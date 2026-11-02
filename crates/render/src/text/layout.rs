@@ -88,20 +88,35 @@ pub(super) fn stacked_down(glyphs: &[Drawn], ids: &[usize]) -> Vec<bool> {
         // thousands of glyphs (#3812 review).
         let band = |y: f32, h: f32| (y / h.max(0.1)).floor() as i64;
         let height = |k: usize| box_of(k).map_or(10.0, |r| (r[3] - r[1]).max(0.1));
-        let unit = (0..ids.len()).map(height).fold(f32::INFINITY, f32::min).max(0.1);
+        // A typical height, not the smallest one. The minimum let a single degenerate glyph -- a
+        // zero-height OCR artefact, a 0 pt glyph, a hairline rule in the text layer -- drag `unit`
+        // to its 0.1 floor, and then neither lookup worked: `band(..) - 1 ..= band(..) + 1` spans
+        // about 0.2 pt while the tests it feeds accept 0.3 of a glyph height and 0.4 of a column
+        // width, so a column that lined up was never found and the run fell back to horizontal;
+        // and indexing a 12 pt glyph into ~120 bands put the quadratic cost back (#3812 review).
+        let unit = {
+            let mut heights: Vec<f32> = (0..ids.len()).map(height).collect();
+            heights.sort_unstable_by(f32::total_cmp);
+            heights.get(heights.len() / 2).copied().unwrap_or(10.0).max(0.1)
+        };
+        // Indexed once, by top. Both predicates below compare tops only, so a glyph's other
+        // bands were never read -- spanning them was all cost and no reach.
         let mut bands: std::collections::HashMap<i64, Vec<usize>> = std::collections::HashMap::new();
         for k in 0..ids.len() {
             if let Some(r) = box_of(k) {
-                for t in band(r[1], unit)..=band(r[3], unit) {
-                    bands.entry(t).or_default().push(k);
-                }
+                bands.entry(band(r[1], unit)).or_default().push(k);
             }
         }
+        // How many bands a tolerance of `d` points reaches, so each lookup asks for the distance
+        // its own test accepts rather than for a fixed band either side.
+        let reach = |d: f32| (d / unit).ceil().max(0.0) as i64;
         let beside = |k: usize, known: &[bool]| {
             let Some(r) = box_of(k) else { return false };
             let (rh, rw) = ((r[3] - r[1]).max(0.1), (r[2] - r[0]).max(0.1));
-            // One band either side as well: a neighbour may sit up to 0.3 of a height away.
-            (band(r[1], unit) - 1..=band(r[3], unit) + 1).flat_map(|t| bands.get(&t).map(Vec::as_slice).unwrap_or(&[])).any(|&o| {
+            // A neighbour's top is within 0.3 of this glyph's height, which is the distance asked
+            // for here.
+            let (top, far) = (band(r[1], unit), reach(rh * 0.3));
+            (top - far..=top + far).flat_map(|t| bands.get(&t).map(Vec::as_slice).unwrap_or(&[])).any(|&o| {
                 o != k
                     && !known.get(o).copied().unwrap_or(false)
                     && box_of(o).is_some_and(|b| {
@@ -128,8 +143,11 @@ pub(super) fn stacked_down(glyphs: &[Drawn], ids: &[usize]) -> Vec<bool> {
             let (bw, bh) = ((bb[2] - bb[0]).max(0.1), (bb[3] - bb[1]).max(0.1));
             let centre = (bb[0] + bb[2]) / 2.0;
             // A column can only line up with a run at nearly its own top, so the columns are
-            // looked up by top in bands of one glyph height as well.
-            let lines_up = (band(bb[1], unit) - 1..=band(bb[1], unit) + 1).flat_map(|t| tops.get(&t).map(Vec::as_slice).unwrap_or(&[])).any(|c| {
+            // looked up by top as well. The test accepts `cw * 0.4`, and it also requires the two
+            // widths to agree within `cw * 0.2`, so `cw <= bw * 1.25` and `bw * 0.5` covers every
+            // column that could pass -- asked for here rather than assumed to be one band.
+            let (top, far) = (band(bb[1], unit), reach(bw * 0.5));
+            let lines_up = (top - far..=top + far).flat_map(|t| tops.get(&t).map(Vec::as_slice).unwrap_or(&[])).any(|c| {
                 let cw = (c[2] - c[0]).max(0.1);
                 let apart = ((c[0] + c[2]) / 2.0 - centre).abs();
                 (bb[1] - c[1]).abs() <= cw * 0.4 && (bw - cw).abs() <= cw * 0.2 && apart > cw * 0.6 && apart <= cw * 5.0

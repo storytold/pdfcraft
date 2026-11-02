@@ -1889,3 +1889,32 @@ fn upright_glyphs_stacked_down_a_column_read_as_vertical_text() {
         assert_eq!(text.plain_text(), "春 and\n天\n來", "pitch {pitch}");
     }
 }
+
+/// The band size the column lookups use must not be set by one degenerate glyph. It was the
+/// smallest glyph height among them, so a single glyph at a size that rounds to nothing took it to
+/// its 0.1 pt floor -- and a lookup of one band either side then spanned a fifth of a point, while
+/// the test it feeds accepts four tenths of a column width. A short last column a few points below
+/// the column it lines up with stopped being found, and came out of order (#3812 review).
+#[test]
+fn one_degenerate_glyph_does_not_hide_the_column_a_short_run_lines_up_with() {
+    use super::layout::stacked_down;
+
+    // A square box of side `h` with its top at `top`: `rect` runs down the page, so index 1 is
+    // the top edge and index 3 the bottom.
+    let glyph = |x: f32, top: f32, h: f32| (0usize, [1.0f64, 0.0], em_box("春", x, top, x + h, top + h));
+
+    // Four touching 12 pt characters, and a two-character column beside them whose top is 3 pt
+    // lower -- inside the four tenths of a column width the match allows, and far enough to need
+    // a band that is sized from a real glyph height rather than from a floor.
+    let column = |x: f32, top: f32, n: usize| (0..n).map(move |j| glyph(x, top + 12.0 * j as f32, 12.0));
+    let mut glyphs: Vec<_> = column(200.0, 100.0, 4).collect();
+    glyphs.extend(column(170.0, 103.0, 2));
+    let all = |n: usize| (0..n).collect::<Vec<usize>>();
+    assert_eq!(stacked_down(&glyphs, &all(glyphs.len())), vec![true; 6], "the short run is read as a column");
+
+    // The same page with one 0.05 pt glyph of the same font on it, clear of both columns.
+    glyphs.push(glyph(10.0, 280.0, 0.05));
+    let got = stacked_down(&glyphs, &all(glyphs.len()));
+    assert_eq!(&got[..6], [true; 6], "the speck must not change how the columns read: {got:?}");
+    assert!(!got[6], "and the speck is not itself a column: {got:?}");
+}
