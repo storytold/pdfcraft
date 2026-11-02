@@ -1380,6 +1380,33 @@ fn pages_shorter_than_the_window_sit_in_its_middle() {
     assert!(r.height() > vp.height() && (r.min.y - vp.min.y).abs() < 40.0, "{r:?} in {vp:?}");
 }
 
+/// A page too tall for its margins still fits the window: it shows whole, in the middle.
+#[test]
+fn a_page_that_fits_without_its_margins_shows_whole() {
+    let mut h = harness(&[("layout", "single"), ("continuous", "off"), ("zoom", "50")]);
+    h.run_steps(4);
+    let (half, vp) = (rect(&h, 0).expect("page 1"), h.state().views[0].viewport_rect());
+    let spare = 20.0;
+    let zoom = (50.0 * (vp.height() - spare) / half.height()).floor();
+    h.state_mut().set_option("zoom", &zoom.to_string()).unwrap();
+    h.run_steps(4);
+    let r = rect(&h, 0).expect("page 1");
+    assert!(r.height() < vp.height() && r.height() + 2.0 * 28.0 > vp.height(), "{r:?} fits {vp:?} only without its margins");
+    assert!(r.min.y >= vp.min.y && r.max.y <= vp.max.y, "{r:?} shows whole in {vp:?}");
+    assert!((r.center().y - vp.center().y).abs() < 1.0, "{r:?} is in the middle of {vp:?}");
+}
+
+/// Two pages side by side are placed as the row they make: the taller decides, not the first.
+#[test]
+fn a_row_too_tall_for_the_window_starts_at_its_top_whichever_page_is_shorter() {
+    let h = mixed_harness(&[("layout", "two-page"), ("zoom", "180")]);
+    let vp = h.state().views[0].viewport_rect();
+    let (first, second) = (rect(&h, 0).expect("page 1"), rect(&h, 1).expect("page 2"));
+    assert!(first.height() > vp.height() && second.height() < vp.height(), "{first:?}, {second:?} in {vp:?}");
+    let row = first.union(second);
+    assert!((row.min.y - vp.min.y).abs() < 40.0, "{row:?} starts in {vp:?}");
+}
+
 #[test]
 fn clicking_a_link_goes_to_its_destination() {
     // Default fit-width zoom: pages are taller than the window, so the target can scroll to the top.

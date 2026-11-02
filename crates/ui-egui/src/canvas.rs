@@ -2075,8 +2075,7 @@ fn single_page_paging(ui: &egui::Ui, view: &mut DocView, cx: &PagingCx<'_>) -> (
     if !view.continuous {
         // The row's bounding box on screen (one page, or a two-page spread).
         let row_rect = row.iter().filter_map(|&i| rects.get(i)).copied().reduce(Rect::union);
-        // Within a point, so layout rounding can't stop a fitting page from turning.
-        let fits = row_rect.is_some_and(|r| r.height() + 2.0 * MARGIN <= avail.height() + 1.0);
+        let fits = row_rect.is_some_and(|r| fits_height(r, avail.height()));
         let can_turn = !middle_gesture && unobstructed && ui.rect_contains_pointer(avail);
         single_paging = can_turn && fits;
         // Every wheel event goes to the pager, so it follows each trackpad touch to its end
@@ -2865,17 +2864,22 @@ fn refine_goto_point(mut scroll: egui::ScrollArea, view: &mut DocView, geometry:
 
 /// Where the `shown` pages sit in the scroll content, as how far the content starts into the
 /// layout and how tall it is. Scrolling continuously every page scrolls; otherwise only the
-/// current row does, the content being its bounding box plus margins. Pages shorter than a view
+/// current row does, the content being its bounding box plus margins. Pages that fit a view
 /// `view_height` tall sit in its middle, the spare height shared above and below (#5708): the
 /// content fills the view, so there is nothing to scroll, and starts on a whole physical pixel
 /// as the layout's pages do, or their edges would blur and the seams between them open.
 fn vertical_placement(continuous: bool, rects: &[Rect], shown: &[usize], view_height: f32, pixels_per_point: f32) -> (f32, f32) {
     let Some(r) = shown.iter().filter_map(|&i| rects.get(i)).copied().reduce(Rect::union) else { return (0.0, 0.0) };
-    let (y_shift, content_h) = if continuous { (0.0, r.bottom() + MARGIN) } else { (r.top() - MARGIN, r.height() + 2.0 * MARGIN) };
-    if content_h >= view_height {
-        return (y_shift, content_h);
+    if fits_height(r, view_height) {
+        return (((r.center().y - view_height / 2.0) * pixels_per_point).round() / pixels_per_point, view_height);
     }
-    (((r.center().y - view_height / 2.0) * pixels_per_point).round() / pixels_per_point, view_height)
+    if continuous { (0.0, r.bottom() + MARGIN) } else { (r.top() - MARGIN, r.height() + 2.0 * MARGIN) }
+}
+
+/// Whether the pages in `r` show whole in a view `view_height` tall, without their margins.
+/// Within a point, so layout rounding can't stop a fitting page from turning or from centring.
+fn fits_height(r: Rect, view_height: f32) -> bool {
+    r.height() <= view_height + 1.0
 }
 
 /// Draws the document tab at `index`: its notice bars, then its pages (or the Organize grid) in a
