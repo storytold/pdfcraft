@@ -171,23 +171,13 @@ fn metadata(doc: &Document, catalog: &Dict) -> Option<String> {
     }
 }
 
-/// A simple XMP property, written as an attribute (`pdfxid:GTS_PDFXVersion="PDF/X-4"`) or as an
-/// element (`<pdfxid:GTS_PDFXVersion>PDF/X-4</pdfxid:GTS_PDFXVersion>`).
+/// A simple XMP property, written as an element (`<pdfxid:GTS_PDFXVersion>PDF/X-4</…>`) or as an
+/// attribute (`pdfxid:GTS_PDFXVersion="PDF/X-4"`), read as the document information mirror reads
+/// XMP ([`crate::xmp::text_property`]): the whole name, the element before the attribute,
+/// character references resolved, surrounding whitespace trimmed, `None` for an empty value or
+/// one that is still markup.
 fn xmp_value(xmp: &str, key: &str) -> Option<String> {
-    for quote in ['"', '\''] {
-        let attr = format!("{key}={quote}");
-        if let Some(rest) = xmp.find(&attr).and_then(|i| xmp.get(i + attr.len()..)) {
-            return rest.find(quote).and_then(|end| rest.get(..end)).map(unescape).filter(|v| !v.is_empty());
-        }
-    }
-    let open = format!("<{key}>");
-    let rest = xmp.get(xmp.find(&open)? + open.len()..)?;
-    let value = rest.get(..rest.find(&format!("</{key}>"))?)?;
-    Some(unescape(value.trim())).filter(|v| !v.is_empty())
-}
-
-fn unescape(s: &str) -> String {
-    s.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&apos;", "'").replace("&amp;", "&")
+    crate::xmp::text_property(xmp, key)
 }
 
 /// `s` as XML text: markup escaped, and characters XML 1.0 does not allow left out.
@@ -199,4 +189,90 @@ pub(crate) fn esc(s: &str) -> String {
         .replace('<', "&lt;")
         .replace('>', "&gt;")
         .replace('"', "&quot;")
+}
+
+#[cfg(test)]
+mod xmp_value_tests {
+    use super::xmp_value;
+
+    const KEY: &str = "pdfxid:GTS_PDFXVersion";
+
+    fn description(attrs: &str, body: &str) -> String {
+        format!(
+            "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF><rdf:Description rdf:about=\"\" {attrs}>{body}</rdf:Description></rdf:RDF></x:xmpmeta>"
+        )
+    }
+
+    #[test]
+    fn character_references_are_resolved() {
+        assert_eq!(xmp_value(&description("pdfxid:GTS_PDFXVersion=\"PDF&#x2F;X-4\"", ""), KEY).as_deref(), Some("PDF/X-4"));
+        let element = description("", "<pdfxid:GTS_PDFXVersion>PDF&#47;X-1a:2001</pdfxid:GTS_PDFXVersion>");
+        assert_eq!(xmp_value(&element, KEY).as_deref(), Some("PDF/X-1a:2001"));
+        assert_eq!(xmp_value(&description("pdfxid:GTS_PDFXVersion='A &amp; B'", ""), KEY).as_deref(), Some("A & B"));
+    }
+
+    #[test]
+    fn only_the_whole_property_name_matches() {
+        let xmp = description("xpdfxid:GTS_PDFXVersion=\"bogus\" pdfxid:GTS_PDFXVersion=\"PDF/X-4\"", "");
+        assert_eq!(xmp_value(&xmp, KEY).as_deref(), Some("PDF/X-4"));
+        let longer = description("", "<pdfxid:GTS_PDFXVersionX>bogus</pdfxid:GTS_PDFXVersionX>");
+        assert_eq!(xmp_value(&longer, KEY), None);
+    }
+
+    /// XML allows a bare `>` in an attribute value: the attributes after it are still in the tag.
+    #[test]
+    fn a_greater_than_sign_in_an_earlier_attribute_value_ends_nothing() {
+        let xmp = description("pdf:Producer=\"A > B\" pdf:Trapped=\"False\"", "");
+        assert_eq!(xmp_value(&xmp, "pdf:Trapped").as_deref(), Some("False"));
+    }
+
+    /// A name inside a quoted value, a comment or a CDATA section is not an attribute.
+    #[test]
+    fn a_name_in_a_value_or_comment_is_not_an_attribute() {
+        let quoted = description("dc:note=\"see pdf:Trapped='True'\"", "");
+        assert_eq!(xmp_value(&quoted, "pdf:Trapped"), None);
+        let commented = format!("<!-- don't: <x pdf:Trapped='True'> -->{}", description("pdf:Trapped=\"False\"", ""));
+        assert_eq!(xmp_value(&commented, "pdf:Trapped").as_deref(), Some("False"));
+        let cdata = format!("<x><![CDATA[ <y pdf:Trapped='True'> ]]></x>{}", description("pdf:Trapped=\"Unknown\"", ""));
+        assert_eq!(xmp_value(&cdata, "pdf:Trapped").as_deref(), Some("Unknown"));
+        // Nor is one in a processing instruction, which only `?>` ends; nor is an element there, or
+        // in a comment.
+        let pi = format!("<?note a > <pdfxid:GTS_PDFXVersion>PDF/X-1a</pdfxid:GTS_PDFXVersion> ?>{}", description("", ""));
+        assert_eq!(xmp_value(&pi, KEY), None);
+        assert_eq!(xmp_value("<?pi note=\"a > b\" pdf:Trapped=\"True\"?><x/>", "pdf:Trapped"), None);
+        let element = format!("<!-- <pdf:Trapped>True</pdf:Trapped> -->{}", description("pdf:Trapped='False'", ""));
+        assert_eq!(xmp_value(&element, "pdf:Trapped").as_deref(), Some("False"));
+    }
+
+    /// A `>` inside an attribute of the property element itself does not end its start tag.
+    #[test]
+    fn a_greater_than_sign_in_the_element_s_own_attribute_ends_nothing() {
+        let xmp = description("", "<pdfxid:GTS_PDFXVersion note=\"a > b\">PDF/X-4</pdfxid:GTS_PDFXVersion>");
+        assert_eq!(xmp_value(&xmp, KEY).as_deref(), Some("PDF/X-4"));
+    }
+
+    /// `pdf:Trapped` and `pdfxid:GTS_PDFXVersion` are simple values: a list in their place, with or
+    /// without commented-out items, is no value. Resolved spaces around a value are trimmed.
+    #[test]
+    fn a_list_is_not_a_simple_value_and_decoded_spaces_are_trimmed() {
+        let list = description("", "<pdf:Trapped><rdf:Alt><rdf:li>True</rdf:li></rdf:Alt></pdf:Trapped>");
+        assert_eq!(xmp_value(&list, "pdf:Trapped"), None);
+        let item = description("", "<pdf:Trapped><rdf:Alt><!-- <rdf:li>True</rdf:li> --><rdf:li>False</rdf:li></rdf:Alt></pdf:Trapped>");
+        assert_eq!(xmp_value(&item, "pdf:Trapped"), None);
+        let version = description("", "<pdfxid:GTS_PDFXVersion><rdf:Alt><rdf:li note=\"a > b\">PDF/X-4</rdf:li></rdf:Alt></pdfxid:GTS_PDFXVersion>");
+        assert_eq!(xmp_value(&version, KEY), None);
+        let cdata = description("", "<pdfxid:GTS_PDFXVersion><![CDATA[PDF/X-4]]></pdfxid:GTS_PDFXVersion>");
+        assert_eq!(xmp_value(&cdata, KEY).as_deref(), Some("PDF/X-4"), "a CDATA section is text");
+        let spaced = description("pdfxid:GTS_PDFXVersion=\"&#x20;PDF/X-4&#x20;\"", "");
+        assert_eq!(xmp_value(&spaced, KEY).as_deref(), Some("PDF/X-4"));
+    }
+
+    #[test]
+    fn plain_values_read_as_before() {
+        assert_eq!(xmp_value(&description("pdf:Trapped=\"False\"", ""), "pdf:Trapped").as_deref(), Some("False"));
+        let element = description("", "<pdfxid:GTS_PDFXVersion> PDF/X-4 </pdfxid:GTS_PDFXVersion>");
+        assert_eq!(xmp_value(&element, KEY).as_deref(), Some("PDF/X-4"));
+        assert_eq!(xmp_value(&description("pdfxid:GTS_PDFXVersion=\"\"", ""), KEY), None);
+        assert_eq!(xmp_value(&description("", ""), KEY), None);
+    }
 }

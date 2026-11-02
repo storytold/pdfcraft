@@ -107,17 +107,32 @@ pub(crate) fn info_value(doc: &Document, key: &str) -> Option<String> {
     get_property(&xmp, name, shape)
 }
 
+/// The text of the simple property `name` in `xmp` (see [`get_property`]), for readers of other
+/// XMP properties than the document information mirrors (PDF/X identification, `pdf:Trapped`).
+/// Those are simple values in their schemas (`pdf:Trapped` a Boolean, `pdfxid:GTS_PDFXVersion` and
+/// `pdfxid:GTS_PDFXConformance` Text), so a list (`rdf:Alt`, `rdf:Seq`) is markup, not a value: it reads as none rather than as
+/// its items.
+pub(crate) fn text_property(xmp: &str, name: &str) -> Option<String> {
+    // Trimmed after character references are resolved too: `&#x20;PDF/X-4&#x20;` is `PDF/X-4`.
+    read_property(xmp, name, Shape::Text, false).map(|v| v.trim().to_string()).filter(|v| !v.is_empty())
+}
+
 /// The text of the property `name` in `xmp`, element or attribute form (see [`info_value`]).
 fn get_property(xmp: &str, name: &str, shape: Shape) -> Option<String> {
+    read_property(xmp, name, shape, true)
+}
+
+/// [`get_property`], reading an element's `rdf:li` items only when `lists` is set.
+fn read_property(xmp: &str, name: &str, shape: Shape, lists: bool) -> Option<String> {
     let value = if let Some((start, end)) = element_span(xmp, name) {
         let element = xmp.get(start..end)?;
-        let open_end = element.find('>')?;
+        let open_end = tag_end(element, 0)?;
         // `<dc:title/>`: no value.
         if element.get(..open_end)?.ends_with('/') {
             return None;
         }
         let inner = element.get(open_end + 1..)?.strip_suffix(&format!("</{name}>"))?;
-        let items = list_items(inner);
+        let items = if lists { list_items(inner) } else { Vec::new() };
         if items.is_empty() {
             // An empty `<rdf:Alt/>` or `<rdf:Seq></rdf:Seq>` has no value, not its markup.
             text_value(inner)?
@@ -134,41 +149,60 @@ fn get_property(xmp: &str, name: &str, shape: Shape) -> Option<String> {
     Some(value).filter(|v| !v.trim().is_empty())
 }
 
-/// Character data `text` as a value, unescaped; `None` when it still holds markup (a `<`, which
-/// a value escapes as `&lt;`), so a structure the reader doesn't take apart never shows as text.
+/// Character data `text` as a value: unescaped, with a CDATA section's text taken as written;
+/// `None` when it still holds other markup (a `<`, which a value escapes as `&lt;`), so a structure
+/// the reader doesn't take apart never shows as text.
 fn text_value(text: &str) -> Option<String> {
-    let text = text.trim();
-    (!text.contains('<')).then(|| unescape(text))
+    const OPEN: &str = "<![CDATA[";
+    let mut rest = text.trim();
+    let mut out = String::with_capacity(rest.len());
+    loop {
+        let Some(at) = rest.find(OPEN) else {
+            if rest.contains('<') {
+                return None;
+            }
+            out.push_str(&unescape(rest));
+            return Some(out);
+        };
+        let plain = rest.get(..at)?;
+        if plain.contains('<') {
+            return None;
+        }
+        out.push_str(&unescape(plain));
+        // An unterminated section is markup that didn't end: no value.
+        let section = rest.get(at + OPEN.len()..)?;
+        let end = section.find("]]>")?;
+        out.push_str(section.get(..end)?);
+        rest = section.get(end + 3..)?;
+    }
 }
 
-/// The `rdf:li` items of a property's content: each one's `xml:lang` (if any) and its text.
+/// The `rdf:li` items of a property's content: each one's `xml:lang` (if any) and its text. Only
+/// an item tag in character data counts, not one inside a comment, CDATA section, processing
+/// instruction or quoted value, and the content is scanned once.
 fn list_items(inner: &str) -> Vec<(Option<String>, &str)> {
+    const OPEN: &str = "<rdf:li";
     let mut items = Vec::new();
-    let mut rest = inner;
-    while let Some(i) = rest.find("<rdf:li") {
-        let Some(after) = rest.get(i + "<rdf:li".len()..) else { break };
+    let mut scan = TextScan::new(inner);
+    while let Some(i) = scan.find(OPEN) {
+        let after = i + OPEN.len();
         // `<rdf:li` must end there: not `<rdf:link`.
-        if !after.starts_with(|c: char| c == '>' || c == '/' || c.is_whitespace()) {
-            rest = after;
+        if !inner.get(after..).is_some_and(|s| s.starts_with(|c: char| c == '>' || c == '/' || c.is_whitespace())) {
+            scan.advance(after);
             continue;
         }
-        let Some(tag_end) = after.find('>') else { break };
-        let tag = after.get(..tag_end).unwrap_or_default();
-        let lang = tag.find("xml:lang=").and_then(|at| {
-            let v = tag.get(at + "xml:lang=".len()..)?;
-            let quote = v.chars().next().filter(|c| matches!(c, '"' | '\''))?;
-            let v = v.get(1..)?;
-            Some(v.get(..v.find(quote)?)?.to_string())
-        });
-        let Some(body) = after.get(tag_end + 1..) else { break };
+        let Some(end) = tag_end(inner, after) else { break };
+        let tag = inner.get(i..end).unwrap_or_default();
+        // The item's own attribute, not a lookalike inside another attribute's quoted value.
+        let lang = attribute_span(tag, "xml:lang").and_then(|(_, s, e, _)| tag.get(s..e)).map(str::to_string);
+        scan.advance(end + 1);
         if tag.ends_with('/') {
             items.push((lang, ""));
-            rest = body;
             continue;
         }
-        let Some(close) = body.find("</rdf:li>") else { break };
-        items.push((lang, body.get(..close).unwrap_or_default()));
-        rest = body.get(close..).unwrap_or_default();
+        let Some(close) = scan.find("</rdf:li>") else { break };
+        items.push((lang, inner.get(end + 1..close).unwrap_or_default()));
+        scan.advance(close + 1);
     }
     items
 }
@@ -266,20 +300,28 @@ fn insert_description(xmp: &str, name: &str, ns: &str, element: &str) -> Option<
     Some(out)
 }
 
-/// Where the element `name` is in `xmp`, from its `<` to past its end tag (or past `/>`).
+/// Where the element `name` is in `xmp`, from its `<` to past its end tag (or past `/>`). Only a
+/// start tag in character data counts, not one inside a comment, CDATA section or quoted value.
 fn element_span(xmp: &str, name: &str) -> Option<(usize, usize)> {
     let open = format!("<{name}");
     let mut from = 0;
+    // Where the text before the match stands, from one pass over the packet (see `attribute_span`).
+    let (mut scanned, mut state) = (0, Markup::Text);
     while let Some(i) = xmp.get(from..).and_then(|s| s.find(&open)).map(|i| i + from) {
         let after = i + open.len();
         from = after;
+        state = (scanned..i).fold(state, |state, p| state.step(xmp.as_bytes(), p));
+        scanned = i;
+        if state != Markup::Text {
+            continue;
+        }
         // `<dc:title` must end there: not `<dc:titles`.
         match xmp.get(after..).and_then(|s| s.chars().next()) {
             Some('>' | '/') => {}
             Some(c) if c.is_whitespace() => {}
             _ => continue,
         }
-        let tag_end = after + xmp.get(after..)?.find('>')?;
+        let tag_end = tag_end(xmp, after)?;
         if xmp.get(..tag_end)?.ends_with('/') {
             return Some((i, tag_end + 1));
         }
@@ -290,28 +332,113 @@ fn element_span(xmp: &str, name: &str) -> Option<(usize, usize)> {
     None
 }
 
+/// Where a forward scan of XML text is.
+#[derive(Clone, Copy, PartialEq)]
+enum Markup {
+    /// Character data, between tags.
+    Text,
+    /// Inside a tag: a start or empty-element tag (`start`), or an end tag or declaration; and
+    /// inside an attribute value quoted with `quote`.
+    Tag { start: bool, quote: Option<u8> },
+    /// Inside `<!-- … -->` that starts at byte `start`.
+    Comment { start: usize },
+    /// Inside `<![CDATA[ … ]]>`.
+    Cdata,
+    /// Inside a processing instruction, `<? … ?>`, that starts at byte `start`; a `>` alone does
+    /// not end it.
+    Pi { start: usize },
+}
+
+impl Markup {
+    /// The state after the byte at `p` of `xml`. A `>` inside a quoted attribute value, which XML
+    /// allows, does not end the tag, and a comment or CDATA section is not a tag. A comment's
+    /// `-->` and an instruction's `?>` can't share bytes with their own opening: `<!-->` and `<?>`
+    /// end nothing.
+    fn step(self, xml: &[u8], p: usize) -> Self {
+        let byte = xml.get(p).copied();
+        let ends = |end: &[u8]| p.checked_sub(end.len() - 1).and_then(|s| xml.get(s..=p)) == Some(end);
+        match (self, byte) {
+            (Self::Text, Some(b'<')) if xml.get(p..).is_some_and(|s| s.starts_with(b"<!--")) => Self::Comment { start: p },
+            (Self::Text, Some(b'<')) if xml.get(p..).is_some_and(|s| s.starts_with(b"<?")) => Self::Pi { start: p },
+            (Self::Text, Some(b'<')) if xml.get(p..).is_some_and(|s| s.starts_with(b"<![CDATA[")) => Self::Cdata,
+            (Self::Text, Some(b'<')) => Self::Tag { start: !matches!(xml.get(p.saturating_add(1)), Some(b'/' | b'!')), quote: None },
+            (Self::Tag { start, quote: None }, Some(q @ (b'"' | b'\''))) => Self::Tag { start, quote: Some(q) },
+            (Self::Tag { quote: None, .. }, Some(b'>')) => Self::Text,
+            (Self::Tag { start, quote: Some(q) }, Some(b)) if b == q => Self::Tag { start, quote: None },
+            (Self::Comment { start }, Some(b'>')) if p >= start.saturating_add(6) && ends(b"-->") => Self::Text,
+            (Self::Cdata, Some(b'>')) if ends(b"]]>") => Self::Text,
+            (Self::Pi { start }, Some(b'>')) if p >= start.saturating_add(3) && ends(b"?>") => Self::Text,
+            (state, _) => state,
+        }
+    }
+}
+
+/// A forward scan of XML text that knows, at each byte, whether it stands in character data.
+struct TextScan<'a> {
+    xml: &'a [u8],
+    pos: usize,
+    state: Markup,
+}
+
+impl<'a> TextScan<'a> {
+    fn new(xml: &'a str) -> Self {
+        Self { xml: xml.as_bytes(), pos: 0, state: Markup::Text }
+    }
+
+    /// Move forward to byte `to` (never back), following the markup over the bytes passed.
+    fn advance(&mut self, to: usize) {
+        while self.pos < to.min(self.xml.len()) {
+            self.state = self.state.step(self.xml, self.pos);
+            self.pos += 1;
+        }
+    }
+
+    /// The next byte from here, this one included, where `needle` starts in character data; the
+    /// scan stays there.
+    fn find(&mut self, needle: &str) -> Option<usize> {
+        while self.pos < self.xml.len() {
+            if self.state == Markup::Text && self.xml.get(self.pos..).is_some_and(|s| s.starts_with(needle.as_bytes())) {
+                return Some(self.pos);
+            }
+            self.state = self.state.step(self.xml, self.pos);
+            self.pos += 1;
+        }
+        None
+    }
+}
+
+/// Where the start tag that is open at byte `from` of `xml` ends: its `>`, the first one that is
+/// not inside a quoted attribute value (XML allows a bare `>` there).
+fn tag_end(xml: &str, from: usize) -> Option<usize> {
+    let mut quote = None;
+    for (i, b) in xml.as_bytes().iter().enumerate().skip(from) {
+        match (quote, b) {
+            (None, b'>') => return Some(i),
+            (None, b'"' | b'\'') => quote = Some(*b),
+            (Some(q), b) if *b == q => quote = None,
+            _ => {}
+        }
+    }
+    None
+}
+
 /// Where the attribute `name` is in `xmp`: its start (including the whitespace before it), the
-/// start and end of its value, and its quote character. Only matches inside a start tag.
+/// start and end of its value, and its quote character. Only matches inside a start tag (not an
+/// end tag, processing instruction, comment or CDATA section), outside any quoted value.
 fn attribute_span(xmp: &str, name: &str) -> Option<(usize, usize, usize, char)> {
     let mut from = 0;
-    // The last `<` and `>` before the match, found by one pass over the packet rather than by
-    // searching back from every match.
-    let (mut scanned, mut last_open, mut last_close) = (0, None, None);
+    // Where the text before the match stands, found by one pass over the packet rather than by
+    // scanning back from every match.
+    let (mut scanned, mut state) = (0, Markup::Text);
     while let Some(i) = xmp.get(from..).and_then(|s| s.find(name)).map(|i| i + from) {
         from = i + name.len();
         let before = xmp.get(..i)?;
-        let gap = xmp.get(scanned..i)?;
         #[cfg(test)]
-        crate::work(gap.len());
-        if let Some(at) = gap.rfind('<') {
-            last_open = Some(scanned + at);
-        }
-        if let Some(at) = gap.rfind('>') {
-            last_close = Some(scanned + at);
-        }
+        crate::work(i - scanned);
+        state = (scanned..i).fold(state, |state, p| state.step(xmp.as_bytes(), p));
         scanned = i;
-        // Preceded by whitespace, and inside a tag (the last `<` comes after the last `>`).
-        if !before.ends_with(char::is_whitespace) || last_open < last_close || last_open.is_none() {
+        // Preceded by whitespace, and inside a start tag but not inside a quoted value.
+        if !before.ends_with(char::is_whitespace) || state != (Markup::Tag { start: true, quote: None }) {
             continue;
         }
         let rest = xmp.get(from..)?;
@@ -361,6 +488,35 @@ mod tests {
         assert_eq!(get_property("<dc:creator><rdf:Seq/></dc:creator>", "dc:creator", Shape::Seq), None);
         let nested = "<dc:creator><rdf:Seq><rdf:li><rdf:Description/></rdf:li><rdf:li>Ada</rdf:li></rdf:Seq></dc:creator>";
         assert_eq!(get_property(nested, "dc:creator", Shape::Seq).as_deref(), Some("Ada"));
+    }
+
+    /// Only a list item in character data is an item: not one inside a CDATA section, a processing
+    /// instruction or a comment (`<!-->` opens one without closing it), and only the item's own
+    /// `xml:lang` attribute is its language, not a lookalike in another attribute's quoted value.
+    #[test]
+    fn list_items_are_read_from_character_data_only() {
+        let get = |content: &str| get_property(&format!("<dc:title><rdf:Alt>{content}</rdf:Alt></dc:title>"), "dc:title", Shape::LangAlt);
+        assert_eq!(get("<![CDATA[<rdf:li>Hidden</rdf:li>]]><rdf:li>Shown</rdf:li>").as_deref(), Some("Shown"));
+        assert_eq!(get("<?pi > <rdf:li>Hidden</rdf:li> ?><rdf:li>Shown</rdf:li>").as_deref(), Some("Shown"));
+        assert_eq!(get("<!--><rdf:li>Hidden</rdf:li>--><rdf:li>Shown</rdf:li>").as_deref(), Some("Shown"));
+        let lookalike = "<rdf:li hint=\"a > xml:lang='x-default'\">Draft</rdf:li><rdf:li xml:lang=\"x-default\">Report</rdf:li>";
+        assert_eq!(get(lookalike).as_deref(), Some("Report"));
+        assert_eq!(get("<rdf:li xml:lang='fr'>Rapport</rdf:li><rdf:li xml:lang='x-default'>Report</rdf:li>").as_deref(), Some("Report"));
+        // An element is not found inside `<!-->…-->` or `<?>…?>` either.
+        let packet = "<!--><pdf:Producer>Hidden</pdf:Producer>--><pdf:Producer>Shown</pdf:Producer>";
+        assert_eq!(get_property(packet, "pdf:Producer", Shape::Text).as_deref(), Some("Shown"));
+        let packet = "<?><pdf:Producer>Hidden</pdf:Producer>?><pdf:Producer>Shown</pdf:Producer>";
+        assert_eq!(get_property(packet, "pdf:Producer", Shape::Text).as_deref(), Some("Shown"));
+    }
+
+    /// A CDATA section is character data: its text is the value, taken as written.
+    #[test]
+    fn cdata_text_is_a_value() {
+        let get = |inner: &str| get_property(&format!("<pdf:Producer>{inner}</pdf:Producer>"), "pdf:Producer", Shape::Text);
+        assert_eq!(get("<![CDATA[A <b> & c]]>").as_deref(), Some("A <b> & c"));
+        assert_eq!(get("x &amp; <![CDATA[&amp;]]> y").as_deref(), Some("x & &amp; y"));
+        assert_eq!(get("<![CDATA[open"), None, "an unterminated section");
+        assert_eq!(get("<![CDATA[a]]><b/>"), None, "other markup after it");
     }
 
     #[test]
