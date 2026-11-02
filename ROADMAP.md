@@ -1,5 +1,15 @@
 # PdfCraft roadmap
 
+> **Last reviewed:** 2026-11-02 | **Last updated:** 2026-11-02 | **Change:** patch (M7 #5763 inset review: wrapped editor rows keep their source inset where it fits and clamp it where it would clip trailing glyphs; unchanged upright geometry and estimates unchanged)
+
+> **Last reviewed:** 2026-11-02 | **Last updated:** 2026-11-02 | **Change:** patch (M7 #5763 wrapped-row review: continuations retain their logical source row inset and metrics; later source rows shift by the accumulated wrap leading; estimates unchanged)
+
+> **Last reviewed:** 2026-11-02 | **Last updated:** 2026-11-02 | **Change:** patch (M7 #5763 review: position horizontal turned editors with the measured wrapped height so rows and caret remain visible near the page bottom; estimates unchanged)
+
+> **Last reviewed:** 2026-11-02 | **Last updated:** 2026-11-02 | **Change:** patch (M7 #5763 review: unchanged turned text wraps within its horizontal field without a PDF edit and hides the source before typing; estimates unchanged)
+
+> **Last reviewed:** 2026-11-02 | **Last updated:** 2026-11-02 | **Change:** patch (M7 #5763: turned text uses a readable horizontal editor with baseline-space width, spacing and caret metrics; saved rotation was already correct and remains unchanged; no rotated in-place widget; estimates unchanged)
+
 > **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M7, PR #2155 further review: inherited drawing/text state, affine image gestures, paste/selection ownership, no-op scripts and menu permissions; estimates unchanged)
 
 > **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M7, PR #2155 latest comments: explicit image-paste events, mixed-size field refresh, and documented mixed-script normalization with Undo; estimates unchanged)
@@ -218,6 +228,16 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 | 8 | 1.0 polish: performance, right-to-left, missing languages, keyboard-only (M14) | 55–95 |
 
 ## Progress log
+
+- **2026-11-02 (M7, #5763 inset review):** Limit a wrapped row’s source inset to the remaining field width so trailing glyphs stay inside TextEdit’s clip. The same rule applies to unchanged turned text and edited upright paragraphs; short rows keep their full inset and unchanged upright text keeps its source geometry. Hanging-indent regressions check every glyph against the field and actual clip, row order/leading, full insets where they fit, unchanged turned Apply and upright Cancel. Estimates unchanged.
+
+- **2026-11-02 (M7, #5763 wrapped-row review):** Map horizontal editor rows to logical source rows, keeping wrapped continuations at the source inset and shifting later source baselines by the accumulated leading. A turned two-row paragraph with different indents and a wrapping first row checks order, spacing, field bounds and byte-identical unchanged Apply; regression fails on d579a9f4. Unwrapped upright geometry is unchanged. Estimates unchanged.
+
+- **2026-11-02 (M7, #5763 wrapped-field review):** Measure the draft before placing its horizontal turned editor, using the same context font view as TextEdit. Clamp with the measured height (capped to the visible page) so wrapped rows, caret, frame and cover move up together immediately. Real-input 90/180 degree bottom-edge regressions fail on c94424c3 and check the first painted frame, geometry/height agreement, unchanged data and no undo entry. Estimates unchanged.
+
+- **2026-11-02 (M7, #5763 review):** An unchanged long turned label wraps in the horizontal editor so every glyph and its end caret remain reachable without editing. Unchanged Apply preserves exact bytes and creates no undo entry; the original text is hidden while editing, including while its textless preview is pending. Both regressions fail on 42333a3a. Estimates unchanged.
+
+- **2026-11-02 (M7, #5763):** A horizontal editor for turned source text uses the text baseline frame rather than its page-space box, keeping glyphs, caret and line height readable and the field on-page. Six UI layout regressions (including two-row order and spacing) fail on main; three Apply/save/reopen orientation controls pass there and remain green. In-place rotated interaction remains unsupported; estimates unchanged.
 
 - **2026-11-01 (M7, #5657):** Header/footer, watermark and background additions and replacements stage the complete call before committing. Synthetic later-page failures preserve exact incremental bytes, object count, dirty state and allocation cursor; success controls retain other marks and shared/inherited resources. Estimates unchanged.
 
@@ -745,6 +765,11 @@ Newest first: the date, what moved, and the new overall estimate.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-02 | patch | M7 #5763 inset review: wrapped editor rows keep their source inset where it fits and clamp it where it would clip trailing glyphs; unchanged upright geometry and estimates unchanged. |
+| 2026-11-02 | patch | M7 #5763 wrapped-row review: continuations retain their logical source row inset and metrics; later source rows shift by the accumulated wrap leading; estimates unchanged. |
+| 2026-11-02 | patch | M7 #5763 review: position horizontal turned editors with the measured wrapped height so rows and caret remain visible near the page bottom; estimates unchanged. |
+| 2026-11-02 | patch | M7 #5763 review: unchanged turned text wraps within its horizontal field without a PDF edit and hides the source before typing; estimates unchanged. |
+| 2026-11-02 | patch | M7 #5763: turned text uses a readable horizontal editor with baseline-space width, spacing and caret metrics; saved rotation was already correct and remains unchanged; no rotated in-place widget; estimates unchanged. |
 | 2026-11-01 | patch | M7 #5657: header/footer, watermark and background operations commit all selected pages together; later-page errors preserve marks, content, shared/inherited resources and pending edits; estimates unchanged. |
 | 2026-10-28 | patch | M2, PR #4172: integrate main 5af10276 and retain both roadmap histories; viewer-only CJK and print/output font policies and estimates unchanged. |
 | 2026-10-27 | minor | M10: OCR stages SHA-256-verified ONNX models after the upstream RTEN URL brownout; discovery prefers a complete ONNX pair per directory, falls back to a complete RTEN pair, and never mixes formats or directories; language/web limits and estimates unchanged. |

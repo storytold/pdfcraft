@@ -9646,3 +9646,6 @@ fn affine_review_cropped_rotation_preview_matches_saved_corners() {
         );
     }
 }
+
+#[path = "rotated_text.rs"]
+mod rotated_text;

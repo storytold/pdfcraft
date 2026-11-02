@@ -169,7 +169,8 @@ impl TextBackground {
         let painter = painter.with_clip_rect(painter.clip_rect().intersect(xf.rect));
         if for_editor {
             // Its place under everything drawn on the page later; the editor fills it once the
-            // paragraph changes (an unchanged paragraph looks as the page draws it).
+            // paragraph changes or uses the horizontal turned-text field. An unchanged
+            // upright paragraph still looks as the page draws it.
             let mut mesh = egui::Mesh::with_texture(tex.id());
             for (u, v) in [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)] {
                 mesh.vertices.push(egui::epaint::Vertex { pos: xf.norm_to_screen(u, v), uv: Pos2::new(u, v), color: Color32::WHITE });
@@ -186,7 +187,7 @@ impl TextBackground {
         }
     }
 
-    /// The open paragraph has changed: show the textless page under its editor this frame.
+    /// Show the textless page under a changed paragraph or a horizontal turned-text field.
     pub fn reveal(&mut self) {
         if let Some((painter, idx, shape)) = self.slot.take() {
             painter.set(idx, shape);
