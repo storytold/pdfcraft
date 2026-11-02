@@ -149,6 +149,9 @@ impl WheelPager {
             };
         if notch {
             if !can_turn {
+                // A notch is a gesture of its own, so one that only pans ends the gesture a
+                // previous notch turned; otherwise `gesture_turned` keeps swallowing the wheel (#5713).
+                self.turned = None;
                 return None;
             }
             // Every notch turns a page; a smooth tail of the same gesture won't add another.

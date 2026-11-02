@@ -562,6 +562,56 @@ fn single_page_wheel_at_last_page_bottom_edge_can_scroll_back_up() {
     assert!(after_up_y > bottom_y, "scrolling up moves the page away from the bottom edge: {after_up_y} > {bottom_y}");
 }
 
+/// One notch of a mouse wheel that macOS reports in points (a Logitech mouse sends about 14).
+const POINT_NOTCH: f32 = 14.0;
+
+#[test]
+fn single_page_point_notches_pan_the_page_a_notch_turned_to() {
+    let mut h = harness_stepping(1.0 / 60.0, &[("layout", "single"), ("zoom", "200")]);
+    let at = h.state().views[0].viewport_rect().center();
+    h.hover_at(at);
+    h.run_steps(20);
+    for _ in 0..120 {
+        h.event(wheel(MouseWheelUnit::Point, -POINT_NOTCH, TouchPhase::Move));
+        h.run_steps(12);
+        if h.state().views[0].current == 1 {
+            break;
+        }
+    }
+    assert_eq!(h.state().views[0].current, 1, "notches pan page 1, then turn to page 2");
+    h.run_steps(20);
+    let top = rect(&h, 1).expect("page 2 on screen").min.y;
+    for _ in 0..3 {
+        h.event(wheel(MouseWheelUnit::Point, -POINT_NOTCH, TouchPhase::Move));
+        h.run_steps(12);
+    }
+    let after = rect(&h, 1).expect("page 2 on screen").min.y;
+    assert!(after < top, "notches pan page 2 down after the turn (#5713): {after} < {top}");
+}
+
+#[test]
+fn single_page_point_notches_scroll_back_up_from_the_last_page_bottom() {
+    let mut h = harness_stepping(1.0 / 60.0, &[("layout", "single"), ("zoom", "200")]);
+    h.state_mut().views[0].go_to_page(2);
+    h.run_steps(20);
+    let at = h.state().views[0].viewport_rect().center();
+    h.hover_at(at);
+    h.run_steps(4);
+    // Past the bottom: the extra notches push against the last page's edge.
+    for _ in 0..200 {
+        h.event(wheel(MouseWheelUnit::Point, -POINT_NOTCH, TouchPhase::Move));
+        h.run_steps(12);
+    }
+    assert_eq!(h.state().views[0].current, 2, "stays on the last page");
+    let bottom = rect(&h, 2).expect("page 3 on screen").min.y;
+    for _ in 0..3 {
+        h.event(wheel(MouseWheelUnit::Point, POINT_NOTCH, TouchPhase::Move));
+        h.run_steps(12);
+    }
+    let after = rect(&h, 2).expect("page 3 on screen").min.y;
+    assert!(after > bottom + 1.0, "notches scroll back up from the last page's bottom (#5713): {after} > {bottom}");
+}
+
 #[test]
 fn stepping_past_either_end_leaves_the_view_alone() {
     // Paging on past the first or last page must not jump the page back to its top.
