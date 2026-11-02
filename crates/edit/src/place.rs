@@ -294,7 +294,32 @@ pub(crate) fn isolation(doc: &Document, list: &[Object]) -> Isolation {
 /// Put a mark's content on a page: behind (with the behind-marks at the start) or on top
 /// (appended, after wrapping the original content in q/Q).
 pub(crate) fn place(doc: &mut Document, page: &pdfcraft_model::Page, kind: MarkKind, content: Vec<u8>, behind: bool) -> Result<(), EditError> {
-    place_tagged(doc, page, kind.tag(), content, behind).map(drop)
+    place_tagged(doc, page, kind.tag(), content, behind)?;
+    #[cfg(test)]
+    fail_after_mark_placement(kind)?;
+    Ok(())
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Force an error after N completed placements of one kind, on this test thread only.
+    pub(crate) static MARK_PLACEMENT_FAILURE: std::cell::Cell<Option<(MarkKind, usize, usize)>> = const { std::cell::Cell::new(None) };
+}
+
+#[cfg(test)]
+fn fail_after_mark_placement(kind: MarkKind) -> Result<(), EditError> {
+    MARK_PLACEMENT_FAILURE.with(|failure| {
+        if let Some((target, after, completed)) = failure.get()
+            && target == kind
+        {
+            let completed = completed.saturating_add(1);
+            failure.set(Some((target, after, completed)));
+            if completed == after {
+                return Err(EditError::Invalid("injected mark placement failure".into()));
+            }
+        }
+        Ok(())
+    })
 }
 
 /// Put content on a page, tagged `tag` (see [`place`]). On top, whatever graphics state the
