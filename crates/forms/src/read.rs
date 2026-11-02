@@ -534,7 +534,7 @@ fn walk(
             })
         })
         .collect();
-    let options = d
+    let options: Vec<(String, String)> = d
         .get(b"Opt")
         .map(|o| doc.resolve(o))
         .and_then(|o| o.as_array().cloned())
@@ -545,15 +545,26 @@ fn walk(
             other => text_of(other).map(|t| (t.clone(), t)),
         })
         .collect();
+    let is_multi = kind == FieldKind::List && ff & flags::MULTI_SELECT != 0;
+    let mut value = values_of(doc, inh.v.as_ref());
+    if matches!(kind, FieldKind::Combo | FieldKind::List) && !is_multi {
+        value.truncate(1);
+    }
+    let indices = if matches!(kind, FieldKind::Combo | FieldKind::List) {
+        appearance::selected_list_indices(doc, Some(d), &options, &value, is_multi)
+    } else {
+        Vec::new()
+    };
     out.push(Field {
         name: inh.name.clone(),
         obj: r,
         kind,
-        value: values_of(doc, inh.v.as_ref()),
+        value,
         default: values_of(doc, inh.dv.as_ref()),
         flags: ff,
         max_len: inh.max_len,
         options,
+        indices,
         da: inh.da.clone().unwrap_or_else(|| "/Helv 0 Tf 0 g".into()),
         quadding: inh.q.unwrap_or(0),
         tooltip: d.get(b"TU").and_then(|o| text_of(&doc.resolve(o))),
