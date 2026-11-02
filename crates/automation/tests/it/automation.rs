@@ -7694,6 +7694,11 @@ fn an_xfa_script_that_adds_a_page_is_seen_and_saved_through_tools() {
     ok(&mut a, "doc_save", json!({ "doc": doc, "path": "saved.pdf" }));
     let again = ok(&mut a, "doc_open", json!({ "path": "saved.pdf" }))["doc"].as_u64().unwrap();
     assert_eq!(pages_of(&mut a, again), 2);
+    // The second page keeps its field: on page 2, at the place it had before saving.
+    let fields = ok(&mut a, "form_fields", json!({ "doc": again }));
+    let saved_d2 = fields["fields"].as_array().unwrap().iter().find(|f| f["name"] == "d2").unwrap().clone();
+    assert_eq!(saved_d2["page"], 2, "{saved_d2}");
+    assert_eq!(saved_d2["rect"], d2["rect"], "{saved_d2}");
 }
 
 #[test]
