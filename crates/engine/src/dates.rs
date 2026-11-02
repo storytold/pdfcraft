@@ -683,15 +683,15 @@ pub fn format_day(fmt: &str, (y, m, d): (i64, u32, u32), lang: &DateLanguage) ->
     out
 }
 
-/// The weekday (0 = Sunday) of a Gregorian date in years 1–9999, or `None` for an invalid one.
+/// The weekday (0 = Sunday) of a Gregorian date in years 1–9999, or `None` for an invalid one
+/// (including a day the month doesn't have, such as 30 February).
 fn weekday(y: i64, m: u32, d: u32) -> Option<usize> {
-    const T: [i64; 12] = [0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4];
-    if !(1..=9999).contains(&y) || !(1..=31).contains(&d) {
+    use chrono::Datelike;
+    if !(1..=9999).contains(&y) {
         return None;
     }
-    let t = *T.get((m as usize).checked_sub(1)?)?;
-    let y = y - i64::from(m < 3);
-    Some((y + y / 4 - y / 100 + y / 400 + t + i64::from(d)).rem_euclid(7) as usize)
+    let date = chrono::NaiveDate::from_ymd_opt(i32::try_from(y).ok()?, m, d)?;
+    usize::try_from(date.weekday().num_days_from_sunday()).ok()
 }
 
 /// The characters of `fmt`, each with whether a `\` before it makes it literal.
@@ -832,6 +832,23 @@ mod tests {
             }
         }
         assert_eq!(format_day("mmmm dddd", (2026, 13, 40), EN), "13 40", "out of range shows numbers");
+    }
+
+    /// A day the month doesn't have is out of range too: it shows its number, never the weekday
+    /// of some other date.
+    #[test]
+    fn an_impossible_day_shows_its_number_not_a_weekday() {
+        assert_eq!(format_day("dddd d mmmm", (2026, 2, 30), EN), "30 30 February");
+        assert_eq!(format_day("ddd", (2025, 2, 29), EN), "29", "2025 is not a leap year");
+        assert_eq!(format_day("ddd", (2026, 4, 31), EN), "31");
+        // Real days, leap years and century rules included.
+        assert_eq!(format_day("dddd", (2026, 11, 2), EN), "Monday");
+        assert_eq!(format_day("dddd", (2000, 2, 29), EN), "Tuesday");
+        assert_eq!(format_day("dddd", (1900, 3, 1), EN), "Thursday");
+        assert_eq!(format_day("dddd", (2100, 2, 28), EN), "Sunday");
+        assert_eq!(format_day("dddd", (1, 1, 1), EN), "Monday");
+        assert_eq!(format_day("dddd", (9999, 12, 31), EN), "Friday");
+        assert_eq!(format_day("dddd", (10000, 1, 1), EN), "1", "past the 1-9999 guard");
     }
 
     #[test]
