@@ -150,25 +150,32 @@ const JOB_NAME_KEY: &str = "com.apple.print.JobInfo.PMJobName";
 const JOB_OWNER_KEY: &str = "com.apple.print.JobInfo.PMJobOwner";
 
 /// `text` as a job option's value: `lp_args` passes on only printable ASCII, up to 64 bytes,
-/// without `/ : = "`, so anything else becomes `_`. Text with nothing left of it, such as a
-/// title in another script, takes `fallback`: the job must still name something.
+/// without `/ : = "`, and CUPS would take `'` and `\` as quoting and `{` as the start of a
+/// collection, so all of these become `_`. Text with nothing left of it, such as a title in
+/// another script, takes `fallback`: the job must still name something. So does a bare `true` or
+/// `false`, which CUPS would send as a boolean, not the name a filter reads.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn job_option_value(text: &str, fallback: &str) -> String {
-    let kept = |c: char| c.is_ascii_graphic() && !matches!(c, '/' | ':' | '=' | '"');
-    if !text.chars().any(kept) {
+    let kept = |c: char| c.is_ascii_graphic() && !matches!(c, '/' | ':' | '=' | '"' | '\'' | '\\' | '{');
+    let value: String = text.chars().take(64).map(|c| if kept(c) { c } else { '_' }).collect();
+    if !text.chars().any(kept) || value.eq_ignore_ascii_case("true") || value.eq_ignore_ascii_case("false") {
         return fallback.to_string();
     }
-    text.chars().take(64).map(|c| if kept(c) { c } else { '_' }).collect()
+    value
 }
 
 /// `job` naming its title and `owner` as a job from the macOS print dialog does. `lp` sends
 /// neither, and a driver's filter can depend on them: Kyocera's crashes without them, so nothing
-/// prints, while the same file sent with both does (#5743).
+/// prints, while the same file sent with both does (#5743). A value the caller set stands: the
+/// last of a repeated option wins in CUPS, which compares their names without case.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub(crate) fn with_job_info(job: &Job, owner: Option<&str>) -> Job {
     let mut named = job.clone();
-    named.options.push((JOB_NAME_KEY.to_string(), job_option_value(&job.title, "PdfCraft")));
-    named.options.push((JOB_OWNER_KEY.to_string(), job_option_value(owner.unwrap_or_default(), "PdfCraft")));
+    for (key, value) in [(JOB_NAME_KEY, job.title.as_str()), (JOB_OWNER_KEY, owner.unwrap_or_default())] {
+        if !job.options.iter().any(|(k, _)| k.eq_ignore_ascii_case(key)) {
+            named.options.push((key.to_string(), job_option_value(value, "PdfCraft")));
+        }
+    }
     named
 }
 
