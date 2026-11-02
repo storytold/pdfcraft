@@ -408,6 +408,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
                 page_size,
                 active_margins,
                 rot,
+                &d.original_boxes,
                 d.mode,
                 &mut d.odd_even_tab,
                 &mut d.current_page,
@@ -1125,6 +1126,7 @@ fn render_interactive_preview(
     page_size: (f32, f32),
     margins: &mut [f64; 4],
     rotation: u16,
+    original_boxes: &[[[f64; 4]; 5]],
     mode: BulkCropMode,
     odd_even_tab: &mut OddEvenTab,
     current_page: &mut usize,
@@ -1185,7 +1187,17 @@ fn render_interactive_preview(
     for &page in pages {
         view.need_thumbnail(page, true);
         if let Some(tex_id) = view.thumb_id(page) {
-            painter.image(tex_id, page_rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), tint);
+            let img_rect = if let Some(b) = original_boxes.get(page) {
+                let (m, c) = (b[0], b[1]);
+                let insets = [(c[0] - m[0]).max(0.0), (c[1] - m[1]).max(0.0), (m[2] - c[2]).max(0.0), (m[3] - c[3]).max(0.0)];
+                let [el, ebo, eri, eto] = pdf_to_visual_margins(insets, rotation).map(|v| (v as f32) * scale);
+                Rect::from_min_max(pos2(page_rect.left() + el, page_rect.top() + eto), pos2(page_rect.right() - eri, page_rect.bottom() - ebo))
+            } else {
+                page_rect
+            };
+            if img_rect.is_positive() {
+                painter.image(tex_id, img_rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), tint);
+            }
         }
     }
 
