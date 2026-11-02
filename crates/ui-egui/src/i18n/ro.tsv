@@ -2846,6 +2846,11 @@ theme	Appearance	Aspect
 	Unpin tool	Anulează fixarea instrumentului
 	Arrange image	Aranjează imaginea
 	Crop	Decupare
+	Print area…	Zonă de imprimare…
+	Save as image	Salvare ca imagine
+	Save as image…	Salvare ca imagine…
+	Selected area (page {page}, {size})	Zonă selectată (pagina {page}, {size})
+	The selected area is no longer on a page of this document.	Zona selectată nu se mai află pe o pagină a acestui document.
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Astăzi

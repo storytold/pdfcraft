@@ -2819,6 +2819,11 @@ key	Space	Space
 	Edit this PDF	Chỉnh sửa PDF này
 	Export this PDF	Xuất PDF này
 	Find text or tools	Tìm văn bản hoặc công cụ
+	Print area…	In vùng…
+	Save as image…	Lưu dưới dạng hình ảnh…
+	Save as image	Lưu dưới dạng hình ảnh
+	Selected area (page {page}, {size})	Vùng đã chọn (trang {page}, {size})
+	The selected area is no longer on a page of this document.	Vùng đã chọn không còn nằm trên trang nào của tài liệu này.
 	Attach a file…	Đính kèm tệp…
 	Delete attachment	Xóa tệp đính kèm
 	Attaching files is not available on the web yet	Chưa thể đính kèm tệp trên web

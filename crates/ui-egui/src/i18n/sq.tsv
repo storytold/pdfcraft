@@ -2571,6 +2571,11 @@ animation effects	Off	Joaktiv
 	Remove crop	Hiq prerjen
 	Send backward	Kalo prapa
 	Send to back	Dërgo mbrapa
+	Print area…	Zona e printimit…
+	Save as image	Ruaj si imazh
+	Save as image…	Ruaj si imazh…
+	Selected area (page {page}, {size})	Zona e zgjedhur (faqja {page}, {size})
+	The selected area is no longer on a page of this document.	Zona e zgjedhur nuk është më në një faqe të këtij dokumenti.
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Sot

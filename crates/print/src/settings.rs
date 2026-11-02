@@ -142,6 +142,10 @@ pub struct Settings {
     /// resolution before it is placed on the paper. The engine does the rendering; `impose` is
     /// then given the image-only document.
     pub raster: Option<Raster>,
+    /// Print a selected area (Acrobat's "print selected area"): only this rectangle of the one
+    /// page in `pages`, in that page's display space (points, origin at the bottom-left of the
+    /// page as shown, y up), sized like a page of its own by a [`Layout::Size`] choice.
+    pub area: Option<[f64; 4]>,
 }
 
 /// How pages are rendered when printing as image.
@@ -175,6 +179,7 @@ impl Default for Settings {
             content: Content::default(),
             raster: None,
             crops: Vec::new(),
+            area: None,
         }
     }
 }

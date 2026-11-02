@@ -2809,6 +2809,11 @@ theme	Appearance	Išvaizda
 	Edit this PDF	Redaguoti šį PDF
 	Export this PDF	Eksportuoti šį PDF
 	Find text or tools	Rasti tekstą arba įrankius
+	Print area…	Spausdinti sritį…
+	Save as image…	Įrašyti kaip paveikslėlį…
+	Save as image	Įrašyti kaip paveikslėlį
+	Selected area (page {page}, {size})	Pasirinkta sritis ({page} puslapis, {size})
+	The selected area is no longer on a page of this document.	Pasirinktos srities nebėra šio dokumento puslapyje.
 	Attach a file…	Pridėti failą…
 	Delete attachment	Ištrinti priedą
 	Attaching files is not available on the web yet	Failų pridėjimas žiniatinklyje dar negalimas
