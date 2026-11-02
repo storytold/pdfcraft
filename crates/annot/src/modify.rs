@@ -1,5 +1,5 @@
 use super::create::{
-    add_annotation, base_dict, bounds, callout_attach, ending_draws, ending_pair, finite, grow, normalize, num_array, rect_for, rgb,
+    add_annotation, base_dict, bounds, callout_attach, ending_draws, ending_pair, finite, grow, ink_bounds, normalize, num_array, rect_for, rgb,
 };
 use super::draw::{draw_appearance, redraw_or_restore, set_appearance};
 use super::group::group_members;
@@ -74,8 +74,9 @@ pub(crate) fn touch(d: &mut Dict, meta: &Meta) {
 /// Refused while it, or a reply that would go with it, is locked. A member of a group (`/RT
 /// /Group`), its primary included, goes alone, as Acrobat deletes the member clicked and keeps the
 /// rest of its group, although ISO 32000-2 §12.5.6.2 lists deletion among the operations that act
-/// on the entire group; a subordinate left without its primary is a comment of its own. Replace
-/// Text's strikeout and caret are one comment and go together from either ([`own_deletion`]).
+/// on the entire group; a subordinate left without its primary is a comment of its own and
+/// loses its `/IRT` ([`release_members`]). Replace Text's strikeout and caret are one comment and
+/// go together from either ([`own_deletion`]).
 pub fn delete_annotation(doc: &mut Document, page: usize, index: usize) -> Result<(), AnnotError> {
     let index = deleted_index(doc, page, index)?;
     lift_annotation(doc, page, index)
@@ -134,7 +135,39 @@ pub fn lift_annotation(doc: &mut Document, page: usize, index: usize) -> Result<
     let target = list.get(index).ok_or(AnnotError::NoSuchAnnotation { page, index })?;
     let doomed = with_replies_and_popups(doc, &list, seed(target));
     let kept: Vec<Object> = list.iter().enumerate().filter(|(i, e)| *i != index && !goes_with(doc, e, &doomed)).map(|(_, e)| e.clone()).collect();
+    let kept = release_members(doc, kept, &doomed)?;
     Ok(set_annots(doc, p, kept)?)
+}
+
+/// The `/Annots` entries `kept` after deleting `going`, with every group subordinate that stays
+/// ([`own_deletion`]) but whose `/IRT` names an annotation going made a comment of its own: its
+/// `/IRT` is removed and its `/RT /Group` kept, as Acrobat does when a group's primary is deleted.
+/// A deleted primary then stays reachable from nothing, so a full save leaves its text out. An
+/// inline entry is rewritten in the list; a referenced one is updated in place. Each entry is
+/// read once, following no chain.
+pub fn release_members(doc: &mut Document, kept: Vec<Object>, going: &HashSet<ObjRef>) -> Result<Vec<Object>, pdfcraft_cos::CosError> {
+    let orphaned = |d: &Dict| is_group_subordinate(d) && d.reference(b"IRT").is_some_and(|r| going.contains(&r));
+    let mut out = Vec::with_capacity(kept.len());
+    for e in kept {
+        match e.as_ref() {
+            Some(r) => {
+                if doc.get(r).as_dict().is_some_and(orphaned) {
+                    doc.update_dict(r, |d| {
+                        d.remove(b"IRT");
+                    })?;
+                }
+                out.push(e);
+            }
+            None => match e {
+                Object::Dict(mut d) if orphaned(&d) => {
+                    d.remove(b"IRT");
+                    out.push(Object::Dict(d));
+                }
+                other => out.push(other),
+            },
+        }
+    }
+    Ok(out)
 }
 
 /// What deleting the `/Annots` entry `target` starts from: its reference, or for an inline
@@ -595,7 +628,33 @@ fn apply_text_box(doc: &mut Document, r: ObjRef, rect: [f64; 4], meta: &Meta, ne
 }
 
 fn border_width_of(d: &Dict) -> f64 {
-    d.get(b"BS").and_then(|b| b.as_dict()).and_then(|b| b.get(b"W")).and_then(|w| w.as_f64()).unwrap_or(1.0).max(0.0)
+    appearance::border_width(d)
+}
+
+/// Recompute `/Rect` for an `Ink` annotation when its stroke width changes from `old_w` to `w`.
+/// Preserves any baseline margin beyond `old_w / 2.0` (at least `1.0` pt) without accumulating
+/// padding across repeated width increases and decreases.
+fn ink_rect_for_width(d: &Dict, old_w: f64, w: f64) -> Option<[f64; 4]> {
+    let list = d.get(b"InkList")?.as_array()?;
+    let mut strokes: Vec<Vec<[f64; 2]>> = Vec::with_capacity(list.len());
+    for s in list {
+        let pts: Vec<f64> = s.as_array()?.iter().map(Object::as_f64).collect::<Option<_>>()?;
+        strokes.push(pts.as_chunks::<2>().0.iter().map(|p| [p[0], p[1]]).collect());
+    }
+    let inner = ink_bounds(&strokes)?;
+    let vals: Vec<f64> = d.get(b"Rect").and_then(Object::as_array).map(|a| a.iter().filter_map(Object::as_f64).collect()).unwrap_or_default();
+    let Some(old_rect) = four(&vals).map(normalize) else {
+        return Some(grow(inner, w / 2.0 + 1.0));
+    };
+    let old_half = old_w / 2.0;
+    let new_half = w / 2.0;
+    let base = [
+        (inner[0] - old_rect[0] - old_half).max(1.0),
+        (inner[1] - old_rect[1] - old_half).max(1.0),
+        (old_rect[2] - inner[2] - old_half).max(1.0),
+        (old_rect[3] - inner[3] - old_half).max(1.0),
+    ];
+    Some([inner[0] - base[0] - new_half, inner[1] - base[1] - new_half, inner[2] + base[2] + new_half, inner[3] + base[3] + new_half])
 }
 
 /// Change a comment's colour, opacity, line width and/or line endings, and redraw it. A comment
@@ -674,10 +733,17 @@ fn style_one(doc: &mut Document, page: usize, index: usize, change: StyleChange,
             }
         }
         if let Some(w) = width {
+            let old_w = border_width_of(d);
+            let w = w.max(0.0);
             let mut bs = d.get(b"BS").and_then(|b| b.as_dict()).cloned().unwrap_or_default();
-            bs.set(b"W".to_vec(), Object::Real(w.max(0.0)));
+            bs.set(b"W".to_vec(), Object::Real(w));
             d.set(b"BS".to_vec(), Object::Dict(bs));
             d.remove(b"Border");
+            if d.name(b"Subtype") == Some(b"Ink")
+                && let Some(rect) = ink_rect_for_width(d, old_w, w)
+            {
+                d.set(b"Rect".to_vec(), num_array(&rect));
+            }
         }
         if let Some(ends) = endings {
             if ends.len() == 1 {
