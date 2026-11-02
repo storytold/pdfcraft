@@ -4506,6 +4506,7 @@ dependencies = [
  "ocrs",
  "pdfcraft-fonts",
  "rten",
+ "rten-imageproc",
  "tempfile",
  "thiserror 2.0.21",
 ]
