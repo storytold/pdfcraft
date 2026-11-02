@@ -6,7 +6,8 @@
 //! press point decide who captures it ([`PageRouter::press`]), by the same table: the highest layer
 //! the active tool reaches. Until the button is up only the owner acts on the press, its drag and
 //! its release, so what the cursor promised is what the press does, and nothing takes a gesture
-//! back halfway.
+//! back halfway. Each page is told what it has to do with the press ([`PagePress`]): its owner's,
+//! the active tool's, or none of its business.
 
 use egui::CursorIcon;
 
@@ -106,6 +107,28 @@ pub(crate) fn top(hits: impl IntoIterator<Item = Hit>, tool: QuickTool) -> Optio
     })
 }
 
+/// What one page has to do with the press the pages hold.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PagePress {
+    /// The press began on this page, and the owner's hit won it: only its module acts on it.
+    Mine(Owner),
+    /// No button is down, or the press began on this page and nobody's hit won it: the active
+    /// tool's.
+    Free,
+    /// The press began on another page, or between the pages.
+    Elsewhere,
+}
+
+impl PagePress {
+    /// Who holds the press on this page, if anyone.
+    pub(crate) fn owner(self) -> Option<Owner> {
+        match self {
+            PagePress::Mine(owner) => Some(owner),
+            PagePress::Free | PagePress::Elsewhere => None,
+        }
+    }
+}
+
 /// A press the pages hold, and who it belongs to.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Capture {
@@ -118,13 +141,33 @@ pub(crate) struct Capture {
 #[derive(Debug, Default)]
 pub(crate) struct PageRouter {
     capture: Option<Capture>,
+    /// A press is held, and the page it began on (`None`: between the pages).
+    began: Option<Option<usize>>,
 }
 
 impl PageRouter {
+    /// A new press on the pages: the last one's owner goes, and until a page claims it the press is
+    /// between the pages.
+    pub(crate) fn begin(&mut self) {
+        self.capture = None;
+        self.began = Some(None);
+    }
+
     /// A press on `page`: `hits` at the press point decide who it belongs to. A press nobody's
     /// hit claims is held by nobody (the page's text, or a tool that acts anywhere on the page).
     pub(crate) fn press(&mut self, page: usize, hits: impl IntoIterator<Item = Hit>, tool: QuickTool) {
         self.capture = top(hits, tool).map(|h| Capture { page, owner: h.owner, declines_drag: h.declines_drag });
+        self.began = Some(Some(page));
+    }
+
+    /// What `page` has to do with the press the pages hold.
+    pub(crate) fn press_for(&self, page: usize) -> PagePress {
+        match (self.began, &self.capture) {
+            (None, _) => PagePress::Free,
+            (Some(Some(p)), Some(c)) if p == page => PagePress::Mine(c.owner),
+            (Some(Some(p)), None) if p == page => PagePress::Free,
+            _ => PagePress::Elsewhere,
+        }
     }
 
     /// Who holds the press on `page`.
@@ -142,12 +185,14 @@ impl PageRouter {
     pub(crate) fn settle(&mut self, any_down: bool, edges: bool) {
         if !any_down && !edges {
             self.capture = None;
+            self.began = None;
         }
     }
 
     /// Drops the press (Escape, a dialog, automation's cancel).
     pub(crate) fn cancel(&mut self) {
         self.capture = None;
+        self.began = None;
     }
 }
 
@@ -183,6 +228,27 @@ mod tests {
         r.press(0, [], QuickTool::Select);
         assert_eq!(r.owner(0), None, "a press nobody claims is held by nobody");
         assert!(!r.keeps_drag());
+    }
+
+    /// A page is told whether the press is its owner's, the active tool's, or another page's.
+    #[test]
+    fn each_page_is_told_whether_the_press_is_its_own() {
+        let mut r = PageRouter::default();
+        assert_eq!(r.press_for(3), PagePress::Free, "no button down: every page is the tool's");
+        r.begin();
+        assert_eq!(r.press_for(0), PagePress::Elsewhere, "a press between the pages is no page's");
+        r.press(2, [], QuickTool::Select);
+        assert_eq!((r.press_for(2), r.press_for(1)), (PagePress::Free, PagePress::Elsewhere), "nobody's, on page 2");
+        r.begin();
+        r.press(1, [hit(Layer::Comment, 4)], QuickTool::Select);
+        assert_eq!((r.press_for(1), r.press_for(2)), (PagePress::Mine(hit(Layer::Comment, 4).owner), PagePress::Elsewhere));
+        r.settle(false, true);
+        assert_eq!(r.press_for(2), PagePress::Elsewhere, "until its release has been seen");
+        r.settle(false, false);
+        assert_eq!((r.press_for(1), r.press_for(2)), (PagePress::Free, PagePress::Free));
+        r.begin();
+        r.cancel();
+        assert_eq!(r.press_for(0), PagePress::Free, "a cancelled press is nobody's");
     }
 
     #[test]

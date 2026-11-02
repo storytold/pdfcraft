@@ -1604,9 +1604,9 @@ fn draw_pages(
     cancel_on_escape(ui.ctx(), view, &ptr);
     view.router.settle(ptr.any_down, !ptr.edges.is_empty());
     // A new press is no longer the last one's, wherever it lands (the page it is on gives it
-    // its owner; in the gap between pages it has none).
+    // its owner; in the gap between pages it is no page's).
     if ptr.pressed().is_some() {
-        view.router.cancel();
+        view.router.begin();
         // The page widget is not focusable. Explicitly return keyboard ownership from Pages
         // when the user presses the document, without stealing focus through a modal.
         if let Some(id) = view.pages_focus_id {

@@ -384,7 +384,7 @@ fn page_modules_claim_the_cursor_and_never_set_it() {
 }
 
 /// What decides, keeps or drops the press the pages hold.
-const ROUTER_WRITES: [&str; 3] = ["router.press(", "router.settle(", "router.cancel("];
+const ROUTER_WRITES: [&str; 4] = ["router.begin(", "router.press(", "router.settle(", "router.cancel("];
 
 /// The functions that decide, keep or drop the press the pages hold: (file, function, why).
 const ROUTER_WRITERS: [(&str, &str, &str); 3] = [
