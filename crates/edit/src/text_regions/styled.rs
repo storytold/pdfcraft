@@ -292,6 +292,9 @@ fn validate_contextual_rows(rows: &[Vec<StyledChar>], kept: &[bool]) -> Result<(
     Ok(())
 }
 
+/// The horizontal scale that makes each source line, rewritten in its own font and text state,
+/// as wide as it is drawn (TJ kerning and justification are not in the text state), clamped to
+/// 50–200 %. A line moved to a document font, or given a family by its own range, keeps factor 1.
 fn calibration_factors(
     lines: &[TextLine],
     metrics: &std::collections::BTreeMap<String, Metrics>,
@@ -316,8 +319,12 @@ fn calibration_factors(
         // A line joined across several resources of one font (#3661) is measured run by run, in
         // each one's own encoding and widths: the first resource alone may not encode the others'
         // letters, which then measured nothing and stretched the rewrite up to `200 Tz` (#5769).
-        // A space joining put between two runs is measured in the line's font.
-        let width = if source.runs.iter().any(|run| run.3 != source.font) {
+        // A space joining put between two runs is measured in the line's font. A run whose font
+        // has no metrics leaves the line uncalibrated rather than measured in a font that may not
+        // encode it. A row restyled into another face keeps the runs it was read from, but is
+        // written in that face (`apply_range_styles`): it is measured whole in it, as before.
+        let read_as_drawn = source.runs.first().is_some_and(|run| run.3 == source.font);
+        let width = if read_as_drawn && source.runs.iter().any(|run| run.3 != source.font) {
             source.runs.iter().try_fold(0.0, |width, (text, _, spaced, font)| {
                 let gap = if *spaced { measure(&source.font, " ")? } else { 0.0 };
                 Some(width + gap + measure(font, text)?)
@@ -388,12 +395,18 @@ fn page_font_metrics(
             metrics.insert(String::from_utf8_lossy(name).into_owned(), Metrics::from_dict(doc, font));
         }
     }
-    for index in &block.lines {
-        if let Some(line) = lines.get(*index)
-            && !metrics.contains_key(&line.font)
-            && let Some(font) = fonts.get(line.font.as_bytes()).and_then(|resource| doc.resolve(resource).as_dict().cloned())
+    // The paragraph's own fonts are read even past that cap: each line's, and each of its runs'
+    // (a line can join several resources of one font, #3661).
+    let shown = block
+        .lines
+        .iter()
+        .filter_map(|index| lines.get(*index))
+        .flat_map(|line| std::iter::once(&line.font).chain(line.runs.iter().map(|run| &run.3)));
+    for name in shown {
+        if !metrics.contains_key(name)
+            && let Some(font) = fonts.get(name.as_bytes()).and_then(|resource| doc.resolve(resource).as_dict().cloned())
         {
-            metrics.insert(line.font.clone(), Metrics::from_dict(doc, &font));
+            metrics.insert(name.clone(), Metrics::from_dict(doc, &font));
         }
     }
     (fonts, metrics)
