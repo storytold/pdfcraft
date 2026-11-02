@@ -2717,6 +2717,38 @@ fn form_fill_ticks_one_kid_of_a_check_box_by_its_on_state() {
     assert_eq!(ok(&mut a, "form_fields", json!({ "doc": doc }))["fields"][0]["checked"], Value::Null);
 }
 
+/// The options `form_fields` reports fill back through `form_fill` to the kid they name, also
+/// where one kid's `/Opt` export is the other kid's on state: B exports `(A)`, and filling `A`
+/// still ticks the kid whose on state is A (ISO 32000-2 §12.7.5.2.3, Table 230).
+#[test]
+fn form_fill_round_trips_the_reported_options_of_a_check_box_with_a_crossed_export() {
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 400 300] >>",
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R 7 0 R] >>",
+        "<< /Fields [5 0 R] /DA (/Helv 0 Tf 0 g) >>",
+        "<< /FT /Btn /T (pair) /V /Off /Opt [(x) (A)] /Kids [6 0 R 7 0 R] >>",
+        "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /AS /Off /Rect [10 250 26 266] /P 3 0 R /AP << /N << /A 8 0 R /Off 8 0 R >> >> >>",
+        "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /AS /Off /Rect [40 250 56 266] /P 3 0 R /AP << /N << /B 8 0 R /Off 8 0 R >> >> >>",
+        "<< /Length 0 >>
+stream
+
+endstream",
+    ];
+    let dir = workdir("check-box-crossed-export-fill");
+    std::fs::write(dir.join("form.pdf"), pdf_of(&objs)).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "form.pdf" }))["doc"].as_u64().unwrap();
+    let before = ok(&mut a, "form_fields", json!({ "doc": doc }));
+    let options = before["fields"][0]["options"].clone();
+    assert_eq!(options, json!(["A", "B"]), "{before}");
+    for option in ["A", "B"] {
+        ok(&mut a, "form_fill", json!({ "doc": doc, "values": { "pair": option } }));
+        let after = ok(&mut a, "form_fields", json!({ "doc": doc }));
+        assert_eq!(after["fields"][0]["checked"], json!(option), "filling {option}: {after}");
+    }
+}
+
 /// `form_fields` on a check box's kids: one option per distinct on state, named by its `/Opt`
 /// export unless two states share one, and `checked` follows the kid whose `/AS` is on, which
 /// ISO 32000-2 §12.7.5.2.3 makes decide where `/AS` and `/V` differ.
