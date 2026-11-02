@@ -21,6 +21,9 @@ them with the image's current orientation. Full turns retain its appearance, rec
 and flips. Angles that are not multiples of 90 are refused without changing the document or
 its undo/redo history.
 
+`page_add_text`, `content_update` and `text_edit` take per-line `aligns`. An `"inherit"` entry
+follows the box-level `align`; legacy `null` entries remain accepted with the same meaning.
+
 `Content` is `Json(Value)` or `Png { data, width, height }`. Errors are `UnknownTool`, `InvalidArgs` (the call didn't match the schema) or `Failed` (a readable message for the agent).
 
 ## Conventions
@@ -181,6 +184,12 @@ working document unchanged.
 `content_list` or `object_list`. It removes only that item in a read-only preview and is
 mutually exclusive with `hide_text_block`.
 
+When the renderer reports a warning for the page, `page_render` and `render_preview` return a
+JSON part after the PNG, `{ "page": 1, "warnings": [...] }`, with the sentences
+`pdfcraft-cli render` prints: "content past the page's safety budget was skipped" and "a colour
+that could not be computed was painted in a fallback colour". A page without warnings returns
+the PNG alone.
+
 
 ## Existing text and document fonts
 
@@ -192,6 +201,19 @@ faces complete absent subset glyphs. `text_edit.ranges` accepts disjoint UTF-8 b
 undoable and survive saving/reopening. `image_hit` shares the UI's curve and hole hit testing.
 The bounds, limits and font requirements are in [existing-text editing](../../docs/editing-existing-text.md)
 and [image editing](../../docs/editing-images.md).
+
+### Superscript and subscript normalization
+
+`text_script` changes characters to their Unicode superscript or subscript forms; it does not
+change the font size or baseline. For characters that have such forms, uniformly plain text
+toggles to the requested script, and uniformly scripted text toggles back to plain text.
+Characters without a matching form stay unchanged and do not determine the selection's state.
+
+A selection mixing plain and target-script characters normalizes to the requested script.
+For example, subscript changes `H₂2` to `H₂₂`, then to `H22` on the next call; superscript
+changes `Q²2` to `Q²²`, then to `Q22`. A second toggle does not reconstruct the original
+mixture. Each call is one undoable text edit: `edit_undo` restores the exact prior text,
+including its original mixture. Save/reopen preserves the resulting normalized characters.
 
 ## Opening local GoToR links
 
@@ -214,6 +236,18 @@ unapplied with a warning.
 folders. The CLI also exposes it as `pdfcraft-cli batch`. See the
 [batch guide](../../docs/cli-batch.md) for examples, output protection, errors and limits.
 
+## Editing button export values
+
+Use `form_set_props` with `field`, `export_value` and optional `widget`
+(1-based, default 1) to change a checkbox or radio button export value.
+`form_fields` returns `export_values` in widget order. The selected/default
+appearance states are preserved; the operation is undoable and survives saving.
+Widgets sharing an appearance state keep one export value. Bulk edits are not
+supported for this widget-specific property. Empty values, `Off`, conflicting
+choices and values over 4096 UTF-8 bytes return an error.
+
+Example: `form_set_props doc=1 field=agree export_value=Accepted widget=1`.
+
 ## Viewer navigation history
 
 A running PdfCraft instance launched with `--control FILE` exposes its per-tab history through
@@ -229,3 +263,10 @@ behavior. Back/Forward
 returns to page tops, does not restore zoom, does not switch documents, and is not saved across
 restarts. Standalone engine/MCP sessions have no viewport, so they do not have a separate
 navigation-history tool; use the opt-in UI control channel to navigate the displayed document.
+
+## Fill & Sign text appearance
+
+`fill_sign_add` accepts `font_size` (4–300 pt, default 10) and `color`
+(`#RRGGBB`, default black) for `text` and `date`. The colour is saved in the
+FreeText appearance and survives reopening. Other mark/signature types reject
+`color`; their appearance controls are separate.
