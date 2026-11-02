@@ -1,4 +1,4 @@
-use super::reader::{find, generated_id};
+use super::reader::find;
 use super::state::Credentials;
 use super::xref::XrefIndex;
 use super::{Arc, BTreeMap, CosError, Dict, Document, ObjRef, Object};
@@ -19,6 +19,7 @@ impl Document {
             repair_log: Arc::new(Vec::new()),
             cache: Arc::default(),
             objstms: Arc::default(),
+            jbig2_globals: Arc::default(),
             stream_limit: crate::object::MAX_DECODED,
             overlay: BTreeMap::new(),
             next_num: 1,
@@ -102,6 +103,7 @@ impl Document {
             repair_log: Arc::new(Vec::new()),
             cache: Arc::default(),
             objstms: Arc::default(),
+            jbig2_globals: Arc::default(),
             stream_limit: stream_limit.min(crate::object::MAX_DECODED),
             overlay: BTreeMap::new(),
             next_num: 1,
@@ -271,8 +273,7 @@ impl Document {
         let id0 = match self.trailer.get(b"ID") {
             Some(Object::Array(a)) if a.len() == 2 => a[0].as_string().map(|s| s.bytes.clone()).unwrap_or_default(),
             _ => {
-                let mut id = generated_id(&params.seed);
-                id.truncate(16);
+                let id = pdfcraft_crypt::file_id(&params.seed);
                 let s = Object::String(crate::PdfString { bytes: id.clone(), hex: true });
                 self.trailer.set(b"ID".to_vec(), Object::Array(vec![s.clone(), s]));
                 id
