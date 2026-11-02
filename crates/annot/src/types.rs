@@ -443,6 +443,14 @@ pub enum Shape {
         file: String,
         data: Vec<u8>,
     },
+    /// Attach an audio clip as a sound annotation: an icon whose top-left corner is at `at`,
+    /// holding `samples` at sampling rate `rate` and `channels`.
+    Sound {
+        at: [f64; 2],
+        rate: u32,
+        channels: u16,
+        samples: Vec<u8>,
+    },
 }
 
 /// The standard file attachment icons (§12.5.6.15).
@@ -494,6 +502,7 @@ impl Shape {
             Shape::PolyLine { .. } => "PolyLine",
             Shape::Caret { .. } => "Caret",
             Shape::Attachment { .. } => "FileAttachment",
+            Shape::Sound { .. } => "Sound",
         }
     }
 }
@@ -614,7 +623,7 @@ impl Style {
                 ([0.89, 0.13, 0.13], 2.0)
             }
             Shape::Callout { .. } => ([0.0, 0.0, 0.0], 1.0),
-            Shape::Caret { .. } | Shape::Attachment { .. } => ([0.0, 0.47, 0.84], 1.0),
+            Shape::Caret { .. } | Shape::Attachment { .. } | Shape::Sound { .. } => ([0.0, 0.47, 0.84], 1.0),
             Shape::FreehandHighlight { .. } => return Self { color: [1.0, 0.94, 0.0], opacity: 0.35, width: 14.0, fill: None },
             Shape::Ink { .. } => ([0.0, 0.4, 0.87], 2.0),
             Shape::TextBox { .. } | Shape::Typewriter { .. } => ([0.0, 0.0, 0.0], 0.0),
