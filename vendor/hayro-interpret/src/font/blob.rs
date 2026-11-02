@@ -48,9 +48,7 @@ impl Type1FontBlob {
         let mut path = OutlinePath::new();
         // A space draws no contours and returns `Ok`; a glyph id the font has no entry for
         // returns `Err`.
-        self.table().draw(gid, Some(UNITS_PER_EM), &mut path).ok()?;
-
-        Some(path.take())
+        drawn(self.table().draw(gid, Some(UNITS_PER_EM), &mut path), path)
     }
 }
 
@@ -120,11 +118,8 @@ impl CffFontBlob {
         let mut path = OutlinePath::new();
         let subfont = self.subfont(glyph)?;
 
-        self.font()
-            .draw(subfont, glyph, &[], Some(UNITS_PER_EM), &mut path)
-            .ok()?;
-
-        Some(path.take())
+        let result = self.font().draw(subfont, glyph, &[], Some(UNITS_PER_EM), &mut path);
+        drawn(result, path)
     }
 
     pub(crate) fn glyph_names(&self) -> Vec<(GlyphId, String)> {
@@ -192,6 +187,22 @@ impl Debug for OpenTypeFontBlob {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "OpenType Font {{ .. }}")
     }
+}
+
+/// PdfCraft patch: the outline a draw produced, keeping what a malformed glyph wrote before it
+/// failed.
+///
+/// A draw that fails can have emitted path elements first, and the old code kept them (it ignored
+/// the result). Turning the failure into `None` lost them, so a glyph that draws most of itself
+/// and then trips came out blank (noted in review of #3447). `None` is for a glyph the font could
+/// not draw at all; an empty path from a successful draw is a glyph that draws nothing, such as a
+/// space.
+fn drawn<T, E>(result: Result<T, E>, path: OutlinePath) -> Option<BezPath> {
+    let path = path.take();
+    if result.is_err() && path.elements().is_empty() {
+        return None;
+    }
+    Some(path)
 }
 
 impl OpenTypeFontBlob {
@@ -358,8 +369,7 @@ impl OpenTypeFontBlob {
 
         let outline = self.outline_glyphs().get(glyph)?;
 
-        outline.draw(draw_settings, &mut path).ok()?;
-        Some(path.take())
+        drawn(outline.draw(draw_settings, &mut path), path)
     }
 }
 
@@ -474,5 +484,37 @@ mod tests {
         let shared = blob.clone();
         assert!(Arc::ptr_eq(&blob.1, &shared.1), "clones share one name map");
         assert_eq!(shared.glyph_index_by_name("Alpha"), Some(GlyphId::new(1)));
+    }
+
+    /// PdfCraft patch test: a draw that fails after writing elements keeps what it drew.
+    ///
+    /// Reporting an unavailable outline separately from an empty one (#3447) turned every draw
+    /// failure into `None`, so a malformed glyph that draws most of itself and then trips came
+    /// out blank, where the code before it kept the partial outline (noted in review).
+    #[test]
+    fn a_failed_draw_keeps_the_elements_it_wrote() {
+        use skrifa::outline::OutlinePen;
+
+        let empty = OutlinePath::new;
+        let with_a_line = || {
+            let mut p = OutlinePath::new();
+            p.move_to(0.0, 0.0);
+            p.line_to(10.0, 10.0);
+            p
+        };
+
+        // A glyph that draws nothing and succeeds is an empty outline, not a missing one: that
+        // is a space, and a clipping render mode clips to nothing for it.
+        let ok_empty = drawn(Ok::<(), ()>(()), empty()).expect("a successful draw is an outline");
+        assert!(ok_empty.elements().is_empty(), "and it is empty");
+
+        // A glyph that drew something and then failed keeps what it drew.
+        let partial = drawn(Err::<(), ()>(()), with_a_line()).expect("a partial outline is kept");
+        assert_eq!(partial.segments().count(), 1, "the line it managed to write");
+
+        // A draw that fails having written nothing is a glyph the font could not draw.
+        assert!(drawn(Err::<(), ()>(()), empty()).is_none(), "nothing drawn and failed: no outline");
+        // And a successful draw that wrote something is itself.
+        assert_eq!(drawn(Ok::<(), ()>(()), with_a_line()).expect("an outline").segments().count(), 1);
     }
 }
