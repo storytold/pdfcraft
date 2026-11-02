@@ -230,11 +230,23 @@ fn word_background(pages: &[Page]) -> Option<String> {
 
 /// The `w:lang` that makes `tag` the language of a Word document's text. Word keeps one language
 /// per script: Chinese, Japanese and Korean are its East Asian text, Arabic, Hebrew, Persian and
-/// Urdu its right-to-left text, and any other language its Latin, Greek and Cyrillic text.
+/// Urdu its right-to-left text, and any other language its Latin, Greek and Cyrillic text. A
+/// script the tag names (`pa-Arab`, `zh-Latn`) decides over its language.
 fn word_lang(tag: &str) -> String {
-    let attribute = match tag.split('-').next().unwrap_or_default().to_ascii_lowercase().as_str() {
-        "zh" | "ja" | "ko" => "w:eastAsia",
-        "ar" | "he" | "fa" | "ur" => "w:bidi",
+    let mut subtags = tag.split('-');
+    let primary = subtags.next().unwrap_or_default().to_ascii_lowercase();
+    // The script comes straight after the language and any three-letter extended languages; a
+    // singleton before it starts an extension or private use, which names no script.
+    let script = subtags
+        .find(|s| s.len() != 3 || !s.bytes().all(|b| b.is_ascii_alphabetic()))
+        .filter(|s| s.len() == 4 && s.bytes().all(|b| b.is_ascii_alphabetic()))
+        .map(str::to_ascii_lowercase);
+    let attribute = match (script.as_deref(), primary.as_str()) {
+        (Some("arab" | "hebr" | "syrc" | "thaa"), _) => "w:bidi",
+        (Some("hans" | "hant" | "hani" | "jpan" | "kore" | "hang" | "hira" | "kana"), _) => "w:eastAsia",
+        (Some("latn" | "cyrl" | "grek"), _) => "w:val",
+        (_, "zh" | "ja" | "ko") => "w:eastAsia",
+        (_, "ar" | "he" | "fa" | "ur") => "w:bidi",
         _ => "w:val",
     };
     format!("<w:lang {attribute}=\"{}\"/>", esc(tag))
