@@ -4651,6 +4651,15 @@ name = "pdfcraft-testkit"
 version = "0.17.0"
 
 [[package]]
+name = "pdfcraft-thumbnails"
+version = "0.16.1"
+dependencies = [
+ "pdfcraft-render",
+ "windows",
+ "windows-core",
+]
+
+[[package]]
 name = "pdfcraft-ui-egui"
 version = "0.17.0"
 dependencies = [
