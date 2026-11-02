@@ -88,6 +88,7 @@
 > **Last reviewed:** 2026-10-18 - **Last updated:** 2026-10-18 - **Change:** minor (M12 #2570: Dynamic XFA rich-text fields carry exData/maxLength into AcroForm MaxLen for reported and enforced Unicode character limits, retained after save/reopen. Estimates unchanged)
 > **Last reviewed:** 2026-10-18 - **Last updated:** 2026-10-18 - **Change:** minor (M4 #3309: bounded iterative named-destination pruning on page deletion; estimates unchanged)
 > **Last reviewed:** 2026-10-18 - **Last updated:** 2026-10-18 - **Change:** minor (M1 #2658: macOS atomic saves retain destination extended attributes, including Finder tags, and reject partial resource-fork reads after size changes. Metadata failures retain the original PDF and unsaved edit. Estimates unchanged)
+> **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M12 #4022: rebase PR #4064 onto main 0cba87ae; 898 scoped tests pass (4 existing ignored), formatting, strict Clippy, layers/assets/parity and wasm checks pass; behavior and estimates unchanged)
 
 PdfCraft's one-page summary: how close it is to Adobe Acrobat Pro's offline feature set, and what
 comes next. Adobe's cloud services (Document Cloud, Acrobat Sign requests, shared review, the AI
@@ -743,6 +744,7 @@ Newest first: the date, what moved, and the new overall estimate.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-01 | patch | M12 #4022: rebase PR #4064 onto main 0cba87ae; 898 scoped tests pass (4 existing ignored), formatting, strict Clippy, layers/assets/parity and wasm checks pass; behavior and estimates unchanged. |
 | 2026-10-28 | patch | M2, PR #4172: integrate main 5af10276 and retain both roadmap histories; viewer-only CJK and print/output font policies and estimates unchanged. |
 | 2026-10-27 | minor | M10: OCR stages SHA-256-verified ONNX models after the upstream RTEN URL brownout; discovery prefers a complete ONNX pair per directory, falls back to a complete RTEN pair, and never mixes formats or directories; language/web limits and estimates unchanged. |
 | 2026-10-23 | minor | M8, #3205 follow-up: phone-pattern redaction includes the +39 country code on labelled Italian geographic numbers with a slash; dates, protocol identifiers and whole-run guards remain. Estimates unchanged. |
@@ -806,6 +808,9 @@ Newest first: the date, what moved, and the new overall estimate.
 - **2026-10-21 (M4, #3865):** A new bookmark records where the reader is: the top-left of the selected text, or the top of the window, as `/XYZ left top null` (zoom kept), instead of the page top (`Edit::AddBookmark` takes `left` and `top`; `bookmark_add` takes `top` and `left`; `PageInfo::xyz_for_view`).
 
 - **2026-10-22 (automation, #4022):** `pdfcraft-cli mcp` takes `--automation-read-root` and `--automation-write-root` more than once (either spelling): a path is allowed inside any root of its kind, a bad folder anywhere in the list stops the server, and with no root of a kind none of its access is granted, as before. `text_font_files` without `directories` searches every read root, and `--root` itself when it lies inside a read root that `--root` would otherwise rule out. Previously the second occurrence was refused ("given twice").
+
+- **2026-11-01 (M12, #4022 rebase):** PR #4064 rebased onto main `0cba87ae`; resolved and auto-merged hunks reviewed. 898 scoped tests passed, 4 existing ignored; formatting, strict Clippy, layers/assets/parity and wasm checks passed. Behavior and estimates unchanged.
+
 
 - **2026-10-18 (renderer, hayro patches 19/35):** A mesh shading (types 4–7) is sampled over its own triangles instead of the whole path: a BricsCAD plan with 310 one-triangle `sh` fills took 2 s per 1024 px tile at every zoom (and hit the 20 s watchdog on a busy machine); now about 70 ms, so zooming into dense topology drawings stays fluid. Estimates unchanged.
 
