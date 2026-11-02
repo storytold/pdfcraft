@@ -65,7 +65,7 @@ fontconfig-parser = "0.5.8"
 # Safe AppKit calls for drag coordinates and repairing an existing per-file PDFCraft binding.
 # The Objective-C wrappers and block support are already in the tree through arboard and rfd.
 objc2 = "0.6"
-objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSEvent", "NSScreen", "NSWorkspace", "block2"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSEvent", "NSMenu", "NSMenuItem", "NSResponder", "NSScreen", "NSWorkspace", "block2"] }
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSGeometry", "NSBundle", "NSURL", "NSString", "NSError"] }
 block2 = "0.6"
 plist = "1.10"

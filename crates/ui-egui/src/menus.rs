@@ -624,6 +624,32 @@ impl PdfCraftApp {
                 log::info!("menu shortcut {:?} kept by {} over {} ({})", clash.shortcut, clash.command.id, clash.system, clash.resolution);
             }
         }
+        #[cfg(target_os = "macos")]
+        sync_full_screen_item(ctx.input(|i| i.viewport().fullscreen.unwrap_or(false)));
+    }
+}
+
+/// AppKit adds its own Enter Full Screen item to a menu titled View and retitles it when it
+/// validates the menu, but muda turns validation off on its menus, so the title is set here. Left
+/// alone while a menu is open: changing an `NSMenu` AppKit is tracking can strand it.
+#[cfg(target_os = "macos")]
+fn sync_full_screen_item(full_screen: bool) {
+    let Some(mtm) = objc2::MainThreadMarker::new() else { return };
+    let Some(bar) = objc2_app_kit::NSApplication::sharedApplication(mtm).mainMenu() else { return };
+    if bar.highlightedItem().is_some() {
+        return;
+    }
+    let item = bar
+        .itemArray()
+        .to_vec()
+        .into_iter()
+        .filter_map(|top| top.submenu())
+        .flat_map(|menu| menu.itemArray().to_vec())
+        .find(|item| item.action() == Some(objc2::sel!(toggleFullScreen:)));
+    let Some(item) = item else { return };
+    let title = objc2_foundation::NSString::from_str(if full_screen { tl!("Exit Full Screen") } else { tl!("Enter Full Screen") });
+    if item.title() != title {
+        item.setTitle(&title);
     }
 }
 
