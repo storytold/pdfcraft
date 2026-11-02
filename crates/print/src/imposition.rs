@@ -16,8 +16,9 @@ fn n(v: f64) -> String {
     if s == "-0" { "0".into() } else { s.into() }
 }
 
-/// The page's content streams decoded against `budget` and joined; streams that don't decode
-/// are left out. `None` when the budget ran out, so part of the content is missing.
+/// The page's content streams decoded against `budget` and joined with a space as the renderer
+/// joins them; streams that don't decode are left out. `None` when the budget ran out, so part of
+/// the content is missing.
 pub(crate) fn decoded_contents(doc: &Document, page: &Dict, budget: &mut DecodeBudget) -> Option<Vec<u8>> {
     let Some(contents) = page.get(b"Contents") else { return Some(Vec::new()) };
     let mut out = Vec::new();
@@ -25,7 +26,7 @@ pub(crate) fn decoded_contents(doc: &Document, page: &Dict, budget: &mut DecodeB
         match data {
             Ok(data) => {
                 out.extend_from_slice(&data);
-                out.push(b'\n');
+                out.push(b' ');
             }
             Err(_) if budget.remaining() == 0 => return None,
             Err(_) => {}

@@ -183,6 +183,7 @@ impl Automation {
                 "page": c.page + 1,
                 "index": c.index + 1,
                 "type": c.subtype,
+                "intent": c.intent,
                 "author": c.author,
                 "contents": c.contents,
                 "modified": c.modified,
@@ -328,7 +329,7 @@ impl Automation {
                     let [start, end] = ending_pair(kind, endings.as_deref())?;
                     Shape::Line { from: to_user(&info, f[0], f[1]), to: to_user(&info, t[0], t[1]), start, end }
                 }
-                "ink" => {
+                "ink" | "freehand_highlight" => {
                     let wrong = || ToolError::InvalidArgs("strokes must be an array of arrays of [x, y] points".into());
                     let strokes = a.get("strokes").ok_or_else(|| ToolError::InvalidArgs("ink needs `strokes`".into()))?;
                     let strokes = strokes
@@ -346,7 +347,7 @@ impl Automation {
                                 .collect::<Result<Vec<_>>>()
                         })
                         .collect::<Result<Vec<_>>>()?;
-                    Shape::Ink { strokes }
+                    if kind == "freehand_highlight" { Shape::FreehandHighlight { strokes } } else { Shape::Ink { strokes } }
                 }
                 "polygon" | "cloud" | "polyline" => {
                     let wrong = || ToolError::InvalidArgs(format!("{kind} needs `points`: an array of [x, y] points"));
@@ -502,6 +503,10 @@ impl Automation {
         if sensitivity.is_some() && !scan {
             return Err(ToolError::InvalidArgs("sensitivity is only for scan: true".into()));
         }
+        let requested_color = a.color("color")?;
+        if requested_color.is_some() && !matches!(kind, "text" | "date") {
+            return Err(ToolError::InvalidArgs("color is only for type text or date".into()));
+        }
         let requested_size = a.opt_num("font_size")?;
         if requested_size.is_some() && !matches!(kind, "text" | "date") {
             return Err(ToolError::InvalidArgs("font_size is only for type text or date".into()));
@@ -579,7 +584,10 @@ impl Automation {
                 (Shape::Mark { rect: mark.rect_at(at, i64::from(info.rotation)), mark }, String::new())
             }
         };
-        let style = Style::default_for(&shape);
+        let mut style = Style::default_for(&shape);
+        if let Some(color) = requested_color {
+            style.color = color;
+        }
         self.apply(a, Edit::AddAnnotation(NewAnnotation { page, shape, style, contents, author }))
     }
 
