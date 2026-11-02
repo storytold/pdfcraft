@@ -110,7 +110,29 @@ fn phone(s: &[char], i: usize) -> Option<usize> {
         let trunk = trunk_zero && (7..=15).contains(&n) && lead >= 2 && date(s, i).is_none();
         nanp || trunk
     };
-    ok.then_some(end - i)
+    // #1957 review: a run that is only a single digit plus a valid phone tail
+    // ("ext. 5-0112-3456") used to match the tail and now matches nothing, so
+    // the number would stay visible — for a redaction tool the missed redaction
+    // is the dangerous error. Flag the whole run instead of dropping it: the
+    // tail is a phone number on its own and the run is phone-sized, so hiding
+    // the whole run is safer than hiding nothing. Longer runs keep the #1884
+    // behavior: their first group is not a single digit, so IBAN, NIR and
+    // SIRET tails still match nothing here.
+    let flagged = !ok
+        && !plus
+        && run.first().is_some_and(|c| c.is_ascii_digit())
+        && run.get(1).is_some_and(|c| matches!(c, ' ' | '-' | '.'))
+        && run.get(2..).is_some_and(|tail| {
+            let n_tail = n - 1;
+            let seps_tail = tail.iter().filter(|c| !c.is_ascii_digit()).count();
+            let nanp_tail = (10..=11).contains(&n_tail);
+            let mut tail_digits = tail.iter().skip_while(|c| !c.is_ascii_digit());
+            let tail_zero = tail_digits.clone().next() == Some(&'0');
+            let tail_lead = tail_digits.by_ref().take_while(|c| c.is_ascii_digit()).count();
+            let trunk_tail = tail_zero && (7..=15).contains(&n_tail) && tail_lead >= 2 && date(s, first + 2).is_none();
+            seps_tail >= 1 && (nanp_tail || trunk_tail)
+        });
+    (ok || flagged).then_some(end - i)
 }
 
 /// Scripts written without spaces between words (Chinese, Japanese, Korean, Thai, …): text in
@@ -384,6 +406,23 @@ mod tests {
         );
         assert_eq!(found(Pattern::Phone, "IBAN FR76 3000 6000 0112 3456 7890 189"), Vec::<String>::new());
         assert_eq!(found(Pattern::Phone, "SIRET 123 456 782 00010"), Vec::<String>::new());
+    }
+
+    #[test]
+    fn phone_after_a_digit_and_separator_is_not_dropped() {
+        // #1957 review: a phone number written after a digit and a separator
+        // must not stay visible. "Tel 1 555 123 4567" already matches whole
+        // from the run start; "ext. 5-0112-3456" is flagged whole instead of
+        // its tail being silently dropped.
+        assert_eq!(found(Pattern::Phone, "Tel 1 555 123 4567"), ["1 555 123 4567"]);
+        assert_eq!(found(Pattern::Phone, "ext. 5-0112-3456"), ["5-0112-3456"]);
+        // The #1884 behavior is unchanged: identifier tails still match nothing
+        // as phone numbers.
+        assert_eq!(found(Pattern::Phone, "IBAN FR76 3000 6000 0112 3456 7890 189"), Vec::<String>::new());
+        assert_eq!(found(Pattern::Phone, "NIR 1 85 05 78 006 084 36"), Vec::<String>::new());
+        // The SIRET run is still redacted, just by another pattern: it passes
+        // the credit-card checksum, so rejecting it as a phone number is safe.
+        assert_eq!(found(Pattern::CreditCard, "SIRET 123 456 782 00010"), ["123 456 782 00010"]);
     }
 
     #[test]
