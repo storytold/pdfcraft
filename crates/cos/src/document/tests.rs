@@ -588,6 +588,31 @@ fn an_entry_that_misses_its_object_is_found_by_searching_but_is_not_exact() {
     assert!(doc.xref_entry_is_exact(1) && doc.xref_entry_is_exact(2));
 }
 
+/// An object that can't be read at its entry or anywhere else is searched for in the whole file
+/// once: every later read, in a clone too, gives the same error without searching again. An
+/// edit of that number still answers for it.
+#[test]
+fn an_unreadable_object_is_searched_for_once() {
+    let bodies = ["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>", "<< /Odd Key(x) >>"];
+    let doc = Document::open(Arc::new(build(&bodies, "/Root 1 0 R /Info 3 0 R"))).unwrap();
+    // Counted wherever the whole-file search is done (`scan_for`).
+    OBJECT_SEARCHES.with(|c| c.set(0));
+    let first = doc.try_get(3);
+    assert!(first.is_err(), "{first:?}");
+    for _ in 0..10 {
+        assert_eq!(doc.try_get(3), first);
+        assert_eq!(*doc.get(ObjRef::new(3, 0)), Object::Null);
+    }
+    let mut edited = doc.clone();
+    assert_eq!(edited.try_get(3), first);
+    assert_eq!(OBJECT_SEARCHES.with(|c| c.get()), 1, "searches for an object that isn't there");
+    edited.set(ObjRef::new(3, 0), Object::Int(7));
+    assert_eq!(edited.try_get(3).as_deref(), Ok(&Object::Int(7)));
+    assert_eq!(doc.try_get(3), first, "the edit is the clone's alone");
+    edited.free(ObjRef::new(3, 0));
+    assert_eq!(edited.try_get(3).as_deref(), Ok(&Object::Null));
+}
+
 /// A classic table with `/Size` rows and object 0's free entry first, its subsection numbered
 /// `1 n` instead of `0 n` (#2676): every row is one number off.
 fn misnumbered_table(start: u32) -> Vec<u8> {
@@ -1109,7 +1134,7 @@ fn temporary_reader_keeps_file_views_and_evicts_data_of_its_own() {
     // Data of its own (decrypted streams, strings) counts: past the budget the cache is
     // cleared after the next read, including a failed one.
     let owned = Object::Stream(crate::Stream::from_raw(Dict::new(), vec![b'y'; ObjectReader::STREAM_BYTES + 1]));
-    reader.document.cache.lock().unwrap().insert(3, Arc::new(owned));
+    reader.document.cache.lock().unwrap().insert(3, Ok(Arc::new(owned)));
     assert_eq!(*reader.get(ObjRef::new(99, 0)), Object::Null);
     assert!(reader.document.cache.lock().unwrap().is_empty(), "owned data over budget is evicted");
 }
@@ -1198,8 +1223,8 @@ fn editor_cache_counts_deeply_nested_strings() {
         let Object::Ref(reference) = reference else { panic!("indirect object") };
         drop(doc.get(*reference));
         let cache = doc.cache.lock().unwrap();
-        let owned = cache.values().fold(0usize, |n, o| n.saturating_add(owned_bytes(o, &doc.data, 0)));
-        let strings = cache.values().filter(|o| o.as_array().is_some()).count();
+        let owned = cache.values().flatten().fold(0usize, |n, o| n.saturating_add(owned_bytes(o, &doc.data, 0)));
+        let strings = cache.values().flatten().filter(|o| o.as_array().is_some()).count();
         assert!(strings << 20 <= Document::EDITOR_CACHE_BYTES + (1 << 20), "{strings} MiB strings cached, {owned} bytes counted");
     }
 }

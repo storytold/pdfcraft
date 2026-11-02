@@ -30,6 +30,14 @@ impl LoadGuard {
     }
 }
 
+/// What loading a file object gave, kept in the document's cache either way.
+pub(super) type Loaded = Result<Arc<Object>, CosError>;
+
+/// The bytes a load result holds of its own ([`owned_bytes`]); a failure holds none.
+pub(super) fn loaded_bytes(loaded: &Loaded, data: &Arc<Vec<u8>>) -> usize {
+    loaded.as_ref().map_or(0, |o| owned_bytes(o, data, 0))
+}
+
 impl Drop for LoadGuard {
     fn drop(&mut self) {
         let outermost = LOADING.with(|l| {
@@ -165,7 +173,7 @@ impl ObjectReader {
         // have cached large objects.
         if let Ok(mut cache) = self.document.cache.lock() {
             let data = &self.document.data;
-            if cache.len() >= Self::OBJECTS || cache.values().fold(0usize, |n, o| n.saturating_add(owned_bytes(o, data, 0))) > Self::STREAM_BYTES {
+            if cache.len() >= Self::OBJECTS || cache.values().fold(0usize, |n, o| n.saturating_add(loaded_bytes(o, data))) > Self::STREAM_BYTES {
                 cache.clear();
             }
         }
@@ -177,6 +185,8 @@ impl ObjectReader {
 thread_local! {
     /// Cross-reference sections read on this thread.
     pub(super) static SECTION_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Whole-file searches for an object (`Document::scan_for`) on this thread.
+    pub(super) static OBJECT_SEARCHES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// Nesting [`owned_bytes`] walks: past the parser's own nesting limit, so every parsed object

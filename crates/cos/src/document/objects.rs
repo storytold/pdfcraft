@@ -1,5 +1,5 @@
 use super::reader::find;
-use super::state::{LENGTHS, LoadGuard, ObjStm, ObjectReader, ReadState, Slot, SourceIdentity, objstm_member, owned_bytes};
+use super::state::{LENGTHS, LoadGuard, Loaded, ObjStm, ObjectReader, ReadState, Slot, SourceIdentity, loaded_bytes, objstm_member};
 use super::xref::{Revision, XrefEntry};
 use super::{
     Arc, CosError, Cow, Dict, Document, Lexer, MAX_DECODED, MAX_JBIG2_GLOBALS, ObjRef, Object, Stream, is_whitespace, parse_indirect_shared,
@@ -388,20 +388,23 @@ impl Document {
             Some(Slot::Freed(_)) => return Ok(Arc::new(Object::Null)),
             None => {}
         }
-        if let Some(o) = self.cache.lock().map_err(|_| CosError::Poisoned)?.get(&num) {
-            return Ok(o.clone());
+        if let Some(loaded) = self.cache.lock().map_err(|_| CosError::Poisoned)?.get(&num) {
+            return loaded.clone();
         }
         // Loading can re-enter (indirect stream `/Length`, object streams); damaged files make
         // cycles such as `6 0 obj << /Length 6 0 R >>`. Bound the nesting on every path.
         let _guard =
             LoadGuard::enter(num).ok_or_else(|| CosError::Syntax { offset: 0, detail: format!("reference cycle while loading object {num}") })?;
-        let obj = self.load(num, 0)?;
-        let obj = Arc::new(obj);
-        // The editing cache is bounded like the scan reader's: re-parsing a file-backed view
-        // is cheap, and returned objects outlive eviction.
-        self.cache.lock().map_err(|_| CosError::Poisoned)?.insert(num, obj.clone());
-        self.evict_editor_cache_if_over_budget(num, &obj)?;
-        Ok(obj)
+        let loaded = self.load(num, 0).map(Arc::new);
+        // A failure is kept like an object, or every read of a damaged object searches the whole
+        // file again. A poisoned lock says nothing about the object.
+        if !matches!(loaded, Err(CosError::Poisoned)) {
+            // The editing cache is bounded like the scan reader's: re-parsing a file-backed view
+            // is cheap, and returned objects outlive eviction.
+            self.cache.lock().map_err(|_| CosError::Poisoned)?.insert(num, loaded.clone());
+            self.evict_editor_cache_if_over_budget(num, &loaded)?;
+        }
+        loaded
     }
 
     /// Bounds for the editing cache: roomier than the scan reader's (128 objects / 8 MB)
@@ -430,17 +433,17 @@ impl Document {
     /// byte budget can double.
     const EDITOR_LARGE_OBJECT: usize = 256 * 1024;
 
-    fn evict_editor_cache_if_over_budget(&self, fresh_num: u32, fresh: &Object) -> Result<(), CosError> {
+    fn evict_editor_cache_if_over_budget(&self, fresh_num: u32, fresh: &Loaded) -> Result<(), CosError> {
         // Fast path: the full fold is O(cache) per insert, so skip it for a small newcomer
         // below the count cap. `len` is copied out first; nothing here holds the lock.
         let len = self.cache.lock().map_err(|_| CosError::Poisoned)?.len();
-        if len <= Self::EDITOR_CACHE_OBJECTS && owned_bytes(fresh, &self.data, 0) <= Self::EDITOR_LARGE_OBJECT {
+        if len <= Self::EDITOR_CACHE_OBJECTS && loaded_bytes(fresh, &self.data) <= Self::EDITOR_LARGE_OBJECT {
             return Ok(());
         }
         // Walk a snapshot off-lock; re-lock only to evict.
-        let live: Vec<(u32, Arc<Object>)> = self.cache.lock().map_err(|_| CosError::Poisoned)?.iter().map(|(n, o)| (*n, o.clone())).collect();
+        let live: Vec<(u32, Loaded)> = self.cache.lock().map_err(|_| CosError::Poisoned)?.iter().map(|(n, o)| (*n, o.clone())).collect();
         let data = &self.data;
-        let owned: usize = live.iter().fold(0usize, |n, (_, o)| n.saturating_add(owned_bytes(o, data, 0)));
+        let owned: usize = live.iter().fold(0usize, |n, (_, o)| n.saturating_add(loaded_bytes(o, data)));
         if live.len() <= Self::EDITOR_CACHE_OBJECTS && owned <= Self::EDITOR_CACHE_BYTES {
             return Ok(());
         }
@@ -450,7 +453,7 @@ impl Document {
         let mut cache = self.cache.lock().map_err(|_| CosError::Poisoned)?;
         if cache.len() <= Self::EDITOR_CACHE_OBJECTS {
             let data = &self.data;
-            let owned: usize = cache.values().fold(0usize, |n, o| n.saturating_add(owned_bytes(o, data, 0)));
+            let owned: usize = cache.values().fold(0usize, |n, o| n.saturating_add(loaded_bytes(o, data)));
             if owned <= Self::EDITOR_CACHE_BYTES {
                 return Ok(());
             }
@@ -602,6 +605,8 @@ impl Document {
 
     /// Last-resort lookup: scan the file for `num G obj`.
     fn scan_for(&self, num: u32) -> Option<(ObjRef, Object)> {
+        #[cfg(test)]
+        super::OBJECT_SEARCHES.with(|c| c.set(c.get() + 1));
         let needle = format!("{num} ");
         let data = &self.data;
         let mut found = None;
