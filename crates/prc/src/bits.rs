@@ -12,30 +12,59 @@ use crate::acof::{self, Entry};
 /// bytes each, so 128 MiB.
 pub const MAX_DECODED_ELEMENTS: usize = 1 << 24;
 
+/// The most schema-program steps (tokens executed, loop iterations included) the readers of
+/// one PRC stream run together.
+pub const MAX_SCHEMA_STEPS: u64 = 1 << 22;
+
+/// What the readers of one stream may still spend, carried from each reader to the next.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Budget {
+    /// Array elements still to decode.
+    pub(crate) elements: usize,
+    /// Schema-program steps still to run.
+    pub(crate) steps: u64,
+}
+
+impl Budget {
+    /// A whole stream's allowance.
+    pub(crate) const FULL: Self = Self { elements: MAX_DECODED_ELEMENTS, steps: MAX_SCHEMA_STEPS };
+}
+
 /// A cursor over one inflated section.
 #[derive(Debug, Clone)]
 pub struct BitReader<'a> {
     data: &'a [u8],
     pos: usize,
-    /// Array elements this reader may still decode.
-    elements: usize,
+    budget: Budget,
 }
 
 impl<'a> BitReader<'a> {
-    /// A reader positioned at the first bit of `data`, allowed [`MAX_DECODED_ELEMENTS`].
+    /// A reader positioned at the first bit of `data`, allowed [`MAX_DECODED_ELEMENTS`] and
+    /// [`MAX_SCHEMA_STEPS`].
     pub fn new(data: &'a [u8]) -> Self {
-        Self::with_elements(data, MAX_DECODED_ELEMENTS)
+        Self::with_budget(data, Budget::FULL)
     }
 
-    /// A reader of `data` allowed `elements` array elements: what an earlier reader of the
-    /// same stream left.
+    /// A reader of `data` allowed `budget`: what an earlier reader of the same stream left.
+    pub(crate) fn with_budget(data: &'a [u8], budget: Budget) -> Self {
+        Self { data, pos: 0, budget }
+    }
+
+    /// A reader of `data` allowed `elements` array elements and a full step allowance.
+    #[cfg(test)]
     pub(crate) fn with_elements(data: &'a [u8], elements: usize) -> Self {
-        Self { data, pos: 0, elements }
+        Self::with_budget(data, Budget { elements, ..Budget::FULL })
+    }
+
+    /// What this reader may still spend.
+    pub(crate) fn budget(&self) -> Budget {
+        self.budget
     }
 
     /// Array elements this reader may still decode.
+    #[cfg(test)]
     pub(crate) fn elements_left(&self) -> usize {
-        self.elements
+        self.budget.elements
     }
 
     /// Charge `n` decoded array elements against the allowance.
@@ -43,8 +72,19 @@ impl<'a> BitReader<'a> {
     /// # Errors
     /// [`PrcError::TooManyElements`] when fewer than `n` are left.
     pub(crate) fn take_elements(&mut self, n: usize) -> Result<(), PrcError> {
-        self.elements = self.elements.checked_sub(n).ok_or(PrcError::TooManyElements { limit: MAX_DECODED_ELEMENTS })?;
+        self.budget.elements = self.budget.elements.checked_sub(n).ok_or(PrcError::TooManyElements { limit: MAX_DECODED_ELEMENTS })?;
         Ok(())
+    }
+
+    /// Charge one schema-program step; false when none is left.
+    pub(crate) fn take_step(&mut self) -> bool {
+        match self.budget.steps.checked_sub(1) {
+            Some(left) => {
+                self.budget.steps = left;
+                true
+            }
+            None => false,
+        }
     }
 
     /// Bits consumed so far.

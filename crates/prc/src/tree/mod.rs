@@ -9,7 +9,7 @@
 
 use std::sync::Arc;
 
-use crate::bits::{BitReader, MAX_DECODED_ELEMENTS};
+use crate::bits::{BitReader, Budget};
 use crate::container::offset;
 use crate::entity::{Ctx, malformed};
 use crate::geometry::{Matrix, Vec3};
@@ -231,8 +231,8 @@ impl PrcFile {
     /// the file stores no tree ([`Self::stores_tree`]).
     ///
     /// # Errors
-    /// [`PrcError::Unsupported`] when an item is placed by a reference coordinate system and
-    /// the globals carry fonts or fill patterns; [`PrcError::Malformed`] for an index naming no entity,
+    /// [`PrcError::Unsupported`] when an item or an entity reference names a reference
+    /// coordinate system and the globals carry fonts or fill patterns; [`PrcError::Malformed`] for an index naming no entity,
     /// a cycle of occurrences or prototypes, or a tree past [`MAX_PLACEMENTS`] or the depth
     /// ceiling; read errors as [`crate::FileStructure::tessellations`].
     pub fn placements(&self) -> Result<Vec<Placement>, PrcError> {
@@ -269,45 +269,40 @@ impl PrcFile {
     }
 
     fn walk(&self, rule: StyleAlpha, scope: EntityOverrides) -> Result<(Vec<Placement>, Vec<ModelNode>), PrcError> {
-        self.walk_within(rule, scope, MAX_DECODED_ELEMENTS)
+        self.walk_within(rule, scope, Budget::FULL)
     }
 
-    /// [`Self::walk`] with `elements` decoded array elements allowed across all its readers.
-    pub(crate) fn walk_within(
-        &self,
-        rule: StyleAlpha,
-        scope: EntityOverrides,
-        elements: usize,
-    ) -> Result<(Vec<Placement>, Vec<ModelNode>), PrcError> {
+    /// [`Self::walk`] with `budget` shared by all its readers.
+    pub(crate) fn walk_within(&self, rule: StyleAlpha, scope: EntityOverrides, budget: Budget) -> Result<(Vec<Placement>, Vec<ModelNode>), PrcError> {
         if !self.stores_tree() {
             return Ok((Vec::new(), Vec::new()));
         }
-        // One element allowance for the whole walk, so many sections cannot each decode a full one.
-        let mut left = elements;
+        // One allowance for the whole walk, so many sections cannot each spend a full one.
+        let mut left = budget;
         let mut trees = Vec::with_capacity(self.file_structures.len());
         for fs in &self.file_structures {
             let schema = fs.schema()?;
-            let mut ctx = Ctx::new(BitReader::with_elements(fs.section(SectionKind::Tree), left), &schema, fs.authoring_version);
+            let mut ctx = Ctx::new(BitReader::with_budget(fs.section(SectionKind::Tree), left), &schema, fs.authoring_version);
             let tree = ctx.file_structure_tree()?;
-            left = ctx.r.elements_left();
+            left = ctx.r.budget();
             // The globals carry the coordinate systems and the colours; colours alone are not
             // worth refusing the placements over.
             let globals = (|| {
-                let mut r = BitReader::with_elements(fs.section(SectionKind::Globals), left);
+                let mut r = BitReader::with_budget(fs.section(SectionKind::Globals), left);
                 Schema::read(&mut r)?;
                 let mut ctx = Ctx::new(r, &schema, fs.authoring_version);
                 let globals = ctx.globals();
-                left = ctx.r.elements_left();
+                left = ctx.r.budget();
                 globals
             })();
             let globals = match globals {
                 Ok(g) => g,
-                Err(e) if tree.parts.iter().flatten().any(|i| !i.local.is_empty()) => return Err(e),
+                Err(e) if places_by_system(&tree) => return Err(e),
                 Err(_) => Globals::default(),
             };
             trees.push((fs.id, tree, globals));
         }
-        let mut r = BitReader::with_elements(&self.model_file, left);
+        let mut r = BitReader::with_budget(&self.model_file, left);
         let schema = Schema::read(&mut r)?;
         let model = Ctx::new(r, &schema, self.header.authoring_version).model_file()?;
         let mut walk = Walk::new(trees.iter().map(|(id, t, g)| (*id, t, g)).collect(), rule, scope);
@@ -319,6 +314,12 @@ impl PrcFile {
         }
         Ok((walk.out, walk.nodes))
     }
+}
+
+/// Whether an item of `tree`, or an entity reference one of its occurrences holds, names a
+/// coordinate system: then the globals that store them must have been read.
+fn places_by_system(tree: &Tree) -> bool {
+    tree.parts.iter().flatten().any(|i| !i.local.is_empty()) || tree.products.iter().flat_map(|p| &p.overrides).any(|o| o.local != 0)
 }
 
 #[cfg(test)]

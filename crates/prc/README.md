@@ -24,7 +24,7 @@ BitReader: bit, bits, character, unsigned_integer, integer, integer_vbn, double_
 
 - `MAX_INFLATED_BYTES` (512 MiB) bounds every section together; `TooLarge` reports the limit hit.
 - `MAX_DECODED_ELEMENTS` (2^24) bounds the array elements one pass decodes (a tree walk, or one `tessellations` call), since a single bit can decode to a 4-8 byte element; `TooManyElements` reports it.
-- Schema programs (how a newer producer describes fields it added) run under a step ceiling (2^22) and a nesting ceiling (64).
+- Schema programs (how a newer producer describes fields it added) run under a nesting ceiling (64) and `MAX_SCHEMA_STEPS` (2^22), shared like `MAX_DECODED_ELEMENTS` by every program one pass runs.
 - `Unsupported` names constructs the reader cannot step over (schema pointer fields, `Value_CurveIs3D`).
 - `Tessellation::Mesh` is a `TriangleMesh`: positions, triangles, one triangle range per face, the stored normals and
   texture coordinates with each triangle's corner indices into them, and per-triangle line-attribute styles.

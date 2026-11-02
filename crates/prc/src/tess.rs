@@ -155,8 +155,8 @@ impl Ctx<'_, '_> {
         }
         let count = if per_segment { count / 2 } else { count };
         let bytes = if rgba { 4 } else { 3 };
-        // Every colour but the first is at least its reuse bit.
-        if count.saturating_mul(1 + 8 * bytes) > self.r.remaining().saturating_add(8 * bytes) {
+        // The first colour is `8 * bytes` bits; every later one is at least its reuse bit.
+        if count > 0 && (count - 1).saturating_add(8 * bytes) > self.r.remaining() {
             return Err(PrcError::Truncated("vertex colours"));
         }
         for i in 0..count {
@@ -393,7 +393,7 @@ type UvSets = Vec<Vec<Option<[u32; 3]>>>;
 /// indices (a slot is a `Double` offset, so even); a triangle with a slot naming no pair is
 /// `None`.
 fn stored_uvs(coords: &[f64], sets: UvSets) -> (Vec<[f64; 2]>, UvSets) {
-    let uvs: Vec<[f64; 2]> = coords.chunks_exact(2).map(|c| [c.first().copied().unwrap_or(0.0), c.get(1).copied().unwrap_or(0.0)]).collect();
+    let uvs: Vec<[f64; 2]> = coords.as_chunks::<2>().0.to_vec();
     if uvs.is_empty() {
         return (Vec::new(), Vec::new());
     }
@@ -404,7 +404,7 @@ fn stored_uvs(coords: &[f64], sets: UvSets) -> (Vec<[f64; 2]>, UvSets) {
 }
 
 fn points(coords: &[f64]) -> Vec<[f64; 3]> {
-    coords.chunks_exact(3).map(|c| [0, 1, 2].map(|i| c.get(i).copied().unwrap_or(0.0))).collect()
+    coords.as_chunks::<3>().0.to_vec()
 }
 
 /// The point a `Double`-offset index names [WD 7.8.5.2: multiples of 3].

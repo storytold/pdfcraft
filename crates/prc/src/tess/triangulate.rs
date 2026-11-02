@@ -237,10 +237,7 @@ fn emit(shape: Shape, slots: &Slots, out: &mut Vec<[u32; 3]>, corners: &mut Corn
 /// Append the triangles `shape` makes of `verts`.
 fn assemble(shape: Shape, verts: &[u32], out: &mut Vec<[u32; 3]>) {
     match shape {
-        Shape::Triangles => out.extend(verts.chunks_exact(3).filter_map(|c| match c {
-            [a, b, c] => Some([*a, *b, *c]),
-            _ => None,
-        })),
+        Shape::Triangles => out.extend(verts.as_chunks::<3>().0.iter().copied()),
         Shape::Fan => {
             if let Some((&c, rim)) = verts.split_first() {
                 out.extend(rim.windows(2).filter_map(|w| match w {

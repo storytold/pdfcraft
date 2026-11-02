@@ -25,10 +25,6 @@ use std::collections::HashMap;
 use crate::PrcError;
 use crate::bits::BitReader;
 
-/// Steps (tokens executed, loop iterations included) one
-/// [`Schema::skip_added_fields`] call may take.
-const MAX_STEPS: u64 = 1 << 22;
-
 /// Nesting depth of blocks, loops, expressions and `Father_Type` calls.
 const MAX_DEPTH: u32 = 64;
 
@@ -80,17 +76,18 @@ impl Schema {
     }
 
     /// Consume the fields a newer producer appended to `entity_type`, if the
-    /// schema describes it; a no-op otherwise.
+    /// schema describes it; a no-op otherwise. Each step is charged to `r`, so every
+    /// program run on one stream shares [`crate::MAX_SCHEMA_STEPS`].
     ///
     /// # Errors
     /// [`PrcError::Unsupported`] for a token that needs exact geometry;
-    /// [`PrcError::Malformed`] for an ill-formed program or one past the step
-    /// or depth ceiling; any read error from `r`.
+    /// [`PrcError::Malformed`] for an ill-formed program, one past the depth ceiling, or
+    /// one that runs out of the stream's steps; any read error from `r`.
     pub fn skip_added_fields(&self, entity_type: u32, r: &mut BitReader<'_>) -> Result<(), PrcError> {
         let Some(program) = self.programs.get(&entity_type) else {
             return Ok(());
         };
-        let mut exec = Exec { schema: self, r, vars: HashMap::new(), loop_counter: 0, steps: 0 };
+        let mut exec = Exec { schema: self, r, vars: HashMap::new(), loop_counter: 0 };
         exec.program(program, 0)
     }
 }
@@ -100,7 +97,6 @@ struct Exec<'s, 'r, 'd> {
     r: &'r mut BitReader<'d>,
     vars: HashMap<u32, i64>,
     loop_counter: i64,
-    steps: u64,
 }
 
 fn malformed(what: &str) -> PrcError {
@@ -116,8 +112,7 @@ fn next(prog: &[u32], pos: &mut usize) -> Result<u32, PrcError> {
 
 impl Exec<'_, '_, '_> {
     fn tick(&mut self, depth: u32) -> Result<(), PrcError> {
-        self.steps += 1;
-        if self.steps > MAX_STEPS {
+        if !self.r.take_step() {
             return Err(malformed("step ceiling reached"));
         }
         if depth > MAX_DEPTH {
@@ -524,6 +519,18 @@ mod tests {
         assert!(matches!(run(&[(172, &[21])], &d).0, Err(PrcError::Malformed(_))));
         assert!(matches!(run(&[(172, &[19, 0])], &d).0, Err(PrcError::Malformed(_))));
         assert!(matches!(run(&[(172, &[23, 0, 30, 26, 1, 26, 0])], &d).0, Err(PrcError::Malformed(_))));
+    }
+
+    /// Every program run on one reader draws on one step allowance.
+    #[test]
+    fn programs_on_one_stream_share_the_step_allowance() {
+        // For (2^19) { empty block }: about 2^20 steps, so the 2^22 allowance fits three runs.
+        let bytes = schema(&[(172, &[15, 26, 1 << 19, 19, 21])]).bytes();
+        let mut r = BitReader::new(&bytes);
+        let s = Schema::read(&mut r).unwrap();
+        let runs = (0..5).take_while(|_| s.skip_added_fields(172, &mut r).is_ok()).count();
+        assert_eq!(runs, 3);
+        assert!(matches!(s.skip_added_fields(172, &mut r), Err(PrcError::Malformed(m)) if m.contains("step ceiling")));
     }
 
     #[test]

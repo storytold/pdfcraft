@@ -310,6 +310,25 @@ fn a_wire_without_indices_is_the_coordinate_polyline() {
     assert!(matches!(t[1], Tessellation::Wire(_)));
 }
 
+/// Reused colours cost one bit each, so a long run of them may end the section.
+#[test]
+fn reused_vertex_colours_may_be_the_last_data() {
+    let n = 40;
+    let mut b = W::default();
+    b.uint(175).bit(false).uint(3 * n);
+    for i in 0..3 * n {
+        b.double(f64::from(i));
+    }
+    // No indices: the polyline of all `n` points, one RGB colour then `n - 1` reuses.
+    b.uint(0).bit(true).bit(false).bit(false).bit(false).put(1, 24);
+    for _ in 1..n {
+        b.bit(true);
+    }
+    let t = decode(&section(1, &b), &Schema::default(), 8137).unwrap();
+    let Tessellation::Wire(w) = &t[0] else { panic!("not a wire") };
+    assert_eq!(w[0].len(), n as usize);
+}
+
 /// A square as one triangle plus one 4-vertex fan (two entities, three triangles), the face
 /// carrying `attrs` and, when it has any, behaviour 0x30; then `colours` per-point colours
 /// and a trailing wire.

@@ -1,8 +1,11 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use super::style::{Material, Style};
-use super::{EntityOverrides, FATHER_HERIT_COLOR, Globals, Graphics, MAX_PLACEMENTS, NameSource, SHOW, SON_HERIT_COLOR, StyleAlpha, resolve_style};
-use crate::bits::BitReader;
+use super::{
+    EntityOverrides, FATHER_HERIT_COLOR, FILE_STRUCTURE_TREE, Globals, Graphics, MAX_PLACEMENTS, NameSource, SHOW, SON_HERIT_COLOR, StyleAlpha,
+    resolve_style,
+};
+use crate::bits::{BitReader, Budget};
 use crate::entity::Ctx;
 use crate::tess::tests::two_face_square;
 use crate::testw::W;
@@ -191,8 +194,14 @@ fn material(diffuse: u32, alpha: f64) -> W {
 /// A globals section (schema included) with `colours`, `materials`, `styles` and reference
 /// coordinate systems `systems` (transformations).
 fn globals(colours: &[Rgba], materials: &[W], styles: &[W], systems: &[W]) -> W {
-    let mut w = W::default();
-    w.uint(0).uint(303);
+    let mut schema = W::default();
+    schema.uint(0);
+    globals_after(schema, colours, materials, styles, systems)
+}
+
+/// [`globals`] after the already-written `schema`.
+fn globals_after(mut w: W, colours: &[Rgba], materials: &[W], styles: &[W], systems: &[W]) -> W {
+    w.uint(303);
     base(&mut w, None);
     w.uint(0).double(0.).double(0.).string(None).uint(0);
     w.uint(len(colours.len()));
@@ -238,10 +247,15 @@ fn translate_scale(t: [f64; 3], s: f64) -> W {
 
 /// An entity reference giving the item with PRC unique id `uid` the graphics `g`.
 fn ref_entity(uid: u32, g: (u32, u16)) -> W {
+    ref_entity_at(uid, g, 0)
+}
+
+/// [`ref_entity`], also placing its target by biased coordinate system `local`.
+fn ref_entity_at(uid: u32, g: (u32, u16), local: u32) -> W {
     let mut w = W::default();
     w.uint(203);
     graphics(&mut w, None, 0, g);
-    w.uint(0).bit(true).uint(205).uint(RI_POLY_BREP).bit(true).uint(uid).uint(0);
+    w.uint(local).bit(true).uint(205).uint(RI_POLY_BREP).bit(true).uint(uid).uint(0);
     w
 }
 
@@ -408,13 +422,52 @@ fn one_element_allowance_covers_the_whole_walk() {
     let fs = || Fs { globals: palette(), tree: tree(&[wide()], &[Occ { part: 1, ..Occ::default() }]), tess: two_face_square() };
     let one = PrcFile::parse(&prc(&[fs()], &model(&[(0, 1)]))).unwrap();
     let two = PrcFile::parse(&prc(&[fs(), fs()], &model(&[(0, 1), (1, 1)]))).unwrap();
-    let walk = |f: &PrcFile, n| f.walk_within(StyleAlpha::default(), EntityOverrides::default(), n);
+    let walk = |f: &PrcFile, n| f.walk_within(StyleAlpha::default(), EntityOverrides::default(), Budget { elements: n, ..Budget::FULL });
     let short = |f: &PrcFile, n| matches!(walk(f, n), Err(PrcError::TooManyElements { .. }));
     // One structure decodes about 70 elements, two about 140.
     assert!(short(&one, 32));
     assert_eq!(walk(&one, 100).map(|w| w.0.len()), Ok(64));
     assert!(short(&two, 100), "each structure fits in 100, both do not");
     assert_eq!(walk(&two, 200).map(|w| w.0.len()), Ok(128));
+}
+
+/// One schema-step allowance covers the whole walk: each structure's tree runs a 2,000-step
+/// program, which a 3,000-step allowance fits once but not twice.
+#[test]
+fn one_step_allowance_covers_the_whole_walk() {
+    let fs = || {
+        let mut schema = W::default();
+        // For (1000) { empty block } on the file structure tree.
+        schema.uint(1).uint(FILE_STRUCTURE_TREE).uint(5);
+        for t in [15, 26, 1000, 19, 21] {
+            schema.uint(t);
+        }
+        let globals = globals_after(schema, &[RED], &[], &[], &[]);
+        Fs { globals, tree: tree(&[plate(S_RED)], &[Occ { part: 1, ..Occ::default() }]), tess: two_face_square() }
+    };
+    let one = PrcFile::parse(&prc(&[fs()], &model(&[(0, 1)]))).unwrap();
+    let two = PrcFile::parse(&prc(&[fs(), fs()], &model(&[(0, 1), (1, 1)]))).unwrap();
+    let walk = |f: &PrcFile| f.walk_within(StyleAlpha::default(), EntityOverrides::default(), Budget { steps: 3000, ..Budget::FULL });
+    assert_eq!(walk(&one).map(|w| w.0.len()), Ok(1));
+    assert!(matches!(walk(&two), Err(PrcError::Malformed(m)) if m.contains("step ceiling")));
+    assert_eq!(two.placements().map(|p| p.len()), Ok(2));
+}
+
+/// Globals that cannot be read are reported, not replaced by empty ones, when an entity
+/// reference names one of their coordinate systems.
+#[test]
+fn unreadable_globals_are_an_error_when_a_reference_names_a_coordinate_system() {
+    let file = |local| {
+        let mut fonts = W::default();
+        fonts.uint(0).uint(303);
+        base(&mut fonts, None);
+        fonts.uint(0).double(0.).double(0.).string(None).uint(1);
+        let occs = [Occ { part: 1, refs: vec![ref_entity_at(7, PLAIN, local)], ..Occ::default() }];
+        let fs = Fs { globals: fonts, tree: tree(&[plate(S_RED)], &occs), tess: two_face_square() };
+        PrcFile::parse(&prc(&[fs], &model(&[(0, 1)]))).unwrap()
+    };
+    assert_eq!(file(0).placements().map(|p| p.len()), Ok(1));
+    assert!(matches!(file(1).placements(), Err(PrcError::Unsupported("PRC global fonts"))));
 }
 
 #[test]
