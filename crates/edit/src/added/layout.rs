@@ -20,7 +20,7 @@ pub(super) fn latin_width(t: &AddedText, s: &str) -> f64 {
 
 /// The lines of a text item after wrapping to its box width.
 pub fn lines(t: &AddedText) -> Vec<String> {
-    wrapped(t).into_iter().map(|(line, _)| line).collect()
+    wrapped(t).into_iter().map(|(line, ..)| line).collect()
 }
 
 #[cfg(test)]
@@ -30,13 +30,13 @@ thread_local! {
 }
 
 /// [`lines`], each with whether its paragraph runs right to left (its first strong character
-/// does).
-pub(super) fn wrapped(t: &AddedText) -> Vec<(String, bool)> {
+/// does) and which paragraph it is in.
+pub(super) fn wrapped(t: &AddedText) -> Vec<(String, bool, usize)> {
     #[cfg(test)]
     WRAP_CALLS.with(|c| c.set(c.get().saturating_add(1)));
     let width = (t.rect[2] - t.rect[0]).max(t.size);
     let mut out = Vec::new();
-    for para in t.text.split('\n') {
+    for (index, para) in t.text.split('\n').enumerate() {
         // Arabic or Hebrew: laid out with the bidirectional algorithm and shaped.
         let rtl_script = para.chars().any(|c| is_arabic(c) || is_hebrew(c));
         let thai = para.chars().any(is_thai);
@@ -44,7 +44,7 @@ pub(super) fn wrapped(t: &AddedText) -> Vec<(String, bool)> {
             && !rtl_script
             && let Ok(lines) = thai_lines(t, para, width)
         {
-            out.extend(lines.into_iter().map(|line| (line, false)));
+            out.extend(lines.into_iter().map(|line| (line, false, index)));
             continue;
         }
         let rtl = rtl_script && unicode_bidi::get_base_direction(para) == unicode_bidi::Direction::Rtl;
@@ -60,7 +60,7 @@ pub(super) fn wrapped(t: &AddedText) -> Vec<(String, bool)> {
             let candidate_w =
                 if rtl_script || thai { if line.is_empty() { measure(word) } else { line_w + space + measure(word) } } else { measure(&candidate) };
             if !line.is_empty() && candidate_w > width {
-                out.push((std::mem::take(&mut line), rtl));
+                out.push((std::mem::take(&mut line), rtl, index));
                 line = word.to_string();
                 line_w = measure(word);
             } else {
@@ -68,7 +68,7 @@ pub(super) fn wrapped(t: &AddedText) -> Vec<(String, bool)> {
                 line_w = candidate_w;
             }
         }
-        out.push((line, rtl));
+        out.push((line, rtl, index));
     }
     out
 }
@@ -142,7 +142,7 @@ pub fn first_undrawable(t: &AddedText) -> Option<char> {
         return t.text.split('\n').find_map(pdfcraft_fonts::first_non_win_ansi);
     }
     // What `shaped_layout` leaves to the standard font, exactly as `draw_shaped` splits it.
-    wrapped(t).into_iter().find_map(|(line, rtl)| {
+    wrapped(t).into_iter().find_map(|(line, rtl, _)| {
         let (pieces, _) = shaped_layout(t, &line, rtl).ok()?;
         pieces.iter().find_map(|p| match p {
             Piece::Latin(s) => pdfcraft_fonts::first_non_win_ansi(s),

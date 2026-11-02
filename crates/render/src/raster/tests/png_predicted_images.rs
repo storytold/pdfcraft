@@ -1,5 +1,5 @@
 //! #5430: Flate images with PNG predictors (ISO 32000-2 §7.4.4.4) are undone a byte row at a
-//! time (vendored hayro-syntax patch 29). The bit-level decoder they went through before dropped
+//! time (vendored hayro-syntax patch 35). The bit-level decoder they went through before dropped
 //! the last byte of each filtered row that ends part-way through a pixel, so every later row
 //! started a byte early and the picture came out sheared.
 
