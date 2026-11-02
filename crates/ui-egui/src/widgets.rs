@@ -70,7 +70,7 @@ pub fn line(text: &mut dyn egui::TextBuffer) -> egui::TextEdit<'_> {
     egui::TextEdit::singleline(text).margin(FIELD_MARGIN).min_size(vec2(0.0, FIELD_MIN_HEIGHT))
 }
 
-/// A multiline field with the same horizontal inset as [`line`].
+/// A multiline field with the same horizontal inset as [`line()`].
 pub fn block(text: &mut dyn egui::TextBuffer) -> egui::TextEdit<'_> {
     egui::TextEdit::multiline(text).margin(egui::Margin::symmetric(10, 6))
 }
@@ -254,6 +254,23 @@ pub fn radio_value<'a, V: PartialEq>(ui: &mut egui::Ui, current: &mut V, alterna
     response
 }
 
+/// Keeps the end of a "from … to …" page range at or after its start, but not while `typing` into the
+/// end's `DragValue` ([`typing_into`]): the half-typed "1" of "12" is below `from`, and raising it
+/// then replaced what the user was typing with `from` (#5574). A dialog's OK orders it whatever has
+/// the keyboard (`typing` false), so a range left reversed never reaches the edit.
+pub fn keep_range_ordered(from: usize, to: &mut usize, typing: bool) {
+    if !typing {
+        *to = (*to).max(from);
+    }
+}
+
+/// Whether `field` is being typed into: it has the keyboard focus in egui's memory. Unlike
+/// `Response::has_focus` this stays true while the window is in the background, so switching to
+/// another app mid-number doesn't end the typing.
+pub fn typing_into(field: &Response) -> bool {
+    field.ctx.memory(|m| m.has_focus(field.id))
+}
+
 /// The box of a checkbox or the circle of a radio button. egui draws it with the widgets' visuals
 /// and has no style of its own for it, so it is set in a scope around the widget, keeping what
 /// the caller set (dialogs and the search panel already outline theirs):
@@ -433,14 +450,28 @@ fn wrapped_lines(ui: &egui::Ui, text: &str, font: &egui::FontId, width: f32, tru
 
 /// Transient message at the bottom centre.
 pub fn toast(app: &mut PdfCraftApp, ctx: &egui::Context) {
+    // A form script message waiting its turn takes the toast once it is free.
+    if app.toast.is_none() {
+        app.toast_script = None;
+        // A left-out count whose toast was cleared before its time is said again.
+        app.script_messages_dropped = app.script_messages_dropped.saturating_add(std::mem::take(&mut app.toast_dropped));
+        app.next_script_message();
+    }
     let Some((msg, start)) = app.toast.clone() else { return };
     let now = ctx.input(|i| i.time);
     let start = if start == 0.0 { now } else { start };
     app.toast = Some((msg.clone(), start));
     if now - start > 3.5 {
         app.toast = None;
+        app.toast_script = None;
+        // Shown its time: a left-out count it said is done.
+        app.toast_dropped = 0;
+        if app.next_script_message() {
+            ctx.request_repaint();
+        }
         return;
     }
+    let script = app.toast_script.as_ref().map(|m| (m.title.clone(), crate::js_ui::message_icon(m.icon)));
     let t = Tokens::get(ctx);
     let screen = ctx.content_rect();
     // Above the progress notice while a job runs.
@@ -461,10 +492,26 @@ pub fn toast(app: &mut PdfCraftApp, ctx: &egui::Context) {
                     // Allow natural short labels; wrap longer ones within the viewport,
                     // including the frame's 32 points and 16-point outside margins.
                     ui.set_max_width((screen.width() - 64.0).clamp(1.0, 560.0));
-                    ui.add(
-                        egui::Label::new(egui::RichText::new(msg).color(if t.dark() { Color32::from_rgb(0x22, 0x22, 0x26) } else { Color32::WHITE }))
-                            .wrap(),
-                    );
+                    let ink = if t.dark() { Color32::from_rgb(0x22, 0x22, 0x26) } else { Color32::WHITE };
+                    let text = |ui: &mut egui::Ui| {
+                        ui.add(egui::Label::new(egui::RichText::new(msg).color(ink)).wrap());
+                    };
+                    match script {
+                        // A form script's message: its icon, then its title (when it gave one)
+                        // over its text.
+                        Some((title, icon)) => {
+                            ui.horizontal_top(|ui| {
+                                ui.add(icons::image(icon, 16.0, ink));
+                                ui.vertical(|ui| {
+                                    if let Some(title) = title {
+                                        ui.add(egui::Label::new(egui::RichText::new(title).strong().color(ink)).wrap());
+                                    }
+                                    text(ui);
+                                });
+                            });
+                        }
+                        None => text(ui),
+                    }
                 });
         });
     ctx.request_repaint_after(std::time::Duration::from_millis(100));

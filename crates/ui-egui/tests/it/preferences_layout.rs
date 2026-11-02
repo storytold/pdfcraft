@@ -29,7 +29,7 @@ fn ok_is_on_screen_without_scrolling_at_any_window_height() {
         let h = harness(height);
         let ok = h.get_by_label("OK").rect();
         assert!(on_screen(ok, height), "{height}: OK at {ok:?} is off the {height} pt window");
-        let title = h.get_by_label("Preferences").rect();
+        let title = h.get_by(|n| n.role() == egui::accesskit::Role::Label && n.value().as_deref() == Some("Preferences")).rect();
         assert!(on_screen(title, height), "{height}: the title at {title:?} is off the window");
         // The OK row sits below the scrolled settings, never over them: the settings' last visible
         // row ends above it. The title is above everything.
@@ -43,13 +43,13 @@ fn ok_closes_the_dialog_in_a_short_window_and_the_settings_still_scroll() {
     // A setting far down the list starts out below the visible settings; scrolling brings it in
     // between the title and the OK row, and OK did not move.
     let ok_before = h.get_by_label("OK").rect();
-    let title = h.get_by_label("Preferences").rect();
-    let far = h.get_by_label_contains("Reading colours").rect();
-    assert!(far.min.y >= ok_before.min.y, "Reading colours starts out of sight: {far:?} vs OK {ok_before:?}");
-    h.get_by_label_contains("Reading colours").scroll_to_me();
+    let title = h.get_by(|n| n.role() == egui::accesskit::Role::Label && n.value().as_deref() == Some("Preferences")).rect();
+    let far = h.get_by_label_contains("Enable Acrobat JavaScript").rect();
+    assert!(far.min.y >= ok_before.min.y, "JavaScript setting starts out of sight: {far:?} vs OK {ok_before:?}");
+    h.get_by_label_contains("Enable Acrobat JavaScript").scroll_to_me();
     h.run_steps(4);
-    let far = h.get_by_label_contains("Reading colours").rect();
-    assert!(far.min.y >= title.max.y && far.max.y <= ok_before.min.y, "Reading colours scrolled in between the title and OK: {far:?}");
+    let far = h.get_by_label_contains("Enable Acrobat JavaScript").rect();
+    assert!(far.min.y >= title.max.y && far.max.y <= ok_before.min.y, "JavaScript setting scrolled in between the title and OK: {far:?}");
     assert_eq!(h.get_by_label("OK").rect(), ok_before, "OK stays put while the settings scroll");
     assert!(h.state().dialog.is_some());
     h.get_by_label("OK").click();
@@ -64,9 +64,15 @@ fn the_dialog_opens_at_its_full_size_and_does_not_grow_afterwards() {
     // in its first frames landed on controls that were still moving.
     for height in [260.0, 560.0, 900.0] {
         let mut h = harness(height);
-        let settled = (h.get_by_label("Preferences").rect(), h.get_by_label("OK").rect());
+        let settled = (
+            h.get_by(|n| n.role() == egui::accesskit::Role::Label && n.value().as_deref() == Some("Preferences")).rect(),
+            h.get_by_label("OK").rect(),
+        );
         h.run_steps(8);
-        let later = (h.get_by_label("Preferences").rect(), h.get_by_label("OK").rect());
+        let later = (
+            h.get_by(|n| n.role() == egui::accesskit::Role::Label && n.value().as_deref() == Some("Preferences")).rect(),
+            h.get_by_label("OK").rect(),
+        );
         assert_eq!(settled, later, "{height}: the dialog moved after it had been shown for six frames");
     }
     // And it is in place within a few frames of opening, for the first click: a frame or two of
@@ -95,4 +101,153 @@ fn a_very_tall_window_does_not_leave_a_blank_gap_above_ok() {
     let last = h.get_by_label_contains("Enable Acrobat JavaScript").rect();
     assert!(on_screen(ok, 2600.0) && on_screen(last, 2600.0), "{last:?} {ok:?}");
     assert!(ok.min.y - last.max.y < 120.0, "a gap of {} pt between the last setting and OK", ok.min.y - last.max.y);
+}
+
+#[test]
+fn segmented_pill_controls_switch_modes_and_layouts() {
+    let mut h = harness(900.0);
+    // Switch workspace mode via segmented pill
+    h.get_by_role_and_label(egui::accesskit::Role::RadioButton, "Convert").scroll_to_me();
+    h.run_steps(3);
+    h.get_by_role_and_label(egui::accesskit::Role::RadioButton, "Convert").click();
+    h.run_steps(2);
+    assert_eq!(h.state().default_mode, pdfcraft_ui_egui::Mode::Convert);
+
+    let continuous_before = h.state().view_defaults.continuous;
+
+    // Switch page layout via segmented pill
+    h.get_by_label("Two-page view").scroll_to_me();
+    h.run_steps(3);
+    h.get_by_label("Two-page view").click();
+    h.run_steps(2);
+    assert_eq!(h.state().view_defaults.layout, pdfcraft_ui_egui::canvas::PageLayout::TwoUp);
+    assert_eq!(h.state().view_defaults.continuous, continuous_before, "Two-page view retains continuous scrolling");
+
+    // Switch continuous scrolling pill (can be combined with Two-page view)
+    h.get_by_label("Continuous scrolling").click();
+    h.run_steps(2);
+    assert_eq!(h.state().view_defaults.continuous, !continuous_before);
+    assert_eq!(h.state().view_defaults.layout, pdfcraft_ui_egui::canvas::PageLayout::TwoUp, "two-page continuous scrolling is supported");
+
+    // Switch to single page mode (continuous setting remains independent)
+    h.get_by_label("Single page").click();
+    h.run_steps(2);
+    assert_eq!(h.state().view_defaults.layout, pdfcraft_ui_egui::canvas::PageLayout::Single);
+    assert_eq!(h.state().view_defaults.continuous, !continuous_before);
+
+    // Switch tools panel side via segmented pill
+    h.get_by_label("Left").scroll_to_me();
+    h.run_steps(3);
+    h.get_by_label("Left").click();
+    h.run_steps(2);
+    assert_eq!(h.state().side_panels.tools_side, pdfcraft_ui_egui::side_panels::ToolsSide::Left);
+
+    // Switch measurement units via segmented pill
+    h.get_by_label("pt").scroll_to_me();
+    h.run_steps(3);
+    h.get_by_label("pt").click();
+    h.run_steps(2);
+    assert_eq!(h.state().units, pdfcraft_ui_egui::units::Unit::Points);
+}
+
+#[test]
+fn search_settings_scans_and_highlights_in_situ_without_hiding_cards() {
+    let mut h = harness(900.0);
+    // Initially all card titles exist
+    assert!(h.query_by_label("General & Interface").is_some());
+    assert!(h.query_by_label("Comment").is_some());
+    assert!(h.query_by_label("JavaScript").is_some());
+
+    // Type "Hide hover" in search box
+    h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Search settings…").click();
+    h.run_steps(1);
+    h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Search settings…").type_text("Hide hover");
+    h.run_steps(4);
+
+    // In browser-style search, cards are NOT hidden
+    assert!(h.query_by_label("General & Interface").is_some());
+    assert!(h.query_by_label("Comment").is_some());
+    assert!(h.query_by_label("JavaScript").is_some());
+
+    // The setting "Hide hover previews for highlights without comment text" is present and matched
+    assert!(h.query_by_label("Hide hover previews for highlights without comment text").is_some());
+    // Match badge displays 1 match
+    assert!(h.query_by_label("1 match").is_some());
+
+    // Clearing search clears match badge
+    h.get_by_label("Clear search").click();
+    h.run_steps(4);
+    assert!(h.query_by_label("1 match").is_none());
+
+    // Search for "javascript"
+    h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Search settings…").click();
+    h.run_steps(1);
+    h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Search settings…").type_text("javascript");
+    h.run_steps(4);
+
+    // Cards remain visible and multiple matches are reported
+    assert!(h.query_by_label("JavaScript").is_some());
+    assert!(h.query_by_label("General & Interface").is_some());
+    assert!(h.query_by_label_contains("matches").is_some());
+
+    // Clearing search shows everything again
+    h.get_by_label("Clear search").click();
+    h.run_steps(4);
+    assert!(h.query_by_label("General & Interface").is_some());
+    assert!(h.query_by_label("Comment").is_some());
+    assert!(h.query_by_label("JavaScript").is_some());
+}
+
+#[test]
+fn preferences_dialog_scrollbar_spacing_and_controls() {
+    let h = harness(600.0);
+    let title = h.get_by(|n| n.role() == egui::accesskit::Role::Label && n.value().as_deref() == Some("Preferences")).rect();
+    let search = h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Search settings…").rect();
+    let ok = h.get_by_label("OK").rect();
+    assert!(on_screen(ok, 600.0));
+    // Header title and search box are vertically aligned
+    assert!((title.center().y - search.center().y).abs() <= 2.0);
+    // Search box right edge is aligned within the dialog
+    assert!(search.max.x <= ok.max.x);
+}
+
+#[test]
+fn search_scrolls_option_only_and_theme_card_matches_into_visible_viewport() {
+    let mut h = harness(480.0);
+    let title = h.get_by(|n| n.role() == egui::accesskit::Role::Label && n.value().as_deref() == Some("Preferences")).rect();
+    let ok = h.get_by_label("OK").rect();
+
+    // "Two-page view" is an option in Card 3 (Documents and view).
+    // In a 480 pt window, it starts out below the visible scroll viewport.
+    let opt_before = h.get_by_label("Two-page view").rect();
+    assert!(opt_before.min.y >= ok.min.y, "Two-page option starts out below the visible viewport: {opt_before:?} vs OK {ok:?}");
+
+    // Searching "Two-page" (which only occurs inside that segmented pill option)
+    // auto-scrolls the matching option into the visible viewport between title and OK.
+    h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Search settings…").click();
+    h.run_steps(1);
+    h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Search settings…").type_text("Two-page");
+    h.run_steps(4);
+
+    let opt_after = h.get_by_label("Two-page view").rect();
+    assert!(
+        opt_after.min.y >= title.max.y && opt_after.max.y <= ok.min.y,
+        "Two-page option scrolled into visible scroll viewport: {opt_after:?} between title {title:?} and OK {ok:?}"
+    );
+
+    // Clear search and test a theme-card-only match
+    h.get_by_label("Clear search").click();
+    h.run_steps(4);
+
+    // Search for "Dark theme" (which occurs only in the dark theme card in Card 2).
+    h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Search settings…").click();
+    h.run_steps(1);
+    h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Search settings…").type_text("Dark theme");
+    h.run_steps(4);
+
+    let dark_card = h.get_by_label("Dark theme").rect();
+    assert!(
+        dark_card.min.y >= title.max.y && dark_card.max.y <= ok.min.y,
+        "Dark theme card scrolled into visible viewport: {dark_card:?} between title {title:?} and OK {ok:?}"
+    );
 }

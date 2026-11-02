@@ -818,18 +818,6 @@ pub(super) fn rfind(hay: &[u8], needle: &[u8], from: usize) -> Option<usize> {
     (from..=hay.len() - needle.len()).rev().find(|&i| &hay[i..i + needle.len()] == needle)
 }
 
-/// A file identifier derived from entropy supplied by the caller.
-pub(super) fn generated_id(seed: &[u8; 32]) -> Vec<u8> {
-    use std::hash::{Hash, Hasher};
-    let mut out = Vec::new();
-    for i in 0..2u8 {
-        let mut h = std::collections::hash_map::DefaultHasher::new();
-        (seed, i, b"pdfcraft id").hash(&mut h);
-        out.extend_from_slice(&h.finish().to_be_bytes());
-    }
-    out
-}
-
 /// The object number a classic xref subsection really starts at. A common producer bug heads the
 /// table `1 n` and then writes object 0's free entry (`0000000000 65535 f`) as its first row, so
 /// every row would be read one number too high and object 1 as free. Such a subsection is read
