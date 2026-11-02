@@ -227,6 +227,7 @@ fn value_for(f: &FormField, v: &Value) -> Result<FieldValue> {
 }
 
 impl Automation {
+    /// Report form values, widget geometry and editing properties, including stored text direction.
     pub(crate) fn form_fields(&self, a: &Args) -> Result<Value> {
         let doc = self.doc(a)?;
         let out: Vec<Value> = doc
@@ -532,6 +533,8 @@ impl Automation {
         Ok(out)
     }
 
+    /// Prepare field properties without mutating the document.
+    /// Validate tool arguments and convert displayed-page rectangle coordinates into PDF user space; omitted properties remain unchanged.
     fn field_props_arg(&self, a: &Args, name: &str) -> Result<FieldProps> {
         let doc = self.doc(a)?;
         let f = doc.form.iter().find(|f| f.name == name).ok_or_else(|| failed(format!("there is no field named {name:?} (see form_fields)")))?;

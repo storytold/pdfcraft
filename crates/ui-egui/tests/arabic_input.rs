@@ -7,11 +7,13 @@ use egui_kittest::{Harness, kittest::Queryable};
 use pdfcraft_ui_egui::{PdfCraftApp, control::ControlClient};
 use serde_json::{Value, json};
 
+/// Create the default synthetic page used to open either page-text editor.
 fn fixture() -> Vec<u8> {
     let body = "BT /F1 24 Tf 20 150 Td (Page 1) Tj ET";
     fixture_with_body(body)
 }
 
+/// Build a single-page synthetic PDF using the supplied text operators as its content stream.
 fn fixture_with_body(body: &str) -> Vec<u8> {
     let objects = [
         "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
@@ -35,10 +37,12 @@ fn fixture_with_body(body: &str) -> Vec<u8> {
     bytes
 }
 
+/// Open the default fixture in the selected existing-text or added-text editing path.
 fn harness(source: bool) -> (Harness<'static, PdfCraftApp>, ControlClient) {
     harness_with_pdf(source, fixture(), false)
 }
 
+/// Open the supplied synthetic PDF and focus either the existing-text or added-text editor with opt-in control attached.
 fn harness_with_pdf(source: bool, bytes: Vec<u8>, fit_page: bool) -> (Harness<'static, PdfCraftApp>, ControlClient) {
     let slot = Arc::new(Mutex::new(None));
     let capture = Arc::clone(&slot);
@@ -71,6 +75,7 @@ fn harness_with_pdf(source: bool, bytes: Vec<u8>, fit_page: bool) -> (Harness<'s
     (h, client)
 }
 
+/// Deliver a primary pointer press/release and let the native UI settle.
 fn click(h: &mut Harness<'static, PdfCraftApp>, at: egui::Pos2) {
     h.hover_at(at);
     h.run_steps(1);
@@ -80,6 +85,7 @@ fn click(h: &mut Harness<'static, PdfCraftApp>, at: egui::Pos2) {
     h.run_steps(3);
 }
 
+/// Pass synthetic input through the real app raw-input hook before advancing the native harness.
 fn native_input(h: &mut Harness<'static, PdfCraftApp>, events: Vec<Event>) {
     // Kittest's eframe adapter starts at App::logic, skipping raw_input_hook.
     // Exercise the real host hook before egui can move focus for Escape/Tab.
@@ -92,10 +98,12 @@ fn native_input(h: &mut Harness<'static, PdfCraftApp>, events: Vec<Event>) {
     h.run_steps(3);
 }
 
+/// Construct matching native key-down/key-up events without modifiers.
 fn key_events(key: Key) -> Vec<Event> {
     [true, false].into_iter().map(|pressed| Event::Key { key, physical_key: None, pressed, repeat: false, modifiers: Modifiers::NONE }).collect()
 }
 
+/// Send a UI-control request and advance a bounded number of frames until it receives a reply.
 fn call(h: &mut Harness<'static, PdfCraftApp>, c: &ControlClient, method: &str, args: Value) -> Result<Value, String> {
     let rx = c.send(method, args);
     for _ in 0..120 {
@@ -107,6 +115,7 @@ fn call(h: &mut Harness<'static, PdfCraftApp>, c: &ControlClient, method: &str, 
     panic!("{method} did not answer");
 }
 
+/// Read the current logical draft from the selected existing-text or added-text editor.
 fn text(h: &Harness<'static, PdfCraftApp>, source: bool) -> String {
     let view = &h.state().views[0];
     if source {
@@ -116,6 +125,7 @@ fn text(h: &Harness<'static, PdfCraftApp>, source: bool) -> String {
     }
 }
 
+/// Set the native TextEdit selection using Unicode character positions.
 fn select(h: &mut Harness<'static, PdfCraftApp>, start: usize, end: usize) {
     let id = h.ctx.memory(|m| m.focused()).expect("text has keyboard focus");
     let mut state = egui::TextEdit::load_state(&h.ctx, id).unwrap();
@@ -123,6 +133,7 @@ fn select(h: &mut Harness<'static, PdfCraftApp>, start: usize, end: usize) {
     state.store(&h.ctx, id);
 }
 
+/// Replace the whole focused draft through native text input and require the expected logical value.
 fn replace(h: &mut Harness<'static, PdfCraftApp>, source: bool, value: &str) {
     select(h, 0, text(h, source).chars().count());
     h.event(Event::Text(value.into()));
@@ -130,12 +141,14 @@ fn replace(h: &mut Harness<'static, PdfCraftApp>, source: bool, value: &str) {
     assert_eq!(text(h, source), value);
 }
 
+/// Read the primary native caret position in Unicode characters.
 fn caret(h: &Harness<'static, PdfCraftApp>) -> usize {
     let id = h.ctx.memory(|m| m.focused()).unwrap();
     egui::TextEdit::load_state(&h.ctx, id).unwrap().cursor.char_range().unwrap().primary.index.0
 }
 
 #[test]
+/// Verify invalid composition payloads leave both editor drafts and keyboard focus unchanged.
 fn malformed_composition_requests_preserve_text_and_focus() {
     for source in [true, false] {
         let (mut h, c) = harness(source);
@@ -161,6 +174,7 @@ fn malformed_composition_requests_preserve_text_and_focus() {
 }
 
 #[test]
+/// Verify native composition cancellation retains the accepted draft and keeps either page editor open.
 fn composition_cancel_keeps_both_page_editors_open() {
     for source in [true, false] {
         let (mut h, c) = harness(source);
@@ -182,6 +196,7 @@ fn composition_cancel_keeps_both_page_editors_open() {
 }
 
 #[test]
+/// Verify confirmation keys and Save cannot publish an unfinished preedit into either page-text path.
 fn composition_enter_tab_and_save_cannot_publish_a_candidate() {
     for source in [true, false] {
         let (mut h, c) = harness(source);
@@ -204,6 +219,7 @@ fn composition_enter_tab_and_save_cannot_publish_a_candidate() {
 }
 
 #[test]
+/// Verify an outside paragraph click cannot publish preedit, while cancellation restores ordinary switching.
 fn composition_blocks_switching_to_another_paragraph() {
     let bytes = fixture_with_body("BT /F1 24 Tf 20 150 Td (Page 1) Tj ET BT /F1 24 Tf 20 70 Td (Second) Tj ET");
     let other_point = |h: &Harness<'static, PdfCraftApp>| {
@@ -249,6 +265,7 @@ fn composition_blocks_switching_to_another_paragraph() {
 }
 
 #[test]
+/// Check native visual caret movement and logical selection/copy across mixed Arabic, Latin and digits.
 fn mixed_arabic_caret_selection_and_copy_keep_logical_order() {
     for source in [true, false] {
         let (mut h, _) = harness(source);
@@ -274,6 +291,7 @@ fn mixed_arabic_caret_selection_and_copy_keep_logical_order() {
 }
 
 #[test]
+/// Verify native deletion edits Arabic marks and multiline text without inventing a separate cursor model.
 fn marks_and_multiline_deletion_use_native_grapheme_boundaries() {
     for source in [true, false] {
         let (mut h, _) = harness(source);
@@ -302,6 +320,7 @@ fn marks_and_multiline_deletion_use_native_grapheme_boundaries() {
 }
 
 #[test]
+/// Verify pointer placement within rendered Arabic inserts text at the native visible caret in both page editors.
 fn clicking_inside_arabic_text_inserts_at_the_visible_caret() {
     if !arabic_font_available() {
         return;
@@ -338,6 +357,7 @@ fn clicking_inside_arabic_text_inserts_at_the_visible_caret() {
     }
 }
 
+/// Require the optional Arabic face for qualification, otherwise permit the bounded font-dependent case to skip.
 fn arabic_font_available() -> bool {
     let present = pdfcraft_fonts::document_arabic_font().is_some();
     assert!(present || std::env::var_os("PDFCRAFT_ARABIC_CORPUS_REQUIRED").is_none(), "required craft-fonts Arabic face missing");
@@ -345,6 +365,7 @@ fn arabic_font_available() -> bool {
 }
 
 #[test]
+/// Verify committed multiline Arabic added text remains logical and rendered through history, saving and reopening.
 fn committed_multiline_arabic_added_text_survives_history_and_save_reopen() {
     if !arabic_font_available() {
         return;
@@ -380,6 +401,7 @@ fn committed_multiline_arabic_added_text_survives_history_and_save_reopen() {
 }
 
 #[test]
+/// Verify a native caret interruption releases composition command protection after the edit completes.
 fn composition_pointer_interruption_releases_native_editor_commands() {
     for source in [true, false] {
         let (mut h, c) = harness(source);

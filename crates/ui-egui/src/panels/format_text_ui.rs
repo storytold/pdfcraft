@@ -134,6 +134,7 @@ fn number(v: f64) -> String {
     s.trim_end_matches('0').trim_end_matches('.').to_string()
 }
 
+/// Draw the formatting rail and emit supported paragraph, font and alignment changes.
 pub(crate) fn panel(
     ui: &mut egui::Ui,
     t: &Tokens,

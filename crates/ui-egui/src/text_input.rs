@@ -13,6 +13,8 @@ struct Composition {
 }
 
 impl Composition {
+    /// Update the focused composition owner from native IME and focus events.
+    /// Return key ownership for the whole current frame, including commit/cancel; changing owner clears active preedit state.
     fn observe(&mut self, owner: Option<Id>, events: &[Event]) -> bool {
         if self.owner != owner || owner.is_none() {
             self.owner = owner;
@@ -45,28 +47,34 @@ impl Composition {
     }
 }
 
+/// Return the stable context-local key used to store composition ownership.
 fn state_id() -> Id {
     Id::unique("pdfcraft-input-composition")
 }
 
+/// Check whether the given widget currently owns an active preedit.
 pub(crate) fn composing_for(ctx: &Context, owner: Id) -> bool {
     ctx.data(|d| d.get_temp::<Composition>(state_id())).is_some_and(|s| s.owner == Some(owner) && s.active)
 }
 
+/// Check whether the currently focused widget owns an active composition.
 pub(crate) fn is_composing(ctx: &Context) -> bool {
     ctx.memory(|m| m.focused()).is_some_and(|owner| composing_for(ctx, owner))
 }
 
+/// Forget an active preedit owned by the widget being retired.
 pub(crate) fn forget(ctx: &Context, owner: Id) {
     if composing_for(ctx, owner) {
         ctx.data_mut(|d| d.remove::<Composition>(state_id()));
     }
 }
 
+/// Recognize pressed Enter/Escape/Tab events that can otherwise confirm, cancel or leave an editor.
 fn command_key(event: &Event) -> bool {
     matches!(event, Event::Key { key: Key::Enter | Key::Escape | Key::Tab, pressed: true, .. })
 }
 
+/// Return the focused widget only when egui identifies it as a text editor.
 fn focused_editor(ctx: &Context) -> Option<Id> {
     if ctx.text_edit_focused() { ctx.memory(|m| m.focused()) } else { None }
 }
@@ -120,11 +128,13 @@ pub(crate) fn finish_frame(ctx: &Context) {
 mod tests {
     use super::*;
 
+    /// Construct a native preedit event without an explicit active-character selection.
     fn preedit(text: &str) -> Event {
         Event::Ime(ImeEvent::Preedit { text: text.into(), active_range_chars: None })
     }
 
     #[test]
+    /// Verify composition keeps confirmation/cancellation keys through idle and composition-ending frames.
     fn ime_keys_stay_owned_through_idle_commit_and_cancel_frames() {
         let owner = Some(Id::unique("editor"));
         for ending in [preedit(""), Event::Ime(ImeEvent::Commit("مرحبا".into()))] {
@@ -137,6 +147,7 @@ mod tests {
     }
 
     #[test]
+    /// Verify idle/empty preedit and a different focused owner do not retain composition command ownership.
     fn idle_empty_preedit_and_other_widget_do_not_capture_commands() {
         let first = Some(Id::unique("first"));
         let second = Some(Id::unique("second"));
@@ -148,6 +159,7 @@ mod tests {
     }
 
     #[test]
+    /// Verify raw-input protection keeps IME payloads and ordinary text-editing keys intact.
     fn raw_ime_routing_preserves_payload_and_regular_editing_keys() {
         let ctx = Context::default();
         let owner = Id::unique("editor");
@@ -168,6 +180,7 @@ mod tests {
     }
 
     #[test]
+    /// Verify completed native pointer interruptions release composition ownership in non-page text widgets.
     fn non_page_pointer_interruption_releases_composition_keys() {
         for (multiline, drag) in [(false, false), (false, true), (true, false), (true, true)] {
             let ctx = Context::default();

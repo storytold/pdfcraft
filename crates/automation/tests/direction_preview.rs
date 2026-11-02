@@ -3,11 +3,13 @@
 use pdfcraft_automation::{Automation, Content};
 use serde_json::{Value, json};
 
+/// Create source rows containing a soft wrap followed by a hard break.
 fn page() -> Vec<u8> {
     let content = "BT /F1 12 Tf 14.4 TL 1 0 0 1 72 700 Tm (Alpha beta gamma delta epsilon) Tj T* (zeta eta theta) Tj T* (Tail) Tj ET";
     fixture(content)
 }
 
+/// Build a valid single-page Helvetica PDF around synthetic text operators with correct stream lengths and xref offsets.
 fn fixture(content: &str) -> Vec<u8> {
     let objects = [
         "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
@@ -31,6 +33,7 @@ fn fixture(content: &str) -> Vec<u8> {
     bytes
 }
 
+/// Require one JSON automation result for the synthetic paragraph assertions.
 fn call(auto: &mut Automation, name: &str, args: Value) -> Value {
     let result = auto.call(name, &args).unwrap();
     let Content::Json(value) = result.into_iter().next().unwrap() else { panic!("JSON result") };
@@ -38,6 +41,7 @@ fn call(auto: &mut Automation, name: &str, args: Value) -> Value {
 }
 
 #[test]
+/// Verify implicit width/direction preview and Apply select the same reflow text while preserving the hard break.
 fn implicit_direction_reflow_preview_matches_explicit_text_and_apply() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("wrapped.pdf"), page()).unwrap();
@@ -61,6 +65,7 @@ fn implicit_direction_reflow_preview_matches_explicit_text_and_apply() {
     assert_eq!(applied["paragraphs"][0]["editor_text"], reflow);
 }
 
+/// Exercise implicit or literal replacement when the paragraph contains only soft source wraps.
 fn all_soft_reflow(explicit: bool) {
     let dir = tempfile::tempdir().unwrap();
     let bytes = String::from_utf8(page()).unwrap().replace(" T* (Tail) Tj", "");
@@ -83,16 +88,19 @@ fn all_soft_reflow(explicit: bool) {
 }
 
 #[test]
+/// Verify implicit width/direction editing rejoins a paragraph whose source breaks are all soft.
 fn implicit_all_soft_width_and_direction_reflows() {
     all_soft_reflow(false);
 }
 
 #[test]
+/// Verify a literal flat draft is still reflowed when it equals the source's flattened text.
 fn explicit_flat_text_equal_to_source_text_reflows() {
     all_soft_reflow(true);
 }
 
 #[test]
+/// Verify direction-only editing keeps visual rows and saved break kinds so later widening rejoins only soft wraps.
 fn direction_only_preserves_soft_and_hard_breaks_after_reopen() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("wrapped.pdf"), page()).unwrap();
@@ -113,6 +121,7 @@ fn direction_only_preserves_soft_and_hard_breaks_after_reopen() {
 }
 
 #[test]
+/// Verify Latin range styling under stored LTR direction while retaining the RTL mixed-style refusal.
 fn explicit_ltr_latin_allows_range_styles_after_reopen() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("latin.pdf"), fixture("BT /F1 12 Tf 1 0 0 1 72 700 Tm (Alpha beta) Tj ET")).unwrap();

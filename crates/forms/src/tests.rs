@@ -261,6 +261,7 @@ fn appearance_text(doc: &Document, w: &Widget, font_name: &[u8]) -> (Object, Vec
 }
 
 #[test]
+/// Verify oversized explicit-direction values are refused on editing and reported when already loaded.
 fn explicit_text_direction_budget_refuses_edits_and_reports_loaded_values() {
     use pdfcraft_fonts::{TextDirection as D, text_direction::MAX_DIRECTION_BYTES};
     let mut doc = fixture();
@@ -283,6 +284,7 @@ fn explicit_text_direction_budget_refuses_edits_and_reports_loaded_values() {
 }
 
 #[test]
+/// Verify stored direction preserves field value and physical quadding through reopen.
 fn explicit_text_direction_preserves_value_quadding_and_reopen() {
     use pdfcraft_fonts::TextDirection as D;
     let mut doc = fixture();
@@ -310,6 +312,7 @@ fn explicit_text_direction_preserves_value_quadding_and_reopen() {
 }
 
 #[test]
+/// Verify inherited direction metadata does not expose a password field's underlying value.
 fn explicit_text_direction_inherits_and_does_not_expose_passwords() {
     use pdfcraft_fonts::TextDirection as D;
     let mut doc = fixture();
@@ -328,6 +331,7 @@ fn explicit_text_direction_inherits_and_does_not_expose_passwords() {
 }
 
 #[test]
+/// Verify a rejected direction edit leaves field names and permission flags unchanged.
 fn explicit_text_direction_refusal_does_not_rename_or_unlock_fields() {
     use pdfcraft_fonts::TextDirection as D;
     let mut doc = fixture();

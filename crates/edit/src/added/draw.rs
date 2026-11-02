@@ -351,6 +351,7 @@ pub(super) fn draw(doc: &mut Document, c: &Content, view: [f64; 6], taken: &Dict
     Ok((out, res))
 }
 
+/// Serialize an added item's editable text/image settings into its private PDF dictionary.
 pub(super) fn params(c: &Content) -> Dict {
     let mut d = Dict::new();
     let arr = |v: &[f64]| Object::Array(v.iter().map(|x| Object::Real(*x)).collect());

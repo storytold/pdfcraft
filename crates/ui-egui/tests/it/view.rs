@@ -365,6 +365,7 @@ fn two_up_layout_places_pages_side_by_side() {
 }
 
 #[test]
+/// Verify RTL spread placement and arrow navigation while Page Up/Down retain document order.
 fn right_to_left_page_order_puts_the_first_page_on_the_right() {
     let mut h = harness(&[("layout", "two-up"), ("zoom", "50"), ("rtl-pages", "on")]);
     h.run_steps(4);

@@ -521,6 +521,7 @@ fn to_unicode(cmap: &[u8]) -> HashMap<u32, String> {
 }
 
 #[test]
+/// Verify an empty ToUnicode destination is retained while an empty source code does not become a mapping.
 fn empty_unicode_destinations_are_explicit_and_empty_source_codes_are_not() {
     let mapping = to_unicode(b"4 beginbfchar <41> <0061> <42> <> <43> <0062> <> <0078> endbfchar");
     assert_eq!(mapping.get(&0x41).map(String::as_str), Some("a"));

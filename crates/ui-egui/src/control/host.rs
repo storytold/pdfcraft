@@ -55,6 +55,7 @@ impl Host for crate::PdfCraftApp {
         self.request_quit(ctx)
     }
 
+    /// Snapshot open documents and active view state for the opt-in UI control channel.
     fn state(&self) -> Value {
         let active = self.active.and_then(|i| self.views.get(i));
         let docs: Vec<Value> = self

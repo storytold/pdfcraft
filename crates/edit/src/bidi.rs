@@ -39,6 +39,7 @@ pub(crate) fn is_hebrew_mark(c: char) -> bool {
     matches!(u32::from(c), 0x0591..=0x05BD | 0x05BF | 0x05C1..=0x05C2 | 0x05C4..=0x05C5 | 0x05C7 | 0xFB1E)
 }
 
+/// Recognize Unicode EN/AN numeric classes, including Arabic decimal and grouping separators.
 fn is_number(c: char) -> bool {
     // U+066B/U+066C are AN too: treating them as Arabic letters splits ١٢٣٫٤٥.
     matches!(unicode_bidi::bidi_class(c), unicode_bidi::BidiClass::EN | unicode_bidi::BidiClass::AN)
@@ -74,6 +75,7 @@ fn mirrored(c: char) -> char {
     }
 }
 
+/// Classify numeric bidi characters before RTL letters so decimal/group separators stay in number runs.
 fn class(c: char) -> Class {
     if is_number(c) {
         Class::Number
@@ -280,6 +282,7 @@ mod tests {
     use super::*;
 
     #[test]
+    /// Verify Arabic/Persian numeric separators survive logical-to-visual-to-logical conversion without splitting numbers.
     fn arabic_indic_decimal_and_group_separators_keep_numeric_order() {
         for logical in ["المبلغ ١٢٣٫٤٥ و 123.45", "السعر ١٬٢٣٤٫٥٠", "فاتورة ۱۲۳٫۴۵"] {
             let visual = to_visual(logical);

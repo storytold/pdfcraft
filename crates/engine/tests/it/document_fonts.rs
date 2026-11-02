@@ -133,6 +133,7 @@ fn complete_arabic_source() -> Option<(Vec<u8>, Arc<Vec<u8>>)> {
     Some((font, Arc::new(pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap())))
 }
 
+/// Check logical text, source-program reuse, notices, selection/search and return the rendered pixels.
 fn arabic_edit_state(session: &Session, id: pdfcraft_engine::DocId, expected: &str, font: &[u8]) -> Vec<u8> {
     let doc = session.get(id).unwrap();
     assert_eq!(doc.text_blocks(0)[0].editor_text, expected);
@@ -149,6 +150,7 @@ fn arabic_edit_state(session: &Session, id: pdfcraft_engine::DocId, expected: &s
 }
 
 #[test]
+/// Verify supported complete-source Arabic edits retain logical Unicode and rendered output through history and incremental reopen.
 fn complete_arabic_source_edit_history_and_incremental_reopen_keep_unicode_and_pixels() {
     let Some((font, source)) = complete_arabic_source() else { return };
     let artifact_dir = std::env::var_os("PDFCRAFT_ARABIC_EDIT_ARTIFACT_DIR").map(std::path::PathBuf::from);
@@ -231,6 +233,7 @@ fn complete_arabic_source_edit_history_and_incremental_reopen_keep_unicode_and_p
 }
 
 #[test]
+/// Require unsupported mixed-style Arabic edits to preserve the original source and undo state.
 fn unsupported_mixed_style_arabic_edit_preserves_source_and_history() {
     let Some((_, source)) = complete_arabic_source() else { return };
     let mut session = Session::new();
@@ -257,6 +260,7 @@ fn unsupported_mixed_style_arabic_edit_preserves_source_and_history() {
 }
 
 #[test]
+/// Verify deleting a newly inserted suffix restores the original positions of leading Arabic marks.
 fn leading_arabic_marks_retain_position_when_an_inserted_suffix_is_deleted() {
     let Some((font, _)) = complete_arabic_source() else { return };
     for logical in ["سَسَ", "السَّلَامُ عَلَيْكُمْ", "مرحباً بكم في جنيف", "لا لأ لإ لآ سلام", "سَلَام 123", "مرحبا Bonjour Genève Hello PDF", "المبلغ ١٢٣٫٤٥ و 123.45"]
@@ -306,6 +310,7 @@ fn leading_arabic_marks_retain_position_when_an_inserted_suffix_is_deleted() {
 }
 
 #[test]
+/// Verify the shaped font's Unicode mapping preserves Arabic word selection even without ActualText.
 fn source_glyph_unicode_without_actual_text_preserves_arabic_word_copy() {
     let Some((font, seed)) = complete_arabic_source() else { return };
     for logical in ["اللغة العربية جميلة", "مرحباً بكم في جنيف", "السَّلَامُ عَلَيْكُمْ"] {

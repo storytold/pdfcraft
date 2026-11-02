@@ -1478,6 +1478,7 @@ fn a_combining_mark_drawn_last_stays_with_its_letter() {
 }
 
 #[test]
+/// Verify separately emitted Arabic marks follow their base in extracted logical text.
 fn arabic_separate_marks_stay_after_their_base_in_copied_text() {
     let mut glyphs = vec![g("ب", 10.0, 10.0, 16.0), g("ب", 16.0, 10.0, 22.0)];
     glyphs.push(g("\u{64e}", 16.0, 10.0, 16.0));
@@ -1486,6 +1487,7 @@ fn arabic_separate_marks_stay_after_their_base_in_copied_text() {
 }
 
 #[test]
+/// Verify RTL copy order keeps separately mapped marks with their base without changing glyph geometry.
 fn separate_marks_keep_source_order_and_glyph_geometry_in_rtl_lines() {
     for (left, right, marks, expected) in [("ب", "ب", "\u{64e}\u{651}", "بَّب"), ("ם", "ש", "\u{5b8}\u{5c1}", "שָׁם")] {
         let mut glyphs = vec![g(left, 10.0, 10.0, 16.0), g(right, 16.0, 10.0, 22.0)];
@@ -1510,6 +1512,7 @@ fn separate_marks_keep_source_order_and_glyph_geometry_in_rtl_lines() {
 }
 
 #[test]
+/// Verify mapped Arabic diacritics retain logical copy and search order.
 fn arabic_mapped_diacritics_keep_copy_and_search_order() {
     let pdf = unicode_mapped_pages(
         "4 beginbfchar <61> <0628> <62> <0627> <63> <0628> <64> <064E> endbfchar",

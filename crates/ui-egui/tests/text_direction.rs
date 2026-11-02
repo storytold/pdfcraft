@@ -5,6 +5,7 @@ use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use pdfcraft_ui_egui::PdfCraftApp;
 
+/// Build numbered synthetic pages for direction-control interaction checks.
 fn fixture(n: usize) -> Vec<u8> {
     let mut objs: Vec<String> = vec!["<< /Type /Catalog /Pages 2 0 R >>".into()];
     let kids: Vec<String> = (0..n).map(|i| format!("{} 0 R", 4 + 2 * i)).collect();
@@ -31,6 +32,7 @@ fn fixture(n: usize) -> Vec<u8> {
 }
 
 #[test]
+/// Verify direction buttons change bidi policy independently of the editor's logical text and alignment.
 fn explicit_direction_buttons_preserve_text_and_alignment_in_the_editor() {
     use pdfcraft_engine::TextDirection as D;
     let mut h = harness(1, |_| {});
@@ -75,6 +77,7 @@ fn explicit_direction_buttons_preserve_text_and_alignment_in_the_editor() {
     assert!(!doc.dirty, "undoing the format changes restores the original document");
 }
 
+/// Create a native app harness, enabling pixel rendering only for explicitly requested snapshot runs.
 fn harness(pages: usize, setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> Harness<'static, PdfCraftApp> {
     let mut builder = Harness::builder().with_size(egui::vec2(1400.0, 900.0));
     if std::env::var_os("PDFCRAFT_ORGANIZE_SNAPSHOT").is_some() || std::env::var_os("PDFCRAFT_DIRECTION_SNAPSHOT").is_some() {
@@ -91,6 +94,7 @@ fn harness(pages: usize, setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> Harn
     h
 }
 
+/// Deliver a native pointer click at the requested point and settle the editor UI.
 fn click_at(h: &mut Harness<'static, PdfCraftApp>, at: egui::Pos2) {
     h.hover_at(at);
     h.run_steps(1);
@@ -100,6 +104,7 @@ fn click_at(h: &mut Harness<'static, PdfCraftApp>, at: egui::Pos2) {
     h.run_steps(4);
 }
 
+/// Click the synthetic source paragraph and require its inline editor to open.
 fn open_paragraph(h: &mut Harness<'static, PdfCraftApp>) {
     let r = h.state().views[0].page_screen_rect(0).expect("on screen");
     let at = egui::pos2(r.left() + 40.0 / 200.0 * r.width(), r.top() + (300.0 - 158.0) / 300.0 * r.height());

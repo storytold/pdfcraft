@@ -614,6 +614,7 @@ mod space_tests {
     use super::*;
 
     #[test]
+    /// Verify an absent PDF space mapping uses the validated source program's advance.
     fn an_unencoded_space_uses_the_complete_source_program_advance() {
         let bytes = include_bytes!("../../../../assets/fonts/Inter-Regular.ttf");
         let mut doc = Document::new_empty();
@@ -640,6 +641,7 @@ mod space_tests {
     }
 
     #[test]
+    /// Require an encoded PDF space width to win over the complete source font's nominal space advance.
     fn encoded_pdf_space_widths_take_precedence_over_the_program() {
         let bytes = include_bytes!("../../../../assets/fonts/Inter-Regular.ttf");
         let mut doc = Document::new_empty();

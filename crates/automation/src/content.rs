@@ -117,6 +117,8 @@ pub(crate) fn opt_aligns(a: &Args) -> Result<Option<Vec<Option<TextAlign>>>> {
 }
 
 impl Automation {
+    /// List added page items with per-page indexes, stored text style and paragraph direction.
+    /// Geometry is reported in displayed-page coordinates so the same indexes can drive later edits.
     pub(crate) fn content_list(&self, a: &Args) -> Result<Value> {
         let doc = self.doc(a)?;
         let mut per_page: std::collections::HashMap<usize, usize> = Default::default();
@@ -198,6 +200,8 @@ impl Automation {
         Ok((page, index as usize - 1, it.content.clone(), ph))
     }
 
+    /// Validate and apply changes to one added text or image item.
+    /// Text-only and image-only options are checked before dispatch; omitted style fields retain the stored settings.
     pub(crate) fn content_update(&mut self, a: &Args) -> Result<Value> {
         let (page, index, content, ph) = self.item(a)?;
         let mut content = match rect_arg(a, "rect")? {

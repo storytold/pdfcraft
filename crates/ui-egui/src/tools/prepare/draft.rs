@@ -180,6 +180,7 @@ pub(crate) fn da_font(da: &str) -> &str {
 }
 
 impl FieldDraft {
+    /// Capture a field/widget's editable properties and direction as a draft whose omitted edits remain unchanged.
     pub fn new(f: &FormField, widget: usize) -> Self {
         let r = f.widgets.get(widget).map(|w| w.rect).unwrap_or_default();
         let mut d = FieldDraft {

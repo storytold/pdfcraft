@@ -41,6 +41,7 @@ fn view_transform_to_user(info: &pdfcraft_render::PageInfo, m: [f64; 6]) -> Resu
     Ok(user)
 }
 
+/// Reject paragraph-direction arguments on single-line editing requests.
 fn refuse_line_direction(args: &Args) -> Result<()> {
     if args.get("direction").is_some() {
         return Err(ToolError::InvalidArgs("direction is a paragraph property; use paragraph from text_paragraphs".into()));
@@ -48,6 +49,8 @@ fn refuse_line_direction(args: &Args) -> Result<()> {
     Ok(())
 }
 
+/// Choose the paragraph text shared by preview and Apply.
+/// An explicit draft stays literal. Otherwise width changes rejoin soft wraps, while row alignment and direction-only edits retain editor rows.
 fn paragraph_replacement(args: &Args, block: &pdfcraft_engine::TextBlock, width: Option<f64>) -> Result<String> {
     // Explicit row alignments keep editor rows; a width-only edit rejoins soft wraps.
     Ok(match args.opt_str("text")? {

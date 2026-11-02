@@ -214,6 +214,8 @@ struct RewriteDispatch {
     use_styled_path: bool,
 }
 
+/// Select the supported paragraph rewrite path before any font or content mutation.
+/// Explicit or retained non-Auto direction refuses turned baselines and legacy visual-order Indic text rather than writing an incompatible layout.
 fn choose_rewrite_path(
     doc: &Document,
     fonts: &Dict,
@@ -780,6 +782,7 @@ struct SourceFont {
     space: f64,
 }
 
+/// Determine source-font reuse and space advance while honoring legacy visual-order encoding.
 fn source_font(doc: &Document, fonts_res: &Dict, font_name: &str, first: &TextLine, flat: &str, style: &BlockStyle) -> SourceFont {
     let metrics = fonts_res.get(font_name.as_bytes()).and_then(|f| doc.resolve(f).as_dict().cloned()).map(|d| Metrics::from_dict(doc, &d));
     let visual_indic = metrics.as_ref().is_some_and(|m| m.visual_order) || first.visual_order;

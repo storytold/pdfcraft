@@ -7392,6 +7392,7 @@ fn detecting_form_fields_through_tools() {
 }
 
 #[test]
+/// Verify form detection preserves text streams whose trailing comments meet another content piece.
 fn detecting_form_fields_preserves_content_piece_comments() {
     for visible in [false, true] {
         let first = format!("BT /F1 18 Tf 40 250 Td (FIRST) Tj ET % trailing comment{}", if visible { "\n" } else { "" });
@@ -10525,6 +10526,7 @@ fn mixed_script_tools_normalize_but_undo_restores_the_exact_mixture() {
 }
 
 #[test]
+/// Verify public direction tools preserve logical text, independent alignment and history through saving/reopening.
 fn explicit_direction_tools_keep_text_alignment_history_and_reopen() {
     let dir = workdir("explicit-direction");
     std::fs::write(dir.join("source.pdf"), fixture(1)).unwrap();
@@ -10557,6 +10559,7 @@ fn explicit_direction_tools_keep_text_alignment_history_and_reopen() {
 }
 
 #[test]
+/// Require optional Auto/LTR/RTL arguments on the public text and field tool schemas.
 fn explicit_direction_is_advertised_as_a_root_tool_argument() {
     let table = tools();
     for name in ["page_add_text", "content_update", "text_edit", "text_edit_layout", "form_set_props"] {
@@ -10569,6 +10572,7 @@ fn explicit_direction_is_advertised_as_a_root_tool_argument() {
 }
 
 #[test]
+/// Verify an added text item's direction persists independently of physical paragraph alignment.
 fn added_direction_round_trips_independently_of_alignment() {
     let dir = workdir("added-explicit-direction");
     let mut a = auto(&dir);

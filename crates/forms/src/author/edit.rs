@@ -3,6 +3,8 @@ use super::look::{BorderStyle, da_string, patch_da, patch_widget_look, redraw_wi
 use super::tree::{ancestor_sets, attach, check_place, child_named, clash, detach, ensure_form, inherited, name_parts, own_inherited};
 use super::{Dict, Document, Field, FieldKind, FieldProps, FormError, MIN_FIELD_SIDE, ObjRef, Object, PdfString, fields, flags, invalid};
 
+/// Validate direction before renaming fields, changing actions or modifying lock flags.
+/// Text/choice fields accept the property; retained or requested non-Auto direction requires bounded values and refuses comb layout.
 fn validate_text_direction(f: &Field, props: &FieldProps) -> Result<(), FormError> {
     // Direction refusal must precede renaming, actions and lock mutations too.
     if props.text_direction.is_some() && !matches!(f.kind, FieldKind::Text | FieldKind::Combo | FieldKind::List) {

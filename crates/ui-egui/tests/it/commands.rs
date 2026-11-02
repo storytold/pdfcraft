@@ -69,6 +69,7 @@ const PICKERS: &[&str] = &[
 ];
 
 #[test]
+/// Exercise enabled registry commands with their required document/view setup while avoiding interactive file pickers.
 fn every_registered_command_is_implemented() {
     for spec in COMMANDS {
         // Page-text Copy needs a loaded view and egui context, covered by text_select.

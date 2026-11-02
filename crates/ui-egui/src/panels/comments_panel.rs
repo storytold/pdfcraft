@@ -382,6 +382,7 @@ struct CardContext<'a> {
     nav: &'a mut Option<Nav>,
 }
 
+/// Draw one comment card and collect its thread, editing and context-menu actions.
 fn card(ui: &mut egui::Ui, view: &mut DocView, context: CardContext<'_>) -> Option<Edit> {
     let CardContext { theme: t, annotation: a, rotation, thread, doc, prefs, allowed, nav } = context;
     let info = &doc.info;

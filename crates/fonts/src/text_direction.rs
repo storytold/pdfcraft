@@ -13,6 +13,7 @@ pub enum TextDirection {
 }
 
 impl TextDirection {
+    /// Return the private PDF metadata spelling of this paragraph-direction policy.
     pub fn name(self) -> &'static str {
         match self {
             Self::Auto => "Auto",
@@ -21,6 +22,7 @@ impl TextDirection {
         }
     }
 
+    /// Read direction metadata, defaulting unknown or older values to automatic direction.
     pub fn from_name(name: &[u8]) -> Self {
         match name {
             b"LTR" => Self::LeftToRight,
@@ -29,6 +31,8 @@ impl TextDirection {
         }
     }
 
+    /// Resolve whether a paragraph has an RTL base.
+    /// Auto follows Unicode's first strong direction; forced LTR/RTL ignores the content's inferred base.
     pub fn rtl(self, text: &str) -> bool {
         match self {
             Self::Auto => unicode_bidi::get_base_direction(text) == Direction::Rtl,
@@ -37,6 +41,7 @@ impl TextDirection {
         }
     }
 
+    /// Return the Unicode bidi base level selected for this paragraph.
     pub fn level(self, text: &str) -> Level {
         if self.rtl(text) { Level::rtl() } else { Level::ltr() }
     }
@@ -104,6 +109,7 @@ mod tests {
     use super::*;
 
     #[test]
+    /// Verify empty strings produce no visual text under automatic and forced paragraph bases.
     fn empty_directional_text_has_no_visual_runs() {
         for direction in [TextDirection::Auto, TextDirection::LeftToRight, TextDirection::RightToLeft] {
             assert_eq!(direction.visual_plain("").unwrap(), "");
@@ -111,6 +117,7 @@ mod tests {
     }
 
     #[test]
+    /// Verify forced paragraph bases affect visual order without rewriting the logical input string.
     fn explicit_base_changes_visual_order_without_changing_logical_text() {
         let logical = "123 ABC";
         assert_eq!(TextDirection::Auto.visual_plain(logical).unwrap(), "123 ABC");
@@ -122,6 +129,7 @@ mod tests {
     }
 
     #[test]
+    /// Verify simple bidi ordering keeps nonspacing marks with their base and rejects an over-budget row.
     fn simple_visual_units_keep_nonspacing_marks_attached() {
         assert_eq!(TextDirection::RightToLeft.visual_plain("שָׁם").unwrap(), "םשָׁ");
         assert_eq!(TextDirection::LeftToRight.visual_plain("ABC e\u{301}").unwrap(), "ABC e\u{301}");

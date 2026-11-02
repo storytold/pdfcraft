@@ -25,6 +25,7 @@ fn build(objects: &[&str]) -> Document {
     Document::open(Arc::new(bytes)).unwrap()
 }
 
+/// Wrap synthetic content operators in a correctly sized PDF stream object.
 fn stream(content: &str) -> String {
     format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len())
 }
@@ -73,6 +74,7 @@ fn devanagari_page(content: &str) -> Document {
 }
 
 #[test]
+/// Verify explicit-direction dispatch rejects turned and legacy visual-order Indic sources without mutation.
 fn explicit_direction_dispatch_refuses_turned_and_visual_indic_atomically() {
     for visual_indic in [false, true] {
         for (direction, stored) in

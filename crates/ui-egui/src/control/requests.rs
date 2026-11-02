@@ -303,6 +303,8 @@ fn widget(id: NodeId, n: &accesskit::Node, depth: usize, focused: bool) -> Value
     w
 }
 
+/// Validate a composition request and translate it into native egui IME input.
+/// Text is capped at 262144 UTF-8 bytes; preedit selection counts ordered Unicode characters, not byte offsets. Reject extra or phase-incompatible parameters.
 fn ime_event(p: &Value) -> Result<egui::Event, String> {
     let phase = p.get("phase").and_then(Value::as_str).ok_or("ui.ime: phase must be preedit, commit or cancel")?;
     if phase == "cancel" {
@@ -415,6 +417,7 @@ mod ime_tests {
     use super::*;
 
     #[test]
+    /// Verify composition requests reject oversized text and invalid Unicode character-index selections.
     fn composition_parameters_are_bounded_and_use_character_indices() {
         let event = ime_event(&json!({"phase":"preedit","text":"مَر","selection":[0,3]})).unwrap();
         assert!(matches!(event, egui::Event::Ime(egui::ImeEvent::Preedit { active_range_chars: Some(range), .. }) if range == (0..3)));

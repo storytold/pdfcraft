@@ -252,6 +252,7 @@ impl PdfCraftApp {
         Some(true)
     }
 
+    /// Apply a registered view command to the current document without changing its stored PDF content.
     fn run_view_command(&mut self, id: &str, active: Option<usize>) -> Option<bool> {
         match id {
             "ui.dock.reset" => {

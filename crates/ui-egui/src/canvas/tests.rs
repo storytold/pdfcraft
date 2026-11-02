@@ -1617,6 +1617,7 @@ fn notches_turn_pages_and_stop_at_the_ends() {
 }
 
 #[test]
+/// Verify RTL spread geometry places the earlier document page on the right.
 fn right_to_left_two_page_view_puts_the_earlier_page_on_the_right() {
     let info = pdfcraft_render::DocInfo {
         pages: (0..4)
@@ -1659,6 +1660,7 @@ fn right_to_left_two_page_view_keeps_each_page_width() {
 }
 
 #[test]
+/// Verify replacing a document preserves its selected RTL page-reading order.
 fn replacing_the_document_keeps_right_to_left_page_order() {
     let info = pdfcraft_render::DocInfo {
         pages: (0..4)
@@ -1678,6 +1680,7 @@ fn replacing_the_document_keeps_right_to_left_page_order() {
 }
 
 #[test]
+/// Check pure and Latin-prefixed Arabic hover text retains logical strings and uses bidi-aware layout.
 fn arabic_comment_hover_uses_the_bidi_path() {
     let lines = crate::bidi::wrap("Author\nواحد اثنين", |_| true);
     assert_eq!(lines.len(), 2);

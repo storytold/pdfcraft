@@ -453,6 +453,8 @@ fn is_cmap_delimiter(b: u8) -> bool {
 impl<'a> Iterator for Lexer<'a> {
     type Item = Tok<'a>;
 
+    /// Read the next CMap token while skipping PDF whitespace and comments.
+    /// Preserve empty hex strings as real tokens so an explicit empty Unicode destination differs from an absent mapping.
     fn next(&mut self) -> Option<Tok<'a>> {
         loop {
             let b = self.at(self.pos)?;

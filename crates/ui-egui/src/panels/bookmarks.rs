@@ -365,6 +365,7 @@ mod bookmark_filter {
         assert!(!crate::bidi::wrap("Chapter 1", |_| true)[0].rtl);
     }
 
+    /// Lay out the production bookmark-title job in a native egui context for glyph-position assertions.
     fn laid_out_title(title: &str) -> std::sync::Arc<egui::Galley> {
         let ctx = egui::Context::default();
         ctx.set_fonts(theme::font_definitions());

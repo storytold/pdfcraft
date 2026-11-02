@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 const INTER: &[u8] = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
 
+/// Build a PDF with the exact Inter program and either sparse WinAnsi or complete Unicode encoding.
 fn fixture(complete_mapping: bool) -> Vec<u8> {
     let bytes = pdfcraft_engine::Session::new().create_blank(600.0, 800.0, 1).unwrap();
     let mut doc = Document::open(bytes).unwrap();
@@ -49,6 +50,7 @@ fn fixture(complete_mapping: bool) -> Vec<u8> {
     write_incremental(&doc, &Default::default()).unwrap()
 }
 
+/// Run one automation request and require its first result to be JSON.
 fn call(auto: &mut Automation, name: &str, args: Value) -> Value {
     match auto.call(name, &args).unwrap().remove(0) {
         Content::Json(value) => value,
@@ -56,6 +58,7 @@ fn call(auto: &mut Automation, name: &str, args: Value) -> Value {
     }
 }
 
+/// Check font-resource count and exact embedded Inter bytes, refusing outline fallback resources.
 fn assert_source_fonts(bytes: Vec<u8>, expected: usize) {
     let doc = Document::open(Arc::new(bytes)).unwrap();
     let page = pdfcraft_model::pages(&doc).remove(0);
@@ -70,6 +73,7 @@ fn assert_source_fonts(bytes: Vec<u8>, expected: usize) {
 }
 
 #[test]
+/// Verify sparse RTL encoding completion, complete-source/LTR controls and literal font requests through preview, editing and reopen.
 fn rtl_latin_completion_uses_one_full_source_encoding_for_preview_apply_and_reopen() {
     for (complete, direction, expected_fonts) in [(false, "rtl", 2), (true, "rtl", 1), (false, "ltr", 2)] {
         let dir = tempfile::tempdir().unwrap();

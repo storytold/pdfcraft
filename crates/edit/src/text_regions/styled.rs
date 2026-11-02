@@ -35,6 +35,8 @@ struct FontResolver<'a> {
 }
 
 impl FontResolver<'_> {
+    /// Resolve an encoding for the requested text without replacing an explicit font resource.
+    /// Otherwise prefer existing source encodings, the validated complete source program and matching full faces. Return None when the caller must choose a fallback.
     fn encodable_font(&mut self, source: &TextLine, text: &str, requested: Option<&str>) -> Result<Option<String>, EditError> {
         if let Some(resource) = requested {
             if !self.metrics.get(resource).is_some_and(|metrics| source_encodes(metrics, text)) {
@@ -84,6 +86,7 @@ impl FontResolver<'_> {
         self.embed_face(key, &bytes, &family, "the source font could not be loaded").map(Some)
     }
 
+    /// Choose one directional-row encoding, preferring a complete source program when positioned spaces need completion.
     fn uniform_row_font(&mut self, source: &TextLine, text: &str) -> Result<Option<String>, EditError> {
         // source_encodes deliberately permits positioned spaces. When a complete
         // program exists, keep its space glyph and all letters in one encoding.
@@ -147,6 +150,8 @@ struct DirectionalRow<'a> {
 
 type RowFontChoices = HashMap<usize, HashMap<String, Option<String>>>;
 
+/// Index UTF-8 draft row starts and cache uniform-font eligibility from resolved paragraph bases.
+/// Treat CRLF as one break, keep standalone CR/LF boundaries, and avoid rescanning a row for every style span.
 fn directional_rows<'a>(draft: &'a str, bases: &[pdfcraft_fonts::TextDirection]) -> Vec<DirectionalRow<'a>> {
     let mut starts = vec![0];
     for (at, ch) in draft.char_indices() {
@@ -166,6 +171,8 @@ fn directional_rows<'a>(draft: &'a str, bases: &[pdfcraft_fonts::TextDirection])
         .collect()
 }
 
+/// Cache one whole-row font choice per directional row and source resource.
+/// Check the cache before resolving a complete encoding; preserve source-style indexes so unsupported mixed-style bidi rows are still refused.
 fn prepare_directional_row_fonts(
     rows: &[DirectionalRow<'_>],
     span: std::ops::Range<usize>,
@@ -186,6 +193,8 @@ fn prepare_directional_row_fonts(
 }
 
 impl CharacterPreparation<'_> {
+    /// Resolve styled characters and bounded fallback glyphs before rewriting content.
+    /// Explicit resources stay authoritative; implicit bidi rows share a complete encoding, and source-style indexes remain available for later validation.
     fn prepare(self) -> Result<PreparedCharacters, EditError> {
         let Self { doc, first, lines, draft, bases, spans, style, overrides, fonts, metrics, max_glyphs } = self;
         let mut chars = Vec::new();
@@ -358,6 +367,7 @@ fn plain_segment_width(
         .sum())
 }
 
+/// Prepare contextual runs or plain visual advances for rewritten rows while leaving retained rows untouched.
 fn prepare_shaped_rows(
     doc: &Document,
     fonts: &Dict,
@@ -389,6 +399,7 @@ fn prepare_shaped_rows(
     Ok(ShapedRows { runs, advances })
 }
 
+/// Embed each prepared glyph mapping and return its output font resource by row/run position.
 fn embed_shaped_resources(doc: &mut Document, fonts: &mut Dict, runs: &ShapedRunCache) -> Result<HashMap<(usize, usize), String>, EditError> {
     let mut resources = HashMap::new();
     for (key, (bytes, shaped, family)) in runs {
@@ -399,6 +410,8 @@ fn embed_shaped_resources(doc: &mut Document, fonts: &mut Dict, runs: &ShapedRun
     Ok(resources)
 }
 
+/// Refuse rewritten contextual/bidi rows that cross unsupported font or source-style boundaries.
+/// Retained source rows are left alone; pure-Latin LTR rows may still use range styles.
 fn validate_contextual_rows(rows: &[Vec<StyledChar>], kept: &[bool], directional: impl Fn(usize, &str) -> bool) -> Result<(), EditError> {
     for ((index, row), _) in rows.iter().enumerate().zip(kept).filter(|(_, retained)| !**retained) {
         let text: String = row.iter().map(|character| character.0).collect();
@@ -458,6 +471,8 @@ fn validated_ranges<'a>(draft: &str, style: &'a BlockStyle) -> Result<Vec<&'a Ra
     Ok(ranges)
 }
 
+/// Select the literal replacement when supplied, otherwise borrow the source editor rows.
+/// Refuse drafts over four million UTF-8 bytes before character and fallback preparation.
 fn replacement_text<'a>(block: &'a TextBlock, text: Option<&'a str>) -> Result<&'a str, EditError> {
     let draft = match text {
         Some(text) => text,
@@ -469,6 +484,7 @@ fn replacement_text<'a>(block: &'a TextBlock, text: Option<&'a str>) -> Result<&
     Ok(draft)
 }
 
+/// Detect unchanged content/style requests while excluding the source-break preservation policy.
 fn has_no_effective_style_change(block: &TextBlock, draft: &str, style: &BlockStyle) -> bool {
     draft == block.editor_text && BlockStyle { preserve_source_breaks: false, ..style.clone() } == BlockStyle::default()
 }
@@ -525,6 +541,9 @@ fn paragraph_geometry(doc: &Document, page: &pdfcraft_model::Page, block: &TextB
 
 type WrappedStyledRows = (StyledRows, RowRanges, Vec<usize>, Vec<bool>, Vec<usize>);
 
+/// Wrap styled characters into output rows with draft ranges, paragraph ownership and soft-gap metadata.
+/// Pass paragraph indexes to the measurement callback so continuations retain their chosen base.
+/// Draft ranges index styled characters, not UTF-8 bytes; rows stay logical until drawing applies bidi order.
 fn wrap_styled_rows(
     chars: &[StyledChar],
     width: f64,
@@ -961,6 +980,7 @@ fn splice_with_marker(
     data
 }
 
+/// Resolve one bidi base for each CR/LF-normalized paragraph under the caller's direction policy.
 fn paragraph_bases(draft: &str, direction: pdfcraft_fonts::TextDirection) -> Vec<pdfcraft_fonts::TextDirection> {
     draft
         .replace("\r\n", "\n")
@@ -974,6 +994,7 @@ fn paragraph_bases(draft: &str, direction: pdfcraft_fonts::TextDirection) -> Vec
         .collect()
 }
 
+/// Require uniform layout for RTL bases or RTL content without restricting pure-Latin LTR range styles.
 fn direction_needs_uniform_row(base: pdfcraft_fonts::TextDirection, text: &str) -> bool {
     // Explicit LTR alone does not make a Latin row contextual. RTL content still
     // needs a uniform face even when its paragraph base is forced left to right.
@@ -982,6 +1003,8 @@ fn direction_needs_uniform_row(base: pdfcraft_fonts::TextDirection, text: &str) 
 
 type SourceBreaks = Vec<Option<usize>>;
 
+/// Capture source soft/hard break classifications before styling when preservation was requested.
+/// Require unchanged editor text and no width override; literal replacement drafts retain their own newline semantics.
 fn preserved_source_breaks(
     block: &TextBlock,
     lines: &[TextLine],
@@ -1000,6 +1023,8 @@ fn preserved_source_breaks(
     Ok(Some((0..block.rows.len()).map(|row| break_gap(block, lines, row)).collect()))
 }
 
+/// Map logical paragraph bases onto preserved visual rows.
+/// Soft continuations inherit their logical paragraph's base; hard breaks advance to the next logical paragraph.
 fn draft_row_bases(
     block: &TextBlock,
     draft: &str,
@@ -1021,6 +1046,7 @@ fn draft_row_bases(
         .collect()
 }
 
+/// Restore captured source break kinds and separator counts on the rewritten row metadata.
 fn restore_source_breaks(breaks: Option<&[Option<usize>]>, soft: &mut [bool], gaps: &mut [usize]) {
     let Some(breaks) = breaks else { return };
     for (row, gap) in breaks.iter().enumerate().skip(1) {
@@ -1033,6 +1059,7 @@ fn restore_source_breaks(breaks: Option<&[Option<usize>]>, soft: &mut [bool], ga
     }
 }
 
+/// Open ActualText only when the emitted visual string differs from its logical Unicode text.
 fn begin_logical_span(ops: &mut Vec<Op>, logical: &str, visual: &str) -> bool {
     let changed = logical != visual;
     if changed {
@@ -1043,12 +1070,15 @@ fn begin_logical_span(ops: &mut Vec<Op>, logical: &str, visual: &str) -> bool {
     changed
 }
 
+/// Close the ActualText span only when its matching logical-text marker was emitted.
 fn end_logical_span(ops: &mut Vec<Op>, changed: bool) {
     if changed {
         ops.push(Op::new("EMC", vec![]));
     }
 }
 
+/// Open the paragraph marker with explicit/stored direction metadata when that policy must survive saving.
+/// Keep Auto distinct from forced LTR/RTL instead of persisting only the resolved base.
 fn begin_direction_marker(ops: &mut Vec<Op>, marked: bool, direction: pdfcraft_fonts::TextDirection, explicit: bool) {
     if marked && (explicit || direction != pdfcraft_fonts::TextDirection::Auto) {
         let mut props = Dict::new();

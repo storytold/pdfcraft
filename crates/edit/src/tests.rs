@@ -6282,6 +6282,7 @@ fn arabic_actual_text_keeps_typing_order_when_opened_for_editing() {
 }
 
 #[test]
+/// Verify zero-text auxiliary glyphs do not create spaces between their advancing neighbors.
 fn empty_unicode_auxiliaries_do_not_invent_word_spaces() {
     for auxiliary_x in [54.0, 37.0] {
         let mut doc =
@@ -6302,6 +6303,7 @@ fn empty_unicode_auxiliaries_do_not_invent_word_spaces() {
 }
 
 #[test]
+/// Verify a leading zero-text auxiliary is grouped with its own following line.
 fn leading_empty_unicode_auxiliaries_stay_with_their_new_line() {
     let mut doc = text_page("BT /F1 12 Tf 1 0 0 1 40 700 Tm (A) Tj 1 0 0 1 40 670 Tm (B) Tj 1 0 0 1 48.004 670 Tm (C) Tj ET");
     let cmap = doc.add(Object::Stream(Stream::flate(
@@ -6317,6 +6319,7 @@ fn leading_empty_unicode_auxiliaries_stay_with_their_new_line() {
 }
 
 #[test]
+/// Verify an initial raised mark does not replace the source baseline of its self-contained ActualText body.
 fn self_contained_actual_text_uses_the_advancing_body_rise() {
     for (content, baseline, _rise) in [
         ("/Span <</ActualText <FEFF0628064E>>> BDC BT /F1 12 Tf 1 0 0 1 40 700 Tm 3 Ts (A) Tj 0 Ts (B) Tj ET EMC", 700.0, 0.0),
@@ -7416,6 +7419,7 @@ fn rows_the_edit_does_not_reach_keep_their_source_operators() {
 }
 
 #[test]
+/// Require a preservation-policy-only request to leave original content bytes unchanged.
 fn preserved_source_breaks_alone_do_not_rewrite_content() {
     let mut doc = text_page("BT /F1 12 Tf 14.4 TL 1 0 0 1 72 700 Tm [(First) -400 ( row)] TJ T* (Second row) Tj ET");
     let before = page_content_bytes(&doc, 0);
@@ -7426,6 +7430,7 @@ fn preserved_source_breaks_alone_do_not_rewrite_content() {
 }
 
 #[test]
+/// Verify an untouched row retains its exact source operators when a neighboring range is restyled.
 fn preserved_source_breaks_keep_unedited_rows_operators() {
     let row = "[(justified) -400 ( text) -400 ( uses) -400 ( wide) -400 ( gaps)] TJ";
     let mut doc = text_page(&format!("BT /F1 12 Tf 14.4 TL 1 0 0 1 72 700 Tm {row} T* (last line.) Tj ET"));
@@ -7578,6 +7583,7 @@ fn a_new_character_comes_from_the_source_fonts_own_embedded_program() {
 }
 
 #[test]
+/// Verify a newly added combining mark moves its whole contextual span into one complete source encoding.
 fn contextual_source_completion_uses_one_encoding_for_the_whole_span() {
     // Inter is already a repository asset. Its source WinAnsi encoding can show q,
     // but not combining acute: completion must move the entire contextual span.
@@ -7649,6 +7655,7 @@ fn a_shaped_run_is_one_text_object_with_each_glyph_where_shaping_put_it() {
 }
 
 #[test]
+/// Check shaped glyph placement, tracking and horizontal scaling without separating marks from their owning cluster.
 fn shaped_cluster_tracking_preserves_mark_offsets_and_horizontal_scale() {
     let mut cases = vec![(include_bytes!("../../../assets/fonts/Inter-Regular.ttf").to_vec(), vec!["q\u{301}x\u{323} n\u{303}\u{304} Cafe\u{301}"])];
     if let Some(path) = std::env::var_os("PDFCRAFT_TEST_ARABIC_FONT") {
@@ -10622,6 +10629,7 @@ fn review_inside_scope_group_move_matches_direct_transform_under_outer_scale() {
 }
 
 #[test]
+/// Verify unsupported direction/justification requests fail before changing the page's content bytes.
 fn explicit_direction_justification_is_refused_without_changing_content() {
     for per_row in [false, true] {
         let mut doc = text_page("BT /F1 12 Tf 72 700 Td (123 ABC) Tj ET");

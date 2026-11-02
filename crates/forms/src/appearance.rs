@@ -722,6 +722,7 @@ pub enum Overflow {
 }
 
 impl std::fmt::Display for Overflow {
+    /// Describe field overflow or refused direction layout with the value's relevant size and available room.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::DirectionBudget => {

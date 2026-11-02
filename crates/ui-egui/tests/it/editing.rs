@@ -4756,6 +4756,7 @@ fn page_context_menu_items_disabled_on_protected_pdf() {
 }
 
 #[test]
+/// Verify image edge handles apply the expected stretch and crop editing modes.
 fn image_edge_handle_stretch_and_crop_mode() {
     let mut png = Vec::new();
     image::RgbImage::from_pixel(100, 100, image::Rgb([100, 150, 200]))
@@ -7456,6 +7457,7 @@ fn image_copy_cut_paste_keyboard_and_context_menu() {
 }
 
 #[test]
+/// Verify added and pasted images remain editable through the shared image-edit operations.
 fn added_and_pasted_image_uses_refactored_image_edits() {
     let mut png = Vec::new();
     image::RgbImage::from_pixel(80, 80, image::Rgb([120, 180, 240])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();

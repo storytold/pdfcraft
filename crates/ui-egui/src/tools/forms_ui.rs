@@ -327,6 +327,7 @@ struct ComboEditor<'a> {
     index: usize,
 }
 
+/// Edit a combo field using its existing options and native text input with the stored direction.
 fn combo_editor(ctx: &egui::Context, view: &mut DocView, editor: ComboEditor<'_>) {
     let ComboEditor { form, field: f, widget: w, rect, zoom, index: widget } = editor;
     let mut enter = false;
@@ -586,6 +587,7 @@ fn field_layout_job(f: &FormField, text: String, font: f32, wrap: f32) -> egui::
     job
 }
 
+/// Translate field quadding into physical widget alignment independently of bidi direction.
 fn field_text_align(f: &FormField) -> egui::Align2 {
     match f.quadding {
         1 => egui::Align2::CENTER_TOP,
@@ -594,6 +596,7 @@ fn field_text_align(f: &FormField) -> egui::Align2 {
     }
 }
 
+/// Draw a field without a baked appearance using its values, masking, direction and widget geometry.
 fn paint_unbaked_widget(painter: &egui::Painter, xf: &PageXform, f: &FormField, w: &FormWidget, r: Rect) {
     match f.kind {
         FormFieldKind::Text | FormFieldKind::Combo => {

@@ -97,6 +97,7 @@ fn settle(h: &mut Harness<'static, PdfCraftApp>) {
 }
 
 #[test]
+/// Verify opt-in UI control can set, report and toggle RTL spreads, refusing activation outside two-page view.
 fn right_to_left_page_order_is_reachable_and_observable_headlessly() {
     let (mut h, c) = harness();
     assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["active"]["rtl_pages"], false);

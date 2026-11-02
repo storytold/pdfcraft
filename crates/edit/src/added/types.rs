@@ -118,6 +118,7 @@ impl AddedText {
 }
 
 impl Default for AddedText {
+    /// Create empty Helvetica text with automatic direction and the standard editing defaults.
     fn default() -> Self {
         AddedText {
             rect: [0.0; 4],

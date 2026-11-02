@@ -152,6 +152,7 @@ impl TextLine {
 mod tests {
     use super::*;
 
+    /// Construct a synthetic text block with the requested text and page bounds for replacement-selection checks.
     fn block(text: &str, rect: [f64; 4]) -> TextBlock {
         TextBlock {
             text: text.into(),

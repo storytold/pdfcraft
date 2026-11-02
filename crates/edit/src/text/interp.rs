@@ -454,6 +454,7 @@ pub(super) struct Carry {
 const MAX_PAGE_TEXT: usize = 16 << 20;
 
 impl Carry {
+    /// Start page interpretation with identity graphics state and the full decoded-text budget.
     pub(super) fn new() -> Self {
         let ts = Ts {
             ctm: Matrix::IDENTITY,
@@ -496,6 +497,8 @@ struct MarkedContent {
 }
 
 impl MarkedContent {
+    /// Open a marked-content scope, inheriting paragraph direction and resolving inline or named properties.
+    /// Direction metadata is read even when the caller disables ActualText replacement; nested scopes retain their enclosing region.
     fn begin(&mut self, doc: &Document, op: &Op, index: usize, logical_text: Option<&Dict>, shown_count: usize, resources: &Dict) {
         // Marked text paragraphs/headings are authoritative boundaries. Ignore artifacts and
         // inner spans, which inherit their enclosing region.
@@ -532,6 +535,8 @@ impl MarkedContent {
         self.actual_text.push(logical.map(|text| (shown_count, index, text)));
     }
 
+    /// Close a marked scope and combine its shown glyphs under ActualText.
+    /// For eligible self-contained horizontal spans, use an agreeing advancing body's rise instead of a leading raised mark; mixed or transformed spans retain their source origin.
     fn end(&mut self, index: usize, shown: &mut Vec<Shown>) {
         self.regions.pop();
         self.directions.pop();
@@ -612,6 +617,8 @@ struct TextRunState<'a> {
     soft_gap: usize,
 }
 
+/// Decode one text-show operator into bounded glyph runs and advance its text matrix.
+/// Retain zero-text auxiliary geometry, paragraph/break metadata and ActualText ownership while charging decoded text against the page budget.
 fn show_text(op: &Op, i: usize, state: &mut TextRunState<'_>) -> Result<(), EditError> {
     let ts = &mut *state.ts;
     let tm = &mut *state.tm;
@@ -818,6 +825,7 @@ fn show_text(op: &Op, i: usize, state: &mut TextRunState<'_>) -> Result<(), Edit
     Ok(())
 }
 
+/// Interpret page-stream operators while carrying graphics, text and marked-content state between streams.
 pub(super) fn interpret(
     doc: &Document,
     ops: &[Op],

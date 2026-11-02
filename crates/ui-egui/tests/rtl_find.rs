@@ -3,6 +3,7 @@
 use egui_kittest::Harness;
 use pdfcraft_ui_egui::PdfCraftApp;
 
+/// Build a synthetic one-page Helvetica PDF for native Find and Search input regressions.
 fn fixture() -> Vec<u8> {
     let body = "BT /F1 18 Tf 20 150 Td (Page) Tj ET";
     let objs = [
@@ -27,6 +28,7 @@ fn fixture() -> Vec<u8> {
     out
 }
 
+/// Open the synthetic page in an English native UI harness for Find/Search input checks.
 fn harness() -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1100.0, 720.0)).build_eframe(|_cc| {
         let mut app = PdfCraftApp::new();
@@ -39,6 +41,7 @@ fn harness() -> Harness<'static, PdfCraftApp> {
     h
 }
 
+/// Read the stored logical Find query, treating a closed Find bar as empty.
 fn query(h: &Harness<'static, PdfCraftApp>) -> String {
     h.state().views[0].find.as_ref().map(|f| f.query.clone()).unwrap_or_default()
 }
@@ -52,6 +55,7 @@ fn type_chars(h: &mut Harness<'static, PdfCraftApp>, text: &str) {
 }
 
 #[test]
+/// Verify incremental Arabic typing, deletion and Search-panel continuation retain logical query order and render text.
 fn find_bar_keeps_arabic_typing_order() {
     let mut h = harness();
     h.state_mut().views[0].open_find();
@@ -87,6 +91,7 @@ fn find_bar_keeps_arabic_typing_order() {
 }
 
 #[test]
+/// Verify native Find undo restores the logical Arabic query rather than its visual order.
 fn find_bar_undo_keeps_typing_order() {
     let mut h = harness();
     h.state_mut().views[0].open_find();
@@ -107,6 +112,7 @@ fn find_bar_undo_keeps_typing_order() {
 }
 
 #[test]
+/// Verify native word deletion removes the last typed Arabic word from Find.
 fn find_bar_word_backspace_removes_the_last_typed_word() {
     let mut h = harness();
     h.state_mut().views[0].open_find();
@@ -173,6 +179,7 @@ fn find_bar_paints_both_words_across_the_line() {
 }
 
 #[test]
+/// Verify native Find still appends and deletes ordinary Latin text.
 fn find_bar_still_types_latin_at_the_end() {
     let mut h = harness();
     h.state_mut().views[0].open_find();

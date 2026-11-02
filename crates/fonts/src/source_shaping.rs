@@ -57,6 +57,7 @@ pub fn required(text: &str) -> bool {
     })
 }
 
+/// Shape one bounded source-font row with automatic paragraph-base selection.
 pub fn shape(bytes: &[u8], text: &str) -> Result<ShapedRun, String> {
     shape_with_direction(bytes, text, crate::TextDirection::Auto)
 }
@@ -119,6 +120,7 @@ pub fn shape_with_direction(bytes: &[u8], text: &str, direction: crate::TextDire
 mod direction_tests {
     use super::*;
     #[test]
+    /// Verify a forced RTL base reorders source glyphs without changing total advance or logical input.
     fn forced_paragraph_base_reorders_the_same_source_glyphs() {
         let bytes = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
         let logical = "123 ABC";
@@ -137,6 +139,7 @@ mod tests {
     use super::*;
 
     #[test]
+    /// Require each Arabic cluster's logical text to belong to its advancing glyph rather than a zero-advance mark.
     fn arabic_cluster_unicode_is_carried_by_its_advancing_body() {
         let Some(font) = crate::document_arabic_font() else {
             eprintln!("set CRAFT_FONTS_DIR to exercise Arabic cluster Unicode ownership");

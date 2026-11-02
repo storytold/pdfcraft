@@ -3183,6 +3183,7 @@ pub(super) fn comment_hover_uses_bidi(text: &str) -> bool {
     crate::bidi::has_rtl(text)
 }
 
+/// Paint comment hover text through bidi-aware wrapping whenever it contains RTL characters.
 fn paint_hover_text(ui: &mut egui::Ui, text: &str) {
     if !comment_hover_uses_bidi(text) {
         ui.label(text);
