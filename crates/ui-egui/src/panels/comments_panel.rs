@@ -204,10 +204,12 @@ pub(crate) fn show(
         .annotations
         .iter()
         .filter(|a| a.is_comment())
+        // Search finds a comment by its text, its replies' and the status replies set on any of
+        // them: one set on a reply is that reply's (`states`), but it belongs to this thread.
         .filter(|a| {
-            query
-                .as_deref()
-                .is_none_or(|q| matches(a, q) || replies_of(a).iter().any(|r| matches(r, q)) || states.history(a).iter().any(|r| matches(r, q)))
+            query.as_deref().is_none_or(|q| {
+                std::iter::once(*a).chain(replies_of(a).iter().copied()).any(|x| matches(x, q) || states.history(x).iter().any(|r| matches(r, q)))
+            })
         })
         .filter(|a| !cv.hidden_types.iter().any(|t| t == kind_label(a)))
         .filter(|a| !cv.hidden_authors.contains(&a.author.clone().unwrap_or_default()))

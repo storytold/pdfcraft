@@ -1332,6 +1332,32 @@ fn the_panel_preserves_threads_source_order_and_unfiltered_page_counts() {
     assert_eq!(h.query_all_by_label("Needle first reply").count(), 0, "nothing replies to the unnamed root");
 }
 
+// Contributor-original PDF. A status is set on a reply (its /IRT names the reply, ISO 32000-2
+// §12.5.6.3), not on the comment; the status reply's text is found only there.
+const REPLY_STATUS_FIXTURE: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [5 0 R 6 0 R 7 0 R 8 0 R] >> endobj
+5 0 obj << /Type /Annot /Subtype /Text /Rect [20 140 40 160] /T (Alpha) /Contents (Plain root) >> endobj
+6 0 obj << /Type /Annot /Subtype /Text /Rect [60 140 80 160] /T (Beta) /Contents (Other root) >> endobj
+7 0 obj << /Type /Annot /Subtype /Text /Rect [20 100 40 120] /IRT 5 0 R /T (Reader) /Contents (Ordinary reply) >> endobj
+8 0 obj << /Type /Annot /Subtype /Text /Rect [20 100 40 120] /IRT 7 0 R /T (Carol) /StateModel /Review /State /Accepted /Contents (Reply-status token) >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+
+#[test]
+fn search_finds_a_comment_by_the_status_set_on_one_of_its_replies() {
+    let mut h = harness_with_bytes(REPLY_STATUS_FIXTURE.to_vec(), |app| {
+        app.set_option("panel", "comments").unwrap();
+        app.views[0].comments.search = Some("reply-status token".into());
+    });
+    h.run_steps(2);
+    h.get_by_label("Plain root");
+    h.get_by_label("Ordinary reply");
+    assert_eq!(h.query_all_by_label("Other root").count(), 0, "the other comment has no such status");
+    assert_eq!(h.query_all_by_label("No comments match.").count(), 0);
+}
+
 // Contributor-original PDF, shaped like PyMuPDF output: every page's first comment is named
 // `fitz-A0`, so only the `/IRT` reference tells which comment a reply belongs to.
 const PER_PAGE_NAMES: &[u8] = b"%PDF-1.7
