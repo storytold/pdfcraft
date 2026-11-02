@@ -757,9 +757,9 @@ fn format_text_fits_the_tools_pane_at_its_narrowest() {
     }
 }
 
-/// The lists in Format text fit the narrowest Tools pane in every interface language: "Auto" in
-/// the line spacing list is the one word in them that is translated, and in German, Ukrainian or
-/// Lao it is twice as long. The font list spans the pane, so nothing may end past it.
+/// The lists and the size row in Format text fit the narrowest Tools pane in every interface
+/// language: "Auto" in the line spacing list and "Mixed" in the size field are translated, and in
+/// Czech or French they are much longer. The font list spans the pane, so nothing may end past it.
 #[test]
 fn format_text_lists_fit_the_narrowest_tools_pane_in_every_language() {
     use egui::accesskit::Role;
@@ -780,6 +780,9 @@ fn format_text_lists_fit_the_narrowest_tools_pane_in_every_language() {
         for r in &lists {
             assert!(r.right() <= font.right() + 0.5, "{}: {r:?} reaches past the font list ({font:?})", lang.code());
         }
+        // The size row too: its field reserves room for a translated "Mixed".
+        let align = h.get_by_label(pdfcraft_ui_egui::i18n::t("Alignment")).rect();
+        assert!(align.right() <= font.right() + 0.5, "{}: Alignment {align:?} reaches past the font list ({font:?})", lang.code());
     }
 }
 

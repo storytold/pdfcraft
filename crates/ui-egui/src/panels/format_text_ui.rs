@@ -109,9 +109,10 @@ const LABEL_ICON: f32 = 22.0;
 const PRESET_LIST: f32 = 22.0;
 /// The room a number field keeps for its value ("-5.0 pt"), beside the arrow in its box.
 const NUMBER_MIN: f32 = 52.0;
-/// The size field, which reserves room for "Mixed" so it doesn't resize while typing.
-/// shortcut: measured for English "Mixed"; a longer translation widens the size row past the
-/// narrowest pane. Upgrade by having the panel report its measured row width to the pane.
+/// The size field's room in the row: English "Mixed", its margins and the 2 pt of its box. The
+/// field reserves room for "Mixed" so it doesn't resize while typing, but no more than this.
+/// shortcut: a longer translation of "Mixed" scrolls in the field. Upgrade by having the panel
+/// report its measured row width to the pane, if that reads badly.
 const SIZE_FIELD: f32 = 62.0;
 /// The least width the panel's widest rows need, which sets how narrow the Tools pane may be
 /// dragged. Size and alignment: the size field and its arrow (in their box), the swatch, the
@@ -558,7 +559,9 @@ fn font_size_input(ui: &mut egui::Ui, size: &mut f64, mixed: bool) -> bool {
         // Reserve the localized mixed label, field margins and caret without resizing while typing.
         let font = egui::TextStyle::Body.resolve(ui.style());
         let mixed_width = ui.painter().layout_no_wrap(tl!("Mixed").into(), font.clone(), ui.visuals().text_color()).size().x;
-        let width = (mixed_width + margin.sum().x + 2.0).ceil().max(40.0);
+        // Within the row's allowance, so a long translation ("Valeurs différentes") scrolls in the
+        // field rather than pushing the row past the pane.
+        let width = (mixed_width + margin.sum().x + 2.0).ceil().clamp(40.0, SIZE_FIELD - 2.0);
         let field = egui::TextEdit::singleline(&mut text)
             .id(id)
             .font(font)
