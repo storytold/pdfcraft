@@ -164,6 +164,42 @@ impl MarksDraft {
             self.bg.replace_backdrop = true;
         }
     }
+
+    /// Update header & footer: start from the header on `page` (0-based) and the pages it is on,
+    /// so each header of several can be updated (#5785). A page without one whose settings were
+    /// kept leaves the draft as it was.
+    pub fn load_header_footer(&mut self, doc: &pdfcraft_engine::Document, page: usize) {
+        if let Some((hf, pages)) = doc.header_footer_on(page) {
+            self.hf = hf;
+            self.range = range_of_pages(&pages, doc.info.pages.len());
+            self.header_pages = Some((self.range, pages));
+        }
+    }
+
+    /// The pages (0-based) OK applies to: the pages of the header Update opened with while the
+    /// range is left as it was loaded (it may cover pages between them that carry another
+    /// header), otherwise the pages the range selects.
+    pub fn pages(&self, count: usize) -> Vec<usize> {
+        match &self.header_pages {
+            Some((range, pages)) if self.replace && *range == self.range => pages.iter().copied().filter(|p| *p < count).collect(),
+            _ => self.range.pages(count),
+        }
+    }
+}
+
+/// The page range from the first of `pages` (0-based, ascending) to the last, in a document of
+/// `count` pages: with the odd or even subset when that selects exactly `pages`, and all pages
+/// when `pages` are all of them.
+fn range_of_pages(pages: &[usize], count: usize) -> PageRange {
+    let (Some(&first), Some(&last)) = (pages.first(), pages.last()) else { return PageRange::default() };
+    let candidates = [Subset::All, Subset::Odd, Subset::Even].map(|subset| PageRange {
+        all: false,
+        from: first.saturating_add(1),
+        to: last.saturating_add(1),
+        subset,
+    });
+    let range = candidates.into_iter().find(|r| r.pages(count) == pages).unwrap_or(candidates[0]);
+    if range.subset == Subset::All && first == 0 && last.saturating_add(1) == count && pages.len() == count { PageRange::default() } else { range }
 }
 
 /// How many runs of pages a message lists before it stops with "…".
@@ -201,6 +237,9 @@ pub struct MarksDraft {
     pub range: PageRange,
     /// Replace existing marks of this kind (Update).
     pub replace: bool,
+    /// Update header & footer: the range the dialog opened with and the pages (0-based,
+    /// ascending) the header being updated is on, which that range may not select exactly.
+    pub header_pages: Option<(PageRange, Vec<usize>)>,
     /// Which header/footer box Insert Page Number / Insert Date type into.
     pub focused_box: usize,
     pub page_format: usize,
@@ -226,6 +265,7 @@ impl Default for MarksDraft {
             bg: Background::default(),
             range: PageRange::default(),
             replace: false,
+            header_pages: None,
             focused_box: 1,
             page_format: 0,
             date_format: 0,
@@ -734,10 +774,17 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
                     d.preview = next.or(d.preview);
                 }
             });
-            let n = d.range.pages(count).len();
+            let pages = if kind == MarkKind::HeaderFooter { d.pages(count) } else { d.range.pages(count) };
+            let n = pages.len();
             let applies =
                 if n == 1 { tl!("Applies to 1 page").to_string() } else { crate::i18n::fmt(tl!("Applies to {n} pages"), &[("n", &n.to_string())]) };
             ui.label(egui::RichText::new(applies).small().color(t.text_faint));
+            if kind == MarkKind::HeaderFooter && pages != d.range.pages(count) {
+                // Update of a header on pages no range selects exactly: say which ones change.
+                let only =
+                    pages_phrase(&pages, tl!("Only page {pages}, which carries this header."), tl!("Only pages {pages}, which carry this header."));
+                ui.label(egui::RichText::new(only).small().color(t.text_faint));
+            }
             if d.replace {
                 ui.label(egui::RichText::new(tl!("Replaces the existing one on those pages.")).small().color(t.text_faint));
             }
@@ -765,7 +812,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
                 }
                 MarkKind::Background => !d.use_file || d.file.is_some(),
             }
-            && !d.range.pages(count).is_empty();
+            && !if kind == MarkKind::HeaderFooter { d.pages(count) } else { d.range.pages(count) }.is_empty();
         if ui.add_enabled_ui(ready, |ui| widgets::pill_button(ui, tl!("OK"), true)).inner.clicked() {
             apply = true;
         }
@@ -869,7 +916,7 @@ fn backdrop_options(ui: &mut egui::Ui, t: &Tokens, d: &mut MarksDraft, doc: &pdf
 pub fn edit(d: &MarksDraft, kind: MarkKind, count: usize) -> Edit {
     let pages = d.range.pages(count);
     match kind {
-        MarkKind::HeaderFooter => Edit::AddHeaderFooter { pages, settings: d.hf.clone(), replace: d.replace },
+        MarkKind::HeaderFooter => Edit::AddHeaderFooter { pages: d.pages(count), settings: d.hf.clone(), replace: d.replace },
         MarkKind::Watermark => {
             let mut wm = d.wm.clone();
             if d.fit {
@@ -924,6 +971,27 @@ mod tests {
         assert_eq!(r.pages(4), [0, 1, 2, 3]);
         let r = PageRange { all: false, from: 1, to: 1, subset: Subset::All };
         assert_eq!(r.pages(38), [0]);
+    }
+
+    #[test]
+    fn update_applies_to_every_page_a_header_is_on() {
+        assert_eq!(range_of_pages(&[0, 1, 2, 3], 4), PageRange::default());
+        assert_eq!(range_of_pages(&[1, 2], 4).pages(4), [1, 2]);
+        assert_eq!(range_of_pages(&[1, 3, 5], 6).pages(6), [1, 3, 5]);
+        assert_eq!(range_of_pages(&[0, 2], 3).pages(3), [0, 2]);
+        // No range selects these exactly: the range covers them all, and OK applies to them alone.
+        let pages = vec![0, 1, 4, 5, 7];
+        let range = range_of_pages(&pages, 9);
+        assert_eq!(range.pages(9), [0, 1, 2, 3, 4, 5, 6, 7]);
+        let mut d = MarksDraft { range, replace: true, header_pages: Some((range, pages.clone())), ..MarksDraft::default() };
+        assert_eq!(d.pages(9), pages);
+        assert!(matches!(edit(&d, MarkKind::HeaderFooter, 9), Edit::AddHeaderFooter { pages: p, .. } if p == pages));
+        // A range the user changes is the range OK applies to.
+        d.range.to = 2;
+        assert_eq!(d.pages(9), [0, 1]);
+        // The page list never names pages past the end.
+        d.range = range;
+        assert_eq!(d.pages(5), [0, 1, 4]);
     }
 
     #[test]

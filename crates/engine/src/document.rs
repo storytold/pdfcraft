@@ -455,6 +455,12 @@ impl Document {
             .marks
     }
 
+    /// The header and footer on `page` (0-based) and the pages (0-based) carrying the same one,
+    /// for Update; `None` when the page has none whose settings were kept.
+    pub fn header_footer_on(&self, page: usize) -> Option<(crate::HeaderFooter, Vec<usize>)> {
+        pdfcraft_edit::header_footer_on(&self.editor.as_ref()?.cos, page)
+    }
+
     /// Text and images added with Edit a PDF ▸ Add content (still editable).
     pub fn added(&self) -> &[pdfcraft_edit::Added] {
         &self

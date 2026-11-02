@@ -495,6 +495,13 @@ impl PdfCraftApp {
                     K::Background
                 };
                 self.marks_draft.replace = id.ends_with(".update");
+                self.marks_draft.header_pages = None;
+                if id == "edit.header_footer.update"
+                    && let Some((i, doc_id)) = self.active_ids()
+                    && let Some(doc) = self.session.get(doc_id)
+                {
+                    self.marks_draft.load_header_footer(doc, self.views[i].current);
+                }
                 self.marks_draft.opened(kind);
                 self.marks_draft.preview = None;
                 self.dialog = Some(Dialog::Marks(kind));
@@ -503,6 +510,7 @@ impl PdfCraftApp {
                 // Bates numbering ▸ Add: the header & footer dialog with a Bates number in the
                 // bottom-right box (6 digits from 1), ready to edit.
                 self.marks_draft.replace = false;
+                self.marks_draft.header_pages = None;
                 if self.marks_draft.hf.text.iter().all(|t| !t.contains("<<Bates")) {
                     self.marks_draft.hf.text[5] = "<<Bates Number#6#1##>>".into();
                 }

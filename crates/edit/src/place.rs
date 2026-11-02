@@ -292,12 +292,12 @@ pub(crate) fn isolation(doc: &Document, list: &[Object]) -> Isolation {
 }
 
 /// Put a mark's content on a page: behind (with the behind-marks at the start) or on top
-/// (appended, after wrapping the original content in q/Q).
-pub(crate) fn place(doc: &mut Document, page: &pdfcraft_model::Page, kind: MarkKind, content: Vec<u8>, behind: bool) -> Result<(), EditError> {
-    place_tagged(doc, page, kind.tag(), content, behind)?;
+/// (appended, after wrapping the original content in q/Q). Returns the mark's content stream.
+pub(crate) fn place(doc: &mut Document, page: &pdfcraft_model::Page, kind: MarkKind, content: Vec<u8>, behind: bool) -> Result<ObjRef, EditError> {
+    let mark = place_tagged(doc, page, kind.tag(), content, behind)?;
     #[cfg(test)]
     fail_after_mark_placement(kind)?;
-    Ok(())
+    Ok(mark)
 }
 
 #[cfg(test)]
