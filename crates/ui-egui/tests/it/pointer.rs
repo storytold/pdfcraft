@@ -1128,6 +1128,7 @@ fn a_right_click_on_a_comment_with_a_drawing_tool_opens_its_menu() {
     let on_comment = at(&h, 100.0, 305.0);
     right_click(&mut h, on_comment);
     assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "the comment is selected for its menu");
+    assert!(h.query_all_by_label("Reply").next().is_some(), "and its menu is open");
 }
 
 /// The check box `agree` of [`checkbox_pdf`], with a rectangle comment at x 150..250, y 100..150.
@@ -1406,7 +1407,7 @@ fn edge_link_pdf() -> Vec<u8> {
 }
 
 /// The Link tool's margin round a link stops at the page's edge: beside the page, where a press
-/// does nothing, no hand promises one.
+/// does nothing, no hand promises one (as before the margin moved into the one link test).
 #[test]
 fn the_link_tools_hand_stops_at_the_pages_edge() {
     let mut h = open(edge_link_pdf(), "150", false);
@@ -1440,4 +1441,65 @@ fn a_right_click_with_a_field_tool_selects_no_comment() {
     let on_comment = at(&h, 200.0, 125.0);
     right_click(&mut h, on_comment);
     assert_eq!(h.state().views[0].comments.selected, None);
+}
+
+/// With the Link tool a click that began off the page (in the gutter beside it) is no page's: the
+/// selected link stays selected. It used to unselect it.
+#[test]
+fn a_click_that_began_off_the_page_keeps_the_selected_link() {
+    let mut h = open(link_pdf(), "150", false);
+    link_tool(&mut h);
+    let on_link = at(&h, 150.0, 325.0);
+    mouse_click(&mut h, on_link);
+    assert_eq!(h.state().views[0].links.selected, Some((0, 0)), "the link is selected");
+    let left = page(&h).min.x;
+    slipping_click(&mut h, egui::pos2(left - 2.0, on_link.y), egui::pos2(left + 3.0, on_link.y));
+    assert_eq!(h.state().views[0].links.selected, Some((0, 0)), "a click that began off the page leaves it selected");
+}
+
+/// A right-click while a comment is moved leaves the moved comment selected: the move ends on
+/// it. The right-click used to select the comment under it mid-drag.
+#[test]
+fn a_right_click_during_a_comment_move_keeps_the_moved_comment_selected() {
+    let mut h = open(stacked_comments_pdf(), "150", false);
+    // "Bottom note" alone, then "Top note" alone.
+    let (bottom, top) = (at(&h, 60.0, 160.0), at(&h, 190.0, 290.0));
+    h.hover_at(bottom);
+    h.run_steps(1);
+    h.drag_at(bottom);
+    h.run_steps(1);
+    h.hover_at(bottom + egui::vec2(0.0, 20.0));
+    h.run_steps(1);
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos: top, button: egui::PointerButton::Secondary, pressed, modifiers: egui::Modifiers::NONE });
+    }
+    h.run_steps(1);
+    let end = bottom + egui::vec2(0.0, 40.0);
+    h.hover_at(end);
+    h.run_steps(1);
+    h.drop_at(end);
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "the moved comment stays selected");
+}
+
+/// A click on added text leaves the selected comment unselected, as a click on a form field does
+/// (ruling 1). It used to keep it selected.
+#[test]
+fn a_click_on_added_text_deselects_the_selected_comment() {
+    let mut h = open(comment_on_text_pdf(), "150", false);
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::AddText {
+        page: 0,
+        text: pdfcraft_engine::AddedText { rect: [40.0, 195.0, 140.0, 210.0], text: "Added".into(), ..Default::default() },
+    }));
+    // The Edit panel open, with the Select tool: added text is picked up.
+    assert!(h.state_mut().execute("edit.text"));
+    h.run_steps(3);
+    h.state_mut().quick_tool = QuickTool::Select;
+    h.run_steps(3);
+    let on_comment = at(&h, 150.0, 315.0);
+    mouse_click(&mut h, on_comment);
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "the comment is selected");
+    let on_added = at(&h, 90.0, 202.0);
+    mouse_click(&mut h, on_added);
+    assert_eq!(h.state().views[0].comments.selected, None, "a click on the added text leaves it unselected");
 }

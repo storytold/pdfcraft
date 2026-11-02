@@ -407,7 +407,7 @@ const ROUTER_WRITES: [&str; 4] = ["router.begin(", "router.press(", "router.sett
 const ROUTER_WRITERS: [(&str, &str, &str); 3] = [
     ("canvas/page_input.rs", "page_tool_input", "the hits at the press point decide its owner, once per press"),
     ("canvas.rs", "draw_pages", "the press is over once the button is up and its release seen, and a new one drops the last owner"),
-    ("canvas.rs", "cancel_pointer_gestures", "every pointer gesture's cancel: Escape, a dialog, automation's cancel"),
+    ("canvas.rs", "cancel_pointer_gestures", "every pointer gesture's cancel: Escape, automation's cancel"),
 ];
 
 /// Ways to make a `Hit`.
@@ -430,7 +430,9 @@ fn hit_test_calls(line: &str) -> Vec<String> {
         .collect()
 }
 
-/// The functions that call a hit test: (file, function, why). `PageHits::hits` is the one: the hits
+/// The functions that call a hit test: (file, function, why). Hit tests are found by name (a
+/// function named `hit` or `…_hit`, called by path, bare or as a method); a point test by another
+/// name has a list of its own (`COMMENT_POINT_TESTERS`). `PageHits::hits` is the one: the hits
 /// at the press point decide its owner, and those under the pointer give its cursor, its tip, hover
 /// painting and a right-click.
 const HIT_TESTERS: [(&str, &str, &str); 1] = [(
@@ -438,6 +440,16 @@ const HIT_TESTERS: [(&str, &str, &str); 1] = [(
     "hits",
     "`PageHits::hits`: every module's hits at a point, for the pointer's cursor and tip, a right-click and, once, the press's owner",
 )];
+
+/// The comments' point test, which their hit tests are built on: which comment lies under a point.
+const COMMENT_POINT_TESTS: [&str; 1] = [".comment_at("];
+
+/// The functions that ask which comment lies under a point: (file, function, why).
+const COMMENT_POINT_TESTERS: [(&str, &str, &str); 3] = [
+    ("tools/comments/input.rs", "hit", "the comments' hit test"),
+    ("tools/comments/input.rs", "context_hit", "the comments' hit test for a right-click"),
+    ("tools/comments/paint.rs", "paint_page", "a redaction mark shows its fill under the pointer with every tool, as comments' tips show"),
+];
 
 /// What reads who holds the press the pages hold.
 const ROUTER_READS: [&str; 3] = ["router.press_for(", "router.owner(", "router.keeps_drag("];
@@ -520,6 +532,14 @@ fn page_modules_act_on_a_press_only_through_the_router() {
          what the press is to its page: take a `PagePress` (src/canvas/page_router.rs) instead. A new place that must? \
          Add the function to ROUTER_READERS in src/canvas/page_pointer/tests.rs, with why.",
         "no longer reads who holds the press: remove it from ROUTER_READERS.",
+    ));
+    problems.extend(misuses(
+        &COMMENT_POINT_TESTS,
+        &COMMENT_POINT_TESTERS,
+        "asks which comment lies under a point. The comments' hit tests answer that for a press and a right-click: \
+         act on what the page view tells you, rather than testing the point again. A new place that must? Add the \
+         function to COMMENT_POINT_TESTERS in src/canvas/page_pointer/tests.rs, with why.",
+        "no longer asks which comment lies under a point: remove it from COMMENT_POINT_TESTERS.",
     ));
     problems.extend(misuses(
         &PRESS_IGNORES,

@@ -99,7 +99,7 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
     // What lies under the pointer before the tools act, asked once: for a click's release, a
     // right-click, and Fill & Sign's preview.
     let wants_under = resp.clicked() || resp.secondary_clicked() || matches!(tool, QuickTool::Fill(_)) && !ptr.any_down;
-    let under = pointer.filter(|_| wants_under).map(|p| hits.at(view, p)).unwrap_or_default();
+    let under = pointer.filter(|p| wants_under && xf.rect.contains(*p)).map(|p| hits.at(view, p)).unwrap_or_default();
     let released_over = match press {
         PagePress::Mine(owner) if resp.clicked() => under.iter().any(|h| h.owner == owner),
         _ => false,
@@ -227,7 +227,8 @@ fn link_of(owner: Option<Owner>) -> Option<usize> {
 /// The active tool's own input on page `i`: the one gate for presses nobody holds. Measure, the
 /// stamps, Fill & Sign, Sign area, zoom and snapshot, the camera's quadrilateral and crop act only
 /// on a press that began on this page and that no hit won (`press` is Free), and keep their cursor
-/// and gestures. `over_mark`: a Fill & Sign mark takes the press, or would take one under the
+/// and gestures. The camera also drags a corner whose press it holds, and crop's double-click
+/// opens Set Page Boxes wherever it is. `over_mark`: a Fill & Sign mark takes the press, or would take one under the
 /// pointer.
 fn tool_input(
     ui: &egui::Ui,
@@ -323,7 +324,7 @@ fn tool_input(
 /// selected; links take theirs from what this returns.
 /// `under`: the hits at `p` before the tools act.
 fn right_click(hits: &PageHits<'_>, under: &[crate::page_router::Hit], view: &mut DocView, p: Pos2) -> Option<Owner> {
-    let context = hits.context_at(view, p);
+    let context = hits.context_at(view, p, under);
     // Add text takes every right-click on a page it can change, Edit text those on its own
     // paragraphs and pictures, the Link tool those on a link, and a Prepare field tool the whole
     // page, as before: comments see none of them.
@@ -333,7 +334,10 @@ fn right_click(hits: &PageHits<'_>, under: &[crate::page_router::Hit], view: &mu
         QuickTool::Link => hits.can_modify && matches!(context, Some(Owner::Link { .. })),
         _ => hits.field_tool.is_some(),
     };
-    if !tool_takes_it {
+    // A comment being moved, resized or reshaped keeps its selection until its release.
+    let comment_dragged =
+        matches!(view.comments.gesture, Some(comments::Gesture::Move { .. } | comments::Gesture::Resize { .. } | comments::Gesture::Reshape { .. }));
+    if !tool_takes_it && !comment_dragged {
         let comment = match context {
             Some(Owner::Comment { index, .. }) => Some(index),
             _ => None,
@@ -400,11 +404,12 @@ impl PageHits<'_> {
     /// tool reaching comments and links, as a comment's menu shows whatever the tool. A highlight
     /// over a link is the highlight's ([`comments::context_hit`]).
     /// The Link tool edits links and reaches no comment: on a document it can change, its
-    /// right-click is what its press there would take, when that is anything.
-    fn context_at(&self, view: &DocView, p: Pos2) -> Option<Owner> {
+    /// right-click is what its press there would take (`under`, the hits at `p`), when that is
+    /// anything.
+    fn context_at(&self, view: &DocView, p: Pos2, under: &[crate::page_router::Hit]) -> Option<Owner> {
         if self.tool == QuickTool::Link
             && self.can_modify
-            && let Some(press) = top(self.hits(view, p, false), QuickTool::Link)
+            && let Some(press) = top(under.iter().cloned(), QuickTool::Link)
         {
             return Some(press.owner);
         }

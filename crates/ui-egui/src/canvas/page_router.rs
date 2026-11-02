@@ -112,7 +112,8 @@ pub(crate) fn top(hits: impl IntoIterator<Item = Hit>, tool: QuickTool) -> Optio
 /// What one page has to do with the press the pages hold.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PagePress {
-    /// The press began on this page, and the owner's hit won it: only its module acts on it.
+    /// The press began on this page, and the owner's hit won it: its module acts on it. Others
+    /// only let go of their own state (a click on anything but the selected comment unselects it).
     Mine(Owner),
     /// No button is down, or the press began on this page and nobody's hit won it: the active
     /// tool's. Also every page's while a press that began off the pages is held, and after the
@@ -135,7 +136,6 @@ impl PagePress {
 /// A press the pages hold, and who it belongs to.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Capture {
-    pub page: usize,
     pub owner: Owner,
     pub declines_drag: bool,
 }
@@ -159,7 +159,7 @@ impl PageRouter {
     /// A press on `page`: `hits` at the press point decide who it belongs to. A press nobody's
     /// hit claims is held by nobody (the page's text, or a tool that acts anywhere on the page).
     pub(crate) fn press(&mut self, page: usize, hits: impl IntoIterator<Item = Hit>, tool: QuickTool) {
-        self.capture = top(hits, tool).map(|h| Capture { page, owner: h.owner, declines_drag: h.declines_drag });
+        self.capture = top(hits, tool).map(|h| Capture { owner: h.owner, declines_drag: h.declines_drag });
         self.began = Some(Some(page));
     }
 
@@ -167,7 +167,7 @@ impl PageRouter {
     pub(crate) fn press_for(&self, page: usize) -> PagePress {
         match (self.began, &self.capture) {
             (None, _) => PagePress::Free,
-            (Some(Some(p)), Some(c)) if p == page => PagePress::Mine(c.owner),
+            (Some(Some(p)), Some(capture)) if p == page => PagePress::Mine(capture.owner),
             (Some(Some(p)), None) if p == page => PagePress::Free,
             _ => PagePress::Elsewhere,
         }
@@ -175,7 +175,7 @@ impl PageRouter {
 
     /// Who holds the press on `page`.
     pub(crate) fn owner(&self, page: usize) -> Option<Owner> {
-        self.capture.as_ref().filter(|c| c.page == page).map(|c| c.owner)
+        self.press_for(page).owner()
     }
 
     /// Whether the press is held by someone who keeps its drag: then the page's text is not
@@ -192,7 +192,7 @@ impl PageRouter {
         }
     }
 
-    /// Drops the press (Escape, a dialog, automation's cancel): every page is the active tool's again
+    /// Drops the press (Escape, automation's cancel): every page is the active tool's again
     /// ([`PagePress::Free`]). Page input skips a press Escape cancelled until the button is up.
     pub(crate) fn cancel(&mut self) {
         self.capture = None;

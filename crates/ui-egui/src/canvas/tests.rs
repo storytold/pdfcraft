@@ -2038,7 +2038,7 @@ fn image_handles_account_for_document_and_view_rotation() {
     }
 }
 
-/// Cancelling the pages' pointer gestures (Escape, a dialog, automation's cancel) lets go of a
+/// Cancelling the pages' pointer gestures (Escape, automation's cancel) lets go of a
 /// camera corner being dragged: the quadrilateral stays, and no corner follows the pointer.
 #[test]
 fn cancelling_pointer_gestures_lets_go_of_a_camera_corner() {

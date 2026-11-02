@@ -132,7 +132,8 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, free: bool, owner: Option<usiz
         lv.context = Some((page, index));
         return true;
     }
-    if resp.clicked() || resp.double_clicked() {
+    // The tool's own click: on a link, or one nobody holds.
+    if (resp.clicked() || resp.double_clicked()) && (free || owner.is_some()) {
         let now = ui.input(|i| i.time);
         // A second click on the same link soon after the first is a double-click.
         let double = resp.double_clicked() || owner.is_some_and(|k| lv.last_click.is_some_and(|(t, p, l)| p == page && l == k && now - t < 0.5));
