@@ -4063,6 +4063,26 @@ fn apply_frame_requests(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui, 
     }
 }
 
+impl PdfCraftApp {
+    /// One frame of the document at `index` for a host shell that shows the view inside its own
+    /// tabs, without this app's chrome: `document_area` only draws what the caches hold, so the
+    /// frame's bookkeeping (what the app's own `ui` runs around the area) runs here too — demand
+    /// is collected, the queue submitted, results received. Without it the page never leaves the
+    /// empty caches and stays blank.
+    pub fn host_document(&mut self, index: usize, ui: &mut egui::Ui) {
+        let ctx = ui.ctx().clone();
+        // The host never runs the app's `logic` pass, which is what sets the interface language
+        // every frame: without it a hosted document's notices come out in the wrong one.
+        crate::i18n::set_current(crate::i18n::Lang::from_pref(&self.language));
+        self.motion.begin_pass(&ctx, self.animation_effects);
+        for view in &mut self.views {
+            view.begin_render_frame();
+        }
+        document_area(self, index, ui);
+        self.finish_render_frame(&ctx);
+    }
+}
+
 /// The prepare-mode field menu's choices.
 enum FieldMenu {
     Properties,

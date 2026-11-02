@@ -2037,3 +2037,22 @@ fn image_handles_account_for_document_and_view_rotation() {
         }
     }
 }
+
+/// A host shell (Kirp Office) draws the document area inside its own frame, without this app's
+/// `ui`: [`PdfCraftApp::host_document`] must carry the frame's render bookkeeping with it, or the
+/// page is requested from nobody and the area stays blank.
+#[test]
+fn a_hosted_document_renders_its_page() {
+    let mut app = PdfCraftApp::new();
+    let bytes = app.session.create_blank(300.0, 400.0, 1).unwrap();
+    app.open_bytes("hosted.pdf", None, bytes.as_ref().clone()).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 900.0)).build_ui_state(|ui, app: &mut PdfCraftApp| app.host_document(0, ui), app);
+    for _ in 0..400 {
+        h.step();
+        if h.state().views[0].page_raster(0).is_some() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(h.state().views[0].page_raster(0).is_some(), "the hosted page is rendered and received");
+}
