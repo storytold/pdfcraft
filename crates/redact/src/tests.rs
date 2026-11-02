@@ -1329,11 +1329,10 @@ fn globals_a_redacted_jbig2_image_shares_with_another_page_leave_the_file() {
     let mut doc = build(&image.replace(&format!("/Height {h}"), &format!("/Height {}", h + 1)));
     mark(&mut doc, 0, &[[0.25, 113.75, 49.75, 120.0]], "");
     assert!(matches!(apply(&mut doc, None), Err(RedactError::SharedJbig2Globals(1))));
-    // Storing the second page's image again decodes it, within what is left of the run's
-    // allowance: with nothing left the redaction is refused as one past the allowance, not
-    // reported as an image that can't be read.
-    // The first page's image leaves (its page no longer lists it), and what is left of the
-    // allowance is all that decodes the second's.
+    // Reading the dictionary to know copies of it, and storing the second page's image again,
+    // decode within what is left of the run's allowance: past it the redaction is refused as one
+    // past the allowance, not reported as an image that can't be read. The first page's image
+    // leaves (its page no longer lists it).
     let mut doc = build(&image);
     let before = crate::globals::kept(&doc);
     let first = pdfcraft_model::pages(&doc)[0].obj;
@@ -1343,6 +1342,12 @@ fn globals_a_redacted_jbig2_image_shares_with_another_page_leave_the_file() {
     .unwrap();
     let refused = crate::globals::unshare(&mut doc.clone(), &before, &mut pdfcraft_cos::ImageBudget::with_work(0));
     assert!(matches!(refused, Err(RedactError::ImagesPastAllowance)), "{refused:?}");
+    // Enough to read the dictionary, and nothing left for the image.
+    let mut reading = pdfcraft_cos::ImageBudget::with_work(u64::MAX);
+    crate::globals::content(&mut crate::globals::Run::new(crate::globals::RUN_BUDGET), &doc, 9, &mut reading).unwrap();
+    let read = u64::MAX - reading.work_left();
+    let refused = crate::globals::unshare(&mut doc.clone(), &before, &mut pdfcraft_cos::ImageBudget::with_work(read));
+    assert!(matches!(refused, Err(RedactError::ImagesPastAllowance)), "the image: {refused:?}");
     // Removing hidden information chose no pages, so fewer of them is no way out: it is refused as
     // finding what shares the dictionary is.
     let refused = crate::sanitize::unshare_unmarked(&mut doc.clone(), &before, &mut pdfcraft_cos::ImageBudget::with_work(0));

@@ -689,7 +689,8 @@ pub fn remove_hidden(doc: &mut Document, which: &[Hidden]) -> Result<Vec<(Hidden
     if done.is_empty() {
         return Err(RedactError::NothingToApply);
     }
-    // Images stored again without a dictionary are decoded within an allowance of their own.
+    // Images stored again without a dictionary, and the dictionaries read to know copies, are
+    // decoded within an allowance of their own.
     unshare_unmarked(doc, &kept_before, &mut pdfcraft_cos::ImageBudget::new(doc))?;
     doc.require_full_save();
     Ok(done)

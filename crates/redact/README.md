@@ -19,7 +19,7 @@ clear_marks(&mut doc, None)?;                        // remove marks without app
   inside;
 - **images**: fully covered → removed; partly covered → a copy with the covered pixels cleared
   (8/16-bit and 1/2/4-bit images, image masks; Flate/LZW/RL/A85/AHx, and CCITT fax or JBIG2 as
-  the last filter, decoded through `Document::decoded_image_within`, a JBIG2 image with its
+  the last filter, decoded through `ImageBudget::decode`, a JBIG2 image with its
   `/JBIG2Globals`; `/DecodeParms` given by reference, numbers inside included, count). The copy
   is Flate, or for a one-bit image of one component (a scan as a rule) CCITT Group 4, or JBIG2
   when it was JBIG2, whichever is smallest as stored, coded from the cleared samples; it refers to
@@ -27,8 +27,9 @@ clear_marks(&mut doc, None)?;                        // remove marks without app
   those of marks under the area included, so whatever left the document, by any route, takes its
   globals with it on the full rewrite: anything else the save would keep that names them, or a
   copy of them (the same bytes once decoded), is stored again without them, as a copy is (Flate, Group 4 or JBIG2,
-  whichever is smallest; `Report::images_restored`). When one can't be (it isn't JBIG2, it's past
-  the size redaction clears, its data is in another file, or it can't be decoded), or something else refers to them, `apply`
+  whichever is smallest; `Report::images_restored`). When one can't be (it isn't JBIG2, its colour
+  space is known to have more than one component, it has no size or one past what redaction
+  clears, its data is in another file, or it can't be decoded), or something else refers to them, `apply`
   refuses and changes nothing (`RedactError::SharedJbig2Globals`). `remove_hidden` takes them out
   the same way. Another dictionary holding the same shapes in other bytes isn't found, nor is a copy
   nothing names, and an image that hasn't left keeps its globals with its pixels: one another page

@@ -84,8 +84,9 @@ pub enum RedactError {
     /// Finding what shares JBIG2 symbol data with what is being removed would read more of the file
     /// than one run allows (`globals::RUN_BUDGET`): its images and parameters refer to the same
     /// objects in more ways than are checked, or hold more than is decoded. Removing hidden
-    /// information says so too when storing those images again would decode more than its image
-    /// allowance, which no choice of pages makes smaller.
+    /// information says so too when the dictionaries it reads to know copies, or the images it
+    /// stores again, would decode more than its image allowance, which no choice of pages makes
+    /// smaller.
     #[error(
         "finding and storing again what shares JBIG2 symbol data with something being removed would read more of this file than one run allows, so it can't be shown that the data leaves with it; this was refused"
     )]
