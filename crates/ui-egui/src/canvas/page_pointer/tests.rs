@@ -150,8 +150,9 @@ fn edges_are_primary_finite_in_order_and_capped() {
 }
 
 /// The page modules: the per-page chain in `canvas::document_area` and what it calls.
-const PAGE_MODULES: [&str; 35] = [
+const PAGE_MODULES: [&str; 36] = [
     "canvas.rs",
+    "canvas/page_input.rs",
     "canvas/area.rs",
     "canvas/bars.rs",
     "canvas/cache.rs",
@@ -387,7 +388,7 @@ const ROUTER_WRITES: [&str; 3] = ["router.press(", "router.settle(", "router.can
 
 /// The functions that decide, keep or drop the press the pages hold: (file, function, why).
 const ROUTER_WRITERS: [(&str, &str, &str); 3] = [
-    ("canvas.rs", "page_tool_input", "the hits at the press point decide its owner, once per press"),
+    ("canvas/page_input.rs", "page_tool_input", "the hits at the press point decide its owner, once per press"),
     ("canvas.rs", "draw_pages", "the press is over once the button is up and its release seen, and a new one drops the last owner"),
     ("canvas.rs", "cancel_pointer_gestures", "every pointer gesture's cancel: Escape, a dialog, automation's cancel"),
 ];
@@ -416,8 +417,8 @@ fn hit_test_calls(line: &str) -> Vec<String> {
 /// The functions that call a hit test: (file, function, why). Only `PageHits::at` asks at the
 /// press point; the others ask where the pointer is.
 const HIT_TESTERS: [(&str, &str, &str); 4] = [
-    ("canvas.rs", "at", "`PageHits::at`: every module's hits at a point, for the pointer's cursor and tip and, once, the press's owner"),
-    ("canvas.rs", "page_overlays", "a link's click counts only released over the link its press was on"),
+    ("canvas/page_input.rs", "at", "`PageHits::at`: every module's hits at a point, for the pointer's cursor and tip and, once, the press's owner"),
+    ("canvas/page_input.rs", "page_overlays", "a link's click counts only released over the link its press was on"),
     ("tools/forms_ui.rs", "page_input", "the field's tooltip under the pointer, and a click counts only released over the widget its press was on"),
     ("tools/comments/input.rs", "grabs", "with no button down, whether a comment would take a press under the pointer, for hover painting"),
 ];
@@ -426,7 +427,8 @@ const HIT_TESTERS: [(&str, &str, &str); 4] = [
 const PRESS_IGNORES: [&str; 1] = ["press_cancelled = true"];
 
 /// The one function that ignores a press until the button is up: (file, function, why).
-const PRESS_IGNORERS: [(&str, &str, &str); 1] = [("canvas.rs", "cancel_on_escape", "Escape abandons the gesture the press drives, whichever tool's")];
+const PRESS_IGNORERS: [(&str, &str, &str); 1] =
+    [("canvas/page_input.rs", "cancel_on_escape", "Escape abandons the gesture the press drives, whichever tool's")];
 
 /// The module hit tests, called by path: a press handler calls none of them (HIT_TESTERS says who
 /// may).
