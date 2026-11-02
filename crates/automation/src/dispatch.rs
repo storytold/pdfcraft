@@ -1,7 +1,7 @@
 use super::error::{Result, ToolError, failed};
 use super::json::{Args, document_attachment_keys, info, one_based, parse_style_ranges, security, summary, text_style_levels};
 use super::paths::{read_input, write_atomic};
-use super::{Arc, Automation, Edit, Value, block_overlapping, comments, json, tools};
+use super::{Arc, Automation, Edit, Value, block_overlapping, comments, content, json, tools};
 
 /// One piece of a tool's result.
 #[derive(Clone, Debug, PartialEq)]
@@ -10,6 +10,35 @@ pub enum Content {
     Json(Value),
     /// A PNG image.
     Png { data: Vec<u8>, width: u32, height: u32 },
+}
+
+/// `image_edit` `transform`: a matrix `[a b c d e f]` acting on top-left-origin points (a point
+/// moves to `(a·x + c·y + e, b·x + d·y + f)`) → the same motion in PDF user space, which is
+/// what `ImageEdit::Transform` applies after the image's placement. Both spaces are related by
+/// an affine map, so three corners of the crop box pin the result down.
+fn view_transform_to_user(info: &pdfcraft_render::PageInfo, m: [f64; 6]) -> Result<[f64; 6]> {
+    let [a, b, c, d, e, f] = m;
+    let det = a * d - b * c;
+    if !m.iter().all(|v| v.is_finite()) || !det.is_finite() || det.abs() < 1e-9 {
+        return Err(ToolError::InvalidArgs("transform needs a finite matrix that keeps an area (a·d − b·c must not be 0)".into()));
+    }
+    let moved = |x: f32, y: f32| {
+        let [vx, vy] = info.user_to_view(x, y).map(f64::from);
+        info.view_to_user((a * vx + c * vy + e) as f32, (b * vx + d * vy + f) as f32).map(f64::from)
+    };
+    let [x0, y0, x1, y1] = info.crop;
+    let (w, h) = (f64::from(x1 - x0), f64::from(y1 - y0));
+    if w.abs() < 1e-3 || h.abs() < 1e-3 {
+        return Err(ToolError::InvalidArgs("the page has no area to transform in".into()));
+    }
+    let (o, px, py) = (moved(x0, y0), moved(x1, y0), moved(x0, y1));
+    let (ua, ub, uc, ud) = ((px[0] - o[0]) / w, (px[1] - o[1]) / w, (py[0] - o[0]) / h, (py[1] - o[1]) / h);
+    let (x0, y0) = (f64::from(x0), f64::from(y0));
+    let user = [ua, ub, uc, ud, o[0] - ua * x0 - uc * y0, o[1] - ub * x0 - ud * y0];
+    if !user.iter().all(|v| v.is_finite()) {
+        return Err(ToolError::InvalidArgs("the transform moves the image too far".into()));
+    }
+    Ok(user)
 }
 
 impl Automation {
@@ -38,7 +67,7 @@ impl Automation {
                 let edit = Edit::SetInfo { key: a.str("key")?.into(), value: a.str("value")?.into() };
                 self.apply(&a, edit)?
             }
-            "page_render" => return self.page_render(&a).map(|c| vec![c]),
+            "page_render" => return self.page_render(&a),
             "comment_image_preview" => return self.comment_image_preview(&a),
             "text_extract" => self.text_extract(&a)?,
             "text_word_count" => self.text_word_count(&a)?,
@@ -142,7 +171,7 @@ impl Automation {
             "command_run" => return self.command_run(&a),
             "command_batch" => self.command_batch(&a)?,
             "doc_inspect" => self.doc_inspect(&a)?,
-            "render_preview" => return self.render_preview(&a).map(|c| vec![c]),
+            "render_preview" => return self.render_preview(&a),
             "page_number" => {
                 use pdfcraft_organize::LabelStyle as L;
                 let n = self.doc(&a)?.info.pages.len();
@@ -357,7 +386,7 @@ impl Automation {
                             let (u, v) = (info.user_to_view(rect[0] as f32, rect[1] as f32), info.user_to_view(rect[2] as f32, rect[3] as f32));
                             [r(u[0].min(v[0])), r(u[1].min(v[1])), r(u[0].max(v[0])), r(u[1].max(v[1]))]
                         });
-                        json!({ "visible_rect": visible, "image": i + 1, "rect": [r(u[0].min(v[0])), r(u[1].min(v[1])), r(u[0].max(v[0])), r(u[1].max(v[1]))], "pixels": [im.width, im.height], "name": im.name, "kind": if im.is_form { "form" } else { "image" } })
+                        json!({ "visible_rect": visible, "has_editor_crop": im.has_editor_crop(), "image": i + 1, "rect": [r(u[0].min(v[0])), r(u[1].min(v[1])), r(u[0].max(v[0])), r(u[1].max(v[1]))], "pixels": [im.width, im.height], "name": im.name, "kind": if im.is_form { "form" } else { "image" } })
                     })
                     .collect();
                 json!({ "page": page + 1, "count": list.len(), "images": list })
@@ -395,6 +424,16 @@ impl Automation {
                             let (u0, u1) = (info.view_to_user(r[0] as f32, r[1] as f32), info.view_to_user(r[2] as f32, r[3] as f32));
                             ImageEdit::Move([u0[0].min(u1[0]) as f64, u0[1].min(u1[1]) as f64, u0[0].max(u1[0]) as f64, u0[1].max(u1[1]) as f64])
                         }
+                        "transform" => {
+                            let m: Vec<f64> = a
+                                .get("matrix")
+                                .and_then(Value::as_array)
+                                .and_then(|x| x.iter().map(Value::as_f64).collect())
+                                .ok_or_else(|| ToolError::InvalidArgs("transform needs matrix: 6 numbers [a, b, c, d, e, f]".into()))?;
+                            let m = <[f64; 6]>::try_from(m)
+                                .map_err(|_| ToolError::InvalidArgs("transform needs matrix: 6 numbers [a, b, c, d, e, f]".into()))?;
+                            ImageEdit::Transform(view_transform_to_user(&self.doc(&a)?.info.pages[page], m)?)
+                        }
                         "rotate_by" => ImageEdit::RotateBy(
                             a.get("degrees")
                                 .and_then(Value::as_f64)
@@ -410,9 +449,18 @@ impl Automation {
                             let (u0, u1) = (info.view_to_user(r[0] as f32, r[1] as f32), info.view_to_user(r[2] as f32, r[3] as f32));
                             ImageEdit::Crop([u0[0].min(u1[0]) as f64, u0[1].min(u1[1]) as f64, u0[0].max(u1[0]) as f64, u0[1].max(u1[1]) as f64])
                         }
-                        "flip_horizontal" => ImageEdit::Flip { horizontal: true },
-                        "flip_vertical" => ImageEdit::Flip { horizontal: false },
+                        action @ ("flip_horizontal" | "flip_vertical") => {
+                            let horizontal = action == "flip_horizontal";
+                            let info = self.doc(&a)?.info.pages.get(page).ok_or_else(|| ToolError::InvalidArgs("the page does not exist".into()))?;
+                            // The tool names displayed axes; the engine names PDF user-space axes.
+                            ImageEdit::Flip { horizontal: horizontal ^ (info.rotation % 180 == 90) }
+                        }
                         "delete" => ImageEdit::Delete,
+                        "bring_to_front" => ImageEdit::Arrange(pdfcraft_engine::ArrangeOrder::BringToFront),
+                        "send_to_back" => ImageEdit::Arrange(pdfcraft_engine::ArrangeOrder::SendToBack),
+                        "bring_forward" => ImageEdit::Arrange(pdfcraft_engine::ArrangeOrder::BringForward),
+                        "send_backward" => ImageEdit::Arrange(pdfcraft_engine::ArrangeOrder::SendBackward),
+                        "remove_crop" => ImageEdit::RemoveCrop,
                         "replace" => {
                             let path = self.resolve(a.str("path")?, false)?;
                             let bytes = read_input(&path)?;
@@ -538,7 +586,15 @@ impl Automation {
                 };
                 let index = self.paragraph_index(id, page, k, &blocks)?;
                 let block = blocks.get(index).cloned().ok_or_else(|| ToolError::InvalidArgs(format!("paragraph {k} is out of range")))?;
-                let text = a.opt_str("text")?.map(str::to_owned).unwrap_or(block.text);
+                let width = a.opt_num("width")?;
+                // Explicit row alignments keep the editor's row boundaries; a width-only
+                // reflow rejoins soft wraps while retaining typed newlines and spaces.
+                let text = match a.opt_str("text")? {
+                    Some(text) => text.to_owned(),
+                    None if a.get("aligns").is_some() => block.editor_text,
+                    None if width.is_some() => block.reflow_text.clone(),
+                    None => block.text,
+                };
                 let mut style = pdfcraft_engine::BlockStyle {
                     ranges: parse_style_ranges(a.get("ranges"))?,
                     resource: a.opt_str("font_resource")?.map(str::to_owned),
@@ -548,7 +604,7 @@ impl Automation {
                     line_spacing: a.opt_num("line_spacing")?,
                     char_spacing: a.opt_num("char_spacing")?,
                     scale: a.opt_num("scale")?,
-                    width: a.opt_num("width")?,
+                    width,
                     ..Default::default()
                 };
                 let (dx, dy) = (a.opt_num("dx")?, a.opt_num("dy")?);
@@ -568,13 +624,10 @@ impl Automation {
                     style.color = Some(comments::parse_color(c)?);
                 }
                 if let Some(al) = a.opt_str("align")? {
-                    style.align = Some(match al {
-                        "left" => pdfcraft_engine::TextAlign::Left,
-                        "center" => pdfcraft_engine::TextAlign::Center,
-                        "right" => pdfcraft_engine::TextAlign::Right,
-                        "justify" => pdfcraft_engine::TextAlign::Justify,
-                        other => return Err(ToolError::InvalidArgs(format!("unknown align {other:?}"))),
-                    });
+                    style.align = Some(content::parse_align(al)?);
+                }
+                if let Some(aligns) = content::opt_aligns(&a)? {
+                    style.aligns = aligns;
                 }
                 // Where the paragraph is drawn after the edit: moved by dx, dy (up is +dy).
                 let [dx, dy] = style.offset.unwrap_or([0.0, 0.0]);
@@ -619,6 +672,7 @@ impl Automation {
                 }
                 out
             }
+            "text_script" => self.text_script(&a)?,
             "doc_audit_space" => {
                 let rows: Vec<Value> = self
                     .doc(&a)?
@@ -636,6 +690,7 @@ impl Automation {
             }
             "doc_export_images" | "doc_export_text" | "doc_export_all_images" => self.export(name, &a)?,
             "doc_header_footer" | "doc_watermark" | "doc_background" | "doc_remove_marks" => self.marks(name, &a)?,
+            "doc_backdrops" => self.backdrops(&a)?,
             "doc_unprotect" => {
                 let mut out = self.apply(&a, Edit::RemoveProtection)?;
                 out["security"] = security(self.doc(&a)?);
@@ -808,5 +863,53 @@ impl Automation {
             other => return Err(ToolError::UnknownTool(other.into())),
         };
         Ok(vec![Content::Json(out)])
+    }
+
+    /// `text_script`: Format text ▸ Superscript or Subscript on a paragraph, or on a byte range
+    /// of its editor text, written as `text_edit` writes the paragraph.
+    fn text_script(&mut self, a: &Args) -> Result<Value> {
+        use pdfcraft_engine::text_script::{Script, toggle};
+        let name = a.str("script")?;
+        let script = match name {
+            "superscript" => Script::Super,
+            "subscript" => Script::Sub,
+            other => return Err(ToolError::InvalidArgs(format!("unknown script {other:?} (superscript, subscript)"))),
+        };
+        let page = self.page(a)?;
+        let k = a.int("paragraph")?;
+        let text = {
+            let doc = self.doc(a)?;
+            let blocks = doc.text_blocks(page);
+            let index = self.paragraph_index(doc.id, page, k, &blocks)?;
+            blocks.get(index).map(|b| b.editor_text.clone()).ok_or_else(|| ToolError::InvalidArgs(format!("paragraph {k} is out of range")))?
+        };
+        let range = match a.opt_ints("range")? {
+            None => None,
+            Some(r) => {
+                let bounds = match r.as_slice() {
+                    [start, end] => usize::try_from(*start).ok().zip(usize::try_from(*end).ok()),
+                    _ => None,
+                };
+                let range = bounds
+                    .map(|(start, end)| start..end)
+                    .filter(|r| r.start < r.end && r.end <= text.len() && text.is_char_boundary(r.start) && text.is_char_boundary(r.end));
+                let Some(range) = range else {
+                    return Err(ToolError::InvalidArgs(format!(
+                        "range must be [start, end]: UTF-8 byte offsets of the paragraph's editor_text (from text_paragraphs) with start < end <= {}, on character boundaries",
+                        text.len()
+                    )));
+                };
+                Some(range)
+            }
+        };
+        let (toggled, _) = toggle(&text, range.as_ref(), script)
+            .ok_or_else(|| ToolError::InvalidArgs(format!("nothing to change: no character of the text has a {name} form")))?;
+        let args = json!({ "doc": a.get("doc"), "page": a.get("page"), "paragraph": k, "text": toggled });
+        let mut out = match self.call("text_edit", &args)?.into_iter().next() {
+            Some(Content::Json(out)) => out,
+            _ => json!({}),
+        };
+        out["script"] = json!(name);
+        Ok(out)
     }
 }
