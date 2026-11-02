@@ -2344,6 +2344,46 @@ fn a_lookup_table_is_read_within_the_exports_allowance() {
     assert_eq!(count, 1);
 }
 
+/// A JPEG's colour space is read once for an export, its lookup table paid for once: whether it is
+/// CMYK (a negative as is) and what its samples are both come from that reading. An indexed JPEG
+/// isn't valid, and is written as it is, but its soft mask makes it go on past the first.
+#[test]
+fn a_jpegs_lookup_table_is_paid_for_once() {
+    use pdfcraft_cos::{Dict, Document, ImageBudget, Object, PdfString, Stream};
+    let table = [255, 0, 0, 0, 0, 255];
+    let lookup = Stream::flate(Dict::new(), &table);
+    let mut jpeg = Vec::new();
+    image::GrayImage::from_pixel(2, 1, image::Luma([1])).write_to(&mut std::io::Cursor::new(&mut jpeg), image::ImageFormat::Jpeg).unwrap();
+    let spent = |as_stream: bool| {
+        let mut doc = Document::new_empty();
+        let table = if as_stream { Object::Ref(doc.add(Object::Stream(lookup.clone()))) } else { Object::String(PdfString::literal(table.to_vec())) };
+        let mut mask = Dict::new();
+        for (k, v) in
+            [("Subtype", Object::name("Image")), ("Width", Object::Int(2)), ("Height", Object::Int(1)), ("BitsPerComponent", Object::Int(8))]
+        {
+            mask.set(k.as_bytes().to_vec(), v);
+        }
+        mask.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+        let mask = doc.add(Object::Stream(Stream::flate(mask, &[255, 128])));
+        let mut dict = Dict::new();
+        for (k, v) in
+            [("Subtype", Object::name("Image")), ("Width", Object::Int(2)), ("Height", Object::Int(1)), ("BitsPerComponent", Object::Int(8))]
+        {
+            dict.set(k.as_bytes().to_vec(), v);
+        }
+        dict.set(b"ColorSpace".to_vec(), Object::Array(vec![Object::name("Indexed"), Object::name("DeviceRGB"), Object::Int(1), table]));
+        dict.set(b"Filter".to_vec(), Object::name("DCTDecode"));
+        dict.set(b"SMask".to_vec(), Object::Ref(mask));
+        let image = doc.add(Object::Stream(Stream::from_raw(dict, jpeg.clone())));
+        let mut budget = ImageBudget::with_work(u64::MAX);
+        let file = crate::extract::image_file_within(&doc, image, &mut budget);
+        assert_eq!(file, Ok(("jpg", jpeg.clone())), "written as it is");
+        u64::MAX - budget.work_left()
+    };
+    let read = (lookup.raw.len() + table.len()) as u64 + pdfcraft_filters::FLATE_READ_WORK * lookup.raw.len() as u64;
+    assert_eq!(spent(true), spent(false) + read, "one reading of the table");
+}
+
 /// A JPEG is written as it is, at no cost, unless something means decoding it, here a mask: that
 /// pays for its samples, and past the allowance the image goes, with the reason, as it would come out without
 /// its transparency otherwise.
