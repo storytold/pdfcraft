@@ -3523,10 +3523,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     // Security, stay as they are.
     let secured = show_secured_notice && doc.security_summary().is_some_and(|s| !(s.owner || (s.permissions.modify() && s.permissions.assemble())));
     let repaired = !doc.repair_log().is_empty();
-    // Full screen shows the page and nothing else (#1459), so the notice bar above the pages waits
-    // until it is left; filling the screen, a bar would push the page past its bottom (#576).
-    let notice =
-        if view.presentation.is_some() { None } else { notices(view, doc, secured, repaired, crate::sign_ui::banner(&doc.signatures), ui, &t) };
+    let notice = notices(view, doc, secured, repaired, crate::sign_ui::banner(&doc.signatures), ui, &t);
     apply_notice(app, index, notice);
     let Some(doc) = app.session.get(app.views[index].id) else { return };
     let info = &doc.info;
