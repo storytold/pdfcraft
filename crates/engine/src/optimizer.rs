@@ -95,12 +95,12 @@ impl OptimizeJob {
         let discarded = if discard.is_empty() {
             Vec::new()
         } else {
-            // `remove_hidden` refuses a run that removes nothing. Ticked categories that hold
-            // nothing are nothing to discard, not a reason to end the whole optimization.
-            match pdfcraft_redact::sanitize::remove_hidden(&mut cos, &discard) {
-                Err(pdfcraft_redact::RedactError::NothingToApply) => Vec::new(),
-                r => r?,
-            }
+            // Only the ticked categories its scan finds something in: `remove_hidden` refuses when
+            // it counts every one it is given as 0, which would end the whole optimization, and
+            // may have changed the copy by then (an empty outline root goes with bookmarks).
+            let counts = pdfcraft_redact::sanitize::scan(&cos);
+            let which: Vec<Hidden> = discard.iter().copied().filter(|h| counts.iter().any(|(c, n)| c == h && *n > 0)).collect();
+            if which.is_empty() { Vec::new() } else { pdfcraft_redact::sanitize::remove_hidden(&mut cos, &which)? }
         };
         let report = optimize::optimize_with_progress(&mut cos, &settings, &mut |s| {
             step(match s {

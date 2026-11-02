@@ -3618,6 +3618,21 @@ fn optimize_discarding_an_empty_category_still_runs() {
     let (bytes, report) = s.optimized_bytes(id, &optimize::Settings::default(), &[crate::Hidden::Bookmarks, crate::Hidden::Comments]).unwrap();
     assert!(bytes.starts_with(b"%PDF-"));
     assert!(report.discarded.is_empty(), "{:?}", report.discarded);
+    // An outline root with no entries is no bookmarks: it stays, as Remove Hidden Information,
+    // which refuses then, leaves it.
+    let outline = pdfcraft_testkit::Pdf::new()
+        .obj("<< /Type /Catalog /Pages 2 0 R /Outlines 4 0 R /PageMode /UseOutlines >>")
+        .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>")
+        .obj("<< /Type /Page /Parent 2 0 R >>")
+        .obj("<< /Type /Outlines /Count 0 >>")
+        .build();
+    let mut s = Session::new();
+    let id = s.open("outline.pdf", None, Arc::new(outline), None).unwrap();
+    let (bytes, report) = s.optimized_bytes(id, &optimize::Settings::default(), &[crate::Hidden::Bookmarks]).unwrap();
+    assert!(report.discarded.is_empty(), "{:?}", report.discarded);
+    let saved = pdfcraft_cos::Document::open(bytes).unwrap();
+    let catalog = saved.get(saved.root().unwrap()).as_dict().cloned().unwrap();
+    assert!(catalog.contains(b"Outlines") && catalog.contains(b"PageMode"), "{catalog:?}");
 }
 
 #[test]
