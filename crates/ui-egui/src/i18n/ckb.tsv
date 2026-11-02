@@ -20,6 +20,10 @@
 # reorders each line with UAX #9, so preordering here would reverse right-to-left text twice.
 # Spaces and a colon at either end of an entry stay at that end, next to what the code appends.
 
+# Untranslated: English text until a translator fills these in.
+	Lowering this forgets the oldest files. At 0 there is no list.	Lowering this forgets the oldest files. At 0 there is no list.
+	Recent files to keep	Recent files to keep
+
 	Menu	پێڕست
 	File	فایل
 	Edit	دەستکاریکردن
@@ -2735,6 +2739,13 @@ certificate	Version	وەشان
 	Make properties default	کردنی تایبەتمەندییەکان بە بنەڕەتی
 	Pages selected	پەڕە هەڵبژێردراوەکان
 	Page properties	تایبەتمەندییەکانی پەڕە
+	Arrange image	ڕێکخستنی وێنە
+	Bring forward	هێنانە پێشەوە
+	Bring to front	هێنانە پێشەوەی سەرەکی
+	Crop	بڕینەوە
+	Remove crop	لابردنی بڕینەوە
+	Send backward	ناردنە دواوە
+	Send to back	ناردنە دواوەی سەرەکی
 	Create & Edit	دروستکردن و دەستکاریکردن
 	Review & Compare	پێداچوونەوە و بەراوردکردن
 	Forms & Signatures	فۆڕمەکان و واژووەکان
@@ -2770,3 +2781,32 @@ certificate	Version	وەشان
 @plural	{n} more formula reads a missing field.|{n} more formulas read missing fields.	{n} more formula reads a missing field.|{n} more formulas read missing fields.
 @plural	{fields} builds some field names as it runs, so those reads aren't checked.|{fields} build some field names as they run, so those reads aren't checked.	{fields} builds some field names as it runs, so those reads aren't checked.|{fields} build some field names as they run, so those reads aren't checked.
 @plural	{fields} is missing|{fields} are missing	{fields} is missing|{fields} are missing
+
+# Image paste and Home notifications (AI-assisted; not separately native-reviewed)
+	Search…	گەڕان…
+	Image pasted	وێنەکە لکێنرا
+	No image on clipboard to paste	هیچ وێنەیەک لە کلیپبۆرد نییە بۆ لکاندن
+	Pinned {tool} to Home	{tool} لە ماڵەوە جێگیرکرا
+	Unpinned {tool} from Home	{tool} لە ماڵەوە لابرا
+
+# Home tools (AI-assisted; not separately native-reviewed)
+	Clear search	پاککردنەوەی گەڕان
+	Pin	جێگیرکردن
+	Pin a tool…	جێگیرکردنی ئامراز…
+	Pin to Home	جێگیرکردن لە ماڵەوە
+	Pin tools to Home	جێگیرکردنی ئامرازەکان لە ماڵەوە
+	Pin your favorite tools here for quick access.	ئامرازە دڵخوازەکانت لێرە جێگیر بکە بۆ دەستگەیشتنی خێرا.
+	Pinned	جێگیرکراو
+	Pinned Tools	ئامرازە جێگیرکراوەکان
+	Search tools…	گەڕان بەدوای ئامرازەکان…
+	Select tools to display on your Home page for quick access.	ئامرازەکان هەڵبژێرە بۆ پیشاندان لە ماڵەوە و دەستگەیشتنی خێرا.
+	Unpin from Home	لابردنی جێگیرکردن لە ماڵەوە
+	Unpin tool	لابردنی جێگیرکردنی ئامراز
+	Transform image	گۆڕینی شێوەی وێنە
+	Select Tool	ئامرازی هەڵبژاردن
+	Hand Tool	ئامرازی دەست
+	Marquee Zoom	گەورەکردنی ناوچەی هەڵبژێردراو
+	Edit this PDF	دەستکاریکردنی ئەم PDF ـە
+	Export this PDF	هەناردەکردنی ئەم PDF ـە
+	Find text or tools	دۆزینەوەی دەق یان ئامراز
+	Crop image	بڕینەوەی وێنە
