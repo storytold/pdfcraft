@@ -61,7 +61,7 @@ impl Document {
                 pdfcraft_annot::props(&editor.cos, page, index).map(|p| p.opacity).filter(|v| v.is_finite()).unwrap_or(1.0).clamp(0.0, 1.0) as f32;
             let turn = pdfcraft_annot::picture_rotation(&editor.cos, page, index).map_err(|e| e.to_string())?;
             let mut cos = editor.cos.clone();
-            pdfcraft_annot::delete_annotation(&mut cos, page, index).map_err(|e| e.to_string())?;
+            pdfcraft_annot::lift_annotation(&mut cos, page, index).map_err(|e| e.to_string())?;
             let bytes = Arc::new(pdfcraft_cos::write_incremental(&cos, &pdfcraft_cos::SaveOptions::default()).map_err(|e| e.to_string())?);
             Ok(Some(ImageSignaturePreview { image, opacity, turn, page, bytes, config: self.config.clone() }))
         })?

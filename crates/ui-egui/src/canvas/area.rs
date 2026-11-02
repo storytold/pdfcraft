@@ -32,14 +32,22 @@ pub(super) const SUPPRESS_SECS: f64 = 0.25;
 /// Short rolling extension while egui still has an unprocessed wheel tail.
 pub(super) const SUPPRESS_TAIL_SECS: f64 = 0.05;
 
-// Keep the viewer's scroll identity tied to the document instead of its parent UI.
+// Keep the viewer's scroll identity tied to the document instead of its parent UI. Without
+// `fades` (Show Page Edge Shadows off) the viewport-edge gradients are off for this area only.
 pub(super) fn page_scroll<R>(
     ui: &mut egui::Ui,
     scroll: egui::ScrollArea,
     id: egui::Id,
+    fades: bool,
     draw: impl FnOnce(&mut egui::Ui, egui::Rect) -> R,
 ) -> egui::scroll_area::ScrollAreaOutput<R> {
-    ui.scope_builder(egui::UiBuilder::new().scope_id(id), |ui| scroll.show_viewport(ui, draw)).inner
+    let strength = ui.spacing().scroll.fade.strength;
+    if !fades {
+        ui.spacing_mut().scroll.fade.strength = 0.0;
+    }
+    let out = ui.scope_builder(egui::UiBuilder::new().scope_id(id), |ui| scroll.show_viewport(ui, draw)).inner;
+    ui.spacing_mut().scroll.fade.strength = strength;
+    out
 }
 
 /// Run a push button's action (the ones that need no JavaScript engine).
