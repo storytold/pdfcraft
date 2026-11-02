@@ -1,6 +1,9 @@
 //! X.509 certificates (RFC 5280): the fields signing and validation need, signature checks
 //! along a chain, and a self-signed certificate builder for new digital IDs.
 
+use base64::Engine as _;
+use base64::engine::general_purpose::{STANDARD, STANDARD_NO_PAD};
+
 use crate::SignError;
 use crate::der::{self, Time, Tlv, tag};
 use crate::keys::{self, DigestAlg, PrivateKey, PublicKey};
@@ -609,41 +612,23 @@ pub fn load_certificates(bytes: &[u8]) -> Result<Vec<Certificate>, SignError> {
 
 /// The certificate as PEM text (Export certificate).
 pub fn to_pem(cert: &Certificate) -> String {
-    const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut s = String::new();
-    for c in cert.raw.chunks(3) {
-        let n = (c[0] as u32) << 16 | (*c.get(1).unwrap_or(&0) as u32) << 8 | *c.get(2).unwrap_or(&0) as u32;
-        for i in 0..4 {
-            s.push(if i <= c.len() { T[(n >> (18 - 6 * i) & 63) as usize] as char } else { '=' });
-        }
-    }
+    let s = STANDARD.encode(&cert.raw);
+    // Base64 is ASCII, so every 64-byte chunk is valid UTF-8 and the lossy conversion never
+    // replaces anything.
     let body: Vec<String> = s.as_bytes().chunks(64).map(|l| String::from_utf8_lossy(l).into_owned()).collect();
     format!("-----BEGIN CERTIFICATE-----\n{}\n-----END CERTIFICATE-----\n", body.join("\n"))
 }
 
+/// The bytes of a PEM block's base64 body, ASCII whitespace (line breaks included) ignored.
+/// RFC 7468's lax grammar, which parsers should accept (writers must pad, and `to_pem` does),
+/// allows zero, one or two `=` at the end whatever the length, so up to two are dropped and the
+/// rest must be unpadded base64. `None` for anything else that isn't base64: a `=` inside
+/// the body or a third one at the end, a one-character tail, non-zero bits after the last byte
+/// (RFC 4648 §3.5).
 fn base64(s: &str) -> Option<Vec<u8>> {
-    let val = |c: u8| -> Option<u32> {
-        Some(match c {
-            b'A'..=b'Z' => c - b'A',
-            b'a'..=b'z' => c - b'a' + 26,
-            b'0'..=b'9' => c - b'0' + 52,
-            b'+' => 62,
-            b'/' => 63,
-            _ => return None,
-        } as u32)
-    };
-    let digits: Vec<u8> = s.bytes().filter(|c| !c.is_ascii_whitespace() && *c != b'=').collect();
-    let mut out = Vec::with_capacity(digits.len() * 3 / 4);
-    for chunk in digits.chunks(4) {
-        let mut n = 0u32;
-        for (i, c) in chunk.iter().enumerate() {
-            n |= val(*c)? << (18 - 6 * i);
-        }
-        for i in 0..chunk.len().saturating_sub(1) {
-            out.push((n >> (16 - 8 * i)) as u8);
-        }
-    }
-    Some(out)
+    let compact: Vec<u8> = s.bytes().filter(|c| !c.is_ascii_whitespace()).collect();
+    let body = compact.strip_suffix(b"==").or_else(|| compact.strip_suffix(b"=")).unwrap_or(&compact);
+    STANDARD_NO_PAD.decode(body).ok()
 }
 
 #[cfg(test)]

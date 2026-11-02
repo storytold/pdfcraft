@@ -1,5 +1,6 @@
 //! The cryptographic core against files made by OpenSSL 3 (tests/data/README.md).
 
+use base64::Engine as _;
 use pdfcraft_sign::der::{Time, Tlv};
 use pdfcraft_sign::keys::DigestAlg;
 use pdfcraft_sign::{Certificate, Name, PublicKey, SignError, cms, pkcs12};
@@ -15,22 +16,7 @@ fn pem(name: &str) -> Vec<u8> {
 }
 
 fn decode_base64(s: &str) -> Vec<u8> {
-    let val = |c: u8| match c {
-        b'A'..=b'Z' => c - b'A',
-        b'a'..=b'z' => c - b'a' + 26,
-        b'0'..=b'9' => c - b'0' + 52,
-        b'+' => 62,
-        _ => 63,
-    };
-    let bytes: Vec<u8> = s.bytes().filter(|c| *c != b'=').map(val).collect();
-    bytes
-        .chunks(4)
-        .flat_map(|c| {
-            let n = c.iter().enumerate().fold(0u32, |acc, (i, v)| acc | (*v as u32) << (18 - 6 * i));
-            let k = c.len() * 6 / 8;
-            (0..k).map(move |i| (n >> (16 - 8 * i)) as u8)
-        })
-        .collect()
+    base64::engine::general_purpose::STANDARD.decode(s).unwrap()
 }
 
 #[test]
@@ -239,16 +225,60 @@ fn certificates_load_from_pem_and_der_and_export_as_pem() {
     assert!(pdfcraft_sign::x509::load_certificates(b"hello").is_err());
 }
 
+/// `to_pem` writes exactly what OpenSSL wrote: the fixtures come back byte for byte.
+#[test]
+fn canonical_pem_round_trips_byte_for_byte() {
+    for name in ["rsa.crt.pem", "ca.crt.pem"] {
+        let text = String::from_utf8(data(name)).unwrap();
+        let certs = pdfcraft_sign::x509::load_certificates(text.as_bytes()).unwrap();
+        assert_eq!(pdfcraft_sign::x509::to_pem(&certs[0]), text, "{name}");
+    }
+}
+
+/// A `=` inside a PEM body is not base64: the old reader skipped every `=` and loaded the file.
+#[test]
+fn pem_padding_inside_the_body_is_malformed() {
+    let text = String::from_utf8(data("rsa.crt.pem")).unwrap();
+    let body_start = text.find('\n').unwrap() + 1;
+    let broken = format!("{}={}", &text[..body_start + 4], &text[body_start + 4..]);
+    match pdfcraft_sign::x509::load_certificates(broken.as_bytes()) {
+        Err(SignError::Malformed(m)) => assert_eq!(m, "PEM base64"),
+        other => panic!("expected Malformed(\"PEM base64\"), got {other:?}"),
+    }
+}
+
+/// RFC 7468's lax grammar, which parsers should accept, allows zero to two `=` at the end of a
+/// body whatever its length. The hand-written reader before the base64 crate accepted all of
+/// these, so they must keep loading.
+#[test]
+fn pem_with_lax_trailing_padding_still_loads() {
+    use pdfcraft_sign::x509::load_certificates as load;
+    // ca.crt.pem ends its body with the canonical "==": drop it.
+    let text = String::from_utf8(data("ca.crt.pem")).unwrap();
+    assert!(text.contains("==\n-----END"), "the fixture ends its body with padding");
+    let unpadded = text.replace("==\n-----END", "\n-----END");
+    assert_eq!(load(unpadded.as_bytes()).unwrap(), load(text.as_bytes()).unwrap());
+    // More than two `=` is outside the grammar, whatever padding the length needs.
+    for extra in ["=", "=="] {
+        let over = text.replace("==\n-----END", &format!("=={extra}\n-----END"));
+        assert!(matches!(load(over.as_bytes()), Err(SignError::Malformed(m)) if m == "PEM base64"), "=={extra}");
+    }
+    // rsa.crt.pem's body is a whole number of quanta with no padding: one or two extra `=` are
+    // still the lax grammar; a third is not.
+    let text = String::from_utf8(data("rsa.crt.pem")).unwrap();
+    assert!(!text.contains('='), "the fixture's body needs no padding");
+    let expected = load(text.as_bytes()).unwrap();
+    for extra in ["=", "=="] {
+        let padded = text.replace("\n-----END", &format!("{extra}\n-----END"));
+        assert_eq!(load(padded.as_bytes()).unwrap(), expected, "{extra}");
+    }
+    let too_much = text.replace("\n-----END", "===\n-----END");
+    assert!(matches!(load(too_much.as_bytes()), Err(SignError::Malformed(m)) if m == "PEM base64"));
+}
+
 /// Base64 in 64-column lines, for PEM armour.
 fn encode_base64(der: &[u8]) -> String {
-    const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut s = String::new();
-    for c in der.chunks(3) {
-        let n = u32::from(c[0]) << 16 | u32::from(*c.get(1).unwrap_or(&0)) << 8 | u32::from(*c.get(2).unwrap_or(&0));
-        for i in 0..4 {
-            s.push(if i <= c.len() { T[(n >> (18 - 6 * i) & 63) as usize] as char } else { '=' });
-        }
-    }
+    let s = base64::engine::general_purpose::STANDARD.encode(der);
     let lines: Vec<&str> = s.as_bytes().chunks(64).map(|l| std::str::from_utf8(l).unwrap()).collect();
     lines.join("\n")
 }
@@ -414,7 +444,6 @@ fn crls_verify_and_report_revocation() {
 /// with the reason in the message.
 #[test]
 fn opens_wrapped_pkcs12_files_and_still_rejects_broken_ones() {
-    use base64::Engine as _;
     let der = data("rsa-aes.p12");
     let signer = pkcs12::open(&der, "test").unwrap();
 
