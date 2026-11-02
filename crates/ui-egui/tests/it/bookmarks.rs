@@ -119,6 +119,40 @@ fn the_panel_keeps_its_width_while_the_pointer_moves() {
     assert_eq!(panel_width(&h), before, "the Bookmarks panel drifted wider");
 }
 
+/// #5529: the title is selected when the rename editor opens, so typing replaces it at once,
+/// with no Ctrl+A. New bookmarks and double-click rename both get this.
+#[test]
+fn typing_replaces_the_title_when_the_editor_opens() {
+    let mut h = harness();
+    h.key_press_modifiers(Modifiers::COMMAND, Key::B);
+    h.run_steps(3);
+    field(&h, "Untitled").type_text("Intro"); // the whole default is replaced
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+    assert_eq!(outline(&h), [("Intro".into(), Some(0), 0)]);
+
+    menu(&mut h, "Intro", "Rename");
+    field(&h, "Intro").type_text("Introduction");
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+    assert_eq!(outline(&h)[0].0, "Introduction");
+}
+
+/// The selection is one-shot: after the user collapses it to a caret, later frames must not
+/// reselect, so typing at that caret inserts.
+#[test]
+fn a_rename_editor_keeps_the_users_caret_across_frames() {
+    let mut h = harness();
+    h.key_press_modifiers(Modifiers::COMMAND, Key::B);
+    h.run_steps(3);
+    h.key_press(Key::ArrowLeft); // collapses the opening selection to the caret at 0
+    h.run_steps(2);
+    field(&h, "Untitled").type_text("I"); // inserts at the caret, does not replace
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+    assert_eq!(outline(&h)[0].0, "IUntitled");
+}
+
 #[test]
 fn escape_cancels_a_rename() {
     let mut h = harness();
