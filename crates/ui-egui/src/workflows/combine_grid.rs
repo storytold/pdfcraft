@@ -2,6 +2,8 @@
 //! stack when it contributes more than one, with its name below. Cards are selected and moved
 //! with the same [`RowAction`]s as the table's rows, so both views share the selection, the
 //! order and the undo history.
+//! A collapsed file, including a single-page PDF, can be inserted inside another file
+//! shown as pages: all contributed pages move in order, with one undo step.
 //!
 //! Thumbnails render off the UI thread through [`RenderPool`] (its panic guard, size caps and
 //! watchdog), one small pool per thumbnail. Only missing ones are asked for, those in view first.
@@ -174,19 +176,12 @@ fn layout(app: &mut PdfCraftApp) -> Vec<Cell> {
     cells
 }
 
-/// The file gap (0 = before the first file, n = after the last) a drop before place `at` means: a
-/// drop inside an expanded file's pages goes to the nearer end of that file.
-fn file_gap(cells: &[Cell], at: usize, files: usize) -> usize {
-    match cells.get(at) {
-        None => files,
-        Some(Cell { file, page: Some((nth, _, of)) }) if *nth > 0 => {
-            if nth.saturating_mul(2) < *of {
-                *file
-            } else {
-                file.saturating_add(1)
-            }
-        }
-        Some(c) => c.file,
+/// A page-level gap marker, shared by page drags and whole files inserted inside an expanded file.
+fn paint_page_gap(ui: &egui::Ui, cells: &[(usize, Rect)], p: egui::Pos2, color: Color32) {
+    let nearest = cells.iter().min_by(|(_, a), (_, b)| a.distance_sq_to_pos(p).total_cmp(&b.distance_sq_to_pos(p)));
+    if let Some((_, r)) = nearest {
+        let x = if p.x < r.center().x { r.left() + 2.0 } else { r.right() - 2.0 };
+        ui.painter().line_segment([pos2(x, r.top() + 10.0), pos2(x, r.bottom() - 30.0)], Stroke::new(3.0, color));
     }
 }
 
@@ -334,11 +329,7 @@ pub(crate) fn grid(
             && let Some(p) = pointer
         {
             let at = crate::canvas::drop_gap(&cells, p);
-            let nearest = cells.iter().min_by(|(_, a), (_, b)| a.distance_sq_to_pos(p).total_cmp(&b.distance_sq_to_pos(p)));
-            if let Some((_, r)) = nearest {
-                let x = if p.x < r.center().x { r.left() + 2.0 } else { r.right() - 2.0 };
-                ui.painter().line_segment([pos2(x, r.top() + 10.0), pos2(x, r.bottom() - 30.0)], Stroke::new(3.0, t.accent));
-            }
+            paint_page_gap(ui, &cells, p, t.accent);
             let moving = if picked_pages.contains(&page) { picked_pages.len() } else { 1 };
             let label = if moving == 1 { tl!("1 page").to_string() } else { crate::i18n::fmt(tl!("{n} pages"), &[("n", &moving.to_string())]) };
             ui.painter().text(p + vec2(14.0, 14.0), Align2::LEFT_TOP, label, theme::medium(12.0), t.accent_text);
@@ -352,11 +343,15 @@ pub(crate) fn grid(
         } else if let Some(d) = drag
             && let Some(p) = pointer
         {
-            // A file's card: the file gap it would go to, drawn as a bar, and how many files go.
-            let gap = crate::canvas::drop_gap(&cells, p).map(|at| file_gap(&places, at, n));
-            // Drawn at the end of the file before the gap or the start of the one after (an
-            // expanded file's pages are never split), whichever is nearer the pointer.
-            if let Some(gap) = gap {
+            // A whole-file card: an exact page gap inside an expanded file, otherwise a file boundary.
+            let at = crate::canvas::drop_gap(&cells, p);
+            let inside = at.and_then(|at| places.get(at)).is_some_and(|c| c.page.is_some_and(|(nth, ..)| nth > 0));
+            let gap = at.map(|at| places.get(at).map_or(n, |c| c.file));
+            // Inside an expanded file, use its exact page gap. At file boundaries keep the
+            // whole-file reorder marker/path (including files that cannot be split).
+            if inside {
+                paint_page_gap(ui, &cells, p, t.accent);
+            } else if let Some(gap) = gap {
                 let before = gap
                     .checked_sub(1)
                     .and_then(|f| first_place.get(f.saturating_add(1)).map(|next| next.saturating_sub(1)).or(places.len().checked_sub(1)));
@@ -383,7 +378,12 @@ pub(crate) fn grid(
                 && viewport.contains(p)
                 && let Some(gap) = gap
             {
-                action = Some(RowAction::DropAt { file: d.file, revision: d.revision, gap });
+                action = Some(if inside {
+                    let gap = at.and_then(|at| page_at.get(at)).copied().unwrap_or(total_pages);
+                    RowAction::MoveFilesToPage { file: d.file, revision: d.revision, gap }
+                } else {
+                    RowAction::DropAt { file: d.file, revision: d.revision, gap }
+                });
             }
         }
     });
