@@ -126,7 +126,7 @@ impl PdfCraftApp {
         let view = &self.views[index];
         let doc = self.session.get(view.id).ok_or("no document")?;
         let ppp = self.ctx.as_ref().map_or(2.0, |c| c.pixels_per_point());
-        let scale = snapshot_scale((view.zoom * ppp).clamp(0.5, 8.0), view_rect[2] - view_rect[0], view_rect[3] - view_rect[1]);
+        let scale = snapshot_scale(view.render_scale(ppp), view_rect[2] - view_rect[0], view_rect[3] - view_rect[1]);
         let tile = Tile {
             x: (view_rect[0] * scale).floor().max(0.0) as u32,
             y: (view_rect[1] * scale).floor().max(0.0) as u32,

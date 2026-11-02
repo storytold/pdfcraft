@@ -986,11 +986,15 @@ fn a_snapshot_keeps_its_resolution_when_zoomed_out() {
     let (_, _, px) = h.state().last_snapshot.clone().expect("a snapshot");
     assert!(px.as_chunks::<4>().0.iter().any(|p| p[0] < 100), "the text is in it");
 
-    // Zoomed in past the minimum, a snapshot still has what the screen shows.
-    h.state_mut().set_option("zoom", "800").unwrap();
-    h.run_steps(2);
-    let (w, _) = h.state_mut().snapshot(i, 0, [15.0, 125.0, 180.0, 160.0]).expect("a snapshot");
-    assert!(w > sizes[0].0, "{w}");
+    // Zoomed in past the minimum, a snapshot has every pixel the screen shows, however far.
+    let ppp = h.ctx.pixels_per_point();
+    for zoom in [400.0_f32, 1600.0] {
+        h.state_mut().set_option("zoom", &zoom.to_string()).unwrap();
+        h.run_steps(2);
+        let (w, _) = h.state_mut().snapshot(i, 0, [15.0, 125.0, 180.0, 160.0]).expect("a snapshot");
+        let on_screen = (165.0 * zoom / 100.0 * pdfcraft_ui_egui::canvas::PT * ppp).ceil() as u32;
+        assert!(w.abs_diff(on_screen) <= 1, "{w} pixels at {zoom}%, {on_screen} on screen");
+    }
 }
 
 /// #5716: at 300 ppi this page is more than the renderer draws in one tile, which would cut off
