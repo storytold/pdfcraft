@@ -648,6 +648,64 @@ fn an_edited_object_stream_length_leaves_other_clones_members_alone() {
     assert_eq!(text_of(&doc, 3, b"Hidden").as_deref(), Some("cut endstream here"), "the edited length reached another clone");
 }
 
+/// A `/Length` read through one clone's edits and reused within the same load still keeps that
+/// load to the clone. Here the file's offsets are header-relative behind junk, so object 10's
+/// offset first lands on object 12, whose length (object 8, in the edited object stream 9) is
+/// read; object 10's own length then loads object stream 4, framed by object 8 too.
+#[test]
+fn a_reused_edited_length_leaves_other_clones_members_alone() {
+    let mut out = b"%PDF-1.5\n".to_vec();
+    let mut offs = [0usize; 13];
+    let mut obj = |out: &mut Vec<u8>, n: usize, body: &[u8]| {
+        offs[n] = out.len();
+        out.extend_from_slice(format!("{n} 0 obj\n").as_bytes());
+        out.extend_from_slice(body);
+        out.extend_from_slice(b"\nendobj\n");
+    };
+    let stream = |dict: &str, data: &str| format!("<< {dict} >>\nstream\n{data}\nendstream").into_bytes();
+    obj(&mut out, 1, b"<< /Type /Catalog /Pages 2 0 R >>");
+    obj(&mut out, 2, b"<< /Type /Pages /Kids [] /Count 0 /Extra 3 0 R >>");
+    let inner = "11 0 3 2 5 << /Hidden (cut endstream here) >>";
+    obj(&mut out, 4, &stream("/Type /ObjStm /N 2 /First 9 /Length 8 0 R", inner));
+    let lengths = format!("8 0 {}", inner.len());
+    obj(&mut out, 9, &stream(&format!("/Type /ObjStm /N 1 /First 4 /Length {}", lengths.len()), &lengths));
+    obj(&mut out, 12, &stream("/Length 8 0 R", &"x".repeat(40)));
+    obj(&mut out, 10, &stream("/Length 11 0 R", "PDATA"));
+    // A cross-reference stream: a hybrid file's /XRefStm is not looked for behind junk.
+    let compressed = [(3, 4, 1), (8, 9, 0), (11, 4, 0)];
+    let mut data = Vec::new();
+    for (n, off) in offs.iter().enumerate() {
+        let row = match compressed.iter().find(|c| c.0 == n) {
+            Some(&(_, stream, index)) => [2, 0, stream, index],
+            None if *off == 0 => [0, 0, 0, 0],
+            None => {
+                let [.., hi, lo] = u32::try_from(*off).unwrap().to_be_bytes();
+                [1, hi, lo, 0]
+            }
+        };
+        data.extend_from_slice(&row);
+    }
+    let table = out.len();
+    let dict = format!("<< /Type /XRef /Size 14 /W [1 2 1] /Index [0 13] /Root 1 0 R /Length {} >>", data.len());
+    out.extend_from_slice(format!("13 0 obj\n{dict}\nstream\n").as_bytes());
+    out.extend_from_slice(&data);
+    out.extend_from_slice(format!("\nendstream\nendobj\nstartxref\n{table}\n%%EOF\n").as_bytes());
+    let mut file = vec![b'J'; offs[10] - offs[12] - 1];
+    file.push(b'\n');
+    file.extend_from_slice(&out);
+    let doc = Document::open(Arc::new(file)).unwrap();
+    let mut edited = doc.clone();
+    let cut = "11 0 3 2 5 << /Hidden (cut".len();
+    let mut dict = Dict::new();
+    dict.set(b"Type".to_vec(), Object::name("ObjStm"));
+    dict.set(b"N".to_vec(), Object::Int(1));
+    dict.set(b"First".to_vec(), Object::Int(4));
+    edited.set(ObjRef::new(9, 0), crate::Stream::from_raw(dict, format!("8 0 {cut}").into_bytes()));
+    assert!(matches!(&*edited.get(ObjRef::new(10, 0)), Object::Stream(s) if &s.raw[..] == b"PDATA"));
+    assert_ne!(text_of(&edited, 3, b"Hidden").as_deref(), Some("cut endstream here"), "the edited length was not used");
+    assert_eq!(text_of(&doc, 3, b"Hidden").as_deref(), Some("cut endstream here"), "the edited length reached another clone");
+}
+
 /// A classic table with `/Size` rows and object 0's free entry first, its subsection numbered
 /// `1 n` instead of `0 n` (#2676): every row is one number off.
 fn misnumbered_table(start: u32) -> Vec<u8> {

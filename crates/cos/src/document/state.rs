@@ -6,8 +6,9 @@ thread_local! {
     static LOADING: std::cell::RefCell<Vec<u32>> = const { std::cell::RefCell::new(Vec::new()) };
     /// Indirect `/Length` values resolved during the current outermost load: a damaged file
     /// retries a parse several ways, and each retry would resolve the same lengths again
-    /// (exponential in the chain of streams whose lengths point at further streams).
-    pub(super) static LENGTHS: std::cell::RefCell<HashMap<u32, Option<i64>>> = std::cell::RefCell::new(HashMap::new());
+    /// (exponential in the chain of streams whose lengths point at further streams). Each is
+    /// kept with whether resolving it read unsaved edits.
+    pub(super) static LENGTHS: std::cell::RefCell<HashMap<u32, (Option<i64>, bool)>> = std::cell::RefCell::new(HashMap::new());
     /// Unsaved edits read on this thread (`Document::try_get`, and a `/Length` in `Document::load`).
     static OVERLAY_READS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }

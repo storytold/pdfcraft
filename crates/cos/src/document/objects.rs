@@ -549,11 +549,17 @@ impl Document {
                     if self.overlay.contains_key(&r.num) {
                         note_overlay_read();
                     }
-                    if let Some(known) = LENGTHS.with(|m| m.borrow().get(&r.num).copied()) {
+                    // A length resolved through this document's edits counts as an edit read
+                    // on every reuse.
+                    if let Some((known, edits)) = LENGTHS.with(|m| m.borrow().get(&r.num).copied()) {
+                        if edits {
+                            note_overlay_read();
+                        }
                         return known;
                     }
+                    let edits_read = overlay_reads();
                     let length = self.try_get(r.num).ok().and_then(|o| o.as_int());
-                    LENGTHS.with(|m| m.borrow_mut().insert(r.num, length));
+                    LENGTHS.with(|m| m.borrow_mut().insert(r.num, (length, overlay_reads() != edits_read)));
                     length
                 };
                 let off = offset as usize;
