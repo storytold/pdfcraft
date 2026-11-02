@@ -332,8 +332,9 @@ impl PdfCraftApp {
             #[cfg(target_os = "macos")]
             macos_association::repair(std::path::Path::new(&p));
             self.recent.retain(|r| r.path != p);
+            self.recent_check.opened(&p);
             self.recent.insert(0, RecentFile { name: name.to_string(), path: p, pages, size });
-            self.recent.truncate(12);
+            self.recent.truncate(self.recent_limit);
         }
         // What the form's scripts said while it opened (messages, errors) shows now, not with
         // the next edit.
