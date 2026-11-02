@@ -3,14 +3,18 @@ use hayro_syntax::bit_reader::BitReader;
 use hayro_syntax::object::Array;
 use hayro_syntax::object::Stream;
 use hayro_syntax::object::dict::keys::{BITS_PER_SAMPLE, DECODE, ENCODE, SIZE};
-use smallvec::{SmallVec, ToSmallVec, smallvec};
-use std::collections::HashMap;
+use smallvec::SmallVec;
 
 /// A type 0 function (sampled function).
 #[derive(Debug)]
 pub(crate) struct Type0 {
     sizes: IntVec,
-    table: HashMap<Key, IntVec>,
+    /// PdfCraft patch (31): the samples in stream order, `range.len()` to a grid point, the
+    /// first input varying fastest. They were a hash map keyed by each grid point, built again
+    /// every time a shading using the function was painted.
+    samples: Vec<u32>,
+    /// PdfCraft patch (31): how many grid points one step along each input moves.
+    strides: SmallVec<[usize; 4]>,
     clamper: Clamper,
     range: TupleVec,
     bits_per_sample: u8,
@@ -85,14 +89,22 @@ impl Type0 {
             data.truncate(num_expected_entries);
         }
 
-        let table = build_table(&data, &sizes, range.len())?;
+        // Saturating: the grid has at most `MAX_SAMPLE_ENTRIES` points unless a size is 0, and
+        // then no point is on it (`entry` checks each coordinate against its size first).
+        let mut strides = SmallVec::with_capacity(sizes.len());
+        let mut stride = 1usize;
+        for size in &sizes {
+            strides.push(stride);
+            stride = stride.saturating_mul(*size as usize);
+        }
 
         Some(Self {
             sizes,
             clamper,
             range,
             bits_per_sample,
-            table,
+            samples: data,
+            strides,
             encode,
             decode,
         })
@@ -122,29 +134,16 @@ impl Type0 {
 
         let in_prev = key.iter().map(|v| v.floor() as u32).collect::<IntVec>();
         let in_next = key.iter().map(|v| v.ceil() as u32).collect::<IntVec>();
+        let mut coord: IntVec = in_prev.clone();
 
-        let interpolator = Interpolator::new(
-            key.clone().to_smallvec(),
-            in_prev,
-            in_next,
-            self.sizes.clone(),
-            self.range.len(),
-        );
+        let interpolated = self.interpolate(&key, &in_prev, &in_next, &mut coord, 0)?;
 
-        let interpolated = interpolator.interpolate(&self.table)?;
-
+        // PdfCraft patch (31): `2_u32.pow(32)` overflowed (a panic with overflow checks on).
+        let max_sample = ((1u64 << self.bits_per_sample) - 1) as f32;
         let mut out = interpolated
             .iter()
             .zip(self.decode.iter())
-            .map(|(x, decode)| {
-                interpolate(
-                    *x,
-                    0.0,
-                    (2_u32.pow(self.bits_per_sample as u32) - 1) as f32,
-                    decode.0,
-                    decode.1,
-                )
-            })
+            .map(|(x, decode)| interpolate(*x, 0.0, max_sample, decode.0, decode.1))
             .collect::<SmallVec<_>>();
 
         self.clamper.clamp_output(&mut out);
@@ -157,95 +156,57 @@ type FloatVec = SmallVec<[f32; 4]>;
 type IntVec = SmallVec<[u32; 4]>;
 
 // See <https://github.com/apache/pdfbox/blob/bb778d4784f354c36ce032e91a0cee2169a4c598/pdfbox/src/main/java/org/apache/pdfbox/pdmodel/common/function/PDFunctionType0.java#L252>
-struct Interpolator {
-    input: FloatVec,
-    sizes: IntVec,
-    in_prev: IntVec,
-    in_next: IntVec,
-    out_len: usize,
-}
-
-impl Interpolator {
-    fn new(
-        input: FloatVec,
-        in_prev: IntVec,
-        in_next: IntVec,
-        sizes: IntVec,
-        out_len: usize,
-    ) -> Self {
-        Self {
-            input,
-            in_prev,
-            in_next,
-            sizes,
-            out_len,
-        }
-    }
-
-    fn interpolate(&self, table: &HashMap<Key, IntVec>) -> Option<FloatVec> {
-        self.interpolate_inner(smallvec![0; self.input.len()], 0, table)
-    }
-
-    fn interpolate_inner(
+impl Type0 {
+    /// PdfCraft patch (31): the value at `input` between the grid points `in_prev` and
+    /// `in_next`, interpolating the inputs from `step` on (the earlier ones are placed in
+    /// `coord`). The same multilinear interpolation, in the same order, as the hash-map
+    /// version, so the results are bit for bit the same; one level of recursion per input,
+    /// as before.
+    fn interpolate(
         &self,
-        mut coord: IntVec,
+        input: &[f32],
+        in_prev: &[u32],
+        in_next: &[u32],
+        coord: &mut IntVec,
         step: usize,
-        table: &HashMap<Key, IntVec>,
     ) -> Option<FloatVec> {
-        if step == self.input.len() - 1 {
-            if self.in_prev[step] == self.in_next[step] {
-                coord[step] = self.in_prev[step];
+        let (Some(x), Some(prev), Some(next)) =
+            (input.get(step), in_prev.get(step), in_next.get(step))
+        else {
+            // Every input placed: the grid point itself.
+            return Some(self.entry(coord)?.iter().map(|n| *n as f32).collect());
+        };
+        let (x, prev, next) = (*x, *prev, *next);
 
-                Some(
-                    table
-                        .get(&Key::from_raw(&self.sizes, &coord))?
-                        .clone()
-                        .iter()
-                        .map(|n| *n as f32)
-                        .collect(),
-                )
-            } else {
-                coord[step] = self.in_prev[step];
-                let val1 = table.get(&Key::from_raw(&self.sizes, &coord))?;
-                coord[step] = self.in_next[step];
-                let val2 = table.get(&Key::from_raw(&self.sizes, &coord))?;
-                let mut out = smallvec![0.0; self.out_len];
-
-                for i in 0..self.out_len {
-                    out[i] = interpolate(
-                        self.input[step],
-                        self.in_prev[step] as f32,
-                        self.in_next[step] as f32,
-                        val1[i] as f32,
-                        val2[i] as f32,
-                    );
-                }
-
-                Some(out)
-            }
-        } else if self.in_prev[step] == self.in_next[step] {
-            coord[step] = self.in_prev[step];
-            self.interpolate_inner(coord, step + 1, table)
-        } else {
-            coord[step] = self.in_prev[step];
-            let val1 = self.interpolate_inner(coord.clone(), step + 1, table)?;
-            coord[step] = self.in_next[step];
-            let val2 = self.interpolate_inner(coord, step + 1, table)?;
-
-            let mut out = smallvec![0.0; self.out_len];
-
-            for i in 0..self.out_len {
-                out[i] = interpolate(
-                    self.input[step],
-                    self.in_prev[step] as f32,
-                    self.in_next[step] as f32,
-                    val1[i],
-                    val2[i],
-                );
-            }
-
-            Some(out)
+        *coord.get_mut(step)? = prev;
+        let val1 = self.interpolate(input, in_prev, in_next, coord, step + 1)?;
+        if prev == next {
+            return Some(val1);
         }
+        *coord.get_mut(step)? = next;
+        let val2 = self.interpolate(input, in_prev, in_next, coord, step + 1)?;
+
+        Some(
+            val1.iter()
+                .zip(val2.iter())
+                .map(|(a, b)| interpolate(x, prev as f32, next as f32, *a, *b))
+                .collect(),
+        )
+    }
+
+    /// PdfCraft patch (31): the samples of grid point `coord`, or `None` where it is off the
+    /// grid or the stream ended before it (where the hash map had no entry).
+    fn entry(&self, coord: &[u32]) -> Option<&[u32]> {
+        let mut index = 0usize;
+        for ((c, size), stride) in coord.iter().zip(&self.sizes).zip(&self.strides) {
+            if c >= size {
+                return None;
+            }
+            index = index.checked_add((*c as usize).checked_mul(*stride)?)?;
+        }
+        let n = self.range.len();
+        let start = index.checked_mul(n)?;
+        self.samples.get(start..start.checked_add(n)?)
     }
 }
 
@@ -257,71 +218,3 @@ impl Interpolator {
 /// values, 17^5 points with 4 outputs 5.7 million values.
 const MAX_SAMPLE_VALUES: usize = 1 << 23;
 const MAX_SAMPLE_ENTRIES: usize = 1 << 21;
-
-fn build_table(data: &[u32], sizes: &[u32], n: usize) -> Option<HashMap<Key, IntVec>> {
-    let mut key = Key::new(sizes);
-    let mut table = HashMap::new();
-
-    let mut first = true;
-
-    for b in data.chunks_exact(n) {
-        if !first {
-            key.increment();
-        }
-
-        table.insert(key.clone(), b.to_smallvec());
-
-        first = false;
-    }
-
-    Some(table)
-}
-
-/// A sampled function consists of a (possibly) multi-dimensional table that we can index
-/// into. We do this by representing the entries as a flat list of vectors, where each
-/// element in the vector represents the value of the key in that specific dimension.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct Key {
-    sizes: SmallVec<[u32; 4]>,
-    parts: SmallVec<[u32; 4]>,
-}
-
-impl Key {
-    fn new(sizes: &[u32]) -> Self {
-        let parts = smallvec![0; sizes.len()];
-
-        Self {
-            sizes: sizes.to_smallvec(),
-            parts,
-        }
-    }
-
-    fn from_raw(sizes: &[u32], parts: &[u32]) -> Self {
-        Self {
-            sizes: sizes.to_smallvec(),
-            parts: parts.to_smallvec(),
-        }
-    }
-
-    fn increment(&mut self) -> Option<()> {
-        self.increment_index(0)
-    }
-
-    fn increment_index(&mut self, index: usize) -> Option<()> {
-        let size = *self.sizes.get(index).or_else(|| {
-            error!("overflowed key in sampled function");
-
-            None
-        })?;
-        let val = self.parts.get_mut(index)?;
-
-        if *val >= (size - 1) {
-            *val = 0;
-            self.increment_index(index + 1)?;
-        } else {
-            *val += 1;
-        }
-
-        Some(())
-    }
-}

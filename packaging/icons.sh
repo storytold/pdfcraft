@@ -27,7 +27,10 @@ MAC="$TMP/macos.svg"
   echo '</svg>'
 } >"$MAC"
 
-render() { resvg -w "$2" -h "$2" "$1" "$3" </dev/null; }
+render() {
+  local src="$1" size="$2" out="$3"
+  resvg -w "$size" -h "$size" "$src" "$out" </dev/null
+}
 
 # 1024 px PNG on Apple's grid (also the runtime Dock icon on macOS, see apps/pdfcraft/src/main.rs).
 render "$MAC" 1024 "$DIR/pdfcraft-1024.png"
