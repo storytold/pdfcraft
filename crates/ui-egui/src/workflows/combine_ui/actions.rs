@@ -1,5 +1,5 @@
 use super::files::{Preview, RowAction};
-use super::parts::{moved_pages, removed_pages, step_to};
+use super::parts::{moved_files, moved_pages, removed_pages, step_to};
 use super::view::expandable;
 use super::{BTreeSet, PdfCraftApp};
 
@@ -73,6 +73,24 @@ impl PdfCraftApp {
                 };
                 if let Some(moved) = moved_pages(&parts, &moving, gap, &mut new_id) {
                     self.combine_set_parts(moved);
+                }
+                return None;
+            }
+            RowAction::MoveFilesToPage { file, revision, gap } => {
+                if revision != self.combine_tab.revision || !self.combine_draft.iter().any(|f| f.id == file) {
+                    return None;
+                }
+                let moving = if self.combine_tab.selected.contains(&file) { self.combine_tab.selected.clone() } else { BTreeSet::from([file]) };
+                let parts = self.combine_parts();
+                let next = &mut self.combine_tab.next_id;
+                let mut new_id = || {
+                    let id = *next;
+                    *next = next.wrapping_add(1);
+                    id
+                };
+                if let Some(moved) = moved_files(&parts, &moving, gap, &mut new_id) {
+                    self.combine_set_parts(moved);
+                    self.combine_tab.selected = self.combine_draft.iter().filter(|f| moving.contains(&f.id)).map(|f| f.id).collect();
                 }
                 return None;
             }

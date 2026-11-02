@@ -1584,10 +1584,10 @@ fn dragging_a_page_moves_that_page_even_between_another_files_pages() {
     let (p3, a) = (card(&h, &page_card(3, "b.pdf")), card(&h, "a.pdf"));
     drag(&mut h, p3.center(), a.center() - vec2(a.width() * 0.3, 0.0));
     assert_eq!(parts(&h), ["b.pdf:[0, 2]", "a.pdf:[0]", "b.pdf:[3, 1]", "c.pdf:[0]"]);
-    // A file's card still moves its whole file, and a drop among a file's pages goes to its nearer end.
+    // A file's card moves the whole file into the exact page gap, splitting the target part.
     let (cc, early) = (card(&h, "c.pdf"), card(&h, &page_card(3, "b.pdf")));
     drag(&mut h, cc.center(), early.center() - vec2(early.width() * 0.3, 0.0));
-    assert_eq!(names(&h), ["b.pdf", "c.pdf", "a.pdf", "b.pdf"], "the second of that part's two pages: its end");
+    assert_eq!(parts(&h), ["b.pdf:[0]", "c.pdf:[0]", "b.pdf:[2]", "a.pdf:[0]", "b.pdf:[3, 1]"]);
 }
 
 #[test]
@@ -1909,3 +1909,6 @@ fn open_documents_already_in_the_list_are_not_added_again() {
     add_all(&mut h);
     assert_eq!(names(&h), ["a.pdf", "report.pdf", "report.pdf", "b.pdf"]);
 }
+
+#[path = "combine_insert_file.rs"]
+mod insert_file;

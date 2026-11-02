@@ -451,6 +451,13 @@ pub(crate) enum RowAction {
         revision: u64,
         gap: usize,
     },
+    /// Whole file cards dropped at a page gap inside an expanded file. All contributed pages of the
+    /// dragged file (and other selected files) move together, in list order, as one undo step.
+    MoveFilesToPage {
+        file: u64,
+        revision: u64,
+        gap: usize,
+    },
     /// One page's trash (`Some`), or the selected pages: out of the list.
     RemovePages(Option<(u64, usize)>),
     /// Row `from` (and the rest of the selection, if it is selected) dropped on row `to`.

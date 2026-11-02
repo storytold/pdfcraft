@@ -220,9 +220,21 @@ pub(super) fn parts_of(items: &[Item], parts: &[Part], new_id: &mut dyn FnMut() 
 /// splits its file into parts, and parts of one file brought side by side join. `None` when
 /// nothing would change.
 pub(crate) fn moved_pages(parts: &[Part], moving: &BTreeSet<(u64, usize)>, gap: usize, new_id: &mut dyn FnMut() -> u64) -> Option<Vec<Part>> {
+    moved_items(parts, gap, new_id, |i| matches!(i, Item::Page { from, nth, .. } if moving.contains(&(*from, *nth))))
+}
+
+/// Whole entries moved together to a page gap, using the same partition/split/join rules as
+/// individual pages. Entries that cannot be split (locked, unreadable, invalid range) stay whole.
+pub(crate) fn moved_files(parts: &[Part], moving: &BTreeSet<u64>, gap: usize, new_id: &mut dyn FnMut() -> u64) -> Option<Vec<Part>> {
+    moved_items(parts, gap, new_id, |i| match i {
+        Item::Page { from, .. } => moving.contains(from),
+        Item::Whole(id) => moving.contains(id),
+    })
+}
+
+fn moved_items(parts: &[Part], gap: usize, new_id: &mut dyn FnMut() -> u64, picked: impl Fn(&Item) -> bool) -> Option<Vec<Part>> {
     let items = items_of(parts);
     let gap = gap.min(items.len());
-    let picked = |i: &Item| matches!(i, Item::Page { from, nth, .. } if moving.contains(&(*from, *nth)));
     let before = items.get(..gap).map_or(0, |s| s.iter().filter(|i| picked(i)).count());
     let (taken, mut rest): (Vec<Item>, Vec<Item>) = items.iter().partition(|i| picked(i));
     if taken.is_empty() {

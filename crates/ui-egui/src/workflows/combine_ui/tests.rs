@@ -210,3 +210,21 @@ fn removing_pages_drops_emptied_parts_and_joins_what_meets() {
     // A page that isn't there: nothing changes, and it says so.
     assert_eq!(removed_pages(&two, &BTreeSet::from([(1, 9)]), &mut new_id), None);
 }
+
+#[test]
+fn whole_files_at_a_page_gap_keep_ranges_and_unsplittable_entries() {
+    use super::parts::moved_files;
+    let list = vec![part(1, 1, &[0, 1, 2, 3, 4]), part(2, 2, &[2, 0]), Part { id: 3, group: 3, pages: None }];
+    let mut next = 100;
+    let mut new_id = || {
+        let id = next;
+        next += 1;
+        id
+    };
+    let moved = moved_files(&list, &BTreeSet::from([2, 3]), 3, &mut new_id).unwrap();
+    let summary = |parts: &[Part]| parts.iter().map(|p| (p.group, p.pages.clone())).collect::<Vec<_>>();
+    assert_eq!(summary(&moved), [(1, Some(vec![0, 1, 2])), (2, Some(vec![2, 0])), (3, None), (1, Some(vec![3, 4]))]);
+    assert_eq!(moved[2].id, 3, "the unsplittable source retains its identity");
+    assert_eq!(moved_files(&list, &BTreeSet::from([2]), 5, &mut new_id), None, "dropping a whole file in its own position is not an edit");
+    assert_eq!(moved_files(&list, &BTreeSet::from([99]), 0, &mut new_id), None, "missing drag sources change nothing");
+}
