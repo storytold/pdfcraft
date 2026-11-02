@@ -355,6 +355,10 @@ pub enum Shape {
         start: LineEnding,
         end: LineEnding,
     },
+    /// Translucent freehand highlighting, stored as ink with a distinct intent.
+    FreehandHighlight {
+        strokes: Vec<Vec<[f64; 2]>>,
+    },
     /// Freehand strokes (Draw tool).
     Ink {
         strokes: Vec<Vec<[f64; 2]>>,
@@ -474,6 +478,7 @@ pub fn rect_quad(r: [f64; 4]) -> [f64; 8] {
 }
 
 impl Shape {
+    /// Return the PDF `/Subtype` name for this annotation shape.
     pub fn subtype(&self) -> &'static str {
         match self {
             Shape::Note { .. } => "Text",
@@ -481,7 +486,7 @@ impl Shape {
             Shape::Rectangle { .. } => "Square",
             Shape::Oval { .. } => "Circle",
             Shape::Line { .. } => "Line",
-            Shape::Ink { .. } | Shape::Signature { .. } => "Ink",
+            Shape::Ink { .. } | Shape::FreehandHighlight { .. } | Shape::Signature { .. } => "Ink",
             Shape::TextBox { .. } | Shape::Typewriter { .. } | Shape::Callout { .. } => "FreeText",
             Shape::Mark { .. } | Shape::Stamp { .. } | Shape::CustomStamp { .. } | Shape::TypedSignature { .. } => "Stamp",
             Shape::Redact { .. } => "Redact",
@@ -610,6 +615,7 @@ impl Style {
             }
             Shape::Callout { .. } => ([0.0, 0.0, 0.0], 1.0),
             Shape::Caret { .. } | Shape::Attachment { .. } => ([0.0, 0.47, 0.84], 1.0),
+            Shape::FreehandHighlight { .. } => return Self { color: [1.0, 0.94, 0.0], opacity: 0.35, width: 14.0, fill: None },
             Shape::Ink { .. } => ([0.0, 0.4, 0.87], 2.0),
             Shape::TextBox { .. } | Shape::Typewriter { .. } => ([0.0, 0.0, 0.0], 0.0),
             Shape::Mark { .. } => ([0.0, 0.0, 0.0], 1.5),

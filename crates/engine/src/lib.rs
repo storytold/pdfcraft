@@ -54,6 +54,7 @@ mod stamp_preview;
 mod test_hooks;
 pub mod text_fonts;
 mod text_preview;
+pub mod text_script;
 pub mod text_style_bookmarks;
 pub mod word_count;
 pub mod xfa;
@@ -64,6 +65,7 @@ use std::sync::Arc;
 pub use links::{
     MAX_REMOTE_DOCUMENT_BYTES, RemoteDocumentPathError, read_remote_document, remote_document_path_is_absolute, resolve_remote_document_path,
 };
+pub use pdfcraft_edit::strip_subset_tag;
 pub use signature_image::{ImageSignaturePreview, SignatureImage};
 pub use signature_scan::{PhotoRect, ScanError, SignaturePhoto, Turn};
 pub use stamp_preview::{CommentLayer, StampPreview};
@@ -138,7 +140,7 @@ pub use history::Label;
 use layers::{apply_layer_state, set_default_layer_state, use_layer_choices};
 pub use open::{OpenContext, PreparedDocument};
 pub use page_filter::{PageOrientation, PageParity, filter_pages};
-pub use pictures::MarkFile;
+pub use pictures::{MarkFile, image_dimensions};
 use pictures::{embed_image, fit_picture, mark_source};
 use protection::unrestricted;
 pub use protection::{Changes, Printing, Protection, SecuritySummary};
@@ -154,6 +156,8 @@ use xfa_form::{
 
 mod clock;
 mod doc_state;
+
+pub use pdfcraft_edit::ArrangeOrder;
 
 use clock::{local_utc_offset, parse_ymd};
 pub use doc_state::{DocId, ImageEdit, OptimizeReport, RecoverySnapshot, SplitPart, guard, merge_data_files};

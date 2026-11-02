@@ -7,6 +7,11 @@
 # Plural rule: `plural_none` — every @plural row lists exactly one form.
 # Context-sensitive wording and intentional unchanged strings are regression-tested in i18n/mod.rs.
 #
+
+# Untranslated: English text until a translator fills these in.
+	Lowering this forgets the oldest files. At 0 there is no list.	Lowering this forgets the oldest files. At 0 there is no list.
+	Recent files to keep	Recent files to keep
+
 	Menu	Trình đơn
 	Edit	Chỉnh sửa
 	Pages	Trang
@@ -342,12 +347,10 @@ theme	Appearance	Giao diện
 	Check Again	Kiểm tra lại
 	Check again	Kiểm tra lại
 	Check box is checked by default	Hộp kiểm được chọn theo mặc định
-	Check for updates	Kiểm tra bản cập nhật
 	Check spelling	Kiểm tra chính tả
 	Check the pages	Kiểm tra các trang
 	Check the pages of {name}: {why}	Kiểm tra các trang của {name}: {why}
 	Checking Options ({on} of 32 in all categories)	Tùy chọn kiểm tra ({on} trên 32 ở tất cả danh mục)
-	Checking for a newer version…	Đang kiểm tra phiên bản mới hơn…
 	Choose a PNG or JPEG image (up to 4 MiB). Transparency is preserved.	Chọn ảnh PNG hoặc JPEG (tối đa 4 MiB). Độ trong suốt được giữ nguyên.
 	Choose a folder for the exported files	Chọn thư mục cho các tệp đã xuất
 	Choose a folder for the extracted pages	Chọn thư mục cho các trang đã trích xuất
@@ -408,7 +411,6 @@ theme	Appearance	Giao diện
 	Copies:	Số bản sao:
 	Copy selected text	Sao chép văn bản đã chọn
 	Copy text	Sao chép văn bản
-	Couldn't check for updates: {e}	Không thể kiểm tra bản cập nhật: {e}
 	Couldn't open the printer's preferences: {e}	Không thể mở tùy chọn của máy in: {e}
 	Counterclockwise 90 degrees	Ngược chiều kim đồng hồ 90 độ
 	Country/Region	Quốc gia/Khu vực
@@ -910,7 +912,6 @@ theme	Appearance	Giao diện
 	Patterns (graphics objects)	Họa tiết (đối tượng đồ họa)
 	PdfCraft didn't shut down normally. These documents had changes that were autosaved:	PdfCraft không đóng bình thường. Các tài liệu này có thay đổi đã được tự động lưu:
 	PdfCraft works offline. No telemetry, no account, and no cloud processing unless you add a provider.	PdfCraft hoạt động ngoại tuyến. Không thu thập dữ liệu sử dụng, không cần tài khoản, và không xử lý đám mây trừ khi bạn thêm nhà cung cấp.
-	PdfCraft {c} is up to date.	PdfCraft {c} đã là bản mới nhất.
 	PdfCraft {v} is available.	PdfCraft {v} đã có sẵn.
 	Percentage	Phần trăm
 	Permissions password	Mật khẩu quyền hạn
@@ -1333,7 +1334,6 @@ theme	Appearance	Giao diện
 	XFA form: its fields and its XFA data are kept in step, so other viewers show what you fill in.	Biểu mẫu XFA: các trường và dữ liệu XFA của nó được giữ đồng bộ, nên các trình xem khác hiển thị những gì bạn điền.
 	You are about to apply 1 redaction mark. Text, images and drawings under the marks, and comments and form fields that overlap them, are removed permanently.	Bạn sắp áp dụng 1 dấu xóa. Văn bản, hình ảnh và bản vẽ nằm dưới các dấu, cũng như bình luận và trường biểu mẫu chồng lên chúng, sẽ bị xóa vĩnh viễn.
 	You are about to apply {n} redaction marks. Text, images and drawings under the marks, and comments and form fields that overlap them, are removed permanently.	Bạn sắp áp dụng {n} dấu xóa. Văn bản, hình ảnh và bản vẽ nằm dưới các dấu, cũng như bình luận và trường biểu mẫu chồng lên chúng, sẽ bị xóa vĩnh viễn.
-	You have version {c}. All releases are listed at {page}.	Bạn đang dùng phiên bản {c}. Tất cả các bản phát hành được liệt kê tại {page}.
 	You have version {c}. Download the new version from its release page.	Bạn đang dùng phiên bản {c}. Hãy tải phiên bản mới từ trang phát hành của nó.
 	Your changes will be lost if you don't save them.	Các thay đổi của bạn sẽ bị mất nếu bạn không lưu.
 	ZIP	ZIP
@@ -2707,6 +2707,12 @@ key	Space	Space
 	Redact Image	Xóa nội dung nhạy cảm của hình ảnh
 	Create Link…	Tạo liên kết…
 	Recognize Text…	Nhận dạng văn bản…
+	Bring forward	Chuyển lên trước
+	Bring to front	Đưa lên trước cùng
+	Crop image	Cắt hình ảnh
+	Remove crop	Xóa cắt
+	Send backward	Chuyển về sau
+	Send to back	Đưa về sau cùng
 	Create & Edit	Tạo và chỉnh sửa
 	Review & Compare	Xem xét và so sánh
 	Forms & Signatures	Biểu mẫu và chữ ký
@@ -2794,6 +2800,25 @@ key	Space	Space
 # Historical snapshot notice bar (View signed version / View revision).
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	Bạn đang xem phiên bản đã ký của “{from}” (bản sửa đổi {rev}). Đây là ảnh nhanh: các thay đổi ở đây không được áp dụng đến bản gốc.
 	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	Bạn đang xem bản sửa đổi {rev} của “{from}”. Đây là ảnh nhanh: các thay đổi ở đây không được áp dụng đến bản gốc.
+	Clear search	Xóa tìm kiếm
+	Pin	Ghim
+	Pin a tool…	Ghim công cụ…
+	Pin to Home	Ghim vào Trang chủ
+	Pin tools to Home	Ghim công cụ vào Trang chủ
+	Pin your favorite tools here for quick access.	Ghim các công cụ yêu thích của bạn vào đây để truy cập nhanh.
+	Pinned	Đã ghim
+	Pinned Tools	Công cụ đã ghim
+	Search tools…	Tìm kiếm công cụ…
+	Select tools to display on your Home page for quick access.	Chọn các công cụ hiển thị trên Trang chủ để truy cập nhanh.
+	Unpin from Home	Bỏ ghim khỏi Trang chủ
+	Unpin tool	Bỏ ghim công cụ
+	Transform image	Chuyển đổi hình ảnh
+	Select Tool	Công cụ chọn
+	Hand Tool	Công cụ bàn tay
+	Marquee Zoom	Thu phóng theo vùng chọn
+	Edit this PDF	Chỉnh sửa PDF này
+	Export this PDF	Xuất PDF này
+	Find text or tools	Tìm văn bản hoặc công cụ
 	Attach a file…	Đính kèm tệp…
 	Delete attachment	Xóa tệp đính kèm
 	Attaching files is not available on the web yet	Chưa thể đính kèm tệp trên web
@@ -2831,6 +2856,8 @@ key	Space	Space
 	a table has 1 to {max} columns	một bảng có từ 1 đến {max} cột
 	the first row number can be at most {max}	số hàng đầu tiên tối đa là {max}
 	the area, the spacing and the column widths must be numbers, the spacing 0 or more and each width more than 0	vùng, khoảng cách và độ rộng cột phải là số, khoảng cách từ 0 trở lên và mỗi độ rộng lớn hơn 0
+	Arrange image	Sắp xếp hình ảnh
+	Crop	Xén
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Hôm nay
@@ -2850,3 +2877,11 @@ key	Space	Space
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Tùy chọn cho câu trả lời này
 	Export value	Giá trị xuất
+	Show Page Edge Shadows	Hiển thị bóng viền trang
+
+# Image paste and Home notifications (AI-assisted; not separately native-reviewed)
+	Search…	Tìm kiếm…
+	Image pasted	Đã dán hình ảnh
+	No image on clipboard to paste	Không có hình ảnh trong bảng nhớ tạm để dán
+	Pinned {tool} to Home	Đã ghim {tool} vào Trang chủ
+	Unpinned {tool} from Home	Đã bỏ ghim {tool} khỏi Trang chủ
