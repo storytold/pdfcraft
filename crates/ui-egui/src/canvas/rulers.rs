@@ -172,7 +172,8 @@ fn paint_rulers(ui: &egui::Ui, layout: RulerLayout, axes: RulerAxes, viewport: R
     } else {
         (f64::from(layout.vertical.top()), f64::from(layout.vertical.height()) / axes.scale_y.max(f64::EPSILON))
     };
-    let pointer = pointer.filter(|point| viewport.contains(*point));
+    let document_canvas = Rect::from_min_max(layout.corner.max, viewport.max);
+    let pointer = pointer.filter(|point| document_canvas.contains(*point));
     ruler::paint_corner(ui, layout.corner, units);
     ruler::paint_ruler(
         ui,

@@ -80,7 +80,9 @@ impl PagePointer {
                     _ => false,
                 }),
                 i.events.iter().find_map(|event| match event {
-                    Event::PointerButton { pos, .. } if pos.is_finite() && blocked.iter().any(|rect| rect.contains(*pos)) => Some(*pos),
+                    Event::PointerButton { pos, pressed: true, .. } if pos.is_finite() && blocked.iter().any(|rect| rect.contains(*pos)) => {
+                        Some(*pos)
+                    }
                     _ => None,
                 }),
             )

@@ -735,7 +735,7 @@ fn card_documents_and_view(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens,
             &[(Fit::Width, tl!("Fit to width")), (Fit::Page, tl!("Zoom to page level")), (Fit::None, tl!("Custom"))],
         );
         let mut percent = defaults.zoom * 100.0;
-        if ui.add(egui::DragValue::new(&mut percent).range(8.0..=6400.0).max_decimals(0).suffix("%")).changed() {
+        if ui.add(egui::DragValue::new(&mut percent).range(1.0..=6400.0).max_decimals(0).suffix("%")).changed() {
             (defaults.fit, defaults.zoom) = (Fit::None, percent / 100.0);
         }
     });
