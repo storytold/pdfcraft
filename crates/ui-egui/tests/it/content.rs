@@ -272,7 +272,8 @@ fn typing_moving_styling_and_deleting_added_content() {
 #[test]
 fn a_picture_on_the_clipboard_is_pasted_onto_the_page() {
     use pdfcraft_ui_egui::Clip;
-    let mut h = harness();
+    // Three frames between modifier releases represent a short real key gesture.
+    let mut h = harness_with_step_dt(1.0 / 60.0);
     let v = |pressed, modifiers| egui::Event::Key { key: egui::Key::V, physical_key: None, pressed, repeat: false, modifiers };
     let images = |h: &Harness<'static, PdfCraftApp>| added(h).iter().filter(|a| matches!(a.content, pdfcraft_engine::AddedContent::Image(_))).count();
     // Text on the clipboard: egui gets a Paste event instead of the press; nothing lands on the page.
@@ -288,9 +289,8 @@ fn a_picture_on_the_clipboard_is_pasted_onto_the_page() {
     h.event(v(false, egui::Modifiers::NONE));
     h.run_steps(3);
     assert_eq!(images(&h), 0, "a plain V doesn't paste");
-    // A picture alone: egui-winit sends no Paste event and swallows the press, so only the
-    // release of V arrives.
-    h.event(v(false, egui::Modifiers::COMMAND));
+    // The integration delivers image pixels and consumes the native shortcut keys.
+    h.event(egui::Event::PasteImage(std::sync::Arc::new(egui::ColorImage::filled([30, 20], egui::Color32::GRAY))));
     h.run_steps(3);
     let a = added(&h);
     assert_eq!(a.len(), 1);
@@ -301,14 +301,17 @@ fn a_picture_on_the_clipboard_is_pasted_onto_the_page() {
         let s = h.state();
         assert_eq!(s.session.get(s.views[0].id).unwrap().can_undo(), Some("Add image"));
     }
-    // Ctrl let go a moment before V: the release comes without the modifier, and still pastes.
+    // Modifier release order does not change delivery of the next image paste.
+    h.event(egui::Event::ModifiersChanged(egui::Modifiers::COMMAND));
+    h.event(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
+    h.event(egui::Event::PasteImage(std::sync::Arc::new(egui::ColorImage::filled([30, 20], egui::Color32::GRAY))));
     h.event(v(false, egui::Modifiers::NONE));
     h.run_steps(3);
     assert_eq!(images(&h), 2, "Ctrl released first");
     // A text field with the keyboard keeps ⌘V for itself.
     assert!(h.state_mut().execute("edit.find"));
     h.run_steps(3);
-    h.event(v(false, egui::Modifiers::COMMAND));
+    h.event(egui::Event::PasteImage(std::sync::Arc::new(egui::ColorImage::filled([30, 20], egui::Color32::GRAY))));
     h.run_steps(3);
     assert_eq!(images(&h), 2, "the Find field has the keyboard");
     h.key_press(egui::Key::Escape);
@@ -317,7 +320,7 @@ fn a_picture_on_the_clipboard_is_pasted_onto_the_page() {
     assert!(h.state_mut().execute("page.organize"));
     h.run_steps(4);
     assert!(h.state().views[0].organize);
-    h.event(v(false, egui::Modifiers::COMMAND));
+    h.event(egui::Event::PasteImage(std::sync::Arc::new(egui::ColorImage::filled([30, 20], egui::Color32::GRAY))));
     h.run_steps(3);
     assert_eq!(images(&h), 2, "Organize Pages pastes pages");
     h.state_mut().views[0].organize = false;
@@ -326,7 +329,7 @@ fn a_picture_on_the_clipboard_is_pasted_onto_the_page() {
     assert!(h.state_mut().execute("form.prepare"));
     h.run_steps(3);
     assert!(h.state().is_preparing());
-    h.event(v(false, egui::Modifiers::COMMAND));
+    h.event(egui::Event::PasteImage(std::sync::Arc::new(egui::ColorImage::filled([30, 20], egui::Color32::GRAY))));
     h.run_steps(3);
     assert_eq!(images(&h), 2, "Prepare Form pastes fields");
 }
