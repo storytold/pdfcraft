@@ -8,17 +8,43 @@
 use crate::PrcError;
 use crate::acof::{self, Entry};
 
+/// The most array elements the readers of one PRC stream decode together (2^24): at most 8
+/// bytes each, so 128 MiB.
+pub const MAX_DECODED_ELEMENTS: usize = 1 << 24;
+
 /// A cursor over one inflated section.
 #[derive(Debug, Clone)]
 pub struct BitReader<'a> {
     data: &'a [u8],
     pos: usize,
+    /// Array elements this reader may still decode.
+    elements: usize,
 }
 
 impl<'a> BitReader<'a> {
-    /// A reader positioned at the first bit of `data`.
+    /// A reader positioned at the first bit of `data`, allowed [`MAX_DECODED_ELEMENTS`].
     pub fn new(data: &'a [u8]) -> Self {
-        Self { data, pos: 0 }
+        Self::with_elements(data, MAX_DECODED_ELEMENTS)
+    }
+
+    /// A reader of `data` allowed `elements` array elements: what an earlier reader of the
+    /// same stream left.
+    pub(crate) fn with_elements(data: &'a [u8], elements: usize) -> Self {
+        Self { data, pos: 0, elements }
+    }
+
+    /// Array elements this reader may still decode.
+    pub(crate) fn elements_left(&self) -> usize {
+        self.elements
+    }
+
+    /// Charge `n` decoded array elements against the allowance.
+    ///
+    /// # Errors
+    /// [`PrcError::TooManyElements`] when fewer than `n` are left.
+    pub(crate) fn take_elements(&mut self, n: usize) -> Result<(), PrcError> {
+        self.elements = self.elements.checked_sub(n).ok_or(PrcError::TooManyElements { limit: MAX_DECODED_ELEMENTS })?;
+        Ok(())
     }
 
     /// Bits consumed so far.

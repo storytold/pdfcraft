@@ -9,7 +9,7 @@
 
 use std::sync::Arc;
 
-use crate::bits::BitReader;
+use crate::bits::{BitReader, MAX_DECODED_ELEMENTS};
 use crate::container::offset;
 use crate::entity::{Ctx, malformed};
 use crate::geometry::{Matrix, Vec3};
@@ -272,16 +272,23 @@ impl PrcFile {
         if !self.stores_tree() {
             return Ok((Vec::new(), Vec::new()));
         }
+        // One element allowance for the whole walk, so many sections cannot each decode a full one.
+        let mut left = MAX_DECODED_ELEMENTS;
         let mut trees = Vec::with_capacity(self.file_structures.len());
         for fs in &self.file_structures {
             let schema = fs.schema()?;
-            let tree = Ctx::new(BitReader::new(fs.section(SectionKind::Tree)), &schema, fs.authoring_version).file_structure_tree()?;
+            let mut ctx = Ctx::new(BitReader::with_elements(fs.section(SectionKind::Tree), left), &schema, fs.authoring_version);
+            let tree = ctx.file_structure_tree()?;
+            left = ctx.r.elements_left();
             // The globals carry the coordinate systems and the colours; colours alone are not
             // worth refusing the placements over.
             let globals = (|| {
-                let mut r = BitReader::new(fs.section(SectionKind::Globals));
+                let mut r = BitReader::with_elements(fs.section(SectionKind::Globals), left);
                 Schema::read(&mut r)?;
-                Ctx::new(r, &schema, fs.authoring_version).globals()
+                let mut ctx = Ctx::new(r, &schema, fs.authoring_version);
+                let globals = ctx.globals();
+                left = ctx.r.elements_left();
+                globals
             })();
             let globals = match globals {
                 Ok(g) => g,
@@ -290,7 +297,7 @@ impl PrcFile {
             };
             trees.push((fs.id, tree, globals));
         }
-        let mut r = BitReader::new(&self.model_file);
+        let mut r = BitReader::with_elements(&self.model_file, left);
         let schema = Schema::read(&mut r)?;
         let model = Ctx::new(r, &schema, self.header.authoring_version).model_file()?;
         let mut walk = Walk::new(trees.iter().map(|(id, t, g)| (*id, t, g)).collect(), rule, scope);

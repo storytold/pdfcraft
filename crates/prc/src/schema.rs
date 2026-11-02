@@ -59,6 +59,7 @@ impl Schema {
             if len > r.remaining() {
                 return Err(PrcError::Truncated("a schema program"));
             }
+            r.take_elements(len)?;
             let tokens = (0..len).map(|_| r.unsigned_integer()).collect::<Result<Vec<_>, _>>()?;
             if programs.insert(entity_type, tokens).is_some() {
                 return Err(PrcError::Malformed(format!("schema lists entity type {entity_type} twice")));

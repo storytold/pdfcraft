@@ -4,7 +4,7 @@ A reader for PRC (ISO 14739-1), the 3D model format a PDF `/3D` stream of `/Subt
 
 - **Layer:** L0, standalone. No dependency on any other PdfCraft crate.
 - **Licence:** MIT OR Apache-2.0. Inflation through `flate2` with the pure-Rust `miniz_oxide` backend.
-- `#![forbid(unsafe_code)]`. Never panics on input: every read is bounded and returns `PrcError`.
+- `#![forbid(unsafe_code)]`. Never panics on input: inflated bytes, decoded elements, schema steps and walk depth are capped, and damage returns `PrcError`.
 
 ## API
 
@@ -23,6 +23,7 @@ BitReader: bit, bits, character, unsigned_integer, integer, integer_vbn, double_
 ```
 
 - `MAX_INFLATED_BYTES` (512 MiB) bounds every section together; `TooLarge` reports the limit hit.
+- `MAX_DECODED_ELEMENTS` (2^24) bounds the array elements one pass decodes (a tree walk, or one `tessellations` call), since a single bit can decode to a 4-8 byte element; `TooManyElements` reports it.
 - Schema programs (how a newer producer describes fields it added) run under a step ceiling (2^22) and a nesting ceiling (64).
 - `Unsupported` names constructs the reader cannot step over (schema pointer fields, `Value_CurveIs3D`).
 - `Tessellation::Mesh` is a `TriangleMesh`: positions, triangles, one triangle range per face, the stored normals and

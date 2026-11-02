@@ -91,7 +91,8 @@ fn huffman(r: &mut BitReader<'_>, nbits: u32, signed: bool) -> Result<Vec<i32>, 
     if count > b.remaining() {
         return Err(PrcError::Truncated("a Huffman element count"));
     }
-    let mut out = Vec::with_capacity(count);
+    r.take_elements(count)?;
+    let mut out = Vec::with_capacity(count.min(1024));
     for _ in 0..count {
         out.push(huffman_symbol(&mut b, &codes)?);
     }
@@ -157,6 +158,7 @@ pub(crate) fn character_array(r: &mut BitReader<'_>, nbits: u32, compressed: Opt
     if n.saturating_mul(8) > r.remaining() {
         return Err(PrcError::Truncated("a character array"));
     }
+    r.take_elements(n)?;
     (0..n)
         .map(|_| {
             let c = r.character()?;
@@ -175,6 +177,7 @@ pub(crate) fn short_array(r: &mut BitReader<'_>, nbits: u32) -> Result<Vec<i32>,
     if n.saturating_mul(16) > r.remaining() {
         return Err(PrcError::Truncated("a short array"));
     }
+    r.take_elements(n)?;
     (0..n)
         .map(|_| {
             let lo = r.character()?;
@@ -221,6 +224,7 @@ pub(crate) fn bool_array(r: &mut BitReader<'_>, n: usize) -> Result<Vec<bool>, P
     if n > r.remaining() {
         return Err(PrcError::Truncated("a boolean array"));
     }
+    r.take_elements(n)?;
     (0..n).map(|_| r.bit()).collect()
 }
 
@@ -332,5 +336,20 @@ mod tests {
     fn a_bool_array_longer_than_the_data_is_truncated() {
         assert!(matches!(bool_array(&mut BitReader::new(&[0]), 9), Err(PrcError::Truncated(_))));
         assert_eq!(bool_array(&mut BitReader::new(&[0x80]), 2).unwrap(), [true, false]);
+    }
+
+    #[test]
+    fn decoded_elements_are_charged_against_one_allowance() {
+        // One bit can decode to a 4-byte element, so the byte cap alone does not bound memory.
+        let leaves = [(0b111110, 0b10, 2), (1, 0b11, 2)];
+        let mut w = W::default();
+        w.huffman(6, 2, &leaves, &[62, 1, 62]);
+        let bytes = w.bytes();
+        let mut r = BitReader::with_elements(&bytes, 2);
+        assert!(matches!(huffman(&mut r, 6, false), Err(PrcError::TooManyElements { .. })));
+        let mut r = BitReader::with_elements(&bytes, 4);
+        assert_eq!(huffman(&mut r, 6, false).unwrap(), [62, 1, 62]);
+        assert_eq!(r.elements_left(), 1);
+        assert!(matches!(bool_array(&mut BitReader::with_elements(&[0], 1), 2), Err(PrcError::TooManyElements { .. })));
     }
 }

@@ -49,6 +49,7 @@ impl<'a, 's> Ctx<'a, 's> {
         if n.saturating_mul(min_bits) > self.r.remaining() {
             return Err(PrcError::Truncated(what));
         }
+        self.r.take_elements(n)?;
         Ok(n)
     }
 

@@ -31,6 +31,14 @@ pub enum PrcError {
         /// The ceiling that was hit.
         limit: usize,
     },
+    /// The arrays read from one stream hold more elements than [`crate::MAX_DECODED_ELEMENTS`].
+    /// One bit can decode to a 4- or 8-byte element, so the inflation ceiling alone does not
+    /// bound the memory the arrays take.
+    #[error("PRC arrays decode past the {limit}-element ceiling")]
+    TooManyElements {
+        /// The ceiling that was hit.
+        limit: usize,
+    },
     /// A construct this reader does not decode; the part of the file holding it cannot be
     /// read past.
     #[error("PRC {0} is not supported")]
