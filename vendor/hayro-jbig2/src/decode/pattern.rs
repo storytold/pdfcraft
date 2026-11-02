@@ -3,15 +3,20 @@
 use super::{AdaptiveTemplatePixel, Template, generic};
 use crate::ScratchBuffers;
 use crate::arithmetic_decoder::{ArithmeticDecoder, ArithmeticDecoderContext};
-use crate::bitmap::{Bitmap, WORD_BITS, Word};
+use crate::bitmap::{Bitmap, WORD_BITS, Word, copy_work};
 use crate::error::{OverflowError, ParseError, Result};
 use crate::reader::Reader;
 use alloc::vec::Vec;
+
+/// PdfCraft patch: the most words of shifted copies a dictionary keeps, 16 MiB, where 256 patterns
+/// of 32 rows take 2 MiB. A 48-byte dictionary of 65,535 such patterns asked for 539 MB.
+const MAX_SHIFTED_WORDS: u64 = 1 << 22;
 
 /// Decode a pattern dictionary segment (7.4.4.2, 6.7).
 pub(crate) fn decode(
     header: &PatternDictionaryHeader<'_>,
     scratch: &mut ScratchBuffers,
+    room: u64,
 ) -> Result<PatternDictionary> {
     let pattern_width = header.pattern_width as u32;
     let pattern_height = header.pattern_height as u32;
@@ -133,7 +138,19 @@ pub(crate) fn decode(
     // for all possible 32-bit alignments, which later on allows us to
     // very easily blit it into the backdrop, significantly speeding up
     // the whole process.
-    let shifted_patterns = if pattern_width <= WORD_BITS && pattern_height <= WORD_BITS {
+    //
+    // PdfCraft patch: only when the table is small, and fits what the page may still hold
+    // (`room`), so that a speed-up never gets an image refused. It can be left out:
+    // `shifted_pattern` then returns `None` and the patterns are combined the slow way.
+    let shifted_words = (patterns.len() as u64)
+        .saturating_mul(32 * 2)
+        .saturating_mul(u64::from(pattern_height));
+    let pattern_words = patterns.iter().map(|p| p.words() as u64).fold(0, u64::saturating_add);
+    let shifted_patterns = if pattern_width <= WORD_BITS
+        && pattern_height <= WORD_BITS
+        && shifted_words <= MAX_SHIFTED_WORDS
+        && shifted_words.saturating_add(pattern_words) <= room
+    {
         let h = pattern_height as usize;
         let mut data = Vec::with_capacity(patterns.len() * 32 * h * 2);
         for pattern in &patterns {
@@ -180,6 +197,11 @@ impl PatternDictionary {
         let start = (pattern_idx * 32 + bit_offset as usize) * len;
         self.shifted_patterns.get(start..start + len)
     }
+
+    /// PdfCraft patch: the words the dictionary holds, its patterns and their shifted copies.
+    pub(crate) fn words(&self) -> usize {
+        self.patterns.iter().map(Bitmap::words).fold(self.shifted_patterns.len(), usize::saturating_add)
+    }
 }
 
 /// Parsed pattern dictionary segment header (7.4.4.1).
@@ -194,6 +216,17 @@ pub(crate) struct PatternDictionaryHeader<'a> {
     /// `GRAYMAX`
     pub(crate) num_patterns: u32,
     pub(crate) data: &'a [u8],
+}
+
+impl PatternDictionaryHeader<'_> {
+    /// PdfCraft patch: the work of decoding the patterns, side by side in one bitmap, and of
+    /// taking each out of it (see `bitmap::MAX_WORK`).
+    pub(crate) fn work(&self) -> u64 {
+        let (width, height) = (u32::from(self.pattern_width), u32::from(self.pattern_height));
+        let patterns = u64::from(self.num_patterns) + 1;
+        let side_by_side = u64::from(height) * (patterns.saturating_mul(u64::from(width)) + 4);
+        side_by_side.saturating_add(patterns.saturating_mul(copy_work(width, height)))
+    }
 }
 
 /// Parse a pattern dictionary segment header (7.4.4.1).

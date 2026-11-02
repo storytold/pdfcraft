@@ -98,7 +98,7 @@ impl PdfCraftApp {
     /// the Recovery dialog offers, so neither opens twice.
     ///
     /// Only one password prompt can wait at a time: the first encrypted file asks for its
-    /// password and later ones stay closed (they are in the recent-files list).
+    /// password and later ones stay closed (in the recent-files list, if there is one).
     pub fn reopen_last_files(&mut self, skip: &[String]) {
         let last = std::mem::take(&mut self.last_session);
         #[cfg(not(target_arch = "wasm32"))]
