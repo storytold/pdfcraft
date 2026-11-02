@@ -422,6 +422,69 @@ fn a_late_automatic_match_does_not_override_the_readers_navigation() {
     }
 }
 
+/// #5141: a selection becomes the search phrase on one line; white space alone, or a selection too
+/// long to be a search, is none.
+#[test]
+fn a_selection_is_a_search_phrase_on_one_line() {
+    assert_eq!(super::find::find_phrase("sample"), Some("sample".into()));
+    assert_eq!(super::find::find_phrase("  two\n  lines \t here "), Some("two lines here".into()));
+    assert_eq!(super::find::find_phrase(" \n\t "), None);
+    assert_eq!(super::find::find_phrase(""), None);
+    let limit = "a".repeat(200);
+    assert_eq!(super::find::find_phrase(&limit), Some(limit.clone()));
+    assert_eq!(super::find::find_phrase(&format!("{limit}b")), None, "past the limit");
+    // Counted in characters, not bytes.
+    assert!(super::find::find_phrase(&"é".repeat(200)).is_some());
+}
+
+/// #5141: ⌘F on a word of the page the reader is on searches from that page. An earlier search
+/// that followed its matches to this page keeps its starting page for refining the query, but a
+/// different search made from the selection must not jump back to it.
+#[test]
+fn find_for_a_selection_searches_from_the_page_the_reader_is_on() {
+    let mut v = view(5, PageLayout::Single, true);
+    v.current = 0;
+    v.texts.insert(4, Arc::new(find_test_text("sample here word")));
+    v.find = Some(Find { query: "sample".into(), ..Default::default() });
+    v.rerun_find();
+    assert_eq!((v.current, v.find.as_ref().unwrap().auto_from), (4, Some(0)), "the search followed its only match to page 5");
+    // Page 1 has the word too; page 5's selection is the one to search from.
+    v.texts.insert(0, Arc::new(find_test_text("a word first")));
+    v.select_text(4, 12, 15);
+    assert_eq!(v.selected_text().as_deref(), Some("word"));
+    v.open_find_for_selection();
+    let f = v.find.as_ref().unwrap();
+    assert_eq!(f.query, "word");
+    assert_eq!(f.matches.iter().map(|(p, _)| *p).collect::<Vec<_>>(), [0, 4]);
+    assert_eq!((f.auto_from, f.current), (Some(4), Some(1)), "from the page of the selection, to its own match");
+    assert_eq!(v.current, 4, "the view stays on the reader's page");
+    // The same selection again is no new search: the match the reader stepped to stays.
+    v.find_step(true);
+    let stepped = (v.find.as_ref().unwrap().current, v.current);
+    assert_eq!(stepped, (Some(0), 0));
+    v.select_text(0, 2, 5);
+    v.open_find_for_selection();
+    assert_eq!((v.find.as_ref().unwrap().current, v.current), stepped, "the query is already the search");
+}
+
+/// #5141: with the selection on the second page and the first the view's current one (two pages
+/// on screen), the search starts from the selection's page and finds the word there, not the
+/// same word on the first page.
+#[test]
+fn find_for_a_selection_searches_from_the_selections_page() {
+    let mut v = view(2, PageLayout::TwoUp, true);
+    v.current = 0;
+    v.texts.insert(0, Arc::new(find_test_text("a word first")));
+    v.texts.insert(1, Arc::new(find_test_text("second word here")));
+    v.select_text(1, 7, 10);
+    assert_eq!(v.selected_text().as_deref(), Some("word"));
+    v.open_find_for_selection();
+    let f = v.find.as_ref().unwrap();
+    assert_eq!(f.matches.iter().map(|(p, _)| *p).collect::<Vec<_>>(), [0, 1]);
+    assert_eq!((f.auto_from, f.current), (Some(1), Some(1)), "from the selection's page, to its match there");
+    assert_eq!(v.current, 1, "the view goes to that match");
+}
+
 /// Typing on while the results arrive must not re-anchor the search on a page the automatic
 /// flash picked. The anchor stays the page the reader was on when they started searching.
 #[test]
