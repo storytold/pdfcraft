@@ -315,25 +315,26 @@ fn flatten_in(doc: &mut Document, pages: &[usize], which: Which) -> Result<usize
         // any order of `/Annots`, except a reply that stayed because it could not be drawn: its
         // content would go with nothing in its place. What points at each annotation (a pop-up
         // by `/Parent`, a reply by `/IRT`) is gathered once, then followed from what went.
+        // `/Annots` should hold references (ISO 32000-2 Table 31), but a pop-up or reply written
+        // inline still goes with what it points at; nothing can point at it in turn.
         let mut pointing: HashMap<ObjRef, Vec<ObjRef>> = HashMap::new();
-        for entry in &list {
-            let Some(r) = entry.as_ref() else { continue };
-            if undrawn.contains(&r) {
+        let mut pointing_inline: Vec<(ObjRef, usize)> = Vec::new();
+        for (k, entry) in list.iter().enumerate() {
+            let r = entry.as_ref();
+            if r.is_some_and(|r| undrawn.contains(&r)) {
                 continue;
             }
-            let obj = doc.get(r);
+            let obj = doc.resolve(entry);
             let Some(d) = obj.as_dict() else { continue };
-            if d.name(b"Subtype") == Some(b"Popup")
-                && let Some(p) = d.reference(b"Parent")
-            {
-                pointing.entry(p).or_default().push(r);
-            }
+            let popup_of = d.reference(b"Parent").filter(|_| d.name(b"Subtype") == Some(b"Popup"));
             // Only a reply goes with what it answers: a `/RT /Group` member was drawn (and went) or
             // stays, hidden or undrawable, as any annotation.
-            if is_reply(doc, d)
-                && let Some(p) = d.reference(b"IRT")
-            {
-                pointing.entry(p).or_default().push(r);
+            let reply_to = d.reference(b"IRT").filter(|_| is_reply(doc, d));
+            for p in popup_of.into_iter().chain(reply_to) {
+                match r {
+                    Some(r) => pointing.entry(p).or_default().push(r),
+                    None => pointing_inline.push((p, k)),
+                }
             }
         }
         let mut follow: Vec<ObjRef> = gone.iter().copied().collect();
@@ -344,6 +345,7 @@ fn flatten_in(doc: &mut Document, pages: &[usize], which: Which) -> Result<usize
                 }
             }
         }
+        gone_inline.extend(pointing_inline.into_iter().filter(|(p, _)| gone.contains(p)).map(|(_, k)| k));
         let kept: Vec<Object> = list
             .iter()
             .enumerate()
