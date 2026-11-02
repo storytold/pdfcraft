@@ -3497,7 +3497,7 @@ source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icon
 licence = "ISC AND MIT"
 licence_file = "assets/icons/LICENSE-lucide.txt"
 kind = "icon"
-usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+usage = "UI icon, embedded via crates/ui-egui/src/widgets/icon_data.rs"
 sha256 = "d4985fc71174d108e322c3b25cb6abe2837a115fe3f239a1918645db436743ec"
 
 [[asset]]
