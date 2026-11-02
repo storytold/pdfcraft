@@ -306,6 +306,14 @@ impl Stream {
         self.decode_chain(max, decode)
     }
 
+    /// [`Stream::decoded_within`] spending from `work`, what an operation may still do across a
+    /// document's images ([`pdfcraft_filters::decode_tolerant_within`]).
+    pub(crate) fn decoded_spending(&self, max: usize, work: &mut u64) -> Result<Vec<u8>, CosError> {
+        let filter = |e: pdfcraft_filters::FilterError| CosError::Filter(e.to_string());
+        let chain = self.readable_filters().map_err(filter)?;
+        pdfcraft_filters::decode_tolerant_within(&chain, &self.raw, max.min(MAX_DECODED), work).map_err(filter)
+    }
+
     /// The stream decoded through its filters by `decode`, or copied when it has none, within
     /// `max` and [`MAX_DECODED`].
     fn decode_chain(
