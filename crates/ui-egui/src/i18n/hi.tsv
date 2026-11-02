@@ -2,6 +2,11 @@
 #   context <TAB> English source <TAB> translation
 #   Clean-room translation written from the English source's meaning.
 #   License: MIT OR Apache-2.0.
+
+# Untranslated: English text until a translator fills these in.
+	Lowering this forgets the oldest files. At 0 there is no list.	Lowering this forgets the oldest files. At 0 there is no list.
+	Recent files to keep	Recent files to keep
+
 	Menu	मेनू
 	File	फ़ाइल
 	Edit	संपादित करें
@@ -544,6 +549,9 @@
 	Clean Up	सफ़ाई
 	Color Images	रंगीन छवियाँ
 	Grayscale Images	ग्रेस्केल छवियाँ
+	Monochrome Images	मोनोक्रोम छवियाँ
+	CCITT Group 4	CCITT समूह 4
+	JBIG2 (lossless)	JBIG2 (हानिरहित)
 	Bicubic downsampling to	बाइक्यूबिक डाउनसैंपलिंग तक
 	for images above	इससे बड़ी छवियों के लिए
 	Compression	संपीड़न
@@ -757,14 +765,9 @@
 	Copy Image in Original Format	छवि मूल प्रारूप में कॉपी करें
 	The image has been copied as a {ext} file	छवि {ext} फ़ाइल के रूप में कॉपी हो गई है
 	The page has changed; select the image again	पृष्ठ बदल गया है; छवि फिर से चुनें
-	Check for updates	अपडेट के लिए जाँचें
 	No check has run yet.	अभी तक कोई जाँच नहीं चली है।
-	Checking for a newer version…	नए संस्करण की जाँच हो रही है…
 	PdfCraft {v} is available.	PdfCraft {v} उपलब्ध है।
 	You have version {c}. Download the new version from its release page.	आपके पास संस्करण {c} है। नया संस्करण इसके रिलीज़ पृष्ठ से डाउनलोड करें।
-	PdfCraft {c} is up to date.	PdfCraft {c} अद्यतन है।
-	Couldn't check for updates: {e}	अपडेट की जाँच नहीं हो सकी: {e}
-	You have version {c}. All releases are listed at {page}.	आपके पास संस्करण {c} है। सभी रिलीज़ {page} पर सूचीबद्ध हैं।
 	Asks GitHub for the latest release. Nothing is downloaded or installed automatically.	GitHub से नवीनतम रिलीज़ की क्वेरी करता है। कुछ भी स्वतः डाउनलोड या इंस्टॉल नहीं होता।
 	Download	डाउनलोड
 	Later	बाद में
@@ -808,6 +811,14 @@
 	Applies to 1 page	1 पृष्ठ पर लागू
 	Applies to {n} pages	{n} पृष्ठों पर लागू
 	Replaces the existing one on those pages.	उन पृष्ठों पर मौजूदा वाले को बदल देता है।
+	Checking pages…	पृष्ठों की जाँच हो रही है…
+	Page {pages} paints its own white backdrop, which would hide the background. Replace it	पृष्ठ {pages} की अपनी सफ़ेद भराई है, जो पृष्ठभूमि को छिपा देगी। इसे बदलें
+	Pages {pages} paint their own white backdrop, which would hide the background. Replace it	पृष्ठ {pages} की अपनी सफ़ेद भराई है, जो पृष्ठभूमि को छिपा देगी। इसे बदलें
+	Removing the background puts the page's own backdrop back.	पृष्ठभूमि हटाने पर पृष्ठ की अपनी सफ़ेद भराई वापस आ जाती है।
+	A picture covers page {pages} (a scan?), so the background won't show there.	एक छवि पृष्ठ {pages} को ढकती है (स्कैन?), इसलिए वहाँ पृष्ठभूमि नहीं दिखेगी।
+	Pictures cover pages {pages} (scans?), so the background won't show there.	छवियाँ पृष्ठ {pages} को ढकती हैं (स्कैन?), इसलिए वहाँ पृष्ठभूमि नहीं दिखेगी।
+	Page {pages} changed after the background was added, so its own white backdrop stays off. It looks the same on white paper.	पृष्ठभूमि जोड़ने के बाद पृष्ठ {pages} बदल गया, इसलिए उसकी अपनी सफ़ेद भराई बंद रहती है। सफ़ेद कागज़ पर यह वैसा ही दिखता है।
+	Pages {pages} changed after the background was added, so their own white backdrops stay off. They look the same on white paper.	पृष्ठभूमि जोड़ने के बाद पृष्ठ {pages} बदल गए, इसलिए उनकी अपनी सफ़ेद भराई बंद रहती है। सफ़ेद कागज़ पर वे वैसे ही दिखते हैं।
 	PDF or image	पीडीएफ़ या छवि
 	No file chosen	कोई फ़ाइल नहीं चुनी गई
 	Page number	पृष्ठ संख्या
@@ -2721,6 +2732,12 @@ theme	Appearance	स्वरूप
 	Links on page	Links on page
 	Loop	Loop
 	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.
+	Reads {name}, which the form doesn't have, so it gets no value there.	Reads {name}, which the form doesn't have, so it gets no value there.
+	Its script also reads fields whose names it builds as it runs, so those reads can't be checked.	Its script also reads fields whose names it builds as it runs, so those reads can't be checked.
+	Missing field	Missing field
+	Unchecked reads	Unchecked reads
+	{field} reads fields named as it runs	{field} reads fields named as it runs
+	Some names are built as it runs	Some names are built as it runs
 	Move only what must move, so every field calculates after the fields it reads.	Move only what must move, so every field calculates after the fields it reads.
 	Moves only what must move	Moves only what must move
 	No field reads it	No field reads it
@@ -2774,6 +2791,31 @@ theme	Appearance	स्वरूप
 	field names can't contain a period: {name}	फ़ील्ड के नामों में पूर्ण विराम (.) नहीं हो सकता: {name}
 	two cells would both be named {name}	दो सेल का नाम {name} हो जाएगा
 	a field named {name} already exists	{name} नाम का फ़ील्ड पहले से मौजूद है
+	Clear search	खोज साफ़ करें
+	Edit this PDF	इस PDF को संपादित करें
+	Export this PDF	इस PDF को निर्यात करें
+	Find text or tools	पाठ या उपकरण ढूंढें
+	Hand Tool	हैंड टूल
+	Marquee Zoom	मार्की ज़ूम
+	Pin	पिन करें
+	Pin a tool…	उपकरण पिन करें…
+	Pin to Home	होम पर पिन करें
+	Pin tools to Home	होम पर उपकरण पिन करें
+	Pin your favorite tools here for quick access.	त्वरित पहुँच के लिए अपने पसंदीदा उपकरण यहाँ पिन करें।
+	Pinned	पिन किया गया
+	Pinned Tools	पिन किए गए उपकरण
+	Search tools…	उपकरण खोजें…
+	Select Tool	चयन उपकरण
+	Select tools to display on your Home page for quick access.	त्वरित पहुँच के लिए अपने होम पेज पर प्रदर्शित करने हेतु उपकरण चुनें।
+	Unpin from Home	होम से अनपिन करें
+	Unpin tool	उपकरण अनपिन करें
+	Arrange image	छवि व्यवस्थित करें
+	Bring forward	आगे लाएँ
+	Bring to front	सबसे आगे लाएँ
+	Crop	क्रॉप करें
+	Remove crop	क्रॉप हटाएँ
+	Send backward	पीछे भेजें
+	Send to back	सबसे पीछे भेजें
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	आज
@@ -2794,3 +2836,13 @@ theme	Appearance	स्वरूप
 	Rotate the selected pages clockwise	चयनित पृष्ठों को दक्षिणावर्त घुमाएँ
 	Extract the selected pages…	चयनित पृष्ठ निकालें…
 	Delete the selected pages	चयनित पृष्ठ हटाएँ
+
+# Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
+	Options for this reply	इस जवाब के विकल्प
+
+# Image paste and Home notifications (AI-assisted; not separately native-reviewed)
+	Search…	खोजें…
+	Image pasted	छवि चिपकाई गई
+	No image on clipboard to paste	चिपकाने के लिए क्लिपबोर्ड में कोई छवि नहीं है
+	Pinned {tool} to Home	{tool} को होम पर पिन किया गया
+	Unpinned {tool} from Home	{tool} को होम से अनपिन किया गया
