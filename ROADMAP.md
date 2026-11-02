@@ -219,6 +219,10 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 ## Progress log
 
+- **2026-11-02 (M10, #2192):** Windows lists printer names without waiting for every driver's capabilities. Selected-printer reads handle cancellation, retry and refresh; Properties invalidates only its printer, and delayed capability answers keep Print controls in place. Read-only backend timing: 49.9 s versus 32 ms. Regression and native read-only checks cover discovery and dialog lifetime; physical output remains unqualified. Estimates unchanged; see `docs/windows-printer-discovery.md`.
+
+- **2026-11-01 (M14):** Remove inherited strict Clippy diagnostics with equivalent Option, match and boolean expressions. No user-facing behavior or readiness estimate changes.
+
 - **2026-11-01 (M14, #5572):** Preferences ▸ Documents and view sets how many recent files to keep, from 0 to 50 with 12 by default. At 0 Home has no Recent section and File ▸ Open Recent is disabled. The list is cut when Preferences closes, so the number can pass through 0 on its way to another.
 
 - **2026-11-01 (M5/M14, customizable hotbar, freehand highlight, and moveable navigation rail):** Added Freehand-Highlight (`/Subtype /Ink`, `/IT /FreehandHighlight`, Multiply blending, 100 pt max line width) inside the standard Highlight flyout and headless `comment_add`; added a customizable floating or side-docked hotbar with a full-side chrome strip mode, settings gear icon anchored at the bar end, and 24–64 px sizing; and added Left/Right docking for the navigation rail (`rail_side`). Focused unit and integration tests pass across `annot`, `automation`, and `ui-egui`. Estimates unchanged.
