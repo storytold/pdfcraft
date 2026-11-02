@@ -90,6 +90,9 @@ pub(super) struct Want {
     pub(super) text: String,
     /// Create the node even for an empty value (an instance of a repeating subform).
     pub(super) ensure: bool,
+    /// A reset ([`DataOp::Reset`](super::DataOp::Reset)): a node holding a multi-select list's picks
+    /// takes the text as its picks.
+    pub(super) picks: bool,
 }
 
 /// `tpl`, or the document's own template when none is given (parsed once).
@@ -137,7 +140,7 @@ pub(super) fn wanted(doc: &Document, fields: &[FieldDatum], tpl: Option<&Templat
             FieldData::Radio(sel) => radio_dataset_value(doc, f, sel),
             FieldData::None => continue,
         };
-        out.push(Want { som, path, text, ensure: false });
+        out.push(Want { som, path, text, ensure: false, picks: false });
     }
     out
 }

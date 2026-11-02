@@ -2,27 +2,71 @@ use super::model::{
     MAX_ALERTS, MAX_CONSOLE, MAX_DEPTH, MAX_EFFECTS, MAX_NODES, MAX_PAYLOAD, MAX_VALUE, XfaDoc, XfaEffect, XfaKind, XfaNode, clip, clip_value,
     effect_key, payload,
 };
+use std::sync::Arc;
+
 use super::{Context, HashMap, JsResult, Message, RefCell, error};
 
-/// One node of the flattened form, shared by the JavaScript and FormCalc engines.
+/// One node of the flattened form, shared by the JavaScript and FormCalc engines. Its text is
+/// shared (`Arc<str>`), so the copy each script starts from costs little: the scripts of one
+/// event start from the same flattened form until it changes (see [`XHost::new`]).
+#[derive(Clone)]
 pub(crate) struct HNode {
-    pub(crate) name: String,
-    pub(crate) som: String,
+    pub(crate) name: Arc<str>,
+    pub(crate) som: Arc<str>,
     pub(crate) kind: XfaKind,
     pub(crate) value: String,
     pub(crate) numeric: bool,
-    pub(crate) presence: String,
-    pub(crate) access: String,
+    pub(crate) presence: Arc<str>,
+    pub(crate) access: Arc<str>,
     pub(crate) repeatable: bool,
     pub(crate) occur_min: usize,
     pub(crate) occur_max: Option<usize>,
     pub(crate) index: usize,
     pub(crate) parent: Option<usize>,
-    pub(crate) children: Vec<usize>,
+    pub(crate) children: Arc<[usize]>,
     /// Removed by `removeInstance`: skipped everywhere.
     pub(crate) gone: bool,
     /// See [`XfaNode::formatted`]; dropped when a script sets the value, which it no longer shows.
-    pub(crate) formatted: Option<String>,
+    pub(crate) formatted: Option<Arc<str>>,
+}
+
+thread_local! {
+    /// The form the last script on this thread started from, flattened: the next script of the
+    /// event starts from a copy of it while the engine sends the same form.
+    static BASE: std::cell::RefCell<Option<(Arc<XfaNode>, Vec<HNode>)>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Let go of the form the scripts on this thread started from.
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn forget_base() {
+    BASE.with(|b| b.borrow_mut().take());
+}
+
+/// `root` flattened under a synthetic `form` node (index 0).
+fn flattened(root: &XfaNode) -> Vec<HNode> {
+    let mut nodes = vec![HNode {
+        name: "form".into(),
+        som: "".into(),
+        kind: XfaKind::Form,
+        value: String::new(),
+        numeric: false,
+        presence: "visible".into(),
+        access: "open".into(),
+        repeatable: false,
+        occur_min: 0,
+        occur_max: None,
+        index: 0,
+        parent: None,
+        children: Arc::from([]),
+        gone: false,
+        formatted: None,
+    }];
+    if let Some(ci) = flatten(root, Some(0), &mut nodes, 1)
+        && let Some(f) = nodes.get_mut(0)
+    {
+        f.children = Arc::from([ci]);
+    }
+    nodes
 }
 
 /// The form as a script sees and changes it, with the effects it records.
@@ -53,11 +97,25 @@ pub(crate) struct XHost {
 impl XHost {
     /// The host for a script on `root` (the template's root subform), with `this` at the node
     /// named by `target`. `xfa.form` is a synthetic root whose child is the root subform.
-    pub(crate) fn new(root: XfaNode, target: &str, doc: &XfaDoc) -> XHost {
-        let form = XfaNode { name: "form".into(), kind: Some(XfaKind::Form), children: vec![root], ..Default::default() };
-        let mut nodes = Vec::new();
-        flatten(&form, None, &mut nodes, 0);
-        let current = nodes.iter().position(|n| n.som == target && n.kind != XfaKind::Form).unwrap_or(1.min(nodes.len().saturating_sub(1)));
+    /// With `reuse`, the flattened form is kept on this thread for the next script given the
+    /// same `root` (the scripts of one event, [`crate::xfa_session`]).
+    pub(crate) fn new(root: Arc<XfaNode>, reuse: bool, target: &str, doc: &XfaDoc) -> XHost {
+        let nodes = if !reuse {
+            flattened(&root)
+        } else {
+            BASE.with(|b| {
+                let mut b = b.borrow_mut();
+                match b.as_ref() {
+                    Some((r, nodes)) if Arc::ptr_eq(r, &root) => nodes.clone(),
+                    _ => {
+                        let nodes = flattened(&root);
+                        *b = Some((root, nodes.clone()));
+                        nodes
+                    }
+                }
+            })
+        };
+        let current = nodes.iter().position(|n| &*n.som == target && n.kind != XfaKind::Form).unwrap_or(1.min(nodes.len().saturating_sub(1)));
         XHost {
             nodes,
             effects: Vec::new(),
@@ -122,8 +180,8 @@ impl XHost {
         }
         if let Some(n) = self.nodes.get_mut(i) {
             match &e {
-                XfaEffect::SetPresence { presence, .. } => n.presence = presence.clone(),
-                XfaEffect::SetAccess { access, .. } => n.access = access.clone(),
+                XfaEffect::SetPresence { presence, .. } => n.presence = presence.as_str().into(),
+                XfaEffect::SetAccess { access, .. } => n.access = access.as_str().into(),
                 _ => {}
             }
         }
@@ -220,7 +278,7 @@ impl XHost {
         if n.gone || !matches!(n.kind, XfaKind::Field | XfaKind::ExclGroup) {
             return false;
         }
-        let som = n.som.clone();
+        let som = n.som.to_string();
         // Cut here, not only in the effect: later reads in the script see what is saved, and
         // the snapshot stays bounded however often a long value is written.
         let (text, cut) = clip_value(text);
@@ -257,21 +315,21 @@ fn flatten(n: &XfaNode, parent: Option<usize>, out: &mut Vec<HNode>, depth: usiz
     }
     let idx = out.len();
     out.push(HNode {
-        name: n.name.clone(),
-        som: n.som.clone(),
+        name: n.name.as_str().into(),
+        som: n.som.as_str().into(),
         kind: n.kind.unwrap_or(XfaKind::Subform),
         value: n.value.clone(),
         numeric: n.numeric,
-        presence: if n.presence.is_empty() { "visible".into() } else { n.presence.clone() },
-        access: if n.access.is_empty() { "open".into() } else { n.access.clone() },
+        presence: if n.presence.is_empty() { "visible".into() } else { n.presence.as_str().into() },
+        access: if n.access.is_empty() { "open".into() } else { n.access.as_str().into() },
         repeatable: n.repeatable,
         occur_min: n.occur_min,
         occur_max: n.occur_max,
         index: n.index,
         parent,
-        children: Vec::new(),
+        children: Arc::from([]),
         gone: false,
-        formatted: n.formatted.clone(),
+        formatted: n.formatted.as_deref().map(Arc::from),
     });
     let mut kids = Vec::new();
     for c in &n.children {
@@ -280,7 +338,7 @@ fn flatten(n: &XfaNode, parent: Option<usize>, out: &mut Vec<HNode>, depth: usiz
         }
     }
     if let Some(h) = out.get_mut(idx) {
-        h.children = kids;
+        h.children = kids.into();
     }
     Some(idx)
 }

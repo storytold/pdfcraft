@@ -277,11 +277,11 @@ impl Interp<'_> {
                         Some(e) => {
                             let raw = self.eval(e)?;
                             match self.nodes_of(&raw).first() {
-                                Some(i) => self.node(*i).map(|n| n.som.clone()).unwrap_or_default(),
+                                Some(i) => self.node(*i).map(|n| n.som.to_string()).unwrap_or_default(),
                                 None => {
                                     let s = self.to_str(&raw);
                                     let found = resolve_som(self.h, self.h.current, &s);
-                                    found.first().and_then(|i| self.node(*i)).map(|n| n.som.clone()).unwrap_or(s)
+                                    found.first().and_then(|i| self.node(*i)).map(|n| n.som.to_string()).unwrap_or(s)
                                 }
                             }
                         }
@@ -396,7 +396,7 @@ impl Interp<'_> {
         match target {
             Val::Node(i) => {
                 let Some(n) = self.node(i) else { return Ok(()) };
-                let som = n.som.clone();
+                let som = n.som.to_string();
                 match prop {
                     "rawValue" | "value" | "formattedValue" => {
                         let text = self.to_str(&v);

@@ -166,7 +166,7 @@ pub fn write_data_image(
     }
     let ct: String = content_type.chars().filter(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '-' | '.' | '+')).take(64).collect();
     let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
-    let ensure = [Want { som: String::new(), path: path.clone(), text: String::new(), ensure: true }];
+    let ensure = [Want { som: String::new(), path: path.clone(), text: String::new(), ensure: true, picks: false }];
     rewrite(doc, &[Op::Values(&ensure), Op::Picture(path, &ct, &b64)], reuse)
 }
 
