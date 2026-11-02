@@ -5,7 +5,8 @@ use crate::convert::{convert_dash_array, convert_line_cap, convert_line_join, co
 use crate::device::Device;
 use crate::font::{Font, FontData, FontQuery, StandardFont};
 use crate::interpret::path::{
-    apply_pending_clip, close_path, fill_path, fill_path_impl, fill_stroke_path, stroke_path,
+    apply_pending_clip, begin_subpath_after_close, close_path, fill_path, fill_path_impl,
+    fill_stroke_path, stroke_path,
 };
 use crate::interpret::state::{TextStateFont, handle_gs};
 use crate::interpret::text::TextRenderingMode;
@@ -568,6 +569,7 @@ fn interpret_window<'a>(
             }
             TypedInstruction::LineTo(m) => {
                 if !context.path().elements().is_empty() {
+                    begin_subpath_after_close(context);
                     // PdfCraft patch (61): a segment to the point it starts from is kept as it
                     // is. Upstream nudged its end a ten-thousandth of a point to the right so
                     // round caps drew a dot, which also gave butt and square caps a direction
@@ -580,6 +582,7 @@ fn interpret_window<'a>(
             }
             TypedInstruction::CubicTo(c) => {
                 if !context.path().elements().is_empty() {
+                    begin_subpath_after_close(context);
                     let p1 = Point::new(c.0.as_f64(), c.1.as_f64());
                     let p2 = Point::new(c.2.as_f64(), c.3.as_f64());
                     let p3 = Point::new(c.4.as_f64(), c.5.as_f64());
@@ -591,6 +594,7 @@ fn interpret_window<'a>(
             }
             TypedInstruction::CubicStartTo(c) => {
                 if !context.path().elements().is_empty() {
+                    begin_subpath_after_close(context);
                     let p1 = *context.last_point();
                     let p2 = Point::new(c.0.as_f64(), c.1.as_f64());
                     let p3 = Point::new(c.2.as_f64(), c.3.as_f64());
@@ -602,6 +606,7 @@ fn interpret_window<'a>(
             }
             TypedInstruction::CubicEndTo(c) => {
                 if !context.path().elements().is_empty() {
+                    begin_subpath_after_close(context);
                     let p2 = Point::new(c.0.as_f64(), c.1.as_f64());
                     let p3 = Point::new(c.2.as_f64(), c.3.as_f64());
 

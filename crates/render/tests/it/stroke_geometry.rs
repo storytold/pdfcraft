@@ -121,6 +121,33 @@ fn degenerate_subpaths_leave_the_rest_of_the_path_alone() {
     assert_eq!(px(&page, 20, 20), BLUE, "a segment a hundredth of a point long is stroked with its caps");
 }
 
+/// `h` "terminates the current subpath. Appending another segment to the current path shall begin
+/// a new subpath, even if the new segment begins at the endpoint reached by the h operation"
+/// (ISO 32000-2 §8.5.2.1, Table 58). So a segment after `h` back to the point `h` reached is a
+/// degenerate subpath of its own: a round dot with round caps, nothing with the others. The closed
+/// line from x 10 to x 30 turns back on itself at x 10, where the miter join falls back to a bevel
+/// and paints nothing left of x 10; a 6 pt dot at (10, 20) reaches x 7.
+#[test]
+fn a_segment_after_h_begins_a_new_subpath() {
+    let page = render("0 0 1 RG 6 w 1 J 10 20 m 30 20 l h S", "<< >>");
+    assert_eq!(px(&page, 20, 20), BLUE, "the closed line");
+    assert_eq!(px(&page, 8, 20), WHITE, "a closed line has no cap at its start");
+    for (what, after) in [("l", "10 20 l"), ("c", "10 20 10 20 10 20 c"), ("v", "10 20 10 20 v"), ("y", "10 20 10 20 y")] {
+        let page = render(&format!("0 0 1 RG 6 w 1 J 10 20 m 30 20 l h {after} S"), "<< >>");
+        assert_eq!(px(&page, 20, 20), BLUE, "{what} after h: the closed line");
+        assert_eq!(px(&page, 8, 20), BLUE, "{what} after h, round caps: a dot at the point h reached");
+        for cap in ["0 J", "2 J"] {
+            let page = render(&format!("0 0 1 RG 6 w {cap} 10 20 m 30 20 l h {after} S"), "<< >>");
+            assert_eq!(px(&page, 20, 20), BLUE, "{what} after h with {cap}: the closed line");
+            assert_eq!(px(&page, 8, 20), WHITE, "{what} after h with {cap}: no dot");
+        }
+    }
+    // A segment after h that goes somewhere is an open subpath with caps of its own: with square
+    // caps the line from (10, 20) down to (10, 35) reaches y 38 (device row 2).
+    let page = render("0 0 1 RG 6 w 2 J 10 20 m 30 20 l h 10 35 l S", "<< >>");
+    assert_eq!(px(&page, 10, 3), BLUE, "the new subpath's projecting cap");
+}
+
 /// §8.4.3.6 asks for dash numbers that are nonnegative and not all zero, but not how to recover
 /// from others. They draw a solid line, as an empty dash array does; before, `[0 0]` was cut into
 /// hundredth-of-a-point dashes and came out a faint, half-covered line.

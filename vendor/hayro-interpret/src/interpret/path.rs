@@ -67,6 +67,21 @@ pub(crate) fn close_path(context: &mut Context<'_>) {
     }
 }
 
+/// PdfCraft patch (61): call before appending a segment. ISO 32000-2 §8.5.2.1 (Table 58) says `h`
+/// "terminates the current subpath. Appending another segment to the current path shall begin a
+/// new subpath, even if the new segment begins at the endpoint reached by the h operation." kurbo
+/// takes a segment after a `ClosePath` on from the closed subpath's start without a `MoveTo`, so
+/// `resolve_degenerate_subpaths` saw the closed subpath and a degenerate one after it (`h` then an
+/// `l` to the same point) as one subpath and drew no round dot. A `MoveTo` to the point `h`
+/// reached starts the new subpath.
+pub(crate) fn begin_subpath_after_close(context: &mut Context<'_>) {
+    if context.path().elements().last() == Some(&PathEl::ClosePath) {
+        let p = *context.last_point();
+        *(context.sub_path_start_mut()) = p;
+        context.path_mut().move_to(p);
+    }
+}
+
 pub(crate) fn fill_path_impl<'a>(
     context: &mut Context<'a>,
     device: &mut impl Device<'a>,
