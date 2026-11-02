@@ -147,6 +147,7 @@ pub(crate) fn forget_typing_before(ctx: &egui::Context, id: egui::Id, doc: pdfcr
     // A box new to the text box starts with nothing of the last one's: no history, caret,
     // selection or rows' alignments by text.
     let (state, rows) = back.unwrap_or_default();
+    crate::text_input::forget(ctx, id);
     egui::TextEdit::store_state(ctx, id, state);
     ctx.data_mut(|d| {
         d.insert_temp(owner, doc);
@@ -948,6 +949,11 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
                 }
                 look = Some((Arc::clone(&output.galley), output.galley_pos));
                 let r = output.response;
+                // Native TextEdit promotes its preedit to Selection on a caret click/drag.
+                // Mirror that completed native transition; never change text or IME ranges.
+                if r.clicked() || r.dragged() {
+                    crate::text_input::forget(ui.ctx(), input);
+                }
                 if ed.focus {
                     r.request_focus();
                     if let Some(range) = &ed.selection {
@@ -969,11 +975,12 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
                     ctx.request_repaint();
                 }
                 let lost = lost_focus_once(&r, &mut ed.had_focus);
-                let esc = ui.input(|i| i.key_pressed(egui::Key::Escape));
+                let composing = crate::text_input::composing_for(ctx, input);
+                let esc = !composing && ui.input(|i| i.key_pressed(egui::Key::Escape));
                 let apply = ui.input(|i| i.key_pressed(egui::Key::Enter) && i.modifiers.command);
                 if esc {
                     done = Some(false);
-                } else if apply || (lost && !outside && !hold) {
+                } else if !composing && (apply || (lost && !outside && !hold)) {
                     done = Some(true);
                 }
             });

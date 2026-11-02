@@ -416,6 +416,7 @@ impl eframe::App for PdfCraftApp {
         let size = ctx.input(|i| i.viewport().inner_rect).map_or(egui::Vec2::ZERO, |r| r.size());
         drag_pointer::locate_wheel(raw, known, size, || drag_pointer::in_window(ctx));
         self.prepare_raw_input(ctx, raw);
+        crate::text_input::protect_raw(ctx, &mut raw.events);
         if raw.hovered_files.is_empty() && raw.dropped_files.is_empty() {
             return;
         }
@@ -582,6 +583,7 @@ impl eframe::App for PdfCraftApp {
             let events = std::mem::take(&mut self.menu_input);
             ctx.input_mut(|i| i.events.extend(events));
         }
+        crate::text_input::protect_current(ctx);
         self.shortcuts(ctx);
         // Scrolling and group-drag previews are transient: never resume after changing tabs,
         // opening a modal/palette, or returning to a window that lost focus.
