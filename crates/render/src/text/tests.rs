@@ -1788,18 +1788,32 @@ fn a_chinese_label_spread_by_character_spacing_keeps_its_characters_together() {
         assert_eq!(line(tc), "受文者如正本", "{tc} pt of character spacing");
     }
 
-    // A gap that stands on its own is still a word gap: two cells of a row, two character
-    // widths apart, keep the space between them.
-    let mut v = Vec::new();
-    for (i, ch) in ["姓", "名"].iter().enumerate() {
-        let x = i as f32 * 12.0;
-        v.push(em_box(ch, x, 0.0, x + 12.0, 12.0));
+    // A gap that stands on its own is still a word gap. The width is what the review caught: a
+    // whole line height swallowed any isolated gap under one em, so two cells of a form row set
+    // 9pt apart on a 12pt line copied as one word. Half a line height upwards is a gap, which is
+    // the width Hangul already used; below it is still spacing.
+    let cells = |gap: f32| {
+        let mut v = Vec::new();
+        for (i, ch) in ["姓", "名"].iter().enumerate() {
+            let x = i as f32 * 12.0;
+            v.push(em_box(ch, x, 0.0, x + 12.0, 12.0));
+        }
+        for (i, ch) in ["王", "小", "明"].iter().enumerate() {
+            let x = 24.0 + gap + i as f32 * 12.0;
+            v.push(em_box(ch, x, 0.0, x + 12.0, 12.0));
+        }
+        layout(v).plain_text()
+    };
+    // Two character widths, as before, and then the band that used to be lost: half a line
+    // height and up. 6.0 is the boundary itself, which is a gap.
+    for gap in [24.0, 18.0, 12.0, 9.0, 7.2, 6.0] {
+        assert_eq!(cells(gap), "姓名 王小明", "{gap} pt between the two cells");
     }
-    for (i, ch) in ["王", "小", "明"].iter().enumerate() {
-        let x = 48.0 + i as f32 * 12.0;
-        v.push(em_box(ch, x, 0.0, x + 12.0, 12.0));
+    // And below it, still spacing rather than a gap -- one isolated narrow gap must not start
+    // splitting a label that happens to carry one.
+    for gap in [5.4, 3.0, 1.2, 0.0] {
+        assert_eq!(cells(gap), "姓名王小明", "{gap} pt is spacing, not a gap");
     }
-    assert_eq!(layout(v).plain_text(), "姓名 王小明");
 }
 
 /// Korean is written with spaces between words (띄어쓰기), and a file may write them as
