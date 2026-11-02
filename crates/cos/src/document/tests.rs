@@ -634,6 +634,20 @@ fn an_edited_object_stream_leaves_other_clones_members_alone() {
     assert_eq!(text_of(&doc, 3, b"Hidden").as_deref(), Some("yes"), "the replacement reached another clone");
 }
 
+/// An object stream framed by one clone's edit of its indirect `/Length` is that clone's alone:
+/// the others still read its members within the file's length.
+#[test]
+fn an_edited_object_stream_length_leaves_other_clones_members_alone() {
+    let file = Arc::new(object_stream_file_with("3 0 ", "<< /Hidden (cut endstream here) >>", 0, true));
+    let doc = Document::open(file).unwrap();
+    let mut edited = doc.clone();
+    // Ends the stream at the `endstream` inside the member's string.
+    let cut = "3 0 << /Hidden (cut".len();
+    edited.set(ObjRef::new(6, 0), Object::Int(cut as i64));
+    assert_ne!(text_of(&edited, 3, b"Hidden").as_deref(), Some("cut endstream here"), "the edited length was not used");
+    assert_eq!(text_of(&doc, 3, b"Hidden").as_deref(), Some("cut endstream here"), "the edited length reached another clone");
+}
+
 /// A classic table with `/Size` rows and object 0's free entry first, its subsection numbered
 /// `1 n` instead of `0 n` (#2676): every row is one number off.
 fn misnumbered_table(start: u32) -> Vec<u8> {
@@ -1367,8 +1381,14 @@ fn hybrid_reference_files_read_the_xref_stream_too() {
 /// stream puts it at position `member` of object stream 4, which holds `header` (the number
 /// and offset pairs) and then `members`.
 fn object_stream_file(header: &str, members: &str, member: u8) -> Vec<u8> {
+    object_stream_file_with(header, members, member, false)
+}
+
+/// [`object_stream_file`], with the stream's `/Length` in object 6 when `indirect_length`.
+fn object_stream_file_with(header: &str, members: &str, member: u8, indirect_length: bool) -> Vec<u8> {
     let mut out = b"%PDF-1.5\n".to_vec();
-    let mut offs = [0usize; 6];
+    let size = if indirect_length { 7 } else { 6 };
+    let mut offs = vec![0usize; size];
     let mut obj = |out: &mut Vec<u8>, n: usize, body: &[u8]| {
         offs[n] = out.len();
         out.extend_from_slice(format!("{n} 0 obj\n").as_bytes());
@@ -1379,7 +1399,8 @@ fn object_stream_file(header: &str, members: &str, member: u8) -> Vec<u8> {
     obj(&mut out, 2, b"<< /Type /Pages /Kids [] /Count 0 /Extra 3 0 R >>");
     let count = header.split_whitespace().count() / 2;
     let inner = format!("{header}{members}");
-    let mut stm = format!("<< /Type /ObjStm /N {count} /First {} /Length {} >>\nstream\n", header.len(), inner.len()).into_bytes();
+    let length = if indirect_length { "6 0 R".to_string() } else { inner.len().to_string() };
+    let mut stm = format!("<< /Type /ObjStm /N {count} /First {} /Length {length} >>\nstream\n", header.len()).into_bytes();
     stm.extend_from_slice(inner.as_bytes());
     stm.extend_from_slice(b"\nendstream");
     obj(&mut out, 4, &stm);
@@ -1388,13 +1409,16 @@ fn object_stream_file(header: &str, members: &str, member: u8) -> Vec<u8> {
     xs.extend_from_slice(&data);
     xs.extend_from_slice(b"\nendstream");
     obj(&mut out, 5, &xs);
+    if indirect_length {
+        obj(&mut out, 6, inner.len().to_string().as_bytes());
+    }
     let table = out.len();
-    out.extend_from_slice(b"xref\n0 6\n0000000000 65535 f \n");
+    out.extend_from_slice(format!("xref\n0 {size}\n0000000000 65535 f \n").as_bytes());
     for (n, off) in offs.iter().enumerate().skip(1) {
         let line = if n == 3 { "0000000000 65535 f \n".to_string() } else { format!("{off:010} 00000 n \n") };
         out.extend_from_slice(line.as_bytes());
     }
-    out.extend_from_slice(format!("trailer << /Size 6 /Root 1 0 R /XRefStm {} >>\nstartxref\n{table}\n%%EOF\n", offs[5]).as_bytes());
+    out.extend_from_slice(format!("trailer << /Size {size} /Root 1 0 R /XRefStm {} >>\nstartxref\n{table}\n%%EOF\n", offs[5]).as_bytes());
     out
 }
 

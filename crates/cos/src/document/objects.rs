@@ -589,6 +589,7 @@ impl Document {
         // header, as a plain object with a wrong offset is. An edited or freed stream, in the
         // overlay or in a saved revision's table, is what that says it is: the file's copy
         // must not come back.
+        let edits_read = overlay_reads();
         let loaded = match self.try_get(num) {
             Ok(o) if matches!(*o, Object::Stream(_)) => o,
             _ if self.overlay.contains_key(&num) || matches!(self.xref_entry(num), Some(XrefEntry::Free { .. })) => {
@@ -596,6 +597,8 @@ impl Document {
             }
             _ => Arc::new(self.scan_for(num).map(|(id, o)| self.decrypted(id, o)).ok_or(CosError::MissingObject(num))?),
         };
+        // A stream whose load read this document's edits (its `/Length`) is as much its own as an edited one.
+        let own = edited || overlay_reads() != edits_read;
         let Object::Stream(s) = &*loaded else { return Err(CosError::MissingObject(num)) };
         let n = s.dict.int(b"N").unwrap_or(0).clamp(0, 1_000_000) as usize;
         let first = usize::try_from(s.dict.int(b"First").unwrap_or(0).max(0)).ok();
@@ -607,7 +610,7 @@ impl Document {
             index.push(objstm_member(onum, off, first, data.len()));
         }
         let stm = Arc::new(ObjStm { index, data: Arc::new(data) });
-        if edited {
+        if own {
             return Ok(stm);
         }
         // Same bound as the object cache: decoded object streams can be megabytes each.
