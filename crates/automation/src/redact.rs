@@ -212,6 +212,12 @@ impl Automation {
                 if which.is_empty() {
                     return Err(ToolError::InvalidArgs("categories is empty".into()));
                 }
+                // The scan counts what removal takes, an AcroForm with no fields as 1, so none
+                // means the removal would refuse, with an error about redaction marks.
+                let info = self.doc(a)?.hidden_info();
+                if which.iter().all(|h| info.iter().find(|c| c.0 == *h).is_none_or(|c| c.1 == 0)) {
+                    return Err(failed("nothing to remove: the listed categories hold nothing (see doc_hidden_info)"));
+                }
                 Edit::RemoveHidden { which }
             }
         };
