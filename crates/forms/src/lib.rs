@@ -220,6 +220,15 @@ impl Field {
         self.widgets.iter().position(|w| w.on_state.as_deref() == Some(state)).and_then(|i| self.export_of(i)).unwrap_or(state)
     }
 
+    /// Values for data export, resolving button appearance names through /Opt.
+    pub fn export_values(&self) -> Vec<String> {
+        if matches!(self.kind, FieldKind::CheckBox | FieldKind::Radio) {
+            self.value.iter().map(|v| self.export_for_state(v).to_string()).collect()
+        } else {
+            self.value.clone()
+        }
+    }
+
     /// The value as one string: text, the state name, or the selected display texts.
     pub fn display_value(&self) -> String {
         match self.kind {
