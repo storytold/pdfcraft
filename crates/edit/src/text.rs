@@ -24,6 +24,7 @@ use crate::EditError;
 mod regions;
 #[path = "text_session.rs"]
 mod session;
+pub(crate) use fallback::fonts_shown;
 pub use fallback::strip_subset_tag;
 use regions::{alignment_frame, group_blocks, is_centred, rewrite_styled_block};
 pub use session::TextSession;

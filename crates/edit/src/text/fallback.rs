@@ -75,7 +75,7 @@ pub(super) fn drop_unused_fallback_fonts(doc: &mut Document, page: usize) {
 
 /// The font resource names `Tf` selects in the page's content and in the content that uses the
 /// page's resources (see [`drop_unused_fallback_fonts`]), or `None` if any of it can't be read.
-fn fonts_shown(doc: &Document, page: &Dict, resources: &Dict) -> Option<std::collections::HashSet<Vec<u8>>> {
+pub(crate) fn fonts_shown(doc: &Document, page: &Dict, resources: &Dict) -> Option<std::collections::HashSet<Vec<u8>>> {
     let mut streams: Vec<Object> = match page.get(b"Contents") {
         None => Vec::new(),
         Some(c) => match &*doc.resolve(c) {
@@ -117,7 +117,11 @@ fn fonts_shown(doc: &Document, page: &Dict, resources: &Dict) -> Option<std::col
         let Object::Stream(s) = &*doc.resolve(&stream) else { return None };
         // Strict: a stream only partly read might name a font in the part that wasn't.
         let data = s.decoded_strict().ok()?;
-        for op in parse(&data).ops {
+        let parsed = parse(&data);
+        if parsed.skipped != 0 || parsed.ambiguous_images != 0 {
+            return None;
+        }
+        for op in parsed.ops {
             if op.is("Tf")
                 && let Some(name) = op.operands.first().and_then(|n| n.as_name())
             {

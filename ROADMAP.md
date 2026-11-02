@@ -829,3 +829,5 @@ PR #1952 retains per-widget checkbox/radio export-value editing in the split for
 - **2026-10-31 (#1577):** Reconciled the page-shadow preference with split viewer, organizer, settings and control modules, preserving upstream page-gap shadow suppression. CI validation pending.
 
 * 2026-11-02 (M7, Chinese Add Text): native builds with the existing LXGW WenKai Lite face offer it explicitly for new page text and preserve it through save/reopen/retyping. Regular style and existing CJK line-break rules; font import and form appearances remain separate.
+
+* 2026-11-02 (M7, #5721 review): advertise the Chinese automation alias and reclaim obsolete WenKai mappings after edits/deletion, retaining shared/inherited uses and unreadable content. Regression coverage includes full-save collection.

@@ -634,7 +634,7 @@ pub fn tools() -> Vec<ToolDef> {
                 "at": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 },
                 "width": { "type": "number", "exclusiveMinimum": 0 },
                 "rect": { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4 },
-                "font": { "type": "string", "enum": ["helvetica", "times", "courier", "wenkai"] }, "size": { "type": "number", "minimum": 1, "maximum": 500 },
+                "font": { "type": "string", "enum": ["helvetica", "times", "courier", "wenkai", "chinese"] }, "size": { "type": "number", "minimum": 1, "maximum": 500 },
                 "bold": { "type": "boolean" }, "italic": { "type": "boolean" }, "color": { "type": "string" },
                 "align": { "type": "string", "enum": ["left", "center", "right", "justify"] },
                 "aligns": { "type": "array", "maxItems": 4096, "items": { "type": "string", "enum": ["left", "center", "right", "justify", "inherit"] }, "description": "Each paragraph's (line's) own alignment, by index; inherit (or legacy null) follows align." },
@@ -657,7 +657,7 @@ pub fn tools() -> Vec<ToolDef> {
                 json!({
                     "doc": doc(), "page": { "type": "integer", "minimum": 1 }, "index": { "type": "integer", "minimum": 1 },
                     "rect": { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4 }, "text": { "type": "string" },
-                    "font": { "type": "string", "enum": ["helvetica", "times", "courier", "wenkai"] }, "size": { "type": "number", "minimum": 1, "maximum": 500 },
+                    "font": { "type": "string", "enum": ["helvetica", "times", "courier", "wenkai", "chinese"] }, "size": { "type": "number", "minimum": 1, "maximum": 500 },
                     "bold": { "type": "boolean" }, "italic": { "type": "boolean" }, "color": { "type": "string" },
                     "align": { "type": "string", "enum": ["left", "center", "right", "justify"] },
                     "aligns": { "type": "array", "maxItems": 4096, "items": { "type": "string", "enum": ["left", "center", "right", "justify", "inherit"] }, "description": "Each paragraph's (line's) own alignment, by index; inherit (or legacy null) follows align." },
