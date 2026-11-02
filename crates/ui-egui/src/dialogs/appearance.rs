@@ -144,6 +144,9 @@ pub fn preferences_section(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens)
     ui.add_space(4.0);
     // Acrobat's "Highlight existing fields": shared with the toggle in the form bar.
     ui.add(crate::widgets::checkbox(&mut app.view_defaults.highlight_fields, tl!("Highlight fields")));
+    if ui.add(crate::widgets::checkbox(&mut app.show_page_edge_shadows, tl!("Show Page Edge Shadows"))).changed() {
+        ui.ctx().request_repaint();
+    }
 }
 
 #[cfg(test)]

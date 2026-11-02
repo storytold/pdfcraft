@@ -1012,6 +1012,22 @@ fn always_use_my_default_zoom_and_page_layout_survives_a_restart() {
     assert!(!legacy.always_default_view, "a legacy file without the key keeps it off");
 }
 
+/// Preferences has one Appearance section, and Show Page Edge Shadows is in it, with the other
+/// page-view options. It used to sit under a second "Appearance" heading at the top, over the
+/// language and size settings.
+#[test]
+fn preferences_have_one_appearance_section_with_the_page_edge_shadows() {
+    use egui_kittest::kittest::Queryable;
+    let mut h = harness(&[]);
+    assert!(h.state_mut().execute("app.preferences"));
+    h.run_steps(3);
+    assert_eq!(h.query_all_by_label("Appearance").count(), 1, "one Appearance heading");
+    let mode = h.get_by_label("Appearance mode").rect().top();
+    let shadows = h.get_by_label("Show Page Edge Shadows").rect().top();
+    assert!(shadows > mode, "the shadows box is in the Appearance section ({shadows} below {mode})");
+    assert!(h.get_by_label("Interface language").rect().top() < mode, "the interface settings come first");
+}
+
 #[test]
 fn preferences_turn_on_always_use_my_default_zoom_and_page_layout() {
     use egui_kittest::kittest::Queryable;

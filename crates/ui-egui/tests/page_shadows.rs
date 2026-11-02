@@ -159,6 +159,9 @@ fn checkbox_and_multiple_documents_do_not_edit_pdf_state() {
         .collect();
     h.state_mut().set_option("dialog", "preferences").unwrap();
     h.run_steps(3);
+    // The box is in the Appearance section, below the theme cards: scroll it into view.
+    h.get_by_label("Show Page Edge Shadows").scroll_to_me();
+    h.run_steps(4);
     let checkbox = h.get_by_label("Show Page Edge Shadows");
     checkbox.click();
     h.run_steps(2);
