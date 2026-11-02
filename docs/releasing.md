@@ -286,3 +286,8 @@ a match of the `CobaltStrikeBeacon` family rule.
 7. **Report.** To the scanner, send the file's SHA-256, the release URL, the rule name and revision,
    and the matched identifiers and offsets. Report PdfCraft problems at
    <https://github.com/storytold/pdfcraft/issues> with the same facts.
+
+
+## Distribution build configuration (2026-11-02)
+
+macOS packaging accepts APPLE_KEYCHAIN_PROFILE for notarization, with precedence over the unchanged three-variable authentication path.
