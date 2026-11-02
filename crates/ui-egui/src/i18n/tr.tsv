@@ -2610,7 +2610,7 @@ animation effects	Off	Kapalı
 	Pinned {tool} to Home	{tool} Ana Sayfaya sabitlendi
 	Unpinned {tool} from Home	{tool} Ana Sayfadan kaldırıldı
 
-# Strings the translation gaps report listed on 2026-11-03 (AI-assisted; not separately native-reviewed).
+# Strings the translation gaps report listed on 2026-11-03 (AI-assisted; a native Turkish speaker reviewed the judgement calls: "of", hotbar, navigation rail, certificate terms, weekday heads).
 	Lowering this forgets the oldest files. At 0 there is no list.	Bu değeri düşürmek en eski dosyaları unutturur. 0'da liste olmaz.
 	Recent files to keep	Saklanacak son dosya sayısı
 	 on page {label}	 {label}. sayfada
