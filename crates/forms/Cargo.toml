@@ -14,6 +14,9 @@ pdfcraft-fonts = { workspace = true }
 pdfcraft-content = { workspace = true }
 pdfcraft-model = { workspace = true }
 thiserror = { workspace = true }
+# Month lengths and weekdays of AFDate formats (af/format.rs); already in the graph through
+# pdfcraft-cos.
+chrono = { workspace = true }
 
 [dev-dependencies]
 hayro-syntax = { workspace = true }

@@ -4458,6 +4458,7 @@ dependencies = [
 name = "pdfcraft-forms"
 version = "0.18.0"
 dependencies = [
+ "chrono",
  "hayro-syntax",
  "pdfcraft-content",
  "pdfcraft-cos",
