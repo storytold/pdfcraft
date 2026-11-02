@@ -88,6 +88,19 @@ fn thai_document_face<'a>(document: &'a [CraftFont], ui: &'a [CraftFont]) -> Opt
     thai(document).find(|f| f.style == "Regular").or_else(|| thai(ui).next()).or_else(|| thai(document).next())
 }
 
+/// The face for Thai text of the asked weight written into PDFs. Bold text takes the Thai
+/// document manifest's Bold face when the build has one (Sarabun Medium or Bold, so headings
+/// and titles keep their weight); everything else, and bold without such a face, is
+/// [`document_thai_font`].
+pub fn document_thai_font_for(bold: bool) -> Option<&'static CraftFont> {
+    thai_document_face_for(CRAFT_DOCUMENT_FONTS, CRAFT_FONTS, bold)
+}
+
+fn thai_document_face_for<'a>(document: &'a [CraftFont], ui: &'a [CraftFont], bold: bool) -> Option<&'a CraftFont> {
+    let bold_face = bold.then(|| document.iter().find(|f| f.covers("Thai") && f.style == "Bold")).flatten();
+    bold_face.or_else(|| thai_document_face(document, ui))
+}
+
 /// The `Deva` craft-fonts faces for Devanagari interface text (the Hindi catalog, file names,
 /// document titles), in manifest order. Empty when built without craft-fonts or when its revision
 /// has no Devanagari face; a desktop build then falls back to one font already installed on the
@@ -308,6 +321,21 @@ mod tests {
         // An Arabic face is never a CJK fallback, and the other way round.
         assert!(order_cjk(&faces, false).iter().all(|f| f.family == "BIZ UDPGothic"));
         assert_eq!(ui_arabic_fonts().len(), CRAFT_FONTS.iter().filter(|f| f.covers("Arab")).count());
+    }
+
+    #[test]
+    fn bold_thai_takes_the_document_manifest_bold_face() {
+        static THAI_LATN: &[&str] = &["Thai", "Latn"];
+        let document = [
+            CraftFont { family: "FakeLooped", style: "Regular", scripts: THAI_LATN, bytes: b"looped" },
+            CraftFont { family: "FakeLooped", style: "Bold", scripts: THAI_LATN, bytes: b"looped-bold" },
+        ];
+        let ui = [CraftFont { family: "FakeLoopless", style: "Regular", scripts: &["Thai"], bytes: b"loopless" }];
+        assert_eq!(thai_document_face_for(&document, &ui, true).map(|f| f.bytes), Some(&b"looped-bold"[..]));
+        assert_eq!(thai_document_face_for(&document, &ui, false).map(|f| f.bytes), Some(&b"looped"[..]));
+        // Without a document Bold face, bold text keeps the plain-text face.
+        assert_eq!(thai_document_face_for(&document[..1], &ui, true).map(|f| f.bytes), Some(&b"looped"[..]));
+        assert_eq!(thai_document_face_for(&[], &ui, true).map(|f| f.bytes), Some(&b"loopless"[..]));
     }
 
     #[test]

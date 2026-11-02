@@ -1,6 +1,7 @@
 use super::types::{AddedImage, AddedText};
 use super::{
-    Content, Document, EditError, GlyphError, Level, ObjRef, Object, ParagraphBidiInfo, ShapedScript, shape_arabic, shape_hebrew, shape_thai,
+    Content, Document, EditError, GlyphError, Level, ObjRef, Object, ParagraphBidiInfo, ShapedCluster, ShapedScript, shape_arabic, shape_hebrew,
+    shape_thai, shape_thai_styled,
 };
 
 pub(super) fn nums(doc: &Document, o: Option<&Object>) -> Vec<f64> {
@@ -276,8 +277,9 @@ pub(super) fn shaped_layout(t: &AddedText, line: &str, rtl: bool) -> Result<(Vec
         let mut segments: Vec<(Option<ShapedScript>, String)> = Vec::new();
         for c in text.chars().filter(|c| !is_bidi_control(*c)) {
             let after_hebrew = segments.last().is_some_and(|(kind, _)| *kind == Some(ShapedScript::Hebrew));
-            let script = if is_thai(c) {
-                Some(ShapedScript::Thai)
+            let in_thai = segments.last().is_some_and(|(kind, _)| matches!(kind, Some(ShapedScript::Thai | ShapedScript::ThaiBold)));
+            let script = if is_thai(c) || (in_thai && !c.is_alphabetic() && pdfcraft_fonts::thai_has(c)) {
+                Some(if t.bold { ShapedScript::ThaiBold } else { ShapedScript::Thai })
             } else if is_hebrew(c) || (run_rtl && after_hebrew && !c.is_alphanumeric() && pdfcraft_fonts::hebrew_has(c)) {
                 Some(ShapedScript::Hebrew)
             } else if is_arabic(c) || (run_rtl && !c.is_alphanumeric() && pdfcraft_fonts::arabic_has(c)) {
@@ -298,7 +300,9 @@ pub(super) fn shaped_layout(t: &AddedText, line: &str, rtl: bool) -> Result<(Vec
                 let shaped = match script {
                     ShapedScript::Arabic => shape_arabic(&s, run_rtl).map_err(|e| arabic_error(e, &s))?,
                     ShapedScript::Hebrew => shape_hebrew(&s, run_rtl).map_err(|e| hebrew_error(e, &s))?,
-                    ShapedScript::Thai => shape_thai(&s).map_err(|e| thai_error(e, &s))?,
+                    ShapedScript::Thai | ShapedScript::ThaiBold => {
+                        shape_thai_styled(&s, script == ShapedScript::ThaiBold).map_err(|e| thai_error(e, &s))?
+                    }
                 };
                 Piece::Shaped(shaped)
             } else if run_rtl {
