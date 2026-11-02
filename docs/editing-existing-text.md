@@ -21,7 +21,9 @@ reconstructed from a glyph the PDF does not contain. **Load font…** imports an
 embeddable standalone `.ttf` or `.otf` face. **Installed fonts…** discovers eligible user-installed
 faces on request, off the UI thread; the document-font menu selects resources already on the
 page. Select **Keep source fonts** to preserve each run's original face. A matching full face
-completes its subsets automatically, including new Chinese characters. When the PDF itself embeds
+completes its subsets automatically, including new Chinese characters. Text that needs shaping,
+such as Myanmar, goes to that face as a whole run, loaded or built in, when the subset can't shape
+it, so the letters the subset has aren't split from the new ones. When the PDF itself embeds
 the complete program of a paragraph's font (not a subset) and its licence allows editable
 embedding, a character the font's encoding can't show is drawn with that same program. A
 character no available face has is refused with an error that names it, and a CJK character
