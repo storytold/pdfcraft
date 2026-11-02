@@ -399,6 +399,8 @@ pub struct PdfCraftApp {
     /// Preferences: recognise the text of scanned pages in the background, so it can be selected
     /// and found without changing the file ([`auto_ocr`]).
     pub auto_ocr: bool,
+    /// Background recognition workers of closed tabs, still reading the page they were on.
+    pub(crate) auto_ocr_closed: auto_ocr::Retiring,
     /// Open documents' files, watched for changes on disk.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) watch: file_watch::FileWatch,

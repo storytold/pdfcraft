@@ -27,10 +27,30 @@ pub(crate) struct AutoOcr {
     /// again.
     stopped: bool,
     run: Option<Run>,
-    /// Workers of runs stopped before they finished: each still reads the page it is on. None
-    /// starts until they are done, so edits in a row (dragging a picture on a scan) never leave
-    /// several reading at once, each with a page rendered at 300 dpi; they ran out of memory.
-    retiring: Vec<Arc<Mutex<Shared>>>,
+    /// Workers of this view's runs stopped before they finished.
+    retiring: Retiring,
+}
+
+/// Workers of recognitions stopped before they finished: each still reads the page it is on.
+/// None starts until they are done, so edits in a row (dragging a picture on a scan) never leave
+/// several reading at once, each with a page rendered at 300 dpi; they ran out of memory.
+#[derive(Default)]
+pub(crate) struct Retiring(Vec<Arc<Mutex<Shared>>>);
+
+impl Retiring {
+    /// Whether one is still reading. Those that are done are forgotten.
+    fn still_reading(&mut self) -> bool {
+        // A worker that panicked marks its chunk finished all the same (`Finished`).
+        self.0.retain(|s| !s.lock().unwrap_or_else(std::sync::PoisonError::into_inner).finished);
+        !self.0.is_empty()
+    }
+
+    /// Take over `ocr`'s workers, its running one included: its view is closing or being
+    /// replaced, and they are waited for here.
+    pub(crate) fn take_from(&mut self, ocr: &mut AutoOcr) {
+        ocr.retire();
+        self.0.append(&mut ocr.retiring.0);
+    }
 }
 
 /// Pages looked at for pictures in one frame. Finding them parses each page's content, so a long
@@ -121,15 +141,14 @@ impl AutoOcr {
     /// kept, to be waited for.
     fn retire(&mut self) {
         if let Some(chunk) = self.run.take().and_then(|run| run.chunk) {
-            self.retiring.push(chunk.shared.clone());
+            self.retiring.0.push(chunk.shared.clone());
         }
     }
 
-    /// Whether a worker of a stopped run is still reading. Those that are done are forgotten.
-    fn still_reading(&mut self) -> bool {
-        // A worker that panicked marks its chunk finished all the same (`Finished`).
-        self.retiring.retain(|s| !s.lock().unwrap_or_else(std::sync::PoisonError::into_inner).finished);
-        !self.retiring.is_empty()
+    /// This view replaces `old`'s (its document was reloaded from a changed file): `old`'s
+    /// workers, still reading the old version, are waited for before this one reads.
+    pub(crate) fn take_over(&mut self, old: &mut AutoOcr) {
+        self.retiring.take_from(old);
     }
 
     pub(crate) fn running(&self) -> bool {
@@ -192,10 +211,21 @@ impl PdfCraftApp {
     /// Hand finished pages to their views, keep a recognition going, and start one for a
     /// document that needs it.
     pub(crate) fn poll_auto_ocr(&mut self) {
-        let mut busy = false;
+        // Turned off in Preferences: runs end where they are, and start again from the pages not
+        // recognised yet when it is turned back on (`stop` would keep them from starting again).
+        if !self.auto_ocr {
+            for view in &mut self.views {
+                // What its worker has read already is kept.
+                if let Some(doc) = self.session.get(view.id) {
+                    view.take_recognised(&doc.info.pages);
+                }
+                view.auto_ocr.retire();
+            }
+        }
+        let mut busy = self.auto_ocr_closed.still_reading();
         for index in 0..self.views.len() {
             self.step_auto_ocr(index);
-            busy |= self.views.get_mut(index).is_some_and(|v| v.auto_ocr.running() || v.auto_ocr.still_reading());
+            busy |= self.views.get_mut(index).is_some_and(|v| v.auto_ocr.running() || v.auto_ocr.retiring.still_reading());
         }
         if busy {
             if let Some(ctx) = &self.ctx {
@@ -334,13 +364,30 @@ mod tests {
         png.into_inner()
     }
 
-    /// An app with a document of `pages` pages that are each only a picture, as a scan's are.
-    fn scan(pages: usize) -> PdfCraftApp {
+    /// A document of `pages` pages that are each only a picture, as a scan's are.
+    fn scan_pdf(pages: usize) -> Vec<u8> {
         let images: Vec<(String, Vec<u8>)> = (0..pages).map(|p| (format!("{p}.png"), png())).collect();
-        let pdf = Session::new().create_from_images(&images).unwrap();
+        Session::new().create_from_images(&images).unwrap().to_vec()
+    }
+
+    /// An app with [`scan_pdf`] open.
+    fn scan(pages: usize) -> PdfCraftApp {
         let mut app = PdfCraftApp::new();
-        app.open_bytes("scan.pdf", None, pdf.to_vec()).unwrap();
+        app.open_bytes("scan.pdf", None, scan_pdf(pages)).unwrap();
         app
+    }
+
+    /// A run whose worker is still reading page 0, and that worker's state.
+    fn reading() -> (Arc<Mutex<Shared>>, Run) {
+        let shared = Arc::new(Mutex::new(Shared::default()));
+        let chunk = Chunk { shared: shared.clone(), pages: 1 };
+        (shared, Run { queue: VecDeque::new(), pending: Vec::new(), total: 1, handled: 0, chunk: Some(chunk) })
+    }
+
+    /// Whether recognition of view `index` started, or found it cannot run here (no models).
+    fn started(app: &PdfCraftApp, index: usize) -> bool {
+        let ocr = &app.views[index].auto_ocr;
+        ocr.running() || ocr.done
     }
 
     /// What recognition read on `page`: one word.
@@ -376,20 +423,74 @@ mod tests {
     #[test]
     fn a_page_edit_waits_for_the_worker_still_reading() {
         let mut app = scan(1);
-        let shared = Arc::new(Mutex::new(Shared::default()));
-        let chunk = Chunk { shared: shared.clone(), pages: 1 };
-        let run = Run { queue: VecDeque::new(), pending: Vec::new(), total: 1, handled: 0, chunk: Some(chunk) };
+        let (shared, run) = reading();
         app.views[0].auto_ocr = AutoOcr { wanted: true, run: Some(run), ..Default::default() };
         let picture = Edit::AddImage { page: 0, rect: Some([1.0, 1.0, 4.0, 4.0]), name: "stamp.png".into(), bytes: Arc::new(png()) };
         assert!(app.apply_edit(picture));
         app.poll_auto_ocr();
         assert!(shared.lock().unwrap().cancel, "the worker is asked to stop");
-        let ocr = &app.views[0].auto_ocr;
-        assert!(!ocr.running() && !ocr.done, "recognition started again beside the worker still reading");
+        assert!(!started(&app, 0), "recognition started again beside the worker still reading");
         shared.lock().unwrap().finished = true;
         app.poll_auto_ocr();
-        let ocr = &app.views[0].auto_ocr;
-        assert!(ocr.running() || ocr.done, "recognition starts again once that worker is done");
+        assert!(started(&app, 0), "recognition starts again once that worker is done");
+    }
+
+    /// A document reloaded from its changed file gets a fresh view: the old view's worker, still
+    /// reading the old version, is waited for before the new one is read (CodeRabbit on #3860).
+    #[test]
+    fn a_reloaded_document_waits_for_the_old_version_s_worker() {
+        let mut app = scan(1);
+        let (shared, run) = reading();
+        app.views[0].auto_ocr = AutoOcr { wanted: true, run: Some(run), ..Default::default() };
+        let info = app.session.get(app.views[0].id).unwrap().info.clone();
+        app.views[0].document_replaced(&info);
+        // The new version's text layer comes back empty too.
+        app.views[0].auto_ocr.wanted = true;
+        app.poll_auto_ocr();
+        assert!(shared.lock().unwrap().cancel, "the old version's worker is asked to stop");
+        assert!(!started(&app, 0), "the new version was read beside the old one");
+        shared.lock().unwrap().finished = true;
+        app.poll_auto_ocr();
+        assert!(started(&app, 0), "it is read once the old version's worker is done");
+    }
+
+    /// A closed tab's worker, still reading a page, is waited for before another document is read
+    /// (CodeRabbit on #3860).
+    #[test]
+    fn a_closed_tab_s_worker_is_waited_for() {
+        let mut app = scan(1);
+        app.open_bytes("other.pdf", None, scan_pdf(1)).unwrap();
+        assert_eq!(app.views.len(), 2);
+        let (shared, run) = reading();
+        app.views[0].auto_ocr = AutoOcr { wanted: true, run: Some(run), ..Default::default() };
+        app.views[1].auto_ocr.wanted = true;
+        app.close_tab(0);
+        app.poll_auto_ocr();
+        assert!(shared.lock().unwrap().cancel, "the closed tab's worker is asked to stop");
+        assert!(!started(&app, 0), "another document was read beside it");
+        shared.lock().unwrap().finished = true;
+        app.poll_auto_ocr();
+        assert!(started(&app, 0), "it is read once that worker is done");
+    }
+
+    /// Turning background recognition off in Preferences ends a run where it is: its worker stops
+    /// and its progress bar goes. Turned on again, it starts again, unlike after Cancel
+    /// (CodeRabbit on #3860).
+    #[test]
+    fn turning_background_recognition_off_pauses_it() {
+        let mut app = scan(1);
+        let (shared, run) = reading();
+        app.views[0].auto_ocr = AutoOcr { wanted: true, run: Some(run), ..Default::default() };
+        app.auto_ocr = false;
+        app.poll_auto_ocr();
+        assert!(shared.lock().unwrap().cancel, "the worker is asked to stop");
+        assert_eq!(app.views[0].auto_ocr_progress(), None, "still running, with its progress bar");
+        shared.lock().unwrap().finished = true;
+        app.poll_auto_ocr();
+        assert!(!started(&app, 0), "started again while turned off");
+        app.auto_ocr = true;
+        app.poll_auto_ocr();
+        assert!(started(&app, 0), "turned on again, it starts again");
     }
 
     /// Cancel holds through a content edit: recognition doesn't start again on its own.

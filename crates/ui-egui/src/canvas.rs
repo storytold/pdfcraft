@@ -1141,6 +1141,8 @@ impl DocView {
         fresh.viewport_w = self.viewport_w;
         fresh.viewport_h = self.viewport_h;
         fresh.viewport_screen = self.viewport_screen;
+        // A recognition worker still reading the old version is waited for before the new one is.
+        fresh.auto_ocr.take_over(&mut self.auto_ocr);
         *self = fresh;
         // Marks the kept images out of date and clamps the page to the new page count.
         self.document_changed(info);

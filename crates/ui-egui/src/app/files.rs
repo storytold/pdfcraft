@@ -751,7 +751,10 @@ impl PdfCraftApp {
             return;
         }
         self.remember_view(index);
-        let id = self.views.remove(index).id;
+        let mut view = self.views.remove(index);
+        // Its background recognition may still be reading a page: none starts until it is done.
+        self.auto_ocr_closed.take_from(&mut view.auto_ocr);
+        let id = view.id;
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(path) = self.session.get(id).and_then(|d| d.path.clone()) {
             if self.closed_tabs.len() == 10 {
