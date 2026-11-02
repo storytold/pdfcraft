@@ -2596,8 +2596,8 @@ animation effects	Off	Joaktiv
 	Options for this reply	Opsionet për këtë përgjigje
 
 # AI-assisted additions for the cut-content notice (#623) (2026-10-22); not reviewed by a native speaker.
-	Page {page} holds more content than PdfCraft can read: part of it isn't drawn, and its text can't be found or copied.	Faqja {page} përmban më shumë përmbajtje sesa mund të lexojë PdfCraft: një pjesë e saj nuk vizatohet dhe teksti i saj nuk mund të kërkohet ose të kopjohet.
-	{n} pages hold more content than PdfCraft can read, page {page} first: parts of them aren't drawn, and their text can't be found or copied.	{n} faqe përmbajnë më shumë përmbajtje sesa mund të lexojë PdfCraft, duke filluar nga faqja {page}: disa pjesë të tyre nuk vizatohen dhe teksti i tyre nuk mund të kërkohet ose të kopjohet.
+	Page {page} holds more content than PdfCraft can read: part of it isn't drawn, and only part of its text can be found or copied.	Faqja {page} përmban më shumë përmbajtje sesa mund të lexojë PdfCraft: një pjesë e saj nuk vizatohet dhe vetëm një pjesë e tekstit të saj mund të kërkohet ose të kopjohet.
+	{n} pages hold more content than PdfCraft can read, page {page} first: parts of them aren't drawn, and only part of their text can be found or copied.	{n} faqe përmbajnë më shumë përmbajtje sesa mund të lexojë PdfCraft, duke filluar nga faqja {page}: disa pjesë të tyre nuk vizatohen dhe vetëm një pjesë e tekstit të tyre mund të kërkohet ose të kopjohet.
 
 # Image paste and Home notifications (AI-assisted; not separately native-reviewed)
 	Search…	Kërko…

@@ -2767,8 +2767,8 @@ key	Space	Mellomrom
 @plural	{fields} is missing|{fields} are missing	{fields} is missing|{fields} are missing
 
 # AI-assisted additions for the cut-content notice (#623) (2026-10-22); not reviewed by a native speaker.
-	Page {page} holds more content than PdfCraft can read: part of it isn't drawn, and its text can't be found or copied.	Side {page} inneholder mer innhold enn PdfCraft kan lese: en del av den tegnes ikke, og teksten kan ikke søkes i eller kopieres.
-	{n} pages hold more content than PdfCraft can read, page {page} first: parts of them aren't drawn, and their text can't be found or copied.	{n} sider inneholder mer innhold enn PdfCraft kan lese, først side {page}: deler av dem tegnes ikke, og teksten deres kan ikke søkes i eller kopieres.
+	Page {page} holds more content than PdfCraft can read: part of it isn't drawn, and only part of its text can be found or copied.	Side {page} inneholder mer innhold enn PdfCraft kan lese: en del av den tegnes ikke, og bare en del av teksten kan søkes i eller kopieres.
+	{n} pages hold more content than PdfCraft can read, page {page} first: parts of them aren't drawn, and only part of their text can be found or copied.	{n} sider inneholder mer innhold enn PdfCraft kan lese, først side {page}: deler av dem tegnes ikke, og bare en del av teksten deres kan søkes i eller kopieres.
 
 # Image paste and Home notifications (AI-assisted; not separately native-reviewed)
 	Search…	Søk…
