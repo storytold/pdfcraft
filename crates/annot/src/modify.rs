@@ -375,7 +375,8 @@ pub fn set_points(doc: &mut Document, page: usize, index: usize, points: &[[f64;
     if points.len() > MAX_POINTS {
         return Err(AnnotError::Invalid(format!("at most {MAX_POINTS} points")));
     }
-    let style = Style { width: border_width_of(&d), ..Style::default() };
+    // The width the appearance draws with (`/BS`, else `/Border`), so the room is the drawn stroke's.
+    let style = Style { width: appearance::border_width(&d), ..Style::default() };
     let ends = line_endings_of(&d).unwrap_or_default();
     let (start, end) = (ends.first().copied().unwrap_or(LineEnding::None), ends.get(1).copied().unwrap_or(LineEnding::None));
     let subtype = String::from_utf8_lossy(d.name(b"Subtype").unwrap_or_default()).into_owned();

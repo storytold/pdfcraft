@@ -2394,6 +2394,35 @@ fn a_reshaped_intensity_two_cloud_stays_inside_its_rect() {
     assert!(leftmost - 1.0 >= bbox[0], "the left bumps ({leftmost}) and the line fit in /Rect {bbox:?}");
 }
 
+/// Review on #4195: a reshaped polygon gets room for the border it is drawn with. With no `/BS`,
+/// a `/Border [0 0 5]` is drawn 5 pt wide (`appearance::border_width`), so the new `/Rect` is the
+/// one `/BS /W 5` gets; it was sized for a 1-pt border, and the cloud's outer bumps were clipped.
+#[test]
+fn a_reshaped_polygon_has_room_for_the_border_it_is_drawn_with() {
+    let reshaped = |border: &[u8], width: Object| {
+        let mut doc = fixture();
+        let shape = Shape::Polygon { vertices: vec![[100.0, 100.0], [200.0, 100.0], [150.0, 200.0]], cloud: true };
+        let i = add_annotation(&mut doc, &new(0, shape), &meta("p")).unwrap();
+        let (_, r) = annot_ref(&mut doc, 0, i).unwrap();
+        doc.update_dict(r, |d| {
+            d.remove(b"BS");
+            if border == b"BS" {
+                let mut bs = pdfcraft_cos::Dict::new();
+                bs.set(b"W".to_vec(), width);
+                d.set(b"BS".to_vec(), Object::Dict(bs));
+            } else {
+                d.set(b"Border".to_vec(), Object::Array(vec![Object::Int(0), Object::Int(0), width]));
+            }
+        })
+        .unwrap();
+        set_points(&mut doc, 0, i, &[[100.0, 100.0], [300.0, 100.0], [200.0, 250.0]], &meta("")).unwrap();
+        rect(&list(&doc, 0)[i])
+    };
+    let bs = reshaped(b"BS", Object::Int(5));
+    assert_eq!(reshaped(b"Border", Object::Int(5)), bs, "the same 5-pt border, the same room");
+    assert_ne!(reshaped(b"BS", Object::Int(1)), bs, "a 1-pt border needs less");
+}
+
 /// Every number a drawing writes, which must all be finite.
 fn drawn_numbers(ops: &str) -> Vec<f64> {
     ops.split_whitespace().filter(|t| t.starts_with(|c: char| c.is_ascii_digit() || c == '-' || c == '.')).filter_map(|t| t.parse().ok()).collect()
