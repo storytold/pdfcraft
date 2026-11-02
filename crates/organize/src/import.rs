@@ -183,7 +183,7 @@ fn import_pages_mapped(
     if let Some(bad) = src_pages.iter().find(|i| **i >= source.len()) {
         return Err(OrganizeError::NoSuchPage(*bad));
     }
-    let mut existing = walk(dst)?;
+    let mut existing = crate::walk_whole(dst)?;
     let root = pages_root(dst)?;
     let mut copier = Copier::new(src, HashMap::new(), HashMap::new());
     // Allocate every destination page first, so destinations between copied pages resolve.

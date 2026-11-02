@@ -4,69 +4,12 @@ use super::{AnnotError, Dict, Document, ObjRef, Object, appearance};
 
 // ── pages and /Annots ───────────────────────────────────────────────────────────────────────
 
-/// The page object of each leaf page, in order.
+/// The page object of each leaf page, in order: the shared page-tree walk
+/// (`pdfcraft_model::PageLeaves`). `NoPageTree` when the catalog names no page tree.
 pub fn page_refs(doc: &Document) -> Result<Vec<ObjRef>, AnnotError> {
     let root = doc.root().ok_or(AnnotError::NoPageTree)?;
     let pages = doc.get(root).as_dict().and_then(|d| d.reference(b"Pages")).ok_or(AnnotError::NoPageTree)?;
-    Ok(PageWalk::new(doc, pages).collect())
-}
-
-/// Depth-first walk over the leaf pages under `top`. It keeps one cursor per open `/Kids` array,
-/// never one entry per child, so a child listed many times or shared between nodes is skipped by
-/// the seen check without being queued first (`pdfcraft_model::pages` walks the same way).
-/// Cycles end at the seen check, a `/Kids` array object shared by several nodes is read once,
-/// and at most a million nodes and four million `/Kids` entries are read.
-pub(crate) struct PageWalk<'a> {
-    doc: &'a Document,
-    seen: std::collections::HashSet<ObjRef>,
-    pub(crate) pending: Vec<(std::sync::Arc<Object>, usize)>,
-    /// `/Kids` entries read so far.
-    pub(crate) examined: usize,
-}
-
-impl<'a> PageWalk<'a> {
-    pub(crate) fn new(doc: &'a Document, top: ObjRef) -> Self {
-        let top = std::sync::Arc::new(Object::Array(vec![Object::Ref(top)]));
-        Self { doc, seen: Default::default(), pending: vec![(top, 0)], examined: 0 }
-    }
-}
-
-impl Iterator for PageWalk<'_> {
-    type Item = ObjRef;
-
-    fn next(&mut self) -> Option<ObjRef> {
-        while let Some((kids, next)) = self.pending.last_mut() {
-            let Some(kid) = kids.as_array().and_then(|a| a.get(*next)) else {
-                self.pending.pop();
-                continue;
-            };
-            let node = kid.as_ref();
-            *next += 1;
-            self.examined += 1;
-            let Some(node) = node else { continue };
-            if self.seen.len() >= 1_000_000 || self.examined > 4_000_000 {
-                self.pending.clear();
-                return None;
-            }
-            if !self.seen.insert(node) {
-                continue;
-            }
-            let obj = self.doc.get(node);
-            let Some(d) = obj.as_dict() else { continue };
-            match d.get(b"Kids") {
-                // A `/Kids` array object shared by several nodes is read under the first: under
-                // the others it would only list nodes already seen.
-                Some(Object::Ref(array)) if d.name(b"Type") != Some(b"Page") => {
-                    if self.seen.insert(*array) {
-                        self.pending.push((self.doc.get(*array), 0));
-                    }
-                }
-                Some(kids) if d.name(b"Type") != Some(b"Page") => self.pending.push((self.doc.resolve(kids), 0)),
-                _ => return Some(node),
-            }
-        }
-        None
-    }
+    Ok(pdfcraft_model::PageLeaves::under(doc, pages).map(|leaf| leaf.obj).collect())
 }
 
 pub(crate) fn page_ref(doc: &Document, page: usize) -> Result<ObjRef, AnnotError> {

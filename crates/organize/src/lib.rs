@@ -12,6 +12,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, XrefEntry};
+use pdfcraft_model::INHERITABLE;
 
 mod attachments;
 mod boxes;
@@ -60,8 +61,6 @@ pub enum OrganizeError {
     Cos(#[from] pdfcraft_cos::CosError),
 }
 
-const INHERITABLE: [&[u8]; 4] = [b"Resources", b"MediaBox", b"CropBox", b"Rotate"];
-
 /// A leaf page in document order.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PageRef {
@@ -74,92 +73,75 @@ fn pages_root(doc: &Document) -> Result<ObjRef, OrganizeError> {
     catalog.as_dict().and_then(|d| d.reference(b"Pages")).ok_or(OrganizeError::NoPageTree)
 }
 
-/// All leaf pages in order, with their effective inherited attributes.
+/// All leaf pages in order, with their effective inherited attributes: the shared page-tree walk
+/// (`pdfcraft_model::PageLeaves`), which carries the nodes that set them rather than copies.
+/// A tree too large to walk whole gives the leaves before the cap, as it always has.
 fn walk(doc: &Document) -> Result<Vec<(ObjRef, Dict)>, OrganizeError> {
-    Ok(PageWalk::new(doc, pages_root(doc)?).collect())
+    Ok(leaves_with_attributes(doc, leaves(doc)?).0)
 }
 
-/// For each of `INHERITABLE`, the nearest node that sets it, shared rather than copied.
-type Owners = [Option<std::sync::Arc<Object>>; 4];
-
-/// Depth-first walk over the leaf pages under `top`. It keeps one cursor per open `/Kids` array,
-/// never one entry per child, and carries inherited attributes as the nodes that set them, so a
-/// child listed many times or shared between nodes is skipped by the seen check before anything
-/// is queued or copied (`pdfcraft_model::pages` walks the same way). Cycles in broken trees end
-/// at the seen check and at most a million nodes are visited.
-struct PageWalk<'a> {
-    doc: &'a Document,
-    seen: std::collections::HashSet<ObjRef>,
-    pending: Vec<(std::sync::Arc<Object>, usize, Owners)>,
+/// [`walk`] for a caller that rebuilds the page tree from the list: an error when the walk ended at
+/// a cap, since the rebuilt tree would drop the pages past the cut.
+fn walk_whole(doc: &Document) -> Result<Vec<(ObjRef, Dict)>, OrganizeError> {
+    whole_tree(doc, leaves(doc)?)
 }
 
-impl<'a> PageWalk<'a> {
-    fn new(doc: &'a Document, top: ObjRef) -> Self {
-        let top = std::sync::Arc::new(Object::Array(vec![Object::Ref(top)]));
-        Self { doc, seen: Default::default(), pending: vec![(top, 0, Default::default())] }
+/// The leaf walk organize reads and rebuilds from (`pdfcraft_model::PageLeaves` with its caps).
+fn leaves(doc: &Document) -> Result<pdfcraft_model::PageLeaves<'_>, OrganizeError> {
+    Ok(pdfcraft_model::PageLeaves::under(doc, pages_root(doc)?))
+}
+
+/// [`walk_whole`] over `leaves`.
+fn whole_tree(doc: &Document, leaves: pdfcraft_model::PageLeaves<'_>) -> Result<Vec<(ObjRef, Dict)>, OrganizeError> {
+    let (all, truncated) = leaves_with_attributes(doc, leaves);
+    if truncated {
+        return Err(OrganizeError::Invalid("the page tree is too large to rearrange".into()));
     }
+    Ok(all)
 }
 
-impl Iterator for PageWalk<'_> {
-    type Item = (ObjRef, Dict);
+/// Each leaf ([`current`]) with its inherited attributes, and whether the walk ended at a cap.
+fn leaves_with_attributes(doc: &Document, mut leaves: pdfcraft_model::PageLeaves<'_>) -> (Vec<(ObjRef, Dict)>, bool) {
+    let all: Vec<(ObjRef, Dict)> = leaves
+        .by_ref()
+        .map(|leaf| {
+            let mut attrs = Dict::new();
+            for k in INHERITABLE {
+                if let Some(v) = leaf.inherited(k) {
+                    attrs.set(k.to_vec(), v.clone());
+                }
+            }
+            (current(doc, leaf.obj), attrs)
+        })
+        .collect();
+    (all, leaves.truncated())
+}
 
-    fn next(&mut self) -> Option<(ObjRef, Dict)> {
-        while let Some((kids, next, inherited)) = self.pending.last_mut() {
-            let Some(kid) = kids.as_array().and_then(|a| a.get(*next)) else {
-                self.pending.pop();
-                continue;
-            };
-            let node = kid.as_ref();
-            *next += 1;
-            let Some(node) = node else { continue };
-            if self.seen.len() >= 1_000_000 {
-                self.pending.clear();
-                return None;
-            }
-            if !self.seen.insert(node) {
-                continue;
-            }
-            let obj = self.doc.get(node);
-            let Some(d) = obj.as_dict() else { continue };
-            let mut owners = inherited.clone();
-            for (k, owner) in INHERITABLE.iter().zip(&mut owners) {
-                if d.contains(k) {
-                    *owner = Some(obj.clone());
-                }
-            }
-            let is_pages = d.name(b"Type") == Some(b"Pages") || (d.contains(b"Kids") && d.name(b"Type") != Some(b"Page"));
-            if is_pages {
-                if let Some(kids) = d.get(b"Kids") {
-                    self.pending.push((self.doc.resolve(kids), 0, owners));
-                }
-            } else {
-                let mut attrs = Dict::new();
-                for (k, owner) in INHERITABLE.iter().zip(&owners) {
-                    if let Some(v) = owner.as_ref().and_then(|o| o.as_dict()).and_then(|o| o.get(k)) {
-                        attrs.set(k.to_vec(), v.clone());
-                    }
-                }
-                return Some((node, attrs));
-            }
-        }
-        None
-    }
+/// `page` at the generation the document holds it at. `/Kids` may name a page with a stale
+/// generation, which `Document::get` overlooks; organize edits pages, and an edit through the stale
+/// reference would store the object at that generation and leave every other reference to it
+/// stale. Destinations are matched to pages by number for the same reason.
+fn current(doc: &Document, page: ObjRef) -> ObjRef {
+    ObjRef { num: page.num, generation: doc.generation(page.num) }
 }
 
 /// Leaf pages in document order.
 pub fn pages(doc: &Document) -> Result<Vec<PageRef>, OrganizeError> {
-    Ok(walk(doc)?.into_iter().map(|(obj, _)| PageRef { obj }).collect())
+    // The refs alone: building each leaf's inherited attributes only to drop them would copy a
+    // large inherited value once per page.
+    Ok(leaves(doc)?.map(|leaf| PageRef { obj: current(doc, leaf.obj) }).collect())
 }
 
 /// Effective inherited page rotation, clockwise in degrees.
 pub fn page_rotation(doc: &Document, index: usize) -> Result<i64, OrganizeError> {
-    let pages = walk(doc)?;
-    let (_, attrs) = pages.get(index).ok_or(OrganizeError::NoSuchPage(index))?;
-    Ok(resolved_rotation(doc, attrs).rem_euclid(360))
+    // The one leaf's value, without copying every leaf's inherited attributes first.
+    let leaf = leaves(doc)?.nth(index).ok_or(OrganizeError::NoSuchPage(index))?;
+    Ok(leaf.inherited(b"Rotate").and_then(|value| doc.resolve(value).as_int()).unwrap_or(0).rem_euclid(360))
 }
 
 pub fn page_count(doc: &Document) -> Result<usize, OrganizeError> {
-    Ok(walk(doc)?.len())
+    // Counted, not collected: a large inherited value would be copied once per leaf.
+    Ok(leaves(doc)?.count())
 }
 
 fn resolved_rotation(doc: &Document, attrs: &Dict) -> i64 {
@@ -169,7 +151,10 @@ fn resolved_rotation(doc: &Document, attrs: &Dict) -> i64 {
 /// Rebuild the page tree as one flat node with `order` as its kids (attributes pushed down).
 fn rebuild(doc: &mut Document, order: &[(ObjRef, Dict)]) -> Result<(), OrganizeError> {
     let root = pages_root(doc)?;
-    for (page, inherited) in order {
+    // Each page at the generation the document holds it at ([`current`]): a caller may pass a page
+    // it found elsewhere than through `walk`.
+    let order: Vec<(ObjRef, &Dict)> = order.iter().map(|(page, inherited)| (current(doc, *page), inherited)).collect();
+    for (page, inherited) in &order {
         doc.update_dict(*page, |d| {
             for k in INHERITABLE {
                 if !d.contains(k)
@@ -199,7 +184,7 @@ fn rebuild(doc: &mut Document, order: &[(ObjRef, Dict)]) -> Result<(), OrganizeE
 /// scanning the file, in file order, and edits must address those same pages. Returns how many
 /// pages were gathered; 0 leaves the document unchanged.
 pub fn recover_page_tree(doc: &mut Document) -> Result<usize, OrganizeError> {
-    if walk(doc).is_ok_and(|pages| !pages.is_empty()) {
+    if pages_root(doc).is_ok_and(|top| pdfcraft_model::PageLeaves::under(doc, top).next().is_some()) {
         return Ok(0);
     }
     let catalog = doc.root().ok_or(OrganizeError::NoPageTree)?;
@@ -265,7 +250,7 @@ pub fn rotate_pages(doc: &mut Document, indices: &[usize], degrees: i64) -> Resu
 /// that need atomic edits (including replacement) must use a working clone and keep it only on
 /// success; discard the working clone on error. The engine does this for its history boundary.
 pub fn delete_pages(doc: &mut Document, indices: &[usize]) -> Result<(), OrganizeError> {
-    let all = walk(doc)?;
+    let all = walk_whole(doc)?;
     check(indices, all.len())?;
     let keep: Vec<(ObjRef, Dict)> = all.iter().enumerate().filter(|(i, _)| !indices.contains(i)).map(|(_, p)| p.clone()).collect();
     if keep.is_empty() {
@@ -355,7 +340,7 @@ fn goes_to(doc: &Document, dest: &Object, gone: &[ObjRef]) -> bool {
         Some(d) => d.get(b"D").map(|d| doc.resolve(d)),
         None => Some(dest.clone()),
     };
-    array.and_then(|a| a.as_array().and_then(|a| a.first()).and_then(Object::as_ref)).is_some_and(|r| gone.contains(&r))
+    array.and_then(|a| a.as_array().and_then(|a| a.first()).and_then(Object::as_ref)).is_some_and(|r| gone.iter().any(|g| g.num == r.num))
 }
 
 /// Remove the named destinations (the catalog's /Names /Dests tree and the legacy /Dests
@@ -517,7 +502,7 @@ fn drop_widgets(doc: &mut Document, mut widgets: Vec<ObjRef>) -> Result<(), Orga
 /// Move the pages at `indices` (kept in their relative order) so they start at position `to`
 /// in the resulting document.
 pub fn move_pages(doc: &mut Document, indices: &[usize], to: usize) -> Result<(), OrganizeError> {
-    let all = walk(doc)?;
+    let all = walk_whole(doc)?;
     check(indices, all.len())?;
     let mut sorted = indices.to_vec();
     sorted.sort_unstable();
@@ -532,7 +517,7 @@ pub fn move_pages(doc: &mut Document, indices: &[usize], to: usize) -> Result<()
 /// Reverse the order of the pages at `indices` among the positions they occupy; every other
 /// page stays where it is. Fewer than two distinct pages is refused, since nothing would change.
 pub fn reverse_pages(doc: &mut Document, indices: &[usize]) -> Result<(), OrganizeError> {
-    let mut all = walk(doc)?;
+    let mut all = walk_whole(doc)?;
     check(indices, all.len())?;
     let mut slots = indices.to_vec();
     slots.sort_unstable();
@@ -597,7 +582,7 @@ pub fn replace_pages(doc: &mut Document, targets: &[usize], src: &Document, src_
 
 /// Insert a blank page of `width × height` points at position `at` (0 = before the first page).
 pub fn insert_blank_page(doc: &mut Document, at: usize, width: f64, height: f64) -> Result<ObjRef, OrganizeError> {
-    let mut all = walk(doc)?;
+    let mut all = walk_whole(doc)?;
     let root = pages_root(doc)?;
     let mut page = Dict::new();
     page.set(b"Type".to_vec(), Object::name("Page"));

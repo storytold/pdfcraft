@@ -307,7 +307,8 @@ fn filter_at(doc: &mut Document, key: XKey, names: &HashSet<Vec<u8>>) -> Result<
 
 /// Drop the page-resource entries the document's pages never draw. Returns how many were removed.
 pub(crate) fn prune_unused_xobjects(doc: &mut Document) -> Result<usize, OrganizeError> {
-    let pages = crate::walk(doc)?;
+    // The whole tree: a name drawn only by a page past a cap would look unused and be dropped.
+    let pages = crate::walk_whole(doc)?;
     let mut pruner = Pruner {
         doc,
         used: HashMap::new(),

@@ -171,6 +171,42 @@ fn walks_nested_tree_in_order() {
     assert_eq!(labels(&doc), ["Page 1", "Page 2", "Page 3"]);
 }
 
+/// A walk cut off at a cap is refused where the tree is rebuilt from it, which would drop the pages
+/// past the cut.
+#[test]
+fn a_walk_cut_off_at_a_cap_is_not_rebuilt_from() {
+    let doc = open(fixture());
+    let top = pages_root(&doc).unwrap();
+    assert_eq!(whole_tree(&doc, pdfcraft_model::PageLeaves::with_limits(&doc, top, 100, 100)).unwrap().len(), 3);
+    assert!(matches!(whole_tree(&doc, pdfcraft_model::PageLeaves::with_limits(&doc, top, 100, 2)), Err(OrganizeError::Invalid(_))));
+    assert!(matches!(whole_tree(&doc, pdfcraft_model::PageLeaves::with_limits(&doc, top, 2, 100)), Err(OrganizeError::Invalid(_))));
+    // Counting doesn't rebuild anything, so it still answers.
+    assert_eq!(page_count(&doc).unwrap(), 3);
+}
+
+/// A rebuilt tree names each page at the generation the document holds it at, not a stale one its
+/// old `/Kids` used.
+#[test]
+fn a_rebuild_names_pages_at_their_current_generation() {
+    let mut doc = open(fixture());
+    let first = pages(&doc).unwrap()[0].obj;
+    let parent = doc.get(first).as_dict().unwrap().reference(b"Parent").unwrap();
+    doc.update_dict(parent, |d| {
+        let mut kids = d.get(b"Kids").unwrap().as_array().unwrap().clone();
+        kids[0] = Object::Ref(ObjRef { num: first.num, generation: first.generation + 1 });
+        d.set(b"Kids".to_vec(), Object::Array(kids));
+    })
+    .unwrap();
+    // An edit in place keeps the page at its generation too, and a bookmark naming it by its
+    // current generation still finds it.
+    assert_eq!(pages(&doc).unwrap()[0].obj, first);
+    rotate_pages(&mut doc, &[0], 90).unwrap();
+    assert_eq!(doc.generation(first.num), first.generation);
+    reverse_pages(&mut doc, &[0, 1, 2]).unwrap();
+    assert!(pages(&doc).unwrap().iter().any(|p| p.obj == first), "{:?}", pages(&doc).unwrap());
+    assert_eq!(doc.generation(first.num), first.generation);
+}
+
 #[test]
 fn rotate_uses_inherited_rotation_and_round_trips() {
     let mut doc = open(fixture());
@@ -3510,27 +3546,66 @@ fn a_bookmark_position_that_is_not_a_number_is_refused_and_changes_nothing() {
 }
 
 #[test]
-fn page_walk_skips_repeated_and_cyclic_kids_without_copying_attributes() {
+fn page_walk_skips_repeated_and_cyclic_kids_and_keeps_inherited_attributes() {
     let mut doc = open(fixture());
-    let (root, branch) = (ObjRef { num: 2, generation: 0 }, ObjRef { num: 3, generation: 0 });
+    let branch = ObjRef { num: 3, generation: 0 };
     let (first, second) = (ObjRef { num: 4, generation: 0 }, ObjRef { num: 5, generation: 0 });
     // The branch node carries Resources for its pages: a cycle back to it, then both pages
     // 128 times over.
     let mut kids = vec![Object::Ref(branch)];
     kids.extend([Object::Ref(first), Object::Ref(second)].into_iter().cycle().take(256));
     doc.update_dict(branch, |d| d.set(b"Kids".to_vec(), Object::Array(kids))).unwrap();
-    let mut walk = PageWalk::new(&doc, root);
-    let (page, attrs) = walk.next().unwrap();
-    assert_eq!(page, first);
-    assert!(walk.pending.len() <= 3, "repeated kids retained {} pending entries", walk.pending.len());
+    let pages = crate::walk(&doc).unwrap();
+    assert_eq!(pages.len(), 3);
+    let (page, attrs) = &pages[0];
+    assert_eq!(*page, first);
     assert!(attrs.get(b"Resources").and_then(|r| r.as_dict()).is_some_and(|r| r.contains(b"Font")), "Resources from the branch");
     assert_eq!(attrs.get(b"Rotate").and_then(Object::as_int), Some(90), "Rotate from the root");
-    assert_eq!(walk.next().map(|(p, _)| p), Some(second));
-    let (_, last) = walk.next().unwrap();
-    let media_box = last.get(b"MediaBox").and_then(Object::as_array).map(|m| m.iter().filter_map(Object::as_int).collect::<Vec<_>>());
+    assert_eq!(pages[1].0, second);
+    let media_box = pages[2].1.get(b"MediaBox").and_then(Object::as_array).map(|m| m.iter().filter_map(Object::as_int).collect::<Vec<_>>());
     assert_eq!(media_box, Some(vec![0, 0, 500, 500]), "own MediaBox kept over the root's");
-    assert!(walk.next().is_none());
     assert_eq!(labels(&doc), ["Page 1", "Page 2", "Page 3"]);
+}
+
+/// Many page-tree nodes sharing one indirect `/Kids` array read it once, not once per node.
+#[test]
+fn page_walk_reads_a_shared_kids_array_once() {
+    let mut doc = open(fixture());
+    let (root, first) = (ObjRef { num: 2, generation: 0 }, ObjRef { num: 4, generation: 0 });
+    let shared = doc.add(Object::Array(vec![Object::Ref(first); 1_000]));
+    let nodes: Vec<Object> = (0..1_000)
+        .map(|_| {
+            let mut d = Dict::new();
+            d.set(b"Type".to_vec(), Object::name("Pages"));
+            d.set(b"Kids".to_vec(), Object::Ref(shared));
+            Object::Ref(doc.add(d))
+        })
+        .collect();
+    doc.update_dict(root, |d| d.set(b"Kids".to_vec(), Object::Array(nodes))).unwrap();
+    assert_eq!(crate::walk(&doc).unwrap().iter().map(|(p, _)| *p).collect::<Vec<_>>(), [first]);
+    // walk is this walk: it reads the shared array once, not under each of the 1,000 nodes.
+    let mut leaves = pdfcraft_model::PageLeaves::new(&doc);
+    assert_eq!(leaves.by_ref().count(), 1);
+    assert!(leaves.entries_read() <= 3_000, "{} kids entries read", leaves.entries_read());
+}
+
+/// A `/Type /Pages` node without `/Kids` lists no pages and is not a page itself.
+#[test]
+fn a_pages_node_without_kids_is_not_a_page() {
+    let mut doc = open(fixture());
+    let root = ObjRef { num: 2, generation: 0 };
+    let before: Vec<ObjRef> = crate::walk(&doc).unwrap().into_iter().map(|(p, _)| p).collect();
+    let mut empty = Dict::new();
+    empty.set(b"Type".to_vec(), Object::name("Pages"));
+    empty.set(b"Count".to_vec(), Object::Int(0));
+    let empty = doc.add(empty);
+    doc.update_dict(root, |d| {
+        let mut kids = d.get(b"Kids").and_then(Object::as_array).cloned().unwrap_or_default();
+        kids.insert(0, Object::Ref(empty));
+        d.set(b"Kids".to_vec(), Object::Array(kids));
+    })
+    .unwrap();
+    assert_eq!(crate::walk(&doc).unwrap().into_iter().map(|(p, _)| p).collect::<Vec<_>>(), before);
 }
 
 /// A one-page document whose page carries `annots` (object bodies 5…), with `extra` bodies after them.

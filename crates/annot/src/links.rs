@@ -91,7 +91,8 @@ fn action_of(doc: &Document, d: &Dict, pages: &[ObjRef], uri_budget: &mut usize)
         let a = doc.resolve(dest);
         let first = a.as_array()?.first()?.clone();
         match first {
-            Object::Ref(r) => pages.iter().position(|p| *p == r),
+            // By number, as the page list and `Document::get` tell objects apart.
+            Object::Ref(r) => pages.iter().position(|p| p.num == r.num),
             Object::Int(i) => usize::try_from(i).ok(),
             _ => None,
         }

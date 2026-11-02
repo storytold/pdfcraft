@@ -116,7 +116,7 @@ fn read(doc: &Document, o: &Object, pages: &[pdfcraft_cos::ObjRef], scripts: &mu
         b"GoTo" => {
             let dest = d.get(b"D").map(|x| doc.resolve(x))?;
             let target = dest.as_array()?.first()?.as_ref()?;
-            FieldAction::GoTo(pages.iter().position(|p| *p == target)?)
+            FieldAction::GoTo(pages.iter().position(|p| p.num == target.num)?)
         }
         b"Hide" => FieldAction::ShowHide {
             fields: d.get(b"T").map(|t| texts(doc, t)).unwrap_or_default(),

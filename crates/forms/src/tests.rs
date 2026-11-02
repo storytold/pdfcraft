@@ -3503,7 +3503,7 @@ fn the_field_appearance_cache_sees_indirect_resources() {
 }
 
 #[test]
-fn page_walk_skips_repeated_and_cyclic_kids_without_queueing_them() {
+fn page_walk_skips_repeated_and_cyclic_kids() {
     let mut doc = fixture();
     let root = ObjRef { num: 2, generation: 0 };
     let page = ObjRef { num: 3, generation: 0 };
@@ -3511,10 +3511,44 @@ fn page_walk_skips_repeated_and_cyclic_kids_without_queueing_them() {
     let mut kids = vec![Object::Ref(root)];
     kids.extend(std::iter::repeat_n(Object::Ref(page), 128));
     doc.update_dict(root, |d| d.set(b"Kids".to_vec(), Object::Array(kids))).unwrap();
-    let mut walk = PageWalk::new(&doc, root);
-    assert_eq!(walk.next(), Some(page));
-    assert!(walk.pending.len() <= 2, "repeated kids retained {} pending entries", walk.pending.len());
-    assert_eq!(walk.next(), None);
+    assert_eq!(page_refs(&doc), [page]);
+}
+
+/// Many page-tree nodes sharing one indirect `/Kids` array read it once, not once per node.
+#[test]
+fn page_walk_reads_a_shared_kids_array_once() {
+    let mut doc = fixture();
+    let root = ObjRef { num: 2, generation: 0 };
+    let page = ObjRef { num: 3, generation: 0 };
+    let shared = doc.add(Object::Array(vec![Object::Ref(page); 1_000]));
+    let nodes: Vec<Object> = (0..1_000)
+        .map(|_| {
+            let mut d = Dict::new();
+            d.set(b"Type".to_vec(), Object::name("Pages"));
+            d.set(b"Kids".to_vec(), Object::Ref(shared));
+            Object::Ref(doc.add(d))
+        })
+        .collect();
+    doc.update_dict(root, |d| d.set(b"Kids".to_vec(), Object::Array(nodes))).unwrap();
+    assert_eq!(page_refs(&doc), [page]);
+    // page_refs is this walk: it reads the shared array once, not under each of the 1,000 nodes.
+    let mut walk = pdfcraft_model::PageLeaves::new(&doc);
+    assert_eq!(walk.by_ref().count(), 1);
+    assert!(walk.entries_read() <= 3_000, "{} kids entries read", walk.entries_read());
+}
+
+/// A `/Type /Pages` node without `/Kids` lists no pages and is not a page itself, as in
+/// `pdfcraft_model::pages`, so form page numbers agree with every other crate's.
+#[test]
+fn a_pages_node_without_kids_is_not_a_page() {
+    let mut doc = fixture();
+    let root = ObjRef { num: 2, generation: 0 };
+    let page = ObjRef { num: 3, generation: 0 };
+    let mut empty = Dict::new();
+    empty.set(b"Type".to_vec(), Object::name("Pages"));
+    empty.set(b"Count".to_vec(), Object::Int(0));
+    let empty = doc.add(empty);
+    doc.update_dict(root, |d| d.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(empty), Object::Ref(page)]))).unwrap();
     assert_eq!(page_refs(&doc), [page]);
 }
 
