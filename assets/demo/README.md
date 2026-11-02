@@ -20,6 +20,9 @@ environment variable if you set one.
    Inter and JetBrains Mono fonts).
 2. **Chrome.** Headless Chrome prints the page to PDF with
    `--headless=new --no-pdf-header-footer --generate-pdf-document-outline --print-to-pdf`.
+   It runs with a throwaway `--user-data-dir` and
+   `--disable-features=MacAppCodeSignClone`, so no code-sign clones are left
+   behind on macOS.
    Skia produces 12 tagged pages with embedded font subsets. Variable
    system-ui weights come out as Type 3 fonts and emoji as Type 3 bitmap
    glyphs. The pages also get shadings, blend modes, soft masks, tiling

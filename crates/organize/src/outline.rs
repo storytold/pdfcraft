@@ -38,6 +38,16 @@ pub struct Bookmark {
     pub open: bool,
     /// The 0-based page it goes to, when that page is in this document.
     pub page: Option<usize>,
+    /// Where on that page it goes: the destination's type (`XYZ`, `Fit`, `FitH`…) and the numbers
+    /// after it, in PDF user space (`None` for `null` or anything that isn't a number).
+    pub view: Option<(Vec<u8>, Vec<Option<f64>>)>,
+    /// The title's colour (`/C`, DeviceRGB, ISO 32000-2 §12.3.3 Table 151), each component kept
+    /// within 0–1; `None` for the default black or a value that isn't three numbers. The
+    /// inspector's `OutlineItem::color` reads it the same way.
+    pub color: Option<[f32; 3]>,
+    /// The title's style (`/F`, Table 152): bit 1 italic, bit 2 bold.
+    pub italic: bool,
+    pub bold: bool,
 }
 
 /// One page of the outline listing (see [`bookmark_page`]).
@@ -56,6 +66,10 @@ pub enum OutlineError {
     IntoItself,
     #[error("the title must not be empty")]
     EmptyTitle,
+    #[error("a bookmark's position must be a finite number")]
+    BadPosition,
+    #[error("a bookmark's colour must be three numbers from 0 to 1")]
+    BadColor,
     #[error("this document has no tagged headings to make bookmarks from")]
     NoEntries,
     #[error("{0}")]
@@ -229,43 +243,66 @@ fn dests_dict(doc: &Document, key: &[u8]) -> Option<Object> {
     dests.as_dict()?.get(key).cloned()
 }
 
-/// The page index a destination names: an explicit `[page /XYZ …]` array, a dictionary whose `/D`
-/// is one, or a named destination that resolves to one.
-fn page_of_dest(doc: &Document, targets: &mut Targets, dest: &Object, depth: u8) -> Option<usize> {
+/// The explicit destination array (`[page /XYZ …]`) a destination stands for: itself, a dictionary
+/// whose `/D` is one, or a named destination that resolves to one.
+fn explicit_dest(doc: &Document, targets: &mut Targets, dest: &Object, depth: u8) -> Option<Vec<Object>> {
     if depth > DEST_DEPTH {
         return None;
     }
     let dest = doc.resolve(dest);
     match &*dest {
-        Object::Array(a) => match a.first()? {
-            Object::Ref(page) => targets.pages.get(page).copied(),
-            // Some producers write a page number in a remote-style destination.
-            Object::Int(n) => usize::try_from(*n).ok().filter(|&p| p < targets.pages.len()),
-            _ => None,
-        },
-        Object::Dict(d) => page_of_dest(doc, targets, d.get(b"D")?, depth + 1),
+        Object::Array(a) => Some(a.clone()),
+        Object::Dict(d) => explicit_dest(doc, targets, d.get(b"D")?, depth + 1),
         Object::String(s) => {
             let inner = targets.named(doc, &s.bytes)?;
-            page_of_dest(doc, targets, &inner, depth + 1)
+            explicit_dest(doc, targets, &inner, depth + 1)
         }
         Object::Name(n) => {
             let inner = targets.named(doc, n)?;
-            page_of_dest(doc, targets, &inner, depth + 1)
+            explicit_dest(doc, targets, &inner, depth + 1)
         }
         _ => None,
     }
 }
 
-/// The page an item goes to: its `/Dest`, else the destination of its GoTo action `/A`.
-fn item_page(doc: &Document, targets: &mut Targets, d: &Dict) -> Option<usize> {
-    if let Some(dest) = d.get(b"Dest")
-        && let Some(page) = page_of_dest(doc, targets, dest, 0)
+/// The explicit destination array `dest` stands for: itself, a dictionary whose `/D` is one, or a
+/// named destination (a name or string, ISO 32000-2 §12.3.2.4) looked up in the `/Names /Dests`
+/// tree, then the catalog `/Dests`. `None` when a name names nothing.
+pub(crate) fn resolve_dest(doc: &Document, dest: &Object) -> Option<Vec<Object>> {
+    // Names only: the page map is not needed to look one up.
+    let mut targets = Targets { pages: HashMap::new(), names: None };
+    explicit_dest(doc, &mut targets, dest, 0)
+}
+
+/// The page index an explicit destination array names.
+fn page_of_explicit(targets: &Targets, dest: &[Object]) -> Option<usize> {
+    match dest.first()? {
+        Object::Ref(page) => targets.pages.get(page).copied(),
+        // Some producers write a page number in a remote-style destination.
+        Object::Int(n) => usize::try_from(*n).ok().filter(|&p| p < targets.pages.len()),
+        _ => None,
+    }
+}
+
+/// The view an explicit destination array asks for: its type and the numbers after it.
+fn view_of_explicit(doc: &Document, dest: &[Object]) -> Option<(Vec<u8>, Vec<Option<f64>>)> {
+    let kind = dest.get(1).map(|k| doc.resolve(k)).and_then(|k| k.as_name().map(<[u8]>::to_vec))?;
+    // At most the four numbers of /FitR.
+    let numbers = dest.iter().skip(2).take(4).map(|n| doc.resolve(n).as_f64().filter(|v| v.is_finite())).collect();
+    Some((kind, numbers))
+}
+
+/// The explicit destination an item goes to: its `/Dest` when that names a page here, else the
+/// destination of its GoTo action `/A`.
+fn item_dest(doc: &Document, targets: &mut Targets, d: &Dict) -> Option<Vec<Object>> {
+    if let Some(dest) = d.get(b"Dest").and_then(|dest| explicit_dest(doc, targets, dest, 0))
+        && page_of_explicit(targets, &dest).is_some()
     {
-        return Some(page);
+        return Some(dest);
     }
     let action = doc.resolve(d.get(b"A")?);
     let dest = action.as_dict()?.get(b"D")?;
-    page_of_dest(doc, targets, dest, 0)
+    explicit_dest(doc, targets, dest, 0)
 }
 
 /// A bookmark's title as viewers show it: the decoded text, without NULs or surrounding space.
@@ -281,11 +318,25 @@ fn title_of(doc: &Document, d: &Dict) -> String {
 
 fn describe(doc: &Document, targets: &mut Targets, obj: ObjRef, path: Vec<usize>) -> Bookmark {
     let item = doc.get(obj);
-    let (title, open, page) = match item.as_dict() {
-        Some(d) => (title_of(doc, d), d.int(b"Count").is_some_and(|c| c > 0), item_page(doc, targets, d)),
+    let (title, open, dest) = match item.as_dict() {
+        Some(d) => (title_of(doc, d), d.int(b"Count").is_some_and(|c| c > 0), item_dest(doc, targets, d)),
         None => (String::new(), false, None),
     };
-    Bookmark { obj, path, title, open, page }
+    let page = dest.as_deref().and_then(|d| page_of_explicit(targets, d));
+    let view = dest.as_deref().filter(|_| page.is_some()).and_then(|d| view_of_explicit(doc, d));
+    let color = item.as_dict().and_then(|d| d.get(b"C").map(|c| doc.resolve(c))).and_then(|c| title_color(doc, &c));
+    let flags = item.as_dict().and_then(|d| d.get(b"F").and_then(|f| doc.resolve(f).as_int())).unwrap_or(0);
+    Bookmark { obj, path, title, open, page, view, color, italic: flags & 1 != 0, bold: flags & 2 != 0 }
+}
+
+/// A bookmark title's `/C` as a colour: three numbers, each kept within 0–1 (ISO 32000-2
+/// §12.3.3, Table 151: "An array of three numbers in the range 0.0 to 1.0"); a number past the
+/// range, however large, is kept at its edge. Black, the default, and anything else give `None`.
+fn title_color(doc: &Document, c: &Object) -> Option<[f32; 3]> {
+    let [r, g, b] = c.as_array()?.as_slice() else { return None };
+    let channel = |v: &Object| doc.resolve(v).as_f64().map(|v| v.clamp(0.0, 1.0) as f32);
+    let rgb = [channel(r)?, channel(g)?, channel(b)?];
+    (rgb != [0.0; 3]).then_some(rgb)
 }
 
 /// Lists up to `limit` bookmarks from position `offset`, entering no level deeper than `max_depth`.
@@ -345,7 +396,7 @@ fn resolve_path(doc: &Document, path: &[usize]) -> Result<(ObjRef, ObjRef)> {
 }
 
 /// The object that holds children at `parent_path` (`[]` = the outline root, created if needed).
-fn container(doc: &mut Document, parent_path: &[usize]) -> Result<ObjRef> {
+pub(crate) fn container(doc: &mut Document, parent_path: &[usize]) -> Result<ObjRef> {
     if parent_path.is_empty() {
         if let Some(r) = outline_root(doc) {
             return Ok(r);
@@ -373,6 +424,27 @@ fn put(doc: &mut Document, r: ObjRef, key: &[u8], value: Option<Object>) -> Resu
         }
     })?;
     Ok(())
+}
+
+/// The children of `parent` (an item or the outline root), in order. Cycle-safe.
+pub(crate) fn children(doc: &Document, parent: ObjRef) -> Vec<ObjRef> {
+    children_of(doc, parent, &mut HashSet::from([parent]))
+}
+
+/// [`relink`] `kids` under `parent`, then recompute every `/Count`.
+pub(crate) fn relink_and_recount(doc: &mut Document, parent: ObjRef, kids: &[ObjRef]) -> Result<()> {
+    relink(doc, parent, kids)?;
+    recount(doc)
+}
+
+impl From<OutlineError> for OrganizeError {
+    fn from(e: OutlineError) -> Self {
+        match e {
+            OutlineError::Organize(e) => e,
+            OutlineError::Cos(e) => OrganizeError::Cos(e),
+            other => OrganizeError::Invalid(other.to_string()),
+        }
+    }
 }
 
 /// Make `kids` the children of `parent`, in order: rewires `/Parent`, `/Prev`, `/Next`,
@@ -432,24 +504,51 @@ fn recount(doc: &mut Document) -> Result<()> {
 }
 
 fn destination(doc: &Document, page: usize) -> Result<Object> {
-    let pages = walk(doc)?;
-    let (p, _) = pages.get(page).ok_or(OrganizeError::NoSuchPage(page))?;
-    Ok(go_to(*p))
+    destination_at(doc, page, None, None)
 }
 
-/// `/XYZ null null null`: go to the page, keeping the reader's zoom (what Acrobat writes for a
+/// A destination on `page` (0-based) at the user-space point (`left`, `top`), either of which
+/// may be left out to keep the reader's position in that direction.
+fn destination_at(doc: &Document, page: usize, left: Option<f64>, top: Option<f64>) -> Result<Object> {
+    if ![left, top].iter().flatten().all(|v| v.is_finite()) {
+        return Err(OutlineError::BadPosition);
+    }
+    let pages = walk(doc)?;
+    let (p, _) = pages.get(page).ok_or(OrganizeError::NoSuchPage(page))?;
+    Ok(go_to_at(*p, left, top))
+}
+
+/// `/XYZ left top null`: the point (`left`, `top`) at the window's upper-left corner, at the
+/// reader's zoom; a coordinate that is left out keeps the reader's position. With neither,
+/// `/XYZ null null null` goes to the page, keeping the reader's zoom (what Acrobat writes for a
 /// new bookmark when the view has no specific position).
-fn go_to(page: ObjRef) -> Object {
-    Object::Array(vec![Object::Ref(page), Object::name("XYZ"), Object::Null, Object::Null, Object::Null])
+fn go_to_at(page: ObjRef, left: Option<f64>, top: Option<f64>) -> Object {
+    let coordinate = |v: Option<f64>| v.map_or(Object::Null, Object::Real);
+    Object::Array(vec![Object::Ref(page), Object::name("XYZ"), coordinate(left), coordinate(top), Object::Null])
 }
 
 /// Add a bookmark titled `title` that goes to `page` (0-based), as child `index` of
 /// `parent_path` (`[]` = top level; an index past the end appends). Returns its path.
 pub fn add_bookmark(doc: &mut Document, parent_path: &[usize], index: usize, title: &str, page: usize) -> Result<Vec<usize>> {
+    add_bookmark_at(doc, parent_path, index, title, page, None, None)
+}
+
+/// [`add_bookmark`] going to the user-space point (`left`, `top`) of `page`, as `/XYZ left top null`
+/// (zoom kept). Either coordinate may be left out to keep the reader's position in that
+/// direction; one that is not finite is refused.
+pub fn add_bookmark_at(
+    doc: &mut Document,
+    parent_path: &[usize],
+    index: usize,
+    title: &str,
+    page: usize,
+    left: Option<f64>,
+    top: Option<f64>,
+) -> Result<Vec<usize>> {
     if title.trim().is_empty() {
         return Err(OutlineError::EmptyTitle);
     }
-    let dest = destination(doc, page)?;
+    let dest = destination_at(doc, page, left, top)?;
     let parent = container(doc, parent_path)?;
     let mut kids = children_of(doc, parent, &mut HashSet::from([parent]));
     let mut d = Dict::new();
@@ -459,17 +558,14 @@ pub fn add_bookmark(doc: &mut Document, parent_path: &[usize], index: usize, tit
     let at = index.min(kids.len());
     kids.insert(at, item);
     relink(doc, parent, &kids)?;
-    // Show the new bookmark: open its parent (the root is always open).
-    if !parent_path.is_empty() && doc.get(parent).as_dict().and_then(|d| d.int(b"Count")).is_none_or(|c| c <= 0) {
-        put(doc, parent, b"Count", Some(Object::Int(1)))?;
-    }
+    show_children(doc, parent, parent_path)?;
     recount(doc)?;
     let mut path = parent_path.to_vec();
     path.push(at);
     Ok(path)
 }
 
-/// One bookmark of a generated tree (New Bookmarks from Structure).
+/// One bookmark of a generated tree (New Bookmarks from Structure, or from text styles).
 #[derive(Clone, Debug, PartialEq)]
 pub struct OutlineEntry {
     /// 1 = directly under the new parent; deeper levels nest under the last shallower entry.
@@ -478,6 +574,9 @@ pub struct OutlineEntry {
     pub page: usize,
     /// The structure element it stands for (`/SE`).
     pub element: Option<ObjRef>,
+    /// Where on the page it goes: this height (user space) at the top of the window, at the
+    /// reader's zoom. `None` goes to the page, keeping the reader's position.
+    pub top: Option<f64>,
 }
 
 /// Add a new top-level bookmark `parent_title` (first in the list) holding `entries` nested by
@@ -501,7 +600,7 @@ pub fn add_bookmark_tree(doc: &mut Document, parent_title: &str, entries: &[Outl
     for (e, page) in entries.iter().zip(targets) {
         let mut d = Dict::new();
         d.set(b"Title".to_vec(), Object::String(PdfString::text(&e.title)));
-        d.set(b"Dest".to_vec(), go_to(page));
+        d.set(b"Dest".to_vec(), go_to_at(page, None, e.top));
         if let Some(se) = e.element {
             d.set(b"SE".to_vec(), Object::Ref(se));
         }
@@ -537,6 +636,33 @@ pub fn rename_bookmark(doc: &mut Document, path: &[usize], title: &str) -> Resul
     }
     let (r, _) = resolve_path(doc, path)?;
     put(doc, r, b"Title", Some(Object::String(PdfString::text(title))))
+}
+
+/// Set the colour of a bookmark's title (`/C`, ISO 32000-2 §12.3.3, Table 151: "An array of three
+/// numbers in the range 0.0 to 1.0, representing the components in the DeviceRGB colour space").
+/// Black, the default, and `None` remove `/C`; a component outside 0–1 is refused.
+pub fn set_bookmark_color(doc: &mut Document, path: &[usize], color: Option<[f64; 3]>) -> Result<()> {
+    if color.is_some_and(|c| !c.iter().all(|v| (0.0..=1.0).contains(v))) {
+        return Err(OutlineError::BadColor);
+    }
+    let (r, _) = resolve_path(doc, path)?;
+    let value = color.filter(|c| *c != [0.0; 3]).map(|c| Object::Array(c.iter().map(|v| Object::Real(*v)).collect()));
+    put(doc, r, b"C", value)
+}
+
+/// Make a bookmark's title bold or italic or not (`/F`, ISO 32000-2 §12.3.3, Table 152: bit 1
+/// italic, bit 2 bold); `None` keeps that one as it is, and so are the other bits. When no bit is
+/// left, `/F` is removed, its default being 0.
+pub fn set_bookmark_style(doc: &mut Document, path: &[usize], bold: Option<bool>, italic: Option<bool>) -> Result<()> {
+    let (r, _) = resolve_path(doc, path)?;
+    let old = doc.get(r).as_dict().and_then(|d| d.get(b"F").and_then(|f| doc.resolve(f).as_int())).unwrap_or(0);
+    let bit = |flags: i64, mask: i64, on: Option<bool>| match on {
+        Some(true) => flags | mask,
+        Some(false) => flags & !mask,
+        None => flags,
+    };
+    let flags = bit(bit(old, 1, italic), 2, bold);
+    put(doc, r, b"F", (flags != 0).then_some(Object::Int(flags)))
 }
 
 /// Point a bookmark at `page` (0-based), replacing its destination or GoTo action.
@@ -578,9 +704,21 @@ pub fn move_bookmark(doc: &mut Document, from: &[usize], to_parent: &[usize], in
     let at = index.min(kids.len());
     kids.insert(at, r);
     relink(doc, parent, &kids)?;
+    if parent != old_parent {
+        show_children(doc, parent, &to_parent)?;
+    }
     recount(doc)?;
     to_parent.push(at);
     Ok(to_parent)
+}
+
+/// Open `parent` so a bookmark just added or moved into it shows (the root is always open).
+/// Only the sign of `/Count` matters here: [`recount`] sets its value.
+fn show_children(doc: &mut Document, parent: ObjRef, parent_path: &[usize]) -> Result<()> {
+    if !parent_path.is_empty() && doc.get(parent).as_dict().and_then(|d| d.int(b"Count")).is_none_or(|c| c <= 0) {
+        put(doc, parent, b"Count", Some(Object::Int(1)))?;
+    }
+    Ok(())
 }
 
 /// Expand or collapse a bookmark that has children.

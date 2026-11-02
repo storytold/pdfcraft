@@ -19,17 +19,18 @@ struct Key {
     tile: Option<Tile>,
     scale: u32,
     tag: u64,
+    preview: bool,
 }
 
 impl From<RenderRequest> for Key {
     fn from(r: RenderRequest) -> Self {
-        Self { page: r.page, kind: r.kind, tile: r.tile, scale: r.scale.to_bits(), tag: r.tag }
+        Self { page: r.page, kind: r.kind, tile: r.tile, scale: r.scale.to_bits(), tag: r.tag, preview: r.preview }
     }
 }
 
 impl Key {
     fn request(self) -> RenderRequest {
-        RenderRequest { page: self.page, kind: self.kind, tile: self.tile, scale: f32::from_bits(self.scale), tag: self.tag }
+        RenderRequest { page: self.page, kind: self.kind, tile: self.tile, scale: f32::from_bits(self.scale), tag: self.tag, preview: self.preview }
     }
 }
 
@@ -219,7 +220,7 @@ impl WorkQueue {
             }
             // The parser validity token can change independently of this queue. Bound the
             // wait so failed generations are released even while the consumer is paused.
-            state = self.changed.wait_timeout(state, Duration::from_millis(25)).unwrap_or_else(|p| p.into_inner()).0;
+            state = self.changed.wait_timeout(state, Duration::from_millis(25)).unwrap_or_else(std::sync::PoisonError::into_inner).0;
         }
     }
 

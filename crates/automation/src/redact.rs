@@ -14,9 +14,19 @@ impl Automation {
     pub(crate) fn redact_mark(&mut self, a: &Args) -> Result<Value> {
         let doc = self.doc(a)?;
         let (id, n) = (doc.id, doc.info.pages.len());
-        let pages: Vec<usize> = match a.opt_ints("pages")? {
-            Some(_) => self.pages(a, "pages")?,
-            None => (0..n).collect(),
+        if a.get("page").is_some() && a.get("pages").is_some() {
+            return Err(ToolError::InvalidArgs("pass page or pages, not both".into()));
+        }
+        if a.get("rect").is_some() && a.get("pages").is_some() {
+            return Err(ToolError::InvalidArgs("rect requires page, not pages".into()));
+        }
+        let pages: Vec<usize> = if a.get("page").is_some() {
+            vec![self.page(a)?]
+        } else {
+            match a.opt_ints("pages")? {
+                Some(_) => self.pages(a, "pages")?,
+                None => (0..n).collect(),
+            }
         };
         let overlay = match (a.opt_str("overlay")?, a.opt_str("code_set")?) {
             (Some(_), Some(_)) => return Err(ToolError::InvalidArgs("pass overlay or code_set with codes, not both".into())),
@@ -53,6 +63,11 @@ impl Automation {
         ];
         if chosen.iter().filter(|c| **c).count() != 1 {
             return Err(ToolError::InvalidArgs("pass exactly one of rect (with page), find, words, pattern or whole_pages: true".into()));
+        }
+        let case_sensitive = a.opt_bool("case_sensitive")?.unwrap_or(false);
+        let whole_words = a.opt_bool("whole_words")?.unwrap_or(false);
+        if (case_sensitive || whole_words) && a.get("find").is_none() && a.get("words").is_none() {
+            return Err(ToolError::InvalidArgs("case_sensitive and whole_words apply only to find or words".into()));
         }
         // Per searched word or phrase: how many marks it made.
         let mut matched_words: Vec<(String, usize)> = Vec::new();
@@ -95,7 +110,11 @@ impl Automation {
             for (&p, text) in pages.iter().zip(&texts) {
                 let hits: Vec<(Option<usize>, _)> = match pattern {
                     Some(pat) => text.find_with(|chars| find_pattern(pat, chars)).into_iter().map(|h| (None, h)).collect(),
-                    None => needles.iter().enumerate().flat_map(|(i, w)| text.find(w).into_iter().map(move |h| (Some(i), h))).collect(),
+                    None => needles
+                        .iter()
+                        .enumerate()
+                        .flat_map(|(i, w)| text.find_opts(w, case_sensitive, whole_words).into_iter().map(move |h| (Some(i), h)))
+                        .collect(),
                 };
                 for (word, h) in hits {
                     let quads: Vec<[f64; 8]> = text.line_rects(h).into_iter().map(|r| info.pages[p].view_rect_to_quad(r)).collect();
@@ -164,14 +183,16 @@ impl Automation {
     }
 
     pub(crate) fn doc_audit_redactions(&self, a: &Args) -> Result<Value> {
-        let findings = self.doc(a)?.audit_redactions().map_err(ToolError::Failed)?;
+        let d = self.doc(a)?;
+        let findings = d.audit_redactions().map_err(ToolError::Failed)?;
         let items: Vec<Value> = findings
             .into_iter()
             .map(|f| {
                 json!({
                     "page": f.page + 1,
                     "kind": f.kind.id(),
-                    "rect": f.rect,
+                    // Points from the top-left of the displayed page, like `comment_list` and `doc_info`.
+                    "rect": crate::view_rect(&d.info, f.page, f.rect.map(|v| v as f32)),
                     "covered_text": f.covered_text,
                 })
             })

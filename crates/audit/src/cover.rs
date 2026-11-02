@@ -1,10 +1,11 @@
 //! Walk page content streams and collect the opaque filled rectangles they draw.
 //!
 //! This is the geometric half of the faux-redaction audit: a rectangle filled with an opaque
-//! color (`re` + `f`) is the classic way a "redaction" is faked. Graphics state tracked here is
-//! deliberately small: the CTM stack (`q`/`Q`/`cm`), the non-stroking color (`g`/`rg`/`k`) and
-//! the non-stroking alpha from ExtGState (`gs` reading `/ca`). Form XObjects are followed
-//! read-only with a depth cap. Anything fancier (arbitrary filled paths, shadings, patterns) is
+//! color (`re` + `f`) is the classic way a "redaction" is faked. A single closed `m`/`l` subpath
+//! whose four corners form an axis-aligned rectangle in user space is the same shape and counts
+//! too (#1510). Graphics state tracked here is deliberately small: the CTM stack (`q`/`Q`/`cm`),
+//! the non-stroking color (`g`/`rg`/`k`) and the non-stroking alpha from ExtGState (`gs` reading
+//! `/ca`). Form XObjects are followed read-only with a depth cap. Anything fancier (other filled paths, shadings, patterns) is
 //! out of scope and documented as such.
 //!
 //! Paint order: a page's content streams are one stream in pieces (ISO 32000-2 §7.8.2), so they
@@ -15,7 +16,7 @@
 //! Positions compare lexicographically in paint order.
 
 use pdfcraft_content::{Matrix, Op, Pieces, parse};
-use pdfcraft_cos::{Dict, Document, Object};
+use pdfcraft_cos::{DecodeBudget, Dict, Document, Object};
 
 use crate::AuditError;
 
@@ -45,6 +46,58 @@ struct Gs {
     alpha: f64,
 }
 
+/// The path under construction, as far as the audit cares about it.
+enum Path {
+    Empty,
+    /// A `re` rectangle, in user space.
+    Rect([f64; 4]),
+    /// One `m`/`l` subpath, corners already mapped to user space; `true` once closed by `h`.
+    Lines(Vec<[f64; 2]>, bool),
+    /// Anything else: curves, a second subpath, a CTM change mid-path.
+    Other,
+}
+
+impl Path {
+    /// The rectangle a fill of this path paints, if the path is one.
+    fn rect(self) -> Option<[f64; 4]> {
+        match self {
+            Path::Rect(r) => Some(r),
+            Path::Lines(pts, _) => lines_rect(pts),
+            Path::Empty | Path::Other => None,
+        }
+    }
+}
+
+/// The bounding box of a closed polygon that is an axis-aligned rectangle, or `None`. A repeated
+/// start point is dropped first; the remaining four corners must alternate horizontal and
+/// vertical edges.
+fn lines_rect(mut pts: Vec<[f64; 2]>) -> Option<[f64; 4]> {
+    // CTM products leave rounding noise, so corners compare with a tolerance (in points).
+    const EPS: f64 = 1e-6;
+    let same = |a: f64, b: f64| (a - b).abs() <= EPS;
+    if pts.len() == 5 && same(pts[0][0], pts[4][0]) && same(pts[0][1], pts[4][1]) {
+        pts.pop();
+    }
+    let [a, b, c, d] = <[[f64; 2]; 4]>::try_from(pts).ok()?;
+    let fits = |first_horizontal: bool| {
+        [(a, b), (b, c), (c, d), (d, a)]
+            .iter()
+            .enumerate()
+            .all(|(i, (p, q))| if (i % 2 == 0) == first_horizontal { same(p[1], q[1]) } else { same(p[0], q[0]) })
+    };
+    if !(fits(true) || fits(false)) {
+        return None;
+    }
+    let (xs, ys) = ([a[0], b[0], c[0], d[0]], [a[1], b[1], c[1], d[1]]);
+    let r = [
+        xs.into_iter().fold(f64::INFINITY, f64::min),
+        ys.into_iter().fold(f64::INFINITY, f64::min),
+        xs.into_iter().fold(f64::NEG_INFINITY, f64::max),
+        ys.into_iter().fold(f64::NEG_INFINITY, f64::max),
+    ];
+    (r[2] - r[0] > EPS && r[3] - r[1] > EPS).then_some(r)
+}
+
 impl Default for Gs {
     fn default() -> Self {
         Gs { ctm: Matrix::IDENTITY, fill: [0.0, 0.0, 0.0], alpha: 1.0 }
@@ -56,6 +109,9 @@ struct Walker<'a> {
     pieces: &'a Pieces,
     out: Vec<FilledRect>,
     ops_seen: usize,
+    /// Decoded bytes and form entries left for the page, its forms included: spending either
+    /// fails the audit.
+    budget: DecodeBudget,
 }
 
 impl<'a> Walker<'a> {
@@ -79,8 +135,7 @@ impl<'a> Walker<'a> {
         depth: usize,
         at_do: Option<(usize, usize)>,
     ) -> Result<(), AuditError> {
-        // A pending `re` rectangle, in the user space active when it was built.
-        let mut pending: Option<[f64; 4]> = None;
+        let mut path = Path::Empty;
         for (i, op) in ops.iter().enumerate() {
             self.bump()?;
             // Paint position of this operator: its own `(piece, joined index)` at page level,
@@ -92,18 +147,24 @@ impl<'a> Walker<'a> {
             match op.op.as_slice() {
                 b"q" => stack.push(gs.clone()),
                 b"Q" => {
+                    // The current path is not graphics state (ISO 32000-2 §8.4.1): `re Q f` still
+                    // fills the rectangle, whose corners are already in user space.
                     if let Some(g) = stack.pop() {
                         *gs = g;
                     }
-                    pending = None;
                 }
                 b"cm" => {
+                    let before = gs.ctm;
                     if let Some(m) = Matrix::from_operands(&op.operands)
                         && m.0.iter().all(|v| v.is_finite())
                     {
                         gs.ctm = m.then(&gs.ctm);
                     }
-                    pending = None;
+                    // A `cm` that leaves the CTM unchanged (an identity matrix) cannot move the
+                    // pending path, so keep it for the fill (#1333).
+                    if gs.ctm != before && !matches!(path, Path::Empty) {
+                        path = Path::Other;
+                    }
                 }
                 b"g" => {
                     if let Some(v) = op.num(0).filter(|v| v.is_finite()) {
@@ -133,7 +194,7 @@ impl<'a> Walker<'a> {
                     }
                 }
                 b"re" => {
-                    pending = op.nums::<4>().and_then(|[x, y, w, h]| {
+                    let rect = op.nums::<4>().and_then(|[x, y, w, h]| {
                         if [x, y, w, h].iter().all(|v| v.is_finite()) && w != 0.0 && h != 0.0 {
                             let r = gs.ctm.bbox([x.min(x + w), y.min(y + h), x.max(x + w), y.max(y + h)]);
                             (r[2] > r[0] && r[3] > r[1]).then_some(r)
@@ -141,18 +202,42 @@ impl<'a> Walker<'a> {
                             None
                         }
                     });
+                    path = rect.map_or(Path::Other, Path::Rect);
                 }
-                b"f" | b"F" | b"f*" | b"B" | b"B*" => {
-                    if let Some(r) = pending.take()
+                b"m" => {
+                    path = match (path, user_point(gs, op)) {
+                        (Path::Empty, Some(p)) => Path::Lines(vec![p], false),
+                        _ => Path::Other,
+                    };
+                }
+                b"l" => {
+                    path = match (path, user_point(gs, op)) {
+                        // Past a repeated start point it can no longer be a rectangle.
+                        (Path::Lines(mut pts, false), Some(p)) if pts.len() < 5 => {
+                            pts.push(p);
+                            Path::Lines(pts, false)
+                        }
+                        _ => Path::Other,
+                    };
+                }
+                b"h" => {
+                    path = match path {
+                        Path::Lines(pts, _) => Path::Lines(pts, true),
+                        // `re` already closed its subpath, so a further `h` changes nothing.
+                        Path::Rect(r) => Path::Rect(r),
+                        _ => Path::Other,
+                    };
+                }
+                // `b`/`b*` close the path before filling it, which the fill does anyway.
+                b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*" => {
+                    if let Some(r) = std::mem::replace(&mut path, Path::Empty).rect()
                         && gs.alpha >= 1.0
                     {
                         self.out.push(FilledRect { rect: r, rgb: gs.fill, pos });
                     }
-                    // Any other path construction clears the pending rectangle.
                 }
-                b"m" | b"l" | b"c" | b"v" | b"y" | b"h" | b"S" | b"s" | b"n" | b"W" | b"W*" => {
-                    pending = None;
-                }
+                b"S" | b"s" | b"n" => path = Path::Empty,
+                b"c" | b"v" | b"y" | b"W" | b"W*" => path = Path::Other,
                 b"Do" => {
                     if let Some(name) = op.name(0) {
                         if depth >= MAX_DEPTH {
@@ -160,7 +245,7 @@ impl<'a> Walker<'a> {
                         }
                         self.walk_xobject(name, gs, resources, depth, pos)?;
                     }
-                    pending = None;
+                    path = Path::Empty;
                 }
                 _ => {}
             }
@@ -177,7 +262,7 @@ impl<'a> Walker<'a> {
         let resolved = self.doc.resolve(entry);
         let Object::Stream(stream) = &*resolved else { return Ok(()) };
         let dict = &stream.dict;
-        if dict.name(b"Subtype") != Some(b"Form") {
+        if crate::subtype(self.doc, dict)?.as_deref() != Some(b"Form") {
             return Ok(());
         }
         let matrix = dict
@@ -190,8 +275,11 @@ impl<'a> Walker<'a> {
             })
             .unwrap_or(Matrix::IDENTITY);
         let sub_resources = dict.get(b"Resources").map(|o| self.doc.resolve(o)).and_then(|o| o.as_dict().cloned()).unwrap_or_default();
+        if !self.budget.enter_form() {
+            return Err(AuditError::TooManyForms);
+        }
         // A form stream that cannot be decoded fails the audit: it might hide a cover.
-        let data = stream.decoded_strict()?;
+        let data = self.budget.decode_strict(stream)?;
         let ops = parse(&data).ops;
         // The XObject matrix maps form space into the user space active at `Do`.
         let mut sub_gs = gs.clone();
@@ -199,6 +287,13 @@ impl<'a> Walker<'a> {
         let mut sub_stack = Vec::new();
         self.walk_ops(&ops, &mut sub_gs, &mut sub_stack, &sub_resources, depth + 1, Some(pos))
     }
+}
+
+/// The `x y` operands of `m`/`l`, mapped to user space.
+fn user_point(gs: &Gs, op: &Op) -> Option<[f64; 2]> {
+    let [x, y] = op.nums::<2>().filter(|v| v.iter().all(|n| n.is_finite()))?;
+    let (x, y) = gs.ctm.apply(x, y);
+    Some([x, y])
 }
 
 /// The non-stroking alpha (`/ca`) of a named ExtGState, defaulting to opaque.
@@ -216,7 +311,8 @@ fn ext_alpha(doc: &Document, resources: &Dict, name: &[u8]) -> f64 {
 /// Every opaque filled rectangle drawn by a page's content (and its form XObjects), with paint
 /// positions. A page's content streams are walked once, joined, with one graphics state, so
 /// state set in an earlier stream is still in force in the later ones. Any content stream that
-/// cannot be decoded is an audit failure, never an empty result.
+/// cannot be decoded, or content and forms that decode or enter past one page's [`DecodeBudget`]
+/// in all, is an audit failure, never an empty result.
 pub fn filled_rects(doc: &Document, page: &Dict) -> Result<Vec<FilledRect>, AuditError> {
     let resources = page.get(b"Resources").map(|o| doc.resolve(o)).and_then(|o| o.as_dict().cloned()).unwrap_or_default();
     let contents: Vec<Object> = match page.get(b"Contents") {
@@ -226,15 +322,16 @@ pub fn filled_rects(doc: &Document, page: &Dict) -> Result<Vec<FilledRect>, Audi
             _ => vec![c.clone()],
         },
     };
+    let mut budget = DecodeBudget::page();
     let mut streams = Vec::with_capacity(contents.len());
     for c in &contents {
         if let Object::Stream(s) = &*doc.resolve(c) {
-            streams.push(s.decoded_strict()?);
+            streams.push(budget.decode_strict(s)?);
         }
     }
     let pieces = Pieces::join(&streams);
     let parsed = pieces.parse();
-    let mut w = Walker { doc, pieces: &pieces, out: Vec::new(), ops_seen: 0 };
+    let mut w = Walker { doc, pieces: &pieces, out: Vec::new(), ops_seen: 0, budget };
     let mut gs = Gs::default();
     let mut stack = Vec::new();
     w.walk_ops(&parsed.ops, &mut gs, &mut stack, &resources, 0, None)?;

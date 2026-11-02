@@ -37,8 +37,8 @@ pub(crate) trait Structure {
         self.trailer().get(b"Root").and_then(Object::as_reference).and_then(|id| self.get_dictionary(id))
     }
 
-    fn get_pages(&self) -> BTreeMap<u32, ObjectId> {
-        let mut pages = BTreeMap::new();
+    fn page_ids(&self) -> Vec<ObjectId> {
+        let mut pages = Vec::new();
         let Ok(root) = self.catalog().and_then(|c| c.get(b"Pages")).and_then(Object::as_reference) else { return pages };
         let mut pending = vec![(root, 0usize)];
         let mut seen = HashSet::new();
@@ -49,9 +49,11 @@ pub(crate) trait Structure {
             let Ok(dict) = self.get_dictionary(id) else { continue };
             match dict.get_type() {
                 Ok(b"Page") => {
-                    // Page numbers are 1-based u32s; a tree past u32::MAX pages stops there.
-                    let Some(number) = u32::try_from(pages.len()).ok().and_then(|n| n.checked_add(1)) else { return pages };
-                    pages.insert(number, id);
+                    // Keep the effective u32 page-count bound without trusting /Count.
+                    if u32::try_from(pages.len()).ok().and_then(|n| n.checked_add(1)).is_none() {
+                        return pages;
+                    }
+                    pages.push(id);
                 }
                 Ok(b"Pages") => {
                     if let Ok(kids) = dict.get(b"Kids").and_then(|o| self.dereference(o)).and_then(|(_, o)| o.as_array()) {
@@ -112,10 +114,15 @@ impl Structure for lopdf::Document {
     fn get_object(&self, id: ObjectId) -> Result<&Object> {
         self.get_object(id)
     }
+    // lopdf's `get_object` already follows an indirect object that holds a reference, so the
+    // trait's walk would report the first object of a chain. lopdf's own walk reports the last.
+    fn dereference<'a>(&'a self, object: &'a Object) -> Result<(Option<ObjectId>, &'a Object)> {
+        lopdf::Document::dereference(self, object)
+    }
     fn encrypted(&self) -> bool {
         self.is_encrypted() || self.was_encrypted() || self.trailer.has(b"Encrypt")
     }
-    // `get_pages` is not overridden: lopdf's own page-tree walk trusts /Count and pre-allocates
+    // `page_ids` is not overridden: lopdf's own page-tree walk trusts /Count and pre-allocates
     // by it, so a hostile /Count (a fuzz finding: 4294967295) aborted the process with a 48 GiB
     // allocation. The trait's bounded default walk counts the real pages instead.
     fn get_page_fonts(&self, page: ObjectId) -> Result<BTreeMap<Vec<u8>, &Dictionary>> {
@@ -226,8 +233,62 @@ trailer
 << /Size 4 /Root 1 0 R >>
 %%EOF";
         let doc = lopdf::Document::load_mem(&pdf[..]).unwrap();
-        let pages = Structure::get_pages(&doc);
-        assert_eq!(pages.len(), 1, "the walk counts the one real page, not /Count");
+        let pages = Structure::page_ids(&doc);
+        assert_eq!(pages, [(3, 0)], "the walk counts the one real page, not /Count");
+    }
+
+    fn nested_sparse_page_tree(repeated_and_cyclic: bool) -> lopdf::Document {
+        let mut doc = lopdf::Document::with_version("1.7");
+        let mut catalog = Dictionary::new();
+        catalog.set("Type", Object::Name(b"Catalog".to_vec()));
+        catalog.set("Pages", Object::Reference((5, 0)));
+        doc.objects.insert((17, 0), Object::Dictionary(catalog));
+
+        let mut pages = Dictionary::new();
+        pages.set("Type", Object::Name(b"Pages".to_vec()));
+        pages.set("Kids", vec![Object::Reference((31, 0)), Object::Reference((88, 0))]);
+        pages.set("Count", Object::Integer(if repeated_and_cyclic { 5 } else { 3 }));
+        doc.objects.insert((5, 0), Object::Dictionary(pages));
+
+        let mut nested = Dictionary::new();
+        nested.set("Type", Object::Name(b"Pages".to_vec()));
+        nested.set("Parent", Object::Reference((5, 0)));
+        let kids = if repeated_and_cyclic {
+            vec![Object::Reference((12, 0)), Object::Reference((5, 0)), Object::Reference((31, 0)), Object::Reference((42, 0))]
+        } else {
+            vec![Object::Reference((12, 0)), Object::Reference((42, 0))]
+        };
+        nested.set("Kids", kids);
+        nested.set("Count", Object::Integer(if repeated_and_cyclic { 4 } else { 2 }));
+        doc.objects.insert((88, 0), Object::Dictionary(nested));
+
+        for (id, parent) in [(31, 5), (12, 88), (42, 88)] {
+            let mut page = Dictionary::new();
+            page.set("Type", Object::Name(b"Page".to_vec()));
+            page.set("Parent", Object::Reference((parent, 0)));
+            doc.objects.insert((id, 0), Object::Dictionary(page));
+        }
+        doc.max_id = 88;
+        doc.trailer.set("Root", Object::Reference((17, 0)));
+        doc
+    }
+
+    #[test]
+    fn page_walk_keeps_nested_sparse_order_and_first_visit_semantics() {
+        let doc = nested_sparse_page_tree(true);
+        assert_eq!(Structure::page_ids(&doc), [(31, 0), (12, 0), (42, 0)]);
+    }
+
+    #[test]
+    fn lazy_and_compatibility_walks_keep_nested_sparse_order() {
+        let mut source = nested_sparse_page_tree(false);
+        let mut bytes = Vec::new();
+        source.save_to(&mut bytes).unwrap();
+        let expected = [(31, 0), (12, 0), (42, 0)];
+        let eager = lopdf::Document::load_mem(&bytes).unwrap();
+        let lazy = LazyStructure::new(Arc::new(bytes), None).unwrap();
+        assert_eq!(Structure::page_ids(&eager), expected);
+        assert_eq!(Structure::page_ids(&lazy), expected);
     }
 
     #[test]
@@ -246,10 +307,11 @@ trailer
         source.save_to(&mut bytes).unwrap();
         let cos = Document::open(Arc::new(bytes)).unwrap();
         let compressed = pdfcraft_cos::write_full(&cos, &pdfcraft_cos::SaveOptions::default()).unwrap();
-        let expected = lopdf::Document::load_mem(&compressed).unwrap().get_pages();
+        let eager = lopdf::Document::load_mem(&compressed).unwrap();
+        let expected = Structure::page_ids(&eager);
         let view = LazyStructure::new(Arc::new(compressed), None).unwrap();
-        assert_eq!(view.get_pages().len(), 1);
-        assert_eq!(view.get_pages(), expected);
+        assert_eq!(view.page_ids().len(), 1);
+        assert_eq!(view.page_ids(), expected);
         assert!(!view.failed());
         assert!(
             view.objects.iter().filter(|(_, slot)| slot.get().is_some()).count() <= 3,

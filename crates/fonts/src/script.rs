@@ -188,9 +188,21 @@ pub(crate) fn bounded_outline(font: &FontRef, gid: GlyphId, width: f64) -> Resul
     Ok(GlyphOutline { contours: pen.contours, width, bbox })
 }
 
+/// The first character of `text` (other than white space) that neither the script font of typed
+/// signatures nor its Inter fallback has a glyph for: [`script_outline`] would leave it out.
+/// `None` when they can draw all of them.
+pub fn script_missing(text: &str) -> Option<char> {
+    let font = FontRef::new(FONT).ok()?;
+    let charmap = font.charmap();
+    let fallback = FontRef::new(INTER_REGULAR).ok();
+    let fallback_map = fallback.as_ref().map(|f| f.charmap());
+    text.chars().find(|c| !c.is_whitespace() && charmap.map(*c).is_none() && fallback_map.as_ref().and_then(|m| m.map(*c)).is_none())
+}
+
 /// The outlines of `text` in the script font. Characters it lacks (Cyrillic, Greek, …) are drawn
 /// from Inter, slanted and scaled to the script's capital height; characters neither font has are
-/// skipped. Over-limit input returns an empty outline instead of a silently truncated signature.
+/// skipped (check [`script_missing`] first where nobody sees a preview). Over-limit input returns
+/// an empty outline instead of a silently truncated signature.
 pub fn script_outline(text: &str) -> ScriptOutline {
     if text.chars().take(MAX_SIGNATURE_CHARS + 1).count() > MAX_SIGNATURE_CHARS {
         return ScriptOutline::default();
@@ -279,6 +291,17 @@ mod tests {
         let mixed = super::script_outline("Ana Ана");
         let latin_only = super::script_outline("Ana ");
         assert!(mixed.width > latin_only.width + 0.5, "{} vs {}", mixed.width, latin_only.width);
+    }
+
+    #[test]
+    fn missing_script_glyphs_are_named() {
+        assert_eq!(super::script_missing("Ada Lovelace-King"), None);
+        assert_eq!(super::script_missing("Zoë Ñúñez"), None);
+        assert_eq!(super::script_missing("Ada 张三"), Some('张'));
+        // Cyrillic and Greek come from the Inter fallback (#963), so they aren't missing.
+        assert_eq!(super::script_missing("Саша Дермановић Νίκος"), None);
+        assert_eq!(super::script_missing("Саша 张"), Some('张'));
+        assert_eq!(super::script_missing(" \t"), None);
     }
 
     #[test]

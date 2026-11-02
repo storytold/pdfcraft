@@ -6,14 +6,14 @@
 </filter></defs>
 
 <rect width="660" height="400" fill="#efe9dc"/>
-<g clip-path="url(#panel)"><rect width="232" height="400" fill="#12a58a"/><g transform="translate(-134.0,-40.0) scale(1.0)"><image href="../../../assets/app-icon/pdfcraft.svg" width="512" height="512"/></g></g>
+<g clip-path="url(#panel)"><rect width="232" height="400" fill="#b70228"/><g transform="translate(-134.0,-40.0) scale(1.0)"><image href="../../../assets/app-icon/pdfcraft.svg" width="512" height="512"/></g></g>
 <line x1="232.5" y1="0" x2="232.5" y2="400" stroke="#0b0b0c" stroke-width="1.2"/>
 <line x1="236.5" y1="0" x2="236.5" y2="400" stroke="#0b0b0c" stroke-width="0.5"/>
 
 <line x1="267" y1="88.5" x2="624" y2="88.5" stroke="#0b0b0c" stroke-width="0.6"/>
-<path d="M271.5,81.5 L276,88.5 L271.5,95.5 L267,88.5 Z" fill="#12a58a"/>
+<path d="M271.5,81.5 L276,88.5 L271.5,95.5 L267,88.5 Z" fill="#b70228"/>
 
-<rect x="408" y="197" width="78" height="16" rx="2" fill="#12a58a" fill-opacity="0.45"/><line x1="414" y1="205" x2="482" y2="205" stroke="#0b0b0c" stroke-width="1.6"/><path d="M499.1,205.0 L486.1,211.0 L486.1,199.0 Z" fill="#0b0b0c"/>
+<rect x="408" y="197" width="78" height="16" rx="2" fill="#b70228" fill-opacity="0.45"/><line x1="414" y1="205" x2="482" y2="205" stroke="#0b0b0c" stroke-width="1.6"/><path d="M499.1,205.0 L486.1,211.0 L486.1,199.0 Z" fill="#0b0b0c"/>
 <line x1="267" y1="335.5" x2="624" y2="335.5" stroke="#0b0b0c" stroke-width="0.6"/>
 
 

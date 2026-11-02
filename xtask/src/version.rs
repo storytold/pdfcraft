@@ -15,12 +15,21 @@ pub fn read(manifest: &str) -> Result<String, String> {
     Ok(v)
 }
 
-/// `manifest` with the workspace version replaced; everything else is byte-for-byte unchanged.
+/// `manifest` with the workspace version replaced, together with the matching `version` of every
+/// path dependency in `[workspace.dependencies]` (the workspace's own crates, which must agree
+/// with it or `cargo update` refuses them); everything else is byte-for-byte unchanged.
 pub fn replace(manifest: &str, new: &str) -> Result<String, String> {
     validate(new)?;
+    let old = read(manifest)?;
     let (idx, _) = find_line(manifest)?;
+    let (old_pin, new_pin) = (format!("version = \"{old}\""), format!("version = \"{new}\""));
     let mut out = String::with_capacity(manifest.len() + 8);
+    let mut in_deps = false;
     for (i, line) in manifest.split_inclusive('\n').enumerate() {
+        let t = line.trim();
+        if t.starts_with('[') {
+            in_deps = t == "[workspace.dependencies]";
+        }
         if i == idx {
             let eol = if line.ends_with("\r\n") {
                 "\r\n"
@@ -30,6 +39,8 @@ pub fn replace(manifest: &str, new: &str) -> Result<String, String> {
                 ""
             };
             out.push_str(&format!("version = \"{new}\"{eol}"));
+        } else if in_deps && line.contains("path = \"") && line.contains(&old_pin) {
+            out.push_str(&line.replace(&old_pin, &new_pin));
         } else {
             out.push_str(line);
         }
@@ -132,6 +143,18 @@ mod tests {
     }
 
     #[test]
+    fn moves_the_workspace_crates_pins_with_it() {
+        let manifest = "[workspace.package]\nversion = \"0.1.0\"\n\n[workspace.dependencies]\n\
+                        own = { path = \"crates/own\", version = \"0.1.0\" }\n\
+                        dep = { version = \"0.1.0\" }\n\
+                        other = { path = \"crates/other\", version = \"0.2\" }\n";
+        let out = replace(manifest, "0.2.0").unwrap();
+        assert!(out.contains("own = { path = \"crates/own\", version = \"0.2.0\" }"), "{out}");
+        assert!(out.contains("dep = { version = \"0.1.0\" }"), "a registry dependency keeps its version");
+        assert!(out.contains("other = { path = \"crates/other\", version = \"0.2\" }"));
+    }
+
+    #[test]
     fn keeps_crlf_line_endings() {
         let crlf = MANIFEST.replace('\n', "\r\n");
         let out = replace(&crlf, "2.0.0").unwrap();
@@ -153,5 +176,19 @@ mod tests {
     fn the_real_manifest_has_a_valid_version() {
         let text = std::fs::read_to_string(crate::gates::root().join("Cargo.toml")).unwrap();
         validate(&read(&text).unwrap()).unwrap();
+    }
+
+    /// The `rust-version = "1.NN"` line of a manifest, as the minor number.
+    fn minor_of_rust_version(manifest: &str) -> u32 {
+        let line = manifest.lines().find(|l| l.starts_with("rust-version = \"")).unwrap();
+        line.split('"').nth(1).unwrap().split('.').nth(1).unwrap().parse().unwrap()
+    }
+
+    #[test]
+    fn workspace_rust_version_covers_the_ui_crate() {
+        let root = crate::gates::root();
+        let workspace = std::fs::read_to_string(root.join("Cargo.toml")).unwrap();
+        let ui = std::fs::read_to_string(root.join("crates/ui-egui/Cargo.toml")).unwrap();
+        assert!(minor_of_rust_version(&workspace) >= minor_of_rust_version(&ui));
     }
 }

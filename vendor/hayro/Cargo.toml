@@ -83,9 +83,9 @@ features = [
 ]
 default-features = false
 
-[dev-dependencies.log]
-version = "0.4"
-
+# PdfCraft patch: the upstream-only `[dev-dependencies.log]` entry is removed (log is a normal
+# dependency since the logging patch), so `cargo test -p hayro` can run this crate's unit tests
+# even though a patched non-workspace crate may not require dev-dependencies.
 [lints.clippy]
 collection_is_never_read = "warn"
 dbg_macro = "warn"

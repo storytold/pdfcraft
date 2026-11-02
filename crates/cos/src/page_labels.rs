@@ -7,6 +7,11 @@ pub const MAX_LABEL_BYTES: usize = 1024;
 pub const MAX_PREFIX_BYTES: usize = 2 * MAX_LABEL_BYTES + 2;
 /// Sum of the UTF-8 bytes of custom labels for one document.
 pub const MAX_LABEL_TOTAL_BYTES: usize = 4 << 20;
+/// Sum of the UTF-8 bytes of the decoded prefixes of one `/PageLabels` tree. Each range decodes
+/// its own prefix, and ranges may share one prefix object, so without this a small file could ask
+/// for a copy per range: [`MAX_LABEL_TREE_WORK`] ranges naming one 1,024-byte prefix would hold
+/// about 200 MiB. Real documents stay far below it.
+pub const MAX_PREFIX_TOTAL_BYTES: usize = 4 << 20;
 /// The most number-tree entries (nodes, kids and range pairs) read from one `/PageLabels`
 /// tree. Scaled for real documents: one range per page on a ten-thousand-page PDF happens
 /// (prefix labels; #307's file has 9,156 pages), so the cap is twenty times that while still

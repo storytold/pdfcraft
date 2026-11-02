@@ -61,7 +61,7 @@ impl Document {
                 pdfcraft_annot::props(&editor.cos, page, index).map(|p| p.opacity).filter(|v| v.is_finite()).unwrap_or(1.0).clamp(0.0, 1.0) as f32;
             let turn = pdfcraft_annot::picture_rotation(&editor.cos, page, index).map_err(|e| e.to_string())?;
             let mut cos = editor.cos.clone();
-            pdfcraft_annot::delete_annotation(&mut cos, page, index).map_err(|e| e.to_string())?;
+            pdfcraft_annot::lift_annotation(&mut cos, page, index).map_err(|e| e.to_string())?;
             let bytes = Arc::new(pdfcraft_cos::write_incremental(&cos, &pdfcraft_cos::SaveOptions::default()).map_err(|e| e.to_string())?);
             Ok(Some(ImageSignaturePreview { image, opacity, turn, page, bytes, config: self.config.clone() }))
         })?
@@ -118,6 +118,43 @@ pub struct SignatureImage {
     size: [usize; 2],
 }
 
+/// Decode an imported PNG or JPEG within the source limits (file size, 32 megapixels, 8192 pixels
+/// per side, bounded allocation), upright per its EXIF orientation and scaled down to at most
+/// 4 megapixels and 4096 pixels per side. Shared by image signatures and scanned photos.
+pub(crate) fn decode_source(bytes: &[u8]) -> Result<DynamicImage, SignatureImageError> {
+    if bytes.len() > MAX_SIGNATURE_IMAGE_BYTES {
+        return Err(SignatureImageError::Size);
+    }
+    let format = image::guess_format(bytes).map_err(|_| SignatureImageError::Format)?;
+    if !matches!(format, ImageFormat::Png | ImageFormat::Jpeg) {
+        return Err(SignatureImageError::Format);
+    }
+    let mut reader = ImageReader::with_format(Cursor::new(bytes), format);
+    let mut limits = Limits::default();
+    limits.max_image_width = Some(MAX_SOURCE_SIDE);
+    limits.max_image_height = Some(MAX_SOURCE_SIDE);
+    // 8-bit RGBA at the pixel cap; 16-bit sources that large hit this and report Size.
+    limits.max_alloc = Some(MAX_SOURCE_PIXELS * 4);
+    reader.limits(limits);
+    let too_big = |e: image::ImageError| if matches!(e, image::ImageError::Limits(_)) { SignatureImageError::Size } else { e.into() };
+    let mut decoder = reader.into_decoder().map_err(too_big)?;
+    let (w, h) = decoder.dimensions();
+    if w == 0 || h == 0 || u64::from(w) * u64::from(h) > MAX_SOURCE_PIXELS {
+        return Err(SignatureImageError::Size);
+    }
+    let orientation = decoder.orientation()?;
+    let mut image = DynamicImage::from_decoder(decoder).map_err(too_big)?;
+    image.apply_orientation(orientation);
+    let (w, h) = (f64::from(image.width()), f64::from(image.height()));
+    let scale = (f64::from(MAX_SIDE) / w.max(h)).min((MAX_PIXELS as f64 / (w * h)).sqrt());
+    if scale < 1.0 {
+        let (nw, nh) = (((w * scale) as u32).max(1), ((h * scale) as u32).max(1));
+        // `thumbnail` resamples in one integer pass, without the large float buffers `resize` keeps.
+        image = image.thumbnail(nw, nh);
+    }
+    Ok(image)
+}
+
 impl SignatureImage {
     /// Read at most the file limit plus one byte, even if the file grows while being read.
     pub fn read(reader: impl Read) -> Result<Self, SignatureImageError> {
@@ -127,36 +164,7 @@ impl SignatureImage {
     }
 
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, SignatureImageError> {
-        if bytes.len() > MAX_SIGNATURE_IMAGE_BYTES {
-            return Err(SignatureImageError::Size);
-        }
-        let format = image::guess_format(bytes).map_err(|_| SignatureImageError::Format)?;
-        if !matches!(format, ImageFormat::Png | ImageFormat::Jpeg) {
-            return Err(SignatureImageError::Format);
-        }
-        let mut reader = ImageReader::with_format(Cursor::new(bytes), format);
-        let mut limits = Limits::default();
-        limits.max_image_width = Some(MAX_SOURCE_SIDE);
-        limits.max_image_height = Some(MAX_SOURCE_SIDE);
-        // 8-bit RGBA at the pixel cap; 16-bit sources that large hit this and report Size.
-        limits.max_alloc = Some(MAX_SOURCE_PIXELS * 4);
-        reader.limits(limits);
-        let too_big = |e: image::ImageError| if matches!(e, image::ImageError::Limits(_)) { SignatureImageError::Size } else { e.into() };
-        let mut decoder = reader.into_decoder().map_err(too_big)?;
-        let (w, h) = decoder.dimensions();
-        if w == 0 || h == 0 || u64::from(w) * u64::from(h) > MAX_SOURCE_PIXELS {
-            return Err(SignatureImageError::Size);
-        }
-        let orientation = decoder.orientation()?;
-        let mut image = DynamicImage::from_decoder(decoder).map_err(too_big)?;
-        image.apply_orientation(orientation);
-        let (w, h) = (f64::from(image.width()), f64::from(image.height()));
-        let scale = (f64::from(MAX_SIDE) / w.max(h)).min((MAX_PIXELS as f64 / (w * h)).sqrt());
-        if scale < 1.0 {
-            let (nw, nh) = (((w * scale) as u32).max(1), ((h * scale) as u32).max(1));
-            // `thumbnail` resamples in one integer pass, without the large float buffers `resize` keeps.
-            image = image.thumbnail(nw, nh);
-        }
+        let image = decode_source(bytes)?;
         let rgba = image.into_rgba8();
         let size = [rgba.width() as usize, rgba.height() as usize];
         let mut png = Cursor::new(Vec::new());
