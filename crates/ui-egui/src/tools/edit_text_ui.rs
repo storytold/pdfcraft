@@ -1,7 +1,9 @@
 //! Edit a PDF ▸ Edit text & images: boxes around the paragraphs and images already on the page.
 //! Click a paragraph to edit it in place (⌘Enter or clicking away applies and rewraps it to the
 //! box, Esc cancels); drag it to move it, or drag the handle on its left or right edge to rewrap
-//! it to a new width. Click an image to select it: drag to move, drag a corner to resize (keeping
+//! it to a new width. Turned source text uses a horizontal editing field measured along its
+//! own baseline; Apply keeps its original orientation. Rotated in-place interaction is not supported.
+//! Click an image to select it: drag to move, drag a corner to resize (keeping
 //! its proportions), right-click for rotate, flip, replace, save and delete; Delete removes it.
 
 use std::collections::BTreeMap;
@@ -79,7 +81,7 @@ pub struct LineEditor {
     pub(crate) fonts: BTreeMap<String, String>,
     /// The draft extends outside the source container; its frame follows the live draft bounds.
     pub overflow: bool,
-    /// The initial source container width in screen pixels.
+    /// The horizontal editing field width in screen pixels.
     max_width: f32,
     /// Current screen-space size. Recomputed from the current page transform before painting.
     size: f32,
@@ -233,6 +235,22 @@ impl Default for Extras {
 }
 
 impl LineEditor {
+    /// A turned paragraph uses a horizontal editing field, with metrics along its own baseline.
+    /// Its source geometry stays unchanged for Apply; egui's TextEdit cannot rotate interactions.
+    fn turned(&self) -> bool {
+        self.source.as_ref().is_some_and(|(block, _)| block.rotation.abs() > 1e-3)
+    }
+
+    fn text_frame(&self) -> Option<[f64; 4]> {
+        let (block, lines) = self.source.as_ref().filter(|_| self.turned())?;
+        block
+            .lines
+            .iter()
+            .filter_map(|i| lines.get(*i))
+            .map(|line| line.frame_rect())
+            .reduce(|a, b| [a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])])
+    }
+
     /// What Format text's font list shows: the chosen page font, a standard family picked
     /// instead, or the paragraph's own font (its `/BaseFont` without the subset tag).
     pub(crate) fn font_shown(&self, sources: &[(String, String)]) -> String {
@@ -843,9 +861,32 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
         ctx.request_repaint();
         return None;
     }
-    ed.rect = xf.user_rect(info, ed.page, ed.source_rect);
+    let source_screen = xf.user_rect(info, ed.page, ed.source_rect);
+    let turned = ed.turned();
+    let scale = if turned {
+        // A user-space square stays square under the page/view rotation, including UserUnit.
+        xf.user_rect(info, ed.page, [0.0, 0.0, 1.0, 1.0]).width().max(0.01)
+    } else {
+        (source_screen.width() / (ed.source_rect[2] - ed.source_rect[0]).abs().max(0.01)).max(0.01)
+    };
+    ed.rect = if let Some(frame) = ed.text_frame() {
+        if !page_clip.is_positive() {
+            return None;
+        }
+        // A readable horizontal field beside the turned source, constrained to this page.
+        let size = egui::vec2(
+            ((frame[2] - frame[0]) as f32 * scale).max(1.0).min(page_clip.width()),
+            ((frame[3] - frame[1]) as f32 * scale).max(1.0).min(page_clip.height()),
+        );
+        let min = pos2(
+            source_screen.left().clamp(page_clip.left(), (page_clip.right() - size.x).max(page_clip.left())),
+            source_screen.top().clamp(page_clip.top(), (page_clip.bottom() - size.y).max(page_clip.top())),
+        );
+        Rect::from_min_size(min, size)
+    } else {
+        source_screen
+    };
     ed.max_width = ed.rect.width();
-    let scale = (ed.rect.width() / (ed.source_rect[2] - ed.source_rect[0]).abs().max(0.01)).max(0.01);
     ed.size = (ed.look.size as f32 * scale).clamp(1.0, 300.0);
     // egui draws the caret at least one row of this font tall. Each row already has its source
     // row's height, so the font stays below every row (half the region's smallest size): on a
@@ -882,13 +923,14 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
             } else {
                 ed.rect.width().max(1.0)
             };
+            let width = if turned { width.min((page_clip.right() - ed.rect.left()).max(1.0)) } else { width };
             ui.set_width(width);
             let measured = editor_galley(ui, ed, &ed.text, scale, width);
             ed.overflow = ed.has_changes() && (measured.rect.width() > ed.rect.width() + 1.5 || measured.rect.height() > ed.rect.height() + 1.5);
             let visible = Rect::from_min_size(ed.rect.min, measured.rect.size().max(egui::vec2(1.0, 1.0)));
             // Unsupported source programs use an interface fallback whose glyph advances
             // can differ from the PDF's. Keep every visible row inside the growing frame.
-            let live = draft_rect.map_or(visible, |bounds| bounds.union(visible));
+            let live = if turned { visible } else { draft_rect.map_or(visible, |bounds| bounds.union(visible)) };
             ui.painter().rect_stroke(live.expand(2.0), CornerRadius::ZERO, Stroke::new(1.5, ACCENT), egui::StrokeKind::Outside);
             // On the frame, a press takes hold of the box (a click selects it, a drag moves it):
             // the pointer says so there, and reads as text inside.
@@ -901,7 +943,7 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
             }
             // White, unless the text is too pale to read on white (white text from a coloured
             // banner, #913): then a dark box, with a caret that shows on it.
-            let fill = if background_ready { Color32::TRANSPARENT } else { editor_fill(text_color) };
+            let fill = if background_ready && !turned { Color32::TRANSPARENT } else { editor_fill(text_color) };
             // An unchanged paragraph is the page's own text: the editor draws only its frame and
             // caret over it. Once it changes, the textless page goes under the editor's text or,
             // until that background is ready, a cover over the entire source box, including lines
@@ -912,7 +954,7 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
             egui::Frame::NONE.show(ui, |ui| {
                 // A textless PDF preview, or the page itself, keeps its real background through
                 // the transparent editor. The temporary opaque cover uses the shared caret-contrast rule.
-                ui.visuals_mut().text_cursor.stroke.color = if background_ready || unchanged {
+                ui.visuals_mut().text_cursor.stroke.color = if (background_ready || unchanged) && !turned {
                     if luminance(text_color) < 0.5 { Color32::BLACK } else { Color32::WHITE }
                 } else {
                     caret_color_on(fill)
@@ -921,7 +963,7 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
                 let snapshot = ed.clone();
                 let mut layouter = |ui: &egui::Ui, text: &dyn egui::TextBuffer, wrap_width: f32| {
                     let galley = editor_galley(ui, &snapshot, text.as_str(), scale, wrap_width);
-                    if snapshot.changes_with(text.as_str()) { galley } else { unseen(galley) }
+                    if snapshot.turned() || snapshot.changes_with(text.as_str()) { galley } else { unseen(galley) }
                 };
                 let before = ed.text.clone();
                 let input = input_id();
@@ -938,11 +980,24 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
                     .show(ui);
                 // The editor paints over the page with no visible label; name it for assistive tech.
                 output.response.response.clone().accessible_name(tl!("Text editing line"));
+                if turned {
+                    // The field is deliberately horizontal, so the unchanged vertical raster
+                    // cannot serve as its text/background as it does for an upright paragraph.
+                    ui.painter().set(cover, egui::Shape::rect_filled(output.response.rect.expand(1.0), CornerRadius::ZERO, fill));
+                }
                 if ed.has_changes() {
                     if background_ready {
                         reveal = true;
                     } else {
-                        ui.painter().set(cover, egui::Shape::rect_filled(ed.rect.expand(1.0).union(output.response.rect), CornerRadius::ZERO, fill));
+                        let shape = if turned {
+                            egui::Shape::Vec(vec![
+                                egui::Shape::rect_filled(source_screen.expand(1.0), CornerRadius::ZERO, fill),
+                                egui::Shape::rect_filled(output.response.rect.expand(1.0), CornerRadius::ZERO, fill),
+                            ])
+                        } else {
+                            egui::Shape::rect_filled(ed.rect.expand(1.0).union(output.response.rect), CornerRadius::ZERO, fill)
+                        };
+                        ui.painter().set(cover, shape);
                     }
                 }
                 look = Some((Arc::clone(&output.galley), output.galley_pos));
@@ -980,7 +1035,9 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
     if reveal {
         view.text_background.reveal();
     }
-    if let Some((galley, pos)) = look {
+    // A horizontal field is not an on-page rendering of turned text. Do not leave it behind
+    // as the settling preview after Apply; the next page raster has the real orientation.
+    if !turned && let Some((galley, pos)) = look {
         view.text_background.remember(&xf, page, block, galley, pos, text_color);
     }
     match done {
