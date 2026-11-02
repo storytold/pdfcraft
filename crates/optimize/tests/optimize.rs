@@ -1775,7 +1775,8 @@ fn monochrome_images_keep_what_they_should() {
     optimize(&mut doc, &Settings::default()).unwrap();
     assert_eq!([alone, deep].map(|r| raw(&doc, r)), before, "a Group 4 halftone alone, and sixteen-bit grey");
     assert_eq!(filters(&doc, wrapped), 1, "a wrapped Group 4 halftone is stored again alone by default");
-    assert_eq!(stream(&doc, scan).dict.name(b"Filter"), Some(&b"CCITTFaxDecode"[..]), "the scan: Group 4 is smaller");
+    assert!(matches!(stream(&doc, scan).filters().as_slice(), [(Filter::CcittFax | Filter::Flate, _)]), "the scan: Group 4 or Flate");
+    assert_eq!(doc.decoded_image(&stream(&doc, scan)).unwrap(), ragged, "the scan preserves every sample");
     assert_eq!((stream(&doc, fax).dict.name(b"Filter"), filters(&doc, fax)), (Some(&b"CCITTFaxDecode"[..]), 1), "the busy fax image");
 
     let (mut doc, [_, wrapped, scan, _, _]) = build();
@@ -2042,6 +2043,127 @@ fn rendered_text_becomes_jbig2_symbols() {
     let generic = pdfcraft_filters::encode_jbig2_generic(&text, w, h).unwrap();
     assert!(s.raw.len() * 2 < generic.len(), "symbols {} bytes, generic {}", s.raw.len(), generic.len());
     assert!(render(&doc) == before, "the page looks the same");
+}
+
+/// A JBIG2 scan goes through Monochrome Images like any black-and-white image. Above 450 ppi it
+/// is averaged as its Flate copy is, to the same samples, and stored as each compression asks:
+/// Group 4 or JBIG2, or Flate when that is smaller, or under Retain JBIG2 again; alone or behind another
+/// filter, and with `/JBIG2Globals`, which the new image doesn't refer to. Below 450 ppi it is
+/// stored again only when that is smaller: a generic region of text stays under Group 4, which
+/// is larger, and under Retain, and becomes symbols with JBIG2 asked for; behind ASCIIHex it is
+/// stored again alone, as Group 4 where the hex is spaced out. A JBIG2 page taller than the image
+/// is left alone.
+#[test]
+fn jbig2_scans_are_averaged_and_stored_again() {
+    // Black squares 16 samples a side on even rows and columns: at 600 ppi, halving leaves no new
+    // pixel covering both samples, so nothing keeps the picture at its resolution.
+    let (w, h) = (1200u32, 480u32);
+    let stride = (w as usize).div_ceil(8);
+    let mut squares = vec![0xFFu8; stride * h as usize];
+    for (top, left) in (0..h as usize / 32).flat_map(|r| (0..w as usize / 32).map(move |c| (r * 32 + 8, c * 32 + 8))) {
+        for y in top..top + 16 {
+            for x in left..left + 16 {
+                squares[y * stride + x / 8] &= !(0x80 >> (x % 8));
+            }
+        }
+    }
+    let grey = [("BitsPerComponent", 1.into()), ("ColorSpace", Object::name("DeviceGray"))];
+    let hex = |coded: &[u8]| -> Vec<u8> { coded.iter().flat_map(|b| format!("{b:02x}").into_bytes()).chain(*b">").collect() };
+    // An image of `coded` behind `filters`, with globals a decoder skips when `globals`, drawn at
+    // `width` × `height` pt.
+    let jbig2_page = |coded: &[u8], filters: &[&str], globals: bool, (iw, ih): (u32, u32), (width, height): (f64, f64)| {
+        let mut doc = Document::new_empty();
+        let mut d = Dict::new();
+        d.set(b"Subtype".to_vec(), Object::name("Image"));
+        d.set(b"Width".to_vec(), Object::Int(iw.into()));
+        d.set(b"Height".to_vec(), Object::Int(ih.into()));
+        for (k, v) in &grey {
+            d.set(k.as_bytes().to_vec(), v.clone());
+        }
+        d.set(b"Filter".to_vec(), Object::Array(filters.iter().map(|f| Object::name(f)).collect()));
+        if globals {
+            let g = doc.add(Object::Stream(Stream::from_raw(Dict::new(), vec![0, 0, 0, 0, 0x3E, 0, 0, 0, 0, 0, 4, 0, 0, 0, 1])));
+            let mut parms = Dict::new();
+            parms.set(b"JBIG2Globals".to_vec(), Object::Ref(g));
+            let entries = filters.iter().map(|f| if *f == "JBIG2Decode" { Object::Dict(parms.clone()) } else { Object::Null }).collect();
+            d.set(b"DecodeParms".to_vec(), Object::Array(entries));
+        }
+        let data = if filters.len() > 1 { hex(coded) } else { coded.to_vec() };
+        let im = doc.add(Object::Stream(Stream::from_raw(d, data)));
+        page(&mut doc, &[("Im", im)], &format!("q {width} 0 0 {height} 20 600 cm /Im Do Q"));
+        (doc, im)
+    };
+    let coded = pdfcraft_filters::encode_jbig2_generic(&squares, w, h).unwrap();
+    // 144 × 57.6 pt is 600 ppi.
+    let at_600 = (144.0, 57.6);
+    for compression in [MonoCompression::CcittG4, MonoCompression::Jbig2, MonoCompression::Retain] {
+        let settings = Settings { mono: MonoSettings { compression, ..MonoSettings::REDUCE }, ..Settings::default() };
+        let mut doc = Document::new_empty();
+        let im = mono_image(&mut doc, w, h, &squares, None, &grey);
+        page(&mut doc, &[("Im", im)], "q 144 0 0 57.6 20 600 cm /Im Do Q");
+        assert_eq!(optimize(&mut doc, &settings).unwrap().images_resampled, 1, "Flate, {compression:?}");
+        let averaged = doc.decoded_image(&stream(&doc, im)).unwrap();
+        for (filters, globals) in [(&["JBIG2Decode"][..], false), (&["ASCIIHexDecode", "JBIG2Decode"][..], false), (&["JBIG2Decode"][..], true)] {
+            let (mut doc, im) = jbig2_page(&coded, filters, globals, (w, h), at_600);
+            let r = optimize(&mut doc, &settings).unwrap();
+            let s = stream(&doc, im);
+            let what = format!("{filters:?}, globals {globals}, {compression:?}: {r:?}");
+            assert_eq!((r.images_resampled, s.dict.int(b"Width"), s.dict.int(b"Height")), (1, Some(600), Some(240)), "{what}");
+            assert_eq!(doc.decoded_image(&s).unwrap(), averaged, "{what}");
+            assert!(!s.dict.contains(b"DecodeParms") || s.dict.name(b"Filter") == Some(&b"CCITTFaxDecode"[..]), "{what}");
+            let filter = s.dict.name(b"Filter").map(<[u8]>::to_vec);
+            // The smallest of what each compression may store; under Retain, JBIG2 again.
+            let allowed: &[&[u8]] = match compression {
+                MonoCompression::CcittG4 => &[b"CCITTFaxDecode", b"FlateDecode"],
+                MonoCompression::Jbig2 => &[b"JBIG2Decode", b"FlateDecode"],
+                MonoCompression::Retain => &[b"JBIG2Decode"],
+            };
+            assert!(filter.as_deref().is_some_and(|f| allowed.contains(&f)), "{what}: {:?}", filter.map(String::from_utf8));
+        }
+    }
+
+    // At 300 ppi, below 450: rendered text, whose letters repeat, coded as one generic region.
+    let (tw, th) = (600u32, 480u32);
+    let text = rendered_text(tw, th);
+    let generic = pdfcraft_filters::encode_jbig2_generic(&text, tw, th).unwrap();
+    let at_300 = (144.0, 115.2);
+    for compression in [MonoCompression::CcittG4, MonoCompression::Retain] {
+        let settings = Settings { mono: MonoSettings { compression, ..MonoSettings::REDUCE }, ..Settings::default() };
+        let (mut doc, im) = jbig2_page(&generic, &["JBIG2Decode"], false, (tw, th), at_300);
+        let before = stream(&doc, im);
+        optimize(&mut doc, &settings).unwrap();
+        assert_eq!(stream(&doc, im), before, "JBIG2 below 450 ppi, {compression:?}");
+    }
+    let jbig2_asked = Settings { mono: MonoSettings { compression: MonoCompression::Jbig2, ..MonoSettings::REDUCE }, ..Settings::default() };
+    let (mut doc, im) = jbig2_page(&generic, &["JBIG2Decode"], false, (tw, th), at_300);
+    let r = optimize(&mut doc, &jbig2_asked).unwrap();
+    let s = stream(&doc, im);
+    assert_eq!((r.images_resampled, r.images_recompressed, s.dict.name(b"Filter")), (0, 1, Some(&b"JBIG2Decode"[..])), "{r:?}");
+    assert!(s.raw.len() * 2 < generic.len(), "symbols {} bytes, the generic region {}", s.raw.len(), generic.len());
+    assert_eq!(doc.decoded_image(&s).unwrap(), text);
+    // Behind ASCIIHex it is stored again alone, being smaller so.
+    let (mut doc, im) = jbig2_page(&generic, &["ASCIIHexDecode", "JBIG2Decode"], false, (tw, th), at_300);
+    optimize(&mut doc, &jbig2_asked).unwrap();
+    let s = stream(&doc, im);
+    assert_eq!((s.filters().len(), s.dict.name(b"Filter")), (1, Some(&b"JBIG2Decode"[..])));
+    assert_eq!(doc.decoded_image(&s).unwrap(), text);
+    // So it is as Group 4 when that is smaller: here the hex digits are spaced out, as ASCIIHex
+    // allows, so that the stream is many times the code.
+    let (mut doc, im) = jbig2_page(&generic, &["ASCIIHexDecode", "JBIG2Decode"], false, (tw, th), at_300);
+    let mut padded = stream(&doc, im);
+    padded.raw = generic.iter().flat_map(|b| format!("{b:02x}{}", " ".repeat(30)).into_bytes()).chain(*b">").collect::<Vec<u8>>().into();
+    doc.set(im, Object::Stream(padded));
+    optimize(&mut doc, &Settings::default()).unwrap();
+    let s = stream(&doc, im);
+    assert_eq!((s.filters().len(), s.dict.name(b"Filter")), (1, Some(&b"CCITTFaxDecode"[..])), "Group 4 alone");
+    assert_eq!(doc.decoded_image(&s).unwrap(), text);
+
+    // A JBIG2 page taller than the image: the renderer draws the whole page into it, so it isn't
+    // read, and stays as it is.
+    let (mut doc, im) = jbig2_page(&coded, &["JBIG2Decode"], false, (w, h - 8), at_600);
+    let before = stream(&doc, im);
+    optimize(&mut doc, &Settings::default()).unwrap();
+    assert_eq!(stream(&doc, im), before, "a taller page");
 }
 
 /// A whole 300 dpi letter page of rendered text, more marks than one JBIG2 text region of the
@@ -3490,10 +3612,12 @@ fn lzw_streams_that_cannot_be_read_or_are_not_asked_for_stay_unchanged() {
     assert_eq!(stream(&doc, c).decoded_strict().unwrap(), ops);
 }
 
-/// Unknown palette polarity is never guessed. Both palette orders and Decode directions
-/// retain the original thin rule and exact samples through a full save and render.
+/// An indexed image's palette says which sample is dark, so a thin rule survives averaging as it does
+/// in grey: with the palette either way round, and the decode array either way, the averaged image
+/// holds the averaged DeviceGray one's samples (flipped where its samples are), and looks the same
+/// through a full save and render.
 #[test]
-fn indexed_thin_rules_keep_their_samples_for_both_palette_orders_and_decodes() {
+fn indexed_thin_rules_survive_averaging_for_both_palette_orders_and_decodes() {
     let (w, h) = (1200u32, 480u32);
     let stride = (w as usize).div_ceil(8);
     let mut gray_data = vec![0xFF; stride * h as usize];
@@ -3505,6 +3629,7 @@ fn indexed_thin_rules_keep_their_samples_for_both_palette_orders_and_decodes() {
     page(&mut gray, &[("Im", gray_image)], "q 144 0 0 57.6 20 600 cm /Im Do Q");
     let gray_render = render(&gray);
     optimize(&mut gray, &Settings::default()).unwrap();
+    let gray_after = render(&Document::open(Arc::new(write_full(&gray, &SaveOptions::default()).unwrap())).unwrap());
     let gray_stream = stream(&gray, gray_image);
     let gray_samples = gray.decoded_image(&gray_stream).unwrap();
     assert_eq!((gray_stream.dict.int(b"Width"), gray_stream.dict.int(b"Height")), (Some(600), Some(240)));
@@ -3536,12 +3661,151 @@ fn indexed_thin_rules_keep_their_samples_for_both_palette_orders_and_decodes() {
             assert_eq!(before, gray_render, "the palette image is visually identical to DeviceGray");
             optimize(&mut doc, &Settings::default()).unwrap();
             let s = stream(&doc, image);
-            assert_eq!((s.dict.int(b"Width"), s.dict.int(b"Height")), (Some(w.into()), Some(h.into())));
-            assert_eq!(doc.decoded_image(&s).unwrap(), data);
+            assert_eq!((s.dict.int(b"Width"), s.dict.int(b"Height")), (Some(600), Some(240)), "white-first={white_first}, inverted={inverted}");
+            // The rows are 600 samples, whole bytes: flipping each byte flips each sample.
+            let expected: Vec<u8> = gray_samples.iter().map(|b| if white_first != inverted { !b } else { *b }).collect();
+            assert_eq!(doc.decoded_image(&s).unwrap(), expected, "white-first={white_first}, inverted={inverted}: the rule is dark");
             let saved = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
-            assert_eq!(render(&saved), before, "palette white-first={white_first}, inverted={inverted}");
+            assert!(render(&saved) == gray_after, "palette white-first={white_first}, inverted={inverted}");
         }
     }
+}
+
+/// An indexed image also drawn where the optimizer doesn't read (an annotation's appearance, where
+/// other default colour spaces may be in force and change which palette entry is darker) keeps its
+/// resolution, as black-and-white RGB keeps its colour space; drawn only on the page, it is
+/// averaged. A grey image is averaged either way: sample 0 stays dark in a grey space, and only an
+/// indexed image's palette depends on what's in force where it is drawn.
+#[test]
+fn an_indexed_image_used_beyond_the_page_content_read_is_not_averaged() {
+    let (w, h) = (1200u32, 480u32);
+    let stride = (w as usize).div_ceil(8);
+    let mut data = vec![0xFF; stride * h as usize];
+    for y in 0..h as usize {
+        data[y * stride + 101 / 8] &= !(0x80 >> (101 % 8));
+    }
+    let palette = Object::String(pdfcraft_cos::PdfString::literal(vec![0, 0, 0, 255, 255, 255]));
+    let indexed = Object::Array(vec![Object::name("Indexed"), Object::name("DeviceRGB"), 1.into(), palette]);
+    let cases = [(&indexed, false, 600), (&indexed, true, 1200), (&Object::name("DeviceGray"), false, 600), (&Object::name("DeviceGray"), true, 600)];
+    for (cs, in_annotation, width) in cases {
+        let mut doc = Document::new_empty();
+        let image = mono_image(&mut doc, w, h, &data, None, &[("BitsPerComponent", 1.into()), ("ColorSpace", cs.clone())]);
+        // 144 × 57.6 pt is 600 ppi.
+        let p = page(&mut doc, &[("Im", image)], "q 144 0 0 57.6 20 600 cm /Im Do Q");
+        if in_annotation {
+            let resources = Object::Dict({
+                let mut r = Dict::new();
+                r.set(b"XObject".to_vec(), Object::Dict(xobject_dict(&[("Im", image)])));
+                r
+            });
+            let appearance = drawing(&mut doc, Some(resources), &form_entries());
+            annotate(&mut doc, p, appearance);
+        }
+        optimize(&mut doc, &Settings::default()).unwrap();
+        assert_eq!(stream(&doc, image).dict.int(b"Width"), Some(width), "{cs:?}, in an annotation: {in_annotation}");
+    }
+}
+
+/// Which palette entry is darker comes from the colours, weighted as luma, and blue is darker than
+/// red whichever comes first. An array shaped like an indexed colour space and named otherwise has
+/// no palette, so its samples aren't averaged.
+#[test]
+fn an_indexed_palette_is_read_by_the_luma_of_its_colours() {
+    let (w, h) = (1200u32, 480u32);
+    let stride = (w as usize).div_ceil(8);
+    let mut data = vec![0xFF; stride * h as usize];
+    for y in 0..h as usize {
+        data[y * stride + 101 / 8] &= !(0x80 >> (101 % 8));
+    }
+    let palette = Object::String(pdfcraft_cos::PdfString::literal(vec![0, 0, 255, 255, 0, 0]));
+    let optimized = |space: &str| {
+        let cs = Object::Array(vec![Object::name(space), Object::name("DeviceRGB"), 1.into(), palette.clone()]);
+        let mut doc = Document::new_empty();
+        let image = mono_image(&mut doc, w, h, &data, None, &[("BitsPerComponent", 1.into()), ("ColorSpace", cs)]);
+        page(&mut doc, &[("Im", image)], "q 144 0 0 57.6 20 600 cm /Im Do Q");
+        optimize(&mut doc, &Settings::default()).unwrap();
+        let s = stream(&doc, image);
+        (s.dict.int(b"Width"), doc.decoded_image(&s).unwrap())
+    };
+    let (width, samples) = optimized("Indexed");
+    assert_eq!(width, Some(600));
+    assert!(samples.iter().any(|b| *b != 0xFF), "the blue line, half a new pixel wide, stays as the dark sample");
+    assert_eq!(optimized("NotIndexed").0, Some(1200));
+}
+
+/// What is averaged, by how the image is spelled. A family or a base by reference, or a device base
+/// alone in an array, is the same colour space. `/I`, an inline abbreviation, and a real `hival`
+/// aren't one, and neither is a table too large to be a palette, which images share and which
+/// would be read for each. A colour key can hide the dark sample a tie goes to, so a thin rule of
+/// the other would be lost, in grey too; a stencil `/Mask` doesn't.
+#[test]
+fn an_indexed_image_is_averaged_only_in_a_spelling_it_can_read() {
+    let (w, h) = (1200u32, 480u32);
+    let stride = (w as usize).div_ceil(8);
+    let mut data = vec![0xFF; stride * h as usize];
+    for y in 0..h as usize {
+        data[y * stride + 101 / 8] &= !(0x80 >> (101 % 8));
+    }
+    let table = || Object::String(pdfcraft_cos::PdfString::literal(vec![0, 0, 0, 255, 255, 255]));
+    let indexed = |family: Object, base: Object, hival: Object, table: Object| Object::Array(vec![family, base, hival, table]);
+    let rgb = || Object::name("DeviceRGB");
+    let plain = || indexed(Object::name("Indexed"), rgb(), 1.into(), table());
+    let width = |make: &dyn Fn(&mut Document) -> Vec<(&'static str, Object)>| {
+        let mut doc = Document::new_empty();
+        let mut entries = vec![("BitsPerComponent", Object::Int(1))];
+        entries.extend(make(&mut doc));
+        let image = mono_image(&mut doc, w, h, &data, None, &entries);
+        page(&mut doc, &[("Im", image)], "q 144 0 0 57.6 20 600 cm /Im Do Q");
+        optimize(&mut doc, &Settings::default()).unwrap();
+        stream(&doc, image).dict.int(b"Width")
+    };
+    let averaged = Some(600);
+    let kept = Some(1200);
+    assert_eq!(width(&|_| vec![("ColorSpace", plain())]), averaged, "direct");
+    assert_eq!(
+        width(&|doc: &mut Document| {
+            let family = doc.add(Object::name("Indexed"));
+            vec![("ColorSpace", indexed(Object::Ref(family), rgb(), 1.into(), table()))]
+        }),
+        averaged,
+        "the family by reference"
+    );
+    let base = Object::Array(vec![rgb()]);
+    assert_eq!(width(&|_| vec![("ColorSpace", indexed(Object::name("Indexed"), base.clone(), 1.into(), table()))]), averaged, "the base in an array");
+    assert_eq!(width(&|_| vec![("ColorSpace", indexed(Object::name("I"), rgb(), 1.into(), table()))]), kept, "an inline abbreviation");
+    assert_eq!(width(&|_| vec![("ColorSpace", indexed(Object::name("Indexed"), rgb(), Object::Real(1.0), table()))]), kept, "a real hival");
+    let long = Object::String(pdfcraft_cos::PdfString::literal([vec![0, 0, 0, 255, 255, 255], vec![0; 4097]].concat()));
+    assert_eq!(width(&|_| vec![("ColorSpace", indexed(Object::name("Indexed"), rgb(), 1.into(), long.clone()))]), kept, "a string past a palette");
+    // 16 KiB of raw data is all a table may take, whatever it decodes to.
+    let mut d = Dict::new();
+    d.set(b"Filter".to_vec(), Object::name("ASCIIHexDecode"));
+    let table_of = |raw: usize| {
+        let d = d.clone();
+        let hex: Vec<u8> = b"000000FFFFFF".iter().copied().chain(std::iter::repeat_n(b' ', raw - 13)).chain(*b">").collect();
+        move |doc: &mut Document| doc.add(Object::Stream(pdfcraft_cos::Stream::from_raw(d.clone(), hex.clone())))
+    };
+    for (raw, expected) in [(16384, averaged), (16385, kept)] {
+        let add = table_of(raw);
+        assert_eq!(
+            width(&|doc: &mut Document| {
+                let table = add(doc);
+                vec![("ColorSpace", indexed(Object::name("Indexed"), rgb(), 1.into(), Object::Ref(table)))]
+            }),
+            expected,
+            "a stream of {raw} bytes"
+        );
+    }
+    let key = || Object::Array(vec![0.into(), 0.into()]);
+    assert_eq!(width(&|_| vec![("ColorSpace", plain()), ("Mask", key())]), kept, "a colour key, indexed");
+    assert_eq!(width(&|_| vec![("ColorSpace", Object::name("DeviceGray")), ("Mask", key())]), kept, "a colour key, grey");
+    assert_eq!(
+        width(&|doc: &mut Document| {
+            let key = doc.add(key());
+            vec![("ColorSpace", plain()), ("Mask", Object::Ref(key))]
+        }),
+        kept,
+        "a colour key by reference"
+    );
 }
 
 /// White margins must not hide a small screened photograph from the tone guard.
