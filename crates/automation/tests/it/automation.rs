@@ -6353,6 +6353,16 @@ fn drawing_comments_through_tools() {
     // Review on #5689 (CodeRabbit): the requested colour is the group's, so the primary has it.
     assert_eq!(caret["replies"][0]["color"], caret["color"], "one colour for the pair: {caret}");
     assert_eq!(caret["color"], json!("#2E9E5C"), "the requested green, not the caret's default blue: {caret}");
+    // Restyling the caret restyles the proposal, its strikeout too, as one undo step.
+    let pair = |a: &mut Automation| {
+        let list = ok(a, "comment_list", json!({ "doc": doc, "page": 2 }));
+        let c = list["comments"].as_array().unwrap().iter().find(|c| c["type"] == "Caret").unwrap().clone();
+        (c["color"].clone(), c["replies"][0]["color"].clone())
+    };
+    ok(&mut a, "comment_edit", json!({ "doc": doc, "page": 2, "index": caret["index"], "color": "purple" }));
+    assert_eq!(pair(&mut a), (json!("#8A3FD1"), json!("#8A3FD1")), "the strikeout follows its caret");
+    ok(&mut a, "edit_undo", json!({ "doc": doc }));
+    assert_eq!(pair(&mut a), (json!("#2E9E5C"), json!("#2E9E5C")), "one undo puts both back");
     assert!(matches!(a.call("comment_add", &json!({ "doc": doc, "page": 2, "type": "replace", "find": "page 2" })), Err(ToolError::InvalidArgs(_))));
     // A file attached as a comment.
     std::fs::write(dir.join("notes.txt"), b"remember").unwrap();

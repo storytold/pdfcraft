@@ -572,9 +572,61 @@ fn ink_rect_for_width(d: &Dict, old_w: f64, w: f64) -> Option<[f64; 4]> {
 }
 
 /// Change a comment's colour, opacity, line width and/or line endings, and redraw it.
+///
+/// A Replace Text proposal is one look: colour and opacity are the group's (`/C` is read from
+/// the primary, ISO 32000-2 §12.5.6.2), so restyling either the caret or its strikeout restyles
+/// and redraws the other too, in the same edit. The strikeout takes no line width (a text markup
+/// annotation has no border) and neither part has line endings. All or nothing: if one member
+/// can't be restyled, none is.
 pub fn set_style(doc: &mut Document, page: usize, index: usize, change: StyleChange, meta: &Meta) -> Result<(), AnnotError> {
-    let StyleChange { color, opacity, width, endings } = change;
     let (_, r) = annot_ref(doc, page, index)?;
+    let others = replace_text_partners(doc, page, r)?;
+    // Check every partner before changing anything.
+    for &o in &others {
+        unlocked(doc, o)?;
+    }
+    let before: Vec<(ObjRef, Dict)> = others.iter().map(|&o| (o, annot_dict(doc, o))).collect();
+    let mut done: Vec<(ObjRef, Dict)> = vec![(r, annot_dict(doc, r))];
+    style_one(doc, r, change.clone(), meta)?;
+    for (o, d) in before {
+        let caret = d.name(b"Subtype") == Some(b"Caret");
+        let part = StyleChange { color: change.color, opacity: change.opacity, width: change.width.filter(|_| caret), endings: None };
+        let unchanged = part.color.is_none() && part.opacity.is_none() && part.width.is_none();
+        if unchanged {
+            continue;
+        }
+        if let Err(e) = style_one(doc, o, part, meta) {
+            // Put the members already restyled back, the target included.
+            for (o, d) in done.into_iter().rev() {
+                doc.set(o, Object::Dict(d));
+            }
+            return Err(e);
+        }
+        done.push((o, d));
+    }
+    Ok(())
+}
+
+/// The other members of the Replace Text proposal `r` belongs to, on `page`: for its caret, the
+/// strikeouts grouped under it; for a strikeout, its caret and any other strikeout under it.
+/// Empty for anything else.
+fn replace_text_partners(doc: &Document, page: usize, r: ObjRef) -> Result<Vec<ObjRef>, AnnotError> {
+    let own = Object::Ref(r);
+    let caret = match replaced_by(doc, &own) {
+        Some(c) => c,
+        None if annot_dict(doc, r).name(b"Subtype") == Some(b"Caret") => r,
+        None => return Ok(Vec::new()),
+    };
+    let list = annots(doc, page_ref(doc, page)?);
+    let strikes = list.iter().filter(|e| replaced_by(doc, e) == Some(caret)).filter_map(Object::as_ref);
+    // `/Annots` may list one annotation twice: restyle each once.
+    let mut seen: HashSet<ObjRef> = HashSet::from([r]);
+    Ok(std::iter::once(caret).chain(strikes).filter(|&o| seen.insert(o)).collect())
+}
+
+/// [`set_style`] on one annotation.
+fn style_one(doc: &mut Document, r: ObjRef, change: StyleChange, meta: &Meta) -> Result<(), AnnotError> {
+    let StyleChange { color, opacity, width, endings } = change;
     unlocked(doc, r)?;
     let d = annot_dict(doc, r);
     let subtype = String::from_utf8_lossy(d.name(b"Subtype").unwrap_or_default()).into_owned();

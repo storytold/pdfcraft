@@ -942,6 +942,55 @@ fn replace_text_groups_a_strikeout_and_a_caret() {
     );
 }
 
+/// Review on #5689 (CodeRabbit): clicking a Replace Text strikeout selects its caret, the
+/// group's primary, so a restyle from Comment Properties lands on the caret. Colour and opacity
+/// are the proposal's, so the strikeout is restyled and redrawn in the same edit, whichever
+/// member is restyled; it takes no border width. A locked member refuses the whole change.
+#[test]
+fn restyling_a_replace_text_pair_restyles_both_members() {
+    let mut doc = fixture();
+    let quads = [[100.0, 720.0, 200.0, 720.0, 100.0, 706.0, 200.0, 706.0]];
+    let red = Style { color: [0.89, 0.13, 0.13], opacity: 1.0, width: 1.0, fill: None };
+    let tr = TextReplacement {
+        page: 0,
+        quads: &quads,
+        replacement: "new words",
+        author: "Ada",
+        strike: &red,
+        caret: &red,
+        strike_meta: &meta("r"),
+        caret_meta: &meta("r-caret"),
+    };
+    let s = add_text_replacement(&mut doc, tr).unwrap();
+    let c = list(&doc, 0).iter().position(|d| d.name(b"Subtype") == Some(b"Caret")).unwrap();
+    let color = |doc: &Document, i: usize| {
+        list(doc, 0)[i].get(b"C").and_then(|o| o.as_array().cloned()).unwrap().iter().filter_map(Object::as_f64).collect::<Vec<_>>()
+    };
+    let green = [0.0, 0.5, 0.0];
+
+    // Restyled through the caret (what a click on either part selects).
+    let mut by_caret = doc.clone();
+    set_style(&mut by_caret, 0, c, StyleChange::new(Some(green), Some(0.5), Some(3.0), None), &meta("")).unwrap();
+    let by_caret = reopen(&by_caret);
+    assert_eq!(color(&by_caret, c), green.to_vec());
+    assert_eq!(color(&by_caret, s), green.to_vec(), "the strikeout takes the proposal's colour");
+    let strike = &list(&by_caret, 0)[s];
+    assert_eq!(strike.get(b"CA").and_then(Object::as_f64), Some(0.5), "and its opacity");
+    assert!(strike.get(b"BS").is_none(), "a strikeout has no border to widen: {strike:?}");
+    assert!(ap_content(&by_caret, strike).contains("0 0.5 0 RG"), "its appearance is redrawn: {}", ap_content(&by_caret, strike));
+
+    // Restyled through the strikeout: the caret follows.
+    let mut by_strike = doc.clone();
+    set_style(&mut by_strike, 0, s, StyleChange::new(Some(green), None, None, None), &meta("")).unwrap();
+    assert_eq!(color(&by_strike, c), green.to_vec(), "the caret takes the proposal's colour");
+
+    // A locked strikeout refuses the change, and nothing moves.
+    let mut locked = doc.clone();
+    set_locked(&mut locked, 0, s, true).unwrap();
+    assert!(set_style(&mut locked, 0, c, StyleChange::new(Some(green), None, None, None), &meta("")).is_err());
+    assert_eq!(color(&locked, c), red.color.to_vec(), "the caret keeps its colour");
+}
+
 #[test]
 fn files_attach_as_comments() {
     let mut doc = fixture();
