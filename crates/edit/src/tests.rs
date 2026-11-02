@@ -7720,6 +7720,48 @@ fn a_subset_that_cant_shape_gives_its_whole_run_to_a_loaded_full_face() {
     assert_eq!(page_content_bytes(&doc, 0), before);
 }
 
+/// Issue #5114: a program that shapes a run doesn't help when its resource can't encode the run.
+/// The letters it can encode stayed in it and the rest went to another font, and the row was
+/// refused as a mixed run. A complete program stays the document's own, ahead of a loaded face.
+#[test]
+fn a_resource_that_cant_encode_its_run_gives_all_of_it_to_one_face() {
+    const INTER: &[u8] = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
+    let draft = "ae\u{301}b";
+    let drawn_with = |doc: &Document| -> Vec<Vec<u8>> {
+        let page = pdfcraft_model::pages(doc).remove(0);
+        let resources = page.dict.get(b"Resources").and_then(|o| doc.dict(o)).unwrap();
+        let fonts = resources.get(b"Font").and_then(|o| doc.dict(o)).unwrap();
+        fonts_shown(doc)
+            .iter()
+            .map(|name| pdfcraft_fonts::pdf::embedded_sfnt(doc, &fonts.get(name).and_then(|f| doc.dict(f)).unwrap()).unwrap())
+            .collect()
+    };
+    // A subset's program is not its source's to complete, so the loaded face takes the run.
+    let mut doc = subset_page(INTER, INTER, "ABCDEF+Inter-Regular", "ae", "ae");
+    text::register_text_font(&mut doc, 0, INTER).unwrap();
+    text::rewrite_block(&mut doc, 0, 0, Some(draft), &text::BlockStyle::default()).unwrap();
+    assert_eq!(text::text_blocks(&reopen(&doc), 0).unwrap()[0].editor_text, draft);
+    assert!(!fonts_shown(&doc).contains(&b"F9".to_vec()));
+    // The document's complete program takes it, with or without a different program of that face
+    // loaded: without its kerning, so it can be told apart.
+    let other = font_without_table(INTER, b"GPOS");
+    for loaded in [true, false] {
+        let mut doc = subset_page(INTER, INTER, "Inter-Regular", "ae", "ae");
+        if loaded {
+            text::register_text_font(&mut doc, 0, &other).unwrap();
+        }
+        text::rewrite_block(&mut doc, 0, 0, Some(draft), &text::BlockStyle::default()).unwrap_or_else(|e| panic!("{loaded}: {e}"));
+        assert_eq!(text::text_blocks(&reopen(&doc), 0).unwrap()[0].editor_text, draft);
+        assert!(!fonts_shown(&doc).contains(&b"F9".to_vec()), "{loaded}");
+        assert!(drawn_with(&doc).iter().all(|program| program == INTER), "{loaded}");
+    }
+    // A resource that encodes the run keeps it, with a full face on the page.
+    let mut doc = subset_page(INTER, INTER, "ABCDEF+Inter-Regular", "ae\u{301}", "ae");
+    text::register_text_font(&mut doc, 0, &other).unwrap();
+    text::rewrite_block(&mut doc, 0, 0, Some("ea\u{301}"), &text::BlockStyle::default()).unwrap();
+    assert!(drawn_with(&doc).iter().all(|program| program == INTER));
+}
+
 /// Issue #5114: a Myanmar subset without GSUB, with the full face of its family loaded or built in.
 /// Runs only when craft-fonts has a Myanmar (`Mymr`) face (`CRAFT_FONTS_DIR`).
 #[test]
@@ -7729,7 +7771,8 @@ fn a_myanmar_subset_is_shaped_in_the_full_face_of_its_family() {
         return;
     };
     let no_gsub = font_without_table(face.bytes, b"GSUB");
-    let page = || subset_page(face.bytes, &no_gsub, "ABCDEF+NotoSansMyanmar-Regular", "\u{1019}\u{1014}", "\u{1019}\u{1014}");
+    let name = format!("ABCDEF+{}", face.name());
+    let page = || subset_page(face.bytes, &no_gsub, &name, "\u{1019}\u{1014}", "\u{1019}\u{1014}");
     for loaded in [false, true] {
         for draft in ["\u{1014}\u{1019}", "\u{1019}\u{1014}\u{1000}", "\u{1000} \u{1001}", "မြန်မာ"] {
             let mut doc = page();

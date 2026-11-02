@@ -60,6 +60,11 @@ impl FontResolver<'_> {
         {
             return self.embed_face(face.name(), face.bytes, face.family, "the full source font could not be loaded").map(Some);
         }
+        self.complete_source_font(source, text)
+    }
+
+    /// The complete program the document embeds for `source`, as a resource that encodes all of it.
+    fn complete_source_font(&mut self, source: &TextLine, text: &str) -> Result<Option<String>, EditError> {
         let Some(bytes) = self
             .programs
             .entry(source.font.clone())
@@ -77,10 +82,11 @@ impl FontResolver<'_> {
         self.embed_face(key, &bytes, &family, "the source font could not be loaded").map(Some)
     }
 
-    /// The one face a contextual span goes to when its source font can't shape it: a resource of
-    /// the same family on the page, or else an approved full face of that family. Left to
-    /// [`Self::encodable_font`] character by character, the letters a subset has would stay in it
-    /// and the rest go to the full face, so the span would split into runs shaped apart (#5114).
+    /// The one face a contextual span goes to when its source resource can't both encode and
+    /// shape it: the document's complete program for that resource, a resource of the same family
+    /// on the page, or else an approved full face of that family. Left to
+    /// [`Self::encodable_font`] character by character, the letters a resource can encode would
+    /// stay in it and the rest go elsewhere, so the span would split into runs shaped apart (#5114).
     /// `None` keeps the span with the source font, also when no face shapes it.
     fn shaping_font(&mut self, source: &TextLine, span: &str) -> Result<Option<String>, EditError> {
         use pdfcraft_fonts::{embedding, source_shaping};
@@ -89,19 +95,23 @@ impl FontResolver<'_> {
         }
         let rows = || span.split(['\n', '\r']);
         let shapes = |bytes: &[u8]| embedding::covers(bytes, span) && rows().all(|row| source_shaping::shape(bytes, row).is_ok());
-        let doc = &*self.doc;
-        let fonts = &*self.fonts;
-        let program =
-            |name: &str| fonts.get(name.as_bytes()).and_then(|font| doc.dict(font)).and_then(|font| pdfcraft_fonts::pdf::embedded_sfnt(doc, &font));
-        if program(&source.font).is_some_and(|bytes| shapes(&bytes)) {
-            return Ok(None);
+        let program = |doc: &Document, fonts: &Dict, name: &str| {
+            fonts.get(name.as_bytes()).and_then(|font| doc.dict(font)).and_then(|font| pdfcraft_fonts::pdf::embedded_sfnt(doc, &font))
+        };
+        if program(self.doc, self.fonts, &source.font).is_some_and(|bytes| shapes(&bytes)) {
+            if self.metrics.get(&source.font).is_some_and(|metrics| rows().all(|row| source_encodes(metrics, row))) {
+                return Ok(None);
+            }
+            if let Some(name) = self.complete_source_font(source, span)? {
+                return Ok(Some(name));
+            }
         }
         let key = embedding::face_key(&source.base_font);
         let loaded = self.metrics.iter().find(|(name, metrics)| {
             **name != source.font
                 && embedding::face_key(&metrics.base_font) == key
                 && rows().all(|row| source_encodes(metrics, row))
-                && program(name).is_some_and(|bytes| shapes(&bytes))
+                && program(self.doc, self.fonts, name).is_some_and(|bytes| shapes(&bytes))
         });
         if let Some((name, _)) = loaded {
             return Ok(Some(name.clone()));
