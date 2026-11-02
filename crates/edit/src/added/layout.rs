@@ -37,6 +37,21 @@ pub(super) fn wrapped(t: &AddedText) -> Vec<(String, bool, usize)> {
     let width = (t.rect[2] - t.rect[0]).max(t.size);
     let mut out = Vec::new();
     for (index, para) in t.text.split('\n').enumerate() {
+        if t.family == super::Family::WenKai {
+            let (mut line, mut used) = (String::new(), 0.0);
+            let paragraph = para.replace('\r', "");
+            for piece in paragraph.split_inclusive(' ').flat_map(crate::linebreak::pieces) {
+                let w = latin_width(t, piece);
+                if !line.is_empty() && used + w > width {
+                    out.push((std::mem::take(&mut line), false, index));
+                    used = 0.0;
+                }
+                line.push_str(piece);
+                used += w;
+            }
+            out.push((line, false, index));
+            continue;
+        }
         // Arabic or Hebrew: laid out with the bidirectional algorithm and shaped.
         let rtl_script = para.chars().any(|c| is_arabic(c) || is_hebrew(c));
         let thai = para.chars().any(is_thai);
@@ -123,6 +138,9 @@ pub(super) fn is_hebrew(c: char) -> bool {
 /// draw (or that has no face to draw it). Page-content tools refuse such text; the Add-text editor
 /// keeps it open.
 pub fn first_undrawable(t: &AddedText) -> Option<char> {
+    if t.family == super::Family::WenKai {
+        return t.text.chars().find(|c| !pdfcraft_fonts::chinese::has(*c));
+    }
     if t.text.chars().any(is_thai) {
         if let Some(c) = t.text.chars().find(|c| is_thai(*c) && !pdfcraft_fonts::thai_has(*c)) {
             return Some(c);

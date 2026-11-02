@@ -49,6 +49,7 @@ impl TextSession {
 
     /// Lays a draft out without writing it: the rewrite Apply runs, on a copy of the opened document.
     pub fn layout(&self, text: &str, style: &BlockStyle) -> Result<TextEditLayout, EditError> {
+        validate_standard_family(style)?;
         layout_draft(&self.base, self.page, &self.lines, &self.source, self.block, text, style)
     }
 
@@ -64,9 +65,21 @@ impl TextSession {
         style: &BlockStyle,
         max_glyphs: usize,
     ) -> Result<LineEdit, EditError> {
+        validate_standard_family(style)?;
         if !self.is_current(doc) {
             return Err(EditError::Invalid("the paragraph changed while it was being edited".into()));
         }
         rewrite_block_from(doc, self.page, self.lines.clone(), self.block, text, style, max_glyphs)
     }
+}
+
+/// The explicit build-input face is an added-item choice, not a standard-14 paragraph face.
+fn validate_standard_family(style: &BlockStyle) -> Result<(), EditError> {
+    let added_face = |family| matches!(family, Some((crate::added::Family::WenKai, _, _)));
+    if added_face(style.family) || style.ranges.iter().any(|range| added_face(range.family)) {
+        return Err(EditError::Invalid(
+            "LXGW WenKai Lite is an Add Text choice; select an embedded font resource when editing an existing paragraph".into(),
+        ));
+    }
+    Ok(())
 }

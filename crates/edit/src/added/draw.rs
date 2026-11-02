@@ -252,6 +252,30 @@ fn type3_shaped(doc: &mut Document, clusters: &[&ShapedCluster], outlines: &Hash
     doc.add(Object::Dict(font))
 }
 
+/// Write the selected Chinese face as an embedded Unicode font, using its actual advances.
+fn draw_chinese(doc: &mut Document, t: &AddedText, taken: &Dict, out: &mut Vec<u8>) -> Result<Dict, EditError> {
+    let mut fonts = taken.clone();
+    let (resource, codes) = pdfcraft_fonts::chinese::embed(doc, &mut fonts, &t.text).map_err(EditError::Invalid)?;
+    let r = text_rect(t);
+    let [cr, cg, cb] = t.color.map(|v| v.clamp(0.0, 1.0));
+    out.extend(format!("BT /{resource} {} Tf {} {} {} rg\n", n(t.size), n(cr), n(cg), n(cb)).bytes());
+    let all = wrapped(t);
+    let paragraphs: Vec<_> = all.iter().map(|(_, _, p)| *p).collect();
+    for (i, (line, ..)) in all.iter().enumerate() {
+        let w = latin_width(t, line);
+        let y = r[3] - (i as f64 * 1.2 + 0.95) * t.size;
+        let (mut x, tw) = placed(t, r, &paragraphs, i, w, line.matches(' ').count(), false);
+        for c in line.chars() {
+            let code = codes.get(&c).ok_or_else(|| EditError::Invalid("Chinese character has no font mapping".into()))?;
+            out.extend(format!("1 0 0 1 {} {} Tm <{code:04X}> Tj\n", n(x), n(y)).bytes());
+            x += latin_width(t, &c.to_string()) + if c == ' ' { tw } else { 0.0 };
+        }
+    }
+    out.extend_from_slice(b"ET\n");
+
+    Ok(fonts)
+}
+
 /// Content and resources for an item; `view` maps display space to user space. `taken` holds the
 /// page's font names. `existing`: the item is being replaced, so a build without the Arabic or
 /// Hebrew face keeps drawing that text as `?`, as before it was supported, rather than refusing to
@@ -270,6 +294,12 @@ pub(super) fn draw(doc: &mut Document, c: &Content, view: [f64; 6], taken: &Dict
     .into_bytes();
     match c {
         Content::Text(t) => {
+            if t.family == Family::WenKai {
+                let fonts = draw_chinese(doc, t, taken, &mut out)?;
+                res.set(b"Font".to_vec(), Object::Dict(fonts));
+                out.extend_from_slice(b"Q\n");
+                return Ok((out, res));
+            }
             let base = t.family.base_font(t.bold, t.italic);
             let name = font_name(base);
             let mut font = Dict::new();

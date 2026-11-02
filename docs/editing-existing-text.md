@@ -128,3 +128,12 @@ them, a page of an affected document is refused until it is listed again, instea
 numbers as positions. Without a listing, a number is a position in the page's current
 paragraphs, as before. The inline editor holds the paragraph a switching click asked for the
 same way. What is still missing is an identity that survives save and reopen (design: #2508).
+
+
+## Chinese in Add Text
+
+When the native build includes LXGW WenKai Lite Regular from the existing craft-fonts input, Add Text offers **LXGW WenKai Lite** alongside the three standard families. Select it before typing Chinese in a new box. The saved PDF embeds its font program and Unicode mappings, and keeps the font choice when the added item is reopened, retyped or moved.
+
+The headless `page_add_text` and `content_update` tools accept `font: "wenkai"`. Characters the face cannot draw are refused. The choice is hidden in builds without the face, including the current web build; modifying a saved item in such a build reports that the face is missing. This option supports regular style only, and wraps using the existing CJK line-break opportunities and punctuation prohibitions. Arbitrary font import in Add Text, form fields and Fill & Sign are outside this change.
+
+Retyping, changing away from WenKai or deleting an added item removes its unused font mappings. Mappings still used by another item or a resource-inheriting form are retained; unreadable page content conservatively keeps them. A full save can collect the unreferenced font objects; incremental saves retain their earlier revisions. The `chinese` alias is also listed in both automation font schemas.

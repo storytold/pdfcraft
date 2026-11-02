@@ -180,3 +180,8 @@ sync_github_name = true
 
 [people.dylanmtaylor]
 sync_github_name = true
+
+[people.ynqiu]
+real_name = "Yuning Qiu"
+display_name = "Yuning Qiu"
+sync_github_name = false

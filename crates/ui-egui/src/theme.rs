@@ -404,6 +404,9 @@ fn font_definitions_for_platform(prefer_hans: bool, platform: FontPolicyPlatform
         }
     }
     let fallback: Vec<String> = fonts.families[&FontFamily::Proportional].clone();
+    if let Some(face) = pdfcraft_fonts::chinese::face() {
+        fonts.families.insert(FontFamily::Name("added-chinese".into()), vec![face.name()]);
+    }
     for (fam, primary) in [("medium", "Inter-Medium"), ("semibold", "Inter-SemiBold")] {
         let mut stack = vec![primary.to_owned()];
         stack.extend(fallback.iter().cloned());

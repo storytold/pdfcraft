@@ -12,6 +12,8 @@ pub enum Family {
     Helvetica,
     Times,
     Courier,
+    /// The build-input LXGW WenKai Lite Regular face, for added page text only.
+    WenKai,
 }
 
 impl Family {
@@ -20,12 +22,14 @@ impl Family {
             Family::Helvetica => "Helvetica",
             Family::Times => "Times",
             Family::Courier => "Courier",
+            Family::WenKai => "LXGW WenKai Lite",
         }
     }
 
-    /// The standard-14 font name for this family and style.
+    /// The PDF base-font name for this family and style.
     pub fn base_font(self, bold: bool, italic: bool) -> &'static str {
         match (self, bold, italic) {
+            (Family::WenKai, _, _) => "LXGWWenKaiLite-Regular",
             (Family::Helvetica, false, false) => "Helvetica",
             (Family::Helvetica, true, false) => "Helvetica-Bold",
             (Family::Helvetica, false, true) => "Helvetica-Oblique",
@@ -43,7 +47,9 @@ impl Family {
 
     pub(super) fn from_base(base: &[u8]) -> (Family, bool, bool) {
         let s = String::from_utf8_lossy(base);
-        let family = if s.starts_with("Times") {
+        let family = if s.starts_with("LXGWWenKaiLite") {
+            Family::WenKai
+        } else if s.starts_with("Times") {
             Family::Times
         } else if s.starts_with("Courier") {
             Family::Courier
@@ -58,12 +64,16 @@ impl Family {
     /// `italic` matters: the item is written out as the oblique/italic face (see [`Family::base_font`]),
     /// whose published widths differ from the upright face (Times-Italic `A` is 611, Times-Roman 722).
     pub fn width(self, s: &str, size: f64, bold: bool, italic: bool) -> f64 {
+        if self == Family::WenKai {
+            return pdfcraft_fonts::chinese::width(s, size);
+        }
         self.std14(bold, italic).text_width(s, size)
     }
 
-    /// The standard-14 face this family means at the given style.
+    /// The standard-14 face, or a Latin fallback for an explicitly embedded family.
     pub fn std14(self, bold: bool, italic: bool) -> Std14 {
         match (self, bold, italic) {
+            (Family::WenKai, _, _) => Std14::Helvetica,
             (Family::Courier, false, false) => Std14::Courier,
             (Family::Courier, true, false) => Std14::CourierBold,
             (Family::Courier, false, true) => Std14::CourierOblique,

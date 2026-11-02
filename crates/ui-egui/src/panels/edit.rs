@@ -395,6 +395,10 @@ fn added_text_format(
     let out = crate::format_text_ui::panel(ui, t, style, None, crate::format_text_ui::Fonts { sources: None, shown, mixed_size: false }, paragraphs);
     if let Some(crate::format_text_ui::FontChoice::Family(family)) = out.font {
         style.family = family;
+        if family == pdfcraft_engine::FontFamily::WenKai {
+            style.bold = false;
+            style.italic = false;
+        }
     }
     out
 }
@@ -448,5 +452,42 @@ impl PdfCraftApp {
             }
         }
         self.views[index].line_editor = Some(ed);
+    }
+}
+
+#[cfg(test)]
+mod chinese_added_font_tests {
+    use egui_kittest::kittest::Queryable;
+
+    #[test]
+    fn added_text_menu_selects_the_build_input_chinese_face() {
+        let available = pdfcraft_fonts::chinese::face().is_some();
+        crate::i18n::set_current(crate::i18n::Lang::EN);
+        let mut ready = false;
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(272.0, 700.0)).with_accessibility_check(false).build_ui_state(
+            move |ui, style: &mut pdfcraft_engine::AddedText| {
+                if !ready {
+                    egui_extras::install_image_loaders(ui.ctx());
+                    crate::theme::install_fonts(ui.ctx());
+                    crate::theme::apply(ui.ctx(), crate::theme::ThemeKind::Light);
+                    ready = true;
+                    return;
+                }
+                super::added_text_format(ui, &crate::theme::Tokens::get(ui.ctx()), style, None);
+            },
+            pdfcraft_engine::AddedText { bold: true, italic: true, ..Default::default() },
+        );
+        h.run_steps(4);
+        h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Font").click();
+        h.run_steps(2);
+        if !available {
+            assert!(h.query_by_label("LXGW WenKai Lite").is_none());
+            return;
+        }
+        h.get_by_label("LXGW WenKai Lite").click();
+        h.run_steps(4);
+        assert_eq!(h.state().family, pdfcraft_engine::FontFamily::WenKai);
+        assert!(!h.state().bold && !h.state().italic, "the selected face is regular only");
+        assert_eq!(h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Font").value().as_deref(), Some("LXGW WenKai Lite"));
     }
 }

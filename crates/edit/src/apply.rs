@@ -26,6 +26,12 @@ pub fn add_header_footer(doc: &mut Document, pages: &[usize], hf: &HeaderFooter,
 }
 
 fn add_header_footer_in_place(doc: &mut Document, pages: &[usize], hf: &HeaderFooter, replace: bool, cx: &Context) -> Result<(), EditError> {
+    let preferred = match hf.font {
+        added::Family::Helvetica => "PCHelv",
+        added::Family::Times => "PCTimes",
+        added::Family::Courier => "PCCour",
+        added::Family::WenKai => return Err(EditError::Invalid("the Chinese face is currently available in Add Text only".into())),
+    };
     let all = page_list(doc);
     check(pages, all.len())?;
     if hf.text.iter().all(|t| t.trim().is_empty()) {
@@ -83,11 +89,6 @@ fn add_header_footer_in_place(doc: &mut Document, pages: &[usize], hf: &HeaderFo
         let [top, bottom, left, right] = hf.margins;
         // The page resource the face is added under: the usual name, unless the page already
         // draws another font by it, which must not change under the header.
-        let preferred = match hf.font {
-            added::Family::Helvetica => "PCHelv",
-            added::Family::Times => "PCTimes",
-            added::Family::Courier => "PCCour",
-        };
         let base = hf.font.base_font(false, false);
         let resource = free_font_name(doc, &page_fonts(doc, page), preferred, base);
         let mut body: Vec<u8> = format!("BT\n/{resource} {} Tf\n{}\n", n(size), rgb(hf.color)).into_bytes();

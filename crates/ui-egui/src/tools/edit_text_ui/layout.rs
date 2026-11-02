@@ -27,6 +27,7 @@ pub(super) fn look_of(b: &pdfcraft_engine::TextBlock) -> pdfcraft_engine::AddedT
 
 pub(crate) fn editor_font(look: &pdfcraft_engine::AddedText, size: f32) -> FontId {
     let family = match (look.family, look.bold) {
+        (pdfcraft_engine::FontFamily::WenKai, _) if pdfcraft_fonts::chinese::face().is_some() => FontFamily::Name("added-chinese".into()),
         (pdfcraft_engine::FontFamily::Courier, _) => FontFamily::Monospace,
         (_, true) => FontFamily::Name("semibold".into()),
         (_, false) => FontFamily::Proportional,

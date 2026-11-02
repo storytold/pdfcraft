@@ -127,6 +127,12 @@ fn validate(c: &Content) -> Result<(), EditError> {
     }
     match c {
         Content::Text(t) => {
+            if t.family == Family::WenKai && pdfcraft_fonts::chinese::face().is_none() {
+                return Err(EditError::Invalid("Chinese text needs the LXGW WenKai Lite face in this build".into()));
+            }
+            if t.family == Family::WenKai && (t.bold || t.italic) {
+                return Err(EditError::Invalid("the Chinese face currently supports regular style only".into()));
+            }
             if t.text.trim().is_empty() {
                 return Err(EditError::Invalid("type some text first".into()));
             }
@@ -245,7 +251,9 @@ pub fn update_content(doc: &mut Document, page: usize, index: usize, c: &Content
     if std::mem::discriminant(&a.content) != std::mem::discriminant(c) {
         return Err(EditError::Invalid("an item can't change between text and image".into()));
     }
+    let old_fonts = chinese_fonts(doc, a.obj);
     write(doc, page, c, Some(a.obj))?;
+    drop_unused_chinese_fonts(doc, page, &old_fonts);
     Ok(())
 }
 
@@ -255,6 +263,7 @@ pub fn delete_content(doc: &mut Document, page: usize, index: usize) -> Result<(
     let p = page_list(doc).swap_remove(page);
     let list: Vec<Object> = contents(doc, &p)?.into_iter().filter(|o| o.as_ref() != Some(a.obj)).collect();
     let fonts = own_fonts(doc, a.obj);
+    let chinese = chinese_fonts(doc, a.obj);
     // Only the page's own resources carry an item's fonts (`write` gives the page a copy).
     let res = match p.dict.get(b"Resources") {
         Some(Object::Dict(d)) if !fonts.is_empty() => Some(d.clone()),
@@ -270,6 +279,7 @@ pub fn delete_content(doc: &mut Document, page: usize, index: usize) -> Result<(
             d.set(b"Resources".to_vec(), Object::Dict(r));
         }
     })?;
+    drop_unused_chinese_fonts(doc, page, &chinese);
     Ok(())
 }
 
@@ -305,4 +315,47 @@ fn drop_fonts(doc: &Document, res: &mut Dict, names: &[Vec<u8>]) {
         fonts.remove(name);
     }
     res.set(b"Font".to_vec(), Object::Dict(fonts));
+}
+
+/// Mapping resources selected by the old item. Unlike PCAr fonts, PCFull mappings can be shared.
+fn chinese_fonts(doc: &Document, obj: ObjRef) -> Vec<Vec<u8>> {
+    let Object::Stream(stream) = &*doc.get(obj) else { return Vec::new() };
+    let Ok(data) = stream.decoded_strict() else { return Vec::new() };
+    pdfcraft_content::parse(&data)
+        .ops
+        .into_iter()
+        .filter(|op| op.is("Tf"))
+        .filter_map(|op| op.name(0).filter(|name| name.starts_with(b"PCFull")).map(<[u8]>::to_vec))
+        .take(256)
+        .collect()
+}
+
+/// After replacement/deletion, remove only the old item's unreferenced WenKai mappings.
+/// The shared scanner also checks forms and Type 3 glyphs inheriting the page's resources;
+/// unreadable content keeps its resources. Cloning gives this page its own resource dictionary.
+fn drop_unused_chinese_fonts(doc: &mut Document, page: usize, candidates: &[Vec<u8>]) {
+    if candidates.is_empty() {
+        return;
+    }
+    let Some(page) = page_list(doc).into_iter().nth(page) else { return };
+    let Some(mut resources) = page.dict.get(b"Resources").and_then(|r| doc.dict(r)) else { return };
+    let Some(mut fonts) = resources.get(b"Font").and_then(|f| doc.dict(f)) else { return };
+    let Some(shown) = crate::text::fonts_shown(doc, &page.dict, &resources) else { return };
+    let mut changed = false;
+    for name in candidates {
+        if !shown.contains(name)
+            && fonts
+                .get(name)
+                .and_then(|f| doc.dict(f))
+                .is_some_and(|font| font.name(b"Subtype") == Some(b"Type0") && font.name(b"BaseFont") == Some(b"LXGWWenKaiLite-Regular"))
+        {
+            fonts.remove(name);
+            changed = true;
+        }
+    }
+    if changed {
+        resources.set(b"Font".to_vec(), Object::Dict(fonts));
+        // Cleanup is optional: failure leaves the old mapping, never missing content.
+        let _ = doc.update_dict(page.obj, |d| d.set(b"Resources".to_vec(), Object::Dict(resources)));
+    }
 }

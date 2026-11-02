@@ -10306,3 +10306,203 @@ fn review_inside_scope_group_move_matches_direct_transform_under_outer_scale() {
         }
     }
 }
+
+#[test]
+fn added_chinese_font_roundtrips_and_remains_editable() {
+    if !pdfcraft_fonts::CRAFT_FONTS.iter().any(|f| f.family == "LXGW WenKai Lite") {
+        return;
+    }
+    let mut doc = fixture();
+    // A newly added Chinese item must remain the same font after saving and reopening.
+    let family = Family::WenKai;
+    let text =
+        AddedText { family, text: "中文标注：文字 ABC 123。".into(), rect: [72.0, 678.4, 400.0, 700.0], size: 18.0, ..Default::default() };
+    assert!(added::first_undrawable(&text).is_none());
+    add_content(&mut doc, 0, &Content::Text(text.clone())).unwrap();
+    let mut doc = reopen(&doc);
+    let items = list_added(&doc);
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].content, Content::Text(text.clone()));
+    let lines = text::text_lines(&doc, 0).unwrap();
+    let extracted: String = lines.iter().map(|l| l.text.as_str()).collect();
+    assert!(extracted.contains("中文标注"), "{extracted}");
+    let changed = AddedText { text: "保存后继续编辑中文。".into(), ..text };
+    update_content(&mut doc, 0, 0, &Content::Text(changed.clone())).unwrap();
+    let mut doc = reopen(&doc);
+    assert_eq!(list_added(&doc)[0].content, Content::Text(changed));
+    delete_content(&mut doc, 0, 0).unwrap();
+    assert!(list_added(&reopen(&doc)).is_empty());
+    assert!(streams(&doc, 0).iter().any(|s| s.contains("(Hi)")), "unrelated page content stays intact");
+}
+
+#[test]
+fn added_chinese_wraps_and_refuses_unavailable_glyphs() {
+    if !pdfcraft_fonts::CRAFT_FONTS.iter().any(|f| f.family == "LXGW WenKai Lite") {
+        return;
+    }
+    let family = Family::WenKai;
+    let text =
+        AddedText {
+            family, text: "中文标注测试没有空格也应该自动换行".into(), rect: [72.0, 600.0, 160.0, 700.0], size: 18.0, ..Default::default()
+        };
+    let lines = added::lines(&text);
+    assert!(lines.len() > 1);
+    for line in lines {
+        assert!(family.width(&line, 18.0, false, false) <= 88.01);
+    }
+    let mut doc = fixture();
+    let invalid = AddedText { text: "中文\u{10ffff}".into(), ..text };
+    assert!(add_content(&mut doc, 0, &Content::Text(invalid)).is_err());
+    assert!(!doc.is_modified());
+}
+
+#[test]
+fn added_chinese_wraps_without_stranding_punctuation() {
+    if pdfcraft_fonts::chinese::face().is_none() {
+        return;
+    }
+    let text = AddedText {
+        family: Family::WenKai,
+        text: "中文，标注（测试）文字。继续编辑。".into(),
+        rect: [0.0, 0.0, 45.0, 300.0],
+        size: 18.0,
+        ..Default::default()
+    };
+    let lines = added::lines(&text);
+    assert!(lines.len() > 1);
+    assert_eq!(lines.concat(), text.text);
+    for line in lines {
+        assert!(line.chars().next().is_none_or(|c| !['，', '）', '。'].contains(&c)), "{line}");
+        assert!(!line.ends_with('（'), "{line}");
+    }
+}
+
+#[test]
+fn added_chinese_face_is_not_written_as_a_standard_header_or_paragraph_font() {
+    let mut doc = fixture();
+    let hf = HeaderFooter {
+        font: Family::WenKai,
+        text: ["Header".into(), String::new(), String::new(), String::new(), String::new(), String::new()],
+        ..Default::default()
+    };
+    assert!(add_header_footer(&mut doc, &[0], &hf, false, &cx()).is_err());
+    let style = text::BlockStyle { family: Some((Family::WenKai, false, false)), ..Default::default() };
+    assert!(text::rewrite_block(&mut doc, 0, 0, Some("Hello"), &style).is_err());
+    assert!(text::text_edit_layout(&doc, 0, 0, "Hello", &style).is_err());
+    assert!(!doc.is_modified());
+}
+
+fn chinese_font_resources(doc: &Document) -> Dict {
+    let page = &pdfcraft_model::pages(doc)[0];
+    let resources = doc.dict(page.dict.get(b"Resources").unwrap()).unwrap();
+    let fonts = doc.dict(resources.get(b"Font").unwrap()).unwrap();
+    Dict::from_iter(fonts.iter().filter(|(name, _)| name.starts_with(b"PCFull")).map(|(name, font)| (name.clone(), font.clone())))
+}
+
+#[test]
+fn added_chinese_retyping_reclaims_obsolete_mappings_after_full_save() {
+    if pdfcraft_fonts::chinese::face().is_none() {
+        return;
+    }
+    let mut doc = fixture();
+    let mut text = AddedText { rect: [72.0, 600.0, 400.0, 700.0], family: Family::WenKai, text: "中文".into(), ..Default::default() };
+    add_content(&mut doc, 0, &Content::Text(text.clone())).unwrap();
+    let original = chinese_font_resources(&doc);
+    text.rect[0] += 10.0;
+    update_content(&mut doc, 0, 0, &Content::Text(text.clone())).unwrap();
+    assert_eq!(chinese_font_resources(&doc), original, "moving reuses the same font mapping");
+    for value in ["标注", "继续编辑", "保存文字"] {
+        text.text = value.into();
+        update_content(&mut doc, 0, 0, &Content::Text(text.clone())).unwrap();
+        assert_eq!(chinese_font_resources(&doc).len(), 1, "obsolete mappings are removed after retyping");
+    }
+    let mut doc = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
+    assert_eq!(chinese_font_resources(&doc).len(), 1);
+    let programs =
+        |doc: &Document| doc.scan_objects().filter(|(_, o)| matches!(o.as_ref(), Object::Stream(s) if s.dict.get(b"PCFullFont").is_some())).count();
+    assert_eq!(programs(&doc), 1);
+    delete_content(&mut doc, 0, 0).unwrap();
+    assert!(chinese_font_resources(&doc).is_empty());
+    let doc = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
+    assert_eq!(programs(&doc), 0, "full save collects the last unused font program");
+}
+
+#[test]
+fn added_chinese_shared_mapping_survives_until_its_last_user_is_removed() {
+    if pdfcraft_fonts::chinese::face().is_none() {
+        return;
+    }
+    let mut doc = fixture();
+    let text = AddedText { rect: [72.0, 600.0, 400.0, 700.0], family: Family::WenKai, text: "中文".into(), ..Default::default() };
+    add_content(&mut doc, 0, &Content::Text(text.clone())).unwrap();
+    add_content(&mut doc, 0, &Content::Text(text.clone())).unwrap();
+    let shared = chinese_font_resources(&doc);
+    assert_eq!(shared.len(), 1);
+    update_content(&mut doc, 0, 0, &Content::Text(AddedText { text: "标注".into(), ..text })).unwrap();
+    assert_eq!(chinese_font_resources(&doc).len(), 2);
+    delete_content(&mut doc, 0, 1).unwrap();
+    assert_eq!(chinese_font_resources(&doc).len(), 1, "only the retyped item's mapping remains");
+    assert!(text::text_lines(&doc, 0).unwrap().iter().any(|line| line.text.contains("标注")));
+    update_content(&mut doc, 0, 0, &Content::Text(AddedText { rect: [72.0, 600.0, 400.0, 700.0], text: "Latin".into(), ..Default::default() }))
+        .unwrap();
+    assert!(chinese_font_resources(&doc).is_empty(), "switching to a standard font removes the old mapping");
+
+    let text = AddedText { rect: [72.0, 600.0, 400.0, 700.0], family: Family::WenKai, text: "中文".into(), ..Default::default() };
+    add_content(&mut doc, 0, &Content::Text(text.clone())).unwrap();
+    add_content(&mut doc, 0, &Content::Text(text)).unwrap();
+    let shared = chinese_font_resources(&doc);
+    delete_content(&mut doc, 0, 1).unwrap();
+    assert_eq!(chinese_font_resources(&doc), shared, "another added item still uses the mapping");
+    delete_content(&mut doc, 0, 1).unwrap();
+    assert!(chinese_font_resources(&doc).is_empty());
+}
+
+#[test]
+fn added_chinese_cleanup_preserves_mappings_used_by_inheriting_forms() {
+    if pdfcraft_fonts::chinese::face().is_none() {
+        return;
+    }
+    let mut doc = fixture();
+    add_content(
+        &mut doc,
+        0,
+        &Content::Text(AddedText { rect: [72.0, 600.0, 400.0, 700.0], family: Family::WenKai, text: "中文".into(), ..Default::default() }),
+    )
+    .unwrap();
+    let fonts = chinese_font_resources(&doc);
+    let name = String::from_utf8(fonts.iter().next().unwrap().0.clone()).unwrap();
+    let mut form = Dict::new();
+    form.set(b"Subtype".to_vec(), Object::name("Form"));
+    form.set(b"BBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 200.into(), 200.into()]));
+    let form = doc.add(Object::Stream(Stream::flate(form, format!("BT /{name} 12 Tf <0001> Tj ET").as_bytes())));
+    let page = pdfcraft_model::pages(&doc)[0].clone();
+    let mut res = doc.dict(page.dict.get(b"Resources").unwrap()).unwrap();
+    res.set(b"XObject".to_vec(), Object::Dict(Dict::from_iter([(b"Form".to_vec(), Object::Ref(form))])));
+    doc.update_dict(page.obj, |d| d.set(b"Resources".to_vec(), Object::Dict(res))).unwrap();
+    delete_content(&mut doc, 0, 0).unwrap();
+    assert_eq!(chinese_font_resources(&doc), fonts, "a form without resources still uses the page's font");
+}
+
+#[test]
+fn added_chinese_cleanup_keeps_resources_when_content_is_not_parseable() {
+    if pdfcraft_fonts::chinese::face().is_none() {
+        return;
+    }
+    let mut doc = fixture();
+    add_content(
+        &mut doc,
+        0,
+        &Content::Text(AddedText { rect: [72.0, 600.0, 400.0, 700.0], family: Family::WenKai, text: "中文".into(), ..Default::default() }),
+    )
+    .unwrap();
+    let fonts = chinese_font_resources(&doc);
+    let data = b")";
+    assert!(pdfcraft_content::parse(data).skipped > 0);
+    let malformed = doc.add(Object::Stream(Stream::flate(Dict::new(), data)));
+    let page = pdfcraft_model::pages(&doc)[0].clone();
+    let mut entries = contents(&mut doc, &page).unwrap();
+    entries.push(Object::Ref(malformed));
+    doc.update_dict(page.obj, |d| d.set(b"Contents".to_vec(), Object::Array(entries))).unwrap();
+    delete_content(&mut doc, 0, 0).unwrap();
+    assert_eq!(chinese_font_resources(&doc), fonts, "unknown content might still need this mapping");
+}
