@@ -225,6 +225,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 ## Progress log
 
+- **2026-11-02 (M7, #5731 preview):** Preview and Apply share implicit paragraph text selection; the public-tool regression failed before the correction and passes for width-plus-Auto-direction with soft and hard breaks. Integrated upstream main `f47618f5` cleanly. Browser/provider/native-reader qualification and estimates remain unchanged.
+
 - **2026-11-02 (M7, #5731 review):** Completed native text-editor pointer interruptions release composition command keys at the common frame boundary; single-line/multiline click/drag component coverage passes. README direction status is clarified. Preview/Apply text-selection review remains open; broader browser/form/IME qualification and estimates are unchanged.
 
 - **2026-11-02 (M7, #5731):** Consolidated Arabic integration follows upstream main `d7dd1de647ee`; retained both roadmap histories and reviewed automatic app initialization merges. Supported-font and Chrome/native-reader limitations remain unchanged. Estimates unchanged.

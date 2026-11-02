@@ -48,6 +48,11 @@ language. `content_list`, `text_paragraphs` and `form_fields` return `direction`
 A direction-only paragraph edit preserves the editor's row boundaries. Line edits
 and image updates refuse direction; use the paragraph or added text item instead.
 
+Paragraph preview (`text_edit_layout`) and Apply (`text_edit`) select the same
+replacement text for a width-and-direction change without explicit `text`: both
+rejoin soft wraps. A direction-only request preserves editor rows. Supplying
+`text` uses that text unchanged.
+
 Logical Unicode remains the stored text. PdfCraft records explicit overrides in
 its own PDF metadata, so another viewer need not expose the same controls. Complex
 existing text still needs a supported complete embedded source face; direction

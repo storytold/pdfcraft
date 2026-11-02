@@ -63,7 +63,7 @@ states and exact heads before merging.
 
 A combined desktop build was also exercised with the user's Windows Arabic
 keyboard: Arabic text plus `1378` was saved, and the saved PDF was reopened with
-text readback and rendering checked. This is a bounded supported-font example.
+text readback and rendering checked. This is a bounded example using a supported font.
 Chrome acceptance, broader runtime/provider coverage and independent native-reader
 qualification remain pending. The consolidated PR is open for review;
 it has not been merged.
@@ -73,4 +73,4 @@ full Arabic form appearances, missing-font completion, OCR/export interoperabili
 and universal OS IME qualification are not delivered by this bundle. Overall RTL
 interface parity remains planned until its broader workflows have evidence.
 
-Review 5735147265 follow-up: completed native click/drag interruptions release composition ownership at the common frame boundary, covering non-page text widgets while retaining page-specific resets. The component regression failed with the reset disabled and passes for single-line/multiline click/drag cases against pinned egui; this is not live form/provider/browser qualification. README links distinguish the historical core checkpoint from integrated direction controls. The preview/Apply text-selection finding remains open: its new automation regression build was stopped at the contributor's timebox before execution. No passing or failing regression result is claimed for that unfinished check.
+Review 5735147265 follow-up: completed native click/drag interruptions release composition ownership at the common frame boundary, covering non-page text widgets while retaining page-specific resets. The component regression failed with the reset disabled and passes for single-line/multiline click/drag cases against pinned egui; this is not live form/provider/browser qualification. README links distinguish the historical core checkpoint from integrated direction controls. Preview and Apply now share paragraph replacement selection. The focused public-tool regression first reproduced different bounds and overflow for implicit width-plus-Auto-direction reflow, then passed after the correction. The synthetic paragraph includes both a soft wrap and a hard break; preview remains read-only and Apply retains the hard break. Forced LTR/RTL across these standard-font source rows still requires a uniform complete face. This closes the specific selector finding, without expanding the qualification claims above.

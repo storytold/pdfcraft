@@ -48,14 +48,14 @@ fn refuse_line_direction(args: &Args) -> Result<()> {
     Ok(())
 }
 
-fn paragraph_replacement(args: &Args, block: pdfcraft_engine::TextBlock, width: Option<f64>) -> Result<String> {
+fn paragraph_replacement(args: &Args, block: &pdfcraft_engine::TextBlock, width: Option<f64>) -> Result<String> {
     // Explicit row alignments keep editor rows; a width-only edit rejoins soft wraps.
     Ok(match args.opt_str("text")? {
         Some(text) => text.to_owned(),
-        None if args.get("aligns").is_some() => block.editor_text,
+        None if args.get("aligns").is_some() => block.editor_text.clone(),
         None if width.is_some() => block.reflow_text.clone(),
-        None if args.get("direction").is_some() => block.editor_text,
-        None => block.text,
+        None if args.get("direction").is_some() => block.editor_text.clone(),
+        None => block.text.clone(),
     })
 }
 
@@ -577,16 +577,17 @@ impl Automation {
                 let blocks = doc.text_blocks(page);
                 let index = self.paragraph_index(doc.id, page, k, &blocks)?;
                 let source = blocks.get(index).ok_or_else(|| ToolError::InvalidArgs("paragraph is out of range".into()))?;
-                let text = a.opt_str("text")?.unwrap_or(&source.editor_text);
+                let width = a.opt_num("width")?;
+                let text = paragraph_replacement(&a, source, width)?;
                 let style = pdfcraft_engine::BlockStyle {
                     size: a.opt_num("size")?,
-                    width: a.opt_num("width")?,
+                    width,
                     resource: a.opt_str("font_resource")?.map(str::to_owned),
                     direction: a.opt_str("direction")?.map(crate::content::parse_direction).transpose()?,
                     ranges: parse_style_ranges(a.get("ranges"))?,
                     ..Default::default()
                 };
-                let layout = doc.text_edit_layout(page, index, text, &style).map_err(failed)?;
+                let layout = doc.text_edit_layout(page, index, &text, &style).map_err(failed)?;
                 let info = &doc.info.pages[page];
                 let view_rect = |r: [f64; 4]| {
                     let a = info.user_to_view(r[0] as f32, r[1] as f32);
@@ -608,7 +609,7 @@ impl Automation {
                 let block = blocks.get(index).cloned().ok_or_else(|| ToolError::InvalidArgs(format!("paragraph {k} is out of range")))?;
                 let width = a.opt_num("width")?;
                 let source_rect = block.rect;
-                let text = paragraph_replacement(&a, block, width)?;
+                let text = paragraph_replacement(&a, &block, width)?;
                 let mut style = pdfcraft_engine::BlockStyle {
                     ranges: parse_style_ranges(a.get("ranges"))?,
                     resource: a.opt_str("font_resource")?.map(str::to_owned),
