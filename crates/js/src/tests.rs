@@ -1226,6 +1226,11 @@ mod formcalc {
         assert_eq!(calc(r#"WordNum(1.01, 2)"#), "One Dollar And 01 Cent");
         assert_eq!(calc(r#"Encode("a b&c", "url")"#), "a%20b%26c");
         assert_eq!(calc(r#"Decode("a%20b", "url")"#), "a b");
+        // Unreserved characters stay; a space, `/`, `%` and UTF-8 bytes are `%XX` in capitals.
+        assert_eq!(calc(r#"Encode("aZ09-_.~ /%é", "url")"#), "aZ09-_.~%20%2F%25%C3%A9");
+        // A `%` that starts no escape is kept; bytes that aren't UTF-8 become U+FFFD.
+        assert_eq!(calc(r#"Decode("%c3%a9%G1%4%", "url")"#), "é%G1%4%");
+        assert_eq!(calc(r#"Decode("%E9x", "url")"#), "\u{FFFD}x");
     }
 
     fn assert_format_and_date_builtins() {
