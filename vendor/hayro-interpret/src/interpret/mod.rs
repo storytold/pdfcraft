@@ -120,6 +120,10 @@ pub struct InterpreterSettings {
     /// costs a decode and a resample each for pixels nobody can see. Never set it for a final
     /// render (tiles, whole pages, print, export).
     pub preview: bool,
+    /// PdfCraft patch (73): the steps of JBIG2 decoding a page's images may take between them
+    /// ([`hayro_syntax::MAX_PAGE_JBIG2_WORK`] by default). Images past it aren't drawn, nor images
+    /// whose masks are past it, each with [`InterpreterWarning::ContentTruncated`].
+    pub jbig2_work: u64,
 }
 
 impl Default for InterpreterSettings {
@@ -142,6 +146,7 @@ impl Default for InterpreterSettings {
             ocg_overrides: Arc::new(Vec::new()),
             cancelled: None,
             preview: false,
+            jbig2_work: hayro_syntax::MAX_PAGE_JBIG2_WORK,
         }
     }
 }
@@ -163,12 +168,25 @@ pub enum InterpreterWarning {
     ColorFallback,
 }
 
+/// PdfCraft patch (73): ends a page's JBIG2 allowance with the page, so that what decodes on its
+/// thread afterwards has no page to run out on.
+struct PageJbig2Work;
+
+impl Drop for PageJbig2Work {
+    fn drop(&mut self) {
+        hayro_syntax::set_page_jbig2_work(u64::MAX);
+    }
+}
+
 /// interpret the contents of the page and render them into the device.
 pub fn interpret_page<'a>(
     page: &Page<'a>,
     context: &mut Context<'a>,
     device: &mut impl Device<'a>,
 ) {
+    // PdfCraft patch (73): a context used again is another page.
+    hayro_syntax::set_page_jbig2_work(context.settings.jbig2_work);
+    let _allowance = PageJbig2Work;
     let resources = page.resources();
     let mut content = page.content_reader();
     // PdfCraft patch: the page's own contents count against its content budget too, where they
