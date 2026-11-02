@@ -58,7 +58,10 @@ mod editing;
 mod home;
 mod hotbar;
 mod panels;
-pub use print_ui::{Handling as PrintHandling, OptionsSource, PrintDraft, PrinterSource, Which as PrintWhich, system_printers};
+pub use print_ui::{
+    Handling as PrintHandling, OptionsSource, PreferencesSource, PrintDraft, PrinterSource, TwoSidedSource, Which as PrintWhich, system_printers,
+    system_two_sided,
+};
 pub use redact_ui::{HiddenDraft, PagesDraft as RedactPagesDraft, RedactPrefs, SearchDraft as RedactSearchDraft, SearchMode as RedactSearchMode};
 pub mod i18n;
 pub mod theme;
@@ -338,6 +341,11 @@ pub struct PdfCraftApp {
     pub printer_source: Option<PrinterSource>,
     /// Where Properties… reads a printer's driver options: the spooler's unless a test stands in.
     pub options_source: Option<OptionsSource>,
+    /// Reads the picked printer's two-sided support in the background (the desktop app sets it;
+    /// see [`TwoSidedSource`]). Without one the dialog goes by the printer list alone.
+    pub two_sided_source: Option<TwoSidedSource>,
+    /// Native printer settings, supplied by tests when no real driver window should open.
+    pub preferences_source: Option<PreferencesSource>,
     // A browser has no background print work: the type is empty there.
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub(crate) print_tasks: print_ui::PrintTasks,

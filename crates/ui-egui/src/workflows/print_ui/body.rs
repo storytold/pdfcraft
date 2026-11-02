@@ -94,6 +94,11 @@ pub(crate) fn body(
     ui.add_space(8.0);
     let settings = d.settings(sizes.len(), labels);
     let sheets = settings.as_ref().ok().and_then(|s| print::layout(sizes, s).ok()).unwrap_or_default();
+    let duplex_warning = d
+        .printers
+        .iter()
+        .find(|p| d.printer.as_ref() == Some(&p.name))
+        .is_some_and(|p| p.two_sided.or_else(|| d.two_sided_for(&p.name).copied().flatten()) == Some(false));
     d.sheet = d.sheet.min(sheets.len().saturating_sub(1));
     ui.horizontal_top(|ui| {
         // Settings.
@@ -136,12 +141,13 @@ pub(crate) fn body(
                     } else {
                         tl!("The printer driver's own settings for this print: paper tray, paper type, finishing and more.")
                     };
-                    let properties = ui.add_enabled(d.printer.is_some() && !browser, egui::Button::new(tl!("Properties…"))).on_hover_text(tip);
+                    let properties = ui.add_enabled(d.printer.is_some() && !browser && d.preferences_loading != d.printer, egui::Button::new(tl!("Properties…"))).on_hover_text(tip);
                     if properties.clicked()
                         && let Some(p) = d.printer.clone()
                     {
                         if spool::HAS_PRINTER_PREFERENCES {
-                            d.driver_error = spool::open_printer_preferences(&p).err().map(|e| e.to_string());
+                            d.preferences_loading = Some(p.clone());
+                            d.read_preferences_for = Some(p);
                         } else {
                             if d.driver_options.as_ref().is_none_or(|(read_for, _)| *read_for != p) && d.driver_options_loading.as_deref() != Some(p.as_str()) {
                                 // Read off the GUI thread (#1818): `poll_print` starts it next frame.
@@ -219,13 +225,6 @@ pub(crate) fn body(
                 }
                 ui.end_row();
             });
-            // Windows says which drivers can't print two-sided as they're asked; they keep their
-            // own setting, even when Two-sided is Off.
-            if let Some(p) = d.printers.iter().find(|p| d.printer.as_ref() == Some(&p.name))
-                && p.two_sided == Some(false)
-            {
-                ui.label(egui::RichText::new(tl!("This printer's driver doesn't take two-sided settings from other programs, so its own setting applies. Change it in Properties…")).small().color(t.text_muted));
-            }
             if d.printer.as_deref() == Some(crate::web_print::BROWSER_PRINTER) {
                 ui.label(egui::RichText::new(tl!("Copies, two-sided printing and colour are chosen in the browser's print dialog.")).small().color(t.text_muted));
             }
@@ -529,6 +528,10 @@ pub(crate) fn body(
                         ui.label(egui::RichText::new(tl!("Drawing scale changes. Use Actual size for full-scale plans.")).small().color(t.text_muted));
                     }
                 }
+            }
+            // Reserve the notice beside the preview so a capability reply cannot move controls.
+            if cfg!(windows) || duplex_warning {
+                ui.add_visible(duplex_warning, egui::Label::new(egui::RichText::new(tl!("This printer's driver doesn't take two-sided settings from other programs, so its own setting applies. Change it in Properties…")).small().color(t.text_muted)));
             }
         });
     });

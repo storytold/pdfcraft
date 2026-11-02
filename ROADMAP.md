@@ -219,6 +219,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 ## Progress log
 
+- **2026-11-02 (M10, #2192):** Windows lists printer names without waiting for every driver's capabilities. Selected-printer reads handle cancellation, retry and refresh; Properties invalidates only its printer, and delayed capability answers keep Print controls in place. Read-only backend timing: 49.9 s versus 32 ms. Regression and native read-only checks cover discovery and dialog lifetime; physical output remains unqualified. Estimates unchanged; see `docs/windows-printer-discovery.md`.
+
 - **2026-11-01 (M7, #5657):** Header/footer, watermark and background additions and replacements stage the complete call before committing. Synthetic later-page failures preserve exact incremental bytes, object count, dirty state and allocation cursor; success controls retain other marks and shared/inherited resources. Estimates unchanged.
 - **2026-11-01 (M14):** Remove inherited strict Clippy diagnostics with equivalent Option, match and boolean expressions. No user-facing behavior or readiness estimate changes.
 
