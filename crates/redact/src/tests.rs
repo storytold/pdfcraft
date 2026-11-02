@@ -1791,6 +1791,44 @@ fn a_dictionary_that_names_itself_isnt_counted_as_stored() {
     assert!(matches!(apply(&mut doc, None), Err(RedactError::SharedJbig2Globals(1))));
 }
 
+/// A copy of the dictionary stored with a predictor is found whatever way its parameters are given,
+/// through a chain of references among them, as a reader that follows them decodes it. Through a
+/// chain, PdfCraft can't decode the image with the copy's symbols to store it again, so the run is
+/// refused; it never goes on with the copy left in the file.
+#[test]
+fn a_copy_is_found_however_its_parameters_are_given() {
+    let scan = shared_scan();
+    let globals = [jbig2_globals(b"LEAK_GLOBALS"), scan.symbols.clone()].concat();
+    // PNG rows of one byte, each with no prediction: a byte for the row's tag, then the byte.
+    let predicted: Vec<u8> = globals.iter().flat_map(|b| [0u8, *b]).collect();
+    let flate = pdfcraft_filters::encode_flate(&predicted);
+    let parms = b"<< /Predictor 12 /Columns 1 >>".to_vec();
+    for (spelling, extra, stored) in [
+        ("/DecodeParms << /Predictor 12 /Columns 1 >>", vec![], true),
+        ("/DecodeParms 11 0 R", vec![parms.clone()], true),
+        ("/DecodeParms 11 0 R", vec![b"12 0 R".to_vec(), parms.clone()], false),
+        ("/DecodeParms [11 0 R]", vec![b"12 0 R".to_vec(), parms.clone()], false),
+        ("/DecodeParms << /Predictor 11 0 R /Columns 1 >>", vec![b"12 0 R".to_vec(), b"12".to_vec()], false),
+    ] {
+        let mut objects = vec![stream(&format!("/Filter /FlateDecode {spelling}"), flate.clone())];
+        objects.extend(extra.clone());
+        let other = shared_image("/DecodeParms << /JBIG2Globals 10 0 R >>");
+        let mut doc = SharedPages { other, extra: objects, ..SharedPages::new(&scan) }.build(&scan);
+        mark(&mut doc, 0, &[CLEARS], "");
+        let at = format!("{spelling} {}", extra.len());
+        match apply(&mut doc, None) {
+            Ok(report) => {
+                assert!(stored, "{at}: went on");
+                assert_eq!(report.images_restored, 1, "{at}");
+                let kept: std::collections::HashSet<u32> = pdfcraft_cos::reachable(&doc).into_iter().map(|r| r.num).collect();
+                assert!(!kept.contains(&10) && !kept.contains(&9), "{at}: the copy or the dictionary stays");
+                assert_eq!(drawn_samples(&reopen(&doc), 1), scan.bits, "{at}");
+            }
+            Err(e) => assert!(!stored && matches!(e, RedactError::SharedJbig2Globals(1)), "{at}: {e:?}"),
+        }
+    }
+}
+
 /// An image that names the dictionary and another one is stored again without both, but the other
 /// was shared with nothing that left: an image that uses only it stays as it was, whichever of the
 /// two comes first in the file, and so does that dictionary.

@@ -68,13 +68,36 @@ fn direct(doc: &Document, v: &Object) -> Object {
     }
 }
 
-/// `s` with what `decoded_image` and `decoded_within` read as given made direct: its size and filters.
+/// `/DecodeParms` as a reader takes them, through any references: the array or dictionary, each
+/// entry, and each value made direct, but `/JBIG2Globals`, which stays the reference it is.
+fn direct_parms(doc: &Document, v: &Object) -> Object {
+    let entry = |e: &Object| match &*followed(doc, e) {
+        Object::Dict(d) => {
+            let mut made = d.clone();
+            for (key, value) in d.iter().filter(|(key, _)| key.as_slice() != b"JBIG2Globals") {
+                made.set(key.to_vec(), (*followed(doc, value)).clone());
+            }
+            Object::Dict(made)
+        }
+        other => other.clone(),
+    };
+    match &*followed(doc, v) {
+        Object::Array(a) => Object::Array(a.iter().map(entry).collect()),
+        other => entry(other),
+    }
+}
+
+/// `s` with what `decoded_image` and `decoded_within` read as given made direct: its size, filters
+/// and their parameters.
 fn readable(doc: &Document, s: &Stream) -> Stream {
     let mut readable = s.clone();
     for key in [b"Width".as_slice(), b"Height", b"Filter"] {
         if let Some(v) = s.dict.get(key) {
             readable.dict.set(key.to_vec(), direct(doc, v));
         }
+    }
+    if let Some(v) = s.dict.get(b"DecodeParms") {
+        readable.dict.set(b"DecodeParms".to_vec(), direct_parms(doc, v));
     }
     readable
 }
