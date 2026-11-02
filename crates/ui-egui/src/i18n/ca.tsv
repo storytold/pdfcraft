@@ -2846,6 +2846,8 @@ theme	Appearance	Aspecte
 	Unpin tool	Desenganxa l'eina
 	Arrange image	Organitza la imatge
 	Crop	Escapça
+	Split down	Divideix cap avall
+	Split right	Divideix cap a la dreta
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Avui
