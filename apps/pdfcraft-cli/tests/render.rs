@@ -58,6 +58,34 @@ fn freetext_without_appearance(test: &str) -> PathBuf {
     pdf
 }
 
+/// A one-page PDF whose only mark is a Highlight annotation with no `/AP` appearance
+/// stream. Viewers draw it from `/QuadPoints` and `/C`; before #2371 `render` omitted it.
+fn highlight_without_appearance(test: &str) -> PathBuf {
+    let pdf = tmp(test, "highlight.pdf");
+    let objects: Vec<&[u8]> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Annots [4 0 R] >>",
+        b"<< /Type /Annot /Subtype /Highlight /Rect [20 40 180 60] /QuadPoints [20 60 180 60 20 40 180 40] /C [1 1 0] /F 4 >>",
+    ];
+    let mut bytes = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, obj) in objects.iter().enumerate() {
+        offsets.push(bytes.len());
+        bytes.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+        bytes.extend_from_slice(obj);
+        bytes.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = bytes.len();
+    bytes.extend_from_slice(b"xref\n0 5\n0000000000 65535 f \n");
+    for o in &offsets {
+        bytes.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    bytes.extend_from_slice(format!("trailer\n<< /Size 5 /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n").as_bytes());
+    std::fs::write(&pdf, &bytes).unwrap();
+    pdf
+}
+
 #[test]
 fn a_png_name_gets_a_png() {
     let pdf = fixture("png");
@@ -122,4 +150,17 @@ fn render_draws_freetext_annotations_without_an_appearance_stream() {
     assert_eq!(pixels.len() % 4, 0);
     let drawn = pixels.chunks_exact(4).filter(|p| p[0] != 255 || p[1] != 255 || p[2] != 255).count();
     assert!(drawn > 100, "FreeText annotation missing from CLI render: {drawn} non-white pixels");
+}
+
+#[test]
+fn render_draws_highlight_annotations_without_an_appearance_stream() {
+    let pdf = highlight_without_appearance("highlight");
+    let out = tmp("highlight", "p1.pam");
+    let r = render(&pdf, &out);
+    assert!(r.status.success(), "{}", String::from_utf8_lossy(&r.stderr));
+    let bytes = std::fs::read(&out).unwrap();
+    let end = bytes.windows(7).position(|w| w == b"ENDHDR\n").unwrap() + 7;
+    let pixels = &bytes[end..];
+    let drawn = pixels.chunks_exact(4).filter(|p| p[0] != 255 || p[1] != 255 || p[2] != 255).count();
+    assert!(drawn > 100, "Highlight annotation missing from CLI render: {drawn} non-white pixels");
 }
