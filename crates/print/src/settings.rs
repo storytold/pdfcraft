@@ -1,4 +1,4 @@
-use super::*;
+use super::spool;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Orientation {

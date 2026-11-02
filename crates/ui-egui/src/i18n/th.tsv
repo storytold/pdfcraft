@@ -7,6 +7,10 @@
 # names stay in Latin letters; the trailing ellipsis of dialog commands is kept. Thai has one
 # plural form.
 
+# Untranslated: English text until a translator fills these in.
+	Lowering this forgets the oldest files. At 0 there is no list.	Lowering this forgets the oldest files. At 0 there is no list.
+	Recent files to keep	Recent files to keep
+
 	Menu	เมนู
 	File	ไฟล์
 	Edit	แก้ไข
@@ -554,6 +558,9 @@
 	Clean Up	ล้างข้อมูล
 	Color Images	รูปภาพสี
 	Grayscale Images	รูปภาพระดับสีเทา
+	Monochrome Images	รูปภาพขาวดำ
+	CCITT Group 4	CCITT กลุ่ม 4
+	JBIG2 (lossless)	JBIG2 (ไม่สูญเสียข้อมูล)
 	Bicubic downsampling to	ลดความละเอียดแบบ Bicubic เป็น
 	for images above	สำหรับรูปภาพที่สูงกว่า
 	Compression	การบีบอัด
@@ -768,14 +775,9 @@
 	Copy Image in Original Format	คัดลอกรูปภาพในรูปแบบเดิม
 	The image has been copied as a {ext} file	คัดลอกรูปภาพเป็นไฟล์ {ext} แล้ว
 	The page has changed; select the image again	หน้ามีการเปลี่ยนแปลง โปรดเลือกรูปภาพอีกครั้ง
-	Check for updates	ตรวจหาการอัปเดต
 	No check has run yet.	ยังไม่ได้ตรวจสอบ
-	Checking for a newer version…	กำลังตรวจหารุ่นที่ใหม่กว่า…
 	PdfCraft {v} is available.	มี PdfCraft {v} ให้ใช้งานแล้ว
 	You have version {c}. Download the new version from its release page.	คุณใช้รุ่น {c} ดาวน์โหลดรุ่นใหม่ได้จากหน้ารุ่นที่เผยแพร่
-	PdfCraft {c} is up to date.	PdfCraft {c} เป็นรุ่นล่าสุดแล้ว
-	Couldn't check for updates: {e}	ตรวจหาการอัปเดตไม่ได้: {e}
-	You have version {c}. All releases are listed at {page}.	คุณใช้รุ่น {c} รายการรุ่นทั้งหมดอยู่ที่ {page}
 	Asks GitHub for the latest release. Nothing is downloaded or installed automatically.	ถาม GitHub ว่ามีรุ่นล่าสุดหรือไม่ จะไม่มีการดาวน์โหลดหรือติดตั้งโดยอัตโนมัติ
 	Download	ดาวน์โหลด
 	Later	ภายหลัง
@@ -819,6 +821,14 @@
 	Applies to 1 page	มีผลกับ 1 หน้า
 	Applies to {n} pages	มีผลกับ {n} หน้า
 	Replaces the existing one on those pages.	แทนที่ของเดิมในหน้าเหล่านั้น
+	Checking pages…	กำลังตรวจสอบหน้า…
+	Page {pages} paints its own white backdrop, which would hide the background. Replace it	หน้า {pages} มีพื้นสีขาวของตัวเองซึ่งจะบังพื้นหลัง แทนที่
+	Pages {pages} paint their own white backdrop, which would hide the background. Replace it	หน้า {pages} มีพื้นสีขาวของตัวเองซึ่งจะบังพื้นหลัง แทนที่ทั้งหมด
+	Removing the background puts the page's own backdrop back.	การเอาพื้นหลังออกจะคืนพื้นสีขาวเดิมของหน้า
+	A picture covers page {pages} (a scan?), so the background won't show there.	มีรูปภาพปิดหน้า {pages} อยู่ (ภาพสแกน?) จึงจะมองไม่เห็นพื้นหลังที่นั่น
+	Pictures cover pages {pages} (scans?), so the background won't show there.	มีรูปภาพหลายรูปปิดหน้า {pages} อยู่ (ภาพสแกน?) จึงจะมองไม่เห็นพื้นหลังที่นั่น
+	Page {pages} changed after the background was added, so its own white backdrop stays off. It looks the same on white paper.	หน้า {pages} เปลี่ยนไปหลังจากเพิ่มพื้นหลัง พื้นสีขาวของตัวเองจึงยังปิดอยู่ บนกระดาษสีขาวจะดูเหมือนเดิม
+	Pages {pages} changed after the background was added, so their own white backdrops stay off. They look the same on white paper.	หน้า {pages} เปลี่ยนไปหลังจากเพิ่มพื้นหลัง พื้นสีขาวของหน้าเหล่านั้นจึงยังปิดอยู่ บนกระดาษสีขาวจะดูเหมือนเดิม
 	PDF or image	PDF หรือรูปภาพ
 	No file chosen	ยังไม่ได้เลือกไฟล์
 	Page number	เลขหน้า
@@ -2705,6 +2715,13 @@ key	Space	Space
 	Collapse all tools	ยุบเครื่องมือทั้งหมด
 	The password must have at least 8 characters.	รหัสผ่านต้องมีอย่างน้อย 8 ตัวอักษร
 theme	Appearance	ลักษณะที่ปรากฏ
+	Arrange image	จัดเรียงรูปภาพ
+	Bring forward	นำไปข้างหน้า
+	Bring to front	นำไปไว้ข้างหน้าสุด
+	Crop	ครอบตัด
+	Remove crop	เอาการครอบตัดออก
+	Send backward	ส่งไปข้างหลัง
+	Send to back	ส่งไปไว้ข้างหลังสุด
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	วันนี้
@@ -2720,3 +2737,42 @@ theme	Appearance	ลักษณะที่ปรากฏ
 	Rotate the selected pages clockwise	หมุนหน้าที่เลือกตามเข็มนาฬิกา
 	Extract the selected pages…	แยกหน้าที่เลือกออก…
 	Delete the selected pages	ลบหน้าที่เลือก
+
+# Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
+	Options for this reply	ตัวเลือกของการตอบกลับนี้
+# Untranslated: English text until a translator fills these in.
+	Reads {name}, which the form doesn't have, so it gets no value there.	Reads {name}, which the form doesn't have, so it gets no value there.
+	Its script also reads fields whose names it builds as it runs, so those reads can't be checked.	Its script also reads fields whose names it builds as it runs, so those reads can't be checked.
+	Missing field	Missing field
+	Unchecked reads	Unchecked reads
+	{field} reads fields named as it runs	{field} reads fields named as it runs
+	Some names are built as it runs	Some names are built as it runs
+
+# Image paste and Home notifications (AI-assisted; not separately native-reviewed)
+	Search…	ค้นหา…
+	Image pasted	วางรูปภาพแล้ว
+	No image on clipboard to paste	ไม่มีรูปภาพในคลิปบอร์ดให้วาง
+	Pinned {tool} to Home	ปักหมุด {tool} ไว้ที่หน้าแรกแล้ว
+	Unpinned {tool} from Home	เลิกปักหมุด {tool} จากหน้าแรกแล้ว
+
+# Home tools (AI-assisted; not separately native-reviewed)
+	Clear search	ล้างการค้นหา
+	Pin	ปักหมุด
+	Pin a tool…	ปักหมุดเครื่องมือ…
+	Pin to Home	ปักหมุดไว้ที่หน้าแรก
+	Pin tools to Home	ปักหมุดเครื่องมือไว้ที่หน้าแรก
+	Pin your favorite tools here for quick access.	ปักหมุดเครื่องมือโปรดที่นี่เพื่อเข้าถึงอย่างรวดเร็ว
+	Pinned	ปักหมุดแล้ว
+	Pinned Tools	เครื่องมือที่ปักหมุด
+	Search tools…	ค้นหาเครื่องมือ…
+	Select tools to display on your Home page for quick access.	เลือกเครื่องมือที่จะแสดงบนหน้าแรกเพื่อเข้าถึงอย่างรวดเร็ว
+	Unpin from Home	เลิกปักหมุดจากหน้าแรก
+	Unpin tool	เลิกปักหมุดเครื่องมือ
+	Transform image	แปลงรูปภาพ
+	Select Tool	เครื่องมือเลือก
+	Hand Tool	เครื่องมือมือ
+	Marquee Zoom	ซูมพื้นที่ที่เลือก
+	Edit this PDF	แก้ไข PDF นี้
+	Export this PDF	ส่งออก PDF นี้
+	Find text or tools	ค้นหาข้อความหรือเครื่องมือ
+	Crop image	ครอบตัดรูปภาพ

@@ -178,42 +178,38 @@ fn collect_used_resources_in_stream(data: &[u8], used: &mut UsedInGlyphs) -> Res
     Ok(())
 }
 
-fn prune_type3_font_resources(doc: &Document, font_res: &mut Dict, used: &UsedInGlyphs) -> bool {
-    let mut changed = false;
-
-    macro_rules! prune_category {
-        ($cat:expr, $used_set:expr) => {
-            if let Some(sub_obj) = font_res.get($cat) {
-                let mut sub = doc.resolve(sub_obj).as_dict().cloned().unwrap_or_default();
-                let names: Vec<Vec<u8>> = sub.iter().map(|(n, _)| n.to_vec()).collect();
-                let mut cat_changed = false;
-                for n in names {
-                    if !$used_set.contains(&n) {
-                        sub.remove(&n);
-                        cat_changed = true;
-                    }
-                }
-                if cat_changed {
-                    changed = true;
-                    if sub.is_empty() {
-                        font_res.remove($cat);
-                    } else {
-                        font_res.set($cat.to_vec(), Object::Dict(sub));
-                    }
-                }
-            }
-        };
+/// Removes the entries of `font_res`'s `category` sub-dictionary that `used` does not name,
+/// dropping the sub-dictionary when nothing is left. Whether anything changed.
+fn prune_category(doc: &Document, font_res: &mut Dict, category: &[u8], used: &HashSet<Vec<u8>>) -> bool {
+    let Some(sub_obj) = font_res.get(category) else { return false };
+    let mut sub = doc.resolve(sub_obj).as_dict().cloned().unwrap_or_default();
+    let unused: Vec<Vec<u8>> = sub.iter().map(|(n, _)| n.to_vec()).filter(|n| !used.contains(n)).collect();
+    if unused.is_empty() {
+        return false;
     }
+    for name in &unused {
+        sub.remove(name);
+    }
+    if sub.is_empty() {
+        font_res.remove(category);
+    } else {
+        font_res.set(category.to_vec(), Object::Dict(sub));
+    }
+    true
+}
 
-    prune_category!(b"XObject", used.xobjects);
-    prune_category!(b"ColorSpace", used.colorspaces);
-    prune_category!(b"Pattern", used.patterns);
-    prune_category!(b"Shading", used.shadings);
-    prune_category!(b"ExtGState", used.extgstates);
-    prune_category!(b"Font", used.fonts);
-    prune_category!(b"Properties", used.properties);
-
-    changed
+fn prune_type3_font_resources(doc: &Document, font_res: &mut Dict, used: &UsedInGlyphs) -> bool {
+    let categories: [(&[u8], &HashSet<Vec<u8>>); 7] = [
+        (b"XObject", &used.xobjects),
+        (b"ColorSpace", &used.colorspaces),
+        (b"Pattern", &used.patterns),
+        (b"Shading", &used.shadings),
+        (b"ExtGState", &used.extgstates),
+        (b"Font", &used.fonts),
+        (b"Properties", &used.properties),
+    ];
+    // Every category is pruned, even after an earlier one changed.
+    categories.into_iter().fold(false, |changed, (category, names)| prune_category(doc, font_res, category, names) | changed)
 }
 
 struct ScanContext<'a> {

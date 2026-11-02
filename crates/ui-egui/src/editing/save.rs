@@ -1,4 +1,4 @@
-use super::*;
+use super::{PdfCraftApp, StagingName, staging_suffixes};
 
 /// A save held back by [`Dialog::OverwriteChanged`](crate::Dialog::OverwriteChanged): the file
 /// on disk is another version than the document came from (#2166).

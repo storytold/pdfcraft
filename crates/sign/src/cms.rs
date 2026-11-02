@@ -376,7 +376,7 @@ pub fn sign_detached(
     alg: DigestAlg,
     content_digest: &[u8],
 ) -> Result<Vec<u8>, SignError> {
-    build(key, cert, chain, alg, DATA, None, content_digest)
+    build(SignedDataInput { key, cert, chain, alg, content_type: DATA, content: None, content_digest })
 }
 
 /// A CMS SignedData that encapsulates `content` under `content_type` (an RFC 3161 token wraps
@@ -389,20 +389,23 @@ pub fn sign_encapsulated(
     content_type: &str,
     content: &[u8],
 ) -> Result<Vec<u8>, SignError> {
-    build(key, cert, chain, alg, content_type, Some(content), &alg.digest(&[content]))
+    let content_digest = alg.digest(&[content]);
+    build(SignedDataInput { key, cert, chain, alg, content_type, content: Some(content), content_digest: &content_digest })
 }
 
-// The parameters mirror the SignedData fields being assembled.
-#[allow(clippy::too_many_arguments)]
-fn build(
-    key: &PrivateKey,
-    cert: &Certificate,
-    chain: &[Certificate],
+/// The values needed to assemble a CMS SignedData object.
+struct SignedDataInput<'a> {
+    key: &'a PrivateKey,
+    cert: &'a Certificate,
+    chain: &'a [Certificate],
     alg: DigestAlg,
-    content_type: &str,
-    content: Option<&[u8]>,
-    content_digest: &[u8],
-) -> Result<Vec<u8>, SignError> {
+    content_type: &'a str,
+    content: Option<&'a [u8]>,
+    content_digest: &'a [u8],
+}
+
+fn build(input: SignedDataInput<'_>) -> Result<Vec<u8>, SignError> {
+    let SignedDataInput { key, cert, chain, alg, content_type, content, content_digest } = input;
     let cert_hash = DigestAlg::Sha256.digest(&[&cert.raw]);
     let general_names = der::seq(&[&der::explicit(4, &cert.issuer.raw)]);
     let ess = der::seq(&[&der::seq(&[&der::seq(&[&der::octets(&cert_hash), &der::seq(&[&general_names, &der::uint(&cert.serial)])])])]);

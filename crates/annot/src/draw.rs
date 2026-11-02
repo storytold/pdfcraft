@@ -2,7 +2,7 @@ use super::create::{finite, num_array};
 use super::lookup::{annot_dict, annots, page_refs};
 use super::modify::refuse_foreign_text;
 use super::types::NOTE_SIZE;
-use super::*;
+use super::{AnnotError, Dict, Document, ObjRef, Object, Stream, appearance};
 
 /// (Re)generate `/AP /N` for the annotation `r` from its dictionary, for an edit that keeps its
 /// text (a restyle, a new size or colour).

@@ -1,5 +1,5 @@
 use super::requests::Handled;
-use super::*;
+use super::{Arc, Control, Mutex, RequestBatches, Shared, Value, timeout};
 
 /// Track only presses that reached egui and have not yet been released. A pointer release is
 /// retained as an ownership marker, never as a timeout event.

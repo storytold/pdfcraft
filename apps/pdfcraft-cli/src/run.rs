@@ -1,7 +1,9 @@
 #[cfg(feature = "mcp")]
 use super::options::MCP_OPTIONS;
 use super::options::{RUN_OPTIONS, flag, positional, validate_options};
-use super::*;
+#[cfg(feature = "mcp")]
+use super::{Arc, Path, Write, automation_args};
+use super::{CliError, stdout_line};
 
 // ---- automation --------------------------------------------------------------------------------
 

@@ -231,14 +231,15 @@ impl Pruner<'_> {
     }
 }
 
-/// The page's content, concatenated (`/Contents` may be one stream or an array), decoded
-/// against one page's [`DecodeBudget`]. An error when a stream can't be decoded or the budget
-/// runs out: the page may draw names that can't be seen.
+/// The page's content, concatenated (`/Contents` may be one stream or an array) with a space
+/// between pieces as the renderer joins them, decoded against one page's [`DecodeBudget`]. An
+/// error when a stream can't be decoded or the budget runs out: the page may draw names that
+/// can't be seen.
 pub(crate) fn content_bytes(doc: &Document, contents: &Object) -> Result<Vec<u8>, CosError> {
     let mut out = Vec::new();
     for data in DecodeBudget::page().decode_contents(doc, contents) {
         out.extend(data?);
-        out.push(b'\n');
+        out.push(b' ');
     }
     Ok(out)
 }
