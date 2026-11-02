@@ -13,6 +13,7 @@ mod pixels;
 mod raster;
 mod reading;
 mod structure;
+mod system_font;
 pub mod text;
 pub mod transition;
 

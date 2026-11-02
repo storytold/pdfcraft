@@ -1,5 +1,5 @@
 use super::create::{
-    add_annotation, base_dict, bounds, callout_attach, ending_draws, ending_pair, finite, grow, normalize, num_array, rect_for, rgb,
+    add_annotation, base_dict, bounds, callout_attach, ending_draws, ending_pair, finite, grow, ink_bounds, normalize, num_array, rect_for, rgb,
 };
 use super::draw::{draw_appearance, redraw_or_restore, set_appearance};
 use super::info::{line_endings_of, text_value};
@@ -70,18 +70,51 @@ pub(crate) fn touch(d: &mut Dict, meta: &Meta) {
 }
 
 /// Delete a comment together with its pop-up and its replies (and theirs), as Acrobat does.
+/// Refused while it, or a reply that would go with it, is locked.
 pub fn delete_annotation(doc: &mut Document, page: usize, index: usize) -> Result<(), AnnotError> {
-    let p = page_ref(doc, page)?;
-    let list = annots(doc, p);
-    let target = list.get(index).cloned().ok_or(AnnotError::NoSuchAnnotation { page, index })?;
+    deletable(doc, page, index)?;
+    lift_annotation(doc, page, index)
+}
+
+/// Whether [`delete_annotation`] deletes the annotation at `(page, index)`, or why not, without
+/// changing anything: what a Delete command asks before it is offered. It is refused while the
+/// annotation is locked, or a reply that would go with it is.
+pub fn deletable(doc: &Document, page: usize, index: usize) -> Result<(), AnnotError> {
+    let list = annots(doc, page_ref(doc, page)?);
+    let target = list.get(index).ok_or(AnnotError::NoSuchAnnotation { page, index })?;
     if let Some(r) = target.as_ref() {
         unlocked(doc, r)?;
     }
-    // An inline comment has no reference to collect; the pop-up it names still goes.
-    let seed = target.as_ref().or_else(|| target.as_dict().and_then(|d| d.reference(b"Popup")));
-    let doomed = with_replies_and_popups(doc, &list, seed);
-    let kept: Vec<Object> = list.into_iter().enumerate().filter(|(i, e)| *i != index && !goes_with(e, &doomed)).map(|(_, e)| e).collect();
+    let doomed = with_replies_and_popups(doc, &list, seed(target));
+    // A locked reply can't be deleted on its own, so it doesn't go with the comment or reply it
+    // answers either. Pop-ups follow their comment.
+    for (_, e) in list.iter().enumerate().filter(|(i, e)| *i != index && goes_with(e, &doomed)) {
+        let obj = doc.resolve(e);
+        if let Some(d) = obj.as_dict().filter(|d| d.name(b"Subtype") != Some(b"Popup".as_slice()))
+            && annotation_flags(doc, d) & FLAG_LOCKED != 0
+        {
+            return Err(AnnotError::Invalid("a reply to it is locked".into()));
+        }
+    }
+    Ok(())
+}
+
+/// Take the annotation at `(page, index)` out of its page with its pop-up and replies, as
+/// [`delete_annotation`] does but whatever their locks: for drawing the page beneath it on a
+/// copy of the document (a stamp or signature being dragged), which changes nothing.
+pub fn lift_annotation(doc: &mut Document, page: usize, index: usize) -> Result<(), AnnotError> {
+    let p = page_ref(doc, page)?;
+    let list = annots(doc, p);
+    let target = list.get(index).ok_or(AnnotError::NoSuchAnnotation { page, index })?;
+    let doomed = with_replies_and_popups(doc, &list, seed(target));
+    let kept: Vec<Object> = list.iter().enumerate().filter(|(i, e)| *i != index && !goes_with(e, &doomed)).map(|(_, e)| e.clone()).collect();
     Ok(set_annots(doc, p, kept)?)
+}
+
+/// What deleting the `/Annots` entry `target` starts from: its reference, or for an inline
+/// comment (which has none to collect) the pop-up it names, which still goes.
+fn seed(target: &Object) -> Option<ObjRef> {
+    target.as_ref().or_else(|| target.as_dict().and_then(|d| d.reference(b"Popup")))
 }
 
 /// Whether the `/Annots` entry `entry` goes with `going` (from [`with_replies_and_popups`]): it is
@@ -496,7 +529,33 @@ fn apply_text_box(doc: &mut Document, r: ObjRef, rect: [f64; 4], meta: &Meta, ne
 }
 
 fn border_width_of(d: &Dict) -> f64 {
-    d.get(b"BS").and_then(|b| b.as_dict()).and_then(|b| b.get(b"W")).and_then(|w| w.as_f64()).unwrap_or(1.0).max(0.0)
+    appearance::border_width(d)
+}
+
+/// Recompute `/Rect` for an `Ink` annotation when its stroke width changes from `old_w` to `w`.
+/// Preserves any baseline margin beyond `old_w / 2.0` (at least `1.0` pt) without accumulating
+/// padding across repeated width increases and decreases.
+fn ink_rect_for_width(d: &Dict, old_w: f64, w: f64) -> Option<[f64; 4]> {
+    let list = d.get(b"InkList")?.as_array()?;
+    let mut strokes: Vec<Vec<[f64; 2]>> = Vec::with_capacity(list.len());
+    for s in list {
+        let pts: Vec<f64> = s.as_array()?.iter().map(Object::as_f64).collect::<Option<_>>()?;
+        strokes.push(pts.as_chunks::<2>().0.iter().map(|p| [p[0], p[1]]).collect());
+    }
+    let inner = ink_bounds(&strokes)?;
+    let vals: Vec<f64> = d.get(b"Rect").and_then(Object::as_array).map(|a| a.iter().filter_map(Object::as_f64).collect()).unwrap_or_default();
+    let Some(old_rect) = four(&vals).map(normalize) else {
+        return Some(grow(inner, w / 2.0 + 1.0));
+    };
+    let old_half = old_w / 2.0;
+    let new_half = w / 2.0;
+    let base = [
+        (inner[0] - old_rect[0] - old_half).max(1.0),
+        (inner[1] - old_rect[1] - old_half).max(1.0),
+        (old_rect[2] - inner[2] - old_half).max(1.0),
+        (old_rect[3] - inner[3] - old_half).max(1.0),
+    ];
+    Some([inner[0] - base[0] - new_half, inner[1] - base[1] - new_half, inner[2] + base[2] + new_half, inner[3] + base[3] + new_half])
 }
 
 /// Change a comment's colour, opacity, line width and/or line endings, and redraw it.
@@ -543,10 +602,17 @@ pub fn set_style(doc: &mut Document, page: usize, index: usize, change: StyleCha
             }
         }
         if let Some(w) = width {
+            let old_w = border_width_of(d);
+            let w = w.max(0.0);
             let mut bs = d.get(b"BS").and_then(|b| b.as_dict()).cloned().unwrap_or_default();
-            bs.set(b"W".to_vec(), Object::Real(w.max(0.0)));
+            bs.set(b"W".to_vec(), Object::Real(w));
             d.set(b"BS".to_vec(), Object::Dict(bs));
             d.remove(b"Border");
+            if d.name(b"Subtype") == Some(b"Ink")
+                && let Some(rect) = ink_rect_for_width(d, old_w, w)
+            {
+                d.set(b"Rect".to_vec(), num_array(&rect));
+            }
         }
         if let Some(ends) = endings {
             if ends.len() == 1 {
