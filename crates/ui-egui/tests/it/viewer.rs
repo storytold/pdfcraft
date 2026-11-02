@@ -968,6 +968,65 @@ fn marquee_zoom_and_snapshot() {
     assert!(after > before * 2.0, "{before} → {after}");
 }
 
+/// #5716: what a snapshot holds doesn't depend on how far the page is zoomed out.
+#[test]
+fn a_snapshot_keeps_its_resolution_when_zoomed_out() {
+    let mut h = harness();
+    let i = h.state().active.unwrap();
+    h.state_mut().system_clipboard = false;
+    let mut sizes = Vec::new();
+    for zoom in ["25", "100"] {
+        h.state_mut().set_option("zoom", zoom).unwrap();
+        h.run_steps(2);
+        // The text line of the page, as a marquee would give it.
+        sizes.push(h.state_mut().snapshot(i, 0, [15.0, 125.0, 180.0, 160.0]).expect("a snapshot"));
+    }
+    assert_eq!(sizes[0], sizes[1], "the same pixels at either zoom");
+    assert_eq!(sizes[0], (688, 146), "165 × 35 pt at 300 ppi");
+    let (_, _, px) = h.state().last_snapshot.clone().expect("a snapshot");
+    assert!(px.as_chunks::<4>().0.iter().any(|p| p[0] < 100), "the text is in it");
+
+    // Zoomed in past the minimum, a snapshot still has what the screen shows.
+    h.state_mut().set_option("zoom", "800").unwrap();
+    h.run_steps(2);
+    let (w, _) = h.state_mut().snapshot(i, 0, [15.0, 125.0, 180.0, 160.0]).expect("a snapshot");
+    assert!(w > sizes[0].0, "{w}");
+}
+
+/// #5716: at 300 ppi this page is more than the renderer draws in one tile, which would cut off
+/// the side the snapshot was taken for. A 2000 pt square with a black mark in its far corner.
+#[test]
+fn a_snapshot_of_a_large_page_reaches_its_far_corner() {
+    let stream = "0 0 0 rg 1900 0 100 100 re f";
+    let pdf = format!(
+        "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 2000 2000] /Contents 4 0 R >> endobj
+4 0 obj << /Length {} >> stream
+{stream}
+endstream endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+        stream.len()
+    );
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("large.pdf", None, pdf.into_bytes()).unwrap();
+        app.system_clipboard = false;
+        app
+    });
+    h.run_steps(4);
+    let i = h.state().active.unwrap();
+    let (w, hgt) = h.state_mut().snapshot(i, 0, [0.0, 0.0, 2000.0, 2000.0]).expect("a snapshot");
+    assert!(w <= 4096 && hgt <= 4096 && w == hgt, "{w} × {hgt}");
+    let (_, _, px) = h.state().last_snapshot.clone().expect("a snapshot");
+    let at = |x: u32, y: u32| px[((y * w + x) * 4) as usize];
+    assert!(at(w * 98 / 100, hgt * 98 / 100) < 100, "the mark in the far corner is in it");
+    assert!(at(w / 2, hgt / 2) > 200, "and the page around it is white");
+}
+
 #[test]
 fn fit_visible_zooms_to_the_content_width() {
     let mut h = harness();

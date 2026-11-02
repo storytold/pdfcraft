@@ -1586,8 +1586,8 @@ milestone = "M3"
 status = "shipped"
 commands = ["edit.snapshot"]
 tools = ["page_render"]
-evidence = ["crates/ui-egui/tests/it/viewer.rs::marquee_zoom_and_snapshot"]
-notes = "copies the area at the current zoom to the clipboard as an image"
+evidence = ["crates/ui-egui/tests/it/viewer.rs::marquee_zoom_and_snapshot", "crates/ui-egui/tests/it/viewer.rs::a_snapshot_keeps_its_resolution_when_zoomed_out", "crates/ui-egui/src/canvas/zoom_snap.rs::a_snapshot_is_drawn_at_the_finer_of_the_zoom_and_the_minimum", "crates/ui-egui/src/canvas/zoom_snap.rs::a_snapshot_stays_within_what_the_renderer_draws_at_once", "crates/ui-egui/tests/it/viewer.rs::a_snapshot_of_a_large_page_reaches_its_far_corner"]
+notes = "copies the area to the clipboard as an image, at 300 ppi or the current zoom if that is finer (#5716), or as fine as the renderer draws in one tile (4096 pixels a side), drawn while the app waits. Missing: a choice of resolution, and a selection that stays active to copy later"
 
 [[feature]]
 id = "view.copy-image"
