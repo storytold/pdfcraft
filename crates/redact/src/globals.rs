@@ -23,19 +23,28 @@ pub(crate) fn kept(doc: &Document) -> HashSet<u32> {
 
 /// `o`, or what references lead to from it. A ring of them ends as a reference, which is no dictionary.
 pub(crate) fn followed(doc: &Document, o: &Object) -> Arc<Object> {
+    followed_to(doc, o).0
+}
+
+/// [`followed`], and the last reference on the way: the one that names what it ends at, whichever
+/// reference or chain of them led there. `None` when `o` was given directly.
+fn followed_to(doc: &Document, o: &Object) -> (Arc<Object>, Option<pdfcraft_cos::ObjRef>) {
+    let mut last = o.as_ref();
     let mut at = doc.resolve(o);
     for _ in 0..MAX_HOPS {
         let next = match &*at {
             Object::Ref(next) => *next,
             _ => break,
         };
+        last = Some(next);
         at = doc.get(next);
     }
-    at
+    (at, last)
 }
 
 /// What a parameters value names as `/JBIG2Globals`, and the key it is remembered by: a value the
-/// file refers to, by its object number and whether it is read as a list of entries.
+/// file refers to, by the number of the object the references end at and whether it is read as a
+/// list of entries.
 pub(crate) type Listed = (Rc<[u32]>, Option<(u32, bool)>);
 
 /// Every object a stream names as `/JBIG2Globals`, and each reference on the way to one: in any entry
@@ -43,7 +52,7 @@ pub(crate) type Listed = (Rc<[u32]>, Option<(u32, bool)>);
 /// reader may use less of this, but leaving a dictionary behind is the failure that matters here.
 ///
 /// What a value the file refers to names is read once a run, so streams that share one, by
-/// reference or through an entry, cost it once however many there are.
+/// reference, through a chain of them or through an entry, cost it once however many there are.
 #[derive(Default)]
 pub(crate) struct Names {
     memo: HashMap<(u32, bool), Rc<[u32]>>,
@@ -60,12 +69,14 @@ impl Names {
 
     /// What `v` names: one entry, or (`list`) an array of them or one.
     fn value(&mut self, doc: &Document, v: &Object, list: bool) -> Listed {
-        let key = v.as_ref().map(|r| (r.num, list));
+        // By the object the references end at: another reference to it, or a chain, finds it too.
+        let (held, last) = followed_to(doc, v);
+        let key = last.map(|r| (r.num, list));
         if let Some(hit) = key.and_then(|k| self.memo.get(&k)) {
             return (hit.clone(), key);
         }
         self.read += 1;
-        let names: Rc<[u32]> = match (&*followed(doc, v), list) {
+        let names: Rc<[u32]> = match (&*held, list) {
             (Object::Array(entries), true) => {
                 let mut all: Vec<u32> = entries.iter().flat_map(|e| self.value(doc, e, false).0.to_vec()).collect();
                 all.sort_unstable();

@@ -1836,17 +1836,26 @@ fn what_is_made_direct_is_small_however_often_a_large_object_is_named() {
     assert_eq!(made.dict.get(b"Filter").and_then(Object::as_array).map(Vec::len), Some(9));
 }
 
-/// What streams share by reference is read once a run, however many share it: a parameters array
-/// of 5,000 entries named by 100 streams costs the array and its one entry, once.
+/// What streams share by reference is read once a run, however many share it and however they
+/// refer to it: a parameters array of 5,000 entries named by 100 streams, directly, each through an
+/// object of its own that refers to it, or through a chain of two, costs the array and its one
+/// entry, once.
 #[test]
 fn a_shared_parameters_array_is_read_once_however_many_streams_share_it() {
     let entries = " 4 0 R".repeat(5000);
     let mut objects =
         vec![b"<< /Type /Catalog >>".to_vec(), format!("[{entries}]").into_bytes(), stream("", b"symbols"), b"<< /JBIG2Globals 3 0 R >>".to_vec()];
-    objects.extend((0..100).map(|_| stream("/Filter /JBIG2Decode /DecodeParms 2 0 R", b"")));
+    // Objects 5 to 54 refer to the array, and 55 to 5.
+    objects.extend((0..50).map(|_| b"2 0 R".to_vec()));
+    objects.push(b"5 0 R".to_vec());
+    // Streams 56 to 155: fifty name the array directly, forty-nine through objects 5 to 53, one
+    // through the chain from 55.
+    objects.extend((0..50).map(|_| stream("/Filter /JBIG2Decode /DecodeParms 2 0 R", b"")));
+    objects.extend((5..54).map(|n| stream(&format!("/Filter /JBIG2Decode /DecodeParms {n} 0 R"), b"")));
+    objects.push(stream("/Filter /JBIG2Decode /DecodeParms 55 0 R", b""));
     let doc = pdf(objects);
     let mut names = crate::globals::Names::default();
-    for n in 5..105 {
+    for n in 56..156 {
         let Object::Stream(s) = &*doc.get(ObjRef::new(n, 0)) else { panic!("object {n} is a stream") };
         let lists = names.of(&doc, s);
         assert_eq!(lists.iter().map(|(list, _)| list.to_vec()).collect::<Vec<_>>(), [vec![3]]);
