@@ -18,9 +18,6 @@ use crate::mq::{Context, MqEncoder};
 /// replaced such an image with one that draws nothing.
 pub const MAX_JBIG2_COLUMNS: u32 = 65_535;
 
-/// The most samples [`encode_jbig2_generic`] encodes: that decoder's bound on a bitmap.
-const MAX_JBIG2_SAMPLES: u64 = 1 << 28;
-
 /// Template 0's pixels (Figure 3), as (x, y) offsets from the pixel being coded, each a bit of the
 /// context in this order: the four on the current row, the five fixed ones on the row above, the
 /// three on the row above that, then the adaptive pixels A1–A4 at their nominal places (Table 5).
@@ -77,11 +74,11 @@ pub fn encode_jbig2(data: &[u8], columns: u32, rows: u32) -> Result<Vec<u8>, Fil
 /// samples have it. Bytes after the last row are ignored, as are the bits that pad a row to a whole
 /// byte.
 ///
-/// Errors: no rows or columns, more of either than [`MAX_JBIG2_COLUMNS`], or more samples than the
-/// decoder takes ([`FilterError::Unsupported`]); fewer bytes than the rows need
-/// ([`FilterError::Corrupt`]).
+/// Errors: no rows or columns, more of either than [`MAX_JBIG2_COLUMNS`], or more samples than
+/// [`MAX_JBIG2_PIXELS`], what the decoder takes ([`FilterError::Unsupported`]); fewer bytes than the
+/// rows need ([`FilterError::Corrupt`]).
 pub fn encode_jbig2_generic(data: &[u8], columns: u32, rows: u32) -> Result<Vec<u8>, FilterError> {
-    let too_large = columns > MAX_JBIG2_COLUMNS || rows > MAX_JBIG2_COLUMNS || u64::from(columns) * u64::from(rows) > MAX_JBIG2_SAMPLES;
+    let too_large = columns > MAX_JBIG2_COLUMNS || rows > MAX_JBIG2_COLUMNS || u64::from(columns) * u64::from(rows) > MAX_JBIG2_PIXELS;
     if columns == 0 || rows == 0 || too_large {
         return Err(FilterError::Unsupported(format!("JBIG2 encoding of {columns} × {rows} samples")));
     }

@@ -27,7 +27,7 @@ encode_g4(data, columns, rows) -> Result<Vec<u8>, FilterError>   // 1-bit rows a
 pub struct CcittParams { k, columns, rows, end_of_line, encoded_byte_align, end_of_block, black_is_1 }  // Table 11; Default = its defaults
 decode_ccitt(data, &params, max_rows) -> Result<Vec<u8>, FilterError>   // CCITT fax as CCITTFaxDecode gives it; columns <= MAX_CCITT_COLUMNS
 decode_jbig2(data, globals, columns, rows, max) -> Result<Vec<u8>, FilterError>   // JBIG2 as JBIG2Decode gives it; a page of columns × rows, within max and MAX_JBIG2_PIXELS
-encode_jbig2_generic(data, columns, rows) -> Result<Vec<u8>, FilterError>   // 1-bit rows as lossless JBIG2 for JBIG2Decode; columns and rows <= MAX_JBIG2_COLUMNS (65,535) and 2^28 samples, what the decoder takes
+encode_jbig2_generic(data, columns, rows) -> Result<Vec<u8>, FilterError>   // 1-bit rows as lossless JBIG2 for JBIG2Decode; columns and rows <= MAX_JBIG2_COLUMNS (65,535) and MAX_JBIG2_PIXELS (2^28) samples, what the decoder takes
 encode_jbig2(data, columns, rows) -> Result<Vec<u8>, FilterError>   // 1-bit rows as lossless JBIG2 for JBIG2Decode, symbol coded when that is smaller; the same limits
 ```
 
