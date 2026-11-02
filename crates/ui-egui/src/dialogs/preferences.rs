@@ -404,12 +404,10 @@ fn card_general(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) {
         ui.label(tl!("Navigation rail side"));
         let rail_right = app.side_panels.rail_on_right();
         let mut rside = if rail_right { ToolsSide::Right } else { ToolsSide::Left };
-        if segmented_pill_choice_a11y(
-            ui,
-            t,
-            &mut rside,
-            &[(ToolsSide::Left, tl!("Left"), tl!("Navigation rail on left")), (ToolsSide::Right, tl!("Right"), tl!("Navigation rail on right"))],
-        ) {
+        let left_a11y = format!("{}: {}", tl!("Navigation rail side"), tl!("Left"));
+        let right_a11y = format!("{}: {}", tl!("Navigation rail side"), tl!("Right"));
+        if segmented_pill_choice_a11y(ui, t, &mut rside, &[(ToolsSide::Left, tl!("Left"), &left_a11y), (ToolsSide::Right, tl!("Right"), &right_a11y)])
+        {
             app.side_panels.rail_side = rside;
         }
     });
