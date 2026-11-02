@@ -150,3 +150,35 @@ fn word_export_reports_a_page_whose_paths_it_leaves_out() {
     assert_eq!(truncated(subpaths(limit + 1), OfficeFormat::Docx), [0], "one path of many subpaths");
     assert_eq!(truncated(paths(limit + 1), OfficeFormat::Html), Vec::<usize>::new());
 }
+
+/// A field's border and fill come from its widget's `/MK /BC` and `/BG`, at `/BS /W` points
+/// (1 by default; dashed for `/S /D`); a widget drawn round (its appearance curves, a radio
+/// button's circle) gets none, as a square Word box can't draw it, nor does one without `/MK`.
+#[test]
+fn a_fields_border_and_fill_come_from_its_widget() {
+    let widget =
+        |t: &str, x: i32, extra: &str| format!("<< /Type /Annot /Subtype /Widget /FT /Btn /T ({t}) /Rect [{x} 10 {} 20] /P 3 0 R {extra} >>", x + 10);
+    let bytes = pdf(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R 6 0 R 7 0 R 8 0 R] >> >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /Annots [5 0 R 6 0 R 7 0 R 8 0 R] >>".into(),
+        stream("", ""),
+        widget("Square", 10, "/MK << /BC [0] /BG [1] >> /AP << /N << /Off 9 0 R >> >>"),
+        widget("Round", 30, "/MK << /BC [0] /BG [1] >> /AP << /N << /Off 10 0 R >> >>"),
+        widget("Dashed", 50, "/MK << /BC [1 0 0] >> /BS << /W 2 /S /D >>"),
+        widget("Plain", 70, ""),
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 10 10]", "0 G 0.5 0.5 9 9 re S"),
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 10 10]", "0 G 5 0 m 7.8 0 10 2.2 10 5 c 10 7.8 7.8 10 5 10 c S"),
+    ]);
+    let mut s = Session::new();
+    let id = s.open("boxes.pdf", None, Arc::new(bytes), None).unwrap();
+    let pages = s.get(id).unwrap().export_pages();
+    let look = |name: &str| {
+        let f = pages[0].fields.iter().find(|f| f.name == name).unwrap_or_else(|| panic!("{name}: {:#?}", pages[0].fields));
+        (f.border, f.background)
+    };
+    assert_eq!(look("Square"), (Some(pdfcraft_export::Stroke { color: [0.0; 3], width: 1.0, dashed: false }), Some([1.0; 3])));
+    assert_eq!(look("Round"), (None, None), "a round widget keeps the page's own drawing");
+    assert_eq!(look("Dashed"), (Some(pdfcraft_export::Stroke { color: [1.0, 0.0, 0.0], width: 2.0, dashed: true }), None));
+    assert_eq!(look("Plain"), (None, None));
+}

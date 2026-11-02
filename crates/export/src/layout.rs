@@ -35,6 +35,10 @@ pub struct Image {
     pub size: [f64; 2],
     /// Counterclockwise rotation in user space (degrees).
     pub rotation: f64,
+    /// Drawn mirrored: the placement turns the image's own up and down around (a negative
+    /// determinant, as print drivers draw bottom-up bitmaps), so it shows flipped vertically in
+    /// its frame, before `rotation`.
+    pub flip: bool,
 }
 
 /// How a [`Shape`]'s outline is drawn.
@@ -79,6 +83,11 @@ pub struct Field {
     /// Font size in points; 0 or less for auto (fit the box).
     pub size: f64,
     pub kind: FieldKind,
+    /// The border a PDF viewer draws around the field (its widget's `/MK /BC` and `/BS`), and
+    /// the colour it fills the field with (`/MK /BG`); `None` for none. A form whose boxes only
+    /// the fields draw keeps them this way.
+    pub border: Option<Stroke>,
+    pub background: Option<[f64; 3]>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]

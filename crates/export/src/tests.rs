@@ -69,6 +69,7 @@ fn page() -> Page {
             rect: [72.0, 450.0, 272.0, 600.0],
             size: [200.0, 150.0],
             rotation: 0.0,
+            flip: false,
         }],
         background: None,
         ..Page::default()
@@ -912,26 +913,48 @@ fn form_page() -> Page {
             rect: [60.0, 700.0, 300.0, 712.0],
             size: 0.0,
             kind: FieldKind::Text { value: String::new(), multiline: false, comb: None, max_len: None },
+            border: None,
+            background: None,
         },
         Field {
             name: "Postcode".into(),
             rect: [60.0, 520.0, 160.0, 532.0],
             size: 10.0,
             kind: FieldKind::Text { value: "10115".into(), multiline: false, comb: Some(5), max_len: Some(5) },
+            border: None,
+            background: None,
         },
         Field {
             name: "Notes".into(),
             rect: [60.0, 200.0, 540.0, 260.0],
             size: 9.0,
             kind: FieldKind::Text { value: "a & b".into(), multiline: true, comb: None, max_len: None },
+            border: None,
+            background: None,
         },
-        Field { name: "Yes".into(), rect: [60.0, 150.0, 70.0, 160.0], size: 0.0, kind: FieldKind::Check { checked: true } },
-        Field { name: "No".into(), rect: [90.0, 150.0, 100.0, 160.0], size: 0.0, kind: FieldKind::Check { checked: false } },
+        Field {
+            name: "Yes".into(),
+            rect: [60.0, 150.0, 70.0, 160.0],
+            size: 0.0,
+            kind: FieldKind::Check { checked: true },
+            border: None,
+            background: None,
+        },
+        Field {
+            name: "No".into(),
+            rect: [90.0, 150.0, 100.0, 160.0],
+            size: 0.0,
+            kind: FieldKind::Check { checked: false },
+            border: None,
+            background: None,
+        },
         Field {
             name: "Fund".into(),
             rect: [120.0, 150.0, 300.0, 162.0],
             size: 0.0,
             kind: FieldKind::Choice { value: "Health".into(), options: vec!["Health".into(), "Pension".into()] },
+            border: None,
+            background: None,
         },
     ];
     Page { width: 595.0, height: 842.0, blocks, shapes, fields, ..Page::default() }
@@ -1008,7 +1031,7 @@ fn word_makes_a_forms_fields_fillable_within_their_limits() {
     assert!(xml.contains("<w14:checked w14:val=\"1\"/>") && xml.contains("<w14:checked w14:val=\"0\"/>"), "{xml}");
     assert!(xml.contains("<w:dropDownList><w:listItem w:displayText=\"Health\" w:value=\"Health\"/>"), "{xml}");
     // Word reads the check boxes through the Word 2010 namespace, which older readers may skip.
-    assert!(xml.contains("mc:Ignorable=\"w14\""), "{xml}");
+    assert!(xml.contains("mc:Ignorable=\"w14 wps\""), "{xml}");
     // The document is protected for filling in forms, without a password, so the limits hold
     // and only the fields can be changed.
     let zip = docx(&[form_page()], "Claim");
@@ -1030,6 +1053,8 @@ fn word_form_field_names_are_valid_and_unique() {
         rect: [60.0, 50.0, 200.0, 62.0],
         size: 0.0,
         kind: FieldKind::Text { value: String::new(), multiline: false, comb: None, max_len: Some(8) },
+        border: None,
+        background: None,
     };
     p.fields =
         vec![text("Arbeitnehmeranteil.Betrag.1"), text("Arbeitnehmeranteil.Betrag.2"), text("1. Betrag (€)"), text("Name"), text("Name"), text("")];
@@ -1087,12 +1112,21 @@ fn word_bounds_hostile_shapes_and_fields() {
     p.shapes.push(Shape { stroke: None, fill: None, ..boxed([1.0, 1.0, 2.0, 2.0]) });
     p.shapes
         .push(Shape { stroke: Some(Stroke { color: [f64::NAN; 3], width: f64::INFINITY, dashed: false }), ..boxed([-1e300, -1e300, 1e300, 1e300]) });
-    p.fields.push(Field { name: "<&>\u{0}".into(), rect: [f64::NAN, 0.0, 1.0, 1.0], size: f64::NAN, kind: FieldKind::Check { checked: true } });
+    p.fields.push(Field {
+        name: "<&>\u{0}".into(),
+        rect: [f64::NAN, 0.0, 1.0, 1.0],
+        size: f64::NAN,
+        kind: FieldKind::Check { checked: true },
+        border: None,
+        background: None,
+    });
     p.fields.push(Field {
         name: "x".into(),
         rect: [0.0, 0.0, 1e300, 1e300],
         size: -5.0,
         kind: FieldKind::Text { value: "1".into(), multiline: false, comb: Some(0), max_len: Some(0) },
+        border: None,
+        background: None,
     });
     for i in 0..MAX_DOCX_PAGE_SHAPES + 50 {
         p.shapes.push(Shape { paths: vec![(vec![[1.0, i as f64 / 100.0], [2.0, 3.0]], false)], ..boxed([0.0; 4]) });
@@ -1203,4 +1237,68 @@ fn word_counts_every_subpath_against_the_page_limit() {
     let mut text = page();
     text.shapes = vec![Shape { paths: (0..MAX_DOCX_PAGE_SHAPES + 1).map(tick).collect(), ..boxed([0.0; 4]) }];
     assert!(docx_checked(&[text], "Report").1.is_empty());
+}
+
+/// A picture the PDF draws mirrored (a print driver's bottom-up bitmap, drawn with a negative
+/// height) is flipped back in every format that shows pictures: a scanned form drawn in 70 such
+/// strips came out in Word with every strip upside down, as if cut apart and pasted back wrongly.
+#[test]
+fn a_mirrored_picture_is_flipped_back_in_every_format() {
+    let flipped = |mut p: Page| {
+        p.images.iter_mut().for_each(|im| im.flip = true);
+        p
+    };
+    // Flowing Word: an inline picture.
+    let xml = part(&docx(&[flipped(page())], "Scan"), "word/document.xml");
+    assert!(xml.contains("<wp:inline>") && xml.contains("<a:xfrm flipV=\"1\">"), "{xml}");
+    // Positioned Word: an anchored picture, flipped in its frame before it is rotated.
+    let mut form = form_page();
+    form.images = page().images;
+    let xml = part(&docx(&[flipped(form.clone())], "Scan"), "word/document.xml");
+    assert!(xml.contains("<wp:anchor ") && xml.contains("<a:xfrm rot=\"0\" flipV=\"1\">"), "{xml}");
+    assert!(!part(&docx(&[form], "Scan"), "word/document.xml").contains("flipV"), "an upright picture stays as it is");
+    // PowerPoint and HTML.
+    assert!(part(&pptx(&[flipped(page())], "Scan"), "ppt/slides/slide1.xml").contains("<a:xfrm flipV=\"1\">"));
+    assert!(!part(&pptx(&[page()], "Scan"), "ppt/slides/slide1.xml").contains("flipV"));
+    assert!(html(&[flipped(page())], "Scan").contains("<img alt=\"\" style=\"transform:scaleY(-1)\" src="));
+    assert!(!html(&[page()], "Scan").contains("scaleY"));
+}
+
+/// A field's own border and fill (what a PDF viewer draws for its widget) are drawn behind the
+/// text but above the page's pictures: a scanned form's check boxes, whose thin scanned lines
+/// the fields' solid boxes cover in the PDF, lost their top line in Word without them. They
+/// stack above every picture (a VML shape went behind a picture in LibreOffice), with the border
+/// inside the field's box.
+#[test]
+fn word_draws_a_fields_border_and_fill_over_the_pictures() {
+    let mut p = form_page();
+    p.images = page().images;
+    p.fields[3].border = Some(Stroke { color: [0.0; 3], width: 1.0, dashed: false });
+    p.fields[3].background = Some([1.0; 3]);
+    p.fields[0].border = Some(Stroke { color: [1.0, 0.0, 0.0], width: 2.0, dashed: true });
+    let xml = part(&docx(&[p], "Scan"), "word/document.xml");
+    assert_eq!(xml.matches("name=\"Field box ").count(), 2, "only fields with a border or fill: {xml}");
+    // The check box [60, 150, 70, 160]: its 1 pt border half a point inside, on an 842 pt page.
+    assert!(
+        xml.contains("<wp:posOffset>768350</wp:posOffset></wp:positionH><wp:positionV relativeFrom=\"page\"><wp:posOffset>8667750</wp:posOffset>"),
+        "{xml}"
+    );
+    assert!(xml.contains("<wp:extent cx=\"114300\" cy=\"114300\"/>"), "{xml}");
+    assert!(
+        xml.contains(
+            "<a:solidFill><a:srgbClr val=\"FFFFFF\"/></a:solidFill><a:ln w=\"12700\"><a:solidFill><a:srgbClr val=\"000000\"/></a:solidFill></a:ln>"
+        ),
+        "{xml}"
+    );
+    assert!(
+        xml.contains("<a:noFill/><a:ln w=\"25400\"><a:solidFill><a:srgbClr val=\"FF0000\"/></a:solidFill><a:prstDash val=\"dash\"/></a:ln>"),
+        "{xml}"
+    );
+    // Stacked above the picture, behind the text.
+    let height = |marker: &str| -> u64 {
+        let at = xml.find(marker).unwrap();
+        xml[..at].rsplit("relativeHeight=\"").next().unwrap().split('"').next().unwrap().parse().unwrap()
+    };
+    assert!(height("name=\"Field box ") > height("name=\"Picture "), "{xml}");
+    assert!(!xml.contains("behindDoc=\"0\""));
 }

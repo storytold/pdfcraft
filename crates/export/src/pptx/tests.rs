@@ -47,6 +47,7 @@ fn sample_page() -> Page {
             rect: [72.0, 150.0, 300.0, 300.0],
             size: [228.0, 150.0],
             rotation: 0.0,
+            flip: false,
         }],
         background: None,
         ..Page::default()
@@ -283,6 +284,7 @@ fn hostile_sizes_do_not_overflow_the_slide_position() {
             rect: [0.0, -1e300, 1e-300, 1e300 - k as f64],
             size: [1.0, 1.0],
             rotation: 0.0,
+            flip: k % 2 == 1,
         })
         .collect();
     let p = Page { width: f64::MAX, height: f64::NAN, blocks, images, ..Page::default() };

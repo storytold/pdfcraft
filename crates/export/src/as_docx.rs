@@ -213,9 +213,14 @@ fn emu(pt: f64) -> i64 {
     if pt.is_finite() { (pt * 12700.0).round() as i64 } else { 0 }
 }
 
-/// The `a:graphic` of one picture (DrawingML), rotated by `rotation` degrees when given.
-fn picture_xml(n: usize, name: &str, (cx, cy): (i64, i64), rotation: Option<f64>) -> String {
-    let rot = rotation.map_or(String::new(), |r| format!(" rot=\"{}\"", (r * 60000.0).round() as i64));
+/// The `a:graphic` of one picture (DrawingML), rotated by `rotation` degrees when given and
+/// flipped vertically when the PDF draws it mirrored.
+fn picture_xml(n: usize, name: &str, (cx, cy): (i64, i64), rotation: Option<f64>, flip: bool) -> String {
+    let mut rot = rotation.map_or(String::new(), |r| format!(" rot=\"{}\"", (r * 60000.0).round() as i64));
+    // DrawingML flips a picture in its own frame before it rotates it, as the PDF placement does.
+    if flip {
+        rot.push_str(" flipV=\"1\"");
+    }
     format!(
         "<wp:docPr id=\"{n}\" name=\"Picture {n}\"/><wp:cNvGraphicFramePr/>\
 <a:graphic xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"><a:graphicData uri=\"http://schemas.openxmlformats.org/drawingml/2006/picture\">\
@@ -461,6 +466,50 @@ fn frame_ppr(r: [f64; 4], page_height: f64, down: f64, extra: &str) -> String {
     )
 }
 
+/// Where field boxes stack among a page's pictures: above every picture (whose stacking height
+/// is its index, at most [`MAX_MEDIA`] + 1), so a scanned page's strips can't cover them.
+const FIELD_LOOK_HEIGHT: usize = 1 << 20;
+
+/// The border and fill a PDF viewer draws for a field, as a DrawingML rectangle behind the text,
+/// stacked above the page's pictures (a scanned form drawn behind the text) and below the
+/// field's own frame, with the border inside the field's box as the PDF draws it. DrawingML, not
+/// VML: LibreOffice stacks every VML shape behind a DrawingML picture. `None` for a field with
+/// neither, or a hostile box.
+fn field_look_xml(f: &Field, page_height: f64, id: usize) -> Option<String> {
+    if f.border.is_none() && f.background.is_none() {
+        return None;
+    }
+    let r = f.rect;
+    if !r.iter().all(|v| v.is_finite()) {
+        return None;
+    }
+    let width = f.border.map_or(0.0, |b| if b.width.is_finite() { b.width.clamp(0.25, 12.0) } else { 1.0 });
+    // DrawingML centres a line on the outline: an outline half the width inside keeps it in the box.
+    let inset = (width / 2.0).min(((r[2] - r[0]) / 2.0).max(0.0)).min(((r[3] - r[1]) / 2.0).max(0.0));
+    let (x, y) = (emu(layout_number(r[0] + inset)), emu(layout_number(page_height - r[3] + inset)));
+    let (cx, cy) = (emu(layout_number(r[2] - r[0] - 2.0 * inset).max(0.01)), emu(layout_number(r[3] - r[1] - 2.0 * inset).max(0.01)));
+    let hex = |c: [f64; 3]| rgb_attr(c).trim_start_matches('#').to_string();
+    let fill = f.background.map_or("<a:noFill/>".to_string(), |c| format!("<a:solidFill><a:srgbClr val=\"{}\"/></a:solidFill>", hex(c)));
+    let line = match f.border {
+        Some(b) => format!(
+            "<a:ln w=\"{}\"><a:solidFill><a:srgbClr val=\"{}\"/></a:solidFill>{}</a:ln>",
+            emu(width),
+            hex(b.color),
+            if b.dashed { "<a:prstDash val=\"dash\"/>" } else { "" }
+        ),
+        None => "<a:ln><a:noFill/></a:ln>".to_string(),
+    };
+    let doc_pr = FIELD_LOOK_HEIGHT.saturating_add(id);
+    Some(format!(
+        "<w:r><w:drawing><wp:anchor distT=\"0\" distB=\"0\" distL=\"0\" distR=\"0\" simplePos=\"0\" relativeHeight=\"{doc_pr}\" behindDoc=\"1\" locked=\"0\" layoutInCell=\"1\" allowOverlap=\"1\">\
+<wp:simplePos x=\"0\" y=\"0\"/><wp:positionH relativeFrom=\"page\"><wp:posOffset>{x}</wp:posOffset></wp:positionH><wp:positionV relativeFrom=\"page\"><wp:posOffset>{y}</wp:posOffset></wp:positionV>\
+<wp:extent cx=\"{cx}\" cy=\"{cy}\"/><wp:effectExtent l=\"0\" t=\"0\" r=\"0\" b=\"0\"/><wp:wrapNone/><wp:docPr id=\"{doc_pr}\" name=\"Field box {id}\"/><wp:cNvGraphicFramePr/>\
+<a:graphic xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"><a:graphicData uri=\"http://schemas.microsoft.com/office/word/2010/wordprocessingShape\">\
+<wps:wsp><wps:cNvSpPr/><wps:spPr><a:xfrm><a:off x=\"0\" y=\"0\"/><a:ext cx=\"{cx}\" cy=\"{cy}\"/></a:xfrm><a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom>{fill}{line}</wps:spPr><wps:bodyPr/></wps:wsp>\
+</a:graphicData></a:graphic></wp:anchor></w:drawing></w:r>"
+    ))
+}
+
 /// A form field as a framed paragraph over the field's box, which a document protected for
 /// filling in forms lets its reader fill in: a text field is a Word form field, limited to the
 /// PDF field's maximum length when it has one (a comb field also spreads its characters over its
@@ -649,7 +698,7 @@ fn positioned_page<'a>(page: &'a Page, media: &mut Vec<(String, &'a Image)>, sha
         let (x, y) = (layout_number((im.rect[0] + im.rect[2] - w) / 2.0), layout_number(page.height - (im.rect[1] + im.rect[3] + h) / 2.0));
         let rotation = layout_number(-im.rotation).rem_euclid(360.0);
         let name = format!("image{n}.{}", im.ext);
-        let pic = picture_xml(n, &name, (emu(w), emu(h)), Some(rotation));
+        let pic = picture_xml(n, &name, (emu(w), emu(h)), Some(rotation), im.flip);
         // A DrawingML anchor, the way Word itself stores a picture placed behind text: a VML
         // rectangle with an image does not show the picture.
         s.push_str(&format!(
@@ -665,6 +714,14 @@ fn positioned_page<'a>(page: &'a Page, media: &mut Vec<(String, &'a Image)>, sha
         s.push_str(&pic);
         s.push_str("</wp:anchor></w:drawing></w:r>");
         media.push((name, im));
+    }
+    // The fields' borders and fills, behind the text but over the page's own art and pictures:
+    // a scanned form's thin check box lines get the solid box the PDF's fields draw over them.
+    for f in page.fields.iter().take(MAX_DOCX_PAGE_SHAPES) {
+        *shape_id = shape_id.saturating_add(1);
+        if let Some(xml) = field_look_xml(f, page.height, *shape_id) {
+            s.push_str(&xml);
+        }
     }
     s.push_str("</w:p>");
     // Fields follow as framed paragraphs over their boxes (a form field in a text box can't be
@@ -770,7 +827,7 @@ pub fn docx_checked(pages: &[Page], title: &str) -> (Vec<u8>, Vec<usize>) {
                             let k = (text_w / w).min(1.0);
                             let (cx, cy) = (emu(w * k), emu(h * k));
                             body.push_str(&format!("<w:p><w:r><w:drawing><wp:inline><wp:extent cx=\"{cx}\" cy=\"{cy}\"/>"));
-                            body.push_str(&picture_xml(n, &name, (cx, cy), None));
+                            body.push_str(&picture_xml(n, &name, (cx, cy), None, im.flip));
                             body.push_str("</wp:inline></w:drawing></w:r></w:p>");
                             media.push((name, im));
                         }
@@ -806,7 +863,8 @@ pub fn docx_checked(pages: &[Page], title: &str) -> (Vec<u8>, Vec<usize>) {
         "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n\
 <w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" \
 xmlns:wp=\"http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing\" xmlns:v=\"urn:schemas-microsoft-com:vml\" xmlns:w10=\"urn:schemas-microsoft-com:office:word\" \
-xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\" xmlns:mc=\"http://schemas.openxmlformats.org/markup-compatibility/2006\" mc:Ignorable=\"w14\">{background}<w:body>{body}\
+xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\" xmlns:wps=\"http://schemas.microsoft.com/office/word/2010/wordprocessingShape\" \
+xmlns:mc=\"http://schemas.openxmlformats.org/markup-compatibility/2006\" mc:Ignorable=\"w14 wps\">{background}<w:body>{body}\
 </w:body></w:document>"
     );
     let types = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">\

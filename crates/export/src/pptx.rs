@@ -209,11 +209,13 @@ pub fn pptx(pages: &[Page], title: &str) -> Vec<u8> {
                     let cy = height_emu(h * k);
                     let x = mx + (content_w - cx) / 2;
                     let y = current_y;
+                    // A picture the PDF draws mirrored (a bottom-up bitmap) is flipped back.
+                    let flip = if im.flip { " flipV=\"1\"" } else { "" };
 
                     shapes.push_str(&format!(
                         "<p:pic><p:nvPicPr><p:cNvPr id=\"{shape_id}\" name=\"Picture {shape_id}\"/><p:cNvPicPr><a:picLocks noChangeAspect=\"1\"/></p:cNvPicPr><p:nvPr/></p:nvPicPr>\
 <p:blipFill><a:blip r:embed=\"{r_id}\"/><a:stretch><a:fillRect/></a:stretch></p:blipFill>\
-<p:spPr><a:xfrm><a:off x=\"{x}\" y=\"{y}\"/><a:ext cx=\"{cx}\" cy=\"{cy}\"/></a:xfrm><a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom></p:spPr></p:pic>"
+<p:spPr><a:xfrm{flip}><a:off x=\"{x}\" y=\"{y}\"/><a:ext cx=\"{cx}\" cy=\"{cy}\"/></a:xfrm><a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom></p:spPr></p:pic>"
                     ));
                     shape_id += 1;
                     current_y = current_y.saturating_add(cy).saturating_add(height_emu(12.0));

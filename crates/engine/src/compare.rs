@@ -186,7 +186,12 @@ pub struct OfficeExport {
 type PreparedImage = Result<(&'static str, Arc<[u8]>), bool>;
 
 /// A form field's widget as an exported field, its box on the visible page (`visible`).
-fn export_field(f: &pdfcraft_forms::Field, w: &pdfcraft_forms::Widget, visible: &dyn Fn([f64; 4]) -> [f64; 4]) -> Option<pdfcraft_export::Field> {
+fn export_field(
+    cos: &pdfcraft_cos::Document,
+    f: &pdfcraft_forms::Field,
+    w: &pdfcraft_forms::Widget,
+    visible: &dyn Fn([f64; 4]) -> [f64; 4],
+) -> Option<pdfcraft_export::Field> {
     use pdfcraft_forms::{FieldKind, flags};
     let kind = match f.kind {
         FieldKind::Text => pdfcraft_export::FieldKind::Text {
@@ -204,7 +209,65 @@ fn export_field(f: &pdfcraft_forms::Field, w: &pdfcraft_forms::Widget, visible: 
         }
         FieldKind::PushButton | FieldKind::Signature => return None,
     };
-    Some(pdfcraft_export::Field { name: f.name.clone(), rect: visible(w.rect), size: pdfcraft_forms::appearance::parse_da(&f.da).size, kind })
+    let (border, background) = widget_look(cos, w);
+    Some(pdfcraft_export::Field {
+        name: f.name.clone(),
+        rect: visible(w.rect),
+        size: pdfcraft_forms::appearance::parse_da(&f.da).size,
+        kind,
+        border,
+        background,
+    })
+}
+
+/// A colour array of `/MK` (ISO 32000-2 Table 192): none (transparent), gray, RGB or CMYK
+/// components, as plain sRGB; `None` for none or anything else.
+fn mk_colour(cos: &pdfcraft_cos::Document, o: Option<&pdfcraft_cos::Object>) -> Option<[f64; 3]> {
+    let a = o.map(|o| cos.resolve(o))?;
+    let v: Vec<f64> = a.as_array()?.iter().map(|x| cos.resolve(x).as_f64()).collect::<Option<_>>()?;
+    let unit = |x: f64| if x.is_finite() { x.clamp(0.0, 1.0) } else { 0.0 };
+    match v.as_slice() {
+        [g] => Some([unit(*g); 3]),
+        [r, g, b] => Some([unit(*r), unit(*g), unit(*b)]),
+        [c, m, y, k] => {
+            let k = unit(*k);
+            Some([(1.0 - unit(*c)) * (1.0 - k), (1.0 - unit(*m)) * (1.0 - k), (1.0 - unit(*y)) * (1.0 - k)])
+        }
+        _ => None,
+    }
+}
+
+/// Most bytes of a widget's appearance read to tell whether it is drawn round.
+const MAX_LOOK_BYTES: usize = 64 * 1024;
+
+/// The border and background a PDF viewer draws for a widget: `/MK /BC` in `/BS /W` points
+/// (1 by default; dashed for `/S /D`) and `/MK /BG`. None for a widget drawn round (its
+/// appearance curves, as a radio button's circle does; without an appearance, a radio button),
+/// which a square Word frame can't draw, nor for a border of no width.
+fn widget_look(cos: &pdfcraft_cos::Document, w: &pdfcraft_forms::Widget) -> (Option<pdfcraft_export::Stroke>, Option<[f64; 3]>) {
+    let Some(d) = cos.dict(&pdfcraft_cos::Object::Ref(w.obj)) else { return (None, None) };
+    let Some(mk) = d.get(b"MK").and_then(|o| cos.dict(o)) else { return (None, None) };
+    // Any state of the normal appearance shows the widget's outline.
+    let appearance = d.get(b"AP").and_then(|o| cos.dict(o)).and_then(|ap| ap.get(b"N").map(|n| cos.resolve(n))).and_then(|n| match &*n {
+        pdfcraft_cos::Object::Stream(s) => s.decoded_within(MAX_LOOK_BYTES).ok(),
+        pdfcraft_cos::Object::Dict(states) => states.iter().find_map(|(_, v)| match &*cos.resolve(v) {
+            pdfcraft_cos::Object::Stream(s) => s.decoded_within(MAX_LOOK_BYTES).ok(),
+            _ => None,
+        }),
+        _ => None,
+    });
+    let round = match appearance {
+        Some(data) => pdfcraft_content::parse(&data).ops.iter().any(|op| matches!(op.op.as_slice(), b"c" | b"v" | b"y")),
+        None => w.round,
+    };
+    if round {
+        return (None, None);
+    }
+    let bs = d.get(b"BS").and_then(|o| cos.dict(o));
+    let width = bs.as_ref().and_then(|b| b.get(b"W")).and_then(|o| cos.resolve(o).as_f64()).filter(|w| w.is_finite()).unwrap_or(1.0);
+    let dashed = bs.as_ref().is_some_and(|b| b.name(b"S") == Some(b"D".as_slice()));
+    let border = mk_colour(cos, mk.get(b"BC")).filter(|_| width > 0.0).map(|color| pdfcraft_export::Stroke { color, width: width.min(12.0), dashed });
+    (border, mk_colour(cos, mk.get(b"BG")))
 }
 
 impl crate::Document {
@@ -306,6 +369,8 @@ impl crate::Document {
                             rect: visible_rect(im.rect),
                             size: [im.matrix[0].hypot(im.matrix[1]) * unit, im.matrix[2].hypot(im.matrix[3]) * unit],
                             rotation: im.matrix[1].atan2(im.matrix[0]).to_degrees() - f64::from(info.rotation),
+                            // A page's /Rotate turns the page; only the placement can mirror it.
+                            flip: im.matrix[0] * im.matrix[3] - im.matrix[1] * im.matrix[2] < 0.0,
                         })
                     })
                     .collect();
@@ -331,7 +396,7 @@ impl crate::Document {
                     .collect();
                 let fields = fields_by_page
                     .get(&i)
-                    .map_or_else(Vec::new, |on_page| on_page.iter().filter_map(|(f, w)| export_field(f, w, &visible_rect)).collect());
+                    .map_or_else(Vec::new, |on_page| on_page.iter().filter_map(|(f, w)| export_field(cos, f, w, &visible_rect)).collect());
                 pdfcraft_export::Page { width: info.width as f64, height: info.height as f64, blocks, images, background, shapes, fields, lines }
             })
             .collect();

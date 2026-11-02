@@ -93,7 +93,9 @@ table{{border-collapse:collapse;margin:1em 0}}td,th{{border:1px solid #999;paddi
             }
             Item::Img(im) => {
                 let mime = if im.ext == "jpg" { "image/jpeg" } else { "image/png" };
-                s.push_str(&format!("<p><img alt=\"\" src=\"data:{mime};base64,{}\"></p>\n", base64(&im.bytes)));
+                // A picture the PDF draws mirrored (a bottom-up bitmap) is flipped back.
+                let flip = if im.flip { " style=\"transform:scaleY(-1)\"" } else { "" };
+                s.push_str(&format!("<p><img alt=\"\"{flip} src=\"data:{mime};base64,{}\"></p>\n", base64(&im.bytes)));
             }
             Item::PageBreak => s.push_str("<hr>\n"),
         }
