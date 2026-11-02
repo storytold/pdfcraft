@@ -221,6 +221,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 ## Progress log
 
+- **2026-11-02 (M7, PR #4625):** Integrated upstream 168a3cb9, preserving both the visible-body image-menu regression and the upstream rail-field sizing regression. Existing image-frame, ownership and preview fixes are unchanged; estimates unchanged.
+
 - **2026-11-02 (M7, PR #4625):** Reconciled with upstream d3384340 and its shared image controller. Selected resize frames keep off-page handles while explicit PDF/editor clips remain effective; page clipping no longer drops added-image identity. Drag previews clip source pixels and their destination together, and image context menus require visible body. Rendered resize/pixel regressions, explicit-clip save/reopen controls, ownership and central-routing checks pass; scoped edit/engine/UI tests, clippy, layers, assets and wasm are green locally. Estimates unchanged.
 
 - **2026-11-01 (M7, #5657):** Header/footer, watermark and background additions and replacements stage the complete call before committing. Synthetic later-page failures preserve exact incremental bytes, object count, dirty state and allocation cursor; success controls retain other marks and shared/inherited resources. Estimates unchanged.
