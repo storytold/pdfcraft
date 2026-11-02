@@ -194,10 +194,14 @@ fn an_administrators_policy_locks_the_preference_off() {
     assert_eq!(checkbox.accesskit_node().toggled(), Some(egui::accesskit::Toggled::False), "shown off");
     h.get_by_label("Turned off by your administrator.");
     h.get_by_label(source);
-    // Clicking the locked box changes nothing, and the button script doesn't run.
+    // Clicking the locked box changes nothing, the person's own choice included, and the button
+    // script doesn't run. Below the fold in a 900-point window: scroll to it so the click lands.
+    h.get_by_label("Enable Acrobat JavaScript").scroll_to_me();
+    h.run_steps(4);
     h.get_by_label("Enable Acrobat JavaScript").click();
     h.run_steps(2);
     assert!(!h.state().session.javascript());
+    assert!(h.state().session.javascript_preference(), "the locked box leaves the person's choice alone");
     let id = h.state().active_ids().unwrap().1;
     h.state_mut().run_button_script(id, "hello", "getField('greeting').value = 'ran';");
     h.run_steps(2);
