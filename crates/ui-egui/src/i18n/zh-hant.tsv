@@ -2469,6 +2469,8 @@ animation effects	Off	關
 	Make properties default	將內容設為預設
 	Pages selected	選取的頁面
 	Page properties	頁面屬性
+# Combine files from Finder (macOS).
+	From Finder: select files, then right-click > Quick Actions > Combine files in PdfCraft. Not listed? Turn it on once under Quick Actions > Customize.	在 Finder 中：選取檔案，然後按右鍵 > 快速動作 > “Combine files in PdfCraft”。沒有列出？請在「快速動作 > 自訂」中開啟一次。
 	Clear search	清除搜尋
 	Pin	釘選
 	Pin a tool…	釘選工具…
