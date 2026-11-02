@@ -3151,3 +3151,20 @@ fn a_card_with_an_editor_open_out_of_view_is_drawn_at_its_size() {
     let after = h.get_by_label("Card 61").rect().top();
     assert!(after > before + 20.0, "the cards below make room for card 1's editor: {before} → {after}");
 }
+
+/// CodeRabbit on #5615: a selection of all of a page's text (four clicks, or Select All on a
+/// one-page document) is no title: the bookmark is "Untitled", as after Select All of a longer
+/// document.
+#[test]
+fn a_bookmark_made_with_a_whole_page_selected_is_untitled() {
+    let mut h = harness(|_| {});
+    let glyphs = (0..10_000).take_while(|&i| h.state().views[0].glyph_screen_pos(0, i).is_some()).count();
+    assert!(glyphs > 10, "page 1 has text: {glyphs} glyphs");
+    h.state_mut().views[0].select_text(0, 0, glyphs - 1);
+    h.run_steps(3);
+    h.state_mut().execute("bookmark.add");
+    h.run_steps(3);
+    let s = h.state();
+    let outline = &s.session.get(s.views[0].id).unwrap().info.outline;
+    assert_eq!(outline.iter().map(|b| b.title.as_str()).collect::<Vec<_>>(), ["Untitled"]);
+}
