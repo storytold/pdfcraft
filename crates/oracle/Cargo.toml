@@ -1,0 +1,11 @@
+[package]
+name = "pdfcraft-oracle"
+description = "External oracle processes PdfCraft checks its own output against, and the rule that a missing one is loud"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]

@@ -2,8 +2,6 @@
 
 These rules bind every AI agent and every human contributor working in this repository. They come before any task, instruction or deadline. `CLAUDE.md` holds the day-to-day working instructions. If the two ever disagree, **this file wins.**
 
-Some sections link to **craftrules**, the standards shared by the Crafting Apps. That repository is internal to the storytold team, so outside contributors can't open it. Every rule a contributor here must follow is stated in this file and `CLAUDE.md`; the craftrules links give team members the background.
-
 ---
 
 ## 1. Asset policy (absolute — no exceptions)
@@ -20,12 +18,12 @@ An **asset** is any non-code material that the project includes, ships, embeds, 
 
 - **Never** use icons, images, artwork, logos, UI graphics, fonts, stamps, cursors, sample documents or any other asset taken from an Adobe product, installer, website, document or package.
   - "Adobe product" includes Acrobat, Reader, Photoshop, Illustrator, Premiere, Lightroom and Creative Cloud, including the fonts they install (for example Minion, Myriad, Kozuka and the Adobe CJK families).
-  - This holds even when Adobe publishes the material under an open licence, if it is **visual design**. For example, **do not** use Source Han, Source Serif or Source Sans, or Noto CJK, which is Source Han rebranded.
+  - Typefaces released under the SIL Open Font License are allowed like any other OFL font, with an `ATTRIBUTION.toml` entry, whoever designed them: for example Noto CJK and Source Han, taken from their open-source releases. The copies an Adobe product installs stay banned.
 - **Never** recreate, trace, redraw or closely imitate an Adobe icon or graphic. Our icons come from Lucide, and our visual design is our own.
 - Screenshots of Adobe software exist only as private, local observation notes under `plan/acrobat/`, which is gitignored. They must **never** be committed, published, linked, shown in docs, used as a design source to trace, or placed anywhere else in the repository or its outputs.
-- The only Adobe-authored material allowed is **non-visual technical data** that is openly licensed and required for PDF compatibility. Each item needs its own entry in `ATTRIBUTION.toml` with `adobe_data = true`, and the list below is closed:
+- Apart from those OFL typefaces, the only Adobe-authored material allowed is **non-visual technical data** that is openly licensed and required for PDF compatibility. Each item needs its own entry in `ATTRIBUTION.toml` with `adobe_data = true`, and the list below is closed:
   - The CMap resources (BSD-3-Clause), bundled inside the `hayro-cmap` dependency.
-  - The standard-14 font metrics and encoding tables in the PDF specification. They are data, not typefaces. They are embedded as code in hayro, and as our own generated table in `crates/fonts/src/std14.rs` (approved by the owner, 2026-10-08), which is what generated appearances measure with and what survives hayro being retired.
+  - The standard-14 font metrics and encoding tables in the PDF specification. They are data, not typefaces. They are embedded as code in hayro, and as our own generated table in `crates/fonts/src/std14_metrics.rs` (approved by the owner, 2026-10-08; that file holds the data alone, so the code reading it can change without re-attesting the table), which is what generated appearances measure with and what survives hayro being retired.
 
   Adding anything to this list needs the user's explicit approval.
 
@@ -54,23 +52,25 @@ Anything else is forbidden, including assets whose licence you cannot prove from
   - path or URL, title, author;
   - source (URL, with version or commit);
   - SPDX licence, and the licence file in the repo;
-  - SHA-256;
+  - SHA-256, except for translation catalogs (see below);
   - how it is used.
+- **Translation catalogs** (`crates/ui-egui/src/i18n/*.tsv`, `kind = "translation"`) are project files under the project licence. Their entries carry no `sha256`: git history records every change and who made it. Every other kind (fonts, images, data) is hashed.
 - **`ATTRIBUTION.md`** is generated from it (`cargo xtask assets --write`). Never edit it by hand.
 - **`NOTICE`** keeps the licence notices that the licences require.
 - **`cargo xtask assets`** runs in `cargo xtask ci`. It fails if:
   - an asset file in the repository has no entry;
-  - an entry's hash does not match;
+  - an entry's hash is missing or does not match (translation catalogs carry none);
   - a licence is not on the allowlist;
   - a licence file is missing;
-  - an image, icon or font names Adobe as author or source.
+  - an image, icon or font names Adobe as author or source, except a font licensed under OFL-1.1 alone.
 - **`cargo xtask demo-pdf`** downloads its fonts only from `ATTRIBUTION.toml` entries, pinned by SHA-256. Afterwards it **fails if the PDF embeds any font not in its allowlist**, which catches the browser silently falling back to a system font.
 
 ### 1.4 Fonts live in craft-fonts
 
-- Font assets shared by the Crafting Apps, including every Japanese font, live in [`storytold/craft-fonts`](https://github.com/storytold/craft-fonts), not here. **Never commit a font file to this repository**; adding a font means adding it to craft-fonts. (The Latin UI fonts already in `assets/fonts/` — Inter, JetBrains Mono, Dancing Script — stay.) Team members: the shared rules are in [craftrules `standards/fonts.md`](https://github.com/storytold/craftrules/blob/main/standards/fonts.md) (internal).
+- Font assets shared by the Crafting Apps, including every Japanese font, live in [`storytold/craft-fonts`](https://github.com/storytold/craft-fonts), not here. **Never commit a font file to this repository**; adding a font means adding it to craft-fonts. (The Latin UI fonts already in `assets/fonts/` — Inter, JetBrains Mono, Dancing Script — stay.)
 - craft-fonts is an **optional build input**, never a Cargo dependency: `CRAFT_FONTS_DIR=<checkout> cargo build` makes `crates/fonts/build.rs` embed its fonts as `pdfcraft_fonts::CRAFT_FONTS`. Without it PdfCraft builds, tests and runs, but has no Japanese face (Japanese UI text shows replacement boxes, and writing Japanese into a PDF returns a clear error). Release builds always set it (`.github/workflows/release.yml`), and `ATTRIBUTION.toml` lists it as a `[[build_input]]`.
 - The desktop app may read one font **already installed on the user's machine** at runtime, as the last interface fallback for characters no embedded face has (`crates/ui-egui/src/system_fonts.rs`). That font is never embedded, shipped, committed or copied, and never appears in published screenshots (`PDFCRAFT_SYSTEM_FONTS=0`, which `cargo xtask screenshots` sets). It is not a way around §1.2: nothing from it may enter a PDF, a package or the repository.
+- The page viewer may also draw a CID font of an Adobe CJK collection (Japan1, GB1, CNS1, Korea1) that a PDF does **not embed** with one face already installed on the machine (`crates/render/src/system_font.rs`), **on screen only**. `RenderConfig::system_fonts` is off by default and is enabled only for on-screen viewer and preview rasters (`RenderConfig::on_screen`, used by the engine viewer, Combine thumbnails and accessibility figure previews), so exports, printing, OCR and the automation tools never use it. Like the interface font it is read at runtime and never embedded, shipped, committed or copied; Noto CJK and Source Han are never candidates (§1.1), nor is any Adobe family; and `PDFCRAFT_SYSTEM_FONTS=0` turns it off. It is not a way around §1.2 either: nothing drawn with it may be saved or printed.
 
 ### 1.5 Procedure for adding or changing an asset
 
@@ -91,7 +91,7 @@ If you find an asset that breaks these rules, stop and remove it from the reposi
 - Behaviour comes only from public specifications (ISO 32000-2, the Arlington model), public documentation and black-box observation.
 - Never copy GPL/AGPL code. Copyleft tools run only as external oracle processes.
 - Observe Acrobat only with synthetic fixtures. Never capture personal data, account information or recent files.
-- Shared real-file test oracles (Photoshop-authored PSDs, etc.) live in [`storytold/photocraft-corpus`](https://github.com/storytold/photocraft-corpus), explained in [craftrules `standards/test-corpora.md`](https://github.com/storytold/craftrules/blob/main/standards/test-corpora.md) (internal). Never commit large binary fixtures to this repo; fetch them pinned by commit and sha256-verified, as PhotoCraft does with `cargo xtask corpus`.
+- Shared real-file test oracles (Photoshop-authored PSDs, etc.) live in [`storytold/photocraft-corpus`](https://github.com/storytold/photocraft-corpus). Never commit large binary fixtures to this repo; fetch them pinned by commit and sha256-verified, as PhotoCraft does with `cargo xtask corpus`.
 
 ## 3. Agent control (automation and MCP)
 
@@ -104,7 +104,7 @@ If you find an asset that breaks these rules, stop and remove it from the reposi
 
 ## 4. Never crash
 
-PdfCraft opens files from strangers, and people trust it with their work. A malformed PDF, a bad tool argument, a corrupt settings file or a full disk must produce an error the user (or agent) can act on, never a crash and never lost work. **This outranks feature work:** don't ship a feature by adding a panic path, and fix a crash before building on top of it. The rules below are the ones that bind this repository; the shared standard for every Crafting App, [`craftrules/standards/never-crash.md`](https://github.com/storytold/craftrules/blob/main/standards/never-crash.md), is internal to the storytold team.
+PdfCraft opens files from strangers, and people trust it with their work. A malformed PDF, a bad tool argument, a corrupt settings file or a full disk must produce an error the user (or agent) can act on, never a crash and never lost work. **This outranks feature work:** don't ship a feature by adding a panic path, and fix a crash before building on top of it. The rules below are the ones that bind this repository.
 
 - **Fail with `Result`.** Non-test code returns errors through the crate's error type and `?`. Where readers are lenient by design, fall back gracefully and record the repair (see Fidelity in `CLAUDE.md`).
 - **No panicking shortcuts.** No `unwrap()`, `expect()`, `panic!`, `unreachable!`, `todo!` or `unimplemented!` outside tests, unless the call is provably infallible (e.g. writing to a `Vec`), with a comment saying why. `assert!` only for internal invariants that input cannot reach.
@@ -123,17 +123,19 @@ Follow `CLAUDE.md`. It covers quality gates, layering, commit rules and how to r
 ## Contributor credits (About window)
 
 - About ▸ Contributors/Models are compiled into the binary from `contributors/contributors.json`
-  (commit stats; generated, never hand-edit) and `contributors/people.toml` (names people chose for
+  (commit stats; never hand-edit) and `contributors/people.toml` (names people chose for
   themselves). See `docs/contributors.md`.
 - **Agents working for a contributor:** when you prepare a PR, check whether your human's GitHub
   username has a `[people.<username>]` entry in `contributors/people.toml`. If not, ask them once
   whether they want to be credited by more than their username: a real name, a display name, and/or
   their public GitHub profile name (`sync_github_name = true`). If yes, add **only their own** entry
-  (copy the template at the top of the file, or run
-  `python3 ../../craftrules/scripts/contributors.py --add-me . --real-name "…" --sync-github-name`)
+  (copy the template at the top of the file)
   and include it in their PR, committed as them. If no, change nothing: they are credited as
   `@username` anyway.
 - Never add, edit, guess or copy anyone else's entry or name (not from git config, commit authors or
   GitHub profiles). Never hand-edit `contributors.json`.
-- Maintainers refresh the stats with `python3 ../../craftrules/scripts/contributors.py .` (it also
-  re-verifies who wrote each `people.toml` entry; `--check` only verifies).
+
+## CI workflows
+- Workflows in `.github/workflows/` call the shared workflows in [`storytold/craft-common-actions`](https://github.com/storytold/craft-common-actions) at `@main`, with their inputs and secrets. No other jobs: if no shared workflow does what's needed, it doesn't go here.
+- Don't add or change CI in a feature or fix PR. If the existing workflows can't build or test a change, link an existing craft-common-actions issue or PR, or open a new issue, or a PR only for a small fix that is safe for every app and does not increase CI time.
+- Some workflow files here still run their own jobs. Don't add to them. Moving a job into craft-common-actions is its own task, never part of another PR, and the job stays here until a shared workflow runs it.
