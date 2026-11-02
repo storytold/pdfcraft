@@ -2,12 +2,22 @@ name: Android CI
 
 on:
   push:
-    branches: [ android-port, main ]
+    branches:
+      - android-port
+      - android/development
+      - "feature/android-*"
   pull_request:
-    branches: [ android-port, main ]
+    branches:
+      - android-port
+      - android/development
+  workflow_dispatch:
 
 permissions:
   contents: read
+
+concurrency:
+  group: android-ci-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
@@ -15,56 +25,77 @@ env:
 
 jobs:
   build-and-test:
-    name: Build & Test Android
+    name: Build and test Android
     runs-on: ubuntu-latest
+    timeout-minutes: 90
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: "17"
 
       - name: Set up Rust
         run: |
           rustup toolchain install stable --profile minimal
+          rustup default stable
           rustup target add aarch64-linux-android x86_64-linux-android
+          rustc --version
+          cargo --version
 
-      - name: Cache Cargo & Gradle
+      - name: Install cargo-ndk and Android SDK packages
+        run: |
+          cargo install cargo-ndk --version 4.1.2 --locked
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;29.0.14206865" "platforms;android-37" >/dev/null
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null
+
+      - name: Cache Cargo and Gradle
         uses: actions/cache@v4
         with:
           path: |
-            ~/.cargo/bin/cargo-ndk
             ~/.cargo/registry
             ~/.cargo/git
             ~/.gradle/caches
             ~/.gradle/wrapper
-          key: ${{ runner.os }}-android-build-${{ hashFiles('**/Cargo.lock', '**/*.gradle*') }}
+          key: ${{ runner.os }}-android-${{ hashFiles('Cargo.lock', 'apps/pdfcraft-android/android/gradle/wrapper/gradle-wrapper.properties', 'apps/pdfcraft-android/android/gradle.properties', 'apps/pdfcraft-android/android/**/*.gradle*') }}
           restore-keys: |
-            ${{ runner.os }}-android-build-
+            ${{ runner.os }}-android-
 
-      - name: Install cargo-ndk & Android NDK
-        run: |
-          which cargo-ndk || cargo install cargo-ndk --version 4.1.2 --locked
-          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;29.0.14206865" "platforms;android-37.0" >/dev/null
+      - name: Check Rust formatting
+        run: cargo fmt --all -- --check
 
-      - name: Run Host Native Unit Tests
-        run: |
-          cargo test -p pdfcraft-android
+      - name: Run Android bridge tests
+        run: cargo test --locked -p pdfcraft-android
 
-      - name: Run Android Unit Tests
+      - name: Run automation tests
+        run: cargo test --locked -p pdfcraft-automation
+
+      - name: Run annotation tests
+        run: cargo test --locked -p pdfcraft-annot
+
+      - name: Run Android JVM unit tests
         working-directory: apps/pdfcraft-android/android
-        run: |
-          ./gradlew testDebugUnitTest
+        run: ./gradlew --no-daemon testDebugUnitTest
 
-      - name: Assemble Debug APK
+      - name: Assemble debug APK
         working-directory: apps/pdfcraft-android/android
-        run: |
-          ./gradlew assembleDebug
+        run: ./gradlew --no-daemon assembleDebug
 
-      - name: Upload Debug APK
+      - name: Assemble release APK and AAB for build validation
+        working-directory: apps/pdfcraft-android/android
+        run: ./gradlew --no-daemon assembleRelease bundleRelease
+
+      - name: Upload Android build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: pdfcraft-android-debug-apk
-          path: apps/pdfcraft-android/android/app/build/outputs/apk/debug/app-debug.apk
+          name: pdfcraft-android-${{ github.sha }}
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            apps/pdfcraft-android/android/app/build/outputs/apk/debug/*.apk
+            apps/pdfcraft-android/android/app/build/outputs/apk/release/*.apk
+            apps/pdfcraft-android/android/app/build/outputs/bundle/release/*.aab
