@@ -5,6 +5,10 @@
 //!   deflate stream is inflated raw after the 2-byte zlib header;
 //! - streams without a valid zlib header are inflated as raw deflate;
 //! - data after the end of the deflate stream is ignored.
+//!
+//! A back-reference to before the start of the output points at nothing, and is damage, as zlib
+//! has it: read strictly the stream is refused, and read tolerantly what came before it is kept.
+//! (miniz_oxide, flate2's backend here before zlib-rs, copied zeros and went on.)
 
 use std::io::Write;
 
@@ -194,5 +198,68 @@ mod tests {
 
     fn dec_limit(d: &[u8], max: usize) -> Result<Vec<u8>, FilterError> {
         decode(d, max, Some(max)).0.map_err(|f| f.error)
+    }
+
+    /// Deflate's bits: header fields and extra bits least significant first, Huffman codes most
+    /// significant first (RFC 1951 §3.1.1).
+    #[derive(Default)]
+    struct Bits {
+        out: Vec<u8>,
+        acc: u32,
+        n: u32,
+    }
+
+    impl Bits {
+        fn put(&mut self, value: u32, len: u32) {
+            for i in 0..len {
+                self.acc |= ((value >> i) & 1) << self.n;
+                self.n += 1;
+                if self.n == 8 {
+                    self.out.push(self.acc as u8);
+                    (self.acc, self.n) = (0, 0);
+                }
+            }
+        }
+
+        fn code(&mut self, code: u32, len: u32) {
+            for i in (0..len).rev() {
+                self.put((code >> i) & 1, 1);
+            }
+        }
+
+        fn finish(mut self) -> Vec<u8> {
+            if self.n > 0 {
+                self.out.push(self.acc as u8);
+            }
+            self.out
+        }
+    }
+
+    /// A back-reference to before the start of the output points at nothing: read strictly the
+    /// stream is refused, and what came before it is what a tolerant reading keeps. miniz_oxide,
+    /// flate2's backend here before zlib-rs, copied zeros and went on, so this also shows which
+    /// backend inflates (the price of reading Flate, `FLATE_READ_WORK`, is set for zlib-rs).
+    #[test]
+    fn a_copy_from_before_the_start_is_damage() {
+        let literal = |bits: &mut Bits, b: u8| bits.code(0x30 + u32::from(b), 8);
+        let mut bits = Bits::default();
+        bits.put(1, 1); // the final block,
+        bits.put(1, 2); // fixed Huffman codes (§3.2.6)
+        literal(&mut bits, b'A');
+        literal(&mut bits, b'B');
+        bits.code(1, 7); // length 3
+        bits.code(4, 5); // distance 5 (code 4 and an extra bit of 0), three bytes before the start
+        bits.put(0, 1);
+        literal(&mut bits, b'C');
+        bits.code(0, 7); // end of block
+        let data = bits.finish();
+        assert!(zlib_header(&data).is_none(), "read as raw deflate");
+        match decode(&data, 1 << 20, Some(1 << 20)).0 {
+            Err(f) => {
+                assert!(matches!(f.error, FilterError::Corrupt { .. }), "{}", f.error);
+                assert_eq!(f.partial, b"AB");
+            }
+            Ok(out) => panic!("read as {out:?}"),
+        }
     }
 }

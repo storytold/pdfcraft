@@ -264,7 +264,7 @@ pub const MAX_CHAIN: usize = 8;
 /// 0.6.8, release build) the slowest blocks measured, empty dynamic ones, took 21 ns a byte read
 /// to make nothing, empty fixed ones 9 and fixed ones of a literal each 6, so at this price the
 /// worst comes to about 7 ns a step, inside what a step of JBIG2 decoding takes. (miniz_oxide
-/// 0.8.9, flate2's backend here before, builds a block's tables for every block, and took 1,383 ns
+/// 0.9.1, flate2's backend here before, builds a block's tables for every block, and took 1,383 ns
 /// a byte read on empty fixed blocks.) Data a real encoder makes took 0.2 to 2.3 ns a byte made, its
 /// reading included, so an image pays twice its stored length more than it would unpriced.
 pub const FLATE_READ_WORK: u64 = 2;
