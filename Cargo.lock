@@ -4218,6 +4218,7 @@ dependencies = [
  "log",
  "pdfcraft-engine",
  "pdfcraft-ui-egui",
+ "percent-encoding",
  "pollster 1.0.1",
  "raw-window-handle",
  "serde_json",
