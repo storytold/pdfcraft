@@ -217,6 +217,7 @@ fn tools_that_write_a_path_are_held_to_the_write_root() {
             ("doc_print", json!({"doc": 1, "path": file("printed.pdf")})),
             ("doc_export_text", json!({"doc": 1, "path": file("text.txt")})),
             ("doc_export_office", json!({"doc": 1, "path": file("export.docx")})),
+            ("doc_export_epub", json!({"doc": 1, "path": file("export.epub")})),
             ("doc_export_data", json!({"doc": 1, "path": file("data.xfdf")})),
             ("doc_export_images", json!({"doc": 1, "folder": file("renders")})),
             ("doc_export_all_images", json!({"doc": 1, "folder": file("images")})),

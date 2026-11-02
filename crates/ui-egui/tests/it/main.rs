@@ -41,6 +41,8 @@ mod dialog_chrome;
 mod document_links;
 mod editing;
 mod editor_taps;
+mod epub_export_range;
+mod epub_export_save_name;
 mod export;
 mod fill_sign;
 mod folders;
