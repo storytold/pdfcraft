@@ -316,9 +316,13 @@ fn tool_input(
 /// selected; links take theirs from what this returns.
 fn right_click(hits: &PageHits<'_>, view: &mut DocView, p: Pos2) -> Option<Owner> {
     let context = hits.context_at(view, p);
-    // Edit text's own paragraphs and pictures keep the right-click as they take it today, and a
-    // Prepare field tool the whole page.
-    let editing_here = matches!(hits.tool, QuickTool::AddText | QuickTool::EditText) && top(hits.at(view, p), hits.tool).is_some();
+    // Add text takes every right-click on a page it can change, Edit text those on its own
+    // paragraphs and pictures, and a Prepare field tool the whole page, as before.
+    let editing_here = match hits.tool {
+        QuickTool::AddText => hits.can_modify || top(hits.at(view, p), hits.tool).is_some(),
+        QuickTool::EditText => top(hits.at(view, p), hits.tool).is_some(),
+        _ => false,
+    };
     if !editing_here && hits.field_tool.is_none() {
         let comment = match context {
             Some(Owner::Comment { index, .. }) => Some(index),
@@ -385,8 +389,16 @@ impl PageHits<'_> {
     /// What a right-click at `p` is on: what lies on top there, as for a press, but with every
     /// tool reaching comments and links, as a comment's menu shows whatever the tool. A highlight
     /// over a link is the highlight's ([`comments::context_hit`]).
+    /// The Link tool edits links, so its right-click on one is the link's whatever lies over it, as
+    /// its press there is.
     fn context_at(&self, view: &DocView, p: Pos2) -> Option<Owner> {
-        top(self.hits(view, p, true), QuickTool::Select).map(|h| h.owner)
+        let hits = self.hits(view, p, true);
+        if self.tool == QuickTool::Link
+            && let Some(link) = hits.iter().rev().find(|h| matches!(h.owner, Owner::Link { .. }))
+        {
+            return Some(link.owner);
+        }
+        top(hits, QuickTool::Select).map(|h| h.owner)
     }
 
     /// The hits at `p`, bottom up: links, comments; Edit text's pictures under its paragraphs (text

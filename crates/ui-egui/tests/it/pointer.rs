@@ -1226,3 +1226,61 @@ fn a_fields_tooltip_shows_only_where_the_field_takes_the_press() {
     rest_at(&mut h, on_field);
     assert!(h.query_all_by_label("Your name").next().is_some(), "the field's tooltip where it takes the press");
 }
+
+/// With the Link tool a right-click on a link is the link's, as its press there is, though a note
+/// lies over it: the Link tool edits links and reaches no comment.
+#[test]
+fn a_right_click_with_the_link_tool_on_a_note_over_a_link_selects_the_link() {
+    let mut h = open(note_over_link_pdf(), "150", false);
+    link_tool(&mut h);
+    let on_both = at(&h, 150.0, 325.0);
+    right_click(&mut h, on_both);
+    let v = &h.state().views[0];
+    assert_eq!((v.links.selected, v.links.context, v.comments.selected), (Some((0, 0)), Some((0, 0)), None), "the link, not the note");
+}
+
+/// With Add text a right-click leaves comments alone, as before: Add text takes the page's
+/// right-clicks.
+#[test]
+fn a_right_click_with_add_text_selects_no_comment() {
+    let mut h = open(comment_on_text_pdf(), "150", false);
+    h.state_mut().quick_tool = QuickTool::AddText;
+    h.run_steps(4);
+    // Above the line of text the comment covers, where no paragraph is.
+    let on_comment = at(&h, 100.0, 317.0);
+    right_click(&mut h, on_comment);
+    assert_eq!(h.state().views[0].comments.selected, None, "the comment under the pointer is not selected");
+}
+
+/// With the Select tool a right-click finds a link only where a click follows it: a link that
+/// does nothing has no menu. The Link tool's own test used to give it one.
+#[test]
+fn a_right_click_with_the_select_tool_on_a_link_with_no_action_opens_no_link_menu() {
+    let mut h = open(dead_link_pdf(), "150", false);
+    let dead = at(&h, 25.0, 325.0);
+    right_click(&mut h, dead);
+    assert_eq!(h.state().views[0].links.context, None);
+    assert!(h.query_by_label("Remove all links").is_none(), "the page's menu has no link items");
+}
+
+/// [`link_pdf`], with a check box over the middle of its link.
+fn field_over_link_pdf() -> Vec<u8> {
+    pdf(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R] /DA (/ZaDb 0 Tf 0 g) /DR << /Font << /ZaDb 6 0 R >> >> >> >>",
+        PAGES,
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R] >>",
+        "<< /Type /Annot /Subtype /Link /Rect [50 300 250 350] /Border [0 0 0] /A << /S /URI /URI (https://example.org/) >> >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Btn /T (agree) /V /Off /AS /Off /Rect [140 315 160 335] /P 3 0 R /F 4 /MK << /CA (4) >> /DA (/ZaDb 11 Tf 0 g) >>",
+        "<< /Type /Font /Subtype /Type1 /BaseFont /ZapfDingbats >>",
+    ])
+}
+
+/// A right-click on a form field over a link is the field's, as a press there is: no link menu.
+#[test]
+fn a_right_click_on_a_field_over_a_link_opens_no_link_menu() {
+    let mut h = open(field_over_link_pdf(), "150", false);
+    let on_field = at(&h, 150.0, 325.0);
+    right_click(&mut h, on_field);
+    assert_eq!(h.state().views[0].links.context, None, "the field is on top");
+    assert!(h.query_by_label("Remove all links").is_none());
+}

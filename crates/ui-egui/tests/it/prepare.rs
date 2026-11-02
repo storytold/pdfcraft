@@ -1562,3 +1562,40 @@ fn button_export_properties_apply_cancel_and_undo() {
         assert_eq!(f.export_of(0), Some(original.as_str()));
     }
 }
+
+/// The screen rectangle of widget 0 of field `name` on the first view.
+fn field_rect(h: &Harness<'static, PdfCraftApp>, name: &str) -> egui::Rect {
+    let s = h.state();
+    let doc = s.session.get(s.views[0].id).unwrap();
+    let f = doc.form.iter().find(|f| f.name == name).unwrap();
+    pdfcraft_ui_egui::forms_ui::field_screen_rect(&s.views[0], &doc.info, f, 0).expect("on screen")
+}
+
+/// A right-click while a field is dragged leaves the dragged field selected, so the drag moves it
+/// and not the field right-clicked. The right-click used to select the other field, and the release
+/// moved that one.
+#[test]
+fn a_right_click_during_a_field_drag_moves_the_dragged_field() {
+    let mut h = harness();
+    h.state_mut().execute("form.prepare");
+    h.run_steps(3);
+    let (name, city) = (field_rect(&h, "name"), field_rect(&h, "city"));
+    let a = name.center();
+    h.hover_at(a);
+    h.run_steps(1);
+    h.drag_at(a);
+    h.run_steps(1);
+    h.hover_at(a + egui::vec2(0.0, 30.0));
+    h.run_steps(1);
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos: city.center(), button: egui::PointerButton::Secondary, pressed, modifiers: Default::default() });
+    }
+    h.run_steps(1);
+    let end = a + egui::vec2(0.0, 60.0);
+    h.hover_at(end);
+    h.run_steps(1);
+    h.drop_at(end);
+    h.run_steps(3);
+    assert_eq!(field_rect(&h, "city"), city, "the field right-clicked stays where it was");
+    assert_ne!(field_rect(&h, "name"), name, "the dragged field moved");
+}

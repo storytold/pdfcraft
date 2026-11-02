@@ -462,11 +462,15 @@ pub(crate) fn page_input(
 
 /// A right-click on widget `widget` of field `field` (the top hit there, [`hit`]): the field is
 /// selected, so the menu acts on it. Part of a selection of several, it becomes the anchor the
-/// others line up with.
+/// others line up with. Not while a field is dragged or a rectangle drawn: the release acts on
+/// the selection the drag began with.
 pub(crate) fn context(form: &[FormField], field: usize, widget: usize, view: &mut DocView) {
     let Some(f) = form.get(field) else { return };
     let key = (f.name.clone(), widget);
     let prep = &mut view.prepare;
+    if prep.grab.is_some() || prep.ignore_release {
+        return;
+    }
     if let Some(i) = prep.also.iter().position(|k| *k == key) {
         prep.also.remove(i);
         if let Some(old) = prep.selected.replace(key) {
