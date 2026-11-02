@@ -148,7 +148,7 @@ fn unescape(s: &str) -> String {
 /// line feed and carriage return, and U+FFFE/U+FFFF).
 fn esc(s: &str) -> String {
     s.chars()
-        .filter(|c| !(*c < '\u{20}' && !matches!(c, '\t' | '\n' | '\r')) && !matches!(c, '\u{FFFE}' | '\u{FFFF}'))
+        .filter(|c| (*c >= '\u{20}' || matches!(c, '\t' | '\n' | '\r')) && !matches!(c, '\u{FFFE}' | '\u{FFFF}'))
         .collect::<String>()
         .replace('&', "&amp;")
         .replace('<', "&lt;")
