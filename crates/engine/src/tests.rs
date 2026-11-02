@@ -3644,6 +3644,30 @@ fn optimize_discarding_an_empty_category_still_runs() {
     let id = s.open("noted.pdf", None, Arc::new(noted), None).unwrap();
     let (_, report) = s.optimized_bytes(id, &optimize::Settings::default(), &[crate::Hidden::Bookmarks, crate::Hidden::Comments]).unwrap();
     assert_eq!(report.discarded, vec![(crate::Hidden::Comments, 1)]);
+    // A field whose appearance draws text invisibly: flattening it brings that text onto the page,
+    // which no scan before counts as hidden, and discarding hidden text takes it too.
+    let form = pdfcraft_testkit::Pdf::new()
+        .obj("<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] /DA (/F1 0 Tf 0 g) >> >>")
+        .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>")
+        .obj("<< /Type /Page /Parent 2 0 R /Annots [4 0 R] /Resources << /Font << /F1 6 0 R >> >> /Contents 7 0 R >>")
+        .obj("<< /Type /Annot /Subtype /Widget /FT /Tx /T (name) /V (shown) /Rect [100 100 300 130] /P 3 0 R /F 4 /AP << /N 5 0 R >> >>")
+        .stream(
+            "/Type /XObject /Subtype /Form /BBox [0 0 200 30] /Resources << /Font << /F1 6 0 R >> >>",
+            "/Tx BMC BT /F1 12 Tf 2 10 Td (shown) Tj ET BT /F1 12 Tf 3 Tr 2 20 Td (HIDDENSECRET) Tj ET EMC",
+        )
+        .obj("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
+        .stream("", "BT /F1 12 Tf 72 700 Td (Page text) Tj ET")
+        .build();
+    let mut s = Session::new();
+    let id = s.open("form.pdf", None, Arc::new(form), None).unwrap();
+    let (bytes, _) = s.optimized_bytes(id, &optimize::Settings::default(), &[crate::Hidden::FormFields, crate::Hidden::HiddenText]).unwrap();
+    let saved = pdfcraft_cos::Document::open(bytes).unwrap();
+    for (r, object) in saved.scan_objects() {
+        if let pdfcraft_cos::Object::Stream(st) = &*object {
+            let data = st.decoded().unwrap_or_default();
+            assert!(!data.windows(12).any(|w| w == b"HIDDENSECRET"), "the hidden text stays in {r:?}");
+        }
+    }
 }
 
 #[test]
