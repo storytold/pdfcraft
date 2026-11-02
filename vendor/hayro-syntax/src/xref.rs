@@ -98,12 +98,15 @@ fn read_object_header<'a>(r: &mut Reader<'a>, ctx: &ReaderContext<'a>) -> Option
         *r = strict;
         return Some(obj_id);
     }
-    let obj_number = r.read_without_context::<i32>()?;
-    r.skip_white_spaces_and_comments();
+    // On a clone as well, so a header that isn't one leaves `r` where it was for the caller.
+    let mut lenient = r.clone();
+    let obj_number = lenient.read_without_context::<i32>()?;
+    lenient.skip_white_spaces_and_comments();
     // Any number at all in the generation position, including one no generation may be.
-    r.skip::<Number>(false)?;
-    r.skip_white_spaces_and_comments();
-    r.forward_tag(b"obj")?;
+    lenient.skip::<Number>(false)?;
+    lenient.skip_white_spaces_and_comments();
+    lenient.forward_tag(b"obj")?;
+    *r = lenient;
     Some(ObjectIdentifier::new(obj_number, 0))
 }
 
@@ -583,8 +586,10 @@ impl XRef {
                 // one object -- its own generation and the generation-0 stand-in (#5580) -- and
                 // enumeration yielded the object once for each, so a document recovered by
                 // `Pages::new_brute_force` reported the page twice (noted in review). Both keys
-                // stay for lookups; only this walk is deduplicated.
-                elements.dedup_by_key(|e| e.1);
+                // stay for lookups; only this walk is deduplicated. The object number is part of
+                // the key: an object stream at (offset, 0) and its first member, also
+                // (offset, 0), are two objects.
+                elements.dedup_by(|a, b| a.1 == b.1 && a.0.obj_number == b.0.obj_number);
 
                 let mut iter = elements.into_iter();
 
@@ -1836,6 +1841,18 @@ mod tests {
                 job.join().unwrap();
             }
         }
+    }
+
+    #[test]
+    fn an_object_stream_and_its_first_member_are_both_enumerated() {
+        // Both sit at (stream offset, 0) in `objects`' ordering; one object per location must
+        // not cost either of them.
+        let pdf = crate::Pdf::new(object_stream_fixture(false)).unwrap();
+        let objects: Vec<_> = pdf.xref().objects().into_iter().collect();
+        assert!(objects.iter().any(|o| matches!(o, Object::Stream(_))));
+        assert!(objects.iter().any(
+            |o| matches!(o, Object::Dict(d) if d.get::<i32>(b"Marker") == Some(123))
+        ));
     }
 
     #[test]

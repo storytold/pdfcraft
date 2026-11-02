@@ -8569,6 +8569,19 @@ fn a_rebuilt_table_finds_an_object_whose_header_names_another_generation() {
         assert!(page.error.is_none(), "generation {generation}: the page is found: {:?}", page.error);
         assert_eq!((page.width, page.height), (200, 100), "generation {generation}: and it is the page's own size");
     }
+
+    // A stray number before a header (`42 3 0 obj`) is not a header, and must not cost the one
+    // after it: the lenient read leaves the scan where it was when it fails (noted in review).
+    let pdf = "%PDF-1.4\n\
+               1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+               2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+               42 3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] >> endobj\n\
+               trailer << /Root 1 0 R >>\n\
+               %%EOF\n";
+    let mut r = PageRenderer::new(Arc::new(pdf.to_string().into_bytes()), RenderConfig::default());
+    let page = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false });
+    assert!(page.error.is_none(), "the header after a stray number is found: {:?}", page.error);
+    assert_eq!((page.width, page.height), (200, 100));
 }
 
 /// #3109 / #3116: clipping-only text (`7 Tr`) installs a clip for subsequent painting
