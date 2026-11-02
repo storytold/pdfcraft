@@ -486,6 +486,52 @@ fn a_selection_made_first_is_marked_when_a_tool_is_picked() {
     assert!(h.state().views[0].selected_text().is_none(), "the selection is consumed");
 }
 
+/// #4824: a highlight takes the text selected on its page as the text it marks, through its
+/// context menu, as one undo step, and the item is off with nothing selected.
+#[test]
+fn a_highlights_range_is_changed_to_the_selected_text() {
+    let mut h = harness(|_| {});
+    crate::support::settle(&mut h);
+    h.state_mut().views[0].select_text(0, 4, 8);
+    assert!(h.state_mut().execute("comment.highlight"));
+    h.run_steps(2);
+    let width = |h: &Harness<'static, PdfCraftApp>| {
+        let r = comments(h)[0].rect;
+        r[2] - r[0]
+    };
+    let before = width(&h);
+    assert_eq!(comments(&h).len(), 1);
+    h.state_mut().set_option("quick", "select").unwrap();
+    h.state_mut().views[0].comments.selected = Some((0, 0));
+    crate::support::settle(&mut h);
+    let open_menu = |h: &mut Harness<'static, PdfCraftApp>| {
+        let p = h.state().views[0].glyph_screen_pos(0, 5).expect("text layer");
+        h.hover_at(p);
+        h.run_steps(1);
+        h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Secondary, pressed: true, modifiers: Default::default() });
+        h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Secondary, pressed: false, modifiers: Default::default() });
+        h.run_steps(3);
+    };
+    // With no text selected the item is there and off.
+    open_menu(&mut h);
+    assert!(h.get_by_label("Mark the selected text instead").accesskit_node().is_disabled());
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    // Select more text on the page and use it.
+    h.state_mut().views[0].select_text(0, 4, 14);
+    h.state_mut().views[0].comments.selected = Some((0, 0));
+    h.run_steps(2);
+    open_menu(&mut h);
+    h.get_by_label("Mark the selected text instead").click();
+    h.run_steps(3);
+    assert_eq!(comments(&h).len(), 1, "the same highlight, not a new one");
+    assert!(width(&h) > before + 1.0, "{} vs {before}", width(&h));
+    assert!(h.state().views[0].selected_text().is_none(), "the selection is consumed");
+    h.state_mut().undo();
+    h.run_steps(3);
+    assert!((width(&h) - before).abs() < 0.01, "one undo step puts the range back");
+}
+
 #[test]
 fn selected_text_shows_actions_and_underlines_without_changing_tools() {
     let mut h = harness(|_| {});

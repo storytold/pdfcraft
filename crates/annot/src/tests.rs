@@ -306,6 +306,266 @@ fn deleting_the_last_comment_removes_annots() {
     assert!(!doc.get(page_refs(&doc).unwrap()[0]).as_dict().unwrap().contains(b"Annots"));
 }
 
+/// #4824: a text markup's range can be extended or reduced; everything else about it stays.
+#[test]
+fn set_quads_changes_the_marked_range_and_keeps_the_rest() {
+    let mut doc = fixture();
+    let one = [72.0, 712.0, 200.0, 712.0, 72.0, 700.0, 200.0, 700.0];
+    let two = [72.0, 700.0, 150.0, 700.0, 72.0, 688.0, 150.0, 688.0];
+    let h = add_annotation(&mut doc, &new(0, Shape::TextMarkup { kind: Markup::Highlight, quads: vec![one] }), &meta("h")).unwrap();
+    let before = ap_content(&doc, &list(&doc, 0)[h]);
+    set_quads(&mut doc, 0, h, &[one, two], &meta("h2")).unwrap();
+    let now = reopen(&doc);
+    let d = &list(&now, 0)[h];
+    let qp: Vec<f64> = d.get(b"QuadPoints").unwrap().as_array().unwrap().iter().map(|o| o.as_f64().unwrap()).collect();
+    assert_eq!(qp, [one, two].concat(), "both lines are marked");
+    assert_eq!(rect(d), [72.0, 688.0, 200.0, 712.0], "/Rect follows the area");
+    assert_ne!(ap_content(&now, d), before, "the appearance is redrawn over the new area");
+    assert_eq!(d.get(b"C").unwrap().as_array().unwrap().len(), 3, "the colour is kept");
+    assert_eq!(crate::info::text_value(&now, d, b"Contents").as_deref(), Some("hello"));
+    // And reduced again, to the second line only.
+    set_quads(&mut doc, 0, h, &[two], &meta("h3")).unwrap();
+    assert_eq!(rect(&list(&reopen(&doc), 0)[h]), [72.0, 688.0, 150.0, 700.0]);
+}
+
+/// #4824: an imported markup keeps its opacity and colour when its range changes, though the file
+/// keeps them behind references.
+#[test]
+fn set_quads_redraws_with_the_opacity_and_colour_kept_behind_references() {
+    let mut doc = fixture();
+    let q = [72.0, 712.0, 200.0, 712.0, 72.0, 700.0, 200.0, 700.0];
+    let h = add_annotation(&mut doc, &new(0, Shape::TextMarkup { kind: Markup::Highlight, quads: vec![q] }), &meta("h")).unwrap();
+    let (_, r) = crate::lookup::annot_ref(&mut doc, 0, h).unwrap();
+    let ca = doc.add(Object::Real(0.25));
+    let c = doc.add(Object::Array(vec![Object::Real(0.0), Object::Real(1.0), Object::Real(0.0)]));
+    doc.update_dict(r, |d| {
+        d.set(b"CA".to_vec(), Object::Ref(ca));
+        d.set(b"C".to_vec(), Object::Ref(c));
+    })
+    .unwrap();
+    set_quads(&mut doc, 0, h, &[q, [72.0, 700.0, 150.0, 700.0, 72.0, 688.0, 150.0, 688.0]], &meta("h2")).unwrap();
+    let d = &list(&doc, 0)[h];
+    assert!(matches!(d.get(b"CA"), Some(Object::Ref(_))) && matches!(d.get(b"C"), Some(Object::Ref(_))), "the file's own entries stay as they were");
+    let ap = d.get(b"AP").unwrap().as_dict().unwrap().reference(b"N").unwrap();
+    let res = doc.get(ap).as_dict().unwrap().get(b"Resources").cloned().unwrap();
+    let gs = res.as_dict().unwrap().get(b"ExtGState").unwrap().as_dict().unwrap().get(b"GS0").unwrap().as_dict().unwrap().clone();
+    assert_eq!(gs.get(b"ca").and_then(|o| o.as_f64()), Some(0.25), "the drawn opacity is the file's");
+    assert!(ap_content(&doc, d).contains("0 1 0 rg"), "and its colour: {}", ap_content(&doc, d));
+}
+
+/// #4824: many long, thin squiggly areas stay within one total drawing budget.
+#[test]
+fn set_quads_bounds_the_squiggly_appearance_as_a_whole() {
+    let mut doc = fixture();
+    let q = [72.0, 712.0, 200.0, 712.0, 72.0, 700.0, 200.0, 700.0];
+    let h = add_annotation(&mut doc, &new(0, Shape::TextMarkup { kind: Markup::Squiggly, quads: vec![q] }), &meta("s")).unwrap();
+    let long = [0.0, 1.0, 20_000.0, 1.0, 0.0, 0.0, 20_000.0, 0.0];
+    set_quads(&mut doc, 0, h, &vec![long; 50_000], &meta("s2")).unwrap();
+    let content = ap_content(&doc, &list(&doc, 0)[h]);
+    assert!(content.len() < 8 << 20, "the appearance is {} bytes", content.len());
+    assert_eq!(content.matches(" m\n").count(), 50_000, "every area is still drawn");
+}
+
+/// Long quads must leave every later squiggly at least one zigzag, including very short quads.
+#[test]
+fn set_quads_keeps_every_squiggly_zigzag_within_the_total_vertex_budget() {
+    let mut doc = fixture();
+    let long = [0.0, 1.0, 20_000.0, 1.0, 0.0, 0.0, 20_000.0, 0.0];
+    let short = [0.0, 1.0, 1.0, 1.0, 0.0, 0.0, 1.0, 0.0];
+    let h = add_annotation(&mut doc, &new(0, Shape::TextMarkup { kind: Markup::Squiggly, quads: vec![long] }), &meta("s")).unwrap();
+    let mut quads = vec![long; 64];
+    quads.resize(50_000, short);
+    set_quads(&mut doc, 0, h, &quads, &meta("s2")).unwrap();
+    let content = ap_content(&doc, &list(&doc, 0)[h]);
+    let (mut paths, mut vertices) = (Vec::new(), 0usize);
+    for line in content.lines() {
+        if line.ends_with(" m") {
+            assert_eq!(vertices, 0, "the preceding path was stroked");
+            vertices = 1;
+        } else if line.ends_with(" l") {
+            vertices += 1;
+        } else if line == "S" {
+            paths.push(vertices);
+            vertices = 0;
+        }
+    }
+    assert_eq!(paths.len(), quads.len(), "every quad has its own stroked path");
+    assert_eq!(vertices, 0);
+    for (quad, vertices) in paths.iter().enumerate() {
+        assert!(*vertices >= 3, "quad {quad} has only {vertices} vertices: a squiggly needs m + 2 l");
+    }
+    let total = paths.iter().sum::<usize>();
+    assert!(total <= 200_000, "the appearance has {total} vertices, above the shared 200000 cap");
+}
+
+/// Imported annotations can exceed the range-edit limit. Refuse a redraw whose minimum
+/// zigzags cannot fit the appearance budget, preserving its existing dictionary and appearance.
+#[test]
+fn restyling_a_squiggly_refuses_more_quads_than_the_minimum_vertex_budget_allows() {
+    let short = [0.0, 1.0, 1.0, 1.0, 0.0, 0.0, 1.0, 0.0];
+    for (count, refused) in [(66_666, false), (66_667, true)] {
+        let mut doc = fixture();
+        let h = add_annotation(&mut doc, &new(0, Shape::TextMarkup { kind: Markup::Squiggly, quads: vec![short] }), &meta("s")).unwrap();
+        let (_, r) = crate::lookup::annot_ref(&mut doc, 0, h).unwrap();
+        doc.update_dict(r, |d| d.set(b"QuadPoints".to_vec(), create::num_array(&vec![short; count].concat()))).unwrap();
+        let before = pdfcraft_cos::write_full(&doc, &Default::default()).unwrap();
+        let change = StyleChange::new(Some([0.0, 1.0, 0.0]), None, None, None);
+        let result = set_style(&mut doc, 0, h, change, &meta("restyle"));
+        assert_eq!(result.is_err(), refused, "{count} quads need {} vertices", count * 3);
+        if refused {
+            assert_eq!(pdfcraft_cos::write_full(&doc, &Default::default()).unwrap(), before, "a refused redraw changes nothing");
+        }
+    }
+}
+
+/// Zero-area quadrilaterals, including collinear diagonals with a nonempty bounding box,
+/// never replace a markup. Reject them before even promoting an inline annotation to a reference.
+#[test]
+fn set_quads_rejects_zero_area_quads_without_changing_the_markup() {
+    let valid = [72.0, 712.0, 200.0, 712.0, 72.0, 700.0, 200.0, 700.0];
+    for inline in [false, true] {
+        let mut doc = fixture();
+        let h = add_annotation(&mut doc, &new(0, Shape::TextMarkup { kind: Markup::Highlight, quads: vec![valid] }), &meta("h")).unwrap();
+        let page = page_refs(&doc).unwrap()[0];
+        if inline {
+            let dict = list(&doc, 0)[h].clone();
+            let mut entries = annots(&doc, page);
+            entries[h] = Object::Dict(dict);
+            set_annots(&mut doc, page, entries).unwrap();
+        }
+        let snapshot = |doc: &Document| {
+            (format!("{:?}", list(doc, 0)), format!("{:?}", doc.get(page)), doc.object_numbers().len(), ap_content(doc, &list(doc, 0)[h]))
+        };
+        let before = snapshot(&doc);
+        for quads in [
+            vec![[0.0; 8]],
+            vec![[0.0, 1.0, 10.0, 1.0, 20.0, 1.0, 30.0, 1.0]],
+            vec![[1.0, 0.0, 1.0, 10.0, 1.0, 20.0, 1.0, 30.0]],
+            vec![[0.0, 0.0, 10.0, 10.0, 20.0, 20.0, 30.0, 30.0]],
+            vec![valid, [0.0; 8]],
+            vec![[0.0; 8], valid],
+            vec![[-f64::MAX, 0.0, f64::MAX, 0.0, 0.0, 1.0, 1.0, 1.0]],
+            Vec::new(),
+        ] {
+            assert!(set_quads(&mut doc, 0, h, &quads, &meta("bad")).is_err(), "inline={inline}, {quads:?}");
+            assert_eq!(snapshot(&doc), before, "no dictionary, appearance or page reference changed: {quads:?}");
+        }
+        // Area does not depend on the point order: both Z-order and perimeter-order corners
+        // span the same rectangle, and a rotated/skewed area is valid too.
+        for quad in [valid, [72.0, 712.0, 200.0, 712.0, 200.0, 700.0, 72.0, 700.0], [0.0, 0.0, 10.0, 10.0, -2.0, 2.0, 8.0, 12.0]] {
+            set_quads(&mut doc, 0, h, &[quad], &meta("good")).unwrap();
+        }
+    }
+}
+
+/// Valid geometry must not promote an inline annotation before a lock or subtype refusal.
+#[test]
+fn set_quads_refuses_inline_locked_or_non_markup_annotations_without_promotion() {
+    let q = [72.0, 712.0, 200.0, 712.0, 72.0, 700.0, 200.0, 700.0];
+    let mut changed = Vec::new();
+    for inline in [false, true] {
+        for (shape, locked) in [
+            (Shape::TextMarkup { kind: Markup::Highlight, quads: vec![q] }, true),
+            (Shape::Ink { strokes: vec![vec![[10.0, 10.0], [20.0, 20.0]]] }, false),
+            (Shape::Redact { quads: vec![q], overlay: String::new(), look: Default::default() }, false),
+        ] {
+            let mut doc = fixture();
+            let index = add_annotation(&mut doc, &new(0, shape), &meta("source")).unwrap();
+            let page = page_refs(&doc).unwrap()[0];
+            let mut dict = list(&doc, 0)[index].clone();
+            let subtype = String::from_utf8_lossy(dict.name(b"Subtype").unwrap()).into_owned();
+            if locked {
+                // Indirect flags must be checked before promotion too.
+                let flags = doc.add(Object::Int(crate::types::FLAG_LOCKED));
+                dict.set(b"F".to_vec(), Object::Ref(flags));
+            }
+            let mut entries = annots(&doc, page);
+            entries[index] = if inline { Object::Dict(dict) } else { Object::Ref(doc.add(Object::Dict(dict))) };
+            set_annots(&mut doc, page, entries).unwrap();
+            let snapshot = |doc: &Document| {
+                (
+                    pdfcraft_cos::write_full(doc, &Default::default()).unwrap(),
+                    format!("{:?}", doc.get(page)),
+                    doc.object_numbers().len(),
+                    doc.is_modified(),
+                )
+            };
+            let before = snapshot(&doc);
+            let error = set_quads(&mut doc, 0, index, &[q], &meta("refused")).unwrap_err().to_string();
+            assert!(error.contains(if locked { "locked" } else { "no text range" }), "{error}");
+            if snapshot(&doc) != before {
+                changed.push(format!("inline={inline}, subtype={subtype}, locked={locked}"));
+            }
+        }
+    }
+    assert!(changed.is_empty(), "refusal changed objects or page entries: {changed:?}");
+}
+
+/// A cloudy imported markup cannot be redrawn. Refusal must not promote an inline dictionary,
+/// rewrite either form of /Annots, allocate objects, or replace the existing appearance.
+#[test]
+fn set_quads_redraw_failure_preserves_inline_and_indirect_annotations_byte_for_byte() {
+    let q = [72.0, 712.0, 200.0, 712.0, 72.0, 700.0, 200.0, 700.0];
+    let replacement = [72.0, 700.0, 150.0, 700.0, 72.0, 688.0, 150.0, 688.0];
+    for inline in [true, false] {
+        for indirect_annots in [false, true] {
+            let mut doc = fixture();
+            let h = add_annotation(&mut doc, &new(0, Shape::TextMarkup { kind: Markup::Highlight, quads: vec![q] }), &meta("source")).unwrap();
+            let page = page_refs(&doc).unwrap()[0];
+            let mut dict = list(&doc, 0)[h].clone();
+            dict.set(b"BE".to_vec(), Object::Dict(Dict::from_iter([(b"S".to_vec(), Object::name("C")), (b"I".to_vec(), Object::Int(2))])));
+            assert!(appearance::build(&dict).is_none(), "cloudy highlight appearances are unsupported");
+            let mut entries = annots(&doc, page);
+            entries[h] = if inline { Object::Dict(dict) } else { Object::Ref(doc.add(Object::Dict(dict))) };
+            if indirect_annots {
+                let array = doc.add(Object::Array(entries));
+                doc.update_dict(page, |d| d.set(b"Annots".to_vec(), Object::Ref(array))).unwrap();
+            } else {
+                set_annots(&mut doc, page, entries).unwrap();
+            }
+            let mut doc = reopen(&doc);
+            assert!(!doc.is_modified(), "the imported fixture starts clean");
+            let snapshot = |doc: &Document| {
+                (
+                    write_incremental(doc, &SaveOptions::default()).unwrap(),
+                    format!("{:?}", doc.get(page)),
+                    doc.object_numbers().len(),
+                    ap_content(doc, &list(doc, 0)[h]),
+                    doc.is_modified(),
+                )
+            };
+            let before = snapshot(&doc);
+            assert!(matches!(set_quads(&mut doc, 0, h, &[replacement], &meta("refused")), Err(AnnotError::Unsupported(kind)) if kind == "Highlight"));
+            assert_eq!(snapshot(&doc), before, "inline={inline}, indirect Annots={indirect_annots}");
+        }
+    }
+}
+
+/// #4824: what is refused changes nothing.
+#[test]
+fn set_quads_refuses_other_comments_locked_markup_and_bad_areas() {
+    let mut doc = fixture();
+    let q = [72.0, 712.0, 200.0, 712.0, 72.0, 700.0, 200.0, 700.0];
+    let h = add_annotation(&mut doc, &new(0, Shape::TextMarkup { kind: Markup::Underline, quads: vec![q] }), &meta("h")).unwrap();
+    let ink = add_annotation(&mut doc, &new(0, Shape::Ink { strokes: vec![vec![[10.0, 10.0], [20.0, 20.0]]] }), &meta("i")).unwrap();
+    let redact =
+        add_annotation(&mut doc, &new(0, Shape::Redact { quads: vec![q], overlay: String::new(), look: Default::default() }), &meta("r")).unwrap();
+    let snapshot = |doc: &Document| format!("{:?}", list(doc, 0));
+    let before = snapshot(&doc);
+    assert!(set_quads(&mut doc, 0, ink, &[q], &meta("")).is_err(), "a drawing has no text range");
+    assert!(set_quads(&mut doc, 0, redact, &[q], &meta("")).is_err(), "a redaction's area is what is removed");
+    assert!(set_quads(&mut doc, 0, h, &[], &meta("")).is_err(), "an empty area");
+    assert!(set_quads(&mut doc, 0, h, &[[f64::NAN; 8]], &meta("")).is_err(), "a non-finite area");
+    assert!(set_quads(&mut doc, 0, h, &vec![q; 50_001], &meta("")).is_err(), "a capped number of areas");
+    assert!(set_quads(&mut doc, 0, 99, &[q], &meta("")).is_err(), "no such comment");
+    set_locked(&mut doc, 0, h, true).unwrap();
+    let locked = snapshot(&doc);
+    assert!(set_quads(&mut doc, 0, h, &[q], &meta("")).is_err(), "a locked markup");
+    assert_eq!(snapshot(&doc), locked);
+    set_locked(&mut doc, 0, h, false).unwrap();
+    assert_eq!(snapshot(&doc), before, "nothing changed");
+}
+
 #[test]
 fn move_shifts_all_geometry_and_the_popup() {
     let mut doc = fixture();

@@ -1,7 +1,7 @@
 use super::create::{
     add_annotation, base_dict, bounds, callout_attach, ending_draws, ending_pair, finite, grow, ink_bounds, normalize, num_array, rect_for, rgb,
 };
-use super::draw::{draw_appearance, redraw_or_restore, set_appearance};
+use super::draw::{apply_appearance, build_appearance, draw_appearance, redraw_or_restore, set_appearance};
 use super::info::{line_endings_of, text_value};
 use super::lookup::{annot_dict, annot_ref, annotation_flags, annots, page_ref, set_annots};
 use super::types::{
@@ -431,6 +431,65 @@ pub fn set_points(doc: &mut Document, page: usize, index: usize, points: &[[f64;
         touch(d, meta);
     })?;
     redraw_or_restore(doc, r, before)
+}
+
+const MAX_QUADS: usize = 50_000;
+
+/// Give a highlight, underline, strikethrough or squiggly underline new text area `quads` (user
+/// space, a `/QuadPoints` quadrilateral each): the range it covers is extended or reduced, as
+/// Acrobat lets one select the markup and change the text it marks. `/Rect` follows the
+/// quadrilaterals and the appearance is redrawn; the colour, opacity, contents, replies and every
+/// other entry are kept. A locked markup, another kind of comment, a redaction (its area is what
+/// is removed) or an empty or non-finite area is refused, and nothing changes.
+pub fn set_quads(doc: &mut Document, page: usize, index: usize, quads: &[[f64; 8]], meta: &Meta) -> Result<(), AnnotError> {
+    if quads.len() > MAX_QUADS {
+        return Err(AnnotError::Invalid(format!("at most {MAX_QUADS} text areas")));
+    }
+    let bad_area = || AnnotError::Invalid("text areas need quadrilaterals with nonzero finite area".into());
+    if quads.is_empty() {
+        return Err(bad_area());
+    }
+    // Non-collinear corners span an area in either Z-order or perimeter order. Validate every
+    // quad before annot_ref can promote an inline annotation to a reference.
+    for quad in quads {
+        let [x0, y0, x1, y1, x2, y2, x3, y3] = *quad;
+        let (a, b, c) = ([x1 - x0, y1 - y0], [x2 - x0, y2 - y0], [x3 - x0, y3 - y0]);
+        let cross = |[ax, ay]: [f64; 2], [bx, by]: [f64; 2]| ax * by - ay * bx;
+        let areas = [cross(a, b), cross(a, c), cross(b, c)];
+        if !areas.iter().all(|area| area.is_finite()) || areas.iter().all(|area| *area == 0.0) {
+            return Err(bad_area());
+        }
+    }
+    // Read without promotion: even valid geometry must leave an inline entry untouched when
+    // its lock or subtype refuses the edit.
+    let mut d = annots(doc, page_ref(doc, page)?)
+        .get(index)
+        .and_then(|entry| doc.resolve(entry).as_dict().cloned())
+        .ok_or(AnnotError::NoSuchAnnotation { page, index })?;
+    if annotation_flags(doc, &d) & FLAG_LOCKED != 0 {
+        return Err(AnnotError::Invalid("the comment is locked".into()));
+    }
+    let subtype = String::from_utf8_lossy(d.name(b"Subtype").unwrap_or_default()).into_owned();
+    let kind = match subtype.as_str() {
+        "Highlight" => Markup::Highlight,
+        "Underline" => Markup::Underline,
+        "StrikeOut" => Markup::StrikeOut,
+        "Squiggly" => Markup::Squiggly,
+        other => return Err(AnnotError::Invalid(format!("{other} comments have no text range to change"))),
+    };
+    // Derive the bounds from the validated quadrilaterals.
+    let rect = rect_for(&Shape::TextMarkup { kind, quads: quads.to_vec() }, &Style::default())?;
+    d.set(b"QuadPoints".to_vec(), num_array(&quads.concat()));
+    d.set(b"Rect".to_vec(), num_array(&rect));
+    touch(&mut d, meta);
+    // Build before promotion: a redraw refusal must not add an object or rewrite /Annots.
+    refuse_foreign_text(doc, &d)?;
+    let stream = build_appearance(doc, &d).ok_or(AnnotError::Unsupported(subtype))?;
+    let (_, r) = annot_ref(doc, page, index)?;
+    doc.set(r, Object::Dict(d.clone()));
+    // r is now a dictionary, and adding the stream cannot replace an existing object, so
+    // apply_appearance's dictionary update cannot fail after promotion.
+    apply_appearance(doc, r, &d, stream)
 }
 
 /// Scale a drawing's strokes into `rect`. The margin between the strokes and the old `/Rect` (half

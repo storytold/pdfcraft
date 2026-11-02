@@ -88,6 +88,12 @@
 > **Last reviewed:** 2026-10-18 - **Last updated:** 2026-10-18 - **Change:** minor (M12 #2570: Dynamic XFA rich-text fields carry exData/maxLength into AcroForm MaxLen for reported and enforced Unicode character limits, retained after save/reopen. Estimates unchanged)
 > **Last reviewed:** 2026-10-18 - **Last updated:** 2026-10-18 - **Change:** minor (M4 #3309: bounded iterative named-destination pruning on page deletion; estimates unchanged)
 > **Last reviewed:** 2026-10-18 - **Last updated:** 2026-10-18 - **Change:** minor (M1 #2658: macOS atomic saves retain destination extended attributes, including Finder tags, and reject partial resource-fork reads after size changes. Metadata failures retain the original PDF and unsaved edit. Estimates unchanged)
+> **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (Direct markup-range edits build and validate the replacement appearance before inline promotion, so unsupported redraws preserve incremental bytes, page Annots, object count, appearance and dirty state. The cloudy-highlight regression fails on b70c2c10; 883 scoped tests pass (4 existing ignored), with stable formatting, strict Clippy, layers/assets/parity and core wasm checks)
+> **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (Squiggly appearances reserve three vertices for every remaining area within the shared 200,000-vertex cap; 50,000 mixed long/short areas retain their zigzags, and infeasible imported redraws preserve the prior appearance. Both regressions fail on cef66f30; an independent reservation mutation exceeds the cap. 882 scoped tests pass (4 existing ignored), with stable formatting, strict Clippy, layers/assets/parity and core wasm checks)
+> **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M5 #4824: rebase PR #5100 onto main 0cba87ae; 2938 scoped tests pass (9 existing ignored), formatting, strict Clippy, layers/assets/parity and wasm checks pass; behavior and estimates unchanged)
+> **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (Markup range edits check locks and subtypes before promoting inline annotations; refusals preserve exact bytes, page entries, object count and dirty state. The regression fails on all three inline cases without the fix; 876 scoped tests pass, 4 existing ignored, with strict Clippy, repository gates and annotation wasm checks)
+> **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M5 #4824: reject empty or collinear markup quadrilaterals before annotation lookup; preserve inline dictionaries and compound-edit document bytes and history on refusal; both regressions fail with the fix reverted, 875 scoped tests pass (4 existing ignored), formatting, strict Clippy, layers/assets/parity and annotation wasm checks pass; estimates unchanged)
+> **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M5 #4824: rebase PR #5100 onto main b36bdaea; 2917 scoped tests pass (9 existing ignored), formatting, strict Clippy, layers/assets/parity and wasm checks pass; behavior and estimates unchanged)
 
 PdfCraft's one-page summary: how close it is to Adobe Acrobat Pro's offline feature set, and what
 comes next. Adobe's cloud services (Document Cloud, Acrobat Sign requests, shared review, the AI
@@ -237,6 +243,37 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 - **2026-10-28 (M2, PR #4172):** Integrated main 5af10276, preserving both roadmap histories and reviewing auto-merged export tests and accessibility UI changes. Validation: 488 scoped tests passed (18 engine, 412 renderer unit, 43 renderer integration, 15 Combine; one existing renderer integration test ignored); scoped all-target Clippy with -D warnings, formatting, layers, assets, parity and renderer/engine WASM checks passed. Viewer-only CJK fallback and print/output font policy remain unchanged; estimates unchanged.
 
 - **2026-10-27 (M2, PR #4172 module-split conflicts):** Integrated main 1dd2737b, retaining viewer-only CJK fallback in split session modules and Combine thumbnail workers, and moving renderer regressions to the new test module. Validation: 798 scoped tests passed (371 engine, 412 renderer, 15 Combine; two existing engine tests ignored); scoped all-target Clippy with -D warnings, formatting, layers, assets, parity and renderer/engine WASM checks passed. Estimates unchanged.
+
+- **2026-10-27 (M5, #4824):** A highlight, underline, strikethrough or squiggly underline can be given another text range: select the text and choose Mark the selected text instead in its context menu, or `comment_edit` with `find`/`quads` (`Edit::SetMarkupRange`, `pdfcraft_annot::set_quads`). Colour, note and replies stay; one undo step. Estimates unchanged.
+
+- **2026-11-01 (M5, #4824 review):** Direct markup-range edits build and validate the replacement appearance before inline promotion, so unsupported redraws preserve incremental bytes, page Annots, object count, appearance and dirty state. The cloudy-highlight regression fails on b70c2c10; 883 scoped tests pass (4 existing ignored), with stable formatting, strict Clippy, layers/assets/parity and core wasm checks.
+
+- **2026-11-01 (M5, #4824 review):** Squiggly appearances reserve three vertices for every remaining area within the shared 200,000-vertex cap; 50,000 mixed long/short areas retain their zigzags, and infeasible imported redraws preserve the prior appearance. Both regressions fail on cef66f30; an independent reservation mutation exceeds the cap. 882 scoped tests pass (4 existing ignored), with stable formatting, strict Clippy, layers/assets/parity and core wasm checks.
+
+- **2026-11-01 (M5, #4824 review):** Markup range edits check locks and subtypes before promoting inline annotations; refusals preserve exact bytes, page entries, object count and dirty state. The regression fails on all three inline cases without the fix; 876 scoped tests pass, 4 existing ignored, with strict Clippy, repository gates and annotation wasm checks.
+
+- **2026-11-01 (M5, #4824 review):** M5 #4824: reject empty or collinear markup quadrilaterals before annotation lookup; preserve inline dictionaries and compound-edit document bytes and history on refusal; both regressions fail with the fix reverted, 875 scoped tests pass (4 existing ignored), formatting, strict Clippy, layers/assets/parity and annotation wasm checks pass; estimates unchanged.
+
+- **2026-11-01 (M5, #4824 rebase):** PR #5100 rebased onto main `b36bdaea`; resolved and auto-merged hunks reviewed. 2917 scoped tests passed, 9 existing ignored; formatting, strict Clippy, layers/assets/parity and wasm checks passed. Behavior and estimates unchanged.
+
+- **2026-11-01 (M5, #4824 rebase):** PR #5100 rebased onto main `0cba87ae`; resolved and auto-merged hunks reviewed. 2938 scoped tests passed, 9 existing ignored; formatting, strict Clippy, layers/assets/parity and wasm checks passed. Behavior and estimates unchanged.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 - **2026-10-27 (M10, OCR models):** Model staging downloads and verifies the ONNX pair after the upstream RTEN URL brownout; runtime discovery prefers complete ONNX pairs per directory, retains complete RTEN fallback and preserves directory precedence.
 
@@ -743,6 +780,12 @@ Newest first: the date, what moved, and the new overall estimate.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-01 | patch | Direct markup-range edits build and validate the replacement appearance before inline promotion, so unsupported redraws preserve incremental bytes, page Annots, object count, appearance and dirty state. The cloudy-highlight regression fails on b70c2c10; 883 scoped tests pass (4 existing ignored), with stable formatting, strict Clippy, layers/assets/parity and core wasm checks. |
+| 2026-11-01 | patch | Squiggly appearances reserve three vertices for every remaining area within the shared 200,000-vertex cap; 50,000 mixed long/short areas retain their zigzags, and infeasible imported redraws preserve the prior appearance. Both regressions fail on cef66f30; an independent reservation mutation exceeds the cap. 882 scoped tests pass (4 existing ignored), with stable formatting, strict Clippy, layers/assets/parity and core wasm checks. |
+| 2026-11-01 | patch | M5 #4824: rebase PR #5100 onto main 0cba87ae; 2938 scoped tests pass (9 existing ignored), formatting, strict Clippy, layers/assets/parity and wasm checks pass; behavior and estimates unchanged. |
+| 2026-11-01 | patch | Markup range edits check locks and subtypes before promoting inline annotations; refusals preserve exact bytes, page entries, object count and dirty state. The regression fails on all three inline cases without the fix; 876 scoped tests pass, 4 existing ignored, with strict Clippy, repository gates and annotation wasm checks. |
+| 2026-11-01 | patch | M5 #4824: reject empty or collinear markup quadrilaterals before annotation lookup; preserve inline dictionaries and compound-edit document bytes and history on refusal; both regressions fail with the fix reverted, 875 scoped tests pass (4 existing ignored), formatting, strict Clippy, layers/assets/parity and annotation wasm checks pass; estimates unchanged. |
+| 2026-11-01 | patch | M5 #4824: rebase PR #5100 onto main b36bdaea; 2917 scoped tests pass (9 existing ignored), formatting, strict Clippy, layers/assets/parity and wasm checks pass; behavior and estimates unchanged. |
 | 2026-10-28 | patch | M2, PR #4172: integrate main 5af10276 and retain both roadmap histories; viewer-only CJK and print/output font policies and estimates unchanged. |
 | 2026-10-27 | minor | M10: OCR stages SHA-256-verified ONNX models after the upstream RTEN URL brownout; discovery prefers a complete ONNX pair per directory, falls back to a complete RTEN pair, and never mixes formats or directories; language/web limits and estimates unchanged. |
 | 2026-10-23 | minor | M8, #3205 follow-up: phone-pattern redaction includes the +39 country code on labelled Italian geographic numbers with a slash; dates, protocol identifiers and whole-run guards remain. Estimates unchanged. |
