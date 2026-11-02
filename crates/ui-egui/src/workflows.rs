@@ -11,4 +11,5 @@ pub(super) mod js_ui;
 pub(super) mod ocr_ui;
 pub(super) mod optimize_ui;
 pub(super) mod print_ui;
+pub(super) mod send_email_ui;
 pub(super) mod web_print;
