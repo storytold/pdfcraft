@@ -2241,6 +2241,28 @@ fn free_text_without_a_border_entry_has_the_default_one() {
     }
 }
 
+/// Review on #4365: a text box's new text is fitted with the border it is drawn with. A 4-pt border
+/// written as `/Border [0 0 4]` (no `/BS`) is drawn 4 pt wide, so the box grows as for `/BS /W 4`;
+/// before, the fit read only `/BS` and measured it with a 1-pt border, so the drawn text, wrapped
+/// 6 pt narrower, could run past the box.
+#[test]
+fn new_text_is_fitted_with_the_border_the_box_is_drawn_with() {
+    let fitted = |border: &str| {
+        let annot = format!("<< /Type /Annot /Subtype /FreeText /Rect [45 600 165 700] /DA (0 g /Helv 12 Tf) {border} /Contents (Hi) >>");
+        let mut doc = document_of(&[
+            b"<< /Type /Catalog /Pages 2 0 R >>",
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>",
+            b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>",
+            annot.as_bytes(),
+        ]);
+        set_contents(&mut doc, 0, 0, "Several words that wrap over a few lines of this box", &meta("")).unwrap();
+        list(&doc, 0).remove(0).get(b"Rect").and_then(|r| r.as_array()).map(|r| r.iter().filter_map(|x| x.as_f64()).collect::<Vec<f64>>()).unwrap()
+    };
+    let bs = fitted("/BS << /W 4 >>");
+    assert_eq!(fitted("/Border [0 0 4]"), bs, "the same 4-pt border, the same box");
+    assert_ne!(fitted("/BS << /W 1 >>"), bs, "a 1-pt border fits another box");
+}
+
 /// `/DA` names its font in the form's `/DR` (§12.7.4.3): a standard face is drawn in that face,
 /// with its widths for wrapping; any other font stays Helvetica.
 #[test]
