@@ -78,12 +78,15 @@ enum How {
 /// chain of them or through an entry, costs it once however many there are.
 pub(crate) struct Run {
     budget: usize,
-    spent: usize,
+    /// What was spent of the budget.
+    pub(crate) spent: usize,
     /// What a reference leads to, as it is read, under every reference on the way.
     reduced: HashMap<(u32, How), Rc<Object>>,
     /// What a reference leads to names, under every reference on the way, with the key of the one
     /// that names what it ends at: aliases and chains find it, and are counted as that one.
     names: HashMap<Key, (Rc<[u32]>, Key)>,
+    /// What a `/JBIG2Globals` reference leads to: it and each reference after it, by its number.
+    chains: HashMap<u32, Rc<[u32]>>,
     /// How many values were read for their names rather than remembered.
     pub(crate) read: usize,
     /// How many objects were fetched.
@@ -92,7 +95,7 @@ pub(crate) struct Run {
 
 impl Run {
     pub(crate) fn new(budget: usize) -> Self {
-        Run { budget, spent: 0, reduced: HashMap::new(), names: HashMap::new(), read: 0, fetched: 0 }
+        Run { budget, spent: 0, reduced: HashMap::new(), names: HashMap::new(), chains: HashMap::new(), read: 0, fetched: 0 }
     }
 
     /// Counts `units` against the budget.
@@ -196,15 +199,36 @@ impl Run {
 
     /// What one parameters entry names as `/JBIG2Globals`, and each reference on the way to it.
     fn entry_names(&mut self, doc: &Document, entry: &Object) -> Result<Vec<u32>, crate::RedactError> {
+        match entry.as_dict().and_then(|d| d.get(b"JBIG2Globals")).and_then(Object::as_ref) {
+            Some(start) => Ok(self.chain(doc, start)?.to_vec()),
+            None => Ok(Vec::new()),
+        }
+    }
+
+    /// `start` and each reference after it, up to the limit, remembered under `start` for the run,
+    /// so entries naming it, directly or not, fetch it once however many there are; a chain met
+    /// part way takes what is known from there.
+    fn chain(&mut self, doc: &Document, start: pdfcraft_cos::ObjRef) -> Result<Rc<[u32]>, crate::RedactError> {
+        if let Some(hit) = self.chains.get(&start.num) {
+            return Ok(hit.clone());
+        }
         let mut found = Vec::new();
-        let Some(mut at) = entry.as_dict().and_then(|d| d.get(b"JBIG2Globals")).and_then(Object::as_ref) else { return Ok(found) };
+        let mut at = start;
         for _ in 0..=MAX_HOPS {
+            if let Some(rest) = self.chains.get(&at.num) {
+                found.extend(rest.iter());
+                break;
+            }
             found.push(at.num);
             match &*self.fetch(doc, at)? {
                 Object::Ref(next) => at = *next,
                 _ => break,
             }
         }
+        found.truncate(MAX_HOPS + 1);
+        let found: Rc<[u32]> = found.into();
+        self.spend(found.len())?;
+        self.chains.insert(start.num, found.clone());
         Ok(found)
     }
 
@@ -214,13 +238,18 @@ impl Run {
         Ok((*self.follow(doc, v, How::Number, read)?).clone())
     }
 
-    /// A `/Filter` through any references, as a decoder reads it: a name, or an array of names, each
-    /// entry through references too. Anything else is null, a chain longer than any decoder takes
-    /// (`MAX_CHAIN`, and a `/Crypt`) included, so a stream that names it is read as one with no
-    /// filter.
+    /// A `/Filter` through any references, as a decoder reads it: a name a decoder knows, or an array
+    /// of them, each entry through references too. Anything else is null, a chain longer than any
+    /// decoder takes (`MAX_CHAIN`, and a `/Crypt`) included, so a stream that names it is read as one
+    /// with no filter.
     fn filter(&mut self, doc: &Document, v: &Object) -> Result<Object, crate::RedactError> {
+        // A name a decoder knows; any other is no filter, and isn't copied, however long.
         fn name(_: &mut Run, _: &Document, o: &Object) -> Result<Object, crate::RedactError> {
-            Ok(if matches!(o, Object::Name(_)) { o.clone() } else { Object::Null })
+            let known = |n: &[u8]| n.len() <= 16 && !matches!(pdfcraft_filters::Filter::from_name(n), pdfcraft_filters::Filter::Unknown(_));
+            Ok(match o {
+                Object::Name(n) if known(n) => o.clone(),
+                _ => Object::Null,
+            })
         }
         let read = |run: &mut Self, doc: &Document, o: &Object| match o {
             Object::Array(a) if a.len() > pdfcraft_filters::MAX_CHAIN + 1 => Ok(Object::Null),
@@ -349,7 +378,7 @@ impl Run {
 
 /// What dictionary `num` holds, to know a copy of it by: a file put together from pages split apart
 /// has one per page, each byte for byte the others.
-fn content(run: &mut Run, doc: &Document, num: u32) -> Result<Option<u64>, crate::RedactError> {
+pub(crate) fn content(run: &mut Run, doc: &Document, num: u32) -> Result<Option<u64>, crate::RedactError> {
     let Ok(object) = doc.try_get(num) else { return Ok(None) };
     let Object::Stream(s) = &*object else { return Ok(None) };
     let readable = run.readable(doc, s)?;
@@ -360,7 +389,11 @@ fn content(run: &mut Run, doc: &Document, num: u32) -> Result<Option<u64>, crate
             run.decoded(data.len())?;
             data.hash(&mut hash);
         }
-        Err(_) => s.raw[..].hash(&mut hash),
+        // What it took to find out it can't be read: as much as it was allowed to decode.
+        Err(_) => {
+            run.decoded(MAX_JBIG2_GLOBALS)?;
+            s.raw[..].hash(&mut hash);
+        }
     }
     Ok(Some(hash.finish()))
 }
@@ -371,7 +404,7 @@ fn content(run: &mut Run, doc: &Document, num: u32) -> Result<Option<u64>, crate
 /// or known to have more than one component, which JBIG2 is drawn as one of whatever the dictionary
 /// says; for one whose data is in another file (`/F`), which readers draw instead of what is here;
 /// and for one that can't be decoded.
-fn without_dictionary(run: &mut Run, doc: &Document, s: &Stream) -> Result<Option<Stream>, crate::RedactError> {
+pub(crate) fn without_dictionary(run: &mut Run, doc: &Document, s: &Stream) -> Result<Option<Stream>, crate::RedactError> {
     if run.elsewhere(doc, s)? {
         return Ok(None);
     }
@@ -396,7 +429,11 @@ fn without_dictionary(run: &mut Run, doc: &Document, s: &Stream) -> Result<Optio
     else {
         return Ok(None);
     };
-    let Ok(data) = doc.decoded_image_within(&readable, allowance) else { return Ok(None) };
+    let Ok(data) = doc.decoded_image_within(&readable, allowance) else {
+        // What it took to find out it can't be read: as much as it was allowed to decode.
+        run.decoded(allowance)?;
+        return Ok(None);
+    };
     run.decoded(data.len())?;
     let mut dict = readable.dict.clone();
     // `/FFilter` and `/FDecodeParms` too: with no data in another file they mean nothing, but

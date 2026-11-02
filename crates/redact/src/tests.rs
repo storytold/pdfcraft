@@ -1819,6 +1819,10 @@ fn what_is_made_direct_is_small_however_often_a_large_object_is_named() {
         globals.into_bytes(),
         stream(&long, b""),
         stream(&format!("/Filter [{}]", "/FlateDecode ".repeat(9)), b""),
+        // A name no decoder knows, long or short, is no filter, and isn't copied however often.
+        format!("/{}", "A".repeat(2000)).into_bytes(),
+        format!("[{} /Foo]", " 9 0 R".repeat(8)).into_bytes(),
+        stream("/Filter 10 0 R", b""),
     ]);
     let Object::Stream(s) = &*doc.get(ObjRef::new(5, 0)) else { panic!("object 5 is the stream") };
     let made = crate::globals::Run::new(crate::globals::RUN_BUDGET).readable(&doc, s).unwrap();
@@ -1837,6 +1841,65 @@ fn what_is_made_direct_is_small_however_often_a_large_object_is_named() {
     let Object::Stream(s) = &*doc.get(ObjRef::new(8, 0)) else { panic!("object 8 is the stream") };
     let made = crate::globals::Run::new(crate::globals::RUN_BUDGET).readable(&doc, s).unwrap();
     assert_eq!(made.dict.get(b"Filter").and_then(Object::as_array).map(Vec::len), Some(9));
+    let Object::Stream(s) = &*doc.get(ObjRef::new(11, 0)) else { panic!("object 11 is the stream") };
+    let made = crate::globals::Run::new(crate::globals::RUN_BUDGET).readable(&doc, s).unwrap();
+    assert_eq!(made.dict.get(b"Filter"), Some(&Object::Array(vec![Object::Null; 9])));
+}
+
+/// A `/JBIG2Globals` reference in parameters given directly is fetched once a run, however many
+/// entries and streams name it, and what it leads to is held once.
+#[test]
+fn a_dictionary_named_in_direct_entries_is_fetched_once() {
+    let entries = " << /JBIG2Globals 2 0 R >>".repeat(9);
+    let mut objects = vec![b"<< /Type /Catalog >>".to_vec(), stream("", b"symbols")];
+    objects.extend((0..50).map(|_| stream(&format!("/Filter /JBIG2Decode /DecodeParms [{entries}]"), b"")));
+    let doc = pdf(objects);
+    let mut run = crate::globals::Run::new(crate::globals::RUN_BUDGET);
+    for n in 3..53 {
+        let Object::Stream(s) = &*doc.get(ObjRef::new(n, 0)) else { panic!("object {n} is a stream") };
+        let lists = run.names_of(&doc, s).unwrap();
+        assert_eq!(lists.iter().map(|(list, _)| list.to_vec()).collect::<Vec<_>>(), [vec![2]]);
+    }
+    assert_eq!((run.fetched, run.spent), (1, 2), "one fetch, and the one number held");
+}
+
+/// A `/JBIG2Globals` reference leading through a chain names each reference on the way, up to the
+/// limit of 33, whether the chain is met first part way or from its start.
+#[test]
+fn a_chain_of_references_is_named_to_the_limit() {
+    // Objects 2 to 41 each refer to the next, and 42 is the dictionary; 43 names the chain from 20,
+    // and 44 from its start.
+    let mut objects = vec![b"<< /Type /Catalog >>".to_vec()];
+    objects.extend((3..=42).map(|n| format!("{n} 0 R").into_bytes()));
+    objects.push(stream("", b"symbols"));
+    objects.push(stream("/Filter /JBIG2Decode /DecodeParms << /JBIG2Globals 20 0 R >>", b""));
+    objects.push(stream("/Filter /JBIG2Decode /DecodeParms << /JBIG2Globals 2 0 R >>", b""));
+    let doc = pdf(objects);
+    let mut run = crate::globals::Run::new(crate::globals::RUN_BUDGET);
+    let named = |run: &mut crate::globals::Run, n: u32| {
+        let Object::Stream(s) = &*doc.get(ObjRef::new(n, 0)) else { panic!("object {n} is a stream") };
+        run.names_of(&doc, s).unwrap().iter().flat_map(|(list, _)| list.to_vec()).collect::<Vec<_>>()
+    };
+    assert_eq!(named(&mut run, 43), (20..=42).collect::<Vec<u32>>());
+    assert_eq!(named(&mut run, 44), (2..=34).collect::<Vec<u32>>());
+}
+
+/// What can't be decoded is charged as much as it was allowed to decode, so going past a limit
+/// costs as much as reaching it: a dictionary `MAX_JBIG2_GLOBALS` (here one behind a filter that
+/// isn't decoded here), an image its allowance.
+#[test]
+fn a_decode_that_fails_is_charged_what_it_was_allowed() {
+    let image = "/Type /XObject /Subtype /Image /Width 8 /Height 8 /BitsPerComponent 1 /Filter /JBIG2Decode";
+    let doc = pdf(vec![b"<< /Type /Catalog >>".to_vec(), stream("/Filter /DCTDecode", b"not a JPEG"), stream(image, b"not JBIG2")]);
+    let units = pdfcraft_cos::MAX_JBIG2_GLOBALS / 4096 + 1;
+    let run = |budget| crate::globals::Run::new(budget);
+    assert!(crate::globals::content(&mut run(units), &doc, 2).is_ok());
+    assert_eq!(crate::globals::content(&mut run(units - 1), &doc, 2), Err(RedactError::SharedJbig2Budget));
+    // The image's allowance: (one byte a row of 8, and a byte a row) × 3 a byte, and 4096: 4144
+    // bytes, two units.
+    let Object::Stream(s) = &*doc.get(ObjRef::new(3, 0)) else { panic!("object 3 is the image") };
+    assert!(matches!(crate::globals::without_dictionary(&mut run(2), &doc, s), Ok(None)));
+    assert!(matches!(crate::globals::without_dictionary(&mut run(1), &doc, s), Err(RedactError::SharedJbig2Budget)));
 }
 
 /// What streams share by reference is read once a run, however many share it and however they
