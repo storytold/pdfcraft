@@ -1739,3 +1739,22 @@ fn a_camera_click_on_another_page_moves_the_quadrilateral_there() {
     mouse_click(&mut h, two.min + egui::vec2(100.0, 60.0));
     assert_eq!(h.state().views[0].camera.map(|q| q.page), Some(1));
 }
+
+/// A camera click is located where it came up, not where the pointer went after it in the same
+/// frame: pressed on page 2 and released on page 1 (the gaps hidden), it moves nothing, though the
+/// pointer is back on page 2 by the frame's end. The pointer's last position used to move the
+/// quadrilateral to page 2.
+#[test]
+fn a_camera_click_released_off_its_page_moves_nothing() {
+    let (mut h, seam) = touching_pages(|app| app.quick_tool = QuickTool::EnhanceCamera);
+    assert_eq!(h.state().views[0].camera.map(|q| q.page), Some(0), "it starts on the current page");
+    let (press, release, back) = (seam + egui::vec2(0.0, 2.0), seam - egui::vec2(0.0, 2.0), seam + egui::vec2(0.0, 40.0));
+    h.hover_at(press);
+    h.run_steps(1);
+    h.drag_at(press);
+    h.run_steps(1);
+    let up = egui::Event::PointerButton { pos: release, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE };
+    one_frame(&mut h, [up, egui::Event::PointerMoved(back)]);
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].camera.map(|q| q.page), Some(0));
+}

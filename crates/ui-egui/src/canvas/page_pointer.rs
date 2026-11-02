@@ -78,6 +78,15 @@ impl PagePointer {
     pub(crate) fn pressed(&self) -> Option<Pos2> {
         first_press(&self.edges)
     }
+
+    /// Where this frame's last primary release was: where a click came up, which the pointer may
+    /// have left by the frame's end.
+    pub(crate) fn released(&self) -> Option<Pos2> {
+        self.edges.iter().rev().find_map(|e| match e {
+            Edge::Release(p) => Some(*p),
+            Edge::Press(_) => None,
+        })
+    }
 }
 
 /// Whether egui gives the drag to a widget that is not the pages' (a panel's tab, a floating panel's
