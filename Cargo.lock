@@ -4696,6 +4696,7 @@ dependencies = [
  "sys-locale",
  "toml",
  "unicode-bidi",
+ "ureq",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",

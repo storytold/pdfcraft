@@ -107,7 +107,7 @@ use dialogs::pageboxes;
 use dialogs::palette;
 use dialogs::protect;
 use dialogs::standards_ui;
-use dialogs::word_count_ui;
+use dialogs::{claude_ui, word_count_ui};
 pub use home::folders_ui;
 pub use hooks::{FailedInbox, HostDirtyFn, HostSaveFn, Inbox, OsEvent, OsEventsFn};
 use menus::tab_context;
@@ -611,6 +611,7 @@ pub struct PdfCraftApp {
     /// Number pages dialog settings (1-based pages).
     pub number_draft: NumberDraft,
     pub(crate) word_count_draft: word_count_ui::Draft,
+    pub(crate) claude_draft: claude_ui::Draft,
     /// Protect Using Password dialog state.
     pub protect_draft: protect::ProtectDraft,
     /// New bookmarks from text styles dialog state (#1693).

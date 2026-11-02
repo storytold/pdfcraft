@@ -9,6 +9,7 @@ use crate::{CloseRequest, Dialog, PdfCraftApp, PropsTab, panels::human_size, wid
 
 pub(super) mod appearance;
 pub mod bookmark_styles_ui;
+pub(super) mod claude_ui;
 pub(super) mod comment_props;
 pub(super) mod credits;
 pub(super) mod marks_ui;
@@ -90,6 +91,9 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
     if app.dialog != Some(Dialog::WordCount) {
         app.word_count_draft.cancel();
     }
+    if !matches!(app.dialog, Some(Dialog::Claude(_))) {
+        app.claude_draft.cancel();
+    }
     if app.dialog != Some(Dialog::FieldTable) {
         app.field_table_draft = None;
     }
@@ -128,6 +132,7 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
             Dialog::Print => 820.0,
             Dialog::FieldProps | Dialog::BulkFieldProps => 600.0,
             Dialog::About => 780.0,
+            Dialog::Claude(_) => 680.0,
             Dialog::PinTool => 540.0,
             _ => 520.0,
         });
@@ -144,6 +149,9 @@ fn dialog_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: &m
     match dialog {
         Dialog::WordCount => {
             req.close = crate::word_count_ui::body(ui, app);
+        }
+        Dialog::Claude(mode) => {
+            req.close = crate::claude_ui::body(ui, app, mode, &mut req.next);
         }
         Dialog::CreateImages => {
             let (go, cancel) = crate::create_ui::image_import_body(ui, app);
