@@ -1861,6 +1861,8 @@ fn a_shared_parameters_array_is_read_once_however_many_streams_share_it() {
         assert_eq!(lists.iter().map(|(list, _)| list.to_vec()).collect::<Vec<_>>(), [vec![3]]);
     }
     assert_eq!(names.read, 2);
+    // Each object once: the array, its entry, each of the 49 objects that refer to it, and 55.
+    assert_eq!(names.fetched, 52);
 }
 
 /// A copy of the dictionary stored with a predictor is found whatever way its parameters are given,

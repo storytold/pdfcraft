@@ -23,29 +23,24 @@ pub(crate) fn kept(doc: &Document) -> HashSet<u32> {
 
 /// `o`, or what references lead to from it. A ring of them ends as a reference, which is no dictionary.
 pub(crate) fn followed(doc: &Document, o: &Object) -> Arc<Object> {
-    followed_to(doc, o).0
-}
-
-/// [`followed`], and the last reference on the way: the one that names what it ends at, whichever
-/// reference or chain of them led there. `None` when `o` was given directly.
-fn followed_to(doc: &Document, o: &Object) -> (Arc<Object>, Option<pdfcraft_cos::ObjRef>) {
-    let mut last = o.as_ref();
     let mut at = doc.resolve(o);
     for _ in 0..MAX_HOPS {
         let next = match &*at {
             Object::Ref(next) => *next,
             _ => break,
         };
-        last = Some(next);
         at = doc.get(next);
     }
-    (at, last)
+    at
 }
 
 /// What a parameters value names as `/JBIG2Globals`, and the key it is remembered by: a value the
 /// file refers to, by the number of the object the references end at and whether it is read as a
 /// list of entries.
-pub(crate) type Listed = (Rc<[u32]>, Option<(u32, bool)>);
+pub(crate) type Listed = (Rc<[u32]>, Option<Key>);
+
+/// A value the file refers to: the number of an object, and whether it is read as a list of entries.
+pub(crate) type Key = (u32, bool);
 
 /// Every object a stream names as `/JBIG2Globals`, and each reference on the way to one: in any entry
 /// of its parameters, whichever filter that entry belongs to and however the filters are given. A
@@ -55,9 +50,13 @@ pub(crate) type Listed = (Rc<[u32]>, Option<(u32, bool)>);
 /// reference, through a chain of them or through an entry, cost it once however many there are.
 #[derive(Default)]
 pub(crate) struct Names {
-    memo: HashMap<(u32, bool), Rc<[u32]>>,
+    /// What a reference leads to names, under every reference on the way, with the key of the one
+    /// that names what it ends at: aliases and chains find it, and are counted as that one.
+    memo: HashMap<Key, (Rc<[u32]>, Key)>,
     /// How many values were read rather than remembered.
     pub(crate) read: usize,
+    /// How many objects were fetched on the way to a value.
+    pub(crate) fetched: usize,
 }
 
 impl Names {
@@ -69,11 +68,22 @@ impl Names {
 
     /// What `v` names: one entry, or (`list`) an array of them or one.
     fn value(&mut self, doc: &Document, v: &Object, list: bool) -> Listed {
-        // By the object the references end at: another reference to it, or a chain, finds it too.
-        let (held, last) = followed_to(doc, v);
-        let key = last.map(|r| (r.num, list));
-        if let Some(hit) = key.and_then(|k| self.memo.get(&k)) {
-            return (hit.clone(), key);
+        // Through the references as `followed` goes, each looked up before it is fetched, so one
+        // remembered costs nothing more, and an alias or a chain only the references before it.
+        let mut keys: Vec<Key> = Vec::new();
+        let mut held = Arc::new(v.clone());
+        for _ in 0..=MAX_HOPS {
+            let Some(r) = Object::as_ref(&held) else { break };
+            let key = (r.num, list);
+            if let Some((hit, at)) = self.memo.get(&key).cloned() {
+                for k in keys {
+                    self.memo.insert(k, (hit.clone(), at));
+                }
+                return (hit, Some(at));
+            }
+            keys.push(key);
+            self.fetched += 1;
+            held = doc.get(r);
         }
         self.read += 1;
         let names: Rc<[u32]> = match (&*held, list) {
@@ -85,10 +95,15 @@ impl Names {
             }
             (entry, _) => entry_names(doc, entry).into(),
         };
-        if let Some(k) = key {
-            self.memo.insert(k, names.clone());
+        // Remembered when the references end at an object, under the last of them; a ring, or a
+        // chain past the limit, is read again where it is met.
+        let at = keys.last().copied().filter(|_| !matches!(*held, Object::Ref(_)));
+        if let Some(at) = at {
+            for k in keys {
+                self.memo.insert(k, (names.clone(), at));
+            }
         }
-        (names, key)
+        (names, at)
     }
 }
 
@@ -249,7 +264,7 @@ pub(crate) fn unshare(doc: &mut Document, before: &HashSet<u32>) -> Result<usize
     let mut names = Names::default();
     let mut dictionaries: HashSet<u32> = HashSet::new();
     // A list the file refers to is added once, however many streams share it.
-    let mut added: HashSet<(u32, bool)> = HashSet::new();
+    let mut added: HashSet<Key> = HashSet::new();
     for &num in before.difference(&now) {
         if let Ok(object) = doc.try_get(num)
             && let Object::Stream(s) = &*object
@@ -269,7 +284,7 @@ pub(crate) fn unshare(doc: &mut Document, before: &HashSet<u32>) -> Result<usize
     // Whether a name matches doesn't depend on order: it is a dictionary that left, or a copy of one
     // (what is added below is only ever such a copy). So what a shared list matches is found once.
     let left = dictionaries.clone();
-    let mut matches: HashMap<(u32, bool), Rc<[u32]>> = HashMap::new();
+    let mut matches: HashMap<Key, Rc<[u32]>> = HashMap::new();
     added.clear();
     let mut users = Vec::new();
     for (r, object) in doc.scan_objects() {
