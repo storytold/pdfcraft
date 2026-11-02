@@ -3091,6 +3091,93 @@ trailer << /Root 1 0 R >>
     assert!(!in_window("Marked set by Ada"), "not the checkmark");
 }
 
+/// A Replace Text proposal: a strikeout and a caret grouped by `/IRT` and `/RT /Group`, with the
+/// pop-up `open`. `caret_first` writes the caret as the group's primary, holding the replacement,
+/// with the strikeout grouped under it; otherwise the strikeout is the primary and the
+/// replacement is on the caret grouped under it, as PdfCraft used to write it.
+fn replace_text_pdf(caret_first: bool, open: bool) -> Vec<u8> {
+    let primary = if caret_first { 4 } else { 5 };
+    let strike = format!(
+        "<< /Type /Annot /Subtype /StrikeOut /Rect [40 100 140 120] /QuadPoints [40 120 140 120 40 100 140 100] /C [1 0 0] /T (Ada) /IT /StrikeOutTextEdit{} >>",
+        if caret_first { " /IRT 4 0 R /RT /Group" } else { " /Popup 6 0 R" }
+    );
+    let caret = format!(
+        "<< /Type /Annot /Subtype /Caret /Rect [135 95 145 105] /C [0 0 1] /T (Bob) /Contents (slow red){} >>",
+        if caret_first { " /IT /Replace /Popup 6 0 R" } else { " /IRT 5 0 R /RT /Group" }
+    );
+    format!(
+        "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [5 0 R 4 0 R 6 0 R] >> endobj
+4 0 obj {caret} endobj
+5 0 obj {strike} endobj
+6 0 obj << /Type /Annot /Subtype /Popup /Parent {primary} 0 R /Rect [160 20 290 150] /Open {open} >> endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+    )
+    .into_bytes()
+}
+
+/// Review on #2137: a Replace Text proposal's window shows the replacement as the comment's text,
+/// and the other member of the group is part of the comment, not a reply panel (ISO 32000-2
+/// §12.5.6.2: a group's members are one unit). Both layouts: the caret as the primary, and the
+/// strikeout as the primary with the replacement on the grouped caret.
+#[test]
+fn a_replace_text_window_shows_the_replacement_as_its_text_not_as_a_reply() {
+    for caret_first in [true, false] {
+        let pdf = replace_text_pdf(caret_first, true);
+        let mut h = harness(move |app| {
+            app.open_bytes("replace.pdf", None, pdf).expect("opens");
+            app.close_tab(0);
+        });
+        h.run_steps(6);
+        let (_, window) = h.state().views[0].comments.popup_rects.first().copied().expect("the open pop-up shows");
+        let boxes: Vec<String> = h
+            .query_all_by(|n| n.role() == Role::MultilineTextInput)
+            .filter(|n| window.contains(n.rect().center()))
+            .map(|n| n.value().unwrap_or_default())
+            .collect();
+        assert_eq!(boxes, ["slow red"], "caret first: {caret_first}: one box, the replacement");
+    }
+}
+
+/// Review on #2137: a double-click on a Replace Text proposal opens the group's one window, the
+/// primary's, in either layout. (A double-click on the member grouped under it opens the same
+/// window once members are picked on the page; main hit-tests only the primary.)
+#[test]
+fn a_double_click_on_a_replace_text_opens_its_one_window() {
+    for (caret_first, on_caret) in [(true, true), (false, false)] {
+        let pdf = replace_text_pdf(caret_first, false);
+        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 60.0).build_eframe(move |_cc| {
+            let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
+            app.open_bytes("replace.pdf", None, pdf.clone()).expect("opens");
+            app.set_option("left", "closed").unwrap();
+            app
+        });
+        h.run_steps(4);
+        crate::support::settle(&mut h);
+        h.run_steps(45);
+        let target = if on_caret { (140.0, 98.0) } else { (60.0, 110.0) };
+        let p = at(&h, target.0, target.1);
+        h.hover_at(p);
+        h.run_steps(1);
+        for _ in 0..2 {
+            h.drag_at(p);
+            h.run_steps(1);
+            h.drop_at(p);
+            h.run_steps(1);
+        }
+        h.run_steps(4);
+        let primary_subtype = if caret_first { "Caret" } else { "StrikeOut" };
+        let c = comments(&h);
+        let primary = c.iter().find(|a| a.subtype == primary_subtype).expect("the primary");
+        assert_eq!(primary.popup.map(|w| w.open), Some(true), "caret first: {caret_first}, on the caret: {on_caret}: the group's window opened");
+        assert_eq!(h.state().views[0].comments.popup_rects.len(), 1, "one window");
+    }
+}
+
 /// A double-click on a sticky note opens its pop-up window on the page, where its text is read
 /// and edited; the title bar drags it (saved as the pop-up's place, one undo step); × closes it
 /// (comment.popups).

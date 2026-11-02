@@ -446,14 +446,31 @@ pub(crate) fn popups(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, pr
                     // Replies, as the thread reads: text replies only, filed under this
                     // comment by `/IRT` reference as in the Comments panel, each under the
                     // one it answers. A review status or a checkmark (`/State`) is a reply too,
-                    // but not one to read here.
+                    // but not one to read here, and a member of the comment's group (`/RT
+                    // /Group`, ISO 32000-2 §12.5.6.2) is part of the comment, not a reply.
                     let replies: Vec<&Annotation> = info
                         .annotations
                         .iter()
                         .filter(|r| {
-                            r.state.is_none() && r.parent.is_some_and(|parent| tops.get(&(r.page, r.index)).copied().unwrap_or(parent) == key)
+                            r.state.is_none()
+                                && !r.grouped
+                                && r.parent.is_some_and(|parent| tops.get(&(r.page, r.index)).copied().unwrap_or(parent) == key)
                         })
                         .collect();
+                    // The comment's text. Replace Text as PdfCraft used to write it keeps the
+                    // replacement on the caret grouped under an empty strikeout: the window shows
+                    // and edits the caret's text, the proposal's.
+                    let holder = info
+                        .annotations
+                        .iter()
+                        .find(|r| {
+                            r.grouped
+                                && r.parent == Some(key)
+                                && a.contents.as_deref().unwrap_or("").is_empty()
+                                && r.contents.as_deref().is_some_and(|c| !c.is_empty())
+                        })
+                        .cloned()
+                        .unwrap_or_else(|| a.clone());
                     let order = thread(key, &replies);
                     let (nodes, roots) = nest(&order);
                     let mut parts = Parts { allowed, author: &prefs.author, pal, cv: &mut view.comments, edits: &mut edits };
@@ -474,7 +491,7 @@ pub(crate) fn popups(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, pr
                             egui::ScrollArea::vertical().id_salt(("popup-body", page, a.index)).max_height(body_height).auto_shrink([false, false]);
                         scroll.show(ui, |ui| {
                             ui.spacing_mut().item_spacing.y = 3.0;
-                            text_box(ui, &mut parts, &a, tl!("Add a comment"));
+                            text_box(ui, &mut parts, &holder, tl!("Add a comment"));
                             footer(ui, &mut parts, &a);
                             for root in &roots {
                                 reply_panel(ui, &mut parts, &nodes, *root);
