@@ -95,7 +95,7 @@ pub fn export_data(doc: &Document, format: Format) -> String {
         .map(|f| {
             let v = match f.kind {
                 FieldKind::CheckBox | FieldKind::Radio if f.value.is_empty() => "Off".to_string(),
-                _ => f.value.join(", "),
+                _ => f.export_values().join(", "),
             };
             (f.name, v)
         })
@@ -152,8 +152,11 @@ pub fn data_values(bytes: &[u8]) -> Result<Vec<(String, Vec<String>)>, DataError
             .into_iter()
             .filter(|f| !matches!(f.kind, FieldKind::PushButton | FieldKind::Signature))
             .map(|f| {
-                let v =
-                    if matches!(f.kind, FieldKind::CheckBox | FieldKind::Radio) && f.value.is_empty() { vec!["Off".to_string()] } else { f.value };
+                let v = if matches!(f.kind, FieldKind::CheckBox | FieldKind::Radio) && f.value.is_empty() {
+                    vec!["Off".to_string()]
+                } else {
+                    f.export_values()
+                };
                 (f.name, v)
             })
             .collect());
