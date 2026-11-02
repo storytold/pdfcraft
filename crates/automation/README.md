@@ -21,6 +21,9 @@ them with the image's current orientation. Full turns retain its appearance, rec
 and flips. Angles that are not multiples of 90 are refused without changing the document or
 its undo/redo history.
 
+`page_add_text`, `content_update` and `text_edit` take per-line `aligns`. An `"inherit"` entry
+follows the box-level `align`; legacy `null` entries remain accepted with the same meaning.
+
 `Content` is `Json(Value)` or `Png { data, width, height }`. Errors are `UnknownTool`, `InvalidArgs` (the call didn't match the schema) or `Failed` (a readable message for the agent).
 
 ## Conventions
@@ -198,6 +201,19 @@ faces complete absent subset glyphs. `text_edit.ranges` accepts disjoint UTF-8 b
 undoable and survive saving/reopening. `image_hit` shares the UI's curve and hole hit testing.
 The bounds, limits and font requirements are in [existing-text editing](../../docs/editing-existing-text.md)
 and [image editing](../../docs/editing-images.md).
+
+### Superscript and subscript normalization
+
+`text_script` changes characters to their Unicode superscript or subscript forms; it does not
+change the font size or baseline. For characters that have such forms, uniformly plain text
+toggles to the requested script, and uniformly scripted text toggles back to plain text.
+Characters without a matching form stay unchanged and do not determine the selection's state.
+
+A selection mixing plain and target-script characters normalizes to the requested script.
+For example, subscript changes `H₂2` to `H₂₂`, then to `H22` on the next call; superscript
+changes `Q²2` to `Q²²`, then to `Q22`. A second toggle does not reconstruct the original
+mixture. Each call is one undoable text edit: `edit_undo` restores the exact prior text,
+including its original mixture. Save/reopen preserves the resulting normalized characters.
 
 ## Opening local GoToR links
 
