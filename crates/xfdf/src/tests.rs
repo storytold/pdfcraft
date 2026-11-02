@@ -266,6 +266,50 @@ fn an_unnamed_group_primary_gets_an_export_only_name() {
     }
 }
 
+/// An annotation written inline in `/Annots` (a direct dictionary, not a reference) is exported
+/// under its `/NM` too, so a made-up name must not repeat it either.
+#[test]
+fn an_export_only_name_never_repeats_an_inline_annotations_nm() {
+    let mut src = blank();
+    let quads = [[100.0, 720.0, 200.0, 720.0, 100.0, 706.0, 200.0, 706.0]];
+    let style = Style { color: [0.89, 0.13, 0.13], opacity: 1.0, width: 1.0, fill: None };
+    let unnamed = Meta { date: None, id: String::new() };
+    add_text_replacement(
+        &mut src,
+        TextReplacement {
+            page: 0,
+            quads: &quads,
+            replacement: "new words",
+            author: "Ada",
+            strike: &style,
+            caret: &style,
+            strike_meta: &unnamed,
+            caret_meta: &unnamed,
+        },
+    )
+    .unwrap();
+    let page = pdfcraft_model::pages(&src)[0].obj;
+    let mut annots = src.get(page).as_dict().unwrap().get(b"Annots").and_then(|a| src.resolve(a).as_array().cloned()).unwrap();
+    let primary =
+        annots.iter().filter_map(Object::as_ref).find(|r| src.get(*r).as_dict().and_then(|d| d.name(b"Subtype")) == Some(&b"Caret"[..])).unwrap();
+    // An inline note already named what the made-up name would be.
+    let clash = format!("pdfcraft-export-{}-{}", primary.num, primary.generation);
+    let mut note = Dict::new();
+    note.set(b"Type".to_vec(), Object::name("Annot"));
+    note.set(b"Subtype".to_vec(), Object::name("Text"));
+    note.set(b"NM".to_vec(), PdfString::text(&clash));
+    note.set(b"Rect".to_vec(), Object::Array(vec![300.into(), 300.into(), 320.into(), 320.into()]));
+    annots.push(Object::Dict(note));
+    src.update_dict(page, |p| p.set(b"Annots".to_vec(), Object::Array(annots))).unwrap();
+
+    let xfdf = export_xfdf(&src, true, false, "a.pdf");
+    let doc = roxmltree::Document::parse(&xfdf).unwrap();
+    let caret = doc.descendants().find(|n| n.has_tag_name("caret")).unwrap_or_else(|| panic!("no <caret>: {xfdf}"));
+    let name = caret.attribute("name").unwrap_or_else(|| panic!("the unnamed primary gets a name: {xfdf}"));
+    assert_ne!(name, clash, "a made-up name never repeats an inline annotation's /NM: {xfdf}");
+    assert_eq!(doc.descendants().filter(|n| n.attribute("name") == Some(&clash[..])).count(), 1, "{xfdf}");
+}
+
 #[test]
 fn xml_exports_drop_xml_noncharacters() {
     let mut src = filled();

@@ -15,12 +15,19 @@ fn export_names(doc: &Document, pages: &[pdfcraft_model::Page]) -> HashMap<ObjRe
     let mut names: HashMap<ObjRef, String> = HashMap::new();
     let mut listed: HashSet<ObjRef> = HashSet::new();
     let mut targets: Vec<ObjRef> = Vec::new();
+    // Every `/NM` the export writes, inline annotations' included: a made-up name avoids them all.
+    let mut taken: HashSet<String> = HashSet::new();
     for p in pages {
         for a in p.dict.get(b"Annots").map(|a| doc.resolve(a)).and_then(|a| a.as_array().cloned()).unwrap_or_default() {
             let Some(d) = doc.resolve(&a).as_dict().cloned() else { continue };
+            let nm = text_of(doc, &d, b"NM").filter(|nm| !nm.is_empty());
+            if let Some(nm) = &nm {
+                taken.insert(nm.clone());
+            }
+            // Only an indirect annotation can be an `/IRT` target, so only it is keyed here.
             if let Some(r) = a.as_ref() {
                 listed.insert(r);
-                if let Some(nm) = text_of(doc, &d, b"NM").filter(|nm| !nm.is_empty()) {
+                if let Some(nm) = nm {
                     names.insert(r, nm);
                 }
             }
@@ -29,7 +36,6 @@ fn export_names(doc: &Document, pages: &[pdfcraft_model::Page]) -> HashMap<ObjRe
             }
         }
     }
-    let taken: HashSet<String> = names.values().cloned().collect();
     let mut made: HashSet<String> = HashSet::new();
     for t in targets {
         // Only a target on a page is exported, so only it can carry the name.
