@@ -31,18 +31,20 @@ pub fn segmented_pill_choice<T: PartialEq + Copy>(ui: &mut egui::Ui, t: &Tokens,
 /// A segmented pill selection bar with separate accessibility labels.
 #[expect(dead_code, reason = "convenience helpers for non-searched segmented pill controls")]
 pub fn segmented_pill_choice_a11y<T: PartialEq + Copy>(ui: &mut egui::Ui, t: &Tokens, current: &mut T, options: &[(T, &str, &str)]) -> bool {
-    segmented_pill_choice_a11y_query(ui, t, current, options, "")
+    segmented_pill_choice_a11y_query(ui, t, current, options, "").0
 }
 
 /// A segmented pill selection bar with separate accessibility labels and optional query highlighting.
+/// Returns whether the selection changed and the Response of the first matching option, if any.
 pub fn segmented_pill_choice_a11y_query<T: PartialEq + Copy>(
     ui: &mut egui::Ui,
     t: &Tokens,
     current: &mut T,
     options: &[(T, &str, &str)],
     query: &str,
-) -> bool {
+) -> (bool, Option<egui::Response>) {
     let mut changed = false;
+    let mut first_match_resp: Option<egui::Response> = None;
     egui::Frame::new()
         .fill(t.field)
         .stroke(Stroke::new(1.0, t.border))
@@ -59,6 +61,10 @@ pub fn segmented_pill_choice_a11y_query<T: PartialEq + Copy>(
                     let w = label_galley.size().x;
                     let (rect, resp) = ui.allocate_exact_size(vec2(w + 18.0, 24.0), Sense::click());
                     resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::RadioButton, true, is_active, a11y_label));
+
+                    if first_match_resp.is_none() && !find_match_ranges(label, query).is_empty() {
+                        first_match_resp = Some(resp.clone());
+                    }
 
                     if is_active {
                         ui.painter().rect(rect, CornerRadius::same(12), t.accent, Stroke::NONE, egui::StrokeKind::Inside);
@@ -87,11 +93,12 @@ pub fn segmented_pill_choice_a11y_query<T: PartialEq + Copy>(
                 }
             });
         });
-    changed
+    (changed, first_match_resp)
 }
 
 /// An independent toggle pill button with optional query highlighting.
-pub fn toggle_pill_query(ui: &mut egui::Ui, t: &Tokens, active: &mut bool, label: &str, query: &str) -> bool {
+/// Returns whether the active state changed and the control's Response.
+pub fn toggle_pill_query(ui: &mut egui::Ui, t: &Tokens, active: &mut bool, label: &str, query: &str) -> (bool, egui::Response) {
     let mut changed = false;
     let is_active = *active;
     let font = theme::medium(12.0);
@@ -120,7 +127,7 @@ pub fn toggle_pill_query(ui: &mut egui::Ui, t: &Tokens, active: &mut bool, label
         *active = !*active;
         changed = true;
     }
-    changed
+    (changed, resp)
 }
 
 fn layout_pill_label(ui: &egui::Ui, label: &str, query: &str, font: egui::FontId, normal_color: Color32) -> std::sync::Arc<egui::Galley> {
@@ -282,14 +289,18 @@ impl<'a> PrefSearchContext<'a> {
         Self { query, total_matches: 0, first_match_scrolled: false, should_scroll }
     }
 
-    pub fn checkbox(&mut self, ui: &mut egui::Ui, checked: &mut bool, label: &str, t: &Tokens) -> egui::Response {
-        let (widget_text, count) = highlight_widget_text(label, self.query, theme::regular(13.0), t.text);
-        self.total_matches += count;
-        let resp = ui.add(widgets::checkbox(checked, widget_text));
+    pub fn scroll_if_first_match(&mut self, resp: &egui::Response, count: usize) {
         if count > 0 && self.should_scroll && !self.first_match_scrolled {
             resp.scroll_to_me(Some(egui::Align::Center));
             self.first_match_scrolled = true;
         }
+    }
+
+    pub fn checkbox(&mut self, ui: &mut egui::Ui, checked: &mut bool, label: &str, t: &Tokens) -> egui::Response {
+        let (widget_text, count) = highlight_widget_text(label, self.query, theme::regular(13.0), t.text);
+        self.total_matches += count;
+        let resp = ui.add(widgets::checkbox(checked, widget_text));
+        self.scroll_if_first_match(&resp, count);
         resp
     }
 
@@ -297,10 +308,7 @@ impl<'a> PrefSearchContext<'a> {
         let (widget_text, count) = highlight_widget_text(text, self.query, font, color);
         self.total_matches += count;
         let resp = ui.label(widget_text);
-        if count > 0 && self.should_scroll && !self.first_match_scrolled {
-            resp.scroll_to_me(Some(egui::Align::Center));
-            self.first_match_scrolled = true;
-        }
+        self.scroll_if_first_match(&resp, count);
         resp
     }
 
@@ -317,24 +325,38 @@ impl<'a> PrefSearchContext<'a> {
     }
 
     pub fn pill_choice<T: PartialEq + Copy>(&mut self, ui: &mut egui::Ui, t: &Tokens, current: &mut T, options: &[(T, &str)]) -> bool {
+        let mut matches = 0;
         for &(_, label) in options {
-            self.total_matches += find_match_ranges(label, self.query).len();
+            matches += find_match_ranges(label, self.query).len();
         }
+        self.total_matches += matches;
         let with_a11y: Vec<(T, &str, &str)> = options.iter().map(|&(v, l)| (v, l, l)).collect();
-        segmented_pill_choice_a11y_query(ui, t, current, &with_a11y, self.query)
+        let (changed, match_resp) = segmented_pill_choice_a11y_query(ui, t, current, &with_a11y, self.query);
+        if let Some(resp) = match_resp {
+            self.scroll_if_first_match(&resp, matches);
+        }
+        changed
     }
 
     pub fn pill_choice_a11y<T: PartialEq + Copy>(&mut self, ui: &mut egui::Ui, t: &Tokens, current: &mut T, options: &[(T, &str, &str)]) -> bool {
+        let mut matches = 0;
         for &(_, label, _) in options {
-            self.total_matches += find_match_ranges(label, self.query).len();
+            matches += find_match_ranges(label, self.query).len();
         }
-        segmented_pill_choice_a11y_query(ui, t, current, options, self.query)
+        self.total_matches += matches;
+        let (changed, match_resp) = segmented_pill_choice_a11y_query(ui, t, current, options, self.query);
+        if let Some(resp) = match_resp {
+            self.scroll_if_first_match(&resp, matches);
+        }
+        changed
     }
 
     pub fn toggle_pill(&mut self, ui: &mut egui::Ui, t: &Tokens, active: &mut bool, label: &str) -> bool {
         let matches = find_match_ranges(label, self.query).len();
         self.total_matches += matches;
-        toggle_pill_query(ui, t, active, label, self.query)
+        let (changed, resp) = toggle_pill_query(ui, t, active, label, self.query);
+        self.scroll_if_first_match(&resp, matches);
+        changed
     }
 }
 
@@ -647,7 +669,7 @@ fn card_appearance(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ctx: &m
         ui.ctx().request_repaint();
     }
     ui.add_space(4.0);
-    ctx.total_matches += crate::appearance::preferences_section_with_query(ui, app, t, ctx.query);
+    crate::appearance::preferences_section_with_context(ui, app, t, ctx);
     ui.add_space(8.0);
     reading_colours_section(ui, app, t, ctx);
 }

@@ -210,3 +210,44 @@ fn preferences_dialog_scrollbar_spacing_and_controls() {
     // Search box right edge is aligned within the dialog
     assert!(search.max.x <= ok.max.x);
 }
+
+#[test]
+fn search_scrolls_option_only_and_theme_card_matches_into_visible_viewport() {
+    let mut h = harness(480.0);
+    let title = h.get_by(|n| n.role() == egui::accesskit::Role::Label && n.value().as_deref() == Some("Preferences")).rect();
+    let ok = h.get_by_label("OK").rect();
+
+    // "Two-page view" is an option in Card 3 (Documents and view).
+    // In a 480 pt window, it starts out below the visible scroll viewport.
+    let opt_before = h.get_by_label("Two-page view").rect();
+    assert!(opt_before.min.y >= ok.min.y, "Two-page option starts out below the visible viewport: {opt_before:?} vs OK {ok:?}");
+
+    // Searching "Two-page" (which only occurs inside that segmented pill option)
+    // auto-scrolls the matching option into the visible viewport between title and OK.
+    h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Search settings…").click();
+    h.run_steps(1);
+    h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Search settings…").type_text("Two-page");
+    h.run_steps(4);
+
+    let opt_after = h.get_by_label("Two-page view").rect();
+    assert!(
+        opt_after.min.y >= title.max.y && opt_after.max.y <= ok.min.y,
+        "Two-page option scrolled into visible scroll viewport: {opt_after:?} between title {title:?} and OK {ok:?}"
+    );
+
+    // Clear search and test a theme-card-only match
+    h.get_by_label("Clear search").click();
+    h.run_steps(4);
+
+    // Search for "Dark theme" (which occurs only in the dark theme card in Card 2).
+    h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Search settings…").click();
+    h.run_steps(1);
+    h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Search settings…").type_text("Dark theme");
+    h.run_steps(4);
+
+    let dark_card = h.get_by_label("Dark theme").rect();
+    assert!(
+        dark_card.min.y >= title.max.y && dark_card.max.y <= ok.min.y,
+        "Dark theme card scrolled into visible viewport: {dark_card:?} between title {title:?} and OK {ok:?}"
+    );
+}
