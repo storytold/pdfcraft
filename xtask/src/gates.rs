@@ -116,7 +116,7 @@ pub fn ci(_: &[String]) -> anyhow::Result<()> {
         ("i18n-report", Box::new(|| i18n_report(&["--workspace".to_string()]))),
         ("layers", Box::new(|| layers(&[]))),
         ("wasm", Box::new(|| wasm(&[]))),
-        ("assets", Box::new(|| crate::assets::run(&[]))),
+        ("license-check", Box::new(|| crate::license_check::run(&[]))),
         ("deny", Box::new(|| deny(&[]))),
         ("parity", Box::new(|| crate::parity::run(&[]))),
     ];
