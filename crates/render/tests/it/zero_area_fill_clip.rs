@@ -296,4 +296,6 @@ fn disconnected_subpaths_on_one_line_leave_the_gap_between_them_unpainted() {
     // Overlapping subpaths drawn in opposite directions still paint their union under either rule.
     let fill = render("1 0 0 rg 10 50 m 60 50 l 90 50 m 40 50 l f*");
     assert_only_red_run(&fill, (10, 90), (150, 151), "overlapping subpaths");
+    let clip = render(&format!("q 10 50 m 60 50 l 90 50 m 40 50 l W* n {FLOOD} Q"));
+    assert_only_red_run(&clip, (10, 90), (150, 151), "overlapping subpaths: clip");
 }
