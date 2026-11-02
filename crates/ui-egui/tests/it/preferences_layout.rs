@@ -160,26 +160,48 @@ fn cancel_button_closes_preferences_dialog() {
 }
 
 #[test]
-fn search_settings_filters_cards_in_real_time() {
+fn search_settings_scans_and_highlights_in_situ_without_hiding_cards() {
     let mut h = harness(900.0);
     // Initially all card titles exist
     assert!(h.query_by_label("General & Interface").is_some());
     assert!(h.query_by_label("Comment").is_some());
     assert!(h.query_by_label("JavaScript").is_some());
 
-    // Type in search box to filter to JavaScript card
+    // Type "Hide hover" in search box
+    h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Search settings…").click();
+    h.run_steps(1);
+    h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Search settings…").type_text("Hide hover");
+    h.run_steps(4);
+
+    // In browser-style search, cards are NOT hidden
+    assert!(h.query_by_label("General & Interface").is_some());
+    assert!(h.query_by_label("Comment").is_some());
+    assert!(h.query_by_label("JavaScript").is_some());
+
+    // The setting "Hide hover previews for highlights without comment text" is present and matched
+    assert!(h.query_by_label("Hide hover previews for highlights without comment text").is_some());
+    // Match badge displays 1 match
+    assert!(h.query_by_label("1 match").is_some());
+
+    // Clearing search clears match badge
+    h.get_by_label("Clear search").click();
+    h.run_steps(4);
+    assert!(h.query_by_label("1 match").is_none());
+
+    // Search for "javascript"
     h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Search settings…").click();
     h.run_steps(1);
     h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Search settings…").type_text("javascript");
-    h.run_steps(3);
+    h.run_steps(4);
 
-    // JavaScript card is visible, General & Interface is filtered out
+    // Cards remain visible and multiple matches are reported
     assert!(h.query_by_label("JavaScript").is_some());
-    assert!(h.query_by_label("General & Interface").is_none());
+    assert!(h.query_by_label("General & Interface").is_some());
+    assert!(h.query_by_label_contains("matches").is_some());
 
     // Clearing search shows everything again
     h.get_by_label("Clear search").click();
-    h.run_steps(3);
+    h.run_steps(4);
     assert!(h.query_by_label("General & Interface").is_some());
     assert!(h.query_by_label("Comment").is_some());
     assert!(h.query_by_label("JavaScript").is_some());

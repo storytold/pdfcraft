@@ -1360,9 +1360,11 @@ fn dialog_signature(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending)
 fn dialog_preferences(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending) -> bool {
     ui.set_width(610.0);
     let t = Tokens::get(ui.ctx());
+    preferences::preferences_header(ui, &t);
+    ui.add_space(10.0);
     // The settings outgrow a short window: scroll them rather than run off the screen.
     // The OK row stays below the scroll, in reach however far the settings are scrolled.
-    let max = (ui.ctx().content_rect().height() - 120.0 - preferences::PREFERENCES_BUTTON_ROW).max(preferences::PREFERENCES_MIN_SCROLL);
+    let max = (ui.ctx().content_rect().height() - 120.0 - preferences::PREFERENCES_BUTTON_ROW - 40.0).max(preferences::PREFERENCES_MIN_SCROLL);
     // A scroll area starts from the room the dialog offers it, and a modal offers more
     // each frame for the first few, so with OK outside the scroll the dialog would grow
     // over those frames. Asking for the full height as the least it may scroll in

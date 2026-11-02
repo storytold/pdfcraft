@@ -318,7 +318,7 @@ pub(crate) fn document_js_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
 
 #[expect(unused_imports, reason = "re-exported for tests and backward compatibility")]
 pub(crate) use crate::dialogs::preferences::{
-    PREFERENCES_BUTTON_ROW, PREFERENCES_MIN_SCROLL, date_language_picker_name, preferences_body, preferences_buttons,
+    PREFERENCES_BUTTON_ROW, PREFERENCES_MIN_SCROLL, date_language_picker_name, preferences_body, preferences_buttons, preferences_header,
 };
 
 #[cfg(test)]

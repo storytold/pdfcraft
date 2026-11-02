@@ -83,7 +83,7 @@ fn preview(ui: &mut egui::Ui, kind: ThemeKind, width: f32) {
 
 /// One theme card: its title, Active when it is what shows now, and a preview of the chosen theme.
 /// Returns true when the card was clicked or activated via keyboard.
-fn card(ui: &mut egui::Ui, t: &Tokens, title: &str, active: bool, themes: &[(ThemeKind, &str)]) -> bool {
+fn card(ui: &mut egui::Ui, t: &Tokens, title: &str, active: bool, themes: &[(ThemeKind, &str)], query: &str) -> bool {
     let mut card_clicked = false;
     let frame_stroke = if active { Stroke::new(1.5, t.accent) } else { Stroke::new(1.0, t.border) };
     let scope_res = ui.scope_builder(egui::UiBuilder::new().id_salt(title).sense(egui::Sense::click()), |ui| {
@@ -93,7 +93,13 @@ fn card(ui: &mut egui::Ui, t: &Tokens, title: &str, active: bool, themes: &[(The
                 ui.set_width(ui.available_width());
                 ui.horizontal(|ui| {
                     let font = theme::semibold(12.5);
-                    let galley = crate::bidi::layout_ui(ui, title.to_owned(), font, t.text);
+                    let ranges = crate::dialogs::preferences::find_match_ranges(title, query);
+                    let galley = if ranges.is_empty() {
+                        crate::bidi::layout_ui(ui, title.to_owned(), font, t.text)
+                    } else {
+                        let (job, _) = crate::dialogs::preferences::create_highlight_job(title, &ranges, font, t.text);
+                        ui.painter().layout_job(job)
+                    };
                     let (title_rect, _) = ui.allocate_exact_size(galley.size(), egui::Sense::hover());
                     ui.painter().galley(title_rect.min, galley, t.text);
                     if active {
@@ -123,10 +129,21 @@ fn card(ui: &mut egui::Ui, t: &Tokens, title: &str, active: bool, themes: &[(The
 }
 
 /// The Appearance section of Preferences.
+#[cfg_attr(not(test), expect(dead_code, reason = "called by unit tests"))]
 pub fn preferences_section(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) {
-    ui.label(RichText::new(tl_ctx!("theme", "Appearance")).font(theme::semibold(13.0)));
+    let _ = preferences_section_with_query(ui, app, t, "");
+}
+
+/// The Appearance section of Preferences with live search highlighting.
+pub fn preferences_section_with_query(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, query: &str) -> usize {
+    let mut matches = 0;
+    let (app_label, c) = crate::dialogs::preferences::highlight_widget_text(tl_ctx!("theme", "Appearance"), query, theme::semibold(13.0), t.text);
+    matches += c;
+    ui.label(app_label);
     ui.horizontal(|ui| {
-        let label = ui.label(tl!("Appearance mode"));
+        let (label_text, c) = crate::dialogs::preferences::highlight_widget_text(tl!("Appearance mode"), query, theme::regular(13.0), t.text);
+        matches += c;
+        let label = ui.label(label_text);
         let combo = craft_ui::ComboBox::from_id_salt("appearance-mode").selected_text(tl!(mode_label(app.theme_preference))).show_ui(ui, |ui| {
             for preference in [ThemePreference::System, ThemePreference::Light, ThemePreference::Dark] {
                 if ui.selectable_label(app.theme_preference == preference, tl!(mode_label(preference))).clicked() {
@@ -140,18 +157,23 @@ pub fn preferences_section(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens)
     });
     ui.add_space(4.0);
     let light_active = app.theme == ThemeKind::Light;
+    matches += crate::dialogs::preferences::find_match_ranges(tl!("Light theme"), query).len();
+    matches += crate::dialogs::preferences::find_match_ranges(tl!("Dark theme"), query).len();
     ui.columns(2, |cols| {
         let [light, dark] = cols else { return };
-        if card(light, t, tl!("Light theme"), light_active, LIGHT_THEMES) {
+        if card(light, t, tl!("Light theme"), light_active, LIGHT_THEMES, query) {
             app.execute(mode_command(ThemePreference::Light));
         }
-        if card(dark, t, tl!("Dark theme"), !light_active, DARK_THEMES) {
+        if card(dark, t, tl!("Dark theme"), !light_active, DARK_THEMES, query) {
             app.execute(mode_command(ThemePreference::Dark));
         }
     });
     ui.add_space(4.0);
     // Acrobat's "Highlight existing fields": shared with the toggle in the form bar.
-    ui.add(crate::widgets::checkbox(&mut app.view_defaults.highlight_fields, tl!("Highlight fields")));
+    let (fields_text, c) = crate::dialogs::preferences::highlight_widget_text(tl!("Highlight fields"), query, theme::regular(13.0), t.text);
+    matches += c;
+    ui.add(crate::widgets::checkbox(&mut app.view_defaults.highlight_fields, fields_text));
+    matches
 }
 
 #[cfg(test)]
