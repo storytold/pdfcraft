@@ -202,6 +202,22 @@ impl CommentView {
         }
     }
 
+    /// Select `key`, or nothing, from anywhere but a press on the page ([`Self::pick`]): the group
+    /// member a press picked goes, so Delete and the arrow keys act on what is selected now, not
+    /// on a member remembered from before (after the Comments panel, a deletion or undo).
+    pub(crate) fn select(&mut self, key: Option<(usize, usize)>) {
+        self.selected = key;
+        self.member = None;
+    }
+
+    /// Select `a`, the comment a press at `p` on this page selects ([`PageCx::click_hit`]),
+    /// remembering the group subordinate under `p` when `a` is its group's primary
+    /// ([`PageCx::picked`]). The only place that sets [`Self::member`].
+    pub(crate) fn pick(&mut self, cx: &PageCx<'_>, p: Pos2, a: &Annotation) {
+        self.selected = Some((cx.page, a.index));
+        self.member = cx.picked(p, self.selected);
+    }
+
     /// Takes back the last point of a polygon, cloud or connected lines being drawn; the first
     /// point's removal cancels the drawing. Returns whether there was such a drawing.
     pub fn undo_point(&mut self) -> bool {
@@ -240,7 +256,7 @@ impl CommentView {
     /// were on, where it now is (deleting a reply keeps its comment selected), and close when it
     /// went too.
     pub(crate) fn annotation_deleted(&mut self, before: &[Annotation], after: &[Annotation], gone: (usize, usize)) {
-        self.selected = self.selected.and_then(|k| after_delete(before, after, gone, k));
+        self.select(self.selected.and_then(|k| after_delete(before, after, gone, k)));
         self.editing = self.editing.take().and_then(|(p, i, text)| after_delete(before, after, gone, (p, i)).map(|(p, i)| (p, i, text)));
         if self.editing.is_none() {
             self.editor_focus = None;
@@ -252,7 +268,7 @@ impl CommentView {
     /// editor close, its unsaved text with it, rather than Save writing that text over whatever
     /// took its place.
     pub(crate) fn history_stepped(&mut self) {
-        self.selected = None;
+        self.select(None);
         self.editing = None;
         self.editor_focus = None;
     }

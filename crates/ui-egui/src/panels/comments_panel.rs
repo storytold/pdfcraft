@@ -571,7 +571,7 @@ fn card(ui: &mut egui::Ui, view: &mut DocView, context: CardContext<'_>) -> Opti
         .on_hover_cursor(egui::CursorIcon::PointingHand)
         .on_hover_text(crate::i18n::fmt(tl!("{kind} — click to show it on the page"), &[("kind", tl!(kind_label(a)))]));
     if click.clicked() {
-        view.comments.selected = Some(key);
+        view.comments.select(Some(key));
         view.comments.reply.clear();
         *nav = Some(Nav::Flash(a.page, a.shown_rect(rotation)));
     }
@@ -622,7 +622,7 @@ fn card(ui: &mut egui::Ui, view: &mut DocView, context: CardContext<'_>) -> Opti
             ui.separator();
             // A locked reply can't be deleted, so it keeps the comment it answers too.
             if ui.add_enabled(doc.annotation_deletable(a.page, a.index), egui::Button::new(tl!("Delete"))).clicked() {
-                view.comments.selected = None;
+                view.comments.select(None);
                 edit = Some(Edit::DeleteAnnotation { page: a.page, index: a.index });
                 ui.close();
             }
