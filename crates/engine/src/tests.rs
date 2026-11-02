@@ -6144,6 +6144,160 @@ fn static_xfa_forms_take_their_values_from_the_datasets_and_write_them_back() {
     assert!(!d2.info.warnings.iter().any(|w| w.contains("taken from this form's XFA data")), "nothing was rewritten");
 }
 
+/// A static XFA exclusion group laid out as a radio group with `/Opt [(1) (2)]` and on states
+/// named by position (`/0`, `/1`; ISO 32000-2 Table 230): the data's item `1` is the first
+/// button, not the second one's state `/1`, and a click stores the clicked button's item.
+/// Public benefit forms are built this way; their "English" came back as "French".
+#[test]
+fn a_static_xfa_radio_group_with_numeric_items_keeps_the_picked_button() {
+    let lang = "form1[0].page1[0].lang[0]";
+    let data_of = |bytes: Arc<Vec<u8>>| {
+        let cos = pdfcraft_cos::Document::open(bytes).unwrap();
+        let data = pdfcraft_xfa::parse_datasets(&pdfcraft_xfa::read_packets(&cos).unwrap().unwrap().xdp).unwrap();
+        data.text_at(&pdfcraft_xfa::som_to_path(lang)).map(str::to_owned)
+    };
+    let states = |s: &Session, id: DocId| {
+        let f = s.get(id).unwrap().form.iter().find(|f| f.name == lang).unwrap().clone();
+        (f.value.clone(), f.widgets.iter().map(|w| w.state.clone().unwrap_or_default()).collect::<Vec<_>>())
+    };
+    let form = |data: &str| Arc::new(pdfcraft_xfa::fixtures::static_radio_shell(&format!("<form1><page1>{data}</page1></form1>")));
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    // Data filled elsewhere: item 1 (English) turns the first button on, item 2 the second.
+    let id = s.open("one.pdf", None, form("<lang>1</lang>"), None).unwrap();
+    assert_eq!(states(&s, id), (vec!["0".to_string()], vec!["0".to_string(), "Off".to_string()]));
+    let id = s.open("two.pdf", None, form("<lang>2</lang>"), None).unwrap();
+    assert_eq!(states(&s, id), (vec!["1".to_string()], vec!["Off".to_string(), "1".to_string()]));
+    // A click on a button (its on state, as the page sends it) stores that button's item.
+    let id = s.open("blank.pdf", None, form("<lang/>"), None).unwrap();
+    for (state, item) in [("0", "1"), ("1", "2")] {
+        s.apply(id, Edit::SetFieldValue { name: lang.into(), value: FieldValue::Radio(Some(state.into())) }).unwrap();
+        let saved = s.save_bytes(id).unwrap();
+        assert_eq!(data_of(saved.clone()).as_deref(), Some(item), "clicked {state}");
+        // Reopened, the same button is on and nothing is rewritten.
+        let again = s.open("again.pdf", None, saved, None).unwrap();
+        assert_eq!(states(&s, again).0, vec![state.to_string()], "clicked {state}");
+        assert!(!s.get(again).unwrap().info.warnings.iter().any(|w| w.contains("taken from this form's XFA data")), "clicked {state}");
+    }
+}
+
+/// The XFA data layer keeps its own copy of the forms crate's name spelling (it can't depend on
+/// forms), and a radio group's value only finds its button while the two agree: UTF-8 as
+/// itself, `#` and bytes that aren't UTF-8 as `#XX`.
+#[test]
+fn xfa_and_forms_spell_names_alike() {
+    for bytes in [&b"Yes"[..], b"", b"a b", b"A#1", "はい".as_bytes(), b"\x82\xcd\x82\xa2", b"\xff#\x00", b"\x7f\x20~"] {
+        assert_eq!(pdfcraft_xfa::data::name_text(bytes), pdfcraft_forms::name_text(bytes), "{bytes:?}");
+        assert_eq!(pdfcraft_forms::name_bytes(&pdfcraft_xfa::data::name_text(bytes)), bytes, "{bytes:?}");
+    }
+}
+
+/// Taking the XFA out of a radio group whose buttons carry `/PCOn` as well as `/Opt` (the item
+/// saving writes ahead of the `/Opt` entry) notes no lost data when the data holds that item:
+/// one equal to the on state, and one equal to neither the state nor the `/Opt` entry.
+#[test]
+fn stripping_xfa_takes_a_radio_items_pcon_as_the_fields_value() {
+    let lang = "form1[0].page1[0].lang[0]";
+    let lost = |s: &Session, id: DocId| {
+        s.get(id).unwrap().info.warnings.iter().filter(|w| w.contains("held a value other than the form's XFA data")).cloned().collect::<Vec<_>>()
+    };
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    // `/PCOn` equals the state: the data's `0` is the first button, whose `/Opt` entry is `1`.
+    let form = pdfcraft_xfa::fixtures::static_radio_shell_with_pcon("<form1><page1><lang>0</lang></page1></form1>", ["0", "1"]);
+    let id = s.open("pcon-state.pdf", None, Arc::new(form), None).unwrap();
+    assert_eq!(s.get(id).unwrap().form.iter().find(|f| f.name == lang).unwrap().value, ["0"]);
+    s.apply(id, Edit::XfaToStatic).unwrap();
+    assert_eq!(lost(&s, id), Vec::<String>::new());
+    // `/PCOn` is neither: a click writes `en` to the data for the first button.
+    let form = pdfcraft_xfa::fixtures::static_radio_shell_with_pcon("<form1><page1><lang/></page1></form1>", ["en", "fr"]);
+    let id = s.open("pcon-item.pdf", None, Arc::new(form), None).unwrap();
+    s.apply(id, Edit::SetFieldValue { name: lang.into(), value: FieldValue::Radio(Some("0".into())) }).unwrap();
+    s.apply(id, Edit::XfaToStatic).unwrap();
+    assert_eq!(lost(&s, id), Vec::<String>::new());
+    // The data names a button by its `/Opt` entry (`2`, as data from elsewhere does), while
+    // saving would write that button's `/PCOn` (`fr`). Opening turned that button on, so the
+    // field shows what the data selects and nothing is lost, although the spellings differ.
+    let form = pdfcraft_xfa::fixtures::static_radio_shell_with_pcon("<form1><page1><lang>2</lang></page1></form1>", ["en", "fr"]);
+    let id = s.open("opt-item.pdf", None, Arc::new(form), None).unwrap();
+    assert_eq!(s.get(id).unwrap().form.iter().find(|f| f.name == lang).unwrap().value, ["1"]);
+    s.apply(id, Edit::XfaToStatic).unwrap();
+    assert_eq!(lost(&s, id), Vec::<String>::new());
+}
+
+/// Opening reads a radio group's data as saving writes it: with `/PCOn` items `4` `1` next to
+/// `/Opt [(1) (2)]` and states `/0` `/1`, a click on the second button saves its item `1`, and
+/// reopening turns the second button on again, not the first one whose `/Opt` entry is `1`; the
+/// first button saves `4` and comes back too. Taking the XFA out then notes no lost data.
+#[test]
+fn a_radio_item_that_is_another_buttons_export_reopens_on_its_own_button() {
+    let lang = "form1[0].page1[0].lang[0]";
+    let data_of = |bytes: Arc<Vec<u8>>| {
+        let cos = pdfcraft_cos::Document::open(bytes).unwrap();
+        let data = pdfcraft_xfa::parse_datasets(&pdfcraft_xfa::read_packets(&cos).unwrap().unwrap().xdp).unwrap();
+        data.text_at(&pdfcraft_xfa::som_to_path(lang)).map(str::to_owned)
+    };
+    let value = |s: &Session, id: DocId| s.get(id).unwrap().form.iter().find(|f| f.name == lang).unwrap().value.clone();
+    let form = Arc::new(pdfcraft_xfa::fixtures::static_radio_shell_with_pcon("<form1><page1><lang/></page1></form1>", ["4", "1"]));
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    for (state, item) in [("1", "1"), ("0", "4")] {
+        let id = s.open("blank.pdf", None, form.clone(), None).unwrap();
+        s.apply(id, Edit::SetFieldValue { name: lang.into(), value: FieldValue::Radio(Some(state.into())) }).unwrap();
+        let saved = s.save_bytes(id).unwrap();
+        assert_eq!(data_of(saved.clone()).as_deref(), Some(item), "clicked {state}");
+        let again = s.open("again.pdf", None, saved, None).unwrap();
+        assert_eq!(value(&s, again), [state], "clicked {state}");
+        s.apply(again, Edit::XfaToStatic).unwrap();
+        assert!(!s.get(again).unwrap().info.warnings.iter().any(|w| w.contains("held a value other than the form's XFA data")), "clicked {state}");
+    }
+    // Data from elsewhere that no button saves is still read as an export value, then a state.
+    let id = s
+        .open(
+            "two.pdf",
+            None,
+            Arc::new(pdfcraft_xfa::fixtures::static_radio_shell_with_pcon("<form1><page1><lang>2</lang></page1></form1>", ["4", "1"])),
+            None,
+        )
+        .unwrap();
+    assert_eq!(value(&s, id), ["1"]);
+    let id = s
+        .open(
+            "zero.pdf",
+            None,
+            Arc::new(pdfcraft_xfa::fixtures::static_radio_shell_with_pcon("<form1><page1><lang>0</lang></page1></form1>", ["4", "1"])),
+            None,
+        )
+        .unwrap();
+    assert_eq!(value(&s, id), ["0"]);
+}
+
+/// A radio group whose buttons carry `/PCOn` items `1` `2` next to `/Opt [(1) (2)]` and on
+/// states named by position (`/0`, `/1`): a click on either button saves that button's own item
+/// to the datasets, reopening turns the same button on with nothing rewritten, and taking the XFA
+/// out notes no lost data. The state `/1` used to match the first button's item `1`, so the
+/// second button saved `1` and came back as the first.
+#[test]
+fn a_radio_group_with_pcon_items_saves_and_reopens_the_clicked_button() {
+    let lang = "form1[0].page1[0].lang[0]";
+    let data_of = |bytes: Arc<Vec<u8>>| {
+        let cos = pdfcraft_cos::Document::open(bytes).unwrap();
+        let data = pdfcraft_xfa::parse_datasets(&pdfcraft_xfa::read_packets(&cos).unwrap().unwrap().xdp).unwrap();
+        data.text_at(&pdfcraft_xfa::som_to_path(lang)).map(str::to_owned)
+    };
+    let value = |s: &Session, id: DocId| s.get(id).unwrap().form.iter().find(|f| f.name == lang).unwrap().value.clone();
+    let form = Arc::new(pdfcraft_xfa::fixtures::static_radio_shell_with_pcon("<form1><page1><lang/></page1></form1>", ["1", "2"]));
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    for (state, item) in [("0", "1"), ("1", "2")] {
+        let id = s.open("blank.pdf", None, form.clone(), None).unwrap();
+        s.apply(id, Edit::SetFieldValue { name: lang.into(), value: FieldValue::Radio(Some(state.into())) }).unwrap();
+        let saved = s.save_bytes(id).unwrap();
+        assert_eq!(data_of(saved.clone()).as_deref(), Some(item), "clicked {state}");
+        let again = s.open("again.pdf", None, saved, None).unwrap();
+        assert_eq!(value(&s, again), [state], "clicked {state}");
+        assert!(!s.get(again).unwrap().info.warnings.iter().any(|w| w.contains("taken from this form's XFA data")), "clicked {state}");
+        s.apply(again, Edit::XfaToStatic).unwrap();
+        assert!(!s.get(again).unwrap().info.warnings.iter().any(|w| w.contains("held a value other than the form's XFA data")), "clicked {state}");
+    }
+}
+
 /// A static XFA form whose values are only in its datasets takes every one on opening, as
 /// filling the fields one at a time would leave it: values, appearances and the note; a
 /// read-only field keeps its own value.

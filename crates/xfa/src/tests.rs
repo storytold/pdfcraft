@@ -4146,6 +4146,49 @@ fn clear_password_values_clears_static_xfa_password_fields() {
     assert!(!packets.xdp.contains("hunter2"), "{}", packets.xdp);
 }
 
+/// The data a radio group writes for its selected on state compares every button's state before
+/// any `/PCOn`: with states `/0` `/1` and `/PCOn` items `1` `2`, the state `1` is the second
+/// button, whose item is `2` (it used to match the first button's `/PCOn` `1` and write `1`).
+/// A selection that is only an item still finds its button.
+#[test]
+fn a_radio_state_is_matched_before_any_pcon_item() {
+    let doc = Document::open(Arc::new(crate::fixtures::static_radio_shell_with_pcon("<form1/>", ["1", "2"]))).unwrap();
+    let group = FieldDatum { obj: pdfcraft_cos::ObjRef::new(8, 0), name: "form1[0].page1[0].lang[0]".into(), data: FieldData::None };
+    let write = |sel: &str| crate::data::radio_dataset_value(&doc, &group, &Some(sel.to_string()));
+    assert_eq!(write("0"), "1");
+    assert_eq!(write("1"), "2");
+    // `2` is no state: it is the second button's item.
+    assert_eq!(write("2"), "2");
+    // Neither: written as given; nothing selected: empty.
+    assert_eq!(write("9"), "9");
+    assert_eq!(crate::data::radio_dataset_value(&doc, &group, &None), "");
+}
+
+/// A radio group's value is an on-state name as the AcroForm reads it: `#` and bytes that are
+/// not UTF-8 (a Shift-JIS state) written `#XX`. Saving and opening spell the buttons' states the
+/// same way, so a state `/A#23B` (the bytes `A#B`) or `/#82#CD` still finds its button and its
+/// `/Opt` item, both ways. Read lossily, neither state matched: saving wrote the state's text as
+/// the item, and opening returned a state no button has.
+#[test]
+fn radio_states_with_hash_or_non_utf8_bytes_find_their_buttons() {
+    let pdf = String::from_utf8(crate::fixtures::static_radio_shell("<form1/>"))
+        .unwrap()
+        .replace("/N << /0 ", "/N << /A#23B ")
+        .replace("/N << /1 ", "/N << /#82#CD ");
+    let doc = Document::open(Arc::new(pdf.into_bytes())).unwrap();
+    let group = FieldDatum { obj: pdfcraft_cos::ObjRef::new(8, 0), name: "form1[0].page1[0].lang[0]".into(), data: FieldData::None };
+    let write = |sel: &str| crate::data::radio_dataset_value(&doc, &group, &Some(sel.to_string()));
+    assert_eq!(write("A#23B"), "1", "the first button writes its /Opt item");
+    assert_eq!(write("#82#CD"), "2", "the second button writes its /Opt item");
+    assert_eq!(crate::data::radio_state_for_item(&doc, &group, "1").as_deref(), Some("A#23B"));
+    assert_eq!(crate::data::radio_state_for_item(&doc, &group, "2").as_deref(), Some("#82#CD"));
+    // The spelling is the forms crate's `name_text`.
+    for (bytes, text) in [(&b"Yes"[..], "Yes"), ("はい".as_bytes(), "はい"), (b"A#1", "A#231"), (b"\x82\xcd", "#82#CD"), (b"\xff#\x00", "#FF#23#00")]
+    {
+        assert_eq!(crate::data::name_text(bytes), text, "{bytes:?}");
+    }
+}
+
 /// A form with `draws` in a subform placed by position, on a letter page whose content area is a
 /// quarter inch in, with `master` on the page itself.
 fn form_of_draws(master: &str, draws: &str) -> String {
