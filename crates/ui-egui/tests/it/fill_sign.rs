@@ -1850,3 +1850,36 @@ fn the_quick_bar_fill_button_shows_the_tool_it_picks() {
     h.run_steps(2);
     assert_eq!(h.state().quick_tool, QuickTool::Fill(FillTool::Initials), "a tool restored without a command still updates the button");
 }
+
+#[test]
+fn the_quick_bar_fill_button_keeps_date_after_deselecting_and_across_documents() {
+    let mut h = harness();
+    h.get_by_label("Fill & Sign: Add signature").click_secondary();
+    h.run_steps(2);
+    h.get_by_label("Date").click();
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::Fill(FillTool::Date));
+    h.get_by_label("Select (V)").click();
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::Select);
+
+    h.state_mut().open_bytes("second.pdf", None, FIXTURE.to_vec()).unwrap();
+    h.state_mut().active = Some(1);
+    h.run_steps(2);
+    h.get_by_label("Fill & Sign: Date").click();
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::Fill(FillTool::Date), "a click picks the shown tool, not the default");
+    assert_eq!(h.state().dialog, None, "the default tool's dialog stays closed");
+    h.get_by_label("Select (V)").click();
+    h.run_steps(2);
+
+    h.state_mut().close_tab(1);
+    h.state_mut().close_tab(0);
+    h.run_steps(2);
+    h.state_mut().open_bytes("third.pdf", None, FIXTURE.to_vec()).unwrap();
+    h.state_mut().active = Some(0);
+    h.run_steps(2);
+    h.get_by_label("Fill & Sign: Date").click();
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::Fill(FillTool::Date), "the tool outlives closing every document");
+}
