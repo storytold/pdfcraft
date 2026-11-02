@@ -1389,6 +1389,14 @@ fn a_click_in_a_twin_list_box_with_options_in_another_order_picks_the_row_clicke
     click_at(&mut h, egui::pos2(r.center().x, r.min.y + 8.0 * zoom));
     assert_eq!(value(&h, "dup"), ["1"]);
     assert_eq!(twins(&h), [vec![1], vec![0]], "One-B in both: second in the first, first in the twin");
+    // The arrows step through the focused twin's own rows: ↓ from One-B there is One-A, which is
+    // first in the first field, not Two (the row after One-B in the first field).
+    h.key_press(egui::Key::ArrowDown);
+    h.run_steps(3);
+    assert_eq!(twins(&h), [vec![0], vec![1]], "One-A in both after ↓ in the twin");
+    h.key_press(egui::Key::ArrowUp);
+    h.run_steps(3);
+    assert_eq!(twins(&h), [vec![1], vec![0]], "back to One-B after ↑ in the twin");
 }
 
 /// ISO 32000-2 Table 233: a list box without MultiSelect selects "at most one item". Given
