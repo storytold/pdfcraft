@@ -4797,7 +4797,7 @@ fn image_edge_handle_stretch_and_crop_mode() {
     // Confirm crop with Enter key
     h.key_press(egui::Key::Enter);
     h.run_steps(4);
-    assert!(!h.state().views[0].image_selection.as_ref().is_some_and(|s| s.crop.is_some()));
+    assert!(h.state().views[0].image_selection.as_ref().is_none_or(|s| s.crop.is_none()));
     let doc_id = h.state().views[0].id;
     let images = h.state().session.get(doc_id).unwrap().page_images(0);
     assert_eq!(images.len(), 1, "image still exists: {images:?}");
@@ -7490,7 +7490,7 @@ fn added_and_pasted_image_uses_refactored_image_edits() {
     set_crop_box(&mut h, smaller);
     h.key_press(egui::Key::Enter);
     h.run_steps(4);
-    assert!(!h.state().views[0].image_selection.as_ref().is_some_and(|s| s.crop.is_some()), "crop mode exited");
+    assert!(h.state().views[0].image_selection.as_ref().is_none_or(|s| s.crop.is_none()), "crop mode exited");
 
     let images_after_crop = h.state().session.get(id).unwrap().page_images(0);
     assert!(images_after_crop[0].visible_rect.is_some());
