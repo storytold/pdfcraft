@@ -20,7 +20,12 @@ pub(crate) enum Input {
 
 pub(crate) enum ResultKind {
     Conversion(Arc<Vec<u8>>),
-    Prepared { bytes: Arc<Vec<u8>>, result: Box<Result<PreparedDocument, OpenError>> },
+    /// An EPUB book, converted here (laying a book out takes a while): its PDF and notes, or why not.
+    Book(Result<pdfcraft_engine::books::Book, String>),
+    Prepared {
+        bytes: Arc<Vec<u8>>,
+        result: Box<Result<PreparedDocument, OpenError>>,
+    },
     ReadFailed(String),
     RemoteFailed(String),
     RecoveryFailed(String),
@@ -175,8 +180,12 @@ fn prepare(job: Job) -> ResultKind {
         },
         Input::Bytes(bytes) => bytes.clone(),
     };
-    if matches!(pdfcraft_engine::source_kind(&job.name, &bytes), Some(SourceKind::Image | SourceKind::Text)) {
-        return ResultKind::Conversion(bytes);
+    match pdfcraft_engine::source_kind(&job.name, &bytes) {
+        Some(SourceKind::Image | SourceKind::Text) => return ResultKind::Conversion(bytes),
+        Some(SourceKind::Epub) => {
+            return ResultKind::Book(job.context.convert_book(&job.name, &bytes).map_err(|e| crate::create_ui::book_error(&job.name, &e)));
+        }
+        _ => {}
     }
     let result = job.context.prepare_open(job.name, job.path, bytes.clone(), job.password.as_deref());
     ResultKind::Prepared { bytes, result: Box::new(result) }

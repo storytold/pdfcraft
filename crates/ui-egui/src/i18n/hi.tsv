@@ -2816,6 +2816,7 @@ theme	Appearance	स्वरूप
 	Remove crop	क्रॉप हटाएँ
 	Send backward	पीछे भेजें
 	Send to back	सबसे पीछे भेजें
+	Converted from an EPUB book. Details lists how it was laid out and what was left out.	EPUB पुस्तक से रूपांतरित। विवरण में बताया गया है कि इसे कैसे सजाया गया और क्या छोड़ा गया।
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	आज
@@ -2836,6 +2837,7 @@ theme	Appearance	स्वरूप
 	Rotate the selected pages clockwise	चयनित पृष्ठों को दक्षिणावर्त घुमाएँ
 	Extract the selected pages…	चयनित पृष्ठ निकालें…
 	Delete the selected pages	चयनित पृष्ठ हटाएँ
+	Converted from an EPUB book.	Converted from an EPUB book.
 
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	इस जवाब के विकल्प

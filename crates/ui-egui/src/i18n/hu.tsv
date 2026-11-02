@@ -2539,6 +2539,8 @@ animation effects	Off	Ki
 	Edit this PDF	Ezen PDF szerkesztése
 	Export this PDF	Ezen PDF exportálása
 	Find text or tools	Szöveg vagy eszközök keresése
+# Opening an EPUB book (#493).
+	Converted from an EPUB book. Details lists how it was laid out and what was left out.	EPUB-könyvből átalakítva. A Részletek megmutatják, hogyan lett tördelve, és mi maradt ki.
 	Create & Edit	Létrehozás és szerkesztés
 	Review & Compare	Áttekintés és összehasonlítás
 	Forms & Signatures	Űrlapok és aláírások

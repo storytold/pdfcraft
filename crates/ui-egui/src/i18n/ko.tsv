@@ -2816,6 +2816,7 @@ theme	Appearance	모양
 	Remove crop	자르기 제거
 	Send backward	뒤로 보내기
 	Send to back	맨 뒤로 보내기
+	Converted from an EPUB book. Details lists how it was laid out and what was left out.	EPUB 도서에서 변환되었습니다. 세부 정보에서 레이아웃 방식과 제외된 항목을 확인할 수 있습니다.
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	오늘
@@ -2836,6 +2837,7 @@ theme	Appearance	모양
 	Rotate the selected pages clockwise	선택한 페이지를 시계 방향으로 회전
 	Extract the selected pages…	선택한 페이지 추출…
 	Delete the selected pages	선택한 페이지 삭제
+	Converted from an EPUB book.	Converted from an EPUB book.
 
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	이 답글의 옵션

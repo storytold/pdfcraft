@@ -2856,6 +2856,7 @@ theme	Appearance	Teema
 	Unpin tool	Irrota työkalu
 	Arrange image	Järjestä kuva
 	Crop	Rajaa
+	Converted from an EPUB book. Details lists how it was laid out and what was left out.	Muunnettu EPUB-kirjasta. Tiedot-kohdassa kerrotaan, miten se asenneltiin ja mitä jätettiin pois.
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Tänään
@@ -2876,6 +2877,7 @@ theme	Appearance	Teema
 	Rotate the selected pages clockwise	Kierrä valittuja sivuja myötäpäivään
 	Extract the selected pages…	Pura valitut sivut…
 	Delete the selected pages	Poista valitut sivut
+	Converted from an EPUB book.	Converted from an EPUB book.
 
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Tämän vastauksen asetukset

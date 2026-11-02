@@ -64,8 +64,10 @@ impl PdfCraftApp {
 
     /// Construct an application with the default session, panels, theme and control state.
     pub fn new() -> Self {
+        let mut session = Session::new();
+        session.set_book_paper(create_ui::regional_paper());
         Self {
-            session: Session::new(),
+            session,
             views: Vec::new(),
             closed_tabs: Vec::new(),
             active: None,

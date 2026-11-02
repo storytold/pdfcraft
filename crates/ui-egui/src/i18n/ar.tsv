@@ -2815,6 +2815,8 @@ certificate	Version	الإصدار
 	Edit this PDF	تحرير هذا الملف PDF
 	Export this PDF	تصدير هذا الملف PDF
 	Find text or tools	البحث عن نص أو أدوات
+# Opening an EPUB book (#493).
+	Converted from an EPUB book. Details lists how it was laid out and what was left out.	تم التحويل من كتاب EPUB. تعرض التفاصيل كيف نُسّق وما الذي لم يُضمَّن.
 	Create & Edit	الإنشاء والتحرير
 	Review & Compare	المراجعة والمقارنة
 	Forms & Signatures	النماذج والتوقيعات
