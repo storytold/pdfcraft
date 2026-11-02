@@ -186,6 +186,11 @@ pub(crate) struct EditCtx {
     /// The overlay streams the edit's applied redactions added, which alone the renderer's check
     /// leaves out.
     pub(crate) redaction_overlays: Vec<pdfcraft_cos::ObjRef>,
+    /// What the edit's applied redactions left as it was that still holds the removed text.
+    pub(crate) redaction_elsewhere: Option<pdfcraft_redact::Elsewhere>,
+    /// What became of the PDF/A and PDF/UA identification when the edit's applied redactions
+    /// removed the catalog's XMP packet.
+    pub(crate) redaction_identification: pdfcraft_redact::Identification,
 }
 
 impl EditCtx {
@@ -215,6 +220,8 @@ impl EditCtx {
             rng: getrandom::fill,
             renamed_fields: Vec::new(),
             redaction_overlays: Vec::new(),
+            redaction_elsewhere: None,
+            redaction_identification: pdfcraft_redact::Identification::default(),
         }
     }
 
@@ -778,7 +785,10 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             pdfcraft_edit::add_content(doc, *page, &content)?;
         }
         Edit::ApplyRedactions { pages } => {
-            cx.redaction_overlays = pdfcraft_redact::apply(doc, pages.as_deref())?.overlays;
+            let report = pdfcraft_redact::apply(doc, pages.as_deref())?;
+            cx.redaction_overlays = report.overlays;
+            cx.redaction_elsewhere = Some(report.still_holding);
+            cx.redaction_identification = report.identification;
         }
         Edit::ClearRedactions => {
             pdfcraft_redact::clear_marks(doc, None)?;

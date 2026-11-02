@@ -11,6 +11,9 @@
 //!
 //! A verification pass then re-reads every redacted page; if any glyph or inline image is still
 //! under a region the whole operation fails (callers keep the previous document: fail-closed).
+//! Finally, document metadata (`/Info` entries, XMP) that repeats the removed text is removed.
+//! Places it leaves as they are (bookmark titles, attachments, remaining comments, other XMP)
+//! are only counted when they still hold that text ([`Report::still_holding`]).
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -19,8 +22,11 @@ use std::collections::{HashMap, HashSet};
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, Stream};
 
 pub mod codes;
+mod elsewhere;
+mod identification;
 mod image;
 mod interp;
+mod metadata;
 mod overlay;
 pub mod patterns;
 pub mod sanitize;
@@ -30,6 +36,8 @@ mod tests;
 pub(crate) mod type3;
 pub(crate) mod type3_tables;
 
+pub use elsewhere::Elsewhere;
+pub use identification::{Claim, Identification};
 use interp::{Mode, Scope, process};
 
 pub type Rgb = [f64; 3];
@@ -158,6 +166,16 @@ pub struct Report {
     /// only streams a check for text left under the marks may skip: an input stream labelled
     /// like an overlay (`/PCMark /Redaction`) is checked like any other.
     pub overlays: Vec<ObjRef>,
+    /// Document information entries and XMP streams removed because they held redacted text.
+    pub metadata: usize,
+    /// What became of the PDF/A and PDF/UA identification when the catalog's XMP packet was
+    /// removed: written back in a packet of its own, or lost (see [`Identification`]).
+    pub identification: Identification,
+    /// Places this apply leaves as they are that still hold the removed text (bookmark titles,
+    /// attachments, the comments that remain, XMP on other objects), counted so the user can be
+    /// told; Remove hidden information removes them. See [`Elsewhere`] for when the counts are
+    /// of every place holding any text.
+    pub still_holding: Elsewhere,
 }
 
 fn rect_of(doc: &Document, o: Option<&Object>) -> Option<[f64; 4]> {
@@ -427,6 +445,8 @@ fn apply_to(doc: &mut Document, pages: Option<&[usize]>) -> Result<Report, Redac
         doomed_xobjects: Vec::new(),
         retired_properties: Vec::new(),
         widget_owner,
+        removed_text: Vec::new(),
+        removed_cut: false,
         removed_everywhere: HashSet::new(),
     };
     for &(pi, page_marks) in &groups {
@@ -435,7 +455,7 @@ fn apply_to(doc: &mut Document, pages: Option<&[usize]>) -> Result<Report, Redac
         redact_page_content(doc, &mut applying, pi, &page, &rects)?;
         remove_page_annotations(doc, &mut applying, &page, &rects, page_marks)?;
     }
-    let Applying { mut report, doomed_fields, doomed_xobjects, retired_properties, mut removed_everywhere, .. } = applying;
+    let Applying { mut report, doomed_fields, doomed_xobjects, retired_properties, mut removed_everywhere, removed_text, removed_cut, .. } = applying;
 
     // 2b. Replies and pop-ups of a removed annotation can be listed on another page than their
     // parent: their `/IRT` or `/Parent` would keep the removed comment reachable.
@@ -538,6 +558,12 @@ fn apply_to(doc: &mut Document, pages: Option<&[usize]>) -> Result<Report, Redac
     if residue > 0 {
         return Err(RedactError::Residue(residue));
     }
+    // 6. The document's metadata must not keep what the pages no longer show (#2448).
+    let scrubbed = metadata::scrub(doc, &removed_text, !removed_cut)?;
+    report.metadata = scrubbed.removed;
+    report.identification = scrubbed.identification;
+    // What it doesn't scrub is counted, never changed.
+    report.still_holding = elsewhere::find(doc, &removed_text, !removed_cut);
     // The previous revision still holds the removed content: the next save must rewrite.
     doc.require_full_save();
     Ok(report)
@@ -615,6 +641,10 @@ struct Applying {
     retired_properties: Vec<Object>,
     widget_owner: Vec<(ObjRef, ObjRef)>,
     removed_everywhere: HashSet<ObjRef>,
+    /// The text of the removed glyphs, for the metadata check at the end.
+    removed_text: Vec<String>,
+    /// Some removed text was too long to keep whole for that check.
+    removed_cut: bool,
 }
 
 /// Step 1 for one page: rewrites its content so nothing readable stays under a mark, and cleans the tags it no longer shows.
@@ -625,14 +655,18 @@ fn redact_page_content(
     page: &pdfcraft_model::Page,
     rects: &[[f64; 4]],
 ) -> Result<(), RedactError> {
-    let Applying { report, doomed_xobjects, retired_properties, .. } = applying;
+    let Applying { report, doomed_xobjects, retired_properties, removed_text, removed_cut, .. } = applying;
     // 1. Content.
     let mut budget = pdfcraft_cos::DecodeBudget::page();
     let (list, data) = page_streams_within(doc, &page.dict, pi, &mut budget)?;
     let resources = page.dict.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned()).unwrap_or_default();
     let out = {
         let mut scope = Scope::new(rects, Mode::Apply, report, budget);
-        process(doc, &mut scope, &data, &resources, pdfcraft_content::Matrix::IDENTITY)
+        let out = process(doc, &mut scope, &data, &resources, pdfcraft_content::Matrix::IDENTITY);
+        scope.flush();
+        removed_text.append(&mut scope.removed_text);
+        *removed_cut |= scope.removed_cut;
+        out
     };
     // Fail closed: the interpreter lays vertical-writing text out horizontally, so it cannot
     // tell whether those glyphs lie under a mark. Rather than report success and possibly

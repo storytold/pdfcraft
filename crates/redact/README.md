@@ -43,7 +43,61 @@ clear_marks(&mut doc, None)?;                        // remove marks without app
 - **annotations** whose rectangle overlaps (with their pop-ups and their replies, `/IRT`), and **form fields** with a
   widget under a mark;
 - the marks themselves, replaced by boxes in their fill colour (and overlay text) drawn into the
-  page as a `/PCMark /Redaction` stream.
+  page as a `/PCMark /Redaction` stream;
+- **metadata** that repeats the removed text (#2448): `/Info` entries containing it or wholly
+  part of it as whole words (three letters or digits at least), and the catalog's and pages'
+  XMP streams whose text (element content, attribute values other than `xmlns` declarations,
+  comments and processing instructions, entities decoded) contains it or has a value wholly
+  part of it, removed whole. When the catalog's packet goes, its PDF/A (`pdfaid`) and PDF/UA
+  (`pdfuaid`) identification, read by namespace, is written back in a packet holding nothing
+  else: the part number, the PDF/A conformance letter, amendment and revision, and PDF/UA's
+  part and revision, each kept only if it is the short code it must be and doesn't itself hold
+  the removed text (a one-character code can't, so it is kept even when the text couldn't be
+  searched for), plus a fixed extension schema for `pdfuaid` under PDF/A-1 to -3, left out
+  with the PDF/UA claim if the redacted words are among its words. `Report::identification`
+  says, for each, whether the claim was kept or lost (a value that isn't a valid code or holds
+  the text, or a packet that can't be read); the notification and `redact_apply` say it too.
+  `/Info` entries that remain aren't mirrored into the new packet, so a PDF/A validator may
+  still report them. The removed
+  glyphs' text is collected in runs by position (character and word spacing included, so
+  letter-spaced text stays one word), and each run (two or more letters or digits) and each of
+  its words of three or more are matched without regard to case or spacing, and also by their
+  letters and digits alone when they have three or more: "Blue fin" and "BLUE-FIN" hold
+  "Bluefin", and so does a heading whose letters `TJ` numbers spread apart (collected as
+  "B L U E F I N", since a `TJ` gap can't be told from a word space). A value is wholly part of
+  a run when its letters and digits are, starting and ending where the run's words do, so
+  "True" isn't part of "untrue". This over-matches only towards removal: "is a" also holds
+  "Lisa". Both sides are compared in Unicode compatibility form (NFKC) and lower case, so a
+  decomposed "Müller" (u and U+0308), full-width letters and a "ﬁ" ligature from a
+  `ToUnicode` map match their plain forms. A string behind an `FF FE` mark, which ISO 32000-2
+  §7.9.2.2.1 doesn't define, is read as UTF-16LE, here and in the places reported below, rather
+  than through PDFDocEncoding, in which it could never match. A value that shares only words of one or two
+  letters with the removed text, and isn't wholly part of it, stays:
+  Sanitize's metadata category removes the rest. `Report::metadata` counts what went.
+  - **Fail-closed.** When the check can't know what the removed text was, every `/Info`
+    string and every catalog and page XMP stream goes: more than 100,000 runs or a run over
+    64 KiB removed (the collection limit); a removed glyph whose text isn't known (no
+    `/ToUnicode` or encoding gives it); a form XObject removed without being read, because it
+    is nested past the depth limit (`MAX_DEPTH`, 50) or its content can't be read; or more
+    than 20,000 terms, or a run longer than 4,096 characters, to search for. Once the
+    search's work limit (2^28 steps) runs out, every entry and packet not yet checked goes
+    too. An XMP packet that isn't valid UTF-8 or UTF-16, can't be decoded strictly (damaged or
+    cut-short filter data, or more than one filter), or decodes to more than
+    16 MiB goes without being read, and a value whose normalized form would be more than four
+    times as long (U+FDFA alone is 18 letters) counts as holding the text.
+  - **Not scrubbed, but reported** (Remove hidden information's categories remove them): bookmark
+    titles, attachments (names in the document's list of embedded files, file names and
+    descriptions, and the files of file attachment comments), the comments that remain (their
+    text, rich text, subject and author; not form fields or pop-ups), and XMP streams on anything
+    but the catalog and the pages (images, fonts, form XObjects, annotations and other objects).
+    `apply` changes none of them, but counts those that still hold the removed text, matched as
+    above, in `Report::still_holding` (`Elsewhere`), so the interface and the `redact_apply` tool
+    can say where it is; this search has a work limit of its own, past which every place counts.
+    When the removed text couldn't be searched for (the cases above in which every `/Info`
+    string goes), every one of them that holds any text is counted and `unsearched` is set; an XMP
+    stream or rich text stream that can't be read counts as holding it. The walks are bounded: at
+    most 100,000 bookmarks and 100,000 name-tree nodes (32 deep) are read, each once, and a walk
+    cut short counts one more place.
 
 A verification pass re-reads each redacted page and fails the operation if any glyph or inline
 image is still under an area. It checks every content stream the page had, whatever its
