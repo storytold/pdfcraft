@@ -189,6 +189,7 @@ impl Session {
                             datasets: None,
                             ran_away: false,
                             time_scale: context.xfa_time_scale,
+                            relaid: false,
                         };
                         let changes = xfa::on_open(&mut work, &tpl, &mut run);
                         if run.ran_away {
