@@ -229,11 +229,9 @@ pub fn parse_wav_samples(data: &[u8]) -> Result<WavAudio, WavError> {
         16 => {
             // Little-endian signed 16-bit to big-endian signed 16-bit
             let mut out = Vec::with_capacity(payload.len());
-            for chunk in payload.chunks_exact(2) {
-                if let [lo, hi] = chunk {
-                    out.push(*hi);
-                    out.push(*lo);
-                }
+            for &[lo, hi] in payload.as_chunks::<2>().0 {
+                out.push(hi);
+                out.push(lo);
             }
             out
         }
