@@ -37,6 +37,12 @@ fn columns(h: &Harness<'static, PdfCraftApp>) -> usize {
     (1..=PAGES).take_while(|p| h.get_by_label(&format!("Page {p}")).rect().top() == top).count()
 }
 
+/// The part of the window the grid scrolls in, below the organize toolbar: the vertical span of
+/// its scroll bar, the only one in the view.
+fn grid_viewport(h: &Harness<'static, PdfCraftApp>) -> egui::Rect {
+    h.get_by_role(egui::accesskit::Role::ScrollBar).rect()
+}
+
 fn press(h: &mut Harness<'static, PdfCraftApp>, modifiers: Modifiers, key: Key) {
     h.key_press_modifiers(modifiers, key);
     h.run_steps(2);
@@ -127,7 +133,6 @@ fn an_arrow_press_next_to_a_zoom_still_shows_its_page() {
         let mut h = organize_pages(MANY);
         assert!(h.query_by_label(&label).is_none(), "the last page starts out of view");
         h.state_mut().views[0].current = MANY - 2;
-        let z0 = h.state().views[0].grid_zoom();
         h.key_press_modifiers(Modifiers::COMMAND, Key::Minus);
         if !same_frame {
             h.run_steps(1);
@@ -135,8 +140,10 @@ fn an_arrow_press_next_to_a_zoom_still_shows_its_page() {
         h.key_press(Key::ArrowRight);
         h.run_steps(4);
         assert_eq!(state(&h).0, MANY - 1);
-        eprintln!("DBG same={same_frame} zoom {z0} -> {} page1 {:?}", h.state().views[0].grid_zoom(), h.query_by_label("Page 1").map(|n| n.rect()));
-        let page = h.query_by_label(&label).map(|n| n.rect());
-        assert!(page.is_some_and(|r| r.top() >= 0.0 && r.bottom() <= 900.0), "same frame {same_frame}: the last page is in view: {page:?}");
+        let (page, viewport) = (h.query_by_label(&label).map(|n| n.rect()), grid_viewport(&h));
+        assert!(
+            page.is_some_and(|r| r.top() >= viewport.top() && r.bottom() <= viewport.bottom()),
+            "same frame {same_frame}: the last page is in the grid's view {viewport:?}: {page:?}"
+        );
     }
 }
