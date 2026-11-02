@@ -105,10 +105,15 @@ fn editable_combo(f: &FormField) -> bool {
 /// option it picks (a free value typed into an editable one has no option, and shows as is).
 pub(crate) fn draft_text(f: &FormField) -> String {
     let value = f.value.first().cloned().unwrap_or_default();
-    if f.kind == FormFieldKind::Combo
-        && let Some((_, shown)) = f.options.iter().find(|(export, _)| *export == value)
-    {
-        return shown.clone();
+    if f.kind == FormFieldKind::Combo {
+        if let Some((export, shown)) = f.indices.first().and_then(|&idx| f.options.get(idx))
+            && (export == &value || shown == &value || value.is_empty())
+        {
+            return shown.clone();
+        }
+        if let Some((_, shown)) = f.options.iter().find(|(export, _)| *export == value) {
+            return shown.clone();
+        }
     }
     value
 }
@@ -1034,5 +1039,38 @@ mod tests {
         assert_eq!(largest.get(), MAX_SCREEN_FONT, "laid out at the bound");
         assert_eq!(bounded_line_width(10.0, measure), 30.0, "below it, at the size itself");
         assert_eq!(largest.get(), MAX_SCREEN_FONT);
+    }
+
+    #[test]
+    fn draft_text_uses_selected_index_for_combo_with_duplicate_exports() {
+        use pdfcraft_cos::ObjRef;
+        use pdfcraft_engine::{FormField, FormFieldKind};
+
+        let mut field = FormField {
+            name: "combo".into(),
+            obj: ObjRef::new(1, 0),
+            kind: FormFieldKind::Combo,
+            value: vec!["dup".into()],
+            default: Vec::new(),
+            flags: 0,
+            max_len: None,
+            options: vec![
+                ("dup".into(), "First Option".into()),
+                ("dup".into(), "Second Option".into()),
+            ],
+            indices: vec![1],
+            da: String::new(),
+            quadding: 0,
+            tooltip: None,
+            widgets: Vec::new(),
+            actions: Default::default(),
+            button: None,
+        };
+
+        assert_eq!(super::draft_text(&field), "Second Option");
+
+        field.value = vec!["Custom Free Text".into()];
+        field.indices.clear();
+        assert_eq!(super::draft_text(&field), "Custom Free Text");
     }
 }
