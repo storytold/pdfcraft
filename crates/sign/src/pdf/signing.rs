@@ -540,8 +540,10 @@ fn appearance(doc: &mut Document, rect: [f64; 4], turn: i64, name: &str, cert: &
             let mut size = (h * 0.4).min(36.0);
             loop {
                 let words = wrap_text(name, size, max_w);
-                if words.len() as f64 * size * 1.1 <= h - 2.0 * pad || size <= 4.0 {
-                    let width = words.iter().map(|l| measure(l, size)).fold(0.0, f64::max);
+                let width = words.iter().map(|l| measure(l, size)).fold(0.0, f64::max);
+                // Never clip: shrink until every line fits both the column and the box's height.
+                let fits = words.len() as f64 * size * 1.1 <= h - 2.0 * pad && width <= max_w;
+                if fits || size <= 1.0 {
                     break (size, words, width);
                 }
                 size *= 0.95;
@@ -576,7 +578,9 @@ fn appearance(doc: &mut Document, rect: [f64; 4], turn: i64, name: &str, cert: &
         let mut size = (h / (lines.len().max(1) as f64 * 1.15)).min(12.0);
         let wrapped = loop {
             let all: Vec<String> = lines.iter().flat_map(|l| wrap_text(l, size, right_w)).collect();
-            if all.len() as f64 * size * 1.15 <= h - 2.0 * pad || size <= 3.0 {
+            let widest = all.iter().map(|l| measure(l, size)).fold(0.0, f64::max);
+            // Never clip: shrink until every line fits both the column and the box's height.
+            if (all.len() as f64 * size * 1.15 <= h - 2.0 * pad && widest <= right_w) || size <= 1.0 {
                 break all;
             }
             size *= 0.9;
