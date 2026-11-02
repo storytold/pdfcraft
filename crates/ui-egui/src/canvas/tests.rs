@@ -2047,3 +2047,14 @@ fn cancelling_pointer_gestures_lets_go_of_a_camera_corner() {
     v.cancel_pointer_gestures();
     assert_eq!(v.camera.map(|q| q.grab), Some(None));
 }
+
+/// A camera corner at the page's edge is hit on the page only: a press off the page is no page's,
+/// so its grab cursor does not show there.
+#[test]
+fn a_camera_corner_at_the_page_edge_is_hit_on_the_page_only() {
+    let mut v = view(1, PageLayout::Single, true);
+    v.camera = Some(crate::camera_ui::CameraQuad { page: 0, corners: [[0.0, 0.0], [300.0, 0.0], [300.0, 400.0], [0.0, 400.0]], grab: None });
+    let xf = PageXform { rect: Rect::from_min_size(pos2(10.0, 20.0), egui::vec2(300.0, 400.0)), rot: 0, pw: 300.0, ph: 400.0 };
+    assert!(crate::camera_ui::hit(&xf, 0, &v, pos2(14.0, 24.0)).is_some(), "on the page");
+    assert!(crate::camera_ui::hit(&xf, 0, &v, pos2(6.0, 16.0)).is_none(), "just off it");
+}

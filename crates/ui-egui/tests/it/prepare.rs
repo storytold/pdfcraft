@@ -1599,3 +1599,21 @@ fn a_right_click_during_a_field_drag_moves_the_dragged_field() {
     assert_eq!(field_rect(&h, "city"), city, "the field right-clicked stays where it was");
     assert_ne!(field_rect(&h, "name"), name, "the dragged field moved");
 }
+
+/// With Prepare open, a drag with a shape tool on the page's empty part draws Prepare's selection
+/// rectangle and no comment, as before: Prepare takes the press nobody holds. It used to draw both.
+#[test]
+fn with_prepare_open_a_shape_tool_drag_draws_no_comment() {
+    let mut h = harness();
+    h.state_mut().execute("form.prepare");
+    h.run_steps(3);
+    assert!(h.state_mut().execute("comment.square"));
+    h.run_steps(3);
+    assert!(h.state().is_preparing(), "picking the tool leaves Prepare open");
+    // Below the fields.
+    let (from, to) = (at(&h, 40.0, 260.0), at(&h, 200.0, 360.0));
+    drag(&mut h, from, to);
+    let s = h.state();
+    let squares = s.session.get(s.views[0].id).unwrap().info.annotations.iter().filter(|a| a.subtype == "Square").count();
+    assert_eq!(squares, 0, "no rectangle under Prepare's selection rectangle");
+}

@@ -1419,7 +1419,8 @@ fn the_link_tools_hand_stops_at_the_pages_edge() {
 }
 
 /// With Edit text a right-click on a paragraph is Edit text's, as before, though a comment lies
-/// over it: the comment is not selected.
+/// over it: the comment is not selected. The page's menu is anchored there all the same (Paste on
+/// the picture menu, Delete page); it used to stay where the last right-click comments saw was.
 #[test]
 fn a_right_click_with_edit_text_on_a_paragraph_under_a_comment_selects_no_comment() {
     let mut h = open(comment_on_text_pdf(), "150", false);
@@ -1429,6 +1430,7 @@ fn a_right_click_with_edit_text_on_a_paragraph_under_a_comment_selects_no_commen
     wait_for_cursor(&mut h, on_text, |c| c != egui::CursorIcon::Default);
     right_click(&mut h, on_text);
     assert_eq!(h.state().views[0].comments.selected, None);
+    assert_eq!(h.state().views[0].comments.context_at.map(|(page, _)| page), Some(0), "the menu is anchored on the page");
 }
 
 /// With a Prepare field tool a right-click is the tool's, as before: a comment under it is not
@@ -1543,4 +1545,47 @@ fn a_long_press_on_a_comment_selects_it_for_its_menu() {
     assert_eq!(h.state().views[0].comments.selected, Some((0, 1)), "the note under the finger is selected");
     one_frame(&mut h, [touch(egui::TouchPhase::End, top), button(top, false), egui::Event::PointerGone]);
     h.run_steps(2);
+}
+
+/// A right-click while the primary button is held anchors the page's menu where it is (Delete page,
+/// Paste): the held press leaves only the selections alone. It used to keep the menu on the page
+/// right-clicked before.
+#[test]
+fn a_right_click_with_the_button_held_anchors_the_menu_on_its_page() {
+    let mut h = open(two_pages_pdf(), "100", false);
+    h.run_steps(2);
+    h.state_mut().views[0].comments.context_at = Some((0, [10.0, 10.0]));
+    let two = h.state().views[0].page_screen_rect(1).expect("page 2 on screen");
+    let press = two.min + egui::vec2(50.0, 30.0);
+    h.hover_at(press);
+    h.run_steps(1);
+    h.drag_at(press);
+    h.run_steps(1);
+    h.hover_at(press + egui::vec2(40.0, 0.0));
+    h.run_steps(1);
+    let menu = press + egui::vec2(100.0, 60.0);
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos: menu, button: egui::PointerButton::Secondary, pressed, modifiers: egui::Modifiers::NONE });
+    }
+    h.run_steps(1);
+    assert_eq!(h.state().views[0].comments.context_at.map(|(page, _)| page), Some(1), "the menu is page 2's");
+    h.drop_at(press + egui::vec2(40.0, 0.0));
+    h.run_steps(2);
+}
+
+/// With Edit text a right-click on added text reaches comments, as before (Edit text keeps those on
+/// its own paragraphs and pictures): the selected comment is unselected.
+#[test]
+fn a_right_click_with_edit_text_on_added_text_unselects_the_comment() {
+    let mut h = open(comment_on_text_pdf(), "150", false);
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::AddText {
+        page: 0,
+        text: pdfcraft_engine::AddedText { rect: [40.0, 195.0, 140.0, 210.0], text: "Added".into(), ..Default::default() },
+    }));
+    h.state_mut().quick_tool = QuickTool::EditText;
+    h.run_steps(4);
+    h.state_mut().views[0].comments.selected = Some((0, 0));
+    let on_added = at(&h, 90.0, 202.0);
+    right_click(&mut h, on_added);
+    assert_eq!(h.state().views[0].comments.selected, None);
 }

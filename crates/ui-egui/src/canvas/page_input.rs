@@ -201,9 +201,12 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
         view.links.context = Some((i, index));
     }
     // Comments, every frame: their own presses, a commenting tool's, and a click elsewhere that
-    // leaves them unselected.
-    let on_comment = comments::page_input(ui, resp, &pcx, press, view);
-    let consumed = on_objects || on_edit_text || on_link || on_content || boxing || on_field || on_comment;
+    // leaves them unselected. A press nobody holds that another tool took this frame (Prepare's
+    // selection rectangle, added content, which still decide for themselves) is not also a
+    // commenting tool's, as before.
+    let taken = on_objects || on_edit_text || on_link || on_content || boxing || on_field;
+    let on_comment = comments::page_input(ui, resp, &pcx, press, taken, view);
+    let consumed = taken || on_comment;
     let hover = pointer.and_then(|p| claim_under(&hits, view, p, frame.env.unobstructed));
     PageInput { consumed, area_tool, hover, released_over }
 }
@@ -324,33 +327,36 @@ fn tool_input(
     }
 }
 
-/// A right-click at `p`: it goes to what lies on top there ([`PageHits::context_at`]), which the
-/// page's menu then acts on. A comment there is selected, and none elsewhere; a Prepare field is
-/// selected; links take theirs from what this returns.
+/// A right-click at `p`: the page's menu opens there, and it goes to what lies on top there
+/// ([`PageHits::context_at`]), which the menu then acts on. A comment there is selected, and none
+/// elsewhere; a Prepare field is selected; links take theirs from what this returns.
 /// `under`: the hits at `p` before the tools act. `press_held`: the primary button is held, and the
 /// selections its press acts on are left alone until its release.
 fn right_click(hits: &PageHits<'_>, under: &[crate::page_router::Hit], view: &mut DocView, p: Pos2, press_held: bool) -> Option<Owner> {
     let context = hits.context_at(view, p, under);
-    // Add text takes every right-click on a page it can change, Edit text those on anything of its
-    // own (paragraphs, pictures, added content, the objects selected together and their grips), the
-    // Link tool those on a link, and a Prepare field tool the whole page, as before: comments see
-    // none of them.
+    // Delete page, Paste and Copy Image act where the menu opened, whoever takes the right-click.
+    comments::anchor(hits.pcx, p, view);
+    if press_held {
+        return context;
+    }
+    // Add text takes every right-click on a page it can change, Edit text those on its own
+    // paragraphs and pictures (the objects selected together, and crop mode's picture, among them),
+    // the Link tool those on a link, and a Prepare field tool the whole page, as before: comments
+    // see none of them.
     let tool_takes_it = match hits.tool {
-        QuickTool::AddText => hits.can_modify || top(under.iter().cloned(), hits.tool).is_some(),
-        QuickTool::EditText => top(under.iter().cloned(), hits.tool).is_some(),
+        QuickTool::AddText => hits.can_modify,
+        QuickTool::EditText => under.iter().any(|h| matches!(h.owner, Owner::Paragraph { .. } | Owner::Picture { .. } | Owner::Objects { .. })),
         QuickTool::Link => hits.can_modify && matches!(context, Some(Owner::Link { .. })),
         _ => hits.field_tool.is_some(),
     };
-    if !tool_takes_it && !press_held {
+    if !tool_takes_it {
         let comment = match context {
             Some(Owner::Comment { index, .. }) => Some(index),
             _ => None,
         };
-        comments::context(hits.pcx, p, comment, view);
+        comments::context(hits.pcx, comment, view);
     }
-    if let Some(Owner::PrepareField { field, widget }) = context
-        && !press_held
-    {
+    if let Some(Owner::PrepareField { field, widget }) = context {
         crate::prepare::context(hits.form, field, widget, view);
     }
     context

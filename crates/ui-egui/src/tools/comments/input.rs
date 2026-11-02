@@ -11,12 +11,13 @@ use crate::page_router::{CommentPart, Hit, Owner, PagePress};
 /// Comment input on one page, before text selection runs. `press` is what this page has to do with
 /// the press the pages hold: a press on a comment where the tool reaches it ([`hit`]: the Select
 /// tool, Fill & Sign over its marks, a shape tool over the selected shape's handles) is that
-/// comment's, and one nobody holds is a commenting tool's. Returns `true` when the pointer gesture belongs to
-/// commenting (text selection must ignore it).
-pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, press: PagePress, view: &mut DocView) -> bool {
+/// comment's, and one nobody holds is a commenting tool's, unless another tool took it this frame
+/// (`taken`: Prepare's selection rectangle, added content), though a click there still unselects.
+/// Returns `true` when the pointer gesture belongs to commenting (text selection must ignore it).
+pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, press: PagePress, taken: bool, view: &mut DocView) -> bool {
     let (pointer, origin) = (cx.ptr.pos, cx.ptr.origin);
     let page_rect = cx.xf.rect;
-    let free = press == PagePress::Free;
+    let free = press == PagePress::Free && !taken;
     let pressed_here = free && origin.is_some_and(|o| page_rect.contains(o));
     let over_page = pointer.is_some_and(|p| page_rect.contains(p));
     let owned = match press {
@@ -98,11 +99,15 @@ pub(crate) fn hit(cx: &PageCx<'_>, view: &DocView, p: Pos2, on_link: bool) -> Op
     }
     let markup = is_markup(&a.subtype);
     let icon = if cx.allowed && !markup { egui::CursorIcon::Move } else { egui::CursorIcon::PointingHand };
-    // What a drag moves whole (a note, a shape, a signature, a Fill & Sign mark) is placed on the
-    // page, over a form field; text markup lies on the text, under one.
-    let layer = if a.fill_sign || !markup { Layer::Placed } else { Layer::Comment };
     // Text markup does not move: a click selects it, a drag across it selects the text.
-    Some(Hit { declines_drag: markup, ..Hit::new(Owner::Comment { index: a.index, part: CommentPart::Body }, layer, icon) })
+    Some(Hit { declines_drag: markup, ..Hit::new(Owner::Comment { index: a.index, part: CommentPart::Body }, layer(a), icon) })
+}
+
+/// The layer a comment's body lies on: what a drag moves whole (a note, a shape, a signature, a
+/// Fill & Sign mark) is placed on the page, over a form field; text markup lies on the text, under
+/// one.
+fn layer(a: &Annotation) -> Layer {
+    if a.fill_sign || !is_markup(&a.subtype) { Layer::Placed } else { Layer::Comment }
 }
 
 /// The comment a right-click at `p` is on: the topmost, with every tool, as a comment's menu shows
@@ -113,14 +118,18 @@ pub(crate) fn context_hit(cx: &PageCx<'_>, p: Pos2) -> Option<Hit> {
         return None;
     }
     let a = cx.comment_at(p)?;
-    let layer = if a.fill_sign || !is_markup(&a.subtype) { Layer::Placed } else { Layer::Comment };
-    Some(Hit::new(Owner::Comment { index: a.index, part: CommentPart::Body }, layer, egui::CursorIcon::Default))
+    Some(Hit::new(Owner::Comment { index: a.index, part: CommentPart::Body }, layer(a), egui::CursorIcon::Default))
 }
 
-/// A right-click at `p` on this page: the page's menu is anchored there (Copy Image), and the
-/// comment it is on ([`context_hit`], when it wins there) is selected, or none.
-pub(crate) fn context(cx: &PageCx<'_>, p: Pos2, index: Option<usize>, view: &mut DocView) {
+/// A right-click at `p` on this page: the page's menu is anchored there (Delete page, Paste, Copy
+/// Image, a note added here).
+pub(crate) fn anchor(cx: &PageCx<'_>, p: Pos2, view: &mut DocView) {
     view.comments.context_at = Some((cx.page, cx.to_user(p)));
+}
+
+/// A right-click on comment `index` of this page ([`context_hit`], when it wins there) selects it,
+/// and one on anything else selects none.
+pub(crate) fn context(cx: &PageCx<'_>, index: Option<usize>, view: &mut DocView) {
     view.comments.selected = index.map(|i| (cx.page, i));
 }
 
