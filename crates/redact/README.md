@@ -66,8 +66,8 @@ clear_marks(&mut doc, None)?;                        // remove marks without app
   letters with the removed text, and isn't wholly part of it, stays:
   Sanitize's metadata category removes the rest. `Report::metadata` counts what went.
   - **Fail-closed.** When the check can't know what the removed text was, every `/Info`
-    string and every catalog and page XMP stream goes: more than 100,000 runs or a run over
-    64 KiB removed (the collection limit); a removed glyph whose text isn't known (no
+    string and every catalog and page XMP stream goes: more than 100,000 runs on a page, a run
+    over 64 KiB, or more than 16 MiB in the whole document removed (the collection limits); a removed glyph whose text isn't known (no
     `/ToUnicode` or encoding gives it); a form XObject removed without being read, because it
     is nested past the depth limit (`MAX_DEPTH`, 50) or its content can't be read; or more
     than 20,000 terms, or a run longer than 4,096 characters, to search for. Once the
