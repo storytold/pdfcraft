@@ -38,7 +38,7 @@ fn settle(h: &mut Harness<'static, PdfCraftApp>) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     loop {
         h.run_steps(2);
-        if h.query_by_label_contains("Checking for a newer version").is_none() {
+        if h.query_by_label_contains("Checking for updates").is_none() {
             break;
         }
         assert!(std::time::Instant::now() < deadline, "timed out waiting for the update check");
@@ -64,13 +64,14 @@ fn an_up_to_date_or_failed_check_says_so() {
     let mut h = harness(Ok(None));
     h.state_mut().execute("help.check_updates");
     settle(&mut h);
-    h.get_by_label_contains("is up to date");
+    h.get_by_label_contains("is the newest version available");
     assert!(h.query_by_label("Download").is_none());
 
     let mut h = harness(Err("couldn't reach GitHub"));
     h.state_mut().execute("help.check_updates");
     settle(&mut h);
-    h.get_by_label_contains("Couldn't check for updates: couldn't reach GitHub");
+    h.get_by_label_contains("Could not check for updates.");
+    h.get_by_label_contains("couldn't reach GitHub");
 }
 
 #[test]

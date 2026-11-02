@@ -166,12 +166,24 @@ fn icc_stream_object(array: &Array<'_>, stream: &Stream<'_>) -> Option<object::O
     dict.obj_id()
 }
 
+/// PdfCraft patch (74): how deeply colour spaces may nest. A legal file goes five levels at most:
+/// a Pattern's underlying space, an Indexed base, a Separation's alternate, an ICC profile, and
+/// that profile's alternate. Reading an object already being read is refused, which ends a cycle
+/// but not a chain: 5,000 spaces each naming the next, 180 KB of file, overflowed the stack, and
+/// that aborts the process.
+const MAX_COLOR_SPACE_DEPTH: u32 = 32;
+
 impl ColorSpaceType {
-    fn new(object: Object<'_>, cache: &Cache) -> Option<Self> {
-        Self::new_inner(object, cache)
+    fn new(object: Object<'_>, cache: &Cache, depth: u32) -> Option<Self> {
+        if depth >= MAX_COLOR_SPACE_DEPTH {
+            warn!("colour spaces nest past the limit of {MAX_COLOR_SPACE_DEPTH} levels");
+            return None;
+        }
+
+        Self::new_inner(object, cache, depth)
     }
 
-    fn new_inner(object: Object<'_>, cache: &Cache) -> Option<Self> {
+    fn new_inner(object: Object<'_>, cache: &Cache, depth: u32) -> Option<Self> {
         if let Object::Name(name) = object {
             return Self::new_from_name(&name);
         } else if let Object::Array(color_array) = object {
@@ -186,6 +198,9 @@ impl ColorSpaceType {
 
                     // PdfCraft patch (48): cached by what the profile is read from (see
                     // `IccProfileKey`), not by the stream dictionary's bytes alone.
+                    // PdfCraft patch (74): what's kept is what the profile itself reads as. What
+                    // it falls back to depends on how deep it was met, and kept with the profile
+                    // a page could build a chain past the limit on spaces already read.
                     let read = || {
                         let data = icc_stream.raw_data();
                         let content = IccProfileKey::Content {
@@ -194,40 +209,37 @@ impl ColorSpaceType {
                         };
                         cache.get_or_insert_with(hash128(&content), || {
                             cache.count_icc_profile_read();
-                            if let Some(decoded) = icc_stream.decoded().ok().as_ref() {
-                                ICCProfile::new(decoded, num_components)
-                                    .map(|icc| {
-                                        // TODO: For SVG and PNG we can assume that the output color space is
-                                        // sRGB. If we ever implement PDF-to-PDF, we probably want to
-                                        // let the user pass the native color type and don't make this optimization
-                                        // if it's not sRGB.
-                                        if icc.is_srgb() {
-                                            Self::DeviceRgb
-                                        } else {
-                                            Self::ICCBased(icc)
-                                        }
-                                    })
-                                    .or_else(|| {
-                                        dict.get::<Object<'_>>(ALTERNATE)
-                                            .and_then(|o| Self::new(o, cache))
-                                    })
-                                    .or_else(|| match dict.get::<u8>(N) {
-                                        Some(1) => Some(Self::DeviceGray),
-                                        Some(3) => Some(Self::DeviceRgb),
-                                        Some(4) => Some(Self::DeviceCmyk),
-                                        _ => None,
-                                    })
-                            } else {
-                                None
-                            }
+                            let decoded = icc_stream.decoded().ok()?;
+                            Some(ICCProfile::new(&decoded, num_components).map(|icc| {
+                                // TODO: For SVG and PNG we can assume that the output color space is
+                                // sRGB. If we ever implement PDF-to-PDF, we probably want to
+                                // let the user pass the native color type and don't make this optimization
+                                // if it's not sRGB.
+                                if icc.is_srgb() {
+                                    Self::DeviceRgb
+                                } else {
+                                    Self::ICCBased(icc)
+                                }
+                            }))
                         })
                     };
-                    return match icc_stream_object(&color_array, &icc_stream) {
+                    let profile = match icc_stream_object(&color_array, &icc_stream) {
                         Some(object) => {
                             cache.get_or_insert_with(hash128(&IccProfileKey::Object(object)), read)
                         }
                         None => read(),
                     };
+                    return profile?
+                        .or_else(|| {
+                            dict.get::<Object<'_>>(ALTERNATE)
+                                .and_then(|o| Self::new(o, cache, depth + 1))
+                        })
+                        .or_else(|| match dict.get::<u8>(N) {
+                            Some(1) => Some(Self::DeviceGray),
+                            Some(3) => Some(Self::DeviceRgb),
+                            Some(4) => Some(Self::DeviceCmyk),
+                            _ => None,
+                        });
                 }
                 CALCMYK => return Some(Self::DeviceCmyk),
                 CALGRAY => {
@@ -246,19 +258,20 @@ impl ColorSpaceType {
                     return Some(Self::Lab(Lab::new(&lab_dict)?));
                 }
                 INDEXED | I => {
-                    return Some(Self::Indexed(Indexed::new(&color_array, cache)?));
+                    return Some(Self::Indexed(Indexed::new(&color_array, cache, depth)?));
                 }
                 SEPARATION => {
-                    return Some(Self::Separation(Separation::new(&color_array, cache)?));
+                    return Some(Self::Separation(Separation::new(&color_array, cache, depth)?));
                 }
                 DEVICE_N => {
-                    return Some(Self::DeviceN(DeviceN::new(&color_array, cache)?));
+                    return Some(Self::DeviceN(DeviceN::new(&color_array, cache, depth)?));
                 }
                 PATTERN => {
-                    let _ = iter.next::<Name<'_>>();
+                    // PdfCraft patch (72): the family is already read. Reading a name here too took
+                    // the underlying space when it was a name or a reference.
                     let cs = iter
                         .next::<Object<'_>>()
-                        .and_then(|o| ColorSpace::new(o, cache))
+                        .and_then(|o| ColorSpace::within(o, cache, depth + 1))
                         .unwrap_or(ColorSpace::device_rgb());
                     return Some(Self::Pattern(cs));
                 }
@@ -291,7 +304,12 @@ pub struct ColorSpace(Arc<ColorSpaceType>);
 impl ColorSpace {
     /// Create a new color space from the given object.
     pub(crate) fn new(object: Object<'_>, cache: &Cache) -> Option<Self> {
-        Some(Self(Arc::new(ColorSpaceType::new(object, cache)?)))
+        Self::within(object, cache, 0)
+    }
+
+    /// A colour space named by another, `depth` levels down.
+    fn within(object: Object<'_>, cache: &Cache, depth: u32) -> Option<Self> {
+        Some(Self(Arc::new(ColorSpaceType::new(object, cache, depth)?)))
     }
 
     /// Create a new color space from the name.
@@ -991,21 +1009,22 @@ pub(crate) struct Indexed {
 }
 
 impl Indexed {
-    fn new(array: &Array<'_>, cache: &Cache) -> Option<Self> {
+    fn new(array: &Array<'_>, cache: &Cache, depth: u32) -> Option<Self> {
         let mut iter = array.flex_iter();
         // Skip name
         let _ = iter.next::<Name<'_>>()?;
-        let base_color_space = ColorSpace::new(iter.next::<Object<'_>>()?, cache)?;
+        let base_color_space = ColorSpace::within(iter.next::<Object<'_>>()?, cache, depth + 1)?;
         let hival = iter.next::<u32>()?.min(u8::MAX as u32) as u8;
 
         let values = {
-            let data = iter
-                .next::<Stream<'_>>()
-                .and_then(|s| s.decoded().ok())
-                .or_else(|| {
-                    iter.next::<object::String<'_>>()
-                        .map(|s| Cow::Owned(s.to_vec()))
-                })?;
+            // PdfCraft patch (71): read once, as whichever it is. A failed read as a stream leaves
+            // a direct string in place but uses up a reference, so a table in an indirect string
+            // was lost, and the space with it.
+            let data = match iter.next::<Object<'_>>()? {
+                Object::Stream(s) => s.decoded().ok()?,
+                Object::String(s) => Cow::Owned(s.to_vec()),
+                _ => return None,
+            };
 
             let num_components = base_color_space.num_components();
 
@@ -1080,12 +1099,12 @@ fn eval_tint_transform(
 }
 
 impl Separation {
-    fn new(array: &Array<'_>, cache: &Cache) -> Option<Self> {
+    fn new(array: &Array<'_>, cache: &Cache, depth: u32) -> Option<Self> {
         let mut iter = array.flex_iter();
         // Skip `/Separation`
         let _ = iter.next::<Name<'_>>()?;
         let name = iter.next::<Name<'_>>()?;
-        let alternate_space = ColorSpace::new(iter.next::<Object<'_>>()?, cache)?;
+        let alternate_space = ColorSpace::within(iter.next::<Object<'_>>()?, cache, depth + 1)?;
         // PdfCraft patch (55): an unreadable tint transform keeps the space (see
         // `eval_tint_transform`).
         let tint_transform = iter.next::<Object<'_>>().and_then(|f| Function::new(&f));
@@ -1147,7 +1166,7 @@ pub(crate) struct DeviceN {
 }
 
 impl DeviceN {
-    fn new(array: &Array<'_>, cache: &Cache) -> Option<Self> {
+    fn new(array: &Array<'_>, cache: &Cache, depth: u32) -> Option<Self> {
         let mut iter = array.flex_iter();
         // Skip `/DeviceN`
         let _ = iter.next::<Name<'_>>()?;
@@ -1158,7 +1177,7 @@ impl DeviceN {
             .collect::<Vec<_>>();
         let num_components = u8::try_from(names.len()).ok()?;
         let all_none = names.iter().all(|n| n.as_str() == "None");
-        let alternate_space = ColorSpace::new(iter.next::<Object<'_>>()?, cache)?;
+        let alternate_space = ColorSpace::within(iter.next::<Object<'_>>()?, cache, depth + 1)?;
         // PdfCraft patch (55): an unreadable tint transform keeps the space (see
         // `eval_tint_transform`).
         let tint_transform = iter.next::<Object<'_>>().and_then(|f| Function::new(&f));
