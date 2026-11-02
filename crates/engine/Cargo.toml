@@ -46,6 +46,9 @@ tiff = "0.11"
 url = "2.5"
 idna = "1.1"
 icu_properties = "2.3"
+# Already in the graph through url: `%XX` escapes in mailto: addresses
+# (links::check_mail_parameters).
+percent-encoding = { workspace = true }
 unicode-segmentation = "1.13"
 # Already in the graph through lopdf. The workspace entry is std-only, so it builds for wasm too:
 # the weekday of a date in a date format (dates.rs).

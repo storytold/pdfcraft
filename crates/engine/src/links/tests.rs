@@ -325,3 +325,18 @@ fn hosts_are_shown_as_the_browser_receives_them() {
         assert_eq!(document_url(bad), Err(B::Malformed), "{bad}");
     }
 }
+
+/// `%` and two hex digits decode; any other `%` is kept as written, as the hand-written decoder
+/// this replaced did.
+#[test]
+fn percent_decode_keeps_a_percent_that_starts_no_escape() {
+    use super::percent_decode as dec;
+    assert_eq!(dec(b"%61ttach%3D%2a"), b"attach=*");
+    assert_eq!(dec(b"100%"), b"100%", "a lone %");
+    assert_eq!(dec(b"%G1"), b"%G1", "not a hex digit");
+    assert_eq!(dec(b"a%4"), b"a%4", "a truncated escape");
+    assert_eq!(dec(b"%+1%-1"), b"%+1%-1", "a sign is not a hex digit");
+    assert_eq!(dec(b"%%41"), b"%A");
+    assert_eq!(dec(b"%FF%00"), [0xFF, 0x00]);
+    assert_eq!(dec("%é".as_bytes()), "%é".as_bytes(), "a non-ASCII byte is not a hex digit");
+}
