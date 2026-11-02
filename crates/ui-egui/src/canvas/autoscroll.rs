@@ -3,7 +3,8 @@
 //! because egui's drag responses accept every pointer button. Also the edge scrolling of a
 //! text-selection drag.
 
-use egui::{Context, CursorIcon, Event, Key, PointerButton, Pos2, Stroke, Vec2, vec2};
+use super::press_origin_is_blocked;
+use egui::{Context, CursorIcon, Event, Key, PointerButton, Pos2, Rect, Stroke, Vec2, vec2};
 
 const DEAD_ZONE: f32 = 15.0;
 // Chromium's autoscroll_controller.cc uses distance^2.2 * 0.000008; its
@@ -47,13 +48,18 @@ impl AutoScroll {
 
     /// Run before the document's widgets. Starting is restricted to the unobstructed viewport;
     /// once started, moving outside that viewport still controls the speed.
-    pub(crate) fn update(&mut self, ui: &egui::Ui, viewport: egui::Rect, organize: bool) -> Vec2 {
-        self.update_for_platform(ui, viewport, organize, cfg!(target_os = "linux"))
+    pub(crate) fn update(&mut self, ui: &egui::Ui, viewport: egui::Rect, blocked: &[Rect], organize: bool) -> Vec2 {
+        self.update_for_platform(ui, viewport, blocked, organize, cfg!(target_os = "linux"))
     }
 
-    fn update_for_platform(&mut self, ui: &egui::Ui, viewport: egui::Rect, organize: bool, supported: bool) -> Vec2 {
+    /// Update the platform-selected middle-button behavior while excluding blocked press origins.
+    ///
+    /// `supported` selects latched auto-scroll; otherwise the held-button drag path is used. The
+    /// exclusion applies only when a gesture starts, so an accepted gesture can cross viewport
+    /// chrome without being cancelled.
+    fn update_for_platform(&mut self, ui: &egui::Ui, viewport: egui::Rect, blocked: &[Rect], organize: bool, supported: bool) -> Vec2 {
         if !supported {
-            return self.update_drag(ui, viewport);
+            return self.update_drag(ui, viewport, blocked);
         }
         let ctx = ui.ctx();
         let (pointer, middle_press, middle_down, middle_released, cancel, cancel_button, dt) = ctx.input(|i| {
@@ -99,6 +105,7 @@ impl AutoScroll {
             } else if !cancel
                 && !ctx.egui_wants_keyboard_input()
                 && viewport.intersect(ui.clip_rect()).contains(pressed_at)
+                && !press_origin_is_blocked(pressed_at, blocked)
                 && ctx.layer_id_at(pressed_at) == Some(ui.layer_id())
             {
                 self.anchor = Some(pressed_at);
@@ -119,7 +126,7 @@ impl AutoScroll {
 
     /// Without auto-scroll, a middle-button drag pans the view 1:1, like the Hand tool. Input is
     /// blocked from the press through the release, so the drag cannot also draw, select or move.
-    fn update_drag(&mut self, ui: &egui::Ui, viewport: egui::Rect) -> Vec2 {
+    fn update_drag(&mut self, ui: &egui::Ui, viewport: egui::Rect, blocked: &[Rect]) -> Vec2 {
         self.anchor = None;
         self.cancel_button = None;
         let ctx = ui.ctx();
@@ -145,6 +152,7 @@ impl AutoScroll {
             && self.drag.is_none()
             && !ctx.egui_wants_keyboard_input()
             && viewport.intersect(ui.clip_rect()).contains(pressed_at)
+            && !press_origin_is_blocked(pressed_at, blocked)
             && ctx.layer_id_at(pressed_at) == Some(ui.layer_id())
         {
             self.drag = Some(pressed_at);
@@ -264,12 +272,53 @@ mod tests {
         let mut output = ctx.run_ui(
             egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(Pos2::ZERO, vec2(400.0, 400.0))), events, focused, ..Default::default() },
             |ui| {
-                let delta = scroll.update_for_platform(ui, ui.max_rect(), false, false);
+                let delta = scroll.update_for_platform(ui, ui.max_rect(), &[], false, false);
                 check(scroll, delta);
             },
         );
         // This input-only test has no renderer to apply the generated font texture.
         output.textures_delta.clear();
+    }
+
+    fn gesture_frame(
+        ctx: &Context,
+        scroll: &mut AutoScroll,
+        events: Vec<Event>,
+        blocked: &[Rect],
+        supported: bool,
+        check: impl Fn(&AutoScroll, Vec2),
+    ) {
+        let mut output = ctx.run_ui(
+            egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(400.0, 400.0))), events, focused: true, ..Default::default() },
+            |ui| {
+                let delta = scroll.update_for_platform(ui, ui.max_rect(), blocked, false, supported);
+                check(scroll, delta);
+            },
+        );
+        output.textures_delta.clear();
+    }
+
+    /// Both platform paths reject ruler-originated presses and accept document-originated ones.
+    #[test]
+    fn middle_press_on_a_blocked_ruler_never_starts_scroll_but_document_press_does() {
+        let blocked = [Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(400.0, 24.0))];
+        let ruler = egui::pos2(100.0, 12.0);
+        let document = egui::pos2(100.0, 100.0);
+
+        for supported in [false, true] {
+            let ctx = Context::default();
+            let mut scroll = AutoScroll::default();
+            gesture_frame(&ctx, &mut scroll, vec![], &blocked, supported, |_, _| {});
+            gesture_frame(&ctx, &mut scroll, vec![Event::PointerMoved(ruler), middle(ruler, true)], &blocked, supported, |s, d| {
+                assert_eq!(d, Vec2::ZERO);
+                assert!(!s.active() && !s.panning(), "a ruler press must not start either middle-button mode");
+            });
+            gesture_frame(&ctx, &mut scroll, vec![middle(ruler, false)], &blocked, supported, |_, _| {});
+            gesture_frame(&ctx, &mut scroll, vec![Event::PointerMoved(document), middle(document, true)], &blocked, supported, |s, _| {
+                assert_eq!(s.active(), supported);
+                assert_eq!(s.panning(), !supported);
+            });
+        }
     }
 
     #[test]

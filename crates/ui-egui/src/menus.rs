@@ -344,6 +344,9 @@ impl PdfCraftApp {
             Node::submenu(tl!("Page display"), list(DISPLAY, &mut used)),
             Node::Separator,
         ];
+        if self.active.is_some() {
+            view.extend(list(&["view.rulers"], &mut used));
+        }
         view.extend(list(PANES, &mut used));
         view.push(Node::submenu(
             tl!("Side panels"),
@@ -496,6 +499,7 @@ impl PdfCraftApp {
             "view.layout.two_up" => Some(view.is_some_and(|v| v.layout == PageLayout::TwoUp)),
             "view.continuous" => Some(view.is_some_and(|v| v.continuous())),
             "view.page_gaps" => Some(view.is_some_and(|v| v.show_page_gaps)),
+            "view.rulers" => Some(self.show_rulers),
             "view.layout.cover" => Some(view.is_some_and(|v| v.cover)),
             "view.full_screen" => Some(self.full_screen),
             "view.read_mode" => Some(self.mode == crate::Mode::Read),

@@ -1,6 +1,6 @@
 # UI and interaction parity
 
-> **Last reviewed:** 2026-10-21 · **Last updated:** 2026-10-21 · **Change:** minor (Pages inspector thumbnail size slider and buttons #3808; full screen presents one page at a time #1459; the selected field nudges with the arrow keys in Prepare a form #2608) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-10-27 · **Last updated:** 2026-10-27 · **Change:** minor (read-only document rulers with a persisted View toggle; Pages inspector thumbnail size slider and buttons #3808; full screen presents one page at a time #1459; the selected field nudges with the arrow keys in Prepare a form #2608) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
 How PdfCraft's tools, panels, shortcuts and feel compare with Acrobat Pro's current interface (the
 2023+ "new Acrobat": All tools pane on the left, quick-action toolbar, Home view). Behaviour is
@@ -50,7 +50,7 @@ No dump of Acrobat's menu tree has been diffed against the registry yet (gap 24)
 | Moved comments drawn where they go while dragged | yes | yes: the comment's own pixels follow the pointer, the page shows it where it was until release; stamps and Fill & Sign marks also hide the original | shipped |
 | Object handles: corners keep proportion, edges free | yes | yes for added images and signatures; Shift on a corner keeps the proportions of comments, stamps and form fields (#2199); no Alt resize from the centre | shipped |
 | Arrange, align and distribute page objects | yes | fields only | partial |
-| Rulers, grids, snap to grid, guides | yes | no | planned |
+| Rulers, grids, snap to grid, guides | yes | read-only document rulers with adaptive units and pointer indicators | partial; draggable origins, grids, guides and snapping planned |
 | Cursor coordinates, line weights | yes | no | planned |
 | Measuring snap to paths, endpoints, midpoints, intersections | yes | yes | shipped |
 | Nudge selected objects with arrow keys (Shift for larger steps) | yes | yes in Edit text: a point, Shift ten points, for selected objects, images and an open paragraph's box (#1520); and in Prepare a form, for the selected field (#2608); a selected comment: a screen pixel, ⌘/Ctrl or Shift ten | shipped |
@@ -82,6 +82,7 @@ No dump of Acrobat's menu tree has been diffed against the registry yet (gap 24)
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-27 | minor | Read-only document rulers with a persisted View toggle, adaptive units and pointer indicators; draggable origins, grids, guides and snapping remain planned. |
 | 2026-10-21 | minor | Pages inspector thumbnail sizing (#3808), separate from page and Organize zoom; view setting retained on reload and exposed through UI control. Not persisted between sessions. |
 | 2026-10-15 | minor | A selected field nudges with the arrow keys in Prepare a form: a point, Shift ten points, one undo step per press (#2608) |
 | 2026-10-14 | minor | Full screen shows one fitted page (or spread) at a time on black with click and key paging, as Acrobat's Full Screen Mode (#379, #1459, #1353) |

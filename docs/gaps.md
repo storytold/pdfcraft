@@ -343,7 +343,7 @@ update the numbers.
 ### 16. UI precision gaps
 
 - **Missing:** moving several selected objects across pages (same-page moves shipped, #844), single-key tool accelerators,
-  rulers, grids and guides, loupe and dynamic zoom, multiple windows and split view, comment
+  draggable ruler origins and grids (read-only document rulers shipped), guides, loupe and dynamic zoom, multiple windows and split view, comment
   pop-ups that can be moved, connector lines, customisable quick tools; shortcut display and tool-mode bugs (#746, #721), macOS window controls
   (#789).
 - **Estimate:** 30–60 h. **Doc:** [ui-parity.md](ui-parity.md).
