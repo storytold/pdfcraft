@@ -305,6 +305,36 @@ fn spooler_arguments_and_printer_list() {
     assert_eq!(lp_args(&Job::default())[0], "-n", "no -d: the default printer");
 }
 
+/// The job name and owner, read from the `lp` arguments, since `lp_args` drops a value it can't
+/// pass on: the job must reach the spooler named, whatever its title holds (#5743).
+#[test]
+fn a_job_names_its_title_and_owner_to_the_spooler() {
+    let args_for = |title: &str, owner: Option<&str>| {
+        let job = Job { title: title.into(), ..Job::default() };
+        lp_args(&spool::with_job_info(&job, owner))
+    };
+    let option = |args: &[String], key: &str| {
+        let prefix = format!("com.apple.print.JobInfo.{key}=");
+        args.iter().find_map(|a| a.strip_prefix(prefix.as_str()).map(str::to_string))
+    };
+    let args = args_for("memo.pdf", Some("sam"));
+    assert_eq!(option(&args, "PMJobName").as_deref(), Some("memo.pdf"), "{args:?}");
+    assert_eq!(option(&args, "PMJobOwner").as_deref(), Some("sam"), "{args:?}");
+    // The title keeps its place as `-t`, in full.
+    assert!(args_for("Q3 report: a/b=\"c\".pdf", None).windows(2).any(|w| w[0] == "-t" && w[1] == "Q3 report: a/b=\"c\".pdf"));
+
+    let named = args_for("Q3 report: a/b=\"c\".pdf", None);
+    assert_eq!(option(&named, "PMJobName").as_deref(), Some("Q3_report__a_b__c_.pdf"), "what lp can't be given becomes _");
+    assert_eq!(option(&named, "PMJobOwner").as_deref(), Some("PdfCraft"), "no owner known: the filter still gets one");
+
+    for nothing_left in ["", "   ", "見積書", "/:=\""] {
+        assert_eq!(option(&args_for(nothing_left, Some("")), "PMJobName").as_deref(), Some("PdfCraft"), "{nothing_left:?}");
+    }
+    assert_eq!(option(&args_for("見積書2.pdf", None), "PMJobName").as_deref(), Some("___2.pdf"), "a part of it is kept");
+    let long = option(&args_for(&format!("a{}", "é".repeat(200)), None), "PMJobName").unwrap_or_default();
+    assert_eq!(long.len(), 64, "cut to what lp_args takes, on a multi-byte title too: {long}");
+}
+
 #[test]
 fn lpstat_output_is_untranslated() {
     // A localized lpstat (here Polish) is unreadable to parse_lpstat...

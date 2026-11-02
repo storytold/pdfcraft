@@ -143,14 +143,55 @@ pub(crate) fn printer_options_via_within(
     options
 }
 
+/// The keys the macOS print dialog names a job's title and owner under.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+const JOB_NAME_KEY: &str = "com.apple.print.JobInfo.PMJobName";
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+const JOB_OWNER_KEY: &str = "com.apple.print.JobInfo.PMJobOwner";
+
+/// `text` as a job option's value: `lp_args` passes on only printable ASCII, up to 64 bytes,
+/// without `/ : = "`, so anything else becomes `_`. Text with nothing left of it, such as a
+/// title in another script, takes `fallback`: the job must still name something.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn job_option_value(text: &str, fallback: &str) -> String {
+    let kept = |c: char| c.is_ascii_graphic() && !matches!(c, '/' | ':' | '=' | '"');
+    if !text.chars().any(kept) {
+        return fallback.to_string();
+    }
+    text.chars().take(64).map(|c| if kept(c) { c } else { '_' }).collect()
+}
+
+/// `job` naming its title and `owner` as a job from the macOS print dialog does. `lp` sends
+/// neither, and a driver's filter can depend on them: Kyocera's crashes without them, so nothing
+/// prints, while the same file sent with both does (#5743).
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub(crate) fn with_job_info(job: &Job, owner: Option<&str>) -> Job {
+    let mut named = job.clone();
+    named.options.push((JOB_NAME_KEY.to_string(), job_option_value(&job.title, "PdfCraft")));
+    named.options.push((JOB_OWNER_KEY.to_string(), job_option_value(owner.unwrap_or_default(), "PdfCraft")));
+    named
+}
+
+/// The job as the system spooler takes it.
+fn spooled(job: &Job) -> Job {
+    #[cfg(target_os = "macos")]
+    {
+        with_job_info(job, std::env::var("USER").ok().as_deref())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        job.clone()
+    }
+}
+
 pub fn submit(pdf: &[u8], job: &Job) -> Result<String, crate::PrintError> {
-    craft_print::submit(pdf, job).map_err(|e| crate::PrintError::Spool(e.to_string()))
+    craft_print::submit(pdf, &spooled(job)).map_err(|e| crate::PrintError::Spool(e.to_string()))
 }
 
 /// [`submit`], told `(sent, sheets)` as each sheet reaches the spooler (Windows; CUPS takes the
 /// whole PDF at once and reports nothing).
 pub fn submit_with_progress(pdf: &[u8], job: &Job, progress: &mut dyn FnMut(usize, usize)) -> Result<String, crate::PrintError> {
-    craft_print::submit_with_progress(pdf, job, progress).map_err(|e| crate::PrintError::Spool(e.to_string()))
+    craft_print::submit_with_progress(pdf, &spooled(job), progress).map_err(|e| crate::PrintError::Spool(e.to_string()))
 }
 
 pub fn open_printer_preferences(printer: &str) -> Result<(), crate::PrintError> {
