@@ -27,3 +27,5 @@ unicode-normalization = "0.1"
 
 [dev-dependencies]
 hayro-syntax = { workspace = true }
+pdfcraft-render = { workspace = true }
+proptest = { workspace = true }

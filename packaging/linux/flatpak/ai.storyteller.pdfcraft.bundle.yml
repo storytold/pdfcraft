@@ -45,16 +45,17 @@ finish-args:
   # Deliberately not granted: home/host filesystem access. No CUPS socket either: printing
   # runs the `lp` command (crates/print), which the freedesktop runtime doesn't ship, so Print
   # reports that the spooler is unavailable until it goes through the print portal.
+# The release runner's flatpak-builder has no eu-strip (elfutils), which its debuginfo pass runs
+# on cups-client's unstripped tools, in whichever module comes first after they're installed. The
+# app's own binaries come from the release tarball, already stripped.
+build-options:
+  no-debuginfo: true
 modules:
   # CUPS client tools for craft-print: the runtime has libcups but not lpstat/lp/lpoptions.
   # Linked statically against this release's libcups, so a runtime update can't break them;
   # the socket path matches the host's, which --socket=cups mounts.
   - name: cups-client
     buildsystem: simple
-    # The release runner's flatpak-builder has no eu-strip (elfutils), which the debuginfo pass
-    # runs on every binary this module compiles.
-    build-options:
-      no-debuginfo: true
     build-commands:
       - ./configure --prefix=/app --sysconfdir=/etc --localstatedir=/var --with-rundir=/run/cups
         --with-domainsocket=/run/cups/cups.sock --disable-shared --with-components=libcups
