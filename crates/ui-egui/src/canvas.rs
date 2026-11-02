@@ -1804,18 +1804,12 @@ impl PageHits<'_> {
             images,
             clip,
         } = *self;
-        // Crop mode owns presses on its page, including the controls beside its
-        // frame. Underlying paragraphs and the empty-page marquee must not take
-        // a crop button's press before the image module receives it.
+        // Crop mode owns every press on its page (`edit_text_ui::crop_hit`).
         if tool == QuickTool::EditText
             && can_modify
-            && let Some(selection) = view.image_selection.as_ref().filter(|s| s.page == page && s.crop.is_some())
+            && let Some(crop) = crate::edit_text_ui::crop_hit(view, page)
         {
-            return vec![crate::page_router::Hit::new(
-                crate::page_router::Owner::Picture { index: selection.index, part: crate::page_router::PicturePart::Body },
-                crate::page_cursor::Layer::Handle,
-                egui::CursorIcon::Default,
-            )];
+            return vec![crop];
         }
         let fields = if preparing {
             crate::prepare::hit(xf, info, page, form, field_tool, prepare_allowed, &view.prepare, p)
