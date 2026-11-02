@@ -3036,16 +3036,13 @@ fn the_selection_bar_stays_inside_the_pages_area() {
     h.state_mut().views[0].select_text(0, last, last);
     h.run_steps(4);
     let viewport = h.state().views[0].viewport_rect();
-    let (first, copy) = (h.get_by_label("Kommentar hinzufügen").rect(), h.get_by_label("Kopieren").rect());
-    let glyph = h.state().views[0].glyph_screen_pos(0, last).unwrap();
-    // The setup puts a bar opening at the glyph past the area's right edge.
-    assert!(
-        glyph.x + (copy.right() - first.left()) > viewport.right(),
-        "glyph at {}, bar {} wide, area {viewport:?}",
-        glyph.x,
-        copy.right() - first.left()
-    );
-    assert!(first.left() >= viewport.left() && copy.right() <= viewport.right(), "bar {first:?}..{copy:?} inside {viewport:?}");
+    // The bar's whole area, frame included, not only its first and last buttons.
+    let id = egui::Id::unique(("text-selection-actions", h.state().views[0].id.0));
+    let bar = h.ctx.memory(|m| m.area_rect(id)).expect("the selection bar is shown");
+    // The bar opens at the selection's left edge: past the area's right edge, without the clamp.
+    let anchor = h.state().views[0].glyph_screen_rect(0, last).unwrap().left();
+    assert!(anchor + bar.width() > viewport.right(), "selection at {anchor}, bar {} wide, area {viewport:?}", bar.width());
+    assert!(viewport.contains_rect(bar), "bar {bar:?} inside {viewport:?}");
 }
 
 /// `n` pages with one comment each, "Card 1" to "Card n".

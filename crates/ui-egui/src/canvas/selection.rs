@@ -76,9 +76,14 @@ impl DocView {
     /// Screen position of the centre of glyph `glyph` on `page`, if that page is on screen and its
     /// text layer is loaded (used by UI tests and automation to aim pointer input).
     pub fn glyph_screen_pos(&self, page: usize, glyph: usize) -> Option<Pos2> {
+        self.glyph_screen_rect(page, glyph).map(|r| r.center())
+    }
+
+    /// The screen rectangle of glyph `glyph` on `page`, when the page is on screen.
+    pub fn glyph_screen_rect(&self, page: usize, glyph: usize) -> Option<Rect> {
         let (_, xf) = self.screen_xforms.iter().find(|(p, _)| *p == page)?;
         let g = self.texts.get(&page)?.glyphs.get(glyph)?;
-        Some(xf.view_rect(g.rect).center())
+        Some(xf.view_rect(g.rect))
     }
 
     /// Selected text, if any (⌘C).
