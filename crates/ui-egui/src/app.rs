@@ -74,6 +74,7 @@ impl PdfCraftApp {
             view_defaults: Default::default(),
             show_rulers: false,
             units: Default::default(),
+            blank_paper: crate::paper::Paper::system(),
             date_format_draft: None,
             mode_override: None,
             left: LeftPanel::AllTools,
@@ -88,6 +89,7 @@ impl PdfCraftApp {
             space_hand: None,
             full_screen_tool: None,
             comment_prefs: Default::default(),
+            hotbar: Default::default(),
             theme: ThemeKind::Light,
             // A fresh install follows the desktop's appearance (#1248); saved settings override.
             theme_preference: ThemePreference::System,
@@ -119,6 +121,7 @@ impl PdfCraftApp {
             all_tools_query: String::new(),
             all_tools_tab: (None, false),
             recent: Vec::new(),
+            recent_limit: crate::RECENT_FILES_DEFAULT,
             reopen_last_session: false,
             restore_last_view: true,
             last_views: Vec::new(),
@@ -142,6 +145,8 @@ impl PdfCraftApp {
             #[cfg(all(test, not(target_arch = "wasm32")))]
             open_prepare_gate: None,
             pinned: Default::default(),
+            pinned_tools: Vec::new(),
+            pin_tool_search: String::new(),
             toast: None,
             toast_script: None,
             script_messages: std::collections::VecDeque::new(),
@@ -229,7 +234,6 @@ impl PdfCraftApp {
             last_copied_file: None,
             system_clipboard: true,
             clipboard_override: None,
-            v_pressed: false,
             attach_override: None,
             duplicate_draft: None,
             page_props_draft: None,
@@ -359,6 +363,46 @@ impl PdfCraftApp {
     pub fn render_pending(&self) -> bool {
         self.views.iter().any(|v| v.render_pending())
     }
+
+    /// Check whether a tool group is pinned to Home.
+    pub fn is_tool_pinned(&self, id: &str) -> bool {
+        self.pinned_tools.iter().any(|t| t == id)
+    }
+
+    /// Pin a tool group to Home. Returns true if newly pinned.
+    pub fn pin_tool(&mut self, id: &str) -> bool {
+        if pdfcraft_engine::catalog::group(id).is_none() {
+            return false;
+        }
+        if !self.is_tool_pinned(id) {
+            self.pinned_tools.push(id.to_string());
+            if let Some(g) = pdfcraft_engine::catalog::group(id) {
+                self.notify_fmt("Pinned {tool} to Home", &[("tool", tl!(g.label))]);
+            }
+            return true;
+        }
+        false
+    }
+
+    /// Unpin a tool group from Home.
+    pub fn unpin_tool(&mut self, id: &str) {
+        if let Some(pos) = self.pinned_tools.iter().position(|t| t == id) {
+            self.pinned_tools.remove(pos);
+            if let Some(g) = pdfcraft_engine::catalog::group(id) {
+                self.notify_fmt("Unpinned {tool} from Home", &[("tool", tl!(g.label))]);
+            }
+        }
+    }
+
+    /// Toggle a tool group's pinned state on Home. Returns whether it is now pinned.
+    pub fn toggle_pin_tool(&mut self, id: &str) -> bool {
+        if self.is_tool_pinned(id) {
+            self.unpin_tool(id);
+            false
+        } else {
+            self.pin_tool(id)
+        }
+    }
 }
 
 impl eframe::App for PdfCraftApp {
@@ -368,6 +412,10 @@ impl eframe::App for PdfCraftApp {
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
         // The button's release a window move or resize kept from egui.
         window_controls::release_after_desktop_grab(ctx, raw);
+        // The wheel after Alt+Tab back, before the mouse has moved (#1518).
+        let known = ctx.input(|i| i.pointer.latest_pos().is_some());
+        let size = ctx.input(|i| i.viewport().inner_rect).map_or(egui::Vec2::ZERO, |r| r.size());
+        drag_pointer::locate_wheel(raw, known, size, || drag_pointer::in_window(ctx));
         self.prepare_raw_input(ctx, raw);
         if raw.hovered_files.is_empty() && raw.dropped_files.is_empty() {
             return;

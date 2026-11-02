@@ -7,7 +7,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use egui::{Color32, CornerRadius, FontFamily, FontId, Pos2, Rect, Stroke};
+use egui::{Color32, CornerRadius, FontFamily, FontId, Pos2, Rect, Stroke, pos2};
 use pdfcraft_engine::{Edit, ObjectKind, ObjectTarget};
 use pdfcraft_render::DocInfo;
 
@@ -21,14 +21,16 @@ mod image;
 mod layout;
 
 pub(crate) use background::TextBackground;
-pub use image::{CropMode, ImageSelection};
-pub(crate) use image::{ImageAction, ImageCx, body_hit as picture_hit, handle_hit as picture_handle_hit, image_input};
+pub use image::{CropMode, DragTarget, ImageAction, ImageDrag, ImageHandle, ImageSelection, image_menu_id};
+pub(crate) use image::{
+    ImageCx, Matrix, body_hit as picture_hit, handle_hit as picture_handle_hit, image_context_menu, image_input, quad_contains, user_to_screen,
+};
 #[cfg(test)]
-use image::{rotate_knob, turn_degrees};
+use image::{rotate_knob, turn_degrees, turn_degrees_delta};
 #[cfg(test)]
 use layout::{DARK_EDITOR_FILL, contrast};
 pub(crate) use layout::{caret_color_on, editor_fill, editor_font, install_source_fonts};
-use layout::{color32, editor_galley, editor_job, look_of, luminance, unseen};
+use layout::{color32, editor_galley, editor_job, look_of, luminance, source_look, unseen};
 
 const ACCENT: Color32 = Color32::from_rgb(0x14, 0x73, 0xE6);
 
@@ -42,7 +44,22 @@ enum TextTarget {
 /// ~1000 tiny images on one page; stroking all of them every frame (plus a hover query
 /// per box) stalls the UI. Past this, only the selected and hovered boxes are outlined:
 /// hit-testing still covers every image, so nothing becomes unselectable.
-const MAX_OUTLINES: usize = 250;
+pub(crate) const MAX_OUTLINES: usize = 250;
+
+/// Format text ▸ Superscript or Subscript on `text`: on the `selection` (bytes of `text`), or all
+/// of it without one ([`pdfcraft_engine::text_script::toggle`]). A selection follows the
+/// converted characters. Whether the text changed.
+pub(crate) fn toggle_script(text: &mut String, selection: &mut Option<std::ops::Range<usize>>, script: pdfcraft_engine::text_script::Script) -> bool {
+    if selection.as_ref().is_some_and(|r| r.is_empty()) {
+        *selection = None;
+    }
+    let Some((toggled, range)) = pdfcraft_engine::text_script::toggle(text, selection.as_ref(), script) else { return false };
+    *text = toggled;
+    if selection.is_some() {
+        *selection = Some(range);
+    }
+    true
+}
 
 /// A paragraph being edited.
 #[derive(Clone, Debug, PartialEq)]
@@ -67,7 +84,7 @@ pub struct LineEditor {
     /// Current screen-space size. Recomputed from the current page transform before painting.
     size: f32,
     /// Take the keyboard focus on the next frame.
-    pub(crate) focus: bool,
+    pub focus: bool,
     /// Whether the text box had the keyboard at the end of the editor's last frame
     /// ([`lost_focus_once`]).
     had_focus: bool,
@@ -78,6 +95,7 @@ pub struct LineEditor {
     /// (Calibri reads as Helvetica) can be the one picked, so comparing `look` with `look0` alone
     /// would miss the choice.
     family_chosen: bool,
+    size_chosen: bool,
     /// Underline, line spacing (× size; 0 = the paragraph's own), character spacing (pt) and
     /// horizontal scale (%), and what they were.
     pub extras: Extras,
@@ -226,10 +244,7 @@ impl LineEditor {
         }
         let base = self.source.as_ref().map(|(block, _)| block.base_font.as_str()).unwrap_or_default();
         // "ABCDEF+Calibri" is a subset of Calibri.
-        let name = match base.split_once('+') {
-            Some((tag, rest)) if tag.len() == 6 && tag.bytes().all(|b| b.is_ascii_uppercase()) => rest,
-            _ => base,
-        };
+        let name = pdfcraft_engine::strip_subset_tag(base);
         if name.is_empty() { tl!("Keep source fonts").to_string() } else { name.to_string() }
     }
 
@@ -254,7 +269,7 @@ impl LineEditor {
 
     /// Whether the paragraph with `text` in it differs from what was opened.
     fn changes_with(&self, text: &str) -> bool {
-        text != self.original || self.look != self.look0 || self.extras != self.extras0 || self.family_chosen
+        text != self.original || self.look != self.look0 || self.extras != self.extras0 || self.family_chosen || self.size_chosen
     }
 
     /// Extra width permitted by the editor. Source containers now remain fixed.
@@ -273,7 +288,7 @@ impl LineEditor {
         let mut style = pdfcraft_engine::BlockStyle {
             resource: self.font_resource.clone(),
             family: (l.family != o.family || self.family_chosen || l.bold != o.bold || l.italic != o.italic).then_some((l.family, l.bold, l.italic)),
-            size: (l.size != o.size).then_some(l.size),
+            size: (self.size_chosen || l.size != o.size).then_some(l.size),
             color: (l.color != o.color).then_some(l.color),
             // The whole paragraph's alignment when it was picked, or when the rows' own were
             // dropped for it (the rows are where those put them, so leaving it out keeps them there).
@@ -319,14 +334,22 @@ impl LineEditor {
         self.rect
     }
 
-    /// After applying formatting: the paragraph now has it. The selection stays, as the box still
-    /// shows it, so a second alignment or format picked for it applies to the same rows.
+    /// An explicit size commit also normalizes a mixed selection to the displayed value.
+    pub(crate) fn choose_size(&mut self, size: f64) {
+        self.look.size = size;
+        self.size_chosen = true;
+    }
+
+    /// After applying formatting: the paragraph now has it. Its old byte selection is cleared;
+    /// the rewritten paragraph may have different text or geometry.
     pub fn applied(&mut self) {
+        self.size_chosen = false;
         self.font_resource = None;
         self.family_chosen = false;
         self.look0 = self.look.clone();
         self.extras0 = self.extras;
         self.original = self.text.clone();
+        self.selection = None;
         // The page now has this text: the box's history restarts, even when the format left the
         // text as it was, so a Redo from before can't put undone typing back on top of it.
         self.typing_from = None;
@@ -353,6 +376,120 @@ impl LineEditor {
         self.original = self.text.clone();
     }
 
+    fn current_formatting(&self, sources: &[(String, String)]) -> SelectionFormatting {
+        SelectionFormatting {
+            font_shown: self.font_shown(sources),
+            size: Some(self.look.size),
+            family: Some(self.look.family),
+            bold: Some(self.look.bold),
+            italic: Some(self.look.italic),
+            color: Some(self.look.color),
+        }
+    }
+
+    pub fn selection_formatting(&self, sources: &[(String, String)]) -> SelectionFormatting {
+        let Some((block, lines)) = &self.source else {
+            return self.current_formatting(sources);
+        };
+
+        let spans = block.edited_spans(&self.text);
+        let matching_lines: Vec<&pdfcraft_engine::TextLine> = match &self.selection {
+            Some(range) if range.start < range.end => {
+                spans.iter().filter(|(span, _)| span.start < range.end && span.end > range.start).filter_map(|(_, idx)| lines.get(*idx)).collect()
+            }
+            _ => spans.iter().filter_map(|(_, idx)| lines.get(*idx)).collect(),
+        };
+
+        let Some(first) = matching_lines.first().copied() else {
+            return self.current_formatting(sources);
+        };
+
+        let line_font = |l: &pdfcraft_engine::TextLine| -> String {
+            if let Some((_, face)) = sources.iter().find(|(res, _)| res == &l.font) {
+                return face.clone();
+            }
+            let base = l.base_font.as_str();
+            let name = pdfcraft_engine::strip_subset_tag(base);
+            if let Some((_, face)) = sources.iter().find(|(_, face)| face.as_str() == name) {
+                return face.clone();
+            }
+            let look = look_of_line(l);
+            let lower = name.to_ascii_lowercase();
+            if ["times", "serif", "roman", "courier", "helvetica", "arial"].iter().any(|s| lower.contains(s)) {
+                return look.family.label().to_string();
+            }
+            if name.is_empty() { tl!("Keep source fonts").to_string() } else { name.to_string() }
+        };
+
+        let first_font = line_font(first);
+        let same_font = matching_lines.iter().skip(1).all(|l| line_font(l) == first_font);
+        let font_shown = if same_font {
+            if self.font_resource.is_some() || self.look.family != self.look0.family || self.family_chosen {
+                self.font_shown(sources)
+            } else {
+                first_font
+            }
+        } else {
+            tl!("Mixed").to_string()
+        };
+
+        let first_size = (first.size * 10.0).round() / 10.0;
+        let same_size = matching_lines.iter().skip(1).all(|l| ((l.size * 10.0).round() / 10.0 - first_size).abs() < 0.05);
+        let size = if same_size { Some(first_size) } else { None };
+
+        let first_look = look_of_line(first);
+        let same_family = matching_lines.iter().skip(1).all(|l| look_of_line(l).family == first_look.family);
+        let family = if same_family { Some(first_look.family) } else { None };
+        let same_bold = matching_lines.iter().skip(1).all(|l| l.bold == first.bold);
+        let bold = if same_bold { Some(first.bold) } else { None };
+        let same_italic = matching_lines.iter().skip(1).all(|l| l.italic == first.italic);
+        let italic = if same_italic { Some(first.italic) } else { None };
+        let same_color = matching_lines.iter().skip(1).all(|l| l.color == first.color);
+        let color = if same_color { Some(first.color) } else { None };
+
+        SelectionFormatting { font_shown, size, family, bold, italic, color }
+    }
+
+    pub(crate) fn sync_selection_look(&mut self, fmt: &SelectionFormatting) {
+        if let Some(sz) = fmt.size {
+            self.look.size = sz;
+            self.look0.size = sz;
+        } else {
+            if self.look.size <= 0.0 {
+                self.look.size = 12.0;
+            }
+            self.look0.size = self.look.size;
+        }
+        if let Some(f) = fmt.family {
+            self.look.family = f;
+            self.look0.family = f;
+        }
+        match fmt.bold {
+            Some(b) => {
+                self.look.bold = b;
+                self.look0.bold = b;
+            }
+            None => {
+                self.look.bold = false;
+                self.look0.bold = false;
+            }
+        }
+        match fmt.italic {
+            Some(it) => {
+                self.look.italic = it;
+                self.look0.italic = it;
+            }
+            None => {
+                self.look.italic = false;
+                self.look0.italic = false;
+            }
+        }
+        if let Some(c) = fmt.color {
+            self.look.color = c;
+            self.look0.color = c;
+        }
+    }
+
     /// The text changed from `before` through the box's own typing (typing, Undo, Redo): rows
     /// aligned on their own keep their alignment, and a row Undo brings back gets its own back.
     pub(crate) fn follow_typed_rows(&mut self, ctx: &egui::Context, before: &str) {
@@ -365,6 +502,20 @@ impl LineEditor {
             look.aligns = pdfcraft_engine::paragraph_align::remap(before, &self.text, &look.aligns);
         }
     }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct SelectionFormatting {
+    pub font_shown: String,
+    pub size: Option<f64>,
+    pub family: Option<pdfcraft_engine::FontFamily>,
+    pub bold: Option<bool>,
+    pub italic: Option<bool>,
+    pub color: Option<[f64; 3]>,
+}
+
+fn look_of_line(l: &pdfcraft_engine::TextLine) -> pdfcraft_engine::AddedText {
+    source_look(&l.base_font, l.size, l.color, l.bold, l.italic)
 }
 
 /// What a drag on a paragraph box takes hold of.
@@ -463,7 +614,7 @@ pub(crate) fn hit(xf: &PageXform, info: &DocInfo, page: usize, lines: &[pdfcraft
     })
 }
 
-fn user_box(xf: &PageXform, info: &DocInfo, page: usize, r: Rect) -> [f64; 4] {
+pub(crate) fn user_box(xf: &PageXform, info: &DocInfo, page: usize, r: Rect) -> [f64; 4] {
     let p = &info.pages[page];
     let (a, b) = (xf.screen_to_view(r.min), xf.screen_to_view(r.max));
     let (u, v) = (p.view_to_user(a.0, a.1), p.view_to_user(b.0, b.1));
@@ -505,6 +656,7 @@ fn open_editor(cx: PageToolContext<'_>, lines: &[pdfcraft_engine::TextBlock], bo
         look: look_of(l),
         look0: look_of(l),
         family_chosen: false,
+        size_chosen: false,
         extras: Extras::default(),
         extras0: Extras::default(),
         typing_from: None,
@@ -796,23 +948,26 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, i
                     }
                 }
                 look = Some((Arc::clone(&output.galley), output.galley_pos));
-                if let Some(cursor) = output.cursor_range {
-                    let selected = cursor.as_sorted_char_range();
-                    let byte = |index| ed.text.char_indices().nth(index).map_or(ed.text.len(), |(at, _)| at);
-                    ed.selection = (!selected.is_empty()).then(|| byte(selected.start.into())..byte(selected.end.into()));
-                }
                 let r = output.response;
-                if r.changed() {
-                    ed.follow_typed_rows(ctx, &before);
-                    // The next pass measures the updated draft with the Apply/Save rewrite.
-                    ctx.request_repaint();
-                }
                 if ed.focus {
                     r.request_focus();
                     if let Some(range) = &ed.selection {
                         reselect(ui.ctx(), input, &ed.text, range);
                     }
                     ed.focus = false;
+                } else if r.has_focus() {
+                    if let Some(cursor) = output.cursor_range {
+                        let selected = cursor.as_sorted_char_range();
+                        let byte = |index| ed.text.char_indices().nth(index).map_or(ed.text.len(), |(at, _)| at);
+                        ed.selection = (!selected.is_empty()).then(|| byte(selected.start.into())..byte(selected.end.into()));
+                    } else {
+                        ed.selection = None;
+                    }
+                }
+                if r.changed() {
+                    ed.follow_typed_rows(ctx, &before);
+                    // The next pass measures the updated draft with the Apply/Save rewrite.
+                    ctx.request_repaint();
                 }
                 let lost = lost_focus_once(&r, &mut ed.had_focus);
                 let esc = ui.input(|i| i.key_pressed(egui::Key::Escape));
@@ -1033,6 +1188,22 @@ C", &picked
         assert_eq!(at(f32::NAN, 5.0), 0.0);
     }
 
+    #[test]
+    fn the_rotate_knob_measures_clockwise_delta_from_drag_start() {
+        let c = Pos2::new(100.0, 100.0);
+        // Start dragging at 45° clockwise from top:
+        let r = 50.0_f32;
+        let start = c + egui::vec2(r * 45.0_f32.to_radians().sin(), -r * 45.0_f32.to_radians().cos());
+        // At start position, delta is 0:
+        assert!(turn_degrees_delta(c, start, start, false).abs() < 1e-3);
+        // Move by +15° (to 60°):
+        let p_60 = c + egui::vec2(r * 60.0_f32.to_radians().sin(), -r * 60.0_f32.to_radians().cos());
+        assert!((turn_degrees_delta(c, start, p_60, false) - 15.0).abs() < 1e-2);
+        // Move by -10° (to 35°):
+        let p_35 = c + egui::vec2(r * 35.0_f32.to_radians().sin(), -r * 35.0_f32.to_radians().cos());
+        assert!((turn_degrees_delta(c, start, p_35, false) + 10.0).abs() < 1e-2);
+    }
+
     /// An app with one text document open, and an editor on its first paragraph.
     fn preview_app() -> (crate::PdfCraftApp, LineEditor) {
         let mut app = crate::PdfCraftApp::new();
@@ -1060,11 +1231,36 @@ C", &picked
             look: look_of(&block),
             look0: look_of(&block),
             family_chosen: false,
+            size_chosen: false,
             extras: Extras::default(),
             extras0: Extras::default(),
             typing_from: None,
         };
         (app, ed)
+    }
+
+    #[test]
+    fn review_committing_the_shown_size_applies_it_to_a_mixed_selection() {
+        let (_app, mut ed) = preview_app();
+        ed.selection = Some(0..2);
+        let mut fmt = ed.current_formatting(&[]);
+        fmt.size = None;
+        ed.sync_selection_look(&fmt);
+        let shown = ed.look.size;
+        ed.choose_size(shown);
+        assert!(ed.has_changes());
+        assert_eq!(ed.style().ranges[0].size, Some(shown));
+        ed.applied();
+        assert!(ed.style().ranges.is_empty());
+    }
+
+    #[test]
+    fn review_a_caret_only_script_formats_the_whole_draft() {
+        let mut text = "x2".to_string();
+        let mut caret = Some(1..1);
+        assert!(toggle_script(&mut text, &mut caret, pdfcraft_engine::text_script::Script::Super));
+        assert_eq!(text, "ˣ²");
+        assert_eq!(caret, None);
     }
 
     #[test]
@@ -1223,5 +1419,54 @@ C", &picked
         assert_eq!(caret_color_on(Color32::from_rgb(0xFF, 0xFF, 0xF4)), Color32::BLACK);
         assert_eq!(caret_color_on(Color32::BLACK), Color32::WHITE);
         assert_eq!(caret_color_on(DARK_EDITOR_FILL), Color32::WHITE);
+    }
+
+    #[test]
+    fn superscript_and_subscript_conversion() {
+        use pdfcraft_engine::text_script::Script;
+        let (mut text, mut selection) = ("E = mc2".to_string(), Some(6..7));
+        assert!(toggle_script(&mut text, &mut selection, Script::Super));
+        assert_eq!((text.as_str(), selection.clone()), ("E = mc²", Some(6..8)), "the selection follows the converted character");
+        assert!(toggle_script(&mut text, &mut selection, Script::Super));
+        assert_eq!((text.as_str(), selection), ("E = mc2", Some(6..7)));
+
+        // No selection: the whole text. H and O have no subscript form, and it still toggles back.
+        let (mut text, mut none) = ("H2O".to_string(), None);
+        assert!(toggle_script(&mut text, &mut none, Script::Sub));
+        assert_eq!((text.as_str(), none.clone()), ("H₂O", None));
+        assert!(toggle_script(&mut text, &mut none, Script::Sub));
+        assert_eq!(text, "H2O");
+    }
+
+    #[test]
+    fn value_based_line_spacing_in_style() {
+        let ed = LineEditor {
+            page: 0,
+            block: 0,
+            text: "Paragraph text".to_string(),
+            original: "Paragraph text".to_string(),
+            rect: egui::Rect::ZERO,
+            source_rect: [0.0; 4],
+            max_width: 100.0,
+            overflow: false,
+            selection: None,
+            font_resource: None,
+            fonts: std::collections::BTreeMap::new(),
+            source: None,
+            multiline: false,
+            size: 12.0,
+            family_chosen: false,
+            size_chosen: false,
+            focus: true,
+            had_focus: false,
+            look: pdfcraft_engine::AddedText::default(),
+            look0: pdfcraft_engine::AddedText::default(),
+            extras: Extras { line_spacing: 1.33, underline: true, ..Default::default() },
+            extras0: Extras::default(),
+            typing_from: None,
+        };
+        let style = ed.style();
+        assert_eq!(style.line_spacing, Some(1.33));
+        assert_eq!(style.underline, Some(true));
     }
 }

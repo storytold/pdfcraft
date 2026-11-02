@@ -315,7 +315,10 @@ fn on_page(added: &[Added], page: usize) -> Vec<(usize, &Added)> {
 }
 
 pub(crate) fn hits_added(xf: &PageXform, info: &DocInfo, page: usize, added: &[Added], point: Pos2) -> bool {
-    on_page(added, page).iter().any(|(_, a)| screen_rect(xf, info, page, a.content.rect()).expand(2.0).contains(point))
+    on_page(added, page)
+        .iter()
+        .filter(|(_, a)| matches!(a.content, AddedContent::Text(_)))
+        .any(|(_, a)| screen_rect(xf, info, page, a.content.rect()).expand(2.0).contains(point))
 }
 
 fn handles(r: Rect) -> [(Pos2, bool, bool); 4] {
@@ -355,7 +358,7 @@ pub(crate) fn hit(xf: &PageXform, info: &DocInfo, page: usize, added: &[Added], 
     if !xf.rect.contains(p) {
         return None;
     }
-    let items = on_page(added, page);
+    let items: Vec<(usize, &Added)> = on_page(added, page).into_iter().filter(|(_, a)| matches!(a.content, AddedContent::Text(_))).collect();
     let selected = view.content.selected.filter(|s| s.0 == page).and_then(|(_, si)| items.iter().find(|(i, _)| *i == si));
     if let Some((index, a)) = selected
         && let Some((_, left, top)) = handles(screen_rect(xf, info, page, a.content.rect())).into_iter().find(|(c, ..)| c.distance(p) <= 6.0)
@@ -390,11 +393,10 @@ pub(crate) fn page_input(
             let end = pointer.unwrap_or(start);
             if let Some((sp, si)) = cv.selected
                 && sp == page
-                && let Some((_, a)) = on_page(added, page).into_iter().find(|(i, _)| *i == si)
+                && let Some((_, a)) = on_page(added, page).into_iter().find(|(i, a)| *i == si && matches!(a.content, AddedContent::Text(_)))
                 && (end - start).length() >= 1.0
             {
-                let keep = matches!(a.content, AddedContent::Image(_));
-                let r = dragged(screen_rect(xf, info, page, a.content.rect()), grab, end - start, keep);
+                let r = dragged(screen_rect(xf, info, page, a.content.rect()), grab, end - start, false);
                 let (p0, p1) = (to_display(xf, info, page, r.left_bottom()), to_display(xf, info, page, r.right_top()));
                 let mut rect = [p0[0], p0[1], p1[0], p1[1]];
                 if let AddedContent::Text(t) = &a.content
@@ -409,7 +411,7 @@ pub(crate) fn page_input(
         return consumed;
     }
     let Some(p) = pointer.filter(|p| xf.rect.contains(*p)) else { return consumed };
-    let items = on_page(added, page);
+    let items: Vec<(usize, &Added)> = on_page(added, page).into_iter().filter(|(_, a)| matches!(a.content, AddedContent::Text(_))).collect();
     let hit = items.iter().rev().find(|(_, a)| screen_rect(xf, info, page, a.content.rect()).expand(2.0).contains(p)).map(|(i, a)| (*i, *a));
     let selected_rect = cv
         .selected
@@ -515,6 +517,9 @@ pub(crate) fn paint_page(
 ) {
     let cv = &view.content;
     for (i, a) in on_page(added, page) {
+        if matches!(a.content, AddedContent::Image(_)) {
+            continue;
+        }
         if cv.draft.as_ref().is_some_and(|d| d.page == page && d.index == Some(i)) {
             continue;
         }
@@ -537,9 +542,52 @@ pub(crate) fn paint_page(
     }
 }
 
+/// The image controller owns image selection; the added-content panel follows the same XObject.
+pub(crate) fn sync_image_selection(view: &mut DocView, page: usize, images: &[pdfcraft_engine::PageImage], added: &[Added]) {
+    let Some(selection) = view.image_selection.as_ref().filter(|selection| selection.page == page) else { return };
+    if view.content.draft.is_some() {
+        return;
+    }
+    let object = images
+        .get(selection.index)
+        .and_then(|image| image.object)
+        .filter(|object| images.iter().filter(|image| image.object == Some(*object)).count() == 1);
+    view.content.selected = object.and_then(|object| {
+        let mut matches = added
+            .iter()
+            .filter(|item| item.page == page)
+            .enumerate()
+            .filter(|(_, item)| matches!(&item.content, AddedContent::Image(image) if image.image == object));
+        let selected = matches.next().map(|(index, _)| (page, index));
+        if matches.next().is_none() { selected } else { None }
+    });
+    view.content.select_added = None;
+    view.content.grab = None;
+}
+
+/// Leaving the image controller cannot leave a hidden added image owning keyboard actions.
+pub(crate) fn release_image_selection(view: &mut DocView, added: &[Added]) {
+    if view.content.draft.is_some() {
+        return;
+    }
+    let image_selected = view.content.selected.is_some_and(|(page, index)| {
+        added.iter().filter(|item| item.page == page).nth(index).is_some_and(|item| matches!(item.content, AddedContent::Image(_)))
+    });
+    if image_selected {
+        view.content.selected = None;
+        view.content.select_added = None;
+        view.content.grab = None;
+    }
+}
+
 /// Delete removes the selected item; Escape clears the selection.
-pub(crate) fn keys(ctx: &egui::Context, view: &mut DocView) {
-    if view.content.selected.is_none() || view.content.draft.is_some() || ctx.egui_wants_keyboard_input() {
+pub(crate) fn keys(ctx: &egui::Context, view: &mut DocView, image_controller_active: bool) {
+    if image_controller_active && view.image_selection.is_some()
+        || matches!(view.pending_edit.as_ref(), Some(Edit::EditPageImage { .. }))
+        || view.content.selected.is_none()
+        || view.content.draft.is_some()
+        || ctx.egui_wants_keyboard_input()
+    {
         return;
     }
     let (del, esc) = ctx.input(|i| (i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace), i.key_pressed(egui::Key::Escape)));
@@ -909,7 +957,7 @@ impl crate::PdfCraftApp {
     }
 
     /// Copy Image: image `index` on `page`, at its own resolution, to the clipboard.
-    pub(crate) fn copy_page_image(&mut self, page: usize, index: usize) -> bool {
+    pub fn copy_page_image(&mut self, page: usize, index: usize) -> bool {
         // A newer copy wins over a whole-document copy still reading its pages.
         self.document_copy = None;
         let Some((_, id)) = self.active_ids() else { return false };
@@ -921,12 +969,13 @@ impl crate::PdfCraftApp {
             #[cfg(not(target_arch = "wasm32"))]
             if self.system_clipboard {
                 let img = arboard::ImageData { width: w as usize, height: h as usize, bytes: std::borrow::Cow::Borrowed(&rgba) };
-                arboard::Clipboard::new().and_then(|mut c| c.set_image(img)).map_err(|e| e.to_string())?;
+                crate::os_clipboard::with(|c| c.set_image(img)).map_err(|e| e.to_string())?;
             }
             #[cfg(target_arch = "wasm32")]
             if self.system_clipboard {
                 return Err("the web version can't put images on the clipboard yet; use Save Image As".to_string());
             }
+            self.last_copied_file = None;
             self.last_copied_image = Some((w, h, rgba));
             Ok((w, h))
         });
@@ -943,17 +992,26 @@ impl crate::PdfCraftApp {
     }
 
     /// The picture's visible box on its page, in user space.
-    fn page_image_box(&self, page: usize, index: usize) -> Option<[f64; 4]> {
+    pub(crate) fn page_image_box(&self, page: usize, index: usize) -> Option<[f64; 4]> {
         let (_, id) = self.active_ids()?;
         let image = self.session.get(id)?.page_images(page).into_iter().nth(index)?;
         Some(image.visible_rect.unwrap_or(image.rect))
     }
 
     /// Cut: copy the picture, and only when that worked take it off the page (one undo step).
-    pub(crate) fn cut_page_image(&mut self, page: usize, index: usize) {
-        if self.copy_page_image(page, index) {
-            self.apply_edit(Edit::EditPageImage { page, index, change: pdfcraft_engine::ImageEdit::Delete });
+    pub(crate) fn cut_page_image(&mut self, page: usize, index: usize) -> bool {
+        let Some((view, id)) = self.active_ids() else { return false };
+        if self.session.get(id).is_some_and(|doc| !doc.allows_modification()) {
+            self.notify_error(tl!("The document's security settings don't allow this change"));
+            return false;
         }
+        if !self.copy_page_image(page, index) || !self.apply_edit(Edit::EditPageImage { page, index, change: pdfcraft_engine::ImageEdit::Delete }) {
+            return false;
+        }
+        if let Some(view) = self.views.get_mut(view) {
+            view.image_selection = None;
+        }
+        true
     }
 
     /// Redact image: a redaction mark over the whole picture. It is applied, like any mark, from
@@ -1012,50 +1070,203 @@ impl crate::PdfCraftApp {
     pub fn add_image(&mut self, name: String, bytes: Vec<u8>) {
         let Some((i, id)) = self.active_ids() else { return };
         let page = self.views[i].current;
-        let before = self.session.get(id).map_or(0, |d| d.added().iter().filter(|a| a.page == page).count());
+        let before_img = self.session.get(id).map_or(0, |d| d.page_images(page).len());
+        let before_added = self.session.get(id).map_or(0, |d| d.added().iter().filter(|a| a.page == page).count());
         if self.apply_edit(Edit::AddImage { page, rect: None, name, bytes: std::sync::Arc::new(bytes) }) {
-            self.views[i].content.select_added = Some((page, before));
+            self.views[i].content.selected = Some((page, before_added));
+            self.views[i].content.select_added = Some((page, before_added));
+            self.views[i].image_selection = Some(crate::edit_text_ui::ImageSelection::at(page, before_img));
+            self.quick_tool = crate::QuickTool::EditText;
             self.left = crate::LeftPanel::Tool("edit");
             self.left_open = true;
         }
     }
 
-    /// Whether ⌘V / Ctrl+V was let go this frame. egui-winit swallows that press (with a Paste
-    /// event only if the clipboard holds text), while a plain V press always comes through: a
-    /// release of V with no press of V since the last one is the shortcut, even when ⌘ or Ctrl
-    /// was let go first. Read every frame, dialogs or not, so a press is never missed.
-    pub(crate) fn paste_key_released(&mut self, ctx: &egui::Context) -> bool {
-        let mut released = false;
-        ctx.input(|inp| {
-            for e in &inp.events {
-                if let egui::Event::Key { key: egui::Key::V, pressed, .. } = e {
-                    released |= !*pressed && !self.v_pressed;
-                    self.v_pressed = *pressed;
-                }
+    /// Whether there is an image in the in-memory clipboard or system clipboard ready to paste.
+    pub fn can_paste_image(&self) -> bool {
+        if let Some(crate::create_ui::Clip::Image { .. }) = self.clipboard_override.as_ref() {
+            return true;
+        }
+        if self.clipboard_override.is_some() {
+            return false;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if self.system_clipboard {
+                return matches!(crate::os_clipboard::for_image_paste(), Some(crate::create_ui::Clip::Image { .. }));
             }
-        });
-        released
+        }
+        self.last_copied_image.is_some() || self.last_copied_file.is_some()
     }
 
-    /// ⌘V / Ctrl+V with a picture on the system clipboard (a screenshot, a picture copied in a
-    /// browser) places it on the current page, as Add Image does.
-    /// Organize Pages keeps ⌘V for pages, Prepare Form for fields, and text fields for text.
-    pub(crate) fn paste_image_key(&mut self, i: usize, ctx: &egui::Context, pasted: bool) {
-        let free = self.dialog.is_none() && !self.palette_open && !ctx.egui_wants_keyboard_input();
-        let Some(view) = self.views.get(i) else { return };
-        if !pasted || !free || view.organize || view.forms.focus.is_some() || self.is_preparing() {
-            return;
+    /// Paste the integration's delivered pixels without rereading a clipboard that may have changed.
+    pub(crate) fn paste_received_image(&mut self, page: usize, image: &egui::ColorImage) -> bool {
+        let [width, height] = image.size;
+        let pixels = width.checked_mul(height);
+        let bytes = pixels.and_then(|n| n.checked_mul(4));
+        if width == 0
+            || height == 0
+            || width > crate::create_ui::MAX_IMAGE_SIDE
+            || height > crate::create_ui::MAX_IMAGE_SIDE
+            || pixels != Some(image.pixels.len())
+            || bytes.is_none_or(|n| n > crate::create_ui::MAX_IMAGE_BYTES)
+        {
+            self.notify_error("the clipboard image is empty, malformed or exceeds size limits");
+            return false;
         }
-        let clip = match self.clipboard_override.clone() {
-            Some(c) => Some(c),
-            #[cfg(not(target_arch = "wasm32"))]
-            None if self.system_clipboard => crate::create_ui::read_clipboard(),
-            None => None,
+        let rgba = image.pixels.iter().flat_map(egui::Color32::to_srgba_unmultiplied).collect();
+        let delivered = crate::create_ui::Clip::Image { width, height, rgba };
+        self.paste_image_with_system(page, None, None, None, false, Some(delivered))
+    }
+
+    /// Paste an image from the clipboard onto `page`.
+    pub fn paste_image(&mut self, page: usize, rect: Option<[f64; 4]>) -> bool {
+        self.paste_image_internal(page, rect, None)
+    }
+
+    /// Paste an image centered at context menu point `at: [f64; 2]` on `page`.
+    pub fn paste_image_at(&mut self, page: usize, at: [f64; 2]) -> bool {
+        self.paste_image_internal(page, None, Some(at))
+    }
+
+    fn paste_image_internal(&mut self, page: usize, rect: Option<[f64; 4]>, at: Option<[f64; 2]>) -> bool {
+        #[cfg(not(target_arch = "wasm32"))]
+        let system = if self.clipboard_override.is_none() && self.system_clipboard { crate::os_clipboard::for_image_paste() } else { None };
+        #[cfg(target_arch = "wasm32")]
+        let system = None;
+        self.paste_image_with_system(
+            page,
+            rect,
+            at,
+            system,
+            cfg!(not(target_arch = "wasm32")) && self.system_clipboard,
+            self.clipboard_override.clone(),
+        )
+    }
+
+    fn paste_image_with_system(
+        &mut self,
+        page: usize,
+        rect: Option<[f64; 4]>,
+        at: Option<[f64; 2]>,
+        system: Option<crate::create_ui::Clip>,
+        system_authoritative: bool,
+        clipboard: Option<crate::create_ui::Clip>,
+    ) -> bool {
+        let Some((i, id)) = self.active_ids() else {
+            return false;
         };
-        let Some(crate::create_ui::Clip::Image { width, height, rgba }) = clip else { return };
-        match crate::create_ui::png_from_rgba(width, height, &rgba) {
-            Ok(png) => self.add_image("Pasted image.png".into(), png),
-            Err(e) => self.notify_fmt("Couldn't read {name}: {e}", &[("name", tl!("Clipboard")), ("e", &e)]),
+        if let Some(doc) = self.session.get(id)
+            && !doc.allows_modification()
+        {
+            self.notify_error(tl!("The document's security settings don't allow this change"));
+            return false;
+        }
+
+        let image_data: Option<(String, Vec<u8>)> = match clipboard {
+            Some(crate::create_ui::Clip::Image { width, height, rgba }) => {
+                let is_same = self
+                    .last_copied_image
+                    .as_ref()
+                    .is_some_and(|(w, h, bytes)| *w as usize == width && *h as usize == height && bytes.as_slice() == rgba.as_slice());
+                if !is_same {
+                    self.last_copied_file = None;
+                    self.last_copied_image = Some((width as u32, height as u32, rgba.clone()));
+                }
+                crate::create_ui::png_from_rgba(width, height, &rgba).ok().map(|b| ("pasted_image.png".to_string(), b))
+            }
+            Some(crate::create_ui::Clip::Text(_)) => None,
+            None => {
+                if matches!(system, Some(crate::create_ui::Clip::Text(_))) || (system_authoritative && system.is_none()) {
+                    self.last_copied_image = None;
+                    self.last_copied_file = None;
+                    self.notify_tr("No image on clipboard to paste");
+                    return false;
+                }
+                let sys_result = match system {
+                    Some(crate::create_ui::Clip::Image { width, height, rgba }) => Some((width, height, rgba)),
+                    _ => None,
+                };
+
+                if let Some((img_width, img_height, img_bytes)) = sys_result {
+                    let is_same_as_last = self
+                        .last_copied_image
+                        .as_ref()
+                        .is_some_and(|(w, h, rgba)| *w as usize == img_width && *h as usize == img_height && rgba.as_slice() == img_bytes.as_slice());
+                    if is_same_as_last && let Some((name, bytes)) = self.last_copied_file.clone() {
+                        Some((name, bytes))
+                    } else if is_same_as_last && let Some((w, h, rgba)) = self.last_copied_image.clone() {
+                        crate::create_ui::png_from_rgba(w as usize, h as usize, &rgba).ok().map(|b| ("pasted_image.png".to_string(), b))
+                    } else {
+                        // System clipboard has a newer / external image!
+                        self.last_copied_file = None;
+                        self.last_copied_image = Some((img_width as u32, img_height as u32, img_bytes.clone()));
+                        crate::create_ui::png_from_rgba(img_width, img_height, &img_bytes).ok().map(|b| ("clipboard_image.png".to_string(), b))
+                    }
+                } else if let Some((name, bytes)) = self.last_copied_file.clone() {
+                    Some((name, bytes))
+                } else if let Some((w, h, rgba)) = self.last_copied_image.clone() {
+                    crate::create_ui::png_from_rgba(w as usize, h as usize, &rgba).ok().map(|b| ("pasted_image.png".to_string(), b))
+                } else {
+                    None
+                }
+            }
+        };
+
+        let Some((name, bytes)) = image_data else {
+            self.notify_tr("No image on clipboard to paste");
+            return false;
+        };
+
+        let target_rect = if let Some(r) = rect {
+            Some(r)
+        } else if let Some(at) = at {
+            let (raw_w, raw_h) = self
+                .last_copied_image
+                .as_ref()
+                .map(|(w, h, _)| (*w as f64, *h as f64))
+                .or_else(|| {
+                    (bytes.len() <= 64_000_000 * 4).then(|| pdfcraft_engine::image_dimensions(&bytes)).flatten().map(|(w, h)| (w as f64, h as f64))
+                })
+                .unwrap_or((100.0, 100.0));
+            let (pw, ph) =
+                self.session.get(id).and_then(|d| d.info.pages.get(page)).map(|p| (p.width as f64, p.height as f64)).unwrap_or((612.0, 792.0));
+            let k = ((pw * 0.8) / raw_w.max(1.0)).min((ph * 0.8) / raw_h.max(1.0)).min(1.0);
+            let (w, h) = (raw_w * k, raw_h * k);
+            let Some(info) = self.session.get(id).and_then(|doc| doc.info.pages.get(page)) else { return false };
+            let view = info.user_to_view(at[0] as f32, at[1] as f32).map(f64::from);
+            // Added content uses the page's bottom-left display origin; rendered view space is y-down.
+            let center = [view[0], f64::from(info.height) - view[1]];
+            Some([center[0] - w * 0.5, center[1] - h * 0.5, center[0] + w * 0.5, center[1] + h * 0.5])
+        } else {
+            None
+        };
+
+        let added_before: std::collections::HashSet<_> =
+            self.session.get(id).into_iter().flat_map(|doc| doc.added()).filter(|item| item.page == page).map(|item| item.obj).collect();
+        if self.apply_edit(pdfcraft_engine::Edit::AddImage { page, rect: target_rect, name, bytes: std::sync::Arc::new(bytes) }) {
+            let selection = self.session.get(id).and_then(|doc| {
+                let mut inserted =
+                    doc.added().iter().filter(|item| item.page == page).enumerate().filter(|(_, item)| !added_before.contains(&item.obj));
+                let (added_idx, item) = inserted.next()?;
+                if inserted.next().is_some() {
+                    return None;
+                }
+                let AddedContent::Image(image) = &item.content else { return None };
+                let pasted_idx = doc.page_images(page).iter().rposition(|placed| placed.object == Some(image.image))?;
+                Some((added_idx, pasted_idx))
+            });
+            if let Some(v) = self.views.get_mut(i) {
+                v.current = page;
+                v.content.selected = selection.map(|(added, _)| (page, added));
+                v.content.select_added = v.content.selected;
+                v.image_selection = selection.map(|(_, image)| crate::edit_text_ui::ImageSelection::at(page, image));
+            }
+            self.quick_tool = crate::QuickTool::EditText;
+            self.notify_tr("Image pasted");
+            true
+        } else {
+            false
         }
     }
 }
@@ -1150,6 +1361,89 @@ mod tests {
     use egui_kittest::kittest::Queryable;
 
     use super::*;
+
+    #[test]
+    fn delivered_pixels_are_bounded_before_cache_or_document_changes() {
+        let mut app = crate::PdfCraftApp::new();
+        app.create_blank();
+        app.last_copied_image = Some((1, 1, vec![0, 255, 0, 255]));
+        let before = app.last_copied_image.clone();
+        for size in [[0, 1], [usize::MAX, 2], [crate::create_ui::MAX_IMAGE_SIDE + 1, 1], [2, 2]] {
+            let mut image = egui::ColorImage::filled([1, 1], egui::Color32::RED);
+            image.size = size;
+            assert!(!app.paste_received_image(0, &image));
+            assert_eq!(app.last_copied_image, before);
+        }
+        assert!(app.session.get(app.views[0].id).unwrap().page_images(0).is_empty());
+    }
+
+    #[test]
+    fn delivered_pixels_keep_unpremultiplied_alpha() {
+        let mut app = crate::PdfCraftApp::new();
+        app.create_blank();
+        let image = egui::ColorImage::from_rgba_unmultiplied([1, 1], &[255, 0, 0, 128]);
+        assert!(app.paste_received_image(0, &image));
+        assert_eq!(app.last_copied_image.unwrap().2, vec![255, 0, 0, 128]);
+    }
+
+    #[test]
+    fn review_web_can_paste_an_internal_image_without_a_native_clipboard() {
+        let mut app = crate::PdfCraftApp::new();
+        app.create_blank();
+        app.system_clipboard = true;
+        app.last_copied_image = Some((1, 1, vec![255, 0, 0, 255]));
+        assert!(app.paste_image_with_system(0, None, None, None, false, None));
+        let id = app.active_ids().unwrap().1;
+        assert_eq!(app.session.get(id).unwrap().page_images(0).len(), 1);
+    }
+
+    #[test]
+    fn review_system_without_supported_formats_does_not_paste_a_cached_image() {
+        let mut app = crate::PdfCraftApp::new();
+        app.create_blank();
+        app.system_clipboard = true;
+        app.last_copied_image = Some((1, 1, vec![255, 0, 0, 255]));
+        assert!(!app.paste_image_with_system(0, None, None, None, true, None));
+    }
+
+    #[test]
+    fn review_cut_checks_modify_permission_before_writing_the_clipboard() {
+        let mut app = crate::PdfCraftApp::new();
+        app.system_clipboard = false;
+        app.create_blank();
+        let png = crate::create_ui::png_from_rgba(1, 1, &[255, 0, 0, 255]).unwrap();
+        app.add_image("test.png".into(), png);
+        app.apply_edit(Edit::Protect(pdfcraft_engine::Protection {
+            permissions_password: Some("owner".into()),
+            changes: pdfcraft_engine::Changes::None,
+            copy: true,
+            ..Default::default()
+        }));
+        let id = app.active_ids().unwrap().1;
+        let bytes = app.session.save_bytes(id).unwrap();
+        let mut locked = crate::PdfCraftApp::new();
+        locked.system_clipboard = false;
+        locked.open_bytes("locked.pdf", None, bytes.as_ref().clone()).unwrap();
+        assert!(!locked.session.get(locked.active_ids().unwrap().1).unwrap().allows_modification());
+        locked.last_copied_image = Some((1, 1, vec![0, 255, 0, 255]));
+        let before = locked.last_copied_image.clone();
+        assert!(!locked.cut_page_image(0, 0));
+        assert_eq!(locked.last_copied_image, before);
+    }
+
+    #[test]
+    fn system_text_prevents_context_menu_paste_of_a_cached_image() {
+        let mut app = crate::PdfCraftApp::new();
+        app.system_clipboard = false;
+        app.create_blank();
+        let id = app.active_ids().unwrap().1;
+        app.last_copied_image = Some((1, 1, vec![255, 0, 0, 255]));
+        let undo = app.session.get(id).unwrap().can_undo().map(str::to_owned);
+        assert!(!app.paste_image_with_system(0, None, Some([20.0, 20.0]), Some(crate::create_ui::Clip::Text("new text".into())), true, None));
+        assert_eq!(app.session.get(id).unwrap().can_undo().map(str::to_owned), undo);
+        assert!(app.session.get(id).unwrap().page_images(0).is_empty());
+        assert!(app.last_copied_image.is_none());
+    }
 
     /// The image a flip button leaves behind, as the panel returns it.
     fn flipped(tooltip: &str) -> pdfcraft_engine::AddedImage {
