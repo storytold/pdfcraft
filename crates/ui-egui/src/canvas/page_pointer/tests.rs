@@ -150,7 +150,7 @@ fn edges_are_primary_finite_in_order_and_capped() {
 }
 
 /// The page modules: the per-page chain in `canvas::document_area` and what it calls.
-const PAGE_MODULES: [&str; 36] = [
+const PAGE_MODULES: [&str; 37] = [
     "canvas.rs",
     "canvas/page_input.rs",
     "canvas/area.rs",
@@ -187,6 +187,7 @@ const PAGE_MODULES: [&str; 36] = [
     "canvas/image_pick.rs",
     "canvas/signature_drag.rs",
     "tools/calc_order_ui.rs",
+    "tools/stamps_ui.rs",
 ];
 
 /// egui's raw pointer state: where the pointer is, and which buttons are down or went down.
@@ -434,11 +435,12 @@ const PRESS_IGNORERS: [(&str, &str, &str); 1] =
 
 /// The module hit tests, called by path: a press handler calls none of them (HIT_TESTERS says who
 /// may).
-const PAGE_HIT_CALLS: [&str; 10] = [
+const PAGE_HIT_CALLS: [&str; 11] = [
     "link_ui::hit(",
     "prepare::hit(",
     "forms_ui::hit(",
     "comments::hit(",
+    "camera_ui::hit(",
     "edit_text_ui::hit(",
     "edit_text_ui::picture_hit(",
     "edit_text_ui::picture_handle_hit(",

@@ -87,10 +87,10 @@ fn target_label(info: &DocInfo, target: &LinkTarget) -> String {
     }
 }
 
-/// Link tool input on one page: `owner` is the link that holds the press (by its `/Annots`
-/// index), and `context` the one a right-click is on. Returns `true` when the gesture belongs to
-/// the tool.
-pub(crate) fn page_input(cx: PageToolContext<'_>, owner: Option<usize>, context: Option<usize>, view: &mut DocView) -> bool {
+/// Link tool input on one page: `free` when nobody holds the press and it began on this page,
+/// `owner` the link that holds it (by its `/Annots` index), and `context` the link a right-click is
+/// on. A drag from either draws a new link. Returns `true` when the gesture belongs to the tool.
+pub(crate) fn page_input(cx: PageToolContext<'_>, free: bool, owner: Option<usize>, context: Option<usize>, view: &mut DocView) -> bool {
     let PageToolContext { ui, resp, xf, ptr, page, info, .. } = cx;
     let pointer = ptr.pos;
     let lv = &mut view.links;
@@ -128,7 +128,7 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, owner: Option<usize>, context:
         }
         return true;
     }
-    if resp.drag_started() {
+    if resp.drag_started() && (free || owner.is_some()) {
         let origin = ptr.origin.unwrap_or(p);
         lv.drag = Some((page, origin));
         return true;

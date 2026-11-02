@@ -39,30 +39,20 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
     let PageEnv {
         added,
         allowed,
-        author,
-        by_line,
-        can_crop,
         can_fill,
         can_modify,
         comments_hidden,
-        custom_stamp,
-        date_text,
         doc,
         doc_links,
         editing_content,
         form,
         info,
-        initials,
         prefs,
         preparing,
         redact_mark,
-        signature,
         table_preview,
         text_style,
         tool,
-        units,
-        fill_text_size,
-        fill_text_color,
         ..
     } = frame.env;
     let PageSlot { i, xf, .. } = *slot;
@@ -103,106 +93,11 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
     // What this page has to do with the press: its owner's, the active tool's, or another page's.
     let press = view.router.press_for(i);
     let context = pointer.filter(|p| resp.secondary_clicked() && xf.rect.contains(*p)).and_then(|p| right_click(&hits, view, p));
-    if let QuickTool::Measure(measure_tool) = tool {
-        crate::measure_ui::page_input(ui, resp, doc, view, &pcx, measure_tool, units);
-    }
-
-    // Form fields take clicks first with the Select tool (as Acrobat fills fields in
-    // every viewing mode); then comments; then text selection.
-    if let QuickTool::Stamp(kind) = tool
-        && allowed
-        && let Some(p) = ptr.within(xf.rect)
-    {
-        view.cursor.claim(Layer::ToolArea, egui::CursorIcon::Crosshair);
-        // The tool's own click: nothing drawn over the page here holds the press.
-        if resp.clicked() && press == PagePress::Free {
-            // Centred on the click, upright as the page is shown.
-            let (vx, vy) = xf.screen_to_view(p);
-            let (w, h) = kind.size();
-            let corners = [(vx as f64 - w / 2.0, vy as f64 - h / 2.0), (vx as f64 + w / 2.0, vy as f64 + h / 2.0)];
-            let u: Vec<[f32; 2]> = corners.iter().map(|(x, y)| info.pages[i].view_to_user(*x as f32, *y as f32)).collect();
-            let rect = [u[0][0].min(u[1][0]) as f64, u[0][1].min(u[1][1]) as f64, u[0][0].max(u[1][0]) as f64, u[0][1].max(u[1][1]) as f64];
-            let by = (kind.group() == pdfcraft_engine::StampGroup::Dynamic).then(|| by_line.clone());
-            let shape = pdfcraft_engine::Shape::Stamp { rect, stamp: kind, by };
-            view.pending_edit = Some(pdfcraft_engine::Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
-                page: i,
-                style: pdfcraft_engine::Style::default_for(&shape),
-                shape,
-                contents: String::new(),
-                author: author.clone(),
-            }));
-            frame.out.stamp_placed = true;
-        }
-    }
-    if let Some(cs) = custom_stamp.as_ref()
-        && allowed
-        && let Some(p) = ptr.within(xf.rect)
-    {
-        view.cursor.claim(Layer::ToolArea, egui::CursorIcon::Crosshair);
-        // The tool's own click: nothing drawn over the page here holds the press.
-        if resp.clicked() && press == PagePress::Free {
-            // Centred on the click at its natural size (the engine sizes it).
-            let (vx, vy) = xf.screen_to_view(p);
-            let u = info.pages[i].view_to_user(vx, vy);
-            let (x, y) = (u[0] as f64, u[1] as f64);
-            view.pending_edit = Some(pdfcraft_engine::Edit::AddCustomStamp {
-                page: i,
-                rect: [x, y, x, y],
-                name: cs.name.clone(),
-                file: pdfcraft_engine::MarkFile { name: cs.file.clone(), bytes: cs.data.clone(), page: cs.page },
-                author: author.clone(),
-            });
-            frame.out.stamp_placed = true;
-        }
-    }
     // A mark already placed takes its own press (comments, below), and with no button down the
-    // tool's preview hides over one, where a press would pick it up.
+    // Fill & Sign tool's preview hides over one, where a press would pick it up.
     let over_mark = matches!(tool, QuickTool::Fill(_))
         && (matches!(press, PagePress::Mine(_)) || !ptr.any_down && pointer.and_then(|p| top(hits.at(view, p), tool)).is_some());
-    if let QuickTool::Fill(ft) = tool
-        && allowed
-        && !over_mark
-    {
-        match crate::fill_sign::page_input(
-            cx,
-            crate::fill_sign::PageInput {
-                tool: ft,
-                text_size: fill_text_size,
-                text_color: fill_text_color,
-                signature: signature.as_ref(),
-                initials: initials.as_ref(),
-                preview: frame.signature_preview,
-                author,
-                date_text,
-            },
-            view,
-        ) {
-            Some(crate::fill_sign::FillAction::Edit(e)) => view.pending_edit = Some(*e),
-            Some(crate::fill_sign::FillAction::Signature(e)) => {
-                view.pending_edit = Some(*e);
-                view.fill_signature_page = Some(i);
-            }
-            Some(crate::fill_sign::FillAction::CreateSignature) => frame.out.open_signature = true,
-            Some(crate::fill_sign::FillAction::CreateInitials) => frame.out.open_initials = true,
-            Some(crate::fill_sign::FillAction::Refused(why)) => frame.out.refused = Some(why),
-            None => {}
-        }
-    }
-    if matches!(tool, QuickTool::SignArea { .. }) {
-        crate::sign_ui::page_input(ui, resp, &xf, ptr, i, info, view);
-    }
-    if matches!(tool, QuickTool::MarqueeZoom | QuickTool::Snapshot) {
-        crate::zoom_snap::page_input(ui, resp, &xf, ptr, i, view);
-    }
-    if tool == QuickTool::EnhanceCamera {
-        crate::camera_ui::page_input(resp, &xf, ptr, i, view, can_modify);
-    }
-    if tool == QuickTool::Crop
-        && crate::crop::page_input(ui, crate::crop::CropPageInput { resp, xf: &xf, ptr, page: i, info, view, allowed: can_crop })
-    {
-        view.current = i;
-        frame.out.open_boxes = true;
-    }
+    tool_input(ui, view, frame, slot, &pcx, press, over_mark);
     let on_field = if preparing {
         let o = crate::prepare::page_input(cx, form, field_tool, prepare_allowed, view);
         frame.out.field_props |= o.properties;
@@ -220,7 +115,7 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
             let (vx, vy) = xf.screen_to_view(p);
             text.as_ref().is_some_and(|t| t.glyphs.iter().any(|g| vx >= g.rect[0] && vx <= g.rect[2] && vy >= g.rect[1] && vy <= g.rect[3]))
         };
-        crate::redact_ui::page_input(cx, over_text, view)
+        crate::redact_ui::page_input(cx, over_text, press == PagePress::Free, view)
     };
     let on_objects = tool == QuickTool::EditText && can_modify && crate::object_ui::page_input(cx, view);
     // Add text acts on the page's own paragraphs over them, and on the one its press was on until
@@ -281,7 +176,7 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
         }
     }
     let (link_owner, link_context) = (link_of(press.owner()), link_of(context));
-    let on_link = tool == QuickTool::Link && can_modify && crate::link_ui::page_input(cx, link_owner, link_context, view);
+    let on_link = tool == QuickTool::Link && can_modify && crate::link_ui::page_input(cx, press == PagePress::Free, link_owner, link_context, view);
     if tool == QuickTool::Select
         && can_modify
         && let Some(index) = link_context
@@ -312,6 +207,100 @@ fn link_of(owner: Option<Owner>) -> Option<usize> {
     match owner {
         Some(Owner::Link { index }) => Some(index),
         _ => None,
+    }
+}
+
+/// The active tool's own input on page `i`: the one gate for presses nobody holds. Measure, the
+/// stamps, Fill & Sign, Sign area, zoom and snapshot, the camera's quadrilateral and crop act only
+/// on a press that began on this page and that no hit won (`press` is Free), and keep their cursor
+/// and gestures. `over_mark`: a Fill & Sign mark takes the press, or would take one under the
+/// pointer.
+fn tool_input(
+    ui: &egui::Ui,
+    view: &mut DocView,
+    frame: &mut PageFrame<'_>,
+    slot: &PageSlot,
+    pcx: &comments::PageCx<'_>,
+    press: PagePress,
+    over_mark: bool,
+) {
+    let PageEnv {
+        allowed,
+        author,
+        by_line,
+        can_crop,
+        can_modify,
+        custom_stamp,
+        date_text,
+        doc,
+        info,
+        initials,
+        signature,
+        tool,
+        units,
+        fill_text_size,
+        fill_text_color,
+        ..
+    } = frame.env;
+    let PageSlot { i, xf, .. } = *slot;
+    let PageFrame { resp, ptr, .. } = *frame;
+    let cx = PageToolContext { ui, resp, xf: &xf, ptr, page: i, doc, info };
+    let free = press == PagePress::Free;
+    if let QuickTool::Measure(measure_tool) = tool {
+        crate::measure_ui::page_input(ui, crate::measure_ui::Clicks::of(resp, free), doc, view, pcx, measure_tool, units);
+    }
+    if let QuickTool::Stamp(kind) = tool
+        && allowed
+        && crate::stamps_ui::place(cx, kind, by_line, author, free, view)
+    {
+        frame.out.stamp_placed = true;
+    }
+    if let Some(cs) = custom_stamp.as_ref()
+        && allowed
+        && crate::stamps_ui::place_custom(cx, cs, author, free, view)
+    {
+        frame.out.stamp_placed = true;
+    }
+    if let QuickTool::Fill(ft) = tool
+        && allowed
+        && !over_mark
+    {
+        let input = crate::fill_sign::PageInput {
+            tool: ft,
+            text_size: fill_text_size,
+            text_color: fill_text_color,
+            signature: signature.as_ref(),
+            initials: initials.as_ref(),
+            preview: frame.signature_preview,
+            author,
+            date_text,
+        };
+        match crate::fill_sign::page_input(cx, input, free, view) {
+            Some(crate::fill_sign::FillAction::Edit(e)) => view.pending_edit = Some(*e),
+            Some(crate::fill_sign::FillAction::Signature(e)) => {
+                view.pending_edit = Some(*e);
+                view.fill_signature_page = Some(i);
+            }
+            Some(crate::fill_sign::FillAction::CreateSignature) => frame.out.open_signature = true,
+            Some(crate::fill_sign::FillAction::CreateInitials) => frame.out.open_initials = true,
+            Some(crate::fill_sign::FillAction::Refused(why)) => frame.out.refused = Some(why),
+            None => {}
+        }
+    }
+    if matches!(tool, QuickTool::SignArea { .. }) {
+        crate::sign_ui::page_input(cx, free, view);
+    }
+    if matches!(tool, QuickTool::MarqueeZoom | QuickTool::Snapshot) {
+        crate::zoom_snap::page_input(ui, resp, &xf, ptr, i, free, view);
+    }
+    if tool == QuickTool::EnhanceCamera {
+        crate::camera_ui::page_input(resp, &xf, ptr, i, view, can_modify, press);
+    }
+    if tool == QuickTool::Crop
+        && crate::crop::page_input(ui, crate::crop::CropPageInput { resp, xf: &xf, ptr, page: i, info, view, allowed: can_crop, free })
+    {
+        view.current = i;
+        frame.out.open_boxes = true;
     }
 }
 
@@ -460,9 +449,10 @@ impl PageHits<'_> {
         // together.
         let picks_up = matches!(tool, QuickTool::Select | QuickTool::AddText | QuickTool::EditText);
         let added = (editing_content && can_modify && picks_up).then(|| crate::content_ui::hit(xf, info, page, added, view, p)).flatten();
+        let corner = (tool == QuickTool::EnhanceCamera && can_modify).then(|| crate::camera_ui::hit(xf, page, view, p)).flatten();
         let link = crate::link_ui::hit(xf, info, page, doc_links, tool, p);
         let comment = if context { comments::context_hit(pcx, p) } else { comments::hit(pcx, view, p, link.is_some()) };
-        [link, comment, pictures, paragraphs, added, objects, grips, fields].into_iter().flatten().collect()
+        [link, comment, pictures, paragraphs, added, objects, grips, corner, fields].into_iter().flatten().collect()
     }
 }
 

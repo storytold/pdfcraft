@@ -36,6 +36,8 @@ pub(crate) enum Owner {
     /// Added text or a picture placed on the page, by its index among the page's, and a corner of
     /// the selected one (left, top) or the item itself.
     Added { index: usize, corner: Option<(bool, bool)> },
+    /// Enhance ▸ Camera image: a corner of the quadrilateral (0 left top, then clockwise).
+    CameraCorner { corner: usize },
 }
 
 /// The part of a picture a hit is on.

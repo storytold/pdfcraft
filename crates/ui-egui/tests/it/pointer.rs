@@ -1155,3 +1155,40 @@ fn a_click_on_a_form_field_deselects_the_selected_comment() {
     assert_eq!(h.state().views[0].comments.selected, None, "a click on the check box leaves it unselected");
     assert_eq!(agree(&h).len(), 1, "and ticks the box");
 }
+
+/// The camera tool's quadrilateral, corner by corner, in page view points.
+fn camera_corners(h: &Harness<'_, PdfCraftApp>) -> Option<[[f32; 2]; 4]> {
+    h.state().views[0].camera.map(|q| q.corners)
+}
+
+/// A corner of the camera tool's quadrilateral is a press of its own: Escape in the middle of its
+/// drag cancels it, and once the button is up no corner follows the pointer. Today Escape also
+/// leaves the camera tool before the pages see it; this holds whatever the order of the keys.
+#[test]
+fn escape_mid_corner_drag_leaves_no_corner_following_the_pointer() {
+    let mut h = open(text_pdf(), "150", false);
+    h.state_mut().quick_tool = QuickTool::EnhanceCamera;
+    h.run_steps(4);
+    // The left top corner starts 5% in from the page's edges: view (15, 20) on the 300×400 page.
+    let corner = at(&h, 15.0, 380.0);
+    let start = camera_corners(&h);
+    h.hover_at(corner);
+    h.run_steps(1);
+    h.drag_at(corner);
+    h.run_steps(1);
+    h.hover_at(corner + egui::vec2(30.0, 30.0));
+    h.run_steps(2);
+    assert_ne!(camera_corners(&h), start, "the corner follows its drag");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(1);
+    let end = corner + egui::vec2(60.0, 60.0);
+    h.hover_at(end);
+    h.run_steps(1);
+    h.drop_at(end);
+    h.run_steps(2);
+    let after = camera_corners(&h);
+    h.hover_at(corner + egui::vec2(120.0, 90.0));
+    h.run_steps(3);
+    assert_eq!(camera_corners(&h), after, "no corner follows the pointer once the press is cancelled");
+    assert!(h.state().views[0].camera.is_none_or(|q| q.grab.is_none()), "and none is held");
+}

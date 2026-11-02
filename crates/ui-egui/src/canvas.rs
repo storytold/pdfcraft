@@ -863,6 +863,9 @@ impl DocView {
         self.sign.drag = None;
         self.redact_drag = None;
         self.crop_drag = None;
+        if let Some(q) = &mut self.camera {
+            q.grab = None;
+        }
         self.block_drag = None;
         self.org_drag = None;
         self.panel_drag = None;
