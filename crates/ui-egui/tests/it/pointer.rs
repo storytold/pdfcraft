@@ -1192,3 +1192,37 @@ fn escape_mid_corner_drag_leaves_no_corner_following_the_pointer() {
     assert_eq!(camera_corners(&h), after, "no corner follows the pointer once the press is cancelled");
     assert!(h.state().views[0].camera.is_none_or(|q| q.grab.is_none()), "and none is held");
 }
+
+/// A 300×400 page with a text field `name` (tooltip "Your name") at x 50..250, y 200..220, and a
+/// rectangle comment drawn over its right end, x 150..260, y 190..230.
+fn commented_text_field_pdf() -> Vec<u8> {
+    pdf(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] /DA (/Helv 0 Tf 0 g) >> >>",
+        PAGES,
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R] >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (name) /TU (Your name) /Rect [50 200 250 220] /P 3 0 R /F 4 /DA (/Helv 12 Tf 0 g) >>",
+        "<< /Type /Annot /Subtype /Square /Rect [150 190 260 230] /C [1 0 0] /F 4 /T (Ana) >>",
+    ])
+}
+
+/// Rests the pointer at `p` long enough for a tooltip.
+fn rest_at(h: &mut Harness<'_, PdfCraftApp>, p: egui::Pos2) {
+    h.hover_at(p);
+    for _ in 0..40 {
+        h.step();
+        std::thread::sleep(std::time::Duration::from_millis(15));
+    }
+}
+
+/// A field's tooltip (`/TU`) shows only where a press would take the field: not under a comment
+/// drawn over it. It used to show over the whole field.
+#[test]
+fn a_fields_tooltip_shows_only_where_the_field_takes_the_press() {
+    let mut h = open(commented_text_field_pdf(), "150", false);
+    let under_comment = at(&h, 200.0, 210.0);
+    rest_at(&mut h, under_comment);
+    assert!(h.query_by_label("Your name").is_none(), "no field tooltip where the comment takes the press");
+    let on_field = at(&h, 100.0, 210.0);
+    rest_at(&mut h, on_field);
+    assert!(h.query_all_by_label("Your name").next().is_some(), "the field's tooltip where it takes the press");
+}

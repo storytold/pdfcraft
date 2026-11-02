@@ -18,6 +18,9 @@ pub(super) struct PageInput {
     pub(super) area_tool: bool,
     /// What a press under the pointer would take (the top hit there), for hover painting.
     pub(super) hover: Option<crate::page_router::Hit>,
+    /// The press's click came up over what the press began on: a link's or a field's click counts
+    /// only then, as a button's does.
+    pub(super) released_over: bool,
 }
 
 /// Common geometry and pointer state for a tool acting on one page.
@@ -92,6 +95,10 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
     }
     // What this page has to do with the press: its owner's, the active tool's, or another page's.
     let press = view.router.press_for(i);
+    let released_over = match press {
+        PagePress::Mine(owner) if resp.clicked() => pointer.is_some_and(|p| hits.at(view, p).iter().any(|h| h.owner == owner)),
+        _ => false,
+    };
     let context = pointer.filter(|p| resp.secondary_clicked() && xf.rect.contains(*p)).and_then(|p| right_click(&hits, view, p));
     // A mark already placed takes its own press (comments, below), and with no button down the
     // Fill & Sign tool's preview hides over one, where a press would pick it up.
@@ -99,13 +106,13 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
         && (matches!(press, PagePress::Mine(_)) || !ptr.any_down && pointer.and_then(|p| top(hits.at(view, p), tool)).is_some());
     tool_input(ui, view, frame, slot, &pcx, press, over_mark);
     let on_field = if preparing {
-        let o = crate::prepare::page_input(cx, form, field_tool, prepare_allowed, view);
+        let o = crate::prepare::page_input(cx, form, field_tool, prepare_allowed, press, view);
         frame.out.field_props |= o.properties;
         frame.out.field_placed |= o.placed;
         frame.out.open_table = frame.out.open_table.or(o.table);
         o.consumed || field_tool.is_some()
     } else {
-        tool == QuickTool::Select && crate::forms_ui::page_input(cx, form, can_fill, view)
+        tool == QuickTool::Select && crate::forms_ui::page_input(cx, form, can_fill, press, released_over, view)
     };
     // Redact draws boxes off text; so does Highlight (an area highlight, as in Acrobat).
     let area_tool = tool == QuickTool::Redact && can_modify || tool == QuickTool::Comment(comments::CommentTool::Highlight) && allowed;
@@ -188,7 +195,7 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
     let on_comment = comments::page_input(ui, resp, &pcx, press, view);
     let consumed = on_objects || on_edit_text || on_link || on_content || boxing || on_field || on_comment;
     let hover = pointer.filter(|_| frame.env.unobstructed).and_then(|p| claim_under(&hits, view, p));
-    PageInput { consumed, area_tool, hover }
+    PageInput { consumed, area_tool, hover, released_over }
 }
 
 /// The cursor and the tip from what lies under the pointer at `p`, after the tools claimed theirs
@@ -727,7 +734,8 @@ pub(super) fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut P
             }
         }
     } else {
-        crate::forms_ui::paint_page(painter, &xf, i, info, form, view, pointer);
+        crate::forms_ui::paint_page(painter, &xf, i, info, form, view, input.hover.as_ref());
+        crate::forms_ui::tooltip(resp, form, input.hover.as_ref());
     }
 
     // Form-field highlight (Acrobat's "Highlight existing fields"); required fields get a
@@ -743,8 +751,8 @@ pub(super) fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut P
         && resp.clicked()
         && tool == QuickTool::Select
         && !input.consumed
-        && let Some(owner @ Owner::Link { index }) = view.router.owner(i)
-        && pointer.and_then(|p| crate::link_ui::hit(&xf, info, i, doc_links, tool, p)).is_some_and(|h| h.owner == owner)
+        && let Some(Owner::Link { index }) = view.router.owner(i)
+        && input.released_over
         && let Some(l) = info.links.iter().find(|l| l.page == i && l.index == index)
     {
         frame.out.clicked_link = Some(l.target.clone());

@@ -13,7 +13,7 @@ use pdfcraft_render::DocInfo;
 use crate::canvas::{DocView, PageToolContext, PageXform};
 use crate::comments;
 use crate::page_cursor::Layer;
-use crate::page_router::{Hit, Owner};
+use crate::page_router::{Hit, Owner, PagePress};
 use crate::theme;
 use crate::widgets;
 
@@ -285,8 +285,17 @@ pub(crate) fn hit(
     Some(Hit::new(Owner::PrepareField { field, widget }, Layer::Placed, egui::CursorIcon::Move))
 }
 
-/// Pointer input on one page while preparing a form.
-pub(crate) fn page_input(cx: PageToolContext<'_>, form: &[FormField], tool: Option<FieldTool>, allowed: bool, view: &mut DocView) -> Outcome {
+/// Pointer input on one page while preparing a form: `press` says whether the press is a field's
+/// or a corner's ([`hit`]), nobody's (a field tool draws, the Select tool draws a selection
+/// rectangle), or another page's.
+pub(crate) fn page_input(
+    cx: PageToolContext<'_>,
+    form: &[FormField],
+    tool: Option<FieldTool>,
+    allowed: bool,
+    press: PagePress,
+    view: &mut DocView,
+) -> Outcome {
     let PageToolContext { ui, resp, xf, ptr, page, info, .. } = cx;
     let mut out = Outcome { consumed: false, properties: false, placed: false, table: None };
     let pointer = ptr.pos;
@@ -373,9 +382,10 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, form: &[FormField], tool: Opti
     if !allowed {
         return out;
     }
+    let free = press == PagePress::Free;
     if let Some(tool) = tool {
         view.cursor.claim(Layer::ToolArea, egui::CursorIcon::Crosshair);
-        if resp.drag_started() || resp.clicked() {
+        if free && (resp.drag_started() || resp.clicked()) {
             let origin = ptr.origin.filter(|o| xf.rect.contains(*o)).unwrap_or(p);
             prep.grab = Some((page, Grab::Draw(origin), origin));
             out.consumed = true;
@@ -398,18 +408,17 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, form: &[FormField], tool: Opti
         return out;
     }
 
-    // The Select tool: what the press was on ([`hit`]), a corner handle or a field; elsewhere a
-    // drag draws a selection rectangle. A press held by something drawn over the fields (a
+    // The Select tool: what the press is on ([`hit`]), a corner handle or a field; a press nobody
+    // holds draws a selection rectangle. A press held by something drawn over the fields (a
     // comment) is not Prepare's.
-    let owner = view.router.owner(page);
-    let held = matches!(owner, Some(Owner::PrepareField { .. } | Owner::PrepareCorner { .. }));
-    let hit = match owner {
-        Some(Owner::PrepareField { field, widget }) => form.get(field).map(|f| (f, widget)),
+    let held = matches!(press, PagePress::Mine(Owner::PrepareField { .. } | Owner::PrepareCorner { .. }));
+    let hit = match press {
+        PagePress::Mine(Owner::PrepareField { field, widget }) => form.get(field).map(|f| (f, widget)),
         _ => None,
     };
-    if resp.drag_started() && (held || owner.is_none()) {
+    if resp.drag_started() && (held || free) {
         let origin = ptr.origin.unwrap_or(p);
-        if let Some(Owner::PrepareCorner { left, top }) = owner {
+        if let PagePress::Mine(Owner::PrepareCorner { left, top }) = press {
             prep.grab = Some((page, Grab::Corner(left, top), origin));
             out.consumed = true;
         } else if let Some((f, wi)) = hit {
@@ -432,7 +441,7 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, form: &[FormField], tool: Opti
         out.properties = true;
         return out;
     }
-    if resp.clicked() && (held || owner.is_none()) {
+    if resp.clicked() && (held || free) {
         let extend = ui.input(|i| i.modifiers.shift || i.modifiers.command);
         match hit {
             // Shift/⌘-click adds or removes a field from the selection.
