@@ -5,11 +5,11 @@ exclude = ["vendor"]
 default-members = ["crates/*", "apps/pdfcraft", "apps/pdfcraft-cli", "xtask"]
 
 [workspace.package]
-version = "0.7.1"
+version = "0.7.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 rust-version = "1.95"
-repository = "https://github.com/storytold/pdfcraft"
+repository = "https://github.com/gr1425/pdfcraft.git"
 
 [workspace.dependencies]
 # Shared frontend components; engines remain independent of egui.

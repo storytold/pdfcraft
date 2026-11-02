@@ -370,13 +370,20 @@ fn app_creator<'a>(
                 app.open_path(&f);
             }
         }
-        for (k, v) in options {
-            if let Err(e) = app.set_option(&k, &v) {
-                log::warn!("--{k} {v}: {e}");
-            }
-        }
+        apply_launch_options(&mut app, &options);
         Ok(Box::new(app))
     })
+}
+
+fn apply_launch_options(app: &mut PdfCraftApp, options: &[(String, String)]) {
+    if let Err(e) = app.set_option("left", "closed") {
+        log::warn!("default --left closed: {e}");
+    }
+    for (k, v) in options {
+        if let Err(e) = app.set_option(&k, &v) {
+            log::warn!("--{k} {v}: {e}");
+        }
+    }
 }
 
 /// Tell the user when wgpu draws on the processor (WARP on Windows, llvmpipe on Linux) rather than
@@ -678,6 +685,16 @@ mod tests {
 
     fn endpoint() -> std::io::Result<Endpoint> {
         Ok(Endpoint { port: 4321, token: "0123456789abcdef".into() })
+    }
+
+    #[test]
+    fn the_all_tools_panel_starts_closed_unless_left_open_is_explicit() {
+        let mut app = pdfcraft_ui_egui::PdfCraftApp::new();
+        super::apply_launch_options(&mut app, &[]);
+        assert!(!app.left_open);
+
+        super::apply_launch_options(&mut app, &[("left".into(), "open".into())]);
+        assert!(app.left_open);
     }
 
     /// Tests that open a real GPU device take this first, so only one of them is inside the

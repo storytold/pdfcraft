@@ -54,3 +54,12 @@ uds_windows = "=1.2.1"
 [build-dependencies]
 # Icon + VERSIONINFO for pdfcraft.exe; build.rs only uses it when targeting Windows.
 winresource = "0.1"
+
+[package.metadata.packager]
+product-name = "PdfCraft"
+description = "Herramienta de gestión y procesamiento de PDFs.  Fix Win-Print por GR1431."
+icons = ["../../assets/app-icon/pdfcraft.ico"]
+before-packaging-command = "cargo build --release"
+
+[package.metadata.packager.nsis]
+installer-icon = "../../assets/app-icon/pdfcraft.ico"
