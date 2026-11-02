@@ -16,7 +16,7 @@ fn fields() -> Vec<FieldState> {
 }
 
 fn doc() -> DocInfo {
-    DocInfo { file_name: "order.pdf".into(), num_pages: 3, page: 0, info: vec![("title".into(), "Order".into())], xfa: false }
+    DocInfo { file_name: "order.pdf".into(), num_pages: 3, page: 0, info: vec![("title".into(), "Order".into())], ..Default::default() }
 }
 
 fn go(script: &str, event: &Event) -> Outcome {
@@ -29,6 +29,42 @@ fn calculate_scripts_read_fields_and_set_the_value() {
     assert_eq!(o.error, None);
     assert_eq!(o.value, "50");
     assert!(o.rc);
+}
+
+#[test]
+fn get_page_box_returns_supported_boxes_in_rotated_user_space() {
+    let mut document = doc();
+    document.page_boxes = vec![
+        [
+            [10.0, 20.0, 210.0, 320.0],
+            [20.0, 30.0, 200.0, 310.0],
+            [25.0, 35.0, 195.0, 305.0],
+            [30.0, 40.0, 190.0, 300.0],
+            [35.0, 45.0, 185.0, 295.0]
+        ];
+        3
+    ];
+    document.page_rotations = vec![0, 90, 270];
+    let out = run(
+        "JSON.stringify([this.getPageBox(), this.getPageBox('Media', 1), this.getPageBox('Art', 2)])",
+        &Event::doc("Console"),
+        &document,
+        &[],
+        &[],
+        Limits::default(),
+    );
+    assert_eq!(out.error, None);
+    assert_eq!(out.result.as_deref(), Some("[[20,310,200,30],[-10,190,290,-10],[15,165,265,15]]"));
+}
+
+#[test]
+fn get_page_box_rejects_unknown_boxes_and_invalid_pages() {
+    for script in
+        ["this.getPageBox('BBox')", "this.getPageBox(1)", "this.getPageBox('Crop', -1)", "this.getPageBox('Crop', 1.5)", "this.getPageBox('Crop', 3)"]
+    {
+        let out = go(script, &Event::doc("Console"));
+        assert!(out.error.is_some(), "{script}");
+    }
 }
 
 #[test]
@@ -71,6 +107,33 @@ fn scripts_change_other_fields_and_their_properties() {
     assert_eq!(total.text_color.as_deref(), Some(&["RGB".to_string(), "1".into(), "0".into(), "0".into()][..]));
     assert_eq!(o.changed.iter().find(|f| f.name == "agree").unwrap().value, ["Yes"]);
     assert_eq!(o.changed.iter().find(|f| f.name == "size").unwrap().value, ["l"]);
+}
+
+#[test]
+fn push_button_caption_methods_read_write_and_reject_other_faces() {
+    let mut button = FieldState::new("go", FieldType::Button, vec![]);
+    button.caption = Some("Old".into());
+    let fields = vec![button, FieldState::new("text", FieldType::Text, vec![])];
+    let run = |script: &str| run(script, &Event::field("Mouse Up", "go", ""), &doc(), &fields, &[], Limits::default());
+    let got = run("event.value = getField('go').buttonGetCaption();");
+    assert_eq!(got.value, "Old");
+    let set = run("getField('go').buttonSetCaption('New'); event.value = getField('go').buttonGetCaption();");
+    assert_eq!(set.value, "New");
+    assert_eq!(set.changed[0].caption.as_deref(), Some("New"));
+    assert!(got.changed.is_empty(), "a getter must not change the form");
+    for face in ["1", "2", "-1", "0.5", "NaN", "Infinity"] {
+        for method in [format!("getField('go').buttonGetCaption({face});"), format!("getField('go').buttonSetCaption('Bad', {face});")] {
+            let rejected = run(&method);
+            assert!(rejected.error.is_some(), "{method}");
+            assert!(rejected.changed.is_empty(), "an invalid face must not mutate the caption");
+        }
+    }
+    assert!(run("getField('text').buttonSetCaption('Bad');").error.is_some());
+    assert!(run("getField('text').buttonGetCaption();").error.is_some());
+    let cleared = run("getField('go').buttonSetCaption('', 0); event.value = getField('go').buttonGetCaption(0);");
+    assert_eq!(cleared.error, None);
+    assert_eq!(cleared.value, "");
+    assert_eq!(cleared.changed[0].caption.as_deref(), Some(""));
 }
 
 #[test]
@@ -355,12 +418,16 @@ fn app_alert_titles_are_clipped_and_charged() {
     // The title's bytes count against the budget with the text's, and a message the budget
     // has no room for is left out and counted.
     let mut h = Host {
+        icons: Vec::new(),
+        objects: Vec::new(),
         fields: Arc::new(Vec::new()),
         changed: BTreeSet::new(),
         alerts: Vec::new(),
         console: Vec::new(),
         requests: Vec::new(),
         doc: doc(),
+        calculations: Vec::new(),
+        calculate_depth: 0,
         kept: 0,
         dropped: 0,
     };

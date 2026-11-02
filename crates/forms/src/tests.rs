@@ -137,6 +137,71 @@ fn a_button_caption_its_fonts_encoding_cant_hold_is_reported() {
     assert_eq!(undrawn_fields(&doc), [("go".to_string(), '\u{2000B}')]);
 }
 
+/// A field-wide script caption must reach every widget, including shared dictionaries.
+#[test]
+fn script_caption_updates_every_widget_and_survives_save() {
+    let mut doc = one_page();
+    let a = add_field(&mut doc, 0, [40.0, 600.0, 200.0, 630.0], &NewField::Button { caption: "Original".into() }, Some("first")).unwrap();
+    let b = add_field(&mut doc, 0, [40.0, 500.0, 200.0, 530.0], &NewField::Button { caption: "Original".into() }, Some("second")).unwrap();
+    let all = fields(&doc);
+    let (first, second) = (field(&all, &a).obj, field(&all, &b).obj);
+    let mut parent = Dict::new();
+    parent.set(b"FT".to_vec(), Object::name("Btn"));
+    parent.set(b"Ff".to_vec(), Object::Int(flags::PUSH_BUTTON as i64));
+    parent.set(b"T".to_vec(), PdfString::text("clear_button"));
+    parent.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(first), Object::Ref(second)]));
+    let mut action = Dict::new();
+    action.set(b"S".to_vec(), Object::name("ResetForm"));
+    parent.set(b"A".to_vec(), Object::Dict(action.clone()));
+    let parent = doc.add(parent);
+    let mut mk = Dict::new();
+    let ca = Object::String(PdfString::text("Original"));
+    let ca = Object::Ref(doc.add(ca));
+    mk.set(b"CA".to_vec(), ca);
+    mk.set(b"TP".to_vec(), Object::Int(0));
+    mk.set(b"R".to_vec(), Object::Int(90));
+    mk.set(b"VendorNote".to_vec(), PdfString::text("kept"));
+    let mk = doc.add(mk);
+    let mut shared_ap = doc.get(first).as_dict().unwrap().get(b"AP").unwrap().as_dict().unwrap().clone();
+    let normal = shared_ap.get(b"N").unwrap().clone();
+    shared_ap.set(b"R".to_vec(), normal.clone());
+    shared_ap.set(b"D".to_vec(), normal);
+    shared_ap.set(b"VendorAP".to_vec(), PdfString::text("kept"));
+    let shared_ap = doc.add(shared_ap);
+    for widget in [first, second] {
+        doc.update_dict(widget, |d| {
+            for key in [b"FT".as_slice(), b"Ff", b"T"] {
+                d.remove(key);
+            }
+            d.set(b"Parent".to_vec(), Object::Ref(parent));
+            d.set(b"MK".to_vec(), Object::Ref(mk));
+            d.set(b"AP".to_vec(), Object::Ref(shared_ap));
+        })
+        .unwrap();
+    }
+    let af = doc.get(doc.root().unwrap()).as_dict().unwrap().reference(b"AcroForm").unwrap();
+    doc.update_dict(af, |d| d.set(b"Fields".to_vec(), Object::Array(vec![Object::Ref(parent)]))).unwrap();
+
+    for caption in ["Original", "", "Continue"] {
+        apply_script_changes(
+            &mut doc,
+            &[FieldChange { name: "clear_button".into(), caption: Some(caption.into()), ..Default::default() }],
+            &mut NoScripts,
+        )
+        .unwrap();
+        let bytes = pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap();
+        doc = Document::open(Arc::new(bytes)).unwrap();
+        let all = fields(&doc);
+        let button = field(&all, "clear_button");
+        assert_eq!(button.widgets.len(), 2);
+        for widget in &button.widgets {
+            assert_eq!(widget.caption.as_deref(), Some(caption));
+            let ap = doc.resolve(doc.get(widget.obj).as_dict().unwrap().get(b"AP").unwrap());
+            assert!(ap.as_dict().unwrap().get(b"N").is_some());
+        }
+    }
+}
+
 /// Changing one widget's caption on a push button with two widgets leaves the other widget, the
 /// shared `/MK` and the parent's action untouched, keeps the other `/MK` and `/AP` entries, and
 /// drops the stale rollover and down appearances, with a direct or indirect caption and either save.
@@ -1518,7 +1583,7 @@ fn formats_validation_and_calculations_run_like_acrobat() {
 fn a_script_that_spells_the_markers_in_a_string_runs_as_a_script() {
     struct Ran;
     impl Scripts for Ran {
-        fn run(&mut self, _event: FieldEvent, _script: &str, _target: &Field, _value: &str, _fields: &[Field]) -> ScriptResult {
+        fn run(&mut self, _event: FieldEvent, _script: &str, _target: &Field, _value: &str, _fields: &[Field], _doc: &Document) -> ScriptResult {
             ScriptResult { rc: true, value: "ran".into(), changes: Vec::new(), message: None }
         }
     }
@@ -2928,7 +2993,7 @@ fn check_box_redraw_keeps_down_states_it_still_draws() {
 fn recalc_chain_where_script_changes_checkbox() {
     struct TestScripts;
     impl Scripts for TestScripts {
-        fn run(&mut self, _event: FieldEvent, script: &str, _target: &Field, _value: &str, fields: &[Field]) -> ScriptResult {
+        fn run(&mut self, _event: FieldEvent, script: &str, _target: &Field, _value: &str, fields: &[Field], _doc: &Document) -> ScriptResult {
             if script == "set_box" {
                 ScriptResult {
                     rc: true,
@@ -2939,6 +3004,10 @@ fn recalc_chain_where_script_changes_checkbox() {
                         read_only: None,
                         required: None,
                         display: None,
+                        caption: None,
+                        text_color: None,
+                        fill_color: None,
+                        ..Default::default()
                     }],
                     message: None,
                 }
@@ -5484,4 +5553,31 @@ fn locked_button_export_edits_leave_the_document_unchanged() {
         assert!(error.to_string().contains("locked"));
         assert_eq!(write_incremental(&doc, &SaveOptions::default()).unwrap(), before);
     }
+}
+
+#[test]
+fn script_cosmetic_mutations_do_not_run_the_calculation_chain() {
+    struct Counter(usize);
+    impl Scripts for Counter {
+        fn run(&mut self, event: FieldEvent, _: &str, _: &Field, value: &str, _: &[Field], _: &Document) -> ScriptResult {
+            if event == FieldEvent::Calculate {
+                self.0 += 1;
+            }
+            ScriptResult { rc: true, value: value.into(), changes: Vec::new(), message: None }
+        }
+    }
+    let mut doc = one_page();
+    add_field(&mut doc, 0, [40.0, 700.0, 200.0, 730.0], &NewField::Text { multiline: false }, Some("input")).unwrap();
+    add_field(&mut doc, 0, [40.0, 650.0, 200.0, 680.0], &NewField::Text { multiline: false }, Some("total")).unwrap();
+    set_field_script(&mut doc, "total", "calculate", Some("event.value = 1;")).unwrap();
+    let mut count = Counter(0);
+    apply_script_changes(
+        &mut doc,
+        &[FieldChange { name: "input".into(), fill_color: Some(vec!["RGB".into(), "1".into(), "0".into(), "0".into()]), ..Default::default() }],
+        &mut count,
+    )
+    .unwrap();
+    assert_eq!(count.0, 0, "a visual change must not evaluate the whole form");
+    apply_script_changes(&mut doc, &[FieldChange { name: "input".into(), value: Some(vec!["2".into()]), ..Default::default() }], &mut count).unwrap();
+    assert!(count.0 > 0, "value changes still calculate dependent fields");
 }

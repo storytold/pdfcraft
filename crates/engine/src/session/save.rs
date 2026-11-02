@@ -127,6 +127,7 @@ impl Session {
     /// File ▸ Revert: back to the last saved version (or the file as opened). Undo history is
     /// cleared, as in Acrobat.
     pub fn revert(&mut self, id: DocId) -> Result<(), EditError> {
+        self.invalidate_javascript(id);
         let doc = self.doc_mut(id)?;
         let editor = doc.editor.as_mut().ok_or_else(|| EditError::ReadOnly(doc.read_only_reason.clone().unwrap_or_default()))?;
         let base = editor.saved.clone();

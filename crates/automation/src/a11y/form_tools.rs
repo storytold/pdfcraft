@@ -11,6 +11,8 @@ fn request_json(r: &pdfcraft_engine::js::Request) -> Value {
         R::LaunchUrl(u) => json!({ "url": u }),
         R::Submit(u) => json!({ "submit": u }),
         R::Focus(f) => json!({ "focus": f }),
+        R::Zoom(z) => json!({"zoom":z}),
+        R::Highlight(h) => json!({"highlight_fields":h}),
         R::Beep => json!({ "beep": true }),
         R::SaveAs => json!({ "save_as": true }),
         R::ShowPanel(p) => json!({ "panel": p.id() }),
@@ -28,7 +30,19 @@ impl Automation {
     /// messages, console lines, requests, error, the failing document scripts' errors and result.
     pub(crate) fn js_run(&mut self, a: &Args) -> Result<Value> {
         let id = self.doc(a)?.id;
-        let o = self.session.run_javascript(id, a.str("script")?, a.opt_str("field")?).map_err(failed)?;
+        let answers = match a.0.get("answers") {
+            None => Vec::new(),
+            Some(Value::Array(values)) if values.len() <= 32 => values
+                .iter()
+                .map(|v| match v {
+                    Value::Null => Ok(None),
+                    Value::String(s) if s.len() <= 4096 => Ok(Some(s.clone())),
+                    _ => Err(ToolError::InvalidArgs("answers must contain strings or null".into())),
+                })
+                .collect::<Result<Vec<_>>>()?,
+            _ => return Err(ToolError::InvalidArgs("answers must be an array of at most 32 strings or null".into())),
+        };
+        let o = self.session.run_javascript_answers(id, a.str("script")?, a.opt_str("field")?, &answers).map_err(failed)?;
         let reqs: Vec<Value> = o.requests.iter().map(request_json).collect();
         let alerts: Vec<Value> = o.alerts.iter().map(alert_json).collect();
         Ok(json!({ "alerts": alerts, "console": o.console, "requests": reqs, "error": o.error, "document_errors": o.doc_errors, "result": o.result }))

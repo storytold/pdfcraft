@@ -108,6 +108,20 @@ pub fn run(script: &str, event: &Event, doc: &DocInfo, fields: &[FieldState], do
 /// context; the first field write copies the snapshot, so neither the caller nor another
 /// script can observe uncommitted writes. Read-only calculations avoid copying the whole form.
 pub fn run_shared(script: &str, event: &Event, doc: &DocInfo, fields: Arc<Vec<FieldState>>, doc_scripts: &[String], limits: Limits) -> Outcome {
+    run_shared_calculations(script, event, doc, fields, doc_scripts, &[], limits)
+}
+
+/// Like [`run_shared`], with the document's ordered calculated fields available to
+/// `calculateNow()` while this context is running.
+pub fn run_shared_calculations(
+    script: &str,
+    event: &Event,
+    doc: &DocInfo,
+    fields: Arc<Vec<FieldState>>,
+    doc_scripts: &[String],
+    calculations: &[(String, String)],
+    limits: Limits,
+) -> Outcome {
     let failed = |why: String| Outcome { rc: true, value: event.value.clone(), change: event.change.clone(), error: Some(why), ..Default::default() };
     if let Some(why) = refuse(script) {
         return failed(why);
@@ -130,10 +144,9 @@ pub fn run_shared(script: &str, event: &Event, doc: &DocInfo, fields: Arc<Vec<Fi
     #[cfg(not(target_arch = "wasm32"))]
     {
         std::thread::scope(|scope| {
-            let spawned = std::thread::Builder::new()
-                .name("pdfcraft-js".into())
-                .stack_size(SCRIPT_STACK)
-                .spawn_scoped(scope, || run_here(script, event, doc, fields, kept, skipped, limits));
+            let spawned = std::thread::Builder::new().name("pdfcraft-js".into()).stack_size(SCRIPT_STACK).spawn_scoped(scope, || {
+                run_here(script, event, doc, fields, ScriptSetup { doc_scripts: kept, skipped, calculations, initialize: true }, limits)
+            });
             match spawned {
                 Ok(thread) => thread.join().unwrap_or_else(|_| failed("the script stopped with an internal error".into())),
                 Err(e) => failed(format!("the script engine could not start: {e}")),
@@ -141,13 +154,13 @@ pub fn run_shared(script: &str, event: &Event, doc: &DocInfo, fields: Arc<Vec<Fi
         })
     }
     #[cfg(target_arch = "wasm32")]
-    run_here(script, event, doc, fields, kept, skipped, limits)
+    run_here(script, event, doc, fields, ScriptSetup { doc_scripts: kept, skipped, calculations, initialize: true }, limits)
 }
 
 /// Host hooks that refuse to compile code from strings (`eval`, `Function` and its generator
 /// and async kin). Such code is built at run time, so it never passed [`refuse`], and boa's
 /// recursive parser would overflow the stack on a deeply nested one.
-struct NoCodeFromStrings;
+pub(crate) struct NoCodeFromStrings;
 
 impl HostHooks for NoCodeFromStrings {
     fn ensure_can_compile_strings(&self, _: Realm, _: &[JsString], _: &JsString, _: bool, _: &mut Context) -> JsResult<()> {
@@ -183,58 +196,78 @@ fn doc_error(index: usize, error: &dyn std::fmt::Display) -> String {
 
 /// `doc_scripts` are the document scripts to run with their places among all of them;
 /// `skipped` the ones refused before running, with the reason.
-fn run_here(
+pub(crate) struct ScriptSetup<'a> {
+    pub(crate) doc_scripts: &'a [(usize, &'a str)],
+    pub(crate) skipped: &'a [(usize, String)],
+    pub(crate) calculations: &'a [(String, String)],
+    pub(crate) initialize: bool,
+}
+
+fn run_here(script: &str, event: &Event, doc: &DocInfo, fields: Arc<Vec<FieldState>>, setup: ScriptSetup<'_>, limits: Limits) -> Outcome {
+    match Context::builder().host_hooks(std::rc::Rc::new(NoCodeFromStrings)).build() {
+        Ok(mut ctx) => run_in_context(&mut ctx, script, event, doc, fields, setup, limits),
+        Err(e) => Outcome { rc: true, error: Some(format!("the script engine could not start: {e}")), ..Default::default() },
+    }
+}
+
+pub(crate) fn run_in_context(
+    ctx: &mut Context,
     script: &str,
     event: &Event,
     doc: &DocInfo,
     fields: Arc<Vec<FieldState>>,
-    doc_scripts: &[(usize, &str)],
-    skipped: &[(usize, String)],
+    setup: ScriptSetup<'_>,
     limits: Limits,
 ) -> Outcome {
-    let mut ctx = match Context::builder().host_hooks(std::rc::Rc::new(NoCodeFromStrings)).build() {
-        Ok(ctx) => ctx,
-        Err(e) => {
-            let error = Some(format!("the script engine could not start: {e}"));
-            return Outcome { rc: true, value: event.value.clone(), change: event.change.clone(), error, ..Default::default() };
-        }
-    };
     ctx.runtime_limits_mut().set_loop_iteration_limit(limits.loop_iterations);
     ctx.runtime_limits_mut().set_recursion_limit(limits.recursion);
+    let (icons, objects) = ctx
+        .remove_data::<Shared>()
+        .map(|h| {
+            let h = h.into_inner();
+            (h.icons, h.objects)
+        })
+        .unwrap_or_default();
     ctx.insert_data(RefCell::new(Host {
         fields,
+        icons,
+        objects,
         changed: BTreeSet::new(),
         alerts: Vec::new(),
         console: Vec::new(),
         requests: Vec::new(),
         doc: doc.clone(),
+        calculations: setup.calculations.to_vec(),
+        calculate_depth: 0,
         kept: 0,
         dropped: 0,
     }));
     let mut out = Outcome { rc: true, value: event.value.clone(), change: event.change.clone(), ..Default::default() };
-    let mut doc_errors: Vec<(usize, String)> = skipped.iter().map(|(i, why)| (*i, doc_error(*i, why))).collect();
+    let mut doc_errors: Vec<(usize, String)> = setup.skipped.iter().map(|(i, why)| (*i, doc_error(*i, why))).collect();
     let result = (|| -> JsResult<()> {
-        install(&mut ctx)?;
-        let ev = event_object(&mut ctx, event);
+        if setup.initialize {
+            install(ctx)?;
+        }
+        let ev = event_object(ctx, event);
         ctx.register_global_property(js_string!("event"), ev.clone(), Attribute::all())?;
         // One document script that throws (calling a method PdfCraft lacks, say) must not keep
         // every field script in the form from running: what it defined before the error, and
         // the other scripts, stay available (#3940).
-        for &(i, d) in doc_scripts {
+        for &(i, d) in setup.doc_scripts {
             if let Err(e) = ctx.eval(Source::from_bytes(d)) {
                 doc_errors.push((i, doc_error(i, &e)));
             }
         }
         let r = ctx.eval(Source::from_bytes(script))?;
         if !r.is_undefined() {
-            out.result = Some(text(&r, &mut ctx)?);
+            out.result = Some(text(&r, ctx)?);
         }
-        let rc = ev.get(js_string!("rc"), &mut ctx)?;
+        let rc = ev.get(js_string!("rc"), ctx)?;
         out.rc = rc.to_boolean();
-        let v = ev.get(js_string!("value"), &mut ctx)?;
-        out.value = text(&v, &mut ctx)?;
-        let c = ev.get(js_string!("change"), &mut ctx)?;
-        out.change = text(&c, &mut ctx)?;
+        let v = ev.get(js_string!("value"), ctx)?;
+        out.value = text(&v, ctx)?;
+        let c = ev.get(js_string!("change"), ctx)?;
+        out.change = text(&c, ctx)?;
         Ok(())
     })();
     if let Err(e) = result {
@@ -243,14 +276,15 @@ fn run_here(
     doc_errors.sort_by_key(|(i, _)| *i);
     out.doc_errors = doc_errors.into_iter().map(|(_, e)| e).collect();
     if let Some(h) = ctx.remove_data::<Shared>() {
-        let h = h.into_inner();
-        out.changed = h.changed.iter().map(|i| h.fields[*i].clone()).collect();
-        out.alerts = h.alerts;
-        out.console = h.console;
-        out.requests = h.requests;
+        let mut h = h.into_inner();
+        out.changed = h.changed.iter().filter_map(|i| h.fields.get(*i).cloned()).collect();
+        out.alerts = std::mem::take(&mut h.alerts);
+        out.console = std::mem::take(&mut h.console);
+        out.requests = std::mem::take(&mut h.requests);
         if h.dropped > 0 {
             out.console.push(format!("the script's messages, console lines and requests passed their limits; {} more were left out", h.dropped));
         }
+        ctx.insert_data(RefCell::new(h));
     }
     out
 }

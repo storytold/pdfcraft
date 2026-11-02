@@ -76,9 +76,9 @@ fn button_scripts_run_and_alert() {
     let mut h = harness();
     let id = h.state().active_ids().unwrap().1;
     h.state_mut().run_button_script(id, "hello", "getField('greeting').value = 'Hello from JavaScript'; app.alert('Filled in');");
-    h.run_steps(2);
-    assert_eq!(value(&h, "greeting"), ["Hello from JavaScript"]);
-    assert_eq!(h.state().toast.clone().unwrap().0, "Filled in");
+    wait_for(&mut h, "Filled in");
+    h.get_by_label("OK").click();
+    wait_value(&mut h, "greeting", "Hello from JavaScript");
 }
 
 /// One run's messages are all shown, in order (#4294): the first takes the toast with its title
@@ -90,7 +90,12 @@ fn every_message_a_script_shows_takes_the_toast_in_turn() {
     use pdfcraft_engine::js::{MessageButtons, MessageIcon};
     let mut h = harness();
     let id = h.state().active_ids().unwrap().1;
-    h.state_mut().run_button_script(id, "hello", "app.alert('First', 1, 0, 'Order form'); app.alert('Second', 3); app.alert('Third');");
+    let out = h
+        .state_mut()
+        .session
+        .run_javascript(id, "app.alert('First', 1, 0, 'Order form'); app.alert('Second', 3); app.alert('Third');", None)
+        .unwrap();
+    h.state_mut().handle_js(id, pdfcraft_engine::js::JsOutput { alerts: out.alerts, ..Default::default() });
     h.run_steps(2);
     let shown = |h: &Harness<'static, PdfCraftApp>| h.state().toast.clone().map(|t| t.0);
     assert_eq!(shown(&h).as_deref(), Some("First"));
@@ -114,7 +119,8 @@ fn every_message_a_script_shows_takes_the_toast_in_turn() {
     // follows it.
     h.state_mut().toast = None;
     h.run_steps(2);
-    h.state_mut().run_button_script(id, "hello", "this.submitForm('https://example.com/form'); app.alert('Fourth');");
+    let out = h.state_mut().session.run_javascript(id, "this.submitForm('https://example.com/form'); app.alert('Fourth');", None).unwrap();
+    h.state_mut().handle_js(id, pdfcraft_engine::js::JsOutput { alerts: out.alerts, requests: out.requests, ..Default::default() });
     h.run_steps(2);
     let notice = shown(&h).unwrap_or_default();
     assert!(notice.contains("submitted"), "the submit notice stays: {notice}");
@@ -214,4 +220,67 @@ fn prepare_a_form_detects_fields_on_a_paper_form() {
     let names: Vec<String> = app.session.get(id).unwrap().form.iter().map(|f| f.name.clone()).collect();
     assert_eq!(names, ["Name", "Phone"]);
     assert_eq!(app.toast.clone().unwrap().0, "Detected 2 form fields");
+}
+
+fn wait_for(h: &mut Harness<'static, PdfCraftApp>, label: &str) {
+    for _ in 0..300 {
+        h.run_steps(1);
+        if h.query_by_label(label).is_some() {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    panic!("script dialog did not show {label}");
+}
+fn wait_value(h: &mut Harness<'static, PdfCraftApp>, name: &str, expected: &str) {
+    for _ in 0..300 {
+        h.run_steps(1);
+        if value(h, name) == [expected] {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(value(h, name), [expected]);
+}
+#[test]
+fn native_button_popup_and_response_resume_without_replaying_the_script() {
+    let mut h = harness();
+    let id = h.state().active_ids().unwrap().1;
+    h.state_mut().run_button_script(id,"hello","var calls=0;calls++;var choice=app.popUpMenuEx({cName:'Morning',cReturn:'08:00'});var extra=app.response({cTitle:'Manual time',cQuestion:'Suffix',cDefault:'x'});getField('greeting').value=choice+'/'+extra+'/'+calls;");
+    wait_for(&mut h, "Morning");
+    h.get_by_label("Morning").click();
+    wait_for(&mut h, "Suffix");
+    if let Ok(path) = std::env::var("PDFCRAFT_COMPAT_SCREENSHOT") {
+        let image = h.render().unwrap();
+        let crop = image::imageops::crop_imm(&image, 400, 220, 600, 460).to_image();
+        crop.save(path).unwrap();
+    }
+    h.get_by_label("OK").click();
+    wait_value(&mut h, "greeting", "08:00/x/1");
+}
+#[test]
+fn native_popup_cancellation_returns_null_and_preserves_the_single_invocation() {
+    let mut h = harness();
+    let id = h.state().active_ids().unwrap().1;
+    h.state_mut().run_button_script(
+        id,
+        "hello",
+        "var calls=0;calls++;var choice=app.popUpMenuEx({cName:'Choose',cReturn:'yes'});getField('greeting').value=String(choice)+'/'+calls;",
+    );
+    wait_for(&mut h, "Choose");
+    h.get_by_label("Cancel").click();
+    wait_value(&mut h, "greeting", "null/1");
+}
+#[test]
+fn native_popup_completion_is_discarded_after_the_document_is_edited() {
+    let mut h = harness();
+    let id = h.state().active_ids().unwrap().1;
+    h.state_mut().run_button_script(id, "hello", "app.popUpMenuEx({cName:'Wait',cReturn:'yes'});getField('greeting').value='stale';");
+    wait_for(&mut h, "Wait");
+    h.state_mut()
+        .session
+        .apply(id, pdfcraft_engine::Edit::SetFieldValue { name: "greeting".into(), value: pdfcraft_engine::FieldValue::Text("current".into()) })
+        .unwrap();
+    h.run_steps(5);
+    assert_eq!(value(&h, "greeting"), ["current"]);
 }

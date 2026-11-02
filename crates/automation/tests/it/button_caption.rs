@@ -34,11 +34,16 @@ fn button_caption_can_be_changed_after_creation() {
     let id = tool(&mut a, "doc_open", json!({"path": "buttons.pdf"}))["doc"].as_u64().unwrap();
     let before = a.session().save_bytes(DocId(id)).unwrap();
     let (_, _, empty_pixels) = a.render_pixels(id, 1, 1.0).unwrap();
-    tool(&mut a, "form_set_props", json!({"doc": id, "field": "clear_button", "caption": "Clear Form"}));
+    let result = tool(
+        &mut a,
+        "js_run",
+        json!({ "doc": id, "field": "clear_button", "script": "getField('clear_button').value='ignored'; getField('clear_button').buttonSetCaption('Clear Form'); getField('clear_button').buttonGetCaption();" }),
+    );
+    assert_eq!(result["result"], "Clear Form");
     let fields = tool(&mut a, "form_fields", json!({"doc": id}));
     assert_eq!(fields["fields"][0]["caption"], "Clear Form");
     assert_eq!(fields["fields"][0]["captions"], json!([{"widget": 1, "caption": "Clear Form"}]));
-    assert_eq!(a.session().get(DocId(id)).unwrap().can_undo(), Some("Change field properties"));
+    assert_eq!(a.session().get(DocId(id)).unwrap().can_undo(), Some("Run JavaScript"));
     let (_, _, labelled_pixels) = a.render_pixels(id, 1, 1.0).unwrap();
     assert_ne!(empty_pixels, labelled_pixels, "the label must reach the actual page appearance");
     tool(&mut a, "edit_undo", json!({"doc": id}));
@@ -87,5 +92,71 @@ fn button_caption_can_be_changed_after_creation() {
     assert_eq!(fields["fields"][0]["caption"], "");
     let (_, _, pixels) = a.render_pixels(id, 1, 1.0).unwrap();
     assert_eq!(pixels, empty_pixels);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// An unindexed setter reaches both widgets even when the first caption already matches.
+#[test]
+fn javascript_caption_updates_all_widgets_with_undo_and_save() {
+    use pdfcraft_cos::{Dict, Document, Object, PdfString, SaveOptions, write_full};
+
+    let dir = std::env::temp_dir().join(format!("pdfcraft-js-multi-caption-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut session = Session::new();
+    let bytes = session.create_blank(300.0, 400.0, 1).unwrap();
+    let id = session.open("buttons.pdf", None, bytes, None).unwrap();
+    for (name, caption, y) in [("first", "First", 300.0), ("second", "Second", 240.0)] {
+        session
+            .apply(
+                id,
+                Edit::AddField {
+                    page: 0,
+                    rect: [40.0, y, 200.0, y + 30.0],
+                    kind: NewField::Button { caption: caption.into() },
+                    name: Some(name.into()),
+                },
+            )
+            .unwrap();
+    }
+    let mut doc = Document::open(session.save_bytes(id).unwrap()).unwrap();
+    let af = doc.get(doc.root().unwrap()).as_dict().unwrap().reference(b"AcroForm").unwrap();
+    let form = doc.get(af);
+    let fields = doc.resolve(form.as_dict().unwrap().get(b"Fields").unwrap());
+    let widgets: Vec<_> = fields.as_array().unwrap().iter().map(|w| w.as_ref().unwrap()).collect();
+    let mut parent = Dict::new();
+    parent.set(b"FT".to_vec(), Object::name("Btn"));
+    parent.set(b"Ff".to_vec(), Object::Int(1 << 16));
+    parent.set(b"T".to_vec(), PdfString::text("go"));
+    parent.set(b"Kids".to_vec(), Object::Array(widgets.iter().copied().map(Object::Ref).collect()));
+    let parent = doc.add(parent);
+    for w in widgets {
+        doc.update_dict(w, |d| {
+            for key in [b"FT".as_slice(), b"Ff", b"T"] {
+                d.remove(key);
+            }
+            d.set(b"Parent".to_vec(), Object::Ref(parent));
+        })
+        .unwrap();
+    }
+    doc.update_dict(af, |d| d.set(b"Fields".to_vec(), Object::Array(vec![Object::Ref(parent)]))).unwrap();
+    std::fs::write(dir.join("buttons.pdf"), write_full(&doc, &SaveOptions::default()).unwrap()).unwrap();
+    let mut a = Automation::new().with_root(&dir).unwrap();
+    let id = tool(&mut a, "doc_open", json!({"path": "buttons.pdf"}))["doc"].as_u64().unwrap();
+    let (_, _, before) = a.render_pixels(id, 1, 1.0).unwrap();
+    let result = tool(&mut a, "js_run", json!({"doc": id, "script": "getField('go').buttonSetCaption('First'); getField('go').buttonGetCaption();"}));
+    assert_eq!(result["error"], Value::Null);
+    assert_eq!(result["result"], "First");
+    let expected = json!([{"widget": 1, "caption": "First"}, {"widget": 2, "caption": "First"}]);
+    assert_eq!(tool(&mut a, "form_fields", json!({"doc": id}))["fields"][0]["captions"], expected);
+    let (_, _, after) = a.render_pixels(id, 1, 1.0).unwrap();
+    assert_ne!(before, after, "the second widget must visibly change");
+    tool(&mut a, "edit_undo", json!({"doc": id}));
+    assert_eq!(a.render_pixels(id, 1, 1.0).unwrap().2, before);
+    tool(&mut a, "edit_redo", json!({"doc": id}));
+    assert_eq!(a.render_pixels(id, 1, 1.0).unwrap().2, after);
+    tool(&mut a, "doc_save", json!({"doc": id, "path": "saved.pdf"}));
+    let reopened = tool(&mut a, "doc_open", json!({"path": "saved.pdf"}))["doc"].as_u64().unwrap();
+    assert_eq!(tool(&mut a, "form_fields", json!({"doc": reopened}))["fields"][0]["captions"], expected);
+    assert_eq!(a.render_pixels(reopened, 1, 1.0).unwrap().2, after);
     std::fs::remove_dir_all(dir).unwrap();
 }

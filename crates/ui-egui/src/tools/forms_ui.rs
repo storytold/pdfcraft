@@ -113,7 +113,7 @@ pub(crate) fn draft_text(f: &FormField) -> String {
     value
 }
 
-fn open_focus(f: &FormField, widget: usize) -> Focus {
+pub(crate) fn open_focus(f: &FormField, widget: usize) -> Focus {
     Focus {
         name: f.name.clone(),
         widget,

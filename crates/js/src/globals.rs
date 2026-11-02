@@ -1,10 +1,10 @@
 use super::document::{field_object, get_field, get_nth_field_name, noop, num_fields, page_num_get, page_num_set, print, reset_form, submit_form};
 use super::format::{printd, printf, printx, scand};
-use super::host::{arg, function, host, s, text, text_line};
+use super::host::{arg, error, function, host, read, s, strings, text, text_line};
 use super::model::{DISPLAY_HIDDEN, DISPLAY_NO_PRINT, DISPLAY_NO_VIEW, DISPLAY_VISIBLE, Event, Panel, Request};
 use super::{
-    Attribute, Context, JsArray, JsObject, JsResult, JsString, JsValue, Message, MessageButtons, MessageIcon, NativeFunction, ObjectInitializer,
-    js_string,
+    Arc, Attribute, Context, JsArray, JsObject, JsResult, JsString, JsValue, Message, MessageButtons, MessageIcon, NativeFunction, ObjectInitializer,
+    Source, js_string,
 };
 
 // ── app, util, console ──────────────────────────────────────────────────────────────────────
@@ -78,10 +78,30 @@ pub(crate) fn message_box_message(args: &[JsValue], ctx: &mut Context) -> JsResu
 /// given in that order or as one object with those keys, and returns 1 (the OK button).
 fn alert(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let m = alert_message(args, ctx)?;
-    host(ctx)?.borrow_mut().alert(m);
-    // Always the OK button for now: the viewer can't ask the user and run the script on with
-    // the answer yet (#4291).
-    Ok(JsValue::from(1))
+    host(ctx)?.borrow_mut().alert(m.clone());
+    if !crate::interaction::has_host() {
+        return Ok(JsValue::from(1));
+    }
+    let answer = crate::interaction::ask(crate::interaction::Prompt::Alert(m.clone()))?;
+    let fallback = match m.buttons {
+        MessageButtons::Ok => "1",
+        MessageButtons::YesNo => "3",
+        _ => "2",
+    };
+    let answer = answer.as_deref().unwrap_or(fallback);
+    let accepted = match m.buttons {
+        MessageButtons::Ok => ["1"].as_slice(),
+        MessageButtons::OkCancel => ["1", "2"].as_slice(),
+        MessageButtons::YesNo => ["3", "4"].as_slice(),
+        MessageButtons::YesNoCancel => ["2", "3", "4"].as_slice(),
+    };
+    if answer == "1" && !accepted.contains(&"1") {
+        return Ok(JsValue::from(2));
+    }
+    if !accepted.contains(&answer) {
+        return Err(error("invalid alert response"));
+    }
+    Ok(JsValue::from(answer.parse::<i32>().unwrap_or(2)))
 }
 
 /// `app.beep()`: queues a request to beep.
@@ -125,13 +145,53 @@ fn exec_menu_item(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<
     Ok(JsValue::undefined())
 }
 
-/// `app.response(…)`: always `null`, the answer for a canceled dialog, since no one is there to
-/// type one.
-fn response(_: &JsValue, _: &[JsValue], _: &mut Context) -> JsResult<JsValue> {
-    // No one to answer: as if the dialog was cancelled.
-    Ok(JsValue::null())
+/// Return a page box in Acrobat's rotated-user-space order: left, top, right, bottom.
+fn get_page_box(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let name = arg(args, 0);
+    let name = if name.is_undefined() {
+        "Crop".to_string()
+    } else {
+        name.as_string().ok_or_else(|| error("getPageBox box name must be a string"))?.to_std_string_escaped()
+    };
+    let which = match name.as_str() {
+        "Media" | "MediaBox" => 0,
+        "Crop" | "CropBox" => 1,
+        "Bleed" | "BleedBox" => 2,
+        "Trim" | "TrimBox" => 3,
+        "Art" | "ArtBox" => 4,
+        _ => return Err(error("getPageBox box name must be Media, Crop, Trim, Bleed, or Art")),
+    };
+    let page_value = arg(args, 1);
+    let page = if page_value.is_undefined() {
+        0
+    } else {
+        let page = page_value.to_number(ctx)?;
+        if !page.is_finite() || page < 0.0 || page.fract() != 0.0 || page >= usize::MAX as f64 {
+            return Err(error("getPageBox page must be a non-negative in-range integer"));
+        }
+        page as usize
+    };
+    let (rect, rotation, crop) = {
+        let h = host(ctx)?.borrow();
+        let boxes = h.doc.page_boxes.get(page).ok_or_else(|| error("getPageBox page is outside the document"))?;
+        let rotation = h.doc.page_rotations.get(page).copied().unwrap_or(0);
+        (boxes[which], rotation, boxes[1])
+    };
+    let [x0, y0, x1, y1] = rect;
+    let [cx0, cy0, cx1, cy1] = crop;
+    let rotated = match rotation {
+        90 => [y0 - cy0, cx1 - x0, y1 - cy0, cx1 - x1],
+        180 => [cx1 - x1, cy1 - y0, cx1 - x0, cy1 - y1],
+        270 => [cy1 - y1, x1 - cx0, cy1 - y0, x0 - cx0],
+        _ => [x0, y1, x1, y0],
+    };
+    if !rotated.iter().all(|value| value.is_finite()) {
+        return Err(error("getPageBox returned non-finite coordinates"));
+    }
+    Ok(JsArray::from_iter(rotated.into_iter().map(JsValue::from), ctx).into())
 }
 
+/// Write a bounded line to the script console.
 fn println(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let m = text_line(&arg(args, 0), ctx)?;
     host(ctx)?.borrow_mut().print(m);
@@ -141,6 +201,84 @@ fn println(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue
 fn console_clear(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     host(ctx)?.borrow_mut().console.clear();
     Ok(JsValue::undefined())
+}
+
+/// Recalculate fields in the document's `/CO` order against the writes already made by this
+/// script. A small depth cap stops calculate scripts from recursing forever.
+fn calculate_now(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    const MAX_CALCULATE_DEPTH: usize = 8;
+    let calculations = {
+        let shared = host(ctx)?;
+        let mut h = shared.borrow_mut();
+        if h.calculate_depth >= MAX_CALCULATE_DEPTH {
+            return Err(error("calculateNow recursion limit exceeded"));
+        }
+        h.calculate_depth += 1;
+        h.calculations.clone()
+    };
+    let previous_event = match ctx.global_object().get(js_string!("event"), ctx) {
+        Ok(event) => event,
+        Err(error) => {
+            if let Ok(shared) = host(ctx) {
+                let mut h = shared.borrow_mut();
+                h.calculate_depth = h.calculate_depth.saturating_sub(1);
+            }
+            return Err(error);
+        }
+    };
+    let result = (|| {
+        for (name, script) in calculations {
+            let Some(field) = host(ctx)?.borrow().fields.iter().find(|f| f.name == name).cloned() else { continue };
+            if let Some(why) = super::run::refuse(&script) {
+                return Err(error(why));
+            }
+            let event = Event::field("Calculate", &name, &field.value.first().cloned().unwrap_or_default());
+            let object = event_object(ctx, &event);
+            ctx.global_object().set(js_string!("event"), object.clone(), true, ctx)?;
+            ctx.eval(Source::from_bytes(&script))?;
+            let rc = object.get(js_string!("rc"), ctx)?;
+            if !rc.to_boolean() {
+                continue;
+            }
+            let value = object.get(js_string!("value"), ctx)?;
+            let value = text(&value, ctx)?;
+            let shared = host(ctx)?;
+            let mut h = shared.borrow_mut();
+            if let Some((index, _)) = h.fields.iter().enumerate().find(|(_, f)| f.name == name) {
+                let target = Arc::make_mut(&mut h.fields).get_mut(index).ok_or_else(|| error("the field is no longer available"))?;
+                target.value = vec![value];
+                h.changed.insert(index);
+            }
+        }
+        Ok(JsValue::undefined())
+    })();
+    let restored = ctx.global_object().set(js_string!("event"), previous_event, true, ctx).map(|_| JsValue::undefined());
+    if let Ok(shared) = host(ctx) {
+        let mut h = shared.borrow_mut();
+        h.calculate_depth = h.calculate_depth.saturating_sub(1);
+    }
+    result.and(restored)
+}
+
+/// Acrobat's built-in calculation helper, used by the scripts written by its Calculate tab.
+fn af_simple_calculate(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let op = text(&arg(args, 0), ctx)?;
+    let names = strings(&arg(args, 1), ctx)?;
+    let mut values = Vec::new();
+    for name in names {
+        let field = read(ctx, &JsString::from(name))?;
+        values.extend(field.value.iter().map(|v| super::host::as_number(v).unwrap_or(0.0)));
+    }
+    let result = match op.as_str() {
+        "SUM" => values.iter().sum(),
+        "PRD" => values.iter().product(),
+        "AVG" if values.is_empty() => 0.0,
+        "AVG" => values.iter().sum::<f64>() / values.len() as f64,
+        "MIN" => values.iter().copied().reduce(f64::min).unwrap_or(0.0),
+        "MAX" => values.iter().copied().reduce(f64::max).unwrap_or(0.0),
+        _ => 0.0,
+    };
+    Ok(s(&if result.is_finite() { result.to_string() } else { "0".into() }))
 }
 
 fn timer(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
@@ -180,22 +318,62 @@ const XFA_VERSION: f64 = 3.5;
 /// `print`, `submitForm` and others) and properties (`numFields`, `pageNum`, `numPages`,
 /// `documentFileName`, `info`, the XFA version), and the `app`, `util`, `console`, `display` and
 /// `color` objects.
+fn zoom_get(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let z = host(ctx)?.borrow().doc.zoom;
+    Ok(JsValue::from(if z > 0.0 { z } else { 100.0 }))
+}
+fn zoom_set(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let z = arg(args, 0).to_number(ctx)?;
+    if !z.is_finite() || !(1.0..=6400.0).contains(&z) {
+        return Err(error("zoom must be between 1 and 6400"));
+    }
+    host(ctx)?.borrow_mut().doc.zoom = z;
+    host(ctx)?.borrow_mut().request(Request::Zoom(z));
+    Ok(JsValue::undefined())
+}
+fn highlight_get(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    Ok(JsValue::from(host(ctx)?.borrow().doc.runtime_highlight))
+}
+fn highlight_set(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let h = arg(args, 0).to_boolean();
+    host(ctx)?.borrow_mut().doc.runtime_highlight = h;
+    host(ctx)?.borrow_mut().request(Request::Highlight(h));
+    Ok(JsValue::undefined())
+}
 pub(crate) fn install(ctx: &mut Context) -> JsResult<()> {
-    let globals: [(&str, usize, NativeFunction); 9] = [
+    let globals: [(&str, usize, NativeFunction); 11] = [
         ("getField", 1, NativeFunction::from_fn_ptr(get_field)),
         ("getNthFieldName", 1, NativeFunction::from_fn_ptr(get_nth_field_name)),
         ("resetForm", 1, NativeFunction::from_fn_ptr(reset_form)),
         ("print", 1, NativeFunction::from_fn_ptr(print)),
         ("submitForm", 1, NativeFunction::from_fn_ptr(submit_form)),
         ("mailDoc", 1, NativeFunction::from_fn_ptr(noop)),
-        ("calculateNow", 0, NativeFunction::from_fn_ptr(noop)),
+        ("calculateNow", 0, NativeFunction::from_fn_ptr(calculate_now)),
+        ("getPageBox", 2, NativeFunction::from_fn_ptr(get_page_box)),
+        ("AFSimple_Calculate", 2, NativeFunction::from_fn_ptr(af_simple_calculate)),
         ("syncAnnotScan", 0, NativeFunction::from_fn_ptr(noop)),
         ("dirty", 0, NativeFunction::from_fn_ptr(noop)),
     ];
     for (name, len, f) in globals {
         ctx.register_global_callable(JsString::from(name), len, f)?;
     }
+    let zg = function(ctx, NativeFunction::from_fn_ptr(zoom_get));
+    let zs = function(ctx, NativeFunction::from_fn_ptr(zoom_set));
+
+    let border = ObjectInitializer::new(ctx)
+        .property(js_string!("s"), s("solid"), Attribute::all())
+        .property(js_string!("d"), s("dashed"), Attribute::all())
+        .property(js_string!("b"), s("beveled"), Attribute::all())
+        .property(js_string!("i"), s("inset"), Attribute::all())
+        .property(js_string!("u"), s("underline"), Attribute::all())
+        .build();
+    ctx.register_global_property(js_string!("border"), border, Attribute::CONFIGURABLE)?;
     let global = ctx.global_object();
+    global.define_property_or_throw(
+        js_string!("zoom"),
+        boa_engine::property::PropertyDescriptor::builder().get(zg).set(zs).configurable(true).build(),
+        ctx,
+    )?;
     let rw = Attribute::CONFIGURABLE;
     let nf = function(ctx, NativeFunction::from_fn_ptr(num_fields));
     let pg = function(ctx, NativeFunction::from_fn_ptr(page_num_get));
@@ -222,11 +400,15 @@ pub(crate) fn install(ctx: &mut Context) -> JsResult<()> {
         ctx.register_global_property(js_string!("xfa_installed"), JsValue::from(true), rw)?;
     }
 
+    let hg = function(ctx, NativeFunction::from_fn_ptr(highlight_get));
+    let hs = function(ctx, NativeFunction::from_fn_ptr(highlight_set));
     let app = ObjectInitializer::new(ctx)
+        .accessor(js_string!("runtimeHighlight"), Some(hg), Some(hs), Attribute::CONFIGURABLE)
         .function(NativeFunction::from_fn_ptr(alert), js_string!("alert"), 1)
         .function(NativeFunction::from_fn_ptr(beep), js_string!("beep"), 0)
-        .function(NativeFunction::from_fn_ptr(response), js_string!("response"), 1)
+        .function(NativeFunction::from_fn_ptr(crate::interaction::response), js_string!("response"), 1)
         .function(NativeFunction::from_fn_ptr(launch_url), js_string!("launchURL"), 2)
+        .function(NativeFunction::from_fn_ptr(crate::interaction::popup_menu), js_string!("popUpMenuEx"), 0)
         .function(NativeFunction::from_fn_ptr(exec_menu_item), js_string!("execMenuItem"), 1)
         .function(NativeFunction::from_fn_ptr(timer), js_string!("setTimeOut"), 2)
         .function(NativeFunction::from_fn_ptr(timer), js_string!("setInterval"), 2)
