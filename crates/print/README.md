@@ -58,6 +58,12 @@ The desktop UI discovers printers and submits jobs on workers, so neither operat
 the dialog; the Windows backend starts without a console window. Physical printer output
 still needs hardware validation.
 
+Windows discovery returns queue names without waiting for driver capabilities.
+The dialog reads two-sided support only for the selected printer;
+the headless `printers` tool leaves it unknown. Reopening Print refreshes all capability
+answers. Closing native Properties refreshes only that printer's answer, without changing
+job settings.
+
 In a browser there is no spooler: the app (`pdfcraft-ui-egui`'s `web_print`) draws the print-ready
 PDF's sheets with PdfCraft's renderer and prints them through the browser's print dialog, which
 sets copies, two-sided printing and colour. This crate stays free of web APIs.

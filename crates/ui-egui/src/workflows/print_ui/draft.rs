@@ -83,6 +83,15 @@ pub struct PrintDraft {
     pub driver_options_loading: Option<String>,
     /// Properties… asked for this printer's options; the app starts the read on the next frame.
     pub read_options_for: Option<String>,
+    /// The current printer's advisory duplex answer. Outer `None` means unread; inner `None`
+    /// means unavailable (see [`TwoSidedSource`](super::TwoSidedSource)).
+    pub two_sided: Option<(String, Option<bool>)>,
+    /// Request a fresh shared capability session when opening Print.
+    pub refresh_capabilities: bool,
+    /// Native preferences requested on the next logic pass.
+    pub read_preferences_for: Option<String>,
+    /// The selected printer has a native settings window pending.
+    pub preferences_loading: Option<String>,
 }
 
 impl Default for PrintDraft {
@@ -131,11 +140,27 @@ impl Default for PrintDraft {
             crop_pages: None,
             driver_options_loading: None,
             read_options_for: None,
+            two_sided: None,
+            refresh_capabilities: false,
+            read_preferences_for: None,
+            preferences_loading: None,
         }
     }
 }
 
 impl PrintDraft {
+    /// Discard driver knowledge, including failures, without changing the user's job settings.
+    pub fn refresh_two_sided(&mut self) {
+        self.two_sided = None;
+        self.refresh_capabilities = true;
+        for printer in &mut self.printers {
+            printer.two_sided = None;
+        }
+    }
+    /// The current presentation snapshot, not the owner of the capability cache.
+    pub fn two_sided_for(&self, printer: &str) -> Option<&Option<bool>> {
+        self.two_sided.as_ref().filter(|(name, _)| name == printer).map(|(_, answer)| answer)
+    }
     /// Choose Page Sizing & Handling. Label loads label stock and remembers the paper it
     /// replaced; leaving Label gives that paper back, unless another one was picked meanwhile.
     pub fn set_handling(&mut self, handling: Handling) {

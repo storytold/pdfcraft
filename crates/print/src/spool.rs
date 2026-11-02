@@ -3,8 +3,14 @@
 
 pub use craft_print::{
     Duplex, HANDLED_OPTIONS, HAS_PRINTER_PREFERENCES, Job, Printer, PrinterOption, Scaling, lp_args, lpstat_command, parse_lpoptions, parse_lpstat,
-    parse_lpstat_e, parse_ppd, parse_windows_printers, ppd_text, printers, printers_parsed,
+    parse_lpstat_e, parse_ppd, parse_windows_printers, ppd_text, printers, printers_parsed, query_printers, query_two_sided, two_sided,
 };
+
+#[cfg(not(target_arch = "wasm32"))]
+pub use craft_print::DuplexSession;
+pub use craft_print::DuplexSource;
+#[cfg(windows)]
+pub use craft_print::query_worker;
 
 /// The driver's job options for a printer (CUPS: its PPD, with the queue's current defaults);
 /// empty when it has none or on other platforms. Reads files and runs `lpoptions`, so call it
@@ -155,6 +161,12 @@ pub fn submit_with_progress(pdf: &[u8], job: &Job, progress: &mut dyn FnMut(usiz
 
 pub fn open_printer_preferences(printer: &str) -> Result<(), crate::PrintError> {
     craft_print::open_printer_preferences(printer).map_err(|e| crate::PrintError::Spool(e.to_string()))
+}
+
+/// Open native printer settings and wait for the user to close them. Call off the UI thread
+/// and invalidate capabilities afterwards; opening the window alone does not change settings.
+pub fn wait_printer_preferences(printer: &str) -> Result<(), crate::PrintError> {
+    craft_print::wait_printer_preferences(printer).map_err(|error| crate::PrintError::Spool(error.to_string()))
 }
 
 /// The PPD language codes (`*cupsLanguages`, the `ll` of `*ll.Translation`) to try for a UI
