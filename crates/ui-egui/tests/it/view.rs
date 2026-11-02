@@ -521,6 +521,48 @@ fn single_page_swipe_that_reaches_the_edge_does_not_turn_but_a_fresh_one_does() 
 }
 
 #[test]
+fn single_page_wheel_at_last_page_bottom_edge_can_scroll_back_up() {
+    let mut h = harness_stepping(1.0 / 60.0, &[("layout", "single"), ("zoom", "200")]);
+    h.state_mut().views[0].go_to_page(2); // Go to last page of PAGES (3 pages)
+    h.run_steps(20);
+    let at = h.state().views[0].viewport_rect().center();
+    h.hover_at(at);
+    h.run_steps(4);
+
+    // Scroll to the bottom edge of page 3
+    let mut notches = 0;
+    let mut last = rect(&h, 2).expect("page 3 on screen").min.y;
+    let mut at_bottom = false;
+    while notches < 80 {
+        h.event(wheel(MouseWheelUnit::Line, -1.0, TouchPhase::Move));
+        h.run_steps(12);
+        notches += 1;
+        if let Some(r) = rect(&h, 2) {
+            if (r.min.y - last).abs() < 0.01 {
+                at_bottom = true;
+                break;
+            }
+            last = r.min.y;
+        }
+    }
+    assert!(at_bottom, "reached bottom edge of last page");
+    assert_eq!(h.state().views[0].current, 2, "remains on page 3");
+
+    // Push the wheel further against the bottom edge (cannot turn because it's the last page)
+    for _ in 0..5 {
+        h.event(wheel(MouseWheelUnit::Line, -1.0, TouchPhase::Move));
+        h.run_steps(12);
+    }
+    let bottom_y = rect(&h, 2).expect("page 3 on screen").min.y;
+
+    // Roll the wheel back up: the page must move away from the bottom edge (#5713)
+    h.event(wheel(MouseWheelUnit::Line, 1.0, TouchPhase::Move));
+    h.run_steps(12);
+    let after_up_y = rect(&h, 2).expect("page 3 on screen").min.y;
+    assert!(after_up_y > bottom_y, "scrolling up moves the page away from the bottom edge: {after_up_y} > {bottom_y}");
+}
+
+#[test]
 fn stepping_past_either_end_leaves_the_view_alone() {
     // Paging on past the first or last page must not jump the page back to its top.
     for (page, forward) in [(2, true), (0, false)] {

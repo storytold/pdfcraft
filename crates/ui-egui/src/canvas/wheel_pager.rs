@@ -73,6 +73,11 @@ impl WheelPager {
         self.accum = 0.0;
     }
 
+    /// Reset any turned state when a turn did not happen (e.g. at document boundary).
+    pub(crate) fn unturn(&mut self) {
+        self.turned = None;
+    }
+
     /// Whether the current gesture already turned a page: the rest of it must not pan the page
     /// just shown away from its top (or bottom).
     pub(crate) fn gesture_turned(&self) -> bool {
