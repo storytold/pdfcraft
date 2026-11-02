@@ -5,6 +5,13 @@ pub(super) fn is_markup(subtype: &str) -> bool {
     matches!(subtype, "Highlight" | "Underline" | "StrikeOut" | "Squiggly")
 }
 
+/// What lies on the text and doesn't move with a drag: text markup, and the caret of a Replace
+/// Text proposal (`/IT /Replace`), which is picked by its strikeout too and would otherwise be
+/// dragged away from the text it replaces, leaving the strikeout behind.
+pub(super) fn on_text(a: &Annotation) -> bool {
+    is_markup(&a.subtype) || a.subtype == "Caret" && a.intent.as_deref() == Some("Replace")
+}
+
 /// Rectangles, ovals, text boxes, stamps and drawings (drawn signatures among them). A callout's
 /// `/Rect` also holds its leader line, so it only moves.
 pub(super) fn resizable(a: &Annotation) -> bool {

@@ -400,7 +400,7 @@ pub fn tool_for(a: &Annotation) -> Option<CommentTool> {
         ("FreeText", _) => CommentTool::TextBox,
         ("Highlight", _) => CommentTool::Highlight,
         ("Underline", _) => CommentTool::Underline,
-        ("StrikeOut", Some("StrikeOutTextEdit")) => CommentTool::ReplaceText,
+        ("StrikeOut", Some("StrikeOutTextEdit")) | ("Caret", Some("Replace")) => CommentTool::ReplaceText,
         ("StrikeOut", _) => CommentTool::StrikeOut,
         ("Squiggly", _) => CommentTool::Squiggly,
         ("Ink", Some("FreehandHighlight")) => CommentTool::FreehandHighlight,

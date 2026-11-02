@@ -85,7 +85,7 @@ pub fn deletable(doc: &Document, page: usize, index: usize) -> Result<(), AnnotE
     if let Some(r) = target.as_ref() {
         unlocked(doc, r)?;
     }
-    let doomed = with_replies_and_popups(doc, &list, seed(target));
+    let doomed = with_replies_and_popups(doc, &list, seed(doc, target));
     // A locked reply can't be deleted on its own, so it doesn't go with the comment or reply it
     // answers either. Pop-ups follow their comment.
     for (_, e) in list.iter().enumerate().filter(|(i, e)| *i != index && goes_with(e, &doomed)) {
@@ -106,15 +106,28 @@ pub fn lift_annotation(doc: &mut Document, page: usize, index: usize) -> Result<
     let p = page_ref(doc, page)?;
     let list = annots(doc, p);
     let target = list.get(index).ok_or(AnnotError::NoSuchAnnotation { page, index })?;
-    let doomed = with_replies_and_popups(doc, &list, seed(target));
+    let doomed = with_replies_and_popups(doc, &list, seed(doc, target));
     let kept: Vec<Object> = list.iter().enumerate().filter(|(i, e)| *i != index && !goes_with(e, &doomed)).map(|(_, e)| e.clone()).collect();
     Ok(set_annots(doc, p, kept)?)
 }
 
 /// What deleting the `/Annots` entry `target` starts from: its reference, or for an inline
-/// comment (which has none to collect) the pop-up it names, which still goes.
-fn seed(target: &Object) -> Option<ObjRef> {
-    target.as_ref().or_else(|| target.as_dict().and_then(|d| d.reference(b"Popup")))
+/// comment (which has none to collect) the pop-up it names, which still goes. The strikeout of a
+/// Replace Text proposal also takes the caret it is grouped under, so the two go together
+/// whichever is deleted.
+fn seed(doc: &Document, target: &Object) -> Vec<ObjRef> {
+    let own = target.as_ref().or_else(|| target.as_dict().and_then(|d| d.reference(b"Popup")));
+    own.into_iter().chain(replaced_by(doc, target)).collect()
+}
+
+/// The caret a Replace Text strikeout is grouped under (`/IT /StrikeOutTextEdit`, `/RT /Group`,
+/// `/IRT` to a caret): the proposal's primary, which holds the replacement.
+fn replaced_by(doc: &Document, strike: &Object) -> Option<ObjRef> {
+    let obj = doc.resolve(strike);
+    let d = obj.as_dict()?;
+    let edit = d.name(b"Subtype") == Some(b"StrikeOut") && d.name(b"IT") == Some(b"StrikeOutTextEdit") && d.name(b"RT") == Some(b"Group");
+    let caret = d.reference(b"IRT").filter(|_| edit)?;
+    (annot_dict(doc, caret).name(b"Subtype") == Some(b"Caret")).then_some(caret)
 }
 
 /// Whether the `/Annots` entry `entry` goes with `going` (from [`with_replies_and_popups`]): it is
@@ -742,8 +755,13 @@ fn pair_points(d: &Dict, key: &[u8]) -> Option<Vec<[f64; 2]>> {
 }
 
 /// Replace Text (Acrobat's proposal): strike out `quads` and add a caret at the end of the
-/// struck text holding `replacement`, grouped with the strikeout (`/IRT` + `/RT /Group`) so they
-/// move, list and delete as one. Returns the strikeout's index.
+/// struck text holding `replacement`, the two grouped so they move, list and delete as one.
+/// Returns the strikeout's index.
+///
+/// The caret is the group's primary (`/IT /Replace`) and the strikeout its subordinate (`/IRT` to
+/// the caret, `/RT /Group`, `/IT /StrikeOutTextEdit`): a group's text is read from its primary,
+/// and the subordinates' `Contents` are ignored (ISO 32000-2 §12.5.6.2), so the replacement has
+/// to be on the primary.
 ///
 /// The two annotations need their own `/NM`: XFDF names a reply by the `/NM` of what it replies
 /// to, so one id for both writes `inreplyto` equal to the caret's own `name`, and a reader that
@@ -764,7 +782,6 @@ pub fn add_text_replacement(doc: &mut Document, replacement: TextReplacement<'_>
         meta,
     )?;
     let (_, sr) = annot_ref(doc, page, s)?;
-    doc.update_dict(sr, |d| d.set(b"IT".to_vec(), Object::name("StrikeOutTextEdit")))?;
     // The caret sits on the baseline at the end of the last line, its point at the text.
     let xs = [last[0], last[2], last[4], last[6]];
     let ys = [last[1], last[3], last[5], last[7]];
@@ -779,9 +796,13 @@ pub fn add_text_replacement(doc: &mut Document, replacement: TextReplacement<'_>
     )?;
     let (_, cr) = annot_ref(doc, page, c)?;
     doc.update_dict(cr, |d| {
-        d.set(b"IRT".to_vec(), Object::Ref(sr));
-        d.set(b"RT".to_vec(), Object::name("Group"));
+        d.set(b"IT".to_vec(), Object::name("Replace"));
         d.set(b"Subj".to_vec(), PdfString::text("Replace Text"));
+    })?;
+    doc.update_dict(sr, |d| {
+        d.set(b"IT".to_vec(), Object::name("StrikeOutTextEdit"));
+        d.set(b"IRT".to_vec(), Object::Ref(cr));
+        d.set(b"RT".to_vec(), Object::name("Group"));
     })?;
     Ok(s)
 }

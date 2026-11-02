@@ -40,7 +40,7 @@ pub fn subtype_label(s: &str) -> &str {
 /// The comment type as the panel names it, telling callouts, clouds and replaced text apart by `/IT`.
 pub fn kind_label(a: &Annotation) -> &str {
     match a.intent.as_deref() {
-        Some("StrikeOutTextEdit") => "Replace text",
+        Some("StrikeOutTextEdit" | "Replace") => "Replace text",
         Some("FreeTextCallout") => "Callout",
         Some("PolygonCloud") => "Cloud",
         Some("FreeTextTypeWriter") => "Typewriter",

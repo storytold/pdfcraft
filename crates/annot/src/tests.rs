@@ -894,22 +894,36 @@ fn replace_text_groups_a_strikeout_and_a_caret() {
     let strike = &a[i];
     assert_eq!((strike.name(b"Subtype"), strike.name(b"IT")), (Some(&b"StrikeOut"[..]), Some(&b"StrikeOutTextEdit"[..])));
     let caret = a.iter().find(|d| d.name(b"Subtype") == Some(b"Caret")).unwrap();
-    assert_eq!((text(caret, b"Contents").as_str(), caret.name(b"RT")), ("new words", Some(&b"Group"[..])));
-    assert!(caret.reference(b"IRT").is_some());
+    // The caret is the group's primary: a group's text is read from its primary and the
+    // subordinates' Contents are ignored (ISO 32000-2 §12.5.6.2), so the replacement is on it.
+    assert_eq!((text(caret, b"Contents").as_str(), caret.name(b"IT")), ("new words", Some(&b"Replace"[..])));
+    assert!(caret.get(b"IRT").is_none() && caret.get(b"RT").is_none(), "a primary has no /IRT: {caret:?}");
+    assert_eq!(strike.name(b"RT"), Some(&b"Group"[..]));
+    assert!(text(strike, b"Contents").is_empty());
     // #2666: the pair needs its own `/NM` each. XFDF names a reply by the `/NM` of what it
     // replies to, so sharing one id writes `inreplyto` equal to the caret's own `name` and the
     // pair does not survive an export and import.
     assert_eq!(text(caret, b"NM").as_str(), "r-caret");
     assert_eq!(text(strike, b"NM").as_str(), "r");
     assert_ne!(text(caret, b"NM"), text(strike, b"NM"), "the caret must not carry the strikeout's name");
-    let irt = caret.reference(b"IRT").unwrap();
-    assert_eq!(text(doc.get(irt).as_dict().unwrap(), b"NM").as_str(), "r", "the caret replies to the strikeout");
+    let irt = strike.reference(b"IRT").unwrap();
+    assert_eq!(text(doc.get(irt).as_dict().unwrap(), b"NM").as_str(), "r-caret", "the strikeout is grouped under the caret");
     let r = rect(caret);
     assert!(r[0] < 200.0 && r[2] > 200.0 && r[1] < 706.0, "at the end of the line, below its baseline: {r:?}");
-    // Deleting the strikeout takes the caret with it (the group).
+    // Deleting either one takes the other with it (the proposal is one comment).
+    let marks = |doc: &Document| list(doc, 0).iter().filter(|d| matches!(d.name(b"Subtype"), Some(b"Caret" | b"StrikeOut"))).count();
+    let mut by_strike = doc.clone();
+    delete_annotation(&mut by_strike, 0, i).unwrap();
+    assert_eq!(marks(&by_strike), 0, "deleting the strikeout deletes the caret");
     let mut doc = doc;
-    delete_annotation(&mut doc, 0, i).unwrap();
-    assert!(!list(&doc, 0).iter().any(|d| d.name(b"Subtype") == Some(b"Caret")));
+    let c = list(&doc, 0).iter().position(|d| d.name(b"Subtype") == Some(b"Caret")).unwrap();
+    // A locked caret keeps the strikeout too: the pair can't be broken by deleting the other.
+    let mut locked = doc.clone();
+    set_locked(&mut locked, 0, c, true).unwrap();
+    assert!(deletable(&locked, 0, i).is_err() && delete_annotation(&mut locked, 0, i).is_err(), "a locked caret refuses its strikeout's deletion");
+    assert_eq!(marks(&locked), 2);
+    delete_annotation(&mut doc, 0, c).unwrap();
+    assert_eq!(marks(&doc), 0, "deleting the caret deletes the strikeout");
     assert!(
         add_text_replacement(
             &mut doc,
