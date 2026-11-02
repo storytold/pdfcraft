@@ -1814,6 +1814,35 @@ fn the_first_save_after_placing_a_signature_asks_to_lock_it() {
     let _ = std::fs::remove_file(&out);
 }
 
+/// #2348 review (CodeRabbit): answering the lock question doesn't forget the signature; only a
+/// save that succeeds does. When the save after the answer fails, the next save asks again.
+#[test]
+fn a_save_that_fails_after_the_lock_question_asks_again() {
+    let bad = std::env::temp_dir().join(format!("pdfcraft-no-such-dir-{}", std::process::id())).join("out.pdf");
+    let good = std::env::temp_dir().join(format!("pdfcraft-lock-retry-{}.pdf", std::process::id()));
+    let mut h = harness();
+    h.state_mut().save_override = Some(bad.to_string_lossy().into_owned());
+    h.state_mut().signature = Some(SavedSig::Typed("Ada Lovelace".into()));
+    h.state_mut().execute("sign.fill.signature");
+    h.run_steps(2);
+    click(&mut h, 40.0, 300.0);
+    assert!(!h.state_mut().save_active(SaveTarget::InPlace), "asks first");
+    h.run_steps(2);
+    h.get_by_label("Keep editable").click();
+    h.run_steps(3);
+    assert!(h.state().session.get(h.state().views[0].id).unwrap().dirty, "the save failed");
+    // The save after the answer doesn't ask twice in a row, but the failed one left the signature
+    // unsaved: the next save asks again.
+    h.state_mut().save_override = Some(good.to_string_lossy().into_owned());
+    assert!(!h.state_mut().save_active(SaveTarget::InPlace), "asks again");
+    h.run_steps(2);
+    h.get_by_label("Keep editable").click();
+    h.run_steps(3);
+    assert!(!h.state().session.get(h.state().views[0].id).unwrap().dirty, "saved this time");
+    assert!(h.state_mut().save_active(SaveTarget::InPlace), "saved: no question");
+    let _ = std::fs::remove_file(&good);
+}
+
 /// #2348 review (CodeRabbit): File ▸ Revert discards a signature just placed, so the save after it
 /// doesn't ask to lock one, even when the saved file holds an earlier Fill & Sign signature.
 #[test]

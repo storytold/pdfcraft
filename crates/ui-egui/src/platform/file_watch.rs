@@ -451,8 +451,10 @@ impl PdfCraftApp {
         let Some(id) = self.views.get(i).map(|v| v.id) else { return };
         match self.session.reload(id, bytes) {
             Ok(()) => {
-                // Whatever was unsaved is gone, so there is nothing left to recover.
+                // Whatever was unsaved is gone, so there is nothing left to recover, and no
+                // signature placed since the last save is left to ask about locking (#2149).
                 self.forget_recovery(id);
+                self.placed_signatures.remove(&id);
                 if let (Some(view), Some(doc)) = (self.views.get_mut(i), self.session.get(id)) {
                     view.document_replaced(&doc.info);
                 }
@@ -554,6 +556,22 @@ mod tests {
     fn doc<'a>(h: &'a Harness<'static, PdfCraftApp>) -> &'a pdfcraft_engine::Document {
         let app = h.state();
         app.session.get(app.views[0].id).unwrap()
+    }
+
+    /// #2348 review (CodeRabbit): a reload from disk replaces the document, so a signature
+    /// placed since the last save is gone and the next save doesn't ask to lock it. A reload
+    /// that fails keeps the document, and the mark with it.
+    #[test]
+    fn reloading_from_disk_forgets_a_signature_just_placed() {
+        let (_dir, path) = TempDir::new("lock-reload", &fixture(1));
+        let mut h = harness(&path);
+        h.run_steps(3);
+        let id = h.state().views[0].id;
+        h.state_mut().placed_signatures.insert(id);
+        h.state_mut().reload_view(0, Arc::new(b"not a pdf".to_vec()));
+        assert!(h.state().placed_signatures.contains(&id), "a failed reload keeps the mark");
+        h.state_mut().reload_view(0, Arc::new(fixture(2)));
+        assert!(!h.state().placed_signatures.contains(&id), "the reloaded document has no placed signature");
     }
 
     /// Association recovery changes ctime without replacing PDF contents. It must neither

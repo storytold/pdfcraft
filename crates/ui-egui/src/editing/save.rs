@@ -60,7 +60,14 @@ impl PdfCraftApp {
         // changes page content in an update, which validators report as a change after signing.
         let still_marked = self.session.get(id).is_some_and(|d| d.info.annotations.iter().any(|a| a.fill_sign));
         let signed = self.session.get(id).is_some_and(|d| d.is_signed());
-        if self.ask_to_lock_signatures && !self.flatten_fill_sign_on_save && self.placed_signatures.contains(&id) && still_marked && !signed {
+        let answered = self.lock_answered.take() == Some(id);
+        if self.ask_to_lock_signatures
+            && !self.flatten_fill_sign_on_save
+            && self.placed_signatures.contains(&id)
+            && still_marked
+            && !signed
+            && !answered
+        {
             self.pending_lock = Some(PendingLock { id, target, after: Box::new(after) });
             self.dialog = Some(crate::Dialog::LockSignatures);
             return false;
@@ -180,13 +187,14 @@ impl PdfCraftApp {
     /// its pages first when `lock`, then save as was asked. With `remember`, the answer becomes
     /// the preference (flatten on every save, or never ask again). Nothing changes when locking
     /// fails: the document still counts as holding a placed signature, so the next save asks
-    /// again, and the answer isn't remembered.
+    /// again, and the answer isn't remembered. The placed-signature mark stays until the save
+    /// succeeds, so a save that fails or is cancelled asks again too.
     pub(crate) fn answer_lock_signatures(&mut self, lock: bool, remember: bool) {
         let Some(p) = self.pending_lock.take() else { return };
         if lock && !self.flatten_fill_sign_on_save && !self.flatten_fill_sign_in(p.id) {
             return;
         }
-        self.placed_signatures.remove(&p.id);
+        self.lock_answered = Some(p.id);
         if remember {
             if lock {
                 self.flatten_fill_sign_on_save = true;

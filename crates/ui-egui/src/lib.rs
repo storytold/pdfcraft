@@ -334,6 +334,10 @@ pub struct PdfCraftApp {
     pub(crate) placed_signatures: std::collections::HashSet<pdfcraft_engine::DocId>,
     /// A save waiting behind [`Dialog::LockSignatures`], and its Don't ask again box.
     pub(crate) pending_lock: Option<editing::PendingLock>,
+    /// The document whose lock question was just answered: the save that follows the answer
+    /// doesn't ask again. The placed-signature mark itself stays until that save succeeds, so a
+    /// save that fails or is cancelled asks again next time.
+    pub(crate) lock_answered: Option<pdfcraft_engine::DocId>,
     pub(crate) lock_remember: bool,
     /// Point size for new Fill & Sign text and dates, kept across launches.
     pub fill_text_size: f64,

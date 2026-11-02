@@ -109,6 +109,7 @@ impl PdfCraftApp {
             ask_to_lock_signatures: true,
             placed_signatures: Default::default(),
             pending_lock: None,
+            lock_answered: None,
             lock_remember: false,
             fill_text_size: fill_sign::TEXT_SIZE,
             fill_text_color: [0.0; 3],
