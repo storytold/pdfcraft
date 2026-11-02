@@ -2149,6 +2149,27 @@ fn comments_through_tools() {
     save_and_reopen_comments(&dir, &mut a, doc);
 }
 
+#[test]
+fn freehand_highlight_through_tools() {
+    let dir = workdir("freehand-highlight");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(
+        &mut a,
+        "comment_add",
+        json!({ "doc": doc, "page": 1, "type": "freehand_highlight", "width": 100,
+        "strokes": [[[20, 100], [120, 100]]] }),
+    );
+    let list = ok(&mut a, "comment_list", json!({ "doc": doc }));
+    assert_eq!(list["count"], 1);
+    assert_eq!(list["comments"][0]["type"], "Ink");
+    assert_eq!(list["comments"][0]["intent"], "FreehandHighlight");
+    assert_eq!(list["comments"][0]["color"], "#FFF000");
+    let undone = ok(&mut a, "edit_undo", json!({ "doc": doc }));
+    assert_eq!(undone["undone"], "Add freehand highlight");
+    assert_eq!(ok(&mut a, "comment_list", json!({ "doc": doc }))["count"], 0);
+}
+
 fn add_comment_examples(a: &mut Automation, doc: u64) -> String {
     // "Page 2" sits at y = 150 (user space) = 150 from the top of the 300 pt page.
     let hl = ok(a, "comment_add", json!({ "doc": doc, "page": 2, "type": "highlight", "find": "page 2", "contents": "check", "author": "Ada" }));
