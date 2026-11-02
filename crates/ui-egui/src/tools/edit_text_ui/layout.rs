@@ -111,7 +111,7 @@ fn source_rect(ed: &LineEditor, line: &pdfcraft_engine::TextLine) -> [f64; 4] {
     if ed.turned() { line.frame_rect() } else { line.rect }
 }
 
-pub(super) fn editor_job(ui: &egui::Ui, ed: &LineEditor, text: &str, scale: f32, width: f32) -> egui::text::LayoutJob {
+pub(super) fn editor_job(ctx: &egui::Context, ed: &LineEditor, text: &str, scale: f32, width: f32) -> egui::text::LayoutJob {
     let mut job = egui::text::LayoutJob::default();
     // An unchanged PDF row already has an authoritative line break. Do not rewrap it
     // because font rounding or a fallback face measures a fraction of a pixel wider.
@@ -161,7 +161,7 @@ pub(super) fn editor_job(ui: &egui::Ui, ed: &LineEditor, text: &str, scale: f32,
             if embedded && let Some(name) = ed.fonts.get(&line.font) {
                 font.family = FontFamily::Name(name.clone().into());
             }
-            let native_width = ui.fonts_mut(|f| f.layout_no_wrap(line.text.clone(), font.clone(), Color32::BLACK).size().x);
+            let native_width = ctx.fonts_mut(|f| f.layout_no_wrap(line.text.clone(), font.clone(), Color32::BLACK).size().x);
             let rect = source_rect(ed, line);
             let target_width = ((rect[2] - rect[0]) * look.size / line.size.max(0.01)) as f32 * scale;
             let spacing = if original_face { (target_width - native_width) / line.text.chars().count().saturating_sub(1).max(1) as f32 } else { 0.0 };
@@ -204,11 +204,11 @@ pub(super) fn unseen(mut galley: Arc<egui::Galley>) -> Arc<egui::Galley> {
 
 /// Align the editable galley's baselines to the source rows instead of egui's interface
 /// leading. Glyphs, meshes, caret and selection receive the same transform.
-pub(super) fn editor_galley(ui: &egui::Ui, ed: &LineEditor, text: &str, scale: f32, width: f32) -> Arc<egui::Galley> {
-    let mut job = editor_job(ui, ed, text, scale, width);
+pub(super) fn editor_galley(ctx: &egui::Context, ed: &LineEditor, text: &str, scale: f32, width: f32) -> Arc<egui::Galley> {
+    let mut job = editor_job(ctx, ed, text, scale, width);
     let centered = job.halign == egui::Align::Center;
     job.halign = egui::Align::LEFT;
-    let mut galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
+    let mut galley = ctx.fonts_mut(|fonts| fonts.layout_job(job));
     let Some((block, lines)) = &ed.source else { return galley };
     let block_rect = ed.text_frame().unwrap_or(block.rect);
     let sources: Vec<_> = block

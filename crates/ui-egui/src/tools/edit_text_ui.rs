@@ -899,10 +899,42 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
     let mut done = None;
     let mut reveal = false;
     let mut look = None;
+    // The editor opens at the source size. Once text changes, show the real draft
+    // extent: single rows grow toward the page edge, paragraphs rewrap at their
+    // source width, and the visible frame grows/shrinks vertically with their rows.
+    // An OCR phrase (several stretched words on one scanned line) also grows rightwards.
+    let single_run = ed.source.as_ref().is_some_and(|(block, _)| block.rows.len() == 1 || block.invisible);
+    let width = if !ed.multiline && single_run && !ed.text.contains('\n') && ed.has_changes() {
+        let job = editor_job(ctx, ed, &ed.text, scale, f32::INFINITY);
+        let natural = ctx.fonts_mut(|f| f.layout_job(job)).size().x;
+        natural.max(ed.size * 0.4).min((xf.rect.right() - ed.rect.left() - 36.0 * scale).max(ed.rect.width()))
+    } else {
+        ed.rect.width().max(1.0)
+    };
+    let width = if turned { width.min((page_clip.right() - ed.rect.left()).max(1.0)) } else { width };
+    let measured = editor_galley(ctx, ed, &ed.text, scale, width);
+    ed.overflow = ed.has_changes() && (measured.rect.width() > ed.rect.width() + 1.5 || measured.rect.height() > ed.rect.height() + 1.5);
+    if turned {
+        if !page_clip.is_positive() {
+            return None;
+        }
+        // Position the Area from the same galley TextEdit renders, including soft wraps.
+        // Using the source frame's one-row height would clip later rows at the bottom.
+        // Match TextEdit's desired_rows(1) minimum as well as the actual draft height.
+        let height = measured.rect.height().max(ctx.fonts_mut(|f| f.row_height(&font))).max(1.0).min(page_clip.height());
+        let top = source_screen.top().clamp(page_clip.top(), (page_clip.bottom() - height).max(page_clip.top()));
+        ed.rect.min.y = top;
+        ed.rect.max.y = top + height;
+    }
+    let size = measured.rect.size().max(egui::vec2(1.0, 1.0));
+    let visible = Rect::from_min_size(ed.rect.min, if turned { egui::vec2(size.x, ed.rect.height()) } else { size });
+    // Unsupported source programs use an interface fallback whose glyph advances
+    // can differ from the PDF's. Keep every visible row inside the growing frame.
+    let live = if turned { visible } else { draft_rect.map_or(visible, |bounds| bounds.union(visible)) };
     // No fade-in: while it faded, the page's own copy of the text showed through the cover.
     // Over the page, so only where the document shows: a paragraph scrolled under the mode bar or
-    // a side panel must leave them their pointer (#2755). It stays at its paragraph, cut off as
-    // the page is, rather than pushed back into the window.
+    // a side panel must leave them their pointer (#2755). Upright text stays at its paragraph,
+    // cut off as the page is; a horizontal turned field fits its measured rows within the page.
     egui::Area::new(egui::Id::unique("edit-text-line"))
         .order(egui::Order::Foreground)
         .fade_in(false)
@@ -911,26 +943,7 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
         .constrain(false)
         .show(ctx, |ui| {
             ui.set_clip_rect(ui.clip_rect().intersect(page_clip));
-            // The editor opens at the source size. Once text changes, show the real draft
-            // extent: single rows grow toward the page edge, paragraphs rewrap at their
-            // source width, and the visible frame grows/shrinks vertically with their rows.
-            // An OCR phrase (several stretched words on one scanned line) also grows rightwards.
-            let single_run = ed.source.as_ref().is_some_and(|(block, _)| block.rows.len() == 1 || block.invisible);
-            let width = if !ed.multiline && single_run && !ed.text.contains('\n') && ed.has_changes() {
-                let job = editor_job(ui, ed, &ed.text, scale, f32::INFINITY);
-                let natural = ui.fonts_mut(|f| f.layout_job(job)).size().x;
-                natural.max(ed.size * 0.4).min((xf.rect.right() - ed.rect.left() - 36.0 * scale).max(ed.rect.width()))
-            } else {
-                ed.rect.width().max(1.0)
-            };
-            let width = if turned { width.min((page_clip.right() - ed.rect.left()).max(1.0)) } else { width };
             ui.set_width(width);
-            let measured = editor_galley(ui, ed, &ed.text, scale, width);
-            ed.overflow = ed.has_changes() && (measured.rect.width() > ed.rect.width() + 1.5 || measured.rect.height() > ed.rect.height() + 1.5);
-            let visible = Rect::from_min_size(ed.rect.min, measured.rect.size().max(egui::vec2(1.0, 1.0)));
-            // Unsupported source programs use an interface fallback whose glyph advances
-            // can differ from the PDF's. Keep every visible row inside the growing frame.
-            let live = if turned { visible } else { draft_rect.map_or(visible, |bounds| bounds.union(visible)) };
             ui.painter().rect_stroke(live.expand(2.0), CornerRadius::ZERO, Stroke::new(1.5, ACCENT), egui::StrokeKind::Outside);
             // On the frame, a press takes hold of the box (a click selects it, a drag moves it):
             // the pointer says so there, and reads as text inside.
@@ -963,7 +976,7 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
                 let rows = 1;
                 let snapshot = ed.clone();
                 let mut layouter = |ui: &egui::Ui, text: &dyn egui::TextBuffer, wrap_width: f32| {
-                    let galley = editor_galley(ui, &snapshot, text.as_str(), scale, wrap_width);
+                    let galley = editor_galley(ui.ctx(), &snapshot, text.as_str(), scale, wrap_width);
                     if snapshot.turned() || snapshot.changes_with(text.as_str()) { galley } else { unseen(galley) }
                 };
                 let before = ed.text.clone();

@@ -27,7 +27,7 @@ fn open_editor_rows(angle: i32, x: f64, two_rows: bool) -> Harness<'static, PdfC
     open_fixture_editor(fixture(angle, x, two_rows), "117")
 }
 
-fn open_fixture_editor(bytes: Vec<u8>, zoom: &str) -> Harness<'static, PdfCraftApp> {
+fn fixture_editor_harness(bytes: Vec<u8>, zoom: &str) -> Harness<'static, PdfCraftApp> {
     let zoom = zoom.to_owned();
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1000.0)).build_eframe(move |_| {
         let mut app = PdfCraftApp::new();
@@ -39,6 +39,10 @@ fn open_fixture_editor(bytes: Vec<u8>, zoom: &str) -> Harness<'static, PdfCraftA
     h.run_steps(6);
     assert!(h.state_mut().execute("edit.edit_text"));
     h.run_steps(3);
+    h
+}
+
+fn editor_point(h: &Harness<'_, PdfCraftApp>) -> egui::Pos2 {
     let doc = h.state().session.get(h.state().views[0].id).unwrap();
     let block = doc.text_blocks(0)[0].clone();
     let page = h.state().views[0].page_screen_rect(0).unwrap();
@@ -48,7 +52,12 @@ fn open_fixture_editor(bytes: Vec<u8>, zoom: &str) -> Harness<'static, PdfCraftA
         page.min + egui::vec2(p[0], p[1]) * (page.width() / info.width)
     };
     let source = egui::Rect::from_two_pos(point(block.rect[0], block.rect[1]), point(block.rect[2], block.rect[3]));
-    let at = source.intersect(page).intersect(h.state().views[0].viewport_rect()).center();
+    source.intersect(page).intersect(h.state().views[0].viewport_rect()).center()
+}
+
+fn open_fixture_editor(bytes: Vec<u8>, zoom: &str) -> Harness<'static, PdfCraftApp> {
+    let mut h = fixture_editor_harness(bytes, zoom);
+    let at = editor_point(&h);
     for _ in 0..2 {
         crate::support::input::double_click(&mut h, at);
         h.run_steps(3);
@@ -299,3 +308,6 @@ fn unchanged_turned_text_hides_its_source_before_any_typing() {
     assert!(!h.state().views[0].line_editor.as_ref().unwrap().has_unsaved_text());
     assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().bytes, bytes);
 }
+
+#[path = "rotated_text_bottom.rs"]
+mod bottom;
