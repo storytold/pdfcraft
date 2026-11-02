@@ -10,6 +10,7 @@
 //! the active tool's, or none of its business.
 
 use egui::CursorIcon;
+use pdfcraft_engine::ObjectTarget;
 
 use crate::QuickTool;
 use crate::page_cursor::Layer;
@@ -73,6 +74,15 @@ pub(crate) enum ObjectsPart {
     Selection,
     /// The frame drawn around the paragraph open for typing: a click selects the box, a drag moves it.
     Frame,
+    /// A press with Shift or ⌘ (Ctrl): it adds the object under it to the objects selected
+    /// together, or takes it out of them, or on none starts an area selection that adds to them.
+    Toggle(Option<ObjectTarget>),
+    /// A press with Shift or ⌘ while text being typed is open (a new box, or a paragraph with
+    /// changes), which must be finished or discarded first: it is held until the button is up, and
+    /// selects nothing.
+    Held,
+    /// A press with Shift or ⌘ on a page whose objects can't be selected together: it says so.
+    Refused,
 }
 
 /// The part of a paragraph a hit is on.

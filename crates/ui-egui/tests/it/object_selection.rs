@@ -385,3 +385,56 @@ fn modifier_selection_picks_foreground_text_and_added_items_over_background_artw
         assert!(new.rect.iter().enumerate().all(|(i, value)| (value - old.rect[i] - shift[i % 2]).abs() < 0.01), "{old:?} -> {new:?}");
     }
 }
+
+/// A press with Shift while a paragraph with changes is open is held until the button is up: it
+/// says why, the paragraph keeps its text, and nothing under the press is moved or selected, not
+/// even once the press turns into a drag.
+#[test]
+fn a_shift_click_with_a_changed_paragraph_open_shows_the_notice_and_moves_nothing() {
+    let mut h = harness();
+    let before = objects(&h);
+    let p = at(&h, 55.0, 70.0);
+    click(&mut h, p, Modifiers::NONE);
+    h.state_mut().views[0].line_editor.as_mut().unwrap().text = "A draft still being edited".into();
+    let (a, b) = (at(&h, 60.0, 145.0), at(&h, 120.0, 200.0));
+    h.hover_at(a);
+    h.run_steps(2);
+    h.event_modifiers(
+        egui::Event::PointerButton { pos: a, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::SHIFT },
+        Modifiers::SHIFT,
+    );
+    h.run_steps(2);
+    let notice = "Finish or discard the text being edited before selecting several objects.";
+    assert!(h.state().toast.as_ref().is_some_and(|t| t.0.contains(notice)), "the notice says why");
+    for k in 1..=3 {
+        h.hover_at(a + (b - a) * (k as f32 / 3.0));
+        h.run_steps(2);
+    }
+    h.drop_at(b);
+    h.run_steps(4);
+    assert_eq!(h.state().views[0].line_editor.as_ref().map(|e| e.text.as_str()), Some("A draft still being edited"));
+    assert_eq!(objects(&h), before, "nothing moved");
+    assert!(h.state().views[0].image_selection.is_none() && h.state().views[0].content.selected.is_none(), "nothing selected");
+    assert!(
+        h.query_all_by_label_contains("object selected").next().is_none() && h.query_all_by_label_contains("objects selected").next().is_none(),
+        "no objects selected"
+    );
+}
+
+/// A press beside a picture, within the reach the objects selected together are found in but
+/// outside the picture itself, is nobody's: it starts an area selection. It used to start nothing.
+#[test]
+fn a_press_just_outside_a_picture_starts_an_area_selection() {
+    let mut h = harness();
+    // The figure is x 40..100, y 130..160 from the page's top; the added note x 130..230, y 130..144.
+    let (a, b) = (at(&h, 38.5, 140.0), at(&h, 235.0, 175.0));
+    h.hover_at(a);
+    h.run_steps(2);
+    h.drag_at(a);
+    h.run_steps(2);
+    h.hover_at(b);
+    h.run_steps(2);
+    h.drop_at(b);
+    h.run_steps(4);
+    h.get_by_label("2 objects selected");
+}

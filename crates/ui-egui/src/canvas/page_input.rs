@@ -91,7 +91,15 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
         clip: ui.clip_rect(),
     };
     if let Some(o) = ptr.pressed().filter(|o| xf.rect.contains(*o)) {
-        let at = hits.at(view, o);
+        // A press with Shift or ⌘ in Edit text is the objects', whatever lies under it
+        // (`object_ui::modified_hit`): the page's objects are read for it alone.
+        let adds = tool == QuickTool::EditText
+            && can_modify
+            && crate::object_ui::adds(ptr.modifiers)
+            && !resp.context_menu_opened()
+            && !egui::Popup::is_any_open(ui.ctx());
+        let objects = adds.then(|| view.objects.inventory(doc, i));
+        let at = hits.at(view, o, objects.as_ref());
         view.router.press(i, at, tool);
     }
     // What this page has to do with the press: its owner's, the active tool's, or another page's.
@@ -99,7 +107,7 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
     // What lies under the pointer before the tools act, on the frames that need it: for a click's
     // release, a right-click's tool checks, and Fill & Sign's preview.
     let wants_under = resp.clicked() || resp.secondary_clicked() || matches!(tool, QuickTool::Fill(_)) && !ptr.any_down;
-    let under = pointer.filter(|p| wants_under && xf.rect.contains(*p)).map(|p| hits.at(view, p)).unwrap_or_default();
+    let under = pointer.filter(|p| wants_under && xf.rect.contains(*p)).map(|p| hits.at(view, p, None)).unwrap_or_default();
     let released_over = match press {
         PagePress::Mine(owner) if resp.clicked() => under.iter().any(|h| h.owner == owner),
         _ => false,
@@ -135,7 +143,7 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
         };
         crate::redact_ui::page_input(cx, over_text, press == PagePress::Free, view)
     };
-    let on_objects = tool == QuickTool::EditText && can_modify && crate::object_ui::page_input(cx, view);
+    let on_objects = tool == QuickTool::EditText && can_modify && crate::object_ui::page_input(cx, press, view);
     // Add text acts on the page's own paragraphs over them, and on the one its press was on until
     // the button is up: a drag that leaves the box still ends, and no new box takes it over.
     let over_source = tool == QuickTool::AddText
@@ -217,7 +225,7 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
 /// for hover painting. With `claim` (nothing drawn over the pages, such as the palette), its cursor
 /// and tip too, after the tools claimed theirs (the last claim on a layer stands).
 fn claim_under(hits: &PageHits<'_>, view: &mut DocView, p: Pos2, claim: bool) -> Option<crate::page_router::Hit> {
-    let under = hits.at(view, p);
+    let under = hits.at(view, p, None);
     if claim {
         for h in &under {
             view.cursor.claim_with_tip(h.layer, h.icon, h.tip.clone());
@@ -411,9 +419,10 @@ struct PageHits<'a> {
 }
 
 impl PageHits<'_> {
-    /// The hits at `p`, bottom up ([`Self::hits`]).
-    fn at(&self, view: &DocView, p: Pos2) -> Vec<crate::page_router::Hit> {
-        self.hits(view, p, false)
+    /// The hits at `p`, bottom up ([`Self::hits`]). For a press with Shift or ⌘ in Edit text, the
+    /// page's `objects` ([`crate::object_ui::ObjectSelection::inventory`]), which take it whole.
+    fn at(&self, view: &DocView, p: Pos2, objects: Option<&Result<Vec<pdfcraft_engine::EditableObject>, String>>) -> Vec<crate::page_router::Hit> {
+        self.hits(view, p, false, objects)
     }
 
     /// What a right-click at `p` is on: what lies on top there, as for a press, but with every
@@ -429,17 +438,24 @@ impl PageHits<'_> {
         {
             return Some(press.owner);
         }
-        top(self.hits(view, p, true), QuickTool::Select).map(|h| h.owner)
+        top(self.hits(view, p, true, None), QuickTool::Select).map(|h| h.owner)
     }
 
     /// The hits at `p`, bottom up: links, comments; Edit text's pictures under its paragraphs (text
     /// on top of artwork takes the press), added content, the objects selected together and the
     /// open paragraph's frame, the selected picture's grips over them all; the camera tool's corners;
     /// then form fields (Prepare's, being moved, over the comments; filled ones under added content
-    /// and the comments that move). In crop mode, only the picture being cropped.
+    /// and the comments that move). For a press with Shift or ⌘ in Edit text, only the objects
+    /// (`objects`, the page's); in crop mode, only the picture being cropped.
     /// For a right-click (`context`), comments by [`comments::context_hit`], and no camera corner (it
     /// has no menu).
-    fn hits(&self, view: &DocView, p: Pos2, context: bool) -> Vec<crate::page_router::Hit> {
+    fn hits(
+        &self,
+        view: &DocView,
+        p: Pos2,
+        context: bool,
+        objects: Option<&Result<Vec<pdfcraft_engine::EditableObject>, String>>,
+    ) -> Vec<crate::page_router::Hit> {
         let PageHits {
             page,
             xf,
@@ -459,6 +475,10 @@ impl PageHits<'_> {
             images,
             clip,
         } = *self;
+        // A press with Shift or ⌘ is the objects', crop mode's page included (`object_ui::modified_hit`).
+        if let Some(objects) = objects {
+            return crate::object_ui::modified_hit(view, xf, info, page, objects, clip, p).into_iter().collect();
+        }
         // Crop mode holds every press on its page (`edit_text_ui::crop_hit`).
         if tool == QuickTool::EditText && can_modify && view.image_selection.as_ref().is_some_and(|s| s.page == page && s.crop.is_some()) {
             return crate::edit_text_ui::crop_hit(xf, page, info, images, view, p).into_iter().collect();

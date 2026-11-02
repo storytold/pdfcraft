@@ -573,7 +573,7 @@ const ROUTER_READS: [&str; 6] =
 /// page and tells each module what the press is to its page (`PagePress`); the Edit text group, the
 /// text layer and link following still ask, until they are told too (PR 4b), and an unused entry
 /// fails the test.
-const ROUTER_READERS: [(&str, &str, &str); 8] = [
+const ROUTER_READERS: [(&str, &str, &str); 7] = [
     (
         "canvas/page_input.rs",
         "page_tool_input",
@@ -585,7 +585,6 @@ const ROUTER_READERS: [(&str, &str, &str); 8] = [
     ("tools/content_ui.rs", "page_input", "added text and pictures, until they are told (4b)"),
     ("tools/edit_text_ui.rs", "page_input", "Edit text's paragraphs, until they are told (4b)"),
     ("tools/edit_text_ui/image.rs", "image_input", "Edit text's pictures, until they are told (4b)"),
-    ("tools/object_ui.rs", "input", "the objects selected together, until they are told (4b)"),
 ];
 
 /// What ignores the press the pages hold until the button is up.
@@ -597,7 +596,7 @@ const PRESS_IGNORERS: [(&str, &str, &str); 1] =
 
 /// The module hit tests, called by path: a press handler calls none of them (HIT_TESTERS says who
 /// may).
-const PAGE_HIT_CALLS: [&str; 12] = [
+const PAGE_HIT_CALLS: [&str; 13] = [
     "link_ui::hit(",
     "prepare::hit(",
     "forms_ui::hit(",
@@ -609,6 +608,7 @@ const PAGE_HIT_CALLS: [&str; 12] = [
     "edit_text_ui::picture_handle_hit(",
     "edit_text_ui::crop_hit(",
     "object_ui::hit(",
+    "object_ui::modified_hit(",
     "content_ui::hit(",
 ];
 
@@ -695,12 +695,9 @@ fn page_modules_act_on_a_press_only_through_the_router() {
         "no longer ignores a press: remove it from PRESS_IGNORERS.",
     ));
     let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-    for (file, function) in [
-        ("tools/content_ui.rs", "page_input"),
-        ("tools/edit_text_ui.rs", "page_input"),
-        ("tools/edit_text_ui/image.rs", "image_input"),
-        ("tools/object_ui.rs", "input"),
-    ] {
+    for (file, function) in
+        [("tools/content_ui.rs", "page_input"), ("tools/edit_text_ui.rs", "page_input"), ("tools/edit_text_ui/image.rs", "image_input")]
+    {
         let source = std::fs::read_to_string(src.join(file)).expect("page input module");
         let body = source.lines().skip_while(|line| declares(line) != Some(function)).take_while(|line| *line != "}").collect::<Vec<_>>().join("\n");
         if !routed_press_handler(&body) {
