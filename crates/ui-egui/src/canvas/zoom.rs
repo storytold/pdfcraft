@@ -263,7 +263,11 @@ impl DocView {
             Self::WHEEL_ZOOM_STEPS.iter().rev().copied().find(|s| *s < z * 0.999)
         };
         if let Some(n) = next {
-            self.set_zoom(n);
+            // A discrete zoom step keeps the top of the visible document stable. Center-anchoring
+            // can move fields near the top above the interactive viewport when zooming in.
+            let anchor =
+                if self.viewport_screen.is_positive() { pos2(self.viewport_screen.center().x, self.viewport_screen.min.y) } else { Pos2::ZERO };
+            self.zoom_at(n, anchor);
         }
     }
 
