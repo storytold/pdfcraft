@@ -662,6 +662,47 @@ trailer << /Root 1 0 R >>
     h.run_steps(3);
     assert_eq!(h.state().quick_tool, QuickTool::Select);
     h.get_by_label_contains("security settings don't allow");
+
+    // A refused key takes no tool, so Space still hands back the one it borrowed.
+    let space = |pressed| egui::Event::Key { key: egui::Key::Space, physical_key: None, pressed, repeat: false, modifiers: egui::Modifiers::NONE };
+    h.event(space(true));
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::Hand);
+    h.key_press(egui::Key::R);
+    h.run_steps(2);
+    h.event(space(false));
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::Select);
+}
+
+/// An open menu holds the keys: a letter it doesn't take must not reach the page, where it
+/// would mark the selected words.
+#[test]
+fn a_single_key_leaves_the_page_alone_while_a_menu_is_open() {
+    let mut h = harness(|_| {});
+    h.state_mut().views[0].select_text(0, 4, 8);
+    h.run_steps(3);
+    crate::support::open_menu(&mut h, "View");
+    h.key_press(egui::Key::X);
+    h.run_steps(3);
+    assert!(comments(&h).is_empty());
+    assert_eq!(h.state().quick_tool, QuickTool::Select);
+}
+
+/// F10 puts the keyboard on the in-window bar, which holds the keys as an open menu does. macOS
+/// has no keyboard on the bar.
+#[cfg(not(target_os = "macos"))]
+#[test]
+fn a_single_key_leaves_the_page_alone_while_the_menu_bar_has_the_keyboard() {
+    let mut h = harness(|_| {});
+    h.state_mut().views[0].select_text(0, 4, 8);
+    h.run_steps(3);
+    h.key_press(egui::Key::F10);
+    h.run_steps(3);
+    h.key_press(egui::Key::X);
+    h.run_steps(3);
+    assert!(comments(&h).is_empty());
+    assert_eq!(h.state().quick_tool, QuickTool::Select);
 }
 
 #[test]
