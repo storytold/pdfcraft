@@ -84,39 +84,40 @@ fn preview(ui: &mut egui::Ui, kind: ThemeKind, width: f32) {
 /// One theme card: its title, Active when it is what shows now, and a preview of the chosen theme.
 /// Returns true when the card was clicked or activated via keyboard.
 fn card(ui: &mut egui::Ui, t: &Tokens, title: &str, active: bool, themes: &[(ThemeKind, &str)]) -> bool {
-    let card_w = ui.available_width();
-    let (rect, resp) = ui.allocate_exact_size(vec2(card_w, 156.0), egui::Sense::click());
+    let mut card_clicked = false;
+    let frame_stroke = if active { Stroke::new(1.5, t.accent) } else { Stroke::new(1.0, t.border) };
+    let inner = egui::Frame::new().fill(t.card).stroke(frame_stroke).corner_radius(CornerRadius::same(6)).inner_margin(egui::Margin::same(8)).show(
+        ui,
+        |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal(|ui| {
+                let font = theme::semibold(12.5);
+                let galley = crate::bidi::layout_ui(ui, title.to_owned(), font, t.text);
+                let (title_rect, _) = ui.allocate_exact_size(galley.size(), egui::Sense::hover());
+                ui.painter().galley(title_rect.min, galley, t.text);
+                if active {
+                    ui.label(RichText::new(tl!("Active")).color(t.accent_text).small());
+                }
+            });
+            ui.add_space(4.0);
+            let shown = themes.first().map_or(ThemeKind::Light, |(kind, _)| *kind);
+            preview(ui, shown, ui.available_width());
+        },
+    );
+
+    let resp = ui.interact(inner.response.rect, inner.response.id, egui::Sense::click());
     resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::RadioButton, true, active, title));
 
-    let press = theme::Press::track(ui, &resp);
-    let fill = press.fill(t.card, t.hover, t.pressed);
-    let stroke = if resp.has_focus() {
-        Stroke::new(2.0, t.accent_text)
-    } else if active {
-        Stroke::new(1.5, t.accent)
-    } else {
-        Stroke::new(1.0, t.border)
-    };
-    ui.painter().rect(rect, CornerRadius::same(6), fill, stroke, egui::StrokeKind::Inside);
-
-    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect.shrink(8.0)).layout(egui::Layout::top_down(egui::Align::Min)));
-    child.horizontal(|ui| {
-        let font = theme::semibold(12.5);
-        let galley = crate::bidi::layout_ui(ui, title.to_owned(), font, t.text);
-        let (title_rect, _) = ui.allocate_exact_size(galley.size(), egui::Sense::hover());
-        ui.painter().galley(title_rect.min, galley, t.text);
-        if active {
-            ui.label(RichText::new(tl!("Active")).color(t.accent_text).small());
-        }
-    });
-    child.add_space(4.0);
-    let preview_w = child.available_width();
-    let shown = themes.first().map_or(ThemeKind::Light, |(kind, _)| *kind);
-    preview(&mut child, shown, preview_w);
+    if resp.has_focus() {
+        ui.painter().rect_stroke(inner.response.rect, CornerRadius::same(6), Stroke::new(2.0, t.accent_text), egui::StrokeKind::Outside);
+    }
 
     let resp = theme::hand(resp);
     let key_select = resp.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Space) || i.key_pressed(egui::Key::Enter));
-    resp.clicked() || key_select
+    if resp.clicked() || key_select {
+        card_clicked = true;
+    }
+    card_clicked
 }
 
 /// The Appearance section of Preferences.
