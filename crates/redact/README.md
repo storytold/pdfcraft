@@ -31,7 +31,8 @@ clear_marks(&mut doc, None)?;                        // remove marks without app
   space is known to have more than one component, it has no size or one past what redaction
   clears, its data is in another file, or it can't be decoded), or something else refers to them, `apply`
   refuses and changes nothing (`RedactError::SharedJbig2Globals`). `remove_hidden` takes them out
-  the same way. Another dictionary holding the same shapes in other bytes isn't found, nor is a copy
+  the same way, but it has changed the document by the time it refuses: a caller passes a copy it
+  can drop. Another dictionary holding the same shapes in other bytes isn't found, nor is a copy
   nothing names, and an image that hasn't left keeps its globals with its pixels: one another page
   still draws, or one something that doesn't draw it still refers to. Finding what to store again
   reads each object at most once for each way it is read (a `/JBIG2Globals` chain named part way,
