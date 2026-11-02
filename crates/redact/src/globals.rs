@@ -133,8 +133,8 @@ fn without_dictionary(doc: &Document, s: &Stream) -> Option<Stream> {
 /// more.
 ///
 /// Errors: [`RedactError::SharedJbig2Globals`](crate::RedactError::SharedJbig2Globals) when a dictionary would
-/// still be kept, as what names it can't be stored without it or something else refers to it. Such
-/// an image may still be drawn, on a page no mark reached, so it isn't removed, and `doc` is part
+/// still be kept, as what names it can't be stored without it (counted) or something else refers to
+/// it (0 when that is all). Such an image may still be drawn, on a page no mark reached, so it isn't removed, and `doc` is part
 /// changed by then: a caller works on a copy it can drop.
 pub(crate) fn unshare(doc: &mut Document, before: &HashSet<u32>) -> Result<usize, crate::RedactError> {
     let now = kept(doc);
@@ -176,7 +176,7 @@ pub(crate) fn unshare(doc: &mut Document, before: &HashSet<u32>) -> Result<usize
     }
     let after = kept(doc);
     if dictionaries.iter().any(|n| after.contains(n)) {
-        return Err(crate::RedactError::SharedJbig2Globals(stuck.max(1)));
+        return Err(crate::RedactError::SharedJbig2Globals(stuck));
     }
     Ok(users.len())
 }

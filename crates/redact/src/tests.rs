@@ -1660,8 +1660,8 @@ fn an_alternate_of_what_stays_stays() {
     assert_eq!(kept, 1);
 }
 
-/// The refusal counts the images that can't be stored, or says 1 for something else that refers to
-/// the dictionary.
+/// The refusal counts the images that can't be stored, and says so; when only something else refers
+/// to the dictionary, it counts none and says that instead, however many such references there are.
 #[test]
 fn a_refused_redaction_counts_what_cant_be_stored() {
     let scan = shared_scan();
@@ -1669,7 +1669,23 @@ fn a_refused_redaction_counts_what_cant_be_stored() {
     let other = format!("{wrong} /SMask 10 0 R");
     let mut doc = SharedPages { other, extra: vec![stream(&wrong, scan.page.clone())], ..SharedPages::new(&scan) }.build(&scan);
     mark(&mut doc, 0, &[CLEARS], "");
-    assert!(matches!(apply(&mut doc, None), Err(RedactError::SharedJbig2Globals(2))));
+    let refused = apply(&mut doc, None);
+    assert!(matches!(refused, Err(RedactError::SharedJbig2Globals(2))));
+    assert!(refused.unwrap_err().to_string().starts_with("2 item(s) share JBIG2 symbol data with something being removed and can't be stored"));
+    let note = "/Type /XObject /Subtype /Image /Width 1 /Height 1 /BitsPerComponent 1 /ColorSpace /DeviceGray /Note 9 0 R";
+    for (other, extra, stuck) in [
+        (note.to_string(), vec![], 0),
+        (format!("{note} /SMask 10 0 R"), vec![stream(note, vec![0])], 0),
+        (format!("{note} /SMask 10 0 R"), vec![stream(&wrong, scan.page.clone())], 1),
+    ] {
+        let mut doc = SharedPages { other: other.clone(), other_data: vec![0], extra, ..SharedPages::new(&scan) }.build(&scan);
+        mark(&mut doc, 0, &[CLEARS], "");
+        let refused = apply(&mut doc, None);
+        assert!(matches!(refused, Err(RedactError::SharedJbig2Globals(n)) if n == stuck), "{other}");
+        let text = refused.unwrap_err().to_string();
+        assert_eq!(text.starts_with("something else in the file refers to JBIG2 symbol data"), stuck == 0, "{other}: {text}");
+        assert_eq!(text.contains("can't be stored"), stuck > 0, "{other}: {text}");
+    }
 }
 
 /// Remove Hidden Information leaves the same way: comments go, with what their appearances drew.
@@ -1689,6 +1705,32 @@ fn removing_hidden_information_takes_a_shared_jbig2_dictionary_too() {
     crate::sanitize::remove_hidden(&mut doc, &[crate::sanitize::Hidden::Comments]).unwrap();
     assert_gone(&doc, b"LEAK_GLOBALS");
     assert_eq!(drawn_samples(&reopen(&doc), 1), scan.bits);
+}
+
+/// Remove Hidden Information refuses as a redaction does when the dictionary can't leave, but it has
+/// changed the document by then, so the refusal doesn't say nothing was changed.
+#[test]
+fn a_refused_removal_of_hidden_information_doesnt_say_nothing_changed() {
+    let scan = shared_scan();
+    let form = stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /XObject << /Im 7 0 R >> >>", DRAWS);
+    let annotation = b"<< /Type /Annot /Subtype /Stamp /Rect [0 100 200 120] /AP << /N 11 0 R >> >>".to_vec();
+    let mut doc = SharedPages {
+        content: Vec::new(),
+        resources: String::new(),
+        page: "/Annots [10 0 R]".into(),
+        other: shared_image(SHARED).replace("/Filter /JBIG2Decode", "/Filter /FlateDecode"),
+        other_data: pdfcraft_filters::encode_flate(&scan.bits),
+        extra: vec![annotation, form],
+        ..SharedPages::new(&scan)
+    }
+    .build(&scan);
+    let annotations = |doc: &Document| crate::annots_of(doc, &pdfcraft_model::pages(doc)[0].dict).len();
+    assert_eq!(annotations(&doc), 1);
+    let refused = crate::sanitize::remove_hidden(&mut doc, &[crate::sanitize::Hidden::Comments]);
+    assert!(matches!(refused, Err(RedactError::SharedJbig2Globals(1))));
+    assert_eq!(annotations(&doc), 0, "the comment went before the refusal");
+    let text = refused.unwrap_err().to_string();
+    assert!(text.ends_with("this was refused") && !text.contains("nothing was changed"), "{text}");
 }
 
 /// [`assert_no_secret`] for a file that may hold JBIG2 streams, which `decoded` doesn't read: a stream

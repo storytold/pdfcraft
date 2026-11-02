@@ -73,11 +73,9 @@ pub enum RedactError {
     TooDeep,
     /// `/JBIG2Globals` used by something removed would stay: a JBIG2 image shares them and can't be
     /// stored again without them, or something else refers to them. Either way the shapes they
-    /// hold, those of marks under the area included, would stay. Counts the images, or 1 for another
-    /// reference.
-    #[error(
-        "{0} item(s) share JBIG2 symbol data with something being removed and can't be stored without it, so that data, which can show what was removed, would stay in the file; this was refused"
-    )]
+    /// hold, those of marks under the area included, would stay. Counts what can't be stored without
+    /// them: 0 when only something else keeps them.
+    #[error("{}", shared_jbig2_text(*.0))]
     SharedJbig2Globals(usize),
     #[error(transparent)]
     Edit(#[from] pdfcraft_edit::EditError),
@@ -85,6 +83,15 @@ pub enum RedactError {
     Form(#[from] pdfcraft_forms::FormError),
     #[error(transparent)]
     Cos(#[from] pdfcraft_cos::CosError),
+}
+
+/// [`RedactError::SharedJbig2Globals`]'s text, which says what keeps the data.
+fn shared_jbig2_text(stuck: usize) -> String {
+    let why = match stuck {
+        0 => "something else in the file refers to JBIG2 symbol data shared with something being removed".to_string(),
+        n => format!("{n} item(s) share JBIG2 symbol data with something being removed and can't be stored without it"),
+    };
+    format!("{why}, so that data, which can show what was removed, would stay in the file; this was refused")
 }
 
 /// A redaction mark on a page.
