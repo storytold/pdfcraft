@@ -50,19 +50,26 @@ pub fn combine_field_conflicts(sources: &[&Document]) -> Vec<Vec<(String, String
 /// bytes, so one name written in two encodings (PDFDocEncoding, UTF-16BE) is one name.
 /// Read-only: returns (node, new `/T`, old name, new name). Cycle- and depth-safe.
 fn plan_renames(doc: &Document, roots: &[ObjRef], taken: &mut std::collections::HashSet<String>) -> Vec<(ObjRef, String, String, String)> {
+    let mut reserved = std::collections::HashSet::new();
+    let mut seen = std::collections::HashSet::new();
+    for &root in roots {
+        collect_names(doc, root, "", &mut seen, 0, &mut reserved);
+    }
     let mut planned = Vec::new();
-    let mut walk = RenameWalk::default();
+    let mut walk = RenameWalk { reserved, ..RenameWalk::default() };
     for &root in roots {
         plan_renames_under(doc, root, "", taken, &mut walk, 0, &mut planned);
     }
     planned
 }
 
-/// What one [`plan_renames`] call remembers: the nodes it visited, and for each colliding name
-/// the suffix to try next.
+/// What one [`plan_renames`] call remembers: the nodes it visited, the incoming tree's own
+/// names (so an earlier rename does not steal a later sibling's name), and for each colliding
+/// name the suffix to try next.
 #[derive(Default)]
 struct RenameWalk {
     seen: HashSet<ObjRef>,
+    reserved: HashSet<String>,
     next: HashMap<String, u32>,
 }
 
@@ -88,18 +95,19 @@ fn plan_renames_under(
             // still taken: resume there instead of at 1.
             let mut n = walk.next.get(&fqn).copied().unwrap_or(1);
             let mut variant;
+            let mut candidate;
             while {
                 #[cfg(test)]
                 crate::work(1);
                 variant = format!("{name}-{n}");
-                taken.contains(&qualified(prefix, &variant))
+                candidate = qualified(prefix, &variant);
+                taken.contains(&candidate) || walk.reserved.contains(&candidate)
             } {
                 n = n.saturating_add(1);
             }
             walk.next.insert(fqn.clone(), n.saturating_add(1));
-            let new_fqn = qualified(prefix, &variant);
-            planned.push((node, variant.clone(), fqn, new_fqn.clone()));
-            taken.insert(new_fqn);
+            planned.push((node, variant.clone(), fqn, candidate.clone()));
+            taken.insert(candidate);
             name = variant;
         } else {
             taken.insert(fqn);
@@ -143,15 +151,16 @@ fn field_roots(doc: &Document) -> Result<Vec<ObjRef>, OrganizeError> {
         let annots = d.get(b"Annots").map(|a| doc.resolve(a)).and_then(|a| a.as_array().cloned()).unwrap_or_default();
         for a in annots.iter() {
             let Some(w) = doc.resolve(a).as_dict().cloned() else { continue };
-            if w.name(b"Subtype") != Some(b"Widget") {
+            if w.get(b"Subtype").map(|s| doc.resolve(s)).as_deref().and_then(Object::as_name) != Some(b"Widget") {
                 continue;
             }
             // Walk up to the field the widget belongs to, however deep it sits; a widget that
             // is its own field is its own root.
             let Some(mut root) = a.as_ref() else { continue };
             let mut up = 0;
+            let mut visited = HashSet::from([root]);
             while let Some(parent) = doc.get(root).as_dict().and_then(|p| p.reference(b"Parent")) {
-                if up >= 32 || root == parent {
+                if up >= 32 || !visited.insert(parent) || doc.get(parent).as_dict().is_none() {
                     break;
                 }
                 root = parent;
@@ -294,4 +303,64 @@ pub(super) fn register_fields(dst: &mut Document, fields: &[ObjRef]) -> Result<(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::*;
+
+    fn build(bodies: &[&str]) -> Document {
+        let mut out = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, b) in bodies.iter().enumerate() {
+            offsets.push(out.len());
+            out.extend_from_slice(format!("{} 0 obj\n{b}\nendobj\n", i + 1).as_bytes());
+        }
+        let xref = out.len();
+        out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", bodies.len() + 1).as_bytes());
+        for o in offsets {
+            out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+        }
+        out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", bodies.len() + 1).as_bytes());
+        Document::open(Arc::new(out)).expect("opens")
+    }
+
+    #[test]
+    fn renaming_colliding_field_does_not_steal_later_sibling_name() {
+        let dst = build(&[
+            "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] >> >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 100 100] >>",
+            "<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>",
+            "<< /Type /Annot /Subtype /Widget /FT /Tx /T (item) /Rect [0 0 10 10] >>",
+        ]);
+        let src = build(&[
+            "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 5 0 R] >> >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 100 100] >>",
+            "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R] >>",
+            "<< /Type /Annot /Subtype /Widget /FT /Tx /T (item) /Rect [0 0 10 10] >>",
+            "<< /Type /Annot /Subtype /Widget /FT /Tx /T (item-1) /Rect [0 20 10 30] >>",
+        ]);
+        // Only "item" collides with dst; "item-1" in src is already unique and must not be stolen.
+        assert_eq!(field_name_conflicts(&dst, &src), [("item".to_string(), "item-2".to_string())]);
+    }
+
+    #[test]
+    fn field_roots_keeps_widget_with_dangling_parent_or_indirect_subtype() {
+        let dst = build(&[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 100 100] >>",
+            "<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>",
+            "<< /Type /Annot /Subtype 5 0 R /FT /Tx /T (orphan) /Parent 99 0 R /Rect [0 0 10 10] >>",
+            "/Widget",
+        ]);
+        let src = build(&[
+            "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] >> >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 100 100] >>",
+            "<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>",
+            "<< /Type /Annot /Subtype /Widget /FT /Tx /T (orphan) /Rect [0 0 10 10] >>",
+        ]);
+        assert_eq!(field_name_conflicts(&dst, &src), [("orphan".to_string(), "orphan-1".to_string())]);
+    }
 }
