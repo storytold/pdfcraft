@@ -396,8 +396,8 @@ fn visible_signatures_show_a_drawn_typed_or_image_graphic() {
     let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
     let name = format!("({})", id.certificate.display_name());
     let plain = pdfcraft_sign::sign(&open(&fixture()), &id, &opts()).unwrap();
-    // Without a graphic the name is large on the left and in the details.
-    assert_eq!(appearance_of(&plain, "Signature1").0.matches(&name).count(), 2);
+    // Without a graphic the name is large on the left, wrapped as its column needs, and whole in the details.
+    assert_eq!(appearance_of(&plain, "Signature1").0.matches(&name).count(), 1);
     let strokes = Graphic::Strokes(vec![vec![[0.0, 0.0], [0.3, 0.2], [0.6, 0.0], [1.0, 0.2]], vec![[0.5, 0.1]]]);
     let typed = Graphic::Outlines(vec![vec![[0.0, 0.0], [1.0, 0.0], [1.0, 0.5], [0.0, 0.5]], vec![[0.2, 0.1], [0.8, 0.1], [0.5, 0.4]]]);
     for (graphic, drawn) in [
@@ -2953,4 +2953,22 @@ fn signing_a_field_with_a_null_value_after_another_signature_keeps_the_first_val
         "{:?}",
         all.iter().map(|s| (&s.status, &s.modification)).collect::<Vec<_>>()
     );
+}
+
+#[test]
+fn visible_text_never_leaves_its_box() {
+    // Narrow, tiny and large boxes: every line's position stays inside the box, so nothing is clipped.
+    let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
+    for (w, h) in [(25.0, 100.0), (40.0, 100.0), (60.0, 15.0), (120.0, 40.0), (400.0, 150.0)] {
+        let rect = [20.0, 100.0, 20.0 + w, 100.0 + h];
+        let signed = pdfcraft_sign::sign(&open(&fixture()), &id, &SignOptions { rect: Some(rect), ..opts() }).unwrap();
+        let (content, _) = appearance_of(&signed, "Signature1");
+        // Each `x y Tm` ends the chunk before it: the position of the text that follows.
+        for chunk in content.split(" Tm ").take(content.matches(" Tm ").count()) {
+            let t: Vec<&str> = chunk.split_whitespace().collect();
+            let x: f64 = t[t.len() - 2].parse().unwrap();
+            let y: f64 = t[t.len() - 1].parse().unwrap();
+            assert!((0.0..=w).contains(&x) && (0.0..=h).contains(&y), "{w}x{h}: text at {x} {y} leaves the box: {content}");
+        }
+    }
 }
