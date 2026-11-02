@@ -15,6 +15,8 @@ boa_engine = { version = "0.22.0", default-features = false, features = ["annex-
 # FormCalc Date/Num2Date calendar conversion goes through chrono (no hand-rolled calendar code);
 # std-only, so it stays wasm-safe.
 chrono = { workspace = true }
+# FormCalc url Encode/Decode; already in the workspace through url.
+percent-encoding = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 boa_engine = { version = "0.22.0", default-features = false, features = ["annex-b", "js"] }

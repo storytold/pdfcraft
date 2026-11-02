@@ -4479,6 +4479,7 @@ version = "0.18.1"
 dependencies = [
  "boa_engine",
  "chrono",
+ "percent-encoding",
 ]
 
 [[package]]
