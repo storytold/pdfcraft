@@ -95,15 +95,19 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
     }
     // What this page has to do with the press: its owner's, the active tool's, or another page's.
     let press = view.router.press_for(i);
+    // What lies under the pointer before the tools act, asked once: for a click's release, a
+    // right-click, and Fill & Sign's preview.
+    let wants_under = resp.clicked() || resp.secondary_clicked() || matches!(tool, QuickTool::Fill(_)) && !ptr.any_down;
+    let under = pointer.filter(|_| wants_under).map(|p| hits.at(view, p)).unwrap_or_default();
     let released_over = match press {
-        PagePress::Mine(owner) if resp.clicked() => pointer.is_some_and(|p| hits.at(view, p).iter().any(|h| h.owner == owner)),
+        PagePress::Mine(owner) if resp.clicked() => under.iter().any(|h| h.owner == owner),
         _ => false,
     };
-    let context = pointer.filter(|p| resp.secondary_clicked() && xf.rect.contains(*p)).and_then(|p| right_click(&hits, view, p));
+    let context = pointer.filter(|p| resp.secondary_clicked() && xf.rect.contains(*p)).and_then(|p| right_click(&hits, &under, view, p));
     // A mark already placed takes its own press (comments, below), and with no button down the
     // Fill & Sign tool's preview hides over one, where a press would pick it up.
-    let over_mark = matches!(tool, QuickTool::Fill(_))
-        && (matches!(press, PagePress::Mine(_)) || !ptr.any_down && pointer.and_then(|p| top(hits.at(view, p), tool)).is_some());
+    let over_mark =
+        matches!(tool, QuickTool::Fill(_)) && (matches!(press, PagePress::Mine(_)) || !ptr.any_down && top(under.iter().cloned(), tool).is_some());
     tool_input(ui, view, frame, slot, &pcx, press, over_mark);
     let on_field = if preparing {
         let o = crate::prepare::page_input(cx, form, field_tool, prepare_allowed, press, view);
@@ -194,17 +198,19 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
     // leaves them unselected.
     let on_comment = comments::page_input(ui, resp, &pcx, press, view);
     let consumed = on_objects || on_edit_text || on_link || on_content || boxing || on_field || on_comment;
-    let hover = pointer.filter(|_| frame.env.unobstructed).and_then(|p| claim_under(&hits, view, p));
+    let hover = pointer.and_then(|p| claim_under(&hits, view, p, frame.env.unobstructed));
     PageInput { consumed, area_tool, hover, released_over }
 }
 
-/// The cursor and the tip from what lies under the pointer at `p`, after the tools claimed theirs
-/// (the last claim on a layer stands). Returns the top of it, what a press there would take, for
-/// hover painting.
-fn claim_under(hits: &PageHits<'_>, view: &mut DocView, p: Pos2) -> Option<crate::page_router::Hit> {
+/// What lies under the pointer at `p`, after the tools act: its top, what a press there would take,
+/// for hover painting. With `claim` (nothing drawn over the pages, such as the palette), its cursor
+/// and tip too, after the tools claimed theirs (the last claim on a layer stands).
+fn claim_under(hits: &PageHits<'_>, view: &mut DocView, p: Pos2, claim: bool) -> Option<crate::page_router::Hit> {
     let under = hits.at(view, p);
-    for h in &under {
-        view.cursor.claim_with_tip(h.layer, h.icon, h.tip.clone());
+    if claim {
+        for h in &under {
+            view.cursor.claim_with_tip(h.layer, h.icon, h.tip.clone());
+        }
     }
     top(under, hits.tool)
 }
@@ -314,13 +320,14 @@ fn tool_input(
 /// A right-click at `p`: it goes to what lies on top there ([`PageHits::context_at`]), which the
 /// page's menu then acts on. A comment there is selected, and none elsewhere; a Prepare field is
 /// selected; links take theirs from what this returns.
-fn right_click(hits: &PageHits<'_>, view: &mut DocView, p: Pos2) -> Option<Owner> {
+/// `under`: the hits at `p` before the tools act.
+fn right_click(hits: &PageHits<'_>, under: &[crate::page_router::Hit], view: &mut DocView, p: Pos2) -> Option<Owner> {
     let context = hits.context_at(view, p);
     // Add text takes every right-click on a page it can change, Edit text those on its own
     // paragraphs and pictures, and a Prepare field tool the whole page, as before.
     let editing_here = match hits.tool {
-        QuickTool::AddText => hits.can_modify || top(hits.at(view, p), hits.tool).is_some(),
-        QuickTool::EditText => top(hits.at(view, p), hits.tool).is_some(),
+        QuickTool::AddText => hits.can_modify || top(under.iter().cloned(), hits.tool).is_some(),
+        QuickTool::EditText => top(under.iter().cloned(), hits.tool).is_some(),
         _ => false,
     };
     if !editing_here && hits.field_tool.is_none() {

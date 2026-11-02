@@ -2037,3 +2037,13 @@ fn image_handles_account_for_document_and_view_rotation() {
         }
     }
 }
+
+/// Cancelling the pages' pointer gestures (Escape, a dialog, automation's cancel) lets go of a
+/// camera corner being dragged: the quadrilateral stays, and no corner follows the pointer.
+#[test]
+fn cancelling_pointer_gestures_lets_go_of_a_camera_corner() {
+    let mut v = view(1, PageLayout::Single, true);
+    v.camera = Some(crate::camera_ui::CameraQuad { grab: Some(2), ..crate::camera_ui::CameraQuad::inset(0, 300.0, 400.0) });
+    v.cancel_pointer_gestures();
+    assert_eq!(v.camera.map(|q| q.grab), Some(None));
+}

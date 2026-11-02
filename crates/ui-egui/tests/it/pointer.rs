@@ -1284,3 +1284,17 @@ fn a_right_click_on_a_field_over_a_link_opens_no_link_menu() {
     assert_eq!(h.state().views[0].links.context, None, "the field is on top");
     assert!(h.query_by_label("Remove all links").is_none());
 }
+
+/// While the palette is open, a field beside it still shows its tooltip, as before: the palette
+/// keeps the page's own tips away, not egui's tooltip of a field.
+#[test]
+fn a_fields_tooltip_shows_beside_the_open_palette() {
+    let mut h = open(commented_text_field_pdf(), "150", false);
+    h.state_mut().palette_open = true;
+    h.run_steps(4);
+    let palette = h.ctx.memory(|m| m.area_rect(egui::Id::unique("palette"))).expect("palette shown");
+    let on_field = at(&h, 60.0, 210.0);
+    assert!(!palette.expand(20.0).contains(on_field), "the field is beside the palette {palette:?}");
+    rest_at(&mut h, on_field);
+    assert!(h.query_all_by_label("Your name").next().is_some(), "the field's tooltip shows");
+}
