@@ -160,6 +160,40 @@ fn a_click_selects_the_topmost_of_comments_and_group_subordinates() {
     }
 }
 
+/// #5517 review: a Fill & Sign tool picks up its own marks only, so a press reaches a mark lying
+/// under a comment or a group subordinate it ignores, and the Select tool still takes the topmost.
+#[test]
+fn a_fill_and_sign_tool_reaches_its_mark_under_a_group_member() {
+    let at = |a: Annotation, rect: [f32; 4]| Annotation { rect, ..a };
+    let under = [90.0, 90.0, 110.0, 110.0];
+    let mark = Annotation { fill_sign: true, subtype: "FreeText".into(), ..at(listed(0, 0, "mark", None), under) };
+    let primary = at(listed(0, 1, "primary", None), [150.0, 150.0, 170.0, 170.0]);
+    let member = Annotation { grouped: true, subtype: "Square".into(), ..at(listed(0, 2, "member", Some((0, 1))), under) };
+    let page = PageInfo { width: 200.0, height: 200.0, label: String::new(), crop: [0.0, 0.0, 200.0, 200.0], rotation: 0 };
+    let info = DocInfo { pages: vec![page], annotations: vec![mark, primary, member], ..Default::default() };
+    let view = DocView::new(pdfcraft_engine::DocId(1), &info, crate::canvas::ViewDefaults::default());
+    let xf = PageXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(200.0, 200.0)), rot: 0, pw: 200.0, ph: 200.0 };
+    let prefs = CommentPrefs::default();
+    for (tool, index) in [(QuickTool::Fill(crate::fill_sign::FillTool::Check), 0), (QuickTool::Select, 2)] {
+        let cx = PageCx {
+            page: 0,
+            xf: &xf,
+            ptr: &PagePointer::default(),
+            info: &info,
+            tool,
+            prefs: &prefs,
+            allowed: true,
+            hidden: false,
+            redact_mark: ([0.0; 3], 1.0),
+        };
+        let owner = hit(&cx, &view, pos2(100.0, 100.0)).map(|h| h.owner);
+        assert!(
+            matches!(owner, Some(crate::page_router::Owner::Comment { index: i, .. }) if i == index),
+            "{tool:?}: the press lands on annotation {index}, not {owner:?}"
+        );
+    }
+}
+
 use pdfcraft_render::TextGlyph;
 
 /// One glyph per character, `w` points wide, on a line of `em`-point text whose baseline is at `y`, drawn

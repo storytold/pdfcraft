@@ -100,8 +100,9 @@ pub(crate) fn hit(cx: &PageCx<'_>, view: &DocView, p: Pos2) -> Option<Hit> {
         }
     }
     // A click on a group subordinate (`/RT /Group`) selects its group (ISO 32000-2 §12.5.6.2); a
-    // drag moves just it, as Acrobat's does.
-    let a = Some(cx.click_hit(p)?).filter(|a| bodies && pick(a))?;
+    // drag moves just it, as Acrobat's does. The tool's own filter picks the candidates, so a
+    // Fill & Sign tool reaches its mark under a comment or group member it ignores.
+    let a = cx.click_hit_where(p, |a| bodies && pick(a))?;
     // A click on a highlight over a link follows the link, so the link's hand and tip show there.
     if cx.tool == QuickTool::Select && a.subtype == "Highlight" && on_link(cx, p) {
         return None;

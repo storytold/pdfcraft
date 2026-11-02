@@ -443,9 +443,15 @@ impl PageCx<'_> {
     /// `/Annots` (paint) order as [`Self::hit`] reads it. A click there selects [`Self::selects`];
     /// a drag moves just it.
     pub(super) fn click_hit(&self, p: Pos2) -> Option<&Annotation> {
+        self.click_hit_where(p, |_| true)
+    }
+
+    /// [`Self::click_hit`] among the annotations `takes` accepts: a tool that picks up only some
+    /// (Fill & Sign's marks) reaches one under an annotation it ignores.
+    pub(super) fn click_hit_where(&self, p: Pos2, takes: impl Fn(&Annotation) -> bool) -> Option<&Annotation> {
         self.comments()
             .chain(self.group_members().into_iter().map(|(m, _)| m))
-            .filter(|a| self.screen_rects(a).any(|r| r.expand(3.0).contains(p)))
+            .filter(|a| takes(a) && self.screen_rects(a).any(|r| r.expand(3.0).contains(p)))
             .max_by_key(|a| a.index)
     }
 
