@@ -698,3 +698,75 @@ mod tests {
         assert_eq!(map.len(), 12);
     }
 }
+
+#[cfg(test)]
+mod width_tests {
+    use super::*;
+    use hayro_syntax::Pdf;
+    use hayro_syntax::object::ObjectIdentifier;
+
+    /// A PDF whose object 5 is `array`, for what references in it can reach.
+    fn with_array(array: &str) -> Pdf {
+        let pdf = format!(
+            "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+             2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+             3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 10 10] >> endobj\n\
+             4 0 obj 20 endobj\n5 0 obj {array} endobj\n6 0 obj 22 endobj\n\
+             7 0 obj 7 0 R endobj\n8 0 obj 9 0 R endobj\n9 0 obj 8 0 R endobj\n\
+             10 0 obj 4 0 R endobj\n11 0 obj [500 600] endobj\n12 0 obj [-1000 500 880] endobj\n\
+             trailer << /Root 1 0 R >>\n%%EOF\n"
+        );
+        Pdf::new(pdf.into_bytes()).unwrap()
+    }
+
+    /// `/W` and `/W2` read groups of items, and either kind can start with a reference: taken for
+    /// the whole group it was lost, with all that followed, and those glyphs fell back to `/DW`.
+    #[test]
+    fn a_width_group_can_start_with_a_reference() {
+        let widths = |array: &str| {
+            let pdf = with_array(array);
+            let array = pdf.xref().get::<Array<'_>>(ObjectIdentifier::new(5, 0)).unwrap();
+            let mut read: Vec<_> = read_widths(&array).unwrap().into_iter().collect();
+            read.sort_by_key(|(cid, _)| *cid);
+            read
+        };
+        let by_list = vec![(20, 500.0), (21, 600.0)];
+        assert_eq!(widths("[20 [500 600]]"), by_list);
+        assert_eq!(widths("[4 0 R [500 600]]"), by_list);
+        let by_range = vec![(20, 700.0), (21, 700.0), (22, 700.0)];
+        assert_eq!(widths("[20 22 700]"), by_range);
+        assert_eq!(widths("[4 0 R 22 700]"), by_range);
+        assert_eq!(widths("[4 0 R 6 0 R 700]"), by_range);
+        assert_eq!(widths("[1 [100] 4 0 R [500 600]]"), vec![(1, 100.0), (20, 500.0), (21, 600.0)], "after a group");
+
+        let vertical = |array: &str| {
+            let pdf = with_array(array);
+            let array = pdf.xref().get::<Array<'_>>(ObjectIdentifier::new(5, 0)).unwrap();
+            let mut read: Vec<_> = read_widths2(&array).unwrap().into_iter().collect();
+            read.sort_by_key(|(cid, _)| *cid);
+            read
+        };
+        let by_list = vec![(20, [-1000.0, 500.0, 880.0])];
+        assert_eq!(vertical("[20 [-1000 500 880]]"), by_list);
+        assert_eq!(vertical("[4 0 R [-1000 500 880]]"), by_list);
+        let by_range = vec![(20, [-900.0, 400.0, 800.0]), (21, [-900.0, 400.0, 800.0]), (22, [-900.0, 400.0, 800.0])];
+        assert_eq!(vertical("[20 22 -900 400 800]"), by_range);
+        assert_eq!(vertical("[4 0 R 22 -900 400 800]"), by_range);
+
+        // A group's list can be given by reference too, and a reference to a reference is what it
+        // names.
+        let by_list = vec![(20, 500.0), (21, 600.0)];
+        assert_eq!(widths("[20 11 0 R]"), by_list);
+        assert_eq!(widths("[10 0 R [500 600]]"), by_list);
+        assert_eq!(widths("[10 0 R 11 0 R]"), by_list);
+        assert_eq!(vertical("[20 12 0 R]"), vec![(20, [-1000.0, 500.0, 880.0])]);
+
+        // A reference that only leads back to itself holds no number, so those glyphs keep `/DW`.
+        for array in ["[7 0 R [500 600]]", "[8 0 R [500 600]]", "[20 7 0 R 700]", "[7 0 R 8 0 R 700]", "[20 [7 0 R 600]]"] {
+            assert!(widths(array).is_empty(), "{array}");
+        }
+        for array in ["[7 0 R [-1000 500 880]]", "[8 0 R 22 -900 400 800]", "[20 [7 0 R 500 880]]"] {
+            assert!(vertical(array).is_empty(), "{array}");
+        }
+    }
+}

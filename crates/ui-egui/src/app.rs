@@ -31,6 +31,37 @@ impl Default for PdfCraftApp {
 }
 
 impl PdfCraftApp {
+    /// The window's title and, on the web, the page's, from the active document (#3640). Done in
+    /// `logic` too, which also runs while the window or browser tab is hidden: a document opened
+    /// then (a `?file=` download finishing) still names the page an embedding host reads.
+    fn sync_titles(&mut self, ctx: &egui::Context) {
+        // The window shows the active document's name (or title, if it asks for that), with •
+        // while it has unsaved changes, as the other Craft apps write it (#3640). Unsaved means
+        // what closing would ask about, so a draft not yet applied counts too.
+        let dirty = self.active.is_some_and(|i| self.has_unsaved_work(i));
+        let mark = if dirty { " •" } else { "" };
+        let titled = |name: Option<String>| {
+            name.or_else(|| self.combine_showing().then(|| tl!("Combine files").to_owned()))
+                .map_or_else(|| "PdfCraft".to_owned(), |name| format!("{name}{mark} — PdfCraft"))
+        };
+        let title = titled(self.active.and_then(|i| crate::canvas::tab_label(self, i)));
+        // The web page's title is what an embedding host reads to tell which file opened, so it
+        // names the file even when the document asks to show its own title.
+        let page_title = titled(self.active.and_then(|i| self.views.get(i)).and_then(|v| self.session.get(v.id)).map(|d| d.name.clone()));
+        if title != self.window_title {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
+            self.window_title = title;
+        }
+        if page_title != self.page_title {
+            // eframe's web runner ignores Title: set the page's own.
+            #[cfg(target_arch = "wasm32")]
+            if let Some(document) = web_sys::window().and_then(|w| w.document()) {
+                document.set_title(&page_title);
+            }
+            self.page_title = page_title;
+        }
+    }
+
     /// Construct an application with the default session, panels, theme and control state.
     pub fn new() -> Self {
         Self {
@@ -42,6 +73,7 @@ impl PdfCraftApp {
             default_mode: Mode::AllTools,
             view_defaults: Default::default(),
             units: Default::default(),
+            blank_paper: crate::paper::Paper::system(),
             date_format_draft: None,
             mode_override: None,
             left: LeftPanel::AllTools,
@@ -56,10 +88,12 @@ impl PdfCraftApp {
             space_hand: None,
             full_screen_tool: None,
             comment_prefs: Default::default(),
+            hotbar: Default::default(),
             theme: ThemeKind::Light,
             // A fresh install follows the desktop's appearance (#1248); saved settings override.
             theme_preference: ThemePreference::System,
             reading_colors: Default::default(),
+            show_page_edge_shadows: true,
             #[cfg(target_os = "linux")]
             desktop_theme: None,
             #[cfg(target_os = "linux")]
@@ -73,6 +107,7 @@ impl PdfCraftApp {
             ui_scale_applied: None,
             flatten_fill_sign_on_save: false,
             fill_text_size: fill_sign::TEXT_SIZE,
+            fill_text_color: [0.0; 3],
             dialog: None,
             updates: updates::Updates::default(),
             printer_source: None,
@@ -85,6 +120,7 @@ impl PdfCraftApp {
             all_tools_query: String::new(),
             all_tools_tab: (None, false),
             recent: Vec::new(),
+            recent_limit: crate::RECENT_FILES_DEFAULT,
             reopen_last_session: false,
             restore_last_view: true,
             last_views: Vec::new(),
@@ -101,9 +137,15 @@ impl PdfCraftApp {
             pending_opens: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
             next_open_token: 0,
+            #[cfg(not(target_arch = "wasm32"))]
+            launch_layout: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            launch_display_target: None,
             #[cfg(all(test, not(target_arch = "wasm32")))]
             open_prepare_gate: None,
             pinned: Default::default(),
+            pinned_tools: Vec::new(),
+            pin_tool_search: String::new(),
             toast: None,
             toast_script: None,
             script_messages: std::collections::VecDeque::new(),
@@ -191,13 +233,13 @@ impl PdfCraftApp {
             last_copied_file: None,
             system_clipboard: true,
             clipboard_override: None,
-            v_pressed: false,
             attach_override: None,
             duplicate_draft: None,
             page_props_draft: None,
             field_table_draft: None,
             form_preview: false,
             window_title: String::new(),
+            page_title: String::new(),
             recovery: None,
             recoverable: Vec::new(),
             recovery_keys: Default::default(),
@@ -320,6 +362,46 @@ impl PdfCraftApp {
     pub fn render_pending(&self) -> bool {
         self.views.iter().any(|v| v.render_pending())
     }
+
+    /// Check whether a tool group is pinned to Home.
+    pub fn is_tool_pinned(&self, id: &str) -> bool {
+        self.pinned_tools.iter().any(|t| t == id)
+    }
+
+    /// Pin a tool group to Home. Returns true if newly pinned.
+    pub fn pin_tool(&mut self, id: &str) -> bool {
+        if pdfcraft_engine::catalog::group(id).is_none() {
+            return false;
+        }
+        if !self.is_tool_pinned(id) {
+            self.pinned_tools.push(id.to_string());
+            if let Some(g) = pdfcraft_engine::catalog::group(id) {
+                self.notify_fmt("Pinned {tool} to Home", &[("tool", tl!(g.label))]);
+            }
+            return true;
+        }
+        false
+    }
+
+    /// Unpin a tool group from Home.
+    pub fn unpin_tool(&mut self, id: &str) {
+        if let Some(pos) = self.pinned_tools.iter().position(|t| t == id) {
+            self.pinned_tools.remove(pos);
+            if let Some(g) = pdfcraft_engine::catalog::group(id) {
+                self.notify_fmt("Unpinned {tool} from Home", &[("tool", tl!(g.label))]);
+            }
+        }
+    }
+
+    /// Toggle a tool group's pinned state on Home. Returns whether it is now pinned.
+    pub fn toggle_pin_tool(&mut self, id: &str) -> bool {
+        if self.is_tool_pinned(id) {
+            self.unpin_tool(id);
+            false
+        } else {
+            self.pin_tool(id)
+        }
+    }
 }
 
 impl eframe::App for PdfCraftApp {
@@ -329,6 +411,10 @@ impl eframe::App for PdfCraftApp {
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
         // The button's release a window move or resize kept from egui.
         window_controls::release_after_desktop_grab(ctx, raw);
+        // The wheel after Alt+Tab back, before the mouse has moved (#1518).
+        let known = ctx.input(|i| i.pointer.latest_pos().is_some());
+        let size = ctx.input(|i| i.viewport().inner_rect).map_or(egui::Vec2::ZERO, |r| r.size());
+        drag_pointer::locate_wheel(raw, known, size, || drag_pointer::in_window(ctx));
         self.prepare_raw_input(ctx, raw);
         if raw.hovered_files.is_empty() && raw.dropped_files.is_empty() {
             return;
@@ -527,6 +613,7 @@ impl eframe::App for PdfCraftApp {
         // Last, after everything that can open or answer the "save changes?" question.
         self.attend_save_prompt(ctx);
         self.sync_native_menu(ctx);
+        self.sync_titles(ctx);
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
@@ -546,16 +633,7 @@ impl eframe::App for PdfCraftApp {
         for view in &mut self.views {
             view.begin_render_frame();
         }
-        // The window shows the active document's name (or title, if it asks for that).
-        let title = self
-            .active
-            .and_then(|i| crate::canvas::tab_label(self, i))
-            .or_else(|| self.combine_showing().then(|| tl!("Combine files").to_owned()))
-            .map_or_else(|| "PdfCraft".to_owned(), |name| format!("{name} — PdfCraft"));
-        if title != self.window_title {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
-            self.window_title = title;
-        }
+        self.sync_titles(&ctx);
         // The accessible window takes the same name, so a screen reader (AT-SPI on Linux, UIA on
         // Windows) can tell it apart (#4614). egui builds the root node afresh every pass.
         ctx.accesskit_node_builder(egui::accesskit_root_id(), |root| root.set_label(self.window_title.as_str()));
