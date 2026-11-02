@@ -2886,3 +2886,18 @@ theme	Appearance	Teema
 	No image on clipboard to paste	Leikepöydällä ei ole liitettävää kuvaa
 	Pinned {tool} to Home	{tool} kiinnitetty aloitussivulle
 	Unpinned {tool} from Home	{tool} irrotettu aloitussivulta
+	Text style	Tekstityyli
+	Modern print	Nykyaikainen painokirjoitus
+	Historical print (Fraktur)	Historiallinen painokirjoitus (fraktuura)
+	Fraktur and Kurrent use an optional 13 MB add-on. After download, recognition works offline.	Fraktuura ja Kurrent käyttävät valinnaista 13 Mt:n lisäosaa. Latauksen jälkeen tunnistus toimii ilman verkkoyhteyttä.
+	Historical spelling is preserved. Handwriting, abbreviations and complex layouts need checking.	Historiallinen oikeinkirjoitus säilytetään. Käsiala, lyhenteet ja monimutkaiset asettelut on tarkistettava.
+	Preparing OCR add-on…	Valmistellaan OCR-lisäosaa…
+	Historical OCR add-on installed	Historiallisen OCR:n lisäosa asennettu
+	Remove add-on	Poista lisäosa
+	Download historical OCR add-on (13 MB)	Lataa historiallisen OCR:n lisäosa (13 Mt)
+	Historical OCR add-ons require the desktop app.	Historiallisen OCR:n lisäosat vaativat työpöytäsovelluksen.
+	Wait for text recognition to finish before changing add-ons	Odota, että tekstintunnistus päättyy, ennen kuin muutat lisäosia
+	Automatic (historical model)	Automaattinen (historiallinen malli)
+	The historical model detects its supported scripts automatically; Japanese is not included.	Historiallinen malli tunnistaa tukemansa kirjoitusjärjestelmät automaattisesti; japani ei sisälly.
+	Historical handwriting (Kurrent)	Historiallinen käsiala (Kurrent)
+	Handwriting requires upright horizontal lines in one text column. Columns, tables and marginal notes are not supported.	Käsiala edellyttää pystyasentoisia vaakasuoria rivejä yhdessä tekstipalstassa. Palstoja, taulukoita ja marginaalimerkintöjä ei tueta.

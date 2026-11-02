@@ -2896,3 +2896,18 @@ theme	Appearance	Išvaizda
 	Safety margin (pt)	Apsauginė paraštė (pt)
 	Only clear paper edges are cropped. Indistinguishable white borders are kept.	Apkerpami tik aiškūs popieriaus kraštai. Neatskiriami balti kraštai paliekami.
 	Straighten scanned page	Ištiesinti nuskaitytą puslapį
+	Text style	Teksto stilius
+	Modern print	Šiuolaikinis spaudinys
+	Historical print (Fraktur)	Istorinis spaudinys (fraktūra)
+	Fraktur and Kurrent use an optional 13 MB add-on. After download, recognition works offline.	Fraktūrai ir Kurrent naudojamas pasirenkamas 13 MB priedas. Atsisiuntus atpažinimas veikia neprisijungus.
+	Historical spelling is preserved. Handwriting, abbreviations and complex layouts need checking.	Istorinė rašyba išsaugoma. Ranka rašytą tekstą, santrumpas ir sudėtingus maketus reikia patikrinti.
+	Preparing OCR add-on…	Ruošiamas OCR priedas…
+	Historical OCR add-on installed	Istorinio OCR priedas įdiegtas
+	Remove add-on	Šalinti priedą
+	Download historical OCR add-on (13 MB)	Atsisiųsti istorinio OCR priedą (13 MB)
+	Historical OCR add-ons require the desktop app.	Istorinio OCR priedams reikia darbalaukio programos.
+	Wait for text recognition to finish before changing add-ons	Prieš keisdami priedus palaukite, kol baigsis teksto atpažinimas
+	Automatic (historical model)	Automatiškai (istorinis modelis)
+	The historical model detects its supported scripts automatically; Japanese is not included.	Istorinis modelis palaikomus raštus nustato automatiškai; japonų kalba neįtraukta.
+	Historical handwriting (Kurrent)	Istorinis rankraštis (Kurrent)
+	Handwriting requires upright horizontal lines in one text column. Columns, tables and marginal notes are not supported.	Rankraščiui reikia statmenų horizontalių eilučių viename teksto stulpelyje. Stulpeliai, lentelės ir paraščių pastabos nepalaikomi.

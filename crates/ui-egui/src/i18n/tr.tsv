@@ -2631,3 +2631,18 @@ animation effects	Off	Kapalı
 	No image on clipboard to paste	Panoda yapıştırılacak görüntü yok
 	Pinned {tool} to Home	{tool} Ana Sayfaya sabitlendi
 	Unpinned {tool} from Home	{tool} Ana Sayfadan kaldırıldı
+	Text style	Metin stili
+	Modern print	Modern baskı
+	Historical print (Fraktur)	Tarihî baskı (Fraktur)
+	Fraktur and Kurrent use an optional 13 MB add-on. After download, recognition works offline.	Fraktur ve Kurrent isteğe bağlı 13 MB'lık bir eklenti kullanır. İndirdikten sonra tanıma çevrimdışı çalışır.
+	Historical spelling is preserved. Handwriting, abbreviations and complex layouts need checking.	Tarihî yazım korunur. El yazısı, kısaltmalar ve karmaşık düzenler kontrol edilmelidir.
+	Preparing OCR add-on…	OCR eklentisi hazırlanıyor…
+	Historical OCR add-on installed	Tarihî OCR eklentisi yüklü
+	Remove add-on	Eklentiyi kaldır
+	Download historical OCR add-on (13 MB)	Tarihî OCR eklentisini indir (13 MB)
+	Historical OCR add-ons require the desktop app.	Tarihî OCR eklentileri masaüstü uygulamasını gerektirir.
+	Wait for text recognition to finish before changing add-ons	Eklentileri değiştirmeden önce metin tanımanın bitmesini bekleyin
+	Automatic (historical model)	Otomatik (tarihî model)
+	The historical model detects its supported scripts automatically; Japanese is not included.	Tarihî model desteklediği yazıları otomatik olarak algılar; Japonca dahil değildir.
+	Historical handwriting (Kurrent)	Tarihî el yazısı (Kurrent)
+	Handwriting requires upright horizontal lines in one text column. Columns, tables and marginal notes are not supported.	El yazısı, tek bir metin sütununda dik ve yatay satırlar gerektirir. Sütunlar, tablolar ve kenar notları desteklenmez.

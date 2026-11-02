@@ -2903,3 +2903,18 @@ key	Space	Space
 	No image on clipboard to paste	Không có hình ảnh trong bảng nhớ tạm để dán
 	Pinned {tool} to Home	Đã ghim {tool} vào Trang chủ
 	Unpinned {tool} from Home	Đã bỏ ghim {tool} khỏi Trang chủ
+	Text style	Kiểu chữ
+	Modern print	Chữ in hiện đại
+	Historical print (Fraktur)	Chữ in cổ (Fraktur)
+	Fraktur and Kurrent use an optional 13 MB add-on. After download, recognition works offline.	Fraktur và Kurrent dùng một tiện ích bổ sung tùy chọn 13 MB. Sau khi tải xuống, việc nhận dạng hoạt động ngoại tuyến.
+	Historical spelling is preserved. Handwriting, abbreviations and complex layouts need checking.	Chính tả cổ được giữ nguyên. Chữ viết tay, chữ viết tắt và bố cục phức tạp cần được kiểm tra.
+	Preparing OCR add-on…	Đang chuẩn bị tiện ích OCR…
+	Historical OCR add-on installed	Đã cài tiện ích OCR chữ cổ
+	Remove add-on	Gỡ tiện ích
+	Download historical OCR add-on (13 MB)	Tải tiện ích OCR chữ cổ (13 MB)
+	Historical OCR add-ons require the desktop app.	Tiện ích OCR chữ cổ cần ứng dụng máy tính.
+	Wait for text recognition to finish before changing add-ons	Hãy đợi nhận dạng văn bản xong rồi mới thay đổi tiện ích
+	Automatic (historical model)	Tự động (mô hình chữ cổ)
+	The historical model detects its supported scripts automatically; Japanese is not included.	Mô hình chữ cổ tự động nhận biết các hệ chữ được hỗ trợ; không bao gồm tiếng Nhật.
+	Historical handwriting (Kurrent)	Chữ viết tay cổ (Kurrent)
+	Handwriting requires upright horizontal lines in one text column. Columns, tables and marginal notes are not supported.	Chữ viết tay cần các dòng ngang thẳng trong một cột văn bản. Không hỗ trợ nhiều cột, bảng và ghi chú lề.

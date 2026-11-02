@@ -2794,3 +2794,18 @@ key	Space	Mellomrom
 	Export this PDF	Eksporter denne PDF-en
 	Find text or tools	Finn tekst eller verktøy
 	Crop image	Beskjær bilde
+	Text style	Tekststil
+	Modern print	Moderne trykk
+	Historical print (Fraktur)	Historisk trykk (fraktur)
+	Fraktur and Kurrent use an optional 13 MB add-on. After download, recognition works offline.	Fraktur og kurrent bruker et valgfritt tillegg på 13 MB. Etter nedlasting fungerer gjenkjenningen uten nett.
+	Historical spelling is preserved. Handwriting, abbreviations and complex layouts need checking.	Historisk rettskriving beholdes. Håndskrift, forkortelser og komplekse oppsett må kontrolleres.
+	Preparing OCR add-on…	Klargjør OCR-tillegg…
+	Historical OCR add-on installed	Tillegg for historisk OCR er installert
+	Remove add-on	Fjern tillegg
+	Download historical OCR add-on (13 MB)	Last ned tillegg for historisk OCR (13 MB)
+	Historical OCR add-ons require the desktop app.	Tillegg for historisk OCR krever skrivebordsappen.
+	Wait for text recognition to finish before changing add-ons	Vent til tekstgjenkjenningen er ferdig før du endrer tillegg
+	Automatic (historical model)	Automatisk (historisk modell)
+	The historical model detects its supported scripts automatically; Japanese is not included.	Den historiske modellen gjenkjenner skriftene den støtter automatisk; japansk er ikke inkludert.
+	Historical handwriting (Kurrent)	Historisk håndskrift (kurrent)
+	Handwriting requires upright horizontal lines in one text column. Columns, tables and marginal notes are not supported.	Håndskrift krever rette, vannrette linjer i én tekstspalte. Spalter, tabeller og margnotater støttes ikke.

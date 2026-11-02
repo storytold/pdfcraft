@@ -2601,3 +2601,18 @@ animation effects	Off	Joaktiv
 	No image on clipboard to paste	Nuk ka imazh në kujtesën e përkohshme për të ngjitur
 	Pinned {tool} to Home	{tool} u fiksua te Kreu
 	Unpinned {tool} from Home	{tool} u hoq nga fiksimi te Kreu
+	Text style	Stili i tekstit
+	Modern print	Shtyp modern
+	Historical print (Fraktur)	Shtyp historik (Fraktur)
+	Fraktur and Kurrent use an optional 13 MB add-on. After download, recognition works offline.	Fraktur dhe Kurrent përdorin një shtojcë opsionale 13 MB. Pas shkarkimit, njohja funksionon pa internet.
+	Historical spelling is preserved. Handwriting, abbreviations and complex layouts need checking.	Drejtshkrimi historik ruhet. Shkrimi me dorë, shkurtimet dhe faqosjet e ndërlikuara duhen kontrolluar.
+	Preparing OCR add-on…	Po përgatitet shtojca OCR…
+	Historical OCR add-on installed	Shtojca OCR historike u instalua
+	Remove add-on	Hiq shtojcën
+	Download historical OCR add-on (13 MB)	Shkarko shtojcën OCR historike (13 MB)
+	Historical OCR add-ons require the desktop app.	Shtojcat OCR historike kërkojnë aplikacionin për desktop.
+	Wait for text recognition to finish before changing add-ons	Prisni të përfundojë njohja e tekstit përpara se të ndryshoni shtojcat
+	Automatic (historical model)	Automatike (model historik)
+	The historical model detects its supported scripts automatically; Japanese is not included.	Modeli historik i zbulon automatikisht shkrimet që mbështet; japonishtja nuk përfshihet.
+	Historical handwriting (Kurrent)	Shkrim dore historik (Kurrent)
+	Handwriting requires upright horizontal lines in one text column. Columns, tables and marginal notes are not supported.	Shkrimi me dorë kërkon rreshta horizontalë të drejtë në një kolonë teksti. Kolonat, tabelat dhe shënimet anësore nuk mbështeten.

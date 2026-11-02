@@ -2846,3 +2846,18 @@ theme	Appearance	स्वरूप
 	No image on clipboard to paste	चिपकाने के लिए क्लिपबोर्ड में कोई छवि नहीं है
 	Pinned {tool} to Home	{tool} को होम पर पिन किया गया
 	Unpinned {tool} from Home	{tool} को होम से अनपिन किया गया
+	Text style	पाठ शैली
+	Modern print	आधुनिक छपाई
+	Historical print (Fraktur)	ऐतिहासिक छपाई (फ़्राक्टूर)
+	Fraktur and Kurrent use an optional 13 MB add-on. After download, recognition works offline.	फ़्राक्टूर और कुरेंट एक वैकल्पिक 13 MB ऐड-ऑन का उपयोग करते हैं। डाउनलोड के बाद पहचान ऑफ़लाइन काम करती है।
+	Historical spelling is preserved. Handwriting, abbreviations and complex layouts need checking.	ऐतिहासिक वर्तनी बनी रहती है। हस्तलेख, संक्षिप्त रूप और जटिल लेआउट जाँचने होंगे।
+	Preparing OCR add-on…	OCR ऐड-ऑन तैयार हो रहा है…
+	Historical OCR add-on installed	ऐतिहासिक OCR ऐड-ऑन इंस्टॉल है
+	Remove add-on	ऐड-ऑन हटाएँ
+	Download historical OCR add-on (13 MB)	ऐतिहासिक OCR ऐड-ऑन डाउनलोड करें (13 MB)
+	Historical OCR add-ons require the desktop app.	ऐतिहासिक OCR ऐड-ऑन के लिए डेस्कटॉप ऐप आवश्यक है।
+	Wait for text recognition to finish before changing add-ons	ऐड-ऑन बदलने से पहले पाठ पहचान पूरी होने तक प्रतीक्षा करें
+	Automatic (historical model)	स्वचालित (ऐतिहासिक मॉडल)
+	The historical model detects its supported scripts automatically; Japanese is not included.	ऐतिहासिक मॉडल समर्थित लिपियों को स्वयं पहचानता है; जापानी शामिल नहीं है।
+	Historical handwriting (Kurrent)	ऐतिहासिक हस्तलेख (कुरेंट)
+	Handwriting requires upright horizontal lines in one text column. Columns, tables and marginal notes are not supported.	हस्तलेख के लिए एक पाठ स्तंभ में सीधी क्षैतिज पंक्तियाँ आवश्यक हैं। स्तंभ, तालिकाएँ और हाशिये की टिप्पणियाँ समर्थित नहीं हैं।

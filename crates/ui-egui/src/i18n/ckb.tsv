@@ -2810,3 +2810,18 @@ certificate	Version	وەشان
 	Export this PDF	هەناردەکردنی ئەم PDF ـە
 	Find text or tools	دۆزینەوەی دەق یان ئامراز
 	Crop image	بڕینەوەی وێنە
+	Text style	شێوازی دەق
+	Modern print	چاپی نوێ
+	Historical print (Fraktur)	چاپی مێژوویی (فراکتور)
+	Fraktur and Kurrent use an optional 13 MB add-on. After download, recognition works offline.	فراکتور و کورێنت پاشکۆیەکی ئارەزوومەندانەی ١٣ مێگابایتی بەکاردەهێنن. دوای داگرتن، ناسینەوە بێ ئینتەرنێت کار دەکات.
+	Historical spelling is preserved. Handwriting, abbreviations and complex layouts need checking.	ڕێنووسی مێژوویی دەپارێزرێت. دەستنووس، کورتکراوەکان و ڕێکخستنە ئاڵۆزەکان پێویستیان بە پشکنین هەیە.
+	Preparing OCR add-on…	پاشکۆی OCR ئامادە دەکرێت…
+	Historical OCR add-on installed	پاشکۆی OCRی مێژوویی دامەزرا
+	Remove add-on	لابردنی پاشکۆ
+	Download historical OCR add-on (13 MB)	داگرتنی پاشکۆی OCRی مێژوویی (١٣ مێگابایت)
+	Historical OCR add-ons require the desktop app.	پاشکۆکانی OCRی مێژوویی پێویستیان بە ئەپی دێسکتۆپ هەیە.
+	Wait for text recognition to finish before changing add-ons	چاوەڕێ بکە تا ناسینەوەی دەق تەواو دەبێت پێش گۆڕینی پاشکۆکان
+	Automatic (historical model)	خۆکار (مۆدێلی مێژوویی)
+	The historical model detects its supported scripts automatically; Japanese is not included.	مۆدێلی مێژوویی خۆکارانە ئەو نووسینانە دەناسێتەوە کە پشتگیرییان دەکات؛ ژاپۆنی تێدا نییە.
+	Historical handwriting (Kurrent)	دەستنووسی مێژوویی (کورێنت)
+	Handwriting requires upright horizontal lines in one text column. Columns, tables and marginal notes are not supported.	دەستنووس پێویستی بە دێڕی ئاسۆیی ڕاست هەیە لە یەک ستوونی دەقدا. ستوون، خشتە و تێبینی پەراوێز پشتگیری ناکرێن.

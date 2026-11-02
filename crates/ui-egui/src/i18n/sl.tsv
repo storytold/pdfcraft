@@ -2640,3 +2640,18 @@ animation effects	Off	Izklopljeni
 	No image on clipboard to paste	V odložišču ni slike za lepljenje
 	Pinned {tool} to Home	{tool} pripeto na domačo stran
 	Unpinned {tool} from Home	{tool} odpeto z domače strani
+	Text style	Slog besedila
+	Modern print	Sodobni tisk
+	Historical print (Fraktur)	Zgodovinski tisk (fraktura)
+	Fraktur and Kurrent use an optional 13 MB add-on. After download, recognition works offline.	Fraktura in kurent uporabljata izbirni dodatek velikosti 13 MB. Po prenosu prepoznavanje deluje brez povezave.
+	Historical spelling is preserved. Handwriting, abbreviations and complex layouts need checking.	Zgodovinski pravopis se ohrani. Rokopis, okrajšave in zapletene postavitve je treba preveriti.
+	Preparing OCR add-on…	Pripravljanje dodatka OCR …
+	Historical OCR add-on installed	Dodatek za zgodovinski OCR je nameščen
+	Remove add-on	Odstrani dodatek
+	Download historical OCR add-on (13 MB)	Prenesi dodatek za zgodovinski OCR (13 MB)
+	Historical OCR add-ons require the desktop app.	Dodatki za zgodovinski OCR zahtevajo namizno aplikacijo.
+	Wait for text recognition to finish before changing add-ons	Pred spreminjanjem dodatkov počakajte, da se prepoznavanje besedila konča
+	Automatic (historical model)	Samodejno (zgodovinski model)
+	The historical model detects its supported scripts automatically; Japanese is not included.	Zgodovinski model samodejno zazna podprte pisave; japonščina ni vključena.
+	Historical handwriting (Kurrent)	Zgodovinski rokopis (kurent)
+	Handwriting requires upright horizontal lines in one text column. Columns, tables and marginal notes are not supported.	Rokopis zahteva pokončne vodoravne vrstice v enem stolpcu besedila. Stolpci, tabele in opombe na robu niso podprti.

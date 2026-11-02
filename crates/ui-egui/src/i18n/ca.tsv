@@ -2876,3 +2876,18 @@ theme	Appearance	Aspecte
 	No image on clipboard to paste	No hi ha cap imatge al porta-retalls per enganxar
 	Pinned {tool} to Home	{tool} fixat a Inici
 	Unpinned {tool} from Home	{tool} desfixat d’Inici
+	Text style	Estil del text
+	Modern print	Impremta moderna
+	Historical print (Fraktur)	Impremta històrica (Fraktur)
+	Fraktur and Kurrent use an optional 13 MB add-on. After download, recognition works offline.	Fraktur i Kurrent fan servir un complement opcional de 13 MB. Després de baixar-lo, el reconeixement funciona sense connexió.
+	Historical spelling is preserved. Handwriting, abbreviations and complex layouts need checking.	Es conserva l'ortografia històrica. Cal revisar l'escriptura a mà, les abreviatures i les maquetacions complexes.
+	Preparing OCR add-on…	S'està preparant el complement d'OCR…
+	Historical OCR add-on installed	Complement d'OCR històric instal·lat
+	Remove add-on	Elimina el complement
+	Download historical OCR add-on (13 MB)	Baixa el complement d'OCR històric (13 MB)
+	Historical OCR add-ons require the desktop app.	Els complements d'OCR històric requereixen l'aplicació d'escriptori.
+	Wait for text recognition to finish before changing add-ons	Espereu que acabi el reconeixement de text abans de canviar els complements
+	Automatic (historical model)	Automàtic (model històric)
+	The historical model detects its supported scripts automatically; Japanese is not included.	El model històric detecta automàticament les escriptures que admet; el japonès no hi és inclòs.
+	Historical handwriting (Kurrent)	Escriptura a mà històrica (Kurrent)
+	Handwriting requires upright horizontal lines in one text column. Columns, tables and marginal notes are not supported.	L'escriptura a mà requereix línies horitzontals i rectes en una sola columna de text. No s'admeten columnes, taules ni notes al marge.

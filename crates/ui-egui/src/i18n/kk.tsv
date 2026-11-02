@@ -2633,3 +2633,18 @@ animation effects	Off	Өшірулі
 	No image on clipboard to paste	Алмасу буферінде қоятын сурет жоқ
 	Pinned {tool} to Home	{tool} басты бетке бекітілді
 	Unpinned {tool} from Home	{tool} басты беттен ажыратылды
+	Text style	Мәтін стилі
+	Modern print	Заманауи баспа
+	Historical print (Fraktur)	Тарихи баспа (Фрактура)
+	Fraktur and Kurrent use an optional 13 MB add-on. After download, recognition works offline.	Фрактура мен Куррент 13 МБ қосымша модульді пайдаланады. Жүктеп алғаннан кейін тану желісіз жұмыс істейді.
+	Historical spelling is preserved. Handwriting, abbreviations and complex layouts need checking.	Тарихи емле сақталады. Қолжазбаны, қысқартуларды және күрделі беттеуді тексеру керек.
+	Preparing OCR add-on…	OCR модулі дайындалуда…
+	Historical OCR add-on installed	Тарихи OCR модулі орнатылды
+	Remove add-on	Модульді жою
+	Download historical OCR add-on (13 MB)	Тарихи OCR модулін жүктеп алу (13 МБ)
+	Historical OCR add-ons require the desktop app.	Тарихи OCR модульдері үшін жұмыс үстелі қолданбасы қажет.
+	Wait for text recognition to finish before changing add-ons	Модульдерді өзгертпес бұрын мәтінді тану аяқталғанын күтіңіз
+	Automatic (historical model)	Автоматты (тарихи модель)
+	The historical model detects its supported scripts automatically; Japanese is not included.	Тарихи модель өзі қолдайтын жазуларды автоматты түрде анықтайды; жапон тілі кірмейді.
+	Historical handwriting (Kurrent)	Тарихи қолжазба (Куррент)
+	Handwriting requires upright horizontal lines in one text column. Columns, tables and marginal notes are not supported.	Қолжазба бір мәтін бағанындағы тік тұрған көлденең жолдарды талап етеді. Бағандар, кестелер және жиектегі жазбалар қолдау көрсетілмейді.

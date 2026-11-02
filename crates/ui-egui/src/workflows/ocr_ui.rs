@@ -163,7 +163,6 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
         });
         ui.add_space(8.0);
     };
-    egui::ScrollArea::vertical().max_height((ui.ctx().content_rect().height() - 160.0).max(200.0)).show(ui, |ui| {
     group(ui, "Pages", &mut |ui| {
         widgets::radio_value(ui, &mut d.pages, OcrPages::All, tl!("All pages"));
         widgets::radio_value(ui, &mut d.pages, OcrPages::Current, tl!("Current page"));
@@ -181,17 +180,21 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
             if d.recognizer != Recognizer::Modern {
                 ui.label(tl!("Automatic (historical model)"));
             } else {
-            let name = LANGUAGES.iter().find(|l| l.0 == d.language).map_or("English", |l| l.1);
-            craft_ui::ComboBox::from_id_salt("ocr-language").selected_text(tl!(name)).width(220.0).height(560.0).show_ui(ui, |ui| {
-                for (code, name) in LANGUAGES {
-                    ui.selectable_value(&mut d.language, (*code).to_string(), tl!(*name));
-                }
-            });
+                let name = LANGUAGES.iter().find(|l| l.0 == d.language).map_or("English", |l| l.1);
+                craft_ui::ComboBox::from_id_salt("ocr-language").selected_text(tl!(name)).width(220.0).height(560.0).show_ui(ui, |ui| {
+                    for (code, name) in LANGUAGES {
+                        ui.selectable_value(&mut d.language, (*code).to_string(), tl!(*name));
+                    }
+                });
             }
             ui.end_row();
             ui.label(tl!("Text style"));
             craft_ui::ComboBox::from_id_salt("ocr-recognizer")
-                .selected_text(match d.recognizer { Recognizer::Modern => tl!("Modern print"), Recognizer::Historical => tl!("Historical print (Fraktur)"), Recognizer::HistoricalHandwriting => tl!("Historical handwriting (Kurrent)") })
+                .selected_text(match d.recognizer {
+                    Recognizer::Modern => tl!("Modern print"),
+                    Recognizer::Historical => tl!("Historical print (Fraktur)"),
+                    Recognizer::HistoricalHandwriting => tl!("Historical handwriting (Kurrent)"),
+                })
                 .width(220.0)
                 .show_ui(ui, |ui| {
                     ui.selectable_value(&mut d.recognizer, Recognizer::Modern, tl!("Modern print"));
@@ -218,12 +221,32 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
         });
         if d.recognizer != Recognizer::Modern {
             ui.add_space(6.0);
-            if d.recognizer == Recognizer::HistoricalHandwriting { ui.label(egui::RichText::new(tl!("Handwriting requires upright horizontal lines in one text column. Columns, tables and marginal notes are not supported.")).small()); }
-            ui.label(egui::RichText::new(tl!("Fraktur and Kurrent use an optional 13 MB add-on. After download, recognition works offline.")).small());
-            ui.label(egui::RichText::new(tl!("Historical spelling is preserved. Handwriting, abbreviations and complex layouts need checking.")).small().color(t.text_muted));
-            ui.label(egui::RichText::new(tl!("The historical model detects its supported scripts automatically; Japanese is not included.")).small().color(t.text_muted));
+            if d.recognizer == Recognizer::HistoricalHandwriting {
+                ui.label(
+                    egui::RichText::new(tl!(
+                        "Handwriting requires upright horizontal lines in one text column. Columns, tables and marginal notes are not supported."
+                    ))
+                    .small(),
+                );
+            }
+            ui.label(
+                egui::RichText::new(tl!("Fraktur and Kurrent use an optional 13 MB add-on. After download, recognition works offline.")).small(),
+            );
+            ui.label(
+                egui::RichText::new(tl!("Historical spelling is preserved. Handwriting, abbreviations and complex layouts need checking."))
+                    .small()
+                    .color(t.text_muted),
+            );
+            ui.label(
+                egui::RichText::new(tl!("The historical model detects its supported scripts automatically; Japanese is not included."))
+                    .small()
+                    .color(t.text_muted),
+            );
             if addon_pending {
-                ui.horizontal(|ui| { ui.spinner(); ui.label(tl!("Preparing OCR add-on…")); });
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label(tl!("Preparing OCR add-on…"));
+                });
             } else if addon_installed {
                 ui.horizontal(|ui| {
                     ui.label(tl!("Historical OCR add-on installed"));
@@ -237,7 +260,9 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
             } else {
                 ui.label(egui::RichText::new(tl!("Historical OCR add-ons require the desktop app.")).small());
             }
-            if let Some(message) = &addon_message { ui.label(egui::RichText::new(message).small().color(t.text_muted)); }
+            if let Some(message) = &addon_message {
+                ui.label(egui::RichText::new(message).small().color(t.text_muted));
+            }
         }
         ui.add_space(4.0);
         ui.add(crate::widgets::checkbox(&mut d.text_pages, tl!("Also recognize pages that already have text")))
@@ -271,7 +296,6 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
         );
         ui.add_space(6.0);
     }
-    });
     ui.add_space(6.0);
     let (mut go, mut cancel) = (false, false);
     ui.horizontal(|ui| {
@@ -361,7 +385,6 @@ impl PdfCraftApp {
             ctx.request_repaint_after(std::time::Duration::from_millis(200));
         }
     }
-
 
     /// Recognize text on the pages chosen in the dialog, in the background.
     pub fn start_ocr(&mut self) {

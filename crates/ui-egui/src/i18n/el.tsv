@@ -2643,3 +2643,18 @@ animation effects	Off	Ανενεργά
 	No image on clipboard to paste	Δεν υπάρχει εικόνα στο πρόχειρο για επικόλληση
 	Pinned {tool} to Home	Το {tool} καρφιτσώθηκε στην Αρχική
 	Unpinned {tool} from Home	Το {tool} ξεκαρφιτσώθηκε από την Αρχική
+	Text style	Στυλ κειμένου
+	Modern print	Σύγχρονη τυπογραφία
+	Historical print (Fraktur)	Ιστορική τυπογραφία (Fraktur)
+	Fraktur and Kurrent use an optional 13 MB add-on. After download, recognition works offline.	Οι γραφές Fraktur και Kurrent χρησιμοποιούν ένα προαιρετικό πρόσθετο 13 MB. Μετά τη λήψη, η αναγνώριση λειτουργεί εκτός σύνδεσης.
+	Historical spelling is preserved. Handwriting, abbreviations and complex layouts need checking.	Η ιστορική ορθογραφία διατηρείται. Η χειρόγραφη γραφή, οι συντομογραφίες και οι σύνθετες διατάξεις χρειάζονται έλεγχο.
+	Preparing OCR add-on…	Προετοιμασία πρόσθετου OCR…
+	Historical OCR add-on installed	Το πρόσθετο ιστορικού OCR εγκαταστάθηκε
+	Remove add-on	Κατάργηση πρόσθετου
+	Download historical OCR add-on (13 MB)	Λήψη πρόσθετου ιστορικού OCR (13 MB)
+	Historical OCR add-ons require the desktop app.	Τα πρόσθετα ιστορικού OCR απαιτούν την εφαρμογή υπολογιστή.
+	Wait for text recognition to finish before changing add-ons	Περιμένετε να ολοκληρωθεί η αναγνώριση κειμένου πριν αλλάξετε πρόσθετα
+	Automatic (historical model)	Αυτόματα (ιστορικό μοντέλο)
+	The historical model detects its supported scripts automatically; Japanese is not included.	Το ιστορικό μοντέλο εντοπίζει αυτόματα τις γραφές που υποστηρίζει· τα ιαπωνικά δεν περιλαμβάνονται.
+	Historical handwriting (Kurrent)	Ιστορική χειρόγραφη γραφή (Kurrent)
+	Handwriting requires upright horizontal lines in one text column. Columns, tables and marginal notes are not supported.	Η χειρόγραφη γραφή απαιτεί όρθιες οριζόντιες γραμμές σε μία στήλη κειμένου. Στήλες, πίνακες και σημειώσεις περιθωρίου δεν υποστηρίζονται.

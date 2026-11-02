@@ -2847,3 +2847,18 @@ theme	Appearance	Tampilan
 	No image on clipboard to paste	Tidak ada gambar di papan klip untuk ditempel
 	Pinned {tool} to Home	{tool} disematkan ke Beranda
 	Unpinned {tool} from Home	{tool} dilepas dari Beranda
+	Text style	Gaya teks
+	Modern print	Cetakan modern
+	Historical print (Fraktur)	Cetakan historis (Fraktur)
+	Fraktur and Kurrent use an optional 13 MB add-on. After download, recognition works offline.	Fraktur dan Kurrent memakai add-on opsional 13 MB. Setelah diunduh, pengenalan berjalan secara offline.
+	Historical spelling is preserved. Handwriting, abbreviations and complex layouts need checking.	Ejaan historis dipertahankan. Tulisan tangan, singkatan, dan tata letak yang rumit perlu diperiksa.
+	Preparing OCR add-on…	Menyiapkan add-on OCR…
+	Historical OCR add-on installed	Add-on OCR historis terpasang
+	Remove add-on	Hapus add-on
+	Download historical OCR add-on (13 MB)	Unduh add-on OCR historis (13 MB)
+	Historical OCR add-ons require the desktop app.	Add-on OCR historis memerlukan aplikasi desktop.
+	Wait for text recognition to finish before changing add-ons	Tunggu hingga pengenalan teks selesai sebelum mengubah add-on
+	Automatic (historical model)	Otomatis (model historis)
+	The historical model detects its supported scripts automatically; Japanese is not included.	Model historis mendeteksi aksara yang didukungnya secara otomatis; bahasa Jepang tidak termasuk.
+	Historical handwriting (Kurrent)	Tulisan tangan historis (Kurrent)
+	Handwriting requires upright horizontal lines in one text column. Columns, tables and marginal notes are not supported.	Tulisan tangan memerlukan baris horizontal yang tegak dalam satu kolom teks. Kolom, tabel, dan catatan pinggir tidak didukung.

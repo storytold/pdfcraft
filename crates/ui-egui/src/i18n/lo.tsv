@@ -2522,3 +2522,18 @@ animation effects	Off	ປິດ
 	Export this PDF	ສົ່ງອອກ PDF ນີ້
 	Find text or tools	ຊອກຫາຂໍ້ຄວາມ ຫຼື ເຄື່ອງມື
 	Crop image	ຕັດຂອບຮູບພາບ
+	Text style	ຮູບແບບຂໍ້ຄວາມ
+	Modern print	ຕົວພິມສະໄໝໃໝ່
+	Historical print (Fraktur)	ຕົວພິມປະຫວັດສາດ (Fraktur)
+	Fraktur and Kurrent use an optional 13 MB add-on. After download, recognition works offline.	Fraktur ແລະ Kurrent ໃຊ້ສ່ວນເສີມທາງເລືອກຂະໜາດ 13 MB. ຫຼັງຈາກດາວໂຫຼດແລ້ວ ການຈຳແນກຈະເຮັດວຽກແບບອອບລາຍ.
+	Historical spelling is preserved. Handwriting, abbreviations and complex layouts need checking.	ການສະກົດຄຳແບບປະຫວັດສາດຈະຖືກຮັກສາໄວ້. ລາຍມື, ຕົວຫຍໍ້ ແລະ ໂຄງຮ່າງທີ່ຊັບຊ້ອນຕ້ອງກວດສອບ.
+	Preparing OCR add-on…	ກຳລັງກະກຽມສ່ວນເສີມ OCR…
+	Historical OCR add-on installed	ຕິດຕັ້ງສ່ວນເສີມ OCR ປະຫວັດສາດແລ້ວ
+	Remove add-on	ລຶບສ່ວນເສີມ
+	Download historical OCR add-on (13 MB)	ດາວໂຫຼດສ່ວນເສີມ OCR ປະຫວັດສາດ (13 MB)
+	Historical OCR add-ons require the desktop app.	ສ່ວນເສີມ OCR ປະຫວັດສາດຕ້ອງໃຊ້ແອັບເດັສທັອບ.
+	Wait for text recognition to finish before changing add-ons	ລໍຖ້າໃຫ້ການຈຳແນກຂໍ້ຄວາມສຳເລັດກ່ອນປ່ຽນສ່ວນເສີມ
+	Automatic (historical model)	ອັດຕະໂນມັດ (ແບບຈຳລອງປະຫວັດສາດ)
+	The historical model detects its supported scripts automatically; Japanese is not included.	ແບບຈຳລອງປະຫວັດສາດກວດຫາອັກສອນທີ່ຮອງຮັບໂດຍອັດຕະໂນມັດ; ບໍ່ລວມພາສາຍີ່ປຸ່ນ.
+	Historical handwriting (Kurrent)	ລາຍມືປະຫວັດສາດ (Kurrent)
+	Handwriting requires upright horizontal lines in one text column. Columns, tables and marginal notes are not supported.	ລາຍມືຕ້ອງເປັນແຖວລວງນອນທີ່ຕັ້ງຊື່ໃນຖັນຂໍ້ຄວາມດຽວ. ບໍ່ຮອງຮັບຫຼາຍຖັນ, ຕາຕະລາງ ແລະ ບັນທຶກຂອບ.

@@ -2827,3 +2827,18 @@ theme	Appearance	ظاهر
 	No image on clipboard to paste	تصویری در حافظهٔ موقت برای چسباندن نیست
 	Pinned {tool} to Home	{tool} به خانه سنجاق شد
 	Unpinned {tool} from Home	{tool} از خانه جدا شد
+	Text style	سبک متن
+	Modern print	چاپ مدرن
+	Historical print (Fraktur)	چاپ تاریخی (فراکتور)
+	Fraktur and Kurrent use an optional 13 MB add-on. After download, recognition works offline.	فراکتور و کورنت از یک افزونهٔ اختیاری ۱۳ مگابایتی استفاده می‌کنند. پس از بارگیری، تشخیص به‌صورت آفلاین کار می‌کند.
+	Historical spelling is preserved. Handwriting, abbreviations and complex layouts need checking.	املای تاریخی حفظ می‌شود. دست‌نوشته، اختصارها و چیدمان‌های پیچیده نیاز به بازبینی دارند.
+	Preparing OCR add-on…	در حال آماده‌سازی افزونهٔ OCR…
+	Historical OCR add-on installed	افزونهٔ OCR تاریخی نصب شد
+	Remove add-on	حذف افزونه
+	Download historical OCR add-on (13 MB)	بارگیری افزونهٔ OCR تاریخی (۱۳ مگابایت)
+	Historical OCR add-ons require the desktop app.	افزونه‌های OCR تاریخی به برنامهٔ دسکتاپ نیاز دارند.
+	Wait for text recognition to finish before changing add-ons	پیش از تغییر افزونه‌ها صبر کنید تا تشخیص متن تمام شود
+	Automatic (historical model)	خودکار (مدل تاریخی)
+	The historical model detects its supported scripts automatically; Japanese is not included.	مدل تاریخی خط‌های پشتیبانی‌شده را خودکار تشخیص می‌دهد؛ ژاپنی شامل نمی‌شود.
+	Historical handwriting (Kurrent)	دست‌نوشتهٔ تاریخی (کورنت)
+	Handwriting requires upright horizontal lines in one text column. Columns, tables and marginal notes are not supported.	دست‌نوشته به سطرهای افقی و صاف در یک ستون متن نیاز دارد. ستون‌ها، جدول‌ها و یادداشت‌های حاشیه پشتیبانی نمی‌شوند.

@@ -1,5 +1,6 @@
 # Where PdfCraft falls short of Acrobat Pro
 
+> **Last reviewed:** 2026-11-02 · **Last updated:** 2026-11-02 · **Change:** minor (gap 7: optional historical Fraktur/Kurrent OCR add-on, #1059; estimates unchanged)
 > **Last reviewed:** 2026-11-02 · **Last updated:** 2026-11-02 · **Change:** minor (gap 7: Catalan and horizontal Chinese listed, vertical Chinese missing; annotated skewed pages are recognized without deskew; estimates unchanged)
 > **Last reviewed:** 2026-10-25 · **Last updated:** 2026-10-25 · **Change:** minor (gaps 5 and 14 current state: native release Hans face via LXGW WenKai Lite; Arabic logical catalog, explicit RTL direction and mirrored stock chrome, with native/browser/IME workflows unqualified; no readiness re-estimate)
 > **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-15 · **Change:** minor (gap 3: #2517 a blank line stays a paragraph break; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
@@ -43,7 +44,7 @@ update the numbers.
 | 3 | Editing existing text is fragile on real files | feature | 100–180 | [target-app-parity.md](target-app-parity.md) |
 | 5 | Chinese UI lacks a web glyph face | localization | 6–12 | [localization-parity.md](localization-parity.md) |
 | 6 | Open-issue backlog of wrong results in shipped features | stability | 45–80 | this file |
-| 7 | OCR reads only unaccented Latin | feature | 40–75 | [file-format-parity.md](file-format-parity.md) |
+| 7 | OCR language, handwriting and scan-cleanup gaps | feature | 40–75 | [file-format-parity.md](file-format-parity.md) |
 | 8 | Office export weak, Office import absent | file format | 55–100 | [file-format-parity.md](file-format-parity.md) |
 | 9 | No Preflight; PDF/A partial; PDF/X and PDF/UA absent | standards | 65–115 | [pdf-spec-parity.md](pdf-spec-parity.md) |
 | 10 | Signatures: no PKCS #11, timestamp servers or online revocation | feature, hardware | 40–70 | [pdf-spec-parity.md](pdf-spec-parity.md) |
@@ -180,11 +181,15 @@ update the numbers.
   A skewed page with annotations is recognized but left unstraightened.
   Clear paper edges can now define an automatic crop with safety padding; ambiguous white borders
   stay unchanged, and original image pixels remain in the PDF.
+  An explicit optional download adds offline historical print/handwriting recognition, including
+  Fraktur and single-column Kurrent; spelling is preserved and transcription still needs review. See
+  [historical-ocr.md](historical-ocr.md) for model provenance and limited regression evidence.
 - **Missing:** additional language choices, vertical Japanese and Chinese, reliable reading order and word spacing
   across complex layouts, editable-text output, deskew on pages with annotations, despeckle, MRC
   compression, browser OCR and scanner input. Camera perspective
   and colour cleanup use the separate Enhance camera image command; broader photo fidelity remains open.
-- **Evidence:** `crates/engine/tests/scan_ocr.rs` and the OCR automation/UI tests; model tests require
+  Complex historical layouts, arbitrary writers and historical Japanese remain unclaimed.
+- **Evidence:** `crates/engine/tests/it/scan_ocr.rs` and the OCR automation/UI tests; model tests require
   `cargo xtask models`, Japanese fixture generation requires the release `CRAFT_FONTS_DIR` input.
 - **Impact:** scanned documents remain a core Pro workflow with wider language and layout demands.
 - **Estimate:** previous 40–75 h estimate needs reassessment after this narrower feature slice.

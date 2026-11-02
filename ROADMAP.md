@@ -1,5 +1,7 @@
 # PdfCraft roadmap
 
+> **Last reviewed:** 2026-11-02 · **Last updated:** 2026-11-02 · **Change:** minor (M10 #1059: optional historical Fraktur/Kurrent OCR add-on, integrated with #1012 and main 168a3cb9; estimates unchanged)
+
 > **Last reviewed:** 2026-11-02 · **Last updated:** 2026-11-02 · **Change:** minor (M10 #1012: integrate main 168a3cb9 across the engine, edit, automation and UI module splits; ONNX model discovery requires the multilingual files; a skewed page with annotations is recognized unstraightened instead of failing the run; batch OCR always adds text; estimates unchanged)
 
 > **Last reviewed:** 2026-10-20 · **Last updated:** 2026-10-20 · **Change:** minor (M10 #1012: integrate ec0a9650, preserve OCR replacement metrics alongside cached space widths; estimates unchanged)
@@ -224,6 +226,7 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 ## Progress log
 
+- **2026-11-02 (M10, optional historical OCR):** Fraktur and Kurrent recognition can be downloaded as a separate 13 MB add-on. Pinned Apache-2.0 weights run offline through Rust/RTen; the scan dialog and automation expose explicit install/status/removal. Unicode text, scan pixels, save/reopen and undo are covered. The public historical regression samples overlap model training, so they demonstrate integration and conversion fidelity, not general handwriting accuracy. Overall percentage unchanged.
 - **2026-10-20 (M10, #1012 refresh):** Integrated main through ec0a9650. Added graphics-state isolation to the Unicode OCR layer, carrying forward main's #3029 fix with a failing-before/fixed-after regression. Combined the new per-font space-width cache with OCR visible-replacement calibration, keyed by the actual replacement font. Preserved incoming translation additions and the branch's OCR labels; regenerated attribution hashes. Local checks pass: 534 core tests, 248 automation tests, six OCR UI tests and 117 catalog tests, plus the new graphics-state regression and final OCR save/edit checks. Previous head passed Linux, Windows, FreeBSD, ARM64, WASM and security CI. Estimates unchanged.
 - **2026-11-02 (M10, #1012 refresh):** Integrated main through 168a3cb9, carrying multilingual OCR and scan correction across the engine, edit, automation and UI module splits and the ONNX detection/recognition models. A skewed page with annotations is now recognized and left unstraightened, reported as `deskew_skipped`, instead of one sticky note failing the whole run; Recognize text in multiple files always adds text after Enhance scanned file. Estimates unchanged.
 
@@ -773,6 +776,7 @@ Newest first: the date, what moved, and the new overall estimate.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-02 | minor | Optional historical Fraktur/Kurrent recognition with explicit model management and offline inference; estimates unchanged |
 | 2026-11-01 | patch | M7 #5657: header/footer, watermark and background operations commit all selected pages together; later-page errors preserve marks, content, shared/inherited resources and pending edits; estimates unchanged. |
 | 2026-10-28 | patch | M2, PR #4172: integrate main 5af10276 and retain both roadmap histories; viewer-only CJK and print/output font policies and estimates unchanged. |
 | 2026-10-27 | minor | M10: OCR stages SHA-256-verified ONNX models after the upstream RTEN URL brownout; discovery prefers a complete ONNX pair per directory, falls back to a complete RTEN pair, and never mixes formats or directories; language/web limits and estimates unchanged. |

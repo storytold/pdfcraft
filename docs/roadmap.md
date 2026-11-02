@@ -1,5 +1,7 @@
 # PdfCraft roadmap: milestones and what's next
 
+> **Last reviewed:** 2026-11-02 · **Last updated:** 2026-11-02 · **Change:** minor (M10 #1059: optional historical Fraktur/Kurrent OCR add-on, integrated with #1012 and main 168a3cb9; estimates unchanged)
+
 > **Last reviewed:** 2026-11-02 · **Last updated:** 2026-11-02 · **Change:** minor (M10 #1012: integrate main 168a3cb9 across the engine, edit, automation and UI module splits; ONNX model discovery requires the multilingual files; a skewed page with annotations is recognized unstraightened instead of failing the run; batch OCR always adds text; estimates unchanged)
 
 > **Last reviewed:** 2026-10-20 · **Last updated:** 2026-10-20 · **Change:** minor (M10 #1012: integrate ec0a9650, preserve OCR replacement metrics alongside cached space widths; estimates unchanged)
@@ -287,6 +289,8 @@ M2 (renderer), M7 (content editing), M10 (OCR and Office), M11 (Preflight and st
 - Unmeasured fidelity: without an Acrobat comparison harness, quality gaps surface as user reports.
 
 ## Revision history
+
+**2026-11-02 · minor:** M10 optional Fraktur/Kurrent recognition (#1059) with checksum-pinned downloads, offline Rust inference and UI/automation model management; the historical line regression is not an independent accuracy benchmark. Percentages unchanged.
 
 **2026-10-26 · patch:** M2/PR #4172: reconcile current main and preserve upstream Japanese serif/weight selection alongside the installed CJK viewer and preview fallback. Estimates unchanged.
 

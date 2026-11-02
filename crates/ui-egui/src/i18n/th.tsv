@@ -2776,3 +2776,18 @@ theme	Appearance	ลักษณะที่ปรากฏ
 	Export this PDF	ส่งออก PDF นี้
 	Find text or tools	ค้นหาข้อความหรือเครื่องมือ
 	Crop image	ครอบตัดรูปภาพ
+	Text style	รูปแบบข้อความ
+	Modern print	ตัวพิมพ์สมัยใหม่
+	Historical print (Fraktur)	ตัวพิมพ์ประวัติศาสตร์ (Fraktur)
+	Fraktur and Kurrent use an optional 13 MB add-on. After download, recognition works offline.	Fraktur และ Kurrent ใช้ส่วนเสริมที่เลือกติดตั้งได้ขนาด 13 MB หลังดาวน์โหลดแล้ว การรู้จำจะทำงานแบบออฟไลน์
+	Historical spelling is preserved. Handwriting, abbreviations and complex layouts need checking.	การสะกดแบบประวัติศาสตร์จะคงไว้ ลายมือ คำย่อ และเค้าโครงที่ซับซ้อนต้องตรวจทาน
+	Preparing OCR add-on…	กำลังเตรียมส่วนเสริม OCR…
+	Historical OCR add-on installed	ติดตั้งส่วนเสริม OCR ประวัติศาสตร์แล้ว
+	Remove add-on	ลบส่วนเสริม
+	Download historical OCR add-on (13 MB)	ดาวน์โหลดส่วนเสริม OCR ประวัติศาสตร์ (13 MB)
+	Historical OCR add-ons require the desktop app.	ส่วนเสริม OCR ประวัติศาสตร์ต้องใช้แอปเดสก์ท็อป
+	Wait for text recognition to finish before changing add-ons	รอให้การรู้จำข้อความเสร็จก่อนเปลี่ยนส่วนเสริม
+	Automatic (historical model)	อัตโนมัติ (โมเดลประวัติศาสตร์)
+	The historical model detects its supported scripts automatically; Japanese is not included.	โมเดลประวัติศาสตร์ตรวจหาอักษรที่รองรับโดยอัตโนมัติ ไม่รวมภาษาญี่ปุ่น
+	Historical handwriting (Kurrent)	ลายมือประวัติศาสตร์ (Kurrent)
+	Handwriting requires upright horizontal lines in one text column. Columns, tables and marginal notes are not supported.	ลายมือต้องเป็นบรรทัดแนวนอนตั้งตรงในคอลัมน์ข้อความเดียว ไม่รองรับหลายคอลัมน์ ตาราง และหมายเหตุที่ขอบ

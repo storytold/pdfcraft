@@ -2876,3 +2876,18 @@ theme	Appearance	Aspect
 	No image on clipboard to paste	Nicio imagine în clipboard de lipit
 	Pinned {tool} to Home	{tool} fixat pe pagina principală
 	Unpinned {tool} from Home	{tool} desprins de pe pagina principală
+	Text style	Stil text
+	Modern print	Tipar modern
+	Historical print (Fraktur)	Tipar istoric (Fraktur)
+	Fraktur and Kurrent use an optional 13 MB add-on. After download, recognition works offline.	Fraktur și Kurrent folosesc un supliment opțional de 13 MB. După descărcare, recunoașterea funcționează offline.
+	Historical spelling is preserved. Handwriting, abbreviations and complex layouts need checking.	Ortografia istorică este păstrată. Scrisul de mână, abrevierile și aranjamentele complexe trebuie verificate.
+	Preparing OCR add-on…	Se pregătește suplimentul OCR…
+	Historical OCR add-on installed	Suplimentul OCR istoric este instalat
+	Remove add-on	Elimină suplimentul
+	Download historical OCR add-on (13 MB)	Descarcă suplimentul OCR istoric (13 MB)
+	Historical OCR add-ons require the desktop app.	Suplimentele OCR istorice necesită aplicația desktop.
+	Wait for text recognition to finish before changing add-ons	Așteptați terminarea recunoașterii textului înainte de a modifica suplimentele
+	Automatic (historical model)	Automat (model istoric)
+	The historical model detects its supported scripts automatically; Japanese is not included.	Modelul istoric detectează automat scrierile acceptate; limba japoneză nu este inclusă.
+	Historical handwriting (Kurrent)	Scris de mână istoric (Kurrent)
+	Handwriting requires upright horizontal lines in one text column. Columns, tables and marginal notes are not supported.	Scrisul de mână necesită rânduri orizontale drepte într-o singură coloană de text. Coloanele, tabelele și notele marginale nu sunt acceptate.

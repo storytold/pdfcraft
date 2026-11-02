@@ -2846,3 +2846,18 @@ theme	Appearance	모양
 	No image on clipboard to paste	클립보드에 붙여넣을 이미지가 없습니다
 	Pinned {tool} to Home	{tool}을 홈에 고정했습니다
 	Unpinned {tool} from Home	{tool}의 홈 고정을 해제했습니다
+	Text style	텍스트 스타일
+	Modern print	현대 인쇄체
+	Historical print (Fraktur)	역사적 인쇄체(프락투어)
+	Fraktur and Kurrent use an optional 13 MB add-on. After download, recognition works offline.	프락투어와 쿠렌트는 선택 사항인 13MB 추가 기능을 사용합니다. 다운로드한 후에는 오프라인으로 인식합니다.
+	Historical spelling is preserved. Handwriting, abbreviations and complex layouts need checking.	역사적 철자가 그대로 유지됩니다. 손글씨, 약어, 복잡한 레이아웃은 확인이 필요합니다.
+	Preparing OCR add-on…	OCR 추가 기능 준비 중…
+	Historical OCR add-on installed	역사적 OCR 추가 기능 설치됨
+	Remove add-on	추가 기능 제거
+	Download historical OCR add-on (13 MB)	역사적 OCR 추가 기능 다운로드(13MB)
+	Historical OCR add-ons require the desktop app.	역사적 OCR 추가 기능은 데스크톱 앱이 필요합니다.
+	Wait for text recognition to finish before changing add-ons	추가 기능을 변경하려면 텍스트 인식이 끝날 때까지 기다리세요
+	Automatic (historical model)	자동(역사적 모델)
+	The historical model detects its supported scripts automatically; Japanese is not included.	역사적 모델은 지원하는 문자 체계를 자동으로 감지합니다. 일본어는 포함되지 않습니다.
+	Historical handwriting (Kurrent)	역사적 손글씨(쿠렌트)
+	Handwriting requires upright horizontal lines in one text column. Columns, tables and marginal notes are not supported.	손글씨는 한 텍스트 열에 똑바른 가로줄로 쓰여 있어야 합니다. 여러 열, 표, 여백 메모는 지원되지 않습니다.
