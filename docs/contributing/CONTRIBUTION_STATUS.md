@@ -23,10 +23,10 @@ This live status tracker records all upstream contributions, branches, commits, 
 
 | Contribution / Topic | Type | Topic Branch | Commit | Tests & Status | PR Status | Blocker / Next Action |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **PR 1: Automation Apply Alerts**<br>Surface AcroForm calculation alerts & requests in `apply` | `fix(automation)` | `upstream/automation-apply-alerts` | Prepared from `android-port` | • `cargo test -p pdfcraft-automation`: 318 passed<br>• Regression test passed | **DRAFT READY** | Ready to create branch from `upstream/main` and stage commit |
-| **PR 2: ISO 32000-2 Sound Annotations**<br>`Shape::Sound`, appearance stream vector mic icon, WAV parsing | `feat(annot)` | `upstream/sound-annotations` | Prepared from `android-port` | • `cargo test -p pdfcraft-annot`: passed<br>• `cargo test -p pdfcraft-automation`: 318 passed<br>• `cargo xtask assets`: passed | **DRAFT READY** | Ready to create branch from `upstream/main` and stage commit |
-| **RFC Proposal: Native Android Support**<br>Architecture proposal issue for upstream discussion | `rfc(platform)` | N/A | Documented in `PROPOSAL_ISSUE_DRAFT.md` | Complete architectural review | **DRAFT READY** | Awaiting user authorization before publishing to GitHub |
-| **Track A: Native Android Application**<br>Complete Kotlin + Compose + UniFFI Android App | Product | `android/development` | `fa9984a4` | • 54 Android JVM unit tests passed<br>• 17 Native host tests passed<br>• Multi-ABI APK generated (`app-debug.apk`: 63MB) | **VERIFIED (Fork)** | Independent product track running in fork |
+| **PR 1: Automation Apply Alerts**<br>Surface AcroForm calculation alerts & requests in `apply` | `fix(automation)` | `upstream/automation-apply-alerts` | `8246d8ce` | • `cargo test -p pdfcraft-automation`: 318 passed<br>• Regression test passed | **READY TO SUBMIT** | Pushed to origin; awaiting authorization to open PR against `storytold/pdfcraft:main` |
+| **PR 2: ISO 32000-2 Sound Annotations**<br>`Shape::Sound`, appearance stream vector mic icon, WAV parsing | `feat(annot)` | `upstream/sound-annotations` | `58dbec31` | • `cargo test -p pdfcraft-annot`: passed<br>• `cargo test -p pdfcraft-automation`: 318 passed<br>• `cargo xtask assets`: passed | **READY TO SUBMIT** | Pushed to origin; awaiting authorization to open PR against `storytold/pdfcraft:main` |
+| **RFC Proposal: Native Android Support**<br>Architecture proposal issue for upstream discussion | `rfc(platform)` | N/A | Documented in `PROPOSAL_ISSUE_DRAFT.md` | Complete architectural review | **DRAFT READY** | Awaiting user authorization before publishing issue to `storytold/pdfcraft` |
+| **Track A: Native Android Application**<br>Complete Kotlin + Compose + UniFFI Android App | Product | `android/development` | `f35a18fe` | • 54 Android JVM unit tests passed<br>• 17 Native host tests passed<br>• Multi-ABI APK generated (`app-debug.apk`: 63MB) | **VERIFIED (Fork)** | Independent product track running in fork (`origin/android/development`) |
 
 ---
 
@@ -39,11 +39,17 @@ This live status tracker records all upstream contributions, branches, commits, 
 
 ---
 
-## 4. Current Blockers and Required User Authorizations
+## 4. Current Status and Required User Authorizations
 
-1. **GitHub Issue Publishing:**
-   - Maintainer RFC proposal is drafted at `docs/contributing/PROPOSAL_ISSUE_DRAFT.md`.
-   - **Action Required:** User authorization needed to publish this issue on `storytold/pdfcraft`.
-2. **Upstream PR Creation:**
-   - Local topic branches `upstream/automation-apply-alerts` and `upstream/sound-annotations` are prepared and isolated from Android-specific code.
-   - Pushing and opening PRs on GitHub requires network push and user confirmation.
+1. **Fork Synchronization:**
+   - Remote `origin` (`https://github.com/dikshant363/pdfcraft-android`) created and synchronized.
+   - All topic and integration branches (`android/development`, `android-port`, `feature/android-reader`, `feature/android-rendering`, `upstream/automation-apply-alerts`, `upstream/sound-annotations`) are pushed to `origin`.
+
+2. **Upstream PR Submission:**
+   - PR 1 (`upstream/automation-apply-alerts` -> `storytold/pdfcraft:main`) is verified and ready.
+   - PR 2 (`upstream/sound-annotations` -> `storytold/pdfcraft:main`) is verified and ready.
+   - **Action Required:** User authorization to open the PRs against `storytold/pdfcraft:main` via GitHub CLI or web UI.
+
+3. **RFC Proposal Publishing:**
+   - RFC proposal is drafted at `docs/contributing/PROPOSAL_ISSUE_DRAFT.md`.
+   - **Action Required:** User authorization needed to publish this discussion issue on `storytold/pdfcraft`.
