@@ -598,9 +598,9 @@ pub(crate) fn content_units(ops: &[Op], scan_start: usize, scan_end: usize) -> V
             sequence_end(ops, i, scan_end, &["q"], "Q")
         } else if op.is("BT") {
             sequence_end(ops, i, scan_end, &[], "ET")
-        } else if op.is("BI") {
-            sequence_end(ops, i, scan_end, &[], "EI")
-        } else if op.is("Do") || op.is("sh") {
+        } else if op.is("BI") || op.is("Do") || op.is("sh") {
+            // The parser emits a whole inline image (`BI` … `ID` … `EI`) as one `BI` op, so it is a
+            // unit of its own (#3146).
             i.saturating_add(1)
         } else {
             let mut j = i;

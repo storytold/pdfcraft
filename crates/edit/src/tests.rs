@@ -9814,6 +9814,36 @@ fn content_units_does_not_swallow_subsequent_units_on_standalone_gs() {
 }
 
 #[test]
+fn content_units_keep_a_top_level_inline_image_to_itself() {
+    // The parser emits a whole inline image as one `BI` op; its unit must not run on to the end (#3146).
+    let content = "BI /W 1 /H 1 /CS /G /BPC 8 ID x EI q 200 0 0 100 100 100 cm /Im0 Do Q q 10 0 0 10 300 300 cm /Im0 Do Q";
+    let pieces = pdfcraft_content::Pieces::join(&[content.as_bytes()]);
+    let ops = pieces.parse().ops;
+    let units = images::content_units(&ops, 0, ops.len());
+    assert_eq!(units.len(), 3, "{units:?}");
+    assert_eq!(units[0], 0..1);
+}
+
+#[test]
+fn send_backward_after_a_top_level_inline_image_moves_one_step() {
+    // Before #3146 the inline image's unit swallowed everything after it, so SendBackward on a later
+    // image acted like SendToBack (or failed): it must step behind the text only.
+    let content = "BI /W 1 /H 1 /CS /G /BPC 8 ID x EI q 100 0 0 100 100 100 cm /Im0 Do Q BT /F1 12 Tf 72 700 Td (Middle Text) Tj ET q 150 0 0 150 200 200 cm /Im0 Do Q";
+    let mut doc = image_page_with(content);
+    let imgs = images::page_images(&doc, 0).unwrap();
+    let front = imgs.iter().position(|i| close(i.rect, [200.0, 200.0, 350.0, 350.0])).unwrap();
+    arrange(&mut doc, 0, front, images::ArrangeOrder::SendBackward).unwrap();
+    let doc = reopen(&doc);
+    let bytes = page_content_bytes(&doc, 0);
+    let s = String::from_utf8_lossy(&bytes);
+    let inline = s.find("BI").unwrap();
+    let back = s.find("100 0 0 100 100 100 cm").unwrap();
+    let moved = s.find("150 0 0 150 200 200 cm").unwrap();
+    let text = s.find("Middle Text").unwrap();
+    assert!(inline < back && back < moved && moved < text, "{s}");
+}
+
+#[test]
 fn different_inline_soft_masks_have_distinct_identities() {
     let doc = Document::new_empty();
     let mut dict1 = Dict::default();
