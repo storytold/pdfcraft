@@ -115,7 +115,8 @@ pub(crate) enum PagePress {
     /// The press began on this page, and the owner's hit won it: only its module acts on it.
     Mine(Owner),
     /// No button is down, or the press began on this page and nobody's hit won it: the active
-    /// tool's.
+    /// tool's. Also every page's while a press that began off the pages is held, and after the
+    /// press was dropped ([`PageRouter::cancel`]) until the button is up.
     Free,
     /// The press began on another page, or between the pages.
     Elsewhere,

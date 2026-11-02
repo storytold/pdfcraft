@@ -66,6 +66,10 @@ fn to_user(xf: &PageXform, info: &DocInfo, page: usize, p: Pos2) -> [f64; 2] {
 /// picked, and a drag from one draws a new link. The other tools find the links the renderer can
 /// follow, which have a target (`info.links`). The tip is the link's target.
 pub(crate) fn hit(xf: &PageXform, info: &DocInfo, page: usize, links: &[LinkItem], tool: QuickTool, p: Pos2) -> Option<Hit> {
+    // A press off the page is no page's, so nothing there is a link's, the margin included.
+    if !xf.rect.contains(p) {
+        return None;
+    }
     let index = if tool == QuickTool::Link {
         links.iter().rfind(|l| l.page == page && screen_rect(xf, info, page, l.rect).expand(LINK_TOOL_MARGIN).contains(p))?.index
     } else {

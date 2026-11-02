@@ -9,8 +9,9 @@ use crate::page_cursor::{Layer, Subject};
 use crate::page_router::{CommentPart, Hit, Owner, PagePress};
 
 /// Comment input on one page, before text selection runs. `press` is what this page has to do with
-/// the press the pages hold: a press on a comment ([`hit`]) is that comment's, with any tool, and
-/// one nobody holds is a commenting tool's. Returns `true` when the pointer gesture belongs to
+/// the press the pages hold: a press on a comment where the tool reaches it ([`hit`]: the Select
+/// tool, Fill & Sign over its marks, a shape tool over the selected shape's handles) is that
+/// comment's, and one nobody holds is a commenting tool's. Returns `true` when the pointer gesture belongs to
 /// commenting (text selection must ignore it).
 pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, press: PagePress, view: &mut DocView) -> bool {
     let (pointer, origin) = (cx.ptr.pos, cx.ptr.origin);

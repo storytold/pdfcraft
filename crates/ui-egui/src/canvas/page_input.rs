@@ -35,9 +35,10 @@ pub(crate) struct PageToolContext<'a> {
     pub info: &'a DocInfo,
 }
 
-/// The tools' input on one page. The hits at the press point decide who holds the press, and each
-/// module is told what the press is to this page (`PagePress`): its own, nobody's (the active tool's,
-/// through `tool_input`), or another page's. Text selection runs after, on what nobody took.
+/// The tools' input on one page. The hits at the press point decide who holds the press, and the
+/// modules are told what the press is to this page (`PagePress`): their own, nobody's (the active
+/// tool's: `tool_input`, and the tools still called here), or another page's. The Edit text group
+/// still asks the router, until it is told too. Text selection runs after, on what nobody took.
 pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_>, slot: &PageSlot) -> PageInput {
     let PageEnv {
         added,
@@ -324,13 +325,15 @@ fn tool_input(
 fn right_click(hits: &PageHits<'_>, under: &[crate::page_router::Hit], view: &mut DocView, p: Pos2) -> Option<Owner> {
     let context = hits.context_at(view, p);
     // Add text takes every right-click on a page it can change, Edit text those on its own
-    // paragraphs and pictures, and a Prepare field tool the whole page, as before.
-    let editing_here = match hits.tool {
+    // paragraphs and pictures, the Link tool those on a link, and a Prepare field tool the whole
+    // page, as before: comments see none of them.
+    let tool_takes_it = match hits.tool {
         QuickTool::AddText => hits.can_modify || top(under.iter().cloned(), hits.tool).is_some(),
         QuickTool::EditText => top(under.iter().cloned(), hits.tool).is_some(),
-        _ => false,
+        QuickTool::Link => hits.can_modify && matches!(context, Some(Owner::Link { .. })),
+        _ => hits.field_tool.is_some(),
     };
-    if !editing_here && hits.field_tool.is_none() {
+    if !tool_takes_it {
         let comment = match context {
             Some(Owner::Comment { index, .. }) => Some(index),
             _ => None,
@@ -396,16 +399,16 @@ impl PageHits<'_> {
     /// What a right-click at `p` is on: what lies on top there, as for a press, but with every
     /// tool reaching comments and links, as a comment's menu shows whatever the tool. A highlight
     /// over a link is the highlight's ([`comments::context_hit`]).
-    /// The Link tool edits links, so its right-click on one is the link's whatever lies over it, as
-    /// its press there is.
+    /// The Link tool edits links and reaches no comment: on a document it can change, its
+    /// right-click is what its press there would take, when that is anything.
     fn context_at(&self, view: &DocView, p: Pos2) -> Option<Owner> {
-        let hits = self.hits(view, p, true);
         if self.tool == QuickTool::Link
-            && let Some(link) = hits.iter().rev().find(|h| matches!(h.owner, Owner::Link { .. }))
+            && self.can_modify
+            && let Some(press) = top(self.hits(view, p, false), QuickTool::Link)
         {
-            return Some(link.owner);
+            return Some(press.owner);
         }
-        top(hits, QuickTool::Select).map(|h| h.owner)
+        top(self.hits(view, p, true), QuickTool::Select).map(|h| h.owner)
     }
 
     /// The hits at `p`, bottom up: links, comments; Edit text's pictures under its paragraphs (text
@@ -413,7 +416,8 @@ impl PageHits<'_> {
     /// open paragraph's frame, the selected picture's grips over them all; the camera tool's corners;
     /// then form fields (Prepare's, being moved, over the comments; filled ones under added content
     /// and the comments that move). In crop mode, only the picture being cropped.
-    /// For a right-click (`context`), comments by [`comments::context_hit`].
+    /// For a right-click (`context`), comments by [`comments::context_hit`], and no camera corner (it
+    /// has no menu).
     fn hits(&self, view: &DocView, p: Pos2, context: bool) -> Vec<crate::page_router::Hit> {
         let PageHits {
             page,
@@ -475,7 +479,7 @@ impl PageHits<'_> {
         // together.
         let picks_up = matches!(tool, QuickTool::Select | QuickTool::AddText | QuickTool::EditText);
         let added = (editing_content && can_modify && picks_up).then(|| crate::content_ui::hit(xf, info, page, added, view, p)).flatten();
-        let corner = (tool == QuickTool::EnhanceCamera && can_modify).then(|| crate::camera_ui::hit(xf, page, view, p)).flatten();
+        let corner = (!context && tool == QuickTool::EnhanceCamera && can_modify).then(|| crate::camera_ui::hit(xf, page, view, p)).flatten();
         let link = crate::link_ui::hit(xf, info, page, doc_links, tool, p);
         let comment = if context { comments::context_hit(pcx, p) } else { comments::hit(pcx, view, p, link.is_some()) };
         [link, comment, pictures, paragraphs, added, objects, grips, corner, fields].into_iter().flatten().collect()

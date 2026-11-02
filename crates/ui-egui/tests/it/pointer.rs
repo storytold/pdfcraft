@@ -1356,3 +1356,88 @@ fn a_field_dragged_off_its_page_is_drawn_on_it() {
     let doc = s.session.get(s.views[0].id).unwrap();
     assert!(doc.form.iter().any(|f| f.widgets.iter().any(|w| w.page == Some(0))), "a field on page 1");
 }
+
+/// With the Link tool a right-click on a link is the link's and leaves comments as they are, as
+/// before: the selected comment stays selected.
+#[test]
+fn a_right_click_with_the_link_tool_on_a_link_keeps_the_selected_comment() {
+    let mut h = open(note_over_link_pdf(), "150", false);
+    let on_note = at(&h, 150.0, 325.0);
+    mouse_click(&mut h, on_note);
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 1)), "the note is selected");
+    link_tool(&mut h);
+    // On the link, away from the note.
+    let on_link = at(&h, 70.0, 325.0);
+    right_click(&mut h, on_link);
+    let v = &h.state().views[0];
+    assert_eq!((v.links.context, v.comments.selected), (Some((0, 0)), Some((0, 1))), "the link's menu; the note stays selected");
+}
+
+/// A 300×400 page with a rectangle comment round the camera tool's first corner (view 15, 20).
+fn comment_at_camera_corner_pdf() -> Vec<u8> {
+    pdf(&[
+        CATALOG,
+        PAGES,
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>",
+        "<< /Type /Annot /Subtype /Square /Rect [5 365 45 395] /C [1 0 0] /F 4 /T (Ana) >>",
+    ])
+}
+
+/// A camera corner has no menu: a right-click on a comment under it opens the comment's, as
+/// before.
+#[test]
+fn a_right_click_on_a_comment_under_a_camera_corner_opens_the_comments_menu() {
+    let mut h = open(comment_at_camera_corner_pdf(), "150", false);
+    h.state_mut().quick_tool = QuickTool::EnhanceCamera;
+    h.run_steps(4);
+    let corner = at(&h, 15.0, 380.0);
+    right_click(&mut h, corner);
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "the comment is selected for its menu");
+}
+
+/// A 300×400 page with a web link along its left edge, x 0..100, y 300..350.
+fn edge_link_pdf() -> Vec<u8> {
+    pdf(&[
+        CATALOG,
+        PAGES,
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>",
+        "<< /Type /Annot /Subtype /Link /Rect [0 300 100 350] /Border [0 0 0] /A << /S /URI /URI (https://example.org/) >> >>",
+    ])
+}
+
+/// The Link tool's margin round a link stops at the page's edge: beside the page, where a press
+/// does nothing, no hand promises one.
+#[test]
+fn the_link_tools_hand_stops_at_the_pages_edge() {
+    let mut h = open(edge_link_pdf(), "150", false);
+    link_tool(&mut h);
+    let on_link = at(&h, 10.0, 325.0);
+    assert_eq!(cursor_at(&mut h, on_link), egui::CursorIcon::PointingHand, "on the link");
+    let beside = at(&h, 0.0, 325.0) - egui::vec2(1.0, 0.0);
+    assert_ne!(cursor_at(&mut h, beside), egui::CursorIcon::PointingHand, "just off the page");
+}
+
+/// With Edit text a right-click on a paragraph is Edit text's, as before, though a comment lies
+/// over it: the comment is not selected.
+#[test]
+fn a_right_click_with_edit_text_on_a_paragraph_under_a_comment_selects_no_comment() {
+    let mut h = open(comment_on_text_pdf(), "150", false);
+    h.state_mut().quick_tool = QuickTool::EditText;
+    h.run_steps(4);
+    let on_text = at(&h, 100.0, 303.0);
+    wait_for_cursor(&mut h, on_text, |c| c != egui::CursorIcon::Default);
+    right_click(&mut h, on_text);
+    assert_eq!(h.state().views[0].comments.selected, None);
+}
+
+/// With a Prepare field tool a right-click is the tool's, as before: a comment under it is not
+/// selected.
+#[test]
+fn a_right_click_with_a_field_tool_selects_no_comment() {
+    let mut h = open(comment_and_checkbox_pdf(), "150", false);
+    assert!(h.state_mut().execute("form.add.text"));
+    h.run_steps(4);
+    let on_comment = at(&h, 200.0, 125.0);
+    right_click(&mut h, on_comment);
+    assert_eq!(h.state().views[0].comments.selected, None);
+}
