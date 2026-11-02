@@ -98,9 +98,12 @@ pub(crate) fn page_input(resp: &egui::Response, xf: &PageXform, ptr: &PagePointe
     if view.camera.is_none() && page == view.current {
         view.camera = Some(CameraQuad::inset(page, xf.pw, xf.ph));
     }
+    // A press nobody holds on a page without the quadrilateral moves it there: a drag from where it
+    // began, a click where it came up (egui has cleared the press's origin by its release).
+    let at = if resp.clicked() { pointer } else { origin };
     if (resp.drag_started() || resp.clicked())
         && press == PagePress::Free
-        && origin.is_some_and(|o| xf.rect.contains(o))
+        && at.is_some_and(|p| xf.rect.contains(p))
         && view.camera.is_none_or(|q| q.page != page)
     {
         view.camera = Some(CameraQuad::inset(page, xf.pw, xf.ph));

@@ -1725,3 +1725,17 @@ fn a_right_click_between_the_pages_anchors_no_pages_menu() {
     right_click(&mut h, gap);
     assert_eq!(h.state().views[0].comments.context_at, None);
 }
+
+/// With the camera tool, a click on another page moves the quadrilateral there, as a drag from it
+/// does. The click was located by its press's origin, which egui has cleared by the release frame,
+/// so it did nothing (on `main` too).
+#[test]
+fn a_camera_click_on_another_page_moves_the_quadrilateral_there() {
+    let mut h = open(two_pages_pdf(), "100", false);
+    h.state_mut().quick_tool = QuickTool::EnhanceCamera;
+    h.run_steps(4);
+    assert_eq!(h.state().views[0].camera.map(|q| q.page), Some(0), "it starts on the current page");
+    let two = h.state().views[0].page_screen_rect(1).expect("page 2 on screen");
+    mouse_click(&mut h, two.min + egui::vec2(100.0, 60.0));
+    assert_eq!(h.state().views[0].camera.map(|q| q.page), Some(1));
+}
