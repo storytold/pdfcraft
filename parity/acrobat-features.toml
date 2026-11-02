@@ -8406,11 +8406,11 @@ title = "Convert colours"
 area = "L"
 tier = "P1"
 milestone = "M11"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "shipped"
+commands = ["prepress.convert_colors"]
+tools = ["doc_convert_colours"]
+evidence = ["crates/edit/src/tests.rs::colours_are_converted_to_gray_rgb_and_cmyk", "crates/engine/src/tests.rs::converting_colours_recolours_pictures", "crates/ui-egui/tests/it/editing.rs::convert_colours_from_the_dialog", "crates/automation/tests/it/automation.rs::convert_colours_through_tools"]
+notes = "Print production ▸ Convert colours…: Grayscale, RGB or CMYK by the standard device formulas (no ICC profile applied): every colour operator in the pages' content and the Form XObjects it draws is rewritten (device spaces, ICCBased by component count, CalRGB/CalGray, Lab, Indexed, Separation/DeviceN through a Type 2 tint), black kept 100% K / gray 0 on request, 8-bit gray/RGB pictures re-encoded (JPEG stays JPEG, CMYK written lossless, soft masks kept) and the ones left alone counted, comments' and fields' appearances optionally; all, current or a range of pages; one undo step; tool doc_convert_colours, which also lists the PDF/A level and output intents the file may no longer meet (the dialog does not say so yet). Still missing against Acrobat: conversion through ICC profiles and rendering intents (it is no prepress separation and uses no output intent), keeping spot colours, sampled and PostScript tint transforms (a gray of the tint's darkness), per-object conversion rules, inline images, and indexed, CMYK and masked pictures or decode arrays."
 
 [[feature]]
 id = "print.ink-manager"

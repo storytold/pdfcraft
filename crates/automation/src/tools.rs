@@ -138,6 +138,16 @@ pub fn tools() -> Vec<ToolDef> {
         t("attachment_delete", "Delete an attachment", "Remove the document-level attachment with this name (as doc_info lists it). Undoable.")
             .destructive()
             .with(schema(json!({"doc": doc(), "name": {"type": "string"}}), &["doc", "name"])),
+        t("doc_convert_colours", "Convert colours", "Print production: every colour operator in the pages' content and the artwork it draws rewritten in the target space (to: gray, rgb or cmyk) by the standard device formulas (device spaces, ICC by component count, Lab, Indexed, Separation and DeviceN tints; patterns, shadings and inline images stay). Not a prepress separation: no ICC profile and no output intent is used. Spot colours are converted, not kept: exact through a Type 2 tint, otherwise a gray of their darkness; /None stays. preserve_black (default true) keeps pure black as 100% K / gray 0; images (default true) re-encodes 8-bit gray and RGB pictures (JPEG stays JPEG, compressed again at quality 80; CMYK written lossless; soft masks kept), and leaves indexed, CMYK, masked and other pictures as they are; annotations also converts the pages' comment and field appearances. Returns how many colours and pictures changed on how many pages, images_left (pictures not in the target that stayed), and loses_conformance (the PDF/A level and output intents the file declared: it may no longer meet them, and still declares them; standards_remove_id takes that off). Undoable.")
+            .cmd("prepress.convert_colors")
+            .with(schema(
+                json!({
+                    "doc": doc(), "pages": pages("to convert (default all)"),
+                    "to": { "type": "string", "enum": ["gray", "rgb", "cmyk"] },
+                    "preserve_black": { "type": "boolean" }, "images": { "type": "boolean" }, "annotations": { "type": "boolean" },
+                }),
+                &["doc"],
+            )),
         t("doc_open", "Open a PDF", "Open a PDF file and return its document id, page count and whether it can be edited.")
             .cmd("file.open")
             .with(schema(json!({ "path": { "type": "string" }, "password": { "type": "string", "description": "User or owner password for encrypted files." } }), &["path"])),

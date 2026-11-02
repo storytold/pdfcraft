@@ -135,6 +135,7 @@ impl PdfCraftApp {
                         self.execute("page.number");
                         Some(Dialog::NumberPages)
                     }
+                    "convert-colours" => Some(Dialog::ConvertColours),
                     "page-properties" => {
                         // Same path as the panel, so the selected pages and their order are seeded.
                         self.execute("page.properties");

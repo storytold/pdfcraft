@@ -86,7 +86,8 @@ pub(crate) fn scope_of(edit: &Edit) -> Scope {
         | Edit::AddHeaderFooter { .. }
         | Edit::AddWatermark { .. }
         | Edit::AddBackground { .. }
-        | Edit::RemoveMarks { .. } => Scope::Content,
+        | Edit::RemoveMarks { .. }
+        | Edit::ConvertColours { .. } => Scope::Content,
         Edit::Batch { edits, .. } => {
             let mut scopes = edits.iter().map(scope_of);
             let first = scopes.next().unwrap_or(Scope::Full);

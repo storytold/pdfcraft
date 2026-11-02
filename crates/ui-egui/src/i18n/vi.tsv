@@ -2819,6 +2819,21 @@ key	Space	Space
 	Edit this PDF	Chỉnh sửa PDF này
 	Export this PDF	Xuất PDF này
 	Find text or tools	Tìm văn bản hoặc công cụ
+	By the standard device formulas; profiles are not applied.	Theo các công thức thiết bị tiêu chuẩn; không áp dụng cấu hình màu.
+	CMYK	CMYK
+	Comments and form fields	Bình luận và các trường biểu mẫu
+	Convert colours	Chuyển đổi màu
+	Convert colours…	Chuyển đổi màu…
+	Convert to	Chuyển sang
+	Converted {c} colours and {i} pictures on {p} pages	Đã chuyển đổi {c} màu và {i} hình ảnh trên {p} trang
+	Grayscale	Thang độ xám
+	Nothing on those pages needed converting	Không có gì trên các trang đó cần chuyển đổi
+	Pictures too	Cả hình ảnh
+	Preserve black	Giữ nguyên màu đen
+	RGB	RGB
+	pure black stays 100% K or gray 0 instead of a mix	màu đen thuần giữ ở 100% K hoặc xám 0 thay vì màu pha trộn
+	re-encoded in the target space; JPEGs stay JPEG	được mã hóa lại trong không gian đích; ảnh JPEG vẫn là JPEG
+	their appearances as well as the page	cả giao diện hiển thị của chúng lẫn trang
 	Attach a file…	Đính kèm tệp…
 	Delete attachment	Xóa tệp đính kèm
 	Attaching files is not available on the web yet	Chưa thể đính kèm tệp trên web
