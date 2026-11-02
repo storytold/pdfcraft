@@ -2312,6 +2312,38 @@ fn flate_images_past_the_exports_allowance_are_left_out_with_the_reason() {
     assert_eq!(budget.refused(), 1);
 }
 
+/// An indexed image's lookup table, given as a stream, is read within the export's allowance as
+/// the image's samples are: each image reads it again, and its filters can do work that makes
+/// nothing (Flate over empty blocks). Past the allowance the image is left out with the reason.
+#[test]
+fn a_lookup_table_is_read_within_the_exports_allowance() {
+    use pdfcraft_cos::{Dict, Document, ImageBudget, Object, PdfString, Stream};
+    let table = [255, 0, 0, 0, 0, 255];
+    let lookup = Stream::flate(Dict::new(), &table);
+    let exported = |as_stream: bool, work: u64| {
+        let mut doc = Document::new_empty();
+        let table = if as_stream { Object::Ref(doc.add(Object::Stream(lookup.clone()))) } else { Object::String(PdfString::literal(table.to_vec())) };
+        let mut dict = Dict::new();
+        dict.set(b"Subtype".to_vec(), Object::name("Image"));
+        dict.set(b"Width".to_vec(), Object::Int(2));
+        dict.set(b"Height".to_vec(), Object::Int(1));
+        dict.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+        dict.set(b"ColorSpace".to_vec(), Object::Array(vec![Object::name("Indexed"), Object::name("DeviceRGB"), Object::Int(1), table]));
+        let image = doc.add(Object::Stream(Stream::flate(dict, &[0, 1])));
+        let mut budget = ImageBudget::with_work(work);
+        let file = crate::extract::image_file_within(&doc, image, &mut budget);
+        (file, work - budget.work_left(), budget.refused())
+    };
+    let (direct, image_alone, _) = exported(false, u64::MAX);
+    let (streamed, both, _) = exported(true, u64::MAX);
+    assert_eq!(streamed.unwrap(), direct.unwrap(), "the same picture");
+    let read = (lookup.raw.len() + table.len()) as u64 + pdfcraft_filters::FLATE_READ_WORK * lookup.raw.len() as u64;
+    assert_eq!(both, image_alone + read, "the table is paid for as it is read");
+    let (refused, _, count) = exported(true, image_alone);
+    assert!(refused.unwrap_err().contains("more image decoding than"));
+    assert_eq!(count, 1);
+}
+
 /// A JPEG is written as it is, at no cost, unless something means decoding it, here a mask: that
 /// pays for its samples, and past the allowance the image goes, with the reason, as it would come out without
 /// its transparency otherwise.

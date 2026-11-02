@@ -258,15 +258,16 @@ fn spending(chain: &[(Filter, Params)], data: &[u8], max_output: usize, work: &m
 pub const MAX_CHAIN: usize = 8;
 
 /// The steps each byte Flate reads costs where decoding is paid for ([`decode_tolerant_within`],
-/// [`decode_within`]), besides a step for each byte it makes. Inflating does work for every block
-/// it reads, whether or not the block makes anything: an empty fixed-Huffman block is ten bits
-/// (RFC 1951 §3.2.6), and a stream of them took 1,383 ns a byte to make nothing (miniz_oxide
-/// 0.8.9, release build), one of a literal each 768 ns a byte, and empty dynamic blocks 106. At
-/// this price the worst of these comes to about 11 ns a step, inside what a step of JBIG2
-/// decoding takes. Data a real encoder makes took 0.4 to 3.2 ns for each byte it made, its reading
-/// included, so it pays far more than reading takes; each byte of a file still adds 64 times this
-/// price to an operation's allowance (8,192 steps, `IMAGE_WORK_PER_BYTE` in `pdfcraft_cos`).
-pub const FLATE_READ_WORK: u64 = 1 << 7;
+/// [`decode_within`]), besides the step it was paid as input and a step for each byte it makes.
+/// Inflating does work for every block it reads, whether or not the block makes anything: an empty
+/// fixed-Huffman block is ten bits (RFC 1951 §3.2.6). With flate2's zlib-rs backend (zlib-rs
+/// 0.6.8, release build) the slowest blocks measured, empty dynamic ones, took 21 ns a byte read
+/// to make nothing, empty fixed ones 9 and fixed ones of a literal each 6, so at this price the
+/// worst comes to about 7 ns a step, inside what a step of JBIG2 decoding takes. (miniz_oxide
+/// 0.8.9, flate2's backend here before, builds a block's tables for every block, and took 1,383 ns
+/// a byte read on empty fixed blocks.) Data a real encoder makes took 0.2 to 2.3 ns a byte made, its
+/// reading included, so an image pays twice its stored length more than it would unpriced.
+pub const FLATE_READ_WORK: u64 = 2;
 
 /// Whether a chain is one [`run`] takes, and if not, the error.
 fn decodable(chain: &[(Filter, Params)]) -> Result<(), FilterError> {

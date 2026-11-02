@@ -13,12 +13,12 @@ use crate::{CosError, Document, ObjRef, Object, Stream};
 /// decode them, so this alone reads about 1,000 of them. A byte into or out of a filter is a step
 /// too, and takes less: 3 ns at most, or up to 19 ns through a predictor on samples of a bit. A
 /// byte Flate reads is [`pdfcraft_filters::FLATE_READ_WORK`] steps besides, since inflating blocks
-/// that make nothing takes up to 1.4 µs a byte: about 11 ns a step.
+/// that make nothing takes up to 21 ns a byte: about 7 ns a step.
 const IMAGE_WORK: u64 = 1 << 34;
 /// The steps each byte of the file adds to [`IMAGE_WORK`], so that a long scan is read whole: such a
 /// page pays for itself with about 2 KB of the file, about the smallest a page of text is stored
-/// in, and a stream of any filter this reads can be decoded about 7 times at Flate's best, 1,032 to
-/// one, its reading included. So what a hostile file can ask for grows with its length, by about 14 minutes for 10 MB.
+/// in, and a stream of any filter this reads can be decoded about 8 times at Flate's best, 1,032 to
+/// one. So what a hostile file can ask for grows with its length, by about 14 minutes for 10 MB.
 const IMAGE_WORK_PER_BYTE: u64 = 1 << 13;
 
 /// Decoded bytes one page's content walk may produce in all: its `/Contents` streams and every
@@ -589,6 +589,35 @@ mod image_tests {
         assert_eq!((budget.work_left(), budget.refused()), (4, 0));
         assert!(!budget.pay_jpeg(0, b"ab"));
         assert_eq!((budget.work_left(), budget.refused()), (0, 1));
+    }
+
+    /// What Flate reads is priced for blocks that make nothing, and an image an encoder made pays
+    /// little for it: a scan-like picture stored in under half its size costs no more than half
+    /// again its bytes, samples and pixels. Redaction decodes a picture once for each page that draws it, so
+    /// a letterhead on hundreds of pages has to fit as it did unpriced.
+    #[test]
+    fn an_image_an_encoder_made_pays_little_for_its_reading() {
+        let doc = Document::new_empty();
+        let mut seed = 0x2545_F491_4F6C_DD1Du64;
+        let samples: Vec<u8> = (0..256 * 256usize)
+            .map(|i| {
+                seed ^= seed << 13;
+                seed ^= seed >> 7;
+                seed ^= seed << 17;
+                ((i % 256) as u8 / 16) ^ (seed as u8 & 3)
+            })
+            .collect();
+        let mut dict = Dict::new();
+        dict.set(b"Width".to_vec(), Object::Int(256));
+        dict.set(b"Height".to_vec(), Object::Int(256));
+        let image = Stream::flate(dict, &samples);
+        assert!(image.raw.len() * 2 < samples.len(), "stored smaller: {}", image.raw.len());
+        let unpriced = (image.raw.len() + samples.len()) as u64 + 256 * 256;
+        let mut budget = ImageBudget::with_work(u64::MAX);
+        budget.decode(&doc, &image, 1 << 20).unwrap();
+        let paid = u64::MAX - budget.work_left();
+        assert_eq!(paid, unpriced + read(image.raw.len()));
+        assert!(2 * paid <= 3 * unpriced, "{paid} steps against {unpriced}");
     }
 
     /// An image pays for the pixels its data holds, not those its size declares: one claiming
