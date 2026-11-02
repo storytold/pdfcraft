@@ -769,3 +769,75 @@ fn a_paragraph_is_a_heading_only_when_its_text_is() {
     assert!(!xml.contains("Heading2"), "the lead-in made its paragraph a heading: {xml}");
     assert_eq!(word_paragraphs(&xml).len(), 2, "{xml}");
 }
+
+/// #1595: Markdown gets the headings, paragraphs and a rule between pages, in reading order;
+/// images are left out.
+#[test]
+fn markdown_has_headings_paragraphs_and_page_rules_in_order() {
+    let md = markdown(&[page(), page()]);
+    let order: Vec<usize> = ["# Annual Report\n\n", "## Overview\n\n", "Some \\<body\\> text \\& more", "Body text after the picture", "\n\n---\n\n"]
+        .iter()
+        .map(|x| md.find(x).unwrap_or_else(|| panic!("{x:?} missing in {md}")))
+        .collect();
+    assert!(order.windows(2).all(|w| w[0] < w[1]), "{md}");
+    assert_eq!(md.matches("\n---\n").count(), 1, "one rule between two pages: {md}");
+    assert_eq!(md.matches("# Annual Report").count(), 2, "{md}");
+    assert!(!md.contains("PNG") && !md.contains("!["), "images are left out: {md}");
+    assert!(md.ends_with(".\n") && !md.ends_with("\n\n"), "{md:?}");
+}
+
+/// #1595: text Markdown would read as markup stays text, emphasis wraps a run without its outer
+/// spaces, and a detected table becomes a pipe table with its first row as the header.
+#[test]
+fn markdown_escapes_markup_and_keeps_emphasis_and_tables() {
+    let b = |t: &str, y: f64, bold: bool, italic: bool| Block {
+        text: t.into(),
+        rect: [72.0, y, 500.0, y + 11.0],
+        size: 11.0,
+        bold,
+        italic,
+        color: [0.0; 3],
+        rotation: 0.0,
+        space_around: [false; 2],
+    };
+    let p = Page {
+        width: 612.0,
+        height: 792.0,
+        blocks: vec![
+            b("- not a list item, and long enough to make eleven points the body size here", 700.0, false, false),
+            b("1. not a numbered item either", 650.0, false, false),
+            b("*stars* _under_ `tick` [link](x) a|b # #tag\u{1}\nnext", 600.0, false, false),
+            b("Strong words in a sentence of their own.", 550.0, true, false),
+            b("slanted", 500.0, false, true),
+        ],
+        images: Vec::new(),
+        background: None,
+    };
+    let md = markdown(&[p]);
+    assert!(md.contains("\\- not a list item"), "{md}");
+    assert!(md.contains("1\\. not a numbered item"), "{md}");
+    assert!(md.contains("\\*stars\\* \\_under\\_ \\`tick\\` \\[link\\](x) a\\|b \\# \\#tag next"), "{md}");
+    assert!(md.contains("**Strong words in a sentence of their own.**"), "{md}");
+    // Markdown reads no emphasis where a marker sits next to a space: the outer spaces go outside.
+    assert_eq!(emphasis(" two words ", true, false, false, false), " **two words** ");
+    assert_eq!(emphasis("both", true, true, true, true), "***both***");
+    assert_eq!(emphasis("  ", true, true, true, true), "  ", "nothing to mark");
+    // Runs in one style are one: two bold runs side by side don't meet as `****`.
+    assert_eq!(paragraph(&[("hello", true, false), ("world", true, false)]), "**helloworld**");
+    // Markers inside a word would stay literal in CommonMark, so a run there gets HTML tags.
+    assert_eq!(paragraph(&[("foo", false, false), (".", true, false), ("bar", false, false)]), "foo<strong>.</strong>bar");
+    assert_eq!(paragraph(&[("x", true, false), ("y", false, true)]), "<strong>x</strong>*y*", "two styles side by side");
+    // `*` may sit inside a word, and before punctuation that follows a letter.
+    assert_eq!(paragraph(&[("foo", false, false), ("bar", true, false), ("baz", false, false)]), "foo**bar**baz");
+    assert_eq!(paragraph(&[("a ", false, false), ("b", true, false), (" c", false, false)]), "a **b** c");
+    assert_eq!(paragraph(&[("say ", false, false), ("this", false, true), (", then", false, false)]), "say *this*, then");
+    assert!(md.contains("*slanted*"), "{md}");
+    assert!(!md.chars().any(|c| !allowed(c)), "{md:?}");
+
+    let md = markdown(&[table_page()]);
+    let rows: Vec<&str> = md.lines().filter(|l| l.starts_with('|')).collect();
+    assert_eq!(rows.first(), Some(&"| Meter | Unit | Reading |"), "{md}");
+    assert_eq!(rows.get(1), Some(&"| --- | --- | --- |"), "{md}");
+    assert!(rows.contains(&"| A1 | kWh | 37414.00 |"), "{md}");
+    assert!(rows.iter().all(|r| r.matches(" | ").count() == 2), "every row has the header's three cells: {md}");
+}

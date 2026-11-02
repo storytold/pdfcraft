@@ -170,6 +170,13 @@ impl CffFontBlob {
         self.font().num_glyphs()
     }
 
+    /// PdfCraft patch (69): the `CFF ` table of an OpenType font, for a `FontFile3` of
+    /// subtype `OpenType` (ISO 32000-2 §9.9) under a simple font.
+    pub(crate) fn from_open_type(data: &[u8]) -> Option<Self> {
+        let cff = FontRef::new(data).ok()?.cff().ok()?;
+        Self::new(Arc::new(cff.offset_data().as_ref().to_vec()))
+    }
+
     pub(crate) fn is_cid(&self) -> bool {
         self.font().is_cid()
     }
