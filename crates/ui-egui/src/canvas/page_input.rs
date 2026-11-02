@@ -96,8 +96,8 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
     }
     // What this page has to do with the press: its owner's, the active tool's, or another page's.
     let press = view.router.press_for(i);
-    // What lies under the pointer before the tools act, asked once: for a click's release, a
-    // right-click, and Fill & Sign's preview.
+    // What lies under the pointer before the tools act, on the frames that need it: for a click's
+    // release, a right-click's tool checks, and Fill & Sign's preview.
     let wants_under = resp.clicked() || resp.secondary_clicked() || matches!(tool, QuickTool::Fill(_)) && !ptr.any_down;
     let under = pointer.filter(|p| wants_under && xf.rect.contains(*p)).map(|p| hits.at(view, p)).unwrap_or_default();
     let released_over = match press {
@@ -111,8 +111,8 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
     let press_held = ptr.primary_down && !resp.long_touched();
     let context = frame.right_click_on(xf.rect).and_then(|p| right_click(&hits, &under, view, p, press_held));
     // A mark already placed takes its own press (comments, below), as does one being moved on this
-    // page until its move ends; with no button down the Fill & Sign tool's preview hides over one,
-    // where a press would pick it up.
+    // page until its move ends; with no button down the Fill & Sign tool's preview hides where a
+    // press would be taken (a mark, its handles, a Prepare field).
     let over_mark = matches!(tool, QuickTool::Fill(_))
         && (matches!(press, PagePress::Mine(_)) || comments::moving_on(view, i) || !ptr.any_down && top(under.iter().cloned(), tool).is_some());
     tool_input(ui, view, frame, slot, &pcx, press, over_mark);
@@ -238,8 +238,8 @@ fn link_of(owner: Option<Owner>) -> Option<usize> {
 /// on a press that began on this page and that no hit won (`press` is Free), and keep their cursor
 /// and gestures. The camera also drags a corner whose press it holds, and crop's double-click
 /// opens Set Page Boxes wherever it is. `over_mark`: with Fill & Sign, a hit holds the press (a
-/// mark's, or a Prepare field's), a mark is being moved on this page, or with no button down a mark
-/// lies under the pointer, where a press would pick it up.
+/// mark's, or a Prepare field's), a mark is being moved on this page, or with no button down a press
+/// under the pointer would be taken (a mark, its handles, a Prepare field).
 fn tool_input(
     ui: &egui::Ui,
     view: &mut DocView,

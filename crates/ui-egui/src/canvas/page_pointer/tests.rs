@@ -292,34 +292,40 @@ fn outside_test_modules(source: &str) -> Vec<(usize, &str)> {
     kept
 }
 
+/// The lines of code in `source` outside its test modules, numbered from 1, each with the
+/// top-level function or `impl` method it is in; comment lines are left out. A line rustfmt
+/// continued (a method chain split as `view` / `.router` / `.owner(i)`) is read with the one it
+/// continues, under that one's number.
+fn code_lines(source: &str) -> Vec<(usize, Option<&str>, String)> {
+    let (mut function, mut in_impl) = (None, false);
+    let mut lines: Vec<(usize, Option<&str>, String)> = Vec::new();
+    for (n, line) in outside_test_modules(source) {
+        if line.starts_with("impl") {
+            (function, in_impl) = (None, true);
+        } else if line == "}" {
+            (function, in_impl) = (None, false);
+        } else if let Some(name) = declares(line).or_else(|| line.strip_prefix("    ").filter(|_| in_impl).and_then(declares)) {
+            function = Some(name);
+        }
+        if line.trim_start().starts_with("//") {
+            continue;
+        }
+        match lines.last_mut() {
+            Some((_, _, text)) if line.trim_start().starts_with('.') => text.push_str(line.trim_start()),
+            _ => lines.push((n, function, line.to_owned())),
+        }
+    }
+    lines
+}
+
 /// Each name `find` finds in a line of the page modules' code (their tests left out), as (file,
-/// the top-level function or `impl` method it is in, line, name). A line rustfmt continued (a
-/// method chain split as `view` / `.router` / `.owner(i)`) is read with the one it continues.
+/// the top-level function or `impl` method it is in, line, name) ([`code_lines`]).
 fn page_module_matches(find: impl Fn(&str) -> Vec<String>) -> Vec<(&'static str, Option<String>, usize, String)> {
     let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut found = Vec::new();
     for file in PAGE_MODULES {
         let source = std::fs::read_to_string(src.join(file)).expect("page module").replace("\r\n", "\n");
-        // The top-level function, or method of an `impl`, that each line is in.
-        let (mut function, mut in_impl) = (None, false);
-        let mut lines: Vec<(usize, Option<&str>, String)> = Vec::new();
-        for (n, line) in outside_test_modules(&source) {
-            if line.starts_with("impl") {
-                (function, in_impl) = (None, true);
-            } else if line == "}" {
-                (function, in_impl) = (None, false);
-            } else if let Some(name) = declares(line).or_else(|| line.strip_prefix("    ").filter(|_| in_impl).and_then(declares)) {
-                function = Some(name);
-            }
-            if line.trim_start().starts_with("//") {
-                continue;
-            }
-            match lines.last_mut() {
-                Some((_, _, text)) if line.trim_start().starts_with('.') => text.push_str(line.trim_start()),
-                _ => lines.push((n, function, line.to_owned())),
-            }
-        }
-        for (n, function, text) in lines {
+        for (n, function, text) in code_lines(&source) {
             for name in find(&text) {
                 found.push((file, function.map(str::to_owned), n, name));
             }
@@ -328,36 +334,45 @@ fn page_module_matches(find: impl Fn(&str) -> Vec<String>) -> Vec<(&'static str,
     found
 }
 
-/// Each hit test a page module imports under a name that is not a hit test's (`use …::hit as
-/// under;`), which the checks by name would not see.
+/// Each hit test `source` imports under a name that is not a hit test's (`use …::hit as under;`),
+/// as (name, alias), from each `use` statement, from its first line to its `;`, wherever it is.
+fn aliased_hit_tests(source: &str) -> Vec<(String, String)> {
+    let mut found = Vec::new();
+    let mut statement: Option<String> = None;
+    for line in source.lines().map(str::trim) {
+        if statement.is_none() && ["use ", "pub use ", "pub(crate) use ", "pub(super) use "].iter().any(|start| line.starts_with(start)) {
+            statement = Some(String::new());
+        }
+        let Some(text) = statement.as_mut() else { continue };
+        text.push_str(line);
+        text.push(' ');
+        if !line.ends_with(';') {
+            continue;
+        }
+        for part in text.split([',', '{', '}', ';']) {
+            let Some((path, alias)) = part.split_once(" as ") else { continue };
+            let (name, alias) = (path.trim().rsplit("::").next().unwrap_or_default(), alias.trim());
+            if is_hit_test(name) && !is_hit_test(alias) {
+                found.push((name.to_owned(), alias.to_owned()));
+            }
+        }
+        statement = None;
+    }
+    found
+}
+
+/// Each hit test a page module imports under a name that is not a hit test's, which the checks by
+/// name would not see ([`aliased_hit_tests`]).
 fn hit_test_aliases() -> Vec<String> {
     let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut found = Vec::new();
     for file in PAGE_MODULES {
         let source = std::fs::read_to_string(src.join(file)).expect("page module");
-        // Each `use` statement, from its first line to its `;`, wherever it is.
-        let mut statement: Option<String> = None;
-        for line in source.lines().map(str::trim) {
-            if statement.is_none() && ["use ", "pub use ", "pub(crate) use ", "pub(super) use "].iter().any(|start| line.starts_with(start)) {
-                statement = Some(String::new());
-            }
-            let Some(text) = statement.as_mut() else { continue };
-            text.push_str(line);
-            text.push(' ');
-            if !line.ends_with(';') {
-                continue;
-            }
-            for part in text.split([',', '{', '}', ';']) {
-                let Some((path, alias)) = part.split_once(" as ") else { continue };
-                let (name, alias) = (path.trim().rsplit("::").next().unwrap_or_default(), alias.trim());
-                if is_hit_test(name) && !is_hit_test(alias) {
-                    found.push(format!(
-                        "src/{file}: `{name} as {alias}` imports a hit test under another name, which the checks by name miss: \
-                         name it `hit` or `…_hit`."
-                    ));
-                }
-            }
-            statement = None;
+        for (name, alias) in aliased_hit_tests(&source) {
+            found.push(format!(
+                "src/{file}: `{name} as {alias}` imports a hit test under another name, which the checks by name miss: name \
+                 it `hit` or `…_hit`."
+            ));
         }
     }
     found
@@ -527,7 +542,7 @@ const PAGE_HITS_ASKERS: [(&str, &str, &str); 5] = [
 ];
 
 /// The comments' point test, which their hit tests are built on: which comment lies under a point.
-const COMMENT_POINT_TESTS: [&str; 1] = [".comment_at("];
+const COMMENT_POINT_TESTS: [&str; 2] = [".comment_at(", "PageCx::comment_at("];
 
 /// The functions that ask which comment lies under a point: (file, function, why).
 const COMMENT_POINT_TESTERS: [(&str, &str, &str); 3] = [
@@ -620,6 +635,28 @@ fn page_modules_act_on_a_press_only_through_the_router() {
          Add the function to ROUTER_READERS in src/canvas/page_pointer/tests.rs, with why.",
         "no longer reads who holds the press: remove it from ROUTER_READERS.",
     ));
+    // A router method the lists above don't name yet is the router's all the same: only their
+    // functions use it.
+    let known: Vec<&str> = ROUTER_WRITES.iter().chain(ROUTER_READS.iter()).copied().collect();
+    let unlisted = page_module_matches(|line| {
+        let router = uses(line, ".router.") || uses(line, "PageRouter::");
+        if router && !known.iter().any(|name| uses(line, name)) { vec!["router".to_owned()] } else { Vec::new() }
+    });
+    problems.extend(
+        unlisted
+            .into_iter()
+            .filter(|(file, function, _, _)| {
+                !ROUTER_WRITERS.iter().chain(ROUTER_READERS.iter()).any(|(f, name, _)| f == file && function.as_deref() == Some(*name))
+            })
+            .map(|(file, _, n, _)| {
+                format!(
+                    "src/{file}:{n}: uses the router by a method ROUTER_WRITES and ROUTER_READS don't name. The page view \
+                     decides the press and tells each module what it is to its page (`PagePress`): add the method to \
+                     ROUTER_WRITES or ROUTER_READS in src/canvas/page_pointer/tests.rs, and the function to their lists \
+                     only if it must."
+                )
+            }),
+    );
     problems.extend(misuses(
         &COMMENT_POINT_TESTS,
         &COMMENT_POINT_TESTERS,
@@ -695,6 +732,36 @@ fn the_page_guards_read_past_a_test_module_in_the_middle_of_a_file() {
     let source = "fn before() {}\n#[cfg(test)]\nmod tests {\n    fn inside() {}\n}\n\nfn after() {}\n#[cfg(test)]\nmod more;\nfn last() {}\n";
     let kept: Vec<(usize, &str)> = outside_test_modules(source);
     assert_eq!(kept, [(1, "fn before() {}"), (6, ""), (7, "fn after() {}"), (10, "fn last() {}")]);
+}
+
+/// The guard's readers: hit tests by name, the function a line declares, a call rustfmt split,
+/// and a hit test imported as another name.
+#[test]
+fn the_page_guards_read_hit_tests_split_calls_and_aliases() {
+    assert_eq!(hit_test_calls("let h = crate::forms_ui::hit(xf, p);"), ["hit"]);
+    assert_eq!(hit_test_calls("cx.comment_hit(p) && picture_hit(p)"), ["comment_hit", "picture_hit"]);
+    assert!(hit_test_calls("pub(crate) fn hit(xf: &PageXform) -> Option<Hit> {").is_empty());
+    assert!(hit_test_calls("let all = self.hits(view, p, false);").is_empty());
+    assert_eq!(declares("pub(crate) const fn crop_hit<'a>(view: &DocView) {"), Some("crop_hit"));
+    assert_eq!(declares("let hit = 1;"), None);
+    let source = "impl PageHits<'_> {\n    fn at(&self) {\n        self\n            .hits(view, p, false)\n    }\n}\nfn after() {\n    // view.router.owner(0)\n    let _ = view\n        .router\n        .owner(0);\n}\n";
+    assert_eq!(
+        code_lines(source),
+        [
+            (1, None, "impl PageHits<'_> {".to_owned()),
+            (2, Some("at"), "    fn at(&self) {".to_owned()),
+            (3, Some("at"), "        self.hits(view, p, false)".to_owned()),
+            (5, Some("at"), "    }".to_owned()),
+            (6, None, "}".to_owned()),
+            (7, Some("after"), "fn after() {".to_owned()),
+            (9, Some("after"), "    let _ = view.router.owner(0);".to_owned()),
+            (12, None, "}".to_owned()),
+        ]
+    );
+    let source =
+        "fn a() {}\n\n#[cfg(any())]\nuse crate::camera_ui::hit as corner_under;\nuse crate::x::{\n    hit as x_hit,\n    picture_hit as under,\n};\n";
+    let aliases: Vec<(String, String)> = [("hit", "corner_under"), ("picture_hit", "under")].map(|(a, b)| (a.to_owned(), b.to_owned())).to_vec();
+    assert_eq!(aliased_hit_tests(source), aliases);
 }
 
 #[test]
