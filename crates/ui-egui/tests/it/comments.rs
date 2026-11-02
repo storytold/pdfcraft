@@ -3022,3 +3022,73 @@ fn an_upright_comment_on_a_turned_page_is_drawn_where_it_goes_before_release() {
     h.drop_at(from + delta);
     h.run_steps(3);
 }
+
+/// `n` pages with one comment each, "Card 1" to "Card n".
+fn one_comment_per_page(n: usize) -> Vec<u8> {
+    let mut objs = vec!["<< /Type /Catalog /Pages 2 0 R >>".to_string()];
+    let kids: Vec<String> = (0..n).map(|i| format!("{} 0 R", 3 + 2 * i)).collect();
+    objs.push(format!("<< /Type /Pages /Kids [{}] /Count {n} /MediaBox [0 0 300 200] >>", kids.join(" ")));
+    for i in 0..n {
+        objs.push(format!("<< /Type /Page /Parent 2 0 R /Annots [{} 0 R] >>", 4 + 2 * i));
+        objs.push(format!("<< /Type /Annot /Subtype /Square /Rect [20 20 80 80] /C [1 0 0] /T (Ada) /Contents (Card {}) >>", i + 1));
+    }
+    let mut out = b"%PDF-1.7\n".to_vec();
+    for (i, o) in objs.iter().enumerate() {
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    out.extend_from_slice(b"trailer << /Root 1 0 R >>\n%%EOF\n");
+    out
+}
+
+/// #5488: the panel laid out every card on every frame, which put a few hundred comments over the
+/// frame budget. Cards out of view now only take up their height, and the selected one is still
+/// drawn wherever it is, so it can scroll into view.
+#[test]
+fn the_comments_panel_lays_out_only_the_cards_in_view() {
+    let mut h = harness_with_bytes(one_comment_per_page(120), |app| app.set_option("panel", "comments").unwrap());
+    h.run_steps(4);
+    let drawn = h.query_all_by_label_contains("Card ").count();
+    assert!((1..40).contains(&drawn), "{drawn} of 120 cards laid out");
+    h.state_mut().views[0].comments.selected = Some((100, 0));
+    h.state_mut().views[0].comments.reveal = true;
+    h.run_steps(4);
+    assert!(h.query_by_label("Card 101").is_some(), "the selected card is drawn and scrolled to");
+    assert!(h.query_by_label("Card 1").is_none(), "the top of the list scrolled out of view");
+}
+
+/// CodeRabbit on #5583: a card's measured height belongs to what it showed. Card 1, far above the
+/// cards in view, grows by two replies; the cards in view move down by its growth, not stay where
+/// card 1's old height would put them.
+#[test]
+fn a_card_out_of_view_that_grows_moves_the_cards_below_it() {
+    let mut h = harness_with_bytes(one_comment_per_page(120), |app| app.set_option("panel", "comments").unwrap());
+    h.run_steps(4);
+    h.state_mut().views[0].comments.selected = Some((60, 0));
+    h.state_mut().views[0].comments.reveal = true;
+    h.run_steps(4);
+    assert!(h.query_by_label("Card 1").is_none(), "card 1 is out of view");
+    let before = h.get_by_label("Card 61").rect().top();
+    for text in ["A first reply", "A second reply"] {
+        h.state_mut().apply_edit(pdfcraft_engine::Edit::ReplyToAnnotation { page: 0, index: 0, text: text.into(), author: "Bo".into() });
+    }
+    h.run_steps(4);
+    let after = h.get_by_label("Card 61").rect().top();
+    assert!(after > before + 40.0, "the cards below a grown card move down: {before} → {after}");
+}
+
+/// CodeRabbit on #5583: a card with an editor open on it is drawn wherever it is, so the cards
+/// below it make room for the editor rather than keep the card's height from before it opened.
+#[test]
+fn a_card_with_an_editor_open_out_of_view_is_drawn_at_its_size() {
+    let mut h = harness_with_bytes(one_comment_per_page(120), |app| app.set_option("panel", "comments").unwrap());
+    h.run_steps(4);
+    h.state_mut().views[0].comments.selected = Some((60, 0));
+    h.state_mut().views[0].comments.reveal = true;
+    h.run_steps(4);
+    assert!(h.query_by_label("Card 1").is_none(), "card 1 is out of view");
+    let before = h.get_by_label("Card 61").rect().top();
+    h.state_mut().views[0].comments.editing = Some((0, 0, "Card 1".into()));
+    h.run_steps(4);
+    let after = h.get_by_label("Card 61").rect().top();
+    assert!(after > before + 20.0, "the cards below make room for card 1's editor: {before} → {after}");
+}

@@ -1,4 +1,5 @@
 use crate::bit_reader::BitWriter;
+use crate::filter::Filter;
 use crate::object::Dict;
 use crate::object::Stream;
 use crate::object::dict::keys::JBIG2_GLOBALS;
@@ -17,8 +18,12 @@ pub(crate) fn decode(
     params: &Dict<'_>,
     image_params: &ImageDecodeParams,
 ) -> Option<FilterResult<'static>> {
+    // PdfCraft patch: globals are raw segments, so JBIG2 inside them means nothing, and decoding
+    // it reads its own globals in turn: a chain of 16,000 such streams overflowed the stack, which
+    // aborts the process. Such a stream reads as globals that can't be decoded.
     let globals = params
         .get::<Stream<'_>>(JBIG2_GLOBALS)
+        .filter(|g| !g.filters().iter().any(|f| matches!(f, Filter::Jbig2Decode)))
         .and_then(|g| g.decoded().ok());
 
     let image = hayro_jbig2::Image::new_embedded(data, globals.as_deref()).ok()?;
