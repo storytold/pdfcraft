@@ -1347,3 +1347,22 @@ fn word_draws_a_fields_border_and_fill_over_the_pictures() {
     assert!(height("name=\"Field box ") > height("name=\"Picture "), "{xml}");
     assert!(!xml.contains("behindDoc=\"0\""));
 }
+
+/// A repeated field name takes a suffix, and a suffixed name that another field already has
+/// takes another one: two Word fields of one name keep only the first as a bookmark.
+#[test]
+fn a_suffixed_field_name_never_repeats_one_already_used() {
+    let mut form = Form::default();
+    assert_eq!(form.name("Name", 7), "Name");
+    // A field is named exactly what the repeat would become.
+    assert_eq!(form.name("Name_7", 3), "Name_7");
+    let third = form.name("Name", 7);
+    assert_eq!(third, "Name_7_2");
+    assert_eq!(form.name("Name", 7), "Name_7_3");
+    // Long names keep within 20 characters with the longer suffix too.
+    let long = "A".repeat(30);
+    let names: Vec<String> = (0..4).map(|_| form.name(&long, 123)).collect();
+    assert!(names.iter().all(|n| n.len() <= 20), "{names:?}");
+    let unique: std::collections::HashSet<_> = names.iter().collect();
+    assert_eq!(unique.len(), names.len(), "{names:?}");
+}

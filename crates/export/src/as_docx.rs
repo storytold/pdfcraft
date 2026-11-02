@@ -421,18 +421,23 @@ fn field_rpr(size: f64, spacing: f64) -> String {
     rpr
 }
 
+/// How many suffixed names [`Form::name`] tries before it leaves a name repeated.
+const MAX_NAME_TRIES: usize = 64;
+
 /// The form fields a Word document has written, by name: Word's field names name their
 /// bookmarks, so they must be unique.
 #[derive(Default)]
-struct Form {
+pub(crate) struct Form {
     names: std::collections::HashSet<String>,
 }
 
 impl Form {
     /// A Word form field name for `name`: letters, digits and `_`, starting with a letter, at
-    /// most 20 characters (Word's limit), and not one this document already uses. `id` keeps a
-    /// repeated name apart.
-    fn name(&mut self, name: &str, id: usize) -> String {
+    /// most 20 characters (Word's limit), and not one this document already uses. A repeated name
+    /// takes `_` and `id`, then `_2`, `_3` … after that as long as that is taken too (a field
+    /// may already be named so); past [`MAX_NAME_TRIES`] the name stays repeated, which Word
+    /// opens with only the first of the two as a bookmark.
+    pub(crate) fn name(&mut self, name: &str, id: usize) -> String {
         let mut base: String = name.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect();
         if !base.starts_with(|c: char| c.is_ascii_alphabetic()) {
             base.insert(0, 'F');
@@ -440,10 +445,13 @@ impl Form {
         // ASCII only, so any byte length is a character boundary.
         base.truncate(20);
         let mut candidate = base.clone();
-        if self.names.contains(&candidate) {
-            let suffix = format!("_{id}");
-            base.truncate(20usize.saturating_sub(suffix.len()));
-            candidate = format!("{base}{suffix}");
+        for k in 1..=MAX_NAME_TRIES {
+            if !self.names.contains(&candidate) {
+                break;
+            }
+            let suffix = if k == 1 { format!("_{id}") } else { format!("_{id}_{k}") };
+            let keep = 20usize.saturating_sub(suffix.len()).min(base.len());
+            candidate = format!("{}{suffix}", base.get(..keep).unwrap_or_default());
         }
         self.names.insert(candidate.clone());
         candidate
