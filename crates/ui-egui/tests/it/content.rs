@@ -393,6 +393,23 @@ fn image_files_on_the_clipboard_are_pasted_onto_the_page() {
     assert_eq!(h.state().views[0].content.selected, Some((0, 0)));
     // Two at once: both placed, the last one selected.
     paste(&mut h, &["Copied.PNG", "second.png"]);
+    assert_eq!(added(&h).len(), 3);
+    // Two pastes in a row, the second one sent before the first one's file is placed: the
+    // first one's own edit doesn't count as the document changing under the second.
+    h.state_mut().clipboard_override = Some(Clip::Files(vec![dir.join("second.png")]));
+    for _ in 0..2 {
+        h.event(egui::Event::PasteImage(std::sync::Arc::new(egui::ColorImage::filled([4, 4], egui::Color32::BLUE))));
+        h.step();
+    }
+    for _ in 0..500 {
+        if !h.state().paste_reading() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        h.run_steps(1);
+    }
+    h.run_steps(2);
+    assert_eq!(added(&h).len(), 5, "{}", toast(&h));
     // A document that doesn't allow changes says so, once, and that isn't hidden by the notice
     // for a paste with no pictures.
     {
@@ -422,8 +439,8 @@ fn image_files_on_the_clipboard_are_pasted_onto_the_page() {
     h.state_mut().active = Some(0);
     h.run_steps(2);
     std::fs::remove_dir_all(&dir).unwrap();
-    assert_eq!(added(&h).len(), 3, "{}", toast(&h));
-    assert_eq!(h.state().views[0].content.selected, Some((0, 2)));
+    assert_eq!(added(&h).len(), 5, "{}", toast(&h));
+    assert_eq!(h.state().views[0].content.selected, Some((0, 4)));
 }
 
 /// #125: text the standard fonts can't draw stays in the editor with a warning instead of being

@@ -1342,7 +1342,12 @@ impl crate::PdfCraftApp {
             self.paste_reads.reading = self.paste_reads.reading.saturating_sub(1);
             let active = self.active_ids();
             let generation = self.session.get(target.doc).map(|d| d.edit_generation());
-            if active.is_none_or(|(_, id)| id != target.doc) || generation != target.generation {
+            // Follow the earlier pastes' own edits from the generation this paste saw.
+            let mut seen = target.generation;
+            while let Some(&(_, _, to)) = self.paste_reads.placed.iter().find(|(doc, from, _)| *doc == target.doc && Some(*from) == seen) {
+                seen = Some(to);
+            }
+            if active.is_none_or(|(_, id)| id != target.doc) || generation != seen {
                 self.notify_tr("The document changed while the copied files were read, so nothing was pasted.");
                 continue;
             }
@@ -1353,6 +1358,7 @@ impl crate::PdfCraftApp {
                 self.notify_tr(NO_PICTURE);
                 continue;
             }
+            let before = generation;
             for (path, read) in files {
                 let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
                 match read {
@@ -1375,6 +1381,16 @@ impl crate::PdfCraftApp {
                     }
                 }
             }
+            let after = self.session.get(target.doc).map(|d| d.edit_generation());
+            if let (Some(from), Some(to)) = (before, after)
+                && from != to
+                && self.paste_reads.reading > 0
+            {
+                self.paste_reads.placed.push((target.doc, from, to));
+            }
+        }
+        if self.paste_reads.reading == 0 {
+            self.paste_reads.placed.clear();
         }
     }
 }
@@ -1390,6 +1406,10 @@ pub struct PasteReads {
     /// Reads started and not yet placed.
     reading: usize,
     done: std::sync::Arc<std::sync::Mutex<Vec<PasteRead>>>,
+    /// The edit generations the placed pastes moved their documents through (from, to), while
+    /// reads are under way: a paste that finishes after another one placed its images is
+    /// still for an unchanged document.
+    placed: Vec<(pdfcraft_engine::DocId, u64, u64)>,
 }
 
 /// The document and page a paste was for, and the document's edit generation then.
