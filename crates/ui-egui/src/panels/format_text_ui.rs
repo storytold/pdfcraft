@@ -569,7 +569,11 @@ fn font_size_input(ui: &mut egui::Ui, size: &mut f64, mixed: bool) -> bool {
             .desired_width(width)
             .frame(egui::Frame::NONE)
             .align(egui::Align2::CENTER_CENTER);
-        let response = ui.add_sized([width, 26.0], field).accessible_name(tl!("Font size:"));
+        let mut response = ui.add_sized([width, 26.0], field).accessible_name(tl!("Font size:"));
+        // A long translation of "Mixed" scrolls in the field: the tooltip has it whole.
+        if mixed {
+            response = response.on_hover_text(tl!("Mixed"));
+        }
         let cancel = (response.has_focus() || response.lost_focus()) && ui.input(|i| i.key_pressed(egui::Key::Escape));
         if cancel {
             text = initial_text();
