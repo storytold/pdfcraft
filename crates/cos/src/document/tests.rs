@@ -1701,3 +1701,61 @@ fn a_stream_whose_length_is_itself_and_never_ends_loads_quickly() {
     });
     rx.recv_timeout(std::time::Duration::from_secs(20)).expect("loading must not retry exponentially");
 }
+
+/// A file whose object 3 (its `/Info`) can't be parsed: the rest reads.
+fn with_unreadable_info() -> Vec<u8> {
+    build(
+        &["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>", "<< /Title (Report) /Author ) >>"],
+        "/Root 1 0 R /Info 3 0 R",
+    )
+}
+
+/// An object that can't be parsed reads as null and is listed once, by number and generation,
+/// with why. Clones and scans share the list, an edit takes the object off it (in that document
+/// only), and a sound file lists nothing.
+#[test]
+fn unreadable_objects_are_listed_with_the_reason() {
+    let doc = Document::open(Arc::new(with_unreadable_info())).unwrap();
+    assert!(doc.unreadable_objects().is_empty(), "nothing has read object 3 yet");
+    assert_eq!(*doc.get(ObjRef::new(3, 0)), Object::Null);
+    assert!(doc.try_get(3).is_err());
+    let lines = doc.unreadable_objects();
+    assert_eq!(lines.len(), 1, "read twice, listed once: {lines:?}");
+    assert!(lines[0].starts_with("object 3 0 could not be read: syntax error"), "{lines:?}");
+    let scanned = doc.clone();
+    assert_eq!(scanned.scan_objects_checked().filter(|(_, o)| o.is_err()).count(), 1);
+    assert_eq!(doc.unreadable_objects(), lines, "the scan found the same object");
+    let mut edited = doc.clone();
+    edited.set(ObjRef::new(3, 0), Object::Dict(Dict::new()));
+    assert!(edited.unreadable_objects().is_empty(), "the edit replaced it");
+    assert_eq!(doc.unreadable_objects(), lines);
+    let sound =
+        build(&["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>", "<< /Title (Report) >>"], "/Root 1 0 R /Info 3 0 R");
+    let sound = Document::open(Arc::new(sound)).unwrap();
+    assert_eq!(sound.scan_objects_checked().filter(|(_, o)| o.is_err()).count(), 0);
+    assert!(sound.unreadable_objects().is_empty());
+}
+
+/// The list keeps at most 100 objects and then says there were more; an object whose
+/// cross-reference offset holds no object is listed with that as its reason.
+#[test]
+fn the_unreadable_object_list_is_bounded() {
+    let mut bodies = vec!["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>"];
+    bodies.extend(std::iter::repeat_n("<< /A ) >>", 120));
+    let doc = Document::open(Arc::new(build(&bodies, "/Root 1 0 R"))).unwrap();
+    assert_eq!(doc.scan_objects_checked().filter(|(_, o)| o.is_err()).count(), 120);
+    let lines = doc.unreadable_objects();
+    assert_eq!(lines.len(), 101, "{:?}", lines.last());
+    assert!(lines[0].starts_with("object 3 0 could not be read"), "{}", lines[0]);
+    assert_eq!(lines[100], "more objects could not be read; only the first 100 are listed");
+
+    let base = build(&["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>", "(three)"], "/Root 1 0 R");
+    let text = String::from_utf8_lossy(&base).into_owned();
+    let gone = text.replacen("3 0 obj\n(three)", "9 0 obj\n(three)", 1);
+    let doc = Document::open(Arc::new(gone.into_bytes())).unwrap();
+    assert!(doc.try_get(3).is_err());
+    assert_eq!(
+        doc.unreadable_objects(),
+        ["object 3 0 could not be read: no readable copy was found at its cross-reference offset or elsewhere in the file"]
+    );
+}

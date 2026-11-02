@@ -61,6 +61,54 @@ pub(super) fn objstm_member(num: i64, offset: i64, first: Option<usize>, len: us
     (start < len).then_some((num, start))
 }
 
+/// Objects the reader could not read, each with the reason (see `Document::unreadable_objects`).
+/// Bounded: past [`Unreadable::MAX`] objects only the fact that there were more is kept.
+#[derive(Debug, Default)]
+pub(super) struct Unreadable {
+    pub(super) objects: BTreeMap<u32, (u16, String)>,
+    pub(super) more: bool,
+}
+
+impl Unreadable {
+    pub(super) const MAX: usize = 100;
+    /// Characters of a reason kept: a parser's message can quote the bytes it stopped at.
+    const REASON: usize = 160;
+
+    /// Whether `num` is to be recorded: not listed yet and there is room. A full list notes that
+    /// there were more, so a caller asks this before building the reason.
+    pub(super) fn wants(&mut self, num: u32) -> bool {
+        if self.objects.contains_key(&num) {
+            return false;
+        }
+        if self.objects.len() >= Self::MAX {
+            self.more = true;
+            return false;
+        }
+        true
+    }
+
+    /// Record `num` once; the first reason given is kept.
+    pub(super) fn note(&mut self, num: u32, generation: u16, reason: &str) {
+        if self.wants(num) {
+            self.objects.insert(num, (generation, reason.chars().take(Self::REASON).collect()));
+        }
+    }
+
+    /// One line per recorded object not `hidden`, then one saying there were more, if there were.
+    pub(super) fn lines(&self, hidden: impl Fn(u32) -> bool) -> Vec<String> {
+        let mut lines: Vec<String> = self
+            .objects
+            .iter()
+            .filter(|(num, _)| !hidden(**num))
+            .map(|(num, (generation, reason))| format!("object {num} {generation} could not be read: {reason}"))
+            .collect();
+        if self.more {
+            lines.push(format!("more objects could not be read; only the first {} are listed", Self::MAX));
+        }
+        lines
+    }
+}
+
 /// Where an overlay slot came from.
 #[derive(Clone, Debug, PartialEq)]
 pub(super) enum Slot {

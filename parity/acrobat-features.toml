@@ -70,8 +70,8 @@ milestone = "M1"
 status = "shipped"
 commands = []
 tools = ["doc_info"]
-evidence = ["crates/ui-egui/tests/it/viewer.rs::damaged_files_say_they_were_repaired"]
-notes = "a notice says the file was repaired; Document Properties ▸ Advanced lists the repairs; doc_info reports them"
+evidence = ["crates/ui-egui/tests/it/viewer.rs::damaged_files_say_they_were_repaired", "crates/cos/src/document/tests.rs::unreadable_objects_are_listed_with_the_reason", "crates/automation/tests/it/unreadable_objects.rs::doc_info_lists_an_object_that_could_not_be_read"]
+notes = "a notice says the file was repaired; Document Properties ▸ Advanced lists the repairs; doc_info reports them, and lists apart (unreadable_objects) each object that could not be read and reads as null, with its number and why: only objects read so far, including any object a scan, save or audit read, at most 100; a stream whose own data fails to decode is not listed, but the objects of an object stream that cannot be decoded are"
 
 [[feature]]
 id = "core.xref-streams"
