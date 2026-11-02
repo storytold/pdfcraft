@@ -3236,9 +3236,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     } else {
         view.no_text = None;
     }
-    if unobstructed {
-        crate::auto_ocr::progress_bar(ui, avail, view);
-    }
+    crate::auto_ocr::progress_bar(ui, avail, view, unobstructed);
 
     // Collect all main-page demand, including cached surfaces, for byte admission later.
     // Pan-settle debounce for tiled pages: each tile costs a full page interpret, so holding

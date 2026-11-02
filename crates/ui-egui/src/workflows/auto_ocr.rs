@@ -274,8 +274,10 @@ impl PdfCraftApp {
 }
 
 /// The progress of a background recognition, at the bottom of the document area, with Cancel.
-pub(crate) fn progress_bar(ui: &egui::Ui, viewport: egui::Rect, view: &mut DocView) {
-    let Some((page, total)) = view.auto_ocr.progress() else { return };
+/// Not drawn while a panel or dialog covers the page area (`unobstructed` false); the flag is
+/// taken here, not tested by the caller, to keep `document_area` within clippy's complexity limit.
+pub(crate) fn progress_bar(ui: &egui::Ui, viewport: egui::Rect, view: &mut DocView, unobstructed: bool) {
+    let Some((page, total)) = view.auto_ocr.progress().filter(|_| unobstructed) else { return };
     let message = crate::i18n::fmt(tl!("Recognizing text… page {d} of {t}"), &[("d", &page.to_string()), ("t", &total.to_string())]);
     let mut cancel = false;
     egui::Area::new(egui::Id::unique(("auto-ocr-progress", view.id.0)))
