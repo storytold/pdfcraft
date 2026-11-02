@@ -91,6 +91,8 @@ fn harness() -> Harness<'static, PdfCraftApp> {
         app.set_option("left", "closed").unwrap();
         app.set_option("panel", "none").unwrap();
         app.set_option("zoom", "100").unwrap();
+        // The floating hotbar sits over the top middle of the page, where the first links are.
+        app.set_option("hotbar-side", "right").unwrap();
         app
     });
     h.run_steps(8);
