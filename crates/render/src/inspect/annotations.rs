@@ -42,6 +42,15 @@ pub(super) fn retained(a: &Annotation) -> usize {
         .fold(0, usize::saturating_add)
 }
 
+/// A remote Go-To or Launch target, its file and named destination spent from `budget`; `None`,
+/// spending nothing, when the budget can't cover them.
+fn spend_remote(target: LinkTarget, budget: &mut usize) -> Option<LinkTarget> {
+    let LinkTarget::RemoteGoTo { file, destination, .. } = &target else { return Some(target) };
+    let bytes = file.len().saturating_add(if let RemoteDestination::Named(name) = destination { name.len() } else { 0 });
+    *budget = budget.checked_sub(bytes)?;
+    Some(target)
+}
+
 impl<'a> Inspector<'a> {
     /// Whether an annotation is a Fill & Sign mark. Keep in step with
     /// `pdfcraft_annot::is_fill_sign`, which the engine's comment list uses.
@@ -206,13 +215,26 @@ impl<'a> Inspector<'a> {
         }
         let action = d.get(b"A").ok()?;
         let a = self.dict(action)?;
-        let target = self.action(a, text_budget)?;
-        let next = self.next_actions(action, a, text_budget);
+        // Not an action (no `/S`): no link. An action whose operands are unusable does nothing
+        // itself, but the actions chained after it still run ("shall be performed after", §12.6.2,
+        // Table 196): the first of those is then the link's own.
+        self.name(a, b"S")?;
+        let target = self.action(a, text_budget);
+        let mut next = self.next_actions(action, a, text_budget);
+        let target = match target {
+            Some(target) => target,
+            None if next.is_empty() => return None,
+            None => next.remove(0),
+        };
         Some(Link { page, index, rect, target, next })
     }
 
     /// What one action dictionary does; `None` when it has no type, or when a Go-To's
-    /// destination or a URI action's address is unusable.
+    /// destination or a URI action's address is unusable. The text it keeps from the file (an
+    /// address, a remote file and destination, a named action's name, field names, an unknown
+    /// type) is spent from `text_budget`, as each link sharing one action keeps it again: past the
+    /// budget a URI, Go-To-remote or Launch action lists as one PdfCraft doesn't run, and a name
+    /// is kept empty.
     fn action(&self, a: &Dictionary, text_budget: &mut usize) -> Option<LinkTarget> {
         Some(match self.name(a, b"S").as_deref()? {
             "GoTo" => {
@@ -227,23 +249,29 @@ impl<'a> Inspector<'a> {
                 }
             }
             "SetOCGState" => self.layer_state(a),
-            "GoToR" => self.remote_go_to(a).unwrap_or_else(|| LinkTarget::Other("GoToR".into())),
-            "Launch" => self.launch_pdf(a).unwrap_or_else(|| LinkTarget::Other("Launch".into())),
+            "GoToR" => self.remote_go_to(a).and_then(|t| spend_remote(t, text_budget)).unwrap_or_else(|| LinkTarget::Other("GoToR".into())),
+            "Launch" => self.launch_pdf(a).and_then(|t| spend_remote(t, text_budget)).unwrap_or_else(|| LinkTarget::Other("Launch".into())),
             "Named" => LinkTarget::Named(match a.get(b"N").map(|n| self.resolve(n)) {
-                Ok(Object::Name(n)) if n.len() <= MAX_REMOTE_DESTINATION_NAME_BYTES => String::from_utf8_lossy(n).into_owned(),
+                Ok(Object::Name(n)) if n.len() <= MAX_REMOTE_DESTINATION_NAME_BYTES => {
+                    spend(n, text_budget, |b| String::from_utf8_lossy(b).into_owned()).unwrap_or_default()
+                }
                 _ => String::new(),
             }),
             "Hide" => self.hide(a, text_budget),
             "ResetForm" => self.reset_form(a, text_budget),
-            other => LinkTarget::Other(other.to_string()),
+            // Kept whatever the budget: it marks the document as one with scripts.
+            "JavaScript" => LinkTarget::Other("JavaScript".into()),
+            other => LinkTarget::Other(spend(other.as_bytes(), text_budget, |b| String::from_utf8_lossy(b).into_owned()).unwrap_or_default()),
         })
     }
 
     /// The actions `/Next` chains after `first` (whose own object is `first_ref`), depth first:
     /// each action, then its own `/Next`, before the action after it (§12.6.2, Table 196 Note 1).
     /// An action object is run once however often it is chained, so a cycle ends, and at most
-    /// [`MAX_LINK_ACTIONS`] run in all. An entry that isn't an action, or whose operands are
-    /// unusable, is skipped and its own chain with it.
+    /// [`MAX_LINK_ACTIONS`] run in all. An entry that isn't an action (no `/S`) is skipped and its
+    /// own chain with it; an action whose operands are unusable is skipped, but its chain still
+    /// runs. Each action spends the text it keeps from `text_budget` ([`Self::action`]), so links
+    /// sharing one long chain keep no more than [`MAX_LINK_ATTACHMENT_TEXT_BYTES`] of it in all.
     fn next_actions(&self, first_ref: &'a Object, first: &'a Dictionary, text_budget: &mut usize) -> Vec<LinkTarget> {
         let mut seen: HashSet<ObjectId> = self.resolved_id(first_ref).into_iter().collect();
         let mut out = Vec::new();
@@ -275,8 +303,10 @@ impl<'a> Inspector<'a> {
                 continue;
             }
             let Some(d) = self.dict(o) else { continue };
-            let Some(target) = self.action(d, text_budget) else { continue };
-            out.push(target);
+            if self.name(d, b"S").is_none() {
+                continue;
+            }
+            out.extend(self.action(d, text_budget));
             push_next(d, &mut todo, MAX_LINK_ACTIONS.saturating_sub(steps));
         }
         out

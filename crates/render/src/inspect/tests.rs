@@ -1400,6 +1400,61 @@ fn links_read_next_action_chains_in_order_and_bounded() {
     assert!(info.links.iter().all(|l| l.page == 0));
 }
 
+/// Review on #4525: an action whose operands are unusable (a Go-To to no page) runs nothing, but
+/// the actions chained after it still run ("shall be performed after", ISO 32000-2 §12.6.2, Table
+/// 196); when it is the link's own action, the first of them takes its place. An entry with no
+/// `/S` is no action: it is skipped with its chain, and a link whose `/A` has none is no link.
+#[test]
+fn an_unusable_action_still_runs_the_actions_chained_after_it() {
+    let pdf = "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+         2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >> endobj\n\
+         3 0 obj << /Type /Page /Parent 2 0 R /Annots [30 0 R 31 0 R 32 0 R 33 0 R 34 0 R] >> endobj\n\
+         30 0 obj << /Type /Annot /Subtype /Link /Rect [0 0 10 10] /A << /S /GoTo /D [99 0 R /Fit] /Next << /S /Named /N /First /Next << /S /Named /N /Second >> >> >> >> endobj\n\
+         31 0 obj << /Type /Annot /Subtype /Link /Rect [0 20 10 30] /A << /S /Named /N /Top /Next [<< /S /GoTo /D [99 0 R /Fit] /Next << /S /Named /N /After >> >> << /S /Named /N /Last >>] >> >> endobj\n\
+         32 0 obj << /Type /Annot /Subtype /Link /Rect [0 40 10 50] /A << /S /Named /N /Top /Next [<< /N /NoType /Next << /S /Named /N /Hidden >> >> << /S /Named /N /Last >>] >> >> endobj\n\
+         33 0 obj << /Type /Annot /Subtype /Link /Rect [0 60 10 70] /A << /S /GoTo /D [99 0 R /Fit] >> >> endobj\n\
+         34 0 obj << /Type /Annot /Subtype /Link /Rect [0 80 10 90] /A << /N /NoType /Next << /S /Named /N /Y >> >> >> endobj\n\
+         trailer << /Root 1 0 R >>\n%%EOF";
+    let info = inspect(Arc::new(pdf.as_bytes().to_vec()), None).expect("opens");
+    let named = |n: &str| LinkTarget::Named(n.into());
+    let listed: Vec<(&LinkTarget, &[LinkTarget])> = info.links.iter().map(|l| (&l.target, l.next.as_slice())).collect();
+    assert_eq!(
+        listed,
+        [(&named("First"), &[named("Second")][..]), (&named("Top"), &[named("After"), named("Last")][..]), (&named("Top"), &[named("Last")][..]),],
+        "a Go-To to no page alone, and an /A with no /S, list no link"
+    );
+}
+
+/// Review on #4525: every link that reaches a shared `/Next` chain keeps that chain's text again,
+/// so each action spends what it keeps from the link text budget: a hundred links sharing a chain
+/// of 255 named actions with 1,000-byte names keep no more than the budget in all. Before, each
+/// kept the whole chain, 25.5 MB.
+#[test]
+fn links_sharing_a_long_chain_keep_no_more_text_than_the_budget() {
+    const LINKS: usize = 100;
+    let links = "<< /Type /Annot /Subtype /Link /Rect [0 0 1 1] /A 40 0 R >> ".repeat(LINKS);
+    let mut pdf = format!(
+        "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+         2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >> endobj\n\
+         3 0 obj << /Type /Page /Parent 2 0 R /Annots [{links}] >> endobj\n\
+         40 0 obj << /S /Named /N /Start /Next 100 0 R >> endobj\n"
+    );
+    let long = "n".repeat(997);
+    for k in 0..MAX_LINK_ACTIONS {
+        pdf.push_str(&format!("{} 0 obj << /S /Named /N /{k:03}{long} /Next {} 0 R >> endobj\n", 100 + k, 101 + k));
+    }
+    pdf.push_str("trailer << /Root 1 0 R >>\n%%EOF");
+    let info = inspect(Arc::new(pdf.into_bytes()), None).expect("opens");
+    assert_eq!(info.links.len(), LINKS);
+    let name_bytes = |t: &LinkTarget| if let LinkTarget::Named(n) = t { n.len() } else { 0 };
+    let kept: usize = info.links.iter().flat_map(|l| std::iter::once(&l.target).chain(&l.next)).map(name_bytes).sum();
+    assert!(kept <= MAX_LINK_ATTACHMENT_TEXT_BYTES, "{kept} bytes kept");
+    // The first links still list the whole chain, names and all.
+    let first = &info.links[0];
+    assert_eq!(first.next.len(), MAX_LINK_ACTIONS - 1);
+    assert!(first.next.iter().all(|t| name_bytes(t) == 1000), "{:?}", first.next.first());
+}
+
 #[test]
 fn links_read_bounded_local_remote_go_to_actions() {
     use DestView::{Fit, Xyz};
