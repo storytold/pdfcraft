@@ -75,7 +75,7 @@ fn to_user(p: &PageInfo, x: f64, y: f64) -> [f64; 2] {
     [ux as f64, uy as f64]
 }
 
-fn rect_to_user(p: &PageInfo, r: [f64; 4]) -> [f64; 4] {
+pub(crate) fn rect_to_user(p: &PageInfo, r: [f64; 4]) -> [f64; 4] {
     let (a, b) = (to_user(p, r[0], r[1]), to_user(p, r[2], r[3]));
     [a[0].min(b[0]), a[1].min(b[1]), a[0].max(b[0]), a[1].max(b[1])]
 }
