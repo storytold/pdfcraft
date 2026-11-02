@@ -1120,6 +1120,13 @@ fn page_delete_handles_sixty_thousand_destinations_with_history_and_reopen() {
 #[test]
 fn an_in_place_save_reports_a_required_rewrite_as_not_incremental() {
     let dir = workdir("save-incremental-flag");
+    // Sanitizing requires a rewrite only when there is hidden data to remove.
+    // Give every case the same saved metadata instead of relying on an empty
+    // category silently mutating the document.
+    let mut setup = auto(&dir);
+    let doc = ok(&mut setup, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut setup, "doc_set_info", json!({ "doc": doc, "key": "Subject", "value": "Synthetic removable metadata" }));
+    ok(&mut setup, "doc_save", json!({ "doc": doc }));
     let original = std::fs::read(dir.join("a.pdf")).unwrap();
     let cases = [
         ("page_rotate", json!({ "pages": [1], "degrees": 90 }), true),
@@ -7113,6 +7120,64 @@ fn a_page_printed_in_strips_gets_small_through_tools() {
     let mobile = ok(&mut a, "doc_open", json!({ "path": "mobile.pdf" }))["doc"].as_u64().unwrap();
     assert!(a.call("page_render", &json!({ "doc": mobile, "page": 1, "dpi": 72 })).is_ok());
     assert!(matches!(a.call("doc_optimize", &json!({ "doc": doc, "path": "x.pdf", "preset": "tiny" })), Err(ToolError::InvalidArgs(_))));
+}
+
+#[test]
+fn lossless_optimization_through_tools_preserves_image_bytes_and_appearance() {
+    use pdfcraft_cos::{Document, ObjRef, Object};
+    use std::sync::Arc;
+    let dir = workdir("lossless-optimize");
+    let mut jpeg = Vec::new();
+    let pixels = (0..128 * 128).flat_map(|i| [(i % 128) as u8, (i / 128) as u8, 180]).collect::<Vec<_>>();
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, 95).encode(&pixels, 128, 128, image::ExtendedColorType::Rgb8).unwrap();
+    std::fs::write(dir.join("image.jpg"), &jpeg).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_create", json!({"from":"images", "paths":["image.jpg"]}))["doc"].as_u64().unwrap();
+    ok(&mut a, "doc_save", json!({"doc":doc, "path":"original.pdf"}));
+    let original = std::fs::read(dir.join("original.pdf")).unwrap();
+    let before = a.call("page_render", &json!({"doc":doc, "page":1, "dpi":72})).unwrap();
+    let report = ok(&mut a, "doc_optimize", json!({"doc":doc, "path":"lossless.pdf", "profile":"lossless"}));
+    assert_eq!(report["images_resampled"], 0);
+    assert_eq!(report["images_recompressed"], 0);
+    assert_eq!(report["discarded"], json!([]));
+    let result = std::fs::read(dir.join("lossless.pdf")).unwrap();
+    let image_streams = |bytes| {
+        let document = Document::open(Arc::new(bytes)).unwrap();
+        document
+            .object_numbers()
+            .into_iter()
+            .filter_map(|number| {
+                let object = document.get(ObjRef::new(number, document.generation(number)));
+                match &*object {
+                    Object::Stream(stream) if stream.dict.name(b"Subtype") == Some(b"Image") => {
+                        Some((stream.dict.int(b"Width"), stream.dict.int(b"Height"), stream.raw.to_vec()))
+                    }
+                    _ => None,
+                }
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(image_streams(result), image_streams(original.clone()));
+    assert_eq!(std::fs::read(dir.join("original.pdf")).unwrap(), original);
+    let reopened = ok(&mut a, "doc_open", json!({"path":"lossless.pdf"}))["doc"].as_u64().unwrap();
+    assert_eq!(a.call("page_render", &json!({"doc":reopened, "page":1, "dpi":72})).unwrap(), before);
+    for extra in [
+        json!({"profile":"unknown"}),
+        json!({"profile":"lossless", "color":{"compression":"jpeg"}}),
+        json!({"profile":"lossless", "preset":"mobile"}),
+        json!({"profile":"lossless", "merge_fragments":true}),
+        json!({"profile":"lossless", "discard":["metadata"]}),
+        json!({"profile":"lossless", "discard_tags":true}),
+    ] {
+        let mut args = json!({"doc":doc, "path":"refused.pdf"});
+        args.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        assert!(matches!(a.call("doc_optimize", &args), Err(ToolError::InvalidArgs(_))));
+        assert!(!dir.join("refused.pdf").exists());
+    }
+    let bare = ok(&mut a, "doc_open", json!({"path":"a.pdf"}))["doc"].as_u64().unwrap();
+    let report = ok(&mut a, "doc_optimize", json!({"doc":bare, "path":"no-metadata.pdf", "discard":["metadata"]}));
+    assert_eq!(report["discarded"], json!([]));
+    assert_eq!(ok(&mut a, "doc_open", json!({"path":"no-metadata.pdf"}))["pages"], 3);
 }
 
 #[test]

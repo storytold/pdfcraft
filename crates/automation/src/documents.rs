@@ -279,14 +279,44 @@ impl Automation {
     }
 
     pub(crate) fn doc_optimize(&mut self, a: &Args) -> Result<Value> {
-        use pdfcraft_engine::optimize::{Compatibility, Compression, ImageSettings, MonoCompression, Preset};
+        use pdfcraft_engine::optimize::{Compatibility, Compression, ImageSettings, MonoCompression, Preset, Settings};
         const MONO_KEYS: [&str; 4] = ["downsample", "ppi", "above_ppi", "compression"];
         let id = self.doc(a)?.id;
         let before = self.doc(a)?.bytes.len();
         let path = self.resolve(a.str("path")?, true)?;
-        let mut settings = match a.opt_str("preset")? {
-            None => Preset::Standard.settings(),
-            Some(p) => Preset::from_name(p).ok_or_else(|| ToolError::InvalidArgs(format!("unknown preset {p:?} (standard, mobile)")))?.settings(),
+        let profile = a.opt_str("profile")?.unwrap_or("reduce");
+        let mut settings = match profile {
+            "reduce" => match a.opt_str("preset")? {
+                None => Preset::Standard.settings(),
+                Some(p) => Preset::from_name(p).ok_or_else(|| ToolError::InvalidArgs(format!("unknown preset {p:?} (standard, mobile)")))?.settings(),
+            },
+            "lossless" => {
+                for key in [
+                    "preset",
+                    "merge_fragments",
+                    "color",
+                    "gray",
+                    "mono",
+                    "discard",
+                    "discard_thumbnails",
+                    "discard_alternate_images",
+                    "discard_tags",
+                    "discard_print_settings",
+                    "flate_unencoded",
+                    "lzw_to_flate",
+                    "remove_invalid_links",
+                    "remove_unreferenced_dests",
+                    "remove_unused_xobjects",
+                ] {
+                    if a.get(key).is_some() {
+                        return Err(ToolError::InvalidArgs(format!(
+                            "profile lossless cannot be combined with {key}; omit profile for custom optimization"
+                        )));
+                    }
+                }
+                Settings::lossless()
+            }
+            other => return Err(ToolError::InvalidArgs(format!("unknown optimization profile {other:?} (reduce, lossless)"))),
         };
         if let Some(c) = a.opt_str("compatibility")? {
             settings.compatibility = Compatibility::from_name(c)
@@ -361,6 +391,7 @@ impl Automation {
             ("lzw_to_flate", &mut settings.lzw_to_flate),
             ("remove_invalid_links", &mut settings.remove_invalid_links),
             ("remove_unreferenced_dests", &mut settings.remove_unreferenced_dests),
+            ("remove_unused_xobjects", &mut settings.remove_unused_xobjects),
         ] {
             if let Some(b) = a.opt_bool(key)? {
                 *flag = b;
