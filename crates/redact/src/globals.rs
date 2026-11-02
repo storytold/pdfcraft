@@ -34,6 +34,13 @@ pub(crate) fn followed(doc: &Document, o: &Object) -> Arc<Object> {
     at
 }
 
+/// The most one run may spend finding what shares a dictionary with what left: objects fetched,
+/// names remembered, and decoded data, a unit and one for each whole 4 KiB. Past it the run is refused
+/// ([`RedactError::SharedJbig2Budget`](crate::RedactError::SharedJbig2Budget)). A scan reads a few
+/// objects a page, and its pages stored again a unit for each 4 KiB of their samples, so a book of
+/// thousands of pages sharing one dictionary stays well within it.
+pub(crate) const RUN_BUDGET: usize = 1 << 22;
+
 /// What a parameters value names as `/JBIG2Globals`, and the key it is remembered by: a value the
 /// file refers to, by the number of the object the references end at and whether it is read as a
 /// list of entries.
@@ -42,169 +49,320 @@ pub(crate) type Listed = (Rc<[u32]>, Option<Key>);
 /// A value the file refers to: the number of an object, and whether it is read as a list of entries.
 pub(crate) type Key = (u32, bool);
 
-/// Every object a stream names as `/JBIG2Globals`, and each reference on the way to one: in any entry
-/// of its parameters, whichever filter that entry belongs to and however the filters are given. A
-/// reader may use less of this, but leaving a dictionary behind is the failure that matters here.
-///
-/// What a value the file refers to names is read once a run, so streams that share one, by
-/// reference, through a chain of them or through an entry, cost it once however many there are.
-#[derive(Default)]
-pub(crate) struct Names {
+/// How a value is read, and so what is kept of it: what a reference leads to is remembered for each.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum How {
+    /// A size: a number, or null.
+    Number,
+    /// One filter: a name, or null.
+    Name,
+    /// `/Filter`: a name, or an array of names, or null for a chain longer than any decoder takes.
+    Filter,
+    /// `/DecodeParms` for so many filters.
+    Parms(usize),
+    /// One parameters entry: the numbers and flags decoders read, and `/JBIG2Globals` by reference.
+    Entry,
+    /// A number or a flag.
+    Scalar,
+    /// `/F`: whether it names anything (true) or is null.
+    Present,
+    /// `/ColorSpace`: whether it is known to have more than one component.
+    Components,
+    /// An ICC profile: its `/N`, or null.
+    Profile,
+}
+
+/// What one redaction or Remove Hidden Information run reads, to find what shares a dictionary with
+/// what left, against [`RUN_BUDGET`]. Each object is fetched at most once a run for each way it is
+/// read, and kept only as what is read of it: a value many streams share, by reference, through a
+/// chain of them or through an entry, costs it once however many there are.
+pub(crate) struct Run {
+    budget: usize,
+    spent: usize,
+    /// What a reference leads to, as it is read, under every reference on the way.
+    reduced: HashMap<(u32, How), Rc<Object>>,
     /// What a reference leads to names, under every reference on the way, with the key of the one
     /// that names what it ends at: aliases and chains find it, and are counted as that one.
-    memo: HashMap<Key, (Rc<[u32]>, Key)>,
-    /// How many values were read rather than remembered.
+    names: HashMap<Key, (Rc<[u32]>, Key)>,
+    /// How many values were read for their names rather than remembered.
     pub(crate) read: usize,
-    /// How many objects were fetched on the way to a value.
+    /// How many objects were fetched.
     pub(crate) fetched: usize,
 }
 
-impl Names {
-    /// What `s` names, one list for each key that gives it parameters.
-    pub(crate) fn of(&mut self, doc: &Document, s: &Stream) -> Vec<Listed> {
+impl Run {
+    pub(crate) fn new(budget: usize) -> Self {
+        Run { budget, spent: 0, reduced: HashMap::new(), names: HashMap::new(), read: 0, fetched: 0 }
+    }
+
+    /// Counts `units` against the budget.
+    fn spend(&mut self, units: usize) -> Result<(), crate::RedactError> {
+        self.spent = self.spent.saturating_add(units);
+        if self.spent > self.budget { Err(crate::RedactError::SharedJbig2Budget) } else { Ok(()) }
+    }
+
+    /// Fetches the object `r` names, counted.
+    fn fetch(&mut self, doc: &Document, r: pdfcraft_cos::ObjRef) -> Result<Arc<Object>, crate::RedactError> {
+        self.spend(1)?;
+        self.fetched += 1;
+        Ok(doc.get(r))
+    }
+
+    /// What `v` leads to through references, as `followed` goes, kept as `read` makes it. Each
+    /// reference is looked up before it is fetched, and what it leads to is remembered under every
+    /// one on the way, so one remembered costs nothing more, and an alias or a chain only the
+    /// references before it. A ring, or a chain past the limit, is read as the reference it ends at.
+    fn follow(
+        &mut self,
+        doc: &Document,
+        v: &Object,
+        how: How,
+        read: impl FnOnce(&mut Self, &Document, &Object) -> Result<Object, crate::RedactError>,
+    ) -> Result<Rc<Object>, crate::RedactError> {
+        let mut keys: Vec<(u32, How)> = Vec::new();
+        let mut fetched: Option<Arc<Object>> = None;
+        for _ in 0..=MAX_HOPS {
+            let Some(r) = fetched.as_deref().unwrap_or(v).as_ref() else { break };
+            if let Some(hit) = self.reduced.get(&(r.num, how)).cloned() {
+                for k in keys {
+                    self.reduced.insert(k, hit.clone());
+                }
+                return Ok(hit);
+            }
+            keys.push((r.num, how));
+            fetched = Some(self.fetch(doc, r)?);
+        }
+        let made = Rc::new(read(self, doc, fetched.as_deref().unwrap_or(v))?);
+        for k in keys {
+            self.reduced.insert(k, made.clone());
+        }
+        Ok(made)
+    }
+
+    /// What `s` names as `/JBIG2Globals`, and each reference on the way to one: in any entry of its
+    /// parameters, whichever filter that entry belongs to and however the filters are given, one
+    /// list for each key that gives it parameters. A reader may use less of this, but leaving a
+    /// dictionary behind is the failure that matters here.
+    pub(crate) fn names_of(&mut self, doc: &Document, s: &Stream) -> Result<Vec<Listed>, crate::RedactError> {
         // `/FDecodeParms` too: those of data in another file, which a reader may draw instead.
-        [b"DecodeParms".as_slice(), b"DP", b"FDecodeParms"].into_iter().filter_map(|key| s.dict.get(key)).map(|v| self.value(doc, v, true)).collect()
+        [b"DecodeParms".as_slice(), b"DP", b"FDecodeParms"]
+            .into_iter()
+            .filter_map(|key| s.dict.get(key))
+            .map(|v| self.names_in(doc, v, true))
+            .collect()
     }
 
     /// What `v` names: one entry, or (`list`) an array of them or one.
-    fn value(&mut self, doc: &Document, v: &Object, list: bool) -> Listed {
-        // Through the references as `followed` goes, each looked up before it is fetched, so one
-        // remembered costs nothing more, and an alias or a chain only the references before it.
+    fn names_in(&mut self, doc: &Document, v: &Object, list: bool) -> Result<Listed, crate::RedactError> {
         let mut keys: Vec<Key> = Vec::new();
-        let mut held = Arc::new(v.clone());
+        let mut fetched: Option<Arc<Object>> = None;
         for _ in 0..=MAX_HOPS {
-            let Some(r) = Object::as_ref(&held) else { break };
+            let Some(r) = fetched.as_deref().unwrap_or(v).as_ref() else { break };
             let key = (r.num, list);
-            if let Some((hit, at)) = self.memo.get(&key).cloned() {
+            if let Some((hit, at)) = self.names.get(&key).cloned() {
                 for k in keys {
-                    self.memo.insert(k, (hit.clone(), at));
+                    self.names.insert(k, (hit.clone(), at));
                 }
-                return (hit, Some(at));
+                return Ok((hit, Some(at)));
             }
             keys.push(key);
-            self.fetched += 1;
-            held = doc.get(r);
+            fetched = Some(self.fetch(doc, r)?);
         }
         self.read += 1;
-        let names: Rc<[u32]> = match (&*held, list) {
+        let held = fetched.as_deref().unwrap_or(v);
+        let names: Rc<[u32]> = match (held, list) {
             (Object::Array(entries), true) => {
-                let mut all: Vec<u32> = entries.iter().flat_map(|e| self.value(doc, e, false).0.to_vec()).collect();
+                let mut all: Vec<u32> = Vec::new();
+                for e in entries {
+                    all.extend(self.names_in(doc, e, false)?.0.iter());
+                }
                 all.sort_unstable();
                 all.dedup();
                 all.into()
             }
-            (entry, _) => entry_names(doc, entry).into(),
+            (entry, _) => self.entry_names(doc, entry)?.into(),
         };
-        // Remembered when the references end at an object, under the last of them; a ring, or a
-        // chain past the limit, is read again where it is met.
-        let at = keys.last().copied().filter(|_| !matches!(*held, Object::Ref(_)));
+        // Remembered when the references end at an object, under the last of them, and counted
+        // against the budget as held; a ring, or a chain past the limit, is read again where met.
+        let at = keys.last().copied().filter(|_| !matches!(held, Object::Ref(_)));
         if let Some(at) = at {
+            self.spend(names.len())?;
             for k in keys {
-                self.memo.insert(k, (names.clone(), at));
+                self.names.insert(k, (names.clone(), at));
             }
         }
-        (names, at)
+        Ok((names, at))
     }
-}
 
-/// What one parameters entry names as `/JBIG2Globals`, and each reference on the way to it.
-fn entry_names(doc: &Document, entry: &Object) -> Vec<u32> {
-    let mut found = Vec::new();
-    let Some(mut at) = entry.as_dict().and_then(|d| d.get(b"JBIG2Globals")).and_then(Object::as_ref) else { return found };
-    for _ in 0..=MAX_HOPS {
-        found.push(at.num);
-        match &*doc.get(at) {
-            Object::Ref(next) => at = *next,
-            _ => break,
+    /// What one parameters entry names as `/JBIG2Globals`, and each reference on the way to it.
+    fn entry_names(&mut self, doc: &Document, entry: &Object) -> Result<Vec<u32>, crate::RedactError> {
+        let mut found = Vec::new();
+        let Some(mut at) = entry.as_dict().and_then(|d| d.get(b"JBIG2Globals")).and_then(Object::as_ref) else { return Ok(found) };
+        for _ in 0..=MAX_HOPS {
+            found.push(at.num);
+            match &*self.fetch(doc, at)? {
+                Object::Ref(next) => at = *next,
+                _ => break,
+            }
         }
+        Ok(found)
     }
-    found
-}
 
-/// A `/Filter` through any references, as a decoder reads it: a name, or an array of names, each
-/// entry through references too. Anything else is null, a chain longer than any decoder takes
-/// (`MAX_CHAIN`, and a `/Crypt`) included, so nothing large is copied however often the file refers
-/// to it, and a stream that names it is read as one with no filter.
-fn direct_filter(doc: &Document, v: &Object) -> Object {
-    let name = |o: &Object| if matches!(o, Object::Name(_)) { o.clone() } else { Object::Null };
-    match &*followed(doc, v) {
-        Object::Array(a) if a.len() > pdfcraft_filters::MAX_CHAIN + 1 => Object::Null,
-        Object::Array(a) => Object::Array(a.iter().map(|e| name(&followed(doc, e))).collect()),
-        other => name(other),
+    /// A size through any references: a number, or null.
+    fn number(&mut self, doc: &Document, v: &Object) -> Result<Object, crate::RedactError> {
+        let read = |_: &mut Self, _: &Document, o: &Object| Ok(if matches!(o, Object::Int(_) | Object::Real(_)) { o.clone() } else { Object::Null });
+        Ok((*self.follow(doc, v, How::Number, read)?).clone())
     }
-}
 
-/// A size through any references: a number, or null.
-fn direct_number(doc: &Document, v: &Object) -> Object {
-    match &*followed(doc, v) {
-        number @ (Object::Int(_) | Object::Real(_)) => number.clone(),
-        _ => Object::Null,
+    /// A `/Filter` through any references, as a decoder reads it: a name, or an array of names, each
+    /// entry through references too. Anything else is null, a chain longer than any decoder takes
+    /// (`MAX_CHAIN`, and a `/Crypt`) included, so a stream that names it is read as one with no
+    /// filter.
+    fn filter(&mut self, doc: &Document, v: &Object) -> Result<Object, crate::RedactError> {
+        fn name(_: &mut Run, _: &Document, o: &Object) -> Result<Object, crate::RedactError> {
+            Ok(if matches!(o, Object::Name(_)) { o.clone() } else { Object::Null })
+        }
+        let read = |run: &mut Self, doc: &Document, o: &Object| match o {
+            Object::Array(a) if a.len() > pdfcraft_filters::MAX_CHAIN + 1 => Ok(Object::Null),
+            Object::Array(a) => {
+                let mut names = Vec::with_capacity(a.len());
+                for e in a {
+                    names.push((*run.follow(doc, e, How::Name, name)?).clone());
+                }
+                Ok(Object::Array(names))
+            }
+            other => name(run, doc, other),
+        };
+        Ok((*self.follow(doc, v, How::Filter, read)?).clone())
     }
-}
 
-/// `/DecodeParms` as a reader takes them, through any references, for `filters` filters: of each
-/// entry, the numbers and flags the decoders read ([`DECODE_PARMS_KEYS`]), and `/JBIG2Globals` when it
-/// is a reference. An entry that isn't a dictionary is null. As `Document::with_direct_parms`, nothing large
-/// is copied however often the file refers to it.
-fn direct_parms(doc: &Document, v: &Object, filters: usize) -> Object {
-    let entry = |e: &Object| match &*followed(doc, e) {
-        Object::Dict(d) => {
+    /// `/DecodeParms` as a reader takes them, through any references, for `filters` filters: of each
+    /// entry, the numbers and flags the decoders read ([`DECODE_PARMS_KEYS`]), and `/JBIG2Globals` when
+    /// it is a reference (a direct value is no stream, so no decoder reads it, and it may be large).
+    /// An entry that isn't a dictionary is null, as `Document::with_direct_parms` reads them.
+    fn parms(&mut self, doc: &Document, v: &Object, filters: usize) -> Result<Object, crate::RedactError> {
+        fn scalar(_: &mut Run, _: &Document, o: &Object) -> Result<Object, crate::RedactError> {
+            Ok(if matches!(o, Object::Int(_) | Object::Real(_) | Object::Bool(_)) { o.clone() } else { Object::Null })
+        }
+        fn entry(run: &mut Run, doc: &Document, o: &Object) -> Result<Object, crate::RedactError> {
+            let Object::Dict(d) = o else { return Ok(Object::Null) };
             let mut made = Dict::new();
             for key in DECODE_PARMS_KEYS {
                 let Some(value) = d.get(key) else { continue };
-                let value = followed(doc, value);
-                if matches!(*value, Object::Int(_) | Object::Real(_) | Object::Bool(_)) {
+                let value = run.follow(doc, value, How::Scalar, scalar)?;
+                if !matches!(*value, Object::Null) {
                     made.set(key.to_vec(), (*value).clone());
                 }
             }
-            // As a reference only, as `Document::with_direct_parms` keeps it: a direct value is no
-            // stream, so no decoder reads it, and it may be large.
             if let Some(globals @ Object::Ref(_)) = d.get(b"JBIG2Globals") {
                 made.set(b"JBIG2Globals".to_vec(), globals.clone());
             }
-            Object::Dict(made)
+            Ok(Object::Dict(made))
         }
-        _ => Object::Null,
-    };
-    match &*followed(doc, v) {
-        Object::Array(a) => Object::Array(a.iter().take(filters).map(entry).collect()),
-        other => entry(other),
-    }
-}
-
-/// `s` with what `decoded_image` and `decoded_within` read as given made direct: its size, filters
-/// and their parameters.
-pub(crate) fn readable(doc: &Document, s: &Stream) -> Stream {
-    let mut readable = s.clone();
-    for key in [b"Width".as_slice(), b"Height"] {
-        if let Some(v) = s.dict.get(key) {
-            readable.dict.set(key.to_vec(), direct_number(doc, v));
-        }
-    }
-    if let Some(v) = s.dict.get(b"Filter") {
-        readable.dict.set(b"Filter".to_vec(), direct_filter(doc, v));
-    }
-    if let Some(v) = s.dict.get(b"DecodeParms") {
-        let filters = match readable.dict.get(b"Filter") {
-            Some(Object::Array(a)) => a.len(),
-            Some(Object::Name(_)) => 1,
-            _ => 0,
+        let read = move |run: &mut Self, doc: &Document, o: &Object| match o {
+            Object::Array(a) => {
+                let mut entries = Vec::new();
+                for e in a.iter().take(filters) {
+                    entries.push((*run.follow(doc, e, How::Entry, entry)?).clone());
+                }
+                Ok(Object::Array(entries))
+            }
+            other => entry(run, doc, other),
         };
-        readable.dict.set(b"DecodeParms".to_vec(), direct_parms(doc, v, filters));
+        Ok((*self.follow(doc, v, How::Parms(filters), read)?).clone())
     }
-    readable
+
+    /// Whether `s`'s data is in another file, which a reader may draw instead of what is here: a `/F`
+    /// that isn't null, through any references (a null entry is as if absent, and a reference to no
+    /// object is null, ISO 32000-2 §7.3.7 and §7.3.10). A ring of references counts as a file.
+    fn elsewhere(&mut self, doc: &Document, s: &Stream) -> Result<bool, crate::RedactError> {
+        let Some(f) = s.dict.get(b"F") else { return Ok(false) };
+        let read = |_: &mut Self, _: &Document, o: &Object| Ok(Object::Bool(!matches!(o, Object::Null)));
+        Ok(matches!(*self.follow(doc, f, How::Present, read)?, Object::Bool(true)))
+    }
+
+    /// Whether `s`'s colour space is known to have more than one component, through any references:
+    /// a JBIG2 image is drawn as one whatever its dictionary says, so such an image read as one bit
+    /// would show otherwise. An unknown colour space isn't known to have more.
+    fn several_components(&mut self, doc: &Document, s: &Stream) -> Result<bool, crate::RedactError> {
+        let Some(cs) = s.dict.get(b"ColorSpace") else { return Ok(false) };
+        fn profile(_: &mut Run, _: &Document, o: &Object) -> Result<Object, crate::RedactError> {
+            // /N lives in the ICC profile stream, and shall be 1, 3 or 4 (ISO 32000-2 §8.6.5.5).
+            let n = match o {
+                Object::Stream(icc) => icc.dict.int(b"N").filter(|n| matches!(n, 1 | 3 | 4)),
+                _ => None,
+            };
+            Ok(n.map_or(Object::Null, Object::Int))
+        }
+        let read = |run: &mut Self, doc: &Document, o: &Object| {
+            let name = match o {
+                Object::Name(n) => n.as_slice(),
+                Object::Array(a) => match a.first().and_then(Object::as_name) {
+                    Some(n) => n,
+                    None => return Ok(Object::Bool(false)),
+                },
+                _ => return Ok(Object::Bool(false)),
+            };
+            Ok(Object::Bool(match name {
+                b"DeviceRGB" | b"RGB" | b"CalRGB" | b"Lab" | b"DeviceCMYK" | b"CMYK" => true,
+                b"ICCBased" => match o.as_array().and_then(|a| a.get(1)) {
+                    Some(entry) => run.follow(doc, entry, How::Profile, profile)?.as_int().is_some_and(|n| n > 1),
+                    None => false,
+                },
+                _ => false,
+            }))
+        };
+        Ok(matches!(*self.follow(doc, cs, How::Components, read)?, Object::Bool(true)))
+    }
+
+    /// `s` with what `decoded_image` and `decoded_within` read as given made direct: its size,
+    /// filters and their parameters, each kept small, however often the file refers to a large object.
+    pub(crate) fn readable(&mut self, doc: &Document, s: &Stream) -> Result<Stream, crate::RedactError> {
+        let mut readable = s.clone();
+        for key in [b"Width".as_slice(), b"Height"] {
+            if let Some(v) = s.dict.get(key) {
+                let number = self.number(doc, v)?;
+                readable.dict.set(key.to_vec(), number);
+            }
+        }
+        if let Some(v) = s.dict.get(b"Filter") {
+            let filter = self.filter(doc, v)?;
+            readable.dict.set(b"Filter".to_vec(), filter);
+        }
+        if let Some(v) = s.dict.get(b"DecodeParms") {
+            let filters = match readable.dict.get(b"Filter") {
+                Some(Object::Array(a)) => a.len(),
+                Some(Object::Name(_)) => 1,
+                _ => 0,
+            };
+            let parms = self.parms(doc, v, filters)?;
+            readable.dict.set(b"DecodeParms".to_vec(), parms);
+        }
+        Ok(readable)
+    }
+
+    /// Counts what was decoded: a unit, and one more for each whole 4 KiB.
+    pub(crate) fn decoded(&mut self, bytes: usize) -> Result<(), crate::RedactError> {
+        self.spend(bytes / 4096 + 1)
+    }
 }
 
 /// What dictionary `num` holds, to know a copy of it by: a file put together from pages split apart
 /// has one per page, each byte for byte the others.
-fn content(doc: &Document, num: u32) -> Option<u64> {
-    let object = doc.try_get(num).ok()?;
-    let Object::Stream(s) = &*object else { return None };
-    let readable = readable(doc, s);
-    let data = doc.with_direct_parms(&readable).decoded_within(MAX_JBIG2_GLOBALS).unwrap_or_else(|_| s.raw.to_vec());
+fn content(run: &mut Run, doc: &Document, num: u32) -> Result<Option<u64>, crate::RedactError> {
+    let Ok(object) = doc.try_get(num) else { return Ok(None) };
+    let Object::Stream(s) = &*object else { return Ok(None) };
+    let readable = run.readable(doc, s)?;
+    let data = doc.with_direct_parms(&readable).decoded_within(MAX_JBIG2_GLOBALS);
     let mut hash = DefaultHasher::new();
-    data.hash(&mut hash);
-    Some(hash.finish())
+    match &data {
+        Ok(data) => {
+            run.decoded(data.len())?;
+            data.hash(&mut hash);
+        }
+        Err(_) => s.raw[..].hash(&mut hash),
+    }
+    Ok(Some(hash.finish()))
 }
 
 /// JBIG2 stream `s` stored alone, as a cleared copy is: what it shows unchanged and no dictionary
@@ -213,36 +371,65 @@ fn content(doc: &Document, num: u32) -> Option<u64> {
 /// or known to have more than one component, which JBIG2 is drawn as one of whatever the dictionary
 /// says; for one whose data is in another file (`/F`), which readers draw instead of what is here;
 /// and for one that can't be decoded.
-fn without_dictionary(doc: &Document, s: &Stream) -> Option<Stream> {
-    if crate::image::data_elsewhere(doc, s) {
-        return None;
+fn without_dictionary(run: &mut Run, doc: &Document, s: &Stream) -> Result<Option<Stream>, crate::RedactError> {
+    if run.elsewhere(doc, s)? {
+        return Ok(None);
     }
-    let readable = readable(doc, s);
+    let readable = run.readable(doc, s)?;
     let jbig2 = match readable.dict.get(b"Filter") {
         Some(Object::Array(a)) => a.iter().any(|f| f.as_name() == Some(b"JBIG2Decode".as_slice())),
         Some(f) => f.as_name() == Some(b"JBIG2Decode".as_slice()),
         None => false,
     };
-    if !jbig2 || (s.dict.contains(b"ColorSpace") && crate::image::components(doc, s).is_some_and(|n| n > 1)) {
-        return None;
+    if !jbig2 || run.several_components(doc, s)? {
+        return Ok(None);
     }
     let side = |key: &[u8]| readable.dict.int(key).and_then(|v| usize::try_from(v).ok());
-    let (w, h) = (side(b"Width")?, side(b"Height")?);
+    let (Some(w), Some(h)) = (side(b"Width"), side(b"Height")) else { return Ok(None) };
     if (w as u64).saturating_mul(h as u64) > crate::image::MAX_PIXELS {
-        return None;
+        return Ok(None);
     }
     // As for `clear`: the filters before the JBIG2 decoder may give up to three bytes for each one
     // of the raster and a byte a row.
-    let allowance = w.div_ceil(8).checked_mul(h)?.checked_add(h)?.checked_mul(3)?.checked_add(4096)?;
-    let data = doc.decoded_image_within(&readable, allowance).ok()?;
+    let Some(allowance) =
+        w.div_ceil(8).checked_mul(h).and_then(|n| n.checked_add(h)).and_then(|n| n.checked_mul(3)).and_then(|n| n.checked_add(4096))
+    else {
+        return Ok(None);
+    };
+    let Ok(data) = doc.decoded_image_within(&readable, allowance) else { return Ok(None) };
+    run.decoded(data.len())?;
     let mut dict = readable.dict.clone();
     // `/FFilter` and `/FDecodeParms` too: with no data in another file they mean nothing, but
-    // `named` reads them.
+    // `names_of` reads them.
     for key in [b"Length".as_slice(), b"DecodeParms", b"DP", b"FFilter", b"FDecodeParms"] {
         dict.remove(key);
     }
     dict.set(b"BitsPerComponent".to_vec(), Object::Int(1));
-    Some(crate::image::smallest(dict, &data, w, h, true, true))
+    Ok(Some(crate::image::smallest(dict, &data, w, h, true, true)))
+}
+
+/// Whether dictionary `n` is one that left (`left`), or a copy of one (`contents`); what each
+/// object holds is found once a run (`read`).
+fn matches_left(
+    run: &mut Run,
+    doc: &Document,
+    n: u32,
+    left: &HashSet<u32>,
+    contents: &HashSet<u64>,
+    read: &mut HashMap<u32, Option<u64>>,
+) -> Result<bool, crate::RedactError> {
+    if left.contains(&n) {
+        return Ok(true);
+    }
+    let held = match read.get(&n) {
+        Some(held) => *held,
+        None => {
+            let held = content(run, doc, n)?;
+            read.insert(n, held);
+            held
+        }
+    };
+    Ok(held.is_some_and(|c| contents.contains(&c)))
 }
 
 /// Takes the `/JBIG2Globals` dictionaries of what left the document since `before` ([`kept`]) out of
@@ -255,13 +442,16 @@ fn without_dictionary(doc: &Document, s: &Stream) -> Option<Stream> {
 /// An image another page still draws hasn't left: it keeps its pixels, so its dictionary keeps nothing
 /// more.
 ///
+/// What it reads and decodes is counted against [`RUN_BUDGET`] for the whole run.
+///
 /// Errors: [`RedactError::SharedJbig2Globals`](crate::RedactError::SharedJbig2Globals) when a dictionary would
 /// still be kept, as what names it can't be stored without it (counted) or something else refers to
-/// it (0 when that is all). Such an image may still be drawn, on a page no mark reached, so it isn't removed, and `doc` is part
-/// changed by then: a caller works on a copy it can drop.
+/// it (0 when that is all); [`RedactError::SharedJbig2Budget`](crate::RedactError::SharedJbig2Budget) when
+/// finding that would spend more than the budget. Such an image may still be drawn, on a page no mark
+/// reached, so it isn't removed, and `doc` is part changed by then: a caller works on a copy it can drop.
 pub(crate) fn unshare(doc: &mut Document, before: &HashSet<u32>) -> Result<usize, crate::RedactError> {
     let now = kept(doc);
-    let mut names = Names::default();
+    let mut run = Run::new(RUN_BUDGET);
     let mut dictionaries: HashSet<u32> = HashSet::new();
     // A list the file refers to is added once, however many streams share it.
     let mut added: HashSet<Key> = HashSet::new();
@@ -269,7 +459,7 @@ pub(crate) fn unshare(doc: &mut Document, before: &HashSet<u32>) -> Result<usize
         if let Ok(object) = doc.try_get(num)
             && let Object::Stream(s) = &*object
         {
-            for (list, key) in names.of(doc, s) {
+            for (list, key) in run.names_of(doc, s)? {
                 if key.is_none_or(|k| added.insert(k)) {
                     dictionaries.extend(list.iter());
                 }
@@ -279,7 +469,12 @@ pub(crate) fn unshare(doc: &mut Document, before: &HashSet<u32>) -> Result<usize
     if dictionaries.is_empty() {
         return Ok(0);
     }
-    let contents: HashSet<u64> = dictionaries.iter().filter_map(|n| content(doc, *n)).collect();
+    let mut contents: HashSet<u64> = HashSet::new();
+    for &n in &dictionaries {
+        if let Some(c) = content(&mut run, doc, n)? {
+            contents.insert(c);
+        }
+    }
     let mut read: HashMap<u32, Option<u64>> = HashMap::new();
     // Whether a name matches doesn't depend on order: it is a dictionary that left, or a copy of one
     // (what is added below is only ever such a copy). So what a shared list matches is found once.
@@ -292,18 +487,23 @@ pub(crate) fn unshare(doc: &mut Document, before: &HashSet<u32>) -> Result<usize
         if !now.contains(&r.num) {
             continue;
         }
-        let copy =
-            |n: &u32, read: &mut HashMap<u32, Option<u64>>| read.entry(*n).or_insert_with(|| content(doc, *n)).is_some_and(|c| contents.contains(&c));
         // Only what matched has to leave, a copy found here included. Another dictionary this also
         // names was shared with nothing that left: what else uses it may keep it, whichever comes
         // first in the file.
         let mut uses = false;
-        for (list, key) in names.of(doc, s) {
+        for (list, key) in run.names_of(doc, s)? {
             let matched = match key.and_then(|k| matches.get(&k)) {
                 Some(hit) => hit.clone(),
                 None => {
-                    let found: Rc<[u32]> = list.iter().copied().filter(|n| left.contains(n) || copy(n, &mut read)).collect();
+                    let mut found = Vec::new();
+                    for &n in list.iter() {
+                        if matches_left(&mut run, doc, n, &left, &contents, &mut read)? {
+                            found.push(n);
+                        }
+                    }
+                    let found: Rc<[u32]> = found.into();
                     if let Some(k) = key {
+                        run.spend(found.len())?;
                         matches.insert(k, found.clone());
                     }
                     found
@@ -324,7 +524,7 @@ pub(crate) fn unshare(doc: &mut Document, before: &HashSet<u32>) -> Result<usize
     for &r in &users {
         let object = doc.get(r);
         let Object::Stream(s) = &*object else { continue };
-        match without_dictionary(doc, s) {
+        match without_dictionary(&mut run, doc, s)? {
             Some(stored) => {
                 doc.set(r, Object::Stream(stored));
                 stored_again += 1;

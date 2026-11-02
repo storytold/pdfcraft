@@ -1575,6 +1575,8 @@ fn what_stays_is_stored_without_the_dictionary_however_it_names_it() {
             vec![b"11 0 R".to_vec(), b"/JBIG2Decode".to_vec()],
         ),
         (image.replace("/ColorSpace /DeviceGray", "/ColorSpace 10 0 R"), scan.page.clone(), vec![b"11 0 R".to_vec(), b"/DeviceGray".to_vec()]),
+        // An ICC profile of one component is one.
+        (format!("{} /ColorSpace [/ICCBased 10 0 R]", image.replace("/ColorSpace /DeviceGray ", "")), scan.page.clone(), vec![stream("/N 1", b"")]),
     ] {
         let mut doc = SharedPages { other: other.clone(), other_data: data, extra, ..SharedPages::new(&scan) }.build(&scan);
         mark(&mut doc, 0, &[CLEARS], "");
@@ -1672,6 +1674,7 @@ fn a_shared_jbig2_dictionary_that_cant_leave_refuses_the_redaction() {
     for (other, data, extra) in [
         (image.replace("/Height 40", "/Height 41"), scan.page.clone(), vec![]),
         (image.replace("/DeviceGray", "/DeviceRGB"), scan.page.clone(), vec![]),
+        (image.replace("/DeviceGray", "/DeviceCMYK"), scan.page.clone(), vec![]),
         (image.replace("/ColorSpace /DeviceGray", "/ColorSpace 10 0 R"), scan.page.clone(), vec![b"11 0 R".to_vec(), b"/DeviceRGB".to_vec()]),
         (
             format!("{image} /ColorSpace [/ICCBased 10 0 R]").replace("/ColorSpace /DeviceGray ", ""),
@@ -1818,7 +1821,7 @@ fn what_is_made_direct_is_small_however_often_a_large_object_is_named() {
         stream(&format!("/Filter [{}]", "/FlateDecode ".repeat(9)), b""),
     ]);
     let Object::Stream(s) = &*doc.get(ObjRef::new(5, 0)) else { panic!("object 5 is the stream") };
-    let made = crate::globals::readable(&doc, s);
+    let made = crate::globals::Run::new(crate::globals::RUN_BUDGET).readable(&doc, s).unwrap();
     let mut bytes = Vec::new();
     pdfcraft_cos::serialize(&Object::Dict(made.dict.clone()), &mut bytes);
     assert!(bytes.len() < 4096, "{} bytes made direct", bytes.len());
@@ -1827,12 +1830,12 @@ fn what_is_made_direct_is_small_however_often_a_large_object_is_named() {
     assert_eq!(parms.len(), 3, "an entry for each filter");
     assert!(parms[1].as_dict().is_some_and(|d| !d.contains(b"JBIG2Globals")), "{:?}", parms[1]);
     let Object::Stream(s) = &*doc.get(ObjRef::new(7, 0)) else { panic!("object 7 is the stream") };
-    let made = crate::globals::readable(&doc, s);
+    let made = crate::globals::Run::new(crate::globals::RUN_BUDGET).readable(&doc, s).unwrap();
     assert_eq!(made.dict.get(b"Filter"), Some(&Object::Null));
     assert_eq!(made.dict.get(b"DecodeParms").and_then(Object::as_array).map(Vec::len), Some(0));
     // Eight filters and a `/Crypt` are as many as a decoder takes: those are read.
     let Object::Stream(s) = &*doc.get(ObjRef::new(8, 0)) else { panic!("object 8 is the stream") };
-    let made = crate::globals::readable(&doc, s);
+    let made = crate::globals::Run::new(crate::globals::RUN_BUDGET).readable(&doc, s).unwrap();
     assert_eq!(made.dict.get(b"Filter").and_then(Object::as_array).map(Vec::len), Some(9));
 }
 
@@ -1854,15 +1857,55 @@ fn a_shared_parameters_array_is_read_once_however_many_streams_share_it() {
     objects.extend((5..54).map(|n| stream(&format!("/Filter /JBIG2Decode /DecodeParms {n} 0 R"), b"")));
     objects.push(stream("/Filter /JBIG2Decode /DecodeParms 55 0 R", b""));
     let doc = pdf(objects);
-    let mut names = crate::globals::Names::default();
+    let mut run = crate::globals::Run::new(crate::globals::RUN_BUDGET);
     for n in 56..156 {
         let Object::Stream(s) = &*doc.get(ObjRef::new(n, 0)) else { panic!("object {n} is a stream") };
-        let lists = names.of(&doc, s);
+        let lists = run.names_of(&doc, s).unwrap();
         assert_eq!(lists.iter().map(|(list, _)| list.to_vec()).collect::<Vec<_>>(), [vec![3]]);
     }
-    assert_eq!(names.read, 2);
-    // Each object once: the array, its entry, each of the 49 objects that refer to it, and 55.
-    assert_eq!(names.fetched, 52);
+    assert_eq!(run.read, 2);
+    // Each object once: the array, its entry, the dictionary it names, each of the 49 objects that
+    // refer to the array, and 55.
+    assert_eq!(run.fetched, 53);
+    // A run whose budget that is past is refused.
+    let mut run = crate::globals::Run::new(20);
+    let refused = (56..156).try_for_each(|n| {
+        let Object::Stream(s) = &*doc.get(ObjRef::new(n, 0)) else { panic!("object {n} is a stream") };
+        run.names_of(&doc, s).map(|_| ())
+    });
+    assert_eq!(refused, Err(RedactError::SharedJbig2Budget));
+}
+
+/// A run's budget is spent to the unit: a run may spend all of it, and is refused past it. What is
+/// decoded spends a unit, and one more for each whole 4 KiB.
+#[test]
+fn a_runs_budget_is_spent_to_the_unit() {
+    let mut run = crate::globals::Run::new(10);
+    assert_eq!(run.decoded(4095), Ok(()));
+    assert_eq!(run.decoded(8 * 4096), Ok(()));
+    assert_eq!(run.decoded(0), Err(RedactError::SharedJbig2Budget));
+}
+
+/// What a stream's size, filters and parameters lead to is fetched once a run, however many streams
+/// share them by reference: fifty images naming the same objects fetch each once for each way it is
+/// read.
+#[test]
+fn what_streams_share_is_fetched_once_a_run() {
+    let mut objects =
+        vec![b"<< /Type /Catalog >>".to_vec(), b"/FlateDecode".to_vec(), b"<< /Predictor 4 0 R /Columns 4 0 R >>".to_vec(), b"1".to_vec()];
+    objects.extend(
+        (0..50).map(|_| stream("/Width 4 0 R /Height 4 0 R /Filter [2 0 R 2 0 R] /DecodeParms [3 0 R 3 0 R] /ColorSpace 2 0 R /F 4 0 R", b"")),
+    );
+    let doc = pdf(objects);
+    let mut run = crate::globals::Run::new(crate::globals::RUN_BUDGET);
+    for n in 5..55 {
+        let Object::Stream(s) = &*doc.get(ObjRef::new(n, 0)) else { panic!("object {n} is a stream") };
+        let made = run.readable(&doc, s).unwrap();
+        assert_eq!(made.dict.get(b"Width"), Some(&Object::Int(1)));
+        assert_eq!(made.dict.get(b"Filter").and_then(Object::as_array).map(Vec::len), Some(2));
+    }
+    // Object 4 as a size and as a parameter, 2 as a filter, 3 as an entry.
+    assert_eq!(run.fetched, 4);
 }
 
 /// A copy of the dictionary stored with a predictor is found whatever way its parameters are given,
