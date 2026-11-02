@@ -17,6 +17,8 @@ lopdf = { workspace = true }
 kurbo = { workspace = true }
 thiserror = { workspace = true }
 log = { workspace = true }
+# The reading-colours setting is persisted with the app state and echoed by the automation tool.
+serde = { workspace = true }
 # Reads rendered pixel words as bytes; already in the tree through hayro.
 bytemuck = { version = "1" }
 

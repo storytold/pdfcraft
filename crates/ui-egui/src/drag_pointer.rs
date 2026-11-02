@@ -19,7 +19,22 @@ pub(crate) fn in_window(ctx: &egui::Context) -> Option<egui::Pos2> {
     (pos.x.is_finite() && pos.y.is_finite()).then_some(pos)
 }
 
-#[cfg(not(target_os = "macos"))]
+/// The pointer in this window's coordinates (egui points), when the system can tell.
+#[cfg(windows)]
+pub(crate) fn in_window(ctx: &egui::Context) -> Option<egui::Pos2> {
+    // Physical screen pixels, whatever this thread's DPI awareness.
+    let pointer = winsafe::GetPhysicalCursorPos().ok()?;
+    let inner = ctx.input(|i| i.viewport().inner_rect)?;
+    // egui places the window in points: physical pixels over the pixels per point (zoom included).
+    let ppp = ctx.pixels_per_point();
+    if !(ppp.is_finite() && ppp > 0.0) {
+        return None;
+    }
+    let pos = egui::pos2(pointer.x as f32 / ppp - inner.min.x, pointer.y as f32 / ppp - inner.min.y);
+    (pos.x.is_finite() && pos.y.is_finite()).then_some(pos)
+}
+
+#[cfg(not(any(target_os = "macos", windows)))]
 pub(crate) fn in_window(_ctx: &egui::Context) -> Option<egui::Pos2> {
     None
 }

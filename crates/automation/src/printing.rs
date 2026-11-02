@@ -12,7 +12,16 @@ fn bad(m: impl Into<String>) -> ToolError {
 
 impl Automation {
     pub(crate) fn printers(&self) -> Result<Value> {
-        let list: Vec<Value> = spool::printers().into_iter().map(|p| json!({ "name": p.name, "default": p.default })).collect();
+        let list: Vec<Value> = spool::printers()
+            .into_iter()
+            .map(|p| {
+                let mut v = json!({ "name": p.name, "default": p.default });
+                if let Some(two_sided) = p.two_sided {
+                    v["two_sided"] = json!(two_sided);
+                }
+                v
+            })
+            .collect();
         Ok(json!({ "count": list.len(), "printers": list }))
     }
 
@@ -56,9 +65,10 @@ impl Automation {
                     o => return Err(bad(format!("unknown order {o:?}"))),
                 };
                 match Layout::multiple(per) {
-                    Layout::Multiple { cols, rows, .. } => Layout::Multiple {
+                    Layout::Multiple { cols, rows, per_sheet, .. } => Layout::Multiple {
                         cols,
                         rows,
+                        per_sheet,
                         order,
                         border: a.opt_bool("border")?.unwrap_or(false),
                         auto_rotate: a.opt_bool("auto_rotate")?.unwrap_or(true),
@@ -105,11 +115,28 @@ impl Automation {
             None => PAPERS[0].1,
             Some(p) => PAPERS
                 .iter()
-                .find(|(n, _)| n.eq_ignore_ascii_case(p) || n.replace("US ", "").eq_ignore_ascii_case(p))
+                .find(|(n, _)| {
+                    n.eq_ignore_ascii_case(p)
+                        || n.replace("US ", "").eq_ignore_ascii_case(p)
+                        || n.split(" (").next().is_some_and(|name| name.eq_ignore_ascii_case(p))
+                })
                 .map(|x| x.1)
-                .ok_or_else(|| bad(format!("unknown paper {p:?} (Letter, Legal, Tabloid, A3, A4, A5)")))?,
+                .ok_or_else(|| {
+                    bad(format!("unknown paper {p:?}; choose one of {}", PAPERS.iter().map(|(name, _)| *name).collect::<Vec<_>>().join(", ")))
+                })?,
         };
-        let settings = print::Settings { pages, paper, orientation, layout, content };
+        // Print as image (Acrobat's Advanced Print Setup): pictures at `dpi`, grey when
+        // `grayscale` is also asked for.
+        let raster = if a.opt_bool("as_image")?.unwrap_or(false) {
+            let dpi = a.opt_num("dpi")?.unwrap_or(300.0);
+            if !(72.0..=600.0).contains(&dpi) {
+                return Err(bad("dpi must be between 72 and 600"));
+            }
+            Some(print::Raster { dpi, grayscale: a.opt_bool("grayscale")?.unwrap_or(false) })
+        } else {
+            None
+        };
+        let settings = print::Settings { pages, paper, orientation, layout, content, raster, crops: Vec::new() };
         let sizes: Vec<(f64, f64)> = self.doc(a)?.info.pages.iter().map(|p| (p.width as f64, p.height as f64)).collect();
         let sheets = print::layout(&sizes, &settings).map_err(|e| bad(e.to_string()))?.len();
         let bytes = self.session.print_pdf(id, &settings).map_err(failed)?;
@@ -126,12 +153,13 @@ impl Automation {
                     printer: if printer == "default" { None } else { Some(printer.to_string()) },
                     copies: a.opt_int("copies")?.unwrap_or(1).clamp(1, 999) as u32,
                     collate: a.opt_bool("collate")?.unwrap_or(true),
-                    duplex: match a.opt_str("duplex")?.unwrap_or("off") {
+                    duplex: Some(match a.opt_str("duplex")?.unwrap_or("off") {
                         "off" => spool::Duplex::Off,
                         "long-edge" => spool::Duplex::LongEdge,
                         "short-edge" => spool::Duplex::ShortEdge,
                         d => return Err(bad(format!("unknown duplex {d:?}"))),
-                    },
+                    }),
+                    scaling: spool::Scaling::Exact,
                     grayscale: a.opt_bool("grayscale")?.unwrap_or(false),
                     title: name,
                     options: match a.get("options") {

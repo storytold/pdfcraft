@@ -186,6 +186,48 @@ fn new_digital_ids_are_self_signed_and_survive_a_p12_round_trip() {
 }
 
 #[test]
+fn new_digital_ids_use_the_stronger_round_count_for_the_key_and_the_mac() {
+    let name = Name::build("Grace Hopper", "", "", "", "");
+    let now = Time { year: 2026, month: 10, day: 14, hour: 12, minute: 0, second: 0 };
+    let key = pdfcraft_sign::PrivateKey::generate_p256().unwrap();
+    let certificate = Certificate::self_signed(&name, &key, now, 5, &[0x42]).unwrap();
+    let id = pkcs12::DigitalId { key, certificate, chain: Vec::new(), friendly_name: None };
+    let p12 = pkcs12::write(&id, "s3cret12").unwrap();
+    // OWASP's figure for PBKDF2-HMAC-SHA-256, spelled out so lowering the constant fails here.
+    const ROUNDS: u64 = 600_000;
+    // MacData's iteration count, the last field of the file.
+    let pfx = Tlv::parse_all(&p12).unwrap().children().unwrap();
+    let mac = pfx[2].children().unwrap();
+    assert_eq!(mac[2].u64().unwrap(), ROUNDS);
+    // The same INTEGER three times: the MAC and the PBKDF2 parameters of both encrypted parts.
+    let rounds = pdfcraft_sign::der::int(ROUNDS);
+    assert_eq!(p12.windows(rounds.len()).filter(|w| *w == rounds.as_slice()).count(), 3);
+    assert_eq!(pkcs12::open(&p12, "s3cret12").unwrap().certificate, id.certificate);
+}
+
+/// A `.p12` whose MAC asks for `rounds` iterations. Its content is empty: opening it must stop
+/// at the MAC, before the content is read.
+fn p12_with_mac_rounds(rounds: u64) -> Vec<u8> {
+    use pdfcraft_sign::der;
+    let auth_safe = der::seq(&[]);
+    let digest = der::seq(&[&DigestAlg::Sha256.algorithm(), &der::octets(&[0; 32])]);
+    let mac_data = der::seq(&[&digest, &der::octets(&[1; 16]), &der::int(rounds)]);
+    der::seq(&[&der::int(3), &der::seq(&[&der::oid("1.2.840.113549.1.7.1"), &der::explicit(0, &der::octets(&auth_safe))]), &mac_data])
+}
+
+#[test]
+fn a_p12_asking_for_too_many_rounds_is_refused_before_hashing() {
+    // 2^32 + 1 used to wrap to one round; 20 million took seconds and 4 billion about an hour,
+    // all spent on the password check (#1847).
+    for rounds in [(1u64 << 32) + 1, 20_000_000, 4_000_000_000] {
+        let err = pkcs12::open(&p12_with_mac_rounds(rounds), "password").expect_err("refused");
+        assert!(matches!(err, SignError::Unsupported(_)), "{rounds}: {err}");
+    }
+    // An ordinary count still gets as far as the password.
+    assert!(matches!(pkcs12::open(&p12_with_mac_rounds(2048), "password"), Err(SignError::WrongPassword)));
+}
+
+#[test]
 fn certificates_load_from_pem_and_der_and_export_as_pem() {
     let pem_text = data("rsa.crt.pem");
     let certs = pdfcraft_sign::x509::load_certificates(&pem_text).unwrap();

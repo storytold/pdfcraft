@@ -11,9 +11,10 @@
 
 use egui::{MouseWheelUnit, TouchPhase};
 
-/// How far one wheel notch scrolls, in points (egui's native `line_scroll_speed`). Smooth
-/// input turns a page once it has moved this far, so a light swipe turns and resting fingers
-/// don't; smooth line deltas count this many points per line.
+/// One wheel notch, in points (egui's default desktop `line_scroll_speed`, fixed so paging
+/// doesn't change with the scroll speed preference). Smooth input turns a page once it has
+/// moved this far, so a light swipe turns and resting fingers don't; smooth line deltas count
+/// this many points per line.
 const NOTCH_POINTS: f32 = 40.0;
 /// A phase-less point delta at least this big is a wheel notch: egui draws the same line
 /// between wheel steps, which it smooths, and trackpad input, which it passes through.
@@ -52,12 +53,16 @@ pub(crate) struct WheelPager {
     last_event: f64,
     /// egui time of the last smooth (non-notch) motion.
     last_smooth: f64,
+    /// The current smooth gesture already panned the page (edge paging only): it must end
+    /// before it can turn, so momentum that carries the view to the page's edge doesn't go on
+    /// to turn the page.
+    panned: bool,
 }
 
 impl Default for WheelPager {
     fn default() -> Self {
         // Infinitely long ago, so the first event never looks like part of a stream.
-        Self { accum: 0.0, turned: None, touch: None, finger_up: None, last_event: f64::NEG_INFINITY, last_smooth: f64::NEG_INFINITY }
+        Self { accum: 0.0, turned: None, touch: None, finger_up: None, last_event: f64::NEG_INFINITY, last_smooth: f64::NEG_INFINITY, panned: false }
     }
 }
 
@@ -68,10 +73,27 @@ impl WheelPager {
         self.accum = 0.0;
     }
 
+    /// Whether the current gesture already turned a page: the rest of it must not pan the page
+    /// just shown away from its top (or bottom).
+    pub(crate) fn gesture_turned(&self) -> bool {
+        self.turned.is_some()
+    }
+
     /// Feed one `Event::MouseWheel`: `dy` is its vertical delta (negative scrolls forward) and
     /// `now` is egui time. With `can_turn` false (the page doesn't fit, a dialog is open…) the
     /// gesture is followed but never turns. Returns the way to turn (`true` = forward).
     pub(crate) fn feed(&mut self, unit: MouseWheelUnit, dy: f32, phase: TouchPhase, now: f64, can_turn: bool) -> Option<bool> {
+        self.feed_inner(unit, dy, phase, now, can_turn, false)
+    }
+
+    /// Like [`Self::feed`], for a page taller than the window, where `can_turn` means the view
+    /// is at the edge the motion pushes against. A smooth gesture that panned the page first
+    /// doesn't turn it: the user lifts and swipes again (a wheel notch still turns at once).
+    pub(crate) fn feed_edge(&mut self, unit: MouseWheelUnit, dy: f32, phase: TouchPhase, now: f64, can_turn: bool) -> Option<bool> {
+        self.feed_inner(unit, dy, phase, now, can_turn, true)
+    }
+
+    fn feed_inner(&mut self, unit: MouseWheelUnit, dy: f32, phase: TouchPhase, now: f64, can_turn: bool, edge: bool) -> Option<bool> {
         if !now.is_finite() {
             return None;
         }
@@ -95,16 +117,17 @@ impl WheelPager {
                 self.touch = None;
                 None
             }
-            TouchPhase::Move => self.motion(unit, dy, now, idle, can_turn),
+            TouchPhase::Move => self.motion(unit, dy, now, idle, can_turn, edge),
         }
     }
 
     fn new_gesture(&mut self) {
         self.accum = 0.0;
         self.turned = None;
+        self.panned = false;
     }
 
-    fn motion(&mut self, unit: MouseWheelUnit, dy: f32, now: f64, idle: f64, can_turn: bool) -> Option<bool> {
+    fn motion(&mut self, unit: MouseWheelUnit, dy: f32, now: f64, idle: f64, can_turn: bool, edge: bool) -> Option<bool> {
         if !dy.is_finite() || dy == 0.0 {
             return None;
         }
@@ -135,6 +158,10 @@ impl WheelPager {
         if !can_turn {
             // Panning a page that doesn't fit: that motion must not count toward a turn later.
             self.accum = 0.0;
+            self.panned |= edge;
+            return None;
+        }
+        if self.panned {
             return None;
         }
         if self.turned == Some(forward) {
@@ -277,6 +304,23 @@ mod tests {
         assert!(turns(&mut p, &[(Point, 0.0, Start, 1.0)]).is_empty());
         // Seconds later a wheel notch is a notch again, not part of that touch.
         assert_eq!(turns(&mut p, &[(Line, -1.0, Move, 3.0)]), [true]);
+    }
+
+    #[test]
+    fn edge_paging_needs_a_gesture_that_did_not_pan() {
+        let mut p = WheelPager::default();
+        // A swipe that pans first (not at the edge yet), then reaches it: no turn, momentum included.
+        let mut n = 0;
+        for (unit, dy, phase, at) in swipe(1.0, -25.0) {
+            n += usize::from(p.feed_edge(unit, dy, phase, at, at > 1.2).is_some());
+        }
+        assert_eq!(n, 0);
+        // A fresh swipe that starts at the edge turns once.
+        let turned: Vec<_> = swipe(3.0, -25.0).into_iter().filter_map(|(u, dy, ph, at)| p.feed_edge(u, dy, ph, at, true)).collect();
+        assert_eq!(turned, [true]);
+        // A wheel notch at the edge turns at once, even right after panning.
+        assert_eq!(p.feed_edge(Line, -1.0, Move, 5.0, false), None);
+        assert_eq!(p.feed_edge(Line, -1.0, Move, 5.3, true), Some(true));
     }
 
     #[test]

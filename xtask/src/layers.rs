@@ -55,6 +55,7 @@ pub const TABLE: &[(&str, Class)] = &[
     ("organize", Class::Layer(4)),
     ("security", Class::Layer(4)),
     ("redact", Class::Layer(4)),
+    ("audit", Class::Layer(4)),
     ("xfdf", Class::Layer(4)),
     ("sign", Class::Layer(4)),
     ("ocr", Class::Layer(4)),
@@ -96,6 +97,7 @@ pub const STANDALONE_DEPS: &[(&str, &[&str])] = &[("cos", &["filters", "crypt", 
 /// Allowed same-layer edges (architecture §3 rule 1). `forms → js` is deliberately absent.
 pub const SIDEWAYS: &[(&str, &str)] = &[
     ("redact", "edit"),
+    ("audit", "edit"),
     ("a11y", "preflight"),
     ("prepress", "preflight"),
     ("export", "ocr"),
@@ -196,11 +198,17 @@ pub fn check(crates: &[Crate]) -> Vec<Violation> {
                 continue;
             }
             if d.workspace {
-                if matches!(class, Class::Standalone(_)) && !standalone_allowed(&c.name, &d.name) {
+                let dep_class = classify(&d.name);
+                // Test support is a dev-dependency only (`Class::Testkit`) and so never reaches
+                // the product graph a standalone crate publishes. Checking it against the
+                // standalone allow-list would stop `cos` using the shared oracles in its own
+                // tests, which is the one thing those crates exist for.
+                let testkit_dev = dep_class == Some(Class::Testkit) && d.kind == DepKind::Dev;
+                if matches!(class, Class::Standalone(_)) && !testkit_dev && !standalone_allowed(&c.name, &d.name) {
                     out.push(Violation::StandaloneHasWorkspaceDep { krate: c.name.clone(), dep: d.name.clone() });
                     continue;
                 }
-                match classify(&d.name) {
+                match dep_class {
                     None => {}
                     Some(Class::Testkit) if d.kind != DepKind::Dev && class != Class::Testkit => {
                         out.push(Violation::TestkitAsNormalDep { krate: c.name.clone(), dep: d.name.clone() });
@@ -320,6 +328,17 @@ mod tests {
         assert!(check(&[c("pdfcraft-render", &[("pdfcraft-oracle", Dev, true)])]).is_empty());
         let v = check(&[c("pdfcraft-render", &[("pdfcraft-oracle", Normal, true)])]);
         assert!(matches!(v[..], [Violation::TestkitAsNormalDep { .. }]));
+
+        // A standalone crate may use test support in its own tests: a dev-dependency is not part
+        // of the graph the standalone rule protects. `cos` is where the qpdf oracle is needed.
+        assert!(check(&[c("pdfcraft-cos", &[("pdfcraft-oracle", Dev, true)])]).is_empty());
+        assert!(check(&[c("pdfcraft-geom", &[("pdfcraft-testkit", Dev, true)])]).is_empty());
+        // ...but only as a dev-dependency, and only for test support. Product crates are still
+        // off-limits to a standalone crate however they are depended on.
+        let v = check(&[c("pdfcraft-cos", &[("pdfcraft-oracle", Normal, true)])]);
+        assert!(matches!(v[..], [Violation::StandaloneHasWorkspaceDep { .. }]), "{v:?}");
+        let v = check(&[c("pdfcraft-cos", &[("pdfcraft-model", Dev, true)])]);
+        assert!(matches!(v[..], [Violation::StandaloneHasWorkspaceDep { .. }]), "{v:?}");
     }
 
     #[test]

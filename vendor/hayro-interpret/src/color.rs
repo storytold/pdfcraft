@@ -11,7 +11,7 @@ use hayro_syntax::object::Stream;
 use hayro_syntax::object::dict::keys::*;
 use moxcms::{
     ColorProfile, DataColorSpace, Layout, Transform8BitExecutor, TransformF32Executor,
-    TransformOptions, Xyzd,
+    TransformOptions,
 };
 use smallvec::{SmallVec, ToSmallVec, smallvec};
 use std::borrow::Cow;
@@ -21,6 +21,25 @@ use std::sync::{Arc, LazyLock, OnceLock};
 
 /// A storage for the components of colors.
 pub type ColorComponents = SmallVec<[f32; 4]>;
+
+std::thread_local! {
+    // PdfCraft patch (34): see `tint_transform_runs`.
+    static TINT_TRANSFORM_RUNS: core::cell::Cell<u64> = const { core::cell::Cell::new(0) };
+}
+
+/// PdfCraft patch (34): how many colours this thread has run through a Separation or DeviceN
+/// tint transform, for diagnostics and tests. An image converted through patch (28)'s lookup
+/// table runs it once per possible sample value, not once per pixel. Per thread, so a caller
+/// counting its own render is not disturbed by renders on other threads.
+pub fn tint_transform_runs() -> u64 {
+    TINT_TRANSFORM_RUNS.with(core::cell::Cell::get)
+}
+
+/// PdfCraft patch (34): count `colours` runs of a tint transform (called once per batch).
+fn count_tint_transform_runs(colours: usize) {
+    let colours = u64::try_from(colours).unwrap_or(u64::MAX);
+    TINT_TRANSFORM_RUNS.with(|runs| runs.set(runs.get().saturating_add(colours)));
+}
 
 /// An RGB color with an alpha channel.
 #[derive(Debug, Copy, Clone)]
@@ -601,11 +620,7 @@ impl CalRgb {
         Self::matrix_product(&Self::BRADFORD_SCALE_INVERSE_MATRIX, &lms_flat)
     }
 
-    fn normalize_white_point_to_d65(
-        &self,
-        source_white_point: &[f32; 3],
-        xyz: &[f32; 3],
-    ) -> [f32; 3] {
+    fn normalize_white_point_to_d65(source_white_point: &[f32; 3], xyz: &[f32; 3]) -> [f32; 3] {
         let lms = Self::matrix_product(&Self::BRADFORD_SCALE_MATRIX, xyz);
         let lms_d65 = Self::to_d65(source_white_point, &lms);
         Self::matrix_product(&Self::BRADFORD_SCALE_INVERSE_MATRIX, &lms_d65)
@@ -637,7 +652,7 @@ impl ToRgb for CalRgb {
 
             let xyz_flat = self.normalize_white_point_to_flat(&self.white_point, &xyz);
             let xyz_black = Self::compensate_black_point(&self.black_point, &xyz_flat);
-            let xyz_d65 = self.normalize_white_point_to_d65(&Self::FLAT_WHITEPOINT, &xyz_black);
+            let xyz_d65 = Self::normalize_white_point_to_d65(&Self::FLAT_WHITEPOINT, &xyz_black);
             let srgb_xyz = Self::matrix_product(&Self::SRGB_D65_XYZ_TO_RGB_MATRIX, &xyz_d65);
 
             output.copy_from_slice(&[
@@ -654,58 +669,114 @@ impl ToRgb for CalRgb {
 #[derive(Debug, Clone)]
 pub(crate) struct Lab {
     range: [f32; 4],
-    profile: ICCProfile,
+    white_point: [f32; 3],
 }
 
 impl Lab {
     fn new(dict: &Dict<'_>) -> Option<Self> {
         let white_point = dict.get::<[f32; 3]>(WHITE_POINT).unwrap_or([1.0, 1.0, 1.0]);
-        // Not sure how this should be used.
-        let _black_point = dict.get::<[f32; 3]>(BLACK_POINT).unwrap_or([0.0, 0.0, 0.0]);
         let range = dict
             .get::<[f32; 4]>(RANGE)
             .unwrap_or([-100.0, 100.0, -100.0, 100.0]);
 
-        let mut profile = ColorProfile::new_from_slice(include_bytes!("../assets/LAB.icc")).ok()?;
-        profile.white_point = Xyzd::new(
-            white_point[0] as f64,
-            white_point[1] as f64,
-            white_point[2] as f64,
-        );
+        Some(Self { range, white_point })
+    }
 
-        let profile = ICCProfile::new_from_src_profile(
-            profile, false,
-            // This flag is only used to scale the values to [0.0, 1.0], but
-            // we already take care of this in the `convert_f32` method.
-            // Therefore, leave this as false, even though this is a LAB profile.
-            false, 3,
-        )?;
+    /// The white point the space's L\*a\*b\* values are relative to (ISO 32000-2
+    /// §8.6.5.4). A missing or degenerate entry falls back to a flat white point
+    /// so hostile input cannot break the conversion.
+    fn usable_white_point(&self) -> [f32; 3] {
+        let white_point = self.white_point;
+        if white_point
+            .iter()
+            .all(|component| component.is_finite() && *component > 0.0)
+        {
+            white_point
+        } else {
+            [1.0, 1.0, 1.0]
+        }
+    }
 
-        Some(Self { range, profile })
+    /// Bradford adaptation scales cone responses, so both white points must
+    /// be expressed in LMS before taking their ratios. CalRGB's separate
+    /// flat-white/black-point pipeline retains its existing normalization.
+    fn adapt_to_d65(white_point: &[f32; 3], xyz: &[f32; 3]) -> [f32; 3] {
+        let source_lms = CalRgb::matrix_product(&CalRgb::BRADFORD_SCALE_MATRIX, white_point);
+        // A malformed but positive XYZ white can still yield a zero or
+        // overflowing cone response. Leave it unadapted rather than divide by
+        // zero or propagate a non-finite scale.
+        if source_lms.iter().any(|v| !v.is_finite() || v.abs() <= f32::EPSILON) {
+            return *xyz;
+        }
+        let destination_lms = CalRgb::matrix_product(&CalRgb::BRADFORD_SCALE_MATRIX, &CalRgb::D65_WHITEPOINT);
+        let lms = CalRgb::matrix_product(&CalRgb::BRADFORD_SCALE_MATRIX, xyz);
+        let adapted = [
+            lms[0] * destination_lms[0] / source_lms[0],
+            lms[1] * destination_lms[1] / source_lms[1],
+            lms[2] * destination_lms[2] / source_lms[2],
+        ];
+        CalRgb::matrix_product(&CalRgb::BRADFORD_SCALE_INVERSE_MATRIX, &adapted)
+    }
+
+    /// Inverse of the CIE f(t) helper that maps relative fX/fY/fZ to absolute
+    /// XYZ as a ratio of the white point.
+    fn inverse_lab_f(t: f32) -> f32 {
+        const DELTA: f32 = 6.0 / 29.0;
+        if t > DELTA {
+            t * t * t
+        } else {
+            3.0 * DELTA * DELTA * (t - 4.0 / 29.0)
+        }
     }
 }
 
 impl ToRgb for Lab {
     fn convert_f32(&self, input: &[f32], output: &mut [u8], manual_scale: bool) -> Option<()> {
-        if !manual_scale {
-            // moxcms expects values between 0.0 and 1.0, so we need to undo
-            // the scaling.
+        let [min_a, max_a, min_b, max_b] = self.range;
+        let white_point = self.usable_white_point();
+        let [xw, yw, zw] = white_point;
 
-            let input = input
-                .chunks_exact(3)
-                .flat_map(|i| {
-                    let l = i[0] / 100.0;
-                    let a = (i[1] + 128.0) / 255.0;
-                    let b = (i[2] + 128.0) / 255.0;
+        for (input, output) in input.chunks_exact(3).zip(output.chunks_exact_mut(3)) {
+            // PdfCraft patch: `manual_scale` means the components arrive
+            // normalised to [0, 1] (an `/Indexed` palette over Lab looks its
+            // bytes up as `byte / 255`). Map them linearly onto L* 0..100 and
+            // the a*/b* /Range (ISO 32000-2 §8.6.6.3) before converting.
+            let (l, a, b) = if manual_scale {
+                (
+                    clamp_component(input[0], 0.0, 1.0) * 100.0,
+                    min_a + clamp_component(input[1], 0.0, 1.0) * (max_a - min_a),
+                    min_b + clamp_component(input[2], 0.0, 1.0) * (max_b - min_b),
+                )
+            } else {
+                (input[0], input[1], input[2])
+            };
+            let l = clamp_component(l, 0.0, 100.0);
+            let a = clamp_component(a, min_a, max_a);
+            let b = clamp_component(b, min_b, max_b);
 
-                    [l, a, b]
-                })
-                .collect::<Vec<_>>();
+            // L*a*b* is relative to the space's own /WhitePoint. Map it to XYZ
+            // in that white's coordinates, Bradford-adapt to D65 and convert to
+            // sRGB (ISO 32000-2 §8.6.5.4).
+            let fy = (l + 16.0) / 116.0;
+            let fx = fy + a / 500.0;
+            let fz = fy - b / 200.0;
+            let xyz = [
+                xw * Self::inverse_lab_f(fx),
+                yw * Self::inverse_lab_f(fy),
+                zw * Self::inverse_lab_f(fz),
+            ];
 
-            self.profile.convert_f32(&input, output, manual_scale)
-        } else {
-            self.profile.convert_f32(input, output, manual_scale)
+            let xyz_d65 = Self::adapt_to_d65(&white_point, &xyz);
+            let srgb = CalRgb::matrix_product(&CalRgb::SRGB_D65_XYZ_TO_RGB_MATRIX, &xyz_d65);
+
+            output.copy_from_slice(&[
+                f32_to_u8(CalRgb::srgb_transfer_function(srgb[0])),
+                f32_to_u8(CalRgb::srgb_transfer_function(srgb[1])),
+                f32_to_u8(CalRgb::srgb_transfer_function(srgb[2])),
+            ]);
         }
+
+        Some(())
     }
 }
 
@@ -805,6 +876,7 @@ impl Separation {
 
 impl ToRgb for Separation {
     fn convert_f32(&self, input: &[f32], output: &mut [u8], _: bool) -> Option<()> {
+        count_tint_transform_runs(input.len());
         let evaluated = input
             .iter()
             .flat_map(|n| {
@@ -859,6 +931,8 @@ impl DeviceN {
 
 impl ToRgb for DeviceN {
     fn convert_f32(&self, input: &[f32], output: &mut [u8], _: bool) -> Option<()> {
+        let colours = input.len().checked_div(usize::from(self.num_components));
+        count_tint_transform_runs(colours.unwrap_or(0));
         let evaluated = input
             .chunks_exact(self.num_components as usize)
             .flat_map(|n| {
@@ -1027,6 +1101,15 @@ impl ToRgb for ICCProfile {
 #[inline(always)]
 fn f32_to_u8(val: f32) -> u8 {
     (val * 255.0 + 0.5) as u8
+}
+
+/// Clamp an input-derived colour component to `[lo, hi]` without panicking on
+/// NaN or on a reversed range. Non-finite values map to zero.
+fn clamp_component(value: f32, lo: f32, hi: f32) -> f32 {
+    if !value.is_finite() {
+        return 0.0;
+    }
+    value.max(lo).min(hi)
 }
 
 #[derive(Debug, Clone)]

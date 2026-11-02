@@ -444,6 +444,29 @@ impl Encoding {
             Self::BuiltIn => None,
         }
     }
+
+    /// PdfCraft patch: the glyph name an Annex D.2 *alias code* reads as when the glyph is taken
+    /// as text rather than looked up in a font program; `None` for every other code.
+    ///
+    /// Annex D.2 gives WinAnsiEncoding codes 0xA0 and 0xAD the glyph names `space` and `hyphen`,
+    /// the same names it gives 0x20 and 0x2D, and MacRomanEncoding 0xCA `space`. The tables above
+    /// call them `nbspace` and `sfthyphen`, whose Adobe Glyph List values U+00A0 and U+00AD are
+    /// *formatting* characters, so extraction hid ink the reader can see: a soft hyphen is
+    /// invisible, and text that drew one matched no search and no redaction pattern -- one corpus
+    /// file alone produced 104 of them -- while a non-breaking space did not match the space a
+    /// reader typed. pdftotext reads both codes as the ordinary character.
+    ///
+    /// Only the base table is aliased, in the text direction only. A `/Differences` entry naming
+    /// `sfthyphen` or `nbspace` is a deliberate statement and keeps its glyph list value, which
+    /// is what pdftotext does too; and glyph *lookup* is untouched, so a font program's own
+    /// `sfthyphen` program is still found first.
+    fn text_alias(&self, code: u8) -> Option<&'static str> {
+        match (self, code) {
+            (Self::WinAnsi, 0xA0) | (Self::MacRoman, 0xCA) => Some("space"),
+            (Self::WinAnsi, 0xAD) => Some("hyphen"),
+            _ => None,
+        }
+    }
 }
 
 /// The font stretch.

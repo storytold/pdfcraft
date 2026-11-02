@@ -9,7 +9,6 @@ use std::sync::{Arc, Mutex};
 type CacheMap = HashMap<u128, Option<Box<dyn Any + Send + Sync>>>;
 #[derive(Clone)]
 pub(crate) struct Cache(Arc<Mutex<CacheMap>>);
-
 impl Default for Cache {
     fn default() -> Self {
         Self::new()
@@ -47,6 +46,135 @@ impl Cache {
                 val
             }
         }
+    }
+}
+
+/// PdfCraft patch: a byte-budgeted cache of decoded images, keyed by everything a decode reads
+/// ([`DecodedImageKey`]). Image-heavy pages decode thousands of images; without this every tile
+/// and every scale decodes them all again. Entries hold owned pixels, so a hit never changes
+/// them; when an insert would pass the budget the whole map is dropped (a fresh epoch), which
+/// only costs re-decoding, and an image larger than the whole budget is never kept. The budget
+/// caps memory per interpreter cache. A poisoned lock decodes without the cache.
+#[derive(Clone)]
+pub(crate) struct DecodedImageCache {
+    inner: Arc<Mutex<DecodedImageCacheInner>>,
+    /// Whether the render this handle serves is a preview (`InterpreterSettings::preview`).
+    /// Part of every key, so a preview's entries are never handed to a final render.
+    pub(crate) preview: bool,
+}
+
+/// PdfCraft patch: what a decoded image depends on. Two images share an entry only when all of
+/// it is equal:
+/// - where the stream's dictionary lies in the document's data (`dict_at`, `dict_len`): a
+///   stream's data follows its dictionary, so this tells apart streams whose dictionaries are
+///   byte for byte the same (two uncompressed images of one size), which `dict_hash` alone
+///   would not; the data stays put for as long as the document (and so this cache) lives;
+/// - the dictionary's bytes (`dict_hash`: `/Decode`, `/ColorSpace`, `/SMask`, `/Mask`,
+///   `/BitsPerComponent`, filters, …) and its object (`obj`: the decryption key depends on it);
+/// - whether it is decoded as a mask, a stencil mask, raster or mask output, interpolation,
+///   the decode target size (only for an image a JPX stream decodes, which is the only
+///   decode that reads it: PdfCraft patch 32), and preview or final quality.
+///
+/// A transfer function (graphics state `/TR`) also changes the pixels and has no cheap key, so
+/// an image drawn under one is not cached; neither is an inline image, whose dictionary lives in
+/// a content stream and whose colour space can be a name resolved through the resources.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct DecodedImageKey {
+    pub(crate) mask_output: bool,
+    pub(crate) dict_at: usize,
+    pub(crate) dict_len: usize,
+    pub(crate) dict_hash: u128,
+    pub(crate) obj: Option<(i32, i32)>,
+    pub(crate) is_mask: bool,
+    pub(crate) is_stencil_mask: bool,
+    pub(crate) interpolate: bool,
+    pub(crate) target: Option<(u32, u32)>,
+    pub(crate) preview: bool,
+}
+
+#[derive(Default)]
+struct DecodedImageCacheInner {
+    map: HashMap<DecodedImageKey, Option<Box<dyn Any + Send + Sync>>>,
+    bytes: usize,
+    /// PdfCraft patch (32): how many keyed decodes ran (cache misses).
+    decodes: usize,
+}
+
+impl DecodedImageCache {
+    pub(crate) fn new() -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(DecodedImageCacheInner::default())),
+            preview: false,
+        }
+    }
+
+    /// PdfCraft patch (32): how many decodes the cache was asked to keep (its misses), for
+    /// diagnostics and tests. 0 when the lock is poisoned.
+    pub(crate) fn decodes(&self) -> usize {
+        self.inner.lock().map(|locked| locked.decodes).unwrap_or(0)
+    }
+
+    /// The same cache, for a preview (`true`) or a final render.
+    pub(crate) fn for_render(&self, preview: bool) -> Self {
+        Self {
+            inner: self.inner.clone(),
+            preview,
+        }
+    }
+
+    /// The decoded image for `key`, from the cache or from `f`. `None` as the key decodes
+    /// without the cache.
+    pub(crate) fn get_or_insert_with<T: Clone + Send + Sync + 'static>(
+        &self,
+        key: Option<DecodedImageKey>,
+        budget: usize,
+        size_of: impl FnOnce(&T) -> usize,
+        f: impl FnOnce() -> Option<T>,
+    ) -> Option<T> {
+        let Some(key) = key else { return f() };
+        // Fast path: a hit clones the pixels without decoding.
+        let hit = match self.inner.lock() {
+            Ok(locked) => locked
+                .map
+                .get(&key)
+                .and_then(|val| val.as_ref())
+                .and_then(|val| val.downcast_ref::<T>().cloned()),
+            // A thread panicked while holding the lock: decode without the cache.
+            Err(_) => return f(),
+        };
+        if let Some(hit) = hit {
+            return Some(hit);
+        }
+        // Miss: decode without holding the lock (decoding must never deadlock the cache).
+        let val = f();
+        let Ok(mut locked) = self.inner.lock() else {
+            return val;
+        };
+        locked.decodes = locked.decodes.saturating_add(1);
+        // Another thread may have decoded it meanwhile: keep the first copy.
+        if let Some(existing) = locked.map.get(&key)
+            && let Some(existing) = existing.as_ref().and_then(|val| val.downcast_ref::<T>())
+        {
+            return Some(existing.clone());
+        }
+        let size = match &val {
+            Some(v) => size_of(v),
+            None => 0,
+        };
+        if size > budget {
+            return val;
+        }
+        if locked.bytes.saturating_add(size) > budget {
+            locked.map.clear();
+            locked.bytes = 0;
+        }
+        locked.bytes = locked.bytes.saturating_add(size);
+        locked.map.insert(
+            key,
+            val.clone()
+                .map(|val| Box::new(val) as Box<dyn Any + Send + Sync>),
+        );
+        val
     }
 }
 

@@ -5,17 +5,23 @@
 //! marked-content block as viewers expect. Supported: single-line, multiline (wrapped), comb,
 //! password, quadding, auto font size (`0 Tf`), combo boxes and list boxes (selection shown).
 //!
-//! The `/DA` font is used when the form's `/DR` defines it as a simple font (text encoded in
-//! WinAnsi) or as a composite font with a predefined Unicode CMap such as `UniJIS-UTF16-H`, as
-//! Japanese forms use (text encoded in that CMap). Otherwise (other composite fonts, missing
-//! resources) Helvetica is used, so text is always visible. Widths use the approximate metrics
-//! of `pdfcraft-fonts` (Helvetica, or one em per full-width character in composite fonts).
+//! The `/DA` font is used when the form's `/DR` defines it as a simple font that can encode the
+//! displayed text (using its own encoding and Differences), or as a composite font with a
+//! predefined Unicode CMap such as `UniJIS-UTF16-H`, as Japanese forms use. Otherwise (unsupported
+//! characters, other composite fonts, missing resources) Helvetica is used. Text the chosen font
+//! can't hold (outside WinAnsi in Helvetica, or beyond U+FFFF in a UCS-2 CMap) is drawn as `?`, as
+//! Acrobat keeps a value its field font can't show: the value itself is stored as typed,
+//! [`field_appearance_drawn`] returns the first such character, and the caller marks the widget
+//! (`pdfcraft_fonts::UNDRAWN_MARK`) and asks other viewers to redraw the field
+//! (`/NeedAppearances`). Widths use the approximate metrics of `pdfcraft-fonts` (Helvetica, or one
+//! em per full-width character in composite fonts).
 //!
 //! `/MK /R` (0, 90, 180, 270, counterclockwise) lays the content out in the upright box and sets
 //! the appearance `/Matrix` so that box lands on the widget rectangle. Any other value is 0, and
 //! rotation 0 leaves `/Matrix` off.
 
 use pdfcraft_cos::{Dict, Document, Object, Stream};
+use pdfcraft_fonts::pdf::Metrics;
 use pdfcraft_fonts::{UnicodeCMap, cjk_width, helvetica_width, literal, win_ansi, wrap_with};
 
 use crate::{Field, FieldKind, Widget, acroform, flags};
@@ -30,6 +36,39 @@ fn n(v: f64) -> String {
 /// Format a number for content streams (up to three decimals).
 pub fn fmt(v: f64) -> String {
     n(v)
+}
+
+/// The font size an auto-sized (`0 Tf`) text field uses for `text` in a `width` × `height` box
+/// (inside the padding), measured by `width_of(text, size)`: at most 12 pt and at least 4 pt.
+/// Single-line text shrinks until it fits the width; multiline text takes the largest size whose
+/// wrapped lines fit the height. The page appearance and the on-screen editor share this.
+pub fn auto_text_size(text: &str, width: f64, height: f64, multiline: bool, width_of: impl Fn(&str, f64) -> f64) -> f64 {
+    let wrap_width = if width.is_finite() { width.max(1.0) } else { 1.0 };
+    auto_text_size_by(
+        width,
+        height,
+        multiline,
+        |size| width_of(text, size),
+        |size| wrap_with(text, size, wrap_width, &width_of).len() as f64 * size * 1.15,
+    )
+}
+
+/// [`auto_text_size`] with the text measured by the caller: `line_width(size)` is its width on
+/// one line, `wrapped_height(size)` its height wrapped at `width`. The screen measures in its
+/// own font, whose widths and line breaks differ from the page's.
+pub fn auto_text_size_by(width: f64, height: f64, multiline: bool, line_width: impl Fn(f64) -> f64, wrapped_height: impl Fn(f64) -> f64) -> f64 {
+    let (width, height) = (if width.is_finite() { width.max(1.0) } else { 1.0 }, if height.is_finite() { height } else { 0.0 });
+    if multiline {
+        let mut size = 12.0;
+        // A NaN height from the measurer compares false, so it keeps the size it has.
+        while size > 4.0 && wrapped_height(size) > height {
+            size -= 0.5;
+        }
+        return size;
+    }
+    let size = (height / 1.15).clamp(4.0, 12.0);
+    let tw = line_width(size);
+    if tw.is_finite() && tw > width { (size * width / tw).max(4.0) } else { size }
 }
 
 /// `/MK /R` as a quadrant, or 0 when it is missing or not a multiple of 90.
@@ -111,24 +150,48 @@ pub fn parse_da(da: &str) -> Da {
 }
 
 /// How a field font's text is encoded and measured.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 enum FontText {
     WinAnsi,
+    /// A reused simple font's encoding, including indirect dictionaries and Differences.
+    Simple(Box<Metrics>),
     /// A composite font with a predefined Unicode CMap.
     Unicode(UnicodeCMap),
 }
 
 impl FontText {
-    fn encode(self, s: &str) -> Vec<u8> {
+    fn encode(&self, s: &str) -> Vec<u8> {
         match self {
             Self::WinAnsi => win_ansi(s),
+            // Selection checks every displayed string first; wrapping only removes line breaks.
+            Self::Simple(metrics) => metrics.encode(&s.replace('\t', " ")).unwrap_or_default(),
             Self::Unicode(cmap) => cmap.encode(s),
         }
     }
 
-    fn width(self, s: &str, size: f64) -> f64 {
+    fn can_encode(&self, s: &str) -> bool {
         match self {
-            Self::WinAnsi => helvetica_width(s, size),
+            Self::Simple(metrics) => metrics.encode(&s.replace('\t', " ")).is_some(),
+            _ => true,
+        }
+    }
+
+    /// The first character of `s` the encoding can't hold, which [`Self::encode`] writes as `?`
+    /// (a reused simple font is only chosen when it holds them all): reported by
+    /// [`field_appearance_drawn`], so that `?` is never silent (AGENTS.md §4).
+    fn first_unencodable(&self, s: &str) -> Option<char> {
+        match self {
+            Self::WinAnsi => pdfcraft_fonts::first_undrawable(s),
+            Self::Simple(metrics) => {
+                s.chars().map(|c| if c == '\t' { ' ' } else { c }).find(|c| metrics.encode(c.encode_utf8(&mut [0; 4])).is_none())
+            }
+            Self::Unicode(cmap) => cmap.first_unencodable(s),
+        }
+    }
+
+    fn width(&self, s: &str, size: f64) -> f64 {
+        match self {
+            Self::WinAnsi | Self::Simple(_) => helvetica_width(s, size),
             Self::Unicode(_) => cjk_width(s, size),
         }
     }
@@ -154,7 +217,7 @@ fn dr_font(doc: &Document, name: &str) -> Option<(Object, FontText)> {
     if matches!(fd.name(b"BaseFont"), Some(b"ZapfDingbats" | b"Symbol")) {
         return None;
     }
-    Some((entry, FontText::WinAnsi))
+    Some((entry, FontText::Simple(Box::new(Metrics::from_dict(doc, fd)))))
 }
 
 fn helvetica() -> Object {
@@ -255,7 +318,95 @@ fn frame(doc: &Document, wd: &Dict, w: f64, h: f64) -> (String, f64) {
     (c, 0.0)
 }
 
-/// The appearance of a text or choice field's widget showing `values`.
+/// The width [`frame`] insets the content by: the `/BS` border width when the widget has a
+/// border colour, doubled for beveled and inset borders, and 0 without a border.
+fn border_width(doc: &Document, wd: &Dict) -> f64 {
+    let mk = wd.get(b"MK").map(|m| doc.resolve(m)).and_then(|m| m.as_dict().cloned());
+    let bs = wd.get(b"BS").map(|b| doc.resolve(b)).and_then(|b| b.as_dict().cloned());
+    let bw = bs.as_ref().and_then(|b| b.get(b"W")).and_then(|x| doc.resolve(x).as_f64()).unwrap_or(1.0).max(0.0);
+    if color_array(doc, mk.as_ref(), b"BC").is_none() || bw <= 0.0 {
+        return 0.0;
+    }
+    let style = bs.as_ref().and_then(|b| b.name(b"S").map(<[u8]>::to_vec)).unwrap_or_default();
+    if style == b"B" || style == b"I" { 2.0 * bw } else { bw }
+}
+
+/// Where a list box draws its options: one row per option from the top, starting with option
+/// `top` (`/TI`, §12.7.4.4). The appearance PdfCraft writes and the viewer's in-place list share
+/// it, so a click picks the option drawn under the pointer (#1524).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ListRows {
+    /// The first option shown (`/TI`).
+    pub top: usize,
+    /// From the widget's top edge to the first row, in points.
+    pub inset: f64,
+    /// The height of one row, in points.
+    pub row: f64,
+    /// The text size, in points.
+    pub size: f64,
+}
+
+impl ListRows {
+    /// How many whole rows fit in a list box `height` points tall (at least one).
+    pub fn visible(&self, height: f64) -> usize {
+        if !(height.is_finite() && self.row > 0.0) {
+            return 1;
+        }
+        let rows = ((height - self.inset) / self.row).floor();
+        if rows >= 1.0 { rows.min(10_000.0) as usize } else { 1 }
+    }
+
+    /// The option at `y` points below the widget's top edge when the list starts at option `top`,
+    /// or `None` above the first row. The caller checks it against the number of options.
+    pub fn option_at(&self, top: usize, y: f64) -> Option<usize> {
+        if !(y.is_finite() && self.row > 0.0) || y < self.inset {
+            return None;
+        }
+        let k = ((y - self.inset) / self.row).floor();
+        (k < 1.0e6).then(|| top.saturating_add(k as usize))
+    }
+
+    /// The top index that shows as many of the `selected` option indices as fit in `visible`
+    /// rows, staying at `current` when they are all shown already, among `count` options.
+    pub fn top_showing(current: usize, selected: &[usize], visible: usize, count: usize) -> usize {
+        let visible = visible.max(1);
+        let last_top = count.saturating_sub(visible);
+        let (Some(&first), Some(&last)) = (selected.iter().min(), selected.iter().max()) else { return current.min(last_top) };
+        let top = if first >= current && last < current.saturating_add(visible) {
+            current
+        } else if last.saturating_sub(first) >= visible || first < current {
+            first
+        } else {
+            // Scroll down just far enough that the last selected option is the bottom row.
+            last.saturating_add(1).saturating_sub(visible)
+        };
+        top.min(last_top)
+    }
+}
+
+/// `/TI` of a list box: on the widget, else on the field.
+fn top_index(doc: &Document, wd: &Dict, field: Option<&Dict>) -> usize {
+    let ti = |d: &Dict| d.get(b"TI").and_then(|o| doc.resolve(o).as_int());
+    ti(wd).or_else(|| field.and_then(ti)).and_then(|i| usize::try_from(i).ok()).unwrap_or(0)
+}
+
+/// The rows of a list box whose field's `/DA` is `f_da`, in widget `wd`.
+pub(crate) fn list_rows_of(doc: &Document, f_da: &str, field: Option<&Dict>, wd: &Dict) -> ListRows {
+    let da = parse_da(wd.get(b"DA").and_then(|o| doc.resolve(o).as_string().map(|s| s.to_text())).as_deref().unwrap_or(f_da));
+    let size = if da.size > 0.0 { da.size } else { 12.0 };
+    ListRows { top: top_index(doc, wd, field), inset: 2.0 + border_width(doc, wd), row: size * 1.15, size }
+}
+
+/// The rows of list box `f` as drawn in widget `w`.
+pub fn list_rows(doc: &Document, f: &Field, w: &Widget) -> ListRows {
+    let wobj = doc.get(w.obj);
+    let wd = wobj.as_dict().cloned().unwrap_or_default();
+    let fobj = doc.get(f.obj);
+    list_rows_of(doc, &f.da, fobj.as_dict(), &wd)
+}
+
+/// The appearance of a text or choice field's widget showing `values`. Characters its font can't
+/// hold come out as `?`; [`field_appearance_drawn`] says which.
 pub fn field_appearance(doc: &Document, f: &Field, w: &Widget, values: &[String]) -> Stream {
     field_appearance_as(doc, f, w, values, true)
 }
@@ -263,6 +414,13 @@ pub fn field_appearance(doc: &Document, f: &Field, w: &Widget, values: &[String]
 /// [`field_appearance`], where `format` false means `values` are already what to show (a
 /// custom Format script ran).
 pub fn field_appearance_as(doc: &Document, f: &Field, w: &Widget, values: &[String], format: bool) -> Stream {
+    field_appearance_drawn(doc, f, w, values, format).0
+}
+
+/// [`field_appearance_as`] with the first character it drew as `?` because the field's font can't
+/// hold it: the form's font is a simple (WinAnsi) font, Helvetica stands in for one PdfCraft can't
+/// write with (an embedded subset, `Identity-H`), or a UCS-2 CMap meets a character beyond U+FFFF.
+pub fn field_appearance_drawn(doc: &Document, f: &Field, w: &Widget, values: &[String], format: bool) -> (Stream, Option<char>) {
     // The Format event: what is shown, not what is stored.
     let formatted: Vec<String>;
     let values = if format
@@ -281,7 +439,22 @@ pub fn field_appearance_as(doc: &Document, f: &Field, w: &Widget, values: &[Stri
     let place = placement(mk_rotation(doc, &wd), page_w, page_h);
     let (width, height) = (place.layout_w, place.layout_h);
     let da = parse_da(wd.get(b"DA").and_then(|o| doc.resolve(o).as_string().map(|s| s.to_text())).as_deref().unwrap_or(&f.da));
-    let (font_name, font_obj, enc) = match dr_font(doc, &da.font) {
+    let text: String = if f.kind == FieldKind::Combo {
+        values.iter().map(|v| f.options.iter().find(|(e, _)| e == v).map_or(v.clone(), |(_, d)| d.clone())).collect::<Vec<_>>().join(", ")
+    } else {
+        values.first().cloned().unwrap_or_default()
+    };
+    let text = if f.has(flags::PASSWORD) { "*".repeat(text.chars().count()) } else { text };
+    let can_show = |enc: &FontText| {
+        if f.kind == FieldKind::List {
+            f.options.iter().all(|(_, display)| enc.can_encode(display))
+        } else if f.kind == FieldKind::Text && f.has(flags::MULTILINE) {
+            text.split(['\n', '\r']).all(|line| enc.can_encode(line))
+        } else {
+            enc.can_encode(&text)
+        }
+    };
+    let (font_name, font_obj, enc) = match dr_font(doc, &da.font).filter(|(_, enc)| can_show(enc)) {
         Some((o, enc)) => (da.font.clone(), o, enc),
         None => ("Helv".to_string(), helvetica(), FontText::WinAnsi),
     };
@@ -291,9 +464,16 @@ pub fn field_appearance_as(doc: &Document, f: &Field, w: &Widget, values: &[Stri
     let inner_w = (width - 2.0 * pad).max(1.0);
     let q = wd.get(b"Q").and_then(|o| doc.resolve(o).as_int()).unwrap_or(f.quadding);
     let mut body: Vec<u8> = Vec::new();
-    let show = |body: &mut Vec<u8>, x: f64, y: f64, text: &str| {
+    // The first character drawn that the font can't hold (drawn as `?`), for the caller to report.
+    let mut unencodable: Option<char> = None;
+    let mut show = |body: &mut Vec<u8>, x: f64, y: f64, text: &str| {
+        // A line break in a single-line value is a space, as in viewers (multiline text is split).
+        let text: String = text.chars().map(|c| if matches!(c, '\n' | '\r') { ' ' } else { c }).collect();
+        if unencodable.is_none() {
+            unencodable = enc.first_unencodable(&text);
+        }
         body.extend(format!("1 0 0 1 {} {} Tm ", n(x), n(y)).bytes());
-        body.extend(literal(&enc.encode(text)));
+        body.extend(literal(&enc.encode(&text)));
         body.extend_from_slice(b" Tj\n");
     };
     let x_for = |text: &str, size: f64| -> f64 {
@@ -307,14 +487,13 @@ pub fn field_appearance_as(doc: &Document, f: &Field, w: &Widget, values: &[Stri
     let mut size = da.size;
     match f.kind {
         FieldKind::List => {
-            // Every option, one per line from the top; selected ones highlighted.
-            if size == 0.0 {
-                size = 12.0;
-            }
-            let line = size * 1.15;
-            let top = wd.get(b"TI").and_then(|o| doc.resolve(o).as_int()).unwrap_or(0).max(0) as usize;
-            let mut y = height - pad;
-            for (export, display) in f.options.iter().skip(top) {
+            // Every option, one per line from the top (from `/TI`); selected ones highlighted.
+            let fobj = doc.get(f.obj);
+            let rows = list_rows_of(doc, &f.da, fobj.as_dict(), &wd);
+            size = rows.size;
+            let line = rows.row;
+            let mut y = height - rows.inset;
+            for (export, display) in f.options.iter().skip(rows.top) {
                 if y - line < 0.0 {
                     break;
                 }
@@ -326,20 +505,10 @@ pub fn field_appearance_as(doc: &Document, f: &Field, w: &Widget, values: &[Stri
             }
         }
         _ => {
-            let text: String = if f.kind == FieldKind::Combo {
-                values.iter().map(|v| f.options.iter().find(|(e, _)| e == v).map_or(v.clone(), |(_, d)| d.clone())).collect::<Vec<_>>().join(", ")
-            } else {
-                values.first().cloned().unwrap_or_default()
-            };
-            let text = if f.has(flags::PASSWORD) { "*".repeat(text.chars().count()) } else { text };
             let comb = f.has(flags::COMB) && !f.has(flags::MULTILINE) && !f.has(flags::PASSWORD) && f.max_len.is_some_and(|m| m > 0);
             if f.kind == FieldKind::Text && f.has(flags::MULTILINE) {
                 if size == 0.0 {
-                    // Auto size: the largest size (≤ 12) whose wrapped lines fit the height.
-                    size = 12.0;
-                    while size > 4.0 && wrap_with(&text, size, inner_w, width_of).len() as f64 * size * 1.15 > height - 2.0 * pad {
-                        size -= 0.5;
-                    }
+                    size = auto_text_size(&text, inner_w, height - 2.0 * pad, true, width_of);
                 }
                 let mut y = height - pad - size * 0.85;
                 for line in wrap_with(&text, size, inner_w, width_of) {
@@ -351,11 +520,12 @@ pub fn field_appearance_as(doc: &Document, f: &Field, w: &Widget, values: &[Stri
                 }
             } else {
                 if size == 0.0 {
-                    size = ((height - 2.0 * pad) / 1.15).clamp(4.0, 12.0);
-                    let tw = width_of(&text, size);
-                    if tw > inner_w && !comb {
-                        size = (size * inner_w / tw).max(4.0);
-                    }
+                    // Comb cells hold one character each, so only the height limits them.
+                    size = if comb {
+                        ((height - 2.0 * pad) / 1.15).clamp(4.0, 12.0)
+                    } else {
+                        auto_text_size(&text, inner_w, height - 2.0 * pad, false, width_of)
+                    };
                 }
                 // Centre Helvetica's ascent (0.718) and descent (0.207) vertically.
                 let y = (height - 0.925 * size) / 2.0 + 0.207 * size;
@@ -397,7 +567,7 @@ pub fn field_appearance_as(doc: &Document, f: &Field, w: &Widget, values: &[Stri
     d.set(b"Subtype".to_vec(), Object::name("Form"));
     set_form_box(&mut d, place);
     d.set(b"Resources".to_vec(), Object::Dict(res));
-    Stream::flate(d, &content)
+    (Stream::flate(d, &content), unencodable)
 }
 
 /// On/Off appearances for a check box or radio button that has none (a check mark or a dot,
@@ -533,5 +703,24 @@ mod tests {
         assert_eq!(parse_da("/Cour 9 Tf 0 0 0 1 k").color, "0 0 0 1 k");
         assert_eq!(parse_da("garbage").font, "Helv");
         assert_eq!(stroke_op("1 0 0 rg"), "1 0 0 RG");
+    }
+
+    #[test]
+    fn list_rows_visibility_and_scrolling() {
+        let rows = ListRows { top: 0, inset: 2.0, row: 11.5, size: 10.0 };
+        assert_eq!(rows.visible(46.0), 3);
+        assert_eq!(rows.option_at(0, 1.0), None);
+        assert_eq!(rows.option_at(0, 5.0), Some(0));
+        assert_eq!(rows.option_at(0, 15.0), Some(1));
+        assert_eq!(rows.option_at(2, 5.0), Some(2));
+
+        // When Tue (1) and Thu (3) are selected in 5 options with 3 visible rows:
+        assert_eq!(ListRows::top_showing(0, &[1, 3], 3, 5), 1);
+        // When staying within view:
+        assert_eq!(ListRows::top_showing(1, &[1, 2], 3, 5), 1);
+        // When selecting before current top:
+        assert_eq!(ListRows::top_showing(2, &[0], 3, 5), 0);
+        // When empty selection:
+        assert_eq!(ListRows::top_showing(0, &[], 3, 5), 0);
     }
 }

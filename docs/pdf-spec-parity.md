@@ -1,6 +1,6 @@
 # PDF specification and standards parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** major (first spec-coverage checklist) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-14 · **Change:** minor (§12.4.4: page transitions and display times read) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
 How much of ISO 32000-2 (PDF 2.0) and the PDF subset standards PdfCraft implements, set against
 what Acrobat Pro implements. This is PdfCraft's equivalent of a "geometry" or "codec" checklist:
@@ -23,7 +23,7 @@ are borrowed; PDF 2.0 additions and most subset standards are missing. **150–2
 | §7.4 | Stream filters: Flate, LZW, ASCII85, ASCIIHex, RunLength, predictors | full | **own** | `crates/filters` |
 | §7.4 | Image filters: DCT, JPX, JBIG2, CCITTFax | full | **borrowed** (decode only) | `core.image-filters` partial; own codecs M1.1/M1.2; no JBIG2/CCITT encoding (Optimizer) |
 | §7.5.8 | Linearization | R W | R only | `core.linearization` planned |
-| §7.6.4 | Standard security handler R2–R6 (RC4 40/128, AES-128, AES-256), crypt filters, `/EncryptMetadata`, SASLprep | full | **own**, read and write | `crates/crypt`; **written files rejected by Acrobat (#774)** |
+| §7.6.4 | Standard security handler R2–R6 (RC4 40/128, AES-128, AES-256), crypt filters, `/EncryptMetadata`, SASLprep | full | **own**, read and write | `crates/crypt`; written files open in Acrobat DC since #836 (#774: Acrobat needs the catalog outside object streams) |
 | §7.6.5 | Public-key security handler | full | none | `core.open-public-key`, `protect.certificate-encryption` planned |
 | §7.6.2 | Unencrypted signature `/Contents` | yes | yes | signing encrypted documents (#753) |
 | §7.9.2 | Text strings incl. PDF 2.0 UTF-8 | full | PDFDocEncoding and UTF-16; UTF-8 none | `core.pdf20-utf8-strings` planned |
@@ -35,7 +35,7 @@ are borrowed; PDF 2.0 additions and most subset standards are missing. **150–2
 | §10 | Rendering: transfer functions, halftones, overprint, smoothness | full | borrowed; no overprint preview | `print.overprint-preview` planned |
 | §11 | Transparency: blend modes, soft masks, groups, knockout | full | borrowed (knockout shipped) | `view.render-transparency` partial |
 | §12.1–12.3 | Viewer preferences, page layout, page labels, outlines, destinations | full | **own**: initial view, page labels, bookmarks edit and from structure, named destinations rewired on copy | named-destination editing panel planned |
-| §12.4 | Page transitions, thumbnails, articles, presentations | full | none (thumbnails discarded or kept) | `organize.page-transitions`, `view.articles-panel` planned |
+| §12.4 | Page transitions, thumbnails, articles, presentations | full | `/Trans` and `/Dur` read and listed by `doc_info`, not played; thumbnails discarded or kept | `organize.page-transitions` partial, `view.articles-panel` planned |
 | §12.5 | Annotations | 28 types | see table below | |
 | §12.6 | Actions | 19 types | see table below | |
 | §12.7 | Interactive forms (AcroForm): fields, appearances, calculation order, JavaScript actions | full | **own**: all field types, regenerated appearances, Acrobat's AF functions and event order, sandboxed JavaScript (boa) | `form.js-host` partial (object-model subset); submit planned |
@@ -44,7 +44,7 @@ are borrowed; PDF 2.0 additions and most subset standards are missing. **150–2
 | §12.9 | Measurement and geospatial | full | 2D measuring with viewports and calibration; no geospatial | `comment.geospatial` planned |
 | §12.10 | Document requirements | yes | none | |
 | §13 | Multimedia: sound, movies, screen, rich media, 3D (U3D, PRC) | yes | preserved untouched; not played or shown | `misc.rich-media-*`, `misc.3d-view` planned (P3) |
-| §14.3 | Metadata: info dictionary, XMP | full, XMP editor | info dictionary edited; XMP kept in step for PDF/A; no XMP editor or custom properties | `organize.xmp-editor` planned |
+| §14.3 | Metadata: info dictionary, XMP | full, XMP editor | info dictionary edited, with its XMP counterparts (title, author, subject, keywords, creator tool, producer) kept in step; XMP written for PDF/A; no XMP editor or custom properties | `organize.xmp-editor` planned |
 | §14.6–14.8 | Marked content, logical structure, tagged PDF | full, with editing tools | read (checker, bookmarks from structure, redaction of tags); no tag editing or autotag | gap 11 |
 | §14.9 | Accessibility support: alt text, ActualText, language | full | alt text figure by figure, language, title | `a11y.alt-text-workflow` |
 | §14.10 | Web capture | yes | none | |
@@ -64,7 +64,7 @@ are borrowed; PDF 2.0 additions and most subset standards are missing. **150–2
 | FreeText (text box, typewriter, callout) | create, rich text | create; rich text written but no per-run formatting | `comment.text-box` partial |
 | Line, Square, Circle, Polygon, PolyLine | create | create, all ten line endings | |
 | Highlight, Underline, Squiggly, StrikeOut | create | create | |
-| Caret (insert/replace text) | create | create; not snapped to text | `comment.insert-text` partial |
+| Caret (insert/replace text) | create | create; snapped to the text in the UI (upright horizontal text, unrotated pages) | `comment.insert-text` partial |
 | Stamp | create, custom, dynamic | create, custom, dynamic, Sign Here | stamp management planned |
 | Ink | create, erase | create, erase | no pressure |
 | FileAttachment | create | create | |
@@ -81,7 +81,8 @@ are borrowed; PDF 2.0 additions and most subset standards are missing. **150–2
 | Action | Acrobat | PdfCraft |
 |---|---|---|
 | GoTo | yes | yes (page with Fit; named destinations and zoom partial) |
-| GoToR, GoToE | yes | none (preserved; the Optimizer can remove invalid ones) |
+| GoToR | yes | partial: local PDF paths open in a PdfCraft tab; `/F` strings and file-spec dictionaries (`/UF`, then `/F`), source-relative paths, and explicit numeric-page destinations are supported. Automation uses the same resolver and `--root` confinement. Named destinations open at the target's default view with a warning; `/NewWindow` is a tab hint. Network/URL file systems are refused. |
+| GoToE | yes | none (preserved; the Optimizer can remove invalid ones) |
 | Launch | yes (restricted) | none |
 | Thread | yes | none |
 | URI | yes | yes |
@@ -129,4 +130,6 @@ are borrowed; PDF 2.0 additions and most subset standards are missing. **150–2
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-14 | minor | §12.4.4: `/Trans` and `/Dur` read into `DocInfo::transitions` and reported by `doc_info` |
+| 2026-10-11 | minor | §7.6.4: encrypted files we write open in Acrobat (#774, fixed by #836) |
 | 2026-10-10 | major | Created from the code, `vendor/README.md` and `parity/acrobat-features.toml`, against ISO 32000-2 and Acrobat Pro 26.002.21931's documented capabilities |

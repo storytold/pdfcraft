@@ -22,11 +22,30 @@ pub struct DocJsDraft {
     pub script: String,
 }
 
+/// What the user is told when a form's scripts were turned off: in a toast as it happens, then
+/// on the notice bar for as long as the document is open.
+pub(crate) fn scripts_off_notice() -> String {
+    tl!("This form's scripts are turned off because one ran too long. Reopen the document to run them again.").to_string()
+}
+
 impl PdfCraftApp {
     /// Act on what scripts produced in document `id`: alerts are shown, console output goes to
     /// the console, print and page requests are carried out, links wait for the user's permission
     /// (form submissions are reported, never sent).
     pub fn handle_js(&mut self, id: DocId, out: JsOutput) {
+        let view = self.views.iter().position(|v| v.id == id);
+        // A script that ran away turned the form's scripts off: calculations and buttons stop
+        // working, and the error is only in the console. Say so once, and bring the notice bar
+        // (which keeps saying so) back if it was closed. A message of the form's own, below,
+        // takes the toast's place.
+        if let Some(v) = view.and_then(|i| self.views.get_mut(i))
+            && !v.scripts_off_noted
+            && self.session.get(id).is_some_and(|d| d.xfa_scripts_off())
+        {
+            v.scripts_off_noted = true;
+            v.notice_dismissed = false;
+            self.notify(scripts_off_notice());
+        }
         if out.is_empty() {
             return;
         }
@@ -34,7 +53,6 @@ impl PdfCraftApp {
         for e in &out.errors {
             self.js_console.log.push(format!("Error: {e}"));
         }
-        let view = self.views.iter().position(|v| v.id == id);
         for r in out.requests {
             match r {
                 Request::Print => self.open_print(),
@@ -163,7 +181,7 @@ pub(crate) fn console_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens)
     });
     ui.add_space(6.0);
     let input = ui.add(
-        egui::TextEdit::multiline(&mut app.js_console.input)
+        crate::widgets::block(&mut app.js_console.input)
             .code_editor()
             .desired_rows(4)
             .desired_width(f32::INFINITY)
@@ -190,7 +208,7 @@ pub(crate) fn document_js_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
     let mut edit: Option<Edit> = None;
     ui.horizontal(|ui| {
         ui.label(tl!("Script Name:"));
-        ui.add(egui::TextEdit::singleline(&mut app.doc_js.name).desired_width(240.0).id_salt("doc-js-name"));
+        ui.add(crate::widgets::line(&mut app.doc_js.name).desired_width(240.0).id_salt("doc-js-name"));
     });
     ui.add_space(4.0);
     egui::Frame::new().fill(t.hover).corner_radius(egui::CornerRadius::same(6)).inner_margin(egui::Margin::same(8)).show(ui, |ui| {
@@ -208,7 +226,7 @@ pub(crate) fn document_js_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
         });
     });
     ui.add_space(6.0);
-    ui.add(egui::TextEdit::multiline(&mut app.doc_js.script).code_editor().desired_rows(8).desired_width(f32::INFINITY).id_salt("doc-js-script"));
+    ui.add(crate::widgets::block(&mut app.doc_js.script).code_editor().desired_rows(8).desired_width(f32::INFINITY).id_salt("doc-js-script"));
     ui.add_space(8.0);
     let name = app.doc_js.name.trim().to_string();
     let close = match buttons(ui, "Save", &["Close", "Delete"]).as_deref() {
@@ -230,7 +248,19 @@ pub(crate) fn document_js_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
     close
 }
 
-/// Preferences: interface language, identity and JavaScript. Returns `true` to close.
+/// The label for a [`pdfcraft_render::ReadingColors`] mode name (`mode_name`).
+fn reading_mode_label(mode: &str) -> &'static str {
+    match mode {
+        "black-on-white" => "Black on white",
+        "white-on-black" => "White on black",
+        "yellow-on-black" => "Yellow on black",
+        "green-on-black" => "Green on black",
+        "custom" => "Custom",
+        _ => "Off",
+    }
+}
+
+/// Preferences: interface language and size, appearance, identity and JavaScript. Returns `true` to close.
 pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
     ui.label(egui::RichText::new(tl!("Preferences")).font(theme::semibold(18.0)));
     ui.horizontal(|ui| {
@@ -255,8 +285,10 @@ pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
     ui.horizontal(|ui| {
         use crate::ui_scale;
         ui.label(tl!("Interface size"));
-        let auto =
-            crate::i18n::fmt(tl!("Auto ({percent}%)"), &[("percent", &ui_scale::percent(ui_scale::factor(None, app.system_text_scale)).to_string())]);
+        // Auto shows the size it draws at: the display's scale times the system's text scale.
+        let native = ui.ctx().native_pixels_per_point().unwrap_or(1.0);
+        let auto_percent = ui_scale::percent(ui_scale::drawn(None, app.system_text_scale, native));
+        let auto = crate::i18n::fmt(tl!("Auto ({percent}%)"), &[("percent", &auto_percent.to_string())]);
         let selected = app.ui_scale.map_or_else(|| auto.clone(), |f| format!("{}%", ui_scale::percent(f)));
         egui::ComboBox::from_id_salt("interface-size").selected_text(selected).show_ui(ui, |ui| {
             if ui.selectable_value(&mut app.ui_scale, None, auto).clicked() {
@@ -276,6 +308,22 @@ pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
             .small()
             .color(t.text_muted),
     );
+    ui.horizontal(|ui| {
+        ui.label(tl!("Tools panel side"));
+        let right = app.docking.tools_on_right();
+        if ui.selectable_label(!right, tl!("Left")).clicked()
+            && let Err(error) = app.docking.set_tools_on_right(false)
+        {
+            app.notify(error);
+        }
+        if ui.selectable_label(right, tl!("Right")).clicked()
+            && let Err(error) = app.docking.set_tools_on_right(true)
+        {
+            app.notify(error);
+        }
+    });
+    ui.add_space(8.0);
+    crate::appearance::preferences_section(ui, app, t);
     ui.add_space(8.0);
     ui.label(egui::RichText::new(tl!("Documents and view")).font(theme::semibold(13.0)));
     ui.horizontal(|ui| {
@@ -287,7 +335,7 @@ pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
             (crate::Mode::Convert, "Convert"),
             (crate::Mode::Sign, "E-Sign"),
         ] {
-            ui.radio_value(&mut app.default_mode, mode, tl!(label));
+            widgets::radio_value(ui, &mut app.default_mode, mode, tl!(label));
         }
     });
     ui.label(
@@ -299,15 +347,16 @@ pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
     ui.horizontal(|ui| {
         ui.label(tl!("Default page display"));
         for l in crate::canvas::PageLayout::ORDER {
-            ui.radio_value(&mut defaults.layout, l, tl!(l.label()));
+            widgets::radio_value(ui, &mut defaults.layout, l, tl!(l.label()));
         }
+        ui.add(widgets::checkbox(&mut defaults.continuous, tl!("Continuous scrolling")));
     });
     ui.horizontal(|ui| {
         use crate::canvas::Fit;
         ui.label(tl!("Default zoom"));
-        ui.radio_value(&mut defaults.fit, Fit::Width, tl!("Fit to width"));
-        ui.radio_value(&mut defaults.fit, Fit::Page, tl!("Zoom to page level"));
-        ui.radio_value(&mut defaults.fit, Fit::None, tl!("Custom"));
+        widgets::radio_value(ui, &mut defaults.fit, Fit::Width, tl!("Fit to width"));
+        widgets::radio_value(ui, &mut defaults.fit, Fit::Page, tl!("Zoom to page level"));
+        widgets::radio_value(ui, &mut defaults.fit, Fit::None, tl!("Custom"));
         // Editing the percentage selects Custom.
         let mut percent = defaults.zoom * 100.0;
         if ui.add(egui::DragValue::new(&mut percent).range(8.0..=6400.0).max_decimals(0).suffix("%")).changed() {
@@ -319,20 +368,109 @@ pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
             .small()
             .color(t.text_muted),
     );
+    ui.horizontal(|ui| {
+        ui.label(tl!("Units"));
+        for u in crate::units::Unit::ALL {
+            widgets::radio_value(ui, &mut app.units, u, u.label());
+        }
+    });
+    ui.label(egui::RichText::new(tl!("For page sizes and margins.")).small().color(t.text_muted));
     // The web build has no file paths to reopen.
     #[cfg(not(target_arch = "wasm32"))]
-    ui.checkbox(&mut app.reopen_last_session, tl!("Reopen the files that were open when PdfCraft last closed"));
+    ui.add(widgets::checkbox(&mut app.reopen_last_session, tl!("Reopen the files that were open when PdfCraft last closed")));
+    // The web build has no files on disk to watch.
+    #[cfg(not(target_arch = "wasm32"))]
+    ui.add(widgets::checkbox(&mut app.reload_changed_files, tl!("Reload documents when their files change on disk")));
+    ui.horizontal(|ui| {
+        ui.label(tl!("Scroll speed (mouse wheel and arrow keys)"));
+        for speed in crate::scroll_speed::ScrollSpeed::ALL {
+            widgets::radio_value(ui, &mut app.scroll_speed, speed, tl_ctx!("scroll speed", speed.label()));
+        }
+    });
+    // Whether anything animates, the wheel's scrolling and zooming included; left alone it
+    // follows the system's animation setting.
+    ui.horizontal(|ui| {
+        ui.label(tl!("Animation effects"));
+        for choice in crate::motion::AnimationEffects::ALL {
+            widgets::radio_value(ui, &mut app.animation_effects, choice, tl_ctx!("animation effects", choice.label()));
+        }
+    });
+    // Only where the app draws the title bar (GNOME on Wayland); elsewhere the desktop draws it.
+    if app.window_controls.is_some() {
+        ui.add(widgets::checkbox(&mut app.system_title_bar, tl!("Use system title bar")))
+            .on_hover_text(tl!("Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme."));
+    }
+    ui.add_space(8.0);
+    // Reading colours (Acrobat: Replace Document Colors): solid text and line-art paints are
+    // remapped while rendering, and the page clears to the background colour. The preference
+    // is app-wide: every open document follows it, and documents open with it.
+    ui.label(egui::RichText::new(tl!("Reading colours")).font(theme::semibold(13.0)));
+    ui.horizontal(|ui| {
+        ui.label(tl!("Replace document colours"));
+        let mode = app.reading_colors.mode_name();
+        egui::ComboBox::from_id_salt("reading-colors").selected_text(tl!(reading_mode_label(mode))).show_ui(ui, |ui| {
+            for (m, label) in [
+                ("off", "Off"),
+                ("black-on-white", "Black on white"),
+                ("white-on-black", "White on black"),
+                ("yellow-on-black", "Yellow on black"),
+                ("green-on-black", "Green on black"),
+                ("custom", "Custom"),
+            ] {
+                if ui.selectable_label(mode == m, tl!(label)).clicked() {
+                    match m {
+                        "off" => app.set_reading_colors(pdfcraft_render::ReadingColors::default()),
+                        "custom" => {
+                            // Custom starts from the colours already chosen, or black on white.
+                            let colors = app.reading_colors.params.map_or(pdfcraft_render::ReadingColors::BLACK_ON_WHITE, |params| {
+                                pdfcraft_render::ReadingColors { params: Some(params) }
+                            });
+                            app.set_reading_colors(colors);
+                        }
+                        // `parse` knows these names; a preset comes with its own flags.
+                        preset => {
+                            if let Ok(colors) = pdfcraft_render::ReadingColors::parse(preset, None, None, None, None) {
+                                app.set_reading_colors(colors);
+                            }
+                        }
+                    }
+                    ui.close();
+                }
+            }
+        });
+    });
+    if app.reading_colors.params.is_some() {
+        let mut changed = false;
+        if let Some(params) = app.reading_colors.params.as_mut() {
+            ui.horizontal(|ui| {
+                let text = ui.label(tl!("Text"));
+                changed |= ui.color_edit_button_srgb(&mut params.text).labelled_by(text.id).changed();
+                let background = ui.label(tl!("Page background"));
+                changed |= ui.color_edit_button_srgb(&mut params.background).labelled_by(background.id).changed();
+            });
+            if ui.add(crate::widgets::checkbox(&mut params.only_black, tl!("Only change the colour of black text or line art"))).changed() {
+                changed = true;
+            }
+            if ui.add(crate::widgets::checkbox(&mut params.line_art, tl!("Change the colour of line art as well as text"))).changed() {
+                changed = true;
+            }
+        }
+        if changed {
+            app.set_reading_colors(app.reading_colors);
+        }
+    }
+    ui.label(egui::RichText::new(tl!("Colours are remapped while rendering; the document itself never changes.")).small().color(t.text_muted));
     ui.add_space(8.0);
     // Identity: the author of new comments (Acrobat: Preferences ▸ Identity).
     ui.label(egui::RichText::new(tl!("Identity")).font(theme::semibold(13.0)));
     ui.horizontal(|ui| {
         let label = ui.label(tl!("Name on new comments"));
-        ui.add(egui::TextEdit::singleline(&mut app.comment_prefs.author).desired_width(220.0).char_limit(crate::MAX_AUTHOR_CHARS))
-            .labelled_by(label.id);
+        ui.add(crate::widgets::line(&mut app.comment_prefs.author).desired_width(220.0).char_limit(crate::MAX_AUTHOR_CHARS)).labelled_by(label.id);
     });
+    ui.add(widgets::checkbox(&mut app.comment_prefs.hide_empty_highlight_hover, tl!("Hide hover previews for highlights without comment text")));
     ui.add_space(8.0);
     ui.label(egui::RichText::new(tl!("Fill & Sign")).font(theme::semibold(13.0)));
-    ui.checkbox(&mut app.flatten_fill_sign_on_save, tl!("Flatten Fill & Sign when saving"));
+    ui.add(widgets::checkbox(&mut app.flatten_fill_sign_on_save, tl!("Flatten Fill & Sign when saving")));
     ui.label(
         egui::RichText::new(tl!("Text, marks and signatures become part of the page. Other comments stay editable.")).small().color(t.text_muted),
     );
@@ -343,7 +481,7 @@ pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
     egui::Frame::new().fill(t.hover).corner_radius(egui::CornerRadius::same(6)).inner_margin(egui::Margin::same(10)).show(ui, |ui| {
         ui.set_width(ui.available_width());
         let mut on = app.session.javascript();
-        if ui.checkbox(&mut on, tl!("Enable Acrobat JavaScript")).changed() {
+        if ui.add(widgets::checkbox(&mut on, tl!("Enable Acrobat JavaScript"))).changed() {
             app.session.set_javascript(on);
         }
         ui.label(

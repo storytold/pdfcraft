@@ -113,7 +113,7 @@ fn an_end_entity_certificate_cannot_issue() {
     let pool = [e.cert.clone(), r.cert.clone()];
     let (chain, why) = build_chain_noted(&forged.cert, &pool, None);
     assert_eq!(names(&chain), ["Bank AG"], "the subscriber certificate does not vouch for what it signed");
-    assert!(why.is_some_and(|w| w.contains("not a CA")), "the reason is reported");
+    assert!(why.is_some_and(|w| w.message.contains("not a CA")), "the reason is reported");
     // Neither does one without basicConstraints (not a v1 root: it has an issuer).
     let plain = issue("No Constraints", Some(&r), FOREVER, &[]);
     let under_plain = end_entity("Under Plain", &plain);
@@ -159,7 +159,7 @@ fn issuers_must_have_been_valid_when_it_matters() {
     assert_eq!(names(&build_chain(&l.cert, &pool, Some(time(2021)))), ["Leaf", "Short Lived CA", "Test Root"]);
     let (chain, why) = build_chain_noted(&l.cert, &pool, Some(time(2023)));
     assert_eq!(names(&chain), ["Leaf"], "expired by then");
-    assert!(why.is_some_and(|w| w.contains("not valid")));
+    assert!(why.is_some_and(|w| w.message.contains("not valid")));
     assert_eq!(names(&build_chain(&l.cert, &pool, Some(time(2019)))), ["Leaf"], "not yet valid");
     // With no time to judge by, nothing is refused on validity.
     assert_eq!(names(&build_chain(&l.cert, &pool, None)).len(), 3);
@@ -191,7 +191,9 @@ fn verdict(leaf: Party, embedded: Vec<Certificate>, anchor: &Certificate) -> (St
     let signed = pdfcraft_sign::sign(&doc, &id, &opts).unwrap();
     let trust = TrustStore { certs: vec![anchor.clone()] };
     let s = signatures(&Document::open(Arc::new(signed.clone())).unwrap(), &signed, &trust).into_iter().rfind(|s| s.signed).unwrap();
-    (s.status, s.details)
+    // The details as they read in English; what an interface says in another language is checked in
+    // `tests/pdf.rs`.
+    (s.status, s.details.iter().map(|d| d.message.clone()).collect())
 }
 
 #[test]
@@ -242,19 +244,19 @@ fn the_signer_certificate_must_allow_document_signing() {
     let r = root();
     let problem = |exts: &[Vec<u8>]| signer_with("Signer", &r, exts).cert.signing_problem();
     // Key usage without digitalSignature or nonRepudiation.
-    assert!(problem(&[key_usage(KEY_CERT_SIGN)]).is_some_and(|w| w.contains("key usage")));
+    assert!(problem(&[key_usage(KEY_CERT_SIGN)]).is_some_and(|w| w.message.contains("key usage")));
     assert!(problem(&[key_usage(KEY_ENCIPHERMENT)]).is_some());
     assert!(problem(&[key_usage(DIGITAL_SIGNATURE)]).is_none());
     // nonRepudiation alone is enough.
     assert!(problem(&[key_usage(0x40)]).is_none());
     // Extended key usage without a document-signing purpose.
-    assert!(problem(&[extended_key_usage(&[SERVER_AUTH])]).is_some_and(|w| w.contains("extended key usage")));
+    assert!(problem(&[extended_key_usage(&[SERVER_AUTH])]).is_some_and(|w| w.message.contains("extended key usage")));
     for ok in ["2.5.29.37.0", "1.3.6.1.5.5.7.3.4", "1.3.6.1.5.5.7.3.36", "1.2.840.113583.1.1.5", "1.3.6.1.4.1.311.10.3.12"] {
         assert!(problem(&[extended_key_usage(&[SERVER_AUTH, ok])]).is_none(), "{ok}");
     }
     // An unknown critical extension refuses; the same extension non-critical does not.
     let unknown = "1.2.3.4.5.6";
-    assert!(problem(&[ext(unknown, &der::octets(&[0]))]).is_some_and(|w| w.contains(unknown)));
+    assert!(problem(&[ext(unknown, &der::octets(&[0]))]).is_some_and(|w| w.message.contains(unknown)));
     assert!(problem(&[der::seq(&[&der::oid(unknown), &der::octets(&der::octets(&[0]))])]).is_none());
     // Critical extensions PdfCraft knows, or may accept as they are, don't refuse.
     assert!(problem(&[ext("2.5.29.32", &der::seq(&[]))]).is_none());
@@ -280,6 +282,21 @@ fn a_trusted_signer_whose_certificate_may_not_sign_is_not_valid() {
 }
 
 #[test]
+fn a_smart_cards_certificates_that_may_not_sign_say_why_in_id_lists() {
+    // A DoD CAC's four certificates, all under the same name; only the signing one may sign.
+    let r = root();
+    let clause = |exts: &[Vec<u8>]| signer_with("DOE.JANE.1234567890", &r, exts).cert.signing_problem_clause();
+    let encryption = clause(&[key_usage(KEY_ENCIPHERMENT), extended_key_usage(&["1.3.6.1.5.5.7.3.4"])]);
+    assert_eq!(encryption.as_deref(), Some("it does not allow digital signatures (its key usage has neither digital signature nor non-repudiation)"));
+    let logon = clause(&[key_usage(DIGITAL_SIGNATURE), extended_key_usage(&["1.3.6.1.4.1.311.20.2.2", "1.3.6.1.5.5.7.3.2"])]);
+    assert_eq!(logon.as_deref(), Some("it is not issued for signing documents (its extended key usage has no document-signing purpose)"));
+    let card_auth = clause(&[key_usage(DIGITAL_SIGNATURE), extended_key_usage(&["2.16.840.1.101.3.6.8"])]);
+    assert_eq!(card_auth, logon);
+    let signing = clause(&[key_usage(DIGITAL_SIGNATURE | 0x40), extended_key_usage(&["1.3.6.1.5.5.7.3.4", "1.3.6.1.4.1.311.10.3.12"])]);
+    assert_eq!(signing, None);
+}
+
+#[test]
 fn unreadable_constraint_extensions_fail_closed() {
     // keyUsage present but not a BIT STRING: no usage at all, so no keyCertSign.
     let bad_usage = ext("2.5.29.15", &[0xff, 0x00]);
@@ -295,4 +312,31 @@ fn unreadable_constraint_extensions_fail_closed() {
     let garbage = ext("2.5.29.19", &[0x30, 0x05, 0x01]);
     let c = issue("Garbled Constraints", None, FOREVER, &[garbage]);
     assert!(c.cert.has_basic_constraints && !c.cert.is_ca && !c.cert.may_issue());
+}
+
+#[test]
+fn an_unreadable_extended_key_usage_allows_no_purpose() {
+    // An extendedKeyUsage that is present restricts the key even when it doesn't parse (#1807):
+    // truncated, critical or not; a SET instead of a SEQUENCE; or a member that isn't an OID.
+    // Each would otherwise read as "no restriction", or as only its readable members.
+    let r = root();
+    let any = der::oid("2.5.29.37.0");
+    let truncated = [0x30, 0x05, 0x06];
+    let malformed = [
+        ext("2.5.29.37", &truncated),
+        der::seq(&[&der::oid("2.5.29.37"), &der::octets(&truncated)]),
+        ext("2.5.29.37", &der::tlv(tag::SET, &any)),
+        ext("2.5.29.37", &der::seq(&[&der::int(1), &any])),
+    ];
+    for (i, eku) in malformed.into_iter().enumerate() {
+        let signer = signer_with("Malformed EKU", &r, &[key_usage(DIGITAL_SIGNATURE), eku]);
+        assert_eq!(signer.cert.extended_key_usage.as_deref(), Some(&[][..]), "case {i}");
+        let (status, details) = verdict(signer, vec![], &r.cert);
+        assert_eq!(status, Status::Unknown, "case {i}: {details:?}");
+        assert!(details.iter().any(|d| d.contains("not issued for signing documents")), "case {i}: {details:?}");
+    }
+    // The same document-signing purpose, well formed, may sign.
+    let (status, details) =
+        verdict(signer_with("Good EKU", &r, &[key_usage(DIGITAL_SIGNATURE), extended_key_usage(&["2.5.29.37.0"])]), vec![], &r.cert);
+    assert_eq!(status, Status::Valid, "{details:?}");
 }

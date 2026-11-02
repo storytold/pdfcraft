@@ -180,6 +180,18 @@ impl SecurityHandler {
         Ok(Self { dict, key, auth, recovered_user })
     }
 
+    /// Upgrade to owner access with the owner (permissions) password, as when a restricted
+    /// document is unlocked after opening. The user password, or any other, is `WrongPassword`.
+    /// Both passwords unlock the same file key, so what was decrypted so far stays valid; a
+    /// different key is refused too.
+    pub fn authenticate_owner(&self, id0: &[u8], password: &str) -> Result<Self, CryptError> {
+        let owner = Self::open(self.dict.clone(), id0, Some(password))?;
+        if owner.auth != Auth::Owner || owner.key != self.key {
+            return Err(CryptError::WrongPassword);
+        }
+        Ok(owner)
+    }
+
     pub fn auth(&self) -> Auth {
         self.auth
     }
@@ -191,8 +203,22 @@ impl SecurityHandler {
         self.recovered_user.clone()
     }
 
+    /// For R5/R6, `/P` is stored in clear and again in `/Perms`, encrypted with the file key
+    /// (Algorithm 13). Where the two differ, a permission counts only when both grant it, so an
+    /// edited `/P` grants nothing extra. Without a readable `/Perms`, `/P` applies as before.
     pub fn permissions(&self) -> Permissions {
-        Permissions { bits: self.dict.p, owner: self.auth == Auth::Owner }
+        let bits = self.perms_p().map_or(self.dict.p, |p| self.dict.p & p);
+        Permissions { bits, owner: self.auth == Auth::Owner }
+    }
+
+    /// `/P` as `/Perms` holds it: AES-256 ECB of one block (= CBC with a zero IV), marked `adb`.
+    fn perms_p(&self) -> Option<i32> {
+        if !matches!(self.dict.r, 5 | 6) {
+            return None;
+        }
+        let plain = aes_cbc_decrypt(&self.key, &[0; 16], self.dict.perms.first_chunk::<16>()?, false);
+        let p = i32::from_le_bytes(*plain.first_chunk::<4>()?);
+        (plain.get(9..12) == Some(&b"adb"[..])).then_some(p)
     }
 
     pub fn dict(&self) -> &EncryptDict {
@@ -527,6 +553,32 @@ pub enum Algorithm {
     Aes256,
 }
 
+/// A password as [`create`] prepares it: for R2–R4 its PDFDocEncoding (characters it lacks
+/// dropped), at most 32 bytes; for R6 its SASLprep (RFC 4013: soft hyphens and the like removed,
+/// other spaces made plain, then NFKC; the password as given if SASLprep refuses it), in UTF-8,
+/// at most 127 bytes.
+fn prepared_password(algorithm: Algorithm, password: &str) -> Vec<u8> {
+    match algorithm {
+        Algorithm::Rc4_40 | Algorithm::Rc4_128 | Algorithm::Aes128 => legacy_password(password),
+        Algorithm::Aes256 => sasl_password(password),
+    }
+}
+
+/// The bytes new encryption with `algorithm` derives its keys from for `password`: for R2–R4 its
+/// PDFDocEncoding cut or padded to exactly 32 bytes (Algorithm 2); for R6 its SASLprep (the
+/// password as given if SASLprep refuses it), at most 127 bytes of UTF-8. Two passwords with the
+/// same bytes are the same password to the file, and a password with the bytes of `""` opens it
+/// without asking, so callers can refuse either before encrypting. Different bytes can still give
+/// the same key (RC4-40 keeps 5 bytes of a hash). `create` still uses the user password for an
+/// empty R2–R4 owner password.
+pub fn effective_password(algorithm: Algorithm, password: &str) -> Vec<u8> {
+    let prepared = prepared_password(algorithm, password);
+    match algorithm {
+        Algorithm::Rc4_40 | Algorithm::Rc4_128 | Algorithm::Aes128 => pad(&prepared).to_vec(),
+        Algorithm::Aes256 => prepared,
+    }
+}
+
 /// Parameters for new encryption.
 #[derive(Clone, Debug)]
 pub struct NewEncryption<'a> {
@@ -561,6 +613,8 @@ pub fn create(params: &NewEncryption, id0: &[u8]) -> Result<SecurityHandler, Cry
     // Bits 7–8 and 13–32 must be 1; bits 1–2 must be 0 (§7.6.4.2).
     let p = (params.permissions | !0xFFF | 0xC0) & !0x3;
     let mut d = EncryptDict { filter: b"Standard".to_vec(), p, encrypt_metadata: params.encrypt_metadata, ..Default::default() };
+    let user = prepared_password(params.algorithm, params.user_password);
+    let owner = prepared_password(params.algorithm, params.owner_password);
     match params.algorithm {
         Algorithm::Rc4_40 | Algorithm::Rc4_128 | Algorithm::Aes128 => {
             (d.v, d.r, d.length_bits) = match params.algorithm {
@@ -575,8 +629,7 @@ pub fn create(params: &NewEncryption, id0: &[u8]) -> Result<SecurityHandler, Cry
             } else {
                 d.encrypt_metadata = true; // V < 4 always encrypts metadata
             }
-            let user = legacy_password(params.user_password);
-            let owner = if params.owner_password.is_empty() { user.clone() } else { legacy_password(params.owner_password) };
+            let owner = if params.owner_password.is_empty() { user.clone() } else { owner };
             // Algorithm 3: /O
             let rk = owner_rc4_key(&d, &owner);
             let mut o = rc4(&rk, &pad(&user));
@@ -598,8 +651,6 @@ pub fn create(params: &NewEncryption, id0: &[u8]) -> Result<SecurityHandler, Cry
             d.str_f = b"StdCF".to_vec();
             let key = expand(&params.seed, b"file key", 32);
             let salts = expand(&params.seed, b"salts", 32);
-            let user = sasl_password(params.user_password);
-            let owner = sasl_password(params.owner_password);
             // Algorithm 8: /U, /UE
             let mut u = hash_r6(6, &user, &salts[0..8], &[]);
             u.extend_from_slice(&salts[0..16]);

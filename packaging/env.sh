@@ -4,6 +4,8 @@
 # Exports:
 #   ROOT                    workspace root
 #   VERSION                 [workspace.package] version from Cargo.toml (override: PDFCRAFT_VERSION)
+#   PDFCRAFT_BUILD_LABEL    optional label for a local or patched build (letters, digits, dots);
+#                           compiled into `--version` and About, and appended to the package release
 #   DIST                    output directory for release artifacts (default: $ROOT/dist/release)
 #   PDFCRAFT_BUILD_SHA    git commit, recorded in the macOS Info.plist (PdfCraftBuildCommit)
 #   PDFCRAFT_BUILD_DATE   UTC build date, YYYY-MM-DD
@@ -27,6 +29,18 @@ if [ -z "$VERSION" ]; then
   exit 1
 fi
 export VERSION
+
+# A labelled build says so in `--version` and About (pdfcraft_engine::build_info) and in its
+# package release (packaging/linux/nfpm.yaml), so it can't be mistaken for the release.
+if [ -n "${PDFCRAFT_BUILD_LABEL:-}" ]; then
+  case "$PDFCRAFT_BUILD_LABEL" in
+    *[!A-Za-z0-9.]* | .* | *.)
+      echo "error: PDFCRAFT_BUILD_LABEL may hold only letters, digits and inner dots: $PDFCRAFT_BUILD_LABEL" >&2
+      exit 1
+      ;;
+  esac
+  export PDFCRAFT_BUILD_LABEL
+fi
 
 DIST="${DIST:-$ROOT/dist/release}"
 mkdir -p "$DIST"

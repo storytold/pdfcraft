@@ -3,7 +3,7 @@
 //! Without a logger every `log::warn!`/`log::error!` in the workspace (a failed autosave, a page
 //! that would not render, a render worker that could not start, the panic hook's report) vanished.
 //! A launch from a desktop menu has no terminal, so the file is what a bug report can attach:
-//! `<settings dir>/logs/pdfcraft.log`, next to `app.ron` (see `settings_dir` in `main.rs`). Each
+//! `<data dir>/logs/pdfcraft.log` (the PdfCraft eframe storage directory, or portable data). Each
 //! start moves the previous log to `pdfcraft.1.log` (and that one to `.2`), so the log of a run
 //! that crashed survives the next launch.
 //!

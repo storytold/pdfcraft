@@ -6,19 +6,19 @@ use egui::{Color32, FontId, TextFormat};
 
 use crate::canvas::DocView;
 use crate::theme::{self, Tokens};
+use crate::widgets;
 
 /// Glyphs of context shown on each side of a match.
 const CONTEXT: usize = 36;
 
 pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, view: &mut DocView, pages: usize) {
+    crate::widgets::begin_dialog(ui);
     let searched = view.texts.len() + view.text_failed.len();
     let Some(find) = view.find.as_mut() else { return };
     find.in_panel = true;
     let l = ui.label(egui::RichText::new(tl!("What word or phrase would you like to search for?")).color(t.text_muted));
     let r = ui
-        .add(
-            egui::TextEdit::singleline(&mut find.query).id(egui::Id::new("search-panel-input")).hint_text(tl!("Search")).desired_width(f32::INFINITY),
-        )
+        .add(crate::widgets::line(&mut find.query).id(egui::Id::new("search-panel-input")).hint_text(tl!("Search")).desired_width(f32::INFINITY))
         .labelled_by(l.id);
     if find.focus {
         r.request_focus();
@@ -29,8 +29,8 @@ pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, view: &mut DocView, pages: us
         let w = &mut ui.visuals_mut().widgets;
         w.inactive.bg_stroke = egui::Stroke::new(1.0, t.border);
         w.inactive.bg_fill = t.hover;
-        let a = ui.checkbox(&mut find.whole_words, tl!("Whole words only")).changed();
-        let b = ui.checkbox(&mut find.case_sensitive, tl!("Case-sensitive")).changed();
+        let a = ui.add(widgets::checkbox(&mut find.whole_words, tl!("Whole words only"))).changed();
+        let b = ui.add(widgets::checkbox(&mut find.case_sensitive, tl!("Case-sensitive"))).changed();
         if a || b {
             find.case_query.clear();
         }

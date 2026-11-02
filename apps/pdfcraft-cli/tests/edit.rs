@@ -92,6 +92,20 @@ fn the_documented_options_still_edit_and_save() {
     }
 }
 
+/// `--out` naming the input replaces it through a staging file (#2166): the result is the
+/// edited, reopenable file, and nothing is left beside it.
+#[test]
+fn editing_in_place_leaves_a_valid_file_and_no_staging_file() {
+    let input = tmp("in-place", "doc.pdf");
+    std::fs::write(&input, fixture()).unwrap();
+    let out = Command::new(BIN).args(["edit", input.to_str().unwrap(), "--out", input.to_str().unwrap(), "--rotate", "1:90"]).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(first_page_rotation(&input), 90);
+    let names: Vec<String> =
+        std::fs::read_dir(input.parent().unwrap()).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+    assert_eq!(names, ["doc.pdf"], "no staging file beside the result");
+}
+
 mod one_based_arguments {
     use super::*;
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -178,4 +192,160 @@ mod one_based_arguments {
         assert_eq!((info.pages[1].width, info.pages[1].height, info.pages[1].rotation), (300.0, 200.0, 90));
         assert_eq!(std::fs::read(dir.0.join("input.pdf")).unwrap(), source);
     }
+}
+
+/// A destination past the end must fail, not silently become an append (#1330).
+#[test]
+fn a_destination_past_the_end_fails_and_writes_nothing() {
+    let input = tmp("past-end", "in.pdf");
+    std::fs::write(&input, fixture()).unwrap();
+    let output = tmp("past-end", "out.pdf");
+    for (option, value, diagnostic) in [
+        ("--insert-blank", "3", "--insert-blank 3 is past the end: it must be between 1 and 2 (the document has 1 pages)"),
+        ("--insert-blank", "99", "--insert-blank 99 is past the end: it must be between 1 and 2 (the document has 1 pages)"),
+        ("--move", "1:3", "--move target 3 is past the end: it must be between 1 and 2 (the document has 1 pages)"),
+        ("--move", "1:99", "--move target 99 is past the end: it must be between 1 and 2 (the document has 1 pages)"),
+    ] {
+        let out = Command::new(BIN).args(["edit", input.to_str().unwrap(), "--out", output.to_str().unwrap(), option, value]).output().unwrap();
+        assert_eq!(out.status.code(), Some(1), "{option} {value}");
+        assert_eq!(String::from_utf8_lossy(&out.stderr), format!("pdfcraft-cli: {diagnostic}\n"), "{option} {value}");
+        assert!(!output.exists(), "{option} {value}: no output may be written");
+    }
+}
+
+/// One past the last page appends, and each destination is checked against the page count at that point.
+#[test]
+fn the_append_destination_and_counts_grown_by_earlier_edits_are_accepted() {
+    let input = tmp("append", "in.pdf");
+    std::fs::write(&input, fixture()).unwrap();
+    for (name, args) in [
+        ("insert.pdf", vec!["--insert-blank", "2"]),
+        ("move.pdf", vec!["--insert-blank", "1", "--move", "1:3"]),
+        ("grown.pdf", vec!["--insert-blank", "2", "--insert-blank", "3"]),
+    ] {
+        let output = tmp("append", name);
+        let mut all = vec!["edit", input.to_str().unwrap(), "--out", output.to_str().unwrap()];
+        all.extend(args);
+        let out = Command::new(BIN).args(&all).output().unwrap();
+        assert!(out.status.success(), "{name}: {}", String::from_utf8_lossy(&out.stderr));
+        let info = pdfcraft_render::inspect(std::sync::Arc::new(std::fs::read(&output).unwrap()), None).unwrap();
+        let sizes: Vec<_> = info.pages.iter().map(|p| (p.width, p.height)).collect();
+        let expected: &[(f32, f32)] = match name {
+            "insert.pdf" => &[(200.0, 300.0), (612.0, 792.0)],
+            "move.pdf" => &[(200.0, 300.0), (612.0, 792.0)],
+            _ => &[(200.0, 300.0), (612.0, 792.0), (612.0, 792.0)],
+        };
+        assert_eq!(sizes, expected, "{name}");
+    }
+}
+
+/// Two pages whose catalog points at a page tree object the file does not have (#1656). The
+/// reader finds the pages by scanning, in file order, so `edit` must work on the same pages.
+/// Object 3 is written before object 2, so file order and object numbers disagree.
+fn fixture_without_page_tree() -> Vec<u8> {
+    let stream = |content: &str| format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()).into_bytes();
+    let objs: Vec<(usize, Vec<u8>)> = vec![
+        (1, b"<< /Type /Catalog /Pages 6 0 R >>".to_vec()),
+        (3, b"<< /Type /Page /Parent 6 0 R /MediaBox [0 0 200 300] /Contents 4 0 R >>".to_vec()),
+        (2, b"<< /Type /Page /Parent 6 0 R /MediaBox [0 0 300 200] /Contents 5 0 R >>".to_vec()),
+        (4, stream("0 0 m 10 10 l S")),
+        (5, stream("0 0 m 20 20 l S")),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = vec![0; objs.len()];
+    for (num, o) in &objs {
+        offsets[num - 1] = out.len();
+        out.extend_from_slice(format!("{num} 0 obj\n").as_bytes());
+        out.extend_from_slice(o);
+        out.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    out
+}
+
+#[test]
+fn a_document_whose_page_tree_is_missing_edits_the_pages_the_reader_shows() {
+    let input = tmp("no-page-tree", "in.pdf");
+    std::fs::write(&input, fixture_without_page_tree()).unwrap();
+    let before = pdfcraft_render::inspect(std::sync::Arc::new(fixture_without_page_tree()), None).unwrap();
+    assert_eq!(before.pages.iter().map(|p| (p.width, p.height)).collect::<Vec<_>>(), [(200.0, 300.0), (300.0, 200.0)]);
+    for (name, args, expected) in [
+        // Width and height are as displayed: the turned page reads 200 x 300.
+        ("rotate.pdf", ["--rotate", "2:90"], &[(200.0, 300.0, 0), (200.0, 300.0, 90)][..]),
+        ("delete.pdf", ["--delete", "1"], &[(300.0, 200.0, 0)][..]),
+    ] {
+        let output = tmp("no-page-tree", name);
+        let mut all = vec!["edit", input.to_str().unwrap(), "--out", output.to_str().unwrap()];
+        all.extend(args);
+        let out = Command::new(BIN).args(&all).output().unwrap();
+        assert!(out.status.success(), "{name}: {}", String::from_utf8_lossy(&out.stderr));
+        let info = pdfcraft_render::inspect(std::sync::Arc::new(std::fs::read(&output).unwrap()), None).unwrap();
+        let pages: Vec<_> = info.pages.iter().map(|p| (p.width, p.height, p.rotation)).collect();
+        assert_eq!(pages, expected, "{name}");
+    }
+}
+
+/// Like [`fixture_without_page_tree`], but the scanning reader shows different pages from the
+/// page objects: it skips the blank 200 x 200 page (no `/Contents`) and shows the Text
+/// annotation (which has `/Contents`) as a page. No page tree may be rebuilt from such a file.
+fn fixture_whose_scan_disagrees() -> Vec<u8> {
+    let stream = |content: &str| format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()).into_bytes();
+    let objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 9 0 R >>".to_vec(),
+        b"<< /Type /Page /Parent 9 0 R /MediaBox [0 0 100 100] /Contents 5 0 R >>".to_vec(),
+        b"<< /Type /Page /Parent 9 0 R /MediaBox [0 0 200 200] >>".to_vec(),
+        b"<< /Type /Page /Parent 9 0 R /MediaBox [0 0 300 300] /Contents 6 0 R /Annots [7 0 R] >>".to_vec(),
+        stream("0 0 m 10 10 l S"),
+        stream("0 0 m 20 20 l S"),
+        b"<< /Type /Annot /Subtype /Text /Rect [10 10 30 30] /Contents (hello) >>".to_vec(),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+        out.extend_from_slice(o);
+        out.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    out
+}
+
+#[test]
+fn a_page_tree_is_not_rebuilt_when_the_reader_shows_other_pages() {
+    let input = tmp("scan-disagrees", "in.pdf");
+    std::fs::write(&input, fixture_whose_scan_disagrees()).unwrap();
+    let shown = pdfcraft_render::inspect(std::sync::Arc::new(fixture_whose_scan_disagrees()), None).unwrap();
+    assert_eq!(shown.pages.len(), 3);
+    assert!(shown.pages.iter().all(|p| p.width != 200.0), "the reader must not show the blank page");
+    let output = tmp("scan-disagrees", "out.pdf");
+    let out = Command::new(BIN).args(["edit", input.to_str().unwrap(), "--out", output.to_str().unwrap(), "--delete", "2"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    assert_eq!(String::from_utf8_lossy(&out.stderr), "pdfcraft-cli: the document's page tree lists no pages: the file is damaged\n");
+    assert!(!output.exists(), "no page may be deleted");
+}
+
+/// A page past the end names its own option and the page count left by the earlier options (#1550).
+#[test]
+fn a_page_past_the_end_after_earlier_edits_names_that_option() {
+    let input = tmp("chained", "in.pdf");
+    std::fs::write(&input, fixture()).unwrap();
+    let output = tmp("chained", "out.pdf");
+    // 1 page, grown to 3, then --delete leaves 2: the 3 in --move 3:1 is the page that is gone.
+    let args = ["--insert-blank", "2", "--insert-blank", "3", "--delete", "3", "--move", "3:1"];
+    let out = Command::new(BIN).args(["edit", input.to_str().unwrap(), "--out", output.to_str().unwrap()]).args(args).output().unwrap();
+    assert!(!out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("--move: page 3 does not exist") && err.contains("has 2 pages"), "{err}");
+    assert!(!output.exists());
 }

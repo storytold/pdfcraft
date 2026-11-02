@@ -4,7 +4,7 @@ use std::env;
 use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -80,13 +80,9 @@ pub fn print_to_pdf(chrome: &Path, html: &Path, pdf: &Path, log: &Path) -> Resul
     print_arg.push(pdf);
     let log_file = fs::File::create(log).with_context(|| format!("creating {}", log.display()))?;
 
+    let profile = TempProfile::new();
     let mut child = Command::new(chrome)
-        .arg("--headless=new")
-        .arg("--disable-gpu")
-        .arg("--no-pdf-header-footer")
-        .arg("--generate-pdf-document-outline")
-        .arg(print_arg)
-        .arg(super::file_url(html))
+        .args(chrome_args(&profile.0, print_arg, super::file_url(html)))
         .stdout(Stdio::null())
         .stderr(log_file)
         .spawn()
@@ -94,6 +90,10 @@ pub fn print_to_pdf(chrome: &Path, html: &Path, pdf: &Path, log: &Path) -> Resul
 
     let started = Instant::now();
     let mut last_len = None;
+    // Chrome's Skia back-end writes the PDF incrementally, and every increment ends with its own
+    // `%%EOF`: a stable file that looks complete can still grow while later pages rasterise. Only
+    // treat the file as finished after the size has been quiet for several consecutive polls.
+    let mut quiet_polls = 0;
     loop {
         if let Some(status) = child.try_wait()? {
             if is_complete(pdf) {
@@ -102,21 +102,98 @@ pub fn print_to_pdf(chrome: &Path, html: &Path, pdf: &Path, log: &Path) -> Resul
             bail!("Chrome exited with {status} without writing {}; see {}", pdf.display(), log.display());
         }
         let len = fs::metadata(pdf).map(|m| m.len()).ok();
-        if len.is_some() && len == last_len && is_complete(pdf) {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Ok(());
+        if len == last_len && len.is_some() && is_complete(pdf) {
+            quiet_polls += 1;
+            if quiet_polls >= 10 {
+                stop(&mut child);
+                return Ok(());
+            }
+        } else {
+            quiet_polls = 0;
         }
         last_len = len;
         if started.elapsed() > Duration::from_secs(120) {
-            let _ = child.kill();
+            stop(&mut child);
             bail!("Chrome timed out printing {}; see {}", html.display(), log.display());
         }
         thread::sleep(Duration::from_millis(500));
     }
 }
 
+/// Command-line arguments for a headless print. `MacAppCodeSignClone` is disabled because on macOS
+/// every launch otherwise makes a code-sign clone of the app under `/private/var/folders`, and a
+/// browser that is killed never removes it. The profile is a throwaway directory.
+fn chrome_args(profile: &Path, print_arg: OsString, url: impl Into<OsString>) -> Vec<OsString> {
+    let mut user_data = OsString::from("--user-data-dir=");
+    user_data.push(profile);
+    vec![
+        "--headless=new".into(),
+        "--disable-gpu".into(),
+        "--disable-features=MacAppCodeSignClone".into(),
+        user_data,
+        "--no-pdf-header-footer".into(),
+        "--generate-pdf-document-outline".into(),
+        print_arg,
+        url.into(),
+    ]
+}
+
+/// Ask Chrome to quit (SIGTERM on Unix) so it can clean up after itself, and kill it only if it
+/// is still running after a few seconds.
+fn stop(child: &mut Child) {
+    #[cfg(unix)]
+    {
+        let _ = Command::new("kill").arg("-TERM").arg(child.id().to_string()).status();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            if matches!(child.try_wait(), Ok(Some(_))) {
+                return;
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+/// A throwaway Chrome profile directory, removed when dropped (also on error paths).
+struct TempProfile(PathBuf);
+
+impl TempProfile {
+    fn new() -> Self {
+        Self(env::temp_dir().join(format!("pdfcraft-chrome-profile-{}", std::process::id())))
+    }
+}
+
+impl Drop for TempProfile {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
 /// A PDF is complete once its trailer's `%%EOF` marker has been written.
 fn is_complete(pdf: &Path) -> bool {
     fs::read(pdf).map(|bytes| bytes.len() > 1024 && bytes[bytes.len() - 1024..].windows(5).any(|w| w == b"%%EOF")).unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn args_disable_code_sign_clone_and_use_throwaway_profile() {
+        let args = chrome_args(Path::new("/tmp/prof"), OsString::from("--print-to-pdf=out.pdf"), "file:///a.html");
+        assert!(args.iter().any(|a| a == "--disable-features=MacAppCodeSignClone"));
+        assert!(args.iter().any(|a| a == "--user-data-dir=/tmp/prof"));
+        assert_eq!(args.last().map(|a| a.as_os_str()), Some(std::ffi::OsStr::new("file:///a.html")));
+    }
+
+    #[test]
+    fn temp_profile_is_removed_on_drop() {
+        let profile = TempProfile::new();
+        let dir = profile.0.clone();
+        fs::create_dir_all(dir.join("Default")).unwrap();
+        drop(profile);
+        assert!(!dir.exists());
+    }
 }

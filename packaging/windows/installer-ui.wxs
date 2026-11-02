@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Original, text-only native MSI dialogs. No third-party UI artwork or custom-action DLLs.
-     Full UI gets welcome (with the desktop-shortcut checkbox)/progress/outcome screens; /qn and /qb stay unattended. -->
+     Full UI gets welcome (with the desktop-shortcut and PDF context-menu checkboxes)/progress/outcome screens; /qn and /qb stay unattended. -->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
   <Fragment>
     <UI Id="PdfcraftInstallerUI">
@@ -14,6 +14,8 @@
             Text="Setup will install [ProductName] for all users and add it to the Start menu. Click Install to continue." />
         <Control Id="DesktopShortcut" Type="CheckBox" X="20" Y="105" Width="330" Height="17"
             Property="INSTALLDESKTOPSHORTCUT" CheckBoxValue="1" Text="Create a &amp;desktop shortcut" />
+        <Control Id="PdfContextMenu" Type="CheckBox" X="20" Y="123" Width="330" Height="17"
+            Property="INSTALLPDFCONTEXTMENU" CheckBoxValue="1" Text="Add &quot;&amp;Edit with PdfCraft&quot; to the right-click menu of PDF files" />
         <Control Id="Install" Type="PushButton" X="195" Y="145" Width="75" Height="23" Default="yes" ElevationShield="yes" Text="&amp;Install">
           <Publish Event="EndDialog" Value="Return" />
         </Control>

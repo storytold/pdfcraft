@@ -59,8 +59,20 @@ pub trait Device<'a> {
     /// The tag is the marked content tag (e.g. b"P", b"Span"). The mcid is
     /// the marked content identifier from the properties dict, if present.
     fn begin_marked_content(&mut self, _tag: &[u8], _mcid: Option<i32>) {}
+    /// PdfCraft patch (25): the `/ActualText` of the marked content sequence that just began
+    /// (ISO 32000-2 §14.9.4), as the text string's raw bytes. Called right after
+    /// `begin_marked_content`; the text replaces everything drawn up to the matching
+    /// `end_marked_content`.
+    fn actual_text(&mut self, _text: &[u8]) {}
     /// Called at the end of a marked content sequence (EMC).
     fn end_marked_content(&mut self) {}
+    /// PdfCraft patch (29): the page's annotations are about to be drawn (until
+    /// `end_annotations`), as page content finishes. Devices can use this to treat their
+    /// paints as annotation colours rather than document colours — the reading-colours
+    /// setting replaces document colours only, never the colours a comment was given.
+    fn begin_annotations(&mut self) {}
+    /// PdfCraft patch (29): the page's annotations are done; what follows is page content.
+    fn end_annotations(&mut self) {}
 }
 
 /// A device that discards all drawing operations.

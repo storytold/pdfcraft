@@ -10,7 +10,14 @@ Comments (annotations), ISO 32000-2 §12.5. Layer L3, depends on `pdfcraft-cos`,
 - **Appearance streams** (`appearance::build`) generated from the annotation dictionary, so new
   and restyled comments look the same in every viewer. Highlights multiply (`/BM /Multiply`).
   Note icons are PdfCraft's own drawings. Text boxes use standard Helvetica (WinAnsi), with
-  line breaking by approximate Helvetica proportions (no font program is bundled).
+  line breaking by approximate Helvetica proportions (no font program is bundled). Text it can't
+  draw (in a text box, callout, Fill & Sign text, measurement label or dynamic stamp's by-line;
+  `appearance::undrawable_text`) is kept as typed and drawn as `?`, and the comment is marked with
+  the first such character (`pdfcraft_fonts::UNDRAWN_MARK`) so the engine reports the edit and
+  flattening refuses to make it permanent. Two refusals (`AnnotError::Undrawable`): a redaction
+  mark's overlay text, which becomes page content when applied; and a restyle or resize of a
+  comment another program drew with a font that has those characters, whose appearance is kept
+  rather than redrawn with `?` (new text for it is taken).
 - **Edits:** reply (`/IRT`), set review status (a `/State` reply, as Acrobat's "Set status"
   does), change text, move, resize, restyle, delete (with pop-up and replies).
 
@@ -40,10 +47,10 @@ deterministic; the engine supplies them.
   never paint a second icon.
 - Resizing a stamp changes its `/Rect` and preserves its original appearance and resources;
   viewers scale that appearance into the new rectangle. Locked stamps refuse the edit.
-- Natural-size image stamps placed by the engine counterrotate their appearance on rotated
-  pages. Image restyling retains that appearance matrix. Explicit rectangles, image signatures
-  and PDF-page stamps still use their existing placement behavior; page-rotation support for
-  those paths is not complete.
+- Picture stamps (a natural-size or explicit-rectangle image, a PDF page, or an image
+  signature) and PdfCraft's rubber stamps counterrotate their appearance on rotated pages, so
+  the picture or label reads upright as the page is displayed. Restyling a picture stamp keeps
+  that appearance matrix. The rotation is the page's `/Rotate` at placement.
 
 ## Not yet
 

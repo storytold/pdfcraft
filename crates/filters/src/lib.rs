@@ -296,6 +296,26 @@ mod tests {
     }
 
     #[test]
+    fn raw_flate_fallback_preserves_output_limits() {
+        // RFC 1951 stored blocks: the first is nonfinal with LEN=257 and
+        // NLEN=!257, followed by a final empty block. Its ignored alignment
+        // bits make the first two bytes also look like a valid zlib header.
+        let data = vec![b'A'; 257];
+        let mut raw = vec![0x78, 0x01, 0x01, 0xfe, 0xfe];
+        raw.extend_from_slice(&data);
+        raw.extend_from_slice(&[0x01, 0x00, 0x00, 0xff, 0xff]);
+        let chain = [(Filter::Flate, Params::default())];
+        for max in [0, 1, 128, 256] {
+            assert!(matches!(decode(&chain, &raw, max), Err(FilterError::LimitExceeded(m)) if m == max));
+            assert!(matches!(decode_tolerant(&chain, &raw, max), Err(FilterError::LimitExceeded(m)) if m == max));
+        }
+        for max in [257, 258] {
+            assert_eq!(decode(&chain, &raw, max).unwrap(), data);
+            assert_eq!(decode_tolerant(&chain, &raw, max).unwrap(), (data.clone(), false));
+        }
+    }
+
+    #[test]
     fn tolerant_flate_returns_partial() {
         let data: Vec<u8> = (0..20_000u32).map(|i| (i % 97) as u8 ^ (i / 300) as u8).collect();
         let mut z = encode_flate(&data);

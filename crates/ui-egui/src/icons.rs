@@ -6,10 +6,10 @@ use std::sync::OnceLock;
 use craft_ui::buttons::{ButtonVisuals, IconButton, IconButtonStyle};
 use craft_ui::icons::{SvgIconSet, SvgStyle};
 
-use egui::{Color32, Rect, Response, Vec2};
+use egui::{Color32, Rect, Response, Stroke, Vec2};
 
 use crate::icon_data::ICONS;
-use crate::theme::Tokens;
+use crate::theme::{self, Tokens};
 
 fn white_icons() -> &'static SvgIconSet {
     static MAP: OnceLock<SvgIconSet> = OnceLock::new();
@@ -36,18 +36,42 @@ pub fn paint(ui: &egui::Ui, rect: Rect, name: &str, size: f32, tint: Color32) {
 /// Square icon button: transparent until hovered; `selected` gets the accent treatment.
 pub fn button(ui: &mut egui::Ui, name: &str, box_size: f32, selected: bool, tooltip: &str) -> Response {
     let t = Tokens::get(ui.ctx());
+    // The shared button paints no fill of its own: the eased press wash below replaces it.
+    let clear = |icon| ButtonVisuals { fill: Color32::TRANSPARENT, stroke: Stroke::NONE, icon };
     let style = IconButtonStyle {
-        normal: ButtonVisuals { fill: Color32::TRANSPARENT, stroke: egui::Stroke::NONE, icon: t.icon },
-        hovered: ButtonVisuals { fill: t.hover, stroke: egui::Stroke::NONE, icon: t.icon },
-        pressed: Some(ButtonVisuals { fill: t.pressed, stroke: egui::Stroke::NONE, icon: t.icon }),
-        selected: ButtonVisuals { fill: t.accent_soft, stroke: egui::Stroke::NONE, icon: t.accent_text },
+        normal: clear(t.icon),
+        hovered: clear(t.icon),
+        pressed: Some(clear(t.icon)),
+        selected: clear(t.accent_text),
         corner_radius: t.radius.into(),
-        focus_stroke: egui::Stroke::new(1.0, t.accent),
+        focus_stroke: Stroke::new(1.0, t.accent),
     };
     let label = if tooltip.is_empty() { name } else { tooltip };
-    let resp = IconButton::new(label, Vec2::splat(box_size), &style).selected(selected).show(ui, |ui, rect, tint| {
-        paint(ui, rect, name, (box_size * 0.5).round(), tint);
-    });
+    // The wash eases from the response, so reserve its place under the icon and focus ring.
+    let wash = ui.painter().add(egui::Shape::Noop);
+    let mut painted = None;
+    let resp = IconButton::new(label, Vec2::splat(box_size), &style).selected(selected).show(ui, |_, rect, tint| painted = Some((rect, tint)));
+    if let Some((rect, tint)) = painted {
+        let press = theme::Press::track(ui, &resp);
+        let mut shapes = Vec::with_capacity(2);
+        let fill = press.wash_color(&t, selected);
+        if fill.a() > 0 {
+            shapes.push(egui::Shape::rect_filled(rect, t.radius, fill));
+        }
+        if selected {
+            shapes.push(egui::Shape::rect_stroke(
+                rect.shrink(0.5),
+                t.radius,
+                Stroke::new(1.0, t.accent.gamma_multiply(0.45)),
+                egui::StrokeKind::Inside,
+            ));
+        }
+        ui.painter().set(wash, egui::Shape::Vec(shapes));
+        // The glyph shrinks a little and drops a pixel while the pointer is down.
+        let size = (box_size * 0.5).round() * (1.0 - 0.08 * press.down);
+        paint(ui, rect.translate(press.offset()), name, size, tint);
+    }
+    let resp = theme::hand(resp);
     if tooltip.is_empty() { resp } else { resp.on_hover_text(tooltip) }
 }
 
@@ -75,7 +99,7 @@ mod tests {
 
     #[test]
     fn shared_catalog_preserves_existing_icons_and_fallback_uri() {
-        assert_eq!(ICONS.len(), 185);
+        assert_eq!(ICONS.len(), 186);
         assert!(exists("minimize-2"));
         for (name, original) in ICONS {
             let expected =
@@ -92,9 +116,10 @@ mod tests {
     }
 
     #[test]
-    fn shared_button_preserves_theme_painting_and_pointer_responses() {
-        // Freeze the original paint path across both themes. The added keyboard-focus
-        // outline is covered independently in craft-ui.
+    fn shared_button_preserves_pointer_responses() {
+        // The shared button must respond like the original allocate-and-paint path in both
+        // themes. Its painting differs on purpose (the eased press wash, the selected outline
+        // and the sinking glyph); the keyboard-focus outline is covered in craft-ui.
         fn frame(
             ctx: &egui::Context,
             events: Vec<egui::Event>,
@@ -151,7 +176,7 @@ mod tests {
                             5 => vec![egui::Event::PointerMoved(egui::pos2(300.0, 200.0))],
                             _ => vec![],
                         };
-                        let (a, before) = frame(&old, events.clone(), selected, enabled, true);
+                        let (a, _) = frame(&old, events.clone(), selected, enabled, true);
                         let (b, after) = frame(&new, events, selected, enabled, false);
                         center = a.rect.center();
                         assert_eq!(a.rect, b.rect);
@@ -159,7 +184,7 @@ mod tests {
                             (a.clicked(), a.hovered(), a.is_pointer_button_down_on()),
                             (b.clicked(), b.hovered(), b.is_pointer_button_down_on())
                         );
-                        assert_eq!(before, after, "{theme:?}, selected={selected}, enabled={enabled}, step={step}");
+                        assert!(!after.is_empty(), "{theme:?}, selected={selected}, enabled={enabled}, step={step}");
                     }
                 }
             }

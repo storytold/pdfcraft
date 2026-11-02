@@ -33,6 +33,11 @@ const COMMANDS: &[(&str, &str, Command)] = &[
         macos_integration::run,
     ),
     ("text-oracle", "Compare text extraction with pdftotext over corpus/ (word F1; target median ≥ 0.97)", gates::text_oracle),
+    (
+        "render-oracle",
+        "Compare page rendering with Poppler over corpus/ (pixel disagreement rate; --dir, --dpi, --limit, --tolerance, --hide-annotations)",
+        gates::render_oracle,
+    ),
     ("screenshots", "Regenerate the README screenshots in docs/images/ and their ATTRIBUTION entries", screenshots::run),
     ("models", "Fetch the OCR models (ATTRIBUTION.toml kind = \"model\") into assets/models/, verified by SHA-256", assets::models),
     ("demo-pdf", "Build dist/demo/pdfcraft-showcase.pdf (needs Google Chrome or Chromium)", demo_pdf::run),

@@ -1,5 +1,5 @@
 use crate::font::blob::{CffFontBlob, OpenTypeFontBlob};
-use crate::font::generated::{glyph_names, mac_os_roman, mac_roman, standard};
+use crate::font::generated::{glyph_names, mac_os_roman, mac_roman, standard, win_ansi};
 use crate::font::standard_font::StandardKind;
 use crate::font::{
     Encoding, FallbackFontQuery, FontFlags, glyph_name_to_unicode, read_to_unicode,
@@ -191,7 +191,7 @@ impl TrueTypeFont {
 
         match &self.kind {
             Kind::Embedded(e) => e
-                .code_to_name(code as u8)
+                .code_to_unicode_name(code as u8)
                 .and_then(glyph_name_to_unicode)
                 .map(BfString::Char),
             Kind::Standard(s) => s.char_code_to_unicode(code as u8).map(BfString::Char),
@@ -275,6 +275,25 @@ impl EmbeddedKind {
             // See PDFJS-6410 - PDF has no base encoding, so let's fallback to
             // standard here.
             .or_else(|| standard::get(code))
+    }
+
+    /// PdfCraft patch: the glyph name text extraction reads a code as. Without a base encoding
+    /// a TrueType font's codes are read as WinAnsi, matching pdftotext's output, not as
+    /// Standard: OCR engines write the text layer of a scan with WinAnsi codes and no
+    /// `/Encoding`, and Standard has no name for ü, ö or ß and gives é (0xE9) as Ø. Glyph
+    /// selection (`code_to_name`) is unchanged.
+    fn code_to_unicode_name(&self, code: u8) -> Option<&str> {
+        self.differences
+            .get(&code)
+            .map(|s| s.as_str())
+            // PdfCraft patch: an Annex D.2 alias code reads as the ordinary character; see
+            // `Encoding::text_alias`.
+            .or_else(|| self.encoding.text_alias(code))
+            .or_else(|| self.encoding.map_code(code))
+            // The last resort reads the code as WinAnsi whatever the font said, so it takes the
+            // same aliasing.
+            .or_else(|| Encoding::WinAnsi.text_alias(code))
+            .or_else(|| win_ansi::get(code))
     }
 
     fn outline_glyph(&self, glyph: GlyphId) -> BezPath {

@@ -211,6 +211,25 @@ fn scan_recognizes_accents_in_requested_languages() {
 }
 
 #[test]
+fn french_ocr_preserves_capitals_cedilla_ligature_and_apostrophes_after_save() {
+    if !ocr::available() {
+        eprintln!("skipped: run cargo xtask models");
+        return;
+    }
+    let (mut s, id) = scan("ÉTÉ français cœur l'été l’été à Paris.", 0, 0.0);
+    let before = render(&s, id);
+    s.recognize_text(id, &[], OcrSettings { language: "fr".into(), auto_rotate: false, deskew: false, ..Default::default() }).unwrap();
+    let saved = s.save_bytes(id).unwrap();
+    let reopened = s.open("french.pdf", None, saved, None).unwrap();
+    let extracted = text(&s, reopened);
+    for expected in ["ÉTÉ", "français", "cœur", "l'été", "Paris."] {
+        assert!(extracted.contains(expected), "missing {expected:?}: {extracted:?}");
+    }
+    assert_eq!(extracted.replace('’', "'").matches("l'été").count(), 2, "both apostrophe forms: {extracted:?}");
+    assert_eq!(before, render(&s, reopened), "searchable text must not change scan pixels");
+}
+
+#[test]
 fn italian_ocr_preserves_all_six_accents_after_save() {
     if !ocr::available() {
         eprintln!("skipped: run cargo xtask models");
@@ -422,4 +441,84 @@ fn scan_rotation_and_deskew_keep_searchable_text_aligned() {
     for glyph in &text.glyphs[range] {
         assert!(glyph.direction[0] > 0.99 && glyph.direction[1].abs() < 0.01, "{glyph:?}");
     }
+}
+
+/// #1012 + #1028: existing invisible words are still duplicates when recognition
+/// crops scanner padding, turns the page and deskews before reading it.
+#[test]
+fn corrected_scans_do_not_duplicate_existing_ocr() {
+    if !ocr::available() {
+        eprintln!("skipped: run cargo xtask models");
+        return;
+    }
+    let sentence =
+        (0..8).map(|_| "Document orientation and searchable text. The quick brown fox jumps over the lazy dog.").collect::<Vec<_>>().join("\n");
+    let (mut s, scan_id) = scan(&sentence, 90, 2.0);
+    let image = image::load_from_memory(&render(&s, scan_id)).unwrap().to_rgb8();
+    let mut framed = image::RgbImage::from_pixel(image.width() + 140, image.height() + 140, image::Rgb([25, 25, 25]));
+    image::imageops::overlay(&mut framed, &image, 70, 70);
+    let mut png = std::io::Cursor::new(Vec::new());
+    framed.write_to(&mut png, image::ImageFormat::Png).unwrap();
+    let bytes = s.create_from_images(&[("framed.png".into(), png.into_inner())]).unwrap();
+    let id = s.open("framed.pdf", None, bytes, None).unwrap();
+    let settings = OcrSettings { skip_text_pages: false, auto_crop: true, crop_margin: 0.0, ..Default::default() };
+    let initial = s.ocr_job(id, &[], settings.clone()).unwrap().run(&ocr::engine().unwrap(), |_, _| true);
+    assert!(initial[0].crop.is_some(), "{initial:?}");
+    assert_ne!(initial[0].correction.rotation, 0, "{initial:?}");
+    assert!(initial[0].correction.deskew.abs() > 0.5, "{initial:?}");
+    assert!(!initial[0].words.is_empty());
+    // Seed just the invisible layer in source coordinates, leaving the crooked scan intact.
+    s.apply(id, Edit::AddOcrText { page: 0, words: initial[0].words.clone() }).unwrap();
+    let before = s.get(id).unwrap().bytes.clone();
+    let found = s.recognize_text(id, &[], settings).unwrap();
+    assert!(found[0].words.is_empty(), "{found:?}");
+    assert_eq!(found[0].already_on_page, initial[0].words.len());
+    let extracted = text(&s, id);
+    let saved = s.save_bytes(id).unwrap();
+    let reopened = s.open("corrected.pdf", None, saved, None).unwrap();
+    assert_eq!(text(&s, reopened), extracted);
+    s.undo(id).unwrap();
+    assert_eq!(s.get(id).unwrap().bytes, before);
+}
+
+/// Decoded Han text needs no installed font to survive the invisible PDF text layer.
+#[test]
+fn chinese_ocr_text_layer_preserves_scripts_and_punctuation_after_save() {
+    for sentence in ["繁體中文，臺灣。", "简体中文，中国。"] {
+        let (mut s, id) = scan("Synthetic scan", 0, 0.0);
+        let before = s.get(id).unwrap().bytes.clone();
+        let pixels = render(&s, id);
+        s.apply(
+            id,
+            Edit::AddOcrText {
+                page: 0,
+                words: vec![PlacedWord { text: sentence.into(), origin: [20.0, 20.0], across: [150.0, 0.0], up: [0.0, 20.0] }],
+            },
+        )
+        .unwrap();
+        let saved = s.save_bytes(id).unwrap();
+        let reopened = s.open("chinese.pdf", None, saved, None).unwrap();
+        assert!(text(&s, reopened).contains(sentence), "{:?}", text(&s, reopened));
+        assert_eq!(pixels, render(&s, reopened));
+        s.undo(id).unwrap();
+        assert_eq!(s.get(id).unwrap().bytes, before);
+    }
+}
+
+#[test]
+fn catalan_ocr_keeps_accents_after_save() {
+    if !ocr::available() {
+        eprintln!("skipped: run cargo xtask models");
+        return;
+    }
+    let (mut s, id) = scan("La llengua catalana és útil per a la ciència i la música.", 0, 0.0);
+    let before = render(&s, id);
+    s.recognize_text(id, &[], OcrSettings { language: "ca".into(), auto_rotate: false, deskew: false, ..Default::default() }).unwrap();
+    let saved = s.save_bytes(id).unwrap();
+    let reopened = s.open("catalan.pdf", None, saved, None).unwrap();
+    let extracted = text(&s, reopened);
+    for expected in ["catalana", "és", "útil", "ciència", "música"] {
+        assert!(extracted.contains(expected), "missing {expected:?}: {extracted:?}");
+    }
+    assert_eq!(before, render(&s, reopened));
 }

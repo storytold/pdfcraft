@@ -11,18 +11,21 @@
 mod inspect;
 mod pixels;
 mod raster;
+mod reading;
 mod structure;
 pub mod text;
+pub mod transition;
 
 pub use inspect::{
     Annotation, Attachment, AttachmentSource, DestView, DocInfo, Field, FieldKind, FontInfo, Layer, LayerOp, Link, LinkTarget, OutlineItem, PageInfo,
-    Xfa, attachment_data, inspect, pretty_date,
+    PageTransition, RemoteDestination, TransitionStyle, Xfa, attachment_data, check_pages, inspect, pretty_date,
 };
 pub use pixels::Pixels;
 pub use raster::{
-    MAX_PIXELS, MAX_SIDE, PageRenderer, RenderConfig, RenderPool, RenderRequest, RenderStats, RenderWarning, RenderedPage, RequestKind, Retiring,
-    Tile, device_pixels, effective_scale,
+    MAX_PIXELS, MAX_SIDE, PRINT_TAG, PageRenderer, RenderConfig, RenderPool, RenderRequest, RenderStats, RenderWarning, RenderedPage, RequestKind,
+    Retiring, Tile, device_pixels, effective_scale,
 };
+pub use reading::{ReadingColors, ReadingParams};
 pub use text::{PageText, TextGlyph};
 
 /// Errors surfaced to the user when a document cannot be opened.
@@ -37,3 +40,6 @@ pub enum OpenError {
     #[error("{0}")]
     Unsupported(String),
 }
+
+#[cfg(test)]
+mod lab_bradford_tests;

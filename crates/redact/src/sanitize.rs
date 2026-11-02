@@ -113,8 +113,10 @@ fn outline_len(doc: &Document, first: Option<&Object>, depth: usize) -> usize {
     n
 }
 
+/// A comment as the comments list sees it, less file attachments (removed with Attachments) and
+/// redaction marks.
 fn is_comment(subtype: &[u8]) -> bool {
-    !matches!(subtype, b"Link" | b"Widget" | b"Popup" | b"FileAttachment" | b"Redact")
+    !matches!(subtype, b"FileAttachment" | b"Redact") && pdfcraft_annot::is_comment_subtype(&String::from_utf8_lossy(subtype))
 }
 
 /// The layers that are off in the default configuration.
@@ -142,6 +144,9 @@ fn content_pass(doc: &mut Document, text: bool, layers: bool, write: bool) -> Re
         return Ok(0);
     }
     let mut total = 0;
+    // The original image and form XObjects the rewrite drops or replaces, on any page.
+    let mut doomed = Vec::new();
+    let mut retired_properties = Vec::new();
     let n = pdfcraft_model::pages(doc).len();
     for pi in 0..n {
         let page = pdfcraft_model::pages(doc).swap_remove(pi);
@@ -161,11 +166,16 @@ fn content_pass(doc: &mut Document, text: bool, layers: bool, write: bool) -> Re
         }
         scope.hidden_layers = off.clone();
         let out = process(doc, &mut scope, &data, &resources, Matrix::IDENTITY);
+        if let Some(error) = out.error {
+            return Err(error.into());
+        }
         let blocks = scope.layer_blocks;
         total += out.residue + blocks + report.glyphs;
         if !write {
             continue;
         }
+        doomed.extend_from_slice(&out.doomed);
+        retired_properties.extend(out.retired_properties);
         let mut new_list = list.clone();
         let mut changed = false;
         for (i, new) in out.streams.into_iter().enumerate() {
@@ -178,21 +188,34 @@ fn content_pass(doc: &mut Document, text: bool, layers: bool, write: bool) -> Re
             new_list[i] = Object::Ref(doc.add(Object::Stream(pdfcraft_cos::Stream::flate(dict, &bytes))));
             changed = true;
         }
-        if changed || !out.xobjects.is_empty() {
+        if changed || !out.xobjects.is_empty() || !out.replaced.is_empty() {
+            // Pin inherited resources before replacing them. When no page still inherits the
+            // original holder, retiring it also retires descriptions no longer used anywhere.
+            crate::localize_resources(doc, &[pi])?;
+            let mut cleaned_page = page.dict.clone();
+            cleaned_page.set(b"Contents".to_vec(), Object::Array(new_list.clone()));
+            let (_, page_content) = page_streams(doc, &cleaned_page, pi)?;
             let mut res = resources;
-            if !out.xobjects.is_empty() {
+            if !out.xobjects.is_empty() || !out.replaced.is_empty() {
                 let mut xo = res.get(b"XObject").and_then(|x| doc.resolve(x).as_dict().cloned()).unwrap_or_default();
+                // A full save keeps whatever is still referenced: unlink the originals this page no
+                // longer draws so the removed form or image bytes cannot survive in the saved file.
+                crate::interp::prune(&mut xo, &out.replaced, &page_content);
                 for (n, r) in &out.xobjects {
                     xo.set(n.clone(), Object::Ref(*r));
                 }
                 res.set(b"XObject".to_vec(), Object::Dict(xo));
             }
+            retired_properties.extend(crate::interp::prune_properties(doc, &mut res, &page_content)?);
             doc.update_dict(page.obj, |d| {
                 d.set(b"Contents".to_vec(), Object::Array(new_list));
                 d.set(b"Resources".to_vec(), Object::Dict(res));
             })?;
         }
     }
+    // What a page no longer draws must not stay reachable through an inherited or shared
+    // /Resources either.
+    crate::interp::unlink_doomed(doc, &doomed, &retired_properties)?;
     Ok(total)
 }
 
@@ -238,6 +261,12 @@ pub fn scan(doc: &Document) -> Vec<(Hidden, usize)> {
 }
 
 /// Remove the chosen categories. Returns what was removed per category.
+///
+/// # Errors
+///
+/// This operation is not transactional: an error may leave `doc` partially modified, with
+/// sensitive content still present. Call this on a working clone and replace the original only
+/// on success. On any error, discard the working clone; do not save or reuse it.
 pub fn remove_hidden(doc: &mut Document, which: &[Hidden]) -> Result<Vec<(Hidden, usize)>, RedactError> {
     let counts = scan(doc);
     let count = |h: Hidden| counts.iter().find(|c| c.0 == h).map_or(0, |c| c.1);
@@ -248,6 +277,12 @@ pub fn remove_hidden(doc: &mut Document, which: &[Hidden]) -> Result<Vec<(Hidden
     if (text && count(Hidden::HiddenText) > 0) || (layers && count(Hidden::HiddenLayers) > 0) {
         content_pass(doc, text, layers, true)?;
     }
+    // Every annotation the pages list now: whatever is no longer listed at the end (flattened
+    // widgets included) leaves the structure tree too.
+    let listed = |doc: &Document| -> std::collections::HashSet<ObjRef> {
+        pdfcraft_model::pages(doc).iter().flat_map(|p| annots_of(doc, &p.dict)).filter_map(|a| a.as_ref()).collect()
+    };
+    let listed_before = listed(doc);
     if which.contains(&Hidden::FormFields) && count(Hidden::FormFields) > 0 {
         // Fields without appearances get one first, so their values stay visible.
         for f in pdfcraft_forms::fields(doc) {
@@ -268,16 +303,16 @@ pub fn remove_hidden(doc: &mut Document, which: &[Hidden]) -> Result<Vec<(Hidden
             || (which.contains(&Hidden::Attachments) && s == b"FileAttachment")
             || (which.contains(&Hidden::LinksActionsScripts) && s == b"Link")
     };
+    // The annotations to remove, on every page first, so a pop-up listed on another page than
+    // its parent goes with it.
+    let removed: std::collections::HashSet<ObjRef> = pdfcraft_model::pages(doc)
+        .iter()
+        .flat_map(|p| annots_of(doc, &p.dict))
+        .filter_map(|a| a.as_ref())
+        .filter(|&r| doc.get(r).as_dict().is_some_and(drop_annot))
+        .collect();
     for p in pdfcraft_model::pages(doc) {
         let list = annots_of(doc, &p.dict);
-        let mut removed: Vec<ObjRef> = Vec::new();
-        for a in &list {
-            if let Some(r) = a.as_ref()
-                && doc.get(r).as_dict().is_some_and(drop_annot)
-            {
-                removed.push(r);
-            }
-        }
         let mut kept = Vec::new();
         for a in list {
             let Some(r) = a.as_ref() else {
@@ -317,6 +352,12 @@ pub fn remove_hidden(doc: &mut Document, which: &[Hidden]) -> Result<Vec<(Hidden
             }
         })?;
     }
+    // A tagged PDF's structure tree still points at the removed links, comments and flattened
+    // widgets (#2447): drop those references, or the full rewrite keeps the annotations, URLs,
+    // text and field values included.
+    let still = listed(doc);
+    let gone: std::collections::HashSet<ObjRef> = listed_before.difference(&still).copied().collect();
+    crate::tags::drop_object_refs(doc, &gone)?;
     let off = hidden_layers(doc);
     let mut cat = doc.get(root).as_dict().cloned().unwrap_or_default();
     let mut names = sub(doc, &cat, b"Names");

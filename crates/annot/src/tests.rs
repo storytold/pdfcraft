@@ -187,6 +187,7 @@ fn invalid_geometry_is_rejected() {
         assert!(matches!(add_annotation(&mut doc, &new(0, s.clone()), &meta("x")), Err(AnnotError::Invalid(_))), "{s:?}");
     }
     assert_eq!(add_annotation(&mut doc, &new(5, Shape::Rectangle { rect: [0.0, 0.0, 10.0, 10.0] }), &meta("x")), Err(AnnotError::NoSuchPage(5)));
+    assert_eq!(AnnotError::NoSuchPage(5).to_string(), "page 6 does not exist", "the message counts pages from 1 (#1550)");
     assert!(!doc.is_modified(), "failed adds change nothing");
 }
 
@@ -433,6 +434,19 @@ fn real_annotation_flags_do_not_lock_comments() {
 }
 
 #[test]
+fn carriage_returns_in_comment_text_become_line_breaks() {
+    let mut doc = fixture();
+    let page = page_refs(&doc).unwrap()[0];
+    let mut entries = annots(&doc, page);
+    let Object::Dict(annotation) = &mut entries[0] else { panic!("fixture annotation is inline") };
+    // Acrobat ends lines in /Contents with CR; the interface only breaks lines at LF.
+    annotation.set(b"Contents".to_vec(), PdfString::text("one\r\rtwo\r\nthree"));
+    set_annots(&mut doc, page, entries).unwrap();
+
+    assert_eq!(summaries(&doc)[0].contents.as_deref(), Some("one\n\ntwo\nthree"));
+}
+
+#[test]
 fn a_locked_text_box_still_refits_its_text() {
     let mut doc = fixture();
     let t = add_annotation(&mut doc, &new(0, Shape::TextBox { rect: [100.0, 680.0, 304.0, 692.0], font_size: 12.0 }), &meta("t")).unwrap();
@@ -575,10 +589,78 @@ fn links_are_added_edited_listed_and_removed() {
 }
 
 #[test]
+fn link_uri_is_percent_encoded_to_7_bit_ascii() {
+    use crate::links::{self, LinkAction, LinkStyle};
+    let mut doc = fixture();
+    for url in ["https://example.com/ação", "https://example.com/a%20b"] {
+        links::add(&mut doc, 0, [10.0, 10.0, 110.0, 30.0], &LinkAction::Uri(url.into()), &LinkStyle::default()).unwrap();
+    }
+    let doc = reopen(&doc);
+    let urls: Vec<String> = links::list(&doc)
+        .into_iter()
+        .filter_map(|link| match link.action {
+            LinkAction::Uri(url) => Some(url),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(urls, ["https://example.com/a%C3%A7%C3%A3o", "https://example.com/a%20b"]);
+    assert!(urls.iter().all(|url| url.is_ascii()));
+}
+
+#[test]
+fn link_edit_rejects_non_finite_and_overflowed_rectangles_without_mutating_the_pdf() {
+    use crate::links::{self, LinkAction, LinkStyle};
+    let mut doc = fixture();
+    let original_rect = [10.0, 20.0, 110.0, 70.0];
+    let index = links::add(&mut doc, 0, original_rect, &LinkAction::Uri("https://example.org".into()), &LinkStyle::default()).unwrap();
+    let before = links::list(&doc);
+    let changed_action = LinkAction::Uri("https://other.example".into());
+    for rect in [
+        [f64::NAN, 0.0, 100.0, 30.0],
+        [0.0, 0.0, f64::INFINITY, 30.0],
+        [f64::NEG_INFINITY, 0.0, 100.0, 30.0],
+        [-1e308, 0.0, 1e308, 30.0],
+        [0.0, 0.0, 1.5, 30.0],
+    ] {
+        assert!(links::set(&mut doc, 0, index, Some(rect), Some(&changed_action), None).is_err(), "edit accepted {rect:?}");
+        assert_eq!(links::list(&doc), before, "invalid edit changed an existing link");
+        assert!(links::add(&mut doc, 0, rect, &changed_action, &LinkStyle::default()).is_err(), "add accepted {rect:?}");
+    }
+    // A reversed but otherwise valid rectangle is normalized on edit.
+    links::set(&mut doc, 0, index, Some([110.0, 70.0, 10.0, 20.0]), None, None).unwrap();
+    let edited = links::list(&doc).into_iter().find(|l| l.page == 0 && l.index == index).map(|l| l.rect);
+    assert_eq!(edited, Some(original_rect));
+}
+
+#[test]
 fn urls_are_found_in_text() {
     let t: Vec<char> = "See https://example.org/a?b=1, or www.rust-lang.org. Not a.b or http:/x.".chars().collect();
     let found: Vec<String> = crate::links::find_urls(&t).into_iter().map(|(_, u)| u).collect();
     assert_eq!(found, ["https://example.org/a?b=1", "http://www.rust-lang.org"]);
+}
+
+#[test]
+fn common_email_addresses_become_mailto_links_with_source_character_ranges() {
+    let source = "İ Contact ada.lovelace+forms@example.co.uk, browse HTTPS://EXAMPLE.ORG; or ask admin@example.org.";
+    let chars: Vec<char> = source.chars().collect();
+    let links = crate::links::find_urls(&chars);
+    let found: Vec<(String, String)> = links.into_iter().map(|(range, url)| (chars.get(range).unwrap().iter().collect(), url)).collect();
+    assert_eq!(
+        found,
+        [
+            ("ada.lovelace+forms@example.co.uk".into(), "mailto:ada.lovelace+forms@example.co.uk".into()),
+            ("HTTPS://EXAMPLE.ORG".into(), "HTTPS://EXAMPLE.ORG".into()),
+            ("admin@example.org".into(), "mailto:admin@example.org".into()),
+        ]
+    );
+}
+
+#[test]
+fn malformed_email_addresses_are_not_autolinked() {
+    for invalid in ["a@b", "broken@localhost", "a..b@example.org", "foo@.example.org", "foo@example..org", "foo@example.com@x"] {
+        let input: Vec<char> = invalid.chars().collect();
+        assert!(crate::links::find_urls(&input).is_empty(), "{invalid:?} produced a link");
+    }
 }
 
 #[test]
@@ -721,7 +803,7 @@ fn replace_text_groups_a_strikeout_and_a_caret() {
     let quads = [[100.0, 720.0, 200.0, 720.0, 100.0, 706.0, 200.0, 706.0]];
     let red = Style { color: [0.89, 0.13, 0.13], opacity: 1.0, width: 1.0, fill: None };
     let blue = Style { color: [0.0, 0.47, 0.84], opacity: 1.0, width: 1.0, fill: None };
-    let i = add_text_replacement(&mut doc, 0, &quads, "new words", "Ada", &red, &blue, &meta("r")).unwrap();
+    let i = add_text_replacement(&mut doc, 0, &quads, "new words", "Ada", &red, &blue, &meta("r"), &meta("r-caret")).unwrap();
     let doc = reopen(&doc);
     let a = list(&doc, 0);
     let strike = &a[i];
@@ -729,13 +811,21 @@ fn replace_text_groups_a_strikeout_and_a_caret() {
     let caret = a.iter().find(|d| d.name(b"Subtype") == Some(b"Caret")).unwrap();
     assert_eq!((text(caret, b"Contents").as_str(), caret.name(b"RT")), ("new words", Some(&b"Group"[..])));
     assert!(caret.reference(b"IRT").is_some());
+    // #2666: the pair needs its own `/NM` each. XFDF names a reply by the `/NM` of what it
+    // replies to, so sharing one id writes `inreplyto` equal to the caret's own `name` and the
+    // pair does not survive an export and import.
+    assert_eq!(text(caret, b"NM").as_str(), "r-caret");
+    assert_eq!(text(strike, b"NM").as_str(), "r");
+    assert_ne!(text(caret, b"NM"), text(strike, b"NM"), "the caret must not carry the strikeout's name");
+    let irt = caret.reference(b"IRT").unwrap();
+    assert_eq!(text(doc.get(irt).as_dict().unwrap(), b"NM").as_str(), "r", "the caret replies to the strikeout");
     let r = rect(caret);
     assert!(r[0] < 200.0 && r[2] > 200.0 && r[1] < 706.0, "at the end of the line, below its baseline: {r:?}");
     // Deleting the strikeout takes the caret with it (the group).
     let mut doc = doc;
     delete_annotation(&mut doc, 0, i).unwrap();
     assert!(!list(&doc, 0).iter().any(|d| d.name(b"Subtype") == Some(b"Caret")));
-    assert!(add_text_replacement(&mut doc, 0, &[], "x", "Ada", &red, &blue, &meta("r")).is_err());
+    assert!(add_text_replacement(&mut doc, 0, &[], "x", "Ada", &red, &blue, &meta("r"), &meta("r-caret")).is_err());
 }
 
 #[test]
@@ -1095,4 +1185,200 @@ fn drawings_resize_by_scaling_their_strokes() {
     assert!(ap.contains(&format!("{} {} m", n(first[0]), n(first[1]))), "appearance redrawn at the new size: {ap}");
     // Too small to hold the stroke margin.
     assert!(matches!(set_rect(&mut doc, 0, i, [100.0, 400.0, 101.0, 401.0], &meta("")), Err(AnnotError::Invalid(_))));
+}
+
+/// Comment text the standard fonts can't draw is kept, as Acrobat keeps it: a text box, Fill & Sign
+/// text or a dynamic stamp's by-line is added with its text as typed, its appearance draws `?` for
+/// those characters, and the comment is marked with the first one (cleared once all of it can be
+/// drawn). A comment another program drew with a font that has those characters keeps that
+/// appearance: a restyle is refused rather than replace it with `?`, while new text is taken.
+#[test]
+fn comment_text_the_standard_fonts_cannot_draw_is_kept_and_marked() {
+    let mut doc = fixture();
+    let mark = |doc: &Document, i: usize| pdfcraft_fonts::undrawn_mark(&list(doc, 0)[i]);
+    let mut boxed = new(0, Shape::TextBox { rect: [100.0, 600.0, 300.0, 650.0], font_size: 12.0 });
+    boxed.contents = "签名 Ada".into();
+    let t = add_annotation(&mut doc, &boxed, &meta("t")).unwrap();
+    assert_eq!(text(&list(&doc, 0)[t], b"Contents"), "签名 Ada");
+    assert!(ap_content(&doc, &list(&doc, 0)[t]).contains("(?? Ada)"), "{}", ap_content(&doc, &list(&doc, 0)[t]));
+    assert_eq!(mark(&doc, t), Some('签'));
+    let typed = Shape::Typewriter { rect: [100.0, 700.0, 200.0, 716.0], font_size: 11.0 };
+    let f = add_annotation(
+        &mut doc,
+        &NewAnnotation { page: 0, style: Style::default_for(&typed), shape: typed, contents: "张三".into(), author: "Ada".into() },
+        &meta("x"),
+    )
+    .unwrap();
+    assert_eq!(mark(&doc, f), Some('张'));
+    let stamp =
+        Shape::Stamp { rect: [100.0, 100.0, 260.0, 142.0], stamp: StampKind::DynApproved, by: Some("By 张三 at 2:14 pm, Oct 02, 2026".into()) };
+    let s = add_annotation(
+        &mut doc,
+        &NewAnnotation { page: 0, style: Style::default_for(&stamp), shape: stamp, contents: String::new(), author: "张三".into() },
+        &meta("s"),
+    )
+    .unwrap();
+    assert_eq!(mark(&doc, s), Some('张'));
+    // Our own `?` appearance is redrawn on a restyle; Western European text clears the mark.
+    set_style(&mut doc, 0, t, Some([1.0, 0.0, 0.0]), None, None, None, &meta("")).unwrap();
+    assert_eq!(mark(&doc, t), Some('签'));
+    set_contents(&mut doc, 0, t, "Zürich —\nGenève", &meta("")).unwrap();
+    assert_eq!(mark(&doc, t), None);
+    set_contents(&mut doc, 0, t, "签名", &meta("")).unwrap();
+    assert_eq!((text(&list(&doc, 0)[t], b"Contents").as_str(), mark(&doc, t)), ("签名", Some('签')));
+    // A text box another program drew (with a font that has 欢): a restyle keeps that appearance.
+    let mut foreign = Dict::new();
+    foreign.set(b"Type".to_vec(), Object::name("Annot"));
+    foreign.set(b"Subtype".to_vec(), Object::name("FreeText"));
+    foreign.set(b"Rect".to_vec(), Object::Array([100.0, 400.0, 300.0, 430.0].iter().map(|v| Object::Real(*v)).collect()));
+    foreign.set(b"DA".to_vec(), PdfString::literal(b"0 g /Helv 12 Tf".to_vec()));
+    foreign.set(b"Contents".to_vec(), PdfString::text("欢迎"));
+    let mut drawn = Dict::new();
+    drawn.set(b"Type".to_vec(), Object::name("XObject"));
+    drawn.set(b"Subtype".to_vec(), Object::name("Form"));
+    drawn.set(b"BBox".to_vec(), Object::Array([0.0, 0.0, 200.0, 30.0].iter().map(|v| Object::Real(*v)).collect()));
+    let drawn = doc.add(Object::Stream(pdfcraft_cos::Stream::from_raw(drawn, b"BT /F1 12 Tf (\x01\x02) Tj ET".to_vec())));
+    let mut ap = Dict::new();
+    ap.set(b"N".to_vec(), Object::Ref(drawn));
+    foreign.set(b"AP".to_vec(), Object::Dict(ap));
+    let r = doc.add(Object::Dict(foreign));
+    let page = page_ref(&doc, 0).unwrap();
+    let mut on_page = annots(&doc, page);
+    on_page.push(Object::Ref(r));
+    set_annots(&mut doc, page, on_page).unwrap();
+    let k = list(&doc, 0).len() - 1;
+    let before = list(&doc, 0)[k].clone();
+    let err = set_style(&mut doc, 0, k, Some([1.0, 0.0, 0.0]), Some(0.4), Some(6.0), None, &meta("")).unwrap_err();
+    assert!(matches!(&err, AnnotError::Undrawable(m) if m.contains("can't redraw") && m.contains("\"欢\" (U+6B22)")), "{err:?}");
+    assert_eq!(list(&doc, 0)[k], before, "a refused restyle keeps the colour, opacity, width and appearance");
+    let err = set_rect(&mut doc, 0, k, [40.0, 40.0, 180.0, 90.0], &meta("")).unwrap_err();
+    assert!(matches!(&err, AnnotError::Undrawable(_)), "{err:?}");
+    assert_eq!(list(&doc, 0)[k], before, "a refused resize keeps the rectangle");
+    // New text from the user is taken (and marked), as for any comment.
+    set_contents(&mut doc, 0, k, "欢迎光临", &meta("")).unwrap();
+    assert_eq!(mark(&doc, k), Some('欢'));
+    // One without an appearance is shown in the display copy only; drawing it marks it.
+    let mut bare = Dict::new();
+    bare.set(b"Type".to_vec(), Object::name("Annot"));
+    bare.set(b"Subtype".to_vec(), Object::name("FreeText"));
+    bare.set(b"Rect".to_vec(), Object::Array([100.0, 300.0, 300.0, 330.0].iter().map(|v| Object::Real(*v)).collect()));
+    bare.set(b"DA".to_vec(), PdfString::literal(b"0 g /Helv 12 Tf".to_vec()));
+    bare.set(b"Contents".to_vec(), PdfString::text("欢迎"));
+    let b = doc.add(Object::Dict(bare));
+    let mut on_page = annots(&doc, page);
+    on_page.push(Object::Ref(b));
+    set_annots(&mut doc, page, on_page).unwrap();
+    let shown = with_missing_appearances(&doc).expect("a display copy");
+    assert!(shown.get(b).as_dict().unwrap().contains(b"AP"), "displayed anyway");
+    assert!(!doc.get(b).as_dict().unwrap().contains(b"AP"), "the document itself is unchanged");
+    set_appearance(&mut doc, b).unwrap();
+    assert_eq!(doc.get(b).as_dict().and_then(pdfcraft_fonts::undrawn_mark), Some('欢'));
+    // Kept through a save.
+    let doc = reopen(&doc);
+    assert_eq!(text(&list(&doc, 0)[t], b"Contents"), "签名");
+}
+
+/// Content edits rebuild the display copy on every commit but leave annotations alone: the
+/// cached appearance is drawn once and reused after that, byte-identical.
+#[test]
+fn cached_appearances_are_reused_while_annotations_are_unchanged() {
+    let mut doc = fixture();
+    let idx = add_annotation(&mut doc, &new(0, Shape::Note { at: [100.0, 700.0], icon: NoteIcon::Comment }), &meta("cache")).expect("adds");
+    // Files carry comments without appearances; strip the created one to simulate that.
+    let page = page_refs(&doc).unwrap()[0];
+    let r = annots(&doc, page)[idx].as_ref().expect("indirect");
+    doc.update_dict(r, |d| {
+        d.remove(b"AP");
+    })
+    .expect("strips");
+    let mut cache = AppearanceCache::default();
+    let first = with_missing_appearances_cached(&doc, &mut cache).expect("builds");
+    assert_eq!((cache.builds(), cache.hits()), (1, 0), "only the note needs an appearance");
+    let second = with_missing_appearances_cached(&doc, &mut cache).expect("reuses");
+    assert_eq!((cache.builds(), cache.hits()), (1, 1), "nothing is redrawn");
+    let [a, b] = [&first, &second].map(|copy| ap_content(copy, &list(copy, 0)[idx]));
+    assert!(!a.is_empty());
+    assert_eq!(a, b, "the reused appearance is byte-identical");
+}
+
+/// #1908: a text box's font size changes in `/DA` (colour kept), the rich text follows, the box
+/// grows to hold the bigger text but never shrinks, and bad sizes and other subtypes are refused.
+#[test]
+fn text_box_font_size_changes_the_da_and_grows_the_box() {
+    let mut doc = fixture();
+    let t = add_annotation(&mut doc, &new(0, Shape::TextBox { rect: [100.0, 680.0, 220.0, 692.0], font_size: 12.0 }), &meta("t")).unwrap();
+    set_style(&mut doc, 0, t, Some([1.0, 0.0, 0.0]), None, None, None, &meta("")).unwrap();
+    set_contents(&mut doc, 0, t, "one two three four five six seven eight nine ten eleven twelve", &meta("")).unwrap();
+    let height = |doc: &Document| {
+        let rect: Vec<f64> = list(doc, 0)[t].get(b"Rect").unwrap().as_array().unwrap().iter().map(|x| x.as_f64().unwrap()).collect();
+        rect[3] - rect[1]
+    };
+    let before = height(&doc);
+    set_font_size(&mut doc, 0, t, 24.0, &meta("")).unwrap();
+    let doc = reopen(&doc);
+    let d = &list(&doc, 0)[t];
+    assert_eq!(text(d, b"DA"), "1 0 0 rg /Helv 24 Tf");
+    assert!(text(d, b"DS").contains("24pt") && text(d, b"RC").contains("font-size:24pt"));
+    assert_eq!(props(&doc, 0, t).unwrap().font_size, Some(24.0));
+    assert!(height(&doc) > before, "the box grows");
+    let mut doc = doc;
+    let grown = height(&doc);
+    set_font_size(&mut doc, 0, t, 6.0, &meta("")).unwrap();
+    assert!(height(&doc) >= grown, "the box never shrinks");
+    for bad in [0.0, 0.5, 401.0, f64::NAN, f64::INFINITY] {
+        assert!(matches!(set_font_size(&mut doc, 0, t, bad, &meta("")), Err(AnnotError::Invalid(_))), "{bad}");
+    }
+    assert_eq!(props(&doc, 0, t).unwrap().font_size, Some(6.0));
+    let note = add_annotation(&mut doc, &new(0, Shape::Note { at: [50.0, 50.0], icon: NoteIcon::Note }), &meta("t"));
+    if let Ok(i) = note {
+        assert!(set_font_size(&mut doc, 0, i, 12.0, &meta("")).is_err());
+        assert_eq!(props(&doc, 0, i).unwrap().font_size, None);
+    }
+}
+
+#[test]
+fn text_boxes_and_callouts_can_change_fill_and_border() {
+    let mut doc = fixture();
+    let shapes = [
+        Shape::TextBox { rect: [300.0, 600.0, 500.0, 660.0], font_size: 12.0 },
+        Shape::Callout {
+            rect: [300.0, 600.0, 500.0, 660.0],
+            knee: [260.0, 560.0],
+            point: [200.0, 520.0],
+            font_size: 12.0,
+            ending: LineEnding::OpenArrow,
+        },
+    ];
+    for shape in shapes {
+        let index = add_annotation(&mut doc, &new(0, shape), &meta("test")).unwrap();
+        assert!(props(&doc, 0, index).unwrap().fillable);
+        set_fill(&mut doc, 0, index, Some([1.0, 1.0, 1.0]), &meta("test")).unwrap();
+        set_style(&mut doc, 0, index, None, None, Some(3.0), None, &meta("test")).unwrap();
+        let saved = reopen(&doc);
+        let properties = props(&saved, 0, index).unwrap();
+        assert_eq!(properties.fill, Some([1.0; 3]));
+        assert_eq!(properties.width, Some(3.0));
+        let ap = ap_content(&saved, &list(&saved, 0)[index]);
+        assert!(ap.contains("1 1 1 rg") && ap.contains(" re f") && ap.contains("3 w"), "{ap}");
+        set_fill(&mut doc, 0, index, None, &meta("test")).unwrap();
+        assert_eq!(props(&doc, 0, index).unwrap().fill, None);
+    }
+}
+
+#[test]
+fn free_text_properties_show_legacy_or_absent_border_width() {
+    let mut doc = fixture();
+    let index = add_annotation(&mut doc, &new(0, Shape::TextBox { rect: [100.0, 100.0, 200.0, 140.0], font_size: 12.0 }), &meta("test")).unwrap();
+    let (_, reference) = annot_ref(&mut doc, 0, index).unwrap();
+    doc.update_dict(reference, |d| {
+        d.remove(b"BS");
+        d.remove(b"Border");
+    })
+    .unwrap();
+    assert_eq!(props(&doc, 0, index).unwrap().width, Some(0.0));
+    doc.update_dict(reference, |d| {
+        d.set(b"Border".to_vec(), Object::Array([0.0, 0.0, 4.0].into_iter().map(Object::Real).collect()));
+    })
+    .unwrap();
+    assert_eq!(props(&doc, 0, index).unwrap().width, Some(4.0));
 }

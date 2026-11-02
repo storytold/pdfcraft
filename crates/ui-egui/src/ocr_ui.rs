@@ -35,6 +35,8 @@ pub struct OcrDraft {
     pub auto_crop: bool,
     pub crop_margin: f64,
     pub recognize: bool,
+    /// Also recognize pages that already have text (pictures on them; their text isn't added again).
+    pub text_pages: bool,
 }
 
 impl Default for OcrDraft {
@@ -51,6 +53,24 @@ impl Default for OcrDraft {
             auto_crop: false,
             crop_margin: 2.0,
             recognize: true,
+            text_pages: false,
+        }
+    }
+}
+
+impl OcrDraft {
+    /// Shared by single-file and batch recognition; enhancement also processes existing text.
+    pub fn settings(&self) -> OcrSettings {
+        OcrSettings {
+            dpi: self.dpi as f32,
+            language: self.language.clone(),
+            recognizer: self.recognizer,
+            skip_text_pages: self.recognize && !self.text_pages,
+            auto_rotate: self.auto_rotate,
+            deskew: self.deskew,
+            auto_crop: self.auto_crop,
+            crop_margin: self.crop_margin,
+            recognize: self.recognize,
         }
     }
 }
@@ -115,10 +135,10 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
     };
     egui::ScrollArea::vertical().max_height((ui.ctx().content_rect().height() - 160.0).max(200.0)).show(ui, |ui| {
     group(ui, "Pages", &mut |ui| {
-        ui.radio_value(&mut d.pages, OcrPages::All, tl!("All pages"));
-        ui.radio_value(&mut d.pages, OcrPages::Current, tl!("Current page"));
+        widgets::radio_value(ui, &mut d.pages, OcrPages::All, tl!("All pages"));
+        widgets::radio_value(ui, &mut d.pages, OcrPages::Current, tl!("Current page"));
         ui.horizontal(|ui| {
-            ui.radio_value(&mut d.pages, OcrPages::Range, tl!("From"));
+            widgets::radio_value(ui, &mut d.pages, OcrPages::Range, tl!("From"));
             let on = d.pages == OcrPages::Range;
             ui.add_enabled(on, egui::DragValue::new(&mut d.from).range(1..=pages));
             ui.label(tl!("to"));
@@ -132,9 +152,9 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
                 ui.label(tl!("Automatic (historical model)"));
             } else {
             let name = LANGUAGES.iter().find(|l| l.0 == d.language).map_or("English", |l| l.1);
-            egui::ComboBox::from_id_salt("ocr-language").selected_text(name).height(480.0).width(220.0).show_ui(ui, |ui| {
+            egui::ComboBox::from_id_salt("ocr-language").selected_text(tl!(name)).width(220.0).height(560.0).show_ui(ui, |ui| {
                 for (code, name) in LANGUAGES {
-                    ui.selectable_value(&mut d.language, (*code).to_string(), *name);
+                    ui.selectable_value(&mut d.language, (*code).to_string(), tl!(*name));
                 }
             });
             }
@@ -189,11 +209,14 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
             }
             if let Some(message) = &addon_message { ui.label(egui::RichText::new(message).small().color(t.text_muted)); }
         }
+        ui.add_space(4.0);
+        ui.add(crate::widgets::checkbox(&mut d.text_pages, tl!("Also recognize pages that already have text")))
+            .on_hover_text(tl!("Pictures on those pages are recognized too; words already in the page's text are not added again"));
     });
     group(ui, "Scan correction", &mut |ui| {
-        ui.checkbox(&mut d.auto_rotate, tl!("Automatically rotate sideways and upside-down pages"));
-        ui.checkbox(&mut d.deskew, tl!("Straighten skewed scans"));
-        ui.checkbox(&mut d.auto_crop, tl!("Crop scanner borders to the paper edge"));
+        ui.add(widgets::checkbox(&mut d.auto_rotate, tl!("Automatically rotate sideways and upside-down pages")));
+        ui.add(widgets::checkbox(&mut d.deskew, tl!("Straighten skewed scans")));
+        ui.add(widgets::checkbox(&mut d.auto_crop, tl!("Crop scanner borders to the paper edge")));
         ui.add_enabled_ui(d.auto_crop, |ui| {
             ui.horizontal(|ui| {
                 ui.label(tl!("Safety margin (pt)"));
@@ -203,7 +226,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
         ui.label(
             egui::RichText::new(tl!("Only clear paper edges are cropped. Indistinguishable white borders are kept.")).small().color(t.text_muted),
         );
-        ui.checkbox(&mut d.recognize, tl!("Add searchable text"));
+        ui.add(widgets::checkbox(&mut d.recognize, tl!("Add searchable text")));
         ui.label(
             egui::RichText::new(tl!("Uncertain orientations are left unchanged. Deskew fits the full image inside the page."))
                 .small()
@@ -326,17 +349,7 @@ impl PdfCraftApp {
             OcrPages::Current => vec![self.views[vi].current],
             OcrPages::Range => (d.from.saturating_sub(1)..d.to).collect(),
         };
-        let settings = OcrSettings {
-            dpi: d.dpi as f32,
-            language: d.language.clone(),
-            recognizer: d.recognizer,
-            auto_rotate: d.auto_rotate,
-            deskew: d.deskew,
-            auto_crop: d.auto_crop,
-            crop_margin: d.crop_margin,
-            skip_text_pages: d.recognize,
-            recognize: d.recognize,
-        };
+        let settings = d.settings();
         let Some(job) = self.session.ocr_job(id, &pages, settings) else { return };
         let progress = Arc::new(Mutex::new(OcrProgress { total: job.pages.len(), ..Default::default() }));
         let p = progress.clone();
@@ -373,18 +386,7 @@ impl PdfCraftApp {
             return;
         }
         // The settings showing now, not when the folder arrives.
-        let d = &self.ocr_draft;
-        let settings = OcrSettings {
-            dpi: d.dpi as f32,
-            language: d.language.clone(),
-            recognizer: d.recognizer,
-            auto_rotate: d.auto_rotate,
-            deskew: d.deskew,
-            auto_crop: d.auto_crop,
-            crop_margin: d.crop_margin,
-            skip_text_pages: d.recognize,
-            recognize: d.recognize,
-        };
+        let settings = self.ocr_draft.settings();
         #[cfg(not(target_arch = "wasm32"))]
         match self.export_dir_override.clone() {
             Some(d) => self.ocr_files_into(files, settings, d.into()),

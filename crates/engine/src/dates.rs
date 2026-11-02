@@ -56,7 +56,7 @@ const AR_DAYS: [&str; 7] = ["الأحد", "الاثنين", "الثلاثاء", 
 
 /// The languages month and weekday names can be written in (Preferences ▸ Date format ▸ Language):
 /// the interface languages, in the same order and with the same names.
-pub const DATE_LANGUAGES: [DateLanguage; 17] = [
+pub static DATE_LANGUAGES: [DateLanguage; 23] = [
     DateLanguage {
         code: "en",
         name: "English",
@@ -161,6 +161,15 @@ pub const DATE_LANGUAGES: [DateLanguage; 17] = [
         days_short: ["вс", "пн", "вт", "ср", "чт", "пт", "сб"],
     },
     DateLanguage {
+        code: "kk",
+        name: "Қазақша",
+        months: ["қаңтар", "ақпан", "наурыз", "сәуір", "мамыр", "маусым", "шілде", "тамыз", "қыркүйек", "қазан", "қараша", "желтоқсан"],
+        months_with_day: None,
+        months_short: ["қаң", "ақп", "нау", "сәу", "мам", "мау", "шіл", "там", "қыр", "қаз", "қар", "жел"],
+        days: ["жексенбі", "дүйсенбі", "сейсенбі", "сәрсенбі", "бейсенбі", "жұма", "сенбі"],
+        days_short: ["жк", "дс", "сс", "ср", "бс", "жм", "сб"],
+    },
+    DateLanguage {
         code: "bg",
         name: "Български",
         months: ["януари", "февруари", "март", "април", "май", "юни", "юли", "август", "септември", "октомври", "ноември", "декември"],
@@ -262,6 +271,132 @@ pub const DATE_LANGUAGES: [DateLanguage; 17] = [
         months_short: ["sty", "lut", "mar", "kwi", "maj", "cze", "lip", "sie", "wrz", "paź", "lis", "gru"],
         days: ["niedziela", "poniedziałek", "wtorek", "środa", "czwartek", "piątek", "sobota"],
         days_short: ["niedz.", "pon.", "wt.", "śr.", "czw.", "pt.", "sob."],
+    },
+    DateLanguage {
+        code: "sl",
+        name: "Slovenščina",
+        months: ["januar", "februar", "marec", "april", "maj", "junij", "julij", "avgust", "september", "oktober", "november", "december"],
+        months_with_day: Some([
+            "januarja",
+            "februarja",
+            "marca",
+            "aprila",
+            "maja",
+            "junija",
+            "julija",
+            "avgusta",
+            "septembra",
+            "oktobra",
+            "novembra",
+            "decembra",
+        ]),
+        months_short: ["jan.", "feb.", "mar.", "apr.", "maj", "jun.", "jul.", "avg.", "sep.", "okt.", "nov.", "dec."],
+        days: ["nedelja", "ponedeljek", "torek", "sreda", "četrtek", "petek", "sobota"],
+        days_short: ["ned.", "pon.", "tor.", "sre.", "čet.", "pet.", "sob."],
+    },
+    DateLanguage {
+        code: "el",
+        name: "Ελληνικά",
+        months: [
+            "Ιανουάριος",
+            "Φεβρουάριος",
+            "Μάρτιος",
+            "Απρίλιος",
+            "Μάιος",
+            "Ιούνιος",
+            "Ιούλιος",
+            "Αύγουστος",
+            "Σεπτέμβριος",
+            "Οκτώβριος",
+            "Νοέμβριος",
+            "Δεκέμβριος",
+        ],
+        months_with_day: Some([
+            "Ιανουαρίου",
+            "Φεβρουαρίου",
+            "Μαρτίου",
+            "Απριλίου",
+            "Μαΐου",
+            "Ιουνίου",
+            "Ιουλίου",
+            "Αυγούστου",
+            "Σεπτεμβρίου",
+            "Οκτωβρίου",
+            "Νοεμβρίου",
+            "Δεκεμβρίου",
+        ]),
+        months_short: ["Ιαν", "Φεβ", "Μαρ", "Απρ", "Μάι", "Ιουν", "Ιουλ", "Αυγ", "Σεπ", "Οκτ", "Νοε", "Δεκ"],
+        days: ["Κυριακή", "Δευτέρα", "Τρίτη", "Τετάρτη", "Πέμπτη", "Παρασκευή", "Σάββατο"],
+        days_short: ["Κυρ", "Δευ", "Τρί", "Τετ", "Πέμ", "Παρ", "Σάβ"],
+    },
+    DateLanguage {
+        code: "tr",
+        name: "Türkçe",
+        months: ["Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran", "Temmuz", "Ağustos", "Eylül", "Ekim", "Kasım", "Aralık"],
+        months_with_day: None,
+        months_short: ["Oca", "Şub", "Mar", "Nis", "May", "Haz", "Tem", "Ağu", "Eyl", "Eki", "Kas", "Ara"],
+        days: ["Pazar", "Pazartesi", "Salı", "Çarşamba", "Perşembe", "Cuma", "Cumartesi"],
+        days_short: ["Paz", "Pzt", "Sal", "Çar", "Per", "Cum", "Cmt"],
+    },
+    DateLanguage {
+        code: "lt",
+        name: "Lietuvių",
+        months: ["sausis", "vasaris", "kovas", "balandis", "gegužė", "birželis", "liepa", "rugpjūtis", "rugsėjis", "spalis", "lapkritis", "gruodis"],
+        months_with_day: Some([
+            "sausio",
+            "vasario",
+            "kovo",
+            "balandžio",
+            "gegužės",
+            "birželio",
+            "liepos",
+            "rugpjūčio",
+            "rugsėjo",
+            "spalio",
+            "lapkričio",
+            "gruodžio",
+        ]),
+        months_short: ["saus.", "vas.", "kov.", "bal.", "geg.", "birž.", "liep.", "rugpj.", "rugs.", "spal.", "lapkr.", "gruod."],
+        days: ["sekmadienis", "pirmadienis", "antradienis", "trečiadienis", "ketvirtadienis", "penktadienis", "šeštadienis"],
+        days_short: ["sk", "pr", "an", "tr", "kt", "pn", "št"],
+    },
+    // Vietnamese: numeric month forms (`tháng 1` with a day, `Tháng 1` standing alone).
+    // Fill & Sign still refuses any format whose final text fails the existing WinAnsi check
+    // (for example weekday names); `dd.mm.yyyy` remains writable.
+    DateLanguage {
+        code: "vi",
+        name: "Tiếng Việt",
+        months: [
+            "Tháng 1",
+            "Tháng 2",
+            "Tháng 3",
+            "Tháng 4",
+            "Tháng 5",
+            "Tháng 6",
+            "Tháng 7",
+            "Tháng 8",
+            "Tháng 9",
+            "Tháng 10",
+            "Tháng 11",
+            "Tháng 12",
+        ],
+        months_with_day: Some([
+            "tháng 1",
+            "tháng 2",
+            "tháng 3",
+            "tháng 4",
+            "tháng 5",
+            "tháng 6",
+            "tháng 7",
+            "tháng 8",
+            "tháng 9",
+            "tháng 10",
+            "tháng 11",
+            "tháng 12",
+        ]),
+        months_short: ["Thg 1", "Thg 2", "Thg 3", "Thg 4", "Thg 5", "Thg 6", "Thg 7", "Thg 8", "Thg 9", "Thg 10", "Thg 11", "Thg 12"],
+        days: ["Chủ Nhật", "Thứ Hai", "Thứ Ba", "Thứ Tư", "Thứ Năm", "Thứ Sáu", "Thứ Bảy"],
+        days_short: ["CN", "T2", "T3", "T4", "T5", "T6", "T7"],
     },
 ];
 
@@ -534,6 +669,26 @@ mod tests {
         assert_eq!(s.date_format(), "dd.mm.yyyy", "a rejected pattern keeps the previous one");
     }
 
+    /// 21:30 on 14 Oct 2026 in São Paulo (UTC-3) is 00:30Z on the 15th. The date Fill & Sign
+    /// stamps is the wall-clock day (14th); the time the file records (`/M`, `/ModDate`) is UTC.
+    /// The test shortcut (`with_clock`) takes the injected time as local and says the 15th, which
+    /// is why it cannot serve a host that knows both the UTC time and the zone.
+    #[test]
+    fn a_wall_clock_gives_the_local_day_and_keeps_utc_for_the_file() {
+        let sao_paulo = Session::new().with_wall_clock(|| 1_792_024_200, || -3 * 3600);
+        assert_eq!(sao_paulo.today(), (2026, 10, 14));
+        assert_eq!(sao_paulo.today_text(None, None).as_deref(), Ok("10/14/2026"));
+        assert_eq!(sao_paulo.signing_date(), "D:20261014213000-03'00'");
+        assert_eq!(sao_paulo.stamp_by_line("Ada"), "By Ada at 9:30 pm, Oct 14, 2026");
+        assert_eq!(sao_paulo.now_secs(), 1_792_024_200, "the file's instant stays in UTC");
+
+        let utc = Session::new().with_wall_clock(|| 1_792_024_200, || 0);
+        assert_eq!(utc.today(), (2026, 10, 15));
+
+        let clock_only = Session::new().with_clock(|| 1_792_024_200);
+        assert_eq!(clock_only.today(), (2026, 10, 15), "on its own, an injected clock counts as local time");
+    }
+
     #[test]
     fn names_follow_the_date_language() {
         assert_eq!(in_lang("dddd, d \\de mmmm \\de yyyy", "es"), "sábado, 7 de marzo de 2026");
@@ -576,11 +731,33 @@ mod tests {
         assert_eq!(s.today_text(Some("dddd d mmmm"), Some("de")).as_deref(), Ok("Dienstag 14 November"));
         assert!(s.set_date_language(Some("xx")).unwrap_err().contains("zh-hant"), "only the interface languages");
         assert_eq!(s.date_language(), Some("pt-br"), "an unknown language keeps the previous one");
+        s.set_date_language(Some("LT")).unwrap();
+        assert_eq!(s.date_language(), Some("lt"));
+        assert_eq!(s.today_text(Some("dddd d mmmm"), None).as_deref(), Ok("antradienis 14 lapkričio"));
         s.set_date_language(Some("IT")).unwrap();
         assert_eq!(s.date_language(), Some("it"));
         assert_eq!(s.today_text_for_pdf(None, None).as_deref(), Ok("martedì 14 novembre"), "Italian names and accents can be written into a PDF");
         s.set_date_language(None).unwrap();
         assert_eq!(s.date_language(), None);
+    }
+
+    #[test]
+    fn vietnamese_month_and_weekday_names() {
+        let mut s = Session::new().with_clock(|| 1_700_000_000);
+        s.set_date_language(Some("vi")).unwrap();
+        assert_eq!(s.date_language(), Some("vi"));
+        s.set_date_format("d mmmm yyyy").unwrap();
+        assert_eq!(s.today_text(None, None).as_deref(), Ok("14 tháng 11 2023"));
+        s.set_date_format("mmmm yyyy").unwrap();
+        assert_eq!(s.today_text(None, None).as_deref(), Ok("Tháng 11 2023"));
+        s.set_date_format("ddd, d mmm").unwrap();
+        assert_eq!(s.today_text(None, None).as_deref(), Ok("T3, 14 Thg 11"));
+        // Encoding follows the spelled text: `14 tháng 11 2023` is WinAnsi-representable;
+        // a weekday name such as `Thứ Ba` is not, so Fill & Sign refuses that format.
+        assert_eq!(s.today_text_for_pdf(Some("d mmmm yyyy"), Some("vi")).as_deref(), Ok("14 tháng 11 2023"));
+        let e = s.today_text_for_pdf(Some("dddd d mmmm yyyy"), Some("vi")).unwrap_err();
+        assert!(e.contains("can't be written into the PDF yet") && e.contains("dd.mm.yyyy"), "{e}");
+        assert!(s.today_text_for_pdf(Some("dd.mm.yyyy"), Some("vi")).is_ok());
     }
 
     #[test]

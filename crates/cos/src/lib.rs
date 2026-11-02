@@ -22,10 +22,12 @@ mod security;
 mod writer;
 
 pub use bytes::Bytes;
-pub use document::{Document, Revision, SourceIdentity, XrefEntry};
+pub use document::{Document, ReadState, Revision, SourceIdentity, XrefEntry};
 pub use object::{Dict, MAX_DECODED, Name, ObjRef, Object, PdfString, Stream};
-pub use parser::{Lexer, parse_indirect};
-pub use pdfcraft_crypt::{Algorithm, Auth, Method as CryptMethod, NewEncryption, Permissions, SecurityHandler, pdfdoc_byte, pdfdoc_char};
+pub use parser::{Lexer, is_whitespace, parse_indirect};
+pub use pdfcraft_crypt::{
+    Algorithm, Auth, Method as CryptMethod, NewEncryption, Permissions, SecurityHandler, effective_password, pdfdoc_byte, pdfdoc_char,
+};
 pub use writer::{SaveOptions, pdf_date, serialize, write_full, write_incremental};
 
 #[derive(Debug, thiserror::Error, Clone, PartialEq)]

@@ -252,6 +252,13 @@ mod tests {
     }
 
     #[test]
+    fn committed_manifest_is_well_formed() {
+        let path = root().join("parity/acrobat-features.toml");
+        let text = std::fs::read_to_string(&path).expect("read the committed parity manifest");
+        let _: File = toml::from_str(&text).expect("the committed parity manifest must be valid TOML");
+    }
+
+    #[test]
     fn registry_ids_are_extracted_from_source() {
         let src =
             "c(\"file.open\", \"Open…\", FILE, None), ct(\"edit.undo\", \"Undo\"), t(\"doc_open\", \"Open\"), t(\n    \"doc_save\",), format(x)";

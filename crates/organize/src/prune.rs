@@ -14,6 +14,8 @@ use crate::OrganizeError;
 
 /// Form XObjects nested deeper than this are a broken file, not a reason to hang.
 const MAX_FORM_DEPTH: u8 = 8;
+/// Count every resource object and direct child; a graph beyond this is left unpruned.
+const MAX_GLYPH_RESOURCE_WORK: usize = 10_000;
 
 /// The dictionary a set of drawn names belongs to.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -42,6 +44,12 @@ struct Pruner<'a> {
     /// past the depth limit, Type 3 glyphs drawing through them). They are left untouched:
     /// pruning must never drop an XObject something still draws.
     unsure: HashSet<XKey>,
+    /// An overlarge glyph-resource graph is not safe to prune at all.
+    glyph_budget_exhausted: bool,
+    glyph_work_left: usize,
+    glyph_seen: HashSet<ObjRef>,
+    /// An indirect font's explicit resources have one owner regardless of which page uses it.
+    glyph_fonts: HashSet<ObjRef>,
 }
 
 impl Pruner<'_> {
@@ -52,14 +60,106 @@ impl Pruner<'_> {
         }
     }
 
-    /// True when `resources` lists a Type 3 font without its own `/Resources`: its glyph
-    /// procedures draw through these resources, and they are not followed here.
-    fn has_inheriting_type3(&self, resources: &Dict) -> bool {
-        let Some(fonts) = resources.get(b"Font").map(|f| self.doc.resolve(f)) else { return false };
-        let Some(fonts) = fonts.as_dict() else { return false };
-        fonts
-            .iter()
-            .any(|(_, f)| self.doc.resolve(f).as_dict().is_some_and(|fd| fd.name(b"Subtype") == Some(b"Type3") && fd.get(b"Resources").is_none()))
+    fn glyph_work(&mut self, count: usize) -> bool {
+        if !self.glyph_budget_exhausted
+            && let Some(left) = self.glyph_work_left.checked_sub(count)
+        {
+            self.glyph_work_left = left;
+            return true;
+        }
+        self.glyph_budget_exhausted = true;
+        false
+    }
+
+    /// Walk one object's direct children without cloning them or recursing. Referenced objects
+    /// go on a separate work list, so their borrowed dictionaries stay alive during this pass.
+    fn protect_glyph_tree(&mut self, object: &Object, referenced: &mut Vec<ObjRef>) {
+        if !self.glyph_work(1) {
+            return;
+        }
+        let mut pending = vec![object];
+        while let Some(object) = pending.pop() {
+            match object {
+                Object::Ref(r) => {
+                    // A glyph's forms, patterns and soft masks can share either the XObject
+                    // dictionary itself or a resource owner with content we do interpret.
+                    self.unsure.insert(XKey::XObject(*r));
+                    self.unsure.insert(XKey::Resources(*r));
+                    self.unsure.insert(XKey::Page(*r));
+                    if self.glyph_seen.insert(*r) {
+                        referenced.push(*r);
+                    }
+                }
+                Object::Array(array) => {
+                    if !self.glyph_work(array.len()) {
+                        return;
+                    }
+                    pending.extend(array);
+                }
+                Object::Dict(_) | Object::Stream(_) => {
+                    if let Some(dict) = object.as_dict() {
+                        if !self.glyph_work(dict.len()) {
+                            return;
+                        }
+                        pending.extend(dict.iter().map(|(_, value)| value));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Glyph programs are not interpreted here. Keep every resource owner reachable from their
+    /// resource graph, including nested forms, patterns and soft masks. Data bytes are never
+    /// decoded; references are visited once and all direct children count against the budget.
+    fn protect_glyph_object(&mut self, object: &Object) {
+        let mut referenced = Vec::new();
+        self.protect_glyph_tree(object, &mut referenced);
+        while !self.glyph_budget_exhausted {
+            let Some(r) = referenced.pop() else { break };
+            let object = self.doc.get(r);
+            self.protect_glyph_tree(&object, &mut referenced);
+        }
+    }
+
+    fn protect_type3_resources(&mut self, resources: &Dict, owner: Owner) {
+        if self.glyph_budget_exhausted {
+            return;
+        }
+        let Some(fonts) = resources.get(b"Font").map(|f| self.doc.resolve(f)) else { return };
+        let Some(fonts) = fonts.as_dict() else { return };
+        // Bound discovery too, but don't spend the glyph-graph budget repeatedly examining an
+        // ordinary shared font catalog on every page of a large document.
+        if fonts.len() > MAX_GLYPH_RESOURCE_WORK {
+            self.glyph_budget_exhausted = true;
+            return;
+        }
+        for (_, font) in fonts.iter() {
+            if self.glyph_budget_exhausted {
+                return;
+            }
+            let font_ref = font.as_ref();
+            let resolved = self.doc.resolve(font);
+            let Some(font) = resolved.as_dict().filter(|f| f.name(b"Subtype") == Some(b"Type3")) else { continue };
+            if let Some(glyph_resources) = font.get(b"Resources") {
+                if let Some(r) = font_ref
+                    && !self.glyph_fonts.insert(r)
+                {
+                    continue;
+                }
+                self.protect_glyph_object(glyph_resources);
+            } else {
+                self.distrust(resources, owner);
+                // This root dictionary is already owned by the content caller. Only its
+                // referenced descendants can share additional owners elsewhere in the file.
+                for (_, value) in resources.iter() {
+                    self.protect_glyph_object(value);
+                    if self.glyph_budget_exhausted {
+                        return;
+                    }
+                }
+            }
+        }
     }
 
     /// The `/XObject` dictionary of `resources`, with the key its drawn names belong to.
@@ -77,10 +177,11 @@ impl Pruner<'_> {
 
     /// Record every XObject name `data` draws with `Do`, descending into form XObjects.
     fn content(&mut self, data: &[u8], resources: &Dict, owner: Owner, depth: u8) {
+        self.protect_type3_resources(resources, owner);
         let Some((xobjects, key)) = self.xobjects(resources, owner) else {
             return;
         };
-        if depth > MAX_FORM_DEPTH || self.has_inheriting_type3(resources) {
+        if depth > MAX_FORM_DEPTH {
             self.unsure.insert(key);
             return;
         }
@@ -113,7 +214,10 @@ impl Pruner<'_> {
             match s.decoded() {
                 Ok(data) => self.content(&data, &inner, inner_owner, depth + 1),
                 // What the form draws is unknown: keep everything it could reach.
-                Err(_) => self.distrust(&inner, inner_owner),
+                Err(_) => {
+                    self.protect_type3_resources(&inner, inner_owner);
+                    self.distrust(&inner, inner_owner);
+                }
             }
         }
     }
@@ -202,7 +306,15 @@ fn filter_at(doc: &mut Document, key: XKey, names: &HashSet<Vec<u8>>) -> Result<
 /// Drop the page-resource entries the document's pages never draw. Returns how many were removed.
 pub(crate) fn prune_unused_xobjects(doc: &mut Document) -> Result<usize, OrganizeError> {
     let pages = crate::walk(doc)?;
-    let mut pruner = Pruner { doc, used: HashMap::new(), unsure: HashSet::new() };
+    let mut pruner = Pruner {
+        doc,
+        used: HashMap::new(),
+        unsure: HashSet::new(),
+        glyph_budget_exhausted: false,
+        glyph_work_left: MAX_GLYPH_RESOURCE_WORK,
+        glyph_seen: HashSet::new(),
+        glyph_fonts: HashSet::new(),
+    };
     for (page, attrs) in &pages {
         let Some(res) = attrs.get(b"Resources") else { continue };
         let Some((res_dict, owner)) = resolve_resources(pruner.doc, res, *page) else { continue };
@@ -211,10 +323,16 @@ pub(crate) fn prune_unused_xobjects(doc: &mut Document) -> Result<usize, Organiz
         match content_bytes(pruner.doc, &contents) {
             Some(data) if data.is_empty() => {}
             Some(data) => pruner.content(&data, &res_dict, owner, 0),
-            None => pruner.distrust(&res_dict, owner),
+            None => {
+                pruner.protect_type3_resources(&res_dict, owner);
+                pruner.distrust(&res_dict, owner);
+            }
         }
     }
-    let Pruner { used, unsure, .. } = pruner;
+    let Pruner { used, unsure, glyph_budget_exhausted, .. } = pruner;
+    if glyph_budget_exhausted {
+        return Ok(0);
+    }
     let mut removed = 0;
     for (key, names) in used {
         if !unsure.contains(&key) {

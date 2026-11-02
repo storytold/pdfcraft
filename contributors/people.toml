@@ -17,9 +17,17 @@
 # To remove your names, delete your entry (or set fields empty) in a PR. The next
 # contributors.py run, and the next build, drop them.
 
+[people.YouseifUS]
+sync_github_name = true
+
 [people.echelon]
 real_name = "Brandon Thomas"
 display_name = "Brandon Thomas"
+sync_github_name = false
+
+[people.edurbs]
+real_name = "Eduardo Soares"
+display_name = "Eduardo Soares"
 sync_github_name = false
 
 [people.jcl-bit]
@@ -74,3 +82,74 @@ sync_github_name = true
 
 [people.jay-tau]
 sync_github_name = true
+
+[people.Piohrun]
+real_name = "Grzegorz Martens"
+sync_github_name = true
+
+[people.krinry]
+sync_github_name = true
+
+
+[people.arcanii]
+real_name = "Bryan Mark"
+display_name = "Arcanii"
+sync_github_name = false
+
+[people.atoslins]
+real_name = "Atos Lins"
+display_name = "Atos Lins"
+sync_github_name = false
+
+[people.mhadidi06]
+display_name = "Mustafa Hadidi"
+
+[people.LucasT-dev]
+real_name = "Lucas"
+display_name = "Lucas"
+sync_github_name = true   # use the name on your public GitHub profile as display name
+
+[people.Losminek]
+sync_github_name = true
+
+[people.earlvanze]
+sync_github_name = true
+
+[people.rp6186030]
+real_name = "Raj Patel"
+sync_github_name = false
+
+[people.yeniufuklar-com]
+real_name = "Ufuk Efe"
+display_name = "Ufuk Efe"
+sync_github_name = true
+
+[people.lollinoo]
+sync_github_name = true
+
+[people.JeremyYao]
+real_name = "Jeremy Yao"
+display_name = "Jeremy Yao"
+sync_github_name = false
+
+[people.webdevtodayjason]
+display_name = "Jason Brashear"
+
+[people.alexanderalber]
+real_name = "Alexander Alber"
+
+[people.mtlcl410]
+display_name = "mtlcl410"
+sync_github_name = false
+
+[people.Silvertree2010]
+display_name = "Netter"
+sync_github_name = false
+
+[people.MortenHusted]
+sync_github_name = true
+
+[people.EricKaden]
+real_name = "Eric Kaden"
+display_name = "Eric Kaden"
+sync_github_name = false

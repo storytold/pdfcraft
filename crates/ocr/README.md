@@ -4,8 +4,8 @@
 `ATTRIBUTION.toml`. No document is uploaded and no model is downloaded at runtime.
 Release packages ship these files beside the application.
 
-- English, German, French, Spanish, Italian, Dutch, Danish, Norwegian Bokmål,
-  Swedish, Finnish, Portuguese and horizontal Japanese use PaddlePaddle's
+- English, German, French, Spanish, Catalan, Italian, Dutch, Danish, Norwegian Bokmål,
+  Swedish, Finnish, Portuguese, horizontal Japanese and Chinese (traditional/simplified) use PaddlePaddle's
   PP-OCRv6 small model through the existing Rust RTen runtime. The legacy English
   recognizer API remains available to existing callers.
 - PP-LCNet classifies quarter-turn orientation. Preprocessing centres on ink bounds,
@@ -29,7 +29,10 @@ and `recognize`, plus `auto_crop` and `crop_margin`; `ocr_enhance` corrects scan
 adding text and enables cropping by default, including pages with existing OCR text.
 Rotation/deskew are enabled by default. Disable all three corrections for exact-image
 output. Ordinary recognition leaves cropping off and skips existing text pages by
-default. Per-page `crop_box` results are in original PDF user space, before corrections.
+default. With `skip_text_pages: false`, recognition also reads pictures on pages
+that already contain text. Words overlapping existing text are counted as
+`already_on_page` and omitted; this comparison maps all four word-box corners
+back through crop, rotation and deskew into the original page view. Per-page `crop_box` results are in original PDF user space, before corrections.
 Corrections and OCR form one undo step; stale worker results and
 cancelled UI runs do not modify the document.
 
@@ -38,10 +41,21 @@ translation. Regional locales such as `de-AT`, `nl-BE` and `pt-BR` use `de`, `nl
 `pt`; unavailable or unsupported locales fall back to English. Users can select a
 different document language. CLI/MCP calls retain English as their deterministic default.
 
-Limits: no perspective correction/dewarping, no guarantee on photos or ambiguous text,
-no vertical Japanese claim, and deskew refuses annotated pages rather than separating
+Limits: this scan pipeline does not correct perspective or dewarp pages. Camera photos
+use the separate Enhance camera image command. No guarantee on photos or ambiguous text,
+no vertical Japanese or Chinese claim, and deskew refuses annotated pages rather than separating
 annotations from their targets. Supported OCR languages are deliberately limited to
 those exposed and tested, despite the model's larger vocabulary.
+
+Recognition includes a small margin around detected lines to retain capital accents
+and final punctuation; invisible text retains the detected line's original height.
+For the Latin languages, decoding excludes CJK, kana, full-width forms and letters
+outside ASCII/Latin-1/Latin Extended-A, while preserving other European names,
+digits and punctuation. Japanese and both Chinese choices retain the full dictionary. This is not a
+language-specific spelling filter. Community French checks still found missed
+`ï`, capital `Œ`/`Æ` and `Ë`, and inconsistent straight/curly apostrophes; the model
+does not guarantee exact transcription. Apostrophe equivalence in search remains
+separate work.
 
 Validation: `cargo test -p pdfcraft-engine --test scan_ocr` covers actual models,
 languages, all quarter-turns, deskew, crop offsets and padding, unchanged exact-mode pixels, save/reopen, undo
@@ -55,7 +69,7 @@ the scanned pixels. This is a regression fixture, not a real-document accuracy b
 
 The additional Latin-language regression checks Dutch `één`, `coöperatie`, `België`
 and accented words in Danish, Norwegian, Swedish, Finnish and Portuguese after
-save/reopen. The same model is used without per-language character restrictions.
+save/reopen. The same model is used without per-language spelling restrictions.
 Icelandic remains unclaimed because community tests found weak recognition of þ/Þ and Í.
 
 Historical print and handwriting use a separate optional model, downloaded only on
@@ -66,3 +80,35 @@ one text column using bounded ink projections. Both return source-image word box
 The model recognizes Fraktur and Kurrent with bounded 96-pixel line
 inference, historical spelling and NFC output. See
 [historical OCR](../../docs/historical-ocr.md) for provenance, test conditions and limits.
+The French save/reopen regression covers accented capitals, ç, œ, straight
+and curly apostrophes (allowing the model's normalization) and line-final punctuation,
+with unchanged scan pixels. Decoder unit
+tests cover European names and curly apostrophes without depending on model files.
+
+Chinese choices use `zh-Hant` and `zh-Hans`. Explicit script subtags take precedence;
+`zh-TW`, `zh-HK`, and `zh-MO` select traditional Chinese, while `zh-CN`, `zh-SG`,
+and bare `zh` select simplified Chinese. Both use the same existing model and full
+dictionary, without script conversion. Decoder, locale, UI selection, public-tool
+dispatch and Unicode save/reopen tests cover this wiring; real Chinese scan accuracy
+has not yet been measured. This adds no CJK font: Chinese interface glyph coverage
+still depends on the available interface fonts (see docs/gaps.md, gap 5).
+
+Community Italian checks report improved accents and word spacing, but still find
+paragraphs in the wrong reading order, occasional joined words, and model spelling
+errors. These are remaining recognition/layout limits, not guaranteed transcriptions.
+
+Horizontal Chinese detections are joined before recognition when their vertical ink
+bands substantially overlap and the horizontal gap is at most 1.25 ink heights
+(about one em). Overlapping fragments are recognized once; separate rows and wider
+column gaps remain separate. Searches are bounded to nearby fragments. Geometry
+regressions include actual detector boxes from an original OFL BIZ UDPGothic fixture;
+a local model comparison recovered its three lines and centred commas in reading
+order. This is not a general reading-order solution or a guarantee for every font,
+vertical writing, or thin numerals the detector misses entirely.
+
+Catalan (`ca`, including `ca-ES`, `ca-AD` and Valencian locale variants) uses the same
+Latin decoder. A model-backed regression checks accents after save/reopen with
+unchanged pixels. Community checks still report missing `ï` and `l·l` read as `l-l`.
+There is no automatic separator substitution: names, addresses and literal text
+must remain intact. The current model dictionary also lacks Spanish `¡`; a decoder
+filter cannot recover a class the model does not have.

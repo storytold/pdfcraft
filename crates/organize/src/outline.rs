@@ -38,6 +38,9 @@ pub struct Bookmark {
     pub open: bool,
     /// The 0-based page it goes to, when that page is in this document.
     pub page: Option<usize>,
+    /// Where on that page it goes: the destination's type (`XYZ`, `Fit`, `FitH`…) and the numbers
+    /// after it, in PDF user space (`None` for `null` or anything that isn't a number).
+    pub view: Option<(Vec<u8>, Vec<Option<f64>>)>,
 }
 
 /// One page of the outline listing (see [`bookmark_page`]).
@@ -229,43 +232,57 @@ fn dests_dict(doc: &Document, key: &[u8]) -> Option<Object> {
     dests.as_dict()?.get(key).cloned()
 }
 
-/// The page index a destination names: an explicit `[page /XYZ …]` array, a dictionary whose `/D`
-/// is one, or a named destination that resolves to one.
-fn page_of_dest(doc: &Document, targets: &mut Targets, dest: &Object, depth: u8) -> Option<usize> {
+/// The explicit destination array (`[page /XYZ …]`) a destination stands for: itself, a dictionary
+/// whose `/D` is one, or a named destination that resolves to one.
+fn explicit_dest(doc: &Document, targets: &mut Targets, dest: &Object, depth: u8) -> Option<Vec<Object>> {
     if depth > DEST_DEPTH {
         return None;
     }
     let dest = doc.resolve(dest);
     match &*dest {
-        Object::Array(a) => match a.first()? {
-            Object::Ref(page) => targets.pages.get(page).copied(),
-            // Some producers write a page number in a remote-style destination.
-            Object::Int(n) => usize::try_from(*n).ok().filter(|&p| p < targets.pages.len()),
-            _ => None,
-        },
-        Object::Dict(d) => page_of_dest(doc, targets, d.get(b"D")?, depth + 1),
+        Object::Array(a) => Some(a.clone()),
+        Object::Dict(d) => explicit_dest(doc, targets, d.get(b"D")?, depth + 1),
         Object::String(s) => {
             let inner = targets.named(doc, &s.bytes)?;
-            page_of_dest(doc, targets, &inner, depth + 1)
+            explicit_dest(doc, targets, &inner, depth + 1)
         }
         Object::Name(n) => {
             let inner = targets.named(doc, n)?;
-            page_of_dest(doc, targets, &inner, depth + 1)
+            explicit_dest(doc, targets, &inner, depth + 1)
         }
         _ => None,
     }
 }
 
-/// The page an item goes to: its `/Dest`, else the destination of its GoTo action `/A`.
-fn item_page(doc: &Document, targets: &mut Targets, d: &Dict) -> Option<usize> {
-    if let Some(dest) = d.get(b"Dest")
-        && let Some(page) = page_of_dest(doc, targets, dest, 0)
+/// The page index an explicit destination array names.
+fn page_of_explicit(targets: &Targets, dest: &[Object]) -> Option<usize> {
+    match dest.first()? {
+        Object::Ref(page) => targets.pages.get(page).copied(),
+        // Some producers write a page number in a remote-style destination.
+        Object::Int(n) => usize::try_from(*n).ok().filter(|&p| p < targets.pages.len()),
+        _ => None,
+    }
+}
+
+/// The view an explicit destination array asks for: its type and the numbers after it.
+fn view_of_explicit(doc: &Document, dest: &[Object]) -> Option<(Vec<u8>, Vec<Option<f64>>)> {
+    let kind = dest.get(1).map(|k| doc.resolve(k)).and_then(|k| k.as_name().map(<[u8]>::to_vec))?;
+    // At most the four numbers of /FitR.
+    let numbers = dest.iter().skip(2).take(4).map(|n| doc.resolve(n).as_f64().filter(|v| v.is_finite())).collect();
+    Some((kind, numbers))
+}
+
+/// The explicit destination an item goes to: its `/Dest` when that names a page here, else the
+/// destination of its GoTo action `/A`.
+fn item_dest(doc: &Document, targets: &mut Targets, d: &Dict) -> Option<Vec<Object>> {
+    if let Some(dest) = d.get(b"Dest").and_then(|dest| explicit_dest(doc, targets, dest, 0))
+        && page_of_explicit(targets, &dest).is_some()
     {
-        return Some(page);
+        return Some(dest);
     }
     let action = doc.resolve(d.get(b"A")?);
     let dest = action.as_dict()?.get(b"D")?;
-    page_of_dest(doc, targets, dest, 0)
+    explicit_dest(doc, targets, dest, 0)
 }
 
 /// A bookmark's title as viewers show it: the decoded text, without NULs or surrounding space.
@@ -281,11 +298,13 @@ fn title_of(doc: &Document, d: &Dict) -> String {
 
 fn describe(doc: &Document, targets: &mut Targets, obj: ObjRef, path: Vec<usize>) -> Bookmark {
     let item = doc.get(obj);
-    let (title, open, page) = match item.as_dict() {
-        Some(d) => (title_of(doc, d), d.int(b"Count").is_some_and(|c| c > 0), item_page(doc, targets, d)),
+    let (title, open, dest) = match item.as_dict() {
+        Some(d) => (title_of(doc, d), d.int(b"Count").is_some_and(|c| c > 0), item_dest(doc, targets, d)),
         None => (String::new(), false, None),
     };
-    Bookmark { obj, path, title, open, page }
+    let page = dest.as_deref().and_then(|d| page_of_explicit(targets, d));
+    let view = dest.as_deref().filter(|_| page.is_some()).and_then(|d| view_of_explicit(doc, d));
+    Bookmark { obj, path, title, open, page, view }
 }
 
 /// Lists up to `limit` bookmarks from position `offset`, entering no level deeper than `max_depth`.
@@ -345,7 +364,7 @@ fn resolve_path(doc: &Document, path: &[usize]) -> Result<(ObjRef, ObjRef)> {
 }
 
 /// The object that holds children at `parent_path` (`[]` = the outline root, created if needed).
-fn container(doc: &mut Document, parent_path: &[usize]) -> Result<ObjRef> {
+pub(crate) fn container(doc: &mut Document, parent_path: &[usize]) -> Result<ObjRef> {
     if parent_path.is_empty() {
         if let Some(r) = outline_root(doc) {
             return Ok(r);
@@ -373,6 +392,27 @@ fn put(doc: &mut Document, r: ObjRef, key: &[u8], value: Option<Object>) -> Resu
         }
     })?;
     Ok(())
+}
+
+/// The children of `parent` (an item or the outline root), in order. Cycle-safe.
+pub(crate) fn children(doc: &Document, parent: ObjRef) -> Vec<ObjRef> {
+    children_of(doc, parent, &mut HashSet::from([parent]))
+}
+
+/// [`relink`] `kids` under `parent`, then recompute every `/Count`.
+pub(crate) fn relink_and_recount(doc: &mut Document, parent: ObjRef, kids: &[ObjRef]) -> Result<()> {
+    relink(doc, parent, kids)?;
+    recount(doc)
+}
+
+impl From<OutlineError> for OrganizeError {
+    fn from(e: OutlineError) -> Self {
+        match e {
+            OutlineError::Organize(e) => e,
+            OutlineError::Cos(e) => OrganizeError::Cos(e),
+            other => OrganizeError::Invalid(other.to_string()),
+        }
+    }
 }
 
 /// Make `kids` the children of `parent`, in order: rewires `/Parent`, `/Prev`, `/Next`,

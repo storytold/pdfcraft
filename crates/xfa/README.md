@@ -83,8 +83,7 @@ let form = pdfcraft_xfa::layout_xml(template_xml)?;       // pages of items, for
 ## Deliberately not done (yet)
 
 - **Data binding** is the default one only: explicit `bind ref` expressions, global binding and
-  data descriptions are not followed, and no standalone XML or XDP data file is imported or
-  exported.
+  data descriptions are not followed (a data description is kept as written, not checked).
 - **Scripting.** JavaScript (boa) and FormCalc (a native interpreter, `pdfcraft_js::formcalc`)
   share one object model, one set of effects and one set of budgets. FormCalc covers the
   language and the common built-ins (arithmetic, logical, string, date/time, financial, unit);
@@ -98,8 +97,6 @@ let form = pdfcraft_xfa::layout_xml(template_xml)?;       // pages of items, for
   A hidden instance of a repeating subform hides every instance (overrides apply to the template).
   A repeating subform shows what its data holds once the data holds any instance, else its
   `initial` count, and never fewer than one (`occur min="0"` still shows one row).
-  Each script runs in a fresh engine on its own thread; a form with hundreds of calculate
-  scripts pays that on every field change (a shared engine per event is the obvious next step).
 - **Script limits.** Forms run their scripts on open without being asked, so the engine bounds
   each event: a script's effects (values set again on the same object merge, the last wins;
   10 000 effects, 100 message boxes, 1 000 console lines per script and per event), its loop
@@ -107,6 +104,13 @@ let form = pdfcraft_xfa::layout_xml(template_xml)?;       // pages of items, for
   click and change), 2 000 scripts and 50 relayouts per event, and 3 s (open, changes) or 5 s
   (click) of scripts per event, after which the rest are skipped and reported. Only a click may
   print, save, open a link or move the focus; other events asking are noted in the console.
+  All the scripts of one event (open, a change, a click) run on one thread, each in a fresh
+  JavaScript context (or FormCalc interpreter) on a copy of the form as the engine holds it
+  then: scripts share nothing, a script that fails halfway leaves nothing behind, and what a
+  script changed reaches the next one only through the engine, which applies the effects and
+  keeps its live form up to date in place for values (rebuilding it only when the structure
+  changed). A form with hundreds of calculations runs them all well within the open budget,
+  where each used to pay for a thread of its own and a rebuild of the whole form.
   What open-time scripts change is noted in the document's XFA warnings. Known gaps: the
   engine's loop limit is per call frame, so loops inside nested calls can run far longer; such
   a script is abandoned after 1 s (3 s for a click) on its thread, which keeps running until the
@@ -114,12 +118,27 @@ let form = pdfcraft_xfa::layout_xml(template_xml)?;       // pages of items, for
   allocates is not capped (the same holds for AcroForm JavaScript).
 - **Static XFA forms** (`/NeedsRendering` absent, AcroForm fields present) keep their AcroForm;
   only their data is read and written.
+- **Flattening and converting.** `strip` takes the XFA out of a document: the packets,
+  `/NeedsRendering`, the layout mark, the overrides and the private keys on the fields. The
+  engine calls it after flattening an XFA form's fields (so Adobe's viewers show the baked
+  pages instead of laying the form out again from the template) and for "convert to a static
+  form" (`xfa_to_static`), which keeps the laid-out pages and the fields with their values as
+  an ordinary AcroForm that no viewer lays out again and whose scripts no longer run.
 - **Field kinds.** Choice lists become combo boxes (editable with `textEntry`) or list boxes
   (`open="always"`, multi-select with `open="multiSelect"`), with the shown items and the saved
   values of `<items save="1">` as the options; the data holds saved values, several on
   separate lines. Password fields are password text fields. Signature fields are `/Sig` fields
   the app can sign. Image fields show the picture the data or template holds (JPEG, PNG, GIF)
-  but a new picture can't be chosen; barcode fields show their value as text, not as bars.
+  and are buttons that pick a new one, kept in the data as base64 with its `xfa:contentType`
+  (`write_data_image`); barcode fields show their value as text, not as bars.
+- **Data files.** `export_data` writes the data as Acrobat's Export Data does: an XML document
+  holding the data alone (the form's root data node at the root, its namespaces declared) or
+  an XDP holding the whole datasets and a reference to the PDF. `import_data` takes an XDP, a
+  datasets or data element, or a data document whose root is the form's root data node, and
+  makes it the form's whole data, keeping the rest of the datasets (data descriptions). The
+  file's data is held as a tree and written with the packet's own namespace prefix, never as
+  the file's markup, and every rewrite of the packet is parsed back before it is written; the
+  engine then lays a dynamic form out again from it and runs its calculations.
 - Missing: `keep` constraints, `subformSet` relations, `rl-tb` is mirrored `lr-tb`, font
   metrics are the approximate Helvetica ones, and line heights are 1.15 × size.
 - Acrobat cannot be an oracle here (clean-room rules): layout follows the specification, and

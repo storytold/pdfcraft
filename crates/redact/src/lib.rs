@@ -14,11 +14,14 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+use std::collections::{HashMap, HashSet};
+
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, Stream};
 
 pub mod codes;
 mod image;
 mod interp;
+mod overlay;
 pub mod patterns;
 pub mod sanitize;
 mod tags;
@@ -37,6 +40,24 @@ pub enum RedactError {
     Unreadable(usize),
     #[error("redaction could not be verified: {0} item(s) were still found under the marks, so nothing was changed")]
     Residue(usize),
+    /// A mark's overlay text has a character Helvetica can't draw; nothing was redacted.
+    #[error("{0}")]
+    Undrawable(String),
+    #[error(
+        "page {0} has vertical-writing text while a redaction mark is pending, and PdfCraft cannot tell whether that text lies under the mark yet, so nothing was changed"
+    )]
+    VerticalText(usize),
+    #[error(
+        "redaction appearance has invalid geometry or exceeds the 8 MiB budget; reduce the marked area, turn off repeated text or apply fewer pages at once (nothing was redacted)"
+    )]
+    OverlayLimit,
+    /// The structure tree couldn't be cleaned completely (#3302): an element written in place that
+    /// would need changing, an element whose inherited page can't be found, or a tree too large to
+    /// walk. Tags that kept the removed text or annotation would undo the redaction.
+    #[error(
+        "the document's tags can't be cleaned completely (an element written in place, or a structure tree too large or too deep to follow); the operation was refused"
+    )]
+    Tags,
     #[error(transparent)]
     Edit(#[from] pdfcraft_edit::EditError),
     #[error(transparent)]
@@ -105,8 +126,12 @@ pub struct Report {
     pub forms_removed: usize,
     pub annotations: usize,
     pub fields: usize,
+    pub replacement_text: usize,
     /// Structure elements that lost alternate/actual text or emptied marked content.
     pub tags: usize,
+    /// The form was an AcroForm+XFA form and its `/XFA` packets (which still held redacted field
+    /// values, and from which a relayout could rebuild them) were removed.
+    pub xfa_removed: bool,
 }
 
 fn rect_of(doc: &Document, o: Option<&Object>) -> Option<[f64; 4]> {
@@ -194,95 +219,141 @@ pub(crate) fn page_streams(doc: &Document, page: &Dict, index: usize) -> Result<
     Ok((list, data))
 }
 
-/// The boxes and overlay text drawn for the applied marks.
-fn overlay_content(marks: &[&Mark]) -> Vec<u8> {
-    let n = |v: f64| {
-        let s = format!("{:.3}", v);
-        s.trim_end_matches('0').trim_end_matches('.').to_string()
-    };
-    let mut c: Vec<u8> = Vec::new();
-    for m in marks {
-        let Some(fill) = m.fill else { continue };
-        c.extend(format!("q {} {} {} rg\n", n(fill[0]), n(fill[1]), n(fill[2])).bytes());
-        for r in &m.rects {
-            c.extend(format!("{} {} {} {} re f\n", n(r[0]), n(r[1]), n(r[2] - r[0]), n(r[3] - r[1])).bytes());
+/// The nearest ancestor of `page` that holds `/Resources` (where an inheriting page gets them):
+/// `Some(None)` when none does, `None` when the chain can't be followed (a cycle, a broken node or
+/// a tree deeper than any real one), so callers can stay conservative.
+fn resource_source(doc: &Document, page: ObjRef) -> Option<Option<ObjRef>> {
+    let mut seen = HashSet::new();
+    let mut parent = doc.get(page).as_dict().and_then(|d| d.get(b"Parent")).and_then(Object::as_ref);
+    while let Some(r) = parent {
+        if !seen.insert(r) || seen.len() > 4096 {
+            return None;
         }
-        c.extend_from_slice(b"Q\n");
-        if m.overlay.is_empty() {
+        let node = doc.get(r);
+        let d = node.as_dict()?;
+        if d.contains(b"Resources") {
+            return Some(Some(r));
+        }
+        parent = d.get(b"Parent").and_then(Object::as_ref);
+    }
+    Some(None)
+}
+
+/// Before rewriting `selected` pages, pin the resources they inherit onto them, and retire the
+/// ancestor `/Resources` they came from once no other page still inherits it, so the parent can't
+/// keep a removed XObject reachable. Pages that aren't redacted are left untouched; an inherited
+/// dictionary that is direct becomes one shared indirect object, never a copy per page.
+fn localize_resources(doc: &mut Document, selected: &[usize]) -> Result<(), pdfcraft_cos::CosError> {
+    let pages = pdfcraft_model::pages(doc);
+    let inherits = |doc: &Document, p: &pdfcraft_model::Page| doc.get(p.obj).as_dict().is_some_and(|d| !d.contains(b"Resources"));
+    // Ancestor → the reference its resources are shared through, and whether that reference is new.
+    let mut shared: HashMap<ObjRef, (Object, bool)> = HashMap::new();
+    for page in selected.iter().filter_map(|&i| pages.get(i)) {
+        // What the page tree gives the page; nothing to pin if it gets nothing.
+        let Some(effective) = page.dict.get(b"Resources").cloned() else { continue };
+        if !inherits(doc, page) {
             continue;
         }
-        // The overlay text: its font, colour and alignment; auto-sized to fit unless a size is
-        // set; repeated to fill the area when asked.
-        let look = &m.look;
-        let (res, width): (&str, fn(&str, f64) -> f64) = match look.font {
-            pdfcraft_annot::OverlayFont::Helvetica => ("PCHelv", pdfcraft_fonts::helvetica_width),
-            // Approximations of the standard metrics (no font program is bundled).
-            pdfcraft_annot::OverlayFont::Times => ("PCTimes", |s, size| pdfcraft_fonts::helvetica_width(s, size) * 0.9),
-            pdfcraft_annot::OverlayFont::Courier => ("PCCour", |s, size| s.chars().count() as f64 * size * 0.6),
+        let source = resource_source(doc, page.obj).flatten();
+        let original = source.and_then(|s| doc.get(s).as_dict().and_then(|d| d.get(b"Resources").cloned()));
+        let value = match source.filter(|_| original.as_ref() == Some(&effective)) {
+            // `/Parent` agrees with the page tree: share one reference per ancestor.
+            Some(source) => match shared.get(&source) {
+                Some((v, _)) => v.clone(),
+                None => {
+                    // A direct dictionary is made indirect once, so every pinned page shares it.
+                    let (v, new) = match effective {
+                        Object::Ref(_) => (effective, false),
+                        direct => (Object::Ref(doc.add(direct)), true),
+                    };
+                    shared.insert(source, (v.clone(), new));
+                    v
+                }
+            },
+            // A malformed tree whose `/Parent` disagrees: pin this page alone and retire nothing.
+            None => match effective {
+                Object::Ref(_) => effective,
+                direct => Object::Ref(doc.add(direct)),
+            },
         };
-        let [cr, cg, cb] = look.color.map(|v| v.clamp(0.0, 1.0));
-        for r in &m.rects {
-            let (w, h) = (r[2] - r[0], r[3] - r[1]);
-            let mut size = if look.size > 0.0 { look.size } else { (h * 0.7).min(12.0) };
-            let tw = width(&m.overlay, size);
-            if look.size <= 0.0 && tw > w - 2.0 && tw > 0.0 {
-                size *= (w - 2.0).max(0.0) / tw;
+        doc.update_dict(page.obj, |d| d.set(b"Resources".to_vec(), value))?;
+    }
+    if shared.is_empty() {
+        return Ok(());
+    }
+    // Ancestors some page still inherits from keep their resources (that page draws them), through
+    // the shared reference; the others are retired. A page that inherits resources through a chain
+    // that can't be followed might inherit from any of them, so then none is retired.
+    let mut still_used: HashSet<ObjRef> = HashSet::new();
+    for page in pages.iter().filter(|p| p.dict.contains(b"Resources") && inherits(doc, p)) {
+        match resource_source(doc, page.obj) {
+            Some(Some(source)) => {
+                if shared.contains_key(&source) {
+                    still_used.insert(source);
+                }
             }
-            if size < 2.0 {
-                continue;
-            }
-            // One line, or as many repeated lines as fit (each line the text repeated across).
-            let lines: Vec<String> = if look.repeat {
-                let unit = width(&format!("{} ", m.overlay), size).max(0.01);
-                let per_line = ((w - 2.0) / unit).floor().max(1.0) as usize;
-                let count = ((h / (size * 1.2)).floor() as usize).max(1);
-                vec![vec![m.overlay.as_str(); per_line].join(" "); count]
-            } else {
-                vec![m.overlay.clone()]
-            };
-            let block = lines.len() as f64 * size * 1.2;
-            let mut y = r[1] + (h + block) / 2.0 - size * 0.95;
-            c.extend(
-                format!("q {} {} {} {} re W n BT {} {} {} rg /{res} {} Tf ", n(r[0]), n(r[1]), n(w), n(h), n(cr), n(cg), n(cb), n(size)).bytes(),
-            );
-            for line in &lines {
-                let lw = width(line, size);
-                let x = match look.align {
-                    0 => r[0] + 1.0,
-                    2 => r[2] - 1.0 - lw,
-                    _ => r[0] + (w - lw) / 2.0,
-                };
-                c.extend(format!("1 0 0 1 {} {} Tm ", n(x), n(y)).bytes());
-                c.extend_from_slice(&pdfcraft_fonts::literal(&pdfcraft_fonts::win_ansi(line)));
-                c.extend_from_slice(b" Tj ");
-                y -= size * 1.2;
-            }
-            c.extend_from_slice(b"ET Q\n");
+            _ => still_used.extend(shared.keys().copied()),
         }
     }
-    c
+    for (source, (value, new)) in shared {
+        if still_used.contains(&source) {
+            if !new {
+                continue;
+            }
+            doc.update_dict(source, |d| d.set(b"Resources".to_vec(), value))?;
+        } else {
+            doc.update_dict(source, |d| {
+                d.remove(b"Resources");
+            })?;
+        }
+    }
+    Ok(())
 }
 
 /// Apply every redaction mark (or only those on `pages`, 0-based). Irreversible for the saved
 /// file; callers keep the previous document for undo.
+///
+/// # Errors
+///
+/// This operation is not transactional: an error may leave `doc` partially modified, with
+/// sensitive content still present. Call this on a working clone and replace the original only
+/// on success. On any error, discard the working clone; do not save or reuse it.
 pub fn apply(doc: &mut Document, pages: Option<&[usize]>) -> Result<Report, RedactError> {
     let all_marks = marks(doc);
     let chosen: Vec<&Mark> = all_marks.iter().filter(|m| pages.is_none_or(|p| p.contains(&m.page))).collect();
     if chosen.is_empty() {
         return Err(RedactError::NothingToApply);
     }
+    // Overlay text is drawn in Helvetica; applying can't be undone in the file, so text it can't
+    // draw (a mark another program made) is refused before anything changes, never burnt in as `?`.
+    if let Some((m, c)) = chosen.iter().find_map(|m| pdfcraft_fonts::first_undrawable(&m.overlay).map(|c| (m, c))) {
+        return Err(RedactError::Undrawable(format!(
+            "{}; change or clear that mark's overlay text, then apply again (nothing was redacted)",
+            pdfcraft_fonts::undrawable_message(&format!("the overlay text of a redaction mark on page {}", m.page + 1), c)
+        )));
+    }
     let mut report = Report { marks: chosen.len(), ..Report::default() };
-    let mut by_page: Vec<usize> = chosen.iter().map(|m| m.page).collect();
-    by_page.sort_unstable();
-    by_page.dedup();
+    // `marks` visits pages in order. Keep slices of that order for appearance generation,
+    // content rewriting and verification instead of scanning all marks for every page.
+    let groups: Vec<_> = chosen.chunk_by(|a, b| a.page == b.page).filter_map(|group| group.first().map(|mark| (mark.page, group))).collect();
+    let by_page: Vec<_> = groups.iter().map(|(page, _)| *page).collect();
+    // Budget failures must leave even a direct library caller's document untouched.
+    let mut remaining = overlay::MAX_BYTES;
+    let overlays = groups
+        .iter()
+        .map(|&(pi, page_marks)| overlay::content(page_marks, &mut remaining).map(|content| (pi, content)))
+        .collect::<Result<Vec<_>, _>>()?;
     report.pages = by_page.len();
+    localize_resources(doc, &by_page)?;
     let mut doomed_fields: Vec<String> = Vec::new();
+    // The original image and form XObjects the rewrite drops or replaces, on any page.
+    let mut doomed_xobjects: Vec<ObjRef> = Vec::new();
+    let mut retired_properties = Vec::new();
     let widget_owner: Vec<(ObjRef, String)> =
         pdfcraft_forms::fields(doc).into_iter().flat_map(|f| f.widgets.iter().map(|w| (w.obj, f.name.clone())).collect::<Vec<_>>()).collect();
 
-    for &pi in &by_page {
+    for &(pi, page_marks) in &groups {
         let page = pdfcraft_model::pages(doc).swap_remove(pi);
-        let page_marks: Vec<&Mark> = chosen.iter().copied().filter(|m| m.page == pi).collect();
         let rects: Vec<[f64; 4]> = page_marks.iter().flat_map(|m| m.rects.iter().copied()).collect();
 
         // 1. Content.
@@ -292,6 +363,19 @@ pub fn apply(doc: &mut Document, pages: Option<&[usize]>) -> Result<Report, Reda
             let mut scope = Scope::new(&rects, Mode::Apply, &mut report);
             process(doc, &mut scope, &data, &resources, pdfcraft_content::Matrix::IDENTITY)
         };
+        // Fail closed: the interpreter lays vertical-writing text out horizontally, so it cannot
+        // tell whether those glyphs lie under a mark. Rather than report success and possibly
+        // leave the text in place, refuse the whole operation (the caller keeps the previous
+        // document). The error does not claim the text was under the mark. Full vertical-text
+        // removal is a future enhancement.
+        if let Some(error) = out.error {
+            return Err(error.into());
+        }
+        if out.vertical {
+            return Err(RedactError::VerticalText(pi + 1));
+        }
+        doomed_xobjects.extend_from_slice(&out.doomed);
+        retired_properties.extend(out.retired_properties);
         let mut new_list = list.clone();
         let mut changed = false;
         for (i, new) in out.streams.into_iter().enumerate() {
@@ -309,15 +393,35 @@ pub fn apply(doc: &mut Document, pages: Option<&[usize]>) -> Result<Report, Reda
             new_list[i] = Object::Ref(doc.add(Object::Stream(Stream::flate(dict, &bytes))));
             changed = true;
         }
-        if changed || !out.xobjects.is_empty() {
-            let mut res = resources;
-            if !out.xobjects.is_empty() {
+        if changed || !out.xobjects.is_empty() || !out.replaced.is_empty() {
+            let mut res = resources.clone();
+            if !out.xobjects.is_empty() || !out.replaced.is_empty() {
                 let mut xo = res.get(b"XObject").and_then(|x| doc.resolve(x).as_dict().cloned()).unwrap_or_default();
+                // A full save keeps whatever is still referenced: unlink the originals this page no
+                // longer draws so the removed image or form bytes cannot survive in the saved file.
+                let page_content: Vec<Vec<u8>> = new_list
+                    .iter()
+                    .map(|o| match &*doc.resolve(o) {
+                        Object::Stream(s) => s.decoded().unwrap_or_default(),
+                        _ => Vec::new(),
+                    })
+                    .collect();
+                interp::prune(&mut xo, &out.replaced, &page_content);
                 for (n, r) in &out.xobjects {
                     xo.set(n.clone(), Object::Ref(*r));
                 }
                 res.set(b"XObject".to_vec(), Object::Dict(xo));
             }
+            let (_, cleaned_data) = page_streams(
+                doc,
+                &{
+                    let mut cleaned_page = page.dict.clone();
+                    cleaned_page.set(b"Contents".to_vec(), Object::Array(new_list.clone()));
+                    cleaned_page
+                },
+                pi,
+            )?;
+            retired_properties.extend(interp::prune_properties(doc, &mut res, &cleaned_data)?);
             doc.update_dict(page.obj, |d| {
                 d.set(b"Contents".to_vec(), Object::Array(new_list));
                 d.set(b"Resources".to_vec(), Object::Dict(res));
@@ -325,8 +429,13 @@ pub fn apply(doc: &mut Document, pages: Option<&[usize]>) -> Result<Report, Reda
             // Tags must not keep what the page no longer shows.
             let after = doc.get(page.obj).as_dict().cloned().unwrap_or_default();
             let (_, new_data) = page_streams(doc, &after, pi)?;
-            let (changed_ids, empty_ids) = tags::touched(&data.join(&b'\n'), &new_data.join(&b'\n'));
-            report.tags += tags::clean(doc, page.obj, &changed_ids, &empty_ids)?;
+            let (changed_ids, empty_ids) =
+                tags::touched(doc, &resources, pdfcraft_content::Pieces::join(&data).data(), pdfcraft_content::Pieces::join(&new_data).data());
+            report.tags += tags::clean(doc, page.obj, None, &changed_ids, &empty_ids)?;
+        }
+
+        for (old, new, changed, empty) in out.tag_changes {
+            report.tags += tags::clean(doc, page.obj, Some((old, new)), &changed, &empty)?;
         }
 
         // 2. Annotations: the marks, and whatever lies under them (with their pop-ups).
@@ -359,6 +468,32 @@ pub fn apply(doc: &mut Document, pages: Option<&[usize]>) -> Result<Report, Reda
                 }
             }
         }
+        // Replies (`/IRT`, ISO 32000-2 §12.5.6.2) to a removed annotation go too, and replies to
+        // those: a reply placed elsewhere would keep its parent — the comment and the QuadPoints
+        // of the redacted words — in the file through its `/IRT` (#2659). Each pass removes at
+        // least one more annotation of this page or stops, so it ends.
+        let replies: Vec<(ObjRef, ObjRef)> = annots
+            .iter()
+            .filter_map(Object::as_ref)
+            .filter_map(|r| {
+                let obj = doc.get(r);
+                let d = obj.as_dict()?;
+                (d.name(b"Subtype") != Some(b"Widget")).then_some(())?;
+                Some((r, d.get(b"IRT").and_then(Object::as_ref)?))
+            })
+            .collect();
+        loop {
+            let before = removed.len();
+            for (r, parent) in &replies {
+                if !removed.contains(r) && removed.contains(parent) {
+                    removed.push(*r);
+                    report.annotations += 1;
+                }
+            }
+            if removed.len() == before {
+                break;
+            }
+        }
         let kept: Vec<Object> = annots
             .into_iter()
             .filter(|a| {
@@ -388,20 +523,33 @@ pub fn apply(doc: &mut Document, pages: Option<&[usize]>) -> Result<Report, Reda
         }
     }
 
+    // 3b. An XFA form mirrors its field values in the /XFA datasets packet, and a relayout
+    // rebuilds fields and pages from that packet, so deleting the AcroForm field alone leaves the
+    // redacted value in the file and lets a later relayout put it back. Once redactions are
+    // applied the form stops being XFA: the packets, /NeedsRendering, the layout mark and the
+    // rest go (pdfcraft_xfa::strip), leaving a plain already-laid-out AcroForm that neither the
+    // saved file nor a relayout can restore from.
+    if pdfcraft_xfa::xfa_shape(doc).is_some() {
+        let r = pdfcraft_xfa::strip(doc).map_err(|e| pdfcraft_edit::EditError::Invalid(e.to_string()))?;
+        report.xfa_removed = !r.packets.is_empty();
+    }
+
     // 4. The boxes.
-    for &pi in &by_page {
-        let page_marks: Vec<&Mark> = chosen.iter().copied().filter(|m| m.page == pi).collect();
-        let content = overlay_content(&page_marks);
+    for (pi, content) in overlays {
         if !content.is_empty() {
             pdfcraft_edit::stamp(doc, pi, "Redaction", content)?;
         }
     }
 
+    // A removed image or form must not stay reachable through another resource dictionary (an
+    // inherited or shared /Resources): a full save keeps whatever is still referenced.
+    interp::unlink_doomed(doc, &doomed_xobjects, &retired_properties)?;
+
     // 5. Verify: nothing readable may remain under a region.
     let mut residue = 0;
-    for &pi in &by_page {
+    for &(pi, page_marks) in &groups {
         let page = pdfcraft_model::pages(doc).swap_remove(pi);
-        let rects: Vec<[f64; 4]> = chosen.iter().filter(|m| m.page == pi).flat_map(|m| m.rects.iter().copied()).collect();
+        let rects: Vec<[f64; 4]> = page_marks.iter().flat_map(|m| m.rects.iter().copied()).collect();
         let (list, data) = page_streams(doc, &page.dict, pi)?;
         // The overlay stream (last) draws text of its own: the overlay label is allowed.
         let original: Vec<Vec<u8>> = list

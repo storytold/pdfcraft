@@ -8,6 +8,10 @@
 #   $DIST/pdfcraft-<version>-linux-<arch>.tar.gz    plain FHS-style tree (bin/, share/)
 #   $DIST/pdfcraft-cli-<version>-linux-<arch>.tar.gz  the headless CLI alone (servers, CI, agents)
 #
+# A local or patched build: set PDFCRAFT_BUILD_LABEL (e.g. `titlebar`). `--version` and About then
+# show `0.7.1 (titlebar)`, file names carry `-titlebar`, and the .rpm/.deb release becomes
+# `1.titlebar`, which upgrades over the release of the same version (and the next release over it).
+#
 # Cross-compiling (CI: riscv64, tar only): set CROSS_ARCH (riscv64), CROSS_TARGET (the Rust target),
 # CROSS_COMPILE (binutils prefix, for strip) and optionally EMULATOR (e.g. qemu-riscv64) to
 # smoke-test the CLI.
@@ -30,7 +34,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --skip-build) SKIP_BUILD=1; shift ;;
     --formats) FORMATS="$2"; shift 2 ;;
-    -h | --help) sed -n '2,20p' "$0"; exit 0 ;;
+    -h | --help) sed -n '2,24p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -43,9 +47,10 @@ case "$ARCH" in
   *) echo "unsupported architecture $ARCH" >&2; exit 2 ;;
 esac
 export PDFCRAFT_MAINTAINER="${PDFCRAFT_MAINTAINER:-PdfCraft maintainers <pdfcraft@storyteller.ai>}"
-BASENAME="pdfcraft-$VERSION-linux-$ARCH"
+LABEL_SUFFIX="${PDFCRAFT_BUILD_LABEL:+-$PDFCRAFT_BUILD_LABEL}"
+BASENAME="pdfcraft-$VERSION$LABEL_SUFFIX-linux-$ARCH"
 
-echo "==> PdfCraft $VERSION for Linux $ARCH ($FORMATS)"
+echo "==> PdfCraft $VERSION$LABEL_SUFFIX for Linux $ARCH ($FORMATS)"
 
 if [ "$SKIP_BUILD" = 0 ]; then
   if [ -n "${CROSS_TARGET:-}" ]; then
@@ -96,7 +101,7 @@ fi
 # The stripped pdfcraft-cli (and its opt-in MCP server) with the licences, for machines that never
 # open a window. Like the other formats it needs glibc >= the build host's.
 if has cli; then
-  CLI_NAME="pdfcraft-cli-$VERSION-linux-$ARCH"
+  CLI_NAME="pdfcraft-cli-$VERSION$LABEL_SUFFIX-linux-$ARCH"
   CLI_DIR="$WORK/cli/$CLI_NAME"
   mkdir -p "$CLI_DIR"
   cp "$STAGE/usr/bin/pdfcraft-cli" "$CLI_DIR/"
@@ -109,6 +114,7 @@ fi
 if has deb || has rpm; then
   command -v nfpm >/dev/null || { echo "error: nfpm not found (https://nfpm.goreleaser.com/install/)" >&2; exit 1; }
   export VERSION
+  export RELEASE="1${PDFCRAFT_BUILD_LABEL:+.$PDFCRAFT_BUILD_LABEL}"
   export NFPM_ARCH="$DEB_ARCH"
   # nfpm expands env vars in fields like `version` and `arch`, but not in `contents[].src`.
   sed "s|\${STAGE}|$STAGE|g" "$HERE/nfpm.yaml" >"$WORK/nfpm.yaml"

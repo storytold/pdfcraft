@@ -180,6 +180,8 @@ pub struct CombineTab {
     unlock: Option<UnlockPrompt>,
     /// Bumped on every change to the list, so a grid drag that began before one is dropped.
     pub(crate) revision: u64,
+    /// Exact-content duplicate warnings, shared by both views until the list changes.
+    duplicates: Option<(u64, Arc<[bool]>)>,
     /// The file the keyboard moved to, for the grid to scroll into view.
     pub(crate) reveal: Option<u64>,
     /// Files per grid row as last drawn (Up/Down move a row in the grid).
@@ -213,6 +215,9 @@ pub struct CombineTab {
     pub(crate) selected_pages: BTreeSet<(u64, usize)>,
     /// The page a Shift-click selects from.
     pub(crate) page_anchor: Option<(u64, usize)>,
+    /// "Leave out files that can't be read?", asked when Combine is clicked with such files in the
+    /// list.
+    pub(crate) confirm_skip: bool,
 }
 
 /// The pages a range takes, and the range and page count they were worked out for.
@@ -246,6 +251,43 @@ pub enum Lock {
     Open,
     /// It opens, but only its permissions (owner) password allows copying its pages.
     Permissions,
+}
+
+/// The combine list's field-name conflicts, computed once per list (it opens the files):
+/// for each file, the renames combining would make of its form fields. Keyed by the file ids
+/// and their lock state, so unlocking a file refreshes it.
+#[derive(Default, Debug)]
+pub struct ConflictPreview {
+    key: (Vec<u64>, Vec<bool>),
+    per_file: Vec<Vec<(String, String)>>,
+}
+
+impl ConflictPreview {
+    /// Bring the preview in step with `files`, opening them through the engine when the list
+    /// changed. A file split into parts is combined as one file, once — each group's first
+    /// entry stands for it, as the combine does — and every part shows the file's preview.
+    /// A file that cannot be opened previews as nothing (its row says why).
+    fn refresh(&mut self, session: &pdfcraft_engine::Session, files: &[CombineFile]) {
+        let key = (files.iter().map(|f| f.id).collect(), files.iter().map(|f| f.password.is_some()).collect());
+        if self.key == key && self.per_file.len() == files.len() {
+            return;
+        }
+        let mut groups: Vec<u64> = Vec::new();
+        let mut sources: Vec<pdfcraft_engine::CombineSource> = Vec::new();
+        let mut passwords: Vec<Option<&str>> = Vec::new();
+        for f in files {
+            if groups.contains(&f.group) {
+                continue;
+            }
+            groups.push(f.group);
+            sources.push((f.name.clone(), f.bytes.clone(), None));
+            passwords.push(f.password.as_ref().map(|p| p.0.as_str()));
+        }
+        let per_group = session.combine_field_conflicts(&sources, &passwords);
+        self.per_file =
+            files.iter().map(|f| groups.iter().position(|g| *g == f.group).and_then(|at| per_group.get(at)).cloned().unwrap_or_default()).collect();
+        self.key = key;
+    }
 }
 
 /// Unlock…'s password box: the rows it unlocks and what has been typed.
@@ -338,6 +380,8 @@ pub(crate) struct Incoming {
     pub modified: Option<SystemTime>,
     /// Something to tell the user about where it came from.
     pub note: Option<String>,
+    /// The open document it is, when it came from a tab.
+    pub open_doc: Option<pdfcraft_engine::DocId>,
 }
 
 /// A new value for [`CombineFile::auth`]: counted for the whole run, outside the undo history.
@@ -358,6 +402,9 @@ pub struct CombineFile {
     pub(crate) group: u64,
     pub name: String,
     pub bytes: Arc<Vec<u8>>,
+    /// The file as it was added: `bytes` itself for a PDF, the image or text it was made from
+    /// otherwise (converted anew, with its own date, each time it is added).
+    source: Arc<Vec<u8>>,
     pub pages: usize,
     /// Each page's displayed size in points; shared, so undo snapshots don't copy it.
     pub(crate) sizes: Arc<[(f32, f32)]>,
@@ -378,9 +425,54 @@ pub struct CombineFile {
     pub notes: Vec<String>,
     /// Where it came from, shown among the warnings (e.g. an open document's unsaved changes).
     origin_note: Option<String>,
+    /// The open document it is, when it came from a tab: Add open documents leaves it out.
+    open_doc: Option<pdfcraft_engine::DocId>,
     /// The range last checked and the result: the number of pages it takes and the first of
     /// them (0-based), or why it is wrong.
     checked: Option<(String, RangeCheck)>,
+}
+
+impl CombineTab {
+    fn duplicate_warnings(&mut self, files: &[CombineFile]) -> Arc<[bool]> {
+        if let Some((revision, flags)) = &self.duplicates
+            && *revision == self.revision
+        {
+            return flags.clone();
+        }
+        // Only same-named, same-sized files can be repeats. Avoid reading the bytes of
+        // unrelated files, and never count a source split into parts as several additions.
+        let mut candidates: HashMap<(&str, usize), Vec<usize>> = HashMap::new();
+        for (i, f) in files.iter().enumerate() {
+            candidates.entry((&f.name, f.source.len())).or_default().push(i);
+        }
+        let mut twice = vec![false; files.len()];
+        for indices in candidates.values() {
+            let Some(first) = indices.first().and_then(|i| files.get(*i)) else { continue };
+            if indices.iter().all(|i| files.get(*i).is_some_and(|f| f.group == first.group)) {
+                continue;
+            }
+            // Slice keys check exact bytes even when their hashes collide.
+            let mut contents: HashMap<&[u8], Vec<usize>> = HashMap::new();
+            for &i in indices {
+                if let Some(f) = files.get(i) {
+                    contents.entry(f.source.as_slice()).or_default().push(i);
+                }
+            }
+            for copies in contents.values() {
+                let Some(first) = copies.first().and_then(|i| files.get(*i)) else { continue };
+                if copies.iter().any(|i| files.get(*i).is_some_and(|f| f.group != first.group)) {
+                    for &i in copies {
+                        if let Some(flag) = twice.get_mut(i) {
+                            *flag = true;
+                        }
+                    }
+                }
+            }
+        }
+        let flags: Arc<[bool]> = twice.into();
+        self.duplicates = Some((self.revision, flags.clone()));
+        flags
+    }
 }
 
 impl CombineFile {
@@ -393,6 +485,13 @@ impl CombineFile {
         self.auth = next_auth();
         self.notes = self.origin_note.iter().cloned().chain(a.notes).collect();
         self.checked = None;
+    }
+
+    /// Whether the file can't be read at all (damaged, or a type that can't be made into a PDF):
+    /// it stays in the list, with why, and Combine leaves it out once the user agrees. A
+    /// password-protected file can be unlocked instead, so it isn't one.
+    pub(crate) fn unreadable(&self) -> bool {
+        self.problem.is_some() && self.lock.is_none()
     }
 
     /// The password the file was unlocked with, if any.
@@ -540,6 +639,11 @@ pub(crate) fn page(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let files_hovering = ui.ctx().input(|i| !i.raw.hovered_files.is_empty());
     // Ranges are checked before anything below reads them.
     let checks: Vec<Result<usize, String>> = app.combine_draft.iter_mut().map(CombineFile::selection).collect();
+    // Same-named form fields across the files are renamed when combining: preview it once per
+    // list, so the Warnings column can say so before anything is combined.
+    app.combine_conflicts.refresh(&app.session, &app.combine_draft);
+    let conflicts = app.combine_conflicts.per_file.clone();
+    let twice = app.combine_tab.duplicate_warnings(&app.combine_draft);
     let n = app.combine_draft.len();
     let ids: Vec<u64> = app.combine_draft.iter().map(|f| f.id).collect();
     app.combine_tab.selected.retain(|id| ids.contains(id));
@@ -583,7 +687,7 @@ pub(crate) fn page(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     // The keyboard is the list's unless a text field, the password box or the size slider has it.
     let slider_focused = grid && app.combine_tab.zoom_slider.is_some_and(|id| ui.memory(|m| m.has_focus(id)));
     // (Nor while a file is shown large: its window may only open or close this frame.)
-    let covered = app.combine_tab.unlock.is_some() || app.combine_tab.preview.is_some();
+    let covered = app.combine_tab.unlock.is_some() || app.combine_tab.preview.is_some() || app.combine_tab.confirm_skip;
     let focus = ui.memory(|m| m.focused());
     let space = focus.is_none() || focus == app.combine_tab.card_focus;
     let any_picked = count > 0 || !app.combine_tab.selected_pages.is_empty();
@@ -629,7 +733,7 @@ pub(crate) fn page(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
             let edge = ui.max_rect().right();
             add_menu(app, ui);
             let open_docs: Vec<(usize, String)> =
-                app.views.iter().enumerate().filter_map(|(i, v)| app.session.get(v.id).map(|d| (i, d.display_name()))).collect();
+                app.views.iter().enumerate().filter_map(|(i, _)| crate::canvas::tab_label(app, i).map(|name| (i, name))).collect();
             let response = ui.add_enabled_ui(!open_docs.is_empty(), |ui| widgets::icon_pill(ui, "file-plus", tl!("Add open documents"), false)).inner;
             response.clone().on_disabled_hover_text(tl!("No documents are open"));
             egui::Popup::menu(&response).show(|ui| {
@@ -727,11 +831,11 @@ pub(crate) fn page(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 // The view as the toolbar left it: a click on List view this frame starts no
                 // thumbnail renders.
                 } else if app.combine_view == CombineView::Grid {
-                    if let Some(action) = crate::combine_grid::grid(app, ui, &t, &checks, &selected) {
+                    if let Some(action) = crate::combine_grid::grid(app, ui, &t, &checks, &selected, &twice) {
                         events.action = Some(action);
                     }
                 } else {
-                    let table_events = table(app, ui, &t, &checks, &selected);
+                    let table_events = table(app, ui, &t, &checks, &selected, &conflicts, &twice);
                     events.range_focused |= table_events.range_focused;
                     events.range_changed |= table_events.range_changed;
                     if table_events.action.is_some() {
@@ -793,7 +897,67 @@ pub(crate) fn page(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         app.combine_apply(action);
     }
     if combine && blocker.is_none() {
-        app.combine_staged();
+        if app.combine_draft.iter().any(CombineFile::unreadable) {
+            app.combine_tab.confirm_skip = true;
+        } else {
+            app.combine_staged();
+        }
+    }
+    skip_prompt(app, ui.ctx());
+}
+
+/// Most files the prompt names; the rest are counted.
+const SKIP_PROMPT_NAMES: usize = 8;
+
+/// "Leave out files that can't be read?": names them and why, then combines the others, or not.
+fn skip_prompt(app: &mut PdfCraftApp, ctx: &egui::Context) {
+    if !app.combine_tab.confirm_skip {
+        return;
+    }
+    let t = Tokens::get(ctx);
+    let mut left_out: Vec<(&str, &str)> = Vec::new();
+    let mut seen = BTreeSet::new();
+    for f in app.combine_draft.iter().filter(|f| f.unreadable() && seen.insert(f.group)) {
+        left_out.push((f.name.as_str(), f.problem.as_deref().unwrap_or_default()));
+    }
+    let mut choice: Option<bool> = None;
+    let modal = egui::Modal::new(egui::Id::new("combine-skip")).show(ctx, |ui| {
+        ui.set_width(460.0);
+        ui.horizontal(|ui| {
+            ui.add(icons::image("triangle-alert", 22.0, ERROR));
+            ui.add(egui::Label::new(egui::RichText::new(tl!("Leave out files that can't be read?")).font(theme::semibold(16.0))).wrap());
+        });
+        ui.add_space(6.0);
+        ui.label(egui::RichText::new(tl!("These files can't be read, so they won't be in the combined PDF:")).color(t.text_muted));
+        ui.add_space(6.0);
+        for (name, why) in left_out.iter().take(SKIP_PROMPT_NAMES) {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(egui::RichText::new(format!("• {}", crate::bidi::visual(name))).strong());
+                ui.label(egui::RichText::new(*why).color(t.text_muted));
+            });
+        }
+        if left_out.len() > SKIP_PROMPT_NAMES {
+            let more = (left_out.len() - SKIP_PROMPT_NAMES).to_string();
+            ui.label(egui::RichText::new(crate::i18n::fmt(tl!("and {n} more"), &[("n", &more)])).color(t.text_muted));
+        }
+        ui.add_space(14.0);
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            if widgets::pill_button(ui, tl!("Combine the rest"), true).clicked() {
+                choice = Some(true);
+            }
+            if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
+                choice = Some(false);
+            }
+        });
+    });
+    if choice.is_none() && modal.should_close() {
+        choice = Some(false);
+    }
+    if let Some(go) = choice {
+        app.combine_tab.confirm_skip = false;
+        if go {
+            app.combine_staged();
+        }
     }
 }
 
@@ -828,8 +992,8 @@ fn unlock_prompt(app: &mut PdfCraftApp, ctx: &egui::Context) {
             }
             ui.add_space(8.0);
             ui.horizontal(|ui| {
-                let field =
-                    ui.add(egui::TextEdit::singleline(&mut prompt.input.0).password(!prompt.show).hint_text(tl!("Password")).desired_width(290.0));
+                crate::widgets::begin_dialog(ui);
+                let field = ui.add(crate::widgets::line(&mut prompt.input.0).password(!prompt.show).hint_text(tl!("Password")).desired_width(290.0));
                 if !prompt.focused {
                     field.request_focus();
                     prompt.focused = true;
@@ -907,11 +1071,20 @@ fn expandable(f: &mut CombineFile) -> bool {
 
 /// Why Combine can't run yet, if so.
 fn blocker(files: &[CombineFile], checks: &[Result<usize, String>]) -> Option<String> {
-    // (A file split into parts is still one file.)
-    if files.iter().map(|f| f.group).collect::<BTreeSet<u64>>().len() < 2 {
-        return Some(tl!("Add at least two files").to_string());
+    // (A file split into parts is still one file.) Files that can't be read are left out, so
+    // they don't count.
+    if files.iter().filter(|f| !f.unreadable()).map(|f| f.group).collect::<BTreeSet<u64>>().len() < 2 {
+        return Some(match files.iter().find(|f| f.unreadable()) {
+            Some(f) => {
+                crate::i18n::fmt(tl!("{name} can't be combined: {why}"), &[("name", &f.name), ("why", f.problem.as_deref().unwrap_or_default())])
+            }
+            None => tl!("Add at least two files").to_string(),
+        });
     }
     for (f, check) in files.iter().zip(checks) {
+        if f.unreadable() {
+            continue;
+        }
         if let Some(p) = &f.problem {
             return Some(crate::i18n::fmt(tl!("{name} can't be combined: {why}"), &[("name", &f.name), ("why", p)]));
         }
@@ -1041,9 +1214,9 @@ fn empty_state(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, files_hover
         ui.add_space((ui.available_height() / 2.0 - 70.0).max(16.0));
         ui.add(icons::image("files", 40.0, if files_hovering { t.accent } else { t.text_faint }));
         ui.add_space(10.0);
-        ui.label(egui::RichText::new(tl!("Add the PDFs to combine")).font(theme::medium(15.0)));
+        ui.label(egui::RichText::new(tl!("Add the files to combine")).font(theme::medium(15.0)));
         ui.add_space(4.0);
-        ui.label(egui::RichText::new(tl!("Drop PDFs or folders here, or choose them.")).color(t.text_faint));
+        ui.label(egui::RichText::new(tl!("Drop PDFs, images, text files or folders here, or choose them.")).color(t.text_faint));
         ui.add_space(12.0);
         let folders = cfg!(not(target_arch = "wasm32"));
         // Centre the buttons: measure them first.
@@ -1084,12 +1257,12 @@ fn add_menu(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
             app.combine_dialog();
             ui.close();
         }
-        if item(ui, "folder", tl!("Add folder…")).on_hover_text(tl!("Every PDF in the folder")).clicked() {
+        if item(ui, "folder", tl!("Add folder…")).on_hover_text(tl!("Every PDF, image and text file in the folder")).clicked() {
             app.combine_add_folder(false);
             ui.close();
         }
         if item(ui, "folder-open", tl!("Add folder and subfolders…"))
-            .on_hover_text(tl!("Every PDF in the folder and the folders inside it"))
+            .on_hover_text(tl!("Every PDF, image and text file in the folder and the folders inside it"))
             .clicked()
         {
             app.combine_add_folder(true);
@@ -1099,15 +1272,16 @@ fn add_menu(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
 }
 
 /// The file table.
-fn table(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, checks: &[Result<usize, String>], selected: &[bool]) -> TableEvents {
+fn table(
+    app: &mut PdfCraftApp,
+    ui: &mut egui::Ui,
+    t: &Tokens,
+    checks: &[Result<usize, String>],
+    selected: &[bool],
+    conflicts: &[Vec<(String, String)>],
+    twice: &[bool],
+) -> TableEvents {
     let mut events = TableEvents::default();
-    // The same file twice is allowed (e.g. a cover sheet), but probably a mistake.
-    // (A file's parts are the one file, not copies.)
-    let twice: Vec<bool> = app
-        .combine_draft
-        .iter()
-        .map(|f| app.combine_draft.iter().filter(|g| g.group != f.group && g.name == f.name && g.bytes.len() == f.bytes.len()).count() > 0)
-        .collect();
     let dragging = egui::DragAndDrop::has_payload_of_type::<usize>(ui.ctx());
     // Until the user resizes a column, the widths follow the window.
     let gap = ui.spacing().item_spacing.x;
@@ -1117,7 +1291,7 @@ fn table(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, checks: &[Result<
         app.combine_tab.layout = app.combine_tab.layout.wrapping_add(1);
     }
     let widths = app.combine_columns.resolved(available);
-    let rows = Rows { checks, selected, twice: &twice, dragging, sort: app.combine_tab.sort };
+    let rows = Rows { checks, selected, twice, conflicts, dragging, sort: app.combine_tab.sort };
     let mut heading_event = None;
     let mut shown = None;
     egui::ScrollArea::horizontal()
@@ -1154,6 +1328,8 @@ struct Rows<'a> {
     checks: &'a [Result<usize, String>],
     selected: &'a [bool],
     twice: &'a [bool],
+    /// What combining would rename of this file's form fields (the field-name conflict preview).
+    conflicts: &'a [Vec<(String, String)>],
     dragging: bool,
     sort: Option<(SortKey, bool)>,
 }
@@ -1295,9 +1471,10 @@ fn table_body(
                             }
                             // The range field and how many pages it takes.
                             SortKey::Pages => {
+                                crate::widgets::begin_dialog(ui);
                                 let edit = ui.add_enabled(
                                     f.problem.is_none(),
-                                    egui::TextEdit::singleline(&mut f.range).hint_text(tl!("All pages")).desired_width(88.0),
+                                    crate::widgets::line(&mut f.range).frame(egui::Frame::NONE).hint_text(tl!("All pages")).desired_width(88.0),
                                 );
                                 // A visible field on plain and striped rows alike; red when the range is wrong.
                                 let border = if check.is_err() { Stroke::new(1.5, ERROR) } else { Stroke::new(1.0, t.border) };
@@ -1342,6 +1519,19 @@ fn table_body(
                                 let mut warnings = f.notes.clone();
                                 if rows.twice.get(i).copied().unwrap_or(false) {
                                     warnings.push(tl!("Added more than once").to_string());
+                                }
+                                if let Some(renames) = rows.conflicts.get(i).filter(|r| !r.is_empty()) {
+                                    let shown: Vec<String> = renames.iter().take(3).map(|(old, new)| format!("{old} → {new}")).collect();
+                                    let list = shown.join(", ");
+                                    warnings.push(crate::i18n::fmt(
+                                        &crate::i18n::trn(
+                                            crate::i18n::current(),
+                                            renames.len() as u64,
+                                            "{n} field name collides with earlier files and will be renamed: {list}",
+                                            "{n} field names collide with earlier files and will be renamed: {list}",
+                                        ),
+                                        &[("list", &list)],
+                                    ));
                                 }
                                 let (icon, colour, first) = match (errors.first(), warnings.first()) {
                                     (Some(e), _) => ("circle-x", ERROR, e.clone()),
@@ -1406,10 +1596,10 @@ fn table_body(
         });
 }
 
-/// The PDFs in `dir` (and, if `recursive`, the folders inside it, not following links), in
-/// natural order, at most [`MAX_FOLDER_FILES`]; and whether there were more.
+/// The PDFs, images and text files in `dir` (and, if `recursive`, the folders inside it, not
+/// following links), in natural order, at most [`MAX_FOLDER_FILES`]; and whether there were more.
 #[cfg(not(target_arch = "wasm32"))]
-fn pdfs_in(dir: &std::path::Path, recursive: bool) -> (Vec<std::path::PathBuf>, bool) {
+fn combinable_in(dir: &std::path::Path, recursive: bool) -> (Vec<std::path::PathBuf>, bool) {
     let mut found = Vec::new();
     let mut more = false;
     let mut folders = vec![(dir.to_path_buf(), 0usize)];
@@ -1423,7 +1613,7 @@ fn pdfs_in(dir: &std::path::Path, recursive: bool) -> (Vec<std::path::PathBuf>, 
                 if recursive && !hidden && depth < MAX_FOLDER_DEPTH {
                     folders.push((path, depth + 1));
                 }
-            } else if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("pdf")) && path.is_file() {
+            } else if path.extension().is_some_and(|e| combinable(&e.to_string_lossy())) && path.is_file() {
                 if found.len() >= MAX_FOLDER_FILES {
                     more = true;
                     break 'walk;
@@ -1434,6 +1624,21 @@ fn pdfs_in(dir: &std::path::Path, recursive: bool) -> (Vec<std::path::PathBuf>, 
     }
     found.sort_by(|a, b| natural(&a.to_string_lossy(), &b.to_string_lossy()));
     (found, more)
+}
+
+/// Whether a file with extension `ext` can join the list: a PDF, or an image or text file that
+/// becomes one.
+fn combinable(ext: &str) -> bool {
+    std::iter::once("pdf").chain(pdfcraft_engine::CONVERTIBLE).any(|c| ext.eq_ignore_ascii_case(c))
+}
+
+/// A file's bookmark in the combined PDF: its name without ".pdf", or without the extension of
+/// the image or text file it was made from.
+fn title_of(name: &str) -> &str {
+    match name.rsplit_once('.') {
+        Some((stem, ext)) if !stem.is_empty() && combinable(ext) => stem,
+        _ => name,
+    }
 }
 
 /// File names in the order people expect: case-insensitive, with numbers by value
@@ -2183,20 +2388,45 @@ impl PdfCraftApp {
 
     /// Add picked files to the Combine files list (and show it).
     pub(crate) fn stage_combine(&mut self, files: Vec<(String, Vec<u8>)>) {
-        let incoming = files.into_iter().map(|(name, bytes)| Incoming { name, bytes: Arc::new(bytes), modified: None, note: None }).collect();
+        let incoming =
+            files.into_iter().map(|(name, bytes)| Incoming { name, bytes: Arc::new(bytes), modified: None, note: None, open_doc: None }).collect();
         self.stage_combine_with(incoming);
     }
 
     /// Add files to the Combine files list, with what can be known about them up front.
     pub(crate) fn stage_combine_with(&mut self, files: Vec<Incoming>) {
         let mut added = Vec::new();
-        for Incoming { name, bytes, modified, note } in files {
-            let assessed = match assess(&bytes, None) {
-                Ok(a) => a,
-                Err(AssessError::Unreadable(e)) => {
-                    self.notify_fmt("Couldn't add {name}: {e}", &[("name", &name), ("e", &e)]);
-                    continue;
+        for Incoming { name, bytes, modified, note, open_doc } in files {
+            // Images and text files become PDFs as they join the list (#569): from then on they
+            // are ordinary files, with pages, thumbnails and page ranges.
+            // A file that can't be read joins the list all the same, with why (the Warnings
+            // column, its card); Combine asks before leaving it out.
+            let unreadable = |e: &str| Assessed {
+                pages: 0,
+                sizes: Arc::from(Vec::new()),
+                problem: Some(crate::i18n::fmt(tl!("Can't be read: {e}"), &[("e", e)])),
+                lock: None,
+                notes: Vec::new(),
+            };
+            let source = bytes.clone();
+            let (bytes, assessed) = match self.session.as_pdf(&name, &bytes) {
+                Ok(pdf) => {
+                    let assessed = assess(&pdf, None);
+                    (pdf, assessed)
                 }
+                Err(e) => {
+                    // (The engine's message names the file, which the row already shows.)
+                    let e = match e {
+                        pdfcraft_engine::EditError::Source(m) => m,
+                        other => other.to_string(),
+                    };
+                    let why = e.strip_prefix(&format!("{name}: ")).unwrap_or(&e).to_string();
+                    (bytes, Ok(unreadable(&why)))
+                }
+            };
+            let assessed = match assessed {
+                Ok(a) => a,
+                Err(AssessError::Unreadable(e)) => unreadable(&e),
                 Err(AssessError::WrongPassword) => {
                     self.notify_fmt("Couldn't add {name}: {e}", &[("name", &name), ("e", "the password is wrong")]);
                     continue;
@@ -2207,6 +2437,7 @@ impl PdfCraftApp {
                 group: 0,
                 name,
                 bytes,
+                source,
                 pages: 0,
                 range: String::new(),
                 modified,
@@ -2217,6 +2448,7 @@ impl PdfCraftApp {
                 auth: 0,
                 notes: Vec::new(),
                 origin_note: note,
+                open_doc,
                 checked: None,
             };
             f.take(assessed, None);
@@ -2286,7 +2518,8 @@ impl PdfCraftApp {
         self.combine_unlock(&ids, password)
     }
 
-    /// Add every PDF in a folder the user picks (and its subfolders, if `recursive`).
+    /// Add every PDF, image and text file in a folder the user picks (and its subfolders, if
+    /// `recursive`).
     pub fn combine_add_folder(&mut self, recursive: bool) {
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -2298,51 +2531,54 @@ impl PdfCraftApp {
         let _ = recursive;
     }
 
-    /// Add the PDFs in `dir` to the Combine files list, as one undo step.
+    /// Add the PDFs, images and text files in `dir` to the Combine files list, as one undo step.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn add_folder_to_combine(&mut self, dir: &std::path::Path, recursive: bool) {
-        let (paths, more) = pdfs_in(dir, recursive);
+        let (paths, more) = combinable_in(dir, recursive);
         let folder = dir.file_name().map_or_else(|| dir.to_string_lossy().into_owned(), |n| n.to_string_lossy().into_owned());
         if paths.is_empty() {
-            self.notify_fmt("No PDFs found in {folder}", &[("folder", &folder)]);
+            self.notify_fmt("No PDFs, images or text files found in {folder}", &[("folder", &folder)]);
             self.open_combine_tab();
             return;
         }
         self.use_paths(crate::files::FilePurpose::Combine, &paths);
         if more {
-            self.notify_fmt("Added the first {n} PDFs in {folder}", &[("n", &MAX_FOLDER_FILES.to_string()), ("folder", &folder)]);
+            self.notify_fmt("Added the first {n} files in {folder}", &[("n", &MAX_FOLDER_FILES.to_string()), ("folder", &folder)]);
         }
     }
 
-    /// Add documents open in tabs (by tab index), as they are now.
+    /// Add documents open in tabs (by tab index), as they are now; those already in the list
+    /// stay out (#1356). The same document, not the same name: two files called alike are two.
     pub(crate) fn add_open_documents(&mut self, tabs: &[usize]) {
         let mut incoming = Vec::new();
         for &i in tabs {
             let Some(doc) = self.views.get(i).and_then(|v| self.session.get(v.id)) else { continue };
+            if self.combine_draft.iter().any(|f| f.open_doc == Some(doc.id)) {
+                continue;
+            }
             #[cfg(not(target_arch = "wasm32"))]
             let modified = if doc.dirty { None } else { doc.path.as_ref().and_then(|p| std::fs::metadata(p).and_then(|m| m.modified()).ok()) };
             #[cfg(target_arch = "wasm32")]
             let modified = None;
             let note = doc.dirty.then(|| tl!("Includes unsaved changes").to_string());
             let name = if doc.name.to_ascii_lowercase().ends_with(".pdf") { doc.name.clone() } else { format!("{}.pdf", doc.name) };
-            incoming.push(Incoming { name, bytes: doc.bytes.clone(), modified, note });
+            incoming.push(Incoming { name, bytes: doc.bytes.clone(), modified, note, open_doc: Some(doc.id) });
         }
         self.stage_combine_with(incoming);
     }
 
     /// Combine the listed files into a new, unsaved document; the tab makes way for it.
+    /// Files that can't be read are left out (the user was asked).
     pub fn combine_staged(&mut self) {
-        let files = &self.combine_draft;
+        let files: Vec<&CombineFile> = self.combine_draft.iter().filter(|f| !f.unreadable()).collect();
         if files.is_empty() {
             return;
         }
         // Each file once, however many parts it is in.
         let count = files.iter().map(|f| f.group).collect::<BTreeSet<u64>>().len();
         let groups: Vec<u64> = files.iter().map(|f| f.group).collect();
-        let sources: Vec<(String, Arc<Vec<u8>>, Option<String>)> = files
-            .iter()
-            .map(|f| (crate::files::strip_pdf(&f.name).to_string(), f.bytes.clone(), Some(f.range.clone()).filter(|r| !r.trim().is_empty())))
-            .collect();
+        let sources: Vec<(String, Arc<Vec<u8>>, Option<String>)> =
+            files.iter().map(|f| (title_of(&f.name).to_string(), f.bytes.clone(), Some(f.range.clone()).filter(|r| !r.trim().is_empty()))).collect();
         let passwords: Vec<Option<&str>> = files.iter().map(|f| f.password.as_ref().map(|p| p.0.as_str())).collect();
         match self.session.combine_grouped(&sources, &groups, &passwords) {
             Ok(bytes) => {
@@ -2393,6 +2629,51 @@ mod tests {
     }
 
     #[test]
+    fn duplicate_warnings_reuse_results_and_track_removal_and_parts() {
+        let bytes = locked();
+        let mut app = PdfCraftApp::new();
+        app.stage_combine(vec![("same.pdf".into(), bytes.clone())]);
+        let mut part = app.combine_draft[0].clone();
+        part.id = 99;
+        app.combine_draft.push(part);
+        let first = app.combine_tab.duplicate_warnings(&app.combine_draft);
+        assert_eq!(&*first, &[false, false], "parts of one source are not duplicate additions");
+        let again = app.combine_tab.duplicate_warnings(&app.combine_draft);
+        assert!(Arc::ptr_eq(&first, &again), "unchanged frames reuse the result without scanning files");
+        app.stage_combine(vec![("same.pdf".into(), bytes)]);
+        assert_eq!(&*app.combine_tab.duplicate_warnings(&app.combine_draft), &[true, true, true]);
+        let duplicate = app.combine_draft.last().unwrap().id;
+        app.combine_apply(RowAction::RemoveFile(duplicate));
+        assert_eq!(&*app.combine_tab.duplicate_warnings(&app.combine_draft), &[false, false]);
+        app.combine_history_step(true);
+        assert_eq!(&*app.combine_tab.duplicate_warnings(&app.combine_draft), &[true, true, true]);
+        app.close_combine_tab();
+        assert!(app.combine_tab.duplicate_warnings(&app.combine_draft).is_empty());
+    }
+
+    /// #1303: an image or text file is converted anew, with its own date, each time it is added,
+    /// so it is the file as added that is compared, not the PDF made from it.
+    #[test]
+    fn the_same_image_or_text_file_added_twice_is_a_duplicate() {
+        static NOW: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(1_700_000_000);
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::RgbaImage::from_pixel(12, 4, image::Rgba([20, 30, 40, 255])).write_to(&mut png, image::ImageFormat::Png).unwrap();
+        let png = png.into_inner();
+        let warnings = |first: (&str, &[u8]), second: (&str, &[u8])| {
+            let mut app = PdfCraftApp::new();
+            app.session = std::mem::take(&mut app.session).with_clock(|| NOW.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
+            for (name, bytes) in [first, second] {
+                app.stage_combine(vec![(name.into(), bytes.to_vec())]);
+            }
+            assert_ne!(app.combine_draft[0].bytes, app.combine_draft[1].bytes, "each addition is converted with its own date");
+            app.combine_tab.duplicate_warnings(&app.combine_draft).to_vec()
+        };
+        assert_eq!(warnings(("notes.txt", b"Hello"), ("notes.txt", b"Hello")), [true, true], "the same text file");
+        assert_eq!(warnings(("photo.png", &png), ("photo.png", &png)), [true, true], "the same image");
+        assert_eq!(warnings(("notes.txt", b"Hello"), ("notes.txt", b"World")), [false, false], "different text, same name and size");
+    }
+
+    #[test]
     fn every_read_of_a_file_is_new_even_after_undo() {
         // Regression: the read counter lived in the undo history, so unlock → undo → unlock (with
         // another password) could repeat a value and keep a thumbnail of the other read.
@@ -2421,6 +2702,16 @@ mod tests {
             now.sort_unstable();
             assert_eq!(now, (0..6).collect::<Vec<u64>>(), "every file once");
         }
+    }
+
+    #[test]
+    fn bookmarks_are_named_without_the_extension_of_a_converted_file() {
+        assert_eq!(title_of("report.pdf"), "report");
+        assert_eq!(title_of("REPORT.PDF"), "REPORT");
+        assert_eq!(title_of("scan.2024.JPG"), "scan.2024");
+        assert_eq!(title_of("notes.txt"), "notes");
+        assert_eq!(title_of("v1.2"), "v1.2", "not a known extension");
+        assert_eq!(title_of(".png"), ".png", "nothing would be left");
     }
 
     #[test]

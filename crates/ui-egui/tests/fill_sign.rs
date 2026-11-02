@@ -145,6 +145,30 @@ fn clicking_elsewhere_with_add_text_keeps_the_typed_text() {
 }
 
 #[test]
+fn fill_text_size_controls_new_text_and_survives_settings_restore() {
+    let mut h = harness();
+    h.state_mut().execute("sign.fill.text");
+    h.run_steps(2);
+    h.get_by_label("Font size:");
+    h.state_mut().fill_text_size = 24.0;
+    click(&mut h, 50.0, 250.0);
+    assert_eq!(h.state().views[0].fill_text.as_ref().map(|t| t.size), Some(24.0));
+    h.event(egui::Event::Text("Larger text".into()));
+    h.run_steps(1);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    let annotation =
+        h.state().session.get(h.state().views[0].id).unwrap().info.annotations.iter().find(|a| a.contents.as_deref() == Some("Larger text")).unwrap();
+    assert!(annotation.rect[3] - annotation.rect[1] > 24.0, "24 pt text has a larger annotation: {annotation:?}");
+    let settings = h.state().persist();
+    let mut restored = PdfCraftApp::new();
+    restored.restore(&settings);
+    assert_eq!(restored.fill_text_size, 24.0);
+    restored.restore(r#"{"fill_text_size":1000000}"#);
+    assert_eq!(restored.fill_text_size, 24.0, "invalid settings do not change the size");
+}
+
+#[test]
 fn the_type_box_grows_as_text_is_typed() {
     let mut h = harness();
     h.state_mut().execute("sign.fill.text");
@@ -279,6 +303,30 @@ fn changing_saved_signatures_and_initials_preserves_placed_marks() {
     again.restore(&h.state().persist());
     assert_eq!(again.signature, Some(SavedSig::Typed("Grace Hopper".into())));
     assert_eq!(again.initials, Some(SavedSig::Typed("GH".into())));
+}
+
+#[test]
+fn undo_button_and_ctrl_z_take_back_one_drawn_stroke_at_a_time() {
+    let mut h = harness();
+    let drawn = SavedSig::Drawn(vec![vec![[0.1, 0.1], [0.5, 0.2]], vec![[0.2, 0.3], [0.6, 0.1]], vec![[0.7, 0.2], [0.9, 0.3]]]);
+    h.state_mut().signature = Some(drawn);
+    assert!(h.state_mut().execute("sign.fill.signature.change"));
+    h.run_steps(2);
+    h.get_by_label("Undo").click();
+    h.run_steps(2);
+    assert_eq!(h.state().signature_draft.strokes.len(), 2);
+    h.key_press(egui::Key::Z);
+    h.run_steps(2);
+    assert_eq!(h.state().signature_draft.strokes.len(), 2, "plain Z is not undo");
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Z);
+    h.run_steps(2);
+    assert_eq!(h.state().signature_draft.strokes.len(), 1);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Z);
+    h.run_steps(2);
+    assert!(h.state().signature_draft.strokes.is_empty());
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Z);
+    h.run_steps(2);
+    assert!(h.state().signature_draft.strokes.is_empty());
 }
 
 #[test]
@@ -947,7 +995,7 @@ fn saving_flattens_fill_and_sign_only_when_the_preference_is_on() {
     app.open_bytes("form.pdf", None, FIXTURE.to_vec()).unwrap();
     let id = app.views[0].id;
     app.session.apply(id, mark).unwrap();
-    app.views[0].fill_text = Some(TypeBox { page: 0, at: [40.0, 200.0], text: "Typed".into(), focus: false });
+    app.views[0].fill_text = Some(TypeBox { page: 0, at: [40.0, 200.0], text: "Typed".into(), size: 10.0, focus: false });
     let kept = dir.join("kept.pdf");
     app.save_override = Some(kept.to_string_lossy().into_owned());
     assert!(app.save_active(SaveTarget::InPlace));
@@ -958,7 +1006,7 @@ fn saving_flattens_fill_and_sign_only_when_the_preference_is_on() {
     assert!(texts.iter().any(|t| t == "Typed"), "an open type box is saved: {texts:?}");
     assert_eq!(reopened.session.get(reopened.views[0].id).unwrap().info.annotations.len(), 2, "the check mark stays too");
 
-    app.views[0].fill_text = Some(TypeBox { page: 0, at: [40.0, 160.0], text: "More".into(), focus: false });
+    app.views[0].fill_text = Some(TypeBox { page: 0, at: [40.0, 160.0], text: "More".into(), size: 10.0, focus: false });
     app.flatten_fill_sign_on_save = true;
     let flat = dir.join("flat.pdf");
     app.save_override = Some(flat.to_string_lossy().into_owned());
@@ -1234,4 +1282,236 @@ fn select_tool_picks_up_a_signature_over_a_form_field() {
     // Clear of the signature, the field still takes the click.
     click(&mut h, 270.0, 190.0);
     assert_eq!(h.state().views[0].forms.focus.as_ref().map(|f| f.name.as_str()), Some("city"));
+}
+
+/// A synthetic phone photo of a signature on paper: a dark table along the left edge, a sheet
+/// with a lighting gradient and a soft shadow, and a ballpoint-blue signature in two words.
+fn signature_photo(test: &str) -> std::path::PathBuf {
+    let path = std::env::temp_dir().join(format!("pdfcraft-signature-photo-{test}-{}.png", std::process::id()));
+    let image = image::RgbImage::from_fn(800, 600, |x, y| {
+        if x < 60 {
+            return image::Rgb([70, 55, 45]);
+        }
+        let light = 235.0 - x as f32 * 0.04 - if (500..700).contains(&x) && y > 380 { 45.0 } else { 0.0 };
+        let (fx, fy) = (x as f32, y as f32);
+        let wave = |x0: f32, x1: f32| (x0..x1).contains(&fx) && (fy - (300.0 + 25.0 * ((fx - x0) / 18.0).sin())).abs() < 3.0;
+        if wave(180.0, 380.0) || wave(420.0, 640.0) {
+            image::Rgb([30, 40, 110])
+        } else {
+            let v = light.clamp(0.0, 255.0) as u8;
+            image::Rgb([v, v, v.saturating_sub(6)])
+        }
+    });
+    image.save(&path).unwrap();
+    path
+}
+
+fn choose_photo(h: &mut Harness<'static, PdfCraftApp>, path: &std::path::Path) {
+    h.state_mut().pick_override = Some(vec![path.to_string_lossy().into_owned()]);
+    h.get_by_label("Choose photo…").click();
+    h.run_steps(3);
+    settle_scan(h);
+}
+
+/// Scans run on a worker thread: step frames until the answer has been picked up.
+fn settle_scan(h: &mut Harness<'static, PdfCraftApp>) {
+    for _ in 0..1000 {
+        if !h.state().signature_draft.scan.as_ref().is_some_and(|s| s.scanning()) {
+            h.run_steps(1);
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        h.run_steps(1);
+    }
+    panic!("the signature scan did not finish");
+}
+
+/// A transparent signature in the ink's colour: no paper, table or shadow is left.
+fn assert_clean_signature(image: &pdfcraft_engine::SignatureImage) {
+    let [w, h] = image.size();
+    assert!(w > 200 && w > h * 2, "both words are framed and trimmed: {w}×{h}");
+    let rgba = image.rgba();
+    let opaque: Vec<&[u8; 4]> = rgba.as_chunks::<4>().0.iter().filter(|p| p[3] > 128).collect();
+    assert!(!opaque.is_empty());
+    assert!(opaque.iter().all(|p| p[2] > p[0]), "strokes keep their blue ink");
+    assert!(rgba.as_chunks::<4>().0.iter().filter(|p| p[3] == 0).count() > rgba.len() / 8, "the paper is transparent");
+}
+
+#[test]
+fn scanned_signatures_are_framed_cleaned_adjusted_placed_and_remembered() {
+    let _gpu = gpu();
+    let path = signature_photo("scan");
+    let mut h = harness();
+    h.state_mut().execute("sign.fill.signature");
+    h.run_steps(2);
+    h.get_by_label("Scan").click();
+    h.run_steps(2);
+    assert!(h.state().signature_draft.scan_mode);
+    assert!(h.state().signature_draft.saved().is_none(), "Apply needs a photo");
+    choose_photo(&mut h, &path);
+    let scan = h.state().signature_draft.scan.clone().expect("the photo is loaded");
+    assert_eq!(scan.photo.size(), [800, 600]);
+    let frame = scan.frame;
+    assert!(frame.x > 60 && frame.x < 190 && frame.x + frame.width > 630, "the frame holds both words, not the table: {frame:?}");
+    assert_clean_signature(h.state().signature_draft.image.as_ref().expect("a cleaned signature"));
+    if let Ok(dir) = std::env::var("PDFCRAFT_SHOTS") {
+        h.render().unwrap().save(format!("{dir}/scan-signature-dialog.png")).unwrap();
+    }
+
+    // Drawing a frame around the first word only leaves the second out.
+    let area = h.get_by_label("Photo").rect();
+    let to_screen = |x: f32, y: f32| {
+        let fit = area.shrink(8.0);
+        let scale = (fit.width() / 800.0).min(fit.height() / 600.0);
+        let origin = fit.center() - egui::vec2(400.0, 300.0) * scale;
+        origin + egui::vec2(x, y) * scale
+    };
+    let (a, b) = (to_screen(110.0, 190.0), to_screen(400.0, 370.0));
+    h.hover_at(a);
+    h.run_steps(1);
+    h.drag_at(a);
+    h.run_steps(1);
+    for k in 1..=5 {
+        h.hover_at(a + (b - a) * (k as f32 / 5.0));
+        h.run_steps(1);
+    }
+    h.drop_at(b);
+    h.run_steps(3);
+    settle_scan(&mut h);
+    let one_word = h.state().signature_draft.scan.as_ref().unwrap().frame;
+    assert!(one_word.x + one_word.width < 420, "{one_word:?}");
+    let [w, _] = h.state().signature_draft.image.as_ref().unwrap().size();
+    assert!(w < 300, "only the first word is left: {w}");
+    assert!(h.state().signature_draft.saved().is_some(), "the full result is ready after the drag");
+
+    // Turning the photo turns the frame with it; turning back restores both.
+    h.get_by_label("Rotate clockwise").click();
+    h.run_steps(2);
+    assert_eq!(h.state().signature_draft.scan.as_ref().unwrap().photo.size(), [600, 800]);
+    h.get_by_label("Rotate counterclockwise").click();
+    h.run_steps(2);
+    let scan = h.state().signature_draft.scan.clone().unwrap();
+    assert_eq!((scan.photo.size(), scan.frame), ([800, 600], one_word));
+
+    // A photo with nothing in the frame says so instead of offering an empty signature.
+    {
+        let d = &mut h.state_mut().signature_draft;
+        let scan = d.scan.as_mut().unwrap();
+        scan.frame = pdfcraft_engine::PhotoRect { x: 650, y: 40, width: 120, height: 100 };
+        scan.rescan(&mut d.image, true);
+    }
+    h.run_steps(2);
+    assert!(h.state().signature_draft.saved().is_none());
+    assert!(h.state().signature_draft.scan.as_ref().unwrap().problem.as_ref().unwrap().contains("No signature was found"));
+    h.get_by_label("No signature was found in the frame. Move the frame over the signature or raise the ink sensitivity.");
+    {
+        let d = &mut h.state_mut().signature_draft;
+        let scan = d.scan.as_mut().unwrap();
+        scan.frame = frame;
+        scan.rescan(&mut d.image, true);
+    }
+    h.run_steps(2);
+
+    h.get_by_label("Apply").click();
+    h.run_steps(3);
+    let Some(SavedSig::Image(saved)) = h.state().signature.clone() else { panic!("the scan is saved as an image signature") };
+    assert_clean_signature(&saved);
+    click(&mut h, 40.0, 250.0);
+    assert_eq!(items(&h).len(), 1);
+    assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().info.annotations[0].subtype, "Stamp");
+
+    // It is remembered like any image signature, without the photo or its path.
+    let settings = h.state().persist();
+    assert!(!settings.contains(&path.to_string_lossy().to_string()));
+    assert!(settings.len() < 200_000, "only the trimmed signature is kept: {} bytes", settings.len());
+    let mut again = PdfCraftApp::new();
+    again.set_option("language", "en").unwrap();
+    again.restore(&settings);
+    assert_eq!(again.signature, h.state().signature);
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn scan_cancel_errors_and_stale_answers_preserve_saved_signatures() {
+    let path = signature_photo("scan-cancel");
+    let mut h = harness();
+    let original = SavedSig::Typed("Ada Lovelace".into());
+    h.state_mut().signature = Some(original.clone());
+    h.state_mut().execute("sign.fill.signature.change");
+    h.run_steps(2);
+    h.get_by_label("Scan").click();
+    h.run_steps(2);
+    h.state_mut().pick_override = Some(Vec::new());
+    h.get_by_label("Choose photo…").click();
+    h.run_steps(3);
+    assert!(h.state().signature_draft.scan.is_none(), "a cancelled pick loads nothing");
+    choose_photo(&mut h, &path);
+    let loaded = h.state().signature_draft.clone();
+    assert!(loaded.image.is_some());
+    let broken = std::env::temp_dir().join(format!("pdfcraft-signature-photo-broken-{}.jpg", std::process::id()));
+    std::fs::write(&broken, b"\xFF\xD8\xFF not a JPEG").unwrap();
+    choose_photo(&mut h, &broken);
+    assert_eq!(h.state().signature_draft, loaded, "an invalid photo keeps the previous one");
+    assert!(h.state().toast.as_ref().unwrap().0.contains("Couldn't use the photo"));
+    // A photo picked for the Scan tab does not land in the Image tab.
+    h.state_mut().pick_override = Some(vec![path.to_string_lossy().into_owned()]);
+    h.get_by_label("Choose photo…").click();
+    h.run_steps(1);
+    h.state_mut().signature_draft.scan = None;
+    h.state_mut().signature_draft.image = None;
+    h.state_mut().signature_draft.scan_mode = false;
+    h.state_mut().signature_draft.image_mode = true;
+    h.run_steps(3);
+    assert!(h.state().signature_draft.image.is_none() && h.state().signature_draft.scan.is_none());
+    h.get_by_label("Cancel").click();
+    h.run_steps(3);
+    assert_eq!(h.state().signature, Some(original));
+    assert!(items(&h).is_empty());
+    std::fs::remove_file(path).unwrap();
+    std::fs::remove_file(broken).unwrap();
+}
+
+/// A file dropped on the window, as the windowing layer hands it over.
+#[derive(Debug)]
+struct Dropped(std::path::PathBuf, Vec<u8>);
+
+impl egui::DroppedFile for Dropped {
+    fn path(&self) -> &std::path::Path {
+        &self.0
+    }
+    fn bytes(&self) -> Result<Vec<u8>, String> {
+        Ok(self.1.clone())
+    }
+}
+
+#[test]
+fn photos_and_images_dropped_on_the_signature_pad_are_imported_not_opened() {
+    let photo = signature_photo("drop");
+    let mut h = harness();
+    let tabs = h.state().views.len();
+    h.state_mut().execute("sign.fill.signature");
+    h.run_steps(2);
+    h.get_by_label("Scan").click();
+    h.run_steps(2);
+    // From a file manager (an absolute path) and from a browser-like source (bytes only).
+    for file in [Dropped(photo.clone(), Vec::new()), Dropped("photo.png".into(), std::fs::read(&photo).unwrap())] {
+        h.state_mut().signature_draft.scan = None;
+        h.input_mut().dropped_files.push(std::sync::Arc::new(file));
+        h.run_steps(3);
+        settle_scan(&mut h);
+        assert!(h.state().signature_draft.scan.is_some(), "the photo is scanned");
+        assert!(h.state().signature_draft.image.is_some());
+    }
+    h.get_by_label("Image").click();
+    h.run_steps(2);
+    h.state_mut().signature_draft.image = None;
+    h.input_mut().dropped_files.push(std::sync::Arc::new(Dropped("photo.png".into(), std::fs::read(&photo).unwrap())));
+    h.run_steps(3);
+    assert!(h.state().signature_draft.image.is_some(), "the Image tab takes the picture as it is");
+    h.input_mut().dropped_files.push(std::sync::Arc::new(Dropped("broken.png".into(), b"broken".to_vec())));
+    h.run_steps(3);
+    assert!(h.state().signature_draft.image.is_some(), "an invalid file keeps the previous draft");
+    assert!(h.state().toast.as_ref().unwrap().0.contains("Couldn't import"));
+    assert_eq!(h.state().views.len(), tabs, "nothing opened behind the dialog");
+    std::fs::remove_file(photo).unwrap();
 }

@@ -178,6 +178,19 @@ fn write_style(d: &mut Dict, s: &LinkStyle) {
     d.set(b"H".to_vec(), Object::name(s.highlight.code()));
 }
 
+/// Bytes of `u` as a 7-bit ASCII URI string (§12.6.4.8).
+fn uri_bytes(u: &str) -> Vec<u8> {
+    let mut out = Vec::with_capacity(u.len());
+    for &b in u.as_bytes() {
+        if (0x21..=0x7e).contains(&b) {
+            out.push(b);
+        } else {
+            out.extend_from_slice(format!("%{b:02X}").as_bytes());
+        }
+    }
+    out
+}
+
 fn write_action(doc: &Document, d: &mut Dict, a: &LinkAction) -> Result<(), AnnotError> {
     match a {
         LinkAction::Page(p) => {
@@ -194,7 +207,7 @@ fn write_action(doc: &Document, d: &mut Dict, a: &LinkAction) -> Result<(), Anno
             let mut act = Dict::new();
             act.set(b"S".to_vec(), Object::name("URI"));
             // URIs are 7-bit ASCII strings (§12.6.4.8).
-            act.set(b"URI".to_vec(), PdfString::literal(u.as_bytes().to_vec()));
+            act.set(b"URI".to_vec(), PdfString::literal(uri_bytes(u)));
             d.set(b"A".to_vec(), Object::Dict(act));
         }
         LinkAction::Other(_) => {}
@@ -202,13 +215,24 @@ fn write_action(doc: &Document, d: &mut Dict, a: &LinkAction) -> Result<(), Anno
     Ok(())
 }
 
+/// Check link geometry before writing PDF objects: a user or automation call can supply
+/// non-finite coordinates or a finite pair whose difference overflows to infinity.
+fn checked_rect(rect: [f64; 4]) -> Result<[f64; 4], AnnotError> {
+    if !rect.iter().all(|v| v.is_finite()) {
+        return Err(AnnotError::Invalid("the link area must have finite coordinates".into()));
+    }
+    let r = [rect[0].min(rect[2]), rect[1].min(rect[3]), rect[0].max(rect[2]), rect[1].max(rect[3])];
+    let (width, height) = (r[2] - r[0], r[3] - r[1]);
+    if !width.is_finite() || !height.is_finite() || width < 2.0 || height < 2.0 {
+        return Err(AnnotError::Invalid("the link area is too small or too large".into()));
+    }
+    Ok(r)
+}
+
 /// Add a link over `rect` (user space). Returns its index in the page's `/Annots`.
 pub fn add(doc: &mut Document, page: usize, rect: [f64; 4], action: &LinkAction, style: &LinkStyle) -> Result<usize, AnnotError> {
     let p = page_ref(doc, page)?;
-    let r = [rect[0].min(rect[2]), rect[1].min(rect[3]), rect[0].max(rect[2]), rect[1].max(rect[3])];
-    if !r.iter().all(|v| v.is_finite()) || r[2] - r[0] < 2.0 || r[3] - r[1] < 2.0 {
-        return Err(AnnotError::Invalid("the link area is too small".into()));
-    }
+    let r = checked_rect(rect)?;
     if matches!(action, LinkAction::Other(_)) {
         return Err(AnnotError::Invalid("choose a page or a web address".into()));
     }
@@ -250,10 +274,7 @@ pub fn set(
     let (_, r) = link_at(doc, page, index)?;
     let mut d = doc.get(r).as_dict().cloned().unwrap_or_default();
     if let Some(rect) = rect {
-        let rr = [rect[0].min(rect[2]), rect[1].min(rect[3]), rect[0].max(rect[2]), rect[1].max(rect[3])];
-        if rr[2] - rr[0] < 2.0 || rr[3] - rr[1] < 2.0 {
-            return Err(AnnotError::Invalid("the link area is too small".into()));
-        }
+        let rr = checked_rect(rect)?;
         d.set(b"Rect".to_vec(), Object::Array(rr.iter().map(|v| Object::Real(*v)).collect()));
     }
     if let Some(s) = style {
@@ -296,6 +317,59 @@ pub fn remove_all(doc: &mut Document, pages: Option<&[usize]>) -> Result<usize, 
     Ok(n)
 }
 
+/// Recognise common ASCII mailbox addresses without mistaking domains, partial words or
+/// invalid labels for e-mail links. The returned end is in source-character indices.
+fn email_at(chars: &[char], start: usize) -> Option<(usize, String)> {
+    let local_char = |c: char| c.is_ascii_alphanumeric() || "._+%-".contains(c);
+    let domain_char = |c: char| c.is_ascii_alphanumeric() || c == '-' || c == '.';
+    // Don't create a link starting in the middle of an address.
+    if start > 0 && chars.get(start - 1).is_some_and(|c| local_char(*c) || *c == '@') {
+        return None;
+    }
+    let mut at = start;
+    while chars.get(at).is_some_and(|c| local_char(*c)) {
+        at += 1;
+        if at - start > 64 {
+            return None;
+        }
+    }
+    let local = chars.get(start..at)?;
+    if local.is_empty() || local.first() == Some(&'.') || local.last() == Some(&'.') || local.windows(2).any(|w| w == ['.', '.']) {
+        return None;
+    }
+    if chars.get(at) != Some(&'@') {
+        return None;
+    }
+    let mut end = at + 1;
+    while chars.get(end).is_some_and(|c| domain_char(*c)) {
+        end += 1;
+        if end - at - 1 > 253 {
+            return None;
+        }
+    }
+    while end > at + 1 && chars.get(end - 1) == Some(&'.') {
+        end -= 1;
+    }
+    if chars.get(end).is_some_and(|c| c.is_ascii_alphanumeric() || *c == '@' || *c == '_') {
+        return None;
+    }
+    let domain = chars.get(at + 1..end)?;
+    let mut labels = 0;
+    let mut tld_length = 0;
+    for label in domain.split(|c| *c == '.') {
+        if label.is_empty() || label.len() > 63 || !label.first()?.is_ascii_alphanumeric() || !label.last()?.is_ascii_alphanumeric() {
+            return None;
+        }
+        labels += 1;
+        tld_length = label.len();
+    }
+    if labels < 2 || tld_length < 2 {
+        return None;
+    }
+    let address: String = chars.get(start..end)?.iter().collect();
+    Some((end, format!("mailto:{address}")))
+}
+
 /// Find web addresses in text: `http(s)://…`, `www.…` and bare e-mail addresses become
 /// `mailto:`. Returns character ranges and the URI for each.
 pub fn find_urls(chars: &[char]) -> Vec<(std::ops::Range<usize>, String)> {
@@ -326,6 +400,11 @@ pub fn find_urls(chars: &[char]) -> Vec<(std::ops::Range<usize>, String)> {
                 i = j;
                 continue;
             }
+        }
+        if boundary && let Some((end, uri)) = email_at(chars, i) {
+            out.push((i..end, uri));
+            i = end;
+            continue;
         }
         i += 1;
     }

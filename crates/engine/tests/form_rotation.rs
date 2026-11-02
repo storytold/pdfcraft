@@ -27,7 +27,7 @@ fn one_page() -> Document {
 fn ink_span(doc: &Document) -> (u32, u32) {
     let bytes = write_incremental(doc, &SaveOptions::default()).unwrap();
     let mut r = PageRenderer::new(Arc::new(bytes), RenderConfig::default());
-    let p = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 2.0, tag: 0 });
+    let p = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 2.0, tag: 0, preview: false });
     assert!(p.error.is_none(), "{:?}", p.error);
     let (mut x0, mut y0, mut x1, mut y1) = (u32::MAX, u32::MAX, 0, 0);
     let mut ink = false;

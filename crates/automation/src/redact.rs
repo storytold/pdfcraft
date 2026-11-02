@@ -54,6 +54,11 @@ impl Automation {
         if chosen.iter().filter(|c| **c).count() != 1 {
             return Err(ToolError::InvalidArgs("pass exactly one of rect (with page), find, words, pattern or whole_pages: true".into()));
         }
+        let case_sensitive = a.opt_bool("case_sensitive")?.unwrap_or(false);
+        let whole_words = a.opt_bool("whole_words")?.unwrap_or(false);
+        if (case_sensitive || whole_words) && a.get("find").is_none() && a.get("words").is_none() {
+            return Err(ToolError::InvalidArgs("case_sensitive and whole_words apply only to find or words".into()));
+        }
         // Per searched word or phrase: how many marks it made.
         let mut matched_words: Vec<(String, usize)> = Vec::new();
         if a.get("rect").is_some() {
@@ -95,7 +100,11 @@ impl Automation {
             for (&p, text) in pages.iter().zip(&texts) {
                 let hits: Vec<(Option<usize>, _)> = match pattern {
                     Some(pat) => text.find_with(|chars| find_pattern(pat, chars)).into_iter().map(|h| (None, h)).collect(),
-                    None => needles.iter().enumerate().flat_map(|(i, w)| text.find(w).into_iter().map(move |h| (Some(i), h))).collect(),
+                    None => needles
+                        .iter()
+                        .enumerate()
+                        .flat_map(|(i, w)| text.find_opts(w, case_sensitive, whole_words).into_iter().map(move |h| (Some(i), h)))
+                        .collect(),
                 };
                 for (word, h) in hits {
                     let quads: Vec<[f64; 8]> = text.line_rects(h).into_iter().map(|r| info.pages[p].view_rect_to_quad(r)).collect();
@@ -161,6 +170,24 @@ impl Automation {
         let items: Vec<Value> = doc.hidden_info().into_iter().map(|(h, n)| json!({ "category": h.id(), "label": h.label(), "count": n })).collect();
         let total: usize = doc.hidden_info().iter().map(|c| c.1).sum();
         Ok(json!({ "total": total, "categories": items }))
+    }
+
+    pub(crate) fn doc_audit_redactions(&self, a: &Args) -> Result<Value> {
+        let d = self.doc(a)?;
+        let findings = d.audit_redactions().map_err(ToolError::Failed)?;
+        let items: Vec<Value> = findings
+            .into_iter()
+            .map(|f| {
+                json!({
+                    "page": f.page + 1,
+                    "kind": f.kind.id(),
+                    // Points from the top-left of the displayed page, like `comment_list` and `doc_info`.
+                    "rect": crate::view_rect(&d.info, f.page, f.rect.map(|v| v as f32)),
+                    "covered_text": f.covered_text,
+                })
+            })
+            .collect();
+        Ok(json!({ "findings": items, "count": items.len() }))
     }
 
     pub(crate) fn doc_remove_hidden(&mut self, a: &Args) -> Result<Value> {

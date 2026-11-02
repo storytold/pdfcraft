@@ -712,6 +712,13 @@ fn num_text(n: f64) -> String {
     if s.is_empty() || s == "-0" { "0".into() } else { s.to_string() }
 }
 
+/// `v` with `decimals` places, rounding exact halves away from zero (Rust's formatter rounds them to even).
+fn fixed(v: f64, decimals: usize) -> String {
+    let k = 10f64.powi(decimals.min(20) as i32);
+    let scaled = (v * k).round() / k;
+    format!("{:.decimals$}", if scaled.is_finite() { scaled } else { v })
+}
+
 /// The number a string holds: its leading numeric part (`12abc` → 12), `None` for none.
 fn parse_num(s: &str) -> Option<f64> {
     let t = s.trim();
@@ -1913,8 +1920,20 @@ fn parse_date(text: &str, picture: &str) -> Option<(i64, u32, u32)> {
         }
     }
     let (y, m, d) = (y?, m.unwrap_or(1), d.unwrap_or(1));
-    ((-200_000..=200_000).contains(&y) && (1..=12).contains(&m) && (1..=31).contains(&d)).then_some((y, m, d))
+    ((-200_000..=200_000).contains(&y) && (1..=12).contains(&m) && (1..=days_in(y, m)).contains(&d)).then_some((y, m, d))
 }
+
+/// Number of days in month `m` (1-12) of year `y`, leap years included.
+fn days_in(y: i64, m: u32) -> u32 {
+    match m {
+        2 if (y % 4 == 0 && y % 100 != 0) || y % 400 == 0 => 29,
+        2 => 28,
+        4 | 6 | 9 | 11 => 30,
+        _ => 31,
+    }
+}
+
+const WEEKDAYS: [&str; 7] = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
 fn format_date(y: i64, m: u32, d: u32, picture: &str) -> String {
     let pic: Vec<char> = picture.chars().collect();
@@ -1937,6 +1956,19 @@ fn format_date(y: i64, m: u32, d: u32, picture: &str) -> String {
                 ('M', _) => out.push_str(MONTHS.get((m as usize).saturating_sub(1)).copied().unwrap_or("")),
                 ('D', 1) => out.push_str(&d.to_string()),
                 (_, _) => out.push_str(&format!("{d:02}")),
+            }
+        } else if pic[i] == 'E' {
+            let mut run = 1;
+            while i + run < pic.len() && pic[i + run] == 'E' {
+                run += 1;
+            }
+            i += run;
+            // Day 1 (1900-01-01) was a Monday, so the serial modulo 7 indexes from Sunday.
+            let weekday = days_from_civil(y, m, d).rem_euclid(7) as usize;
+            match run {
+                1 | 2 => out.push_str(&(weekday + 1).to_string()),
+                3 => out.push_str(WEEKDAYS.get(weekday).map_or("", |n| &n[..3])),
+                _ => out.push_str(WEEKDAYS.get(weekday).copied().unwrap_or("")),
             }
         } else {
             out.push(pic[i]);
@@ -2156,7 +2188,7 @@ impl Interp<'_> {
                 let v = self.arg_num(args, 0)?;
                 let width = if args.len() > 1 { self.arg_num(args, 1)?.clamp(0.0, 1000.0) as usize } else { 10 };
                 let prec = if args.len() > 2 { self.arg_num(args, 2)?.clamp(0.0, 20.0) as usize } else { 0 };
-                let text = format!("{v:.prec$}");
+                let text = fixed(v, prec);
                 Val::Str(if text.len() > width { "*".repeat(width) } else { format!("{text:>width$}") })
             }
             "substr" => {
@@ -2245,7 +2277,7 @@ impl Interp<'_> {
                 let num = self.to_num(&v);
                 let decimals = pic.split_once('.').map_or(0, |(_, f)| f.chars().filter(|c| matches!(c, '9' | 'z' | 'Z')).count()).min(20);
                 let grouped = pic.contains(',');
-                let mut text = format!("{:.decimals$}", num.abs());
+                let mut text = fixed(num.abs(), decimals);
                 if grouped {
                     let (int, frac) = text.split_once('.').map_or((text.as_str(), ""), |(a, b)| (a, b));
                     let mut g = String::new();
@@ -2543,7 +2575,11 @@ pub(crate) fn run_formcalc_at(
 /// [`run_formcalc`] on its own thread, abandoned after `timeout` (and told to stop itself then).
 pub fn run_formcalc_within(script: &str, event: &XfaEvent, doc: &XfaDoc, root: XfaNode, limits: Limits, timeout: std::time::Duration) -> XfaOutcome {
     let (script, event, doc) = (script.to_string(), event.clone(), doc.clone());
-    run_within("pdfcraft-formcalc", timeout, move || run_formcalc_at(&script, &event, &doc, root, limits, Some(timeout)))
+    // FormCalc has no engine to start: its time (and its own deadline) begins at once.
+    run_within("pdfcraft-formcalc", timeout, move |started| {
+        started();
+        run_formcalc_at(&script, &event, &doc, root, limits, Some(timeout))
+    })
 }
 
 #[cfg(test)]

@@ -3,7 +3,7 @@
 use crate::color::{AlphaColor, ColorComponents, ColorSpace};
 use crate::interpret::state::ActiveTransferFunction;
 use crate::pattern::ShadingPattern;
-use crate::shading::{ShadingFunction, ShadingType, Triangle};
+use crate::shading::{ShadingFunction, ShadingType, Triangle, TriangleVertex};
 use kurbo::{Affine, Point};
 use rustc_hash::FxHashMap;
 use smallvec::{ToSmallVec, smallvec};
@@ -102,7 +102,7 @@ impl ShadingPattern {
                     }
                     triangles.clear();
                     patch.to_triangles(&mut triangles);
-                    if !sampler.sample(&triangles, full_transform) {
+                    if !sampler.sample_owned(&mut triangles, full_transform) {
                         break;
                     }
                 }
@@ -126,7 +126,7 @@ impl ShadingPattern {
                     }
                     triangles.clear();
                     patch.to_triangles(&mut triangles);
-                    if !sampler.sample(&triangles, full_transform) {
+                    if !sampler.sample_owned(&mut triangles, full_transform) {
                         break;
                     }
                 }
@@ -268,52 +268,81 @@ impl TriangleSampler {
 
     /// Sample `triangles`; `false` once a budget is spent (the rest is left unsampled).
     fn sample(&mut self, triangles: &[Triangle], transform: Affine) -> bool {
+        if !self.take_page_budget(triangles.len()) {
+            return false;
+        }
+        triangles.iter().all(|t| {
+            self.sample_one(transformed(
+                t.p0.clone(),
+                t.p1.clone(),
+                t.p2.clone(),
+                transform,
+            ))
+        })
+    }
+
+    /// PdfCraft patch (33): [`Self::sample`] for triangles made for this sampling alone (a
+    /// patch's), moving their vertices instead of copying each one's colours (`triangles` is
+    /// left empty).
+    fn sample_owned(&mut self, triangles: &mut Vec<Triangle>, transform: Affine) -> bool {
+        if !self.take_page_budget(triangles.len()) {
+            return false;
+        }
+        triangles
+            .drain(..)
+            .all(|t| self.sample_one(transformed(t.p0, t.p1, t.p2, transform)))
+    }
+
+    /// Take `count` triangles from the page's budget; `false` (and none left) when it is short.
+    fn take_page_budget(&mut self, count: usize) -> bool {
         let page_left = MESH_TRIANGLES_LEFT.with(core::cell::Cell::get);
-        if page_left < triangles.len() as u64 {
+        if page_left < count as u64 {
             MESH_TRIANGLES_LEFT.with(|n| n.set(0));
             warn!("page mesh triangle budget exceeded; the rest of the shading is not drawn");
             return false;
         }
-        MESH_TRIANGLES_LEFT.with(|n| n.set(page_left - triangles.len() as u64));
-        for t in triangles {
-            let t = {
-                let p0 = transform * t.p0.point;
-                let p1 = transform * t.p1.point;
-                let p2 = transform * t.p2.point;
+        MESH_TRIANGLES_LEFT.with(|n| n.set(page_left - count as u64));
+        true
+    }
 
-                let mut v0 = t.p0.clone();
-                v0.point = p0;
-                let mut v1 = t.p1.clone();
-                v1.point = p1;
-                let mut v2 = t.p2.clone();
-                v2.point = p2;
+    /// Sample one triangle in device space; `false` once the visit budget is spent.
+    fn sample_one(&mut self, t: Triangle) -> bool {
+        // Only the part of the triangle inside `area`; only such triangles add visits.
+        let bbox = t.bounding_box().intersect(self.area);
+        if bbox.width() <= 0.0 || bbox.height() <= 0.0 {
+            return true;
+        }
+        self.visits_left = self.visits_left.saturating_add(MESH_VISITS_PER_TRIANGLE);
 
-                Triangle::new(v0, v1, v2)
-            };
-
-            // Only the part of the triangle inside `area`; only such triangles add visits.
-            let bbox = t.bounding_box().intersect(self.area);
-            if bbox.width() <= 0.0 || bbox.height() <= 0.0 {
-                continue;
-            }
-            self.visits_left = self.visits_left.saturating_add(MESH_VISITS_PER_TRIANGLE);
-
-            for y in (bbox.y0.floor() as u16)..(bbox.y1.ceil() as u16) {
-                for x in (bbox.x0.floor() as u16)..(bbox.x1.ceil() as u16) {
-                    if self.visits_left == 0 {
-                        warn!("mesh shading visit budget exceeded; the rest is not drawn");
-                        return false;
-                    }
-                    self.visits_left -= 1;
-                    let point = Point::new(x as f64, y as f64);
-                    if t.contains_point(point) {
-                        self.map.insert((x, y), t.interpolate(point));
-                    }
+        for y in (bbox.y0.floor() as u16)..(bbox.y1.ceil() as u16) {
+            for x in (bbox.x0.floor() as u16)..(bbox.x1.ceil() as u16) {
+                if self.visits_left == 0 {
+                    warn!("mesh shading visit budget exceeded; the rest is not drawn");
+                    return false;
+                }
+                self.visits_left -= 1;
+                let point = Point::new(x as f64, y as f64);
+                if t.contains_point(point) {
+                    self.map.insert((x, y), t.interpolate(point));
                 }
             }
         }
         true
     }
+}
+
+/// The triangle `v0`, `v1`, `v2` with its points mapped through `transform` (its colours as
+/// they are).
+fn transformed(
+    mut v0: TriangleVertex,
+    mut v1: TriangleVertex,
+    mut v2: TriangleVertex,
+    transform: Affine,
+) -> Triangle {
+    v0.point = transform * v0.point;
+    v1.point = transform * v1.point;
+    v2.point = transform * v2.point;
+    Triangle::new(v0, v1, v2)
 }
 
 fn encode_function_shading(domain: &[f32; 4], function: &ShadingFunction) -> EncodedShadingType {

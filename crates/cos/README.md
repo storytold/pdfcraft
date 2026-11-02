@@ -53,7 +53,7 @@ another. Edits never touch the original bytes.
   headers. Repairs are *recorded*, never silent, so the UI can say the file was damaged.
 - **Tolerant, never fatal.** The lexer works on a byte slice and a position; it allocates nothing
   for skipped data, bounds-checks every index, and caps nesting depth. Malformed input yields
-  `CosError`, never a panic — this crate is the first thing a hostile file meets.
+  `CosError`, never a panic — this crate is the first thing a hostile file meets. Exhausted xref entries are skipped with a repair log; exhausted /Size hints allocate unused numbers without overflowing or replacing existing objects.
 - **Lazy.** Objects are parsed on first use and cached. (Whole-file buffering is still the case;
   `ByteSource` streaming is `core.lazy-loading`, not yet done.)
 - **Encryption** is handled on load and save through `pdfcraft-crypt`: every standard-security

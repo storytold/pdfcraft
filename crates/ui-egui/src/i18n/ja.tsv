@@ -29,6 +29,7 @@
 	Auto follows the system's text size. Pages always render at the display's full resolution.	自動にすると、システムの文字サイズに合わせます。ページは常にディスプレイの最大解像度で描画されます。
 	Identity	個人情報
 	Name on new comments	新しい注釈の作成者名
+	Hide hover previews for highlights without comment text	コメントテキストのないハイライトのホバープレビューを非表示にする
 	Open…	開く…
 	Open Recent	最近のファイルを開く
 	Clear Recent Files	最近のファイルをクリア
@@ -57,6 +58,7 @@
 	Create PDF from file…	ファイルから PDF を作成…
 	Create PDF from images…	画像から PDF を作成…
 	Create PDF from multiple files…	複数のファイルから PDF を作成…
+	Create separate PDFs…	個別の PDF を作成…
 	Create PDF from clipboard	クリップボードから PDF を作成
 	Combine files…	ファイルを結合…
 	Save	保存
@@ -79,6 +81,8 @@
 	Column select	列の選択
 	Full screen mode	全画面表示
 	Read mode	閲覧モード
+	Next tab	次のタブ
+	Previous tab	前のタブ
 	Switch light / dark theme	明るい／暗いテーマを切り替え
 	Comments panel	コメントパネル
 	Form fields panel	フォームフィールドパネル
@@ -110,12 +114,18 @@
 	Open a PDF ({key})	PDF を開く（{key}）
 	Dark gray theme	ダークグレーのテーマ
 	Light theme	ライトテーマ
+	Appearance mode	外観モード
+	Light	ライト
+	Dark	ダーク
+	Active	使用中
+	Dark theme	ダークテーマ
+	Appearance settings…	外観の設定…
 	All tools	すべてのツール
 	Read	閲覧
 	Convert	変換
 	E-Sign	電子署名
 	Print ({key})	印刷（{key}）
-	Save (M4)	保存（M4）
+	Save ({key})	保存（{key}）
 	Document properties ({key})	文書のプロパティ（{key}）
 	Find tools and commands	ツールとコマンドを検索
 	Fit to height	高さに合わせる
@@ -152,6 +162,7 @@
 	Next page	次のページ
 	Previous page	前のページ
 	Current page — type a page number or label (such as iv) and press Enter	現在のページ：ページ番号またはラベル（例：iv）を入力して Enter
+	Zoom — type a percentage and press Enter	ズーム — パーセンテージを入力して Enter キーを押します
 	Welcome to PdfCraft	PdfCraft へようこそ
 	An open-source PDF workbench — local, private, and scriptable.	ローカルで処理し、プライバシーを守る、スクリプト対応のオープンソース PDF ツール。
 	Join the ArtCraft community	ArtCraft コミュニティに参加
@@ -218,6 +229,9 @@
 	Add or edit links	リンクを追加・編集
 	Create links from URLs	URL からリンクを作成
 	Remove all links	すべてのリンクを削除
+	No links to remove	削除するリンクはありません
+	Removed 1 link	リンクを 1 件削除しました
+	Removed {n} links	リンクを {n} 件削除しました
 	Add Bates numbering…	ベイツ番号を追加…
 	Add image…	画像を追加…
 	Redact text and images	テキストと画像を墨消し
@@ -256,6 +270,7 @@
 	Optimize PDF…	PDF を最適化…
 	Export to text…	テキストに書き出す…
 	Export to Word…	Word に書き出す…
+	Export to PowerPoint…	PowerPoint に書き出す…
 	Export to HTML…	HTML に書き出す…
 	Export to RTF…	RTF に書き出す…
 	JavaScript console…	JavaScript コンソール…
@@ -340,6 +355,7 @@
 	Create from	作成元
 	Single file	単一ファイル
 	Multiple files	複数のファイル
+	Separate PDFs	個別の PDF
 	Images	画像
 	Clipboard	クリップボード
 	Blank page	空白のページ
@@ -356,6 +372,7 @@
 	Split	分割
 	More	その他
 	Set page boxes	ページボックスを設定
+	Set page transitions	ページ切り替え効果を設定
 	Page labels	ページラベル
 	Page transitions	ページ切り替え効果
 	Add comments	コメントを追加
@@ -568,6 +585,7 @@
 	Remove unused objects and merge identical ones	未使用オブジェクトを削除し同一オブジェクトを統合
 	Audit space usage…	容量の使用状況を確認…
 	Space Audit	容量の使用状況
+	What takes up the space in this file, by kind of content.	このファイルの容量を何が占めているか、コンテンツの種類別に示します。
 	Bytes	バイト数
 	Content Streams	コンテンツストリーム
 	X Object Forms	フォーム XObject
@@ -692,6 +710,14 @@
 	of the following fields:	対象フィールド:
 	Simplified field notation:	簡易フィールド表記:
 	Field names with + - * / and parentheses; put \\ before spaces in names.	フィールド名と + - * / および括弧を使用できます。名前に含まれる空白の前には \\ を付けてください。
+
+# Document font selection
+	Finding document fonts…	文書用フォントを検索中…
+	Installed fonts…	インストール済みフォント…
+	Keep source fonts	元のフォントを保持
+	Load font…	フォントを読み込む…
+	No openly licensed document fonts found. Load a font file.	オープンライセンスのフォントが見つかりません。フォントファイルを読み込んでください。
+
 	Format text	テキストの書式
 	Bold	太字
 	Italic	斜体
@@ -699,7 +725,7 @@
 	Centre	中央揃え
 	Align right	右揃え
 	Justify	両端揃え
-	Standard fonts; text outside Windows-1252 isn't supported yet.	標準フォントを使用します。Windows-1252 に含まれない文字にはまだ対応していません。
+	Thai and Arabic use regular fallback fonts when available.	タイ語とアラビア語には、利用可能な場合、標準スタイルの代替フォントを使用します。
 	Edit image	画像を編集
 	Rotate counterclockwise	反時計回りに回転
 	Rotate clockwise	時計回りに回転
@@ -741,6 +767,12 @@
 	Flip Vertical	上下反転
 	Replace Image…	画像を置換…
 	Save Image As…	画像を別名で保存…
+	Copy Image	画像をコピー
+	The image has been copied ({w} × {h} pixels)	画像をコピーしました（{w} × {h} ピクセル）
+	Couldn't copy the image: {e}	画像をコピーできませんでした: {e}
+	Copy Image in Original Format	画像を元の形式でコピー
+	The image has been copied as a {ext} file	画像を {ext} ファイルとしてコピーしました
+	The page has changed; select the image again	ページが変更されました。画像をもう一度選択してください
 	Check for updates	アップデートを確認
 	No check has run yet.	まだ確認していません。
 	Checking for a newer version…	新しいバージョンを確認中…
@@ -770,7 +802,7 @@
 	{verb} Header and Footer	ヘッダーとフッターを{verb}
 	{verb} Watermark	透かしを{verb}
 	{verb} Background	背景を{verb}
-	Margins (in)	余白（インチ）
+	Margins	余白
 	Left Header Text	左ヘッダーのテキスト
 	Center Header Text	中央ヘッダーのテキスト
 	Right Header Text	右ヘッダーのテキスト
@@ -785,6 +817,7 @@
 	Rotation	回転
 	Appear behind page	ページの背面に表示
 	Appear on top of page	ページの前面に表示
+	Offset from centre	中心からのオフセット
 	From colour	色を指定
 	Page Range Options	ページ範囲のオプション
 	Preview: page {p} of {n}	プレビュー: {n} ページ中 {p} ページ
@@ -827,8 +860,15 @@
 	Windows store  ·  	Windows 証明書ストア · 
 	Issued by: 	発行者: 
 	, Expires: 	、有効期限: 
+	Digitally signed by	デジタル署名者
+	DN: 	DN: 
+	Reason: 	理由: 
+	Location: 	場所: 
+	Date: 	日付: 
+	The labels are in English: the signature's font can't draw them in this language.	署名のフォントではこの言語のラベルを描画できないため、ラベルは英語になります。
 	No digital IDs yet.	デジタル ID はまだありません。
 	Configure New Digital ID	新しいデジタル ID を設定
+	Remove "{name}" from this list? The file itself is not deleted.	「{name}」をこの一覧から削除しますか？ファイル自体は削除されません。
 	Continue	続行
 	Configure a Digital ID for Signing	署名用のデジタル ID を設定
 	Use a Digital ID from a file	ファイルのデジタル ID を使用
@@ -847,8 +887,13 @@
 	{verb} as "{name}"	「{name}」として{verb}
 	Certify	証明
 	The signature will be invisible.	署名は非表示になります。
+	The existing action will be preserved.	既存のアクションは保持されます。
 	Distinguished name	識別名
 	Labels	ラベル
+	Graphic	グラフィック
+	Signer's name	署名者名
+	Fill & Sign signature	入力と署名の署名
+	Choose image…	画像を選択…
 	Permitted actions after certifying	証明後に許可する操作
 	No changes allowed	変更を許可しない
 	Annotations, form fill-in, and digital signatures	注釈、フォーム入力、デジタル署名
@@ -1112,6 +1157,7 @@
 	Redaction code:	墨消しコード:
 	Font:	フォント:
 	Font size:	フォントサイズ:
+	Font size	フォントサイズ
 	Auto-size text to fit redaction region	墨消し領域に合わせて文字サイズを自動調整
 	Font colour:	文字色:
 	Repeat overlay text	オーバーレイテキストを繰り返す
@@ -1211,6 +1257,8 @@
 	Searchable Image (Exact)	検索可能な画像（元の画像を保持）
 	Adds invisible text over each word; the page image is not changed	各単語に非表示のテキストを重ねます。ページ画像は変更しません
 	Downsample to	ダウンサンプル:
+	Also recognize pages that already have text	テキストを含むページも認識
+	Pictures on those pages are recognized too; words already in the page's text are not added again	それらのページ上の画像も認識します。ページのテキストに既にある単語は再度追加されません
 	Text recognition isn't installed: its model files are missing. Reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them.	テキスト認識がインストールされていません。モデルファイルがありません。PdfCraft を再インストールするか、PDFCRAFT_MODELS にモデルファイルのあるフォルダーを設定してください。
 	Settings	設定
 	Optional	任意
@@ -1250,6 +1298,7 @@
 	Copy text	テキストをコピー
 	Properties…	プロパティ…
 	Make Current Properties Default	現在のプロパティを既定にする
+	Make Properties Default	プロパティを既定にする
 	More options	詳細オプション
 	Sort by	並べ替え
 	Author	作成者
@@ -1371,6 +1420,9 @@
 	Sort comments by:	注釈の並べ替え:
 	Create PDF Comment Summary	PDF 注釈の一覧を作成
 	Revert to the previously saved version of “{name}”? Changes since then can't be undone afterwards.	「{name}」を保存済みの状態に戻しますか？それ以降の変更は後から取り消せません。
+	Save over the changed file?	変更されたファイルに上書きしますか？
+	“{name}” changed on disk after it was opened or last saved. Saving now replaces that newer version with this one.	「{name}」は開いた後または最後に保存した後にディスク上で変更されました。今保存すると、その新しい版がこの版で置き換えられます。
+	Save anyway	それでも保存
 	Number pages	ページ番号を設定
 	Style	スタイル
 	None (prefix only)	なし（接頭辞のみ）
@@ -1514,7 +1566,7 @@
 	Couldn't optimize the file: {e}	ファイルを最適化できませんでした: {e}
 	Couldn't write {path}: {e}	{path} に書き込めませんでした: {e}
 	The form asks to be submitted to {u}; PdfCraft doesn't send form data. Save the document to keep your entries.	フォームは {u} への送信を要求していますが、PdfCraft はフォームデータを送信しません。入力内容を保持するには文書を保存してください。
-	{s} actions run in the JavaScript engine (M6)	{s} 件のアクションは JavaScript エンジンで実行します（M6）
+	This PDF uses the unsupported {s} action.	この PDF では未対応の {s} アクションが使われています。
 	{name}: the {other} action isn't supported yet	{name}: {other} アクションにはまだ対応していません
 	{name} submits the form to {url}; PdfCraft doesn't send form data. Save the document to keep your entries.	{name} はフォームを {url} に送信しますが、PdfCraft はフォームデータを送信しません。入力内容を保持するには文書を保存してください。
 	Export stopped: {e}	書き出しを中止しました: {e}
@@ -1576,6 +1628,8 @@
 	Sent to {printer}	{printer} に送信しました
 	Sent to {printer}: {msg}	{printer} に送信しました: {msg}
 	Looking for printers…	プリンターを検索しています…
+	Sending sheet {s} of {n} to {printer}…	{printer} に用紙 {s} / {n} を送信しています…
+	No printers were found. Check that the printer is installed and the print spooler is running, then open Print again.	プリンターが見つかりません。プリンターがインストールされ、印刷スプーラーが動作していることを確認してから、もう一度［印刷］を開いてください。
 	Sending to {printer}…	{printer} に送信しています…
 	Choose a folder for the searchable files	検索可能なファイルの保存先フォルダーを選択
 	Files are combined from top to bottom. Leave Pages empty to take every page.	ファイルは上から順に結合されます。すべてのページを使用する場合は「ページ」を空欄にしてください。
@@ -1594,16 +1648,16 @@
 	Opened, but its security settings don't allow combining. Enter the permissions password.	開けましたが、セキュリティ設定により結合が許可されていません。権限パスワードを入力してください。
 	Unlocked: the combined file won't be password-protected	ロック解除済み: 結合後のファイルはパスワードで保護されません
 	Unlocked {n} of {m} files	{m} 個中 {n} 個のファイルのロックを解除しました
-	Drop PDFs or folders here, or choose them.	ここに PDF またはフォルダーをドロップするか、選択してください。
+	Drop PDFs, images, text files or folders here, or choose them.	ここに PDF、画像、テキストファイル、またはフォルダーをドロップするか、選択してください。
 	Add folder…	フォルダーを追加…
 	Add folder and subfolders…	フォルダーとサブフォルダーを追加…
 	More ways to add files	ファイルを追加するその他の方法
-	Every PDF in the folder	フォルダー内のすべての PDF
-	Every PDF in the folder and the folders inside it	フォルダーとその中のフォルダーにあるすべての PDF
+	Every PDF, image and text file in the folder	フォルダー内のすべての PDF、画像、テキストファイル
+	Every PDF, image and text file in the folder and the folders inside it	フォルダーとその中のフォルダーにあるすべての PDF、画像、テキストファイル
 	Add folder	フォルダーを追加
 	Add folder and subfolders	フォルダーとサブフォルダーを追加
-	No PDFs found in {folder}	{folder} に PDF が見つかりません
-	Added the first {n} PDFs in {folder}	{folder} の最初の {n} 個の PDF を追加しました
+	No PDFs, images or text files found in {folder}	{folder} に PDF、画像、テキストファイルが見つかりません
+	Added the first {n} files in {folder}	{folder} の最初の {n} 個のファイルを追加しました
 	Click to sort, drag to move the column. Drag its edge to resize it.	クリックで並べ替え、ドラッグで列を移動します。列の端をドラッグすると幅を変更できます。
 	Reset columns	列をリセット
 	Remove {n} files	{n} 個のファイルを削除
@@ -1621,7 +1675,7 @@
 	{n} files need attention	{n} 個のファイルに問題があります
 	{name} can't be combined: {why}	{name} は結合できません: {why}
 	Check the pages of {name}: {why}	{name} のページ指定を確認してください: {why}
-	Add the PDFs to combine	結合する PDF を追加
+	Add the files to combine	結合するファイルを追加
 	File name	ファイル名
 	Warnings	警告
 	Drag to reorder	ドラッグして並べ替え
@@ -1634,6 +1688,10 @@
 	Password-protected	パスワードで保護されています
 	Its security settings don't allow copying pages	セキュリティ設定によりページのコピーが許可されていません
 	Can't be read: {e}	読み込めません: {e}
+	Leave out files that can't be read?	読み込めないファイルを除外しますか？
+	These files can't be read, so they won't be in the combined PDF:	次のファイルは読み込めないため、結合した PDF には含まれません:
+	Combine the rest	残りを結合
+	and {n} more	ほか {n} 件
 	Includes unsaved changes	未保存の変更を含みます
 	Pages of {name} to combine, e.g. 1-3, 6	結合する {name} のページ（例: 1-3, 6）
 	Remove {name}	{name} を削除
@@ -1656,6 +1714,7 @@
 	Couldn't use {name}: {e}	{name} を使用できませんでした: {e}
 	Couldn't extract pages: {e}	ページを抽出できませんでした: {e}
 	Couldn't write {name}: {e}	{name} に書き込めませんでした: {e}
+	the name is not a plain file name	名前が単独のファイル名ではありません
 	Wrote 1 file to {dir}	{dir} に 1 ファイルを書き込みました
 	Wrote {n} files to {dir}	{dir} に {n} ファイルを書き込みました
 	No pages match those choices	条件に一致するページはありません
@@ -1709,8 +1768,14 @@
 	watermark	透かし
 	background	背景
 	This document isn't password-protected	この文書はパスワード保護されていません
-	Only the document's owner can change its security (open it with the permissions password)	文書の所有者のみセキュリティを変更できます（権限パスワードで開いてください）
+	Enter permissions password…	権限パスワードを入力…
+	Permissions password	権限パスワード
+	“{name}” has security restrictions. Enter its permissions password to lift them.	「{name}」にはセキュリティの制限があります。制限を解除するには権限パスワードを入力してください。
+	Restrictions lifted	制限を解除しました
+	Couldn't unlock {name}: {e}	{name} のロックを解除できませんでした: {e}
+	This document has no restrictions to lift	この文書には解除する制限がありません
 	The document's security settings don't allow this change	文書のセキュリティ設定により、この変更は許可されていません
+	The document's security settings don't allow copying text and images	文書のセキュリティ設定により、テキストと画像のコピーは許可されていません
 	Open a document first	先に文書を開いてください
 	Security will be removed when you save	セキュリティは保存時に解除されます
 	Click text or an image to edit it	テキストまたは画像をクリックして編集
@@ -1743,6 +1808,7 @@
 	At least one signature has problems.	問題のある署名があります。
 	This document is secured. Some changes are restricted by its security settings.	この文書は保護されています。セキュリティ設定により一部の変更が制限されています。
 	This is a dynamic XFA form, which PdfCraft can't display yet. What you see is the file's placeholder page.	この文書は動的 XFA フォームで、PdfCraft はまだ表示できません。現在はファイルの代替ページを表示しています。
+	This form's scripts are turned off because one ran too long. Reopen the document to run them again.	このフォームのスクリプトは、実行に時間がかかりすぎたものがあったため無効になっています。もう一度実行するには、文書を再度開いてください。
 	This form also contains XFA data, which PdfCraft doesn't read yet. You can fill its fields, but Acrobat may show the XFA values instead.	このフォームには PdfCraft がまだ読み取れない XFA データも含まれます。フィールドには入力できますが、Acrobat は代わりに XFA の値を表示する場合があります。
 	This document contains {n} interactive form fields.	この文書には対話型フォームフィールドが {n} 個あります。
 	This file was damaged and has been repaired. Saving keeps the repaired version.	このファイルは破損していたため修復しました。保存すると修復済みの状態が保持されます。
@@ -1849,6 +1915,8 @@
 	{month} {y}	{y}年{month}
 	Change {key}	{key}を変更
 	Insert pages from {name}	{name} からページを挿入
+	Insert pages from {name} — 1 field renamed	{name} からページを挿入 — 1 個のフィールド名を変更
+	Insert pages from {name} — fields renamed	{name} からページを挿入 — フィールド名を変更
 	Fill in {name}	{name} に入力
 	Set the image of {name}	{name} の画像を設定
 	Edit script of {name}	{name} のスクリプトを編集
@@ -1879,6 +1947,7 @@
 	Delete document JavaScript	文書の JavaScript を削除
 	Edit document JavaScript	文書の JavaScript を編集
 	Edit text	テキストを編集
+	Load document font	文書フォントを読み込む
 	Move image	画像を移動
 	Rotate image	画像を回転
 	Flip image	画像を反転
@@ -1996,8 +2065,12 @@
 	Choose a PNG or JPEG image (up to 4 MiB). Transparency is preserved.	PNG または JPEG 画像を選択してください（最大 4 MiB）。透明度は保持されます。
 	Couldn't import the signature image: {e}	署名画像を読み込めませんでした: {e}
 	Go to page…	ページへ移動…
+	For page sizes and margins.	ページサイズと余白に使います。
 	Reopen the files that were open when PdfCraft last closed	前回 PdfCraft を閉じたときに開いていたファイルを再度開く
+	The PDF text fonts can't draw “{c}” ({code}). Choose supported text.	PDF テキスト用フォントでは「{c}」（{code}）を表示できません。対応している文字を使用してください。
 	The standard fonts can't draw “{c}” ({code}). Only Western European characters can be added as text for now.	標準フォントでは「{c}」（{code}）を表示できません。現在、テキストとして追加できるのは西ヨーロッパの文字のみです。
+	This field's font can't draw “{c}” ({code}), so PdfCraft shows ? in its place. The value is saved, and other PDF viewers redraw the field from it.	このフィールドのフォントでは「{c}」（{code}）を表示できないため、PdfCraft では ? と表示されます。値は保存され、他の PDF ビューアーではこの値からフィールドが再描画されます。
+	The fonts PdfCraft writes with can't draw “{c}” ({code}), so it shows as ? in every PDF viewer. The text is saved.	PdfCraft が書き込みに使うフォントでは「{c}」（{code}）を表示できないため、どの PDF ビューアーでも ? と表示されます。テキストは保存されています。
 	Open arrow	開いた矢印
 	Closed arrow	閉じた矢印
 	Butt	平ら
@@ -2123,6 +2196,7 @@
 	−Bin	−Bin
 	−LOC	−LOC
 @plural	{n} field|{n} fields	{n} 個のフィールド
+@plural	{n} field name collides with earlier files and will be renamed: {list}|{n} field names collide with earlier files and will be renamed: {list}	{n} 個のフィールド名が前のファイルと競合するため、名前が変更されます: {list}
 @plural	{n} page|{n} pages	{n} ページ
 signature pad	Type	入力
 	Flatten Fill & Sign when saving	保存時に入力と署名を統合する
@@ -2184,6 +2258,8 @@ key	Space	スペース
 	Switch to List view to change the pages it takes.	使用するページを変更するには、リスト表示に切り替えてください。
 	Expand all	すべて展開
 	Collapse all	すべて折りたたむ
+	Collapse all pages	すべてのページを折りたたむ
+	Expand all pages	すべてのページを展開
 	Remove page	ページを削除
 	Remove {n} pages	{n} ページを削除
 
@@ -2227,3 +2303,166 @@ key	Space	スペース
 	The historical model detects its supported scripts automatically; Japanese is not included.	歴史的文字モデルは対応する書体を自動検出します。日本語は含まれていません。
 	Historical handwriting (Kurrent)	歴史的な手書き文字（クレント）
 	Handwriting requires upright horizontal lines in one text column. Columns, tables and marginal notes are not supported.	手書き文字は、正しい向きの横書き行が1列に並んでいる必要があります。複数列、表、余白の注記には対応していません。
+
+# Architectural print controls (follow-up to #599).
+	PDF page: {size}	PDFページ: {size}
+	Match page at 100%	ページに合わせて100%に設定
+	PDF scale: {scale}%	PDFの倍率: {scale}%
+	Printer paper and scaling may differ. Check driver settings.	プリンターの用紙や倍率は異なる場合があります。ドライバーの設定を確認してください。
+	Drawing scale changes. Use Actual size for full-scale plans.	図面の縮尺が変わります。原寸で印刷するには「実際のサイズ」を使用してください。
+	Reload documents when their files change on disk	ディスク上のファイルが変更されたら文書を再読み込みする
+	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	このファイルはディスク上で変更されました。「再読み込み」は新しい版を表示して未保存の変更を破棄し、「保存」はこの版で置き換えます。
+	Reload	再読み込み
+	Couldn't reload {name}: {e}	{name} を再読み込みできませんでした: {e}
+	Select page {label}	ページ {label} を選択
+	Rotate page {label} counterclockwise	ページ {label} を反時計回りに回転
+	Rotate page {label} clockwise	ページ {label} を時計回りに回転
+	Delete page {label}	ページ {label} を削除
+	Scroll speed (mouse wheel and arrow keys)	スクロール速度（マウスホイールと矢印キー）
+scroll speed	Slow	遅い
+scroll speed	Normal	標準
+scroll speed	Fast	速い
+	Animation effects	アニメーション効果
+animation effects	On	オン
+animation effects	Off	オフ
+	Enhance camera image	カメラ画像を補正
+	Drag the corners onto the document's edges, then choose Enhance page.	四隅を文書の端までドラッグしてから、「ページを補正」を選択します。
+	Enhance page	ページを補正
+	Done adding text	テキストの追加を完了
+	Discard this text (Esc)	このテキストを破棄（Esc）
+	Clean-up	クリーンアップ
+	Original	オリジナル
+	Greyscale	グレースケール
+	Black and white	白黒
+	Reading colours	読書用の色
+	Replace document colours	文書の色を置き換える
+	Black on white	白地に黒
+	White on black	黒地に白
+	Yellow on black	黒地に黄
+	Green on black	黒地に緑
+	Page background	ページの背景
+	Only change the colour of black text or line art	黒いテキストと線画の色だけを変更する
+	Change the colour of line art as well as text	テキストに加えて線画の色も変更する
+	Colours are remapped while rendering; the document itself never changes.	色は描画時に置き換えられ、文書自体が変わることはありません。
+	This printer's driver doesn't take two-sided settings from other programs, so its own setting applies. Change it in Properties…	このプリンターのドライバーは他のプログラムからの両面印刷の設定を受け付けないため、ドライバー自身の設定が使われます。変更先: プロパティ…
+	Browser's print dialog	ブラウザーの印刷ダイアログ
+	Copies, two-sided printing and colour are chosen in the browser's print dialog.	部数、両面印刷、カラーはブラウザーの印刷ダイアログで選びます。
+	Preparing {n} sheets for printing…	{n} 枚のシートを印刷用に準備しています…
+	Preparing sheet {done} of {total} for printing…	印刷用にシート {done}/{total} を準備しています…
+	Opening the browser's print dialog…	ブラウザーの印刷ダイアログを開いています…
+	Couldn't print from the browser ({e}); downloaded {name} to print instead	ブラウザーから印刷できませんでした ({e})。代わりに印刷用の {name} をダウンロードしました
+	Tools panel side	ツールパネルの位置
+	Add comment	コメントを追加
+	Change tag properties	タグのプロパティを変更
+# Accessibility structure tags.
+	Tags panel	タグパネル
+	Tags	タグ
+	Tag type	タグの種類
+	Actual text	実際のテキスト
+	Find a tag	タグを検索
+	Collapse tag	タグを折りたたむ
+	Expand tag	タグを展開
+	Revert changes	変更を元に戻す
+	Save tag properties	タグのプロパティを保存
+	This document has no editable structure tags.	この文書には編集可能な構造タグがありません。
+	{n} tags	{n} 個のタグ
+	Save or revert changes before selecting another tag.	別のタグを選択する前に変更を保存するか元に戻してください。
+	Left out: {names}	除外: {names}
+	already a PDF	すでに PDF です
+	no unused output name	使用可能な出力名がありません
+	no output folder was chosen	出力フォルダーが選択されていません
+@plural	Downloaded {n} PDF|Downloaded {n} PDFs	{n} 個の PDF をダウンロードしました
+	Scan	スキャン
+	Sign a sheet of white paper and take a photo of it in bright, even light (use the flash). Choose the photo or drop it here: PdfCraft finds the signature and removes the paper.	白い紙に署名し、明るく均一な光の下で写真を撮ってください（フラッシュを使用）。写真を選択するか、ここにドロップしてください。PdfCraft が署名を見つけ、紙の部分を取り除きます。
+	Choose photo…	写真を選択…
+	No photo chosen	写真が選択されていません
+	Photo	写真
+	Ink sensitivity	インクの感度
+	No signature was found in the frame. Move the frame over the signature or raise the ink sensitivity.	枠内に署名が見つかりません。枠を署名に合わせるか、インクの感度を上げてください。
+	Couldn't use the photo: {e}	写真を使用できません: {e}
+
+# PDF tab context menu (#1233)
+	Close Tab	タブを閉じる
+	Reopen Closed Tab	閉じたタブを再度開く
+	Reveal in Finder	Finderで表示
+	Reveal in File Explorer	ファイルエクスプローラーで表示
+	Other colour…	その他の色…
+	Recent colours	最近使った色
+	Couldn't follow linked PDF: {reason}	リンク先の PDF を開けませんでした: {reason}
+	The linked PDF opened, but its named destination was not applied.	リンク先の PDF を開きましたが、名前付き移動先は適用されませんでした。
+	The linked PDF opened, but its page destination was out of range.	リンク先の PDF を開きましたが、移動先のページが範囲外です。
+	Local cross-PDF links require the desktop app	PDF 間のローカルリンクにはデスクトップアプリが必要です
+	Cut Image	画像を切り取り
+	Redact Image	画像を墨消し
+	Create Link…	リンクを作成…
+	Recognize Text…	テキストを認識…
+	Minimize	最小化
+	Maximize	最大化
+	Restore	元のサイズに戻す
+	Use system title bar	システムのタイトルバーを使う
+	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	タブバーの代わりに、ウィンドウボタン用のシンプルなタイトルバーを表示します。GNOME はアプリのタイトルバーを描画しないため、このタイトルバーは GNOME のテーマに従いません。
+
+# Absolute local GoToR confirmation (#1364).
+	Allow	許可
+	Only allow this if you trust the source document.	元の文書を信頼できる場合にのみ許可してください。
+	Open in Full Screen mode?	フルスクリーンモードで開きますか？
+	This document asks to open in Full Screen mode: the page fills the screen and nothing else shows. Press Esc at any time to leave it.	この文書はフルスクリーンモードで開くよう求めています。ページが画面全体を占め、他には何も表示されません。Esc キーでいつでも終了できます。
+	Full Screen	フルスクリーン
+	Not now	今はしない
+	Open this local PDF?	このローカルPDFを開きますか？
+	This document is trying to open a local file:	この文書はローカルファイルを開こうとしています：
+	Move tag earlier	タグを前へ移動
+	Move tag later	タグを後へ移動
+	Straighten scanned page	スキャンしたページの傾きを補正
+
+# Historical snapshot notice bar (View signed version / View revision).
+	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	「{from}」の署名済みバージョン（リビジョン {rev}）を表示しています。これはスナップショットであり、ここでの変更は元の文書に影響しません。
+	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	「{from}」のリビジョン {rev} を表示しています。これはスナップショットであり、ここでの変更は元の文書に影響しません。
+	Turn upside down (180°)	上下反転 (180°)
+	4 x 6 in label (101.6 x 152.4 mm)	4 × 6 インチ ラベル (101.6 × 152.4 mm)
+	Cuts each page to its printed area, turns it upright and fits it to the sheet without stretching. One label per sheet.	各ページを印刷領域で切り抜き、正しい向きに回転して、伸縮させずに用紙に合わせます。1 枚に 1 ラベル。
+	Find untagged content	タグなしのコンテンツを検索
+	No untagged content was found.	タグなしのコンテンツは見つかりませんでした。
+	Found {n} untagged content problems.	タグなしのコンテンツの問題が {n} 件見つかりました。
+	Tag form fields	フォームフィールドにタグを付ける
+	Mark as artifact	アーティファクトとしてマーク
+	Remove this leaf tag from reading order and mark its direct content as an artifact	このリーフタグを読み上げ順序から削除し、その直接のコンテンツをアーティファクトとしてマークします
+	Mark content as artifact	コンテンツをアーティファクトとしてマーク
+	Word count	文字数と単語数
+	Current page only	現在のページのみ
+	Exclude tagged tables	タグ付きの表を除外
+	Exclude tagged code blocks	タグ付きのコードブロックを除外
+	Exclude image/OCR text	画像・OCRのテキストを除外
+	Exclusions use PDF tags. Untagged tables and code remain included. Image exclusion also removes invisible text.	除外にはPDFタグを使用します。タグのない表やコードは集計に含まれます。画像の除外では非表示のテキストも除外されます。
+	Words	単語数
+	Characters	文字数
+	Characters without spaces	空白を除く文字数
+	Pages counted	集計したページ数
+	Some pages contain no countable text. Scanned images need OCR first.	一部のページには集計できるテキストがありません。スキャン画像には先にOCRを実行してください。
+	Some content could not be classified safely and was kept in the count.	正確に分類できなかった内容は集計に含まれています。
+	Counting words… {n} pages read	単語を集計中… {n}ページ読み取り済み
+	Word counting stopped unexpectedly.	単語の集計が予期せず停止しました。
+	Word count…	文字数と単語数…
+@id	file.word_count	文字数と単語数…
+	Standard	標準
+	Mobile	モバイル
+	Merge image fragments	画像の断片を結合
+	Optimizing… merging image fragments	最適化中… 画像の断片を結合しています
+	Side by side	並べて表示
+	New file only	新しいファイルのみ
+	Old file: {name}	古いファイル: {name}
+	New file: {name}	新しいファイル: {name}
+	Print as image	画像として印刷
+	Resolution:	解像度:
+	Use it when a printer skips text, shading or transparency. The print is no longer searchable text; with Print in grayscale, the pictures are grey.	プリンターが文字、グラデーション、透明部分を印刷しないときに使います。印刷物は検索できる文字ではなくなります。グレースケール印刷と併用すると画像はグレーになります。
+	Crop Image	画像を切り抜き
+	Remove Crop	切り抜きを解除
+	Trim the picture with its handles; Enter or Done applies	ハンドルで画像を切り抜きます。Enter または完了で適用
+	Redaction mark appearance	墨消しマークの外観
+	Outline colour:	枠線の色:
+	Fill colour:	塗りの色:
+	Shown while the pointer is over a mark.	ポインターがマーク上にあるときに表示されます。
+	Opacity:	不透明度:
+	Make properties default	プロパティをデフォルトに設定
+	Pages selected	選択したページ
+	Page properties	ページのプロパティ

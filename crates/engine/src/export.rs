@@ -27,7 +27,10 @@ pub struct ExportSource {
 }
 
 impl Document {
-    /// The current state, for exporting on another thread.
+    /// What an export reads, for exporting on another thread. These are the displayed
+    /// bytes, so they may carry missing comment appearances PdfCraft drew. Signature
+    /// artwork stays original; viewer validation badges are not document content and
+    /// do not enter image/text exports or Print as Image. Saving uses the working file.
     pub fn export_source(&self) -> ExportSource {
         ExportSource {
             bytes: self.display.clone(),
@@ -46,8 +49,11 @@ pub fn extract_images(src: &ExportSource, pages: &[usize], min_side: u32) -> Res
 }
 
 /// The file name for the `index`-th (1-based) exported image: `<stem>_Page_<n>_Image_<index>.<ext>`.
-pub fn image_file_name(stem: &str, image: &pdfcraft_create::ExtractedImage, index: usize) -> String {
-    format!("{stem}_Page_{}_Image_{index:04}.{}", image.page + 1, image.extension)
+/// The page number has leading zeros for as many digits as the document's `page_count` has, so the
+/// files sort in page order (#2208): page 7 of 120 is `Page_007`.
+pub fn image_file_name(stem: &str, image: &pdfcraft_create::ExtractedImage, index: usize, page_count: usize) -> String {
+    let width = page_count.max(1).to_string().len();
+    format!("{stem}_Page_{:0width$}_Image_{index:04}.{}", image.page + 1, image.extension)
 }
 
 impl Exporter {
@@ -87,14 +93,14 @@ impl Exporter {
         encode_png(r.width, r.height, &r.rgba)
     }
 
-    /// Page `page` as an image file of `format`.
+    /// Page `page` as an image file of `format`, which says the resolution it was drawn at.
     pub fn image(&mut self, page: usize, dpi: f64, format: ImageFormat) -> Result<Vec<u8>, String> {
         self.check(page)?;
         let r = self.renderer.render(RenderRequest { page, scale: (dpi.clamp(18.0, 1200.0) / 72.0) as f32, ..Default::default() });
         if let Some(e) = r.error {
             return Err(format!("page {}: {e}", page + 1));
         }
-        encode_image(r.width, r.height, &r.rgba, format)
+        encode_image(r.width, r.height, &r.rgba, format, self.dpi_used(page, dpi))
     }
 
     /// The reading-order text of a page.
@@ -121,12 +127,14 @@ impl Exporter {
     }
 }
 
-/// Premultiplied RGBA → an image file of `format`.
-pub fn encode_image(width: u32, height: u32, premultiplied: &[u8], format: ImageFormat) -> Result<Vec<u8>, String> {
+/// Premultiplied RGBA → an image file of `format`. A JPEG or TIFF says it is `dpi` dots per inch,
+/// so other programs show and print it at the page's size. A PNG says nothing: its `pHYs` counts
+/// pixels per metre, so 72 dpi would read back as 72.009 and a page made from it would shrink.
+pub fn encode_image(width: u32, height: u32, premultiplied: &[u8], format: ImageFormat, dpi: f64) -> Result<Vec<u8>, String> {
     match format {
         ImageFormat::Png => encode_png(width, height, premultiplied),
-        ImageFormat::Jpeg { quality } => encode_jpeg(width, height, premultiplied, quality),
-        ImageFormat::Tiff => encode_tiff(width, height, premultiplied),
+        ImageFormat::Jpeg { quality } => encode_jpeg(width, height, premultiplied, quality, dpi),
+        ImageFormat::Tiff => encode_tiff(width, height, premultiplied, dpi),
     }
 }
 
@@ -193,22 +201,62 @@ fn over_white(premultiplied: &[u8]) -> Vec<u8> {
         .collect()
 }
 
-/// Premultiplied RGBA → baseline JPEG (pages are opaque: transparency becomes white paper).
-pub fn encode_jpeg(width: u32, height: u32, premultiplied: &[u8], quality: u8) -> Result<Vec<u8>, String> {
+/// Premultiplied RGBA → baseline JPEG at `dpi` (pages are opaque: transparency becomes white paper).
+pub fn encode_jpeg(width: u32, height: u32, premultiplied: &[u8], quality: u8, dpi: f64) -> Result<Vec<u8>, String> {
     use image::ImageEncoder;
+    use image::codecs::jpeg::{JpegEncoder, PixelDensity};
     let rgb = over_white(premultiplied);
     let mut out = Vec::new();
-    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, quality.clamp(1, 100))
-        .write_image(&rgb, width, height, image::ExtendedColorType::Rgb8)
-        .map_err(|e| e.to_string())?;
+    let mut enc = JpegEncoder::new_with_quality(&mut out, quality.clamp(1, 100));
+    // The JFIF density is whole dots per inch.
+    enc.set_pixel_density(PixelDensity::dpi(dpi.round() as u16));
+    enc.write_image(&rgb, width, height, image::ExtendedColorType::Rgb8).map_err(|e| e.to_string())?;
     Ok(out)
 }
 
-/// Premultiplied RGBA → TIFF (RGB, LZW-compressed by the encoder's default).
-pub fn encode_tiff(width: u32, height: u32, premultiplied: &[u8]) -> Result<Vec<u8>, String> {
-    use image::ImageEncoder;
+/// Premultiplied RGBA → TIFF (RGB, LZW-compressed) at `dpi`. Written with `tiff` directly:
+/// `image`'s `TiffEncoder` always says 1 × 1 with no unit and leaves the strips uncompressed.
+/// No predictor: LZW alone is the compression TIFF readers support most widely after none.
+pub fn encode_tiff(width: u32, height: u32, premultiplied: &[u8], dpi: f64) -> Result<Vec<u8>, String> {
+    use tiff::encoder::{Compression, Rational, TiffEncoder, colortype::RGB8};
+    use tiff::tags::{ResolutionUnit, Tag};
+    let err = |e: tiff::TiffError| e.to_string();
     let rgb = over_white(premultiplied);
     let mut out = std::io::Cursor::new(Vec::new());
-    image::codecs::tiff::TiffEncoder::new(&mut out).write_image(&rgb, width, height, image::ExtendedColorType::Rgb8).map_err(|e| e.to_string())?;
+    let mut tiff = TiffEncoder::new(&mut out).map_err(err)?.with_compression(Compression::Lzw);
+    let mut image = tiff.new_image::<RGB8>(width, height).map_err(err)?;
+    // In hundredths: a page drawn at a lowered resolution (`Exporter::dpi_used`) is rarely a whole number.
+    let resolution = Rational { n: (dpi * 100.0).round() as u32, d: 100 };
+    let tags = image.encoder();
+    tags.write_tag(Tag::ResolutionUnit, ResolutionUnit::Inch).map_err(err)?;
+    tags.write_tag(Tag::XResolution, resolution.clone()).map_err(err)?;
+    tags.write_tag(Tag::YResolution, resolution).map_err(err)?;
+    image.write_data(&rgb).map_err(err)?;
     Ok(out.into_inner())
+}
+
+#[cfg(test)]
+mod image_name_tests {
+    use super::image_file_name;
+
+    fn image(page: usize) -> pdfcraft_create::ExtractedImage {
+        pdfcraft_create::ExtractedImage {
+            page,
+            object: pdfcraft_cos::ObjRef { num: 1, generation: 0 },
+            width: 1,
+            height: 1,
+            extension: "png",
+            data: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn page_number_is_padded_to_the_page_count() {
+        assert_eq!(image_file_name("doc", &image(0), 1, 1), "doc_Page_1_Image_0001.png");
+        assert_eq!(image_file_name("doc", &image(0), 1, 9), "doc_Page_1_Image_0001.png");
+        assert_eq!(image_file_name("doc", &image(6), 2, 20), "doc_Page_07_Image_0002.png");
+        assert_eq!(image_file_name("doc", &image(6), 3, 120), "doc_Page_007_Image_0003.png");
+        assert_eq!(image_file_name("doc", &image(119), 4, 120), "doc_Page_120_Image_0004.png");
+        assert_eq!(image_file_name("doc", &image(0), 1, 0), "doc_Page_1_Image_0001.png");
+    }
 }

@@ -4,6 +4,9 @@
 use std::sync::Arc;
 
 pub use pdfcraft_compare::{Change, Comparison, Kind, Side};
+// How far Office export reads into form XObjects; `OfficeExport::truncated_pages` lists the pages
+// that draw more.
+pub use pdfcraft_edit::{MAX_FORM_DEPTH, MAX_FORM_VISITS};
 
 use crate::{DocId, Edit, EditError, Markup, NewAnnotation, NoteIcon, Session, Shape};
 
@@ -64,13 +67,12 @@ impl Session {
         let (mut ra, mut rb) = (renderer(a), renderer(b));
         let scale = dpi.clamp(18.0, 150.0) / 72.0;
         let mut out = Vec::new();
-        for page in 0..a.info.pages.len().min(b.info.pages.len()) {
+        for (page, info) in b.info.pages.iter().enumerate().take(a.info.pages.len()) {
             let req = pdfcraft_render::RenderRequest { page, scale, ..Default::default() };
             let (x, y) = (ra.render(req), rb.render(req));
             if x.error.is_some() || y.error.is_some() {
                 continue;
             }
-            let info = &b.info.pages[page];
             let s = y.width as f32 / info.width.max(1e-3);
             for r in pdfcraft_compare::visual_regions((&y.rgba, y.width, y.height), (&x.rgba, x.width, x.height), 24) {
                 let p = info.view_to_user(r[0] as f32 / s, r[1] as f32 / s);
@@ -85,7 +87,7 @@ impl Session {
     pub fn compare_report(&self, old: DocId, new: DocId) -> Result<Arc<Vec<u8>>, EditError> {
         let c = self.compare(old, new)?;
         let name = |id| self.get(id).map(|d| d.name.clone()).unwrap_or_default();
-        self.create_from_text("Compare Report", &pdfcraft_compare::report(&c, &name(old), &name(new)))
+        self.create_report("Compare Report", &pdfcraft_compare::report(&c, &name(old), &name(new)))
     }
 
     /// Mark the differences in `new` as comments: highlights over replaced and inserted text
@@ -122,10 +124,11 @@ impl Session {
     }
 }
 
-/// Export a PDF ▸ Word, HTML or RTF.
+/// Export a PDF ▸ Word, PowerPoint, HTML or RTF.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OfficeFormat {
     Docx,
+    Pptx,
     Html,
     Rtf,
 }
@@ -134,6 +137,7 @@ impl OfficeFormat {
     pub fn extension(self) -> &'static str {
         match self {
             OfficeFormat::Docx => "docx",
+            OfficeFormat::Pptx => "pptx",
             OfficeFormat::Html => "html",
             OfficeFormat::Rtf => "rtf",
         }
@@ -142,6 +146,7 @@ impl OfficeFormat {
     pub fn from_extension(ext: &str) -> Option<OfficeFormat> {
         match ext.to_ascii_lowercase().as_str() {
             "docx" => Some(OfficeFormat::Docx),
+            "pptx" => Some(OfficeFormat::Pptx),
             "html" | "htm" => Some(OfficeFormat::Html),
             "rtf" => Some(OfficeFormat::Rtf),
             _ => None,
@@ -149,29 +154,63 @@ impl OfficeFormat {
     }
 }
 
+/// A Word, PowerPoint, HTML or RTF export ([`crate::Document::export_office_checked`]).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct OfficeExport {
+    /// The exported file.
+    pub bytes: Vec<u8>,
+    /// Pages (0-based) that draw forms nested deeper than [`MAX_FORM_DEPTH`] or more of them
+    /// than [`MAX_FORM_VISITS`]: export stops reading there to stay bounded on hostile files, so
+    /// the text and images of those forms are missing from `bytes`.
+    pub truncated_pages: Vec<usize>,
+}
+
 impl crate::Document {
     /// The pages as paragraphs and images (for Word, HTML and RTF export), including what
     /// form XObjects draw.
     pub fn export_pages(&self) -> Vec<pdfcraft_export::Page> {
-        let Some(cos) = self.editor.as_ref().map(|e| &e.cos) else { return Vec::new() };
-        self.info
+        self.export_pages_checked().0
+    }
+
+    /// [`Self::export_pages`], and the pages whose forms were left partly unread
+    /// ([`OfficeExport::truncated_pages`]).
+    fn export_pages_checked(&self) -> (Vec<pdfcraft_export::Page>, Vec<usize>) {
+        let Some(cos) = self.editor.as_ref().map(|e| &e.cos) else { return (Vec::new(), Vec::new()) };
+        let mut truncated = Vec::new();
+        let pages = self
+            .info
             .pages
             .iter()
             .enumerate()
             .map(|(i, info)| {
-                let blocks = pdfcraft_edit::reading_blocks(cos, i)
-                    .unwrap_or_default()
+                // Export uses the visible page in points, y up. Raw PDF coordinates include
+                // CropBox offsets and precede /Rotate and /UserUnit.
+                let visible_rect = |r: [f64; 4]| {
+                    let a = info.user_to_view(r[0] as f32, r[1] as f32);
+                    let b = info.user_to_view(r[2] as f32, r[3] as f32);
+                    [a[0].min(b[0]) as f64, (info.height - a[1].max(b[1])) as f64, a[0].max(b[0]) as f64, (info.height - a[1].min(b[1])) as f64]
+                };
+                let crop_width = f64::from(info.crop[2] - info.crop[0]);
+                let display_width = f64::from(if info.rotation % 180 == 0 { info.width } else { info.height });
+                let unit = if crop_width > 0.0 && crop_width.is_finite() && display_width.is_finite() { display_width / crop_width } else { 1.0 };
+                let reading = pdfcraft_edit::reading_blocks_checked(cos, i).unwrap_or_default();
+                if reading.truncated {
+                    truncated.push(i);
+                }
+                let blocks = reading
+                    .blocks
                     .into_iter()
                     .filter(|b| !b.text.trim().is_empty())
                     .map(|b| {
                         let f = b.base_font.to_ascii_lowercase();
                         pdfcraft_export::Block {
                             text: b.text,
-                            rect: b.rect,
-                            size: b.size,
+                            rect: visible_rect(b.rect),
+                            size: b.size * unit,
                             bold: f.contains("bold") || f.contains("black") || f.contains("heavy"),
                             italic: f.contains("italic") || f.contains("oblique"),
                             color: b.color,
+                            rotation: b.rotation - f64::from(info.rotation),
                         }
                     })
                     .collect();
@@ -180,22 +219,37 @@ impl crate::Document {
                     .iter()
                     .filter_map(|im| {
                         let (ext, bytes) = pdfcraft_create::image_file(cos, im.object?).ok()?;
-                        Some(pdfcraft_export::Image { ext: if ext == "jpg" { "jpg" } else { "png" }, bytes, rect: im.rect })
+                        Some(pdfcraft_export::Image {
+                            ext: if ext == "jpg" { "jpg" } else { "png" },
+                            bytes,
+                            rect: visible_rect(im.rect),
+                            size: [im.matrix[0].hypot(im.matrix[1]) * unit, im.matrix[2].hypot(im.matrix[3]) * unit],
+                            rotation: im.matrix[1].atan2(im.matrix[0]).to_degrees() - f64::from(info.rotation),
+                        })
                     })
                     .collect();
                 pdfcraft_export::Page { width: info.width as f64, height: info.height as f64, blocks, images }
             })
-            .collect()
+            .collect();
+        (pages, truncated)
     }
 
-    /// The document as a Word, HTML or RTF file.
+    /// The document as a Word, PowerPoint, HTML or RTF file.
     pub fn export_office(&self, format: OfficeFormat) -> Vec<u8> {
-        let pages = self.export_pages();
+        self.export_office_checked(format).bytes
+    }
+
+    /// [`Self::export_office`], and the pages whose text it had to leave out
+    /// ([`OfficeExport::truncated_pages`]).
+    pub fn export_office_checked(&self, format: OfficeFormat) -> OfficeExport {
+        let (pages, truncated_pages) = self.export_pages_checked();
         let title = self.info.title.clone().unwrap_or_else(|| self.name.trim_end_matches(".pdf").to_string());
-        match format {
+        let bytes = match format {
             OfficeFormat::Docx => pdfcraft_export::docx(&pages, &title),
+            OfficeFormat::Pptx => pdfcraft_export::pptx(&pages, &title),
             OfficeFormat::Html => pdfcraft_export::html(&pages, &title).into_bytes(),
             OfficeFormat::Rtf => pdfcraft_export::rtf(&pages).into_bytes(),
-        }
+        };
+        OfficeExport { bytes, truncated_pages }
     }
 }

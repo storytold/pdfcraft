@@ -20,6 +20,9 @@ jobs:
   test:
     name: test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    env:
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+      CARGO_PROFILE_TEST_DEBUG: line-tables-only
     strategy:
       fail-fast: false
       matrix:
@@ -27,28 +30,43 @@ jobs:
         # and release.yml builds macOS (a failing release is fixed and rebuilt).
         os: [ubuntu-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # The optional craft-fonts build input (Japanese fonts), so the Japanese font tests run on
       # Linux; Windows tests the build without it. See craftrules standards/fonts.md.
       - name: Check out craft-fonts (Linux)
         if: runner.os == 'Linux'
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: storytold/craft-fonts
-          ref: 8dcdacd5153e64560d109541a47d806f26f048c0
+          ref: 3d9ab3a132ed0eff457e424226a435a901da30d3
           path: craft-fonts
 
-      - name: Install Linux system dependencies (egui/winit/rfd)
+      - name: Configure craft-fonts (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          echo "CRAFT_FONTS_DIR=$GITHUB_WORKSPACE/craft-fonts" >> "$GITHUB_ENV"
+          echo "CRAFT_FONTS_REQUIRED=1" >> "$GITHUB_ENV"
+
+      - name: Install Linux system dependencies (egui/winit/rfd) and the oracles
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev libxi-dev \
-            libgl1-mesa-dev libgtk-3-dev
+            libgl1-mesa-dev libgtk-3-dev \
+            qpdf poppler-utils
 
-      - uses: dtolnay/rust-toolchain@stable
+      # The independent oracles (crates/oracle) are only worth having when they run. With this
+      # set, a missing one fails the job instead of printing a skip notice that reads as a pass.
+      # Only the tools the job actually uses are installed above.
+      - name: Require the oracles (Linux)
+        if: runner.os == 'Linux'
+        run: echo "PDFCRAFT_ORACLES_REQUIRED=1" >> "$GITHUB_ENV"
+
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
         with:
+          toolchain: stable
           components: clippy, rustfmt
 
       - name: Require Windows executable resources
@@ -56,7 +74,7 @@ jobs:
         run: Add-Content -Path $env:GITHUB_ENV -Value 'PDFCRAFT_REQUIRE_WINRES=1'
         shell: pwsh
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       - name: Format
         if: runner.os == 'Linux'
@@ -71,12 +89,10 @@ jobs:
 
       - name: Test (with craft-fonts)
         if: runner.os == 'Linux'
-        env:
-          CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
-          CRAFT_FONTS_REQUIRED: "1"
         run: cargo test --workspace
 
       - name: Layering
+        if: runner.os == 'Linux'
         run: cargo xtask layers
 
       - name: Assets (licences and attribution)
@@ -91,11 +107,12 @@ jobs:
     name: wasm32 check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
         with:
+          toolchain: stable
           targets: wasm32-unknown-unknown
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           key: wasm32
       - name: Check library crates for wasm32
@@ -105,7 +122,7 @@ jobs:
     name: dependency licences and advisories
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: EmbarkStudios/cargo-deny-action@v2
         with:
           command: check
@@ -115,9 +132,11 @@ jobs:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           key: fuzz
       - name: Fetch the pdf.js corpus (seeds)
@@ -126,7 +145,7 @@ jobs:
         run: cargo xtask fuzz --time 900 --seed ${{ github.run_number }}
       - name: Upload findings
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: fuzz-findings
           path: fuzz-out/findings

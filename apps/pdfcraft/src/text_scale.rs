@@ -27,7 +27,7 @@ fn parse(output: &str) -> f32 {
 
 /// Run `gsettings` and return what it printed, or `None` if it is missing, fails or hangs.
 #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd"))]
-fn gsettings(args: &[&str]) -> Option<String> {
+pub(crate) fn gsettings(args: &[&str]) -> Option<String> {
     use std::io::Read;
     use std::process::{Command, Stdio};
     let mut child = Command::new("gsettings").args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().ok()?;

@@ -81,24 +81,36 @@ pub struct Pickers {
 }
 
 /// Clears `showing` if the worker ends without queueing a pick (it panicked).
-struct Showing(Option<Arc<AtomicBool>>);
+struct Showing {
+    flag: Option<Arc<AtomicBool>>,
+    ctx: Option<egui::Context>,
+}
 
 impl Showing {
     /// The pick is queued: the frame that uses it clears the flag.
     fn hand_over(mut self) {
-        self.0 = None;
+        self.flag = None;
     }
 }
 
 impl Drop for Showing {
     fn drop(&mut self) {
-        if let Some(flag) = &self.0 {
+        if let Some(flag) = &self.flag {
             flag.store(false, Ordering::SeqCst);
+            // No picked result will wake the frame to resume opens behind this picker.
+            if let Some(ctx) = &self.ctx {
+                ctx.request_repaint();
+            }
         }
     }
 }
 
 impl Pickers {
+    /// A picker is showing or its result is waiting for the frame.
+    pub(crate) fn pending(&self) -> bool {
+        self.showing.load(Ordering::SeqCst)
+    }
+
     /// Wait for `pick` on a worker thread and queue its result for the next frame. On macOS
     /// `pick` must already have shown the picker (rfd starts the panel when the future is
     /// created, on the main thread). Returns false when the worker couldn't start.
@@ -114,7 +126,7 @@ impl Pickers {
     where
         F: Future<Output = Vec<PathBuf>> + Send + 'static,
     {
-        let showing = Showing(Some(self.showing.clone()));
+        let showing = Showing { flag: Some(self.showing.clone()), ctx: ctx.clone() };
         let done = self.done.clone();
         std::thread::Builder::new()
             .name("file-picker".into())
@@ -225,6 +237,13 @@ impl PdfCraftApp {
         for Picked { target, paths, then } in self.pickers.take() {
             // The pick is in hand: the next picker may show, including one `then` asks for.
             self.pickers.showing.store(false, Ordering::SeqCst);
+            // Opens were polled before this pick was consumed. Wake their retained replies
+            // once, including after cancellation, without polling while a picker waits.
+            if !self.pending_opens.is_empty()
+                && let Some(ctx) = &self.ctx
+            {
+                ctx.request_repaint();
+            }
             if paths.is_empty() {
                 continue;
             }
@@ -264,18 +283,31 @@ mod tests {
     }
 
     #[test]
-    fn a_panicking_worker_clears_showing_and_queues_nothing() {
+    fn a_panicking_worker_releases_picker_and_requests_repaint() {
         let pickers = Pickers::default();
         pickers.showing.store(true, Ordering::SeqCst);
+        let ctx = egui::Context::default();
+        // Consume the context's initial repaint demand so only the failed worker can wake it.
+        for _ in 0..2 {
+            let _ = ctx.run_logic(&egui::RawInput::default(), |_| {});
+        }
+        assert!(!ctx.has_requested_repaint());
+        let wakes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let requested = wakes.clone();
+        ctx.set_request_repaint_callback(move |_| {
+            requested.fetch_add(1, Ordering::SeqCst);
+        });
         fn fail() -> Vec<PathBuf> {
             panic!("picker failed")
         }
         let got = Arc::new(Mutex::new(Vec::new()));
-        let worker = pickers.spawn_worker(None, None, async { fail() }, record(&got)).expect("worker starts");
+        let worker = pickers.spawn_worker(None, Some(ctx.clone()), async { fail() }, record(&got)).expect("worker starts");
         // join returns once the panic has unwound and the drop guard has run.
         assert!(worker.join().is_err());
         assert!(!pickers.showing.load(Ordering::SeqCst));
         assert!(pickers.take().is_empty());
+        assert!(ctx.has_requested_repaint(), "retained opens must get another frame after a picker worker fails");
+        assert_eq!(wakes.load(Ordering::SeqCst), 1, "an abandoned picker requests one wake");
     }
 
     #[test]
@@ -287,6 +319,43 @@ mod tests {
         assert!(got.lock().unwrap().is_empty(), "nothing runs until the frame uses the picks");
         app.process_picked();
         assert_eq!(*got.lock().unwrap(), vec![PathBuf::from("b.pdf")], "a cancelled pick runs nothing");
+    }
+
+    #[test]
+    fn cancellation_requests_a_frame_for_a_retained_open_reply() {
+        let mut app = PdfCraftApp::new();
+        let ctx = egui::Context::default();
+        app.ctx = Some(ctx.clone());
+        for _ in 0..2 {
+            let _ = ctx.run_logic(&egui::RawInput::default(), |_| {});
+        }
+        assert!(!ctx.has_requested_repaint());
+        let (reply, receiver) = std::sync::mpsc::channel();
+        reply
+            .send(crate::open_worker::ResultMessage { token: 1, kind: crate::open_worker::ResultKind::ReadFailed("controlled failure".into()) })
+            .unwrap();
+        app.pending_opens.push(crate::PendingOpen {
+            token: 1,
+            receiver,
+            name: "waiting.pdf".into(),
+            path: None,
+            stamp: None,
+            activate: true,
+            after_open: None,
+            recovered: None,
+            then: None,
+        });
+        let got = Arc::new(Mutex::new(Vec::new()));
+        app.pickers.showing.store(true, Ordering::SeqCst);
+        app.pickers.deliver(None, vec![], record(&got));
+        app.poll_pending_opens();
+        assert_eq!(app.pending_opens.len(), 1, "the picker keeps the ready reply queued");
+        app.process_picked();
+        assert!(!app.pickers.showing.load(Ordering::SeqCst));
+        assert!(got.lock().unwrap().is_empty(), "cancellation runs no callback");
+        assert!(ctx.has_requested_repaint(), "cancellation must wake the earlier blocked open poll");
+        app.poll_pending_opens();
+        assert!(app.pending_opens.is_empty(), "the retained ready reply is consumed on the next poll");
     }
 
     #[test]

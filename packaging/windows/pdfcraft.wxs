@@ -5,9 +5,11 @@
     wix build pdfcraft.wxs installer-ui.wxs -arch x64 -d Version=1.2.3 -d BinDir=... -d ModelsDir=... -d IconPath=... -o out.msi
 
   Per-machine install into Program Files, a Start Menu shortcut, a desktop shortcut (on by default,
-  optional), an App Paths entry, and PdfCraft registered as a PDF handler (offered under "Open with"
-  and in Default apps, never forced as the default). Files opened with PdfCraft arrive on its
-  command line.
+  optional, and an update keeps it only if it is still there), an App Paths entry, PdfCraft registered as a PDF handler (offered under "Open with"
+  and in Default apps, never forced as the default), "Edit with PdfCraft" on PDF files'
+  right-click menu and "Create PDF with PdfCraft…" on image files' right-click menu (both on by
+  default, optional, and an update keeps the installed version's choice). Files opened with
+  PdfCraft arrive on its command line.
 -->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
   <Package
@@ -36,10 +38,45 @@
     <Property Id="ARPURLINFOABOUT" Value="https://getartcraft.com/apps/pdfcraft" />
     <Property Id="ARPURLUPDATEINFO" Value="https://getartcraft.com/apps/pdfcraft" />
     <Property Id="ARPHELPLINK" Value="https://discord.gg/artcraft" />
-    <!-- Desktop shortcut (#143): on by default, a checkbox in the full-UI welcome dialog, and
-         INSTALLDESKTOPSHORTCUT=0 on the msiexec command line for unattended installs. Secure, so the
-         choice made in the (unelevated) UI reaches the elevated install. -->
-    <Property Id="INSTALLDESKTOPSHORTCUT" Value="1" Secure="yes" />
+    <!-- Desktop shortcut (#143): on by default for a first install, a checkbox in the full-UI
+         welcome dialog, and INSTALLDESKTOPSHORTCUT=0 on the msiexec command line for unattended
+         installs. Secure, so the choice made in the (unelevated) UI reaches the elevated install.
+         An update keeps the shortcut only if it is still on the desktop (#1058): the launcher
+         updates with /passive and no properties, so deleting the shortcut is the only way its
+         users can say no. A value given on the command line wins. -->
+    <Property Id="INSTALLDESKTOPSHORTCUT" Secure="yes" />
+    <Property Id="EXISTINGDESKTOPSHORTCUT">
+      <DirectorySearch Id="DesktopSearch" Path="[DesktopFolder]" Depth="0">
+        <FileSearch Name="PdfCraft.lnk" />
+      </DirectorySearch>
+    </Property>
+    <SetProperty Id="INSTALLDESKTOPSHORTCUT" Value="1" After="AppSearch" Sequence="first"
+        Condition="NOT INSTALLDESKTOPSHORTCUT AND (NOT WIX_UPGRADE_DETECTED OR EXISTINGDESKTOPSHORTCUT)" />
+    <!-- The File Explorer menus: "Edit with PdfCraft" for PDF files (#682) and "Create PDF with
+         PdfCraft…" for images (#190). Each is on by default for a first install and has a property
+         to leave it out of unattended installs: INSTALLPDFCONTEXTMENU=0 (also a welcome-dialog
+         checkbox) and INSTALLIMAGECONTEXTMENU=0. Secure, like the desktop shortcut's.
+         An update keeps the installed version's choice (#305) by looking for the menu's registry
+         key, the way the desktop shortcut looks for its file: AppSearch runs before the old version
+         is removed. Releases from before a menu existed (the PDF one came in 0.7.1, the image one in
+         0.4.0) never had the key, so updating from one of them counts as a first install; the
+         OnlyDetect rows below tell them apart. A value given on the command line wins. -->
+    <Upgrade Id="EA00C367-7270-4C50-9D8B-A7A5C88AD27F">
+      <UpgradeVersion Minimum="0.7.1" IncludeMinimum="yes" OnlyDetect="yes" Property="PDFCONTEXTMENURELEASE" />
+      <UpgradeVersion Minimum="0.4.0" IncludeMinimum="yes" OnlyDetect="yes" Property="IMAGECONTEXTMENURELEASE" />
+    </Upgrade>
+    <Property Id="INSTALLPDFCONTEXTMENU" Secure="yes" />
+    <Property Id="EXISTINGPDFCONTEXTMENU">
+      <RegistrySearch Id="PdfContextMenuSearch" Root="HKLM" Key="Software\Classes\SystemFileAssociations\.pdf\shell\PdfCraft.Edit" Type="raw" />
+    </Property>
+    <SetProperty Id="INSTALLPDFCONTEXTMENU" Value="1" After="AppSearch" Sequence="first"
+        Condition="NOT INSTALLPDFCONTEXTMENU AND (NOT PDFCONTEXTMENURELEASE OR EXISTINGPDFCONTEXTMENU)" />
+    <Property Id="INSTALLIMAGECONTEXTMENU" Secure="yes" />
+    <Property Id="EXISTINGIMAGECONTEXTMENU">
+      <RegistrySearch Id="ImageContextMenuSearch" Root="HKLM" Key="Software\Classes\SystemFileAssociations\.png\shell\PdfCraft.CreatePdf" Type="raw" />
+    </Property>
+    <SetProperty Id="INSTALLIMAGECONTEXTMENU" Value="1" After="AppSearch" Sequence="first"
+        Condition="NOT INSTALLIMAGECONTEXTMENU AND (NOT IMAGECONTEXTMENURELEASE OR EXISTINGIMAGECONTEXTMENU)" />
     <UIRef Id="PdfcraftInstallerUI" />
 
     <StandardDirectory Id="ProgramFiles6432Folder">
@@ -74,6 +111,11 @@
              Resource 1 is the app's lion; resource 2 is the PDF document (build.rs). -->
         <RegistryValue Root="HKLM" Key="Software\Classes\PdfCraft.Document\DefaultIcon" Value="&quot;[#PdfcraftExe]&quot;,-2" Type="string" />
         <RegistryValue Root="HKLM" Key="Software\Classes\PdfCraft.Document\shell\open\command" Value="&quot;[#PdfcraftExe]&quot; &quot;%1&quot;" Type="string" />
+        <!-- No overlay on thumbnails and in the preview pane: without TypeOverlay, Windows paints
+             the default program's icon (the lion) over the lower-right corner of every PDF
+             thumbnail, covering part of the page. An empty string means none ("Thumbnail
+             Handlers", Microsoft Learn). -->
+        <RegistryValue Root="HKLM" Key="Software\Classes\PdfCraft.Document" Name="TypeOverlay" Value="" Type="string" />
         <RegistryValue Root="HKLM" Key="Software\Classes\.pdf\OpenWithProgids" Name="PdfCraft.Document" Value="" Type="string" />
         <RegistryValue Root="HKLM" Key="Software\Classes\Applications\pdfcraft.exe" Name="FriendlyAppName" Value="PdfCraft" Type="string" />
         <RegistryValue Root="HKLM" Key="Software\Classes\Applications\pdfcraft.exe\DefaultIcon" Value="&quot;[#PdfcraftExe]&quot;,-2" Type="string" />
@@ -84,9 +126,49 @@
         <RegistryValue Root="HKLM" Key="Software\PdfCraft\Capabilities" Name="ApplicationIcon" Value="[#PdfcraftExe],0" Type="string" />
         <RegistryValue Root="HKLM" Key="Software\PdfCraft\Capabilities\FileAssociations" Name=".pdf" Value="PdfCraft.Document" Type="string" />
         <RegistryValue Root="HKLM" Key="Software\RegisteredApplications" Name="PdfCraft" Value="Software\PdfCraft\Capabilities" Type="string" />
+      </Component>
 
-        <!-- Image context menu (#190): convert without changing image file defaults. -->
-        <RegistryValue Root="HKLM" Key="Software\Classes\SystemFileAssociations\.png\shell\PdfCraft.CreatePdf" Value="Create PDF with PdfCraft…" Type="string" />
+      <!-- Shortcuts (#143) are plain links to pdfcraft.exe, not advertised MSI shortcuts: advertised
+           ones point at a Windows Installer descriptor rather than the program, which Windows can't
+           use as a file handler (#107), and 0.2.1's advertised one went missing from the Start menu
+           (#143). Each has its own component with an HKLM key path, so Windows Installer removes it
+           on uninstall; in this per-machine package both folders are the all-users ones. -->
+      <Component Id="PdfcraftStartMenuShortcut" Directory="ProgramMenuFolder" Guid="DC028192-C233-4F99-9A77-ED458C60DF26">
+        <Shortcut Id="StartMenuShortcut" Name="PdfCraft" Description="PdfCraft PDF workbench"
+            Target="[#PdfcraftExe]" WorkingDirectory="INSTALLFOLDER" Icon="PdfcraftIcon.ico" IconIndex="0" />
+        <RegistryValue Root="HKLM" Key="Software\PdfCraft\Shortcuts" Name="StartMenu" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+
+      <Component Id="PdfcraftDesktopShortcut" Directory="DesktopFolder" Guid="F6948627-32AB-4D78-8865-0FDF417CE442"
+          Condition="INSTALLDESKTOPSHORTCUT = 1">
+        <Shortcut Id="DesktopShortcut" Name="PdfCraft" Description="PdfCraft PDF workbench"
+            Target="[#PdfcraftExe]" WorkingDirectory="INSTALLFOLDER" Icon="PdfcraftIcon.ico" IconIndex="0" />
+        <RegistryValue Root="HKLM" Key="Software\PdfCraft\Shortcuts" Name="Desktop" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+
+      <!-- PDF context menu (#682): "Edit with PdfCraft" opens the file in PdfCraft whichever app is
+           the default for .pdf, which it leaves alone (SystemFileAssociations, like the image
+           menu). Several PDFs selected (up to 15, Windows' limit for this kind of entry) start one
+           launch each, and the single-instance hand-off opens them as tabs of one window. On
+           Windows 11 the entry is under "Show more options": the first-level menu only takes
+           packaged apps' (IExplorerCommand) entries. Its own component with an HKLM key path, so
+           INSTALLPDFCONTEXTMENU=0 leaves it out and uninstall removes it. -->
+      <Component Id="PdfcraftPdfContextMenu" Guid="439F084F-657D-4AC2-A4CC-F099C518D71F"
+          Condition="INSTALLPDFCONTEXTMENU = 1">
+        <RegistryValue Root="HKLM" Key="Software\Classes\SystemFileAssociations\.pdf\shell\PdfCraft.Edit" Value="Edit with PdfCraft" Type="string" KeyPath="yes" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\SystemFileAssociations\.pdf\shell\PdfCraft.Edit" Name="Icon" Value="&quot;[#PdfcraftExe]&quot;,0" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\SystemFileAssociations\.pdf\shell\PdfCraft.Edit" Name="MultiSelectModel" Value="Document" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\SystemFileAssociations\.pdf\shell\PdfCraft.Edit\command" Value="&quot;[#PdfcraftExe]&quot; &quot;%1&quot;" Type="string" />
+      </Component>
+
+      <!-- Image context menu (#190): "Create PDF with PdfCraft…" opens the DPI chooser, without
+           changing image file defaults. Its own component with an HKLM key path, so
+           INSTALLIMAGECONTEXTMENU=0 leaves it out and uninstall removes it. These rows were in
+           PdfcraftApp up to 0.7.1; moving them is safe because MajorUpgrade removes the old version
+           before installing (afterInstallValidate), so no old row is left behind. -->
+      <Component Id="PdfcraftImageContextMenu" Guid="1B783BF3-12DF-4588-AF80-E2CEA8BC1E5A"
+          Condition="INSTALLIMAGECONTEXTMENU = 1">
+        <RegistryValue Root="HKLM" Key="Software\Classes\SystemFileAssociations\.png\shell\PdfCraft.CreatePdf" Value="Create PDF with PdfCraft…" Type="string" KeyPath="yes" />
         <RegistryValue Root="HKLM" Key="Software\Classes\SystemFileAssociations\.png\shell\PdfCraft.CreatePdf" Name="MultiSelectModel" Value="Single" Type="string" />
         <RegistryValue Root="HKLM" Key="Software\Classes\SystemFileAssociations\.png\shell\PdfCraft.CreatePdf\command" Value="&quot;[#PdfcraftExe]&quot; --create-images &quot;%1&quot;" Type="string" />
         <RegistryValue Root="HKLM" Key="Software\Classes\SystemFileAssociations\.jpg\shell\PdfCraft.CreatePdf" Value="Create PDF with PdfCraft…" Type="string" />
@@ -116,24 +198,6 @@
         <RegistryValue Root="HKLM" Key="Software\Classes\SystemFileAssociations\.jpx\shell\PdfCraft.CreatePdf" Value="Create PDF with PdfCraft…" Type="string" />
         <RegistryValue Root="HKLM" Key="Software\Classes\SystemFileAssociations\.jpx\shell\PdfCraft.CreatePdf" Name="MultiSelectModel" Value="Single" Type="string" />
         <RegistryValue Root="HKLM" Key="Software\Classes\SystemFileAssociations\.jpx\shell\PdfCraft.CreatePdf\command" Value="&quot;[#PdfcraftExe]&quot; --create-images &quot;%1&quot;" Type="string" />
-      </Component>
-
-      <!-- Shortcuts (#143) are plain links to pdfcraft.exe, not advertised MSI shortcuts: advertised
-           ones point at a Windows Installer descriptor rather than the program, which Windows can't
-           use as a file handler (#107), and 0.2.1's advertised one went missing from the Start menu
-           (#143). Each has its own component with an HKLM key path, so Windows Installer removes it
-           on uninstall; in this per-machine package both folders are the all-users ones. -->
-      <Component Id="PdfcraftStartMenuShortcut" Directory="ProgramMenuFolder" Guid="DC028192-C233-4F99-9A77-ED458C60DF26">
-        <Shortcut Id="StartMenuShortcut" Name="PdfCraft" Description="PdfCraft PDF workbench"
-            Target="[#PdfcraftExe]" WorkingDirectory="INSTALLFOLDER" Icon="PdfcraftIcon.ico" IconIndex="0" />
-        <RegistryValue Root="HKLM" Key="Software\PdfCraft\Shortcuts" Name="StartMenu" Type="integer" Value="1" KeyPath="yes" />
-      </Component>
-
-      <Component Id="PdfcraftDesktopShortcut" Directory="DesktopFolder" Guid="F6948627-32AB-4D78-8865-0FDF417CE442"
-          Condition="INSTALLDESKTOPSHORTCUT = 1">
-        <Shortcut Id="DesktopShortcut" Name="PdfCraft" Description="PdfCraft PDF workbench"
-            Target="[#PdfcraftExe]" WorkingDirectory="INSTALLFOLDER" Icon="PdfcraftIcon.ico" IconIndex="0" />
-        <RegistryValue Root="HKLM" Key="Software\PdfCraft\Shortcuts" Name="Desktop" Type="integer" Value="1" KeyPath="yes" />
       </Component>
 
       <Component Id="PdfcraftCli">

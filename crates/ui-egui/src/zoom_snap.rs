@@ -63,6 +63,10 @@ impl PdfCraftApp {
                 if view_rect[2] - view_rect[0] < 2.0 || view_rect[3] - view_rect[1] < 2.0 {
                     return;
                 }
+                // The tool outlives the tab it was chosen on.
+                if self.views.get(index).map(|v| v.id).is_some_and(|id| !self.may_copy(id)) {
+                    return;
+                }
                 match self.snapshot(index, page, view_rect) {
                     Ok((w, h)) => {
                         self.notify_fmt("The selected area has been copied ({w} × {h} pixels)", &[("w", &w.to_string()), ("h", &h.to_string())])
@@ -85,7 +89,8 @@ impl PdfCraftApp {
         let mut r = pdfcraft_render::PageRenderer::new(doc.bytes.clone(), config);
         // About 800 px along the longer side is plenty to find the margins.
         let size = doc.info.pages.get(page).map_or(792.0, |p| p.width.max(p.height));
-        let out = r.render(RenderRequest { page, kind: RequestKind::Pixels, tile: None, scale: (800.0 / size).clamp(0.1, 4.0), tag: 0 });
+        let out =
+            r.render(RenderRequest { page, kind: RequestKind::Pixels, tile: None, scale: (800.0 / size).clamp(0.1, 4.0), tag: 0, preview: false });
         if let Some(e) = out.error {
             return Err(e);
         }
@@ -128,7 +133,7 @@ impl PdfCraftApp {
         }
         let config = RenderConfig { password: doc.password.as_deref().map(std::sync::Arc::from), ..RenderConfig::default() };
         let mut r = pdfcraft_render::PageRenderer::new(doc.bytes.clone(), config);
-        let out = r.render(RenderRequest { page, kind: RequestKind::Pixels, tile: Some(tile), scale, tag: 0 });
+        let out = r.render(RenderRequest { page, kind: RequestKind::Pixels, tile: Some(tile), scale, tag: 0, preview: false });
         if let Some(e) = out.error {
             return Err(e);
         }

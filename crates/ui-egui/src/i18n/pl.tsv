@@ -26,6 +26,7 @@
 	Interface language	Język interfejsu
 	Identity	Tożsamość
 	Name on new comments	Autor nowych komentarzy
+	Hide hover previews for highlights without comment text	Ukryj podglądy po najechaniu dla wyróżnień bez tekstu komentarza
 	Open…	Otwórz…
 	Open Recent	Otwórz ostatnie
 	Clear Recent Files	Wyczyść listę ostatnich plików
@@ -54,6 +55,7 @@
 	Create PDF from file…	Utwórz PDF z pliku…
 	Create PDF from images…	Utwórz PDF z obrazów…
 	Create PDF from multiple files…	Utwórz PDF z wielu plików…
+	Create separate PDFs…	Utwórz osobne pliki PDF…
 	Create PDF from clipboard	Utwórz PDF ze schowka
 	Combine files…	Połącz pliki…
 	Save	Zapisz
@@ -75,6 +77,8 @@
 	Take a snapshot	Zrób migawkę
 	Full screen mode	Tryb pełnoekranowy
 	Read mode	Tryb czytania
+	Next tab	Następna karta
+	Previous tab	Poprzednia karta
 	Switch light / dark theme	Przełącz jasny / ciemny motyw
 	Comments panel	Panel komentarzy
 	Form fields panel	Panel pól formularza
@@ -106,12 +110,18 @@
 	Open a PDF (⌘O)	Otwórz PDF (⌘O)
 	Dark gray theme	Ciemnoszary motyw
 	Light theme	Jasny motyw
+	Appearance mode	Tryb wyglądu
+	Light	Jasny
+	Dark	Ciemny
+	Active	Aktywny
+	Dark theme	Ciemny motyw
+	Appearance settings…	Ustawienia wyglądu…
 	All tools	Wszystkie narzędzia
 	Read	Czytaj
 	Convert	Konwertuj
 	E-Sign	Podpis elektroniczny
 	Print (⌘P)	Drukuj (⌘P)
-	Save (M4)	Zapisz (M4)
+	Save ({key})	Zapisz ({key})
 	Document properties (⌘D)	Właściwości dokumentu (⌘D)
 	Find tools and commands	Znajdź narzędzia i polecenia
 	Fit to height	Dopasuj do wysokości
@@ -148,6 +158,7 @@
 	Next page	Następna strona
 	Previous page	Poprzednia strona
 	Current page — type a page number or label (such as iv) and press Enter	Bieżąca strona — wpisz numer lub etykietę strony (np. iv) i naciśnij Enter
+	Zoom — type a percentage and press Enter	Powiększenie — wpisz wartość procentową i naciśnij Enter
 	Welcome to PdfCraft	Witamy w PdfCraft
 	An open-source PDF workbench — local, private, and scriptable.	Otwarty zestaw narzędzi do PDF — lokalny, prywatny i obsługujący skrypty.
 	Join the ArtCraft community	Dołącz do społeczności ArtCraft
@@ -214,6 +225,9 @@
 	Add or edit links	Dodaj lub edytuj łącza
 	Create links from URLs	Utwórz łącza z adresów URL
 	Remove all links	Usuń wszystkie łącza
+	No links to remove	Brak łączy do usunięcia
+	Removed 1 link	Usunięto 1 łącze
+	Removed {n} links	Usunięte łącza: {n}
 	Add Bates numbering…	Dodaj numerację Batesa…
 	Add image…	Dodaj obraz…
 	Redact text and images	Utajnij tekst i obrazy
@@ -252,6 +266,7 @@
 	Optimize PDF…	Optymalizuj PDF…
 	Export to text…	Eksportuj do tekstu…
 	Export to Word…	Eksportuj do Worda…
+	Export to PowerPoint…	Eksportuj do PowerPointa…
 	Export to HTML…	Eksportuj do HTML…
 	Export to RTF…	Eksportuj do RTF…
 	JavaScript console…	Konsola JavaScript…
@@ -335,6 +350,7 @@
 	Create from	Utwórz z
 	Single file	Pojedynczy plik
 	Multiple files	Wiele plików
+	Separate PDFs	Osobne pliki PDF
 	Images	Obrazy
 	Clipboard	Schowek
 	Blank page	Pusta strona
@@ -351,6 +367,7 @@
 	Split	Podziel
 	More	Więcej
 	Set page boxes	Ustaw obszary strony
+	Set page transitions	Ustaw przejścia stron
 	Page labels	Etykiety stron
 	Page transitions	Przejścia stron
 	Add comments	Dodaj komentarze
@@ -563,6 +580,7 @@
 	Remove unused objects and merge identical ones	Usuń nieużywane obiekty i scal identyczne
 	Audit space usage…	Analiza wykorzystania miejsca…
 	Space Audit	Analiza miejsca
+	What takes up the space in this file, by kind of content.	Co zajmuje miejsce w tym pliku, według rodzaju zawartości.
 	Bytes	Bajty
 	Content Streams	Strumienie zawartości
 	X Object Forms	Obiekty Form XObject
@@ -687,6 +705,11 @@
 	of the following fields:	następujących pól:
 	Simplified field notation:	Uproszczony zapis pól:
 	Field names with + - * / and parentheses; put \\ before spaces in names.	Nazwy pól z + - * / i nawiasami; przed spacjami w nazwach wpisz \\.
+	Finding document fonts…	Wyszukiwanie czcionek dokumentu…
+	Installed fonts…	Zainstalowane czcionki…
+	Keep source fonts	Zachowaj czcionki źródłowe
+	Load font…	Wczytaj czcionkę…
+	No openly licensed document fonts found. Load a font file.	Nie znaleziono czcionek dokumentu na otwartej licencji. Wczytaj plik czcionki.
 	Format text	Formatuj tekst
 	Bold	Pogrubienie
 	Italic	Kursywa
@@ -694,7 +717,7 @@
 	Centre	Wyśrodkuj
 	Align right	Wyrównaj do prawej
 	Justify	Wyjustuj
-	Standard fonts; text outside Windows-1252 isn't supported yet.	Standardowe czcionki; tekst spoza Windows-1252 nie jest jeszcze obsługiwany.
+	Thai and Arabic use regular fallback fonts when available.	Tajski i arabski używają zwykłych czcionek zastępczych, gdy są dostępne.
 	Edit image	Edytuj obraz
 	Rotate counterclockwise	Obróć w lewo
 	Rotate clockwise	Obróć w prawo
@@ -736,6 +759,12 @@
 	Flip Vertical	Odbij w pionie
 	Replace Image…	Zastąp obraz…
 	Save Image As…	Zapisz obraz jako…
+	Copy Image	Kopiuj obraz
+	The image has been copied ({w} × {h} pixels)	Obraz został skopiowany ({w} × {h} pikseli)
+	Couldn't copy the image: {e}	Nie można skopiować obrazu: {e}
+	Copy Image in Original Format	Kopiuj obraz w oryginalnym formacie
+	The image has been copied as a {ext} file	Obraz został skopiowany jako plik {ext}
+	The page has changed; select the image again	Strona się zmieniła; zaznacz obraz ponownie
 	Check for updates	Sprawdź aktualizacje
 	No check has run yet.	Nie sprawdzono jeszcze aktualizacji.
 	Checking for a newer version…	Sprawdzanie dostępności nowszej wersji…
@@ -822,8 +851,15 @@
 	Windows store  ·  	Magazyn Windows  ·  
 	Issued by: 	Wystawca: 
 	, Expires: 	, Wygasa: 
+	Digitally signed by	Podpisany cyfrowo przez
+	DN: 	DN: 
+	Reason: 	Powód: 
+	Location: 	Lokalizacja: 
+	Date: 	Data: 
+	The labels are in English: the signature's font can't draw them in this language.	Etykiety są po angielsku: czcionka podpisu nie potrafi ich wyświetlić w tym języku.
 	No digital IDs yet.	Brak identyfikatorów cyfrowych.
 	Configure New Digital ID	Skonfiguruj nowy identyfikator cyfrowy
+	Remove "{name}" from this list? The file itself is not deleted.	Usunąć „{name}” z tej listy? Sam plik nie zostanie usunięty.
 	Continue	Kontynuuj
 	Configure a Digital ID for Signing	Skonfiguruj identyfikator cyfrowy do podpisywania
 	Use a Digital ID from a file	Użyj identyfikatora cyfrowego z pliku
@@ -844,6 +880,10 @@
 	The signature will be invisible.	Podpis będzie niewidoczny.
 	Distinguished name	Nazwa wyróżniająca
 	Labels	Etykiety
+	Graphic	Grafika
+	Signer's name	Nazwa podpisującego
+	Fill & Sign signature	Podpis z „Wypełnij i podpisz”
+	Choose image…	Wybierz obraz…
 	Permitted actions after certifying	Dozwolone działania po certyfikacji
 	No changes allowed	Zmiany niedozwolone
 	Annotations, form fill-in, and digital signatures	Adnotacje, wypełnianie formularzy i podpisy cyfrowe
@@ -1100,6 +1140,7 @@
 	Custom text:	Własny tekst:
 	Font:	Czcionka:
 	Font size:	Rozmiar czcionki:
+	Font size	Rozmiar czcionki
 	Auto-size text to fit redaction region	Dopasuj rozmiar tekstu do utajnianego obszaru
 	Font colour:	Kolor czcionki:
 	Repeat overlay text	Powtarzaj tekst nakładany
@@ -1199,6 +1240,8 @@
 	Searchable Image (Exact)	Obraz z możliwością wyszukiwania (dokładny)
 	Adds invisible text over each word; the page image is not changed	Dodaje niewidoczny tekst nad każdym słowem; obraz strony pozostaje bez zmian
 	Downsample to	Zmniejsz rozdzielczość do
+	Also recognize pages that already have text	Rozpoznaj także strony, które zawierają już tekst
+	Pictures on those pages are recognized too; words already in the page's text are not added again	Obrazy na tych stronach też są rozpoznawane; słowa, które już są w tekście strony, nie są dodawane ponownie
 	Text recognition isn't installed: its model files are missing. Reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them.	Rozpoznawanie tekstu nie jest zainstalowane: brakuje plików modeli. Zainstaluj PdfCraft ponownie lub ustaw PDFCRAFT_MODELS na folder zawierający te pliki.
 	Settings	Ustawienia
 	Optional	Opcjonalne
@@ -1238,6 +1281,7 @@
 	Copy text	Kopiuj tekst
 	Properties…	Właściwości…
 	Make Current Properties Default	Ustaw bieżące właściwości jako domyślne
+	Make Properties Default	Ustaw właściwości jako domyślne
 	More options	Więcej opcji
 	Sort by	Sortuj według
 	Author	Autor
@@ -1267,6 +1311,8 @@
 	Expand all bookmarks	Rozwiń wszystkie zakładki
 	Expand top-level bookmarks	Rozwiń zakładki najwyższego poziomu
 	Collapse all bookmarks	Zwiń wszystkie zakładki
+	Collapse all pages	Zwiń wszystkie strony
+	Expand all pages	Rozwiń wszystkie strony
 	New bookmark (⌘B)	Nowa zakładka (⌘B)
 	This document has no bookmarks.	Ten dokument nie zawiera zakładek.
 	This document has no layers.	Ten dokument nie zawiera warstw.
@@ -1359,6 +1405,9 @@
 	Sort comments by:	Sortuj komentarze według:
 	Create PDF Comment Summary	Utwórz podsumowanie komentarzy w PDF
 	Revert to the previously saved version of “{name}”? Changes since then can't be undone afterwards.	Przywrócić ostatnio zapisaną wersję „{name}”? Późniejszych zmian nie będzie można odzyskać.
+	Save over the changed file?	Zapisać na zmienionym pliku?
+	“{name}” changed on disk after it was opened or last saved. Saving now replaces that newer version with this one.	Plik „{name}” zmienił się na dysku po otwarciu lub ostatnim zapisie. Zapisanie teraz zastąpi tę nowszą wersję bieżącą.
+	Save anyway	Zapisz mimo to
 	Number pages	Ponumeruj strony
 	Style	Styl
 	None (prefix only)	Brak (tylko prefiks)
@@ -1500,7 +1549,7 @@
 	Couldn't optimize the file: {e}	Nie można zoptymalizować pliku: {e}
 	Couldn't write {path}: {e}	Nie można zapisać {path}: {e}
 	The form asks to be submitted to {u}; PdfCraft doesn't send form data. Save the document to keep your entries.	Formularz wymaga wysłania do {u}; PdfCraft nie wysyła danych formularza. Zapisz dokument, aby zachować wpisane dane.
-	{s} actions run in the JavaScript engine (M6)	Liczba akcji wykonywanych w silniku JavaScript (M6): {s}
+	This PDF uses the unsupported {s} action.	Ten PDF używa nieobsługiwanej akcji {s}.
 	{name}: the {other} action isn't supported yet	{name}: akcja {other} nie jest jeszcze obsługiwana
 	{name} submits the form to {url}; PdfCraft doesn't send form data. Save the document to keep your entries.	{name} wysyła formularz do {url}; PdfCraft nie wysyła danych formularza. Zapisz dokument, aby zachować wpisane dane.
 	Export stopped: {e}	Eksport zatrzymany: {e}
@@ -1562,6 +1611,8 @@
 	Sent to {printer}	Wysłano do {printer}
 	Sent to {printer}: {msg}	Wysłano do {printer}: {msg}
 	Looking for printers…	Wyszukiwanie drukarek…
+	Sending sheet {s} of {n} to {printer}…	Wysyłanie arkusza {s} z {n} do {printer}…
+	No printers were found. Check that the printer is installed and the print spooler is running, then open Print again.	Nie znaleziono drukarek. Sprawdź, czy drukarka jest zainstalowana, a bufor wydruku działa, i ponownie otwórz Drukuj.
 	Sending to {printer}…	Wysyłanie do {printer}…
 	Choose a folder for the searchable files	Wybierz folder dla plików z możliwością wyszukiwania
 	Files are combined from top to bottom. Leave Pages empty to take every page.	Pliki są łączone od góry do dołu. Pozostaw pole Strony puste, aby uwzględnić wszystkie strony.
@@ -1580,16 +1631,16 @@
 	Opened, but its security settings don't allow combining. Enter the permissions password.	Otwarto, ale ustawienia zabezpieczeń nie zezwalają na łączenie. Wpisz hasło uprawnień.
 	Unlocked: the combined file won't be password-protected	Odblokowano: połączony plik nie będzie chroniony hasłem
 	Unlocked {n} of {m} files	Odblokowano {n} z {m} plików
-	Drop PDFs or folders here, or choose them.	Upuść tutaj pliki PDF lub foldery albo wybierz je.
+	Drop PDFs, images, text files or folders here, or choose them.	Upuść tutaj pliki PDF, obrazy, pliki tekstowe lub foldery albo wybierz je.
 	Add folder…	Dodaj folder…
 	Add folder and subfolders…	Dodaj folder i podfoldery…
 	More ways to add files	Więcej sposobów dodawania plików
-	Every PDF in the folder	Każdy PDF w folderze
-	Every PDF in the folder and the folders inside it	Każdy PDF w folderze i jego podfolderach
+	Every PDF, image and text file in the folder	Każdy PDF, obraz i plik tekstowy w folderze
+	Every PDF, image and text file in the folder and the folders inside it	Każdy PDF, obraz i plik tekstowy w folderze i jego podfolderach
 	Add folder	Dodaj folder
 	Add folder and subfolders	Dodaj folder i podfoldery
-	No PDFs found in {folder}	Nie znaleziono plików PDF w {folder}
-	Added the first {n} PDFs in {folder}	Dodano pierwsze {n} plików PDF z {folder}
+	No PDFs, images or text files found in {folder}	Nie znaleziono plików PDF, obrazów ani plików tekstowych w {folder}
+	Added the first {n} files in {folder}	Dodano pierwsze {n} plików z {folder}
 	Click to sort, drag to move the column. Drag its edge to resize it.	Kliknij, aby sortować; przeciągnij, aby przenieść kolumnę. Przeciągnij jej krawędź, aby zmienić szerokość.
 	Reset columns	Zresetuj kolumny
 	Remove {n} files	Usuń pliki w liczbie {n}
@@ -1607,7 +1658,7 @@
 	{n} files need attention	Liczba plików wymagających uwagi: {n}
 	{name} can't be combined: {why}	Nie można połączyć {name}: {why}
 	Check the pages of {name}: {why}	Sprawdź strony {name}: {why}
-	Add the PDFs to combine	Dodaj pliki PDF do połączenia
+	Add the files to combine	Dodaj pliki do połączenia
 	File name	Nazwa pliku
 	Warnings	Ostrzeżenia
 	Drag to reorder	Przeciągnij, aby zmienić kolejność
@@ -1620,6 +1671,10 @@
 	Password-protected	Chroniony hasłem
 	Its security settings don't allow copying pages	Ustawienia zabezpieczeń nie zezwalają na kopiowanie stron
 	Can't be read: {e}	Nie można odczytać: {e}
+	Leave out files that can't be read?	Pominąć pliki, których nie można odczytać?
+	These files can't be read, so they won't be in the combined PDF:	Tych plików nie można odczytać, więc nie znajdą się w połączonym pliku PDF:
+	Combine the rest	Połącz pozostałe
+	and {n} more	i jeszcze {n}
 	Includes unsaved changes	Zawiera niezapisane zmiany
 	Pages of {name} to combine, e.g. 1-3, 6	Strony z {name} do połączenia, np. 1-3, 6
 	Remove {name}	Usuń {name}
@@ -1642,6 +1697,7 @@
 	Couldn't use {name}: {e}	Nie można użyć {name}: {e}
 	Couldn't extract pages: {e}	Nie można wyodrębnić stron: {e}
 	Couldn't write {name}: {e}	Nie można zapisać {name}: {e}
+	the name is not a plain file name	nazwa nie jest zwykłą nazwą pliku
 	Wrote 1 file to {dir}	Zapisano 1 plik w {dir}
 	Wrote {n} files to {dir}	Liczba plików zapisanych w {dir}: {n}
 	No pages match those choices	Żadna strona nie pasuje do wybranych opcji
@@ -1695,7 +1751,12 @@
 	watermark	znak wodny
 	background	tło
 	This document isn't password-protected	Ten dokument nie jest chroniony hasłem
-	Only the document's owner can change its security (open it with the permissions password)	Tylko właściciel dokumentu może zmienić zabezpieczenia (otwórz go przy użyciu hasła uprawnień)
+	Enter permissions password…	Wpisz hasło uprawnień…
+	Permissions password	Hasło uprawnień
+	“{name}” has security restrictions. Enter its permissions password to lift them.	Plik „{name}” ma ograniczenia zabezpieczeń. Wpisz jego hasło uprawnień, aby je znieść.
+	Restrictions lifted	Ograniczenia zniesione
+	Couldn't unlock {name}: {e}	Nie udało się odblokować pliku {name}: {e}
+	This document has no restrictions to lift	Ten dokument nie ma ograniczeń do zniesienia
 	The document's security settings don't allow this change	Ustawienia zabezpieczeń dokumentu nie zezwalają na tę zmianę
 	Open a document first	Najpierw otwórz dokument
 	Security will be removed when you save	Zabezpieczenia zostaną usunięte przy zapisie
@@ -1835,6 +1896,8 @@
 	{month} {y}	{month} {y}
 	Change {key}	Zmień {key}
 	Insert pages from {name}	Wstaw strony z {name}
+	Insert pages from {name} — 1 field renamed	Wstaw strony z {name} — zmieniono nazwę 1 pola
+	Insert pages from {name} — fields renamed	Wstaw strony z {name} — zmieniono nazwy pól
 	Fill in {name}	Wypełnij {name}
 	Set the image of {name}	Ustaw obraz pola {name}
 	Edit script of {name}	Edytuj skrypt pola {name}
@@ -1865,6 +1928,7 @@
 	Delete document JavaScript	Usuń JavaScript dokumentu
 	Edit document JavaScript	Edytuj JavaScript dokumentu
 	Edit text	Edytuj tekst
+	Load document font	Wczytaj czcionkę dokumentu
 	Move image	Przenieś obraz
 	Rotate image	Obróć obraz
 	Flip image	Odbij obraz
@@ -1982,7 +2046,10 @@
 	Couldn't import the signature image: {e}	Nie można zaimportować obrazu podpisu: {e}
 	Go to page…	Przejdź do strony…
 	Reopen the files that were open when PdfCraft last closed	Otwórz ponownie pliki otwarte przy ostatnim zamknięciu PdfCraft
+	The PDF text fonts can't draw “{c}” ({code}). Choose supported text.	Czcionki tekstu PDF nie obsługują znaku „{c}” ({code}). Wybierz obsługiwany tekst.
 	The standard fonts can't draw “{c}” ({code}). Only Western European characters can be added as text for now.	Standardowe czcionki nie obsługują znaku „{c}” ({code}). Na razie można dodawać tylko tekst ze znakami zachodnioeuropejskimi.
+	This field's font can't draw “{c}” ({code}), so PdfCraft shows ? in its place. The value is saved, and other PDF viewers redraw the field from it.	Czcionka tego pola nie obsługuje znaku „{c}” ({code}), więc PdfCraft wyświetla w jego miejscu ?. Wartość została zapisana, a inne przeglądarki PDF odrysują pole na jej podstawie.
+	The fonts PdfCraft writes with can't draw “{c}” ({code}), so it shows as ? in every PDF viewer. The text is saved.	Czcionki, którymi pisze PdfCraft, nie obsługują znaku „{c}” ({code}), więc w każdej przeglądarce PDF w jego miejscu widać ?. Tekst został zapisany.
 	Open arrow	Otwarta strzałka
 	Closed arrow	Zamknięta strzałka
 	Butt	Poprzeczna kreska
@@ -2108,6 +2175,7 @@
 	−Bin	−Bin
 	−LOC	−LOC
 @plural	{n} field|{n} fields	{n} pole|{n} pola|{n} pól
+@plural	{n} field name collides with earlier files and will be renamed: {list}|{n} field names collide with earlier files and will be renamed: {list}	Nazwa {n} pola koliduje z wcześniejszymi plikami i zostanie zmieniona: {list}|Nazwy {n} pól kolidują z wcześniejszymi plikami i zostaną zmienione: {list}|{n} nazw pól koliduje z wcześniejszymi plikami i zostanie zmienionych: {list}
 @plural	{n} page|{n} pages	{n} strona|{n} strony|{n} stron
 signature pad	Type	Wpisz
 	Flatten Fill & Sign when saving	Spłaszczaj elementy Wypełnij i podpisz przy zapisie
@@ -2222,3 +2290,155 @@ key	Space	Spacja
 	The historical model detects its supported scripts automatically; Japanese is not included.	Model historyczny automatycznie wykrywa obsługiwane pisma; język japoński nie jest uwzględniony.
 	Historical handwriting (Kurrent)	Historyczne pismo odręczne (kurrent)
 	Handwriting requires upright horizontal lines in one text column. Columns, tables and marginal notes are not supported.	Pismo odręczne wymaga prawidłowo obróconych poziomych wierszy w jednej kolumnie. Wiele kolumn, tabele i notatki na marginesach nie są obsługiwane.
+	Reload documents when their files change on disk	Wczytuj ponownie dokumenty, gdy ich pliki zmienią się na dysku
+	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	Ten plik zmienił się na dysku. Wczytaj ponownie pokazuje nową wersję i odrzuca niezapisane zmiany; Zapisz zastępuje ją tą wersją.
+	Reload	Wczytaj ponownie
+	Couldn't reload {name}: {e}	Nie można ponownie wczytać {name}: {e}
+	Select page {label}	Wybierz stronę {label}
+	Rotate page {label} counterclockwise	Obróć stronę {label} w lewo
+	Rotate page {label} clockwise	Obróć stronę {label} w prawo
+	Delete page {label}	Usuń stronę {label}
+	Scroll speed (mouse wheel and arrow keys)	Szybkość przewijania (kółko myszy i klawisze strzałek)
+scroll speed	Slow	Wolna
+scroll speed	Normal	Normalna
+scroll speed	Fast	Szybka
+	Animation effects	Efekty animacji
+animation effects	On	Włączone
+animation effects	Off	Wyłączone
+	Enhance camera image	Popraw zdjęcie z aparatu
+	Drag the corners onto the document's edges, then choose Enhance page.	Przeciągnij narożniki na krawędzie dokumentu, a następnie wybierz Popraw stronę.
+	Enhance page	Popraw stronę
+	Clean-up	Oczyszczanie
+	Original	Oryginał
+	Greyscale	Skala szarości
+	Black and white	Czarno-biały
+	This printer's driver doesn't take two-sided settings from other programs, so its own setting applies. Change it in Properties…	Sterownik tej drukarki nie przyjmuje ustawień druku dwustronnego z innych programów, więc obowiązuje jego własne ustawienie. Zmień je w oknie Właściwości…
+	Browser's print dialog	Okno drukowania przeglądarki
+	Copies, two-sided printing and colour are chosen in the browser's print dialog.	Liczbę kopii, druk dwustronny i kolor wybiera się w oknie drukowania przeglądarki.
+	Preparing {n} sheets for printing…	Przygotowywanie arkuszy do druku: {n}…
+	Preparing sheet {done} of {total} for printing…	Przygotowywanie arkusza {done} z {total} do druku…
+	Opening the browser's print dialog…	Otwieranie okna drukowania przeglądarki…
+	Couldn't print from the browser ({e}); downloaded {name} to print instead	Nie można drukować z przeglądarki ({e}); zamiast tego pobrano plik {name} do wydruku
+	Tools panel side	Strona panelu narzędzi
+	Add comment	Dodaj komentarz
+	Change tag properties	Zmień właściwości znacznika
+# Accessibility structure tags.
+	Tags panel	Panel znaczników
+	Tags	Znaczniki
+	Tag type	Typ znacznika
+	Actual text	Tekst rzeczywisty
+	Find a tag	Znajdź znacznik
+	Collapse tag	Zwiń znacznik
+	Expand tag	Rozwiń znacznik
+	Revert changes	Cofnij zmiany
+	Save tag properties	Zapisz właściwości znacznika
+	This document has no editable structure tags.	Ten dokument nie ma edytowalnych znaczników struktury.
+	{n} tags	{n} znaczników
+	Save or revert changes before selecting another tag.	Zapisz lub cofnij zmiany przed wybraniem innego znacznika.
+	Left out: {names}	Pominięto: {names}
+	already a PDF	to już jest PDF
+	no unused output name	brak wolnej nazwy pliku wyjściowego
+	no output folder was chosen	nie wybrano folderu wyjściowego
+@plural	Downloaded {n} PDF|Downloaded {n} PDFs	Pobrano {n} plik PDF|Pobrano {n} pliki PDF|Pobrano {n} plików PDF
+	Scan	Skanuj
+	Sign a sheet of white paper and take a photo of it in bright, even light (use the flash). Choose the photo or drop it here: PdfCraft finds the signature and removes the paper.	Podpisz się na białej kartce i zrób jej zdjęcie przy jasnym, równomiernym świetle (użyj lampy błyskowej). Wybierz zdjęcie lub upuść je tutaj: PdfCraft znajdzie podpis i usunie papier.
+	Choose photo…	Wybierz zdjęcie…
+	No photo chosen	Nie wybrano zdjęcia
+	Photo	Zdjęcie
+	Ink sensitivity	Czułość na atrament
+	No signature was found in the frame. Move the frame over the signature or raise the ink sensitivity.	W ramce nie znaleziono podpisu. Przesuń ramkę na podpis lub zwiększ czułość na atrament.
+	Couldn't use the photo: {e}	Nie można użyć zdjęcia: {e}
+
+# PDF tab context menu (#1233)
+	Close Tab	Zamknij kartę
+	Reopen Closed Tab	Otwórz ponownie zamkniętą kartę
+	Reveal in Finder	Pokaż w Finderze
+	Reveal in File Explorer	Pokaż w Eksploratorze plików
+	Other colour…	Inny kolor…
+	Recent colours	Ostatnie kolory
+	Reading colours	Kolory do czytania
+	Replace document colours	Zastąp kolory dokumentu
+	Page background	Tło strony
+	Only change the colour of black text or line art	Zmieniaj kolor tylko czarnego tekstu lub grafiki liniowej
+	Change the colour of line art as well as text	Zmieniaj kolor grafiki liniowej, a nie tylko tekstu
+	Colours are remapped while rendering; the document itself never changes.	Kolory są zmieniane podczas renderowania; sam dokument nigdy się nie zmienia.
+	Black on white	Czarny na białym
+	White on black	Biały na czarnym
+	Yellow on black	Żółty na czarnym
+	Green on black	Zielony na czarnym
+	Couldn't follow linked PDF: {reason}	Nie można otworzyć połączonego pliku PDF: {reason}
+	The linked PDF opened, but its named destination was not applied.	Połączony plik PDF został otwarty, ale jego nazwany cel nie został zastosowany.
+	The linked PDF opened, but its page destination was out of range.	Połączony plik PDF został otwarty, ale jego strona docelowa jest poza zakresem.
+	Local cross-PDF links require the desktop app	Lokalne łącza między plikami PDF wymagają aplikacji komputerowej
+	The existing action will be preserved.	Istniejąca akcja zostanie zachowana.
+	This form's scripts are turned off because one ran too long. Reopen the document to run them again.	Skrypty tego formularza są wyłączone, ponieważ jeden z nich działał zbyt długo. Otwórz dokument ponownie, aby znów je uruchomić.
+	Cut Image	Wytnij obraz
+	Redact Image	Utajnij obraz
+	Create Link…	Utwórz łącze…
+	Recognize Text…	Rozpoznaj tekst…
+	Minimize	Zminimalizuj
+	Maximize	Zmaksymalizuj
+	Restore	Przywróć
+	Use system title bar	Używaj systemowego paska tytułu
+	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	Pokazuj prosty pasek tytułu z przyciskami okna zamiast paska kart. GNOME nie rysuje pasków tytułu dla aplikacji, więc ten nie pasuje do jego motywu.
+
+# Absolute local GoToR confirmation (#1364).
+	Allow	Zezwól
+	Only allow this if you trust the source document.	Zezwól na to tylko wtedy, gdy ufasz dokumentowi źródłowemu.
+	Open in Full Screen mode?	Otworzyć w trybie pełnoekranowym?
+	This document asks to open in Full Screen mode: the page fills the screen and nothing else shows. Press Esc at any time to leave it.	Ten dokument prosi o otwarcie w trybie pełnoekranowym: strona wypełnia ekran i nic innego nie jest widoczne. Naciśnij Esc w dowolnej chwili, aby go opuścić.
+	Full Screen	Pełny ekran
+	Not now	Nie teraz
+	Open this local PDF?	Otworzyć ten lokalny plik PDF?
+	This document is trying to open a local file:	Ten dokument próbuje otworzyć plik lokalny:
+	Move tag earlier	Przenieś znacznik wcześniej
+	Move tag later	Przenieś znacznik później
+	Straighten scanned page	Wyprostuj zeskanowaną stronę
+	Turn upside down (180°)	Obróć do góry nogami (180°)
+	4 x 6 in label (101.6 x 152.4 mm)	Etykieta 4 × 6 cali (101,6 × 152,4 mm)
+	Cuts each page to its printed area, turns it upright and fits it to the sheet without stretching. One label per sheet.	Przycina każdą stronę do zadrukowanego obszaru, obraca ją pionowo i dopasowuje do arkusza bez rozciągania. Jedna etykieta na arkusz.
+	Find untagged content	Znajdź nieoznaczoną zawartość
+	No untagged content was found.	Nie znaleziono nieoznaczonej zawartości.
+	Found {n} untagged content problems.	Znaleziono problemów z nieoznaczoną zawartością: {n}.
+	Tag form fields	Oznacz pola formularza
+	Mark as artifact	Oznacz jako artefakt
+	Remove this leaf tag from reading order and mark its direct content as an artifact	Usuń ten znacznik liścia z kolejności odczytu i oznacz jego bezpośrednią zawartość jako artefakt
+	Mark content as artifact	Oznacz zawartość jako artefakt
+	Word count	Liczba słów
+	Current page only	Tylko bieżąca strona
+	Exclude tagged tables	Wyklucz oznaczone tabele
+	Exclude tagged code blocks	Wyklucz oznaczone bloki kodu
+	Exclude image/OCR text	Wyklucz tekst obrazów/OCR
+	Exclusions use PDF tags. Untagged tables and code remain included. Image exclusion also removes invisible text.	Wykluczenia używają znaczników PDF. Nieoznaczone tabele i kod nadal są uwzględniane. Wykluczenie obrazów usuwa również niewidoczny tekst.
+	Words	Słowa
+	Characters	Znaki
+	Characters without spaces	Znaki bez spacji
+	Pages counted	Policzone strony
+	Some pages contain no countable text. Scanned images need OCR first.	Niektóre strony nie zawierają tekstu do policzenia. Zeskanowane obrazy wymagają najpierw OCR.
+	Some content could not be classified safely and was kept in the count.	Części treści nie udało się wiarygodnie sklasyfikować, więc pozostała uwzględniona w liczbie.
+	Counting words… {n} pages read	Liczenie słów… odczytane strony: {n}
+	Word counting stopped unexpectedly.	Liczenie słów zostało nieoczekiwanie przerwane.
+	Word count…	Liczba słów…
+@id	file.word_count	Liczba słów…
+	Standard	Standardowe
+	Mobile	Urządzenie mobilne
+	Merge image fragments	Scal fragmenty obrazów
+	Optimizing… merging image fragments	Optymalizacja… scalanie fragmentów obrazów
+	Side by side	Obok siebie
+	New file only	Tylko nowy plik
+	Old file: {name}	Stary plik: {name}
+	New file: {name}	Nowy plik: {name}
+	Print as image	Drukuj jako obraz
+	Resolution:	Rozdzielczość:
+	Use it when a printer skips text, shading or transparency. The print is no longer searchable text; with Print in grayscale, the pictures are grey.	Użyj, gdy drukarka pomija tekst, cieniowanie lub przezroczystość. Wydruk nie jest już tekstem do przeszukiwania; przy druku w skali szarości obrazy są szare.
+	Crop Image	Przytnij obraz
+	Remove Crop	Usuń przycięcie
+	Trim the picture with its handles; Enter or Done applies	Przytnij obraz uchwytami; Enter lub Gotowe stosuje
+	Redaction mark appearance	Wygląd znacznika redakcji
+	Outline colour:	Kolor obrysu:
+	Fill colour:	Kolor wypełnienia:
+	Shown while the pointer is over a mark.	Widoczny, gdy wskaźnik jest nad znacznikiem.
+	Opacity:	Krycie:
+	Make properties default	Ustaw właściwości jako domyślne
+	Pages selected	Zaznaczone strony
+	Page properties	Właściwości strony

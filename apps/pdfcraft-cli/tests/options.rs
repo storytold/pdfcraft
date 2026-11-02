@@ -15,6 +15,8 @@ fn non_edit_commands_reject_unknown_options_before_io() {
         vec!["render", "missing.pdf", "--dppi", "96", "--out", "out.png"],
         vec!["check-one", "missing.pdf", "--edti"],
         vec!["check", "missing.pdf", "--timout", "2"],
+        vec!["audit", "missing.pdf", "--passwrod", "x"],
+        vec!["audit", "missing.pdf", "--nonsense", "1"],
         vec!["run", "doc_open", "--roto", "/tmp"],
         vec!["ui", "--contro", "control.json", "state"],
     ] {

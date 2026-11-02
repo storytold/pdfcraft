@@ -119,10 +119,30 @@ neither the MSI nor the portable zip needs the Visual C++ redistributable.
   this.
 - `installer-ui.wxs` supplies native welcome, maintenance, progress, files-in-use and outcome
   dialogs. Full UI confirms success with Finish; failures and cancellations have distinct messages.
-  The welcome dialog has a "Create a desktop shortcut" checkbox, ticked by default. `/qn` and `/qb`
-  stay unattended and create the desktop shortcut unless `INSTALLDESKTOPSHORTCUT=0` is passed.
-- `test-msi.ps1 <file.msi>` checks the compiled shortcut and dialog tables. Packaging runs it in a
-  child process before signing, so the MSI isn't held open when signtool runs. The ARM64 install
+  The welcome dialog has a "Create a desktop shortcut" checkbox and an "Edit with PdfCraft"
+  right-click menu checkbox, both ticked by default. `/qn` and `/qb` stay unattended and create
+  both unless `INSTALLDESKTOPSHORTCUT=0` or `INSTALLPDFCONTEXTMENU=0` is passed;
+  `INSTALLIMAGECONTEXTMENU=0` (no checkbox) leaves out the image menu. An update (the launcher runs
+  `msiexec /passive` with no properties) keeps the desktop shortcut only if `PdfCraft.lnk` is still
+  on the all-users desktop, so deleting it once keeps it away (#1058), and keeps each menu only if
+  its key path is still in HKLM (#305). Both are AppSearch results read before the old version is
+  removed. An update from a release that didn't have a menu yet (before 0.7.1 for the PDF menu,
+  before 0.4.0 for the image menu, found by `OnlyDetect` Upgrade rows) adds it like a first install.
+  A value given on the command line wins.
+- The PDF right-click entry (#682) is a classic verb under
+  `HKLM\Software\Classes\SystemFileAssociations\.pdf\shell\PdfCraft.Edit`, so it shows whichever app
+  is the default for `.pdf` and never changes that default. Several selected PDFs (up to 15, the
+  limit for a `Document` verb) start one `pdfcraft.exe "<file>"` each, and the single-instance
+  hand-off opens them as tabs. On Windows 11 it is under "Show more options"; a first-level entry
+  needs an `IExplorerCommand` handler and package identity (a sparse MSIX package), which the MSI
+  doesn't have.
+- The image right-click entry (#190) is the same kind of verb, `PdfCraft.CreatePdf`, for ten image
+  types, in its own component (`PdfcraftImageContextMenu`) since it became optional. Its rows moved
+  out of `PdfcraftApp`; that's safe because `MajorUpgrade` removes the old version before installing
+  the new one (`afterInstallValidate`), which `test-msi.ps1` checks.
+- `test-msi.ps1 <file.msi>` checks the compiled shortcut, context-menu and dialog tables, and
+  evaluates the first-install and update conditions of the desktop shortcut and both menus. Packaging
+  runs it in a child process before signing, so the MSI isn't held open when signtool runs. The ARM64 install
   smoke test checks that both all-users shortcuts point at the installed `pdfcraft.exe` and are
   removed on uninstall, and that `INSTALLDESKTOPSHORTCUT=0` skips the desktop one.
 - The portable zip holds both executables, the README, the licences, the OFL licence of each

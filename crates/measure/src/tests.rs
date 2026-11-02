@@ -1,30 +1,18 @@
 use super::*;
 use pdfcraft_cos::{SaveOptions, write_full};
+use pdfcraft_testkit::Pdf;
 use std::sync::Arc;
 fn fixture(content: &str, attrs: &str, extra: &[&str]) -> Document {
     fixture_with("4 0 R", content, attrs, extra)
 }
 fn fixture_with(contents: &str, content: &str, attrs: &str, extra: &[&str]) -> Document {
-    let mut objects = vec![
-        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
-        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>".into(),
-        format!("<< /Type /Page /Parent 2 0 R /Contents {contents} /Resources << /XObject << /Nested 5 0 R >> >> {attrs} >>"),
-        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
-    ];
-    objects.extend(extra.iter().map(|s| s.to_string()));
-    let mut bytes = b"%PDF-1.7\n".to_vec();
-    let mut offsets = Vec::new();
-    for (i, o) in objects.iter().enumerate() {
-        offsets.push(bytes.len());
-        bytes.extend(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
-    }
-    let xref = bytes.len();
-    bytes.extend(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).as_bytes());
-    for o in offsets {
-        bytes.extend(format!("{o:010} 00000 n \n").as_bytes());
-    }
-    bytes.extend(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1).as_bytes());
-    Document::open(Arc::new(bytes)).unwrap()
+    let pdf = Pdf::new()
+        .obj("<< /Type /Catalog /Pages 2 0 R >>")
+        .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>")
+        .obj(format!("<< /Type /Page /Parent 2 0 R /Contents {contents} /Resources << /XObject << /Nested 5 0 R >> >> {attrs} >>"))
+        .stream("", content)
+        .objs(extra);
+    Document::open(Arc::new(pdf.build())).unwrap()
 }
 fn close(a: f64, b: f64) {
     assert!((a - b).abs() < 1e-8, "{a} != {b}");
@@ -150,6 +138,39 @@ fn snap_paths_endpoints_midpoints_and_intersections() {
     assert!(paths.snap([200.0, 200.0], 3.0, opts).unwrap().is_none());
     assert!(paths.snap([f64::NAN, 0.0], 3.0, opts).is_err());
 }
+#[test]
+fn filled_open_subpath_offers_the_same_snap_edges_as_explicit_close() {
+    let open = fixture("40 50 m 160 50 l 100 170 l f", "", &[]);
+    let closed = fixture("40 50 m 160 50 l 100 170 l h f", "", &[]);
+    let stroke = fixture("40 50 m 160 50 l 100 170 l S", "", &[]);
+    let filled = snap::geometry(&open, 0).unwrap();
+    let explicit = snap::geometry(&closed, 0).unwrap();
+    let stroked = snap::geometry(&stroke, 0).unwrap();
+
+    assert_eq!(filled.segments, explicit.segments);
+    assert_eq!(filled.segments.len(), 3);
+    assert_eq!(stroked.segments.len(), 2);
+    let paths_only = snap::SnapOptions { endpoints: false, midpoints: false, intersections: false, paths: true };
+    let hit = filled.snap([55.0, 80.0], 5.0, paths_only).unwrap().unwrap();
+    assert_eq!(hit.kind, snap::SnapKind::Path);
+    assert_eq!(hit.point, [55.0, 80.0]);
+    assert!(stroked.snap([55.0, 80.0], 5.0, paths_only).unwrap().is_none());
+}
+
+#[test]
+fn fills_close_all_open_subpaths_but_strokes_do_not() {
+    let triangles = "0 0 m 20 0 l 10 20 l 40 0 m 60 0 l 50 20 l";
+    for paint in ["f", "F", "f*", "B", "B*", "b", "b*"] {
+        let doc = fixture(&format!("{triangles} {paint}"), "", &[]);
+        let geometry = snap::geometry(&doc, 0).unwrap();
+        assert_eq!(geometry.segments.len(), 6, "{paint}");
+        assert!(geometry.segments.contains(&[[10.0, 20.0], [0.0, 0.0]]), "{paint}");
+        assert!(geometry.segments.contains(&[[50.0, 20.0], [40.0, 0.0]]), "{paint}");
+    }
+    let stroked = fixture(&format!("{triangles} S"), "", &[]);
+    assert_eq!(snap::geometry(&stroked, 0).unwrap().segments.len(), 4);
+}
+
 #[test]
 fn nested_forms_transforms_curves_and_cycles_are_bounded() {
     let body = "0 0 m 10 0 l S 0 0 m 0 10 10 10 10 0 c S /Nested Do";

@@ -11,7 +11,7 @@ use crate::{Compression, ImageSettings, OptimizeError, Report, Settings, Stage};
 const MAX_PIXELS: u64 = 80_000_000;
 
 /// The resources of a page, inherited from the page tree if the page has none.
-fn page_resources(doc: &Document, page: ObjRef) -> Option<Dict> {
+pub(crate) fn page_resources(doc: &Document, page: ObjRef) -> Option<Dict> {
     let mut node = Some(page);
     for _ in 0..64 {
         let d = doc.get(node?).as_dict()?.clone();
@@ -23,7 +23,7 @@ fn page_resources(doc: &Document, page: ObjRef) -> Option<Dict> {
     None
 }
 
-fn content_bytes(doc: &Document, contents: &Object) -> Vec<u8> {
+pub(crate) fn content_bytes(doc: &Document, contents: &Object) -> Vec<u8> {
     match &*doc.resolve(contents) {
         Object::Stream(s) => s.decoded().unwrap_or_default(),
         Object::Array(a) => a
@@ -41,77 +41,127 @@ fn content_bytes(doc: &Document, contents: &Object) -> Vec<u8> {
     }
 }
 
-/// Walk one content stream, recording each image's displayed resolution (pixels per inch, the
-/// smaller of the two axes) and descending into form XObjects.
-fn walk(doc: &Document, data: &[u8], resources: &Dict, ctm: Matrix, depth: usize, seen: &mut HashSet<ObjRef>, out: &mut HashMap<ObjRef, f64>) {
-    if depth > 12 {
-        return;
-    }
-    let xobjects = resources.get(b"XObject").map(|x| doc.resolve(x)).and_then(|x| x.as_dict().cloned()).unwrap_or_default();
-    let mut stack = vec![ctm];
-    for op in pdfcraft_content::parse(data).ops {
-        let top = stack.last().copied().unwrap_or(ctm);
-        match op.op.as_slice() {
-            b"q" => stack.push(top),
-            b"Q" if stack.len() > 1 => {
-                stack.pop();
-            }
-            b"cm" => {
-                if let Some(m) = Matrix::from_operands(&op.operands)
-                    && let Some(t) = stack.last_mut()
-                {
-                    *t = m.then(&top);
+/// Forms nested deeper than this aren't followed.
+const MAX_FORM_DEPTH: usize = 12;
+/// Walks of a form already walked once (other scale or caller) before the measurement gives up.
+/// Each form's first walk is free: their number is bounded by the file's object count.
+const MAX_REWALKS: usize = 100_000;
+
+/// State of one [`effective_resolutions`] pass.
+struct Walk<'a> {
+    doc: &'a Document,
+    /// The forms being walked right now, outermost first: a form drawing one of these is a cycle.
+    path: Vec<ObjRef>,
+    /// Forms with their own resources already walked, by the linear part of their matrix. Drawing
+    /// one again at the same scale (only moved) can't change any image's resolution.
+    walked: HashSet<(ObjRef, [u64; 4])>,
+    /// Forms walked at least once.
+    seen: HashSet<ObjRef>,
+    rewalks: usize,
+    /// False once a use may have been missed (depth or work limit).
+    complete: bool,
+    out: HashMap<ObjRef, f64>,
+}
+
+impl Walk<'_> {
+    /// Walk one content stream, recording each image's displayed resolution (pixels per inch, the
+    /// smaller of the two axes) and descending into form XObjects.
+    fn content(&mut self, data: &[u8], resources: &Dict, ctm: Matrix) {
+        let doc = self.doc;
+        let xobjects = resources.get(b"XObject").map(|x| doc.resolve(x)).and_then(|x| x.as_dict().cloned()).unwrap_or_default();
+        let mut stack = vec![ctm];
+        for op in pdfcraft_content::parse(data).ops {
+            let top = stack.last().copied().unwrap_or(ctm);
+            match op.op.as_slice() {
+                b"q" => stack.push(top),
+                b"Q" if stack.len() > 1 => {
+                    stack.pop();
                 }
-            }
-            b"Do" => {
-                let Some(name) = op.name(0) else { continue };
-                let Some(r) = xobjects.get(name).and_then(Object::as_ref) else { continue };
-                let obj = doc.get(r);
-                let Object::Stream(s) = &*obj else { continue };
-                match s.dict.name(b"Subtype") {
-                    Some(b"Image") => {
-                        let (w, h) = (s.dict.int(b"Width").unwrap_or(0) as f64, s.dict.int(b"Height").unwrap_or(0) as f64);
-                        let [a, b, c, d, ..] = top.0;
-                        let (sx, sy) = ((a * a + b * b).sqrt(), (c * c + d * d).sqrt());
-                        if w > 0.0 && h > 0.0 && sx > 1e-6 && sy > 1e-6 {
-                            let ppi = (w / (sx / 72.0)).min(h / (sy / 72.0));
-                            let e = out.entry(r).or_insert(f64::INFINITY);
-                            *e = e.min(ppi);
-                        }
+                b"cm" => {
+                    if let Some(m) = Matrix::from_operands(&op.operands)
+                        && let Some(t) = stack.last_mut()
+                    {
+                        *t = m.then(&top);
                     }
-                    Some(b"Form") => {
-                        if !seen.insert(r) && depth > 4 {
-                            continue;
-                        }
-                        let m = s.dict.get(b"Matrix").map(|m| doc.resolve(m)).and_then(|m| m.as_array().map(|a| Matrix::from_operands(a))).flatten();
-                        let res =
-                            s.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_else(|| resources.clone());
-                        let inner = m.unwrap_or(Matrix([1.0, 0.0, 0.0, 1.0, 0.0, 0.0])).then(&top);
-                        walk(doc, &s.decoded().unwrap_or_default(), &res, inner, depth + 1, seen, out);
-                    }
-                    _ => {}
                 }
+                b"Do" => {
+                    let Some(name) = op.name(0) else { continue };
+                    let Some(r) = xobjects.get(name).and_then(Object::as_ref) else { continue };
+                    let obj = doc.get(r);
+                    let Object::Stream(s) = &*obj else { continue };
+                    match s.dict.name(b"Subtype") {
+                        Some(b"Image") => {
+                            let (w, h) = (s.dict.int(b"Width").unwrap_or(0) as f64, s.dict.int(b"Height").unwrap_or(0) as f64);
+                            let [a, b, c, d, ..] = top.0;
+                            let (sx, sy) = ((a * a + b * b).sqrt(), (c * c + d * d).sqrt());
+                            if w > 0.0 && h > 0.0 && sx > 1e-6 && sy > 1e-6 {
+                                let ppi = (w / (sx / 72.0)).min(h / (sy / 72.0));
+                                let e = self.out.entry(r).or_insert(f64::INFINITY);
+                                *e = e.min(ppi);
+                            }
+                        }
+                        Some(b"Form") => self.form(r, s, resources, top),
+                        _ => {}
+                    }
+                }
+                _ => {}
             }
-            _ => {}
         }
+    }
+
+    /// Descend into form `r` drawn with `ctm` from a stream whose resources are `resources`.
+    fn form(&mut self, r: ObjRef, s: &Stream, resources: &Dict, ctm: Matrix) {
+        if self.path.contains(&r) {
+            return;
+        }
+        if self.path.len() >= MAX_FORM_DEPTH {
+            self.complete = false;
+            return;
+        }
+        let doc = self.doc;
+        let m = s.dict.get(b"Matrix").map(|m| doc.resolve(m)).and_then(|m| m.as_array().map(|a| Matrix::from_operands(a))).flatten();
+        let inner = m.unwrap_or(Matrix([1.0, 0.0, 0.0, 1.0, 0.0, 0.0])).then(&ctm);
+        let own = s.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned());
+        // A form without resources uses its caller's, so the same form can draw other images.
+        if own.is_some() {
+            let [a, b, c, d, ..] = inner.0;
+            if !self.walked.insert((r, [a.to_bits(), b.to_bits(), c.to_bits(), d.to_bits()])) {
+                return;
+            }
+        }
+        if !self.seen.insert(r) {
+            if self.rewalks >= MAX_REWALKS {
+                self.complete = false;
+                return;
+            }
+            self.rewalks += 1;
+        }
+        self.path.push(r);
+        self.content(&s.decoded().unwrap_or_default(), own.as_ref().unwrap_or(resources), inner);
+        self.path.pop();
     }
 }
 
 /// The effective resolution (ppi) of every image drawn by `pages`: the smallest over its uses.
+///
+/// If forms nest too deeply or are drawn too many times to measure every use, every image is
+/// given `INFINITY` (never resampled), since its largest use may be among those missed.
 pub fn effective_resolutions(doc: &Document, pages: &[ObjRef]) -> HashMap<ObjRef, f64> {
-    let mut out = HashMap::new();
-    let mut seen = HashSet::new();
+    let mut walk = Walk { doc, path: Vec::new(), walked: HashSet::new(), seen: HashSet::new(), rewalks: 0, complete: true, out: HashMap::new() };
     for p in pages {
         let Some(d) = doc.get(*p).as_dict().cloned() else { continue };
         let Some(contents) = d.get(b"Contents") else { continue };
         let res = page_resources(doc, *p).unwrap_or_default();
-        walk(doc, &content_bytes(doc, contents), &res, Matrix([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]), 0, &mut seen, &mut out);
+        walk.content(&content_bytes(doc, contents), &res, Matrix([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]));
     }
-    out
+    if !walk.complete {
+        walk.out.values_mut().for_each(|v| *v = f64::INFINITY);
+    }
+    walk.out
 }
 
 /// Colour components of a colour space PdfCraft resamples: gray (1) or RGB (3).
-fn components(doc: &Document, cs: &Object) -> Option<usize> {
+pub(crate) fn components(doc: &Document, cs: &Object) -> Option<usize> {
     let cs = doc.resolve(cs);
     match &*cs {
         Object::Name(n) => match n.as_slice() {
@@ -179,7 +229,7 @@ fn is_dct(s: &Stream) -> Option<bool> {
 }
 
 /// 8-bit samples of an image (`n` components), decoded.
-fn pixels(s: &Stream, n: usize) -> Option<Vec<u8>> {
+pub(crate) fn pixels(s: &Stream, n: usize) -> Option<Vec<u8>> {
     let (w, h) = (s.dict.int(b"Width")? as usize, s.dict.int(b"Height")? as usize);
     if is_dct(s)? {
         let img = image::load_from_memory_with_format(&s.raw, image::ImageFormat::Jpeg).ok()?;
@@ -192,7 +242,7 @@ fn pixels(s: &Stream, n: usize) -> Option<Vec<u8>> {
     }
 }
 
-fn resample(px: &[u8], n: usize, w: u32, h: u32, nw: u32, nh: u32) -> Option<Vec<u8>> {
+pub(crate) fn resample(px: &[u8], n: usize, w: u32, h: u32, nw: u32, nh: u32) -> Option<Vec<u8>> {
     use image::imageops::{FilterType, resize};
     Some(match n {
         1 => resize(&image::GrayImage::from_raw(w, h, px.to_vec())?, nw, nh, FilterType::CatmullRom).into_raw(),
@@ -206,6 +256,13 @@ fn jpeg(px: &[u8], n: usize, w: u32, h: u32, quality: u8) -> Option<Vec<u8>> {
     let ty = if n == 1 { image::ExtendedColorType::L8 } else { image::ExtendedColorType::Rgb8 };
     enc.encode(px, w, h, ty).ok()?;
     Some(out)
+}
+
+/// Whether [`pixels`] reads `s` as it is drawn: a codec it decodes and no decode array that
+/// changes anything. `None` when the colour space isn't grey or RGB.
+pub(crate) fn decodable(doc: &Document, s: &Stream) -> Option<bool> {
+    let n = components(doc, s.dict.get(b"ColorSpace")?)?;
+    Some(is_dct(s).is_some() && s.dict.get(b"Decode").is_none_or(|d| is_identity_decode(doc, d, n)))
 }
 
 /// Whether `decode` is the default decode array for `n` components ([0 1] each), which changes

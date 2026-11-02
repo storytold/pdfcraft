@@ -94,6 +94,17 @@ fn util_printf_printd_and_printx() {
     assert_eq!(o.value, "1,234,567.89|00042|hi|FF|1.234,50|Jan 5, 2024 09:07|Friday|(555) 123-4567|ABC");
 }
 
+#[test]
+fn printd_escapes_multibyte_chars() {
+    let o = go(
+        "event.value = [util.printd('yyyy \\\\é', new Date(2024, 0, 5)), util.printd('\\\\€ yyyy', new Date(2024, 0, 5)), \
+         util.printd('\\\\y yyyy', new Date(2024, 0, 5))].join('|');",
+        &Event::field("Calculate", "total", ""),
+    );
+    assert_eq!(o.error, None);
+    assert_eq!(o.value, "2024 é|€ 2024|y 2024");
+}
+
 fn assert_printf_error(script: &str, message: &str) {
     let o = go(script, &Event::doc("Open"));
     assert!(o.error.as_deref().is_some_and(|e| e.starts_with(message)), "{script}: {:?}", o.error);
@@ -544,6 +555,37 @@ mod xfa_model {
         let o = go("xfa.host.messageBox(new Array(100000).join('x'));", "form1[0].page1[0]", "click");
         assert!(matches!(&o.effects[0], XfaEffect::MessageBox(m) if m.chars().count() <= 4_097));
     }
+
+    #[test]
+    fn a_slow_engine_start_does_not_count_against_the_script() {
+        let ms = std::time::Duration::from_millis;
+        // On a busy machine the engine can take longer to start than a script may run: the
+        // script still runs (abandoning it would turn the form's scripts off).
+        let o = run_within_limits("test", ms(10_000), ms(500), move |started| {
+            std::thread::sleep(ms(1_500));
+            started();
+            XfaOutcome { result: Some("ran".into()), ..Default::default() }
+        });
+        assert!(!o.abandoned, "{o:?}");
+        assert_eq!(o.result.as_deref(), Some("ran"));
+        // The script's own time counts from then.
+        let o = run_within_limits("test", ms(10_000), ms(200), move |started| {
+            started();
+            std::thread::sleep(ms(2_000));
+            XfaOutcome::default()
+        });
+        assert!(o.abandoned && o.error.as_deref().is_some_and(|e| e.contains("ran longer")), "{o:?}");
+        // Start-up has a limit of its own, so nobody waits forever for an engine.
+        let o = run_within_limits("test", ms(200), ms(10_000), move |started| {
+            std::thread::sleep(ms(2_000));
+            started();
+            XfaOutcome::default()
+        });
+        assert!(o.abandoned && o.error.as_deref().is_some_and(|e| e.contains("to start")), "{o:?}");
+        // A script that finishes without saying it started (refused at once) isn't abandoned.
+        let o = run_within_limits("test", ms(10_000), ms(200), |_| XfaOutcome { error: Some("refused".into()), ..Default::default() });
+        assert!(!o.abandoned && o.error.as_deref() == Some("refused"), "{o:?}");
+    }
 }
 
 mod formcalc {
@@ -592,6 +634,34 @@ mod formcalc {
         assert!(go("1 / 0", "form1[0].page1[0].total[0]", "calculate").error.is_some());
         // Comments and newlines inside brackets.
         assert_eq!(calc("; a comment\n// another\nSum(1,\n 2,\n 3)"), "6");
+    }
+
+    #[test]
+    fn date_pictures_render_the_weekday_letters() {
+        assert_eq!(calc(r#"Num2Date(45350, DateFmt(4))"#), "Thursday, February 29, 2024");
+        assert_eq!(calc(r#"Num2Date(45350, "EEE, YYYY-MM-DD")"#), "Thu, 2024-02-29");
+        assert_eq!(calc(r#"Num2Date(45350, "EEEE")"#), "Thursday");
+        assert_eq!(calc(r#"Num2Date(45350, "E")"#), "5");
+        assert_eq!(calc(r#"Num2Date(45351, "EEEE")"#), "Friday");
+        assert_eq!(calc(r#"Num2Date(45352, "EEEE")"#), "Saturday");
+        assert_eq!(calc(r#"Num2Date(45353, "EEEE")"#), "Sunday");
+        assert_eq!(calc(r#"Num2Date(1, "EEEE")"#), "Monday");
+        assert_eq!(calc(r#"Format("EEEE, YYYY-MM-DD", 45350)"#), "Thursday, 2024-02-29");
+        // Other letters are still literal text.
+        assert_eq!(calc(r#"Num2Date(45350, "YYYY-MM-DD x")"#), "2024-02-29 x");
+    }
+
+    #[test]
+    fn str_and_format_round_exact_ties_away_from_zero() {
+        assert_eq!(calc("Str(2.5, 3, 0)"), "  3");
+        assert_eq!(calc("Str(0.5, 3, 0)"), "  1");
+        assert_eq!(calc("Str(-2.5, 4, 0)"), "  -3");
+        assert_eq!(calc("Str(1.125, 6, 2)"), "  1.13");
+        assert_eq!(calc(r#"Format("9", 2.5)"#), "3");
+        assert_eq!(calc(r#"Format("9.99", 0.125)"#), "0.13");
+        assert_eq!(calc(r#"Format("9.9", 0.25)"#), "0.3");
+        assert_eq!(calc(r#"Format("9.9", -0.25)"#), "-0.3");
+        assert_eq!(calc(r#"Format("9.99", 2.344)"#), "2.34");
     }
 
     #[test]
@@ -648,6 +718,20 @@ mod formcalc {
         assert_eq!(calc(r#"Decode("a%20b", "url")"#), "a b");
         assert!(go(r#"Get("http://example.com")"#, "form1[0].page1[0].total[0]", "calculate").error.unwrap().contains("network"));
         assert!(go("Nope(1)", "form1[0].page1[0].total[0]", "calculate").error.unwrap().contains("unknown function"));
+    }
+
+    #[test]
+    fn date2num_rejects_days_past_the_end_of_the_month() {
+        assert_eq!(calc(r#"Date2Num("2023-02-30")"#), "0");
+        assert_eq!(calc(r#"Date2Num("31/04/2024", "DD/MM/YYYY")"#), "0");
+        assert_eq!(calc(r#"Date2Num("2023-02-29")"#), "0");
+        assert_eq!(calc(r#"Date2Num("1900-02-29")"#), "0");
+        assert_eq!(calc(r#"Parse("YYYY-MM-DD", "2023-02-30") == null"#), "1");
+        // Valid month ends still work.
+        assert_eq!(calc(r#"Date2Num("2024-02-29")"#), "45350");
+        assert_eq!(calc(r#"Date2Num("2000-02-29") <> 0"#), "1");
+        assert_eq!(calc(r#"Date2Num("2024-04-30") <> 0"#), "1");
+        assert_eq!(calc(r#"Date2Num("2024-12-31") <> 0"#), "1");
     }
 
     #[test]
@@ -947,5 +1031,104 @@ $host.gotoURL("https://example.org")"#,
             std::time::Duration::from_millis(200),
         );
         assert!(o.abandoned || o.error.is_some(), "{o:?}");
+    }
+}
+
+mod session {
+    use super::xfa_model::form;
+    use crate::Limits;
+    use crate::xfa::*;
+    use crate::xfa_session::{Script, XfaSession};
+
+    fn script(source: &str, formcalc: bool, target: &str, activity: &str) -> Script {
+        Script {
+            source: source.into(),
+            formcalc,
+            event: XfaEvent { activity: activity.into(), target: target.into(), ..Default::default() },
+            root: form(),
+            limits: Limits::default(),
+            timeout: std::time::Duration::from_secs(3),
+        }
+    }
+
+    #[test]
+    fn scripts_of_one_event_run_on_one_thread_each_on_the_form_the_caller_sends() {
+        let mut s = XfaSession::new(XfaDoc { page_count: 3, ..Default::default() });
+        assert_eq!(s.dead(), None);
+        // JavaScript, then FormCalc, on the same thread.
+        let o = s.run(script("qty.rawValue = 10; qty.rawValue", false, "form1[0].page1[0].total[0]", "calculate"));
+        assert_eq!(o.error, None, "{o:?}");
+        assert_eq!(o.effects.len(), 1);
+        assert_eq!(o.result.as_deref(), Some("10"));
+        // The next script sees the form the caller sends, not what the last script did on
+        // its copy: nothing a script changed leaks past the caller.
+        let o = s.run(script("qty * price", true, "form1[0].page1[0].total[0]", "calculate"));
+        assert_eq!(o.result.as_deref(), Some("10"), "{o:?}");
+        let mut with = script("qty * price", true, "form1[0].page1[0].total[0]", "calculate");
+        with.root.children[0].children[0].value = "10".into();
+        assert_eq!(s.run(with).result.as_deref(), Some("25"));
+        // Nor do variables, globals, prototype changes or kept objects.
+        s.run(script("leak = 5; String.prototype.trim = function () { return 'P' }; kept = qty; 1", false, "form1[0].page1[0].qty[0]", "calculate"));
+        let o = s.run(script("typeof leak + ':' + ' x '.trim() + ':' + typeof kept", false, "form1[0].page1[0].qty[0]", "calculate"));
+        assert_eq!(o.result.as_deref(), Some("undefined:x:undefined"));
+        s.run(script("Object.freeze(globalThis); 1", false, "form1[0].page1[0].qty[0]", "calculate"));
+        let o = s.run(script("xfa.host.numPages", false, "form1[0].page1[0].qty[0]", "calculate"));
+        assert_eq!(o.result.as_deref(), Some("3"), "{o:?}");
+        // `this` and `event` follow each script's target.
+        let o = s.run(script("this.name + ':' + xfa.event.name", false, "form1[0].page1[0].price[0]", "change"));
+        assert_eq!(o.result.as_deref(), Some("price:change"));
+        // A failing script doesn't end the session.
+        let o = s.run(script("throw new Error('no')", false, "form1[0].page1[0].go[0]", "click"));
+        assert!(o.error.is_some() && !o.abandoned);
+        assert_eq!(s.run(script("1 + 1", true, "form1[0].page1[0].go[0]", "click")).result.as_deref(), Some("2"));
+        // Hundreds of scripts on the one thread.
+        let started = std::time::Instant::now();
+        for i in 0..300 {
+            let o = s.run(script(&format!("{i} + qty.rawValue"), i % 2 == 0, "form1[0].page1[0].total[0]", "calculate"));
+            assert_eq!(o.error, None, "{o:?}");
+        }
+        assert!(started.elapsed() < std::time::Duration::from_secs(10), "{:?}", started.elapsed());
+    }
+
+    #[test]
+    fn a_scripts_time_starts_when_its_context_is_ready() {
+        // The engine made slow to be ready (300 ms) under a 50 ms script limit: the script is
+        // not abandoned, its time starting only when the engine says it is ready.
+        use crate::xfa_session::START_DELAY_MS;
+        use std::sync::atomic::Ordering::Relaxed;
+        let mut s = XfaSession::new(XfaDoc::default());
+        START_DELAY_MS.store(300, Relaxed);
+        let mut quick = script("1", false, "form1[0].page1[0].go[0]", "click");
+        quick.timeout = std::time::Duration::from_millis(50);
+        let js = s.run(quick);
+        let mut quick = script("1", true, "form1[0].page1[0].go[0]", "click");
+        quick.timeout = std::time::Duration::from_millis(50);
+        let fc = s.run(quick);
+        START_DELAY_MS.store(0, Relaxed);
+        assert!(!js.abandoned && js.result.as_deref() == Some("1"), "{js:?}");
+        assert!(!fc.abandoned && fc.result.as_deref() == Some("1"), "{fc:?}");
+        assert_eq!(s.dead(), None);
+    }
+
+    #[test]
+    fn a_script_past_its_time_is_abandoned_and_the_session_is_dead_after_it() {
+        let mut s = XfaSession::new(XfaDoc::default());
+        let mut slow = script("while (true) {}", false, "form1[0].page1[0].go[0]", "click");
+        slow.limits = Limits { loop_iterations: u64::MAX, recursion: 32 };
+        slow.timeout = std::time::Duration::from_millis(200);
+        let started = std::time::Instant::now();
+        let o = s.run(slow);
+        assert!(o.abandoned, "{o:?}");
+        assert!(started.elapsed() < std::time::Duration::from_secs(2));
+        assert!(s.dead().is_some_and(|w| w.contains("abandoned")));
+        let o = s.run(script("1", false, "form1[0].page1[0].go[0]", "click"));
+        assert!(o.abandoned && o.result.is_none(), "nothing more runs: {o:?}");
+        // FormCalc past its time too (it stops itself at the deadline and is reported).
+        let mut s = XfaSession::new(XfaDoc::default());
+        let mut slow = script("while (1) do endwhile", true, "form1[0].page1[0].go[0]", "click");
+        slow.limits = Limits { loop_iterations: u64::MAX, recursion: 32 };
+        slow.timeout = std::time::Duration::from_millis(200);
+        let o = s.run(slow);
+        assert!(o.abandoned || o.error.as_deref().is_some_and(|e| e.contains("too long")), "{o:?}");
     }
 }

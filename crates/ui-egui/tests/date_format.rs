@@ -19,6 +19,9 @@ fn shows(h: &Harness<'static, PdfCraftApp>, text: &str) -> bool {
 }
 
 fn retype(h: &mut Harness<'static, PdfCraftApp>, text: &str) {
+    // The preferences scroll; bring the field into view before clicking it.
+    h.get_by_role_and_label(Role::TextInput, "Pattern").scroll_to_me();
+    h.run_steps(4);
     h.get_by_role_and_label(Role::TextInput, "Pattern").click();
     h.run_steps(1);
     h.key_press_modifiers(Modifiers::COMMAND, Key::A);
@@ -110,7 +113,7 @@ fn month_names_follow_the_date_language_or_else_the_interface_language() {
     let text = |h: &Harness<'static, PdfCraftApp>| h.state().date_text(None).unwrap();
     assert_eq!(text(&h), h.state().session.today_text(None, Some("cs")).unwrap(), "follows the interface (Czech)");
     // The picker offers following the interface first, then the interface languages.
-    assert!(shows(&h, "Same as interface (Čeština)"));
+    assert!(shows(&h, "Stejný jako rozhraní (Čeština)"));
     h.state_mut().set_option("date-language", "es").unwrap();
     h.run_steps(2);
     assert_eq!(text(&h), h.state().session.today_text(None, Some("es")).unwrap());

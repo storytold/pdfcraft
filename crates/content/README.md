@@ -12,3 +12,8 @@ let m = Matrix::from_operands(&op.operands);  // cm / Tm arithmetic, invert, bbo
 The parser is tolerant (unreadable bytes are skipped and counted, never fatal) and never
 panics. `redact` and (later) `edit` build their interpreters on it; the graphics-state tracker
 and the `Patch` API of architecture §6 grow here.
+
+Unfiltered inline images with built-in or Indexed colour spaces, and image masks, use their
+sample layout (including per-row byte padding) to locate `EI`. This preserves pixel bytes
+that look like the terminator. Filtered images and resource-defined colour spaces retain
+the tolerant delimiter heuristic; damaged or truncated layouts fall back to it too.

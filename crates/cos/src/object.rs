@@ -230,6 +230,17 @@ impl Stream {
         pdfcraft_filters::decode(&chain, &self.raw, MAX_DECODED).map_err(|e| CosError::Filter(e.to_string()))
     }
 
+    /// Data after the first filter alone, bounded by `max`: the rest of the chain stays encoded.
+    /// Any corruption in that first filter is an error.
+    pub fn decoded_first_filter_strict(&self, max: usize) -> Result<Vec<u8>, CosError> {
+        let mut chain = self.filters();
+        chain.truncate(1);
+        if chain.is_empty() {
+            return self.raw_within(max);
+        }
+        pdfcraft_filters::decode(&chain, &self.raw, max.min(MAX_DECODED)).map_err(|e| CosError::Filter(e.to_string()))
+    }
+
     fn raw_within(&self, max: usize) -> Result<Vec<u8>, CosError> {
         let max = max.min(MAX_DECODED);
         // An empty decoder chain still produces an owned output buffer: check its limit
@@ -469,5 +480,34 @@ mod tests {
         assert!(matches!(stream.decoded_within(2), Err(CosError::Filter(_))));
         assert_eq!(stream.decoded_within(3).unwrap(), b"abc");
         assert_eq!(stream.decoded_strict().unwrap(), b"abc");
+    }
+
+    #[test]
+    fn raw_flate_fallback_streams_preserve_the_caller_limit() {
+        // Raw deflate with a stored byte and a final empty block. 78 01 also
+        // passes the zlib header check, so decoding must retry the whole input.
+        let mut dict = Dict::new();
+        dict.set(b"Filter".to_vec(), Object::name("FlateDecode"));
+        let stream = Stream::from_raw(dict, vec![0x78, 0x01, 0x00, 0xfe, 0xff, b'A', 0x01, 0x00, 0x00, 0xff, 0xff]);
+        let result = stream.decoded_within(0);
+        assert!(matches!(&result, Err(CosError::Filter(detail)) if detail.contains("exceeds the limit of 0 bytes")), "{result:?}");
+        assert_eq!(stream.decoded_within(1).unwrap(), b"A");
+        assert_eq!(stream.decoded_strict().unwrap(), b"A");
+    }
+
+    #[test]
+    fn first_filter_decodes_only_the_outer_wrapper() {
+        let data = "0 0 m 100 100 l S\n".repeat(64).into_bytes();
+        let inner = Stream::flate(Dict::new(), &data).raw.to_vec();
+        for (outer, name, corrupt) in [(Filter::Ascii85, "ASCII85Decode", &b"{~>"[..]), (Filter::AsciiHex, "ASCIIHexDecode", &b"G0>"[..])] {
+            let encoded = pdfcraft_filters::encode(&outer, &Params::default(), &inner).unwrap();
+            let mut dict = Dict::new();
+            dict.set(b"Filter".to_vec(), Object::Array(vec![Object::name(name), Object::name("FlateDecode")]));
+            let stream = Stream::from_raw(dict.clone(), encoded);
+            assert_eq!(stream.decoded_first_filter_strict(usize::MAX).unwrap(), inner);
+            assert_eq!(stream.decoded_strict().unwrap(), data);
+            assert!(matches!(stream.decoded_first_filter_strict(inner.len() - 1), Err(CosError::Filter(_))));
+            assert!(matches!(Stream::from_raw(dict, corrupt.to_vec()).decoded_first_filter_strict(usize::MAX), Err(CosError::Filter(_))));
+        }
     }
 }

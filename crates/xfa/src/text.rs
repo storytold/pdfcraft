@@ -286,10 +286,12 @@ pub fn measure_height(rich: &RichText, width: f64, para: &Para, base: &Face, emb
     layout(rich, Rect::new(0.0, 0.0, width.max(1.0), 0.0), &p, base, embed).height
 }
 
-/// Plain text as rich text (paragraphs split on line breaks).
+/// Plain text as rich text (paragraphs split on line breaks; a carriage return and line feed
+/// together are one break, as form data often holds them).
 pub fn plain(text: &str) -> RichText {
     RichText {
         paragraphs: text
+            .replace("\r\n", "\n")
             .split(['\n', '\r', '\u{2028}', '\u{2029}'])
             .map(|l| crate::model::Paragraph { runs: vec![Run { text: l.to_string(), ..Run::default() }], h_align: None })
             .collect(),

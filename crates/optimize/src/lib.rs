@@ -1,6 +1,9 @@
 //! The PDF Optimizer (execution plan M11.1; Acrobat: Reduce File Size and Optimize PDF ▸
 //! Advanced optimization).
 //!
+//! - **Merge image fragments:** a page picture some PDF printers draw as thousands of images one
+//!   pixel row high is put back together into one image first (see [`fragments`]), so the image
+//!   settings can work on it.
 //! - **Images:** each image's effective resolution is measured where pages draw it (the
 //!   smallest over its uses, through form XObjects); colour and grayscale images above a
 //!   threshold are resampled (bicubic) to a target resolution and recompressed as JPEG or Flate.
@@ -10,7 +13,8 @@
 //! - **Discard objects:** page thumbnails, alternate images, document tags (structure tree),
 //!   print settings.
 //! - **Clean up:** drop images and forms that pages list but never draw (such as a deleted
-//!   image); Flate-compress streams that have no filter.
+//!   image); Flate-compress streams that have no filter; remove a redundant outer ASCII85 or
+//!   ASCIIHex layer from streams that have one.
 //!
 //! Metadata, attachments, comments, scripts, private data, hidden layers, bookmarks and form
 //! fields are discarded by `pdfcraft-redact`'s Remove Hidden Information, which the engine
@@ -19,13 +23,14 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod audit;
+pub mod fragments;
 mod images;
 mod links;
 mod unused;
 
 pub use audit::{SpaceCategory, SpaceUse, audit_space};
 
-use pdfcraft_cos::{Document, ObjRef, Object, Stream};
+use pdfcraft_cos::{Document, ObjRef, Object, Stream, serialize};
 
 pub use images::effective_resolutions;
 
@@ -44,6 +49,8 @@ pub enum OptimizeError {
 pub enum Stage {
     /// About to process image `done` (0-based) of `total`; `done == total` once all are done.
     Images { done: usize, total: usize },
+    /// Merging the fragments of a page picture into one image (only when a page has some).
+    Fragments,
     /// Discarding objects, cleaning up links and compressing unencoded streams.
     CleanUp,
 }
@@ -72,19 +79,26 @@ pub struct ImageSettings {
 }
 
 impl ImageSettings {
-    /// Reduce File Size: bicubic to 150 ppi above 225 ppi, JPEG medium quality.
+    /// Reduce File Size and the Standard preset: bicubic to 150 ppi above 225 ppi, JPEG medium
+    /// quality.
     pub const REDUCE: ImageSettings = ImageSettings { downsample: true, target_ppi: 150.0, above_ppi: 225.0, compression: Compression::Jpeg(60) };
+    /// The Mobile preset: bicubic to 96 ppi above 144 ppi, JPEG high quality. Pages read on a
+    /// screen; text in scans stays legible.
+    pub const MOBILE: ImageSettings = ImageSettings { downsample: true, target_ppi: 96.0, above_ppi: 144.0, compression: Compression::Jpeg(80) };
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Settings {
+    /// Put page pictures drawn as many stacked fragments back together first ([`fragments`]).
+    pub merge_fragments: bool,
     pub color: ImageSettings,
     pub gray: ImageSettings,
     pub discard_thumbnails: bool,
     pub discard_alternate_images: bool,
     pub discard_tags: bool,
     pub discard_print_settings: bool,
-    /// Flate-compress streams stored without a filter.
+    /// Flate-compress streams stored without a filter, and strip a redundant outer ASCII85 or
+    /// ASCIIHex layer from streams that have one.
     pub flate_unencoded: bool,
     /// Clean Up: remove links (and bookmark destinations) that point nowhere.
     pub remove_invalid_links: bool,
@@ -96,6 +110,7 @@ impl Default for Settings {
     /// Acrobat's Reduce File Size choices.
     fn default() -> Self {
         Self {
+            merge_fragments: true,
             color: ImageSettings::REDUCE,
             gray: ImageSettings::REDUCE,
             discard_thumbnails: true,
@@ -109,9 +124,49 @@ impl Default for Settings {
     }
 }
 
+/// The optimizer's ready-made settings, as in Acrobat's Settings menu.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Preset {
+    /// Reduce File Size's choices ([`Settings::default`]).
+    Standard,
+    /// Smaller files for reading on a phone or screen: images to 96 ppi above 144, JPEG high.
+    Mobile,
+}
+
+impl Preset {
+    pub const ALL: [Preset; 2] = [Preset::Standard, Preset::Mobile];
+
+    /// The name tools use.
+    pub fn name(self) -> &'static str {
+        match self {
+            Preset::Standard => "standard",
+            Preset::Mobile => "mobile",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Preset> {
+        Preset::ALL.into_iter().find(|p| p.name() == name)
+    }
+
+    pub fn settings(self) -> Settings {
+        match self {
+            Preset::Standard => Settings::default(),
+            Preset::Mobile => Settings { color: ImageSettings::MOBILE, gray: ImageSettings::MOBILE, ..Settings::default() },
+        }
+    }
+
+    /// The preset `settings` are, if they are one.
+    pub fn of(settings: &Settings) -> Option<Preset> {
+        Preset::ALL.into_iter().find(|p| p.settings() == *settings)
+    }
+}
+
 /// What an optimization did.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Report {
+    /// Images merged from fragments, and how many fragments went into them.
+    pub merged_images: usize,
+    pub fragments_merged: usize,
     pub images: usize,
     pub images_resampled: usize,
     pub images_recompressed: usize,
@@ -142,6 +197,9 @@ pub fn optimize(doc: &mut Document, settings: &Settings) -> Result<Report, Optim
 pub fn optimize_with_progress(doc: &mut Document, settings: &Settings, progress: &mut dyn FnMut(Stage) -> bool) -> Result<Report, OptimizeError> {
     let mut report = Report::default();
     let pages = pdfcraft_annot::page_refs(doc).map_err(|_| OptimizeError::NoPages)?;
+    if settings.merge_fragments {
+        fragments::run(doc, &pages, &mut report, progress)?;
+    }
     images::run(doc, &pages, settings, &mut report, progress)?;
     if !progress(Stage::CleanUp) {
         return Err(OptimizeError::Cancelled);
@@ -227,17 +285,53 @@ pub fn optimize_with_progress(doc: &mut Document, settings: &Settings, progress:
             let obj = doc.get(r);
             let Object::Stream(s) = &*obj else { continue };
             // XMP stays readable as plain text (PDF/A requires it); tiny streams don't gain.
-            if s.dict.contains(b"Filter") || s.dict.name(b"Type") == Some(b"Metadata") || s.dict.name(b"Type") == Some(b"XRef") || s.raw.len() < 64 {
+            if s.dict.name(b"Type") == Some(b"Metadata") || s.dict.name(b"Type") == Some(b"XRef") || s.raw.len() < 64 {
                 continue;
             }
-            let mut d = s.dict.clone();
-            d.remove(b"Length");
-            let packed = Stream::flate(d, &s.raw);
-            if packed.raw.len() < s.raw.len() {
-                doc.set(r, Object::Stream(packed));
+            let replacement = if s.dict.contains(b"Filter") {
+                strip_ascii_wrapper(s)
+            } else {
+                let mut d = s.dict.clone();
+                d.remove(b"Length");
+                let packed = Stream::flate(d, &s.raw);
+                (packed.raw.len() < s.raw.len()).then_some(packed)
+            };
+            if let Some(replacement) = replacement {
+                doc.set(r, Object::Stream(replacement));
                 report.streams_compressed += 1;
             }
         }
     }
     Ok(report)
+}
+
+/// `s` without its outer ASCII85 or ASCIIHex layer (`[/ASCII85Decode /FlateDecode]` becomes
+/// `[/FlateDecode]`), when that is smaller. Only the outer layer is decoded: strictly, and within
+/// the stored size, which ASCII text never falls below, so the inner encoded bytes stay exact.
+fn strip_ascii_wrapper(s: &Stream) -> Option<Stream> {
+    if s.dict.contains(b"DecodeParms") || s.dict.name(b"Type") == Some(b"ObjStm") || s.dict.name(b"Subtype") == Some(b"Image") {
+        return None;
+    }
+    let Some(Object::Array(filters)) = s.dict.get(b"Filter") else { return None };
+    let names = filters.iter().map(Object::as_name).collect::<Option<Vec<_>>>()?;
+    let (outer, inner) = names.split_first()?;
+    if !matches!(*outer, b"ASCII85Decode" | b"ASCIIHexDecode") || inner.is_empty() || inner.contains(&&b"Crypt"[..]) {
+        return None;
+    }
+    let data = s.decoded_first_filter_strict(s.raw.len()).ok()?;
+    let mut dict = s.dict.clone();
+    dict.remove(b"Length");
+    dict.set(b"Filter".to_vec(), Object::Array(inner.iter().map(|n| Object::Name(n.to_vec())).collect()));
+    let candidate = Stream::from_raw(dict, data);
+    (stored_len(&candidate)? < stored_len(s)?).then_some(candidate)
+}
+
+/// Bytes the stream object takes in the file: its dictionary with `/Length` set as the writer
+/// sets it, then its data.
+fn stored_len(s: &Stream) -> Option<usize> {
+    let mut dict = s.dict.clone();
+    dict.set(b"Length".to_vec(), Object::Int(i64::try_from(s.raw.len()).ok()?));
+    let mut out = Vec::new();
+    serialize(&Object::Dict(dict), &mut out);
+    out.len().checked_add(s.raw.len())
 }

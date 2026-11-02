@@ -13,6 +13,9 @@ mod jpx;
 mod lzw_flate;
 mod run_length;
 
+// PdfCraft patch: the incremental Flate decoder that `page::ContentReader` drives.
+pub(crate) use lzw_flate::flate::{FlateState, is_plain as flate_is_plain};
+
 use crate::object::Dict;
 use crate::object::Name;
 use crate::object::dict::keys::*;
@@ -92,7 +95,7 @@ impl Filter {
             Self::AsciiHexDecode => ascii_hex::decode(data)
                 .map(FilterResult::from_data)
                 .ok_or(DecodeFailure::StreamDecode),
-            Self::Ascii85Decode => ascii_85::decode(data)
+            Self::Ascii85Decode => ascii_85::decode(data, limit)
                 .map(FilterResult::from_data)
                 .ok_or(DecodeFailure::StreamDecode),
             Self::RunLengthDecode => run_length::decode(data, limit)

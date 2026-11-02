@@ -6,7 +6,7 @@
 //! Preferences ▸ JavaScript ▸ Enable Acrobat JavaScript is [`Session::set_javascript`]; with it
 //! off, scripts don't run and AF calls keep working natively.
 
-use pdfcraft_forms::{Field, FieldChange, FieldEvent, FieldKind, ScriptResult, Scripts};
+use pdfcraft_forms::{Field, FieldChange, FieldEvent, FieldKind, FieldProps, ScriptResult, Scripts};
 pub use pdfcraft_js::{Limits, Outcome, Request};
 
 use crate::{DocId, Edit, EditError, Session};
@@ -250,6 +250,15 @@ fn detection_words(text: &pdfcraft_render::PageText, info: &pdfcraft_render::Pag
 /// A page's words in reading order, in user space ([x0, y0, x1, y1]); runs of underscores are
 /// words of their own.
 pub(crate) fn page_words(text: &pdfcraft_render::PageText, info: &pdfcraft_render::PageInfo) -> Vec<(String, [f64; 4])> {
+    words_with(text, |x, y| info.view_to_user(x, y))
+        .into_iter()
+        .map(|(text, r)| (text, [f64::from(r[0]), f64::from(r[1]), f64::from(r[2]), f64::from(r[3])]))
+        .collect()
+}
+
+/// A page's words in reading order, their boxes mapped from view space by `map` (and ordered
+/// again, so that [x0, y0, x1, y1] holds whatever way `map` turns them).
+pub(crate) fn words_with(text: &pdfcraft_render::PageText, map: impl Fn(f32, f32) -> [f32; 2]) -> Vec<(String, [f32; 4])> {
     let mut words: Vec<(String, [f32; 4])> = Vec::new();
     let mut last_line = u32::MAX;
     // A space glyph ends the word before it.
@@ -281,18 +290,23 @@ pub(crate) fn page_words(text: &pdfcraft_render::PageText, info: &pdfcraft_rende
     words
         .into_iter()
         .map(|(text, r)| {
-            let a = info.view_to_user(r[0], r[1]);
-            let b = info.view_to_user(r[2], r[3]);
-            let rect = [a[0].min(b[0]) as f64, a[1].min(b[1]) as f64, a[0].max(b[0]) as f64, a[1].max(b[1]) as f64];
-            (text, rect)
+            let a = map(r[0], r[1]);
+            let b = map(r[2], r[3]);
+            (text, [a[0].min(b[0]), a[1].min(b[1]), a[0].max(b[0]), a[1].max(b[1])])
         })
         .collect()
 }
 
 impl Session {
     /// Prepare a form ▸ automatic field detection: the fields `pages` (0-based; empty = all)
-    /// seem to ask for, named from their labels, as (page, candidate).
+    /// seem to ask for, named from their labels, as (page, candidate). Scanned pages (a picture
+    /// and no drawn shapes) are read from their pixels, see [`crate::scan_fields`].
     pub fn detect_fields(&self, id: DocId, pages: &[usize]) -> Vec<(usize, pdfcraft_forms::detect::Candidate)> {
+        self.detect_fields_turned(id, pages).into_iter().map(|(page, c, _)| (page, c)).collect()
+    }
+
+    /// [`Self::detect_fields`], with how far each field turns (`/MK /R`) to read upright.
+    fn detect_fields_turned(&self, id: DocId, pages: &[usize]) -> Vec<(usize, pdfcraft_forms::detect::Candidate, i64)> {
         let Some(doc) = self.get(id) else { return Vec::new() };
         let Some(cos) = doc.editor.as_ref().map(|e| &e.cos) else { return Vec::new() };
         let config = pdfcraft_render::RenderConfig { password: doc.password.as_deref().map(std::sync::Arc::from), ..Default::default() };
@@ -302,13 +316,19 @@ impl Session {
         let list: Vec<usize> = if pages.is_empty() { (0..all).collect() } else { pages.iter().copied().filter(|p| *p < all).collect() };
         let mut out = Vec::new();
         for page in list {
+            let Some(info) = doc.info.pages.get(page) else { continue };
             let res = r.render(pdfcraft_render::RenderRequest { page, kind: pdfcraft_render::RequestKind::Text, scale: 1.0, ..Default::default() });
-            let words = res.text.map(|t| detection_words(&t, &doc.info.pages[page])).unwrap_or_default();
             let shapes = pdfcraft_forms::detect::page_shapes(cos, page);
             let existing: Vec<[f64; 4]> = doc.form.iter().flat_map(|f| f.widgets.iter()).filter(|w| w.page == Some(page)).map(|w| w.rect).collect();
-            for c in pdfcraft_forms::detect::detect(&words, &shapes, &existing, &taken) {
+            let (found, turn) = if shapes.boxes.is_empty() && shapes.rules.is_empty() && crate::scan_fields::is_scan(doc, page, info) {
+                self.detect_on_scan(id, &mut r, page, res.text.as_deref(), &existing, &taken)
+            } else {
+                let words = res.text.map(|t| detection_words(&t, info)).unwrap_or_default();
+                (pdfcraft_forms::detect::detect(&words, &shapes, &existing, &taken), 0)
+            };
+            for c in found {
                 taken.push(c.name.clone());
-                out.push((page, c));
+                out.push((page, c, turn));
             }
         }
         out
@@ -316,23 +336,34 @@ impl Session {
 
     /// Detect fields and add them, as one undoable step. Returns the new fields' names.
     pub fn auto_detect_fields(&mut self, id: DocId, pages: &[usize]) -> Result<Vec<String>, EditError> {
-        let found = self.detect_fields(id, pages);
+        let found = self.detect_fields_turned(id, pages);
         if found.is_empty() {
             return Ok(Vec::new());
         }
-        let names = found.iter().map(|(_, c)| c.name.clone()).collect();
-        let edits = found
-            .into_iter()
-            .map(|(page, c)| Edit::AddField {
-                page,
-                rect: c.rect,
-                kind: match c.kind {
-                    pdfcraft_forms::detect::Kind::Text => pdfcraft_forms::NewField::Text { multiline: c.rect[3] - c.rect[1] > 30.0 },
-                    pdfcraft_forms::detect::Kind::CheckBox => pdfcraft_forms::NewField::CheckBox,
-                },
-                name: Some(c.name),
-            })
-            .collect();
+        let names = found.iter().map(|(_, c, _)| c.name.clone()).collect();
+        let mut edits = Vec::with_capacity(found.len());
+        for (page, c, turn) in found {
+            let tall = if turn % 180 == 0 { c.rect[3] - c.rect[1] } else { c.rect[2] - c.rect[0] };
+            let (kind, comb) = match c.kind {
+                pdfcraft_forms::detect::Kind::Text => (pdfcraft_forms::NewField::Text { multiline: tall > 30.0 }, None),
+                pdfcraft_forms::detect::Kind::CheckBox => (pdfcraft_forms::NewField::CheckBox, None),
+                pdfcraft_forms::detect::Kind::Comb { cells } => (pdfcraft_forms::NewField::Text { multiline: false }, Some(cells)),
+            };
+            let mut props = FieldProps::default();
+            if turn != 0 {
+                // A turned field keeps its place: the rectangle is already the one on the page.
+                props.rotation = Some((0, turn));
+                props.rect = Some((0, c.rect));
+            }
+            if let Some(cells) = comb {
+                props.max_len = Some(Some(cells));
+                props.flags = vec![(pdfcraft_forms::flags::COMB, true)];
+            }
+            edits.push(Edit::AddField { page, rect: c.rect, kind, name: Some(c.name.clone()) });
+            if turn != 0 || comb.is_some() {
+                edits.push(Edit::SetFieldProps { name: c.name, props: Box::new(props) });
+            }
+        }
         self.apply(id, Edit::Batch { label: "Detect form fields".into(), edits })?;
         Ok(names)
     }

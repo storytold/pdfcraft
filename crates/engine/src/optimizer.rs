@@ -17,6 +17,8 @@ pub enum OptimizeStage {
     /// Removing the user data chosen under Discard User Data.
     #[default]
     Discarding,
+    /// Merging the fragments of a page picture into one image.
+    Fragments,
     /// About to process image `done` (0-based) of `total`.
     Images { done: usize, total: usize },
     /// Discarding objects and compressing unencoded streams.
@@ -33,6 +35,7 @@ impl OptimizeStage {
     pub fn fraction(self) -> f32 {
         match self {
             OptimizeStage::Discarding => 0.0,
+            OptimizeStage::Fragments => 0.03,
             OptimizeStage::Images { done, total } => 0.05 + 0.75 * if total == 0 { 1.0 } else { done.min(total) as f32 / total as f32 },
             OptimizeStage::CleaningUp => 0.8,
             OptimizeStage::Merging => 0.85,
@@ -85,6 +88,7 @@ impl OptimizeJob {
         let discarded = if discard.is_empty() { Vec::new() } else { pdfcraft_redact::sanitize::remove_hidden(&mut cos, &discard)? };
         let report = optimize::optimize_with_progress(&mut cos, &settings, &mut |s| {
             step(match s {
+                optimize::Stage::Fragments => OptimizeStage::Fragments,
                 optimize::Stage::Images { done, total } => OptimizeStage::Images { done, total },
                 optimize::Stage::CleanUp => OptimizeStage::CleaningUp,
             })

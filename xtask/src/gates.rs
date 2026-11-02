@@ -196,13 +196,19 @@ pub fn check(args: &[String]) -> anyhow::Result<()> {
 }
 
 /// `cargo xtask text-oracle [--limit N]`: compare `pdfcraft-cli text` with poppler's `pdftotext`
-/// (external oracle process, never linked) over the corpus. Reports word-level F1 per file and the
-/// median. Plan target (M2): median ≥ 0.97.
+/// (external oracle process, never linked) over the corpus.
+///
+/// Two scores per file, because one hides the other. **Word F1** ([`f1`]) is a bag of words: it
+/// catches a character read wrong, a glyph not read at all, a font we cannot map, and is blind to
+/// order. **Reading order** ([`order_score`]) catches what F1 cannot see — a column read into the
+/// middle of its neighbour, a figure's labels threaded through a paragraph. Reports both; gates
+/// neither. Plan target (M2): median F1 ≥ 0.97.
 pub fn text_oracle(args: &[String]) -> anyhow::Result<()> {
     let limit: usize = args.iter().position(|a| a == "--limit").and_then(|i| args.get(i + 1)).and_then(|v| v.parse().ok()).unwrap_or(usize::MAX);
-    if Command::new("pdftotext").arg("-v").output().is_err() {
-        bail!("pdftotext (poppler) not found; install it to run the text oracle (brew install poppler / apt install poppler-utils)");
-    }
+    let pdftotext = match pdfcraft_oracle::pdftotext() {
+        Ok(o) => o,
+        Err(absent) => bail!("{absent}"),
+    };
     run_args(&["build", "--release", "-p", "pdfcraft-cli"])?;
     let corpus = root().join("corpus/pdfjs/test/pdfs");
     let mut files: Vec<PathBuf> =
@@ -210,43 +216,216 @@ pub fn text_oracle(args: &[String]) -> anyhow::Result<()> {
     files.sort();
     let cli = release_cli();
     let mut scores = Vec::new();
+    let mut orders = Vec::new();
     let mut worst: Vec<(f64, String)> = Vec::new();
+    let mut worst_order: Vec<(f64, String)> = Vec::new();
+    let mut not_permitted = 0usize;
+    let mut truncated = 0usize;
     for f in files.iter().take(limit) {
+        // A document may forbid copying its text, and we honour that: `pdfcraft-cli text` refuses
+        // and says how to override it with the owner password. pdftotext ignores the flag and
+        // extracts anyway, so scoring us against it there measures obedience, not quality --
+        // bug1815476.pdf scored 0.000 for behaving correctly on a page we render perfectly.
+        if !copying_allowed(f) {
+            not_permitted = not_permitted.saturating_add(1);
+            continue;
+        }
         let ours = run_capture(Command::new(&cli).arg("text").arg(f), 20);
-        let theirs = run_capture(Command::new("pdftotext").arg("-q").arg(f).arg("-"), 20);
+        let theirs = run_capture(pdftotext.command().arg("-q").arg(f).arg("-"), 20);
         let (Some(ours), Some(theirs)) = (ours, theirs) else { continue };
-        let (a, b) = (words(&ours), words(&theirs));
+        let (sa, sb) = (word_sequence(&ours), word_sequence(&theirs));
+        let (a, b) = (words(&sa), words(&sb));
         if b.len() < 20 {
             continue; // image-only or near-empty per the oracle
         }
         let score = f1(&a, &b);
+        let (order, cut) = order_score(&sa, &sb);
+        truncated = truncated.saturating_add(usize::from(cut));
+        let name = f.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         scores.push(score);
-        worst.push((score, f.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()));
+        orders.push(order);
+        worst.push((score, name.clone()));
+        worst_order.push((order, name));
     }
     if scores.is_empty() {
         bail!("no comparable files");
     }
-    scores.sort_by(f64::total_cmp);
+    let summary = |v: &mut Vec<f64>| {
+        v.sort_by(f64::total_cmp);
+        let mean = v.iter().sum::<f64>() / v.len() as f64;
+        (v[v.len() / 2], mean, v[v.len() / 10])
+    };
+    let compared = scores.len();
+    let (median, mean, p10) = summary(&mut scores);
+    let (omedian, omean, op10) = summary(&mut orders);
     worst.sort_by(|a, b| a.0.total_cmp(&b.0));
-    let median = scores[scores.len() / 2];
-    let mean = scores.iter().sum::<f64>() / scores.len() as f64;
-    println!("text oracle: {} files with text; median F1 {:.3}, mean {:.3}, p10 {:.3}", scores.len(), median, mean, scores[scores.len() / 10]);
-    println!("lowest:");
+    worst_order.sort_by(|a, b| a.0.total_cmp(&b.0));
+    println!("text oracle: {compared} files with text; median F1 {median:.3}, mean {mean:.3}, p10 {p10:.3}");
+    println!(
+        "  reading order: median {omedian:.3}, mean {omean:.3}, p10 {op10:.3}{}",
+        if truncated > 0 { format!(" ({truncated} cut to {MAX_ORDER_WORDS} words)") } else { String::new() }
+    );
+    if not_permitted > 0 {
+        println!("  {not_permitted} skipped: the document forbids copying its text, which we honour and pdftotext does not");
+    }
+    println!("lowest F1:");
     for (s, n) in worst.iter().take(12) {
+        println!("  {s:.3}  {n}");
+    }
+    println!("lowest reading order:");
+    for (s, n) in worst_order.iter().take(12) {
         println!("  {s:.3}  {n}");
     }
     Ok(())
 }
 
+/// Compare our rendering against Poppler's, page 1 of every PDF in a directory.
+///
+/// This is the measured half of the fidelity gap (`docs/gaps.md` gap 12): until it exists, every
+/// claim about rendering quality is a judgement. It reports rather than gates, because the corpus
+/// is not fetched on CI and because a first reading of a borrowed renderer is a baseline to
+/// improve on, not a bar to clear.
+///
+/// The score is the share of pixels with no near match in the other renderer's 3x3 neighbourhood
+/// (`pdfcraft_oracle::pixels`), which forgives antialiasing and subpixel placement but not
+/// missing or wrong content. **Lower is better; it is a disagreement rate, not a quality score.**
+pub fn render_oracle(args: &[String]) -> anyhow::Result<()> {
+    let limit: usize = flag_num(args, "--limit").unwrap_or(usize::MAX);
+    let dpi: u32 = flag_num(args, "--dpi").unwrap_or(72);
+    let tolerance: u8 = flag_num(args, "--tolerance").unwrap_or(8);
+    // Annotations are shown by default, which is not the obvious choice and was settled by
+    // measurement rather than argument. Poppler synthesises an appearance for an annotation that
+    // has none, where we draw only what the document carries (`view.render-annotation-appearances`
+    // records link borders without `/AP` as not covered), so showing them scores us for a known
+    // gap: bug1552113.pdf is 84% purely because Poppler paints a 112-unit link border over the
+    // text that fixture exists to show -- and our rendering, not Poppler's, is the readable one.
+    //
+    // Hiding them is worse, though, because it scores Poppler for every appearance we *do* draw.
+    // Over the same 250 files: shown gives mean 2.16%, p90 5.35%, 25 files within 0.1%; hidden
+    // gives 2.18%, 5.55% and 22, with annotation-tx3.pdf jumping to 45.64%. The two biases very
+    // nearly cancel, so the default stays with the fuller picture and this flag exists to tell
+    // the two apart when a single file's score needs explaining.
+    let hide_annotations = args.iter().any(|a| a == "--hide-annotations");
+    let dir =
+        args.iter().position(|a| a == "--dir").and_then(|i| args.get(i + 1)).map_or_else(|| root().join("corpus/pdfjs/test/pdfs"), PathBuf::from);
+
+    let pdftoppm = match pdfcraft_oracle::pdftoppm() {
+        Ok(tool) => tool,
+        Err(absent) => bail!("{absent}"),
+    };
+    run_args(&["build", "--release", "-p", "pdfcraft-cli"])?;
+    let cli = release_cli();
+
+    let mut files: Vec<PathBuf> = std::fs::read_dir(&dir)
+        .with_context(|| format!("{}: no such directory (cargo xtask corpus, or pass --dir)", dir.display()))?
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("pdf")))
+        .collect();
+    files.sort();
+
+    let out_pam = std::env::temp_dir().join(format!("pdfcraft-render-oracle-{}.pam", std::process::id()));
+    let (mut scores, mut sizes_differed, mut ours_failed, mut theirs_failed) = (Vec::new(), 0usize, 0usize, 0usize);
+    let mut worst: Vec<(f64, String)> = Vec::new();
+    for file in files.iter().take(limit) {
+        let name = file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let ours = Command::new(&cli)
+            .args(["render", "--page", "1", "--dpi"])
+            .arg(dpi.to_string())
+            .arg("--out")
+            .arg(&out_pam)
+            .arg(file)
+            .status()
+            .ok()
+            .filter(std::process::ExitStatus::success)
+            .and_then(|_| std::fs::read(&out_pam).ok())
+            .and_then(|b| pdfcraft_oracle::pixels::decode_pam_gray(&b));
+        let mut theirs_cmd = pdftoppm.command();
+        theirs_cmd.args(["-singlefile", "-gray", "-f", "1", "-l", "1", "-r"]).arg(dpi.to_string());
+        if hide_annotations {
+            theirs_cmd.arg("-hide-annotations");
+        }
+        theirs_cmd.arg(file);
+        let theirs = run_capture_bytes(&mut theirs_cmd, 30).and_then(|b| pdfcraft_oracle::pixels::decode_pgm(&b));
+        // An oracle that cannot read a file says nothing about our fidelity, and a file we cannot
+        // read is `xtask check`'s business, not this one's. Count each side and move on.
+        if ours.is_none() {
+            ours_failed = ours_failed.saturating_add(1);
+        }
+        if theirs.is_none() {
+            theirs_failed = theirs_failed.saturating_add(1);
+        }
+        let (Some((aw, ah, a)), Some((bw, bh, b))) = (ours, theirs) else { continue };
+        let (Some(a), Some(b)) = (pixels_of(aw, ah, &a), pixels_of(bw, bh, &b)) else { continue };
+        match pdfcraft_oracle::pixels::compare(a, b, tolerance) {
+            Ok(diff) => {
+                scores.push(diff.percent());
+                worst.push((diff.percent(), name));
+            }
+            // Different rounding of the page box at this scale: not a fidelity signal.
+            Err(_) => sizes_differed = sizes_differed.saturating_add(1),
+        }
+    }
+    let _ = std::fs::remove_file(&out_pam);
+
+    if scores.is_empty() {
+        bail!(
+            "no comparable files in {} ({sizes_differed} size mismatches, {ours_failed} we could not render, {theirs_failed} Poppler could not)",
+            dir.display()
+        );
+    }
+    scores.sort_by(f64::total_cmp);
+    worst.sort_by(|a, b| b.0.total_cmp(&a.0));
+    let median = scores.get(scores.len() / 2).copied().unwrap_or(0.0);
+    let mean = scores.iter().sum::<f64>() / scores.len() as f64;
+    let p90 = scores.get(scores.len().saturating_mul(9) / 10).copied().unwrap_or(0.0);
+    let clean = scores.iter().filter(|s| **s < 0.1).count();
+    println!("render oracle vs Poppler at {dpi} dpi, tolerance {tolerance} (disagreement rate, lower is better)");
+    println!("  {} compared: median {median:.2}%, mean {mean:.2}%, p90 {p90:.2}%", scores.len());
+    println!("  {clean} within 0.1%; {sizes_differed} size mismatches, {ours_failed} we could not render, {theirs_failed} Poppler could not");
+    println!("worst:");
+    for (score, name) in worst.iter().take(12) {
+        println!("  {score:6.2}%  {name}");
+    }
+    Ok(())
+}
+
+/// Whether the document lets its text be copied.
+///
+/// `true` when it is unencrypted, when the flag is set, and when the file cannot be opened at all
+/// — a file we cannot read is a different problem, and silently dropping it from the comparison
+/// would hide it.
+fn copying_allowed(path: &Path) -> bool {
+    let Ok(bytes) = std::fs::read(path) else { return true };
+    let Ok(doc) = pdfcraft_cos::Document::open(std::sync::Arc::new(bytes)) else { return true };
+    doc.permissions().is_none_or(|p| p.copy())
+}
+
+/// The value after `name` on the command line, parsed, or `None` when it is absent or malformed.
+fn flag_num<T: std::str::FromStr>(args: &[String], name: &str) -> Option<T> {
+    args.iter().position(|a| a == name).and_then(|i| args.get(i.checked_add(1)?)).and_then(|v| v.parse().ok())
+}
+
+fn pixels_of(w: usize, h: usize, buf: &[u8]) -> Option<pdfcraft_oracle::pixels::Gray<'_>> {
+    pdfcraft_oracle::pixels::Gray::new(w, h, buf)
+}
+
 fn run_capture(cmd: &mut Command, timeout_s: u64) -> Option<String> {
+    // `read_to_string` left the buffer empty when the output was not UTF-8; `from_utf8` keeps
+    // exactly that behaviour now that the capture itself is byte-oriented.
+    Some(String::from_utf8(run_capture_bytes(cmd, timeout_s)?).unwrap_or_default())
+}
+
+/// [`run_capture`] for output that is not text — an oracle's image on stdout, for instance.
+fn run_capture_bytes(cmd: &mut Command, timeout_s: u64) -> Option<Vec<u8>> {
     let mut child = cmd.stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null()).spawn().ok()?;
     let start = std::time::Instant::now();
-    let mut out = String::new();
+    let mut out = Vec::new();
     let mut stdout = child.stdout.take()?;
     let reader = std::thread::spawn(move || {
         use std::io::Read;
-        let mut s = String::new();
-        let _ = stdout.read_to_string(&mut s);
+        let mut s = Vec::new();
+        let _ = stdout.read_to_end(&mut s);
         s
     });
     loop {
@@ -261,16 +440,59 @@ fn run_capture(cmd: &mut Command, timeout_s: u64) -> Option<String> {
             Err(_) => return None,
         }
     }
-    out.push_str(&reader.join().ok()?);
+    out.extend_from_slice(&reader.join().ok()?);
     Some(out)
 }
 
-fn words(s: &str) -> BTreeMap<String, usize> {
+/// The words of `s`, in the order they were extracted.
+fn word_sequence(s: &str) -> Vec<String> {
+    s.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).map(str::to_lowercase).collect()
+}
+
+fn words(seq: &[String]) -> BTreeMap<String, usize> {
     let mut m = BTreeMap::new();
-    for w in s.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()) {
-        *m.entry(w.to_lowercase()).or_insert(0) += 1;
+    for w in seq {
+        *m.entry(w.clone()).or_insert(0) += 1;
     }
     m
+}
+
+/// Both word sequences are cut to this length before [`order_score`] compares them: the
+/// comparison is quadratic, and three pages of prose is plenty of signal about reading order.
+const MAX_ORDER_WORDS: usize = 3000;
+
+/// How much of the longer word sequence reads in the same order in both, and whether either side
+/// was cut to [`MAX_ORDER_WORDS`] first.
+///
+/// [`f1`] is a bag of words and cannot see order at all: a page emitted back to front scores a
+/// perfect 1.000 against the page read properly. Reading order is most of what extraction has
+/// left to get
+/// wrong — a column read into the middle of its neighbour, a figure's labels threaded through a
+/// paragraph, a form's value parted from its label — so it needs a number of its own. Reviewing
+/// #2431, a change that moves text and alters nothing else, F1 called 26 of the 29 files whose
+/// output changed identical, while this separated 18 improvements from 6 regressions.
+///
+/// The score is the length of the longest common subsequence over the longer side. Like every
+/// other oracle number here it is a *disagreement* with Poppler, not a verdict: the same split
+/// scores as a win on one file and a loss on another purely because `pdftotext` happens to make
+/// it in one place and not the other.
+fn order_score(a: &[String], b: &[String]) -> (f64, bool) {
+    let cut = a.len() > MAX_ORDER_WORDS || b.len() > MAX_ORDER_WORDS;
+    let a = a.get(..a.len().min(MAX_ORDER_WORDS)).unwrap_or(a);
+    let b = b.get(..b.len().min(MAX_ORDER_WORDS)).unwrap_or(b);
+    let (n, m) = (a.len(), b.len());
+    if n == 0 || m == 0 {
+        return (0.0, cut);
+    }
+    // Two rows of the usual table: after row `i`, `prev[j]` answers `a[..i]` against `b[..j]`.
+    let (mut prev, mut cur) = (vec![0u32; m + 1], vec![0u32; m + 1]);
+    for x in a {
+        for (j, y) in b.iter().enumerate() {
+            cur[j + 1] = if x == y { prev[j].saturating_add(1) } else { cur[j].max(prev[j + 1]) };
+        }
+        std::mem::swap(&mut prev, &mut cur);
+    }
+    (f64::from(prev[m]) / n.max(m) as f64, cut)
 }
 
 fn f1(a: &BTreeMap<String, usize>, b: &BTreeMap<String, usize>) -> f64 {
@@ -285,7 +507,42 @@ fn f1(a: &BTreeMap<String, usize>, b: &BTreeMap<String, usize>) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use super::root;
+    use super::{f1, order_score, root, word_sequence, words};
+
+    /// The two scores answer different questions, and the point of adding the second one is the
+    /// first row: F1 cannot tell a page from the same page read backwards.
+    #[test]
+    fn reading_order_sees_what_word_f1_cannot() {
+        let score = |ours: &str, theirs: &str| {
+            let (a, b) = (word_sequence(ours), word_sequence(theirs));
+            (f1(&words(&a), &words(&b)), order_score(&a, &b).0)
+        };
+
+        // Two columns, read as columns and read interleaved: every word is there either way.
+        let columns = "left one left two left three right one right two right three";
+        let woven = "left one right one left two right two left three right three";
+        let (same_words, out_of_order) = score(woven, columns);
+        assert_eq!(same_words, 1.0, "F1 is a bag of words and cannot see the difference");
+        assert!(out_of_order < 0.7, "reading order can: {out_of_order}");
+
+        // It is not blind to the thing F1 measures, either: a missing word costs both.
+        let (f, o) = score("left one left two left", columns);
+        assert!(f < 0.9 && o < 0.9, "{f} {o}");
+
+        // Identical text, and the degenerate inputs.
+        assert_eq!(score(columns, columns), (1.0, 1.0));
+        assert_eq!(score("", columns).1, 0.0);
+        assert_eq!(score(columns, "").1, 0.0);
+        assert_eq!(order_score(&[], &[]), (0.0, false));
+
+        // Case and punctuation are not order: both sides are folded the same way.
+        assert_eq!(score("Left, one. LEFT two!", "left one left two"), (1.0, 1.0));
+
+        // Over the cap, the comparison still answers, and says that it was cut.
+        let long: Vec<String> = (0..super::MAX_ORDER_WORDS + 10).map(|i| i.to_string()).collect();
+        let (s, cut) = order_score(&long, &long);
+        assert!((s - 1.0).abs() < 1e-9 && cut, "{s} {cut}");
+    }
 
     // Issue #211: Finder lists the app under Open With > Recommended only when the
     // bundle claims PDFs by UTI (#176).
@@ -295,6 +552,7 @@ mod tests {
         assert!(pdf.contains("<string>com.adobe.pdf</string>"), "claim PDFs by UTI, not just extension/MIME");
         assert!(pdf.contains("<string>Editor</string>"), "PDF role stays Editor");
         assert!(pdf.contains("<string>Alternate</string>"), "rank stays Alternate: offered without taking over Preview");
+        assert!(pdf.contains("<key>CFBundleTypeIconFile</key>"), "declares document icon file for Finder");
     }
 
     // The bundle id must match the app id the binary uses; renames change both (#174).

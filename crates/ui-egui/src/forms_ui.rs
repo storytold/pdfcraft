@@ -1,17 +1,23 @@
 //! Filling in forms on the page (execution plan M6; Acrobat fills fields in every viewing mode).
 //!
 //! Text fields open an in-place editor over the widget (Enter or clicking away commits, Escape
-//! cancels, Tab moves to the next field). Check boxes and radio buttons toggle on click. Combo
-//! and list boxes open a list of their options. Every change is one undoable engine edit.
+//! cancels, Tab moves to the next field). Check boxes and radio buttons toggle on click. List
+//! boxes are directly selectable in-place on the page (clicking picks an option; Ctrl-click
+//! toggles on multi-select lists). Combo boxes open a list of their options. Every change is one
+//! undoable engine edit.
+
+use std::collections::HashSet;
 
 use egui::{Color32, CornerRadius, Rect, Stroke, vec2};
-use pdfcraft_engine::{Edit, FieldValue, FormField, FormFieldKind, field_flags};
+use pdfcraft_engine::{Edit, FieldValue, FormField, FormFieldKind, FormWidget, field_flags, form_appearance};
 use pdfcraft_render::DocInfo;
 
 use crate::canvas::{DocView, PageXform};
 use crate::theme::Tokens;
 
 const FOCUS_BLUE: Color32 = Color32::from_rgb(0x14, 0x73, 0xE6);
+/// Background of the in-place text field editor, the same in every theme.
+const FIELD_FILL: Color32 = Color32::from_rgb(0xFF, 0xFF, 0xF4);
 
 /// The field being edited.
 #[derive(Clone, Debug, PartialEq)]
@@ -26,9 +32,15 @@ pub struct Focus {
     pub request_focus: bool,
     /// Select the whole value when the editor opens (entered with Tab), so typing replaces it.
     pub select_all: bool,
+    /// Where the press that opened the editor landed: the editor puts its caret there and takes
+    /// over the drag, so press-and-drag selects text in a field that was not focused (#2213).
+    pub press: Option<egui::Pos2>,
     /// Date fields: the month the calendar shows (year, month 1–12), and where it was drawn.
     pub calendar: Option<(i32, u32)>,
     pub calendar_rect: Option<egui::Rect>,
+    /// The text the calendar last saw, so it moves to a typed date once, when the typing becomes
+    /// a whole date, and otherwise keeps the month its arrows turned to.
+    pub calendar_text: Option<String>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -37,6 +49,13 @@ pub struct FormView {
     /// The draft whose edit is queued (`DocView::pending_edit`): if the field refuses the value,
     /// the editor reopens with it rather than losing the typing.
     pub(crate) committed: Option<Focus>,
+    /// A press on a text field committed the field before it (#2213). Until the button is
+    /// released, that field losing focus to the same gesture must not commit it again: a
+    /// refused value would be validated (and alerted) twice.
+    pub(crate) pressed: bool,
+    /// Fields modified by the user whose appearance stream has not been rasterized by the render worker yet.
+    /// Tracked as (field_name, page_index) so committed edits stay immediately visible without flicker.
+    pub unbaked: HashSet<(String, usize)>,
     /// A message for the app to show (e.g. "buttons run JavaScript").
     pub notice: Option<FormNotice>,
     /// A push button was clicked: (its field name, what it does).
@@ -71,12 +90,27 @@ fn open_focus(f: &FormField, widget: usize) -> Focus {
         picked: f.value.clone(),
         request_focus: true,
         select_all: false,
+        press: None,
         calendar: None,
         calendar_rect: None,
+        calendar_text: None,
     }
 }
 
-/// Clicks on form widgets of one page. Returns `true` when the click belongs to a field.
+/// Where the pointer is relative to one page's form widgets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FieldPointer {
+    /// Not over a field.
+    Away,
+    /// Over a field, which has set the cursor. Nothing is pressed, so the layers below still see
+    /// the hover, but they must not replace the cursor: a check box drawn with a glyph, or set
+    /// on printed text, is a button, not text to select.
+    Over,
+    /// The field owns the press or click.
+    Owned,
+}
+
+/// Clicks on form widgets of one page.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn page_input(
     ui: &egui::Ui,
@@ -87,9 +121,9 @@ pub(crate) fn page_input(
     form: &[FormField],
     allowed: bool,
     view: &mut DocView,
-) -> bool {
+) -> FieldPointer {
     let pointer = ui.input(|i| i.pointer.hover_pos());
-    let Some(p) = pointer.filter(|p| xf.rect.contains(*p)) else { return false };
+    let Some(p) = pointer.filter(|p| xf.rect.contains(*p)) else { return FieldPointer::Away };
     let hit = form.iter().find_map(|f| {
         f.widgets
             .iter()
@@ -97,7 +131,7 @@ pub(crate) fn page_input(
             .find(|(_, w)| w.page == Some(page) && !w.hidden && widget_rect(xf, info, page, w.rect).contains(p))
             .map(|(i, w)| (f, i, w))
     });
-    let Some((f, wi, w)) = hit else { return false };
+    let Some((f, wi, w)) = hit else { return FieldPointer::Away };
     // Empty signature fields are signed by clicking them (Use a certificate); push buttons run
     // their action.
     let pressable = f.kind == FormFieldKind::PushButton && !f.read_only() && f.button.is_some();
@@ -107,12 +141,20 @@ pub(crate) fn page_input(
         (true, FormFieldKind::Text) => egui::CursorIcon::Text,
         _ => egui::CursorIcon::PointingHand,
     });
+    // A text field opens on the press rather than the click, so a drag that starts on it
+    // selects its text (#2213).
+    let pressed = f.kind == FormFieldKind::Text && usable && resp.is_pointer_button_down_on() && ui.input(|i| i.pointer.primary_pressed());
+    if pressed && view.forms.focus.as_ref().is_none_or(|x| x.name != f.name || x.widget != wi) {
+        commit(view, form);
+        view.forms.focus = Some(Focus { press: Some(p), ..open_focus(f, wi) });
+        view.forms.pressed = true;
+    }
     if !resp.clicked() {
-        return resp.is_pointer_button_down_on();
+        return if resp.is_pointer_button_down_on() { FieldPointer::Owned } else { FieldPointer::Over };
     }
     if !allowed {
         view.forms.notice = Some(FormNotice::Security);
-        return true;
+        return FieldPointer::Owned;
     }
     match f.kind {
         _ if f.read_only() => view.forms.notice = Some(FormNotice::ReadOnly(f.name.clone())),
@@ -134,14 +176,60 @@ pub(crate) fn page_input(
                 view.pending_edit = Some(Edit::SetFieldValue { name: f.name.clone(), value: FieldValue::Radio(value) });
             }
         }
-        FormFieldKind::Text | FormFieldKind::Combo | FormFieldKind::List => {
+        // The press already committed the previous field and opened this one (above), unless
+        // press and release came in one frame. Committing again would re-run a validation that
+        // refused the value on the press.
+        FormFieldKind::Text if !ui.input(|i| i.pointer.primary_pressed()) => {
+            // An editor opened by the press cannot be hit until a frame has laid it out: the
+            // release lands on the page and would take its focus away.
+            if let Some(x) = view.forms.focus.as_mut().filter(|x| x.name == f.name && x.widget == wi) {
+                x.request_focus = true;
+            }
+        }
+        FormFieldKind::Text | FormFieldKind::Combo => {
             if view.forms.focus.as_ref().is_none_or(|x| x.name != f.name || x.widget != wi) {
                 commit(view, form);
                 view.forms.focus = Some(open_focus(f, wi));
             }
         }
+        FormFieldKind::List => {
+            commit(view, form);
+            view.forms.focus = Some(open_focus(f, wi));
+            let r = widget_rect(xf, info, page, w.rect);
+            let height_pt = if matches!(w.rotation, 90 | 270) { (w.rect[2] - w.rect[0]).max(1.0) } else { (w.rect[3] - w.rect[1]).max(1.0) };
+            let zoom = (r.height() as f64) / height_pt;
+            let y_pt = (p.y - r.min.y) as f64 / zoom;
+            let rows = w.list.unwrap_or(form_appearance::ListRows { top: 0, inset: 2.0, row: 12.0 * 1.15, size: 12.0 });
+            let picked_indices: Vec<usize> = f.value.iter().filter_map(|v| f.options.iter().position(|(e, _)| e == v)).collect();
+            let top = form_appearance::ListRows::top_showing(rows.top, &picked_indices, rows.visible(height_pt), f.options.len());
+            if let Some(opt_idx) = rows.option_at(top, y_pt).filter(|&i| i < f.options.len()) {
+                let export = &f.options[opt_idx].0;
+                let ctrl = ui.input(|i| i.modifiers.command || i.modifiers.ctrl);
+                let shift = ui.input(|i| i.modifiers.shift);
+                let multi = f.has(field_flags::MULTI_SELECT);
+                let new_value = if multi && ctrl {
+                    let mut picked = f.value.clone();
+                    if let Some(pos) = picked.iter().position(|x| x == export) {
+                        picked.remove(pos);
+                    } else {
+                        picked.push(export.clone());
+                    }
+                    FieldValue::Choice(picked)
+                } else if multi && shift && !f.value.is_empty() {
+                    let anchor = f.value.last().and_then(|last| f.options.iter().position(|(e, _)| e == last)).unwrap_or(opt_idx);
+                    let (min, max) = (anchor.min(opt_idx), anchor.max(opt_idx));
+                    let picked = f.options[min..=max].iter().map(|(e, _)| e.clone()).collect();
+                    FieldValue::Choice(picked)
+                } else {
+                    FieldValue::Choice(vec![export.clone()])
+                };
+                if new_value != FieldValue::Choice(f.value.clone()) {
+                    view.pending_edit = Some(Edit::SetFieldValue { name: f.name.clone(), value: new_value });
+                }
+            }
+        }
     }
-    true
+    FieldPointer::Owned
 }
 
 /// The edit the focused field's draft makes, if it differs from the field's value.
@@ -149,7 +237,6 @@ pub(crate) fn draft_edit(focus: &Focus, form: &[FormField]) -> Option<Edit> {
     let f = form.iter().find(|f| f.name == focus.name)?;
     let value = match f.kind {
         FormFieldKind::Text if f.value.first().map(String::as_str).unwrap_or("") != focus.text => FieldValue::Text(focus.text.clone()),
-        FormFieldKind::List if f.has(field_flags::MULTI_SELECT) && focus.picked != f.value => FieldValue::Choice(focus.picked.clone()),
         _ => return None,
     };
     Some(Edit::SetFieldValue { name: f.name.clone(), value })
@@ -172,11 +259,19 @@ const MONTHS: [&str; 12] = ["January", "February", "March", "April", "May", "Jun
 fn calendar(ctx: &egui::Context, view: &mut DocView, field: egui::Rect, fmt: &str, today: (i64, u32, u32)) -> Option<String> {
     use pdfcraft_engine::form_scripts::{DateTime, format_date, parse_date};
     let fx = view.forms.focus.as_mut()?;
-    let (mut y, mut m) = fx.calendar.unwrap_or_else(|| match parse_date(&fx.text, fmt) {
-        Some(d) => (d.y, d.m),
-        None => (today.0 as i32, today.1),
-    });
     let current = parse_date(&fx.text, fmt);
+    // A whole date typed since the last frame moves the calendar to it; half a date, or text
+    // that hasn't changed, leaves it on the month it shows (the one the arrows turned to).
+    let changed = fx.calendar_text.as_deref() != Some(fx.text.as_str());
+    let (mut y, mut m) = match (fx.calendar, current) {
+        (Some(_), Some(d)) if changed => (d.y, d.m),
+        (Some(shown), _) => shown,
+        (None, Some(d)) => (d.y, d.m),
+        (None, None) => (today.0 as i32, today.1),
+    };
+    if changed {
+        fx.calendar_text = Some(fx.text.clone());
+    }
     let mut picked = None;
     let area = egui::Area::new(egui::Id::new(("date-picker", view.id.0)))
         .order(egui::Order::Foreground)
@@ -210,7 +305,7 @@ fn calendar(ctx: &egui::Context, view: &mut DocView, field: egui::Rect, fmt: &st
                 let len = (days_from_civil(if m == 12 { y + 1 } else { y }, if m == 12 { 1 } else { m + 1 }, 1) - days_from_civil(y, m, 1)) as usize;
                 egui::Grid::new(("date-grid", view.id.0)).spacing([4.0, 2.0]).show(ui, |ui| {
                     for d in ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"] {
-                        ui.label(egui::RichText::new(d).small());
+                        ui.label(egui::RichText::new(tl_ctx!("calendar weekday", d)).small());
                     }
                     ui.end_row();
                     for cell in 0..(first + len).div_ceil(7) * 7 {
@@ -262,6 +357,9 @@ pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, xf: &PageXform,
             let focused = view.forms.focus.as_ref().is_some_and(|x| x.name == f.name && x.widget == wi);
             if focused {
                 painter.rect_stroke(r.expand(1.0), CornerRadius::same(2), Stroke::new(2.0, FOCUS_BLUE), egui::StrokeKind::Outside);
+            }
+            if view.forms.unbaked.contains(&(f.name.clone(), page)) {
+                paint_unbaked_widget(painter, xf, f, w, r);
             } else if fillable(f) && pointer.is_some_and(|p| r.contains(p)) {
                 painter.rect_stroke(r, CornerRadius::same(1), Stroke::new(1.0, FOCUS_BLUE.gamma_multiply(0.8)), egui::StrokeKind::Outside);
             }
@@ -269,8 +367,119 @@ pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, xf: &PageXform,
     }
 }
 
+/// The size, in points, a text field shows `text` at on screen: its `/DA` size, or for auto size
+/// (`0 Tf`) the page appearance's fit, measured in the font the screen draws with so the text
+/// stays inside the box (the interface font runs wider than the page's Helvetica).
+pub fn field_text_size(painter: &egui::Painter, f: &FormField, w: &FormWidget, text: &str) -> f32 {
+    let da = f.da.split_whitespace().collect::<Vec<_>>();
+    let fixed = da
+        .iter()
+        .position(|x| *x == "Tf")
+        .and_then(|i| i.checked_sub(1))
+        .and_then(|i| da.get(i))
+        .and_then(|s| s.parse::<f64>().ok())
+        .filter(|s| s.is_finite() && *s > 0.0);
+    let size = fixed.unwrap_or_else(|| {
+        // The appearance's padding: 2 pt inside a 1 pt border.
+        let pad = 3.0;
+        let (width, height) = ((w.rect[2] - w.rect[0]).abs() - 2.0 * pad, (w.rect[3] - w.rect[1]).abs() - 2.0 * pad);
+        // Comb cells hold one character each, so only the height limits them.
+        let comb = f.has(field_flags::COMB) && f.max_len.is_some_and(|m| m > 0);
+        let fit = if comb { "" } else { text };
+        let font = |size: f64| egui::FontId::proportional(size as f32);
+        let line_width = |size: f64| f64::from(painter.layout_no_wrap(fit.to_string(), font(size), Color32::BLACK).size().x);
+        // Wrapped as the editor and the page preview wrap it.
+        let wrap = width.max(1.0) as f32;
+        let wrapped_height = |size: f64| f64::from(painter.layout(fit.to_string(), font(size), Color32::BLACK, wrap).size().y);
+        pdfcraft_engine::field_auto_text_size_by(width, height, f.has(field_flags::MULTILINE), line_width, wrapped_height)
+    });
+    size.min(300.0) as f32
+}
+
+fn paint_unbaked_widget(painter: &egui::Painter, xf: &PageXform, f: &FormField, w: &FormWidget, r: Rect) {
+    match f.kind {
+        FormFieldKind::Text | FormFieldKind::Combo => {
+            let text = f.value.first().map(String::as_str).unwrap_or("");
+            painter.rect_filled(r, CornerRadius::same(1), Color32::from_rgb(0xFF, 0xFF, 0xF4));
+            painter.rect_stroke(r, CornerRadius::same(1), Stroke::new(1.0, Color32::from_gray(180)), egui::StrokeKind::Inside);
+            if !text.is_empty() {
+                let unrotated_w = if xf.rot % 180 == 90 { xf.ph } else { xf.pw };
+                let zoom = xf.rect.width() / unrotated_w.max(1.0);
+                let font_size = (field_text_size(painter, f, w, text) * zoom).clamp(3.0, 64.0);
+                let display_text = if f.has(field_flags::PASSWORD) { "•".repeat(text.chars().count()) } else { text.to_string() };
+                let p = painter.with_clip_rect(r);
+                let (align, pos) = match f.quadding {
+                    1 => (egui::Align2::CENTER_TOP, egui::pos2(r.center().x, r.min.y + 1.0)),
+                    2 => (egui::Align2::RIGHT_TOP, egui::pos2(r.max.x - 3.0, r.min.y + 1.0)),
+                    _ => (egui::Align2::LEFT_TOP, egui::pos2(r.min.x + 3.0, r.min.y + 1.0)),
+                };
+                // Multiline fields wrap at the box, as their page appearance does.
+                // At the width the size was fitted to: the box less 3 pt each side, scaled.
+                let wrap = if f.has(field_flags::MULTILINE) { (r.width() - 6.0 * zoom).max(1.0) } else { f32::INFINITY };
+                let galley = p.layout(display_text, egui::FontId::proportional(font_size), Color32::BLACK, wrap);
+                p.galley(align.anchor_size(pos, galley.size()).min, galley, Color32::BLACK);
+            }
+        }
+        FormFieldKind::List => {
+            painter.rect_filled(r, CornerRadius::same(1), Color32::from_rgb(0xFF, 0xFF, 0xF4));
+            painter.rect_stroke(r, CornerRadius::same(1), Stroke::new(1.0, Color32::from_gray(180)), egui::StrokeKind::Inside);
+            let unrotated_w = if xf.rot % 180 == 90 { xf.ph } else { xf.pw };
+            let zoom = (xf.rect.width() / unrotated_w.max(1.0)) as f64;
+            let rows = w.list.unwrap_or(form_appearance::ListRows { top: 0, inset: 2.0, row: 12.0 * 1.15, size: 12.0 });
+            let height_pt = if matches!(w.rotation, 90 | 270) { (w.rect[2] - w.rect[0]).max(1.0) } else { (w.rect[3] - w.rect[1]).max(1.0) };
+            let picked_indices: Vec<usize> = f.value.iter().filter_map(|v| f.options.iter().position(|(e, _)| e == v)).collect();
+            let top = form_appearance::ListRows::top_showing(rows.top, &picked_indices, rows.visible(height_pt), f.options.len());
+            let font_size = (rows.size * zoom).clamp(6.0, 64.0) as f32;
+            let row_h = (rows.row * zoom) as f32;
+            let inset = (rows.inset * zoom) as f32;
+            let p = painter.with_clip_rect(r);
+            let mut y = r.min.y + inset;
+            for (export, display) in f.options.iter().skip(top) {
+                if y + row_h > r.max.y {
+                    break;
+                }
+                let row_rect = Rect::from_min_size(egui::pos2(r.min.x + 1.0, y), egui::vec2(r.width() - 2.0, row_h));
+                if f.value.contains(export) {
+                    p.rect_filled(row_rect, CornerRadius::ZERO, Color32::from_rgb(0x99, 0xC0, 0xDC));
+                }
+                p.text(
+                    egui::pos2(r.min.x + 3.0, y + font_size * 0.15),
+                    egui::Align2::LEFT_TOP,
+                    display,
+                    egui::FontId::proportional(font_size),
+                    Color32::BLACK,
+                );
+                y += row_h;
+            }
+        }
+        FormFieldKind::CheckBox => {
+            painter.rect_filled(r, CornerRadius::same(1), Color32::from_rgb(0xFF, 0xFF, 0xF4));
+            painter.rect_stroke(r, CornerRadius::same(1), Stroke::new(1.0, Color32::from_gray(180)), egui::StrokeKind::Inside);
+            let checked = f.value.first().is_some_and(|v| v != "Off" && !v.is_empty());
+            if checked {
+                let sz = (r.height() * 0.75).clamp(8.0, 32.0);
+                painter.text(r.center(), egui::Align2::CENTER_CENTER, "✔", egui::FontId::proportional(sz), Color32::BLACK);
+            }
+        }
+        FormFieldKind::Radio => {
+            painter.rect_filled(r, CornerRadius::same(1), Color32::from_rgb(0xFF, 0xFF, 0xF4));
+            painter.rect_stroke(r, CornerRadius::same(1), Stroke::new(1.0, Color32::from_gray(180)), egui::StrokeKind::Inside);
+            let selected = f.value.first().map(String::as_str) == w.on_state.as_deref();
+            if selected {
+                let radius = (r.height().min(r.width()) * 0.25).clamp(2.0, 16.0);
+                painter.circle_filled(r.center(), radius, Color32::BLACK);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// The in-place editor or option list for the focused field. Returns an edit to apply.
 pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, form: &[FormField], today: (i64, u32, u32)) -> Option<Edit> {
+    let pressed = view.forms.pressed;
+    if !ctx.input(|i| i.pointer.primary_down()) {
+        view.forms.pressed = false;
+    }
     let focus = view.forms.focus.clone()?;
     let Some(f) = form.iter().find(|f| f.name == focus.name) else {
         view.forms.focus = None;
@@ -287,19 +496,21 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, f
     let mut next: Option<bool> = None; // Tab / Shift+Tab
     match f.kind {
         FormFieldKind::Text => {
-            let da = f.da.split_whitespace().collect::<Vec<_>>();
-            let size =
-                da.iter().position(|x| *x == "Tf").and_then(|i| da.get(i.wrapping_sub(1))).and_then(|s| s.parse::<f32>().ok()).filter(|s| *s > 0.0);
             let multiline = f.has(field_flags::MULTILINE);
-            let font = (size.unwrap_or(((w.rect[3] - w.rect[1]) as f32 * 0.6).clamp(6.0, 12.0)) * zoom).clamp(6.0, 64.0);
             egui::Area::new(egui::Id::new(("form-editor", view.id.0))).order(egui::Order::Foreground).fixed_pos(rect.min).show(ctx, |ui| {
                 ui.set_min_size(rect.size());
                 let Some(fx) = view.forms.focus.as_mut() else { return };
+                // Sized from the text being typed, so an auto-sized field shrinks to keep it in view.
+                let font = (field_text_size(ui.painter(), f, w, &fx.text) * zoom).clamp(3.0, 64.0);
+                // The field is pale yellow in every theme, so the caret must not follow the theme (pale in dark mode) (#655).
+                ui.visuals_mut().text_cursor.stroke.color = crate::edit_text_ui::caret_color_on(FIELD_FILL);
                 let mut te = if multiline { egui::TextEdit::multiline(&mut fx.text) } else { egui::TextEdit::singleline(&mut fx.text) };
                 te = te
-                    .desired_width(rect.width() - 6.0)
+                    // Wraps (inside the 3 px side margins) at the width the size was fitted to:
+                    // the box less 3 pt each side, scaled.
+                    .desired_width((rect.width() - 6.0 * zoom + 6.0).max(1.0))
                     .font(egui::FontId::proportional(font))
-                    .background_color(Color32::from_rgb(0xFF, 0xFF, 0xF4))
+                    .background_color(FIELD_FILL)
                     .text_color(Color32::BLACK)
                     .margin(egui::Margin::symmetric(3, 1))
                     .password(f.has(field_flags::PASSWORD))
@@ -310,7 +521,24 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, f
                 if multiline {
                     te = te.desired_rows(((rect.height() / (font * 1.3)).floor() as usize).max(1));
                 }
-                let r = ui.add_sized(rect.size(), te);
+                let mut laid_out = None;
+                let r = ui.add_sized(rect.size(), |ui: &mut egui::Ui| {
+                    let out = te.show(ui);
+                    laid_out = Some((out.galley, out.galley_pos));
+                    out.response.response
+                });
+                if let Some(press) = fx.press.take()
+                    && let Some((galley, pos)) = laid_out
+                    && let Some(mut st) = egui::TextEdit::load_state(ui.ctx(), r.id)
+                {
+                    // The press went to the page, not to this editor, which did not exist yet.
+                    let at = galley.cursor_from_pos(press - pos + vec2(galley.rect.left(), 0.0));
+                    st.cursor.set_char_range(Some(egui::text::CCursorRange::one(at)));
+                    st.store(ui.ctx(), r.id);
+                    if ui.input(|i| i.pointer.primary_down()) {
+                        ui.ctx().set_dragged_id(r.id);
+                    }
+                }
                 if fx.request_focus {
                     r.request_focus();
                     fx.request_focus = false;
@@ -332,8 +560,13 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, f
                     && (!multiline || !enter)
                     && !fx.calendar_rect.is_some_and(|c| ui.input(|i| i.pointer.interact_pos().is_some_and(|p| c.contains(p))))
                 {
-                    // Enter in a single-line field, or clicking elsewhere, commits.
-                    commit(view, form);
+                    if pressed {
+                        // The field reopened with a refused value; keep it open and focused.
+                        fx.request_focus = true;
+                    } else {
+                        // Enter in a single-line field, or clicking elsewhere, commits.
+                        commit(view, form);
+                    }
                 }
             });
             // Date fields: a calendar under the field (Acrobat's date picker).
@@ -347,8 +580,7 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, f
                 return view.pending_edit.take();
             }
         }
-        FormFieldKind::Combo | FormFieldKind::List => {
-            let multi = f.kind == FormFieldKind::List && f.has(field_flags::MULTI_SELECT);
+        FormFieldKind::Combo => {
             let resp = egui::Area::new(egui::Id::new(("form-choices", view.id.0)))
                 .order(egui::Order::Foreground)
                 .fixed_pos(rect.left_bottom() + vec2(0.0, 2.0))
@@ -357,27 +589,14 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, f
                         ui.set_min_width(rect.width().max(160.0));
                         ui.label(egui::RichText::new(&f.name).small().color(t.text_faint));
                         egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
-                            let Some(fx) = view.forms.focus.as_mut() else { return };
                             for (export, display) in &f.options {
-                                let on = if multi { fx.picked.contains(export) } else { f.value.first() == Some(export) };
-                                if multi {
-                                    let mut c = on;
-                                    if ui.checkbox(&mut c, display).changed() {
-                                        if c {
-                                            fx.picked.push(export.clone());
-                                        } else {
-                                            fx.picked.retain(|x| x != export);
-                                        }
-                                    }
-                                } else if ui.selectable_label(on, display).clicked() {
+                                let on = f.value.first() == Some(export);
+                                if ui.selectable_label(on, display).clicked() {
                                     edit = Some(Edit::SetFieldValue { name: f.name.clone(), value: FieldValue::Choice(vec![export.clone()]) });
                                     close = true;
                                 }
                             }
                         });
-                        if multi && ui.button(tl!("Done")).clicked() {
-                            commit(view, form);
-                        }
                     });
                 });
             let clicked_away = ctx.input(|i| i.pointer.any_click())
@@ -390,6 +609,35 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, f
                 next = Some(!shift);
             } else if clicked_away {
                 commit(view, form);
+                close = true;
+            }
+        }
+        FormFieldKind::List => {
+            let (up, down, esc, tab, shift) = ctx.input_mut(|i| {
+                (
+                    // Consumed, so the arrows move the selection without also scrolling the page.
+                    i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp),
+                    i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown),
+                    i.key_pressed(egui::Key::Escape),
+                    i.key_pressed(egui::Key::Tab),
+                    i.modifiers.shift,
+                )
+            });
+            if esc {
+                close = true;
+            } else if tab {
+                next = Some(!shift);
+            } else if (up || down) && !f.options.is_empty() {
+                let current_idx = f.value.last().and_then(|v| f.options.iter().position(|(e, _)| e == v)).unwrap_or(0);
+                let next_idx = if up { current_idx.saturating_sub(1) } else { (current_idx + 1).min(f.options.len().saturating_sub(1)) };
+                if next_idx != current_idx && next_idx < f.options.len() {
+                    let export = f.options[next_idx].0.clone();
+                    edit = Some(Edit::SetFieldValue { name: f.name.clone(), value: FieldValue::Choice(vec![export]) });
+                }
+            }
+            let clicked_away = ctx.input(|i| i.pointer.any_click()) && !ctx.input(|i| i.pointer.hover_pos()).is_some_and(|p| rect.contains(p));
+            if clicked_away {
+                close = true;
             }
         }
         _ => close = true,

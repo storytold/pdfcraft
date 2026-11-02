@@ -4,6 +4,7 @@
 use crate::SignError;
 use crate::der::{self, Time, Tlv, tag};
 use crate::keys::{self, DigestAlg, PrivateKey, PublicKey};
+use crate::pdf::{Detail, Fill};
 
 const CN: &str = "2.5.4.3";
 const C: &str = "2.5.4.6";
@@ -230,11 +231,15 @@ impl Extensions {
                     self.authority_key_id = aki.children().ok().and_then(|c| c.into_iter().find(|t| t.tag == tag::ctx(0))).map(|t| t.value.to_vec());
                 }
             }
-            // ExtendedKeyUsage: a SEQUENCE OF OID.
+            // ExtendedKeyUsage: a SEQUENCE OF OID. Like keyUsage, one that is present restricts
+            // the key even when it doesn't parse: an unreadable one allows no purpose at all.
             "2.5.29.37" => {
-                if let Ok(eku) = Tlv::parse_all(value.value) {
-                    self.extended_key_usage = eku.children().ok().map(|c| c.into_iter().filter_map(|t| t.oid().ok()).collect::<Vec<_>>());
-                }
+                let purposes = Tlv::parse_all(value.value)
+                    .ok()
+                    .filter(|eku| eku.tag == tag::SEQUENCE)
+                    .and_then(|eku| eku.children().ok())
+                    .and_then(|c| c.iter().map(|t| t.oid().ok()).collect::<Option<Vec<_>>>());
+                self.extended_key_usage = Some(purposes.unwrap_or_default());
             }
             // Authority Information Access: OCSP and CA-issuer locations.
             "1.3.6.1.5.5.7.1.1" => {
@@ -355,21 +360,37 @@ impl Certificate {
     /// Why this certificate may not sign documents, if it may not (RFC 5280 §4.2.1.3,
     /// §4.2.1.12, §4.2): a key usage without digitalSignature or nonRepudiation, an extended key
     /// usage without a document-signing purpose, or a critical extension PdfCraft doesn't process.
-    pub fn signing_problem(&self) -> Option<String> {
+    /// The sentences are wordings of this crate's, listed in [`WORDINGS`](crate::pdf::WORDINGS), so an
+    /// interface reading in another language says them in it; only the extensions' own OIDs go in as
+    /// they stand.
+    pub fn signing_problem(&self) -> Option<Detail> {
         /// keyUsage bits 0 (digitalSignature) and 1 (nonRepudiation).
         const SIGNING_BITS: u16 = 0b11;
         if self.key_usage.is_some_and(|u| u & SIGNING_BITS == 0) {
-            Some(
-                "The signer's certificate does not allow digital signatures (its key usage has neither digital signature nor non-repudiation)."
-                    .into(),
-            )
+            Some(Detail::plain(
+                "The signer's certificate does not allow digital signatures (its key usage has neither digital signature nor non-repudiation).",
+            ))
         } else if self.extended_key_usage.as_ref().is_some_and(|e| !e.iter().any(|o| DOCUMENT_SIGNING_EKUS.contains(&o.as_str()))) {
-            Some("The signer's certificate is not issued for signing documents (its extended key usage has no document-signing purpose).".into())
+            Some(Detail::plain(
+                "The signer's certificate is not issued for signing documents (its extended key usage has no document-signing purpose).",
+            ))
         } else if !self.unknown_critical.is_empty() {
-            Some(format!("The signer's certificate has critical extensions PdfCraft does not recognize ({}).", self.unknown_critical.join(", ")))
+            Some(Detail::of(
+                "The signer's certificate has critical extensions PdfCraft does not recognize ({}).",
+                Fill::Value(self.unknown_critical.join(", ")),
+            ))
         } else {
             None
         }
+    }
+
+    /// [`signing_problem`](Self::signing_problem) as a clause that follows the certificate's
+    /// name ("it is not issued for signing documents (…)"), for lists of digital IDs.
+    pub fn signing_problem_clause(&self) -> Option<String> {
+        self.signing_problem().map(|d| match d.message.strip_prefix("The signer's certificate ") {
+            Some(rest) => format!("it {}", rest.strip_suffix('.').unwrap_or(rest)),
+            None => d.message,
+        })
     }
 
     /// Issued by itself (subject = issuer and its own key verifies it).
@@ -481,7 +502,11 @@ pub fn build_chain<'a>(leaf: &'a Certificate, pool: &'a [Certificate], at: Optio
 
 /// [`build_chain`], and why it stopped where it did if a certificate that matched the issuer by
 /// name and signature was refused.
-pub fn build_chain_noted<'a>(leaf: &'a Certificate, pool: &'a [Certificate], at: Option<Time>) -> (Vec<&'a Certificate>, Option<String>) {
+///
+/// The reason is a whole sentence of ours, listed in [`WORDINGS`](crate::pdf::WORDINGS), with the two
+/// certificates' own names put in afterwards, so an interface reading in another language says it in
+/// it.
+pub fn build_chain_noted<'a>(leaf: &'a Certificate, pool: &'a [Certificate], at: Option<Time>) -> (Vec<&'a Certificate>, Option<Detail>) {
     let mut chain = vec![leaf];
     let mut refused = None;
     while chain.len() < 10 {
@@ -493,12 +518,14 @@ pub fn build_chain_noted<'a>(leaf: &'a Certificate, pool: &'a [Certificate], at:
         let below = chain.len() - 1;
         let mut found = None;
         for c in pool.iter().filter(|c| c.subject.raw == last.issuer.raw && !chain.contains(c) && last.signed_by(&c.public_key)) {
+            // Each reason is a whole sentence, not a phrase stitched into one: a language puts the
+            // two names where it needs them.
             let why = if !c.may_issue() {
-                Some("is not a CA certificate that may issue certificates")
+                Some("The certificate of {} is not a CA certificate that may issue certificates, so it is not used to vouch for {}.")
             } else if c.path_len.is_some_and(|n| below > n as usize) {
-                Some("does not allow this many CA certificates below it (path length)")
+                Some("The certificate of {} does not allow this many CA certificates below it (path length), so it is not used to vouch for {}.")
             } else if at.is_some_and(|t| !c.valid_at(t)) {
-                Some("was not valid at the time of signing")
+                Some("The certificate of {} was not valid at the time of signing, so it is not used to vouch for {}.")
             } else {
                 None
             };
@@ -507,9 +534,7 @@ pub fn build_chain_noted<'a>(leaf: &'a Certificate, pool: &'a [Certificate], at:
                     found = Some(c);
                     break;
                 }
-                Some(why) => {
-                    refused = Some(format!("The certificate of {} {why}, so it is not used to vouch for {}.", c.display_name(), last.display_name()))
-                }
+                Some(why) => refused = Some(Detail::of(why, Fill::Names(c.display_name(), last.display_name()))),
             }
         }
         let Some(issuer) = found else { break };

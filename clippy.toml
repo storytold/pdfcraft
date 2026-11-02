@@ -2,3 +2,14 @@ allow-unwrap-in-tests = true
 allow-expect-in-tests = true
 allow-panic-in-tests = true
 allow-indexing-slicing-in-tests = true
+
+# With the theme's widget visuals egui draws a checkbox's box as a circle, like a radio button,
+# and on the light theme neither has an outline or a fill that shows on a white panel.
+disallowed-methods = [
+    { path = "egui::Ui::checkbox", reason = "use checkbox from crates/ui-egui/src/widgets.rs, whose box is a square" },
+    { path = "egui::Checkbox::new", reason = "use checkbox from crates/ui-egui/src/widgets.rs, whose box is a square" },
+    { path = "egui::Checkbox::without_text", reason = "use checkbox_without_text from crates/ui-egui/src/widgets.rs, whose box is a square" },
+    { path = "egui::Ui::radio", reason = "use radio from crates/ui-egui/src/widgets.rs, which is outlined and filled" },
+    { path = "egui::Ui::radio_value", reason = "use radio_value from crates/ui-egui/src/widgets.rs, which is outlined and filled" },
+    { path = "egui::RadioButton::new", reason = "use radio from crates/ui-egui/src/widgets.rs, which is outlined and filled" },
+]

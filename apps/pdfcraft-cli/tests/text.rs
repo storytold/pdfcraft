@@ -96,6 +96,41 @@ fn text_of_a_protected_document_with_the_password_succeeds() {
     assert!(stdout.contains("Page 1") && stdout.contains("Page 3"), "{stdout}");
 }
 
+/// `three.pdf` encrypted so that the open password `openme` doesn't allow copying, and the
+/// permissions password `boss` lifts that.
+fn copy_protected_fixture() -> std::path::PathBuf {
+    let src = tmp("to-protect-no-copy.pdf");
+    std::fs::write(&src, fixture(3)).unwrap();
+    let out_path = tmp("protected-no-copy.pdf");
+    let script = tmp("protect-no-copy.json");
+    let steps = serde_json::json!([
+        { "tool": "doc_open", "args": { "path": src } },
+        { "tool": "doc_protect", "args": { "doc": 1, "open_password": "openme", "permissions_password": "boss", "copy": false } },
+        { "tool": "doc_save", "args": { "doc": 1, "path": out_path } },
+    ]);
+    std::fs::write(&script, steps.to_string()).unwrap();
+    let out = Command::new(BIN).args(["run", "--script", script.to_str().unwrap()]).output().unwrap();
+    assert!(out.status.success(), "protecting the fixture failed: {}", String::from_utf8_lossy(&out.stderr));
+    out_path
+}
+
+/// `text` copies text out, so it asks what `text_extract` asks (#1645): the open password alone
+/// gives no text when copying isn't allowed, the permissions password does.
+#[test]
+fn text_respects_a_document_that_does_not_allow_copying() {
+    let path = copy_protected_fixture();
+    let out = Command::new(BIN).args(["text", path.to_str().unwrap(), "--password", "openme"]).output().unwrap();
+    assert!(!out.status.success(), "copying isn't allowed: {}", String::from_utf8_lossy(&out.stdout));
+    assert!(out.stdout.is_empty(), "{}", String::from_utf8_lossy(&out.stdout));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("don't allow copying"), "the reason must be named: {stderr}");
+    assert!(stderr.contains("--password"), "and the way in: {stderr}");
+    let out = Command::new(BIN).args(["text", path.to_str().unwrap(), "--password", "boss"]).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("Page 1") && stdout.contains("Page 3"), "{stdout}");
+}
+
 mod page_argument_tests {
     use super::*;
     use std::path::PathBuf;

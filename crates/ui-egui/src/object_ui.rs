@@ -101,6 +101,16 @@ impl ObjectSelection {
         }
     }
 
+    /// The move of the whole selection by `offset` (user space). The selection follows it.
+    fn move_by(&mut self, page: usize, offset: [f64; 2]) -> Edit {
+        let mut expected = self.selected.clone();
+        for object in &mut expected {
+            object.rect = [object.rect[0] + offset[0], object.rect[1] + offset[1], object.rect[2] + offset[0], object.rect[3] + offset[1]];
+        }
+        self.pending = Some(expected);
+        Edit::MoveObjects { page, objects: self.selected.iter().map(|o| o.target).collect(), offset }
+    }
+
     fn inventory(&mut self, doc: &Document, page: usize) -> Result<Vec<EditableObject>, String> {
         if self.cache.len() >= 8 && !self.cache.contains_key(&page) {
             self.cache.clear();
@@ -215,22 +225,14 @@ fn input(s: &mut ObjectSelection, ui: &egui::Ui, resp: &egui::Response, xf: &Pag
             } else if gesture.start.distance(gesture.now) > 3.0 && view.pending_edit.is_none() {
                 let (a, b) = (xf.screen_to_view(gesture.start), xf.screen_to_view(gesture.now));
                 match doc.object_move_offset(page, [f64::from(b.0 - a.0), f64::from(b.1 - a.1)]) {
-                    Ok(offset) => {
-                        let mut expected = s.selected.clone();
-                        for object in &mut expected {
-                            object.rect =
-                                [object.rect[0] + offset[0], object.rect[1] + offset[1], object.rect[2] + offset[0], object.rect[3] + offset[1]];
-                        }
-                        s.pending = Some(expected);
-                        view.pending_edit = Some(Edit::MoveObjects { page, objects: s.selected.iter().map(|o| o.target).collect(), offset });
-                    }
+                    Ok(offset) => view.pending_edit = Some(s.move_by(page, offset)),
                     Err(_) => s.notice = Some(tl!("These objects could not be moved. Select them again and try a smaller move.").into()),
                 }
             }
         } else {
             s.gesture = Some(gesture);
         }
-        ui.ctx().set_cursor_icon(if gesture.marquee { egui::CursorIcon::Crosshair } else { egui::CursorIcon::Grabbing });
+        ui.ctx().set_cursor_icon(if gesture.marquee { egui::CursorIcon::Crosshair } else { egui::CursorIcon::Move });
         return true;
     }
     let Some(p) = pointer.filter(|p| xf.rect.contains(*p) && ui.clip_rect().contains(*p) && resp.rect.contains(*p)) else {
@@ -240,7 +242,7 @@ fn input(s: &mut ObjectSelection, ui: &egui::Ui, resp: &egui::Response, xf: &Pag
         if s.page == Some(page) && !s.selected.is_empty() {
             let union = s.selected.iter().fold(Rect::NOTHING, |r, o| r.union(screen(xf, info, page, o)));
             if union.contains(p) {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+                ui.ctx().set_cursor_icon(egui::CursorIcon::Move);
             }
             return true;
         }
@@ -294,6 +296,20 @@ fn input(s: &mut ObjectSelection, ui: &egui::Ui, resp: &egui::Response, xf: &Pag
             return true;
         }
     }
+    // The frame of the paragraph open for typing takes hold of the box, as in Acrobat: a click
+    // selects it (for the arrow keys), a drag moves it. Its text keeps the caret.
+    if let Some(block) = view.line_editor.as_ref().filter(|e| e.page == page && !e.has_changes()).map(|e| e.block)
+        && let Some(object) = objects.iter().find(|o| o.target == ObjectTarget { kind: ObjectKind::Text, index: block })
+        && on_frame(screen(xf, info, page, object), p)
+    {
+        s.clear();
+        s.page = Some(page);
+        s.selected.push(object.clone());
+        s.gesture = Some(Gesture { start: p, now: p, marquee: false, additive: false });
+        leave_single(view);
+        view.current = page;
+        return true;
+    }
     s.clear();
     if hit.is_some() {
         return false;
@@ -303,6 +319,65 @@ fn input(s: &mut ObjectSelection, ui: &egui::Ui, resp: &egui::Response, xf: &Pag
     s.gesture = Some(Gesture { start: p, now: p, marquee: true, additive: false });
     view.current = page;
     true
+}
+
+/// Whether `p` is on the frame drawn around a paragraph open for typing (`r`, screen): just
+/// outside the text, where a press would otherwise close the paragraph.
+fn on_frame(r: Rect, p: Pos2) -> bool {
+    r.expand(2.0 + FRAME_REACH).contains(p) && !r.expand(2.0).contains(p)
+}
+
+/// How far outside a paragraph's frame a press still grabs it (screen pixels).
+const FRAME_REACH: f32 = 6.0;
+
+/// The arrow keys move the selected image or objects a point, Shift and an arrow ten points,
+/// as in Acrobat. They are taken before the view turns the page with them.
+pub(crate) fn nudge_keys(ctx: &egui::Context, view: &mut DocView, doc: &Document) {
+    if ctx.egui_wants_keyboard_input() || view.pending_edit.is_some() {
+        return;
+    }
+    let image = view.image_selection.as_ref().filter(|s| !s.dragging()).map(|s| (s.page, s.index));
+    let objects = view.objects.page.filter(|_| !view.objects.selected.is_empty() && view.objects.gesture.is_none());
+    let Some(page) = objects.or(image.map(|(page, _)| page)) else { return };
+    let Some(xf) = view.page_xform(page) else { return };
+    use egui::{Key, Modifiers};
+    let mut step = egui::Vec2::ZERO;
+    ctx.input_mut(|i| {
+        for (key, direction) in [
+            (Key::ArrowLeft, egui::vec2(-1.0, 0.0)),
+            (Key::ArrowRight, egui::vec2(1.0, 0.0)),
+            (Key::ArrowUp, egui::vec2(0.0, -1.0)),
+            (Key::ArrowDown, egui::vec2(0.0, 1.0)),
+        ] {
+            // Shift first: a plain key pattern also matches a Shift press.
+            if i.consume_key(Modifiers::SHIFT, key) {
+                step += direction * 10.0;
+            } else if i.consume_key(Modifiers::NONE, key) {
+                step += direction;
+            }
+        }
+    });
+    if step == egui::Vec2::ZERO {
+        return;
+    }
+    // A point on screen, whatever the zoom and the view's rotation: one screen pixel's step in
+    // view space, at unit length.
+    let c = xf.rect.center();
+    let unit = |d: egui::Vec2| {
+        let (a, b) = (xf.screen_to_view(c), xf.screen_to_view(c + d));
+        let v = egui::vec2(b.0 - a.0, b.1 - a.1);
+        if v.length() > 0.0 { v / v.length() } else { egui::Vec2::ZERO }
+    };
+    let delta = unit(egui::vec2(1.0, 0.0)) * step.x + unit(egui::vec2(0.0, 1.0)) * step.y;
+    let Ok(offset) = doc.object_move_offset(page, [f64::from(delta.x), f64::from(delta.y)]) else { return };
+    if objects.is_some() {
+        view.pending_edit = Some(view.objects.move_by(page, offset));
+    } else if let Some((page, index)) = image
+        && let Some(r) = doc.page_images(page).get(index).map(|im| im.rect)
+    {
+        let rect = [r[0] + offset[0], r[1] + offset[1], r[2] + offset[0], r[3] + offset[1]];
+        view.pending_edit = Some(Edit::EditPageImage { page, index, change: pdfcraft_engine::ImageEdit::Move(rect) });
+    }
 }
 
 pub(crate) fn paint(painter: &egui::Painter, xf: &PageXform, page: usize, info: &DocInfo, selection: &ObjectSelection) {

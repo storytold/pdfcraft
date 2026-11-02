@@ -5,6 +5,7 @@
 //! remains the compatibility fallback. When neither can inspect a renderable file, panels
 //! are empty and `warnings` says why.
 
+use std::cell::OnceCell;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
@@ -14,7 +15,9 @@ use hayro::hayro_syntax::DecryptionError;
 use hayro::hayro_syntax::LoadPdfError;
 use hayro::hayro_syntax::Pdf;
 use lopdf::{Dictionary, Document, LoadOptions, Object, ObjectId};
-use pdfcraft_cos::page_labels::{MAX_LABEL_BYTES, MAX_LABEL_TOTAL_BYTES, MAX_LABEL_TREE_DEPTH, MAX_LABEL_TREE_WORK, MAX_PREFIX_BYTES, alpha, roman};
+use pdfcraft_cos::page_labels::{
+    MAX_LABEL_BYTES, MAX_LABEL_TOTAL_BYTES, MAX_LABEL_TREE_DEPTH, MAX_LABEL_TREE_WORK, MAX_PREFIX_BYTES, MAX_PREFIX_TOTAL_BYTES, alpha, roman,
+};
 
 use crate::OpenError;
 use crate::structure::{LazyStructure, Structure};
@@ -26,6 +29,10 @@ const LOAD_STREAM_LIMIT: usize = 256 << 20;
 
 /// At most this many `/State` entries of a set-layer-visibility action are read.
 const MAX_LAYER_STATE: usize = 1024;
+
+/// File specifications retained from a remote-Go-To action are deliberately small.
+const MAX_REMOTE_FILE_SPEC_BYTES: usize = 4096;
+const MAX_REMOTE_DESTINATION_NAME_BYTES: usize = 1024;
 
 /// At most this many layers are read from all of `/RBGroups` together.
 const MAX_LAYER_GROUP_ENTRIES: usize = 4096;
@@ -49,6 +56,9 @@ pub struct DocInfo {
     pub keywords: Option<String>,
     pub creator: Option<String>,
     pub producer: Option<String>,
+    /// Custom document properties: `/Info` entries with a key the spec does not name and a text
+    /// value, as (name, text), in the dictionary's order (at most 256).
+    pub custom: Vec<(String, String)>,
     pub pdf_version: String,
     pub file_size: usize,
     pub encrypted: bool,
@@ -69,6 +79,8 @@ pub struct DocInfo {
     pub layer_groups: Vec<Vec<(u32, u16)>>,
     pub fonts: Vec<FontInfo>,
     pub attachments: Vec<Attachment>,
+    /// Pages with a presentation transition (`/Trans`) or display time (`/Dur`), in page order.
+    pub transitions: Vec<PageTransition>,
     pub warnings: Vec<String>,
 }
 
@@ -81,6 +93,89 @@ pub enum Xfa {
     /// The form is laid out from the XFA packets at open (`/NeedsRendering`, or no fields): the
     /// PDF pages are only a placeholder.
     Dynamic,
+}
+
+/// A page's presentation transition and display time (ISO 32000-2 §12.4.4): how the page comes
+/// into view in a full-screen presentation, and how long it stays before advancing. Only pages
+/// carrying `/Trans` or `/Dur` are listed. Values outside the spec's ranges fall back to the
+/// defaults rather than being refused.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PageTransition {
+    pub page: usize,
+    /// `/Trans /S`; `None` when the page has only `/Dur`.
+    pub style: Option<TransitionStyle>,
+    /// `/D`: how long the transition takes, in seconds (default 1).
+    pub duration: f32,
+    /// `/Dm /H` (true) or `/V` (Split, Blinds).
+    pub horizontal: bool,
+    /// `/M /I` (true) or `/O` (Split, Box, Fly).
+    pub inward: bool,
+    /// `/Di`: 0, 90, 180, 270 or 315 degrees (Wipe, Glitter, Fly, Cover, Uncover, Push); `None`
+    /// for `/None` (Fly only).
+    pub direction: Option<u16>,
+    /// `/SS`: the Fly scale (default 1).
+    pub scale: f32,
+    /// `/B`: Fly with an opaque backdrop.
+    pub opaque: bool,
+    /// `/Dur`: seconds the page shows before the presentation advances; `None` waits for the
+    /// presenter.
+    pub display: Option<f32>,
+}
+
+/// The transition styles of ISO 32000-2 table 164 (`/Trans /S`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TransitionStyle {
+    Split,
+    Blinds,
+    Box,
+    Wipe,
+    Dissolve,
+    Glitter,
+    /// `/R`: the next page replaces the old one with no effect (the default).
+    Replace,
+    Fly,
+    Push,
+    Cover,
+    Uncover,
+    Fade,
+}
+
+impl TransitionStyle {
+    /// The style a `/S` name means; an unknown name is `Replace`, the spec's default.
+    pub fn from_name(name: &str) -> Self {
+        match name {
+            "Split" => Self::Split,
+            "Blinds" => Self::Blinds,
+            "Box" => Self::Box,
+            "Wipe" => Self::Wipe,
+            "Dissolve" => Self::Dissolve,
+            "Glitter" => Self::Glitter,
+            "Fly" => Self::Fly,
+            "Push" => Self::Push,
+            "Cover" => Self::Cover,
+            "Uncover" => Self::Uncover,
+            "Fade" => Self::Fade,
+            _ => Self::Replace,
+        }
+    }
+
+    /// The name as written in a PDF (`/S`).
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Split => "Split",
+            Self::Blinds => "Blinds",
+            Self::Box => "Box",
+            Self::Wipe => "Wipe",
+            Self::Dissolve => "Dissolve",
+            Self::Glitter => "Glitter",
+            Self::Replace => "R",
+            Self::Fly => "Fly",
+            Self::Push => "Push",
+            Self::Cover => "Cover",
+            Self::Uncover => "Uncover",
+            Self::Fade => "Fade",
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -170,6 +265,8 @@ impl PageInfo {
 #[derive(Clone, Debug)]
 pub struct Link {
     pub page: usize,
+    /// Zero-based position in the page's raw `/Annots` array.
+    pub index: usize,
     pub rect: [f32; 4],
     pub target: LinkTarget,
 }
@@ -186,7 +283,20 @@ pub enum LinkTarget {
         changes: Vec<(LayerOp, (u32, u16))>,
         preserve_rb: bool,
     },
+    /// A local-file remote Go-To action. The caller resolves `file` relative to the source path.
+    RemoteGoTo {
+        file: String,
+        destination: RemoteDestination,
+        new_window: Option<bool>,
+    },
     Other(String),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum RemoteDestination {
+    Default,
+    Page { page: usize, view: DestView },
+    Named(String),
 }
 
 /// What a set-layer-visibility action does to a layer.
@@ -344,6 +454,39 @@ pub struct FontInfo {
     pub embedded: bool,
     pub subset: bool,
     pub encoding: Option<String>,
+    /// The face standing in for a program the document does not embed. `None` when the font is
+    /// embedded (nothing stands in) or when no face was available at all -- `substitution` then
+    /// says which of the two it is.
+    pub substitute: Option<String>,
+    /// Why a face was substituted, as a sentence for whoever has to act on it. `None` only when
+    /// the document's own glyphs are being shown.
+    pub substitution: Option<String>,
+}
+
+/// Check that `bytes` still open as the same document: the parser reads them and the page
+/// count matches. Content-only edits skip the full [`inspect`] (seconds on very large files)
+/// but must still catch an edit that produced something the viewer cannot display, so the
+/// caller can roll it back. Never panics: parser crashes are caught and reported.
+pub fn check_pages(bytes: Arc<Vec<u8>>, password: Option<&str>, expected: usize) -> Result<(), OpenError> {
+    let pdf = catch_unwind(AssertUnwindSafe(|| Pdf::new_with_password(bytes, password.unwrap_or(""))))
+        .map_err(|p| OpenError::Invalid(format!("the parser crashed: {}", crate::raster::panic_message(&p))))?
+        .map_err(|e| match e {
+            LoadPdfError::Decryption(DecryptionError::PasswordProtected) => {
+                if password.is_some() {
+                    OpenError::WrongPassword
+                } else {
+                    OpenError::NeedsPassword
+                }
+            }
+            LoadPdfError::Decryption(other) => OpenError::Unsupported(format!("encryption not supported: {other:?}")),
+            LoadPdfError::Invalid => OpenError::Invalid("no readable page tree or cross-reference data was found".into()),
+        })?;
+    let pages = catch_unwind(AssertUnwindSafe(|| pdf.pages().len()))
+        .map_err(|p| OpenError::Invalid(format!("the page tree could not be read: {}", crate::raster::panic_message(&p))))?;
+    if pages != expected {
+        return Err(OpenError::Invalid(format!("the edit changed the page count from {expected} to {pages}")));
+    }
+    Ok(())
 }
 
 /// Inspect a document. Fails only if the renderer itself cannot open the file (or needs a
@@ -440,16 +583,22 @@ fn inspect_structure(info: &mut DocInfo, fill: impl FnOnce(&mut DocInfo) -> Resu
 
 struct Inspector<'a> {
     doc: &'a dyn Structure,
+    page_ids: Vec<ObjectId>,
     page_index: HashMap<ObjectId, usize>,
     /// Named destinations (`/Names /Dests` tree), keyed by raw string bytes, built once.
     /// Looking each name up by walking the tree was O(links × names): minutes on manuals.
     named: HashMap<Vec<u8>, &'a Object>,
+    /// The page of each annotation (the first page that lists it), built when a field's widget
+    /// has no `/P`. Searching every page's `/Annots` for each such field was O(fields ×
+    /// annotations): a second on a form of 8,000 fields.
+    annotation_pages: OnceCell<HashMap<ObjectId, usize>>,
 }
 
 impl<'a> Inspector<'a> {
     fn new(doc: &'a dyn Structure) -> Self {
-        let page_index = doc.get_pages().into_iter().map(|(n, id)| (id, n as usize - 1)).collect();
-        let mut me = Self { doc, page_index, named: HashMap::new() };
+        let page_ids = doc.page_ids();
+        let page_index = page_ids.iter().copied().enumerate().map(|(index, id)| (id, index)).collect();
+        let mut me = Self { doc, page_ids, page_index, named: HashMap::new(), annotation_pages: OnceCell::new() };
         let mut named = HashMap::new();
         if let Some(tree) =
             doc.catalog().ok().and_then(|c| c.get(b"Names").ok()).and_then(|o| me.dict(o)).and_then(|n| n.get(b"Dests").ok()).and_then(|o| me.dict(o))
@@ -470,6 +619,23 @@ impl<'a> Inspector<'a> {
             info.keywords = self.text(d, b"Keywords");
             info.creator = self.text(d, b"Creator");
             info.producer = self.text(d, b"Producer");
+            const STANDARD: [&[u8]; 9] =
+                [b"Title", b"Author", b"Subject", b"Keywords", b"Creator", b"Producer", b"CreationDate", b"ModDate", b"Trapped"];
+            // The same rule as the engine's list after an edit (`pdfcraft_organize::custom_info`,
+            // trimmed and without empty values): text strings only, so a name value is not a
+            // custom property, and the cap counts listed entries.
+            info.custom = d
+                .iter()
+                .filter(|(k, _)| !STANDARD.contains(&k.as_slice()))
+                .filter_map(|(k, v)| match self.resolve(v) {
+                    Object::String(bytes, _) => {
+                        let v = text_string(bytes).trim_matches(|c: char| c == '\0' || c.is_whitespace()).to_string();
+                        (!v.is_empty()).then(|| (String::from_utf8_lossy(k).into_owned(), v))
+                    }
+                    _ => None,
+                })
+                .take(256)
+                .collect();
         }
         let Ok(catalog) = self.doc.catalog() else { return };
         info.tagged = catalog
@@ -487,6 +653,7 @@ impl<'a> Inspector<'a> {
             (info.outline, info.outline_more) = self.outline_window(first);
         }
         self.annotations(info);
+        self.transitions(info);
         let mut field_seen = HashSet::new();
         if let Some(form) = catalog.get(b"AcroForm").ok().and_then(|o| self.dict(o))
             && let Ok(fields) = form.get(b"Fields").and_then(|o| self.resolve(o).as_array())
@@ -497,9 +664,7 @@ impl<'a> Inspector<'a> {
         }
         // Widgets no `/Fields` entry reaches are fields too (Acrobat and the browsers fill them);
         // each is adopted through its topmost unlisted `/Parent`, so a split field stays one.
-        let mut pages: Vec<_> = self.page_index.iter().collect();
-        pages.sort_by_key(|(_, i)| **i);
-        for (&pid, _) in pages {
+        for &pid in &self.page_ids {
             let Ok(page_dict) = self.doc.get_dictionary(pid) else { continue };
             let Ok(Object::Array(annots)) = page_dict.get(b"Annots").map(|o| self.resolve(o)) else { continue };
             for a in annots {
@@ -533,9 +698,62 @@ impl<'a> Inspector<'a> {
             }
             info.has_javascript |= names.get(b"JavaScript").is_ok();
         }
+        if let Ok(action) = catalog.get(b"OpenAction")
+            && let Some(dict) = self.dict(action)
+            && dict.get(b"S").ok().and_then(|o| self.resolve(o).as_name().ok()) == Some(&b"JavaScript"[..])
+        {
+            info.has_javascript = true;
+        }
     }
 
     // ── object helpers ──────────────────────────────────────────────────────────────────────
+
+    /// `/Trans` and `/Dur` of every page (ISO 32000-2 §12.4.4), in page order. Lenient: a value
+    /// outside the spec's choices takes that entry's default, and a page with neither entry is
+    /// not listed. Bounded by the page count.
+    fn transitions(&self, info: &mut DocInfo) {
+        for (page, &pid) in self.page_ids.iter().enumerate() {
+            let Ok(d) = self.doc.get_dictionary(pid) else { continue };
+            let display = d.get(b"Dur").ok().and_then(|o| self.resolve(o).as_float().ok()).filter(|s| s.is_finite() && *s >= 0.0);
+            let trans = d.get(b"Trans").ok().and_then(|o| self.dict(o));
+            if trans.is_none() && display.is_none() {
+                continue;
+            }
+            let mut t = PageTransition {
+                page,
+                style: None,
+                duration: 1.0,
+                horizontal: true,
+                inward: true,
+                direction: Some(0),
+                scale: 1.0,
+                opaque: false,
+                display,
+            };
+            if let Some(tr) = trans {
+                t.style = Some(self.name(tr, b"S").map_or(TransitionStyle::Replace, |n| TransitionStyle::from_name(&n)));
+                let num = |key: &[u8]| tr.get(key).ok().and_then(|o| self.resolve(o).as_float().ok()).filter(|v| v.is_finite());
+                t.duration = num(b"D").filter(|d| *d >= 0.0).unwrap_or(1.0);
+                t.horizontal = self.name(tr, b"Dm").as_deref() != Some("V");
+                t.inward = self.name(tr, b"M").as_deref() != Some("O");
+                t.direction = match tr.get(b"Di").map(|o| self.resolve(o)) {
+                    Ok(Object::Name(n)) if n.as_slice() == b"None" => None,
+                    Ok(o) => match o.as_i64().ok() {
+                        Some(0) => Some(0),
+                        Some(90) => Some(90),
+                        Some(180) => Some(180),
+                        Some(270) => Some(270),
+                        Some(315) => Some(315),
+                        _ => Some(0),
+                    },
+                    Err(_) => Some(0),
+                };
+                t.scale = num(b"SS").filter(|s| *s > 0.0).unwrap_or(1.0);
+                t.opaque = matches!(tr.get(b"B").map(|o| self.resolve(o)), Ok(Object::Boolean(true)));
+            }
+            info.transitions.push(t);
+        }
+    }
 
     fn resolve(&self, o: &'a Object) -> &'a Object {
         self.doc.dereference(o).map(|(_, o)| o).unwrap_or(o)
@@ -788,19 +1006,33 @@ impl<'a> Inspector<'a> {
         }
         // Decode each bounded prefix once, rather than once for every page in its range.
         let mut specs = BTreeMap::new();
+        let mut prefix_total = 0usize;
         for (start, d) in ranges {
             let first = d.get(b"St").ok().and_then(|o| self.resolve(o).as_i64().ok()).unwrap_or(1).max(1) as u64;
             let prefix = match d.get(b"P").ok().map(|o| self.resolve(o)) {
-                Some(Object::String(raw, _) | Object::Name(raw)) => {
+                Some(Object::String(raw, _)) => {
                     if raw.len() > MAX_PREFIX_BYTES {
                         return Err("a raw prefix exceeds 2050 bytes");
                     }
-                    self.text(d, b"P").unwrap_or_default()
+                    // A label prefix is literal text, not trimmed document metadata.
+                    text_string(raw).trim_matches('\0').to_string()
+                }
+                Some(Object::Name(raw)) => {
+                    if raw.len() > MAX_PREFIX_BYTES {
+                        return Err("a raw prefix exceeds 2050 bytes");
+                    }
+                    // Retain the existing name compatibility and boundary-NUL handling.
+                    String::from_utf8_lossy(raw).trim_matches('\0').to_string()
                 }
                 _ => String::new(),
             };
             if prefix.len() > MAX_LABEL_BYTES {
                 return Err("a decoded prefix exceeds 1024 UTF-8 bytes");
+            }
+            // A prefix object shared by many ranges is decoded once per range: count every copy.
+            prefix_total = prefix_total.saturating_add(prefix.len());
+            if prefix_total > MAX_PREFIX_TOTAL_BYTES {
+                return Err("decoded prefixes exceed 4 MiB in total");
             }
             let style = d.get(b"S").ok().and_then(|o| self.resolve(o).as_name().ok());
             specs.insert(start, (first, prefix, style));
@@ -873,7 +1105,7 @@ impl<'a> Inspector<'a> {
                     info.attachments.push(self.attachment(name, fs, AttachmentSource::Annotation { page, index }));
                 }
                 if subtype == "Link" {
-                    if let Some(link) = self.link(page, d) {
+                    if let Some(link) = self.link(page, index, d) {
                         if matches!(&link.target, LinkTarget::Other(s) if s == "JavaScript") {
                             info.has_javascript = true;
                         }
@@ -921,7 +1153,9 @@ impl<'a> Inspector<'a> {
                     page,
                     subtype,
                     author: self.text(d, b"T"),
-                    contents: self.text(d, b"Contents"),
+                    // Acrobat ends lines with CR, which the interface would draw as nothing (keep
+                    // in step with `pdfcraft_annot::summaries`).
+                    contents: self.text(d, b"Contents").map(|s| s.replace("\r\n", "\n").replace('\r', "\n")),
                     modified: self.text(d, b"M").map(|m| pretty_date(&m)),
                     name: self.text(d, b"NM"),
                     in_reply_to,
@@ -939,7 +1173,7 @@ impl<'a> Inspector<'a> {
         info.annotations.sort_by(|a, b| a.page.cmp(&b.page).then(b.rect[3].total_cmp(&a.rect[3])));
     }
 
-    fn link(&self, page: usize, d: &Dictionary) -> Option<Link> {
+    fn link(&self, page: usize, index: usize, d: &Dictionary) -> Option<Link> {
         let rect = rect4(self.resolve(d.get(b"Rect").ok()?));
         let target = if let Ok(dest) = d.get(b"Dest") {
             let (page, view) = self.dest(dest, 0)?;
@@ -955,11 +1189,72 @@ impl<'a> Inspector<'a> {
                     LinkTarget::Uri(a.get(b"URI").ok().and_then(|u| self.resolve(u).as_str().ok()).map(|b| String::from_utf8_lossy(b).into_owned())?)
                 }
                 Some("SetOCGState") => self.layer_state(a),
+                Some("GoToR") => self.remote_go_to(a).unwrap_or_else(|| LinkTarget::Other("GoToR".into())),
                 Some(other) => LinkTarget::Other(other.to_string()),
                 None => return None,
             }
         };
-        Some(Link { page, rect, target })
+        Some(Link { page, index, rect, target })
+    }
+
+    fn remote_go_to(&self, action: &Dictionary) -> Option<LinkTarget> {
+        if self.name(action, b"FS").as_deref() == Some("URL") {
+            return None;
+        }
+        let file = match self.resolve(action.get(b"F").ok()?) {
+            Object::String(bytes, _) => limited_pdf_string(bytes, MAX_REMOTE_FILE_SPEC_BYTES)?,
+            Object::Dictionary(spec) => {
+                if self.name(spec, b"FS").as_deref() == Some("URL") {
+                    return None;
+                }
+                spec.get(b"UF")
+                    .ok()
+                    .and_then(|o| self.pdf_text(o, MAX_REMOTE_FILE_SPEC_BYTES))
+                    .or_else(|| spec.get(b"F").ok().and_then(|o| self.pdf_text(o, MAX_REMOTE_FILE_SPEC_BYTES)))?
+            }
+            _ => return None,
+        };
+        if file.is_empty() {
+            return None;
+        }
+        let destination = match action.get(b"D") {
+            Err(_) => RemoteDestination::Default,
+            Ok(o) => match self.resolve(o) {
+                Object::Array(items) => {
+                    let page = items.first().and_then(|o| self.resolve(o).as_i64().ok()).and_then(|n| usize::try_from(n).ok())?;
+                    let kind = items.get(1).map(|o| self.resolve(o)).and_then(|o| o.as_name().ok());
+                    let operands: [Option<f32>; 4] = std::array::from_fn(|i| items.get(i + 2).and_then(|o| self.resolve(o).as_float().ok()));
+                    RemoteDestination::Page { page, view: DestView::from_operands(kind, &operands) }
+                }
+                Object::Name(name) if name.len() <= MAX_REMOTE_DESTINATION_NAME_BYTES => {
+                    let name = String::from_utf8_lossy(name).into_owned();
+                    if name.is_empty() || name.len() > MAX_REMOTE_DESTINATION_NAME_BYTES {
+                        return None;
+                    }
+                    RemoteDestination::Named(name)
+                }
+                Object::String(bytes, _) if bytes.len() <= MAX_REMOTE_DESTINATION_NAME_BYTES => {
+                    let name = text_string(bytes);
+                    if name.is_empty() || name.len() > MAX_REMOTE_DESTINATION_NAME_BYTES {
+                        return None;
+                    }
+                    RemoteDestination::Named(name)
+                }
+                _ => return None,
+            },
+        };
+        let new_window = match action.get(b"NewWindow").map(|o| self.resolve(o)) {
+            Ok(Object::Boolean(value)) => Some(*value),
+            _ => None,
+        };
+        Some(LinkTarget::RemoteGoTo { file, destination, new_window })
+    }
+
+    fn pdf_text(&self, o: &Object, max_bytes: usize) -> Option<String> {
+        match self.resolve(o) {
+            Object::String(bytes, _) => limited_pdf_string(bytes, max_bytes),
+            _ => None,
+        }
     }
 
     /// A set-OCG-state action: `/State` is `ON`, `OFF` or `Toggle`, each followed by the groups
@@ -1061,17 +1356,25 @@ impl<'a> Inspector<'a> {
         out.push(Field { name: full, kind, value, page, tooltip: self.text(d, b"TU"), has_actions, rect });
     }
 
+    /// The first page whose `/Annots` lists the field or one of its kids.
     fn find_widget_page(&self, field: &Object, kids: &[Object]) -> Option<usize> {
-        let targets: HashSet<ObjectId> =
-            std::iter::once(field).chain(kids.iter()).filter_map(|o| if let Object::Reference(id) = o { Some(*id) } else { None }).collect();
-        if targets.is_empty() {
-            return None;
+        let pages = self.annotation_pages.get_or_init(|| self.annotation_pages());
+        std::iter::once(field).chain(kids).filter_map(|o| if let Object::Reference(id) = o { pages.get(id).copied() } else { None }).min()
+    }
+
+    /// Each annotation listed in a page's `/Annots`, with the first page that lists it.
+    fn annotation_pages(&self) -> HashMap<ObjectId, usize> {
+        let mut pages = HashMap::new();
+        for (idx, &pid) in self.page_ids.iter().enumerate() {
+            let Some(annots) = self.doc.get_dictionary(pid).ok().and_then(|d| d.get(b"Annots").ok()) else { continue };
+            let Ok(annots) = self.resolve(annots).as_array() else { continue };
+            for a in annots {
+                if let Object::Reference(id) = a {
+                    pages.entry(*id).or_insert(idx);
+                }
+            }
         }
-        self.page_index.iter().find_map(|(&pid, &idx)| {
-            let annots = self.doc.get_dictionary(pid).ok()?.get(b"Annots").ok()?;
-            let arr = self.resolve(annots).as_array().ok()?;
-            arr.iter().any(|a| matches!(a, Object::Reference(id) if targets.contains(id))).then_some(idx)
-        })
+        pages
     }
 
     /// The topmost field above widget `id` (itself without a `/Parent`), or `None` when it or an
@@ -1157,9 +1460,7 @@ impl<'a> Inspector<'a> {
 
     fn fonts(&self, out: &mut Vec<FontInfo>) {
         let mut seen = HashSet::new();
-        let mut pages: Vec<_> = self.page_index.iter().collect();
-        pages.sort_by_key(|(_, i)| **i);
-        for (&pid, _) in pages {
+        for &pid in &self.page_ids {
             let Ok(fonts) = self.doc.get_page_fonts(pid) else { continue };
             for (_, f) in fonts {
                 let base = f
@@ -1176,20 +1477,38 @@ impl<'a> Inspector<'a> {
                     _ => None,
                 };
                 // Embedded: FontFile/2/3 in the descriptor (for Type0, in the descendant font).
-                let descriptor_of = |d: &Dictionary| d.get(b"FontDescriptor").ok().and_then(|o| self.dict(o)).cloned();
-                let desc = descriptor_of(f).or_else(|| {
-                    f.get(b"DescendantFonts")
-                        .ok()
-                        .and_then(|o| self.resolve(o).as_array().ok())
-                        .and_then(|a| a.first())
-                        .and_then(|o| self.dict(o))
-                        .and_then(descriptor_of)
-                });
+                let descriptor_of = |d: &'a Dictionary| d.get(b"FontDescriptor").ok().and_then(|o| self.dict(o));
+                let descendant =
+                    f.get(b"DescendantFonts").ok().and_then(|o| self.resolve(o).as_array().ok()).and_then(|a| a.first()).and_then(|o| self.dict(o));
+                let desc = descriptor_of(f).or_else(|| descendant.and_then(descriptor_of));
                 let embedded =
                     kind == "Type3" || desc.is_some_and(|d| d.get(b"FontFile").is_ok() || d.get(b"FontFile2").is_ok() || d.get(b"FontFile3").is_ok());
+                // What the substitution chain needs beyond the name: the descriptor flags, and for
+                // a composite font the script its descendant declares (ISO 32000-2 9.7.3).
+                let flags = desc
+                    .and_then(|d| d.get(b"Flags").ok())
+                    .and_then(|o| self.resolve(o).as_i64().ok())
+                    .and_then(|n| u32::try_from(n).ok())
+                    .unwrap_or(0);
+                let ordering =
+                    descendant.and_then(|d| d.get(b"CIDSystemInfo").ok()).and_then(|o| self.dict(o)).and_then(|c| self.text(c, b"Ordering"));
                 let subset = base.len() > 7 && base.as_bytes()[6] == b'+' && base[..6].bytes().all(|b| b.is_ascii_uppercase());
                 let name = if subset { base[7..].to_string() } else { base };
-                let info = FontInfo { name, kind, embedded, subset, encoding };
+                let chosen = pdfcraft_fonts::fallback::substitute(&pdfcraft_fonts::fallback::Request {
+                    base_font: &name,
+                    embedded,
+                    flags,
+                    ordering: ordering.as_deref(),
+                });
+                let info = FontInfo {
+                    name,
+                    kind,
+                    embedded,
+                    subset,
+                    encoding,
+                    substitute: chosen.face_name(),
+                    substitution: (!chosen.why.is_faithful()).then(|| chosen.why.note().to_owned()),
+                };
                 if seen.insert((info.name.clone(), info.kind.clone(), info.embedded)) {
                     out.push(info);
                 }
@@ -1224,6 +1543,14 @@ impl<'a> Inspector<'a> {
 /// ([`pdfcraft_cos::PdfString::to_text`]) so the panels and outline editing agree.
 fn text_string(bytes: &[u8]) -> String {
     pdfcraft_cos::PdfString::literal(bytes).to_text()
+}
+
+fn limited_pdf_string(bytes: &[u8], max_bytes: usize) -> Option<String> {
+    if bytes.len() > max_bytes {
+        return None;
+    }
+    let text = text_string(bytes);
+    (text.len() <= max_bytes).then_some(text)
 }
 
 /// Nests a pre-order list of `(depth, item)` into the outline tree.
@@ -1647,6 +1974,78 @@ mod tests {
         assert!(info.warnings[0].contains("physical page numbers"), "{:?}", info.warnings);
     }
 
+    // Contributor-original, blank three-page PDFs. The public importer reads both labels and metadata.
+    fn page_prefix_space_pdf(prefix: Vec<u8>, decimal: bool, indirect: bool) -> Vec<u8> {
+        use lopdf::dictionary;
+        let mut doc = Document::with_version("1.7");
+        let pages_id = doc.new_object_id();
+        let kids: Vec<Object> = (0..3)
+            .map(|_| {
+                doc.add_object(dictionary! {
+                    "Type" => "Page",
+                    "Parent" => pages_id,
+                    "MediaBox" => vec![0.into(), 0.into(), 200.into(), 300.into()],
+                    "Resources" => Dictionary::new(),
+                })
+                .into()
+            })
+            .collect();
+        doc.objects.insert(pages_id, dictionary! { "Type" => "Pages", "Kids" => kids, "Count" => 3 }.into());
+        let prefix = Object::String(prefix, lopdf::StringFormat::Hexadecimal);
+        let prefix = if indirect { Object::Reference(doc.add_object(prefix)) } else { prefix };
+        let mut label = Dictionary::new();
+        label.set("P", prefix);
+        if decimal {
+            label.set("S", Object::Name(b"D".to_vec()));
+        }
+        let labels = dictionary! { "Nums" => vec![Object::Integer(0), Object::Dictionary(label)] };
+        let catalog_id = doc.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages_id, "PageLabels" => labels });
+        let info_id = doc.add_object(dictionary! { "Title" => Object::string_literal("  Metadata title  ") });
+        doc.trailer.set("Root", catalog_id);
+        doc.trailer.set("Info", info_id);
+        let mut bytes = Vec::new();
+        doc.save_to(&mut bytes).expect("write original page-prefix fixture");
+        bytes
+    }
+
+    #[test]
+    fn page_label_prefix_spaces_survive_public_inspection() {
+        let mut utf16 = vec![0xfe, 0xff];
+        utf16.extend(" Ω ".encode_utf16().flat_map(u16::to_be_bytes));
+        for (raw, prefix, decimal, indirect) in [
+            (b" leading".to_vec(), " leading", true, false),
+            (b"trailing ".to_vec(), "trailing ", true, false),
+            (b" both ".to_vec(), " both ", false, false),
+            (b" ".to_vec(), " ", false, false),
+            (b" Caf\xe9 ".to_vec(), " Café ", true, false),
+            (utf16.clone(), " Ω ", true, false),
+            (utf16, " Ω ", false, true),
+            (Vec::new(), "", true, false),
+            (Vec::new(), "", false, false),
+        ] {
+            let bytes = page_prefix_space_pdf(raw, decimal, indirect);
+            let info = inspect(Arc::new(bytes), None).expect("public import of original page-prefix fixture");
+            let expected: Vec<String> = (1..=3)
+                .map(|n| {
+                    if decimal {
+                        format!("{prefix}{n}")
+                    } else if prefix.is_empty() {
+                        n.to_string()
+                    } else {
+                        prefix.to_owned()
+                    }
+                })
+                .collect();
+            assert_eq!(
+                info.pages.iter().map(|p| p.label.clone()).collect::<Vec<_>>(),
+                expected,
+                "{prefix:?}, decimal={decimal}, indirect={indirect}"
+            );
+            assert!(info.warnings.is_empty(), "{:?}", info.warnings);
+            assert_eq!(info.title.as_deref(), Some("Metadata title"), "page-prefix decoding must not change metadata normalization");
+        }
+    }
+
     #[test]
     fn page_label_limits_keep_normal_pdf_numbering() {
         for (style, first, expected) in [
@@ -1745,6 +2144,36 @@ mod tests {
     }
 
     #[test]
+    fn page_label_limits_bound_the_total_of_decoded_prefixes() {
+        // `ranges` ranges naming one shared prefix object of `prefix` bytes, without a style.
+        let shared = |ranges: i64, prefix: usize| {
+            let mut doc = Document::with_version("1.7");
+            doc.objects.insert((7, 0), Object::String(vec![b'x'; prefix], lopdf::StringFormat::Literal));
+            let mut spec = Dictionary::new();
+            spec.set("P", Object::Reference((7, 0)));
+            doc.objects.insert((8, 0), Object::Dictionary(spec));
+            let mut tree = Dictionary::new();
+            tree.set("Nums", (0..ranges).flat_map(|i| [Object::Integer(i), Object::Reference((8, 0))]).collect::<Vec<_>>());
+            let mut catalog = Dictionary::new();
+            catalog.set("PageLabels", Object::Dictionary(tree));
+            (doc, catalog)
+        };
+        let mut pages: Vec<_> =
+            (1..=3).map(|n| PageInfo { width: 200.0, height: 300.0, crop: [0.0, 0.0, 200.0, 300.0], rotation: 0, label: n.to_string() }).collect();
+        // Each range decodes its prefix, so a small file sharing one prefix object asks for a
+        // copy per range: 5,000 ranges and a 1,000-byte prefix make 5 MB, past the 4 MiB total.
+        // Three pages make three labels, far below the label total: the prefixes alone refuse it.
+        let (doc, catalog) = shared(5000, 1000);
+        let err = Inspector::new(&doc).page_labels(&catalog, &mut pages).unwrap_err();
+        assert!(err.contains("prefixes exceed 4 MiB"), "{err}");
+        assert!(pages.iter().enumerate().all(|(i, p)| p.label == (i + 1).to_string()));
+        // Exactly 4 MiB of prefixes is still read.
+        let (doc, catalog) = shared((MAX_PREFIX_TOTAL_BYTES / MAX_LABEL_BYTES) as i64, MAX_LABEL_BYTES);
+        Inspector::new(&doc).page_labels(&catalog, &mut pages).unwrap();
+        assert!(pages.iter().all(|p| p.label.len() == MAX_LABEL_BYTES));
+    }
+
+    #[test]
     fn page_label_limits_handle_prefix_only_and_reference_cycles() {
         let info = label_info(vec![Object::Integer(0), label_spec("", b"prefix".to_vec(), i64::MAX)], Vec::new());
         assert!(info.warnings.is_empty());
@@ -1829,7 +2258,20 @@ trailer << /Root 1 0 R >>
             let expected: &[u8] = if a.name == "notes.txt" { b"hello notes" } else { b"a,b,c" };
             assert_eq!(data, expected, "{}", a.name);
         }
-        assert_eq!(info.fonts, vec![FontInfo { name: "Helvetica".into(), kind: "Type1".into(), embedded: false, subset: true, encoding: None }]);
+        // A non-embedded /Helvetica is reported as standing in for itself: the standard-14
+        // metrics are exact, so the substitution is named rather than left implicit.
+        assert_eq!(
+            info.fonts,
+            vec![FontInfo {
+                name: "Helvetica".into(),
+                kind: "Type1".into(),
+                embedded: false,
+                subset: true,
+                encoding: None,
+                substitute: Some("Helvetica".into()),
+                substitution: Some(pdfcraft_fonts::fallback::Why::NamedStandard14.note().into()),
+            }]
+        );
     }
 
     const LAYERS: &[u8] = b"%PDF-1.7
@@ -1845,6 +2287,67 @@ trailer << /Root 1 0 R >>
 11 0 obj << /Type /Annot /Subtype /Link /Rect [60 10 100 30] /A << /S /SetOCGState /State 9 0 R >> >> endobj
 trailer << /Root 1 0 R >>
 %%EOF";
+
+    /// `/Trans` and `/Dur` (ISO 32000-2 §12.4.4): read with the spec's defaults for what a page
+    /// leaves out, lenient about what is out of range, and only for pages that have either.
+    const TRANSITIONS: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R 5 0 R 6 0 R 7 0 R] /Count 5 /MediaBox [0 0 200 200] >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /Trans << /Type /Trans /S /Wipe /D 2.5 /Di 270 >> /Dur 5 >> endobj
+4 0 obj << /Type /Page /Parent 2 0 R /Dur 3 >> endobj
+5 0 obj << /Type /Page /Parent 2 0 R /Trans 8 0 R >> endobj
+6 0 obj << /Type /Page /Parent 2 0 R /Trans << /S /Bogus /D (slow) /Di 45 /Dm /Q >> /Dur -1 >> endobj
+7 0 obj << /Type /Page /Parent 2 0 R >> endobj
+8 0 obj << /S /Fly /M /O /SS 0.5 /B true /Di /None /Dm /V >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+
+    #[test]
+    fn page_transitions_and_display_times_are_read() {
+        use super::TransitionStyle as S;
+        let info = inspect(Arc::new(TRANSITIONS.to_vec()), None).expect("opens");
+        let t = &info.transitions;
+        assert_eq!(t.iter().map(|t| t.page).collect::<Vec<_>>(), [0, 1, 2, 3], "pages with /Trans or /Dur, in order; page 5 has neither");
+        assert_eq!((t[0].style, t[0].duration, t[0].direction, t[0].display), (Some(S::Wipe), 2.5, Some(270), Some(5.0)));
+        assert!((t[0].horizontal, t[0].inward, t[0].scale, t[0].opaque) == (true, true, 1.0, false), "defaults: {:?}", t[0]);
+        assert_eq!((t[1].style, t[1].duration, t[1].display), (None, 1.0, Some(3.0)), "/Dur without /Trans");
+        assert_eq!(
+            (t[2].style, t[2].inward, t[2].scale, t[2].opaque, t[2].direction, t[2].horizontal),
+            (Some(S::Fly), false, 0.5, true, None, false),
+            "an indirect /Trans: {:?}",
+            t[2]
+        );
+        // Out of range: an unknown style is the spec's default R, a non-numeric /D the default
+        // second, a direction that is not one of the five falls back to 0, a bad /Dm to
+        // horizontal, and a negative /Dur is no display time.
+        assert_eq!(
+            (t[3].style, t[3].duration, t[3].direction, t[3].horizontal, t[3].display),
+            (Some(S::Replace), 1.0, Some(0), true, None),
+            "{:?}",
+            t[3]
+        );
+    }
+
+    const CUSTOM_INFO: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R >> endobj
+4 0 obj << /Title (Report) /Producer (Test) /Project (Apollo) /Revision 7 /Dept (R&D) /Trapped /False /Note <FEFF90E8> >> endobj
+trailer << /Root 1 0 R /Info 4 0 R >>
+%%EOF";
+
+    #[test]
+    fn custom_document_properties_are_listed_apart_from_the_standard_ones() {
+        let info = inspect(Arc::new(CUSTOM_INFO.to_vec()), None).expect("opens");
+        assert_eq!((info.title.as_deref(), info.producer.as_deref()), (Some("Report"), Some("Test")));
+        let mut custom = info.custom.clone();
+        custom.sort();
+        // Revision is a number, not text, so it is not listed; Trapped is a standard entry.
+        assert_eq!(
+            custom,
+            [("Dept".to_string(), "R&D".to_string()), ("Note".to_string(), "部".to_string()), ("Project".to_string(), "Apollo".to_string())]
+        );
+    }
 
     #[test]
     fn radio_button_layer_groups_are_read() {
@@ -1870,6 +2373,70 @@ trailer << /Root 1 0 R >>
         let info = inspect(Arc::new(ORPHAN_FIELDS.to_vec()), None).expect("opens");
         let listed: Vec<_> = info.fields.iter().map(|f| (f.name.as_str(), f.value.as_deref(), f.page)).collect();
         assert_eq!(listed, [("alpha", Some("one"), Some(0)), ("beta", None, Some(0))], "{:?}", info.fields);
+    }
+
+    /// A `Structure` that counts the objects read through it.
+    struct CountingReads<'a> {
+        doc: &'a Document,
+        reads: std::cell::Cell<usize>,
+    }
+
+    impl Structure for CountingReads<'_> {
+        fn trailer(&self) -> &Dictionary {
+            &self.doc.trailer
+        }
+        fn get_object(&self, id: ObjectId) -> lopdf::Result<&Object> {
+            self.reads.set(self.reads.get() + 1);
+            self.doc.get_object(id)
+        }
+        fn encrypted(&self) -> bool {
+            false
+        }
+    }
+
+    /// Widgets without `/P` are placed on the page that lists them with one pass over the pages'
+    /// `/Annots`, not a search of every page per field: that was O(fields × annotations), a
+    /// second to open a form of 8,000 fields. A widget two pages list is on the first of them.
+    #[test]
+    fn widgets_without_a_page_entry_are_placed_in_one_pass() {
+        const PAGES: usize = 100;
+        const PER_PAGE: usize = 10;
+        let field = |p: usize, k: usize| 4 + PAGES + p * PER_PAGE + k;
+        let mut pdf = String::from("%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R /AcroForm 3 0 R >> endobj\n");
+        let kids: Vec<String> = (0..PAGES).map(|p| format!("{} 0 R", 4 + p)).collect();
+        pdf += &format!("2 0 obj << /Type /Pages /Kids [{}] /Count {PAGES} >> endobj\n", kids.join(" "));
+        let fields: Vec<String> = (0..PAGES).flat_map(|p| (0..PER_PAGE).map(move |k| format!("{} 0 R", field(p, k)))).collect();
+        pdf += &format!("3 0 obj << /Fields [{}] >> endobj\n", fields.join(" "));
+        for p in 0..PAGES {
+            let mut annots: Vec<String> = (0..PER_PAGE).map(|k| format!("{} 0 R", field(p, k))).collect();
+            // The last page lists the first page's first widget too.
+            if p == PAGES - 1 {
+                annots.push(format!("{} 0 R", field(0, 0)));
+            }
+            pdf += &format!("{} 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [{}] >> endobj\n", 4 + p, annots.join(" "));
+        }
+        for p in 0..PAGES {
+            for k in 0..PER_PAGE {
+                pdf += &format!("{} 0 obj << /Type /Annot /Subtype /Widget /FT /Tx /T (f{p}_{k}) /Rect [10 10 90 30] >> endobj\n", field(p, k));
+            }
+        }
+        pdf += "trailer << /Root 1 0 R >>\n%%EOF";
+        let doc = Document::load_mem(pdf.as_bytes()).expect("loads");
+        let counting = CountingReads { doc: &doc, reads: std::cell::Cell::new(0) };
+        let mut info = DocInfo {
+            pages: (0..PAGES)
+                .map(|_| PageInfo { width: 200.0, height: 200.0, crop: [0.0, 0.0, 200.0, 200.0], rotation: 0, label: String::new() })
+                .collect(),
+            ..Default::default()
+        };
+        Inspector::new(&counting).fill(&mut info);
+        let placed: Vec<_> = info.fields.iter().map(|f| (f.name.clone(), f.page)).collect();
+        let want: Vec<_> = (0..PAGES).flat_map(|p| (0..PER_PAGE).map(move |k| (format!("f{p}_{k}"), Some(p)))).collect();
+        assert_eq!(placed, want);
+        // A handful of reads per page and field; searching the pages for each field read the
+        // page dictionaries about 50,000 times.
+        let reads = counting.reads.get();
+        assert!(reads < 20 * (PAGES + PAGES * PER_PAGE), "{reads} object reads");
     }
 
     #[test]
@@ -1915,6 +2482,72 @@ trailer << /Root 1 0 R >>
                 LinkTarget::SetLayers { changes: vec![(On, (6, 0)), (Toggle, (5, 0)), (Toggle, (7, 0))], preserve_rb: false },
                 // An indirect /State; /PreserveRB defaults to true.
                 LinkTarget::SetLayers { changes: vec![(Off, (5, 0))], preserve_rb: true },
+            ]
+        );
+    }
+
+    #[test]
+    fn links_read_bounded_local_remote_go_to_actions() {
+        use DestView::{Fit, Xyz};
+        let too_long = "a".repeat(MAX_REMOTE_FILE_SPEC_BYTES + 1);
+        let wide_file = format!("<FEFF{}>", "4E00".repeat(1400));
+        let wide_name = format!("<FEFF{}>", "4E00".repeat(342));
+        let pdf = format!(
+            "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+             2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >> endobj\n\
+             3 0 obj << /Type /Page /Parent 2 0 R /Annots [99 0 R 30 0 R 31 0 R 32 0 R 33 0 R 34 0 R 35 0 R 36 0 R 37 0 R 38 0 R 39 0 R 40 0 R 41 0 R] >> endobj\n\
+             30 0 obj << /Type /Annot /Subtype /Link /Rect [0 0 10 10] /A << /S /GoToR /F (chapters/remote.pdf) /D [2 /XYZ 10 20 1.5] /NewWindow true >> >> endobj\n\
+             31 0 obj << /Type /Annot /Subtype /Link /Rect [0 20 10 30] /A << /S /GoToR /F << /Type /Filespec /F (fallback.pdf) /UF <FEFF0066006F006F002E007000640066> >> /D [0 /Fit] /NewWindow false >> >> endobj\n\
+             32 0 obj << /Type /Annot /Subtype /Link /Rect [0 40 10 50] /A << /S /GoToR /F (remote.pdf) >> >> endobj\n\
+             33 0 obj << /Type /Annot /Subtype /Link /Rect [0 60 10 70] /A << /S /GoToR /F (chapter.pdf) /D (chapter) >> >> endobj\n\
+             34 0 obj << /Type /Annot /Subtype /Link /Rect [0 80 10 90] /A << /S /GoToR /FS /URL /F (https://example.com) /D [0 /Fit] >> >> endobj\n\
+             35 0 obj << /Type /Annot /Subtype /Link /Rect [0 100 10 110] /A << /S /GoToR /F ({too_long}) /D [0 /Fit] >> >> endobj\n\
+             36 0 obj << /Type /Annot /Subtype /Link /Rect [0 120 10 130] /A << /S /GoToR /F (chapter.pdf) /D /chapter >> >> endobj\n\
+             37 0 obj << /Type /Annot /Subtype /Link /Rect [0 140 10 150] /A << /S /GoToR /F (chapter.pdf) /D [-1 /Fit] >> >> endobj\n\
+             38 0 obj << /Type /Annot /Subtype /Link /Rect [0 160 10 170] /A << /S /GoToR /F (chapter.pdf) /D [1.5 /Fit] >> >> endobj\n\
+             39 0 obj << /Type /Annot /Subtype /Link /Rect [0 180 10 190] /A << /S /GoToR /F (chapter.pdf) /D [9223372036854775807 /Fit] >> >> endobj\n\
+             40 0 obj << /Type /Annot /Subtype /Link /Rect [0 200 10 210] /A << /S /GoToR /F << /Type /Filespec /UF {wide_file} >> /D [0 /Fit] >> >> endobj\n\
+             41 0 obj << /Type /Annot /Subtype /Link /Rect [0 220 10 230] /A << /S /GoToR /F (chapter.pdf) /D {wide_name} >> >> endobj\n\
+             trailer << /Root 1 0 R >>\n%%EOF"
+        );
+        let info = inspect(Arc::new(pdf.into_bytes()), None).expect("opens");
+        let targets: Vec<_> = info.links.iter().map(|l| (l.index, l.target.clone())).collect();
+        let huge_page_target = usize::try_from(i64::MAX)
+            .map(|page| LinkTarget::RemoteGoTo {
+                file: "chapter.pdf".into(),
+                destination: RemoteDestination::Page { page, view: Fit },
+                new_window: None,
+            })
+            .unwrap_or_else(|_| LinkTarget::Other("GoToR".into()));
+        assert_eq!(
+            targets,
+            [
+                (
+                    1,
+                    LinkTarget::RemoteGoTo {
+                        file: "chapters/remote.pdf".into(),
+                        destination: RemoteDestination::Page { page: 2, view: Xyz { left: Some(10.0), top: Some(20.0), zoom: Some(1.5) } },
+                        new_window: Some(true),
+                    }
+                ),
+                (
+                    2,
+                    LinkTarget::RemoteGoTo {
+                        file: "foo.pdf".into(),
+                        destination: RemoteDestination::Page { page: 0, view: Fit },
+                        new_window: Some(false),
+                    }
+                ),
+                (3, LinkTarget::RemoteGoTo { file: "remote.pdf".into(), destination: RemoteDestination::Default, new_window: None }),
+                (4, LinkTarget::RemoteGoTo { file: "chapter.pdf".into(), destination: RemoteDestination::Named("chapter".into()), new_window: None }),
+                (5, LinkTarget::Other("GoToR".into())),
+                (6, LinkTarget::Other("GoToR".into())),
+                (7, LinkTarget::RemoteGoTo { file: "chapter.pdf".into(), destination: RemoteDestination::Named("chapter".into()), new_window: None }),
+                (8, LinkTarget::Other("GoToR".into())),
+                (9, LinkTarget::Other("GoToR".into())),
+                (10, huge_page_target),
+                (11, LinkTarget::Other("GoToR".into())),
+                (12, LinkTarget::Other("GoToR".into())),
             ]
         );
     }
@@ -2234,6 +2867,35 @@ trailer << /Root 1 0 R >>
     }
 
     #[test]
+    fn carriage_returns_in_comment_text_become_line_breaks() {
+        use lopdf::dictionary;
+
+        let mut doc = Document::with_version("1.7");
+        let pages_id = doc.new_object_id();
+        let annot_id = doc.add_object(dictionary! {
+            "Type" => "Annot",
+            "Subtype" => "Text",
+            "Rect" => vec![10.into(), 10.into(), 30.into(), 30.into()],
+            // Acrobat ends lines in /Contents with CR; the interface only breaks lines at LF.
+            "Contents" => Object::string_literal("one\r\rtwo\r\nthree"),
+        });
+        let page_id = doc.add_object(dictionary! {
+            "Type" => "Page",
+            "Parent" => pages_id,
+            "MediaBox" => vec![0.into(), 0.into(), 200.into(), 300.into()],
+            "Annots" => vec![annot_id.into()],
+        });
+        doc.objects.insert(pages_id, dictionary! { "Type" => "Pages", "Kids" => vec![page_id.into()], "Count" => 1 }.into());
+        let catalog_id = doc.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages_id });
+        doc.trailer.set("Root", catalog_id);
+        let mut bytes = Vec::new();
+        doc.save_to(&mut bytes).expect("write synthetic fixture");
+
+        let info = inspect(Arc::new(bytes), None).expect("opens");
+        assert_eq!(info.annotations[0].contents.as_deref(), Some("one\n\ntwo\nthree"));
+    }
+
+    #[test]
     fn dates_are_prettified() {
         assert_eq!(pretty_date("D:20260930104512-04'00'"), "2026-09-30 10:45");
         assert_eq!(pretty_date("yesterday"), "yesterday");
@@ -2271,5 +2933,145 @@ mod version_tests {
         assert_eq!(super::version_label("Pdf17"), "1.7");
         assert_eq!(super::version_label("V2_0"), "2.0");
         assert_eq!(super::version_label("Unknown"), "Unknown");
+    }
+}
+
+#[cfg(test)]
+mod substitution_tests {
+    use std::sync::Arc;
+
+    use super::{FontInfo, inspect};
+
+    /// One page naming four fonts the document does not embed: a Chinese CID font (Adobe-GB1), a
+    /// Japanese one (Adobe-Japan1), an unknown serif-flagged simple font, and an aliased
+    /// standard-14 name.
+    const NOT_EMBEDDED: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << /Font << /F1 4 0 R /F2 6 0 R /F3 8 0 R /F4 9 0 R /F5 11 0 R >> >> >> endobj
+4 0 obj << /Type /Font /Subtype /Type0 /BaseFont /STSong-Light /Encoding /UniGB-UCS2-H /DescendantFonts [5 0 R] >> endobj
+5 0 obj << /Type /Font /Subtype /CIDFontType0 /BaseFont /STSong-Light /CIDSystemInfo << /Registry (Adobe) /Ordering (GB1) /Supplement 2 >> >> endobj
+6 0 obj << /Type /Font /Subtype /Type0 /BaseFont /KozMinPro-Regular /Encoding /UniJIS-UCS2-H /DescendantFonts [7 0 R] >> endobj
+7 0 obj << /Type /Font /Subtype /CIDFontType0 /BaseFont /KozMinPro-Regular /CIDSystemInfo << /Registry (Adobe) /Ordering (Japan1) /Supplement 4 >> >> endobj
+8 0 obj << /Type /Font /Subtype /TrueType /BaseFont /SomeHouseSerif /FontDescriptor 10 0 R >> endobj
+9 0 obj << /Type /Font /Subtype /TrueType /BaseFont /ArialMT >> endobj
+10 0 obj << /Type /FontDescriptor /FontName /SomeHouseSerif /Flags 34 >> endobj
+11 0 obj << /Type /Font /Subtype /TrueType /BaseFont /HouseGrotesk /FontDescriptor 12 0 R >> endobj
+12 0 obj << /Type /FontDescriptor /FontName /HouseGrotesk /Flags 33 >> endobj
+trailer << /Size 13 /Root 1 0 R >>
+%%EOF";
+
+    fn font<'a>(fonts: &'a [FontInfo], name: &str) -> &'a FontInfo {
+        fonts.iter().find(|f| f.name == name).unwrap_or_else(|| panic!("{name} listed; got {:?}", fonts.iter().map(|f| &f.name).collect::<Vec<_>>()))
+    }
+
+    #[test]
+    fn doc_info_says_which_face_stands_in_and_why() {
+        let info = inspect(Arc::new(NOT_EMBEDDED.to_vec()), None).expect("opens");
+
+        // The one that matters most to a user: a Chinese PDF that draws nothing. Before this,
+        // doc_info said only `embedded: false` and left them to guess.
+        let cjk = font(&info.fonts, "STSong-Light");
+        assert!(!cjk.embedded);
+        assert_eq!(cjk.substitute, None, "no licensed Chinese face, so nothing stands in");
+        let why = cjk.substitution.as_deref().unwrap_or_default();
+        assert!(why.contains("no licensed face") && why.contains("rather than the wrong glyphs"), "{why}");
+
+        // An aliased standard-14 name resolves to the real face, whose metrics are exact.
+        let arial = font(&info.fonts, "ArialMT");
+        assert_eq!(arial.substitute.as_deref(), Some("Helvetica"));
+        assert!(arial.substitution.as_deref().unwrap_or_default().contains("standard 14"));
+
+        // A house font whose name merely contains "Serif" gets Times -- reported as the guess it
+        // is, not as a standard-14 name, which would be untrue of a font nobody has heard of.
+        let serif = font(&info.fonts, "SomeHouseSerif");
+        assert_eq!(serif.substitute.as_deref(), Some("Times-Roman"));
+        assert!(serif.substitution.as_deref().unwrap_or_default().contains("hints at one"), "{serif:?}");
+
+        // No hint in the name at all, so the descriptor flags decide: 33 = fixed pitch + nonsymbolic.
+        let grotesk = font(&info.fonts, "HouseGrotesk");
+        assert_eq!(grotesk.substitute.as_deref(), Some("Courier"));
+        assert!(grotesk.substitution.as_deref().unwrap_or_default().contains("descriptor flags"), "{grotesk:?}");
+
+        // Japanese depends on the optional craft-fonts build input; either way it is reported,
+        // and never as a Latin face.
+        let jpan = font(&info.fonts, "KozMinPro-Regular");
+        assert!(jpan.substitution.is_some(), "a substitution is always explained");
+        match &jpan.substitute {
+            Some(face) => {
+                assert!(!face.starts_with("Helvetica") && !face.starts_with("Times"), "a Latin face is never a Japanese substitute: {face}")
+            }
+            None => assert!(jpan.substitution.as_deref().unwrap_or_default().contains("no licensed face")),
+        }
+
+        // Nothing claims to be embedded, so every font here carries a reason.
+        assert!(info.fonts.iter().all(|f| !f.embedded && f.substitution.is_some()), "{:?}", info.fonts);
+    }
+
+    /// An embedded font is reported as faithful: nothing stands in, and there is nothing to explain.
+    const EMBEDDED: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << /Font << /F1 4 0 R >> >> >> endobj
+4 0 obj << /Type /Font /Subtype /TrueType /BaseFont /ABCDEF+SomeHouseSans /FontDescriptor 5 0 R >> endobj
+5 0 obj << /Type /FontDescriptor /FontName /ABCDEF+SomeHouseSans /Flags 32 /FontFile2 6 0 R >> endobj
+6 0 obj << /Length 4 >> stream
+test
+endstream endobj
+trailer << /Size 7 /Root 1 0 R >>
+%%EOF";
+
+    #[test]
+    fn an_embedded_font_reports_no_substitution_at_all() {
+        let info = inspect(Arc::new(EMBEDDED.to_vec()), None).expect("opens");
+        let f = font(&info.fonts, "SomeHouseSans");
+        assert!(f.embedded && f.subset, "{f:?}");
+        assert_eq!((f.substitute.as_deref(), f.substitution.as_deref()), (None, None), "the document's own glyphs are shown");
+    }
+}
+
+#[cfg(test)]
+mod open_action_javascript_tests {
+    use std::sync::Arc;
+
+    use super::inspect;
+
+    /// One-page PDF whose catalog points its /OpenAction at object 4 (written by the caller).
+    fn pdf_with_open_action(action: &[u8]) -> Vec<u8> {
+        let objs: Vec<&[u8]> = vec![
+            b"<< /Type /Catalog /Pages 2 0 R /OpenAction 4 0 R >>",
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>",
+            action,
+        ];
+        let mut out = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, o) in objs.iter().enumerate() {
+            offsets.push(out.len());
+            out.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+            out.extend_from_slice(o);
+            out.extend_from_slice(b"\nendobj\n");
+        }
+        let xref = out.len();
+        out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+        for o in offsets {
+            out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+        }
+        out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+        out
+    }
+
+    #[test]
+    fn open_action_javascript_sets_has_javascript() {
+        let bytes = pdf_with_open_action(b"<< /S /JavaScript /JS (app.alert('hi')) >>");
+        let info = inspect(Arc::new(bytes), None).expect("inspects");
+        assert!(info.has_javascript, "an /OpenAction /JavaScript is JavaScript");
+    }
+
+    #[test]
+    fn open_action_goto_does_not_set_has_javascript() {
+        let bytes = pdf_with_open_action(b"<< /S /GoTo /D [3 0 R /Fit] >>");
+        let info = inspect(Arc::new(bytes), None).expect("inspects");
+        assert!(!info.has_javascript, "a /GoTo /OpenAction is not JavaScript");
     }
 }

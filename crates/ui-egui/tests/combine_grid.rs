@@ -126,6 +126,44 @@ fn names(h: &Harness<'static, PdfCraftApp>) -> Vec<String> {
     h.state().combine_draft.iter().map(|f| f.name.clone()).collect()
 }
 
+fn check_duplicate_warnings(view: &str) {
+    let first = fixture_sized(1, 200.0, 300.0);
+    let other = fixture_sized(1, 300.0, 200.0);
+    assert_eq!(first.len(), other.len());
+    assert_ne!(first, other);
+    let mut h = grid_of(vec![("report.pdf", first.clone()), ("report.pdf", other)], vec2(1400.0, 900.0));
+    h.state_mut().set_option("combine-view", view).unwrap();
+    h.run_steps(2);
+    let warning_count = |h: &mut Harness<'static, PdfCraftApp>| {
+        if view == "grid" {
+            let at = h.get_all_by_label("report.pdf").next().unwrap().rect().center();
+            h.hover_at(at);
+            h.run_steps(60);
+        }
+        h.query_all_by_label_contains("Added more than once").count()
+    };
+    assert_eq!(warning_count(&mut h), 0, "different equal-sized PDFs are not duplicates in {view}");
+    h.state_mut().use_files(FilePurpose::Combine, vec![("report.pdf".into(), first)]);
+    h.run_steps(3);
+    assert_eq!(warning_count(&mut h), if view == "grid" { 1 } else { 2 }, "only the two identical files are warned");
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    h.run_steps(3);
+    assert_eq!(warning_count(&mut h), 0, "undo removes the duplicate warning");
+    h.key_press_modifiers(Modifiers::COMMAND | Modifiers::SHIFT, Key::Z);
+    h.run_steps(3);
+    assert_eq!(warning_count(&mut h), if view == "grid" { 1 } else { 2 }, "redo restores the duplicate warning");
+}
+
+#[test]
+fn list_duplicate_warnings_compare_contents_and_follow_undo() {
+    check_duplicate_warnings("list");
+}
+
+#[test]
+fn grid_duplicate_warnings_compare_contents_and_follow_undo() {
+    check_duplicate_warnings("grid");
+}
+
 /// Run frames until `done`, giving render threads time; whether it happened.
 fn settle(h: &mut Harness<'static, PdfCraftApp>, done: impl Fn(&PdfCraftApp) -> bool) -> bool {
     for _ in 0..400 {
@@ -1762,4 +1800,44 @@ fn files_picked_by_automation_let_go_of_the_pages_picked() {
     h.key_press(Key::Delete);
     h.run_steps(2);
     assert_eq!(h.state().combine_parts_shown(), [("b.pdf".to_string(), vec![0, 1, 2])], "the file picked goes, b keeps its pages");
+}
+
+#[test]
+fn open_documents_already_in_the_list_are_not_added_again() {
+    // #1356: Add open documents left out none of the open documents, but added again the ones
+    // already listed. Two documents with the same name and the same bytes are still two documents.
+    let mut h = Harness::builder().with_size(vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        for (name, pages) in [("a.pdf", 1), ("b.pdf", 2), ("report.pdf", 3)] {
+            app.open_bytes(name, None, fixture(pages)).unwrap();
+        }
+        app
+    });
+    h.run_steps(4);
+    h.state_mut().execute("page.combine");
+    h.run_steps(3);
+    let add_all = |h: &mut Harness<'static, PdfCraftApp>| {
+        h.get_by_label("Add open documents").click();
+        h.run_steps(2);
+        h.get_by_label("All open documents").click();
+        h.run_steps(3);
+    };
+    add_all(&mut h);
+    assert_eq!(names(&h), ["a.pdf", "b.pdf", "report.pdf"]);
+    add_all(&mut h);
+    assert_eq!(names(&h), ["a.pdf", "b.pdf", "report.pdf"], "nothing is added twice");
+    // Another report.pdf, opened while the first is listed: a different document all the same.
+    h.state_mut().open_bytes("report.pdf", None, fixture(3)).unwrap();
+    h.state_mut().execute("page.combine");
+    h.run_steps(3);
+    add_all(&mut h);
+    assert_eq!(names(&h), ["a.pdf", "b.pdf", "report.pdf", "report.pdf"]);
+    // A document taken out of the list can be added again.
+    h.state_mut().select_combine_rows(&[1]);
+    h.run_steps(2);
+    h.key_press(Key::Delete);
+    h.run_steps(2);
+    add_all(&mut h);
+    assert_eq!(names(&h), ["a.pdf", "report.pdf", "report.pdf", "b.pdf"]);
 }

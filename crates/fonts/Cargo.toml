@@ -14,3 +14,4 @@ pdfcraft-cos = { workspace = true }
 skrifa = "0.44"
 # Arabic shaping for text written into PDFs; already in the tree via egui, on the same read-fonts.
 harfrust = "0.12"
+unicode-bidi = "0.3"

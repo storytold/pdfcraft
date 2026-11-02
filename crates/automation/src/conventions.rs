@@ -2,15 +2,31 @@
 use serde_json::{Value, json};
 
 use crate::{Args, Automation, Content, Result, ToolError, encode_png, failed, info, tools};
+use pdfcraft_engine::commands;
 use pdfcraft_render::{RenderRequest, RequestKind};
 
 /// The most steps one `command_batch` runs.
 pub(crate) const MAX_BATCH_STEPS: usize = 1000;
 
+/// Why `id` has no tool to run: a tool name passed as a command id, an id the registry doesn't
+/// know, or a real command that nothing automates yet. They need different fixes from the caller.
+fn no_tool_for(id: &str) -> ToolError {
+    if commands::command(id).is_some() {
+        return failed(format!("command {id:?} has no headless tool; see command_list"));
+    }
+    match tools::find(id) {
+        Some(def) => match def.command {
+            Some(command) => failed(format!("{id:?} is a tool, not a command id; use the command id {command:?}, or call the tool directly")),
+            None => failed(format!("{id:?} is a tool, not a command id; call it directly (command ids are in command_list)")),
+        },
+        None => failed(format!("unknown command id {id:?}; see command_list")),
+    }
+}
+
 impl Automation {
     pub(crate) fn command_run(&mut self, args: &Args) -> Result<Vec<Content>> {
         let id = args.str("id")?;
-        let tool = tools::tool_for_command(id).ok_or_else(|| failed(format!("command {id:?} has no headless tool; see command_list")))?;
+        let tool = tools::tool_for_command(id).ok_or_else(|| no_tool_for(id))?;
         let def = tools::find(tool).ok_or_else(|| failed("command tool is unavailable"))?;
         let mut params = match args.get("params") {
             None | Some(Value::Null) => serde_json::Map::new(),
@@ -114,7 +130,7 @@ impl Automation {
             return Err(failed("page has invalid dimensions"));
         }
         let scale = (max as f32 / side).min(1.0);
-        let out = self.renderer(id)?.render(RenderRequest { page, kind: RequestKind::Pixels, tile: None, scale, tag: 0 });
+        let out = self.renderer(id)?.render(RenderRequest { page, kind: RequestKind::Pixels, tile: None, scale, tag: 0, preview: false });
         if let Some(error) = out.error {
             return Err(failed(error));
         }

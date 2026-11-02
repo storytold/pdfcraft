@@ -20,6 +20,76 @@ pub mod text;
 
 use pdfcraft_cos::Document;
 
+/// The deepest element nesting accepted before an XML document reaches the parser.
+///
+/// roxmltree parses by recursive descent, so its stack use grows with the nesting depth: ten
+/// thousand levels overflow the main thread's stack, and a stack overflow is `abort()`, which no
+/// `catch_unwind` can intercept. The bound therefore has to be checked before parsing, not while
+/// walking the result. Around three thousand levels still parse on the default stack, so this stays
+/// clear of the cliff while leaving far more room than the walks below, which cut off at 64 - and
+/// more than the five hundred levels `hostile_templates_fail_without_panicking` keeps parsing.
+/// `pdfcraft-xfdf` carries the same check for form data files.
+pub(crate) const MAX_XML_DEPTH: usize = 1_024;
+
+/// Element nesting depth of `text`, skipping comments, CDATA, processing instructions, the DOCTYPE
+/// and quoted attribute values. A tag that closes itself (`<draw/>`) is one level while it is read
+/// and does not stay open, so a long run of styling elements cannot accumulate into the bound. It
+/// cannot under-count a real element; a stray `<` in text is invalid XML and only makes it
+/// over-count, which errs towards refusing the document.
+pub(crate) fn xml_nesting_depth(text: &str) -> usize {
+    fn find(hay: &[u8], from: usize, needle: &[u8]) -> Option<usize> {
+        (from..hay.len()).find(|&p| hay[p..].starts_with(needle))
+    }
+    let b = text.as_bytes();
+    let (mut i, mut depth, mut max) = (0usize, 0usize, 0usize);
+    while i < b.len() {
+        if b[i] != b'<' {
+            i += 1;
+        } else if b[i..].starts_with(b"<!--") {
+            i = find(b, i + 4, b"-->").map_or(b.len(), |p| p + 3);
+        } else if b[i..].starts_with(b"<![CDATA[") {
+            i = find(b, i + 9, b"]]>").map_or(b.len(), |p| p + 3);
+        } else if b[i..].starts_with(b"<?") {
+            i = find(b, i + 2, b"?>").map_or(b.len(), |p| p + 2);
+        } else if b[i..].starts_with(b"<!") {
+            i = find(b, i + 2, b">").map_or(b.len(), |p| p + 1);
+        } else if b[i..].starts_with(b"</") {
+            depth = depth.saturating_sub(1);
+            i = find(b, i + 2, b">").map_or(b.len(), |p| p + 1);
+        } else {
+            depth += 1;
+            max = max.max(depth);
+            // Skip the rest of the start tag, over any quoted attribute value, and remember its last
+            // significant byte: a tag that ends in `/` closes itself, so it is one level deep while it
+            // is read rather than a level left open.
+            i += 1;
+            let mut quote = 0u8;
+            let mut last = 0u8;
+            while i < b.len() {
+                let c = b[i];
+                if quote != 0 {
+                    if c == quote {
+                        quote = 0;
+                    }
+                } else if c == b'"' || c == b'\'' {
+                    quote = c;
+                } else if c == b'>' {
+                    i += 1;
+                    break;
+                } else if !c.is_ascii_whitespace() {
+                    last = c;
+                }
+                i += 1;
+            }
+            if last == b'/' {
+                depth -= 1;
+            }
+        }
+    }
+    max
+}
+
+pub use data::{DataImport, ImportNode, export_data, import_data, parse_data_file, write_data_image};
 pub use data::{
     DataNode, DataOp, DataPath, DatasetsWrite, FieldData, FieldDatum, add_data_instances, build_data, data_path, iso_to_pattern, parse_datasets,
     pattern_to_iso, read_values, read_values_with, remove_data_instance, som_to_path, write_data_ops, write_data_value, write_datasets,
@@ -28,10 +98,10 @@ pub use data::{
 pub use layout::{Action, BorderShape, Form, Item, MAX_PAGES, Page, Widget, WidgetKind, layout};
 pub use packets::{Encoding, Packets, decode as decode_packet, encode as encode_packet, read_packets};
 pub use parse::{measure, parse};
-pub use pdf::{CLICK_KEY, LAYOUT_KEY, SOM_KEY, existing_layout};
+pub use pdf::{CLICK_KEY, LAYOUT_KEY, SOM_KEY, Stripped, XfaShape, existing_layout, strip, xfa_shape};
 pub use script::{
     FormNode, LiveForm, MAX_FORM_NODES, NodeKind, OVERRIDES_KEY, Overrides, ScriptEvent, apply_overrides, data_of, fields_by_som, form_tree,
-    has_scripts, overrides, rerender, set_overrides, template_of,
+    has_scripts, overrides, refresh_value, rerender, set_overrides, template_of,
 };
 
 #[derive(Debug, thiserror::Error)]

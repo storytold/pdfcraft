@@ -30,6 +30,10 @@ const MAX_MEASURES: usize = 2_000_000;
 const MAX_INSTANCES: usize = 50;
 /// Largest picture taken from the data (decoded bytes), as for template pictures.
 const MAX_DATA_IMAGE: usize = 32 << 20;
+/// Most picture bytes one layout keeps, all copies together. Each laid-out picture holds its
+/// own copy, so a large picture in repeating subforms would otherwise multiply into gigabytes
+/// (a failed allocation aborts the app); a real form's logos and photos stay far below.
+const MAX_IMAGE_BYTES: usize = 256 << 20;
 /// Placeholder for the page count in text laid out before the count is known.
 const PAGE_COUNT_MARK: char = '\u{E000}';
 
@@ -56,6 +60,8 @@ pub enum WidgetKind {
     },
     /// A signature field, to be signed in the app.
     Signature,
+    /// An image field: a push button that picks a picture (the picture itself is page content).
+    Image,
     /// A date field with its Acrobat format pattern (`yyyy-mm-dd`).
     Date(String),
     CheckBox {
@@ -195,11 +201,16 @@ struct Layouter<'t> {
     warned: HashSet<String>,
     fields: usize,
     items: usize,
+    /// Picture bytes laid out so far (see [`MAX_IMAGE_BYTES`]).
+    image_bytes: usize,
     /// Container sizes by (address of the subform or area in the template, available width,
     /// depth), with the inherited font and paragraph they were measured with.
     measured: RefCell<HashMap<MeasureKey, Measured>>,
     /// Measurements made so far (see [`MAX_MEASURES`]).
     measures: Cell<usize>,
+    /// The fields and draws of the block being placed: (first item, one past the last, top,
+    /// bottom) on the last page. A page break keeps each whole (see `split_block`).
+    leaves: Vec<(usize, usize, f64, f64)>,
 }
 
 /// How many instances of a repeating subform to lay out: what the data holds once it holds
@@ -208,12 +219,6 @@ struct Layouter<'t> {
 pub fn instance_count(occur: &Occur, from_data: usize) -> usize {
     let n = if from_data > 0 { from_data } else { occur.initial };
     n.min(occur.max.unwrap_or(usize::MAX)).clamp(1, MAX_INSTANCES)
-}
-
-/// Index of child `i` among the earlier siblings with the same name (the SOM index).
-fn sib_index(children: &[Node], i: usize) -> usize {
-    let name = children.get(i).and_then(|c| c.common().name.as_deref());
-    children.iter().take(i).filter(|c| c.common().name.as_deref() == name && name.is_some()).count()
 }
 
 /// Lay a template out, with the values and repeat counts of `data` (the `xfa:data` element).
@@ -227,6 +232,7 @@ pub fn layout(tpl: &Template, data: Option<&DataNode>) -> Result<Form, XfaError>
             content: vec![Rect::new(36.0, 36.0, 540.0, 720.0)],
             items: Vec::new(),
             occur_max: None,
+            occur_min: 0,
         }],
     };
     let mut values = HashMap::new();
@@ -246,14 +252,17 @@ pub fn layout(tpl: &Template, data: Option<&DataNode>) -> Result<Form, XfaError>
         warned: HashSet::new(),
         fields: 0,
         items: 0,
+        image_bytes: 0,
         measured: RefCell::new(HashMap::new()),
         measures: Cell::new(0),
+        leaves: Vec::new(),
     };
     let ctx = Ctx { font: Font::default(), para: Para::default(), som: String::new() };
     l.new_page()?;
     if tpl.root.common.presence.occupies() {
         l.flow_subform(&root_node, None, &ctx, 0, 0)?;
     }
+    l.satisfy_page_area_minimums()?;
     l.check_measures()?;
     let total = l.pages.len();
     let count = total.to_string();
@@ -310,6 +319,75 @@ fn clamp_opt(v: f64, min: Option<f64>, max: Option<f64>) -> f64 {
 /// Does `node` flow (may be split across pages) rather than being placed as one block?
 fn splittable(node: &Node) -> bool {
     matches!(node, Node::Subform(s) if matches!(s.layout, Layout::Tb | Layout::Table) && s.common.h.is_none())
+}
+
+/// Top and bottom of an item a page break must not cut (text, a picture, a field); `None`
+/// for fills and lines, which are cut at the break.
+fn solid_extent(item: &Item) -> Option<(f64, f64)> {
+    match item {
+        Item::Text(s) => Some((s.baseline - s.face.size * 0.8, s.baseline + s.face.size * 0.2)),
+        Item::Image { rect, .. } => Some((rect.y, rect.bottom())),
+        Item::Widget(w) => Some((w.rect.y, w.rect.bottom())),
+        Item::Fill { .. } | Item::Line { .. } => None,
+    }
+}
+
+/// `item` as the part above `cut` and the part below: solid items go whole to the side their
+/// top is on, fills and lines crossing the cut are cut in two.
+fn divide(item: Item, cut: f64) -> (Option<Item>, Option<Item>) {
+    if let Some((top, _)) = solid_extent(&item) {
+        return if top < cut - 0.01 { (Some(item), None) } else { (None, Some(item)) };
+    }
+    match item {
+        Item::Fill { rect, color } => {
+            if rect.bottom() <= cut + 0.01 {
+                (Some(Item::Fill { rect, color }), None)
+            } else if rect.y >= cut - 0.01 {
+                (None, Some(Item::Fill { rect, color }))
+            } else {
+                let above = Rect::new(rect.x, rect.y, rect.w, cut - rect.y);
+                let below = Rect::new(rect.x, cut, rect.w, rect.bottom() - cut);
+                (Some(Item::Fill { rect: above, color }), Some(Item::Fill { rect: below, color }))
+            }
+        }
+        Item::Line { from, to, width, color, dashed } => {
+            let (lo, hi) = if from.1 <= to.1 { (from, to) } else { (to, from) };
+            if lo.1 >= cut {
+                (None, Some(Item::Line { from, to, width, color, dashed }))
+            } else if hi.1 <= cut {
+                (Some(Item::Line { from, to, width, color, dashed }), None)
+            } else {
+                // lo.1 < cut < hi.1, so the divisor is positive.
+                let t = (cut - lo.1) / (hi.1 - lo.1);
+                let mid = (lo.0 + (hi.0 - lo.0) * t, cut);
+                (Some(Item::Line { from: lo, to: mid, width, color, dashed }), Some(Item::Line { from: mid, to: hi, width, color, dashed }))
+            }
+        }
+        other => (Some(other), None),
+    }
+}
+
+/// `item` moved by (`dx`, `dy`).
+fn moved(mut item: Item, dx: f64, dy: f64) -> Item {
+    match &mut item {
+        Item::Fill { rect, .. } | Item::Image { rect, .. } => {
+            rect.x += dx;
+            rect.y += dy;
+        }
+        Item::Line { from, to, .. } => {
+            *from = (from.0 + dx, from.1 + dy);
+            *to = (to.0 + dx, to.1 + dy);
+        }
+        Item::Text(s) => {
+            s.x += dx;
+            s.baseline += dy;
+        }
+        Item::Widget(w) => {
+            w.rect.x += dx;
+            w.rect.y += dy;
+        }
+    }
+    item
 }
 
 fn is_row(node: &Node) -> bool {
@@ -421,11 +499,28 @@ impl Layouter<'_> {
     // ───────────────────────────────────────────────────────────────────────── pages
 
     fn new_page(&mut self) -> Result<(), XfaError> {
+        let idx =
+            (0..self.areas.len()).find(|&i| self.areas[i].occur_max.is_none_or(|m| self.uses[i] < m)).unwrap_or(self.areas.len().saturating_sub(1));
+        self.new_page_of(idx)
+    }
+
+    /// Once the body has been laid out, give every page area that has been used fewer times than
+    /// its `occur min` the pages it still needs, in template order, after the body's pages.
+    fn satisfy_page_area_minimums(&mut self) -> Result<(), XfaError> {
+        let areas = Rc::clone(&self.areas);
+        for (idx, area) in areas.iter().enumerate() {
+            while self.uses.get(idx).is_some_and(|u| *u < area.occur_min) {
+                self.new_page_of(idx)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Start a page from page area `idx`.
+    fn new_page_of(&mut self, idx: usize) -> Result<(), XfaError> {
         if self.pages.len() >= MAX_PAGES {
             return Err(XfaError::TooLarge(format!("the form lays out to more than {MAX_PAGES} pages")));
         }
-        let idx =
-            (0..self.areas.len()).find(|&i| self.areas[i].occur_max.is_none_or(|m| self.uses[i] < m)).unwrap_or(self.areas.len().saturating_sub(1));
         let areas = Rc::clone(&self.areas);
         let Some(area) = areas.get(idx) else {
             return Err(XfaError::Malformed("the template has no page area".into()));
@@ -439,8 +534,9 @@ impl Layouter<'_> {
         // Master page content: positioned draws and fields.
         let ctx = Ctx { font: Font::default(), para: Para::default(), som: area.name.clone().map(|n| format!("{n}[0]")).unwrap_or_default() };
         let page_rect = Rect::new(0.0, 0.0, area.width, area.height);
+        let sibs = SomIndices::of(&area.items);
         for (i, item) in area.items.iter().enumerate() {
-            self.draw_positioned_child(item, page_rect, &ctx, 1, sib_index(&area.items, i))?;
+            self.draw_positioned_child(item, page_rect, &ctx, 1, sibs.at(i))?;
         }
         Ok(())
     }
@@ -491,6 +587,143 @@ impl Layouter<'_> {
         Ok(true)
     }
 
+    /// Place `node` as one block of size (`w`, `h`) at the cursor: in this content area when it fits,
+    /// in the next when it fits there, and across as many as it takes when it is taller than a
+    /// content area (a positioned or fixed-height subform holding more than a page).
+    fn flow_block(&mut self, node: &Node, x: f64, (w, h): (f64, f64), ctx: &Ctx, depth: usize, sib: usize) -> Result<(), XfaError> {
+        let (rect, y, _) = self.cursor();
+        if y + h > rect.bottom() + 0.01 && h <= rect.h + 0.01 {
+            self.make_room(h)?;
+        }
+        let (rect, y, _) = self.cursor();
+        let first = self.pages.last().map_or(0, |p| p.items.len());
+        self.leaves.clear();
+        self.draw_node(node, Rect::new(x, y, w, h), ctx, depth, sib)?;
+        let page_h = self.pages.last().map_or(f64::INFINITY, |p| p.height);
+        // What was drawn, when it is lower than the block's own height says (content that
+        // outgrows a fixed height) and ends off the page.
+        let drawn = self
+            .pages
+            .last()
+            .and_then(|p| p.items.get(first..))
+            .unwrap_or_default()
+            .iter()
+            .filter_map(solid_extent)
+            .map(|e| e.1)
+            .fold(y + h, f64::max);
+        if y + h <= rect.bottom() + 0.01 && drawn <= page_h + 0.01 {
+            self.leaves.clear();
+            self.place(h);
+            return Ok(());
+        }
+        self.split_block(first, y, drawn)
+    }
+
+    /// Remember that the items the last page got since `start` are one field or draw at
+    /// `rect`, to be kept together by a page break.
+    fn keep_whole(&mut self, start: usize, rect: Rect) {
+        let end = self.pages.last().map_or(0, |p| p.items.len());
+        if end > start {
+            self.leaves.push((start, end, rect.y, rect.bottom()));
+        }
+    }
+
+    fn item_count(&self) -> usize {
+        self.pages.last().map_or(0, |p| p.items.len())
+    }
+
+    /// Spread the items the last page holds from index `first` on (a block drawn from `top` to
+    /// `end`, past the bottom of its content area) over this and the following content areas.
+    /// Breaks fall between text, pictures and fields, never through one that fits in an area;
+    /// fills and lines are cut at the break.
+    fn split_block(&mut self, first: usize, top: f64, end: f64) -> Result<(), XfaError> {
+        let items: Vec<Item> = match self.pages.last_mut() {
+            Some(p) if first <= p.items.len() => p.items.split_off(first),
+            _ => return Ok(()),
+        };
+        // Each item with the extent of the field or draw it belongs to: such a leaf moves
+        // whole (its border with its text), unless it is taller than a content area.
+        let area_h = self.cursor().0.h;
+        let mut extents: Vec<Option<(f64, f64)>> = vec![None; items.len()];
+        for (start, end, top, bottom) in std::mem::take(&mut self.leaves) {
+            if bottom - top <= area_h + 0.01
+                && let Some(slots) = start.checked_sub(first).and_then(|s| extents.get_mut(s..end.saturating_sub(first)))
+            {
+                slots.fill(Some((top, bottom)));
+            }
+        }
+        let mut rest: Vec<(Item, Option<(f64, f64)>)> = items.into_iter().zip(extents).collect();
+        let origin_x = self.cursor().0.x;
+        // An item's place on the current page is its drawn place moved by (dx, -shift).
+        let (mut dx, mut shift) = (0.0, 0.0);
+        let mut seg_top = top;
+        let mut first_segment = true;
+        loop {
+            let (rect, _, placed) = self.cursor();
+            let limit = rect.bottom() + shift;
+            let mut cut = limit;
+            if rect.h < 1.0 {
+                // No room to split into: leave the rest here.
+                cut = f64::INFINITY;
+            } else {
+                // The lowest break at or above the bottom that crosses no solid item: going
+                // through them from the lowest top up, a break moved to an item's top can't
+                // cross one already passed.
+                let mut solid: Vec<(f64, f64)> =
+                    rest.iter().filter_map(|(item, kept)| kept.or_else(|| solid_extent(item))).filter(|e| e.0 < limit - 0.01).collect();
+                solid.sort_by(|a, b| b.0.total_cmp(&a.0));
+                for (t, b) in solid {
+                    if t < cut - 0.01 && b > cut + 0.01 {
+                        cut = t;
+                    }
+                }
+                if cut <= seg_top + 0.01 {
+                    // An item taller than what is left. Start it in a fresh area if this one
+                    // already holds something; otherwise cut through it.
+                    cut = if first_segment && placed && seg_top > rect.y + 0.01 { seg_top } else { limit };
+                }
+            }
+            let mut here = Vec::new();
+            let mut below = Vec::new();
+            for (item, kept) in rest {
+                if let Some((top, _)) = kept {
+                    if top < cut - 0.01 {
+                        here.push(item)
+                    } else {
+                        below.push((item, kept))
+                    }
+                    continue;
+                }
+                match divide(item, cut) {
+                    (Some(a), None) => here.push(a),
+                    (None, Some(b)) => below.push((b, None)),
+                    (Some(a), Some(b)) => {
+                        here.push(a);
+                        below.push((b, None));
+                    }
+                    (None, None) => {}
+                }
+            }
+            if let Some(p) = self.pages.last_mut() {
+                p.items.extend(here.into_iter().map(|it| moved(it, dx, -shift)));
+            }
+            if below.is_empty() {
+                if let Some(c) = &mut self.cur {
+                    c.y = (end - shift).min(c.rect.bottom()).max(c.y);
+                    c.placed = true;
+                }
+                return Ok(());
+            }
+            rest = below;
+            seg_top = cut;
+            first_segment = false;
+            self.next_area()?;
+            let (rect, _, _) = self.cursor();
+            shift = cut - rect.y;
+            dx = rect.x - origin_x;
+        }
+    }
+
     fn page_has_flow(&self) -> bool {
         self.cur.as_ref().is_some_and(|c| c.placed || c.content > 0)
     }
@@ -509,6 +742,7 @@ impl Layouter<'_> {
         }
         // Data adds instances of a repeating subform (rows added in another viewer).
         let instances = self.instances(node, &ctx.som);
+        self.warn_truncated(node, &ctx.som, instances);
         let ctx_parent = ctx;
         for i in 0..instances {
             let ctx = ctx_parent.with_som(&sf.common, sib + i);
@@ -518,10 +752,7 @@ impl Layouter<'_> {
             if !matches!(sf.layout, Layout::Tb | Layout::Table) || sf.common.h.is_some() {
                 // Not splittable: one block.
                 let (_, h) = self.size_of(node, w, ctx_parent, depth);
-                self.make_room(h)?;
-                let (_, y, _) = self.cursor();
-                self.draw_node(node, Rect::new(x, y, w, h), ctx_parent, depth, sib + i)?;
-                self.place(h);
+                self.flow_block(node, x, (w, h), ctx_parent, depth, sib + i)?;
                 continue;
             }
             let m = sf.common.margin;
@@ -531,11 +762,12 @@ impl Layouter<'_> {
             match sf.layout {
                 Layout::Table => self.flow_table(sf, inner_x, inner_w, &ctx, depth)?,
                 _ => {
+                    let sibs = SomIndices::of(&sf.children);
                     for (ci, child) in sf.children.iter().enumerate() {
                         if !child.common().presence.occupies() {
                             continue;
                         }
-                        let csib = sib_index(&sf.children, ci);
+                        let csib = sibs.at(ci);
                         if let Node::Subform(_) = child
                             && splittable(child)
                         {
@@ -543,10 +775,7 @@ impl Layouter<'_> {
                             continue;
                         }
                         let (cw, ch) = self.size_of(child, inner_w, &ctx, depth + 1);
-                        self.make_room(ch)?;
-                        let (_, y, _) = self.cursor();
-                        self.draw_node(child, Rect::new(inner_x, y, cw, ch), &ctx, depth + 1, csib)?;
-                        self.place(ch);
+                        self.flow_block(child, inner_x, (cw, ch), &ctx, depth + 1, csib)?;
                     }
                 }
             }
@@ -570,16 +799,18 @@ impl Layouter<'_> {
         let cols = self.columns(sf, inner_w);
         let leader =
             sf.overflow_leader.as_ref().and_then(|name| sf.children.iter().position(|c| c.common().name.as_deref() == Some(name) && is_row(c)));
+        let sibs = SomIndices::of(&sf.children);
         for (ci, child) in sf.children.iter().enumerate() {
             if !child.common().presence.occupies() {
                 continue;
             }
-            let csib = sib_index(&sf.children, ci);
+            let csib = sibs.at(ci);
             if let Node::Subform(row) = child
                 && row.layout == Layout::Row
             {
                 // Rows added as data (in another viewer) repeat the row.
                 let instances = self.instances(child, &ctx.som);
+                self.warn_truncated(child, &ctx.som, instances);
                 for inst in 0..instances {
                     let h = self.row_height(row, &cols, inner_w, ctx, depth + 1);
                     if self.make_room(h)?
@@ -589,7 +820,7 @@ impl Layouter<'_> {
                     {
                         let lh = self.row_height(l, &cols, inner_w, ctx, depth + 1);
                         let (_, y, _) = self.cursor();
-                        self.draw_row(l, &cols, Rect::new(x, y, inner_w, lh), ctx, depth + 1, sib_index(&sf.children, li))?;
+                        self.draw_row(l, &cols, Rect::new(x, y, inner_w, lh), ctx, depth + 1, sibs.at(li))?;
                         self.place(lh);
                     }
                     let (_, y, _) = self.cursor();
@@ -605,10 +836,7 @@ impl Layouter<'_> {
                 continue;
             }
             let (cw, ch) = self.size_of(child, inner_w, ctx, depth + 1);
-            self.make_room(ch)?;
-            let (_, y, _) = self.cursor();
-            self.draw_node(child, Rect::new(x, y, cw, ch), ctx, depth + 1, csib)?;
-            self.place(ch);
+            self.flow_block(child, x, (cw, ch), ctx, depth + 1, csib)?;
         }
         Ok(())
     }
@@ -627,6 +855,22 @@ impl Layouter<'_> {
             _ => 0,
         };
         instance_count(&sf.occur, from_data)
+    }
+
+    /// The data holds more instances of `node` than `laid_out`: say so, since calculations
+    /// then see only those.
+    fn warn_truncated(&mut self, node: &Node, parent_som: &str, laid_out: usize) {
+        let Node::Subform(sf) = node else { return };
+        let from_data = match (&sf.common.name, self.data) {
+            (Some(name), Some(d)) if sf.occur.max != Some(1) => d.count(&data_path(self.tpl, parent_som), name),
+            _ => 0,
+        };
+        if from_data > laid_out {
+            self.warn_once(format!(
+                "{}: the data holds {from_data} rows; only the first {laid_out} are laid out (calculations see those)",
+                sf.common.name.as_deref().unwrap_or("a subform")
+            ));
+        }
     }
 
     fn size_of(&self, node: &Node, avail_w: f64, ctx: &Ctx, depth: usize) -> (f64, f64) {
@@ -662,10 +906,11 @@ impl Layouter<'_> {
 
     fn measure(&self, node: &Node, avail_w: f64, ctx: &Ctx, depth: usize) -> (f64, f64) {
         let c = node.common();
-        // The container's own SOM, under which its repeating children count their instances.
-        // Measurements are cached per template node, so instance 0 stands for all of them.
-        let som = ctx.with_som(c, 0).som;
-        let ctx = ctx.child(c);
+        // The node's own SOM: its repeating children count their instances under it, and a
+        // growing text field finds its value at it. Measurements are cached per template node,
+        // so instance 0 stands for all of them.
+        let ctx = ctx.with_som(c, 0);
+        let som = ctx.som.clone();
         // A container without a width is as wide as its content (a radio group beside its
         // question, say); a leaf without one takes what is available.
         let w = match c.w {
@@ -697,7 +942,7 @@ impl Layouter<'_> {
                             .filter(|k| k.common().presence.occupies())
                             .map(|k| self.size_of(k, inner_w, &ctx, depth + 1).1 * self.instances(k, &som) as f64)
                             .sum(),
-                        Layout::LrTb | Layout::RlTb => self.packed_height(&s.children, inner_w, &ctx, depth),
+                        Layout::LrTb | Layout::RlTb => self.pack_instances(&s.children, inner_w, &ctx, depth, &som).1,
                         Layout::Table => {
                             let cols = self.columns(s, inner_w);
                             s.children
@@ -715,7 +960,13 @@ impl Layouter<'_> {
                 content + c.margin.vertical()
             }
         };
-        (w, clamp_opt(h, c.min_h, c.max_h))
+        // A flowed subform is as tall as what it holds: other viewers do not stretch one to
+        // the `minH` a designer left on it.
+        let min_h = match node {
+            Node::Subform(s) if c.h.is_none() && s.layout != Layout::Positioned => None,
+            _ => c.min_h,
+        };
+        (w, clamp_opt(h, min_h, c.max_h))
     }
 
     /// The natural width of a container's content within `avail_w`.
@@ -742,9 +993,13 @@ impl Layouter<'_> {
                 let sum: f64 = visible.map(|k| self.size_of(k, avail_w, ctx, depth + 1).0).sum();
                 if sum <= avail_w + 0.05 { sum } else { avail_w }
             }
-            Layout::Positioned => {
-                visible.map(|k| k.common().x.unwrap_or(0.0) + self.size_of(k, avail_w, ctx, depth + 1).0).fold(0.0, f64::max).min(avail_w)
-            }
+            Layout::Positioned => visible
+                .map(|k| {
+                    let (w, h) = self.size_of(k, avail_w, ctx, depth + 1);
+                    k.common().top_left(w, h).0 + w
+                })
+                .fold(0.0, f64::max)
+                .min(avail_w),
             Layout::Tb | Layout::Table => visible.map(|k| self.size_of(k, avail_w, ctx, depth + 1).0).fold(0.0, f64::max).min(avail_w),
         }
     }
@@ -787,7 +1042,7 @@ impl Layouter<'_> {
         let lines = if f.multiline { 3.0 } else { 1.0 };
         let ui = match f.ui {
             Ui::CheckButton => f.check_size.unwrap_or(10.0).max(text::line_height(font.size)),
-            _ => text::line_height(font.size) * lines + 4.0 + f.ui_margin.vertical(),
+            _ => (text::line_height(font.size) * lines).max(self.grown_text_height(f, inner_w, ctx)) + 4.0 + f.ui_margin.vertical(),
         };
         match self.caption_reserve(f, inner_w, ctx) {
             Some((Placement::Top | Placement::Bottom, r)) => ui + r,
@@ -807,6 +1062,25 @@ impl Layouter<'_> {
         }
     }
 
+    /// The height the text of a multi-line text field takes (its value in the data, else the
+    /// template's), for a field without a fixed height, which grows to hold its text. `ctx`
+    /// is the field's own (its SOM ends in the field). Zero for anything else.
+    fn grown_text_height(&self, f: &Field, inner_w: f64, ctx: &Ctx) -> f64 {
+        if f.ui != Ui::TextEdit || !f.multiline || f.common.h.is_some() || f.common.name.is_none() {
+            return 0.0;
+        }
+        let value = self.data.and_then(|d| d.value_at(&data_path(self.tpl, &ctx.som))).filter(|t| !t.trim().is_empty()).or_else(|| f.value.plain());
+        let Some(value) = value.filter(|t| !t.trim().is_empty()) else { return 0.0 };
+        // Beside a caption the text has what the caption leaves; 2pt of padding on each side.
+        let beside = match self.caption_reserve(f, inner_w, ctx) {
+            Some((Placement::Top | Placement::Bottom, _)) | None => 0.0,
+            Some((_, r)) => r,
+        };
+        let w = (inner_w - beside - f.ui_margin.horizontal() - 4.0).max(1.0);
+        let font = ctx.font.apply(&f.common.font);
+        text::measure_height(&text::plain(value.trim_end()), w, &ctx.para, &Face::of(&font), &|_| String::new())
+    }
+
     fn group_height(&self, g: &ExclGroup, inner_w: f64, ctx: &Ctx, depth: usize) -> f64 {
         let nodes: Vec<Node> = g.fields.iter().map(|f| Node::Field(Box::new(f.clone()))).collect();
         match g.layout {
@@ -822,14 +1096,16 @@ impl Layouter<'_> {
             .filter(|k| k.common().presence.occupies())
             .map(|k| {
                 let c = k.common();
-                let (_, h) = self.size_of(k, (inner_w - c.x.unwrap_or(0.0)).max(1.0), ctx, depth + 1);
-                c.y.unwrap_or(0.0) + h
+                let (w, h) = self.size_of(k, (inner_w - c.x.unwrap_or(0.0)).max(1.0), ctx, depth + 1);
+                c.top_left(w, h).1 + h
             })
             .fold(0.0, f64::max)
     }
 
-    /// Left-to-right packing: rows of children, wrapped at the available width.
-    fn pack(&self, children: &[Node], inner_w: f64, ctx: &Ctx, depth: usize) -> (Vec<(usize, Rect)>, f64) {
+    /// Left-to-right packing: rows of children, wrapped at the available width, as (child,
+    /// instance, place). A repeating subform is packed once per instance it has under the
+    /// container at `som`.
+    fn pack_instances(&self, children: &[Node], inner_w: f64, ctx: &Ctx, depth: usize, som: &str) -> (Vec<(usize, usize, Rect)>, f64) {
         let mut out = Vec::new();
         let (mut x, mut y, mut line_h) = (0.0, 0.0, 0.0);
         for (i, k) in children.iter().enumerate() {
@@ -837,16 +1113,24 @@ impl Layouter<'_> {
                 continue;
             }
             let (w, h) = self.size_of(k, inner_w, ctx, depth + 1);
-            if x > 0.0 && x + w > inner_w + 0.05 {
-                y += line_h;
-                x = 0.0;
-                line_h = 0.0;
+            for instance in 0..self.instances(k, som) {
+                if x > 0.0 && x + w > inner_w + 0.05 {
+                    y += line_h;
+                    x = 0.0;
+                    line_h = 0.0;
+                }
+                out.push((i, instance, Rect::new(x, y, w, h)));
+                x += w;
+                line_h = line_h.max(h);
             }
-            out.push((i, Rect::new(x, y, w, h)));
-            x += w;
-            line_h = line_h.max(h);
         }
         (out, y + line_h)
+    }
+
+    /// [`Self::pack_instances`] for children that don't repeat (the fields of a group).
+    fn pack(&self, children: &[Node], inner_w: f64, ctx: &Ctx, depth: usize) -> (Vec<(usize, Rect)>, f64) {
+        let (placed, h) = self.pack_instances(children, inner_w, ctx, depth, "");
+        (placed.into_iter().map(|(i, _, r)| (i, r)).collect(), h)
     }
 
     fn packed_height(&self, children: &[Node], inner_w: f64, ctx: &Ctx, depth: usize) -> f64 {
@@ -895,10 +1179,11 @@ impl Layouter<'_> {
         let ctx = ctx.with_som(&row.common, sib);
         let inner = rect.inset(&row.common.margin);
         let (cells, _) = self.cells(row, cols, inner.w, &ctx, depth);
+        let sibs = SomIndices::of(&row.children);
         for (i, r) in cells {
             if let Some(k) = row.children.get(i) {
                 // Cells stretch to the row height.
-                self.draw_node(k, Rect::new(inner.x + r.x, inner.y, r.w, inner.h), &ctx, depth + 1, sib_index(&row.children, i))?;
+                self.draw_node(k, Rect::new(inner.x + r.x, inner.y, r.w, inner.h), &ctx, depth + 1, sibs.at(i))?;
             }
         }
         Ok(())
@@ -909,8 +1194,8 @@ impl Layouter<'_> {
         if !c.presence.occupies() {
             return Ok(());
         }
-        let (x, y) = (c.x.unwrap_or(0.0), c.y.unwrap_or(0.0));
-        let (w, h) = self.size_of(k, (inner.w - x).max(1.0), ctx, depth + 1);
+        let (w, h) = self.size_of(k, (inner.w - c.x.unwrap_or(0.0)).max(1.0), ctx, depth + 1);
+        let (x, y) = c.top_left(w, h);
         self.draw_node(k, Rect::new(inner.x + x, inner.y + y, w, h), ctx, depth + 1, sib)
     }
 
@@ -923,13 +1208,27 @@ impl Layouter<'_> {
             return Ok(());
         }
         match node {
-            Node::Draw(d) => self.draw_draw(d, rect, ctx),
-            Node::Field(f) => self.draw_field(f, rect, ctx, None, sib),
+            Node::Draw(d) => {
+                let start = self.item_count();
+                self.draw_draw(d, rect, ctx)?;
+                // Text and pictures stay with their border; a bare line or rectangle is cut.
+                if matches!(d.value, Value::Text(_) | Value::Rich(_) | Value::Image { .. }) {
+                    self.keep_whole(start, rect);
+                }
+                Ok(())
+            }
+            Node::Field(f) => {
+                let start = self.item_count();
+                self.draw_field(f, rect, ctx, None, sib)?;
+                self.keep_whole(start, rect);
+                Ok(())
+            }
             Node::ExclGroup(g) => self.draw_group(g, rect, ctx, depth, sib),
             Node::Area(a) => {
                 let ctx = ctx.with_som(&a.common, sib);
+                let sibs = SomIndices::of(&a.children);
                 for (i, k) in a.children.iter().enumerate() {
-                    self.draw_positioned_child(k, rect, &ctx, depth + 1, sib_index(&a.children, i))?;
+                    self.draw_positioned_child(k, rect, &ctx, depth + 1, sibs.at(i))?;
                 }
                 Ok(())
             }
@@ -940,10 +1239,11 @@ impl Layouter<'_> {
                 let parent_ctx = ctx;
                 let ctx = ctx.with_som(&s.common, sib);
                 let inner = rect.inset(&s.common.margin);
+                let sibs = SomIndices::of(&s.children);
                 match s.layout {
                     Layout::Positioned => {
                         for (i, k) in s.children.iter().enumerate() {
-                            self.draw_positioned_child(k, inner, &ctx, depth + 1, sib_index(&s.children, i))?;
+                            self.draw_positioned_child(k, inner, &ctx, depth + 1, sibs.at(i))?;
                         }
                     }
                     Layout::Tb => {
@@ -956,17 +1256,19 @@ impl Layouter<'_> {
                             // A repeating subform here (a table in an area of a positioned page,
                             // say) gets its instances, as in a flowed one, one under another.
                             for instance in 0..self.instances(k, &ctx.som) {
-                                self.draw_node(k, Rect::new(inner.x, y, w, h), &ctx, depth + 1, sib_index(&s.children, i) + instance)?;
+                                self.draw_node(k, Rect::new(inner.x, y, w, h), &ctx, depth + 1, sibs.at(i) + instance)?;
                                 y += h;
                             }
                         }
                     }
                     Layout::LrTb | Layout::RlTb => {
-                        let (placed, _) = self.pack(&s.children, inner.w, &ctx, depth);
-                        for (i, r) in placed {
+                        // A repeating subform here (rows of fields under a heading) gets its
+                        // instances, as in the other layouts.
+                        let (placed, _) = self.pack_instances(&s.children, inner.w, &ctx, depth, &ctx.som);
+                        for (i, instance, r) in placed {
                             if let Some(k) = s.children.get(i) {
                                 let x = if s.layout == Layout::RlTb { inner.right() - r.x - r.w } else { inner.x + r.x };
-                                self.draw_node(k, Rect::new(x, inner.y + r.y, r.w, r.h), &ctx, depth + 1, sib_index(&s.children, i))?;
+                                self.draw_node(k, Rect::new(x, inner.y + r.y, r.w, r.h), &ctx, depth + 1, sibs.at(i) + instance)?;
                             }
                         }
                     }
@@ -977,7 +1279,7 @@ impl Layouter<'_> {
                             if !k.common().presence.occupies() {
                                 continue;
                             }
-                            let csib = sib_index(&s.children, i);
+                            let csib = sibs.at(i);
                             if let Node::Subform(r) = k
                                 && r.layout == Layout::Row
                             {
@@ -1039,7 +1341,20 @@ impl Layouter<'_> {
             Value::Rich(r) => r.clone(),
             _ => return Ok(()),
         };
-        let block = text::layout(&rich, rect, para, &Face::of(font), &|id| self.embed(id));
+        let face = Face::of(font);
+        // Text that doesn't fit the height it was given (the template's face is narrower than
+        // the standard one drawn in its place, so it wraps to more lines) is drawn smaller,
+        // down to 70%, rather than over what lies below.
+        let fits = |k: f64| text::measure_height(&rich, rect.w / k, para, &face, &|id| self.embed(id)) <= rect.h / k + 1.0;
+        let scale = if rect.h < 4.0 || fits(1.0) { 1.0 } else { [0.95, 0.9, 0.85, 0.8, 0.75].into_iter().find(|k| fits(*k)).unwrap_or(0.7) };
+        let mut block = text::layout(&rich, Rect::new(rect.x, rect.y, rect.w / scale, rect.h / scale), para, &face, &|id| self.embed(id));
+        if scale < 1.0 {
+            for s in &mut block.spans {
+                s.x = rect.x + (s.x - rect.x) * scale;
+                s.baseline = rect.y + (s.baseline - rect.y) * scale;
+                s.face.size *= scale;
+            }
+        }
         self.push_block(block)
     }
 
@@ -1100,17 +1415,19 @@ impl Layouter<'_> {
                 .map(|(i, k)| {
                     let c = k.common();
                     let (w, h) = self.size_of(k, (inner.w - c.x.unwrap_or(0.0)).max(1.0), &ctx, depth + 1);
-                    (i, Rect::new(c.x.unwrap_or(0.0), c.y.unwrap_or(0.0), w, h))
+                    let (x, y) = c.top_left(w, h);
+                    (i, Rect::new(x, y, w, h))
                 })
                 .collect(),
             _ => self.pack(&nodes, inner.w, &ctx, depth).0,
         };
+        let sibs = SomIndices::of(&nodes);
         for (i, r) in placed {
             if let Some(f) = g.fields.get(i) {
                 let on = f.items.first().cloned().filter(|s| !s.trim().is_empty()).unwrap_or_else(|| (i + 1).to_string());
                 let tip = f.tooltip.clone().or_else(|| g.tooltip.clone());
                 let chosen = selected.as_deref() == Some(on.as_str());
-                self.draw_field(f, Rect::new(inner.x + r.x, inner.y + r.y, r.w, r.h), &ctx, Some((&group, &on, tip, chosen)), sib_index(&nodes, i))?;
+                self.draw_field(f, Rect::new(inner.x + r.x, inner.y + r.y, r.w, r.h), &ctx, Some((&group, &on, tip, chosen)), sibs.at(i))?;
             }
         }
         Ok(())
@@ -1118,6 +1435,10 @@ impl Layouter<'_> {
 
     /// A picture scaled to fit `inner`, keeping its shape, from its top left.
     fn draw_image(&mut self, data: &[u8], content_type: &str, inner: Rect) -> Result<(), XfaError> {
+        self.image_bytes = self.image_bytes.saturating_add(data.len());
+        if self.image_bytes > MAX_IMAGE_BYTES {
+            return Err(XfaError::TooLarge("the form's pictures are too large together to lay out".into()));
+        }
         let fitted = match crate::image::size(data) {
             Some((iw, ih)) if iw > 0 && ih > 0 && inner.w > 0.0 && inner.h > 0.0 => {
                 let k = (inner.w / iw as f64).min(inner.h / ih as f64);
@@ -1223,8 +1544,7 @@ impl Layouter<'_> {
                     (None, Value::Image { content_type, data }) => self.draw_image(data, content_type, box_)?,
                     _ => {}
                 }
-                self.warn_once("image fields show their picture; a new picture can't be chosen yet");
-                return Ok(());
+                // Then the field itself, which clicking gives a new picture.
             }
             Ui::Barcode => {
                 // The value as text, where the bars would be.
@@ -1247,6 +1567,25 @@ impl Layouter<'_> {
         if f.access == Access::NonInteractive && f.ui != Ui::Button {
             // Shown as text, not as a field.
             return self.draw_value_text(&f.value, ui.inset(&f.ui_margin), &fctx.font, &fctx.para);
+        }
+        // A text field that grew past what a content area holds can't be one widget: its text
+        // is drawn as lines the page breaks fall between, and stays what the data holds.
+        if f.ui == Ui::TextEdit && f.multiline && f.common.h.is_none() && rect.h > self.cursor().0.h + 0.01 {
+            let value =
+                self.data.and_then(|d| d.value_at(&data_path(self.tpl, &som_path()))).filter(|t| !t.trim().is_empty()).or_else(|| f.value.plain());
+            if let Some(value) = value.filter(|t| !t.trim().is_empty()) {
+                let name = f.common.name.clone().unwrap_or_else(|| "a text field".into());
+                self.warn_once(format!("{name}: its text is longer than a page; it is shown across pages and can't be edited here"));
+                let m = Margin {
+                    top: f.ui_margin.top + 2.0,
+                    bottom: f.ui_margin.bottom + 2.0,
+                    left: f.ui_margin.left + 2.0,
+                    right: f.ui_margin.right + 2.0,
+                };
+                let para = Para { v_align: VAlign::Top, ..fctx.para.clone() };
+                let block = text::layout(&text::plain(value.trim_end()), ui.inset(&m), &para, &Face::of(&fctx.font), &|_| String::new());
+                return self.push_block(block);
+            }
         }
         let face = match (&f.ui, &f.caption) {
             // Buttons show their caption in the caption's font.
@@ -1321,6 +1660,10 @@ impl Layouter<'_> {
                 (kind, ui, widget_border(f.ui_border.as_ref(), false), value, f.tooltip.clone())
             }
             Ui::Signature => (WidgetKind::Signature, ui, widget_border(f.ui_border.as_ref(), false), None, f.tooltip.clone()),
+            Ui::ImageEdit => {
+                let none = WidgetBorder { color: None, fill: None, shape: BorderShape::None, width: 0.0 };
+                (WidgetKind::Image, ui, none, None, f.tooltip.clone())
+            }
             Ui::PasswordEdit => (WidgetKind::Password, ui, widget_border(f.ui_border.as_ref(), false), plain_value, f.tooltip.clone()),
             _ => (WidgetKind::Text, ui, widget_border(f.ui_border.as_ref(), false), plain_value, f.tooltip.clone()),
         };
@@ -1354,16 +1697,14 @@ impl Layouter<'_> {
     }
 }
 
-/// The widget's own border from the `<ui>` border element. Without one, text fields and check
-/// boxes get a solid box, as Designer draws them.
+/// The widget's own border from the `<ui>` border element. Without one, a check box gets a
+/// solid box, as Designer draws it, and any other field has no box of its own.
 fn widget_border(b: Option<&Border>, check: bool) -> WidgetBorder {
     let Some(b) = b else {
-        return WidgetBorder {
-            color: Some([0.0, 0.0, 0.0]),
-            fill: if check { Some([1.0, 1.0, 1.0]) } else { None },
-            shape: BorderShape::Full,
-            width: 0.5,
-        };
+        if !check {
+            return WidgetBorder { color: None, fill: None, shape: BorderShape::None, width: 0.0 };
+        }
+        return WidgetBorder { color: Some([0.0, 0.0, 0.0]), fill: Some([1.0, 1.0, 1.0]), shape: BorderShape::Full, width: 0.5 };
     };
     let vis = b.visible_edges();
     let shape = match vis {

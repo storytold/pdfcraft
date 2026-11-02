@@ -5,9 +5,22 @@ use std::sync::{Arc, Mutex};
 
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
+use pdfcraft_render::{PageRenderer, RenderRequest, RequestKind};
 use pdfcraft_ui_egui::PdfCraftApp;
 use pdfcraft_ui_egui::control::{ControlClient, Reply};
 use serde_json::{Value, json};
+
+/// The text each page shows, in order, as the app's session holds it.
+fn page_texts(app: &PdfCraftApp) -> Vec<String> {
+    let doc = app.session.get(app.views[0].id).unwrap();
+    let mut r = PageRenderer::new(doc.bytes.clone(), Default::default());
+    (0..r.page_count())
+        .map(|p| {
+            let out = r.render(RenderRequest { page: p, kind: RequestKind::Text, scale: 1.0, ..Default::default() });
+            out.text.map(|t| t.plain_text().trim().to_string()).unwrap_or_default()
+        })
+        .collect()
+}
 
 fn fixture(n: usize) -> Vec<u8> {
     let mut objs: Vec<String> = vec!["<< /Type /Catalog /Pages 2 0 R >>".into()];
@@ -274,6 +287,41 @@ fn theme_commands_and_options_report_preference_and_effective_colours() {
     assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["theme_preference"], "System");
 }
 
+#[test]
+fn lithuanian_password_dialog_translates_dynamic_labels_and_validation() {
+    let (mut h, c) = harness();
+    ok(&mut h, &c, "ui.set", json!({ "key": "language", "value": "lt" }));
+    ok(&mut h, &c, "ui.set", json!({ "key": "dialog", "value": "protect" }));
+    h.run_steps(2);
+    h.get_by_role_and_label(egui::accesskit::Role::RadioButton, "Peržiūrėti");
+    h.get_by_role_and_label(egui::accesskit::Role::RadioButton, "Redaguoti").click();
+    h.run_steps(2);
+    assert!(!h.state().protect_draft.viewing);
+    h.get_by_role_and_label(egui::accesskit::Role::PasswordInput, "Įveskite slaptažodį");
+    h.get_by_role_and_label(egui::accesskit::Role::PasswordInput, "Pakartokite slaptažodį");
+    h.state_mut().protect_draft.password = "abc".into();
+    h.state_mut().protect_draft.confirm = "xyz".into();
+    h.run_steps(2);
+    h.get_by_label("Slaptažodžiai nesutampa.");
+}
+
+#[test]
+fn lithuanian_inspector_title_updates_through_the_control_channel() {
+    let (mut h, c) = harness();
+    ok(&mut h, &c, "ui.set", json!({ "key": "panel", "value": "comments" }));
+    h.run_steps(2);
+    h.get_by_role_and_label(egui::accesskit::Role::Tab, "Inspector");
+    let documents = ok(&mut h, &c, "ui.state", json!({}))["documents"].clone();
+    ok(&mut h, &c, "ui.set", json!({ "key": "language", "value": "lt" }));
+    h.run_steps(2);
+    h.get_by_role_and_label(egui::accesskit::Role::Tab, "Inspektorius");
+    assert!(h.query_by_role_and_label(egui::accesskit::Role::Tab, "Inspector").is_none());
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["documents"], documents);
+    ok(&mut h, &c, "ui.set", json!({ "key": "language", "value": "en" }));
+    h.run_steps(2);
+    h.get_by_role_and_label(egui::accesskit::Role::Tab, "Inspector");
+}
+
 /// Switching the interface language changes labels only: documents, their dirty state and the
 /// command ids agents drive stay exactly the same.
 #[test]
@@ -285,7 +333,7 @@ fn language_switch_preserves_document_and_command_ids() {
     let documents = ok(&mut h, &c, "ui.state", json!({}))["documents"].clone();
     assert_eq!(documents[0]["dirty"], true);
     let commands = ok(&mut h, &c, "ui.commands", json!({}));
-    for code in ["ja", "zh-hans", "fr", "de", "uk", "en"] {
+    for code in ["ja", "zh-hans", "fr", "de", "uk", "lt", "en"] {
         ok(&mut h, &c, "ui.set", json!({ "key": "language", "value": code }));
         h.run_steps(2);
         let state = ok(&mut h, &c, "ui.state", json!({}));
@@ -304,7 +352,8 @@ fn language_switch_preserves_document_and_command_ids() {
         h.run_steps(2);
     }
     let error = call(&mut h, &c, "ui.set", json!({ "key": "language", "value": "xx" })).unwrap_err();
-    assert!(error.contains("auto, en, ja"), "{error}");
+    let codes = std::iter::once(i18n::AUTO).chain(i18n::Lang::all().map(i18n::Lang::code)).collect::<Vec<_>>().join(", ");
+    assert_eq!(error, format!("language must be one of {codes}"));
     assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["language"], "en");
 }
 
@@ -990,6 +1039,67 @@ fn state_reports_the_selected_pages() {
     assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["active"]["selected_pages"], json!([]));
     ok(&mut h, &c, "ui.set", json!({ "key": "select", "value": "2,4" }));
     assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["active"]["selected_pages"], json!([2, 4]));
+    ok(&mut h, &c, "ui.set", json!({ "key": "select", "value": "4-2,3" }));
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["active"]["selected_pages"], json!([2, 3, 4]));
+    assert!(call(&mut h, &c, "ui.set", json!({ "key": "select", "value": "0,6" })).is_err());
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["active"]["selected_pages"], json!([2, 3, 4]));
+    ok(&mut h, &c, "ui.set", json!({ "key": "select", "value": "" }));
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["active"]["selected_pages"], json!([]));
+}
+
+#[test]
+fn ctrl_dragging_a_thumbnail_through_the_control_channel_copies_the_page() {
+    let (mut h, c) = harness_pages(3);
+    ok(&mut h, &c, "ui.set", json!({ "key": "tool", "value": "organize" }));
+    h.run_steps(3);
+    // The grid cell of a page: the node labelled exactly "Page N" (the checkbox says "Select page N").
+    let cell = |h: &mut Harness<'static, PdfCraftApp>, c: &ControlClient, page: usize| -> [f64; 4] {
+        let nodes = ok(h, c, "ui.inspect", json!({ "query": &format!("page {page}") }));
+        let want = format!("Page {page}");
+        let r = nodes["widgets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|w| w["label"].as_str() == Some(want.as_str()))
+            .and_then(|w| w["rect"].as_array().cloned())
+            .expect("the page's grid cell");
+        let f = |i: usize| r[i].as_f64().unwrap();
+        [f(0), f(1), f(2), f(3)]
+    };
+    let (a, b) = (cell(&mut h, &c, 1), cell(&mut h, &c, 3));
+    // The gesture reads the OS the context reports: Option on macOS, Ctrl elsewhere.
+    let copy = if h.ctx.os() == egui::os::OperatingSystem::Mac { "alt" } else { "ctrl" };
+    ok(
+        &mut h,
+        &c,
+        "ui.drag",
+        json!({
+            "from": [(a[0] + a[2]) / 2.0, (a[1] + a[3]) / 2.0],
+            "to": [b[2] - 4.0, (b[1] + b[3]) / 2.0],
+            "modifiers": [copy],
+        }),
+    );
+    h.run_steps(3);
+    let st = ok(&mut h, &c, "ui.state", json!({}));
+    assert_eq!(st["documents"][0]["pages"], 4, "the drag copied the page instead of moving it: {st}");
+    assert_eq!(st["active"]["selected_pages"], json!([4]), "{st}");
+    assert_eq!(page_texts(h.state()), ["Page 1", "Page 2", "Page 3", "Page 1"], "the copy landed at the drop gap, after page 3");
+}
+
+#[test]
+fn organize_overview_is_reachable_through_the_control_channel() {
+    let (mut h, c) = harness();
+    ok(&mut h, &c, "ui.set", json!({ "key": "tool", "value": "organize" }));
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["active"]["organize"], true);
+    h.run_steps(3);
+    for label in ["Select page 1", "Select page 3", "Rotate page 1 clockwise"] {
+        ok(&mut h, &c, "ui.click", json!({ "label": label }));
+        h.run_steps(3);
+    }
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["active"]["selected_pages"], json!([1, 3]));
+    let app = h.state();
+    let rotations: Vec<_> = app.session.get(app.views[0].id).unwrap().info.pages.iter().map(|p| p.rotation).collect();
+    assert_eq!(rotations, [90, 0, 0, 0, 0]);
 }
 
 #[test]
@@ -1288,7 +1398,8 @@ fn explicit_panel_requests_reveal_inactive_group_members() {
     h.get_by_label("This document has no bookmarks.");
     ok(&mut h, &c, "ui.command", json!({"id":"edit.edit_text"}));
     h.run_steps(4);
-    h.get_by_label("Edit text & images");
+    // The Edit panel's own row: the tool's name is on the floating toolbar too while it is on.
+    h.get_by_label("Header and footer");
 }
 
 #[test]
@@ -1367,7 +1478,7 @@ fn rail_reveals_its_remembered_inactive_inspector_then_closes_the_visible_panel(
 fn control_quit_retains_inactive_fill_sign_typing_after_cancel() {
     let (mut h, c) = harness();
     h.state_mut().views[0].fill_text =
-        Some(pdfcraft_ui_egui::fill_sign::TypeBox { page: 0, at: [40.0, 200.0], text: "Unsaved signature note".into(), focus: false });
+        Some(pdfcraft_ui_egui::fill_sign::TypeBox { page: 0, at: [40.0, 200.0], text: "Unsaved signature note".into(), size: 10.0, focus: false });
     h.state_mut().active = None;
     assert!(!h.state().session.get(h.state().views[0].id).unwrap().dirty);
     assert_eq!(ok(&mut h, &c, "ui.quit", json!({})), json!({"quitting":false,"needs_confirmation":true}));
@@ -1410,4 +1521,203 @@ fn read_mode_retains_existing_rail_click_to_close_policy() {
     h.run_steps(3);
     assert_eq!(h.state().right, None);
     assert_eq!(h.state().mode, pdfcraft_ui_egui::Mode::Read);
+}
+
+fn navigation_frame(h: &mut Harness<'static, PdfCraftApp>, events: Vec<egui::Event>) {
+    h.input_mut().events.extend(events);
+    h.step();
+}
+
+fn navigation_wheel(h: &mut Harness<'static, PdfCraftApp>, pos: egui::Pos2, delta: f32, ctrl: bool) {
+    let modifiers = egui::Modifiers { ctrl, command: ctrl, ..egui::Modifiers::NONE };
+    navigation_frame(
+        h,
+        vec![
+            egui::Event::ModifiersChanged(modifiers),
+            egui::Event::PointerMoved(pos),
+            egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: egui::vec2(0.0, delta), modifiers, phase: egui::TouchPhase::Move },
+        ],
+    );
+    h.run_steps(20);
+    navigation_frame(h, vec![egui::Event::ModifiersChanged(egui::Modifiers::NONE)]);
+}
+
+#[test]
+fn ctrl_wheel_anchors_visible_page_and_plain_wheel_only_scrolls() {
+    for percent in [100, 200, 400] {
+        for fraction in [0.1, 0.5, 0.9] {
+            let (mut h, c) = harness_pages(20);
+            ok(&mut h, &c, "ui.set", json!({"key":"zoom", "value":percent.to_string()}));
+            h.run_steps(4);
+            let viewport = h.state().views[0].viewport_rect();
+            let before = h.state().views[0].page_screen_rect(0).unwrap();
+            let visible = before.intersect(viewport).shrink(15.0);
+            let p = egui::pos2(visible.left() + fraction * visible.width(), visible.top() + fraction * visible.height());
+            let normalised = (p - before.min) / before.size();
+            let old_zoom = h.state().views[0].zoom;
+            navigation_wheel(&mut h, p, 20.0, true);
+            let enlarged = h.state().views[0].page_screen_rect(0).unwrap();
+            let anchored = enlarged.min + normalised * enlarged.size();
+            assert!(h.state().views[0].zoom > old_zoom);
+            assert!((anchored.y - p.y).abs() < 2.0, "percent={percent}, fraction={fraction}");
+            if before.width() > viewport.width() {
+                assert!((anchored.x - p.x).abs() < 2.0);
+            }
+            navigation_wheel(&mut h, p, -20.0, true);
+            assert!((h.state().views[0].zoom - old_zoom).abs() < 0.01);
+            let zoom = h.state().views[0].zoom;
+            let top = h.state().views[0].page_screen_rect(0).unwrap().top();
+            navigation_wheel(&mut h, p, -80.0, false);
+            assert_eq!(h.state().views[0].zoom, zoom);
+            assert!(h.state().views[0].page_screen_rect(0).unwrap().top() < top - 20.0);
+        }
+    }
+}
+
+#[test]
+fn wheel_zoom_is_scoped_to_the_viewport_and_respects_existing_limits() {
+    let (mut h, c) = harness();
+    let outside = egui::pos2(5.0, 5.0);
+    let zoom = h.state().views[0].zoom;
+    navigation_wheel(&mut h, outside, 40.0, true);
+    assert_eq!(h.state().views[0].zoom, zoom);
+    for (percent, delta, expected) in [(6400, 80.0, 64.0), (8, -80.0, 0.08)] {
+        ok(&mut h, &c, "ui.set", json!({"key":"zoom", "value":percent.to_string()}));
+        h.run_steps(4);
+        let p = h.state().views[0].viewport_rect().center();
+        navigation_wheel(&mut h, p, delta, true);
+        assert_eq!(h.state().views[0].zoom, expected);
+    }
+}
+
+#[test]
+fn initial_zoom_option_is_applied_before_the_first_viewport_layout() {
+    for percent in [50, 100, 200, 400] {
+        let h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+            let mut app = PdfCraftApp::new();
+            app.open_bytes("initial-zoom.pdf", None, fixture(3)).unwrap();
+            app.set_option("zoom", &percent.to_string()).unwrap();
+            assert_eq!(app.views[0].zoom, percent as f32 / 100.0, "initial options must work before the viewport exists");
+            app
+        });
+        assert_eq!(h.state().views[0].zoom, percent as f32 / 100.0);
+    }
+}
+
+/// #1306: a coordinate that only overflows once narrowed to a pointer position is refused by
+/// click and drag, as move refuses it, before any pointer input is queued; the frames that follow
+/// run, and the channel keeps working.
+#[test]
+fn click_and_drag_refuse_coordinates_that_overflow_like_move() {
+    let (mut h, c) = harness();
+    for (method, params) in [
+        ("ui.move", json!({ "x": 1e39, "y": -1e39 })),
+        ("ui.click", json!({ "x": 1e39, "y": -1e39 })),
+        ("ui.click", json!({ "x": 40.0, "y": 1e39 })),
+        ("ui.drag", json!({ "from": [1e39, -1e39], "to": [40.0, 40.0], "steps": 1 })),
+        ("ui.drag", json!({ "from": [40.0, 40.0], "to": [40.0, -1e39], "steps": 1 })),
+        // Each end fits, but not the way from one to the other.
+        ("ui.drag", json!({ "from": [-3e38, 40.0], "to": [3e38, 40.0], "steps": 1 })),
+    ] {
+        let e = call(&mut h, &c, method, params.clone()).expect_err(&format!("{method} {params} is refused"));
+        assert!(e.starts_with(&format!("{method}: ")) && e.contains("finite"), "{e}");
+        h.run_steps(4);
+        assert_eq!(ok(&mut h, &c, "ui.inspect", json!({ "query": "Read", "role": "Button" }))["count"], 1);
+    }
+    let read = ok(&mut h, &c, "ui.inspect", json!({ "query": "Read", "role": "Button" }))["widgets"][0]["rect"].clone();
+    let (x, y) = (read[0].as_f64().unwrap() + 4.0, read[1].as_f64().unwrap() + 4.0);
+    assert_eq!(ok(&mut h, &c, "ui.click", json!({ "x": x, "y": y }))["clicked"], json!([x, y]));
+    ok(&mut h, &c, "ui.drag", json!({ "from": [x, y], "to": [x + 10.0, y], "steps": 2 }));
+}
+
+#[test]
+fn page_size_shows_while_the_pointer_is_in_the_bottom_left_quadrant() {
+    let (mut h, _c) = harness();
+    let area = h.state().views[0].viewport_rect();
+    let shown = |h: &Harness<'static, PdfCraftApp>| {
+        let layer = egui::LayerId::new(egui::Order::Foreground, egui::Id::new("page-size-hint"));
+        h.ctx.memory(|m| m.areas().visible_last_frame(&layer))
+    };
+    let away = area.center() + egui::vec2(300.0, -200.0);
+    h.event(egui::Event::PointerMoved(away));
+    h.run_steps(3);
+    assert!(!shown(&h), "top-right: hidden");
+    h.event(egui::Event::PointerMoved(area.left_bottom() + egui::vec2(80.0, -80.0)));
+    h.run_steps(3);
+    assert!(shown(&h), "bottom-left: shown");
+    if let Ok(dir) = std::env::var("PDFCRAFT_SHOT_DIR") {
+        h.render().unwrap().save(format!("{dir}/page-size-hint.png")).unwrap();
+    }
+    h.event(egui::Event::PointerMoved(away));
+    h.run_steps(3);
+    assert!(!shown(&h), "pointer left: hidden again");
+}
+
+#[test]
+fn navigation_history_commands_and_rail_are_per_tab_and_non_editing() {
+    for os in [egui::os::OperatingSystem::Nix, egui::os::OperatingSystem::Mac, egui::os::OperatingSystem::Windows] {
+        navigation_history_for_os(os);
+    }
+}
+
+fn navigation_history_for_os(os: egui::os::OperatingSystem) {
+    let (mut h, c) = harness();
+    h.ctx.set_os(os);
+    h.run_steps(2);
+    let enabled =
+        |list: Value, id: &str| list["commands"].as_array().unwrap().iter().find(|cmd| cmd["id"] == id).unwrap()["enabled"].as_bool().unwrap();
+    assert!(!enabled(ok(&mut h, &c, "ui.commands", json!({})), "view.previous_view"));
+    assert!(call(&mut h, &c, "ui.command", json!({"id": "view.previous_view"})).is_err());
+    // Empty-history shortcuts were silent before registry integration and must stay silent.
+    for key in ["[", "]"] {
+        ok(&mut h, &c, "ui.key", json!({"key": key, "modifiers": ["command"]}));
+        assert!(h.state().toast.is_none(), "an unavailable history action must not ask to open the already-open document");
+    }
+    let before = h.state().session.get(h.state().views[0].id).unwrap().bytes.clone();
+    ok(&mut h, &c, "ui.set", json!({"key": "page", "value": "4"}));
+    assert!(enabled(ok(&mut h, &c, "ui.commands", json!({})), "view.previous_view"));
+    // The real rail button is accessible and invokes the same history, not the adjacent page.
+    let shortcut = if h.ctx.os() == egui::os::OperatingSystem::Mac { "⌘[" } else { "Ctrl+[" };
+    ok(&mut h, &c, "ui.click", json!({"label": &format!("Previous view ({shortcut})")}));
+    assert_eq!(h.state().views[0].current, 0);
+    assert!(enabled(ok(&mut h, &c, "ui.commands", json!({})), "view.next_view"));
+    ok(&mut h, &c, "ui.command", json!({"id": "view.next_view"}));
+    assert_eq!(h.state().views[0].current, 3);
+    ok(&mut h, &c, "ui.set", json!({"key": "page", "value": "5"}));
+    ok(&mut h, &c, "ui.key", json!({"key": "[", "modifiers": ["command"]}));
+    assert_eq!(h.state().views[0].current, 3, "shortcut traverses exactly one history entry");
+    ok(&mut h, &c, "ui.key", json!({"key": "]", "modifiers": ["command"]}));
+    assert_eq!(h.state().views[0].current, 4);
+    ok(&mut h, &c, "ui.command", json!({"id": "view.previous_view"}));
+    h.state_mut().open_bytes("other.pdf", None, fixture(5)).unwrap();
+    assert!(!enabled(ok(&mut h, &c, "ui.commands", json!({})), "view.previous_view"));
+    ok(&mut h, &c, "ui.set", json!({"key": "page", "value": "2"}));
+    ok(&mut h, &c, "ui.command", json!({"id": "view.previous_view"}));
+    assert_eq!(h.state().views[1].current, 0);
+    assert_eq!(h.state().views[0].current, 3, "other tab's history does not move this document");
+    h.state_mut().active = Some(0);
+    ok(&mut h, &c, "ui.command", json!({"id": "view.previous_view"}));
+    assert_eq!(h.state().views[0].current, 0);
+    assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().bytes, before);
+    assert!(!h.state().session.get(h.state().views[0].id).unwrap().dirty);
+    h.state_mut().open_bytes("reopened.pdf", None, before.as_ref().clone()).unwrap();
+    assert!(h.state().views.last().unwrap().back.is_empty());
+    assert!(h.state().views.last().unwrap().forward.is_empty());
+}
+
+#[test]
+fn routine_continuous_scrolling_does_not_add_navigation_history() {
+    let (mut h, c) = harness_pages(20);
+    ok(&mut h, &c, "ui.set", json!({"key": "animation_effects", "value": "off"}));
+    h.hover_at(egui::pos2(700.0, 450.0));
+    h.event(egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(0.0, -1200.0),
+        modifiers: egui::Modifiers::NONE,
+        phase: egui::TouchPhase::Move,
+    });
+    h.run_steps(8);
+    assert!(h.state().views[0].current > 0, "the wheel really moved to a later page");
+    assert!(h.state().views[0].back.is_empty());
+    assert!(h.state().views[0].forward.is_empty());
 }

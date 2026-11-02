@@ -69,7 +69,7 @@ impl Automation {
         let doc = self.doc(a)?;
         let mut per_page: std::collections::HashMap<usize, usize> = Default::default();
         let items: Vec<Value> = doc
-            .added
+            .added()
             .iter()
             .map(|it| {
                 let index = per_page.entry(it.page).or_default();
@@ -110,7 +110,7 @@ impl Automation {
         let mut t = AddedText { rect, text: a.str("text")?.to_string(), ..AddedText::default() };
         style(a, &mut t)?;
         let mut out = self.apply(a, Edit::AddText { page, text: t })?;
-        out["index"] = json!(self.doc(a)?.added.iter().filter(|x| x.page == page).count());
+        out["index"] = json!(self.doc(a)?.added().iter().filter(|x| x.page == page).count());
         Ok(out)
     }
 
@@ -123,7 +123,7 @@ impl Automation {
         let rect = rect_arg(a, "rect")?.map(|r| to_display(r, ph));
         let mut out = self.apply(a, Edit::AddImage { page, rect, name, bytes: std::sync::Arc::new(bytes) })?;
         let doc = self.doc(a)?;
-        let mine: Vec<_> = doc.added.iter().filter(|x| x.page == page).collect();
+        let mine: Vec<_> = doc.added().iter().filter(|x| x.page == page).collect();
         out["index"] = json!(mine.len());
         out["rect"] = json!(mine.last().map(|x| to_view(x.content.rect(), ph)));
         Ok(out)
@@ -135,10 +135,10 @@ impl Automation {
         let index = a.int("index")?;
         let ph = doc.info.pages[page].height as f64;
         let it = doc
-            .added
+            .added()
             .iter()
             .filter(|x| x.page == page)
-            .nth((index - 1).max(0) as usize)
+            .nth(usize::try_from(index.saturating_sub(1)).unwrap_or(usize::MAX))
             .filter(|_| index >= 1)
             .ok_or_else(|| failed(format!("page {} has no added item {index} (see content_list)", page + 1)))?;
         Ok((page, index as usize - 1, it.content.clone(), ph))
@@ -163,6 +163,9 @@ impl Automation {
             AddedContent::Image(i) => {
                 if a.get("text").is_some() {
                     return Err(bad("images have no text"));
+                }
+                if ["font", "size", "bold", "italic", "color", "align"].iter().any(|k| a.get(k).is_some()) {
+                    return Err(bad("font, size, bold, italic, color and align apply to text"));
                 }
                 if let Some(deg) = a.opt_int("rotate")? {
                     if deg.rem_euclid(90) != 0 {

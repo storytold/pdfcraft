@@ -32,17 +32,46 @@ Each source page becomes a Form XObject (its content wrapped in q/Q, plus the pr
 annotations); sheets place them with a clip. The result is a fresh, unencrypted,
 garbage-collected file (callers check the print permission).
 
-`spool` talks to CUPS on macOS and Linux: printers come from `lpstat -p -d` (the queues) and
-`lpstat -e` (driverless destinations no queue exists for; CUPS builds a temporary one when the
-job arrives), jobs go to `lp` with copies, collation, duplex and monochrome options. The job is
-piped to `lp` on stdin and never written to a temp file, where another local user could read or
-swap it. On Windows the printers come from `Win32_Printer` and jobs are rendered by the in-box
-`Windows.Data.Pdf` and spooled by `System.Drawing.Printing` with the driver's own settings (both
-through `powershell`, so no Win32 API is called here); that job file exists for the seconds the
-spooler reads it, under a fresh unpredictable name. Each sheet prints at 100% on the driver's
-paper closest to its size, turned landscape when it is wide, and is rasterised at the printer's
-resolution (up to 600 dpi), not sent as vectors. Other platforms report that printing to a
-printer isn't available yet; the print-ready PDF can always be saved.
+`spool` delegates discovery, driver options, preferences and submission to
+[`craft-print`](https://github.com/storytold/craft-libs/tree/main/crates/print).
+PdfCraft retains page selection, imposition, annotations and print-permission checks.
+CUPS jobs stream through stdin with `fit-to-page=false`. Windows renders sheets through
+`Windows.Data.Pdf` and spools them at their physical PDF size with per-page paper and
+orientation, zero added margins and hardware-edge clipping. Long-edge and short-edge duplex
+use the corresponding Windows binding edges. Random, exclusively created Windows job files
+are removed on success and failure. Other targets offer the print-ready PDF instead.
 
-Not yet: the web spooler, print as image, poster labels, PostScript output, colour conversion for
+The shared dependency requires Rust 1.95. Transport and native Windows regression tests
+live in craft-libs; local tests retain composition, facade, engine, automation and UI coverage.
+The desktop UI discovers printers and submits jobs on workers, so neither operation blocks
+the dialog; the Windows backend starts without a console window. Physical printer output
+still needs hardware validation.
+
+In a browser there is no spooler: the app (`pdfcraft-ui-egui`'s `web_print`) draws the print-ready
+PDF's sheets with PdfCraft's renderer and prints them through the browser's print dialog, which
+sets copies, two-sided printing and colour. This crate stays free of web APIs.
+
+Not yet: print as image, poster labels, PostScript output, colour conversion for
 grayscale.
+
+## Architectural sheets and scale
+
+The Paper menu and `doc_print` share Letter, Legal, Tabloid, A3/A4/A5/A6 plus
+ARCH A/B/C/D/E1/E, ANSI C/D/E and ISO A0/A1/A2. ARCH D is 24 × 36 inches;
+ANSI D is 22 × 34 inches. Dimensions follow the [HP DesignJet paper-size table](https://support.hp.com/hr-en/document/bpp01676).
+Automation accepts short names such as `"ARCH D"` (case-insensitive) or the full menu label.
+For example, `doc_print` with `paper: "ARCH D"`, `layout: "actual"`,
+`orientation: "auto"` and `path: "plan.pdf"` writes a print-ready PDF at 100%.
+
+**Match page at 100%** uses the currently viewed document page to choose a standard
+sheet (either orientation, within 0.5 pt for rounded metric dimensions), Actual size
+and Auto orientation. It leaves the selected page range intact. It is disabled
+for a custom page size with no matching preset. One preset applies to the whole job;
+this is not per-page paper-source selection.
+
+**PDF scale** describes the source-to-sheet transform in the previewed print-ready
+PDF, not measured physical output. Fit reserves an 18 pt margin and can reduce even
+a matching page. On Windows craft-print sends the sheets as vectors with a PrintTicket
+for the sheet's exact paper and no scaling (#599's approach), validated by the driver:
+a job is refused, not shrunk, when the driver lacks the paper or would change it. Verify
+the driver's paper settings and physical calibration before relying on drawing scale.

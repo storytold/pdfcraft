@@ -23,30 +23,7 @@ permissions:
 
 jobs:
   freebsd:
-    name: FreeBSD 14 (build + test)
-    runs-on: ubuntu-latest
-    timeout-minutes: 300
-    steps:
-      - uses: actions/checkout@v4
-      - name: Build and test in a FreeBSD VM
-        uses: vmactions/freebsd-vm@c46abacb49f09938ca4e1702d15d836285d694cc # v1
-        with:
-          release: "14.3"
-          usesh: true
-          cpu: 4
-          mem: 12288
-          # Nothing to bring back; copying the target dir out of the VM fails on large builds.
-          copyback: false
-          prepare: |
-            pkg install -y bash git curl pkgconf cmake python3 libxkbcommon wayland libX11 libXcursor libXrandr libXi libxcb mesa-libs vulkan-loader gtk3 fontconfig freetype2 alsa-lib
-            curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal
-          run: |
-            . "$HOME/.cargo/env"
-            # The checkout is synced in under another owner; let tests that call git read it.
-            git config --global --add safe.directory "*"
-            rustc --version
-            CARGO_PROFILE_DEV_DEBUG=0 cargo build --workspace --all-targets --locked
-            CARGO_PROFILE_DEV_DEBUG=0 cargo test --workspace --locked
-            # The release packaging, end to end (a quicker release profile than the real release).
-            CARGO_PROFILE_RELEASE_LTO=false CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16 packaging/freebsd/package.sh
-            tar -tzf dist/release/pdfcraft-*-freebsd-*.tar.gz | grep -E '/bin/pdfcraft$|/bin/pdfcraft-cli$|applications/|/share/pdfcraft/models/.+\.rten$'
+    # Intentionally tracked at @main (not SHA-pinned) so org-wide CI improvements, security fixes, and build optimizations propagate without PR churn across all craftapp repos.
+    uses: storytold/craft-common-actions/.github/workflows/freebsd.yml@main
+    with:
+      craft-fonts-ref: 3d9ab3a132ed0eff457e424226a435a901da30d3

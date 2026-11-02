@@ -171,6 +171,7 @@ fn parse_common(n: XmlNode) -> Common {
         id: n.attribute("id").map(str::to_string),
         x: attr_measure(n, "x"),
         y: attr_measure(n, "y"),
+        anchor: Anchor::parse(n.attribute("anchorType")),
         w: attr_measure(n, "w"),
         h: attr_measure(n, "h"),
         min_w: attr_measure(n, "minW"),
@@ -528,8 +529,11 @@ fn parse_page_set(n: XmlNode, warnings: &mut Vec<String>, depth: usize) -> PageS
             content.push(Rect::new(0.0, 0.0, width, height));
         }
         let items = pa.children().filter(|c| c.is_element()).filter_map(|c| parse_node(c, warnings, depth + 1)).collect();
-        let occur = parse_occur(child(pa, "occur"));
-        areas.push(PageArea { name: pa.attribute("name").map(str::to_string), width, height, content, items, occur_max: occur.max });
+        // A page area with no `<occur>` has no limit and no minimum (a subform's default of one
+        // would exhaust it, and demand a page for every master).
+        let occur = child(pa, "occur").map(|o| parse_occur(Some(o)));
+        let (occur_min, occur_max) = occur.map_or((0, None), |o| (o.min, o.max));
+        areas.push(PageArea { name: pa.attribute("name").map(str::to_string), width, height, content, items, occur_max, occur_min });
     }
     // Nested page sets: take their areas too.
     for ps in children(n, "pageSet") {
@@ -640,6 +644,13 @@ fn collect_page_roles(nodes: &[Node], out: &mut Vec<(String, PageRole)>, depth: 
 
 /// Parse a template packet. Returns the template and the warnings met on the way.
 pub fn parse(xml: &str) -> Result<(Template, Vec<String>), XfaError> {
+    let depth = crate::xml_nesting_depth(xml);
+    if depth > crate::MAX_XML_DEPTH {
+        return Err(XfaError::Malformed(format!(
+            "the template nests XML elements {depth} deep, past the {} the reader accepts",
+            crate::MAX_XML_DEPTH
+        )));
+    }
     let opts = roxmltree::ParsingOptions { allow_dtd: false, nodes_limit: MAX_NODES };
     let doc = roxmltree::Document::parse_with_options(xml, opts).map_err(|e| XfaError::Malformed(format!("template XML: {e}")))?;
     let root = doc.root_element();
@@ -662,7 +673,91 @@ pub fn parse(xml: &str) -> Result<(Template, Vec<String>), XfaError> {
         // A page set may sit beside the root subform.
         root_sf.page_set = child(template, "pageSet").map(|ps| parse_page_set(ps, &mut warnings, 0));
     }
+    // The form packet beside the template holds the state the form was saved in.
+    let saved = root
+        .descendants()
+        .find(|n| n.is_element() && n.tag_name().name() == "form" && n.tag_name().namespace().is_some_and(|ns| ns.contains("xfa-form")));
+    if let Some(saved_root) = saved.and_then(|f| children(f, "subform").next()) {
+        if let Some(p) = saved_root.attribute("presence") {
+            root_sf.common.presence = Presence::parse(Some(p));
+        }
+        apply_saved_state(&mut root_sf.children, saved_root, 0);
+    }
     let mut page_roles = Vec::new();
     collect_page_roles(&[Node::Subform(Box::new(root_sf.clone()))], &mut page_roles, 0);
     Ok((Template { root: root_sf, page_roles }, warnings))
+}
+
+fn parse_access(a: Option<&str>) -> Option<Access> {
+    Some(match a? {
+        "readOnly" => Access::ReadOnly,
+        "protected" => Access::Protected,
+        "nonInteractive" => Access::NonInteractive,
+        "open" => Access::Open,
+        _ => return None,
+    })
+}
+
+/// Apply the saved state of a form packet (`saved`: the element matching the container whose
+/// children `nodes` are) to the template: the `presence` and `access` a script gave an object
+/// before the form was saved, which is restored on opening. Objects are matched by
+/// name and position among the same-named; of the instances of a repeating subform only the
+/// first is read, as the template has it once.
+fn apply_saved_state(nodes: &mut [Node], saved: XmlNode, depth: usize) {
+    if depth > MAX_DEPTH {
+        return;
+    }
+    let mut seen: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    for c in saved.children().filter(|c| c.is_element()) {
+        if !matches!(c.tag_name().name(), "subform" | "subformSet" | "area" | "field" | "draw" | "exclGroup") {
+            continue;
+        }
+        let Some(name) = c.attribute("name").filter(|n| !n.is_empty()) else { continue };
+        let nth = {
+            let k = seen.entry(name).or_insert(0);
+            *k += 1;
+            *k - 1
+        };
+        let same: Vec<usize> = nodes.iter().enumerate().filter(|(_, n)| n.common().name.as_deref() == Some(name)).map(|(i, _)| i).collect();
+        // More saved objects of the name than the template has: further instances.
+        let Some(target) = same.get(nth).copied().and_then(|i| nodes.get_mut(i)) else { continue };
+        let presence = c.attribute("presence").map(|p| Presence::parse(Some(p)));
+        match target {
+            Node::Subform(s) => {
+                if let Some(p) = presence {
+                    s.common.presence = p;
+                }
+                apply_saved_state(&mut s.children, c, depth + 1);
+            }
+            Node::Area(a) => {
+                if let Some(p) = presence {
+                    a.common.presence = p;
+                }
+                apply_saved_state(&mut a.children, c, depth + 1);
+            }
+            Node::Field(f) => {
+                if let Some(p) = presence {
+                    f.common.presence = p;
+                }
+                if let Some(a) = parse_access(c.attribute("access")) {
+                    f.access = a;
+                }
+                // A caption a script changed (a button's label, say) is saved as plain text.
+                let text = child(c, "caption").and_then(|k| child(k, "value")).and_then(|v| child(v, "text")).and_then(|t| t.text());
+                if let (Some(caption), Some(text)) = (f.caption.as_mut(), text) {
+                    caption.value = Value::Text(text.to_string());
+                }
+            }
+            Node::Draw(d) => {
+                if let Some(p) = presence {
+                    d.common.presence = p;
+                }
+            }
+            Node::ExclGroup(g) => {
+                if let Some(p) = presence {
+                    g.common.presence = p;
+                }
+            }
+        }
+    }
 }

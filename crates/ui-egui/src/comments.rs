@@ -14,7 +14,7 @@
 
 use egui::{Color32, CornerRadius, Pos2, Rect, Sense, Stroke, pos2, vec2};
 use pdfcraft_engine::{Edit, LineEnding, Markup, NewAnnotation, NoteIcon, ReviewState, Rgb, Shape, Style};
-use pdfcraft_render::{Annotation, DocInfo};
+use pdfcraft_render::{Annotation, DocInfo, PageInfo, PageText};
 
 use crate::canvas::{DocView, PageXform};
 use crate::theme::{self, Tokens};
@@ -188,12 +188,17 @@ impl CommentTool {
 
     /// Whether the line-thickness control applies.
     pub fn has_width(self) -> bool {
-        self.draws() || self.clicks_points()
+        self.draws() || self.clicks_points() || matches!(self, Self::TextBox | Self::Callout)
     }
 
-    /// Whether the fill-colour control applies: shapes with an interior (#686).
+    /// Text comments may have no border while retaining visible text or fill.
+    fn min_width(self) -> f64 {
+        if matches!(self, Self::TextBox | Self::Callout) { 0.0 } else { 0.5 }
+    }
+
+    /// Whether the fill-colour control applies to this tool.
     pub fn has_fill(self) -> bool {
-        matches!(self, Self::Rectangle | Self::Oval | Self::Polygon | Self::Cloud)
+        matches!(self, Self::Rectangle | Self::Oval | Self::Polygon | Self::Cloud | Self::TextBox | Self::Callout)
     }
 
     /// A placeholder shape of this kind (for per-tool default styles).
@@ -250,6 +255,8 @@ pub struct CommentPrefs {
     pub pinned: bool,
     /// The tool each flyout group shows (the last one used).
     pub group_tool: [CommentTool; 3],
+    /// Hide hover previews on highlight annotations when they contain no comment text beyond the author.
+    pub hide_empty_highlight_hover: bool,
 }
 
 impl Default for CommentPrefs {
@@ -259,6 +266,7 @@ impl Default for CommentPrefs {
             styles: ALL.iter().map(|t| (*t, Style::default_for(&t.sample()))).collect(),
             pinned: false,
             group_tool: [CommentTool::Note, CommentTool::Highlight, CommentTool::Ink],
+            hide_empty_highlight_hover: false,
         }
     }
 }
@@ -281,7 +289,7 @@ impl CommentPrefs {
 
     pub fn set_width(&mut self, tool: CommentTool, w: f64) {
         if let Some((_, s)) = self.styles.iter_mut().find(|(t, _)| *t == tool) {
-            s.width = w.clamp(0.5, 12.0);
+            s.width = w.clamp(tool.min_width(), 12.0);
         }
     }
 
@@ -292,7 +300,7 @@ impl CommentPrefs {
         }
     }
 
-    /// The tool's fill (`None`: no fill). Only shapes with an interior keep one.
+    /// The tool's fill (`None`: no fill).
     pub fn set_fill(&mut self, tool: CommentTool, fill: Option<Rgb>) {
         if let Some((_, s)) = self.styles.iter_mut().find(|(t, _)| *t == tool) {
             s.fill = if tool.has_fill() { fill.filter(|c| c.iter().all(|x| x.is_finite())).map(|c| c.map(|x| x.clamp(0.0, 1.0))) } else { None };
@@ -304,6 +312,30 @@ impl CommentPrefs {
             *s = style;
         }
     }
+}
+
+/// Whether `tool` makes comments like `a`. Arrows are saved as plain Line annotations with an
+/// ending, so the Line and Arrow tools both match a line.
+pub(crate) fn made_by(a: &Annotation, tool: CommentTool) -> bool {
+    match tool_for(a) {
+        Some(CommentTool::Line) => matches!(tool, CommentTool::Line | CommentTool::Arrow),
+        made => made == Some(tool),
+    }
+}
+
+/// The tool whose defaults "Make Current Properties Default" should update.
+///
+/// Arrows are stored as Line annotations. An arrow ending belongs to the Arrow tool, so its
+/// defaults stay separate from a plain line.
+pub(crate) fn tool_for_default(a: &Annotation, endings: Option<&[LineEnding]>) -> Option<CommentTool> {
+    match tool_for(a) {
+        Some(CommentTool::Line) if endings.is_some_and(|ends| ends.iter().copied().any(arrow_ending)) => Some(CommentTool::Arrow),
+        other => other,
+    }
+}
+
+fn arrow_ending(ending: LineEnding) -> bool {
+    matches!(ending, LineEnding::OpenArrow | LineEnding::ClosedArrow | LineEnding::ROpenArrow | LineEnding::RClosedArrow)
 }
 
 /// The tool that makes comments like `a` (for Make Current Properties Default).
@@ -363,8 +395,11 @@ pub enum ComposerKind {
     Callout {
         point: [f64; 2],
     },
-    /// Insert text at the anchor (the caret's tip).
-    Caret,
+    /// Insert text at the anchor (the caret's tip); `size` is the side of the caret's square box,
+    /// in user space units.
+    Caret {
+        size: f64,
+    },
     /// Replace the selected text (`CommentView::replace` holds the quads).
     Replace,
     /// Edit the text of the comment at this index on the composer's page.
@@ -382,12 +417,70 @@ pub struct Composer {
     pub focus: bool,
 }
 
+/// A released drawing gesture waiting for the page raster to show its annotation.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Settling {
+    pub page: usize,
+    pub tool: CommentTool,
+    pub points: Vec<[f64; 2]>,
+    /// Frame time (seconds) at release; a raster that never arrives must not leave a ghost.
+    pub since: f64,
+    /// Its annotation is in the document, so a raster of the page from now on draws it. Until
+    /// then a raster is of the document without it (in full screen the edit is applied the frame
+    /// after the release, and a raster already on its way can arrive in between).
+    pub committed: bool,
+}
+
+/// Longest a released drawing stays painted without its page raster, and how many are kept.
+const SETTLE_SECS: f64 = 20.0;
+const SETTLE_MAX: usize = 16;
+
+impl CommentView {
+    /// Remember a released drag drawing so it stays on screen until its page is re-rendered.
+    pub(crate) fn settle(&mut self, now: f64, page: usize, tool: CommentTool, points: &[[f64; 2]]) {
+        if !matches!(tool, CommentTool::Ink | CommentTool::Line | CommentTool::Arrow | CommentTool::Rectangle | CommentTool::Oval) {
+            return;
+        }
+        self.settling.retain(|s| now - s.since < SETTLE_SECS);
+        if self.settling.len() >= SETTLE_MAX {
+            self.settling.remove(0);
+        }
+        self.settling.push(Settling { page, tool, points: points.to_vec(), since: now, committed: false });
+    }
+
+    /// How many released drawings are still painted from their points (waiting for a raster).
+    pub fn settling_len(&self) -> usize {
+        self.settling.len()
+    }
+
+    /// A fresh raster of `page` is on screen: it draws the committed annotations itself. One
+    /// still waiting for its edit isn't in that raster, and stays drawn from its points.
+    pub(crate) fn page_rendered(&mut self, page: usize) {
+        self.settling.retain(|s| s.page != page || !s.committed);
+    }
+
+    /// The edit adding the released drawings was applied: rasters from now on draw them.
+    pub(crate) fn drawings_committed(&mut self) {
+        for s in &mut self.settling {
+            s.committed = true;
+        }
+    }
+
+    /// The edit adding the released drawings failed: nothing will draw them.
+    pub(crate) fn drawings_refused(&mut self) {
+        self.settling.retain(|s| s.committed);
+    }
+}
+
 /// Per-document commenting state.
 #[derive(Clone, Debug, Default)]
 pub struct CommentView {
     /// The selected comment: (page, index in `/Annots`).
     pub selected: Option<(usize, usize)>,
     pub gesture: Option<Gesture>,
+    /// Drawings just released: shown from their points until the page raster that includes the
+    /// committed annotation arrives, so the stroke never vanishes in between (#1858).
+    pub(crate) settling: Vec<Settling>,
     /// Escape ends egui's drag too; ignore its synthetic release until the mouse is up.
     cancelled_drag: bool,
     pub composer: Option<Composer>,
@@ -410,10 +503,15 @@ pub struct CommentView {
     pub hidden_checks: Vec<String>,
     /// How the panel orders comments.
     pub sort: SortBy,
+    /// Pages whose group is folded in the panel (when sorted by page).
+    pub collapsed_pages: Vec<usize>,
     /// Comment Properties was asked for from the panel: (page, index).
     pub props_request: Option<(usize, usize)>,
     /// Make Current Properties Default was asked for: (page, index).
     pub default_request: Option<(usize, usize)>,
+    /// A file attachment comment's file was asked for: (page, index, open it in a new tab
+    /// rather than save it).
+    pub attachment_request: Option<(usize, usize, bool)>,
     /// Replace Text: the struck-out text's quads while the replacement is typed.
     pub replace: Option<Vec<[f64; 8]>>,
     /// Attach file: where the icon goes (page, top-left in user space), for the app to pick a file.
@@ -423,6 +521,22 @@ pub struct CommentView {
     pub context_at: Option<(usize, [f64; 2])>,
     /// A one-shot tool just finished; the app returns to the Select tool unless pinned.
     pub tool_done: bool,
+}
+
+impl CommentView {
+    /// Takes back the last point of a polygon, cloud or connected lines being drawn; the first
+    /// point's removal cancels the drawing. Returns whether there was such a drawing.
+    pub fn undo_point(&mut self) -> bool {
+        let Some(Gesture::Draw { tool, points, .. }) = self.gesture.as_mut() else { return false };
+        if !tool.clicks_points() {
+            return false;
+        }
+        points.pop();
+        if points.is_empty() {
+            self.gesture = None;
+        }
+        true
+    }
 }
 
 /// Comments panel order (Acrobat: Sort by page, author, date, type, colour).
@@ -443,6 +557,9 @@ pub(crate) struct PageCx<'a> {
     pub info: &'a DocInfo,
     pub tool: QuickTool,
     pub prefs: &'a CommentPrefs,
+    /// A redaction mark's fill while the pointer is over it, and its opacity (Redaction Tool
+    /// Properties).
+    pub redact_mark: ([f64; 3], f64),
     /// The document allows commenting.
     pub allowed: bool,
     /// Comments are hidden (Hide all comments): nothing to select.
@@ -488,6 +605,23 @@ impl PageCx<'_> {
         }
     }
 
+    /// A redaction mark's areas: one per marked quad, or its rectangle.
+    fn redact_rects(&self, a: &Annotation) -> Vec<Rect> {
+        if a.quads.is_empty() {
+            return vec![self.screen_rect(a)];
+        }
+        a.quads
+            .iter()
+            .map(|q| {
+                let xs = [q[0], q[2], q[4], q[6]];
+                let ys = [q[1], q[3], q[5], q[7]];
+                let (x0, x1) = (xs.iter().copied().fold(f32::MAX, f32::min), xs.iter().copied().fold(f32::MIN, f32::max));
+                let (y0, y1) = (ys.iter().copied().fold(f32::MAX, f32::min), ys.iter().copied().fold(f32::MIN, f32::max));
+                self.xf.user_rect(self.info, self.page, [x0, y0, x1, y1])
+            })
+            .collect()
+    }
+
     /// The topmost comment under `p`.
     fn hit(&self, p: Pos2) -> Option<&Annotation> {
         self.comments().filter(|a| self.screen_rects(a).iter().any(|r| r.expand(3.0).contains(p))).last()
@@ -503,7 +637,15 @@ impl PageCx<'_> {
     }
 
     /// The same geometry drives the live image, its handles, and the edit on release.
-    pub(crate) fn adjusted_rect(&self, a: &Annotation, gesture: Option<&Gesture>, pointer: Option<Pos2>, pending: Option<&Edit>) -> Rect {
+    /// `shift` is whether Shift is held now: it keeps the box's proportions from a corner.
+    pub(crate) fn adjusted_rect(
+        &self,
+        a: &Annotation,
+        gesture: Option<&Gesture>,
+        pointer: Option<Pos2>,
+        shift: bool,
+        pending: Option<&Edit>,
+    ) -> Rect {
         let r = self.screen_rect(a);
         if let Some(Edit::ResizeAnnotation { page, index, rect }) = pending
             && (*page, *index) == (self.page, a.index)
@@ -522,7 +664,7 @@ impl PageCx<'_> {
         match (gesture, pointer) {
             (Some(Gesture::Move { page, index, from }), Some(p)) if (*page, *index) == (self.page, a.index) => r.translate(p - *from),
             (Some(Gesture::Resize { page, index, handle, from, aspect_ratio }), Some(p)) if (*page, *index) == (self.page, a.index) => {
-                resized(r, *handle, p - *from, *aspect_ratio)
+                resized(r, *handle, p - *from, corner_ratio(r, *aspect_ratio, shift))
             }
             _ => r,
         }
@@ -555,7 +697,13 @@ fn handle_pos(r: Rect, (hx, hy): (i8, i8)) -> Pos2 {
     pos2(x, y)
 }
 
-fn resized(r: Rect, (hx, hy): (i8, i8), d: egui::Vec2, aspect_ratio: Option<f32>) -> Rect {
+/// The proportions a corner drag of `r` keeps: the box's own fixed ratio (an image signature's),
+/// else `r`'s current one while Shift is held, else none.
+pub(crate) fn corner_ratio(r: Rect, fixed: Option<f32>, shift: bool) -> Option<f32> {
+    fixed.or_else(|| (shift && r.width() > 0.0 && r.height() > 0.0).then(|| r.width() / r.height()))
+}
+
+pub(crate) fn resized(r: Rect, (hx, hy): (i8, i8), d: egui::Vec2, aspect_ratio: Option<f32>) -> Rect {
     if hx != 0
         && hy != 0
         && let Some(ratio) = aspect_ratio.filter(|v| v.is_finite() && *v > 0.0)
@@ -589,6 +737,8 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, 
     let pressed_here = origin.is_some_and(|o| page_rect.contains(o));
     let over_page = pointer.is_some_and(|p| page_rect.contains(p));
     let fill_grab = fill_grabs(ui, cx, view);
+    let draw_grab = draw_grabs(ui, cx, view);
+    let caret_text = if cx.tool == QuickTool::Comment(CommentTool::Caret) { view.page_text(cx.page) } else { None };
     let cv = &mut view.comments;
     if cv.gesture.is_some() && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
         cv.gesture = None;
@@ -605,6 +755,9 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, 
         cv.selected = cx.hit(p).map(|a| (cx.page, a.index));
     }
     match cx.tool {
+        // The shape just drawn is selected with its handles showing: they resize it without a
+        // trip to the Select tool (#2338). Anywhere else the tool keeps drawing.
+        QuickTool::Comment(_) if draw_grab => select_input(ui, resp, cx, view, pointer, origin, pressed_here),
         QuickTool::Comment(tool) if tool.draws() => {
             if !cx.allowed {
                 return false;
@@ -643,8 +796,24 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, 
                 if tool == CommentTool::Eraser {
                     view.pending_edit = erase(cx, &points);
                 } else if let Some(shape) = drawn_shape(tool, &points) {
+                    let now = ui.input(|i| i.time);
+                    cv.settle(now, page, tool, &points);
                     view.pending_edit = Some(new_comment(cx, tool, shape, String::new()));
                 }
+            }
+            // A quick press/release does not start an egui drag, but Acrobat's Draw tool treats
+            // it as a one-point ink stroke (a dot). The appearance uses round line caps, so a
+            // single PDF point is visible and remains editable like any other drawing.
+            if tool == CommentTool::Ink
+                && resp.clicked()
+                && over_page
+                && let Some(p) = pointer
+                && let Some(shape) = drawn_shape(tool, &[cx.to_user(p)])
+            {
+                cv.selected = None;
+                let now = ui.input(|i| i.time);
+                cv.settle(now, cx.page, tool, &[cx.to_user(p)]);
+                view.pending_edit = Some(new_comment(cx, tool, shape, String::new()));
             }
             true
         }
@@ -656,6 +825,17 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, 
                 ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
             }
             let finish = resp.double_clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter));
+            // Backspace (or Delete) takes back the last point, e.g. after a wrong click; Undo does too.
+            // Only while a drawing is in progress: otherwise Delete belongs to the selected comment.
+            if matches!(cv.gesture, Some(Gesture::Draw { page, .. }) if page == cx.page)
+                && !ui.ctx().egui_wants_keyboard_input()
+                && ui.input_mut(|i| {
+                    i.consume_key(egui::Modifiers::NONE, egui::Key::Backspace) || i.consume_key(egui::Modifiers::NONE, egui::Key::Delete)
+                })
+            {
+                cv.undo_point();
+                return true;
+            }
             if resp.clicked()
                 && over_page
                 && let Some(p) = pointer
@@ -758,7 +938,10 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, 
                 && over_page
                 && let Some(p) = pointer
             {
-                cv.composer = Some(Composer { page: cx.page, at: cx.to_user(p), kind: ComposerKind::Caret, text: String::new(), focus: true });
+                let (vx, vy) = cx.xf.screen_to_view(p);
+                let snapped = cx.info.pages.get(cx.page).zip(caret_text.as_deref()).and_then(|(page, t)| snapped_caret(page, t, vx, vy));
+                let (at, size) = snapped.unwrap_or_else(|| (cx.to_user(p), CARET_SIZE));
+                cv.composer = Some(Composer { page: cx.page, at, kind: ComposerKind::Caret { size }, text: String::new(), focus: true });
                 cv.selected = None;
             }
             true
@@ -801,25 +984,53 @@ pub(crate) fn select_grabs(ui: &egui::Ui, cx: &PageCx<'_>, view: &DocView) -> bo
     cx.tool == QuickTool::Select && grabs(ui, cx, view, |a| !is_markup(&a.subtype))
 }
 
+/// With a shape tool (rectangle, oval, line, polygon…), the selected comment's resize handles
+/// are picked up as with the Select tool, so the shape just drawn can be resized straight away
+/// (#2338). Only the handles: a press anywhere else, the shape itself included, still draws.
+pub(crate) fn draw_grabs(ui: &egui::Ui, cx: &PageCx<'_>, view: &DocView) -> bool {
+    let QuickTool::Comment(tool) = cx.tool else { return false };
+    if !(tool.draws() || tool.clicks_points()) || tool == CommentTool::Eraser || cx.hidden {
+        return false;
+    }
+    let cv = &view.comments;
+    if matches!(cv.gesture, Some(Gesture::Resize { page, .. }) if page == cx.page) {
+        return true;
+    }
+    // A polygon being clicked out keeps its clicks, even near an old shape's handle.
+    if cv.gesture.is_some() {
+        return false;
+    }
+    press_point(ui, cx).is_some_and(|p| on_handle(cx, view, p, |_| true))
+}
+
 /// Whether the press (or, with no button down, the pointer) is on a `pick` comment or on the
 /// selected one's resize handles.
 fn grabs(ui: &egui::Ui, cx: &PageCx<'_>, view: &DocView, pick: impl Fn(&Annotation) -> bool) -> bool {
     if cx.hidden {
         return false;
     }
-    let cv = &view.comments;
-    if matches!(cv.gesture, Some(Gesture::Move { page, .. } | Gesture::Resize { page, .. }) if page == cx.page) {
+    if matches!(view.comments.gesture, Some(Gesture::Move { page, .. } | Gesture::Resize { page, .. }) if page == cx.page) {
         return true;
     }
+    let Some(p) = press_point(ui, cx) else { return false };
+    on_handle(cx, view, p, &pick) || cx.hit(p).is_some_and(pick)
+}
+
+/// Where a gesture on this page is decided: the press while the button is down, otherwise the
+/// pointer (egui clears the press origin on release). `None` off the page.
+fn press_point(ui: &egui::Ui, cx: &PageCx<'_>) -> Option<Pos2> {
     let (pointer, origin, down) = ui.input(|i| (i.pointer.hover_pos(), i.pointer.press_origin(), i.pointer.any_down()));
-    let Some(p) = (if down { origin } else { pointer }).filter(|p| cx.xf.rect.contains(*p)) else { return false };
-    let on_handle = cv
+    (if down { origin } else { pointer }).filter(|p| cx.xf.rect.contains(*p))
+}
+
+/// Whether `p` is on a resize handle of the selected comment, when it is a resizable `pick`.
+fn on_handle(cx: &PageCx<'_>, view: &DocView, p: Pos2, pick: impl Fn(&Annotation) -> bool) -> bool {
+    view.comments
         .selected
         .filter(|(page, _)| *page == cx.page)
         .and_then(|(_, i)| cx.get(i))
         .filter(|a| pick(a) && cx.allowed && resizable(a))
-        .is_some_and(|a| HANDLES.into_iter().any(|h| handle_pos(cx.screen_rect(a), h).distance(p) <= 7.0));
-    on_handle || cx.hit(p).is_some_and(pick)
+        .is_some_and(|a| HANDLES.into_iter().any(|h| handle_pos(cx.screen_rect(a), h).distance(p) <= 7.0))
 }
 
 fn clamp_to(r: Rect, p: Pos2) -> Pos2 {
@@ -902,7 +1113,9 @@ fn select_input(
             Some(Gesture::Resize { page, index, handle, from, aspect_ratio }) if page == cx.page => {
                 cv.gesture = None;
                 if let Some(a) = cx.get(index) {
-                    let r = resized(cx.screen_rect(a), handle, p - from, aspect_ratio);
+                    let from_rect = cx.screen_rect(a);
+                    let shift = ui.input(|i| i.modifiers.shift);
+                    let r = resized(from_rect, handle, p - from, corner_ratio(from_rect, aspect_ratio, shift));
                     let rect = cx.rect_to_user(r);
                     if r.width() >= 4.0 && r.height() >= 4.0 {
                         view.pending_edit = Some(Edit::ResizeAnnotation { page, index, rect });
@@ -915,7 +1128,18 @@ fn select_input(
     // (egui clears the press origin on release, so clicks are located by the pointer.)
     let on_page = pointer.is_some_and(|p| cx.xf.rect.contains(p));
     if resp.clicked() && on_page {
+        let follow_link = cx.tool == QuickTool::Select
+            && !consumed
+            && cv.gesture.is_none()
+            && !resp.double_clicked()
+            && pointer
+                .is_some_and(|p| cx.info.links.iter().any(|link| link.page == cx.page && cx.xf.user_rect(cx.info, cx.page, link.rect).contains(p)));
         match pointer.and_then(|p| cx.hit(p)) {
+            Some(a) if a.subtype == "Highlight" && follow_link => {
+                // A plain click follows the link beneath text highlighting. Keep other
+                // annotations and active gestures in control of their own input.
+                cv.selected = None;
+            }
             Some(a) => {
                 cv.selected = Some((cx.page, a.index));
                 cv.reveal = true;
@@ -972,6 +1196,18 @@ pub(crate) fn page_after_text(resp: &egui::Response, cx: &PageCx<'_>, view: &mut
 pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, cx: &PageCx<'_>, view: &DocView) {
     let cv = &view.comments;
     let pointer = ui.input(|i| i.pointer.hover_pos());
+    // A redaction mark shows its fill while the pointer is over it, as Acrobat's does, so the
+    // marked area reads before anything is applied.
+    if cv.gesture.is_none()
+        && let Some(a) = pointer.and_then(|p| cx.hit(p))
+        && a.subtype == "Redact"
+    {
+        let ([r, g, b], opacity) = cx.redact_mark;
+        let fill = Color32::from_rgba_unmultiplied((r * 255.0) as u8, (g * 255.0) as u8, (b * 255.0) as u8, (opacity.clamp(0.0, 1.0) * 255.0) as u8);
+        for rect in cx.redact_rects(a) {
+            painter.rect_filled(rect, CornerRadius::ZERO, fill);
+        }
+    }
     if cv.gesture.is_none()
         && let Some(a) = pointer.and_then(|p| cx.hit(p))
         && (cx.tool == QuickTool::Select || matches!(cx.tool, QuickTool::Fill(_)) && a.fill_sign)
@@ -995,7 +1231,8 @@ pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, cx: &PageCx<'_>
         {
             return paint_gesture(painter, cx, view);
         }
-        let r = cx.adjusted_rect(a, cv.gesture.as_ref(), pointer, view.pending_edit.as_ref()).expand(2.0);
+        let shift = ui.input(|i| i.modifiers.shift);
+        let r = cx.adjusted_rect(a, cv.gesture.as_ref(), pointer, shift, view.pending_edit.as_ref()).expand(2.0);
         painter.rect_stroke(r, CornerRadius::ZERO, Stroke::new(1.0, SELECT_BLUE), egui::StrokeKind::Middle);
         if cx.allowed && resizable(a) {
             for h in HANDLES {
@@ -1008,8 +1245,19 @@ pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, cx: &PageCx<'_>
 }
 
 fn paint_gesture(painter: &egui::Painter, cx: &PageCx<'_>, view: &DocView) {
+    let now = painter.ctx().input(|i| i.time);
+    for s in view.comments.settling.iter().filter(|s| s.page == cx.page && now - s.since < SETTLE_SECS) {
+        paint_draw(painter, cx, &s.tool, &s.points);
+    }
     if let Some(Gesture::Draw { page, tool, points }) = &view.comments.gesture
         && *page == cx.page
+    {
+        paint_draw(painter, cx, tool, points);
+    }
+}
+
+/// A drawing tool's shape from its points (a live drag, or a released one still settling).
+fn paint_draw(painter: &egui::Painter, cx: &PageCx<'_>, tool: &CommentTool, points: &[[f64; 2]]) {
     {
         let style = cx.prefs.style(*tool);
         let zoom = cx.xf.rect.width() / cx.xf.pw.max(1.0);
@@ -1067,7 +1315,7 @@ fn drawn_shape(tool: CommentTool, points: &[[f64; 2]]) -> Option<Shape> {
     let rect = [first[0].min(last[0]), first[1].min(last[1]), first[0].max(last[0]), first[1].max(last[1])];
     let big = rect[2] - rect[0] >= 2.0 && rect[3] - rect[1] >= 2.0;
     match tool {
-        CommentTool::Ink if points.len() >= 2 => Some(Shape::Ink { strokes: vec![points.to_vec()] }),
+        CommentTool::Ink if !points.is_empty() => Some(Shape::Ink { strokes: vec![points.to_vec()] }),
         CommentTool::Line | CommentTool::Arrow if far => Some(Shape::Line {
             from: first,
             to: last,
@@ -1121,7 +1369,7 @@ pub(crate) fn composer(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
         // Scrolled away: keep the draft until the page is back.
         return None;
     };
-    let cx = PageCx { page, xf: &xf, info, tool: QuickTool::Select, prefs, allowed: true, hidden: false };
+    let cx = PageCx { page, xf: &xf, info, tool: QuickTool::Select, prefs, allowed: true, hidden: false, redact_mark: ([0.89, 0.13, 0.13], 1.0) };
     let anchor = cx.to_screen(c.at);
     let t = Tokens::get(ctx);
     let mut post = false;
@@ -1131,7 +1379,7 @@ pub(crate) fn composer(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
         ComposerKind::Note => "Sticky note",
         ComposerKind::TextBox => "Text box",
         ComposerKind::Callout { .. } => "Callout",
-        ComposerKind::Caret => "Inserted text",
+        ComposerKind::Caret { .. } => "Inserted text",
         ComposerKind::Replace => "Replacement text",
         ComposerKind::Edit(_) => "Edit comment",
     };
@@ -1140,13 +1388,13 @@ pub(crate) fn composer(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
         egui::Frame::popup(ui.style()).inner_margin(egui::Margin::same(12)).corner_radius(CornerRadius::same(8)).show(ui, |ui| {
             ui.set_width(260.0);
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(&prefs.author).font(theme::semibold(13.0)));
+                ui.label(egui::RichText::new(crate::bidi::visual_auto(&prefs.author)).font(theme::semibold(13.0)));
                 ui.label(egui::RichText::new(tl!(title)).font(theme::regular(11.5)).color(t.text_faint));
             });
             ui.add_space(6.0);
             let hint = match c.kind {
                 ComposerKind::TextBox | ComposerKind::Callout { .. } => tl!("Type text"),
-                ComposerKind::Caret => tl!("Text to insert"),
+                ComposerKind::Caret { .. } => tl!("Text to insert"),
                 ComposerKind::Replace => tl!("Replacement text"),
                 _ => tl!("Add a comment"),
             };
@@ -1156,7 +1404,7 @@ pub(crate) fn composer(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
                 edit.request_focus();
                 c.focus = false;
             }
-            let enter = ui.input(|i| i.key_pressed(egui::Key::Enter) && i.modifiers.command);
+            let enter = submit_key(ui, &edit, false);
             if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                 cancel = true;
             }
@@ -1198,11 +1446,17 @@ pub(crate) fn composer(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
         }
         ComposerKind::TextBox => {
             view.comments.tool_done = true;
-            Some(new_comment(&cx, CommentTool::TextBox, Shape::TextBox { rect: text_box_rect(c.at, &text, 12.0), font_size: 12.0 }, text))
+            Some(new_comment(
+                &cx,
+                CommentTool::TextBox,
+                Shape::TextBox { rect: text_box_rect(c.at, &text, 12.0, page_rotation(info, page)), font_size: 12.0 },
+                text,
+            ))
         }
         ComposerKind::Callout { point } => {
             view.comments.tool_done = true;
-            let rect = text_box_rect(c.at, &text, 10.0);
+            // A callout's leader and box stay in user-space axes (its appearance isn't turned).
+            let rect = text_box_rect(c.at, &text, 10.0, 0);
             let side = if point[0] < rect[0] {
                 rect[0]
             } else if point[0] > rect[2] {
@@ -1225,23 +1479,103 @@ pub(crate) fn composer(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
                 caret: prefs.style(CommentTool::Caret),
             })
         }
-        ComposerKind::Caret => {
+        ComposerKind::Caret { size } => {
             view.comments.tool_done = true;
             let [x, y] = c.at;
-            Some(new_comment(&cx, CommentTool::Caret, Shape::Caret { rect: [x - 4.0, y - 8.0, x + 4.0, y] }, text))
+            let half = size / 2.0;
+            Some(new_comment(&cx, CommentTool::Caret, Shape::Caret { rect: [x - half, y - size, x + half, y] }, text))
         }
     }
 }
 
+/// Submit only from the focused comment editor. Match each key event's modifiers exactly,
+/// so Shift+Enter stays a newline and another editor cannot submit this draft. Replies also
+/// keep their existing unmodified Enter-to-post behavior.
+pub(crate) fn submit_key(ui: &mut egui::Ui, field: &egui::Response, plain_enter: bool) -> bool {
+    field.has_focus()
+        && ui.input_mut(|input| {
+            let mut submit = false;
+            input.events.retain(|event| {
+                let matched = matches!(event,
+                    egui::Event::Key { key: egui::Key::Enter, pressed: true, modifiers, .. }
+                        if modifiers.matches_exact(egui::Modifiers::CTRL)
+                            || modifiers.matches_exact(egui::Modifiers::COMMAND)
+                            || plain_enter && modifiers.matches_exact(egui::Modifiers::NONE)
+                );
+                submit |= matched;
+                !matched
+            });
+            submit
+        })
+}
+
+/// The side of the caret's box, in user space units, away from text.
+const CARET_SIZE: f64 = 8.0;
+
+/// [`caret_snap`] in the page's user space: the caret's tip and the side of its box.
+///
+/// The caret is drawn upright in user space, so it only snaps on an unrotated page, where up on
+/// the page is up on screen; its size goes through the same mapping as the tip, so a page with
+/// `/UserUnit` gets a caret of the same size relative to its text.
+pub(crate) fn snapped_caret(page: &PageInfo, text: &PageText, vx: f32, vy: f32) -> Option<([f64; 2], f64)> {
+    if !page.rotation.is_multiple_of(360) {
+        return None;
+    }
+    let ([x, y], size) = caret_snap(text, vx, vy)?;
+    let tip = page.view_to_user(x, y);
+    let foot = page.view_to_user(x, y + size);
+    let side = f64::from(tip[1] - foot[1]);
+    (side.is_finite() && side > 0.0).then(|| ([f64::from(tip[0]), f64::from(tip[1])], side))
+}
+
+/// Insert text: where a click puts the caret's tip (view space) and how tall the caret is.
+///
+/// On upright, horizontal text the tip snaps to the nearer edge of the character under (or
+/// next to) the click, on the line's baseline, and the caret's side is half the text's em size
+/// (clamped to 4–36 view-space points; [`snapped_caret`] maps it to user space): the
+/// proposal marks an insertion point in the text, as a proofreader's caret does. Elsewhere
+/// (away from text, or on turned, sloped or vertical text) it returns `None` and the caret stays
+/// at the click. A ligature is one glyph, so the caret goes before or after it, never inside.
+pub(crate) fn caret_snap(text: &PageText, vx: f32, vy: f32) -> Option<([f32; 2], f32)> {
+    let g = text.glyphs.get(text.nearest(vx, vy)?)?;
+    if !(g.direction[0] > 0.0 && g.direction[1].abs() <= 0.02) {
+        return None;
+    }
+    // Close enough to belong to this glyph: within half an em of its box.
+    let [x0, y0, x1, y1] = g.rect;
+    let slack = (y1 - y0) / 2.0;
+    if !(slack.is_finite() && slack > 0.0) || vx < x0 - slack || vx > x1 + slack || vy < y0 - slack || vy > y1 + slack {
+        return None;
+    }
+    // The em box runs from 0.2 em below the baseline to 0.8 em above it (`pdfcraft_render`'s
+    // text extraction); `quad` is its bottom edge in the writing direction, then its top edge
+    // backwards. Take the side of the box the click is nearer to: its foot and head.
+    let [q0, q1, q2, q3] = g.quad;
+    let (foot, head) = if vx < (q0[0] + q1[0]) / 2.0 { (q0, q3) } else { (q1, q2) };
+    let em = (head[0] - foot[0]).hypot(head[1] - foot[1]);
+    if !(em.is_finite() && em > 0.0) {
+        return None;
+    }
+    let baseline = [foot[0] + 0.2 * (head[0] - foot[0]), foot[1] + 0.2 * (head[1] - foot[1])];
+    Some((baseline, (em / 2.0).clamp(4.0, 36.0)))
+}
+
 /// A text box sized to its text (at most 300 pt wide), hanging from its top-left corner.
-pub fn text_box_rect(at: [f64; 2], text: &str, size: f64) -> [f64; 4] {
+/// The box for `text` at `size` with its displayed top-left corner at `at`, on a page turned by
+/// `rotation` (its `/Rotate`): on a quarter-turned page it is taller than wide in user space.
+pub fn text_box_rect(at: [f64; 2], text: &str, size: f64, rotation: i64) -> [f64; 4] {
     use pdfcraft_engine::annot_text::{text_width, wrap};
     let pad = 2.0;
     let longest = text.lines().map(|l| text_width(l, size)).fold(0.0, f64::max);
     let w = (longest + 2.0 * pad + 4.0).clamp(40.0, 300.0);
     let lines = wrap(text, size, w - 2.0 * pad).len().max(1);
     let h = lines as f64 * size * 1.2 + 2.0 * pad + 2.0;
-    [at[0], at[1] - h, at[0] + w, at[1]]
+    pdfcraft_engine::text_box_at(rotation, at, w, h).unwrap_or([at[0], at[1] - h, at[0] + w, at[1]])
+}
+
+/// The `/Rotate` of `page` (0 when it is unknown).
+pub(crate) fn page_rotation(info: &DocInfo, page: usize) -> i64 {
+    info.pages.get(page).map_or(0, |p| i64::from(p.rotation))
 }
 
 /// Delete / Escape handling for comments (only while no text field has focus).
@@ -1269,6 +1603,23 @@ pub(crate) fn keys(ctx: &egui::Context, view: &mut DocView, tool: &mut QuickTool
     }
 }
 
+/// Save attachment… and, for a PDF, Open in a new tab, first in a file attachment comment's
+/// menus as in the Attachments panel: the comment is where the reader finds its file. Reading
+/// the file changes nothing, so a read-only document offers them too.
+pub(crate) fn attachment_items(ui: &mut egui::Ui, view: &mut DocView, info: &DocInfo, a: &Annotation) {
+    let source = pdfcraft_render::AttachmentSource::Annotation { page: a.page, index: a.index };
+    let Some(file) = info.attachments.iter().find(|f| f.source == source) else { return };
+    if ui.button(tl!("Save attachment…")).clicked() {
+        view.comments.attachment_request = Some((a.page, a.index, false));
+        ui.close();
+    }
+    if file.name.to_lowercase().ends_with(".pdf") && ui.button(tl!("Open in a new tab")).clicked() {
+        view.comments.attachment_request = Some((a.page, a.index, true));
+        ui.close();
+    }
+    ui.separator();
+}
+
 /// Items of the canvas context menu for the selected comment (or the page).
 pub(crate) fn context_menu(ui: &mut egui::Ui, view: &mut DocView, info: &DocInfo, prefs: &CommentPrefs, allowed: bool) -> Option<CanvasAction> {
     let mut action = None;
@@ -1276,6 +1627,7 @@ pub(crate) fn context_menu(ui: &mut egui::Ui, view: &mut DocView, info: &DocInfo
     match selected {
         Some(a) => {
             let (page, index) = (a.page, a.index);
+            attachment_items(ui, view, info, a);
             if ui.add_enabled(allowed, egui::Button::new(tl!("Edit text…"))).clicked() {
                 view.comments.composer = Some(Composer {
                     page,
@@ -1363,28 +1715,132 @@ pub enum CanvasAction {
     OpenComments,
     /// Comment Properties for (page, index).
     Properties(usize, usize),
+    /// Copy Image: image (page, index in `page_images`) to the clipboard.
+    CopyImage(usize, usize),
+    /// Copy Image in Original Format: the same image as a file (JPEG as stored, else PNG).
+    CopyImageFile(usize, usize),
 }
 
-/// A grid of colour swatches; returns the one clicked.
+/// How many custom colours the "Recent colours" row keeps.
+const RECENT_CUSTOM: usize = 5;
+
+fn recent_custom_id() -> egui::Id {
+    egui::Id::new("pdfcraft-recent-custom-colours")
+}
+
+/// Custom colours picked with "Other colour…" this session, newest first (#1193).
+pub fn recent_custom_colours(ctx: &egui::Context) -> Vec<Rgb> {
+    ctx.data(|d| d.get_temp::<Vec<Rgb>>(recent_custom_id())).unwrap_or_default()
+}
+
+/// Put `c` first in the recent custom colours (once, at most [`RECENT_CUSTOM`]). Colours that are
+/// already swatches are not repeated there.
+pub fn remember_custom_colour(ctx: &egui::Context, c: Rgb) {
+    if !c.iter().all(|v| v.is_finite()) || SWATCHES.iter().any(|(_, s)| same_colour(s, &c)) {
+        return;
+    }
+    let c = c.map(|v| v.clamp(0.0, 1.0));
+    ctx.data_mut(|d| {
+        let recent = d.get_temp_mut_or_default::<Vec<Rgb>>(recent_custom_id());
+        recent.retain(|r| !same_colour(r, &c));
+        recent.insert(0, c);
+        recent.truncate(RECENT_CUSTOM);
+    });
+}
+
+fn same_colour(a: &Rgb, b: &Rgb) -> bool {
+    a.iter().zip(b).all(|(x, y)| (x - y).abs() < 0.02)
+}
+
+fn rgb_of(c: Color32) -> Rgb {
+    [c.r(), c.g(), c.b()].map(|v| f64::from(v) / 255.0)
+}
+
+/// One round swatch; `on` rings it as the current colour.
+fn swatch(ui: &mut egui::Ui, c: Rgb, on: bool, tooltip: &str) -> egui::Response {
+    let (r, resp) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tooltip));
+    ui.painter().circle_filled(r.center(), 9.0, color32(c));
+    ui.painter().circle_stroke(r.center(), 9.0, Stroke::new(1.0, Color32::from_black_alpha(40)));
+    if on || resp.hovered() {
+        ui.painter().circle_stroke(r.center(), 11.0, Stroke::new(1.5, SELECT_BLUE));
+    }
+    resp.on_hover_text(tooltip)
+}
+
+/// The "+" swatch that opens "Other colour…": a ring with a plus, the size of a swatch.
+fn other_colour_swatch(ui: &mut egui::Ui, open: bool) -> egui::Response {
+    let (r, resp) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::click());
+    let ink = ui.visuals().widgets.inactive.fg_stroke.color;
+    ui.painter().circle_stroke(r.center(), 9.0, Stroke::new(1.0, ink.gamma_multiply(0.6)));
+    let c = r.center();
+    for d in [vec2(4.5, 0.0), vec2(0.0, 4.5)] {
+        ui.painter().line_segment([c - d, c + d], Stroke::new(1.5, ink));
+    }
+    if open || resp.hovered() {
+        ui.painter().circle_stroke(c, 11.0, Stroke::new(1.5, SELECT_BLUE));
+    }
+    let label = tl!("Other colour…");
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, open, label));
+    resp.on_hover_text(label)
+}
+
+/// A grid of colour swatches with a "+" swatch for "Other colour…" (a full picker, as Acrobat's
+/// quick colours offer) and, once used, the recent custom colours; returns the colour chosen.
+/// The "+" sits in the first row, so the grid is no taller than before until the picker opens.
 pub fn swatch_grid(ui: &mut egui::Ui, current: Option<Rgb>) -> Option<Rgb> {
     let mut picked = None;
-    egui::Grid::new(ui.id().with("swatches")).spacing(vec2(6.0, 6.0)).show(ui, |ui| {
+    let on = |c: &Rgb| current.is_some_and(|cur| same_colour(&cur, c));
+    // Keyed on this grid's own place in the parent, so two grids in one dialog open their
+    // pickers separately.
+    let base = ui.next_auto_id();
+    ui.skip_ahead_auto_ids(1);
+    let open_id = base.with("other-colour");
+    let value_id = open_id.with("value");
+    let mut open = ui.data(|d| d.get_temp::<bool>(open_id)).unwrap_or(false);
+    egui::Grid::new(base.with("swatches")).spacing(vec2(6.0, 6.0)).show(ui, |ui| {
         for (i, (name, c)) in SWATCHES.iter().enumerate() {
-            let (r, resp) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::click());
-            let on = current.is_some_and(|cur| cur.iter().zip(c).all(|(a, b)| (a - b).abs() < 0.02));
-            ui.painter().circle_filled(r.center(), 9.0, color32(*c));
-            ui.painter().circle_stroke(r.center(), 9.0, Stroke::new(1.0, Color32::from_black_alpha(40)));
-            if on || resp.hovered() {
-                ui.painter().circle_stroke(r.center(), 11.0, Stroke::new(1.5, SELECT_BLUE));
-            }
-            if resp.on_hover_text(tl!(name)).clicked() {
+            if swatch(ui, *c, on(c), tl!(name)).clicked() {
                 picked = Some(*c);
+            }
+            if i == 4 && other_colour_swatch(ui, open).clicked() {
+                open = !open;
+                // Start from the current colour each time the picker opens.
+                ui.data_mut(|d| d.insert_temp(value_id, current.map_or(Color32::BLACK, color32)));
             }
             if i % 5 == 4 {
                 ui.end_row();
             }
         }
     });
+    let recent = recent_custom_colours(ui.ctx());
+    if !recent.is_empty() {
+        ui.label(egui::RichText::new(tl!("Recent colours")).small());
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            for c in &recent {
+                let [r, g, b, _] = color32(*c).to_array();
+                if swatch(ui, *c, on(c), &format!("#{r:02X}{g:02X}{b:02X}")).clicked() {
+                    picked = Some(*c);
+                }
+            }
+        });
+    }
+    if open && picked.is_none() {
+        let mut value = ui.data(|d| d.get_temp::<Color32>(value_id)).unwrap_or_else(|| current.map_or(Color32::BLACK, color32));
+        egui::widgets::color_picker::color_picker_color32(ui, &mut value, egui::widgets::color_picker::Alpha::Opaque);
+        ui.data_mut(|d| d.insert_temp(value_id, value));
+        // Dragging in the picker previews nothing; Apply commits once (one undo step).
+        if ui.button(tl!("Apply")).clicked() {
+            let c = rgb_of(value);
+            remember_custom_colour(ui.ctx(), c);
+            picked = Some(c);
+        }
+    }
+    if picked.is_some() {
+        open = false;
+    }
+    ui.data_mut(|d| d.insert_temp(open_id, open));
     picked
 }
 
@@ -1405,18 +1861,21 @@ pub fn fill_picker(ui: &mut egui::Ui, current: Option<Rgb>) -> Option<Option<Rgb
 }
 
 /// The comment tools' extra quick-bar controls: pin, colour, fill, opacity and thickness.
-pub(crate) fn quick_bar_controls(ui: &mut egui::Ui, tool: CommentTool, prefs: &mut CommentPrefs) {
+pub(crate) fn quick_bar_controls(ui: &mut egui::Ui, tool: CommentTool, prefs: &mut CommentPrefs) -> Option<Rgb> {
     let style = prefs.style(tool);
+    let mut selected_color = None;
     if icons::button(ui, "pin", 32.0, prefs.pinned, if prefs.pinned { tl!("Keep tool selected: on") } else { tl!("Keep tool selected") }).clicked() {
         prefs.pinned = !prefs.pinned;
     }
     let (r, resp) = ui.allocate_exact_size(vec2(32.0, 32.0), Sense::click());
     ui.painter().circle_filled(r.center(), 9.0, color32(style.color));
     ui.painter().circle_stroke(r.center(), 9.0, Stroke::new(1.0, Color32::from_black_alpha(50)));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!("Colour")));
     let resp = resp.on_hover_text(tl!("Colour"));
     egui::Popup::menu(&resp).align(egui::RectAlign::RIGHT_START).show(|ui| {
         if let Some(c) = swatch_grid(ui, Some(style.color)) {
             prefs.set_color(tool, c);
+            selected_color = Some(c);
             ui.close();
         }
     });
@@ -1445,11 +1904,12 @@ pub(crate) fn quick_bar_controls(ui: &mut egui::Ui, tool: CommentTool, prefs: &m
             ui.set_min_width(180.0);
             let mut w = style.width;
             ui.label(egui::RichText::new(tl!("Line thickness")).font(theme::semibold(12.0)));
-            if ui.add(egui::Slider::new(&mut w, 0.5..=12.0).step_by(0.5).suffix(" pt")).changed() {
+            if ui.add(egui::Slider::new(&mut w, tool.min_width()..=12.0).step_by(0.5).suffix(" pt")).changed() {
                 prefs.set_width(tool, w);
             }
         });
     }
+    selected_color
 }
 
 /// The quick bar's fill button: a filled square in the fill colour, or a crossed-out outline
@@ -1492,6 +1952,170 @@ pub fn status_badge(state: &str) -> Option<(&'static str, &'static str, Color32)
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pdfcraft_render::TextGlyph;
+
+    /// One glyph per character, `w` points wide, on a line of `em`-point text whose baseline is at `y`, drawn
+    /// along `direction` (a unit vector in view space, y down).
+    fn line(chars: &str, x: f32, y: f32, w: f32, em: f32, direction: [f32; 2]) -> PageText {
+        let [dx, dy] = direction;
+        // "Up" for the glyph: its writing direction turned a quarter counterclockwise (y down).
+        let [ux, uy] = [dy, -dx];
+        let glyphs = chars
+            .chars()
+            .enumerate()
+            .map(|(i, c)| {
+                let start = [x + dx * w * i as f32, y + dy * w * i as f32];
+                let at = |along: f32, up: f32| [start[0] + dx * along + ux * up, start[1] + dy * along + uy * up];
+                let quad = [at(0.0, -0.2 * em), at(w, -0.2 * em), at(w, 0.8 * em), at(0.0, 0.8 * em)];
+                let xs = quad.map(|p| p[0]);
+                let ys = quad.map(|p| p[1]);
+                let rect = [
+                    xs.into_iter().fold(f32::INFINITY, f32::min),
+                    ys.into_iter().fold(f32::INFINITY, f32::min),
+                    xs.into_iter().fold(f32::NEG_INFINITY, f32::max),
+                    ys.into_iter().fold(f32::NEG_INFINITY, f32::max),
+                ];
+                TextGlyph { text: c.to_string(), rect, quad, direction }
+            })
+            .collect::<Vec<_>>();
+        let n = glyphs.len();
+        PageText { glyphs, line_of: vec![0; n], space_before: vec![false; n] }
+    }
+
+    fn near(a: Option<([f32; 2], f32)>, b: ([f32; 2], f32)) -> bool {
+        a.is_some_and(|([x, y], s)| (x - b.0[0]).abs() < 1e-3 && (y - b.0[1]).abs() < 1e-3 && (s - b.1).abs() < 1e-3)
+    }
+
+    #[test]
+    fn the_caret_snaps_to_the_nearer_edge_on_the_baseline() {
+        let text = line("abcd", 20.0, 100.0, 10.0, 14.0, [1.0, 0.0]);
+        // "c" spans 40..50: its left half snaps before it, its right half after it.
+        assert!(near(caret_snap(&text, 43.0, 95.0), ([40.0, 100.0], 7.0)));
+        assert!(near(caret_snap(&text, 47.0, 92.0), ([50.0, 100.0], 7.0)));
+        // Just past the last character, on the line: after it.
+        assert!(near(caret_snap(&text, 63.0, 99.0), ([60.0, 100.0], 7.0)));
+    }
+
+    #[test]
+    fn the_snapped_caret_follows_the_page_into_user_space() {
+        let text = line("abcd", 20.0, 100.0, 10.0, 14.0, [1.0, 0.0]);
+        let page = |rotation, user_unit: f32| PageInfo {
+            width: 300.0 * user_unit,
+            height: 200.0 * user_unit,
+            label: "1".into(),
+            crop: [0.0, 0.0, 300.0, 200.0],
+            rotation,
+        };
+        // An unrotated page: view y = 100 is user y = 100 (y up from the bottom of a 200 pt page).
+        let (tip, side) = snapped_caret(&page(0, 1.0), &text, 43.0, 95.0).expect("snaps");
+        assert!((tip[0] - 40.0).abs() < 1e-3 && (tip[1] - 100.0).abs() < 1e-3 && (side - 7.0).abs() < 1e-3);
+        // /UserUnit 2: the view is twice as large, so the same text is half as many user units.
+        let doubled = line("abcd", 40.0, 200.0, 20.0, 28.0, [1.0, 0.0]);
+        let (tip, side) = snapped_caret(&page(0, 2.0), &doubled, 86.0, 190.0).expect("snaps");
+        assert!((tip[0] - 40.0).abs() < 1e-3 && (tip[1] - 100.0).abs() < 1e-3 && (side - 7.0).abs() < 1e-3, "{tip:?} {side}");
+        // A rotated page: the caret would lie on its side, so it stays at the click.
+        for rotation in [90, 180, 270] {
+            assert_eq!(snapped_caret(&page(rotation, 1.0), &text, 43.0, 95.0), None, "/Rotate {rotation}");
+        }
+    }
+
+    #[test]
+    fn away_from_upright_horizontal_text_the_caret_stays_at_the_click() {
+        let text = line("abcd", 20.0, 100.0, 10.0, 14.0, [1.0, 0.0]);
+        assert_eq!(caret_snap(&text, 200.0, 100.0), None, "far to the right");
+        assert_eq!(caret_snap(&text, 40.0, 40.0), None, "far above the line");
+        assert_eq!(caret_snap(&PageText::default(), 40.0, 100.0), None, "no text");
+        for (direction, what) in [([0.0, 1.0], "vertical"), ([-1.0, 0.0], "upside down"), ([0.995, 0.0998], "sloped")] {
+            let turned = line("abcd", 20.0, 100.0, 10.0, 14.0, direction);
+            let [x0, y0, x1, y1] = turned.glyphs[2].rect;
+            assert_eq!(caret_snap(&turned, (x0 + x1) / 2.0, (y0 + y1) / 2.0), None, "{what}");
+        }
+    }
+
+    #[test]
+    fn recent_custom_colours_dedupe_cap_and_skip_swatches() {
+        // #1193: "Other colour…" remembers what it applied, newest first.
+        let ctx = egui::Context::default();
+        assert!(recent_custom_colours(&ctx).is_empty());
+        for i in 0..7 {
+            remember_custom_colour(&ctx, [0.1 * f64::from(i), 0.3, 0.7]);
+        }
+        let recent = recent_custom_colours(&ctx);
+        assert_eq!(recent.len(), RECENT_CUSTOM, "capped");
+        assert!(same_colour(&recent[0], &[0.6, 0.3, 0.7]), "newest first: {recent:?}");
+        remember_custom_colour(&ctx, [0.2, 0.3, 0.7]);
+        let again = recent_custom_colours(&ctx);
+        assert_eq!(again.len(), RECENT_CUSTOM);
+        assert!(
+            same_colour(&again[0], &[0.2, 0.3, 0.7]) && again.iter().filter(|c| same_colour(c, &[0.2, 0.3, 0.7])).count() == 1,
+            "moved, not repeated"
+        );
+        // Swatches and unusable values are not remembered; out-of-range ones are clamped.
+        remember_custom_colour(&ctx, SWATCHES[0].1);
+        remember_custom_colour(&ctx, [f64::NAN, 0.0, 0.0]);
+        assert!(same_colour(&recent_custom_colours(&ctx)[0], &[0.2, 0.3, 0.7]));
+        remember_custom_colour(&ctx, [1.7, -0.5, 0.25]);
+        assert!(same_colour(&recent_custom_colours(&ctx)[0], &[1.0, 0.0, 0.25]));
+    }
+
+    #[test]
+    fn other_colour_applies_the_picked_colour_once() {
+        // #1193: the swatch grid has a full picker; Apply returns its colour and remembers it.
+        use egui_kittest::kittest::Queryable;
+        let current = [0.2, 0.4, 0.6];
+        let mut h = egui_kittest::Harness::new_ui_state(
+            |ui, picked: &mut Vec<Rgb>| {
+                if let Some(c) = swatch_grid(ui, Some(current)) {
+                    picked.push(c);
+                }
+            },
+            Vec::new(),
+        );
+        h.run();
+        assert!(h.query_by_label("Apply").is_none(), "the picker starts closed");
+        assert!(h.query_by_label("Recent colours").is_none());
+        h.get_by_label("Other colour…").click();
+        h.run();
+        h.get_by_label("Apply").click();
+        h.run();
+        let picked = h.state().clone();
+        assert_eq!(picked.len(), 1, "one choice: {picked:?}");
+        assert!(same_colour(&picked[0], &current), "the picker opens on the current colour: {picked:?}");
+        assert!(h.query_by_label("Apply").is_none(), "applying closes the picker");
+        assert!(h.query_by_label("Recent colours").is_some(), "the colour is offered again");
+    }
+
+    #[test]
+    fn two_grids_in_one_parent_open_their_pickers_separately() {
+        // Redaction properties and Prepare a form draw two grids in one parent ui.
+        use egui_kittest::kittest::Queryable;
+        let mut h = egui_kittest::Harness::new_ui(|ui| {
+            let _ = swatch_grid(ui, Some([0.2, 0.4, 0.6]));
+            let _ = swatch_grid(ui, Some([0.6, 0.4, 0.2]));
+        });
+        h.run();
+        let plus = h.query_all_by_label("Other colour…").collect::<Vec<_>>();
+        assert_eq!(plus.len(), 2);
+        plus[0].click();
+        h.run();
+        assert_eq!(h.query_all_by_label("Apply").count(), 1, "only the first grid's picker opens");
+    }
+
+    #[test]
+    fn shift_keeps_the_current_proportions_unless_the_box_has_its_own() {
+        let r = Rect::from_min_max(pos2(100.0, 100.0), pos2(196.0, 132.0));
+        assert_eq!(corner_ratio(r, None, false), None);
+        assert_eq!(corner_ratio(r, None, true), Some(3.0));
+        assert_eq!(corner_ratio(r, Some(2.0), false), Some(2.0));
+        assert_eq!(corner_ratio(r, Some(2.0), true), Some(2.0));
+        // A degenerate box has no proportions to keep (no division by zero).
+        let flat = Rect::from_min_max(pos2(100.0, 100.0), pos2(196.0, 100.0));
+        assert_eq!(corner_ratio(flat, None, true), None);
+        // Dragging a corner with Shift held scales the box instead of stretching it.
+        let out = resized(r, (1, 1), vec2(48.0, 0.0), corner_ratio(r, None, true));
+        assert_eq!(out.min, r.min);
+        assert!((out.width() / out.height() - 3.0).abs() < 0.001);
+    }
 
     #[test]
     fn proportional_corners_keep_the_opposite_anchor_and_edges_stretch_one_axis() {
@@ -1528,7 +2152,7 @@ mod tests {
     fn drawn_shapes_ignore_slips() {
         assert_eq!(drawn_shape(CommentTool::Rectangle, &[[0.0, 0.0], [1.0, 1.0]]), None);
         assert_eq!(drawn_shape(CommentTool::Rectangle, &[[10.0, 0.0], [0.0, 10.0]]), Some(Shape::Rectangle { rect: [0.0, 0.0, 10.0, 10.0] }));
-        assert_eq!(drawn_shape(CommentTool::Ink, &[[0.0, 0.0]]), None);
+        assert_eq!(drawn_shape(CommentTool::Ink, &[[0.0, 0.0]]), Some(Shape::Ink { strokes: vec![vec![[0.0, 0.0]]] }));
         assert!(matches!(
             drawn_shape(CommentTool::Arrow, &[[0.0, 0.0], [5.0, 0.0]]),
             Some(Shape::Line { start: LineEnding::None, end: LineEnding::OpenArrow, .. })
@@ -1537,10 +2161,10 @@ mod tests {
 
     #[test]
     fn text_boxes_fit_their_text() {
-        let r = text_box_rect([100.0, 500.0], "Hi", 12.0);
+        let r = text_box_rect([100.0, 500.0], "Hi", 12.0, 0);
         assert_eq!((r[0], r[3]), (100.0, 500.0));
         assert!(r[2] - r[0] < 60.0);
-        let long = text_box_rect([0.0, 500.0], &"word ".repeat(80), 12.0);
+        let long = text_box_rect([0.0, 500.0], &"word ".repeat(80), 12.0, 0);
         assert_eq!(long[2], 300.0);
         assert!(long[3] - long[1] > 50.0);
     }

@@ -2,7 +2,7 @@
 //! Private keys remain in CNG; Windows may ask permission to use a key.
 //!
 //! Certificates that can't sign through PdfCraft (no usable private key, a key type it doesn't
-//! sign with) are reported in [`Listing::unusable`] with the reason rather than left out
+//! sign with, a key usage or extended key usage that doesn't allow signing documents) are reported in [`Listing::unusable`] with the reason rather than left out
 //! silently, so a missing identity can be explained (issue #179).
 
 use std::sync::Arc;
@@ -160,6 +160,13 @@ fn entries() -> Result<Entries, SignError> {
                 skip(certificate.display_name(), reason, no_private_key);
                 continue;
             }
+        }
+        // A smart card holds encryption and logon certificates beside the signing one, all under
+        // the same name; a signature made with them doesn't validate, so they aren't offered.
+        // Checked after the key, so a certificate without one stays out of the list entirely.
+        if let Some(reason) = certificate.signing_problem_clause() {
+            skip(certificate.display_name(), reason, false);
+            continue;
         }
         let public = certificate.public_key.clone();
         let key = PrivateKey::external(public.clone(), Arc::new(WindowsKey { context: context.clone(), public }));

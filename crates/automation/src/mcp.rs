@@ -329,7 +329,7 @@ fn guarded_tool(f: impl FnOnce() -> Result<Value, (i64, String)>) -> Result<Valu
 }
 
 fn tool_content(name: &str, content: Vec<Content>) -> Value {
-    let failed = name == "command_batch"
+    let failed = matches!(name, "command_batch" | "doc_batch")
         && content.iter().any(|c| match c {
             Content::Json(v) => v.get("failed").and_then(Value::as_u64).is_some_and(|n| n > 0),
             _ => false,

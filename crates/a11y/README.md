@@ -4,7 +4,7 @@ Layer L4: accessibility (execution plan M12.3). Today: the Accessibility Checker
 
 ```rust
 let report = check(&doc, &Options::default());          // 31 of 32 rules (colour contrast off)
-let html = report_html(&report, "file.pdf", "2026-10-02");
+let html = report_html(&report, "file.pdf", "2026-10-02", "en", &in_english);  // or an interface's words
 ```
 
 - **32 rules in 7 categories**, as in Acrobat's full check: Document (permission flag,

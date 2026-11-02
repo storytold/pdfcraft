@@ -154,4 +154,18 @@ mod tests {
         let text = std::fs::read_to_string(crate::gates::root().join("Cargo.toml")).unwrap();
         validate(&read(&text).unwrap()).unwrap();
     }
+
+    /// The `rust-version = "1.NN"` line of a manifest, as the minor number.
+    fn minor_of_rust_version(manifest: &str) -> u32 {
+        let line = manifest.lines().find(|l| l.starts_with("rust-version = \"")).unwrap();
+        line.split('"').nth(1).unwrap().split('.').nth(1).unwrap().parse().unwrap()
+    }
+
+    #[test]
+    fn workspace_rust_version_covers_the_ui_crate() {
+        let root = crate::gates::root();
+        let workspace = std::fs::read_to_string(root.join("Cargo.toml")).unwrap();
+        let ui = std::fs::read_to_string(root.join("crates/ui-egui/Cargo.toml")).unwrap();
+        assert!(minor_of_rust_version(&workspace) >= minor_of_rust_version(&ui));
+    }
 }

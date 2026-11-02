@@ -5,6 +5,7 @@
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream};
 
 mod extract;
+mod upright_image;
 pub use extract::{ExtractedImage, ImageExport, extract_images, image_file};
 use pdfcraft_fonts::{literal, win_ansi, wrap};
 
@@ -314,7 +315,13 @@ fn png_image(name: &str, bytes: &[u8]) -> Result<Embedded, CreateError> {
         _ => (72.0, 72.0),
     };
     let icc = reader.info().icc_profile.as_ref().map(|p| p.to_vec());
-    let mut buf = vec![0; reader.output_buffer_size().ok_or_else(|| bad("image too large".into()))?];
+    // The decoded size comes from the header alone, so a file of a few bytes can claim any
+    // size: keep the ceiling, and ask for the memory fallibly (a failed allocation would abort
+    // the whole app, and no `catch_unwind` stops that).
+    let size = reader.output_buffer_size().filter(|n| *n <= MAX_DECODED_BYTES).ok_or_else(|| bad("image too large".into()))?;
+    let mut buf = Vec::new();
+    buf.try_reserve_exact(size).map_err(|_| bad("not enough memory for this image".into()))?;
+    buf.resize(size, 0);
     let frame = reader.next_frame(&mut buf).map_err(|e| bad(e.to_string()))?;
     let (w, h) = (frame.width, frame.height);
     let data = &buf[..frame.buffer_size()];
@@ -327,8 +334,14 @@ fn png_image(name: &str, bytes: &[u8]) -> Result<Embedded, CreateError> {
     };
     let has_alpha = channels == 2 || channels == 4;
     let colour_n = if has_alpha { channels - 1 } else { channels };
-    let mut colour = Vec::with_capacity(w as usize * h as usize * colour_n);
+    let mut colour = Vec::new();
+    colour
+        .try_reserve_exact((w as usize).saturating_mul(h as usize).saturating_mul(colour_n))
+        .map_err(|_| bad("not enough memory for this image".into()))?;
     let mut alpha = Vec::new();
+    if has_alpha {
+        alpha.try_reserve_exact((w as usize).saturating_mul(h as usize)).map_err(|_| bad("not enough memory for this image".into()))?;
+    }
     for px in data.chunks_exact(channels) {
         colour.extend_from_slice(&px[..colour_n]);
         if has_alpha {
@@ -385,8 +398,9 @@ fn decoded(name: &str, bytes: &[u8], format: image::ImageFormat) -> Result<Embed
     Ok(rgba_image(rgba.as_raw(), rgba.dimensions(), (72.0, 72.0)))
 }
 
-/// Most decoded bytes one TIFF page may take: room for the 768 MiB CMYK poster in #665, twice over.
-const MAX_TIFF_DECODED_BYTES: usize = 2 << 30;
+/// Most decoded bytes one TIFF page or PNG may take: room for the 768 MiB CMYK poster in #665,
+/// twice over.
+const MAX_DECODED_BYTES: usize = 2 << 30;
 
 /// Every page of a TIFF (multi-page scans become multi-page PDFs).
 fn tiff_pages(name: &str, bytes: &[u8]) -> Result<Vec<Embedded>, CreateError> {
@@ -398,7 +412,7 @@ fn tiff_pages(name: &str, bytes: &[u8]) -> Result<Vec<Embedded>, CreateError> {
     // 12000x16000 CMYK is 768 MiB. Raise it, but keep a ceiling so a tiny file claiming
     // enormous dimensions can't ask for unbounded memory.
     let mut limits = Limits::default();
-    limits.decoding_buffer_size = MAX_TIFF_DECODED_BYTES;
+    limits.decoding_buffer_size = MAX_DECODED_BYTES;
     let mut dec = Decoder::new(std::io::Cursor::new(bytes)).map_err(|e| bad(e.to_string()))?.with_limits(limits);
     let mut out = Vec::new();
     loop {
@@ -475,12 +489,21 @@ pub enum SourceKind {
 /// File extensions Create converts to PDF (images and plain text).
 pub const CONVERTIBLE: [&str; 12] = ["png", "jpg", "jpeg", "tif", "tiff", "gif", "bmp", "jp2", "j2k", "jpx", "txt", "text"];
 
+/// A classic TIFF or a BigTIFF (version 43), in either byte order.
+fn is_tiff(bytes: &[u8]) -> bool {
+    [b"II*\0", b"MM\0*", b"II+\0", b"MM\0+"].iter().any(|m| bytes.starts_with(*m))
+}
+
+/// The GIF headers `embed` decodes, so detection and conversion agree.
+fn is_gif(bytes: &[u8]) -> bool {
+    bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a")
+}
+
 fn is_image(bytes: &[u8]) -> bool {
     bytes.starts_with(&[0xFF, 0xD8])
         || bytes.starts_with(b"\x89PNG\r\n\x1a\n")
-        || bytes.starts_with(b"II*\0")
-        || bytes.starts_with(b"MM\0*")
-        || bytes.starts_with(b"GIF8")
+        || is_tiff(bytes)
+        || is_gif(bytes)
         // JPEG 2000: a JP2 file or a raw codestream.
         || bytes.starts_with(JP2_SIGNATURE)
         || bytes.starts_with(&[0xFF, 0x4F, 0xFF, 0x51])
@@ -506,14 +529,14 @@ pub fn source_kind(name: &str, bytes: &[u8]) -> Option<SourceKind> {
 /// Detect the image format from its bytes; a TIFF may hold several pages.
 fn embed(name: &str, bytes: &[u8]) -> Result<Vec<Embedded>, CreateError> {
     if bytes.starts_with(&[0xFF, 0xD8]) {
-        Ok(vec![jpeg(name, bytes)?])
+        Ok(vec![jpeg(name, &upright_image::upright(bytes))?])
     } else if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
         Ok(vec![png_image(name, bytes)?])
-    } else if bytes.starts_with(b"II*\0") || bytes.starts_with(b"MM\0*") {
+    } else if is_tiff(bytes) {
         tiff_pages(name, bytes)
     } else if bytes.starts_with(b"BM") {
         Ok(vec![decoded(name, bytes, image::ImageFormat::Bmp)?])
-    } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+    } else if is_gif(bytes) {
         Ok(vec![decoded(name, bytes, image::ImageFormat::Gif)?])
     } else if bytes.starts_with(JP2_SIGNATURE) || bytes.starts_with(&[0xFF, 0x4F, 0xFF, 0x51]) {
         Ok(vec![jpx(name, bytes)?])
@@ -605,8 +628,50 @@ fn turkish_code_page(bytes: &[u8]) -> bool {
         && !bytes.iter().any(|b| matches!(b, 0xC1 | 0xCD | 0xD3 | 0xDA | 0xE1 | 0xED | 0xF3 | 0xFA))
 }
 
-/// Plain text set in Helvetica on pages of `page` size with 1-inch margins.
+/// Plain text set in Helvetica on pages of `page` size with 1-inch margins. Text Helvetica can't
+/// draw (outside Western European) is refused with [`CreateError::Invalid`] naming the line and
+/// the character; text PdfCraft generates goes through [`from_text_escaped`] instead.
 pub fn from_text(title: &str, text: &str, page: (f64, f64), font_size: f64) -> Result<Document, CreateError> {
+    // Helvetica in WinAnsiEncoding: text it can't draw is refused with where it is, not set as `?`.
+    if let Some((line, c)) = first_undrawable_line(text) {
+        return Err(CreateError::Invalid(pdfcraft_fonts::undrawable_message(&format!("the text (line {line})"), c)));
+    }
+    set_text(title, text, page, font_size)
+}
+
+/// The line (1-based) and character of the first one Helvetica can't draw. Line breaks, tabs and
+/// form feeds (new pages) are layout, not drawn.
+fn first_undrawable_line(text: &str) -> Option<(usize, char)> {
+    text.split('\n').enumerate().find_map(|(i, l)| pdfcraft_fonts::first_undrawable(&l.replace('\u{c}', "")).map(|c| (i + 1, c)))
+}
+
+/// What a PDF made from text PdfCraft generated says, in its first line, about characters it
+/// wrote as `[U+XXXX]`.
+pub const ESCAPED_NOTE: &str = "Characters Helvetica can't draw are written as [U+XXXX] code points.";
+
+/// [`from_text`] for text PdfCraft generates from documents (a comment summary, a compare
+/// report), which may quote any language. Each character Helvetica can't draw is written as
+/// `[U+XXXX]` instead of being refused or set as `?`, so nothing is lost, and the first line says
+/// so ([`ESCAPED_NOTE`]). Returns the document and how many characters were written that way.
+pub fn from_text_escaped(title: &str, text: &str, page: (f64, f64), font_size: f64) -> Result<(Document, usize), CreateError> {
+    let mut escaped = 0usize;
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        if matches!(c, '\n' | '\r' | '\u{c}') || pdfcraft_fonts::first_undrawable(c.encode_utf8(&mut [0; 4])).is_none() {
+            out.push(c);
+        } else {
+            escaped = escaped.saturating_add(1);
+            out.push_str(&format!("[U+{:04X}]", u32::from(c)));
+        }
+    }
+    if escaped > 0 {
+        out = format!("{ESCAPED_NOTE}\n\n{out}");
+    }
+    // The title is a text string in /Info, which holds any character.
+    Ok((set_text(title, &out, page, font_size)?, escaped))
+}
+
+fn set_text(title: &str, text: &str, page: (f64, f64), font_size: f64) -> Result<Document, CreateError> {
     let size = if font_size.is_finite() && font_size > 0.0 { font_size.clamp(4.0, 72.0) } else { 11.0 };
     let (w, h) = page;
     let margin = 72.0;

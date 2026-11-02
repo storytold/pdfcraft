@@ -469,21 +469,50 @@ impl Automation {
         let at = to_user(&info, x, y);
         let author = a.opt_str("author")?.unwrap_or(DEFAULT_AUTHOR).to_string();
         let kind = a.str("type")?;
+        let scan = a.opt_bool("scan")?.unwrap_or(false);
+        let sensitivity = a.opt_int("sensitivity")?;
+        if (scan || sensitivity.is_some()) && a.opt_str("path")?.is_none() {
+            return Err(ToolError::InvalidArgs("scan and sensitivity need path, a photo of a signature on paper".into()));
+        }
+        if sensitivity.is_some() && !scan {
+            return Err(ToolError::InvalidArgs("sensitivity is only for scan: true".into()));
+        }
+        let requested_size = a.opt_num("font_size")?;
+        if requested_size.is_some() && !matches!(kind, "text" | "date") {
+            return Err(ToolError::InvalidArgs("font_size is only for type text or date".into()));
+        }
+        let size = requested_size.unwrap_or(10.0);
+        if !(4.0..=300.0).contains(&size) {
+            return Err(ToolError::InvalidArgs("font_size must be 4–300 pt".into()));
+        }
         if let Some(path) = a.opt_str("path")? {
             if !matches!(kind, "signature" | "initials") || a.opt_str("text")?.is_some() {
                 return Err(ToolError::InvalidArgs("path is only for an image signature or initials; pass either path or text".into()));
             }
             let path = self.resolve(path, false)?;
             let file = std::fs::File::open(&path).map_err(|e| failed(format!("{}: {e}", path.display())))?;
-            let image = pdfcraft_engine::SignatureImage::read(file).map_err(|e| ToolError::InvalidArgs(e.to_string()))?;
+            let image = if scan {
+                let sensitivity = match sensitivity {
+                    None => pdfcraft_engine::signature_scan::DEFAULT_SENSITIVITY,
+                    Some(s) => u8::try_from(s)
+                        .ok()
+                        .filter(|s| *s <= 100)
+                        .ok_or_else(|| ToolError::InvalidArgs(format!("sensitivity must be 0–100, got {s}")))?,
+                };
+                let mut photo = pdfcraft_engine::SignaturePhoto::read(file).map_err(|e| ToolError::InvalidArgs(e.to_string()))?;
+                let frame = photo.auto_frame();
+                photo.scan(frame, sensitivity, pdfcraft_engine::signature_scan::SCAN_MAX_SIDE).map_err(|e| ToolError::InvalidArgs(e.to_string()))?
+            } else {
+                pdfcraft_engine::SignatureImage::read(file).map_err(|e| ToolError::InvalidArgs(e.to_string()))?
+            };
             let edit = image.edit(page, &info, at, kind == "initials", &author).ok_or_else(|| ToolError::InvalidArgs("at must be finite".into()))?;
             return self.apply(a, edit);
         }
-        let size = 10.0;
         let text_at = |t: &str| {
             let w = (pdfcraft_engine::annot_text::text_width(t, size) + 8.0).clamp(20.0, 600.0);
             let h = size * 1.2 + 6.0;
-            Shape::Typewriter { rect: [at[0], at[1] - h, at[0] + w, at[1]], font_size: size }
+            let rect = pdfcraft_engine::text_box_at(i64::from(info.rotation), at, w, h).unwrap_or([at[0], at[1] - h, at[0] + w, at[1]]);
+            Shape::Typewriter { rect, font_size: size }
         };
         let (shape, contents) = match kind {
             "text" => {
@@ -501,6 +530,14 @@ impl Automation {
             // A typed signature or initials in the script font, left edge at `at`, upright as displayed.
             kind @ ("signature" | "initials") => {
                 let t = a.str("text")?;
+                // Nobody sees a preview here: refuse what the script font would leave out.
+                if let Some(c) = pdfcraft_engine::script_missing(t) {
+                    return Err(ToolError::InvalidArgs(format!(
+                        "the signature script font can't draw \"{}\" (U+{:04X}); type the {kind} in Latin, Cyrillic or Greek letters, or pass `path` to a PNG or JPEG image of it instead of `text`",
+                        c.escape_debug(),
+                        u32::from(c)
+                    )));
+                }
                 let h = if kind == "initials" { 24.0 } else { 32.0 };
                 let shape = pdfcraft_engine::typed_signature_shape(at, t, h, i64::from(info.rotation))
                     .ok_or_else(|| ToolError::InvalidArgs("text has nothing to draw".into()))?;
@@ -582,6 +619,12 @@ impl Automation {
             let fill = if f.eq_ignore_ascii_case("none") { None } else { Some(parse_color(f)?) };
             edits.push(Edit::FillAnnotation { page, index, fill });
         }
+        if let Some(size) = a.opt_num("font_size")? {
+            if !(1.0..=400.0).contains(&size) {
+                return Err(ToolError::InvalidArgs("font_size must be 1–400 pt".into()));
+            }
+            edits.push(Edit::FontSizeAnnotation { page, index, size });
+        }
         if let Some(r) = a.nums::<4>("rect")? {
             edits.push(Edit::ResizeAnnotation { page, index, rect: rect_to_user(&info, r) });
         }
@@ -590,7 +633,7 @@ impl Automation {
             edits.push(Edit::MoveAnnotation { page, index, dx: d[0] - o[0], dy: d[1] - o[1] });
         }
         if edits.is_empty() {
-            return Err(ToolError::InvalidArgs("nothing to change: pass contents, color, opacity, width, rect or move".into()));
+            return Err(ToolError::InvalidArgs("nothing to change: pass contents, color, opacity, width, fill, font_size, rect or move".into()));
         }
         let edit = if edits.len() == 1 { edits.remove(0) } else { Edit::Batch { label: "Edit comment".into(), edits } };
         self.apply(a, edit)

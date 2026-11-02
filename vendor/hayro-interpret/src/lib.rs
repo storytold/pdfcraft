@@ -47,6 +47,7 @@ pub use x_object::image_size_ok;
 pub mod color;
 pub mod encode;
 pub mod font;
+pub mod gradient;
 pub mod pattern;
 pub mod shading;
 pub mod util;

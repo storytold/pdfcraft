@@ -57,6 +57,17 @@ fn jpeg_and_tiff_names_get_those_formats() {
 }
 
 #[test]
+fn the_file_records_the_dpi_it_was_rendered_at() {
+    // The engine's tests check each format; this checks that `--dpi` reaches the file.
+    let pdf = fixture("dpi");
+    let jpg = tmp("dpi", "p1.jpg");
+    assert!(render(&pdf, &jpg).status.success());
+    let bytes = std::fs::read(&jpg).unwrap();
+    assert_eq!(&bytes[6..11], b"JFIF\0");
+    assert_eq!(bytes[13..18], [1, 0, 36, 0, 36], "JFIF density in dots per inch");
+}
+
+#[test]
 fn a_pam_name_still_gets_the_netpbm_stream() {
     let pdf = fixture("pam");
     let out = tmp("pam", "p1.pam");

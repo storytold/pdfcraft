@@ -3,6 +3,9 @@
 The façade every frontend talks to. It holds the open documents, their edit history and the tool
 catalogue; frontends never reach past it into the parsing, rendering or editing crates.
 
+`word_count::count` provides cancellable, page-at-a-time Unicode word and character statistics
+with optional semantic exclusions; see [word-count behavior and limits](../../docs/word-count.md).
+
 - **Layer:** L6. It depends on most of L1–L4 and on nothing above itself. **No UI toolkit** —
   `egui`, `winit`, `eframe` and `rfd` are forbidden below L7, and `xtask layers` enforces it.
 - The crate denies `unwrap`/`expect`/`panic!`/`todo!`. Entry points that run untrusted-document
@@ -78,3 +81,7 @@ family (`sign`, `sign_with_timestamp`, `timestamp_document`, `embed_ltv`).
 - Performance budgets (`misc.performance-budgets`) are not set or enforced.
 - Some shipped features are still reachable only from the UI, not through an `automation` tool;
   `cargo xtask parity` lists them; closing that gap is tracked in the execution plan (D4).
+
+`doc.text_edit_preview(page, block)` prepares a read-only page background with the selected
+paragraph’s glyphs removed, preserving text positioning, images and colours. It shares the
+working document’s render configuration and never enters the undo history.

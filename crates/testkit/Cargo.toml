@@ -1,0 +1,11 @@
+[package]
+name = "pdfcraft-testkit"
+description = "Synthetic PDF fixtures for PdfCraft's tests: one way to write the bytes, so the tests differ only where they mean to"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]

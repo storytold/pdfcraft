@@ -52,8 +52,8 @@ impl Document {
             let obj = editor.cos.get(picture);
             let pdfcraft_cos::Object::Stream(s) = &*obj else { return Err("the signature image is damaged".into()) };
             let (w, h) = (s.dict.int(b"Width").unwrap_or(0), s.dict.int(b"Height").unwrap_or(0));
-            if w <= 0 || h <= 0 || w > 4096 || h > 4096 || w.saturating_mul(h) > MAX_PIXELS as i64 {
-                return Err(SignatureImageError::Size.to_string());
+            if w <= 0 || h <= 0 || w > i64::from(MAX_SIDE) || h > i64::from(MAX_SIDE) || w.saturating_mul(h) > MAX_PIXELS as i64 {
+                return Err(SignatureImageError::PlacedSize.to_string());
             }
             let (_, bytes) = pdfcraft_create::image_file(&editor.cos, picture)?;
             let image = SignatureImage::from_bytes(&bytes).map_err(|e| e.to_string())?;
@@ -90,13 +90,20 @@ pub fn upright_box(rotation: i64, at: [f64; 2], width: f64, height: f64) -> Opti
 /// Saved signatures live in settings, so both source and normalized PNG are bounded.
 pub const MAX_SIGNATURE_IMAGE_BYTES: usize = 4 << 20;
 const MAX_PIXELS: u64 = 4 << 20;
+const MAX_SIDE: u32 = 4096;
+/// Larger sources (scans, phone photos) are decoded within these bounds, then scaled down.
+const MAX_SOURCE_SIDE: u32 = 8192;
+const MAX_SOURCE_PIXELS: u64 = 32 << 20;
 
 #[derive(Debug, thiserror::Error)]
 pub enum SignatureImageError {
     #[error("Choose a PNG or JPEG image.")]
     Format,
-    #[error("Choose an image smaller than 4 MiB and 4 megapixels (at most 4096 pixels per side).")]
+    #[error("Choose an image smaller than 4 MiB and 32 megapixels (at most 8192 pixels per side).")]
     Size,
+    /// An image already in the document, which was stored at 4 megapixels or less when placed.
+    #[error("This signature image is larger than 4 megapixels (or 4096 pixels per side), so it can't be previewed.")]
+    PlacedSize,
     #[error("Couldn't read the signature image: {0}")]
     Read(#[from] std::io::Error),
     #[error("Couldn't decode the signature image: {0}")]
@@ -111,6 +118,43 @@ pub struct SignatureImage {
     size: [usize; 2],
 }
 
+/// Decode an imported PNG or JPEG within the source limits (file size, 32 megapixels, 8192 pixels
+/// per side, bounded allocation), upright per its EXIF orientation and scaled down to at most
+/// 4 megapixels and 4096 pixels per side. Shared by image signatures and scanned photos.
+pub(crate) fn decode_source(bytes: &[u8]) -> Result<DynamicImage, SignatureImageError> {
+    if bytes.len() > MAX_SIGNATURE_IMAGE_BYTES {
+        return Err(SignatureImageError::Size);
+    }
+    let format = image::guess_format(bytes).map_err(|_| SignatureImageError::Format)?;
+    if !matches!(format, ImageFormat::Png | ImageFormat::Jpeg) {
+        return Err(SignatureImageError::Format);
+    }
+    let mut reader = ImageReader::with_format(Cursor::new(bytes), format);
+    let mut limits = Limits::default();
+    limits.max_image_width = Some(MAX_SOURCE_SIDE);
+    limits.max_image_height = Some(MAX_SOURCE_SIDE);
+    // 8-bit RGBA at the pixel cap; 16-bit sources that large hit this and report Size.
+    limits.max_alloc = Some(MAX_SOURCE_PIXELS * 4);
+    reader.limits(limits);
+    let too_big = |e: image::ImageError| if matches!(e, image::ImageError::Limits(_)) { SignatureImageError::Size } else { e.into() };
+    let mut decoder = reader.into_decoder().map_err(too_big)?;
+    let (w, h) = decoder.dimensions();
+    if w == 0 || h == 0 || u64::from(w) * u64::from(h) > MAX_SOURCE_PIXELS {
+        return Err(SignatureImageError::Size);
+    }
+    let orientation = decoder.orientation()?;
+    let mut image = DynamicImage::from_decoder(decoder).map_err(too_big)?;
+    image.apply_orientation(orientation);
+    let (w, h) = (f64::from(image.width()), f64::from(image.height()));
+    let scale = (f64::from(MAX_SIDE) / w.max(h)).min((MAX_PIXELS as f64 / (w * h)).sqrt());
+    if scale < 1.0 {
+        let (nw, nh) = (((w * scale) as u32).max(1), ((h * scale) as u32).max(1));
+        // `thumbnail` resamples in one integer pass, without the large float buffers `resize` keeps.
+        image = image.thumbnail(nw, nh);
+    }
+    Ok(image)
+}
+
 impl SignatureImage {
     /// Read at most the file limit plus one byte, even if the file grows while being read.
     pub fn read(reader: impl Read) -> Result<Self, SignatureImageError> {
@@ -120,27 +164,7 @@ impl SignatureImage {
     }
 
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, SignatureImageError> {
-        if bytes.len() > MAX_SIGNATURE_IMAGE_BYTES {
-            return Err(SignatureImageError::Size);
-        }
-        let format = image::guess_format(bytes).map_err(|_| SignatureImageError::Format)?;
-        if !matches!(format, ImageFormat::Png | ImageFormat::Jpeg) {
-            return Err(SignatureImageError::Format);
-        }
-        let mut reader = ImageReader::with_format(Cursor::new(bytes), format);
-        let mut limits = Limits::default();
-        limits.max_image_width = Some(4096);
-        limits.max_image_height = Some(4096);
-        limits.max_alloc = Some(32 << 20);
-        reader.limits(limits);
-        let mut decoder = reader.into_decoder()?;
-        let (w, h) = decoder.dimensions();
-        if w == 0 || h == 0 || u64::from(w) * u64::from(h) > MAX_PIXELS {
-            return Err(SignatureImageError::Size);
-        }
-        let orientation = decoder.orientation()?;
-        let mut image = DynamicImage::from_decoder(decoder)?;
-        image.apply_orientation(orientation);
+        let image = decode_source(bytes)?;
         let rgba = image.into_rgba8();
         let size = [rgba.width() as usize, rgba.height() as usize];
         let mut png = Cursor::new(Vec::new());
@@ -162,6 +186,13 @@ impl SignatureImage {
 
     pub fn size(&self) -> [usize; 2] {
         self.size
+    }
+
+    /// This image as the graphic of a visible digital signature.
+    pub fn graphic(&self) -> pdfcraft_sign::Graphic {
+        // Sides are at most 4096 pixels; 0 would be refused by the signer, never drawn.
+        let side = |v: usize| u32::try_from(v).unwrap_or(0);
+        pdfcraft_sign::Graphic::Image { width: side(self.size[0]), height: side(self.size[1]), rgba: self.rgba.clone() }
     }
 
     /// Make near-white paper transparent, keeping darker ink.
@@ -243,10 +274,21 @@ mod tests {
         assert!(SignatureImage::from_bytes(b"not an image").is_err());
         assert!(SignatureImage::from_bytes(b"\x89PNG\r\n\x1a\ntruncated").is_err());
         assert!(SignatureImage::from_bytes(&vec![0; MAX_SIGNATURE_IMAGE_BYTES + 1]).is_err());
-        assert!(SignatureImage::from_bytes(&png(4097, 1)).is_err());
-        assert!(SignatureImage::from_bytes(&png(4096, 1025)).is_err());
+        assert!(matches!(SignatureImage::from_bytes(&png(8193, 1)), Err(SignatureImageError::Size)));
+        assert!(matches!(SignatureImage::from_bytes(&png(8192, 4097)), Err(SignatureImageError::Size)));
         assert!(SignatureImage::read(std::io::repeat(0)).is_err());
         assert!(matches!(SignatureImage::from_bytes(b"GIF89a\x02\0\x02\0"), Err(SignatureImageError::Format)));
+    }
+
+    /// #1075: a 6025 x 2506 scan is scaled down to fit 4096 per side and 4 megapixels.
+    #[test]
+    fn large_signature_images_are_scaled_down() {
+        let image = SignatureImage::from_bytes(&png(6025, 2506)).unwrap();
+        let [w, h] = image.size();
+        assert!(w <= 4096 && (w * h) as u64 <= MAX_PIXELS, "{w} x {h}");
+        assert!((w as f64 / h as f64 - 6025.0 / 2506.0).abs() < 0.01, "{w} x {h}");
+        assert_eq!(SignatureImage::from_bytes(&png(4096, 1)).unwrap().size(), [4096, 1]);
+        assert_eq!(SignatureImage::from_bytes(&png(8192, 1)).unwrap().size(), [4096, 1]);
     }
 
     #[test]
@@ -323,7 +365,7 @@ mod tests {
         stream.dict.set(b"Width".to_vec(), pdfcraft_cos::Object::Int(i64::MAX));
         cos.set(picture, pdfcraft_cos::Object::Stream(stream));
         let error = doc.image_signature_preview(0, 0).err().unwrap();
-        assert!(error.contains("4 megapixels"), "{error}");
+        assert_eq!(error, SignatureImageError::PlacedSize.to_string());
     }
 
     /// "Left edge at the point, centered vertically" is as displayed: on a turned page the box

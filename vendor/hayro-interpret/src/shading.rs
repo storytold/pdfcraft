@@ -5,7 +5,7 @@
 use crate::CacheKey;
 use crate::cache::Cache;
 use crate::color::{ColorComponents, ColorSpace};
-use crate::function::{Function, Values, interpolate};
+use crate::function::{Function, StitchingBounds, Values, interpolate};
 use crate::util::{Float32Ext, PointExt, RectExt};
 use hayro_syntax::bit_reader::BitReader;
 use hayro_syntax::object::Array;
@@ -47,6 +47,24 @@ impl ShadingFunction {
                 Some(out)
             }
         }
+    }
+
+    /// PdfCraft patch (backport of hayro 0.8): stitching breakpoints of all component functions.
+    pub(crate) fn stitching_bounds(&self) -> StitchingBounds {
+        let mut bounds = StitchingBounds::new();
+
+        match self {
+            Self::Single(function) => bounds.extend(function.stitching_bounds()),
+            Self::Multiple(functions) => {
+                for function in functions {
+                    bounds.extend(function.stitching_bounds());
+                }
+            }
+        }
+
+        bounds.sort_by(f32::total_cmp);
+        bounds.dedup_by(|a, b| (*a - *b).abs() <= f32::EPSILON);
+        bounds
     }
 }
 
@@ -713,6 +731,10 @@ where
 {
     const GRID_SIZE: usize = 20;
     let mut grid = vec![vec![Point::ZERO; GRID_SIZE]; GRID_SIZE];
+    // PdfCraft patch (33): each grid point's colours, interpolated once. Every cell below
+    // interpolated its four corners itself, so an inner point was interpolated four times
+    // (1,444 interpolations a patch instead of 400) for the same values.
+    let mut colors = vec![vec![ColorComponents::new(); GRID_SIZE]; GRID_SIZE];
 
     // Create grid by mapping unit square coordinates.
     for i in 0..GRID_SIZE {
@@ -723,6 +745,7 @@ where
             // Map unit square coordinate to patch coordinate.
             let unit_point = Point::new(u, v);
             grid[i][j] = map_coordinate(unit_point);
+            colors[i][j] = interpolate(unit_point);
         }
     }
 
@@ -733,32 +756,26 @@ where
             let p01 = grid[i][j + 1];
             let p11 = grid[i + 1][j + 1];
 
-            // Calculate unit square coordinates for color interpolation.
-            let u0 = i as f64 / (GRID_SIZE - 1) as f64;
-            let u1 = (i + 1) as f64 / (GRID_SIZE - 1) as f64;
-            let v0 = j as f64 / (GRID_SIZE - 1) as f64;
-            let v1 = (j + 1) as f64 / (GRID_SIZE - 1) as f64;
-
-            // Create triangle vertices with interpolated colors.
+            // Create triangle vertices with their grid points' colors.
             let v00 = TriangleVertex {
                 flag: 0,
                 point: p00,
-                colors: interpolate(Point::new(u0, v0)),
+                colors: colors[i][j].clone(),
             };
             let v10 = TriangleVertex {
                 flag: 0,
                 point: p10,
-                colors: interpolate(Point::new(u1, v0)),
+                colors: colors[i + 1][j].clone(),
             };
             let v01 = TriangleVertex {
                 flag: 0,
                 point: p01,
-                colors: interpolate(Point::new(u0, v1)),
+                colors: colors[i][j + 1].clone(),
             };
             let v11 = TriangleVertex {
                 flag: 0,
                 point: p11,
-                colors: interpolate(Point::new(u1, v1)),
+                colors: colors[i + 1][j + 1].clone(),
             };
 
             let inflate_point = |p: Point, mid: Point| -> Point {
@@ -777,16 +794,9 @@ where
                 triangle
             };
 
-            buffer.push(inflate(Triangle::new(
-                v00.clone(),
-                v10.clone(),
-                v01.clone(),
-            )));
-            buffer.push(inflate(Triangle::new(
-                v10.clone(),
-                v11.clone(),
-                v01.clone(),
-            )));
+            // PdfCraft patch (33): the second triangle takes the vertices the first copied.
+            buffer.push(inflate(Triangle::new(v00, v10.clone(), v01.clone())));
+            buffer.push(inflate(Triangle::new(v10, v11, v01)));
         }
     }
 }

@@ -24,7 +24,7 @@ encode_flate(data) -> Vec<u8>   // zlib, level 6
 
 - `chain` is applied first to last, as in a `/Filter` array.
 - Image codecs (DCT, JPX, JBIG2, CCITT), `Crypt` and unknown filters anywhere in a chain give `Unsupported`: callers keep such data encoded. Decryption belongs to `crypt`.
-- `max_output` bounds every intermediate buffer (including the pre-predictor buffer) and gives `LimitExceeded(max_output)`.
+- `max_output` bounds every intermediate buffer (including the pre-predictor buffer) and gives `LimitExceeded(max_output)`. This also holds when Flate retries raw deflate after a misleading zlib header, in both strict and tolerant decoding.
 - `decode_tolerant` turns `Corrupt` into "what was decoded so far" plus `partial = true`, then runs the rest of the chain on it (predictors are applied to partial output too). `LimitExceeded` and `Unsupported` are still errors.
 
 ## Behaviour

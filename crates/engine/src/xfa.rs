@@ -8,8 +8,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use pdfcraft_js::formcalc::run_formcalc_within;
-use pdfcraft_js::xfa::{XfaDoc, XfaEffect, XfaEvent, XfaKind, XfaNode, run_xfa_within};
+use pdfcraft_js::xfa::{XfaDoc, XfaEffect, XfaEvent, XfaKind, XfaNode};
+use pdfcraft_js::xfa_session::{Script, XfaSession};
 use pdfcraft_xfa::model::Template;
 use pdfcraft_xfa::{FormNode, LiveForm, NodeKind, ScriptEvent};
 
@@ -258,9 +258,15 @@ struct Runner<'a, 'b> {
     /// Field values to write, by name (the last wins).
     field_changes: std::collections::BTreeMap<String, Vec<String>>,
     by_som: Option<HashMap<String, String>>,
+    /// Widget names by the data node they bind to (built with `by_som`).
+    by_path: Option<HashMap<pdfcraft_xfa::DataPath, Vec<String>>>,
     fields: Option<HashMap<String, FieldInfo>>,
     /// The live form as last built; dropped when a script changed the form.
     cached: Option<LiveForm>,
+    /// The script engine for this event: one thread for all its scripts, each run in a fresh
+    /// context on the form as it is then (`cached`, kept up to date in place for values and
+    /// rebuilt when the structure changed).
+    session: Option<XfaSession>,
     changes: Changes,
 }
 
@@ -285,9 +291,39 @@ impl<'a, 'b> Runner<'a, 'b> {
             pending: Vec::new(),
             field_changes: Default::default(),
             by_som: None,
+            by_path: None,
             fields: None,
             cached: None,
+            session: None,
             changes: Changes::default(),
+        }
+    }
+
+    /// The live form no longer matches the data (its structure changed): rebuilt for the next
+    /// script.
+    fn invalidate(&mut self) {
+        self.cached = None;
+    }
+
+    /// The script engine for this event.
+    fn session(&mut self) -> &mut XfaSession {
+        let doc_info = XfaDoc { file_name: String::new(), page: 0, page_count: self.run.page_count };
+        self.session.get_or_insert_with(|| XfaSession::new(doc_info))
+    }
+
+    /// Give the object at `som` the value `text` in the data and in the live form (refreshed
+    /// in place, as the tree builder would set it; a value changes nothing else, so the tree
+    /// is not rebuilt for it).
+    fn value_op(&mut self, som: &str, path: pdfcraft_xfa::DataPath, text: String) {
+        let op = pdfcraft_xfa::DataOp::Value { path, text };
+        self.data.get_or_insert_with(Default::default).apply(&op);
+        self.pending.push(op);
+        let refreshed = match self.cached.as_mut() {
+            Some(live) => pdfcraft_xfa::refresh_value(&mut live.root, self.tpl, self.data.as_ref(), som).is_some(),
+            None => true,
+        };
+        if !refreshed {
+            self.invalidate();
         }
     }
 
@@ -308,9 +344,24 @@ impl<'a, 'b> Runner<'a, 'b> {
 
     fn by_som(&mut self) -> &HashMap<String, String> {
         if self.by_som.is_none() {
-            self.by_som = Some(pdfcraft_xfa::fields_by_som(self.doc));
+            let by_som = pdfcraft_xfa::fields_by_som(self.doc);
+            let mut by_path: HashMap<pdfcraft_xfa::DataPath, Vec<String>> = HashMap::new();
+            for (som, name) in &by_som {
+                by_path.entry(pdfcraft_xfa::data_path(self.tpl, som)).or_default().push(name.clone());
+            }
+            for names in by_path.values_mut() {
+                names.sort();
+            }
+            self.by_path = Some(by_path);
+            self.by_som = Some(by_som);
         }
         self.by_som.get_or_insert_with(Default::default)
+    }
+
+    /// The widgets bound to the data node at `path`, in name order.
+    fn widgets_at(&mut self, path: &pdfcraft_xfa::DataPath) -> Vec<String> {
+        self.by_som();
+        self.by_path.as_ref().and_then(|m| m.get(path)).cloned().unwrap_or_default()
     }
 
     fn fields(&mut self) -> &mut HashMap<String, FieldInfo> {
@@ -346,62 +397,71 @@ impl<'a, 'b> Runner<'a, 'b> {
         }
     }
 
-    /// Change the data (and the in-memory copy scripts read).
+    /// Change the data's structure (and the in-memory copy scripts read): the form is rebuilt
+    /// for the next script.
     fn data_op(&mut self, op: pdfcraft_xfa::DataOp) {
         self.data.get_or_insert_with(Default::default).apply(&op);
         self.pending.push(op);
-        self.cached = None;
+        self.invalidate();
     }
 
-    /// Give the object at `som` the value `value` (field `name` when it has a widget). Returns
-    /// whether it changed.
+    /// Give the object at `som` the value `value`: in the data, and in every widget bound to
+    /// that data node (each valued by its own kind: a check box by its on state, a list box by
+    /// lines). Returns whether anything changed.
     fn set_value(&mut self, som: &str, value: &str) -> bool {
-        let path = pdfcraft_xfa::data_path(self.tpl, som);
-        let name = self.by_som().get(som).cloned();
-        let Some(name) = name else {
-            // No widget (a hidden field, a draw, a row not laid out yet): the data alone.
-            if self.data.as_ref().and_then(|d| d.text_at(&path)) == Some(value) {
-                return false;
-            }
-            self.data_op(pdfcraft_xfa::DataOp::Value { path, text: value.to_string() });
-            self.changes.values += 1;
-            return true;
-        };
-        let Some(info) = self.fields().get(&name).cloned() else { return false };
         use pdfcraft_forms::FieldKind as K;
-        let new_value: Vec<String> = match info.kind {
-            K::CheckBox => {
-                if pdfcraft_xfa::data::is_on(value, &info.on_state) || value == info.on_state {
-                    vec![info.on_state.clone()]
-                } else {
-                    Vec::new()
+        let path = pdfcraft_xfa::data_path(self.tpl, som);
+        let names = self.widgets_at(&path);
+        // The data text: the widget at `som` says how its kind writes the value; without one,
+        // the first widget bound to the node, else the value itself.
+        let primary = self.by_som().get(som).cloned().or_else(|| names.first().cloned());
+        let mut text = value.to_string();
+        let mut changed = false;
+        for name in &names {
+            let Some(info) = self.fields().get(name).cloned() else { continue };
+            let new_value: Vec<String> = match info.kind {
+                K::CheckBox => {
+                    if pdfcraft_xfa::data::is_on(value, &info.on_state) || value == info.on_state {
+                        vec![info.on_state.clone()]
+                    } else {
+                        Vec::new()
+                    }
                 }
+                K::Radio => {
+                    let v = value.trim();
+                    if v.is_empty() { Vec::new() } else { vec![v.to_string()] }
+                }
+                // Read-only fields still take values from scripts (calculated totals are
+                // read-only); buttons and signatures hold none.
+                K::PushButton | K::Signature => continue,
+                K::List if info.multi => value.lines().map(str::trim).filter(|l| !l.is_empty()).map(str::to_string).collect(),
+                _ => vec![value.to_string()],
+            };
+            let same = match info.kind {
+                K::CheckBox => info.value.is_empty() == new_value.is_empty(),
+                K::Radio => info.value.first() == new_value.first(),
+                K::List if info.multi => info.value == new_value,
+                _ => info.value.first().map_or(value.is_empty(), |v| v == value),
+            };
+            let updated = FieldInfo { value: new_value.clone(), ..info };
+            if primary.as_deref() == Some(name.as_str()) {
+                text = data_text(&updated);
             }
-            K::Radio => {
-                let v = value.trim();
-                if v.is_empty() { Vec::new() } else { vec![v.to_string()] }
+            if same {
+                continue;
             }
-            // Read-only fields still take values from scripts (calculated totals are read-only).
-            K::PushButton | K::Signature => return false,
-            K::List if info.multi => value.lines().map(str::trim).filter(|l| !l.is_empty()).map(str::to_string).collect(),
-            _ => vec![value.to_string()],
-        };
-        let same = match info.kind {
-            K::CheckBox => info.value.is_empty() == new_value.is_empty(),
-            K::Radio => info.value.first() == new_value.first(),
-            K::List if info.multi => info.value == new_value,
-            _ => info.value.first().map_or(value.is_empty(), |v| v == value),
-        };
-        if same {
-            return false;
+            self.fields().insert(name.clone(), updated);
+            self.field_changes.insert(name.clone(), new_value);
+            changed = true;
         }
-        let updated = FieldInfo { value: new_value.clone(), ..info };
-        let text = data_text(&updated);
-        self.fields().insert(name.clone(), updated);
-        self.field_changes.insert(name, new_value);
-        self.data_op(pdfcraft_xfa::DataOp::Value { path, text });
-        self.changes.values += 1;
-        true
+        if self.data.as_ref().and_then(|d| d.text_at(&path)).unwrap_or("") != text {
+            self.value_op(som, path, text);
+            changed = true;
+        }
+        if changed {
+            self.changes.values += 1;
+        }
+        changed
     }
 
     /// Write what the scripts changed so far: the data as one rewrite, the field values, the
@@ -432,7 +492,7 @@ impl<'a, 'b> Runner<'a, 'b> {
         if wrote {
             // What the packet now holds (a value it could not take is reported above).
             self.data = pdfcraft_xfa::data_of(self.doc);
-            self.cached = None;
+            self.invalidate();
         }
         Ok(())
     }
@@ -452,12 +512,12 @@ impl<'a, 'b> Runner<'a, 'b> {
         self.flush()?;
         let report = pdfcraft_xfa::rerender(self.doc, self.tpl).map_err(|e| e.to_string())?;
         self.console(report.warnings);
-        for f in pdfcraft_forms::fields(self.doc) {
-            pdfcraft_forms::redraw_field(self.doc, &f.name).map_err(|e| format!("{}: {e}", f.name))?;
-        }
+        crate::xfa_redraw(self.doc)?;
+        self.console(crate::undrawn_field_warnings(self.doc));
         self.by_som = None;
+        self.by_path = None;
         self.fields = None;
-        self.cached = None;
+        self.invalidate();
         Ok(())
     }
 
@@ -491,7 +551,7 @@ impl<'a, 'b> Runner<'a, 'b> {
                 self.changes.values += 1;
             }
         }
-        self.cached = None;
+        self.invalidate();
         Ok(())
     }
 
@@ -531,7 +591,7 @@ impl<'a, 'b> Runner<'a, 'b> {
                     if self.ov.presence.insert(som.clone(), presence.clone()).as_ref() != Some(presence) {
                         self.ov_dirty = true;
                         self.changes.visibility += 1;
-                        self.cached = None;
+                        self.invalidate();
                         relayout = true;
                     }
                 }
@@ -539,7 +599,7 @@ impl<'a, 'b> Runner<'a, 'b> {
                     if self.ov.access.insert(som.clone(), access.clone()).as_ref() != Some(access) {
                         self.ov_dirty = true;
                         self.changes.visibility += 1;
-                        self.cached = None;
+                        self.invalidate();
                         relayout = true;
                     }
                 }
@@ -587,17 +647,23 @@ impl<'a, 'b> Runner<'a, 'b> {
             return Ok(None);
         }
         self.runs += 1;
+        #[cfg(test)]
+        self.check_live();
         let event = XfaEvent { activity: ev.activity.clone(), target: ev.som.clone(), new_text: new_text.to_string(), prev_text: String::new() };
-        let doc_info = XfaDoc { file_name: String::new(), page: 0, page_count: self.run.page_count };
-        let root_js = to_js(&self.live().root);
-        let (limits, timeout) = (limits_for(&ev.activity), timeout_for(&ev.activity));
-        let o = if ev.formcalc {
-            run_formcalc_within(&ev.script, &event, &doc_info, root_js, limits, timeout)
-        } else {
-            run_xfa_within(&ev.script, &event, &doc_info, root_js, limits, timeout)
+        let root = to_js(&self.live().root);
+        let script = Script {
+            source: ev.script.clone(),
+            formcalc: ev.formcalc,
+            event,
+            root,
+            limits: limits_for(&ev.activity),
+            timeout: timeout_for(&ev.activity),
         };
+        let o = self.session().run(script);
         if o.abandoned {
             self.run.ran_away = true;
+            // The thread is left to the runaway script: nothing more is sent to it.
+            self.session = None;
         }
         self.console(o.console.iter().cloned());
         for n in &o.notes {
@@ -636,12 +702,15 @@ impl<'a, 'b> Runner<'a, 'b> {
     /// End the event: write what is left, lay the form out if a capped relayout is owed, and
     /// report what the limits cut.
     fn finish(mut self) -> Result<Changes, String> {
+        #[cfg(test)]
+        self.check_live();
         if self.relayouts_skipped {
             self.relayouts = 0;
             self.relayouts_skipped = false;
             self.relayout()?;
         }
         self.flush()?;
+        self.session = None;
         if self.skipped > 0 {
             let why = if self.run.ran_away {
                 "one ran too long".to_string()
@@ -656,6 +725,42 @@ impl<'a, 'b> Runner<'a, 'b> {
             self.run.out.errors.push(format!("The form's scripts produced too much output; {} more messages were left out", self.dropped_output));
         }
         Ok(self.changes)
+    }
+}
+
+impl Runner<'_, '_> {
+    /// The live form kept up to date in place must be the form a fresh build gives: every
+    /// field's SOM, value, presence and access (tests run this before every script and at the
+    /// end of every event). A difference is a bug in the in-place refresh, so the test binary
+    /// is ended at once: a panic here would be caught by the engine's guard and turned into a
+    /// script error the test might not look at.
+    #[cfg(test)]
+    fn check_live(&mut self) {
+        let Some(live) = self.cached.as_ref() else { return };
+        let fresh = pdfcraft_xfa::form_tree(self.tpl, self.data.as_ref(), &self.ov);
+        let (mut have, mut want) = (Vec::new(), Vec::new());
+        collect_fields(&live.root, &mut have, 0);
+        collect_fields(&fresh.root, &mut want, 0);
+        if have != want {
+            let differ: Vec<String> =
+                have.iter().zip(want.iter()).filter(|(a, b)| a != b).take(5).map(|(a, b)| format!("live {a:?} vs fresh {b:?}")).collect();
+            eprintln!("the live form diverged from a fresh build ({} vs {} fields): {}", have.len(), want.len(), differ.join("; "));
+            std::process::abort();
+        }
+    }
+}
+
+/// Every field's (SOM, value, presence, access), in document order.
+#[cfg(test)]
+fn collect_fields(n: &FormNode, out: &mut Vec<(String, String, String, String)>, depth: usize) {
+    if depth > 64 {
+        return;
+    }
+    if n.kind == Some(NodeKind::Field) {
+        out.push((n.som.clone(), n.value.clone(), n.presence.clone(), n.access.clone()));
+    }
+    for c in &n.children {
+        collect_fields(c, out, depth + 1);
     }
 }
 
@@ -691,6 +796,17 @@ pub(crate) fn on_changes(doc: &mut pdfcraft_cos::Document, tpl: &Template, names
         }
     }
     r.calculates()?;
+    r.finish().map(|_| ())
+}
+
+/// The form's data changed outside its scripts (a data file imported, a picture chosen): lay
+/// the form out again from the data, then, when `calculate`, run every calculation.
+pub(crate) fn on_data_replaced(doc: &mut pdfcraft_cos::Document, tpl: &Template, calculate: bool, run: &mut XfaRun) -> Result<(), String> {
+    let mut r = Runner::new(doc, tpl, run, OPEN_BUDGET_MS);
+    r.relayout()?;
+    if calculate {
+        r.calculates()?;
+    }
     r.finish().map(|_| ())
 }
 
