@@ -5,6 +5,10 @@ use super::value::{Val, fixed, is_numeric_text, parse_num};
 use super::words::word_num;
 use super::{Interp, MAX_STRING, R, STRING_TOO_LONG, XfaKind, is_limit};
 
+/// The bytes FormCalc's url `Encode` writes as `%XX`: every byte of the UTF-8 text except letters,
+/// digits and `-_.~` (RFC 3986's unreserved characters).
+const URL_ENCODE_SET: &percent_encoding::AsciiSet = &percent_encoding::NON_ALPHANUMERIC.remove(b'-').remove(b'_').remove(b'.').remove(b'~');
+
 impl Interp<'_> {
     /// A built-in function: its result is never a string past [`MAX_STRING`], and work on
     /// long strings is charged to the step budget.
@@ -201,31 +205,9 @@ impl Interp<'_> {
                 Val::Str(match (lower.as_str(), kind.as_str()) {
                     ("encode", "html" | "xml") => s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;"),
                     ("decode", "html" | "xml") => s.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&amp;", "&"),
-                    ("encode", _) => s
-                        .bytes()
-                        .map(|b| if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") })
-                        .collect(),
-                    (_, _) => {
-                        let mut out = Vec::new();
-                        let b = s.as_bytes();
-                        let mut i = 0;
-                        while i < b.len() {
-                            if b[i] == b'%'
-                                && let Some(h) = b
-                                    .get(i + 1..i + 3)
-                                    .filter(|h| h.iter().all(u8::is_ascii_hexdigit))
-                                    .and_then(|h| std::str::from_utf8(h).ok())
-                                    .and_then(|h| u8::from_str_radix(h, 16).ok())
-                            {
-                                out.push(h);
-                                i += 3;
-                            } else {
-                                out.push(b[i]);
-                                i += 1;
-                            }
-                        }
-                        String::from_utf8_lossy(&out).into_owned()
-                    }
+                    ("encode", _) => percent_encoding::utf8_percent_encode(&s, URL_ENCODE_SET).to_string(),
+                    // `%` and two hex digits decode; any other `%` is kept (a sign is not a digit, #4586).
+                    (_, _) => percent_encoding::percent_decode_str(&s).decode_utf8_lossy().into_owned(),
                 })
             }
             "format" => {
