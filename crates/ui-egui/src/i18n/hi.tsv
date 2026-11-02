@@ -2,6 +2,11 @@
 #   context <TAB> English source <TAB> translation
 #   Clean-room translation written from the English source's meaning.
 #   License: MIT OR Apache-2.0.
+
+# Untranslated: English text until a translator fills these in.
+	Lowering this forgets the oldest files. At 0 there is no list.	Lowering this forgets the oldest files. At 0 there is no list.
+	Recent files to keep	Recent files to keep
+
 	Menu	मेनू
 	File	फ़ाइल
 	Edit	संपादित करें
