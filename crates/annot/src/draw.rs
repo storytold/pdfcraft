@@ -46,6 +46,21 @@ pub(crate) fn can_draw(doc: &Document, d: &Dict) -> bool {
     build_appearance(doc, d, &with_direct_values(doc, d), None).is_some()
 }
 
+/// The appearance for `d`, an annotation that page `page` lists, built but not stored: with
+/// [`store_built`], [`draw_appearance`] in two halves, so an edit can refuse before it changes
+/// anything. `None` when it can't be drawn.
+pub(crate) fn build_listed_by(doc: &Document, d: &Dict, page: ObjRef) -> Option<Built> {
+    let crop = appearance::is_drawn_from_points(d).then(|| page_with_inherited_boxes(doc, page).crop(doc));
+    let direct = with_direct_values(doc, d);
+    let stream = build_appearance(doc, d, &direct, crop)?;
+    Some(Built::new(stream, &direct))
+}
+
+/// Store an appearance [`build_listed_by`] built from `d` on the annotation `r`.
+pub(crate) fn store_built(doc: &mut Document, r: ObjRef, d: &Dict, built: Built) -> Result<(), AnnotError> {
+    apply_appearance(doc, r, d, built)
+}
+
 /// The visible region (`Page::crop`) of the page that lists `r` among its annotations: the page
 /// its `/P` names when that page lists it, read up its own `/Parent` chain, else the first page
 /// of the tree that lists it. An annotation is listed by one page only (ISO 32000-2 §12.5.2), so
@@ -249,7 +264,7 @@ fn direct_value(doc: &Document, o: &Object, depth: usize, budget: &mut usize) ->
 /// A built appearance and what storing it needs from the dictionary it was drawn from, read
 /// with references followed, so a cached one is stored without following them again.
 #[derive(Clone, Debug)]
-struct Built {
+pub(crate) struct Built {
     stream: Stream,
     /// The first character the standard fonts can't draw (it came out as `?`).
     missing: Option<char>,
