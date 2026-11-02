@@ -5,6 +5,8 @@
 - 2026-11-04 (M6, PR #5699 reset estimate): Charge expanded-name scans and field-name copy/comparison bytes; add three negative regressions and byte-exact refusal checks.
 # PdfCraft roadmap
 
+> **Last reviewed:** 2026-11-03 | **Last updated:** 2026-11-03 | **Change:** patch (M3 #3460: rebase PR #3889 onto main 9ce6d89f and remove all 18 obsolete UI TSV changes; translations are maintained in craft-i18n#141; Find and Search & Redact behavior and estimates unchanged)
+
 > **Last reviewed:** 2026-10-31 | **Last updated:** 2026-10-31 | **Change:** patch (M6, PR #4166/#4088: integrate main f137a289 at 0.16.1; retain automatic-field Print suppression, explicit button/console printing and document-error provenance; 761 scoped tests and verification gates passed; 13-step CLI exercise and render inspection passed; existing warnings retained; estimates unchanged)
 > **Last reviewed:** 2026-11-09 | **Last updated:** 2026-11-09 | **Change:** patch (M10 #5130: preserve manual duplex defaults; validate DocumentDuplex review fix and CI formatting; estimates unchanged)
 >
@@ -30,7 +32,6 @@
 
 > **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M7, PR #2155 review follow-up: preserve image crop/tag/stream ownership, resize in page orientation, harden clipboard and text formatting, and reload installed fonts; estimates unchanged)
 
-> **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M3 #3460: rebase PR #3889 onto main 7ca64298; 2751 scoped tests pass (6 existing ignored), formatting, strict Clippy, layers/assets/parity and wasm checks pass; behavior and estimates unchanged)
 > **Last reviewed:** 2026-10-31 | **Last updated:** 2026-10-31 | **Change:** patch (M2, PR #4172: GBK rasters compared with explicit Unicode and independently selected installed faces; wrong-glyph and wrong-family negative controls fail; estimates unchanged)
 > **Last reviewed:** 2026-10-31 | **Last updated:** 2026-10-31 | **Change:** patch (M2, PR #4172: integrate main fa5f9f8c; retain CJK viewer and upstream raster regressions, restore explicit display_config imports; estimates unchanged)
 > **Last reviewed:** 2026-10-28 · **Last updated:** 2026-10-28 · **Change:** patch (M2, PR #4172: integrate main 5af10276; retain both roadmap histories and viewer-only CJK font policy; estimates unchanged)
@@ -131,6 +132,8 @@
 > **Last reviewed:** 2026-10-18 - **Last updated:** 2026-10-18 - **Change:** minor (M12 #2570: Dynamic XFA rich-text fields carry exData/maxLength into AcroForm MaxLen for reported and enforced Unicode character limits, retained after save/reopen. Estimates unchanged)
 > **Last reviewed:** 2026-10-18 - **Last updated:** 2026-10-18 - **Change:** minor (M4 #3309: bounded iterative named-destination pruning on page deletion; estimates unchanged)
 > **Last reviewed:** 2026-10-18 - **Last updated:** 2026-10-18 - **Change:** minor (M1 #2658: macOS atomic saves retain destination extended attributes, including Finder tags, and reject partial resource-fork reads after size changes. Metadata failures retain the original PDF and unsaved edit. Estimates unchanged)
+> **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M3 #3460: rebase PR #3889 onto main 0cba87ae; 2941 scoped tests pass (6 existing ignored), formatting, strict Clippy, layers/assets/parity and wasm checks pass; behavior and estimates unchanged)
+> **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M3 #3460: rebase PR #3889 onto main 7ca64298; 2751 scoped tests pass (6 existing ignored), formatting, strict Clippy, layers/assets/parity and wasm checks pass; behavior and estimates unchanged)
 
 PdfCraft's one-page summary: how close it is to Adobe Acrobat Pro's offline feature set, and what
 comes next. Adobe's cloud services (Document Cloud, Acrobat Sign requests, shared review, the AI
@@ -296,6 +299,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 - **2026-11-03 (M11, shared JBIG2 dictionary):** With Monochrome Images set to JBIG2, Optimize has up to 16 JBIG2 images share one symbol dictionary (`/JBIG2Globals`), the letters found on more than one page stored once, when that is smaller (`pdfcraft_filters::encode_jbig2_shared`). Eight pages of 10 pt text rendered at 300 dpi take 41% less in Helvetica and 42% in Times than coded alone, 10% in Courier; groups of 16 save 45%, of 32 only 47%. Only images redaction can store again without the dictionary share one (image masks and DeviceGray named directly, at most 64 Mi pixels), and redacting one stores the rest of its group so, which the group bounds to 15.
 
+- **2026-11-03 (M3, #3460 / PR #3889):** Rebased onto the external-catalogue main and removed all 18 deleted in-repository TSV changes. The English Accent-sensitive keys, UI/renderer/automation regressions, corrected Latin-fold examples and legacy accent-sensitive Search & Redact path are retained. Translation rows and contributor credit live in craft-i18n#141, with English fallback until the pinned catalogue includes them. Both automation regression blocks and roadmap histories are retained. Scoped stable tests pass (3,438; 10 existing ignored), with formatting, strict all-target Clippy, layers/assets/parity and wasm checks green. Behavior and estimates unchanged.
+
 - **2026-11-03 (M5, #5850 review):** Resolve indirect IT when recognizing typewriter contents and Fill & Sign marks. Comment listing and property lookup retain their existing direct-Subtype behavior. A real double-click Edit composer preserves the typewriter’s text as written; ordinary comment edits keep trimming. Regressions cover direct Subtype with indirect intent, save/reopen, raw posted contents and same-index comments on different pages. The existing live-movement test now commits its setup with an outside click rather than Enter. Estimates unchanged.
 
 - **2026-11-03 (M5, #5850):** Fill & Sign Enter inserts a line break in a growing editor; clicking outside commits and Escape cancels. Nonempty text keeps leading, internal and trailing line breaks. The headless fill_sign_add path sizes its typewriter box for the same wrapped lines so saved appearances show every row. Production-order keyboard and engine save/reopen/render regressions exercise the UI and headless callers. Estimates unchanged.
@@ -323,7 +328,6 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 - 2026-11-01: PR #2155 review follow-up preserves editor crops through group moves and keeps arranged artwork outside added-item streams; unsafe nested-tag extraction is refused. Image handles and flips follow page orientation, added images accept general transforms, and clipboard/text/Home/font-discovery edge cases have focused regressions. Candidate only; estimates unchanged.
 - 2026-11-01: PR #2155 maintainer edits remove redundant image/text helpers and add regressions for crop ownership, arrange scope/state fidelity, clipboard precedence, crop-drag bounds, and font scanning. Transform and Unicode-script tools complete the headless paths.
 - **2026-10-31 (M3/M4, #5330):** The document quick toolbar offers Crop pages directly through the existing page.crop command, with the command’s assembly-permission check and an active-tool highlight. The existing crop, undo and headless page_set_box paths are unchanged. No toolbar customization or new shortcut. Estimates unchanged.
-- **2026-11-01 (M3, #3460 rebase):** PR #3889 rebased onto main `7ca64298`; resolved and auto-merged hunks reviewed. 2751 scoped tests passed, 6 existing ignored; formatting, strict Clippy, layers/assets/parity and wasm checks passed. Behavior and estimates unchanged.
 
 - **2026-10-30 (M6):** Button scripts can read and change the normal push-button caption with `buttonGetCaption` and `buttonSetCaption`. The caption is drawn and retained through undo/redo and save/reopen; unsupported face indices are refused. Estimates unchanged.
 - **2026-10-18 (M3, #1354, local candidate):** Integrated --two-paged with current main, retaining upstream modal/picker ownership and single-tab reuse. Native launch/opening/password regressions, negative checks against the old wrapper, visual inspection, formatting, strict scoped Clippy, layers, assets, parity and scoped WASM compilation pass. Three existing socket tests are unavailable in this workspace; one existing network test remains ignored. No push or GitHub merge; estimates unchanged.
@@ -338,6 +342,11 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 - **2026-10-27 (M10, `ocr.ocr-web`, rebase fix):** The web build loads OCR models only when their SHA-256 matches `ATTRIBUTION.toml`. With ONNX loading now on, rten's parser spins forever on some bytes that aren't a model (a corrupt or wrong download), so a bad file now fails at once instead of hanging a worker.
 - **2026-10-27 (M3, #3425):** A file named with open parameters, as help systems start a PDF reader (`manual.pdf#nameddest=Intro`, `#page=12` or `#Intro`), opens at that destination instead of failing to read `manual.pdf#…`: at launch, when another launch hands it over, and in its tab when it is already open. Other parameters are ignored. The app and `link_open` now also apply a GoToR link's named destination, looked up in the target's /Names /Dests or catalog /Dests, instead of warning that it wasn't applied; the app looks names up off the UI thread. `doc_open` reports the destination of a path with open parameters. Estimates unchanged.
 - **2026-10-28 (M3, #3460):** Find ignores accents by default (`cafe` finds `café`), with an Accent-sensitive option in the find bar and on `text_find`. Only Latin letters fold; kana, Cyrillic and Greek stay distinct. Search & Redact still matches accents as written. Estimates unchanged.
+
+- **2026-11-01 (M3, #3460 rebase):** PR #3889 rebased onto main `7ca64298`; resolved and auto-merged hunks reviewed. 2751 scoped tests passed, 6 existing ignored; formatting, strict Clippy, layers/assets/parity and wasm checks passed. Behavior and estimates unchanged.
+
+- **2026-11-01 (M3, #3460 rebase):** PR #3889 rebased onto main `0cba87ae`; resolved and auto-merged hunks reviewed. 2941 scoped tests passed, 6 existing ignored; formatting, strict Clippy, layers/assets/parity and wasm checks passed. Behavior and estimates unchanged.
+
 - **2026-10-27 (M10, OCR models):** Model staging downloads and verifies the ONNX pair after the upstream RTEN URL brownout; runtime discovery prefers complete ONNX pairs per directory, retains complete RTEN fallback and preserves directory precedence.
 
 - **2026-10-26 (M2, PR #4172):** Reconciled current main, preserving its Japanese serif/weight selection and both branches' progress records. Installed CJK viewer and preview fallback remains display-only; estimates unchanged.
@@ -905,6 +914,7 @@ Estimates unchanged.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-03 | patch | M3 #3460: rebase PR #3889 onto main 9ce6d89f and remove all 18 obsolete UI TSV changes; translations are maintained in craft-i18n#141; Find and Search & Redact behavior and estimates unchanged. |
 | 2026-11-09 | patch | M10 #5130: Windows Printer default sends native two-sided bindings only when automatic duplex support is confirmed, preserving manual driver defaults (#5130/#5772); physical output remains unqualified. Estimates unchanged. |
 | 2026-11-08 | patch | M10 #6514/#636: retain main's public GDI Git revision (64e7afd4) to preserve downstream Rust type identity, update the internal PDF loader independently, and refresh the application dependency/lockfile. New-graph CI pending; estimates unchanged. |
 | 2026-11-08 | patch | M10 #6514: refresh the craft-print and winprint/GDI pins after #605 merged; retain the Direct2D crash fix and stream-test cleanup repairs, record single-page HUAWEI output with its diagnostic limits, and rerun CI for the new dependency graph. Estimates unchanged. |
@@ -912,6 +922,7 @@ Estimates unchanged.
 | 2026-11-03 | patch | M5 #5850 review: indirect typewriter intent and composer edits preserve outer whitespace; movement regression commits by outside click; estimates unchanged. |
 | 2026-11-03 | patch | M5 #5850: Enter adds Fill & Sign line breaks; outside clicks commit, Escape cancels, and saved multiline appearances retain their text and height; estimates unchanged. |
 | 2026-11-01 | patch | M7 #5657: header/footer, watermark and background operations commit all selected pages together; later-page errors preserve marks, content, shared/inherited resources and pending edits; estimates unchanged. |
+| 2026-11-01 | patch | M3 #3460: rebase PR #3889 onto main 0cba87ae; 2941 scoped tests pass (6 existing ignored), formatting, strict Clippy, layers/assets/parity and wasm checks pass; behavior and estimates unchanged. |
 | 2026-11-01 | patch | M3 #3460: rebase PR #3889 onto main 7ca64298; 2751 scoped tests pass (6 existing ignored), formatting, strict Clippy, layers/assets/parity and wasm checks pass; behavior and estimates unchanged. |
 | 2026-10-28 | patch | M2, PR #4172: integrate main 5af10276 and retain both roadmap histories; viewer-only CJK and print/output font policies and estimates unchanged. |
 | 2026-10-28 | minor | M10: Recognize text widens each found line by fractions of its word height before reading it, so the first and last letters are no longer clipped at 300 dpi (word errors on synthetic 150–400 dpi pages 3.8 % → 0.3 %); word boxes keep their size. Estimates unchanged. |
