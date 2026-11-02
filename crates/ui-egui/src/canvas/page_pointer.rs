@@ -85,6 +85,8 @@ impl PagePointer {
                 }),
             )
         });
+        let layer = ui.layer_id();
+        let blocked_interaction = blocked_interaction.filter(|p| !modal && ui.ctx().layer_id_at(*p).is_none_or(|l| l == layer));
         let blocked_press_key = resp.id.with("blocked-press");
         let primary_press_blocked_key = resp.id.with("primary-press-blocked");
         let clear_blocked_press_key = resp.id.with("clear-blocked-press");
