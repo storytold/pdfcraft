@@ -487,6 +487,19 @@ fn a_selection_made_first_is_marked_when_a_tool_is_picked() {
 }
 
 #[test]
+fn pressing_u_marks_selected_text_with_highlight() {
+    let mut h = harness(|_| {});
+    h.state_mut().views[0].select_text(0, 4, 8);
+    h.key_press(egui::Key::U);
+    h.run_steps(2);
+    let c = comments(&h);
+    assert_eq!(c.len(), 1);
+    assert_eq!(c[0].subtype, "Highlight");
+    assert!(h.state().views[0].selected_text().is_none(), "the selection is consumed");
+    assert_eq!(h.state().quick_tool, pdfcraft_ui_egui::QuickTool::Comment(pdfcraft_ui_egui::comments::CommentTool::Highlight));
+}
+
+#[test]
 fn selected_text_shows_actions_and_underlines_without_changing_tools() {
     let mut h = harness(|_| {});
     h.state_mut().views[0].select_text(0, 4, 8);

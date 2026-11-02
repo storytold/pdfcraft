@@ -84,9 +84,9 @@ impl PdfCraftApp {
 }
 
 impl PdfCraftApp {
-    /// The quick tools' keys, as in Acrobat: V selects, H pans, and holding Space pans until it
-    /// is released. Plain letters, so not while a text field, a form field, a dialog or the
-    /// palette has the keyboard.
+    /// The quick tools' keys, as in Acrobat: V selects, H pans, D draws, U highlights, and holding
+    /// Space pans until it is released. Plain letters, so not while a text field, a form field,
+    /// a dialog or the palette has the keyboard.
     fn tool_keys(&mut self, i: usize, ctx: &egui::Context) {
         use egui::Key;
         let free = self.dialog.is_none() && !self.palette_open && !ctx.egui_wants_keyboard_input() && self.views[i].forms.focus.is_none();
@@ -108,6 +108,14 @@ impl PdfCraftApp {
         }
         if ctx.input(|input| input.key_pressed(Key::H)) {
             self.quick_tool = QuickTool::Hand;
+            self.space_hand = None;
+        }
+        if ctx.input(|input| input.key_pressed(Key::D)) {
+            self.execute("comment.ink");
+            self.space_hand = None;
+        }
+        if ctx.input(|input| input.key_pressed(Key::U)) {
+            self.execute("comment.highlight");
             self.space_hand = None;
         }
         if space && self.space_hand.is_none() && self.quick_tool != QuickTool::Hand {
