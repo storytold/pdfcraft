@@ -5886,11 +5886,11 @@ title = "Add a suffix to redacted file names"
 area = "G"
 tier = "P3"
 milestone = "M8"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "shipped"
+commands = ["redact.apply", "file.save"]
+tools = ["redact_apply"]
+evidence = ["crates/ui-egui/tests/it/redact.rs::saving_after_applying_redactions_asks_where", "crates/automation/tests/it/automation.rs::applying_redactions_proposes_the_name_with_redacted", "crates/redact/src/tests.rs::redacted_copies_are_named_with_redacted_before_the_extension"]
+notes = "After Apply redactions, Save asks where and proposes the name with _Redacted before the extension (contract.pdf gives contract_Redacted.pdf; a name already ending in _Redacted keeps one); the web build downloads under that name. redact_apply returns the same name in save_as, for doc_save's path; doc_save without a path still writes in place. The suffix is fixed: there is no preference to change it or to use a prefix."
 
 [[feature]]
 id = "protect.redact-ai-suggestions"

@@ -20,7 +20,7 @@ pub use save::{SaveTarget, write_atomically};
 #[cfg(test)]
 pub(crate) use save::{is_mail_temp_copy, save_dialog_folder};
 #[cfg(test)]
-use save::{write_atomically_syncing, write_atomically_with};
+use save::{unredacted_file_name, write_atomically_syncing, write_atomically_with};
 
 /// Text typed into a new text box that isn't added to the page yet.
 fn new_text_typed(v: &crate::DocView) -> bool {
@@ -343,6 +343,17 @@ impl PdfCraftApp {
                 if let Some(view) = self.views.get_mut(i) {
                     view.comments.selected = None;
                     view.comments.history_stepped();
+                }
+                if label == (Edit::ApplyRedactions { pages: None }).label() {
+                    let view = &mut self.views[i];
+                    let (applied, undone) = (view.redactions_applied, view.redactions_undone_after_save);
+                    // Undo past the last save counts as undone; Redo first takes those back.
+                    match (undo, applied, undone) {
+                        (true, 0, _) => view.redactions_undone_after_save = undone.saturating_add(1),
+                        (true, _, _) => view.redactions_applied = applied.saturating_sub(1),
+                        (false, _, 0) => view.redactions_applied = applied.saturating_add(1),
+                        (false, _, _) => view.redactions_undone_after_save = undone.saturating_sub(1),
+                    }
                 }
                 let label = crate::i18n::edit_label(&label);
                 if undo {
