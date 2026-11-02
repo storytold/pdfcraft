@@ -1,5 +1,4 @@
 use crate::object::ObjectIdentifier;
-use crate::object::Stream;
 use crate::reader::ReaderContext;
 use crate::sync::HashMap;
 use crate::sync::{Arc, Mutex, MutexExt};
@@ -92,6 +91,12 @@ impl Data {
         &self.data
     }
 
+    /// PdfCraft patch: (hayro-syntax (33)) enter the gate for what an object stream's index depends
+    /// on, once its data is read and [`Self::get_with`] has let go of it.
+    pub(crate) fn enter_loading(&self, id: ObjectIdentifier) -> Option<LoadGuard<'_>> {
+        self.loading.enter(id)
+    }
+
     /// Get access to the data of a decoded object stream.
     pub(crate) fn get_with(&self, id: ObjectIdentifier, ctx: &ReaderContext<'_>) -> Option<&[u8]> {
         // PdfCraft patch: (#307, see vendor/README.md hayro-syntax (10)) register exactly once:
@@ -110,7 +115,8 @@ impl Data {
         let _loading = self.loading.enter(id)?;
         self.decoded
             .get_or_init(idx, || {
-                let stream = ctx.xref().get_with::<Stream<'_>>(id, ctx)?;
+                // PdfCraft patch: (hayro-syntax (33)) only ever an object stream.
+                let stream = ctx.xref().object_stream(id, ctx)?;
                 stream.decoded().ok().map(Cow::into_owned)
             })?
             .as_deref()
@@ -244,7 +250,7 @@ mod tests {
     }
 }
 
-struct LoadGuard<'a>(&'a LoadGate);
+pub(crate) struct LoadGuard<'a>(&'a LoadGate);
 
 impl Drop for LoadGuard<'_> {
     fn drop(&mut self) {
