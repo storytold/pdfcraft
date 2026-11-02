@@ -186,6 +186,8 @@ pub enum Dialog {
     AuditSpace,
     /// Signatures ▸ Show certificate.
     CertificateViewer,
+    /// Pin tools to Home: selection modal.
+    PinTool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -362,6 +364,11 @@ impl UnlockPrompt {
         Self { doc: doc.id, name: doc.name.clone(), input: String::new(), error: None, then }
     }
 }
+
+/// How many recent files are kept until Preferences says otherwise.
+pub const RECENT_FILES_DEFAULT: usize = 12;
+/// The most Preferences can ask to keep.
+pub const RECENT_FILES_MAX: usize = 50;
 
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct RecentFile {
