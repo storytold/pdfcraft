@@ -530,6 +530,69 @@ fn an_edit_to_a_full_field_keeps_what_fits() {
     assert!(kept.starts_with("SW") && kept.ends_with('t') && tb.fits(&kept), "{kept}");
 }
 
+/// An unavailable Syriac glyph uses the appearance's fallback metrics. Short edits retain
+/// their text and warning, while a long fallback run still obeys the field's size.
+#[test]
+fn unmeasurable_syriac_edits_are_kept_and_warned_without_relaxing_measured_overflow() {
+    let mut doc = fixture();
+    set_props(
+        &mut doc,
+        "name",
+        &FieldProps {
+            font_size: Some(12.0),
+            rect: Some((0, [50.0, 700.0, 250.0, 740.0])),
+            flags: vec![(flags::DO_NOT_SCROLL, true)],
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    // U+0860 is outside the approved faces' coverage; it also fails without craft-fonts.
+    // This is unconditional: the regression must not disappear when fonts are absent.
+    assert!(pdfcraft_fonts::content_text::line("\u{0860}", true).is_err());
+    let all = fields(&doc);
+    let f = field(&all, "name");
+    let tb = appearance::text_box(&doc, f, &f.widgets[0]);
+    assert!(tb.fits("\u{0860}"), "the fallback question mark fits even when the original glyph is unavailable");
+    for (before, after, caret) in [("AB", "A\u{0860}B", 2), ("AoldB", "A\u{0860}B", 2), ("", "\u{0860}", 1), ("", "AA\u{0860}ZZ", 5)] {
+        let (kept, actual_caret) = tb.fitted_edit(before, after);
+        assert_eq!(kept, after, "an unavailable glyph must not silently remove an insertion into {before:?}");
+        assert_eq!(actual_caret, caret);
+        set_value(&mut doc, "name", &FieldValue::Text(kept)).unwrap();
+        assert_eq!(field(&fields(&doc), "name").value, [after]);
+        assert_eq!(undrawn_fields(&doc), [("name".to_string(), '\u{0860}')]);
+        assert!(need_appearances(&doc), "the viewer must be told that the preserved text cannot be drawn");
+    }
+    let reopened = reopen(&doc);
+    assert_eq!(field(&fields(&reopened), "name").value, ["AA\u{0860}ZZ"]);
+    assert_eq!(undrawn_fields(&reopened), [("name".to_string(), '\u{0860}')]);
+    assert!(need_appearances(&reopened));
+
+    let fallback_overflow = format!("\u{0860}{}", "W".repeat(100));
+    assert!(!tb.fits(&fallback_overflow), "one unavailable glyph must not bypass measurable fallback overflow");
+    let (kept, caret) = tb.fitted_edit("", &fallback_overflow);
+    assert!(kept.starts_with('\u{0860}') && kept.chars().count() > 1 && kept.len() < fallback_overflow.len());
+    assert!(tb.fits(&kept));
+    assert_eq!(caret, kept.chars().count());
+    set_value(&mut doc, "name", &FieldValue::Text(kept.clone())).unwrap();
+    assert_eq!(field(&fields(&doc), "name").value, [kept]);
+    assert_eq!(undrawn_fields(&doc), [("name".to_string(), '\u{0860}')]);
+    assert!(need_appearances(&doc));
+
+    let mut measured = vec!["W".repeat(100)];
+    if pdfcraft_fonts::document_syriac_font().is_some() {
+        let syriac = "\u{0712}".repeat(100);
+        assert!(pdfcraft_fonts::content_text::line(&syriac, true).is_ok(), "this overflow control has known glyph metrics");
+        measured.push(syriac);
+    }
+    for too_long in measured {
+        assert!(!tb.fits(&too_long));
+        let (kept, caret) = tb.fitted_edit("", &too_long);
+        assert!(!kept.is_empty() && kept.len() < too_long.len(), "known overflow still trims the insertion");
+        assert!(tb.fits(&kept));
+        assert_eq!(caret, kept.chars().count());
+    }
+}
+
 /// When the field's own font can't show a character of a paste, the text from there on is drawn
 /// in Helvetica, which can be narrower: the longest part that fits may come after that point, and
 /// is still the one kept.

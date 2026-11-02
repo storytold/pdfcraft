@@ -1036,6 +1036,58 @@ fn comments_without_appearances_get_one_for_display_only() {
     assert!(with_missing_appearances(&complete).is_none());
 }
 
+#[test]
+fn syriac_freetext_keeps_a_legacy_fallback_without_document_or_glyphs() {
+    let mut bare = Dict::new();
+    bare.set(b"Subtype".to_vec(), Object::name("FreeText"));
+    bare.set(b"Rect".to_vec(), num_array(&[20.0, 20.0, 200.0, 70.0]));
+    bare.set(b"Contents".to_vec(), PdfString::text("ܒ"));
+    let stream = appearance::build(&bare).expect("dictionary-only callers retain the standard-font appearance");
+    assert!(String::from_utf8_lossy(&stream.decoded().unwrap()).contains("(?)"));
+    assert_eq!(text(&bare, b"Contents"), "ܒ", "fallback drawing keeps the logical text");
+
+    // All approved Syriac releases lack this supplement glyph. This exercises
+    // the missing-face/glyph fallback without switching the build's font input.
+    let mut doc = fixture();
+    let mut boxed = new(0, Shape::TextBox { rect: [100.0, 600.0, 300.0, 650.0], font_size: 12.0 });
+    boxed.contents = "\u{0860}".into();
+    let index = add_annotation(&mut doc, &boxed, &meta("missing-syriac")).expect("unavailable glyphs retain a marked fallback appearance");
+    assert_eq!(text(&list(&doc, 0)[index], b"Contents"), "\u{0860}");
+    assert_eq!(pdfcraft_fonts::undrawn_mark(&list(&doc, 0)[index]), Some('\u{0860}'));
+    assert!(ap_content(&doc, &list(&doc, 0)[index]).contains("(?)"));
+    assert!(props(&doc, 0, index).unwrap().restylable, "our marked fallback remains restylable");
+    set_style(&mut doc, 0, index, StyleChange::new(Some([1.0, 0.0, 0.0]), None, None, None), &meta("restyled")).unwrap();
+    let reopened = reopen(&doc);
+    assert_eq!(text(&list(&reopened, 0)[index], b"Contents"), "\u{0860}");
+    assert_eq!(pdfcraft_fonts::undrawn_mark(&list(&reopened, 0)[index]), Some('\u{0860}'));
+    assert!(ap_content(&reopened, &list(&reopened, 0)[index]).contains("(?)"));
+}
+
+#[test]
+fn one_unbuildable_syriac_comment_does_not_discard_other_display_appearances() {
+    let doc = document_of(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>",
+        b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R 6 0 R] >>",
+        b"<< /Type /Annot /Subtype /Square /Rect [10 10 50 50] /C [1 0 0] >>",
+        // Malformed geometry remains unbuildable even with the text fallback.
+        b"<< /Type /Annot /Subtype /FreeText /Rect [20 20] /Contents <FEFF0712> >>",
+        b"<< /Type /Annot /Subtype /Circle /Rect [100 100 150 150] /C [0 0 1] >>",
+    ]);
+    let before = write_incremental(&doc, &SaveOptions::default()).unwrap();
+    let mut cache = AppearanceCache::default();
+    for _ in 0..2 {
+        let display = with_missing_appearances_cached(&doc, &mut cache).expect("valid comments before and after the bad comment remain visible");
+        let shown = list(&display, 0);
+        assert!(shown[0].get(b"AP").is_some(), "keep the appearance built before the failed annotation");
+        assert!(shown[1].get(b"AP").is_none(), "skip only the unbuildable annotation");
+        assert!(shown[2].get(b"AP").is_some(), "continue to later annotations, including on a cache hit");
+        assert_eq!(text(&shown[1], b"Contents"), "ܒ");
+    }
+    assert!(list(&doc, 0).iter().all(|annotation| annotation.get(b"AP").is_none()));
+    assert_eq!(write_incremental(&doc, &SaveOptions::default()).unwrap(), before, "display-only recovery does not mutate the original document");
+}
+
 fn line_dict(coords: [f64; 4], ending: &str) -> pdfcraft_cos::Dict {
     let mut d = pdfcraft_cos::Dict::new();
     d.set(b"Subtype".to_vec(), Object::name("Line"));

@@ -183,13 +183,17 @@ impl TextBox {
     /// Whether `text` fits: on one line within the width, or, multi-line, wrapped within the
     /// height, as the appearance draws it. An automatic size shrinks before text stops fitting,
     /// so such a field is full only when the text no longer fits at its smallest size (4 pt). A
-    /// comb field always fits (its `/MaxLen` bounds it).
+    /// comb field always fits (its `/MaxLen` bounds it). When Syriac shaping is unavailable,
+    /// use the appearance's fallback metrics; storing the value still marks undrawn glyphs.
     pub fn fits(&self, text: &str) -> bool {
         if self.comb || text.is_empty() {
             return true;
         }
-        if !self.password && pdfcraft_fonts::content_text::contains_syriac(text) {
-            return syriac::fits(self, text);
+        if !self.password
+            && pdfcraft_fonts::content_text::contains_syriac(text)
+            && let Ok(fits) = syriac::fits(self, text)
+        {
+            return fits;
         }
         let shown: String = if self.password { "*".repeat(text.chars().count()) } else { text.to_string() };
         // The font the appearance would choose for this text.

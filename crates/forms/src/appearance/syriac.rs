@@ -104,16 +104,13 @@ fn comb_auto_size(width: f64, height: f64, cells: usize, widest: f64, ink_height
     Ok(size)
 }
 
-pub(super) fn fits(box_: &TextBox, value: &str) -> bool {
-    let result = (|| -> Result<bool, String> {
-        let size = size_for(value, box_.size, box_.inner_w, box_.inner_h, box_.multiline, box_.syriac_family)?;
-        let rows = layout(value, size, box_.inner_w, box_.multiline, box_.syriac_family)?;
-        let (top, bottom) = extents(&rows)?;
-        let pitch = (top - bottom + 0.1).max(1.15) * size;
-        let height = (top - bottom) * size + rows.len().saturating_sub(1) as f64 * pitch;
-        Ok(rows.iter().all(|line| line.width * size <= box_.inner_w + 0.01) && height <= box_.inner_h + 0.01)
-    })();
-    result.unwrap_or(false)
+pub(super) fn fits(box_: &TextBox, value: &str) -> Result<bool, String> {
+    let size = size_for(value, box_.size, box_.inner_w, box_.inner_h, box_.multiline, box_.syriac_family)?;
+    let rows = layout(value, size, box_.inner_w, box_.multiline, box_.syriac_family)?;
+    let (top, bottom) = extents(&rows)?;
+    let pitch = (top - bottom + 0.1).max(1.15) * size;
+    let height = (top - bottom) * size + rows.len().saturating_sub(1) as f64 * pitch;
+    Ok(rows.iter().all(|line| line.width * size <= box_.inner_w + 0.01) && height <= box_.inner_h + 0.01)
 }
 
 pub(super) fn overflow(box_: &TextBox, f: &Field) -> Result<Option<Overflow>, String> {

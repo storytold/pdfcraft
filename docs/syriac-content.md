@@ -70,7 +70,7 @@ at 1,024, comb values at 4,096 cells, and typed signatures retain the existing
 256-character limit. Unsupported input follows the surface's existing error or
 warning policy. Glyph-outline and font-resource budgets also apply.
 
-The focused local batch passed on 2026-11-02 with the companion revision above,
+The original feature batch at `df4de1d9` passed on 2026-11-02 with the companion revision above,
 repository optimization defaults, at most two compiler jobs and
 `PDFCRAFT_REQUIRE_SYRIAC=1` so the Syriac tests could not skip missing fonts:
 
@@ -97,6 +97,25 @@ repository optimization defaults, at most two compiler jobs and
   The resulting image was inspected for visible joining/marks and placement, with
   no obvious clipping. The output is local verification material, not a committed
   PDF or a claim of native-reader typography acceptance.
+
+### Review 5740207590 corrections
+
+Default FreeText retains its standard-font placeholder appearance and logical
+contents when Syriac drawing is unavailable. Restyling uses that same fallback.
+A malformed or unbuildable Syriac comment no longer discards other comments'
+display-only appearances; the input document remains unchanged.
+
+Form fitting uses Syriac measurements when successful, and otherwise uses the
+existing field/Helvetica placeholder metrics. Short unsupported insertions remain
+stored with their normal undrawn-text warning. Actual overflow, including a long
+Latin insertion beside an unsupported glyph, still uses the existing trimming
+policy. This is not an unconditional bypass of field size limits.
+
+Two annotation regressions and the refined form regression passed after witnessed
+pre-correction failures. The supported three-family integration case also passed;
+its successful shaping path was unchanged by the final error-only fit refinement.
+Only the affected form test was rerun for that refinement. Earlier font assets,
+source-shaping and CLI checks were not repeated without a relevant change.
 
 Ordinary builds without the optional companion retain their no-font behavior.
 Native-reader judgment and desktop/browser keyboard composition are separate from

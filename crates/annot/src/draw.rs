@@ -183,8 +183,9 @@ pub fn with_missing_appearances_cached(doc: &Document, cache: &mut AppearanceCac
             // Font references allocated in a display copy cannot be cached in another copy.
             if appearance::syriac_contents(&d).is_some() {
                 let current = copy.get_or_insert_with(|| doc.clone());
-                let stream = build_appearance_in(current, &d)?;
-                apply_appearance(current, r, &d, stream).ok()?;
+                if let Some(stream) = build_appearance_in(current, &d) {
+                    apply_appearance(current, r, &d, stream).ok();
+                }
                 continue;
             }
             if let Some(stream) = cache.get(r) {

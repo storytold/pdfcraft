@@ -439,22 +439,15 @@ impl AppearanceDrawing {
 /// Draw the normal appearance of an annotation, or `None` if this subtype/variant isn't supported.
 /// Text the standard fonts can't draw comes out as `?`: [`undrawable_text`] says which, and
 /// [`crate::set_appearance`] marks the annotation with it (`pdfcraft_fonts::UNDRAWN_MARK`).
+/// Without a document this retains the standard-font fallback; use [`build_in`] for Syriac fonts.
 pub fn build(d: &Dict) -> Option<Stream> {
     build_with(d, None)
 }
 
-/// Whether the dictionary can be redrawn, including document-backed Syriac text.
+/// Whether the dictionary can be redrawn, including the standard-font fallback
+/// when its Syriac text cannot be shaped in this build.
 pub fn can_build(d: &Dict) -> bool {
-    if let Some(text) = syriac_contents(d) {
-        if pdfcraft_fonts::content_text::wrap_for_family(&text, 12.0, 1000.0, pdfcraft_fonts::SyriacFamily::from_dict(d)).is_err() {
-            return false;
-        }
-        let mut probe = d.clone();
-        probe.set(b"Contents".to_vec(), Object::String(PdfString::text("")));
-        build(&probe).is_some()
-    } else {
-        build(d).is_some()
-    }
+    build(d).is_some()
 }
 
 pub(crate) fn syriac_contents(d: &Dict) -> Option<String> {
@@ -1035,9 +1028,10 @@ fn draw_free_text(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawin
     let pad = 2.0 + bw;
     let width = (rect[2] - rect[0] - 2.0 * pad).max(1.0);
     let q = d.int(b"Q").unwrap_or(0);
-    if pdfcraft_fonts::content_text::contains_syriac(&text) {
-        let doc = doc?;
-        let lines = pdfcraft_fonts::content_text::wrap_for_family(&text, size, width, pdfcraft_fonts::SyriacFamily::from_dict(d)).ok()?;
+    if pdfcraft_fonts::content_text::contains_syriac(&text)
+        && let Some(doc) = doc
+        && let Ok(lines) = pdfcraft_fonts::content_text::wrap_for_family(&text, size, width, pdfcraft_fonts::SyriacFamily::from_dict(d))
+    {
         let mut ascent = 0.9f64;
         let mut descent = -0.2f64;
         for line in &lines {
