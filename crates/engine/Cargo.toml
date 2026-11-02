@@ -47,10 +47,12 @@ url = "2.5"
 idna = "1.1"
 icu_properties = "2.3"
 unicode-segmentation = "1.13"
+# Already in the graph through lopdf. The workspace entry is std-only, so it builds for wasm too:
+# the weekday of a date in a date format (dates.rs).
+chrono = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-# Already in the graph through lopdf; used only for the local UTC offset ("today"). The workspace
-# entry is std-only; this target adds `clock` for `chrono::Local::now`.
+# The local UTC offset ("today", clock.rs) needs `clock` for `chrono::Local::now`, which wasm lacks.
 chrono = { workspace = true, features = ["clock"] }
 getrandom = "0.4"
 
