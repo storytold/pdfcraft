@@ -87,11 +87,11 @@ fn a_dragged_width_is_remembered_across_restarts() {
     // The side panel's resize edge: the one right of the page, left of the panel's text.
     let edge = h
         .get_all_by_label("Resize panels")
-        .map(|n| n.rect().center())
+        .map(|n| n.rect().left_center())
         .filter(|c| c.x < side_left && c.x > WIDTH / 2.0)
         .min_by(|a, b| (side_left - a.x).total_cmp(&(side_left - b.x)))
         .expect("the side panel has a resize edge")
-        // The pane's half of the edge: the page, drawn after the panes, takes the other half.
+        // 2 pt inside the panel: the edge lies right of the border, clear of the page's scrollbar.
         + egui::vec2(2.0, 0.0);
     h.hover_at(edge);
     h.run_steps(1);
@@ -197,7 +197,8 @@ fn scrollbar_and_panel_resize_handle_do_not_collide_on_either_dock_side() {
     assert!(after_width > initial_width);
     assert!((after_width - (initial_width + 40.0)).abs() <= 5.0);
 
-    // 2. Right docking: tools panel on the right (resize handle on the left).
+    // 2. Right docking: tools panel on the right (resize handle on the left), next to the page's
+    // scrollbar (#5730).
     let mut h_right = harness_sized(egui::vec2(1200.0, 450.0), |app| {
         app.set_option("tools-side", "right").unwrap();
         app.all_tools_expanded = true;
@@ -207,6 +208,51 @@ fn scrollbar_and_panel_resize_handle_do_not_collide_on_either_dock_side() {
     let splitters_right: Vec<_> = h_right.get_all_by_label("Resize panels").collect();
     assert!(!splitters_right.is_empty());
     let right_splitter_rect = splitters_right[0].rect();
+    let bars: Vec<egui::Rect> = h_right.get_all_by_role(Role::ScrollBar).map(|s| s.rect()).filter(|r| r.height() > 0.0).collect();
+    // The page's scrollbar ends where the pane begins; the pane's own one is at its far side.
+    let page_bar = bars
+        .iter()
+        .copied()
+        .filter(|r| r.min.x < right_splitter_rect.center().x)
+        .max_by(|a, b| a.max.x.total_cmp(&b.max.x))
+        .expect("the page has a scrollbar");
+    assert!(
+        (right_splitter_rect.center().x - page_bar.max.x).abs() < 6.0,
+        "the page's scrollbar is beside the edge: {page_bar:?} {right_splitter_rect:?}"
+    );
+    let tools_bar = bars.iter().copied().find(|r| r.min.x > right_splitter_rect.center().x).expect("Tools panel scrollbar should exist");
+    let initial_right_width = h_right.state().side_panels.tools_width;
+
+    // All of either scrollbar is the scrollbar, not the resize edge.
+    for bar in [page_bar, tools_bar] {
+        for x in [bar.min.x + 0.5, bar.center().x, bar.max.x - 0.5] {
+            h_right.hover_at(egui::pos2(x, bar.center().y));
+            h_right.run_steps(1);
+            let cursor = h_right.output().platform_output.cursor_icon;
+            assert_ne!(cursor, egui::CursorIcon::ResizeHorizontal, "Hovering scrollbar {bar:?} at x={x} should not trigger resize handle");
+        }
+    }
+
+    // Dragging either scrollbar by its right edge scrolls its content and leaves the width alone.
+    let drag = |h: &mut Harness<'static, PdfCraftApp>, at: egui::Pos2| {
+        h.hover_at(at);
+        h.run_steps(1);
+        h.drag_at(at);
+        h.run_steps(1);
+        h.hover_at(at + egui::vec2(0.0, 60.0));
+        h.run_steps(1);
+        h.drop_at(at + egui::vec2(0.0, 60.0));
+        h.run_steps(2);
+    };
+    let page_top = |h: &Harness<'static, PdfCraftApp>| h.state().views[0].page_screen_rect(0).expect("page on screen").min.y;
+    let before = page_top(&h_right);
+    drag(&mut h_right, egui::pos2(page_bar.max.x - 1.0, page_bar.center().y));
+    assert!(page_top(&h_right) < before, "dragging the page's scrollbar scrolls the page");
+    assert_eq!(h_right.state().side_panels.tools_width, initial_right_width, "Dragging scrollbar must not resize the panel");
+    let before = h_right.get_by_label("Edit a PDF").rect().top();
+    drag(&mut h_right, egui::pos2(tools_bar.max.x - 1.0, tools_bar.center().y));
+    assert!(h_right.get_by_label("Edit a PDF").rect().top() < before, "Content should scroll up when dragging scrollbar down");
+    assert_eq!(h_right.state().side_panels.tools_width, initial_right_width, "Dragging scrollbar must not resize the panel");
 
     // Splitter is at the left boundary of the right-docked pane.
     h_right.hover_at(right_splitter_rect.center());
@@ -214,7 +260,6 @@ fn scrollbar_and_panel_resize_handle_do_not_collide_on_either_dock_side() {
     assert_eq!(h_right.output().platform_output.cursor_icon, egui::CursorIcon::ResizeHorizontal);
 
     // Dragging the splitter on right-docked pane smoothly resizes.
-    let initial_right_width = h_right.state().side_panels.tools_width;
     h_right.hover_at(right_splitter_rect.center());
     h_right.run_steps(1);
     h_right.drag_at(right_splitter_rect.center());

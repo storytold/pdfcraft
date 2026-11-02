@@ -390,6 +390,31 @@ fn open_panes(app: &PdfCraftApp) -> Vec<Pane> {
     open
 }
 
+/// Width of a pane's resize edge that takes the pointer, right of its border.
+const RESIZE_GRIP: f32 = 4.0;
+
+/// Moves each open pane's resize edge to the right of its border (#5730).
+///
+/// The host centres the edge on the border and widens it, so it reaches over whatever ends left
+/// of the border. egui puts a vertical scrollbar at the right of its area, so that is the
+/// scrollbar of the page beside a right-docked pane, or of the Inspector beside a right-docked
+/// Tools pane, and its right half became the edge. Right of a border starts the next area, never
+/// with a scrollbar: a right-docked pane's own scrollbar is at its far side, and a left-docked
+/// pane keeps a gutter left of its border.
+///
+/// The edge is the host's widget registered again with a smaller rect; egui keeps the last rect
+/// for the next frame's hit test, and the layer is the one the host used.
+fn keep_resize_edges_off_scrollbars(ui: &mut egui::Ui, host: egui::Id, open: &[Pane]) {
+    for pane in open {
+        let id = host.with(("pane", *pane)).with("resize");
+        // An inert edge (bad geometry) senses no drag: leave it so.
+        let Some(edge) = ui.ctx().read_response(id).filter(|r| r.sense.senses_drag() && r.rect.is_positive()) else { continue };
+        let border = edge.rect.center().x;
+        let grip = egui::Rect::from_x_y_ranges(border..=border + RESIZE_GRIP, edge.rect.y_range());
+        ui.new_child(egui::UiBuilder::new().layer_id(edge.layer_id)).interact(grip, id, egui::Sense::drag());
+    }
+}
+
 /// Draws the rail and the open panes. Call after the top bars and before the central panel.
 pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     if let Some(panel) = app.right {
@@ -411,7 +436,8 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let labels = PaneLabels { resize: crate::i18n::t("Resize panels").to_owned(), ..PaneLabels::default() };
     let panels = app.side_panels;
     // Columns: both panes may share the right edge, Tools outermost, as `open` lists them.
-    let output = PaneHost::new(egui::Id::unique("pdfcraft-side-panels"))
+    let host = egui::Id::unique("pdfcraft-side-panels");
+    let output = PaneHost::new(host)
         .policy(SidePolicy::Columns)
         .f6(false)
         .labels(labels)
@@ -419,21 +445,7 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         .body_margin(egui::Margin::ZERO)
         .show(ui, &open, |pane| Some(state_of(&panels, *pane)), &mut Content { app });
 
-    // Ensure panel resize handles do not bleed inward over panel interiors and scrollbars.
-    // The handle's active target is kept to the divider strip centered on the border.
-    for pane in &open {
-        let host_id = egui::Id::unique("pdfcraft-side-panels");
-        let s_id = host_id.with(("pane", *pane));
-        let resize_id = s_id.with("resize");
-        if let Some(resp) = ui.ctx().read_response(resize_id) {
-            let edge_layer = egui::LayerId::new(ui.layer_id().order, s_id.with("resize-layer"));
-            let edge_ui = ui.new_child(egui::UiBuilder::new().layer_id(edge_layer));
-            let old_rect = resp.rect;
-            let border = (old_rect.min.x + old_rect.max.x) / 2.0;
-            let new_rect = egui::Rect::from_x_y_ranges((border - 2.0)..=(border + 2.0), old_rect.y_range());
-            edge_ui.interact(new_rect, resize_id, egui::Sense::drag());
-        }
-    }
+    keep_resize_edges_off_scrollbars(ui, host, &open);
     for request in output.requests {
         match request {
             PaneRequest::Resize(pane, width) => app.side_panels.set_width(pane, width),
