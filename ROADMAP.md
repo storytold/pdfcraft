@@ -1,7 +1,6 @@
 # PdfCraft roadmap
 
 > **Last reviewed:** 2026-11-02 | **Last updated:** 2026-11-02 | **Change:** patch (PR #5776 documentation follow-up: describe touched Syriac shaping, appearance, fallback and regression contracts; runtime behavior, release dependencies and estimates unchanged)
-
 > **Last reviewed:** 2026-11-02 | **Last updated:** 2026-11-02 | **Change:** patch (PR #5776 review: preserve unsupported FreeText and form values with fallback metrics, isolate display recovery failures, and correct font/milestone notes; companion/release qualification and estimates unchanged)
 
 > **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M7, PR #2155 further review: inherited drawing/text state, affine image gestures, paste/selection ownership, no-op scripts and menu permissions; estimates unchanged)

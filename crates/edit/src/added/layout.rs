@@ -291,6 +291,7 @@ pub(super) fn arabic_error(e: GlyphError, text: &str) -> EditError {
     })
 }
 
+/// Translate an unavailable Hebrew face, missing glyph or excessive outline complexity into an actionable edit error.
 pub(super) fn hebrew_error(e: GlyphError, text: &str) -> EditError {
     EditError::Invalid(match e {
         GlyphError::NoFont => "Hebrew text needs PdfCraft's Hebrew font, which this build doesn't include \
