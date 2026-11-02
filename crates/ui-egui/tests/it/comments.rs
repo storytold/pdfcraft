@@ -3119,10 +3119,10 @@ trailer << /Root 1 0 R >>
     .into_bytes()
 }
 
-/// Review on #2137: a Replace Text proposal's window shows the replacement as the comment's text,
-/// and the other member of the group is part of the comment, not a reply panel (ISO 32000-2
-/// §12.5.6.2: a group's members are one unit). Both layouts: the caret as the primary, and the
-/// strikeout as the primary with the replacement on the grouped caret.
+/// A Replace Text proposal's window shows the replacement as the comment's text, and the other
+/// member of the group is part of the comment, not a reply panel (ISO 32000-2 §12.5.6.2: a group's
+/// members are one unit). Both layouts: the caret as the primary, and the strikeout as the primary
+/// with the replacement on the grouped caret, as `main` writes it (#5688).
 #[test]
 fn a_replace_text_window_shows_the_replacement_as_its_text_not_as_a_reply() {
     for caret_first in [true, false] {
@@ -3142,8 +3142,29 @@ fn a_replace_text_window_shows_the_replacement_as_its_text_not_as_a_reply() {
     }
 }
 
-/// Review on #2137: a double-click on a Replace Text proposal opens the group's one window, the
-/// primary's, in either layout. (A double-click on the member grouped under it opens the same
+/// A locked Replace Text proposal, as `main` writes it (the strikeout primary and locked, the
+/// replacement on the grouped caret), shows the replacement in its window read-only: locking the
+/// comment locks the text the window shows for it.
+#[test]
+fn a_locked_replace_text_window_shows_the_replacement_read_only() {
+    let pdf = String::from_utf8(replace_text_pdf(false, true))
+        .unwrap()
+        .replace("/IT /StrikeOutTextEdit /Popup", "/IT /StrikeOutTextEdit /F 128 /Popup")
+        .into_bytes();
+    let mut h = harness(move |app| {
+        app.open_bytes("replace.pdf", None, pdf).expect("opens");
+        app.close_tab(0);
+    });
+    h.run_steps(6);
+    let (_, window) = h.state().views[0].comments.popup_rects.first().copied().expect("the open pop-up shows");
+    let inside = |n: &egui_kittest::Node<'_>| window.contains(n.rect().center());
+    let boxes = h.query_all_by(|n| n.role() == Role::MultilineTextInput).filter(inside).count();
+    assert_eq!(boxes, 0, "no box to type in while the comment is locked");
+    assert!(h.query_all_by_label("slow red").any(|n| inside(&n)), "the replacement is shown");
+}
+
+/// A double-click on a Replace Text proposal opens the group's one window, the primary's, in
+/// either layout. (A double-click on the member grouped under it opens the same
 /// window once members are picked on the page; main hit-tests only the primary.)
 #[test]
 fn a_double_click_on_a_replace_text_opens_its_one_window() {

@@ -457,10 +457,11 @@ pub(crate) fn popups(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, pr
                                 && r.parent.is_some_and(|parent| tops.get(&(r.page, r.index)).copied().unwrap_or(parent) == key)
                         })
                         .collect();
-                    // The comment's text. Replace Text as PdfCraft used to write it keeps the
+                    // The comment's text. Replace Text as `main` writes it (#5688) keeps the
                     // replacement on the caret grouped under an empty strikeout: the window shows
-                    // and edits the caret's text, the proposal's.
-                    let holder = info
+                    // and edits the caret's text, the proposal's. Locking the comment locks that
+                    // text too.
+                    let mut holder = info
                         .annotations
                         .iter()
                         .find(|r| {
@@ -471,6 +472,7 @@ pub(crate) fn popups(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, pr
                         })
                         .cloned()
                         .unwrap_or_else(|| a.clone());
+                    holder.locked |= a.locked;
                     let order = thread(key, &replies);
                     let (nodes, roots) = nest(&order);
                     let mut parts = Parts { allowed, author: &prefs.author, pal, cv: &mut view.comments, edits: &mut edits };
