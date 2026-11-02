@@ -453,13 +453,17 @@ const HIT_TESTERS: [(&str, &str, &str); 1] = [(
     "`PageHits::hits`: every module's hits at a point, for the pointer's cursor and tip, a right-click and, once, the press's owner",
 )];
 
-/// The page view's asks for every module's hits at a point (`PageHits::at`, `PageHits::context_at`).
-const PAGE_HITS_ASKS: [&str; 2] = [".at(", ".context_at("];
+/// The page view's asks for every module's hits at a point (`PageHits::hits`, and `at` and
+/// `context_at`, which wrap it).
+const PAGE_HITS_ASKS: [&str; 3] = [".hits(", ".at(", ".context_at("];
 
 /// The functions that ask the page view's hits at a point: (file, function, why). `PageHits` is
-/// private to `page_input.rs`, so this keeps a new place there from testing a point again; a
-/// second ask inside one of these is for review to catch.
-const PAGE_HITS_ASKERS: [(&str, &str, &str); 3] = [
+/// private to `page_input.rs`, so this keeps a new function there from asking by these names; a
+/// call by path (`PageHits::at(&hits, …)`) and a second ask inside a listed function are for
+/// review to catch.
+const PAGE_HITS_ASKERS: [(&str, &str, &str); 5] = [
+    ("canvas/page_input.rs", "at", "`PageHits::at`: the hits at a point, as a press there would take them"),
+    ("canvas/page_input.rs", "context_at", "`PageHits::context_at`: what a right-click at a point is on"),
     (
         "canvas/page_input.rs",
         "page_tool_input",

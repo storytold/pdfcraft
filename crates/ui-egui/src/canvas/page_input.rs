@@ -236,8 +236,9 @@ fn link_of(owner: Option<Owner>) -> Option<usize> {
 /// stamps, Fill & Sign, Sign area, zoom and snapshot, the camera's quadrilateral and crop act only
 /// on a press that began on this page and that no hit won (`press` is Free), and keep their cursor
 /// and gestures. The camera also drags a corner whose press it holds, and crop's double-click
-/// opens Set Page Boxes wherever it is. `over_mark`: a Fill & Sign mark takes the press, or would take one under the
-/// pointer.
+/// opens Set Page Boxes wherever it is. `over_mark`: with Fill & Sign, a hit holds the press (a
+/// mark's, or a Prepare field's), or with no button down a mark lies under the pointer, where a
+/// press would pick it up.
 fn tool_input(
     ui: &egui::Ui,
     view: &mut DocView,

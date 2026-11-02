@@ -13,8 +13,8 @@ use crate::page_router::{CommentPart, Hit, Owner, PagePress};
 /// tool, Fill & Sign over its marks, a shape tool over the selected shape's handles) is that
 /// comment's, and one nobody holds is a commenting tool's. When another tool took this frame
 /// (`taken`: Prepare, added content, which still decide for themselves), the commenting tools leave
-/// it to that tool, as before, though a click there still unselects. Returns `true` when the
-/// pointer gesture belongs to commenting (text selection must ignore it).
+/// it to that tool, as before; the Select tool's click there still unselects. Returns `true` when
+/// the pointer gesture belongs to commenting (text selection must ignore it).
 pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, press: PagePress, taken: bool, view: &mut DocView) -> bool {
     let (pointer, origin) = (cx.ptr.pos, cx.ptr.origin);
     let page_rect = cx.xf.rect;

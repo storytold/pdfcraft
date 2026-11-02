@@ -90,7 +90,7 @@ pub(crate) struct Hit {
     /// Beside the pointer where this hit wins (a link's target).
     pub tip: Option<String>,
     /// A drag from here is not this owner's: a click on a highlight selects it, a drag across it
-    /// selects the text underneath.
+    /// selects the text underneath; with the Link tool, a drag from a link draws a new one.
     pub declines_drag: bool,
 }
 
@@ -159,7 +159,12 @@ impl PageRouter {
 
     /// A press on `page`: `hits` at the press point decide who it belongs to. A press nobody's
     /// hit claims is held by nobody (the page's text, or a tool that acts anywhere on the page).
+    /// Only a press just begun ([`Self::begin`]) is claimed, by the first page that does: pages
+    /// that touch (the gaps hidden) can share a row of pixels, and a press there is one page's.
     pub(crate) fn press(&mut self, page: usize, hits: impl IntoIterator<Item = Hit>, tool: QuickTool) {
+        if self.began != Some(None) {
+            return;
+        }
         self.capture = top(hits, tool).map(|h| Capture { owner: h.owner, declines_drag: h.declines_drag });
         self.began = Some(Some(page));
     }
@@ -222,6 +227,7 @@ mod tests {
     #[test]
     fn a_press_is_held_until_the_button_is_up_and_its_release_seen() {
         let mut r = PageRouter::default();
+        r.begin();
         r.press(2, [hit(Layer::Comment, 7)], QuickTool::Select);
         assert_eq!(r.owner(2), Some(hit(Layer::Comment, 7).owner));
         assert_eq!(r.owner(1), None, "only on its page");
@@ -230,6 +236,7 @@ mod tests {
         assert!(r.owner(2).is_some(), "the release frame still belongs to the press");
         r.settle(false, false);
         assert_eq!(r.owner(2), None);
+        r.begin();
         r.press(0, [], QuickTool::Select);
         assert_eq!(r.owner(0), None, "a press nobody claims is held by nobody");
         assert!(!r.keeps_drag());
@@ -257,9 +264,21 @@ mod tests {
         assert_eq!(r.press_for(0), PagePress::Free, "a cancelled press leaves every page to the tool");
     }
 
+    /// Pages that touch (the gaps hidden) can share a row of pixels: a press there is the first
+    /// page's to claim it, and the next page's claim is ignored.
+    #[test]
+    fn a_press_where_two_pages_touch_is_the_first_pages() {
+        let mut r = PageRouter::default();
+        r.begin();
+        r.press(0, [hit(Layer::Comment, 1)], QuickTool::Select);
+        r.press(1, [hit(Layer::Comment, 2)], QuickTool::Select);
+        assert_eq!((r.press_for(0), r.press_for(1)), (PagePress::Mine(hit(Layer::Comment, 1).owner), PagePress::Elsewhere));
+    }
+
     #[test]
     fn a_highlight_lets_its_drag_go_to_the_text() {
         let mut r = PageRouter::default();
+        r.begin();
         r.press(0, [Hit { declines_drag: true, ..hit(Layer::Comment, 0) }], QuickTool::Select);
         assert!(r.owner(0).is_some() && !r.keeps_drag());
         r.cancel();
