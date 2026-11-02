@@ -1,20 +1,37 @@
-use super::common::{clamp_opt, divide, is_row, moved, solid_extent, splittable};
+use super::common::{WidgetRest, clamp_opt, divide, is_row, moved, solid_extent, split_line, split_widget, splittable, widget_box};
 use super::items::Item;
-use super::{Ctx, Frame, Layout, Layouter, MAX_DEPTH, Node, Rect, SomIndices, Subform, XfaError, data_path, instance_count};
+use super::{Ctx, Frame, Layout, Layouter, MAX_DEPTH, Node, Rect, SomIndices, Splitting, Subform, XfaError, data_path, instance_count};
 
 impl Layouter<'_> {
     /// Place `node` as one block of size (`w`, `h`) at the cursor: in this content area when it fits,
     /// in the next when it fits there, and across as many as it takes when it is taller than a
     /// content area (a positioned or fixed-height subform holding more than a page).
-    fn flow_block(&mut self, node: &Node, x: f64, (w, h): (f64, f64), ctx: &Ctx, depth: usize, sib: usize) -> Result<(), XfaError> {
+    fn flow_block(&mut self, node: &Node, x: f64, size: (f64, f64), ctx: &Ctx, depth: usize, sib: usize) -> Result<(), XfaError> {
+        self.place_block(node, x, size, ctx, depth, sib, true)
+    }
+
+    /// [`Self::flow_block`]; `may_split` is false when a field that might have been split turned
+    /// out not to be (see below), to place it as any other block.
+    #[allow(clippy::too_many_arguments)]
+    fn place_block(&mut self, node: &Node, x: f64, (w, h): (f64, f64), ctx: &Ctx, depth: usize, sib: usize, may_split: bool) -> Result<(), XfaError> {
         let (rect, y, _) = self.cursor();
-        if y + h > rect.bottom() + 0.01 && h <= rect.h + 0.01 {
+        // A field a page break may split starts here, and what doesn't fit goes on in the next
+        // content area (XFA 3.3 pp. 291–292), rather than the whole field moving there.
+        let splits = may_split && matches!(node, Node::Field(f) if f.splits_at_page_break());
+        if !splits && y + h > rect.bottom() + 0.01 && h <= rect.h + 0.01 {
             self.make_room(h, 0.0)?;
         }
         let (rect, y, _) = self.cursor();
         let first = self.pages.last().map_or(0, |p| p.items.len());
+        // What drawing it changes besides the page, to undo if it then isn't split: only a field that
+        // doesn't fit here can turn out so. The item count goes back with the items taken off the
+        // page; the measurement budget doesn't, as that work was done. (A text field draws no
+        // picture, so the picture budget is untouched.)
+        let undo = (splits && y + h > rect.bottom() + 0.01).then(|| (self.fields, self.names.clone(), self.items));
         self.leaves.clear();
+        self.field_border = None;
         self.draw_node(node, Rect::new(x, y, w, h), ctx, depth, sib)?;
+        let border_items = self.field_border.take();
         let page_h = self.pages.last().map_or(f64::INFINITY, |p| p.height);
         // What was drawn, when it is lower than the block's own height says (content that
         // outgrows a fixed height) and ends off the page.
@@ -32,7 +49,59 @@ impl Layouter<'_> {
             self.place(h);
             return Ok(());
         }
-        self.split_block(first, y, drawn)
+        let Some(som) = (if splits { self.splittable_widget_since(first, rect.bottom() - self.frames_bottom()) } else { None }) else {
+            if let Some((fields, names, items)) = undo {
+                // Not split after all (a value, or no room for a line of it here): undone, and
+                // placed as before, moving to the next content area whole.
+                if let Some(p) = self.pages.last_mut() {
+                    p.items.truncate(first);
+                }
+                self.fields = fields;
+                self.names = names;
+                self.items = items;
+                self.leaves.clear();
+                return self.place_block(node, x, (w, h), ctx, depth, sib, false);
+            }
+            return self.split_block(first, y, drawn);
+        };
+        // The field breaks into pieces, each with the field's border all round (a border's
+        // default `break="close"`, XFA 3.3 pp. 629–630): the border drawn round the whole field
+        // comes out, to be drawn round each piece once the break is known.
+        self.leaves.clear();
+        let border = match (node, border_items) {
+            (Node::Field(f), Some((start, end))) if first <= start => {
+                if let Some(p) = self.pages.last_mut()
+                    && let Some(drawn) = p.items.get(start..end)
+                    && !drawn.is_empty()
+                {
+                    p.items.drain(start..end);
+                }
+                f.common.border.as_ref()
+            }
+            _ => None,
+        };
+        self.splitting = Some(Splitting { som, rect: Rect::new(x, y, w, h), pieces: Vec::new() });
+        let split = self.split_block(first, y, drawn);
+        let pieces = self.splitting.take().map(|s| s.pieces).unwrap_or_default();
+        split?;
+        if let Some(b) = border {
+            // The last piece first: a piece's place on its page stays where it was found.
+            for (page, at, piece) in pieces.into_iter().rev() {
+                self.insert_border(b, piece, page, at)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// The SOM path of the empty widget drawn on the last page since item `first`, when the page
+    /// break at `bottom` leaves room above it for a line of its text: only then is the field split.
+    /// A value can't run on from one widget into the next piece, and a field with no line on this
+    /// page moves on whole.
+    fn splittable_widget_since(&self, first: usize, bottom: f64) -> Option<String> {
+        self.pages.last()?.items.get(first..)?.iter().find_map(|item| match item {
+            Item::Widget(w) => (w.value.as_deref().is_none_or(|v| v.trim().is_empty()) && w.rect.y + split_line(w) <= bottom).then(|| w.som.clone()),
+            _ => None,
+        })
     }
 
     /// Remember that the items the last page got since `start` are one field or draw at
@@ -68,15 +137,39 @@ impl Layouter<'_> {
                 slots.fill(Some((top, bottom)));
             }
         }
+        // The empty field being split: its widget is no solid item, so the break may go through it.
+        let (som, field) = match &self.splitting {
+            Some(s) => (Some(s.som.clone()), Some(s.rect)),
+            None => (None, None),
+        };
+        let loose = |item: &Item| matches!((item, &som), (Item::Widget(w), Some(som)) if w.som == *som);
         let mut rest: Vec<(Item, Option<(f64, f64)>)> = items.into_iter().zip(extents).collect();
         let origin_x = self.cursor().0.x;
         // An item's place on the current page is its drawn place moved by (dx, -shift).
         let (mut dx, mut shift) = (0.0, 0.0);
         let mut seg_top = top;
         let mut first_segment = true;
+        let mut widget_rest: Option<WidgetRest> = None;
         loop {
             let (rect, _, placed) = self.cursor();
-            let limit = rect.bottom() + shift;
+            // A field being split leaves room for the bottom margins of the flowed subforms round it.
+            let margins = if field.is_some() { self.frames_bottom() } else { 0.0 };
+            let mut limit = rect.bottom() - margins + shift;
+            if field.is_some() && !first_segment && limit <= seg_top + 0.01 {
+                // The subforms' margins leave nothing of this content area (a smaller one than
+                // the field started in): breaking on would leave the same nothing in each like it.
+                // The field goes on past their bottom margins, and from the top of the area when
+                // their top margins took all of it, and they, which can't hold it here, are drawn
+                // without their border, as round anything that runs out of them.
+                limit = rect.bottom() + shift;
+                if limit <= seg_top + 0.01 {
+                    shift = seg_top - rect.y;
+                    limit = rect.bottom() + shift;
+                }
+                for f in &mut self.frames {
+                    f.lost = true;
+                }
+            }
             let mut cut = limit;
             if rect.h < 1.0 {
                 // No room to split into: leave the rest here.
@@ -85,8 +178,12 @@ impl Layouter<'_> {
                 // The lowest break at or above the bottom that crosses no solid item: going
                 // through them from the lowest top up, a break moved to an item's top can't
                 // cross one already passed.
-                let mut solid: Vec<(f64, f64)> =
-                    rest.iter().filter_map(|(item, kept)| kept.or_else(|| solid_extent(item))).filter(|e| e.0 < limit - 0.01).collect();
+                let mut solid: Vec<(f64, f64)> = rest
+                    .iter()
+                    .filter(|(item, _)| !loose(item))
+                    .filter_map(|(item, kept)| kept.or_else(|| solid_extent(item)))
+                    .filter(|e| e.0 < limit - 0.01)
+                    .collect();
                 solid.sort_by(|a, b| b.0.total_cmp(&a.0));
                 for (t, b) in solid {
                     if t < cut - 0.01 && b > cut + 0.01 {
@@ -101,7 +198,28 @@ impl Layouter<'_> {
             }
             let mut here = Vec::new();
             let mut below = Vec::new();
+            // The rest of the split widget's box: a piece down to this break, closed on every
+            // side, and what is left of it goes on.
+            if let Some((r, border)) = widget_rest.take() {
+                let bottom = r.bottom().min(cut);
+                if bottom - r.y > 0.01 {
+                    here.extend(widget_box(Rect::new(r.x, r.y, r.w, bottom - r.y), &border));
+                }
+                if r.bottom() > cut + 0.01 {
+                    let y = cut.max(r.y);
+                    widget_rest = Some((Rect::new(r.x, y, r.w, r.bottom() - y), border));
+                }
+            }
             for (item, kept) in rest {
+                if loose(&item) {
+                    let (upper, whole, rest_box) = split_widget(item, cut);
+                    here.extend(upper);
+                    below.extend(whole.map(|it| (it, None)));
+                    if rest_box.is_some() {
+                        widget_rest = rest_box;
+                    }
+                    continue;
+                }
                 if let Some((top, _)) = kept {
                     if top < cut - 0.01 {
                         here.push(item)
@@ -120,10 +238,28 @@ impl Layouter<'_> {
                     (None, None) => {}
                 }
             }
+            // The piece of the field being split on this page, where its border goes.
+            if let Some(f) = field {
+                let (from, to) = (f.y.max(seg_top), f.bottom().min(cut));
+                let page = self.pages.len().saturating_sub(1);
+                let at = self.pages.last().map_or(0, |p| p.items.len());
+                if to - from > 0.01
+                    && let Some(s) = &mut self.splitting
+                {
+                    s.pieces.push((page, at, Rect::new(f.x + dx, from - shift, f.w, to - from)));
+                    // The flowed subforms round it hold this piece here, even if it draws nothing.
+                    let here: Vec<bool> = self.frames.iter().map(|fr| self.on_area(&fr.part)).collect();
+                    for (fr, here) in self.frames.iter_mut().zip(here) {
+                        fr.held |= here;
+                    }
+                }
+            }
             if let Some(p) = self.pages.last_mut() {
                 p.items.extend(here.into_iter().map(|it| moved(it, dx, -shift)));
             }
-            if below.is_empty() {
+            // A field being split goes on to its own bottom, even when what is left of it draws
+            // nothing (no fill, no border).
+            if below.is_empty() && widget_rest.is_none() && !field.is_some_and(|f| f.bottom() > cut + 0.01) {
                 if let Some(c) = &mut self.cur {
                     c.y = (end - shift).min(c.rect.bottom()).max(c.y);
                     c.placed = true;
@@ -134,9 +270,23 @@ impl Layouter<'_> {
             rest = below;
             seg_top = cut;
             first_segment = false;
-            self.next_area()?;
-            let (rect, _, _) = self.cursor();
-            shift = cut - rect.y;
+            let (rect, y) = if field.is_some() {
+                // A field breaks the flowed subforms round it as a field moving on whole does:
+                // each closes its part at the break and opens a new one, after its top margin,
+                // in the next content area.
+                if let Some(c) = &mut self.cur {
+                    c.y = (cut - shift).min(c.rect.bottom()).max(c.y);
+                    c.placed = true;
+                }
+                self.break_frames(0.0, false)?;
+                let (rect, y, _) = self.cursor();
+                (rect, y)
+            } else {
+                self.next_area()?;
+                let (rect, _, _) = self.cursor();
+                (rect, rect.y)
+            };
+            shift = cut - y;
             dx = rect.x - origin_x;
         }
     }
@@ -179,7 +329,7 @@ impl Layouter<'_> {
             // Its border and fill go round what it takes from here, a part on each content area.
             let framed = match self.flow_mark() {
                 Some(part) => {
-                    self.frames.push(Frame { x, w, margin: m, border: sf.common.border.clone(), part, parts: Vec::new(), lost: false });
+                    self.frames.push(Frame { x, w, margin: m, border: sf.common.border.clone(), part, parts: Vec::new(), lost: false, held: false });
                     true
                 }
                 None => false,

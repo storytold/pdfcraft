@@ -116,6 +116,10 @@ struct Frame {
     /// the area's bottom (a table row taller than an area, an overflow leader and the row after it
     /// that don't fit together). The border is left out ([`Layouter::finish_frame`]).
     lost: bool,
+    /// A piece of a field being split sits in the part on this content area, whether or not it
+    /// drew anything there (a widget with no border or fill draws nothing below the break): the
+    /// part counts as holding something, as one that got items does.
+    held: bool,
 }
 
 struct Cursor {
@@ -125,6 +129,15 @@ struct Cursor {
     y: f64,
     /// Something from the flow was placed in this content area.
     placed: bool,
+}
+
+/// An empty field a page break is splitting ([`Layouter::splitting`]): its widget's SOM path, its
+/// box where it was drawn, and its pieces so far (page index, the page's first item of the piece,
+/// the piece's box).
+struct Splitting {
+    som: String,
+    rect: Rect,
+    pieces: Vec<(usize, usize, Rect)>,
 }
 
 struct Layouter<'t> {
@@ -152,6 +165,10 @@ struct Layouter<'t> {
     /// The fields and draws of the block being placed: (first item, one past the last, top,
     /// bottom) on the last page. A page break keeps each whole (see `split_block`).
     leaves: Vec<(usize, usize, f64, f64)>,
+    /// The empty field a page break is splitting (see `flow_block` and `split_block`).
+    splitting: Option<Splitting>,
+    /// The items `draw_field` drew for the border of the field drawn last: (first, one past the last).
+    field_border: Option<(usize, usize)>,
     /// The flowed subforms being laid out, outermost first: a break between their children
     /// closes their parts on one content area and opens new ones on the next.
     frames: Vec<Frame>,
@@ -200,6 +217,8 @@ pub fn layout(tpl: &Template, data: Option<&DataNode>) -> Result<Form, XfaError>
         measured: RefCell::new(HashMap::new()),
         measures: Cell::new(0),
         leaves: Vec::new(),
+        splitting: None,
+        field_border: None,
         frames: Vec::new(),
     };
     let ctx = Ctx { font: Font::default(), para: Para::default(), som: String::new() };
@@ -214,6 +233,8 @@ pub fn layout(tpl: &Template, data: Option<&DataNode>) -> Result<Form, XfaError>
     for p in &mut l.pages {
         fill_page_count(&mut p.items, &count);
     }
+    #[cfg(test)]
+    LAID_OUT_ITEMS.with(|c| c.set(l.items));
     Ok(Form { pages: l.pages, fields: l.fields, warnings: l.warnings })
 }
 
@@ -232,4 +253,10 @@ fn fill_page_count(items: &mut [Item], count: &str) {
 #[cfg(test)]
 thread_local! {
     pub(crate) static EMBED_COPIED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+// The item count the last layout on this thread ended with, against `MAX_ITEMS`.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static LAID_OUT_ITEMS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
