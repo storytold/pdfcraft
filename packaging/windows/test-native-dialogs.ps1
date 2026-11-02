@@ -154,6 +154,12 @@ try {
           $nativeClass = @{ Text = 'Static'; CheckBox = 'Button'; PushButton = 'Button' }[$control.Type]
           if (-not $nativeClass) { throw "Unaccounted native text control type $($control.Type)" }
           $matching = @($elements | Where-Object { Test-NativeControlIdentity $_.Current $expected $nativeClass $child.Id })
+          if ($control.HideCondition) {
+            # Scope-dependent twins (Install/InstallUser, Description/DescriptionUser) share a
+            # position and sometimes a text; only the one the preview context shows is checked.
+            $matching = @($matching | Where-Object { -not $_.Current.IsOffscreen -and -not $seenHandles.ContainsKey($_.Current.NativeWindowHandle) } | Select-Object -First 1)
+            if ($matching.Count -eq 0) { continue }
+          }
           if ($matching.Count -ne 1) { throw "$id.$($control.Id): expected one native $nativeClass with exact Unicode text '$expected' in the preview process; found $($matching.Count)." }
           $element = $matching[0].Current
           if ($seenHandles.ContainsKey($element.NativeWindowHandle) -or $seenIds.ContainsKey($element.AutomationId)) {
