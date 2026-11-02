@@ -1841,14 +1841,54 @@ fn the_quick_bar_fill_button_shows_the_tool_it_picks() {
     h.get_by_label("Fill & Sign: Checkmark").click();
     h.run_steps(2);
     assert_eq!(h.state().quick_tool, QuickTool::Fill(FillTool::Check), "the button keeps the last Fill & Sign tool");
+}
 
-    h.state_mut().quick_tool = QuickTool::Fill(FillTool::Initials);
+#[test]
+fn a_restored_fill_tool_shows_without_replacing_the_last_selection() {
+    let mut h = harness();
+    h.state_mut().execute("sign.fill.date");
     h.run_steps(2);
+    h.state_mut().apply_full_screen(true);
+    h.run_steps(2);
+    h.state_mut().execute("sign.fill.check");
+    h.run_steps(2);
+    h.state_mut().apply_full_screen(false);
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::Fill(FillTool::Date));
+    h.get_by_label("Fill & Sign: Date");
+
     h.state_mut().quick_tool = QuickTool::Select;
     h.run_steps(2);
-    h.get_by_label("Fill & Sign: Add initials").click();
+    h.get_by_label("Fill & Sign: Checkmark").click();
     h.run_steps(2);
-    assert_eq!(h.state().quick_tool, QuickTool::Fill(FillTool::Initials), "a tool restored without a command still updates the button");
+    assert_eq!(h.state().quick_tool, QuickTool::Fill(FillTool::Check));
+}
+
+#[test]
+fn a_fill_tool_selected_while_the_quick_bar_is_hidden_is_remembered() {
+    let mut h = harness();
+    let mode = h.state().mode;
+    h.state_mut().set_option("mode", "read").unwrap();
+    h.run_steps(2);
+    h.state_mut().set_option("quick", "fill-date").unwrap();
+    h.run_steps(2);
+    h.state_mut().set_option("quick", "select").unwrap();
+    h.state_mut().mode = mode;
+    h.run_steps(2);
+    h.get_by_label("Fill & Sign: Date");
+
+    h.state_mut().initials = Some(SavedSig::Typed("AL".into()));
+    h.state_mut().set_option("mode", "read").unwrap();
+    h.run_steps(2);
+    h.state_mut().execute("sign.fill.initials.change");
+    h.run_steps(2);
+    h.get_by_label("Apply").click();
+    h.run_steps(3);
+    assert_eq!(h.state().quick_tool, QuickTool::Fill(FillTool::Initials));
+    h.state_mut().quick_tool = QuickTool::Select;
+    h.state_mut().mode = mode;
+    h.run_steps(2);
+    h.get_by_label("Fill & Sign: Place saved initials");
 }
 
 #[test]
