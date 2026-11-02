@@ -775,16 +775,13 @@ fn card_javascript(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ctx: &m
     );
 }
 
-/// Preferences dialog buttons: Cancel and OK on the right. Returns true to close.
+/// Preferences dialog buttons: OK on the right. Returns true to close.
 pub(crate) fn preferences_buttons(ui: &mut egui::Ui) -> bool {
     ui.add_space(10.0);
     let mut close = false;
     ui.horizontal(|ui| {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if widgets::pill_button(ui, tl!("OK"), true).clicked() {
-                close = true;
-            }
-            if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
                 close = true;
             }
         });

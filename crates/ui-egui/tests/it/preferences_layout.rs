@@ -151,15 +151,6 @@ fn segmented_pill_controls_switch_modes_and_layouts() {
 }
 
 #[test]
-fn cancel_button_closes_preferences_dialog() {
-    let mut h = harness(900.0);
-    assert!(h.state().dialog.is_some());
-    h.get_by_label("Cancel").click();
-    h.run_steps(3);
-    assert!(h.state().dialog.is_none());
-}
-
-#[test]
 fn search_settings_scans_and_highlights_in_situ_without_hiding_cards() {
     let mut h = harness(900.0);
     // Initially all card titles exist
@@ -213,10 +204,7 @@ fn preferences_dialog_scrollbar_spacing_and_controls() {
     let title = h.get_by(|n| n.role() == egui::accesskit::Role::Label && n.value().as_deref() == Some("Preferences")).rect();
     let search = h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Search settings…").rect();
     let ok = h.get_by_label("OK").rect();
-    let cancel = h.get_by_label("Cancel").rect();
-    assert!(cancel.min.x < ok.min.x);
     assert!(on_screen(ok, 600.0));
-    assert!(on_screen(cancel, 600.0));
     // Header title and search box are vertically aligned
     assert!((title.center().y - search.center().y).abs() <= 2.0);
     // Search box right edge is aligned within the dialog
