@@ -98,7 +98,7 @@ impl PdfCraftApp {
     /// the Recovery dialog offers, so neither opens twice.
     ///
     /// Only one password prompt can wait at a time: the first encrypted file asks for its
-    /// password and later ones stay closed (they are in the recent-files list).
+    /// password and later ones stay closed (in the recent-files list, if there is one).
     ///
     /// Pinned tabs (#2926) open first, whatever the preference says: they are the files meant
     /// to be open at every start. One that is missing now (a drive not connected) stays pinned.

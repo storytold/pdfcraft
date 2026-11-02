@@ -73,6 +73,7 @@ impl PdfCraftApp {
             default_mode: Mode::AllTools,
             view_defaults: Default::default(),
             units: Default::default(),
+            blank_paper: crate::paper::Paper::system(),
             date_format_draft: None,
             mode_override: None,
             left: LeftPanel::AllTools,
@@ -118,6 +119,7 @@ impl PdfCraftApp {
             all_tools_query: String::new(),
             all_tools_tab: (None, false),
             recent: Vec::new(),
+            recent_limit: crate::RECENT_FILES_DEFAULT,
             reopen_last_session: false,
             restore_last_view: true,
             pinned_tabs: Vec::new(),
@@ -409,6 +411,10 @@ impl eframe::App for PdfCraftApp {
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
         // The button's release a window move or resize kept from egui.
         window_controls::release_after_desktop_grab(ctx, raw);
+        // The wheel after Alt+Tab back, before the mouse has moved (#1518).
+        let known = ctx.input(|i| i.pointer.latest_pos().is_some());
+        let size = ctx.input(|i| i.viewport().inner_rect).map_or(egui::Vec2::ZERO, |r| r.size());
+        drag_pointer::locate_wheel(raw, known, size, || drag_pointer::in_window(ctx));
         self.prepare_raw_input(ctx, raw);
         if raw.hovered_files.is_empty() && raw.dropped_files.is_empty() {
             return;
