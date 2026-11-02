@@ -1,4 +1,4 @@
-use super::{Arc, HashMap, RenderConfig, RenderPool, RenderRequest, Retiring, TextureHandle};
+use super::{Arc, HashMap, RenderPool, RenderRequest, Retiring, TextureHandle, thumbnail_config};
 
 /// Render threads for thumbnails at once, counting those of retired pools until they exit.
 pub(super) const MAX_THREADS: usize = 3;
@@ -319,7 +319,7 @@ impl Thumbs {
                 waiting = true;
                 break;
             }
-            let config = RenderConfig { password: w.password, ..Default::default() };
+            let config = thumbnail_config(w.password);
             #[cfg(test)]
             let pool = if self.inline { RenderPool::new_inline(w.bytes, config) } else { RenderPool::new(w.bytes, 1, config).without_replacements() };
             #[cfg(not(test))]

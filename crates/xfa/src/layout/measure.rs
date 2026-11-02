@@ -162,7 +162,7 @@ impl Layouter<'_> {
             Layout::Positioned => visible
                 .map(|(i, k)| {
                     let (w, h) = self.size_at(k, avail_w, ctx, depth + 1, sibs.at(i));
-                    k.common().top_left(w, h).0 + w
+                    k.standing_box(w, h).right()
                 })
                 .fold(0.0, f64::max)
                 .min(avail_w),
@@ -330,7 +330,7 @@ impl Layouter<'_> {
             .map(|(i, k)| {
                 let c = k.common();
                 let (w, h) = self.size_at(k, (inner_w - c.x.unwrap_or(0.0)).max(1.0), ctx, depth + 1, sibs.at(i));
-                c.top_left(w, h).1 + h
+                k.standing_box(w, h).bottom()
             })
             .fold(0.0, f64::max)
     }
