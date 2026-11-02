@@ -86,6 +86,10 @@ pub struct RenderConfig {
     /// The render is output for printing (print as image): the configuration's auto state for
     /// the View event (ISO 32000-2 §8.11.4.4) is not applied, since printing is not viewing.
     pub for_print: bool,
+    /// Steps of JBIG2 decoding a render may take across the page's images, instead of the usual
+    /// `hayro_syntax::MAX_PAGE_JBIG2_WORK`. Those past it aren't drawn, like an image that can't
+    /// be decoded.
+    pub jbig2_work: Option<u64>,
 }
 
 impl RenderConfig {
@@ -103,7 +107,8 @@ impl RenderConfig {
     /// Passwords belong to parser construction; request-specific preview overrides are applied
     /// by `render_page`, which also preserves the caller's warning and cancellation hooks.
     fn settings(&self) -> InterpreterSettings {
-        let standard = InterpreterSettings::default().font_resolver;
+        let defaults = InterpreterSettings::default();
+        let standard = defaults.font_resolver.clone();
         let system_fonts = self.system_fonts;
         InterpreterSettings {
             ocg_overrides: self.layers.clone(),
@@ -112,7 +117,8 @@ impl RenderConfig {
             font_resolver: Arc::new(move |query| {
                 japanese_fallback(query).or_else(|| system_fonts.then(|| system_fallback(query)).flatten()).or_else(|| standard(query))
             }),
-            ..InterpreterSettings::default()
+            jbig2_work: self.jbig2_work.unwrap_or(defaults.jbig2_work),
+            ..defaults
         }
     }
 }

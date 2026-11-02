@@ -218,6 +218,8 @@ impl<'a> Context<'a> {
         NESTED_PAINTS.with(|n| n.set(0));
         CONTENT_LEFT.with(|c| c.set(MAX_PAGE_CONTENT));
         CONTENT_TRUNCATED.with(|truncated| truncated.set(false));
+        // PdfCraft patch (73): and fresh JBIG2 decoding, which every image of it shares.
+        hayro_syntax::set_page_jbig2_work(settings.jbig2_work);
         // PdfCraft patch (55): a fallback left over from another page is not this page's.
         crate::color::take_color_fallback();
         crate::encode::reset_mesh_budget();
