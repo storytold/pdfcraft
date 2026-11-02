@@ -1688,6 +1688,48 @@ fn a_refused_redaction_counts_what_cant_be_stored() {
     }
 }
 
+/// An image that names the dictionary and another one is stored again without both, but the other
+/// was shared with nothing that left: an image that uses only it stays as it was, whichever of the
+/// two comes first in the file, and so does that dictionary.
+#[test]
+fn another_dictionary_named_beside_it_stays_whatever_the_order() {
+    let scan = shared_scan();
+    let other_dictionary = stream("", [jbig2_globals(b"OTHER_GLOBALS"), scan.symbols.clone()].concat());
+    let only_other = shared_image("/DecodeParms << /JBIG2Globals 11 0 R >>");
+    let chained = "/Type /XObject /Subtype /Image /Width 400 /Height 40 /BitsPerComponent 1 /ColorSpace /DeviceGray /Filter [/FlateDecode /JBIG2Decode] /DecodeParms [<< /JBIG2Globals 11 0 R >> << /JBIG2Globals 9 0 R >>]";
+    let both_spellings = [
+        (chained.to_string(), pdfcraft_filters::encode_flate(&scan.page)),
+        (format!("{} /DP << /JBIG2Globals 11 0 R >>", shared_image(SHARED)), scan.page.clone()),
+    ];
+    let other_stays = |doc: &Document| {
+        let saved = reopen(doc);
+        saved.scan_objects().any(|(_, o)| matches!(&*o, Object::Stream(s) if s.raw.windows(13).any(|w| w == b"OTHER_GLOBALS")))
+    };
+    for (both, data) in both_spellings {
+        // Image 8 is drawn on the second page, and image 10 is its alternate.
+        let only_other_first = SharedPages {
+            other: format!("{only_other} /Alternates [<< /Image 10 0 R >>]"),
+            extra: vec![stream(&both, data.clone()), other_dictionary.clone()],
+            ..SharedPages::new(&scan)
+        };
+        let both_first = SharedPages {
+            other: format!("{both} /Alternates [<< /Image 10 0 R >>]"),
+            other_data: data.clone(),
+            extra: vec![stream(&only_other, scan.page.clone()), other_dictionary.clone()],
+            ..SharedPages::new(&scan)
+        };
+        for (pages, only_other_at) in [(only_other_first, 8), (both_first, 10)] {
+            let mut doc = pages.build(&scan);
+            let untouched = doc.get(pdfcraft_cos::ObjRef::new(only_other_at, 0));
+            mark(&mut doc, 0, &[CLEARS], "");
+            assert_eq!(apply(&mut doc, None).unwrap().images_restored, 1, "{both}");
+            assert_gone(&doc, b"LEAK_GLOBALS");
+            assert!(other_stays(&doc), "{both}");
+            assert_eq!(doc.get(pdfcraft_cos::ObjRef::new(only_other_at, 0)), untouched, "{both}");
+        }
+    }
+}
+
 /// Remove Hidden Information leaves the same way: comments go, with what their appearances drew.
 #[test]
 fn removing_hidden_information_takes_a_shared_jbig2_dictionary_too() {

@@ -71,7 +71,7 @@ pub enum RedactError {
     /// could not be shown complete.
     #[error("the document's objects nest too deeply to remove hidden information completely; the operation was refused")]
     TooDeep,
-    /// `/JBIG2Globals` used by something removed would stay: a JBIG2 image shares them and can't be
+    /// `/JBIG2Globals` used by something removed would stay: something that names them can't be
     /// stored again without them, or something else refers to them. Either way the shapes they
     /// hold, those of marks under the area included, would stay. Counts what can't be stored without
     /// them: 0 when only something else keeps them.

@@ -157,11 +157,14 @@ pub(crate) fn unshare(doc: &mut Document, before: &HashSet<u32>) -> Result<usize
         if !now.contains(&r.num) {
             continue;
         }
-        let names = named(doc, s);
         let copy =
             |n: &u32, read: &mut HashMap<u32, Option<u64>>| read.entry(*n).or_insert_with(|| content(doc, *n)).is_some_and(|c| contents.contains(&c));
-        if names.iter().any(|n| dictionaries.contains(n) || copy(n, &mut read)) {
-            dictionaries.extend(names);
+        // Only what matched has to leave, a copy found here included. Another dictionary this also
+        // names was shared with nothing that left: what else uses it may keep it, whichever comes
+        // first in the file.
+        let matched: Vec<u32> = named(doc, s).into_iter().filter(|n| dictionaries.contains(n) || copy(n, &mut read)).collect();
+        if !matched.is_empty() {
+            dictionaries.extend(matched);
             users.push(r);
         }
     }
