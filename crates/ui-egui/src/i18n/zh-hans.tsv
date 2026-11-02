@@ -8,6 +8,10 @@
 # Product and technology names (PdfCraft, PDF, Acrobat JavaScript ...) stay in Latin letters;
 # the trailing "…" of dialog commands is kept.
 
+# Untranslated: English text until a translator fills these in.
+	Lowering this forgets the oldest files. At 0 there is no list.	Lowering this forgets the oldest files. At 0 there is no list.
+	Recent files to keep	Recent files to keep
+
 # About, contributor/model credits, and multiline interface guidance.
 	About	关于
 	Contributors	贡献者
@@ -492,14 +496,9 @@
 	Copy Image in Original Format	以原始格式复制图像
 	The image has been copied as a {ext} file	图像已复制为 {ext} 文件
 	The page has changed; select the image again	页面已更改；请重新选择图像
-	Check for updates	检查更新
 	No check has run yet.	尚未运行检查。
-	Checking for a newer version…	正在检查新版本…
 	PdfCraft {v} is available.	PdfCraft {v} 可用。
 	You have version {c}. Download the new version from its release page.	当前版本为 {c}。请从其发布页面下载新版本。
-	PdfCraft {c} is up to date.	PdfCraft {c} 已是最新。
-	Couldn't check for updates: {e}	无法检查更新：{e}
-	You have version {c}. All releases are listed at {page}.	当前版本为 {c}。所有版本列在 {page}。
 	Asks GitHub for the latest release. Nothing is downloaded or installed automatically.	向 GitHub 查询最新版本。不会自动下载或安装任何内容。
 	Download	下载
 	Later	稍后
@@ -2485,6 +2484,26 @@ animation effects	Off	关
 	Pages selected	选定的页面
 	Page properties	页面属性
 	Between paragraphs: press Enter in the box to start one	段落之间：在框中按 Enter 开始新段落
+	Clear search	清除搜索
+	Pin	固定
+	Pin a tool…	固定工具…
+	Pin to Home	固定到主页
+	Pin tools to Home	将工具固定到主页
+	Pin your favorite tools here for quick access.	将常用的工具固定在此处以便快速访问。
+	Pinned	已固定
+	Pinned Tools	已固定的工具
+	Search tools…	搜索工具…
+	Select tools to display on your Home page for quick access.	选择要在主页上显示的工具以便快速访问。
+	Unpin from Home	从主页取消固定
+	Unpin tool	取消固定工具
+	Transform image	变换图像
+	Select Tool	选择工具
+	Hand Tool	手形工具
+	Marquee Zoom	选框缩放
+	Paste	粘贴
+	Edit this PDF	编辑此 PDF
+	Export this PDF	导出此 PDF
+	Find text or tools	查找文本或工具
 	Create & Edit	创建和编辑
 	Review & Compare	审阅和比较
 	Forms & Signatures	表单和签名
@@ -2532,6 +2551,13 @@ animation effects	Off	关
 	field names can't contain a period: {name}	字段名称不能包含句点：{name}
 	two cells would both be named {name}	两个单元格的名称都会是 {name}
 	a field named {name} already exists	已存在名为 {name} 的字段
+	Arrange image	排列图像
+	Bring forward	上移一层
+	Bring to front	置于顶层
+	Crop	裁剪
+	Remove crop	移除裁剪
+	Send backward	下移一层
+	Send to back	置于底层
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	今天
@@ -2548,3 +2574,11 @@ animation effects	Off	关
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	此回复的选项
 	Export value	导出值
+	Show Page Edge Shadows	显示页面边缘阴影
+
+# Image paste and Home notifications (AI-assisted; not separately native-reviewed)
+	Search…	搜索…
+	Image pasted	已粘贴图像
+	No image on clipboard to paste	剪贴板中没有可粘贴的图像
+	Pinned {tool} to Home	已将 {tool} 固定到主页
+	Unpinned {tool} from Home	已从主页取消固定 {tool}

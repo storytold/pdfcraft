@@ -19,6 +19,10 @@
 # each rendered line. The Persian comma \u060c and question mark \u061f are used, and \u200c (ZWNJ) joins
 # compound words.
 
+# Untranslated: English text until a translator fills these in.
+	Lowering this forgets the oldest files. At 0 there is no list.	Lowering this forgets the oldest files. At 0 there is no list.
+	Recent files to keep	Recent files to keep
+
 	Menu	منو
 	File	فایل
 	Edit	ویرایش
@@ -818,14 +822,9 @@
 	Copy Image in Original Format	کپی تصویر در قالب اصلی
 	The image has been copied as a {ext} file	تصویر به‌صورت یک فایل {ext} کپی شد
 	The page has changed; select the image again	صفحه تغییر کرده است؛ تصویر را دوباره انتخاب کنید
-	Check for updates	بررسی به‌روز‌رسانی‌ها
 	No check has run yet.	هنوز هیچ بررسیای انجام نشده است.
-	Checking for a newer version…	بررسی برای نگارش تازه‌تر…
 	PdfCraft {v} is available.	PdfCraft {v} در دسترس است.
 	You have version {c}. Download the new version from its release page.	شما نگارش {c} را دارید. نگارش جدید را از صفحه انتشار آن دانلود کنید.
-	PdfCraft {c} is up to date.	PdfCraft {c} به‌روز است.
-	Couldn't check for updates: {e}	بررسی به‌روز‌رسانی‌ها انجام نشد: {e}
-	You have version {c}. All releases are listed at {page}.	شما نگارش {c} را دارید. همه انتشار‌ها در {page} فهرست شدهاند.
 	Asks GitHub for the latest release. Nothing is downloaded or installed automatically.	آخرین انتشار را از GitHub می‌پرسد. هیچ چیزی به‌طور خودکار دانلود یا نصب نمی‌شود.
 	Download	دانلود
 	Later	بعداً
@@ -2821,3 +2820,10 @@ theme	Appearance	ظاهر
 
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	گزینه‌های این پاسخ
+
+# Image paste and Home notifications (AI-assisted; not separately native-reviewed)
+	Search…	جستجو…
+	Image pasted	تصویر چسبانده شد
+	No image on clipboard to paste	تصویری در حافظهٔ موقت برای چسباندن نیست
+	Pinned {tool} to Home	{tool} به خانه سنجاق شد
+	Unpinned {tool} from Home	{tool} از خانه جدا شد
