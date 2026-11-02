@@ -46,6 +46,9 @@ tiff = "0.11"
 url = "2.5"
 idna = "1.1"
 icu_properties = "2.3"
+# Already in the graph through url: `%XX` escapes in mailto: addresses
+# (links::check_mail_parameters).
+percent-encoding = { workspace = true }
 unicode-segmentation = "1.13"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]

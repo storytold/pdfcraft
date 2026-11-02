@@ -305,21 +305,7 @@ fn check_mail_layer(text: &str) -> Result<(), BlockedLink> {
 
 /// Decode `%XX` escapes. A `%` not followed by two hex digits is kept as it is.
 fn percent_decode(s: &[u8]) -> Vec<u8> {
-    let hex = |b: Option<&u8>| b.and_then(|b| char::from(*b).to_digit(16)).and_then(|d| u8::try_from(d).ok());
-    let mut out = Vec::with_capacity(s.len());
-    let mut i = 0;
-    while let Some(&b) = s.get(i) {
-        if b == b'%'
-            && let (Some(high), Some(low)) = (hex(s.get(i + 1)), hex(s.get(i + 2)))
-        {
-            out.push((high << 4) | low);
-            i += 3;
-        } else {
-            out.push(b);
-            i += 1;
-        }
-    }
-    out
+    percent_encoding::percent_decode(s).collect()
 }
 
 /// The authority of a web address: what follows `//`, up to the first `/`, `\`, `?` or `#`.
