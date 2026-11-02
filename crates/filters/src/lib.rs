@@ -7,9 +7,27 @@
 //! Image codecs (`DCTDecode`, `JPXDecode`, `JBIG2Decode`, `CCITTFaxDecode`),
 //! `Crypt` and unknown filters are reported as [`FilterError::Unsupported`] so
 //! callers keep such data encoded. CCITT fax and JBIG2 images decode on their own
-//! ([`decode_ccitt`], [`decode_jbig2`]), as `pdfcraft_cos::Document::decoded_image`
-//! does after the filters before them. 1-bit samples can be encoded as CCITT Group 4
-//! ([`encode_g4`]) or lossless JBIG2 ([`encode_jbig2`]).
+//! ([`decode_ccitt_within`], [`decode_jbig2_within`]), each spending from an allowance its caller
+//! shares across a run of images, as `pdfcraft_cos::ImageBudget::decode` does after the filters
+//! before them. Neither decodes without one:
+//!
+//! ```compile_fail
+//! let _ = pdfcraft_filters::decode_jbig2(&[], None, 1, 1, 1 << 20);
+//! ```
+//!
+//! ```compile_fail
+//! let _ = pdfcraft_filters::decode_ccitt(&[], &pdfcraft_filters::CcittParams::default(), 1);
+//! ```
+//!
+//! ```
+//! let mut work = 1 << 20;
+//! assert!(pdfcraft_filters::decode_jbig2_within(&[], None, 1, 1, 1 << 20, &mut work).is_err());
+//! let p = pdfcraft_filters::CcittParams { columns: 8, ..Default::default() };
+//! assert!(pdfcraft_filters::decode_ccitt_within(&[], &p, 1, &mut work).is_ok());
+//! ```
+//!
+//! 1-bit samples can be encoded as CCITT Group 4 ([`encode_g4`]) or lossless JBIG2
+//! ([`encode_jbig2`]).
 //!
 //! Every decoder is bounded by a caller-supplied `max_output` (decompression-bomb
 //! defence) and never panics on malformed input.
@@ -28,8 +46,8 @@ mod runlength;
 
 use std::borrow::Cow;
 
-pub use ccitt::{CcittParams, MAX_CCITT_COLUMNS, MAX_G4_COLUMNS, decode_ccitt, decode_ccitt_within, encode_g4};
-pub use jbig2::{MAX_JBIG2_COLUMNS, MAX_JBIG2_PIXELS, decode_jbig2, decode_jbig2_within, encode_jbig2, encode_jbig2_generic};
+pub use ccitt::{CcittParams, MAX_CCITT_COLUMNS, MAX_G4_COLUMNS, decode_ccitt_within, encode_g4};
+pub use jbig2::{MAX_JBIG2_COLUMNS, MAX_JBIG2_PIXELS, decode_jbig2_within, encode_jbig2, encode_jbig2_generic};
 
 /// A PDF stream filter, identified by its `/Filter` name.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]

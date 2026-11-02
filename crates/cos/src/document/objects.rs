@@ -274,34 +274,23 @@ impl Document {
         .unwrap_or_default()
     }
 
-    /// The samples of image `s`, decoded: through its filters ([`Stream::decoded`]), or, for a
-    /// CCITT fax or JBIG2 image (its last filter), through the filters before it and then
-    /// [`pdfcraft_filters::decode_ccitt`] with its [`Document::fax_params`], or
-    /// [`pdfcraft_filters::decode_jbig2`] with its `/JBIG2Globals`, as `CCITTFaxDecode` and
-    /// `JBIG2Decode` give them (ISO 32000-2 §7.4.6, §7.4.7). Parameters given by reference count,
-    /// for every filter ([`Document::with_direct_parms`]). A fax image's `/Columns` has to be its
-    /// `/Width`, and a JBIG2 image's page its `/Width` × `/Height`: PdfCraft's renderer draws the
-    /// whole page into the image. Up to its `/Height` rows are decoded, whatever a fax image's `/Rows` says,
-    /// within [`MAX_DECODED`] bytes; damaged fax data gives fewer, so a caller checks it has the
-    /// rows it needs. Damaged JBIG2 data, and globals that can't be read (within
-    /// [`MAX_JBIG2_GLOBALS`]), are an error.
-    pub fn decoded_image(&self, s: &Stream) -> Result<Vec<u8>, CosError> {
+    /// [`Document::decoded_image_spending`] with no limit on the work, for tests of what an image
+    /// decodes to: everything else decodes images through an [`ImageBudget`](crate::ImageBudget).
+    #[cfg(test)]
+    pub(crate) fn decoded_image(&self, s: &Stream) -> Result<Vec<u8>, CosError> {
         self.decoded_image_within(s, MAX_DECODED)
     }
 
-    /// [`Document::decoded_image`] for an image whose decoding has a tighter bound than
-    /// [`MAX_DECODED`]: no stage, the filters before a fax or JBIG2 decoder included, may produce
-    /// more than `max` bytes. A JBIG2 image's `/JBIG2Globals` are another stream, shared between
-    /// images, and are decoded within [`MAX_JBIG2_GLOBALS`] whatever `max` is.
-    pub fn decoded_image_within(&self, s: &Stream, max: usize) -> Result<Vec<u8>, CosError> {
+    /// [`Document::decoded_image`] within `max` bytes.
+    #[cfg(test)]
+    pub(crate) fn decoded_image_within(&self, s: &Stream, max: usize) -> Result<Vec<u8>, CosError> {
         let mut unbounded = u64::MAX;
         self.decoded_image_spending(s, max, &mut unbounded)
     }
 
-    /// [`Document::decoded_image_within`], spending from `work`, what an operation may still do
-    /// across its images ([`ImageBudget`](crate::ImageBudget)): each filter as it runs, a JBIG2
-    /// image's globals when they have to be read, and the fax or JBIG2 decoder. With nothing left an
-    /// image is refused before anything is read, its globals included.
+    /// The samples of image `s`, decoded within `max` bytes ([`MAX_DECODED`] at most), spending from
+    /// `work`: see [`ImageBudget::decode`](crate::ImageBudget::decode), the way in from outside this
+    /// crate, which says what this decodes and how.
     pub(crate) fn decoded_image_spending(&self, s: &Stream, max: usize, work: &mut u64) -> Result<Vec<u8>, CosError> {
         let max = max.min(MAX_DECODED);
         let s = &*self.with_direct_parms(s);

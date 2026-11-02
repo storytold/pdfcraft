@@ -2,7 +2,7 @@
 //! whose footprint intersects a region is set to zero (no ink for image masks), and the result is
 //! written as a new image, Flate, or for a one-bit image of one component Group 4, or JBIG2 when it
 //! was JBIG2, whichever is smallest; the original object is untouched (other pages may use it).
-//! CCITT fax and JBIG2 images decode through `Document::decoded_image_within`, but for Group 3 on
+//! CCITT fax and JBIG2 images decode through `ImageBudget::decode`, but for Group 3 on
 //! bytes, which PdfCraft's renderer may draw as other rows, and a JBIG2 page of other rows than the
 //! image's. Images whose codec PdfCraft can't decode (DCT, JPX), and those, return `None`, and the
 //! caller removes the whole image instead; that is fail-closed.
@@ -54,7 +54,7 @@ fn decode_and_clear(doc: &Document, s: &Stream, ctm: &Matrix, rects: &[[f64; 4]]
             b"FlateDecode" | b"Fl" | b"LZWDecode" | b"LZW" | b"ASCII85Decode" | b"A85" | b"ASCIIHexDecode" | b"AHx" | b"RunLengthDecode" | b"RL"
         )
     };
-    // A CCITT fax or JBIG2 image (its last filter) decodes through `Document::decoded_image_within`,
+    // A CCITT fax or JBIG2 image (its last filter) decodes through `ImageBudget::decode`,
     // after the filters before it, so a scan stored as Group 4 or JBIG2 is cleared like any other
     // image.
     let fax = |f: &Object| f.as_name().is_some_and(|n| matches!(n, b"CCITTFaxDecode" | b"CCF"));

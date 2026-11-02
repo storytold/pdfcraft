@@ -520,10 +520,16 @@ fn two_pages_one_resource_dictionary(inherited: bool, again: bool) -> Document {
     ])
 }
 
+/// What image `s` decodes to, its fax or JBIG2 data included, with no limit on the work: the
+/// samples an operation would read through its `ImageBudget`.
+fn decoded_image(doc: &Document, s: &pdfcraft_cos::Stream) -> Result<Vec<u8>, pdfcraft_cos::CosError> {
+    pdfcraft_cos::ImageBudget::with_work(u64::MAX).decode(doc, s, pdfcraft_cos::MAX_DECODED)
+}
+
 /// The samples of the image a page's (possibly inherited) resources name `name`, decoded through
-/// its image codec too (`Document::decoded_image`).
+/// its image codec too ([`decoded_image`]).
 fn named_image(doc: &Document, page: usize, name: &[u8]) -> Option<Vec<u8>> {
-    named_stream(doc, page, name).and_then(|s| doc.decoded_image(&s).ok())
+    named_stream(doc, page, name).and_then(|s| decoded_image(doc, &s).ok())
 }
 
 /// The image a page's (possibly inherited) resources name `name`.
@@ -708,7 +714,8 @@ fn group_3_on_bytes_is_removed_whole_and_other_fax_images_cleared() {
         (-1, true, "<< /K -1 /Columns 16 /EncodedByteAlign true >>", vec![0x80, 0x80], vec![], false),
     ] {
         let p = pdfcraft_filters::CcittParams { k, columns: 16, encoded_byte_align: on_bytes, ..Default::default() };
-        assert_eq!(pdfcraft_filters::decode_ccitt(&data, &p, 2).unwrap(), [0xFF; 4], "{parms}: the picture is white");
+        let mut work = u64::MAX;
+        assert_eq!(pdfcraft_filters::decode_ccitt_within(&data, &p, 2, &mut work).unwrap(), [0xFF; 4], "{parms}: the picture is white");
         let dict = format!("{image} /DecodeParms {parms}");
         let mut objs = vec![stream(&dict, data)];
         objs.extend(extra);
@@ -770,7 +777,7 @@ fn no_stream_holds_the_pixels_under_a_mark_on_a_jbig2_scan() {
     }
     let holds = |doc: &Document, pixels: &[u8]| {
         doc.scan_objects().any(|(_, object)| match &*object {
-            Object::Stream(s) => doc.decoded_image(s).is_ok_and(|d| d.windows(pixels.len()).any(|w| w == pixels)),
+            Object::Stream(s) => decoded_image(doc, s).is_ok_and(|d| d.windows(pixels.len()).any(|w| w == pixels)),
             _ => false,
         })
     };
@@ -1262,7 +1269,7 @@ fn globals_a_redacted_jbig2_image_shares_with_another_page_leave_the_file() {
         let res = doc.resolve(p.dict.get(b"Resources")?).as_dict().cloned()?;
         let xo = doc.resolve(res.get(b"XObject")?).as_dict().cloned()?;
         match &*doc.get(xo.get(name)?.as_ref()?) {
-            Object::Stream(s) => doc.decoded_image(s).ok(),
+            Object::Stream(s) => decoded_image(doc, s).ok(),
             _ => None,
         }
     };
@@ -2956,7 +2963,7 @@ fn assert_no_secret(doc: &Document, secret: &[u8]) {
         assert!(!bytes.windows(secret.len()).any(|w| w == secret), "secret remains in object {r:?}");
         if let Object::Stream(s) = &*object {
             // Image codecs, a cleared scan coded as Group 4 or JBIG2, decode through the document.
-            let data = s.decoded().or_else(|_| saved.decoded_image(s)).unwrap();
+            let data = s.decoded().or_else(|_| decoded_image(&saved, s)).unwrap();
             assert!(!data.windows(secret.len()).any(|w| w == secret), "secret remains in stream {r:?}");
         }
     }

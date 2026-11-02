@@ -8272,7 +8272,7 @@ fn an_office_export_doesnt_call_an_unreadable_picture_truncated() {
 }
 
 /// Copy Image takes a JBIG2 picture as its pixels and as a PNG file, behind another filter
-/// (ASCIIHexDecode) too: Export's decoding, through `Document::decoded_image`.
+/// (ASCIIHexDecode) too: Export's decoding, through `ImageBudget::decode`.
 #[test]
 fn copy_image_copies_a_jbig2_picture_behind_another_filter() {
     // 16 × 2: the left half of the top row black, the rest white.

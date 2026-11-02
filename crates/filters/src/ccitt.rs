@@ -50,7 +50,7 @@ pub fn encode_g4(data: &[u8], columns: u32, rows: u32) -> Result<Vec<u8>, Filter
     }
 }
 
-/// The widest row [`decode_ccitt`] decodes: its row buffer stays within 128 KiB.
+/// The widest row [`decode_ccitt_within`] decodes: its row buffer stays within 128 KiB.
 pub const MAX_CCITT_COLUMNS: u32 = 1 << 20;
 
 /// A `CCITTFaxDecode` stream's `/DecodeParms` (ISO 32000-2 Table 11). [`Default`] gives the
@@ -74,22 +74,8 @@ impl Default for CcittParams {
     }
 }
 
-/// CCITT fax `data` decoded as `CCITTFaxDecode` gives it: rows of `columns` 1-bit samples, most
-/// significant bit first, each starting on a new byte, with black as 0 (as 1 with `black_is_1`).
-///
-/// At most `max_rows` rows are decoded (fewer when `rows` says so), so the output is bounded by
-/// the caller. Damaged data gives the rows decoded before the damage, as viewers show them: a
-/// caller that needs a number of rows checks it got them.
-///
-/// Group 3 rows on bytes (`k` from 0, `encoded_byte_align`) are read by their end-of-line codes,
-/// whether the fill starts each code on a byte or ends it on one, when `data` starts with one (T.4
-/// sends one before the first row when it sends them at all), and on bytes otherwise, whatever
-/// `end_of_line` says. Group 4 is read as its parameters say. Data with codes but none before the
-/// first row is read on bytes, as PdfCraft's renderer draws it; with `k` 0 and the fill ending each
-/// code on a byte, that may be other rows than were coded.
-///
-/// Errors: `columns` that aren't from 1 to [`MAX_CCITT_COLUMNS`] ([`FilterError::Unsupported`]).
-pub fn decode_ccitt(data: &[u8], p: &CcittParams, max_rows: u32) -> Result<Vec<u8>, FilterError> {
+/// What [`decode_ccitt_within`] decodes once it is paid for.
+fn decode_ccitt(data: &[u8], p: &CcittParams, max_rows: u32) -> Result<Vec<u8>, FilterError> {
     let columns = u32::try_from(p.columns)
         .ok()
         .filter(|c| (1..=MAX_CCITT_COLUMNS).contains(c))
@@ -128,7 +114,24 @@ pub fn decode_ccitt(data: &[u8], p: &CcittParams, max_rows: u32) -> Result<Vec<u
 /// what a step of JBIG2 decoding takes.
 const CODE_WORK: u64 = 4;
 
-/// [`decode_ccitt`], spending from `work`, what decoding may still cost across a run of images: a
+/// CCITT fax `data` decoded as `CCITTFaxDecode` gives it: rows of `columns` 1-bit samples, most
+/// significant bit first, each starting on a new byte, with black as 0 (as 1 with `black_is_1`).
+///
+/// At most `max_rows` rows are decoded (fewer when `rows` says so), so the output is bounded by
+/// the caller. Damaged data gives the rows decoded before the damage, as viewers show them: a
+/// caller that needs a number of rows checks it got them.
+///
+/// Group 3 rows on bytes (`k` from 0, `encoded_byte_align`) are read by their end-of-line codes,
+/// whether the fill starts each code on a byte or ends it on one, when `data` starts with one (T.4
+/// sends one before the first row when it sends them at all), and on bytes otherwise, whatever
+/// `end_of_line` says. Group 4 is read as its parameters say. Data with codes but none before the
+/// first row is read on bytes, as PdfCraft's renderer draws it; with `k` 0 and the fill ending each
+/// code on a byte, that may be other rows than were coded.
+///
+/// Errors: `columns` that aren't from 1 to [`MAX_CCITT_COLUMNS`] ([`FilterError::Unsupported`]).
+///
+/// Decoding spends from `work`, what decoding may still cost across a run of images, and there is
+/// no way in without it: a
 /// byte of rows a step, whether or not the data holds them, and [`CODE_WORK`] a byte of `data`.
 /// A blank row takes a bit of code, so the rows are what a few bytes can ask for. It is all paid
 /// before anything is decoded, and what `work` can't pay for spends all of it.
@@ -149,7 +152,7 @@ fn starts_with_end_of_line(data: &[u8]) -> bool {
 
 /// Rows of 1-bit samples filled from a decoder's pixels: `columns` a row, each row on a new byte, at
 /// most `rows` rows. Pixels past a row's end and rows past the last are dropped. The JBIG2 decoder
-/// ([`crate::decode_jbig2`]) fills them too.
+/// ([`crate::decode_jbig2_within`]) fills them too.
 pub(crate) struct Rows {
     pub(crate) out: Vec<u8>,
     row: Vec<u8>,

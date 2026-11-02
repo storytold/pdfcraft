@@ -80,7 +80,49 @@ impl ImageBudget {
         Self { work, refused: 0 }
     }
 
-    /// Image `s` decoded like [`Document::decoded_image_within`], charged to the allowance.
+    /// The samples of image `s`, decoded and charged to the allowance: the one way to decode an
+    /// image outside the renderer, so that an operation over many images can't decode them without
+    /// one.
+    ///
+    /// They go through its filters ([`Stream::decoded`]), or, for a CCITT fax or JBIG2 image (its
+    /// last filter), through the filters before it and then [`pdfcraft_filters::decode_ccitt_within`]
+    /// with its [`Document::fax_params`], or [`pdfcraft_filters::decode_jbig2_within`] with its
+    /// `/JBIG2Globals`, as `CCITTFaxDecode` and `JBIG2Decode` give them (ISO 32000-2 §7.4.6,
+    /// §7.4.7). Parameters given by reference count, for every filter
+    /// ([`Document::with_direct_parms`]). A fax image's `/Columns` has to be its `/Width`, and a
+    /// JBIG2 image's page its `/Width` × `/Height`: PdfCraft's renderer draws the whole page into
+    /// the image. Up to its `/Height` rows are decoded, whatever a fax image's `/Rows` says; damaged
+    /// fax data gives fewer, so a caller checks it has the rows it needs. Damaged JBIG2 data, and
+    /// globals that can't be read (within [`MAX_JBIG2_GLOBALS`](crate::MAX_JBIG2_GLOBALS)), are an
+    /// error.
+    ///
+    /// No stage, the filters before a fax or JBIG2 decoder included, may produce more than `max`
+    /// bytes, nor more than [`MAX_DECODED`](crate::MAX_DECODED). A JBIG2 image's `/JBIG2Globals`
+    /// are another stream, shared between images, and are decoded within `MAX_JBIG2_GLOBALS`
+    /// whatever `max` is. Each filter as it runs, the globals when they have to be read, and the fax
+    /// or JBIG2 decoder spend from the allowance, and the image then pays for its pixels; with
+    /// nothing left an image is refused before anything is read, its globals included.
+    ///
+    /// ```
+    /// # let doc = pdfcraft_cos::Document::new_empty();
+    /// # let s = pdfcraft_cos::Stream::from_raw(pdfcraft_cos::Dict::new(), Vec::new());
+    /// let samples = pdfcraft_cos::ImageBudget::new(&doc).decode(&doc, &s, 1 << 20);
+    /// assert_eq!(samples.unwrap(), b"");
+    /// ```
+    ///
+    /// `Document` has no way of its own to decode an image:
+    ///
+    /// ```compile_fail
+    /// # let doc = pdfcraft_cos::Document::new_empty();
+    /// # let s = pdfcraft_cos::Stream::from_raw(pdfcraft_cos::Dict::new(), Vec::new());
+    /// let _ = doc.decoded_image(&s);
+    /// ```
+    ///
+    /// ```compile_fail
+    /// # let doc = pdfcraft_cos::Document::new_empty();
+    /// # let s = pdfcraft_cos::Stream::from_raw(pdfcraft_cos::Dict::new(), Vec::new());
+    /// let _ = doc.decoded_image_within(&s, 1 << 20);
+    /// ```
     pub fn decode(&mut self, doc: &Document, s: &Stream, max: usize) -> Result<Vec<u8>, CosError> {
         let decoded = doc.decoded_image_spending(s, max, &mut self.work);
         self.count_refused(s, &decoded);

@@ -811,7 +811,7 @@ type Pixel = fn(&[u8]) -> Option<bool>;
 /// with its width and height, and, when they were packed from more bits, its dictionary as a 1-bit
 /// image. These count:
 /// - one bit per pixel in one colour component, or an image mask, stored with no filter, with
-///   general-purpose ones, or with CCITT fax or JBIG2 last ([`Document::decoded_image_within`], no further
+///   general-purpose ones, or with CCITT fax or JBIG2 last ([`ImageBudget::decode`], no further
 ///   than its rows can need);
 /// - with `pack`, and with no colour-key `/Mask` (its ranges are in the image's own values):
 ///   - eight-bit grey (one component, not indexed) whose every sample is 0 or 255. A decode array

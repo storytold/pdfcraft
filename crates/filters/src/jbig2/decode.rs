@@ -3,7 +3,7 @@
 use crate::FilterError;
 use crate::ccitt::Rows;
 
-/// The largest JBIG2 page [`decode_jbig2`] decodes, in pixels. The decoder decodes a page whole,
+/// The largest JBIG2 page [`decode_jbig2_within`] decodes, in pixels. The decoder decodes a page whole,
 /// and takes pages of up to about this many (20,000 × 10,000 decodes).
 pub const MAX_JBIG2_PIXELS: u64 = 1 << 28;
 
@@ -22,13 +22,10 @@ pub const MAX_JBIG2_PIXELS: u64 = 1 << 28;
 /// ([`FilterError::Corrupt`]); a page past `max` ([`FilterError::LimitExceeded`]) or
 /// [`MAX_JBIG2_PIXELS`] ([`FilterError::Unsupported`], or `Corrupt` from the decoder, which has the
 /// same cap and can refuse the page first).
-pub fn decode_jbig2(data: &[u8], globals: Option<&[u8]>, columns: u32, rows: u32, max: usize) -> Result<Vec<u8>, FilterError> {
-    let mut unbounded = u64::MAX;
-    decode_jbig2_within(data, globals, columns, rows, max, &mut unbounded)
-}
-
-/// [`decode_jbig2`], spending from `work`: what decoding may still cost across a run of images, in
-/// the decoder's count of steps. Reading `data` and `globals` is charged first
+///
+/// Decoding spends from `work`: what decoding may still cost across a run of images, in the
+/// decoder's count of steps. There is no way in without it, so a run of images can't decode them
+/// without sharing an allowance. Reading `data` and `globals` is charged first
 /// ([`hayro_jbig2::charge_reading`]), so an image that turns out not to decode has paid for that,
 /// then what decoding takes ([`hayro_jbig2::Image::decode_within`]). An image takes at most what
 /// one decode may on top of its reading and its page, whatever `work` allows, and one that `work`
@@ -79,6 +76,12 @@ impl hayro_jbig2::Decoder for Rows {
 mod tests {
     use super::*;
     use crate::{encode_jbig2, encode_jbig2_generic};
+
+    /// [`decode_jbig2_within`] with no limit on the work.
+    fn decode_jbig2(data: &[u8], globals: Option<&[u8]>, columns: u32, rows: u32, max: usize) -> Result<Vec<u8>, FilterError> {
+        let mut unbounded = u64::MAX;
+        decode_jbig2_within(data, globals, columns, rows, max, &mut unbounded)
+    }
 
     /// `rows` rows of `columns` samples of noise, the bits that pad each row to a byte 0.
     fn noise(columns: u32, rows: u32) -> Vec<u8> {
