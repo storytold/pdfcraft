@@ -15,6 +15,7 @@ use pdfcraft_render::DocInfo;
 
 use crate::canvas::{DocView, PageToolContext, PageXform};
 use crate::page_cursor::Layer;
+use crate::page_router::{Hit, Owner};
 use crate::theme::Tokens;
 
 const FOCUS_BLUE: Color32 = Color32::from_rgb(0x14, 0x73, 0xE6);
@@ -151,48 +152,67 @@ fn toggle_edit(f: &FormField, w: &FormWidget) -> Option<Edit> {
     Some(Edit::SetFieldValue { name: f.name.clone(), value })
 }
 
-/// Clicks on form widgets of one page. `true` when a field owns the press or click.
-pub(crate) fn page_input(cx: PageToolContext<'_>, form: &[FormField], allowed: bool, view: &mut DocView) -> bool {
-    let PageToolContext { ui, resp, xf, ptr, page, info, .. } = cx;
-    let Some(p) = ptr.within(xf.rect) else { return false };
-    let hit = form.iter().find_map(|f| {
+/// Whether `w`, a widget of `f`, takes a press: fillable, a push button with an action, or an
+/// empty signature field (signed by clicking it, Use a certificate). A radio button of a group can
+/// be read-only on its own.
+fn usable(f: &FormField, w: &FormWidget, allowed: bool) -> bool {
+    let pressable = f.kind == FormFieldKind::PushButton && !f.read_only() && f.button.is_some();
+    allowed && !w.read_only && (fillable(f) || pressable || f.kind == FormFieldKind::Signature)
+}
+
+/// The form widget under `p` on `page`: the one hit test of the fields, for the cursor and the
+/// press. Over the page's text too: a check box drawn with a glyph, or set on printed text, is a
+/// button, not text to select.
+pub(crate) fn hit(xf: &PageXform, info: &DocInfo, page: usize, form: &[FormField], allowed: bool, p: Pos2) -> Option<Hit> {
+    if !xf.rect.contains(p) {
+        return None;
+    }
+    let (field, f, widget, w) = form.iter().enumerate().find_map(|(fi, f)| {
         f.widgets
             .iter()
             .enumerate()
             .find(|(_, w)| w.page == Some(page) && !w.hidden && widget_rect(xf, info, page, w.rect).contains(p))
-            .map(|(i, w)| (f, i, w))
-    });
-    let Some((f, wi, w)) = hit else { return false };
-    // The field's tooltip (`/TU`), as Acrobat shows it on hover (#3854). ISO 32000-2 Table 226
-    // makes it the name the user interface identifies the field by.
-    if let Some(tip) = f.tooltip.as_deref().filter(|t| !t.trim().is_empty()) {
+            .map(|(wi, w)| (fi, f, wi, w))
+    })?;
+    let icon = match (usable(f, w, allowed), f.kind) {
+        (false, _) => egui::CursorIcon::NotAllowed,
+        (true, FormFieldKind::Text) => egui::CursorIcon::Text,
+        _ => egui::CursorIcon::PointingHand,
+    };
+    Some(Hit::new(Owner::Field { field, widget }, Layer::Field, icon))
+}
+
+/// Presses and clicks on form widgets of one page, on the field the press was on ([`hit`]).
+/// `true` while a field holds the press.
+pub(crate) fn page_input(cx: PageToolContext<'_>, form: &[FormField], allowed: bool, view: &mut DocView) -> bool {
+    let PageToolContext { ui, resp, xf, ptr, page, info, .. } = cx;
+    // The field's tooltip (`/TU`) under the pointer, as Acrobat shows it on hover (#3854). ISO
+    // 32000-2 Table 226 makes it the name the user interface identifies the field by.
+    if let Some(p) = ptr.within(xf.rect)
+        && let Some(Owner::Field { field, .. }) = hit(xf, info, page, form, allowed, p).map(|h| h.owner)
+        && let Some(tip) = form.get(field).and_then(|f| f.tooltip.as_deref()).filter(|t| !t.trim().is_empty())
+    {
         resp.clone().on_hover_text_at_pointer(tip);
     }
-    // Empty signature fields are signed by clicking them (Use a certificate); push buttons run
-    // their action.
-    let pressable = f.kind == FormFieldKind::PushButton && !f.read_only() && f.button.is_some();
-    // A radio button of a group can be read-only on its own.
-    let usable = allowed && !w.read_only && (fillable(f) || pressable || f.kind == FormFieldKind::Signature);
-    // Over the page's text too: a check box drawn with a glyph, or set on printed text, is a
-    // button, not text to select.
-    view.cursor.claim(
-        Layer::Field,
-        match (usable, f.kind) {
-            (false, _) => egui::CursorIcon::NotAllowed,
-            (true, FormFieldKind::Text) => egui::CursorIcon::Text,
-            _ => egui::CursorIcon::PointingHand,
-        },
-    );
+    let Some(Owner::Field { field, widget: wi }) = view.router.owner(page) else { return false };
+    let Some((f, w)) = form.get(field).and_then(|f| f.widgets.get(wi).map(|w| (f, w))) else { return false };
+    let usable = usable(f, w, allowed);
     // A text field opens on the press rather than the click, so a drag that starts on it
     // selects its text (#2213).
-    let pressed = f.kind == FormFieldKind::Text && usable && resp.is_pointer_button_down_on() && ptr.pressed().is_some();
-    if pressed && view.forms.focus.as_ref().is_none_or(|x| x.name != f.name || x.widget != wi) {
+    if f.kind == FormFieldKind::Text
+        && usable
+        && let Some(at) = ptr.pressed()
+        && view.forms.focus.as_ref().is_none_or(|x| x.name != f.name || x.widget != wi)
+    {
         commit(view, form);
-        view.forms.focus = Some(Focus { press: Some(p), ..open_focus(f, wi) });
+        view.forms.focus = Some(Focus { press: Some(at), ..open_focus(f, wi) });
         view.forms.pressed = true;
     }
-    if !resp.clicked() {
-        return resp.is_pointer_button_down_on();
+    // A click counts released over the widget its press was on, as a button's does: one that slips
+    // off it first does nothing (a check box's overlay closes on it too).
+    if !resp.clicked() || !ptr.pos.and_then(|p| hit(xf, info, page, form, allowed, p)).is_some_and(|h| h.owner == Owner::Field { field, widget: wi })
+    {
+        return true;
     }
     if !allowed {
         view.forms.notice = Some(FormNotice::Security);
@@ -231,6 +251,7 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, form: &[FormField], allowed: b
             }
         }
         FormFieldKind::List => {
+            let Some(p) = ptr.within(xf.rect) else { return true };
             commit(view, form);
             view.forms.focus = Some(open_focus(f, wi));
             let r = widget_rect(xf, info, page, w.rect);
