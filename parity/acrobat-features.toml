@@ -1787,11 +1787,11 @@ title = "Single-key tool accelerators"
 area = "B"
 tier = "P2"
 milestone = "M3"
-status = "planned"
-commands = []
+status = "partial"
+commands = ["comment.replace", "comment.caret", "comment.strikeout", "comment.highlight"]
 tools = []
-evidence = []
-notes = ""
+evidence = ["crates/ui-egui/tests/it/comments.rs::single_keys_pick_the_reviewing_tools", "crates/ui-egui/tests/it/comments.rs::a_single_key_marks_the_words_selected_before_it", "crates/ui-egui/tests/it/comments.rs::a_single_key_changes_nothing_where_comments_are_forbidden"]
+notes = "V Select, H Hand, Space held to pan, R Replace text, I Insert text, X Strikethrough and M Highlight, only while no text field, form field, dialog or the palette has the keyboard. Always on, where Acrobat keeps its accelerators behind a preference. Missing: keys for the other tools, and a preference to turn them off; the keys are fixed, not Acrobat's own set."
 
 [[feature]]
 id = "view.customize-quick-tools"
