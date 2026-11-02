@@ -1,18 +1,18 @@
-//! Visual order for single-line interface text that may hold right-to-left script (file names,
-//! document titles).
+//! Wrapping right-to-left text into logical lines, and test-only display-order helpers.
 //!
-//! egui shapes each font-face run with the script's own direction, so the letters of an Arabic
-//! word join and run right to left, but it places the runs themselves left to right in logical
-//! order: `واحد اثنين.pdf` would show its two words swapped. [`visual`] puts the runs in display
-//! order and leaves the letters of each word alone for the shaper.
-//!
-//! [`display_rtl`] does the same for the labels of a right-to-left interface language (the Arabic
-//! catalog), whose base direction is right to left.
+//! egui 0.37's epaint shapes text with the Unicode bidirectional algorithm (UAX #9), so
+//! production code passes it logical (typing-order) text: [`wrap`] breaks a comment into logical
+//! lines and lets epaint reorder each one. [`visual`], [`visual_auto`] and [`display_rtl`] are
+//! kept for the tests that prove the old preordering is gone; they must not be used for painting
+//! with egui 0.37, where they would reverse mixed-direction text a second time.
 
+#[cfg(test)]
 use std::borrow::Cow;
 use std::ops::Range;
 
-use unicode_bidi::{BidiInfo, Level, ParagraphInfo};
+use unicode_bidi::BidiInfo;
+#[cfg(test)]
+use unicode_bidi::{Level, ParagraphInfo};
 
 /// `text` rearranged for an egui call that lays out one line. Text without right-to-left
 /// characters comes back borrowed and unchanged.
@@ -20,6 +20,7 @@ use unicode_bidi::{BidiInfo, Level, ParagraphInfo};
 /// The base direction is left to right, as the interface is: a file name keeps its extension
 /// at the end, the way the window title shows it. Use it for painting only; accessibility
 /// labels and anything stored keep the logical text.
+#[cfg(test)]
 pub fn visual(text: &str) -> Cow<'_, str> {
     if !text.chars().any(is_rtl_script) {
         return Cow::Borrowed(text);
@@ -30,6 +31,7 @@ pub fn visual(text: &str) -> Cow<'_, str> {
 }
 
 /// `text` in display order for the paragraph direction `base`, appended to `out`.
+#[cfg(test)]
 fn push_visual(out: &mut String, text: &str, base: Level) {
     let info = BidiInfo::new(text, Some(base));
     for para in &info.paragraphs {
@@ -39,6 +41,7 @@ fn push_visual(out: &mut String, text: &str, base: Level) {
 
 /// The `line` of paragraph `para` (a non-empty byte range of `text`) in display order, as egui
 /// needs it, appended to `out`.
+#[cfg(test)]
 fn push_line(out: &mut String, text: &str, info: &BidiInfo<'_>, para: &ParagraphInfo, line: Range<usize>) {
     let (levels, runs) = info.visual_runs(para, line);
     // First the true display order, every character left to right as it appears on screen.
@@ -62,6 +65,7 @@ fn push_line(out: &mut String, text: &str, info: &BidiInfo<'_>, para: &Paragraph
 /// each such stretch goes back to logical order. What lies between them (spaces, punctuation,
 /// Latin) is drawn by the Latin face left to right and stays as it is. The stretches include
 /// Persian and Arabic-Indic digits: Arabic script to the shaper, though they read left to right.
+#[cfg(test)]
 fn push_for_shaper(out: &mut String, shown: &str) {
     let mut stretch: Vec<char> = Vec::new();
     for c in shown.chars() {
@@ -78,7 +82,7 @@ fn push_for_shaper(out: &mut String, shown: &str) {
 /// One line of wrapped text (see [`wrap`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Line {
-    /// The line in display order, for one egui call that lays out one line.
+    /// The line in logical (reading) order. epaint shapes and reorders it for display.
     pub text: String,
     /// The paragraph reads right to left: the line belongs against the right edge.
     pub rtl: bool,
@@ -89,14 +93,44 @@ pub fn has_rtl(text: &str) -> bool {
     text.chars().any(is_rtl_script)
 }
 
+/// The paragraph direction for translated interface text: explicitly right to left for Arabic,
+/// Kurdish and Persian, and `TextDirection::Auto` otherwise. A label whose first strong character is
+/// Latin or a `{placeholder}` must not fall back to a left-to-right paragraph in an RTL locale.
+pub fn ui_direction() -> egui::epaint::text::TextDirection {
+    if crate::i18n::current().rtl() { egui::epaint::text::TextDirection::RightToLeft } else { egui::epaint::text::TextDirection::Auto }
+}
+
+/// Lay out one line of translated interface text with the locale's explicit base direction.
+pub fn layout_ui(ui: &egui::Ui, text: impl Into<String>, font: egui::FontId, color: egui::Color32) -> std::sync::Arc<egui::Galley> {
+    layout_one_line(ui, text, font, color, ui_direction())
+}
+
+/// Lay out one line of file or path text left to right, so an Arabic file name keeps `.pdf` at
+/// its visual end exactly as a Latin one does. The text stays logical for accessibility.
+pub fn layout_ltr(ui: &egui::Ui, text: impl Into<String>, font: egui::FontId, color: egui::Color32) -> std::sync::Arc<egui::Galley> {
+    layout_one_line(ui, text, font, color, egui::epaint::text::TextDirection::LeftToRight)
+}
+
+fn layout_one_line(
+    ui: &egui::Ui,
+    text: impl Into<String>,
+    font: egui::FontId,
+    color: egui::Color32,
+    direction: egui::epaint::text::TextDirection,
+) -> std::sync::Arc<egui::Galley> {
+    let mut job = egui::text::LayoutJob::simple_singleline(text.into(), font, color);
+    job.direction = direction;
+    ui.painter().layout_job(job)
+}
+
 /// Multi-line text with right-to-left script (a comment in Persian, Arabic, Hebrew), broken
-/// into lines that `fits` accepts (it measures a line in logical order) and each put in display
-/// order by the Unicode bidirectional algorithm (UAX #9).
+/// into logical-order lines that `fits` accepts (it measures a line in logical order).
 ///
-/// Every paragraph takes its direction from its first strong character, as `dir="auto"` does,
-/// so a Persian comment reads right to left with its Latin words and numbers left to right
-/// inside it. Lines break between words, in reading order, and a word wider than a line
-/// between characters. Use it for painting; copying and accessibility keep the logical text.
+/// The lines keep reading order and each line's paragraph direction ([`Line::rtl`]): egui 0.37's
+/// epaint already shapes every line with the Unicode bidirectional algorithm (UAX #9), so
+/// preordering here would reorder mixed Persian/Latin text a second time. Lines break between
+/// words, in reading order, and a word wider than a line between characters. Copying and
+/// accessibility use the same logical text.
 pub fn wrap(text: &str, mut fits: impl FnMut(&str) -> bool) -> Vec<Line> {
     let info = BidiInfo::new(text, None);
     let mut lines = Vec::new();
@@ -109,12 +143,7 @@ pub fn wrap(text: &str, mut fits: impl FnMut(&str) -> bool) -> Vec<Line> {
         let content = para.range.start..para.range.start.saturating_add(whole.trim_end_matches(is_paragraph_separator).len());
         let rtl = para.level.is_rtl();
         for line in break_lines(text, content, &mut fits) {
-            let mut out = String::new();
-            // unicode-bidi indexes the first level of a line, so an empty one would panic.
-            if !line.is_empty() {
-                push_line(&mut out, text, &info, para, line);
-            }
-            lines.push(Line { text: out, rtl });
+            lines.push(Line { text: text.get(line).unwrap_or_default().to_owned(), rtl });
         }
     }
     lines
@@ -122,12 +151,18 @@ pub fn wrap(text: &str, mut fits: impl FnMut(&str) -> bool) -> Vec<Line> {
 
 /// One line of `text` in display order, its direction from its first strong character (an
 /// author's name). Text without right-to-left characters comes back borrowed and unchanged.
+///
+/// Only the bidi unit tests use this now: interface labels keep logical text and let the egui
+/// fork reorder, so no production call site preorders a label.
+#[cfg(test)]
 pub fn visual_auto(text: &str) -> Cow<'_, str> {
     if !has_rtl(text) {
         return Cow::Borrowed(text);
     }
-    let lines: Vec<String> = wrap(text, |_| true).into_iter().map(|l| l.text).collect();
-    Cow::Owned(lines.join("\n"))
+    let base = BidiInfo::new(text, None).paragraphs.first().map_or(Level::ltr(), |para| para.level);
+    let mut out = String::with_capacity(text.len());
+    push_visual(&mut out, text, base);
+    Cow::Owned(out)
 }
 
 /// The byte ranges of the lines `range` of `text` breaks into: as many words as `fits` accepts
@@ -209,7 +244,9 @@ fn is_paragraph_separator(c: char) -> bool {
 /// - A short caption's closing colon stays on the right too, next to the widget it captions.
 ///
 /// Text without right-to-left characters comes back unchanged. Like [`visual`], this is for
-/// painting one line; a label egui wraps breaks at the wrong end.
+/// painting one line; a label egui wraps breaks at the wrong end. Kept for the tests that prove
+/// the old preordering is gone; production catalogs stay logical.
+#[cfg(test)]
 pub fn display_rtl(text: &str) -> String {
     if !text.chars().any(is_rtl_script) {
         return text.to_owned();
@@ -225,13 +262,17 @@ pub fn display_rtl(text: &str) -> String {
 }
 
 /// The most words a caption may have for its closing colon to stay on the right.
+#[cfg(test)]
 const CAPTION_WORDS: usize = 3;
 /// First of the private-use characters that stand for placeholders while a line is reordered.
 /// They are strong left-to-right, like the names they replace.
+#[cfg(test)]
 const PLACEHOLDER_BASE: u32 = 0xE000;
 /// Placeholders protected per line; a line with more keeps the rest as plain text.
+#[cfg(test)]
 const MAX_PLACEHOLDERS: usize = 64;
 
+#[cfg(test)]
 fn push_rtl_line(out: &mut String, line: &str) {
     let edge = |c: char| c.is_whitespace() || c == '·';
     let core = line.trim_start_matches(edge);
@@ -266,6 +307,7 @@ fn push_rtl_line(out: &mut String, line: &str) {
 /// `text` with each `{name}` placeholder and each keyboard shortcut (`⇧⌘+`) replaced by one
 /// stand-in character, and what they replaced, in order. A shortcut's symbols have no direction
 /// of their own, so left alone they would be drawn in reverse.
+#[cfg(test)]
 fn mask_placeholders(text: &str) -> (String, Vec<&str>) {
     let mut masked = String::with_capacity(text.len());
     let mut names: Vec<&str> = Vec::new();
@@ -286,6 +328,7 @@ fn mask_placeholders(text: &str) -> (String, Vec<&str>) {
 }
 
 /// The byte range of the first placeholder or keyboard shortcut in `text`.
+#[cfg(test)]
 fn next_atom(text: &str) -> Option<(usize, usize)> {
     let placeholder = text.find('{').and_then(|open| {
         let len = text.get(open..)?.find('}')?;
@@ -308,6 +351,7 @@ fn next_atom(text: &str) -> Option<(usize, usize)> {
 }
 
 /// The modifier-key symbols of keyboard shortcuts: ⌘ ⇧ ⌥ ⌃.
+#[cfg(test)]
 fn is_modifier_key(c: char) -> bool {
     matches!(c, '\u{2318}' | '\u{21E7}' | '\u{2325}' | '\u{2303}')
 }
@@ -320,15 +364,18 @@ fn is_rtl_script(c: char) -> bool {
 
 /// The zero-width (non-)joiners inside a word (Persian `می‌روم`): egui shapes them with the
 /// letter before them.
+#[cfg(test)]
 fn is_joiner(c: char) -> bool {
     matches!(c, '\u{200C}' | '\u{200D}')
 }
 
 /// Direction marks, embeddings, overrides and isolates: they steer the reordering and are not drawn.
+#[cfg(test)]
 fn is_bidi_control(c: char) -> bool {
     matches!(c, '\u{061C}' | '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
 }
 
+#[cfg(test)]
 fn mirrored(c: char) -> char {
     match c {
         '(' => ')',
@@ -346,258 +393,4 @@ fn mirrored(c: char) -> char {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn text_without_rtl_is_borrowed_unchanged() {
-        for s in ["", "report.pdf", "日本語の文字.pdf", "a (b) [c]", "caf\u{00E9} \u{200E}x"] {
-            assert!(matches!(visual(s), Cow::Borrowed(v) if v == s), "{s:?}");
-        }
-    }
-
-    #[test]
-    fn arabic_words_swap_and_the_extension_stays_last() {
-        // The reported name: "one two.pdf" in Arabic.
-        assert_eq!(visual("واحد اثنين.pdf"), "اثنين واحد.pdf");
-        assert_eq!(visual("ملف.pdf"), "ملف.pdf");
-        assert_eq!(visual("تقرير نهائي جدا.pdf"), "جدا نهائي تقرير.pdf");
-    }
-
-    #[test]
-    fn latin_and_numbers_keep_their_own_order() {
-        assert_eq!(visual("report واحد اثنين final.pdf"), "report اثنين واحد final.pdf");
-        // A number inside right-to-left text reads left to right, to the left of what precedes it.
-        assert_eq!(visual("ملف 2024.pdf"), "2024 ملف.pdf");
-        assert_eq!(visual(r"C:\Users\me\واحد اثنين\a.pdf"), r"C:\Users\me\اثنين واحد\a.pdf");
-    }
-
-    #[test]
-    fn hebrew_and_brackets() {
-        assert_eq!(visual("שלום עולם.pdf"), "עולם שלום.pdf");
-        // Brackets between right-to-left words flip with the direction.
-        assert_eq!(visual("واحد (اثنين) ثلاثة.pdf"), "ثلاثة (اثنين) واحد.pdf");
-    }
-
-    #[test]
-    fn direction_controls_are_not_drawn() {
-        assert_eq!(visual("\u{202B}واحد اثنين\u{202C}.pdf"), "اثنين واحد.pdf");
-        assert_eq!(visual("\u{200F}واحد\u{061C}"), "واحد");
-    }
-
-    #[test]
-    fn rtl_labels_read_right_to_left() {
-        // No right-to-left characters: unchanged.
-        for s in ["", "Save as…", "{n} pages", "日本語"] {
-            assert_eq!(display_rtl(s), s);
-        }
-        assert_eq!(display_rtl("حفظ"), "حفظ");
-        // "Save as…": the second word and the ellipsis end up on the left.
-        assert_eq!(display_rtl("حفظ باسم…"), "…باسم حفظ");
-        // Latin words and numbers keep their own order inside the line.
-        assert_eq!(display_rtl("إنشاء PDF من ملف"), "ملف من PDF إنشاء");
-        assert_eq!(display_rtl("تصدير إلى Microsoft Word الآن"), "الآن Microsoft Word إلى تصدير");
-        assert_eq!(display_rtl("صالح لمدة 5 سنوات"), "سنوات 5 لمدة صالح");
-        // Keyboard shortcuts are not reversed.
-        assert_eq!(display_rtl("طباعة (⌘P)"), "(⌘P) طباعة");
-        assert_eq!(display_rtl("تدوير العرض (⇧⌘+)"), "(⇧⌘+) العرض تدوير");
-        assert_eq!(display_rtl("التمرير مع ⌘ أيضًا"), "أيضًا ⌘ مع التمرير");
-        assert_eq!(display_rtl("نص (عادي)"), "(عادي) نص");
-    }
-
-    #[test]
-    fn rtl_labels_keep_placeholders_whole() {
-        // Two placeholders around a colon stay together, left to right: a file name and its error.
-        assert_eq!(display_rtl("تعذّر فتح {name}: {e}"), "{name}: {e} فتح تعذّر");
-        assert_eq!(display_rtl("فشل {label}، السبب {e}"), "{e} السبب ،{label} فشل");
-        assert_eq!(display_rtl("{n} صفحات"), "صفحات {n}");
-        assert_eq!(display_rtl("الصفحة {p} من {n}"), "{n} من {p} الصفحة");
-        // Adjacent placeholders keep their order, as numbers around a slash would.
-        assert_eq!(display_rtl("جارٍ البحث… {s}/{p}"), "{s}/{p} …البحث جارٍ");
-        // Braces that are not a placeholder are ordinary punctuation.
-        assert_eq!(display_rtl("حرف } واحد"), "واحد { حرف");
-        let many = format!("ا {}", "{a} ".repeat(200));
-        assert_eq!(display_rtl(&many).matches("{a}").count(), 200);
-    }
-
-    #[test]
-    fn rtl_labels_keep_their_edges() {
-        // Edge spaces and separator dots stay where the code concatenates.
-        assert_eq!(display_rtl(" (صفحة {p})"), " ({p} صفحة)");
-        assert_eq!(display_rtl(" · محمي بكلمة مرور"), " · مرور بكلمة محمي");
-        assert_eq!(display_rtl("سلسلة المفاتيح  ·  "), "المفاتيح سلسلة  ·  ");
-        // A caption's colon stays next to its widget; a sentence's colon ends the sentence.
-        assert_eq!(display_rtl("الاسم:"), "الاسم:");
-        assert_eq!(display_rtl("صادرة عن: "), "عن صادرة: ");
-        assert_eq!(display_rtl("اختر المعرّف الرقمي الذي تريد استخدامه:"), ":استخدامه تريد الذي الرقمي المعرّف اختر");
-        // Each line is its own paragraph.
-        assert_eq!(display_rtl("تعذّر عرض الصفحة.\n{e}"), ".الصفحة عرض تعذّر\n{e}");
-    }
-
-    #[test]
-    fn rtl_labels_never_panic_on_odd_input() {
-        let long = "ا {n} ".repeat(20_000);
-        for s in [
-            "ا{",
-            "ا}",
-            "ا{}",
-            "ا{{{",
-            "}ا{",
-            "ا\u{E000}{n}",
-            "⌘",
-            "ا ⌘",
-            "⌘ا⌘{",
-            "ا (⇧⌘",
-            "\u{064B}:",
-            ":",
-            "ا:",
-            " : ا : ",
-            "ا\n\n\nب",
-            "\u{202E}ا{n}",
-            long.as_str(),
-        ] {
-            let v = display_rtl(s);
-            assert!(v.chars().count() <= s.chars().count(), "{:?}", s.chars().take(12).collect::<String>());
-        }
-    }
-
-    /// `wrap` with a width of `n` characters.
-    fn wrap_at(text: &str, n: usize) -> Vec<Line> {
-        wrap(text, |s| s.chars().count() <= n)
-    }
-
-    fn rtl(text: &str) -> Line {
-        Line { text: text.to_owned(), rtl: true }
-    }
-
-    fn ltr(text: &str) -> Line {
-        Line { text: text.to_owned(), rtl: false }
-    }
-
-    #[test]
-    fn persian_paragraph_reads_right_to_left() {
-        // "I go to school": the words come out in reverse for egui's left-to-right placement.
-        assert_eq!(wrap_at("من به مدرسه می‌روم", 80), [rtl("می‌روم مدرسه به من")]);
-        // The zero-width non-joiner keeps a word whole, so the shaper gets it as one run.
-        assert_eq!(wrap_at("کتاب‌ها", 80), [rtl("کتاب‌ها")]);
-    }
-
-    #[test]
-    fn arabic_lines_break_in_reading_order() {
-        // The first words go on the first line, each line reordered on its own.
-        assert_eq!(wrap_at("واحد اثنين ثلاثة أربعة", 11), [rtl("اثنين واحد"), rtl("أربعة ثلاثة")]);
-        assert_eq!(wrap_at("واحد اثنين ثلاثة أربعة", 80), [rtl("أربعة ثلاثة اثنين واحد")]);
-    }
-
-    #[test]
-    fn base_direction_comes_from_the_first_strong_character() {
-        // Latin first: a left-to-right paragraph with an Arabic phrase inside it.
-        assert_eq!(wrap_at("See واحد اثنين here", 80), [ltr("See اثنين واحد here")]);
-        // Persian first: right to left, the Latin words and the number left to right inside it.
-        assert_eq!(wrap_at("فایل PDF نسخه 2 است", 80), [rtl("است 2 نسخه PDF فایل")]);
-        assert_eq!(wrap_at("سلام Hello World", 80), [rtl("Hello World سلام")]);
-        // Leading neutrals and numbers don't decide it.
-        assert_eq!(wrap_at("12. واحد اثنين", 80), [rtl("اثنين واحد .12")]);
-        // Each paragraph finds its own direction.
-        assert_eq!(wrap_at("واحد اثنين\nOK then\n\nשלום עולם", 80), [rtl("اثنين واحد"), ltr("OK then"), ltr(""), rtl("עולם שלום")]);
-    }
-
-    #[test]
-    fn rtl_punctuation_and_brackets() {
-        // The sentence's full stop ends up on the left, brackets flip.
-        assert_eq!(wrap_at("سلام دنیا.", 80), [rtl(".دنیا سلام")]);
-        assert_eq!(wrap_at("واحد (اثنين) ثلاثة", 80), [rtl("ثلاثة (اثنين) واحد")]);
-        assert_eq!(wrap_at("آیا آماده است؟", 80), [rtl("است؟ آماده آیا")]);
-    }
-
-    #[test]
-    fn persian_digits_go_to_the_shaper_reversed() {
-        // Persian and Arabic-Indic digits are Arabic script, which egui's shaper lays out right to
-        // left; they read left to right, so they are handed over reversed.
-        assert_eq!(wrap_at("سال ۱۴۰۲ شمسی", 80), [rtl("شمسی ۲۰۴۱ سال")]);
-        assert_eq!(wrap_at("صفحه ١٢", 80), [rtl("٢١ صفحه")]);
-        // Glued to a word, number and word swap places within one shaped run.
-        assert_eq!(wrap_at("ب۱۲", 80), [rtl("ب۲۱")]);
-    }
-
-    #[test]
-    fn wrapping_handles_odd_widths_and_input() {
-        assert_eq!(wrap_at("", 10), Vec::<Line>::new());
-        // A word wider than the line is broken between characters.
-        assert_eq!(wrap_at("abcdefghij واحد", 4), [ltr("abcd"), ltr("efgh"), ltr("ij"), ltr("واحد")]);
-        // Extra spaces between words don't make empty lines; \r\n is one break.
-        assert_eq!(wrap_at("واحد    اثنين\r\nب", 5), [rtl("واحد"), rtl("اثنين"), rtl("ب")]);
-        // Nothing fits: one character per line, never an endless loop.
-        assert_eq!(wrap("واحد", |_| false).len(), 4);
-        let long = "ا ب ۱ (ج) ".repeat(5_000);
-        for s in ["\u{202E}ا\u{202C}b", "\u{064B}", "\n\n", "\u{2029}ا", long.as_str()] {
-            let lines = wrap_at(s, 7);
-            let shown: usize = lines.iter().map(|l| l.text.chars().count()).sum();
-            assert!(shown <= s.chars().count(), "{:?}", s.chars().take(12).collect::<String>());
-        }
-    }
-
-    /// The characters egui puts on screen for each line of `text`, left to right, zero-width
-    /// ones left out, with the interface fonts.
-    fn on_screen(text: &str) -> Vec<String> {
-        let ctx = egui::Context::default();
-        ctx.set_fonts(crate::theme::font_definitions());
-        let mut shown = Vec::new();
-        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
-            for line in wrap(text, |_| true) {
-                let galley = ui.painter().layout_no_wrap(line.text, egui::FontId::proportional(13.0), egui::Color32::WHITE);
-                let glyphs = galley.rows.iter().flat_map(|row| row.glyphs.iter());
-                shown.push(glyphs.filter(|g| g.advance_width > 0.0).map(|g| g.chr).collect());
-            }
-        });
-        output.drop_without_applying_deltas();
-        shown
-    }
-
-    fn rev(s: &str) -> String {
-        s.chars().rev().collect()
-    }
-
-    #[test]
-    fn egui_draws_lines_in_reading_order() {
-        // Only with an Arabic-script face (the craft-fonts build input, as in CI); without one
-        // egui has no shaper run to check.
-        if pdfcraft_fonts::ui_arabic_fonts().is_empty() {
-            return;
-        }
-        assert_eq!(on_screen("من به مدرسه می\u{200C}روم"), [rev("من به مدرسه میروم")]);
-        assert_eq!(on_screen("فایل PDF نسخه 2 است"), [format!("{} 2 {} PDF {}", rev("است"), rev("نسخه"), rev("فایل"))]);
-        assert_eq!(on_screen("سال ۱۴۰۲ شمسی"), [format!("{} ۱۴۰۲ {}", rev("شمسی"), rev("سال"))]);
-        assert_eq!(on_screen("ب۱۲"), ["۱۲ب"]);
-        assert_eq!(on_screen("See واحد اثنين here"), [format!("See {} {} here", rev("اثنين"), rev("واحد"))]);
-        assert_eq!(on_screen("واحد (اثنين)."), [format!(".({}) {}", rev("اثنين"), rev("واحد"))]);
-    }
-
-    #[test]
-    fn single_line_with_its_own_direction() {
-        assert!(matches!(visual_auto("Ada Lovelace"), Cow::Borrowed("Ada Lovelace")));
-        assert_eq!(visual_auto("علی رضایی"), "رضایی علی");
-        assert_eq!(visual_auto("علی 2"), "2 علی");
-        assert_eq!(visual_auto("Team علی رضایی"), "Team رضایی علی");
-    }
-
-    #[test]
-    fn odd_input_never_panics() {
-        let long = "ا ب ".repeat(20_000);
-        let odd = [
-            "\u{064B}",
-            "\u{064B}\u{064C} \u{0301}",
-            "\u{202E}\u{202E}\u{202E}ا",
-            "\u{2067}ا\u{2066}b",
-            "ا\nب\r\nج\u{2029}د",
-            "\u{FEFF}ا\u{0000}ب",
-            "ا\u{10FFFF}\u{E000}ب",
-            "((((ا]]]]",
-            long.as_str(),
-        ];
-        for s in odd {
-            let v = visual(s);
-            assert!(v.chars().count() <= s.chars().count(), "{:?}", s.chars().take(12).collect::<String>());
-        }
-    }
-}
+mod tests;

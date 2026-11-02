@@ -88,12 +88,17 @@ pub(crate) fn add_text(doc: &mut Document, page: usize, words: &[PlacedWord]) ->
     Ok(())
 }
 
+/// Whether `page` has annotations: deskewing would leave them where the content was.
+pub(crate) fn has_annotations(doc: &Document, page: &pdfcraft_model::Page) -> bool {
+    page.dict.get(b"Annots").map(|v| doc.resolve(v)).and_then(|v| v.as_array().map(|a| !a.is_empty())).unwrap_or(false)
+}
+
 pub(crate) fn deskew(doc: &mut Document, page: usize, degrees: f64) -> Result<(), EditError> {
     if !degrees.is_finite() || degrees.abs() > 12.0 {
         return Err(EditError::Invalid("deskew must be between -12 and 12 degrees".into()));
     }
     let p = pdfcraft_model::pages(doc).get(page).cloned().ok_or_else(|| EditError::Invalid("no such page".into()))?;
-    if p.dict.get(b"Annots").map(|v| doc.resolve(v)).and_then(|v| v.as_array().map(|a| !a.is_empty())).unwrap_or(false) {
+    if has_annotations(doc, &p) {
         return Err(EditError::Invalid("deskew is not available on pages with annotations; disable deskew or flatten annotations first".into()));
     }
     let [l, b, r, t] = p.crop(doc);

@@ -13,7 +13,7 @@ use crate::Session;
 pub const DEFAULT_DATE_FORMAT: &str = "m/d/yyyy";
 
 /// Ready-made formats for Preferences ▸ Date format. Any other valid pattern works too.
-pub const DATE_FORMATS: [&str; 12] = [
+pub const DATE_FORMATS: [&str; 14] = [
     "m/d/yyyy",
     "mm/dd/yyyy",
     "d/m/yyyy",
@@ -21,6 +21,9 @@ pub const DATE_FORMATS: [&str; 12] = [
     "dd.mm.yyyy",
     "yyyy-mm-dd",
     "yyyy.mm.dd.",
+    // Year first with slashes, as Taiwan, Japan and China write it (Windows' zh-TW short date).
+    "yyyy/mm/dd",
+    "yyyy/m/d",
     "d mmm yyyy",
     "d mmmm yyyy",
     "mmm d, yyyy",
@@ -54,9 +57,13 @@ const ZH_DAYS: [&str; 7] = ["星期日", "星期一", "星期二", "星期三", 
 const AR_MONTHS: [&str; 12] = ["يناير", "فبراير", "مارس", "أبريل", "مايو", "يونيو", "يوليو", "أغسطس", "سبتمبر", "أكتوبر", "نوفمبر", "ديسمبر"];
 const AR_DAYS: [&str; 7] = ["الأحد", "الاثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت"];
 
+const CKB_MONTHS: [&str; 12] =
+    ["کانوونی دووەم", "شوبات", "ئازار", "نیسان", "ئایار", "حوزەیران", "تەممووز", "ئاب", "ئەیلوول", "تشرینی یەکەم", "تشرینی دووەم", "کانوونی یەکەم"];
+const CKB_DAYS: [&str; 7] = ["یەکشەممە", "دووشەممە", "سێشەممە", "چوارشەممە", "پێنجشەممە", "هەینی", "شەممە"];
+
 /// The languages month and weekday names can be written in (Preferences ▸ Date format ▸ Language):
 /// the interface languages, in the same order and with the same names.
-pub static DATE_LANGUAGES: [DateLanguage; 23] = [
+pub static DATE_LANGUAGES: [DateLanguage; 35] = [
     DateLanguage {
         code: "en",
         name: "English",
@@ -250,6 +257,27 @@ pub static DATE_LANGUAGES: [DateLanguage; 23] = [
         days: AR_DAYS,
         days_short: AR_DAYS,
     },
+    // Central Kurdish (Sorani) has no shorter written forms of its month and weekday names either.
+    DateLanguage {
+        code: "ckb",
+        name: "کوردیی ناوەندی",
+        months: CKB_MONTHS,
+        months_with_day: None,
+        months_short: CKB_MONTHS,
+        days: CKB_DAYS,
+        days_short: CKB_DAYS,
+    },
+    // Persian (Farsi); Gregorian month and weekday names, right to left like Arabic and Kurdish.
+    // Persian does not change the month form after a day number, so `months_with_day` is `None`.
+    DateLanguage {
+        code: "fa",
+        name: "فارسی",
+        months: ["ژانویه", "فوریه", "مارس", "آوریل", "مه", "ژوئن", "ژوئیه", "اوت", "سپتامبر", "اکتبر", "نوامبر", "دسامبر"],
+        months_with_day: None,
+        months_short: ["ژانویه", "فوریه", "مارس", "آوریل", "مه", "ژوئن", "ژوئیه", "اوت", "سپتامبر", "اکتبر", "نوامبر", "دسامبر"],
+        days: ["یکشنبه", "دوشنبه", "سه‌شنبه", "چهارشنبه", "پنج‌شنبه", "جمعه", "شنبه"],
+        days_short: ["یک", "دو", "سه", "چه", "پن", "جم", "شن"],
+    },
     DateLanguage {
         code: "pl",
         name: "Polski",
@@ -360,6 +388,17 @@ pub static DATE_LANGUAGES: [DateLanguage; 23] = [
         days: ["sekmadienis", "pirmadienis", "antradienis", "trečiadienis", "ketvirtadienis", "penktadienis", "šeštadienis"],
         days_short: ["sk", "pr", "an", "tr", "kt", "pn", "št"],
     },
+    // Indonesian. Month and weekday names are the same with and after a day number, so
+    // `months_with_day` is `None`.
+    DateLanguage {
+        code: "id",
+        name: "Bahasa Indonesia",
+        months: ["Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember"],
+        months_with_day: None,
+        months_short: ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"],
+        days: ["Minggu", "Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu"],
+        days_short: ["Min", "Sen", "Sel", "Rab", "Kam", "Jum", "Sab"],
+    },
     // Vietnamese: numeric month forms (`tháng 1` with a day, `Tháng 1` standing alone).
     // Fill & Sign still refuses any format whose final text fails the existing WinAnsi check
     // (for example weekday names); `dd.mm.yyyy` remains writable.
@@ -397,6 +436,144 @@ pub static DATE_LANGUAGES: [DateLanguage; 23] = [
         months_short: ["Thg 1", "Thg 2", "Thg 3", "Thg 4", "Thg 5", "Thg 6", "Thg 7", "Thg 8", "Thg 9", "Thg 10", "Thg 11", "Thg 12"],
         days: ["Chủ Nhật", "Thứ Hai", "Thứ Ba", "Thứ Tư", "Thứ Năm", "Thứ Sáu", "Thứ Bảy"],
         days_short: ["CN", "T2", "T3", "T4", "T5", "T6", "T7"],
+    },
+    DateLanguage {
+        code: "fi",
+        name: "Suomi",
+        months: [
+            "tammikuu",
+            "helmikuu",
+            "maaliskuu",
+            "huhtikuu",
+            "toukokuu",
+            "kesäkuu",
+            "heinäkuu",
+            "elokuu",
+            "syyskuu",
+            "lokakuu",
+            "marraskuu",
+            "joulukuu",
+        ],
+        // After a day number the month takes the partitive: `14. lokakuuta 2026`.
+        months_with_day: Some([
+            "tammikuuta",
+            "helmikuuta",
+            "maaliskuuta",
+            "huhtikuuta",
+            "toukokuuta",
+            "kesäkuuta",
+            "heinäkuuta",
+            "elokuuta",
+            "syyskuuta",
+            "lokakuuta",
+            "marraskuuta",
+            "joulukuuta",
+        ]),
+        months_short: ["tammi", "helmi", "maalis", "huhti", "touko", "kesä", "heinä", "elo", "syys", "loka", "marras", "joulu"],
+        days: ["sunnuntai", "maanantai", "tiistai", "keskiviikko", "torstai", "perjantai", "lauantai"],
+        days_short: ["su", "ma", "ti", "ke", "to", "pe", "la"],
+    },
+    DateLanguage {
+        code: "sq",
+        name: "Shqip",
+        months: ["janar", "shkurt", "mars", "prill", "maj", "qershor", "korrik", "gusht", "shtator", "tetor", "nëntor", "dhjetor"],
+        months_with_day: None,
+        months_short: ["jan", "shk", "mar", "pri", "maj", "qer", "korr", "gush", "sht", "tet", "nën", "dhj"],
+        days: ["e diel", "e hënë", "e martë", "e mërkurë", "e enjte", "e premte", "e shtunë"],
+        days_short: ["die", "hën", "mar", "mër", "enj", "pre", "sht"],
+    },
+    DateLanguage {
+        code: "th",
+        name: "ไทย",
+        months: ["มกราคม", "กุมภาพันธ์", "มีนาคม", "เมษายน", "พฤษภาคม", "มิถุนายน", "กรกฎาคม", "สิงหาคม", "กันยายน", "ตุลาคม", "พฤศจิกายน", "ธันวาคม"],
+        months_with_day: None,
+        months_short: ["ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."],
+        days: ["วันอาทิตย์", "วันจันทร์", "วันอังคาร", "วันพุธ", "วันพฤหัสบดี", "วันศุกร์", "วันเสาร์"],
+        days_short: ["อา.", "จ.", "อ.", "พ.", "พฤ.", "ศ.", "ส."],
+    },
+    DateLanguage {
+        code: "ca",
+        name: "Català",
+        months: ["gener", "febrer", "març", "abril", "maig", "juny", "juliol", "agost", "setembre", "octubre", "novembre", "desembre"],
+        // After a day the month carries its own preposition, elided before a vowel: `7 d'abril`.
+        months_with_day: Some([
+            "de gener",
+            "de febrer",
+            "de març",
+            "d'abril",
+            "de maig",
+            "de juny",
+            "de juliol",
+            "d'agost",
+            "de setembre",
+            "d'octubre",
+            "de novembre",
+            "de desembre",
+        ]),
+        months_short: ["gen.", "febr.", "març", "abr.", "maig", "juny", "jul.", "ag.", "set.", "oct.", "nov.", "des."],
+        days: ["diumenge", "dilluns", "dimarts", "dimecres", "dijous", "divendres", "dissabte"],
+        days_short: ["dg.", "dl.", "dt.", "dx.", "dj.", "dv.", "ds."],
+    },
+    // Romanian: month and weekday names are lowercase, also standing alone (`noiembrie 2023`).
+    DateLanguage {
+        code: "ro",
+        name: "Română",
+        months: [
+            "ianuarie",
+            "februarie",
+            "martie",
+            "aprilie",
+            "mai",
+            "iunie",
+            "iulie",
+            "august",
+            "septembrie",
+            "octombrie",
+            "noiembrie",
+            "decembrie",
+        ],
+        months_with_day: None,
+        months_short: ["ian.", "feb.", "mar.", "apr.", "mai", "iun.", "iul.", "aug.", "sept.", "oct.", "nov.", "dec."],
+        days: ["duminică", "luni", "marți", "miercuri", "joi", "vineri", "sâmbătă"],
+        days_short: ["dum.", "lun.", "mar.", "mie.", "joi", "vin.", "sâm."],
+    },
+    DateLanguage {
+        code: "lo",
+        name: "ພາສາລາວ",
+        months: ["ມັງກອນ", "ກຸມພາ", "ມີນາ", "ເມສາ", "ພຶດສະພາ", "ມິຖຸນາ", "ກໍລະກົດ", "ສິງຫາ", "ກັນຍາ", "ຕຸລາ", "ພະຈິກ", "ທັນວາ"],
+        months_with_day: None,
+        months_short: ["ມ.ກ.", "ກ.ພ.", "ມ.ນ.", "ມ.ສ.", "ພ.ພ.", "ມິ.ຖ.", "ກ.ລ.", "ສ.ຫ.", "ກ.ຍ.", "ຕ.ລ.", "ພ.ຈ.", "ທ.ວ."],
+        days: ["ວັນອາທິດ", "ວັນຈັນ", "ວັນອັງຄານ", "ວັນພຸດ", "ວັນພະຫັດ", "ວັນສຸກ", "ວັນເສົາ"],
+        days_short: ["ອາທິດ", "ຈັນ", "ອັງຄານ", "ພຸດ", "ພະຫັດ", "ສຸກ", "ເສົາ"],
+    },
+    // Hindi (Devanagari). Month and weekday names are the same with and after a day number.
+    DateLanguage {
+        code: "hi",
+        name: "हिन्दी",
+        months: ["जनवरी", "फ़रवरी", "मार्च", "अप्रैल", "मई", "जून", "जुलाई", "अगस्त", "सितंबर", "अक्तूबर", "नवंबर", "दिसंबर"],
+        months_with_day: None,
+        months_short: ["जन॰", "फ़र॰", "मार्च", "अप्रैल", "मई", "जून", "जुला॰", "अग॰", "सित॰", "अक्तू॰", "नव॰", "दिस॰"],
+        days: ["रविवार", "सोमवार", "मंगलवार", "बुधवार", "गुरुवार", "शुक्रवार", "शनिवार"],
+        days_short: ["रवि", "सोम", "मंगल", "बुध", "गुरु", "शुक्र", "शनि"],
+    },
+    // Korean: months are numbered (`3월`) and weekdays end in 요일; no names change after a day.
+    DateLanguage {
+        code: "ko",
+        name: "한국어",
+        months: ["1월", "2월", "3월", "4월", "5월", "6월", "7월", "8월", "9월", "10월", "11월", "12월"],
+        months_with_day: None,
+        months_short: ["1월", "2월", "3월", "4월", "5월", "6월", "7월", "8월", "9월", "10월", "11월", "12월"],
+        days: ["일요일", "월요일", "화요일", "수요일", "목요일", "금요일", "토요일"],
+        days_short: ["일", "월", "화", "수", "목", "금", "토"],
+    },
+    DateLanguage {
+        code: "nb",
+        name: "Norsk bokmål",
+        months: ["januar", "februar", "mars", "april", "mai", "juni", "juli", "august", "september", "oktober", "november", "desember"],
+        months_with_day: None,
+        months_short: ["jan.", "feb.", "mar.", "apr.", "mai", "jun.", "jul.", "aug.", "sep.", "okt.", "nov.", "des."],
+        days: ["søndag", "mandag", "tirsdag", "onsdag", "torsdag", "fredag", "lørdag"],
+        days_short: ["søn.", "man.", "tir.", "ons.", "tor.", "fre.", "lør."],
     },
 ];
 
@@ -604,6 +781,8 @@ mod tests {
                 "07.03.2026",
                 "2026-03-07",
                 "2026.03.07.",
+                "2026/03/07",
+                "2026/3/7",
                 "7 Mar 2026",
                 "7 March 2026",
                 "Mar 7, 2026",
@@ -701,6 +880,10 @@ mod tests {
         assert_eq!(in_lang("yyyy\\年mmmmd\\日 dddd", "ja"), "2026年3月7日 土曜日");
         assert_eq!(in_lang("yyyy\\年mmmmd\\日 dddd", "zh-hans"), "2026年三月7日 星期六");
         assert_eq!(in_lang("ddd", "zh-hant"), "週六");
+        assert_eq!(in_lang("dddd, d mmmm yyyy", "sq"), "e shtunë, 7 mars 2026");
+        assert_eq!(in_lang("ddd d mmm", "sq"), "sht 7 mar");
+        assert_eq!(in_lang("dddd d. mmmm yyyy", "nb"), "lørdag 7. mars 2026");
+        assert_eq!(in_lang("ddd d. mmm", "nb"), "lør. 7. mar.");
         assert_eq!(date_language("PT-BR").map(|l| l.code), Some("pt-br"));
         assert!(date_language("xx").is_none());
         for l in &DATE_LANGUAGES {
@@ -716,6 +899,46 @@ mod tests {
         assert_eq!(in_lang("mmmm yyyy", "ru"), "март 2026");
         // A weekday (dddd) is not a day number.
         assert_eq!(in_lang("dddd, mmmm", "cs"), "sobota, březen");
+    }
+
+    /// Indonesian month and weekday names are the same with and after a day number. (Vietnamese
+    /// has its own test upstream: its numeric month forms are writable, weekday names are not.)
+    #[test]
+    fn indonesian_month_and_weekday_names() {
+        assert_eq!(in_lang("d mmmm yyyy", "id"), "7 Maret 2026");
+        assert_eq!(in_lang("mmmm yyyy", "id"), "Maret 2026");
+        assert_eq!(in_lang("dddd, d mmmm yyyy", "id"), "Sabtu, 7 Maret 2026");
+        // Indonesian month names are Latin, so they reach a PDF.
+        let mut s = Session::new().with_clock(|| 1_700_000_000);
+        s.set_date_language(Some("id")).unwrap();
+        assert_eq!(s.today_text_for_pdf(Some("d mmmm yyyy"), None).as_deref(), Ok("14 November 2023"));
+    }
+
+    /// Hindi and Korean names are the same with and after a day number. Neither is Western
+    /// European, so the date-text path refuses them with what to use instead.
+    #[test]
+    fn hindi_and_korean_month_and_weekday_names() {
+        assert_eq!(in_lang("d mmmm yyyy", "hi"), "7 मार्च 2026");
+        assert_eq!(in_lang("dddd, mmmm", "hi"), "शनिवार, मार्च");
+        assert_eq!(in_lang("ddd, d mmm", "hi"), "शनि, 7 मार्च");
+        assert_eq!(in_lang("yyyy\\년 mmmm d\\일 dddd", "ko"), "2026년 3월 7일 토요일");
+        assert_eq!(in_lang("ddd", "ko"), "토");
+        let mut s = Session::new().with_clock(|| 1_700_000_000);
+        for code in ["hi", "ko"] {
+            s.set_date_language(Some(code)).unwrap();
+            assert!(s.today_text_for_pdf(Some("d mmmm yyyy"), None).unwrap_err().contains("dd.mm.yyyy"), "{code}");
+        }
+    }
+
+    #[test]
+    fn catalan_months_elide_the_preposition_after_a_day() {
+        assert_eq!(in_lang("dddd d mmmm \\de yyyy", "ca"), "dissabte 7 de març de 2026");
+        assert_eq!(in_lang("mmmm yyyy", "ca"), "març 2026");
+        let ca = date_language("ca").unwrap();
+        assert_eq!(format_day("d mmmm \\de yyyy", (2026, 4, 23), ca), "23 d'abril de 2026");
+        assert_eq!(format_day("d mmmm", (2026, 8, 1), ca), "1 d'agost");
+        assert_eq!(format_day("d mmmm", (2026, 10, 8), ca), "8 d'octubre");
+        assert_eq!(format_day("mmmm", (2026, 10, 8), ca), "octubre", "no preposition without a day");
     }
 
     #[test]
@@ -742,6 +965,23 @@ mod tests {
     }
 
     #[test]
+    fn romanian_month_and_weekday_names() {
+        let mut s = Session::new().with_clock(|| 1_700_000_000);
+        s.set_date_language(Some("ro")).unwrap();
+        assert_eq!(s.date_language(), Some("ro"));
+        s.set_date_format("d mmmm yyyy").unwrap();
+        assert_eq!(s.today_text(None, None).as_deref(), Ok("14 noiembrie 2023"));
+        s.set_date_format("mmmm yyyy").unwrap();
+        assert_eq!(s.today_text(None, None).as_deref(), Ok("noiembrie 2023"));
+        s.set_date_format("ddd, d mmm").unwrap();
+        assert_eq!(s.today_text(None, None).as_deref(), Ok("mar., 14 nov."));
+        // `14 noiembrie 2023` is WinAnsi; the weekday `marți` (ț, comma below) is not, so Fill & Sign refuses that format.
+        assert_eq!(s.today_text_for_pdf(Some("d mmmm yyyy"), Some("ro")).as_deref(), Ok("14 noiembrie 2023"));
+        let e = s.today_text_for_pdf(Some("dddd d mmmm yyyy"), Some("ro")).unwrap_err();
+        assert!(e.contains("can't be written into the PDF yet"), "{e}");
+    }
+
+    #[test]
     fn vietnamese_month_and_weekday_names() {
         let mut s = Session::new().with_clock(|| 1_700_000_000);
         s.set_date_language(Some("vi")).unwrap();
@@ -765,6 +1005,7 @@ mod tests {
         assert_eq!(unwritable("8. října 2026"), "ř");
         assert_eq!(unwritable("2026年10月8日"), "年月日");
         assert_eq!(unwritable("sábado, 7 de março – 2026?"), "", "Western European, dashes and ? are fine");
+        assert_eq!(unwritable("lørdag 7. mars, søn. 8. mai (æøå ÆØÅ)"), "", "Norwegian letters are Western European");
         let mut s = Session::new().with_clock(|| 1_700_000_000);
         s.set_date_format("d. mmmm yyyy").unwrap();
         assert_eq!(s.today_text_for_pdf(None, Some("es")).as_deref(), Ok("14. noviembre 2023"));

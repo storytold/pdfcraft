@@ -8,7 +8,7 @@ use crate::x509::Certificate;
 use crate::{SignError, Time};
 
 /// A DER size cap: real CRLs and OCSP responses are far smaller.
-const MAX_EVIDENCE: usize = 2 * 1024 * 1024;
+pub(crate) const MAX_EVIDENCE: usize = 2 * 1024 * 1024;
 
 const ID_PKIX_OCSP_BASIC: &str = "1.3.6.1.5.5.7.48.1.1";
 const EKU_OCSP_SIGNING: &str = "1.3.6.1.5.5.7.3.9";
@@ -259,26 +259,27 @@ impl OcspResponse {
     /// response window.
     pub fn check(&self, cert: &Certificate, issuer: &Certificate, at: Time) -> RevocationStatus {
         // Who signed the response? The issuer identified by responderID, or a delegated,
-        // embedded responder identified the same way.
-        let responder: Option<&Certificate> = match &self.responder_id {
+        // embedded responder identified the same way. Which of the two it is comes from that
+        // choice, never from the embedded certificate's names, which anyone can copy.
+        let (responder, delegated): (Option<&Certificate>, bool) = match &self.responder_id {
             ResponderId::ByName(name) => {
                 if *name == issuer.subject.raw {
-                    Some(issuer)
+                    (Some(issuer), false)
                 } else {
-                    self.responder_cert.as_ref().filter(|c| *name == c.subject.raw)
+                    (self.responder_cert.as_ref().filter(|c| *name == c.subject.raw), true)
                 }
             }
             ResponderId::ByKey(hash) => {
                 if *hash == DigestAlg::Sha1.digest(&[&issuer.public_key.key_bits()]) {
-                    Some(issuer)
+                    (Some(issuer), false)
                 } else {
-                    self.responder_cert.as_ref().filter(|c| *hash == DigestAlg::Sha1.digest(&[&c.public_key.key_bits()]))
+                    (self.responder_cert.as_ref().filter(|c| *hash == DigestAlg::Sha1.digest(&[&c.public_key.key_bits()])), true)
                 }
             }
         };
         let Some(responder) = responder else { return RevocationStatus::Unknown };
         // A delegated responder must carry the OCSP-signing EKU and be issued by the issuer.
-        if responder.subject.raw != issuer.subject.raw {
+        if delegated {
             if responder.issuer.raw != issuer.subject.raw || !responder.signed_by(&issuer.public_key) {
                 return RevocationStatus::Unknown;
             }

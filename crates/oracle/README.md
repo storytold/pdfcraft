@@ -15,7 +15,7 @@ Every test that wanted an oracle used to probe for it by hand and decide on its 
 it was missing. The common choice — print a line and return — reports as a **pass**, so a suite
 with no oracles installed looked exactly like one in which every oracle agreed.
 
-That was not hypothetical. No CI runner installed `qpdf`, so `cos/tests/encryption.rs::qpdf_agrees`
+That was not hypothetical. No CI runner installed `qpdf`, so `cos/tests/it/encryption.rs::qpdf_agrees`
 had never executed on a runner, while `README.md` said saved output was "independently checked with
 qpdf". For R2–R4 that test is the *only* check of owner-password authentication (Algorithm 7) that
 does not go through our own code.
@@ -50,10 +50,10 @@ Each returns `Result<Oracle, Absent>`. `Oracle::command()` hands back a fresh `C
 install the tools, so a skip notice there becomes a red build.
 
 ```
-$ cargo test -p pdfcraft-cos --test encryption qpdf_agrees
+$ cargo test -p pdfcraft-cos --test it encryption::qpdf_agrees
 test result: ok. 1 passed            # qpdf absent: skipped, with a notice on stderr
 
-$ PDFCRAFT_ORACLES_REQUIRED=1 cargo test -p pdfcraft-cos --test encryption qpdf_agrees
+$ PDFCRAFT_ORACLES_REQUIRED=1 cargo test -p pdfcraft-cos --test it encryption::qpdf_agrees
 oracle `qpdf` is required but is not on PATH (program not found): PDFCRAFT_ORACLES_REQUIRED is
 set, so this is a failure rather than a skip (apt install qpdf / brew install qpdf)
 test result: FAILED. 1 failed
@@ -90,7 +90,7 @@ appearance we do draw.
 **Poppler is not a usable oracle for JBIG2.** The 96 `bitmap-*.pdf` corpus fixtures encode one
 picture through every corner of the format, so a correct decoder renders them all identically. We
 render 1 distinct image across all 96; Poppler renders 8, drawing a blank page for seven of them.
-`crates/render/tests/jbig2_invariants.rs` pins that invariant, and needs no oracle to do it.
+`crates/render/tests/it/jbig2_invariants.rs` pins that invariant, and needs no oracle to do it.
 
 ## Comparing text
 

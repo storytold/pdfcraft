@@ -1,0 +1,73 @@
+[package]
+name = "vello_cpu"
+# When moving past 0.0.x, also update caveats in the README
+version = "0.0.8"
+description = "A CPU-based renderer for Vello, optimized for SIMD and multithreaded execution."
+categories = ["rendering", "graphics"]
+keywords = ["2d", "vector-graphics"]
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+# There are no platform specific docs.
+default-target = "x86_64-unknown-linux-gnu"
+targets = []
+
+[dependencies]
+bytemuck = { workspace = true }
+glifo = { workspace = true, default-features = false, optional = true }
+vello_common = { workspace = true }
+hashbrown = { workspace = true }
+png = { workspace = true, optional = true }
+crossbeam-channel = { workspace = true, optional = true }
+ordered-channel = { workspace = true, optional = true, features = ["crossbeam-channel"] }
+rayon = { workspace = true, optional = true }
+thread_local = { workspace = true, optional = true }
+
+[features]
+# If adding new features, also add to `src/lib.rs`
+default = ["std", "png", "text", "u8_pipeline"]
+# Get floating point functions from the standard library (likely using your target’s libc).
+std = ["vello_common/std", "glifo?/std"]
+# Use floating point implementations from libm.
+libm = ["vello_common/libm", "glifo?/libm"]
+# Allow loading Pixmap from PNG, and drawing png glyphs.
+png = ["dep:png", "vello_common/png", "glifo?/png"]
+# Enable multi-threaded rendering.
+multithreading = [
+    "std",
+    "dep:rayon",
+    "dep:thread_local",
+    "dep:ordered-channel",
+    "dep:crossbeam-channel",
+    "vello_common/multithreading",
+]
+# Add support for text rendering
+text = ["dep:glifo"]
+
+# Speed focussed rendering using u8 math
+u8_pipeline = []
+# Quality focussed rendering using f32 math
+f32_pipeline = []
+
+[lints]
+workspace = true
+
+[[example]]
+name = "basic"
+required-features = ["png", "std"]
+
+[[example]]
+name = "clipping"
+required-features = ["png", "std"]
+
+[[example]]
+name = "masking"
+required-features = ["png", "std"]
+
+[[example]]
+name = "paints"
+required-features = ["png", "std"]

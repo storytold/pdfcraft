@@ -397,7 +397,7 @@ impl StandardKind {
         })
     }
 
-    fn code_to_ps_name(&self, code: u8) -> Option<&str> {
+    pub(crate) fn code_to_ps_name(&self, code: u8) -> Option<&str> {
         let bf = self.base_font;
 
         self.encodings
@@ -445,7 +445,8 @@ impl StandardKind {
     /// PdfCraft patch: the outline of a glyph from [`Self::composite_glyph`] — the base letter,
     /// then the accent centred on it. An accent above a letter taller than `x` is raised by the
     /// difference (the stand-in's accents sit on lowercase letters) and, in an italic font,
-    /// moved along the slant; an ogonek hangs from the letter's right edge.
+    /// moved along the slant; an ogonek hangs from the letter's right edge; a comma below is
+    /// the font's comma, smaller, under the baseline.
     fn composite_outline(&self, glyph: GlyphId) -> Option<BezPath> {
         let code = u8::try_from(glyph.to_u32().checked_sub(COMPOSITE_GLYPH_BASE)?).ok()?;
         let (base, accent, place) = accented_parts(self.code_to_ps_name(code)?)?;
@@ -455,13 +456,27 @@ impl StandardKind {
                 .map(|g| self.base_font_blob.outline_glyph(g))
         };
         let mut path = outline(base)?;
-        let accent = outline(accent)?;
+        let mut accent = outline(accent)?;
         if path.elements().is_empty() || accent.elements().is_empty() {
             return Some(path);
+        }
+        if place == Place::CommaBelow {
+            accent = Affine::scale(COMMA_BELOW_SCALE) * accent;
         }
         let (b, a) = (path.bounding_box(), accent.bounding_box());
         let (dx, dy) = match place {
             Place::Below => (b.center().x - a.center().x, 0.0),
+            Place::CommaBelow => {
+                // Its top a little below the baseline (or the letter's overshoot below it), and
+                // in an italic font moved back along the slant by as much as it is lowered.
+                let dy = b.y0.min(0.0) - COMMA_BELOW_GAP * a.height() - a.y1;
+                let slant = if self.base_font.is_italic() {
+                    dy * ITALIC_ACCENT_SLANT
+                } else {
+                    0.0
+                };
+                (b.center().x - a.center().x + slant, dy)
+            }
             Place::Ogonek => (b.x1 - a.x1, 0.0),
             Place::Above => {
                 let x_top = outline("x")
@@ -529,6 +544,15 @@ impl StandardKind {
                 return path;
             };
 
+            // PdfCraft patch (57): a stand-in for a font the document names is narrowed to a
+            // narrower /Widths advance, so neighbours don't overlap, but never widened: the
+            // advance already places the next glyph, and widening drew `i` and `l` of a 600-unit
+            // `Arial,Bold` as solid blocks twice their width.
+            let should_width = if self.fallback {
+                should_width.min(actual_width)
+            } else {
+                should_width
+            };
             return stretch_glyph(path, should_width, actual_width);
         }
 
@@ -582,12 +606,21 @@ const COMPOSITE_GLYPH_BASE: u32 = 0x0100_0000;
 /// an italic stand-in (tan 15°; the standard italics lean 12° to 16°).
 const ITALIC_ACCENT_SLANT: f64 = 0.27;
 
+/// PdfCraft patch: the size of a comma accent against the font's comma. A full-size comma
+/// moved under the baseline reaches past the descenders and into the line below.
+const COMMA_BELOW_SCALE: f64 = 0.75;
+
+/// PdfCraft patch: the gap between the baseline and a comma accent, as a share of its height.
+const COMMA_BELOW_GAP: f64 = 0.15;
+
 /// Where an accent goes on its base letter.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Place {
     Above,
     Below,
     Ogonek,
+    /// The font's comma, smaller, under the letter (the stand-ins have no `commaaccent`).
+    CommaBelow,
 }
 
 /// PdfCraft patch: the stand-ins for the standard fonts (PDFium's Foxit fonts) carry only the
@@ -596,7 +629,11 @@ enum Place {
 /// iText 2 writes Turkish text with Times New Roman left unembedded) drew nothing for them. Each of
 /// these Latin Extended-A letters is a base letter the stand-ins have plus one of their accents,
 /// as Type 1 `seac` composites and the composites of the standard-14 AFM files are built.
-/// Letters whose accent isn't a plain one (ď ľ ť and the comma accents) aren't here.
+/// The comma-below letters of Romanian (ș ț) and Latvian (ķ ļ ņ ŗ Ģ) are the base letter and the
+/// font's comma, since the stand-ins have no `commaaccent` either; without them a form laid out
+/// from its XFA template drew Romanian ș as a blank and ț with a cedilla. Letters whose accent
+/// isn't a plain one (ď ľ ť, whose caron is an apostrophe beside the letter, and ģ, whose comma
+/// is turned and above it) aren't here.
 const ACCENTED_LETTERS: &[(&str, &str, &str, Place)] = &[
     ("Amacron", "A", "macron", Place::Above),
     ("amacron", "a", "macron", Place::Above),
@@ -628,6 +665,7 @@ const ACCENTED_LETTERS: &[(&str, &str, &str, Place)] = &[
     ("Gbreve", "G", "breve", Place::Above),
     ("gbreve", "g", "breve", Place::Above),
     ("Gdotaccent", "G", "dotaccent", Place::Above),
+    ("Gcommaaccent", "G", "comma", Place::CommaBelow),
     ("gdotaccent", "g", "dotaccent", Place::Above),
     ("Hcircumflex", "H", "circumflex", Place::Above),
     ("hcircumflex", "h", "circumflex", Place::Above),
@@ -641,10 +679,16 @@ const ACCENTED_LETTERS: &[(&str, &str, &str, Place)] = &[
     ("iogonek", "i", "ogonek", Place::Ogonek),
     ("Idotaccent", "I", "dotaccent", Place::Above),
     ("Jcircumflex", "J", "circumflex", Place::Above),
+    ("Kcommaaccent", "K", "comma", Place::CommaBelow),
+    ("kcommaaccent", "k", "comma", Place::CommaBelow),
     ("Lacute", "L", "acute", Place::Above),
     ("lacute", "l", "acute", Place::Above),
+    ("Lcommaaccent", "L", "comma", Place::CommaBelow),
+    ("lcommaaccent", "l", "comma", Place::CommaBelow),
     ("Nacute", "N", "acute", Place::Above),
     ("nacute", "n", "acute", Place::Above),
+    ("Ncommaaccent", "N", "comma", Place::CommaBelow),
+    ("ncommaaccent", "n", "comma", Place::CommaBelow),
     ("Ncaron", "N", "caron", Place::Above),
     ("ncaron", "n", "caron", Place::Above),
     ("Omacron", "O", "macron", Place::Above),
@@ -655,6 +699,8 @@ const ACCENTED_LETTERS: &[(&str, &str, &str, Place)] = &[
     ("ohungarumlaut", "o", "hungarumlaut", Place::Above),
     ("Racute", "R", "acute", Place::Above),
     ("racute", "r", "acute", Place::Above),
+    ("Rcommaaccent", "R", "comma", Place::CommaBelow),
+    ("rcommaaccent", "r", "comma", Place::CommaBelow),
     ("Rcaron", "R", "caron", Place::Above),
     ("rcaron", "r", "caron", Place::Above),
     ("Sacute", "S", "acute", Place::Above),
@@ -663,8 +709,12 @@ const ACCENTED_LETTERS: &[(&str, &str, &str, Place)] = &[
     ("scircumflex", "s", "circumflex", Place::Above),
     ("Scedilla", "S", "cedilla", Place::Below),
     ("scedilla", "s", "cedilla", Place::Below),
+    ("Scommaaccent", "S", "comma", Place::CommaBelow),
+    ("scommaaccent", "s", "comma", Place::CommaBelow),
     ("Tcedilla", "T", "cedilla", Place::Below),
     ("tcedilla", "t", "cedilla", Place::Below),
+    ("Tcommaaccent", "T", "comma", Place::CommaBelow),
+    ("tcommaaccent", "t", "comma", Place::CommaBelow),
     ("Tcaron", "T", "caron", Place::Above),
     ("Utilde", "U", "tilde", Place::Above),
     ("utilde", "u", "tilde", Place::Above),
@@ -688,8 +738,28 @@ const ACCENTED_LETTERS: &[(&str, &str, &str, Place)] = &[
     ("zdotaccent", "z", "dotaccent", Place::Above),
 ];
 
+/// PdfCraft patch: the comma-below letters of [`ACCENTED_LETTERS`] by character. The glyph list
+/// names the Latvian ones `Kcedilla`… (their comma is a cedilla in Unicode's names), has no name
+/// for Ț ț, and gives `Tcommaaccent` and `tcommaaccent` to Ţ ţ, which keep their cedilla.
+const COMMA_BELOW_BY_CHAR: &[(char, &str)] = &[
+    ('\u{0122}', "Gcommaaccent"),
+    ('\u{0136}', "Kcommaaccent"),
+    ('\u{0137}', "kcommaaccent"),
+    ('\u{013B}', "Lcommaaccent"),
+    ('\u{013C}', "lcommaaccent"),
+    ('\u{0145}', "Ncommaaccent"),
+    ('\u{0146}', "ncommaaccent"),
+    ('\u{0156}', "Rcommaaccent"),
+    ('\u{0157}', "rcommaaccent"),
+    ('\u{0218}', "Scommaaccent"),
+    ('\u{0219}', "scommaaccent"),
+    ('\u{021A}', "Tcommaaccent"),
+    ('\u{021B}', "tcommaaccent"),
+];
+
 /// PdfCraft patch: the base letter, accent and placement of an accented letter in
-/// [`ACCENTED_LETTERS`], by glyph name (`uni011E` and `u011E` forms too).
+/// [`ACCENTED_LETTERS`], by glyph name (`uni011E` and `u011E` forms too). A comma-below letter
+/// is found by its character ([`COMMA_BELOW_BY_CHAR`]), so `/uni0136` and `/Kcedilla` are Ķ too.
 fn accented_parts(name: &str) -> Option<(&'static str, &'static str, Place)> {
     let name = normalized_glyph_name(name);
     let by_name = |n: &str| {
@@ -698,5 +768,11 @@ fn accented_parts(name: &str) -> Option<(&'static str, &'static str, Place)> {
             .find(|(letter, ..)| *letter == n)
             .map(|&(_, base, accent, place)| (base, accent, place))
     };
-    by_name(name).or_else(|| by_name(glyph_names::get_reverse(glyph_name_to_unicode(name)?)?))
+    by_name(name).or_else(|| {
+        let c = glyph_name_to_unicode(name)?;
+        match COMMA_BELOW_BY_CHAR.iter().find(|(letter, _)| *letter == c) {
+            Some((_, comma_below)) => by_name(comma_below),
+            None => by_name(glyph_names::get_reverse(c)?),
+        }
+    })
 }
