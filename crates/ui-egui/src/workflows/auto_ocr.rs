@@ -242,8 +242,15 @@ impl PdfCraftApp {
             return;
         }
         let pages = std::mem::take(&mut run.pending);
-        let settings =
-            OcrSettings { language: self.ocr_draft.language.clone(), skip_text_pages: true, engine: EngineChoice::Ocrs, ..OcrSettings::default() };
+        // Comments are not part of the scan, as for Edit: they don't count as its text and aren't
+        // read. A comment edit keeps the page's recognised text, so their words would outlive them.
+        let settings = OcrSettings {
+            language: self.ocr_draft.language.clone(),
+            skip_text_pages: true,
+            native_text_only: true,
+            engine: EngineChoice::Ocrs,
+            ..OcrSettings::default()
+        };
         let Some(job) = self.session.ocr_job(view.id, &pages, settings) else {
             view.auto_ocr.stop();
             return;
