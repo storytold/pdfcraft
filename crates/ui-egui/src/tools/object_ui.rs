@@ -559,6 +559,8 @@ mod tests {
         assert_eq!(order, [('t', 3), ('t', 1), ('i', 0), ('a', 2), ('a', 0)]);
     }
 
+    /// `keep_on_page` stops a move at the page edge, lets an oversized axis move freely, and lets
+    /// content already past an edge move back but not further out.
     #[test]
     fn a_drag_stays_on_the_page() {
         let page = Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(100.0, 100.0));

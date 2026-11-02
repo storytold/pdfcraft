@@ -5170,6 +5170,7 @@ fn dragging_a_paragraph_moves_it_and_its_edge_rewraps_it() {
     assert!(h.state().views[0].line_editor.is_none());
 }
 
+/// Dropping a paragraph on the next page leaves it inside its own page, as one "Move object" step (#5264).
 #[test]
 fn dragging_a_paragraph_onto_the_next_page_keeps_it_on_its_own() {
     let mut h = harness(2, |app| {
@@ -5197,6 +5198,7 @@ fn dragging_a_paragraph_onto_the_next_page_keeps_it_on_its_own() {
     assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Move object"));
 }
 
+/// Dragging a picture far past the page's corner moves it only up to the page edge (#5264).
 #[test]
 fn dragging_a_picture_past_the_page_edge_keeps_it_on_the_page() {
     let mut png = Vec::new();
@@ -5241,6 +5243,7 @@ fn dragging_a_picture_past_the_page_edge_keeps_it_on_the_page() {
     );
 }
 
+/// A turned picture takes the rotated move path and also stops at the page edge (#5264).
 #[test]
 fn dragging_a_turned_picture_past_the_page_edge_keeps_it_on_the_page() {
     let mut png = Vec::new();
