@@ -3610,6 +3610,16 @@ fn create_and_reduce() {
     assert_eq!(page_texts(&s3, r), ["Page 1", "Page 1"]);
 }
 
+/// Discarding a category that holds nothing discards nothing; it used to end the whole
+/// optimization with an error about redaction marks.
+#[test]
+fn optimize_discarding_an_empty_category_still_runs() {
+    let (s, id) = session_with(2);
+    let (bytes, report) = s.optimized_bytes(id, &optimize::Settings::default(), &[crate::Hidden::Bookmarks, crate::Hidden::Comments]).unwrap();
+    assert!(bytes.starts_with(b"%PDF-"));
+    assert!(report.discarded.is_empty(), "{:?}", report.discarded);
+}
+
 #[test]
 fn an_optimize_job_reports_its_stages_and_can_be_cancelled() {
     use crate::optimizer::OptimizeStage;

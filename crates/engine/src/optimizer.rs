@@ -92,7 +92,16 @@ impl OptimizeJob {
         pdfcraft_xfa::clear_password_values(&mut cos).map_err(|e| EditError::Write(e.to_string()))?;
         let mut step = |stage| if progress(stage) { Ok(()) } else { Err(EditError::Cancelled) };
         step(OptimizeStage::Discarding)?;
-        let discarded = if discard.is_empty() { Vec::new() } else { pdfcraft_redact::sanitize::remove_hidden(&mut cos, &discard)? };
+        let discarded = if discard.is_empty() {
+            Vec::new()
+        } else {
+            // `remove_hidden` refuses a run that removes nothing. Ticked categories that hold
+            // nothing are nothing to discard, not a reason to end the whole optimization.
+            match pdfcraft_redact::sanitize::remove_hidden(&mut cos, &discard) {
+                Err(pdfcraft_redact::RedactError::NothingToApply) => Vec::new(),
+                r => r?,
+            }
+        };
         let report = optimize::optimize_with_progress(&mut cos, &settings, &mut |s| {
             step(match s {
                 optimize::Stage::Fragments => OptimizeStage::Fragments,
