@@ -818,6 +818,7 @@ fn markdown_escapes_markup_and_keeps_emphasis_and_tables() {
         ],
         images: Vec::new(),
         background: None,
+        rules: Vec::new(),
     };
     let md = markdown(&[p]);
     assert!(md.contains("\\- not a list item"), "{md}");
