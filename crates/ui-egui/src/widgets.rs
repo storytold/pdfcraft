@@ -70,7 +70,7 @@ pub fn line(text: &mut dyn egui::TextBuffer) -> egui::TextEdit<'_> {
     egui::TextEdit::singleline(text).margin(FIELD_MARGIN).min_size(vec2(0.0, FIELD_MIN_HEIGHT))
 }
 
-/// A multiline field with the same horizontal inset as [`line`].
+/// A multiline field with the same horizontal inset as [`line()`].
 pub fn block(text: &mut dyn egui::TextBuffer) -> egui::TextEdit<'_> {
     egui::TextEdit::multiline(text).margin(egui::Margin::symmetric(10, 6))
 }
@@ -252,6 +252,23 @@ pub fn radio_value<'a, V: PartialEq>(ui: &mut egui::Ui, current: &mut V, alterna
         response.mark_changed();
     }
     response
+}
+
+/// Keeps the end of a "from … to …" page range at or after its start, but not while `typing` into the
+/// end's `DragValue` ([`typing_into`]): the half-typed "1" of "12" is below `from`, and raising it
+/// then replaced what the user was typing with `from` (#5574). A dialog's OK orders it whatever has
+/// the keyboard (`typing` false), so a range left reversed never reaches the edit.
+pub fn keep_range_ordered(from: usize, to: &mut usize, typing: bool) {
+    if !typing {
+        *to = (*to).max(from);
+    }
+}
+
+/// Whether `field` is being typed into: it has the keyboard focus in egui's memory. Unlike
+/// `Response::has_focus` this stays true while the window is in the background, so switching to
+/// another app mid-number doesn't end the typing.
+pub fn typing_into(field: &Response) -> bool {
+    field.ctx.memory(|m| m.has_focus(field.id))
 }
 
 /// The box of a checkbox or the circle of a radio button. egui draws it with the widgets' visuals
