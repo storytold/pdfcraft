@@ -1,6 +1,11 @@
 //! pdfcraft-edit — page content editing (L4). Today: page marks, Acrobat's Header & footer,
 //! Watermark, Background and Bates numbering (execution plan M7.6).
 //!
+//! **Atomic page-mark operations.** Adding or replacing headers/footers, watermarks and backgrounds
+//! stages the whole call on a document snapshot and commits only after every selected page succeeds.
+//! An error preserves existing marks, content, resources, pending edits and allocated objects. The
+//! snapshot shares original PDF bytes and unchanged objects; it copies the overlay table and metadata.
+//!
 //! **How marks are stored.** Each mark is one content stream appended to (or, for content behind
 //! the page, inserted after the backgrounds at the start of) the page's `/Contents`, drawn in
 //! display space (after `/Rotate`) and wrapped in a marked-content artifact (§14.8.2.2) so

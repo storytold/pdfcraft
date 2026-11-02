@@ -2460,8 +2460,8 @@ milestone = "M7"
 status = "shipped"
 commands = ["edit.header_footer.update", "edit.header_footer.remove"]
 tools = ["doc_header_footer", "doc_remove_marks"]
-evidence = ["crates/edit/src/tests.rs::replace_and_remove_restore_the_original_content", "crates/ui-egui/tests/it/marks.rs::header_and_footer_dialog_inserts_tokens_and_applies_to_a_subset"]
-notes = "recognises PdfCraft marks; Acrobat-made headers are not detected yet"
+evidence = ["crates/edit/src/tests.rs::replace_and_remove_restore_the_original_content", "crates/ui-egui/tests/it/marks.rs::header_and_footer_dialog_inserts_tokens_and_applies_to_a_subset", "crates/edit/src/mark_transaction_tests.rs::header_footer_changes_are_atomic_after_a_later_page_failure", "crates/edit/src/mark_transaction_tests.rs::replacements_commit_all_selected_pages_and_preserve_other_marks_and_shared_resources"]
+notes = "Add and Update are atomic across all selected pages: errors preserve existing marks, page content/resources and pending edits (#5657). recognises PdfCraft marks; Acrobat-made headers are not detected yet"
 
 [[feature]]
 id = "edit.header-footer-tokens"
@@ -2532,8 +2532,8 @@ milestone = "M7"
 status = "shipped"
 commands = ["edit.watermark.update", "edit.watermark.remove"]
 tools = ["doc_watermark", "doc_remove_marks"]
-evidence = ["crates/edit/src/tests.rs::replace_and_remove_restore_the_original_content", "crates/engine/src/tests.rs::headers_footers_watermarks_and_backgrounds_show_update_and_remove"]
-notes = ""
+evidence = ["crates/edit/src/tests.rs::replace_and_remove_restore_the_original_content", "crates/engine/src/tests.rs::headers_footers_watermarks_and_backgrounds_show_update_and_remove", "crates/edit/src/mark_transaction_tests.rs::watermark_changes_are_atomic_after_a_later_page_failure", "crates/edit/src/mark_transaction_tests.rs::replacements_commit_all_selected_pages_and_preserve_other_marks_and_shared_resources"]
+notes = "Add and Update are atomic across all selected pages: errors preserve existing marks, page content/resources and pending edits (#5657). "
 
 [[feature]]
 id = "edit.watermark-appearance"
@@ -2568,8 +2568,8 @@ milestone = "M7"
 status = "shipped"
 commands = ["edit.background.update", "edit.background.remove"]
 tools = ["doc_background", "doc_remove_marks"]
-evidence = ["crates/edit/src/tests.rs::replace_and_remove_restore_the_original_content", "crates/engine/src/tests.rs::headers_footers_watermarks_and_backgrounds_show_update_and_remove", "crates/edit/src/backdrop_tests.rs::a_white_fill_backdrop_is_replaced_and_put_back_when_the_background_goes", "crates/edit/src/backdrop_tests.rs::an_edit_after_the_fill_is_kept_and_the_backdrop_still_comes_back", "crates/edit/src/backdrop_tests.rs::a_copy_written_out_again_with_other_spacing_still_comes_back", "crates/edit/src/backdrop_tests.rs::a_change_before_the_fill_leaves_it_off_and_names_the_page", "crates/edit/src/backdrop_tests.rs::a_fill_that_would_cover_content_painted_before_it_stays_off", "crates/engine/src/tests.rs::remove_background_names_the_pages_whose_own_backdrop_stays_off", "crates/automation/tests/it/backdrop.rs::removed_text_leaves_the_file_when_a_background_replaced_the_pages_backdrop"]
-notes = "Remove also turns back on a page backdrop Add replaced, keeping edits made after it; where that isn't safe it says which pages keep it off"
+evidence = ["crates/edit/src/tests.rs::replace_and_remove_restore_the_original_content", "crates/engine/src/tests.rs::headers_footers_watermarks_and_backgrounds_show_update_and_remove", "crates/edit/src/backdrop_tests.rs::a_white_fill_backdrop_is_replaced_and_put_back_when_the_background_goes", "crates/edit/src/backdrop_tests.rs::an_edit_after_the_fill_is_kept_and_the_backdrop_still_comes_back", "crates/edit/src/backdrop_tests.rs::a_copy_written_out_again_with_other_spacing_still_comes_back", "crates/edit/src/backdrop_tests.rs::a_change_before_the_fill_leaves_it_off_and_names_the_page", "crates/edit/src/backdrop_tests.rs::a_fill_that_would_cover_content_painted_before_it_stays_off", "crates/engine/src/tests.rs::remove_background_names_the_pages_whose_own_backdrop_stays_off", "crates/automation/tests/it/backdrop.rs::removed_text_leaves_the_file_when_a_background_replaced_the_pages_backdrop", "crates/edit/src/mark_transaction_tests.rs::background_changes_are_atomic_after_a_later_page_failure", "crates/edit/src/mark_transaction_tests.rs::replacements_commit_all_selected_pages_and_preserve_other_marks_and_shared_resources"]
+notes = "Add and Update are atomic across all selected pages: errors preserve existing marks, page content/resources and pending edits (#5657). Remove also turns back on a page backdrop Add replaced, keeping edits made after it; where that isn't safe it says which pages keep it off"
 
 [[feature]]
 id = "edit.decoration-profiles"
