@@ -526,6 +526,10 @@ pub struct DocView {
     /// Select All while scrolling continuously (#2639): the text of every page of the document,
     /// highlighted on each page as its text arrives and copied whole ([`DocView::whole_text`]).
     pub(crate) all_text: bool,
+    /// The selection Select All made of the page shown, while it stands: a new bookmark is
+    /// "Untitled" after it, as after Select All of the document, not named after the page's text
+    /// (CodeRabbit on #5615). A click or drag that selects the same words is no Select All.
+    page_select_all: Option<Selection>,
     /// The selection whose action bar was closed by its Copy button: the bar stays hidden
     /// until the selection changes, as it does once a markup button consumes the selection.
     actions_dismissed: Option<Selection>,
@@ -924,6 +928,7 @@ impl DocView {
             find: None,
             selection: None,
             all_text: false,
+            page_select_all: None,
             actions_dismissed: None,
             bookmark_selection: false,
             selection_drag: false,

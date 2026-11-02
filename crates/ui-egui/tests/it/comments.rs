@@ -3152,11 +3152,25 @@ fn a_card_with_an_editor_open_out_of_view_is_drawn_at_its_size() {
     assert!(after > before + 20.0, "the cards below make room for card 1's editor: {before} → {after}");
 }
 
-/// CodeRabbit on #5615: a selection of all of a page's text (four clicks, or Select All on a
-/// one-page document) is no title: the bookmark is "Untitled", as after Select All of a longer
-/// document.
+/// CodeRabbit on #5615: Select All of the page shown (one page at a time) is no title: the
+/// bookmark is "Untitled", as after Select All of the whole document.
 #[test]
-fn a_bookmark_made_with_a_whole_page_selected_is_untitled() {
+fn a_bookmark_made_after_select_all_of_a_page_is_untitled() {
+    let mut h = harness(|app| app.set_option("layout", "single").unwrap());
+    assert!(h.state_mut().views[0].select_all());
+    h.run_steps(3);
+    h.state_mut().execute("bookmark.add");
+    h.run_steps(3);
+    let s = h.state();
+    let outline = &s.session.get(s.views[0].id).unwrap().info.outline;
+    assert_eq!(outline.iter().map(|b| b.title.as_str()).collect::<Vec<_>>(), ["Untitled"]);
+}
+
+/// CodeRabbit on #5615: words selected by hand name the bookmark even when they are all of the
+/// page's text (a double-click on a one-word page, a triple-click on a one-line page): only
+/// Select All gives "Untitled".
+#[test]
+fn every_word_of_a_page_selected_by_hand_names_the_bookmark() {
     let mut h = harness(|_| {});
     let glyphs = (0..10_000).take_while(|&i| h.state().views[0].glyph_screen_pos(0, i).is_some()).count();
     assert!(glyphs > 10, "page 1 has text: {glyphs} glyphs");
@@ -3166,5 +3180,7 @@ fn a_bookmark_made_with_a_whole_page_selected_is_untitled() {
     h.run_steps(3);
     let s = h.state();
     let outline = &s.session.get(s.views[0].id).unwrap().info.outline;
-    assert_eq!(outline.iter().map(|b| b.title.as_str()).collect::<Vec<_>>(), ["Untitled"]);
+    assert_eq!(outline.len(), 1);
+    let title = outline[0].title.as_str();
+    assert!(title != "Untitled" && title.starts_with("The quick"), "{title}");
 }

@@ -95,19 +95,18 @@ impl DocView {
 
     /// A new bookmark's title from the words selected on a page, as Acrobat names it (#5577):
     /// their text on one line, at most [`BOOKMARK_TITLE_CHARS`] characters. None after Select All,
-    /// of the document or of a page (a one-page document's Select All, or four clicks: a page's
-    /// text is no title; CodeRabbit on #5615), or with nothing but spaces selected.
+    /// of the document or of the page shown (`page_select_all`: the words a click or drag
+    /// selects name it, even all of a page's; CodeRabbit on #5615), or with nothing but spaces
+    /// selected.
     pub fn bookmark_title(&self) -> Option<String> {
         if self.all_text {
             return None;
         }
         let s = self.selection?;
-        let text = self.texts.get(&s.page)?;
-        let whole_page = matches!(s.span, Span::Run { anchor, head } if Selection::range(anchor, head) == (0..text.glyphs.len()));
-        if whole_page {
+        if self.page_select_all == Some(s) {
             return None;
         }
-        title_of(&s.text(text))
+        title_of(&s.text(self.texts.get(&s.page)?))
     }
 
     /// The text selection as it stands, to put back with [`Self::restore_text_selection`] after an
@@ -154,7 +153,9 @@ impl DocView {
         if t.glyphs.is_empty() {
             return false;
         }
-        self.selection = Some(Selection::run(page, 0, t.glyphs.len() - 1));
+        let all = Selection::run(page, 0, t.glyphs.len() - 1);
+        self.selection = Some(all);
+        self.page_select_all = Some(all);
         true
     }
 
