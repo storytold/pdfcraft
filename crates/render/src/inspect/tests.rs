@@ -1245,6 +1245,216 @@ fn launch_actions_that_name_a_pdf_open_it_like_a_remote_link() {
     );
 }
 
+/// Named (§12.6.4.12), hide (§12.6.4.11) and reset-form (§12.7.6.3) link actions are read
+/// with their operands, not as actions PdfCraft doesn't run.
+#[test]
+fn links_read_named_hide_and_reset_form_actions() {
+    let pdf = "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+         2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >> endobj\n\
+         3 0 obj << /Type /Page /Parent 2 0 R /Annots [30 0 R 31 0 R 32 0 R 33 0 R 34 0 R 35 0 R 36 0 R 37 0 R 38 0 R 39 0 R] >> endobj\n\
+         10 0 obj << /T (person) >> endobj\n\
+         11 0 obj << /Parent 10 0 R /T (name) /Kids [12 0 R] >> endobj\n\
+         12 0 obj << /Type /Annot /Subtype /Widget /Parent 11 0 R /Rect [0 0 1 1] >> endobj\n\
+         13 0 obj << /Type /Annot /Subtype /Square /Rect [0 0 1 1] >> endobj\n\
+         14 0 obj << /T (f2) /FT /Tx >> endobj\n\
+         30 0 obj << /Type /Annot /Subtype /Link /Rect [0 0 10 10] /A << /S /Named /N /NextPage >> >> endobj\n\
+         31 0 obj << /Type /Annot /Subtype /Link /Rect [0 20 10 30] /A << /S /Named /N /Bogus >> >> endobj\n\
+         32 0 obj << /Type /Annot /Subtype /Link /Rect [0 40 10 50] /A << /S /Named >> >> endobj\n\
+         33 0 obj << /Type /Annot /Subtype /Link /Rect [0 60 10 70] /A << /S /Hide /T (secret) >> >> endobj\n\
+         34 0 obj << /Type /Annot /Subtype /Link /Rect [0 80 10 90] /A << /S /Hide /T [12 0 R (other) 13 0 R] /H false >> >> endobj\n\
+         35 0 obj << /Type /Annot /Subtype /Link /Rect [0 100 10 110] /A << /S /Hide /T 13 0 R >> >> endobj\n\
+         36 0 obj << /Type /Annot /Subtype /Link /Rect [0 120 10 130] /A << /S /ResetForm /Fields [(f1) 14 0 R] /Flags 1 >> >> endobj\n\
+         37 0 obj << /Type /Annot /Subtype /Link /Rect [0 140 10 150] /A << /S /ResetForm >> >> endobj\n\
+         38 0 obj << /Type /Annot /Subtype /Link /Rect [0 160 10 170] /A << /S /ResetForm /Fields [(f1) 13 0 R] >> >> endobj\n\
+         39 0 obj << /Type /Annot /Subtype /Link /Rect [0 180 10 190] /A << /S /ResetForm /Fields [(f1)] /Flags 0 >> >> endobj\n\
+         trailer << /Root 1 0 R >>\n%%EOF";
+    let info = inspect(Arc::new(pdf.as_bytes().to_vec()), None).expect("opens");
+    let targets: Vec<_> = info.links.iter().map(|l| l.target.clone()).collect();
+    let names = |n: &[&str]| n.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    assert_eq!(
+        targets,
+        [
+            LinkTarget::Named("NextPage".into()),
+            LinkTarget::Named("Bogus".into()),
+            // No /N: a name PdfCraft doesn't recognise, so no action.
+            LinkTarget::Named(String::new()),
+            LinkTarget::Hide { fields: names(&["secret"]), hide: true },
+            // A widget names its field by the fully qualified name; an annotation of no field
+            // is skipped.
+            LinkTarget::Hide { fields: names(&["person.name", "other"]), hide: false },
+            LinkTarget::Other("Hide".into()),
+            LinkTarget::ResetForm { fields: names(&["f1", "f2"]), exclude: true },
+            LinkTarget::ResetForm { fields: Vec::new(), exclude: false },
+            // An entry that names no field: not run, rather than reset fields it didn't name.
+            LinkTarget::Other("ResetForm".into()),
+            LinkTarget::ResetForm { fields: names(&["f1"]), exclude: false },
+        ]
+    );
+    assert!(info.links.iter().all(|l| l.next.is_empty()));
+}
+
+/// A hide action naming more fields than one action reads is not run, as an oversized
+/// reset-form one isn't, rather than hiding only the first of them.
+#[test]
+fn links_refuse_hide_actions_naming_too_many_fields() {
+    let names = |n: usize| (0..n).map(|k| format!("(f{k})")).collect::<Vec<_>>().join(" ");
+    let pdf = format!(
+        "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+         2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >> endobj\n\
+         3 0 obj << /Type /Page /Parent 2 0 R /Annots [30 0 R 31 0 R] >> endobj\n\
+         30 0 obj << /Type /Annot /Subtype /Link /Rect [0 0 10 10] /A << /S /Hide /T [{}] >> >> endobj\n\
+         31 0 obj << /Type /Annot /Subtype /Link /Rect [0 20 10 30] /A << /S /Hide /T [{}] /H false >> >> endobj\n\
+         trailer << /Root 1 0 R >>\n%%EOF",
+        names(1024),
+        names(1025)
+    );
+    let info = inspect(Arc::new(pdf.into_bytes()), None).expect("opens");
+    let targets: Vec<_> = info.links.iter().map(|l| l.target.clone()).collect();
+    assert_eq!(targets.len(), 2);
+    assert!(matches!(&targets[0], LinkTarget::Hide { fields, hide: true } if fields.len() == 1024), "{:?}", targets[0]);
+    assert_eq!(targets[1], LinkTarget::Other("Hide".into()), "one field past the cap: not run");
+}
+
+/// A reset-form `/Fields` reference names its field by the fully qualified name (§12.7.4.2),
+/// and a `/Fields` that is present but not an array (Table 241) is not run: read as "the
+/// whole form", it would reset every field.
+#[test]
+fn links_reset_form_reads_qualified_names_and_rejects_non_array_fields() {
+    let pdf = "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+         2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >> endobj\n\
+         3 0 obj << /Type /Page /Parent 2 0 R /Annots [30 0 R 31 0 R 32 0 R 33 0 R 34 0 R 35 0 R] >> endobj\n\
+         10 0 obj << /T (person) >> endobj\n\
+         11 0 obj << /Parent 10 0 R /T (name) /Kids [12 0 R] /FT /Tx >> endobj\n\
+         12 0 obj << /Type /Annot /Subtype /Widget /Parent 11 0 R /Rect [0 0 1 1] >> endobj\n\
+         30 0 obj << /Type /Annot /Subtype /Link /Rect [0 0 10 10] /A << /S /ResetForm /Fields [11 0 R 12 0 R] /Flags 1 >> >> endobj\n\
+         31 0 obj << /Type /Annot /Subtype /Link /Rect [0 20 10 30] /A << /S /ResetForm /Fields (person) >> >> endobj\n\
+         32 0 obj << /Type /Annot /Subtype /Link /Rect [0 40 10 50] /A << /S /ResetForm /Fields << /T (person) >> >> >> endobj\n\
+         33 0 obj << /Type /Annot /Subtype /Link /Rect [0 60 10 70] /A << /S /ResetForm /Fields 99 0 R /Flags 1 >> >> endobj\n\
+         34 0 obj << /Type /Annot /Subtype /Link /Rect [0 80 10 90] /A << /S /ResetForm /Fields 7 >> >> endobj\n\
+         35 0 obj << /Type /Annot /Subtype /Link /Rect [0 100 10 110] /A << /S /ResetForm /Fields null >> >> endobj\n\
+         trailer << /Root 1 0 R >>\n%%EOF";
+    let info = inspect(Arc::new(pdf.as_bytes().to_vec()), None).expect("opens");
+    let targets: Vec<_> = info.links.iter().map(|l| l.target.clone()).collect();
+    let other = || LinkTarget::Other("ResetForm".into());
+    assert_eq!(
+        targets,
+        [
+            LinkTarget::ResetForm { fields: vec!["person.name".into(), "person.name".into()], exclude: true },
+            // A string, a dictionary, a dangling reference and a number: none is an array.
+            other(),
+            other(),
+            other(),
+            other(),
+            LinkTarget::ResetForm { fields: Vec::new(), exclude: false },
+        ]
+    );
+}
+
+/// `/Next` chains (§12.6.2, Table 196): a dictionary or an array, run depth first ("each
+/// followed in turn by any actions specified in its Next entry"), each action object once so
+/// a cycle ends, and at most `MAX_LINK_ACTIONS` actions in all.
+#[test]
+fn links_read_next_action_chains_in_order_and_bounded() {
+    let mut pdf = String::from(
+        "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+         2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 300 400] >> endobj\n\
+         3 0 obj << /Type /Page /Parent 2 0 R /Annots [30 0 R 31 0 R 32 0 R 33 0 R 34 0 R] >> endobj\n\
+         4 0 obj << /Type /Page /Parent 2 0 R >> endobj\n\
+         34 0 obj << /Type /Annot /Subtype /Link /Rect [0 80 10 90] /Dest [4 0 R /Fit] >> endobj\n\
+         30 0 obj << /Type /Annot /Subtype /Link /Rect [0 0 10 10] /A << /S /Named /N /NextPage /Next << /S /GoTo /D [4 0 R /Fit] >> >> >> endobj\n\
+         31 0 obj << /Type /Annot /Subtype /Link /Rect [0 20 10 30] /A 40 0 R >> endobj\n\
+         40 0 obj << /S /Named /N /A /Next [41 0 R 43 0 R 44 0 R] >> endobj\n\
+         41 0 obj << /S /Named /N /B /Next 42 0 R >> endobj\n\
+         42 0 obj << /S /Named /N /C /Next 40 0 R >> endobj\n\
+         43 0 obj << /S /Named /N /D /Next [41 0 R 7] >> endobj\n\
+         44 0 obj << /S /Hide /T (x) /H false >> endobj\n\
+         32 0 obj << /Type /Annot /Subtype /Link /Rect [0 40 10 50] /A 50 0 R >> endobj\n\
+         33 0 obj << /Type /Annot /Subtype /Link /Rect [0 60 10 70] /A << /S /Named /N /LastPage /Next [",
+    );
+    // A chain of 300 actions, each object chaining the next: only the first 256 run.
+    for k in 0..300 {
+        pdf.push_str(&format!("{} 0 R ", 100 + k));
+    }
+    pdf.push_str("] >> >> endobj\n");
+    for k in 0..300 {
+        pdf.push_str(&format!("{} 0 obj << /S /Named /N /N{k} >> endobj\n", 100 + k));
+    }
+    // A deep chain through direct and indirect objects.
+    pdf.push_str("50 0 obj << /S /Named /N /First /Next 51 0 R >> endobj\n51 0 obj << /S /Named /N /Second /Next 50 0 R >> endobj\n");
+    pdf.push_str("trailer << /Root 1 0 R >>\n%%EOF");
+    let info = inspect(Arc::new(pdf.into_bytes()), None).expect("opens");
+    let named = |n: &str| LinkTarget::Named(n.into());
+    let link = |k: usize| info.links.get(k).expect("listed");
+    assert_eq!(link(0).target, named("NextPage"));
+    assert_eq!(link(0).next, [LinkTarget::Page(1, DestView::Fit)]);
+    // A, then B (its own chain: C, whose /Next goes back to A: already run), then D (B again:
+    // already run; 7 is not an action), then the hide action.
+    assert_eq!(link(1).target, named("A"));
+    assert_eq!(link(1).next, [named("B"), named("C"), named("D"), LinkTarget::Hide { fields: vec!["x".into()], hide: false }]);
+    assert_eq!(link(2).next, [named("Second")]);
+    assert_eq!(link(3).target, named("LastPage"));
+    assert_eq!(link(3).next.len(), MAX_LINK_ACTIONS - 1);
+    assert_eq!(link(3).next.last(), Some(&named(&format!("N{}", MAX_LINK_ACTIONS - 2))));
+    // A /Dest link stays listed on its own page and chains nothing.
+    assert_eq!((link(4).page, &link(4).target, link(4).next.len()), (0, &LinkTarget::Page(1, DestView::Fit), 0));
+    assert!(info.links.iter().all(|l| l.page == 0));
+}
+
+/// Review on #4525: an action whose operands are unusable (a Go-To to no page) runs nothing, but
+/// the actions chained after it still run ("shall be performed after", ISO 32000-2 §12.6.2, Table
+/// 196); when it is the link's own action, the first of them takes its place. An entry with no
+/// `/S` is no action: it is skipped with its chain, and a link whose `/A` has none is no link.
+#[test]
+fn an_unusable_action_still_runs_the_actions_chained_after_it() {
+    let pdf = "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+         2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >> endobj\n\
+         3 0 obj << /Type /Page /Parent 2 0 R /Annots [30 0 R 31 0 R 32 0 R 33 0 R 34 0 R] >> endobj\n\
+         30 0 obj << /Type /Annot /Subtype /Link /Rect [0 0 10 10] /A << /S /GoTo /D [99 0 R /Fit] /Next << /S /Named /N /First /Next << /S /Named /N /Second >> >> >> >> endobj\n\
+         31 0 obj << /Type /Annot /Subtype /Link /Rect [0 20 10 30] /A << /S /Named /N /Top /Next [<< /S /GoTo /D [99 0 R /Fit] /Next << /S /Named /N /After >> >> << /S /Named /N /Last >>] >> >> endobj\n\
+         32 0 obj << /Type /Annot /Subtype /Link /Rect [0 40 10 50] /A << /S /Named /N /Top /Next [<< /N /NoType /Next << /S /Named /N /Hidden >> >> << /S /Named /N /Last >>] >> >> endobj\n\
+         33 0 obj << /Type /Annot /Subtype /Link /Rect [0 60 10 70] /A << /S /GoTo /D [99 0 R /Fit] >> >> endobj\n\
+         34 0 obj << /Type /Annot /Subtype /Link /Rect [0 80 10 90] /A << /N /NoType /Next << /S /Named /N /Y >> >> >> endobj\n\
+         trailer << /Root 1 0 R >>\n%%EOF";
+    let info = inspect(Arc::new(pdf.as_bytes().to_vec()), None).expect("opens");
+    let named = |n: &str| LinkTarget::Named(n.into());
+    let listed: Vec<(&LinkTarget, &[LinkTarget])> = info.links.iter().map(|l| (&l.target, l.next.as_slice())).collect();
+    assert_eq!(
+        listed,
+        [(&named("First"), &[named("Second")][..]), (&named("Top"), &[named("After"), named("Last")][..]), (&named("Top"), &[named("Last")][..]),],
+        "a Go-To to no page alone, and an /A with no /S, list no link"
+    );
+}
+
+/// Review on #4525: every link that reaches a shared `/Next` chain keeps that chain's text again,
+/// so each action spends what it keeps from the link text budget: a hundred links sharing a chain
+/// of 255 named actions with 1,000-byte names keep no more than the budget in all. Before, each
+/// kept the whole chain, 25.5 MB.
+#[test]
+fn links_sharing_a_long_chain_keep_no_more_text_than_the_budget() {
+    const LINKS: usize = 100;
+    let links = "<< /Type /Annot /Subtype /Link /Rect [0 0 1 1] /A 40 0 R >> ".repeat(LINKS);
+    let mut pdf = format!(
+        "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+         2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >> endobj\n\
+         3 0 obj << /Type /Page /Parent 2 0 R /Annots [{links}] >> endobj\n\
+         40 0 obj << /S /Named /N /Start /Next 100 0 R >> endobj\n"
+    );
+    let long = "n".repeat(997);
+    for k in 0..MAX_LINK_ACTIONS {
+        pdf.push_str(&format!("{} 0 obj << /S /Named /N /{k:03}{long} /Next {} 0 R >> endobj\n", 100 + k, 101 + k));
+    }
+    pdf.push_str("trailer << /Root 1 0 R >>\n%%EOF");
+    let info = inspect(Arc::new(pdf.into_bytes()), None).expect("opens");
+    assert_eq!(info.links.len(), LINKS);
+    let name_bytes = |t: &LinkTarget| if let LinkTarget::Named(n) = t { n.len() } else { 0 };
+    let kept: usize = info.links.iter().flat_map(|l| std::iter::once(&l.target).chain(&l.next)).map(name_bytes).sum();
+    assert!(kept <= MAX_LINK_ATTACHMENT_TEXT_BYTES, "{kept} bytes kept");
+    // The first links still list the whole chain, names and all.
+    let first = &info.links[0];
+    assert_eq!(first.next.len(), MAX_LINK_ACTIONS - 1);
+    assert!(first.next.iter().all(|t| name_bytes(t) == 1000), "{:?}", first.next.first());
+}
+
 #[test]
 fn links_read_bounded_local_remote_go_to_actions() {
     use DestView::{Fit, Xyz};
