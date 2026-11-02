@@ -509,8 +509,10 @@ impl PageRenderer {
     pub fn filtered_text(&mut self, page: usize, filter: crate::text::TextFilter) -> Result<crate::PageText, String> {
         let pdf = self.pdf.as_ref().ok_or("the document could not be parsed")?;
         self.stats.text_interpretations = self.stats.text_interpretations.saturating_add(1);
-        catch_unwind(AssertUnwindSafe(|| crate::text::extract_page_filtered(pdf, page, &self.settings, filter)))
-            .map_err(|e| format!("text extraction failed: {}", panic_message(&e)))?
+        let failed_reads = self.source.failed_reads();
+        let text = catch_unwind(AssertUnwindSafe(|| crate::text::extract_page_filtered(pdf, page, &self.settings, filter)))
+            .map_err(|e| format!("text extraction failed: {}", panic_message(&e)))?;
+        all_read(text.map_err(|e| (e, false)), &self.source, failed_reads).map_err(|(e, _)| e)
     }
 
     /// Render one page. Never panics.

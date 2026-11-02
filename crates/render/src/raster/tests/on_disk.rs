@@ -128,6 +128,82 @@ fn a_file_that_goes_away_is_an_error_and_not_a_blank_page() {
 }
 
 #[test]
+fn text_counted_from_a_file_that_goes_away_is_an_error_and_not_a_short_count() {
+    let pdf = Pdf::new()
+        .obj("<</Type/Catalog/Pages 2 0 R>>")
+        .obj("<</Type/Pages/Kids[3 0 R]/Count 1>>")
+        .obj("<</Type/Page/Parent 2 0 R/MediaBox[0 0 200 100]/Contents 4 0 R/Resources<</Font<</F 5 0 R>>>>>>")
+        .stream("", format!("BT /F 24 Tf 20 50 Td (Hello) Tj ET % {}", "x".repeat(30_000)))
+        .obj("<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>")
+        .build();
+    let (held, file) = on_disk(pdf);
+    let mut renderer = PageRenderer::new(held, RenderConfig::default());
+    let text = |renderer: &mut PageRenderer| renderer.filtered_text(0, crate::text::TextFilter::default()).map(|t| t.plain_text());
+    assert_eq!(text(&mut renderer).unwrap().trim(), "Hello");
+    file.gone.store(true, Ordering::Relaxed);
+    assert_eq!(text(&mut renderer).err().as_deref(), Some(PART_UNREAD));
+}
+
+/// Two pages whose small contents stay in memory and use `shared`, object 7 on, whose body stays
+/// on disk: a read of that body is all that can fail.
+fn sharing(resources: &str, contents: &str, shared: impl FnOnce(Pdf) -> Pdf) -> Vec<u8> {
+    let page = |contents: usize| format!("<</Type/Page/Parent 2 0 R/MediaBox[0 0 100 100]/Contents {contents} 0 R/Resources<<{resources}>>>>");
+    let pdf = Pdf::new()
+        .obj("<</Type/Catalog/Pages 2 0 R>>")
+        .obj("<</Type/Pages/Kids[3 0 R 4 0 R]/Count 2>>")
+        .obj(page(5))
+        .obj(page(6))
+        .stream("", contents)
+        .stream("", contents);
+    shared(pdf).build()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_page_after_a_failed_read_reads_again_and_never_reuses_what_failed() {
+    let type0 = |pdf: Pdf| {
+        pdf.obj("<</Type/Font/Subtype/Type0/BaseFont/X/Encoding/Identity-H/DescendantFonts[8 0 R]>>")
+            .obj("<</Type/Font/Subtype/CIDFontType2/BaseFont/X/CIDSystemInfo<</Registry(Adobe)/Ordering(Identity)/Supplement 0>>/FontDescriptor 9 0 R>>")
+            .obj("<</Type/FontDescriptor/FontName/X/Flags 4/FontFile2 10 0 R>>")
+            .stream("", vec![0_u8; 8_000])
+    };
+    let simple = |pdf: Pdf| {
+        pdf.obj("<</Type/Font/Subtype/TrueType/BaseFont/X/FirstChar 65/LastChar 65/Widths[600]/FontDescriptor 8 0 R>>")
+            .obj("<</Type/FontDescriptor/FontName/X/Flags 4/FontFile2 9 0 R>>")
+            .stream("", vec![0_u8; 8_000])
+    };
+    let image = "/Type/XObject/Subtype/Image/Width 200/Height 200/BitsPerComponent 8/ColorSpace/DeviceGray";
+    let pixels: Vec<u8> = (0..40_000).map(|i| (i / 7 % 251) as u8).collect();
+    let text = "BT /F 40 Tf 10 30 Td <0041> Tj ET";
+    let cases = [
+        ("Type0 font", sharing("/Font<</F 7 0 R>>", text, type0)),
+        ("TrueType font", sharing("/Font<</F 7 0 R>>", "BT /F 40 Tf 10 30 Td (A) Tj ET", simple)),
+        (
+            "colour space",
+            sharing("/ColorSpace<</C[/ICCBased 7 0 R]>>", "/C cs 1 0 0 sc 0 0 100 100 re f", |pdf| pdf.stream("/N 3", vec![0_u8; 8_000])),
+        ),
+        ("image", sharing("/XObject<</I 7 0 R>>", "q 100 0 0 100 0 0 cm /I Do Q", |pdf| pdf.stream(image, pixels))),
+    ];
+    for (name, pdf) in cases {
+        let (held, file) = on_disk(pdf.clone());
+        assert_eq!(held.body_count(), 1, "{name}");
+        let pool = RenderPool::new(held, 1, RenderConfig::default());
+        let draw = |page: usize| {
+            pool.set_queue(vec![RenderRequest { page, scale: 1.0, ..Default::default() }]);
+            receive_before_deadline(&pool)
+        };
+        file.gone.store(true, Ordering::Relaxed);
+        assert_eq!(draw(0).error.as_deref(), Some(PART_UNREAD), "{name}");
+        assert_eq!(draw(1).error.as_deref(), Some(PART_UNREAD), "{name}: the page drew without the body");
+        file.gone.store(false, Ordering::Relaxed);
+        let page = draw(1);
+        assert_eq!(page.error, None, "{name}");
+        let whole = PageRenderer::new(Arc::new(pdf), RenderConfig::default()).render(RenderRequest { page: 1, scale: 1.0, ..Default::default() });
+        assert!(page.rgba == whole.rgba, "{name}: the page differs once the file is back");
+    }
+}
+
+#[test]
 fn a_file_on_disk_inspects_as_the_whole_file_does() {
     let pdf = scanned();
     let (file, _) = on_disk(pdf.clone());

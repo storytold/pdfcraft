@@ -528,8 +528,8 @@ pub(super) fn worker(
     stop: Arc<std::sync::atomic::AtomicBool>,
 ) {
     let warnings = Arc::new(Mutex::new(Vec::new()));
-    // A local cell keeps Pdf borrows used by RenderCache stable. Drop both on an
-    // epoch change/panic before publishing an error or taking another request.
+    // A local cell keeps Pdf borrows used by RenderCache stable. Drop both on an epoch
+    // change, panic or failed read before publishing an error or taking another request.
     loop {
         let reset_result = {
             let parsed = std::cell::OnceCell::new();
@@ -745,7 +745,9 @@ pub(super) fn worker(
                 if *shared_generation {
                     valid.push(shared.parser.valid.clone());
                 }
-                if *shared_generation && !shared.parser.valid.load(Ordering::Acquire) {
+                // The cache may hold what failed to read: a later page would use that and read nothing.
+                let read_failed = source.failed_reads() != failed_reads;
+                if read_failed || (*shared_generation && !shared.parser.valid.load(Ordering::Acquire)) {
                     break Some((finish(req, start, r, request_warnings), valid));
                 }
                 if out.send_valid_with_tokens(finish(req, start, r, request_warnings), valid).is_err() {

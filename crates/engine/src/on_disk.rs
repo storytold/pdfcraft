@@ -319,6 +319,17 @@ mod tests {
     }
 
     #[test]
+    fn a_word_count_refuses_a_file_it_could_not_read_all_of() {
+        let file = Temp::new(&written());
+        let (session, id) = open(&file.path).expect("stays on disk");
+        let source = session.get(id).unwrap().export_source();
+        let count = |source| crate::word_count::count(source, &[0], Default::default(), |_| true);
+        assert_eq!(count(source.clone()).unwrap().total.words, 1);
+        std::fs::File::options().write(true).open(&file.path).unwrap().set_len(1_000).unwrap();
+        assert!(count(source).is_err_and(|e| e.contains("could not be read")));
+    }
+
+    #[test]
     fn a_file_replaced_under_its_name_keeps_reading_as_it_was() {
         let pdf = scanned();
         let file = Temp::new(&pdf);
