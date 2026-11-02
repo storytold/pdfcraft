@@ -2863,6 +2863,21 @@ fn refine_goto_point(mut scroll: egui::ScrollArea, view: &mut DocView, geometry:
     scroll
 }
 
+/// Where the `shown` pages sit in the scroll content, as how far the content starts into the
+/// layout and how tall it is. Scrolling continuously every page scrolls; otherwise only the
+/// current row does, the content being its bounding box plus margins. Pages shorter than a view
+/// `view_height` tall sit in its middle, the spare height shared above and below (#5708): the
+/// content fills the view, so there is nothing to scroll, and starts on a whole physical pixel
+/// as the layout's pages do, or their edges would blur and the seams between them open.
+fn vertical_placement(continuous: bool, rects: &[Rect], shown: &[usize], view_height: f32, pixels_per_point: f32) -> (f32, f32) {
+    let Some(r) = shown.iter().filter_map(|&i| rects.get(i)).copied().reduce(Rect::union) else { return (0.0, 0.0) };
+    let (y_shift, content_h) = if continuous { (0.0, r.bottom() + MARGIN) } else { (r.top() - MARGIN, r.height() + 2.0 * MARGIN) };
+    if content_h >= view_height {
+        return (y_shift, content_h);
+    }
+    (((r.center().y - view_height / 2.0) * pixels_per_point).round() / pixels_per_point, view_height)
+}
+
 /// Draws the document tab at `index`: its notice bars, then its pages (or the Organize grid) in a
 /// scroll area with this frame's zoom, scrolling, tool input, overlays and render requests.
 pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
@@ -2984,15 +2999,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     // row, the jump to the new page scrolled both out of view, a blank frame on every turn forward.
     let row = shown_row(view, &rects);
     let visible_pages: Vec<usize> = if view.continuous { (0..rects.len()).collect() } else { row.clone() };
-    let (y_shift, content_h) = if view.continuous {
-        (0.0, rects.iter().map(|r| r.bottom()).reduce(f32::max).map(|bottom| bottom + MARGIN).unwrap_or(0.0))
-    } else {
-        // Only the current row scrolls into view; the content is its bounding box plus margins.
-        match row.iter().filter_map(|&i| rects.get(i)).copied().reduce(Rect::union) {
-            Some(r) => (r.top() - MARGIN, r.height() + 2.0 * MARGIN),
-            None => (0.0, 0.0),
-        }
-    };
+    let (y_shift, content_h) = vertical_placement(view.continuous, &rects, &visible_pages, avail.height(), ui.ctx().pixels_per_point());
 
     let mut scroll = page_scroll_area(
         ui,

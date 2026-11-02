@@ -1346,6 +1346,41 @@ fn single_page_fit_page_fits_the_shown_page() {
 }
 
 #[test]
+fn pages_shorter_than_the_window_sit_in_its_middle() {
+    let centred = |h: &Harness<'static, PdfCraftApp>, r: egui::Rect| {
+        let vp = h.state().views[0].viewport_rect();
+        assert!(r.height() < vp.height(), "{r:?} is shorter than {vp:?}");
+        assert!((r.center().y - vp.center().y).abs() < 1.0, "{r:?} is in the middle of {vp:?}");
+    };
+    let mut h = harness(&[("layout", "single"), ("continuous", "off"), ("zoom", "50")]);
+    h.run_steps(4);
+    centred(&h, rect(&h, 0).expect("page 1"));
+    assert_eq!(h.state().views[0].current, 0);
+
+    // The page drawn there is the page a click finds: its link still goes to page 3.
+    let r = rect(&h, 0).expect("page 1");
+    let at = egui::pos2(r.min.x + r.width() * 0.5, r.min.y + r.height() * (1.0 - 325.0 / 400.0));
+    h.hover_at(at);
+    h.run_steps(2);
+    h.drag_at(at); // press
+    h.drop_at(at); // release
+    h.run_steps(8);
+    assert_eq!(h.state().views[0].current, 2, "the link is where the page is drawn");
+
+    // Scrolling continuously, the column of pages as a whole.
+    let mut h = harness(&[("layout", "single"), ("continuous", "on"), ("zoom", "25")]);
+    h.run_steps(4);
+    let column = rect(&h, 0).expect("page 1").union(rect(&h, 2).expect("page 3"));
+    centred(&h, column);
+
+    // A page taller than the view starts at its top, as before.
+    let mut h = harness(&[("layout", "single"), ("continuous", "off"), ("zoom", "250")]);
+    h.run_steps(4);
+    let (r, vp) = (rect(&h, 0).expect("page 1"), h.state().views[0].viewport_rect());
+    assert!(r.height() > vp.height() && (r.min.y - vp.min.y).abs() < 40.0, "{r:?} in {vp:?}");
+}
+
+#[test]
 fn clicking_a_link_goes_to_its_destination() {
     // Default fit-width zoom: pages are taller than the window, so the target can scroll to the top.
     let mut h = harness(&[]);
