@@ -90,7 +90,7 @@ pub(crate) fn hit(cx: &PageCx<'_>, view: &DocView, p: Pos2, on_link: bool) -> Op
             return Some(Hit::new(Owner::Comment { index: a.index, part: CommentPart::Handle(x, y) }, Layer::Handle, icon));
         }
     }
-    let a = cx.hit(p).filter(|a| bodies && pick(a))?;
+    let a = cx.comment_at(p).filter(|a| bodies && pick(a))?;
     // A click on a highlight over a link follows the link, so the link's hand and tip show there.
     if cx.tool == QuickTool::Select && a.subtype == "Highlight" && on_link {
         return None;
@@ -111,7 +111,7 @@ pub(crate) fn context_hit(cx: &PageCx<'_>, p: Pos2) -> Option<Hit> {
     if cx.hidden || !cx.xf.rect.contains(p) {
         return None;
     }
-    let a = cx.hit(p)?;
+    let a = cx.comment_at(p)?;
     let layer = if a.fill_sign || !is_markup(&a.subtype) { Layer::Placed } else { Layer::Comment };
     Some(Hit::new(Owner::Comment { index: a.index, part: CommentPart::Body }, layer, egui::CursorIcon::Default))
 }

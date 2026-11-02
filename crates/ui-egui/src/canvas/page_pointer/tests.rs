@@ -418,15 +418,14 @@ fn is_hit_test(name: &str) -> bool {
     name == "hit" || name.ends_with("_hit")
 }
 
-/// The hit tests `line` calls, by path or bare. A method, after its `.`, is left out:
-/// `PageCx::hit` finds the comment under a point, not a `Hit`.
+/// The hit tests `line` calls: by path, bare or as a method.
 fn hit_test_calls(line: &str) -> Vec<String> {
     line.match_indices("hit(")
         .filter_map(|(at, _)| {
             let end = at + "hit".len();
             let start = line[..end].char_indices().rev().find(|(_, c)| !(c.is_alphanumeric() || *c == '_')).map_or(0, |(i, c)| i + c.len_utf8());
             let (before, name) = (&line[..start], &line[start..end]);
-            (is_hit_test(name) && !before.ends_with('.') && !before.ends_with("fn ")).then(|| name.to_owned())
+            (is_hit_test(name) && !before.ends_with("fn ")).then(|| name.to_owned())
         })
         .collect()
 }
@@ -439,6 +438,27 @@ const HIT_TESTERS: [(&str, &str, &str); 1] = [(
     "hits",
     "`PageHits::hits`: every module's hits at a point, for the pointer's cursor and tip, a right-click and, once, the press's owner",
 )];
+
+/// What reads who holds the press the pages hold.
+const ROUTER_READS: [&str; 3] = ["router.press_for(", "router.owner(", "router.keeps_drag("];
+
+/// The functions that read who holds the press: (file, function, why). The page view asks once per
+/// page and tells each module what the press is to its page (`PagePress`); the Edit text group and
+/// the text layer still ask, until they are told too (PR 4b), and an unused entry fails the test.
+const ROUTER_READERS: [(&str, &str, &str); 8] = [
+    (
+        "canvas/page_input.rs",
+        "page_tool_input",
+        "the page view: what the press is to each page (`press_for`); Add text's paragraph and the pictures until 4b",
+    ),
+    ("canvas/page_input.rs", "update_selection_on_press", "the text layer selects no text under a press held by what keeps its drag (4b)"),
+    ("canvas/page_input.rs", "finish_text_pointer_gesture", "a click held by what keeps its drag leaves the text selection alone (4b)"),
+    ("canvas/page_input.rs", "page_overlays", "a click follows the link that holds its press (4b)"),
+    ("tools/content_ui.rs", "page_input", "added text and pictures, until they are told (4b)"),
+    ("tools/edit_text_ui.rs", "page_input", "Edit text's paragraphs, until they are told (4b)"),
+    ("tools/edit_text_ui/image.rs", "image_input", "Edit text's pictures, until they are told (4b)"),
+    ("tools/object_ui.rs", "input", "the objects selected together, until they are told (4b)"),
+];
 
 /// What ignores the press the pages hold until the button is up.
 const PRESS_IGNORES: [&str; 1] = ["press_cancelled = true"];
@@ -494,6 +514,14 @@ fn page_modules_act_on_a_press_only_through_the_router() {
         "no longer decides, keeps or drops the press: remove it from ROUTER_WRITERS.",
     );
     problems.extend(misuses(
+        &ROUTER_READS,
+        &ROUTER_READERS,
+        "reads who holds the press the pages hold. The page view asks the router once per page and tells each module \
+         what the press is to its page: take a `PagePress` (src/canvas/page_router.rs) instead. A new place that must? \
+         Add the function to ROUTER_READERS in src/canvas/page_pointer/tests.rs, with why.",
+        "no longer reads who holds the press: remove it from ROUTER_READERS.",
+    ));
+    problems.extend(misuses(
         &PRESS_IGNORES,
         &PRESS_IGNORERS,
         "ignores the press the pages hold. Escape cancels a press, in `cancel_on_escape`: drop a gesture with \
@@ -524,6 +552,14 @@ fn page_modules_act_on_a_press_only_through_the_router() {
          src/canvas/page_pointer/tests.rs, with why.",
         "calls no hit test any more: remove it from HIT_TESTERS.",
     ));
+    // An entry no page module calls any more no longer guards anything.
+    let called = page_module_uses(&PAGE_HIT_CALLS);
+    problems.extend(
+        PAGE_HIT_CALLS
+            .iter()
+            .filter(|call| !called.iter().any(|(_, _, _, name)| name == *call))
+            .map(|call| format!("no page module calls `{call}` any more: remove it from PAGE_HIT_CALLS.")),
+    );
     let builds = page_module_uses(&HIT_BUILDS);
     assert!(!builds.is_empty(), "no page module makes a `Hit` any more: update HIT_BUILDS");
     problems.extend(builds.into_iter().filter(|(_, function, _, _)| !function.as_deref().is_some_and(is_hit_test)).map(|(file, _, n, name)| {

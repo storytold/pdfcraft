@@ -24,7 +24,7 @@ pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, cx: &PageCx<'_>
     // A redaction mark shows its fill while the pointer is over it, as Acrobat's does, so the
     // marked area reads before anything is applied.
     if cv.gesture.is_none()
-        && let Some(a) = pointer.and_then(|p| cx.hit(p))
+        && let Some(a) = pointer.and_then(|p| cx.comment_at(p))
         && a.subtype == "Redact"
     {
         let ([r, g, b], opacity) = cx.redact_mark;
