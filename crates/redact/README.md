@@ -24,10 +24,16 @@ clear_marks(&mut doc, None)?;                        // remove marks without app
   is Flate, or for a one-bit image of one component (a scan as a rule) CCITT Group 4, or JBIG2
   when it was JBIG2, whichever is smallest as stored, coded from the cleared samples; it refers to
   no globals. Globals hold the shapes of every image that shares them (a scan's pages, often),
-  those of marks under the area included, so every other image that uses the globals of a removed
-  or replaced image is decoded and stored again in place without them, as a copy is (Flate,
-  Group 4 or JBIG2, whichever is smallest; `Report::images_restored`), and they leave the file on the full rewrite; one that can't be
-  decoded for certain refuses the redaction (`RedactError::SharedJbig2Globals`). Codecs redaction doesn't decode (DCT, JPX) are
+  those of marks under the area included, so whatever left the document, by any route, takes its
+  globals with it on the full rewrite: anything else the save would keep that names them, or a
+  byte-for-byte copy of them, is stored again without them, as a copy is (Flate, Group 4 or JBIG2,
+  whichever is smallest; `Report::images_restored`). When one can't be (it isn't JBIG2, it's past
+  the size redaction clears, or it can't be decoded), or something else refers to them, `apply`
+  refuses and changes nothing (`RedactError::SharedJbig2Globals`). `remove_hidden` takes them out
+  the same way. Another dictionary holding the same shapes in other bytes isn't found, nor is a copy
+  nothing names, and an image that hasn't left keeps its globals with its pixels: one another page
+  still draws, or one something that doesn't draw it still refers to. Each image is decoded once,
+  with no total across the document yet. Codecs redaction doesn't decode (DCT, JPX) are
   removed whole (fail-closed), and so is a JBIG2 image whose page isn't its size (the renderer
   draws the whole page into the image, so the rows cleared wouldn't be the ones shown) or of more
   than one bit or component, and Group 3 on bytes (`/K` 0 or more, `/EncodedByteAlign`): PdfCraft's
