@@ -1496,7 +1496,8 @@ fn draw_page(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_>, i
 
     let slot = PageSlot { i, r, xf };
     // A cancelled press takes nothing until the button is up.
-    let input = if view.press_cancelled { PageInput { consumed: true, area_tool: false } } else { page_tool_input(ui, view, frame, &slot) };
+    let input =
+        if view.press_cancelled { PageInput { consumed: true, area_tool: false, hover: None } } else { page_tool_input(ui, view, frame, &slot) };
     let painter = ui.painter();
     let pcx = comments::PageCx { page: i, xf: &xf, ptr, info, tool, prefs, allowed, hidden: comments_hidden, redact_mark };
     let preview_target = (matches!(tool, QuickTool::Select | QuickTool::Fill(_)) && !comments_hidden).then_some(view.comments.selected).flatten();

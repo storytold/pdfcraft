@@ -1,43 +1,47 @@
 use super::geometry::{
-    CARET_SIZE, HANDLES, clamp_to, corner_ratio, drawn_box, grabs_points, handle_pos, is_markup, point_handle, reshapable, reshaped, resizable,
+    CARET_SIZE, HANDLES, clamp_to, corner_ratio, drawn_box, handle_pos, is_markup, point_handle, reaches_points, reshapable, reshaped, resizable,
     resized, snapped_caret,
 };
 use super::paint::{drawn_shape, edit_anchor, erase, new_comment};
 use super::state::{Composer, ComposerKind, Gesture, PageCx};
 use super::{Annotation, CommentPrefs, CommentTool, DocInfo, DocView, Edit, Pos2, QuickTool, Rect, Shape, vec2};
 use crate::page_cursor::{Layer, Subject};
-use crate::page_router::{CommentPart, Hit, Owner};
+use crate::page_router::{CommentPart, Hit, Owner, PagePress};
 
-/// Comment input on one page, before text selection runs. Returns `true` when the pointer
-/// gesture belongs to commenting (text selection must ignore it).
-pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, view: &mut DocView) -> bool {
+/// Comment input on one page, before text selection runs. `press` is what this page has to do with
+/// the press the pages hold: a press on a comment ([`hit`]) is that comment's, with any tool, and
+/// one nobody holds is a commenting tool's. Returns `true` when the pointer gesture belongs to
+/// commenting (text selection must ignore it).
+pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, press: PagePress, view: &mut DocView) -> bool {
     let (pointer, origin) = (cx.ptr.pos, cx.ptr.origin);
     let page_rect = cx.xf.rect;
-    let pressed_here = origin.is_some_and(|o| page_rect.contains(o));
+    let free = press == PagePress::Free;
+    let pressed_here = free && origin.is_some_and(|o| page_rect.contains(o));
     let over_page = pointer.is_some_and(|p| page_rect.contains(p));
-    let fill_grab = fill_grabs(cx, view);
-    let draw_grab = draw_grabs(cx, view);
+    let owned = match press {
+        PagePress::Mine(Owner::Comment { index, part }) => Some((index, part)),
+        _ => None,
+    };
     let caret_text = if cx.tool == QuickTool::Comment(CommentTool::Caret) { view.page_text(cx.page) } else { None };
     let cv = &mut view.comments;
     if cv.gesture.is_some() && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
         cv.gesture = None;
-        cv.cancelled_drag = true;
         return true;
     }
-    if cv.cancelled_drag {
-        return true;
-    }
-    let gestures = Gestures { ui, resp, cx, pointer, origin, page_rect, pressed_here, over_page };
+    // A comment being moved, resized or reshaped on this page keeps the frame until it ends.
+    let moving =
+        matches!(cv.gesture, Some(Gesture::Move { page, .. } | Gesture::Resize { page, .. } | Gesture::Reshape { page, .. }) if page == cx.page);
+    let gestures = Gestures { ui, resp, cx, pointer, origin, page_rect, pressed_here, over_page, free };
     match cx.tool {
-        QuickTool::Comment(_) if draw_grab => select_input(ui, resp, cx, view, pointer, origin),
+        // The selected shape's handles, and Fill & Sign's marks, take their own presses.
+        QuickTool::Comment(_) | QuickTool::Fill(_) if owned.is_some() || moving => select_input(ui, resp, cx, view, owned, pointer, origin),
         QuickTool::Comment(tool) if tool.draws() => gestures.draw_shape(view, tool),
         QuickTool::Comment(tool) if tool.clicks_points() => gestures.click_points(view, tool),
         QuickTool::Comment(CommentTool::Callout) => gestures.callout(view),
         QuickTool::Comment(CommentTool::Attach) => gestures.attach(view),
         QuickTool::Comment(CommentTool::Caret) => gestures.caret(view, caret_text.as_deref()),
         QuickTool::Comment(tool @ (CommentTool::Note | CommentTool::TextBox)) => gestures.note_or_box(view, tool),
-        QuickTool::Select => select_input(ui, resp, cx, view, pointer, origin),
-        QuickTool::Fill(_) if fill_grab => select_input(ui, resp, cx, view, pointer, origin),
+        QuickTool::Select => select_input(ui, resp, cx, view, owned, pointer, origin),
         _ => false,
     }
 }
@@ -68,7 +72,7 @@ pub(crate) fn hit(cx: &PageCx<'_>, view: &DocView, p: Pos2, on_link: bool) -> Op
     };
     let bodies = matches!(cx.tool, QuickTool::Select | QuickTool::Fill(_));
     if let Some(a) = view.comments.selected.filter(|(page, _)| *page == cx.page).and_then(|(_, i)| cx.get(i)).filter(|a| pick(a) && cx.allowed) {
-        if grabs_points(cx.tool)
+        if reaches_points(cx.tool)
             && reshapable(a)
             && let Some(point) = point_handle(cx, a, p)
         {
@@ -119,32 +123,6 @@ pub(crate) fn context(cx: &PageCx<'_>, p: Pos2, index: Option<usize>, view: &mut
     view.comments.selected = index.map(|i| (cx.page, i));
 }
 
-/// Whether the comments take the press on this page (or, with no button down, would take one
-/// under the pointer), so the tools beneath leave it: a live move, resize or reshape, or a press
-/// held by a comment that keeps its drag.
-fn grabs(cx: &PageCx<'_>, view: &DocView) -> bool {
-    if matches!(view.comments.gesture, Some(Gesture::Move { page, .. } | Gesture::Resize { page, .. } | Gesture::Reshape { page, .. }) if page == cx.page)
-    {
-        return true;
-    }
-    if cx.ptr.any_down {
-        return matches!(view.router.owner(cx.page), Some(Owner::Comment { .. })) && view.router.keeps_drag();
-    }
-    // Only the Select tool lets a link through a highlight, and it doesn't come here.
-    cx.ptr.pos.and_then(|p| hit(cx, view, p, false)).is_some_and(|h| !h.declines_drag)
-}
-
-/// With a Fill & Sign tool, a Fill & Sign mark already on the page is picked up as with the Select
-/// tool ([`hit`]), so the tool does not place a mark there.
-pub(crate) fn fill_grabs(cx: &PageCx<'_>, view: &DocView) -> bool {
-    matches!(cx.tool, QuickTool::Fill(_)) && grabs(cx, view)
-}
-
-/// With a shape tool, the selected comment's handles are picked up ([`hit`]).
-fn draw_grabs(cx: &PageCx<'_>, view: &DocView) -> bool {
-    matches!(cx.tool, QuickTool::Comment(_)) && grabs(cx, view)
-}
-
 /// The tip for the comment under the pointer, with any tool, beside that tool's own cursor: Acrobat
 /// shows a comment's tooltip whatever tool is active. Not with Fill & Sign, whose placement stays
 /// clear; not while drawing freehand, where it would cover the next stroke (#429); and not while a
@@ -180,13 +158,19 @@ pub(super) fn hover_tip(a: &Annotation, prefs: &CommentPrefs) -> Option<String> 
     Some(if body.is_empty() { who } else { format!("{who}\n{body}") })
 }
 
-/// The Select tool: select, move, resize, edit, delete, on the comment the press was on (its
-/// owner, from [`hit`]). The cursor comes from [`hit`] too.
-fn select_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, view: &mut DocView, pointer: Option<Pos2>, origin: Option<Pos2>) -> bool {
-    let owner = match view.router.owner(cx.page) {
-        Some(Owner::Comment { index, part }) => cx.get(index).map(|a| (a, part)),
-        _ => None,
-    };
+/// The Select tool: select, move, resize, edit, delete, on the comment the press is on and the
+/// part of it (`owned`, from [`hit`]). The cursor comes from [`hit`] too. A click on anything else
+/// (a link, a field, added text, the page) leaves comments unselected.
+fn select_input(
+    ui: &egui::Ui,
+    resp: &egui::Response,
+    cx: &PageCx<'_>,
+    view: &mut DocView,
+    owned: Option<(usize, CommentPart)>,
+    pointer: Option<Pos2>,
+    origin: Option<Pos2>,
+) -> bool {
+    let owner = owned.and_then(|(index, part)| cx.get(index).map(|a| (a, part)));
     let cv = &mut view.comments;
     let mut consumed = false;
     if resp.drag_started()
@@ -262,8 +246,8 @@ fn select_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, view: &mu
     // (egui clears the press origin on release, so clicks are located by the pointer.)
     let on_page = pointer.is_some_and(|p| cx.xf.rect.contains(p));
     if resp.clicked() && on_page {
-        // A click elsewhere (a link beneath text highlighting included: it follows the link)
-        // leaves comments unselected.
+        // A click elsewhere (a link beneath text highlighting included: it follows the link; a
+        // form field; added text) leaves comments unselected.
         match owner {
             Some((a, _)) => {
                 cv.selected = Some((cx.page, a.index));
@@ -326,13 +310,21 @@ struct Gestures<'a> {
     pointer: Option<Pos2>,
     origin: Option<Pos2>,
     page_rect: Rect,
+    /// The press began on this page, and nobody holds it: the tool's.
     pressed_here: bool,
     over_page: bool,
+    /// Nobody holds the press, and it began on this page, or no button is down.
+    free: bool,
 }
 
 impl Gestures<'_> {
+    /// The tool's own click: one nobody holds.
+    fn clicked(&self) -> bool {
+        self.free && self.resp.clicked()
+    }
+
     fn draw_shape(&self, view: &mut DocView, tool: CommentTool) -> bool {
-        let Self { ui, resp, cx, pointer, origin, page_rect, pressed_here, over_page } = *self;
+        let Self { ui, resp, cx, pointer, origin, page_rect, pressed_here, over_page, .. } = *self;
         let cv = &mut view.comments;
         if !cx.allowed {
             return false;
@@ -380,7 +372,7 @@ impl Gestures<'_> {
         // it as a one-point ink stroke (a dot). The appearance uses round line caps, so a
         // single PDF point is visible and remains editable like any other drawing.
         if matches!(tool, CommentTool::Ink | CommentTool::FreehandHighlight)
-            && resp.clicked()
+            && self.clicked()
             && over_page
             && let Some(p) = pointer
             && let Some(shape) = drawn_shape(tool, &[cx.to_user(p)])
@@ -412,7 +404,7 @@ impl Gestures<'_> {
             cv.undo_point();
             return true;
         }
-        if resp.clicked()
+        if self.clicked()
             && over_page
             && let Some(p) = pointer
         {
@@ -492,7 +484,7 @@ impl Gestures<'_> {
     }
 
     fn attach(&self, view: &mut DocView) -> bool {
-        let Self { resp, cx, pointer, over_page, .. } = *self;
+        let Self { cx, pointer, over_page, .. } = *self;
         let cv = &mut view.comments;
         if !cx.allowed {
             return false;
@@ -500,7 +492,7 @@ impl Gestures<'_> {
         if over_page {
             view.cursor.claim(Layer::ToolArea, egui::CursorIcon::Crosshair);
         }
-        if resp.clicked()
+        if self.clicked()
             && over_page
             && let Some(p) = pointer
         {
@@ -511,7 +503,7 @@ impl Gestures<'_> {
     }
 
     fn caret(&self, view: &mut DocView, caret_text: Option<&pdfcraft_render::PageText>) -> bool {
-        let Self { resp, cx, pointer, over_page, .. } = *self;
+        let Self { cx, pointer, over_page, .. } = *self;
         let cv = &mut view.comments;
         if !cx.allowed {
             return false;
@@ -519,7 +511,7 @@ impl Gestures<'_> {
         if over_page {
             view.cursor.claim(Layer::ToolArea, egui::CursorIcon::Text);
         }
-        if resp.clicked()
+        if self.clicked()
             && over_page
             && let Some(p) = pointer
         {
@@ -573,7 +565,7 @@ impl Gestures<'_> {
                 }
             }
         }
-        if resp.clicked()
+        if self.clicked()
             && over_page
             && let Some(p) = pointer
         {
@@ -587,9 +579,6 @@ impl Gestures<'_> {
 
 /// Delete / Escape handling for comments (only while no text field has focus).
 pub(crate) fn keys(ctx: &egui::Context, view: &mut DocView, tool: &mut QuickTool, allowed: bool) {
-    if !ctx.input(|i| i.pointer.any_down()) {
-        view.comments.cancelled_drag = false;
-    }
     if ctx.egui_wants_keyboard_input() {
         return;
     }

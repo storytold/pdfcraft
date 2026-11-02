@@ -217,14 +217,13 @@ const RAW_READS: [&str; 21] = [
 
 /// Functions in the page modules that are not page input and read egui's pointer state
 /// themselves: (file, function, why).
-const NOT_PAGE_INPUT: [(&str, &str, &str); 11] = [
+const NOT_PAGE_INPUT: [(&str, &str, &str); 10] = [
     ("canvas/area.rs", "zoom_anchor", "a pinch zooms the whole view, and is read before the pages' widget exists"),
     ("canvas/area.rs", "drawing_edge_pointer", "scrolls the view at its edges, read before the pages' widget exists"),
     ("canvas/area.rs", "glide_interrupted", "a press anywhere stops the touchpad's glide"),
     ("canvas/area.rs", "presentation_click", "full screen's click to turn the page, read before the pages' widget exists"),
     ("canvas/bars.rs", "page_size_hint", "the page size hint sits in the view's corner, not on a page"),
     ("canvas/organize.rs", "organize_grid", "Organize Pages shows thumbnails, not pages"),
-    ("tools/comments/input.rs", "keys", "keyboard handling after the pages: a drag cancelled with Escape ends once no button is down"),
     ("tools/forms_ui.rs", "overlay", "the field editor is an Area of its own over the page"),
     ("tools/content_ui.rs", "editor", "the added-text editor is an Area of its own over the page"),
     ("tools/edit_text_ui.rs", "overlay", "the paragraph editor is an Area of its own over the page"),
@@ -416,7 +415,7 @@ fn hit_test_calls(line: &str) -> Vec<String> {
 
 /// The functions that call a hit test: (file, function, why). Only `PageHits::at` asks at the
 /// press point; the others ask where the pointer is.
-const HIT_TESTERS: [(&str, &str, &str); 4] = [
+const HIT_TESTERS: [(&str, &str, &str); 3] = [
     (
         "canvas/page_input.rs",
         "hits",
@@ -424,7 +423,6 @@ const HIT_TESTERS: [(&str, &str, &str); 4] = [
     ),
     ("canvas/page_input.rs", "page_overlays", "a link's click counts only released over the link its press was on"),
     ("tools/forms_ui.rs", "page_input", "the field's tooltip under the pointer, and a click counts only released over the widget its press was on"),
-    ("tools/comments/input.rs", "grabs", "with no button down, whether a comment would take a press under the pointer, for hover painting"),
 ];
 
 /// What ignores the press the pages hold until the button is up.
@@ -493,7 +491,6 @@ fn page_modules_act_on_a_press_only_through_the_router() {
         ("tools/edit_text_ui.rs", "page_input"),
         ("tools/edit_text_ui/image.rs", "image_input"),
         ("tools/object_ui.rs", "input"),
-        ("tools/comments/input.rs", "select_input"),
     ] {
         let source = std::fs::read_to_string(src.join(file)).expect("page input module");
         let body = source.lines().skip_while(|line| declares(line) != Some(function)).take_while(|line| *line != "}").collect::<Vec<_>>().join("\n");

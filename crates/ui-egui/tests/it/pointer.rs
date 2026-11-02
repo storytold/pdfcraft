@@ -1129,3 +1129,29 @@ fn a_right_click_on_a_comment_with_a_drawing_tool_opens_its_menu() {
     right_click(&mut h, on_comment);
     assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "the comment is selected for its menu");
 }
+
+/// The check box `agree` of [`checkbox_pdf`], with a rectangle comment at x 150..250, y 100..150.
+fn comment_and_checkbox_pdf() -> Vec<u8> {
+    pdf(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] /DA (/ZaDb 0 Tf 0 g) /DR << /Font << /ZaDb 5 0 R >> >> >> >>",
+        PAGES,
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 6 0 R] >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Btn /T (agree) /V /Off /AS /Off /Rect [100 200 120 220] /P 3 0 R /F 4 /MK << /CA (4) >> /DA (/ZaDb 11 Tf 0 g) >>",
+        "<< /Type /Font /Subtype /Type1 /BaseFont /ZapfDingbats >>",
+        "<< /Type /Annot /Subtype /Square /Rect [150 100 250 150] /C [1 0 0] /F 4 /T (Ana) >>",
+    ])
+}
+
+/// A click on anything but the selected comment leaves it unselected, a form field included, as
+/// a click on a link or on the page does. A field's click used to keep it selected.
+#[test]
+fn a_click_on_a_form_field_deselects_the_selected_comment() {
+    let mut h = open(comment_and_checkbox_pdf(), "150", false);
+    let comment = at(&h, 200.0, 125.0);
+    mouse_click(&mut h, comment);
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 1)), "the comment is selected");
+    let check_box = at(&h, 110.0, 210.0);
+    mouse_click(&mut h, check_box);
+    assert_eq!(h.state().views[0].comments.selected, None, "a click on the check box leaves it unselected");
+    assert_eq!(agree(&h).len(), 1, "and ticks the box");
+}

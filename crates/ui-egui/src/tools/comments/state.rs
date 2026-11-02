@@ -133,8 +133,6 @@ pub struct CommentView {
     /// Drawings just released: shown from their points until the page raster that includes the
     /// committed annotation arrives, so the stroke never vanishes in between (#1858).
     pub(crate) settling: Vec<Settling>,
-    /// Escape ends egui's drag too; ignore its synthetic release until the mouse is up.
-    pub(super) cancelled_drag: bool,
     pub composer: Option<Composer>,
     /// Reply being typed under the selected card.
     pub reply: String,

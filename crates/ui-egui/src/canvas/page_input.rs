@@ -16,6 +16,8 @@ pub(super) struct PageInput {
     pub(super) consumed: bool,
     /// Redact or Highlight draws boxes off text.
     pub(super) area_tool: bool,
+    /// What a press under the pointer would take (the top hit there), for hover painting.
+    pub(super) hover: Option<crate::page_router::Hit>,
 }
 
 /// Common geometry and pointer state for a tool acting on one page.
@@ -153,10 +155,13 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
             frame.out.stamp_placed = true;
         }
     }
-    // Over a mark already placed, the Fill & Sign tool picks it up (comments, below).
+    // A mark already placed takes its own press (comments, below), and with no button down the
+    // tool's preview hides over one, where a press would pick it up.
+    let over_mark = matches!(tool, QuickTool::Fill(_))
+        && (matches!(press, PagePress::Mine(_)) || !ptr.any_down && pointer.and_then(|p| top(hits.at(view, p), tool)).is_some());
     if let QuickTool::Fill(ft) = tool
         && allowed
-        && !comments::fill_grabs(&pcx, view)
+        && !over_mark
     {
         match crate::fill_sign::page_input(
             cx,
@@ -283,17 +288,23 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
     {
         view.links.context = Some((i, index));
     }
-    let consumed = on_objects || on_edit_text || on_link || on_content || boxing || on_field || comments::page_input(ui, resp, &pcx, view);
-    // The cursor and the tip from what lies under the pointer, after the tools claimed theirs (the
-    // last claim on a layer stands).
-    if frame.env.unobstructed
-        && let Some(p) = pointer
-    {
-        for h in hits.at(view, p) {
-            view.cursor.claim_with_tip(h.layer, h.icon, h.tip);
-        }
+    // Comments, every frame: their own presses, a commenting tool's, and a click elsewhere that
+    // leaves them unselected.
+    let on_comment = comments::page_input(ui, resp, &pcx, press, view);
+    let consumed = on_objects || on_edit_text || on_link || on_content || boxing || on_field || on_comment;
+    let hover = pointer.filter(|_| frame.env.unobstructed).and_then(|p| claim_under(&hits, view, p));
+    PageInput { consumed, area_tool, hover }
+}
+
+/// The cursor and the tip from what lies under the pointer at `p`, after the tools claimed theirs
+/// (the last claim on a layer stands). Returns the top of it, what a press there would take, for
+/// hover painting.
+fn claim_under(hits: &PageHits<'_>, view: &mut DocView, p: Pos2) -> Option<crate::page_router::Hit> {
+    let under = hits.at(view, p);
+    for h in &under {
+        view.cursor.claim_with_tip(h.layer, h.icon, h.tip.clone());
     }
-    PageInput { consumed, area_tool }
+    top(under, hits.tool)
 }
 
 /// The link `owner` is, by its `/Annots` index.
@@ -701,7 +712,7 @@ pub(super) fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut P
     if input.area_tool {
         crate::redact_ui::paint(painter, i, view, pointer);
     }
-    comments::paint_page(ui, painter, &pcx, view);
+    comments::paint_page(ui, painter, &pcx, view, input.hover.as_ref());
     if editing_content {
         crate::content_ui::paint_page(painter, &xf, i, info, added, view, pointer);
     }
