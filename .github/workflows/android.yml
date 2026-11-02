@@ -50,8 +50,9 @@ jobs:
       - name: Install cargo-ndk and Android SDK packages
         run: |
           cargo install cargo-ndk --version 4.1.2 --locked
-          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;29.0.14206865" "platforms;android-37" >/dev/null
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;29.0.14206865" "platforms;android-37.0" >/dev/null
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null
+          [ -d "$ANDROID_HOME/platforms/android-37" ] || ln -s "$ANDROID_HOME/platforms/android-37.0" "$ANDROID_HOME/platforms/android-37"
 
       - name: Cache Cargo and Gradle
         uses: actions/cache@v4
@@ -65,8 +66,17 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-android-
 
+      - name: Validate Gradle wrapper
+        uses: gradle/actions/wrapper-validation@v4
+
       - name: Check Rust formatting
         run: cargo fmt --all -- --check
+
+      - name: Check Clippy linter
+        run: cargo clippy -p pdfcraft-android -p pdfcraft-annot -p pdfcraft-automation --tests --locked -- -D warnings
+
+      - name: Verify asset policy
+        run: cargo xtask assets
 
       - name: Run Android bridge tests
         run: cargo test --locked -p pdfcraft-android
@@ -80,6 +90,10 @@ jobs:
       - name: Run Android JVM unit tests
         working-directory: apps/pdfcraft-android/android
         run: ./gradlew --no-daemon testDebugUnitTest
+
+      - name: Assemble Android instrumentation tests
+        working-directory: apps/pdfcraft-android/android
+        run: ./gradlew --no-daemon assembleAndroidTest
 
       - name: Assemble debug APK
         working-directory: apps/pdfcraft-android/android
@@ -99,3 +113,4 @@ jobs:
             apps/pdfcraft-android/android/app/build/outputs/apk/debug/*.apk
             apps/pdfcraft-android/android/app/build/outputs/apk/release/*.apk
             apps/pdfcraft-android/android/app/build/outputs/bundle/release/*.aab
+            apps/pdfcraft-android/android/app/build/outputs/apk/androidTest/debug/*.apk

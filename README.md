@@ -71,13 +71,13 @@ A locally generated release build is not a Play Store release. Configure and pro
 | `apps/pdfcraft-android/bindgen` | Kotlin binding generator |
 | `crates/engine`, `crates/render`, `crates/automation`, etc. | Shared Rust PDF engine |
 | `.github/workflows/android.yml` | Android build and test workflow |
-| `audit/` | Engineering audit, defect register and verification evidence |
+| `docs/audit/` | Engineering audit, defect register and verification evidence |
 
 ## Upstream and contributions
 
 - Original project: [storytold/pdfcraft](https://github.com/storytold/pdfcraft)
 - Android implementation: [apps/pdfcraft-android](https://github.com/dikshant363/pdfcraft-android/tree/android-port/apps/pdfcraft-android)
-- Contribution and audit notes: [audit](audit/)
+- Contribution and audit notes: [docs/audit/](docs/audit/)
 
 Android-specific work is maintained separately from upstream-compatible Rust contributions. Upstream changes are proposed through focused pull requests; this fork does not imply that the upstream maintainers have accepted or adopted the Android application.
 

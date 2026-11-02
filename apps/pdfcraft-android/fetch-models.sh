@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Fetches the text-recognition models (Recognize text) into assets/models/, checked by SHA-256,
 # with their licence and an attribution note: what `cargo xtask models` does in the full PdfCraft
-# workspace. The public repository (artcraft-android/pdfcraft-android) commits them, so its builds
+# workspace. The public repository (dikshant363/pdfcraft-android) commits them, so its builds
 # (F-Droid's too) download nothing; this fetches them again. Without them the app still builds, and
 # Recognize text says it isn't installed.
 set -euo pipefail

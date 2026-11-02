@@ -407,7 +407,7 @@ private fun Preferences(vm: AppViewModel) {
 }
 
 /** PdfCraft for Android's own repository: its help, its issues and its source. */
-private const val APP_REPO = "https://github.com/artcraft-android/pdfcraft-android"
+private const val APP_REPO = "https://github.com/dikshant363/pdfcraft-android"
 
 @Composable
 private fun Section(title: String) {
