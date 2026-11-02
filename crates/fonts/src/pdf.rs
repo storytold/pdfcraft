@@ -14,7 +14,7 @@
 use std::borrow::Cow;
 use std::collections::{BinaryHeap, HashMap, HashSet};
 
-use pdfcraft_cos::{DecodeBudget, Dict, Document, Object};
+use pdfcraft_cos::{DecodeBudget, Dict, Document, Object, is_delimiter, is_whitespace};
 
 /// How the bytes of a string map to codes.
 #[derive(Clone, Debug, PartialEq)]
@@ -440,21 +440,13 @@ impl<'a> Lexer<'a> {
     }
 }
 
-fn is_cmap_space(b: u8) -> bool {
-    matches!(b, 0 | b'\t' | b'\n' | 0x0c | b'\r' | b' ')
-}
-
-fn is_cmap_delimiter(b: u8) -> bool {
-    matches!(b, b'(' | b')' | b'<' | b'>' | b'[' | b']' | b'{' | b'}' | b'/' | b'%')
-}
-
 impl<'a> Iterator for Lexer<'a> {
     type Item = Tok<'a>;
 
     fn next(&mut self) -> Option<Tok<'a>> {
         loop {
             let b = self.at(self.pos)?;
-            if is_cmap_space(b) {
+            if is_whitespace(b) {
                 self.pos += 1;
             } else if b == b'%' {
                 while self.at(self.pos).is_some_and(|c| c != b'\n' && c != b'\r') {
@@ -482,7 +474,7 @@ impl<'a> Iterator for Lexer<'a> {
                         // Unterminated: what's left is one bad string.
                         None => return Some(Tok::Hex(None)),
                         Some(b'>') => break,
-                        Some(c) if is_cmap_space(c) => {}
+                        Some(c) if is_whitespace(c) => {}
                         Some(c) => match (c as char).to_digit(16) {
                             // A hex digit is below 16, so it fits a u8.
                             Some(d) => digits.push(d as u8),
@@ -515,8 +507,8 @@ impl<'a> Iterator for Lexer<'a> {
             }
             _ => {
                 // A name keeps its `/`; other delimiters (`)`, `>`, `{`, `}`) stand alone.
-                if b == b'/' || !is_cmap_delimiter(b) {
-                    while self.at(self.pos).is_some_and(|c| !is_cmap_space(c) && !is_cmap_delimiter(c)) {
+                if b == b'/' || !is_delimiter(b) {
+                    while self.at(self.pos).is_some_and(|c| !is_whitespace(c) && !is_delimiter(c)) {
                         self.pos += 1;
                     }
                 }

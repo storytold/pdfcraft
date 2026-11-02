@@ -17,7 +17,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use pdfcraft_cos::{Dict, Document, ObjRef, Object, Stream};
+use pdfcraft_cos::{Dict, Document, ObjRef, Object, Stream, is_delimiter, is_whitespace};
 
 use crate::{OptimizeError, Stage};
 
@@ -122,8 +122,7 @@ fn hex(b: &u8) -> Option<u8> {
 /// Record which of `wanted` (none longer than `longest`) are written in `data` (`/Name`, `#xx`
 /// escapes decoded), wherever they appear: operands, strings, comments or inline image data.
 fn find_names(data: &[u8], wanted: &HashSet<Vec<u8>>, longest: usize, found: &mut HashSet<Vec<u8>>) {
-    let regular =
-        |b: u8| !matches!(b, b'\0' | b'\t' | b'\n' | b'\x0C' | b'\r' | b' ' | b'(' | b')' | b'<' | b'>' | b'[' | b']' | b'{' | b'}' | b'/' | b'%');
+    let regular = |b: u8| !(is_whitespace(b) || is_delimiter(b));
     let mut i = 0;
     while let Some(slash) = data.get(i..).and_then(|rest| rest.iter().position(|&b| b == b'/')) {
         let mut j = i + slash + 1;

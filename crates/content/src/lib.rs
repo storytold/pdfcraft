@@ -7,7 +7,7 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
-use pdfcraft_cos::{Dict, Lexer, Object, PdfString, is_whitespace, serialize};
+use pdfcraft_cos::{Dict, Lexer, Object, PdfString, is_delimiter, is_whitespace, serialize};
 
 #[cfg(test)]
 mod tests;
@@ -74,10 +74,6 @@ pub struct Parsed {
     /// and whether one runs out of it into the next. Only boundaries are recorded, so the size
     /// depends on the number of pieces, not of comments.
     comment_edges: Vec<(bool, bool)>,
-}
-
-fn is_delim(b: u8) -> bool {
-    matches!(b, b'(' | b')' | b'<' | b'>' | b'[' | b']' | b'{' | b'}' | b'/' | b'%')
 }
 
 /// Longest unreadable number token retried from its next byte. Real numbers are far shorter.
@@ -193,7 +189,7 @@ impl Iterator for Ops<'_> {
                 }
                 continue;
             }
-            if is_delim(b) {
+            if is_delimiter(b) {
                 // A stray `)`, `>`, `]`, `{`, `}`.
                 lx.pos += 1;
                 *skipped += 1;
@@ -467,7 +463,7 @@ fn unfiltered_image_end(data: &[u8], begin: usize, dict: &Dict) -> Option<(usize
     }
     let ei = end_data.checked_add(separator)?;
     let end = ei.checked_add(2)?;
-    if data.get(ei..end) == Some(b"EI") && data.get(end).is_none_or(|b| is_whitespace(*b) || is_delim(*b)) { Some((end_data, end)) } else { None }
+    if data.get(ei..end) == Some(b"EI") && data.get(end).is_none_or(|b| is_whitespace(*b) || is_delimiter(*b)) { Some((end_data, end)) } else { None }
 }
 
 /// The length declared by `/L` (or `/Length`, ISO 32000-2 §8.9.7), used when `EI` follows the
@@ -478,7 +474,7 @@ fn declared_image_end(data: &[u8], begin: usize, dict: &Dict) -> Option<(usize, 
     let after = data.get(end_data..)?;
     let ei = end_data.checked_add(after.iter().position(|b| !is_whitespace(*b))?)?;
     let end = ei.checked_add(2)?;
-    if data.get(ei..end) == Some(b"EI") && data.get(end).is_none_or(|b| is_whitespace(*b) || is_delim(*b)) { Some((end_data, end)) } else { None }
+    if data.get(ei..end) == Some(b"EI") && data.get(end).is_none_or(|b| is_whitespace(*b) || is_delimiter(*b)) { Some((end_data, end)) } else { None }
 }
 
 /// Where inline image data of unknown length ends. A candidate `EI` followed by binary bytes before
@@ -501,7 +497,7 @@ fn image_data_end(data: &[u8], begin: usize, eod: &[u8]) -> Option<(usize, usize
 /// Whether `bytes` hold a whitespace-delimited `BI` operator.
 fn starts_inline_image(bytes: &[u8]) -> bool {
     bytes.windows(2).enumerate().any(|(i, pair)| {
-        pair == b"BI" && (i == 0 || is_whitespace(bytes[i - 1])) && bytes.get(i + 2).is_none_or(|b| is_whitespace(*b) || is_delim(*b))
+        pair == b"BI" && (i == 0 || is_whitespace(bytes[i - 1])) && bytes.get(i + 2).is_none_or(|b| is_whitespace(*b) || is_delimiter(*b))
     })
 }
 
@@ -514,7 +510,7 @@ fn end_of_image(data: &[u8], begin: usize, eod: &[u8]) -> Option<(usize, usize)>
         if data[i] == b'E'
             && data.get(i + 1) == Some(&b'I')
             && (i == begin || is_whitespace(data[i - 1]) || (!eod.is_empty() && data[begin..i].ends_with(eod)))
-            && data.get(i + 2).is_none_or(|b| is_whitespace(*b) || is_delim(*b))
+            && data.get(i + 2).is_none_or(|b| is_whitespace(*b) || is_delimiter(*b))
         {
             let end_data = if i > begin && is_whitespace(data[i - 1]) { i - 1 } else { i };
             return Some((end_data, i + 2));
