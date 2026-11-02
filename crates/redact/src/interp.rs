@@ -24,7 +24,7 @@ use pdfcraft_content::{Matrix, Op, Pieces, contains, num, overlaps, serialize_op
 use pdfcraft_cos::{CosError, DecodeBudget, Dict, Document, MAX_PAGE_FORMS, ObjRef, Object, Stream};
 
 use crate::{RedactError, Report, image, page_streams, tags};
-use pdfcraft_fonts::pdf::Metrics;
+use pdfcraft_fonts::pdf::{GlyphInk, Ink, Metrics};
 
 mod layers;
 mod prune;
@@ -57,6 +57,8 @@ pub(crate) enum Mode {
 struct Gs {
     ctm: Matrix,
     font: Rc<Metrics>,
+    /// What the current font's glyphs draw, when its embedded program can be read.
+    ink: Option<Rc<GlyphInk>>,
     /// The current font writes vertically (a Type0 font with an `-V` encoding or a CMap whose
     /// `/WMode` is 1). Glyph layout here is horizontal, so such text cannot be placed under a
     /// region; apply fails closed when it meets any (see `show`).
@@ -123,6 +125,10 @@ pub(crate) struct Scope<'a> {
     /// Content removed from hidden layers (blocks and XObjects).
     pub layer_blocks: usize,
     fonts: HashMap<Vec<u8>, Rc<Metrics>>,
+    /// The ink readers of the fonts in `fonts`, under the same keys, read only while marks are
+    /// tested. Like `fonts`, they belong to one resource dictionary: a form's `/F1` can be
+    /// another font than the page's.
+    inks: HashMap<Vec<u8>, Option<Rc<GlyphInk>>>,
     used_names: Vec<Vec<u8>>,
     depth: usize,
     /// Form entries and decoded bytes left for this page, its content streams already charged:
@@ -132,6 +138,21 @@ pub(crate) struct Scope<'a> {
 }
 
 impl<'a> Scope<'a> {
+    /// The ink reader for the font cached under `key` (its resource name, or the ExtGState key),
+    /// read from `font` the first time; `None` when no marks are tested or it has no readable
+    /// program. Its decodes are charged to the page's budget.
+    fn glyph_ink(&mut self, doc: &Document, key: &[u8], font: Option<&Dict>, metrics: &Metrics) -> Option<Rc<GlyphInk>> {
+        if self.rects.is_empty() {
+            return None;
+        }
+        if let Some(ink) = self.inks.get(key) {
+            return ink.clone();
+        }
+        let ink = font.and_then(|d| GlyphInk::from_dict(doc, d, metrics, &mut self.budget)).map(Rc::new);
+        self.inks.insert(key.to_vec(), ink.clone());
+        ink
+    }
+
     /// A scope whose form walk spends `budget`, what is left of the page's allowance after its
     /// content streams were decoded.
     pub fn new(rects: &'a [[f64; 4]], mode: Mode, report: &'a mut Report, budget: DecodeBudget) -> Self {
@@ -147,6 +168,7 @@ impl<'a> Scope<'a> {
             xobject_oc_cache: HashMap::new(),
             layer_blocks: 0,
             fonts: HashMap::new(),
+            inks: HashMap::new(),
             used_names: Vec::new(),
             depth: 0,
             budget,
@@ -227,6 +249,7 @@ pub(crate) fn process(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<
     let gs = Gs {
         ctm,
         font: Rc::new(Metrics::fallback()),
+        ink: None,
         vertical: false,
         size: 0.0,
         char_spacing: 0.0,
@@ -453,8 +476,8 @@ impl Walk {
             }
             b"Tf" => self.select_font(doc, scope, op),
             _ => {
-                if let Some((font, vertical, size)) = op.name(0).and_then(|n| extgstate_font(doc, scope, &self.ext_gstates, n, &self.fallback)) {
-                    (self.gs.font, self.gs.vertical, self.gs.size) = (font, vertical, size);
+                if let Some((font, ink, vertical, size)) = op.name(0).and_then(|n| extgstate_font(doc, scope, &self.ext_gstates, n, &self.fallback)) {
+                    (self.gs.font, self.gs.ink, self.gs.vertical, self.gs.size) = (font, ink, vertical, size);
                 }
             }
         }
@@ -473,6 +496,7 @@ impl Walk {
                 m
             }
         };
+        self.gs.ink = scope.glyph_ink(doc, name, font_dict.as_ref(), &self.gs.font);
     }
 
     /// Text state and text-positioning operators.
@@ -541,7 +565,10 @@ impl Walk {
         {
             self.out.vertical = true;
         }
-        let (new_items, removed) = show(scope, &self.gs, &mut self.tm, &items);
+        let (new_items, removed, beside) = show(scope, &self.gs, &mut self.tm, &items);
+        if scope.mode == Mode::Apply {
+            scope.report.glyphs_beside_marks += beside;
+        }
         if removed == 0 {
             return Some(op);
         }
@@ -639,13 +666,26 @@ fn clean_replacements(doc: &Document, resources: &Dict, original: &[Op], process
     }
 }
 
+/// The glyph box a mark is measured against, across the line, when the glyph's outline can't be
+/// read ([`Ink::Unknown`]): the font's descent to ascent, scaled down to one em when it is taller. A font's ascent and descent include the gap between
+/// lines, so with lines set solid (spacing = font size) each line's box would reach a few points
+/// into the marks on the next line and lose glyphs nobody marked. One em is also the box text
+/// selection uses, so a mark made from a selection covers its own line only.
+fn em_box(descent: f64, ascent: f64) -> (f64, f64) {
+    let h = ascent - descent;
+    if h > 1.0 { (descent / h, ascent / h) } else { (descent, ascent) }
+}
+
 /// Lay out a shown string (or `TJ` array) glyph by glyph, advancing `tm`. Returns the `TJ`
-/// items with the glyphs under a region replaced by displacements, and how many were removed.
-fn show(scope: &Scope<'_>, gs: &Gs, tm: &mut Matrix, items: &[Object]) -> (Vec<Object>, usize) {
+/// items with the glyphs under a region replaced by displacements, how many were removed, and
+/// how many were kept although their full font box reaches a region (see [`em_box`]).
+fn show(scope: &Scope<'_>, gs: &Gs, tm: &mut Matrix, items: &[Object]) -> (Vec<Object>, usize, usize) {
     let f = &gs.font;
     let size = gs.size;
+    let (descent, ascent) = em_box(f.descent, f.ascent);
     let mut out: Vec<Object> = Vec::new();
     let mut removed = 0;
+    let mut beside = 0;
     let push_num = |out: &mut Vec<Object>, v: f64| {
         if v == 0.0 {
             return;
@@ -677,7 +717,25 @@ fn show(scope: &Scope<'_>, gs: &Gs, tm: &mut Matrix, items: &[Object]) -> (Vec<O
                             let degenerate = b[2] - b[0] < 0.01 && b[3] - b[1] < 0.01;
                             matches!(gs.render_mode, 3 | 7) || !(overlaps(page, b, 0.0) || degenerate)
                         }
-                        None => scope.glyph_hit(b, origin),
+                        None => match gs.ink.as_deref().map_or(Ink::Unknown, |ink| ink.ink(f, code)) {
+                            // What the glyph draws is known: it goes when its ink is under a region.
+                            Ink::Box(ink) if matches!(gs.render_mode, 1 | 2 | 5 | 6) => {
+                                // Stroked text paints past its outline by the line width, which is
+                                // not tracked here: the one-em box counts too, as before outlines.
+                                let em = [0.0, descent, w0, ascent];
+                                scope.glyph_hit(trm.bbox([ink[0].min(em[0]), ink[1].min(em[1]), ink[2].max(em[2]), ink[3].max(em[3])]), origin)
+                            }
+                            Ink::Box(ink) => scope.glyph_hit(trm.bbox(ink), origin),
+                            // Nothing drawn: the one-em box decides, and nothing can stay behind.
+                            Ink::Blank => scope.glyph_hit(trm.bbox([0.0, descent, w0, ascent]), origin),
+                            Ink::Unknown => {
+                                let hit = scope.glyph_hit(trm.bbox([0.0, descent, w0, ascent]), origin);
+                                if !hit && scope.glyph_hit(b, origin) {
+                                    beside += 1;
+                                }
+                                hit
+                            }
+                        },
                     };
                     glyphs.push(Glyph { bytes: pos..pos + len, advance, hit });
                     *tm = Matrix::translate(advance * gs.scale, 0.0).then(tm);
@@ -710,7 +768,7 @@ fn show(scope: &Scope<'_>, gs: &Gs, tm: &mut Matrix, items: &[Object]) -> (Vec<O
             }
         }
     }
-    (out, removed)
+    (out, removed, beside)
 }
 
 /// `Do`: `None` = leave the operator alone; `Some(None)` = drop it; `Some(Some(op))` = replace it.
@@ -838,10 +896,12 @@ fn xobject(
             let own = s.dict.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned());
             let res = own.clone().unwrap_or_else(|| resources.clone());
             let saved_fonts = std::mem::take(&mut scope.fonts);
+            let saved_inks = std::mem::take(&mut scope.inks);
             scope.depth += 1;
             let inner = process_from(doc, scope, std::slice::from_ref(&data), &res, Gs { ctm: fctm, ..gs.clone() });
             scope.depth -= 1;
             scope.fonts = saved_fonts;
+            scope.inks = saved_inks;
             out.residue += inner.residue;
             out.vertical |= inner.vertical;
             out.ambiguous |= inner.ambiguous;

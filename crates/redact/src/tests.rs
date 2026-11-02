@@ -60,6 +60,250 @@ fn reopen(doc: &Document) -> Document {
     Document::open(Arc::new(write_incremental(doc, &SaveOptions::default()).unwrap())).unwrap()
 }
 
+/// #5255: a font whose ascent and descent span more than one em (Monaco: 1000 and −250), with
+/// lines set solid. A mark made from a text selection covers the selected line's em box, which
+/// the line below's glyph box reached into by 2 pt: marking "1234" also removed "CRET" below it.
+/// One page like [`one_page`], with font /F1's descriptor at `ascent` and `descent`.
+fn page_with_metrics(content: &[u8], ascent: i32, descent: i32) -> Document {
+    let font = FONT.replace("95 0 R", "6 0 R").replace("/Ascent 800 /Descent -200", &format!("/Ascent {ascent} /Descent {descent}"));
+    pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".to_vec(),
+        stream("", content),
+        font.into_bytes(),
+        widths(),
+    ])
+}
+
+#[test]
+fn a_mark_on_one_line_leaves_the_line_below_when_lines_are_set_solid() {
+    let mut doc = page_with_metrics(b"BT /F1 10 Tf 10 120 Td (ABOVE123) Tj 0 -10 Td (AB1234CD) Tj 0 -10 Td (SECRET) Tj ET", 1000, -250);
+    // "1234" on the baseline at y 110 spans x 20–40; its em box is y 108–118.
+    mark(&mut doc, 0, &[[20.0, 108.0, 40.0, 118.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!(r.glyphs, 4, "{r:?}");
+    assert_eq!(r.glyphs_beside_marks, 4, "CRET below reaches the mark only with its font box: kept and counted");
+    let c = content(&doc, 0);
+    assert!(!c.contains("1234"), "{c}");
+    assert!(c.contains("(SECRET) Tj") && c.contains("(ABOVE123) Tj"), "the lines above and below are whole: {c}");
+    // A rectangle that reaches into the line below still takes the glyphs it covers.
+    mark(&mut doc, 0, &[[20.0, 98.0, 40.0, 108.0]], "");
+    assert_eq!(apply(&mut doc, None).unwrap().glyphs, 4);
+    assert!(!content(&doc, 0).contains("SECRET"));
+}
+
+/// One page whose font /F1 is Inter, embedded as a TrueType program (every glyph 600 units wide).
+fn page_with_inter(content: &[u8]) -> Document {
+    let widths = format!("[{}]", vec!["600"; 224].join(" "));
+    pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".to_vec(),
+        stream("", content),
+        format!("<< /Type /Font /Subtype /TrueType /BaseFont /Inter /Encoding /WinAnsiEncoding /FirstChar 32 /LastChar 255 /Widths {widths} /FontDescriptor 6 0 R >>").into_bytes(),
+        b"<< /Type /FontDescriptor /FontName /Inter /Flags 32 /Ascent 969 /Descent -242 /FontFile2 7 0 R >>".to_vec(),
+        stream("", pdfcraft_fonts::INTER_REGULAR),
+    ])
+}
+
+/// #5298: with the font's outline readable, a glyph goes when its ink is under a mark, even ink
+/// above its one-em box: a mark over only the accent of a 24 pt "É" removes it.
+#[test]
+fn a_mark_over_only_an_accent_removes_the_glyph_when_its_outline_is_known() {
+    let mut doc = page_with_inter(b"BT /F1 24 Tf 10 100 Td (\\311E) Tj ET");
+    // The accent's top, read from the program: the mark covers from 0.805 em up to it, above
+    // the one-em box (0.8 em) and above the capital E beside it.
+    let font = pdfcraft_model::pages(&doc)[0].dict.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned()).unwrap();
+    let font = font.get(b"Font").and_then(|f| doc.resolve(f).as_dict().cloned()).unwrap();
+    let font = doc.resolve(font.get(b"F1").unwrap()).as_dict().cloned().unwrap();
+    let metrics = pdfcraft_fonts::pdf::Metrics::from_dict(&doc, &font);
+    let ink = pdfcraft_fonts::pdf::GlyphInk::from_dict(&doc, &font, &metrics, &mut pdfcraft_cos::DecodeBudget::page()).unwrap();
+    let pdfcraft_fonts::pdf::Ink::Box(accent) = ink.ink(&metrics, 0xC9) else { panic!("É draws") };
+    assert!(accent[3] > 0.85, "the accent rises above one em: {accent:?}");
+    mark(&mut doc, 0, &[[10.0, 100.0 + 0.805 * 24.0, 24.0, 100.0 + accent[3] * 24.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!((r.glyphs, r.glyphs_beside_marks), (1, 0), "{r:?}");
+    let c = content(&doc, 0);
+    assert!(!c.contains("\\311") && c.contains("(E)"), "É removed, E kept: {c}");
+}
+
+/// Italic overhang (#5298): ink that runs past a glyph's advance is under the mark, so the glyph goes.
+/// The page's widths say 0.6 em; a mark that covers only what the outline draws beyond that removes
+/// the glyph, and a metrics-only box would keep it.
+#[test]
+fn a_mark_over_only_a_glyphs_overhang_removes_it_when_its_outline_is_known() {
+    const SCRIPT: &[u8] = include_bytes!("../../../assets/fonts/DancingScript.ttf");
+    let widths = format!("[{}]", vec!["600"; 224].join(" "));
+    let build = |body: &[u8]| {
+        pdf(vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".to_vec(),
+            stream("", body),
+            format!("<< /Type /Font /Subtype /TrueType /BaseFont /Script /Encoding /WinAnsiEncoding /FirstChar 32 /LastChar 255 /Widths {widths} /FontDescriptor 6 0 R >>").into_bytes(),
+            b"<< /Type /FontDescriptor /FontName /Script /Flags 32 /Ascent 969 /Descent -242 /FontFile2 7 0 R >>".to_vec(),
+            stream("", SCRIPT),
+        ])
+    };
+    let probe = build(b"BT /F1 24 Tf 10 100 Td (A) Tj ET");
+    let font = pdfcraft_model::pages(&probe)[0].dict.get(b"Resources").and_then(|r| probe.resolve(r).as_dict().cloned()).unwrap();
+    let font = font.get(b"Font").and_then(|f| probe.resolve(f).as_dict().cloned()).unwrap();
+    let font = probe.resolve(font.get(b"F1").unwrap()).as_dict().cloned().unwrap();
+    let metrics = pdfcraft_fonts::pdf::Metrics::from_dict(&probe, &font);
+    let ink = pdfcraft_fonts::pdf::GlyphInk::from_dict(&probe, &font, &metrics, &mut pdfcraft_cos::DecodeBudget::page()).unwrap();
+    // The letter whose outline runs furthest past the 0.6 em the page's widths give it.
+    let (letter, outline) = (b'A'..=b'z')
+        .filter(|c| c.is_ascii_alphabetic())
+        .filter_map(|c| match ink.ink(&metrics, u32::from(c)) {
+            pdfcraft_fonts::pdf::Ink::Box(b) => Some((c, b)),
+            _ => None,
+        })
+        .max_by(|a, b| a.1[2].total_cmp(&b.1[2]))
+        .expect("the script face has letters that draw");
+    assert!(outline[2] > 0.6 + 0.08, "{} overhangs its advance by under 2 pt at 24 pt: {outline:?}", char::from(letter));
+    let page = format!("BT /F1 24 Tf 10 100 Td ({}) Tj ET BT /F1 24 Tf 10 200 Td (E) Tj ET", char::from(letter));
+    let mut doc = build(page.as_bytes());
+    // Only the part of the outline beyond the advance, over the outline's own height.
+    mark(&mut doc, 0, &[[10.0 + 0.6 * 24.0 + 0.2, 100.0 + outline[1] * 24.0, 10.0 + outline[2] * 24.0, 100.0 + outline[3] * 24.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!((r.glyphs, r.glyphs_beside_marks), (1, 0), "{r:?}");
+    let c = content(&doc, 0);
+    assert!(!c.contains(&format!("({})", char::from(letter))) && c.contains("(E)"), "the overhanging glyph is removed, the other line is kept: {c}");
+}
+
+/// A form's `/F1` is its own font. The page primes `/F1` = Inter; the form names `/F1` for a
+/// standard font with no program, so its "É" has no readable outline and must not be measured
+/// with Inter's: a mark over only the strip above one em keeps it, counted beside the mark.
+#[test]
+fn a_forms_font_is_not_measured_with_the_pages_font_of_the_same_name() {
+    let widths = format!("[{}]", vec!["600"; 224].join(" "));
+    let form = b"BT /F1 24 Tf 10 100 Td (\\311E) Tj ET";
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> /XObject << /X1 8 0 R >> >> >>".to_vec(),
+        stream("", b"BT /F1 24 Tf 10 200 Td (A) Tj ET /X1 Do"),
+        format!("<< /Type /Font /Subtype /TrueType /BaseFont /Inter /Encoding /WinAnsiEncoding /FirstChar 32 /LastChar 255 /Widths {widths} /FontDescriptor 6 0 R >>").into_bytes(),
+        b"<< /Type /FontDescriptor /FontName /Inter /Flags 32 /Ascent 969 /Descent -242 /FontFile2 7 0 R >>".to_vec(),
+        stream("", pdfcraft_fonts::INTER_REGULAR),
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /Font << /F1 9 0 R >> >>", &form[..]),
+        format!("<< /Type /Font /Subtype /TrueType /BaseFont /Other /Encoding /WinAnsiEncoding /FirstChar 32 /LastChar 255 /Widths {widths} >>").into_bytes(),
+    ]);
+    // 0.805 em to 0.9 em above the form's baseline: past its one-em box, where Inter's accent is.
+    mark(&mut doc, 0, &[[10.0, 100.0 + 0.805 * 24.0, 24.0, 100.0 + 0.9 * 24.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!((r.glyphs, r.glyphs_beside_marks), (0, 1), "the form's É is measured by its own font: {r:?}");
+}
+
+/// A font chosen only through an ExtGState's `/Font` is measured by its outline, as with `Tf`.
+#[test]
+fn a_font_set_by_an_extgstate_is_measured_by_its_outline() {
+    let widths = format!("[{}]", vec!["600"; 224].join(" "));
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /ExtGState << /G1 << /Font [5 0 R 24] >> >> >> >>".to_vec(),
+        stream("", b"BT /G1 gs 10 100 Td (\\311E) Tj ET"),
+        format!("<< /Type /Font /Subtype /TrueType /BaseFont /Inter /Encoding /WinAnsiEncoding /FirstChar 32 /LastChar 255 /Widths {widths} /FontDescriptor 6 0 R >>").into_bytes(),
+        b"<< /Type /FontDescriptor /FontName /Inter /Flags 32 /Ascent 969 /Descent -242 /FontFile2 7 0 R >>".to_vec(),
+        stream("", pdfcraft_fonts::INTER_REGULAR),
+    ]);
+    mark(&mut doc, 0, &[[10.0, 100.0 + 0.805 * 24.0, 24.0, 100.0 + 0.9 * 24.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!((r.glyphs, r.glyphs_beside_marks), (1, 0), "{r:?}");
+    let c = content(&doc, 0);
+    assert!(!c.contains("\\311") && c.contains("(E)"), "É removed, E kept: {c}");
+}
+
+/// #5255 with the outline known: Inter at 10 pt, lines set solid. The line below a mark keeps
+/// its glyphs because their ink stays below the mark, and nothing is left to count.
+#[test]
+fn solid_set_lines_keep_the_line_below_by_its_ink() {
+    let mut doc = page_with_inter(b"BT /F1 10 Tf 10 120 Td (ABOVE123) Tj 0 -10 Td (AB1234CD) Tj 0 -10 Td (SECRET) Tj ET");
+    // "1234" on the baseline at y 110 spans x 22–46; its em box is y 108–118.
+    mark(&mut doc, 0, &[[22.0, 108.0, 46.0, 118.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!((r.glyphs, r.glyphs_beside_marks), (4, 0), "{r:?}");
+    let c = content(&doc, 0);
+    assert!(c.contains("(SECRET) Tj") && c.contains("(ABOVE123) Tj") && !c.contains("1234"), "{c}");
+}
+
+/// Stroked text paints past its outline: a mark over the strip between the digits' ink and the
+/// one-em box keeps filled digits but removes stroked ones (Tr 1, 2, 5, 6).
+#[test]
+fn stroked_text_is_measured_beyond_its_outline() {
+    let top = {
+        let doc = page_with_inter(b"");
+        let font = pdfcraft_model::pages(&doc)[0].dict.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned()).unwrap();
+        let font = font.get(b"Font").and_then(|f| doc.resolve(f).as_dict().cloned()).unwrap();
+        let font = doc.resolve(font.get(b"F1").unwrap()).as_dict().cloned().unwrap();
+        let metrics = pdfcraft_fonts::pdf::Metrics::from_dict(&doc, &font);
+        let ink = pdfcraft_fonts::pdf::GlyphInk::from_dict(&doc, &font, &metrics, &mut pdfcraft_cos::DecodeBudget::page()).unwrap();
+        b"1234"
+            .iter()
+            .map(|&c| match ink.ink(&metrics, c.into()) {
+                pdfcraft_fonts::pdf::Ink::Box(b) => b[3],
+                other => panic!("{c} draws: {other:?}"),
+            })
+            .fold(0.0, f64::max)
+    };
+    assert!(top < 0.76, "the digits stay below the strip: {top}");
+    for (tr, removed) in [(0, 0), (1, 4), (2, 4), (5, 4), (6, 4)] {
+        let mut doc = page_with_inter(format!("BT /F1 40 Tf {tr} Tr 10 100 Td (1234) Tj ET").as_bytes());
+        // 40 pt: the strip from 0.76 em to just under the one-em box (0.8 em) is 1.5 pt tall.
+        mark(&mut doc, 0, &[[0.0, 100.0 + 0.76 * 40.0, 300.0, 131.9]], "");
+        let r = apply(&mut doc, None).unwrap();
+        assert_eq!(r.glyphs, removed, "Tr {tr}: {r:?}");
+    }
+}
+
+/// #5255 at a small size: 9 pt lines set solid in a 1000 / −200 font (a 10.8 pt glyph box). The
+/// line below reached 1.8 pt into the selection's mark.
+#[test]
+fn small_text_set_solid_keeps_the_line_below() {
+    let mut doc = page_with_metrics(b"BT /F1 9 Tf 10 120 Td (ABOVE123) Tj 0 -9 Td (AB1234CD) Tj 0 -9 Td (SECRET) Tj ET", 1000, -200);
+    // "1234" on the baseline at y 111 spans x 19–37; its em box is y 109.2–118.2.
+    mark(&mut doc, 0, &[[19.0, 109.2, 37.0, 118.2]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!((r.glyphs, r.glyphs_beside_marks), (4, 4), "{r:?}");
+    let c = content(&doc, 0);
+    assert!(c.contains("(SECRET) Tj") && c.contains("(ABOVE123) Tj"), "{c}");
+}
+
+/// The edge of the em box (#5255): a mark that stops half a point above the em box of the line
+/// "ABOVE123" (baseline 120, em box 118–128 for a 1000 / −250 font at 10 pt) keeps its glyphs and
+/// counts them as left beside the mark; the same mark three points lower, past the fifth of the box a
+/// glyph needs covered, takes them. The mark is one em (10 pt) tall in both.
+#[test]
+fn a_mark_just_outside_the_em_box_keeps_the_line_and_one_just_inside_takes_it() {
+    let text: &[u8] = b"BT /F1 10 Tf 10 120 Td (ABOVE123) Tj 0 -10 Td (AB1234CD) Tj 0 -10 Td (SECRET) Tj ET";
+    // O, V, E and 1 of "ABOVE123" span x 20-40.
+    let mut doc = page_with_metrics(text, 1000, -250);
+    mark(&mut doc, 0, &[[20.0, 128.5, 40.0, 138.5]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!((r.glyphs, r.glyphs_beside_marks), (0, 4), "half a point above the em box: kept and counted, {r:?}");
+    assert!(content(&doc, 0).contains("(ABOVE123) Tj"), "{}", content(&doc, 0));
+    let mut doc = page_with_metrics(text, 1000, -250);
+    mark(&mut doc, 0, &[[20.0, 125.0, 40.0, 135.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!(r.glyphs, 4, "three points inside the em box: removed, {r:?}");
+    let c = content(&doc, 0);
+    assert!(!c.contains("ABOVE123") && c.contains("(AB1234CD) Tj") && c.contains("(SECRET) Tj"), "{c}");
+}
+
+/// A mark over the bottom of large letters still removes them: a glyph left in the file under a
+/// partial black box stays extractable. 24 pt "SECRET", a mark over the lower 3.8 pt of "SE".
+#[test]
+fn a_mark_over_part_of_large_text_still_removes_it() {
+    let mut doc = one_page(b"BT /F1 24 Tf 10 100 Td (SECRET) Tj ET", "", vec![]);
+    // Glyph boxes span y 95.2–119.2; S and E span x 10–34.
+    mark(&mut doc, 0, &[[10.0, 90.0, 34.0, 99.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!((r.glyphs, r.glyphs_beside_marks), (2, 0), "{r:?}");
+    assert!(!content(&doc, 0).contains("SECRET"));
+}
+
 #[test]
 fn glyphs_under_a_mark_go_and_the_rest_stays_put() {
     // "AB1234CD" from x = 10 at 10 pt: each glyph 5 pt wide; 1234 spans x 20–40.
