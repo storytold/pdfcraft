@@ -272,7 +272,8 @@ fn typing_moving_styling_and_deleting_added_content() {
 #[test]
 fn a_picture_on_the_clipboard_is_pasted_onto_the_page() {
     use pdfcraft_ui_egui::Clip;
-    let mut h = harness();
+    // Three frames between modifier releases represent a short real key gesture.
+    let mut h = harness_with_step_dt(1.0 / 60.0);
     let v = |pressed, modifiers| egui::Event::Key { key: egui::Key::V, physical_key: None, pressed, repeat: false, modifiers };
     let images = |h: &Harness<'static, PdfCraftApp>| added(h).iter().filter(|a| matches!(a.content, pdfcraft_engine::AddedContent::Image(_))).count();
     // Text on the clipboard: egui gets a Paste event instead of the press; nothing lands on the page.
@@ -288,9 +289,8 @@ fn a_picture_on_the_clipboard_is_pasted_onto_the_page() {
     h.event(v(false, egui::Modifiers::NONE));
     h.run_steps(3);
     assert_eq!(images(&h), 0, "a plain V doesn't paste");
-    // A picture alone: egui-winit sends no Paste event and swallows the press, so only the
-    // release of V arrives.
-    h.event(v(false, egui::Modifiers::COMMAND));
+    // The integration delivers image pixels and consumes the native shortcut keys.
+    h.event(egui::Event::PasteImage(std::sync::Arc::new(egui::ColorImage::filled([30, 20], egui::Color32::GRAY))));
     h.run_steps(3);
     let a = added(&h);
     assert_eq!(a.len(), 1);
@@ -301,14 +301,17 @@ fn a_picture_on_the_clipboard_is_pasted_onto_the_page() {
         let s = h.state();
         assert_eq!(s.session.get(s.views[0].id).unwrap().can_undo(), Some("Add image"));
     }
-    // Ctrl let go a moment before V: the release comes without the modifier, and still pastes.
+    // Modifier release order does not change delivery of the next image paste.
+    h.event(egui::Event::ModifiersChanged(egui::Modifiers::COMMAND));
+    h.event(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
+    h.event(egui::Event::PasteImage(std::sync::Arc::new(egui::ColorImage::filled([30, 20], egui::Color32::GRAY))));
     h.event(v(false, egui::Modifiers::NONE));
     h.run_steps(3);
     assert_eq!(images(&h), 2, "Ctrl released first");
     // A text field with the keyboard keeps ⌘V for itself.
     assert!(h.state_mut().execute("edit.find"));
     h.run_steps(3);
-    h.event(v(false, egui::Modifiers::COMMAND));
+    h.event(egui::Event::PasteImage(std::sync::Arc::new(egui::ColorImage::filled([30, 20], egui::Color32::GRAY))));
     h.run_steps(3);
     assert_eq!(images(&h), 2, "the Find field has the keyboard");
     h.key_press(egui::Key::Escape);
@@ -317,7 +320,7 @@ fn a_picture_on_the_clipboard_is_pasted_onto_the_page() {
     assert!(h.state_mut().execute("page.organize"));
     h.run_steps(4);
     assert!(h.state().views[0].organize);
-    h.event(v(false, egui::Modifiers::COMMAND));
+    h.event(egui::Event::PasteImage(std::sync::Arc::new(egui::ColorImage::filled([30, 20], egui::Color32::GRAY))));
     h.run_steps(3);
     assert_eq!(images(&h), 2, "Organize Pages pastes pages");
     h.state_mut().views[0].organize = false;
@@ -326,7 +329,7 @@ fn a_picture_on_the_clipboard_is_pasted_onto_the_page() {
     assert!(h.state_mut().execute("form.prepare"));
     h.run_steps(3);
     assert!(h.state().is_preparing());
-    h.event(v(false, egui::Modifiers::COMMAND));
+    h.event(egui::Event::PasteImage(std::sync::Arc::new(egui::ColorImage::filled([30, 20], egui::Color32::GRAY))));
     h.run_steps(3);
     assert_eq!(images(&h), 2, "Prepare Form pastes fields");
 }
@@ -718,6 +721,68 @@ fn format_text_rows_line_up_and_fit_the_panel() {
     }
     for r in h.query_all_by_role(Role::ComboBox).map(|n| n.rect()).chain(scale_row).chain([size, h.get_by_label("Font size").rect()]) {
         assert!(r.right() <= font.right() + 0.5, "{r:?} reaches past the panel ({font:?})");
+    }
+}
+
+/// The Tools pane can't be dragged narrower than Format text needs: at its smallest width no
+/// control reaches past the font list, which spans the panel.
+#[test]
+fn format_text_fits_the_tools_pane_at_its_narrowest() {
+    use egui::accesskit::Role;
+    let mut h = harness();
+    // At the largest interface size too: it scales points to pixels, and the layout is in points.
+    h.state_mut().set_option("ui-scale", "300").unwrap();
+    h.state_mut().side_panels.tools_width = 0.0;
+    assert!(h.state_mut().execute("edit.text"));
+    h.run_steps(3);
+    let font = h.query_all_by_role(Role::ComboBox).find(|n| n.value().as_deref() == Some("Helvetica")).map(|n| n.rect()).expect("the font list");
+    let rects = ["Alignment", "Colour", "Font size", "Character spacing", "Horizontal scale", "Line spacing", "Paragraph spacing"]
+        .into_iter()
+        .flat_map(|l| h.query_all_by_label(l).map(move |n| (l, n.rect())))
+        .chain(h.query_all_by_role(Role::ComboBox).map(|n| ("list", n.rect())))
+        .collect::<Vec<_>>();
+    for (label, r) in rects {
+        assert!(r.right() <= font.right() + 0.5, "{label} {r:?} reaches past the font list ({font:?})");
+    }
+    // The font list ends where the pane's own content does: the header's Close button is its right edge.
+    let close = h.get_by_label("Close panel").rect();
+    assert!((font.right() - close.right()).abs() < 1.5, "the font list {font:?} is not at the pane's content edge ({close:?})");
+    // The rows below scroll, and the scrollbar floats over their right edge: they stop short of it.
+    let image = h.get_by_label("Image").rect();
+    assert!(image.right() <= font.right() - 17.0, "the Image row {image:?} runs under the scrollbar ({font:?})");
+    // The right-hand column ends where the font list does, as the left one starts where it does.
+    for label in ["Paragraph spacing", "Character spacing"] {
+        let right = h.query_all_by_label(label).map(|n| n.rect().right()).fold(f32::MIN, f32::max);
+        assert!((right - font.right()).abs() < 1.5, "{label} ends at {right}, the font list at {}", font.right());
+    }
+}
+
+/// The lists and the size row in Format text fit the narrowest Tools pane in every interface
+/// language: "Auto" in the line spacing list and "Mixed" in the size field are translated, and in
+/// Czech or French they are much longer. The font list spans the pane, so nothing may end past it.
+#[test]
+fn format_text_lists_fit_the_narrowest_tools_pane_in_every_language() {
+    use egui::accesskit::Role;
+    for lang in pdfcraft_ui_egui::i18n::Lang::all() {
+        let mut h = harness();
+        // A script with no face on this machine (Lao without system fonts) can't be drawn at all.
+        if !h.ctx.fonts_mut(|f| f.has_glyphs(&egui::FontId::proportional(13.0), lang.name())) {
+            continue;
+        }
+        h.state_mut().set_option("language", lang.code()).unwrap();
+        h.state_mut().side_panels.tools_width = 0.0;
+        assert!(h.state_mut().execute("edit.text"));
+        h.run_steps(3);
+        let lists: Vec<egui::Rect> = h.query_all_by_role(Role::ComboBox).map(|n| n.rect()).collect();
+        // Found by its value (a font name, never translated), not as the widest list: an overrun
+        // could make another list the widest.
+        let font = h.query_all_by_role(Role::ComboBox).find(|n| n.value().as_deref() == Some("Helvetica")).map(|n| n.rect()).expect("the font list");
+        for r in &lists {
+            assert!(r.right() <= font.right() + 0.5, "{}: {r:?} reaches past the font list ({font:?})", lang.code());
+        }
+        // The size row too: its field reserves room for a translated "Mixed".
+        let align = h.get_by_label(pdfcraft_ui_egui::i18n::t("Alignment")).rect();
+        assert!(align.right() <= font.right() + 0.5, "{}: Alignment {align:?} reaches past the font list ({font:?})", lang.code());
     }
 }
 
@@ -1424,4 +1489,24 @@ fn typing_in_one_tab_never_reaches_another_tabs_added_text() {
     h.key_press_modifiers(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, egui::Key::Z);
     h.run_steps(3);
     assert_eq!(h.state().views[1].content.draft.as_ref().map(|d| d.text.as_str()), Some("Reviewed"), "the other tab's typing stays out");
+}
+
+/// The rail's page and zoom fields are the same size, and each sits wholly inside the rail, so
+/// neither box is cut off at the edge (the page box lost its right side once the rail's contents
+/// changed width).
+#[test]
+fn rail_page_and_zoom_fields_match_and_fit_the_rail() {
+    let mut h = harness();
+    h.run_steps(3);
+    // The rail is 49 pt wide at the window's right edge (1400 pt wide), inside a 1 pt border.
+    let (rail_left, rail_right) = (1400.0 - 49.0 + 1.0, 1400.0 - 1.0);
+    let rail = h.get_by_label("Bookmarks").rect();
+    let (page, zoom) = (h.get_by_label("Current page").rect(), h.get_by_label("Zoom").rect());
+    assert_eq!((page.width(), page.height()), (zoom.width(), zoom.height()), "{page:?} vs {zoom:?}");
+    // The size `RAIL_FIELD_SIZE` sets: wide enough for "6400%", the largest zoom.
+    assert_eq!((page.width(), page.height()), (42.0, 22.0), "{page:?}");
+    for r in [page, zoom] {
+        assert!(r.left() >= rail_left && r.right() <= rail_right, "{r:?} is cut off by the rail ({rail_left}..{rail_right})");
+        assert!((r.center().x - rail.center().x).abs() < 1.0, "{r:?} is off the rail's centre ({rail:?})");
+    }
 }
