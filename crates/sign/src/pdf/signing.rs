@@ -533,21 +533,29 @@ fn appearance(doc: &mut Document, rect: [f64; 4], turn: i64, name: &str, cert: &
         |l: &str| -> Vec<u8> { if let Some(m) = &metrics { literal(&m.encode(l).unwrap_or_else(|| win_ansi(l))) } else { literal(&win_ansi(l)) } };
     if w > 1.0 && h > 1.0 {
         let pad = (h * 0.06).clamp(1.0, 6.0);
+        // Shrinks `items` (wrapped to `max_w`) until they fit `max_h`, never below READABLE_PT.
+        // A box too small even then keeps the lines that fit, the last ending in "...".
+        let fit_text = |items: &[String], start: f64, max_w: f64, max_h: f64, leading: f64| -> (f64, Vec<String>) {
+            let mut size = start.max(READABLE_PT);
+            loop {
+                let all: Vec<String> = items.iter().flat_map(|l| wrap_text(l, size, max_w)).collect();
+                let widest = all.iter().map(|l| measure(l, size)).fold(0.0, f64::max);
+                if all.len() as f64 * size * leading <= max_h && widest <= max_w {
+                    break (size, all);
+                }
+                if size <= READABLE_PT {
+                    break (READABLE_PT, shorten(&all, READABLE_PT, max_w, max_h, leading, &measure));
+                }
+                size = (size * 0.95).max(READABLE_PT);
+            }
+        };
         // The name's column: as wide as a short name needs, wrapped and sized to the box's height.
         // A long name wraps within two fifths of the box, so the details keep the rest.
         let name_column = (opts.graphic.is_none() && a.name).then(|| {
             let max_w = (w * 0.4 - 2.0 * pad).max(1.0);
-            let mut size = (h * 0.4).min(36.0);
-            loop {
-                let words = wrap_text(name, size, max_w);
-                let width = words.iter().map(|l| measure(l, size)).fold(0.0, f64::max);
-                // Never clip: shrink until every line fits both the column and the box's height.
-                let fits = words.len() as f64 * size * 1.1 <= h - 2.0 * pad && width <= max_w;
-                if fits || size <= 1.0 {
-                    break (size, words, width);
-                }
-                size *= 0.95;
-            }
+            let (size, words) = fit_text(&[name.to_string()], (h * 0.4).min(36.0), max_w, h - 2.0 * pad, 1.1);
+            let width = words.iter().map(|l| measure(l, size)).fold(0.0, f64::max);
+            (size, words, width)
         });
         // The details start a gap after the name's column, so no empty space sits between them.
         let name_w = name_column.as_ref().map_or(0.0, |(_, _, width)| *width);
@@ -575,16 +583,7 @@ fn appearance(doc: &mut Document, rect: [f64; 4], turn: i64, name: &str, cert: &
             }
         }
         // The details, shrunk to fit the right side.
-        let mut size = (h / (lines.len().max(1) as f64 * 1.15)).min(12.0);
-        let wrapped = loop {
-            let all: Vec<String> = lines.iter().flat_map(|l| wrap_text(l, size, right_w)).collect();
-            let widest = all.iter().map(|l| measure(l, size)).fold(0.0, f64::max);
-            // Never clip: shrink until every line fits both the column and the box's height.
-            if (all.len() as f64 * size * 1.15 <= h - 2.0 * pad && widest <= right_w) || size <= 1.0 {
-                break all;
-            }
-            size *= 0.9;
-        };
+        let (size, wrapped) = fit_text(&lines, 12.0, right_w, h - 2.0 * pad, 1.15);
         let mut y = h - pad - size * 0.9;
         for l in &wrapped {
             out.extend(format!("/{font_tag} {} Tf 1 0 0 1 {} {} Tm ", fmt(size), fmt(right_x), fmt(y)).bytes());
@@ -617,6 +616,36 @@ fn appearance(doc: &mut Document, rect: [f64; 4], turn: i64, name: &str, cert: &
     }
     d.set(b"Resources".to_vec(), Object::Dict(res));
     Ok(Stream::flate(d, &out))
+}
+
+/// The smallest size visible text is drawn at: smaller, it is shortened instead.
+const READABLE_PT: f64 = 5.0;
+
+/// `lines` at `size`, kept inside `max_h` by dropping the lines past what fits. The last line kept
+/// ends in "..." when any were dropped; each line is shortened to `max_w` by [`ellipsize`].
+fn shorten(lines: &[String], size: f64, max_w: f64, max_h: f64, leading: f64, measure: &impl Fn(&str, f64) -> f64) -> Vec<String> {
+    let capacity = ((max_h / (size * leading)).floor() as usize).max(1);
+    if lines.len() <= capacity {
+        return lines.iter().map(|l| ellipsize(l, size, max_w, measure)).collect();
+    }
+    let mut kept: Vec<String> = lines[..capacity - 1].iter().map(|l| ellipsize(l, size, max_w, measure)).collect();
+    kept.push(ellipsize(&format!("{} ...", lines[capacity - 1]), size, max_w, measure));
+    kept
+}
+
+/// `line` if it fits `max_w` at `size`, else its longest prefix that does, followed by "...".
+fn ellipsize(line: &str, size: f64, max_w: f64, measure: &impl Fn(&str, f64) -> f64) -> String {
+    if measure(line, size) <= max_w {
+        return line.to_string();
+    }
+    let chars: Vec<char> = line.chars().collect();
+    for n in (0..chars.len()).rev() {
+        let cut = format!("{}...", chars[..n].iter().collect::<String>().trim_end());
+        if measure(&cut, size) <= max_w {
+            return cut;
+        }
+    }
+    "...".to_string()
 }
 
 pub(crate) fn fmt(v: f64) -> String {
