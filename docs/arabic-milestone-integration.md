@@ -3,7 +3,7 @@
 Updated 2026-11-02. These contributions form one Arabic editing
 package with five reviewable logical parts. The proposed delivery is one branch
 and one consolidated PR, preserving the original contributions and their evidence.
-The combined package is published as [draft PR #5731](https://github.com/storytold/pdfcraft/pull/5731).
+The combined package is published as [PR #5731](https://github.com/storytold/pdfcraft/pull/5731).
 Publication does not imply acceptance, merge or release.
 
 | Part | Contribution | Role in the combined workflow |
@@ -50,22 +50,22 @@ their replacement. Preserve original author metadata and link every source PR;
 do not import unrelated old upstream merge, CI or asset changes. A shared branch
 does not require collapsing the five parts into an opaque commit.
 
-Before marking the draft ready for merge, refresh it against current main,
-complete Chrome input and broader copy/search acceptance, and record precise
-provider/native-reader limitations. Local checks do not replace exact-head CI
+The integration branch includes upstream main `d7dd1de647ee` (2026-11-02),
+with both roadmap histories retained. Before merging, complete Chrome input and
+broader copy/search acceptance, and record precise provider/native-reader limitations. Local checks do not replace exact-head CI
 and maintainer review. Historical source-PR test results
 remain historical; they must not be represented as one new combined suite run.
 
 At the 2026-11-02 GitHub snapshot, all four published PRs were open. #5602, #5603
 and #5623 had merge conflicts; #5693 was mergeable but had the review follow-up
-above. The input contribution is now included in draft #5731. Recheck the source PR
+above. The input contribution is now included in #5731. Recheck the source PR
 states and exact heads before merging.
 
 A combined desktop build was also exercised with the user's Windows Arabic
 keyboard: Arabic text plus `1378` was saved, and the saved PDF was reopened with
 text readback and rendering checked. This is a bounded supported-font example.
 Chrome acceptance, broader runtime/provider coverage and independent native-reader
-qualification remain pending. The consolidated branch is published as a draft;
+qualification remain pending. The consolidated PR is open for review;
 it has not been merged.
 
 The supported-font scope remains important. Arbitrary mixed-style source text,
