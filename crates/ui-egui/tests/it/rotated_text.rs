@@ -24,10 +24,16 @@ fn open_editor(angle: i32, x: f64) -> Harness<'static, PdfCraftApp> {
 }
 
 fn open_editor_rows(angle: i32, x: f64, two_rows: bool) -> Harness<'static, PdfCraftApp> {
+    open_fixture_editor(fixture(angle, x, two_rows), "117")
+}
+
+fn open_fixture_editor(bytes: Vec<u8>, zoom: &str) -> Harness<'static, PdfCraftApp> {
+    let zoom = zoom.to_owned();
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1000.0)).build_eframe(move |_| {
         let mut app = PdfCraftApp::new();
         app.set_option("language", "en").unwrap();
-        app.open_bytes("rotated.pdf", None, fixture(angle, x, two_rows)).unwrap();
+        app.open_bytes("rotated.pdf", None, bytes).unwrap();
+        app.set_option("zoom", &zoom).unwrap();
         app
     });
     h.run_steps(6);
@@ -37,8 +43,12 @@ fn open_editor_rows(angle: i32, x: f64, two_rows: bool) -> Harness<'static, PdfC
     let block = doc.text_blocks(0)[0].clone();
     let page = h.state().views[0].page_screen_rect(0).unwrap();
     let info = &doc.info.pages[0];
-    let center = info.user_to_view(((block.rect[0] + block.rect[2]) / 2.0) as f32, ((block.rect[1] + block.rect[3]) / 2.0) as f32);
-    let at = page.min + egui::vec2(center[0], center[1]) * (page.width() / info.width);
+    let point = |x: f64, y: f64| {
+        let p = info.user_to_view(x as f32, y as f32);
+        page.min + egui::vec2(p[0], p[1]) * (page.width() / info.width)
+    };
+    let source = egui::Rect::from_two_pos(point(block.rect[0], block.rect[1]), point(block.rect[2], block.rect[3]));
+    let at = source.intersect(page).intersect(h.state().views[0].viewport_rect()).center();
     for _ in 0..2 {
         crate::support::input::double_click(&mut h, at);
         h.run_steps(3);
@@ -194,4 +204,98 @@ fn rotated_text_90_two_rows_keep_order_spacing_and_page_bounds() {
 #[test]
 fn rotated_text_270_two_rows_keep_order_spacing_and_page_bounds() {
     two_rows_stay_readable(270);
+}
+
+#[test]
+fn unchanged_long_turned_text_wraps_with_a_visible_end_caret_and_no_edit() {
+    let shots = std::env::var_os("PDFCRAFT_ROTATED_TEXT_SHOTS").is_some();
+    let _gpu = shots.then(crate::gpu);
+    use pdfcraft_cos::{Dict, Document, ObjRef, Object, Stream, write_incremental};
+    let text = "Margin label ".repeat(9);
+    let mut source = Document::open(std::sync::Arc::new(fixture(90, 100.0, false))).unwrap();
+    source
+        .update_dict(ObjRef::new(2, 0), |d| d.set(b"MediaBox".to_vec(), Object::Array(vec![0, 0, 300, 800].into_iter().map(Object::Int).collect())))
+        .unwrap();
+    source.set(
+        ObjRef::new(5, 0),
+        Object::Stream(Stream::from_raw(Dict::new(), format!("BT /F1 14 Tf 0 1 -1 0 100 60 Tm ({text}) Tj ET").into_bytes())),
+    );
+    let bytes = write_incremental(&source, &Default::default()).unwrap();
+    let mut h = open_fixture_editor(bytes.clone(), "200");
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::End);
+    h.run_steps(3);
+    let field = h.get_by_label("Text editing line").rect();
+    let shape = h
+        .output()
+        .shapes
+        .iter()
+        .find_map(|s| match &s.shape {
+            egui::Shape::Text(t) if t.galley.text() == text => Some(t),
+            _ => None,
+        })
+        .unwrap();
+    assert!(shape.galley.rows.len() > 1, "unchanged long turned text wraps to its horizontal field");
+    for row in &shape.galley.rows {
+        for glyph in &row.glyphs {
+            let rect =
+                egui::Rect::from_min_size(shape.pos + row.pos.to_vec2() + egui::vec2(glyph.pos.x, 0.0), egui::vec2(glyph.advance_width, row.size.y));
+            assert!(field.expand(1.5).contains_rect(rect), "every glyph is in the field: {rect:?} vs {field:?}");
+        }
+    }
+    let focused = h.ctx.memory(|m| m.focused()).unwrap();
+    let state = egui::TextEdit::load_state(&h.ctx, focused).unwrap();
+    let cursor = state.cursor.char_range().unwrap().primary;
+    assert_eq!(usize::from(cursor.index), text.chars().count(), "Ctrl+End reaches the tail without typing");
+    let caret = shape.galley.pos_from_cursor(cursor).translate(shape.pos.to_vec2());
+    assert!(field.expand(1.5).contains_rect(caret), "the end caret is visible: {caret:?} vs {field:?}");
+    let ed = h.state().views[0].line_editor.as_ref().unwrap();
+    assert!(!ed.has_unsaved_text());
+    assert_eq!(ed.style(), pdfcraft_engine::BlockStyle::default());
+    let id = h.state().views[0].id;
+    assert!(!h.state().session.get(id).unwrap().dirty);
+    if shots {
+        h.render().unwrap().save("/tmp/5771-long-unchanged.png").unwrap();
+    }
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Enter);
+    h.run_steps(3);
+    assert!(h.state().views[0].line_editor.is_none());
+    assert!(h.state().session.get(id).unwrap().can_undo().is_none(), "wrapping is not an edit");
+    assert_eq!(h.state().session.save_bytes(id).unwrap().as_slice(), bytes.as_slice(), "unchanged Apply writes no PDF changes");
+}
+
+#[test]
+fn unchanged_turned_text_hides_its_source_before_any_typing() {
+    let mut h = open_editor(90, 100.0);
+    let doc = h.state().session.get(h.state().views[0].id).unwrap();
+    let block = doc.text_blocks(0)[0].clone();
+    let bytes = doc.bytes.clone();
+    let page = h.state().views[0].page_screen_rect(0).unwrap();
+    let info = &doc.info.pages[0];
+    let point = |x: f64, y: f64| {
+        let p = info.user_to_view(x as f32, y as f32);
+        page.min + egui::vec2(p[0], p[1]) * (page.width() / info.width)
+    };
+    let source = egui::Rect::from_two_pos(point(block.rect[0], block.rect[1]), point(block.rect[2], block.rect[3]));
+    fn hidden(shape: &egui::Shape, source: egui::Rect, ctx: &egui::Context) -> bool {
+        match shape {
+            egui::Shape::Vec(shapes) => shapes.iter().any(|s| hidden(s, source, ctx)),
+            egui::Shape::Rect(r) => {
+                r.fill.a() == 255 && r.rect.contains_rect(source) && r.rect.min.distance(source.min) < 3.0 && r.rect.max.distance(source.max) < 3.0
+            }
+            egui::Shape::Mesh(m) => {
+                ctx.tex_manager().read().meta(m.texture_id).is_some_and(|m| m.name == "text-editor-background")
+                    && m.calc_bounds().contains_rect(source)
+            }
+            _ => false,
+        }
+    }
+    for _ in 0..20 {
+        assert!(
+            h.output().shapes.iter().any(|s| hidden(&s.shape, source, &h.ctx)),
+            "source is covered while pending or replaced by the textless raster when ready"
+        );
+        h.run_steps(1);
+    }
+    assert!(!h.state().views[0].line_editor.as_ref().unwrap().has_unsaved_text());
+    assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().bytes, bytes);
 }

@@ -115,7 +115,9 @@ pub(super) fn editor_job(ui: &egui::Ui, ed: &LineEditor, text: &str, scale: f32,
     let mut job = egui::text::LayoutJob::default();
     // An unchanged PDF row already has an authoritative line break. Do not rewrap it
     // because font rounding or a fallback face measures a fraction of a pixel wider.
-    job.wrap.max_width = if text == ed.original && ed.look == ed.look0 && ed.extras == ed.extras0 { f32::INFINITY } else { width };
+    // A turned paragraph uses a horizontal fallback field, so even its unchanged text must
+    // wrap to that field: multiline TextEdit has no horizontal scrolling for a clipped tail.
+    job.wrap.max_width = if !ed.turned() && text == ed.original && ed.look == ed.look0 && ed.extras == ed.extras0 { f32::INFINITY } else { width };
     if let Some((block, lines)) = &ed.source {
         let block_rect = ed.text_frame().unwrap_or(block.rect);
         let lefts: Vec<_> = block.rows.iter().filter_map(|r| r.first().and_then(|i| lines.get(*i)).map(|l| source_rect(ed, l)[0])).collect();

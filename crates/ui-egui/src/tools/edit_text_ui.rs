@@ -945,7 +945,8 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
             // banner, #913): then a dark box, with a caret that shows on it.
             let fill = if background_ready && !turned { Color32::TRANSPARENT } else { editor_fill(text_color) };
             // An unchanged paragraph is the page's own text: the editor draws only its frame and
-            // caret over it. Once it changes, the textless page goes under the editor's text or,
+            // caret over it. A turned field already shows its own text, so hide its source on
+            // opening, too. Once text changes, the textless page goes under the editor's text or,
             // until that background is ready, a cover over the entire source box, including lines
             // the draft no longer occupies. Shrinking the text must never expose a copy. Both are
             // decided after this frame's typing, in places kept under the editor's text.
@@ -985,7 +986,7 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
                     // cannot serve as its text/background as it does for an upright paragraph.
                     ui.painter().set(cover, egui::Shape::rect_filled(output.response.rect.expand(1.0), CornerRadius::ZERO, fill));
                 }
-                if ed.has_changes() {
+                if turned || ed.has_changes() {
                     if background_ready {
                         reveal = true;
                     } else {

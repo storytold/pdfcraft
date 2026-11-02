@@ -1,5 +1,7 @@
 # PdfCraft roadmap
 
+> **Last reviewed:** 2026-11-02 | **Last updated:** 2026-11-02 | **Change:** patch (M7 #5763 review: unchanged turned text wraps within its horizontal field without a PDF edit and hides the source before typing; estimates unchanged)
+
 > **Last reviewed:** 2026-11-02 | **Last updated:** 2026-11-02 | **Change:** patch (M7 #5763: turned text uses a readable horizontal editor with baseline-space width, spacing and caret metrics; saved rotation was already correct and remains unchanged; no rotated in-place widget; estimates unchanged)
 
 > **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M7, PR #2155 further review: inherited drawing/text state, affine image gestures, paste/selection ownership, no-op scripts and menu permissions; estimates unchanged)
@@ -220,6 +222,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 | 8 | 1.0 polish: performance, right-to-left, missing languages, keyboard-only (M14) | 55–95 |
 
 ## Progress log
+
+- **2026-11-02 (M7, #5763 review):** An unchanged long turned label wraps in the horizontal editor so every glyph and its end caret remain reachable without editing. Unchanged Apply preserves exact bytes and creates no undo entry; the original text is hidden while editing, including while its textless preview is pending. Both regressions fail on 42333a3a. Estimates unchanged.
 
 - **2026-11-02 (M7, #5763):** A horizontal editor for turned source text uses the text baseline frame rather than its page-space box, keeping glyphs, caret and line height readable and the field on-page. Six UI layout regressions (including two-row order and spacing) fail on main; three Apply/save/reopen orientation controls pass there and remain green. In-place rotated interaction remains unsupported; estimates unchanged.
 
@@ -749,6 +753,7 @@ Newest first: the date, what moved, and the new overall estimate.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-02 | patch | M7 #5763 review: unchanged turned text wraps within its horizontal field without a PDF edit and hides the source before typing; estimates unchanged. |
 | 2026-11-02 | patch | M7 #5763: turned text uses a readable horizontal editor with baseline-space width, spacing and caret metrics; saved rotation was already correct and remains unchanged; no rotated in-place widget; estimates unchanged. |
 | 2026-11-01 | patch | M7 #5657: header/footer, watermark and background operations commit all selected pages together; later-page errors preserve marks, content, shared/inherited resources and pending edits; estimates unchanged. |
 | 2026-10-28 | patch | M2, PR #4172: integrate main 5af10276 and retain both roadmap histories; viewer-only CJK and print/output font policies and estimates unchanged. |
