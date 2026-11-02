@@ -394,8 +394,8 @@ mod tests {
         let mut budget = ImageBudget::with_work(0);
         assert_eq!(merge_page(&mut doc.clone(), page, &mut Report::default(), &mut |_| true, &mut budget).unwrap(), 0);
         assert_eq!(budget.refused(), 1);
-        // Reading each strip, and building the picture of 8 rows of 8 they make.
-        let cost = raw + 8 * (8 + 8) + 8 * 8;
+        // Reading each strip, inflating it, and building the picture of 8 rows of 8 they make.
+        let cost = (1 + pdfcraft_filters::FLATE_READ_WORK) * raw + 8 * (8 + 8) + 8 * 8;
         let mut budget = ImageBudget::with_work(u64::MAX);
         assert_eq!(merge_page(&mut doc.clone(), page, &mut Report::default(), &mut |_| true, &mut budget).unwrap(), 8);
         assert_eq!(u64::MAX - budget.work_left(), cost);

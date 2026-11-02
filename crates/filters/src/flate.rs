@@ -21,25 +21,48 @@ fn zlib_header(data: &[u8]) -> Option<(u8, u8)> {
     ok.then_some((cmf, flg))
 }
 
-pub(crate) fn decode(data: &[u8], max: usize) -> Step {
+/// `data` inflated within `max`, and whether it was read twice: a zlib header that only looked
+/// valid is read again as raw deflate, within `again`, what a caller paying for what is read has
+/// left for it once it has paid for the second reading. `None`, that reading can't be paid for,
+/// and is [`FilterError::Spent`](crate::FilterError::Spent).
+pub(crate) fn decode(data: &[u8], max: usize, again: Option<usize>) -> (Step, bool) {
     match zlib_header(data) {
-        Some((_, flg)) if flg & 0x20 != 0 => Err(Failure::corrupt(NAME, "zlib preset dictionary is not allowed in PDF", Vec::new())),
+        Some((_, flg)) if flg & 0x20 != 0 => (Err(Failure::corrupt(NAME, "zlib preset dictionary is not allowed in PDF", Vec::new())), false),
         Some(_) => match inflate_raw(&data[2..], max) {
             // A header that only looked valid: retry the whole input as raw deflate.
-            Err(f) if f.partial.is_empty() && matches!(f.error, crate::FilterError::Corrupt { .. }) => match inflate_raw(data, max) {
-                // Keep the original corruption diagnostic only if the retry is corrupt
-                // too. A limit error must remain fatal even for tolerant decoding. What the
-                // retry decoded isn't kept, but a caller charging for work has to hear of it.
-                Err(retry) if matches!(retry.error, crate::FilterError::Corrupt { .. }) => Err(Failure { discarded: retry.partial.len(), ..f }),
-                retry => retry,
-            },
-            r => r,
+            Err(f) if f.partial.is_empty() && matches!(f.error, crate::FilterError::Corrupt { .. }) => {
+                let Some(again) = again else {
+                    return (Err(Failure { error: crate::FilterError::Spent, partial: Vec::new(), discarded: 0 }), false);
+                };
+                let step = match inflate_raw(data, again) {
+                    // Keep the original corruption diagnostic only if the retry is corrupt
+                    // too. A limit error must remain fatal even for tolerant decoding. What the
+                    // retry decoded isn't kept, but a caller charging for work has to hear of it.
+                    Err(retry) if matches!(retry.error, crate::FilterError::Corrupt { .. }) => Err(Failure { discarded: retry.partial.len(), ..f }),
+                    retry => retry,
+                };
+                (step, true)
+            }
+            r => (r, false),
         },
-        None => inflate_raw(data, max),
+        None => (inflate_raw(data, max), false),
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Bytes inflating gave back on this thread, its partial output included.
+    pub(crate) static INFLATED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 fn inflate_raw(input: &[u8], max: usize) -> Step {
+    let step = inflate(input, max);
+    #[cfg(test)]
+    INFLATED.with(|c| c.set(c.get() + step.as_ref().map_or_else(|f| f.partial.len(), Vec::len)));
+    step
+}
+
+fn inflate(input: &[u8], max: usize) -> Step {
     let mut d = Decompress::new(false);
     let mut out: Vec<u8> = Vec::new();
     // One byte beyond the limit lets us tell "exactly max" from "more than max".
@@ -87,7 +110,7 @@ mod tests {
     use crate::FilterError;
 
     fn dec(d: &[u8]) -> Result<Vec<u8>, FilterError> {
-        decode(d, 1 << 24).map_err(|f| f.error)
+        decode(d, 1 << 24, Some(1 << 24)).0.map_err(|f| f.error)
     }
 
     #[test]
@@ -144,7 +167,7 @@ mod tests {
     fn corrupt_and_truncated() {
         let data: Vec<u8> = (0..10_000u32).map(|i| (i % 13) as u8).collect();
         let z = encode(&data);
-        match decode(&z[..z.len() / 2], 1 << 24) {
+        match decode(&z[..z.len() / 2], 1 << 24, Some(1 << 24)).0 {
             Err(f) => {
                 assert!(matches!(f.error, FilterError::Corrupt { .. }));
                 assert_eq!(&data[..f.partial.len()], &f.partial[..]);
@@ -168,6 +191,6 @@ mod tests {
     }
 
     fn dec_limit(d: &[u8], max: usize) -> Result<Vec<u8>, FilterError> {
-        decode(d, max).map_err(|f| f.error)
+        decode(d, max, Some(max)).0.map_err(|f| f.error)
     }
 }
