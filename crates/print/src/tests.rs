@@ -108,6 +108,25 @@ fn current_view_clips_display_coordinates_after_crop_and_rotation_without_changi
     assert_eq!(write_full(&doc, &SaveOptions::default()).expect("source serialization"), before, "printing leaves the source unchanged");
 }
 
+#[test]
+fn current_view_full_page_matches_fit_and_quarter_page_scales_to_fit() {
+    let sizes = [(200.0, 300.0)];
+    let fit = layout(&sizes, &settings(vec![0], Layout::Size(SizeMode::Fit))).expect("fit page");
+    let full = layout(&sizes, &settings(vec![0], Layout::View { rect: [0.0, 0.0, 200.0, 300.0] })).expect("full-page view");
+    assert_eq!(full, fit);
+
+    let quarter = layout(&sizes, &settings(vec![0], Layout::View { rect: [0.0, 0.0, 100.0, 150.0] })).expect("quarter-page view");
+    let full_page = full.first().and_then(|sheet| sheet.placed.first()).expect("full-page placement");
+    let quarter_page = quarter.first().and_then(|sheet| sheet.placed.first()).expect("quarter-page placement");
+    assert_eq!(quarter_page.clip, [0.0, 0.0, 100.0, 150.0]);
+    assert!(close(quarter_page.matrix.0[0], full_page.matrix.0[0] * 2.0));
+}
+
+#[test]
+fn current_view_rejects_zero_area_rectangles() {
+    assert!(matches!(layout(&[(200.0, 300.0)], &settings(vec![0], Layout::View { rect: [10.0, 10.0, 10.0, 100.0] })), Err(PrintError::Invalid(_))));
+}
+
 /// Every mistake a person can make about what to print says itself out of a wording on the list
 /// and the numbers apart from it, and says itself in English exactly as the error prints itself.
 #[test]
