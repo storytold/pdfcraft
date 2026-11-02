@@ -1759,3 +1759,209 @@ fn truetype_without_an_encoding_reads_its_codes_as_win_ansi() {
     assert_eq!(ocr_layer_text(4, false), expected, "symbolic, no /ToUnicode");
     assert_eq!(ocr_layer_text(32, true), expected, "nonsymbolic, /ToUnicode for ASCII only");
 }
+
+/// Issue #2929: a footnote reference (superscript) on a line stays in that line instead of
+/// splitting out as a raised segment that steals the block's tail and pushes the host line
+/// after the paragraph.
+#[test]
+fn paragraph_selection_includes_lines_with_footnote_references() {
+    for inline in [true, false] {
+        let ops = if inline {
+            "BT /F1 12 Tf 1 0 0 1 40 300 Tm (First line of the paragraph) Tj \
+             1 0 0 1 40 285 Tm (Second line with a note) Tj \
+             /F1 8 Tf 5.5 Ts (1) Tj 0 Ts \
+             /F1 12 Tf ( and more text) Tj \
+             1 0 0 1 40 270 Tm (Third line of the paragraph) Tj \
+             /F1 7 Tf 1 0 0 1 40 104 Tm (1) Tj \
+             /F1 10 Tf 1 0 0 1 47 100 Tm (Footnote at the bottom) Tj ET"
+        } else {
+            // Superscripts drawn in a separate pass after the body text.
+            "BT /F1 12 Tf 1 0 0 1 40 300 Tm (First line of the paragraph) Tj \
+             1 0 0 1 40 285 Tm (Second line with a note) Tj \
+             1 0 0 1 173 285 Tm (and more text) Tj \
+             1 0 0 1 40 270 Tm (Third line of the paragraph) Tj \
+             /F1 10 Tf 1 0 0 1 47 100 Tm (Footnote at the bottom) Tj \
+             /F1 8 Tf 1 0 0 1 165 290.5 Tm (1) Tj \
+             /F1 7 Tf 1 0 0 1 40 104 Tm (1) Tj ET"
+        };
+        let text = page_glyphs(ops);
+        let start = text.nearest(40.0, 95.0).unwrap();
+        let end = text.nearest(185.0, 128.0).unwrap();
+        assert_eq!(
+            text.text_of(start..end + 1),
+            "First line of the paragraph\nSecond line with a note1 and more text\nThird line of the paragraph",
+            "inline={inline}"
+        );
+        assert_eq!(text.line_rects(start..end + 1).len(), 3, "three selected lines, inline={inline}");
+        assert_eq!(
+            text.plain_text(),
+            "First line of the paragraph\nSecond line with a note1 and more text\nThird line of the paragraph\n1 Footnote at the bottom",
+            "inline={inline}"
+        );
+    }
+
+    // Superscript on the first line, multi-character bracketed reference `[12]` on the second
+    // line, and subscript on the third line (both inline and out-of-order).
+    for inline in [true, false] {
+        let ops = if inline {
+            "BT /F1 12 Tf 1 0 0 1 40 300 Tm (Opening claim) Tj \
+             /F1 8 Tf 5.5 Ts (1) Tj 0 Ts \
+             /F1 12 Tf ( in the first line) Tj \
+             1 0 0 1 40 285 Tm (Middle citation) Tj \
+             /F1 8 Tf 5.5 Ts ([12]) Tj 0 Ts \
+             /F1 12 Tf ( continues here) Tj \
+             1 0 0 1 40 270 Tm (Formula H) Tj \
+             /F1 8 Tf -3 Ts (2) Tj 0 Ts \
+             /F1 12 Tf (O in the third line) Tj ET"
+        } else {
+            "BT /F1 12 Tf 1 0 0 1 40 300 Tm (Opening claim) Tj \
+             1 0 0 1 125 300 Tm (in the first line) Tj \
+             1 0 0 1 40 285 Tm (Middle citation) Tj \
+             1 0 0 1 135 285 Tm (continues here) Tj \
+             1 0 0 1 40 270 Tm (Formula H) Tj \
+             1 0 0 1 101 270 Tm (O in the third line) Tj \
+             /F1 8 Tf 1 0 0 1 117 305.5 Tm (1) Tj \
+             1 0 0 1 117 290.5 Tm ([12]) Tj \
+             1 0 0 1 96.5 267 Tm (2) Tj ET"
+        };
+        let text = page_glyphs(ops);
+        assert_eq!(
+            text.plain_text(),
+            "Opening claim1 in the first line\nMiddle citation[12] continues here\nFormula H2O in the third line",
+            "inline={inline}"
+        );
+        assert_eq!(text.line_rects(0..text.glyphs.len()).len(), 3, "inline={inline}");
+    }
+
+    // Justified wide gap (18pt = 1.5 * h) after an inline superscript stays on the same line,
+    // and an out-of-order superscript kerned slightly over punctuation does not break the host
+    // word via overprint collision.
+    let justified = page_glyphs(
+        "BT /F1 12 Tf 1 0 0 1 40 300 Tm (Justified clause.) Tj \
+         /F1 8 Tf 5.5 Ts (1) Tj 0 Ts \
+         /F1 12 Tf 1 0 0 1 151 300 Tm (Next sentence on the same line) Tj \
+         1 0 0 1 40 285 Tm (Kerned clause.) Tj \
+         1 0 0 1 130 285 Tm (continues cleanly) Tj \
+         /F1 8 Tf 1 0 0 1 118 290.5 Tm (2) Tj ET",
+    );
+    assert_eq!(justified.plain_text(), "Justified clause.1 Next sentence on the same line\nKerned clause.2 continues cleanly");
+    assert_eq!(justified.line_rects(0..justified.glyphs.len()).len(), 2);
+
+    // A line that begins with a raised superscript marker and continues with taller body text
+    // adopts the body text's vertical band (Seg::extend_box first branch) so a later
+    // out-of-order superscript on that line still measures against the body baseline.
+    let leading_script = page_glyphs(
+        "BT /F1 8 Tf 1 0 0 1 40 300 Tm 6 Ts (1) Tj 0 Ts \
+         /F1 12 Tf ( See the appendix) Tj \
+         1 0 0 1 146 300 Tm (for details) Tj \
+         /F1 8 Tf 1 0 0 1 139 303.6 Tm (2) Tj ET",
+    );
+    assert_eq!(leading_script.plain_text(), "1 See the appendix2 for details");
+    let marker = leading_script.glyphs.first().unwrap().rect;
+    let body = leading_script.glyphs.iter().find(|g| g.text == "S").unwrap().rect;
+    let last = leading_script.glyphs.last().unwrap().rect;
+    let center = |r: [f32; 4]| ((r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0);
+    let (start_x, start_y) = center(marker);
+    let (end_x, end_y) = center(last);
+    let start = leading_script.nearest(start_x, start_y).unwrap();
+    let end = leading_script.nearest(end_x, end_y).unwrap();
+    assert_eq!(leading_script.text_of(start..end + 1), "1 See the appendix2 for details");
+    let rects = leading_script.line_rects(start..end + 1);
+    assert_eq!(rects.len(), 1);
+    assert!(marker[1] < body[1] && marker[3] < body[3], "marker must be raised above the body");
+    let close = |actual: f32, expected: f32| assert!((actual - expected).abs() < 0.001, "{actual} != {expected}");
+    // Highlight rectangles cover the actual glyphs, including the raised marker. They do
+    // not expose the segment's baseline band used for line grouping.
+    for (actual, expected) in rects[0].into_iter().zip([marker[0], marker[1], last[2], body[3]]) {
+        close(actual, expected);
+    }
+    close(rects[0][3] - rects[0][1], 14.8);
+    close(body[3] - 0.2 * 12.0, 100.0); // 300 pt PDF baseline on a 400 pt page.
+
+    // Pin that internal band too: replacing the first extend_box condition with `false`
+    // must fail here even when plain text and highlight rectangles remain unchanged.
+    let mut segment = Seg::new(Run { start: 0, end: 1 }, marker, marker[3] - marker[1]);
+    segment.extend_box(&body, body[3] - body[1]);
+    for (actual, expected) in segment.bbox.into_iter().zip([marker[0], body[1], body[2], body[3]]) {
+        close(actual, expected);
+    }
+    close(segment.h, 12.0);
+    close(segment.bbox[3] - segment.bbox[1], 12.0);
+    close(segment.bbox[3] - 0.2 * segment.h, 100.0);
+    close(segment.cy(), (body[1] + body[3]) / 2.0);
+}
+
+#[test]
+fn text_outside_the_crop_box_is_clipped() {
+    use lopdf::{Document, Object, Stream, dictionary};
+    let ops = [
+        "BT /F1 12 Tf 1 0 0 1 100 200 Tm (Inside crop) Tj ET",
+        "BT /F1 12 Tf 1 0 0 1 100 150 Tm /Span <</ActualText (ActualIn)>> BDC (in) Tj EMC ET",
+        // Keep every glyph of OutSpan outside the crop; a boundary-crossing glyph remains visible.
+        "BT /F1 12 Tf 1 0 0 1 -100 125 Tm /Span <</ActualText (CroppedSpan KeptSpan)>> BDC (OutSpan) Tj 1 0 0 1 100 125 Tm (KeptSpan) Tj EMC ET",
+        "BT /F1 12 Tf 1 0 0 1 5 200 Tm (LeftOut) Tj ET",
+        "BT /F1 12 Tf 1 0 0 1 360 200 Tm (RightOut) Tj ET",
+        "BT /F1 12 Tf 1 0 0 1 100 20 Tm (BelowOut) Tj ET",
+        "BT /F1 12 Tf 1 0 0 1 100 370 Tm (AboveOut) Tj ET",
+        "BT /F1 12 Tf 1 0 0 1 100 20 Tm /Span <</ActualText (ActualOut)>> BDC (out) Tj EMC ET",
+        "BT /F1 12 Tf 1 0 0 1 46 100 Tm (A) Tj ET",
+    ]
+    .join("\n");
+    for rotate in [0, 90, 180, 270] {
+        for unit in [1, 2] {
+            let mut doc = Document::with_version("1.7");
+            let font = doc.add_object(dictionary! { "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica" });
+            let content = doc.add_object(Stream::new(dictionary! {}, ops.as_bytes().to_vec()));
+            let pages = doc.new_object_id();
+            let page = doc.add_object(dictionary! {
+                "Type" => "Page",
+                "Parent" => pages,
+                "MediaBox" => vec![Object::Integer(0), Object::Integer(0), Object::Integer(400), Object::Integer(400)],
+                "CropBox" => vec![Object::Integer(50), Object::Integer(60), Object::Integer(350), Object::Integer(340)],
+                "Rotate" => rotate,
+                "UserUnit" => unit,
+                "Resources" => dictionary! { "Font" => dictionary! { "F1" => font } },
+                "Contents" => content,
+            });
+            doc.objects.insert(pages, dictionary! { "Type" => "Pages", "Kids" => vec![Object::Reference(page)], "Count" => 1 }.into());
+            let catalog = doc.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages });
+            doc.trailer.set("Root", catalog);
+            let mut bytes = Vec::new();
+            doc.save_to(&mut bytes).unwrap();
+            let pdf = Pdf::new(std::sync::Arc::new(bytes)).unwrap();
+            let text = extract_page(&pdf, 0, &InterpreterSettings::default()).unwrap();
+            assert_eq!(text.plain_text(), "Inside crop\nActualIn\nKeptSpan\nA", "rotate={rotate} unit={unit}");
+            assert!(!text.find("Inside").is_empty(), "rotate={rotate} unit={unit}");
+            assert!(!text.find("ActualIn").is_empty(), "rotate={rotate} unit={unit}");
+            assert!(!text.find("KeptSpan").is_empty(), "rotate={rotate} unit={unit}");
+            for hidden in ["LeftOut", "RightOut", "BelowOut", "AboveOut", "ActualOut", "CroppedSpan", "OutSpan"] {
+                assert!(text.find(hidden).is_empty(), "{hidden} must be clipped at rotate={rotate} unit={unit}");
+            }
+        }
+    }
+
+    // A CropBox that is zero-area or disjoint from the MediaBox leaves an empty visible region,
+    // even when a glyph straddles the clamped intersection point.
+    for crop in [[200, 200, 200, 200], [100, 200, 300, 200], [500, 500, 600, 600]] {
+        let mut doc = Document::with_version("1.7");
+        let font = doc.add_object(dictionary! { "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica" });
+        let content = doc.add_object(Stream::new(dictionary! {}, ops.as_bytes().to_vec()));
+        let pages = doc.new_object_id();
+        let page = doc.add_object(dictionary! {
+            "Type" => "Page",
+            "Parent" => pages,
+            "MediaBox" => vec![Object::Integer(0), Object::Integer(0), Object::Integer(400), Object::Integer(400)],
+            "CropBox" => crop.map(Object::Integer).to_vec(),
+            "Resources" => dictionary! { "Font" => dictionary! { "F1" => font } },
+            "Contents" => content,
+        });
+        doc.objects.insert(pages, dictionary! { "Type" => "Pages", "Kids" => vec![Object::Reference(page)], "Count" => 1 }.into());
+        let catalog = doc.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages });
+        doc.trailer.set("Root", catalog);
+        let mut bytes = Vec::new();
+        doc.save_to(&mut bytes).unwrap();
+        let pdf = Pdf::new(std::sync::Arc::new(bytes)).unwrap();
+        let text = extract_page(&pdf, 0, &InterpreterSettings::default()).unwrap();
+        assert!(text.is_empty(), "expected no glyphs on {crop:?}, got {:?}", text.plain_text());
+    }
+}

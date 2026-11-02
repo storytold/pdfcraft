@@ -623,6 +623,45 @@ fn csv_exports_preserve_carriage_returns_in_names_and_values() {
     }
 }
 
+/// Export Data as CSV writes a name or value that a spreadsheet would run as a formula with a
+/// leading `'`, by the same rule as Merge Data Files, and Import Data gives it back unchanged.
+#[test]
+fn exported_csv_cells_never_start_a_formula_and_import_back_unchanged() {
+    for (name, value, expected) in [
+        ("Name", "=1+1", "Name\n'=1+1\n"),
+        ("Name", "@SUM(A1:A2)", "Name\n'@SUM(A1:A2)\n"),
+        ("Name", "+1 555 0100", "Name\n'+1 555 0100\n"),
+        ("Name", "-A1", "Name\n'-A1\n"),
+        ("Name", " =1+1", "Name\n' =1+1\n"),
+        ("Name", "\t=1+1", "Name\n\"'\t=1+1\"\n"),
+        ("Name", "\r=1+1", "Name\n\"'\r=1+1\"\n"),
+        ("Name", "=1,2", "Name\n\"'=1,2\"\n"),
+        ("Name", "'=1+1", "Name\n''=1+1\n"),
+        ("Name", "-12.5", "Name\n-12.5\n"),
+        ("Name", "+1", "Name\n+1\n"),
+        ("Name", "'-5", "Name\n'-5\n"),
+        ("Name", "'plain", "Name\n'plain\n"),
+        ("Name", "a=b", "Name\na=b\n"),
+        ("=Name", "Ada", "'=Name\nAda\n"),
+    ] {
+        let mut src = one_field();
+        let field = fields(&src)[0].obj;
+        src.update_dict(field, |d| d.set(b"T".to_vec(), PdfString::text(name))).unwrap();
+        set_value(&mut src, name, &FieldValue::Text(value.into())).unwrap();
+        let source = Arc::new(write_full(&src, &SaveOptions::default()).unwrap());
+        let src = Document::open(source.clone()).unwrap();
+        let csv = export_data(&src, Format::Csv);
+        assert_eq!(csv, expected, "{value:?}");
+
+        let mut dst = Document::open(source).unwrap();
+        set_value(&mut dst, name, &FieldValue::Text("replaced".into())).unwrap();
+        let report = import(&mut dst, csv.as_bytes()).unwrap();
+        assert_eq!(report.fields, 1, "{value:?}");
+        assert!(report.rejected.is_empty(), "{report:?}");
+        assert_eq!(values(&dst), [(name.to_string(), vec![value.to_string()])]);
+    }
+}
+
 /// #1321: the text export of a one-field form has no tab to tell it from CSV, so a comma in the
 /// value used to split it and only the text before the comma was imported.
 #[test]
@@ -1201,6 +1240,39 @@ fn duplicate_xfdf_annotation_flags_do_not_turn_on_unrelated_bits() {
         let annotations = doc.get(page).as_dict().and_then(|p| p.get(b"Annots")).map(|a| doc.resolve(a)).and_then(|a| a.as_array().cloned()).unwrap();
         let square = annotations.iter().filter_map(|a| doc.resolve(a).as_dict().cloned()).find(|d| d.name(b"Subtype") == Some(b"Square")).unwrap();
         assert_eq!(square.get(b"F").and_then(Object::as_int), Some(expected), "flags={flags}");
+    }
+}
+
+#[test]
+fn edited_button_export_values_round_trip_in_all_data_formats() {
+    use pdfcraft_forms::{FieldProps, set_props};
+    let mut doc = blank();
+    add_field(&mut doc, 0, [80.0, 650.0, 94.0, 664.0], &NewField::Radio { group: Some("Size".into()), export: "S".into() }, None).unwrap();
+    add_field(&mut doc, 0, [100.0, 650.0, 114.0, 664.0], &NewField::Radio { group: Some("Size".into()), export: "L".into() }, None).unwrap();
+    set_props(&mut doc, "Agree", &FieldProps { export_value: Some((0, "Accepted".into())), ..Default::default() }).unwrap();
+    set_props(&mut doc, "Size", &FieldProps { export_value: Some((0, "Small".into())), ..Default::default() }).unwrap();
+    set_value(&mut doc, "Agree", &FieldValue::Check(true)).unwrap();
+    set_value(&mut doc, "Size", &FieldValue::Radio(Some("Small".into()))).unwrap();
+    let doc = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
+    let mut exports = vec![export_xfdf(&doc, false, true, "").into_bytes(), export_fdf(&doc, false, true, "").unwrap()];
+    exports.extend([Format::Xml, Format::Csv, Format::Txt].map(|f| export_data(&doc, f).into_bytes()));
+    for (index, bytes) in exports.into_iter().enumerate() {
+        if index < 2 {
+            let values = data_values(&bytes).unwrap();
+            assert_eq!(values.iter().find(|(n, _)| n == "Agree").unwrap().1, vec!["Accepted"]);
+            assert_eq!(values.iter().find(|(n, _)| n == "Size").unwrap().1, vec!["Small"]);
+        } else {
+            // data_values reads XFDF/FDF/PDF; import also handles XML/CSV/TXT.
+            let text = std::str::from_utf8(&bytes).unwrap();
+            assert!(text.contains("Accepted") && text.contains("Small"), "{text}");
+        }
+        let mut target = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
+        set_value(&mut target, "Agree", &FieldValue::Check(false)).unwrap();
+        set_value(&mut target, "Size", &FieldValue::Radio(Some("L".into()))).unwrap();
+        import(&mut target, &bytes).unwrap();
+        let fs = fields(&target);
+        assert_eq!(fs.iter().find(|f| f.name == "Agree").unwrap().export_values(), vec!["Accepted"]);
+        assert_eq!(fs.iter().find(|f| f.name == "Size").unwrap().export_values(), vec!["Small"]);
     }
 }
 

@@ -5,11 +5,12 @@
 //! Edits never touch the original bytes; the writer appends them (incremental save) or rewrites
 //! the file (full save).
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{Arc, Mutex, Weak};
 
 use crate::CosError;
-use crate::object::{Dict, ObjRef, Object};
+use crate::object::{Dict, MAX_DECODED, MAX_JBIG2_GLOBALS, ObjRef, Object, Stream};
 use crate::parser::{EndstreamIndex, Lexer, is_whitespace, parse_indirect, parse_indirect_shared};
 
 mod objects;
@@ -48,6 +49,9 @@ pub struct Document {
     repair_log: Arc<Vec<String>>,
     cache: Arc<Mutex<HashMap<u32, Arc<Object>>>>,
     objstms: Arc<Mutex<HashMap<u32, Arc<ObjStm>>>>,
+    /// What `/JBIG2Globals` streams of the file decode to, by object number: the images of a scan
+    /// share them, and each would otherwise decode them again (see `Document::jbig2_globals`).
+    jbig2_globals: Arc<Mutex<HashMap<u32, Arc<Vec<u8>>>>>,
     stream_limit: usize,
     overlay: BTreeMap<u32, Slot>,
     next_num: u32,

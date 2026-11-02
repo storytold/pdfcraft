@@ -25,6 +25,24 @@ pub(crate) fn open_source_with(name: &str, bytes: &Arc<Vec<u8>>, password: Optio
     source_document(bytes, password).map_err(|p| EditError::Source(format!("{name}: {p}")))
 }
 
+/// Import the comments of `src` onto the pages of `doc` with the same numbers.
+pub(crate) fn import_pdf_comments(doc: &mut pdfcraft_cos::Document, src: &pdfcraft_cos::Document) -> Result<(), EditError> {
+    if pdfcraft_organize::import_comments(doc, src)? == 0 {
+        return Err(pdfcraft_xfdf::DataError::NothingImported.into());
+    }
+    Ok(())
+}
+
+/// Parse another PDF to import comments from, whatever its permissions allow.
+pub(crate) fn comment_source(bytes: &Arc<Vec<u8>>) -> Result<pdfcraft_cos::Document, SourceProblem> {
+    match std::panic::catch_unwind(|| pdfcraft_cos::Document::open(bytes.clone())) {
+        Ok(Ok(d)) => Ok(d),
+        Ok(Err(pdfcraft_cos::CosError::NeedsPassword)) => Err(SourceProblem::Password),
+        Ok(Err(e)) => Err(SourceProblem::Unreadable(e.to_string())),
+        Err(_) => Err(SourceProblem::Unreadable("the file could not be read".into())),
+    }
+}
+
 fn source_document(bytes: &Arc<Vec<u8>>, password: Option<&str>) -> Result<pdfcraft_cos::Document, SourceProblem> {
     match std::panic::catch_unwind(|| pdfcraft_cos::Document::open_with_password(bytes.clone(), password)) {
         Ok(Ok(d)) if d.permissions().is_some_and(|p| !p.assemble()) => Err(SourceProblem::NotPermitted),

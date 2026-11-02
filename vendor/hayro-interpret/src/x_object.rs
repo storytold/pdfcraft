@@ -1,4 +1,5 @@
 use crate::cache::{Cache, DecodedImageCache, DecodedImageKey};
+use crate::cmyk_group::{CmykGroup, blends_in_device_cmyk, names_a_blending_space};
 use crate::color::{ColorComponents, ColorSpace, DefaultColorSpaces, DeviceFamily, ToRgb};
 use crate::context::Context;
 use crate::device::Device;
@@ -138,8 +139,6 @@ pub(crate) fn draw_form_xobject<'a, 'b>(
         return;
     }
 
-    let iter = TypedIter::new(x_object.decoded.as_ref());
-
     context.path_mut().truncate(0);
     context.save_state();
     context.pre_concat_affine(x_object.matrix);
@@ -155,13 +154,14 @@ pub(crate) fn draw_form_xobject<'a, 'b>(
     // starts from a blank backdrop by definition, and a knockout group or one entered at partial
     // opacity, under a soft mask or with a blend mode keeps its layer, where the group's
     // elements still composite with a blank backdrop (an approximation of §11.4.7 for them).
-    let neutral = !x_object.is_isolated && !x_object.is_knockout && {
+    let entered_plainly = {
         let state = &context.get().graphics_state;
         state.non_stroke_alpha >= 1.0
             && state.stroke_alpha >= 1.0
             && state.soft_mask.is_none()
             && state.blend_mode == BlendMode::Normal
     };
+    let neutral = !x_object.is_isolated && !x_object.is_knockout && entered_plainly;
     // PdfCraft patch (39): a group drawn as an element of a knockout group replaces what that
     // group drew under its shape, the union of its own elements' shapes (#2971). The shape is
     // cleared by drawing the group's content once in the device's erase mode; the group then
@@ -193,6 +193,26 @@ pub(crate) fn draw_form_xobject<'a, 'b>(
         context.restore_state(device);
         context.path_mut().truncate(0);
     }
+    // PdfCraft patch (67): a non-isolated knockout group entered the same way composites each
+    // element with the backdrop already on the page, in the element's own blend mode (#4886). A
+    // layer of its own starts transparent, where a blend mode has nothing to blend with, so the
+    // group is drawn in passes, one per blend mode, each composited onto the page in its mode
+    // (`Device::begin_knockout_pass`).
+    if x_object.is_transparency_group
+        && x_object.is_knockout
+        && !x_object.is_isolated
+        && entered_plainly
+        && !knockout_element
+    {
+        draw_knockout_passes(x_object, resources, context, device);
+        context.pop_root_transform();
+        context.restore_state(device);
+        if has_oc {
+            context.ocg_state.end_marked_content();
+        }
+        context.end_nested_interpretation();
+        return;
+    }
     let own_layer = x_object.is_transparency_group && (!neutral || knockout_element);
 
     if own_layer {
@@ -210,6 +230,57 @@ pub(crate) fn draw_form_xobject<'a, 'b>(
         }
     }
 
+    let resources = Resources::for_form(x_object.resources.clone(), resources.clone());
+
+    // PdfCraft patch (70): an isolated group blending in DeviceCMYK starts from a backdrop of
+    // its own, so a device able to blend in CMYK computes its interior apart and composites the
+    // result through the layer pushed above (see `cmyk_group`). Knockout groups are left out:
+    // their elements composite with the group's initial backdrop, not with each other.
+    // An isolated group that names another blending space blends in that space (§11.3.4); a
+    // device drawing an enclosing group in CMYK is told, so it can decline that group. A
+    // non-isolated group's /CS is ignored: it blends in its parent's space (ISO 32000-2
+    // Table 145, CS), so it stays in the enclosing group's CMYK.
+    if x_object.is_transparency_group
+        && x_object.is_isolated
+        && names_a_blending_space(&x_object.dict)
+        && !blends_in_device_cmyk(&x_object.dict)
+    {
+        device.group_blends_outside_device_cmyk();
+    }
+
+    let blended_in_cmyk = own_layer
+        && x_object.is_isolated
+        && !x_object.is_knockout
+        && blends_in_device_cmyk(&x_object.dict)
+        && device.draw_isolated_cmyk_group(&CmykGroup::new(x_object, &resources, context));
+
+    if !blended_in_cmyk {
+        interpret_form_contents(&resources, x_object, context, device);
+    }
+
+    if own_layer {
+        device.pop_transparency_group();
+    }
+
+    context.pop_root_transform();
+    context.restore_state(device);
+
+    if has_oc {
+        context.ocg_state.end_marked_content();
+    }
+
+    context.end_nested_interpretation();
+}
+
+/// The contents of form `x_object`, in `context` as prepared for them (the form's `/Matrix`
+/// applied, its root transform pushed), clipped to its `/BBox`. PdfCraft patch (70): shared by
+/// [`draw_form_xobject`] and [`CmykGroup::interpret`].
+pub(crate) fn interpret_form_contents<'a>(
+    resources: &Resources<'a>,
+    x_object: &FormXObject<'a>,
+    context: &mut Context<'a>,
+    device: &mut impl Device<'a>,
+) {
     device.set_soft_mask(context.get().graphics_state.soft_mask.clone());
     device.set_blend_mode(context.get().graphics_state.blend_mode);
 
@@ -226,26 +297,70 @@ pub(crate) fn draw_form_xobject<'a, 'b>(
     });
 
     interpret(
-        iter,
-        &Resources::for_form(x_object.resources.clone(), resources.clone()),
+        TypedIter::new(x_object.decoded.as_ref()),
+        resources,
         context,
         device,
     );
 
     device.pop_clip_path();
+}
 
-    if own_layer {
+/// PdfCraft patch (67): draws a non-isolated knockout group entered at full opacity, without a
+/// soft mask and with Normal blending, once per blend mode its elements use. The Normal pass
+/// finds the other modes; there are at most as many passes as blend modes.
+fn draw_knockout_passes<'a>(
+    x_object: &FormXObject<'a>,
+    resources: &Resources<'a>,
+    context: &mut Context<'a>,
+    device: &mut impl Device<'a>,
+) {
+    let clip = ClipPath {
+        path: context.get().ctm
+            * Rect::new(
+                x_object.bbox[0] as f64,
+                x_object.bbox[1] as f64,
+                x_object.bbox[2] as f64,
+                x_object.bbox[3] as f64,
+            )
+            .to_path(0.1),
+        fill: FillRule::NonZero,
+    };
+    // Each pass starts from the same marked-content state, also after a stream that leaves a
+    // `BDC` open.
+    let visibility = context.ocg_state.visibility();
+    let mut modes = vec![BlendMode::Normal];
+    let mut pass = 0;
+    while let Some(&mode) = modes.get(pass) {
+        context.ocg_state.set_visibility(visibility.clone());
+        context.save_state();
+        device.push_transparency_group(1.0, None, mode);
+        device.set_knockout();
+        device.begin_knockout_pass(mode);
+        device.set_soft_mask(None);
+        device.set_blend_mode(BlendMode::Normal);
+        device.push_clip_path(&clip);
+        interpret(
+            TypedIter::new(x_object.decoded.as_ref()),
+            &Resources::for_form(x_object.resources.clone(), resources.clone()),
+            context,
+            device,
+        );
+        device.pop_clip_path();
+        let others = device.end_knockout_pass();
         device.pop_transparency_group();
+        context.restore_state(device);
+        context.path_mut().truncate(0);
+        if pass == 0 {
+            for other in others {
+                if !modes.contains(&other) {
+                    modes.push(other);
+                }
+            }
+        }
+        pass += 1;
     }
-
-    context.pop_root_transform();
-    context.restore_state(device);
-
-    if has_oc {
-        context.ocg_state.end_marked_content();
-    }
-
-    context.end_nested_interpretation();
+    context.ocg_state.set_visibility(visibility);
 }
 
 pub(crate) fn draw_image_xobject<'a, 'b>(
@@ -566,13 +681,23 @@ fn decoded_mask_size(mask: &DecodedMask) -> usize {
 /// `/Filter` or its inline abbreviation `/F`. Errs towards `true`: a name the decoder would
 /// ignore still counts, which only keeps the target in the key as before.
 fn uses_jpx(stream: &Stream<'_>) -> bool {
+    uses_filter(stream, JPX_DECODE)
+}
+
+/// PdfCraft patch (73): whether `stream` is JBIG2, so that what the page has left, which all of it
+/// shares, says something about why this stream failed.
+fn uses_jbig2(stream: &Stream<'_>) -> bool {
+    uses_filter(stream, JBIG2_DECODE)
+}
+
+fn uses_filter(stream: &Stream<'_>, filter: &[u8]) -> bool {
     let dict = stream.dict();
-    let is_jpx = |name: &Name<'_>| name.deref() == JPX_DECODE;
+    let is_filter = |name: &Name<'_>| name.deref() == filter;
     [F, FILTER].into_iter().any(|key| {
-        dict.get::<Name<'_>>(key).is_some_and(|name| is_jpx(&name))
+        dict.get::<Name<'_>>(key).is_some_and(|name| is_filter(&name))
             || dict
                 .get::<Array<'_>>(key)
-                .is_some_and(|filters| filters.iter::<Name<'_>>().any(|name| is_jpx(&name)))
+                .is_some_and(|filters| filters.iter::<Name<'_>>().any(|name| is_filter(&name)))
     })
 }
 
@@ -640,7 +765,15 @@ fn decode_context<'a>(
     let decoded = obj
         .stream
         .decoded_image(&decode_params)
-        .map_err(|_| (obj.warning_sink)(InterpreterWarning::ImageDecodeFailure))
+        .map_err(|_| {
+            // PdfCraft patch (73): left out for the page's allowance, it is content the page's
+            // budget skipped, which is reported, and no failure of this image.
+            (obj.warning_sink)(if hayro_syntax::page_jbig2_work_spent() && uses_jbig2(&obj.stream) {
+                InterpreterWarning::ContentTruncated
+            } else {
+                InterpreterWarning::ImageDecodeFailure
+            });
+        })
         .ok()?;
 
     let (mut scale_x, mut scale_y) = (1.0, 1.0);
@@ -892,6 +1025,15 @@ fn decode_raster(
         )
         .flatten()
     };
+
+    // PdfCraft patch (73): a bad mask leaves the image as it is, but one left out for the page's
+    // allowance takes the image with it. Both are reported, and only here is the file not to blame
+    // for what the mask would have hidden being shown.
+    let dict = obj.stream.dict();
+    let mask = dict.get::<Stream<'_>>(SMASK).or_else(|| dict.get::<Stream<'_>>(MASK));
+    if alpha.is_none() && hayro_syntax::page_jbig2_work_spent() && mask.is_some_and(|m| uses_jbig2(&m)) {
+        return None;
+    }
 
     Some(DecodedRaster { image, alpha })
 }
