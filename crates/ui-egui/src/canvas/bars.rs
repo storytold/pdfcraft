@@ -294,11 +294,20 @@ fn quick_bar_offset(margin: f32, width: f32) -> f32 {
 /// The floating quick-action bar in the margin between the side panel and the page.
 pub(super) fn quick_bar(app: &mut PdfCraftApp, area: Rect, page_left: Option<f32>, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
+    let mut offset = vec2(0.0, 0.0);
+    if app.hotbar.full_side {
+        match app.hotbar.dock.as_deref() {
+            Some("left") => offset.x += app.hotbar.button_size + 14.0,
+            Some("top") => offset.y += app.hotbar.button_size + 14.0,
+            _ => {}
+        }
+    }
     let id = egui::Id::unique("quick-bar");
     // Last frame's bar: Fill & Sign's Text and Date tools add a wider row of controls to it.
     let width = ui.ctx().memory(|m| m.area_rect(id)).map_or(QUICK_BAR_WIDTH, |bar| bar.width().max(QUICK_BAR_WIDTH));
-    let x = quick_bar_offset(page_left.map_or(0.0, |left| left - area.left()), width);
-    let pos = area.left_top() + vec2(x, QUICK_BAR_EDGE);
+    // The margin starts past a hotbar docked on the left.
+    let x = quick_bar_offset(page_left.map_or(0.0, |left| left - area.left() - offset.x), width);
+    let pos = area.left_top() + vec2(x, QUICK_BAR_EDGE) + offset;
     egui::Area::new(id).order(egui::Order::Middle).fixed_pos(pos).show(ui.ctx(), |ui| {
         egui::Frame::NONE
             .fill(t.card)
@@ -321,6 +330,12 @@ pub(super) fn quick_bar(app: &mut PdfCraftApp, area: Rect, page_left: Option<f32
                         let current = app.comment_prefs.group_tool[g];
                         let active = matches!(app.quick_tool, QuickTool::Comment(t) if t.group() == g);
                         let resp = icons::button(ui, current.icon(), 32.0, active, tl!(current.label()));
+                        if comments::GROUPS[g].len() == 1 {
+                            if resp.clicked() {
+                                app.execute(current.command());
+                            }
+                            continue;
+                        }
                         // A small corner triangle marks the flyout.
                         let r = resp.rect;
                         let tri = [r.right_bottom() + vec2(-4.0, -4.0), r.right_bottom() + vec2(-9.0, -4.0), r.right_bottom() + vec2(-4.0, -9.0)];
