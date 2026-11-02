@@ -2157,3 +2157,19 @@ fn script_threads_held_to_a_time_limit_are_capped() {
     }
     assert_eq!(within(quick, 5000).value, "25", "the place came back");
 }
+
+/// A script that ended in time has given its thread's place back by the time its caller has the
+/// outcome, every time, so the next script never finds it taken.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_script_that_ended_has_given_its_place_back_when_its_outcome_arrives() {
+    use crate::run::{ThreadSlots, run_on_thread_from};
+    static ONE: ThreadSlots = ThreadSlots::new(1);
+    let ev = Event::field("Calculate", "total", "");
+    let quick = "event.value = this.getField('price').value * 2;";
+    for _ in 0..300 {
+        let o = run_on_thread_from(&ONE, quick, &ev, &doc(), Arc::new(fields()), &[], (Limits::default(), std::time::Duration::from_secs(5)));
+        assert_eq!((o.value.as_str(), o.abandoned), ("25", false), "{o:?}");
+        assert_eq!(ONE.taken(), 0, "the place is free once the outcome is in");
+    }
+}

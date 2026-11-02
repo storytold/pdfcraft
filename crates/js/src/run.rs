@@ -248,7 +248,9 @@ pub(crate) fn run_on_thread_from(
     let (tx, rx) = std::sync::mpsc::channel();
     // A thread that can't start drops the closure, and the slot with it.
     let spawned = std::thread::Builder::new().name("pdfcraft-js".into()).stack_size(SCRIPT_STACK).spawn(move || {
-        let _slot = slot;
+        // Given back on every way out: dropped below before the outcome is sent, or with the
+        // stack when the script unwinds.
+        let slot = slot;
         // The first script in a process sets the engine up: not on the script's time.
         crate::xfa::warm_up();
         // The receiver is gone when the caller stopped waiting: nothing to report then.
@@ -257,6 +259,8 @@ pub(crate) fn run_on_thread_from(
         let o = run_here(&script_owned, &event_owned, &doc_owned, fields, (&kept, &skipped), limits, &move || {
             let _ = started.send(Step::Started);
         });
+        // Before the outcome is sent, so a caller holding its outcome finds the place free.
+        drop(slot);
         let _ = tx.send(Step::Done(Box::new(o)));
     });
     if let Err(e) = spawned {
