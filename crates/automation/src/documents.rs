@@ -448,6 +448,15 @@ impl Automation {
         if !doc.edit_notices.is_empty() {
             out["warnings"] = json!(doc.edit_notices.iter().map(ToString::to_string).collect::<Vec<_>>());
         }
+        let js = self.session.take_js_output(id);
+        if !js.alerts.is_empty() {
+            let alerts: Vec<Value> = js.alerts.iter().map(crate::a11y::form_tools::alert_json).collect();
+            out["alerts"] = json!(alerts);
+        }
+        if !js.requests.is_empty() {
+            let reqs: Vec<Value> = js.requests.iter().map(crate::a11y::form_tools::request_json).collect();
+            out["requests"] = json!(reqs);
+        }
         Ok(out)
     }
 

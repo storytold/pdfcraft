@@ -174,3 +174,23 @@ fn button_export_edit_is_one_undo_step_and_survives_save() {
     assert_eq!(check["value"], true);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn form_fill_surfaces_calculation_alerts_and_requests() {
+    let (mut a, id, dir) = setup("calc-alerts");
+    tool(
+        &mut a,
+        "form_set_script",
+        json!({
+            "doc": id,
+            "field": "beta",
+            "event": "calculate",
+            "script": "if (this.getField(\"alpha\").value == \"trigger\") app.alert(\"Alert triggered\");"
+        }),
+    );
+    let normal = tool(&mut a, "form_fill", json!({"doc": id, "values": {"alpha": "normal"}}));
+    assert!(normal.get("alerts").is_none());
+    let triggered = tool(&mut a, "form_fill", json!({"doc": id, "values": {"alpha": "trigger"}}));
+    assert_eq!(triggered["alerts"][0]["message"], "Alert triggered");
+    std::fs::remove_dir_all(dir).unwrap();
+}
