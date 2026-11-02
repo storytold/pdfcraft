@@ -369,7 +369,7 @@ fn export_comments_writes_on_a_later_frame() {
     let out = dir.join("data.xfdf");
     let mut h = harness(&[1]);
     h.state_mut().pick_override = Some(vec![out.to_string_lossy().into_owned()]);
-    h.state_mut().export_data_dialog(true, false);
+    h.state_mut().export_data_as(pdfcraft_ui_egui::DataKind::Comments, pdfcraft_engine::DataFormat::Xfdf);
     assert!(!out.exists(), "the command must not wait for the picker");
     h.run_steps(2);
     assert!(std::fs::read_to_string(&out).unwrap().contains("xfdf"));

@@ -48,6 +48,7 @@ pub mod marks {
 }
 pub use content_ui::TextDraft;
 pub use create_ui::Clip;
+pub use data_export_ui::DataKind;
 pub use link_ui::LinkDraft;
 pub use optimize_ui::{OptimizeDraft, OptimizeTab};
 pub use sign_ui::{DigitalIdEntry, SignDraft, SignGraphic, SignStep};
@@ -175,6 +176,7 @@ use workflows::combine_grid;
 use workflows::combine_ui;
 use workflows::compare_ui;
 use workflows::create_ui;
+use workflows::data_export_ui;
 use workflows::export_ui;
 use workflows::files;
 use workflows::js_ui;
@@ -623,6 +625,8 @@ pub struct PdfCraftApp {
     pub export_draft: export_ui::ExportDraft,
     /// A running export's progress.
     export_status: Option<export_ui::ExportStatus>,
+    /// The format last chosen in Export form data or Export comments (#5215).
+    pub(crate) data_format: Option<pdfcraft_engine::DataFormat>,
     /// The saved Fill & Sign signature and initials (drawn or typed).
     pub signature: Option<fill_sign::SavedSig>,
     pub initials: Option<fill_sign::SavedSig>,

@@ -121,6 +121,8 @@ pub enum Dialog {
     Marks(pdfcraft_engine::MarkKind),
     /// Export a PDF ▸ Image / Text.
     Export(export_ui::ExportKind),
+    /// Export form data / Export comments: the format, before the save panel (#5215).
+    ExportData(data_export_ui::DataKind),
     /// Fill & Sign ▸ Create signature (the drawing pad).
     Signature,
     /// Comment Properties.
