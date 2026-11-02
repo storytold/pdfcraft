@@ -3,7 +3,9 @@
 **Repository:** `https://github.com/dikshant363/pdfcraft-android`  
 **Upstream Reference:** `https://github.com/storytold/pdfcraft`  
 **Primary Android Branch:** `android-port`  
-**Head Commit:** `021a5a05691d7d1b4580b39d669da27d7feef4ee`  
+**Head Commit:** `4c749315ef161f8b9aeb4d5368477421da5ba41c`  
+**Verified CI Run ID:** `41490011226` (Job ID: `125430252103`)  
+**CI Conclusion:** SUCCESS (37m 26s duration)  
 **Audit Date:** 2026-11-02  
 
 ---
@@ -22,24 +24,25 @@ All branches are pushed and tracked on GitHub without any history rewriting or f
 
 ---
 
-## 2. GitHub Actions CI Configuration
+## 2. GitHub Actions CI Configuration and Verified Execution Evidence
 
 The automated CI workflow is configured in `.github/workflows/android.yml`:
 - **Runner:** `ubuntu-latest`
 - **Toolchains:** OpenJDK 17, Rust stable (with `aarch64-linux-android` and `x86_64-linux-android` targets), Android NDK `29.0.14206865`, Android SDK Platform `37.0` (with `android-37` symlink).
-- **Validation Pipeline:**
-  1. Gradle wrapper integrity validation (`gradle/actions/wrapper-validation@v4`).
-  2. Rust code formatting verification (`cargo fmt --all -- --check`).
-  3. Strict Rust Clippy linter with `-D warnings` on all Android-facing and upstream crates.
-  4. Repository asset license and provenance audit (`cargo xtask assets`).
-  5. Native bridge test execution (`cargo test --locked -p pdfcraft-android`).
-  6. Shared automation test execution (`cargo test --locked -p pdfcraft-automation`).
-  7. Shared annotation test execution (`cargo test --locked -p pdfcraft-annot`).
-  8. Android JVM unit test execution (`./gradlew --no-daemon testDebugUnitTest`).
-  9. Android on-device instrumentation test assembly (`./gradlew --no-daemon assembleAndroidTest`).
-  10. Debug APK assembly (`./gradlew --no-daemon assembleDebug`).
-  11. Production Release APK and AAB bundle assembly (`./gradlew --no-daemon assembleRelease bundleRelease`).
-  12. Automated artifact archiving of APK, AAB, and test APK files.
+- **Verified Run ID:** [41490011226](https://github.com/dikshant363/pdfcraft-android/actions/runs/41490011226) (Status: **SUCCESS / Exit Code 0**)
+- **Validation Pipeline Results:**
+  1. Gradle wrapper integrity validation (`gradle/actions/wrapper-validation@v4`) — **PASS**
+  2. Rust code formatting verification (`cargo fmt --all -- --check`) — **PASS**
+  3. Strict Rust Clippy linter with `-D warnings` on all Android-facing and upstream crates — **PASS**
+  4. Repository asset license and provenance audit (`cargo xtask assets`) — **PASS**
+  5. Native bridge test execution (`cargo test --locked -p pdfcraft-android`) — **PASS**
+  6. Shared automation test execution (`cargo test --locked -p pdfcraft-automation`) — **PASS**
+  7. Shared annotation test execution (`cargo test --locked -p pdfcraft-annot`) — **PASS**
+  8. Android JVM unit test execution (`./gradlew --no-daemon testDebugUnitTest`) — **PASS**
+  9. Android on-device instrumentation test assembly (`./gradlew --no-daemon assembleAndroidTest`) — **PASS**
+  10. Debug APK assembly (`./gradlew --no-daemon assembleDebug`) — **PASS**
+  11. Production Release APK and AAB bundle assembly (`./gradlew --no-daemon assembleRelease bundleRelease`) — **PASS**
+  12. Automated artifact archiving of APK, AAB, and test APK files — **PASS** (`pdfcraft-android-4c749315ef161f8b9aeb4d5368477421da5ba41c`)
 
 ---
 
