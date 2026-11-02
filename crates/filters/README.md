@@ -44,7 +44,7 @@ encode_jbig2(data, columns, rows) -> Result<Vec<u8>, FilterError>   // 1-bit row
 
 | Filter | Decode | Encode |
 |---|---|---|
-| FlateDecode | zlib header checked, then inflated raw: a missing or wrong Adler-32 is tolerated; no valid header → raw deflate; trailing bytes ignored; preset dictionary → Corrupt; truncated, or a back-reference to before the start of the output → Corrupt (partial in tolerant mode) | zlib level 6 |
+| FlateDecode | zlib header checked, then inflated raw: a missing or wrong Adler-32 is tolerated; no valid header → raw deflate; trailing bytes ignored; preset dictionary → Corrupt; truncated, a back-reference to before the start of the output, or a dynamic block without an end-of-block code → Corrupt (partial in tolerant mode) | zlib level 6 |
 | LZWDecode | 9–12-bit MSB-first codes, clear (256), EOD (257), `EarlyChange` 0/1; missing EOD/initial clear tolerated; a full table stops growing | greedy, leading clear, clear-table when the table fills, EOD |
 | Predictors (Flate/LZW) | 2 = TIFF (1/2/4/8/16 bpc), 10–15 = PNG with per-row tags 0–4; partial final rows decoded; bad params or tags → Corrupt | 2, 10 None, 11 Sub, 12 Up, 13 Average, 14 Paeth, 15 per-row optimum (min sum of signed residuals) |
 | ASCIIHexDecode | white space ignored, odd digit padded with 0, `>` EOD (optional), other characters → Corrupt | upper case, newline every 64 digits, `>` |

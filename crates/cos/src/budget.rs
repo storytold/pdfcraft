@@ -594,7 +594,8 @@ mod image_tests {
     /// What Flate reads is priced for blocks that make nothing, and an image an encoder made pays
     /// little for it: a scan-like picture stored in under half its size costs no more than half
     /// again its bytes, samples and pixels. Redaction decodes a picture once for each page that draws it, so
-    /// a letterhead on hundreds of pages has to fit as it did unpriced.
+    /// a letterhead on hundreds of pages has to fit about as often as it did unpriced (here, at
+    /// most half again the cost).
     #[test]
     fn an_image_an_encoder_made_pays_little_for_its_reading() {
         let doc = Document::new_empty();

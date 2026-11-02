@@ -8,7 +8,8 @@
 //!
 //! A back-reference to before the start of the output points at nothing, and is damage, as zlib
 //! has it: read strictly the stream is refused, and read tolerantly what came before it is kept.
-//! (miniz_oxide, flate2's backend here before zlib-rs, copied zeros and went on.)
+//! (miniz_oxide, flate2's backend here before zlib-rs, copied zeros and went on.) So is a dynamic
+//! block whose code has no end-of-block symbol, and nothing of that block is kept.
 
 use std::io::Write;
 
@@ -232,6 +233,44 @@ mod tests {
                 self.out.push(self.acc as u8);
             }
             self.out
+        }
+    }
+
+    /// A dynamic block whose literal and length code has no end-of-block symbol can't end (RFC 1951
+    /// §3.2.5): it is refused, and nothing of it is kept.
+    #[test]
+    fn a_dynamic_code_without_an_end_is_damage() {
+        let mut bits = Bits::default();
+        bits.put(1, 1); // the final block,
+        bits.put(2, 2); // dynamic Huffman codes (§3.2.7)
+        bits.put(0, 5); // 257 literal and length codes
+        bits.put(0, 5); // 1 distance code
+        bits.put(14, 4); // 18 code length codes, in their order up to the one for 1
+        for symbol in [16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1] {
+            bits.put(u32::from(symbol == 18 || symbol == 1), 3);
+        }
+        // Code length codes: 1 is 0, 18 is 1. 'A' and 'B' get a bit each, 256 none.
+        let zeros = |bits: &mut Bits, n: u32| {
+            bits.code(1, 1);
+            bits.put(n - 11, 7);
+        };
+        zeros(&mut bits, 65);
+        bits.code(0, 1);
+        bits.code(0, 1);
+        zeros(&mut bits, 138);
+        zeros(&mut bits, 52);
+        bits.code(0, 1); // the distance code: a bit
+        for _ in 0..4 {
+            bits.code(0, 1); // 'A'
+        }
+        let data = bits.finish();
+        assert!(zlib_header(&data).is_none(), "read as raw deflate");
+        match decode(&data, 1 << 20, Some(1 << 20)).0 {
+            Err(f) => {
+                assert!(matches!(f.error, FilterError::Corrupt { .. }), "{}", f.error);
+                assert_eq!(f.partial, b"");
+            }
+            Ok(out) => panic!("read as {out:?}"),
         }
     }
 
