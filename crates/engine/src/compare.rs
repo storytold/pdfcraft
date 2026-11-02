@@ -174,8 +174,9 @@ pub struct OfficeExport {
     pub bytes: Vec<u8>,
     /// Pages (0-based) that draw forms nested deeper than [`MAX_FORM_DEPTH`] or more of them
     /// than [`MAX_FORM_VISITS`], pictures past [`MAX_EXPORT_IMAGE_BYTES`] or past what one export
-    /// may decode, or (Word) more paths than [`pdfcraft_edit::MAX_PAGE_SHAPES`] or more shapes,
-    /// points or fields than a Word page holds ([`pdfcraft_export::docx_checked`]): export stops
+    /// may decode, or (Word, on a page whose layout it keeps) more paths than
+    /// [`pdfcraft_edit::MAX_PAGE_SHAPES`] or more shapes, points or fields than a Word page holds
+    /// ([`pdfcraft_export::docx_checked`]): export stops
     /// there to stay bounded on hostile files, so the text and images of those forms, those
     /// pictures, shapes or fields are missing from `bytes`.
     pub truncated_pages: Vec<usize>,
@@ -396,7 +397,9 @@ impl crate::Document {
                     })
                     .collect();
                 let art_read = if art { pdfcraft_edit::reading_shapes(cos, i).unwrap_or_default() } else { pdfcraft_edit::ReadingShapes::default() };
-                if forms_unread || over_budget || art_read.truncated {
+                // Paths left unread matter only to a page Word positions; the writer decides that.
+                let art_truncated = art_read.truncated;
+                if forms_unread || over_budget {
                     truncated.push(i);
                 }
                 // The page colour (Edit a PDF ▸ Background, a producer's page fill) for formats that keep one.
@@ -418,7 +421,17 @@ impl crate::Document {
                 let fields = fields_by_page
                     .get(&i)
                     .map_or_else(Vec::new, |on_page| on_page.iter().filter_map(|(f, w)| export_field(cos, f, w, &visible_rect)).collect());
-                pdfcraft_export::Page { width: info.width as f64, height: info.height as f64, blocks, images, background, shapes, fields, lines }
+                pdfcraft_export::Page {
+                    width: info.width as f64,
+                    height: info.height as f64,
+                    blocks,
+                    images,
+                    background,
+                    shapes,
+                    fields,
+                    lines,
+                    art_truncated,
+                }
             })
             .collect();
         (pages, truncated)

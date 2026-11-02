@@ -182,3 +182,30 @@ fn a_fields_border_and_fill_come_from_its_widget() {
     assert_eq!(look("Dashed"), (Some(pdfcraft_export::Stroke { color: [1.0, 0.0, 0.0], width: 2.0, dashed: true }), None));
     assert_eq!(look("Plain"), (None, None));
 }
+
+/// A page of text past the path reader's limit (a detailed chart, a hatched background) flows in
+/// Word, which draws none of its paths, so Word export doesn't list it as cut short; a form page
+/// past the limit, whose layout Word keeps, is listed.
+#[test]
+fn unread_paths_cut_only_a_positioned_page_short() {
+    let page = |field: bool| {
+        let content =
+            format!("BT /F1 12 Tf 72 700 Td (Quarterly figures) Tj ET\n{}", "0 G 0 0 m 1 1 l S\n".repeat(pdfcraft_edit::MAX_PAGE_SHAPES + 1));
+        let (catalog, annots) = if field { (" /AcroForm << /Fields [6 0 R] >>", " /Annots [6 0 R]") } else { ("", "") };
+        pdf(&[
+            format!("<< /Type /Catalog /Pages 2 0 R{catalog} >>"),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+            format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >>{annots} >>"),
+            stream("", &content),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+            "<< /Type /Annot /Subtype /Widget /FT /Tx /T (Name) /Rect [72 600 300 612] /P 3 0 R >>".into(),
+        ])
+    };
+    let truncated = |field: bool| {
+        let mut s = Session::new();
+        let id = s.open("chart.pdf", None, Arc::new(page(field)), None).unwrap();
+        s.get(id).unwrap().export_office_checked(OfficeFormat::Docx).truncated_pages
+    };
+    assert_eq!(truncated(false), Vec::<usize>::new(), "a flowing page lost none of its paths");
+    assert_eq!(truncated(true), [0]);
+}

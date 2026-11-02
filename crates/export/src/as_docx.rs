@@ -794,8 +794,9 @@ pub fn docx(pages: &[Page], title: &str) -> Vec<u8> {
 }
 
 /// [`docx`], and the pages (0-based) that kept their layout but had more shapes, points or fields
-/// than a Word page holds ([`MAX_DOCX_PAGE_SHAPES`], [`MAX_DOCX_PAGE_POINTS`]): the rest of
-/// those are missing from the document.
+/// than a Word page holds ([`MAX_DOCX_PAGE_SHAPES`], [`MAX_DOCX_PAGE_POINTS`]), or whose paths
+/// were not all read ([`Page::art_truncated`]): the rest of those are missing from the document.
+/// A page that flows draws no shapes, so it is never listed for them.
 pub fn docx_checked(pages: &[Page], title: &str) -> (Vec<u8>, Vec<usize>) {
     let mut dropped = Vec::new();
     let mut body = String::new();
@@ -815,7 +816,8 @@ pub fn docx_checked(pages: &[Page], title: &str) -> (Vec<u8>, Vec<usize>) {
         if kept {
             let (xml, left_out) = positioned_page(page, &mut media, &mut shape_id, &mut form);
             body.push_str(&xml);
-            if left_out {
+            // Paths the reader left out are missing only where the page keeps its layout.
+            if left_out || page.art_truncated {
                 dropped.push(page_index);
             }
             after_table = false;

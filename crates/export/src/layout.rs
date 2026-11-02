@@ -124,6 +124,9 @@ pub struct Page {
     /// instead of the paragraphs: a form's labels, tab-separated pieces and lines far apart that
     /// share a left edge each keep their own place. Empty to place the paragraphs.
     pub lines: Vec<Block>,
+    /// Reading the page's paths stopped at a limit, so some are missing from `shapes`. Word lists
+    /// the page as cut short only when it keeps the page's layout: a flowing page draws no shapes.
+    pub art_truncated: bool,
 }
 
 /// One cell of a detected table. `span` is how many grid columns the cell covers (a header

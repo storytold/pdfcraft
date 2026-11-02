@@ -1379,3 +1379,16 @@ fn field_names_that_differ_only_in_case_are_repeats() {
     assert_eq!(form.name("Name", 8), "Name_8_3");
     assert_eq!(form.name("NAME", 9), "NAME_9", "the emitted spelling is kept");
 }
+
+/// Paths the reader left unread make a page cut short only where Word keeps its layout: a
+/// flowing page draws no shapes, so it lost nothing and is not listed (it was, and Office export
+/// then warned that its text and images were missing).
+#[test]
+fn unread_paths_cut_a_page_short_only_where_word_keeps_its_layout() {
+    let form = Page { art_truncated: true, ..form_page() };
+    assert_eq!(docx_checked(&[form], "Form").1, [0]);
+    let mut text = page();
+    text.images.clear();
+    let text = Page { art_truncated: true, ..text };
+    assert!(docx_checked(&[text], "Report").1.is_empty());
+}
