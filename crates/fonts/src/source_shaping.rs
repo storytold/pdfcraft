@@ -52,9 +52,25 @@ impl ShapedRun {
 /// Complex scripts/marks require shaping instead of independently encoding characters.
 pub fn required(text: &str) -> bool {
     text.chars().any(|c| {
-        unicode_bidi::bidi_class(c) == unicode_bidi::BidiClass::NSM
+        is_arabic(c)
+            || unicode_bidi::bidi_class(c) == unicode_bidi::BidiClass::NSM
             || matches!(u32::from(c), 0x0300..=0x036f | 0x0590..=0x0fff | 0x1780..=0x17ff | 0x200c..=0x200f | 0x202a..=0x202e | 0x2066..=0x2069)
     })
+}
+
+/// Arabic block routing shared by source shaping and the optional Arabic document-face path.
+/// Includes Extended-B/C, presentation forms and mathematical letters; this conservative route is
+/// not a glyph-coverage test. Syriac, Thaana, NKo and the common U+FEFF control remain separate.
+pub fn is_arabic(c: char) -> bool {
+    matches!(u32::from(c), 0x0600..=0x06ff | 0x0750..=0x077f | 0x0870..=0x08ff | 0xfb50..=0xfdff | 0xfe70..=0xfefc | 0x10ec0..=0x10eff | 0x1ee00..=0x1eeff)
+}
+
+/// Joining Arabic and the existing complex-script paths need contextual substitution tables.
+/// Encoded Arabic presentation forms and mathematical letters still need bidi/glyph lookup,
+/// but do not gain a joining-table requirement merely by sharing the Arabic font route.
+fn needs_contextual_substitution(c: char) -> bool {
+    (is_arabic(c) && !matches!(u32::from(c), 0xfb50..=0xfdff | 0xfe70..=0xfefc | 0x1ee00..=0x1eeff))
+        || matches!(u32::from(c), 0x08a0..=0x0fff | 0x1780..=0x17ff)
 }
 
 /// Shape one bounded source-font row with automatic paragraph-base selection.
@@ -71,7 +87,7 @@ pub fn shape_with_direction(bytes: &[u8], text: &str, direction: crate::TextDire
         return Ok(ShapedRun { glyphs: Vec::new(), advance: 0.0 });
     }
     let face = FontRef::new(bytes).map_err(|e| e.to_string())?;
-    if text.chars().any(|c| matches!(u32::from(c), 0x0600..=0x06ff | 0x0750..=0x077f | 0x08a0..=0x0fff | 0x1780..=0x17ff)) && face.gsub().is_err() {
+    if text.chars().any(needs_contextual_substitution) && face.gsub().is_err() {
         return Err("the source subset has no contextual substitution tables; select its full font".into());
     }
     let data = ShaperData::new(&face);
@@ -137,6 +153,40 @@ mod direction_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Extended-B and supplementary joining letters must not bypass the source-face GSUB guard.
+    #[test]
+    fn arabic_extended_source_rows_need_contextual_tables() {
+        let mut bytes = include_bytes!("../../../assets/fonts/Inter-Regular.ttf").to_vec();
+        let count = usize::from(u16::from_be_bytes(bytes.get(4..6).unwrap().try_into().unwrap()));
+        let mut removed = false;
+        for entry in bytes.get_mut(12..12 + count * 16).unwrap().chunks_exact_mut(16) {
+            if entry.get(..4) == Some(b"GSUB") {
+                entry.get_mut(..4).unwrap().copy_from_slice(b"TEST");
+                removed = true;
+            }
+        }
+        assert!(removed);
+        for text in ["\u{0870}", "\u{10ec2}"] {
+            let error = shape(&bytes, text).unwrap_err();
+            assert!(error.contains("contextual substitution tables"), "{text:?}: {error}");
+        }
+        for text in ["\u{fe8f}", "\u{1ee00}", "A"] {
+            assert!(!needs_contextual_substitution(text.chars().next().unwrap()));
+        }
+    }
+
+    /// Arabic presentation and supplementary letters use bidi/shaping rather than scalar encoding.
+    #[test]
+    fn arabic_extended_and_presentation_rows_require_shaping() {
+        for text in ["\u{0870}", "\u{10ec2}", "\u{1ee00}", "\u{fe8f}"] {
+            assert!(required(text), "{text:?} bypassed Arabic shaping");
+        }
+        assert!(!required("Latin 123 ()"));
+        for c in ['\u{0710}', '\u{0860}', '\u{0780}', '\u{07ca}', '\u{feff}', 'A'] {
+            assert!(!is_arabic(c), "{c:?} is not in the Arabic routing policy");
+        }
+    }
 
     #[test]
     /// Require each Arabic cluster's logical text to belong to its advancing glyph rather than a zero-advance mark.

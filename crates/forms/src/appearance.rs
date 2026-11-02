@@ -763,32 +763,38 @@ pub fn value_overflow(doc: &Document, f: &Field, w: &Widget) -> Option<Overflow>
     field_appearance_fit(doc, f, w, &f.value, true).2
 }
 
-/// [`field_appearance_drawn`], and whether the text drawn is cut off by the box.
-fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String], format: bool) -> (Stream, Option<char>, Option<Overflow>) {
-    // The Format event: what is shown, not what is stored.
-    let formatted: Vec<String>;
+/// The text a text/combo appearance displays: native formatting, choice-label resolution, then masking.
+/// `format = false` means a custom Format event already supplied the display values; never run scripts here.
+/// Property validation uses the same transformation on the proposed field without changing its logical value.
+pub(crate) fn displayed_text(f: &Field, values: &[String], format: bool) -> String {
+    let formatted;
     let values = if format
         && matches!(f.kind, crate::FieldKind::Text | crate::FieldKind::Combo)
         && values.len() == 1
         && f.actions.format != crate::af::Format::None
     {
-        formatted = vec![crate::af::format_value(&f.actions.format, &values[0])];
-        &formatted[..]
+        formatted = [crate::af::format_value(&f.actions.format, values.first().map_or("", String::as_str))];
+        &formatted
     } else {
         values
     };
+    let text: String = if f.kind == FieldKind::Combo {
+        values.iter().map(|v| f.options.iter().find(|(e, _)| e == v).map_or(v.clone(), |(_, d)| d.clone())).collect::<Vec<_>>().join(", ")
+    } else {
+        values.first().cloned().unwrap_or_default()
+    };
+    if f.has(flags::PASSWORD) { "*".repeat(text.chars().count()) } else { text }
+}
+
+/// [`field_appearance_drawn`], and whether the text drawn is cut off by the box.
+fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String], format: bool) -> (Stream, Option<char>, Option<Overflow>) {
     let wobj = doc.get(w.obj);
     let wd = wobj.as_dict().cloned().unwrap_or_default();
     let (page_w, page_h) = ((w.rect[2] - w.rect[0]).max(1.0), (w.rect[3] - w.rect[1]).max(1.0));
     let place = placement(mk_rotation(doc, &wd), page_w, page_h);
     let (width, height) = (place.layout_w, place.layout_h);
     let da = parse_da(wd.get(b"DA").and_then(|o| doc.resolve(o).as_string().map(|s| s.to_text())).as_deref().unwrap_or(&f.da));
-    let text: String = if f.kind == FieldKind::Combo {
-        values.iter().map(|v| f.options.iter().find(|(e, _)| e == v).map_or(v.clone(), |(_, d)| d.clone())).collect::<Vec<_>>().join(", ")
-    } else {
-        values.first().cloned().unwrap_or_default()
-    };
-    let text = if f.has(flags::PASSWORD) { "*".repeat(text.chars().count()) } else { text };
+    let text = displayed_text(f, values, format);
     let can_show = |enc: &FontText| {
         if f.kind == FieldKind::List {
             f.options.iter().all(|(_, display)| enc.can_encode(display))
@@ -803,7 +809,7 @@ fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String]
         None => ("Helv".to_string(), helvetica(), FontText::WinAnsi),
     };
     let width_of = |text: &str, size: f64| {
-        if f.text_direction == pdfcraft_fonts::TextDirection::Auto {
+        if f.text_direction == pdfcraft_fonts::TextDirection::Auto || explicit_direction_issue(text).is_some() {
             enc.width(text, size)
         } else {
             // Mirroring can change a glyph's width; fit and align what is drawn.

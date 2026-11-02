@@ -5,7 +5,7 @@ use super::{Dict, Document, Field, FieldKind, FieldProps, FormError, MIN_FIELD_S
 
 /// Validate direction before renaming fields, changing actions or modifying lock flags.
 /// Text/choice fields accept the property; retained or requested non-Auto direction requires bounded values and refuses comb layout.
-/// Check final displayed values and replacement option labels for required shaping, honoring the effective password flag.
+/// Check the effective format, displayed value and final option labels through the appearance's display policy.
 fn validate_text_direction(f: &Field, props: &FieldProps) -> Result<(), FormError> {
     // Direction refusal must precede renaming, actions and lock mutations too.
     if props.text_direction.is_some() && !matches!(f.kind, FieldKind::Text | FieldKind::Combo | FieldKind::List) {
@@ -26,32 +26,31 @@ fn validate_text_direction(f: &Field, props: &FieldProps) -> Result<(), FormErro
         if f.kind == FieldKind::Text && flags & crate::flags::COMB != 0 {
             return invalid("explicit text direction is not supported for comb fields; disable comb or use automatic direction");
         }
-        if !(f.kind == FieldKind::Text && flags & crate::flags::PASSWORD != 0) {
-            let check = |text: &str| -> Result<(), FormError> {
-                match super::appearance::explicit_direction_issue(text) {
-                    Some(issue) => invalid(issue.to_string()),
-                    None => Ok(()),
-                }
-            };
-            if matches!(f.kind, FieldKind::Text | FieldKind::Combo) {
-                for value in &f.value {
-                    let shown = if f.kind == FieldKind::Combo && props.options.is_none() {
-                        f.options.iter().find(|(export, _)| export == value).map_or(value.as_str(), |(_, label)| label.as_str())
-                    } else {
-                        value.as_str()
-                    };
-                    check(shown)?;
-                }
+        let check = |text: &str| -> Result<(), FormError> {
+            match super::appearance::explicit_direction_issue(text) {
+                Some(issue) => invalid(issue.to_string()),
+                None => Ok(()),
             }
-            if matches!(f.kind, FieldKind::Combo | FieldKind::List) {
-                if let Some(options) = &props.options {
-                    for label in options {
-                        check(label)?;
-                    }
-                } else {
-                    for (_, label) in &f.options {
-                        check(label)?;
-                    }
+        };
+        if matches!(f.kind, FieldKind::Text | FieldKind::Combo) {
+            let mut proposed = f.clone();
+            proposed.flags = flags;
+            if let Some(format) = &props.format {
+                proposed.actions.format = format.clone();
+            }
+            if let Some(options) = &props.options {
+                proposed.options = options.iter().map(|label| (label.clone(), label.clone())).collect();
+            }
+            check(&super::appearance::displayed_text(&proposed, &proposed.value, true))?;
+        }
+        if matches!(f.kind, FieldKind::Combo | FieldKind::List) {
+            if let Some(options) = &props.options {
+                for label in options {
+                    check(label)?;
+                }
+            } else {
+                for (_, label) in &f.options {
+                    check(label)?;
                 }
             }
         }

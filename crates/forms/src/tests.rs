@@ -380,6 +380,129 @@ fn shaping_required_field_properties_are_refused_before_any_mutation() {
     assert_eq!(appearance::value_overflow(&doc, f, &f.widgets[0]), None);
 }
 
+/// Existing, simultaneous and retained-direction formats must refuse atomically before other edits.
+#[test]
+fn formatted_direction_properties_are_checked_atomically() {
+    use pdfcraft_fonts::TextDirection as D;
+    let money = af::Format::Number { decimals: 2, sep: 0, neg: 0, currency: "بت".into(), prepend: true };
+    for direction in [D::RightToLeft, D::LeftToRight] {
+        for scenario in 0..3 {
+            let mut doc = shaping_required_fixture();
+            set_value(&mut doc, "name", &FieldValue::Text("123".into())).unwrap();
+            if scenario == 0 {
+                set_props(&mut doc, "name", &FieldProps { format: Some(money.clone()), ..Default::default() }).unwrap();
+            } else if scenario == 2 {
+                set_props(&mut doc, "name", &FieldProps { text_direction: Some(direction), ..Default::default() }).unwrap();
+            }
+            let before = pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap();
+            let result = set_props(
+                &mut doc,
+                "name",
+                &FieldProps {
+                    name: Some("renamed".into()),
+                    locked: Some(true),
+                    text_direction: (scenario != 2).then_some(direction),
+                    format: (scenario != 0).then_some(money.clone()),
+                    ..Default::default()
+                },
+            );
+            assert!(result.is_err(), "unsupported formatted text was accepted: {direction:?}, scenario {scenario}");
+            assert!(result.unwrap_err().to_string().contains("shaping"));
+            assert_eq!(pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap(), before);
+        }
+    }
+}
+
+/// Masking, formatted choice labels, clearing a format and supported currency retain display/storage parity.
+#[test]
+fn formatted_direction_masks_labels_repairs_and_reopen() {
+    use pdfcraft_fonts::TextDirection as D;
+    let money = af::Format::Number { decimals: 2, sep: 0, neg: 0, currency: "بت".into(), prepend: true };
+    let mut doc = shaping_required_fixture();
+    set_value(&mut doc, "pin", &FieldValue::Text("123".into())).unwrap();
+    set_props(&mut doc, "pin", &FieldProps { format: Some(money.clone()), text_direction: Some(D::RightToLeft), ..Default::default() }).unwrap();
+    let all = fields(&doc);
+    let pin = field(&all, "pin");
+    assert_eq!(pin.value, ["123"]);
+    assert!(ap(&doc, &pin.widgets[0]).contains("(********) Tj"));
+    assert!(!ap(&doc, &pin.widgets[0]).contains("ActualText"));
+    let before = pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap();
+    assert!(set_props(&mut doc, "pin", &FieldProps { flags: vec![(flags::PASSWORD, false)], ..Default::default() }).is_err());
+    assert_eq!(pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap(), before);
+    set_props(&mut doc, "pin", &FieldProps { flags: vec![(flags::PASSWORD, false)], format: Some(af::Format::None), ..Default::default() }).unwrap();
+    assert!(ap(&doc, &field(&fields(&doc), "pin").widgets[0]).contains("(123) Tj"));
+
+    // Masking permits Arabic but must not bypass the displayed-row byte budget.
+    let huge =
+        af::Format::Number { decimals: 0, sep: 0, neg: 0, currency: "X".repeat(pdfcraft_fonts::text_direction::MAX_DIRECTION_BYTES), prepend: true };
+    let before = pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap();
+    let error =
+        set_props(&mut doc, "pin", &FieldProps { flags: vec![(flags::PASSWORD, true)], format: Some(huge), ..Default::default() }).unwrap_err();
+    assert!(error.to_string().contains("262144"), "{error}");
+    assert_eq!(pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap(), before);
+
+    // The current appearance formats first, then resolves a combo's resulting display label.
+    doc.update_dict(pdfcraft_cos::ObjRef::new(23, 0), |d| {
+        d.set(b"Opt".to_vec(), Object::Array(vec![Object::Array(vec![PdfString::text("بت123.00").into(), PdfString::text("Safe").into()])]));
+        d.set(b"V".to_vec(), PdfString::text("123"));
+    })
+    .unwrap();
+    set_props(&mut doc, "country", &FieldProps { format: Some(money.clone()), text_direction: Some(D::RightToLeft), ..Default::default() }).unwrap();
+    let all = fields(&doc);
+    let combo = field(&all, "country");
+    assert_eq!(combo.value, ["123"]);
+    assert!(ap(&doc, &combo.widgets[0]).contains("(Safe) Tj"));
+    let before = pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap();
+    assert!(set_props(&mut doc, "country", &FieldProps { options: Some(vec!["Safe".into()]), ..Default::default() }).is_err());
+    assert_eq!(pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap(), before);
+
+    // An imported unsupported format can be repaired without first switching back to Auto.
+    set_value(&mut doc, "name", &FieldValue::Text("123".into())).unwrap();
+    set_props(&mut doc, "name", &FieldProps { format: Some(money), ..Default::default() }).unwrap();
+    doc.update_dict(pdfcraft_cos::ObjRef::new(10, 0), |d| d.set(b"PCTextDirection".to_vec(), Object::name("RTL"))).unwrap();
+    let safe = af::Format::Number { decimals: 2, sep: 0, neg: 0, currency: "$".into(), prepend: true };
+    set_props(&mut doc, "name", &FieldProps { format: Some(safe.clone()), ..Default::default() }).unwrap();
+    let doc = reopen(&doc);
+    let all = fields(&doc);
+    let f = field(&all, "name");
+    assert_eq!(f.value, ["123"]);
+    assert_eq!(f.actions.format, safe);
+    assert_eq!(f.text_direction, D::RightToLeft);
+    assert_eq!(appearance::value_overflow(&doc, f, &f.widgets[0]), None);
+    assert!(ap(&doc, &f.widgets[0]).contains("123.00"));
+}
+
+/// A rejected shaping row measures its logical fallback, including unequal mirrored-glyph widths.
+#[test]
+fn shaping_fallback_measures_the_text_it_draws() {
+    use pdfcraft_fonts::TextDirection as D;
+    let mut baseline = shaping_required_fixture();
+    baseline
+        .update_dict(pdfcraft_cos::ObjRef::new(5, 0), |font| {
+            let mut widths = vec![Object::Int(500); 130];
+            widths[40] = Object::Int(100);
+            widths[41] = Object::Int(900);
+            font.set(b"FirstChar".to_vec(), Object::Int(0));
+            font.set(b"Widths".to_vec(), Object::Array(widths));
+        })
+        .unwrap();
+    set_value(&mut baseline, "name", &FieldValue::Text(String::new())).unwrap();
+    set_props(&mut baseline, "name", &FieldProps { quadding: Some(2), font_size: Some(10.0), ..Default::default() }).unwrap();
+    let mut directed = baseline.clone();
+    set_props(&mut directed, "name", &FieldProps { text_direction: Some(D::RightToLeft), ..Default::default() }).unwrap();
+    for doc in [&mut baseline, &mut directed] {
+        set_value(doc, "name", &FieldValue::Text("بت(".into())).unwrap();
+    }
+    let all = fields(&directed);
+    let f = field(&all, "name");
+    assert_eq!(appearance::value_overflow(&directed, f, &f.widgets[0]), Some(appearance::Overflow::DirectionUnsupported));
+    assert_eq!(
+        ap(&directed, &f.widgets[0]),
+        ap(&baseline, &field(&fields(&baseline), "name").widgets[0]),
+        "fallback alignment must use the logical opening parenthesis width"
+    );
+}
+
 /// Loaded list labels are checked on redraw, and safe replacement labels can repair an imported field.
 #[test]
 fn shaping_required_list_labels_warn_after_loaded_option_replacement() {

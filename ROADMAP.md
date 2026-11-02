@@ -1,19 +1,20 @@
 # PdfCraft roadmap
 
+> **Last reviewed:** 2026-11-02 | **Last updated:** 2026-11-02 | **Change:** patch (PR #5731: share formatted display preflight, measure logical shaping fallbacks, and unify extended Arabic font routing; bounded regressions; broader shaping and estimates unchanged)
 > **Last reviewed:** 2026-11-02 | **Last updated:** 2026-11-02 | **Change:** patch (PR #5731 review: warn when explicit-direction form appearances require unsupported shaping; validate final visible values and option labels before property edits; focused refusal/persistence regressions pass; broader shaping and estimates unchanged)
 > **Last reviewed:** 2026-11-02 | **Last updated:** 2026-11-02 | **Change:** patch (PR #5731: select one complete encoding for directional rows and retain automatic direction per bookmark paragraph; focused regressions pass; current-main integration; broader qualification and estimates unchanged)
-
+>
 > **Last reviewed:** 2026-11-02 | **Last updated:** 2026-11-02 | **Change:** minor (M7/M14 input candidate: eight native shell cases cover Arabic caret, selection, marks, multiline drafts and composition lifecycle; user-confirmed Windows typing observed; combined source-font/browser acceptance pending; estimates unchanged)
-
+>
 > **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** minor (M7/M6 candidate: explicit Auto/LTR/RTL controls with engine/tool/storage paths; targeted direction verification passed; complex Arabic forms and native/browser IME unqualified; estimates unchanged)
-
+>
 > **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M7, PR #2155 further review: inherited drawing/text state, affine image gestures, paste/selection ownership, no-op scripts and menu permissions; estimates unchanged)
-
+>
 > **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M7, PR #2155 latest comments: explicit image-paste events, mixed-size field refresh, and documented mixed-script normalization with Undo; estimates unchanged)
-
+>
 > **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M7, PR #2155 review follow-up: preserve image crop/tag/stream ownership, resize in page orientation, harden clipboard and text formatting, and reload installed fonts; estimates unchanged)
-
-
+>
+>
 > **Last reviewed:** 2026-11-01 · **Last updated:** 2026-11-01 · **Change:** patch (M7: PR #5623 review cleanup and source/test map; core qualification retained; native-reader and UI/input qualification remain open; estimates unchanged)
 > **Last reviewed:** 2026-10-31 | **Last updated:** 2026-10-31 | **Change:** patch (M2, PR #4172: GBK rasters compared with explicit Unicode and independently selected installed faces; wrong-glyph and wrong-family negative controls fail; estimates unchanged)
 > **Last reviewed:** 2026-10-31 | **Last updated:** 2026-10-31 | **Change:** patch (M2, PR #4172: integrate main fa5f9f8c; retain CJK viewer and upstream raster regressions, restore explicit display_config imports; estimates unchanged)
@@ -227,6 +228,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 | 8 | 1.0 polish: performance, right-to-left, missing languages, keyboard-only (M14) | 55–95 |
 
 ## Progress log
+
+- **2026-11-02 (M7, #5731 display/font review):** Property preflight shares effective native formatting, final choice labels and masking with appearance drawing; rejected shaping rows measure their logical fallback. Extended Arabic source/Add Text routing shares one detector and preserves explicit missing-glyph refusal. Complete embedded source-font priority and broader language qualification remain unchanged.
 
 - **2026-11-02 (M7, #5731 allocation review):** Reused one font tuple per styled text segment during plain-width measurement, removing per-character font-name copies without changing measured values or bidi ordering. Existing paragraph and subset-space checks pass; no new performance threshold or broader qualification is claimed.
 
