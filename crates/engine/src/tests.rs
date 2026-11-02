@@ -10384,3 +10384,39 @@ fn sync_failed_link_initialization_does_not_commit_effects() {
     assert_eq!(document.can_undo(), None);
     assert_eq!(*s.save_bytes(id).unwrap(), *bytes);
 }
+
+/// Characterize the published Link lifecycle, rather than silently change it: successful
+/// Doc/Open initialization is part of the explicitly activated, permission-checked transaction.
+#[test]
+fn link_open_guarded_initialization_joins_the_explicit_undo_transaction() {
+    let mut cos = pdfcraft_cos::Document::open(Arc::new(javascript_link_fixture())).unwrap();
+    pdfcraft_forms::add_field(&mut cos, 0, [110.0, 110.0, 200.0, 130.0], &pdfcraft_forms::NewField::Text { multiline: false }, Some("price"))
+        .unwrap();
+    pdfcraft_forms::set_value(&mut cos, "price", &FieldValue::Text("17".into())).unwrap();
+    pdfcraft_forms::set_document_script(
+        &mut cos,
+        "init",
+        Some("if(event.name==='Open')getField('price').value='0';function choose(){console.println(getField('price').value);}"),
+    )
+    .unwrap();
+    let bytes = Arc::new(pdfcraft_cos::write_incremental(&cos, &Default::default()).unwrap());
+    let mut s = Session::new();
+    let id = s.open("open-guard.pdf", None, bytes.clone(), None).unwrap();
+    let console = s.run_javascript(id, "console.println(getField('price').value)", None).unwrap();
+    assert_eq!(console.console, ["17"]);
+    assert!(!s.get(id).unwrap().dirty);
+    let input = s.prepare_link_javascript(id, 0, 0).unwrap();
+    let proposed = input.run();
+    assert_eq!(proposed.error, None);
+    assert_eq!(proposed.console, ["0"]);
+    assert_eq!(s.get(id).unwrap().form.iter().find(|f| f.name == "price").unwrap().value, ["17"]);
+    s.finish_link_javascript(&input, proposed).unwrap();
+    assert_eq!(s.get(id).unwrap().form.iter().find(|f| f.name == "price").unwrap().value, ["0"]);
+    assert!(s.get(id).unwrap().dirty);
+    s.undo(id).unwrap();
+    let restored = s.get(id).unwrap();
+    assert_eq!(restored.form.iter().find(|f| f.name == "price").unwrap().value, ["17"]);
+    assert!(!restored.dirty);
+    assert_eq!(restored.can_undo(), None);
+    assert_eq!(*s.save_bytes(id).unwrap(), *bytes);
+}

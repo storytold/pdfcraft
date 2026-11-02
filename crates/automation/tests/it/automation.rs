@@ -10672,3 +10672,25 @@ fn invalid_javascript_link_identifiers_report_allowed_values() {
     assert!(index.contains("page 1") && index.contains("link 2") && index.contains("link_list"), "{index}");
     assert_eq!(ok(&mut a, "doc_info", json!({"doc":id}))["document"]["dirty"], false);
 }
+
+#[test]
+fn javascript_link_menu_argument_errors_are_actionable_and_leave_the_document_unchanged() {
+    let dir = workdir("js-menu-argument-errors");
+    std::fs::write(dir.join("blank.pdf"), fixture(1)).unwrap();
+    let mut a = auto(&dir);
+    let id = ok(&mut a, "doc_open", json!({"path":"blank.pdf"}))["doc"].clone();
+    let before = ok(&mut a, "doc_info", json!({"doc":id}));
+    let errors: Vec<_> = [json!(vec![Value::Null; 33]), json!([null, false])]
+        .into_iter()
+        .map(|choices| a.call("link_run_javascript", &json!({"doc":id,"page":1,"index":1,"menu_choices":choices})).unwrap_err().to_string())
+        .collect();
+    assert_eq!(ok(&mut a, "doc_info", json!({"doc":id})), before);
+    assert!(
+        errors[0].contains("33")
+            && errors[0].contains("32")
+            && errors[1].contains("menu_choices[1]")
+            && errors[1].contains("string")
+            && errors[1].contains("null"),
+        "{errors:?}"
+    );
+}

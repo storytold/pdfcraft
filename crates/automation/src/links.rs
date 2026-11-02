@@ -256,11 +256,14 @@ impl Automation {
         let index = usize::try_from(a.int("index")?.checked_sub(1).filter(|n| *n >= 0).ok_or_else(|| bad("index must be positive"))?)
             .map_err(|e| bad(e.to_string()))?;
         let choices = match a.get("menu_choices") {
-            Some(value) => value.as_array().ok_or_else(|| bad("menu_choices must be an array"))?.clone(),
-            None => Vec::new(),
+            Some(value) => value.as_array().ok_or_else(|| bad("menu_choices must be an array"))?.as_slice(),
+            None => &[],
         };
-        if choices.len() > 32 || choices.iter().any(|v| !v.is_string() && !v.is_null()) {
-            return Err(bad("invalid menu_choices"));
+        if choices.len() > 32 {
+            return Err(bad(format!("menu_choices has {} items; at most 32 are allowed", choices.len())));
+        }
+        if let Some(index) = choices.iter().position(|v| !v.is_string() && !v.is_null()) {
+            return Err(bad(format!("menu_choices[{index}] must be a string or null")));
         }
         let source = self.doc(a)?;
         let page_number = a.int("page")?;
@@ -281,7 +284,7 @@ impl Automation {
                 match events.recv_timeout(std::time::Duration::from_secs(10)).map_err(|e| failed(format!("link JavaScript stopped waiting for the worker after up to 10 seconds per event: {e}; no result was applied, and abandoning the result does not terminate the worker")))? {
                     pdfcraft_engine::js::InteractiveEvent::Menu(items, reply) => {
                         if menus.len() >= 32 {
-                            return Err(failed("too many popup menus"));
+                            return Err(failed("the script opened more than 32 popup menus; no result was applied"));
                         }
                         let choice = choices.get(menus.len()).and_then(Value::as_str).map(str::to_string);
                         menus.push(menu_json(&items));

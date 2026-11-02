@@ -25,6 +25,12 @@ that context under `Doc/Open`; the action then runs under `Link/Mouse Up`, with 
 equal to the document, `event.targetName` empty, and `pageNum` initially the link's page.
 The link event does not use `event.rc` as a cancellation result.
 
+Initialization is part of the explicit Link transaction. If the whole action succeeds, its
+field changes and eligible requests are retained with the action's effects, subject to the same
+permissions, generation check and single Undo step. Fresh contexts rerun initialization on every
+activation, so an initializer guarded by `event.name === "Open"` can replace saved field values
+when a link is clicked.
+
 An initializer that is refused or throws stops the Link action; its edits and external requests
 are not committed. Ordinary field, button and console initialization retains upstream's separate
 policy: document-script errors are reported while later initializers and the requested script
