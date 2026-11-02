@@ -1,5 +1,7 @@
 use super::reader::find;
-use super::state::{LENGTHS, LoadGuard, Loaded, ObjStm, ObjectReader, ReadState, Slot, SourceIdentity, loaded_bytes, objstm_member};
+use super::state::{
+    LENGTHS, LoadGuard, Loaded, ObjStm, ObjectReader, ReadState, Slot, SourceIdentity, loaded_bytes, note_overlay_read, objstm_member, overlay_reads,
+};
 use super::xref::{Revision, XrefEntry};
 use super::{
     Arc, CosError, Cow, Dict, Document, Lexer, MAX_DECODED, MAX_JBIG2_GLOBALS, ObjRef, Object, Stream, is_whitespace, parse_indirect_shared,
@@ -383,10 +385,12 @@ impl Document {
     }
 
     pub fn try_get(&self, num: u32) -> Result<Arc<Object>, CosError> {
-        match self.overlay.get(&num) {
-            Some(Slot::Set(_, o)) => return Ok(o.clone()),
-            Some(Slot::Freed(_)) => return Ok(Arc::new(Object::Null)),
-            None => {}
+        if let Some(slot) = self.overlay.get(&num) {
+            note_overlay_read();
+            return Ok(match slot {
+                Slot::Set(_, o) => o.clone(),
+                Slot::Freed(_) => Arc::new(Object::Null),
+            });
         }
         if let Some(loaded) = self.cache.lock().map_err(|_| CosError::Poisoned)?.get(&num) {
             return loaded.clone();
@@ -395,10 +399,12 @@ impl Document {
         // cycles such as `6 0 obj << /Length 6 0 R >>`. Bound the nesting on every path.
         let _guard =
             LoadGuard::enter(num).ok_or_else(|| CosError::Syntax { offset: 0, detail: format!("reference cycle while loading object {num}") })?;
+        let edits_read = overlay_reads();
         let loaded = self.load(num, 0).map(Arc::new);
         // A failure is kept like an object, or every read of a damaged object searches the whole
-        // file again. A poisoned lock says nothing about the object.
-        if !matches!(loaded, Err(CosError::Poisoned)) {
+        // file again. A poisoned lock says nothing about the object. Clones share the cache, so
+        // a load that read this document's edits (an edited object stream or `/Length`) is not kept.
+        if overlay_reads() == edits_read && !matches!(loaded, Err(CosError::Poisoned)) {
             // The editing cache is bounded like the scan reader's: re-parsing a file-backed view
             // is cheap, and returned objects outlive eviction.
             self.cache.lock().map_err(|_| CosError::Poisoned)?.insert(num, loaded.clone());
@@ -540,6 +546,9 @@ impl Document {
             None | Some(XrefEntry::Free { .. }) => Ok(Object::Null),
             Some(XrefEntry::InFile { offset, .. }) => {
                 let resolve = |r: ObjRef| {
+                    if self.overlay.contains_key(&r.num) {
+                        note_overlay_read();
+                    }
                     if let Some(known) = LENGTHS.with(|m| m.borrow().get(&r.num).copied()) {
                         return known;
                     }
@@ -570,7 +579,9 @@ impl Document {
     }
 
     pub(super) fn objstm(&self, num: u32) -> Result<Arc<ObjStm>, CosError> {
-        if let Some(s) = self.objstms.lock().map_err(|_| CosError::Poisoned)?.get(&num) {
+        // An edited or freed stream is this document's alone: clones share the parsed streams.
+        let edited = self.overlay.contains_key(&num);
+        if !edited && let Some(s) = self.objstms.lock().map_err(|_| CosError::Poisoned)?.get(&num) {
             return Ok(s.clone());
         }
         // A file entry that cannot place the stream (one that says it is itself compressed
@@ -596,6 +607,9 @@ impl Document {
             index.push(objstm_member(onum, off, first, data.len()));
         }
         let stm = Arc::new(ObjStm { index, data: Arc::new(data) });
+        if edited {
+            return Ok(stm);
+        }
         // Same bound as the object cache: decoded object streams can be megabytes each.
         // Insert first so the retained `num` is actually in the map.
         self.objstms.lock().map_err(|_| CosError::Poisoned)?.insert(num, stm.clone());

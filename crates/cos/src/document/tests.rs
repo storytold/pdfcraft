@@ -613,6 +613,27 @@ fn an_unreadable_object_is_searched_for_once() {
     assert_eq!(edited.try_get(3).as_deref(), Ok(&Object::Null));
 }
 
+/// Clones share the cache, and an edit is one clone's alone: a member of an object stream that
+/// one clone freed or replaced still reads, in the others, from the file's stream.
+#[test]
+fn an_edited_object_stream_leaves_other_clones_members_alone() {
+    let file = Arc::new(object_stream_file("3 0 ", "<< /Hidden (yes) >>", 0));
+    let doc = Document::open(file.clone()).unwrap();
+    let mut freed = doc.clone();
+    freed.free(ObjRef::new(4, 0));
+    assert_eq!(freed.try_get(3), Err(CosError::MissingObject(4)));
+    assert_eq!(text_of(&doc, 3, b"Hidden").as_deref(), Some("yes"), "the free reached another clone");
+    let doc = Document::open(file).unwrap();
+    let mut replaced = doc.clone();
+    let mut dict = Dict::new();
+    dict.set(b"Type".to_vec(), Object::name("ObjStm"));
+    dict.set(b"N".to_vec(), Object::Int(1));
+    dict.set(b"First".to_vec(), Object::Int(4));
+    replaced.set(ObjRef::new(4, 0), crate::Stream::from_raw(dict, b"3 0 << /Hidden (no) >>".to_vec()));
+    assert_eq!(text_of(&replaced, 3, b"Hidden").as_deref(), Some("no"));
+    assert_eq!(text_of(&doc, 3, b"Hidden").as_deref(), Some("yes"), "the replacement reached another clone");
+}
+
 /// A classic table with `/Size` rows and object 0's free entry first, its subsection numbered
 /// `1 n` instead of `0 n` (#2676): every row is one number off.
 fn misnumbered_table(start: u32) -> Vec<u8> {

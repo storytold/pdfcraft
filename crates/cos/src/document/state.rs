@@ -8,6 +8,17 @@ thread_local! {
     /// retries a parse several ways, and each retry would resolve the same lengths again
     /// (exponential in the chain of streams whose lengths point at further streams).
     pub(super) static LENGTHS: std::cell::RefCell<HashMap<u32, Option<i64>>> = std::cell::RefCell::new(HashMap::new());
+    /// Unsaved edits read on this thread (`Document::try_get`, and a `/Length` in `Document::load`).
+    static OVERLAY_READS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Unsaved edits read so far on this thread: a load during which this changes depended on one.
+pub(super) fn overlay_reads() -> u64 {
+    OVERLAY_READS.with(std::cell::Cell::get)
+}
+
+pub(super) fn note_overlay_read() {
+    OVERLAY_READS.with(|c| c.set(c.get().wrapping_add(1)));
 }
 
 /// Marks an object as being loaded on this thread. Loading can re-enter (indirect stream
