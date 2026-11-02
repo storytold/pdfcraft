@@ -2802,6 +2802,38 @@ fn a_protected_file_named_twice_at_startup_asks_for_its_password_once() {
     std::fs::remove_file(other).unwrap();
 }
 
+/// `pdfcraft locked-a.pdf locked-b.pdf`: B's reply is ready while A's password is asked for.
+/// Once A's password is given, A's retry comes first: A opens (or asks again) before B's prompt
+/// can take the dialog. B's prompt used to replace A's retry, so A waited for B's answer.
+#[test]
+fn a_password_retry_finishes_before_the_next_protected_files_prompt() {
+    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let a = temp_path(&format!("startup-retry-a-{nonce}.pdf"));
+    let b = temp_path(&format!("startup-retry-b-{nonce}.pdf"));
+    std::fs::write(&a, protected("reader", "owner", -4)).unwrap();
+    std::fs::write(&b, protected("reader", "owner", -4)).unwrap();
+    let (a_path, b_path) = (a.to_str().unwrap().to_string(), b.to_str().unwrap().to_string());
+    let (first, second) = (a_path.clone(), b_path.clone());
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_path(&first);
+        app.open_path(&second);
+        app
+    });
+    h.run_steps(4);
+    // B is prepared in the background meanwhile; its reply waits behind A's prompt.
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    h.run_steps(2);
+    assert_eq!(h.state().password_prompt.as_ref().and_then(|p| p.path.clone()), Some(a_path.clone()));
+    h.state_mut().submit_password(Some("reader".into()));
+    support::wait_until(&mut h, "the next prompt", |app| app.password_prompt.is_some());
+    assert_eq!(open_paths(h.state()), vec![a_path], "A's retry finished first");
+    assert_eq!(h.state().password_prompt.as_ref().and_then(|p| p.path.clone()), Some(b_path));
+    std::fs::remove_file(a).unwrap();
+    std::fs::remove_file(b).unwrap();
+}
+
 /// `pdfcraft locked.pdf` followed by more files than the open worker queues at once: the files
 /// past its bound wait in order and open as it drains, instead of failing to open.
 #[test]

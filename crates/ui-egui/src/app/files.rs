@@ -1,5 +1,16 @@
 use super::*;
 
+/// Whether an open's reply asks for a password: the file is encrypted and none, or a wrong one,
+/// was given.
+#[cfg(not(target_arch = "wasm32"))]
+fn asks_for_password(kind: &open_worker::ResultKind) -> bool {
+    matches!(
+        kind,
+        open_worker::ResultKind::Prepared { result, .. }
+            if matches!(**result, Err(pdfcraft_render::OpenError::NeedsPassword | pdfcraft_render::OpenError::WrongPassword))
+    )
+}
+
 /// Whether `a` and `b` name the same file: equal, or equal once made absolute against the
 /// current directory (links are not resolved, as in `last_session`).
 pub(crate) fn same_file(a: &str, b: &str) -> bool {
@@ -118,6 +129,7 @@ impl PdfCraftApp {
             recovered: request.recovered,
             then: request.then,
             display_override: None,
+            ready: None,
         });
         Ok(token)
     }
@@ -138,9 +150,15 @@ impl PdfCraftApp {
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn poll_pending_opens(&mut self) {
         let pending_opens = std::mem::take(&mut self.pending_opens);
+        // A retry that is no longer waiting holds nothing back.
+        if let Some(token) = self.password_retry
+            && !pending_opens.iter().any(|pending| pending.token == token)
+        {
+            self.password_retry = None;
+        }
         let mut remaining = pending_opens.into_iter();
         let mut waiting = Vec::new();
-        while let Some(pending) = remaining.next() {
+        while let Some(mut pending) = remaining.next() {
             // A tool, password prompt or file picker belongs to the document just admitted.
             // Keep later replies queued so another open cannot change its recipient.
             if self.modal_open() || self.pickers.pending() {
@@ -148,14 +166,35 @@ impl PdfCraftApp {
                 waiting.extend(remaining);
                 break;
             }
-            match pending.receiver.try_recv() {
-                Ok(result) if result.token == pending.token => self.finish_pending_open(pending, result.kind),
-                Ok(_) => waiting.push(pending),
-                Err(std::sync::mpsc::TryRecvError::Empty) => waiting.push(pending),
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                    self.notify_fmt("Couldn't open {name}: the background worker stopped", &[("name", &pending.name)]);
-                }
+            let retry = self.password_retry == Some(pending.token);
+            let kind = match pending.ready.take() {
+                Some(kind) => kind,
+                None => match pending.receiver.try_recv() {
+                    Ok(result) if result.token == pending.token => result.kind,
+                    Ok(_) | Err(std::sync::mpsc::TryRecvError::Empty) => {
+                        waiting.push(pending);
+                        continue;
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        if retry {
+                            self.password_retry = None;
+                        }
+                        self.notify_fmt("Couldn't open {name}: the background worker stopped", &[("name", &pending.name)]);
+                        continue;
+                    }
+                },
+            };
+            // While a closed prompt's password is being tried, a later file that asks for its own
+            // password keeps its reply: its prompt would hide the retry's outcome. Others admit.
+            if !retry && self.password_retry.is_some() && asks_for_password(&kind) {
+                pending.ready = Some(kind);
+                waiting.push(pending);
+                continue;
             }
+            if retry {
+                self.password_retry = None;
+            }
+            self.finish_pending_open(pending, kind);
         }
         // A completion may schedule another open; preserve those requests as well as the
         // earlier waiting replies, without consuming a blocked receiver's result.
@@ -462,6 +501,9 @@ impl PdfCraftApp {
                 && let Some(pending) = self.pending_opens.iter_mut().find(|pending| pending.token == *token)
             {
                 pending.display_override = p.display_override;
+                // Replies behind it that ask for a password wait for its outcome
+                // (`poll_pending_opens`).
+                self.password_retry = Some(*token);
             }
             if let Err(error) = result {
                 let mut prompt = p;
@@ -618,6 +660,9 @@ impl PdfCraftApp {
         if let Some(deferred) = self.deferred_opens.iter_mut().find(|d| same_file(&d.path, path)) {
             if display_override.is_some() {
                 deferred.display_override = display_override;
+            }
+            if then.is_some() {
+                deferred.then = then;
             }
             return OpenOutcome::Pending;
         }

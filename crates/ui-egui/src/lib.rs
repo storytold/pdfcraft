@@ -247,6 +247,9 @@ struct PendingOpen {
     recovered: Option<RecoveryMeta>,
     then: Option<&'static str>,
     display_override: Option<(canvas::PageLayout, bool)>,
+    /// A reply taken from `receiver` and kept back for later (a password prompt waiting for an
+    /// earlier file's password retry).
+    ready: Option<open_worker::ResultKind>,
 }
 
 /// A file named while the worker's queue was full: submitted once it has room.
@@ -392,6 +395,10 @@ pub struct PdfCraftApp {
     /// Files waiting for room in the worker's bounded queue, in the order they were named.
     #[cfg(not(target_arch = "wasm32"))]
     deferred_opens: std::collections::VecDeque<DeferredOpen>,
+    /// The open retrying a closed password prompt's file with its password: replies behind it
+    /// wait for it.
+    #[cfg(not(target_arch = "wasm32"))]
+    password_retry: Option<u64>,
     #[cfg(not(target_arch = "wasm32"))]
     next_open_token: u64,
     /// Explicit CLI layout waits for flagged launch opens, never targeting restored tabs.
