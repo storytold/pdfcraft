@@ -1217,3 +1217,12 @@ fn date_languages_are_the_interface_languages() {
     let dates: Vec<(&str, &str)> = pdfcraft_engine::dates::DATE_LANGUAGES.iter().map(|l| (l.code, l.name)).collect();
     assert_eq!(dates, interface);
 }
+
+#[test]
+fn image_paste_and_home_notifications_are_translated() {
+    for language in Lang::all().filter(|l| *l != Lang::EN) {
+        for source in ["Search…", "Image pasted", "No image on clipboard to paste", "Pinned {tool} to Home", "Unpinned {tool} from Home"] {
+            assert!(language.catalog().plain(source).is_some(), "{}: {source}", language.code());
+        }
+    }
+}
