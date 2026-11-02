@@ -107,8 +107,9 @@ fn display(doc: &pdfcraft_cos::Document, f: &Field) -> i32 {
     }
 }
 
-/// A form field as scripts see it.
-pub fn field_state(doc: &pdfcraft_cos::Document, f: &Field) -> pdfcraft_js::FieldState {
+/// Snapshot a current form field using page geometry already read once for this runner.
+/// Values/appearances come from `doc` and `f`, never from the cached calculation plan.
+pub fn field_state(doc: &pdfcraft_cos::Document, f: &Field, geometry: &pdfcraft_js::DocInfo) -> pdfcraft_js::FieldState {
     let mut s = pdfcraft_js::FieldState::new(f.name.clone(), kind(f.kind), f.value.clone());
     s.default = f.default.clone();
     s.readonly = f.read_only();
@@ -150,9 +151,8 @@ pub fn field_state(doc: &pdfcraft_cos::Document, f: &Field) -> pdfcraft_js::Fiel
             .unwrap_or(0.0);
     if let Some(w) = f.widgets.first() {
         let page = w.page.unwrap_or(0);
-        let pages = pdfcraft_model::pages(doc);
-        s.page_rotation = pages.get(page).map_or(0, |p| p.rotation(doc));
-        s.page_crop = pdfcraft_organize::page_boxes(doc).ok().and_then(|b| b.get(page).copied()).map_or([0.0; 4], |b| b[1]);
+        s.page_rotation = geometry.page_rotations.get(page).copied().unwrap_or(0);
+        s.page_crop = geometry.page_boxes.get(page).map_or([0.0; 4], |boxes| boxes[1]);
         s.rect = Some(pdfcraft_js::rotate_rect(w.rect, s.page_crop, s.page_rotation));
         s.icon = doc
             .get(w.obj)
@@ -224,13 +224,40 @@ pub struct JsRunner {
     pub doc: pdfcraft_js::DocInfo,
     pub doc_scripts: Vec<String>,
     pub output: JsOutput,
+    /// Source/order cache for this edit only; each callback still snapshots current field values.
+    calculations: Option<Vec<(String, String)>>,
 }
 
 impl JsRunner {
+    /// Forget the per-edit calculation plan after a calculation source is changed.
+    pub(crate) fn invalidate_calculations(&mut self) {
+        self.calculations = None;
+    }
+
+    /// Refresh structural/document sources between batch children, retaining the realm,
+    /// accumulated output and the current viewer snapshot. Ordinary value edits reuse caches.
+    pub(crate) fn refresh_after_batch_edit(&mut self, cos: &pdfcraft_cos::Document, edit: &Edit) {
+        if matches!(edit, Edit::SetFieldValue { .. } | Edit::ResetForm { .. } | Edit::ApplyScriptChanges { .. } | Edit::Batch { .. }) {
+            return;
+        }
+        let mut current = Self::new(cos, &self.doc.file_name);
+        current.doc.zoom = self.doc.zoom;
+        current.doc.runtime_highlight = self.doc.runtime_highlight;
+        current.doc.page = self.doc.page;
+        self.doc = current.doc;
+        self.doc_scripts = current.doc_scripts;
+        self.calculations = None;
+    }
+
     /// A runner for `cos`: what scripts read about the document (pages, info, whether it is
     /// an XFA form) and its document-level scripts, read once.
     pub fn new(cos: &pdfcraft_cos::Document, file_name: &str) -> JsRunner {
         let xfa = pdfcraft_xfa::xfa_shape(cos).is_some();
+        #[cfg(test)]
+        SNAPSHOT_WORK.with(|c| {
+            let (g, p) = c.get();
+            c.set((g + 1, p));
+        });
         let pages = pdfcraft_model::pages(cos);
         let doc = pdfcraft_js::DocInfo {
             file_name: file_name.to_string(),
@@ -249,16 +276,27 @@ impl JsRunner {
         // Packets alone are not enough: static XFA and an unlaid-out shell keep their scripts.
         let xfa_active = xfa && pdfcraft_xfa::existing_layout(cos).is_some();
         let doc_scripts = if xfa_active { Vec::new() } else { pdfcraft_forms::document_scripts(cos) };
-        JsRunner { doc, doc_scripts, output: JsOutput::default(), runtime: Default::default() }
+        JsRunner { doc, doc_scripts, output: JsOutput::default(), runtime: Default::default(), calculations: None }
     }
 }
 
+/// Build the ordered calculation sources once, indexing first-name matches to avoid repeated linear field searches.
 fn calculation_scripts(cos: &pdfcraft_cos::Document, fields: &[Field]) -> Vec<(String, String)> {
+    #[cfg(test)]
+    SNAPSHOT_WORK.with(|c| {
+        let (g, p) = c.get();
+        c.set((g, p + 1));
+    });
+    // Preserve the first duplicate name as the old linear search did for malformed forms.
+    let mut by_name = std::collections::HashMap::with_capacity(fields.len());
+    for field in fields {
+        by_name.entry(field.name.as_str()).or_insert(field);
+    }
     pdfcraft_forms::calculation_order(cos, fields)
         .fields
         .iter()
         .filter_map(|ordered| {
-            let field = fields.iter().find(|f| f.name == ordered.name)?;
+            let field = by_name.get(ordered.name.as_str())?;
             let script = field.actions.scripts.calculate.clone().or_else(|| {
                 let source = pdfcraft_forms::af::calculate_js(&field.actions.calculate)?;
                 Some(match &field.actions.calculate {
@@ -286,10 +324,10 @@ impl Scripts for JsRunner {
     /// Run field `target`'s script for `event` over the form's fields, keeping what it showed and
     /// asked for; a refusal carries its last message.
     fn run(&mut self, event: FieldEvent, script: &str, target: &Field, value: &str, fields: &[Field], doc: &pdfcraft_cos::Document) -> ScriptResult {
-        let states: Vec<_> = fields.iter().map(|f| field_state(doc, f)).collect();
+        let states: Vec<_> = fields.iter().map(|f| field_state(doc, f, &self.doc)).collect();
         let states = std::sync::Arc::new(states);
         let ev = pdfcraft_js::Event::field(event.name(), &target.name, value);
-        let calculations = calculation_scripts(doc, fields);
+        let calculations = self.calculations.get_or_insert_with(|| calculation_scripts(doc, fields)).clone();
         let o = match self.runtime.lock() {
             Ok(mut runtime) => runtime.run(
                 pdfcraft_js::session::Job {
@@ -367,6 +405,7 @@ impl Session {
         self.run_javascript_answers(id, script, target, &[])
     }
 
+    /// Run a button/console event with ordered headless prompt answers and commit field changes as one undo step.
     pub fn run_javascript_answers(
         &mut self,
         id: DocId,
@@ -401,7 +440,7 @@ impl Session {
         runner.doc.runtime_highlight = doc.js_highlight;
         runner.doc.page = doc.js_page;
         let fields = pdfcraft_forms::fields(&cos);
-        let states = std::sync::Arc::new(fields.iter().map(|f| field_state(&cos, f)).collect::<Vec<_>>());
+        let states = std::sync::Arc::new(fields.iter().map(|f| field_state(&cos, f, &runner.doc)).collect::<Vec<_>>());
         let event = match target {
             Some(t) => pdfcraft_js::Event { will_commit: false, ..pdfcraft_js::Event::field("Mouse Up", t, "") },
             None => pdfcraft_js::Event::doc("Console"),
@@ -422,6 +461,7 @@ impl Session {
         self.apply_script_outcome(id, &states, o)
     }
 
+    /// Convert the worker snapshot delta and reset requests into permission-checked atomic document edits.
     fn apply_script_outcome(&mut self, id: DocId, states: &[pdfcraft_js::FieldState], mut o: Outcome) -> Result<Outcome, EditError> {
         let changes = changes(states, &o.changed);
         let resets: Vec<Vec<String>> = o
@@ -687,6 +727,7 @@ mod caption_tests {
     use super::*;
 
     #[test]
+    /// A setter matching widget zero still updates other widgets whose normal captions differ.
     fn setting_the_first_widgets_caption_still_emits_a_field_wide_change() {
         let mut button = pdfcraft_js::FieldState::new("go", pdfcraft_js::FieldType::Button, vec![]);
         button.caption = Some("First".into());
@@ -716,9 +757,11 @@ pub struct PendingScript {
 }
 #[cfg(not(target_arch = "wasm32"))]
 impl Session {
+    /// Check document identity/generation and the JavaScript preference before accepting a worker completion.
     pub fn script_pending_current(&self, p: &PendingScript) -> bool {
         !self.js_off && self.get(p.id).is_some_and(|d| d.generation == p.generation)
     }
+    /// Capture the current fields/view and start a native script without blocking the caller on its prompts.
     pub fn start_javascript(&mut self, id: DocId, script: &str, target: Option<&str>) -> Result<PendingScript, EditError> {
         if self.js_off {
             return Err(EditError::Invalid("JavaScript is disabled".into()));
@@ -730,7 +773,7 @@ impl Session {
         runner.doc.runtime_highlight = doc.js_highlight;
         runner.doc.page = doc.js_page;
         let fields = pdfcraft_forms::fields(cos);
-        let states = std::sync::Arc::new(fields.iter().map(|f| field_state(cos, f)).collect::<Vec<_>>());
+        let states = std::sync::Arc::new(fields.iter().map(|f| field_state(cos, f, &runner.doc)).collect::<Vec<_>>());
         let job = pdfcraft_js::session::Job {
             script: script.into(),
             event: target.map_or_else(|| pdfcraft_js::Event::doc("Console"), |t| pdfcraft_js::Event::field("Mouse Up", t, "")),
@@ -743,6 +786,7 @@ impl Session {
             doc.js_runtime.lock().map_err(|_| EditError::Invalid("script runtime unavailable".into()))?.start(job).map_err(EditError::Invalid)?;
         Ok(PendingScript { id, generation: doc.generation, states, receiver })
     }
+    /// Apply a current worker result, or discard it and reset the realm when the document changed.
     pub fn finish_javascript(&mut self, p: PendingScript, out: Outcome) -> Result<Outcome, EditError> {
         if !self.script_pending_current(&p) {
             if let Some(doc) = self.docs.iter_mut().find(|d| d.id == p.id) {
@@ -755,6 +799,7 @@ impl Session {
 }
 pub use pdfcraft_js::interaction::{InteractiveEvent, MenuItem, Prompt};
 impl Session {
+    /// Supply current viewer state for script getters, clamping invalid zoom to the supported range.
     pub fn set_javascript_view(&mut self, id: DocId, zoom: f64, highlight: bool, page: usize) {
         if let Some(doc) = self.docs.iter_mut().find(|d| d.id == id) {
             doc.js_zoom = if zoom.is_finite() { zoom.clamp(1.0, 6400.0) } else { 100.0 };
@@ -765,9 +810,147 @@ impl Session {
 }
 
 impl Session {
+    /// Release this document runtime after cancellation or lifecycle changes; the next event initializes anew.
     pub fn invalidate_javascript(&mut self, id: DocId) {
         if let Some(doc) = self.docs.iter_mut().find(|d| d.id == id) {
             doc.js_runtime = Default::default();
         }
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Page-tree snapshots and calculation-plan builds performed on this test thread.
+    static SNAPSHOT_WORK: std::cell::Cell<(usize,usize)> = const { std::cell::Cell::new((0,0)) };
+}
+
+#[cfg(test)]
+mod snapshot_review_tests {
+    use super::*;
+
+    /// Real page/info edits and completed Save As refresh metadata without losing script state.
+    #[test]
+    fn retained_document_metadata_tracks_edits_undo_and_save_as() {
+        let mut session = Session::new();
+        let bytes = session.create_blank(200.0, 300.0, 1).unwrap();
+        let id = session.open("before.pdf", None, bytes, None).unwrap();
+        assert_eq!(session.run_javascript(id, "var retained=41;numPages;", None).unwrap().result.as_deref(), Some("1"));
+        session.apply(id, Edit::InsertBlankPage { at: 1, width: 200.0, height: 300.0 }).unwrap();
+        session.apply(id, Edit::SetInfo { key: "Title".into(), value: "After".into() }).unwrap();
+        let out = session.run_javascript(id, "[numPages,info.title,retained].join('/');", None).unwrap();
+        assert_eq!(out.result.as_deref(), Some("2/After/41"));
+        session.undo(id).unwrap();
+        assert_eq!(session.run_javascript(id, "typeof info.title;", None).unwrap().result.as_deref(), Some("undefined"));
+        session.redo(id).unwrap();
+        let saved = session.save_bytes(id).unwrap();
+        session.mark_saved(id, saved, Some("after.pdf".into())).unwrap();
+        assert_eq!(
+            session.run_javascript(id, "[documentFileName,numPages,info.title,retained].join('/');", None).unwrap().result.as_deref(),
+            Some("after.pdf/2/After/41")
+        );
+        session.apply(id, Edit::DeletePages { pages: vec![1] }).unwrap();
+        assert_eq!(session.run_javascript(id, "[numPages,retained].join('/');", None).unwrap().result.as_deref(), Some("1/41"));
+        session.undo(id).unwrap();
+        assert_eq!(session.run_javascript(id, "numPages;", None).unwrap().result.as_deref(), Some("2"));
+        session.redo(id).unwrap();
+        assert_eq!(session.run_javascript(id, "numPages;", None).unwrap().result.as_deref(), Some("1"));
+    }
+
+    /// A batch child that changes page structure or calculation sources invalidates cached plans.
+    #[test]
+    fn batch_children_refresh_geometry_metadata_and_calculation_sources() {
+        let mut session = Session::new();
+        let bytes = session.create_blank(200.0, 300.0, 1).unwrap();
+        let id = session.open("batch.pdf", None, bytes, None).unwrap();
+        for (i, name) in ["input", "total", "seen"].into_iter().enumerate() {
+            session
+                .apply(
+                    id,
+                    Edit::AddField {
+                        page: 0,
+                        rect: [20.0, 20.0 + i as f64 * 40.0, 120.0, 40.0 + i as f64 * 40.0],
+                        kind: crate::NewField::Text { multiline: false },
+                        name: Some(name.into()),
+                    },
+                )
+                .unwrap();
+        }
+        session.apply(id, Edit::SetFieldValue { name: "input".into(), value: crate::FieldValue::Text("2".into()) }).unwrap();
+        session
+            .apply(
+                id,
+                Edit::SetFieldScript {
+                    name: "total".into(),
+                    event: "calculate".into(),
+                    script: Some("event.value=Number(getField('input').value)+1;".into()),
+                },
+            )
+            .unwrap();
+        session
+            .apply(
+                id,
+                Edit::SetFieldScript {
+                    name: "input".into(),
+                    event: "validate".into(),
+                    script: Some("calculateNow();getField('seen').value=numPages+'/'+getField('total').value;".into()),
+                },
+            )
+            .unwrap();
+        session
+            .apply(
+                id,
+                Edit::Batch {
+                    label: "Structural batch".into(),
+                    edits: vec![
+                        Edit::SetFieldValue { name: "input".into(), value: crate::FieldValue::Text("3".into()) },
+                        Edit::InsertBlankPage { at: 1, width: 200.0, height: 300.0 },
+                        Edit::SetFieldScript {
+                            name: "total".into(),
+                            event: "calculate".into(),
+                            script: Some("event.value=Number(getField('input').value)+10;".into()),
+                        },
+                        Edit::SetFieldValue { name: "input".into(), value: crate::FieldValue::Text("4".into()) },
+                    ],
+                },
+            )
+            .unwrap();
+        let out = session.run_javascript(id, "getField('seen').value;", None).unwrap();
+        assert_eq!(out.error, None);
+        assert_eq!(out.result.as_deref(), Some("2/13"));
+    }
+
+    /// Operation counts, rather than wall time, pin the absence of per-field tree/plan walks.
+    #[test]
+    fn field_events_reuse_page_geometry_and_calculation_plans() {
+        let mut session = Session::new();
+        let bytes = session.create_blank(600.0, 800.0, 4).unwrap();
+        let id = session.open("synthetic.pdf", None, bytes, None).unwrap();
+        for i in 0..12 {
+            session
+                .apply(
+                    id,
+                    Edit::AddField {
+                        page: i % 4,
+                        rect: [20.0, 20.0, 100.0, 40.0],
+                        kind: crate::NewField::Text { multiline: false },
+                        name: Some(format!("f{i}")),
+                    },
+                )
+                .unwrap();
+        }
+        let cos = &session.get(id).unwrap().editor.as_ref().unwrap().cos;
+        let mut fields = pdfcraft_forms::fields(cos);
+        fields[1].actions.scripts.calculate = Some("event.value=Number(getField('f0').value)+1;".into());
+        SNAPSHOT_WORK.with(|c| c.set((0, 0)));
+        let mut runner = JsRunner::new(cos, "synthetic.pdf");
+        for i in 0..8 {
+            fields[0].value = vec![i.to_string()];
+            let out = runner.run(FieldEvent::Calculate, "calculateNow();event.value=getField('f1').value;", &fields[1], "", &fields, cos);
+            assert_eq!(out.value, (i + 1).to_string());
+            assert!(runner.output.errors.is_empty(), "{:?}", runner.output.errors);
+        }
+        let work = SNAPSHOT_WORK.with(std::cell::Cell::get);
+        eprintln!("geometry snapshots={}, calculation plan builds={}", work.0, work.1);
+        assert_eq!(work, (1, 1), "one geometry snapshot and one calculation plan per runner");
     }
 }

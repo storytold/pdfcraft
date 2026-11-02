@@ -314,14 +314,12 @@ fn color_object(ctx: &mut Context) -> JsObject {
 /// The XFA version scripts see as `xfa_version`.
 const XFA_VERSION: f64 = 3.5;
 
-/// Defines the form object model's globals: the document's functions (`getField`, `resetForm`,
-/// `print`, `submitForm` and others) and properties (`numFields`, `pageNum`, `numPages`,
-/// `documentFileName`, `info`, the XFA version), and the `app`, `util`, `console`, `display` and
-/// `color` objects.
+/// Read the current zoom percentage, defaulting unset snapshots to actual size.
 fn zoom_get(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let z = host(ctx)?.borrow().doc.zoom;
     Ok(JsValue::from(if z > 0.0 { z } else { 100.0 }))
 }
+/// Validate the requested percentage, update its live value and queue a native viewer zoom request.
 fn zoom_set(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let z = arg(args, 0).to_number(ctx)?;
     if !z.is_finite() || !(1.0..=6400.0).contains(&z) {
@@ -331,15 +329,38 @@ fn zoom_set(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValu
     host(ctx)?.borrow_mut().request(Request::Zoom(z));
     Ok(JsValue::undefined())
 }
+/// Read the current field-highlighting preference supplied by the viewer for this event.
 fn highlight_get(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     Ok(JsValue::from(host(ctx)?.borrow().doc.runtime_highlight))
 }
+/// Update the host preference and queue a viewer highlighting request without editing PDF content.
 fn highlight_set(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let h = arg(args, 0).to_boolean();
     host(ctx)?.borrow_mut().doc.runtime_highlight = h;
     host(ctx)?.borrow_mut().request(Request::Highlight(h));
     Ok(JsValue::undefined())
 }
+/// Read the current page count after page insertion/deletion without resetting script globals.
+fn num_pages_get(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    Ok(JsValue::from(host(ctx)?.borrow().doc.num_pages as f64))
+}
+
+/// Read the current file name, including a completed Save As in this retained realm.
+fn document_file_name_get(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    Ok(s(&host(ctx)?.borrow().doc.file_name))
+}
+
+/// Build the information object from the current snapshot, omitting metadata removed by edits.
+fn document_info_get(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    let info = host(ctx)?.borrow().doc.info.clone();
+    let mut object = ObjectInitializer::new(ctx);
+    for (key, value) in info {
+        object.property(JsString::from(key.as_str()), s(&value), Attribute::all());
+    }
+    Ok(object.build().into())
+}
+
+/// Install the host API once; live document properties continue reading each job's snapshot.
 pub(crate) fn install(ctx: &mut Context) -> JsResult<()> {
     let globals: [(&str, usize, NativeFunction); 11] = [
         ("getField", 1, NativeFunction::from_fn_ptr(get_field)),
@@ -378,21 +399,18 @@ pub(crate) fn install(ctx: &mut Context) -> JsResult<()> {
     let nf = function(ctx, NativeFunction::from_fn_ptr(num_fields));
     let pg = function(ctx, NativeFunction::from_fn_ptr(page_num_get));
     let ps = function(ctx, NativeFunction::from_fn_ptr(page_num_set));
-    let (file, pages, info, xfa) = {
-        let h = host(ctx)?.borrow();
-        (h.doc.file_name.clone(), h.doc.num_pages, h.doc.info.clone(), h.doc.xfa)
-    };
-    let mut io = ObjectInitializer::new(ctx);
-    for (k, v) in &info {
-        io.property(JsString::from(k.as_str()), s(v), Attribute::all());
-    }
-    let info = io.build();
+    let xfa = host(ctx)?.borrow().doc.xfa;
     use boa_engine::property::PropertyDescriptor;
     global.define_property_or_throw(js_string!("numFields"), PropertyDescriptor::builder().get(nf).configurable(true), ctx)?;
     global.define_property_or_throw(js_string!("pageNum"), PropertyDescriptor::builder().get(pg).set(ps).configurable(true), ctx)?;
-    ctx.register_global_property(js_string!("numPages"), JsValue::from(pages as f64), rw)?;
-    ctx.register_global_property(js_string!("documentFileName"), s(&file), rw)?;
-    ctx.register_global_property(js_string!("info"), info, rw)?;
+    for (name, getter) in [
+        ("numPages", num_pages_get as fn(&JsValue, &[JsValue], &mut Context) -> JsResult<JsValue>),
+        ("documentFileName", document_file_name_get),
+        ("info", document_info_get),
+    ] {
+        let getter = function(ctx, NativeFunction::from_fn_ptr(getter));
+        global.define_property_or_throw(JsString::from(name), PropertyDescriptor::builder().get(getter).configurable(true), ctx)?;
+    }
     // XFA forms check both before they run: every document sees the XFA version, and only an
     // XFA form sees `xfa_installed`.
     ctx.register_global_property(js_string!("xfa_version"), JsValue::from(XFA_VERSION), rw)?;

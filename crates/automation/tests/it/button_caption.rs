@@ -12,6 +12,7 @@ fn tool(a: &mut Automation, name: &str, args: Value) -> Value {
 }
 
 #[test]
+/// Changing an existing caption regenerates the saved appearance and preserves form values.
 fn button_caption_can_be_changed_after_creation() {
     let dir = std::env::temp_dir().join(format!("pdfcraft-button-caption-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();

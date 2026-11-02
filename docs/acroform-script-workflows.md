@@ -7,7 +7,8 @@ document, employee, signature image or real PIN.
 ## Runtime and lifecycle
 
 Each open document owns a `ScriptSession`. On native targets its Boa context lives on one
-worker thread. Document scripts initialize once with `Doc/Open`, before the requested event;
+worker thread with a dedicated 64 MiB stack reservation (the transient stateless runner retains
+its separate stack policy). Document scripts initialize once with `Doc/Open`, before the requested event;
 button, console, format, validate and calculate scripts then share that context. Field objects
 read the latest snapshot supplied by the engine, including objects retained by earlier scripts.
 The first 4,096 field objects are cached by name. Separate documents cannot share globals or
@@ -17,13 +18,23 @@ Changing the document-script sources recreates the context. Closing, reopening, 
 Revert and disabling JavaScript release/reset the context. PDF Undo/Redo restores PDF state;
 it does not serialize or rewind arbitrary JavaScript variables. Globals are not saved into the
 PDF. A worker fault resets its context; the existing cooperative source/loop/recursion bounds
-remain in force. These bounds do not establish a hard JavaScript heap quota.
+remain in force. The source preflight additionally caps arrow functions at 256 and right-associative
+assignment/exponentiation tokens at 4,096 per source; keyword unary/new chains share the prefix
+depth bound of 64. These conservative limits protect recursive parser/compiler paths before
+execution on the smaller worker stack. Boundary and refusal cases run in subprocess regressions.
+These bounds do not establish a hard JavaScript heap quota.
 
 `calculateNow()` evaluates the current calculation list synchronously, in `/CO` order, using
 pending writes. Later statements in the same invocation see the new values. The caller's
 event is restored after calculation, including failure. Reentrancy is capped at eight levels.
 Field writes and their dependent recalculation use the existing single undo transaction.
 Pure caption, geometry, style and visibility updates do not run the calculation chain.
+Page geometry is read once per edit runner. Calculation sources/order are analyzed once on its
+first callback and reused; field values and appearance properties still refresh on every callback.
+Structural/document changes between batch children refresh the snapshot, and editing a field's
+calculation script or calculation order invalidates the cached plan before recalculating.
+`numPages`, `documentFileName` and `info` read the current event snapshot, including page/info edits,
+Undo/Redo and completed Save As, without reinitializing script globals.
 
 ## Fields, appearances and icons
 

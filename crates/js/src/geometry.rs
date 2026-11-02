@@ -1,4 +1,5 @@
 //! Conversion between PDF default user space and Acrobat's widget rectangle convention.
+/// Convert a PDF rectangle to rotated user-space order around the effective crop-box origin.
 pub fn rotate_rect([x0, y0, x1, y1]: [f64; 4], [cx0, cy0, cx1, cy1]: [f64; 4], rotation: i64) -> [f64; 4] {
     match rotation.rem_euclid(360) {
         90 => [y0 - cy0, cx1 - x0, y1 - cy0, cx1 - x1],
@@ -7,6 +8,7 @@ pub fn rotate_rect([x0, y0, x1, y1]: [f64; 4], [cx0, cy0, cx1, cy1]: [f64; 4], r
         _ => [x0, y1, x1, y0],
     }
 }
+/// Map a script rectangle back to default PDF user space using the inverse page rotation.
 pub fn unrotate_rect([l, t, r, b]: [f64; 4], [cx0, cy0, cx1, cy1]: [f64; 4], rotation: i64) -> [f64; 4] {
     match rotation.rem_euclid(360) {
         90 => [cx1 - t, cy0 + l, cx1 - b, cy0 + r],
@@ -20,6 +22,7 @@ pub fn unrotate_rect([l, t, r, b]: [f64; 4], [cx0, cy0, cx1, cy1]: [f64; 4], rot
 mod tests {
     use super::*;
     #[test]
+    /// All quarter-turn rotations round-trip rectangle coordinates with a nonzero crop origin.
     fn rotated_widget_rectangles_roundtrip_with_shifted_crop_boxes() {
         let rect = [30.0, 50.0, 90.0, 100.0];
         let crop = [20.0, 40.0, 620.0, 840.0];

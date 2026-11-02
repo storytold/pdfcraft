@@ -69,6 +69,7 @@ pub struct FieldState {
 }
 
 impl FieldState {
+    /// Construct a field snapshot with explicit defaults for optional appearance and interaction state.
     pub fn new(name: impl Into<String>, kind: FieldType, value: Vec<String>) -> FieldState {
         FieldState {
             name: name.into(),

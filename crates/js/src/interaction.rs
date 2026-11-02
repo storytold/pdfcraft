@@ -22,13 +22,16 @@ pub enum InteractiveEvent {
     Complete(Outcome),
 }
 thread_local! { static HOST:RefCell<Option<(Sender<InteractiveEvent>,usize)>>=const {RefCell::new(None)}; }
+/// Tell alert/menu helpers whether this worker has an interactive or deterministic reply channel.
 pub(crate) fn has_host() -> bool {
     HOST.with(|h| h.borrow().is_some())
 }
 #[cfg(not(target_arch = "wasm32"))]
+/// Install or clear the worker-local prompt channel and reset the per-invocation prompt budget.
 pub(crate) fn set_host(host: Option<Sender<InteractiveEvent>>) {
     HOST.with(|h| *h.borrow_mut() = host.map(|h| (h, 0)));
 }
+/// Send a bounded prompt and await its reply, treating disconnect/timeout as cancellation.
 pub(crate) fn ask(prompt: Prompt) -> JsResult<Option<String>> {
     let sender = HOST.with(|h| {
         let mut h = h.borrow_mut();
@@ -48,6 +51,7 @@ pub(crate) fn ask(prompt: Prompt) -> JsResult<Option<String>> {
     }
     Ok(answer)
 }
+/// Parse one menu subtree with shared entry/depth/string budgets before exposing it to a host.
 fn read_menu(value: &JsValue, ctx: &mut Context, depth: usize, remaining: &mut usize) -> JsResult<MenuItem> {
     if depth > 16 || *remaining == 0 {
         return Err(error("popup menu exceeds its size or depth limit"));
@@ -83,9 +87,11 @@ fn read_menu(value: &JsValue, ctx: &mut Context, depth: usize, remaining: &mut u
     Ok(MenuItem { name, value, enabled: enabled.is_undefined() || enabled.to_boolean(), marked, children })
 }
 
+/// Accept only a matching enabled leaf whose ancestors are also enabled, excluding separators.
 fn allowed(items: &[MenuItem], value: &str) -> bool {
     items.iter().any(|i| i.enabled && i.name != "-" && if i.children.is_empty() { i.value == value } else { allowed(&i.children, value) })
 }
+/// Parse and display a bounded popup, returning null on cancel and refusing invalid host choices.
 pub(crate) fn popup_menu(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let mut remaining = 1024;
     let mut items = Vec::new();
@@ -98,6 +104,7 @@ pub(crate) fn popup_menu(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> Js
         None => Ok(JsValue::null()),
     }
 }
+/// Read named or positional input parameters and return bounded text or null on cancellation.
 pub(crate) fn response(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let a = arg(args, 0);
     let (question, title, default, password, label) = if let Some(o) = a.as_object() {

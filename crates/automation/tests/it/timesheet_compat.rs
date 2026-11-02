@@ -5,12 +5,14 @@ use pdfcraft_engine::{Edit, NewField, Session};
 use serde_json::{Value, json};
 use std::sync::Arc;
 
+/// Dispatch a synthetic automation step and fail with the returned tool error on refusal.
 fn call(a: &mut Automation, name: &str, args: Value) -> Value {
     match a.call(name, &args).unwrap().remove(0) {
         Content::Json(v) => v,
         _ => panic!("expected JSON"),
     }
 }
+/// Construct a synthetic form and transparent Form XObject without private files or font assets.
 fn fixture() -> Vec<u8> {
     let mut session = Session::new();
     let bytes = session.create_blank(600.0, 800.0, 1).unwrap();
@@ -56,6 +58,7 @@ function selectTime(){var v=app.popUpMenuEx({cName:'Unavailable',cReturn:'bad',b
 "#;
 
 #[test]
+/// Exercise retained keypad state, geometry, synchronous calculation and transparent icons through save/reopen and Undo/Redo.
 fn timesheet_keypad_geometry_icons_calculation_and_persistence() {
     let dir = std::env::temp_dir().join(format!("pdfcraft-timesheet-compat-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -128,6 +131,7 @@ fn timesheet_keypad_geometry_icons_calculation_and_persistence() {
 }
 
 #[test]
+/// Resume one invocation across popup/text prompts and reject disabled or invented choices.
 fn popup_and_manual_response_resume_the_same_script_and_validate_choices() {
     let dir = std::env::temp_dir().join(format!("pdfcraft-timesheet-menu-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();

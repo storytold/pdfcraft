@@ -17,6 +17,7 @@ pub(crate) struct Pending {
     page: usize,
     serial: u32,
 }
+/// Draw the bounded menu tree and return only the selected enabled leaf value.
 fn menu(ui: &mut egui::Ui, items: &[MenuItem], answer: &mut Option<String>) {
     for item in items {
         if item.name == "-" {
@@ -35,6 +36,7 @@ fn menu(ui: &mut egui::Ui, items: &[MenuItem], answer: &mut Option<String>) {
     }
 }
 impl PdfCraftApp {
+    /// Start one explicit button interaction with captured document/view state and leave egui responsive.
     pub(crate) fn start_ui_script(&mut self, id: DocId, script: &str, field: Option<&str>) {
         if self.script_pending.is_some() {
             return;
@@ -50,6 +52,7 @@ impl PdfCraftApp {
             Err(e) => self.notify(e.to_string()),
         }
     }
+    /// Receive worker prompts/results and invalidate stale or timed-out interactions before applying their edits.
     pub(crate) fn poll_script_dialog(&mut self, ctx: &egui::Context) {
         let Some(mut pending) = self.script_pending.take() else { return };
         let current = self.active_ids().is_some_and(|(_, id)| id == pending.run.id)
@@ -109,6 +112,7 @@ impl PdfCraftApp {
         ctx.request_repaint_after(Duration::from_millis(16));
         self.script_pending = Some(pending);
     }
+    /// Display the current typed prompt and send one answer/cancellation without replaying script side effects.
     pub(crate) fn show_script_dialog(&mut self, ctx: &egui::Context) {
         let Some(pending) = self.script_pending.as_mut() else { return };
         let Some((prompt, _)) = pending.prompt.as_ref() else { return };

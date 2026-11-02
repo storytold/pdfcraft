@@ -222,6 +222,7 @@ fn prepare_a_form_detects_fields_on_a_paper_form() {
     assert_eq!(app.toast.clone().unwrap().0, "Detected 2 form fields");
 }
 
+/// Advance bounded UI frames until the synthetic prompt label becomes available.
 fn wait_for(h: &mut Harness<'static, PdfCraftApp>, label: &str) {
     for _ in 0..300 {
         h.run_steps(1);
@@ -232,6 +233,7 @@ fn wait_for(h: &mut Harness<'static, PdfCraftApp>, label: &str) {
     }
     panic!("script dialog did not show {label}");
 }
+/// Advance bounded UI frames until the worker completion updates the expected synthetic field value.
 fn wait_value(h: &mut Harness<'static, PdfCraftApp>, name: &str, expected: &str) {
     for _ in 0..300 {
         h.run_steps(1);
@@ -243,6 +245,7 @@ fn wait_value(h: &mut Harness<'static, PdfCraftApp>, name: &str, expected: &str)
     assert_eq!(value(h, name), [expected]);
 }
 #[test]
+/// A real UI menu followed by input resumes once and does not leak the menu click into the next modal.
 fn native_button_popup_and_response_resume_without_replaying_the_script() {
     let mut h = harness();
     let id = h.state().active_ids().unwrap().1;
@@ -259,6 +262,7 @@ fn native_button_popup_and_response_resume_without_replaying_the_script() {
     wait_value(&mut h, "greeting", "08:00/x/1");
 }
 #[test]
+/// Cancelling a native menu returns null to the same invocation without duplicating preceding work.
 fn native_popup_cancellation_returns_null_and_preserves_the_single_invocation() {
     let mut h = harness();
     let id = h.state().active_ids().unwrap().1;
@@ -272,6 +276,7 @@ fn native_popup_cancellation_returns_null_and_preserves_the_single_invocation() 
     wait_value(&mut h, "greeting", "null/1");
 }
 #[test]
+/// An intervening document edit prevents an older pending script result from replacing current values.
 fn native_popup_completion_is_discarded_after_the_document_is_edited() {
     let mut h = harness();
     let id = h.state().active_ids().unwrap().1;

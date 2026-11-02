@@ -77,6 +77,7 @@ pub trait Scripts {
 pub struct NoScripts;
 
 impl Scripts for NoScripts {
+    /// Provide the no-JavaScript fallback: accept the current field value without additional script mutations.
     fn run(&mut self, _: FieldEvent, _: &str, _: &Field, value: &str, _: &[Field], _: &Document) -> ScriptResult {
         ScriptResult { rc: true, value: value.to_string(), changes: Vec::new(), message: None }
     }
@@ -263,6 +264,7 @@ pub(crate) fn apply_changes(doc: &mut Document, changes: &[FieldChange], except:
     Ok(())
 }
 
+/// Validate bounded Acrobat colour components and convert gray/RGB/CMYK or transparency to the editor representation.
 fn js_color(values: &[String]) -> Result<Option<[f64; 3]>, FormError> {
     let invalid = || FormError::Invalid("JavaScript colours require T, G, RGB or CMYK with finite components between 0 and 1".into());
     let (space, parts) = values.split_first().ok_or_else(invalid)?;
@@ -278,6 +280,7 @@ fn js_color(values: &[String]) -> Result<Option<[f64; 3]>, FormError> {
         _ => Err(invalid()),
     }
 }
+/// Require an opaque validated colour for text, which cannot use the transparent colour space.
 fn js_rgb(values: &[String]) -> Result<[f64; 3], FormError> {
     js_color(values)?.ok_or_else(|| FormError::Invalid("textColor cannot be transparent".into()))
 }

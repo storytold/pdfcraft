@@ -25,9 +25,22 @@ const MAX_PREFIX_RUN: usize = 64;
 /// Most `?` (conditional expressions nest without brackets).
 const MAX_CONDITIONALS: usize = 4096;
 
+/// Conservative per-source arrow-function budget: right-associated arrows nest without brackets.
+/// Count all arrows outside strings/comments, rather than admitting a parser stack overflow.
+const MAX_ARROW_FUNCTIONS: usize = 256;
+
+/// Assignment and exponentiation associate right-to-left without increasing bracket depth.
+/// A conservative token budget bounds their recursive parse/compiler paths before Boa runs.
+const MAX_RIGHT_ASSOCIATIVE_OPERATORS: usize = 4096;
+
 /// The script thread's stack.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) const SCRIPT_STACK: usize = 1 << 30;
+
+/// Persistent document-worker stack, bounded separately from transient legacy runners.
+/// Parser/compiler boundary and hostile-input regressions run through the real worker.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) const DOCUMENT_WORKER_STACK: usize = 64 << 20;
 
 /// Why `source` is refused, if it is: too long, or nested deeper than any form needs. Strings
 /// and comments are skipped; brackets in regular expressions and templates count, which only
@@ -38,7 +51,7 @@ pub(crate) fn refuse(source: &str) -> Option<String> {
     }
     let too_deep = || Some("the script is nested too deeply to run safely".to_string());
     let b = source.as_bytes();
-    let (mut depth, mut prefix, mut conditionals) = (0usize, 0usize, 0usize);
+    let (mut depth, mut prefix, mut conditionals, mut arrows, mut assignments, mut powers) = (0usize, 0usize, 0usize, 0usize, 0usize, 0usize);
     let mut i = 0;
     while let Some(&c) = b.get(i) {
         i += 1;
@@ -82,6 +95,42 @@ pub(crate) fn refuse(source: &str) -> Option<String> {
                 prefix += 1;
                 if prefix > MAX_PREFIX_RUN {
                     return too_deep();
+                }
+            }
+            b'=' if b.get(i) == Some(&b'>') => {
+                arrows += 1;
+                if arrows > MAX_ARROW_FUNCTIONS {
+                    return Some("the script has too many arrow functions to parse safely".into());
+                }
+                prefix = 0;
+            }
+            b'=' => {
+                assignments += 1;
+                if assignments > MAX_RIGHT_ASSOCIATIVE_OPERATORS {
+                    return too_deep();
+                }
+                prefix = 0;
+            }
+            b'*' if b.get(i) == Some(&b'*') => {
+                i += 1;
+                powers += 1;
+                if powers > MAX_RIGHT_ASSOCIATIVE_OPERATORS {
+                    return too_deep();
+                }
+                prefix = 0;
+            }
+            c if c.is_ascii_alphabetic() || matches!(c, b'_' | b'$') => {
+                let start = i - 1;
+                while b.get(i).is_some_and(|c| c.is_ascii_alphanumeric() || matches!(c, b'_' | b'$')) {
+                    i += 1;
+                }
+                if matches!(b.get(start..i), Some(b"void" | b"typeof" | b"delete" | b"new")) {
+                    prefix += 1;
+                    if prefix > MAX_PREFIX_RUN {
+                        return too_deep();
+                    }
+                } else {
+                    prefix = 0;
                 }
             }
             b'?' => {
@@ -203,6 +252,7 @@ pub(crate) struct ScriptSetup<'a> {
     pub(crate) initialize: bool,
 }
 
+/// Create a restricted temporary Boa context and convert initialization failures into script outcomes.
 fn run_here(script: &str, event: &Event, doc: &DocInfo, fields: Arc<Vec<FieldState>>, setup: ScriptSetup<'_>, limits: Limits) -> Outcome {
     match Context::builder().host_hooks(std::rc::Rc::new(NoCodeFromStrings)).build() {
         Ok(mut ctx) => run_in_context(&mut ctx, script, event, doc, fields, setup, limits),
@@ -210,6 +260,7 @@ fn run_here(script: &str, event: &Event, doc: &DocInfo, fields: Arc<Vec<FieldSta
     }
 }
 
+/// Replace per-event host state, optionally initialize document scripts, and collect results within runtime limits.
 pub(crate) fn run_in_context(
     ctx: &mut Context,
     script: &str,

@@ -12,6 +12,7 @@ macro_rules! getter {
     }};
 }
 
+/// Reuse a context-local Field object by name so retained references and custom properties survive events.
 pub(crate) fn field_object(ctx: &mut Context, name: &str) -> JsObject {
     if let Some(object) = host(ctx).ok().and_then(|h| h.borrow().objects.iter().find(|(n, _)| n == name).map(|(_, o)| o.clone())) {
         return object;
@@ -24,6 +25,7 @@ pub(crate) fn field_object(ctx: &mut Context, name: &str) -> JsObject {
     }
     object
 }
+/// Construct live Field accessors whose reads/writes resolve the current host snapshot by name.
 fn field_object_new(ctx: &mut Context, name: &str) -> JsObject {
     let n = JsString::from(name);
     let value_get = getter!(ctx, n, |f, c| value_of(&f, c));
@@ -109,6 +111,7 @@ fn field_object_new(ctx: &mut Context, name: &str) -> JsObject {
 
     let text_size_get = getter!(ctx, n, |f, c| JsValue::from(f.text_size));
     let text_size_set = {
+        /// Validate a finite text size in 0..=300 points before staging the field appearance change.
         fn set(_: &JsValue, args: &[JsValue], name: &JsString, c: &mut Context) -> JsResult<JsValue> {
             let v = arg(args, 0).to_number(c)?;
             if !v.is_finite() || !(0.0..=300.0).contains(&v) {
@@ -121,6 +124,7 @@ fn field_object_new(ctx: &mut Context, name: &str) -> JsObject {
     };
     let line_width_get = getter!(ctx, n, |f, c| JsValue::from(f.line_width));
     let line_width_set = {
+        /// Validate a finite border width in 0..=12 points before staging the appearance change.
         fn set(_: &JsValue, args: &[JsValue], name: &JsString, c: &mut Context) -> JsResult<JsValue> {
             let v = arg(args, 0).to_number(c)?;
             if !v.is_finite() || !(0.0..=12.0).contains(&v) {
@@ -133,6 +137,7 @@ fn field_object_new(ctx: &mut Context, name: &str) -> JsObject {
     };
     let border_style_get = getter!(ctx, n, |f, c| s(&f.border_style));
     let border_style_set = {
+        /// Accept only supported border styles and stage the validated value for PDF writeback.
         fn set(_: &JsValue, args: &[JsValue], name: &JsString, c: &mut Context) -> JsResult<JsValue> {
             let v = text(&arg(args, 0), c)?;
             if !["solid", "dashed", "beveled", "inset", "underline"].contains(&v.as_str()) {
@@ -145,6 +150,7 @@ fn field_object_new(ctx: &mut Context, name: &str) -> JsObject {
     };
     let user_name_get = getter!(ctx, n, |f, c| s(&f.user_name));
     let user_name_set = {
+        /// Bound the tooltip string to 4,096 bytes before staging the field user name.
         fn set(_: &JsValue, args: &[JsValue], name: &JsString, c: &mut Context) -> JsResult<JsValue> {
             let v = text(&arg(args, 0), c)?;
             if v.len() > 4096 {
@@ -157,6 +163,7 @@ fn field_object_new(ctx: &mut Context, name: &str) -> JsObject {
     };
     let stroke_color_get = getter!(ctx, n, |f, c| colour(&f.stroke_color, c));
     let stroke_color_set = {
+        /// Read the bounded stroke-colour array for validation at the form writeback boundary.
         fn set(_: &JsValue, args: &[JsValue], name: &JsString, c: &mut Context) -> JsResult<JsValue> {
             let v = Some(strings(&arg(args, 0), c)?);
             write(c, name, |f| f.stroke_color = v)?;
@@ -166,6 +173,7 @@ fn field_object_new(ctx: &mut Context, name: &str) -> JsObject {
     };
     let rect_get = getter!(ctx, n, |f, c| f.rect.map_or_else(JsValue::undefined, |r| JsArray::from_iter(r.map(JsValue::from), c).into()));
     let rect_set = {
+        /// Validate finite ordered rectangle coordinates while permitting zero-sized script overlays.
         fn set(_: &JsValue, args: &[JsValue], name: &JsString, c: &mut Context) -> JsResult<JsValue> {
             let a = arg(args, 0).as_object().ok_or_else(|| error("rect needs an array"))?;
             let a = JsArray::from_object(a)?;
@@ -189,6 +197,7 @@ fn field_object_new(ctx: &mut Context, name: &str) -> JsObject {
         function(ctx, NativeFunction::from_copy_closure_with_captures(set, n.clone()))
     };
 
+    /// Read the normal caption of the first button widget and refuse unsupported caption faces.
     fn button_get_caption(_: &JsValue, args: &[JsValue], name: &JsString, c: &mut Context) -> JsResult<JsValue> {
         let f = read(c, name)?;
         if f.kind != FieldType::Button {
@@ -200,6 +209,7 @@ fn field_object_new(ctx: &mut Context, name: &str) -> JsObject {
         }
         Ok(s(f.caption.as_deref().unwrap_or("")))
     }
+    /// Record a normal-caption setter even when widget zero already matches, allowing all-widget writeback.
     fn button_set_caption(_: &JsValue, args: &[JsValue], name: &JsString, c: &mut Context) -> JsResult<JsValue> {
         let f = read(c, name)?;
         if f.kind != FieldType::Button {

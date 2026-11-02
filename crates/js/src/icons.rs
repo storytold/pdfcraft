@@ -2,6 +2,7 @@
 use crate::host::{arg, error, host, read, write};
 use crate::{Attribute, Context, JsObject, JsResult, JsString, JsValue, ObjectInitializer};
 
+/// Accept omitted/normal face zero only; reject unsupported icon states before touching a field.
 fn normal_face(args: &[JsValue], index: usize, c: &mut Context) -> JsResult<()> {
     if let Some(face) = args.get(index)
         && !face.is_undefined()
@@ -11,6 +12,7 @@ fn normal_face(args: &[JsValue], index: usize, c: &mut Context) -> JsResult<()> 
     }
     Ok(())
 }
+/// Return a context-minted normal-icon handle, reusing object identity and enforcing the handle limit.
 pub(crate) fn get(_: &JsValue, args: &[JsValue], name: &JsString, c: &mut Context) -> JsResult<JsValue> {
     normal_face(args, 0, c)?;
     let f = read(c, name)?;
@@ -28,6 +30,7 @@ pub(crate) fn get(_: &JsValue, args: &[JsValue], name: &JsString, c: &mut Contex
     host(c)?.borrow_mut().icons.push((obj.clone(), id));
     Ok(obj.into())
 }
+/// Stage a normal-icon copy/clear only for a handle minted in this context, refusing forged objects.
 pub(crate) fn set(_: &JsValue, args: &[JsValue], name: &JsString, c: &mut Context) -> JsResult<JsValue> {
     normal_face(args, 1, c)?;
     if read(c, name)?.kind != crate::FieldType::Button {

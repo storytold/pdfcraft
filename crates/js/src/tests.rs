@@ -15,6 +15,7 @@ fn fields() -> Vec<FieldState> {
     ]
 }
 
+/// Provide synthetic document metadata and page boxes for isolated JavaScript API tests.
 fn doc() -> DocInfo {
     DocInfo { file_name: "order.pdf".into(), num_pages: 3, page: 0, info: vec![("title".into(), "Order".into())], ..Default::default() }
 }
@@ -32,6 +33,7 @@ fn calculate_scripts_read_fields_and_set_the_value() {
 }
 
 #[test]
+/// Expose all supported page boxes in rotated-user-space order using only supplied document geometry.
 fn get_page_box_returns_supported_boxes_in_rotated_user_space() {
     let mut document = doc();
     document.page_boxes = vec![
@@ -58,6 +60,7 @@ fn get_page_box_returns_supported_boxes_in_rotated_user_space() {
 }
 
 #[test]
+/// Unknown box names, malformed page indices and pages outside the snapshot produce script errors.
 fn get_page_box_rejects_unknown_boxes_and_invalid_pages() {
     for script in
         ["this.getPageBox('BBox')", "this.getPageBox(1)", "this.getPageBox('Crop', -1)", "this.getPageBox('Crop', 1.5)", "this.getPageBox('Crop', 3)"]
@@ -110,6 +113,7 @@ fn scripts_change_other_fields_and_their_properties() {
 }
 
 #[test]
+/// Normal captions read/write correctly; unsupported faces cannot partially mutate a button.
 fn push_button_caption_methods_read_write_and_reject_other_faces() {
     let mut button = FieldState::new("go", FieldType::Button, vec![]);
     button.caption = Some("Old".into());

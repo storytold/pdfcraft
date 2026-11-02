@@ -649,6 +649,9 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         // As after a script edit: the values the new order gives show at once.
         Edit::SetCalculationOrder { names } => {
             pdfcraft_forms::set_calculation_order(doc, names)?;
+            if let Some(js) = cx.js.as_mut() {
+                js.invalidate_calculations();
+            }
             match cx.js.as_mut() {
                 Some(js) => pdfcraft_forms::recalculate_with(doc, js)?,
                 None => pdfcraft_forms::recalculate(doc)?,
@@ -676,6 +679,9 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         }
         Edit::SetFieldScript { name, event, script } => {
             pdfcraft_forms::set_field_script(doc, name, event, script.as_deref())?;
+            if let Some(js) = cx.js.as_mut() {
+                js.invalidate_calculations();
+            }
             match cx.js.as_mut() {
                 Some(js) => pdfcraft_forms::recalculate_with(doc, js)?,
                 None => pdfcraft_forms::recalculate(doc)?,
@@ -894,6 +900,9 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         Edit::Batch { edits, .. } => {
             for e in edits {
                 run_edit(doc, e, cx)?;
+                if let Some(js) = cx.js.as_mut() {
+                    js.refresh_after_batch_edit(doc, e);
+                }
             }
         }
     }

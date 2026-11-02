@@ -113,6 +113,7 @@ pub(crate) fn draft_text(f: &FormField) -> String {
     value
 }
 
+/// Focus a named visible form field using its current page and widget geometry.
 pub(crate) fn open_focus(f: &FormField, widget: usize) -> Focus {
     Focus {
         name: f.name.clone(),

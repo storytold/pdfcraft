@@ -1583,6 +1583,7 @@ fn formats_validation_and_calculations_run_like_acrobat() {
 fn a_script_that_spells_the_markers_in_a_string_runs_as_a_script() {
     struct Ran;
     impl Scripts for Ran {
+        /// Synthetic script hook that returns controlled values/side effects so the calculation-chain behavior is observable.
         fn run(&mut self, _event: FieldEvent, _script: &str, _target: &Field, _value: &str, _fields: &[Field], _doc: &Document) -> ScriptResult {
             ScriptResult { rc: true, value: "ran".into(), changes: Vec::new(), message: None }
         }
@@ -2990,9 +2991,11 @@ fn check_box_redraw_keeps_down_states_it_still_draws() {
 }
 
 #[test]
+/// A calculation side effect on a checkbox is visible to following calculated fields.
 fn recalc_chain_where_script_changes_checkbox() {
     struct TestScripts;
     impl Scripts for TestScripts {
+        /// Synthetic script hook that returns controlled values/side effects so the calculation-chain behavior is observable.
         fn run(&mut self, _event: FieldEvent, script: &str, _target: &Field, _value: &str, fields: &[Field], _doc: &Document) -> ScriptResult {
             if script == "set_box" {
                 ScriptResult {
@@ -5556,9 +5559,11 @@ fn locked_button_export_edits_leave_the_document_unchanged() {
 }
 
 #[test]
+/// Cosmetic field updates skip calculations, while a value write still triggers the chain.
 fn script_cosmetic_mutations_do_not_run_the_calculation_chain() {
     struct Counter(usize);
     impl Scripts for Counter {
+        /// Synthetic script hook that returns controlled values/side effects so the calculation-chain behavior is observable.
         fn run(&mut self, event: FieldEvent, _: &str, _: &Field, value: &str, _: &[Field], _: &Document) -> ScriptResult {
             if event == FieldEvent::Calculate {
                 self.0 += 1;

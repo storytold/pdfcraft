@@ -5384,6 +5384,7 @@ fn form_javascript_validates_calculates_and_formats() {
 }
 
 #[test]
+/// Synchronous calculation exposes pending values immediately and persists the invocation as one undo transaction.
 fn calculate_now_updates_live_fields_in_one_undo_step() {
     let mut s = Session::new().with_clock(|| 1_700_000_000);
     let id = s.open("calculate-now.pdf", None, Arc::new(scripted_form()), None).unwrap();
@@ -5408,6 +5409,7 @@ fn calculate_now_updates_live_fields_in_one_undo_step() {
 }
 
 #[test]
+/// Respect explicit calculation order, restore the outer event and stop recursive calculation requests.
 fn calculate_now_uses_calculation_order_and_bounds_recursion() {
     let mut s = Session::new().with_clock(|| 1_700_000_000);
     let id = s.open("calculate-chain.pdf", None, Arc::new(scripted_form()), None).unwrap();
@@ -5546,6 +5548,7 @@ fn inactive_xfa_and_ordinary_pdfs_keep_document_helpers_and_alerts() {
 }
 
 #[test]
+/// Read inherited page boxes without dirtying the document and reject invalid box/page requests.
 fn js_get_page_box_reads_effective_boxes_without_editing_the_document() {
     let (mut s, id) = session_with(1);
     let before = s.get(id).expect("opened document").can_undo().map(str::to_owned);
@@ -9194,6 +9197,7 @@ fn dynamic_calculation_reads_and_side_effects_reach_later_fields() {
 }
 
 #[test]
+/// Later field callbacks see current COS appearance/flags rather than the runner creation snapshot.
 fn field_scripts_read_current_appearance_during_an_edit() {
     use pdfcraft_forms::{FieldEvent, Scripts};
     let mut cos = pdfcraft_cos::Document::open(Arc::new(synthetic_acroform(2, 0))).unwrap();
@@ -9201,8 +9205,8 @@ fn field_scripts_read_current_appearance_during_an_edit() {
         let fields = pdfcraft_forms::fields(&cos);
         let target = fields.iter().find(|f| f.name == "trained").unwrap();
         let other = fields.iter().find(|f| f.name == "ranks").unwrap();
-        let old_display = crate::js::field_state(&cos, other).display;
         let mut runner = crate::js::JsRunner::new(&cos, "synthetic.pdf");
+        let old_display = crate::js::field_state(&cos, other, &runner.doc).display;
         // Populate script state before a script writes the same field.
         let warm = runner.run(FieldEvent::Calculate, "event.value = getField('ranks').display;", target, "", &fields, &cos);
         assert_eq!(warm.value, old_display.to_string());
@@ -10355,6 +10359,7 @@ fn fill_sign_multiline_text_survives_engine_save_reopen_and_render() {
 }
 
 #[test]
+/// Colour writes survive save/reopen and Undo while preserving unrelated appearance properties.
 fn javascript_field_colours_persist_and_undo_without_changing_other_appearance_properties() {
     let mut s = Session::new().with_clock(|| 1_700_000_000);
     let id = s.open("order.pdf", None, Arc::new(scripted_form()), None).unwrap();
@@ -10404,6 +10409,7 @@ fn javascript_field_colours_persist_and_undo_without_changing_other_appearance_p
 }
 
 #[test]
+/// Reject malformed colour arrays before any field or appearance mutation is applied.
 fn javascript_invalid_field_colour_array_is_refused_without_partial_changes() {
     let mut s = Session::new().with_clock(|| 1_700_000_000);
     let id = s.open("order.pdf", None, Arc::new(scripted_form()), None).unwrap();
@@ -10414,6 +10420,7 @@ fn javascript_invalid_field_colour_array_is_refused_without_partial_changes() {
 }
 
 #[test]
+/// Script colour edits obey the same document permission boundary as other form changes.
 fn javascript_field_colours_respect_document_fill_permissions() {
     let mut plain = pdfcraft_cos::Document::open(Arc::new(scripted_form())).unwrap();
     plain
