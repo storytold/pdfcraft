@@ -3420,6 +3420,18 @@ fn a_caption_font_naming_only_a_size_takes_the_fields_weight_style_and_family() 
     assert_eq!((face.family, face.bold, face.italic, face.size), (crate::text::Family::Times, true, true, 12.0));
 }
 
+/// A caption font that sets only the weight keeps its field's posture: bold from the caption,
+/// italic from the field, both on the caption (XFA 3.3, "Formatting Text That Appears as Fixed or
+/// Variable Content", p. 43).
+#[test]
+fn a_caption_font_naming_only_a_weight_keeps_the_fields_posture() {
+    let items = positioned(
+        r#"<field name="f" x="1in" y="0" w="5in" h="0.5in"><ui><textEdit/></ui><font typeface="Arial" size="8pt" posture="italic"/><caption reserve="2in"><font weight="bold"/><value><text>Name:</text></value></caption></field>"#,
+    );
+    let face = items.iter().find_map(|i| if let Item::Text(s) = i { Some(s.face.clone()) } else { None }).expect("the caption");
+    assert_eq!((face.family, face.bold, face.italic, face.size), (crate::text::Family::Helvetica, true, true, 8.0));
+}
+
 /// A signature box the file already holds a signature for shows that signature, the file's own
 /// objects, and is locked; the other box stays unsigned.
 #[test]
