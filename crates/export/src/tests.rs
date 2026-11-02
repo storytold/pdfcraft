@@ -1366,3 +1366,16 @@ fn a_suffixed_field_name_never_repeats_one_already_used() {
     let unique: std::collections::HashSet<_> = names.iter().collect();
     assert_eq!(unique.len(), names.len(), "{names:?}");
 }
+
+/// Word compares bookmark names without case, so field names that differ only in case are
+/// repeats: after `Name`, `Name_8` and `NAME_8_2`, another `Name` (id 8) is `Name_8_3`, not a
+/// second `Name_8_2`; and `NAME` after `Name` takes a suffix too.
+#[test]
+fn field_names_that_differ_only_in_case_are_repeats() {
+    let mut form = Form::default();
+    assert_eq!(form.name("Name", 8), "Name");
+    assert_eq!(form.name("Name_8", 1), "Name_8");
+    assert_eq!(form.name("NAME_8_2", 2), "NAME_8_2");
+    assert_eq!(form.name("Name", 8), "Name_8_3");
+    assert_eq!(form.name("NAME", 9), "NAME_9", "the emitted spelling is kept");
+}

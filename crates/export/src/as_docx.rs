@@ -425,7 +425,8 @@ fn field_rpr(size: f64, spacing: f64) -> String {
 const MAX_NAME_TRIES: usize = 64;
 
 /// The form fields a Word document has written, by name: Word's field names name their
-/// bookmarks, so they must be unique.
+/// bookmarks, so they must be unique, and Word compares bookmark names without case. The names
+/// are kept in ASCII lower case (they are ASCII).
 #[derive(Default)]
 pub(crate) struct Form {
     names: std::collections::HashSet<String>,
@@ -433,7 +434,8 @@ pub(crate) struct Form {
 
 impl Form {
     /// A Word form field name for `name`: letters, digits and `_`, starting with a letter, at
-    /// most 20 characters (Word's limit), and not one this document already uses. A repeated name
+    /// most 20 characters (Word's limit), and not one this document already uses in any case. A
+    /// repeated name
     /// takes `_` and `id`, then `_2`, `_3` … after that as long as that is taken too (a field
     /// may already be named so); past [`MAX_NAME_TRIES`] the name stays repeated, which Word
     /// opens with only the first of the two as a bookmark.
@@ -446,14 +448,14 @@ impl Form {
         base.truncate(20);
         let mut candidate = base.clone();
         for k in 1..=MAX_NAME_TRIES {
-            if !self.names.contains(&candidate) {
+            if !self.names.contains(&candidate.to_ascii_lowercase()) {
                 break;
             }
             let suffix = if k == 1 { format!("_{id}") } else { format!("_{id}_{k}") };
             let keep = 20usize.saturating_sub(suffix.len()).min(base.len());
             candidate = format!("{}{suffix}", base.get(..keep).unwrap_or_default());
         }
-        self.names.insert(candidate.clone());
+        self.names.insert(candidate.to_ascii_lowercase());
         candidate
     }
 }
