@@ -113,7 +113,13 @@ pub fn read_packets(doc: &Document) -> Result<Option<Packets>, XfaError> {
     let needs_rendering = bool_of(catalog.as_dict().and_then(|c| c.get(b"NeedsRendering"))).or_else(|| bool_of(acro.get(b"NeedsRendering")));
     let has_fields = acro.get(b"Fields").map(|f| doc.resolve(f)).and_then(|f| f.as_array().map(|a| !a.is_empty())).unwrap_or(false);
     let mut total = 0usize;
+    // A stream listed again adds nothing but another decode, which may cost far more than the
+    // bytes it yields (a Flate stream of hex whitespace).
+    let mut seen = std::collections::HashSet::new();
     let mut read = |o: &Object| -> Result<Option<String>, XfaError> {
+        if o.as_ref().is_some_and(|r| !seen.insert(r)) {
+            return Ok(None);
+        }
         let s = doc.resolve(o);
         let Object::Stream(s) = &*s else { return Ok(None) };
         let bytes = s.decoded_within(MAX_XDP)?;

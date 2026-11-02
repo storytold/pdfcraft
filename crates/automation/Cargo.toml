@@ -17,8 +17,7 @@ pdfcraft-platform = { workspace = true }
 serde_json = { workspace = true }
 sha2 = "0.11"
 tempfile = "3.27"
-png = "0.18"
-base64 = { version = "0.22", optional = true }
+base64 = { version = "0.23", optional = true }
 
 
 [features]
@@ -28,7 +27,11 @@ mcp = ["dep:base64"]
 
 [dev-dependencies]
 pdfcraft-fonts = { workspace = true }
+png = "0.18"
 flate2.workspace = true
 pdfcraft-model = { workspace = true }
 pdfcraft-xfa = { workspace = true }
 image = { version = "0.25", default-features = false, features = ["jpeg"] }
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+rustix = { version = "1", features = ["fs"] }

@@ -4,11 +4,14 @@ use kurbo::Affine;
 use std::any::Any;
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 type CacheMap = HashMap<u128, Option<Box<dyn Any + Send + Sync>>>;
+/// The objects read from a document, by key. PdfCraft patch (48): the second field counts the
+/// ICC profiles read through it ([`Cache::icc_profile_reads`]).
 #[derive(Clone)]
-pub(crate) struct Cache(Arc<Mutex<CacheMap>>);
+pub(crate) struct Cache(Arc<Mutex<CacheMap>>, Arc<AtomicUsize>);
 impl Default for Cache {
     fn default() -> Self {
         Self::new()
@@ -17,7 +20,18 @@ impl Default for Cache {
 
 impl Cache {
     pub(crate) fn new() -> Self {
-        Self(Arc::new(Mutex::new(HashMap::new())))
+        Self(Arc::new(Mutex::new(HashMap::new())), Arc::default())
+    }
+
+    /// PdfCraft patch (48): count one ICC profile read, the colour space of an `/ICCBased`
+    /// profile no entry held yet being built from it.
+    pub(crate) fn count_icc_profile_read(&self) {
+        self.1.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// PdfCraft patch (48): how many ICC profiles were read through this cache.
+    pub(crate) fn icc_profile_reads(&self) -> usize {
+        self.1.load(Ordering::Relaxed)
     }
 
     pub(crate) fn get_or_insert_with<T: Clone + Send + Sync + 'static>(
@@ -73,7 +87,10 @@ pub(crate) struct DecodedImageCache {
 ///   `/BitsPerComponent`, filters, …) and its object (`obj`: the decryption key depends on it);
 /// - whether it is decoded as a mask, a stencil mask, raster or mask output, interpolation,
 ///   the decode target size (only for an image a JPX stream decodes, which is the only
-///   decode that reads it: PdfCraft patch 32), and preview or final quality.
+///   decode that reads it: PdfCraft patch 32), and preview or final quality;
+/// - the default colour space drawn in place of the image's device space, if any (the cache
+///   key of its object, PdfCraft patch 38): the same image can be drawn by resources with a
+///   `/DefaultRGB` and by resources without one.
 ///
 /// A transfer function (graphics state `/TR`) also changes the pixels and has no cheap key, so
 /// an image drawn under one is not cached; neither is an inline image, whose dictionary lives in
@@ -88,6 +105,7 @@ pub(crate) struct DecodedImageKey {
     pub(crate) is_mask: bool,
     pub(crate) is_stencil_mask: bool,
     pub(crate) interpolate: bool,
+    pub(crate) default_space: Option<u128>,
     pub(crate) target: Option<(u32, u32)>,
     pub(crate) preview: bool,
 }

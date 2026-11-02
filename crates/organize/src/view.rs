@@ -63,6 +63,10 @@ pub struct InitialView {
     pub language: Option<String>,
     /// Right-edge binding (`/Direction /R2L`).
     pub right_to_left: bool,
+    /// The navigation panel on leaving full screen (`/ViewerPreferences /NonFullScreenPageMode`,
+    /// ISO 32000-2 Table 147), read only when `full_screen` is set. It is read, not written:
+    /// [`set_initial_view`] leaves the entry as it is.
+    pub non_full_screen: Navigation,
 }
 
 fn catalog(doc: &Document) -> Result<(pdfcraft_cos::ObjRef, Dict), OrganizeError> {
@@ -96,7 +100,7 @@ pub fn initial_view(doc: &Document) -> InitialView {
         ..InitialView::default()
     };
     if let Some(vp) = c.get(b"ViewerPreferences").map(|o| doc.resolve(o)).and_then(|o| o.as_dict().cloned()) {
-        let flag = |k: &[u8]| matches!(vp.get(k), Some(Object::Bool(true)));
+        let flag = |k: &[u8]| matches!(vp.get(k).map(|o| doc.resolve(o)).as_deref(), Some(Object::Bool(true)));
         v.fit_window = flag(b"FitWindow");
         v.center_window = flag(b"CenterWindow");
         v.display_title = flag(b"DisplayDocTitle");
@@ -104,11 +108,22 @@ pub fn initial_view(doc: &Document) -> InitialView {
         v.hide_toolbar = flag(b"HideToolbar");
         v.hide_window_ui = flag(b"HideWindowUI");
         v.right_to_left = name(&vp, b"Direction").as_deref() == Some(b"R2L");
+        // Table 147: meaningful only with `/PageMode /FullScreen`, and only these four values.
+        if v.full_screen {
+            v.non_full_screen = match name(&vp, b"NonFullScreenPageMode").as_deref() {
+                Some(b"UseOutlines") => Navigation::Bookmarks,
+                Some(b"UseThumbs") => Navigation::Pages,
+                Some(b"UseOC") => Navigation::Layers,
+                _ => Navigation::PageOnly,
+            };
+        }
     }
-    // The opening destination: an explicit array, or a GoTo action's.
+    // The opening destination: an explicit array, a GoTo action's `/D`, or a named destination (a
+    // name or string, §12.3.2.4) as the explicit one it names, so that the page and magnification
+    // read here are where the document opens. A name that names nothing reads as page 1.
     let dest = c.get(b"OpenAction").map(|o| doc.resolve(o)).and_then(|o| match &*o {
-        Object::Array(a) => Some(a.clone()),
-        Object::Dict(d) if d.name(b"S") == Some(b"GoTo") => d.get(b"D").map(|x| doc.resolve(x)).and_then(|x| x.as_array().cloned()),
+        Object::Array(_) | Object::Name(_) | Object::String(_) => crate::outline::resolve_dest(doc, &o),
+        Object::Dict(d) if d.name(b"S") == Some(b"GoTo") => d.get(b"D").and_then(|x| crate::outline::resolve_dest(doc, x)),
         _ => None,
     });
     if let Some(d) = dest {
@@ -149,8 +164,13 @@ pub fn displays_doc_title(doc: &Document) -> bool {
 }
 
 /// Write the initial view. An opening action that isn't a plain destination (a script, say) is
-/// kept unless the page or magnification asks for a destination.
+/// kept unless the page or magnification asks for a destination, and an opening action whose page
+/// and magnification `v` leaves as [`initial_view`] reads them is kept as it is.
 pub fn set_initial_view(doc: &mut Document, v: &InitialView) -> Result<(), OrganizeError> {
+    let same_destination = {
+        let now = initial_view(doc);
+        now.page == v.page && now.magnification == v.magnification
+    };
     let (root, c) = catalog(doc)?;
     let pages = crate::walk(doc)?;
     if v.page >= pages.len() {
@@ -177,9 +197,12 @@ pub fn set_initial_view(doc: &mut Document, v: &InitialView) -> Result<(), Organ
     } else {
         vp.remove(b"Direction");
     }
+    // A destination, explicit or named (§12.3.2.4), or a GoTo action to one.
     let open_action_is_dest = match c.get(b"OpenAction").map(|o| doc.resolve(o)) {
         None => true,
-        Some(o) => matches!(&*o, Object::Array(_)) || o.as_dict().is_some_and(|d| d.name(b"S") == Some(b"GoTo")),
+        Some(o) => {
+            matches!(&*o, Object::Array(_) | Object::Name(_) | Object::String(_)) || o.as_dict().is_some_and(|d| d.name(b"S") == Some(b"GoTo"))
+        }
     };
     let dest = match v.magnification {
         Magnification::Default if v.page == 0 => None,
@@ -238,6 +261,9 @@ pub fn set_initial_view(doc: &mut Document, v: &InitialView) -> Result<(), Organ
             }
         }
         match (&dest, open_action_is_dest) {
+            // The opening page and magnification are as read: the action stays as written, with
+            // its position or named destination (§12.3.2.4) that the view model doesn't hold.
+            _ if same_destination => {}
             (Some(d), _) => c.set(b"OpenAction".to_vec(), Object::Array(d.clone())),
             (None, true) => {
                 c.remove(b"OpenAction");
@@ -247,4 +273,87 @@ pub fn set_initial_view(doc: &mut Document, v: &InitialView) -> Result<(), Organ
         }
     })?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pdfcraft_cos::{SaveOptions, write_full};
+    use std::sync::Arc;
+
+    fn flags(view: InitialView) -> [bool; 6] {
+        [view.fit_window, view.center_window, view.display_title, view.hide_menubar, view.hide_toolbar, view.hide_window_ui]
+    }
+
+    #[test]
+    fn initial_view_resolves_indirect_boolean_preferences() {
+        let keys: [&[u8]; 6] = [b"FitWindow", b"CenterWindow", b"DisplayDocTitle", b"HideMenubar", b"HideToolbar", b"HideWindowUI"];
+        for enabled in [true, false] {
+            for indirect_dictionary in [false, true] {
+                let mut doc = Document::new_empty();
+                let boolean = doc.add(Object::Bool(enabled));
+                let mut preferences = Dict::new();
+                for key in keys {
+                    preferences.set(key.to_vec(), Object::Ref(boolean));
+                }
+                let preferences = if indirect_dictionary { Object::Ref(doc.add(preferences)) } else { Object::Dict(preferences) };
+                let root = doc.root().unwrap();
+                doc.update_dict(root, |c| c.set(b"ViewerPreferences".to_vec(), preferences)).unwrap();
+                assert_eq!(flags(initial_view(&doc)), [enabled; 6]);
+                let saved = write_full(&doc, &SaveOptions::default()).unwrap();
+                let reopened = Document::open(Arc::new(saved)).unwrap();
+                assert_eq!(flags(initial_view(&reopened)), [enabled; 6]);
+                assert_eq!(displays_doc_title(&reopened), enabled);
+            }
+        }
+    }
+
+    #[test]
+    fn initial_view_malformed_boolean_preferences_keep_false_defaults() {
+        for value in [Object::Null, Object::Int(1), Object::name("true"), Object::Ref(pdfcraft_cos::ObjRef::new(999_999, 0))] {
+            let mut doc = Document::new_empty();
+            let value = doc.add(value);
+            let mut preferences = Dict::new();
+            preferences.set(b"FitWindow".to_vec(), Object::Ref(value));
+            let root = doc.root().unwrap();
+            doc.update_dict(root, |c| c.set(b"ViewerPreferences".to_vec(), Object::Dict(preferences))).unwrap();
+            assert_eq!(flags(initial_view(&doc)), [false; 6]);
+        }
+    }
+
+    /// A catalog with `/PageMode page_mode` and `/ViewerPreferences << /NonFullScreenPageMode mode >>`.
+    fn with_modes(page_mode: &str, mode: Object) -> Document {
+        let mut doc = Document::new_empty();
+        let mode = doc.add(mode);
+        let mut preferences = Dict::new();
+        preferences.set(b"NonFullScreenPageMode".to_vec(), Object::Ref(mode));
+        let root = doc.root().unwrap();
+        doc.update_dict(root, |c| {
+            c.set(b"PageMode".to_vec(), Object::name(page_mode));
+            c.set(b"ViewerPreferences".to_vec(), Object::Dict(preferences));
+        })
+        .unwrap();
+        doc
+    }
+
+    #[test]
+    fn non_full_screen_page_mode_is_read_with_full_screen_only() {
+        for (mode, want) in [
+            ("UseOutlines", Navigation::Bookmarks),
+            ("UseThumbs", Navigation::Pages),
+            ("UseOC", Navigation::Layers),
+            ("UseNone", Navigation::PageOnly),
+            // Not a value Table 147 lists.
+            ("UseAttachments", Navigation::PageOnly),
+            ("FullScreen", Navigation::PageOnly),
+        ] {
+            let v = initial_view(&with_modes("FullScreen", Object::name(mode)));
+            assert!(v.full_screen);
+            assert_eq!(v.non_full_screen, want, "{mode}");
+            // Ignored unless the document opens in full screen.
+            let v = initial_view(&with_modes("UseThumbs", Object::name(mode)));
+            assert_eq!((v.navigation, v.non_full_screen), (Navigation::Pages, Navigation::PageOnly), "{mode}");
+        }
+        assert_eq!(initial_view(&with_modes("FullScreen", Object::Int(1))).non_full_screen, Navigation::PageOnly);
+    }
 }

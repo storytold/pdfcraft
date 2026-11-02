@@ -5,7 +5,7 @@
 
 use crate::flatten_simd::{Callback, LinePathEl};
 use crate::geometry::RectU16;
-use crate::kurbo::{self, Affine, PathEl, Stroke, StrokeCtx, StrokeOpts};
+use crate::kurbo::{self, Affine, BezPath, PathEl, Stroke, StrokeCtx, StrokeOpts};
 use alloc::vec::Vec;
 use fearless_simd::{Level, Simd, dispatch};
 use log::warn;
@@ -220,7 +220,8 @@ pub fn fill_impl<S: Simd>(
 /// See the note about open subpaths and culling on [`fill`].
 pub fn stroke(
     level: Level,
-    path: impl IntoIterator<Item = PathEl>,
+    // PdfCraft patch: `Clone` so the path can be stroked a second time.
+    path: impl IntoIterator<Item = PathEl> + Clone,
     style: &Stroke,
     affine: Affine,
     line_buf: &mut Vec<Line>,
@@ -235,7 +236,14 @@ pub fn stroke(
             .max(affine.as_coeffs()[3].abs())
             .max(1.);
 
-    expand_stroke(path, style, tolerance, stroke_ctx);
+    expand_stroke(path.clone(), style, tolerance, stroke_ctx);
+    // PdfCraft patch: kurbo's stroker can put NaN into the outline of a curve that is nearly a
+    // line (all control points within a rounding error of the chord), and `fill` then drops the
+    // whole outline. Stroke it again with such curves as lines. A finite outline is unchanged.
+    if !stroke_ctx.output().is_finite() {
+        let path = near_line_curves_as_lines(path, tolerance);
+        expand_stroke(&path, style, tolerance, stroke_ctx);
+    }
     fill(
         level,
         stroke_ctx.output(),
@@ -244,6 +252,49 @@ pub fn stroke(
         flatten_ctx,
         cull_bbox,
     );
+}
+
+// PdfCraft patch.
+/// `path` with each quadratic or cubic whose control points all lie within
+/// `tolerance` of its chord replaced by a line to its end point. One element out per element in.
+fn near_line_curves_as_lines(path: impl IntoIterator<Item = PathEl>, tolerance: f64) -> BezPath {
+    let mut out = BezPath::new();
+    let mut start = kurbo::Point::ZERO;
+    let mut last = start;
+    for el in path {
+        let el = match el {
+            PathEl::QuadTo(p1, p2) if near_segment(p1, last, p2, tolerance) => PathEl::LineTo(p2),
+            PathEl::CurveTo(p1, p2, p3)
+                if near_segment(p1, last, p3, tolerance)
+                    && near_segment(p2, last, p3, tolerance) =>
+            {
+                PathEl::LineTo(p3)
+            }
+            el => el,
+        };
+        match el {
+            PathEl::MoveTo(p) => {
+                start = p;
+                last = p;
+            }
+            PathEl::LineTo(p) | PathEl::QuadTo(_, p) | PathEl::CurveTo(_, _, p) => last = p,
+            PathEl::ClosePath => last = start,
+        }
+        out.push(el);
+    }
+    out
+}
+
+/// Whether `p` is within `tolerance` of the segment from `a` to `b`. False for non-finite input.
+fn near_segment(p: kurbo::Point, a: kurbo::Point, b: kurbo::Point, tolerance: f64) -> bool {
+    let ab = b - a;
+    let len2 = ab.hypot2();
+    let t = if len2 > 0.0 {
+        ((p - a).dot(ab) / len2).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    (p - (a + ab * t)).hypot() <= tolerance
 }
 
 /// Expand a stroked path to a filled path.
@@ -282,5 +333,76 @@ impl Callback for FlattenerCallback<'_> {
                 self.p0 = p;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{FlattenCtx, Line, TOL, expand_stroke, stroke};
+    use crate::geometry::RectU16;
+    use crate::kurbo::{Affine, BezPath, Point, Stroke, StrokeCtx};
+    use alloc::vec::Vec;
+    use fearless_simd::Level;
+
+    fn stroke_lines(path: &BezPath, width: f64, ctx: &mut StrokeCtx) -> Vec<Line> {
+        let mut lines = Vec::new();
+        stroke(
+            Level::baseline(),
+            path,
+            &Stroke::new(width),
+            Affine::IDENTITY,
+            &mut lines,
+            &mut FlattenCtx::default(),
+            ctx,
+            RectU16::new(0, 0, 200, 200),
+        );
+        lines
+    }
+
+    // An outline in an Illustrator file (#4907) has a cubic whose control points are all equal
+    // and 0.001 from its start. kurbo's stroker gives that curve a NaN join, which made the whole
+    // outline disappear. The trigger depends on these exact coordinates.
+    #[test]
+    fn a_tiny_degenerate_cubic_does_not_drop_the_stroke() {
+        let mut path = BezPath::new();
+        path.move_to((0.0, 0.0));
+        path.line_to((73.763, -0.536));
+        let p = Point::new(73.764, -0.536);
+        path.curve_to(p, p, p);
+
+        let mut ctx = StrokeCtx::default();
+        let lines = stroke_lines(&path, 0.34, &mut ctx);
+        assert!(!lines.is_empty(), "the stroke was dropped");
+        assert!(ctx.output().is_finite());
+        let max_x = lines
+            .iter()
+            .map(|l| l.p0.x.max(l.p1.x))
+            .fold(f32::MIN, f32::max);
+        assert!(max_x > 73.0, "the stroke ends at x = {max_x}");
+    }
+
+    #[test]
+    fn a_path_with_nan_is_still_dropped() {
+        let mut path = BezPath::new();
+        path.move_to((10.0, 10.0));
+        path.curve_to((f64::NAN, 10.0), (10.0, 60.0), (60.0, 60.0));
+        let lines = stroke_lines(&path, 2.0, &mut StrokeCtx::default());
+        assert!(lines.is_empty());
+    }
+
+    // A regression guard: it passes with or without the patch.
+    #[test]
+    fn a_finite_outline_is_stroked_as_before() {
+        let mut path = BezPath::new();
+        path.move_to((10.0, 10.0));
+        path.curve_to((60.0, 10.0), (10.0, 60.0), (60.0, 60.0));
+        let style = Stroke::new(2.0);
+        let mut expected = StrokeCtx::default();
+        expand_stroke(&path, &style, TOL, &mut expected);
+
+        let mut ctx = StrokeCtx::default();
+        let lines = stroke_lines(&path, 2.0, &mut ctx);
+        assert!(!lines.is_empty());
+        assert_eq!(ctx.output(), expected.output());
     }
 }

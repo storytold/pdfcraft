@@ -14,6 +14,12 @@ const QUALITY: u8 = 92;
 /// Larger photos are embedded as they are: turning them would take hundreds of MB.
 const MAX_PIXELS: u64 = 64 << 20;
 
+#[cfg(test)]
+thread_local! {
+    /// How many JPEGs [`turned`] handed to the decoder on this thread.
+    static DECODES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// A JPEG whose EXIF Orientation is not "as stored" has its pixels turned (and re-encoded);
 /// everything else, and any JPEG this can't read, is returned unchanged.
 pub(crate) fn upright(bytes: &[u8]) -> Cow<'_, [u8]> {
@@ -24,9 +30,11 @@ pub(crate) fn upright(bytes: &[u8]) -> Cow<'_, [u8]> {
 }
 
 fn turned(bytes: &[u8]) -> Option<Vec<u8>> {
-    if !bytes.starts_with(&[0xFF, 0xD8]) {
+    if !bytes.starts_with(&[0xFF, 0xD8]) || extended_xmp_chunks(bytes) > MAX_EXTENDED_XMP_CHUNKS {
         return None;
     }
+    #[cfg(test)]
+    DECODES.with(|c| c.set(c.get().saturating_add(1)));
     let mut decoder = ImageReader::with_format(Cursor::new(bytes), ImageFormat::Jpeg).into_decoder().ok()?;
     let orientation = decoder.orientation().ok()?;
     let (w, h) = decoder.dimensions();
@@ -51,6 +59,41 @@ fn turned(bytes: &[u8]) -> Option<Vec<u8>> {
         }
     }
     Some(out)
+}
+
+/// Most Extended XMP chunks a JPEG handed to the decoder may carry (64 MB of metadata). The
+/// decoder re-sorts and rescans every chunk so far after each marker, quadratic in their number.
+const MAX_EXTENDED_XMP_CHUNKS: usize = 1024;
+
+/// How many Extended XMP chunks (APP1 segments) come before the image data.
+fn extended_xmp_chunks(bytes: &[u8]) -> usize {
+    const PREFIX: &[u8] = b"http://ns.adobe.com/xmp/extension/\0";
+    let (mut i, mut chunks) = (2usize, 0usize);
+    while let Some(&byte) = bytes.get(i) {
+        // Stray bytes between segments, which the decoder skips too.
+        if byte != 0xFF {
+            i += 1;
+            continue;
+        }
+        let Some(&marker) = bytes.get(i.saturating_add(1)) else { break };
+        match marker {
+            // Fill bytes before a marker.
+            0xFF => i += 1,
+            // Markers without a segment.
+            0x00 | 0x01 | 0xD0..=0xD7 => i += 2,
+            // The image data starts (or ends): no headers after it.
+            0xDA | 0xD9 => break,
+            _ => {
+                let Some(&[hi, lo]) = bytes.get(i.saturating_add(2)..i.saturating_add(4)) else { break };
+                let len = usize::from(u16::from_be_bytes([hi, lo]));
+                if marker == 0xE1 && bytes.get(i.saturating_add(4)..).is_some_and(|seg| seg.starts_with(PREFIX)) {
+                    chunks += 1;
+                }
+                i = i.saturating_add(2).saturating_add(len.max(2));
+            }
+        }
+    }
+    chunks
 }
 
 /// The resolution in a JFIF header, if the file has one in inches or centimetres.
@@ -93,5 +136,27 @@ mod tests {
         assert!(matches!(upright(&stored), Cow::Borrowed(_)));
         assert!(matches!(upright(b"\x89PNG\r\n\x1a\n"), Cow::Borrowed(_)));
         assert!(matches!(upright(b"\xff\xd8 not a jpeg"), Cow::Borrowed(_)));
+    }
+
+    #[test]
+    fn a_jpeg_with_thousands_of_extended_xmp_chunks_is_not_decoded() {
+        // Empty chunks of one never-complete extended packet: the decoder re-sorts and rescans every
+        // chunk so far after each marker, quadratic in their number.
+        let chunk = |n: usize| {
+            let mut seg = b"http://ns.adobe.com/xmp/extension/\0".to_vec();
+            seg.extend_from_slice(&[b'0'; 32]); // the packet's GUID
+            seg.extend_from_slice(&1000u32.to_be_bytes()); // its full length
+            seg.extend_from_slice(&0u32.to_be_bytes()); // this chunk's offset
+            let mut out = vec![0xFF, 0xE1];
+            out.extend_from_slice(&u16::try_from(seg.len() + 2).unwrap().to_be_bytes());
+            out.extend_from_slice(&seg);
+            out.repeat(n)
+        };
+        let photo = phone_jpeg(6, 144);
+        let with = |n: usize| [&photo[..2], b"\0".as_slice(), &chunk(n), &photo[2..]].concat();
+        DECODES.with(|c| c.set(0));
+        assert!(matches!(upright(&with(4)), Cow::Owned(_)), "a few chunks are an ordinary photo");
+        assert!(matches!(upright(&with(5_000)), Cow::Borrowed(_)));
+        assert_eq!(DECODES.with(std::cell::Cell::get), 1, "only the ordinary photo reached the decoder");
     }
 }

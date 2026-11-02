@@ -311,6 +311,35 @@ fn refine(q: [Point; 4], edges: &[Option<Edge>], w: usize, h: usize) -> Option<[
     order_quad(refined)
 }
 
+/// A candidate quad's score (its area times the square of its sides' mean support), or `None` when it
+/// strays off the image, is too small, or has a side without enough edge support.
+fn quad_score(q: &[Point; 4], edges: &[Option<Edge>], w: usize, h: usize) -> Option<f64> {
+    let (fw, fh) = (w as f64, h as f64);
+    let (mx, my) = (MARGIN * fw, MARGIN * fh);
+    if q.iter().any(|p| p[0] < -mx || p[1] < -my || p[0] > fw + mx || p[1] > fh + my) {
+        return None;
+    }
+    let area = (0..4)
+        .map(|k| {
+            let (p, n) = (q[k], q[(k + 1) % 4]);
+            p[0] * n[1] - n[0] * p[1]
+        })
+        .sum::<f64>()
+        .abs()
+        / 2.0;
+    if area < MIN_AREA * fw * fh {
+        return None;
+    }
+    let sides: Vec<f64> = (0..4).map(|k| support(q[k], q[(k + 1) % 4], edges, w, h)).collect();
+    if sides.iter().any(|&s| s < MIN_SUPPORT) {
+        return None;
+    }
+    // Large, and with every side on its edge: a slightly larger quad with a side
+    // off the sheet loses to the sheet itself.
+    let mean = sides.iter().sum::<f64>() / 4.0;
+    Some(area * mean * mean)
+}
+
 /// The convex quadrilateral of two near-horizontal and two near-vertical lines whose four sides
 /// all lie on edges, scored by its area times the square of its sides' mean support.
 fn best_quad(lines: &[Line], edges: &[Option<Edge>], w: usize, h: usize) -> Option<[Point; 4]> {
@@ -318,8 +347,6 @@ fn best_quad(lines: &[Line], edges: &[Option<Edge>], w: usize, h: usize) -> Opti
     let flat = |l: &&Line| (l.theta.to_degrees() - 90.0).abs() <= 45.0;
     let horizontal: Vec<&Line> = lines.iter().filter(flat).collect();
     let vertical: Vec<&Line> = lines.iter().filter(|l| !flat(l)).collect();
-    let (fw, fh) = (w as f64, h as f64);
-    let (mx, my) = (MARGIN * fw, MARGIN * fh);
     let mut best: Option<(f64, [Point; 4])> = None;
     for (i, &h1) in horizontal.iter().enumerate() {
         for &h2 in horizontal.iter().skip(i + 1) {
@@ -328,28 +355,7 @@ fn best_quad(lines: &[Line], edges: &[Option<Edge>], w: usize, h: usize) -> Opti
                     let corners = [intersect(*h1, *v1), intersect(*h1, *v2), intersect(*h2, *v2), intersect(*h2, *v1)];
                     let [Some(a), Some(b), Some(c), Some(d)] = corners else { continue };
                     let Some(q) = order_quad([a, b, c, d]) else { continue };
-                    if q.iter().any(|p| p[0] < -mx || p[1] < -my || p[0] > fw + mx || p[1] > fh + my) {
-                        continue;
-                    }
-                    let area = (0..4)
-                        .map(|k| {
-                            let (p, n) = (q[k], q[(k + 1) % 4]);
-                            p[0] * n[1] - n[0] * p[1]
-                        })
-                        .sum::<f64>()
-                        .abs()
-                        / 2.0;
-                    if area < MIN_AREA * fw * fh {
-                        continue;
-                    }
-                    let sides: Vec<f64> = (0..4).map(|k| support(q[k], q[(k + 1) % 4], edges, w, h)).collect();
-                    if sides.iter().any(|&s| s < MIN_SUPPORT) {
-                        continue;
-                    }
-                    // Large, and with every side on its edge: a slightly larger quad with a side
-                    // off the sheet loses to the sheet itself.
-                    let mean = sides.iter().sum::<f64>() / 4.0;
-                    let score = area * mean * mean;
+                    let Some(score) = quad_score(&q, edges, w, h) else { continue };
                     if best.is_none_or(|(b, _)| score > b) {
                         best = Some((score, q));
                     }
