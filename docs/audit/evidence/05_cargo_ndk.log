@@ -1,0 +1,616 @@
+    Building arm64-v8a (aarch64-linux-android)
+warning: patch `egui_demo_lib v0.37.0 (https://github.com/storytold/egui.git?rev=6d518fc799681571963842f95b55a6b68431b15a#6d518fc7)` was not used in the crate graph
+warning: patch `egui_inspection v0.37.0 (https://github.com/storytold/egui.git?rev=6d518fc799681571963842f95b55a6b68431b15a#6d518fc7)` was not used in the crate graph
+warning: patch `egui_system_font_provider v0.37.0 (https://github.com/storytold/egui.git?rev=6d518fc799681571963842f95b55a6b68431b15a#6d518fc7)` was not used in the crate graph
+help: Check that the patched package version and available features are compatible
+      with the dependency requirements. If the patch has a different version from
+      what is locked in the Cargo.lock file, run `cargo update` to use the new
+      version. This may also occur with an optional dependency that is not enabled.
+   Compiling cfg-if v1.0.5
+   Compiling rand_core v0.10.1
+   Compiling zeroize v1.9.0
+   Compiling subtle v2.6.1
+   Compiling libc v0.2.189
+   Compiling getrandom v0.4.3
+   Compiling typenum v1.20.1
+   Compiling num-traits v0.2.19
+   Compiling cmov v0.5.4
+   Compiling const-oid v0.10.2
+   Compiling smallvec v1.16.2
+   Compiling bitflags v2.13.2
+   Compiling bytemuck v1.25.2
+   Compiling cpubits v0.1.1
+   Compiling ctutils v0.4.5
+   Compiling simd-adler32 v0.3.10
+   Compiling adler2 v2.0.1
+   Compiling crc32fast v1.5.2
+   Compiling miniz_oxide v0.9.1
+   Compiling once_cell v1.21.4
+   Compiling thiserror v2.0.21
+   Compiling zerocopy v0.8.59
+   Compiling miniz_oxide v0.8.9
+   Compiling fdeflate v0.3.7
+   Compiling zune-core v0.5.3
+   Compiling hybrid-array v0.4.15
+   Compiling weezl v0.1.12
+   Compiling cpufeatures v0.3.1
+   Compiling flate2 v1.1.10
+   Compiling fearless_simd v0.4.1
+   Compiling pxfm v0.1.30
+   Compiling crypto-common v0.2.2
+   Compiling block-buffer v0.12.1
+   Compiling block-padding v0.4.2
+   Compiling inout v0.2.2
+   Compiling png v0.18.1
+   Compiling zune-jpeg v0.5.15
+   Compiling quick-error v2.0.1
+   Compiling tinyvec v1.13.3
+   Compiling digest v0.11.3
+   Compiling cipher v0.5.2
+   Compiling color_quant v1.1.0
+   Compiling fax v0.2.7
+   Compiling sha2 v0.11.1
+   Compiling gif v0.14.2
+   Compiling unicode-normalization v0.1.25
+   Compiling unicode-properties v0.1.4
+   Compiling unicode-bidi v0.3.18
+   Compiling byteorder-lite v0.1.0
+   Compiling rustc-hash v2.1.3
+   Compiling memchr v2.8.3
+   Compiling hayro-ccitt v0.3.0
+   Compiling stringprep v0.1.5
+   Compiling android_system_properties v0.1.6
+   Compiling iana-time-zone v0.1.65
+   Compiling moxcms v0.8.1
+   Compiling chrono v0.4.45
+   Compiling aes v0.9.3
+   Compiling md-5 v0.11.0
+   Compiling font-types v0.12.5
+   Compiling crossbeam-utils v0.8.23
+   Compiling pdfcraft-crypt v0.17.0 (/Users/dikshantagarwal/Desktop/contribution project/crates/crypt)
+   Compiling zerofrom v0.1.8
+   Compiling stable_deref_trait v1.2.1
+   Compiling yoke v0.8.3
+   Compiling arrayvec v0.7.8
+   Compiling read-fonts v0.41.0
+   Compiling hayro-jpeg2000 v0.3.5
+   Compiling pdfcraft-fonts v0.17.0 (/Users/dikshantagarwal/Desktop/contribution project/crates/fonts)
+   Compiling half v2.7.1
+   Compiling tiff v0.11.3
+   Compiling allocator-api2 v0.2.21
+   Compiling foldhash v0.2.0
+   Compiling equivalent v1.0.2
+   Compiling hashbrown v0.17.1
+   Compiling crossbeam-epoch v0.9.21
+   Compiling crypto-bigint v0.7.6
+   Compiling either v1.18.0
+   Compiling crossbeam-deque v0.8.8
+   Compiling zerovec v0.11.8
+   Compiling rayon-core v1.13.0
+   Compiling image v0.25.10
+   Compiling ff v0.14.0
+   Compiling siphasher v1.0.4
+   Compiling der v0.8.2
+   Compiling serde_core v1.0.229
+   Compiling rayon v1.12.0
+   Compiling group v0.14.0
+   Compiling tinystr v0.8.4
+   Compiling polycool v0.4.0
+   Compiling signature v3.0.0
+   Compiling itoa v1.0.18
+   Compiling rten-base v0.26.0
+   Compiling hayro-jbig2 v0.3.0 (/Users/dikshantagarwal/Desktop/contribution project/vendor/hayro-jbig2)
+   Compiling writeable v0.6.4
+   Compiling base16ct v1.0.0
+   Compiling litemap v0.8.3
+   Compiling icu_locale_core v2.3.0
+   Compiling sec1 v0.8.1
+   Compiling kurbo v0.13.1
+   Compiling pdfcraft-filters v0.17.0 (/Users/dikshantagarwal/Desktop/contribution project/crates/filters)
+   Compiling harfrust v0.12.0
+   Compiling pdfcraft-cos v0.17.0 (/Users/dikshantagarwal/Desktop/contribution project/crates/cos)
+   Compiling skrifa v0.44.0
+   Compiling hayro-syntax v0.7.2 (/Users/dikshantagarwal/Desktop/contribution project/vendor/hayro-syntax)
+   Compiling pdfcraft-model v0.17.0 (/Users/dikshantagarwal/Desktop/contribution project/crates/model)
+   Compiling pdfcraft-content v0.17.0 (/Users/dikshantagarwal/Desktop/contribution project/crates/content)
+   Compiling potential_utf v0.1.6
+   Compiling zerotrie v0.2.5
+   Compiling indexmap v2.14.2
+   Compiling hmac v0.13.0
+   Compiling utf8_iter v1.0.4
+   Compiling static_assertions v1.1.0
+   Compiling log v0.4.34
+   Compiling icu_properties_data v2.3.0
+   Compiling icu_collections v2.3.0
+   Compiling serde v1.0.229
+   Compiling typeid v1.0.3
+   Compiling icu_provider v2.3.1
+   Compiling elliptic-curve v0.14.1
+   Compiling primefield v0.14.0
+   Compiling scopeguard v1.2.0
+   Compiling alloc-no-stdlib v2.0.4
+   Compiling wnaf v0.14.1
+   Compiling alloc-stdlib v0.2.4
+   Compiling icu_normalizer_data v2.3.0
+   Compiling rfc6979 v0.6.0
+   Compiling pdfcraft-annot v0.17.0 (/Users/dikshantagarwal/Desktop/contribution project/crates/annot)
+   Compiling rten-parallel v0.26.0
+   Compiling spki v0.8.0
+   Compiling ryu-js v1.0.3
+   Compiling parking v2.2.1
+   Compiling pin-project-lite v0.2.17
+   Compiling fast-float2 v0.2.4
+   Compiling fastrand v2.5.0
+   Compiling boa_string v0.22.0
+   Compiling ecdsa v0.17.0
+   Compiling rten-tensor v0.26.0
+   Compiling icu_properties v2.3.0
+   Compiling brotli-decompressor v5.0.3
+   Compiling primeorder v0.14.0
+   Compiling phf_shared v0.14.0
+   Compiling anyhow v1.0.104
+   Compiling thin-vec v0.2.20
+   Compiling write16 v1.0.0
+   Compiling utf16_iter v1.0.5
+   Compiling boa_gc v0.22.0
+   Compiling icu_normalizer v2.3.0
+   Compiling phf v0.14.0
+   Compiling flatbuffers v24.12.23
+   Compiling roxmltree v0.21.2
+   Compiling euclid v0.22.14
+   Compiling num-integer v0.1.47
+   Compiling color v0.3.3
+   Compiling chacha20 v0.10.2
+   Compiling futures-core v0.3.34
+   Compiling bitflags v1.3.2
+   Compiling rten-simd v0.26.0
+   Compiling linebender_resource_handle v0.1.1
+   Compiling peniko v0.6.1
+   Compiling rand v0.10.3
+   Compiling parking_lot_core v0.9.12
+   Compiling zmij v1.0.23
+   Compiling guillotiere v0.7.0
+   Compiling num-bigint v0.5.1
+   Compiling strum v0.28.0
+   Compiling encoding_rs v0.8.42
+   Compiling boa_interner v0.22.0
+   Compiling aws-lc-sys v0.46.0
+   Compiling brotli v8.0.4
+   Compiling event-listener v5.4.2
+   Compiling phf_shared v0.13.1
+   Compiling read-fonts v0.44.0
+   Compiling futures-io v0.3.34
+   Compiling hayro-postscript v0.1.0 (/Users/dikshantagarwal/Desktop/contribution project/vendor/hayro-postscript)
+   Compiling base64 v0.23.1
+   Compiling simdutf8 v0.1.5
+   Compiling portable-atomic v1.15.0
+   Compiling serde_json v1.0.154
+   Compiling boa_ast v0.22.0
+   Compiling futures-lite v2.6.1
+   Compiling equator v0.4.2
+   Compiling pin-project v1.1.13
+   Compiling phf v0.13.1
+   Compiling curve25519-dalek v5.0.0
+   Compiling event-listener-strategy v0.5.4
+   Compiling hayro-cmap v0.1.0 (/Users/dikshantagarwal/Desktop/contribution project/vendor/hayro-cmap)
+   Compiling vello_common v0.0.8 (/Users/dikshantagarwal/Desktop/contribution project/vendor/vello_common)
+   Compiling rten-model-file v0.26.0
+   Compiling rten-vecmath v0.26.0
+   Compiling rten-gemm v0.26.0
+   Compiling rten-shape-inference v0.26.0
+   Compiling lock_api v0.4.14
+   Compiling rustix v1.1.5
+   Compiling concurrent-queue v2.5.0
+   Compiling regress v0.12.0
+   Compiling cbc v0.2.1
+   Compiling num_cpus v1.17.0
+   Compiling errno v0.3.14
+   Compiling linux-raw-sys v0.12.1
+   Compiling hashbrown v0.14.5
+   Compiling skrifa v0.47.0
+   Compiling num_threads v0.1.7
+   Compiling fixedbitset v0.5.7
+   Compiling rten-onnx v0.26.0
+   Compiling time-core v0.1.9
+   Compiling powerfmt v0.2.0
+   Compiling num-conv v0.2.2
+   Compiling deranged v0.5.8
+   Compiling hayro-interpret v0.7.0 (/Users/dikshantagarwal/Desktop/contribution project/vendor/hayro-interpret)
+   Compiling time v0.3.55
+   Compiling futures-concurrency v7.7.1
+   Compiling boa_parser v0.22.0
+   Compiling rten v0.26.0
+   Compiling dashmap v6.2.1
+   Compiling dynify v0.1.2
+   Compiling async-channel v2.5.0
+   Compiling vello_cpu v0.0.8 (/Users/dikshantagarwal/Desktop/contribution project/vendor/vello_cpu)
+   Compiling num_enum v0.7.6
+   Compiling aligned-vec v0.6.4
+   Compiling pdfcraft-xfa v0.17.0 (/Users/dikshantagarwal/Desktop/contribution project/crates/xfa)
+   Compiling idna_adapter v1.2.2
+   Compiling rten-imageproc v0.26.0
+   Compiling pdfcraft-edit v0.17.0 (/Users/dikshantagarwal/Desktop/contribution project/crates/edit)
+   Compiling pdfcraft-forms v0.17.0 (/Users/dikshantagarwal/Desktop/contribution project/crates/forms)
+   Compiling ed25519 v3.0.0
+   Compiling crypto-primes v0.7.2
+   Compiling itertools v0.15.0
+   Compiling small_btree v0.1.0
+   Compiling pic-scale v0.7.12
+   Compiling nom v8.0.0
+   Compiling ecb v0.2.1
+   Compiling keccak v0.2.2
+   Compiling tap v1.0.1
+   Compiling intrusive-collections v0.10.3
+   Compiling oneshot v0.2.1
+   Compiling craft-winprint-gdi v0.1.0 (https://github.com/storytold/winprint.rs?rev=417ac3c4d14d3da5485a99c7d5ce8f05664ec312#417ac3c4)
+   Compiling cow-utils v0.1.3
+   Compiling weezl v0.2.1
+   Compiling tag_ptr v0.1.0
+   Compiling sponge-cursor v0.1.0
+   Compiling percent-encoding v2.3.2
+   Compiling rangemap v1.8.0
+   Compiling lopdf v0.45.0 (/Users/dikshantagarwal/Desktop/contribution project/vendor/lopdf)
+   Compiling form_urlencoded v1.2.2
+   Compiling sha3 v0.12.0
+   Compiling boa_engine v0.22.0
+   Compiling hayro v0.7.1 (/Users/dikshantagarwal/Desktop/contribution project/vendor/hayro)
+   Compiling craft-print v0.1.0 (https://github.com/storytold/craft-libs?rev=787a7a0f972fd1d7a7618fdbeca3a5267a0407ff#787a7a0f)
+   Compiling rsa v0.10.0-rc.18
+   Compiling ed25519-dalek v3.0.0
+   Compiling idna v1.1.0
+   Compiling tempfile v3.27.0
+   Compiling p384 v0.14.0
+   Compiling bp256 v0.14.0
+   Compiling p521 v0.14.0
+   Compiling p256 v0.14.0
+   Compiling bp384 v0.14.0
+   Compiling pbkdf2 v0.13.0
+   Compiling rc2 v0.9.0
+   Compiling des v0.9.0
+   Compiling ripemd v0.2.0
+   Compiling sha1 v0.11.0
+   Compiling url v2.5.8
+   Compiling pdfcraft-print v0.17.0 (/Users/dikshantagarwal/Desktop/contribution project/crates/print)
+   Compiling pdfcraft-render v0.17.0 (/Users/dikshantagarwal/Desktop/contribution project/crates/render)
+   Compiling pdfcraft-redact v0.17.0 (/Users/dikshantagarwal/Desktop/contribution project/crates/redact)
+   Compiling pdfcraft-audit v0.17.0 (/Users/dikshantagarwal/Desktop/contribution project/crates/audit)
+   Compiling pdfcraft-xfdf v0.17.0 (/Users/dikshantagarwal/Desktop/contribution project/crates/xfdf)
+   Compiling pdfcraft-create v0.17.0 (/Users/dikshantagarwal/Desktop/contribution project/crates/create)
+   Compiling pdfcraft-preflight v0.17.0 (/Users/dikshantagarwal/Desktop/contribution project/crates/preflight)
+   Compiling pdfcraft-measure v0.17.0 (/Users/dikshantagarwal/Desktop/contribution project/crates/measure)
+   Compiling pdfcraft-optimize v0.17.0 (/Users/dikshantagarwal/Desktop/contribution project/crates/optimize)
+   Compiling pdfcraft-a11y v0.17.0 (/Users/dikshantagarwal/Desktop/contribution project/crates/a11y)
+   Compiling pdfcraft-organize v0.17.0 (/Users/dikshantagarwal/Desktop/contribution project/crates/organize)
+   Compiling pdfcraft-export v0.17.0 (/Users/dikshantagarwal/Desktop/contribution project/crates/export)
+   Compiling bytes v1.12.1
+   Compiling unicode-segmentation v1.13.3
+   Compiling heck v0.5.0
+   Compiling pdfcraft-geom v0.17.0 (/Users/dikshantagarwal/Desktop/contribution project/crates/geom)
+   Compiling pdfcraft-compare v0.17.0 (/Users/dikshantagarwal/Desktop/contribution project/crates/compare)
+   Compiling craft-docpath v0.1.0 (https://github.com/storytold/craft-libs?rev=787a7a0f972fd1d7a7618fdbeca3a5267a0407ff#787a7a0f)
+   Compiling uniffi_pipeline v0.32.2
+   Compiling uniffi_core v0.32.2
+   Compiling env_filter v0.1.4
+   Compiling android_log-sys v0.3.2
+   Compiling pdfcraft-platform v0.17.0 (/Users/dikshantagarwal/Desktop/contribution project/crates/platform)
+   Compiling android_logger v0.15.1
+   Compiling uniffi v0.32.2
+   Compiling aws-lc-rs v1.18.2
+   Compiling ocrs v0.13.1
+   Compiling pdfcraft-sign v0.17.0 (/Users/dikshantagarwal/Desktop/contribution project/crates/sign)
+   Compiling pdfcraft-ocr v0.17.0 (/Users/dikshantagarwal/Desktop/contribution project/crates/ocr)
+   Compiling pdfcraft-js v0.17.0 (/Users/dikshantagarwal/Desktop/contribution project/crates/js)
+   Compiling pdfcraft-engine v0.17.0 (/Users/dikshantagarwal/Desktop/contribution project/crates/engine)
+   Compiling pdfcraft-automation v0.17.0 (/Users/dikshantagarwal/Desktop/contribution project/crates/automation)
+   Compiling pdfcraft-android v0.17.0 (/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 2m 06s
+    Building x86_64 (x86_64-linux-android)
+warning: patch `egui_demo_lib v0.37.0 (https://github.com/storytold/egui.git?rev=6d518fc799681571963842f95b55a6b68431b15a#6d518fc7)` was not used in the crate graph
+warning: patch `egui_inspection v0.37.0 (https://github.com/storytold/egui.git?rev=6d518fc799681571963842f95b55a6b68431b15a#6d518fc7)` was not used in the crate graph
+warning: patch `egui_system_font_provider v0.37.0 (https://github.com/storytold/egui.git?rev=6d518fc799681571963842f95b55a6b68431b15a#6d518fc7)` was not used in the crate graph
+help: Check that the patched package version and available features are compatible
+      with the dependency requirements. If the patch has a different version from
+      what is locked in the Cargo.lock file, run `cargo update` to use the new
+      version. This may also occur with an optional dependency that is not enabled.
+   Compiling cfg-if v1.0.5
+   Compiling rand_core v0.10.1
+   Compiling subtle v2.6.1
+   Compiling zeroize v1.9.0
+   Compiling libc v0.2.189
+   Compiling getrandom v0.4.3
+   Compiling typenum v1.20.1
+   Compiling num-traits v0.2.19
+   Compiling cmov v0.5.4
+   Compiling const-oid v0.10.2
+   Compiling smallvec v1.16.2
+   Compiling bitflags v2.13.2
+   Compiling bytemuck v1.25.2
+   Compiling cpubits v0.1.1
+   Compiling ctutils v0.4.5
+   Compiling simd-adler32 v0.3.10
+   Compiling adler2 v2.0.1
+   Compiling crc32fast v1.5.2
+   Compiling cpufeatures v0.3.1
+   Compiling miniz_oxide v0.9.1
+   Compiling once_cell v1.21.4
+   Compiling thiserror v2.0.21
+   Compiling zerocopy v0.8.59
+   Compiling miniz_oxide v0.8.9
+   Compiling fdeflate v0.3.7
+   Compiling zune-core v0.5.3
+   Compiling fearless_simd v0.4.1
+   Compiling pxfm v0.1.30
+   Compiling flate2 v1.1.10
+   Compiling hybrid-array v0.4.15
+   Compiling weezl v0.1.12
+   Compiling zune-jpeg v0.5.15
+   Compiling png v0.18.1
+   Compiling crypto-common v0.2.2
+   Compiling block-buffer v0.12.1
+   Compiling block-padding v0.4.2
+   Compiling inout v0.2.2
+   Compiling color_quant v1.1.0
+   Compiling digest v0.11.3
+   Compiling cipher v0.5.2
+   Compiling quick-error v2.0.1
+   Compiling tinyvec v1.13.3
+   Compiling fax v0.2.7
+   Compiling sha2 v0.11.1
+   Compiling gif v0.14.2
+   Compiling unicode-normalization v0.1.25
+   Compiling unicode-properties v0.1.4
+   Compiling byteorder-lite v0.1.0
+   Compiling unicode-bidi v0.3.18
+   Compiling hayro-ccitt v0.3.0
+   Compiling rustc-hash v2.1.3
+   Compiling memchr v2.8.3
+   Compiling android_system_properties v0.1.6
+   Compiling moxcms v0.8.1
+   Compiling iana-time-zone v0.1.65
+   Compiling stringprep v0.1.5
+   Compiling half v2.7.1
+   Compiling chrono v0.4.45
+   Compiling aes v0.9.3
+   Compiling md-5 v0.11.0
+   Compiling tiff v0.11.3
+   Compiling font-types v0.12.5
+   Compiling crossbeam-utils v0.8.23
+   Compiling pdfcraft-crypt v0.17.0 (/Users/dikshantagarwal/Desktop/contribution project/crates/crypt)
+   Compiling zerofrom v0.1.8
+   Compiling stable_deref_trait v1.2.1
+   Compiling arrayvec v0.7.8
+   Compiling yoke v0.8.3
+   Compiling read-fonts v0.41.0
+   Compiling hayro-jpeg2000 v0.3.5
+   Compiling pdfcraft-fonts v0.17.0 (/Users/dikshantagarwal/Desktop/contribution project/crates/fonts)
+   Compiling equivalent v1.0.2
+   Compiling allocator-api2 v0.2.21
+   Compiling foldhash v0.2.0
+   Compiling hashbrown v0.17.1
+   Compiling crossbeam-epoch v0.9.21
+   Compiling crypto-bigint v0.7.6
+   Compiling either v1.18.0
+   Compiling crossbeam-deque v0.8.8
+   Compiling zerovec v0.11.8
+   Compiling rayon-core v1.13.0
+   Compiling ff v0.14.0
+   Compiling siphasher v1.0.4
+   Compiling der v0.8.2
+   Compiling image v0.25.10
+   Compiling serde_core v1.0.229
+   Compiling rayon v1.12.0
+   Compiling group v0.14.0
+   Compiling tinystr v0.8.4
+   Compiling polycool v0.4.0
+   Compiling signature v3.0.0
+   Compiling litemap v0.8.3
+   Compiling writeable v0.6.4
+   Compiling rten-base v0.26.0
+   Compiling base16ct v1.0.0
+   Compiling itoa v1.0.18
+   Compiling hayro-jbig2 v0.3.0 (/Users/dikshantagarwal/Desktop/contribution project/vendor/hayro-jbig2)
+   Compiling sec1 v0.8.1
+   Compiling icu_locale_core v2.3.0
+   Compiling kurbo v0.13.1
+   Compiling pdfcraft-filters v0.17.0 (/Users/dikshantagarwal/Desktop/contribution project/crates/filters)
+   Compiling pdfcraft-cos v0.17.0 (/Users/dikshantagarwal/Desktop/contribution project/crates/cos)
+   Compiling skrifa v0.44.0
+   Compiling harfrust v0.12.0
+   Compiling hayro-syntax v0.7.2 (/Users/dikshantagarwal/Desktop/contribution project/vendor/hayro-syntax)
+   Compiling pdfcraft-model v0.17.0 (/Users/dikshantagarwal/Desktop/contribution project/crates/model)
+   Compiling potential_utf v0.1.6
+   Compiling zerotrie v0.2.5
+   Compiling indexmap v2.14.2
+   Compiling hmac v0.13.0
+   Compiling static_assertions v1.1.0
+   Compiling utf8_iter v1.0.4
+   Compiling log v0.4.34
+   Compiling icu_properties_data v2.3.0
+   Compiling typeid v1.0.3
+   Compiling icu_collections v2.3.0
+   Compiling pdfcraft-content v0.17.0 (/Users/dikshantagarwal/Desktop/contribution project/crates/content)
+   Compiling serde v1.0.229
+   Compiling icu_provider v2.3.1
+   Compiling elliptic-curve v0.14.1
+   Compiling primefield v0.14.0
+   Compiling scopeguard v1.2.0
+   Compiling alloc-no-stdlib v2.0.4
+   Compiling alloc-stdlib v0.2.4
+   Compiling icu_normalizer_data v2.3.0
+   Compiling wnaf v0.14.1
+   Compiling pdfcraft-annot v0.17.0 (/Users/dikshantagarwal/Desktop/contribution project/crates/annot)
+   Compiling rfc6979 v0.6.0
+   Compiling rten-parallel v0.26.0
+   Compiling spki v0.8.0
+   Compiling fastrand v2.5.0
+   Compiling ryu-js v1.0.3
+   Compiling parking v2.2.1
+   Compiling pin-project-lite v0.2.17
+   Compiling fast-float2 v0.2.4
+   Compiling boa_string v0.22.0
+   Compiling ecdsa v0.17.0
+   Compiling rten-tensor v0.26.0
+   Compiling icu_properties v2.3.0
+   Compiling primeorder v0.14.0
+   Compiling brotli-decompressor v5.0.3
+   Compiling phf_shared v0.14.0
+   Compiling anyhow v1.0.104
+   Compiling write16 v1.0.0
+   Compiling utf16_iter v1.0.5
+   Compiling thin-vec v0.2.20
+   Compiling icu_normalizer v2.3.0
+   Compiling boa_gc v0.22.0
+   Compiling flatbuffers v24.12.23
+   Compiling phf v0.14.0
+   Compiling roxmltree v0.21.2
+   Compiling euclid v0.22.14
+   Compiling num-integer v0.1.47
+   Compiling color v0.3.3
+   Compiling chacha20 v0.10.2
+   Compiling futures-core v0.3.34
+   Compiling linebender_resource_handle v0.1.1
+   Compiling bitflags v1.3.2
+   Compiling rten-simd v0.26.0
+   Compiling zmij v1.0.23
+   Compiling peniko v0.6.1
+   Compiling parking_lot_core v0.9.12
+   Compiling rand v0.10.3
+   Compiling guillotiere v0.7.0
+   Compiling num-bigint v0.5.1
+   Compiling boa_interner v0.22.0
+   Compiling strum v0.28.0
+   Compiling encoding_rs v0.8.42
+   Compiling aws-lc-sys v0.46.0
+   Compiling brotli v8.0.4
+   Compiling event-listener v5.4.2
+   Compiling phf_shared v0.13.1
+   Compiling read-fonts v0.44.0
+   Compiling hayro-postscript v0.1.0 (/Users/dikshantagarwal/Desktop/contribution project/vendor/hayro-postscript)
+   Compiling futures-io v0.3.34
+   Compiling base64 v0.23.1
+   Compiling simdutf8 v0.1.5
+   Compiling core_detect v1.0.0
+   Compiling boa_ast v0.22.0
+   Compiling serde_json v1.0.154
+   Compiling futures-lite v2.6.1
+   Compiling portable-atomic v1.15.0
+   Compiling pin-project v1.1.13
+   Compiling equator v0.4.2
+   Compiling curve25519-dalek v5.0.0
+   Compiling phf v0.13.1
+   Compiling event-listener-strategy v0.5.4
+   Compiling vello_common v0.0.8 (/Users/dikshantagarwal/Desktop/contribution project/vendor/vello_common)
+   Compiling rten-vecmath v0.26.0
+   Compiling rten-gemm v0.26.0
+   Compiling rten-model-file v0.26.0
+   Compiling hayro-cmap v0.1.0 (/Users/dikshantagarwal/Desktop/contribution project/vendor/hayro-cmap)
+   Compiling rten-shape-inference v0.26.0
+   Compiling lock_api v0.4.14
+   Compiling rustix v1.1.5
+   Compiling concurrent-queue v2.5.0
+   Compiling regress v0.12.0
+   Compiling cbc v0.2.1
+   Compiling errno v0.3.14
+   Compiling num_cpus v1.17.0
+   Compiling curve25519-dalek-derive v0.1.1
+   Compiling skrifa v0.47.0
+   Compiling deranged v0.5.8
+   Compiling hashbrown v0.14.5
+   Compiling num_threads v0.1.7
+   Compiling linux-raw-sys v0.12.1
+   Compiling powerfmt v0.2.0
+   Compiling fixedbitset v0.5.7
+   Compiling time-core v0.1.9
+   Compiling rten-onnx v0.26.0
+   Compiling num-conv v0.2.2
+   Compiling time v0.3.55
+   Compiling futures-concurrency v7.7.1
+   Compiling rten v0.26.0
+   Compiling dashmap v6.2.1
+   Compiling hayro-interpret v0.7.0 (/Users/dikshantagarwal/Desktop/contribution project/vendor/hayro-interpret)
+   Compiling dynify v0.1.2
+   Compiling boa_parser v0.22.0
+   Compiling async-channel v2.5.0
+   Compiling vello_cpu v0.0.8 (/Users/dikshantagarwal/Desktop/contribution project/vendor/vello_cpu)
+   Compiling num_enum v0.7.6
+   Compiling aligned-vec v0.6.4
+   Compiling pdfcraft-xfa v0.17.0 (/Users/dikshantagarwal/Desktop/contribution project/crates/xfa)
+   Compiling idna_adapter v1.2.2
+   Compiling rten-imageproc v0.26.0
+   Compiling pdfcraft-edit v0.17.0 (/Users/dikshantagarwal/Desktop/contribution project/crates/edit)
+   Compiling pdfcraft-forms v0.17.0 (/Users/dikshantagarwal/Desktop/contribution project/crates/forms)
+   Compiling ed25519 v3.0.0
+   Compiling crypto-primes v0.7.2
+   Compiling itertools v0.15.0
+   Compiling small_btree v0.1.0
+   Compiling nom v8.0.0
+   Compiling pic-scale v0.7.12
+   Compiling ecb v0.2.1
+   Compiling keccak v0.2.2
+   Compiling sponge-cursor v0.1.0
+   Compiling rangemap v1.8.0
+   Compiling craft-winprint-gdi v0.1.0 (https://github.com/storytold/winprint.rs?rev=417ac3c4d14d3da5485a99c7d5ce8f05664ec312#417ac3c4)
+   Compiling tap v1.0.1
+   Compiling oneshot v0.2.1
+   Compiling weezl v0.2.1
+   Compiling cow-utils v0.1.3
+   Compiling intrusive-collections v0.10.3
+   Compiling percent-encoding v2.3.2
+   Compiling tag_ptr v0.1.0
+   Compiling boa_engine v0.22.0
+   Compiling form_urlencoded v1.2.2
+   Compiling lopdf v0.45.0 (/Users/dikshantagarwal/Desktop/contribution project/vendor/lopdf)
+   Compiling craft-print v0.1.0 (https://github.com/storytold/craft-libs?rev=787a7a0f972fd1d7a7618fdbeca3a5267a0407ff#787a7a0f)
+   Compiling sha3 v0.12.0
+   Compiling hayro v0.7.1 (/Users/dikshantagarwal/Desktop/contribution project/vendor/hayro)
+   Compiling rsa v0.10.0-rc.18
+   Compiling ed25519-dalek v3.0.0
+   Compiling idna v1.1.0
+   Compiling tempfile v3.27.0
+   Compiling p384 v0.14.0
+   Compiling bp384 v0.14.0
+   Compiling p521 v0.14.0
+   Compiling bp256 v0.14.0
+   Compiling p256 v0.14.0
+   Compiling pbkdf2 v0.13.0
+   Compiling rc2 v0.9.0
+   Compiling des v0.9.0
+   Compiling ripemd v0.2.0
+   Compiling sha1 v0.11.0
+   Compiling url v2.5.8
+   Compiling pdfcraft-render v0.17.0 (/Users/dikshantagarwal/Desktop/contribution project/crates/render)
+   Compiling pdfcraft-print v0.17.0 (/Users/dikshantagarwal/Desktop/contribution project/crates/print)
+   Compiling pdfcraft-redact v0.17.0 (/Users/dikshantagarwal/Desktop/contribution project/crates/redact)
+   Compiling pdfcraft-audit v0.17.0 (/Users/dikshantagarwal/Desktop/contribution project/crates/audit)
+   Compiling pdfcraft-xfdf v0.17.0 (/Users/dikshantagarwal/Desktop/contribution project/crates/xfdf)
+   Compiling pdfcraft-create v0.17.0 (/Users/dikshantagarwal/Desktop/contribution project/crates/create)
+   Compiling pdfcraft-preflight v0.17.0 (/Users/dikshantagarwal/Desktop/contribution project/crates/preflight)
+   Compiling pdfcraft-optimize v0.17.0 (/Users/dikshantagarwal/Desktop/contribution project/crates/optimize)
+   Compiling pdfcraft-measure v0.17.0 (/Users/dikshantagarwal/Desktop/contribution project/crates/measure)
+   Compiling pdfcraft-a11y v0.17.0 (/Users/dikshantagarwal/Desktop/contribution project/crates/a11y)
+   Compiling pdfcraft-organize v0.17.0 (/Users/dikshantagarwal/Desktop/contribution project/crates/organize)
+   Compiling pdfcraft-export v0.17.0 (/Users/dikshantagarwal/Desktop/contribution project/crates/export)
+   Compiling bytes v1.12.1
+   Compiling pdfcraft-compare v0.17.0 (/Users/dikshantagarwal/Desktop/contribution project/crates/compare)
+   Compiling craft-docpath v0.1.0 (https://github.com/storytold/craft-libs?rev=787a7a0f972fd1d7a7618fdbeca3a5267a0407ff#787a7a0f)
+   Compiling heck v0.5.0
+   Compiling pdfcraft-geom v0.17.0 (/Users/dikshantagarwal/Desktop/contribution project/crates/geom)
+   Compiling unicode-segmentation v1.13.3
+   Compiling uniffi_pipeline v0.32.2
+   Compiling uniffi_core v0.32.2
+   Compiling env_filter v0.1.4
+   Compiling android_log-sys v0.3.2
+   Compiling pdfcraft-platform v0.17.0 (/Users/dikshantagarwal/Desktop/contribution project/crates/platform)
+   Compiling android_logger v0.15.1
+   Compiling uniffi v0.32.2
+   Compiling aws-lc-rs v1.18.2
+   Compiling ocrs v0.13.1
+   Compiling pdfcraft-sign v0.17.0 (/Users/dikshantagarwal/Desktop/contribution project/crates/sign)
+   Compiling pdfcraft-ocr v0.17.0 (/Users/dikshantagarwal/Desktop/contribution project/crates/ocr)
+   Compiling pdfcraft-js v0.17.0 (/Users/dikshantagarwal/Desktop/contribution project/crates/js)
+   Compiling pdfcraft-engine v0.17.0 (/Users/dikshantagarwal/Desktop/contribution project/crates/engine)
+   Compiling pdfcraft-automation v0.17.0 (/Users/dikshantagarwal/Desktop/contribution project/crates/automation)
+   Compiling pdfcraft-android v0.17.0 (/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 2m 58s
+     Copying libraries to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/core/native/src/main/jniLibs
+EXIT_CODE: 0

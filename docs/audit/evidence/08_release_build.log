@@ -1,0 +1,175 @@
+Calculating task graph as no cached configuration is available for tasks: assembleRelease bundleRelease
+[CXX5106] NDK was located by using ndk.dir property. This method is deprecated and will be removed in a future release. Please delete ndk.dir from local.properties and set android.ndkVersion to [29.0.14206865] in all native modules in the project. https://developer.android.com/r/studio-ui/ndk-dir
+> Task :app:generateReleaseAssets UP-TO-DATE
+> Task :app:preBuild UP-TO-DATE
+> Task :app:preReleaseBuild UP-TO-DATE
+> Task :app:mergeReleaseArtProfile SKIPPED
+> Task :app:ocrModelsRelease
+> Task :app:javaPreCompileRelease FROM-CACHE
+> Task :app:generateReleaseResources FROM-CACHE
+> Task :app:createReleaseCompatibleScreenManifests
+> Task :app:pdfcraftLicencesRelease
+> Task :app:mergeReleaseStartupProfile
+> Task :app:validateSigningRelease
+> Task :app:writeReleaseAppMetadata
+> Task :app:extractProguardFiles
+> Task :app:writeReleaseSigningConfigVersions
+> Task :app:pdfcraftResourcesRelease
+> Task :app:mergeReleaseAssets
+> Task :app:parseReleaseIntegrityConfig
+> Task :app:processReleaseNavigationResources
+> Task :app:mapReleaseSourceSetPaths
+> Task :app:extractReleaseSupportedLocales
+> Task :app:extractDeepLinksRelease
+> Task :app:compileReleaseNavigationResources
+> Task :app:compressReleaseAssets
+> Task :app:checkReleaseAarMetadata
+> Task :app:generateReleaseLocaleConfig
+> Task :app:checkReleaseDuplicateClasses
+> Task :app:processReleaseMainManifest
+> Task :app:processReleaseManifest
+> Task :app:processReleaseManifestForPackage
+> Task :app:lucideIconsRelease
+> Task :app:packageReleaseResources
+> Task :app:parseReleaseLocalResources
+> Task :app:generateReleaseRFile FROM-CACHE
+> Task :app:mergeReleaseResources
+> Task :app:processReleaseResources
+
+> Task :app:cargoBuildRelease
+    Building arm64-v8a (aarch64-linux-android)
+warning: patch `egui_demo_lib v0.37.0 (https://github.com/storytold/egui.git?rev=6d518fc799681571963842f95b55a6b68431b15a#6d518fc7)` was not used in the crate graph
+warning: patch `egui_inspection v0.37.0 (https://github.com/storytold/egui.git?rev=6d518fc799681571963842f95b55a6b68431b15a#6d518fc7)` was not used in the crate graph
+warning: patch `egui_system_font_provider v0.37.0 (https://github.com/storytold/egui.git?rev=6d518fc799681571963842f95b55a6b68431b15a#6d518fc7)` was not used in the crate graph
+help: Check that the patched package version and available features are compatible
+      with the dependency requirements. If the patch has a different version from
+      what is locked in the Cargo.lock file, run `cargo update` to use the new
+      version. This may also occur with an optional dependency that is not enabled.
+   Compiling pdfcraft-automation v0.17.0 (/Users/dikshantagarwal/Desktop/contribution project/crates/automation)
+   Compiling pdfcraft-android v0.17.0 (/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android)
+    Finished `release` profile [optimized] target(s) in 31.58s
+    Building x86_64 (x86_64-linux-android)
+warning: patch `egui_demo_lib v0.37.0 (https://github.com/storytold/egui.git?rev=6d518fc799681571963842f95b55a6b68431b15a#6d518fc7)` was not used in the crate graph
+warning: patch `egui_inspection v0.37.0 (https://github.com/storytold/egui.git?rev=6d518fc799681571963842f95b55a6b68431b15a#6d518fc7)` was not used in the crate graph
+warning: patch `egui_system_font_provider v0.37.0 (https://github.com/storytold/egui.git?rev=6d518fc799681571963842f95b55a6b68431b15a#6d518fc7)` was not used in the crate graph
+help: Check that the patched package version and available features are compatible
+      with the dependency requirements. If the patch has a different version from
+      what is locked in the Cargo.lock file, run `cargo update` to use the new
+      version. This may also occur with an optional dependency that is not enabled.
+   Compiling pdfcraft-automation v0.17.0 (/Users/dikshantagarwal/Desktop/contribution project/crates/automation)
+   Compiling pdfcraft-android v0.17.0 (/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android)
+    Finished `release` profile [optimized] target(s) in 29.75s
+     Copying libraries to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/generated/jniLibs/cargoBuildRelease
+
+> Task :app:mergeReleaseJniLibFolders
+> Task :app:mergeReleaseNativeLibs
+
+> Task :app:stripReleaseDebugSymbols
+[CXX5106] NDK was located by using ndk.dir property. This method is deprecated and will be removed in a future release. Please delete ndk.dir from local.properties and set android.ndkVersion to [29.0.14206865] in all native modules in the project. https://developer.android.com/r/studio-ui/ndk-dir
+[CXX5106] NDK was located by using ndk.dir property. This method is deprecated and will be removed in a future release. Please delete ndk.dir from local.properties and set android.ndkVersion to [29.0.14206865] in all native modules in the project. https://developer.android.com/r/studio-ui/ndk-dir
+[CXX5106] NDK was located by using ndk.dir property. This method is deprecated and will be removed in a future release. Please delete ndk.dir from local.properties and set android.ndkVersion to [29.0.14206865] in all native modules in the project. https://developer.android.com/r/studio-ui/ndk-dir
+[CXX5106] NDK was located by using ndk.dir property. This method is deprecated and will be removed in a future release. Please delete ndk.dir from local.properties and set android.ndkVersion to [29.0.14206865] in all native modules in the project. https://developer.android.com/r/studio-ui/ndk-dir
+[CXX5106] NDK was located by using ndk.dir property. This method is deprecated and will be removed in a future release. Please delete ndk.dir from local.properties and set android.ndkVersion to [29.0.14206865] in all native modules in the project. https://developer.android.com/r/studio-ui/ndk-dir
+[CXX5106] NDK was located by using ndk.dir property. This method is deprecated and will be removed in a future release. Please delete ndk.dir from local.properties and set android.ndkVersion to [29.0.14206865] in all native modules in the project. https://developer.android.com/r/studio-ui/ndk-dir
+[CXX5106] NDK was located by using ndk.dir property. This method is deprecated and will be removed in a future release. Please delete ndk.dir from local.properties and set android.ndkVersion to [29.0.14206865] in all native modules in the project. https://developer.android.com/r/studio-ui/ndk-dir
+[CXX5106] NDK was located by using ndk.dir property. This method is deprecated and will be removed in a future release. Please delete ndk.dir from local.properties and set android.ndkVersion to [29.0.14206865] in all native modules in the project. https://developer.android.com/r/studio-ui/ndk-dir
+[CXX5106] NDK was located by using ndk.dir property. This method is deprecated and will be removed in a future release. Please delete ndk.dir from local.properties and set android.ndkVersion to [29.0.14206865] in all native modules in the project. https://developer.android.com/r/studio-ui/ndk-dir
+[CXX5106] NDK was located by using ndk.dir property. This method is deprecated and will be removed in a future release. Please delete ndk.dir from local.properties and set android.ndkVersion to [29.0.14206865] in all native modules in the project. https://developer.android.com/r/studio-ui/ndk-dir
+[CXX5106] NDK was located by using ndk.dir property. This method is deprecated and will be removed in a future release. Please delete ndk.dir from local.properties and set android.ndkVersion to [29.0.14206865] in all native modules in the project. https://developer.android.com/r/studio-ui/ndk-dir
+[CXX5106] NDK was located by using ndk.dir property. This method is deprecated and will be removed in a future release. Please delete ndk.dir from local.properties and set android.ndkVersion to [29.0.14206865] in all native modules in the project. https://developer.android.com/r/studio-ui/ndk-dir
+[CXX5106] NDK was located by using ndk.dir property. This method is deprecated and will be removed in a future release. Please delete ndk.dir from local.properties and set android.ndkVersion to [29.0.14206865] in all native modules in the project. https://developer.android.com/r/studio-ui/ndk-dir
+Unable to strip the following libraries, packaging them as they are: libjnidispatch.so. Run with --info option to learn more.
+
+> Task :app:uniffiBindgenRelease
+
+> Task :app:extractReleaseNativeSymbolTables
+[CXX5106] NDK was located by using ndk.dir property. This method is deprecated and will be removed in a future release. Please delete ndk.dir from local.properties and set android.ndkVersion to [29.0.14206865] in all native modules in the project. https://developer.android.com/r/studio-ui/ndk-dir
+
+> Task :app:mergeReleaseNativeDebugMetadata
+
+> Task :app:compileReleaseKotlin
+w: file:///Users/dikshantagarwal/Desktop/contribution%20project/apps/pdfcraft-android/android/app/src/main/java/io/github/dikshant363/pdfcraft/ui/FreeTextLayout.kt:25:11 Redundant call of conversion method.
+w: file:///Users/dikshantagarwal/Desktop/contribution%20project/apps/pdfcraft-android/android/app/src/main/java/io/github/dikshant363/pdfcraft/ui/ToolScreens.kt:670:23 This annotation is currently applied to the value parameter only, but in the future it will also be applied to field.
+- To opt in to applying to both value parameter and field, add '-Xannotation-default-target=param-property' to your compiler arguments.
+- To keep applying to the value parameter only, use the '@param:' annotation target.
+
+See https://youtrack.jetbrains.com/issue/KT-73255 for more details.
+w: file:///Users/dikshantagarwal/Desktop/contribution%20project/apps/pdfcraft-android/android/app/src/main/java/io/github/dikshant363/pdfcraft/ui/home/HomeScreen.kt:86:20 This annotation is currently applied to the value parameter only, but in the future it will also be applied to field.
+- To opt in to applying to both value parameter and field, add '-Xannotation-default-target=param-property' to your compiler arguments.
+- To keep applying to the value parameter only, use the '@param:' annotation target.
+
+See https://youtrack.jetbrains.com/issue/KT-73255 for more details.
+w: file:///Users/dikshantagarwal/Desktop/contribution%20project/apps/pdfcraft-android/android/app/src/main/java/io/github/dikshant363/pdfcraft/ui/home/Tabs.kt:162:64 This annotation is currently applied to the value parameter only, but in the future it will also be applied to field.
+- To opt in to applying to both value parameter and field, add '-Xannotation-default-target=param-property' to your compiler arguments.
+- To keep applying to the value parameter only, use the '@param:' annotation target.
+
+See https://youtrack.jetbrains.com/issue/KT-73255 for more details.
+w: file:///Users/dikshantagarwal/Desktop/contribution%20project/apps/pdfcraft-android/android/app/src/main/java/io/github/dikshant363/pdfcraft/ui/home/Tabs.kt:162:91 This annotation is currently applied to the value parameter only, but in the future it will also be applied to field.
+- To opt in to applying to both value parameter and field, add '-Xannotation-default-target=param-property' to your compiler arguments.
+- To keep applying to the value parameter only, use the '@param:' annotation target.
+
+See https://youtrack.jetbrains.com/issue/KT-73255 for more details.
+w: file:///Users/dikshantagarwal/Desktop/contribution%20project/apps/pdfcraft-android/android/app/src/main/java/io/github/dikshant363/pdfcraft/ui/home/Tabs.kt:420:21 'val LocalClipboardManager: ProvidableCompositionLocal<ClipboardManager>' is deprecated. Use LocalClipboard instead which supports suspend functions.
+w: file:///Users/dikshantagarwal/Desktop/contribution%20project/apps/pdfcraft-android/android/app/src/main/java/io/github/dikshant363/pdfcraft/ui/viewer/DigitalSign.kt:139:21 This annotation is currently applied to the value parameter only, but in the future it will also be applied to field.
+- To opt in to applying to both value parameter and field, add '-Xannotation-default-target=param-property' to your compiler arguments.
+- To keep applying to the value parameter only, use the '@param:' annotation target.
+
+See https://youtrack.jetbrains.com/issue/KT-73255 for more details.
+w: file:///Users/dikshantagarwal/Desktop/contribution%20project/apps/pdfcraft-android/android/app/src/main/java/io/github/dikshant363/pdfcraft/ui/viewer/FillSign.kt:71:48 This annotation is currently applied to the value parameter only, but in the future it will also be applied to field.
+- To opt in to applying to both value parameter and field, add '-Xannotation-default-target=param-property' to your compiler arguments.
+- To keep applying to the value parameter only, use the '@param:' annotation target.
+
+See https://youtrack.jetbrains.com/issue/KT-73255 for more details.
+w: file:///Users/dikshantagarwal/Desktop/contribution%20project/apps/pdfcraft-android/android/app/src/main/java/io/github/dikshant363/pdfcraft/ui/viewer/QuickTools.kt:74:38 This annotation is currently applied to the value parameter only, but in the future it will also be applied to field.
+- To opt in to applying to both value parameter and field, add '-Xannotation-default-target=param-property' to your compiler arguments.
+- To keep applying to the value parameter only, use the '@param:' annotation target.
+
+See https://youtrack.jetbrains.com/issue/KT-73255 for more details.
+w: file:///Users/dikshantagarwal/Desktop/contribution%20project/apps/pdfcraft-android/android/app/src/main/java/io/github/dikshant363/pdfcraft/ui/viewer/QuickTools.kt:74:65 This annotation is currently applied to the value parameter only, but in the future it will also be applied to field.
+- To opt in to applying to both value parameter and field, add '-Xannotation-default-target=param-property' to your compiler arguments.
+- To keep applying to the value parameter only, use the '@param:' annotation target.
+
+See https://youtrack.jetbrains.com/issue/KT-73255 for more details.
+w: file:///Users/dikshantagarwal/Desktop/contribution%20project/apps/pdfcraft-android/android/app/src/main/java/io/github/dikshant363/pdfcraft/ui/viewer/ReadAloud.kt:158:28 'var language: Locale!' is deprecated. Deprecated in Java.
+w: file:///Users/dikshantagarwal/Desktop/contribution%20project/apps/pdfcraft-android/android/app/src/main/java/io/github/dikshant363/pdfcraft/ui/viewer/SpellCheck.kt:57:56 Unnecessary safe call on a non-null receiver of type 'SpellCheckerSession'.
+w: file:///Users/dikshantagarwal/Desktop/contribution%20project/apps/pdfcraft-android/android/app/src/main/java/io/github/dikshant363/pdfcraft/ui/viewer/Tools.kt:109:9 'when' is exhaustive so 'else' is redundant here.
+w: file:///Users/dikshantagarwal/Desktop/contribution%20project/apps/pdfcraft-android/android/app/src/main/java/io/github/dikshant363/pdfcraft/ui/viewer/ZoomButtons.kt:129:44 'fun rememberPlainTooltipPositionProvider(spacingBetweenTooltipAndAnchor: Dp = ...): PopupPositionProvider' is deprecated. Deprecated in favor of rememberTooltipPositionProvider API.
+
+> Task :app:compileReleaseJavaWithJavac NO-SOURCE
+> Task :app:expandReleaseArtProfileWildcards SKIPPED
+> Task :app:mergeReleaseGeneratedProguardFiles
+> Task :app:processReleaseJavaRes
+> Task :app:mergeReleaseJavaResource
+> Task :app:generateReleaseLintVitalReportModel
+> Task :app:produceReleaseComposeMapping
+> Task :app:reportReleaseComposeMappingErrors
+> Task :app:lintVitalAnalyzeRelease
+> Task :app:minifyReleaseWithR8
+> Task :app:convertShrunkResourcesToBinaryRelease
+> Task :app:buildReleasePreBundle
+> Task :app:optimizeReleaseResources
+> Task :app:mergeReleaseComposeMapping
+> Task :app:compileReleaseArtProfile SKIPPED
+> Task :app:lintVitalReportRelease
+> Task :app:lintVitalRelease
+> Task :app:packageRelease
+> Task :app:assembleRelease
+> Task :app:createReleaseApkListingFileRedirect
+> Task :app:packageReleaseBundle
+> Task :app:signReleaseBundle
+> Task :app:bundleRelease
+> Task :app:produceReleaseBundleIdeListingFile
+> Task :app:createReleaseBundleListingFileRedirect
+
+[Incubating] Problems report is available at: file:///Users/dikshantagarwal/Desktop/contribution%20project/apps/pdfcraft-android/android/build/reports/problems/problems-report.html
+
+Deprecated Gradle features were used in this build, making it incompatible with Gradle 10.
+
+You can use '--warning-mode all' to show the individual deprecation warnings and determine if they come from your own scripts or plugins.
+
+For more on this, please refer to https://docs.gradle.org/9.6.1/userguide/command_line_interface.html#sec:command_line_warnings in the Gradle documentation.
+
+BUILD SUCCESSFUL in 3m 6s
+59 actionable tasks: 56 executed, 3 from cache
+Configuration cache entry stored.
+EXIT_CODE: 0

@@ -1,0 +1,1160 @@
+Initialized native services in: /Users/dikshantagarwal/.gradle/native
+Initialized jansi services in: /Users/dikshantagarwal/.gradle/native
+Found daemon DaemonInfo{pid=40834, address=[67c441b7-cec7-4925-8eea-64d9a21c3b3f port:51699, addresses:[/127.0.0.1]], state=Idle, lastBusy=1793587580495, context=DefaultDaemonContext[uid=a02a6ff7-7ec3-476a-a96c-bb8b54d8df0f,javaHome=/opt/homebrew/Cellar/openjdk/26.0.2/libexec/openjdk.jdk/Contents/Home,javaVersion=26,javaVendor=Homebrew,daemonRegistryDir=/Users/dikshantagarwal/.gradle/daemon,pid=40834,idleTimeout=10800000,priority=NORMAL,applyInstrumentationAgent=true,nativeServicesMode=ENABLED,daemonOpts=-Xmx3072m,-Dfile.encoding=UTF-8,-Duser.country=IN,-Duser.language=en,-Duser.variant]} however its context does not match the desired criteria.
+JVM is incompatible.
+Wanted: DaemonRequestContext{jvmCriteria=/opt/homebrew/Cellar/openjdk@17/17.0.20/libexec/openjdk.jdk/Contents/Home (no Daemon JVM specified, using current Java home), daemonOpts=[-Xmx3072m, -Dfile.encoding=UTF-8, -Duser.country=IN, -Duser.language=en, -Duser.variant], applyInstrumentationAgent=true, nativeServicesMode=ENABLED, priority=NORMAL}
+Actual: DefaultDaemonContext[uid=a02a6ff7-7ec3-476a-a96c-bb8b54d8df0f,javaHome=/opt/homebrew/Cellar/openjdk/26.0.2/libexec/openjdk.jdk/Contents/Home,javaVersion=26,javaVendor=Homebrew,daemonRegistryDir=/Users/dikshantagarwal/.gradle/daemon,pid=40834,idleTimeout=10800000,priority=NORMAL,applyInstrumentationAgent=true,nativeServicesMode=ENABLED,daemonOpts=-Xmx3072m,-Dfile.encoding=UTF-8,-Duser.country=IN,-Duser.language=en,-Duser.variant]
+
+  Looking for a different daemon...
+The client will now receive all logging from the daemon (pid: 40796). The daemon log file: /Users/dikshantagarwal/.gradle/daemon/9.6.1/daemon-40796.out.log
+Starting 12th build in daemon [uptime: 1 hrs 25 mins 7.586 secs, performance: 100%, GC rate: 0.00/s, heap usage: 2% of 3 GiB]
+Using 10 worker leases.
+Operational build model parameters: {cachingModelBuilding=false, configurationCache=true, configurationCacheDisabledReason=null, configurationCacheParallelLoad=true, configurationCacheParallelStore=false, configureOnDemand=false, invalidateCoupledProjects=false, isolatedProjects=false, isolatedProjectsDiagnostics=false, modelAsProjectDependency=false, modelBuilding=false, parallelModelBuilding=false, parallelProjectConfiguration=false, parallelProjectExecution=true, resilientModelBuilding=false, vintage=false}
+Encryption key source: default Gradle keystore (pkcs12)
+Now considering [/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android] as hierarchies to watch
+Reusing configuration cache.
+Now considering [/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android] as hierarchies to watch
+Watching the file system is configured to be enabled if available
+File system watching is active
+Using local directory build cache for the root build (location = /Users/dikshantagarwal/.gradle/caches/build-cache-1, remove unused entries = after 7 days).
+Tasks to be executed: [task ':app:pdfcraftResourcesDebug', task ':app:preBuild', task ':app:preDebugBuild', task ':app:extractDebugSupportedLocales', task ':app:mapDebugSourceSetPaths', task ':app:generateDebugLocaleConfig', task ':app:generateDebugResources', task ':app:packageDebugResources', task ':app:processDebugNavigationResources', task ':app:parseDebugLocalResources', task ':app:generateDebugRFile', task ':app:lucideIconsDebug', task ':app:cargoBuildDebug', task ':app:uniffiBindgenDebug', task ':app:compileDebugKotlin', task ':app:javaPreCompileDebug', task ':app:compileDebugJavaWithJavac', task ':app:checkDebugAarMetadata', task ':app:compileDebugNavigationResources', task ':app:mergeDebugResources', task ':app:createDebugCompatibleScreenManifests', task ':app:extractDeepLinksDebug', task ':app:processDebugMainManifest', task ':app:processDebugManifest', task ':app:processDebugManifestForPackage', task ':app:processDebugResources', task ':app:bundleDebugClassesToRuntimeJar', task ':app:bundleDebugClassesToCompileJar', task ':app:preDebugUnitTestBuild', task ':app:compileDebugUnitTestKotlin', task ':app:javaPreCompileDebugUnitTest', task ':app:compileDebugUnitTestJavaWithJavac', task ':app:processDebugJavaRes', task ':app:processDebugUnitTestJavaRes', task ':app:testDebugUnitTest']
+Tasks that were excluded: []
+Resolve mutations for :app:pdfcraftResourcesDebug (Thread[Execution worker,5,main]) started.
+Resolve mutations for :app:preBuild (Thread[Execution worker Thread 2,5,main]) started.
+Resolve mutations for :app:lucideIconsDebug (Thread[Execution worker Thread 4,5,main]) started.
+:app:preBuild (Thread[Execution worker Thread 2,5,main]) started.
+Resolve mutations for :app:cargoBuildDebug (Thread[Execution worker Thread 3,5,main]) started.
+:app:pdfcraftResourcesDebug (Thread[Execution worker Thread 6,5,main]) started.
+:app:lucideIconsDebug (Thread[Execution worker Thread 4,5,main]) started.
+:app:cargoBuildDebug (Thread[Execution worker Thread 3,5,main]) started.
+
+> Task :app:preBuild UP-TO-DATE
+Skipping task ':app:preBuild' as it has no actions.
+Resolve mutations for :app:preDebugBuild (Thread[Execution worker Thread 2,5,main]) started.
+Build 90cc9230-d83a-4f66-b650-25ad52da5b0f is started
+:app:preDebugBuild (Thread[Execution worker Thread 2,5,main]) started.
+Resolve mutations for :app:preDebugUnitTestBuild (Thread[Execution worker Thread 8,5,main]) started.
+
+> Task :app:preDebugBuild UP-TO-DATE
+Skipping task ':app:preDebugBuild' as it has no actions.
+Resolve mutations for :app:generateDebugResources (Thread[Execution worker Thread 7,5,main]) started.
+Resolve mutations for :app:processDebugNavigationResources (Thread[Execution worker Thread 2,5,main]) started.
+Resolve mutations for :app:javaPreCompileDebug (Thread[included builds,5,main]) started.
+:app:generateDebugResources (Thread[Execution worker Thread 7,5,main]) started.
+:app:javaPreCompileDebug (Thread[included builds,5,main]) started.
+:app:processDebugNavigationResources (Thread[Execution worker Thread 2,5,main]) started.
+:app:preDebugUnitTestBuild (Thread[Execution worker Thread 8,5,main]) started.
+Resolve mutations for :app:createDebugCompatibleScreenManifests (Thread[Execution worker Thread 9,5,main]) started.
+:app:createDebugCompatibleScreenManifests (Thread[Execution worker Thread 9,5,main]) started.
+Resolve mutations for :app:checkDebugAarMetadata (Thread[Execution worker,5,main]) started.
+:app:checkDebugAarMetadata (Thread[Execution worker,5,main]) started.
+
+> Task :app:preDebugUnitTestBuild UP-TO-DATE
+Skipping task ':app:preDebugUnitTestBuild' as it has no actions.
+Resolve mutations for :app:javaPreCompileDebugUnitTest (Thread[Execution worker Thread 8,5,main]) started.
+:app:javaPreCompileDebugUnitTest (Thread[Execution worker Thread 8,5,main]) started.
+
+> Task :app:createDebugCompatibleScreenManifests
+Caching disabled for task ':app:createDebugCompatibleScreenManifests' because:
+  Caching has been disabled for the task
+Task ':app:createDebugCompatibleScreenManifests' is not up-to-date because:
+  Executed with '--rerun-tasks'.
+
+> Task :app:generateDebugResources
+Build cache key for task ':app:generateDebugResources' is 67b2c11d6a3d5ebc312846f25e343692
+Task ':app:generateDebugResources' is not up-to-date because:
+  Executed with '--rerun-tasks'.
+Stored cache entry for task ':app:generateDebugResources' with cache key 67b2c11d6a3d5ebc312846f25e343692
+
+> Task :app:javaPreCompileDebug
+Build cache key for task ':app:javaPreCompileDebug' is a8295c88b39001a599ddd9f3c484150c
+Task ':app:javaPreCompileDebug' is not up-to-date because:
+  Executed with '--rerun-tasks'.
+Stored cache entry for task ':app:javaPreCompileDebug' with cache key a8295c88b39001a599ddd9f3c484150c
+
+> Task :app:javaPreCompileDebugUnitTest
+Build cache key for task ':app:javaPreCompileDebugUnitTest' is a8295c88b39001a599ddd9f3c484150c
+Task ':app:javaPreCompileDebugUnitTest' is not up-to-date because:
+  Executed with '--rerun-tasks'.
+Stored cache entry for task ':app:javaPreCompileDebugUnitTest' with cache key a8295c88b39001a599ddd9f3c484150c
+
+> Task :app:pdfcraftResourcesDebug
+Caching disabled for task ':app:pdfcraftResourcesDebug' because:
+  Caching has not been enabled for the task
+Task ':app:pdfcraftResourcesDebug' is not up-to-date because:
+  Executed with '--rerun-tasks'.
+Resolve mutations for :app:extractDebugSupportedLocales (Thread[Execution worker Thread 6,5,main]) started.
+Resolve mutations for :app:mapDebugSourceSetPaths (Thread[Execution worker Thread 8,5,main]) started.
+Resolve mutations for :app:extractDeepLinksDebug (Thread[Execution worker Thread 7,5,main]) started.
+:app:extractDebugSupportedLocales (Thread[Execution worker Thread 6,5,main]) started.
+:app:mapDebugSourceSetPaths (Thread[Execution worker Thread 8,5,main]) started.
+:app:extractDeepLinksDebug (Thread[Execution worker Thread 7,5,main]) started.
+
+> Task :app:processDebugNavigationResources
+Build cache key for task ':app:processDebugNavigationResources' is f97fcdadd359d65d99fb1a9616c64983
+Task ':app:processDebugNavigationResources' is not up-to-date because:
+  Executed with '--rerun-tasks'.
+Stored cache entry for task ':app:processDebugNavigationResources' with cache key f97fcdadd359d65d99fb1a9616c64983
+
+> Task :app:mapDebugSourceSetPaths
+Caching disabled for task ':app:mapDebugSourceSetPaths' because:
+  Caching has been disabled for the task
+Task ':app:mapDebugSourceSetPaths' is not up-to-date because:
+  Executed with '--rerun-tasks'.
+Resolve mutations for :app:compileDebugNavigationResources (Thread[Execution worker Thread 8,5,main]) started.
+:app:compileDebugNavigationResources (Thread[Execution worker Thread 8,5,main]) started.
+
+> Task :app:extractDeepLinksDebug
+Build cache key for task ':app:extractDeepLinksDebug' is 31335deae727d817fe402747606f3f7e
+Task ':app:extractDeepLinksDebug' is not up-to-date because:
+  Executed with '--rerun-tasks'.
+Stored cache entry for task ':app:extractDeepLinksDebug' with cache key 31335deae727d817fe402747606f3f7e
+Resolve mutations for :app:processDebugMainManifest (Thread[Execution worker Thread 7,5,main]) started.
+
+> Task :app:extractDebugSupportedLocales
+Build cache key for task ':app:extractDebugSupportedLocales' is 77765a0e5384058f6942ae3ca2174e2b
+Task ':app:extractDebugSupportedLocales' is not up-to-date because:
+  Executed with '--rerun-tasks'.
+Stored cache entry for task ':app:extractDebugSupportedLocales' with cache key 77765a0e5384058f6942ae3ca2174e2b
+Resolve mutations for :app:generateDebugLocaleConfig (Thread[Execution worker Thread 6,5,main]) started.
+:app:processDebugMainManifest (Thread[Execution worker Thread 7,5,main]) started.
+:app:generateDebugLocaleConfig (Thread[Execution worker Thread 6,5,main]) started.
+
+> Task :app:compileDebugNavigationResources
+Build cache key for task ':app:compileDebugNavigationResources' is 808b98472bd4c829aca677d17e5adac7
+Task ':app:compileDebugNavigationResources' is not up-to-date because:
+  Executed with '--rerun-tasks'.
+The input changes require a full rebuild for incremental task ':app:compileDebugNavigationResources'.
+Stored cache entry for task ':app:compileDebugNavigationResources' with cache key 808b98472bd4c829aca677d17e5adac7
+
+> Task :app:checkDebugAarMetadata
+Caching disabled for task ':app:checkDebugAarMetadata' because:
+  Caching has been disabled for the task
+Task ':app:checkDebugAarMetadata' is not up-to-date because:
+  Executed with '--rerun-tasks'.
+
+> Task :app:generateDebugLocaleConfig
+Build cache key for task ':app:generateDebugLocaleConfig' is 7210a7f89d21baca90c61d42e5ca6974
+Task ':app:generateDebugLocaleConfig' is not up-to-date because:
+  Executed with '--rerun-tasks'.
+Stored cache entry for task ':app:generateDebugLocaleConfig' with cache key 7210a7f89d21baca90c61d42e5ca6974
+Resolve mutations for :app:packageDebugResources (Thread[Execution worker Thread 6,5,main]) started.
+Resolve mutations for :app:mergeDebugResources (Thread[Execution worker,5,main]) started.
+:app:packageDebugResources (Thread[Execution worker Thread 6,5,main]) started.
+:app:mergeDebugResources (Thread[Execution worker,5,main]) started.
+
+> Task :app:lucideIconsDebug
+Caching disabled for task ':app:lucideIconsDebug' because:
+  Caching has not been enabled for the task
+Task ':app:lucideIconsDebug' is not up-to-date because:
+  Executed with '--rerun-tasks'.
+
+> Task :app:processDebugMainManifest
+Build cache key for task ':app:processDebugMainManifest' is e458768d620aab85a49413d06940913b
+Task ':app:processDebugMainManifest' is not up-to-date because:
+  Executed with '--rerun-tasks'.
+Loading library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/561def43da8fc69325d4b0b9bd888b4e/transformed/material3/AndroidManifest.xml
+Loading library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/5d50905b0c7aa0a334423aaf4eea7e06/transformed/material-ripple/AndroidManifest.xml
+Loading library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/4c38e663207a2c9b8cceea03e81d83ea/transformed/foundation/AndroidManifest.xml
+Loading library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/f99a854bb20c85d699fbc2d8e6e6782a/transformed/animation/AndroidManifest.xml
+Loading library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/64af6ba62c4a8556bc753d1de88c1370/transformed/foundation-layout/AndroidManifest.xml
+Loading library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/e0b1dca8dee877fec61bfaa1f60c6471/transformed/animation-core/AndroidManifest.xml
+Loading library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/841b1a8629d8089627c58437e8a545d5/transformed/ui-unit/AndroidManifest.xml
+Loading library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/23b6a4569b6a0e21fbe470f479c4a156/transformed/ui-geometry/AndroidManifest.xml
+Loading library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/1f0cc2c806c6bb1631567ff1519ae3fc/transformed/ui-util/AndroidManifest.xml
+Loading library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/c962999f339beaf8742b759a8286ec24/transformed/ui-text/AndroidManifest.xml
+Loading library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/0511e606c423b6414467ee89665d2421/transformed/ui-graphics/AndroidManifest.xml
+Loading library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/dcdc68093e02bca4948787cc206712f1/transformed/runtime-retain/AndroidManifest.xml
+Loading library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/2c7fee12108cc71610da454c7283df25/transformed/runtime-annotation/AndroidManifest.xml
+Loading library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/4052c249058091f9c076de49bf8c0a62/transformed/autofill-1.0.0/AndroidManifest.xml
+Loading library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/034aeb58ff442bde789e5c9356ac6c41/transformed/window-core/AndroidManifest.xml
+Loading library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/cbcf51ea1bcc69a75b5f05d41f416d4a/transformed/window-1.5.0/AndroidManifest.xml
+Loading library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/2fc536ecbbbe646f31ae98c453b94b40/transformed/graphics-path-1.0.1/AndroidManifest.xml
+Loading library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/04bc5fa73a67bf9c325e63fe9ca74df0/transformed/emoji2-1.4.0/AndroidManifest.xml
+Loading library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/7ead36eff00ef08235ea809b0ed4d45b/transformed/core-1.17.0/AndroidManifest.xml
+Loading library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/ee0552cfc2181ac392f56d9d2e0e25e3/transformed/lifecycle-process-2.9.4/AndroidManifest.xml
+Loading library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/2f6d8ec9b1d51becc4203ef259a894b3/transformed/lifecycle-livedata-core-2.9.4/AndroidManifest.xml
+Loading library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/f75f0850d359b7433c84b3065dc3c351/transformed/lifecycle-viewmodel-ktx-2.9.4/AndroidManifest.xml
+Loading library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/8b4fc9e855369276c3c42846de4fc834/transformed/lifecycle-runtime-ktx/AndroidManifest.xml
+Loading library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/e78d10149b7eebda66822e81655d24f1/transformed/lifecycle-viewmodel-release/AndroidManifest.xml
+Loading library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/282f7f725bf2d2d5dd9dfad421fa532f/transformed/lifecycle-runtime-release/AndroidManifest.xml
+Loading library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/d386d3db8d6f1da5265fcdc2a32d19a4/transformed/lifecycle-viewmodel-savedstate-release/AndroidManifest.xml
+Loading library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/40165ba4c4c0f58c57abe26c44fb29a5/transformed/savedstate-release/AndroidManifest.xml
+Loading library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/86622745cfe74fe815a137e640e9188a/transformed/savedstate-ktx-1.3.2/AndroidManifest.xml
+Loading library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/c85b349be471e19a6b68a51e1645f0ea/transformed/savedstate-compose/AndroidManifest.xml
+Loading library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/9995b166a087b7f4ea3702aa7ba629bb/transformed/runtime/AndroidManifest.xml
+Loading library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/3a2fc3cdccfcb8be389eaabf6994b24e/transformed/runtime-saveable/AndroidManifest.xml
+Loading library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/5d441048df3d0b31021e354db7da3291/transformed/lifecycle-runtime-compose-release/AndroidManifest.xml
+Loading library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/9ef2bd03900e7c21ed725bc9b81a2dbd/transformed/lifecycle-viewmodel-compose-release/AndroidManifest.xml
+Loading library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/6223185744521ac41c5383616ac03cdb/transformed/ui/AndroidManifest.xml
+Loading library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/1b18363de9f5842d3c5db5207f9550d4/transformed/activity-ktx-1.11.0/AndroidManifest.xml
+Loading library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/0771fb7b4e45fe06458340fffedd3c7d/transformed/activity-1.11.0/AndroidManifest.xml
+Loading library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/e2a725b91f11e0a8de91b175275ded54/transformed/activity-compose-1.11.0/AndroidManifest.xml
+Loading library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/21648c24ddbeb469b9d60c972601aeaa/transformed/customview-poolingcontainer-1.0.0/AndroidManifest.xml
+Loading library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/85a2ed644f2d07de07c7028861c5fb2b/transformed/core-ktx-1.17.0/AndroidManifest.xml
+Loading library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/3bdf288911e094bfa76b0d3ab67fa60e/transformed/annotation-experimental-1.4.1/AndroidManifest.xml
+Loading library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/6b2502697c2e8f55a1c84c4313d7f926/transformed/core-viewtree-1.0.0/AndroidManifest.xml
+Loading library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/dd7b9d66cf20df8115fa7892d9a90a0e/transformed/exifinterface-1.4.1/AndroidManifest.xml
+Loading library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/9e4ed8ce1e8a155216c4bb892ef28cec/transformed/interpolator-1.0.0/AndroidManifest.xml
+Loading library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/4913c3fac730121775f2b24bfa1f9ad9/transformed/profileinstaller-1.4.0/AndroidManifest.xml
+Loading library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/39e014b84a61bae0a8fae8a7e3269b58/transformed/startup-runtime-1.1.1/AndroidManifest.xml
+Loading library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/fb395026526984925365e86eb0e5fbdd/transformed/tracing-1.2.0/AndroidManifest.xml
+Loading library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/d35c5ce097f34278d5853f9a7d5bd824/transformed/versionedparcelable-1.1.1/AndroidManifest.xml
+Loading library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/07679d4dd86203baead50b645170d514/transformed/core-runtime-2.2.0/AndroidManifest.xml
+Loading library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/d08ff7463bdb8c845077f314297470e5/transformed/jna-5.19.1/AndroidManifest.xml
+Merging main manifest /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/AndroidManifest.xml
+
+Merging library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/561def43da8fc69325d4b0b9bd888b4e/transformed/material3/AndroidManifest.xml
+Merging manifest with lower [androidx.compose.material3:material3-android:1.4.0] AndroidManifest.xml:17:1-22:12
+uses-sdk defined in both files...
+Merging uses-sdk with lower [androidx.compose.material3:material3-android:1.4.0] AndroidManifest.xml:20:5-44
+Merging library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/5d50905b0c7aa0a334423aaf4eea7e06/transformed/material-ripple/AndroidManifest.xml
+Merging manifest with lower [androidx.compose.material:material-ripple-android:1.12.1] AndroidManifest.xml:2:1-7:12
+uses-sdk defined in both files...
+Merging uses-sdk with lower [androidx.compose.material:material-ripple-android:1.12.1] AndroidManifest.xml:5:5-44
+Merging library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/4c38e663207a2c9b8cceea03e81d83ea/transformed/foundation/AndroidManifest.xml
+Merging manifest with lower [androidx.compose.foundation:foundation-android:1.12.1] AndroidManifest.xml:2:1-7:12
+uses-sdk defined in both files...
+Merging uses-sdk with lower [androidx.compose.foundation:foundation-android:1.12.1] AndroidManifest.xml:5:5-44
+Merging library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/f99a854bb20c85d699fbc2d8e6e6782a/transformed/animation/AndroidManifest.xml
+Merging manifest with lower [androidx.compose.animation:animation-android:1.12.1] AndroidManifest.xml:2:1-7:12
+uses-sdk defined in both files...
+Merging uses-sdk with lower [androidx.compose.animation:animation-android:1.12.1] AndroidManifest.xml:5:5-44
+Merging library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/64af6ba62c4a8556bc753d1de88c1370/transformed/foundation-layout/AndroidManifest.xml
+Merging manifest with lower [androidx.compose.foundation:foundation-layout-android:1.12.1] AndroidManifest.xml:2:1-7:12
+uses-sdk defined in both files...
+Merging uses-sdk with lower [androidx.compose.foundation:foundation-layout-android:1.12.1] AndroidManifest.xml:5:5-44
+Merging library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/e0b1dca8dee877fec61bfaa1f60c6471/transformed/animation-core/AndroidManifest.xml
+Merging manifest with lower [androidx.compose.animation:animation-core-android:1.12.1] AndroidManifest.xml:2:1-7:12
+uses-sdk defined in both files...
+Merging uses-sdk with lower [androidx.compose.animation:animation-core-android:1.12.1] AndroidManifest.xml:5:5-44
+Merging library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/841b1a8629d8089627c58437e8a545d5/transformed/ui-unit/AndroidManifest.xml
+Merging manifest with lower [androidx.compose.ui:ui-unit-android:1.12.1] AndroidManifest.xml:2:1-7:12
+uses-sdk defined in both files...
+Merging uses-sdk with lower [androidx.compose.ui:ui-unit-android:1.12.1] AndroidManifest.xml:5:5-44
+Merging library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/23b6a4569b6a0e21fbe470f479c4a156/transformed/ui-geometry/AndroidManifest.xml
+Merging manifest with lower [androidx.compose.ui:ui-geometry-android:1.12.1] AndroidManifest.xml:2:1-7:12
+uses-sdk defined in both files...
+Merging uses-sdk with lower [androidx.compose.ui:ui-geometry-android:1.12.1] AndroidManifest.xml:5:5-44
+Merging library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/1f0cc2c806c6bb1631567ff1519ae3fc/transformed/ui-util/AndroidManifest.xml
+Merging manifest with lower [androidx.compose.ui:ui-util-android:1.12.1] AndroidManifest.xml:2:1-7:12
+uses-sdk defined in both files...
+Merging uses-sdk with lower [androidx.compose.ui:ui-util-android:1.12.1] AndroidManifest.xml:5:5-44
+Merging library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/c962999f339beaf8742b759a8286ec24/transformed/ui-text/AndroidManifest.xml
+Merging manifest with lower [androidx.compose.ui:ui-text-android:1.12.1] AndroidManifest.xml:2:1-7:12
+uses-sdk defined in both files...
+Merging uses-sdk with lower [androidx.compose.ui:ui-text-android:1.12.1] AndroidManifest.xml:5:5-44
+Merging library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/0511e606c423b6414467ee89665d2421/transformed/ui-graphics/AndroidManifest.xml
+Merging manifest with lower [androidx.compose.ui:ui-graphics-android:1.12.1] AndroidManifest.xml:2:1-7:12
+uses-sdk defined in both files...
+Merging uses-sdk with lower [androidx.compose.ui:ui-graphics-android:1.12.1] AndroidManifest.xml:5:5-44
+Merging library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/dcdc68093e02bca4948787cc206712f1/transformed/runtime-retain/AndroidManifest.xml
+Merging manifest with lower [androidx.compose.runtime:runtime-retain-android:1.12.1] AndroidManifest.xml:2:1-7:12
+uses-sdk defined in both files...
+Merging uses-sdk with lower [androidx.compose.runtime:runtime-retain-android:1.12.1] AndroidManifest.xml:5:5-44
+Merging library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/2c7fee12108cc71610da454c7283df25/transformed/runtime-annotation/AndroidManifest.xml
+Merging manifest with lower [androidx.compose.runtime:runtime-annotation-android:1.12.1] AndroidManifest.xml:2:1-7:12
+uses-sdk defined in both files...
+Merging uses-sdk with lower [androidx.compose.runtime:runtime-annotation-android:1.12.1] AndroidManifest.xml:5:5-44
+Merging library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/4052c249058091f9c076de49bf8c0a62/transformed/autofill-1.0.0/AndroidManifest.xml
+Merging manifest with lower [androidx.autofill:autofill:1.0.0] AndroidManifest.xml:17:1-24:12
+uses-sdk defined in both files...
+Merging uses-sdk with lower [androidx.autofill:autofill:1.0.0] AndroidManifest.xml:20:5-22:41
+Merging library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/034aeb58ff442bde789e5c9356ac6c41/transformed/window-core/AndroidManifest.xml
+Merging manifest with lower [androidx.window:window-core-android:1.5.0] AndroidManifest.xml:2:1-7:12
+uses-sdk defined in both files...
+Merging uses-sdk with lower [androidx.window:window-core-android:1.5.0] AndroidManifest.xml:5:5-44
+Merging library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/cbcf51ea1bcc69a75b5f05d41f416d4a/transformed/window-1.5.0/AndroidManifest.xml
+Merging manifest with lower [androidx.window:window:1.5.0] AndroidManifest.xml:17:1-31:12
+uses-sdk defined in both files...
+Merging uses-sdk with lower [androidx.window:window:1.5.0] AndroidManifest.xml:20:5-44
+application defined in both files...
+Merging application with lower [androidx.window:window:1.5.0] AndroidManifest.xml:22:5-29:19
+Adopted [uses-library: null]
+Adopted [uses-library: null]
+Merging library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/2fc536ecbbbe646f31ae98c453b94b40/transformed/graphics-path-1.0.1/AndroidManifest.xml
+Merging manifest with lower [androidx.graphics:graphics-path:1.0.1] AndroidManifest.xml:2:1-7:12
+uses-sdk defined in both files...
+Merging uses-sdk with lower [androidx.graphics:graphics-path:1.0.1] AndroidManifest.xml:5:5-44
+Merging library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/04bc5fa73a67bf9c325e63fe9ca74df0/transformed/emoji2-1.4.0/AndroidManifest.xml
+Merging manifest with lower [androidx.emoji2:emoji2:1.4.0] AndroidManifest.xml:17:1-35:12
+uses-sdk defined in both files...
+Merging uses-sdk with lower [androidx.emoji2:emoji2:1.4.0] AndroidManifest.xml:21:5-44
+application defined in both files...
+Merging application with lower [androidx.emoji2:emoji2:1.4.0] AndroidManifest.xml:23:5-33:19
+Adopted [provider: null]
+Merging library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/7ead36eff00ef08235ea809b0ed4d45b/transformed/core-1.17.0/AndroidManifest.xml
+Merging manifest with lower [androidx.core:core:1.17.0] AndroidManifest.xml:17:1-30:12
+uses-sdk defined in both files...
+Merging uses-sdk with lower [androidx.core:core:1.17.0] AndroidManifest.xml:20:5-44
+Adopted [permission: null]
+Adopted [uses-permission: null]
+application defined in both files...
+Merging application with lower [androidx.core:core:1.17.0] AndroidManifest.xml:28:5-89
+Merging library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/ee0552cfc2181ac392f56d9d2e0e25e3/transformed/lifecycle-process-2.9.4/AndroidManifest.xml
+Merging manifest with lower [androidx.lifecycle:lifecycle-process:2.9.4] AndroidManifest.xml:17:1-35:12
+uses-sdk defined in both files...
+Merging uses-sdk with lower [androidx.lifecycle:lifecycle-process:2.9.4] AndroidManifest.xml:21:5-44
+application defined in both files...
+Merging application with lower [androidx.lifecycle:lifecycle-process:2.9.4] AndroidManifest.xml:23:5-33:19
+provider#androidx.startup.InitializationProvider defined in both files...
+Merging provider#androidx.startup.InitializationProvider with lower [androidx.lifecycle:lifecycle-process:2.9.4] AndroidManifest.xml:24:9-32:20
+Adopted [meta-data: null]
+Merging library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/2f6d8ec9b1d51becc4203ef259a894b3/transformed/lifecycle-livedata-core-2.9.4/AndroidManifest.xml
+Merging manifest with lower [androidx.lifecycle:lifecycle-livedata-core:2.9.4] AndroidManifest.xml:17:1-22:12
+uses-sdk defined in both files...
+Merging uses-sdk with lower [androidx.lifecycle:lifecycle-livedata-core:2.9.4] AndroidManifest.xml:20:5-44
+Merging library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/f75f0850d359b7433c84b3065dc3c351/transformed/lifecycle-viewmodel-ktx-2.9.4/AndroidManifest.xml
+Merging manifest with lower [androidx.lifecycle:lifecycle-viewmodel-ktx:2.9.4] AndroidManifest.xml:2:1-7:12
+uses-sdk defined in both files...
+Merging uses-sdk with lower [androidx.lifecycle:lifecycle-viewmodel-ktx:2.9.4] AndroidManifest.xml:5:5-44
+Merging library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/8b4fc9e855369276c3c42846de4fc834/transformed/lifecycle-runtime-ktx/AndroidManifest.xml
+Merging manifest with lower [androidx.lifecycle:lifecycle-runtime-ktx-android:2.9.4] AndroidManifest.xml:2:1-7:12
+uses-sdk defined in both files...
+Merging uses-sdk with lower [androidx.lifecycle:lifecycle-runtime-ktx-android:2.9.4] AndroidManifest.xml:5:5-44
+Merging library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/e78d10149b7eebda66822e81655d24f1/transformed/lifecycle-viewmodel-release/AndroidManifest.xml
+Merging manifest with lower [androidx.lifecycle:lifecycle-viewmodel-android:2.9.4] AndroidManifest.xml:17:1-22:12
+uses-sdk defined in both files...
+Merging uses-sdk with lower [androidx.lifecycle:lifecycle-viewmodel-android:2.9.4] AndroidManifest.xml:20:5-44
+Merging library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/282f7f725bf2d2d5dd9dfad421fa532f/transformed/lifecycle-runtime-release/AndroidManifest.xml
+Merging manifest with lower [androidx.lifecycle:lifecycle-runtime-android:2.9.4] AndroidManifest.xml:17:1-22:12
+uses-sdk defined in both files...
+Merging uses-sdk with lower [androidx.lifecycle:lifecycle-runtime-android:2.9.4] AndroidManifest.xml:20:5-44
+Merging library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/d386d3db8d6f1da5265fcdc2a32d19a4/transformed/lifecycle-viewmodel-savedstate-release/AndroidManifest.xml
+Merging manifest with lower [androidx.lifecycle:lifecycle-viewmodel-savedstate-android:2.9.4] AndroidManifest.xml:17:1-22:12
+uses-sdk defined in both files...
+Merging uses-sdk with lower [androidx.lifecycle:lifecycle-viewmodel-savedstate-android:2.9.4] AndroidManifest.xml:20:5-44
+Merging library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/40165ba4c4c0f58c57abe26c44fb29a5/transformed/savedstate-release/AndroidManifest.xml
+Merging manifest with lower [androidx.savedstate:savedstate-android:1.3.2] AndroidManifest.xml:17:1-22:12
+uses-sdk defined in both files...
+Merging uses-sdk with lower [androidx.savedstate:savedstate-android:1.3.2] AndroidManifest.xml:20:5-44
+Merging library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/86622745cfe74fe815a137e640e9188a/transformed/savedstate-ktx-1.3.2/AndroidManifest.xml
+Merging manifest with lower [androidx.savedstate:savedstate-ktx:1.3.2] AndroidManifest.xml:2:1-7:12
+uses-sdk defined in both files...
+Merging uses-sdk with lower [androidx.savedstate:savedstate-ktx:1.3.2] AndroidManifest.xml:5:5-44
+Merging library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/c85b349be471e19a6b68a51e1645f0ea/transformed/savedstate-compose/AndroidManifest.xml
+Merging manifest with lower [androidx.savedstate:savedstate-compose-android:1.3.2] AndroidManifest.xml:2:1-7:12
+uses-sdk defined in both files...
+Merging uses-sdk with lower [androidx.savedstate:savedstate-compose-android:1.3.2] AndroidManifest.xml:5:5-44
+Merging library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/9995b166a087b7f4ea3702aa7ba629bb/transformed/runtime/AndroidManifest.xml
+Merging manifest with lower [androidx.compose.runtime:runtime-android:1.12.1] AndroidManifest.xml:2:1-7:12
+uses-sdk defined in both files...
+Merging uses-sdk with lower [androidx.compose.runtime:runtime-android:1.12.1] AndroidManifest.xml:5:5-44
+Merging library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/3a2fc3cdccfcb8be389eaabf6994b24e/transformed/runtime-saveable/AndroidManifest.xml
+Merging manifest with lower [androidx.compose.runtime:runtime-saveable-android:1.12.1] AndroidManifest.xml:2:1-7:12
+uses-sdk defined in both files...
+Merging uses-sdk with lower [androidx.compose.runtime:runtime-saveable-android:1.12.1] AndroidManifest.xml:5:5-44
+Merging library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/5d441048df3d0b31021e354db7da3291/transformed/lifecycle-runtime-compose-release/AndroidManifest.xml
+Merging manifest with lower [androidx.lifecycle:lifecycle-runtime-compose-android:2.9.4] AndroidManifest.xml:2:1-7:12
+uses-sdk defined in both files...
+Merging uses-sdk with lower [androidx.lifecycle:lifecycle-runtime-compose-android:2.9.4] AndroidManifest.xml:5:5-44
+Merging library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/9ef2bd03900e7c21ed725bc9b81a2dbd/transformed/lifecycle-viewmodel-compose-release/AndroidManifest.xml
+Merging manifest with lower [androidx.lifecycle:lifecycle-viewmodel-compose-android:2.9.4] AndroidManifest.xml:2:1-7:12
+uses-sdk defined in both files...
+Merging uses-sdk with lower [androidx.lifecycle:lifecycle-viewmodel-compose-android:2.9.4] AndroidManifest.xml:5:5-44
+Merging library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/6223185744521ac41c5383616ac03cdb/transformed/ui/AndroidManifest.xml
+Merging manifest with lower [androidx.compose.ui:ui-android:1.12.1] AndroidManifest.xml:2:1-7:12
+uses-sdk defined in both files...
+Merging uses-sdk with lower [androidx.compose.ui:ui-android:1.12.1] AndroidManifest.xml:5:5-44
+Merging library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/1b18363de9f5842d3c5db5207f9550d4/transformed/activity-ktx-1.11.0/AndroidManifest.xml
+Merging manifest with lower [androidx.activity:activity-ktx:1.11.0] AndroidManifest.xml:2:1-7:12
+uses-sdk defined in both files...
+Merging uses-sdk with lower [androidx.activity:activity-ktx:1.11.0] AndroidManifest.xml:5:5-44
+Merging library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/0771fb7b4e45fe06458340fffedd3c7d/transformed/activity-1.11.0/AndroidManifest.xml
+Merging manifest with lower [androidx.activity:activity:1.11.0] AndroidManifest.xml:17:1-22:12
+uses-sdk defined in both files...
+Merging uses-sdk with lower [androidx.activity:activity:1.11.0] AndroidManifest.xml:20:5-44
+Merging library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/e2a725b91f11e0a8de91b175275ded54/transformed/activity-compose-1.11.0/AndroidManifest.xml
+Merging manifest with lower [androidx.activity:activity-compose:1.11.0] AndroidManifest.xml:2:1-7:12
+uses-sdk defined in both files...
+Merging uses-sdk with lower [androidx.activity:activity-compose:1.11.0] AndroidManifest.xml:5:5-44
+Merging library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/21648c24ddbeb469b9d60c972601aeaa/transformed/customview-poolingcontainer-1.0.0/AndroidManifest.xml
+Merging manifest with lower [androidx.customview:customview-poolingcontainer:1.0.0] AndroidManifest.xml:17:1-23:12
+uses-sdk defined in both files...
+Merging uses-sdk with lower [androidx.customview:customview-poolingcontainer:1.0.0] AndroidManifest.xml:20:5-21:38
+Merging library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/85a2ed644f2d07de07c7028861c5fb2b/transformed/core-ktx-1.17.0/AndroidManifest.xml
+Merging manifest with lower [androidx.core:core-ktx:1.17.0] AndroidManifest.xml:2:1-7:12
+uses-sdk defined in both files...
+Merging uses-sdk with lower [androidx.core:core-ktx:1.17.0] AndroidManifest.xml:5:5-44
+Merging library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/3bdf288911e094bfa76b0d3ab67fa60e/transformed/annotation-experimental-1.4.1/AndroidManifest.xml
+Merging manifest with lower [androidx.annotation:annotation-experimental:1.4.1] AndroidManifest.xml:2:1-7:12
+uses-sdk defined in both files...
+Merging uses-sdk with lower [androidx.annotation:annotation-experimental:1.4.1] AndroidManifest.xml:5:5-44
+Merging library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/6b2502697c2e8f55a1c84c4313d7f926/transformed/core-viewtree-1.0.0/AndroidManifest.xml
+Merging manifest with lower [androidx.core:core-viewtree:1.0.0] AndroidManifest.xml:2:1-7:12
+uses-sdk defined in both files...
+Merging uses-sdk with lower [androidx.core:core-viewtree:1.0.0] AndroidManifest.xml:5:5-44
+Merging library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/dd7b9d66cf20df8115fa7892d9a90a0e/transformed/exifinterface-1.4.1/AndroidManifest.xml
+Merging manifest with lower [androidx.exifinterface:exifinterface:1.4.1] AndroidManifest.xml:2:1-7:12
+uses-sdk defined in both files...
+Merging uses-sdk with lower [androidx.exifinterface:exifinterface:1.4.1] AndroidManifest.xml:5:5-44
+Merging library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/9e4ed8ce1e8a155216c4bb892ef28cec/transformed/interpolator-1.0.0/AndroidManifest.xml
+Merging manifest with lower [androidx.interpolator:interpolator:1.0.0] AndroidManifest.xml:17:1-22:12
+uses-sdk defined in both files...
+Merging uses-sdk with lower [androidx.interpolator:interpolator:1.0.0] AndroidManifest.xml:20:5-44
+Merging library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/4913c3fac730121775f2b24bfa1f9ad9/transformed/profileinstaller-1.4.0/AndroidManifest.xml
+Merging manifest with lower [androidx.profileinstaller:profileinstaller:1.4.0] AndroidManifest.xml:17:1-55:12
+uses-sdk defined in both files...
+Merging uses-sdk with lower [androidx.profileinstaller:profileinstaller:1.4.0] AndroidManifest.xml:21:5-44
+application defined in both files...
+Merging application with lower [androidx.profileinstaller:profileinstaller:1.4.0] AndroidManifest.xml:23:5-53:19
+provider#androidx.startup.InitializationProvider defined in both files...
+Merging provider#androidx.startup.InitializationProvider with lower [androidx.profileinstaller:profileinstaller:1.4.0] AndroidManifest.xml:24:9-32:20
+Adopted [meta-data: null]
+Adopted [receiver: null]
+Merging library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/39e014b84a61bae0a8fae8a7e3269b58/transformed/startup-runtime-1.1.1/AndroidManifest.xml
+Merging manifest with lower [androidx.startup:startup-runtime:1.1.1] AndroidManifest.xml:17:1-33:12
+uses-sdk defined in both files...
+Merging uses-sdk with lower [androidx.startup:startup-runtime:1.1.1] AndroidManifest.xml:21:5-23:41
+application defined in both files...
+Merging application with lower [androidx.startup:startup-runtime:1.1.1] AndroidManifest.xml:25:5-31:19
+provider#androidx.startup.InitializationProvider defined in both files...
+Merging provider#androidx.startup.InitializationProvider with lower [androidx.startup:startup-runtime:1.1.1] AndroidManifest.xml:26:9-30:34
+Merging library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/fb395026526984925365e86eb0e5fbdd/transformed/tracing-1.2.0/AndroidManifest.xml
+Merging manifest with lower [androidx.tracing:tracing:1.2.0] AndroidManifest.xml:17:1-22:12
+uses-sdk defined in both files...
+Merging uses-sdk with lower [androidx.tracing:tracing:1.2.0] AndroidManifest.xml:20:5-44
+Merging library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/d35c5ce097f34278d5853f9a7d5bd824/transformed/versionedparcelable-1.1.1/AndroidManifest.xml
+Merging manifest with lower [androidx.versionedparcelable:versionedparcelable:1.1.1] AndroidManifest.xml:17:1-27:12
+uses-sdk defined in both files...
+Merging uses-sdk with lower [androidx.versionedparcelable:versionedparcelable:1.1.1] AndroidManifest.xml:20:5-22:41
+application defined in both files...
+Merging application with lower [androidx.versionedparcelable:versionedparcelable:1.1.1] AndroidManifest.xml:24:5-25:19
+Merging library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/07679d4dd86203baead50b645170d514/transformed/core-runtime-2.2.0/AndroidManifest.xml
+Merging manifest with lower [androidx.arch.core:core-runtime:2.2.0] AndroidManifest.xml:17:1-22:12
+uses-sdk defined in both files...
+Merging uses-sdk with lower [androidx.arch.core:core-runtime:2.2.0] AndroidManifest.xml:20:5-44
+Merging library manifest /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/d08ff7463bdb8c845077f314297470e5/transformed/jna-5.19.1/AndroidManifest.xml
+Merging manifest with lower [net.java.dev.jna:jna:5.19.1] AndroidManifest.xml:2:1-8:12
+uses-sdk defined in both files...
+Merging uses-sdk with lower [net.java.dev.jna:jna:5.19.1] AndroidManifest.xml:7:5-47
+Merging result: SUCCESS
+1<?xml version="1.0" encoding="utf-8"?>
+2<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+3    package="io.github.dikshant363.pdfcraft.debug"
+4    android:versionCode="6010"
+5    android:versionName="0.0.6-beta" >
+6
+7    <uses-sdk
+7-->INJECTED
+8        android:minSdkVersion="31"
+8-->INJECTED
+9        android:targetSdkVersion="36" />
+9-->INJECTED
+10
+11    <!--
+12         No storage permission: files come through the system's pickers (On this device lists the
+13         folders the user picks), and what the app saves goes to Downloads through the media store
+14    -->
+15
+16
+17    <!-- Comment ▸ Voice: recording a voice comment (asked for when first used) -->
+18    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+18-->/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/AndroidManifest.xml:8:5-71
+18-->/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/AndroidManifest.xml:8:22-68
+19
+20    <uses-feature
+20-->/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/AndroidManifest.xml:9:5-89
+21        android:name="android.hardware.microphone"
+21-->/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/AndroidManifest.xml:9:19-61
+22        android:required="false" />
+22-->/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/AndroidManifest.xml:9:62-86
+23
+24    <!--
+25         Scan: the phone's camera app takes the pages. No CAMERA permission: declaring it without
+26         granting it makes Android refuse IMAGE_CAPTURE.
+27    -->
+28    <uses-feature
+28-->/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/AndroidManifest.xml:13:5-89
+29        android:name="android.hardware.camera.any"
+29-->/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/AndroidManifest.xml:13:19-61
+30        android:required="false" />
+30-->/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/AndroidManifest.xml:13:62-86
+31
+32    <!-- Read aloud keeps reading with PdfCraft in the background (a media notification) -->
+33    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+33-->/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/AndroidManifest.xml:16:5-77
+33-->/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/AndroidManifest.xml:16:22-74
+34    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+34-->/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/AndroidManifest.xml:17:5-92
+34-->/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/AndroidManifest.xml:17:22-89
+35
+36    <permission
+36-->[androidx.core:core:1.17.0] /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/7ead36eff00ef08235ea809b0ed4d45b/transformed/core-1.17.0/AndroidManifest.xml:22:5-24:47
+37        android:name="io.github.dikshant363.pdfcraft.debug.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION"
+37-->[androidx.core:core:1.17.0] /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/7ead36eff00ef08235ea809b0ed4d45b/transformed/core-1.17.0/AndroidManifest.xml:23:9-81
+38        android:protectionLevel="signature" />
+38-->[androidx.core:core:1.17.0] /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/7ead36eff00ef08235ea809b0ed4d45b/transformed/core-1.17.0/AndroidManifest.xml:24:9-44
+39
+40    <uses-permission android:name="io.github.dikshant363.pdfcraft.debug.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION" />
+40-->[androidx.core:core:1.17.0] /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/7ead36eff00ef08235ea809b0ed4d45b/transformed/core-1.17.0/AndroidManifest.xml:26:5-97
+40-->[androidx.core:core:1.17.0] /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/7ead36eff00ef08235ea809b0ed4d45b/transformed/core-1.17.0/AndroidManifest.xml:26:22-94
+41
+42    <application
+42-->/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/AndroidManifest.xml:19:5-73:19
+43        android:name="io.github.dikshant363.pdfcraft.PdfcraftApplication"
+43-->/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/AndroidManifest.xml:20:9-44
+44        android:allowBackup="false"
+44-->/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/AndroidManifest.xml:21:9-36
+45        android:appComponentFactory="androidx.core.app.CoreComponentFactory"
+45-->[androidx.core:core:1.17.0] /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/7ead36eff00ef08235ea809b0ed4d45b/transformed/core-1.17.0/AndroidManifest.xml:28:18-86
+46        android:debuggable="true"
+47        android:enableOnBackInvokedCallback="true"
+47-->/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/AndroidManifest.xml:22:9-51
+48        android:extractNativeLibs="false"
+48-->INJECTED
+49        android:icon="@mipmap/ic_launcher"
+49-->/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/AndroidManifest.xml:23:9-43
+50        android:label="@string/app_name"
+50-->/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/AndroidManifest.xml:24:9-41
+51        android:localeConfig="@xml/_generated_res_locale_config"
+52        android:requestLegacyExternalStorage="true"
+52-->/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/AndroidManifest.xml:25:9-52
+53        android:roundIcon="@mipmap/ic_launcher"
+53-->/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/AndroidManifest.xml:26:9-48
+54        android:supportsRtl="true"
+54-->/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/AndroidManifest.xml:27:9-35
+55        android:theme="@style/Theme.PdfCraft" >
+55-->/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/AndroidManifest.xml:28:9-46
+56        <activity
+56-->/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/AndroidManifest.xml:30:9-56:20
+57            android:name="io.github.dikshant363.pdfcraft.MainActivity"
+57-->/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/AndroidManifest.xml:31:13-41
+58            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode|density"
+58-->/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/AndroidManifest.xml:32:13-121
+59            android:exported="true"
+59-->/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/AndroidManifest.xml:33:13-36
+60            android:launchMode="singleTask"
+60-->/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/AndroidManifest.xml:34:13-44
+61            android:windowSoftInputMode="adjustResize" >
+61-->/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/AndroidManifest.xml:35:13-55
+62            <intent-filter>
+62-->/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/AndroidManifest.xml:36:13-39:29
+63                <action android:name="android.intent.action.MAIN" />
+63-->/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/AndroidManifest.xml:37:17-69
+63-->/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/AndroidManifest.xml:37:25-66
+64
+65                <category android:name="android.intent.category.LAUNCHER" />
+65-->/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/AndroidManifest.xml:38:17-77
+65-->/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/AndroidManifest.xml:38:27-74
+66            </intent-filter>
+67            <!-- PDFs other apps open with PdfCraft -->
+68            <intent-filter android:label="@string/open_with" >
+68-->/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/AndroidManifest.xml:41:13-48:29
+68-->/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/AndroidManifest.xml:41:28-61
+69                <action android:name="android.intent.action.VIEW" />
+69-->/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/AndroidManifest.xml:42:17-69
+69-->/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/AndroidManifest.xml:42:25-66
+70
+71                <category android:name="android.intent.category.DEFAULT" />
+71-->/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/AndroidManifest.xml:43:17-76
+71-->/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/AndroidManifest.xml:43:27-73
+72                <category android:name="android.intent.category.BROWSABLE" />
+72-->/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/AndroidManifest.xml:44:17-78
+72-->/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/AndroidManifest.xml:44:27-75
+73
+74                <data android:scheme="content" />
+74-->/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/AndroidManifest.xml:45:17-50
+74-->/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/AndroidManifest.xml:45:23-47
+75                <data android:scheme="file" />
+75-->/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/AndroidManifest.xml:45:17-50
+75-->/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/AndroidManifest.xml:45:23-47
+76                <data android:mimeType="application/pdf" />
+76-->/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/AndroidManifest.xml:45:17-50
+76-->/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/AndroidManifest.xml:47:23-57
+77            </intent-filter>
+78            <!-- PDFs shared to PdfCraft -->
+79            <intent-filter android:label="@string/open_with" >
+79-->/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/AndroidManifest.xml:50:13-55:29
+79-->/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/AndroidManifest.xml:50:28-61
+80                <action android:name="android.intent.action.SEND" />
+80-->/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/AndroidManifest.xml:51:17-69
+80-->/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/AndroidManifest.xml:51:25-66
+81                <action android:name="android.intent.action.SEND_MULTIPLE" />
+81-->/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/AndroidManifest.xml:52:17-78
+81-->/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/AndroidManifest.xml:52:25-75
+82
+83                <category android:name="android.intent.category.DEFAULT" />
+83-->/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/AndroidManifest.xml:43:17-76
+83-->/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/AndroidManifest.xml:43:27-73
+84
+85                <data android:mimeType="application/pdf" />
+85-->/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/AndroidManifest.xml:45:17-50
+85-->/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/AndroidManifest.xml:47:23-57
+86            </intent-filter>
+87        </activity>
+88
+89        <service
+89-->/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/AndroidManifest.xml:58:9-61:61
+90            android:name="io.github.dikshant363.pdfcraft.ReadAloudService"
+90-->/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/AndroidManifest.xml:59:13-45
+91            android:exported="false"
+91-->/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/AndroidManifest.xml:60:13-37
+92            android:foregroundServiceType="mediaPlayback" />
+92-->/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/AndroidManifest.xml:61:13-58
+93
+94        <!-- Files of PdfCraft's handed to other apps (share, print, open in) -->
+95        <provider
+95-->INJECTED
+96            android:name="androidx.core.content.FileProvider"
+96-->/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/AndroidManifest.xml:65:13-62
+97            android:authorities="io.github.dikshant363.pdfcraft.debug.files"
+97-->INJECTED
+98            android:exported="false"
+98-->/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/AndroidManifest.xml:67:13-37
+99            android:grantUriPermissions="true" >
+99-->/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/AndroidManifest.xml:68:13-47
+100            <meta-data
+100-->/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/AndroidManifest.xml:69:13-71:54
+101                android:name="android.support.FILE_PROVIDER_PATHS"
+101-->/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/AndroidManifest.xml:70:17-67
+102                android:resource="@xml/file_paths" />
+102-->/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/AndroidManifest.xml:71:17-51
+103        </provider>
+104
+105        <uses-library
+105-->[androidx.window:window:1.5.0] /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/cbcf51ea1bcc69a75b5f05d41f416d4a/transformed/window-1.5.0/AndroidManifest.xml:23:9-25:40
+106            android:name="androidx.window.extensions"
+106-->[androidx.window:window:1.5.0] /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/cbcf51ea1bcc69a75b5f05d41f416d4a/transformed/window-1.5.0/AndroidManifest.xml:24:13-54
+107            android:required="false" />
+107-->[androidx.window:window:1.5.0] /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/cbcf51ea1bcc69a75b5f05d41f416d4a/transformed/window-1.5.0/AndroidManifest.xml:25:13-37
+108        <uses-library
+108-->[androidx.window:window:1.5.0] /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/cbcf51ea1bcc69a75b5f05d41f416d4a/transformed/window-1.5.0/AndroidManifest.xml:26:9-28:40
+109            android:name="androidx.window.sidecar"
+109-->[androidx.window:window:1.5.0] /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/cbcf51ea1bcc69a75b5f05d41f416d4a/transformed/window-1.5.0/AndroidManifest.xml:27:13-51
+110            android:required="false" />
+110-->[androidx.window:window:1.5.0] /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/cbcf51ea1bcc69a75b5f05d41f416d4a/transformed/window-1.5.0/AndroidManifest.xml:28:13-37
+111
+112        <provider
+112-->[androidx.emoji2:emoji2:1.4.0] /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/04bc5fa73a67bf9c325e63fe9ca74df0/transformed/emoji2-1.4.0/AndroidManifest.xml:24:9-32:20
+113            android:name="androidx.startup.InitializationProvider"
+113-->[androidx.emoji2:emoji2:1.4.0] /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/04bc5fa73a67bf9c325e63fe9ca74df0/transformed/emoji2-1.4.0/AndroidManifest.xml:25:13-67
+114            android:authorities="io.github.dikshant363.pdfcraft.debug.androidx-startup"
+114-->[androidx.emoji2:emoji2:1.4.0] /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/04bc5fa73a67bf9c325e63fe9ca74df0/transformed/emoji2-1.4.0/AndroidManifest.xml:26:13-68
+115            android:exported="false" >
+115-->[androidx.emoji2:emoji2:1.4.0] /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/04bc5fa73a67bf9c325e63fe9ca74df0/transformed/emoji2-1.4.0/AndroidManifest.xml:27:13-37
+116            <meta-data
+116-->[androidx.emoji2:emoji2:1.4.0] /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/04bc5fa73a67bf9c325e63fe9ca74df0/transformed/emoji2-1.4.0/AndroidManifest.xml:29:13-31:52
+117                android:name="androidx.emoji2.text.EmojiCompatInitializer"
+117-->[androidx.emoji2:emoji2:1.4.0] /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/04bc5fa73a67bf9c325e63fe9ca74df0/transformed/emoji2-1.4.0/AndroidManifest.xml:30:17-75
+118                android:value="androidx.startup" />
+118-->[androidx.emoji2:emoji2:1.4.0] /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/04bc5fa73a67bf9c325e63fe9ca74df0/transformed/emoji2-1.4.0/AndroidManifest.xml:31:17-49
+119            <meta-data
+119-->[androidx.lifecycle:lifecycle-process:2.9.4] /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/ee0552cfc2181ac392f56d9d2e0e25e3/transformed/lifecycle-process-2.9.4/AndroidManifest.xml:29:13-31:52
+120                android:name="androidx.lifecycle.ProcessLifecycleInitializer"
+120-->[androidx.lifecycle:lifecycle-process:2.9.4] /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/ee0552cfc2181ac392f56d9d2e0e25e3/transformed/lifecycle-process-2.9.4/AndroidManifest.xml:30:17-78
+121                android:value="androidx.startup" />
+121-->[androidx.lifecycle:lifecycle-process:2.9.4] /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/ee0552cfc2181ac392f56d9d2e0e25e3/transformed/lifecycle-process-2.9.4/AndroidManifest.xml:31:17-49
+122            <meta-data
+122-->[androidx.profileinstaller:profileinstaller:1.4.0] /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/4913c3fac730121775f2b24bfa1f9ad9/transformed/profileinstaller-1.4.0/AndroidManifest.xml:29:13-31:52
+123                android:name="androidx.profileinstaller.ProfileInstallerInitializer"
+123-->[androidx.profileinstaller:profileinstaller:1.4.0] /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/4913c3fac730121775f2b24bfa1f9ad9/transformed/profileinstaller-1.4.0/AndroidManifest.xml:30:17-85
+124                android:value="androidx.startup" />
+124-->[androidx.profileinstaller:profileinstaller:1.4.0] /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/4913c3fac730121775f2b24bfa1f9ad9/transformed/profileinstaller-1.4.0/AndroidManifest.xml:31:17-49
+125        </provider>
+126
+127        <receiver
+127-->[androidx.profileinstaller:profileinstaller:1.4.0] /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/4913c3fac730121775f2b24bfa1f9ad9/transformed/profileinstaller-1.4.0/AndroidManifest.xml:34:9-52:20
+128            android:name="androidx.profileinstaller.ProfileInstallReceiver"
+128-->[androidx.profileinstaller:profileinstaller:1.4.0] /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/4913c3fac730121775f2b24bfa1f9ad9/transformed/profileinstaller-1.4.0/AndroidManifest.xml:35:13-76
+129            android:directBootAware="false"
+129-->[androidx.profileinstaller:profileinstaller:1.4.0] /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/4913c3fac730121775f2b24bfa1f9ad9/transformed/profileinstaller-1.4.0/AndroidManifest.xml:36:13-44
+130            android:enabled="true"
+130-->[androidx.profileinstaller:profileinstaller:1.4.0] /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/4913c3fac730121775f2b24bfa1f9ad9/transformed/profileinstaller-1.4.0/AndroidManifest.xml:37:13-35
+131            android:exported="true"
+131-->[androidx.profileinstaller:profileinstaller:1.4.0] /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/4913c3fac730121775f2b24bfa1f9ad9/transformed/profileinstaller-1.4.0/AndroidManifest.xml:38:13-36
+132            android:permission="android.permission.DUMP" >
+132-->[androidx.profileinstaller:profileinstaller:1.4.0] /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/4913c3fac730121775f2b24bfa1f9ad9/transformed/profileinstaller-1.4.0/AndroidManifest.xml:39:13-57
+133            <intent-filter>
+133-->[androidx.profileinstaller:profileinstaller:1.4.0] /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/4913c3fac730121775f2b24bfa1f9ad9/transformed/profileinstaller-1.4.0/AndroidManifest.xml:40:13-42:29
+134                <action android:name="androidx.profileinstaller.action.INSTALL_PROFILE" />
+134-->[androidx.profileinstaller:profileinstaller:1.4.0] /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/4913c3fac730121775f2b24bfa1f9ad9/transformed/profileinstaller-1.4.0/AndroidManifest.xml:41:17-91
+134-->[androidx.profileinstaller:profileinstaller:1.4.0] /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/4913c3fac730121775f2b24bfa1f9ad9/transformed/profileinstaller-1.4.0/AndroidManifest.xml:41:25-88
+135            </intent-filter>
+136            <intent-filter>
+136-->[androidx.profileinstaller:profileinstaller:1.4.0] /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/4913c3fac730121775f2b24bfa1f9ad9/transformed/profileinstaller-1.4.0/AndroidManifest.xml:43:13-45:29
+137                <action android:name="androidx.profileinstaller.action.SKIP_FILE" />
+137-->[androidx.profileinstaller:profileinstaller:1.4.0] /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/4913c3fac730121775f2b24bfa1f9ad9/transformed/profileinstaller-1.4.0/AndroidManifest.xml:44:17-85
+137-->[androidx.profileinstaller:profileinstaller:1.4.0] /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/4913c3fac730121775f2b24bfa1f9ad9/transformed/profileinstaller-1.4.0/AndroidManifest.xml:44:25-82
+138            </intent-filter>
+139            <intent-filter>
+139-->[androidx.profileinstaller:profileinstaller:1.4.0] /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/4913c3fac730121775f2b24bfa1f9ad9/transformed/profileinstaller-1.4.0/AndroidManifest.xml:46:13-48:29
+140                <action android:name="androidx.profileinstaller.action.SAVE_PROFILE" />
+140-->[androidx.profileinstaller:profileinstaller:1.4.0] /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/4913c3fac730121775f2b24bfa1f9ad9/transformed/profileinstaller-1.4.0/AndroidManifest.xml:47:17-88
+140-->[androidx.profileinstaller:profileinstaller:1.4.0] /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/4913c3fac730121775f2b24bfa1f9ad9/transformed/profileinstaller-1.4.0/AndroidManifest.xml:47:25-85
+141            </intent-filter>
+142            <intent-filter>
+142-->[androidx.profileinstaller:profileinstaller:1.4.0] /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/4913c3fac730121775f2b24bfa1f9ad9/transformed/profileinstaller-1.4.0/AndroidManifest.xml:49:13-51:29
+143                <action android:name="androidx.profileinstaller.action.BENCHMARK_OPERATION" />
+143-->[androidx.profileinstaller:profileinstaller:1.4.0] /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/4913c3fac730121775f2b24bfa1f9ad9/transformed/profileinstaller-1.4.0/AndroidManifest.xml:50:17-95
+143-->[androidx.profileinstaller:profileinstaller:1.4.0] /Users/dikshantagarwal/.gradle/caches/9.6.1/transforms/4913c3fac730121775f2b24bfa1f9ad9/transformed/profileinstaller-1.4.0/AndroidManifest.xml:50:25-92
+144            </intent-filter>
+145        </receiver>
+146    </application>
+147
+148</manifest>
+
+Merged manifest saved to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_manifest/debug/processDebugMainManifest/AndroidManifest.xml
+Stored cache entry for task ':app:processDebugMainManifest' with cache key e458768d620aab85a49413d06940913b
+Resolve mutations for :app:processDebugManifest (Thread[Execution worker Thread 7,5,main]) started.
+:app:processDebugManifest (Thread[Execution worker Thread 7,5,main]) started.
+
+> Task :app:processDebugManifest
+Build cache key for task ':app:processDebugManifest' is eb0456eb51456f96146fc1e0bdbeb999
+Task ':app:processDebugManifest' is not up-to-date because:
+  Executed with '--rerun-tasks'.
+Stored cache entry for task ':app:processDebugManifest' with cache key eb0456eb51456f96146fc1e0bdbeb999
+Resolve mutations for :app:processDebugManifestForPackage (Thread[Execution worker Thread 7,5,main]) started.
+:app:processDebugManifestForPackage (Thread[Execution worker Thread 7,5,main]) started.
+
+> Task :app:processDebugManifestForPackage
+Build cache key for task ':app:processDebugManifestForPackage' is 14598566ee1d62b2fb94cb735fdb6bf0
+Task ':app:processDebugManifestForPackage' is not up-to-date because:
+  Executed with '--rerun-tasks'.
+Stored cache entry for task ':app:processDebugManifestForPackage' with cache key 14598566ee1d62b2fb94cb735fdb6bf0
+
+> Task :app:packageDebugResources
+Build cache key for task ':app:packageDebugResources' is ca013edb7c7e8dd2f71049b86db4c457
+Task ':app:packageDebugResources' is not up-to-date because:
+  Executed with '--rerun-tasks'.
+The input changes require a full rebuild for incremental task ':app:packageDebugResources'.
+[MergeResources] Inputs are non-incremental full task action.
+Stored cache entry for task ':app:packageDebugResources' with cache key ca013edb7c7e8dd2f71049b86db4c457
+Resolve mutations for :app:parseDebugLocalResources (Thread[Execution worker Thread 6,5,main]) started.
+:app:parseDebugLocalResources (Thread[Execution worker Thread 6,5,main]) started.
+
+> Task :app:parseDebugLocalResources
+Build cache key for task ':app:parseDebugLocalResources' is a341b84399a340a57708ba202364bd19
+Task ':app:parseDebugLocalResources' is not up-to-date because:
+  Executed with '--rerun-tasks'.
+The input changes require a full rebuild for incremental task ':app:parseDebugLocalResources'.
+Stored cache entry for task ':app:parseDebugLocalResources' with cache key a341b84399a340a57708ba202364bd19
+Resolve mutations for :app:generateDebugRFile (Thread[Execution worker Thread 6,5,main]) started.
+:app:generateDebugRFile (Thread[Execution worker Thread 6,5,main]) started.
+
+> Task :app:generateDebugRFile
+Build cache key for task ':app:generateDebugRFile' is c7064542987812d72858c52049b54a79
+Task ':app:generateDebugRFile' is not up-to-date because:
+  Executed with '--rerun-tasks'.
+The input changes require a full rebuild for incremental task ':app:generateDebugRFile'.
+Stored cache entry for task ':app:generateDebugRFile' with cache key c7064542987812d72858c52049b54a79
+
+> Task :app:mergeDebugResources
+Build cache key for task ':app:mergeDebugResources' is c522cbc5ef379b440705ff25c815d119
+Task ':app:mergeDebugResources' is not up-to-date because:
+  Executed with '--rerun-tasks'.
+The input changes require a full rebuild for incremental task ':app:mergeDebugResources'.
+[MergeResources] Inputs are non-incremental full task action.
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values/values.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values_values.arsc.flat
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values-hi/values-hi.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values-hi_values-hi.arsc.flat
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values-de/values-de.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values-de_values-de.arsc.flat
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values-lo/values-lo.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values-lo_values-lo.arsc.flat
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values-pt/values-pt.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values-pt_values-pt.arsc.flat
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values-lt/values-lt.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values-lt_values-lt.arsc.flat
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values-uk/values-uk.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values-uk_values-uk.arsc.flat
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values-ml/values-ml.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values-ml_values-ml.arsc.flat
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values-ur/values-ur.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values-ur_values-ur.arsc.flat
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values-ms/values-ms.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values-ms_values-ms.arsc.flat
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values-lv/values-lv.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values-lv_values-lv.arsc.flat
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values-mn/values-mn.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values-mn_values-mn.arsc.flat
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values-mk/values-mk.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values-mk_values-mk.arsc.flat
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values-b+sr+Latn/values-b+sr+Latn.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values-b+sr+Latn_values-b+sr+Latn.arsc.flat
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values-uz/values-uz.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values-uz_values-uz.arsc.flat
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values-el/values-el.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values-el_values-el.arsc.flat
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values-zh-rTW/values-zh-rTW.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values-zh-rTW_values-zh-rTW.arsc.flat
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values-hr/values-hr.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values-hr_values-hr.arsc.flat
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values-zh-rHK/values-zh-rHK.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values-zh-rHK_values-zh-rHK.arsc.flat
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values-it/values-it.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values-it_values-it.arsc.flat
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values-ja/values-ja.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values-ja_values-ja.arsc.flat
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values-hu/values-hu.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values-hu_values-hu.arsc.flat
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values-eu/values-eu.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values-eu_values-eu.arsc.flat
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values-et/values-et.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values-et_values-et.arsc.flat
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values-az/values-az.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values-az_values-az.arsc.flat
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values-ar/values-ar.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values-ar_values-ar.arsc.flat
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values-ne/values-ne.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values-ne_values-ne.arsc.flat
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values-is/values-is.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values-is_values-is.arsc.flat
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values-af/values-af.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values-af_values-af.arsc.flat
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values-vi/values-vi.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values-vi_values-vi.arsc.flat
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values-pt-rPT/values-pt-rPT.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values-pt-rPT_values-pt-rPT.arsc.flat
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values-mr/values-mr.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values-mr_values-mr.arsc.flat
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values-en-rXC/values-en-rXC.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values-en-rXC_values-en-rXC.arsc.flat
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values-zu/values-zu.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values-zu_values-zu.arsc.flat
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values-bg/values-bg.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values-bg_values-bg.arsc.flat
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values-my/values-my.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values-my_values-my.arsc.flat
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values-ru/values-ru.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values-ru_values-ru.arsc.flat
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values-sk/values-sk.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values-sk_values-sk.arsc.flat
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values-bn/values-bn.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values-bn_values-bn.arsc.flat
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values-v21/values-v21.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values-v21_values-v21.arsc.flat
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values-as/values-as.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values-as_values-as.arsc.flat
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values-ca/values-ca.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values-ca_values-ca.arsc.flat
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values-fi/values-fi.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values-fi_values-fi.arsc.flat
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values-ta/values-ta.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values-ta_values-ta.arsc.flat
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values-ko/values-ko.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values-ko_values-ko.arsc.flat
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values-sl/values-sl.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values-sl_values-sl.arsc.flat
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values-fa/values-fa.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values-fa_values-fa.arsc.flat
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values-si/values-si.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values-si_values-si.arsc.flat
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values-ka/values-ka.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values-ka_values-ka.arsc.flat
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values-nl/values-nl.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values-nl_values-nl.arsc.flat
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values-am/values-am.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values-am_values-am.arsc.flat
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values-fr/values-fr.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values-fr_values-fr.arsc.flat
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values-th/values-th.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values-th_values-th.arsc.flat
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values-or/values-or.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values-or_values-or.arsc.flat
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values-nb/values-nb.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values-nb_values-nb.arsc.flat
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values-sq/values-sq.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values-sq_values-sq.arsc.flat
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values-kn/values-kn.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values-kn_values-kn.arsc.flat
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values-bs/values-bs.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values-bs_values-bs.arsc.flat
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values-te/values-te.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values-te_values-te.arsc.flat
+Compiling file /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/generated/res/pdfcraftResourcesDebug/font/inter_semibold.ttf to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/font_inter_semibold.ttf.flat
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values-sw/values-sw.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values-sw_values-sw.arsc.flat
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values-ro/values-ro.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values-ro_values-ro.arsc.flat
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values-da/values-da.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values-da_values-da.arsc.flat
+Compiling xml file /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/res/mipmap-anydpi/ic_launcher.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/mipmap-anydpi_ic_launcher.xml.flat
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values-gl/values-gl.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values-gl_values-gl.arsc.flat
+Compiling image file /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/generated/res/pdfcraftResourcesDebug/drawable-nodpi/ic_launcher_tile.png
+Compiling file /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/generated/res/pdfcraftResourcesDebug/drawable-nodpi/ic_launcher_tile.png to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/drawable-nodpi_ic_launcher_tile.png.flat
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values-pa/values-pa.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values-pa_values-pa.arsc.flat
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values-kk/values-kk.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values-kk_values-kk.arsc.flat
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values-en-rCA/values-en-rCA.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values-en-rCA_values-en-rCA.arsc.flat
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values-en-rIN/values-en-rIN.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values-en-rIN_values-en-rIN.arsc.flat
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values-tl/values-tl.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values-tl_values-tl.arsc.flat
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values-pl/values-pl.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values-pl_values-pl.arsc.flat
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values-sr/values-sr.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values-sr_values-sr.arsc.flat
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values-gu/values-gu.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values-gu_values-gu.arsc.flat
+Compiling xml file /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/res/drawable/ic_stat_read_aloud.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/drawable_ic_stat_read_aloud.xml.flat
+Compiling file /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/generated/res/pdfcraftResourcesDebug/font/inter_regular.ttf to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/font_inter_regular.ttf.flat
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values-fr-rCA/values-fr-rCA.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values-fr-rCA_values-fr-rCA.arsc.flat
+Compiling file /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/generated/res/pdfcraftResourcesDebug/font/inter_medium.ttf to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/font_inter_medium.ttf.flat
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values-ky/values-ky.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values-ky_values-ky.arsc.flat
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values-iw/values-iw.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values-iw_values-iw.arsc.flat
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values-en-rAU/values-en-rAU.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values-en-rAU_values-en-rAU.arsc.flat
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values-es-rUS/values-es-rUS.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values-es-rUS_values-es-rUS.arsc.flat
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values-tr/values-tr.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values-tr_values-tr.arsc.flat
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values-zh-rCN/values-zh-rCN.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values-zh-rCN_values-zh-rCN.arsc.flat
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values-v30/values-v30.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values-v30_values-v30.arsc.flat
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values-km/values-km.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values-km_values-km.arsc.flat
+Compiling xml file /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/generated/res/localeConfig/debug/xml/_generated_res_locale_config.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/xml__generated_res_locale_config.xml.flat
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values-pt-rBR/values-pt-rBR.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values-pt-rBR_values-pt-rBR.arsc.flat
+Compiling xml file /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/res/xml/file_paths.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/xml_file_paths.xml.flat
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values-hy/values-hy.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values-hy_values-hy.arsc.flat
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values-in/values-in.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values-in_values-in.arsc.flat
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values-es/values-es.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values-es_values-es.arsc.flat
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values-night-v8/values-night-v8.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values-night-v8_values-night-v8.arsc.flat
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values-be/values-be.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values-be_values-be.arsc.flat
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values-en-rGB/values-en-rGB.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values-en-rGB_values-en-rGB.arsc.flat
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values-sv/values-sv.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values-sv_values-sv.arsc.flat
+Compiling XML table /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/incremental/debug/mergeDebugResources/merged.dir/values-cs/values-cs.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/values-cs_values-cs.arsc.flat
+Compiling xml file /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/generated/res/localeConfig/debug/xml-v35/_generated_res_locale_config.xml to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/merged_res/debug/mergeDebugResources/xml-v35__generated_res_locale_config.xml.flat
+Stored cache entry for task ':app:mergeDebugResources' with cache key c522cbc5ef379b440705ff25c815d119
+Resolve mutations for :app:processDebugResources (Thread[Execution worker,5,main]) started.
+:app:processDebugResources (Thread[Execution worker,5,main]) started.
+
+> Task :app:processDebugResources
+Build cache key for task ':app:processDebugResources' is f1846de637f11b03c972467cf7dd3c62
+Task ':app:processDebugResources' is not up-to-date because:
+  Executed with '--rerun-tasks'.
+The input changes require a full rebuild for incremental task ':app:processDebugResources'.
+AAPT2 aapt2-9.2.1-15009934-osx Daemon #0: starting
+Aapt output file /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/linked_resources_binary_format/debug/processDebugResources/linked-resources-binary-format-debug.ap_
+Stored cache entry for task ':app:processDebugResources' with cache key f1846de637f11b03c972467cf7dd3c62
+
+> Task :app:cargoBuildDebug
+Caching disabled for task ':app:cargoBuildDebug' because:
+  Caching has not been enabled for the task
+Task ':app:cargoBuildDebug' is not up-to-date because:
+  Executed with '--rerun-tasks'.
+Starting process 'command '/Users/dikshantagarwal/.cargo/bin/cargo''. Working directory: /Users/dikshantagarwal/Desktop/contribution project Command: /Users/dikshantagarwal/.cargo/bin/cargo ndk -t arm64-v8a -t x86_64 --platform 31 -o /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/generated/jniLibs/cargoBuildDebug build --release --locked -p pdfcraft-android --lib
+Successfully started process 'command '/Users/dikshantagarwal/.cargo/bin/cargo''
+    Building arm64-v8a (aarch64-linux-android)
+warning: patch `egui_demo_lib v0.37.0 (https://github.com/storytold/egui.git?rev=6d518fc799681571963842f95b55a6b68431b15a#6d518fc7)` was not used in the crate graph
+warning: patch `egui_inspection v0.37.0 (https://github.com/storytold/egui.git?rev=6d518fc799681571963842f95b55a6b68431b15a#6d518fc7)` was not used in the crate graph
+warning: patch `egui_system_font_provider v0.37.0 (https://github.com/storytold/egui.git?rev=6d518fc799681571963842f95b55a6b68431b15a#6d518fc7)` was not used in the crate graph
+help: Check that the patched package version and available features are compatible
+      with the dependency requirements. If the patch has a different version from
+      what is locked in the Cargo.lock file, run `cargo update` to use the new
+      version. This may also occur with an optional dependency that is not enabled.
+    Finished `release` profile [optimized] target(s) in 0.72s
+    Building x86_64 (x86_64-linux-android)
+warning: patch `egui_demo_lib v0.37.0 (https://github.com/storytold/egui.git?rev=6d518fc799681571963842f95b55a6b68431b15a#6d518fc7)` was not used in the crate graph
+warning: patch `egui_inspection v0.37.0 (https://github.com/storytold/egui.git?rev=6d518fc799681571963842f95b55a6b68431b15a#6d518fc7)` was not used in the crate graph
+warning: patch `egui_system_font_provider v0.37.0 (https://github.com/storytold/egui.git?rev=6d518fc799681571963842f95b55a6b68431b15a#6d518fc7)` was not used in the crate graph
+help: Check that the patched package version and available features are compatible
+      with the dependency requirements. If the patch has a different version from
+      what is locked in the Cargo.lock file, run `cargo update` to use the new
+      version. This may also occur with an optional dependency that is not enabled.
+    Finished `release` profile [optimized] target(s) in 0.29s
+     Copying libraries to /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/generated/jniLibs/cargoBuildDebug
+Resolve mutations for :app:uniffiBindgenDebug (Thread[Execution worker Thread 3,5,main]) started.
+:app:uniffiBindgenDebug (Thread[Execution worker Thread 3,5,main]) started.
+
+> Task :app:uniffiBindgenDebug
+Caching disabled for task ':app:uniffiBindgenDebug' because:
+  Caching has not been enabled for the task
+Task ':app:uniffiBindgenDebug' is not up-to-date because:
+  Executed with '--rerun-tasks'.
+Starting process 'command '/Users/dikshantagarwal/.cargo/bin/cargo''. Working directory: /Users/dikshantagarwal/Desktop/contribution project Command: /Users/dikshantagarwal/.cargo/bin/cargo run --quiet --locked -p pdfcraft-android-bindgen -- generate /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/generated/jniLibs/cargoBuildDebug/arm64-v8a/libpdfcraft_android.so --language kotlin --out-dir /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/generated/java/uniffiBindgenDebug --no-format
+Successfully started process 'command '/Users/dikshantagarwal/.cargo/bin/cargo''
+Resolve mutations for :app:compileDebugKotlin (Thread[Execution worker Thread 3,5,main]) started.
+:app:compileDebugKotlin (Thread[Execution worker Thread 3,5,main]) started.
+
+> Task :app:compileDebugKotlin
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/kotlin', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/debug/java', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/debug/kotlin', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/debug/java', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/kotlin', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/debug/java', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/debug/kotlin', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/debug/java', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/kotlin', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/debug/java', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/debug/kotlin', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/debug/java', not found
+Build cache key for task ':app:compileDebugKotlin' is b4ae5a140ecbf20e86554a4b1e879093
+Task ':app:compileDebugKotlin' is not up-to-date because:
+  Executed with '--rerun-tasks'.
+The input changes require a full rebuild for incremental task ':app:compileDebugKotlin'.
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/kotlin', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/kotlin', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/debug/java', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/debug/java', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/debug/kotlin', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/debug/kotlin', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/debug/java', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/debug/java', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/kotlin', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/debug/java', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/debug/kotlin', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/debug/java', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/kotlin', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/kotlin', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/debug/java', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/debug/java', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/debug/kotlin', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/debug/kotlin', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/debug/java', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/debug/java', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/kotlin', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/kotlin', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/debug/java', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/debug/java', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/debug/kotlin', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/debug/kotlin', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/debug/java', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/debug/java', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/kotlin', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/kotlin', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/debug/java', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/debug/java', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/debug/kotlin', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/debug/kotlin', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/debug/java', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/debug/java', not found
+Kotlin source files: /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/java/io/github/dikshant363/pdfcraft/ui/home/Tabs.kt, /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/java/io/github/dikshant363/pdfcraft/ui/home/HomeScreen.kt, /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/java/io/github/dikshant363/pdfcraft/ui/ToolScreens.kt, /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/java/io/github/dikshant363/pdfcraft/ui/Components.kt, /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/java/io/github/dikshant363/pdfcraft/ui/viewer/ViewerOverlays.kt, /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/java/io/github/dikshant363/pdfcraft/ui/viewer/PageMenu.kt, /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/java/io/github/dikshant363/pdfcraft/ui/viewer/ViewerState.kt, /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/java/io/github/dikshant363/pdfcraft/ui/viewer/Search.kt, /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/java/io/github/dikshant363/pdfcraft/ui/viewer/CommentList.kt, /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/java/io/github/dikshant363/pdfcraft/ui/viewer/PageCanvas.kt, /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/java/io/github/dikshant363/pdfcraft/ui/viewer/ReadAloud.kt, /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/java/io/github/dikshant363/pdfcraft/ui/viewer/Forms.kt, /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/java/io/github/dikshant363/pdfcraft/ui/viewer/VoiceRecorder.kt, /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/java/io/github/dikshant363/pdfcraft/ui/viewer/DigitalSign.kt, /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/java/io/github/dikshant363/pdfcraft/ui/viewer/PageImages.kt, /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/java/io/github/dikshant363/pdfcraft/ui/viewer/CommentDrag.kt, /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/java/io/github/dikshant363/pdfcraft/ui/viewer/ViewerSheets.kt, /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/java/io/github/dikshant363/pdfcraft/ui/viewer/TextSelection.kt, /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/java/io/github/dikshant363/pdfcraft/ui/viewer/VoiceSheet.kt, /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/java/io/github/dikshant363/pdfcraft/ui/viewer/ViewerController.kt, /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/java/io/github/dikshant363/pdfcraft/ui/viewer/ShapeSnap.kt, /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/java/io/github/dikshant363/pdfcraft/ui/viewer/QuickTools.kt, /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/java/io/github/dikshant363/pdfcraft/ui/viewer/ViewerScreen.kt, /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/java/io/github/dikshant363/pdfcraft/ui/viewer/PagesScreen.kt, /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/java/io/github/dikshant363/pdfcraft/ui/viewer/FillSign.kt, /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/java/io/github/dikshant363/pdfcraft/ui/viewer/DocLayout.kt, /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/java/io/github/dikshant363/pdfcraft/ui/viewer/EditLists.kt, /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/java/io/github/dikshant363/pdfcraft/ui/viewer/ZoomButtons.kt, /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/java/io/github/dikshant363/pdfcraft/ui/viewer/Edit.kt, /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/java/io/github/dikshant363/pdfcraft/ui/viewer/ReadingMode.kt, /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/java/io/github/dikshant363/pdfcraft/ui/viewer/CommentPanel.kt, /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/java/io/github/dikshant363/pdfcraft/ui/viewer/ToolPrefs.kt, /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/java/io/github/dikshant363/pdfcraft/ui/viewer/ViewerBars.kt, /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/java/io/github/dikshant363/pdfcraft/ui/viewer/SpellCheck.kt, /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/java/io/github/dikshant363/pdfcraft/ui/viewer/Tools.kt, /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/java/io/github/dikshant363/pdfcraft/ui/Theme.kt, /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/java/io/github/dikshant363/pdfcraft/ui/OpenDocument.kt, /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/java/io/github/dikshant363/pdfcraft/ui/AppViewModel.kt, /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/java/io/github/dikshant363/pdfcraft/ui/ToolScreen.kt, /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/java/io/github/dikshant363/pdfcraft/ui/ScanSession.kt, /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/java/io/github/dikshant363/pdfcraft/ui/FreeTextLayout.kt, /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/java/io/github/dikshant363/pdfcraft/ui/Icons.kt, /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/java/io/github/dikshant363/pdfcraft/ui/AppRoot.kt, /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/java/io/github/dikshant363/pdfcraft/MainActivity.kt, /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/java/io/github/dikshant363/pdfcraft/Strings.kt, /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/java/io/github/dikshant363/pdfcraft/ReadAloudService.kt, /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/java/io/github/dikshant363/pdfcraft/engine/DocumentFiles.kt, /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/java/io/github/dikshant363/pdfcraft/engine/RecentFiles.kt, /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/java/io/github/dikshant363/pdfcraft/engine/LocalFiles.kt, /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/java/io/github/dikshant363/pdfcraft/engine/Engine.kt, /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/java/io/github/dikshant363/pdfcraft/engine/DigitalIds.kt, /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/java/io/github/dikshant363/pdfcraft/engine/UserBookmarks.kt, /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/java/io/github/dikshant363/pdfcraft/PdfcraftApplication.kt, /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/generated/java/lucideIconsDebug/io/github/dikshant363/pdfcraft/ui/LucideIcons.kt, /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/generated/java/uniffiBindgenDebug/io/github/dikshant363/pdfcraft/core/pdfcraft_android.kt
+Java source files: 
+Script source files: 
+Script file extensions: 
+Using Kotlin/JVM incremental compilation
+[KOTLIN] Kotlin compilation 'jdkHome' argument: /opt/homebrew/Cellar/openjdk@17/17.0.20/libexec/openjdk.jdk/Contents/Home
+i: Options for KOTLIN DAEMON: IncrementalCompilationOptions(super=CompilationOptions(compilerMode=INCREMENTAL_COMPILER, targetPlatform=JVM, reportCategories=[0], reportSeverity=2, requestedCompilationResults=[0], kotlinScriptExtensions=[], generateCompilerRefIndex=false), sourceChanges=org.jetbrains.kotlin.buildtools.api.SourcesChanges$Unknown@677a1e20, classpathChanges=NotAvailableDueToMissingClasspathSnapshot, workingDir=/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/kotlin/compileDebugKotlin/cacheable, multiModuleICSettings=null, icFeatures=IncrementalCompilationFeatures(usePreciseJavaTracking=true, withAbiSnapshot=false, preciseCompilationResultsBackup=true, keepIncrementalCompilationCachesInMemory=true, enableUnsafeIncrementalCompilationForMultiplatform=false, enableMonotonousIncrementalCompileSetExpansion=true), outputFiles=[/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/built_in_kotlinc/debug/compileDebugKotlin/classes, /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/kotlin/compileDebugKotlin/cacheable, /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/kotlin/compileDebugKotlin/local-state])
+w: file:///Users/dikshantagarwal/Desktop/contribution%20project/apps/pdfcraft-android/android/app/src/main/java/io/github/dikshant363/pdfcraft/ui/FreeTextLayout.kt:25:11 Redundant call of conversion method.
+w: file:///Users/dikshantagarwal/Desktop/contribution%20project/apps/pdfcraft-android/android/app/src/main/java/io/github/dikshant363/pdfcraft/ui/ToolScreens.kt:670:23 This annotation is currently applied to the value parameter only, but in the future it will also be applied to field.
+- To opt in to applying to both value parameter and field, add '-Xannotation-default-target=param-property' to your compiler arguments.
+- To keep applying to the value parameter only, use the '@param:' annotation target.
+
+See https://youtrack.jetbrains.com/issue/KT-73255 for more details.
+w: file:///Users/dikshantagarwal/Desktop/contribution%20project/apps/pdfcraft-android/android/app/src/main/java/io/github/dikshant363/pdfcraft/ui/home/HomeScreen.kt:86:20 This annotation is currently applied to the value parameter only, but in the future it will also be applied to field.
+- To opt in to applying to both value parameter and field, add '-Xannotation-default-target=param-property' to your compiler arguments.
+- To keep applying to the value parameter only, use the '@param:' annotation target.
+
+See https://youtrack.jetbrains.com/issue/KT-73255 for more details.
+w: file:///Users/dikshantagarwal/Desktop/contribution%20project/apps/pdfcraft-android/android/app/src/main/java/io/github/dikshant363/pdfcraft/ui/home/Tabs.kt:162:64 This annotation is currently applied to the value parameter only, but in the future it will also be applied to field.
+- To opt in to applying to both value parameter and field, add '-Xannotation-default-target=param-property' to your compiler arguments.
+- To keep applying to the value parameter only, use the '@param:' annotation target.
+
+See https://youtrack.jetbrains.com/issue/KT-73255 for more details.
+w: file:///Users/dikshantagarwal/Desktop/contribution%20project/apps/pdfcraft-android/android/app/src/main/java/io/github/dikshant363/pdfcraft/ui/home/Tabs.kt:162:91 This annotation is currently applied to the value parameter only, but in the future it will also be applied to field.
+- To opt in to applying to both value parameter and field, add '-Xannotation-default-target=param-property' to your compiler arguments.
+- To keep applying to the value parameter only, use the '@param:' annotation target.
+
+See https://youtrack.jetbrains.com/issue/KT-73255 for more details.
+w: file:///Users/dikshantagarwal/Desktop/contribution%20project/apps/pdfcraft-android/android/app/src/main/java/io/github/dikshant363/pdfcraft/ui/home/Tabs.kt:420:21 'val LocalClipboardManager: ProvidableCompositionLocal<ClipboardManager>' is deprecated. Use LocalClipboard instead which supports suspend functions.
+w: file:///Users/dikshantagarwal/Desktop/contribution%20project/apps/pdfcraft-android/android/app/src/main/java/io/github/dikshant363/pdfcraft/ui/viewer/DigitalSign.kt:139:21 This annotation is currently applied to the value parameter only, but in the future it will also be applied to field.
+- To opt in to applying to both value parameter and field, add '-Xannotation-default-target=param-property' to your compiler arguments.
+- To keep applying to the value parameter only, use the '@param:' annotation target.
+
+See https://youtrack.jetbrains.com/issue/KT-73255 for more details.
+w: file:///Users/dikshantagarwal/Desktop/contribution%20project/apps/pdfcraft-android/android/app/src/main/java/io/github/dikshant363/pdfcraft/ui/viewer/FillSign.kt:71:48 This annotation is currently applied to the value parameter only, but in the future it will also be applied to field.
+- To opt in to applying to both value parameter and field, add '-Xannotation-default-target=param-property' to your compiler arguments.
+- To keep applying to the value parameter only, use the '@param:' annotation target.
+
+See https://youtrack.jetbrains.com/issue/KT-73255 for more details.
+w: file:///Users/dikshantagarwal/Desktop/contribution%20project/apps/pdfcraft-android/android/app/src/main/java/io/github/dikshant363/pdfcraft/ui/viewer/QuickTools.kt:74:38 This annotation is currently applied to the value parameter only, but in the future it will also be applied to field.
+- To opt in to applying to both value parameter and field, add '-Xannotation-default-target=param-property' to your compiler arguments.
+- To keep applying to the value parameter only, use the '@param:' annotation target.
+
+See https://youtrack.jetbrains.com/issue/KT-73255 for more details.
+w: file:///Users/dikshantagarwal/Desktop/contribution%20project/apps/pdfcraft-android/android/app/src/main/java/io/github/dikshant363/pdfcraft/ui/viewer/QuickTools.kt:74:65 This annotation is currently applied to the value parameter only, but in the future it will also be applied to field.
+- To opt in to applying to both value parameter and field, add '-Xannotation-default-target=param-property' to your compiler arguments.
+- To keep applying to the value parameter only, use the '@param:' annotation target.
+
+See https://youtrack.jetbrains.com/issue/KT-73255 for more details.
+w: file:///Users/dikshantagarwal/Desktop/contribution%20project/apps/pdfcraft-android/android/app/src/main/java/io/github/dikshant363/pdfcraft/ui/viewer/ReadAloud.kt:158:28 'var language: Locale!' is deprecated. Deprecated in Java.
+w: file:///Users/dikshantagarwal/Desktop/contribution%20project/apps/pdfcraft-android/android/app/src/main/java/io/github/dikshant363/pdfcraft/ui/viewer/SpellCheck.kt:57:56 Unnecessary safe call on a non-null receiver of type 'SpellCheckerSession'.
+w: file:///Users/dikshantagarwal/Desktop/contribution%20project/apps/pdfcraft-android/android/app/src/main/java/io/github/dikshant363/pdfcraft/ui/viewer/Tools.kt:109:9 'when' is exhaustive so 'else' is redundant here.
+w: file:///Users/dikshantagarwal/Desktop/contribution%20project/apps/pdfcraft-android/android/app/src/main/java/io/github/dikshant363/pdfcraft/ui/viewer/ZoomButtons.kt:129:44 'fun rememberPlainTooltipPositionProvider(spacingBetweenTooltipAndAnchor: Dp = ...): PopupPositionProvider' is deprecated. Deprecated in favor of rememberTooltipPositionProvider API.
+i: Finished executing kotlin compiler using DAEMON strategy
+Stored cache entry for task ':app:compileDebugKotlin' with cache key b4ae5a140ecbf20e86554a4b1e879093
+Resolve mutations for :app:compileDebugJavaWithJavac (Thread[Execution worker Thread 3,5,main]) started.
+Resolve mutations for :app:processDebugJavaRes (Thread[Execution worker,5,main]) started.
+:app:processDebugJavaRes (Thread[Execution worker,5,main]) started.
+:app:compileDebugJavaWithJavac (Thread[Execution worker Thread 3,5,main]) started.
+
+> Task :app:compileDebugJavaWithJavac NO-SOURCE
+Skipping task ':app:compileDebugJavaWithJavac' as it has no source files and no previous output files.
+Resolve mutations for :app:bundleDebugClassesToRuntimeJar (Thread[Execution worker Thread 3,5,main]) started.
+Resolve mutations for :app:bundleDebugClassesToCompileJar (Thread[Execution worker Thread 5,5,main]) started.
+:app:bundleDebugClassesToRuntimeJar (Thread[Execution worker Thread 3,5,main]) started.
+:app:bundleDebugClassesToCompileJar (Thread[Execution worker Thread 5,5,main]) started.
+
+> Task :app:processDebugJavaRes
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/resources', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/debug/resources', not found
+Caching disabled for task ':app:processDebugJavaRes' because:
+  Caching has been disabled for the task
+Task ':app:processDebugJavaRes' is not up-to-date because:
+  Executed with '--rerun-tasks'.
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/resources', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/debug/resources', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/main/resources', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/debug/resources', not found
+work action resolve out (project ':app') (Thread[Execution worker,5,main]) started.
+
+> Task :app:bundleDebugClassesToCompileJar
+Caching disabled for task ':app:bundleDebugClassesToCompileJar' because:
+  Caching has been disabled for the task
+Task ':app:bundleDebugClassesToCompileJar' is not up-to-date because:
+  Executed with '--rerun-tasks'.
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/javac/debug/compileDebugJavaWithJavac/classes', not found
+work action resolve classes.jar (project ':app') (Thread[Execution worker Thread 5,5,main]) started.
+Resolve mutations for :app:compileDebugUnitTestKotlin (Thread[Execution worker Thread 5,5,main]) started.
+:app:compileDebugUnitTestKotlin (Thread[Execution worker Thread 5,5,main]) started.
+
+> Task :app:bundleDebugClassesToRuntimeJar
+Caching disabled for task ':app:bundleDebugClassesToRuntimeJar' because:
+  Caching has been disabled for the task
+Task ':app:bundleDebugClassesToRuntimeJar' is not up-to-date because:
+  Executed with '--rerun-tasks'.
+work action resolve classes.jar (project ':app') (Thread[Execution worker Thread 3,5,main]) started.
+
+> Task :app:compileDebugUnitTestKotlin
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/test/kotlin', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/testDebug/java', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/testDebug/kotlin', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/testDebug/java', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/test/kotlin', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/testDebug/java', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/testDebug/kotlin', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/testDebug/java', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/test/kotlin', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/testDebug/java', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/testDebug/kotlin', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/testDebug/java', not found
+Build cache key for task ':app:compileDebugUnitTestKotlin' is b52090c89af78b0cf3adf2a3a8fe69a9
+Task ':app:compileDebugUnitTestKotlin' is not up-to-date because:
+  Executed with '--rerun-tasks'.
+The input changes require a full rebuild for incremental task ':app:compileDebugUnitTestKotlin'.
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/test/kotlin', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/test/kotlin', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/testDebug/java', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/testDebug/java', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/testDebug/kotlin', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/testDebug/kotlin', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/testDebug/java', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/testDebug/java', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/test/kotlin', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/testDebug/java', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/testDebug/kotlin', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/testDebug/java', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/test/kotlin', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/test/kotlin', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/testDebug/java', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/testDebug/java', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/testDebug/kotlin', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/testDebug/kotlin', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/testDebug/java', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/testDebug/java', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/test/kotlin', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/test/kotlin', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/testDebug/java', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/testDebug/java', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/testDebug/kotlin', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/testDebug/kotlin', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/testDebug/java', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/testDebug/java', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/test/kotlin', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/test/kotlin', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/testDebug/java', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/testDebug/java', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/testDebug/kotlin', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/testDebug/kotlin', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/testDebug/java', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/testDebug/java', not found
+Kotlin source files: /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/test/java/io/github/dikshant363/pdfcraft/ui/CommentListTest.kt, /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/test/java/io/github/dikshant363/pdfcraft/ui/PdfDateTest.kt, /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/test/java/io/github/dikshant363/pdfcraft/ui/ReadAloudWordsTest.kt, /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/test/java/io/github/dikshant363/pdfcraft/ui/ViewerGeometryTest.kt, /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/test/java/io/github/dikshant363/pdfcraft/ui/FreeTextLayoutTest.kt, /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/test/java/io/github/dikshant363/pdfcraft/ui/QuickToolbarTest.kt, /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/test/java/io/github/dikshant363/pdfcraft/ui/ReadAloudLanguageTest.kt, /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/test/java/io/github/dikshant363/pdfcraft/ui/ScanSessionTest.kt, /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/test/java/io/github/dikshant363/pdfcraft/ui/SignatureBoxTest.kt, /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/test/java/io/github/dikshant363/pdfcraft/ui/ShapeSnapTest.kt, /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/test/java/io/github/dikshant363/pdfcraft/ui/EditListsTest.kt, /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/test/java/io/github/dikshant363/pdfcraft/ui/UiTextTest.kt
+Java source files: 
+Script source files: 
+Script file extensions: 
+Using Kotlin/JVM incremental compilation
+[KOTLIN] Kotlin compilation 'jdkHome' argument: /opt/homebrew/Cellar/openjdk@17/17.0.20/libexec/openjdk.jdk/Contents/Home
+i: Options for KOTLIN DAEMON: IncrementalCompilationOptions(super=CompilationOptions(compilerMode=INCREMENTAL_COMPILER, targetPlatform=JVM, reportCategories=[0], reportSeverity=2, requestedCompilationResults=[0], kotlinScriptExtensions=[], generateCompilerRefIndex=false), sourceChanges=org.jetbrains.kotlin.buildtools.api.SourcesChanges$Unknown@677a1e20, classpathChanges=NotAvailableDueToMissingClasspathSnapshot, workingDir=/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/kotlin/compileDebugUnitTestKotlin/cacheable, multiModuleICSettings=null, icFeatures=IncrementalCompilationFeatures(usePreciseJavaTracking=true, withAbiSnapshot=false, preciseCompilationResultsBackup=true, keepIncrementalCompilationCachesInMemory=true, enableUnsafeIncrementalCompilationForMultiplatform=false, enableMonotonousIncrementalCompileSetExpansion=true), outputFiles=[/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/built_in_kotlinc/debugUnitTest/compileDebugUnitTestKotlin/classes, /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/kotlin/compileDebugUnitTestKotlin/cacheable, /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/kotlin/compileDebugUnitTestKotlin/local-state])
+w: file:///Users/dikshantagarwal/Desktop/contribution%20project/apps/pdfcraft-android/android/app/src/test/java/io/github/dikshant363/pdfcraft/ui/ReadAloudLanguageTest.kt:9:32 'constructor(p0: String!, p1: String!): Locale' is deprecated. Deprecated in Java.
+w: file:///Users/dikshantagarwal/Desktop/contribution%20project/apps/pdfcraft-android/android/app/src/test/java/io/github/dikshant363/pdfcraft/ui/ReadAloudLanguageTest.kt:9:54 'constructor(p0: String!, p1: String!): Locale' is deprecated. Deprecated in Java.
+w: file:///Users/dikshantagarwal/Desktop/contribution%20project/apps/pdfcraft-android/android/app/src/test/java/io/github/dikshant363/pdfcraft/ui/ReadAloudLanguageTest.kt:9:76 'constructor(p0: String!, p1: String!): Locale' is deprecated. Deprecated in Java.
+w: file:///Users/dikshantagarwal/Desktop/contribution%20project/apps/pdfcraft-android/android/app/src/test/java/io/github/dikshant363/pdfcraft/ui/ReadAloudLanguageTest.kt:9:98 'constructor(p0: String!, p1: String!): Locale' is deprecated. Deprecated in Java.
+w: file:///Users/dikshantagarwal/Desktop/contribution%20project/apps/pdfcraft-android/android/app/src/test/java/io/github/dikshant363/pdfcraft/ui/ReadAloudLanguageTest.kt:18:46 'constructor(p0: String!, p1: String!): Locale' is deprecated. Deprecated in Java.
+w: file:///Users/dikshantagarwal/Desktop/contribution%20project/apps/pdfcraft-android/android/app/src/test/java/io/github/dikshant363/pdfcraft/ui/ViewerGeometryTest.kt:206:66 Unnecessary non-null assertion (!!) on a non-null receiver of type 'TileRect'.
+w: file:///Users/dikshantagarwal/Desktop/contribution%20project/apps/pdfcraft-android/android/app/src/test/java/io/github/dikshant363/pdfcraft/ui/ViewerGeometryTest.kt:210:54 Unnecessary non-null assertion (!!) on a non-null receiver of type 'TileRect'.
+i: Finished executing kotlin compiler using DAEMON strategy
+Stored cache entry for task ':app:compileDebugUnitTestKotlin' with cache key b52090c89af78b0cf3adf2a3a8fe69a9
+Resolve mutations for :app:compileDebugUnitTestJavaWithJavac (Thread[Execution worker Thread 5,5,main]) started.
+Resolve mutations for :app:processDebugUnitTestJavaRes (Thread[Execution worker Thread 3,5,main]) started.
+:app:processDebugUnitTestJavaRes (Thread[Execution worker Thread 3,5,main]) started.
+:app:compileDebugUnitTestJavaWithJavac (Thread[Execution worker Thread 5,5,main]) started.
+
+> Task :app:compileDebugUnitTestJavaWithJavac NO-SOURCE
+Skipping task ':app:compileDebugUnitTestJavaWithJavac' as it has no source files and no previous output files.
+
+> Task :app:processDebugUnitTestJavaRes
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/test/resources', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/testDebug/resources', not found
+Caching disabled for task ':app:processDebugUnitTestJavaRes' because:
+  Caching has been disabled for the task
+Task ':app:processDebugUnitTestJavaRes' is not up-to-date because:
+  Executed with '--rerun-tasks'.
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/test/resources', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/testDebug/resources', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/test/resources', not found
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/testDebug/resources', not found
+Resolve mutations for :app:testDebugUnitTest (Thread[Execution worker Thread 3,5,main]) started.
+:app:testDebugUnitTest (Thread[Execution worker Thread 3,5,main]) started.
+Gradle Test Executor 2 started executing tests.
+Gradle Test Executor 2 finished executing tests.
+
+> Task :app:testDebugUnitTest
+Build cache key for task ':app:testDebugUnitTest' is 2adb1e5b9459ae97c057d38c81c6b558
+Task ':app:testDebugUnitTest' is not up-to-date because:
+  Executed with '--rerun-tasks'.
+file or directory '/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/intermediates/javac/debugUnitTest/compileDebugUnitTestJavaWithJavac/classes', not found
+Starting process 'Gradle Test Executor 2'. Working directory: /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app Command: /opt/homebrew/Cellar/openjdk@17/17.0.20/libexec/openjdk.jdk/Contents/Home/bin/java -Djava.awt.headless=true -Djava.library.path=/Users/dikshantagarwal/Library/Java/Extensions:/Library/Java/Extensions:/Network/Library/Java/Extensions:/System/Library/Java/Extensions:/usr/lib/java:.:/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/testDebug/jniLibs:/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/src/test/jniLibs -Dorg.gradle.internal.worker.tmpdir=/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/tmp/testDebugUnitTest/work --add-opens=java.base/java.io=ALL-UNNAMED @/Users/dikshantagarwal/.gradle/.tmp/gradle-worker-classpath719444854691383481txt -Xmx512m -Dfile.encoding=UTF-8 -Duser.country=IN -Duser.language=en -Duser.variant -ea worker.org.gradle.process.internal.worker.GradleWorkerMain 'Gradle Test Executor 2'
+Successfully started process 'Gradle Test Executor 2'
+Generating HTML test report...
+Finished generating test html results (0.003 secs) into: /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/reports/tests/testDebugUnitTest
+Finished generating test XML results (0.001 secs) into: /Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android/app/build/test-results/testDebugUnitTest
+Stored cache entry for task ':app:testDebugUnitTest' with cache key 2adb1e5b9459ae97c057d38c81c6b558
+AAPT2 aapt2-9.2.1-15009934-osx Daemon #0: shutdown
+Build 90cc9230-d83a-4f66-b650-25ad52da5b0f is closed
+
+BUILD SUCCESSFUL in 11s
+30 actionable tasks: 30 executed
+Watched directory hierarchies: [/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android/android]
+Configuration cache entry reused.
+EXIT_CODE: 0

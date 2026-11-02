@@ -1,0 +1,12 @@
+warning: patch `egui_demo_lib v0.37.0 (https://github.com/storytold/egui.git?rev=6d518fc799681571963842f95b55a6b68431b15a#6d518fc7)` was not used in the crate graph
+warning: patch `egui_inspection v0.37.0 (https://github.com/storytold/egui.git?rev=6d518fc799681571963842f95b55a6b68431b15a#6d518fc7)` was not used in the crate graph
+warning: patch `egui_system_font_provider v0.37.0 (https://github.com/storytold/egui.git?rev=6d518fc799681571963842f95b55a6b68431b15a#6d518fc7)` was not used in the crate graph
+help: Check that the patched package version and available features are compatible
+      with the dependency requirements. If the patch has a different version from
+      what is locked in the Cargo.lock file, run `cargo update` to use the new
+      version. This may also occur with an optional dependency that is not enabled.
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.15s
+     Running `target/debug/uniffi-bindgen generate --library target/debug/libpdfcraft_android.dylib --language kotlin --out-dir apps/pdfcraft-android/android/core/native/src/main/java`
+Code generation complete, formatting with ktlint (use --no-format to disable)
+Warning: Unable to auto-format pdfcraft_android.kt using ktlint: Os { code: 2, kind: NotFound, message: "No such file or directory" }
+EXIT_CODE: 0

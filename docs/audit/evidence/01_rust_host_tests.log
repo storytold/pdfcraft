@@ -1,0 +1,49 @@
+warning: patch `egui_demo_lib v0.37.0 (https://github.com/storytold/egui.git?rev=6d518fc799681571963842f95b55a6b68431b15a#6d518fc7)` was not used in the crate graph
+warning: patch `egui_inspection v0.37.0 (https://github.com/storytold/egui.git?rev=6d518fc799681571963842f95b55a6b68431b15a#6d518fc7)` was not used in the crate graph
+warning: patch `egui_system_font_provider v0.37.0 (https://github.com/storytold/egui.git?rev=6d518fc799681571963842f95b55a6b68431b15a#6d518fc7)` was not used in the crate graph
+help: Check that the patched package version and available features are compatible
+      with the dependency requirements. If the patch has a different version from
+      what is locked in the Cargo.lock file, run `cargo update` to use the new
+      version. This may also occur with an optional dependency that is not enabled.
+   Compiling pdfcraft-annot v0.17.0 (/Users/dikshantagarwal/Desktop/contribution project/crates/annot)
+   Compiling pdfcraft-edit v0.17.0 (/Users/dikshantagarwal/Desktop/contribution project/crates/edit)
+   Compiling pdfcraft-optimize v0.17.0 (/Users/dikshantagarwal/Desktop/contribution project/crates/optimize)
+   Compiling pdfcraft-xfdf v0.17.0 (/Users/dikshantagarwal/Desktop/contribution project/crates/xfdf)
+   Compiling pdfcraft-measure v0.17.0 (/Users/dikshantagarwal/Desktop/contribution project/crates/measure)
+   Compiling pdfcraft-sign v0.17.0 (/Users/dikshantagarwal/Desktop/contribution project/crates/sign)
+   Compiling pdfcraft-redact v0.17.0 (/Users/dikshantagarwal/Desktop/contribution project/crates/redact)
+   Compiling pdfcraft-audit v0.17.0 (/Users/dikshantagarwal/Desktop/contribution project/crates/audit)
+   Compiling pdfcraft-engine v0.17.0 (/Users/dikshantagarwal/Desktop/contribution project/crates/engine)
+   Compiling pdfcraft-automation v0.17.0 (/Users/dikshantagarwal/Desktop/contribution project/crates/automation)
+   Compiling pdfcraft-android v0.17.0 (/Users/dikshantagarwal/Desktop/contribution project/apps/pdfcraft-android)
+    Finished `test` profile [optimized + debuginfo] target(s) in 6.05s
+     Running unittests src/lib.rs (target/debug/deps/pdfcraft_android-7193d8f1347ac76c)
+
+running 17 tests
+test tests::open_failures_are_told_apart ... ok
+test tests::opens_a_document_and_describes_its_pages ... ok
+test tests::flattens_the_outline ... ok
+test tests::closing_refuses_to_lose_edits ... ok
+test tests::reading_blocks_split_paragraphs_and_map_characters_to_glyphs ... ok
+test tests::reports_tool_errors_instead_of_failing_hard ... ok
+test tests::search_options_and_fresh_text_after_an_edit ... ok
+test tests::renders_a_page_and_a_tile ... ok
+test tests::tells_document_attachments_from_comment_attachments ... ok
+test tests::runs_tools_and_tracks_undo ... ok
+test tests::lists_comments_links_widgets_and_thumbnails ... ok
+test tests::selects_words_and_reads_their_text ... ok
+test tests::a_voice_comment_keeps_its_recording ... ok
+test tests::form_scripts_run_when_fields_are_filled_and_buttons_pressed ... ok
+test tests::refuses_bad_render_requests ... ok
+test tests::asks_for_a_password_and_opens_with_the_right_one ... ok
+test tests::signs_with_a_digital_id_and_trusts_its_signer ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.62s
+
+   Doc-tests pdfcraft_android
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+EXIT_CODE: 0
