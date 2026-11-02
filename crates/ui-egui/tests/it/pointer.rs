@@ -1607,3 +1607,86 @@ fn a_right_click_with_edit_text_on_added_text_unselects_the_comment() {
     right_click(&mut h, on_added);
     assert_eq!(h.state().views[0].comments.selected, None);
 }
+
+/// Two pages with their gaps hidden, after `tool` set the tool up, and a point on the row of pixels
+/// where they touch, which lies on both.
+fn touching_pages(tool: impl FnOnce(&mut PdfCraftApp)) -> (Harness<'static, PdfCraftApp>, egui::Pos2) {
+    let mut h = open(two_pages_pdf(), "100", false);
+    h.state_mut().views[0].show_page_gaps = false;
+    tool(h.state_mut());
+    h.run_steps(4);
+    let (one, two) = {
+        let v = &h.state().views[0];
+        (v.page_screen_rect(0).expect("page 1 on screen"), v.page_screen_rect(1).expect("page 2 on screen"))
+    };
+    let seam = egui::pos2(one.min.x + 100.0, one.max.y);
+    assert!(one.contains(seam) && two.contains(seam), "the pages touch: {one:?} {two:?}");
+    (h, seam)
+}
+
+/// The pages the document's stamps are on.
+fn stamp_pages(h: &Harness<'_, PdfCraftApp>) -> Vec<usize> {
+    let s = h.state();
+    s.session.get(s.views[0].id).unwrap().info.annotations.iter().filter(|a| a.subtype == "Stamp").map(|a| a.page).collect()
+}
+
+/// Where pages touch (the gaps hidden), a press on the row they share is the first page's: a stamp
+/// clicked there lands on page 1. The second page used to take the press over.
+#[test]
+fn a_stamp_clicked_where_two_pages_touch_lands_on_the_first() {
+    let (mut h, seam) = touching_pages(|app| app.quick_tool = QuickTool::Stamp(StampKind::DynApproved));
+    mouse_click(&mut h, seam);
+    assert_eq!(stamp_pages(&h), vec![0]);
+}
+
+/// A click pressed on one page and released on the next (the gaps hidden, within egui's click
+/// distance) places nothing: the press is the first page's, and the pointer is off it. `main` placed
+/// the stamp on the second page.
+#[test]
+fn a_stamp_click_pressed_on_one_page_and_released_on_the_next_places_nothing() {
+    let (mut h, seam) = touching_pages(|app| app.quick_tool = QuickTool::Stamp(StampKind::DynApproved));
+    slipping_click(&mut h, seam - egui::vec2(0.0, 2.0), seam + egui::vec2(0.0, 2.0));
+    assert_eq!(stamp_pages(&h), Vec::<usize>::new());
+}
+
+/// Where pages touch (the gaps hidden), a right-click on the row they share is the first page's:
+/// the menu is anchored there. Both pages used to take it, and the second's anchor stood.
+#[test]
+fn a_right_click_where_two_pages_touch_is_the_first_pages() {
+    let (mut h, seam) = touching_pages(|_| {});
+    right_click(&mut h, seam);
+    assert_eq!(h.state().views[0].comments.context_at.map(|(page, _)| page), Some(0));
+}
+
+/// With Prepare open, a click that began off the page (in the gutter beside it) is no page's: the
+/// selected field stays selected, as the Link tool's and comments' selections do.
+#[test]
+fn with_prepare_a_click_that_began_off_the_page_keeps_the_selected_field() {
+    let mut h = open(comment_and_checkbox_pdf(), "150", false);
+    assert!(h.state_mut().execute("form.prepare"));
+    h.run_steps(4);
+    let on_box = at(&h, 110.0, 210.0);
+    mouse_click(&mut h, on_box);
+    assert!(h.state().views[0].prepare.selected.is_some(), "the field is selected");
+    let left = page(&h).min.x;
+    slipping_click(&mut h, egui::pos2(left - 2.0, on_box.y), egui::pos2(left + 3.0, on_box.y));
+    assert!(h.state().views[0].prepare.selected.is_some(), "a click that began off the page leaves it selected");
+}
+
+/// With the Edit panel open and the Note tool, a click on added text is the added text's: no note is
+/// started under it, as before.
+#[test]
+fn a_note_tool_click_on_added_text_starts_no_note() {
+    let mut h = open(comment_on_text_pdf(), "150", false);
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::AddText {
+        page: 0,
+        text: pdfcraft_engine::AddedText { rect: [40.0, 195.0, 140.0, 210.0], text: "Added".into(), ..Default::default() },
+    }));
+    assert!(h.state_mut().execute("edit.text"));
+    h.run_steps(3);
+    h.state_mut().quick_tool = QuickTool::Comment(CommentTool::Note);
+    h.run_steps(3);
+    let on_added = at(&h, 90.0, 202.0);
+    mouse_click(&mut h, on_added);
+    assert!(h.state().views[0].comments.composer.is_none(), "no note is started");
+}

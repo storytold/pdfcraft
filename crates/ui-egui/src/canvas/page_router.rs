@@ -118,7 +118,8 @@ pub(crate) enum PagePress {
     /// No button is down, or the press began on this page and nobody's hit won it: the active
     /// tool's. Also every page's while a press the page view does not hold is down (one that began
     /// over a panel), and after the press was dropped ([`PageRouter::cancel`]) until the button is
-    /// up.
+    /// up (`Elsewhere` instead when Escape came in the press's own frame; page input skips a
+    /// cancelled press either way).
     Free,
     /// The press began on another page, or off the pages (between them, or beside one).
     Elsewhere,

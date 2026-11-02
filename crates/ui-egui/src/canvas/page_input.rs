@@ -109,7 +109,7 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
     // goes down, so the button is what tells. A touch's long press, which egui reports as a
     // right-click with the finger still down, opens its menu.
     let press_held = ptr.primary_down && !resp.long_touched();
-    let context = pointer.filter(|p| resp.secondary_clicked() && xf.rect.contains(*p)).and_then(|p| right_click(&hits, &under, view, p, press_held));
+    let context = frame.right_click_on(xf.rect).and_then(|p| right_click(&hits, &under, view, p, press_held));
     // A mark already placed takes its own press (comments, below), and with no button down the
     // Fill & Sign tool's preview hides over one, where a press would pick it up.
     let over_mark =
@@ -332,7 +332,8 @@ fn tool_input(
 /// ([`PageHits::context_at`]), which the menu then acts on. A comment there is selected, and none
 /// elsewhere; a Prepare field is selected; links take theirs from what this returns.
 /// `under`: the hits at `p` before the tools act. `press_held`: the primary button is held, and the
-/// selections its press acts on are left alone until its release.
+/// comment and Prepare selections its press acts on are left alone until its release; links still
+/// take theirs, as before.
 fn right_click(hits: &PageHits<'_>, under: &[crate::page_router::Hit], view: &mut DocView, p: Pos2, press_held: bool) -> Option<Owner> {
     let context = hits.context_at(view, p, under);
     // Delete page, Paste and Copy Image act where the menu opened, whoever takes the right-click.

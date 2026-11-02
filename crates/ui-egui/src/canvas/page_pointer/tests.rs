@@ -293,7 +293,8 @@ fn outside_test_modules(source: &str) -> Vec<(usize, &str)> {
 }
 
 /// Each name `find` finds in a line of the page modules' code (their tests left out), as (file,
-/// the top-level function or `impl` method it is in, line, name).
+/// the top-level function or `impl` method it is in, line, name). A line rustfmt continued (a
+/// method chain split as `view` / `.router` / `.owner(i)`) is read with the one it continues.
 fn page_module_matches(find: impl Fn(&str) -> Vec<String>) -> Vec<(&'static str, Option<String>, usize, String)> {
     let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut found = Vec::new();
@@ -301,6 +302,7 @@ fn page_module_matches(find: impl Fn(&str) -> Vec<String>) -> Vec<(&'static str,
         let source = std::fs::read_to_string(src.join(file)).expect("page module").replace("\r\n", "\n");
         // The top-level function, or method of an `impl`, that each line is in.
         let (mut function, mut in_impl) = (None, false);
+        let mut lines: Vec<(usize, Option<&str>, String)> = Vec::new();
         for (n, line) in outside_test_modules(&source) {
             if line.starts_with("impl") {
                 (function, in_impl) = (None, true);
@@ -312,9 +314,50 @@ fn page_module_matches(find: impl Fn(&str) -> Vec<String>) -> Vec<(&'static str,
             if line.trim_start().starts_with("//") {
                 continue;
             }
-            for name in find(line) {
+            match lines.last_mut() {
+                Some((_, _, text)) if line.trim_start().starts_with('.') => text.push_str(line.trim_start()),
+                _ => lines.push((n, function, line.to_owned())),
+            }
+        }
+        for (n, function, text) in lines {
+            for name in find(&text) {
                 found.push((file, function.map(str::to_owned), n, name));
             }
+        }
+    }
+    found
+}
+
+/// Each hit test a page module imports under a name that is not a hit test's (`use …::hit as
+/// under;`), which the checks by name would not see.
+fn hit_test_aliases() -> Vec<String> {
+    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut found = Vec::new();
+    for file in PAGE_MODULES {
+        let source = std::fs::read_to_string(src.join(file)).expect("page module");
+        // Each `use` statement, from its first line to its `;`, wherever it is.
+        let mut statement: Option<String> = None;
+        for line in source.lines().map(str::trim) {
+            if statement.is_none() && ["use ", "pub use ", "pub(crate) use ", "pub(super) use "].iter().any(|start| line.starts_with(start)) {
+                statement = Some(String::new());
+            }
+            let Some(text) = statement.as_mut() else { continue };
+            text.push_str(line);
+            text.push(' ');
+            if !line.ends_with(';') {
+                continue;
+            }
+            for part in text.split([',', '{', '}', ';']) {
+                let Some((path, alias)) = part.split_once(" as ") else { continue };
+                let (name, alias) = (path.trim().rsplit("::").next().unwrap_or_default(), alias.trim());
+                if is_hit_test(name) && !is_hit_test(alias) {
+                    found.push(format!(
+                        "src/{file}: `{name} as {alias}` imports a hit test under another name, which the checks by name miss: \
+                         name it `hit` or `…_hit`."
+                    ));
+                }
+            }
+            statement = None;
         }
     }
     found
@@ -615,6 +658,7 @@ fn page_modules_act_on_a_press_only_through_the_router() {
          src/canvas/page_pointer/tests.rs, with why.",
         "calls no hit test any more: remove it from HIT_TESTERS.",
     ));
+    problems.extend(hit_test_aliases());
     // An entry no page module calls any more no longer guards anything.
     let called = page_module_uses(&PAGE_HIT_CALLS);
     problems.extend(

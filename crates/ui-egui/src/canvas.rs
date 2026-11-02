@@ -1207,6 +1207,19 @@ struct PageFrame<'a> {
     current_height: f32,
     pressed_page: Option<usize>,
     calc_hover: Option<crate::calc_order_ui::Focus>,
+    /// A page took this frame's right-click.
+    right_clicked: bool,
+}
+
+impl PageFrame<'_> {
+    /// Where this frame's right-click is, on the page at `rect`, for the first page it is on: pages
+    /// that touch (the gaps hidden) can share a row of pixels, and a right-click there is one
+    /// page's, as a press is.
+    fn right_click_on(&mut self, rect: Rect) -> Option<Pos2> {
+        let p = self.pointer.filter(|p| !self.right_clicked && self.resp.secondary_clicked() && rect.contains(*p))?;
+        self.right_clicked = true;
+        Some(p)
+    }
 }
 
 /// Visible heights (points) closer than this are equal: one page size can meet the viewport a
@@ -1502,7 +1515,7 @@ fn draw_page(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_>, i
     // A cancelled press takes nothing until the button is up, though the page's menu still opens
     // where a right-click is.
     let input = if view.press_cancelled {
-        if let Some(p) = pointer.filter(|p| frame.resp.secondary_clicked() && xf.rect.contains(*p)) {
+        if let Some(p) = frame.right_click_on(xf.rect) {
             comments::anchor(&pcx, p, view);
         }
         PageInput { consumed: true, area_tool: false, hover: None, released_over: false }
@@ -1683,6 +1696,7 @@ fn draw_pages(
         current_height: f32::INFINITY,
         pressed_page: None,
         calc_hover: None,
+        right_clicked: false,
     };
     for &i in visible_pages {
         draw_page(ui, view, &mut frame, i);
