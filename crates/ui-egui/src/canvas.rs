@@ -2785,8 +2785,14 @@ type RemoteOpen = (DocId, String, pdfcraft_render::RemoteDestination);
 /// the document is no longer borrowed.
 fn follow_link(app: &mut PdfCraftApp, index: usize, link: Option<pdfcraft_render::Link>) -> Option<RemoteOpen> {
     let link = link?;
+    // A field's typed value, committed by this click, goes first and on its own: a value the
+    // field refuses reopens its editor with the typing (#166), and the link is not followed.
+    // Inside the link's batch its refusal would refuse the batch, and the typing would be lost.
+    if app.views.get(index)?.forms.committed.is_some() && !app.apply_queued_edit(index) {
+        return None;
+    }
     let view = app.views.get_mut(index)?;
-    // An edit already waiting (a field's typed value) is applied first, in the same step.
+    // Another edit already waiting is applied first, in the same step.
     let mut edits: Vec<Edit> = view.pending_edit.take().into_iter().collect();
     let mut remote_open = None;
     for target in std::iter::once(link.target).chain(link.next) {

@@ -850,6 +850,61 @@ fn pressing_another_text_field_validates_the_refused_value_once() {
     assert_eq!((focus.name.as_str(), focus.text.as_str()), ("qty", "4500"));
 }
 
+/// Review on #4525: a click on a link commits the field being typed in before the link's actions
+/// run. A value the field refuses reopens its editor with the typing (#166) and the link is not
+/// followed; inside the link's batch of edits the refusal took the batch with it, the typing was
+/// lost and the hide action didn't run either. A value the field takes goes in, and the link's
+/// hide action runs after it.
+#[test]
+fn a_link_clicked_while_typing_a_refused_value_keeps_the_typing() {
+    let form = || {
+        pdf_from_objects(&[
+            "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 6 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> >> >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>",
+            "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 6 0 R 7 0 R] >>",
+            "<< /Type /Annot /Subtype /Widget /FT /Tx /T (qty) /V (4) /Rect [20 350 280 372] /P 3 0 R /F 4 /AA << /V << /S /JavaScript /JS (if (event.value > 100) { app.alert('At most 100'); event.rc = false; }) >> >> >>",
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+            "<< /Type /Annot /Subtype /Widget /FT /Tx /T (note) /V (shown) /Rect [20 300 280 322] /P 3 0 R /F 4 >>",
+            "<< /Type /Annot /Subtype /Link /Rect [20 200 280 240] /Border [0 0 0] /A << /S /Hide /T (note) >> >>",
+        ])
+    };
+    let note_hidden = |h: &Harness<'static, PdfCraftApp>| {
+        let s = h.state();
+        let doc = pdfcraft_cos::Document::open(s.session.save_bytes(s.views[0].id).unwrap()).unwrap();
+        doc.get(pdfcraft_cos::ObjRef::new(6, 0)).as_dict().and_then(|d| d.int(b"F")).unwrap_or(0) & 2 != 0
+    };
+    for (typed, refused) in [("500", true), ("0", false)] {
+        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+            let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
+            app.open_bytes("order.pdf", None, form()).unwrap();
+            app.set_option("left", "closed").unwrap();
+            app.set_option("zoom", "150").unwrap();
+            app
+        });
+        h.run_steps(6);
+        click_field(&mut h, "qty", 0);
+        h.event(egui::Event::Text(typed.into()));
+        h.run_steps(2);
+        let link = {
+            let r = h.state().views[0].page_screen_rect(0).expect("the page is on screen");
+            let k = r.width() / 300.0;
+            r.min + egui::vec2(150.0 * k, (400.0 - 220.0) * k)
+        };
+        click_at(&mut h, link);
+        if refused {
+            assert!(h.state().toast.is_some(), "the script refused 4500");
+            let focus = h.state().views[0].forms.focus.clone().expect("the refused field opens again");
+            assert_eq!((focus.name.as_str(), focus.text.as_str()), ("qty", "4500"), "with the typing");
+            assert_eq!(value(&h, "qty"), ["4"]);
+            assert!(!note_hidden(&h), "the link was not followed");
+        } else {
+            assert_eq!(value(&h, "qty"), ["40"], "the typing went in");
+            assert!(note_hidden(&h), "and the link hid the note");
+        }
+    }
+}
+
 /// `validated_form` plus a plain text field, `note`, under `qty`.
 fn validated_form_with_note() -> Vec<u8> {
     pdf_from_objects(&[
