@@ -654,6 +654,42 @@ fn the_control_file_replaces_the_one_a_previous_run_left() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// #3922: a control file created in a folder that lets every user read what's in it is still
+/// readable by its user and SYSTEM only, like mode 0600 on Unix.
+#[cfg(windows)]
+#[test]
+fn the_control_file_is_owner_only_in_a_folder_other_users_can_read() {
+    use pdfcraft_platform::owner_only;
+    let dir = scratch();
+    let users = std::process::Command::new("icacls").arg(&dir).arg("/grant").arg("*S-1-5-32-545:(OI)(CI)R").output().unwrap();
+    assert!(users.status.success());
+    // What the folder hands down, for comparison: a plain file there is readable by Users.
+    std::fs::write(dir.join("plain.txt"), "x").unwrap();
+    let me = owner_only::current_user_sid().unwrap();
+    assert!(owner_only::foreign_access(&owner_only::sddl_of(&dir.join("plain.txt")).unwrap(), &me).is_some());
+    super::write_control_file(&dir.join("ctl.json").to_string_lossy(), 4242, "t0ken").unwrap();
+    let sddl = owner_only::sddl_of(&dir.join("ctl.json")).unwrap();
+    assert_eq!(owner_only::foreign_access(&sddl, &me), None, "{sddl}");
+    let (json, names) = written(&dir);
+    assert_eq!(json["token"].as_str(), Some("t0ken"));
+    assert_eq!(names, ["ctl.json", "plain.txt"], "no private staging folder left behind");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Review on #3956: writing the control file reads the user's SID once, for both the private
+/// folder and the file in it, rather than starting `whoami` for each.
+#[cfg(windows)]
+#[test]
+fn writing_the_control_file_looks_up_the_users_sid_once() {
+    use pdfcraft_platform::owner_only::sid_lookups_on_this_thread;
+    let dir = scratch();
+    let before = sid_lookups_on_this_thread();
+    super::write_control_file(&dir.join("ctl.json").to_string_lossy(), 4242, "t0ken").unwrap();
+    assert_eq!(sid_lookups_on_this_thread().saturating_sub(before), 1, "whoami runs once per control file");
+    assert_eq!(written(&dir).0["token"].as_str(), Some("t0ken"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// X11 startup notification and docks match a window to its launcher by `StartupWMClass`,
 /// so it has to be the class the window carries: the app id, on Wayland and X11 alike.
 #[test]
