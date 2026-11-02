@@ -49,13 +49,9 @@ fn hex4(bytes: &[u8]) -> Option<u16> {
         return None;
     }
     bytes.iter().try_fold(0u16, |value, byte| {
-        let digit = match byte {
-            b'0'..=b'9' => byte - b'0',
-            b'a'..=b'f' => byte - b'a' + 10,
-            b'A'..=b'F' => byte - b'A' + 10,
-            _ => return None,
-        };
-        value.checked_mul(16)?.checked_add(u16::from(digit))
+        // A hex digit is below 16, so `try_from` never fails; it only avoids an `as` cast.
+        let digit = u16::try_from(char::from(*byte).to_digit(16)?).ok()?;
+        value.checked_mul(16)?.checked_add(digit)
     })
 }
 
@@ -359,5 +355,32 @@ pub fn calculate_js(c: &Calculate) -> Option<String> {
         // Acrobat's own translation follows the comment, so a viewer that runs the script instead
         // of reading the comment computes the same value (a placeholder here showed 0).
         Calculate::Notation(expr) => Some(format!("/** BVCALC {expr} EVCALC **/ event.value = {};", notation_js(expr))),
+    }
+}
+
+#[cfg(test)]
+mod hex_tests {
+    use super::hex4;
+
+    /// The hand-written match `hex4` used before `char::to_digit`, kept as the reference.
+    fn old_digit(b: u8) -> Option<u16> {
+        match b {
+            b'0'..=b'9' => Some(u16::from(b - b'0')),
+            b'a'..=b'f' => Some(u16::from(b - b'a' + 10)),
+            b'A'..=b'F' => Some(u16::from(b - b'A' + 10)),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn hex4_reads_every_byte_as_the_old_match_did() {
+        for b in 0..=u8::MAX {
+            assert_eq!(hex4(&[b'0', b'0', b'0', b]), old_digit(b), "byte {b:#04x}");
+            assert_eq!(hex4(&[b, b'0', b'0', b'0']), old_digit(b).map(|d| d << 12), "byte {b:#04x}");
+        }
+        assert_eq!(hex4(b"FfA0"), Some(0xFFA0));
+        // `from_str_radix` would take a leading sign; a digit-by-digit read never does.
+        assert_eq!(hex4(b"+FFF"), None);
+        assert_eq!(hex4(b"FFF"), None);
     }
 }

@@ -6,12 +6,8 @@ use crate::{Failure, Step, is_pdf_whitespace};
 const NAME: &str = "ASCIIHexDecode";
 
 fn nibble(b: u8) -> Option<u8> {
-    match b {
-        b'0'..=b'9' => Some(b - b'0'),
-        b'a'..=b'f' => Some(b - b'a' + 10),
-        b'A'..=b'F' => Some(b - b'A' + 10),
-        _ => None,
-    }
+    // A hex digit is below 16, so `try_from` never fails; it only avoids an `as` cast.
+    char::from(b).to_digit(16).and_then(|d| u8::try_from(d).ok())
 }
 
 pub(crate) fn decode(data: &[u8], max: usize) -> Step {
@@ -68,6 +64,20 @@ mod tests {
 
     fn dec(d: &[u8]) -> Result<Vec<u8>, FilterError> {
         decode(d, 1000).map_err(|f| f.error)
+    }
+
+    /// `nibble` reads every byte as the hand-written match it replaced did.
+    #[test]
+    fn nibble_matches_the_old_match_for_every_byte() {
+        let old = |b: u8| match b {
+            b'0'..=b'9' => Some(b - b'0'),
+            b'a'..=b'f' => Some(b - b'a' + 10),
+            b'A'..=b'F' => Some(b - b'A' + 10),
+            _ => None,
+        };
+        for b in 0..=u8::MAX {
+            assert_eq!(nibble(b), old(b), "byte {b:#04x}");
+        }
     }
 
     #[test]

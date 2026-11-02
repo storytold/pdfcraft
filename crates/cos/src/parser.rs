@@ -403,12 +403,8 @@ fn parse_counted<T: std::str::FromStr>(s: &str) -> Result<T, T::Err> {
 }
 
 fn hexval(b: u8) -> Option<u8> {
-    match b {
-        b'0'..=b'9' => Some(b - b'0'),
-        b'a'..=b'f' => Some(b - b'a' + 10),
-        b'A'..=b'F' => Some(b - b'A' + 10),
-        _ => None,
-    }
+    // A hex digit is below 16, so `try_from` never fails; it only avoids an `as` cast.
+    char::from(b).to_digit(16).and_then(|d| u8::try_from(d).ok())
 }
 
 /// Parse an indirect object at `offset`: `N G obj <object> [stream…endstream] endobj`.
@@ -552,6 +548,20 @@ fn find_endstream(data: &[u8], from: usize, endstreams: Option<&EndstreamIndex>)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `hexval` reads every byte as the hand-written match it replaced did.
+    #[test]
+    fn hexval_matches_the_old_match_for_every_byte() {
+        let old = |b: u8| match b {
+            b'0'..=b'9' => Some(b - b'0'),
+            b'a'..=b'f' => Some(b - b'a' + 10),
+            b'A'..=b'F' => Some(b - b'A' + 10),
+            _ => None,
+        };
+        for b in 0..=u8::MAX {
+            assert_eq!(hexval(b), old(b), "byte {b:#04x}");
+        }
+    }
 
     #[test]
     fn numbers_with_multibyte_garbage_do_not_panic() {
