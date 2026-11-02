@@ -1,5 +1,5 @@
 use super::geometry::{
-    CARET_SIZE, HANDLES, clamp_to, corner_ratio, drawn_box, grabs_points, handle_pos, is_markup, point_handle, reshapable, reshaped, resizable,
+    CARET_SIZE, HANDLES, clamp_to, corner_ratio, drawn_box, grabs_points, handle_pos, on_text, point_handle, reshapable, reshaped, resizable,
     resized, snapped_caret,
 };
 use super::paint::{drawn_shape, edit_anchor, erase, new_comment};
@@ -96,7 +96,7 @@ pub(crate) fn hit(cx: &PageCx<'_>, view: &DocView, p: Pos2) -> Option<Hit> {
     if cx.tool == QuickTool::Select && a.subtype == "Highlight" && on_link(cx, p) {
         return None;
     }
-    let markup = is_markup(&a.subtype);
+    let markup = on_text(a);
     let icon = if cx.allowed && !markup { egui::CursorIcon::Move } else { egui::CursorIcon::PointingHand };
     // What a drag moves whole (a note, a shape, a signature, a Fill & Sign mark) is placed on the
     // page, over a form field; text markup lies on the text, under one.
@@ -200,7 +200,7 @@ fn select_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, view: &mu
                 cv.gesture = Some(Gesture::Resize { page: cx.page, index: a.index, handle: (x, y), from: o, aspect_ratio });
                 consumed = true;
             }
-            CommentPart::Body if !is_markup(&a.subtype) => {
+            CommentPart::Body if !on_text(a) => {
                 cv.selected = Some((cx.page, a.index));
                 cv.reveal = true;
                 if cx.allowed {
@@ -613,7 +613,7 @@ pub(crate) fn nudge_keys(ctx: &egui::Context, view: &mut DocView, info: &DocInfo
         return;
     }
     let Some((page, index)) = cv.selected else { return };
-    let movable = info.annotations.iter().any(|a| a.page == page && a.index == index && !a.is_reply() && !is_markup(&a.subtype) && !a.locked);
+    let movable = info.annotations.iter().any(|a| a.page == page && a.index == index && !a.is_reply() && !on_text(a) && !a.locked);
     let (Some(xf), Some(p)) = (view.page_xform(page), info.pages.get(page)) else { return };
     if !movable {
         return;

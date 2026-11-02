@@ -44,6 +44,9 @@ fn xfdf_annots(doc: &Document, out: &mut String) {
                 (b"M", "date"),
                 (b"CreationDate", "creationdate"),
                 (b"RT", "replyType"),
+                // The intent (`/IT`), for every markup annotation: Replace Text's caret and
+                // strikeout are told apart by it, as callouts and clouds are.
+                (b"IT", "intent"),
                 (b"State", "state"),
                 (b"StateModel", "statemodel"),
                 (b"Name", "icon"),
@@ -88,9 +91,6 @@ fn xfdf_annots(doc: &Document, out: &mut String) {
                 let rd = nums_of(doc, d.get(b"RD"));
                 if rd.len() == 4 {
                     let _ = write!(attrs, " fringe=\"{}\"", rd.iter().map(|v| n(*v)).collect::<Vec<_>>().join(","));
-                }
-                if let Some(it) = d.get(b"IT").map(|o| doc.resolve(o)).and_then(|o| o.as_name().map(|x| String::from_utf8_lossy(x).into_owned())) {
-                    let _ = write!(attrs, " intent=\"{}\"", esc(&it));
                 }
                 if let Some(le) = d.get(b"LE").map(|o| doc.resolve(o)).and_then(|o| o.as_name().map(|x| String::from_utf8_lossy(x).into_owned())) {
                     let _ = write!(attrs, " head=\"{}\"", esc(&le));
@@ -273,6 +273,9 @@ fn annot_from_xml(node: roxmltree::Node, subtype: &str, page_ref: ObjRef) -> Opt
     }
     if let Some(v) = node.attribute("icon") {
         d.set(b"Name".to_vec(), Object::name(v));
+    }
+    if let Some(v) = node.attribute("intent").filter(|v| !v.is_empty()) {
+        d.set(b"IT".to_vec(), Object::name(v));
     }
     let flags: i64 = node
         .attribute("flags")

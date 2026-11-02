@@ -179,6 +179,12 @@ fn a_replace_text_pair_survives_an_xfdf_round_trip() {
     let kinds: Vec<&str> = found.iter().map(|s| s.subtype.as_str()).collect();
     assert!(kinds.contains(&"StrikeOut") && kinds.contains(&"Caret"), "{kinds:?}");
     assert_eq!(comment_view(&dst), comment_view(&src), "the pair and its thread survive");
+    // Review on #5689 (CodeRabbit): the intents travel too, so the imported pair is still
+    // Replace Text, and deleting its strikeout takes the caret and its replacement with it.
+    assert!(xfdf.contains("intent=\"Replace\"") && xfdf.contains("intent=\"StrikeOutTextEdit\""), "{xfdf}");
+    let strike = summaries(&dst).into_iter().find(|s| s.subtype == "StrikeOut").expect("the strikeout");
+    pdfcraft_annot::delete_annotation(&mut dst, 0, strike.index).unwrap();
+    assert!(summaries(&dst).iter().all(|s| s.subtype != "Caret"), "the caret goes with the strikeout");
 }
 
 #[test]

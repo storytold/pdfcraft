@@ -151,7 +151,10 @@ pub(crate) fn composer(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, 
                 text,
                 author: prefs.author.clone(),
                 strike: prefs.style(CommentTool::ReplaceText),
-                caret: prefs.style(CommentTool::Caret),
+                // One proposal, one look: the caret, the group's primary, takes the Replace text
+                // tool's style as the strikeout does, so a default saved from either part (Make
+                // Current Properties Default) applies to the next proposal as a whole.
+                caret: prefs.style(CommentTool::ReplaceText),
             })
         }
         ComposerKind::Caret { size } => {
