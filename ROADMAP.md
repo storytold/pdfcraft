@@ -1,5 +1,7 @@
 # PdfCraft roadmap
 
+> **Last reviewed:** 2026-11-02 | **Last updated:** 2026-11-02 | **Change:** patch (M7 #5763 inset review: wrapped editor rows keep their source inset where it fits and clamp it where it would clip trailing glyphs; unchanged upright geometry and estimates unchanged)
+
 > **Last reviewed:** 2026-11-02 | **Last updated:** 2026-11-02 | **Change:** patch (M7 #5763 wrapped-row review: continuations retain their logical source row inset and metrics; later source rows shift by the accumulated wrap leading; estimates unchanged)
 
 > **Last reviewed:** 2026-11-02 | **Last updated:** 2026-11-02 | **Change:** patch (M7 #5763 review: position horizontal turned editors with the measured wrapped height so rows and caret remain visible near the page bottom; estimates unchanged)
@@ -226,6 +228,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 | 8 | 1.0 polish: performance, right-to-left, missing languages, keyboard-only (M14) | 55–95 |
 
 ## Progress log
+
+- **2026-11-02 (M7, #5763 inset review):** Limit a wrapped row’s source inset to the remaining field width so trailing glyphs stay inside TextEdit’s clip. The same rule applies to unchanged turned text and edited upright paragraphs; short rows keep their full inset and unchanged upright text keeps its source geometry. Hanging-indent regressions check every glyph against the field and actual clip, row order/leading, full insets where they fit, unchanged turned Apply and upright Cancel. Estimates unchanged.
 
 - **2026-11-02 (M7, #5763 wrapped-row review):** Map horizontal editor rows to logical source rows, keeping wrapped continuations at the source inset and shifting later source baselines by the accumulated leading. A turned two-row paragraph with different indents and a wrapping first row checks order, spacing, field bounds and byte-identical unchanged Apply; regression fails on d579a9f4. Unwrapped upright geometry is unchanged. Estimates unchanged.
 
@@ -761,6 +765,7 @@ Newest first: the date, what moved, and the new overall estimate.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-02 | patch | M7 #5763 inset review: wrapped editor rows keep their source inset where it fits and clamp it where it would clip trailing glyphs; unchanged upright geometry and estimates unchanged. |
 | 2026-11-02 | patch | M7 #5763 wrapped-row review: continuations retain their logical source row inset and metrics; later source rows shift by the accumulated wrap leading; estimates unchanged. |
 | 2026-11-02 | patch | M7 #5763 review: position horizontal turned editors with the measured wrapped height so rows and caret remain visible near the page bottom; estimates unchanged. |
 | 2026-11-02 | patch | M7 #5763 review: unchanged turned text wraps within its horizontal field without a PDF edit and hides the source before typing; estimates unchanged. |

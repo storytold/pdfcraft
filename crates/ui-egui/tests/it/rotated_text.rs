@@ -374,3 +374,107 @@ fn wrapped_first_turned_row_keeps_source_indent_and_shifts_the_second_row() {
     assert!(h.state().session.get(doc_id).unwrap().can_undo().is_none());
     assert_eq!(h.state().session.save_bytes(doc_id).unwrap().as_slice(), bytes.as_slice());
 }
+
+fn indented_wrap_stays_inside_text_clip(turned: bool) {
+    let shots = std::env::var_os("PDFCRAFT_ROTATED_TEXT_SHOTS").is_some();
+    let _gpu = shots.then(crate::gpu);
+    use pdfcraft_cos::{Dict, Document, ObjRef, Object, Stream, write_incremental};
+    // Leave a short final continuation in both fields, so full-inset preservation is checked.
+    let second = "Margin label ".repeat(if turned { 9 } else { 10 });
+    // A list item explicitly groups the 36pt hanging indent into the same paragraph.
+    let first = if turned { "1. First source row".to_owned() } else { format!("1. {}", "Opening row ".repeat(3)) };
+    let source_second = if turned { second.clone() } else { "Margin label ".to_owned() };
+    let text = format!("{first}\n{second}");
+    let matrix = if turned { "0 1 -1 0 100 60" } else { "1 0 0 1 20 600" };
+    let mut source = Document::open(std::sync::Arc::new(fixture(90, 100.0, false))).unwrap();
+    source
+        .update_dict(ObjRef::new(2, 0), |d| d.set(b"MediaBox".to_vec(), Object::Array(vec![0, 0, 300, 800].into_iter().map(Object::Int).collect())))
+        .unwrap();
+    source.set(
+        ObjRef::new(5, 0),
+        Object::Stream(Stream::from_raw(
+            Dict::new(),
+            format!("BT /F1 14 Tf {matrix} Tm ({first}) Tj 36 -20 Td ({source_second}) Tj ET").into_bytes(),
+        )),
+    );
+    let bytes = write_incremental(&source, &Default::default()).unwrap();
+    let mut h = open_fixture_editor(bytes.clone(), "200");
+    if !turned {
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.get_by_label("Text editing line").type_text(&text);
+        h.run_steps(4);
+    }
+    let doc_id = h.state().views[0].id;
+    let doc = h.state().session.get(doc_id).unwrap();
+    assert_eq!(doc.text_blocks(0)[0].rows.len(), 2);
+    let scale = h.state().views[0].page_screen_rect(0).unwrap().width() / doc.info.pages[0].width;
+    let field = h.get_by_label("Text editing line").rect();
+    let (clip, shape) = h
+        .output()
+        .shapes
+        .iter()
+        .find_map(|s| match &s.shape {
+            egui::Shape::Text(t) if t.galley.text() == text => Some((s.clip_rect, t)),
+            _ => None,
+        })
+        .unwrap();
+    let rows = &shape.galley.rows;
+    assert!(rows.len() > 2, "the indented source row must wrap");
+    assert_eq!(rows[0].glyphs.iter().map(|g| g.chr).collect::<String>(), first);
+    assert_eq!(rows[1..].iter().flat_map(|r| r.glyphs.iter().map(|g| g.chr)).collect::<String>(), second);
+    let baseline = |i: usize| rows[i].pos.y + rows[i].glyphs[0].pos.y;
+    for i in 1..rows.len() {
+        assert!((baseline(i) - baseline(i - 1) - 20.0 * scale).abs() < 1.5, "source leading keeps the reading order");
+        assert!(rows[i].pos.y >= rows[i - 1].pos.y + rows[i - 1].size.y, "rows never overlap");
+    }
+    for row in rows {
+        for glyph in &row.glyphs {
+            let rect = glyph.logical_rect().translate(shape.pos.to_vec2() + row.pos.to_vec2());
+            assert!(field.expand(1.0).contains_rect(rect), "every glyph stays inside the field: {rect:?} vs {field:?}");
+            assert!(clip.expand(1.0).contains_rect(rect), "TextEdit never clips a trailing glyph: {rect:?} vs {clip:?}");
+        }
+    }
+    assert!((rows[0].pos.x).abs() < 0.1, "the first source row stays unindented");
+    let inset = 36.0 * scale;
+    let mut clamped = false;
+    let mut preserved = false;
+    for row in &rows[1..] {
+        // Font layout rounds the job width to a pixel; row placement uses the field width.
+        let available = (shape.galley.job.wrap.max_width - row.size.x).max(0.0);
+        assert!(
+            (row.pos.x - inset.min(available)).abs() < 1.0,
+            "keep the source inset wherever it fits: turned={turned}, x={}, inset={inset}, available={available}, width={}, row_width={}, aligns={:?}",
+            row.pos.x,
+            shape.galley.job.wrap.max_width,
+            row.size.x,
+            h.state().views[0].line_editor.as_ref().unwrap().look.aligns
+        );
+        clamped |= row.pos.x < inset - 1.0;
+        preserved |= (row.pos.x - inset).abs() < 0.1;
+    }
+    assert!(clamped && preserved, "long wrapped rows need a clamp; short continuations retain their full inset");
+    if shots {
+        h.render().unwrap().save(format!("/tmp/5771-wrapped-indented-row-{turned}.png")).unwrap();
+    }
+    if turned {
+        assert!(!h.state().views[0].line_editor.as_ref().unwrap().has_unsaved_text());
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Enter);
+    } else {
+        assert!(h.state().views[0].line_editor.as_ref().unwrap().has_unsaved_text());
+        h.key_press(egui::Key::Escape);
+    }
+    h.run_steps(3);
+    assert!(h.state().views[0].line_editor.is_none());
+    assert!(h.state().session.get(doc_id).unwrap().can_undo().is_none());
+    assert_eq!(h.state().session.save_bytes(doc_id).unwrap().as_slice(), bytes.as_slice());
+}
+
+#[test]
+fn wrapped_indented_turned_row_keeps_every_glyph_inside_the_text_clip() {
+    indented_wrap_stays_inside_text_clip(true);
+}
+
+#[test]
+fn edited_indented_upright_row_keeps_every_glyph_inside_the_text_clip() {
+    indented_wrap_stays_inside_text_clip(false);
+}

@@ -237,6 +237,7 @@ pub(super) fn editor_galley(ctx: &egui::Context, ed: &LineEditor, text: &str, sc
         sources.windows(2).map(|r| (r[0].0 - r[1].0).abs()).rfind(|v| *v > 0.0).unwrap_or(fallback)
     };
     let g = Arc::make_mut(&mut galley);
+    let wraps = g.job.wrap.max_width.is_finite();
     let mut bounds = Rect::NOTHING;
     let mut meshes = Rect::NOTHING;
     // Which line of the text (between `\n`s) each row is on: rows aligned on their own go where
@@ -263,7 +264,12 @@ pub(super) fn editor_galley(ctx: &egui::Context, ed: &LineEditor, text: &str, sc
             Some(pdfcraft_engine::TextAlign::Right) => free,
             Some(pdfcraft_engine::TextAlign::Left | pdfcraft_engine::TextAlign::Justify) => 0.0,
             None if centered => (width - row.size.x) / 2.0,
-            None => (source_rect[0] - block_rect[0]) as f32 * scale,
+            None => {
+                let inset = (source_rect[0] - block_rect[0]) as f32 * scale;
+                // Wrapping uses the full field width. Keep the source inset only where it fits;
+                // otherwise it would push trailing glyphs beyond TextEdit's clip.
+                if wraps { inset.min(free) } else { inset }
+            }
         };
         for glyph in &mut row.glyphs {
             let dy = ascent - glyph.pos.y;
