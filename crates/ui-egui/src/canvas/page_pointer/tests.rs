@@ -53,6 +53,20 @@ fn a_touch_tap_keeps_its_position_on_the_frame_it_lifts() {
     assert_eq!(frame(&ctx, vec![], false), PagePointer::default(), "and forget it the frame after");
 }
 
+/// A click is located where it came up even after a stall's many presses and releases, past the
+/// cap on a frame's edges. Read from the edges kept, it was an earlier release's.
+#[test]
+fn a_frames_last_release_is_kept_past_the_cap_on_its_edges() {
+    let ctx = Context::default();
+    let (p, q) = (pos2(50.0, 60.0), pos2(80.0, 90.0));
+    frame(&ctx, vec![Event::PointerMoved(p)], false);
+    let mut events: Vec<Event> = (0..2 * MAX_EDGES).map(|i| button(p, PointerButton::Primary, i % 2 == 0)).collect();
+    events.extend([button(q, PointerButton::Primary, true), button(q, PointerButton::Primary, false)]);
+    let stall = frame(&ctx, events, false);
+    assert_eq!(stall.edges.len(), MAX_EDGES);
+    assert_eq!(stall.released, Some(q));
+}
+
 #[test]
 fn a_press_and_release_in_one_frame_keep_the_press() {
     let ctx = Context::default();

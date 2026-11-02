@@ -101,7 +101,7 @@ pub(crate) fn page_input(resp: &egui::Response, xf: &PageXform, ptr: &PagePointe
     // A press nobody holds on a page without the quadrilateral moves it there: a drag from where it
     // began, a click where it came up (egui has cleared the press's origin by its release, and the
     // pointer may have moved on in the same frame).
-    let at = if resp.clicked() { ptr.released() } else { origin };
+    let at = if resp.clicked() { ptr.released } else { origin };
     if (resp.drag_started() || resp.clicked())
         && press == PagePress::Free
         && at.is_some_and(|p| xf.rect.contains(p))
