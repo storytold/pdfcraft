@@ -149,6 +149,46 @@ fn header_and_footer_are_drawn_in_display_space_and_wrap_the_original_content() 
 }
 
 #[test]
+fn each_header_keeps_its_settings_and_pages_for_update() {
+    // #5785: two headers on different pages can each be read back, after a save, to update it.
+    let mut doc = fixture();
+    let first = HeaderFooter {
+        text: ["\u{c4} <<1>>".into(), String::new(), String::new(), String::new(), "Two\nlines".into(), String::new()],
+        font: added::Family::Courier,
+        font_size: 11.5,
+        color: [0.25, 0.5, 1.0],
+        underline: true,
+        margins: [10.0, 20.0, 30.0, 40.0],
+        start_number: 7,
+        shrink: false,
+    };
+    let second = HeaderFooter { text: ["Other".into(), String::new(), String::new(), String::new(), String::new(), String::new()], ..first.clone() };
+    add_header_footer(&mut doc, &[0, 2], &first, false, &cx()).unwrap();
+    add_header_footer(&mut doc, &[1], &second, false, &cx()).unwrap();
+    let mut doc = reopen(&doc);
+    assert_eq!(header_footer_on(&doc, 0), Some((first.clone(), vec![0, 2])));
+    assert_eq!(header_footer_on(&doc, 1), Some((second, vec![1])));
+    // Updating the first one leaves the second alone.
+    let updated = HeaderFooter { text: ["New".into(), String::new(), String::new(), String::new(), String::new(), String::new()], ..first };
+    add_header_footer(&mut doc, &[0, 2], &updated, true, &cx()).unwrap();
+    assert_eq!(header_footer_on(&doc, 2), Some((updated, vec![0, 2])));
+    assert!(header_footer_on(&doc, 1).is_some_and(|(hf, _)| hf.text[0] == "Other"));
+    assert_eq!(header_footer_on(&doc, 9), None);
+    // A header written before the settings were kept has none to offer.
+    for page in pdfcraft_model::pages(&doc) {
+        for o in doc.resolve(page.dict.get(b"Contents").unwrap()).as_array().cloned().unwrap_or_default() {
+            if let Object::Ref(r) = o {
+                doc.update_dict(r, |d| {
+                    d.remove(b"PCSettings");
+                })
+                .unwrap();
+            }
+        }
+    }
+    assert_eq!(header_footer_on(&doc, 0), None);
+}
+
+#[test]
 fn header_and_footer_are_drawn_in_the_chosen_standard_face() {
     // #3754: Times or Courier instead of Helvetica. The content names the face, the page's fonts
     // gain it, and right-aligned text is placed by that face's widths (not Helvetica's).
