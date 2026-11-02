@@ -295,12 +295,14 @@ fn a_file_the_limit_ended_says_so() {
 
 #[test]
 fn cancelling_while_a_file_opens_or_its_pages_are_read_ends_at_once() {
-    let bytes = Arc::new(pdf(&["needle"]));
+    let folder = Folder::new();
+    let bytes = pdf(&["needle"]);
+    let file = folder.write("a.pdf", &bytes);
     let cancelled = AtomicBool::new(true);
     let left = none_left();
-    assert!(matches!(super::open(&bytes, Duration::from_secs(60), &cancelled, &left), super::Opened::Cancelled));
+    assert!(matches!(super::open(&file, Duration::from_secs(60), &cancelled, &left), super::Opened::Cancelled));
     assert_eq!(kept(&left), 1, "the thread that was opening it");
-    let read = super::read_pages(bytes, 1, "needle", &Options::new("unused", "needle"), 10, &cancelled, &left);
+    let read = super::read_pages(Arc::new(bytes), 1, "needle", &Options::new("unused", "needle"), 10, &cancelled, &left);
     assert!(read.cancelled);
     assert!(read.matches.is_empty());
     assert_eq!(kept(&left), 2, "and the worker on its page");
@@ -336,6 +338,24 @@ fn cancelling_ends_the_search_at_the_next_step() {
 }
 
 #[test]
+fn cancelling_between_two_files_starts_no_other() {
+    let folder = Folder::new();
+    folder.write("a.pdf", &pdf(&["needle"]));
+    folder.write("b.pdf", &pdf(&["needle"]));
+    let cancel = AtomicBool::new(false);
+    let mut read = 0;
+    let summary = search(&Options::new(&folder.0, "needle"), &cancel, |event| match event {
+        Event::Reading { .. } => read += 1,
+        Event::Matches(_) => cancel.store(true, Ordering::Relaxed),
+        _ => {}
+    })
+    .unwrap();
+    assert_eq!(read, 1);
+    assert_eq!(summary.searched, 1, "the first was read to its end");
+    assert_eq!(summary.stopped, Some(Stop::Cancelled));
+}
+
+#[test]
 fn cancelling_before_the_first_file_reads_nothing() {
     let folder = Folder::new();
     folder.write("a.pdf", &pdf(&["needle"]));
@@ -344,6 +364,15 @@ fn cancelling_before_the_first_file_reads_nothing() {
         search(&Options::new(&folder.0, "needle"), &AtomicBool::new(true), |event| read += usize::from(matches!(event, Event::Reading { .. })))
             .unwrap();
     assert_eq!(read, 0);
+    assert_eq!(summary.stopped, Some(Stop::Cancelled));
+}
+
+#[test]
+fn cancelling_during_the_listing_says_so_with_no_pdf_found_yet() {
+    let folder = Folder::new();
+    folder.write("a.pdf", &pdf(&["needle"]));
+    let summary = search(&Options::new(&folder.0, "needle"), &AtomicBool::new(true), |_| {}).unwrap();
+    assert_eq!(summary.found, 0, "the listing stopped too");
     assert_eq!(summary.stopped, Some(Stop::Cancelled));
 }
 
@@ -375,23 +404,53 @@ fn a_page_that_runs_out_of_time_ends_its_file_and_keeps_what_was_found() {
 
 #[test]
 fn a_file_that_opens_in_time_lets_no_thread_go() {
+    let folder = Folder::new();
+    let file = folder.write("a.pdf", &pdf(&["needle"]));
     let left = none_left();
-    let bytes = Arc::new(pdf(&["needle"]));
-    assert!(matches!(super::open(&bytes, Duration::from_secs(60), &AtomicBool::new(false), &left), super::Opened::Pages(1)));
+    assert!(matches!(super::open(&file, Duration::from_secs(60), &AtomicBool::new(false), &left), super::Opened::File(_, 1)));
     assert_eq!(kept(&left), 0);
 }
 
 #[test]
 fn a_file_or_a_page_out_of_time_leaves_its_thread_counted() {
+    let folder = Folder::new();
+    let file = folder.write("a.pdf", &pdf(&["needle"]));
     let left = none_left();
-    let bytes = Arc::new(pdf(&["needle"]));
-    assert!(matches!(super::open(&bytes, Duration::ZERO, &AtomicBool::new(false), &left), super::Opened::Skip(Skip::TooSlow)));
+    assert!(matches!(super::open(&file, Duration::ZERO, &AtomicBool::new(false), &left), super::Opened::Skip(Skip::TooSlow)));
     assert_eq!(kept(&left), 1);
     let mut options = Options::new("unused", "needle");
     options.page_limit = PAGE_LIMIT;
     let read = super::read_pages(Arc::new(slow_pdf("needle")), 2, "needle", &options, 10, &AtomicBool::new(false), &left);
     assert_eq!(read.skip, Some(Skip::TooSlow));
     assert_eq!(kept(&left), 2);
+}
+
+#[test]
+fn a_page_out_of_time_gets_one_limit_and_one_thread() {
+    // One operator that reads for about 4 s, so what is running at the end is still running.
+    let long = raw_pdf(&[format!("BT /F1 12 Tf 20 150 Td ({}) Tj ET", "x".repeat(16_000_000))]);
+    let mut options = Options::new("unused", "needle");
+    options.page_limit = PAGE_LIMIT;
+    let left = none_left();
+    let read = super::read_pages(Arc::new(long), 1, "needle", &options, 10, &AtomicBool::new(false), &left);
+    assert_eq!(read.skip, Some(Skip::TooSlow));
+    assert!(super::running(&left) <= 1, "a retry would run beside the stuck thread");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_read_that_blocks_ends_at_the_time_limit_and_at_stop() {
+    // A pipe with nobody writing blocks its reader, as a dead share does. The walk would skip it.
+    let folder = Folder::new();
+    let pipe = folder.0.join("a.pdf");
+    assert!(std::process::Command::new("mkfifo").arg(&pipe).status().unwrap().success());
+    let mut options = Options::new(&folder.0, "needle");
+    options.open_limit = PAGE_LIMIT;
+    let left = none_left();
+    assert_eq!(super::search_file(&pipe, "needle", &options, 10, &AtomicBool::new(false), &left).skip, Some(Skip::TooSlow));
+    assert!(super::search_file(&pipe, "needle", &options, 10, &AtomicBool::new(true), &left).cancelled);
+    assert_eq!(super::running(&left), 2, "both are still in the read, and counted");
+    drop(fs::File::options().write(true).open(&pipe).unwrap());
 }
 
 #[test]
