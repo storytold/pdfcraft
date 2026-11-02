@@ -19,12 +19,21 @@ pub struct RecentCheck {
     unchecked: Vec<String>,
     /// The paths the worker has found gone so far; it adds to them as it goes.
     gone: Option<Arc<Mutex<Vec<String>>>>,
+    /// Paths opened while a check was pending: the file is there now, whatever the worker found.
+    opened: Vec<String>,
 }
 
 impl RecentCheck {
     /// Settings just restored these recent files: check them once the window is up.
     pub(crate) fn restored(&mut self, paths: Vec<String>) {
         self.unchecked = paths;
+    }
+
+    /// `path` was just opened: an answer the worker gives about it later is out of date.
+    pub(crate) fn opened(&mut self, path: &str) {
+        if self.gone.is_some() || !self.unchecked.is_empty() {
+            self.opened.push(path.to_string());
+        }
     }
 }
 
@@ -67,11 +76,14 @@ impl PdfCraftApp {
         let finished = Arc::strong_count(slot) == 1;
         let gone = std::mem::take(&mut *slot.lock().unwrap_or_else(PoisonError::into_inner));
         if !gone.is_empty() {
-            self.recent.retain(|r| !gone.contains(&r.path));
+            // A file opened since the check began is there, whatever the worker found earlier.
+            let opened = &self.recent_check.opened;
+            self.recent.retain(|r| !gone.contains(&r.path) || opened.contains(&r.path));
         }
         // The worker has finished (or panicked) and everything it found is taken.
         if finished {
             self.recent_check.gone = None;
+            self.recent_check.opened.clear();
         }
     }
 }
@@ -79,6 +91,24 @@ impl PdfCraftApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A file opened after the worker found it gone, but before that answer was taken, stays
+    /// listed (CodeRabbit on #5692).
+    #[test]
+    fn a_file_opened_while_the_check_is_pending_stays() {
+        let mut app = PdfCraftApp::new();
+        app.recent = vec![crate::state::RecentFile { name: "a.pdf".into(), path: "/gone/a.pdf".into(), pages: 1, size: 0 }];
+        // The worker's answer is waiting: it found the file gone.
+        app.recent_check.gone = Some(Arc::new(Mutex::new(vec!["/gone/a.pdf".to_string()])));
+        app.recent_check.opened("/gone/a.pdf");
+        app.check_restored_recent();
+        assert_eq!(app.recent.len(), 1, "the reopened file stays");
+        assert!(app.recent_check.gone.is_none() && app.recent_check.opened.is_empty());
+        // Without the open, the answer removes it.
+        app.recent_check.gone = Some(Arc::new(Mutex::new(vec!["/gone/a.pdf".to_string()])));
+        app.check_restored_recent();
+        assert!(app.recent.is_empty());
+    }
 
     #[test]
     fn only_a_path_known_to_be_missing_is_gone() {
