@@ -4180,6 +4180,43 @@ fn untouched_replacement_descriptions_survive_redaction_and_hidden_text_cleanup(
     }
 }
 
+/// An image drawn through an ICC profile has as many components as the profile's `/N` says, and
+/// is cleared in place like any other, the profile given through a chain of references too.
+#[test]
+fn an_icc_based_image_is_cleared_in_place_through_any_references() {
+    for (n, chained) in [(1, false), (3, false), (1, true), (3, true)] {
+        let img = stream("/Type /XObject /Subtype /Image /Width 2 /Height 1 /ColorSpace [/ICCBased 8 0 R] /BitsPerComponent 8", vec![255u8; 2 * n]);
+        let icc = stream(&format!("/N {n}"), b"");
+        let objects = if chained { vec![img, b"9 0 R".to_vec(), icc] } else { vec![img, icc] };
+        let mut doc = one_page(b"q 20 0 0 10 100 100 cm /Im Do Q", "/XObject << /Im 7 0 R >>", objects);
+        // The left pixel.
+        mark(&mut doc, 0, &[[95.0, 95.0, 109.0, 115.0]], "");
+        let r = apply(&mut doc, None).unwrap();
+        assert_eq!((r.images_removed, r.images_cleared), (0, 1), "/N {n}, chained {chained}: {r:?}");
+        let samples = [vec![0u8; n], vec![255u8; n]].concat();
+        assert_eq!(named_image(&doc, 0, b"PCRedacted1"), Some(samples), "/N {n}, chained {chained}");
+    }
+}
+
+/// A cleared copy keeps the parameters for data in another file only while it has one: `/FFilter`
+/// and `/FDecodeParms` mean nothing without a `/F` that isn't null, and may name a JBIG2
+/// dictionary that would then stay.
+#[test]
+fn a_cleared_copy_keeps_parameters_for_data_in_another_file_only_with_one() {
+    for (f, kept) in [("/F (scan.jb2)", true), ("/F 9 0 R", true), ("/F null", false), ("/F 8 0 R", false), ("/F 99 0 R", false), ("", false)] {
+        let dict = format!(
+            "/Type /XObject /Subtype /Image /Width 2 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 {f} /FFilter /JBIG2Decode /FDecodeParms << /JBIG2Globals 10 0 R >>"
+        );
+        let objects = vec![stream(&dict, [255u8, 255]), b"null".to_vec(), b"(scan.jb2)".to_vec()];
+        let doc = one_page(b"q 20 0 0 10 100 100 cm /Im Do Q", "/XObject << /Im 7 0 R >>", objects);
+        let Object::Stream(s) = &*doc.get(ObjRef::new(7, 0)) else { panic!("object 7 is the image") };
+        let left = [[0.0, 0.0, 0.4, 1.0]];
+        let copy = crate::image::clear(&doc, s, &pdfcraft_content::Matrix::IDENTITY, &left, &mut pdfcraft_cos::ImageBudget::with_work(u64::MAX));
+        let Ok(Some(copy)) = copy else { panic!("{f}: cleared in a copy") };
+        assert_eq!((copy.dict.contains(b"FFilter"), copy.dict.contains(b"FDecodeParms")), (kept, kept), "{f}");
+    }
+}
+
 #[test]
 fn a_hostile_icc_component_count_is_refused_not_multiplied_into_a_crash() {
     // /N comes from the file. 2^60 × 8 bpc × width 2 overflows the row size; a negative /N wrapped
