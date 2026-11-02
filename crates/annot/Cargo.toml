@@ -13,6 +13,8 @@ pdfcraft-cos = { workspace = true }
 pdfcraft-fonts = { workspace = true }
 pdfcraft-model = { workspace = true }
 thiserror = { workspace = true }
+# A link's /URI written as 7-bit ASCII (links::uri_bytes); already in the workspace through url.
+percent-encoding = { workspace = true }
 
 [dev-dependencies]
 hayro-syntax = { workspace = true }

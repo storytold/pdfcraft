@@ -4251,6 +4251,7 @@ dependencies = [
  "pdfcraft-cos",
  "pdfcraft-fonts",
  "pdfcraft-model",
+ "percent-encoding",
  "thiserror 2.0.21",
 ]
 
@@ -4688,6 +4689,7 @@ dependencies = [
  "pdfcraft-platform",
  "pdfcraft-render",
  "pdfcraft-xfa",
+ "percent-encoding",
  "plist",
  "png 0.18.1",
  "pollster 1.0.1",
@@ -8380,6 +8382,7 @@ dependencies = [
  "lopdf",
  "pdfcraft-cos",
  "pdfcraft-oracle",
+ "percent-encoding",
  "png 0.18.1",
  "serde",
  "serde_json",

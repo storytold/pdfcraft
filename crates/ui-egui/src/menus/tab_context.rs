@@ -126,15 +126,11 @@ fn reveal_command(platform: &str, path: &std::path::Path) -> Result<(&'static st
         }
         "macos" => Ok(("open", vec!["-R".into(), path.as_os_str().into()])),
         "linux" | "freebsd" => {
+            // Every byte but letters, digits and `/-_.~` is written as `%XX`.
+            const ESCAPED: &percent_encoding::AsciiSet =
+                &percent_encoding::NON_ALPHANUMERIC.remove(b'/').remove(b'-').remove(b'_').remove(b'.').remove(b'~');
             let mut uri = String::from("array:string:file://");
-            for b in path.as_os_str().as_encoded_bytes() {
-                if b.is_ascii_alphanumeric() || matches!(b, b'/' | b'-' | b'_' | b'.' | b'~') {
-                    uri.push(char::from(*b));
-                } else {
-                    use std::fmt::Write as _;
-                    let _ = write!(uri, "%{b:02X}");
-                }
-            }
+            uri.extend(percent_encoding::percent_encode(path.as_os_str().as_encoded_bytes(), ESCAPED));
             Ok((
                 "dbus-send",
                 vec![

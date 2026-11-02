@@ -104,13 +104,11 @@ pub(crate) fn file_url(path: &Path) -> String {
     if let Some(rest) = s.strip_prefix("//?/") {
         s = rest.to_string();
     }
+    // Every byte but letters, digits and `/-_.~:` is written as `%XX`.
+    const ESCAPED: &percent_encoding::AsciiSet =
+        &percent_encoding::NON_ALPHANUMERIC.remove(b'/').remove(b'-').remove(b'_').remove(b'.').remove(b'~').remove(b':');
     let mut url = String::from(if s.starts_with('/') { "file://" } else { "file:///" });
-    for byte in s.bytes() {
-        match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'/' | b'-' | b'_' | b'.' | b'~' | b':' => url.push(byte as char),
-            _ => url.push_str(&format!("%{byte:02X}")),
-        }
-    }
+    url.extend(percent_encoding::utf8_percent_encode(&s, ESCAPED));
     url
 }
 
