@@ -568,10 +568,24 @@ impl Walk {
         // Whether this text object still has a glyph that clips. A clipping mode (Tr 4-7) paints
         // nothing itself, so such text is hidden from the eye while staying extractable -- which
         // is what this pass removes -- and taking its glyphs leaves the clip it set empty.
-        let clipping = (4..=7).contains(&self.gs.render_mode) && items.iter().any(|o| matches!(o, Object::String(t) if !t.bytes.is_empty()));
+        //
+        // A glyph that contributes no outline does not clip, so it must not be counted on either
+        // side of this. A mode-7 space has a non-empty source string, so it read as clipping
+        // text; `show` removes it like any other hidden glyph, nothing was left, and `ET` then
+        // wrote an explicit empty clip for a glyph that never clipped anything -- so painting
+        // after it was masked where the original PDF left it alone. The same count made a
+        // *retained* space answer for a removed outlined glyph (both noted in review).
+        //
+        // `is_space` stands in for "has an outline". `Metrics` tells presence and width apart but
+        // exposes no outline predicate, so this is a proxy: whitespace is the glyph that carries
+        // no outline in practice, and a `.notdef` or an unmapped code is not caught. Exactness
+        // would need an outline predicate in `pdfcraft-fonts` over the embedded sfnt.
+        let font = Rc::clone(&self.gs.font);
+        let outlined = move |o: &Object| matches!(o, Object::String(t) if font.codes(&t.bytes).iter().any(|(code, len)| !font.is_space(*code, *len)));
+        let clipping = (4..=7).contains(&self.gs.render_mode) && items.iter().any(&outlined);
         let (new_items, removed) = show(scope, &self.gs, &mut self.tm, &items);
         if clipping {
-            let kept = new_items.iter().any(|o| matches!(o, Object::String(t) if !t.bytes.is_empty()));
+            let kept = new_items.iter().any(&outlined);
             self.clip_text = Some(self.clip_text.unwrap_or(false) || kept);
         }
         if removed == 0 {

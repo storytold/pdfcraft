@@ -1388,7 +1388,6 @@ fn clip_only_text_is_removed_and_what_it_masked_is_not_flooded() {
     assert!(!c.contains("(KEEP)") && !c.contains("(HIDE)"), "{c}");
     assert_eq!(c.matches("0 0 0 0 re\nW\nn").count(), 1, "the object lost every clipping glyph: {c}");
 }
-
 #[test]
 fn hidden_information_is_counted_and_removed() {
     use crate::sanitize::{Hidden, remove_hidden, sanitize, scan};
