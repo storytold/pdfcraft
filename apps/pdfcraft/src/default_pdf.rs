@@ -38,7 +38,7 @@ fn settings_uri(registration: Registration, build: u32, revision: u32) -> &'stat
 
 #[cfg(windows)]
 mod native {
-    use super::*;
+    use super::{SETTINGS, already_default, registration, settings_uri};
     use winsafe::{HKEY, RegistryValue, co};
 
     fn read(key: &HKEY, path: &str, name: Option<&str>) -> Result<Option<RegistryValue>, String> {

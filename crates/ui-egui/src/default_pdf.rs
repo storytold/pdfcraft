@@ -110,7 +110,7 @@ pub(crate) fn dialog(app: &mut PdfCraftApp, ctx: &egui::Context) {
         widgets.hovered.bg_stroke = egui::Stroke::new(1.0, tokens.text);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
             let close = ui.add(egui::Button::image(crate::icons::image("x", 18.0, theme::Tokens::get(ctx).icon)).frame(false));
-            close.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), tl!("Close")));
+            close.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), tl!("Close")));
             if close.on_hover_text(tl!("Close")).clicked() {
                 answer = Some(false);
             }

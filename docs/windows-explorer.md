@@ -1,11 +1,16 @@
 # Windows Explorer actions
 
-The MSI registers three classic context-menu actions. Windows 10 shows them in the normal
+The MSI registers classic context-menu actions. Windows 10 shows them in the normal
 context menu; on Windows 11 use **Show more options**. Portable copies do not alter Explorer.
-No file-type default is changed, and uninstall removes the registrations.
+No file-type default is changed, and uninstall removes the registrations. The actions belong to
+the installer's existing optional menus: the PDF ones to the PDF menu (`INSTALLPDFCONTEXTMENU`,
+next to "Edit with PdfCraft"), the image and text ones to the image menu
+(`INSTALLIMAGECONTEXTMENU`), so leaving a menu out leaves its actions out too.
 
-- **Convert to PDF with PdfCraft** opens each selected source as a new, unsaved PDF. Choose Save
-  to write it. Supported sources are PNG, JPEG, TIFF, GIF, BMP, JPEG 2000, and `.txt`/`.text`.
+- **Convert to PDF with PdfCraft** (`.txt`/`.text`) opens each selected text file as a new,
+  unsaved PDF. Choose Save to write it. Images keep **Create PDF with PdfCraft…**, which stages
+  the selection in one PDF and asks for the page DPI. Supported sources for the actions below
+  are PNG, JPEG, TIFF, GIF, BMP, JPEG 2000, and `.txt`/`.text`.
 - **Combine files in PdfCraft…** collects selected sources and PDFs in the existing sortable
   Combine tab. Review order, warnings and page ranges before combining. Explorer may launch
   one process per selected file; subsequent requests append to the same review list.
@@ -33,7 +38,7 @@ The current converter does not import Word, Excel or PowerPoint files; those ext
 Windows `.lnk` shortcuts are not registered. There is no modern Windows 11 `IExplorerCommand`
 COM extension in this change. Menu text is a localized executable resource, selected by Windows'
 UI language with neutral English fallback, rather than fixed by the installer language.
-The resources cover all 22 current UI languages, including Greek, Kazakh, Lithuanian, Slovenian and Turkish.
+The resources cover all 35 current UI languages, including Catalan, Central Kurdish, Korean, Lao, Thai and Vietnamese.
 
 Explorer requests are limited to 100 paths; IPC is bounded to 1 MiB and file reads to 64 MiB per
 source. Explorer conversion/combination checks a 128 MiB aggregate PDF-source budget across the

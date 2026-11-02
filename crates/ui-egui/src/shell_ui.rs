@@ -248,7 +248,7 @@ impl crate::PdfCraftApp {
         let mut remove = None;
         let mut save = false;
         let mut cancel = false;
-        egui::Window::new(tl!("Prepare email draft")).id(egui::Id::new("shell-email")).default_width(510.0).resizable(true).collapsible(false).show(ctx, |ui| {
+        egui::Window::new(tl!("Prepare email draft")).id(egui::Id::unique("shell-email")).default_width(510.0).resizable(true).collapsible(false).show(ctx, |ui| {
             crate::widgets::begin_dialog(ui);
             ui.label(tl!("PDF attachments"));
             egui::ScrollArea::vertical().max_height(220.0).show(ui, |ui| {

@@ -10,6 +10,10 @@ workspace = true
 
 [dependencies]
 
+[target.'cfg(target_os = "macos")'.dependencies]
+# `write_atomically`: a volume that refuses F_FULLFSYNC gets a plain fsync.
+rustix = { version = "1", features = ["fs"] }
+
 [target.'cfg(target_os = "linux")'.dependencies]
 # Already in the dependency graph through the accessibility integration. The portal watcher
 # uses the async API so dropping it can cancel an idle subscription without polling.
