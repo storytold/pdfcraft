@@ -13,8 +13,9 @@ use pdfcraft_cos::{Dict, Document, Object, Stream};
 /// Most pixels an image may have to be cleared in place (larger ones are removed).
 pub(crate) const MAX_PIXELS: u64 = 64 << 20;
 
+/// The components of image `s`'s colour space, through any references (`None` when unknown).
 pub(crate) fn components(doc: &Document, s: &Stream) -> Option<usize> {
-    let cs = doc.resolve(s.dict.get(b"ColorSpace")?);
+    let cs = crate::globals::followed(doc, s.dict.get(b"ColorSpace")?);
     let cs = &*cs;
     let name = match cs {
         Object::Name(n) => n.as_slice(),
@@ -27,7 +28,7 @@ pub(crate) fn components(doc: &Document, s: &Stream) -> Option<usize> {
         b"DeviceCMYK" | b"CMYK" => 4,
         b"ICCBased" => {
             // /N lives in the ICC profile stream, and shall be 1, 3 or 4 (ISO 32000-2 §8.6.5.5).
-            match &*doc.resolve(cs.as_array()?.get(1)?) {
+            match &*crate::globals::followed(doc, cs.as_array()?.get(1)?) {
                 Object::Stream(icc) => usize::try_from(icc.dict.int(b"N")?).ok().filter(|n| matches!(n, 1 | 3 | 4))?,
                 _ => return None,
             }
@@ -119,9 +120,9 @@ fn decode_and_clear(doc: &Document, s: &Stream, ctm: &Matrix, rects: &[[f64; 4]]
     data.truncate(bytes);
     // Image masks: a sample of 0 paints unless /Decode is [1 0]; cleared samples must not paint.
     let clear_bit = if mask {
-        // The array, and its first number, given by reference too.
-        let decode = s.dict.get(b"Decode").map(|d| doc.resolve(d));
-        let first = decode.as_deref().and_then(Object::as_array).and_then(|d| d.first()).map(|v| doc.resolve(v));
+        // The array, and its first number, given by reference too, through any references.
+        let decode = s.dict.get(b"Decode").map(|d| crate::globals::followed(doc, d));
+        let first = decode.as_deref().and_then(Object::as_array).and_then(|d| d.first()).map(|v| crate::globals::followed(doc, v));
         let inverted = first.as_deref().and_then(Object::as_f64) == Some(1.0);
         !inverted
     } else {
@@ -175,10 +176,10 @@ fn decode_and_clear(doc: &Document, s: &Stream, ctm: &Matrix, rects: &[[f64; 4]]
 }
 
 /// Whether `s`'s data is in another file, which a reader may draw instead of what is here: a `/F`
-/// that isn't null (a null entry is as if absent, and a reference to no object is null, ISO
-/// 32000-2 §7.3.7 and §7.3.10).
+/// that isn't null, through any references (a null entry is as if absent, and a reference to no
+/// object is null, ISO 32000-2 §7.3.7 and §7.3.10). A ring of references counts as a file.
 pub(crate) fn data_elsewhere(doc: &Document, s: &Stream) -> bool {
-    s.dict.get(b"F").is_some_and(|f| !matches!(&*doc.resolve(f), Object::Null))
+    s.dict.get(b"F").is_some_and(|f| !matches!(&*crate::globals::followed(doc, f), Object::Null))
 }
 
 /// The cleared samples `data` of a `w` × `h` image as a stream with `dict`: Flate, or, for one bit

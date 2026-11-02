@@ -21,7 +21,7 @@ pub(crate) fn kept(doc: &Document) -> HashSet<u32> {
 }
 
 /// `o`, or what references lead to from it. A ring of them ends as a reference, which is no dictionary.
-fn followed(doc: &Document, o: &Object) -> Arc<Object> {
+pub(crate) fn followed(doc: &Document, o: &Object) -> Arc<Object> {
     let mut at = doc.resolve(o);
     for _ in 0..MAX_HOPS {
         let next = match &*at {
@@ -60,10 +60,10 @@ fn named(doc: &Document, s: &Stream) -> Vec<u32> {
     found
 }
 
-/// `v`, or what it refers to, inside an array too.
+/// `v`, or what references lead to from it, inside an array too.
 fn direct(doc: &Document, v: &Object) -> Object {
-    match &*doc.resolve(v) {
-        Object::Array(a) => Object::Array(a.iter().map(|e| (*doc.resolve(e)).clone()).collect()),
+    match &*followed(doc, v) {
+        Object::Array(a) => Object::Array(a.iter().map(|e| (*followed(doc, e)).clone()).collect()),
         other => other.clone(),
     }
 }

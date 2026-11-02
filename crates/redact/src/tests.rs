@@ -620,6 +620,25 @@ fn a_fax_image_has_its_covered_pixels_cleared_instead_of_being_removed() {
             vec![b"1".to_vec()],
             [0x00, 0xFF, 0xFF, 0xFF],
         ),
+        // Through a reference to a reference: the array, its first number, and a colour space.
+        (
+            format!("{image} /ImageMask true /Decode 8 0 R /Filter /CCITTFaxDecode /DecodeParms {parms}"),
+            g4.clone(),
+            vec![b"9 0 R".to_vec(), b"[1 0]".to_vec()],
+            [0x00, 0xFF, 0xFF, 0xFF],
+        ),
+        (
+            format!("{image} /ImageMask true /Decode [8 0 R 0] /Filter /CCITTFaxDecode /DecodeParms {parms}"),
+            g4.clone(),
+            vec![b"9 0 R".to_vec(), b"1".to_vec()],
+            [0x00, 0xFF, 0xFF, 0xFF],
+        ),
+        (
+            format!("{image} /ColorSpace 8 0 R /Filter /CCITTFaxDecode /DecodeParms {parms}"),
+            g4.clone(),
+            vec![b"9 0 R".to_vec(), b"/DeviceGray".to_vec()],
+            [0x00, 0xFF, 0xFF, 0xFF],
+        ),
     ] {
         let mut objs = vec![stream(&dict, data)];
         objs.extend(extra);
@@ -1544,6 +1563,17 @@ fn what_stays_is_stored_without_the_dictionary_however_it_names_it() {
         (format!("{image} /F null"), scan.page.clone(), vec![]),
         (format!("{image} /F 10 0 R"), scan.page.clone(), vec![b"null".to_vec()]),
         (format!("{image} /F 99 0 R"), scan.page.clone(), vec![]),
+        // Through a reference to a reference: /F to null, the size, the filter, the colour space.
+        (format!("{image} /F 10 0 R"), scan.page.clone(), vec![b"11 0 R".to_vec(), b"null".to_vec()]),
+        (image.replace("/Width 400", "/Width 10 0 R"), scan.page.clone(), vec![b"11 0 R".to_vec(), b"400".to_vec()]),
+        (image.replace("/Height 40", "/Height 10 0 R"), scan.page.clone(), vec![b"11 0 R".to_vec(), b"40".to_vec()]),
+        (image.replace("/Filter /JBIG2Decode", "/Filter 10 0 R"), scan.page.clone(), vec![b"11 0 R".to_vec(), b"/JBIG2Decode".to_vec()]),
+        (
+            shared_image("/DecodeParms [null << /JBIG2Globals 9 0 R >>]").replace("/Filter /JBIG2Decode", "/Filter [/ASCIIHexDecode 10 0 R]"),
+            hex.clone(),
+            vec![b"11 0 R".to_vec(), b"/JBIG2Decode".to_vec()],
+        ),
+        (image.replace("/ColorSpace /DeviceGray", "/ColorSpace 10 0 R"), scan.page.clone(), vec![b"11 0 R".to_vec(), b"/DeviceGray".to_vec()]),
     ] {
         let mut doc = SharedPages { other: other.clone(), other_data: data, extra, ..SharedPages::new(&scan) }.build(&scan);
         mark(&mut doc, 0, &[CLEARS], "");
@@ -1641,6 +1671,12 @@ fn a_shared_jbig2_dictionary_that_cant_leave_refuses_the_redaction() {
     for (other, data, extra) in [
         (image.replace("/Height 40", "/Height 41"), scan.page.clone(), vec![]),
         (image.replace("/DeviceGray", "/DeviceRGB"), scan.page.clone(), vec![]),
+        (image.replace("/ColorSpace /DeviceGray", "/ColorSpace 10 0 R"), scan.page.clone(), vec![b"11 0 R".to_vec(), b"/DeviceRGB".to_vec()]),
+        (
+            format!("{image} /ColorSpace [/ICCBased 10 0 R]").replace("/ColorSpace /DeviceGray ", ""),
+            scan.page.clone(),
+            vec![b"11 0 R".to_vec(), stream("/N 3", b"")],
+        ),
         (shared_image("/DecodeParms << /JBIG2Globals 10 0 R >>"), scan.page.clone(), vec![b"9 0 R".to_vec()]),
         (elsewhere.to_string(), vec![0], vec![]),
         (not_jbig2, pdfcraft_filters::encode_flate(&scan.bits), vec![]),
