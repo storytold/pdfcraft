@@ -90,10 +90,10 @@ let cells: Vec<table::Cell> = grid.cells_for(names)?;      // "Table1_1", "Table
   fallback. Property edits validate displayed values and final choice labels before
   mutation. Preflight and drawing share native formatting, choice-label resolution
   and password masking, including a format supplied in the same property edit.
-  Masked display text still obeys the row budget. A refused shaping row is measured
-  in the logical order actually drawn, including mirrored characters with unequal
-  widths. Password masking and Latin labels with non-Latin export identifiers remain
-  supported. Auto retains its existing policy and is not a complex-shaping guarantee.
+  Masked display text still obeys the row budget. When shaping is refused, the row
+  is measured in the logical order actually drawn, including mirrored characters
+  with unequal widths. Password masking and Latin labels with non-Latin export
+  identifiers remain supported. Auto retains its existing policy and is not a complex-shaping guarantee.
 - New fields follow Acrobat: names Text1, Check Box1, Group1 (radio groups), Dropdown1, List Box1,
   Button1, Date1, Signature1; `/Helv` is added to `/DR`; appearances are drawn at once. Radio
   buttons joining a group become kid widgets with their own export state. Renaming changes only
