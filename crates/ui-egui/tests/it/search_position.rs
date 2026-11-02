@@ -300,3 +300,49 @@ fn every_page_display_shows_the_match_after_zooming() {
         }
     }
 }
+
+/// FredApps on #4139: the match a find step went to is let go as soon as the reader moves the
+/// view by hand. After a step, a scroll by the wheel and then a ⌘-wheel zoom: the zoom keeps the
+/// point under the pointer, and the view does not jump back to the old match.
+#[test]
+fn a_scroll_by_hand_after_a_step_lets_the_match_go() {
+    let mut h = harness();
+    h.state_mut().views[0].set_zoom(3.0);
+    settle(&mut h);
+    h.state_mut().views[0].find_step(true);
+    settle(&mut h);
+    assert_match_shown(&h, "after the step");
+    let w = h.state().views[0].viewport_rect();
+    let pointer = w.min + egui::vec2(80.0, 80.0);
+    h.hover_at(pointer);
+    h.run_steps(1);
+    // A plain wheel scroll: the reader moves on.
+    h.event(egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(0.0, -300.0),
+        phase: egui::TouchPhase::Move,
+        modifiers: egui::Modifiers::NONE,
+        source: egui::MouseWheelSource::Unknown,
+    });
+    h.run_steps(4);
+    settle(&mut h);
+    // Then a ⌘-wheel zoom with the pointer in the corner.
+    h.event(egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(0.0, 60.0),
+        phase: egui::TouchPhase::Move,
+        modifiers: egui::Modifiers::COMMAND,
+        source: egui::MouseWheelSource::Unknown,
+    });
+    h.run_steps(20);
+    settle(&mut h);
+    let v = &h.state().views[0];
+    let f = v.find.as_ref().unwrap();
+    let (page, range) = f.matches[f.current.unwrap()].clone();
+    let centre = v.glyph_screen_pos(page, range.start).map(|a| a.lerp(v.glyph_screen_pos(page, range.end - 1).unwrap_or(a), 0.5));
+    assert!(
+        centre.is_none_or(|c| c.distance(v.viewport_rect().center()) > 100.0),
+        "the zoom went back to the old match at {centre:?} (window centre {:?})",
+        v.viewport_rect().center()
+    );
+}
