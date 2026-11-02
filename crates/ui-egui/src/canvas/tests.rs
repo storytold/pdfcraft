@@ -1754,6 +1754,17 @@ fn full_screen_two_page_view_fits_the_spread_it_shows() {
     (v.layout, v.continuous) = (PageLayout::TwoUp, false);
     v.fit_zoom(&info);
     assert!((v.zoom - windowed).abs() < 1e-4, "in the window, one zoom for the document");
+    // With Fill off, full screen keeps the window's display (#4273): two-page view keeps one zoom
+    // for the document, and its width, as the spreads turn.
+    let content_w = v.content_width(&info, v.viewport_w);
+    v.full_screen_fill = false;
+    v.enter_presentation();
+    for current in [0, 1, 3] {
+        v.current = current;
+        v.fit_zoom(&info);
+        assert!((v.zoom - windowed).abs() < 1e-4, "fill off, page {current}: the window's zoom, {} vs {windowed}", v.zoom);
+        assert_eq!(v.content_width(&info, v.viewport_w), content_w, "fill off, page {current}: the window's width");
+    }
 }
 
 #[test]

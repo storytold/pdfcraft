@@ -291,9 +291,10 @@ impl DocView {
     }
 
     /// The display sizes of the spread full screen shows in two-page view (one spread at a time):
-    /// its two pages, or one alone. `None` in every other display.
+    /// its two pages, or one alone. `None` in every other display, full screen that keeps the
+    /// window's display (Fill off, #4273) included: that fits the document as the window does.
     fn full_screen_spread(&self, info: &DocInfo) -> Option<Vec<(f32, f32)>> {
-        if self.presentation.is_none() || self.layout != PageLayout::TwoUp || self.continuous {
+        if !self.fills_screen() || self.layout != PageLayout::TwoUp || self.continuous {
             return None;
         }
         let first = self.spread_first(self.current);
@@ -304,10 +305,11 @@ impl DocView {
     pub(super) fn fit_zoom(&mut self, info: &DocInfo) {
         let largest = |side: fn((f32, f32)) -> f32| info.pages.iter().map(|p| side(self.display_size(p))).fold(1.0, f32::max);
         let max_w = largest(|s| s.0);
-        // A single page shown on its own fits that page, and full screen in two-page view fits
-        // the spread it shows (review on #2070). Every other display (scrolling, or two-page
-        // view in the window) fits its largest page, so the zoom holds still while pages of
-        // other sizes scroll or page past. A spread of two pages fits their own widths side by
+        // A single page shown on its own fits that page, and full screen filling the screen in
+        // two-page view fits the spread it shows (review on #2070). Every other display
+        // (scrolling, or two-page view in the window or in a full screen that keeps the window's
+        // display) fits its largest page, so the zoom holds still while pages of other sizes
+        // scroll or page past. A spread of two pages fits their own widths side by
         // side; a page alone in a spread keeps a spread's room (a cover keeps its blank slot).
         let mut spread_w = None;
         let (w, h) = if self.layout == PageLayout::Single && !self.continuous {
