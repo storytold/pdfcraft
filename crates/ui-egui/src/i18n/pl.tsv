@@ -2867,3 +2867,37 @@ calendar weekday	Mo	Pn
 	No image on clipboard to paste	Brak obrazu do wklejenia w schowku
 	Pinned {tool} to Home	Przypięto {tool} do strony głównej
 	Unpinned {tool} from Home	Odpięto {tool} od strony głównej
+# The remaining keys of the catalog union (AI-assisted, written from the plain meaning of the English; reviewed by a native speaker)
+	Add the PDFs to combine	Dodaj pliki PDF do połączenia
+	Added the first {n} PDFs in {folder}	Dodano pierwsze {n} plików PDF z {folder}
+	Automatically	Automatycznie
+	Choose a file…	Wybierz plik…
+	Choose a folder…	Wybierz folder…
+	Choose…	Wybierz…
+	Comment and review	Komentowanie i recenzja
+	Copied to clipboard	Skopiowano do schowka
+	Copy to clipboard	Kopiuj do schowka
+	Create folder	Utwórz folder
+	Crop image	Przytnij obraz
+	Drop PDFs or folders here, or choose them.	Upuść tutaj pliki PDF lub foldery albo wybierz je.
+	Every PDF in the folder	Każdy PDF w folderze
+	Every PDF in the folder and the folders inside it	Każdy PDF w folderze i jego podfolderach
+	Field "{}" on page {p} has no description (tooltip)	Pole „{}” na stronie {p} nie ma opisu (podpowiedzi)
+	Help…	Pomoc…
+	Loading…	Wczytywanie…
+	Mouse wheel scroll speed	Szybkość przewijania kółkiem myszy
+	No PDFs found in {folder}	Nie znaleziono plików PDF w {folder}
+	No results	Brak wyników
+	Only the document's owner can change its security (open it with the permissions password)	Tylko właściciel dokumentu może zmienić jego zabezpieczenia (otwórz go, podając hasło uprawnień)
+	Open folder	Otwórz folder
+	Organize	Organizuj
+	Panel layout could not be restored: {error}	Nie udało się przywrócić układu paneli: {error}
+	Panel move was not applied: {error}	Nie zastosowano przeniesienia panelu: {error}
+	Refresh	Odśwież
+	Reset panel layout	Zresetuj układ paneli
+	Save file	Zapisz plik
+	Search results	Wyniki wyszukiwania
+	The password must have at least 6 characters.	Hasło musi mieć co najmniej 6 znaków.
+	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	Ten plik zmienił się na dysku. Wczytaj go ponownie, aby zobaczyć nową wersję; niezapisane zmiany zostaną utracone.
+@plural	{n} comment|{n} comments	{n} komentarz|{n} komentarze|{n} komentarzy
+@plural	{n} result|{n} results	{n} wynik|{n} wyniki|{n} wyników
