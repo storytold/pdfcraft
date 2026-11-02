@@ -7758,6 +7758,10 @@ fn decoded_images_serve_every_size_they_are_drawn_at() {
 // ICC profiles whose stream dictionaries are the same (vendored hayro-interpret patch 48).
 mod icc_profile_cache;
 
+// An Indexed resource named by many inline images reads its lookup once (vendored
+// hayro-interpret patch 60).
+mod indexed_lookup_cache;
+
 // A symbolic TrueType font draws through its (3, 0) cmap subtable first (#4156).
 mod symbolic_truetype_cmap;
 
