@@ -110,10 +110,11 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
     // right-click with the finger still down, opens its menu.
     let press_held = ptr.primary_down && !resp.long_touched();
     let context = frame.right_click_on(xf.rect).and_then(|p| right_click(&hits, &under, view, p, press_held));
-    // A mark already placed takes its own press (comments, below), and with no button down the
-    // Fill & Sign tool's preview hides over one, where a press would pick it up.
-    let over_mark =
-        matches!(tool, QuickTool::Fill(_)) && (matches!(press, PagePress::Mine(_)) || !ptr.any_down && top(under.iter().cloned(), tool).is_some());
+    // A mark already placed takes its own press (comments, below), as does one being moved on this
+    // page until its move ends; with no button down the Fill & Sign tool's preview hides over one,
+    // where a press would pick it up.
+    let over_mark = matches!(tool, QuickTool::Fill(_))
+        && (matches!(press, PagePress::Mine(_)) || comments::moving_on(view, i) || !ptr.any_down && top(under.iter().cloned(), tool).is_some());
     tool_input(ui, view, frame, slot, &pcx, press, over_mark);
     let on_field = if preparing {
         let o = crate::prepare::page_input(cx, form, field_tool, prepare_allowed, press, view);
@@ -237,8 +238,8 @@ fn link_of(owner: Option<Owner>) -> Option<usize> {
 /// on a press that began on this page and that no hit won (`press` is Free), and keep their cursor
 /// and gestures. The camera also drags a corner whose press it holds, and crop's double-click
 /// opens Set Page Boxes wherever it is. `over_mark`: with Fill & Sign, a hit holds the press (a
-/// mark's, or a Prepare field's), or with no button down a mark lies under the pointer, where a
-/// press would pick it up.
+/// mark's, or a Prepare field's), a mark is being moved on this page, or with no button down a mark
+/// lies under the pointer, where a press would pick it up.
 fn tool_input(
     ui: &egui::Ui,
     view: &mut DocView,

@@ -454,7 +454,16 @@ fn page_modules_claim_the_cursor_and_never_set_it() {
 }
 
 /// What decides, keeps or drops the press the pages hold.
-const ROUTER_WRITES: [&str; 4] = ["router.begin(", "router.press(", "router.settle(", "router.cancel("];
+const ROUTER_WRITES: [&str; 8] = [
+    "router.begin(",
+    "router.press(",
+    "router.settle(",
+    "router.cancel(",
+    "PageRouter::begin(",
+    "PageRouter::press(",
+    "PageRouter::settle(",
+    "PageRouter::cancel(",
+];
 
 /// The functions that decide, keep or drop the press the pages hold: (file, function, why).
 const ROUTER_WRITERS: [(&str, &str, &str); 3] = [
@@ -498,12 +507,12 @@ const HIT_TESTERS: [(&str, &str, &str); 1] = [(
 
 /// The page view's asks for every module's hits at a point (`PageHits::hits`, and `at` and
 /// `context_at`, which wrap it).
-const PAGE_HITS_ASKS: [&str; 3] = [".hits(", ".at(", ".context_at("];
+const PAGE_HITS_ASKS: [&str; 6] = [".hits(", ".at(", ".context_at(", "PageHits::hits(", "PageHits::at(", "PageHits::context_at("];
 
 /// The functions that ask the page view's hits at a point: (file, function, why). `PageHits` is
-/// private to `page_input.rs`, so this keeps a new function there from asking by these names; a
-/// call by path (`PageHits::at(&hits, …)`) and a second ask inside a listed function are for
-/// review to catch.
+/// private to `page_input.rs`, so this keeps a new function there from asking; a second ask inside
+/// a listed function is for review to catch. The method names are matched in every page module,
+/// so an `at` of another type there would need them narrowed.
 const PAGE_HITS_ASKERS: [(&str, &str, &str); 5] = [
     ("canvas/page_input.rs", "at", "`PageHits::at`: the hits at a point, as a press there would take them"),
     ("canvas/page_input.rs", "context_at", "`PageHits::context_at`: what a right-click at a point is on"),
@@ -528,7 +537,8 @@ const COMMENT_POINT_TESTERS: [(&str, &str, &str); 3] = [
 ];
 
 /// What reads who holds the press the pages hold.
-const ROUTER_READS: [&str; 3] = ["router.press_for(", "router.owner(", "router.keeps_drag("];
+const ROUTER_READS: [&str; 6] =
+    ["router.press_for(", "router.owner(", "router.keeps_drag(", "PageRouter::press_for(", "PageRouter::owner(", "PageRouter::keeps_drag("];
 
 /// The functions that read who holds the press: (file, function, why). The page view asks once per
 /// page and tells each module what the press is to its page (`PagePress`); the Edit text group, the

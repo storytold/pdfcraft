@@ -31,9 +31,7 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, 
         cv.gesture = None;
         return true;
     }
-    // A comment being moved, resized or reshaped on this page keeps the frame until it ends.
-    let moving =
-        matches!(cv.gesture, Some(Gesture::Move { page, .. } | Gesture::Resize { page, .. } | Gesture::Reshape { page, .. }) if page == cx.page);
+    let moving = moving_on(view, cx.page);
     let gestures = Gestures { ui, resp, cx, pointer, origin, page_rect, pressed_here, over_page, free };
     match cx.tool {
         // The selected shape's handles, and Fill & Sign's marks, take their own presses.
@@ -49,6 +47,12 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, 
         QuickTool::Select => select_input(ui, resp, cx, view, press, pointer, origin),
         _ => false,
     }
+}
+
+/// A comment (a Fill & Sign mark included) is being moved, resized or reshaped on `page`: it keeps
+/// the page's frames until its gesture ends.
+pub(crate) fn moving_on(view: &DocView, page: usize) -> bool {
+    matches!(view.comments.gesture, Some(Gesture::Move { page: p, .. } | Gesture::Resize { page: p, .. } | Gesture::Reshape { page: p, .. }) if p == page)
 }
 
 /// What of the comments lies under `p`, for the cursor, the tip and the press: the one hit test

@@ -203,7 +203,7 @@ fn snap_to_content(
 }
 
 /// The Measure tools' own clicks this frame: those of a press nobody holds.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy)]
 pub(crate) struct Clicks {
     pub single: bool,
     pub double: bool,

@@ -1690,3 +1690,21 @@ fn a_note_tool_click_on_added_text_starts_no_note() {
     mouse_click(&mut h, on_added);
     assert!(h.state().views[0].comments.composer.is_none(), "no note is started");
 }
+
+/// With Fill & Sign, a mark being moved on the page keeps the page's presses, as before: a click while
+/// its move is still live (its release never seen) places no new mark.
+#[test]
+fn a_fill_and_sign_click_places_nothing_while_a_mark_is_moved() {
+    let mut h = open(comment_on_text_pdf(), "150", false);
+    h.state_mut().quick_tool = QuickTool::Fill(FillTool::Check);
+    h.run_steps(4);
+    let marks = |h: &Harness<'_, PdfCraftApp>| {
+        let s = h.state();
+        s.session.get(s.views[0].id).unwrap().info.annotations.len()
+    };
+    let before = marks(&h);
+    let blank = at(&h, 150.0, 100.0);
+    h.state_mut().views[0].comments.gesture = Some(pdfcraft_ui_egui::comments::Gesture::Move { page: 0, index: 0, from: blank });
+    mouse_click(&mut h, blank);
+    assert_eq!(marks(&h), before, "no mark is placed");
+}
