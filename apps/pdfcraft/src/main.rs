@@ -111,6 +111,20 @@ fn settings_dir() -> Option<std::path::PathBuf> {
     }
 }
 
+/// Preferences ▸ JavaScript as saved, for the Print verb, which opens documents without the
+/// window: the window reads it from the same file when it starts (#1723 review).
+fn saved_javascript() -> bool {
+    settings_dir().and_then(|d| std::fs::read_to_string(d.join("app.ron")).ok()).is_none_or(|ron| javascript_in(&ron))
+}
+
+/// Whether the preferences in `app.ron` text leave JavaScript on. Like the window, settings that
+/// can't be read, or don't say, leave it on (the default).
+fn javascript_in(ron: &str) -> bool {
+    let Ok(stored) = ron::from_str::<std::collections::HashMap<String, String>>(ron) else { return true };
+    let prefs = stored.get("pdfcraft").or_else(|| stored.get(LEGACY_STORAGE_KEY));
+    prefs.and_then(|json| serde_json::from_str::<serde_json::Value>(json).ok()).and_then(|v| v["javascript"].as_bool()).unwrap_or(true)
+}
+
 /// Move the settings and crash-recovery folders of the app's former name, PrintCraft, to the new
 /// name once, so an upgrade keeps recent files, preferences and unsaved work. Best effort: a
 /// folder is left alone when the new one already exists or the move fails. A portable copy leaves
@@ -256,7 +270,7 @@ fn main() -> eframe::Result {
     // File Explorer's Print verb (#1695): print without a window, and open only the files that
     // couldn't be printed that way, with the Print dialog. When every file printed, no window.
     let files = if print && !files.is_empty() {
-        let leftover = print_verb::run(&files);
+        let leftover = print_verb::run(&files, saved_javascript());
         if leftover.is_empty() {
             return Ok(());
         }

@@ -10,14 +10,15 @@
 
 use std::sync::Arc;
 
-use pdfcraft_engine::Session;
 use pdfcraft_engine::print::{self, Content, Layout, Orientation, PAPERS, SizeMode, Subset, spool};
+use pdfcraft_engine::{DocId, Session};
 
-/// Print `files` unattended. Returns the ones the app should open with the Print dialog instead.
-pub(crate) fn run(files: &[String]) -> Vec<String> {
+/// Print `files` unattended, with JavaScript on only when `javascript` (Preferences ▸ JavaScript
+/// as saved). Returns the ones the app should open with the Print dialog instead.
+pub(crate) fn run(files: &[String], javascript: bool) -> Vec<String> {
     let mut leftover = Vec::new();
     for file in files {
-        let printed = prepare(file).and_then(|(pdf, job)| spool::submit(&pdf, &job).map_err(|e| e.to_string()));
+        let printed = prepare(file, javascript).and_then(|(pdf, job)| spool::submit(&pdf, &job).map_err(|e| e.to_string()));
         match printed {
             Ok(message) => log::info!("printed {file} on the default printer: {message}"),
             Err(e) => {
@@ -30,12 +31,8 @@ pub(crate) fn run(files: &[String]) -> Vec<String> {
 }
 
 /// The print-ready PDF of `path` and its job for the default printer, or why there is none.
-fn prepare(path: &str) -> Result<(Vec<u8>, spool::Job), String> {
-    let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
-    let name = std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    let mut session = Session::new();
-    // A file that needs a password fails here; the app asks for it.
-    let id = session.open(name.clone(), Some(path.to_string()), Arc::new(bytes), None).map_err(|e| e.to_string())?;
+fn prepare(path: &str, javascript: bool) -> Result<(Vec<u8>, spool::Job), String> {
+    let (session, id, name) = open(path, javascript)?;
     let doc = session.get(id).ok_or("the document vanished")?;
     let sizes: Vec<(f64, f64)> = doc.info.pages.iter().map(|p| (f64::from(p.width), f64::from(p.height))).collect();
     let labels: Vec<String> = doc.info.pages.iter().map(|p| p.label.clone()).collect();
@@ -44,6 +41,19 @@ fn prepare(path: &str) -> Result<(Vec<u8>, spool::Job), String> {
     // Refuses a document whose permissions forbid printing.
     let pdf = session.print_pdf(id, &settings).map_err(|e| e.to_string())?;
     Ok((pdf, job(&name, actual_size)))
+}
+
+/// `path` opened in a session of its own, and its file name. JavaScript is on only when
+/// `javascript`, so a form's open-time scripts (an XFA form's initialize events) run unattended
+/// only when they would run in the window.
+fn open(path: &str, javascript: bool) -> Result<(Session, DocId, String), String> {
+    let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
+    let name = std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let mut session = Session::new();
+    session.set_javascript(javascript);
+    // A file that needs a password fails here; the app asks for it.
+    let id = session.open(name.clone(), Some(path.to_string()), Arc::new(bytes), None).map_err(|e| e.to_string())?;
+    Ok((session, id, name))
 }
 
 /// The Print dialog's defaults for every page, on the paper of the first page (see [`paper`]):
@@ -175,9 +185,9 @@ mod tests {
     #[test]
     fn a_file_that_asks_for_no_page_scaling_prints_at_actual_size() {
         let (_d1, none) = file_with(&with_print_scaling("/None"));
-        assert_eq!(prepare(&none).unwrap().1.scaling, spool::Scaling::Exact);
+        assert_eq!(prepare(&none, true).unwrap().1.scaling, spool::Scaling::Exact);
         let (_d2, app_default) = file_with(&with_print_scaling("/AppDefault"));
-        assert_eq!(prepare(&app_default).unwrap().1.scaling, spool::Scaling::ShrinkToFit);
+        assert_eq!(prepare(&app_default, true).unwrap().1.scaling, spool::Scaling::ShrinkToFit);
     }
 
     /// A file in a fresh temporary folder, removed with the folder.
@@ -200,7 +210,7 @@ mod tests {
     fn a_printable_file_becomes_a_print_ready_job() {
         let blank = Session::new().create_blank(A4.0, A4.1, 2).unwrap();
         let (_dir, path) = file_with(&blank);
-        let (pdf, job) = prepare(&path).unwrap();
+        let (pdf, job) = prepare(&path, true).unwrap();
         assert!(pdf.starts_with(b"%PDF"));
         assert_eq!(job.title, "doc.pdf");
     }
@@ -209,14 +219,30 @@ mod tests {
     fn files_that_cannot_print_unattended_go_to_the_dialog() {
         // Each of these would run the spooler if `prepare` let it through; none may.
         let missing = std::env::temp_dir().join("pdfcraft-print-verb-missing").join("nothing.pdf");
-        assert!(prepare(&missing.to_string_lossy()).is_err(), "a missing file");
+        assert!(prepare(&missing.to_string_lossy(), true).is_err(), "a missing file");
         let (_d1, not_pdf) = file_with(b"not a PDF at all");
-        assert!(prepare(&not_pdf).is_err(), "not a PDF");
+        assert!(prepare(&not_pdf, true).is_err(), "not a PDF");
         let password = Protection { open_password: Some("pw".into()), permissions_password: Some("owner".into()), ..Default::default() };
         let (_d2, locked) = file_with(&protected(password));
-        assert!(prepare(&locked).unwrap_err().contains("password"), "needs a password");
+        assert!(prepare(&locked, true).unwrap_err().contains("password"), "needs a password");
         let no_print = Protection { permissions_password: Some("owner".into()), printing: Printing::None, ..Default::default() };
         let (_d3, forbidden) = file_with(&protected(no_print));
-        assert!(prepare(&forbidden).unwrap_err().contains("printing"), "permissions forbid printing");
+        assert!(prepare(&forbidden, true).unwrap_err().contains("printing"), "permissions forbid printing");
+    }
+
+    /// #1723 review: with JavaScript turned off in Preferences, printing from File Explorer runs
+    /// none of a form's open-time scripts, as opening it in the window wouldn't; with it on, they
+    /// run as they do there.
+    #[test]
+    fn the_print_verb_runs_open_time_scripts_only_with_javascript_on() {
+        let form = pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::scripted_template());
+        let (_dir, path) = file_with(&form);
+        let qty = |javascript| {
+            let (session, id, _) = open(&path, javascript).unwrap();
+            session.get(id).unwrap().form.iter().find(|f| f.name == "qty").map(|f| f.value.concat()).unwrap_or_default()
+        };
+        assert_eq!(qty(false), "", "the initialize script didn't run");
+        assert_eq!(qty(true), "2", "the initialize script ran");
+        assert!(prepare(&path, false).is_ok(), "the form still prints");
     }
 }
