@@ -3633,6 +3633,17 @@ fn optimize_discarding_an_empty_category_still_runs() {
     let saved = pdfcraft_cos::Document::open(bytes).unwrap();
     let catalog = saved.get(saved.root().unwrap()).as_dict().cloned().unwrap();
     assert!(catalog.contains(b"Outlines") && catalog.contains(b"PageMode"), "{catalog:?}");
+    // Beside an empty tick, one that holds something is discarded, and only that one.
+    let noted = pdfcraft_testkit::Pdf::new()
+        .obj("<< /Type /Catalog /Pages 2 0 R >>")
+        .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>")
+        .obj("<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>")
+        .obj("<< /Type /Annot /Subtype /Text /Rect [20 20 40 40] /Contents (internal note) >>")
+        .build();
+    let mut s = Session::new();
+    let id = s.open("noted.pdf", None, Arc::new(noted), None).unwrap();
+    let (_, report) = s.optimized_bytes(id, &optimize::Settings::default(), &[crate::Hidden::Bookmarks, crate::Hidden::Comments]).unwrap();
+    assert_eq!(report.discarded, vec![(crate::Hidden::Comments, 1)]);
 }
 
 #[test]
