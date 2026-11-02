@@ -602,8 +602,10 @@ impl PdfCraftApp {
         // Before the first frame there is no interaction to keep responsive; this also preserves
         // deterministic inline startup and test flows. Once live, reading and preparation use
         // the bounded worker and commit on the UI thread.
-        // Keep flagged launch files behind an existing password prompt or picker.
-        if (self.ctx.is_none() || self.run_inline) && !(display_override.is_some() && (self.modal_open() || self.pickers.pending())) {
+        // Keep later files behind an open password prompt: it belongs to an earlier file, and an
+        // inline open would clear it. Keep flagged launch files behind any dialog or picker too.
+        let held = self.password_prompt.is_some() || (display_override.is_some() && (self.modal_open() || self.pickers.pending()));
+        if (self.ctx.is_none() || self.run_inline) && !held {
             match std::fs::read(path) {
                 Ok(bytes) => {
                     let before = self.views.len();

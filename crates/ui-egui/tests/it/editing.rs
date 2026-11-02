@@ -2727,6 +2727,47 @@ fn canceling_launch_display_override_does_not_affect_later_documents() {
     std::fs::remove_file(path).unwrap();
 }
 
+/// `pdfcraft locked.pdf other.pdf`: the files open before the first frame, and opening the
+/// second one inline used to clear the first one's password prompt, so `locked.pdf` was never
+/// opened or asked for. The later file now waits behind the prompt.
+#[test]
+fn a_startup_file_after_a_protected_one_keeps_its_password_prompt() {
+    for unlock in [true, false] {
+        let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let locked = temp_path(&format!("startup-locked-{unlock}-{nonce}.pdf"));
+        let other = temp_path(&format!("startup-other-{unlock}-{nonce}.pdf"));
+        std::fs::write(&locked, protected("reader", "owner", -4)).unwrap();
+        std::fs::write(&other, fixture(2)).unwrap();
+        let (locked_path, other_path) = (locked.to_str().unwrap().to_string(), other.to_str().unwrap().to_string());
+        let (first, second) = (locked_path.clone(), other_path.clone());
+        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_| {
+            let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
+            app.open_path(&first);
+            app.open_path(&second);
+            app
+        });
+        h.run_steps(4);
+        let prompt = h.state().password_prompt.as_ref().map(|p| p.path.clone());
+        assert_eq!(prompt, Some(Some(locked_path.clone())), "the protected file is asked for");
+        assert!(h.state().views.is_empty(), "the later file waits behind the prompt");
+        if unlock {
+            h.state_mut().submit_password(Some("reader".into()));
+            support::wait_until(&mut h, "both files", |app| app.views.len() == 2);
+            // The other file opened while the password was being typed; the unlocked one comes
+            // after it and is the one in view.
+            assert_eq!(open_paths(h.state()), vec![other_path, locked_path]);
+            assert_eq!(h.state().active_ids().map(|(i, _)| i), Some(1));
+        } else {
+            h.state_mut().submit_password(None);
+            support::wait_until(&mut h, "the other file", |app| app.views.len() == 1);
+            assert_eq!(open_paths(h.state()), vec![other_path]);
+        }
+        std::fs::remove_file(locked).unwrap();
+        std::fs::remove_file(other).unwrap();
+    }
+}
+
 #[test]
 fn password_prompt_opens_and_security_tab_reports_the_details() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
