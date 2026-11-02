@@ -974,7 +974,7 @@ impl Renderer {
         // an image is resampled and snapped as an interpolated one.
         let requested_interpolation = image_data.interpolate();
         let mut interpolate = requested_interpolation || x_scale.min(y_scale) < MIN_NEAREST_SCALE;
-        // The smooth filter has size limits (a source over 2^20 pixels wide, a plan over budget).
+        // The smooth filter has size limits (a source wider or taller than 2^20 pixels, a plan over budget).
         // An image that only gets it by this rule falls back to picking pixels instead of failing.
         // A soft mask that matches the image is resized with it as RGBA, so it counts as four
         // channels here.
