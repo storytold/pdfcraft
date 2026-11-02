@@ -424,6 +424,7 @@ fn content_pass(doc: &mut Document, text: bool, layers: bool, write: bool) -> Re
                 res.set(b"XObject".to_vec(), Object::Dict(xo));
             }
             retired_properties.extend(crate::interp::prune_properties(doc, &mut res, &page_content)?);
+            crate::type3::prune_type3_from_resources(doc, &mut res, &page_content)?;
             doc.update_dict(page.obj, |d| {
                 d.set(b"Contents".to_vec(), Object::Array(new_list));
                 d.set(b"Resources".to_vec(), Object::Dict(res));
@@ -443,7 +444,11 @@ fn content_pass(doc: &mut Document, text: bool, layers: bool, write: bool) -> Re
     }
     // What a page no longer draws must not stay reachable through an inherited or shared
     // /Resources either.
-    crate::interp::unlink_doomed(doc, &doomed, &retired_properties)?;
+    // Only a removal rewrites the document; a count on a clone has nothing to unlink, and a
+    // cleanup error there would be mistaken for "nothing to remove".
+    if write {
+        crate::interp::unlink_doomed(doc, &doomed, &retired_properties)?;
+    }
     Ok((total, retained_off_layers))
 }
 

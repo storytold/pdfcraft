@@ -21,8 +21,16 @@ pub(crate) fn incoming(ctx: &Context) -> bool {
 }
 
 impl PdfCraftApp {
+    fn held_page_drag(&self) -> Option<&PageDrag> {
+        self.views.iter().find_map(|view| view.page_drag.as_ref())
+    }
+
+    pub(crate) fn page_drag_source(&self) -> Option<DocId> {
+        self.held_page_drag().map(|drag| drag.clip.from)
+    }
+
     pub(crate) fn dragging_pages_to(&self, target: DocId) -> bool {
-        self.page_drag.as_ref().is_some_and(|d| d.clip.from != target)
+        self.page_drag_source().is_some_and(|source| source != target)
     }
 
     /// Run after the tab strip (which may activate the destination) and before drawing its grid.
@@ -40,11 +48,9 @@ impl PdfCraftApp {
     }
 
     fn cancel_page_drag(&mut self) {
-        if let Some(drag) = self.page_drag.take() {
-            for view in &mut self.views {
-                if view.id == drag.clip.from {
-                    view.org_drag = None;
-                }
+        for view in &mut self.views {
+            if view.page_drag.take().is_some() {
+                view.org_drag = None;
             }
         }
     }
@@ -62,7 +68,7 @@ impl PdfCraftApp {
             return;
         }
         let released = ctx.input(|i| i.pointer.primary_released());
-        if self.page_drag.is_none() && !released && ctx.input(|i| i.pointer.primary_down()) {
+        if self.held_page_drag().is_none() && !released && ctx.input(|i| i.pointer.primary_down()) {
             let Some((index, id)) = self.active_ids() else { return };
             let Some(view) = self.views.get(index) else { return };
             let Some(pages) = view.org_drag.as_ref().filter(|p| !p.is_empty()) else { return };
@@ -70,10 +76,13 @@ impl PdfCraftApp {
             if !doc.allows_assembly() || !doc.allows_copying() || pages.iter().any(|p| *p >= doc.info.pages.len()) {
                 return;
             }
-            self.page_drag = Some(PageDrag {
+            let drag = PageDrag {
                 clip: PageClip { password: doc.password.clone(), from: id, name: doc.name.clone(), bytes: doc.bytes.clone(), pages: pages.clone() },
                 generation: doc.edit_generation(),
-            });
+            };
+            if let Some(view) = self.views.get_mut(index) {
+                view.page_drag = Some(drag);
+            }
         }
         if !released {
             // A window losing its pointer without a release must not retain a stale transfer.
@@ -82,7 +91,7 @@ impl PdfCraftApp {
             }
             return;
         }
-        let Some(drag) = self.page_drag.clone() else { return };
+        let Some(drag) = self.held_page_drag().cloned() else { return };
         self.cancel_page_drag();
         let Some((index, target)) = self.active_ids() else { return };
         if target == drag.clip.from {

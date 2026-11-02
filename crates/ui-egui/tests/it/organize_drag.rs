@@ -314,3 +314,95 @@ fn opening_a_drag_target_grid_clears_a_stale_selection_even_if_cancelled() {
     release(&mut h, tab, modifiers);
     assert_eq!(h.state().views[1].target_pages(), vec![0]);
 }
+
+#[test]
+fn restricted_page_copy_does_not_replace_the_clipboard_even_after_source_close() {
+    use pdfcraft_engine::{Changes, Protection};
+    let mut source = Session::new();
+    let id = source.open("secret.pdf", None, document("Secret"), None).unwrap();
+    source
+        .apply(
+            id,
+            Edit::Protect(Protection {
+                open_password: Some("reader".into()),
+                permissions_password: Some("owner".into()),
+                changes: Changes::Pages,
+                copy: false,
+                ..Default::default()
+            }),
+        )
+        .unwrap();
+    let encrypted = source.save_bytes(id).unwrap();
+    let mut h = two_documents();
+    let allowed = h.state().views[0].id;
+    h.state_mut().copy_pages(false);
+    h.state_mut().open_bytes("secret.pdf", None, encrypted.as_ref().clone()).unwrap();
+    assert!(crate::support::step_until(&mut h, |h| {
+        h.run_steps(1);
+        h.state().password_prompt.is_some()
+    }));
+    h.state_mut().submit_password(Some("reader".into()));
+    assert!(crate::support::step_until(&mut h, |h| {
+        h.run_steps(1);
+        h.state().views.len() == 3
+    }));
+    let restricted = h.state().views[2].id;
+    let doc = h.state().session.get(restricted).unwrap();
+    assert!(doc.allows_assembly());
+    assert!(!doc.allows_copying());
+    let before = doc.bytes.clone();
+    for cut in [false, true] {
+        h.state_mut().copy_pages(cut);
+        assert_eq!(h.state().page_clipboard.as_ref().unwrap().from, allowed);
+        assert_eq!(h.state().session.get(restricted).unwrap().bytes, before, "a refused cut must not delete pages");
+    }
+    h.state_mut().execute("file.close");
+    h.run_steps(3);
+    assert!(h.state().session.get(restricted).is_none());
+    h.state_mut().active = Some(1);
+    h.state_mut().paste_pages();
+    let doc = h.state().session.get(h.state().views[1].id).unwrap();
+    assert_eq!(doc.info.pages.len(), 6);
+    let mut renderer = PageRenderer::new(doc.bytes.clone(), Default::default());
+    let text = renderer.render(RenderRequest { page: 1, kind: RequestKind::Text, scale: 1.0, ..Default::default() }).text.unwrap();
+    assert_eq!(text.plain_text().trim(), "Page 1", "only the earlier authorized clipboard can be pasted");
+}
+
+/// A separate viewport renders with its own pointer state. Parking and restoring the views
+/// mirrors a window-state swap without depending on the separate multi-window contribution.
+#[test]
+fn rendering_another_window_keeps_the_source_page_drag_alive() {
+    let mut h = two_documents();
+    h.state_mut().open_bytes("other-window.pdf", None, document("Other").as_ref().clone()).unwrap();
+    assert!(crate::support::step_until(&mut h, |h| {
+        h.run_steps(1);
+        h.state().views.len() == 3
+    }));
+    let other = h.state_mut().views.pop().unwrap();
+    h.state_mut().active = Some(0);
+    h.run_steps(3);
+    let (_, modifiers) = start_drag(&mut h, false);
+    let tab = h.get_by_label("target.pdf").rect().center();
+    let mut app = std::mem::replace(h.state_mut(), PdfCraftApp::new());
+    let parked = std::mem::replace(&mut app.views, vec![other]);
+    app.active = Some(0);
+    let fonts = h.ctx.fonts(|fonts| fonts.definitions().clone());
+    let mut second = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        cc.egui_ctx.set_fonts(fonts);
+        app
+    });
+    second.run_steps(3);
+    let mut app = std::mem::replace(second.state_mut(), PdfCraftApp::new());
+    app.views = parked;
+    app.active = Some(0);
+    *h.state_mut() = app;
+    h.hover_at(tab);
+    h.run_steps(1);
+    assert_eq!(h.state().active, Some(1), "another viewport must not cancel the held source-window gesture");
+    h.run_steps(2);
+    let gap = h.get_by_label("Page 2").rect().left_center() + egui::vec2(5.0, 0.0);
+    h.hover_at(gap);
+    h.run_steps(2);
+    release(&mut h, gap, modifiers);
+    assert_eq!(h.state().session.get(h.state().views[1].id).unwrap().info.pages.len(), 6);
+}
