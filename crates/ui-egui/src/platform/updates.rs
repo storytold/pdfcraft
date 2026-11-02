@@ -21,7 +21,8 @@ pub(crate) struct Updates {
     updater: Updater,
     /// The Updates dialog is showing.
     pub(crate) open: bool,
-    /// Ask for a newer release at start; the desktop app turns it on, so tests never reach the network.
+    /// Ask for a newer release at start, unless Preferences says not to; the desktop app turns
+    /// it on, so tests never reach the network.
     #[cfg(not(target_arch = "wasm32"))]
     startup_check: bool,
     #[cfg(not(target_arch = "wasm32"))]
@@ -73,10 +74,11 @@ impl PdfCraftApp {
         #[cfg(not(target_arch = "wasm32"))]
         {
             let Some(ctx) = self.ctx.clone() else { return };
+            let at_start = self.update_check_at_start;
             let updates = &mut self.updates;
             if std::mem::take(&mut updates.check_requested) {
                 updates.updater.check_now(&ctx);
-            } else if updates.startup_check {
+            } else if updates.startup_check && at_start {
                 updates.updater.check_at_start(&ctx);
             }
             updates.updater.tick(&ctx);
