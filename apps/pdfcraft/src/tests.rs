@@ -84,6 +84,9 @@ fn path_from_arg_decodes_file_uris() {
     assert_eq!(super::path_from_arg("file:///tmp/a%2".to_string()), "/tmp/a%2");
     assert_eq!(super::path_from_arg("file:///tmp/%zz%".to_string()), "/tmp/%zz%");
     assert_eq!(super::path_from_arg("file:///tmp/%FF.pdf".to_string()), "file:///tmp/%FF.pdf");
+    // A sign is not a hex digit: `u8::from_str_radix("+1", 16)` is 1, which made `%+1` byte 0x01.
+    assert_eq!(super::path_from_arg("file:///tmp/a%+1.pdf".to_string()), "/tmp/a%+1.pdf");
+    assert_eq!(super::path_from_arg("file:///tmp/a%+F%2B.pdf".to_string()), "/tmp/a%+F+.pdf");
 }
 
 #[test]

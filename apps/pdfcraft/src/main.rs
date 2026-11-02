@@ -152,20 +152,9 @@ fn path_from_arg(arg: String) -> String {
     // `file:///C:/x.pdf` on Windows names `C:/x.pdf`. `rest` starts with the one-byte '/', so
     // byte 1 is a char boundary.
     let rest = if cfg!(windows) && rest.as_bytes().get(2) == Some(&b':') { &rest[1..] } else { rest };
-    let mut out = Vec::with_capacity(rest.len());
-    let mut bytes = rest.bytes();
-    while let Some(b) = bytes.next() {
-        if b == b'%' {
-            let hex = bytes.clone().take(2).collect::<Vec<u8>>();
-            if let Some(byte) = std::str::from_utf8(&hex).ok().filter(|h| h.len() == 2).and_then(|h| u8::from_str_radix(h, 16).ok()) {
-                out.push(byte);
-                bytes.nth(1);
-                continue;
-            }
-        }
-        out.push(b);
-    }
-    String::from_utf8(out).unwrap_or(arg)
+    // A `%` not followed by two hex digits is kept as written; bytes that aren't UTF-8 keep the URI.
+    let decoded = percent_encoding::percent_decode_str(rest).decode_utf8().ok().map(std::borrow::Cow::into_owned);
+    decoded.unwrap_or(arg)
 }
 
 /// Some programs start the PDF reader with the path unquoted (`pdfcraft.exe P:\Docs\01 Contract.PDF`),
