@@ -1,7 +1,5 @@
 # PdfCraft roadmap
 
-> **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M7 #5657: header/footer, watermark and background operations commit all selected pages together; later-page errors preserve marks, content, shared/inherited resources and pending edits; estimates unchanged)
-
 > **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M7, PR #2155 further review: inherited drawing/text state, affine image gestures, paste/selection ownership, no-op scripts and menu permissions; estimates unchanged)
 
 > **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M7, PR #2155 latest comments: explicit image-paste events, mixed-size field refresh, and documented mixed-script normalization with Undo; estimates unchanged)
