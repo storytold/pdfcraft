@@ -650,8 +650,13 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         Edit::SetCalculationOrder { names } => {
             pdfcraft_forms::set_calculation_order(doc, names)?;
             match cx.js.as_mut() {
-                Some(js) => pdfcraft_forms::recalculate_with(doc, js)?,
-                None => pdfcraft_forms::recalculate(doc)?,
+                Some(js) => {
+                    js.invalidate_calculations(doc);
+                    pdfcraft_forms::recalculate_with(doc, js)?;
+                }
+                None => {
+                    pdfcraft_forms::recalculate(doc)?;
+                }
             };
         }
         Edit::SetInitialView(v) => pdfcraft_organize::set_initial_view(doc, v)?,
@@ -677,8 +682,13 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         Edit::SetFieldScript { name, event, script } => {
             pdfcraft_forms::set_field_script(doc, name, event, script.as_deref())?;
             match cx.js.as_mut() {
-                Some(js) => pdfcraft_forms::recalculate_with(doc, js)?,
-                None => pdfcraft_forms::recalculate(doc)?,
+                Some(js) => {
+                    js.invalidate_calculations(doc);
+                    pdfcraft_forms::recalculate_with(doc, js)?;
+                }
+                None => {
+                    pdfcraft_forms::recalculate(doc)?;
+                }
             };
         }
         Edit::ConvertPdfA { level } => {

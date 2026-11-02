@@ -5379,6 +5379,36 @@ fn calculate_now_uses_calculation_order_and_bounds_recursion() {
     assert!(s.run_javascript(id, "1 + 1", None).unwrap().error.is_none());
 }
 
+#[test]
+fn calculation_order_cache_tracks_script_edits_in_a_batch() {
+    let mut session = Session::new().with_clock(|| 1_700_000_000);
+    let id = session.open("calculate-batch.pdf", None, Arc::new(scripted_form()), None).unwrap();
+    session
+        .apply(
+            id,
+            Edit::Batch {
+                label: "Set calculations".into(),
+                edits: vec![
+                    Edit::SetFieldScript {
+                        name: "qty".into(),
+                        event: "calculate".into(),
+                        script: Some("event.value = Number(getField('price').value) + 1;".into()),
+                    },
+                    Edit::SetFieldScript {
+                        name: "total".into(),
+                        event: "calculate".into(),
+                        script: Some("event.value = Number(getField('qty').value) * 2;".into()),
+                    },
+                    Edit::SetCalculationOrder { names: vec!["qty".into(), "total".into()] },
+                    Edit::SetFieldValue { name: "price".into(), value: FieldValue::Text("3".into()) },
+                ],
+            },
+        )
+        .unwrap();
+    let total = session.get(id).unwrap().form.iter().find(|field| field.name == "total").unwrap().value.clone();
+    assert_eq!(total, ["8"]);
+}
+
 /// XFA forms check `xfa_installed` and `xfa_version` in a document script that runs before
 /// each of their scripts, and alert when either is missing.
 #[test]
