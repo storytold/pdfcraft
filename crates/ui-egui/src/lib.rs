@@ -240,11 +240,13 @@ impl Drop for DocumentCopy {
 pub(crate) struct BulkCropScan {
     pub(crate) doc: DocId,
     pub(crate) is_explicit: bool,
+    pub(crate) generation: u64,
     pub(crate) rx: std::sync::mpsc::Receiver<Vec<(usize, [f64; 4])>>,
     pub(crate) cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl BulkCropScan {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn start(
         doc: DocId,
         bytes: std::sync::Arc<Vec<u8>>,
@@ -252,6 +254,7 @@ impl BulkCropScan {
         pages: Vec<(usize, pdfcraft_render::PageInfo, [f64; 4])>,
         padding: f64,
         is_explicit: bool,
+        generation: u64,
         ctx: &egui::Context,
     ) -> BulkCropScan {
         let (tx, rx) = std::sync::mpsc::channel();
@@ -291,7 +294,7 @@ impl BulkCropScan {
             }
             let _ = tx.send(results);
         }
-        BulkCropScan { doc, is_explicit, rx, cancel }
+        BulkCropScan { doc, is_explicit, generation, rx, cancel }
     }
 }
 

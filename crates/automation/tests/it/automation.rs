@@ -2829,6 +2829,11 @@ fn bulk_crop_through_tools() {
     assert!((w0 - 93.67).abs() < 1.0, "w0: {w0}");
     assert!((h0 - 42.93).abs() < 1.0, "h0: {h0}");
 
+    let boxes = a.session().get(pdfcraft_engine::DocId(doc)).unwrap().page_boxes();
+    let crop0 = boxes[0][1];
+    assert!((crop0[0] - 11.79).abs() < 1.0, "x0: {}", crop0[0]);
+    assert!((crop0[1] - 134.47).abs() < 1.0, "y0: {}", crop0[1]);
+
     // Input validation: combining uniform margins with odd/even margins is rejected
     assert!(matches!(
         a.call("page_bulk_crop", &json!({ "doc": doc, "margins": [10, 10, 10, 10], "odd_margins": [5, 5, 5, 5] })),

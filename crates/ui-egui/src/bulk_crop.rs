@@ -94,6 +94,8 @@ pub struct BulkCropDraft {
     pub seeded: bool,
     /// Active tab in Odd & Even mode (Odd or Even).
     pub odd_even_tab: OddEvenTab,
+    /// Generation counter incremented whenever the user modifies margins or draft state.
+    pub generation: u64,
     /// Active interactive handle drag.
     active_drag: Option<ActiveDrag>,
 }
@@ -121,6 +123,7 @@ impl Default for BulkCropDraft {
             current_page: 0,
             seeded: false,
             odd_even_tab: OddEvenTab::Odd,
+            generation: 0,
             active_drag: None,
         }
     }
@@ -188,12 +191,16 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
     let total_pages = app.session.get(doc_id).map(|d| d.info.pages.len()).unwrap_or(1).max(1);
 
     let scan_results = if let Some(scan) = &app.bulk_crop_scan {
-        if scan.doc == doc_id { scan.rx.try_recv().ok().map(|res| (scan.is_explicit, res)) } else { None }
+        if scan.doc == doc_id && scan.generation == app.bulk_crop_draft.generation {
+            scan.rx.try_recv().ok().map(|res| (scan.is_explicit, res))
+        } else {
+            None
+        }
     } else {
         None
     };
 
-    if scan_results.is_some() {
+    if scan_results.is_some() || app.bulk_crop_scan.as_ref().is_some_and(|s| s.generation != app.bulk_crop_draft.generation) {
         app.bulk_crop_scan = None;
     }
 
@@ -295,8 +302,16 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
                         Some((p, info, media))
                     })
                     .collect();
-                app.bulk_crop_scan =
-                    Some(crate::BulkCropScan::start(doc_id, doc.bytes.clone(), doc.password.clone(), pages_data, 18.0, false, ui.ctx()));
+                app.bulk_crop_scan = Some(crate::BulkCropScan::start(
+                    doc_id,
+                    doc.bytes.clone(),
+                    doc.password.clone(),
+                    pages_data,
+                    18.0,
+                    false,
+                    d.generation,
+                    ui.ctx(),
+                ));
             }
         }
 
@@ -375,9 +390,11 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
 
             // Use displayed page dimensions (MediaBox) so the preview paper reflects the full uncropped sheet
             let base_page = preview_pages.first().copied().unwrap_or(current_page);
+            let rot = doc.info.pages.get(base_page).map(|p| p.rotation).unwrap_or(0);
             let page_size = if let Some(b) = d.original_boxes.get(base_page) {
                 let m = b[0];
-                (((m[2] - m[0]) as f32).max(1.0), ((m[3] - m[1]) as f32).max(1.0))
+                let (w, h) = (((m[2] - m[0]) as f32).max(1.0), ((m[3] - m[1]) as f32).max(1.0));
+                if rot == 90 || rot == 270 { (h, w) } else { (w, h) }
             } else {
                 doc.info.pages.get(base_page).map(|p| (p.width, p.height)).unwrap_or((612.0, 792.0))
             };
@@ -390,6 +407,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
                 &preview_pages,
                 page_size,
                 active_margins,
+                rot,
                 d.mode,
                 &mut d.odd_even_tab,
                 &mut d.current_page,
@@ -400,9 +418,13 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
                 "main-preview",
                 t,
             );
-            if handle_dragged && d.mode == BulkCropMode::PageByPage {
-                d.edited_pages.insert(current_page);
-                d.revert_pages.remove(&current_page);
+            if handle_dragged {
+                d.generation = d.generation.wrapping_add(1);
+                app.bulk_crop_scan = None;
+                if d.mode == BulkCropMode::PageByPage {
+                    d.edited_pages.insert(current_page);
+                    d.revert_pages.remove(&current_page);
+                }
             }
         });
 
@@ -413,6 +435,10 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
             ui.set_width(280.0);
             ui.set_height(COLUMN_HEIGHT);
             let actions = render_controls_sidebar(ui, d, total_pages, COLUMN_HEIGHT, t);
+            if actions.draft_changed {
+                d.generation = d.generation.wrapping_add(1);
+                app.bulk_crop_scan = None;
+            }
             trigger_auto_crop = actions.auto_crop;
             trigger_reset = actions.reset;
             trigger_clear_crop = actions.clear_crop;
@@ -420,6 +446,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
     });
 
     if trigger_auto_crop && let Some(doc) = app.session.get(doc_id) {
+        d.generation = d.generation.wrapping_add(1);
         let boxes = doc.page_boxes();
         let target = match d.mode {
             BulkCropMode::Blended => d.target_pages(total_pages),
@@ -437,11 +464,14 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
                 Some((p, info, media))
             })
             .collect();
-        app.bulk_crop_scan = Some(crate::BulkCropScan::start(doc_id, doc.bytes.clone(), doc.password.clone(), pages_data, 18.0, true, ui.ctx()));
+        app.bulk_crop_scan =
+            Some(crate::BulkCropScan::start(doc_id, doc.bytes.clone(), doc.password.clone(), pages_data, 18.0, true, d.generation, ui.ctx()));
     }
 
     // Handle Reset trigger: restores crop margins back to initial state upon opening dialog
     if trigger_reset {
+        d.generation = d.generation.wrapping_add(1);
+        app.bulk_crop_scan = None;
         match d.mode {
             BulkCropMode::Blended => {
                 d.blended_margins = d.initial_blended_margins;
@@ -466,6 +496,8 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
 
     // Handle Clear crop trigger: removes crop (full sheet / margins = 0.0)
     if trigger_clear_crop {
+        d.generation = d.generation.wrapping_add(1);
+        app.bulk_crop_scan = None;
         match d.mode {
             BulkCropMode::Blended => {
                 for &p in &target_pages {
@@ -626,6 +658,7 @@ struct SidebarActions {
     auto_crop: bool,
     reset: bool,
     clear_crop: bool,
+    draft_changed: bool,
 }
 
 /// Renders the right controls sidebar card.
@@ -650,6 +683,7 @@ fn render_controls_sidebar(ui: &mut egui::Ui, d: &mut BulkCropDraft, total_pages
 
             // Smooth mode switching: preserve and propagate configured crop margins
             if d.mode != prev_mode {
+                actions.draft_changed = true;
                 match d.mode {
                     BulkCropMode::PageByPage => {
                         if prev_mode == BulkCropMode::Blended
@@ -778,6 +812,7 @@ fn render_controls_sidebar(ui: &mut egui::Ui, d: &mut BulkCropDraft, total_pages
                     if ui.add_sized(vec2(col_w, edit_h), egui::DragValue::new(&mut top).speed(speed).range(0.0..=10_000.0).max_decimals(2)).changed()
                     {
                         active_margins[3] = (top / k).max(0.0);
+                        actions.draft_changed = true;
                         if is_page_by_page {
                             d.edited_pages.insert(current_page);
                             d.revert_pages.remove(&current_page);
@@ -794,6 +829,7 @@ fn render_controls_sidebar(ui: &mut egui::Ui, d: &mut BulkCropDraft, total_pages
                         .changed()
                     {
                         active_margins[1] = (bottom / k).max(0.0);
+                        actions.draft_changed = true;
                         if is_page_by_page {
                             d.edited_pages.insert(current_page);
                             d.revert_pages.remove(&current_page);
@@ -810,6 +846,7 @@ fn render_controls_sidebar(ui: &mut egui::Ui, d: &mut BulkCropDraft, total_pages
                     if ui.add_sized(vec2(col_w, edit_h), egui::DragValue::new(&mut left).speed(speed).range(0.0..=10_000.0).max_decimals(2)).changed()
                     {
                         active_margins[0] = (left / k).max(0.0);
+                        actions.draft_changed = true;
                         if is_page_by_page {
                             d.edited_pages.insert(current_page);
                             d.revert_pages.remove(&current_page);
@@ -826,6 +863,7 @@ fn render_controls_sidebar(ui: &mut egui::Ui, d: &mut BulkCropDraft, total_pages
                         .changed()
                     {
                         active_margins[2] = (right / k).max(0.0);
+                        actions.draft_changed = true;
                         if is_page_by_page {
                             d.edited_pages.insert(current_page);
                             d.revert_pages.remove(&current_page);
@@ -1056,6 +1094,27 @@ fn handle_crop_drag(
     }
 }
 
+/// Maps PDF margins [left, bottom, right, top] in user space to visual screen margins [left, bottom, right, top]
+/// based on the page's clockwise rotation (0, 90, 180, 270).
+pub(crate) fn pdf_to_visual_margins(pdf: [f64; 4], rot: u16) -> [f64; 4] {
+    match rot % 360 {
+        90 => [pdf[1], pdf[2], pdf[3], pdf[0]],
+        180 => [pdf[2], pdf[3], pdf[0], pdf[1]],
+        270 => [pdf[3], pdf[0], pdf[1], pdf[2]],
+        _ => pdf,
+    }
+}
+
+/// Maps visual screen margins [left, bottom, right, top] back to PDF user space margins [left, bottom, right, top].
+pub(crate) fn visual_to_pdf_margins(vis: [f64; 4], rot: u16) -> [f64; 4] {
+    match rot % 360 {
+        90 => [vis[3], vis[0], vis[1], vis[2]],
+        180 => [vis[2], vis[3], vis[0], vis[1]],
+        270 => [vis[1], vis[2], vis[3], vis[0]],
+        _ => vis,
+    }
+}
+
 /// Renders the visual page preview with interactive crop handles.
 /// In Odd & Even mode, renders the dual tab pill at the top of the canvas and handles Odd vs Even switching.
 #[allow(clippy::too_many_arguments)]
@@ -1065,6 +1124,7 @@ fn render_interactive_preview(
     pages: &[usize],
     page_size: (f32, f32),
     margins: &mut [f64; 4],
+    rotation: u16,
     mode: BulkCropMode,
     odd_even_tab: &mut OddEvenTab,
     current_page: &mut usize,
@@ -1090,6 +1150,8 @@ fn render_interactive_preview(
     if is_odd_even {
         render_odd_even_tabs(ui, &painter, r, odd_even_tab, current_page, total_pages, t);
     }
+
+    let mut vis_margins = pdf_to_visual_margins(*margins, rotation);
 
     // Dynamic aspect ratio based on actual PDF page dimensions
     let (page_w_pt, page_h_pt) = (page_size.0.max(1.0), page_size.1.max(1.0));
@@ -1127,14 +1189,14 @@ fn render_interactive_preview(
         }
     }
 
-    // Clamp margins to ensure crop_rect always stays valid and positive
-    margins[0] = margins[0].clamp(0.0, (max_w - MIN_CROP_PT).max(0.0));
-    margins[2] = margins[2].clamp(0.0, (max_w - margins[0] - MIN_CROP_PT).max(0.0));
-    margins[3] = margins[3].clamp(0.0, (max_h - MIN_CROP_PT).max(0.0));
-    margins[1] = margins[1].clamp(0.0, (max_h - margins[3] - MIN_CROP_PT).max(0.0));
+    // Clamp visual margins to ensure crop_rect always stays valid and positive
+    vis_margins[0] = vis_margins[0].clamp(0.0, (max_w - MIN_CROP_PT).max(0.0));
+    vis_margins[2] = vis_margins[2].clamp(0.0, (max_w - vis_margins[0] - MIN_CROP_PT).max(0.0));
+    vis_margins[3] = vis_margins[3].clamp(0.0, (max_h - MIN_CROP_PT).max(0.0));
+    vis_margins[1] = vis_margins[1].clamp(0.0, (max_h - vis_margins[3] - MIN_CROP_PT).max(0.0));
 
-    // Map margins to on-screen crop box
-    let [l, bo, ri, to] = margins.map(|v| (v as f32) * scale);
+    // Map visual margins to on-screen crop box
+    let [l, bo, ri, to] = vis_margins.map(|v| (v as f32) * scale);
     let crop_rect = Rect::from_min_max(pos2(page_rect.left() + l, page_rect.top() + to), pos2(page_rect.right() - ri, page_rect.bottom() - bo));
 
     // Dim the exterior cut-away area
@@ -1172,5 +1234,23 @@ fn render_interactive_preview(
         painter.rect_stroke(h_rect, CornerRadius::same(1), Stroke::new(1.0, crop_stroke_color), egui::StrokeKind::Outside);
     }
 
-    handle_crop_drag(ui, &response, crop_rect, &handle_pts, handle_size, id_salt, margins, max_w, max_h, scale, active_drag, handle_dragged);
+    handle_crop_drag(ui, &response, crop_rect, &handle_pts, handle_size, id_salt, &mut vis_margins, max_w, max_h, scale, active_drag, handle_dragged);
+    if *handle_dragged {
+        *margins = visual_to_pdf_margins(vis_margins, rotation);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rotation_margins_round_trip() {
+        let pdf = [12.0, 34.0, 56.0, 78.0];
+        for rot in [0, 90, 180, 270, 360] {
+            let vis = pdf_to_visual_margins(pdf, rot);
+            let back = visual_to_pdf_margins(vis, rot);
+            assert_eq!(pdf, back, "failed for rotation {rot}");
+        }
+    }
 }

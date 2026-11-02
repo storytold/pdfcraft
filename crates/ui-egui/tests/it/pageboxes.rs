@@ -273,6 +273,22 @@ fn bulk_crop_dialog_cancel_preserves_undo_and_redo_history() {
     h.run_steps(2);
     assert_eq!(size(&h, 0), (260.0, 360.0));
 
+    // Apply a second crop with 40pt margins, then undo it to leave a pending Redo operation
+    let _ = h.state_mut().session.apply(
+        doc_id,
+        pdfcraft_engine::Edit::SetPageBox {
+            pages: vec![0, 1],
+            which: pdfcraft_engine::PageBox::Crop,
+            spec: pdfcraft_engine::BoxSpec::Margins([40.0; 4]),
+        },
+    );
+    h.run_steps(2);
+    assert_eq!(size(&h, 0), (220.0, 320.0));
+
+    assert!(h.state_mut().execute("edit.undo"));
+    h.run_steps(2);
+    assert_eq!(size(&h, 0), (260.0, 360.0));
+
     // Open bulk crop dialog
     assert!(h.state_mut().execute("page.bulk_crop"));
     h.run_steps(3);
@@ -286,7 +302,16 @@ fn bulk_crop_dialog_cancel_preserves_undo_and_redo_history() {
     // Page must still be cropped to 260x360
     assert_eq!(size(&h, 0), (260.0, 360.0));
 
-    // Undo should undo the initial 20pt crop directly
+    // Redo should restore the second 40pt crop directly, proving redo stack was preserved
+    assert!(h.state_mut().execute("edit.redo"));
+    h.run_steps(2);
+    assert_eq!(size(&h, 0), (220.0, 320.0));
+
+    // Undo restores the 20pt crop, and subsequent Undo restores uncropped dimensions
+    assert!(h.state_mut().execute("edit.undo"));
+    h.run_steps(2);
+    assert_eq!(size(&h, 0), (260.0, 360.0));
+
     assert!(h.state_mut().execute("edit.undo"));
     h.run_steps(2);
     assert_eq!(size(&h, 0), (300.0, 400.0));
