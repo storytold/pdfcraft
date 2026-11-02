@@ -232,6 +232,9 @@ unapplied with a warning.
 
 ## Folder batches
 
+`folder_search` searches the text of every PDF in a folder and returns matches by file, with the
+files it could not search and why. It reads and changes nothing else, and never follows a link.
+
 `doc_batch` runs conversion, OCR and compression over files and optionally recursive
 folders. The CLI also exposes it as `pdfcraft-cli batch`. See the
 [batch guide](../../docs/cli-batch.md) for examples, output protection, errors and limits.

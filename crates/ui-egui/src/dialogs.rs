@@ -11,6 +11,7 @@ pub(super) mod appearance;
 pub mod bookmark_styles_ui;
 pub(super) mod comment_props;
 pub(super) mod credits;
+pub(super) mod folder_search_ui;
 pub(super) mod marks_ui;
 pub(super) mod pageboxes;
 pub(super) mod palette;
@@ -90,6 +91,10 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
     if app.dialog != Some(Dialog::WordCount) {
         app.word_count_draft.cancel();
     }
+    if app.dialog != Some(Dialog::FolderSearch) {
+        app.folder_search.stop();
+        app.folder_search.poll();
+    }
     if app.dialog != Some(Dialog::FieldTable) {
         app.field_table_draft = None;
     }
@@ -129,6 +134,7 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
             Dialog::FieldProps | Dialog::BulkFieldProps => 600.0,
             Dialog::About => 780.0,
             Dialog::PinTool => 540.0,
+            Dialog::FolderSearch => 640.0,
             _ => 520.0,
         });
         if dialog_body(ui, app, dialog, &mut req) {
@@ -451,6 +457,10 @@ fn dialog_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: &m
             if !dialog_pin_tool(ui, app, req) {
                 return false;
             }
+        }
+        Dialog::FolderSearch => {
+            req.close = crate::folder_search_ui::body(ui, app);
+            return false;
         }
     }
     true
@@ -1942,6 +1952,9 @@ fn finish_close(app: &mut PdfCraftApp, dialog: Dialog, modal_closed: bool, req: 
     // Protect / Remove security replace the Properties dialog.
     let replaces = req.link_command.is_some_and(|c| c.starts_with("protect.")) || req.open_revision.is_some();
     if modal_closed || req.close || replaces {
+        if dialog == Dialog::FolderSearch {
+            app.folder_search.stop();
+        }
         // Only now: the number in Preferences can pass through 0 on its way to the one wanted.
         app.recent.truncate(app.recent_limit);
         app.dialog = None;

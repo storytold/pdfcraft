@@ -6,6 +6,7 @@ mod automation_roots;
 mod backdrop;
 mod batch;
 mod button_caption;
+mod folder_search;
 mod form_bulk;
 mod hostile_args;
 mod optimize_content_boundaries;

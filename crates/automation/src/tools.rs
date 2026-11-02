@@ -197,6 +197,17 @@ pub fn tools() -> Vec<ToolDef> {
                 }),
                 &["doc"],
             )),
+        t("folder_search", "Search a folder", "Search the text of every PDF in a folder (with its subfolders unless subfolders is false), one file at a time, without opening them as documents or changing anything. Links are not followed. Returns matches by file with pages from 1 and the text around each match. A file that could not be searched, or not all of it, is listed under skipped with a reason: link_or_special_file, too_large, unreadable, damaged, secured (every encrypted file), too_slow or pages_unread. stopped is match_limit or too_many_slow_files when the search ended early, and folder_cut_short means the folder held more than 10000 entries or went past 64 levels.")
+            .ro()
+            .cmd("edit.search_folder")
+            .with(schema(json!({
+                "path": { "type": "string", "description": "The folder." },
+                "query": { "type": "string", "minLength": 1, "maxLength": 1000 },
+                "subfolders": { "type": "boolean", "description": "Default true." },
+                "case_sensitive": { "type": "boolean", "description": "Default false." },
+                "whole_words": { "type": "boolean", "description": "Default false." },
+                "limit": { "type": "integer", "minimum": 1, "maximum": 10000, "description": "Stop after this many matches (default 1000)." }
+            }), &["path", "query"])),
         t("text_find", "Find text", "Find a phrase (case-insensitive, whitespace-normalised) and return matches in page order with page and line rectangles in points (origin top-left). Reads growing batches, looking one match past the limit for a continuation. Failed pages do not discard readable matches: warnings contains up to 100 {page, error, error_truncated} entries (errors capped at 1024 UTF-8 bytes), warning_count counts failed pages, and warnings_truncated reports a capped list. complete is false after a page failure or when more matches exist; next is present only for a match-limit continuation.")
             .ro()
             .cmd("edit.find")

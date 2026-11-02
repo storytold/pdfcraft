@@ -145,6 +145,7 @@ const EDIT: &[&str] = &[
     SEP,
     "edit.find",
     "edit.advanced_search",
+    "edit.search_folder",
     SEP,
     "edit.column_select",
     "edit.snapshot",
