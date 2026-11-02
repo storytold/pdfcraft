@@ -88,6 +88,14 @@ pub(crate) fn protect_current(ctx: &Context) {
     }
 }
 
+/// Release composition ownership after native editors accept a pointer interruption.
+pub(crate) fn finish_frame(ctx: &Context) {
+    let Some(owner) = focused_editor(ctx) else { return };
+    if ctx.interaction_snapshot(|interaction| interaction.clicked == Some(owner) || interaction.dragged == Some(owner)) {
+        forget(ctx, owner);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -125,9 +133,10 @@ mod tests {
         let owner = Id::unique("editor");
         let mut value = String::new();
         for _ in 0..2 {
-            let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
                 egui::TextEdit::singleline(&mut value).id(owner).show(ui).response.request_focus();
             });
+            output.textures_delta.clear();
         }
         let key = |key| Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE };
         let mut events = vec![preedit("لاَ"), key(Key::Enter), key(Key::Escape), key(Key::Tab), key(Key::ArrowLeft), key(Key::Backspace)];
@@ -136,5 +145,56 @@ mod tests {
         assert!(!events.iter().any(command_key));
         assert!(events.iter().any(|e| matches!(e, Event::Key { key: Key::ArrowLeft, .. })));
         assert!(events.iter().any(|e| matches!(e, Event::Key { key: Key::Backspace, .. })));
+    }
+
+    #[test]
+    fn non_page_pointer_interruption_releases_composition_keys() {
+        for (multiline, drag) in [(false, false), (false, true), (true, false), (true, true)] {
+            let ctx = Context::default();
+            let owner = Id::unique("non-page-editor");
+            let mut value = "ABC".to_owned();
+            let frame = |value: &mut String, mut events: Vec<Event>, focus: bool| {
+                protect_raw(&ctx, &mut events);
+                let mut rect = egui::Rect::NOTHING;
+                let mut output = ctx.run_ui(egui::RawInput { events, ..Default::default() }, |ui| {
+                    let editor = if multiline { egui::TextEdit::multiline(value) } else { egui::TextEdit::singleline(value) };
+                    let response = editor.id(owner).desired_width(250.0).show(ui).response;
+                    rect = response.rect;
+                    if focus {
+                        response.request_focus();
+                    }
+                    finish_frame(ui.ctx());
+                });
+                output.textures_delta.clear();
+                (rect, output)
+            };
+            frame(&mut value, vec![], true);
+            frame(&mut value, vec![], true);
+            let (rect, output) = frame(&mut value, vec![preedit("مر")], false);
+            assert!(composing_for(&ctx, owner));
+            let committed = |output: &egui::FullOutput| {
+                let egui::output::IMESurroundingText::Available(text) = &output.platform_output.ime.as_ref().unwrap().surrounding_text else {
+                    panic!("short committed-text snapshot")
+                };
+                text.text.clone()
+            };
+            assert_ne!(committed(&output), value, "live preedit must reach the native editor");
+            let at = rect.left_center() + egui::vec2(3.0, 0.0);
+            let pointer = |pressed| Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+            let (_, output) = if drag {
+                frame(&mut value, vec![Event::PointerMoved(at), pointer(true)], false);
+                frame(&mut value, vec![Event::PointerMoved(at + egui::vec2(40.0, 0.0))], false)
+            } else {
+                frame(&mut value, vec![Event::PointerMoved(at), pointer(true), pointer(false)], false)
+            };
+            assert!(ctx.interaction_snapshot(|interaction| if drag { interaction.dragged } else { interaction.clicked }) == Some(owner));
+            assert_eq!(committed(&output), value, "the native editor accepted the preedit on its caret click");
+            let mut events: Vec<_> = [Key::Enter, Key::Escape, Key::Tab]
+                .into_iter()
+                .map(|key| Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE })
+                .collect();
+            protect_raw(&ctx, &mut events);
+            assert_eq!(events.len(), 3, "ordinary commands must resume after a non-page editor click");
+        }
     }
 }

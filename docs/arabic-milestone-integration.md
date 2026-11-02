@@ -72,3 +72,5 @@ The supported-font scope remains important. Arbitrary mixed-style source text,
 full Arabic form appearances, missing-font completion, OCR/export interoperability
 and universal OS IME qualification are not delivered by this bundle. Overall RTL
 interface parity remains planned until its broader workflows have evidence.
+
+Review 5735147265 follow-up: completed native click/drag interruptions release composition ownership at the common frame boundary, covering non-page text widgets while retaining page-specific resets. The component regression failed with the reset disabled and passes for single-line/multiline click/drag cases against pinned egui; this is not live form/provider/browser qualification. README links distinguish the historical core checkpoint from integrated direction controls. The preview/Apply text-selection finding remains open: its new automation regression build was stopped at the contributor's timebox before execution. No passing or failing regression result is claimed for that unfinished check.

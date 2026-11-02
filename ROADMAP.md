@@ -225,6 +225,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 ## Progress log
 
+- **2026-11-02 (M7, #5731 review):** Completed native text-editor pointer interruptions release composition command keys at the common frame boundary; single-line/multiline click/drag component coverage passes. README direction status is clarified. Preview/Apply text-selection review remains open; broader browser/form/IME qualification and estimates are unchanged.
+
 - **2026-11-02 (M7, #5731):** Consolidated Arabic integration follows upstream main `d7dd1de647ee`; retained both roadmap histories and reviewed automatic app initialization merges. Supported-font and Chrome/native-reader limitations remain unchanged. Estimates unchanged.
 
 - **2026-11-01 (M7, #5657):** Header/footer, watermark and background additions and replacements stage the complete call before committing. Synthetic later-page failures preserve exact incremental bytes, object count, dirty state and allocation cursor; success controls retain other marks and shared/inherited resources. Estimates unchanged.

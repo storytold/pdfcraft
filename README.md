@@ -442,8 +442,10 @@ The summary is in **[ROADMAP.md](ROADMAP.md)**; the full assessment by dimension
 **Arabic core-editing checkpoint:** supported complete-source paragraphs now retain exact Unicode,
 mark positions, spacing and appearance through repeated Arabic/Latin edits, history and save/reopen.
 See the [feature and qualification record](docs/arabic-features.md) and
-[test/progress report](docs/arabic-editing-pr-summary.txt). Explicit direction controls and wider
-UI/IME, form-appearance and mixed-formatting qualification remain follow-up work.
+[test/progress report](docs/arabic-editing-pr-summary.txt) for the historical core
+checkpoint. The [consolidated integration record](docs/arabic-milestone-integration.md)
+includes Auto/LTR/RTL direction controls and focused UI tests. Wider UI/IME,
+form-appearance and mixed-formatting qualification remain follow-up work.
 
 ---
 
