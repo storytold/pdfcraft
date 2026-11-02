@@ -19,7 +19,8 @@ pub fn is_whitespace(b: u8) -> bool {
     matches!(b, b'\0' | b'\t' | b'\n' | b'\x0C' | b'\r' | b' ')
 }
 
-pub(crate) fn is_delimiter(b: u8) -> bool {
+/// One of the ten PDF delimiter characters (ISO 32000-2 §7.2.3, Table 2).
+pub fn is_delimiter(b: u8) -> bool {
     matches!(b, b'(' | b')' | b'<' | b'>' | b'[' | b']' | b'{' | b'}' | b'/' | b'%')
 }
 
@@ -552,6 +553,16 @@ fn find_endstream(data: &[u8], from: usize, endstreams: Option<&EndstreamIndex>)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The public whitespace and delimiter predicates are exactly the bytes of ISO 32000-2
+    /// §7.2.3 Tables 1 and 2: other crates rely on them instead of keeping their own lists.
+    #[test]
+    fn whitespace_and_delimiters_are_the_spec_bytes() {
+        let whitespace: Vec<u8> = (0..=u8::MAX).filter(|&b| is_whitespace(b)).collect();
+        let delimiters: Vec<u8> = (0..=u8::MAX).filter(|&b| is_delimiter(b)).collect();
+        assert_eq!(whitespace, b"\0\t\n\x0C\r ");
+        assert_eq!(delimiters, b"%()/<>[]{}");
+    }
 
     #[test]
     fn numbers_with_multibyte_garbage_do_not_panic() {
