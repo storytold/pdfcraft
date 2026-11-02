@@ -4204,16 +4204,20 @@ fn table_rows_of_minimum_height_cells_fill_the_page_at_that_height() {
         let t = crate::parse(&xml).unwrap().0;
         let form = crate::layout::layout(&t, None).unwrap();
         let per_page: Vec<usize> = form.pages.iter().map(|p| widgets(p).iter().filter(|w| w.som.ends_with(".c[0]")).count()).collect();
-        let first_h = form.pages.first().and_then(|p| widgets(p).first().map(|w| w.rect.h)).unwrap_or(0.0);
-        (per_page, first_h)
+        // Every cell of every row, on every page: a shorter `d` cell, or a shorter row further
+        // down, leaves the counts above as they are.
+        let heights: Vec<f64> =
+            form.pages.iter().flat_map(|p| widgets(p)).filter(|w| w.som.ends_with(".c[0]") || w.som.ends_with(".d[0]")).map(|w| w.rect.h).collect();
+        (per_page, heights)
     };
     // 0.4in (28.8pt) rows: 25 to a 10in page. At three lines (38.5pt), 18 would fit.
     let (per_page, h) = pages(r#"minH="0.4in""#, 30);
-    assert_eq!(per_page, [25, 5], "row height {h}");
+    assert_eq!(per_page, [25, 5], "row heights {h:?}");
+    assert!(h.len() == 60 && h.iter().all(|c| (c - 28.8).abs() < 0.01), "every cell starts at its minimum: {h:?}");
     // A table that fits keeps all its rows on the page, each at the minimum.
     let (per_page, h) = pages(r#"minH="0.4in""#, 10);
     assert_eq!(per_page, [10]);
-    assert!((h - 28.8).abs() < 0.01, "a row starts at its minimum: {h}");
+    assert!(h.len() == 20 && h.iter().all(|c| (c - 28.8).abs() < 0.01), "every cell starts at its minimum: {h:?}");
     // Cells with a height: 0.5in rows, 20 to a page.
     assert_eq!(pages(r#"h="0.5in""#, 30).0, [20, 10]);
 }
