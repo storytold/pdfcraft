@@ -4149,6 +4149,7 @@ fn apply_frame_requests(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui, 
     // the quick tools come back with the window.
     if app.mode != crate::Mode::Read && !app.full_screen {
         quick_bar(app, avail, ui);
+        crate::hotbar::show(app, avail, ui.ctx());
     }
     if let Some((source, file, destination)) = remote_open {
         app.open_remote_link(source, file, destination);
