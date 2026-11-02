@@ -33,6 +33,9 @@ pub enum EditError {
 
 pub type Rgb = [f64; 3];
 
+pub mod backdrop;
+pub use backdrop::{Backdrop, backdrops_left_off, page_backdrop, page_backdrops};
+pub use text::strip_subset_tag;
 mod background;
 pub use background::page_background;
 pub mod objects;
@@ -41,10 +44,11 @@ pub use objects::{EditableObject, MAX_MOVE_OBJECTS, ObjectKind, ObjectTarget, ed
 mod flatten;
 pub use flatten::{flatten, flatten_fill_sign};
 pub mod images;
-pub use images::{ImageChange, PageImage, change_image, page_images, reading_images, rect_to_rect, turn_about_centre, turn_by_degrees};
+pub use images::{ArrangeOrder, ImageChange, PageImage, change_image, page_images, reading_images, rect_to_rect, turn_about_centre, turn_by_degrees};
 pub mod bidi;
 pub mod indic;
 mod linebreak;
+pub mod paragraph_align;
 pub mod text;
 pub use text::{
     BlockKey, BlockStyle, LineEdit, MAX_FORM_DEPTH, MAX_FORM_VISITS, RangeStyle, ReadingBlocks, TextBlock, TextLine, TextSession, block_overlapping,
