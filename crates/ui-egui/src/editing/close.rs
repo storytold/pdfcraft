@@ -55,6 +55,9 @@ impl PdfCraftApp {
                     view.forms.unbaked.clear();
                     view.pending_edit = None;
                 }
+                // A signature placed since the last save is gone with the rest: the next save
+                // doesn't ask to lock it (#2149).
+                self.placed_signatures.remove(&id);
                 self.notify_tr("Reverted to the last saved version");
             }
             Err(e) => self.notify_error(e),

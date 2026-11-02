@@ -59,16 +59,20 @@ pub(super) enum Notice {
     Close,
     /// Stop showing the secured-document notice, in every document (#4035).
     HideSecured,
+    /// Lock the placed signatures into the page (#2149).
+    LockSignatures,
 }
 
 /// The notice bar above the pages: a file changed on disk first, then what a historical
-/// snapshot is, then the signature status bar, a form's scripts having been turned
-/// off, security, forms and warnings.
+/// snapshot is, then the offer to lock a signature just placed, then the signature status bar,
+/// a form's scripts having been turned off, security, forms and warnings.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn notices(
     view: &mut DocView,
     doc: &pdfcraft_engine::Document,
     secured: bool,
     repaired: bool,
+    lock_offer: bool,
     signed: Option<(&str, Color32, &str, String)>,
     ui: &mut egui::Ui,
     t: &Tokens,
@@ -120,6 +124,22 @@ pub(super) fn notices(
         });
         if close {
             return Some(Notice::Close);
+        }
+    }
+    // A signature just placed with Fill & Sign is a comment others can move (#2149): offer to
+    // lock it into the page now. `lock_offer` is false for a digitally signed document.
+    if lock_offer && !view.lock_offer_dismissed {
+        let mut lock = false;
+        notice_bar(ui, t, "lock", t.accent_text, tl!("Signature added. Others can move it until it's locked.").to_string(), |ui| {
+            if icons::button(ui, "x", 22.0, false, tl!("Dismiss")).clicked() {
+                view.lock_offer_dismissed = true;
+            }
+            if crate::widgets::pill_button(ui, tl!("Lock now"), true).clicked() {
+                lock = true;
+            }
+        });
+        if lock {
+            return Some(Notice::LockSignatures);
         }
     }
     if let Some((icon, color, template, arg)) = signed {
