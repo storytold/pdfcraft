@@ -19,12 +19,64 @@ pub(crate) const MAX_DIMENSION: u32 = u16::MAX as u32;
 /// pixels, decoded one by one.
 pub(crate) const MAX_PIXELS: u64 = 1 << 28;
 
+/// PdfCraft patch: the most cells a halftone grid may have, which still gives the largest page
+/// (see [`MAX_PIXELS`]) cells of 3 × 3, unrotated. Each cell takes a 4-byte value while the grid decodes, so
+/// the pixel bound alone let a 98-byte segment take 1 GiB; this one leaves 128 MiB.
+pub(crate) const MAX_GRID_CELLS: u64 = 1 << 25;
+
+/// PdfCraft patch: the decoding work a stream may ask for, in pixels decoded from their code: four
+/// of the largest pages, about 6 s on data the decoder predicts and about 17 s on data it can't, so
+/// a render finishes inside its 20 s watchdog. Each bitmap is bounded on its own, but nothing
+/// bounded how many there are: 1,140 bytes of generic regions took over 40 s, a 795-byte PDF's one
+/// halftone 265 s, and a 923-byte PDF's regions would have taken days.
+pub(crate) const MAX_WORK: u64 = 4 * MAX_PIXELS;
+
+/// PdfCraft patch: the work of reading one integer of an item, what an arithmetic-coded one takes
+/// at worst in decisions (see [`MAX_WORK`]), so that a decision costs no more than a pixel. An item
+/// with no pixels still reads its integers: charged a step each, a 22,515-byte PDF of refined text
+/// instances of no size stayed inside `MAX_WORK` and took 730 s.
+pub(crate) const INTEGER_WORK: u64 = 38;
+
+/// PdfCraft patch: the work of a line of a Huffman table built for symbols, about 50 ns (see
+/// [`MAX_WORK`]).
+pub(crate) const HUFFMAN_LINE_WORK: u64 = 10;
+
+/// PdfCraft patch: the work of decoding a bitmap pixel by pixel (see [`MAX_WORK`]). A row costs up
+/// to 21 ns however few pixels it has, about 4 pixels' worth, so one of no width isn't free: 16,384
+/// regions of 0 × 65535 took 9 s at a cost of nothing.
+pub(crate) fn decode_work(width: u32, height: u32) -> u64 {
+    u64::from(height) * (u64::from(width) + 4)
+}
+
+/// PdfCraft patch: the work of copying a bitmap (see [`MAX_WORK`]): a word at a time, and a row is
+/// a copy of its own, so a tall thin bitmap costs its rows, not its pixels.
+pub(crate) fn copy_work(width: u32, height: u32) -> u64 {
+    u64::from(height) * (u64::from(width.div_ceil(WORD_BITS)) + 1)
+}
+
 /// The underlying word type for packed pixel storage.
 /// Change this to `u32` to switch back to 32-bit words.
 pub(crate) type Word = u32;
 
 pub(crate) const WORD_BITS: u32 = Word::BITS;
 pub(crate) const WORD_SHIFT: u32 = WORD_BITS - 1;
+
+/// PdfCraft patch: the words a [`Bitmap`] takes before its pixels. A symbol of width 0 has no
+/// pixels and still costs this: 5 KB of zero-width dictionaries held 781 MB.
+pub(crate) const BITMAP_WORDS: usize = size_of::<Bitmap>() / size_of::<Word>();
+
+/// PdfCraft patch: refuse a page past the bounds on a bitmap (see `MAX_PIXELS`). A stream is held
+/// to this when it is opened as well as when its page bitmap is sized: a caller sizes its own
+/// output from the page header in between, and a 743-byte PDF's Indexed image asked for 137 GB.
+pub(crate) fn check_page_size(width: u32, height: u32) -> Result<()> {
+    if width > MAX_DIMENSION || height > MAX_DIMENSION {
+        return Err(OverflowError::BitmapDimension.into());
+    }
+    if u64::from(width) * u64::from(height) > MAX_PIXELS {
+        return Err(OverflowError::BitmapDimension.into());
+    }
+    Ok(())
+}
 
 /// A decoded bitmap with position information.
 ///
@@ -51,6 +103,11 @@ pub(crate) struct Bitmap {
 }
 
 impl Bitmap {
+    /// PdfCraft patch: the words this bitmap holds, its header included.
+    pub(crate) fn words(&self) -> usize {
+        self.data.len().saturating_add(BITMAP_WORDS)
+    }
+
     /// Create a new bitmap filled with white pixels (false).
     ///
     /// The bitmap is positioned at (0, 0).
@@ -93,13 +150,7 @@ impl Bitmap {
         height: u32,
         default_pixel: bool,
     ) -> Result<()> {
-        if width > MAX_DIMENSION || height > MAX_DIMENSION {
-            return Err(OverflowError::BitmapDimension.into());
-        }
-        // PdfCraft patch: see `MAX_PIXELS` (the page bitmap is sized here).
-        if u64::from(width) * u64::from(height) > MAX_PIXELS {
-            return Err(OverflowError::BitmapDimension.into());
-        }
+        check_page_size(width, height)?;
 
         let stride = width.div_ceil(WORD_BITS);
         let default_word: Word = if default_pixel { !0 } else { 0 };
@@ -149,7 +200,8 @@ impl Bitmap {
         // TODO: Figure out how we can optimize this, especially since this is a
         // bottleneck for symbols/patterns.
         let dest_x_start = x.max(0);
-        let dest_x_end = (x + other.width as i32).min(self.width as i32);
+        // Saturating: a location can be anywhere an `i32` reaches, and past the end it is off the page.
+        let dest_x_end = x.saturating_add(other.width as i32).min(self.width as i32);
 
         if dest_x_start >= dest_x_end {
             return;
@@ -160,7 +212,7 @@ impl Bitmap {
         let dest_x_end = dest_x_end as u32;
 
         for src_y in 0..other.height {
-            let dest_y = y + src_y as i32;
+            let dest_y = y.saturating_add(src_y as i32);
             if dest_y < 0 || dest_y >= self.height as i32 {
                 continue;
             }
