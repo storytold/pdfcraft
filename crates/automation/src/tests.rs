@@ -401,6 +401,34 @@ fn invalid_save_bytes_never_reach_publication_or_mark_saved() {
 }
 
 #[test]
+fn doc_rename_moves_the_file_and_refuses_with_reasons() {
+    let dir = staging_dir("rename");
+    let mut a = Automation::new().with_root(&dir).unwrap();
+    let id = search_document(&mut a, 2);
+    let err = |a: &mut Automation, args: Value| a.call("doc_rename", &args).err().map(|e| e.to_string()).unwrap_or_default();
+    assert!(err(&mut a, json!({"doc": id.0, "name": "x"})).contains("no file yet"), "never saved");
+    json(&mut a, "doc_save", json!({"doc": id.0, "path": "first.pdf"}));
+    std::fs::write(dir.join("taken.pdf"), b"other").unwrap();
+    assert!(err(&mut a, json!({"doc": id.0, "name": "taken"})).contains("already exists"));
+    assert!(err(&mut a, json!({"doc": id.0, "name": "CON"})).contains("reserves"));
+    assert!(err(&mut a, json!({"doc": id.0, "name": "a/b"})).contains("can't contain"));
+    let out = json(&mut a, "doc_rename", json!({"doc": id.0, "name": "Second"}));
+    assert_eq!(out["name"], "Second.pdf");
+    assert!(dir.join("Second.pdf").exists() && !dir.join("first.pdf").exists());
+    assert_eq!(listing(&dir), ["Second.pdf", "taken.pdf"]);
+    // Unsaved changes are never left behind in a renamed file.
+    json(&mut a, "page_rotate", json!({"doc": id.0, "pages": [1], "degrees": 90}));
+    assert!(err(&mut a, json!({"doc": id.0, "name": "third"})).contains("unsaved changes"));
+    json(&mut a, "doc_save", json!({"doc": id.0}));
+    json(&mut a, "doc_rename", json!({"doc": id.0, "name": "third.pdf"}));
+    assert_eq!(
+        a.session.get(id).unwrap().path.as_deref().map(Path::new).and_then(Path::file_name).map(|n| n.to_string_lossy().into_owned()).as_deref(),
+        Some("third.pdf")
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn a_failed_save_sync_keeps_the_document_dirty_and_can_be_retried() {
     let dir = staging_dir("sync-dirty");
     let target = dir.join("out.pdf");
