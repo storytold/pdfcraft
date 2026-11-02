@@ -178,6 +178,8 @@ mod tests {
         assert!(matches!(dec(&[0x78, 0x9c, 0x07, 0, 0, 0]), Err(FilterError::Corrupt { .. })));
         // Preset dictionary.
         assert!(matches!(dec(&[0x78, 0x20, 0, 0, 0, 0]), Err(FilterError::Corrupt { .. })));
+        // One whose header is followed by data that inflates: refused all the same.
+        assert!(matches!(dec(&[0x78, 0xBB, 0x4b, 0x04, 0x00]), Err(FilterError::Corrupt { .. })));
     }
 
     #[test]
