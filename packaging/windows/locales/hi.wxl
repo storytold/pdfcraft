@@ -5,7 +5,9 @@
   <String Id="SetupTitle" Value="[ProductName] सेटअप" />
   <String Id="WelcomeTitle" Value="[ProductName] स्थापित करें" />
   <String Id="WelcomeDescription" Value="सेटअप सभी उपयोगकर्ताओं के लिए [ProductName] स्थापित करेगा और इसे स्टार्ट मेनू में जोड़ेगा। जारी रखने के लिए स्थापित करें पर क्लिक करें।" />
+  <String Id="WelcomeDescriptionUser" Value="सेटअप केवल आपके खाते के लिए [ProductName] स्थापित करेगा और इसे स्टार्ट मेनू में जोड़ेगा। जारी रखने के लिए स्थापित करें पर क्लिक करें।" />
   <String Id="DesktopShortcut" Value="डेस्कटॉप शॉर्टकट बनाएँ" />
+  <String Id="PdfContextMenu" Value="PDF फ़ाइलों के राइट-क्लिक मेनू में &quot;PdfCraft से संपादित करें&quot; जोड़ें" />
   <String Id="HotFolderCheckbox" Value="PdfCraft Hot Folder भी स्थापित करें" />
   <String Id="HotFolderDescription" Value="Windows के साथ शुरू होने वाली पृष्ठभूमि सेवा जोड़ता है। केवल आपके द्वारा कॉन्फ़िगर और सक्षम किए गए कार्य चलाए जाते हैं।" />
   <String Id="Install" Value="स्थापित करें" />
@@ -32,7 +34,6 @@
   <String Id="FilesInUseTitle" Value="फ़ाइलें उपयोग में हैं" />
   <String Id="FilesInUseDescription" Value="ये प्रोग्राम उन फ़ाइलों का उपयोग कर रहे हैं जिन्हें सेटअप को अपडेट करना है। उन्हें बंद करके जारी रखने के लिए ठीक है, या सेटअप रोकने के लिए रद्द करें पर क्लिक करें।" />
   <String Id="OK" Value="ठीक है" />
-  <String Id="PackageScopeError" Value="PdfCraft सभी उपयोगकर्ताओं के लिए स्थापित होना चाहिए। व्यवस्थापक अधिकारों और ALLUSERS=1 के साथ सेटअप चलाएँ; केवल एक उपयोगकर्ता के लिए स्थापना समर्थित नहीं है।" />
   <String Id="DowngradeError" Value="PdfCraft का नया संस्करण पहले से स्थापित है।" />
   <String Id="PackageDescription" Value="PdfCraft PDF workbench" />
   <String Id="HotFolderFeatureDescription" Value="कॉन्फ़िगर किए गए फ़ोल्डरों को पृष्ठभूमि में स्वचालित रूप से संसाधित करें।" />
@@ -40,5 +41,6 @@
   <String Id="HotFolderShortcutDescription" Value="स्वचालित OCR और स्कैन प्रसंस्करण कॉन्फ़िगर करें" />
   <String Id="AppDescription" Value="ओपन-सोर्स PDF कार्यक्षेत्र" />
   <String Id="CreatePdfCommand" Value="PdfCraft से PDF बनाएँ…" />
+  <String Id="EditPdfCommand" Value="PdfCraft से संपादित करें" />
   <String Id="DocumentDescription" Value="PDF दस्तावेज़" />
 </WixLocalization>

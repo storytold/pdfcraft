@@ -1,7 +1,10 @@
 //! Bounded passive FTP subset (RFC 959/2428/3659) and explicit TLS (RFC 4217).
 //! Never uses active mode, follows server-supplied data hosts, or downgrades TLS.
 
-use super::*;
+use super::{
+    BTreeMap, Backend, Control, CredentialStore, Digest, Duration, FtpSecurity, FtpSource, Instant, MAX_ITEMS, MAX_JSON, PathBuf, Read, Record,
+    RemoteFile, Sha256, SourceAction, Write, copy_limited, credentials, io_error, supported,
+};
 use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::sync::{
@@ -486,6 +489,7 @@ fn parse_listing(bytes: &[u8]) -> Result<Vec<Entry>, String> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::{StagedSource, hash};
     use super::*;
     use std::io::{BufRead, BufReader};
     use std::net::TcpListener;

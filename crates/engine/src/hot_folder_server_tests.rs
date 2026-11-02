@@ -372,3 +372,212 @@ fn first_calendar_schedule_is_persisted_once_without_probing_the_input() {
     poll(&config, None).unwrap();
     assert_eq!(fs::read(state_path(&config)).unwrap(), before);
 }
+
+#[test]
+fn root_access_keeps_its_authorized_spelling_and_refuses_traversal_and_sibling_prefixes() {
+    let base = tempfile::tempdir().unwrap();
+    let root = base.path().join("allowed");
+    let sibling = base.path().join("allowed-extra");
+    fs::create_dir(&root).unwrap();
+    fs::create_dir(&sibling).unwrap();
+    let source = root.join("source.pdf");
+    let outside = sibling.join("private.pdf");
+    fs::write(&source, b"retained source").unwrap();
+    fs::write(&outside, b"outside the authorized root").unwrap();
+    // On Windows CI, tempdir inherits a short-name ancestor from the runner's TEMP.
+    // Exercise both the caller's spelling and the filesystem's canonical spelling.
+    assert_eq!(confined(&source, Some(&root)).unwrap(), source.canonicalize().unwrap());
+    assert_eq!(confined(&source.canonicalize().unwrap(), Some(&root)).unwrap(), source.canonicalize().unwrap());
+    assert_eq!(confined(Path::new("source.pdf"), Some(&root)).unwrap(), source.canonicalize().unwrap());
+    assert_eq!(confined(&root.join("new.pdf"), Some(&root)).unwrap(), root.canonicalize().unwrap().join("new.pdf"));
+    for path in [&outside, &root.join("../allowed-extra/private.pdf")] {
+        assert_eq!(confined(path, Some(&root)).unwrap_err(), "hot folder path is outside the allowed directory");
+    }
+    assert_eq!(fs::read(source).unwrap(), b"retained source");
+    assert_eq!(fs::read(outside).unwrap(), b"outside the authorized root");
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_alias_overlap_is_deny_only_and_normalizes_drive_unc_and_extended_prefixes() {
+    let cases = [
+        (r"C:\Users\RUNNER~1\Temp\job\input", r"\\?\c:\Users\runneradmin\Temp\job\input\a.pdf", true),
+        (r"C:\Users\RUNNER~1\Temp\job\input", r"C:\Users\runneradmin\Temp\job\output", false),
+        (r"C:\MISSIN~1\in", r"C:\Missing directory\input", false),
+        (r"C:\MISSIN~1\in", r"D:\Missing directory\in", false),
+        (r"\\server\share\LONGFO~1\input", r"\\?\UNC\SERVER\SHARE\Long folder\input\a.pdf", true),
+        (r"\\server\share\LONGFO~1\input", r"\\server\other-share\Long folder\input", false),
+        (r"\\server\share\LONGFO~1\input", r"\\other-server\share\Long folder\input", false),
+        (r"C:\LONGFO~1\input", r"\\server\share\Long folder\input", false),
+        (r"C:\data\input", r"\\?\C:\data\input\a.pdf", true),
+    ];
+    for (left, right, overlap) in cases {
+        assert_eq!(paths_may_overlap(Path::new(left), Path::new(right)), overlap, "{left} vs {right}");
+        assert_eq!(paths_may_overlap(Path::new(right), Path::new(left)), overlap, "{right} vs {left}");
+    }
+    let short = Path::new(r"C:\Users\RUNNER~1\Temp\job\input");
+    let long = Path::new(r"C:\Users\runneradmin\Temp\job\input");
+    assert!(paths_may_overlap(short, long));
+    assert!(!lexically_inside(short, long), "a potential alias does not authorize access");
+    assert!(!lexically_inside(long, short), "a potential alias does not authorize access");
+    assert!(paths_may_overlap(Path::new(r"C:\straße\input"), Path::new(r"C:\strasse\input")));
+    assert!(!lexically_inside(Path::new(r"C:\straße\input"), Path::new(r"C:\strasse\input")));
+    assert!(lexically_inside(Path::new(r"\\?\C:\data\input\a.pdf"), Path::new(r"c:\data\input")));
+    assert!(lexically_inside(Path::new(r"\\?\UNC\SERVER\SHARE\input\a.pdf"), Path::new(r"\\server\share\input")));
+    assert!(!lexically_inside(Path::new(r"C:\data\input-extra\a.pdf"), Path::new(r"C:\data\input")));
+    for invalid in [r"C:relative", r"\root-relative", r"\\.\PhysicalDrive0", r"\\?\Volume{unknown}\input", r"C:\data\..\other"] {
+        assert!(paths_may_overlap(Path::new(invalid), long), "unknown boundaries fail closed");
+        assert!(!lexically_inside(Path::new(invalid), long));
+    }
+    for short in ["RUNNER~1", "LONGF~12", "DOCUME~1.PDF", "A~123456"] {
+        assert!(possible_short_name(short), "{short}");
+    }
+    for ordinary in ["~1", "folder~", "folder~x", "toolong~12", "long name~1", "DOC~1.PDF.EXTRA"] {
+        assert!(!possible_short_name(ordinary), "{ordinary}");
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_structure_refuses_alias_overlap_without_resolving_other_task_paths() {
+    let first = Task {
+        id: "first".into(),
+        name: "First".into(),
+        enabled: true,
+        input: r"C:\MISSIN~1\input".into(),
+        output: r"C:\MISSIN~1\output".into(),
+        ..Default::default()
+    };
+    let second = Task {
+        id: "second".into(),
+        name: "Second".into(),
+        enabled: true,
+        input: r"C:\Missing directory\input\child".into(),
+        output: r"C:\Missing directory\other-output".into(),
+        ..Default::default()
+    };
+    assert!(validate_structure(&Config { tasks: vec![first.clone(), second] }, None).unwrap_err().contains("overlap"));
+    let own_output = Task { output: r"C:\Missing directory\input\output".into(), ..first.clone() };
+    assert!(validate_structure(&Config { tasks: vec![own_output] }, None).unwrap_err().contains("contain"));
+    let remote = Task {
+        id: "remote".into(),
+        name: "Offline share".into(),
+        enabled: true,
+        input: r"\\pdfcraft-offline.invalid\share\input".into(),
+        output: r"\\pdfcraft-offline.invalid\share\output".into(),
+        ..Default::default()
+    };
+    validate_structure(&Config { tasks: vec![first, remote] }, None).unwrap();
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_possible_alias_never_grants_root_access_or_contacts_an_outside_share() {
+    let base = tempfile::tempdir().unwrap();
+    let root = base.path().join("A lengthy authorized folder");
+    fs::create_dir(&root).unwrap();
+    let original = root.join("original.pdf");
+    fs::write(&original, b"retained").unwrap();
+    let ambiguous = base.path().join("ALENGT~1").join("original.pdf");
+    assert!(paths_may_overlap(&ambiguous, &root));
+    assert!(!lexically_inside(&ambiguous, &root));
+    for candidate in [ambiguous.as_path(), Path::new(r"\\pdfcraft-offline.invalid\share\original.pdf")] {
+        assert_eq!(confined(candidate, Some(&root)).unwrap_err(), "hot folder path is outside the allowed directory");
+    }
+    assert_eq!(fs::read(original).unwrap(), b"retained");
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_selected_local_task_progresses_with_an_unrelated_offline_unc_task() {
+    let base = tempfile::tempdir().unwrap();
+    let config = base.path().join("tasks.json");
+    let local = task(base.path(), "local");
+    let remote = Task {
+        id: "remote".into(),
+        name: "Offline share".into(),
+        enabled: true,
+        input: r"\\pdfcraft-offline.invalid\share\input".into(),
+        output: r"\\pdfcraft-offline.invalid\share\output".into(),
+        ..Default::default()
+    };
+    save_json(&config, &Config { tasks: vec![remote, local.clone()] }).unwrap();
+    let original = pdf();
+    let source = local.input.join("source.pdf");
+    fs::write(&source, original.as_slice()).unwrap();
+    poll_task_cancelable(&config, None, "local", &|| false).unwrap();
+    make_due(&config);
+    let state = poll_task_cancelable(&config, None, "local", &|| false).unwrap();
+    assert_eq!(state.tasks["local"].completed, 1);
+    assert!(!state.tasks.contains_key("remote"));
+    assert_eq!(fs::read(source).unwrap(), *original);
+    assert!(local.output.join("source.pdf").is_file());
+}
+
+/// `count` receipts that each carry a grouped batch's full list of `pages` outputs, as `step`
+/// writes them. A few large receipts keep the test fast; together they exceed one journal file.
+fn oversized_state(count: usize, pages: usize) -> State {
+    let mut state = State::default();
+    let folder = "x".repeat(280);
+    let outputs: Vec<PathBuf> = (0..pages).map(|page| PathBuf::from(format!("{folder}/{page:05}.tif"))).collect();
+    for index in 0..count {
+        let receipt =
+            Receipt { outputs: outputs.clone(), source_hash: "hash".into(), source_stamp: String::new(), output_proofs: vec![], cleanup: None };
+        state.receipts.insert(format!("grouped:{index:03}:hash"), receipt);
+    }
+    state
+}
+
+fn snapshot_files(dir: &Path) -> usize {
+    fs::read_dir(dir).unwrap().filter(|entry| entry.as_ref().unwrap().file_name().to_string_lossy().contains(".pending.")).count()
+}
+
+/// CodeRabbit: the write-ahead snapshot of a large grouped batch exceeded the 16 MiB journal
+/// file limit, so the batch republished its outputs on every retry and never finished.
+#[test]
+fn a_grouped_batch_larger_than_one_journal_file_is_saved_and_spilled() {
+    let base = tempfile::tempdir().unwrap();
+    let config = base.path().join("tasks.json");
+    let mut state = oversized_state(6, 12_800);
+    assert!(serde_json::to_vec(&state).unwrap().len() as u64 > MAX_JSON, "the snapshot needs several files");
+    journal::save(&config, &mut state).unwrap();
+    assert_eq!(snapshot_files(base.path()), 0, "the snapshot is removed once history holds it");
+    let restored = read_state(&config).unwrap();
+    for index in 0..6 {
+        let receipt = journal::receipt(&config, &restored, &format!("grouped:{index:03}:hash")).unwrap();
+        assert_eq!(receipt.map(|r| r.outputs.len()), Some(12_800), "receipt {index}");
+    }
+}
+
+#[test]
+fn an_interrupted_spill_of_a_large_batch_recovers_every_receipt() {
+    let base = tempfile::tempdir().unwrap();
+    let config = base.path().join("tasks.json");
+    let mut state = oversized_state(6, 12_800);
+    assert!(
+        journal::save_with(&config, &mut state, &|count| if count == 1 { Err("simulated crash after one spill".into()) } else { Ok(()) }).is_err()
+    );
+    assert_eq!(read_state(&config).unwrap().receipts.len(), 6, "the whole group is visible together");
+    // A damaged part is refused, never read as a shorter state.
+    let part = fs::read_dir(base.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .find(|path| {
+            let name = path.file_name().unwrap().to_string_lossy().into_owned();
+            name.contains(".pending.") && !name.ends_with(".json")
+        })
+        .unwrap();
+    let mut bytes = fs::read(&part).unwrap();
+    bytes[0] ^= 1;
+    fs::write(&part, bytes).unwrap();
+    assert!(read_state(&config).is_err());
+}
+
+/// The spill loop's running size is exactly the serialized cache's size.
+#[test]
+fn the_journal_measures_a_map_exactly_as_serde_writes_it() {
+    let state = oversized_state(3, 10);
+    let sizes = journal::entry_sizes(&state.receipts).unwrap();
+    assert_eq!(journal::map_len(sizes.values().sum(), sizes.len()), serde_json::to_vec(&state.receipts).unwrap().len());
+    assert_eq!(journal::map_len(0, 0), serde_json::to_vec(&BTreeMap::<String, Receipt>::new()).unwrap().len());
+}

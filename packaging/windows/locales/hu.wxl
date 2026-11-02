@@ -5,7 +5,9 @@
   <String Id="SetupTitle" Value="[ProductName] telepítése" />
   <String Id="WelcomeTitle" Value="A [ProductName] telepítése" />
   <String Id="WelcomeDescription" Value="A [ProductName] minden felhasználó számára települ, és bekerül a Start menübe. A folytatáshoz kattintson a Telepítés gombra." />
+  <String Id="WelcomeDescriptionUser" Value="A [ProductName] csak az Ön fiókja számára települ, és bekerül a Start menübe. A folytatáshoz kattintson a Telepítés gombra." />
   <String Id="DesktopShortcut" Value="&amp;Asztali parancsikon létrehozása" />
+  <String Id="PdfContextMenu" Value="„&amp;Szerkesztés a PdfCrafttal” hozzáadása a PDF-fájlok helyi menüjéhez" />
   <String Id="HotFolderCheckbox" Value="A PdfCraft &amp;Hot Folder telepítése is" />
   <String Id="HotFolderDescription" Value="A Windowszal induló háttérszolgáltatást ad hozzá. Csak a beállított és engedélyezett feladatokat dolgozza fel." />
   <String Id="Install" Value="&amp;Telepítés" />
@@ -32,7 +34,6 @@
   <String Id="FilesInUseTitle" Value="Használatban lévő fájlok" />
   <String Id="FilesInUseDescription" Value="Ezek a programok frissítendő fájlokat használnak. A bezárásukhoz és a folytatáshoz kattintson az OK gombra, vagy szakítsa meg a telepítést a Mégse gombbal." />
   <String Id="OK" Value="OK" />
-  <String Id="PackageScopeError" Value="A PdfCraft minden felhasználó számára telepítendő. Futtassa a telepítőt rendszergazdai jogosultsággal és ALLUSERS=1 beállítással. Felhasználónkénti telepítés nem támogatott." />
   <String Id="DowngradeError" Value="A PdfCraft újabb verziója már telepítve van." />
   <String Id="PackageDescription" Value="PdfCraft PDF-eszközök" />
   <String Id="HotFolderFeatureDescription" Value="A beállított mappák automatikus feldolgozása a háttérben." />
@@ -40,5 +41,6 @@
   <String Id="HotFolderShortcutDescription" Value="Automatikus szövegfelismerés és szkennelésfeldolgozás beállítása" />
   <String Id="AppDescription" Value="Nyílt forráskódú PDF-eszközök" />
   <String Id="CreatePdfCommand" Value="PDF létrehozása a PdfCrafttal…" />
+  <String Id="EditPdfCommand" Value="Szerkesztés a PdfCrafttal" />
   <String Id="DocumentDescription" Value="PDF-dokumentum" />
 </WixLocalization>

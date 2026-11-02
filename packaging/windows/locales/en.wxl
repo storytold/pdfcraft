@@ -5,7 +5,9 @@
   <String Id="SetupTitle" Value="[ProductName] Setup" />
   <String Id="WelcomeTitle" Value="Install [ProductName]" />
   <String Id="WelcomeDescription" Value="Setup will install [ProductName] for all users and add it to the Start menu. Click Install to continue." />
+  <String Id="WelcomeDescriptionUser" Value="Setup will install [ProductName] only for your account and add it to the Start menu. Click Install to continue." />
   <String Id="DesktopShortcut" Value="Create a &amp;desktop shortcut" />
+  <String Id="PdfContextMenu" Value="Add &quot;&amp;Edit with PdfCraft&quot; to the right-click menu of PDF files" />
   <String Id="HotFolderCheckbox" Value="Also install PdfCraft &amp;Hot Folder" />
   <String Id="HotFolderDescription" Value="Adds a background service that starts with Windows. Only tasks you configure and enable are processed." />
   <String Id="Install" Value="&amp;Install" />
@@ -32,7 +34,6 @@
   <String Id="FilesInUseTitle" Value="Files in use" />
   <String Id="FilesInUseDescription" Value="These programs are using files that setup needs to update. Click OK to close them and continue, or Cancel to stop setup." />
   <String Id="OK" Value="OK" />
-  <String Id="PackageScopeError" Value="PdfCraft must be installed for all users. Run setup with administrator privileges and ALLUSERS=1; per-user installation is not supported." />
   <String Id="DowngradeError" Value="A newer version of PdfCraft is already installed." />
   <String Id="PackageDescription" Value="PdfCraft PDF workbench" />
   <String Id="HotFolderFeatureDescription" Value="Automatically process configured folders in the background." />
@@ -40,5 +41,6 @@
   <String Id="HotFolderShortcutDescription" Value="Configure automatic OCR and scan processing" />
   <String Id="AppDescription" Value="Open-source PDF workbench" />
   <String Id="CreatePdfCommand" Value="Create PDF with PdfCraft…" />
+  <String Id="EditPdfCommand" Value="Edit with PdfCraft" />
   <String Id="DocumentDescription" Value="PDF Document" />
 </WixLocalization>

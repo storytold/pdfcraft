@@ -43,7 +43,7 @@ no vertical Japanese claim, and deskew refuses annotated pages rather than separ
 annotations from their targets. Supported OCR languages are deliberately limited to
 those exposed and tested, despite the model's larger vocabulary.
 
-Validation: `cargo test -p pdfcraft-engine --test scan_ocr` covers actual models,
+Validation: `cargo test -p pdfcraft-engine --test it scan_ocr` covers actual models,
 languages, all quarter-turns, deskew, crop offsets and padding, unchanged exact-mode pixels, save/reopen, undo
 and stale results. Model tests report a skip when models are absent. The Japanese
 synthetic fixture uses the optional release `CRAFT_FONTS_DIR` checkout; generated

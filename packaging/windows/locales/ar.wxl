@@ -5,7 +5,9 @@
   <String Id="SetupTitle" Value="إعداد [ProductName]" />
   <String Id="WelcomeTitle" Value="تثبيت [ProductName]" />
   <String Id="WelcomeDescription" Value="سيثبت برنامج الإعداد [ProductName] لجميع المستخدمين ويضيفه إلى قائمة ابدأ. انقر فوق تثبيت للمتابعة." />
+  <String Id="WelcomeDescriptionUser" Value="سيثبت برنامج الإعداد [ProductName] لحسابك فقط ويضيفه إلى قائمة ابدأ. انقر فوق تثبيت للمتابعة." />
   <String Id="DesktopShortcut" Value="إنشاء اختصار على سطح المكتب" />
+  <String Id="PdfContextMenu" Value="إضافة «تحرير باستخدام PdfCraft» إلى قائمة النقر بزر الماوس الأيمن لملفات PDF" />
   <String Id="HotFolderCheckbox" Value="تثبيت PdfCraft Hot Folder أيضًا" />
   <String Id="HotFolderDescription" Value="يضيف خدمة تعمل في الخلفية وتبدأ مع Windows. لا تُعالج إلا المهام التي تضبطها وتفعّلها." />
   <String Id="Install" Value="تثبيت" />
@@ -32,7 +34,6 @@
   <String Id="FilesInUseTitle" Value="ملفات قيد الاستخدام" />
   <String Id="FilesInUseDescription" Value="تستخدم هذه البرامج ملفات يحتاج الإعداد إلى تحديثها. انقر فوق موافق لإغلاقها والمتابعة، أو إلغاء لإيقاف الإعداد." />
   <String Id="OK" Value="موافق" />
-  <String Id="PackageScopeError" Value="يجب تثبيت PdfCraft لجميع المستخدمين. شغّل الإعداد بصلاحيات المسؤول ومع ALLUSERS=1؛ التثبيت لمستخدم واحد غير مدعوم." />
   <String Id="DowngradeError" Value="يوجد إصدار أحدث من PdfCraft مثبت بالفعل." />
   <String Id="PackageDescription" Value="بيئة عمل PdfCraft لملفات PDF" />
   <String Id="HotFolderFeatureDescription" Value="معالجة المجلدات المضبوطة تلقائيًا في الخلفية." />
@@ -40,5 +41,6 @@
   <String Id="HotFolderShortcutDescription" Value="ضبط OCR التلقائي ومعالجة المسح الضوئي" />
   <String Id="AppDescription" Value="بيئة عمل مفتوحة المصدر لملفات PDF" />
   <String Id="CreatePdfCommand" Value="إنشاء PDF باستخدام PdfCraft…" />
+  <String Id="EditPdfCommand" Value="تحرير باستخدام PdfCraft" />
   <String Id="DocumentDescription" Value="مستند PDF" />
 </WixLocalization>

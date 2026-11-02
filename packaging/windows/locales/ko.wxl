@@ -5,7 +5,9 @@
   <String Id="SetupTitle" Value="[ProductName] 설치" />
   <String Id="WelcomeTitle" Value="[ProductName] 설치" />
   <String Id="WelcomeDescription" Value="모든 사용자용으로 [ProductName]을 설치하고 시작 메뉴에 추가합니다. 계속하려면 설치를 클릭하세요." />
+  <String Id="WelcomeDescriptionUser" Value="현재 계정에만 [ProductName]을 설치하고 시작 메뉴에 추가합니다. 계속하려면 설치를 클릭하세요." />
   <String Id="DesktopShortcut" Value="바탕 화면 바로 가기 만들기" />
+  <String Id="PdfContextMenu" Value="PDF 파일의 오른쪽 클릭 메뉴에 &quot;PdfCraft로 편집&quot; 추가" />
   <String Id="HotFolderCheckbox" Value="PdfCraft Hot Folder도 설치" />
   <String Id="HotFolderDescription" Value="Windows와 함께 시작되는 백그라운드 서비스를 추가합니다. 직접 구성하고 활성화한 작업만 처리됩니다." />
   <String Id="Install" Value="설치" />
@@ -32,7 +34,6 @@
   <String Id="FilesInUseTitle" Value="사용 중인 파일" />
   <String Id="FilesInUseDescription" Value="이 프로그램들이 업데이트해야 할 파일을 사용 중입니다. 확인을 클릭하여 프로그램을 닫고 계속하거나, 취소를 클릭하여 설치를 중지하세요." />
   <String Id="OK" Value="확인" />
-  <String Id="PackageScopeError" Value="PdfCraft는 모든 사용자용으로 설치해야 합니다. 관리자 권한으로 ALLUSERS=1을 지정하여 설치를 실행하세요. 사용자별 설치는 지원되지 않습니다." />
   <String Id="DowngradeError" Value="최신 버전의 PdfCraft가 이미 설치되어 있습니다." />
   <String Id="PackageDescription" Value="PdfCraft PDF 작업 도구" />
   <String Id="HotFolderFeatureDescription" Value="구성된 폴더를 백그라운드에서 자동으로 처리합니다." />
@@ -40,5 +41,6 @@
   <String Id="HotFolderShortcutDescription" Value="자동 OCR 및 스캔 처리 구성" />
   <String Id="AppDescription" Value="오픈 소스 PDF 작업 도구" />
   <String Id="CreatePdfCommand" Value="PdfCraft로 PDF 만들기…" />
+  <String Id="EditPdfCommand" Value="PdfCraft로 편집" />
   <String Id="DocumentDescription" Value="PDF 문서" />
 </WixLocalization>

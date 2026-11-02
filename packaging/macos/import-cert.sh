@@ -14,7 +14,7 @@ umask 077
 # shellcheck source=../env.sh
 . "$(dirname "${BASH_SOURCE[0]}")/../env.sh"
 
-if [ -z "${APPLE_CERTIFICATE:-}" ]; then
+if [[ -z "${APPLE_CERTIFICATE:-}" ]]; then
   warn "APPLE_CERTIFICATE is not set: macOS builds will be ad-hoc signed and not notarized"
   exit 0
 fi
@@ -32,7 +32,7 @@ security set-keychain-settings -lut 21600 "$KEYCHAIN"
 security unlock-keychain -p "$KC_PASS" "$KEYCHAIN"
 security import "$CERT" -P "${APPLE_CERTIFICATE_PASSWORD:-}" -T /usr/bin/codesign -T /usr/bin/security -t cert -f pkcs12 -k "$KEYCHAIN"
 rm -f "$CERT"
-if [ -n "${APPLE_INSTALLER_CERTIFICATE:-}" ]; then
+if [[ -n "${APPLE_INSTALLER_CERTIFICATE:-}" ]]; then
   printf '%s' "$APPLE_INSTALLER_CERTIFICATE" | base64 --decode >"$INSTALLER_CERT"
   security import "$INSTALLER_CERT" -P "${APPLE_INSTALLER_CERTIFICATE_PASSWORD:-}" \
     -T /usr/bin/productbuild -T /usr/bin/productsign -T /usr/bin/security -t cert -f pkcs12 -k "$KEYCHAIN"
@@ -45,18 +45,18 @@ security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KC_PASS"
 security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
 
 IDENTITY="$(security find-identity -v -p codesigning "$KEYCHAIN" | awk '/Developer ID Application/ { print $2; exit }')"
-if [ -z "$IDENTITY" ]; then
+if [[ -z "$IDENTITY" ]]; then
   security find-identity -v -p codesigning "$KEYCHAIN" >&2
   echo "error: no 'Developer ID Application' identity in APPLE_CERTIFICATE" >&2
   exit 1
 fi
 echo "Imported signing identity $IDENTITY"
 INSTALLER_IDENTITY="$(security find-identity -v "$KEYCHAIN" | awk '/Developer ID Installer/ { print $2; exit }')"
-if [ -n "${APPLE_INSTALLER_CERTIFICATE:-}" ] && [ -z "$INSTALLER_IDENTITY" ]; then
+if [[ -n "${APPLE_INSTALLER_CERTIFICATE:-}" && -z "$INSTALLER_IDENTITY" ]]; then
   echo "error: no 'Developer ID Installer' identity in APPLE_INSTALLER_CERTIFICATE" >&2
   exit 1
 fi
-if [ -n "${GITHUB_ENV:-}" ]; then
+if [[ -n "${GITHUB_ENV:-}" ]]; then
   { echo "MACOS_SIGN_IDENTITY=$IDENTITY"; echo "MACOS_KEYCHAIN=$KEYCHAIN"; echo "MACOS_INSTALLER_SIGN_IDENTITY=$INSTALLER_IDENTITY"; } >>"$GITHUB_ENV"
 else
   echo "MACOS_SIGN_IDENTITY=$IDENTITY"

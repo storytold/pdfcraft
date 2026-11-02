@@ -6,6 +6,7 @@ mod i18n;
 mod source_ui;
 mod startup;
 mod ui;
+mod widgets;
 mod worker;
 mod worker_process;
 

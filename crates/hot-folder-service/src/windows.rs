@@ -6,10 +6,13 @@ use std::sync::{
 };
 use std::time::Duration;
 use windows_service::{
-    service::*,
+    service::{
+        Service, ServiceAccess, ServiceAction, ServiceActionType, ServiceControl, ServiceControlAccept, ServiceExitCode, ServiceFailureActions,
+        ServiceFailureResetPeriod, ServiceInfo, ServiceSidType, ServiceStartType, ServiceState, ServiceStatus, ServiceType,
+    },
     service_control_handler::{self, ServiceControlHandlerResult},
     service_dispatcher,
-    service_manager::*,
+    service_manager::{ServiceManager, ServiceManagerAccess},
 };
 
 fn service(access: ServiceAccess) -> Result<Service, windows_service::Error> {

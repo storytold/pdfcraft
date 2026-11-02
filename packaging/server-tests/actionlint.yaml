@@ -1,3 +1,0 @@
-self-hosted-runner:
-  labels:
-    - pdfcraft-server-2019-disposable

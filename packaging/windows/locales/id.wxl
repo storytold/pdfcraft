@@ -5,7 +5,9 @@
   <String Id="SetupTitle" Value="Penyiapan [ProductName]" />
   <String Id="WelcomeTitle" Value="Instal [ProductName]" />
   <String Id="WelcomeDescription" Value="Penyiapan akan menginstal [ProductName] untuk semua pengguna dan menambahkannya ke menu Mulai. Klik Instal untuk melanjutkan." />
+  <String Id="WelcomeDescriptionUser" Value="Penyiapan akan menginstal [ProductName] hanya untuk akun Anda dan menambahkannya ke menu Mulai. Klik Instal untuk melanjutkan." />
   <String Id="DesktopShortcut" Value="Buat pintasan desktop" />
+  <String Id="PdfContextMenu" Value="Tambahkan &quot;Edit dengan PdfCraft&quot; ke menu klik kanan file PDF" />
   <String Id="HotFolderCheckbox" Value="Instal juga PdfCraft Hot Folder" />
   <String Id="HotFolderDescription" Value="Menambahkan layanan latar belakang yang dimulai bersama Windows. Hanya tugas yang Anda konfigurasi dan aktifkan yang diproses." />
   <String Id="Install" Value="Instal" />
@@ -32,7 +34,6 @@
   <String Id="FilesInUseTitle" Value="Berkas sedang digunakan" />
   <String Id="FilesInUseDescription" Value="Program ini sedang menggunakan berkas yang perlu diperbarui. Klik OK untuk menutupnya dan melanjutkan, atau Batal untuk menghentikan penyiapan." />
   <String Id="OK" Value="OK" />
-  <String Id="PackageScopeError" Value="PdfCraft harus diinstal untuk semua pengguna. Jalankan penyiapan dengan hak administrator dan ALLUSERS=1; instalasi per pengguna tidak didukung." />
   <String Id="DowngradeError" Value="Versi PdfCraft yang lebih baru sudah diinstal." />
   <String Id="PackageDescription" Value="Ruang kerja PDF PdfCraft" />
   <String Id="HotFolderFeatureDescription" Value="Memproses folder yang dikonfigurasi secara otomatis di latar belakang." />
@@ -40,5 +41,6 @@
   <String Id="HotFolderShortcutDescription" Value="Konfigurasikan OCR otomatis dan pemrosesan pindai" />
   <String Id="AppDescription" Value="Ruang kerja PDF sumber terbuka" />
   <String Id="CreatePdfCommand" Value="Buat PDF dengan PdfCraft…" />
+  <String Id="EditPdfCommand" Value="Edit dengan PdfCraft" />
   <String Id="DocumentDescription" Value="Dokumen PDF" />
 </WixLocalization>

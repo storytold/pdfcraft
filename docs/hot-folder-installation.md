@@ -13,9 +13,12 @@ configure storage that is available to the service account for unattended proces
 
 ## Windows
 
-Select **Also install PdfCraft Hot Folder** in the MSI. It is unchecked on a new installation.
-An upgrade preserves an installed companion unless you deselect it. For unattended installation,
-pass `INSTALLHOTFOLDER=1`; pass `INSTALLHOTFOLDER=0` to decline it on a new installation.
+Choose **Everyone on this computer** in the MSI, then select **Also install PdfCraft Hot
+Folder**. It is unchecked on a new installation. The Hot Folder registers a Windows service, so
+it is offered only for an installation for everyone; **Only for me** leaves it out. An upgrade
+preserves an installed companion unless you deselect it. For unattended installation, pass
+`ALLUSERS=1 INSTALLHOTFOLDER=1`; without `ALLUSERS=1` the MSI installs for one account and skips
+the companion. Pass `INSTALLHOTFOLDER=0` to decline it on a new installation.
 The maintenance screen can add or remove the companion without removing PdfCraft.
 
 The **PdfCraft Hot Folder** Start menu entry opens the task file used by the service:
@@ -26,9 +29,11 @@ Do not put watched files in the protected program or service-configuration direc
 
 The MSI registers automatic startup and recovery after crashes or controlled service errors,
 with a 60-second restart delay (including subsequent failures). An administrator stop does not
-trigger recovery. Its task directory allows administrators, LocalService and the service SID
-to write; ordinary users may read status. The separate `secrets` directory grants access only
-to administrators, SYSTEM, LocalService and `NT SERVICE\PdfCraftHotFolder`. Credentials
+trigger recovery. Its task directory allows administrators, SYSTEM and the service's own SID
+`NT SERVICE\PdfCraftHotFolder` to write; ordinary users may read status. The shared
+LocalService identity gets no grant, so other LocalService services cannot read or change the
+tasks. The MSI enables that service SID before the first start. The separate `secrets` directory
+grants access only to administrators, SYSTEM and `NT SERVICE\PdfCraftHotFolder`. Credentials
 must never be written into exported task JSON. Installer removal stops and unregisters the
 service and removes its executable, but retains nonempty task and credential directories.
 
@@ -60,7 +65,7 @@ making the private configuration or secret store readable by other users. The fo
 explicit elevated command reapplies service-SID/recovery settings to a matching installation:
 
 ```powershell
-& 'C:\Program Files\PdfCraft\pdfcraft-hot-folder.exe' --service-action prepare-account `
+& 'C:\Program Files\ArtCraft\PdfCraft\pdfcraft-hot-folder.exe' --service-action prepare-account `
   --config 'C:\ProgramData\PdfCraft\HotFolder\tasks.json'
 ```
 
@@ -124,7 +129,9 @@ in `/var/lib/pdfcraft-hot-folder/tasks.json`, and enables `pdfcraft-hot-folder.s
 system service manager. The state directory is owned by that account with mode 0700.
 
 Use administrative access to manage the service configuration; preserve its service-account
-ownership and mode 0600. Provision remote-source credentials under the same service account,
+ownership and mode 0600. Opened from the desktop menu as an ordinary user, the manager cannot
+enter that directory: it says the task file belongs to the service and refuses to save, rather
+than showing an empty task list that a save would replace. Provision remote-source credentials under the same service account,
 or use the task manager with administrative permission. Administrative provisioning requires
 an existing private configuration owned by a non-root service account and creates secrets with
 that account's ownership; it does not run the document processor as root.
@@ -157,17 +164,30 @@ Official macOS PKG signing additionally requires a **Developer ID Installer** ce
 alongside the application's Developer ID Application certificate. Without signing credentials,
 preview apps are ad-hoc signed and their PKG is unsigned and not notarized.
 
-`.github/workflows/hot-folder-services.yml` exercises the real Windows Service Control Manager,
-Linux systemd and macOS launchd with a synthetic worker. It verifies boot registration, account,
-start/stop, startup enable/disable and graceful cancellation. Installer tests compile the actual
-MSI/PKG/DEB definitions around the synthetic worker and verify optional installation, task
-preservation and removal. These run only on disposable CI machines. They do not replace testing
-the final OCR executable and signed installer artifacts on each supported architecture.
+The service and installer suites below are not wired into this repository's CI: workflows here
+only call the shared `craft-common-actions` workflows, and running these needs a shared job that
+can act as administrator on disposable machines. Until one exists, run them by hand on a
+disposable machine or VM, never on a workstation you care about:
 
-`.github/workflows/hot-folder-server.yml` is the separate, manual acceptance suite for an
-already-successful matching installer build. It installs the real x64 OCR service on disposable
-Windows Server 2022/2025 hosts, exercises local folders and authenticated SMB, output outages,
-worker crashes, bounded cancellation and same-version account-preserving upgrade. The optional
-Server 2019 path requires an explicitly configured disposable self-hosted runner; hosted CI
-cannot establish Server 2019 compatibility. See `packaging/server-tests/README.txt` for the
-provenance checks and invocation. A checked-in suite is not evidence of a successful run.
+- `packaging/service-tests/unix.sh` (Linux systemd, macOS launchd), `windows.ps1` and
+  `check-stop-wait.ps1` (Windows Service Control Manager) exercise the real service managers with
+  a synthetic worker (`cargo build -p pdfcraft-hot-folder-service --example service_probe`). They
+  verify boot registration, account, start/stop, startup enable/disable and graceful cancellation.
+- `windows-msi.ps1` (WiX 5.0.2), `macos-pkg.sh` and `linux-deb.sh` (nfpm) compile the actual
+  MSI/PKG/DEB definitions around the synthetic worker and verify optional installation, task
+  preservation and removal.
+- The root-only Linux credential provisioning test is `#[ignore]`d in normal runs:
+  `sudo <engine test binary> --exact
+  hot_folder_sources::credentials::tests::unix_admin_provisioning_preserves_service_uid_gid_and_private_modes --ignored`.
+- `packaging/lint-hot-folder.sh` runs shellcheck, xmllint and the server-suite syntax check over
+  the Hot Folder installer scripts.
+
+None of this replaces testing the final OCR executable and signed installer artifacts on each
+supported architecture.
+
+`packaging/server-tests/` is the separate acceptance suite for an already-successful matching
+installer build. It installs the real x64 OCR service on disposable Windows Server 2022/2025
+hosts, exercises local folders and authenticated SMB, output outages, worker crashes, bounded
+cancellation and same-version account-preserving upgrade. The optional Server 2019 path requires
+an explicitly configured disposable self-hosted runner. See `packaging/server-tests/README.txt`
+for the provenance checks and invocation. A checked-in suite is not evidence of a successful run.

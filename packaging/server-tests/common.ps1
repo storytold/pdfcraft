@@ -27,8 +27,13 @@ function Write-Json([string] $Path, $Value) {
 
 function Assert-SafePath([string] $Path, [string] $AllowedRoot) {
     $absolute = [IO.Path]::GetFullPath($Path)
-    $boundary = [IO.Path]::GetFullPath($AllowedRoot).TrimEnd('\')
-    Assert-That ($absolute -eq $boundary -or $absolute.StartsWith($boundary + '\', [StringComparison]::OrdinalIgnoreCase)) "Unsafe test path: $absolute"
+    $boundary = [IO.Path]::TrimEndingDirectorySeparator([IO.Path]::GetFullPath($AllowedRoot))
+    # The harness also runs on Linux. Preserve filesystem roots and use native
+    # separators and case rules rather than accepting Windows-style prefixes there.
+    $separator = [string] [IO.Path]::DirectorySeparatorChar
+    $comparison = if ($IsWindows) { [StringComparison]::OrdinalIgnoreCase } else { [StringComparison]::Ordinal }
+    $prefix = if ($boundary.EndsWith($separator)) { $boundary } else { $boundary + $separator }
+    Assert-That ($absolute.Equals($boundary, $comparison) -or $absolute.StartsWith($prefix, $comparison)) "Unsafe test path: $absolute"
     $cursor = $absolute
     while ($cursor -and $cursor.Length -ge $boundary.Length) {
         if (Test-Path -LiteralPath $cursor) {

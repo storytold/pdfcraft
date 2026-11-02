@@ -26,7 +26,6 @@ pub struct Status {
 }
 
 impl Status {
-    #[cfg(any(windows, target_os = "linux", target_os = "macos"))]
     fn absent() -> Self {
         Self { installed: false, enabled: false, running: false, account: String::new() }
     }

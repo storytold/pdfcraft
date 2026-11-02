@@ -7,8 +7,11 @@ use std::{
 
 fn worker(config: &Path, stopping: &AtomicBool) -> Result<(), String> {
     while !stopping.load(Ordering::SeqCst) {
-        if config.with_extension("fail").exists() {
-            std::fs::remove_file(config.with_extension("fail")).map_err(|e| e.to_string())?;
+        // Fail exactly once per request: only after the request file is gone. While the test's
+        // writer still holds it open on Windows, removal fails; failing anyway would leave it
+        // in place, so the recovered process failed again and SCM's pending restart outlived a
+        // later administrator stop.
+        if config.with_extension("fail").exists() && std::fs::remove_file(config.with_extension("fail")).is_ok() {
             return Err("Synthetic controlled service failure".into());
         }
         std::fs::write(config.with_extension("heartbeat"), b"running").map_err(|e| e.to_string())?;

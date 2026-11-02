@@ -32,7 +32,11 @@ pub mod dict;
 pub mod stream;
 
 /// A trait for PDF objects.
-pub(crate) trait ObjectLike<'a>: TryFrom<Object<'a>> + Readable<'a> + Debug + Clone {}
+pub(crate) trait ObjectLike<'a>: TryFrom<Object<'a>> + Readable<'a> + Debug + Clone {
+    /// PdfCraft patch (32): whether this is several items of an array, read one by one (a tuple).
+    /// Such a thing can't itself be given by reference, so one at its start is its first item's.
+    const GROUP: bool = false;
+}
 
 /// A trait for PDF objects that can be borrowed directly from an [`Object`].
 pub(crate) trait ObjectRefLike<'a>: Sized {
@@ -189,10 +193,14 @@ impl<'a> Readable<'a> for Object<'a> {
             b'<' => match r.peek_bytes(2)? {
                 b"<<" => {
                     let mut cloned = r.clone();
-                    let dict = Dict::read(&mut cloned, ctx)?;
+                    let dict = Dict::read(&mut cloned, ctx);
                     cloned.skip_white_spaces_and_comments();
+                    let is_stream = cloned.forward_tag(b"stream").is_some();
+                    // PdfCraft patch: what the clone looked at past the end counts for `r` too.
+                    r.absorb_past_end(&cloned);
+                    let dict = dict?;
 
-                    if cloned.forward_tag(b"stream").is_some() {
+                    if is_stream {
                         Object::Stream(Stream::read(r, ctx)?)
                     } else {
                         r.jump(cloned.offset());

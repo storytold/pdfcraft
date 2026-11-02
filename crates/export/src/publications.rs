@@ -2,7 +2,8 @@
 //! https://learn.microsoft.com/office/open-xml/spreadsheet/structure-of-a-spreadsheetml-document
 //! https://www.w3.org/TR/epub-33/
 
-use super::{Item, Page, Zip, esc, hex, items};
+use super::layout::{Item, items};
+use super::{Page, Zip, esc, hex};
 
 const REL: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
 const PKG_REL: &str = "http://schemas.openxmlformats.org/package/2006/relationships";
@@ -98,26 +99,32 @@ fn sheet_text(text: &str) -> String {
 }
 
 fn cell(text: &str, col: usize, row: usize, bold: bool, italic: bool, color: [f64; 3]) -> Result<String, String> {
+    rich_cell(&[(text, bold, italic, color)], col, row)
+}
+
+/// An inline-string cell of formatted runs `(text, bold, italic, colour)`, one `<r>` each, so an
+/// italic run inside a paragraph keeps its style without ending the paragraph (#4158).
+fn rich_cell(runs: &[(&str, bool, bool, [f64; 3])], col: usize, row: usize) -> Result<String, String> {
     // Excel's limit is UTF-16 code units, not bytes or Unicode scalar values.
-    if text.encode_utf16().count() > 32_767 {
+    if runs.iter().map(|(text, ..)| text.encode_utf16().count()).sum::<usize>() > 32_767 {
         return Err("a spreadsheet cell exceeds Excel's 32767-character limit; use another output format".into());
     }
-    let mut properties = String::new();
-    if bold {
-        properties.push_str("<b/>");
-    }
-    if italic {
-        properties.push_str("<i/>");
-    }
-    if let Some(color) = hex(color) {
-        properties.push_str(&format!("<color rgb=\"FF{color}\"/>"));
+    let mut xml = String::new();
+    for &(text, bold, italic, color) in runs {
+        let mut properties = String::new();
+        if bold {
+            properties.push_str("<b/>");
+        }
+        if italic {
+            properties.push_str("<i/>");
+        }
+        if let Some(color) = hex(color) {
+            properties.push_str(&format!("<color rgb=\"FF{color}\"/>"));
+        }
+        xml.push_str(&format!("<r><rPr>{properties}</rPr><t xml:space=\"preserve\">{}</t></r>", sheet_text(text)));
     }
     // Always strings: OCR must not silently change identifiers, dates or formulas.
-    Ok(format!(
-        "<c r=\"{}{row}\" t=\"inlineStr\" s=\"0\"><is><r><rPr>{properties}</rPr><t xml:space=\"preserve\">{}</t></r></is></c>",
-        column(col),
-        sheet_text(text)
-    ))
+    Ok(format!("<c r=\"{}{row}\" t=\"inlineStr\" s=\"0\"><is>{xml}</is></c>", column(col)))
 }
 
 /// One worksheet per PDF page. Detected tables become cells/merged ranges; other
@@ -144,8 +151,9 @@ pub fn xlsx(pages: &[Page], title: &str) -> Result<Vec<u8>, String> {
         let mut image_number = 0usize;
         for item in items(std::slice::from_ref(page)) {
             match item {
-                Item::Para(block, _) => {
-                    rows.push_str(&format!("<row r=\"{row}\">{}</row>", cell(&block.text, 0, row, block.bold, block.italic, block.color)?));
+                Item::Para(runs, _) => {
+                    let runs: Vec<_> = runs.iter().map(|r| (r.text.as_str(), r.block.bold, r.block.italic, r.block.color)).collect();
+                    rows.push_str(&format!("<row r=\"{row}\">{}</row>", rich_cell(&runs, 0, row)?));
                     row += 1;
                 }
                 Item::Table(table) => {
@@ -258,9 +266,10 @@ pub fn epub(pages: &[Page], title: &str, language: &str) -> Result<Vec<u8>, Stri
         let mut image_number = 0;
         for item in items(std::slice::from_ref(page)) {
             match item {
-                Item::Para(block, level) => {
+                Item::Para(runs, level) => {
                     let tag = if level == 0 { "p".to_owned() } else { format!("h{level}") };
-                    body.push_str(&format!("<{tag}>{}</{tag}>", rich(&block.text, block.bold, block.italic)));
+                    let text: String = runs.iter().map(|r| rich(&r.text, r.block.bold, r.block.italic)).collect();
+                    body.push_str(&format!("<{tag}>{text}</{tag}>"));
                 }
                 Item::Table(table) => {
                     body.push_str("<table>");
@@ -280,7 +289,7 @@ pub fn epub(pages: &[Page], title: &str, language: &str) -> Result<Vec<u8>, Stri
                     archive.add(&format!("EPUB/{name}"), &image.bytes, false)?;
                     manifest.push_str(&format!("<item id=\"p{number}i{image_number}\" href=\"{name}\" media-type=\"{mime}\"/>"));
                     body.push_str(&format!("<p><img src=\"{name}\" alt=\"Image {image_number} on page {number}\"/></p>"));
-                    for byte in &image.bytes {
+                    for byte in image.bytes.iter() {
                         fingerprint = (fingerprint ^ u64::from(*byte)).wrapping_mul(1099511628211);
                     }
                 }
@@ -358,6 +367,8 @@ mod tests {
                     bold: row == 0,
                     italic: false,
                     color: [0.0; 3],
+                    rotation: 0.0,
+                    space_around: [false; 2],
                 });
             }
         }
@@ -382,7 +393,7 @@ mod tests {
         std::io::Write::write_all(&mut z, &[0, 30, 90, 170]).unwrap();
         chunk(&mut png, b"IDAT", &z.finish().unwrap());
         chunk(&mut png, b"IEND", &[]);
-        page.images.push(Image { ext: "png", bytes: png, rect: [40.0, 400.0, 140.0, 500.0] });
+        page.images.push(Image { ext: "png", bytes: png.into(), rect: [40.0, 400.0, 140.0, 500.0], size: [100.0, 100.0], rotation: 0.0 });
         page
     }
 
@@ -398,8 +409,40 @@ mod tests {
         }
         assert!(!sheet.contains("<f>"));
         assert!(parts.contains_key("xl/worksheets/sheet2.xml"));
-        assert_eq!(parts["xl/media/page1-image1.png"], fixture().images[0].bytes);
+        assert_eq!(parts["xl/media/page1-image1.png"], &*fixture().images[0].bytes);
         assert!(String::from_utf8(parts["xl/drawings/drawing1.xml"].clone()).unwrap().contains("r:embed=\"i1\""));
+    }
+
+    /// #4158: "Before *Chevron* after." stays one paragraph, its italic case name a run of its own.
+    #[test]
+    fn an_italic_word_stays_in_its_sentence_in_spreadsheets_and_epub() {
+        let block = |text: &str, x0: f64, x1: f64, y1: f64, italic: bool| Block {
+            text: text.into(),
+            rect: [x0, 700.0, x1, y1],
+            size: 12.0,
+            bold: false,
+            italic,
+            color: [0.0; 3],
+            rotation: 0.0,
+            space_around: [false; 2],
+        };
+        let blocks = vec![
+            block("Before", 72.0, 110.0, 712.0, false),
+            block("Chevron", 113.0, 158.0, 712.6, true),
+            block("after.", 161.0, 190.0, 712.0, false),
+        ];
+        let page = Page { width: 612.0, height: 792.0, blocks, ..Page::default() };
+        let sheet_parts = parts(&xlsx(std::slice::from_ref(&page), "Opinion").unwrap());
+        let sheet = String::from_utf8(sheet_parts["xl/worksheets/sheet1.xml"].clone()).unwrap();
+        assert!(
+            sheet.contains(
+                "<row r=\"1\"><c r=\"A1\" t=\"inlineStr\" s=\"0\"><is><r><rPr></rPr><t xml:space=\"preserve\">Before </t></r><r><rPr><i/></rPr><t xml:space=\"preserve\">Chevron </t></r><r><rPr></rPr><t xml:space=\"preserve\">after.</t></r></is></c></row>"
+            ),
+            "{sheet}"
+        );
+        let epub_parts = parts(&epub(std::slice::from_ref(&page), "Opinion", "en").unwrap());
+        let chapter = String::from_utf8(epub_parts["EPUB/page1.xhtml"].clone()).unwrap();
+        assert!(chapter.contains("<p>Before <em>Chevron </em>after.</p>"), "{chapter}");
     }
 
     #[test]
@@ -417,7 +460,7 @@ mod tests {
         let chapter = String::from_utf8(parts["EPUB/page1.xhtml"].clone()).unwrap();
         assert!(chapter.contains("<table>"));
         assert!(chapter.contains("日本語"));
-        assert_eq!(parts["EPUB/images/page1-image1.png"], fixture().images[0].bytes);
+        assert_eq!(parts["EPUB/images/page1-image1.png"], &*fixture().images[0].bytes);
         assert_eq!(bytes, epub(&[fixture(), fixture()], "Report & notes", "de-AT").unwrap());
     }
 

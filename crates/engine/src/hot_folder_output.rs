@@ -18,6 +18,9 @@ use sha2::{Digest, Sha256};
 use crate::export::{Exporter, ImageFormat};
 use crate::{Session, hot_folder::confined};
 
+#[path = "hot_folder_optimization.rs"]
+pub mod optimization;
+
 const MAX_INPUT_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_STAGED_BYTES: u64 = 1024 * 1024 * 1024;
 const MAX_OUTPUT_FILES: usize = 10_000;
@@ -121,6 +124,8 @@ pub struct SaveStep {
     pub jpeg_quality: u8,
     /// EPUB language tag; "und" means undetermined. The scheduler fills its OCR language.
     pub language: String,
+    /// Optional optimization of final PDF bytes, after grouping and image-only conversion.
+    pub optimization: optimization::Settings,
 }
 
 impl Default for SaveStep {
@@ -133,6 +138,7 @@ impl Default for SaveStep {
             dpi: 150.0,
             jpeg_quality: 90,
             language: "und".into(),
+            optimization: optimization::Settings::default(),
         }
     }
 }
@@ -172,6 +178,10 @@ impl OutputPlan {
             return Err("choose between 1 and 16 output saving steps".into());
         }
         for step in &self.steps {
+            step.optimization.validate()?;
+            if step.optimization.enabled() && !matches!(step.format, Format::Pdf | Format::ImagePdf) {
+                return Err("PDF optimization is available only for PDF or image-only PDF saving steps".into());
+            }
             if !step.dpi.is_finite() || !(18.0..=1200.0).contains(&step.dpi) || !(1..=100).contains(&step.jpeg_quality) {
                 return Err("output resolution must be 18..1200 dpi and JPEG quality 1..100".into());
             }
@@ -197,6 +207,8 @@ pub struct OutputReceipt {
     pub proofs: Vec<OutputProof>,
     /// Rendered pages that were bounded by the renderer's pixel limit.
     pub warnings: Vec<String>,
+    #[serde(default)]
+    pub optimizations: Vec<optimization::Report>,
 }
 
 /// Expected content computed from staged export bytes, before publication.
@@ -297,6 +309,7 @@ struct Staged {
     extension: &'static str,
     size: u64,
     sha256: String,
+    optimization: Option<optimization::Report>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -322,6 +335,10 @@ fn save_inner(
         total = total.saturating_add(input.bytes.len() as u64);
         if total > MAX_INPUT_BYTES {
             return Err("combined output inputs exceed 512 MiB; use smaller batches".into());
+        }
+        if plan.steps.iter().any(|step| step.optimization.enabled()) {
+            stopped(should_stop)?;
+            optimization::reject_signed(input.bytes.clone())?;
         }
     }
     let timestamp = i64::try_from(batch_time).ok().and_then(|value| DateTime::<Utc>::from_timestamp(value, 0)).ok_or("invalid output timestamp")?;
@@ -410,19 +427,32 @@ fn save_inner(
                     Format::Epub => Arc::new(pdfcraft_export::epub(&document.export_pages(), &stem, &step.language)?),
                     Format::Png | Format::Jpeg | Format::Tiff | Format::Analysis => return Err("invalid output state".into()),
                 };
+                let (output, optimized) = if matches!(step.format, Format::Pdf | Format::ImagePdf) {
+                    step.optimization.apply(output, timestamp.timestamp(), should_stop)?
+                } else {
+                    (output, None)
+                };
                 stage(&mut staged, &mut staged_bytes, &folder, &stem, step.format.extension(), output.as_slice(), retryable)?;
+                if let Some(file) = staged.last_mut() {
+                    file.optimization = optimized;
+                }
             }
         }
     }
     // All render/export work succeeded; only now publish the staged files.
-    for file in staged {
+    for mut file in staged {
         stopped(should_stop)?;
         let bytes = file.size;
         let sha256 = file.sha256.clone();
+        let optimized = file.optimization.take();
         *retryable = true;
         let path = publish(file, root)?;
         *retryable = false;
         receipt.proofs.push(OutputProof { path: path.clone(), bytes, sha256 });
+        if let Some(mut report) = optimized {
+            report.path = path.clone();
+            receipt.optimizations.push(report);
+        }
         receipt.outputs.push(path);
     }
     Ok(())
@@ -463,7 +493,15 @@ fn stage(
     let mut file = tempfile::Builder::new().prefix(".pdfcraft-output-").tempfile_in(folder).map_err(|error| error.to_string())?;
     file.write_all(bytes).and_then(|_| file.as_file().sync_all()).map_err(|error| format!("cannot stage output: {error}"))?;
     *retryable = false;
-    staged.push(Staged { file, folder: folder.to_owned(), stem: stem.to_owned(), extension, size: bytes.len() as u64, sha256: digest(bytes) });
+    staged.push(Staged {
+        file,
+        folder: folder.to_owned(),
+        stem: stem.to_owned(),
+        extension,
+        size: bytes.len() as u64,
+        sha256: digest(bytes),
+        optimization: None,
+    });
     Ok(())
 }
 
@@ -764,8 +802,87 @@ mod tests {
         assert!(!plan.needs_batch());
         assert_eq!(plan.steps[0].format, Format::Pdf);
         assert_eq!(plan.steps[0].name_template, "{name}");
+        assert!(!plan.steps[0].optimization.enabled());
         for unsupported in ["djvu", "fb2", "csv"] {
             assert!(serde_json::from_str::<Format>(&format!("\"{unsupported}\"")).is_err());
+        }
+    }
+
+    #[test]
+    fn optimized_grouped_pdf_and_text_have_matching_proofs_sizes_and_stable_retries() {
+        let dir = tempfile::tempdir().unwrap();
+        let inputs = [input("a.pdf", "Alpha first searchable page"), input("b.pdf", "Beta second searchable page")];
+        let steps = vec![
+            SaveStep {
+                grouping: Grouping::All,
+                name_template: "combined".into(),
+                optimization: optimization::Settings { mode: optimization::Mode::Lossless, ..Default::default() },
+                ..Default::default()
+            },
+            SaveStep { grouping: Grouping::All, name_template: "combined".into(), format: Format::Txt, ..Default::default() },
+        ];
+        fs::write(dir.path().join("combined.pdf"), b"unrelated existing file").unwrap();
+        let receipt = run(&inputs, dir.path(), steps.clone()).unwrap();
+        assert_eq!(receipt.outputs.len(), 2);
+        assert_eq!(receipt.optimizations.len(), 1);
+        let report = &receipt.optimizations[0];
+        assert!(report.path.ends_with("combined (1).pdf"));
+        assert!(report.bytes_after <= report.bytes_before);
+        let bytes = fs::read(&report.path).unwrap();
+        assert_eq!(bytes.len() as u64, report.bytes_after);
+        let proof = receipt.proofs.iter().find(|proof| proof.path == report.path).unwrap();
+        assert_eq!(proof.bytes, report.bytes_after);
+        assert_eq!(proof.sha256, digest(&bytes));
+        let contents = text(&report.path);
+        assert!(contents.find("Alpha first").unwrap() < contents.find("Beta second").unwrap());
+        assert!(fs::read_to_string(dir.path().join("combined.txt")).unwrap().contains("Beta second"));
+        assert_eq!(run(&inputs, dir.path(), steps).unwrap().outputs, receipt.outputs);
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 3);
+        assert_eq!(fs::read(dir.path().join("combined.pdf")).unwrap(), b"unrelated existing file");
+    }
+
+    #[test]
+    fn custom_optimization_applies_after_image_only_export_and_rejects_non_pdf_steps() {
+        let dir = tempfile::tempdir().unwrap();
+        let inputs = [input("source.pdf", "Raster output stays raster only")];
+        let settings = optimization::Settings {
+            mode: optimization::Mode::Custom,
+            color: optimization::Images { downsample: false, compression: optimization::Compression::Zip, ..Default::default() },
+            gray: optimization::Images { downsample: false, compression: optimization::Compression::Retain, ..Default::default() },
+        };
+        let step = SaveStep { format: Format::ImagePdf, dpi: 72.0, optimization: settings.clone(), ..Default::default() };
+        let receipt = run(&inputs, dir.path(), vec![step]).unwrap();
+        assert_eq!(receipt.optimizations.len(), 1);
+        assert!(receipt.optimizations[0].bytes_after <= receipt.optimizations[0].bytes_before);
+        assert!(text(&receipt.outputs[0]).trim().is_empty());
+        let invalid = SaveStep { format: Format::Txt, optimization: settings, ..Default::default() };
+        let error = run(&inputs, dir.path(), vec![invalid]).unwrap_err();
+        assert!(error.message.contains("only for PDF"));
+        assert!(error.outputs.is_empty());
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn signed_input_is_refused_before_grouping_or_image_conversion_can_remove_its_signature() {
+        let p12 = fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12")).unwrap();
+        let identity = crate::sign::pkcs12::open(&p12, "test").unwrap();
+        let mut session = Session::new().with_timestamp(1_800_000_000);
+        let source = input("signed.pdf", "Keep the signature");
+        let id = session.open("signed.pdf", None, source.bytes, None).unwrap();
+        let signed = session.sign(id, &identity, crate::SignOptions { rect: None, ..Default::default() }).unwrap();
+        for format in [Format::Pdf, Format::ImagePdf] {
+            let dir = tempfile::tempdir().unwrap();
+            let inputs = [input("first.pdf", "Unsigned first page"), Input { relative: "signed.pdf".into(), bytes: signed.clone() }];
+            let steps = vec![SaveStep {
+                format,
+                grouping: Grouping::All,
+                optimization: optimization::Settings { mode: optimization::Mode::Lossless, ..Default::default() },
+                ..Default::default()
+            }];
+            let error = run(&inputs, dir.path(), steps).unwrap_err();
+            assert!(error.message.contains("signed PDFs"), "{error}");
+            assert!(error.outputs.is_empty());
+            assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 0);
         }
     }
 }

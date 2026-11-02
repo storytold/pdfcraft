@@ -20,6 +20,8 @@ use std::sync::Arc;
 
 /// The input/output type of functions.
 pub(crate) type Values = SmallVec<[f32; 4]>;
+/// PdfCraft patch (backport of hayro 0.8): interior breakpoints of stitching functions.
+pub(crate) type StitchingBounds = SmallVec<[f32; 3]>;
 type TupleVec = SmallVec<[(f32, f32); 4]>;
 
 // PdfCraft patch: PDF functions are untrusted object graphs. A normal color/transfer function
@@ -98,6 +100,15 @@ impl Function {
             FunctionType::Type2(t2) => Some(t2.eval(*input.first()?)),
             FunctionType::Type3(t3) => t3.eval(*input.first()?),
             FunctionType::Type4(t4) => Some(t4.eval(input)?),
+        }
+    }
+
+    /// PdfCraft patch (backport of hayro 0.8): inputs where a stitching function switches
+    /// sub-function, so a gradient approximation can place a stop exactly there.
+    pub(crate) fn stitching_bounds(&self) -> StitchingBounds {
+        match self.0.as_ref() {
+            FunctionType::Type3(t3) => t3.stitching_bounds(),
+            _ => SmallVec::new(),
         }
     }
 }

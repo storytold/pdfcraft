@@ -3,9 +3,44 @@ use serde_json::Value;
 #[cfg(not(target_arch = "wasm32"))]
 use serde_json::json;
 
+/// The environment variable a tool may read an FTP password from. Only the dedicated prefix is
+/// readable, so a caller cannot send other process secrets (GITHUB_TOKEN, cloud keys) to an
+/// FTP host it chose.
+#[cfg(not(target_arch = "wasm32"))]
+fn password_variable(variable: &str) -> Result<&str> {
+    const PREFIX: &str = "PDFCRAFT_HOT_FOLDER_";
+    let valid = variable.len() > PREFIX.len()
+        && variable.len() <= 128
+        && variable.starts_with(PREFIX)
+        && variable.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_');
+    if valid { Ok(variable) } else { Err(failed("password_env must name a PDFCRAFT_HOT_FOLDER_* environment variable")) }
+}
+
 impl Automation {
     #[cfg(not(target_arch = "wasm32"))]
+    fn check_hot_folder_roots(&self) -> Result<()> {
+        if self.roots.is_some() {
+            return Err(failed(
+                "Hot Folder does not support separate automation read/write roots; use --root to confine all task paths to one folder",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Refuses Hot Folder administration in a session that was not given it.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn check_hot_folder_admin(&self) -> Result<()> {
+        if self.hot_folder_admin {
+            return Ok(());
+        }
+        Err(failed(
+            "Hot Folder administration (system service changes and stored source credentials) is off in this session;              start pdfcraft-cli mcp with --allow-hot-folder-admin to allow it",
+        ))
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn hot_folder_project(&self, args: &Args) -> Result<Value> {
+        self.check_hot_folder_roots()?;
         use pdfcraft_engine::hot_folder_sources as source;
         let path = self.resolve(args.str("path")?, true)?;
         let parent = path.parent().ok_or_else(|| failed("project needs a parent folder"))?;
@@ -27,6 +62,7 @@ impl Automation {
 
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn hot_folder_source(&self, args: &Args) -> Result<Value> {
+        self.check_hot_folder_roots()?;
         use pdfcraft_engine::{hot_folder as hf, hot_folder_sources as source};
         let path = self.resolve(args.str("config")?, false)?;
         let config = hf::load_config(&path).map_err(failed)?;
@@ -38,7 +74,11 @@ impl Automation {
             _ => return Err(failed("this task has no authenticated remote source")),
         };
         let action = args.str("action")?;
-        if task.enabled && matches!(action, "save_ftp_password" | "forget_credentials" | "outlook_begin" | "outlook_poll") {
+        let changes_credentials = matches!(action, "save_ftp_password" | "forget_credentials" | "outlook_begin" | "outlook_poll");
+        if changes_credentials {
+            self.check_hot_folder_admin()?;
+        }
+        if task.enabled && changes_credentials {
             return Err(failed("stop the task before changing its credentials"));
         }
         let store = source::CredentialStore::for_config(&path, self.root.as_deref()).map_err(failed)?;
@@ -53,10 +93,7 @@ impl Automation {
                     return Err(failed("passwords apply only to FTP tasks"));
                 }
                 // Tools accept a variable name, never a secret in replayable task arguments.
-                let variable = args.str("password_env")?;
-                if variable.is_empty() || variable.len() > 128 || !variable.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') {
-                    return Err(failed("password_env must name an environment variable"));
-                }
+                let variable = password_variable(args.str("password_env")?)?;
                 let password =
                     zeroize::Zeroizing::new(std::env::var(variable).map_err(|_| failed("the named password environment variable is unavailable"))?);
                 source::save_ftp_password(&store, id, &password).map_err(failed)?;
@@ -93,6 +130,7 @@ impl Automation {
 
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn hot_folder(&self, action: &str, args: &Args) -> Result<Value> {
+        self.check_hot_folder_roots()?;
         use pdfcraft_engine::hot_folder as hf;
         let path = self.resolve(args.str("config")?, action == "hot_folder_configure")?;
         // Validate every nested path with the same root resolver as other automation tools.
@@ -146,5 +184,18 @@ impl Automation {
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn hot_folder(&self, _action: &str, _args: &Args) -> Result<Value> {
         Err(failed("Hot Folder requires the desktop application or native CLI"))
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ftp_passwords_come_only_from_the_dedicated_variables() {
+        assert!(password_variable("PDFCRAFT_HOT_FOLDER_FTP_PASSWORD").is_ok());
+        for other in ["GITHUB_TOKEN", "AWS_SECRET_ACCESS_KEY", "PDFCRAFT_HOT_FOLDER_", "PDFCRAFT_HOT_FOLDER_A-B", "", "pdfcraft_hot_folder_x"] {
+            assert!(password_variable(other).is_err(), "{other}");
+        }
     }
 }

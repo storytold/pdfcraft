@@ -13,6 +13,22 @@ $boundary = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
 $rejected = $false
 try { [void] (Assert-SafePath ($boundary + '-sibling/file') $boundary) } catch { $rejected = $true }
 Assert-That $rejected 'Sibling-prefix confinement must reject paths outside the test root.'
+$separator = [string] [IO.Path]::DirectorySeparatorChar
+[void] (Assert-SafePath $boundary ($boundary + $separator))
+[void] (Assert-SafePath (Join-Path $boundary 'packaging/server-tests') ($boundary + $separator))
+$filesystemRoot = [IO.Path]::GetPathRoot($boundary)
+[void] (Assert-SafePath $filesystemRoot $filesystemRoot)
+$rejected = $false
+try { [void] (Assert-SafePath (Join-Path $boundary '../outside-test-root') $boundary) } catch { $rejected = $true }
+Assert-That $rejected 'Parent traversal must reject paths outside the test root.'
+if (-not $IsWindows) {
+    $caseRoot = Join-Path $boundary 'case-sensitive-root'
+    foreach ($outside in @((Join-Path $boundary 'CASE-SENSITIVE-ROOT'), ($caseRoot + '\sibling/file'))) {
+        $rejected = $false
+        try { [void] (Assert-SafePath $outside $caseRoot) } catch { $rejected = $true }
+        Assert-That $rejected 'Unix confinement must reject different-case and backslash sibling paths.'
+    }
+}
 
 $guid = '{A9C59D9B-69EB-4AB0-BEA5-419C001B785E}'
 Assert-ProductCode $guid

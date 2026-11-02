@@ -27,6 +27,9 @@ pub struct HotFolderApp {
     start_text: String,
     language: Language,
     error: Option<String>,
+    /// The background worker's last diagnostic, kept apart from `error` so a refresh never
+    /// hides why the user's own action failed, and cleared when the worker recovers.
+    worker_error: Option<String>,
     saved: bool,
     last_refresh: std::time::Instant,
     errors_only: bool,
@@ -46,7 +49,8 @@ pub struct HotFolderApp {
 
 impl HotFolderApp {
     pub fn new(path: PathBuf) -> Self {
-        let loaded = if path.exists() { hf::load_config(&path) } else { Ok(hf::Config::default()) };
+        let language = Language::system(sys_locale::get_locale().as_deref());
+        let loaded = load_tasks(&path, path.try_exists(), language);
         let error = loaded.as_ref().err().cloned();
         let saved_snapshot = loaded.as_ref().ok().and_then(|c| serde_json::to_vec(c).ok()).unwrap_or_default();
         let disk_snapshot = read_disk(&path).ok().flatten();
@@ -59,9 +63,10 @@ impl HotFolderApp {
             config: loaded.unwrap_or_default(),
             selected: usize::MAX,
             start_text: String::new(),
-            language: Language::system(sys_locale::get_locale().as_deref()),
+            language,
             load_error: error.clone(),
             error: initial_error,
+            worker_error: None,
             saved: false,
             saved_snapshot,
             disk_snapshot,
@@ -219,10 +224,10 @@ impl HotFolderApp {
             Ok(state) => self.state = state,
             Err(e) => self.error = Some(e),
         }
-        match hf::read_worker_error(&self.path) {
-            Ok(Some(error)) | Err(error) => self.error = Some(error),
-            Ok(None) => {}
-        }
+        self.worker_error = match hf::read_worker_error(&self.path) {
+            Ok(error) => error,
+            Err(error) => Some(error),
+        };
     }
 
     fn import_tasks(&mut self) -> Result<(), String> {
@@ -277,25 +282,28 @@ impl HotFolderApp {
             ui.horizontal(|ui| {
                 ui.heading("PdfCraft Hot Folder");
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    egui::ComboBox::from_id_salt("ui-language").selected_text(LANGUAGES.get(self.language.0).map_or("English", |l| l.1)).show_ui(
-                        ui,
-                        |ui| {
+                    let picker = craft_ui::ComboBox::from_id_salt("ui-language")
+                        .selected_text(LANGUAGES.get(self.language.0).map_or("English", |l| l.1))
+                        .show_ui(ui, |ui| {
                             for (index, (_, name)) in LANGUAGES.iter().enumerate() {
                                 ui.selectable_value(&mut self.language, Language(index), *name);
                             }
-                        },
-                    );
+                        });
+                    // Right to left, the caption is laid out after the picker, so name it explicitly.
+                    picker.response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, t("Language")));
                     ui.label(t("Language"));
                 });
             });
             ui.label(t("Processing continues when this window or PdfCraft is closed. Stop tasks here to pause it."));
             ui.add_space(8.0);
         });
-        if let Some(error) = &self.error {
+        if self.error.is_some() || self.worker_error.is_some() {
             egui::Panel::top("error").show(root, |ui| {
                 ui.colored_label(egui::Color32::DARK_RED, t("Error details"));
                 egui::ScrollArea::vertical().id_salt("error-details").max_height(80.0).show(ui, |ui| {
-                    ui.label(error);
+                    for error in self.error.iter().chain(&self.worker_error) {
+                        ui.label(error);
+                    }
                 });
             });
         }
@@ -318,7 +326,7 @@ impl HotFolderApp {
                     *self = Self::new(self.path.clone());
                     self.language = language;
                 }
-                ui.checkbox(&mut self.errors_only, t("Show errors only"));
+                ui.add(crate::widgets::checkbox(&mut self.errors_only, t("Show errors only")));
                 let mut selected = self.selected;
                 for (index, task) in self.config.tasks.iter().enumerate() {
                     let status = self.state.tasks.get(&task.id);
@@ -375,7 +383,7 @@ impl HotFolderApp {
                     }
                     let mut action = None;
                     let mut enabled = self.startup_enabled;
-                    if ui.add_enabled(installed, egui::Checkbox::new(&mut enabled, t("Start with the system"))).changed() {
+                    if ui.add_enabled(installed, crate::widgets::checkbox(&mut enabled, t("Start with the system"))).changed() {
                         action = Some(if enabled { "enable" } else { "disable" });
                     }
                     if ui.add_enabled(installed && !running, egui::Button::new(t("Start service"))).clicked() {
@@ -389,8 +397,8 @@ impl HotFolderApp {
                     }
                     #[cfg(unix)]
                     if !installed {
-                        ui.label(t("Service account"));
-                        ui.text_edit_singleline(&mut self.service_account);
+                        let caption = ui.label(t("Service account"));
+                        ui.text_edit_singleline(&mut self.service_account).labelled_by(caption.id);
                         if ui.button(t("Install service")).clicked() {
                             action = Some("install");
                         }
@@ -437,20 +445,23 @@ impl HotFolderApp {
                         ui.colored_label(egui::Color32::DARK_RED, t("OCR models are missing. Reinstall PdfCraft with OCR models."));
                     }
                     ui.add_enabled_ui(!task.enabled, |ui| {
-                        ui.label(t("Task name"));
-                        ui.text_edit_singleline(&mut task.name);
+                        let caption = ui.label(t("Task name"));
+                        ui.text_edit_singleline(&mut task.name).labelled_by(caption.id);
                         self.source_ui.show(ui, task, lang);
                         let local = matches!(task.source, pdfcraft_engine::hot_folder_sources::SourceConfig::Local);
                         folder(ui, &mut task.input, t(if local { "Input folder" } else { "Staging folder" }), lang);
                         folder(ui, &mut task.output, t("Output folder"), lang);
                         if local {
-                            ui.checkbox(&mut task.recursive, t("Include subfolders"));
+                            ui.add(crate::widgets::checkbox(&mut task.recursive, t("Include subfolders")));
                         }
                         ui.horizontal(|ui| {
-                            ui.checkbox(&mut task.pdf, "PDF");
-                            ui.checkbox(&mut task.images, t(if local { "Images (PNG, JPEG, TIFF, BMP)" } else { "Images (PNG, JPEG, TIFF)" }));
+                            ui.add(crate::widgets::checkbox(&mut task.pdf, "PDF"));
+                            ui.add(crate::widgets::checkbox(
+                                &mut task.images,
+                                t(if local { "Images (PNG, JPEG, TIFF, BMP)" } else { "Images (PNG, JPEG, TIFF)" }),
+                            ));
                         });
-                        ui.checkbox(&mut task.analysis_only, t("Analyze without OCR"));
+                        ui.add(crate::widgets::checkbox(&mut task.analysis_only, t("Analyze without OCR")));
                         if task.analysis_only {
                             ui.weak(t("Creates JSON layout reports. OCR, image changes and blank-page removal are disabled."));
                         }
@@ -458,30 +469,30 @@ impl HotFolderApp {
                         ui.separator();
                         ui.heading(t("Schedule"));
                         ui.horizontal(|ui| {
-                            ui.radio_value(&mut task.once, true, t("Run once"));
-                            ui.radio_value(&mut task.once, false, t("Recurring"));
+                            crate::widgets::radio_value(ui, &mut task.once, true, t("Run once"));
+                            crate::widgets::radio_value(ui, &mut task.once, false, t("Recurring"));
                         });
                         if !task.once {
                             calendar(ui, &mut task.schedule, lang);
                         }
-                        ui.label(t("Start time (local)"));
-                        ui.text_edit_singleline(&mut self.start_text);
+                        let caption = ui.label(t("Start time (local)"));
+                        ui.text_edit_singleline(&mut self.start_text).labelled_by(caption.id);
                         ui.weak(t("Leave blank to start now; YYYY-MM-DD HH:MM"));
                         ui.horizontal(|ui| {
-                            ui.label(t("Check interval (seconds)"));
-                            ui.add(egui::DragValue::new(&mut task.interval_seconds).range(1..=86400));
+                            let caption = ui.label(t("Check interval (seconds)"));
+                            ui.add(egui::DragValue::new(&mut task.interval_seconds).range(1..=86400)).labelled_by(caption.id);
                         });
                         ui.horizontal(|ui| {
-                            ui.label(t("Wait for stable files (seconds)"));
-                            ui.add(egui::DragValue::new(&mut task.settle_seconds).range(1..=300));
+                            let caption = ui.label(t("Wait for stable files (seconds)"));
+                            ui.add(egui::DragValue::new(&mut task.settle_seconds).range(1..=300)).labelled_by(caption.id);
                         });
                         ui.separator();
                         if local {
                             ui.heading(t("Original files"));
                             ui.horizontal_wrapped(|ui| {
-                                ui.radio_value(&mut task.originals, hf::Originals::Keep, t("Keep"));
-                                ui.radio_value(&mut task.originals, hf::Originals::Move, t("Move after success"));
-                                ui.radio_value(&mut task.originals, hf::Originals::Delete, t("Delete after success"));
+                                crate::widgets::radio_value(ui, &mut task.originals, hf::Originals::Keep, t("Keep"));
+                                crate::widgets::radio_value(ui, &mut task.originals, hf::Originals::Move, t("Move after success"));
+                                crate::widgets::radio_value(ui, &mut task.originals, hf::Originals::Delete, t("Delete after success"));
                             });
                             if task.originals == hf::Originals::Move {
                                 folder(ui, &mut task.archive, t("Archive folder"), lang);
@@ -490,40 +501,45 @@ impl HotFolderApp {
                         }
                         ui.separator();
                         if task.analysis_only {
-                            ui.label(t("Pages to process (empty = all; example: 1-3,5)"));
-                            ui.text_edit_singleline(&mut task.preprocessing.pages);
+                            let caption = ui.label(t("Pages to process (empty = all; example: 1-3,5)"));
+                            ui.text_edit_singleline(&mut task.preprocessing.pages).labelled_by(caption.id);
                         } else {
                             ui.heading(t("Scan and text recognition"));
                             ui.horizontal(|ui| {
-                                ui.label(t("Document language"));
+                                let caption = ui.label(t("Document language"));
                                 let name = ocr::LANGUAGES.iter().find(|l| l.0 == task.settings.language).map_or("English", |l| l.1);
-                                egui::ComboBox::from_id_salt("ocr-language").height(480.0).selected_text(name).show_ui(ui, |ui| {
-                                    for (code, name) in ocr::LANGUAGES {
-                                        ui.selectable_value(&mut task.settings.language, (*code).into(), *name);
-                                    }
-                                });
+                                craft_ui::ComboBox::from_id_salt("ocr-language")
+                                    .height(480.0)
+                                    .selected_text(name)
+                                    .show_ui(ui, |ui| {
+                                        for (code, name) in ocr::LANGUAGES {
+                                            ui.selectable_value(&mut task.settings.language, (*code).into(), *name);
+                                        }
+                                    })
+                                    .response
+                                    .labelled_by(caption.id);
                             });
                             ui.horizontal(|ui| {
-                                ui.label(t("Resolution (dpi)"));
-                                ui.add(egui::DragValue::new(&mut task.settings.dpi).range(72.0..=600.0));
+                                let caption = ui.label(t("Resolution (dpi)"));
+                                ui.add(egui::DragValue::new(&mut task.settings.dpi).range(72.0..=600.0)).labelled_by(caption.id);
                             });
-                            ui.checkbox(&mut task.settings.recognize, t("Add searchable text"));
-                            ui.checkbox(&mut task.settings.skip_text_pages, t("Skip pages that already contain text"));
-                            ui.checkbox(&mut task.settings.auto_rotate, t("Automatically correct page orientation"));
-                            ui.checkbox(&mut task.settings.deskew, t("Straighten skewed scans"));
-                            ui.checkbox(&mut task.settings.auto_crop, t("Crop to detected paper edges"));
+                            ui.add(crate::widgets::checkbox(&mut task.settings.recognize, t("Add searchable text")));
+                            ui.add(crate::widgets::checkbox(&mut task.settings.skip_text_pages, t("Skip pages that already contain text")));
+                            ui.add(crate::widgets::checkbox(&mut task.settings.auto_rotate, t("Automatically correct page orientation")));
+                            ui.add(crate::widgets::checkbox(&mut task.settings.deskew, t("Straighten skewed scans")));
+                            ui.add(crate::widgets::checkbox(&mut task.settings.auto_crop, t("Crop to detected paper edges")));
                             ui.add_enabled_ui(task.settings.auto_crop, |ui| {
                                 ui.horizontal(|ui| {
-                                    ui.label(t("Safety margin (pt)"));
-                                    ui.add(egui::DragValue::new(&mut task.settings.crop_margin).range(0.0..=20.0));
+                                    let caption = ui.label(t("Safety margin (pt)"));
+                                    ui.add(egui::DragValue::new(&mut task.settings.crop_margin).range(0.0..=20.0)).labelled_by(caption.id);
                                 });
                             });
                             ui.weak(t("Uncertain orientations and paper edges are kept unchanged."));
                             image_preparation(ui, &mut task.preprocessing, lang);
-                            ui.checkbox(&mut task.remove_blank_pages, t("Remove completely white pages"));
+                            ui.add(crate::widgets::checkbox(&mut task.remove_blank_pages, t("Remove completely white pages")));
                             if task.remove_blank_pages {
                                 let mut archive = task.blank_archive.is_some();
-                                if ui.checkbox(&mut archive, t("Save removed blank pages separately")).changed() {
+                                if ui.add(crate::widgets::checkbox(&mut archive, t("Save removed blank pages separately"))).changed() {
                                     task.blank_archive = archive.then(PathBuf::new);
                                 }
                                 if let Some(path) = &mut task.blank_archive {
@@ -546,6 +562,10 @@ impl HotFolderApp {
                         ));
                         if let Some(output) = &status.last_output {
                             ui.label(output.display().to_string());
+                        }
+                        if let Some(summary) = &status.last_optimization {
+                            ui.label(format!("{}: {} → {} {}", t("PDF optimization"), summary.bytes_before, summary.bytes_after, t("bytes")));
+                            ui.label(format!("{}: {} / {}", t("PDFs reduced"), summary.changed, summary.documents));
                         }
                         if let Some(error) = &status.error {
                             ui.collapsing(t("Error details"), |ui| {
@@ -633,10 +653,10 @@ fn open_folder(path: &std::path::Path) -> Result<(), String> {
 }
 
 fn folder(ui: &mut egui::Ui, value: &mut PathBuf, label: &str, language: Language) {
-    ui.label(label);
+    let caption = ui.label(label);
     ui.horizontal(|ui| {
         let mut text = value.to_string_lossy().to_string();
-        if ui.add(egui::TextEdit::singleline(&mut text).desired_width((ui.available_width() - 110.0).max(100.0))).changed() {
+        if ui.add(egui::TextEdit::singleline(&mut text).desired_width((ui.available_width() - 110.0).max(100.0))).labelled_by(caption.id).changed() {
             *value = text.into();
         }
         if ui.button(language.t("Browse…")).clicked()
@@ -650,27 +670,27 @@ fn folder(ui: &mut egui::Ui, value: &mut PathBuf, label: &str, language: Languag
 fn image_preparation(ui: &mut egui::Ui, settings: &mut pdfcraft_engine::hot_folder_preprocess::Settings, language: Language) {
     let t = |key| language.t(key);
     ui.collapsing(t("Page selection and image preparation"), |ui| {
-        ui.label(t("Pages to process (empty = all; example: 1-3,5)"));
-        ui.text_edit_singleline(&mut settings.pages);
+        let caption = ui.label(t("Pages to process (empty = all; example: 1-3,5)"));
+        ui.text_edit_singleline(&mut settings.pages).labelled_by(caption.id);
         ui.weak(t("Only selected pages are included in the output."));
-        ui.checkbox(&mut settings.grayscale, t("Convert to grayscale"));
-        ui.checkbox(&mut settings.invert, t("Invert colors"));
-        ui.checkbox(&mut settings.median_filter, t("Reduce noise (median filter)"));
-        ui.checkbox(&mut settings.split_spreads, t("Split spreads into left and right pages"));
+        ui.add(crate::widgets::checkbox(&mut settings.grayscale, t("Convert to grayscale")));
+        ui.add(crate::widgets::checkbox(&mut settings.invert, t("Invert colors")));
+        ui.add(crate::widgets::checkbox(&mut settings.median_filter, t("Reduce noise (median filter)")));
+        ui.add(crate::widgets::checkbox(&mut settings.split_spreads, t("Split spreads into left and right pages")));
         ui.horizontal(|ui| {
-            ui.label(t("Brightness"));
-            ui.add(egui::DragValue::new(&mut settings.brightness).range(-100..=100));
-            ui.label(t("Contrast"));
-            ui.add(egui::DragValue::new(&mut settings.contrast).range(-100.0..=100.0));
+            let caption = ui.label(t("Brightness"));
+            ui.add(egui::DragValue::new(&mut settings.brightness).range(-100..=100)).labelled_by(caption.id);
+            let caption = ui.label(t("Contrast"));
+            ui.add(egui::DragValue::new(&mut settings.contrast).range(-100.0..=100.0)).labelled_by(caption.id);
         });
         let mut binary = settings.threshold.is_some();
-        if ui.checkbox(&mut binary, t("Convert to black and white")).changed() {
+        if ui.add(crate::widgets::checkbox(&mut binary, t("Convert to black and white"))).changed() {
             settings.threshold = binary.then_some(128);
         }
         if let Some(threshold) = &mut settings.threshold {
             ui.horizontal(|ui| {
-                ui.label(t("Threshold"));
-                ui.add(egui::DragValue::new(threshold).range(1..=254));
+                let caption = ui.label(t("Threshold"));
+                ui.add(egui::DragValue::new(threshold).range(1..=254)).labelled_by(caption.id);
             });
         }
         if settings.changes_images() {
@@ -683,9 +703,9 @@ fn image_preparation(ui: &mut egui::Ui, settings: &mut pdfcraft_engine::hot_fold
         for (index, region) in settings.regions.iter_mut().enumerate() {
             ui.push_id(index, |ui| {
                 ui.horizontal_wrapped(|ui| {
-                    ui.label(t("Page"));
-                    ui.add(egui::DragValue::new(&mut region.page).range(0..=10000));
-                    ui.checkbox(&mut region.exclude, t("Exclude this area"));
+                    let caption = ui.label(t("Page"));
+                    ui.add(egui::DragValue::new(&mut region.page).range(0..=10000)).labelled_by(caption.id);
+                    ui.add(crate::widgets::checkbox(&mut region.exclude, t("Exclude this area")));
                     if ui.button(t("Remove area")).clicked() {
                         remove = Some(index);
                     }
@@ -693,8 +713,8 @@ fn image_preparation(ui: &mut egui::Ui, settings: &mut pdfcraft_engine::hot_fold
                 ui.horizontal_wrapped(|ui| {
                     for (label, value) in ["Left (%)", "Top (%)", "Width (%)", "Height (%)"].into_iter().zip(region.rect.iter_mut()) {
                         let mut percent = *value * 100.0;
-                        ui.label(t(label));
-                        if ui.add(egui::DragValue::new(&mut percent).range(0.0..=100.0).speed(0.5)).changed() {
+                        let caption = ui.label(t(label));
+                        if ui.add(egui::DragValue::new(&mut percent).range(0.0..=100.0).speed(0.5)).labelled_by(caption.id).changed() {
                             *value = percent / 100.0;
                         }
                     }
@@ -724,45 +744,56 @@ fn output_steps(ui: &mut egui::Ui, plan: &mut output::OutputPlan, language: Lang
         for (index, step) in plan.steps.iter_mut().enumerate() {
             ui.push_id(index, |ui| {
                 ui.horizontal_wrapped(|ui| {
-                    ui.label(format!("{} {}", t("Save"), index.saturating_add(1)));
+                    let caption = ui.label(format!("{} {}", t("Save"), index.saturating_add(1)));
                     ui.add_enabled_ui(!analysis, |ui| {
                         let shown = if analysis { output::Format::Analysis } else { step.format };
-                        egui::ComboBox::from_id_salt("format").selected_text(t(shown.label())).show_ui(ui, |ui| {
+                        let picker = craft_ui::ComboBox::from_id_salt("format").selected_text(t(shown.label())).show_ui(ui, |ui| {
                             for format in output::Format::ALL {
-                                ui.selectable_value(&mut step.format, *format, t(format.label()));
+                                if ui.selectable_value(&mut step.format, *format, t(format.label())).changed()
+                                    && !matches!(step.format, output::Format::Pdf | output::Format::ImagePdf)
+                                {
+                                    step.optimization.mode = output::optimization::Mode::Off;
+                                }
                             }
                         });
+                        picker.response.labelled_by(caption.id);
                     });
                     if ui.add_enabled(count > 1, egui::Button::new(t("Remove step"))).clicked() {
                         remove = Some(index);
                     }
                 });
-                egui::ComboBox::from_id_salt("group").selected_text(t(grouping_label(step.grouping))).show_ui(ui, |ui| {
+                let group = craft_ui::ComboBox::from_id_salt("group").selected_text(t(grouping_label(step.grouping))).show_ui(ui, |ui| {
                     for grouping in [output::Grouping::File, output::Grouping::Folder, output::Grouping::All] {
                         ui.selectable_value(&mut step.grouping, grouping, t(grouping_label(grouping)));
                     }
                 });
+                // Which files this save combines: named after its step.
+                let step_name = format!("{} {}", t("Save"), index.saturating_add(1));
+                group.response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, step_name.clone()));
                 let mut custom = step.folder.is_some();
-                if ui.checkbox(&mut custom, t("Use another output folder")).changed() {
+                if ui.add(crate::widgets::checkbox(&mut custom, t("Use another output folder"))).changed() {
                     step.folder = custom.then(PathBuf::new);
                 }
                 if let Some(path) = &mut step.folder {
                     folder(ui, path, t("Output folder"), language);
                 }
-                ui.label(t("Filename template (without extension)"));
-                ui.text_edit_singleline(&mut step.name_template);
+                let caption = ui.label(t("Filename template (without extension)"));
+                ui.text_edit_singleline(&mut step.name_template).labelled_by(caption.id);
                 ui.weak("{name} · {folder} · {task} · {date} · {time} · {counter}");
                 if !analysis && matches!(step.format, output::Format::Png | output::Format::Jpeg | output::Format::Tiff | output::Format::ImagePdf) {
                     ui.horizontal(|ui| {
-                        ui.label(t("Resolution (dpi)"));
-                        ui.add(egui::DragValue::new(&mut step.dpi).range(18.0..=1200.0));
+                        let caption = ui.label(t("Resolution (dpi)"));
+                        ui.add(egui::DragValue::new(&mut step.dpi).range(18.0..=1200.0)).labelled_by(caption.id);
                     });
                 }
                 if !analysis && step.format == output::Format::Jpeg {
                     ui.horizontal(|ui| {
-                        ui.label(t("JPEG quality"));
-                        ui.add(egui::DragValue::new(&mut step.jpeg_quality).range(1..=100));
+                        let caption = ui.label(t("JPEG quality"));
+                        ui.add(egui::DragValue::new(&mut step.jpeg_quality).range(1..=100)).labelled_by(caption.id);
                     });
+                }
+                if !analysis && matches!(step.format, output::Format::Pdf | output::Format::ImagePdf) {
+                    pdf_optimization(ui, &mut step.optimization, language);
                 }
                 ui.separator();
             });
@@ -772,6 +803,77 @@ fn output_steps(ui: &mut egui::Ui, plan: &mut output::OutputPlan, language: Lang
         }
         if ui.add_enabled(plan.steps.len() < 16, egui::Button::new(t("Add saving step"))).clicked() {
             plan.steps.push(output::SaveStep::default());
+        }
+    });
+}
+
+fn pdf_optimization(ui: &mut egui::Ui, settings: &mut output::optimization::Settings, language: Language) {
+    use output::optimization::Mode;
+    let t = |key| language.t(key);
+    let label = |mode| match mode {
+        Mode::Off => t("Off"),
+        Mode::Lossless => t("Lossless PDF optimization"),
+        Mode::Reduce => t("Reduce PDF size (150 ppi, JPEG 60)"),
+        Mode::Custom => t("Custom PDF optimization"),
+    };
+    let caption = ui.label(t("PDF optimization"));
+    craft_ui::ComboBox::from_id_salt("pdf-optimization")
+        .selected_text(label(settings.mode))
+        .show_ui(ui, |ui| {
+            for mode in [Mode::Off, Mode::Lossless, Mode::Reduce, Mode::Custom] {
+                ui.selectable_value(&mut settings.mode, mode, label(mode));
+            }
+        })
+        .response
+        .labelled_by(caption.id);
+    if settings.enabled() {
+        ui.weak(t("Only a smaller PDF replaces the processed copy. Signed PDFs are refused. Original-file actions still apply."));
+        match settings.mode {
+            Mode::Lossless => {
+                ui.weak(t("Keeps image quality, text, tags and forms. OCR and other task processing are separate settings."));
+            }
+            Mode::Reduce | Mode::Custom => {
+                ui.weak(t("Downsampling and JPEG compression can lose image detail. Review the output quality."));
+            }
+            Mode::Off => {}
+        }
+    }
+    if settings.mode == Mode::Custom {
+        optimization_images(ui, &mut settings.color, language, "color", t("Color images"));
+        optimization_images(ui, &mut settings.gray, language, "gray", t("Grayscale images"));
+    }
+}
+
+fn optimization_images(ui: &mut egui::Ui, settings: &mut output::optimization::Images, language: Language, id: &str, title: &str) {
+    use output::optimization::Compression;
+    let t = |key| language.t(key);
+    ui.push_id(id, |ui| {
+        let caption = ui.label(title);
+        ui.add(crate::widgets::checkbox(&mut settings.downsample, t("Downsample images")));
+        ui.add_enabled_ui(settings.downsample, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                let caption = ui.label(t("Target resolution (ppi)"));
+                ui.add(egui::DragValue::new(&mut settings.ppi).range(9.0..=2400.0)).labelled_by(caption.id);
+                let caption = ui.label(t("Only above (ppi)"));
+                ui.add(egui::DragValue::new(&mut settings.above_ppi).range(9.0..=2400.0)).labelled_by(caption.id);
+            });
+        });
+        let label = |compression| match compression {
+            Compression::Retain => t("Retain existing compression"),
+            Compression::Zip => t("ZIP (lossless encoding)"),
+            Compression::Jpeg => "JPEG",
+        };
+        let picker = craft_ui::ComboBox::from_id_salt("compression").selected_text(label(settings.compression)).show_ui(ui, |ui| {
+            for compression in [Compression::Retain, Compression::Zip, Compression::Jpeg] {
+                ui.selectable_value(&mut settings.compression, compression, label(compression));
+            }
+        });
+        picker.response.labelled_by(caption.id);
+        if settings.compression == Compression::Jpeg {
+            ui.horizontal_wrapped(|ui| {
+                let caption = ui.label(t("JPEG quality"));
+                ui.add(egui::DragValue::new(&mut settings.quality).range(1..=100)).labelled_by(caption.id);
+            });
         }
     });
 }
@@ -794,11 +896,13 @@ fn calendar(ui: &mut egui::Ui, schedule: &mut hf::Schedule, language: Language) 
     };
     let old = kind;
     let names = ["At regular intervals", "Daily", "Weekly", "Monthly"];
-    egui::ComboBox::from_id_salt("recurrence").selected_text(t(names.get(kind).copied().unwrap_or(names[0]))).show_ui(ui, |ui| {
-        for (index, name) in names.iter().enumerate() {
-            ui.selectable_value(&mut kind, index, t(name));
-        }
-    });
+    let recurrence =
+        craft_ui::ComboBox::from_id_salt("recurrence").selected_text(t(names.get(kind).copied().unwrap_or(names[0]))).show_ui(ui, |ui| {
+            for (index, name) in names.iter().enumerate() {
+                ui.selectable_value(&mut kind, index, t(name));
+            }
+        });
+    recurrence.response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, t("Schedule")));
     if old != kind {
         *schedule = match kind {
             1 => hf::Schedule::Daily { hour: 8, minute: 0 },
@@ -809,28 +913,46 @@ fn calendar(ui: &mut egui::Ui, schedule: &mut hf::Schedule, language: Language) 
     }
     if let hf::Schedule::Weekly { weekday, .. } = schedule {
         let weekdays = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
-        egui::ComboBox::from_id_salt("weekday").selected_text(t(weekdays.get(*weekday as usize).copied().unwrap_or(weekdays[0]))).show_ui(ui, |ui| {
-            for (index, name) in weekdays.iter().enumerate() {
-                ui.selectable_value(weekday, index as u32, t(name));
-            }
-        });
+        let day = craft_ui::ComboBox::from_id_salt("weekday")
+            .selected_text(t(weekdays.get(*weekday as usize).copied().unwrap_or(weekdays[0])))
+            .show_ui(ui, |ui| {
+                for (index, name) in weekdays.iter().enumerate() {
+                    ui.selectable_value(weekday, index as u32, t(name));
+                }
+            });
+        day.response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, t("Weekly")));
     }
     if let hf::Schedule::Monthly { day, .. } = schedule {
         ui.horizontal(|ui| {
-            ui.label(t("Day of month"));
-            ui.add(egui::DragValue::new(day).range(1..=31));
+            let caption = ui.label(t("Day of month"));
+            ui.add(egui::DragValue::new(day).range(1..=31)).labelled_by(caption.id);
         });
     }
     match schedule {
         hf::Schedule::Daily { hour, minute } | hf::Schedule::Weekly { hour, minute, .. } | hf::Schedule::Monthly { hour, minute, .. } => {
             ui.horizontal(|ui| {
-                ui.label(t("Time"));
-                ui.add(egui::DragValue::new(hour).range(0..=23));
+                let caption = ui.label(t("Time"));
+                ui.add(egui::DragValue::new(hour).range(0..=23)).labelled_by(caption.id);
                 ui.label(":");
-                ui.add(egui::DragValue::new(minute).range(0..=59));
+                ui.add(egui::DragValue::new(minute).range(0..=59)).labelled_by(caption.id);
             });
         }
         hf::Schedule::Interval => {}
+    }
+}
+
+/// The task file the manager edits. One this user cannot even look up is an error that blocks
+/// saving, never an empty configuration: the Linux service keeps its tasks in a directory only
+/// its own account may enter, and a desktop user would otherwise see no tasks and overwrite them.
+fn load_tasks(path: &std::path::Path, exists: std::io::Result<bool>, language: Language) -> Result<hf::Config, String> {
+    match exists {
+        Ok(true) => hf::load_config(path),
+        Ok(false) => Ok(hf::Config::default()),
+        Err(e) => Err(format!(
+            "{} ({}: {e})",
+            language.t("This task file belongs to the Hot Folder service. Open the manager with administrative permission to edit it."),
+            path.display()
+        )),
     }
 }
 
@@ -860,7 +982,7 @@ impl eframe::App for HotFolderApp {
         self.show(ui);
         if self.close_prompt {
             let lang = self.language;
-            egui::Modal::new(egui::Id::new("unsaved-hot-folder")).show(&ctx, |ui| {
+            egui::Modal::new(egui::Id::unique("unsaved-hot-folder")).show(&ctx, |ui| {
                 ui.heading(lang.t("Unsaved changes"));
                 ui.label(lang.t("Save your task settings before closing?"));
                 ui.horizontal(|ui| {
@@ -891,6 +1013,37 @@ impl eframe::App for HotFolderApp {
 mod tests {
     use super::*;
     use egui_kittest::{Harness, kittest::Queryable};
+
+    /// A task file the user may not look up (the Linux service's private state directory) is
+    /// refused with the reason, never shown as an empty configuration that a save would replace.
+    #[test]
+    fn an_unreachable_task_file_is_refused_not_replaced_by_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("tasks.json");
+        let denied = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+        let error = load_tasks(&path, Err(denied), Language(1)).unwrap_err();
+        assert!(error.starts_with("Diese Aufgabendatei gehört dem Hot-Folder-Dienst."), "{error}");
+        assert!(error.contains("tasks.json"), "{error}");
+        assert!(load_tasks(&path, Ok(false), Language(0)).unwrap().tasks.is_empty(), "a missing file starts empty");
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let private = dir.path().join("service");
+            std::fs::create_dir(&private).unwrap();
+            let tasks = private.join("tasks.json");
+            std::fs::write(&tasks, br#"{"tasks":[]}"#).unwrap();
+            std::fs::set_permissions(&private, std::fs::Permissions::from_mode(0o000)).unwrap();
+            // root may enter any directory, and then the file is simply readable.
+            if tasks.try_exists().is_err() {
+                let mut app = HotFolderApp::new(tasks.clone());
+                app.inline = true;
+                assert!(app.load_error.is_some(), "the unreadable service file is reported");
+                assert!(app.save().is_err(), "and never overwritten");
+            }
+            std::fs::set_permissions(&private, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+    }
 
     #[test]
     fn hot_folder_small_window_keeps_actions_tasks_service_and_errors_reachable_in_every_language() {
@@ -978,6 +1131,74 @@ mod tests {
     }
 
     #[test]
+    fn hot_folder_optimization_ui_persists_choices_and_clears_them_for_non_pdf_outputs() {
+        let dir = tempfile::tempdir().unwrap();
+        for folder in ["in", "out"] {
+            std::fs::create_dir(dir.path().join(folder)).unwrap();
+        }
+        let path = dir.path().join("tasks.json");
+        let mut h = Harness::builder().with_size(egui::vec2(900.0, 780.0)).build_eframe(|cc| {
+            install_fonts(&cc.egui_ctx);
+            let mut app = HotFolderApp::new(path.clone());
+            app.language = Language(0);
+            app.inline = true;
+            app.new_task(false);
+            app.config.tasks[0].input = dir.path().join("in");
+            app.config.tasks[0].output = dir.path().join("out");
+            app
+        });
+        h.run_steps(10);
+        h.get_by_label("Output saving steps").scroll_to_me();
+        h.run_steps(10);
+        h.get_by_label("Output saving steps").click();
+        h.run_steps(10);
+        h.get_by_value("Off").scroll_to_me();
+        h.run_steps(10);
+        h.get_by_value("Off").click();
+        h.run_steps(3);
+        h.get_by_label("Lossless PDF optimization").click();
+        h.run_steps(10);
+        h.get_by_label("Save").scroll_to_me();
+        h.run_steps(20);
+        assert!(h.ctx.content_rect().contains_rect(h.get_by_label("Save").rect()), "Save must be visible before clicking");
+        h.get_by_label("Save").click();
+        h.run_steps(3);
+        assert!(h.state().error.is_none(), "{:?}", h.state().error);
+        let saved = hf::load_config(&path).unwrap();
+        assert_eq!(saved.tasks[0].output_plan.steps[0].optimization.mode, output::optimization::Mode::Lossless);
+        assert_eq!(saved.tasks[0].originals, hf::Originals::Keep);
+        assert!(!saved.tasks[0].enabled);
+
+        h.get_by_value("Lossless PDF optimization").scroll_to_me();
+        h.run_steps(10);
+        h.get_by_value("Lossless PDF optimization").click();
+        h.run_steps(3);
+        h.get_by_label("Custom PDF optimization").click();
+        h.run_steps(10);
+        for label in ["Color images", "Grayscale images"] {
+            h.get_by_label(label).scroll_to_me();
+            h.run_steps(10);
+            let viewport = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, 780.0));
+            assert!(viewport.contains_rect(h.get_by_label(label).rect()), "{label} must be reachable");
+        }
+        h.get_by_value("PDF (processed document)").scroll_to_me();
+        h.run_steps(10);
+        h.get_by_value("PDF (processed document)").click();
+        h.run_steps(3);
+        h.get_by_label("Plain text (TXT)").click();
+        h.run_steps(3);
+        h.get_by_label("Save").scroll_to_me();
+        h.run_steps(20);
+        assert!(h.ctx.content_rect().contains_rect(h.get_by_label("Save").rect()), "Save must be visible before clicking");
+        h.get_by_label("Save").click();
+        h.run_steps(3);
+        assert!(h.state().error.is_none(), "{:?}", h.state().error);
+        let saved = hf::load_config(&path).unwrap();
+        assert_eq!(saved.tasks[0].output_plan.steps[0].format, output::Format::Txt);
+        assert_eq!(saved.tasks[0].output_plan.steps[0].optimization.mode, output::optimization::Mode::Off);
+    }
+
+    #[test]
     fn hot_folder_ui_has_seven_languages_and_persists_a_stopped_task() {
         let dir = tempfile::tempdir().unwrap();
         let input = dir.path().join("in");
@@ -998,8 +1219,13 @@ mod tests {
         let task = h.state_mut().config.tasks.first_mut().unwrap();
         task.input = input;
         task.output = output;
+        h.run_steps(3);
+        h.get_by_label("Save").scroll_to_me();
+        h.run_steps(20);
+        assert!(h.ctx.content_rect().contains_rect(h.get_by_label("Save").rect()), "Save must be visible before clicking");
         h.get_by_label("Save").click();
         h.run_steps(2);
+        assert!(h.state().error.is_none(), "{:?}", h.state().error);
         let config = hf::load_config(&path).unwrap();
         assert_eq!(config.tasks.len(), 1);
         assert!(!config.tasks[0].enabled);

@@ -115,6 +115,8 @@ pub struct TaskStatus {
     pub retry_count: u32,
     /// Stable output name timestamp across a killed/retried publication.
     pub attempt_started_at: Option<u64>,
+    /// Actual PDF optimization sizes from the last successful publication batch.
+    pub last_optimization: Option<output::optimization::Summary>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -263,8 +265,8 @@ pub fn initialize_config(path: &Path) -> Result<(), String> {
 
 pub fn save_config(path: &Path, config: &Config, root: Option<&Path>) -> Result<(), String> {
     validate(config, root)?;
-    confined(path, root)?;
-    save_json(path, config)
+    let path = confined(path, root)?;
+    save_json(&path, config)
 }
 
 pub fn state_path(config: &Path) -> PathBuf {
@@ -305,17 +307,28 @@ pub fn read_worker_error(config: &Path) -> Result<Option<String>, String> {
 
 /// Canonicalize before opening anything; reject symbolic links on the final path and root escapes.
 pub fn confined(path: &Path, root: Option<&Path>) -> Result<PathBuf, String> {
+    if root.is_some() && path.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+        return Err("hot folder path is outside the allowed directory".into());
+    }
+    // Resolving the explicitly authorized root is allowed. Do not resolve an arbitrary
+    // candidate until its spelling is strictly inside that root (possibly an 8.3 alias)
+    // or the root's canonical spelling. Alias uncertainty never grants access.
+    let requested_root = root.map(std::path::absolute).transpose().map_err(|e| e.to_string())?;
+    let canonical_root = requested_root.as_ref().map(fs::canonicalize).transpose().map_err(|e| e.to_string())?;
     let absolute = if path.is_absolute() {
         path.to_path_buf()
     } else {
-        root.map(Path::to_path_buf).unwrap_or(std::env::current_dir().map_err(|e| e.to_string())?).join(path)
+        let base = match &requested_root {
+            Some(root) => root.clone(),
+            None => std::env::current_dir().map_err(|e| e.to_string())?,
+        };
+        base.join(path)
     };
-    if let Some(root) = root {
-        let root = root.canonicalize().map_err(|e| e.to_string())?;
-        // Reject '..' before filesystem access; a confined call cannot probe outside the root.
-        if absolute.components().any(|c| matches!(c, std::path::Component::ParentDir)) || !lexically_inside(&absolute, &root) {
-            return Err("hot folder path is outside the allowed directory".into());
-        }
+    if let (Some(requested), Some(canonical)) = (&requested_root, &canonical_root)
+        && !lexically_inside(&absolute, requested)
+        && !lexically_inside(&absolute, canonical)
+    {
+        return Err("hot folder path is outside the allowed directory".into());
     }
     if fs::symlink_metadata(&absolute).is_ok_and(|m| m.file_type().is_symlink()) {
         return Err(format!("symbolic links are not allowed: {}", path.display()));
@@ -326,8 +339,8 @@ pub fn confined(path: &Path, root: Option<&Path>) -> Result<PathBuf, String> {
         absolute.parent().ok_or("path needs a parent folder")?.canonicalize().map(|p| p.join(absolute.file_name().unwrap_or_default()))
     }
     .map_err(|e| format!("{}: {e}", path.display()))?;
-    if let Some(root) = root
-        && !result.starts_with(root.canonicalize().map_err(|e| e.to_string())?)
+    if let Some(root) = canonical_root
+        && !result.starts_with(root)
     {
         return Err("hot folder path is outside the allowed directory".into());
     }
@@ -337,17 +350,91 @@ pub fn confined(path: &Path, root: Option<&Path>) -> Result<PathBuf, String> {
 fn lexically_inside(path: &Path, root: &Path) -> bool {
     #[cfg(windows)]
     {
-        let normalize = |p: &Path| {
-            let raw = p.to_string_lossy().replace('/', "\\");
-            let path = if let Some(unc) = raw.strip_prefix(r"\\?\UNC\") { format!(r"\\{unc}") } else { raw.trim_start_matches(r"\\?\").to_owned() };
-            path.to_ascii_lowercase()
+        let (Some((path_volume, path)), Some((root_volume, root))) = (windows_path_parts(path), windows_path_parts(root)) else {
+            return false;
         };
-        let path = normalize(path);
-        let root = normalize(root);
-        path == root || path.starts_with(&format!("{}\\", root.trim_end_matches('\\')))
+        windows_part_eq(&path_volume, &root_volume)
+            && path.len() >= root.len()
+            && path.iter().zip(&root).all(|(part, parent)| windows_part_eq(part, parent))
     }
     #[cfg(not(windows))]
     path.starts_with(root)
+}
+
+#[cfg(windows)]
+fn windows_path_parts(path: &Path) -> Option<(String, Vec<String>)> {
+    use std::path::{Component, Prefix};
+    let mut components = path.components();
+    let volume = match components.next()? {
+        Component::Prefix(prefix) => match prefix.kind() {
+            Prefix::Disk(drive) | Prefix::VerbatimDisk(drive) => format!("drive:{}", char::from(drive)),
+            Prefix::UNC(server, share) | Prefix::VerbatimUNC(server, share) => format!("unc:{}\\{}", server.to_str()?, share.to_str()?),
+            // Device namespaces and unidentified volume aliases cannot establish safe boundaries.
+            _ => return None,
+        },
+        _ => return None,
+    };
+    if !matches!(components.next(), Some(Component::RootDir)) {
+        return None;
+    }
+    let mut parts = Vec::new();
+    for part in components {
+        match part {
+            Component::Normal(name) => {
+                let name = name.to_str()?;
+                if matches!(name, "." | "..") {
+                    return None;
+                }
+                parts.push(name.to_owned());
+            }
+            Component::CurDir => {}
+            _ => return None,
+        }
+    }
+    Some((volume, parts))
+}
+
+#[cfg(windows)]
+fn windows_part_eq(left: &str, right: &str) -> bool {
+    left.eq_ignore_ascii_case(right)
+}
+
+#[cfg(windows)]
+fn windows_case_may_match(left: &str, right: &str) -> bool {
+    // Unicode expansions can conservatively deny overlap, but must not authorize access
+    // to another spelling (NTFS case rules are not Rust's full Unicode case conversion).
+    windows_part_eq(left, right) || left.to_lowercase() == right.to_lowercase() || left.to_uppercase() == right.to_uppercase()
+}
+
+#[cfg(windows)]
+fn possible_short_name(name: &str) -> bool {
+    let (stem, extension) = name.split_once('.').unwrap_or((name, ""));
+    let Some((prefix, number)) = stem.rsplit_once('~') else { return false };
+    !prefix.is_empty()
+        && stem.chars().count() <= 8
+        && !number.is_empty()
+        && number.bytes().all(|byte| byte.is_ascii_digit())
+        && extension.chars().count() <= 3
+        && !name.chars().any(|c| c.is_control() || matches!(c, ' ' | '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*'))
+        && !extension.contains('.')
+}
+
+/// DENY-only overlap check. An 8.3-looking component may be an unknown long spelling;
+/// ambiguous overlap is refused without resolving or contacting another task's volume.
+/// Never use this conservative predicate to authorize filesystem access.
+fn paths_may_overlap(left: &Path, right: &Path) -> bool {
+    #[cfg(windows)]
+    {
+        let (Some((left_volume, left)), Some((right_volume, right))) = (windows_path_parts(left), windows_path_parts(right)) else {
+            return true;
+        };
+        windows_case_may_match(&left_volume, &right_volume)
+            && left.iter().zip(&right).all(|(a, b)| windows_case_may_match(a, b) || possible_short_name(a) || possible_short_name(b))
+    }
+    #[cfg(not(windows))]
+    {
+        left.starts_with(right) || right.starts_with(left)
+    }
 }
 
 /// Validate scheduler/configuration structure without probing source or output volumes.
@@ -398,8 +485,10 @@ pub fn validate_structure(config: &Config, root: Option<&Path>) -> Result<(), St
                 outputs.push(lexical_path(folder, root)?);
             }
         }
-        if outputs.iter().any(|out| lexically_inside(out, &input) || lexically_inside(&input, out)) {
-            return Err("input, output and archive folders must not contain one another".into());
+        if outputs.iter().any(|out| paths_may_overlap(out, &input)) {
+            return Err(
+                "input, output and archive folders must not contain one another; use full folder names when short aliases are ambiguous".into()
+            );
         }
         if t.enabled {
             sources.push(input);
@@ -407,8 +496,8 @@ pub fn validate_structure(config: &Config, root: Option<&Path>) -> Result<(), St
         }
     }
     for (index, source) in sources.iter().enumerate() {
-        if sources.iter().skip(index + 1).chain(&destinations).any(|other| lexically_inside(source, other) || lexically_inside(other, source)) {
-            return Err("task input/output folders must not overlap".into());
+        if sources.iter().skip(index + 1).chain(&destinations).any(|other| paths_may_overlap(source, other)) {
+            return Err("task input/output folders must not overlap; use full folder names when short aliases are ambiguous".into());
         }
     }
     Ok(())
@@ -554,10 +643,20 @@ fn read_json<T: for<'a> Deserialize<'a>>(path: &Path) -> Result<T, String> {
     if file.metadata().map_err(|e| e.to_string())?.len() > MAX_JSON {
         return Err("hot folder JSON exceeds 16 MiB".into());
     }
-    serde_json::from_reader(file.take(MAX_JSON)).map_err(|e| format!("{}: {e}", path.display()))
+    // Buffered: serde_json reads a byte at a time, one system call each on a bare File.
+    serde_json::from_reader(std::io::BufReader::new(file.take(MAX_JSON))).map_err(|e| format!("{}: {e}", path.display()))
 }
 
 fn save_json<T: Serialize>(path: &Path, value: &T) -> Result<(), String> {
+    let bytes = serde_json::to_vec_pretty(value).map_err(|e| e.to_string())?;
+    if bytes.len() as u64 > MAX_JSON {
+        return Err("hot folder journal is full; archive the completed task and its configuration".into());
+    }
+    save_bytes(path, &bytes)
+}
+
+/// Replace `path` with `bytes` atomically, keeping a service-owned file's owner and mode.
+fn save_bytes(path: &Path, bytes: &[u8]) -> Result<(), String> {
     let previous = match fs::symlink_metadata(path) {
         Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
             return Err("configuration and journal targets must be regular files".into());
@@ -566,10 +665,6 @@ fn save_json<T: Serialize>(path: &Path, value: &T) -> Result<(), String> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
         Err(e) => return Err(e.to_string()),
     };
-    let bytes = serde_json::to_vec_pretty(value).map_err(|e| e.to_string())?;
-    if bytes.len() as u64 > MAX_JSON {
-        return Err("hot folder journal is full; archive the completed task and its configuration".into());
-    }
     let parent = path.parent().ok_or("missing parent folder")?;
     let mut temp = tempfile::NamedTempFile::new_in(parent).map_err(|e| e.to_string())?;
     #[cfg(unix)]
@@ -588,7 +683,7 @@ fn save_json<T: Serialize>(path: &Path, value: &T) -> Result<(), String> {
     }
     #[cfg(not(unix))]
     let _ = previous;
-    temp.write_all(&bytes).and_then(|_| temp.as_file().sync_all()).map_err(|e| e.to_string())?;
+    temp.write_all(bytes).and_then(|_| temp.as_file().sync_all()).map_err(|e| e.to_string())?;
     temp.persist(path).map_err(|e| e.to_string())?;
     sync_parent(path)
 }
@@ -696,8 +791,8 @@ fn validate_runtime(task: &Task, config: &Config, root: Option<&Path>) -> Result
                 boundaries.push(lexical_path(folder, root)?);
             }
         }
-        if originals.iter().any(|source| boundaries.iter().any(|boundary| lexically_inside(source, boundary) || lexically_inside(boundary, source))) {
-            return Err("project originals overlap another active task's folders; originals retained".into());
+        if originals.iter().any(|source| boundaries.iter().any(|boundary| paths_may_overlap(source, boundary))) {
+            return Err("project originals may overlap another active task's folders; use full folder names when short aliases are ambiguous; originals retained".into());
         }
     }
     Ok(())
@@ -830,6 +925,57 @@ fn remove_staged(path: &Path, expected: &str) -> Result<(), String> {
 }
 
 fn step(task: &Task, state: &mut State, current: u64, config_path: &Path, root: Option<&Path>, should_stop: &dyn Fn() -> bool) -> Result<(), String> {
+    step_with_model_check(task, state, current, config_path, root, should_stop, &|| ocr::engine().map(|_| ()))
+}
+
+/// What every phase of one step shares: the task, its confined folders and how to stop.
+struct StepContext<'a> {
+    task: &'a Task,
+    config_path: &'a Path,
+    root: Option<&'a Path>,
+    input: PathBuf,
+    output: PathBuf,
+    store: sources::CredentialStore,
+    /// True once the service stops or this task's configuration changes.
+    stopped: &'a dyn Fn() -> bool,
+}
+
+/// Remote files staged into the inbox, the staged item behind each candidate path, and the
+/// saved-output receipts that must still verify before any acknowledgement.
+#[derive(Default)]
+struct StagedQueue {
+    candidates: Vec<PathBuf>,
+    remote: BTreeMap<PathBuf, sources::StagedSource>,
+    proofs: Vec<Receipt>,
+}
+
+/// An input selected this step: its path, observation key and fingerprint.
+type ReadyInput = (PathBuf, String, String);
+
+/// Inputs selected this step, and how many are still waiting, the selected ones included.
+#[derive(Default)]
+struct Selection {
+    ready: Vec<ReadyInput>,
+    waiting: usize,
+    visited: usize,
+}
+
+/// Running byte totals of one step's inputs as read and as prepared.
+#[derive(Default)]
+struct Budget {
+    read: u64,
+    prepared: u64,
+}
+
+fn step_with_model_check(
+    task: &Task,
+    state: &mut State,
+    current: u64,
+    config_path: &Path,
+    root: Option<&Path>,
+    should_stop: &dyn Fn() -> bool,
+    check_models: &dyn Fn() -> Result<(), String>,
+) -> Result<(), String> {
     let input = confined(&task.input, root)?;
     let output = confined(&task.output, root)?;
     let snapshot = serde_json::to_vec(task).map_err(|e| e.to_string())?;
@@ -838,119 +984,109 @@ fn step(task: &Task, state: &mut State, current: u64, config_path: &Path, root: 
         sources::SourceConfig::Ftp(_) | sources::SourceConfig::Outlook(_) => sources::CredentialStore::for_config(config_path, root)?,
         _ => sources::CredentialStore::OsVault,
     };
-    let mut remote = BTreeMap::new();
-    let mut acknowledgement_proofs = Vec::new();
-    let candidates = if matches!(task.source, sources::SourceConfig::Local) {
-        Vec::new()
-    } else {
-        let staged = sources::stage(&task.source, &input, root, &task_stopped, &store)?;
-        if staged.has_more && task.output_plan.needs_batch() {
-            return Err("combined remote queue exceeds 128 files or 512 MiB; choose a smaller source or per-file outputs".into());
-        }
-        for warning in staged.warnings {
-            state.log.push(LogEntry { at: now(), task: task.id.clone(), input: None, output: None, error: Some(warning) });
-        }
-        for item in &staged.pending_acknowledgements {
-            let path = confined(&input.join(&item.staged_relative), root)?;
-            let key = format!("{}:{}:{}", task.id, path.display(), item.sha256);
-            let receipt =
-                journal::receipt(config_path, state, &key)?.ok_or("pending source acknowledgement has no saved-output receipt; original retained")?;
-            verify_outputs(&receipt, root)?;
-        }
-        let mut items = staged.items;
-        items.extend(staged.pending_acknowledgements);
-        // A final Outlook acknowledgement may consume the whole message. Verify every
-        // earlier ready attachment's outputs before acknowledging any of its peers.
-        for item in &items {
-            let path = confined(&input.join(&item.staged_relative), root)?;
-            let key = format!("{}:{}:{}", task.id, path.display(), item.sha256);
-            if let Some(receipt) = journal::receipt(config_path, state, &key)? {
-                verify_outputs(&receipt, root)?;
-                acknowledgement_proofs.push(receipt.clone());
-            }
-        }
-        if !matches!(task.source, sources::SourceConfig::Project(_)) {
-            items.sort_by(|a, b| a.relative.cmp(&b.relative));
-        }
-        let mut paths = Vec::new();
-        for item in items {
-            let path = confined(&input.join(&item.staged_relative), root)?;
-            if !path.starts_with(&input) {
-                return Err("staged source escaped its inbox".into());
-            }
-            let key = format!("{}:{}", task.id, path.display());
-            // Recover a failed/interrupted acknowledgement without rerunning OCR or saving duplicates.
-            if journal::receipt(config_path, state, &format!("{key}:{}", item.sha256))?.is_some() {
-                for receipt in &acknowledgement_proofs {
-                    verify_outputs(receipt, root)?;
-                }
-                sources::acknowledge(&task.source, &input, &item, &item.sha256, root, &task_stopped, &store)?;
-                remove_staged(&path, &item.sha256)?;
-                continue;
-            }
-            let ext = item.relative.extension().unwrap_or_default().to_string_lossy().to_ascii_lowercase();
-            if task.pdf && ext == "pdf" || task.images && matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "tif" | "tiff" | "bmp") {
-                remote.insert(path.clone(), item);
-                paths.push(path);
-            }
-        }
-        paths
+    let cx = StepContext { task, config_path, root, input, output, store, stopped: &task_stopped };
+    let queue = if matches!(task.source, sources::SourceConfig::Local) { StagedQueue::default() } else { stage_remote(&cx, state)? };
+    let Some(ready) = select_ready(&cx, state, current, should_stop, queue.candidates)? else {
+        return Ok(());
     };
-    let mut ready = Vec::new();
-    let mut waiting = 0usize;
-    let batch = task.output_plan.needs_batch();
-    let mut visited = 0_usize;
-    let mut consider = |path: PathBuf| -> Result<(), String> {
-        let key = format!("{}:{}", task.id, path.display());
-        let stamp = fingerprint(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-        let previous = journal::observation(config_path, state, &key)?;
-        let changed = previous.as_ref().is_none_or(|observation| observation.fingerprint != stamp);
-        let observation = if changed {
-            Observation { fingerprint: stamp.clone(), since: current, attempted: false, receipt_key: None }
-        } else {
-            previous.ok_or("source observation unavailable")?
-        };
-        let pending_cleanup = if let Some(receipt_key) = &observation.receipt_key {
-            journal::receipt(config_path, state, receipt_key)?.is_some_and(|r| r.source_stamp == stamp && r.cleanup.is_some())
-        } else {
-            state.receipts.iter().any(|(receipt_key, receipt)| {
-                receipt_key.starts_with(&format!("{key}:")) && receipt.source_stamp == stamp && receipt.cleanup.is_some()
-            })
-        };
-        if observation.attempted && !pending_cleanup {
-            return Ok(());
+    let publication_time = state.tasks.get(&task.id).and_then(|status| status.attempt_started_at).unwrap_or(current);
+    let prepared = prepare_ready(&cx, state, ready, &queue.remote, publication_time, check_models)?;
+    if prepared.is_empty() {
+        return Ok(());
+    }
+    let result = save_prepared(&cx, state, &prepared, publication_time)?;
+    record_receipts(&cx, state, &prepared, result)?;
+    finish_sources(&cx, state, prepared, &queue.proofs)
+}
+
+fn stage_remote(cx: &StepContext, state: &mut State) -> Result<StagedQueue, String> {
+    let task = cx.task;
+    let staged = sources::stage(&task.source, &cx.input, cx.root, cx.stopped, &cx.store)?;
+    if staged.has_more && task.output_plan.needs_batch() {
+        return Err("combined remote queue exceeds 128 files or 512 MiB; choose a smaller source or per-file outputs".into());
+    }
+    for warning in staged.warnings {
+        state.log.push(LogEntry { at: now(), task: task.id.clone(), input: None, output: None, error: Some(warning) });
+    }
+    for item in &staged.pending_acknowledgements {
+        let path = confined(&cx.input.join(&item.staged_relative), cx.root)?;
+        let key = format!("{}:{}:{}", task.id, path.display(), item.sha256);
+        let receipt =
+            journal::receipt(cx.config_path, state, &key)?.ok_or("pending source acknowledgement has no saved-output receipt; original retained")?;
+        verify_outputs(&receipt, cx.root)?;
+    }
+    let mut items = staged.items;
+    items.extend(staged.pending_acknowledgements);
+    let mut queue = StagedQueue::default();
+    // A final Outlook acknowledgement may consume the whole message. Verify every
+    // earlier ready attachment's outputs before acknowledging any of its peers.
+    for item in &items {
+        let path = confined(&cx.input.join(&item.staged_relative), cx.root)?;
+        let key = format!("{}:{}:{}", task.id, path.display(), item.sha256);
+        if let Some(receipt) = journal::receipt(cx.config_path, state, &key)? {
+            verify_outputs(&receipt, cx.root)?;
+            queue.proofs.push(receipt.clone());
         }
-        waiting = waiting.saturating_add(1);
-        let selected = current.saturating_sub(observation.since) >= task.settle_seconds;
-        if changed || selected {
-            state.observations.insert(key.clone(), observation);
+    }
+    if !matches!(task.source, sources::SourceConfig::Project(_)) {
+        items.sort_by(|a, b| a.relative.cmp(&b.relative));
+    }
+    for item in items {
+        if let Some((path, item)) = queue_staged(cx, state, item, &queue.proofs)? {
+            queue.remote.insert(path.clone(), item);
+            queue.candidates.push(path);
         }
-        if selected {
-            if batch {
-                if ready.len() < 129 {
-                    ready.push((path, key, stamp));
-                }
-            } else if ready.first().is_none_or(|(first, _, _)| path < *first) {
-                ready.clear();
-                ready.push((path, key, stamp));
-            }
+    }
+    Ok(queue)
+}
+
+/// The candidate path of one staged item, or `None` once it was already saved (its
+/// acknowledgement is recovered here) or is a file type this task doesn't process.
+fn queue_staged(
+    cx: &StepContext,
+    state: &mut State,
+    item: sources::StagedSource,
+    proofs: &[Receipt],
+) -> Result<Option<(PathBuf, sources::StagedSource)>, String> {
+    let task = cx.task;
+    let path = confined(&cx.input.join(&item.staged_relative), cx.root)?;
+    if !path.starts_with(&cx.input) {
+        return Err("staged source escaped its inbox".into());
+    }
+    let key = format!("{}:{}", task.id, path.display());
+    // Recover a failed/interrupted acknowledgement without rerunning OCR or saving duplicates.
+    if journal::receipt(cx.config_path, state, &format!("{key}:{}", item.sha256))?.is_some() {
+        for receipt in proofs {
+            verify_outputs(receipt, cx.root)?;
         }
-        visited = visited.saturating_add(1);
-        if visited.is_multiple_of(256) {
-            journal::save(config_path, state)?;
-        }
-        Ok(())
-    };
+        sources::acknowledge(&task.source, &cx.input, &item, &item.sha256, cx.root, cx.stopped, &cx.store)?;
+        remove_staged(&path, &item.sha256)?;
+        return Ok(None);
+    }
+    let ext = item.relative.extension().unwrap_or_default().to_string_lossy().to_ascii_lowercase();
+    let wanted = task.pdf && ext == "pdf" || task.images && matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "tif" | "tiff" | "bmp");
+    Ok(wanted.then_some((path, item)))
+}
+
+/// The settled inputs to process now, or `None` when there is nothing to do yet.
+fn select_ready(
+    cx: &StepContext,
+    state: &mut State,
+    current: u64,
+    should_stop: &dyn Fn() -> bool,
+    candidates: Vec<PathBuf>,
+) -> Result<Option<Vec<ReadyInput>>, String> {
+    let task = cx.task;
+    let mut selection = Selection::default();
     if matches!(task.source, sources::SourceConfig::Local) {
-        visit_files(task, root, should_stop, &mut consider)?;
+        visit_files(task, cx.root, should_stop, &mut |path| consider(cx, state, current, &mut selection, path))?;
+        selection.ready.sort_by(|a, b| a.0.cmp(&b.0));
     } else {
         for path in candidates {
-            consider(path)?;
+            consider(cx, state, current, &mut selection, path)?;
         }
     }
-    if matches!(task.source, sources::SourceConfig::Local) {
-        ready.sort_by(|a, b| a.0.cmp(&b.0));
-    }
+    let Selection { ready, waiting, .. } = selection;
     let status = state.tasks.entry(task.id.clone()).or_default();
     status.waiting = waiting;
     if ready.is_empty() && waiting == 0 && task.once {
@@ -962,103 +1098,191 @@ fn step(task: &Task, state: &mut State, current: u64, config_path: &Path, root: 
         status.blocked = true;
         return Err("combined batch exceeds 128 files; split the task or use one output per file".into());
     }
-    if ready.is_empty() || batch && ready.len() != waiting {
+    if ready.is_empty() || task.output_plan.needs_batch() && ready.len() != waiting {
+        return Ok(None);
+    }
+    Ok(Some(ready))
+}
+
+fn consider(cx: &StepContext, state: &mut State, current: u64, selection: &mut Selection, path: PathBuf) -> Result<(), String> {
+    let task = cx.task;
+    let key = format!("{}:{}", task.id, path.display());
+    let stamp = fingerprint(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let previous = journal::observation(cx.config_path, state, &key)?;
+    let changed = previous.as_ref().is_none_or(|observation| observation.fingerprint != stamp);
+    let observation = if changed {
+        Observation { fingerprint: stamp.clone(), since: current, attempted: false, receipt_key: None }
+    } else {
+        previous.ok_or("source observation unavailable")?
+    };
+    let pending_cleanup = if let Some(receipt_key) = &observation.receipt_key {
+        journal::receipt(cx.config_path, state, receipt_key)?.is_some_and(|r| r.source_stamp == stamp && r.cleanup.is_some())
+    } else {
+        state
+            .receipts
+            .iter()
+            .any(|(receipt_key, receipt)| receipt_key.starts_with(&format!("{key}:")) && receipt.source_stamp == stamp && receipt.cleanup.is_some())
+    };
+    if observation.attempted && !pending_cleanup {
         return Ok(());
     }
-    // Model installation is an environment failure, not a permanent bad input.
-    if !task.analysis_only && (task.settings.recognize || task.settings.auto_rotate || task.settings.deskew || task.settings.auto_crop) {
-        ocr::engine()?;
+    selection.waiting = selection.waiting.saturating_add(1);
+    let selected = current.saturating_sub(observation.since) >= task.settle_seconds;
+    if changed || selected {
+        state.observations.insert(key.clone(), observation);
     }
-    let publication_time = state.tasks.get(&task.id).and_then(|status| status.attempt_started_at).unwrap_or(current);
+    if selected {
+        let ready = &mut selection.ready;
+        if task.output_plan.needs_batch() {
+            if ready.len() < 129 {
+                ready.push((path, key, stamp));
+            }
+        } else if ready.first().is_none_or(|(first, _, _)| path < *first) {
+            ready.clear();
+            ready.push((path, key, stamp));
+        }
+    }
+    selection.visited = selection.visited.saturating_add(1);
+    if selection.visited.is_multiple_of(256) {
+        journal::save(cx.config_path, state)?;
+    }
+    Ok(())
+}
+
+fn prepare_ready(
+    cx: &StepContext,
+    state: &mut State,
+    ready: Vec<ReadyInput>,
+    remote: &BTreeMap<PathBuf, sources::StagedSource>,
+    publication_time: u64,
+    check_models: &dyn Fn() -> Result<(), String>,
+) -> Result<Vec<Prepared>, String> {
     let mut prepared = Vec::new();
-    let mut prepared_bytes = 0_u64;
-    let mut total = 0u64;
-    for (source, key, stamp) in ready {
-        if task_stopped() {
-            return Err("task stopped; no partial output was saved".into());
+    let mut budget = Budget::default();
+    for entry in ready {
+        if let Some(file) = prepare_one(cx, state, entry, remote, &mut budget, publication_time, check_models)? {
+            prepared.push(file);
         }
-        if !state.observations.contains_key(&key) {
-            let observation = journal::observation(config_path, state, &key)?.ok_or("source observation unavailable")?;
-            state.observations.insert(key.clone(), observation);
-        }
-        state.tasks.entry(task.id.clone()).or_default().last_input = Some(source.clone());
-        let file = File::open(&source).map_err(|e| e.to_string())?;
-        let length = file.metadata().map_err(|e| e.to_string())?.len();
-        total = total.saturating_add(length);
-        if length == 0 || total > MAX_INPUT {
-            if let Some(o) = state.observations.get_mut(&key) {
-                o.attempted = true;
-            }
-            state.tasks.entry(task.id.clone()).or_default().blocked = batch;
-            return Err("input or combined batch must contain 1 byte to 512 MiB; sources retained".into());
-        }
-        let mut bytes = Vec::new();
-        file.take(MAX_INPUT + 1).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
-        if bytes.len() as u64 > MAX_INPUT || fingerprint(&source)? != stamp {
-            return Err("input changed while being read; waiting for a stable copy".into());
-        }
-        let hash: String = Sha256::digest(&bytes).iter().map(|byte| format!("{byte:02x}")).collect();
-        let receipt_key = format!("{key}:{hash}");
-        if let Some(receipt) = journal::receipt(config_path, state, &receipt_key)? {
-            state.receipts.insert(receipt_key.clone(), receipt.clone());
-            if let Some(cleanup) = &receipt.cleanup {
-                verify_outputs(&receipt, root)?;
-                finish_original(&source, &hash, cleanup, task, root, &task_stopped)?;
-                if let Some(receipt) = state.receipts.get_mut(&receipt_key) {
-                    receipt.cleanup = None;
-                }
-                journal::save(config_path, state)?;
-            }
-            if let Some(o) = state.observations.get_mut(&key) {
-                o.attempted = true;
-            }
-            state.tasks.entry(task.id.clone()).or_default().waiting = state.tasks.get(&task.id).map_or(0, |s| s.waiting.saturating_sub(1));
-            continue;
-        }
-        let processed = match prepare(task, &source, bytes, config_path, MAX_INPUT.saturating_sub(prepared_bytes), publication_time, &task_stopped) {
-            Ok(bytes) => bytes,
-            Err(e) => {
-                if !task_stopped()
-                    && let Some(o) = state.observations.get_mut(&key)
-                {
-                    o.attempted = true;
-                    state.tasks.entry(task.id.clone()).or_default().blocked = batch;
-                }
-                return Err(e);
-            }
-        };
-        if fingerprint(&source)? != stamp {
-            return Err("input changed during processing; sources retained".into());
-        }
-        let expanded =
-            processed.document.as_ref().map_or(0, |v| v.len() as u64).saturating_add(processed.blank_pages.as_ref().map_or(0, |v| v.len() as u64));
-        prepared_bytes = prepared_bytes.saturating_add(expanded);
-        if prepared_bytes > MAX_INPUT {
-            state.tasks.entry(task.id.clone()).or_default().blocked = batch;
-            if let Some(observation) = state.observations.get_mut(&key) {
-                observation.attempted = true;
-            }
-            return Err("prepared batch exceeds 512 MiB; lower resolution or split the batch; originals retained".into());
-        }
-        prepared.push(Prepared {
-            relative: remote.get(&source).map(|item| item.relative.clone()).unwrap_or(source.strip_prefix(&input).map_err(|e| e.to_string())?.into()),
-            remote: remote.get(&source).cloned(),
-            processed: processed.document,
-            blank_pages: processed.blank_pages,
-            source,
-            key,
-            stamp,
-            hash,
-        });
     }
-    if prepared.is_empty() {
-        return Ok(());
-    }
-    let stopped = &task_stopped;
-    if stopped() {
+    Ok(prepared)
+}
+
+/// One input prepared for saving, or `None` when an earlier step already saved it (its
+/// pending cleanup finishes here).
+fn prepare_one(
+    cx: &StepContext,
+    state: &mut State,
+    (source, key, stamp): ReadyInput,
+    remote: &BTreeMap<PathBuf, sources::StagedSource>,
+    budget: &mut Budget,
+    publication_time: u64,
+    check_models: &dyn Fn() -> Result<(), String>,
+) -> Result<Option<Prepared>, String> {
+    let task = cx.task;
+    let batch = task.output_plan.needs_batch();
+    if (cx.stopped)() {
         return Err("task stopped; no partial output was saved".into());
     }
-    for file in &prepared {
+    if !state.observations.contains_key(&key) {
+        let observation = journal::observation(cx.config_path, state, &key)?.ok_or("source observation unavailable")?;
+        state.observations.insert(key.clone(), observation);
+    }
+    state.tasks.entry(task.id.clone()).or_default().last_input = Some(source.clone());
+    let bytes = read_input(cx, state, &source, &key, &stamp, budget)?;
+    let hash: String = Sha256::digest(&bytes).iter().map(|byte| format!("{byte:02x}")).collect();
+    if let Some(receipt) = journal::receipt(cx.config_path, state, &format!("{key}:{hash}"))? {
+        finish_receipted(cx, state, &source, &key, &hash, receipt)?;
+        return Ok(None);
+    }
+    // Completed receipts need only verified cleanup, even when the models are unavailable.
+    // New work still treats missing models as an environment failure, not a permanent bad input.
+    if !task.analysis_only && (task.settings.recognize || task.settings.auto_rotate || task.settings.deskew || task.settings.auto_crop) {
+        check_models()?;
+    }
+    let processed = match prepare(task, &source, bytes, cx.config_path, MAX_INPUT.saturating_sub(budget.prepared), publication_time, cx.stopped) {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            if !(cx.stopped)()
+                && let Some(o) = state.observations.get_mut(&key)
+            {
+                o.attempted = true;
+                state.tasks.entry(task.id.clone()).or_default().blocked = batch;
+            }
+            return Err(e);
+        }
+    };
+    if fingerprint(&source)? != stamp {
+        return Err("input changed during processing; sources retained".into());
+    }
+    let expanded =
+        processed.document.as_ref().map_or(0, |v| v.len() as u64).saturating_add(processed.blank_pages.as_ref().map_or(0, |v| v.len() as u64));
+    budget.prepared = budget.prepared.saturating_add(expanded);
+    if budget.prepared > MAX_INPUT {
+        state.tasks.entry(task.id.clone()).or_default().blocked = batch;
+        if let Some(observation) = state.observations.get_mut(&key) {
+            observation.attempted = true;
+        }
+        return Err("prepared batch exceeds 512 MiB; lower resolution or split the batch; originals retained".into());
+    }
+    Ok(Some(Prepared {
+        relative: remote.get(&source).map(|item| item.relative.clone()).unwrap_or(source.strip_prefix(&cx.input).map_err(|e| e.to_string())?.into()),
+        remote: remote.get(&source).cloned(),
+        processed: processed.document,
+        blank_pages: processed.blank_pages,
+        source,
+        key,
+        stamp,
+        hash,
+    }))
+}
+
+/// The bytes of one stable input, counted against the step's 512 MiB input budget.
+fn read_input(cx: &StepContext, state: &mut State, source: &Path, key: &str, stamp: &str, budget: &mut Budget) -> Result<Vec<u8>, String> {
+    let file = File::open(source).map_err(|e| e.to_string())?;
+    let length = file.metadata().map_err(|e| e.to_string())?.len();
+    budget.read = budget.read.saturating_add(length);
+    if length == 0 || budget.read > MAX_INPUT {
+        if let Some(o) = state.observations.get_mut(key) {
+            o.attempted = true;
+        }
+        state.tasks.entry(cx.task.id.clone()).or_default().blocked = cx.task.output_plan.needs_batch();
+        return Err("input or combined batch must contain 1 byte to 512 MiB; sources retained".into());
+    }
+    let mut bytes = Vec::new();
+    file.take(MAX_INPUT + 1).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+    if bytes.len() as u64 > MAX_INPUT || fingerprint(source)? != stamp {
+        return Err("input changed while being read; waiting for a stable copy".into());
+    }
+    Ok(bytes)
+}
+
+/// Finishes an input whose outputs an earlier step saved: only its verified cleanup remains.
+fn finish_receipted(cx: &StepContext, state: &mut State, source: &Path, key: &str, hash: &str, receipt: Receipt) -> Result<(), String> {
+    let task = cx.task;
+    let receipt_key = format!("{key}:{hash}");
+    state.receipts.insert(receipt_key.clone(), receipt.clone());
+    if let Some(cleanup) = &receipt.cleanup {
+        verify_outputs(&receipt, cx.root)?;
+        finish_original(source, hash, cleanup, task, cx.root, cx.stopped)?;
+        if let Some(receipt) = state.receipts.get_mut(&receipt_key) {
+            receipt.cleanup = None;
+        }
+        journal::save(cx.config_path, state)?;
+    }
+    if let Some(o) = state.observations.get_mut(key) {
+        o.attempted = true;
+    }
+    state.tasks.entry(task.id.clone()).or_default().waiting = state.tasks.get(&task.id).map_or(0, |s| s.waiting.saturating_sub(1));
+    Ok(())
+}
+
+/// Saves the prepared inputs' outputs and blank-page archive, and checks every published proof.
+fn save_prepared(cx: &StepContext, state: &mut State, prepared: &[Prepared], publication_time: u64) -> Result<output::OutputReceipt, String> {
+    let task = cx.task;
+    if (cx.stopped)() {
+        return Err("task stopped; no partial output was saved".into());
+    }
+    for file in prepared {
         if fingerprint(&file.source)? != file.stamp {
             return Err("input changed before saving; sources retained".into());
         }
@@ -1074,75 +1298,96 @@ fn step(task: &Task, state: &mut State, current: u64, config_path: &Path, root: 
         for step in &mut plan.steps {
             if task.analysis_only {
                 step.format = output::Format::Analysis;
+                step.optimization = Default::default();
             }
             if step.format == output::Format::Epub && step.language == "und" {
                 step.language = task.settings.language.clone();
             }
         }
-        output::save(&inputs, &output, &plan, &task.name, publication_time, root, &stopped)
+        output::save(&inputs, &cx.output, &plan, &task.name, publication_time, cx.root, cx.stopped)
     };
-    let mut result = match primary {
+    let result = match primary {
         Ok(result) => result,
         Err(error) => {
-            for path in error.outputs {
-                state.log.push(LogEntry { at: now(), task: task.id.clone(), input: None, output: Some(path), error: Some(error.message.clone()) });
-            }
-            for file in &prepared {
-                if let Some(o) = state.observations.get_mut(&file.key) {
-                    o.attempted = !stopped() && !error.retryable;
-                }
-            }
-            state.tasks.entry(task.id.clone()).or_default().blocked = batch && !error.retryable && !stopped();
+            record_save_failure(cx, state, prepared, error.outputs, &error.message, error.retryable);
             return Err(format!("{}; all originals retained", error.message));
         }
     };
-    if let Some(archive) = &task.blank_archive {
-        let blanks: Vec<_> = prepared
-            .iter()
-            .filter_map(|p| p.blank_pages.as_ref().map(|bytes| output::Input { relative: p.relative.clone(), bytes: bytes.clone() }))
-            .collect();
-        if !blanks.is_empty() {
-            let plan = OutputPlan { steps: vec![output::SaveStep { name_template: "{name}_blank_pages".into(), ..Default::default() }] };
-            match output::save(&blanks, archive, &plan, &task.name, publication_time, root, &stopped) {
-                Ok(saved) => {
-                    result.outputs.extend(saved.outputs);
-                    result.proofs.extend(saved.proofs);
-                    result.warnings.extend(saved.warnings);
-                }
-                Err(error) => {
-                    for path in result.outputs.into_iter().chain(error.outputs) {
-                        state.log.push(LogEntry {
-                            at: now(),
-                            task: task.id.clone(),
-                            input: None,
-                            output: Some(path),
-                            error: Some(error.message.clone()),
-                        });
-                    }
-                    for file in &prepared {
-                        if let Some(o) = state.observations.get_mut(&file.key) {
-                            o.attempted = !stopped() && !error.retryable;
-                        }
-                    }
-                    state.tasks.entry(task.id.clone()).or_default().blocked = batch && !error.retryable && !stopped();
-                    return Err(format!("blank-page archive failed: {}; all originals retained", error.message));
-                }
-            }
-        }
-    }
+    let result = save_blank_pages(cx, state, prepared, publication_time, result)?;
     for proof in &result.proofs {
-        if output_proof(&proof.path, root)? != *proof {
+        if output_proof(&proof.path, cx.root)? != *proof {
             return Err("published output no longer matches the export; all originals retained".into());
         }
     }
-    for file in &prepared {
+    Ok(result)
+}
+
+fn save_blank_pages(
+    cx: &StepContext,
+    state: &mut State,
+    prepared: &[Prepared],
+    publication_time: u64,
+    mut result: output::OutputReceipt,
+) -> Result<output::OutputReceipt, String> {
+    let Some(archive) = &cx.task.blank_archive else {
+        return Ok(result);
+    };
+    let blanks: Vec<_> = prepared
+        .iter()
+        .filter_map(|p| p.blank_pages.as_ref().map(|bytes| output::Input { relative: p.relative.clone(), bytes: bytes.clone() }))
+        .collect();
+    if blanks.is_empty() {
+        return Ok(result);
+    }
+    let plan = OutputPlan { steps: vec![output::SaveStep { name_template: "{name}_blank_pages".into(), ..Default::default() }] };
+    match output::save(&blanks, archive, &plan, &cx.task.name, publication_time, cx.root, cx.stopped) {
+        Ok(saved) => {
+            result.outputs.extend(saved.outputs);
+            result.proofs.extend(saved.proofs);
+            result.warnings.extend(saved.warnings);
+            result.optimizations.extend(saved.optimizations);
+            Ok(result)
+        }
+        Err(error) => {
+            record_save_failure(cx, state, prepared, result.outputs.into_iter().chain(error.outputs), &error.message, error.retryable);
+            Err(format!("blank-page archive failed: {}; all originals retained", error.message))
+        }
+    }
+}
+
+/// Logs the outputs a failed save left behind and marks its inputs so they retry only when
+/// the failure can recover.
+fn record_save_failure(
+    cx: &StepContext,
+    state: &mut State,
+    prepared: &[Prepared],
+    outputs: impl IntoIterator<Item = PathBuf>,
+    message: &str,
+    retryable: bool,
+) {
+    let task = cx.task;
+    for path in outputs {
+        state.log.push(LogEntry { at: now(), task: task.id.clone(), input: None, output: Some(path), error: Some(message.to_owned()) });
+    }
+    for file in prepared {
+        if let Some(o) = state.observations.get_mut(&file.key) {
+            o.attempted = !(cx.stopped)() && !retryable;
+        }
+    }
+    state.tasks.entry(task.id.clone()).or_default().blocked = task.output_plan.needs_batch() && !retryable && !(cx.stopped)();
+}
+
+/// Records a receipt per saved input and makes them durable before any source action.
+fn record_receipts(cx: &StepContext, state: &mut State, prepared: &[Prepared], result: output::OutputReceipt) -> Result<(), String> {
+    let task = cx.task;
+    for file in prepared {
         let cleanup = if file.remote.is_some() {
             None
         } else {
             match task.originals {
                 Originals::Keep => None,
                 Originals::Delete => Some(PendingLocalAction::Delete),
-                Originals::Move => Some(PendingLocalAction::Move { archive: confined(&task.archive, root)?, relative: file.relative.clone() }),
+                Originals::Move => Some(PendingLocalAction::Move { archive: confined(&task.archive, cx.root)?, relative: file.relative.clone() }),
             }
         };
         state.receipts.insert(
@@ -1175,38 +1420,44 @@ fn step(task: &Task, state: &mut State, current: u64, config_path: &Path, root: 
     }
     let status = state.tasks.entry(task.id.clone()).or_default();
     status.last_output = result.outputs.first().cloned();
+    status.last_optimization = output::optimization::Summary::from_reports(&result.optimizations);
     status.completed = status.completed.saturating_add(prepared.len() as u64);
     status.error = None;
     status.waiting = status.waiting.saturating_sub(prepared.len());
     // All outputs and their receipts are durable before any source move/delete is attempted.
-    journal::save(config_path, state)?;
+    journal::save(cx.config_path, state)
+}
+
+/// Acknowledges remote sources and moves or deletes local originals, each only after its
+/// outputs verify.
+fn finish_sources(cx: &StepContext, state: &mut State, prepared: Vec<Prepared>, proofs: &[Receipt]) -> Result<(), String> {
+    let task = cx.task;
     for file in prepared {
-        if stopped() {
+        if (cx.stopped)() {
             return Err("task stopped after outputs were saved; remaining original actions will resume on retry".into());
         }
         let receipt_key = format!("{}:{}", file.key, file.hash);
-        let receipt = journal::receipt(config_path, state, &receipt_key)?.ok_or("output receipt unavailable; original retained")?;
+        let receipt = journal::receipt(cx.config_path, state, &receipt_key)?.ok_or("output receipt unavailable; original retained")?;
         if file.remote.is_some() || receipt.cleanup.is_some() {
-            verify_outputs(&receipt, root)?;
+            verify_outputs(&receipt, cx.root)?;
         }
         state.receipts.insert(receipt_key.clone(), receipt);
         if let Some(remote) = &file.remote {
             // A previous ready attachment's output may have changed during lengthy OCR
             // of this final attachment. Recheck the whole pending group at the action.
-            for receipt in &acknowledgement_proofs {
-                verify_outputs(receipt, root)?;
+            for receipt in proofs {
+                verify_outputs(receipt, cx.root)?;
             }
-            sources::acknowledge(&task.source, &input, remote, &file.hash, root, &stopped, &store)?;
+            sources::acknowledge(&task.source, &cx.input, remote, &file.hash, cx.root, cx.stopped, &cx.store)?;
             remove_staged(&file.source, &file.hash)?;
             continue;
         }
-        let key = format!("{}:{}", file.key, file.hash);
-        if let Some(action) = state.receipts.get(&key).and_then(|r| r.cleanup.clone()) {
-            finish_original(&file.source, &file.hash, &action, task, root, &stopped)?;
-            if let Some(receipt) = state.receipts.get_mut(&key) {
+        if let Some(action) = state.receipts.get(&receipt_key).and_then(|r| r.cleanup.clone()) {
+            finish_original(&file.source, &file.hash, &action, task, cx.root, cx.stopped)?;
+            if let Some(receipt) = state.receipts.get_mut(&receipt_key) {
                 receipt.cleanup = None;
             }
-            journal::save(config_path, state)?;
+            journal::save(cx.config_path, state)?;
         }
     }
     Ok(())
@@ -1249,6 +1500,9 @@ fn prepare(
                 .map_err(|e| e.to_string())?
         };
         return Ok(preprocess::BlankResult { document: Some(selected), blank_pages: None });
+    }
+    if task.output_plan.steps.iter().any(|step| step.optimization.enabled()) {
+        output::optimization::reject_signed(pdf.clone())?;
     }
     let pdf = preprocess::prepare_bounded(pdf, &task.preprocessing, f64::from(task.settings.dpi), budget, timestamp, should_stop)?;
     let split = if task.remove_blank_pages {
@@ -1437,6 +1691,17 @@ mod tests {
         (dir, path, task)
     }
 
+    /// A relative configuration path under `--root` is written inside the root, not next to
+    /// the process's working directory.
+    #[test]
+    fn a_confined_configuration_is_saved_inside_its_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let name = Path::new("pdfcraft-confined-save-test.json");
+        save_config(name, &Config::default(), Some(dir.path())).unwrap();
+        assert!(dir.path().join(name).is_file(), "written under the root");
+        assert!(!name.exists(), "nothing written relative to the working directory");
+    }
+
     fn text_pdf() -> Arc<Vec<u8>> {
         Session::new().create_from_text("test", "A searchable original remains intact").unwrap()
     }
@@ -1465,7 +1730,11 @@ mod tests {
         task.settings.auto_rotate = false;
         task.settings.deskew = false;
         task.output_plan.steps = vec![
-            output::SaveStep { grouping: output::Grouping::All, ..Default::default() },
+            output::SaveStep {
+                grouping: output::Grouping::All,
+                optimization: output::optimization::Settings { mode: output::optimization::Mode::Lossless, ..Default::default() },
+                ..Default::default()
+            },
             output::SaveStep { format: output::Format::Txt, grouping: output::Grouping::All, ..Default::default() },
         ];
         save_config(&config, &Config { tasks: vec![task.clone()] }, None).unwrap();
@@ -1483,6 +1752,11 @@ mod tests {
         let id = session.open("combined", None, Arc::new(pdf), None).unwrap();
         assert_eq!(session.get(id).unwrap().info.pages.len(), 2);
         assert_eq!(read_state(&config).unwrap().receipts.len(), 2);
+        let saved = read_state(&config).unwrap();
+        let summary = saved.tasks["scan"].last_optimization.as_ref().unwrap();
+        assert_eq!(summary.documents, 1);
+        assert!(summary.bytes_after <= summary.bytes_before);
+        assert_eq!(summary.bytes_after, fs::metadata(task.output.join("Scan task.pdf")).unwrap().len());
     }
 
     #[test]
@@ -1517,6 +1791,31 @@ mod tests {
         t.settings.language = "de".into();
         t.settle_seconds = 0;
         assert!(validate(&Config { tasks: vec![t] }, None).is_err());
+    }
+
+    #[test]
+    fn hot_folder_optimization_refuses_signed_sources_before_page_selection_and_delete() {
+        let (_dir, config, mut task) = setup();
+        task.originals = Originals::Delete;
+        task.settings.recognize = false;
+        task.settings.auto_rotate = false;
+        task.settings.deskew = false;
+        task.preprocessing.pages = "1".into();
+        task.output_plan.steps[0].optimization.mode = output::optimization::Mode::Lossless;
+        let p12 = fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12")).unwrap();
+        let identity = crate::sign::pkcs12::open(&p12, "test").unwrap();
+        let mut session = Session::new().with_timestamp(1_800_000_000);
+        let source = session.combine(&[("first.pdf".into(), text_pdf()), ("signed-page.pdf".into(), text_pdf())]).unwrap();
+        let id = session.open("signed.pdf", None, source, None).unwrap();
+        let signed = session.sign(id, &identity, crate::SignOptions { page: 1, rect: None, ..Default::default() }).unwrap();
+        fs::write(task.input.join("source.pdf"), signed.as_slice()).unwrap();
+        save_config(&config, &Config { tasks: vec![task.clone()] }, None).unwrap();
+        let mut state = State::default();
+        let error = settled(&task, &mut state, &config).unwrap_err();
+        assert!(error.contains("signed PDFs"), "{error}");
+        assert_eq!(fs::read(task.input.join("source.pdf")).unwrap(), *signed);
+        assert!(state.receipts.is_empty());
+        assert_eq!(fs::read_dir(&task.output).unwrap().count(), 0);
     }
 
     #[test]
@@ -1559,6 +1858,33 @@ mod tests {
         assert!(step(&task, &mut state, 16, &config, None, &|| false).is_err());
         assert!(source.exists());
         assert!(state.receipts.is_empty());
+    }
+
+    #[test]
+    fn hot_folder_links_out_of_the_input_are_not_followed() {
+        let (dir, config, mut task) = setup();
+        task.recursive = true;
+        task.originals = Originals::Delete;
+        save_config(&config, &Config { tasks: vec![task.clone()] }, None).unwrap();
+        let outside = dir.path().join("outside");
+        fs::create_dir(&outside).unwrap();
+        fs::write(outside.join("secret.pdf"), b"%PDF-1.7 outside").unwrap();
+        #[cfg(unix)]
+        let linked = std::os::unix::fs::symlink(outside.join("secret.pdf"), task.input.join("file.pdf"))
+            .and_then(|()| std::os::unix::fs::symlink(&outside, task.input.join("folder")));
+        #[cfg(windows)]
+        let linked = std::os::windows::fs::symlink_file(outside.join("secret.pdf"), task.input.join("file.pdf"))
+            .and_then(|()| std::os::windows::fs::symlink_dir(&outside, task.input.join("folder")));
+        if linked.is_err() {
+            return; // Windows without the symlink privilege
+        }
+        let mut state = State::default();
+        for now in [10, 20] {
+            step(&task, &mut state, now, &config, None, &|| false).unwrap();
+        }
+        assert!(state.observations.is_empty());
+        assert!(fs::read_dir(&task.output).unwrap().next().is_none());
+        assert_eq!(fs::read(outside.join("secret.pdf")).unwrap(), b"%PDF-1.7 outside");
     }
 
     #[test]
@@ -1616,6 +1942,39 @@ mod tests {
         assert_eq!(fs::read_dir(&task.archive).unwrap().count(), 1);
         assert_eq!(fs::read_dir(&task.output).unwrap().count(), 1);
         assert!(read_state(&config).unwrap().receipts[&key].cleanup.is_none());
+    }
+
+    #[test]
+    fn hot_folder_missing_models_leave_new_work_retryable_and_keep_its_original() {
+        let (_dir, config, mut task) = setup();
+        task.originals = Originals::Delete;
+        save_config(&config, &Config { tasks: vec![task.clone()] }, None).unwrap();
+        let original = text_pdf();
+        let source = task.input.join("new.pdf");
+        fs::write(&source, original.as_slice()).unwrap();
+        let mut state = State::default();
+        let checks = std::cell::Cell::new(0);
+        // Model discovery normally searches several installation paths. Inject its real missing-
+        // model error so this regression also exercises refusal on machines with models installed.
+        let unavailable = || {
+            checks.set(checks.get() + 1);
+            Err(ocr::OcrError::NoModels.to_string())
+        };
+        step_with_model_check(&task, &mut state, 10, &config, None, &|| false, &unavailable).unwrap();
+        assert_eq!(checks.get(), 0, "an unsettled input does not load models");
+        for current in [13, 16] {
+            assert_eq!(
+                step_with_model_check(&task, &mut state, current, &config, None, &|| false, &unavailable).unwrap_err(),
+                ocr::OcrError::NoModels.to_string()
+            );
+            assert_eq!(fs::read(&source).unwrap(), *original);
+            assert!(fs::read_dir(&task.output).unwrap().next().is_none());
+            assert!(fs::read_dir(&task.archive).unwrap().next().is_none());
+            assert!(state.receipts.is_empty());
+            assert!(state.observations.values().all(|observation| !observation.attempted));
+            assert!(!state.tasks[&task.id].blocked);
+        }
+        assert_eq!(checks.get(), 2, "an unavailable runtime must not permanently suppress retries");
     }
 
     #[test]

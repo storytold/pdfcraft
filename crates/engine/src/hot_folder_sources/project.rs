@@ -1,6 +1,10 @@
 //! PDFCraft's open project manifest. This is not an ABBYY proprietary OCR project.
 
-use super::*;
+use super::{
+    BTreeMap, Backend, Control, Deserialize, File, Journal, MAX_FILE, MAX_ITEMS, MAX_JSON, Path, PathBuf, ProjectSource, Record, RemoteFile,
+    Serialize, SourceAction, StageReport, Write, archived_relative, confined, copy_limited, file_hash, fs, io_error, read_bounded, relative_ok,
+    supported, sync_directory,
+};
 
 pub(super) fn local_paths(source: &ProjectSource, root: Option<&Path>) -> Result<Vec<PathBuf>, String> {
     let (base, manifest) = manifest(source, root)?;

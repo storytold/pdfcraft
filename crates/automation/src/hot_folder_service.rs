@@ -7,10 +7,13 @@ impl Automation {
         use pdfcraft_hot_folder_service as service;
         let action = args.str("action")?;
         // A filesystem root cannot confine system service changes. Never silently cross it.
-        if action != "status" && self.root.is_some() {
+        if action != "status" && (self.root.is_some() || self.roots.is_some()) {
             return Err(failed(
-                "System service changes are unavailable in a --root confined session; run an explicit unrestricted administration command",
+                "System service changes are unavailable in a filesystem-confined session; run an explicit unrestricted administration command",
             ));
+        }
+        if action != "status" {
+            self.check_hot_folder_admin()?;
         }
         let executable = self.resolve(args.str("executable")?, false)?;
         let config = self.resolve(args.str("config")?, false)?;
@@ -34,10 +37,39 @@ impl Automation {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn system_changes_never_escape_separate_automation_roots() {
+        let dir = tempfile::tempdir().unwrap();
+        for (read, write) in [(true, false), (false, true), (true, true)] {
+            let roots = crate::file_access::AutomationRoots::new(read.then_some(dir.path()), write.then_some(dir.path())).unwrap();
+            let automation = Automation::new().with_automation_roots(roots);
+            for action in ["start", "stop", "enable", "disable", "install", "uninstall", "prepare-account"] {
+                let value = json!({"action":action,"executable":"unneeded","config":"unneeded","account":"root"});
+                assert!(automation.hot_folder_service(&Args(&value)).unwrap_err().to_string().contains("confined"));
+            }
+        }
+    }
+
+    #[test]
+    fn system_changes_need_hot_folder_admin() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("tasks.json");
+        let automation = Automation::new().with_hot_folder_admin(false);
+        for action in ["start", "stop", "enable", "disable", "install", "uninstall", "prepare-account"] {
+            let value = json!({"action":action,"executable":"unneeded","config":config,"account":"root"});
+            assert!(automation.hot_folder_service(&Args(&value)).unwrap_err().to_string().contains("--allow-hot-folder-admin"), "{action}");
+        }
+        // Reading the status never needs it.
+        let value = json!({"action":"status","executable":"unneeded","config":config});
+        if let Err(error) = automation.hot_folder_service(&Args(&value)) {
+            assert!(!error.to_string().contains("--allow-hot-folder-admin"), "{error}");
+        }
+    }
 
     #[test]
     fn system_changes_never_escape_a_confined_automation_session() {

@@ -8,8 +8,8 @@ foreach ($name in 'pdfcraft.exe', 'pdfcraft-cli.exe', 'pdfcraft-hot-folder.exe')
 }
 foreach ($name in 'LICENSE-MIT', 'LICENSE-APACHE', 'NOTICE') { Copy-Item -LiteralPath $name -Destination $stage }
 Copy-Item -LiteralPath 'assets/app-icon/LICENSE-document.txt' -Destination $stage
-Set-Content -LiteralPath "$stage/models/detection.rten" -Value 'synthetic installer fixture; never an OCR model'
-Set-Content -LiteralPath "$stage/models/recognition.rten" -Value 'synthetic installer fixture; never an OCR model'
+Set-Content -LiteralPath "$stage/models/text-detection.onnx" -Value 'synthetic installer fixture; never an OCR model'
+Set-Content -LiteralPath "$stage/models/text-recognition.onnx" -Value 'synthetic installer fixture; never an OCR model'
 $msi = Join-Path $stage 'service-test.msi'
 $upgrade = Join-Path $stage 'service-test-upgrade.msi'
 $installedMsi = $msi
@@ -28,7 +28,8 @@ $upgradeHash = (Get-FileHash -LiteralPath "$stage/pdfcraft-hot-folder.exe" -Algo
 if ($LASTEXITCODE -ne 0) { throw 'Upgrade MSI compilation failed' }
 function Invoke-Msi([string] $Options, [string] $Name) {
   $log = Join-Path $stage "$Name.log"
-  $process = Start-Process -FilePath msiexec.exe -ArgumentList "$Options /qn /norestart /l*v `"$log`"" -Wait -PassThru -WindowStyle Hidden
+  # The service belongs to an installation for everyone; silent installs default to one account.
+  $process = Start-Process -FilePath msiexec.exe -ArgumentList "$Options ALLUSERS=1 /qn /norestart /l*v `"$log`"" -Wait -PassThru -WindowStyle Hidden
   if ($process.ExitCode -notin @(0,3010)) {
     Select-String -LiteralPath $log -Pattern 'Return value 3|Error [0-9]|failed' -Context 12,4
     throw "MSI $Name failed: $($process.ExitCode)"
@@ -82,15 +83,29 @@ try {
   Start-Sleep -Seconds 2
   if ((Get-Item -LiteralPath "$data/tasks.heartbeat").LastWriteTimeUtc -le $heartbeatBefore) { throw 'Alternate account cannot write through the service SID' }
   Set-Content -LiteralPath "$data/keep-user-tasks.txt" -Value 'synthetic task preservation fixture'
+  # Model rows left by the pre-0.8 shared app component, including an obsolete subkey.
+  # Menu opt-out on upgrade must remove these while preserving the service account.
+  foreach ($ext in @('png', 'jpg', 'jpeg', 'tif', 'tiff', 'gif', 'bmp', 'jp2', 'j2k', 'jpx')) {
+    $menuKey = "HKLM:\Software\Classes\SystemFileAssociations\.$ext\shell\PdfCraft.CreatePdf"
+    if (-not (Test-Path -LiteralPath "$menuKey\command")) { throw "$ext image menu missing before upgrade" }
+    New-Item -Path "$menuKey\LegacyProbe" -Force | Out-Null
+  }
   # No INSTALLHOTFOLDER override: a major upgrade must preserve the opt-in choice.
-  Invoke-Msi "/i `"$upgrade`"" 'upgrade'
+  Invoke-Msi "/i `"$upgrade`" INSTALLIMAGECONTEXTMENU=0" 'upgrade'
   $installedMsi = $upgrade
+  foreach ($ext in @('png', 'jpg', 'jpeg', 'tif', 'tiff', 'gif', 'bmp', 'jp2', 'j2k', 'jpx')) {
+    if (Test-Path -LiteralPath "HKLM:\Software\Classes\SystemFileAssociations\.$ext\shell\PdfCraft.CreatePdf") {
+      throw "$ext image menu survived upgrade opt-out"
+    }
+  }
   $service = Get-CimInstance Win32_Service -Filter "Name='PdfCraftHotFolder'"
   if ($service.State -ne 'Running' -or $service.StartMode -ne 'Auto' -or $service.StartName -ne 'NT AUTHORITY\NetworkService') {
     throw "Upgrade did not preserve the optional automatic service and its account: state=$($service.State), startup=$($service.StartMode), account=$($service.StartName)"
   }
   if (-not (Test-Path -LiteralPath "$data/keep-user-tasks.txt")) { throw 'Upgrade deleted task data' }
-  if ((Get-FileHash -LiteralPath "$env:ProgramFiles/PdfCraft/pdfcraft-hot-folder.exe" -Algorithm SHA256).Hash -ne $upgradeHash) {
+  # The installer records its folder (Program Files\ArtCraft\PdfCraft for everyone).
+  $installDir = (Get-ItemProperty -LiteralPath 'HKLM:\Software\PdfCraft' -Name InstallDir).InstallDir
+  if ((Get-FileHash -LiteralPath (Join-Path $installDir 'pdfcraft-hot-folder.exe') -Algorithm SHA256).Hash -ne $upgradeHash) {
     throw 'Upgrade retained the old executable instead of the new payload'
   }
   Invoke-Msi "/i `"$installedMsi`" REMOVE=HotFolder" 'remove-companion'

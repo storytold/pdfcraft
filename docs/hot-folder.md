@@ -2,6 +2,28 @@
 
 **Status: implemented native workflow, with isolated task workers and durable restart recovery. Platform package acceptance is documented separately. Proprietary ABBYY task/project formats are not compatible.**
 
+**Optimization integration status:** the shared full-save writer's generation-identity correction
+from [#1143](https://github.com/storytold/pdfcraft/pull/1143) is backported here from
+`da54b14f085c930350d9b23839bd404cf4c3a625` (COS implementation and five synthetic regressions only).
+The additional `hot_folder_optimization_never_revives_stale_page_content` automation regression
+exercises Off/Lossless/Reduce/Custom publication, preserving the original and live extension data
+while preventing stale page references from acquiring replacement content.
+The MSVC linker is installed. All seven Hot Folder automation tests pass on the integration
+with main `b5467d93`, with the pinned OCR models present. A real CLI run preserves the original
+and identical rendered pixels across all four modes: Off retains 66,104 bytes, while each
+optimization profile publishes 832 bytes for the synthetic stale-reference fixture. This is a
+regression check, not a general compression benchmark. Final package acceptance remains separate.
+The strict Windows symlink test cannot create its fixture locally (OS error 1314); GitHub's
+Windows job requires this test rather than silently treating an unavailable fixture as coverage.
+
+At integration commit `116cd60c`, local Windows gates pass: `cargo test --workspace --locked -j 2 --no-fail-fast -- --test-threads=2` (3,173 passed, 15 ignored, 0 failed), strict workspace/all-target Clippy, formatting, assets, layering, parity and all 32 WASM package checks. OCR models are present; optional craft-fonts-dependent cases remain unexercised.
+
+The follow-up integration includes main `3f044b62` (native Windows printing) and its resolved dependency lockfile. Targeted Windows tests pass: 22 print tests, 369 editor library tests (one ignored), and all seven Hot Folder automation tests. Strict workspace/all-target Clippy, formatting, assets, layering, parity and all 32 WASM package checks also pass on the follow-up. The full 3,173-test result above belongs to `116cd60c`; it is not a second full-suite run on the printing follow-up.
+
+The 2026-10-14 follow-up integrates main `dc4d86ba`. Its safe server-test harness passes on Windows and Linux after correcting native path separators and case comparison; the previous helper fails the same Linux run. Selected automation, font, content and editor tests pass (1,385 passed, five ignored), plus 271 renderer tests. Print-dialog tests use synthetic printer sources after reproducing a crash during concurrent native printer enumeration; all eleven assertions pass in parallel with those fixtures. This does not certify native printer drivers.
+
+The 2026-10-15 integration incorporates main `d3a91c5c` and version 0.8.0. It retains the Hot Folder D-Bus build input while enabling the upstream qpdf/Poppler requirement in Linux CI. Local targeted tests pass: 164 automation/Hot Folder tests, 374 editor library tests (one ignored), and 83 support-tool tests. External oracle coverage is enforced by Linux CI; optional craft-fonts coverage is not claimed for the local run.
+
 The optional standalone application processes folders without keeping the PdfCraft editor open.
 It shares OCR, orientation correction, deskew and paper-edge detection with the engine. Its
 interface follows the primary system language when English, German, French, Dutch, Spanish,
@@ -33,6 +55,17 @@ independently from the system language, using the shared OCR language list.
   Receipts retain the hashes of the actual staged export bytes. Missing or replaced outputs stop
   source cleanup, including recovery after a crash; older receipts without proofs cannot authorize
   deletion. Unix publication synchronizes containing directories before originals are changed.
+- PDF saving steps can optionally optimize the final PDF after OCR, corrections and grouping.
+  The default is **Off**. Lossless retains image encoding/quality, text, tags, forms and links;
+  Reduce uses the shared 150 ppi/JPEG quality 60 profile; Custom exposes separate color/grayscale
+  resolution thresholds, Retain/ZIP/JPEG compression and JPEG quality. Downsampling and JPEG
+  re-encoding may lose image detail. Only a strictly smaller result replaces the processed PDF
+  bytes; equal/larger candidates are discarded. Existing input files are never overwritten.
+  Signed inputs are refused before page selection, rasterization or grouping can remove their
+  signatures. Cancellation or optimization failure publishes no partial optimization result and
+  never authorizes source cleanup. Explicit Keep/Move/Delete policies still apply after all
+  outputs and receipts succeed. Image-only PDF and rasterizing scan settings are separate,
+  potentially destructive conversions; choosing Lossless does not undo those earlier choices.
 - Select one-based page ranges and save recognition-area templates in task JSON. Regions use
   displayed top-left percentages, include or exclude OCR words, and leave visible content intact.
   Optional grayscale, inversion, brightness, contrast, black/white threshold, median noise reduction
@@ -78,15 +111,54 @@ same engine through `pdfcraft-cli run` and opt-in MCP. All nested paths honour `
 inputs, every saving/blank archive folder, configuration and sidecars. Poll processes one stable
 file or complete bounded batch per task per due interval; it never silently starts a background worker.
 `hot_folder_run_now` overrides the next calendar occurrence. `hot_folder_service` exposes explicit
-service administration; mutations are refused in a filesystem-confined `--root` session.
+service administration; mutations are refused in any filesystem-confined session. Hot Folder task, source and project
+tools currently refuse separate `--automation-read-root` / `--automation-write-root` settings;
+use the supported shared `--root` confinement instead.
 `hot_folder_project` writes an ordered open manifest without replacing existing files.
 `hot_folder_source` provides credential status/removal, FTP password storage from a named environment
 variable, Outlook device sign-in and folder listing. Secrets never appear in tool results or task JSON.
+`pdfcraft-cli mcp` refuses every service action except `status`, and saving, signing in or forgetting
+source credentials, unless the user starts it with `--allow-hot-folder-admin`; reading the service and
+credential status, and `pdfcraft-cli run` scripts, are unaffected.
+
+Each PDF `output_plan.steps` entry accepts an `optimization` object. It is omitted or
+`{"mode":"off"}` for the original behavior. Modes are `off`, `lossless`, `reduce` and `custom`.
+For example, a task can retain an optimized PDF and a separate text export:
+
+```json
+{
+  "output_plan": {
+    "steps": [
+      { "format": "pdf", "optimization": { "mode": "lossless" } },
+      { "format": "txt" }
+    ]
+  }
+}
+```
+
+Custom settings use `color` and `gray`, each accepting `downsample` (boolean), `ppi`,
+`above_ppi`, `compression` (`retain`, `zip`, `jpeg`) and `quality` (1–100). Resolution must
+be finite, 9–2400 ppi, with `above_ppi >= ppi`. Defaults are 150 ppi above 225 ppi,
+JPEG quality 60. Retain keeps the existing image encoding, while generic lossless stream
+cleanup remains enabled. With downsampling on, Retain keeps the compression family
+(resampled JPEG uses quality 80); choose ZIP for
+lossless encoding of resampled pixels or JPEG for an explicit quality setting. Custom otherwise uses the lossless cleanup
+policy, retaining optional structures and links. Optimizing non-PDF saving steps is rejected.
+Analyze-only mode bypasses optimization as it does the other processing settings.
+
+`hot_folder_poll` and `hot_folder_status` expose `tasks[task_id].last_optimization` for the
+last successful publication batch: `documents`, `changed`, `bytes_before`, `bytes_after`.
+The standalone UI shows the same actual sizes. Counts exclude steps with optimization off;
+unchanged candidates have equal before/after values. Engine `hot_folder_output::save` also
+returns per-file `optimizations`, including the final collision-safe path and image counts.
+These figures compare against the processed PDF immediately before optimization, not the
+original scan or Office/image source. Blank-page archives are kept without this optimization.
 
 ## Remote credentials and mail handling
 
 The service uses a separate protected `secrets` directory next to its configuration. Windows
-installation restricts this to SYSTEM, Administrators, LocalService and the fixed service SID.
+installation restricts this to SYSTEM, Administrators and the fixed service SID; the shared
+LocalService identity gets no grant.
 A separately configured SCM service account is validated by its actual OS SID, not a task-JSON name. Unix requires the service
 account as owner and permissions 0700 for the directory and 0600 for files. Unsafe permissions,
 symlinks and missing provisioning are rejected instead of falling back to an unprotected file.

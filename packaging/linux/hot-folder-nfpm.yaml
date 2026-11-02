@@ -37,3 +37,4 @@ contents:
 scripts:
   postinstall: packaging/linux/hot-folder-postinst.sh
   preremove: packaging/linux/hot-folder-prerm.sh
+  postremove: packaging/linux/hot-folder-postrm.sh

@@ -78,11 +78,15 @@ pub struct LinkItem {
     pub style: LinkStyle,
 }
 
+/// Bytes of web-address text one listing keeps, counted after conversion to UTF-8; past it a link
+/// lists as [`LinkAction::Other`].
+pub(crate) const MAX_URI_BYTES: usize = 16 << 20;
+
 fn nums(doc: &Document, o: Option<&Object>) -> Vec<f64> {
     o.map(|o| doc.resolve(o)).and_then(|a| a.as_array().map(|a| a.iter().filter_map(|x| doc.resolve(x).as_f64()).collect())).unwrap_or_default()
 }
 
-fn action_of(doc: &Document, d: &Dict, pages: &[ObjRef]) -> LinkAction {
+fn action_of(doc: &Document, d: &Dict, pages: &[ObjRef], uri_budget: &mut usize) -> LinkAction {
     let dest_page = |dest: &Object| -> Option<usize> {
         let a = doc.resolve(dest);
         let first = a.as_array()?.first()?.clone();
@@ -97,9 +101,20 @@ fn action_of(doc: &Document, d: &Dict, pages: &[ObjRef]) -> LinkAction {
     }
     let Some(a) = d.get(b"A").map(|a| doc.resolve(a)).and_then(|a| a.as_dict().cloned()) else { return LinkAction::Other("no action".into()) };
     match a.name(b"S") {
-        Some(b"URI") => LinkAction::Uri(
-            a.get(b"URI").and_then(|u| doc.resolve(u).as_string().map(|s| String::from_utf8_lossy(&s.bytes).into_owned())).unwrap_or_default(),
-        ),
+        Some(b"URI") => {
+            let uri = a.get(b"URI").map(|u| doc.resolve(u));
+            let bytes = uri.as_ref().and_then(|u| u.as_string()).map_or(&[][..], |s| &s.bytes[..]);
+            // The raw length first, so an address already over the budget is never converted; then the
+            // converted text, which is up to three times longer where the bytes are not UTF-8.
+            let text = (bytes.len() <= *uri_budget).then(|| String::from_utf8_lossy(bytes));
+            match text.and_then(|t| Some((uri_budget.checked_sub(t.len())?, t))) {
+                Some((left, text)) => {
+                    *uri_budget = left;
+                    LinkAction::Uri(text.into_owned())
+                }
+                None => LinkAction::Other("web address too long".into()),
+            }
+        }
         Some(b"GoTo") => a.get(b"D").and_then(dest_page).map_or_else(|| LinkAction::Other("named destination".into()), LinkAction::Page),
         Some(s) => LinkAction::Other(String::from_utf8_lossy(s).into_owned()),
         None => LinkAction::Other("no action".into()),
@@ -133,8 +148,16 @@ fn style_of(doc: &Document, d: &Dict) -> LinkStyle {
 pub fn list(doc: &Document) -> Vec<LinkItem> {
     let Ok(pages) = page_refs(doc) else { return Vec::new() };
     let mut out = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let mut uri_budget = MAX_URI_BYTES;
     for (pi, p) in pages.iter().enumerate() {
         for (k, a) in annots(doc, *p).iter().enumerate() {
+            // One annotation object listed under several entries or pages is one link.
+            if let Some(r) = a.as_ref()
+                && !seen.insert(r)
+            {
+                continue;
+            }
             let Some(d) = doc.resolve(a).as_dict().cloned() else { continue };
             if d.name(b"Subtype") != Some(b"Link") {
                 continue;
@@ -148,7 +171,7 @@ pub fn list(doc: &Document) -> Vec<LinkItem> {
                 index: k,
                 obj: a.as_ref(),
                 rect: [r[0].min(r[2]), r[1].min(r[3]), r[0].max(r[2]), r[1].max(r[3])],
-                action: action_of(doc, &d, &pages),
+                action: action_of(doc, &d, &pages, &mut uri_budget),
                 style: style_of(doc, &d),
             });
         }
@@ -178,6 +201,19 @@ fn write_style(d: &mut Dict, s: &LinkStyle) {
     d.set(b"H".to_vec(), Object::name(s.highlight.code()));
 }
 
+/// Bytes of `u` as a 7-bit ASCII URI string (§12.6.4.8).
+fn uri_bytes(u: &str) -> Vec<u8> {
+    let mut out = Vec::with_capacity(u.len());
+    for &b in u.as_bytes() {
+        if (0x21..=0x7e).contains(&b) {
+            out.push(b);
+        } else {
+            out.extend_from_slice(format!("%{b:02X}").as_bytes());
+        }
+    }
+    out
+}
+
 fn write_action(doc: &Document, d: &mut Dict, a: &LinkAction) -> Result<(), AnnotError> {
     match a {
         LinkAction::Page(p) => {
@@ -194,7 +230,7 @@ fn write_action(doc: &Document, d: &mut Dict, a: &LinkAction) -> Result<(), Anno
             let mut act = Dict::new();
             act.set(b"S".to_vec(), Object::name("URI"));
             // URIs are 7-bit ASCII strings (§12.6.4.8).
-            act.set(b"URI".to_vec(), PdfString::literal(u.as_bytes().to_vec()));
+            act.set(b"URI".to_vec(), PdfString::literal(uri_bytes(u)));
             d.set(b"A".to_vec(), Object::Dict(act));
         }
         LinkAction::Other(_) => {}
@@ -202,13 +238,34 @@ fn write_action(doc: &Document, d: &mut Dict, a: &LinkAction) -> Result<(), Anno
     Ok(())
 }
 
+/// Check link geometry before writing PDF objects: a user or automation call can supply
+/// non-finite coordinates or a finite pair whose difference overflows to infinity.
+fn checked_rect(rect: [f64; 4]) -> Result<[f64; 4], AnnotError> {
+    if !rect.iter().all(|v| v.is_finite()) {
+        return Err(AnnotError::Invalid("the link area must have finite coordinates".into()));
+    }
+    let r = [rect[0].min(rect[2]), rect[1].min(rect[3]), rect[0].max(rect[2]), rect[1].max(rect[3])];
+    let (width, height) = (r[2] - r[0], r[3] - r[1]);
+    if !width.is_finite() || !height.is_finite() || width < 2.0 || height < 2.0 {
+        return Err(AnnotError::Invalid("the link area is too small or too large".into()));
+    }
+    Ok(r)
+}
+
 /// Add a link over `rect` (user space). Returns its index in the page's `/Annots`.
 pub fn add(doc: &mut Document, page: usize, rect: [f64; 4], action: &LinkAction, style: &LinkStyle) -> Result<usize, AnnotError> {
     let p = page_ref(doc, page)?;
-    let r = [rect[0].min(rect[2]), rect[1].min(rect[3]), rect[0].max(rect[2]), rect[1].max(rect[3])];
-    if !r.iter().all(|v| v.is_finite()) || r[2] - r[0] < 2.0 || r[3] - r[1] < 2.0 {
-        return Err(AnnotError::Invalid("the link area is too small".into()));
-    }
+    let obj = new_link(doc, p, rect, action, style)?;
+    let mut list = annots(doc, p);
+    list.push(Object::Ref(obj));
+    let index = list.len() - 1;
+    set_annots(doc, p, list)?;
+    Ok(index)
+}
+
+/// A link annotation object for page `p`, not yet on the page's `/Annots`.
+fn new_link(doc: &mut Document, p: ObjRef, rect: [f64; 4], action: &LinkAction, style: &LinkStyle) -> Result<ObjRef, AnnotError> {
+    let r = checked_rect(rect)?;
     if matches!(action, LinkAction::Other(_)) {
         return Err(AnnotError::Invalid("choose a page or a web address".into()));
     }
@@ -220,12 +277,7 @@ pub fn add(doc: &mut Document, page: usize, rect: [f64; 4], action: &LinkAction,
     d.set(b"F".to_vec(), Object::Int(4));
     write_style(&mut d, style);
     write_action(doc, &mut d, action)?;
-    let obj = doc.add(Object::Dict(d));
-    let mut list = annots(doc, p);
-    list.push(Object::Ref(obj));
-    let index = list.len() - 1;
-    set_annots(doc, p, list)?;
-    Ok(index)
+    Ok(doc.add(Object::Dict(d)))
 }
 
 fn link_at(doc: &Document, page: usize, index: usize) -> Result<(ObjRef, ObjRef), AnnotError> {
@@ -250,10 +302,7 @@ pub fn set(
     let (_, r) = link_at(doc, page, index)?;
     let mut d = doc.get(r).as_dict().cloned().unwrap_or_default();
     if let Some(rect) = rect {
-        let rr = [rect[0].min(rect[2]), rect[1].min(rect[3]), rect[0].max(rect[2]), rect[1].max(rect[3])];
-        if rr[2] - rr[0] < 2.0 || rr[3] - rr[1] < 2.0 {
-            return Err(AnnotError::Invalid("the link area is too small".into()));
-        }
+        let rr = checked_rect(rect)?;
         d.set(b"Rect".to_vec(), Object::Array(rr.iter().map(|v| Object::Real(*v)).collect()));
     }
     if let Some(s) = style {
@@ -271,7 +320,7 @@ pub fn delete(doc: &mut Document, page: usize, index: usize) -> Result<(), Annot
     let (p, _) = link_at(doc, page, index)?;
     let mut list = annots(doc, p);
     list.remove(index);
-    set_annots(doc, p, list)
+    Ok(set_annots(doc, p, list)?)
 }
 
 /// Remove every link on `pages` (all when `None`). Returns how many went.
@@ -294,6 +343,59 @@ pub fn remove_all(doc: &mut Document, pages: Option<&[usize]>) -> Result<usize, 
         }
     }
     Ok(n)
+}
+
+/// Recognise common ASCII mailbox addresses without mistaking domains, partial words or
+/// invalid labels for e-mail links. The returned end is in source-character indices.
+fn email_at(chars: &[char], start: usize) -> Option<(usize, String)> {
+    let local_char = |c: char| c.is_ascii_alphanumeric() || "._+%-".contains(c);
+    let domain_char = |c: char| c.is_ascii_alphanumeric() || c == '-' || c == '.';
+    // Don't create a link starting in the middle of an address.
+    if start > 0 && chars.get(start - 1).is_some_and(|c| local_char(*c) || *c == '@') {
+        return None;
+    }
+    let mut at = start;
+    while chars.get(at).is_some_and(|c| local_char(*c)) {
+        at += 1;
+        if at - start > 64 {
+            return None;
+        }
+    }
+    let local = chars.get(start..at)?;
+    if local.is_empty() || local.first() == Some(&'.') || local.last() == Some(&'.') || local.windows(2).any(|w| w == ['.', '.']) {
+        return None;
+    }
+    if chars.get(at) != Some(&'@') {
+        return None;
+    }
+    let mut end = at + 1;
+    while chars.get(end).is_some_and(|c| domain_char(*c)) {
+        end += 1;
+        if end - at - 1 > 253 {
+            return None;
+        }
+    }
+    while end > at + 1 && chars.get(end - 1) == Some(&'.') {
+        end -= 1;
+    }
+    if chars.get(end).is_some_and(|c| c.is_ascii_alphanumeric() || *c == '@' || *c == '_') {
+        return None;
+    }
+    let domain = chars.get(at + 1..end)?;
+    let mut labels = 0;
+    let mut tld_length = 0;
+    for label in domain.split(|c| *c == '.') {
+        if label.is_empty() || label.len() > 63 || !label.first()?.is_ascii_alphanumeric() || !label.last()?.is_ascii_alphanumeric() {
+            return None;
+        }
+        labels += 1;
+        tld_length = label.len();
+    }
+    if labels < 2 || tld_length < 2 {
+        return None;
+    }
+    let address: String = chars.get(start..end)?.iter().collect();
+    Some((end, format!("mailto:{address}")))
 }
 
 /// Find web addresses in text: `http(s)://…`, `www.…` and bare e-mail addresses become
@@ -327,6 +429,11 @@ pub fn find_urls(chars: &[char]) -> Vec<(std::ops::Range<usize>, String)> {
                 continue;
             }
         }
+        if boundary && let Some((end, uri)) = email_at(chars, i) {
+            out.push((i..end, uri));
+            i = end;
+            continue;
+        }
         i += 1;
     }
     out
@@ -335,12 +442,40 @@ pub fn find_urls(chars: &[char]) -> Vec<(std::ops::Range<usize>, String)> {
 /// Create links for found URLs: `(page, quads, uri)` with quads in user space (one link per
 /// line rectangle). Returns how many links were added.
 pub fn add_many(doc: &mut Document, links: &[(usize, Vec<[f64; 4]>, String)], style: &LinkStyle) -> Result<usize, AnnotError> {
+    let pages = page_refs(doc)?;
+    // Check the whole batch first, so a bad entry fails it before any link object is created.
+    for (page, rects, uri) in links {
+        pages.get(*page).ok_or(AnnotError::NoSuchPage(*page))?;
+        if uri.trim().is_empty() {
+            return Err(AnnotError::Invalid("type the web address first".into()));
+        }
+        for r in rects {
+            checked_rect(*r)?;
+        }
+    }
+    // Each page's `/Annots` is extended once, with its new links in the order given.
+    let mut added: Vec<(ObjRef, Vec<Object>)> = Vec::new();
+    let mut slot: std::collections::HashMap<ObjRef, usize> = std::collections::HashMap::new();
     let mut n = 0;
     for (page, rects, uri) in links {
+        let p = pages.get(*page).copied().ok_or(AnnotError::NoSuchPage(*page))?;
+        let action = LinkAction::Uri(uri.clone());
         for r in rects {
-            add(doc, *page, *r, &LinkAction::Uri(uri.clone()), style)?;
+            let obj = new_link(doc, p, *r, &action, style)?;
+            let k = *slot.entry(p).or_insert_with(|| {
+                added.push((p, Vec::new()));
+                added.len() - 1
+            });
+            if let Some((_, list)) = added.get_mut(k) {
+                list.push(Object::Ref(obj));
+            }
             n += 1;
         }
+    }
+    for (p, new) in added {
+        let mut list = annots(doc, p);
+        list.extend(new);
+        set_annots(doc, p, list)?;
     }
     Ok(n)
 }

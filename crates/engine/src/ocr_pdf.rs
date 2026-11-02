@@ -65,15 +65,25 @@ pub(crate) fn add_text(doc: &mut Document, page: usize, words: &[PlacedWord]) ->
     }
     res.set(b"Font".to_vec(), Object::Dict(fonts));
     doc.update_dict(p.obj, |d| d.set(b"Resources".to_vec(), Object::Dict(res))).map_err(|e| EditError::Invalid(e.to_string()))?;
-    let mut out = String::from("/OCR BMC\nBT\n3 Tr\n");
+    pdfcraft_edit::stamp(doc, page, "OCR", layer(words, &codes).into_bytes())?;
+    Ok(())
+}
+
+/// The invisible text layer for `words`, drawn with the Type 3 glyph `codes` built above.
+fn layer(words: &[PlacedWord], codes: &BTreeMap<char, (String, usize)>) -> String {
+    // q/Q keep the invisible rendering mode (3 Tr) from reaching content drawn after it.
+    let mut out = String::from("/OCR BMC\nq\nBT\n3 Tr\n");
     for word in words {
         let len = word.text.chars().count() as f64;
         if len == 0.0 {
             continue;
         }
         let [a, b] = word.across.map(|v| v / len);
-        let [c, d] = word.up.map(|v| v / 0.93);
-        let (x, y) = (word.origin[0] + c * 0.21, word.origin[1] + d * 0.21);
+        // Match the OCR writer's shared ink-to-baseline estimate. A full-em box shifts
+        // words without descenders away from their neighbours and splits editable phrases.
+        let (top, bottom) = pdfcraft_ocr::ink_extent(&word.text);
+        let [c, d] = word.up.map(|v| v / (top - bottom));
+        let (x, y) = (word.origin[0] - c * bottom, word.origin[1] - d * bottom);
         out.push_str(&format!("{a:.6} {b:.6} {c:.6} {d:.6} {x:.6} {y:.6} Tm\n"));
         for ch in word.text.chars() {
             if let Some((name, code)) = codes.get(&ch) {
@@ -81,9 +91,8 @@ pub(crate) fn add_text(doc: &mut Document, page: usize, words: &[PlacedWord]) ->
             }
         }
     }
-    out.push_str("ET\nEMC\n");
-    pdfcraft_edit::stamp(doc, page, "OCR", out.into_bytes())?;
-    Ok(())
+    out.push_str("ET\nQ\nEMC\n");
+    out
 }
 
 pub(crate) fn deskew(doc: &mut Document, page: usize, degrees: f64) -> Result<(), EditError> {
@@ -120,4 +129,29 @@ pub(crate) fn deskew(doc: &mut Document, page: usize, degrees: f64) -> Result<()
     streams.push(close);
     doc.update_dict(p.obj, |d| d.set(b"Contents".to_vec(), Object::Array(streams))).map_err(|e| EditError::Invalid(e.to_string()))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The layer's invisible rendering mode and fonts end with it: every operator that sets them
+    /// sits inside a `q … Q` the layer closes itself, so text added after OCR stays visible.
+    #[test]
+    fn the_layer_restores_the_graphics_state_it_changes() {
+        let word = PlacedWord { text: "Hi".into(), origin: [10.0, 20.0], across: [30.0, 0.0], up: [0.0, 9.3] };
+        let codes = BTreeMap::from([('H', ("PCOcr0".to_string(), 1)), ('i', ("PCOcr0".to_string(), 2))]);
+        let s = layer(&[word], &codes);
+        let mut depth = 0_i32;
+        for token in s.split_ascii_whitespace() {
+            match token {
+                "q" => depth += 1,
+                "Q" => depth -= 1,
+                "Tr" | "Tf" | "Tm" => assert!(depth > 0, "`{token}` outside q … Q in {s:?}"),
+                _ => {}
+            }
+            assert!(depth >= 0, "unbalanced Q in {s:?}");
+        }
+        assert_eq!(depth, 0, "the layer leaves a q open: {s:?}");
+    }
 }

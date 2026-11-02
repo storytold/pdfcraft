@@ -1,7 +1,10 @@
 //! Microsoft Graph delegated device-code flow. Tokens/device secrets stay in the selected protected store.
 //! Global Microsoft cloud endpoints are fixed; pagination cannot redirect credentials.
 
-use super::*;
+use super::{
+    Backend, Control, CredentialStore, Deserialize, Duration, MAX_BATCH, MAX_FILE, MAX_ITEMS, MAX_JSON, OutlookSource, PathBuf, Record, RemoteFile,
+    Serialize, SourceAction, Write, copy_limited, credentials, guarded, hash, io_error, safe_filename, supported,
+};
 use serde_json::{Value, json};
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
@@ -167,6 +170,15 @@ impl Network {
         Ok(Self(agent))
     }
 }
+/// Graph calls carry the bearer and Graph's ID preference. Sign-in and token refresh have no
+/// bearer and get neither, rather than an empty Authorization header.
+fn graph_headers<B>(request: ureq::RequestBuilder<B>, auth: Option<&str>) -> ureq::RequestBuilder<B> {
+    match auth {
+        Some(auth) => request.header("Authorization", auth).header("Prefer", "IdType=\"ImmutableId\""),
+        None => request,
+    }
+}
+
 impl Http for Network {
     fn request(
         &self,
@@ -179,15 +191,12 @@ impl Http for Network {
         control: &Control<'_>,
     ) -> Result<Response, String> {
         control.check()?;
-        let auth = Zeroizing::new(bearer.map(|value| format!("Bearer {value}")).unwrap_or_default());
+        let auth = bearer.map(|value| Zeroizing::new(format!("Bearer {value}")));
+        let auth = auth.as_ref().map(|value| value.as_str());
         let mut response = match method {
-            "GET" => self.0.get(url).header("Authorization", auth.as_str()).header("Prefer", "IdType=\"ImmutableId\"").call(),
-            "DELETE" => self.0.delete(url).header("Authorization", auth.as_str()).header("Prefer", "IdType=\"ImmutableId\"").call(),
-            "POST" => self
-                .0
-                .post(url)
-                .header("Authorization", auth.as_str())
-                .header("Prefer", "IdType=\"ImmutableId\"")
+            "GET" => graph_headers(self.0.get(url), auth).call(),
+            "DELETE" => graph_headers(self.0.delete(url), auth).call(),
+            "POST" => graph_headers(self.0.post(url), auth)
                 .header("Content-Type", if is_form { "application/x-www-form-urlencoded" } else { "application/json" })
                 .send(body.unwrap_or_default()),
             _ => return Err("unsupported Outlook request method".into()),
@@ -588,6 +597,7 @@ impl Backend for Client<'_> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::StagedSource;
     use super::*;
     use std::cell::RefCell;
     use std::collections::VecDeque;

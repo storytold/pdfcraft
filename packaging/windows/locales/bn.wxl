@@ -5,7 +5,9 @@
   <String Id="SetupTitle" Value="[ProductName] সেটআপ" />
   <String Id="WelcomeTitle" Value="[ProductName] ইনস্টল করুন" />
   <String Id="WelcomeDescription" Value="সেটআপ সব ব্যবহারকারীর জন্য [ProductName] ইনস্টল করবে এবং স্টার্ট মেনুতে যোগ করবে। এগিয়ে যেতে ইনস্টল করুন-এ ক্লিক করুন।" />
+  <String Id="WelcomeDescriptionUser" Value="সেটআপ শুধু আপনার অ্যাকাউন্টের জন্য [ProductName] ইনস্টল করবে এবং স্টার্ট মেনুতে যোগ করবে। এগিয়ে যেতে ইনস্টল করুন-এ ক্লিক করুন।" />
   <String Id="DesktopShortcut" Value="ডেস্কটপ শর্টকাট তৈরি করুন" />
+  <String Id="PdfContextMenu" Value="PDF ফাইলের রাইট-ক্লিক মেনুতে &quot;PdfCraft দিয়ে সম্পাদনা করুন&quot; যোগ করুন" />
   <String Id="HotFolderCheckbox" Value="PdfCraft Hot Folder-ও ইনস্টল করুন" />
   <String Id="HotFolderDescription" Value="Windows-এর সঙ্গে চালু হওয়া একটি ব্যাকগ্রাউন্ড পরিষেবা যোগ করে। শুধু আপনার কনফিগার ও সক্রিয় করা কাজগুলো প্রক্রিয়া করা হয়।" />
   <String Id="Install" Value="ইনস্টল করুন" />
@@ -32,7 +34,6 @@
   <String Id="FilesInUseTitle" Value="ফাইলগুলো ব্যবহৃত হচ্ছে" />
   <String Id="FilesInUseDescription" Value="সেটআপের আপডেট করা প্রয়োজন এমন ফাইল এই প্রোগ্রামগুলো ব্যবহার করছে। সেগুলো বন্ধ করে এগোতে ঠিক আছে, অথবা সেটআপ থামাতে বাতিল-এ ক্লিক করুন।" />
   <String Id="OK" Value="ঠিক আছে" />
-  <String Id="PackageScopeError" Value="PdfCraft সব ব্যবহারকারীর জন্য ইনস্টল করতে হবে। প্রশাসকের অধিকার এবং ALLUSERS=1 দিয়ে সেটআপ চালান; একক ব্যবহারকারীর ইনস্টলেশন সমর্থিত নয়।" />
   <String Id="DowngradeError" Value="PdfCraft-এর আরও নতুন সংস্করণ ইতিমধ্যে ইনস্টল করা আছে।" />
   <String Id="PackageDescription" Value="PdfCraft PDF workbench" />
   <String Id="HotFolderFeatureDescription" Value="কনফিগার করা ফোল্ডারগুলো ব্যাকগ্রাউন্ডে স্বয়ংক্রিয়ভাবে প্রক্রিয়া করুন।" />
@@ -40,5 +41,6 @@
   <String Id="HotFolderShortcutDescription" Value="স্বয়ংক্রিয় OCR ও স্ক্যান প্রক্রিয়াকরণ কনফিগার করুন" />
   <String Id="AppDescription" Value="ওপেন-সোর্স PDF কর্মক্ষেত্র" />
   <String Id="CreatePdfCommand" Value="PdfCraft দিয়ে PDF তৈরি করুন…" />
+  <String Id="EditPdfCommand" Value="PdfCraft দিয়ে সম্পাদনা করুন" />
   <String Id="DocumentDescription" Value="PDF নথি" />
 </WixLocalization>

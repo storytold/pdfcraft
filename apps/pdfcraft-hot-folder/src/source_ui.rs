@@ -137,11 +137,13 @@ impl SourceUi {
         };
         let old = kind;
         let names = ["Local or network folder", "FTP / FTPS", "Outlook attachments", "PDFCraft project"];
-        egui::ComboBox::from_id_salt("source-kind").selected_text(t(names.get(kind).copied().unwrap_or(names[0]))).show_ui(ui, |ui| {
-            for (index, name) in names.iter().enumerate() {
-                ui.selectable_value(&mut kind, index, t(name));
-            }
-        });
+        let picker =
+            craft_ui::ComboBox::from_id_salt("source-kind").selected_text(t(names.get(kind).copied().unwrap_or(names[0]))).show_ui(ui, |ui| {
+                for (index, name) in names.iter().enumerate() {
+                    ui.selectable_value(&mut kind, index, t(name));
+                }
+            });
+        picker.response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, t("Source")));
         if kind != old {
             task.source = match kind {
                 1 => source::SourceConfig::Ftp(source::FtpSource { credential_id: format!("{}-ftp", task.id), ..Default::default() }),
@@ -157,19 +159,19 @@ impl SourceUi {
             source::SourceConfig::Ftp(settings) => {
                 line(ui, t("Server"), &mut settings.host);
                 ui.horizontal(|ui| {
-                    ui.label(t("Port"));
-                    ui.add(egui::DragValue::new(&mut settings.port).range(1..=65535));
+                    let caption = ui.label(t("Port"));
+                    ui.add(egui::DragValue::new(&mut settings.port).range(1..=65535)).labelled_by(caption.id);
                 });
                 ui.horizontal_wrapped(|ui| {
-                    ui.radio_value(&mut settings.security, source::FtpSecurity::ExplicitTls, t("FTP with TLS"));
-                    ui.radio_value(&mut settings.security, source::FtpSecurity::Plain, t("Unencrypted FTP"));
+                    crate::widgets::radio_value(ui, &mut settings.security, source::FtpSecurity::ExplicitTls, t("FTP with TLS"));
+                    crate::widgets::radio_value(ui, &mut settings.security, source::FtpSecurity::Plain, t("Unencrypted FTP"));
                 });
                 line(ui, t("Username"), &mut settings.username);
                 line(ui, t("Server folder"), &mut settings.folder);
-                ui.checkbox(&mut settings.recursive, t("Include subfolders"));
+                ui.add(crate::widgets::checkbox(&mut settings.recursive, t("Include subfolders")));
                 line(ui, t("Credential ID"), &mut settings.credential_id);
-                ui.label(t("Password"));
-                ui.add(egui::TextEdit::singleline(&mut self.password).password(true));
+                let caption = ui.label(t("Password"));
+                ui.add(egui::TextEdit::singleline(&mut self.password).password(true)).labelled_by(caption.id);
                 if ui.button(t("Save password securely")).clicked() {
                     self.pending = Some(Job::Password(settings.credential_id.clone(), Zeroizing::new(std::mem::take(&mut self.password))));
                 }
@@ -256,8 +258,8 @@ impl SourceUi {
     }
 }
 fn line(ui: &mut egui::Ui, label: &str, value: &mut String) {
-    ui.label(label);
-    ui.text_edit_singleline(value);
+    let caption = ui.label(label);
+    ui.text_edit_singleline(value).labelled_by(caption.id);
 }
 fn action(ui: &mut egui::Ui, value: &mut source::SourceAction, destination_label: &str, lang: Language) {
     let t = |key| lang.t(key);
@@ -270,7 +272,7 @@ fn action(ui: &mut egui::Ui, value: &mut source::SourceAction, destination_label
     let old = kind;
     ui.horizontal_wrapped(|ui| {
         for (index, name) in ["Keep", "Move after success", "Delete after success"].iter().enumerate() {
-            ui.radio_value(&mut kind, index, t(name));
+            crate::widgets::radio_value(ui, &mut kind, index, t(name));
         }
     });
     if old != kind {

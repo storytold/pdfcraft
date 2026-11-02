@@ -5,7 +5,9 @@
   <String Id="SetupTitle" Value="Установка [ProductName]" />
   <String Id="WelcomeTitle" Value="Установить [ProductName]" />
   <String Id="WelcomeDescription" Value="Программа установит [ProductName] для всех пользователей и добавит его в меню «Пуск». Нажмите «Установить», чтобы продолжить." />
+  <String Id="WelcomeDescriptionUser" Value="Программа установит [ProductName] только для вашей учётной записи и добавит его в меню «Пуск». Нажмите «Установить», чтобы продолжить." />
   <String Id="DesktopShortcut" Value="Создать ярлык на рабочем столе" />
+  <String Id="PdfContextMenu" Value="Добавить «Изменить в PdfCraft» в контекстное меню PDF-файлов" />
   <String Id="HotFolderCheckbox" Value="Также установить PdfCraft Hot Folder" />
   <String Id="HotFolderDescription" Value="Добавляет фоновую службу, запускаемую вместе с Windows. Обрабатываются только настроенные и включённые вами задания." />
   <String Id="Install" Value="Установить" />
@@ -32,7 +34,6 @@
   <String Id="FilesInUseTitle" Value="Файлы используются" />
   <String Id="FilesInUseDescription" Value="Эти программы используют файлы, которые необходимо обновить. Нажмите «ОК», чтобы закрыть их и продолжить, или «Отмена», чтобы остановить установку." />
   <String Id="OK" Value="ОК" />
-  <String Id="PackageScopeError" Value="PdfCraft необходимо установить для всех пользователей. Запустите установку с правами администратора и ALLUSERS=1; установка для одного пользователя не поддерживается." />
   <String Id="DowngradeError" Value="Уже установлена более новая версия PdfCraft." />
   <String Id="PackageDescription" Value="PdfCraft — программа для работы с PDF" />
   <String Id="HotFolderFeatureDescription" Value="Автоматическая обработка настроенных папок в фоновом режиме." />
@@ -40,5 +41,6 @@
   <String Id="HotFolderShortcutDescription" Value="Настроить автоматическое OCR и обработку сканов" />
   <String Id="AppDescription" Value="Программа для работы с PDF с открытым исходным кодом" />
   <String Id="CreatePdfCommand" Value="Создать PDF с помощью PdfCraft…" />
+  <String Id="EditPdfCommand" Value="Изменить в PdfCraft" />
   <String Id="DocumentDescription" Value="Документ PDF" />
 </WixLocalization>

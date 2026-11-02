@@ -4,8 +4,9 @@ use std::path::Path;
 fn unavailable<T>() -> Result<T, String> {
     Err("System services are supported on Windows, macOS and Linux with systemd".into())
 }
+// No system service here: report it absent so a manual worker can still be started.
 pub fn status(_: &Path, _: &Path) -> Result<Status, String> {
-    unavailable()
+    Ok(Status::absent())
 }
 pub fn set_enabled(_: bool, _: &Path, _: &Path) -> Result<(), String> {
     unavailable()

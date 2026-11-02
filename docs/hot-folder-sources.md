@@ -20,13 +20,14 @@ service, or as an elevated Windows administrator where the installer authorizes 
 
 | Platform | Required credential storage |
 | --- | --- |
-| Windows service | `%ProgramData%/PdfCraft/HotFolder/secrets`; protected DACL with only SYSTEM, Administrators and LocalService; owner one of those identities |
+| Windows service | `%ProgramData%/PdfCraft/HotFolder/secrets`; protected DACL with only SYSTEM, Administrators and the service SID `NT SERVICE\PdfCraftHotFolder` (older installs may also grant LocalService); owner one of those identities or the registered service account |
 | Linux service | Service-account-owned `secrets` directory, mode `0700`; files `0600`, one hard link; provision as the configured service user |
 | macOS LaunchDaemon | Same owner/mode requirements, under the selected service user's configuration directory; provision as that user |
 
 The Windows installer must create the secrets directory **before** provisioning,
 without inheriting the ordinary Users read access of the parent. Required DACL:
-`D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;S-1-5-19)`.
+`D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;S-1-5-80-4013549229-3107762393-4025766903-2826249871-1347187068)`
+(the last SID is `NT SERVICE\PdfCraftHotFolder`). The shared LocalService SID gets no grant.
 The code checks both owner and grants before reading or writing secrets. Directory
 symlinks, junctions and linked files are refused. Unix provisioning never changes
 an existing directory's ownership or permissions silently.
