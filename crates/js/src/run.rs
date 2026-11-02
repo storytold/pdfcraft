@@ -108,14 +108,205 @@ pub fn run(script: &str, event: &Event, doc: &DocInfo, fields: &[FieldState], do
 /// context; the first field write copies the snapshot, so neither the caller nor another
 /// script can observe uncommitted writes. Read-only calculations avoid copying the whole form.
 pub fn run_shared(script: &str, event: &Event, doc: &DocInfo, fields: Arc<Vec<FieldState>>, doc_scripts: &[String], limits: Limits) -> Outcome {
-    let failed = |why: String| Outcome { rc: true, value: event.value.clone(), change: event.change.clone(), error: Some(why), ..Default::default() };
     if let Some(why) = refuse(script) {
-        return failed(why);
+        return failed(event, why);
     }
-    // A document script too long or too deeply nested to run safely is skipped and reported,
-    // as one that throws is; the others and the script still run (#3940).
+    let (kept, skipped) = sort_doc_scripts(doc_scripts);
+    let (kept, skipped) = (&kept, &skipped);
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        std::thread::scope(|scope| {
+            let spawned = std::thread::Builder::new()
+                .name("pdfcraft-js".into())
+                .stack_size(SCRIPT_STACK)
+                .spawn_scoped(scope, || run_here(script, event, doc, fields, (kept, skipped), limits, &|| {}));
+            match spawned {
+                Ok(thread) => thread.join().unwrap_or_else(|_| failed(event, "the script stopped with an internal error".into())),
+                Err(e) => failed(event, format!("the script engine could not start: {e}")),
+            }
+        })
+    }
+    #[cfg(target_arch = "wasm32")]
+    run_here(script, event, doc, fields, (kept, skipped), limits, &|| {})
+}
+
+/// Like [`run_shared`], held to `timeout` of wall-clock time from when the engine is ready (its
+/// start-up is held apart to [`crate::xfa::ENGINE_START_LIMIT`], as an XFA script's is). boa
+/// can't interrupt a script, and its loop limit counts each call's loops apart, so a script that
+/// calls a function with a long loop again and again could run for hours: past the limit its
+/// thread is left behind to finish on its own, and the outcome is [`Outcome::abandoned`], with
+/// nothing changed. On wasm there are no threads: the script runs here, bounded by the loop and
+/// recursion limits alone.
+///
+/// At most eight of these threads ([`MAX_SCRIPT_THREADS`]) live at once, the ones left behind included:
+/// each abandoned script keeps a core busy until it ends on its own, so a hostile file opened
+/// again and again would otherwise leave one more behind each time. When none is free, the
+/// script is not started and the outcome is abandoned, saying why.
+pub fn run_shared_within(
+    script: &str,
+    event: &Event,
+    doc: &DocInfo,
+    fields: Arc<Vec<FieldState>>,
+    doc_scripts: &[String],
+    limits: Limits,
+    timeout: std::time::Duration,
+) -> Outcome {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = timeout;
+        run_shared(script, event, doc, fields, doc_scripts, limits)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    run_on_thread_from(&SCRIPT_THREADS, script, event, doc, fields, doc_scripts, (limits, timeout))
+}
+
+/// How many threads [`run_shared_within`] keeps alive at once in a process, scripts that ran past
+/// their limit and still run included.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) const MAX_SCRIPT_THREADS: usize = 8;
+
+#[cfg(not(target_arch = "wasm32"))]
+static SCRIPT_THREADS: ThreadSlots = ThreadSlots::new(MAX_SCRIPT_THREADS);
+
+/// A count of script threads alive, held below `max`.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) struct ThreadSlots {
+    taken: std::sync::atomic::AtomicUsize,
+    max: usize,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl ThreadSlots {
+    pub(crate) const fn new(max: usize) -> ThreadSlots {
+        ThreadSlots { taken: std::sync::atomic::AtomicUsize::new(0), max }
+    }
+
+    /// A place for one more thread, if one is free. Taking it and giving it back are each one
+    /// atomic step, so whether the script ends before or after its caller stops waiting, the
+    /// place is given back exactly once: when the [`ThreadSlot`] is dropped.
+    fn take(&'static self) -> Option<ThreadSlot> {
+        use std::sync::atomic::Ordering;
+        let mut n = self.taken.load(Ordering::Acquire);
+        loop {
+            if n >= self.max {
+                return None;
+            }
+            match self.taken.compare_exchange_weak(n, n.saturating_add(1), Ordering::AcqRel, Ordering::Acquire) {
+                Ok(_) => return Some(ThreadSlot(self)),
+                Err(now) => n = now,
+            }
+        }
+    }
+
+    /// How many places are taken.
+    #[cfg(test)]
+    pub(crate) fn taken(&self) -> usize {
+        self.taken.load(std::sync::atomic::Ordering::Acquire)
+    }
+}
+
+/// One taken place of [`ThreadSlots`], given back when dropped: by the script's thread as it
+/// ends (or unwinds), or here when the thread could not start.
+#[cfg(not(target_arch = "wasm32"))]
+struct ThreadSlot(&'static ThreadSlots);
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Drop for ThreadSlot {
+    fn drop(&mut self) {
+        // Only a taken place is dropped, so the count is at least one.
+        self.0.taken.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+    }
+}
+
+/// [`run_shared_within`] on a thread from `slots`.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn run_on_thread_from(
+    slots: &'static ThreadSlots,
+    script: &str,
+    event: &Event,
+    doc: &DocInfo,
+    fields: Arc<Vec<FieldState>>,
+    doc_scripts: &[String],
+    (limits, timeout): (Limits, std::time::Duration),
+) -> Outcome {
+    use std::sync::mpsc::RecvTimeoutError;
+    use std::time::Instant;
+    enum Step {
+        Started,
+        Done(Box<Outcome>),
+    }
+    if let Some(why) = refuse(script) {
+        return failed(event, why);
+    }
+    let Some(slot) = slots.take() else {
+        let why = format!("{} scripts are already running, including ones abandoned for running too long; this one was not started", slots.max);
+        return Outcome { abandoned: true, ..failed(event, why) };
+    };
+    let (kept, skipped) = sort_doc_scripts(doc_scripts);
+    let kept: Vec<(usize, String)> = kept.into_iter().map(|(i, d)| (i, d.to_owned())).collect();
+    let (script_owned, event_owned, doc_owned) = (script.to_owned(), event.clone(), doc.clone());
+    let (tx, rx) = std::sync::mpsc::channel();
+    // A thread that can't start drops the closure, and the slot with it.
+    let spawned = std::thread::Builder::new().name("pdfcraft-js".into()).stack_size(SCRIPT_STACK).spawn(move || {
+        // Given back on every way out: dropped below before the outcome is sent, or with the
+        // stack when the script unwinds.
+        let slot = slot;
+        // The first script in a process sets the engine up: not on the script's time.
+        crate::xfa::warm_up();
+        // The receiver is gone when the caller stopped waiting: nothing to report then.
+        let started = tx.clone();
+        let kept: Vec<(usize, &str)> = kept.iter().map(|(i, d)| (*i, d.as_str())).collect();
+        let o = run_here(&script_owned, &event_owned, &doc_owned, fields, (&kept, &skipped), limits, &move || {
+            let _ = started.send(Step::Started);
+        });
+        // Before the outcome is sent, so a caller holding its outcome finds the place free.
+        drop(slot);
+        let _ = tx.send(Step::Done(Box::new(o)));
+    });
+    if let Err(e) = spawned {
+        return failed(event, format!("the script engine could not start: {e}"));
+    }
+    let start_limit = crate::xfa::ENGINE_START_LIMIT;
+    let (mut running, mut limit) = (false, start_limit);
+    let mut deadline = Instant::now().checked_add(limit);
+    loop {
+        let left = deadline.map_or(limit, |d| d.saturating_duration_since(Instant::now()));
+        match rx.recv_timeout(left) {
+            Ok(Step::Done(o)) => return *o,
+            Ok(Step::Started) => {
+                if !running {
+                    (running, limit) = (true, timeout);
+                    deadline = Instant::now().checked_add(limit);
+                }
+            }
+            Err(RecvTimeoutError::Timeout) => {
+                let why = if running {
+                    format!("the script ran longer than {:.1} s and was abandoned", timeout.as_secs_f64())
+                } else {
+                    format!("the script engine took longer than {:.0} s to start", start_limit.as_secs_f64())
+                };
+                return Outcome { abandoned: true, ..failed(event, why) };
+            }
+            Err(RecvTimeoutError::Disconnected) => return failed(event, "the script stopped with an internal error".into()),
+        }
+    }
+}
+
+/// A document script refused before running ([`refuse`]): its place among all of them, and why.
+type Skipped = (usize, String);
+
+/// The outcome of a script that could not run, or stopped, for `why`: the event as it was.
+fn failed(event: &Event, why: String) -> Outcome {
+    Outcome { rc: true, value: event.value.clone(), change: event.change.clone(), error: Some(why), ..Default::default() }
+}
+
+/// The document scripts that may run, with their places among all of them, and the ones
+/// refused before running ([`refuse`]) with the reason. One too long or too deeply nested to run
+/// safely is skipped and reported, as one that throws is; the others and the script still run
+/// (#3940).
+fn sort_doc_scripts(doc_scripts: &[String]) -> (Vec<(usize, &str)>, Vec<Skipped>) {
     let mut skipped = Vec::new();
-    let kept: Vec<(usize, &str)> = doc_scripts
+    let kept = doc_scripts
         .iter()
         .enumerate()
         .filter_map(|(i, d)| match refuse(d) {
@@ -126,22 +317,7 @@ pub fn run_shared(script: &str, event: &Event, doc: &DocInfo, fields: Arc<Vec<Fi
             None => Some((i, d.as_str())),
         })
         .collect();
-    let (kept, skipped) = (&kept, &skipped);
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        std::thread::scope(|scope| {
-            let spawned = std::thread::Builder::new()
-                .name("pdfcraft-js".into())
-                .stack_size(SCRIPT_STACK)
-                .spawn_scoped(scope, || run_here(script, event, doc, fields, kept, skipped, limits));
-            match spawned {
-                Ok(thread) => thread.join().unwrap_or_else(|_| failed("the script stopped with an internal error".into())),
-                Err(e) => failed(format!("the script engine could not start: {e}")),
-            }
-        })
-    }
-    #[cfg(target_arch = "wasm32")]
-    run_here(script, event, doc, fields, kept, skipped, limits)
+    (kept, skipped)
 }
 
 /// Host hooks that refuse to compile code from strings (`eval`, `Function` and its generator
@@ -181,16 +357,17 @@ fn doc_error(index: usize, error: &dyn std::fmt::Display) -> String {
     format!("document script {}: {error}", index.saturating_add(1))
 }
 
-/// `doc_scripts` are the document scripts to run with their places among all of them;
-/// `skipped` the ones refused before running, with the reason.
+/// `doc_scripts` are the document scripts to run with their places among all of them, and the
+/// ones refused before running, with the reason. `started` is called once the engine is ready:
+/// a time limit on the script runs from then.
 fn run_here(
     script: &str,
     event: &Event,
     doc: &DocInfo,
     fields: Arc<Vec<FieldState>>,
-    doc_scripts: &[(usize, &str)],
-    skipped: &[(usize, String)],
+    (doc_scripts, skipped): (&[(usize, &str)], &[Skipped]),
     limits: Limits,
+    started: &dyn Fn(),
 ) -> Outcome {
     let mut ctx = match Context::builder().host_hooks(std::rc::Rc::new(NoCodeFromStrings)).build() {
         Ok(ctx) => ctx,
@@ -201,6 +378,7 @@ fn run_here(
     };
     ctx.runtime_limits_mut().set_loop_iteration_limit(limits.loop_iterations);
     ctx.runtime_limits_mut().set_recursion_limit(limits.recursion);
+    started();
     ctx.insert_data(RefCell::new(Host {
         fields,
         changed: BTreeSet::new(),

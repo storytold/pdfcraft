@@ -60,6 +60,29 @@ impl JsOutput {
         }
     }
 
+    /// Notes on the console, and drops, what scripts that ran unasked as the document opened
+    /// asked for that a person should choose: opening a link, submitting the form, printing,
+    /// saving, showing a panel, moving the focus or resetting fields. Turning a page and a beep
+    /// stay.
+    fn drop_unasked_requests(&mut self) {
+        let mut notes = Vec::new();
+        self.requests.retain(|r| {
+            let what = match r {
+                Request::GoToPage(_) | Request::Beep => return true,
+                Request::LaunchUrl(u) => format!("open {u}"),
+                Request::Submit(u) => format!("submit the form to {u}"),
+                Request::Print => "print".into(),
+                Request::SaveAs => "save the document as a new file".into(),
+                Request::ShowPanel(_) => "show a side panel".into(),
+                Request::Focus(_) => "move the focus".into(),
+                Request::Reset(_) => "reset fields".into(),
+            };
+            notes.push(format!("A document script asked to {what} as the document opened; only a button may do that"));
+            false
+        });
+        self.console.extend(notes);
+    }
+
     pub(crate) fn append(&mut self, other: JsOutput) {
         self.alerts.extend(other.alerts);
         self.console.extend(other.console);
@@ -165,6 +188,10 @@ pub struct JsRunner {
     // otherwise reparse every widget for every calculation. Values/flags still come from
     // the live `fields` snapshot on each call. A new edit gets a new runner and cache.
     displays: std::collections::HashMap<pdfcraft_cos::ObjRef, i32>,
+    /// When the scripts' time runs out (as a document opens); `None`: no wall-clock limit.
+    deadline: Option<std::time::Instant>,
+    /// A script ran past the deadline and was abandoned: no more run.
+    ran_away: bool,
 }
 
 impl JsRunner {
@@ -180,7 +207,102 @@ impl JsRunner {
         // Packets alone are not enough: static XFA and an unlaid-out shell keep their scripts.
         let xfa_active = xfa && pdfcraft_xfa::existing_layout(cos).is_some();
         let doc_scripts = if xfa_active { Vec::new() } else { pdfcraft_forms::document_scripts(cos) };
-        JsRunner { doc, doc_scripts, output: JsOutput::default(), cos: cos.clone(), displays: std::collections::HashMap::new() }
+        JsRunner {
+            doc,
+            doc_scripts,
+            output: JsOutput::default(),
+            cos: cos.clone(),
+            displays: std::collections::HashMap::new(),
+            deadline: None,
+            ran_away: false,
+        }
+    }
+
+    /// Run `script` for `ev` after the document scripts, within the time left before the
+    /// deadline when there is one. Once a script has been abandoned, or the time is spent, no
+    /// more run: each later one leaves the value alone, and only the first says why.
+    fn run_timed(&mut self, script: &str, ev: &pdfcraft_js::Event, states: std::sync::Arc<Vec<pdfcraft_js::FieldState>>) -> Outcome {
+        let Some(deadline) = self.deadline else {
+            return pdfcraft_js::run_shared(script, ev, &self.doc, states, &self.doc_scripts, Limits::default());
+        };
+        let unchanged = |error: Option<String>| Outcome { rc: true, value: ev.value.clone(), change: ev.change.clone(), error, ..Default::default() };
+        if self.ran_away {
+            return unchanged(None);
+        }
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        if left.is_zero() {
+            self.ran_away = true;
+            return unchanged(Some(format!(
+                "the document's scripts used their {:.0} s as the document opened; the rest did not run",
+                OPENING_TIME.as_secs_f64()
+            )));
+        }
+        let o = pdfcraft_js::run_shared_within(script, ev, &self.doc, states, &self.doc_scripts, Limits::default(), left);
+        self.ran_away |= o.abandoned;
+        o
+    }
+}
+
+/// Longest the document scripts, and the calculations a value they set starts, may run together
+/// as a document opens (from when the script engine is ready). Real forms' document scripts
+/// define functions and set a few fields, in milliseconds; a script past this is abandoned.
+const OPENING_TIME: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// Run the document-level scripts as the document opens (ISO 32000-2 §12.6.4.17: "When the
+/// document is opened, all of the actions in this name tree shall be executed"), and apply to
+/// `work` the field changes they make: a form that hides its "your viewer may not be compatible"
+/// field from a document script shows without it. Returns the names of the fields changed,
+/// including fields a calculation the changes started rewrote; what the scripts printed or
+/// failed with goes to `out`.
+///
+/// The scripts run unasked, from a file that may be hostile: together with the calculations
+/// they start they get [`OPENING_TIME`] (past it a script is abandoned and nothing it did
+/// applies), and what they ask for that a person should choose (a link, a submission, printing,
+/// saving) is noted on the console, not carried out.
+pub(crate) fn on_open(work: &mut pdfcraft_cos::Document, file_name: &str, out: &mut JsOutput) -> Result<Vec<String>, String> {
+    let mut runner = JsRunner::new(work, file_name);
+    if runner.doc_scripts.is_empty() {
+        return Ok(Vec::new());
+    }
+    runner.deadline = deadline_after(OPENING_TIME);
+    let mut opening = JsOutput::default();
+    let ran = run_on_open(work, &mut runner, &mut opening);
+    opening.drop_unasked_requests();
+    out.append(opening);
+    ran
+}
+
+/// [`on_open`]'s work, with what the scripts produced going to `out`.
+fn run_on_open(work: &mut pdfcraft_cos::Document, runner: &mut JsRunner, out: &mut JsOutput) -> Result<Vec<String>, String> {
+    let fields = pdfcraft_forms::fields(work);
+    let states = std::sync::Arc::new(fields.iter().map(|f| field_state(work, f)).collect::<Vec<_>>());
+    let o = runner.run_timed("", &pdfcraft_js::Event::doc("Open"), std::sync::Arc::clone(&states));
+    out.absorb(&o);
+    let changes = changes(&states, &o.changed);
+    if changes.is_empty() {
+        return Ok(Vec::new());
+    }
+    let applied = pdfcraft_forms::apply_open_script_changes(work, &changes, runner).map_err(|e| e.to_string());
+    // What a calculation the changes started printed or failed with.
+    out.append(std::mem::take(&mut runner.output));
+    applied?;
+    // A value the scripts set reruns the calculations, which can change other fields too: name
+    // every field that differs from before opening, not only the ones the scripts touched.
+    let after: Vec<_> = pdfcraft_forms::fields(work).iter().map(|f| field_state(work, f)).collect();
+    Ok(self::changes(&states, &after).into_iter().map(|c| c.name).collect())
+}
+
+/// `time` from now, where there is a clock (not in the browser build, whose scripts are bounded
+/// by the loop and recursion limits alone).
+fn deadline_after(time: std::time::Duration) -> Option<std::time::Instant> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        std::time::Instant::now().checked_add(time)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = time;
+        None
     }
 }
 
@@ -211,11 +333,12 @@ impl Scripts for JsRunner {
             .collect();
         let states = std::sync::Arc::new(states);
         let ev = pdfcraft_js::Event::field(event.name(), &target.name, value);
-        let o = pdfcraft_js::run_shared(script, &ev, &self.doc, std::sync::Arc::clone(&states), &self.doc_scripts, Limits::default());
+        let o = self.run_timed(script, &ev, std::sync::Arc::clone(&states));
         self.output.absorb(&o);
         if o.error.is_some() {
-            // As in Acrobat, a failing script leaves the value alone (the error goes to the console).
-            return ScriptResult { rc: true, value: value.to_string(), changes: Vec::new(), message: None };
+            // As in Acrobat, a failing script leaves the value alone (the error goes to the console);
+            // what it wrote to other fields before it failed stays written.
+            return ScriptResult { rc: true, value: value.to_string(), changes: changes(&states, &o.changed), message: None };
         }
         ScriptResult {
             rc: o.rc,
@@ -223,6 +346,11 @@ impl Scripts for JsRunner {
             changes: changes(&states, &o.changed),
             message: (!o.rc).then(|| o.alerts.last().map(|m| m.text.clone())).flatten(),
         }
+    }
+
+    /// On the console, as a script error: the field kept its value.
+    fn refused(&mut self, why: &str) {
+        self.output.errors.push(format!("A script set a value the field does not take, so the field keeps its own: {why}"));
     }
 }
 

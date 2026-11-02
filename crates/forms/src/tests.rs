@@ -5430,6 +5430,40 @@ endstream".into(),
     }
 }
 
+/// A value a script sets on another field that the field does not take (text past its `/MaxLen`,
+/// ISO 32000-2 §12.7.5.3 Table 232, or an option a combo box doesn't have) is refused as typing
+/// it is: the field keeps its value, the script engine hears why, and the script's other changes
+/// apply.
+#[test]
+fn a_script_value_a_field_does_not_take_is_refused_alone() {
+    #[derive(Default)]
+    struct Refusals(Vec<String>);
+    impl Scripts for Refusals {
+        fn run(&mut self, _: FieldEvent, _: &str, _: &Field, value: &str, _: &[Field]) -> ScriptResult {
+            ScriptResult { rc: true, value: value.to_string(), changes: Vec::new(), message: None }
+        }
+        fn refused(&mut self, why: &str) {
+            self.0.push(why.to_string());
+        }
+    }
+    let mut doc = fixture();
+    let code = add_field(&mut doc, 0, [50.0, 700.0, 250.0, 720.0], &NewField::Text { multiline: false }, Some("code")).unwrap();
+    set_props(&mut doc, &code, &FieldProps { max_len: Some(Some(3)), ..FieldProps::default() }).unwrap();
+    set_value(&mut doc, &code, &FieldValue::Text("abc".into())).unwrap();
+    let pick = add_field(&mut doc, 0, [50.0, 600.0, 250.0, 620.0], &NewField::Combo { options: vec!["Pear".into()], editable: false }, Some("pick"))
+        .unwrap();
+    let note = add_field(&mut doc, 0, [50.0, 500.0, 250.0, 520.0], &NewField::Text { multiline: false }, Some("note")).unwrap();
+    let change = |name: &str, v: &str| FieldChange { name: name.into(), value: Some(vec![v.into()]), ..FieldChange::default() };
+    let mut scripts = Refusals::default();
+    apply_script_changes(&mut doc, &[change(&code, "ABCDEF"), change(&pick, "Plum"), change(&note, "kept")], &mut scripts).unwrap();
+    let value = |name: &str| fields(&doc).into_iter().find(|f| f.name == name).unwrap().value;
+    assert_eq!(value(&code), ["abc"], "the over-long value is refused");
+    assert!(value(&pick).is_empty(), "so is an option the combo box doesn't have");
+    assert_eq!(value(&note), ["kept"], "the other change applies");
+    assert_eq!(scripts.0.len(), 2, "{:?}", scripts.0);
+    assert!(scripts.0[0].contains("takes at most 3 characters"), "{:?}", scripts.0);
+}
+
 #[test]
 fn editing_button_export_values_preserves_selection_and_appearance() {
     let mut doc = fixture();
