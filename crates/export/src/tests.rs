@@ -1261,8 +1261,52 @@ fn a_mirrored_picture_is_flipped_back_in_every_format() {
     // PowerPoint and HTML.
     assert!(part(&pptx(&[flipped(page())], "Scan"), "ppt/slides/slide1.xml").contains("<a:xfrm flipV=\"1\">"));
     assert!(!part(&pptx(&[page()], "Scan"), "ppt/slides/slide1.xml").contains("flipV"));
-    assert!(html(&[flipped(page())], "Scan").contains("<img alt=\"\" style=\"transform:scaleY(-1)\" src="));
-    assert!(!html(&[page()], "Scan").contains("scaleY"));
+    assert!(html(&[flipped(page())], "Scan").contains("<img alt=\"\" style=\"transform:scale(1,-1)\" src="));
+    assert!(!html(&[page()], "Scan").contains("transform"));
+}
+
+/// The writers that place pictures upright (flowing Word pages, PowerPoint, HTML) compose a mirror
+/// with a half turn: a left-right mirror (`-w 0 0 h`, mirrored and turned 180°) flips
+/// horizontally, not vertically, and an upright picture turned half round flips both ways. A
+/// positioned Word page rotates the picture itself, so it keeps the vertical flip and the turn.
+#[test]
+fn a_mirror_and_a_half_turn_compose_in_the_upright_writers() {
+    let turned = |flip: bool| {
+        let mut p = page();
+        p.images.iter_mut().for_each(|im| {
+            im.flip = flip;
+            im.rotation = 180.0;
+        });
+        p
+    };
+    let docx_xml = |p: Page| part(&docx(&[p], "Scan"), "word/document.xml");
+    let slide = |p: Page| part(&pptx(&[p], "Scan"), "ppt/slides/slide1.xml");
+    // A left-right mirror.
+    assert!(docx_xml(turned(true)).contains("<a:xfrm flipH=\"1\">"));
+    assert!(slide(turned(true)).contains("<a:xfrm flipH=\"1\">"));
+    assert!(html(&[turned(true)], "Scan").contains("transform:scale(-1,1)"));
+    // Upright, turned half round.
+    assert!(docx_xml(turned(false)).contains("<a:xfrm flipH=\"1\" flipV=\"1\">"));
+    assert!(slide(turned(false)).contains("<a:xfrm flipH=\"1\" flipV=\"1\">"));
+    assert!(html(&[turned(false)], "Scan").contains("transform:scale(-1,-1)"));
+    // A positioned page turns the picture: a vertical flip before the half turn.
+    let mut form = form_page();
+    form.images = turned(true).images;
+    assert!(docx_xml(form).contains("<a:xfrm rot=\"10800000\" flipV=\"1\">"));
+}
+
+/// A filled multi-line text field keeps its lines in Word: a line ends at a break element, as
+/// CR LF, CR or LF end one in the PDF's value; a one-line field's value is written as it is.
+#[test]
+fn a_multiline_fields_value_keeps_its_lines() {
+    let mut p = form_page();
+    p.fields[2].kind = FieldKind::Text { value: "first\r\nsecond\rthird\nfourth & more".into(), multiline: true, comb: None, max_len: None };
+    let xml = part(&docx(&[p], "Claim"), "word/document.xml");
+    assert!(
+        xml.contains("<w:t xml:space=\"preserve\">first</w:t><w:br/><w:t xml:space=\"preserve\">second</w:t><w:br/><w:t xml:space=\"preserve\">third</w:t><w:br/><w:t xml:space=\"preserve\">fourth &amp; more</w:t>"),
+        "{xml}"
+    );
+    assert!(xml.contains("<w:t xml:space=\"preserve\">10115</w:t>"), "one-line fields are unchanged");
 }
 
 /// A field's own border and fill (what a PDF viewer draws for its widget) are drawn behind the

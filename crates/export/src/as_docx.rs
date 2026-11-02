@@ -214,11 +214,14 @@ fn emu(pt: f64) -> i64 {
 }
 
 /// The `a:graphic` of one picture (DrawingML), rotated by `rotation` degrees when given and
-/// flipped vertically when the PDF draws it mirrored.
-fn picture_xml(n: usize, name: &str, (cx, cy): (i64, i64), rotation: Option<f64>, flip: bool) -> String {
+/// flipped (horizontally, vertically) as `flips` says.
+fn picture_xml(n: usize, name: &str, (cx, cy): (i64, i64), rotation: Option<f64>, flips: (bool, bool)) -> String {
     let mut rot = rotation.map_or(String::new(), |r| format!(" rot=\"{}\"", (r * 60000.0).round() as i64));
     // DrawingML flips a picture in its own frame before it rotates it, as the PDF placement does.
-    if flip {
+    if flips.0 {
+        rot.push_str(" flipH=\"1\"");
+    }
+    if flips.1 {
         rot.push_str(" flipV=\"1\"");
     }
     format!(
@@ -544,16 +547,27 @@ fn field_xml(f: &Field, page_height: f64, id: usize, form: &mut Form) -> Option<
             };
             // An empty field shows Word's own placeholder of five en spaces, or one per comb cell.
             let text = if value.is_empty() { blank(cells.unwrap_or(5)) } else { value.clone() };
+            // A multi-line value keeps its lines: Word ends a line at a break element, not at a
+            // newline character (CR LF, CR or LF each end one line).
+            let text_xml = if *multiline {
+                text.split("\r\n")
+                    .flat_map(|part| part.split(['\r', '\n']))
+                    .map(|line| format!("<w:t xml:space=\"preserve\">{}</w:t>", esc(line)))
+                    .collect::<Vec<_>>()
+                    .join("<w:br/>")
+            } else {
+                format!("<w:t xml:space=\"preserve\">{}</w:t>", esc(&text))
+            };
             let limit = max_len.filter(|n| *n > 0).map_or_else(String::new, |n| format!("<w:maxLength w:val=\"{}\"/>", n.min(32767)));
             let field_name = esc(&form.name(&f.name, id));
             let indent = format!("<w:ind w:left=\"{}\"/>", (left * 20.0).round().clamp(0.0, 31680.0) as i64);
             let before = if *multiline { 0.0 } else { middle(size) };
             format!(
-                "<w:p>{}<w:r><w:fldChar w:fldCharType=\"begin\"><w:ffData><w:name w:val=\"{field_name}\"/><w:enabled/><w:calcOnExit w:val=\"0\"/><w:statusText w:type=\"text\" w:val=\"{}\"/><w:textInput>{limit}</w:textInput></w:ffData></w:fldChar></w:r><w:r><w:instrText xml:space=\"preserve\"> FORMTEXT </w:instrText></w:r><w:r><w:fldChar w:fldCharType=\"separate\"/></w:r><w:r>{}<w:t xml:space=\"preserve\">{}</w:t></w:r><w:r><w:fldChar w:fldCharType=\"end\"/></w:r></w:p>",
+                "<w:p>{}<w:r><w:fldChar w:fldCharType=\"begin\"><w:ffData><w:name w:val=\"{field_name}\"/><w:enabled/><w:calcOnExit w:val=\"0\"/><w:statusText w:type=\"text\" w:val=\"{}\"/><w:textInput>{limit}</w:textInput></w:ffData></w:fldChar></w:r><w:r><w:instrText xml:space=\"preserve\"> FORMTEXT </w:instrText></w:r><w:r><w:fldChar w:fldCharType=\"separate\"/></w:r><w:r>{}{}</w:r><w:r><w:fldChar w:fldCharType=\"end\"/></w:r></w:p>",
                 frame_ppr(frame, page_height, before, &indent),
                 esc(&f.name.chars().take(138).collect::<String>()),
                 field_rpr(size, spacing),
-                esc(&text)
+                text_xml
             )
         }
         FieldKind::Check { checked } => {
@@ -695,7 +709,8 @@ fn positioned_page<'a>(page: &'a Page, media: &mut Vec<(String, &'a Image)>, sha
         let (x, y) = (layout_number((im.rect[0] + im.rect[2] - w) / 2.0), layout_number(page.height - (im.rect[1] + im.rect[3] + h) / 2.0));
         let rotation = layout_number(-im.rotation).rem_euclid(360.0);
         let name = format!("image{n}.{}", im.ext);
-        let pic = picture_xml(n, &name, (emu(w), emu(h)), Some(rotation), im.flip);
+        // Rotated as the PDF turns it, so a mirror is a vertical flip before that turn.
+        let pic = picture_xml(n, &name, (emu(w), emu(h)), Some(rotation), (false, im.flip));
         // A DrawingML anchor, the way Word itself stores a picture placed behind text: a VML
         // rectangle with an image does not show the picture.
         s.push_str(&format!(
@@ -825,7 +840,7 @@ pub fn docx_checked(pages: &[Page], title: &str) -> (Vec<u8>, Vec<usize>) {
                             let k = (text_w / w).min(1.0);
                             let (cx, cy) = (emu(w * k), emu(h * k));
                             body.push_str(&format!("<w:p><w:r><w:drawing><wp:inline><wp:extent cx=\"{cx}\" cy=\"{cy}\"/>"));
-                            body.push_str(&picture_xml(n, &name, (cx, cy), None, im.flip));
+                            body.push_str(&picture_xml(n, &name, (cx, cy), None, im.upright_flips()));
                             body.push_str("</wp:inline></w:drawing></w:r></w:p>");
                             media.push((name, im));
                         }

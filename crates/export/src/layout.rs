@@ -41,6 +41,22 @@ pub struct Image {
     pub flip: bool,
 }
 
+impl Image {
+    /// The flips (horizontal, vertical) that show the picture the right way round in a frame
+    /// that is not rotated, for the writers that place pictures upright (flowing Word pages,
+    /// PowerPoint, HTML). A mirrored picture turned half round is a left-right mirror (`-w 0 0 h`):
+    /// a horizontal flip, not a vertical one; an upright picture turned half round flips both
+    /// ways. Those writers don't draw other turns.
+    pub(crate) fn upright_flips(&self) -> (bool, bool) {
+        let turn = if self.rotation.is_finite() { self.rotation.rem_euclid(360.0) } else { 0.0 };
+        match ((turn - 180.0).abs() < 1.0, self.flip) {
+            (true, true) => (true, false),
+            (true, false) => (true, true),
+            (false, flip) => (false, flip),
+        }
+    }
+}
+
 /// How a [`Shape`]'s outline is drawn.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Stroke {

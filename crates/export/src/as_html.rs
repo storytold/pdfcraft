@@ -93,8 +93,14 @@ table{{border-collapse:collapse;margin:1em 0}}td,th{{border:1px solid #999;paddi
             }
             Item::Img(im) => {
                 let mime = if im.ext == "jpg" { "image/jpeg" } else { "image/png" };
-                // A picture the PDF draws mirrored (a bottom-up bitmap) is flipped back.
-                let flip = if im.flip { " style=\"transform:scaleY(-1)\"" } else { "" };
+                // Pictures flow upright: a picture the PDF mirrors or turns half round is flipped
+                // to match (a bottom-up bitmap vertically, a left-right mirror horizontally).
+                let flip = match im.upright_flips() {
+                    (false, false) => "",
+                    (false, true) => " style=\"transform:scale(1,-1)\"",
+                    (true, false) => " style=\"transform:scale(-1,1)\"",
+                    (true, true) => " style=\"transform:scale(-1,-1)\"",
+                };
                 s.push_str(&format!("<p><img alt=\"\"{flip} src=\"data:{mime};base64,{}\"></p>\n", base64(&im.bytes)));
             }
             Item::PageBreak => s.push_str("<hr>\n"),

@@ -209,8 +209,11 @@ pub fn pptx(pages: &[Page], title: &str) -> Vec<u8> {
                     let cy = height_emu(h * k);
                     let x = mx + (content_w - cx) / 2;
                     let y = current_y;
-                    // A picture the PDF draws mirrored (a bottom-up bitmap) is flipped back.
-                    let flip = if im.flip { " flipV=\"1\"" } else { "" };
+                    // Slides place pictures upright: a picture the PDF mirrors or turns half round
+                    // is flipped to match (a bottom-up bitmap vertically, a left-right mirror
+                    // horizontally).
+                    let (flip_h, flip_v) = im.upright_flips();
+                    let flip = format!("{}{}", if flip_h { " flipH=\"1\"" } else { "" }, if flip_v { " flipV=\"1\"" } else { "" });
 
                     shapes.push_str(&format!(
                         "<p:pic><p:nvPicPr><p:cNvPr id=\"{shape_id}\" name=\"Picture {shape_id}\"/><p:cNvPicPr><a:picLocks noChangeAspect=\"1\"/></p:cNvPicPr><p:nvPr/></p:nvPicPr>\
