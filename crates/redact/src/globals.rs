@@ -39,7 +39,8 @@ pub(crate) fn followed(doc: &Document, o: &Object) -> Arc<Object> {
 /// ([`RedactError::SharedJbig2Budget`](crate::RedactError::SharedJbig2Budget)). A scan reads a few
 /// objects a page, and its pages stored again a unit for each 4 KiB of their samples and of the
 /// dictionary they name, so a book of thousands of pages sharing a dictionary of a MiB or two stays
-/// within it.
+/// within it. The work of decoding, every filter stage's and the JBIG2 decoder's, is paid besides
+/// from the run's image allowance (`ImageBudget`), which a unit of decoded data says nothing of.
 pub(crate) const RUN_BUDGET: usize = 1 << 22;
 
 /// What a parameters value names as `/JBIG2Globals`, and the key it is remembered by: a value the
@@ -384,11 +385,20 @@ impl Run {
 
 /// What dictionary `num` holds, to know a copy of it by: a file put together from pages split apart
 /// has one per page, each byte for byte the others.
-pub(crate) fn content(run: &mut Run, doc: &Document, num: u32) -> Result<Option<u64>, crate::RedactError> {
+///
+/// Decoded within `images`, the run's image allowance, which pays for what every filter stage reads
+/// and makes: what the last one makes says nothing of the work (a predictor over what three Flates
+/// inflate, which hex then skips as white space, ends at nothing). Past it the run is refused
+/// ([`RedactError::ImagesPastAllowance`](crate::RedactError::ImagesPastAllowance)).
+pub(crate) fn content(run: &mut Run, doc: &Document, num: u32, images: &mut ImageBudget) -> Result<Option<u64>, crate::RedactError> {
     let Ok(object) = doc.try_get(num) else { return Ok(None) };
     let Object::Stream(s) = &*object else { return Ok(None) };
     let readable = run.readable(doc, s)?;
-    let data = doc.with_direct_parms(&readable).decoded_within(MAX_JBIG2_GLOBALS);
+    let refused = images.refused();
+    let data = images.decode_filters(doc, &readable, MAX_JBIG2_GLOBALS);
+    if data.is_err() && images.refused() > refused {
+        return Err(crate::RedactError::ImagesPastAllowance);
+    }
     let mut hash = DefaultHasher::new();
     match &data {
         Ok(data) => {
@@ -480,6 +490,7 @@ fn matches_left(
     left: &HashSet<u32>,
     contents: &HashSet<u64>,
     read: &mut HashMap<u32, Option<u64>>,
+    images: &mut ImageBudget,
 ) -> Result<bool, crate::RedactError> {
     if left.contains(&n) {
         return Ok(true);
@@ -487,7 +498,7 @@ fn matches_left(
     let held = match read.get(&n) {
         Some(held) => *held,
         None => {
-            let held = content(run, doc, n)?;
+            let held = content(run, doc, n, images)?;
             read.insert(n, held);
             held
         }
@@ -505,14 +516,14 @@ fn matches_left(
 /// An image another page still draws hasn't left: it keeps its pixels, so its dictionary keeps nothing
 /// more.
 ///
-/// What it reads and decodes is counted against [`RUN_BUDGET`] for the whole run, and each image
-/// is decoded within `images`, the run's image allowance.
+/// What it reads and decodes is counted against [`RUN_BUDGET`] for the whole run, and each
+/// dictionary and image is decoded within `images`, the run's image allowance.
 ///
 /// Errors: [`RedactError::SharedJbig2Globals`](crate::RedactError::SharedJbig2Globals) when a dictionary would
 /// still be kept, as what names it can't be stored without it (counted) or something else refers to
 /// it (0 when that is all); [`RedactError::SharedJbig2Budget`](crate::RedactError::SharedJbig2Budget) when
 /// finding that would spend more than the budget; [`RedactError::ImagesPastAllowance`](crate::RedactError::ImagesPastAllowance)
-/// when decoding the images would spend more than `images` has left. Such an image may still be drawn, on a page no mark
+/// when decoding the dictionaries and images would spend more than `images` has left. Such an image may still be drawn, on a page no mark
 /// reached, so it isn't removed, and `doc` is part changed by then: a caller works on a copy it can drop.
 pub(crate) fn unshare(doc: &mut Document, before: &HashSet<u32>, images: &mut ImageBudget) -> Result<usize, crate::RedactError> {
     let now = kept(doc);
@@ -536,7 +547,7 @@ pub(crate) fn unshare(doc: &mut Document, before: &HashSet<u32>, images: &mut Im
     }
     let mut contents: HashSet<u64> = HashSet::new();
     for &n in &dictionaries {
-        if let Some(c) = content(&mut run, doc, n)? {
+        if let Some(c) = content(&mut run, doc, n, images)? {
             contents.insert(c);
         }
     }
@@ -562,7 +573,7 @@ pub(crate) fn unshare(doc: &mut Document, before: &HashSet<u32>, images: &mut Im
                 None => {
                     let mut found = Vec::new();
                     for &n in list.iter() {
-                        if matches_left(&mut run, doc, n, &left, &contents, &mut read)? {
+                        if matches_left(&mut run, doc, n, &left, &contents, &mut read, images)? {
                             found.push(n);
                         }
                     }

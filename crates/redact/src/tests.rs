@@ -1981,12 +1981,44 @@ fn an_image_is_charged_the_dictionaries_it_names() {
     let image = "/Type /XObject /Subtype /Image /Width 8 /Height 8 /BitsPerComponent 1 /Filter /JBIG2Decode /DecodeParms << /JBIG2Globals 2 0 R >>";
     let doc = pdf(vec![b"<< /Type /Catalog >>".to_vec(), stream("", vec![0u8; 40_000]), stream(image, b"not JBIG2")]);
     let mut run = crate::globals::Run::new(crate::globals::RUN_BUDGET);
-    crate::globals::content(&mut run, &doc, 2).unwrap();
+    crate::globals::content(&mut run, &doc, 2, &mut pdfcraft_cos::ImageBudget::with_work(u64::MAX)).unwrap();
     assert_eq!(run.spent, 10, "40,000 bytes: a unit and nine whole 4 KiB");
     let Object::Stream(s) = &*doc.get(ObjRef::new(3, 0)) else { panic!("object 3 is the image") };
     assert!(matches!(crate::globals::without_dictionary(&mut run, &doc, s, &mut pdfcraft_cos::ImageBudget::with_work(u64::MAX)), Ok(None)));
     // The chain to 2 (a fetch and the number held), the dictionary's 10, the image's allowance 2.
     assert_eq!(run.spent, 24);
+}
+
+/// A dictionary pays the run's image allowance for what every stage of its filters reads and makes,
+/// not for what the last one makes: two Flates inflate a MiB of zero bytes, which hex skips as white
+/// space, so it decodes to nothing. Past the allowance the run is refused, through `unshare` too.
+#[test]
+fn a_dictionary_pays_for_every_stage_of_its_filters() {
+    let hollow = pdfcraft_filters::encode_flate(&pdfcraft_filters::encode_flate(&vec![0u8; 1 << 20]));
+    let dict = || stream("/Filter [/FlateDecode /FlateDecode /ASCIIHexDecode]", hollow.clone());
+    let doc = pdf(vec![b"<< /Type /Catalog >>".to_vec(), dict()]);
+    let mut run = crate::globals::Run::new(crate::globals::RUN_BUDGET);
+    let mut images = pdfcraft_cos::ImageBudget::with_work(u64::MAX);
+    assert!(crate::globals::content(&mut run, &doc, 2, &mut images).unwrap().is_some());
+    assert_eq!(run.spent, 1, "it decodes to nothing: a unit");
+    let paid = u64::MAX - images.work_left();
+    assert!(paid > 1 << 20, "the MiB the second Flate made is paid for: {paid} steps");
+    let mut run = crate::globals::Run::new(crate::globals::RUN_BUDGET);
+    let refused = crate::globals::content(&mut run, &doc, 2, &mut pdfcraft_cos::ImageBudget::with_work(1 << 20));
+    assert_eq!(refused, Err(RedactError::ImagesPastAllowance));
+
+    // An image naming it leaves its page: finding copies of the dictionary reads it.
+    let image = "/Type /XObject /Subtype /Image /Width 8 /Height 8 /BitsPerComponent 1 /Filter /JBIG2Decode /DecodeParms << /JBIG2Globals 8 0 R >>";
+    let mut doc = one_page(b"q 8 0 0 8 0 0 cm /Im Do Q", "/XObject << /Im 7 0 R >>", vec![stream(image, b""), dict()]);
+    let before = crate::globals::kept(&doc);
+    let page = pdfcraft_model::pages(&doc)[0].obj;
+    doc.update_dict(page, |d| {
+        d.remove(b"Resources");
+    })
+    .unwrap();
+    let refused = crate::globals::unshare(&mut doc.clone(), &before, &mut pdfcraft_cos::ImageBudget::with_work(1 << 20));
+    assert_eq!(refused, Err(RedactError::ImagesPastAllowance));
+    assert_eq!(crate::globals::unshare(&mut doc, &before, &mut pdfcraft_cos::ImageBudget::with_work(u64::MAX)), Ok(0));
 }
 
 /// What can't be decoded is charged as much as it was allowed to decode, so going past a limit
@@ -1998,8 +2030,9 @@ fn a_decode_that_fails_is_charged_what_it_was_allowed() {
     let doc = pdf(vec![b"<< /Type /Catalog >>".to_vec(), stream("/Filter /DCTDecode", b"not a JPEG"), stream(image, b"not JBIG2")]);
     let units = pdfcraft_cos::MAX_JBIG2_GLOBALS / 4096 + 1;
     let run = |budget| crate::globals::Run::new(budget);
-    assert!(crate::globals::content(&mut run(units), &doc, 2).is_ok());
-    assert_eq!(crate::globals::content(&mut run(units - 1), &doc, 2), Err(RedactError::SharedJbig2Budget));
+    let images = || pdfcraft_cos::ImageBudget::with_work(u64::MAX);
+    assert!(crate::globals::content(&mut run(units), &doc, 2, &mut images()).is_ok());
+    assert_eq!(crate::globals::content(&mut run(units - 1), &doc, 2, &mut images()), Err(RedactError::SharedJbig2Budget));
     // The image's allowance: (one byte a row of 8, and a byte a row) × 3 a byte, and 4096: 4144
     // bytes, two units.
     let Object::Stream(s) = &*doc.get(ObjRef::new(3, 0)) else { panic!("object 3 is the image") };
