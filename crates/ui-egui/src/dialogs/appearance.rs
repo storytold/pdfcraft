@@ -86,30 +86,32 @@ fn preview(ui: &mut egui::Ui, kind: ThemeKind, width: f32) {
 fn card(ui: &mut egui::Ui, t: &Tokens, title: &str, active: bool, themes: &[(ThemeKind, &str)]) -> bool {
     let mut card_clicked = false;
     let frame_stroke = if active { Stroke::new(1.5, t.accent) } else { Stroke::new(1.0, t.border) };
-    let inner = egui::Frame::new().fill(t.card).stroke(frame_stroke).corner_radius(CornerRadius::same(6)).inner_margin(egui::Margin::same(8)).show(
-        ui,
-        |ui| {
-            ui.set_width(ui.available_width());
-            ui.horizontal(|ui| {
-                let font = theme::semibold(12.5);
-                let galley = crate::bidi::layout_ui(ui, title.to_owned(), font, t.text);
-                let (title_rect, _) = ui.allocate_exact_size(galley.size(), egui::Sense::hover());
-                ui.painter().galley(title_rect.min, galley, t.text);
-                if active {
-                    ui.label(RichText::new(tl!("Active")).color(t.accent_text).small());
-                }
-            });
-            ui.add_space(4.0);
-            let shown = themes.first().map_or(ThemeKind::Light, |(kind, _)| *kind);
-            preview(ui, shown, ui.available_width());
-        },
-    );
+    let scope_res = ui.scope_builder(egui::UiBuilder::new().id_salt(title).sense(egui::Sense::click()), |ui| {
+        egui::Frame::new().fill(t.card).stroke(frame_stroke).corner_radius(CornerRadius::same(6)).inner_margin(egui::Margin::same(8)).show(
+            ui,
+            |ui| {
+                ui.set_width(ui.available_width());
+                ui.horizontal(|ui| {
+                    let font = theme::semibold(12.5);
+                    let galley = crate::bidi::layout_ui(ui, title.to_owned(), font, t.text);
+                    let (title_rect, _) = ui.allocate_exact_size(galley.size(), egui::Sense::hover());
+                    ui.painter().galley(title_rect.min, galley, t.text);
+                    if active {
+                        ui.label(RichText::new(tl!("Active")).color(t.accent_text).small());
+                    }
+                });
+                ui.add_space(4.0);
+                let shown = themes.first().map_or(ThemeKind::Light, |(kind, _)| *kind);
+                preview(ui, shown, ui.available_width());
+            },
+        );
+    });
 
-    let resp = ui.interact(inner.response.rect, inner.response.id, egui::Sense::click());
+    let resp = scope_res.response;
     resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::RadioButton, true, active, title));
 
     if resp.has_focus() {
-        ui.painter().rect_stroke(inner.response.rect, CornerRadius::same(6), Stroke::new(2.0, t.accent_text), egui::StrokeKind::Outside);
+        ui.painter().rect_stroke(resp.rect, CornerRadius::same(6), Stroke::new(2.0, t.accent_text), egui::StrokeKind::Outside);
     }
 
     let resp = theme::hand(resp);

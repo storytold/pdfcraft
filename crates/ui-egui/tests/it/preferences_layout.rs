@@ -113,15 +113,17 @@ fn segmented_pill_controls_switch_modes_and_layouts() {
     h.run_steps(2);
     assert_eq!(h.state().default_mode, pdfcraft_ui_egui::Mode::Convert);
 
+    let continuous_before = h.state().view_defaults.continuous;
+
     // Switch page layout via segmented pill
     h.get_by_label("Two-page view").scroll_to_me();
     h.run_steps(3);
     h.get_by_label("Two-page view").click();
     h.run_steps(2);
     assert_eq!(h.state().view_defaults.layout, pdfcraft_ui_egui::canvas::PageLayout::TwoUp);
+    assert_eq!(h.state().view_defaults.continuous, continuous_before, "Two-page view retains continuous scrolling");
 
     // Switch continuous scrolling pill (can be combined with Two-page view)
-    let continuous_before = h.state().view_defaults.continuous;
     h.get_by_label("Continuous scrolling").click();
     h.run_steps(2);
     assert_eq!(h.state().view_defaults.continuous, !continuous_before);
