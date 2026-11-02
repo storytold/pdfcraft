@@ -95,8 +95,8 @@ let report = optimize_with_progress(&mut doc, &settings, &mut |stage| keep_going
     space, decode array and `/Mask` stay, but for packed RGB, which becomes grey with one decode
     pair. Group 4 wins on scans, whose ragged edges defeat Flate; on clean computer-drawn 1-bit
     art Flate can be smaller. Not yet: inline images, an image's own `/SMask` or `/Mask`
-    image (only images drawn on a page are visited), and Group 4 for rows wider than 32,767
-    samples.
+    image (only images drawn on a page are visited), Group 4 for rows wider than 32,767
+    samples, and JBIG2 past 65,535 samples on a side or 2^28 in all, where the decoder stops.
 
   - Lossless JBIG2 uses bounded generic-region encoding or exact-copy symbol dictionaries when
     smaller. No lossy symbol substitution is used. Export, redaction and this step read JBIG2
