@@ -74,6 +74,9 @@ impl egui::Plugin for ControlPlugin {
     /// Inject admitted control batches into the current pass, dropping stale requests, applying cancellations
     /// and scheduling repaints.
     fn input_hook(&mut self, ctx: &egui::Context, input: &mut egui::RawInput) {
+        if input.viewport_id != egui::ViewportId::ROOT {
+            return;
+        }
         let Ok(mut s) = self.shared.lock() else { return };
         expire_input(&mut s, web_time::Instant::now());
         if std::mem::take(&mut s.cancel_pointer) {
@@ -125,6 +128,9 @@ impl egui::Plugin for ControlPlugin {
     /// Record presented passes and the accesskit tree and focus after a pass, so control replies observe only
     /// drawn frames.
     fn output_hook(&mut self, ctx: &egui::Context, output: &mut egui::FullOutput) {
+        if ctx.viewport_id() != egui::ViewportId::ROOT {
+            return;
+        }
         let Ok(mut s) = self.shared.lock() else { return };
         s.in_pass = false;
         // A discarded pass is layout work, not a frame the agent can observe. Only count passes
@@ -168,5 +174,26 @@ impl Control {
         let frames = batches.len() as u32;
         let batches = self.inject(batches, since)?;
         Ok(Handled::AfterInput { batches, frames, value })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use egui::Plugin as _;
+
+    #[test]
+    fn root_control_input_is_not_consumed_by_a_child_viewport() {
+        let ctx = egui::Context::default();
+        let (control, _) = crate::control::attach(&ctx);
+        control.inject(vec![vec![egui::Event::Text("root only".into())]], web_time::Instant::now()).unwrap();
+        let mut plugin = super::ControlPlugin { shared: control.shared.clone() };
+        let mut child = egui::RawInput { viewport_id: egui::ViewportId::from_hash_of("child"), ..Default::default() };
+        plugin.input_hook(&ctx, &mut child);
+        assert!(child.events.is_empty());
+        assert_eq!(control.shared.lock().unwrap().inject.len(), 1);
+        let mut root = egui::RawInput::default();
+        plugin.input_hook(&ctx, &mut root);
+        assert_eq!(root.events, vec![egui::Event::Text("root only".into())]);
+        assert!(control.shared.lock().unwrap().inject.is_empty());
     }
 }

@@ -5,6 +5,15 @@ impl Control {
     /// Validate and dispatch one control method, rejecting unknown methods and malformed parameters with
     /// actionable errors.
     pub(super) fn handle(&mut self, ctx: &egui::Context, host: &mut impl Host, method: &str, p: &Value, since: web_time::Instant) -> Handled {
+        // The widget plugin currently observes the main viewport. Never inspect or inject its
+        // coordinates while the request's document belongs to another native window.
+        if !host.widget_control_supported() && matches!(method, "ui.inspect" | "ui.click" | "ui.focus" | "ui.move" | "ui.drag" | "ui.type" | "ui.key")
+        {
+            return Handled::Now(Err(
+                "Widget inspection and synthetic input are available in the main window. Use ui.command or ui.set, or move the tab back there."
+                    .into(),
+            ));
+        }
         let str_param = |k: &str| p.get(k).and_then(Value::as_str).ok_or_else(|| format!("{method}: missing string parameter {k}"));
         let r: Result<Handled, String> = (|| match method {
             "ui.state" => {

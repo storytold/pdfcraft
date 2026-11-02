@@ -881,7 +881,12 @@ impl PdfCraftApp {
         let embedded = matches!(class, egui::ViewportClass::EmbeddedWindow).then(|| ui.max_rect());
         self.track_window(id, &ctx, embedded);
         self.window_logic(&ctx, embedded.is_some());
-        if embedded.is_some() { self.draw_embedded_window(ui) } else { self.draw_window(ui) }
+        if embedded.is_some() {
+            self.draw_embedded_window(ui);
+            self.finish_control_frame(&ctx);
+        } else {
+            self.draw_window(ui);
+        }
     }
 
     /// What a window drawn inside the main one shows (tests; egui's fallback where a backend

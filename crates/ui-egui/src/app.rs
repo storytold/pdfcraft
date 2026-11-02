@@ -509,7 +509,7 @@ impl eframe::App for PdfCraftApp {
 
 impl PdfCraftApp {
     /// The frame's work that belongs to no window in particular: files arriving, background
-    /// work finishing, the control channel, watched files. Runs once per frame with the focused
+    /// work finishing and watched files. Runs once per frame with the focused
     /// window's state, so a file opened from a picker or the command line shows up there.
     fn global_logic(&mut self, ctx: &egui::Context) {
         #[cfg(not(target_arch = "wasm32"))]
@@ -569,10 +569,6 @@ impl PdfCraftApp {
                 OsEvent::Quit => ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Close),
             }
         }
-        if let Some(mut control) = self.control.take() {
-            control.tick(ctx, self);
-            self.control = Some(control);
-        }
         self.autosave_tick(ctx, web_time::Instant::now());
         // Reload documents whose files a build rewrote (#431), in whichever window they are.
         #[cfg(not(target_arch = "wasm32"))]
@@ -599,6 +595,13 @@ impl PdfCraftApp {
     /// document's script output, its close button and its keyboard. `embedded` says the window
     /// is drawn inside the main one (tests), whose input it shares.
     pub(crate) fn window_logic(&mut self, ctx: &egui::Context, embedded: bool) {
+        // Admission, completion and capture must use the same window's context and document.
+        if self.current_window == self.focused_window
+            && let Some(mut control) = self.control.take()
+        {
+            control.tick(ctx, self);
+            self.control = Some(control);
+        }
         self.dialog_epoch();
         // Before taking this frame's drop: the grid must be drawn once with the pointer where
         // the files were let go before the gap is read.
@@ -759,10 +762,9 @@ impl PdfCraftApp {
         self.finish_control_frame(&ctx);
     }
 
-    /// Screenshots are issued only after a settled pass that really drew the window: the main
-    /// one, which the control channel shows.
-    fn finish_control_frame(&mut self, ctx: &egui::Context) {
-        if self.current_window == crate::windows::WindowId::ROOT
+    /// Issue captures after the focused window's settled pass, matching admission in its logic.
+    pub(crate) fn finish_control_frame(&mut self, ctx: &egui::Context) {
+        if self.current_window == self.focused_window
             && let Some(mut control) = self.control.take()
         {
             control.finish_frame(ctx, self);

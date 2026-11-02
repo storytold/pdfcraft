@@ -130,7 +130,7 @@ impl PendingFinisher {
             return None;
         };
         self.reserved_total = new_total;
-        let (slot, callback) = craft_ui::capture::CaptureSlot::new(ctx, egui::ViewportId::ROOT, MAX_IMAGE_BYTES);
+        let (slot, callback) = craft_ui::capture::CaptureSlot::new(ctx, ctx.viewport_id(), MAX_IMAGE_BYTES);
         Some(Pending::Screenshot {
             slot,
             callback: Some(callback),

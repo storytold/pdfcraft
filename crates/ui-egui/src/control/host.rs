@@ -1,6 +1,10 @@
 use super::{Host, Reply, Value, json};
 
 impl Host for crate::PdfCraftApp {
+    fn widget_control_supported(&self) -> bool {
+        self.current_window() == crate::WindowId::ROOT
+    }
+
     /// Cancel any in-progress pointer gesture in every open view.
     fn cancel_pointer_gestures(&mut self) {
         for view in &mut self.views {
@@ -27,6 +31,7 @@ impl Host for crate::PdfCraftApp {
     fn capture_epoch(&self) -> u64 {
         use std::hash::{Hash as _, Hasher as _};
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.current_window().hash(&mut hasher);
         let doc = self.active.and_then(|i| self.views.get(i)).map(|v| v.id.0);
         doc.hash(&mut hasher);
         format!(

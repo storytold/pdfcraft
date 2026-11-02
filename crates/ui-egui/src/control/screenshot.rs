@@ -130,7 +130,7 @@ impl Control {
             let _ = reply.send(Err(format!("the screenshot would exceed the {MAX_TOTAL_BYTES}-byte aggregate screenshot budget")));
             return;
         }
-        let (slot, callback) = craft_ui::capture::CaptureSlot::new(ctx, egui::ViewportId::ROOT, MAX_IMAGE_BYTES);
+        let (slot, callback) = craft_ui::capture::CaptureSlot::new(ctx, ctx.viewport_id(), MAX_IMAGE_BYTES);
         self.pending.push(Pending::Screenshot { slot, callback: Some(callback), region, reply, since, geometry, reserved: bytes, attempts: 0 });
     }
 }
