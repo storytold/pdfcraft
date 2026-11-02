@@ -12,6 +12,10 @@ pub struct Pixels(Vec<u32>);
 impl Pixels {
     /// Zeroed pixels for a `width` × `height` raster; `None` when the size overflows.
     pub(crate) fn zeroed(width: usize, height: usize) -> Option<Self> {
+        #[cfg(test)]
+        if allocation_probe::refuse(width, height) {
+            return None;
+        }
         Some(Self(vec![0; width.checked_mul(height)?]))
     }
 
@@ -55,5 +59,63 @@ impl AsRef<[u8]> for Pixels {
 impl std::fmt::Debug for Pixels {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Pixels({} bytes)", self.len())
+    }
+}
+
+/// Observe the real allocator boundary without allocating a large raster in tests.
+#[cfg(test)]
+pub(crate) mod allocation_probe {
+    use std::cell::Cell;
+
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+    pub(crate) struct Attempts {
+        pub calls: u8,
+        pub first: Option<(usize, usize)>,
+    }
+
+    thread_local! {
+        static ACTIVE: Cell<Option<Attempts>> = const { Cell::new(None) };
+    }
+
+    struct Reset;
+
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            ACTIVE.set(None);
+        }
+    }
+
+    pub(crate) fn observe<T>(f: impl FnOnce() -> T) -> (T, Attempts) {
+        assert!(ACTIVE.get().is_none(), "nested raster allocation probe");
+        let _reset = Reset;
+        ACTIVE.set(Some(Attempts::default()));
+        let result = f();
+        let attempts = ACTIVE.get().expect("active raster allocation probe");
+        (result, attempts)
+    }
+
+    pub(super) fn refuse(width: usize, height: usize) -> bool {
+        let Some(mut attempts) = ACTIVE.get() else { return false };
+        attempts.calls = attempts.calls.checked_add(1).expect("bounded allocation probe calls");
+        attempts.first.get_or_insert((width, height));
+        ACTIVE.set(Some(attempts));
+        true
+    }
+
+    #[test]
+    fn raster_allocation_probe_restores_after_unwind() {
+        let panic = std::panic::catch_unwind(|| {
+            observe(|| {
+                assert!(super::Pixels::zeroed(2, 3).is_none());
+                panic!("intentional test-harness unwind outside rendering");
+            });
+        });
+        assert!(panic.is_err());
+        assert!(ACTIVE.get().is_none());
+        assert_eq!(super::Pixels::zeroed(2, 3).expect("probe restored").len(), 24);
+        let (pixels, attempts) = observe(|| super::Pixels::zeroed(3, 2));
+        assert!(pixels.is_none());
+        assert_eq!(attempts, Attempts { calls: 1, first: Some((3, 2)) });
+        assert!(ACTIVE.get().is_none());
     }
 }

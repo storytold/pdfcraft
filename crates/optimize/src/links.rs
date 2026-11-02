@@ -150,11 +150,15 @@ fn referenced_names(doc: &Document) -> HashSet<Vec<u8>> {
         while let Some(o) = stack.pop() {
             match o {
                 Object::Dict(d) => {
-                    if let Some(n) = d.get(b"Dest").and_then(dest_name) {
+                    // Resolve first: /Dest and a GoTo's /D may be an indirect reference to the name
+                    // string, and an unresolved ref has no name, so the destination it uses would
+                    // look unreferenced and be removed. A GoToR or GoToE /D names a destination in
+                    // another document, so it does not count as a use of this one's.
+                    if let Some(n) = d.get(b"Dest").and_then(|x| dest_name(doc.resolve(x).as_ref())) {
                         out.insert(n);
                     }
-                    if matches!(d.name(b"S"), Some(b"GoTo" | b"GoToR" | b"GoToE"))
-                        && let Some(n) = d.get(b"D").and_then(dest_name)
+                    if d.name(b"S") == Some(b"GoTo")
+                        && let Some(n) = d.get(b"D").and_then(|x| dest_name(doc.resolve(x).as_ref()))
                     {
                         out.insert(n);
                     }

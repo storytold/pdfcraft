@@ -114,6 +114,11 @@ impl Structure for lopdf::Document {
     fn get_object(&self, id: ObjectId) -> Result<&Object> {
         self.get_object(id)
     }
+    // lopdf's `get_object` already follows an indirect object that holds a reference, so the
+    // trait's walk would report the first object of a chain. lopdf's own walk reports the last.
+    fn dereference<'a>(&'a self, object: &'a Object) -> Result<(Option<ObjectId>, &'a Object)> {
+        lopdf::Document::dereference(self, object)
+    }
     fn encrypted(&self) -> bool {
         self.is_encrypted() || self.was_encrypted() || self.trailer.has(b"Encrypt")
     }

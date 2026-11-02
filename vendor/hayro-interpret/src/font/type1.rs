@@ -2,7 +2,8 @@ use crate::font::blob::{CffFontBlob, Type1FontBlob};
 use crate::font::standard_font::{StandardFont, StandardKind, select_standard_font};
 use crate::font::true_type::{Width, read_encoding, read_widths};
 use crate::font::{
-    Encoding, FallbackFontQuery, glyph_name_to_unicode, normalized_glyph_name, read_to_unicode,
+    Encoding, FallbackFontQuery, glyph_name_to_text, glyph_name_to_unicode, normalized_glyph_name,
+    read_to_unicode,
 };
 use crate::{CMapResolverFn, CacheKey, FontResolverFn};
 use hayro_cmap::{BfString, CMap};
@@ -117,11 +118,25 @@ impl Type1Font {
         }
 
         let code = char_code as u8;
-        match &self.1 {
-            Kind::Standard(s) => s.char_code_to_unicode(code).map(BfString::Char),
-            Kind::Cff(c) => c.char_code_to_unicode(code).map(BfString::Char),
-            Kind::Type1(t) => t.char_code_to_unicode(code).map(BfString::Char),
+        let found = match &self.1 {
+            Kind::Standard(s) => s.char_code_to_unicode(code),
+            Kind::Cff(c) => c.char_code_to_unicode(code),
+            Kind::Type1(t) => t.char_code_to_unicode(code),
+        };
+        if let Some(c) = found {
+            return Some(BfString::Char(c));
         }
+        // PdfCraft patch (#3169, #3170): a name outside the glyph list still reads by the
+        // glyph list specification's full mapping (`f_i`, `hyphen.case`). A name that only
+        // numbers the glyph (`C39`, `c251`) says nothing about the character and reads as
+        // nothing: the code's StandardEncoding character would be a guess, wrong wherever the
+        // font's /Encoding puts the glyph elsewhere (review on #3239).
+        let name = match &self.1 {
+            Kind::Standard(s) => s.code_to_ps_name(code),
+            Kind::Cff(c) => c.code_to_ps_name(code),
+            Kind::Type1(t) => t.code_to_ps_name(code),
+        }?;
+        glyph_name_to_text(name)
     }
 }
 
@@ -267,7 +282,13 @@ impl CffKind {
     fn new(dict: &Dict<'_>) -> Option<Self> {
         let descriptor = dict.get::<Dict<'_>>(FONT_DESC)?;
         let data = descriptor.get::<Stream<'_>>(FONT_FILE3)?;
-        let font = CffFontBlob::new(Arc::new(data.decoded().ok()?.to_vec()))?;
+        let bytes = data.decoded().ok()?.to_vec();
+        // PdfCraft patch (69): an OpenType-wrapped program carries its CFF in a table.
+        let font = if bytes.starts_with(b"OTTO") {
+            CffFontBlob::from_open_type(&bytes)?
+        } else {
+            CffFontBlob::new(Arc::new(bytes))?
+        };
 
         let (encoding, encodings) = read_encoding(dict);
         let (widths, missing_width) = read_widths(dict, &descriptor)?;

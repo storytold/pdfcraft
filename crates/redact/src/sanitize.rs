@@ -8,14 +8,14 @@ use pdfcraft_content::Matrix;
 use pdfcraft_cos::{Dict, Document, ObjRef, Object};
 
 use crate::interp::{Mode, Scope, process};
-use crate::{RedactError, Report, annots_of, page_streams};
+use crate::{RedactError, Report, annots_of, listed_annotations, page_streams, page_streams_within};
 
 /// The categories of Acrobat's Remove Hidden Information panel that PdfCraft handles.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Hidden {
     /// Document information (`/Info`) and XMP metadata streams.
     Metadata,
-    /// Embedded files and file attachment annotations.
+    /// Embedded files, associated files (`/AF`) and file attachment annotations.
     Attachments,
     /// Comments and markup annotations (with their pop-ups).
     Comments,
@@ -87,30 +87,235 @@ fn sub(doc: &Document, d: &Dict, key: &[u8]) -> Option<Dict> {
     d.get(key).and_then(|o| doc.resolve(o).as_dict().cloned())
 }
 
-/// Entries of a name tree (`/Names` leaves, `/Kids` recursion), bounded against cycles.
-fn name_tree_len(doc: &Document, node: &Dict, depth: usize) -> usize {
-    if depth > 32 {
+/// The most name-tree nodes one count reads.
+const NAME_TREE_NODE_BUDGET: usize = 100_000;
+
+/// Entries of a name tree (`/Names` leaves, `/Kids` recursion). Each indirect node is read once,
+/// however many `/Kids` arrays list it, so shared or cyclic kids cost one step per node rather
+/// than one per path. Every `/Kids` entry the walk does not descend into (a repeated reference or
+/// a non-dictionary) costs a step as well, so a long `/Kids` array of repeats cannot outrun the
+/// budget. Depth and a total step budget bound the rest.
+fn name_tree_len(doc: &Document, node: &Dict) -> usize {
+    let (mut seen, mut visited) = (std::collections::HashSet::new(), 0);
+    name_tree_len_seen(doc, node, 0, &mut seen, &mut visited)
+}
+
+fn name_tree_len_seen(doc: &Document, node: &Dict, depth: usize, seen: &mut std::collections::HashSet<ObjRef>, visited: &mut usize) -> usize {
+    *visited = visited.saturating_add(1);
+    if depth > 32 || *visited > NAME_TREE_NODE_BUDGET {
         return 0;
     }
     let leaves = node.get(b"Names").and_then(|n| doc.resolve(n).as_array().map(|a| a.len() / 2)).unwrap_or(0);
-    let kids = node.get(b"Kids").and_then(|k| doc.resolve(k).as_array().cloned()).unwrap_or_default();
-    leaves + kids.iter().filter_map(|k| doc.resolve(k).as_dict().cloned()).map(|k| name_tree_len(doc, &k, depth + 1)).sum::<usize>()
+    let mut n = leaves;
+    let kids = node.get(b"Kids").map(|k| doc.resolve(k));
+    for k in kids.as_deref().and_then(Object::as_array).map_or(&[][..], Vec::as_slice) {
+        if *visited > NAME_TREE_NODE_BUDGET {
+            break;
+        }
+        let held;
+        let kid = match k {
+            Object::Ref(r) if !seen.insert(*r) => None,
+            Object::Ref(r) => {
+                held = doc.get(*r);
+                held.as_dict()
+            }
+            other => other.as_dict(),
+        };
+        match kid {
+            Some(kid) => n = n.saturating_add(name_tree_len_seen(doc, kid, depth + 1, seen, visited)),
+            None => *visited = visited.saturating_add(1),
+        }
+    }
+    n
 }
 
+/// The most distinct outline items one count reads, over all levels together.
+const OUTLINE_ITEM_BUDGET: usize = 100_000;
+
 fn outline_len(doc: &Document, first: Option<&Object>, depth: usize) -> usize {
+    let (mut seen, mut counted) = (std::collections::HashSet::new(), 0);
+    outline_len_seen(doc, first, depth, &mut seen, &mut counted)
+}
+
+/// Counts an outline level and everything below it, each item once. `seen` holds the indirect items
+/// already counted, and `counted` every item counted so far, inline ones included, which the total
+/// budget applies to. An item that two others name (as `/First` or `/Next`) is counted where the walk
+/// first reaches it, and a level stops at an item already seen, because the walk that reached that
+/// item counts the rest of its level. A hostile outline therefore costs one step per item, not 2^n
+/// steps for n levels of shared children. The depth limit of 64 only matters for outlines nested that
+/// deep: an item first reached through a deeper path is not visited again from a shallower one, so
+/// items nested beyond the limit may stay uncounted.
+fn outline_len_seen(
+    doc: &Document,
+    first: Option<&Object>,
+    depth: usize,
+    seen: &mut std::collections::HashSet<ObjRef>,
+    counted: &mut usize,
+) -> usize {
     let mut n = 0;
     let mut cur = first.cloned();
     let mut guard = 0;
     while let Some(o) = cur {
         guard += 1;
-        if guard > 100_000 || depth > 64 {
+        if guard > 100_000 || depth > 64 || *counted >= OUTLINE_ITEM_BUDGET {
+            break;
+        }
+        if let Object::Ref(r) = &o
+            && !seen.insert(*r)
+        {
             break;
         }
         let Some(d) = doc.resolve(&o).as_dict().cloned() else { break };
-        n += 1 + outline_len(doc, d.get(b"First"), depth + 1);
+        *counted += 1;
+        n += 1 + outline_len_seen(doc, d.get(b"First"), depth + 1, seen, counted);
         cur = d.get(b"Next").cloned();
     }
     n
+}
+
+/// Entries that hold a category's data wherever they appear, not only on the catalog and pages:
+/// XMP on images, fonts and Forms, private data on Forms, associated files on pages and
+/// annotations, additional actions on fields.
+const OWNED: [(Hidden, &[u8]); 4] =
+    [(Hidden::Metadata, b"Metadata"), (Hidden::PrivateData, b"PieceInfo"), (Hidden::Attachments, b"AF"), (Hidden::LinksActionsScripts, b"AA")];
+
+/// Keys whose dictionary values map names a producer chooses to objects (resources, glyph
+/// procedures, named destinations, role and class maps, private data by application). A name
+/// there may be spelt like an owned entry (a font called `/AF`), so these maps are walked but
+/// never stripped.
+const NAME_MAPS: [&[u8]; 14] = [
+    b"Font",
+    b"XObject",
+    b"ExtGState",
+    b"ColorSpace",
+    b"Pattern",
+    b"Shading",
+    b"Properties",
+    b"CharProcs",
+    b"Dests",
+    b"RoleMap",
+    b"ClassMap",
+    b"Colorants",
+    b"Schema",
+    b"PieceInfo",
+];
+
+/// How deep the owner sweep follows dictionaries and arrays written in place.
+const MAX_DIRECT_DEPTH: usize = 64;
+
+/// What a dictionary is to the owner sweep.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum Held {
+    /// An object that may own an entry of [`OWNED`].
+    Owner,
+    /// A [`NAME_MAPS`] map: its keys are names, its values owners.
+    Map,
+    /// An appearance dictionary (`/AP`): its dictionary values map appearance states.
+    Appearances,
+}
+
+impl Held {
+    fn child(self, key: &[u8]) -> Held {
+        match self {
+            Held::Owner if NAME_MAPS.contains(&key) => Held::Map,
+            Held::Owner if key == b"AP" => Held::Appearances,
+            Held::Appearances => Held::Map,
+            _ => Held::Owner,
+        }
+    }
+}
+
+/// Indirect objects that hold an owned entry, each with the role it was reached in.
+type Holders = Vec<(ObjRef, Held)>;
+
+/// The objects reachable from the catalog that hold one of `keys` outside a name map, and how
+/// many dictionaries hold each key. Each object is read at most once per [`Held`] role, so a
+/// shared or cyclic graph costs one step per object.
+fn owners(doc: &Document, keys: &[&[u8]]) -> Result<(Vec<usize>, Holders), RedactError> {
+    let mut held = vec![0; keys.len()];
+    let mut holders = Vec::new();
+    let Some(root) = doc.root() else { return Ok((held, holders)) };
+    let mut next = vec![(root, Held::Owner)];
+    let mut seen = std::collections::HashSet::new();
+    while let Some((r, role)) = next.pop() {
+        if !seen.insert((r, role)) {
+            continue;
+        }
+        if find_owned(&doc.get(r), role, keys, &mut held, &mut next, 0)? {
+            holders.push((r, role));
+        }
+    }
+    Ok((held, holders))
+}
+
+/// Counts the dictionaries in `o` (and what it holds in place) that hold one of `keys`, and
+/// queues the indirect objects it names. Returns whether any key was found.
+fn find_owned(o: &Object, role: Held, keys: &[&[u8]], held: &mut [usize], next: &mut Vec<(ObjRef, Held)>, depth: usize) -> Result<bool, RedactError> {
+    if depth > MAX_DIRECT_DEPTH {
+        return Err(RedactError::TooDeep);
+    }
+    let (d, role) = match o {
+        Object::Ref(r) => {
+            next.push((*r, role));
+            return Ok(false);
+        }
+        Object::Array(a) => {
+            let mut found = false;
+            for v in a {
+                found |= find_owned(v, Held::Owner, keys, held, next, depth + 1)?;
+            }
+            return Ok(found);
+        }
+        Object::Dict(d) => (d, role),
+        // A stream's dictionary is never a name map.
+        Object::Stream(s) => (&s.dict, Held::Owner),
+        _ => return Ok(false),
+    };
+    let mut found = false;
+    if role != Held::Map {
+        for (i, k) in keys.iter().enumerate() {
+            if d.contains(k)
+                && let Some(n) = held.get_mut(i)
+            {
+                *n = n.saturating_add(1);
+                found = true;
+            }
+        }
+    }
+    for (k, v) in d.iter() {
+        found |= find_owned(v, role.child(k), keys, held, next, depth + 1)?;
+    }
+    Ok(found)
+}
+
+/// Removes `keys` from `o` and from what it holds in place, outside name maps. [`owners`] has
+/// already refused anything nested past the depth limit.
+fn strip_owned(o: &mut Object, role: Held, keys: &[&[u8]], depth: usize) {
+    if depth > MAX_DIRECT_DEPTH {
+        return;
+    }
+    let (d, role) = match o {
+        Object::Array(a) => {
+            for v in a {
+                strip_owned(v, Held::Owner, keys, depth + 1);
+            }
+            return;
+        }
+        Object::Dict(d) => (d, role),
+        Object::Stream(s) => (&mut s.dict, Held::Owner),
+        _ => return,
+    };
+    if role != Held::Map {
+        for k in keys {
+            d.remove(k);
+        }
+    }
+    let names: Vec<Vec<u8>> = d.iter().filter(|(_, v)| matches!(v, Object::Array(_) | Object::Dict(_))).map(|(k, _)| k.clone()).collect();
+    for k in names {
+        if let Some(v) = d.get_mut(&k) {
+            strip_owned(v, role.child(&k), keys, depth + 1);
+        }
+    }
 }
 
 /// A comment as the comments list sees it, less file attachments (removed with Attachments) and
@@ -151,16 +356,20 @@ fn content_pass(doc: &mut Document, text: bool, layers: bool, write: bool) -> Re
     let n = pdfcraft_model::pages(doc).len();
     for pi in 0..n {
         let page = pdfcraft_model::pages(doc).swap_remove(pi);
-        let Ok((list, data)) = page_streams(doc, &page.dict, pi) else {
+        let mut budget = pdfcraft_cos::DecodeBudget::page();
+        let Ok((list, data)) = page_streams_within(doc, &page.dict, pi, &mut budget) else {
             if write {
                 return Err(RedactError::Unreadable(pi + 1));
             }
+            // Content that can't be read may hide anything: count it so the removal runs and
+            // refuses the page, instead of a zero count skipping it.
+            total += 1;
             continue;
         };
         let resources = page.dict.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned()).unwrap_or_default();
         let mut report = Report::default();
         let mode = if write { Mode::Apply } else { Mode::Verify };
-        let mut scope = Scope::new(&[], mode, &mut report);
+        let mut scope = Scope::new(&[], mode, &mut report, budget);
         if text {
             let c = page.crop(doc);
             scope.hidden_text = Some([c[0].min(c[2]), c[1].min(c[3]), c[0].max(c[2]), c[1].max(c[3])]);
@@ -191,6 +400,8 @@ fn content_pass(doc: &mut Document, text: bool, layers: bool, write: bool) -> Re
                 _ => Dict::new(),
             };
             dict.remove(b"Length");
+            // The source text of an added item (Edit ▸ Add content) would keep what was removed.
+            dict.remove(b"PCAdded");
             new_list[i] = Object::Ref(doc.add(Object::Stream(pdfcraft_cos::Stream::flate(dict, &bytes))));
             changed = true;
         }
@@ -201,7 +412,7 @@ fn content_pass(doc: &mut Document, text: bool, layers: bool, write: bool) -> Re
             let mut cleaned_page = page.dict.clone();
             cleaned_page.set(b"Contents".to_vec(), Object::Array(new_list.clone()));
             let (_, page_content) = page_streams(doc, &cleaned_page, pi)?;
-            let mut res = resources;
+            let mut res = resources.clone();
             if !out.xobjects.is_empty() || !out.replaced.is_empty() {
                 let mut xo = res.get(b"XObject").and_then(|x| doc.resolve(x).as_dict().cloned()).unwrap_or_default();
                 // A full save keeps whatever is still referenced: unlink the originals this page no
@@ -213,15 +424,31 @@ fn content_pass(doc: &mut Document, text: bool, layers: bool, write: bool) -> Re
                 res.set(b"XObject".to_vec(), Object::Dict(xo));
             }
             retired_properties.extend(crate::interp::prune_properties(doc, &mut res, &page_content)?);
+            crate::type3::prune_type3_from_resources(doc, &mut res, &page_content)?;
             doc.update_dict(page.obj, |d| {
                 d.set(b"Contents".to_vec(), Object::Array(new_list));
                 d.set(b"Resources".to_vec(), Object::Dict(res));
             })?;
+            // Tags must not describe or point at what the page no longer shows.
+            let (changed_ids, empty_ids) = crate::tags::touched(
+                doc,
+                &resources,
+                pdfcraft_content::Pieces::join(&data).data(),
+                pdfcraft_content::Pieces::join(&page_content).data(),
+            );
+            crate::tags::clean(doc, page.obj, None, &changed_ids, &empty_ids)?;
+        }
+        for (old, new, changed, empty) in out.tag_changes {
+            crate::tags::clean(doc, page.obj, Some((old, new)), &changed, &empty)?;
         }
     }
     // What a page no longer draws must not stay reachable through an inherited or shared
     // /Resources either.
-    crate::interp::unlink_doomed(doc, &doomed, &retired_properties)?;
+    // Only a removal rewrites the document; a count on a clone has nothing to unlink, and a
+    // cleanup error there would be mistaken for "nothing to remove".
+    if write {
+        crate::interp::unlink_doomed(doc, &doomed, &retired_properties)?;
+    }
     Ok((total, retained_off_layers))
 }
 
@@ -232,6 +459,11 @@ pub fn scan(doc: &Document) -> Vec<(Hidden, usize)> {
     let annots: Vec<Dict> = pages.iter().flat_map(|p| annots_of(doc, &p.dict)).filter_map(|a| doc.resolve(&a).as_dict().cloned()).collect();
     let count_sub = |s: &[u8]| annots.iter().filter(|a| a.name(b"Subtype") == Some(s)).count();
     let names = sub(doc, &cat, b"Names").unwrap_or_default();
+    let owned_keys: Vec<&[u8]> = OWNED.iter().map(|o| o.1).collect();
+    // A graph nested too deeply to walk counts as holding everything, so the removal runs and
+    // refuses it.
+    let held = owners(doc, &owned_keys).map_or_else(|_| vec![1; OWNED.len()], |o| o.0);
+    let owned = |h: Hidden| OWNED.iter().position(|o| o.0 == h).and_then(|i| held.get(i)).copied().unwrap_or(0);
     let mut doc2 = doc.clone();
     HIDDEN
         .into_iter()
@@ -239,12 +471,24 @@ pub fn scan(doc: &Document) -> Vec<(Hidden, usize)> {
             let n = match h {
                 Hidden::Metadata => {
                     let info = doc.trailer().get(b"Info").and_then(|i| doc.resolve(i).as_dict().map(|d| d.len())).unwrap_or(0);
-                    let xmp = usize::from(cat.contains(b"Metadata")) + pages.iter().filter(|p| p.dict.contains(b"Metadata")).count();
-                    info + xmp
+                    info + owned(Hidden::Metadata)
                 }
-                Hidden::Attachments => sub(doc, &names, b"EmbeddedFiles").map_or(0, |t| name_tree_len(doc, &t, 0)) + count_sub(b"FileAttachment"),
+                Hidden::Attachments => {
+                    sub(doc, &names, b"EmbeddedFiles").map_or(0, |t| name_tree_len(doc, &t))
+                        + count_sub(b"FileAttachment")
+                        + owned(Hidden::Attachments)
+                }
                 Hidden::Comments => annots.iter().filter(|a| is_comment(a.name(b"Subtype").unwrap_or(b""))).count(),
-                Hidden::FormFields => pdfcraft_forms::fields(doc).len(),
+                Hidden::FormFields => {
+                    let n = pdfcraft_forms::fields(doc).len();
+                    if n > 0 {
+                        n
+                    } else if cat.contains(b"AcroForm") {
+                        1
+                    } else {
+                        0
+                    }
+                }
                 Hidden::HiddenText => content_pass(&mut doc2, true, false, false).map(|(n, _)| n).unwrap_or(0),
                 Hidden::HiddenLayers => {
                     let off = hidden_layers(doc).len();
@@ -254,12 +498,11 @@ pub fn scan(doc: &Document) -> Vec<(Hidden, usize)> {
                 Hidden::LinksActionsScripts => {
                     count_sub(b"Link")
                         + usize::from(cat.get(b"OpenAction").is_some_and(|a| doc.resolve(a).as_dict().is_some()))
-                        + usize::from(cat.contains(b"AA"))
-                        + pages.iter().filter(|p| p.dict.contains(b"AA")).count()
-                        + annots.iter().filter(|a| a.contains(b"AA") || (a.name(b"Subtype") == Some(b"Widget") && a.contains(b"A"))).count()
-                        + sub(doc, &names, b"JavaScript").map_or(0, |t| name_tree_len(doc, &t, 0))
+                        + owned(Hidden::LinksActionsScripts)
+                        + annots.iter().filter(|a| !a.contains(b"AA") && a.name(b"Subtype") == Some(b"Widget") && a.contains(b"A")).count()
+                        + sub(doc, &names, b"JavaScript").map_or(0, |t| name_tree_len(doc, &t))
                 }
-                Hidden::PrivateData => usize::from(cat.contains(b"PieceInfo")) + pages.iter().filter(|p| p.dict.contains(b"PieceInfo")).count(),
+                Hidden::PrivateData => owned(Hidden::PrivateData),
             };
             (h, n)
         })
@@ -278,20 +521,12 @@ pub fn remove_hidden(doc: &mut Document, which: &[Hidden]) -> Result<Vec<(Hidden
     let count = |h: Hidden| counts.iter().find(|c| c.0 == h).map_or(0, |c| c.1);
     let (root, _) = catalog(doc).ok_or(RedactError::NothingToApply)?;
     let mut done = Vec::new();
-    // Content first (it needs the layers and the form still in place).
-    let (text, layers) = (which.contains(&Hidden::HiddenText), which.contains(&Hidden::HiddenLayers));
-    let retained_off_layers = if (text && count(Hidden::HiddenText) > 0) || (layers && count(Hidden::HiddenLayers) > 0) {
-        content_pass(doc, text, layers, true)?.1
-    } else {
-        std::collections::HashSet::new()
-    };
     // Every annotation the pages list now: whatever is no longer listed at the end (flattened
     // widgets included) leaves the structure tree too.
-    let listed = |doc: &Document| -> std::collections::HashSet<ObjRef> {
-        pdfcraft_model::pages(doc).iter().flat_map(|p| annots_of(doc, &p.dict)).filter_map(|a| a.as_ref()).collect()
-    };
-    let listed_before = listed(doc);
-    if which.contains(&Hidden::FormFields) && count(Hidden::FormFields) > 0 {
+    let listed_before = listed_annotations(doc);
+    let has_acroform = doc.get(root).as_dict().is_some_and(|d| d.contains(b"AcroForm"));
+    let fields = which.contains(&Hidden::FormFields) && (count(Hidden::FormFields) > 0 || has_acroform);
+    if fields {
         // Fields without appearances get one first, so their values stay visible.
         for f in pdfcraft_forms::fields(doc) {
             if f.widgets.iter().any(|w| !doc.get(w.obj).as_dict().is_some_and(|d| d.contains(b"AP"))) {
@@ -304,10 +539,20 @@ pub fn remove_hidden(doc: &mut Document, which: &[Hidden]) -> Result<Vec<(Hidden
             d.remove(b"AcroForm");
         })?;
     }
-    // Annotations: comments, attachments, links, actions.
+    // Content next (it needs the layers still in place). Flattened appearances are page content
+    // by now, so hidden text or layers inside them are removed with the rest.
+    let (text, layers) = (which.contains(&Hidden::HiddenText), which.contains(&Hidden::HiddenLayers));
+    let retained_off_layers = if (text && (fields || count(Hidden::HiddenText) > 0)) || (layers && (fields || count(Hidden::HiddenLayers) > 0)) {
+        content_pass(doc, text, layers, true)?.1
+    } else {
+        std::collections::HashSet::new()
+    };
+    // Annotations: comments, attachments, links, actions, and the widgets flattening kept (hidden
+    // ones, and ones with nothing to draw), which still hold their field's value and parent.
     let drop_annot = |a: &Dict| -> bool {
         let s = a.name(b"Subtype").unwrap_or(b"");
         (which.contains(&Hidden::Comments) && is_comment(s))
+            || (fields && s == b"Widget")
             || (which.contains(&Hidden::Attachments) && s == b"FileAttachment")
             || (which.contains(&Hidden::LinksActionsScripts) && s == b"Link")
     };
@@ -324,7 +569,9 @@ pub fn remove_hidden(doc: &mut Document, which: &[Hidden]) -> Result<Vec<(Hidden
         let mut kept = Vec::new();
         for a in list {
             let Some(r) = a.as_ref() else {
-                kept.push(a);
+                if !doc.resolve(&a).as_dict().is_some_and(drop_annot) {
+                    kept.push(a);
+                }
                 continue;
             };
             let d = doc.get(r).as_dict().cloned().unwrap_or_default();
@@ -340,30 +587,18 @@ pub fn remove_hidden(doc: &mut Document, which: &[Hidden]) -> Result<Vec<(Hidden
             }
             kept.push(a);
         }
-        let private = which.contains(&Hidden::PrivateData);
-        let metadata = which.contains(&Hidden::Metadata);
-        let actions = which.contains(&Hidden::LinksActionsScripts);
         doc.update_dict(p.obj, |d| {
             if kept.is_empty() {
                 d.remove(b"Annots");
             } else {
                 d.set(b"Annots".to_vec(), Object::Array(kept));
             }
-            if private {
-                d.remove(b"PieceInfo");
-            }
-            if metadata {
-                d.remove(b"Metadata");
-            }
-            if actions {
-                d.remove(b"AA");
-            }
         })?;
     }
     // A tagged PDF's structure tree still points at the removed links, comments and flattened
     // widgets (#2447): drop those references, or the full rewrite keeps the annotations, URLs,
     // text and field values included.
-    let still = listed(doc);
+    let still = listed_annotations(doc);
     let gone: std::collections::HashSet<ObjRef> = listed_before.difference(&still).copied().collect();
     crate::tags::drop_object_refs(doc, &gone)?;
     let off = hidden_layers(doc);
@@ -372,14 +607,12 @@ pub fn remove_hidden(doc: &mut Document, which: &[Hidden]) -> Result<Vec<(Hidden
     for &h in which {
         match h {
             Hidden::Metadata => {
-                cat.remove(b"Metadata");
                 doc.trailer_mut().remove(b"Info");
             }
             Hidden::Attachments => {
                 if let Some(n) = names.as_mut() {
                     n.remove(b"EmbeddedFiles");
                 }
-                cat.remove(b"AF");
             }
             Hidden::Bookmarks => {
                 cat.remove(b"Outlines");
@@ -391,13 +624,9 @@ pub fn remove_hidden(doc: &mut Document, which: &[Hidden]) -> Result<Vec<(Hidden
                 if cat.get(b"OpenAction").is_some_and(|a| doc.resolve(a).as_dict().is_some()) {
                     cat.remove(b"OpenAction");
                 }
-                cat.remove(b"AA");
                 if let Some(n) = names.as_mut() {
                     n.remove(b"JavaScript");
                 }
-            }
-            Hidden::PrivateData => {
-                cat.remove(b"PieceInfo");
             }
             Hidden::HiddenLayers if !off.is_empty() => {
                 // The off layers leave the configuration (their content is gone already).
@@ -417,9 +646,12 @@ pub fn remove_hidden(doc: &mut Document, which: &[Hidden]) -> Result<Vec<(Hidden
                     cat.set(b"OCProperties".to_vec(), Object::Dict(oc));
                 }
             }
+            Hidden::FormFields => {
+                cat.remove(b"AcroForm");
+            }
             _ => {}
         }
-        let n = count(h);
+        let n = if h == Hidden::FormFields && fields { count(h).max(1) } else { count(h) };
         if n > 0 {
             done.push((h, n));
         }
@@ -428,6 +660,16 @@ pub fn remove_hidden(doc: &mut Document, which: &[Hidden]) -> Result<Vec<(Hidden
         cat.set(b"Names".to_vec(), Object::Dict(n));
     }
     doc.set(root, Object::Dict(cat));
+    // Metadata, private data, associated files and additional actions on every object that
+    // still owns them (the catalog and pages included).
+    let keys: Vec<&[u8]> = OWNED.iter().filter(|o| which.contains(&o.0)).map(|o| o.1).collect();
+    if !keys.is_empty() {
+        for (r, role) in owners(doc, &keys)?.1 {
+            let mut o = (*doc.get(r)).clone();
+            strip_owned(&mut o, role, &keys, 0);
+            doc.set(r, o);
+        }
+    }
     if done.is_empty() {
         return Err(RedactError::NothingToApply);
     }

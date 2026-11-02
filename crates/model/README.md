@@ -17,6 +17,9 @@ L3/L4 crates need:
 The page-tree walk keeps one cursor per ancestor and shares inherited attribute owners.
 Repeated child references are skipped before copying attributes, with first depth-first
 occurrence order preserved. Returned page dictionaries still own their effective attributes.
+A walk copies at most `MAX_INHERITED_COPIES` (1 GiB, approximate heap bytes) of inherited
+values into the leaves; past it the walk stops, as it does past its leaf cap, and the pages
+after that point are not listed.
 
 `organize`, `annot` and `forms` still carry their own small walkers; they move here as the model
 grows (ADR-0004).

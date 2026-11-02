@@ -1,11 +1,12 @@
 use crate::cache::{Cache, DecodedImageCache, DecodedImageKey};
-use crate::color::{ColorComponents, ColorSpace, ToRgb};
+use crate::cmyk_group::{CmykGroup, blends_in_device_cmyk, names_a_blending_space};
+use crate::color::{ColorComponents, ColorSpace, DefaultColorSpaces, DeviceFamily, ToRgb};
 use crate::context::Context;
 use crate::device::Device;
 use crate::function::{Function, interpolate};
 use crate::interpret::path::get_paint;
 use crate::interpret::state::ActiveTransferFunction;
-use crate::{BlendMode, CacheKey, ClipPath, Image, RasterImage, StencilImage};
+use crate::{BlendMode, CacheKey, ClipPath, Image, Paint, RasterImage, StencilImage};
 use crate::{FillRule, InterpreterWarning, WarningSinkFn, interpret};
 use crate::{ImageData, LumaData, RgbData};
 use hayro_syntax::bit_reader::BitReader;
@@ -36,6 +37,7 @@ impl<'a> XObject<'a> {
         cache: &Cache,
         decoded_cache: Option<&DecodedImageCache>,
         transfer_function: Option<ActiveTransferFunction>,
+        defaults: &DefaultColorSpaces<'_, '_>,
     ) -> Option<Self> {
         let dict = stream.dict();
         match dict.get::<Name<'_>>(SUBTYPE)?.deref() {
@@ -47,6 +49,7 @@ impl<'a> XObject<'a> {
                 decoded_cache,
                 false,
                 transfer_function,
+                Some(defaults),
             )?)),
             FORM => Some(Self::FormXObject(FormXObject::new(stream)?)),
             _ => None,
@@ -64,7 +67,7 @@ pub(crate) struct FormXObject<'a> {
     is_isolated: bool,
     is_knockout: bool,
     pub(crate) dict: Dict<'a>,
-    resources: Dict<'a>,
+    resources: Option<Dict<'a>>,
 }
 
 impl<'a> FormXObject<'a> {
@@ -73,7 +76,8 @@ impl<'a> FormXObject<'a> {
 
         // PdfCraft patch: see `context::MAX_PAGE_CONTENT`.
         let decoded = crate::context::decode_content(stream)?;
-        let resources = dict.get::<Dict<'_>>(RESOURCES).unwrap_or_default();
+        // PdfCraft patch: retain absence; present malformed dictionaries stay local-empty.
+        let resources = dict.contains_key(RESOURCES).then(|| dict.get::<Dict<'_>>(RESOURCES).unwrap_or_default());
 
         let matrix = Affine::new(
             dict.get::<[f64; 6]>(MATRIX)
@@ -135,8 +139,6 @@ pub(crate) fn draw_form_xobject<'a, 'b>(
         return;
     }
 
-    let iter = TypedIter::new(x_object.decoded.as_ref());
-
     context.path_mut().truncate(0);
     context.save_state();
     context.pre_concat_affine(x_object.matrix);
@@ -152,14 +154,66 @@ pub(crate) fn draw_form_xobject<'a, 'b>(
     // starts from a blank backdrop by definition, and a knockout group or one entered at partial
     // opacity, under a soft mask or with a blend mode keeps its layer, where the group's
     // elements still composite with a blank backdrop (an approximation of §11.4.7 for them).
-    let neutral = !x_object.is_isolated && !x_object.is_knockout && {
+    let entered_plainly = {
         let state = &context.get().graphics_state;
         state.non_stroke_alpha >= 1.0
             && state.stroke_alpha >= 1.0
             && state.soft_mask.is_none()
             && state.blend_mode == BlendMode::Normal
     };
-    let own_layer = x_object.is_transparency_group && !neutral;
+    let neutral = !x_object.is_isolated && !x_object.is_knockout && entered_plainly;
+    // PdfCraft patch (39): a group drawn as an element of a knockout group replaces what that
+    // group drew under its shape, the union of its own elements' shapes (#2971). The shape is
+    // cleared by drawing the group's content once in the device's erase mode; the group then
+    // composites over the cleared area in a layer of its own (also when it would otherwise be
+    // drawn straight onto its parent, where its elements would knock each other out).
+    let knockout_element = x_object.is_transparency_group && device.knockout_erase_wanted();
+    if knockout_element {
+        context.save_state();
+        device.begin_knockout_erase();
+        device.push_clip_path(&ClipPath {
+            path: context.get().ctm
+                * Rect::new(
+                    x_object.bbox[0] as f64,
+                    x_object.bbox[1] as f64,
+                    x_object.bbox[2] as f64,
+                    x_object.bbox[3] as f64,
+                )
+                .to_path(0.1),
+            fill: FillRule::NonZero,
+        });
+        interpret(
+            TypedIter::new(x_object.decoded.as_ref()),
+            &Resources::for_form(x_object.resources.clone(), resources.clone()),
+            context,
+            device,
+        );
+        device.pop_clip_path();
+        device.end_knockout_erase();
+        context.restore_state(device);
+        context.path_mut().truncate(0);
+    }
+    // PdfCraft patch (67): a non-isolated knockout group entered the same way composites each
+    // element with the backdrop already on the page, in the element's own blend mode (#4886). A
+    // layer of its own starts transparent, where a blend mode has nothing to blend with, so the
+    // group is drawn in passes, one per blend mode, each composited onto the page in its mode
+    // (`Device::begin_knockout_pass`).
+    if x_object.is_transparency_group
+        && x_object.is_knockout
+        && !x_object.is_isolated
+        && entered_plainly
+        && !knockout_element
+    {
+        draw_knockout_passes(x_object, resources, context, device);
+        context.pop_root_transform();
+        context.restore_state(device);
+        if has_oc {
+            context.ocg_state.end_marked_content();
+        }
+        context.end_nested_interpretation();
+        return;
+    }
+    let own_layer = x_object.is_transparency_group && (!neutral || knockout_element);
 
     if own_layer {
         device.push_transparency_group(
@@ -170,8 +224,63 @@ pub(crate) fn draw_form_xobject<'a, 'b>(
 
         context.get_mut().graphics_state.non_stroke_alpha = 1.0;
         context.get_mut().graphics_state.stroke_alpha = 1.0;
+        // PdfCraft patch (39): its elements knock each other out (#2971).
+        if x_object.is_knockout {
+            device.set_knockout();
+        }
     }
 
+    let resources = Resources::for_form(x_object.resources.clone(), resources.clone());
+
+    // PdfCraft patch (70): an isolated group blending in DeviceCMYK starts from a backdrop of
+    // its own, so a device able to blend in CMYK computes its interior apart and composites the
+    // result through the layer pushed above (see `cmyk_group`). Knockout groups are left out:
+    // their elements composite with the group's initial backdrop, not with each other.
+    // An isolated group that names another blending space blends in that space (§11.3.4); a
+    // device drawing an enclosing group in CMYK is told, so it can decline that group. A
+    // non-isolated group's /CS is ignored: it blends in its parent's space (ISO 32000-2
+    // Table 145, CS), so it stays in the enclosing group's CMYK.
+    if x_object.is_transparency_group
+        && x_object.is_isolated
+        && names_a_blending_space(&x_object.dict)
+        && !blends_in_device_cmyk(&x_object.dict)
+    {
+        device.group_blends_outside_device_cmyk();
+    }
+
+    let blended_in_cmyk = own_layer
+        && x_object.is_isolated
+        && !x_object.is_knockout
+        && blends_in_device_cmyk(&x_object.dict)
+        && device.draw_isolated_cmyk_group(&CmykGroup::new(x_object, &resources, context));
+
+    if !blended_in_cmyk {
+        interpret_form_contents(&resources, x_object, context, device);
+    }
+
+    if own_layer {
+        device.pop_transparency_group();
+    }
+
+    context.pop_root_transform();
+    context.restore_state(device);
+
+    if has_oc {
+        context.ocg_state.end_marked_content();
+    }
+
+    context.end_nested_interpretation();
+}
+
+/// The contents of form `x_object`, in `context` as prepared for them (the form's `/Matrix`
+/// applied, its root transform pushed), clipped to its `/BBox`. PdfCraft patch (70): shared by
+/// [`draw_form_xobject`] and [`CmykGroup::interpret`].
+pub(crate) fn interpret_form_contents<'a>(
+    resources: &Resources<'a>,
+    x_object: &FormXObject<'a>,
+    context: &mut Context<'a>,
+    device: &mut impl Device<'a>,
+) {
     device.set_soft_mask(context.get().graphics_state.soft_mask.clone());
     device.set_blend_mode(context.get().graphics_state.blend_mode);
 
@@ -188,26 +297,70 @@ pub(crate) fn draw_form_xobject<'a, 'b>(
     });
 
     interpret(
-        iter,
-        &Resources::from_parent(x_object.resources.clone(), resources.clone()),
+        TypedIter::new(x_object.decoded.as_ref()),
+        resources,
         context,
         device,
     );
 
     device.pop_clip_path();
+}
 
-    if own_layer {
+/// PdfCraft patch (67): draws a non-isolated knockout group entered at full opacity, without a
+/// soft mask and with Normal blending, once per blend mode its elements use. The Normal pass
+/// finds the other modes; there are at most as many passes as blend modes.
+fn draw_knockout_passes<'a>(
+    x_object: &FormXObject<'a>,
+    resources: &Resources<'a>,
+    context: &mut Context<'a>,
+    device: &mut impl Device<'a>,
+) {
+    let clip = ClipPath {
+        path: context.get().ctm
+            * Rect::new(
+                x_object.bbox[0] as f64,
+                x_object.bbox[1] as f64,
+                x_object.bbox[2] as f64,
+                x_object.bbox[3] as f64,
+            )
+            .to_path(0.1),
+        fill: FillRule::NonZero,
+    };
+    // Each pass starts from the same marked-content state, also after a stream that leaves a
+    // `BDC` open.
+    let visibility = context.ocg_state.visibility();
+    let mut modes = vec![BlendMode::Normal];
+    let mut pass = 0;
+    while let Some(&mode) = modes.get(pass) {
+        context.ocg_state.set_visibility(visibility.clone());
+        context.save_state();
+        device.push_transparency_group(1.0, None, mode);
+        device.set_knockout();
+        device.begin_knockout_pass(mode);
+        device.set_soft_mask(None);
+        device.set_blend_mode(BlendMode::Normal);
+        device.push_clip_path(&clip);
+        interpret(
+            TypedIter::new(x_object.decoded.as_ref()),
+            &Resources::for_form(x_object.resources.clone(), resources.clone()),
+            context,
+            device,
+        );
+        device.pop_clip_path();
+        let others = device.end_knockout_pass();
         device.pop_transparency_group();
+        context.restore_state(device);
+        context.path_mut().truncate(0);
+        if pass == 0 {
+            for other in others {
+                if !modes.contains(&other) {
+                    modes.push(other);
+                }
+            }
+        }
+        pass += 1;
     }
-
-    context.pop_root_transform();
-    context.restore_state(device);
-
-    if has_oc {
-        context.ocg_state.end_marked_content();
-    }
-
-    context.end_nested_interpretation();
+    context.ocg_state.set_visibility(visibility);
 }
 
 pub(crate) fn draw_image_xobject<'a, 'b>(
@@ -251,6 +404,17 @@ pub(crate) fn draw_image_xobject<'a, 'b>(
         soft_mask = None;
     }
 
+    // PdfCraft patch (39): an image without a mask covers its whole placement rectangle, so in
+    // a knockout group it replaces what the group drew there (#2971). A stencil's or a masked
+    // image's shape is its mask; those composite as before (exact where the mask is opaque or
+    // transparent, which is what masks mostly are). Only an image the device draws clears: one
+    // that doesn't decode (over `MAX_IMAGE_PIXELS`, damaged data) or that it skips (a preview's
+    // tiny image) replaces nothing. The device decides, at its own draw size (review on #2974:
+    // a full-size decode here cost a second decode of every downscaled image).
+    if !x_object.is_mask && !has_alpha && device.in_knockout_group() {
+        device.knockout_image(&RasterImage(x_object.clone()), transform);
+    }
+
     device.push_transparency_group(
         context.get().graphics_state.non_stroke_alpha,
         std::mem::take(&mut soft_mask),
@@ -259,10 +423,18 @@ pub(crate) fn draw_image_xobject<'a, 'b>(
 
     device.set_soft_mask(None);
     device.set_blend_mode(BlendMode::default());
+    // PdfCraft patch (46): the group just pushed applies the fill opacity, so a stencil mask's
+    // paint (the fill colour) must not carry it again: at `ca 0.5` a mask was drawn at a
+    // quarter of its opacity (#2975). The state is restored below.
+    context.get_mut().graphics_state.non_stroke_alpha = 1.0;
 
     let image = if x_object.is_mask {
         Image::Stencil(StencilImage {
-            paint: get_paint(context, false),
+            // A pattern paint keeps the opacity it was set with: drop it too (patch 46).
+            paint: match get_paint(context, false) {
+                Paint::Pattern(pattern) => Paint::Pattern(Box::new(pattern.without_opacity())),
+                paint => paint,
+            },
             image_xobject: x_object.clone(),
         })
     } else {
@@ -308,9 +480,15 @@ pub(crate) struct ImageXObject<'a> {
     stream: Stream<'a>,
     transfer_function: Option<ActiveTransferFunction>,
     warning_sink: WarningSinkFn,
+    /// PdfCraft patch (38): the cache key of the default colour space drawn in place of the
+    /// image's device space, if one is.
+    default_space: Option<u128>,
 }
 
 impl<'a> ImageXObject<'a> {
+    /// PdfCraft patch (38): an image in a device space is drawn in its default colour space
+    /// from `defaults`. Masks have none to replace, and `resolve_cs` (an inline image's named
+    /// colour space) substitutes its own.
     pub(crate) fn new(
         stream: &Stream<'a>,
         resolve_cs: impl FnOnce(&Name<'_>) -> Option<ColorSpace>,
@@ -319,6 +497,7 @@ impl<'a> ImageXObject<'a> {
         decoded_cache: Option<&DecodedImageCache>,
         mut is_mask: bool,
         transfer_function: Option<ActiveTransferFunction>,
+        defaults: Option<&DefaultColorSpaces<'_, '_>>,
     ) -> Option<Self> {
         let dict = stream.dict();
 
@@ -328,6 +507,7 @@ impl<'a> ImageXObject<'a> {
             .unwrap_or(false);
         is_mask |= is_stencil_mask;
 
+        let mut default_space = None;
         let image_cs = if is_mask {
             // Masks are always single-channel.
             Some(ColorSpace::device_gray())
@@ -336,15 +516,25 @@ impl<'a> ImageXObject<'a> {
                 .get::<Object<'_>>(CS)
                 .or_else(|| dict.get::<Object<'_>>(COLORSPACE));
 
-            cs_obj
-                .clone()
-                .and_then(|c| ColorSpace::new(c, cache))
-                // Inline images can also refer to color spaces by name.
-                .or_else(|| {
-                    cs_obj
-                        .and_then(|c| c.into_name())
-                        .and_then(|n| resolve_cs(&n))
-                })
+            let default = cs_obj
+                .as_ref()
+                .and_then(DeviceFamily::of_object)
+                .zip(defaults)
+                .and_then(|(family, defaults)| defaults.get(family));
+            if let Some((space, key)) = default {
+                default_space = Some(key);
+                Some(space)
+            } else {
+                cs_obj
+                    .clone()
+                    .and_then(|c| ColorSpace::new(c, cache))
+                    // Inline images can also refer to color spaces by name.
+                    .or_else(|| {
+                        cs_obj
+                            .and_then(|c| c.into_name())
+                            .and_then(|n| resolve_cs(&n))
+                    })
+            }
         };
 
         let interpolate = dict
@@ -371,6 +561,7 @@ impl<'a> ImageXObject<'a> {
             stream: stream.clone(),
             is_mask,
             is_stencil_mask,
+            default_space,
         })
     }
 
@@ -434,6 +625,8 @@ impl<'a> ImageXObject<'a> {
             is_mask: self.is_mask,
             is_stencil_mask: self.is_stencil_mask,
             interpolate: self.interpolate,
+            // PdfCraft patch (38): the same image drawn in a default colour space or without one.
+            default_space: self.default_space,
             // PdfCraft patch (32): see `decode_reads_target`.
             target: if self.decode_reads_target() {
                 target_dimension
@@ -905,7 +1098,7 @@ fn resolve_alpha(
         .get::<Stream<'_>>(SMASK)
         .or_else(|| dict.get::<Stream<'_>>(MASK))
     {
-        let obj = ImageXObject::new(&s_mask, |_| None, &obj.warning_sink, &obj.cache, obj.decoded_cache.as_ref(), true, None)?;
+        let obj = ImageXObject::new(&s_mask, |_| None, &obj.warning_sink, &obj.cache, obj.decoded_cache.as_ref(), true, None, None)?;
 
         decode_mask(&obj, target_dimension).map(|decoded| decoded.luma)
     } else if let Some(color_key_mask) = dict.get::<SmallVec<[u16; 4]>>(MASK) {
@@ -965,7 +1158,7 @@ fn resolve_matte(
     let mut matte_rgb = [0_u8; 3];
     color_space.convert_f32(&matte, &mut matte_rgb, false);
 
-    let mask_obj = ImageXObject::new(&s_mask, |_| None, &obj.warning_sink, &obj.cache, obj.decoded_cache.as_ref(), true, None)?;
+    let mask_obj = ImageXObject::new(&s_mask, |_| None, &obj.warning_sink, &obj.cache, obj.decoded_cache.as_ref(), true, None, None)?;
     let alpha = decode_mask(&mask_obj, target_dimension)?.luma;
 
     Some((alpha, matte_rgb))

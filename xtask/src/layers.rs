@@ -182,6 +182,34 @@ impl std::fmt::Display for Violation {
     }
 }
 
+/// Layer and testkit rules for one dependency of `c` that is itself a workspace crate.
+fn check_workspace_dep(c: &Crate, class: Class, layer: u8, d: &Dep, out: &mut Vec<Violation>) {
+    let dep_class = classify(&d.name);
+    // Test support is a dev-dependency only (`Class::Testkit`) and so never reaches
+    // the product graph a standalone crate publishes. Checking it against the
+    // standalone allow-list would stop `cos` using the shared oracles in its own
+    // tests, which is the one thing those crates exist for.
+    let testkit_dev = dep_class == Some(Class::Testkit) && d.kind == DepKind::Dev;
+    if matches!(class, Class::Standalone(_)) && !testkit_dev && !standalone_allowed(&c.name, &d.name) {
+        out.push(Violation::StandaloneHasWorkspaceDep { krate: c.name.clone(), dep: d.name.clone() });
+        return;
+    }
+    match dep_class {
+        None => {}
+        Some(Class::Testkit) if d.kind != DepKind::Dev && class != Class::Testkit => {
+            out.push(Violation::TestkitAsNormalDep { krate: c.name.clone(), dep: d.name.clone() });
+        }
+        Some(Class::Testkit) => {}
+        Some(dc) => {
+            let to = dc.layer().unwrap_or(u8::MAX);
+            let ok = to < layer || (to == layer && sideways_allowed(&c.name, &d.name));
+            if !ok {
+                out.push(Violation::Upward { krate: c.name.clone(), dep: d.name.clone(), from: layer, to: to.min(8), kind: d.kind });
+            }
+        }
+    }
+}
+
 pub fn check(crates: &[Crate]) -> Vec<Violation> {
     let mut out = Vec::new();
     for c in crates {
@@ -198,37 +226,14 @@ pub fn check(crates: &[Crate]) -> Vec<Violation> {
                 continue;
             }
             if d.workspace {
-                let dep_class = classify(&d.name);
-                // Test support is a dev-dependency only (`Class::Testkit`) and so never reaches
-                // the product graph a standalone crate publishes. Checking it against the
-                // standalone allow-list would stop `cos` using the shared oracles in its own
-                // tests, which is the one thing those crates exist for.
-                let testkit_dev = dep_class == Some(Class::Testkit) && d.kind == DepKind::Dev;
-                if matches!(class, Class::Standalone(_)) && !testkit_dev && !standalone_allowed(&c.name, &d.name) {
-                    out.push(Violation::StandaloneHasWorkspaceDep { krate: c.name.clone(), dep: d.name.clone() });
-                    continue;
-                }
-                match dep_class {
-                    None => {}
-                    Some(Class::Testkit) if d.kind != DepKind::Dev && class != Class::Testkit => {
-                        out.push(Violation::TestkitAsNormalDep { krate: c.name.clone(), dep: d.name.clone() });
-                    }
-                    Some(Class::Testkit) => {}
-                    Some(dc) => {
-                        let to = dc.layer().unwrap_or(u8::MAX);
-                        let ok = to < layer || (to == layer && sideways_allowed(&c.name, &d.name));
-                        if !ok {
-                            out.push(Violation::Upward { krate: c.name.clone(), dep: d.name.clone(), from: layer, to: to.min(8), kind: d.kind });
-                        }
-                    }
-                }
+                check_workspace_dep(c, class, layer, d, &mut out);
             } else if layer < UI_MIN_LAYER && is_ui_crate(&d.name) && !(class == Class::Testkit || d.kind == DepKind::Dev && d.name == "egui_kittest")
             {
                 out.push(Violation::UiBelowL7 { krate: c.name.clone(), dep: d.name.clone(), layer });
             }
         }
     }
-    out.sort_by_key(|v| v.to_string());
+    out.sort_by_key(ToString::to_string);
     out.dedup();
     out
 }

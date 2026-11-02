@@ -1,0 +1,9 @@
+Label = "Bookmarks"
+Button "Close" [off]
+Button "Bookmark options" [off]
+Button "New bookmark (Ctrl+B)" [off]
+Label = "Search"
+TextInput "Search"
+Button "Clear" [off]
+Button "Introduction"
+Button "Details"

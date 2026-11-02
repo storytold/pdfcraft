@@ -12,6 +12,8 @@ workspace = true
 pdfcraft-crypt = { workspace = true }
 pdfcraft-filters = { workspace = true }
 thiserror = { workspace = true }
+# PDF date strings (`pdf_date`) go through chrono (no hand-rolled calendar code).
+chrono = { workspace = true }
 
 [dev-dependencies]
 pdfcraft-oracle = { workspace = true }

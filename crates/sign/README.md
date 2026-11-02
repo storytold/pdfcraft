@@ -22,7 +22,10 @@ for s in signatures(&doc, &bytes, &trust) {                                // li
   An existing unsigned field or a new one (visible with Acrobat's name-and-details appearance,
   or invisible); certification with DocMDP P=1/2/3. A visible signature can show a `Graphic`
   where the large name would be: drawn strokes, filled outlines (a typed signature) or RGBA
-  pixels (an image XObject with a soft mask), checked and size-capped first. The document is written incrementally
+  pixels (an image XObject with a soft mask), checked and size-capped first. On a page shown
+  turned (`/Rotate`, inherited or not), a new visible signature reads upright as displayed: its
+  widget gets `/MK /R` and its appearance is laid out in the displayed box and turned back by a
+  `/Matrix`; an existing field follows its own `/MK /R`. The document is written incrementally
   with a zero-filled `/Contents` and fixed-width `/ByteRange`, which are then patched in
   place. Encrypted documents are refused for now.
 - **Timestamps (PAdES B-T):** the `timestamp` module builds and parses RFC 3161 requests,
@@ -83,6 +86,13 @@ needs a prompt to open is listed and asks at signing (issue #179).
   attributes are still verified over their own exact bytes (signed attributes written with an
   indefinite length are re-encoded as DER first, as RFC 5652 §5.4 has them signed). Nesting is
   bounded, and the details say that the signature was BER. High tag numbers are not read.
+- **One content type, one message digest.** A CMS whose signed attributes repeat the content type
+  or the message digest, or give either of them more or fewer than one value, is not read (RFC
+  5652 §11.1, §11.2). Neither is one whose content-type attribute differs from `eContentType`:
+  the signature covers the attribute but not `eContentType`. Both content types must be object
+  identifiers, and a PDF signature's must be data. A signature with signed attributes but no
+  content-type attribute is read anyway, with a note, although §11.1 requires one: then
+  `eContentType` alone says that the content is data.
 - **Later changes are classified narrowly.** Only the catalog's own `/Metadata` stream is the
   document's XMP, and only objects reached through the `/DSS` keys above are the security store. A
   `/Type /Metadata` or `/Type /DSS` *label* on any other dictionary or stream (a page's Form

@@ -83,5 +83,5 @@ undo, redo, or save; there is no claim that an index persists across generations
 
 Regression coverage: `crates/edit/src/tests.rs` (glyph bytes, neighbours, split streams, shared Forms,
 rotated/cropped/UserUnit pages and refusal), `crates/engine/src/tests.rs` (permissions, history,
-rendering and save/reopen), `crates/automation/tests/automation.rs` (generation guards and hostile
-references), and `crates/ui-egui/tests/object_selection.rs` (real-shell selection and gestures).
+rendering and save/reopen), `crates/automation/tests/it/automation.rs` (generation guards and hostile
+references), and `crates/ui-egui/tests/it/object_selection.rs` (real-shell selection and gestures).

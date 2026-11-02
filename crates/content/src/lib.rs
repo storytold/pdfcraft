@@ -52,6 +52,12 @@ impl Op {
     pub fn name(&self, i: usize) -> Option<&[u8]> {
         self.operands.get(i).and_then(Object::as_name)
     }
+
+    /// The last operand as a name: the one `Do` and the other one-operand operators act on, since
+    /// the renderer takes operands from the end and ignores any surplus before them.
+    pub fn last_name(&self) -> Option<&[u8]> {
+        self.operands.last().and_then(Object::as_name)
+    }
 }
 
 /// A parsed stream.
@@ -60,6 +66,10 @@ pub struct Parsed {
     pub ops: Vec<Op>,
     /// Bytes that could not be read as operands or operators.
     pub skipped: usize,
+    /// Inline images the renderer's tokenizer reads no image for (it stops, or finds no `EI` it
+    /// accepts). Their end here is a guess, so the operators after them may not be the ones the
+    /// page draws.
+    pub ambiguous_images: usize,
     /// For [`Pieces::parse`]: per piece, whether a comment runs into it from the piece before
     /// and whether one runs out of it into the next. Only boundaries are recorded, so the size
     /// depends on the number of pieces, not of comments.
@@ -74,95 +84,172 @@ fn is_delim(b: u8) -> bool {
     matches!(b, b'(' | b')' | b'<' | b'>' | b'[' | b']' | b'{' | b'}' | b'/' | b'%')
 }
 
+/// Longest unreadable number token retried from its next byte. Real numbers are far shorter.
+const MAX_RETRIED_TOKEN: usize = 64;
+
 /// Parse a (decoded) content stream.
 pub fn parse(data: &[u8]) -> Parsed {
     parse_pieces(data, &[])
 }
 
+/// The operators of a (decoded) content stream, read one at a time, as [`parse`] reads them. A
+/// caller that stops early or keeps only a summary never holds every operator of the stream.
+pub fn ops(data: &[u8]) -> Ops<'_> {
+    Ops::new(data, &[])
+}
+
 /// Parse `data`, recording which of the piece boundaries `ends` (as in [`Pieces`]) a comment
 /// crosses.
 fn parse_pieces(data: &[u8], ends: &[usize]) -> Parsed {
-    let mut out = Parsed { comment_edges: vec![(false, false); ends.len()], ..Parsed::default() };
-    let mut boundary = 0;
-    let mut lx = Lexer::new(data, 0);
-    let mut operands: Vec<Object> = Vec::new();
-    let mut start: Option<usize> = None;
-    loop {
-        let trivia = lx.pos;
-        lx.skip_ws();
-        // Only the whitespace the lexer skips here holds top-level comments: a `%` inside a
-        // string, a name, an array or dictionary operand or inline image data is not one.
-        if boundary < ends.len() {
-            comment_edges(data, trivia..lx.pos, ends, &mut boundary, &mut out.comment_edges);
+    let mut reader = Ops::new(data, ends);
+    let ops = reader.by_ref().collect();
+    Parsed { ops, skipped: reader.skipped, ambiguous_images: reader.ambiguous_images, comment_edges: reader.comment_edges }
+}
+
+/// The iterator [`ops`] returns.
+pub struct Ops<'a> {
+    data: &'a [u8],
+    lx: Lexer<'a>,
+    operands: Vec<Object>,
+    start: Option<usize>,
+    skipped: usize,
+    ambiguous_images: usize,
+    ends: &'a [usize],
+    boundary: usize,
+    comment_edges: Vec<(bool, bool)>,
+}
+
+impl<'a> Ops<'a> {
+    fn new(data: &'a [u8], ends: &'a [usize]) -> Self {
+        Ops {
+            data,
+            lx: Lexer::new(data, 0),
+            operands: Vec::new(),
+            start: None,
+            skipped: 0,
+            ambiguous_images: 0,
+            ends,
+            boundary: 0,
+            comment_edges: vec![(false, false); ends.len()],
         }
-        let Some(&b) = data.get(lx.pos) else { break };
-        let at = lx.pos;
-        let operand_start = matches!(b, b'/' | b'(' | b'<' | b'[' | b'+' | b'-' | b'.') || b.is_ascii_digit();
-        if operand_start {
-            match lx.object() {
-                Ok(o) => {
+    }
+
+    /// Bytes read so far that could not be read as operands or operators.
+    pub fn skipped(&self) -> usize {
+        self.skipped
+    }
+
+    /// Inline images read so far whose end is this parser's guess (as in
+    /// [`Parsed::ambiguous_images`]).
+    pub fn ambiguous_images(&self) -> usize {
+        self.ambiguous_images
+    }
+}
+
+impl Iterator for Ops<'_> {
+    type Item = Op;
+
+    fn next(&mut self) -> Option<Op> {
+        let Ops { data, lx, operands, start, skipped, ambiguous_images, ends, boundary, comment_edges: edges } = self;
+        let (data, ends): (&[u8], &[usize]) = (data, ends);
+        loop {
+            let trivia = lx.pos;
+            lx.skip_ws();
+            // Only the whitespace the lexer skips here holds top-level comments: a `%` inside a
+            // string, a name, an array or dictionary operand or inline image data is not one.
+            if *boundary < ends.len() {
+                comment_edges(data, trivia..lx.pos, ends, boundary, edges);
+            }
+            let Some(&b) = data.get(lx.pos) else {
+                // Operands left without an operator.
+                *skipped += operands.len();
+                operands.clear();
+                return None;
+            };
+            let at = lx.pos;
+            let operand_start = matches!(b, b'/' | b'(' | b'<' | b'[' | b'+' | b'-' | b'.') || b.is_ascii_digit();
+            if operand_start {
+                match lx.object() {
+                    Ok(o) => {
+                        start.get_or_insert(at);
+                        operands.push(o);
+                    }
+                    Err(_) if b == b'(' => {
+                        // An unterminated string runs to the end of the stream.
+                        *skipped += data.len() - at;
+                        lx.pos = data.len();
+                    }
+                    Err(_) => {
+                        let read = lx.pos.saturating_sub(at);
+                        #[cfg(test)]
+                        tests::RESCANNED.with(|c| c.set(c.get() + read));
+                        let number = matches!(b, b'+' | b'-' | b'.') || b.is_ascii_digit();
+                        if number && read > MAX_RETRIED_TOKEN {
+                            // A long unreadable number is skipped whole: retrying from each of its
+                            // bytes would read the rest of it again every time.
+                            *skipped += read;
+                        } else {
+                            // Skip the offending byte and carry on.
+                            lx.pos = at + 1;
+                            *skipped += 1;
+                        }
+                    }
+                }
+                continue;
+            }
+            if is_delim(b) {
+                // A stray `)`, `>`, `]`, `{`, `}`.
+                lx.pos += 1;
+                *skipped += 1;
+                continue;
+            }
+            let kw = lx.token();
+            if kw.is_empty() {
+                lx.pos = at + 1;
+                *skipped += 1;
+                continue;
+            }
+            match kw {
+                b"true" => {
                     start.get_or_insert(at);
-                    operands.push(o);
+                    operands.push(Object::Bool(true));
                 }
-                Err(_) if b == b'(' => {
-                    // An unterminated string runs to the end of the stream.
-                    out.skipped += data.len() - at;
-                    lx.pos = data.len();
+                b"false" => {
+                    start.get_or_insert(at);
+                    operands.push(Object::Bool(false));
                 }
-                Err(_) => {
-                    // Skip the offending byte and carry on.
-                    lx.pos = at + 1;
-                    out.skipped += 1;
+                b"null" => {
+                    start.get_or_insert(at);
+                    operands.push(Object::Null);
                 }
-            }
-            continue;
-        }
-        if is_delim(b) {
-            // A stray `)`, `>`, `]`, `{`, `}`.
-            lx.pos += 1;
-            out.skipped += 1;
-            continue;
-        }
-        let kw = lx.token();
-        if kw.is_empty() {
-            lx.pos = at + 1;
-            out.skipped += 1;
-            continue;
-        }
-        match kw {
-            b"true" => {
-                start.get_or_insert(at);
-                operands.push(Object::Bool(true));
-            }
-            b"false" => {
-                start.get_or_insert(at);
-                operands.push(Object::Bool(false));
-            }
-            b"null" => {
-                start.get_or_insert(at);
-                operands.push(Object::Null);
-            }
-            b"BI" => match inline_image(data, lx.pos) {
-                Ok((dict, img, end)) => {
+                b"BI" => {
+                    let image = inline_image(data, at, lx.pos);
+                    *ambiguous_images += usize::from(image.ambiguous);
+                    let end = image.end;
                     lx.pos = end;
-                    out.ops.push(Op { op: b"BI".to_vec(), operands: Vec::new(), inline: Some((dict, img)), span: start.take().unwrap_or(at)..end });
                     operands.clear();
+                    match image.image {
+                        Some((dict, img)) => {
+                            return Some(Op {
+                                op: b"BI".to_vec(),
+                                operands: Vec::new(),
+                                inline: Some((dict, img)),
+                                span: start.take().unwrap_or(at)..end,
+                            });
+                        }
+                        None => {
+                            *skipped += end.saturating_sub(at);
+                            *start = None;
+                        }
+                    }
                 }
-                Err(end) => {
-                    out.skipped += end.saturating_sub(at);
-                    lx.pos = end;
-                    start = None;
-                    operands.clear();
+                _ => {
+                    let s = start.take().unwrap_or(at);
+                    return Some(Op { op: kw.to_vec(), operands: std::mem::take(operands), inline: None, span: s..lx.pos });
                 }
-            },
-            _ => {
-                let s = start.take().unwrap_or(at);
-                out.ops.push(Op { op: kw.to_vec(), operands: std::mem::take(&mut operands), inline: None, span: s..lx.pos });
             }
         }
     }
-    out.skipped += operands.len();
-    out
 }
 
 /// Record the piece boundaries crossed by the comments in `trivia` (skipped whitespace and
@@ -198,11 +285,29 @@ fn comment_edges(data: &[u8], trivia: std::ops::Range<usize>, ends: &[usize], bo
     }
 }
 
-/// Read an inline image starting after `BI`: (parameters, data, position after `EI`). `Err` holds
-/// the position after the `EI` (or the end of the stream) of an image whose parameters can't be read.
-fn inline_image(data: &[u8], pos: usize) -> Result<(Dict, Vec<u8>, usize), usize> {
+/// An inline image as [`inline_image`] reads it.
+struct Inline {
+    /// Its parameters and data; `None` when the parameters can't be read.
+    image: Option<(Dict, Vec<u8>)>,
+    /// The position after its `EI` (or the end of the stream).
+    end: usize,
+    /// The renderer's tokenizer reads no image here, so `end` is this parser's guess.
+    ambiguous: bool,
+}
+
+/// Read the inline image whose `BI` keyword starts at `bi` (its parameters start at `pos`).
+///
+/// Filtered image data has no length, and `EI` can occur inside it, so where it ends is a
+/// heuristic choice among `EI` candidates. The renderer's choice decides which operators the
+/// page draws after the image, and redaction must see the same ones, so the end is taken from
+/// the renderer's tokenizer (hayro-syntax) rather than worked out here by another rule. Only
+/// when that tokenizer reads no image does this parser fall back to its own rules, and the
+/// image is marked ambiguous.
+fn inline_image(data: &[u8], bi: usize, pos: usize) -> Inline {
     let mut lx = Lexer::new(data, pos);
     let mut dict = Dict::new();
+    let mut readable = true;
+    let mut stop = pos;
     loop {
         lx.skip_ws();
         if lx.eat_keyword(b"ID") {
@@ -216,20 +321,87 @@ fn inline_image(data: &[u8], pos: usize) -> Result<(Dict, Vec<u8>, usize), usize
         let Some((k, v)) = entry else {
             // A stream that ends inside the parameters is cut short, not unreadable: keep what was read.
             if at >= data.len() {
-                return Ok((dict, Vec::new(), data.len()));
+                return Inline { image: Some((dict, Vec::new())), end: data.len(), ambiguous: false };
             }
-            // Without an `EI` after it, the image runs to the end of the stream.
-            return Err(end_of_image(data, at).map_or(data.len(), |(_, end)| end));
+            readable = false;
+            stop = at;
+            break;
         };
         dict.set(k, v);
     }
+    if let Some((start, end_data, end)) = renderer_image_end(data, bi) {
+        // Where the renderer ends the data at an `EI` found by its heuristic, one whitespace byte
+        // before that `EI` separates it from the data.
+        let mut samples = data.get(start..end_data).unwrap_or_default();
+        if data.get(end_data..).is_some_and(|rest| rest.starts_with(b"EI"))
+            && let Some((last, rest)) = samples.split_last()
+            && is_ws(*last)
+        {
+            samples = rest;
+        }
+        return Inline { image: readable.then(|| (dict, samples.to_vec())), end, ambiguous: false };
+    }
+    if !readable {
+        // Without an `EI` after it, the image runs to the end of the stream.
+        return Inline { image: None, end: end_of_image(data, stop, b"").map_or(data.len(), |(_, end)| end), ambiguous: true };
+    }
     // One whitespace byte separates ID from the data.
     let begin = (lx.pos + 1).min(data.len());
-    let end = unfiltered_image_end(data, begin, &dict).or_else(|| end_of_image(data, begin));
-    Ok(match end {
-        Some((end_data, end)) => (dict, data[begin..end_data].to_vec(), end),
-        None => (dict, data[begin..].to_vec(), data.len()),
-    })
+    let end = unfiltered_image_end(data, begin, &dict)
+        .or_else(|| declared_image_end(data, begin, &dict))
+        .or_else(|| image_data_end(data, begin, filter_eod(&dict)));
+    let (image, end) = match end {
+        Some((end_data, end)) => (data.get(begin..end_data).unwrap_or_default().to_vec(), end),
+        None => (data.get(begin..).unwrap_or_default().to_vec(), data.len()),
+    };
+    Inline { image: Some((dict, image)), end, ambiguous: true }
+}
+
+/// Where the renderer's tokenizer ends the inline image whose `BI` starts at `bi`: the start and
+/// end of its data and the position after its `EI`. `None` when it reads no image there (its
+/// parameters don't read, or no `EI` passes its checks).
+fn renderer_image_end(data: &[u8], bi: usize) -> Option<(usize, usize, usize)> {
+    use hayro_syntax::content::TypedIter;
+    use hayro_syntax::content::ops::{InlineImage, TypedInstruction};
+    let tail = data.get(bi..)?;
+    let mut iter = TypedIter::new(tail);
+    let (start, len) = match iter.next()? {
+        TypedInstruction::InlineImage(InlineImage(stream)) => match stream.raw_data() {
+            // The data is a slice of `tail`: its offset is where it starts.
+            std::borrow::Cow::Borrowed(samples) => ((samples.as_ptr() as usize).checked_sub(tail.as_ptr() as usize)?, samples.len()),
+            std::borrow::Cow::Owned(_) => return None,
+        },
+        _ => return None,
+    };
+    let end_data = start.checked_add(len)?;
+    // `committed` is past the whitespace after `EI`; the image ends at the `EI`.
+    let mut end = iter.committed();
+    while end > end_data && tail.get(end - 1).is_some_and(|b| is_ws(*b)) {
+        end -= 1;
+    }
+    if end < end_data.checked_add(2)? || tail.get(end - 2..end) != Some(b"EI") {
+        return None;
+    }
+    Some((bi.checked_add(start)?, bi.checked_add(end_data)?, bi.checked_add(end)?))
+}
+
+/// The end-of-data marker (`>` for ASCIIHex, `~>` for ASCII85) of the outer stream filter, if any.
+fn filter_eod(dict: &Dict) -> &'static [u8] {
+    for key in [b"Filter".as_slice(), b"F"] {
+        if let Some(filter) = dict.get(key) {
+            let name = match filter {
+                Object::Name(name) => Some(name.as_slice()),
+                Object::Array(filters) => filters.first().and_then(Object::as_name),
+                _ => None,
+            };
+            return match name {
+                Some(b"ASCIIHexDecode" | b"AHx") => b">",
+                Some(b"ASCII85Decode" | b"A85") => b"~>",
+                _ => b"",
+            };
+        }
+    }
+    b""
 }
 
 /// An unfiltered image's samples determine its length, including byte padding per row.
@@ -293,23 +465,60 @@ fn unfiltered_image_end(data: &[u8], begin: usize, dict: &Dict) -> Option<(usize
     let row = width.checked_mul(components)?.checked_mul(bits)?.div_ceil(8);
     let end_data = begin.checked_add(row.checked_mul(height)?)?;
     let after = data.get(end_data..)?;
-    if !after.first().is_some_and(|b| is_ws(*b)) {
+    let separator = after.iter().position(|b| !is_ws(*b))?;
+    if separator == 0 && data.get(end_data.checked_sub(1)?).is_some_and(|b| is_ws(*b)) {
         return None;
     }
-    let separator = after.iter().position(|b| !is_ws(*b))?;
     let ei = end_data.checked_add(separator)?;
     let end = ei.checked_add(2)?;
     if data.get(ei..end) == Some(b"EI") && data.get(end).is_none_or(|b| is_ws(*b) || is_delim(*b)) { Some((end_data, end)) } else { None }
 }
 
+/// The length declared by `/L` (or `/Length`, ISO 32000-2 §8.9.7), used when `EI` follows the
+/// declared bytes after optional whitespace. A declared length without that `EI` is ignored.
+fn declared_image_end(data: &[u8], begin: usize, dict: &Dict) -> Option<(usize, usize)> {
+    let length = dict.get(b"L").or_else(|| dict.get(b"Length"))?.as_int()?;
+    let end_data = begin.checked_add(usize::try_from(length).ok()?)?;
+    let after = data.get(end_data..)?;
+    let ei = end_data.checked_add(after.iter().position(|b| !is_ws(*b))?)?;
+    let end = ei.checked_add(2)?;
+    if data.get(ei..end) == Some(b"EI") && data.get(end).is_none_or(|b| is_ws(*b) || is_delim(*b)) { Some((end_data, end)) } else { None }
+}
+
+/// Where inline image data of unknown length ends. A candidate `EI` followed by binary bytes before
+/// the next `EI` lies inside the (compressed) data, unless another inline image starts first.
+fn image_data_end(data: &[u8], begin: usize, eod: &[u8]) -> Option<(usize, usize)> {
+    let mut candidate = end_of_image(data, begin, eod)?;
+    loop {
+        let (end_data, end) = candidate;
+        let Some(next) = end_of_image(data, end, eod) else {
+            return Some(candidate);
+        };
+        let between = data.get(end..next.0).unwrap_or_default();
+        if !between.iter().any(|b| !b.is_ascii()) || starts_inline_image(between) {
+            return Some((end_data, end));
+        }
+        candidate = next;
+    }
+}
+
+/// Whether `bytes` hold a whitespace-delimited `BI` operator.
+fn starts_inline_image(bytes: &[u8]) -> bool {
+    bytes
+        .windows(2)
+        .enumerate()
+        .any(|(i, pair)| pair == b"BI" && (i == 0 || is_ws(bytes[i - 1])) && bytes.get(i + 2).is_none_or(|b| is_ws(*b) || is_delim(*b)))
+}
+
 /// Where inline image data starting at `begin` ends: (end of the data, position after `EI`). The
-/// data ends at whitespace + `EI` + (whitespace, a delimiter or the end).
-fn end_of_image(data: &[u8], begin: usize) -> Option<(usize, usize)> {
+/// data ends at whitespace (or `eod`: `>` for ASCIIHex, `~>` for ASCII85) + `EI` + (whitespace,
+/// a delimiter or the end).
+fn end_of_image(data: &[u8], begin: usize, eod: &[u8]) -> Option<(usize, usize)> {
     let mut i = begin;
     while i + 2 <= data.len() {
         if data[i] == b'E'
             && data.get(i + 1) == Some(&b'I')
-            && (i == begin || is_ws(data[i - 1]))
+            && (i == begin || is_ws(data[i - 1]) || (!eod.is_empty() && data[begin..i].ends_with(eod)))
             && data.get(i + 2).is_none_or(|b| is_ws(*b) || is_delim(*b))
         {
             let end_data = if i > begin && is_ws(data[i - 1]) { i - 1 } else { i };
@@ -433,9 +642,20 @@ impl Pieces {
     /// for byte. Returns every piece's new bytes (unchanged pieces come back equal).
     pub fn splice(&self, edits: impl IntoIterator<Item = (std::ops::Range<usize>, Vec<u8>)>) -> Vec<Vec<u8>> {
         let mut out: Vec<Vec<u8>> = (0..self.len()).map(|i| Vec::with_capacity(self.range(i).len())).collect();
+        // Only the pieces from the one holding `from` up to `to`: one call per edit must not
+        // visit every piece.
         let copy = |out: &mut Vec<Vec<u8>>, from: usize, to: usize| {
-            for (i, piece) in out.iter_mut().enumerate() {
+            if from >= to {
+                return;
+            }
+            let first = self.piece_of(from);
+            for (i, piece) in out.iter_mut().enumerate().skip(first) {
+                #[cfg(test)]
+                tests::PIECE_VISITS.with(|c| c.set(c.get() + 1));
                 let r = self.range(i);
+                if r.start >= to {
+                    break;
+                }
                 let (a, b) = (from.max(r.start), to.min(r.end));
                 if a < b {
                     piece.extend_from_slice(self.data.get(a..b).unwrap_or_default());

@@ -96,7 +96,7 @@ fn recognizes_only_canonical_new_closes_and_retains_legacy_closes() {
 }
 
 #[test]
-fn depth_budget_bounds_emitted_closures_and_overflow_stays_unknown() {
+fn depth_budget_bounds_emitted_closures_and_overflow_is_refused_on_top() {
     let maximum = b"/Artifact BMC\n".repeat(ISOLATION_MAX_DEPTH);
     let mut expected = b"\nEMC".repeat(ISOLATION_MAX_DEPTH);
     expected.extend_from_slice(WRAP_CLOSE);
@@ -114,9 +114,46 @@ fn depth_budget_bounds_emitted_closures_and_overflow_stays_unknown() {
     place_tagged(&mut doc, &page, MarkKind::HeaderFooter.tag(), b"q Q\n".to_vec(), false).unwrap();
     assert_eq!(remove_marks(&mut doc, &[0], MarkKind::HeaderFooter).unwrap(), 1);
     assert_eq!(contents(&mut doc, &page).unwrap(), original, "maximum combined close can be removed without nesting wrappers");
+    // Past the budget the depth is unknown, so nothing can close the page's (possibly hidden)
+    // optional content before a mark on top: placing one there is refused, and the page is left
+    // as it was. Behind the content stays possible.
     for suffix in [b"/Artifact BMC\n".as_slice(), b"/Artifact BMC\nEMC\n", b"/Artifact BMC\nEMC\nEMC\n"] {
         let mut over = maximum.clone();
         over.extend_from_slice(suffix);
-        assert_eq!(close(&[&over]), WRAP_CLOSE, "overflow cannot resume speculative depth tracking after EMC");
+        let mut doc = fixture(&[&over]);
+        let page = page_list(&doc).remove(0);
+        let original = contents(&mut doc, &page).unwrap();
+        assert!(
+            matches!(stamp(&mut doc, 0, "Probe", b"q Q\n".to_vec()), Err(EditError::Invalid(_))),
+            "overflow cannot resume speculative depth tracking after EMC"
+        );
+        assert_eq!(contents(&mut doc, &page).unwrap(), original);
+        place_tagged(&mut doc, &page, MarkKind::Background.tag(), b"q Q\n".to_vec(), true).unwrap();
     }
+}
+
+/// Marks refused on top of content nested past the depth budget leave the page as it was: old
+/// marks are not removed and no resources are added before the refusal.
+#[test]
+fn a_mark_refused_on_top_changes_nothing() {
+    let mut over = b"/Artifact BMC\n".repeat(ISOLATION_MAX_DEPTH);
+    over.extend_from_slice(b"/Artifact BMC\n");
+    let mut doc = fixture(&[&over]);
+    let behind = Watermark { text: "OLD".into(), behind: true, ..Watermark::default() };
+    add_watermark(&mut doc, &[0], &behind, false).unwrap();
+    let page = page_list(&doc).remove(0).obj;
+    let before = (*doc.get(page)).clone();
+    let on_top = Watermark { text: "NEW".into(), ..Watermark::default() };
+    assert!(matches!(add_watermark(&mut doc, &[0], &on_top, true), Err(EditError::Invalid(_))));
+    assert_eq!((*doc.get(page)).clone(), before, "the old watermark stays");
+    let hf = HeaderFooter {
+        text: [String::new(), "Top".into(), String::new(), String::new(), String::new(), String::new()],
+        font: added::Family::Times,
+        ..HeaderFooter::default()
+    };
+    assert!(matches!(add_header_footer(&mut doc, &[0], &hf, true, &Context::default()), Err(EditError::Invalid(_))));
+    assert_eq!((*doc.get(page)).clone(), before, "no fonts are added");
+    let mut stamped = doc.clone();
+    assert!(matches!(stamp(&mut stamped, 0, "Probe", b"/PCTimes 9 Tf\n".to_vec()), Err(EditError::Invalid(_))));
+    assert_eq!((*stamped.get(page)).clone(), before, "no fonts are added");
 }

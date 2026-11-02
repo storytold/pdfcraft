@@ -26,6 +26,22 @@ pub struct TimestampQuery {
     pub certificate_request: bool,
 }
 
+/// Identity and digest algorithm used by a timestamp authority to sign tokens.
+pub struct TimestampSigner<'a> {
+    pub key: &'a PrivateKey,
+    pub certificate: &'a Certificate,
+    pub chain: &'a [Certificate],
+    pub digest: DigestAlg,
+}
+
+/// Issuance details for one timestamp response.
+pub struct TimestampIssuance<'a> {
+    pub query: &'a TimestampQuery,
+    pub policy: &'a str,
+    pub generation_time: Time,
+    pub serial: u64,
+}
+
 impl TimestampQuery {
     pub fn new(digest: DigestAlg, imprint: Vec<u8>) -> Result<Self, SignError> {
         if imprint.len() != digest.digest(&[&[]]).len() {
@@ -62,6 +78,8 @@ pub struct TimestampToken {
     pub policy: String,
     pub serial: Vec<u8>,
     pub gen_time: Time,
+    /// The TSTInfo nonce, when it has one that fits a `u64` (the size requests use).
+    pub nonce: Option<u64>,
 }
 
 impl TimestampToken {
@@ -140,6 +158,9 @@ pub fn parse_token(raw: &[u8]) -> Result<TimestampToken, SignError> {
         .to_vec();
     let serial = fields.get(3).ok_or_else(|| bad("TSTInfo has no serial number"))?.uint_bytes().to_vec();
     let gen_time = fields.get(4).ok_or_else(|| bad("TSTInfo has no generation time"))?.time()?;
+    // The nonce is the only INTEGER after genTime (RFC 3161 §2.4.2): accuracy is a SEQUENCE and
+    // ordering a BOOLEAN.
+    let nonce = fields.iter().skip(5).find(|f| f.tag == tag::INTEGER).and_then(|f| f.u64().ok());
     // The signed messageDigest uses the SignerInfo's digest algorithm, which need not be the
     // imprint's (RFC 5652 §5.4).
     let content_digest = token.signer.digest.digest(&[info]);
@@ -151,7 +172,7 @@ pub fn parse_token(raw: &[u8]) -> Result<TimestampToken, SignError> {
     if !token.verify_signature(cert, &content_digest)? {
         return Err(bad("TSA signature is invalid"));
     }
-    Ok(TimestampToken { raw: raw.to_vec(), digest, imprint, policy, serial, gen_time })
+    Ok(TimestampToken { raw: raw.to_vec(), digest, imprint, policy, serial, gen_time, nonce })
 }
 
 /// Parse and validate a `TimeStampResp`, including the CMS signature and message imprint.
@@ -170,22 +191,20 @@ pub fn parse_response(bytes: &[u8], query: &TimestampQuery) -> Result<TimestampT
     if token.digest != query.digest || token.imprint != query.imprint {
         return Err(bad("message imprint does not match the requested digest"));
     }
+    if query.nonce.is_some() && token.nonce != query.nonce {
+        return Err(bad("time-stamp token does not carry the requested nonce"));
+    }
+    if query.policy.as_ref().is_some_and(|p| *p != token.policy) {
+        return Err(bad("time-stamp token was issued under another policy than the one requested"));
+    }
     Ok(token)
 }
 
 /// The TSA side: sign a `TimeStampResp` for `query` at `gen_time`. Used by deterministic test
 /// authorities and a locally configured stamping identity, never implied to be a remote TSA.
-#[allow(clippy::too_many_arguments)]
-pub fn respond(
-    key: &PrivateKey,
-    cert: &Certificate,
-    chain: &[Certificate],
-    alg: DigestAlg,
-    query: &TimestampQuery,
-    policy: &str,
-    gen_time: Time,
-    serial: u64,
-) -> Result<Vec<u8>, SignError> {
+pub fn respond(signer: TimestampSigner<'_>, issuance: TimestampIssuance<'_>) -> Result<Vec<u8>, SignError> {
+    let TimestampSigner { key, certificate: cert, chain, digest: alg } = signer;
+    let TimestampIssuance { query, policy, generation_time: gen_time, serial } = issuance;
     let mut info = vec![
         der::int(1),
         der::try_oid(policy)?,

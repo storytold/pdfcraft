@@ -18,7 +18,7 @@
 //! drops them.
 
 use pdfcraft_content::{Matrix, Op, parse, serialize_ops};
-use pdfcraft_cos::{Dict, Document, ObjRef, Object, Stream};
+use pdfcraft_cos::{DecodeBudget, Dict, Document, ObjRef, Object, Stream};
 
 use crate::images::{components, content_bytes, decodable, page_resources, pixels, resample};
 use crate::{OptimizeError, Report, Stage};
@@ -28,6 +28,19 @@ pub const MIN_FRAGMENTS: usize = 4;
 
 /// Most pixels a merged image may have (memory).
 const MAX_PIXELS: u64 = 80_000_000;
+
+/// Fragment groups a page's search for runs may read per content operator, and at least. A run
+/// that is not one picture is searched again from each of its groups, so without a limit images
+/// drawn over one another take time quadratic in their number; past it, the rest of the page is
+/// left as it is.
+const SCAN_PER_OP: usize = 16;
+const MIN_SCAN: usize = 1 << 16;
+
+#[cfg(test)]
+thread_local! {
+    /// Fragment groups read, for the test that keeps a page's search linear in its content.
+    static GROUP_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
 
 /// One fragment: its image, its box in the coordinates the run is drawn in, and its size.
 struct Fragment {
@@ -40,6 +53,8 @@ struct Fragment {
 /// The ops `q`, one or more `cm`, `Do`, `Q` starting at `i`: the index after them, the matrix
 /// and the name drawn.
 fn group_at(ops: &[Op], i: usize) -> Option<(usize, Matrix, Vec<u8>)> {
+    #[cfg(test)]
+    GROUP_READS.with(|c| c.set(c.get().saturating_add(1)));
     if !ops.get(i)?.is("q") {
         return None;
     }
@@ -143,12 +158,16 @@ fn merge(doc: &Document, run: &[Fragment], n: usize) -> Option<(Vec<u8>, u32, u3
     // Pixel rows per unit of height: the finest fragment's.
     let density = run.iter().map(|f| f.height as f64 / (f.rect[3] - f.rect[1])).fold(0.0, f64::max);
     let height = ((top - bottom) * density).round();
-    if !(height.is_finite() && height >= 1.0) || (width as u64) * (height as u64) > MAX_PIXELS {
+    if !(height.is_finite() && height >= 1.0 && height <= f64::from(u32::MAX)) {
         return None;
     }
+    // In range and whole, so the cast is exact.
     let height = height as u32;
-    let row = width as usize * n;
-    let mut out = vec![255u8; row * height as usize];
+    if u64::from(width) * u64::from(height) > MAX_PIXELS {
+        return None;
+    }
+    let row = (width as usize).checked_mul(n)?;
+    let mut out = vec![255u8; row.checked_mul(height as usize)?];
     for f in run {
         let r0 = (((top - f.rect[3]) * density).round().max(0.0) as u32).min(height);
         let r1 = (((top - f.rect[1]) * density).round().max(0.0) as u32).min(height);
@@ -157,7 +176,7 @@ fn merge(doc: &Document, run: &[Fragment], n: usize) -> Option<(Vec<u8>, u32, u3
         }
         let obj = doc.get(f.image);
         let Object::Stream(s) = &*obj else { return None };
-        let px = pixels(s, n)?;
+        let px = pixels(doc, s, n)?;
         let px = if (f.width, f.height) == (width, r1 - r0) { px } else { resample(&px, n, f.width, f.height, width, r1 - r0)? };
         out.get_mut(r0 as usize * row..r1 as usize * row)?.copy_from_slice(px.get(..(r1 - r0) as usize * row)?);
     }
@@ -213,7 +232,9 @@ fn add_xobject(doc: &mut Document, page: ObjRef, name: &[u8], image: ObjRef) -> 
 /// Merge the fragment runs of one page; returns how many fragments were merged.
 fn merge_page(doc: &mut Document, page: ObjRef, report: &mut Report, progress: &mut dyn FnMut(Stage) -> bool) -> Result<usize, OptimizeError> {
     let Some(contents) = doc.get(page).as_dict().and_then(|d| d.get(b"Contents").cloned()) else { return Ok(0) };
-    let parsed = parse(&content_bytes(doc, &contents));
+    // A page whose content isn't all known is left alone: rewriting it would drop the rest.
+    let Some(data) = content_bytes(doc, &contents, &mut DecodeBudget::page()) else { return Ok(0) };
+    let parsed = parse(&data);
     if parsed.skipped > 0 {
         return Ok(0);
     }
@@ -222,7 +243,13 @@ fn merge_page(doc: &mut Document, page: ObjRef, report: &mut Report, progress: &
     let ops = parsed.ops;
     let mut out: Vec<Op> = Vec::with_capacity(ops.len());
     let (mut i, mut merged, mut k) = (0, 0, 0);
+    let budget = ops.len().saturating_mul(SCAN_PER_OP).max(MIN_SCAN);
+    let mut scanned = 0usize;
     while i < ops.len() {
+        if scanned > budget {
+            out.extend(ops.get(i..).unwrap_or_default().iter().cloned());
+            break;
+        }
         // The longest run of fragment groups from here with one colour space.
         let mut run = Vec::new();
         let mut kind: Option<(Object, usize)> = None;
@@ -241,10 +268,12 @@ fn merge_page(doc: &mut Document, page: ObjRef, report: &mut Report, progress: &
             run.push(Fragment { image, rect: [e, f, e + a, f + d], width, height });
             j = next;
         }
+        scanned = scanned.saturating_add(run.len()).saturating_add(1);
         // Not one picture as a whole: the rows drawn one under the other from the start may be.
         if run.len() >= MIN_FRAGMENTS && !stacked(&mut run) {
             run = drawn_in_sequence(&ops, i, &xobjects, doc);
             j = run_end(&ops, i, run.len());
+            scanned = scanned.saturating_add(run.len().saturating_mul(2)).saturating_add(2);
         }
         let Some((cs, n)) = kind.filter(|_| run.len() >= MIN_FRAGMENTS && stacked(&mut run)) else {
             // Not a run: keep this op and look again from the next one.
@@ -296,4 +325,54 @@ pub(crate) fn run(doc: &mut Document, pages: &[ObjRef], report: &mut Report, pro
         report.fragments_merged += merge_page(doc, *p, report, progress)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use pdfcraft_cos::{Dict, Document, Object, Stream};
+
+    use super::*;
+
+    #[test]
+    fn a_merged_height_beyond_u32_is_refused_before_allocating() {
+        // Two fragments, one pixel row each, the top one 2^-48 high: the merged image would be
+        // 2^16 × 2^48 pixels, whose product wraps to 0 in u64.
+        let image = ObjRef { num: 1, generation: 0 };
+        let edge = 1.0 - (-48f64).exp2();
+        let run = [
+            Fragment { image, rect: [0.0, edge, 1.0, 1.0], width: 1 << 16, height: 1 },
+            Fragment { image, rect: [0.0, 0.0, 1.0, edge], width: 1 << 16, height: 1 },
+        ];
+        assert!(merge(&Document::new_empty(), &run, 3).is_none());
+    }
+
+    /// Many images drawn on top of each other are not one picture; looking for runs among them reads
+    /// a bounded number of groups per operator, not the rest of the page from every group.
+    #[test]
+    fn rejected_runs_read_a_bounded_number_of_groups() {
+        let mut doc = Document::new_empty();
+        let mut image = Dict::new();
+        for (k, v) in
+            [("Subtype", Object::name("Image")), ("Width", Object::Int(1)), ("Height", Object::Int(1)), ("BitsPerComponent", Object::Int(8))]
+        {
+            image.set(k.as_bytes().to_vec(), v);
+        }
+        image.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+        let image = doc.add(Object::Stream(Stream::from_raw(image, vec![0])));
+        let groups = 4000;
+        let content = doc.add(Object::Stream(Stream::flate(Dict::new(), "q 10 0 0 10 0 0 cm /Im Do Q\n".repeat(groups).as_bytes())));
+        let mut xobjects = Dict::new();
+        xobjects.set(b"Im".to_vec(), Object::Ref(image));
+        let mut resources = Dict::new();
+        resources.set(b"XObject".to_vec(), Object::Dict(xobjects));
+        let mut page = Dict::new();
+        page.set(b"Contents".to_vec(), Object::Ref(content));
+        page.set(b"Resources".to_vec(), Object::Dict(resources));
+        let page = doc.add(Object::Dict(page));
+        GROUP_READS.with(|c| c.set(0));
+        let merged = merge_page(&mut doc, page, &mut Report::default(), &mut |_| true);
+        assert_eq!(merged.ok(), Some(0));
+        let reads = GROUP_READS.with(|c| c.get());
+        assert!(reads <= 40 * 4 * groups, "{reads} group reads");
+    }
 }

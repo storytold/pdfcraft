@@ -1,6 +1,6 @@
 [package]
 name = "pdfcraft-filters"
-description = "PDF stream filters (ISO 32000-2 §7.4): Flate, LZW, predictors, ASCII85, ASCIIHex, RunLength"
+description = "PDF stream filters (ISO 32000-2 §7.4): Flate, LZW, predictors, ASCII85, ASCIIHex, RunLength, CCITT Group 4 encoding and Group 3 and 4 decoding, JBIG2 encoding and decoding"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -11,6 +11,10 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+fax.workspace = true
+# CCITT fax and JBIG2 decoding (`decode_ccitt`, `decode_jbig2`); already in the tree through hayro.
+hayro-ccitt.workspace = true
+hayro-jbig2.workspace = true
 flate2.workspace = true
 thiserror.workspace = true
 

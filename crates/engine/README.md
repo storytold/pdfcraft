@@ -16,6 +16,14 @@ Two frontends exist on top of it today: `pdfcraft-ui-egui` (desktop and web) and
 `pdfcraft-automation` (headless tools, the CLI and MCP). Anything one can do, the other must be
 able to do — see AGENTS.md §3.
 
+When dynamic XFA layout is active, `JsRunner` does not initialize Acrobat JavaScript with
+scripts from the PDF container's `/Names /JavaScript` tree. Those scripts belong to the
+fallback PDF view and can otherwise show a misleading viewer-compatibility warning.
+They remain in the document and in `Document::document_scripts`. Requested console scripts,
+field actions and XFA events can still show messages; ordinary PDFs, static XFA and shells
+without an active layout keep their document scripts. Converting XFA to a static form and
+undoing that conversion switches the context with the document state.
+
 ## The editing model
 
 Each open document holds a `pdfcraft_cos::Document`: the object graph plus a copy-on-write overlay.
