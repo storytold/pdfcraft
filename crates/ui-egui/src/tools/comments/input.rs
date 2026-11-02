@@ -27,12 +27,6 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, 
     if cv.cancelled_drag {
         return true;
     }
-    if resp.secondary_clicked()
-        && let Some(p) = pointer.filter(|p| page_rect.contains(*p))
-    {
-        cv.context_at = Some((cx.page, cx.to_user(p)));
-        cv.selected = cx.hit(p).map(|a| (cx.page, a.index));
-    }
     let gestures = Gestures { ui, resp, cx, pointer, origin, page_rect, pressed_here, over_page };
     match cx.tool {
         QuickTool::Comment(_) if draw_grab => select_input(ui, resp, cx, view, pointer, origin),
@@ -104,6 +98,25 @@ pub(crate) fn hit(cx: &PageCx<'_>, view: &DocView, p: Pos2, on_link: bool) -> Op
     let layer = if a.fill_sign || !markup { Layer::Placed } else { Layer::Comment };
     // Text markup does not move: a click selects it, a drag across it selects the text.
     Some(Hit { declines_drag: markup, ..Hit::new(Owner::Comment { index: a.index, part: CommentPart::Body }, layer, icon) })
+}
+
+/// The comment a right-click at `p` is on: the topmost, with every tool, as a comment's menu shows
+/// whatever tool is active. A highlight over a link is the highlight's here (a left click on it
+/// follows the link, [`hit`]). `None` off the page or with comments hidden.
+pub(crate) fn context_hit(cx: &PageCx<'_>, p: Pos2) -> Option<Hit> {
+    if cx.hidden || !cx.xf.rect.contains(p) {
+        return None;
+    }
+    let a = cx.hit(p)?;
+    let layer = if a.fill_sign || !is_markup(&a.subtype) { Layer::Placed } else { Layer::Comment };
+    Some(Hit::new(Owner::Comment { index: a.index, part: CommentPart::Body }, layer, egui::CursorIcon::Default))
+}
+
+/// A right-click at `p` on this page: the page's menu is anchored there (Copy Image), and the
+/// comment it is on ([`context_hit`], when it wins there) is selected, or none.
+pub(crate) fn context(cx: &PageCx<'_>, p: Pos2, index: Option<usize>, view: &mut DocView) {
+    view.comments.context_at = Some((cx.page, cx.to_user(p)));
+    view.comments.selected = index.map(|i| (cx.page, i));
 }
 
 /// Whether the comments take the press on this page (or, with no button down, would take one

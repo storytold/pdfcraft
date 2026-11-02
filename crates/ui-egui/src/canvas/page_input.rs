@@ -98,8 +98,7 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
         let at = hits.at(view, o);
         view.router.press(i, at, tool);
     }
-    // A right-click goes to what a press there would go to: the top hit under the pointer.
-    let context = pointer.filter(|p| resp.secondary_clicked() && xf.rect.contains(*p)).and_then(|p| top(hits.at(view, p), tool)).map(|h| h.owner);
+    let context = pointer.filter(|p| resp.secondary_clicked() && xf.rect.contains(*p)).and_then(|p| right_click(&hits, view, p));
     if let QuickTool::Measure(measure_tool) = tool {
         crate::measure_ui::page_input(ui, resp, doc, view, &pcx, measure_tool, units);
     }
@@ -303,6 +302,27 @@ fn link_of(owner: Option<Owner>) -> Option<usize> {
     }
 }
 
+/// A right-click at `p`: it goes to what lies on top there ([`PageHits::context_at`]), which the
+/// page's menu then acts on. A comment there is selected, and none elsewhere; a Prepare field is
+/// selected; links take theirs from what this returns.
+fn right_click(hits: &PageHits<'_>, view: &mut DocView, p: Pos2) -> Option<Owner> {
+    let context = hits.context_at(view, p);
+    // Edit text's own paragraphs and pictures keep the right-click as they take it today, and a
+    // Prepare field tool the whole page.
+    let editing_here = matches!(hits.tool, QuickTool::AddText | QuickTool::EditText) && top(hits.at(view, p), hits.tool).is_some();
+    if !editing_here && hits.field_tool.is_none() {
+        let comment = match context {
+            Some(Owner::Comment { index, .. }) => Some(index),
+            _ => None,
+        };
+        comments::context(hits.pcx, p, comment, view);
+    }
+    if let Some(Owner::PrepareField { field, widget }) = context {
+        crate::prepare::context(hits.form, field, widget, view);
+    }
+    context
+}
+
 /// Edit text's paragraphs and pictures on page `i`, kept while the document is unchanged.
 fn edit_inventory(
     view: &mut DocView,
@@ -348,12 +368,25 @@ struct PageHits<'a> {
 }
 
 impl PageHits<'_> {
+    /// The hits at `p`, bottom up ([`Self::hits`]).
+    fn at(&self, view: &DocView, p: Pos2) -> Vec<crate::page_router::Hit> {
+        self.hits(view, p, false)
+    }
+
+    /// What a right-click at `p` is on: what lies on top there, as for a press, but with every
+    /// tool reaching comments and links, as a comment's menu shows whatever the tool. A highlight
+    /// over a link is the highlight's ([`comments::context_hit`]).
+    fn context_at(&self, view: &DocView, p: Pos2) -> Option<Owner> {
+        top(self.hits(view, p, true), QuickTool::Select).map(|h| h.owner)
+    }
+
     /// The hits at `p`, bottom up: links, comments; Edit text's pictures under its paragraphs (text
     /// on top of artwork takes the press), added content, the objects selected together and the
     /// open paragraph's frame, the selected picture's grips over them all; then form fields
     /// (Prepare's, being moved, over the comments; filled ones under added content and the
     /// comments that move).
-    fn at(&self, view: &DocView, p: Pos2) -> Vec<crate::page_router::Hit> {
+    /// For a right-click (`context`), comments by [`comments::context_hit`].
+    fn hits(&self, view: &DocView, p: Pos2, context: bool) -> Vec<crate::page_router::Hit> {
         let PageHits {
             page,
             xf,
@@ -415,7 +448,7 @@ impl PageHits<'_> {
         let picks_up = matches!(tool, QuickTool::Select | QuickTool::AddText | QuickTool::EditText);
         let added = (editing_content && can_modify && picks_up).then(|| crate::content_ui::hit(xf, info, page, added, view, p)).flatten();
         let link = crate::link_ui::hit(xf, info, page, doc_links, tool, p);
-        let comment = comments::hit(pcx, view, p, link.is_some());
+        let comment = if context { comments::context_hit(pcx, p) } else { comments::hit(pcx, view, p, link.is_some()) };
         [link, comment, pictures, paragraphs, added, objects, grips, fields].into_iter().flatten().collect()
     }
 }

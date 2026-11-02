@@ -398,24 +398,6 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, form: &[FormField], tool: Opti
         return out;
     }
 
-    // Right-click a field: select it (the context menu acts on it).
-    if resp.secondary_clicked()
-        && let Some((f, wi)) = form.iter().find_map(|f| {
-            f.widgets.iter().enumerate().find(|(_, w)| w.page == Some(page) && screen_rect(xf, info, page, w.rect).contains(p)).map(|(i, _)| (f, i))
-        })
-    {
-        let key = (f.name.clone(), wi);
-        if let Some(i) = prep.also.iter().position(|k| *k == key) {
-            // Part of the selection: it becomes the anchor the others line up with.
-            prep.also.remove(i);
-            if let Some(old) = prep.selected.replace(key) {
-                prep.also.push(old);
-            }
-        } else if prep.selected.as_ref() != Some(&key) {
-            prep.selected = Some(key);
-            prep.also.clear();
-        }
-    }
     // The Select tool: what the press was on ([`hit`]), a corner handle or a field; elsewhere a
     // drag draws a selection rectangle. A press held by something drawn over the fields (a
     // comment) is not Prepare's.
@@ -467,6 +449,24 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, form: &[FormField], tool: Opti
     }
     out.consumed |= held;
     out
+}
+
+/// A right-click on widget `widget` of field `field` (the top hit there, [`hit`]): the field is
+/// selected, so the menu acts on it. Part of a selection of several, it becomes the anchor the
+/// others line up with.
+pub(crate) fn context(form: &[FormField], field: usize, widget: usize, view: &mut DocView) {
+    let Some(f) = form.get(field) else { return };
+    let key = (f.name.clone(), widget);
+    let prep = &mut view.prepare;
+    if let Some(i) = prep.also.iter().position(|k| *k == key) {
+        prep.also.remove(i);
+        if let Some(old) = prep.selected.replace(key) {
+            prep.also.push(old);
+        }
+    } else if prep.selected.as_ref() != Some(&key) {
+        prep.selected = Some(key);
+        prep.also.clear();
+    }
 }
 
 /// Align, Center, Distribute and Set Fields to Same Size (Prepare a form, several fields

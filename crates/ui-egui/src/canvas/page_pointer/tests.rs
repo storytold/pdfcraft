@@ -417,7 +417,11 @@ fn hit_test_calls(line: &str) -> Vec<String> {
 /// The functions that call a hit test: (file, function, why). Only `PageHits::at` asks at the
 /// press point; the others ask where the pointer is.
 const HIT_TESTERS: [(&str, &str, &str); 4] = [
-    ("canvas/page_input.rs", "at", "`PageHits::at`: every module's hits at a point, for the pointer's cursor and tip and, once, the press's owner"),
+    (
+        "canvas/page_input.rs",
+        "hits",
+        "`PageHits::hits`: every module's hits at a point, for the pointer's cursor and tip, a right-click and, once, the press's owner",
+    ),
     ("canvas/page_input.rs", "page_overlays", "a link's click counts only released over the link its press was on"),
     ("tools/forms_ui.rs", "page_input", "the field's tooltip under the pointer, and a click counts only released over the widget its press was on"),
     ("tools/comments/input.rs", "grabs", "with no button down, whether a comment would take a press under the pointer, for hover painting"),

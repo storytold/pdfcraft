@@ -1089,3 +1089,43 @@ fn a_right_click_on_a_note_over_a_link_opens_the_notes_menu() {
     assert_eq!((v.links.context, v.comments.selected), (None, Some((0, 1))), "the note is selected, not the link");
     assert!(h.query_by_label("Remove all links").is_none(), "the menu is the note's");
 }
+
+/// [`link_pdf`], with a highlight drawn over the middle of its link.
+fn highlight_over_link_pdf() -> Vec<u8> {
+    pdf(&[
+        CATALOG,
+        PAGES,
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R] >>",
+        "<< /Type /Annot /Subtype /Link /Rect [50 300 250 350] /Border [0 0 0] /A << /S /URI /URI (https://example.org/) >> >>",
+        "<< /Type /Annot /Subtype /Highlight /Rect [100 310 200 340] /QuadPoints [100 340 200 340 100 310 200 310] /C [1 1 0] /F 4 /T (Ana) >>",
+    ])
+}
+
+/// A click on a highlight over a link follows the link, but a right-click there is the
+/// highlight's: it is selected and its menu opens. The link's menu used to open, with the
+/// highlight selected underneath.
+#[test]
+fn a_right_click_on_a_highlight_over_a_link_opens_the_highlights_menu() {
+    let mut h = open(highlight_over_link_pdf(), "150", false);
+    let on_both = at(&h, 150.0, 325.0);
+    right_click(&mut h, on_both);
+    let v = &h.state().views[0];
+    assert_eq!((v.links.context, v.comments.selected), (None, Some((0, 1))), "the highlight is selected, not the link");
+    assert!(h.query_by_label("Remove all links").is_none(), "the menu is the highlight's");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    mouse_click(&mut h, on_both);
+    assert!(h.state().pending_link.is_some(), "a click there still follows the link");
+}
+
+/// A comment's menu opens on a right-click whatever the tool, though a press there is the tool's:
+/// with the Rectangle tool, a right-click on a comment selects it.
+#[test]
+fn a_right_click_on_a_comment_with_a_drawing_tool_opens_its_menu() {
+    let mut h = open(comment_on_text_pdf(), "150", false);
+    h.state_mut().quick_tool = QuickTool::Comment(CommentTool::Rectangle);
+    h.run_steps(4);
+    let on_comment = at(&h, 100.0, 305.0);
+    right_click(&mut h, on_comment);
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "the comment is selected for its menu");
+}
