@@ -137,6 +137,11 @@ pub fn run_shared(script: &str, event: &Event, doc: &DocInfo, fields: Arc<Vec<Fi
 /// thread is left behind to finish on its own, and the outcome is [`Outcome::abandoned`], with
 /// nothing changed. On wasm there are no threads: the script runs here, bounded by the loop and
 /// recursion limits alone.
+///
+/// At most eight of these threads ([`MAX_SCRIPT_THREADS`]) live at once, the ones left behind included:
+/// each abandoned script keeps a core busy until it ends on its own, so a hostile file opened
+/// again and again would otherwise leave one more behind each time. When none is free, the
+/// script is not started and the outcome is abandoned, saying why.
 pub fn run_shared_within(
     script: &str,
     event: &Event,
@@ -152,57 +157,133 @@ pub fn run_shared_within(
         run_shared(script, event, doc, fields, doc_scripts, limits)
     }
     #[cfg(not(target_arch = "wasm32"))]
-    {
-        use std::sync::mpsc::RecvTimeoutError;
-        use std::time::Instant;
-        enum Step {
-            Started,
-            Done(Box<Outcome>),
-        }
-        if let Some(why) = refuse(script) {
-            return failed(event, why);
-        }
-        let (kept, skipped) = sort_doc_scripts(doc_scripts);
-        let kept: Vec<(usize, String)> = kept.into_iter().map(|(i, d)| (i, d.to_owned())).collect();
-        let (script_owned, event_owned, doc_owned) = (script.to_owned(), event.clone(), doc.clone());
-        let (tx, rx) = std::sync::mpsc::channel();
-        let spawned = std::thread::Builder::new().name("pdfcraft-js".into()).stack_size(SCRIPT_STACK).spawn(move || {
-            // The first script in a process sets the engine up: not on the script's time.
-            crate::xfa::warm_up();
-            // The receiver is gone when the caller stopped waiting: nothing to report then.
-            let started = tx.clone();
-            let kept: Vec<(usize, &str)> = kept.iter().map(|(i, d)| (*i, d.as_str())).collect();
-            let o = run_here(&script_owned, &event_owned, &doc_owned, fields, (&kept, &skipped), limits, &move || {
-                let _ = started.send(Step::Started);
-            });
-            let _ = tx.send(Step::Done(Box::new(o)));
-        });
-        if let Err(e) = spawned {
-            return failed(event, format!("the script engine could not start: {e}"));
-        }
-        let start_limit = crate::xfa::ENGINE_START_LIMIT;
-        let (mut running, mut limit) = (false, start_limit);
-        let mut deadline = Instant::now().checked_add(limit);
+    run_on_thread_from(&SCRIPT_THREADS, script, event, doc, fields, doc_scripts, (limits, timeout))
+}
+
+/// How many threads [`run_shared_within`] keeps alive at once in a process, scripts that ran past
+/// their limit and still run included.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) const MAX_SCRIPT_THREADS: usize = 8;
+
+#[cfg(not(target_arch = "wasm32"))]
+static SCRIPT_THREADS: ThreadSlots = ThreadSlots::new(MAX_SCRIPT_THREADS);
+
+/// A count of script threads alive, held below `max`.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) struct ThreadSlots {
+    taken: std::sync::atomic::AtomicUsize,
+    max: usize,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl ThreadSlots {
+    pub(crate) const fn new(max: usize) -> ThreadSlots {
+        ThreadSlots { taken: std::sync::atomic::AtomicUsize::new(0), max }
+    }
+
+    /// A place for one more thread, if one is free. Taking it and giving it back are each one
+    /// atomic step, so whether the script ends before or after its caller stops waiting, the
+    /// place is given back exactly once: when the [`ThreadSlot`] is dropped.
+    fn take(&'static self) -> Option<ThreadSlot> {
+        use std::sync::atomic::Ordering;
+        let mut n = self.taken.load(Ordering::Acquire);
         loop {
-            let left = deadline.map_or(limit, |d| d.saturating_duration_since(Instant::now()));
-            match rx.recv_timeout(left) {
-                Ok(Step::Done(o)) => return *o,
-                Ok(Step::Started) => {
-                    if !running {
-                        (running, limit) = (true, timeout);
-                        deadline = Instant::now().checked_add(limit);
-                    }
-                }
-                Err(RecvTimeoutError::Timeout) => {
-                    let why = if running {
-                        format!("the script ran longer than {:.1} s and was abandoned", timeout.as_secs_f64())
-                    } else {
-                        format!("the script engine took longer than {:.0} s to start", start_limit.as_secs_f64())
-                    };
-                    return Outcome { abandoned: true, ..failed(event, why) };
-                }
-                Err(RecvTimeoutError::Disconnected) => return failed(event, "the script stopped with an internal error".into()),
+            if n >= self.max {
+                return None;
             }
+            match self.taken.compare_exchange_weak(n, n.saturating_add(1), Ordering::AcqRel, Ordering::Acquire) {
+                Ok(_) => return Some(ThreadSlot(self)),
+                Err(now) => n = now,
+            }
+        }
+    }
+
+    /// How many places are taken.
+    #[cfg(test)]
+    pub(crate) fn taken(&self) -> usize {
+        self.taken.load(std::sync::atomic::Ordering::Acquire)
+    }
+}
+
+/// One taken place of [`ThreadSlots`], given back when dropped: by the script's thread as it
+/// ends (or unwinds), or here when the thread could not start.
+#[cfg(not(target_arch = "wasm32"))]
+struct ThreadSlot(&'static ThreadSlots);
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Drop for ThreadSlot {
+    fn drop(&mut self) {
+        // Only a taken place is dropped, so the count is at least one.
+        self.0.taken.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+    }
+}
+
+/// [`run_shared_within`] on a thread from `slots`.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn run_on_thread_from(
+    slots: &'static ThreadSlots,
+    script: &str,
+    event: &Event,
+    doc: &DocInfo,
+    fields: Arc<Vec<FieldState>>,
+    doc_scripts: &[String],
+    (limits, timeout): (Limits, std::time::Duration),
+) -> Outcome {
+    use std::sync::mpsc::RecvTimeoutError;
+    use std::time::Instant;
+    enum Step {
+        Started,
+        Done(Box<Outcome>),
+    }
+    if let Some(why) = refuse(script) {
+        return failed(event, why);
+    }
+    let Some(slot) = slots.take() else {
+        let why = format!("{} scripts are already running, including ones abandoned for running too long; this one was not started", slots.max);
+        return Outcome { abandoned: true, ..failed(event, why) };
+    };
+    let (kept, skipped) = sort_doc_scripts(doc_scripts);
+    let kept: Vec<(usize, String)> = kept.into_iter().map(|(i, d)| (i, d.to_owned())).collect();
+    let (script_owned, event_owned, doc_owned) = (script.to_owned(), event.clone(), doc.clone());
+    let (tx, rx) = std::sync::mpsc::channel();
+    // A thread that can't start drops the closure, and the slot with it.
+    let spawned = std::thread::Builder::new().name("pdfcraft-js".into()).stack_size(SCRIPT_STACK).spawn(move || {
+        let _slot = slot;
+        // The first script in a process sets the engine up: not on the script's time.
+        crate::xfa::warm_up();
+        // The receiver is gone when the caller stopped waiting: nothing to report then.
+        let started = tx.clone();
+        let kept: Vec<(usize, &str)> = kept.iter().map(|(i, d)| (*i, d.as_str())).collect();
+        let o = run_here(&script_owned, &event_owned, &doc_owned, fields, (&kept, &skipped), limits, &move || {
+            let _ = started.send(Step::Started);
+        });
+        let _ = tx.send(Step::Done(Box::new(o)));
+    });
+    if let Err(e) = spawned {
+        return failed(event, format!("the script engine could not start: {e}"));
+    }
+    let start_limit = crate::xfa::ENGINE_START_LIMIT;
+    let (mut running, mut limit) = (false, start_limit);
+    let mut deadline = Instant::now().checked_add(limit);
+    loop {
+        let left = deadline.map_or(limit, |d| d.saturating_duration_since(Instant::now()));
+        match rx.recv_timeout(left) {
+            Ok(Step::Done(o)) => return *o,
+            Ok(Step::Started) => {
+                if !running {
+                    (running, limit) = (true, timeout);
+                    deadline = Instant::now().checked_add(limit);
+                }
+            }
+            Err(RecvTimeoutError::Timeout) => {
+                let why = if running {
+                    format!("the script ran longer than {:.1} s and was abandoned", timeout.as_secs_f64())
+                } else {
+                    format!("the script engine took longer than {:.0} s to start", start_limit.as_secs_f64())
+                };
+                return Outcome { abandoned: true, ..failed(event, why) };
+            }
+            Err(RecvTimeoutError::Disconnected) => return failed(event, "the script stopped with an internal error".into()),
         }
     }
 }

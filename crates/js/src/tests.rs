@@ -2124,3 +2124,36 @@ fn a_script_given_a_time_limit_is_abandoned_when_it_passes() {
     assert_eq!(o, run_shared(quick, &ev, &doc(), Arc::new(fields()), &[], Limits::default()));
     assert_eq!((o.value.as_str(), o.abandoned), ("25", false));
 }
+
+/// An abandoned script keeps its thread, and a core, until it ends on its own, so the threads
+/// held to a time limit are capped: with every place taken (here one, by a script left running
+/// past its limit) the next script is not started, and says why. The place comes back when the
+/// abandoned script ends, and a quick script then runs. A script that ends in time gives its
+/// place back too.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn script_threads_held_to_a_time_limit_are_capped() {
+    use crate::run::{ThreadSlots, run_on_thread_from};
+    static ONE: ThreadSlots = ThreadSlots::new(1);
+    let ev = Event::field("Calculate", "total", "");
+    let within = |script: &str, ms: u64| {
+        run_on_thread_from(&ONE, script, &ev, &doc(), Arc::new(fields()), &[], (Limits::default(), std::time::Duration::from_millis(ms)))
+    };
+    let quick = "event.value = this.getField('price').value * 2;";
+    assert_eq!(within(quick, 5000).value, "25");
+    assert_eq!(ONE.taken(), 0, "a script that ended gave its place back");
+    // Long, but it ends: each call stays inside the loop limit.
+    let o = within("function spin() { for (var i = 0; i < 999999; i++) {} } for (var k = 0; k < 40; k++) spin();", 50);
+    assert!(o.abandoned, "{o:?}");
+    assert_eq!(ONE.taken(), 1, "the abandoned script still runs");
+    let o = within(quick, 5000);
+    assert!(o.abandoned, "{o:?}");
+    assert!(o.error.as_deref().is_some_and(|e| e.contains("not started")), "{o:?}");
+    assert_eq!(o.value, "", "the refused script changed nothing");
+    let started = std::time::Instant::now();
+    while ONE.taken() > 0 {
+        assert!(started.elapsed().as_secs() < 120, "the abandoned script never ended");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert_eq!(within(quick, 5000).value, "25", "the place came back");
+}
