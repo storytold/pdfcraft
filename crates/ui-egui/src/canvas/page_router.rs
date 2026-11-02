@@ -116,8 +116,9 @@ pub(crate) enum PagePress {
     /// only let go of their own state (a click on anything but the selected comment unselects it).
     Mine(Owner),
     /// No button is down, or the press began on this page and nobody's hit won it: the active
-    /// tool's. Also every page's while a press that began off the pages is held, and after the
-    /// press was dropped ([`PageRouter::cancel`]) until the button is up.
+    /// tool's. Also every page's while a press the page view does not hold is down (one that began
+    /// over a panel), and after the press was dropped ([`PageRouter::cancel`]) until the button is
+    /// up.
     Free,
     /// The press began on another page, or off the pages (between them, or beside one).
     Elsewhere,
@@ -144,7 +145,7 @@ pub(crate) struct Capture {
 #[derive(Debug, Default)]
 pub(crate) struct PageRouter {
     capture: Option<Capture>,
-    /// A press is held, and the page it began on (`None`: between the pages).
+    /// A press is held, and the page it began on (`None`: off the pages, between them or beside one).
     began: Option<Option<usize>>,
 }
 

@@ -62,8 +62,8 @@ fn screen(xf: &PageXform, c: [f32; 2]) -> Pos2 {
 
 /// The corner of the quadrilateral under `p` on `page`, the nearest within reach: the one hit test
 /// of the camera tool, for the cursor and the press. `None` once the page is enhanced, on a page
-/// without the quadrilateral, or off the page (a press there is no page's), though a corner at its
-/// edge reaches past it.
+/// without the quadrilateral, or off the page (a press there is no page's), even where a corner at
+/// its edge would reach past it.
 pub(crate) fn hit(xf: &PageXform, page: usize, view: &DocView, p: Pos2) -> Option<Hit> {
     if view.camera_done.is_some() || !xf.rect.contains(p) {
         return None;

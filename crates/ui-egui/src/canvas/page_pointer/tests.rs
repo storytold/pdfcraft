@@ -190,9 +190,11 @@ const PAGE_MODULES: [&str; 37] = [
     "tools/stamps_ui.rs",
 ];
 
-/// What a file that acts on the pages uses: the pointer, a tool's page context, what a press is to
-/// a page, or the router's hits and owners. Such a file is a page module.
-const PAGE_MODULE_MARKS: [&str; 4] = ["PagePointer", "PageToolContext", "PagePress", "page_router::"];
+/// What a file that acts on the pages uses: the pointer, a tool's or the comments' page context,
+/// what a press is to a page, or the router's hits and owners. Such a file is a page module. One
+/// that acts on the pages through the page view's response and a bare point alone uses none of
+/// them (`canvas/image_pick.rs`): PAGE_MODULES lists it by hand.
+const PAGE_MODULE_MARKS: [&str; 5] = ["PagePointer", "PageToolContext", "PageCx", "PagePress", "page_router::"];
 
 /// The router's own files, which define what page modules use.
 const ROUTER_FILES: [&str; 3] = ["canvas/page_pointer.rs", "canvas/page_router.rs", "canvas/page_cursor.rs"];
@@ -439,8 +441,10 @@ fn hit_test_calls(line: &str) -> Vec<String> {
 }
 
 /// The functions that call a hit test: (file, function, why). Hit tests are found by name (a
-/// function named `hit` or `…_hit`, called by path, bare or as a method); a point test by another
-/// name has a list of its own (`COMMENT_POINT_TESTERS`). `PageHits::hits` is the one: the hits
+/// function named `hit` or `…_hit`, called by path, bare or as a method). The comments' point test
+/// has a list of its own (`COMMENT_POINT_TESTERS`); the others by other names (added content's,
+/// Edit text's paragraphs', Redact's text test, the text layer's links) are not listed yet, and
+/// most are PR 4b's. `PageHits::hits` is the one: the hits
 /// at the press point decide its owner, and those under the pointer give its cursor, its tip, hover
 /// painting and a right-click.
 const HIT_TESTERS: [(&str, &str, &str); 1] = [(
@@ -448,6 +452,23 @@ const HIT_TESTERS: [(&str, &str, &str); 1] = [(
     "hits",
     "`PageHits::hits`: every module's hits at a point, for the pointer's cursor and tip, a right-click and, once, the press's owner",
 )];
+
+/// The page view's asks for every module's hits at a point (`PageHits::at`, `PageHits::context_at`).
+const PAGE_HITS_ASKS: [&str; 2] = [".at(", ".context_at("];
+
+/// The functions that ask the page view's hits at a point: (file, function, why). `PageHits` is
+/// private to `page_input.rs`, so this keeps a new place there from testing a point again; a
+/// second ask inside one of these is for review to catch.
+const PAGE_HITS_ASKERS: [(&str, &str, &str); 3] = [
+    (
+        "canvas/page_input.rs",
+        "page_tool_input",
+        "the hits at the press point decide its owner, once per press; those under the pointer before the tools act, once a \
+         frame, serve a click's release, a right-click and Fill & Sign's preview",
+    ),
+    ("canvas/page_input.rs", "claim_under", "what lies under the pointer after the tools act: its cursor, its tip and hover painting"),
+    ("canvas/page_input.rs", "right_click", "what a right-click is on"),
+];
 
 /// The comments' point test, which their hit tests are built on: which comment lies under a point.
 const COMMENT_POINT_TESTS: [&str; 1] = [".comment_at("];
@@ -549,6 +570,14 @@ fn page_modules_act_on_a_press_only_through_the_router() {
          act on what the page view tells you, rather than testing the point again. A new place that must? Add the \
          function to COMMENT_POINT_TESTERS in src/canvas/page_pointer/tests.rs, with why.",
         "no longer asks which comment lies under a point: remove it from COMMENT_POINT_TESTERS.",
+    ));
+    problems.extend(misuses(
+        &PAGE_HITS_ASKS,
+        &PAGE_HITS_ASKERS,
+        "asks the page view's hits at a point. The hits at the press point decide its owner once, and those under the \
+         pointer are taken once before the tools act and once after: use those (`under`, `PageInput.hover`). A new \
+         place that must ask? Add the function to PAGE_HITS_ASKERS in src/canvas/page_pointer/tests.rs, with why.",
+        "no longer asks the page view's hits: remove it from PAGE_HITS_ASKERS.",
     ));
     problems.extend(misuses(
         &PRESS_IGNORES,

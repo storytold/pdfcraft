@@ -1617,3 +1617,30 @@ fn with_prepare_open_a_shape_tool_drag_draws_no_comment() {
     let squares = s.session.get(s.views[0].id).unwrap().info.annotations.iter().filter(|a| a.subtype == "Square").count();
     assert_eq!(squares, 0, "no rectangle under Prepare's selection rectangle");
 }
+
+/// With Prepare open, a double-click on a field is the field's (it opens its properties) and leaves
+/// a polygon being clicked out unfinished, as before. It used to finish the polygon too.
+#[test]
+fn with_prepare_open_a_double_click_on_a_field_leaves_the_polygon_unfinished() {
+    let mut h = harness();
+    h.state_mut().execute("form.prepare");
+    h.run_steps(3);
+    assert!(h.state_mut().execute("comment.polygon"));
+    h.run_steps(3);
+    // Three points below the fields.
+    for (x, y) in [(40.0, 260.0), (200.0, 260.0), (120.0, 360.0)] {
+        let p = at(&h, x, y);
+        h.hover_at(p);
+        h.run_steps(1);
+        h.drag_at(p);
+        h.run_steps(1);
+        h.drop_at(p);
+        h.run_steps(3);
+    }
+    let on_field = field_rect(&h, "name").center();
+    crate::support::input::double_click(&mut h, on_field);
+    let s = h.state();
+    let polygons = s.session.get(s.views[0].id).unwrap().info.annotations.iter().filter(|a| a.subtype == "Polygon").count();
+    assert_eq!(polygons, 0, "the polygon is not finished");
+    assert!(matches!(s.views[0].comments.gesture, Some(pdfcraft_ui_egui::comments::Gesture::Draw { .. })), "it is still being clicked out");
+}

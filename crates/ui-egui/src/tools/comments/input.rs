@@ -11,13 +11,14 @@ use crate::page_router::{CommentPart, Hit, Owner, PagePress};
 /// Comment input on one page, before text selection runs. `press` is what this page has to do with
 /// the press the pages hold: a press on a comment where the tool reaches it ([`hit`]: the Select
 /// tool, Fill & Sign over its marks, a shape tool over the selected shape's handles) is that
-/// comment's, and one nobody holds is a commenting tool's, unless another tool took it this frame
-/// (`taken`: Prepare's selection rectangle, added content), though a click there still unselects.
-/// Returns `true` when the pointer gesture belongs to commenting (text selection must ignore it).
+/// comment's, and one nobody holds is a commenting tool's. When another tool took this frame
+/// (`taken`: Prepare, added content, which still decide for themselves), the commenting tools leave
+/// it to that tool, as before, though a click there still unselects. Returns `true` when the
+/// pointer gesture belongs to commenting (text selection must ignore it).
 pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, press: PagePress, taken: bool, view: &mut DocView) -> bool {
     let (pointer, origin) = (cx.ptr.pos, cx.ptr.origin);
     let page_rect = cx.xf.rect;
-    let free = press == PagePress::Free && !taken;
+    let free = press == PagePress::Free;
     let pressed_here = free && origin.is_some_and(|o| page_rect.contains(o));
     let over_page = pointer.is_some_and(|p| page_rect.contains(p));
     let owned = match press {
@@ -37,6 +38,8 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, 
     match cx.tool {
         // The selected shape's handles, and Fill & Sign's marks, take their own presses.
         QuickTool::Comment(_) | QuickTool::Fill(_) if owned.is_some() || moving => select_input(ui, resp, cx, view, press, pointer, origin),
+        // Neither a press nor a double-click or a key another tool took this frame.
+        QuickTool::Comment(_) if taken => false,
         QuickTool::Comment(tool) if tool.draws() => gestures.draw_shape(view, tool),
         QuickTool::Comment(tool) if tool.clicks_points() => gestures.click_points(view, tool),
         QuickTool::Comment(CommentTool::Callout) => gestures.callout(view),

@@ -1498,14 +1498,18 @@ fn draw_page(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_>, i
     }
 
     let slot = PageSlot { i, r, xf };
-    // A cancelled press takes nothing until the button is up.
+    let pcx = comments::PageCx { page: i, xf: &xf, ptr, info, tool, prefs, allowed, hidden: comments_hidden, redact_mark };
+    // A cancelled press takes nothing until the button is up, though the page's menu still opens
+    // where a right-click is.
     let input = if view.press_cancelled {
+        if let Some(p) = pointer.filter(|p| frame.resp.secondary_clicked() && xf.rect.contains(*p)) {
+            comments::anchor(&pcx, p, view);
+        }
         PageInput { consumed: true, area_tool: false, hover: None, released_over: false }
     } else {
         page_tool_input(ui, view, frame, &slot)
     };
     let painter = ui.painter();
-    let pcx = comments::PageCx { page: i, xf: &xf, ptr, info, tool, prefs, allowed, hidden: comments_hidden, redact_mark };
     let preview_target = (matches!(tool, QuickTool::Select | QuickTool::Fill(_)) && !comments_hidden).then_some(view.comments.selected).flatten();
     view.signature_drag.prepare(ui.ctx(), doc, preview_target, scale);
     view.signature_drag.paint(painter, &pcx, &view.comments, view.pending_edit.as_ref());

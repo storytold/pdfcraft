@@ -1547,11 +1547,9 @@ fn a_long_press_on_a_comment_selects_it_for_its_menu() {
     h.run_steps(2);
 }
 
-/// A right-click while the primary button is held anchors the page's menu where it is (Delete page,
-/// Paste): the held press leaves only the selections alone. It used to keep the menu on the page
-/// right-clicked before.
-#[test]
-fn a_right_click_with_the_button_held_anchors_the_menu_on_its_page() {
+/// With the page menu anchored on page 1, presses on page 2 and holds the button, presses Escape
+/// first with `escape`, right-clicks on page 2, and gives the page the menu is anchored on.
+fn menu_page_after_a_right_click_with_the_button_held(escape: bool) -> Option<usize> {
     let mut h = open(two_pages_pdf(), "100", false);
     h.run_steps(2);
     h.state_mut().views[0].comments.context_at = Some((0, [10.0, 10.0]));
@@ -1563,14 +1561,34 @@ fn a_right_click_with_the_button_held_anchors_the_menu_on_its_page() {
     h.run_steps(1);
     h.hover_at(press + egui::vec2(40.0, 0.0));
     h.run_steps(1);
+    if escape {
+        h.key_press(egui::Key::Escape);
+        h.run_steps(1);
+    }
     let menu = press + egui::vec2(100.0, 60.0);
     for pressed in [true, false] {
         h.event(egui::Event::PointerButton { pos: menu, button: egui::PointerButton::Secondary, pressed, modifiers: egui::Modifiers::NONE });
     }
     h.run_steps(1);
-    assert_eq!(h.state().views[0].comments.context_at.map(|(page, _)| page), Some(1), "the menu is page 2's");
+    let page = h.state().views[0].comments.context_at.map(|(page, _)| page);
     h.drop_at(press + egui::vec2(40.0, 0.0));
     h.run_steps(2);
+    page
+}
+
+/// A right-click while the primary button is held anchors the page's menu where it is (Delete page,
+/// Paste): the held press leaves only the selections alone. It used to keep the menu on the page
+/// right-clicked before.
+#[test]
+fn a_right_click_with_the_button_held_anchors_the_menu_on_its_page() {
+    assert_eq!(menu_page_after_a_right_click_with_the_button_held(false), Some(1), "the menu is page 2's");
+}
+
+/// So does a right-click while a press Escape cancelled is held, though the cancelled press takes
+/// nothing else.
+#[test]
+fn a_right_click_after_escape_cancelled_the_press_anchors_the_menu_on_its_page() {
+    assert_eq!(menu_page_after_a_right_click_with_the_button_held(true), Some(1), "the menu is page 2's");
 }
 
 /// With Edit text a right-click on added text reaches comments, as before (Edit text keeps those on
