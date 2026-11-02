@@ -405,10 +405,11 @@ impl PageCx<'_> {
 
     /// A redaction mark's areas: one per marked quad, or its rectangle. They are the content
     /// regions that applying the mark removes (ISO 32000-2 §12.5.6.23, Table 195), so a NoZoom
-    /// flag doesn't scale them: the fill shown over the page is what goes, at any zoom.
+    /// flag doesn't scale them, nor a NoRotate flag turn them upright on a turned page: the fill
+    /// shown over the page is what goes, at any zoom and page rotation.
     pub(super) fn redact_rects(&self, a: &Annotation) -> Vec<Rect> {
         if a.quads.is_empty() {
-            return vec![self.xf.user_rect(self.info, self.page, a.shown_rect(self.rotation()))];
+            return vec![self.xf.user_rect(self.info, self.page, a.rect)];
         }
         a.quads.iter().map(|q| self.xf.user_rect(self.info, self.page, quad_bounds(q))).collect()
     }

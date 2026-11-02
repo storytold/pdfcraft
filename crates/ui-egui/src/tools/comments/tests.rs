@@ -69,10 +69,11 @@ fn an_upright_note_on_a_turned_page_is_in_view_where_it_is_drawn() {
 /// A redaction mark a file flags NoZoom shows, under the pointer, the areas applying it removes
 /// (its `/QuadPoints`, or its `/Rect` without them, ISO 32000-2 Table 195) at any zoom, not its
 /// appearance scaled to keep its size on the screen. At 50% that scale would double the fill
-/// over content the mark leaves in place.
+/// over content the mark leaves in place. A mark also flagged NoRotate on a turned page shows its
+/// `/Rect` as stored too, not the upright box its appearance is turned into: that is what goes.
 #[test]
 fn a_no_zoom_redaction_mark_shows_the_areas_it_removes() {
-    let mark = |quads: Vec<[f32; 8]>| Annotation {
+    let mark = |quads: Vec<[f32; 8]>, no_rotate: bool| Annotation {
         page: 0,
         subtype: "Redact".into(),
         author: None,
@@ -90,18 +91,20 @@ fn a_no_zoom_redaction_mark_shows_the_areas_it_removes() {
         locked: false,
         intent: None,
         fill_sign: false,
-        no_rotate: false,
+        no_rotate,
         points: Vec::new(),
         no_zoom: true,
     };
-    let page = PageInfo { width: 200.0, height: 200.0, label: String::new(), crop: [0.0, 0.0, 200.0, 200.0], rotation: 0 };
     let prefs = CommentPrefs::default();
     let quad = [40.0, 120.0, 80.0, 120.0, 40.0, 100.0, 80.0, 100.0];
-    for (magnification, scaled) in [(0.5, true), (1.0, false), (2.0, true)] {
+    for ((magnification, scaled), (rotation, no_rotate)) in
+        [(0.5, true), (1.0, false), (2.0, true)].into_iter().flat_map(|m| [(m, (0, false)), (m, (90, true))])
+    {
+        let page = PageInfo { width: 200.0, height: 200.0, label: String::new(), crop: [0.0, 0.0, 200.0, 200.0], rotation };
         let side = 200.0 * magnification * crate::canvas::PT;
         let xf = PageXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(side, side)), rot: 0, pw: 200.0, ph: 200.0 };
         for quads in [vec![quad], Vec::new()] {
-            let info = DocInfo { pages: vec![page.clone()], annotations: vec![mark(quads.clone())], ..Default::default() };
+            let info = DocInfo { pages: vec![page.clone()], annotations: vec![mark(quads.clone(), no_rotate)], ..Default::default() };
             let cx = PageCx {
                 page: 0,
                 xf: &xf,
@@ -115,7 +118,11 @@ fn a_no_zoom_redaction_mark_shows_the_areas_it_removes() {
             };
             let a = &info.annotations[0];
             let removed = xf.user_rect(&info, 0, [40.0, 100.0, 80.0, 120.0]);
-            assert_eq!(cx.redact_rects(a), vec![removed], "{magnification}, quads: {}", quads.len());
+            assert_eq!(cx.redact_rects(a), vec![removed], "{magnification}, /Rotate {rotation}, quads: {}", quads.len());
+            if no_rotate {
+                let upright = xf.user_rect(&info, 0, a.shown_rect(rotation));
+                assert_ne!(upright, removed, "{magnification}: the NoRotate mark is drawn turned upright");
+            }
             if scaled {
                 assert_ne!(cx.screen_rect(a), removed, "{magnification}: the mark is drawn NoZoom");
             }
