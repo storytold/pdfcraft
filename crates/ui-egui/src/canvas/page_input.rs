@@ -35,9 +35,9 @@ pub(crate) struct PageToolContext<'a> {
     pub info: &'a DocInfo,
 }
 
-/// Comments: tools, selection, moving and resizing come before text selection. Form fields take
-/// clicks first with the Select tool (as Acrobat fills fields in every viewing mode); then
-/// comments; then text selection.
+/// The tools' input on one page. The hits at the press point decide who holds the press, and each
+/// module is told what the press is to this page (`PagePress`): its own, nobody's (the active tool's,
+/// through `tool_input`), or another page's. Text selection runs after, on what nobody took.
 pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_>, slot: &PageSlot) -> PageInput {
     let PageEnv {
         added,
@@ -391,9 +391,9 @@ impl PageHits<'_> {
 
     /// The hits at `p`, bottom up: links, comments; Edit text's pictures under its paragraphs (text
     /// on top of artwork takes the press), added content, the objects selected together and the
-    /// open paragraph's frame, the selected picture's grips over them all; then form fields
-    /// (Prepare's, being moved, over the comments; filled ones under added content and the
-    /// comments that move).
+    /// open paragraph's frame, the selected picture's grips over them all; the camera tool's corners;
+    /// then form fields (Prepare's, being moved, over the comments; filled ones under added content
+    /// and the comments that move). In crop mode, only the picture being cropped.
     /// For a right-click (`context`), comments by [`comments::context_hit`].
     fn hits(&self, view: &DocView, p: Pos2, context: bool) -> Vec<crate::page_router::Hit> {
         let PageHits {

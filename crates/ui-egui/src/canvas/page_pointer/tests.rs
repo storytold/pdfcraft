@@ -264,6 +264,25 @@ fn uses(line: &str, name: &str) -> bool {
     line.match_indices(name).any(|(at, _)| name.starts_with('.') || !line[..at].ends_with(|c: char| c.is_alphanumeric() || c == '_'))
 }
 
+/// The lines of `source` outside its test modules, numbered from 1. Tests drive egui's input and
+/// read its output themselves. A test module (`#[cfg(test)]` then `mod name {`) ends at the first
+/// line that is a lone `}`, as rustfmt lays a top-level item out, so the code after a test module
+/// in the middle of a file is still read; `#[cfg(test)]` then `mod name;` is one line.
+fn outside_test_modules(source: &str) -> Vec<(usize, &str)> {
+    let mut kept = Vec::new();
+    let mut lines = source.lines().enumerate().map(|(n, line)| (n + 1, line)).peekable();
+    while let Some((n, line)) = lines.next() {
+        if line == "#[cfg(test)]" && lines.peek().is_some_and(|(_, next)| next.starts_with("mod ")) {
+            if lines.next().is_some_and(|(_, module)| module.ends_with('{')) {
+                lines.by_ref().find(|(_, line)| *line == "}");
+            }
+            continue;
+        }
+        kept.push((n, line));
+    }
+    kept
+}
+
 /// Each name `find` finds in a line of the page modules' code (their tests left out), as (file,
 /// the top-level function or `impl` method it is in, line, name).
 fn page_module_matches(find: impl Fn(&str) -> Vec<String>) -> Vec<(&'static str, Option<String>, usize, String)> {
@@ -271,11 +290,9 @@ fn page_module_matches(find: impl Fn(&str) -> Vec<String>) -> Vec<(&'static str,
     let mut found = Vec::new();
     for file in PAGE_MODULES {
         let source = std::fs::read_to_string(src.join(file)).expect("page module").replace("\r\n", "\n");
-        // Tests drive egui's input and read its output themselves.
-        let code = source.split("#[cfg(test)]\nmod ").next().unwrap_or_default();
         // The top-level function, or method of an `impl`, that each line is in.
         let (mut function, mut in_impl) = (None, false);
-        for (n, line) in code.lines().enumerate() {
+        for (n, line) in outside_test_modules(&source) {
             if line.starts_with("impl") {
                 (function, in_impl) = (None, true);
             } else if line == "}" {
@@ -287,7 +304,7 @@ fn page_module_matches(find: impl Fn(&str) -> Vec<String>) -> Vec<(&'static str,
                 continue;
             }
             for name in find(line) {
-                found.push((file, function.map(str::to_owned), n + 1, name));
+                found.push((file, function.map(str::to_owned), n, name));
             }
         }
     }
@@ -414,8 +431,9 @@ fn hit_test_calls(line: &str) -> Vec<String> {
         .collect()
 }
 
-/// The functions that call a hit test: (file, function, why). Only `PageHits::at` asks at the
-/// press point; the others ask where the pointer is.
+/// The functions that call a hit test: (file, function, why). `PageHits::hits` is the one: the hits
+/// at the press point decide its owner, and those under the pointer give its cursor, its tip, hover
+/// painting and a right-click.
 const HIT_TESTERS: [(&str, &str, &str); 1] = [(
     "canvas/page_input.rs",
     "hits",
@@ -431,11 +449,12 @@ const PRESS_IGNORERS: [(&str, &str, &str); 1] =
 
 /// The module hit tests, called by path: a press handler calls none of them (HIT_TESTERS says who
 /// may).
-const PAGE_HIT_CALLS: [&str; 11] = [
+const PAGE_HIT_CALLS: [&str; 12] = [
     "link_ui::hit(",
     "prepare::hit(",
     "forms_ui::hit(",
     "comments::hit(",
+    "comments::context_hit(",
     "camera_ui::hit(",
     "edit_text_ui::hit(",
     "edit_text_ui::picture_hit(",
@@ -461,7 +480,7 @@ fn routed_press_handler(code: &str) -> bool {
 /// so what the cursor promised is what the press does. Where each module tested the press
 /// point again, or asked another whether it wanted the press, the answers disagreed: a press on
 /// one check box released over the next ticked the second, and a drag could be taken over
-/// halfway. Only `PageHits::at` asks the hit tests at the press point. Escape is the one way to
+/// halfway. Only `PageHits::hits` asks the hit tests. Escape is the one way to
 /// drop a press and ignore it until the button is up.
 #[test]
 fn page_modules_act_on_a_press_only_through_the_router() {
@@ -469,7 +488,7 @@ fn page_modules_act_on_a_press_only_through_the_router() {
         &ROUTER_WRITES,
         &ROUTER_WRITERS,
         "decides, keeps or drops the press the pages hold. Only the hits at the press point decide its owner, once \
-         (src/canvas/page_router.rs): a page module reads `view.router.owner(page)`. Drop a press with \
+         (src/canvas/page_router.rs), and the page view tells each module what the press is to its page (`PagePress`). Drop a press with \
          `DocView::cancel_pointer_gestures`. A new place that must? Add the function to ROUTER_WRITERS in \
          src/canvas/page_pointer/tests.rs, with why.",
         "no longer decides, keeps or drops the press: remove it from ROUTER_WRITERS.",
@@ -499,8 +518,8 @@ fn page_modules_act_on_a_press_only_through_the_router() {
     problems.extend(misuses_in(
         page_module_matches(hit_test_calls),
         &HIT_TESTERS,
-        "calls a hit test. The hits at the press point decide its owner once, in `PageHits::at`: act on the press when \
-         `view.router.owner(page)` says it is yours, rather than testing its point again. Testing where the pointer \
+        "calls a hit test. The hits at the press point decide its owner once, in `PageHits::hits`: act on the press when \
+         the page view tells you it is yours (`PagePress::Mine`), rather than testing its point again. Testing where the pointer \
          is (a tooltip, a click released over what it was pressed on)? Add the function to HIT_TESTERS in \
          src/canvas/page_pointer/tests.rs, with why.",
         "calls no hit test any more: remove it from HIT_TESTERS.",
@@ -514,6 +533,15 @@ fn page_modules_act_on_a_press_only_through_the_router() {
         )
     }));
     assert!(problems.is_empty(), "{}", problems.join("\n"));
+}
+
+/// A test module in the middle of a file hides only itself from the page guards: the code after
+/// it is read too. The guards used to stop at the first test module.
+#[test]
+fn the_page_guards_read_past_a_test_module_in_the_middle_of_a_file() {
+    let source = "fn before() {}\n#[cfg(test)]\nmod tests {\n    fn inside() {}\n}\n\nfn after() {}\n#[cfg(test)]\nmod more;\nfn last() {}\n";
+    let kept: Vec<(usize, &str)> = outside_test_modules(source);
+    assert_eq!(kept, [(1, "fn before() {}"), (6, ""), (7, "fn after() {}"), (10, "fn last() {}")]);
 }
 
 #[test]

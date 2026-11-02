@@ -191,7 +191,8 @@ impl PageRouter {
         }
     }
 
-    /// Drops the press (Escape, a dialog, automation's cancel).
+    /// Drops the press (Escape, a dialog, automation's cancel): every page is the active tool's again
+    /// ([`PagePress::Free`]). Page input skips a press Escape cancelled until the button is up.
     pub(crate) fn cancel(&mut self) {
         self.capture = None;
         self.began = None;
@@ -250,7 +251,8 @@ mod tests {
         assert_eq!((r.press_for(1), r.press_for(2)), (PagePress::Free, PagePress::Free));
         r.begin();
         r.cancel();
-        assert_eq!(r.press_for(0), PagePress::Free, "a cancelled press is nobody's");
+        // Page input skips a press Escape cancelled until the button is up (`press_cancelled`).
+        assert_eq!(r.press_for(0), PagePress::Free, "a cancelled press leaves every page to the tool");
     }
 
     #[test]
