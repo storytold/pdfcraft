@@ -53,7 +53,7 @@ use fallback::{
 #[cfg(test)]
 use fallback::{add_type3_font, is_type3_fallback};
 use interp::{Origin, Paint, TextState, union};
-pub(crate) use lines::{FormBudget, content_streams, content_streams_within, form_call, rewritten_contents, splice};
+pub(crate) use lines::{FormBudget, content_streams, content_streams_within, dict_in_place, form_call, resource_dict, rewritten_contents, splice};
 pub use lines::{MAX_FORM_DEPTH, MAX_FORM_VISITS, glyph_text_lines, text_lines};
 use lines::{
     SpacingExpansion, TextPositioning, expand_spacing_runs, page_dict, refuse_dependent_following_text, single_line_block, spacing_ops,
