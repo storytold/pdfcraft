@@ -105,9 +105,9 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
         _ => false,
     };
     // A right-click while the primary button is held (a comment moved, a box drawn) leaves the
-    // selections that press acts on alone; egui ends the press's own interaction when another button
-    // goes down, so the button is what tells. A touch's long press, which egui reports as a
-    // right-click with the finger still down, opens its menu.
+    // selections that press acts on alone. egui ends the press's own interaction when any button is
+    // released, the right-click's own frame included, so the button is what tells. A touch's long
+    // press, which egui reports as a right-click with the finger still down, opens its menu.
     let press_held = ptr.primary_down && !resp.long_touched();
     let context = frame.right_click_on(xf.rect).and_then(|p| right_click(&hits, &under, view, p, press_held));
     // A mark already placed takes its own press (comments, below), as does one being moved on this

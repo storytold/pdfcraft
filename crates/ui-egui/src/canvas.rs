@@ -1645,6 +1645,9 @@ fn draw_pages(
     if resp.secondary_clicked() {
         // Set again below when the right-click lands on a link.
         view.links.context = None;
+        // Set again below by the page right-clicked: a right-click off the pages (between them,
+        // beside one) anchors no page's menu, which then acts on the current page.
+        view.comments.context_at = None;
         let mut over_image = false;
         if tool == QuickTool::EditText {
             let pointer_pos = ptr.pos;

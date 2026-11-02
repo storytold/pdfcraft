@@ -1708,3 +1708,20 @@ fn a_fill_and_sign_click_places_nothing_while_a_mark_is_moved() {
     mouse_click(&mut h, blank);
     assert_eq!(marks(&h), before, "no mark is placed");
 }
+
+/// A right-click between the pages anchors no page's menu, so Delete page and Paste act on the
+/// current page. The menu used to keep the anchor of the last right-click on a page.
+#[test]
+fn a_right_click_between_the_pages_anchors_no_pages_menu() {
+    let mut h = open(two_pages_pdf(), "100", false);
+    h.run_steps(2);
+    h.state_mut().views[0].comments.context_at = Some((0, [10.0, 10.0]));
+    let (one, two) = {
+        let v = &h.state().views[0];
+        (v.page_screen_rect(0).expect("page 1 on screen"), v.page_screen_rect(1).expect("page 2 on screen"))
+    };
+    let gap = egui::pos2(one.center().x, (one.max.y + two.min.y) / 2.0);
+    assert!(!one.contains(gap) && !two.contains(gap), "between the pages: {one:?} {two:?}");
+    right_click(&mut h, gap);
+    assert_eq!(h.state().views[0].comments.context_at, None);
+}

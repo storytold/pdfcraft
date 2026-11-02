@@ -191,10 +191,10 @@ const PAGE_MODULES: [&str; 37] = [
 ];
 
 /// What a file that acts on the pages uses: the pointer, a tool's or the comments' page context,
-/// what a press is to a page, or the router's hits and owners. Such a file is a page module. One
-/// that acts on the pages through the page view's response and a bare point alone uses none of
-/// them (`canvas/image_pick.rs`): PAGE_MODULES lists it by hand.
-const PAGE_MODULE_MARKS: [&str; 5] = ["PagePointer", "PageToolContext", "PageCx", "PagePress", "page_router::"];
+/// what a press is to a page, the router's hits and owners, or the router itself. Such a file is a
+/// page module. One that acts on the pages through the page view's response and a bare point alone
+/// uses none of them (`canvas/image_pick.rs`): PAGE_MODULES lists it by hand.
+const PAGE_MODULE_MARKS: [&str; 6] = ["PagePointer", "PageToolContext", "PageCx", "PagePress", "page_router::", ".router."];
 
 /// The router's own files, which define what page modules use.
 const ROUTER_FILES: [&str; 3] = ["canvas/page_pointer.rs", "canvas/page_router.rs", "canvas/page_cursor.rs"];

@@ -70,12 +70,14 @@ pub(crate) fn hit(xf: &PageXform, info: &DocInfo, page: usize, links: &[LinkItem
     if !xf.rect.contains(p) {
         return None;
     }
-    let index = if tool == QuickTool::Link {
-        links.iter().rfind(|l| l.page == page && screen_rect(xf, info, page, l.rect).expand(LINK_TOOL_MARGIN).contains(p))?.index
+    let (index, link) = if tool == QuickTool::Link {
+        let index = links.iter().rfind(|l| l.page == page && screen_rect(xf, info, page, l.rect).expand(LINK_TOOL_MARGIN).contains(p))?.index;
+        (index, info.links.iter().find(|l| l.page == page && l.index == index))
     } else {
-        info.links.iter().rfind(|l| l.page == page && xf.user_rect(info, page, l.rect).contains(p))?.index
+        let link = info.links.iter().rfind(|l| l.page == page && xf.user_rect(info, page, l.rect).contains(p))?;
+        (link.index, Some(link))
     };
-    let tip = info.links.iter().find(|l| l.page == page && l.index == index).map(|l| target_label(info, &l.target));
+    let tip = link.map(|l| target_label(info, &l.target));
     let declines_drag = tool == QuickTool::Link;
     Some(Hit { tip, declines_drag, ..Hit::new(Owner::Link { index }, Layer::Link, egui::CursorIcon::PointingHand) })
 }
