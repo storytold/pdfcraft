@@ -8,14 +8,18 @@ pub(crate) fn allowed(c: char) -> bool {
     matches!(c, '\t' | '\n' | '\r') || !(c.is_ascii_control() || c == '\u{FFFE}' || c == '\u{FFFF}')
 }
 
+/// The longest language tag the exports write. BCP 47 sets no maximum (35 characters is only
+/// the least a protocol must hold), so this bounds only what a PDF's `/Lang` can put in a file.
+const LONGEST_TAG: usize = 255;
+
 /// `lang` when it is a well formed language tag (BCP 47, as a PDF's `/Lang` holds one): a primary
 /// language of two or three letters, then subtags of one to eight letters or digits, joined by
-/// hyphens, 35 characters at most. Anything else names no language.
+/// hyphens, [`LONGEST_TAG`] characters at most. Anything else names no language.
 pub(crate) fn language_tag(lang: Option<&str>) -> Option<&str> {
     let tag = lang?.trim();
     let mut subtags = tag.split('-');
     let primary = subtags.next()?;
-    let well_formed = tag.len() <= 35
+    let well_formed = tag.len() <= LONGEST_TAG
         && (2..=3).contains(&primary.len())
         && primary.bytes().all(|b| b.is_ascii_alphabetic())
         && subtags.all(|s| (1..=8).contains(&s.len()) && s.bytes().all(|b| b.is_ascii_alphanumeric()));
