@@ -35,14 +35,14 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, 
     let gestures = Gestures { ui, resp, cx, pointer, origin, page_rect, pressed_here, over_page, free };
     match cx.tool {
         // The selected shape's handles, and Fill & Sign's marks, take their own presses.
-        QuickTool::Comment(_) | QuickTool::Fill(_) if owned.is_some() || moving => select_input(ui, resp, cx, view, owned, pointer, origin),
+        QuickTool::Comment(_) | QuickTool::Fill(_) if owned.is_some() || moving => select_input(ui, resp, cx, view, press, pointer, origin),
         QuickTool::Comment(tool) if tool.draws() => gestures.draw_shape(view, tool),
         QuickTool::Comment(tool) if tool.clicks_points() => gestures.click_points(view, tool),
         QuickTool::Comment(CommentTool::Callout) => gestures.callout(view),
         QuickTool::Comment(CommentTool::Attach) => gestures.attach(view),
         QuickTool::Comment(CommentTool::Caret) => gestures.caret(view, caret_text.as_deref()),
         QuickTool::Comment(tool @ (CommentTool::Note | CommentTool::TextBox)) => gestures.note_or_box(view, tool),
-        QuickTool::Select => select_input(ui, resp, cx, view, owned, pointer, origin),
+        QuickTool::Select => select_input(ui, resp, cx, view, press, pointer, origin),
         _ => false,
     }
 }
@@ -160,18 +160,22 @@ pub(super) fn hover_tip(a: &Annotation, prefs: &CommentPrefs) -> Option<String> 
 }
 
 /// The Select tool: select, move, resize, edit, delete, on the comment the press is on and the
-/// part of it (`owned`, from [`hit`]). The cursor comes from [`hit`] too. A click on anything else
-/// (a link, a field, added text, the page) leaves comments unselected.
+/// part of it (`press`, from [`hit`]). The cursor comes from [`hit`] too. A click on this page on
+/// anything else (a link, a field, added text, the page) leaves comments unselected; one that
+/// began off the pages is no page's.
 fn select_input(
     ui: &egui::Ui,
     resp: &egui::Response,
     cx: &PageCx<'_>,
     view: &mut DocView,
-    owned: Option<(usize, CommentPart)>,
+    press: PagePress,
     pointer: Option<Pos2>,
     origin: Option<Pos2>,
 ) -> bool {
-    let owner = owned.and_then(|(index, part)| cx.get(index).map(|a| (a, part)));
+    let owner = match press {
+        PagePress::Mine(Owner::Comment { index, part }) => cx.get(index).map(|a| (a, part)),
+        _ => None,
+    };
     let cv = &mut view.comments;
     let mut consumed = false;
     if resp.drag_started()
@@ -255,7 +259,8 @@ fn select_input(
                 cv.reveal = true;
                 consumed = true;
             }
-            None => cv.selected = None,
+            None if press != PagePress::Elsewhere => cv.selected = None,
+            None => {}
         }
     }
     if resp.double_clicked()

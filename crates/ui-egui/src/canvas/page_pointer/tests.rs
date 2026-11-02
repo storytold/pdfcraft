@@ -190,6 +190,13 @@ const PAGE_MODULES: [&str; 37] = [
     "tools/stamps_ui.rs",
 ];
 
+/// What a file that acts on the pages uses: the pointer, a tool's page context, what a press is to
+/// a page, or the router's hits and owners. Such a file is a page module.
+const PAGE_MODULE_MARKS: [&str; 4] = ["PagePointer", "PageToolContext", "PagePress", "page_router::"];
+
+/// The router's own files, which define what page modules use.
+const ROUTER_FILES: [&str; 3] = ["canvas/page_pointer.rs", "canvas/page_router.rs", "canvas/page_cursor.rs"];
+
 /// egui's raw pointer state: where the pointer is, and which buttons are down or went down.
 const RAW_READS: [&str; 21] = [
     "hover_pos()",
@@ -355,7 +362,7 @@ fn page_modules_read_the_pointer_only_through_page_pointer() {
          NOT_PAGE_INPUT there, with why.",
         "reads no pointer state any more: remove it from NOT_PAGE_INPUT.",
     );
-    // A module that takes the page pointer is a page module, so it is checked too.
+    // A module that acts on the pages is a page module, so it is checked too.
     let mut dirs = vec![src.clone()];
     while let Some(dir) = dirs.pop() {
         for entry in std::fs::read_dir(dir).expect("source directory") {
@@ -375,8 +382,9 @@ fn page_modules_read_the_pointer_only_through_page_pointer() {
             let file =
                 path.strip_prefix(&src).expect("under src").components().map(|c| c.as_os_str().to_string_lossy()).collect::<Vec<_>>().join("/");
             let source = std::fs::read_to_string(&path).expect("source file");
-            if file != "canvas/page_pointer.rs" && source.contains("PagePointer") && !PAGE_MODULES.contains(&file.as_str()) {
-                problems.push(format!("src/{file} takes the page pointer: add it to PAGE_MODULES."));
+            let marks = PAGE_MODULE_MARKS.iter().filter(|mark| source.contains(**mark)).collect::<Vec<_>>();
+            if !ROUTER_FILES.contains(&file.as_str()) && !marks.is_empty() && !PAGE_MODULES.contains(&file.as_str()) {
+                problems.push(format!("src/{file} uses {marks:?}, so it acts on the pages: add it to PAGE_MODULES."));
             }
         }
     }
@@ -455,8 +463,9 @@ const COMMENT_POINT_TESTERS: [(&str, &str, &str); 3] = [
 const ROUTER_READS: [&str; 3] = ["router.press_for(", "router.owner(", "router.keeps_drag("];
 
 /// The functions that read who holds the press: (file, function, why). The page view asks once per
-/// page and tells each module what the press is to its page (`PagePress`); the Edit text group and
-/// the text layer still ask, until they are told too (PR 4b), and an unused entry fails the test.
+/// page and tells each module what the press is to its page (`PagePress`); the Edit text group, the
+/// text layer and link following still ask, until they are told too (PR 4b), and an unused entry
+/// fails the test.
 const ROUTER_READERS: [(&str, &str, &str); 8] = [
     (
         "canvas/page_input.rs",
@@ -567,8 +576,9 @@ fn page_modules_act_on_a_press_only_through_the_router() {
         page_module_matches(hit_test_calls),
         &HIT_TESTERS,
         "calls a hit test. The hits at the press point decide its owner once, in `PageHits::hits`: act on the press when \
-         the page view tells you it is yours (`PagePress::Mine`), rather than testing its point again. Testing where the pointer \
-         is (a tooltip, a click released over what it was pressed on)? Add the function to HIT_TESTERS in \
+         the page view tells you it is yours (`PagePress::Mine`), rather than testing its point again. What lies under \
+         the pointer comes from the page view's own hits: hover painting and tips (`PageInput.hover`), a click released \
+         over what it was pressed on (`released_over`). A new place that must ask? Add the function to HIT_TESTERS in \
          src/canvas/page_pointer/tests.rs, with why.",
         "calls no hit test any more: remove it from HIT_TESTERS.",
     ));

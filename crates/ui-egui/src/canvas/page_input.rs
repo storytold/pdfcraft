@@ -104,7 +104,12 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
         PagePress::Mine(owner) if resp.clicked() => under.iter().any(|h| h.owner == owner),
         _ => false,
     };
-    let context = pointer.filter(|p| resp.secondary_clicked() && xf.rect.contains(*p)).and_then(|p| right_click(&hits, &under, view, p));
+    // A right-click while the primary button is held (a comment moved, a box drawn) leaves the
+    // selections that press acts on alone; egui ends the press's own interaction when another button
+    // goes down, so the button is what tells. A touch's long press, which egui reports as a
+    // right-click with the finger still down, opens its menu.
+    let press_held = ptr.primary_down && !resp.long_touched();
+    let context = pointer.filter(|p| resp.secondary_clicked() && xf.rect.contains(*p)).and_then(|p| right_click(&hits, &under, view, p, press_held));
     // A mark already placed takes its own press (comments, below), and with no button down the
     // Fill & Sign tool's preview hides over one, where a press would pick it up.
     let over_mark =
@@ -322,29 +327,30 @@ fn tool_input(
 /// A right-click at `p`: it goes to what lies on top there ([`PageHits::context_at`]), which the
 /// page's menu then acts on. A comment there is selected, and none elsewhere; a Prepare field is
 /// selected; links take theirs from what this returns.
-/// `under`: the hits at `p` before the tools act.
-fn right_click(hits: &PageHits<'_>, under: &[crate::page_router::Hit], view: &mut DocView, p: Pos2) -> Option<Owner> {
+/// `under`: the hits at `p` before the tools act. `press_held`: the primary button is held, and the
+/// selections its press acts on are left alone until its release.
+fn right_click(hits: &PageHits<'_>, under: &[crate::page_router::Hit], view: &mut DocView, p: Pos2, press_held: bool) -> Option<Owner> {
     let context = hits.context_at(view, p, under);
-    // Add text takes every right-click on a page it can change, Edit text those on its own
-    // paragraphs and pictures, the Link tool those on a link, and a Prepare field tool the whole
-    // page, as before: comments see none of them.
+    // Add text takes every right-click on a page it can change, Edit text those on anything of its
+    // own (paragraphs, pictures, added content, the objects selected together and their grips), the
+    // Link tool those on a link, and a Prepare field tool the whole page, as before: comments see
+    // none of them.
     let tool_takes_it = match hits.tool {
         QuickTool::AddText => hits.can_modify || top(under.iter().cloned(), hits.tool).is_some(),
         QuickTool::EditText => top(under.iter().cloned(), hits.tool).is_some(),
         QuickTool::Link => hits.can_modify && matches!(context, Some(Owner::Link { .. })),
         _ => hits.field_tool.is_some(),
     };
-    // A comment being moved, resized or reshaped keeps its selection until its release.
-    let comment_dragged =
-        matches!(view.comments.gesture, Some(comments::Gesture::Move { .. } | comments::Gesture::Resize { .. } | comments::Gesture::Reshape { .. }));
-    if !tool_takes_it && !comment_dragged {
+    if !tool_takes_it && !press_held {
         let comment = match context {
             Some(Owner::Comment { index, .. }) => Some(index),
             _ => None,
         };
         comments::context(hits.pcx, p, comment, view);
     }
-    if let Some(Owner::PrepareField { field, widget }) = context {
+    if let Some(Owner::PrepareField { field, widget }) = context
+        && !press_held
+    {
         crate::prepare::context(hits.form, field, widget, view);
     }
     context

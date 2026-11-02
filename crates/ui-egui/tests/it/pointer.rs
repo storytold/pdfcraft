@@ -1503,3 +1503,44 @@ fn a_click_on_added_text_deselects_the_selected_comment() {
     mouse_click(&mut h, on_added);
     assert_eq!(h.state().views[0].comments.selected, None, "a click on the added text leaves it unselected");
 }
+
+/// A comment gesture left over with no button down (a release the pages never saw) does not keep
+/// a right-click from selecting the comment under it.
+#[test]
+fn a_right_click_selects_its_comment_though_a_gesture_was_left_over() {
+    let mut h = open(stacked_comments_pdf(), "150", false);
+    let bottom = at(&h, 60.0, 160.0);
+    h.state_mut().views[0].comments.gesture = Some(pdfcraft_ui_egui::comments::Gesture::Move { page: 0, index: 0, from: bottom });
+    let top = at(&h, 190.0, 290.0);
+    right_click(&mut h, top);
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 1)), "the note under the right-click is selected");
+}
+
+/// A click that began off the page (in the gutter beside it) is no page's: the selected comment
+/// stays selected, as the Link tool's and Prepare's selections do. It used to unselect it.
+#[test]
+fn a_click_that_began_off_the_page_keeps_the_selected_comment() {
+    let mut h = open(stacked_comments_pdf(), "150", false);
+    let bottom = at(&h, 60.0, 160.0);
+    mouse_click(&mut h, bottom);
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "the note is selected");
+    let left = page(&h).min.x;
+    slipping_click(&mut h, egui::pos2(left - 2.0, bottom.y), egui::pos2(left + 3.0, bottom.y));
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "a click that began off the page leaves it selected");
+}
+
+/// A touch's long press on a comment selects it for its menu, as a right-click does: egui reports
+/// it as a right-click with the finger still down, which holds no drag.
+#[test]
+fn a_long_press_on_a_comment_selects_it_for_its_menu() {
+    let mut h = open(stacked_comments_pdf(), "150", false);
+    let top = at(&h, 190.0, 290.0);
+    let touch = |phase, pos| egui::Event::Touch { device_id: egui::TouchDeviceId(1), id: egui::TouchId(1), phase, pos, force: None };
+    let button = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+    one_frame(&mut h, [touch(egui::TouchPhase::Start, top), egui::Event::PointerMoved(top), button(top, true)]);
+    // Held still, past egui's long-press time.
+    h.run_steps(6);
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 1)), "the note under the finger is selected");
+    one_frame(&mut h, [touch(egui::TouchPhase::End, top), button(top, false), egui::Event::PointerGone]);
+    h.run_steps(2);
+}
