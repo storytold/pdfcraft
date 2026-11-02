@@ -4315,3 +4315,67 @@ fn escape_with_a_fill_tool_deselects_every_comment_then_drops_the_tool() {
     h.run_steps(2);
     assert_eq!(h.state().quick_tool, QuickTool::Select);
 }
+
+/// #5767: Make Properties Default on a text box or callout keeps its font size too, so the next
+/// one (also after a restart) takes it, along with the colour.
+#[test]
+fn properties_dialog_makes_the_text_box_font_size_default() {
+    let blue = [0.0, 0.47, 0.84];
+    let mut h = harness(|_| {});
+    let font_size_of_last = |h: &Harness<'static, PdfCraftApp>| {
+        let s = h.state();
+        let doc = s.session.get(s.views[0].id).unwrap();
+        let last = doc.info.annotations.len() - 1;
+        doc.comment_props(0, last).unwrap()
+    };
+    for (quick, size, first, second, third) in
+        [("freetext", 24.0, (40.0, 60.0), (40.0, 120.0), (40.0, 100.0)), ("callout", 18.0, (150.0, 40.0), (150.0, 100.0), (150.0, 60.0))]
+    {
+        h.state_mut().set_option("quick", quick).unwrap();
+        if quick == "callout" {
+            drag_pt(&mut h, first, (first.0 + 60.0, first.1 + 20.0));
+        } else {
+            click_pt(&mut h, first);
+        }
+        post_text(&mut h, "First");
+        let index = comments(&h).len() - 1;
+        h.state_mut().open_comment_props(0, index);
+        h.run_steps(2);
+        {
+            let d = h.state_mut().comment_props.as_mut().expect("open");
+            d.edited.font_size = Some(size);
+            d.edited.color = Some(blue);
+        }
+        h.get_by_label("Make Properties Default").click();
+        h.run_steps(1);
+        h.get_by_label("OK").click();
+        h.run_steps(3);
+        assert_eq!(font_size_of_last(&h).font_size, Some(size));
+
+        // The next one takes the font size and the colour.
+        h.state_mut().set_option("quick", quick).unwrap();
+        if quick == "callout" {
+            drag_pt(&mut h, second, (second.0 + 60.0, second.1 + 20.0));
+        } else {
+            click_pt(&mut h, second);
+        }
+        post_text(&mut h, "Second");
+        let p = font_size_of_last(&h);
+        assert_eq!(p.font_size, Some(size), "{quick}: the next one takes the default font size");
+        assert_eq!(p.color, Some(blue), "{quick}: and the default colour");
+
+        // The default survives a restart.
+        let json = h.state().persist();
+        let mut fresh = harness(move |app| {
+            app.restore(&json);
+            app.set_option("quick", quick).unwrap();
+        });
+        if quick == "callout" {
+            drag_pt(&mut fresh, third, (third.0 + 60.0, third.1 + 20.0));
+        } else {
+            click_pt(&mut fresh, third);
+        }
+        post_text(&mut fresh, "Third");
+        assert_eq!(font_size_of_last(&fresh).font_size, Some(size), "{quick}: the default font size persisted");
+    }
+}
