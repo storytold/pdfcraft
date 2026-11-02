@@ -128,6 +128,20 @@ pub fn available() -> bool {
     Models::find().is_some()
 }
 
+/// The reading with the most characters in plausible words ([`orient::plausibility`]); the
+/// first one on a tie.
+fn most_plausible(reads: &[(u8, Vec<Line>)]) -> Option<&(u8, Vec<Line>)> {
+    reads.iter().fold(None, |best: Option<&(u8, Vec<Line>)>, r| match best {
+        Some(b) if orient::plausibility(&b.1).0 >= orient::plausibility(&r.1).0 => Some(b),
+        _ => Some(r),
+    })
+}
+
+/// The turn of the reading that reads most as words, if its text reads as words at all.
+fn upright_turn(reads: &[(u8, Vec<Line>)]) -> Option<u8> {
+    most_plausible(reads).filter(|(_, l)| orient::reads_as_words(l) == Some(true)).map(|r| r.0)
+}
+
 /// One page read by [`OcrJob::read`]: the quarter turns clockwise it was read at, the level it
 /// was read at, and what it says (in the pixels of the levelled, turned rendering).
 struct Reading {
@@ -222,7 +236,7 @@ impl OcrJob {
     /// Read one rendered page. With `correct`, first level it when
     /// `scan` (its scan image and where it is in user space; `to_view` maps user space to
     /// the rendering's pixels) is turned slightly and deskew is on, then read it turned each
-    /// way until its text reads as words, when auto-rotate is on.
+    /// way and keep the way whose text reads most as words, when auto-rotate is on.
     fn read(
         &self,
         ocr: &Ocr,
@@ -256,31 +270,31 @@ impl OcrJob {
             let (px, w, h) = orient::quarter_turn(&level, width, height, q);
             ocr.recognize(&px, w, h)
         };
-        let mut upright = None;
-        // Text read upside down still makes some lowercase "words", so each way is weighed
-        // against the opposite one: the way up reads many more plausible characters.
-        // ponytail: two recognitions a page (four when the lines' direction was misjudged); a
-        // pixel-only up/down test (ascenders against descenders) would save one.
-        for &[a, b] in pairs {
-            let (la, lb) = (read_turned(a)?, read_turned(b)?);
-            let (ga, gb) = (orient::plausibility(&la).0, orient::plausibility(&lb).0);
-            let (q, lines, other) = if gb > ga { (b, lb, la) } else { (a, la, lb) };
-            let verdict = orient::reads_as_words(&lines);
-            if verdict == Some(true) {
-                return Ok(Reading { turn: q, straighten, lines });
-            }
-            match (q, a, b) {
-                (0, ..) => upright = Some(lines),
-                (_, 0, _) | (_, _, 0) => upright = Some(other),
-                _ => {}
+        // Text read upside down or sideways still makes some lowercase "words", so every way is
+        // read and the one with the most plausible characters wins. Stopping at the first way
+        // that reads as words misses pages where a wrong way passes too (measured on
+        // photographed pages, #3662).
+        // The check needs a recogniser that reads turned text as a jumble, as ocrs does; one
+        // that makes plausible words of turned text (measured with PP-OCR) defeats it, so keep
+        // ocrs for this check whatever the language.
+        // ponytail: four recognitions a page; a pixel-only up/down test (ascenders against
+        // descenders) would save two.
+        let mut reads: Vec<(u8, Vec<Line>)> = Vec::new();
+        for pair in pairs {
+            for &q in pair {
+                reads.push((q, read_turned(q)?));
             }
             // Too little text to tell which way up it is: no other way finds more.
-            if verdict.is_none() {
+            if most_plausible(&reads).is_some_and(|(_, l)| orient::reads_as_words(l).is_none()) {
                 break;
             }
         }
-        let lines = match upright {
-            Some(l) => l,
+        if let Some(turn) = upright_turn(&reads) {
+            let lines = reads.into_iter().find(|r| r.0 == turn).map(|r| r.1).unwrap_or_default();
+            return Ok(Reading { turn, straighten, lines });
+        }
+        let lines = match reads.into_iter().find(|r| r.0 == 0) {
+            Some((_, l)) => l,
             None => read_turned(0)?,
         };
         Ok(Reading { turn: 0, straighten, lines })
@@ -493,5 +507,24 @@ mod tests {
         let broken = [[f32::NAN; 4], [f32::NEG_INFINITY, f32::NEG_INFINITY, f32::INFINITY, f32::INFINITY]];
         let c = covered([0.0, 0.0, 10.0, 10.0], &broken);
         assert!((0.0..=1.0).contains(&c), "{c}");
+    }
+
+    /// #3662: every way a page was read is weighed, not only the first pair that reads as
+    /// words. On a photographed page a wrong way can still pass; the way up reads more.
+    #[test]
+    fn the_way_that_reads_most_as_words_wins() {
+        use pdfcraft_ocr::Word;
+        let line = |t: &str| vec![Line { words: t.split(' ').map(|w| Word { text: w.into(), rect: [0.0; 4] }).collect() }];
+        // Upside down, a short line reads as words; the right way, more of the page does.
+        let passes = line("on the way to an old mill xQ");
+        let upright = line("The quick brown fox jumps over the lazy dog.");
+        let jumble = line("xoJ uMoJq ʞ!nb ǝɥ⊥ x0j nMOJq x!nb 3ɥ1");
+        assert_eq!(orient::reads_as_words(&passes), Some(true));
+        let reads = [(0, passes.clone()), (2, jumble.clone()), (1, upright.clone()), (3, jumble.clone())];
+        assert_eq!(upright_turn(&reads), Some(1));
+        // A tie keeps the first way; nothing that reads as words keeps none.
+        assert_eq!(upright_turn(&[(0, upright.clone()), (2, upright)]), Some(0));
+        assert_eq!(upright_turn(&[(0, jumble.clone()), (2, jumble)]), None);
+        assert_eq!(upright_turn(&[]), None);
     }
 }

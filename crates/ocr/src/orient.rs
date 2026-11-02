@@ -7,8 +7,8 @@
 //! - [`rotate`] and [`quarter_turn`] turn an RGBA image; [`unturn`] maps a point in a quarter-turned
 //!   image back to the original one.
 //! - [`plausibility`] scores recognised text: upright text reads as words, text read upside down
-//!   or sideways reads as a jumble of letters, digits and marks. Recognize text tries the other
-//!   quarter turns on a page whose text does not read as words, and keeps the one that does.
+//!   or sideways reads as a jumble of letters, digits and marks. Recognize text reads a page at
+//!   all four quarter turns and keeps the one whose text reads most as words.
 //!
 //! Angles are in degrees, counter-clockwise as seen on screen.
 
