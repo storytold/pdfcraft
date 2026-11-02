@@ -42,8 +42,7 @@ pub(super) fn is_script_on(host_bbox: &[f32; 4], host_h: f32, script_bbox: &[f32
     let host_cy = (host_bbox[1] + host_bbox[3]) / 2.0;
     let script_cy = (script_bbox[1] + script_bbox[3]) / 2.0;
     let script_w = script_bbox[2] - script_bbox[0];
-    let host_w = host_bbox[2] - host_bbox[0];
-    let smaller = script_h >= host_h * 0.45 && script_w < host_h * 3.0 && (script_h < host_h * 0.9 || (script_h <= host_h && host_w > script_w));
+    let smaller = script_h >= host_h * 0.45 && script_h < host_h * 0.75 && script_w < host_h * 3.0;
     if !smaller {
         return false;
     }
@@ -60,6 +59,16 @@ pub(super) fn is_script_on(host_bbox: &[f32; 4], host_h: f32, script_bbox: &[f32
             && script_bbox[3] > host_bbox[3]
             && host_bbox[3] > script_bbox[1] + script_h * 0.5
             && script_bbox[1] >= host_bbox[1] - script_h * 0.2
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_script_on;
+
+    #[test]
+    fn overlapping_smaller_run_is_not_a_script() {
+        assert!(!is_script_on(&[0.0, 0.0, 100.0, 10.0], 10.0, &[0.0, 3.0, 20.0, 11.0], 8.0));
     }
 }
 
