@@ -152,6 +152,7 @@ impl PdfCraftApp {
         v["organize_zoom"] = serde_json::json!(self.organize_zoom);
         // Canonical names survive changes to the order of PAPERS and do not depend on UI language.
         v["print_paper"] = serde_json::json!(pdfcraft_engine::print::PAPERS.get(self.print_draft.paper).map(|(name, _)| *name));
+        v["print_eco_mode"] = serde_json::Value::Bool(self.print_draft.eco_mode);
         v.to_string()
     }
 
@@ -265,6 +266,17 @@ impl PdfCraftApp {
             .and_then(|name| pdfcraft_engine::print::PAPERS.iter().position(|(canonical, _)| *canonical == name))
         {
             self.print_draft.paper = paper;
+        }
+        if let Some(on) = v.get("print_eco_mode").and_then(serde_json::Value::as_bool) {
+            let was_eco = self.print_draft.eco_mode;
+            self.print_draft.eco_mode = on;
+            if on {
+                self.print_draft.grayscale = true;
+                self.print_draft.duplex = Some(pdfcraft_engine::print::spool::Duplex::LongEdge);
+            } else if was_eco {
+                self.print_draft.grayscale = false;
+                self.print_draft.duplex = None;
+            }
         }
         if let Some(on) = v["highlight_fields"].as_bool() {
             self.view_defaults.highlight_fields = on;

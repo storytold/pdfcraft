@@ -176,7 +176,9 @@ pub(crate) fn body(
                     ui.horizontal(|ui| {
                         ui.add(egui::DragValue::new(&mut d.copies).range(1..=999)).labelled_by(copies_label.id);
                         ui.add(widgets::checkbox(&mut d.collate, tl!("Collate")));
-                        ui.add(widgets::checkbox(&mut d.grayscale, tl!("Print in grayscale")));
+                        if ui.add(widgets::checkbox(&mut d.grayscale, tl!("Print in grayscale"))).changed() {
+                            d.eco_mode = d.grayscale && d.duplex == Some(spool::Duplex::LongEdge);
+                        }
                     });
                 });
                 ui.end_row();
@@ -185,19 +187,34 @@ pub(crate) fn body(
                 if d.handling != Handling::Booklet {
                     ui.label(tl!("Two-sided:"));
                     ui.add_enabled_ui(!browser, |ui| {
-                        combo(
-                            ui,
-                            "duplex",
-                            tl!("Two-sided:"),
-                            &mut d.duplex,
-                            &[
-                                (None, tl!("Printer default")),
-                                (Some(spool::Duplex::Off), tl!("Off")),
-                                (Some(spool::Duplex::LongEdge), tl!("Flip on long edge")),
-                                (Some(spool::Duplex::ShortEdge), tl!("Flip on short edge")),
-                            ],
-                            160.0,
-                        );
+                        ui.horizontal(|ui| {
+                            let before_duplex = d.duplex;
+                            combo(
+                                ui,
+                                "duplex",
+                                tl!("Two-sided:"),
+                                &mut d.duplex,
+                                &[
+                                    (None, tl!("Printer default")),
+                                    (Some(spool::Duplex::Off), tl!("Off")),
+                                    (Some(spool::Duplex::LongEdge), tl!("Flip on long edge")),
+                                    (Some(spool::Duplex::ShortEdge), tl!("Flip on short edge")),
+                                ],
+                                160.0,
+                            );
+                            if d.duplex != before_duplex {
+                                d.eco_mode = d.grayscale && d.duplex == Some(spool::Duplex::LongEdge);
+                            }
+                            if ui.add(widgets::checkbox(&mut d.eco_mode, tl!("Eco mode (Grayscale, two-sided)"))).changed() {
+                                if d.eco_mode {
+                                    d.grayscale = true;
+                                    d.duplex = Some(spool::Duplex::LongEdge);
+                                } else {
+                                    d.grayscale = false;
+                                    d.duplex = None;
+                                }
+                            }
+                        });
                     });
                     ui.end_row();
                 }

@@ -913,3 +913,96 @@ fn a_booklet_decides_two_sided_itself() {
     assert!(h.query_by_role_and_label(Role::ComboBox, "Two-sided:").is_some());
     assert_eq!(h.state().print_draft.job("x").duplex, Some(Duplex::LongEdge), "back to the choice");
 }
+
+#[test]
+fn eco_mode_enables_grayscale_and_duplex_and_persists() {
+    use pdfcraft_engine::print::spool::Duplex;
+    let mut h = harness();
+    assert!(h.state_mut().execute("print.dialog"));
+    h.run_steps(3);
+
+    // Initial state: eco_mode is false, grayscale is false, duplex is None.
+    assert!(!h.state().print_draft.eco_mode);
+    assert!(!h.state().print_draft.grayscale);
+    assert_eq!(h.state().print_draft.duplex, None);
+
+    // Click Eco mode checkbox in the dialog.
+    h.get_by_label("Eco mode (Grayscale, two-sided)").click();
+    h.run_steps(2);
+
+    assert!(h.state().print_draft.eco_mode);
+    assert!(h.state().print_draft.grayscale);
+    assert_eq!(h.state().print_draft.duplex, Some(Duplex::LongEdge));
+
+    // Persist and verify JSON serialization.
+    let saved = h.state().persist();
+    let json: serde_json::Value = serde_json::from_str(&saved).unwrap();
+    assert_eq!(json["print_eco_mode"], true);
+
+    // Restore into a fresh app and verify settings are applied.
+    let mut app = PdfCraftApp::new();
+    app.restore(&saved);
+    assert!(app.print_draft.eco_mode);
+    assert!(app.print_draft.grayscale);
+    assert_eq!(app.print_draft.duplex, Some(Duplex::LongEdge));
+
+    // In the dialog, unticking grayscale unsets eco_mode.
+    h.get_by_label("Print in grayscale").click();
+    h.run_steps(2);
+    assert!(!h.state().print_draft.grayscale);
+    assert!(!h.state().print_draft.eco_mode);
+
+    // Clicking Eco mode again re-enables both.
+    h.get_by_label("Eco mode (Grayscale, two-sided)").click();
+    h.run_steps(2);
+    assert!(h.state().print_draft.eco_mode);
+    assert!(h.state().print_draft.grayscale);
+    assert_eq!(h.state().print_draft.duplex, Some(Duplex::LongEdge));
+
+    // Changing Two-sided combo away from "Flip on long edge" unsets eco_mode while keeping grayscale.
+    h.get_by(|n| n.role() == egui::accesskit::Role::ComboBox && n.value().as_deref() == Some("Flip on long edge")).click();
+    h.run_steps(2);
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Off").click();
+    h.run_steps(2);
+    assert!(!h.state().print_draft.eco_mode);
+    assert!(h.state().print_draft.grayscale);
+    assert_eq!(h.state().print_draft.duplex, Some(Duplex::Off));
+
+    // Selecting "Flip on long edge" again re-synchronizes eco_mode back to true.
+    h.get_by(|n| n.role() == egui::accesskit::Role::ComboBox && n.value().as_deref() == Some("Off")).click();
+    h.run_steps(2);
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Flip on long edge").click();
+    h.run_steps(2);
+    assert!(h.state().print_draft.eco_mode);
+    assert!(h.state().print_draft.grayscale);
+    assert_eq!(h.state().print_draft.duplex, Some(Duplex::LongEdge));
+
+    // Unticking Eco mode resets grayscale and duplex.
+    h.get_by_label("Eco mode (Grayscale, two-sided)").click();
+    h.run_steps(2);
+    assert!(!h.state().print_draft.eco_mode);
+    assert!(!h.state().print_draft.grayscale);
+    assert_eq!(h.state().print_draft.duplex, None);
+
+    // Restoring print_eco_mode = false clears eco settings if eco was previously active.
+    let mut eco_app = PdfCraftApp::new();
+    eco_app.print_draft.eco_mode = true;
+    eco_app.print_draft.grayscale = true;
+    eco_app.print_draft.duplex = Some(Duplex::LongEdge);
+    eco_app.restore(r#"{"print_eco_mode": false}"#);
+    assert!(!eco_app.print_draft.eco_mode);
+    assert!(!eco_app.print_draft.grayscale);
+    assert_eq!(eco_app.print_draft.duplex, None);
+
+    // Simplex printer drops duplex when job is created.
+    let mut simplex_draft = h.state().print_draft.clone();
+    simplex_draft.printer = Some("SimplexPrinter".into());
+    simplex_draft.printers = vec![pdfcraft_engine::print::spool::Printer {
+        name: "SimplexPrinter".into(),
+        default: false,
+        two_sided: Some(false),
+        description: String::new(),
+    }];
+    simplex_draft.duplex = Some(Duplex::LongEdge);
+    assert_eq!(simplex_draft.job("doc.pdf").duplex, None);
+}

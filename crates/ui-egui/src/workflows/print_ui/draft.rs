@@ -33,6 +33,8 @@ pub struct PrintDraft {
     pub copies: u32,
     pub collate: bool,
     pub grayscale: bool,
+    /// Eco print mode: quickly enables grayscale and duplex (two-sided) printing to save ink and paper.
+    pub eco_mode: bool,
     /// `None` = the printer's own default (its Properties), as Acrobat does.
     pub duplex: Option<spool::Duplex>,
     pub which: Which,
@@ -96,6 +98,7 @@ impl Default for PrintDraft {
             copies: 1,
             collate: true,
             grayscale: false,
+            eco_mode: false,
             duplex: None,
             which: Which::All,
             range: String::new(),
@@ -205,6 +208,11 @@ impl PrintDraft {
         self.handling == Handling::Multiple && self.order == PageOrder::CutStack
     }
 
+    /// Whether the selected printer driver explicitly reported that it does not take two-sided settings.
+    pub fn is_simplex_printer(&self) -> bool {
+        self.printers.iter().find(|p| self.printer.as_ref() == Some(&p.name)).and_then(|p| p.two_sided) == Some(false)
+    }
+
     /// The spooler job for this print: the dialog's copies, two-sided and colour settings, the
     /// driver options changed from the printer's defaults, and the chosen paper.
     pub fn job(&self, title: &str) -> spool::Job {
@@ -214,10 +222,13 @@ impl PrintDraft {
             collate: self.collate,
             // Cut and stack needs single-sided sheets, whatever the printer's default; a booklet
             // decides two-sided itself (#2707), leaving the Two-sided choice as it was.
+            // A simplex printer drops duplex requests so driver defaults apply without error.
             duplex: if self.cut_and_stack() {
                 Some(spool::Duplex::Off)
             } else if self.handling == Handling::Booklet {
                 Some(print::booklet_duplex(self.booklet_subset))
+            } else if self.is_simplex_printer() {
+                None
             } else {
                 self.duplex
             },
