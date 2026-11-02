@@ -50,8 +50,11 @@ and image updates refuse direction; use the paragraph or added text item instead
 
 Paragraph preview (`text_edit_layout`) and Apply (`text_edit`) select the same
 replacement text for a width-and-direction change without explicit `text`: both
-rejoin soft wraps. A direction-only request preserves editor rows. Supplying
-`text` uses that text unchanged.
+rejoin soft wraps, including when the reflow text equals the space-joined source
+text. A direction-only request preserves editor rows and their original soft/hard
+break types. Saving and reopening retains those types, so later widening rejoins
+only the soft wraps. Supplying `text` uses that text literally, even when it equals
+the source text.
 
 Logical Unicode remains the stored text. PdfCraft records explicit overrides in
 its own PDF metadata, so another viewer need not expose the same controls. Complex

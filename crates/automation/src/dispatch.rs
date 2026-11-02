@@ -55,7 +55,7 @@ fn paragraph_replacement(args: &Args, block: &pdfcraft_engine::TextBlock, width:
         None if args.get("aligns").is_some() => block.editor_text.clone(),
         None if width.is_some() => block.reflow_text.clone(),
         None if args.get("direction").is_some() => block.editor_text.clone(),
-        None => block.text.clone(),
+        None => block.editor_text.clone(),
     })
 }
 
@@ -580,6 +580,7 @@ impl Automation {
                 let width = a.opt_num("width")?;
                 let text = paragraph_replacement(&a, source, width)?;
                 let style = pdfcraft_engine::BlockStyle {
+                    preserve_source_breaks: a.get("text").is_none() && width.is_none(),
                     size: a.opt_num("size")?,
                     width,
                     resource: a.opt_str("font_resource")?.map(str::to_owned),
@@ -611,6 +612,7 @@ impl Automation {
                 let source_rect = block.rect;
                 let text = paragraph_replacement(&a, &block, width)?;
                 let mut style = pdfcraft_engine::BlockStyle {
+                    preserve_source_breaks: a.get("text").is_none() && width.is_none(),
                     ranges: parse_style_ranges(a.get("ranges"))?,
                     resource: a.opt_str("font_resource")?.map(str::to_owned),
                     direction: a.opt_str("direction")?.map(crate::content::parse_direction).transpose()?,

@@ -328,6 +328,9 @@ impl LineEditor {
                 scale: style.scale.take(),
             });
         }
+        // An unchanged draft plus direction formatting is a source-row operation;
+        // explicit typing/reflow keeps its own newline semantics.
+        style.preserve_source_breaks = self.text == self.original && style.direction.is_some();
         style
     }
 

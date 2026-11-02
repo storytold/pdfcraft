@@ -398,6 +398,10 @@ pub fn replace_block(doc: &mut Document, page: usize, block: usize, text: &str) 
 /// Formatting for a rewritten paragraph (`None` keeps the paragraph's own).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct BlockStyle {
+    /// Keep source visual rows and their soft/hard break types for a content-preserving
+    /// rewrite. The draft must be `editor_text`; incompatible with a requested width.
+    /// An explicit replacement leaves this false, even when it equals `text`.
+    pub preserve_source_breaks: bool,
     /// None preserves the source override; Auto restores automatic detection.
     pub direction: Option<pdfcraft_fonts::TextDirection>,
     /// Disjoint UTF-8 ranges in the replacement, each preserving unspecified source style.

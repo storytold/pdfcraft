@@ -5,6 +5,10 @@ use serde_json::{Value, json};
 
 fn page() -> Vec<u8> {
     let content = "BT /F1 12 Tf 14.4 TL 1 0 0 1 72 700 Tm (Alpha beta gamma delta epsilon) Tj T* (zeta eta theta) Tj T* (Tail) Tj ET";
+    fixture(content)
+}
+
+fn fixture(content: &str) -> Vec<u8> {
     let objects = [
         "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
         "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_owned(),
@@ -55,4 +59,55 @@ fn implicit_direction_reflow_preview_matches_explicit_text_and_apply() {
     call(&mut auto, "text_edit", json!({"doc":doc,"page":1,"paragraph":1,"width":400,"direction":"auto"}));
     let applied = call(&mut auto, "text_paragraphs", json!({"doc":doc,"page":1}));
     assert_eq!(applied["paragraphs"][0]["editor_text"], reflow);
+}
+
+fn all_soft_reflow(explicit: bool) {
+    let dir = tempfile::tempdir().unwrap();
+    let bytes = String::from_utf8(page()).unwrap().replace(" T* (Tail) Tj", "");
+    // Rebuild the fixture rather than changing stream lengths/xref positions.
+    let content = bytes.split("stream\n").nth(1).unwrap().split("\nendstream").next().unwrap();
+    let bytes = fixture(content);
+    std::fs::write(dir.path().join("soft.pdf"), bytes).unwrap();
+    let mut auto = Automation::new().with_root(dir.path()).unwrap();
+    let doc = call(&mut auto, "doc_open", json!({"path":"soft.pdf"}))["doc"].clone();
+    let source = auto.session().docs().last().unwrap().text_blocks(0).remove(0);
+    assert_eq!(source.reflow_text, source.text);
+    assert!(source.editor_text.contains('\n'));
+    let mut args = json!({"doc":doc,"page":1,"paragraph":1,"width":400,"direction":"auto"});
+    if explicit {
+        args["text"] = json!(source.text);
+    }
+    call(&mut auto, "text_edit", args);
+    let after = call(&mut auto, "text_paragraphs", json!({"doc":doc,"page":1}));
+    assert_eq!(after["paragraphs"][0]["editor_text"], source.reflow_text, "an explicit reflow draft must not become source visual rows");
+}
+
+#[test]
+fn implicit_all_soft_width_and_direction_reflows() {
+    all_soft_reflow(false);
+}
+
+#[test]
+fn explicit_flat_text_equal_to_source_text_reflows() {
+    all_soft_reflow(true);
+}
+
+#[test]
+fn direction_only_preserves_soft_and_hard_breaks_after_reopen() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("wrapped.pdf"), page()).unwrap();
+    let mut auto = Automation::new().with_root(dir.path()).unwrap();
+    let doc = call(&mut auto, "doc_open", json!({"path":"wrapped.pdf"}))["doc"].clone();
+    let source = auto.session().docs().last().unwrap().text_blocks(0).remove(0);
+    assert_eq!(source.reflow_text.matches('\n').count(), 1);
+    call(&mut auto, "text_edit", json!({"doc":doc,"page":1,"paragraph":1,"direction":"auto"}));
+    let after = auto.session().docs().last().unwrap().text_blocks(0).remove(0);
+    assert_eq!(after.editor_text, source.editor_text, "direction alone keeps visual rows");
+    assert_eq!(after.reflow_text, source.reflow_text, "direction alone must retain source break types");
+    call(&mut auto, "doc_save", json!({"doc":doc,"path":"saved.pdf"}));
+    let reopened = call(&mut auto, "doc_open", json!({"path":"saved.pdf"}))["doc"].clone();
+    assert_eq!(auto.session().docs().last().unwrap().text_blocks(0).remove(0).reflow_text, source.reflow_text);
+    call(&mut auto, "text_edit", json!({"doc":reopened,"page":1,"paragraph":1,"width":400,"direction":"auto"}));
+    let after = call(&mut auto, "text_paragraphs", json!({"doc":reopened,"page":1}));
+    assert_eq!(after["paragraphs"][0]["editor_text"], source.reflow_text, "widening rejoins only soft wraps after reopen");
 }

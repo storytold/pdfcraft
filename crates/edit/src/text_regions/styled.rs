@@ -1,4 +1,4 @@
-use super::grouping::{across, is_centred, row_rect};
+use super::grouping::{across, break_gap, is_centred, row_rect};
 use super::{
     BlockStyle, CraftFont, Dict, Document, EditError, HashMap, LineEdit, MAX_TYPE3_GLYPHS, Matrix, Metrics, Object, Op, PdfString, Pieces,
     RangeStyle, TextBlock, TextLine, Type3Glyph, coincident_ops, content_streams, fallback_face, japanese_glyph_from, needs_type3, no_fallback_font,
@@ -383,8 +383,8 @@ fn validated_ranges<'a>(draft: &str, style: &'a BlockStyle) -> Result<Vec<&'a Ra
 
 fn replacement_text<'a>(block: &'a TextBlock, text: Option<&'a str>) -> Result<&'a str, EditError> {
     let draft = match text {
-        Some(text) if text != block.text => text,
-        _ => &block.editor_text,
+        Some(text) => text,
+        None => &block.editor_text,
     };
     if draft.len() > 4_000_000 {
         return Err(EditError::Invalid("the replacement text is too large".into()));
@@ -901,6 +901,59 @@ fn direction_needs_uniform_row(direction: pdfcraft_fonts::TextDirection, base: p
     direction != pdfcraft_fonts::TextDirection::Auto || base == pdfcraft_fonts::TextDirection::RightToLeft
 }
 
+type SourceBreaks = Vec<Option<usize>>;
+
+fn preserved_source_breaks(
+    block: &TextBlock,
+    lines: &[TextLine],
+    draft: &str,
+    implicit: bool,
+    style: &BlockStyle,
+) -> Result<Option<SourceBreaks>, EditError> {
+    // Intent belongs to the caller, not a comparison with the flattened source text.
+    if !(style.preserve_source_breaks || implicit && style.width.is_none()) {
+        return Ok(None);
+    }
+    if draft != block.editor_text || style.width.is_some() {
+        return Err(EditError::Invalid("preserving source breaks requires unchanged editor rows and no width override".into()));
+    }
+    // Capture original runs before range styling clones or changes them.
+    Ok(Some((0..block.rows.len()).map(|row| break_gap(block, lines, row)).collect()))
+}
+
+fn draft_row_bases(
+    block: &TextBlock,
+    draft: &str,
+    direction: pdfcraft_fonts::TextDirection,
+    breaks: Option<&[Option<usize>]>,
+) -> Vec<pdfcraft_fonts::TextDirection> {
+    let Some(breaks) = breaks else { return paragraph_bases(draft, direction) };
+    let logical = paragraph_bases(&block.reflow_text, direction);
+    let mut paragraph = 0usize;
+    breaks
+        .iter()
+        .enumerate()
+        .map(|(row, gap)| {
+            if row > 0 && gap.is_none() {
+                paragraph = paragraph.saturating_add(1);
+            }
+            logical.get(paragraph).copied().unwrap_or(direction)
+        })
+        .collect()
+}
+
+fn restore_source_breaks(breaks: Option<&[Option<usize>]>, soft: &mut [bool], gaps: &mut [usize]) {
+    let Some(breaks) = breaks else { return };
+    for (row, gap) in breaks.iter().enumerate().skip(1) {
+        if let Some(value) = soft.get_mut(row) {
+            *value = gap.is_some();
+        }
+        if let Some(value) = gaps.get_mut(row) {
+            *value = gap.unwrap_or(0);
+        }
+    }
+}
+
 fn begin_logical_span(ops: &mut Vec<Op>, logical: &str, visual: &str) -> bool {
     let changed = logical != visual;
     if changed {
@@ -949,6 +1002,7 @@ pub(crate) fn rewrite_styled_block(
 ) -> Result<LineEdit, EditError> {
     let first = block.lines.first().and_then(|i| lines.get(*i)).ok_or_else(|| EditError::Invalid("the paragraph has no source runs".into()))?;
     let draft = replacement_text(block, text)?;
+    let source_breaks = preserved_source_breaks(block, lines, draft, text.is_none(), style)?;
     if has_no_effective_style_change(block, draft, style) {
         return Ok(LineEdit { substituted: None });
     }
@@ -1051,9 +1105,11 @@ pub(crate) fn rewrite_styled_block(
     // Auto is a paragraph choice: a wrapped continuation beginning with a number or a
     // different script must keep the first strong character of its logical paragraph.
     // Keep Auto in the PDF metadata so a subsequent edit can choose a new first strong base.
-    let bases = paragraph_bases(draft, direction);
-    let (rows, row_ranges, row_lines, row_soft, row_gap) =
-        wrap_styled_rows(&chars, width, |items, paragraph| measure(items, bases.get(paragraph).copied().unwrap_or(direction)))?;
+    let bases = draft_row_bases(block, draft, direction, source_breaks.as_deref());
+    let row_width = source_breaks.as_ref().map_or(width, |_| f64::MAX);
+    let (rows, row_ranges, row_lines, mut row_soft, mut row_gap) =
+        wrap_styled_rows(&chars, row_width, |items, paragraph| measure(items, bases.get(paragraph).copied().unwrap_or(direction)))?;
+    restore_source_breaks(source_breaks.as_deref(), &mut row_soft, &mut row_gap);
     let row_direction = |row: usize| row_lines.get(row).and_then(|paragraph| bases.get(*paragraph)).copied().unwrap_or(direction);
     let streams = content_streams(doc, &p.dict)?;
     let pieces = Pieces::join(&streams.iter().map(|(_, d)| d.as_slice()).collect::<Vec<_>>());

@@ -74,3 +74,23 @@ and universal OS IME qualification are not delivered by this bundle. Overall RTL
 interface parity remains planned until its broader workflows have evidence.
 
 Review 5735147265 follow-up: completed native click/drag interruptions release composition ownership at the common frame boundary, covering non-page text widgets while retaining page-specific resets. The component regression failed with the reset disabled and passes for single-line/multiline click/drag cases against pinned egui; this is not live form/provider/browser qualification. README links distinguish the historical core checkpoint from integrated direction controls. Preview and Apply now share paragraph replacement selection. The focused public-tool regression first reproduced different bounds and overflow for implicit width-plus-Auto-direction reflow, then passed after the correction. The synthetic paragraph includes both a soft wrap and a hard break; preview remains read-only and Apply retains the hard break. Forced LTR/RTL across these standard-font source rows still requires a uniform complete face. This closes the specific selector finding, without expanding the qualification claims above.
+
+
+### Review 5737152311: replacement intent and saved breaks
+
+Explicit replacement text now remains literal through styled rewriting, including
+a draft equal to the source's space-joined `text`. Width-plus-direction edits can
+therefore rejoin a paragraph whose existing breaks are all soft.
+
+An unchanged direction-only draft carries an explicit source-break preservation
+policy from the editor or automation caller. Styled layout captures the original
+soft/hard classification and separator counts before modifying source runs, keeps
+the visual rows and writes the corresponding PDF break markers. Automatic bidi
+base selection still follows the logical paragraph across soft continuations.
+
+Three additional public-tool regressions failed on the prior implementation and
+pass after these corrections: all-soft implicit width/direction reflow, explicit
+text equal to the flat source text, and direction-only visual-row/break-type
+preservation through save/reopen and later widening. The earlier preview/Apply
+regression also passes. This fixes data semantics within the supported editing
+scope; the font, provider/browser and native-reader limits above remain.
