@@ -188,6 +188,8 @@ pub enum Dialog {
     CertificateViewer,
     /// Pin tools to Home: selection modal.
     PinTool,
+    /// Signatures ▸ Import certificates…: choose which of a file's certificates to trust.
+    ImportCertificates,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
