@@ -87,7 +87,10 @@ const SETTLE_MAX: usize = 16;
 impl CommentView {
     /// Remember a released drag drawing so it stays on screen until its page is re-rendered.
     pub(crate) fn settle(&mut self, now: f64, page: usize, tool: CommentTool, points: &[[f64; 2]]) {
-        if !matches!(tool, CommentTool::Ink | CommentTool::Line | CommentTool::Arrow | CommentTool::Rectangle | CommentTool::Oval) {
+        if !matches!(
+            tool,
+            CommentTool::Ink | CommentTool::FreehandHighlight | CommentTool::Line | CommentTool::Arrow | CommentTool::Rectangle | CommentTool::Oval
+        ) {
             return;
         }
         self.settling.retain(|s| now - s.since < SETTLE_SECS);
