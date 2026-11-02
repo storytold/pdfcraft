@@ -76,7 +76,7 @@ pub enum RedactError {
     /// hold, those of marks under the area included, would stay. Counts the images, or 1 for another
     /// reference.
     #[error(
-        "{0} item(s) share JBIG2 symbol data with something being removed and can't be stored without it, so that data, which can show what was removed, would stay in the file; nothing was changed"
+        "{0} item(s) share JBIG2 symbol data with something being removed and can't be stored without it, so that data, which can show what was removed, would stay in the file; this was refused"
     )]
     SharedJbig2Globals(usize),
     #[error(transparent)]
