@@ -113,6 +113,24 @@ pub(super) fn page_interaction_rect(enabled: bool, presentation: bool, organize:
     Rect::from_min_max(layout.corner.max, viewport.max)
 }
 
+/// Space at the top of the viewport that navigation must keep clear of the horizontal ruler.
+pub(super) fn navigation_top_inset(enabled: bool, viewport_height: f32) -> f32 {
+    if enabled && viewport_height.is_finite() { ruler::HORIZONTAL_RULER_HEIGHT.max(0.0).min(viewport_height.max(0.0)) } else { 0.0 }
+}
+
+/// A top-aligned destination starts below the ruler. A destination centred in the full viewport
+/// moves by half the inset, which is the centre of the remaining visible viewport.
+pub(super) fn navigation_anchor_y(enabled: bool, rel_y: f32, viewport_height: f32) -> f32 {
+    let inset = navigation_top_inset(enabled, viewport_height);
+    if rel_y.abs() <= f32::EPSILON {
+        inset
+    } else if (rel_y - viewport_height / 2.0).abs() <= f32::EPSILON {
+        rel_y + inset / 2.0
+    } else {
+        rel_y
+    }
+}
+
 pub(super) fn paint(app: &PdfCraftApp, index: usize, ui: &egui::Ui) {
     let Some(view) = app.views.get(index) else { return };
     if !app.show_rulers || view.presentation.is_some() || view.organize {
@@ -350,6 +368,25 @@ mod tests {
         assert!(blocked_rects(true, true, false, viewport).is_empty());
         assert!(blocked_rects(true, false, true, viewport).is_empty());
         assert!(blocked_rects(true, false, false, Rect::NOTHING).is_empty());
+    }
+
+    #[test]
+    fn navigation_reserves_the_ruler_for_top_and_center_anchors() {
+        let height = 600.0;
+        let inset = ruler::HORIZONTAL_RULER_HEIGHT;
+        assert_eq!(navigation_top_inset(true, height), inset);
+        assert_eq!(navigation_anchor_y(true, 0.0, height), inset);
+        assert_eq!(navigation_anchor_y(true, height / 2.0, height), height / 2.0 + inset / 2.0);
+        assert_eq!(navigation_anchor_y(true, 75.0, height), 75.0);
+        assert_eq!(navigation_anchor_y(false, 0.0, height), 0.0);
+        assert_eq!(navigation_anchor_y(false, height / 2.0, height), height / 2.0);
+    }
+
+    #[test]
+    fn navigation_inset_is_bounded_by_the_viewport() {
+        assert_eq!(navigation_top_inset(true, 5.0), 5.0);
+        assert_eq!(navigation_top_inset(true, -1.0), 0.0);
+        assert_eq!(navigation_top_inset(true, f32::NAN), 0.0);
     }
 
     #[test]
