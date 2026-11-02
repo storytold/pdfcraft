@@ -100,21 +100,31 @@ pub struct DateTime {
     pub ss: u32,
 }
 
+/// `y` moved into 0..400. The Gregorian calendar repeats every 400 years (146,097 days, a whole
+/// number of weeks), so month lengths and weekdays are the same, and the year is always one
+/// chrono can represent, whatever `y` is.
+fn cycle_year(y: i32) -> i32 {
+    y.rem_euclid(400)
+}
+
+/// Number of days in month `m` (1-12) of year `y`, from chrono (the first of the next month less
+/// the first of this one). An invalid month counts 31 days, as before.
 fn days_in(y: i32, m: u32) -> u32 {
-    match m {
-        2 if (y % 4 == 0 && y % 100 != 0) || y % 400 == 0 => 29,
-        2 => 28,
-        4 | 6 | 9 | 11 => 30,
+    let y = cycle_year(y);
+    let first = |y: i32, m: u32| chrono::NaiveDate::from_ymd_opt(y, m, 1);
+    let next = if m == 12 { first(y + 1, 1) } else { first(y, m.saturating_add(1)) };
+    match (first(y, m), next) {
+        (Some(a), Some(b)) => u32::try_from((b - a).num_days()).unwrap_or(31),
         _ => 31,
     }
 }
 
-fn weekday(y: i32, m: u32, d: u32) -> usize {
-    // Sakamoto's method, in i64 so no year or day can overflow it.
-    const T: [i64; 12] = [0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4];
-    let y = i64::from(y) - i64::from(m < 3);
-    let t = T.get((m as usize).wrapping_sub(1)).copied().unwrap_or(0);
-    (y + y / 4 - y / 100 + y / 400 + t + i64::from(d)).rem_euclid(7) as usize
+/// The weekday (0 = Sunday) of `y-m-d`, from chrono; `None` for an invalid date (a month out of
+/// range, or a day the month doesn't have).
+fn weekday(y: i32, m: u32, d: u32) -> Option<usize> {
+    use chrono::Datelike;
+    let date = chrono::NaiveDate::from_ymd_opt(cycle_year(y), m, d)?;
+    usize::try_from(date.weekday().num_days_from_sunday()).ok()
 }
 
 /// One field of a date format, in the order the format has them.
@@ -367,10 +377,13 @@ pub fn format_date(dt: DateTime, fmt: &str) -> String {
             ('m', _) => {
                 let _ = write!(out, "{}", dt.m);
             }
-            ('d', 3..) => {
-                let name = DAYS.get(weekday(dt.y, dt.m, dt.d)).copied().unwrap_or_default();
-                out.push_str(if n >= 4 { name } else { name.get(..3).unwrap_or(name) });
-            }
+            ('d', 3..) => match weekday(dt.y, dt.m, dt.d).and_then(|w| DAYS.get(w)) {
+                Some(name) => out.push_str(if n >= 4 { name } else { name.get(..3).unwrap_or(name) }),
+                // A day the month doesn't have has no weekday: it shows as its number.
+                None => {
+                    let _ = write!(out, "{}", dt.d);
+                }
+            },
             ('d', 2) => {
                 let _ = write!(out, "{:02}", dt.d);
             }
@@ -530,4 +543,53 @@ pub fn validate(v: &Validate, value: &str) -> Result<(), String> {
         (None, Some(b)) => format!("Invalid value: must be less than or equal to {}.", fmt(*b)),
         (None, None) => String::new(),
     })
+}
+
+#[cfg(test)]
+mod calendar_tests {
+    use super::{DateTime, format_date, parse_date};
+
+    fn day(y: i32, m: u32, d: u32) -> DateTime {
+        DateTime { y, m, d, hh: 0, mm: 0, ss: 0 }
+    }
+
+    /// Leap years follow the Gregorian rules: every 4th year, but not every 100th, except every
+    /// 400th.
+    #[test]
+    fn typed_dates_follow_the_leap_year_rules() {
+        assert!(parse_date("2000-02-29", "yyyy-mm-dd").is_some());
+        assert!(parse_date("1900-02-29", "yyyy-mm-dd").is_none());
+        assert!(parse_date("1900-03-01", "yyyy-mm-dd").is_some());
+        assert!(parse_date("2100-02-28", "yyyy-mm-dd").is_some());
+        assert!(parse_date("2100-02-29", "yyyy-mm-dd").is_none());
+        assert!(parse_date("2024-02-29", "yyyy-mm-dd").is_some());
+        assert!(parse_date("2024-02-31", "yyyy-mm-dd").is_none());
+        assert!(parse_date("2026-04-31", "yyyy-mm-dd").is_none());
+    }
+
+    #[test]
+    fn weekdays_come_from_the_calendar() {
+        assert_eq!(format_date(day(2026, 11, 2), "dddd"), "Monday");
+        assert_eq!(format_date(day(2000, 2, 29), "dddd"), "Tuesday");
+        assert_eq!(format_date(day(1900, 3, 1), "ddd"), "Thu");
+        assert_eq!(format_date(day(2100, 2, 28), "dddd"), "Sunday");
+        // Past chrono's range the 400-year cycle gives the same weekday: 2,000,000,000 is a whole
+        // number of cycles after 2000, and 2000-01-01 was a Saturday.
+        assert_eq!(format_date(day(2_000_000_000, 1, 1), "dddd"), "Saturday");
+        // i32::MIN.rem_euclid(400) is 352, and 352-01-01 was a Tuesday.
+        assert_eq!(format_date(day(i32::MIN, 1, 1), "dddd"), "Tuesday");
+        // Year 0 began on a Saturday. Sakamoto's method with truncating division put January and
+        // February of year 0 (and of negative years) one day late.
+        assert_eq!(format_date(day(0, 1, 1), "dddd"), "Saturday");
+        assert_eq!(format_date(day(0, 2, 29), "dddd"), "Tuesday");
+    }
+
+    /// `DateTime` is public, so it can hold a day its month doesn't have. That day has no weekday
+    /// and shows as its number, not as the weekday of some other date.
+    #[test]
+    fn an_impossible_day_shows_its_number_not_a_weekday() {
+        assert_eq!(format_date(day(2026, 2, 30), "dddd d mmmm"), "30 30 February");
+        assert_eq!(format_date(day(2025, 2, 29), "ddd"), "29");
+        assert_eq!(format_date(day(2024, 13, 1), "dddd"), "1");
+    }
 }
