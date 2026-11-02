@@ -258,6 +258,41 @@ fn bulk_crop_dialog_switching_to_page_by_page_preserves_different_initial_crops(
 }
 
 #[test]
+fn bulk_crop_dialog_cancel_preserves_undo_and_redo_history() {
+    let mut h = harness();
+    let doc_id = h.state().views[0].id;
+    // Apply an initial crop
+    let _ = h.state_mut().session.apply(
+        doc_id,
+        pdfcraft_engine::Edit::SetPageBox {
+            pages: vec![0, 1],
+            which: pdfcraft_engine::PageBox::Crop,
+            spec: pdfcraft_engine::BoxSpec::Margins([20.0; 4]),
+        },
+    );
+    h.run_steps(2);
+    assert_eq!(size(&h, 0), (260.0, 360.0));
+
+    // Open bulk crop dialog
+    assert!(h.state_mut().execute("page.bulk_crop"));
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, Some(Dialog::BulkCrop));
+
+    // Cancel the dialog
+    h.get_by_label("Cancel").click();
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, None);
+
+    // Page must still be cropped to 260x360
+    assert_eq!(size(&h, 0), (260.0, 360.0));
+
+    // Undo should undo the initial 20pt crop directly
+    assert!(h.state_mut().execute("edit.undo"));
+    h.run_steps(2);
+    assert_eq!(size(&h, 0), (300.0, 400.0));
+}
+
+#[test]
 fn duplicate_pages_copies_the_current_page() {
     let mut h = harness();
     assert!(h.state_mut().execute("page.duplicate"));

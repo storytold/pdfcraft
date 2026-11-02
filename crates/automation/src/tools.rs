@@ -992,7 +992,7 @@ pub fn tools() -> Vec<ToolDef> {
         t(
             "page_bulk_crop",
             "Bulk crop pages",
-            "Bulk crop pages with blended, odd/even, or individual margins, plus content-aware auto-crop. Specify margins [left, bottom, right, top], or odd_margins and even_margins, or auto_crop: true with optional padding (default 18 pt / 0.25 in). Undoable.",
+            "Bulk crop pages with uniform, alternating odd/even, or content-aware auto-crop margins. Specify margins [left, bottom, right, top], or odd_margins and even_margins, or auto_crop: true with optional padding (default 18 pt / 0.25 in). Undoable.",
         )
         .cmd("page.bulk_crop")
         .with(schema(

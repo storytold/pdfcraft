@@ -92,8 +92,6 @@ pub struct BulkCropDraft {
     pub current_page: usize,
     /// Initialized flag.
     pub seeded: bool,
-    /// Flag indicating if the document was temporarily uncropped for the dialog preview.
-    pub was_temporarily_uncropped: bool,
     /// Active tab in Odd & Even mode (Odd or Even).
     pub odd_even_tab: OddEvenTab,
     /// Active interactive handle drag.
@@ -122,7 +120,6 @@ impl Default for BulkCropDraft {
             revert_pages: HashSet::new(),
             current_page: 0,
             seeded: false,
-            was_temporarily_uncropped: false,
             odd_even_tab: OddEvenTab::Odd,
             active_drag: None,
         }
@@ -201,9 +198,11 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
     }
 
     if let Some((is_explicit, per_page)) = scan_results {
-        for &(p, m) in &per_page {
-            if let Some(slot) = app.bulk_crop_draft.page_margins.get_mut(p) {
-                *slot = m;
+        if is_explicit {
+            for &(p, m) in &per_page {
+                if let Some(slot) = app.bulk_crop_draft.page_margins.get_mut(p) {
+                    *slot = m;
+                }
             }
         }
         let all_m: Vec<[f64; 4]> = per_page.iter().map(|(_, m)| *m).collect();
@@ -231,7 +230,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
                 app.bulk_crop_draft.revert_pages.clear();
             }
             BulkCropMode::PageByPage => {
-                if let Some(&(p, m)) = per_page.first() {
+                if is_explicit && let Some(&(p, m)) = per_page.first() {
                     app.bulk_crop_draft.edited_pages.insert(p);
                     app.bulk_crop_draft.revert_pages.remove(&p);
                     if let Some(slot) = app.bulk_crop_draft.page_margins.get_mut(p) {
@@ -263,12 +262,6 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
             })
             .collect();
 
-        let uncropped = if has_existing_crop {
-            app.apply_edit(Edit::SetPageBox { pages: (0..total_pages).collect(), which: PageBox::Crop, spec: BoxSpec::Remove })
-        } else {
-            false
-        };
-
         let d = &mut app.bulk_crop_draft;
         d.unit = unit;
         d.range_to = total_pages;
@@ -277,7 +270,6 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
         d.original_boxes = boxes.clone();
         d.current_page = cur;
         d.odd_even_tab = if cur % 2 == 0 { OddEvenTab::Odd } else { OddEvenTab::Even };
-        d.was_temporarily_uncropped = uncropped;
 
         if has_existing_crop {
             let cur_insets = existing_insets.get(cur).copied().unwrap_or([0.0; 4]);

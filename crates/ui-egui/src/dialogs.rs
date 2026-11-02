@@ -424,10 +424,6 @@ fn dialog_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: &m
             req.apply = go;
             req.bulk_crop_now = req.apply;
             req.close = req.apply || cancel;
-            if cancel && app.bulk_crop_draft.was_temporarily_uncropped {
-                app.undo();
-                app.bulk_crop_draft.was_temporarily_uncropped = false;
-            }
             if req.close {
                 app.bulk_crop_draft.seeded = false;
                 app.bulk_crop_scan = None;
@@ -1940,10 +1936,6 @@ fn finish_edits(app: &mut PdfCraftApp, dialog: Dialog, req: &mut Pending) {
         && let Some((_, id)) = app.active_ids()
     {
         let count = app.session.get(id).map(|d| d.info.pages.len()).unwrap_or(0);
-        if app.bulk_crop_draft.was_temporarily_uncropped {
-            app.undo();
-            app.bulk_crop_draft.was_temporarily_uncropped = false;
-        }
         let edit = app.bulk_crop_draft.build_edit(count);
         app.apply_edit(edit);
         app.bulk_crop_draft.seeded = false;
@@ -1974,10 +1966,6 @@ fn finish_close(app: &mut PdfCraftApp, dialog: Dialog, modal_closed: bool, req: 
     if modal_closed || req.close || replaces {
         // Only now: the number in Preferences can pass through 0 on its way to the one wanted.
         app.recent.truncate(app.recent_limit);
-        if app.bulk_crop_draft.was_temporarily_uncropped && !req.bulk_crop_now {
-            app.undo();
-            app.bulk_crop_draft.was_temporarily_uncropped = false;
-        }
         app.bulk_crop_scan = None;
         app.bulk_crop_draft.seeded = false;
         app.dialog = None;
