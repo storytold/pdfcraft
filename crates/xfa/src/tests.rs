@@ -5061,3 +5061,56 @@ fn a_bordered_section_round_a_field_split_over_three_pages_is_closed_on_every_pa
         }
     }
 }
+
+/// #5525 review: a field split into content areas of different sizes keeps moving down even
+/// where the margins of the sections round it leave no room. The first page area (used once) has
+/// a 720 point content area; the next has one only 36 points tall, under a section's 72 point
+/// bottom margin (or with its 72 point top margin taking the whole of it). The field still goes on
+/// 36 points a page, from the top of each small area, instead of breaking to new pages until the
+/// form has too many; the section, which can't hold it there, is drawn without its border, and
+/// the layout says so.
+#[test]
+fn a_field_split_into_areas_smaller_than_its_sections_margins_still_moves_on() {
+    let form = |margin: &str, border: &str| {
+        let xml = format!(
+            r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet>
+  <pageArea name="first"><occur max="1"/><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea>
+  <pageArea name="rest"><contentArea x="0.5in" y="0.5in" w="7.5in" h="0.5in"/><medium short="8.5in" long="11in"/></pageArea>
+ </pageSet>
+ <subform name="sec" layout="tb" w="7.5in">
+  <margin {margin}/>{border}
+  <draw name="filler" w="7.5in" h="8in"><value><text>above</text></value></draw>
+  {}
+ </subform>
+</subform>
+</template>
+</xdp:xdp>
+"##,
+            bordered_notes("notes", "3in", "")
+        );
+        layout_xml(&xml)
+    };
+    // Under a 72 point bottom margin the field starts at 612 and its first piece ends at 684; under
+    // a 72 point top margin it starts at 684 and its first piece ends at 756. Either way 144 points
+    // are left, four small areas' worth.
+    for (margin, first) in [(r#"bottomInset="1in""#, [612.0, 684.0]), (r#"topInset="1in""#, [684.0, 756.0])] {
+        let laid_out = form(margin, "");
+        let pages = match &laid_out {
+            Ok(f) => &f.pages,
+            Err(e) => panic!("{margin}: {e:?}"),
+        };
+        assert_eq!(pages.len(), 5, "{margin}");
+        let levels: Vec<Vec<f64>> = pages.iter().map(|p| level_lines(p, 540.0)).collect();
+        assert!(near_all(&levels[0], &first), "{margin}: first piece: {levels:?}");
+        for (i, l) in levels.iter().enumerate().skip(1) {
+            assert!(near_all(l, &[36.0, 72.0]), "{margin}: page {i}, the whole small area: {levels:?}");
+        }
+        let bordered = form(margin, "<border><edge/></border>").unwrap_or_else(|e| panic!("{margin}: bordered: {e:?}"));
+        assert_eq!(bordered.pages.len(), 5, "{margin}: bordered");
+        assert!(bordered.warnings.iter().any(|w| w.contains("without its border")), "{margin}: {:?}", bordered.warnings);
+    }
+}

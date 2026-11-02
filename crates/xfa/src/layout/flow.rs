@@ -154,7 +154,22 @@ impl Layouter<'_> {
             let (rect, _, placed) = self.cursor();
             // A field being split leaves room for the bottom margins of the flowed subforms round it.
             let margins = if field.is_some() { self.frames_bottom() } else { 0.0 };
-            let limit = rect.bottom() - margins + shift;
+            let mut limit = rect.bottom() - margins + shift;
+            if field.is_some() && !first_segment && limit <= seg_top + 0.01 {
+                // The subforms' margins leave nothing of this content area (a smaller one than
+                // the field started in): breaking on would leave the same nothing in each like it.
+                // The field goes on past their bottom margins, and from the top of the area when
+                // their top margins took all of it, and they, which can't hold it here, are drawn
+                // without their border, as round anything that runs out of them.
+                limit = rect.bottom() + shift;
+                if limit <= seg_top + 0.01 {
+                    shift = seg_top - rect.y;
+                    limit = rect.bottom() + shift;
+                }
+                for f in &mut self.frames {
+                    f.lost = true;
+                }
+            }
             let mut cut = limit;
             if rect.h < 1.0 {
                 // No room to split into: leave the rest here.
