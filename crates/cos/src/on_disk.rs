@@ -373,7 +373,8 @@ impl<'a> Walk<'a> {
                         continue;
                     };
                     let end = start.saturating_add(len);
-                    let structural = matches!(dict.name(b"Type"), Some(b"ObjStm" | b"XRef"));
+                    // hayro reads any stream an entry names as an object stream, whatever its /Type.
+                    let structural = matches!(dict.name(b"Type"), Some(b"ObjStm" | b"XRef")) || dict.contains(b"First");
                     let keep = len < MIN_BODY || structural;
                     if !self.hold_to(if keep { end } else { start })? {
                         return Ok(Next::GiveUp);

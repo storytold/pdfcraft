@@ -1,6 +1,6 @@
 use super::*;
 use pdfcraft_cos::{ByteSource, OnDiskFile};
-use pdfcraft_testkit::Pdf;
+use pdfcraft_testkit::{Pdf, stream_obj};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 /// A file in memory, read through [`ByteSource`], that can stop being readable.
@@ -200,6 +200,57 @@ fn a_page_after_a_failed_read_reads_again_and_never_reuses_what_failed() {
         assert_eq!(page.error, None, "{name}");
         let whole = PageRenderer::new(Arc::new(pdf), RenderConfig::default()).render(RenderRequest { page: 1, scale: 1.0, ..Default::default() });
         assert!(page.rgba == whole.rgba, "{name}: the page differs once the file is back");
+    }
+}
+
+/// Two pages filled black through a graphics state that hides the fill. It is in an object stream
+/// with `dict` in its dictionary, found through a cross-reference stream, and read only to draw.
+/// Object 9 is a body to leave on disk.
+fn in_an_object_stream(dict: &str) -> Vec<u8> {
+    let page = "<</Type/Page/Parent 2 0 R/MediaBox[0 0 100 100]/Contents 5 0 R/Resources<</ExtGState<</G 7 0 R>>>>>>";
+    let objects = [
+        (1, b"<</Type/Catalog/Pages 2 0 R>>".to_vec()),
+        (2, b"<</Type/Pages/Kids[3 0 R 4 0 R]/Count 2>>".to_vec()),
+        (3, page.as_bytes().to_vec()),
+        (4, page.as_bytes().to_vec()),
+        (5, stream_obj("", "/G gs 0 0 0 rg 0 0 100 100 re f")),
+        (6, stream_obj(dict, format!("{:<5000}", "7 0 <</ca 0>>"))),
+        (8, b"4".to_vec()),
+        (9, stream_obj("", vec![7_u8; 40_000])),
+    ];
+    let entry = |kind: u8, value: usize| [&[kind], &(value as u32).to_be_bytes()[..], &[0, 0]].concat();
+    let mut table = vec![vec![0; 7]; 11];
+    let mut pdf = b"%PDF-1.7\n".to_vec();
+    for (number, body) in objects {
+        table[number] = entry(1, pdf.len());
+        pdf.extend(format!("{number} 0 obj\n").as_bytes());
+        pdf.extend(body);
+        pdf.extend(b"\nendobj\n");
+    }
+    table[7] = entry(2, 6);
+    let start = pdf.len();
+    table[10] = entry(1, start);
+    pdf.extend(b"10 0 obj\n");
+    pdf.extend(stream_obj("/Type/XRef/Size 11/W[1 4 2]/Root 1 0 R", table.concat()));
+    pdf.extend(format!("\nendobj\nstartxref\n{start}\n%%EOF\n").as_bytes());
+    pdf
+}
+
+#[test]
+fn an_object_stream_stays_in_memory_whatever_its_dictionary_calls_it() {
+    // A parse keeps what it read from one, so a failed read would look complete on the next page.
+    let dicts =
+        ["/Type/ObjStm/N 1/First 4", "/N 1/First 4", "/Type 99 0 R/N 1/First 4", "/Type/Other/N 1/First 4", "/N 1/F#69rst 4", "/N 1/First 8 0 R"];
+    for dict in dicts {
+        let (held, file) = on_disk(in_an_object_stream(dict));
+        assert_eq!(held.body_count(), 1, "{dict}");
+        let mut renderer = PageRenderer::new(held, RenderConfig::default());
+        file.gone.store(true, Ordering::Relaxed);
+        for page in 0..2 {
+            let drawn = renderer.render(RenderRequest { page, scale: 1.0, ..Default::default() });
+            assert_eq!(drawn.error, None, "{dict}");
+            assert!(drawn.rgba.as_chunks::<4>().0.iter().all(|p| p[0] == 255), "{dict}: page {page} drew without its graphics state");
+        }
     }
 }
 
