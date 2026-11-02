@@ -546,11 +546,33 @@ impl Automation {
                 replace,
                 file: self.mark_file(a)?,
             },
+            "doc_printer_marks" => {
+                use pdfcraft_engine::PrinterMarks;
+                let flag = |k: &str, default: bool| -> Result<bool> { Ok(a.opt_bool(k)?.unwrap_or(default)) };
+                let (y, m, d) = self.session.today();
+                let settings = PrinterMarks {
+                    trim: flag("trim", true)?,
+                    bleed: flag("bleed", true)?,
+                    registration: flag("registration", true)?,
+                    color_bars: flag("color_bars", true)?,
+                    page_info: flag("page_info", true)?,
+                    line_weight: a.opt_num("line_weight")?.unwrap_or(0.25),
+                    make_room: match a.opt_num("make_room")? {
+                        Some(r) if r < 0.0 => None,
+                        Some(r) => Some(r),
+                        None => Some(36.0),
+                    },
+                    label: a.opt_str("label")?.map(str::to_string).unwrap_or_else(|| self.doc(a).map(|d| d.name.clone()).unwrap_or_default()),
+                    date: a.opt_str("date")?.map(str::to_string).unwrap_or_else(|| format!("{y:04}-{m:02}-{d:02}")),
+                };
+                Edit::AddPrinterMarks { pages, settings, replace: a.opt_bool("replace")?.unwrap_or(true) }
+            }
             _ => {
                 let kind = match a.str("kind")? {
                     "header_footer" => MarkKind::HeaderFooter,
                     "watermark" => MarkKind::Watermark,
                     "background" => MarkKind::Background,
+                    "printer_marks" => MarkKind::PrinterMarks,
                     other => return Err(ToolError::InvalidArgs(format!("unknown kind {other:?}"))),
                 };
                 Edit::RemoveMarks { kind }

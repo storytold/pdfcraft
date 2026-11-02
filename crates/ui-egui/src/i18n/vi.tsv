@@ -2819,6 +2819,21 @@ key	Space	Space
 	Edit this PDF	Chỉnh sửa PDF này
 	Export this PDF	Xuất PDF này
 	Find text or tools	Tìm văn bản hoặc công cụ
+	Add printer marks…	Thêm dấu máy in…
+	Remove printer marks	Gỡ dấu máy in
+	Marks	Dấu
+	All marks	Tất cả các dấu
+	Trim marks	Dấu xén
+	Bleed marks	Dấu tràn lề
+	Registration marks	Dấu chồng màu
+	Colour bars	Thanh màu
+	Page information	Thông tin trang
+	Line weight	Độ dày nét
+	Widen the page to make room	Mở rộng trang để có chỗ
+	Room on each side	Khoảng trống mỗi bên
+	The trim box is kept where it is, so the printed page cuts the same.	Hộp xén được giữ nguyên vị trí, nên trang in được xén như cũ.
+	Printer marks added	Đã thêm dấu máy in
+	printer marks	dấu máy in
 	Attach a file…	Đính kèm tệp…
 	Delete attachment	Xóa tệp đính kèm
 	Attaching files is not available on the web yet	Chưa thể đính kèm tệp trên web

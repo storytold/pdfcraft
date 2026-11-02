@@ -100,6 +100,10 @@ fn every_registered_command_is_implemented() {
         if spec.id == "edit.redo" {
             app.undo();
         }
+        if spec.id == "prepress.marks.remove" {
+            use pdfcraft_engine::{Edit, PrinterMarks};
+            app.apply_edit(Edit::AddPrinterMarks { pages: vec![0], settings: PrinterMarks::default(), replace: false });
+        }
         if spec.id.starts_with("edit.") && (spec.id.ends_with(".update") || spec.id.ends_with(".remove")) {
             use pdfcraft_engine::{Background, Edit, HeaderFooter, Watermark};
             let mut hf = HeaderFooter::default();

@@ -9457,6 +9457,35 @@ fn a_root_less_write_output_is_atomic_too() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Printer marks through the tools: added around the trim box (the page widened to make room),
+/// removable by kind.
+#[test]
+fn printer_marks_through_tools() {
+    let dir = workdir("printer-marks");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let width_before = ok(&mut a, "doc_info", json!({ "doc": doc }))["pages"][0]["width"].as_f64().unwrap_or(0.0);
+    let r = ok(&mut a, "doc_printer_marks", json!({ "doc": doc, "pages": [1], "color_bars": false, "line_weight": 0.5 }));
+    assert_eq!(r["undo"], "Add printer marks");
+    let info = ok(&mut a, "doc_info", json!({ "doc": doc }));
+    let width_after = info["pages"][0]["width"].as_f64().unwrap_or(0.0);
+    assert!(width_after > width_before + 70.0 || width_before == 0.0, "widened to make room: {width_before} → {width_after}; {info}");
+    let r = ok(&mut a, "doc_remove_marks", json!({ "doc": doc, "kind": "printer_marks" }));
+    assert_eq!(r["undo"], "Remove printer marks");
+    for bad in [json!({ "line_weight": -1 }), json!({ "line_weight": 0 }), json!({ "line_weight": 10000 }), json!({ "make_room": 1000000 })] {
+        let mut args = bad.clone();
+        args["doc"] = json!(doc);
+        assert!(matches!(a.call("doc_printer_marks", &args), Err(ToolError::Failed(_) | ToolError::InvalidArgs(_))), "{bad}");
+    }
+    assert!(matches!(
+        a.call(
+            "doc_printer_marks",
+            &json!({ "doc": doc, "trim": false, "bleed": false, "registration": false, "color_bars": false, "page_info": false })
+        ),
+        Err(ToolError::Failed(_) | ToolError::InvalidArgs(_))
+    ));
+}
+
 #[test]
 fn attaching_and_deleting_files_through_the_tools() {
     let dir = workdir("attach");
