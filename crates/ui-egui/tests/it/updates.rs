@@ -119,3 +119,57 @@ fn the_check_at_start_offers_the_prompt_and_later_dismisses_it() {
     h.run_steps(3);
     assert!(h.query_by_label_contains("is available").is_none(), "Later closes the prompt");
 }
+
+#[test]
+fn compiled_build_policy_keeps_manual_checks_available() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let calls = Arc::new(AtomicUsize::new(0));
+    let observed = calls.clone();
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        let calls = observed.clone();
+        app.set_update_source(Arc::new(move || {
+            calls.fetch_add(1, Ordering::SeqCst);
+            Ok(None)
+        }));
+        app.set_startup_update_check(true);
+        app
+    });
+    let labelled = pdfcraft_engine::build_info::LABEL.is_some_and(|s| !s.trim().is_empty());
+    for _ in 0..20 {
+        h.run_steps(2);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    let automatic = if labelled { 0 } else { 1 };
+    if !labelled {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while calls.load(Ordering::SeqCst) == 0 {
+            h.run_steps(2);
+            assert!(std::time::Instant::now() < deadline, "timed out waiting for the ordinary startup check");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+    assert_eq!(calls.load(Ordering::SeqCst), automatic, "compiled labels suppress startup network requests");
+    h.state_mut().execute("help.check_updates");
+    settle(&mut h);
+    assert_eq!(calls.load(Ordering::SeqCst), automatic + 1, "manual checks remain available");
+    h.get_by_label_contains("is the newest version available");
+}
+
+#[test]
+fn compiled_build_label_names_the_actual_viewport() {
+    let mut h = harness(Ok(None));
+    h.run_steps(3);
+    let expected = match pdfcraft_engine::build_info::LABEL.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(label) => format!("PdfCraft ({label})"),
+        None => "PdfCraft".into(),
+    };
+    assert_eq!(h.state().window_title, expected);
+    assert_eq!(h.state().page_title, expected);
+    let bytes = h.state().session.create_blank(200.0, 300.0, 1).unwrap().as_ref().clone();
+    h.state_mut().open_bytes("Synthetic.pdf", None, bytes).unwrap();
+    h.run_steps(3);
+    assert_eq!(h.state().window_title, format!("Synthetic.pdf — {expected}"));
+    assert_eq!(h.state().page_title, format!("Synthetic.pdf — {expected}"));
+}
