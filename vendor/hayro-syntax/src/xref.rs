@@ -4,6 +4,7 @@ use crate::crypto::{DecryptionError, DecryptionTarget, Decryptor, get};
 use crate::data::Data;
 use crate::metadata::Metadata;
 use crate::object::Name;
+use crate::object::Number;
 use crate::object::ObjectIdentifier;
 use crate::object::Stream;
 use crate::object::dict::keys::{
@@ -80,6 +81,65 @@ pub(crate) fn fallback(data: PdfData, password: &[u8]) -> Option<XRef> {
     }
 }
 
+/// PdfCraft patch: an `N G obj` header for the repair scan, taking a generation number that
+/// cannot be read as 0.
+///
+/// A generation number is at most 65,535 (ISO 32000-2 §7.5.4), so `3 18446744073709551616 obj` is
+/// malformed and [`ObjectIdentifier::read`] is right to refuse it everywhere else. This scan runs
+/// only when a file's cross-reference table is unusable and its objects are being recovered by
+/// reading the file, where refusing the header drops the object and whatever it holds (#5580).
+/// Before #427 the digits wrapped, and 2^64 wrapped to exactly 0, which is the only reason such a
+/// file used to open.
+///
+/// Only here: reading numbers anywhere else is unchanged.
+fn read_object_header<'a>(r: &mut Reader<'a>, ctx: &ReaderContext<'a>) -> Option<ObjectIdentifier> {
+    let mut strict = r.clone();
+    if let Some(obj_id) = strict.read::<ObjectIdentifier>(ctx) {
+        *r = strict;
+        return Some(obj_id);
+    }
+    // On a clone as well, so a header that isn't one leaves `r` where it was for the caller.
+    let mut lenient = r.clone();
+    let obj_number = lenient.read_without_context::<i32>()?;
+    lenient.skip_white_spaces_and_comments();
+    // Any number at all in the generation position, including one no generation may be.
+    lenient.skip::<Number>(false)?;
+    lenient.skip_white_spaces_and_comments();
+    lenient.forward_tag(b"obj")?;
+    *r = lenient;
+    Some(ObjectIdentifier::new(obj_number, 0))
+}
+
+/// PdfCraft patch: the body of the object at `offset` whose `N G obj` header cannot be read
+/// strictly, for a table rebuilt by scanning the file (#5580). The steps are
+/// `IndirectObject::read`'s, with [`read_object_header`] in place of the strict identifier.
+fn read_repaired_body<'a, T>(
+    data: &'a [u8],
+    offset: usize,
+    id: ObjectIdentifier,
+    ctx: &ReaderContext<'a>,
+) -> Option<T>
+where
+    T: ObjectLike<'a>,
+{
+    let mut r = Reader::new(data);
+    r.jump(offset);
+    // The number is what identifies the object; the generation is what could not be read.
+    if read_object_header(&mut r, ctx)?.obj_number != id.obj_number {
+        return None;
+    }
+    let mut ctx = ctx.clone();
+    if ctx.parent_chain_contains(&id) {
+        warn!("cycle detected in indirect object: {id:?}");
+
+        return None;
+    }
+    ctx.set_obj_number(id);
+    ctx.parent_chain_push(id);
+    r.skip_white_spaces_and_comments();
+    r.read_with_context::<T>(&ctx)
+}
+
 fn fallback_xref_map<'a>(data: &'a PdfData, password: &[u8]) -> (XrefMap, Option<XRefInput<'a>>) {
     fallback_xref_map_inner(data, ReaderContext::dummy(), true, password)
 }
@@ -91,6 +151,10 @@ fn fallback_xref_map_inner<'a>(
     password: &[u8],
 ) -> (XrefMap, Option<XRefInput<'a>>) {
     let mut xref_map = FxHashMap::default();
+    // PdfCraft patch: the generation-0 keys below that stand in for a header with another
+    // generation, so a later header can replace one while a real `N 0 obj` is never displaced
+    // (noted in review of #5580).
+    let mut aliases: rustc_hash::FxHashSet<ObjectIdentifier> = rustc_hash::FxHashSet::default();
     let mut trailer_dicts = vec![];
     let mut root_ref = None;
 
@@ -105,12 +169,32 @@ fn fallback_xref_map_inner<'a>(
 
         // First try to check if we have an object identifier.
         if r.peek_byte().is_some_and(|b: u8| b.is_ascii_digit()) {
-            if let Some(obj_id) = r.read::<ObjectIdentifier>(&dummy_ctx) {
+            if let Some(obj_id) = read_object_header(&mut r, &dummy_ctx) {
                 let mut cloned = r.clone();
                 // Check that the object following it is actually valid before inserting it.
                 cloned.skip_white_spaces_and_comments();
                 if cloned.skip::<Object<'_>>(false).is_some() {
                     xref_map.insert(obj_id, EntryType::Normal(cur_pos));
+                    // PdfCraft patch: also reachable by object number alone, so a reference that
+                    // names a different generation than the header still finds it. A rebuilt
+                    // table has no revision history to tell two generations apart, and a file
+                    // that needs rebuilding references everything as `N 0 R` whatever its headers
+                    // say: `poppler-85140-0.pdf` has one page whose header reads
+                    // `3 18446744073709551616 obj` with a page tree pointing at `3 0 R`, so the
+                    // page was lost and the file did not open at all (#5580). `or_insert`, so a
+                    // real `N 0 obj` is never displaced by this alias.
+                    let by_number = ObjectIdentifier::new(obj_id.obj_number, 0);
+                    if obj_id.gen_number == 0 {
+                        // A real `N 0 obj`: it owns the key from here on, and the last one wins
+                        // as every other entry does.
+                        aliases.remove(&by_number);
+                    } else if !xref_map.contains_key(&by_number) || aliases.contains(&by_number) {
+                        // Stand in for it, and let a later header for the same number replace the
+                        // stand-in -- the exact key moves on, so an alias left behind would send
+                        // `N 0 R` to a body the exact key no longer names (noted in review).
+                        xref_map.insert(by_number, EntryType::Normal(cur_pos));
+                        aliases.insert(by_number);
+                    }
                     last_obj_num = Some(obj_id);
                     dummy_ctx.set_obj_number(obj_id);
                 }
@@ -498,6 +582,14 @@ impl XRef {
                 // Try to yield in the order the objects appeared in the
                 // PDF.
                 elements.sort_by(|e1, e2| e1.1.cmp(&e2.1));
+                // PdfCraft patch: one object per location. A rebuilt table can hold two keys for
+                // one object -- its own generation and the generation-0 stand-in (#5580) -- and
+                // enumeration yielded the object once for each, so a document recovered by
+                // `Pages::new_brute_force` reported the page twice (noted in review). Both keys
+                // stay for lookups; only this walk is deduplicated. The object number is part of
+                // the key: an object stream at (offset, 0) and its first member, also
+                // (offset, 0), are two objects.
+                elements.dedup_by(|a, b| a.1 == b.1 && a.0.obj_number == b.0.obj_number);
 
                 let mut iter = elements.into_iter();
 
@@ -653,10 +745,27 @@ impl XRef {
                 }
 
                 if let Some(object) = r.read_with_context::<IndirectObject<T>>(&ctx) {
-                    if object.id() == &id {
+                    // PdfCraft patch: in a table rebuilt by scanning the file, the object number
+                    // is what identifies an object. There is no revision history to tell two
+                    // generations apart, the scan already files objects found in object streams
+                    // under generation 0, and a malformed generation in a header would otherwise
+                    // make the object unreadable through the reference that names it (#5580). A
+                    // table read from the file's own xref keeps the exact match.
+                    if object.id() == &id || (repaired && object.id().obj_number == id.obj_number) {
                         return Some(Fetched::Object(object.get()));
                     }
                 } else {
+                    // PdfCraft patch: the strict read of the header failed. In a table rebuilt by
+                    // scanning the file that can be a generation number no generation may be --
+                    // `3 18446744073709551616 obj` -- and refusing it loses the object the
+                    // reference names (#5580). The object number still has to be the one asked
+                    // for; only an unreadable generation is tolerated, and only here.
+                    if repaired
+                        && let Some(object) =
+                            read_repaired_body::<T>(repr.data.get().as_ref(), offset, id, &ctx)
+                    {
+                        return Some(Fetched::Object(object));
+                    }
                     // There is a valid object at the offset, it's just not of the type the caller
                     // expected, which is fine.
                     if r.skip::<IndirectObject<Object<'_>>>(false).is_some() {
@@ -1732,6 +1841,18 @@ mod tests {
                 job.join().unwrap();
             }
         }
+    }
+
+    #[test]
+    fn an_object_stream_and_its_first_member_are_both_enumerated() {
+        // Both sit at (stream offset, 0) in `objects`' ordering; one object per location must
+        // not cost either of them.
+        let pdf = crate::Pdf::new(object_stream_fixture(false)).unwrap();
+        let objects: Vec<_> = pdf.xref().objects().into_iter().collect();
+        assert!(objects.iter().any(|o| matches!(o, Object::Stream(_))));
+        assert!(objects.iter().any(
+            |o| matches!(o, Object::Dict(d) if d.get::<i32>(b"Marker") == Some(123))
+        ));
     }
 
     #[test]
