@@ -159,7 +159,7 @@ fn plural_sl(n: u64) -> usize {
 }
 
 /// The registry. English first: it is the fallback and the source language.
-pub static LANGUAGES: [LangInfo; 35] = [
+pub static LANGUAGES: [LangInfo; 36] = [
     LangInfo { code: "en", name: "English", source: "", plural: plural_one_other, rtl: false, catalog: OnceLock::new() },
     LangInfo { code: "ja", name: "日本語", source: include_str!("i18n/ja.tsv"), plural: plural_none, rtl: false, catalog: OnceLock::new() },
     // Simplified Chinese; `zh`, `zh-CN`, `zh-SG` and `zh-Hans-*` locales resolve here (see `candidates`).
@@ -269,6 +269,10 @@ pub static LANGUAGES: [LangInfo; 35] = [
     // Lao; every `lo-*` locale (`lo-LA`, `lo_LA.UTF-8` ...) resolves here.
     LangInfo {
         code: "lo", name: "ພາສາລາວ", source: include_str!("i18n/lo.tsv"), plural: plural_none, rtl: false, catalog: OnceLock::new()
+    },
+    // Tamil; every `ta-*` locale (`ta-IN`, `ta_IN.UTF-8`) resolves here. Tamil uses a two-form plural system.
+    LangInfo {
+        code: "ta", name: "தமிழ்", source: include_str!("i18n/ta.tsv"), plural: plural_one_other, rtl: false, catalog: OnceLock::new()
     },
     // Hindi; every `hi-*` locale (`hi-IN`, `hi_IN.UTF-8`) resolves here. CLDR `hi` has "one"
     // (0 and 1) and "other", but the catalog's nouns are the same in both ("{n} पृष्ठ"), so
@@ -392,6 +396,7 @@ impl Lang {
             "ru" => "Russian",
             "kk" => "Kazakh",
             "bg" => "Bulgarian",
+            "ta" => "Tamil",
             "te" => "Telugu",
             "hu" => "Hungarian",
             "uk" => "Ukrainian",
