@@ -1,4 +1,7 @@
-use pdfcraft_render::{PageText, TextGlyph, text::fold_case};
+use pdfcraft_render::{
+    PageText, TextGlyph,
+    text::{fold_apostrophe, fold_case},
+};
 use std::ops::Range;
 
 fn page(parts: &[&str]) -> PageText {
@@ -12,7 +15,7 @@ fn page(parts: &[&str]) -> PageText {
 // The original straightforward search is an independent oracle for valid page metadata.
 fn reference(page: &PageText, query: &str, sensitive: bool, whole: bool, limit: usize) -> Vec<Range<usize>> {
     let fold = |s: &str| if sensitive { s.to_owned() } else { fold_case(s) };
-    let needle: Vec<char> = fold(query).split_whitespace().collect::<Vec<_>>().join(" ").chars().collect();
+    let needle: Vec<char> = fold(query).split_whitespace().collect::<Vec<_>>().join(" ").chars().map(fold_apostrophe).collect();
     if needle.is_empty() || limit == 0 {
         return Vec::new();
     }
@@ -22,7 +25,7 @@ fn reference(page: &PageText, query: &str, sensitive: bool, whole: bool, limit: 
             chars.push((' ', i));
         }
         for c in fold(&glyph.text).chars() {
-            let c = if c.is_whitespace() { ' ' } else { c };
+            let c = if c.is_whitespace() { ' ' } else { fold_apostrophe(c) };
             if c != ' ' || chars.last().is_none_or(|&(last, _)| last != ' ') {
                 chars.push((c, i));
             }

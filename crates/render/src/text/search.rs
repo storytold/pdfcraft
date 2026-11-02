@@ -1,5 +1,5 @@
 //! Literal search in normalized page text, retaining the original glyph owners.
-use super::{PageText, fold_case};
+use super::{PageText, fold_apostrophe, fold_case};
 use std::ops::Range;
 
 pub(super) fn find(page: &PageText, query: &str, sensitive: bool, whole_words: bool, limit: usize) -> Vec<Range<usize>> {
@@ -7,7 +7,7 @@ pub(super) fn find(page: &PageText, query: &str, sensitive: bool, whole_words: b
         return Vec::new();
     }
     let fold = |s: &str| if sensitive { s.to_owned() } else { fold_case(s) };
-    let needle: Vec<char> = fold(query).split_whitespace().collect::<Vec<_>>().join(" ").chars().collect();
+    let needle: Vec<char> = fold(query).split_whitespace().collect::<Vec<_>>().join(" ").chars().map(fold_apostrophe).collect();
     if needle.is_empty() {
         return Vec::new();
     }
@@ -19,7 +19,7 @@ pub(super) fn find(page: &PageText, query: &str, sensitive: bool, whole_words: b
             chars.push((' ', i));
         }
         for c in fold(&glyph.text).chars() {
-            let c = if c.is_whitespace() { ' ' } else { c };
+            let c = if c.is_whitespace() { ' ' } else { fold_apostrophe(c) };
             if c != ' ' || chars.last().is_none_or(|last| last.0 != ' ') {
                 chars.push((c, i));
             }

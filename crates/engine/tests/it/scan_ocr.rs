@@ -237,6 +237,25 @@ fn scan_recognizes_accents_in_requested_languages() {
 }
 
 #[test]
+fn skewed_lines_are_read_straightened_without_deskewing_the_page() {
+    if !ocr::available() {
+        return;
+    }
+    let sentence = "Quarterly invoice numbers match the signed delivery receipts.
+Warehouse staff confirmed every pallet before shipping.
+";
+    let (mut s, id) = scan(&sentence.repeat(6), 0, 4.0);
+    let found = s.recognize_text(id, &[], OcrSettings { auto_rotate: false, deskew: false, ..Default::default() }).unwrap();
+    assert_eq!(found[0].correction.deskew, 0.0, "{found:?}");
+    let extracted = text(&s, id);
+    // Read from their bounding boxes, these lines each take in their neighbours and nothing
+    // survives; straightened, the recognizer still slips now and then, so most is enough.
+    for expected in ["Quarterly", "invoice", "delivery", "receipts.", "Warehouse", "confirmed", "pallet", "shipping."] {
+        assert!(extracted.matches(expected).count() >= 4, "{expected:?} in {extracted:?}");
+    }
+}
+
+#[test]
 fn french_ocr_preserves_capitals_cedilla_ligature_and_apostrophes_after_save() {
     if !ocr::available() {
         eprintln!("skipped: run cargo xtask models");

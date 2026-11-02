@@ -1,5 +1,7 @@
 # PdfCraft roadmap
 
+> **Last reviewed:** 2026-11-02 · **Last updated:** 2026-11-02 · **Change:** minor (M10 #1012: community OCR proposals: skewed lines are read straightened, language-specific repairs of dashes, German quotes, elided `l'` and Catalan `l·l`, apostrophe forms match in search; estimates unchanged)
+
 > **Last reviewed:** 2026-11-02 · **Last updated:** 2026-11-02 · **Change:** minor (M10 #1012: integrate main 168a3cb9 across the engine, edit, automation and UI module splits; ONNX model discovery requires the multilingual files; a skewed page with annotations is recognized unstraightened instead of failing the run; batch OCR always adds text; estimates unchanged)
 
 > **Last reviewed:** 2026-10-20 · **Last updated:** 2026-10-20 · **Change:** minor (M10 #1012: integrate ec0a9650, preserve OCR replacement metrics alongside cached space widths; estimates unchanged)
