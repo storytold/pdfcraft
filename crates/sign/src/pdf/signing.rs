@@ -479,6 +479,20 @@ fn appearance(doc: &mut Document, rect: [f64; 4], turn: i64, name: &str, cert: &
             )));
         }
     }
+    let measure = |s: &str, sz: f64| -> f64 { if needs_unicode { inter_width(s, sz) } else { helvetica_width(s, sz) } };
+    let wrap_text =
+        |s: &str, sz: f64, max_w: f64| -> Vec<String> { if needs_unicode { wrap_with(s, sz, max_w, inter_width) } else { wrap(s, sz, max_w) } };
+    // A name the name column cannot show at COMFORTABLE_NAME_PT is abbreviated: its first two words, the
+    // initials of the middle ones and its last word. Only the column shows it: the details keep the full name.
+    let shown_name = if opts.graphic.is_none() && a.name && w > 1.0 && h > 1.0 {
+        let column = (w * 0.4 - 2.0 * (h * 0.06).clamp(1.0, 6.0)).max(1.0);
+        let readable = wrap_text(name, COMFORTABLE_NAME_PT, column);
+        let fits = readable.len() as f64 * COMFORTABLE_NAME_PT * 1.1 <= h - 2.0 * (h * 0.06).clamp(1.0, 6.0)
+            && readable.iter().all(|l| measure(l, COMFORTABLE_NAME_PT) <= column);
+        if fits { name.to_string() } else { abbreviate_name(name) }
+    } else {
+        name.to_string()
+    };
     let mut lines: Vec<String> = Vec::new();
     let label = |l: &str, v: &str| if a.labels { format!("{l}{v}") } else { v.to_string() };
     // The labels are the caller's words, so a signature signed in another language reads in it.
@@ -526,9 +540,6 @@ fn appearance(doc: &mut Document, rect: [f64; 4], turn: i64, name: &str, cert: &
         fonts.set(b"Helv".to_vec(), Object::Dict(font));
         ("Helv".to_string(), None)
     };
-    let measure = |s: &str, sz: f64| -> f64 { if needs_unicode { inter_width(s, sz) } else { helvetica_width(s, sz) } };
-    let wrap_text =
-        |s: &str, sz: f64, max_w: f64| -> Vec<String> { if needs_unicode { wrap_with(s, sz, max_w, inter_width) } else { wrap(s, sz, max_w) } };
     let encode_line =
         |l: &str| -> Vec<u8> { if let Some(m) = &metrics { literal(&m.encode(l).unwrap_or_else(|| win_ansi(l))) } else { literal(&win_ansi(l)) } };
     if w > 1.0 && h > 1.0 {
@@ -553,7 +564,7 @@ fn appearance(doc: &mut Document, rect: [f64; 4], turn: i64, name: &str, cert: &
         // A long name wraps within two fifths of the box, so the details keep the rest.
         let name_column = (opts.graphic.is_none() && a.name).then(|| {
             let max_w = (w * 0.4 - 2.0 * pad).max(1.0);
-            let (size, words) = fit_text(&[name.to_string()], (h * 0.4).min(36.0), max_w, h - 2.0 * pad, 1.1);
+            let (size, words) = fit_text(std::slice::from_ref(&shown_name), (h * 0.4).min(36.0), max_w, h - 2.0 * pad, 1.1);
             let width = words.iter().map(|l| measure(l, size)).fold(0.0, f64::max);
             (size, words, width)
         });
@@ -621,6 +632,9 @@ fn appearance(doc: &mut Document, rect: [f64; 4], turn: i64, name: &str, cert: &
 /// The smallest size visible text is drawn at: smaller, it is shortened instead.
 const READABLE_PT: f64 = 5.0;
 
+/// The size a name is expected to fit at; a name that cannot is abbreviated.
+const COMFORTABLE_NAME_PT: f64 = 8.0;
+
 /// `lines` at `size`, kept inside `max_h` by dropping the lines past what fits. The last line kept
 /// ends in "..." when any were dropped; each line is shortened to `max_w` by [`ellipsize`].
 fn shorten(lines: &[String], size: f64, max_w: f64, max_h: f64, leading: f64, measure: &impl Fn(&str, f64) -> f64) -> Vec<String> {
@@ -631,6 +645,19 @@ fn shorten(lines: &[String], size: f64, max_w: f64, max_h: f64, leading: f64, me
     let mut kept: Vec<String> = lines[..capacity - 1].iter().map(|l| ellipsize(l, size, max_w, measure)).collect();
     kept.push(ellipsize(&format!("{} ...", lines[capacity - 1]), size, max_w, measure));
     kept
+}
+
+/// `name` with its middle words cut to initials ("Ana B. C. Silva"); the first two words and the last
+/// one stay whole. A name of three words or fewer has no middle words, so it is returned as it is.
+fn abbreviate_name(name: &str) -> String {
+    let words: Vec<&str> = name.split_whitespace().collect();
+    if words.len() <= 3 {
+        return name.to_string();
+    }
+    let mut out: Vec<String> = words[..2].iter().map(|w| w.to_string()).collect();
+    out.extend(words[2..words.len() - 1].iter().filter_map(|w| w.chars().next()).map(|c| format!("{c}.")));
+    out.push(words[words.len() - 1].to_string());
+    out.join(" ")
 }
 
 /// `line` if it fits `max_w` at `size`, else its longest prefix that does, followed by "...".
@@ -651,4 +678,18 @@ fn ellipsize(line: &str, size: f64, max_w: f64, measure: &impl Fn(&str, f64) -> 
 pub(crate) fn fmt(v: f64) -> String {
     let s = format!("{v:.2}");
     s.trim_end_matches('0').trim_end_matches('.').to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::abbreviate_name;
+
+    #[test]
+    fn long_names_keep_two_first_words_and_the_last() {
+        assert_eq!(abbreviate_name("Christopher Alexander Montgomery Fitzgerald Davidson"), "Christopher Alexander M. F. Davidson");
+        assert_eq!(abbreviate_name("A B C D"), "A B C. D");
+        // Three words or fewer have no middle words to abbreviate.
+        assert_eq!(abbreviate_name("Ana Silva Souza"), "Ana Silva Souza");
+        assert_eq!(abbreviate_name("Ana"), "Ana");
+    }
 }
