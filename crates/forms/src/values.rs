@@ -292,7 +292,11 @@ pub(crate) fn write_value(doc: &mut Document, f: &Field, value: &FieldValue, scr
                         Some((idx, &f.options[idx]))
                     }
                     Some((i, _)) => Some((i, &f.options[i])),
-                    None => None,
+                    None => {
+                        // When an option is repeated (e.g. multi-select list default value [(A) (A)]),
+                        // reuse the already-picked matching option instead of failing.
+                        f.options.iter().enumerate().find(|(_, (e, d))| e == v || d == v)
+                    }
                 };
                 match matched {
                     Some((i, (e, _))) => {

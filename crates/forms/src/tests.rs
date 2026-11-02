@@ -5569,4 +5569,17 @@ fn list_box_duplicate_exports_and_single_select_array_value() {
     assert_eq!(order_field.value, ["B"]);
     assert_eq!(order_field.indices, [0]);
     assert_eq!(order_field.display_value(), "C");
+
+    // Repeated default values (e.g. /DV [(A) (A)]) on multi-select normalize without error on reset.
+    let mut dv_doc = document(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] >> >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Annots [4 0 R] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /F 4 /P 3 0 R /FT /Ch /T (Multi_DV) /Ff 2097152 /Opt [(A) (B)] /V (B) /DV [(A) (A)] /Rect [10 10 100 100] >>".into(),
+    ]);
+    reset(&mut dv_doc, None).unwrap();
+    let all_dv = fields(&dv_doc);
+    let dv_field = field(&all_dv, "Multi_DV");
+    assert_eq!(dv_field.value, ["A", "A"]);
+    assert_eq!(dv_field.indices, [0]);
 }
