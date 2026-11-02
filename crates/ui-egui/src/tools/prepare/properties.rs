@@ -227,7 +227,10 @@ pub(crate) fn body(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme::Toke
                 FormFieldKind::CheckBox | FormFieldKind::Radio => {
                     use pdfcraft_engine::field_flags as ff;
                     let on = d.on_state.clone();
-                    ui.label(crate::i18n::fmt(tl!("Export Value: {on}"), &[("on", &on)]));
+                    ui.horizontal(|ui| {
+                        let label = ui.label(tl!("Export value"));
+                        ui.text_edit_singleline(&mut d.export_value).labelled_by(label.id);
+                    });
                     let mut checked = !d.default.is_empty() && d.default == on;
                     let label =
                         if d.kind == FormFieldKind::CheckBox { tl!("Check box is checked by default") } else { tl!("Button is checked by default") };

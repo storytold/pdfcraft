@@ -406,8 +406,8 @@ fn dragging_over_another_fields_text_focuses_it_and_selects_from_the_press() {
         let rect = pdfcraft_ui_egui::forms_ui::field_screen_rect(&s.views[0], &doc.info, f, 0).expect("on screen");
         (rect, egui::Id::unique(("form-field", s.views[0].id.0, "name", 0usize)))
     };
-    // From inside the first word to past the end of the text.
-    let (from, to) = (egui::pos2(rect.left() + 30.0, rect.center().y), egui::pos2(rect.right() - 8.0, rect.center().y));
+    // From inside the first word ("Ad|a" at the field's auto size, 13.9 pt) to past the end of the text.
+    let (from, to) = (egui::pos2(rect.left() + 38.0, rect.center().y), egui::pos2(rect.right() - 8.0, rect.center().y));
     h.hover_at(from);
     h.run_steps(1);
     h.drag_at(from);
@@ -1361,6 +1361,54 @@ fn auto_size_fields_shrink_and_wrap_typed_text_to_fit_their_box() {
 
     // An explicit size is kept, as in Acrobat: the text may then run past the box.
     assert_eq!(on_screen_fit(&h, "fixed", long).0, 10.0);
+}
+
+/// Auto-size fields 500 pt wide: a four-cell comb 30 pt tall, and single-line fields 100 and 400 pt tall.
+fn tall_auto_size_form() -> Vec<u8> {
+    pdf_from_objects(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 6 0 R 7 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> >> >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>",
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 6 0 R 7 0 R] >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (comb) /Ff 16777216 /MaxLen 4 /Rect [50 740 550 770] /P 3 0 R /F 4 >>",
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (tall) /Rect [50 600 550 700] /P 3 0 R /F 4 >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (huge) /Rect [50 100 550 500] /P 3 0 R /F 4 >>",
+    ])
+}
+
+/// The editor shows auto-size text at the size the page appearance draws it: a comb field keeps
+/// the appearance's 12 pt cap, and a tall single-line field follows its height, at 100% zoom
+/// too, up to the editor's screen-font bound.
+#[test]
+fn the_field_editor_sizes_auto_size_text_as_the_page_does() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("tall.pdf", None, tall_auto_size_form()).unwrap();
+        app
+    });
+    h.run_steps(6);
+    let s = h.state();
+    let doc = s.session.get(s.views[0].id).unwrap();
+    let field = |name: &str| doc.form.iter().find(|f| f.name == name).unwrap().clone();
+    let painter = egui::Painter::new(h.ctx.clone(), egui::LayerId::background(), egui::Rect::EVERYTHING);
+    let screen = |name: &str, zoom: f32| {
+        let f = field(name);
+        pdfcraft_ui_egui::forms_ui::field_screen_font(&painter, &f, &f.widgets[0], "Hi", zoom)
+    };
+    // 100%: 96 screen points per 72 page points.
+    let full = 96.0 / 72.0;
+
+    let comb = field("comb");
+    let page = pdfcraft_engine::field_comb_auto_text_size(30.0 - 6.0);
+    assert_eq!(page, 12.0);
+    assert_eq!(pdfcraft_ui_egui::forms_ui::field_text_size(&painter, &comb, &comb.widgets[0], ""), 12.0, "a comb field");
+    assert_eq!(screen("comb", full), 12.0 * full);
+
+    let tall = (100.0 - 6.0) / 1.15;
+    assert!((screen("tall", full) - tall as f32 * full).abs() < 0.01, "a 100 pt field at 100%: {}", screen("tall", full));
+    assert_eq!(screen("huge", full), pdfcraft_ui_egui::forms_ui::MAX_SCREEN_FONT, "past the screen-font bound");
+    assert_eq!(screen("huge", 0.5), ((400.0 - 6.0) / 1.15) as f32 * 0.5, "below it at 50%");
 }
 
 /// Where a mode bar tab is, by its label.

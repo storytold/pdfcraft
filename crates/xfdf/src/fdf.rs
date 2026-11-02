@@ -231,7 +231,7 @@ pub fn export_fdf(doc: &Document, comments: bool, fields: bool, file: &str) -> R
             body.extend_from_slice(b" /V ");
             match f.kind {
                 FieldKind::CheckBox | FieldKind::Radio => {
-                    let v = f.value.first().cloned().unwrap_or_else(|| "Off".into());
+                    let v = f.export_values().first().cloned().unwrap_or_else(|| "Off".into());
                     pdfcraft_cos::serialize(&Object::Name(pdfcraft_forms::name_bytes(&v)), &mut body);
                 }
                 FieldKind::List if f.value.len() > 1 => {

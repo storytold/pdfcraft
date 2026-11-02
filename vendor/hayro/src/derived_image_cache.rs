@@ -31,6 +31,7 @@ pub(crate) struct DerivedImageCache {
 }
 
 impl DerivedImageCache {
+    /// Share retained pixels without changing FIFO order; a miss leaves rendering uncached.
     pub(crate) fn get(&self, key: &Key) -> Option<Arc<Pixmap>> {
         #[cfg(test)]
         if self.disabled {
@@ -44,6 +45,7 @@ impl DerivedImageCache {
         hit
     }
 
+    /// Retain a matching result within the production payload and metadata limits.
     pub(crate) fn insert(&mut self, key: Key, pixels: Arc<Pixmap>) {
         #[cfg(test)]
         if self.disabled {
@@ -52,6 +54,7 @@ impl DerivedImageCache {
         self.insert_with_budget(key, pixels, MAX_BYTES);
     }
 
+    /// Reserve bookkeeping fallibly before FIFO eviction; reject oversized or mismatched data.
     fn insert_with_budget(&mut self, key: Key, pixels: Arc<Pixmap>, budget: usize) {
         let size = pixels.data_as_u8_slice().len();
         if size == 0
@@ -159,6 +162,26 @@ mod tests {
                 assert!(cached.derived_images.borrow().entries.len() > 2);
             }
         }
+    }
+
+    /// Main's snapped affine must survive cache hits for mirrored and quarter-turned images.
+    #[test]
+    fn cached_snapped_images_keep_mirrored_and_quarter_turned_placement() {
+        let content = "q 8 0 0 12 1 1 cm /A Do Q q -8 0 0 12 21 1 cm /A Do Q q 0 8 -12 0 36 1 cm /A Do Q q 0 -8 12 0 40 9 cm /A Do Q";
+        let pdf = document(content, true, "", 41);
+        let cached = RenderCache::new();
+        let reference = RenderCache::new();
+        reference.derived_images.borrow_mut().disabled = true;
+        let interpreter = InterpreterSettings::default();
+        let settings = RenderSettings::default();
+        let expected = crate::render(&pdf.pages()[0], &reference, &interpreter, &settings);
+        for _ in 0..2 {
+            let actual = crate::render(&pdf.pages()[0], &cached, &interpreter, &settings);
+            assert_eq!(actual.data_as_u8_slice(), expected.data_as_u8_slice());
+        }
+        assert_eq!(cached.derived_images.borrow().entries.len(), 1);
+        assert_eq!(cached.derived_images.borrow().hits.get(), 7);
+        assert_eq!(cached.interpreter_cache.decoded_image_decodes(), 1);
     }
 
     #[test]

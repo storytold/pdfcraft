@@ -1,5 +1,11 @@
 # Derived image pixel cache: implementation and measurements
 
+> **Integration validation:** 2026-11-01, integrated local tree against main `0cba87ae6f7134b33afa359af4936060efdcc6fb`.
+> R3 Windows validation passed 484 tests with zero failures and strict Clippy after a successful
+> locked dependency fetch. Workspace formatting and whitespace checks pass.
+> Performance on the integrated upstream revision was not rebenchmarked; full application-level
+> fidelity and upstream CI are not established. The benchmark measurements below remain historical.
+
 > **Last reviewed:** 2026-10-25 · **Last updated:** 2026-10-25 · **Change:** minor (unmerged rendering performance candidate; no readiness or parity re-estimate)
 
 The source cache introduced by #1117 and refined by [#2436](https://github.com/storytold/pdfcraft/pull/2436)
@@ -13,6 +19,25 @@ decoding, source-buffer cloning, resizing and colour expansion. It uses the exis
 interpolation, snapping and compositing behavior; no sampling policy changes.
 
 ## Existing work and backend ownership
+
+R3 Windows validation of this integrated local tree completed successfully:
+
+| Check | Result |
+|---|---|
+| Locked Windows dependency fetch | Exit 0 |
+| Hayro library tests | 20 passed, 0 failed |
+| PdfCraft render library tests | 453 passed, 0 failed |
+| Rotated-image integration | 1 passed, 0 failed |
+| Knockout integration | 10 passed, 0 failed |
+| Strict Clippy (`-D warnings`) | Exit 0 |
+
+The total is **484 passed, 0 failed**. Three unused egui dependency-patch warnings were
+nonfatal. The initial merge-resolution dependency check had stopped at missing
+`accesskit_atspi_common v0.21.0`; that failed attempt remains historical evidence, superseded
+for current validation status by R3's successful locked Windows dependency fetch and checks.
+R3 did not rerun release benchmarks or a complete application-level fidelity comparison,
+and does not establish upstream CI. Original PR measurements and validation below are retained
+with their original scope.
 
 The timing baseline is main `833cd63c8a0aec826595640b356b3213355957bd`, fetched and verified on
 2026-10-25. The development checkout was clean before this task. The local branch was subsequently
@@ -118,6 +143,8 @@ warm timings.
 
 ## Correctness evidence and validation
 
+This section records the original PR validation; current integrated-tree R3 results are above.
+
 All four benchmark outputs were compared byte-for-byte using SHA-256 over the saved RGBA buffers;
 before and after match. All timed rounds also report stable output hashes.
 
@@ -165,9 +192,18 @@ browser or GPU qualification is claimed.
 
 ## Changed files
 
+The integration preserves main's complete snapped affine for upright, mirrored and quarter-turned
+images in `derived_image_candidate`, and shares the worker cache with main's new CMYK ink-pass
+renderer. Ink passes still reject images before cache lookup and use main's fallback path. The
+new `cached_snapped_images_keep_mirrored_and_quarter_turned_placement` test compares cache-on/off
+pixels across these placements and cold/warm renders and passed in the R3 Hayro library run.
+The cache limits, eligibility, original seven tests, benchmark source and measurements remain
+intact. These focused pixel checks do not establish full application-level fidelity; integrated
+upstream performance, upstream CI and other platforms remain unqualified.
+
 | File | Purpose |
 |---|---|
-| `vendor/hayro/src/derived_image_cache.rs` | FIFO cache, bounds, and seven focused tests. |
+| `vendor/hayro/src/derived_image_cache.rs` | FIFO cache, bounds, and eight focused tests, including the integration placement regression. |
 | `vendor/hayro/src/renderer.rs` | Pre-decode lookup and admission of successfully resized pixmaps. |
 | `vendor/hayro/src/lib.rs` | Document/worker cache ownership and lifetime. |
 | `vendor/hayro-interpret/src/types.rs` | Narrow opaque resource-key accessor. |
