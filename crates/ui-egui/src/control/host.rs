@@ -67,8 +67,15 @@ impl Host for crate::PdfCraftApp {
             })
             .collect();
         #[cfg(not(target_arch = "wasm32"))]
-        let pending_opens: Vec<Value> =
-            self.pending_opens.iter().map(|pending| json!({ "token": pending.token, "name": pending.name, "path": pending.path })).collect();
+        let pending_opens: Vec<Value> = self
+            .pending_opens
+            .iter()
+            .map(|pending| json!({ "token": pending.token, "name": pending.name, "path": pending.path }))
+            .chain(self.deferred_opens.iter().map(|deferred| {
+                let name = std::path::Path::new(&deferred.path).file_name().map(|n| n.to_string_lossy().into_owned());
+                json!({ "token": null, "name": name, "path": deferred.path })
+            }))
+            .collect();
         #[cfg(target_arch = "wasm32")]
         let pending_opens: Vec<Value> = Vec::new();
         json!({

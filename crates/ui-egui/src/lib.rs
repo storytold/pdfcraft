@@ -249,6 +249,14 @@ struct PendingOpen {
     display_override: Option<(canvas::PageLayout, bool)>,
 }
 
+/// A file named while the worker's queue was full: submitted once it has room.
+#[cfg(not(target_arch = "wasm32"))]
+struct DeferredOpen {
+    path: String,
+    then: Option<&'static str>,
+    display_override: Option<(canvas::PageLayout, bool)>,
+}
+
 pub struct PdfCraftApp {
     /// Tools side and pane widths; which panes are open is `left_open` and `right`.
     pub side_panels: side_panels::SidePanels,
@@ -381,6 +389,9 @@ pub struct PdfCraftApp {
     open_worker: Option<open_worker::OpenWorker>,
     #[cfg(not(target_arch = "wasm32"))]
     pending_opens: Vec<PendingOpen>,
+    /// Files waiting for room in the worker's bounded queue, in the order they were named.
+    #[cfg(not(target_arch = "wasm32"))]
+    deferred_opens: std::collections::VecDeque<DeferredOpen>,
     #[cfg(not(target_arch = "wasm32"))]
     next_open_token: u64,
     /// Explicit CLI layout waits for flagged launch opens, never targeting restored tabs.

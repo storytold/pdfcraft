@@ -2768,6 +2768,80 @@ fn a_startup_file_after_a_protected_one_keeps_its_password_prompt() {
     }
 }
 
+/// `pdfcraft locked.pdf locked.pdf other.pdf`: the repeated file joins its open password
+/// prompt. It used to be queued again behind the prompt, so the unlocked file asked for its
+/// password a second time.
+#[test]
+fn a_protected_file_named_twice_at_startup_asks_for_its_password_once() {
+    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let locked = temp_path(&format!("startup-twice-locked-{nonce}.pdf"));
+    let other = temp_path(&format!("startup-twice-other-{nonce}.pdf"));
+    std::fs::write(&locked, protected("reader", "owner", -4)).unwrap();
+    std::fs::write(&other, fixture(2)).unwrap();
+    let (locked_path, other_path) = (locked.to_str().unwrap().to_string(), other.to_str().unwrap().to_string());
+    let (first, second) = (locked_path.clone(), other_path.clone());
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_path(&first);
+        app.open_path(&first);
+        app.open_path(&second);
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state().password_prompt.is_some(), "the protected file is asked for");
+    h.state_mut().submit_password(Some("reader".into()));
+    support::wait_until(&mut h, "both files, or a second prompt", |app| app.views.len() == 2 || app.password_prompt.is_some());
+    assert!(h.state().password_prompt.is_none(), "the password is asked for once");
+    let mut paths = open_paths(h.state());
+    paths.sort();
+    let mut expected = vec![locked_path, other_path];
+    expected.sort();
+    assert_eq!(paths, expected);
+    std::fs::remove_file(locked).unwrap();
+    std::fs::remove_file(other).unwrap();
+}
+
+/// `pdfcraft locked.pdf` followed by more files than the open worker queues at once: the files
+/// past its bound wait in order and open as it drains, instead of failing to open.
+#[test]
+fn a_long_startup_list_behind_a_password_prompt_opens_every_file() {
+    const OTHERS: usize = 24;
+    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let locked = temp_path(&format!("startup-long-locked-{nonce}.pdf"));
+    std::fs::write(&locked, protected("reader", "owner", -4)).unwrap();
+    let others: Vec<std::path::PathBuf> = (0..OTHERS).map(|i| temp_path(&format!("startup-long-{i:02}-{nonce}.pdf"))).collect();
+    for path in &others {
+        std::fs::write(path, fixture(1)).unwrap();
+    }
+    let locked_path = locked.to_str().unwrap().to_string();
+    let other_paths: Vec<String> = others.iter().map(|p| p.to_str().unwrap().to_string()).collect();
+    let (first, rest) = (locked_path.clone(), other_paths.clone());
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_path(&first);
+        for path in &rest {
+            app.open_path(path);
+        }
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state().password_prompt.is_some(), "the protected file is asked for");
+    h.state_mut().submit_password(Some("reader".into()));
+    support::wait_until(&mut h, "every file", |app| app.views.len() == OTHERS + 1);
+    let mut paths = open_paths(h.state());
+    paths.sort();
+    let mut expected = other_paths;
+    expected.push(locked_path);
+    expected.sort();
+    assert_eq!(paths, expected);
+    std::fs::remove_file(locked).unwrap();
+    for path in others {
+        std::fs::remove_file(path).unwrap();
+    }
+}
+
 #[test]
 fn password_prompt_opens_and_security_tab_reports_the_details() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {

@@ -122,6 +122,19 @@ impl PdfCraftApp {
         Ok(token)
     }
 
+    /// Hand waiting files to the worker, oldest first, while its queue has room. Every queued
+    /// job has a `pending_opens` entry, so fewer entries than the bound means room.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn submit_deferred_opens(&mut self) {
+        let mut queue = std::mem::take(&mut self.deferred_opens);
+        while self.deferred_opens.is_empty() && self.pending_opens.len() < open_worker::MAX_QUEUED_OPENS {
+            let Some(next) = queue.pop_front() else { break };
+            self.open_path_request(&next.path, next.then, next.display_override);
+        }
+        // A file put back (the queue filled again) stays ahead of the ones behind it.
+        self.deferred_opens.append(&mut queue);
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn poll_pending_opens(&mut self) {
         let pending_opens = std::mem::take(&mut self.pending_opens);
@@ -148,6 +161,7 @@ impl PdfCraftApp {
         // earlier waiting replies, without consuming a blocked receiver's result.
         waiting.append(&mut self.pending_opens);
         self.pending_opens = waiting;
+        self.submit_deferred_opens();
         self.settle_launch_layout();
     }
 
@@ -590,10 +604,21 @@ impl PdfCraftApp {
             }
             return OpenOutcome::Pending;
         }
-        if display_override.is_some()
-            && let Some(prompt) = self.password_prompt.as_mut().filter(|p| p.path.as_deref().is_some_and(|p| same_file(p, path)))
-        {
-            prompt.display_override = display_override;
+        // The same file named again while its password is being asked for joins that prompt
+        // instead of queuing a second one; a display override or a tool it brings is kept.
+        if let Some(prompt) = self.password_prompt.as_mut().filter(|p| p.path.as_deref().is_some_and(|p| same_file(p, path))) {
+            if display_override.is_some() {
+                prompt.display_override = display_override;
+            }
+            if then.is_some() {
+                prompt.then = then;
+            }
+            return OpenOutcome::Pending;
+        }
+        if let Some(deferred) = self.deferred_opens.iter_mut().find(|d| same_file(&d.path, path)) {
+            if display_override.is_some() {
+                deferred.display_override = display_override;
+            }
             return OpenOutcome::Pending;
         }
         let name = std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| path.to_string());
@@ -647,6 +672,12 @@ impl PdfCraftApp {
             }
         } else {
             self.startup_superseded = true;
+            // The worker queue is bounded. A long file list (a launch behind a password prompt,
+            // or many files at once) waits here, in order, and is submitted as opens finish.
+            if self.pending_opens.len() >= open_worker::MAX_QUEUED_OPENS || !self.deferred_opens.is_empty() {
+                self.deferred_opens.push_back(DeferredOpen { path: path.to_string(), then, display_override });
+                return OpenOutcome::Pending;
+            }
             match self.schedule_open(OpenRequest {
                 name: name.clone(),
                 path: Some(path.to_string()),
@@ -684,6 +715,7 @@ impl PdfCraftApp {
     #[cfg(not(target_arch = "wasm32"))]
     fn settle_launch_layout(&mut self) {
         if self.pending_opens.iter().any(|open| open.display_override.is_some())
+            || self.deferred_opens.iter().any(|open| open.display_override.is_some())
             || self.password_prompt.as_ref().is_some_and(|prompt| prompt.display_override.is_some())
         {
             return;

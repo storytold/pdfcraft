@@ -9,7 +9,7 @@ use crate::RecoveryStore;
 use pdfcraft_engine::{OpenContext, PreparedDocument, SourceKind};
 use pdfcraft_render::OpenError;
 
-const MAX_QUEUED_OPENS: usize = 16;
+pub(crate) const MAX_QUEUED_OPENS: usize = 16;
 
 pub(crate) enum Input {
     Path(PathBuf),
