@@ -239,6 +239,15 @@ fn choose_rewrite_path(
         return Err(EditError::Invalid("formatting part of turned text, or choosing a document font for it, isn't supported yet".into()));
     }
     let visual_indic = members.iter().any(|line| line.visual_order);
+    let explicit_direction = style.direction.is_some() || block.text_direction != pdfcraft_fonts::TextDirection::Auto;
+    // Direction uses styled layout too: it must not bypass the text-space and legacy
+    // visual-order exclusions that keep those paragraphs on the single-style path.
+    if explicit_direction && !upright {
+        return Err(EditError::Invalid("explicit text direction for turned text isn't supported yet".into()));
+    }
+    if explicit_direction && visual_indic {
+        return Err(EditError::Invalid("explicit text direction for legacy visual-order Indic text isn't supported yet".into()));
+    }
     let has_special_text = text.is_some_and(|draft| {
         draft.contains(['\n', '\r'])
             || pdfcraft_fonts::source_shaping::required(draft)
@@ -251,10 +260,11 @@ fn choose_rewrite_path(
     let explicit_styled_text = !style.ranges.is_empty() || style.resource.is_some();
     Ok(RewriteDispatch {
         upright,
-        use_styled_path: upright
-            && !hebrew
-            && !visual_indic
-            && (explicit_styled_text || (source_requires_styled_path && style.family.is_none() && style.bold.is_none())),
+        use_styled_path: explicit_direction
+            || (upright
+                && !hebrew
+                && !visual_indic
+                && (explicit_styled_text || (source_requires_styled_path && style.family.is_none() && style.bold.is_none()))),
     })
 }
 
@@ -819,7 +829,7 @@ pub(crate) fn rewrite_block_from(
     let mut res = p.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
     let mut fonts_res = res.get(b"Font").map(|f| doc.resolve(f)).and_then(|f| f.as_dict().cloned()).unwrap_or_default();
     let dispatch = choose_rewrite_path(doc, &fonts_res, &b, &members, first, text, style)?;
-    let styled = dispatch.use_styled_path || style.direction.is_some() || b.text_direction != pdfcraft_fonts::TextDirection::Auto;
+    let styled = dispatch.use_styled_path;
     if styled
         && (style.align == Some(crate::added::Align::Justify) || style.aligns.iter().flatten().any(|align| *align == crate::added::Align::Justify))
     {
