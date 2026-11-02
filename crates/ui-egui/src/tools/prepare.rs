@@ -378,53 +378,30 @@ pub(crate) fn page_input(
         return out;
     }
 
-    let Some(p) = pointer.filter(|p| xf.rect.contains(*p)) else { return out };
-    if !allowed {
-        return out;
-    }
-    let free = press == PagePress::Free;
-    if let Some(tool) = tool {
-        view.cursor.claim(Layer::ToolArea, egui::CursorIcon::Crosshair);
-        if free && (resp.drag_started() || resp.clicked()) {
-            let origin = ptr.origin.filter(|o| xf.rect.contains(*o)).unwrap_or(p);
-            prep.grab = Some((page, Grab::Draw(origin), origin));
-            out.consumed = true;
-            if resp.clicked() {
-                // A click without a drag: finish at once.
-                prep.grab = None;
-                if tool == FieldTool::TextTable {
-                    out.table = Some((page, table_rect(xf, Rect::from_min_size(p, egui::Vec2::ZERO))));
-                    out.placed = true;
-                    return out;
-                }
-                let at = to_user(xf, info, page, p);
-                let (w, h) = tool.default_size();
-                let join = prep.selected.as_ref().and_then(|(n, _)| form.iter().find(|f| &f.name == n));
-                prep.select_added = Some(form.len());
-                view.pending_edit = Some(Edit::AddField { page, rect: [at[0], at[1] - h, at[0] + w, at[1]], kind: tool.new_field(join), name: None });
-                out.placed = true;
-            }
-        }
-        return out;
-    }
-
     // The Select tool: what the press is on ([`hit`]), a corner handle or a field; a press nobody
-    // holds draws a selection rectangle. A press held by something drawn over the fields (a
-    // comment) is not Prepare's.
+    // holds draws a selection rectangle, or a field with a field tool. A press held by something
+    // drawn over the fields (a comment) is not Prepare's.
+    let free = press == PagePress::Free;
     let held = matches!(press, PagePress::Mine(Owner::PrepareField { .. } | Owner::PrepareCorner { .. }));
     let hit = match press {
         PagePress::Mine(Owner::PrepareField { field, widget }) => form.get(field).map(|f| (f, widget)),
         _ => None,
     };
-    if resp.drag_started() && (held || free) {
-        let origin = ptr.origin.unwrap_or(p);
-        if let PagePress::Mine(Owner::PrepareCorner { left, top }) = press {
+    // A drag starts from where its press began on this page: egui may see it only once the pointer
+    // is past the page's edge.
+    if allowed
+        && resp.drag_started()
+        && (held || free)
+        && let Some(origin) = ptr.origin.filter(|o| xf.rect.contains(*o))
+    {
+        out.consumed = true;
+        if tool.is_some() {
+            prep.grab = Some((page, Grab::Draw(origin), origin));
+        } else if let PagePress::Mine(Owner::PrepareCorner { left, top }) = press {
             prep.grab = Some((page, Grab::Corner(left, top), origin));
-            out.consumed = true;
         } else if let Some((f, wi)) = hit {
             prep.selected = Some((f.name.clone(), wi));
             prep.grab = Some((page, Grab::Move, origin));
-            out.consumed = true;
         } else {
             prep.marquee_before = Some(prep.selected.iter().chain(prep.also.iter()).cloned().collect());
             if !ui.input(|i| i.modifiers.shift || i.modifiers.command) {
@@ -432,7 +409,29 @@ pub(crate) fn page_input(
                 prep.also.clear();
             }
             prep.grab = Some((page, Grab::Select(origin), origin));
+        }
+        return out;
+    }
+    let Some(p) = pointer.filter(|p| xf.rect.contains(*p)) else { return out };
+    if !allowed {
+        return out;
+    }
+    if let Some(tool) = tool {
+        view.cursor.claim(Layer::ToolArea, egui::CursorIcon::Crosshair);
+        // A click without a drag places the field at once.
+        if free && resp.clicked() {
             out.consumed = true;
+            if tool == FieldTool::TextTable {
+                out.table = Some((page, table_rect(xf, Rect::from_min_size(p, egui::Vec2::ZERO))));
+                out.placed = true;
+                return out;
+            }
+            let at = to_user(xf, info, page, p);
+            let (w, h) = tool.default_size();
+            let join = prep.selected.as_ref().and_then(|(n, _)| form.iter().find(|f| &f.name == n));
+            prep.select_added = Some(form.len());
+            view.pending_edit = Some(Edit::AddField { page, rect: [at[0], at[1] - h, at[0] + w, at[1]], kind: tool.new_field(join), name: None });
+            out.placed = true;
         }
         return out;
     }

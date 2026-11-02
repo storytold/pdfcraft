@@ -1298,3 +1298,61 @@ fn a_fields_tooltip_shows_beside_the_open_palette() {
     rest_at(&mut h, on_field);
     assert!(h.query_all_by_label("Your name").next().is_some(), "the field's tooltip shows");
 }
+
+/// Two blank 300×400 pages.
+fn two_pages_pdf() -> Vec<u8> {
+    pdf(&[
+        CATALOG,
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 300 400] >>",
+        "<< /Type /Page /Parent 2 0 R >>",
+        "<< /Type /Page /Parent 2 0 R >>",
+    ])
+}
+
+/// Sets a tool up (`tool`), presses above page 1's bottom edge and drags onto page 2 in one frame,
+/// so egui sees the drag only once the pointer is on page 2, and returns the app after the release.
+fn drag_seen_only_past_page_ones_edge(tool: impl FnOnce(&mut PdfCraftApp)) -> Harness<'static, PdfCraftApp> {
+    let mut h = open(two_pages_pdf(), "100", false);
+    tool(h.state_mut());
+    h.run_steps(4);
+    let (one, two) = {
+        let v = &h.state().views[0];
+        (v.page_screen_rect(0).expect("page 1 on screen"), v.page_screen_rect(1).expect("page 2 on screen"))
+    };
+    let press = egui::pos2(one.min.x + 50.0, one.max.y - 30.0);
+    let release = egui::pos2(one.min.x + 150.0, two.min.y + 20.0);
+    h.hover_at(press);
+    h.run_steps(1);
+    h.drag_at(press);
+    h.run_steps(1);
+    h.hover_at(release);
+    h.run_steps(1);
+    h.drop_at(release);
+    h.run_steps(4);
+    h
+}
+
+// A drag seen only past its page's edge still draws on the page its press began on, as zoom, crop
+// and Sign area do. With these three it used to draw nothing anywhere.
+
+#[test]
+fn a_redaction_box_dragged_off_its_page_is_drawn_on_it() {
+    let h = drag_seen_only_past_page_ones_edge(|app| app.quick_tool = QuickTool::Redact);
+    let s = h.state();
+    let doc = s.session.get(s.views[0].id).unwrap();
+    assert!(doc.info.annotations.iter().any(|a| a.subtype == "Redact" && a.page == 0), "a redaction mark on page 1");
+}
+
+#[test]
+fn a_link_rectangle_dragged_off_its_page_is_drawn_on_it() {
+    let h = drag_seen_only_past_page_ones_edge(|app| app.quick_tool = QuickTool::Link);
+    assert_eq!(h.state().link_draft.as_ref().map(|d| (d.page, d.index)), Some((0, None)), "a new link on page 1");
+}
+
+#[test]
+fn a_field_dragged_off_its_page_is_drawn_on_it() {
+    let h = drag_seen_only_past_page_ones_edge(|app| assert!(app.execute("form.add.text"), "Prepare a form, with the text field tool"));
+    let s = h.state();
+    let doc = s.session.get(s.views[0].id).unwrap();
+    assert!(doc.form.iter().any(|f| f.widgets.iter().any(|w| w.page == Some(0))), "a field on page 1");
+}

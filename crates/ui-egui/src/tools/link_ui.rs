@@ -108,7 +108,19 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, free: bool, owner: Option<usiz
         }
         return true;
     }
-    let Some(p) = pointer.filter(|p| xf.rect.contains(*p)) else { return false };
+    // A drag that nobody holds, or from a link (whose hit lets the drag go), draws a new link from
+    // where its press began on this page. egui may see the drag only once the pointer is past the
+    // page's edge.
+    if resp.drag_started()
+        && (free || owner.is_some())
+        && let Some(origin) = ptr.origin.filter(|o| xf.rect.contains(*o))
+    {
+        lv.drag = Some((page, origin));
+        return true;
+    }
+    if !pointer.is_some_and(|p| xf.rect.contains(p)) {
+        return false;
+    }
     // Over a link, its hit claims the hand.
     view.cursor.claim(Layer::ToolArea, egui::CursorIcon::Crosshair);
     if let Some(index) = context {
@@ -126,11 +138,6 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, free: bool, owner: Option<usiz
             lv.open_existing = Some((page, k));
             lv.last_click = None;
         }
-        return true;
-    }
-    if resp.drag_started() && (free || owner.is_some()) {
-        let origin = ptr.origin.unwrap_or(p);
-        lv.drag = Some((page, origin));
         return true;
     }
     resp.is_pointer_button_down_on()
