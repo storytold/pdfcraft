@@ -3,6 +3,11 @@
 # Clean-room translations of PdfCraft's English UI labels. Use standard Indonesian computing
 # terms; keep product and format names (PdfCraft, PDF, PDF/A, OCR, XFA, Word...) unchanged.
 # Indonesian does not inflect nouns for number, so @plural entries list one form.
+
+# Untranslated: English text until a translator fills these in.
+	Lowering this forgets the oldest files. At 0 there is no list.	Lowering this forgets the oldest files. At 0 there is no list.
+	Recent files to keep	Recent files to keep
+
 	Menu	Menu
 	Edit	Edit
 	Pages	Halaman

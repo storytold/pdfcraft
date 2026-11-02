@@ -327,6 +327,7 @@ fn add_annotation(s: &Shape) -> &'static str {
         Shape::Oval { .. } => "Add oval",
         Shape::Line { start: LineEnding::None, end: LineEnding::OpenArrow, .. } => "Add arrow",
         Shape::Line { .. } => "Add line",
+        Shape::FreehandHighlight { .. } => "Add freehand highlight",
         Shape::Ink { .. } => "Add drawing",
         Shape::TextBox { .. } => "Add text box",
         Shape::Typewriter { .. } => "Add text",
