@@ -12,7 +12,7 @@ workspace = true
 [dependencies]
 pdfcraft-ui-egui = { workspace = true }
 eframe = { workspace = true, features = ["default_fonts", "glow", "persistence", "accesskit"] }
-egui = { workspace = true }
+egui = { workspace = true, features = ["default_fonts", "monochrome_emoji_fonts"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen-futures = "0.4"

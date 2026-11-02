@@ -70,7 +70,7 @@ fn content_bytes(doc: &Document, page: &pdfcraft_model::Page, index: usize) -> R
                 .map_err(|e| unsupported(index, format!("content cannot be decoded strictly: {e}")))?
         };
         all.extend_from_slice(&decoded);
-        all.push(b'\n');
+        all.push(b' ');
     }
     Ok(all)
 }
@@ -132,6 +132,38 @@ fn harmless_inside(op: &[u8]) -> bool {
     )
 }
 
+/// The `(BT, ET)` operator index pairs of each text object that shows text, or why the page cannot be tagged.
+fn text_spans(ops: &[Op], index: usize) -> Result<Vec<(usize, usize)>, AutoTagError> {
+    let mut start = None;
+    let mut has_text = false;
+    let mut spans = Vec::new();
+    for (at, op) in ops.iter().enumerate() {
+        match op.op.as_slice() {
+            b"BT" if start.is_none() => {
+                start = Some(at);
+                has_text = false;
+            }
+            b"ET" => {
+                let Some(first) = start.take() else { return Err(unsupported(index, "unmatched ET operator")) };
+                if has_text {
+                    spans.push((first, at));
+                    if spans.len() > MAX_TEXT_OBJECTS {
+                        return Err(unsupported(index, "too many text objects (maximum 4096)"));
+                    }
+                }
+            }
+            b"Tj" | b"TJ" | b"'" | b"\"" if start.is_some() => has_text = true,
+            name if start.is_some() && harmless_inside(name) => {}
+            name if start.is_none() && harmless_outside(name) => {}
+            _ => return Err(unsupported(index, format!("unsupported or painted operator {}", String::from_utf8_lossy(&op.op)))),
+        }
+    }
+    if start.is_some() {
+        return Err(unsupported(index, "unterminated BT text object"));
+    }
+    Ok(spans)
+}
+
 fn plan(doc: &Document) -> Result<Vec<Plan>, AutoTagError> {
     let root = doc.root().ok_or(AutoTagError::NoCatalog)?;
     let catalog = doc.get(root);
@@ -163,33 +195,7 @@ fn plan(doc: &Document) -> Result<Vec<Plan>, AutoTagError> {
         if parsed.skipped > 0 || parsed.ops.len() > MAX_OPERATORS {
             return Err(unsupported(index, "content has malformed or too many operators"));
         }
-        let mut start = None;
-        let mut has_text = false;
-        let mut spans = Vec::new();
-        for (at, op) in parsed.ops.iter().enumerate() {
-            match op.op.as_slice() {
-                b"BT" if start.is_none() => {
-                    start = Some(at);
-                    has_text = false;
-                }
-                b"ET" => {
-                    let Some(first) = start.take() else { return Err(unsupported(index, "unmatched ET operator")) };
-                    if has_text {
-                        spans.push((first, at));
-                        if spans.len() > MAX_TEXT_OBJECTS {
-                            return Err(unsupported(index, "too many text objects (maximum 4096)"));
-                        }
-                    }
-                }
-                b"Tj" | b"TJ" | b"'" | b"\"" if start.is_some() => has_text = true,
-                name if start.is_some() && harmless_inside(name) => {}
-                name if start.is_none() && harmless_outside(name) => {}
-                _ => return Err(unsupported(index, format!("unsupported or painted operator {}", String::from_utf8_lossy(&op.op)))),
-            }
-        }
-        if start.is_some() {
-            return Err(unsupported(index, "unterminated BT text object"));
-        }
+        let spans = text_spans(&parsed.ops, index)?;
         total = total.saturating_add(spans.len());
         out.push(Plan { page: page.obj, ops: parsed.ops, spans });
     }

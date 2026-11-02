@@ -191,6 +191,12 @@ impl<'a> FlexArrayIter<'a> {
         self.reader.skip_white_spaces_and_comments();
 
         if !self.reader.at_end() {
+            // PdfCraft patch (32): its items each follow a reference. Read as one that might be, a
+            // reference at the start was taken for the whole group, which it can't be, and lost.
+            if T::GROUP {
+                return self.reader.read_with_context::<T>(&self.ctx);
+            }
+
             return match self.reader.read_with_context::<MaybeRef<T>>(&self.ctx)? {
                 MaybeRef::Ref(r) => self.ctx.xref().get_with::<T>(r.into(), &self.ctx),
                 MaybeRef::NotRef(i) => Some(i),

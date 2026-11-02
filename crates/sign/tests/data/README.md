@@ -11,6 +11,7 @@ The password of every `.p12` is `test`.
 | `ec-legacy.p12` | `ec-p256.p12` re-exported with `-legacy` (3DES, SHA-1 MAC): the format macOS `security import` accepts |
 | `ec-p384.p12` | P-384 self-signed "Test Signer P384"; AES-128-CBC, SHA-1 MAC |
 | `chain.p12` | RSA 2048 "Ada Lovelace" issued by a P-256 test root, chain included |
+| `chain-legacy.p12` | `chain.p12` re-exported with `-legacy`, for the Keychain tests |
 | `rsa.crt.pem`, `ca.crt.pem` | the RSA certificate and the test root alone |
 
 Regenerate with:
@@ -29,6 +30,7 @@ openssl req -newkey rsa:2048 -nodes -keyout leaf.key -out leaf.csr -subj "/CN=Ad
 printf "basicConstraints=CA:FALSE\nkeyUsage=critical,digitalSignature,nonRepudiation\n" > leaf.ext
 openssl x509 -req -in leaf.csr -CA ca.crt -CAkey ca.key -set_serial 77 -days 3650 -extfile leaf.ext -out leaf.crt
 openssl pkcs12 -export -inkey leaf.key -in leaf.crt -certfile ca.crt -out chain.p12 -passout pass:test -name "Ada Lovelace"
+openssl pkcs12 -export -legacy -inkey leaf.key -in leaf.crt -certfile ca.crt -out chain-legacy.p12 -passout pass:test -name "Ada Lovelace"
 ```
 
 `openssl-signed.pdf` is a hand-written one-page PDF with a `/Contents` placeholder, signed with
@@ -43,14 +45,14 @@ A synthetic one-page PDF signed the legacy way (`/SubFilter /adbe.x509.rsa_sha1`
 the key of `rsa-aes.p12`. Built by writing the objects with a fixed-width `/ByteRange` and zero-filled
 `/Contents`, patching the byte range, then `openssl dgst -sha1 -sign rsa.key` over the two ranges.
 
-### RSA signature variants (hex constants in `tests/crypto.rs`)
+### RSA signature variants (hex constants in `tests/it/crypto.rs`)
 
 Over SHA-256("hello") with the key of `rsa-aes.p12`:
 `openssl dgst -sha256 -sign rsa.key` (standard DigestInfo); `openssl pkeyutl -sign -pkeyopt rsa_padding_mode:pkcs1`
 over a hand-built DigestInfo without the NULL parameter, and over the bare digest;
 `openssl dgst -sha256 -sigopt rsa_padding_mode:pss -sigopt rsa_pss_saltlen:0 -sign rsa.key`.
 
-### Other algorithms (hex constants in `tests/algorithms.rs`)
+### Other algorithms (hex constants in `tests/it/algorithms.rs`)
 
 All sign the message `hello` with throw-away keys, OpenSSL 3.6. RSA ones use the key of `rsa-aes.p12`.
 
