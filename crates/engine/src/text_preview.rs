@@ -1,4 +1,5 @@
-//! The page beneath an inline text editor, with the source glyphs removed on a COS clone.
+//! The page beneath an inline text editor, with the source glyphs removed on a COS clone; and,
+//! the same way, the page beneath a dragged added item or the marks an Update replaces.
 
 use std::sync::Arc;
 
@@ -18,18 +19,75 @@ impl TextEditPreview {
     }
 
     pub fn render_background(&self, scale: f32) -> Result<RenderedPage, String> {
+        render_one(&self.bytes, &self.config, self.page, scale)
+    }
+}
+
+/// A document's pages without its marks of one kind ([`Document::without_marks`]).
+pub struct UnmarkedPages {
+    bytes: Arc<Vec<u8>>,
+    config: RenderConfig,
+    /// Parsed on the first [`Self::render_page`], once (a copy that can't be parsed isn't tried
+    /// again), and kept: parsing costs about as much as reading the document.
+    parsed: Option<PageRenderer>,
+    /// How many times it was parsed.
+    #[cfg(test)]
+    builds: u64,
+}
+
+impl UnmarkedPages {
+    pub fn renderer(&self) -> RenderPool {
+        RenderPool::new(self.bytes.clone(), 1, self.config.clone())
+    }
+
+    /// `page` at `scale`, on this thread.
+    pub fn render_page(&mut self, page: usize, scale: f32) -> Result<RenderedPage, String> {
         if !scale.is_finite() || scale <= 0.0 {
             return Err("preview scale must be finite and positive".into());
         }
-        guard(|| {
-            let mut renderer = PageRenderer::new(self.bytes.clone(), self.config.clone());
-            let out = renderer.render(RenderRequest { page: self.page, scale, ..Default::default() });
-            if let Some(e) = &out.error {
-                return Err(e.clone());
+        if self.parsed.is_none() {
+            self.parsed = Some(PageRenderer::new(self.bytes.clone(), self.config.clone()));
+            #[cfg(test)]
+            {
+                self.builds += 1;
             }
-            Ok(out)
-        })?
+        }
+        let Some(renderer) = self.parsed.as_mut() else { return Err("the document could not be parsed".into()) };
+        let out = guard(|| renderer.render(RenderRequest { page, scale, ..Default::default() }));
+        let out = match out {
+            Ok(out) => out,
+            Err(e) => {
+                // A panic may have left it half-way: parse afresh next time.
+                self.parsed = None;
+                return Err(e);
+            }
+        };
+        if let Some(e) = &out.error {
+            return Err(e.clone());
+        }
+        Ok(out)
     }
+
+    /// How many times [`Self::render_page`] has parsed the document.
+    #[cfg(test)]
+    pub(crate) fn parser_builds(&self) -> u64 {
+        self.builds
+    }
+}
+
+/// `page` of `bytes` at `scale`, on this thread.
+fn render_one(bytes: &Arc<Vec<u8>>, config: &RenderConfig, page: usize, scale: f32) -> Result<RenderedPage, String> {
+    if !scale.is_finite() || scale <= 0.0 {
+        return Err("preview scale must be finite and positive".into());
+    }
+    guard(|| {
+        let mut renderer = PageRenderer::new(bytes.clone(), config.clone());
+        let out = renderer.render(RenderRequest { page, scale, ..Default::default() });
+        if let Some(e) = &out.error {
+            return Err(e.clone());
+        }
+        Ok(out)
+    })?
 }
 
 impl Document {
@@ -87,6 +145,33 @@ impl Document {
             pdfcraft_edit::delete_content(&mut cos, page, index).map_err(|e| e.to_string())?;
             let bytes = Arc::new(pdfcraft_cos::write_incremental(&cos, &pdfcraft_cos::SaveOptions::default()).map_err(|e| e.to_string())?);
             Ok(TextEditPreview { page, bytes, config: self.config.clone() })
+        })?
+    }
+
+    /// The document without its marks of `kind`, on every page: what Update replaces them on, so
+    /// its preview doesn't draw the new marks over the old ones (or tint the old background).
+    /// Made once for all the pages a dialog steps through, as cloning and writing the document
+    /// costs about a save. `None` when the document has none, and the thumbnails already are
+    /// those pages. Read-only, like [`Self::text_edit_preview`].
+    pub fn without_marks(&self, kind: crate::MarkKind) -> Result<Option<UnmarkedPages>, String> {
+        if !self.marks().contains(&kind) {
+            return Ok(None);
+        }
+        guard(|| {
+            let editor = self.editor.as_ref().ok_or("the document can't be read")?;
+            let mut cos = editor.cos.clone();
+            let n = pdfcraft_model::pages(&cos).len();
+            if pdfcraft_edit::remove_marks(&mut cos, &(0..n).collect::<Vec<_>>(), kind).map_err(|e| e.to_string())? == 0 {
+                return Ok(None);
+            }
+            let bytes = Arc::new(pdfcraft_cos::write_incremental(&cos, &pdfcraft_cos::SaveOptions::default()).map_err(|e| e.to_string())?);
+            Ok(Some(UnmarkedPages {
+                bytes,
+                config: self.config.clone(),
+                parsed: None,
+                #[cfg(test)]
+                builds: 0,
+            }))
         })?
     }
 

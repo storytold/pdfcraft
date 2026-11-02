@@ -3,14 +3,19 @@
 //! page the range selects, with the marks laid out on it. "Update" opens the same dialog in
 //! replace mode.
 
+use std::collections::{HashMap, HashSet};
+
 use egui::{Align, Color32, CornerRadius, Layout, Rect, Stroke, pos2, vec2};
-use pdfcraft_engine::{Background, Edit, FontFamily, HeaderFooter, MarkKind, Watermark};
+use pdfcraft_engine::{Backdrop, Background, DocId, Edit, FontFamily, HeaderFooter, MarkKind, Watermark};
 
 use crate::theme::{self, Tokens};
 use crate::{PdfCraftApp, icons, widgets};
 
 /// How far a watermark may be moved from the page centre, in points.
 const MAX_OFFSET: f64 = 20_000.0;
+
+/// The preview page's longer side, in points.
+const PREVIEW_SIDE: f32 = 190.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Subset {
@@ -72,6 +77,122 @@ impl PageRange {
     }
 }
 
+/// How many pages a frame the Background dialog checks for a backdrop of their own, so a long
+/// document never stalls the dialog.
+const BACKDROP_PAGES_PER_FRAME: usize = 24;
+
+/// Which pages paint their own backdrop (it hides a background), for the document and edit
+/// generation they were checked in. Filled a few pages a frame.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct BackdropCheck {
+    key: Option<(DocId, u64)>,
+    /// Per page: `None` until checked.
+    pages: Vec<Option<Option<Backdrop>>>,
+}
+
+/// What the check found among the pages a background goes on.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct BackdropCount {
+    /// Pages (0-based, ascending) with a white backdrop that can be replaced.
+    pub fills: Vec<usize>,
+    /// Pages (0-based, ascending) covered by a picture (scans): the background stays hidden there.
+    pub images: Vec<usize>,
+    /// Pages not checked yet.
+    pub pending: usize,
+}
+
+impl BackdropCheck {
+    /// Check up to [`BACKDROP_PAGES_PER_FRAME`] more of `pages` (0-based) and sort them.
+    pub fn update(&mut self, doc: &pdfcraft_engine::Document, pages: &[usize]) -> BackdropCount {
+        let key = (doc.id, doc.edit_generation());
+        let count = doc.info.pages.len();
+        if self.key != Some(key) || self.pages.len() != count {
+            self.key = Some(key);
+            self.pages = vec![None; count];
+        }
+        // One batch a frame: finding a page walks the page tree, so the batch shares one walk.
+        let mut batch = Vec::with_capacity(BACKDROP_PAGES_PER_FRAME);
+        for &p in pages {
+            if batch.len() >= BACKDROP_PAGES_PER_FRAME {
+                break;
+            }
+            if matches!(self.pages.get(p), Some(None)) && !batch.contains(&p) {
+                batch.push(p);
+            }
+        }
+        if !batch.is_empty() {
+            for (p, found) in batch.iter().zip(doc.page_backdrops(&batch)) {
+                if let Some(slot) = self.pages.get_mut(*p) {
+                    *slot = Some(found);
+                }
+            }
+        }
+        let mut n = BackdropCount::default();
+        for &p in pages {
+            let Some(slot) = self.pages.get(p) else { continue };
+            match slot {
+                None => n.pending += 1,
+                Some(Some(Backdrop::Fill)) => n.fills.push(p),
+                Some(Some(Backdrop::Image)) => n.images.push(p),
+                Some(None) => {}
+            }
+        }
+        for list in [&mut n.fills, &mut n.images] {
+            list.sort_unstable();
+            list.dedup();
+        }
+        n
+    }
+
+    /// What the check found on `page` (0-based) of this version of `doc`: `None` until it has
+    /// looked, `Some(None)` for a page with no backdrop of its own.
+    pub fn found(&self, doc: &pdfcraft_engine::Document, page: usize) -> Option<Option<Backdrop>> {
+        if self.key != Some((doc.id, doc.edit_generation())) {
+            return None;
+        }
+        self.pages.get(page).copied().flatten()
+    }
+}
+
+impl MarksDraft {
+    /// The dialog for `kind` is opening. Other settings carry over from last time, but replacing
+    /// a page's own backdrop starts on: Update restores backdrops before it re-applies, so a
+    /// page whose backdrop was replaced shows none and the checkbox stays hidden, and a choice
+    /// left off from an earlier dialog would hide the background again unseen.
+    pub fn opened(&mut self, kind: MarkKind) {
+        if kind == MarkKind::Background {
+            self.bg.replace_backdrop = true;
+        }
+    }
+}
+
+/// How many runs of pages a message lists before it stops with "…".
+const LISTED_PAGE_RUNS: usize = 8;
+
+/// After Remove background: the pages (0-based, ascending) whose own white backdrop stays off,
+/// because they changed after the background was added (`pdfcraft_engine::EditNotice`).
+pub(crate) fn backdrops_left_off_message(pages: &[usize]) -> String {
+    pages_phrase(
+        pages,
+        tl!("Page {pages} changed after the background was added, so its own white backdrop stays off. It looks the same on white paper."),
+        tl!("Pages {pages} changed after the background was added, so their own white backdrops stay off. They look the same on white paper."),
+    )
+}
+
+/// `one` or `many` with `{pages}` replaced by `pages` (0-based, ascending) as 1-based runs
+/// ("1-3, 6"), so the message says which pages it means.
+fn pages_phrase(pages: &[usize], one: &str, many: &str) -> String {
+    // `count` 0 never matches a list that isn't empty, so the list is always written out.
+    let runs = crate::combine_ui::range_of(pages, 0);
+    let mut parts: Vec<&str> = runs.split(", ").take(LISTED_PAGE_RUNS + 1).collect();
+    if parts.len() > LISTED_PAGE_RUNS {
+        parts.truncate(LISTED_PAGE_RUNS);
+        parts.push("…");
+    }
+    let template = if pages.len() == 1 { one } else { many };
+    crate::i18n::fmt(template, &[("pages", &parts.join(", "))])
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct MarksDraft {
     pub hf: HeaderFooter,
@@ -90,6 +211,8 @@ pub struct MarksDraft {
     pub use_file: bool,
     pub file: Option<(String, std::sync::Arc<Vec<u8>>)>,
     pub file_page: usize,
+    /// Background: pages that paint their own backdrop.
+    pub backdrops: BackdropCheck,
     /// The page (0-based) the preview was stepped to; `None` previews the current page. Reset
     /// each time the dialog opens.
     pub preview: Option<usize>,
@@ -110,6 +233,7 @@ impl Default for MarksDraft {
             use_file: false,
             file: None,
             file_page: 1,
+            backdrops: BackdropCheck::default(),
             preview: None,
         }
     }
@@ -152,7 +276,7 @@ fn preview(
     draw: impl FnOnce(&egui::Painter, Rect, f32),
 ) {
     let (w, h) = (size.0.max(1.0), size.1.max(1.0));
-    let s = (190.0 / w.max(h)) as f32;
+    let s = (f64::from(PREVIEW_SIDE) / w.max(h)) as f32;
     let (r, _) = ui.allocate_exact_size(vec2(210.0, 210.0), egui::Sense::hover());
     let page = Rect::from_center_size(r.center(), vec2(w as f32 * s, h as f32 * s));
     let painter = ui.painter_at(r);
@@ -178,6 +302,132 @@ fn rgb32(c: [f64; 3]) -> Color32 {
 fn behind(color: [f64; 3], opacity: f64) -> Color32 {
     let a = if opacity.is_finite() { opacity.clamp(0.0, 1.0) } else { 1.0 };
     rgb32(color.map(|c| 1.0 - a * (1.0 - c)))
+}
+
+/// The preview's tint for a background colour on a page whose own backdrop is `found` (`None`
+/// when it has none, or the check hasn't reached it): no colour where the page will still hide
+/// the background after OK, because a picture covers it (a scan) or it keeps its white backdrop
+/// with Replace unticked.
+fn background_tint(d: &MarksDraft, found: Option<Backdrop>) -> Color32 {
+    let hidden = match found {
+        Some(Backdrop::Image) => true,
+        Some(Backdrop::Fill) => !d.bg.replace_backdrop,
+        None => false,
+    };
+    if hidden { Color32::WHITE } else { behind(d.bg.color, d.bg.opacity) }
+}
+
+/// In Update, the pages previewed without the marks the dialog replaces. Their thumbnails still
+/// have them, so the new marks would be drawn over the old ones, and a new background colour
+/// would tint the old one. The document without them is made once per dialog (it costs about a
+/// save). The page shown is drawn from it straight away, at the preview's small size, so neither
+/// a blank sheet nor the old marks show while it renders; the pages a step goes to next render
+/// ahead, off the UI thread (not on the web, where the pool renders on it), so stepping rarely
+/// waits.
+#[derive(Default)]
+pub(crate) struct UnmarkedPage {
+    /// The document, its edit generation and the kind of mark taken away.
+    key: Option<(pdfcraft_engine::DocId, u64, MarkKind)>,
+    pages: Option<pdfcraft_engine::UnmarkedPages>,
+    /// Renders the pages next to the one shown, ahead. None on the web, where the pool renders on
+    /// the UI thread inside `try_recv`: it would draw them in the same frame too.
+    renderer: Option<pdfcraft_render::RenderPool>,
+    /// The pages rendered, with the scale (×1000) they were rendered at: the page shown and the
+    /// pages next to it.
+    textures: HashMap<usize, (u64, egui::TextureHandle)>,
+    /// Pages that failed to render when shown, so they aren't tried every frame: their
+    /// thumbnails show instead, the other pages still don't.
+    failed: HashSet<usize>,
+    /// The pages asked of the renderer ahead, and not back yet. Nothing waits for them: a step
+    /// is a frame, which takes what has come back first and draws the rest itself.
+    ahead: Vec<(usize, u64)>,
+    /// Pages (at a scale) that came back from rendering ahead with an error, not asked ahead
+    /// again: the error needn't be the page's, so drawing it when shown still decides.
+    not_ahead: HashSet<(usize, u64)>,
+}
+
+impl UnmarkedPage {
+    /// The picture to preview `page` on in place of its thumbnail, or `None` for the thumbnail:
+    /// not Update, no marks of `kind` in the document, the pages can't be prepared, or `page`
+    /// fails to render and was never drawn (a picture of it at another scale is shown rather than
+    /// the old marks). `near` are the pages a step goes to from it, rendered ahead.
+    fn picture(
+        &mut self,
+        ctx: &egui::Context,
+        (doc, id): (&pdfcraft_engine::Document, pdfcraft_engine::DocId),
+        page: usize,
+        near: &[usize],
+        kind: MarkKind,
+        replace: bool,
+    ) -> Option<egui::TextureId> {
+        let key = replace.then(|| (id, doc.edit_generation(), kind));
+        if self.key != key {
+            *self = Self { key, ..Default::default() };
+            if replace {
+                self.pages = doc.without_marks(kind).ok().flatten();
+                self.renderer = self.pages.as_ref().filter(|_| !cfg!(target_arch = "wasm32")).map(|p| p.renderer());
+            }
+        }
+        self.pages.as_ref()?;
+        let near = if self.renderer.is_some() { near } else { &[][..] };
+        // At the preview's size in pixels.
+        let scale = |page: usize| {
+            let p = doc.info.pages.get(page)?;
+            let s = PREVIEW_SIDE * ctx.pixels_per_point() / p.width.max(p.height).max(1.0);
+            Some((s, (s * 1000.0) as u64))
+        };
+        let load = |ctx: &egui::Context, out: pdfcraft_render::RenderedPage| {
+            let image = crate::canvas::texture_image([out.width as usize, out.height as usize], out.rgba);
+            ctx.load_texture("marks-preview-unmarked", image, egui::TextureOptions::LINEAR)
+        };
+        while let Some(out) = self.renderer.as_ref().and_then(|r| r.try_recv()) {
+            let at = (out.request.page, out.request.tag);
+            self.ahead.retain(|a| *a != at);
+            // An error rendering ahead needn't be the page's (the pool retires its parser, a
+            // request is cancelled): the page is drawn here when it is shown, and that decides.
+            // It isn't asked ahead again, so a page that always fails isn't rendered every frame.
+            if out.error.is_none() {
+                self.textures.insert(at.0, (at.1, load(ctx, out)));
+            } else {
+                self.not_ahead.insert(at);
+            }
+        }
+        let (s, tag) = scale(page)?;
+        if !self.failed.contains(&page)
+            && self.textures.get(&page).is_none_or(|(t, _)| *t != tag)
+            && let Some(pages) = self.pages.as_mut()
+        {
+            match pages.render_page(page, s) {
+                Ok(out) => {
+                    self.textures.insert(page, (tag, load(ctx, out)));
+                }
+                Err(_) => {
+                    self.failed.insert(page);
+                }
+            }
+        }
+        // Ahead: the pages a step goes to, not rendered yet at their scale.
+        let wanted: Vec<(usize, u64)> = near
+            .iter()
+            .filter(|p| !self.failed.contains(p))
+            .filter_map(|&p| scale(p).map(|(_, t)| (p, t)))
+            .filter(|at| !self.not_ahead.contains(at))
+            .filter(|(p, t)| self.textures.get(p).is_none_or(|(have, _)| have != t))
+            .collect();
+        if let Some(renderer) = self.renderer.as_ref()
+            && !wanted.is_empty()
+            && wanted != self.ahead
+        {
+            let requests = wanted
+                .iter()
+                .filter_map(|&(p, _)| scale(p).map(|(s, tag)| pdfcraft_render::RenderRequest { page: p, scale: s, tag, ..Default::default() }));
+            renderer.set_queue(requests.collect());
+            self.ahead = wanted;
+        }
+        self.textures.retain(|p, _| *p == page || near.contains(p));
+        // A picture rendered at another scale beats the thumbnail with the old marks.
+        self.textures.get(&page).map(|(_, t)| t.id())
+    }
 }
 
 /// The page (0-based) the preview shows: the current one when the range selects it, otherwise the
@@ -370,6 +620,9 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
                     d.bg.opacity = pct / 100.0;
                 }
             });
+            if let Some(doc) = app.session.get(id) {
+                backdrop_options(ui, t, d, doc, count);
+            }
         }
     }
     ui.add_space(8.0);
@@ -378,14 +631,19 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
     ui.add_space(8.0);
     // The preview: the current page (or the page stepped to), or the first one the range selects
     // if it leaves that out, drawn from its thumbnail at its displayed size (after /Rotate), the
-    // frame the engine lays the marks out in.
+    // frame the engine lays the marks out in. Update draws it without the marks it replaces.
     let target = shown_preview(&d.range, &mut d.preview, current, count);
     let page = doc.info.pages.get(target).map(|p| (p.width as f64, p.height as f64)).unwrap_or((612.0, 792.0));
-    let picture = app.views.get_mut(i).and_then(|view| {
-        view.need_thumbnail(target, true);
-        view.thumb_id(target)
+    let near: Vec<usize> = [false, true].into_iter().filter_map(|forward| step_preview(&d.range, target, count, forward)).collect();
+    let unmarked = app.unmarked_page.picture(ui.ctx(), (doc, id), target, &near, kind, d.replace);
+    let picture = unmarked.or_else(|| {
+        app.views.get_mut(i).and_then(|view| {
+            view.need_thumbnail(target, true);
+            view.thumb_id(target)
+        })
     });
-    let tint = if kind == MarkKind::Background && !d.use_file { behind(d.bg.color, d.bg.opacity) } else { Color32::WHITE };
+    let tint =
+        if kind == MarkKind::Background && !d.use_file { background_tint(d, d.backdrops.found(doc, target).flatten()) } else { Color32::WHITE };
     let hf = d.hf.clone();
     let size_h = page.1.max(1.0);
     let (wm, fit) = (d.wm.clone(), d.fit);
@@ -578,6 +836,35 @@ fn file_source(ui: &mut egui::Ui, d: &mut MarksDraft, kind: MarkKind) -> bool {
     browse
 }
 
+/// Pages that paint their own backdrop would hide the background: offer to replace a white one,
+/// and say where a picture (a scan) will still hide it.
+fn backdrop_options(ui: &mut egui::Ui, t: &Tokens, d: &mut MarksDraft, doc: &pdfcraft_engine::Document, count: usize) {
+    let n = d.backdrops.update(doc, &d.range.pages(count));
+    if n.pending > 0 {
+        ui.label(egui::RichText::new(tl!("Checking pages…")).small().color(t.text_faint));
+        ui.ctx().request_repaint();
+    }
+    if !n.fills.is_empty() {
+        ui.add_space(4.0);
+        let label = pages_phrase(
+            &n.fills,
+            tl!("Page {pages} paints its own white backdrop, which would hide the background. Replace it"),
+            tl!("Pages {pages} paint their own white backdrop, which would hide the background. Replace it"),
+        );
+        ui.add(widgets::checkbox(&mut d.bg.replace_backdrop, &label));
+        ui.label(egui::RichText::new(tl!("Removing the background puts the page's own backdrop back.")).small().color(t.text_faint));
+    }
+    if !n.images.is_empty() {
+        ui.add_space(4.0);
+        let text = pages_phrase(
+            &n.images,
+            tl!("A picture covers page {pages} (a scan?), so the background won't show there."),
+            tl!("Pictures cover pages {pages} (scans?), so the background won't show there."),
+        );
+        ui.label(egui::RichText::new(text).small().color(crate::content_ui::UNDRAWABLE));
+    }
+}
+
 /// The edit the dialog's OK makes.
 pub fn edit(d: &MarksDraft, kind: MarkKind, count: usize) -> Edit {
     let pages = d.range.pages(count);
@@ -610,6 +897,18 @@ mod tests {
         d.use_file = true;
         assert_eq!(undrawable(MarkKind::Watermark, &d), None, "a picture watermark draws no text");
         assert_eq!(undrawable(MarkKind::Background, &d), None);
+    }
+
+    #[test]
+    fn backdrop_messages_name_their_pages() {
+        let phrase = |pages: &[usize]| pages_phrase(pages, "Page {pages}", "Pages {pages}");
+        assert_eq!(phrase(&[2]), "Page 3");
+        assert_eq!(phrase(&[0, 1, 2, 5]), "Pages 1-3, 6");
+        assert_eq!(phrase(&[0, 1]), "Pages 1-2", "a whole document is still listed");
+        let every_other: Vec<usize> = (0..40).step_by(2).collect();
+        assert_eq!(phrase(&every_other), "Pages 1, 3, 5, 7, 9, 11, 13, 15, …", "a long list stops");
+        let runs: Vec<usize> = (0..LISTED_PAGE_RUNS * 2).step_by(2).collect();
+        assert_eq!(phrase(&runs), "Pages 1, 3, 5, 7, 9, 11, 13, 15", "exactly the limit: no …");
     }
 
     #[test]
@@ -680,6 +979,19 @@ mod tests {
         assert_eq!(behind([1.0, 0.0, 0.0], 0.0), Color32::WHITE);
         assert_eq!(behind([0.0, 0.0, 0.0], 0.5), Color32::from_rgb(128, 128, 128));
         assert_eq!(behind([0.2, 0.4, 0.6], f64::NAN), behind([0.2, 0.4, 0.6], 1.0), "opaque, as the engine has it");
+    }
+
+    #[test]
+    fn the_preview_shows_a_background_only_where_ok_lets_it_show() {
+        let mut d = MarksDraft::default();
+        let colour = behind(d.bg.color, d.bg.opacity);
+        assert_ne!(colour, Color32::WHITE);
+        assert_eq!(background_tint(&d, None), colour, "no backdrop of its own");
+        assert_eq!(background_tint(&d, Some(Backdrop::Fill)), colour, "its white backdrop is replaced");
+        assert_eq!(background_tint(&d, Some(Backdrop::Image)), Color32::WHITE, "a picture covers it");
+        d.bg.replace_backdrop = false;
+        assert_eq!(background_tint(&d, Some(Backdrop::Fill)), Color32::WHITE, "its white backdrop stays and hides it");
+        assert_eq!(background_tint(&d, None), colour, "unticked changes nothing without a backdrop");
     }
 
     #[test]

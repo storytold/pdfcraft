@@ -1,6 +1,6 @@
 //! Window chrome: tab strip (with the integrated macOS title bar), mode bar, right rail.
 
-use craft_ui::panes::{Edge, Rail, RailItem, RailRequest};
+use craft_ui::panes::{Rail, RailItem, RailRequest};
 use egui::{Align, Color32, CornerRadius, Layout, Rect, Sense, Stroke, vec2};
 
 use crate::canvas::{DocView, Fit, PageLayout};
@@ -30,7 +30,8 @@ const STRIP_BUTTON: f32 = 28.0;
 #[cfg(any(target_os = "windows", test))]
 #[derive(Clone, Copy, Default)]
 struct TitleBarClicks {
-    previous: Option<(f64, egui::Pos2)>,
+    // Native movement can finish after a repaired release; retain the window position too.
+    previous: Option<(f64, egui::Pos2, Option<egui::Pos2>)>,
     deferred_press: bool,
     captured_press: bool,
     native_origin: Option<egui::Pos2>,
@@ -75,14 +76,16 @@ fn title_bar_input(ui: &egui::Ui, title: &egui::Response) {
         )
     });
     let near_previous = |clicks: &TitleBarClicks, pos: Option<egui::Pos2>| {
-        clicks.previous.zip(pos).is_some_and(|((last, previous), pos)| time - last < delay && previous.distance_sq(pos) < distance * distance)
+        clicks.previous.zip(pos).is_some_and(|((last, previous, window), pos)| {
+            time - last < delay && previous.distance_sq(pos) < distance * distance && window.zip(outer_pos).is_none_or(|(from, to)| from == to)
+        })
     };
     let finish_click = |clicks: &mut TitleBarClicks| {
         // Native movement keeps the client pointer at its grab point; the window position
         // distinguishes that drag from a stationary click when the release is repaired.
         let moved = clicks.native_origin.zip(outer_pos).is_some_and(|(from, to)| from != to);
         let maximize = clicks.deferred_press && near_previous(clicks, release_pos) && !moved;
-        clicks.previous = if maximize || moved { None } else { release_pos.map(|pos| (time, pos)) };
+        clicks.previous = if maximize || moved { None } else { release_pos.map(|pos| (time, pos, outer_pos)) };
         clicks.deferred_press = false;
         clicks.captured_press = false;
         clicks.native_origin = None;
@@ -119,7 +122,9 @@ fn title_bar_input(ui: &egui::Ui, title: &egui::Response) {
     if clicked && !(pressed && down) {
         maximize |= finish_click(&mut clicks);
     }
-    if released && !clicked {
+    // A repaired release may be followed by the physical release from Windows. Only
+    // cancel an active gesture; an already-completed click must keep its history.
+    if released && !clicked && (clicks.captured_press || clicks.deferred_press || clicks.native_origin.is_some()) {
         clicks = TitleBarClicks::default();
     }
     // A stalled frame may receive two complete clicks. These already-released presses never
@@ -187,10 +192,10 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     app.active = None;
                     app.combine_tab.focused = false;
                 }
-                // Keep the two icon buttons, Discord's text/padding and three gaps outside the scrolling tabs.
+                // Reserve the three icon buttons, Discord and their gaps outside the scrolling tabs.
                 let controls_width = ui.fonts_mut(|f| f.layout_no_wrap("Discord".into(), theme::medium(13.0), t.text).size().x)
-                    + 2.0 * button
-                    + 50.0
+                    + 3.0 * button
+                    + 54.0
                     + window_controls::width(&controls.right);
                 // Open stays in sight after the tabs: its icon, text and padding, and the gaps around it.
                 let open_width = ui.fonts_mut(|f| f.layout_no_wrap(tl!("Open").into(), theme::medium(13.0), t.text).size().x) + 38.0 + 12.0;
@@ -404,6 +409,9 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                             window_controls::buttons(ui, &controls.right);
                         });
                         ui.add_space(window_controls::SIDE_GAP - 4.0);
+                    }
+                    if icons::button(ui, "settings", button, false, tl!("Preferences")).clicked() {
+                        app.execute("app.preferences");
                     }
                     let (icon, label) = match app.theme_preference {
                         ThemePreference::System => ("monitor", tl!("Use system setting")),
@@ -687,13 +695,18 @@ pub fn right_rail(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let view = &mut app.views[index];
     let mut page_display = None;
     let rail = Rail::new(egui::Id::unique("rail"))
-        .edge(Edge::End)
+        .edge(app.side_panels.rail_edge())
         .frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin::symmetric(6, 8)).stroke(Stroke::new(1.0, t.divider)))
         .show(ui, &items, app.right.as_ref(), |ui| {
             // Page navigation cluster at the bottom, a panel of its own so that in a short
             // window the buttons above scroll instead of running into it (#3282).
             ui.with_layout(Layout::bottom_up(Align::Center), |ui| {
                 ui.spacing_mut().item_spacing.y = 2.0;
+                let right = app.side_panels.rail_on_right();
+                let dock_tip = if right { tl!("Dock navigation rail on Left") } else { tl!("Dock navigation rail on Right") };
+                if icons::button(ui, if right { "panel-left" } else { "panel-right" }, 32.0, false, dock_tip).clicked() {
+                    app.side_panels.rail_side = if right { crate::side_panels::ToolsSide::Left } else { crate::side_panels::ToolsSide::Right };
+                }
                 let tip = crate::commands::key_tip(ui.ctx(), tl!("Zoom out ({key})"), crate::commands::ZOOM_OUT);
                 if icons::button(ui, "zoom-out", 32.0, false, &tip).clicked() {
                     view.zoom_step(false);
@@ -899,6 +912,105 @@ fn rail_view_menu(ui: &mut egui::Ui, view: &mut DocView) -> Option<&'static str>
 
 #[cfg(test)]
 mod title_bar_tests {
+    #[test]
+    fn a_late_physical_release_does_not_erase_the_repaired_title_click() {
+        let ctx = egui::Context::default();
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 900.0));
+        let pos = egui::pos2(700.0, 18.0);
+        let button = |pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+        let frame = |time, events| {
+            let mut raw = egui::RawInput { time: Some(time), screen_rect: Some(screen), focused: true, events, ..Default::default() };
+            crate::window_controls::release_after_desktop_grab(&ctx, &mut raw);
+            let out = ctx.run_ui(raw, |ui| {
+                let title = ui.interact(
+                    egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 38.0)),
+                    egui::Id::unique("late_title_release"),
+                    egui::Sense::click(),
+                );
+                super::title_bar_input(ui, &title);
+            });
+            let commands: Vec<_> = out.viewport_output.values().flat_map(|v| v.commands.iter().cloned()).collect();
+            out.drop_without_applying_deltas();
+            commands
+        };
+        frame(0.0, vec![]);
+        assert!(frame(0.05, vec![egui::Event::PointerMoved(pos), button(true)]).contains(&egui::ViewportCommand::StartDrag));
+        frame(0.08, vec![]); // The repair releases the press before Windows returns its release.
+        frame(0.10, vec![button(false)]);
+        assert!(!frame(0.14, vec![button(true)]).contains(&egui::ViewportCommand::StartDrag));
+        assert!(frame(0.17, vec![button(false)]).contains(&egui::ViewportCommand::Maximized(true)));
+    }
+
+    #[test]
+    fn a_canceled_second_title_press_clears_double_click_history() {
+        let ctx = egui::Context::default();
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 900.0));
+        let pos = egui::pos2(700.0, 18.0);
+        let button = |pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+        let frame = |time, events| {
+            let mut raw = egui::RawInput { time: Some(time), screen_rect: Some(screen), focused: true, events, ..Default::default() };
+            crate::window_controls::release_after_desktop_grab(&ctx, &mut raw);
+            let out = ctx.run_ui(raw, |ui| {
+                let title = ui.interact(
+                    egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 38.0)),
+                    egui::Id::unique("canceled_title_click"),
+                    egui::Sense::click(),
+                );
+                super::title_bar_input(ui, &title);
+            });
+            let commands: Vec<_> = out.viewport_output.values().flat_map(|v| v.commands.iter().cloned()).collect();
+            out.drop_without_applying_deltas();
+            commands
+        };
+        frame(0.0, vec![]);
+        assert!(frame(0.05, vec![egui::Event::PointerMoved(pos), button(true)]).contains(&egui::ViewportCommand::StartDrag));
+        frame(0.08, vec![]); // The repair releases the press before Windows returns its release.
+        frame(0.10, vec![button(false)]);
+        assert!(!frame(0.14, vec![button(true)]).contains(&egui::ViewportCommand::StartDrag));
+        let outside = egui::pos2(700.0, 200.0);
+        let canceled = frame(
+            0.17,
+            vec![
+                egui::Event::PointerMoved(outside),
+                egui::Event::PointerButton { pos: outside, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE },
+            ],
+        );
+        assert!(!canceled.contains(&egui::ViewportCommand::Maximized(true)));
+        assert!(frame(0.20, vec![egui::Event::PointerMoved(pos), button(true)]).contains(&egui::ViewportCommand::StartDrag));
+    }
+
+    #[test]
+    fn a_native_move_after_the_repaired_release_does_not_become_a_double_click() {
+        let ctx = egui::Context::default();
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 900.0));
+        let outer = std::cell::Cell::new(egui::pos2(100.0, 100.0));
+        let pos = egui::pos2(700.0, 18.0);
+        let button = |pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+        let frame = |time, events| {
+            let mut raw = egui::RawInput { time: Some(time), screen_rect: Some(screen), focused: true, events, ..Default::default() };
+            raw.viewports.get_mut(&egui::ViewportId::ROOT).unwrap().outer_rect = Some(egui::Rect::from_min_size(outer.get(), screen.size()));
+            crate::window_controls::release_after_desktop_grab(&ctx, &mut raw);
+            let out = ctx.run_ui(raw, |ui| {
+                let title = ui.interact(
+                    egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 38.0)),
+                    egui::Id::unique("late_native_title_move"),
+                    egui::Sense::click(),
+                );
+                super::title_bar_input(ui, &title);
+            });
+            let commands: Vec<_> = out.viewport_output.values().flat_map(|v| v.commands.iter().cloned()).collect();
+            out.drop_without_applying_deltas();
+            commands
+        };
+        frame(0.0, vec![]);
+        assert!(frame(0.05, vec![egui::Event::PointerMoved(pos), button(true)]).contains(&egui::ViewportCommand::StartDrag));
+        frame(0.08, vec![]); // The repair releases the press before Windows returns its release.
+        outer.set(egui::pos2(200.0, 150.0)); // Native movement completes after the repair.
+        frame(0.10, vec![button(false)]);
+        assert!(frame(0.14, vec![button(true)]).contains(&egui::ViewportCommand::StartDrag));
+        assert!(!frame(0.17, vec![button(false)]).contains(&egui::ViewportCommand::Maximized(true)));
+    }
+
     #[test]
     fn native_title_bar_double_click_does_not_enter_two_move_loops() {
         for kept_release in [false, true] {

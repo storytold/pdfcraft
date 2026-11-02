@@ -279,7 +279,15 @@ fn notice_bar(ui: &mut egui::Ui, t: &Tokens, icon: &str, icon_color: Color32, te
 /// The floating quick-action bar at the left edge of the document area.
 pub(super) fn quick_bar(app: &mut PdfCraftApp, area: Rect, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
-    let pos = area.left_top() + vec2(14.0, 14.0);
+    let mut offset = vec2(0.0, 0.0);
+    if app.hotbar.full_side {
+        match app.hotbar.dock.as_deref() {
+            Some("left") => offset.x += app.hotbar.button_size + 14.0,
+            Some("top") => offset.y += app.hotbar.button_size + 14.0,
+            _ => {}
+        }
+    }
+    let pos = area.left_top() + vec2(14.0, 14.0) + offset;
     egui::Area::new(egui::Id::unique("quick-bar")).order(egui::Order::Middle).fixed_pos(pos).show(ui.ctx(), |ui| {
         egui::Frame::NONE
             .fill(t.card)
@@ -302,6 +310,12 @@ pub(super) fn quick_bar(app: &mut PdfCraftApp, area: Rect, ui: &mut egui::Ui) {
                         let current = app.comment_prefs.group_tool[g];
                         let active = matches!(app.quick_tool, QuickTool::Comment(t) if t.group() == g);
                         let resp = icons::button(ui, current.icon(), 32.0, active, tl!(current.label()));
+                        if comments::GROUPS[g].len() == 1 {
+                            if resp.clicked() {
+                                app.execute(current.command());
+                            }
+                            continue;
+                        }
                         // A small corner triangle marks the flyout.
                         let r = resp.rect;
                         let tri = [r.right_bottom() + vec2(-4.0, -4.0), r.right_bottom() + vec2(-9.0, -4.0), r.right_bottom() + vec2(-4.0, -9.0)];
@@ -458,6 +472,14 @@ pub(super) fn quick_bar(app: &mut PdfCraftApp, area: Rect, ui: &mut egui::Ui) {
                         {
                             app.apply_edit(Edit::FontSizeAnnotation { page, index: annotation, size: app.fill_text_size });
                         }
+                    }
+                    if matches!(current_fill, Some(crate::fill_sign::FillTool::Text | crate::fill_sign::FillTool::Date)) {
+                        ui.menu_button(tl!("Colour"), |ui| {
+                            if let Some(color) = comments::swatch_grid(ui, Some(app.fill_text_color)) {
+                                app.fill_text_color = color;
+                                ui.close();
+                            }
+                        });
                     }
                     if let QuickTool::Comment(tool) = app.quick_tool {
                         let (r, _) = ui.allocate_exact_size(vec2(32.0, 9.0), Sense::hover());
