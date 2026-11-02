@@ -96,7 +96,7 @@ pub(crate) fn context_menu(
             // subordinate, Delete takes just it, as Acrobat's does.
             let (dpage, dindex) = view.comments.target().unwrap_or((page, index));
             if ui.add_enabled(allowed && deletable(dpage, dindex), egui::Button::new(tl!("Delete"))).clicked() {
-                view.comments.selected = None;
+                view.comments.select(None);
                 action = Some(CanvasAction::Edit(Box::new(Edit::DeleteAnnotation { page: dpage, index: dindex })));
                 ui.close();
             }
@@ -127,7 +127,7 @@ pub(crate) fn context_menu(
     if !info.annotations.is_empty() {
         ui.separator();
         if ui.add_enabled(can_modify, egui::Button::new(tl!("Flatten comments"))).clicked() {
-            view.comments.selected = None;
+            view.comments.select(None);
             action = Some(CanvasAction::Edit(Box::new(Edit::Flatten { comments: true, fields: false })));
             ui.close();
         }

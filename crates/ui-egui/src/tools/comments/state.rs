@@ -199,6 +199,14 @@ impl CommentView {
         }
     }
 
+    /// Select `key`, or nothing, from anywhere but a press on the page ([`Self::pick`]): the group
+    /// member a press picked goes, so Delete and the arrow keys act on what is selected now, not
+    /// on a member remembered from before (after the Comments panel, a deletion or undo).
+    pub(crate) fn select(&mut self, key: Option<(usize, usize)>) {
+        self.selected = key;
+        self.member = None;
+    }
+
     /// Select what a press on this page's `a` selects ([`PageCx::selects`]), remembering `a` when
     /// it is a group subordinate.
     pub(crate) fn pick(&mut self, cx: &PageCx<'_>, a: &Annotation) {
@@ -245,7 +253,7 @@ impl CommentView {
     /// were on, where it now is (deleting a reply keeps its comment selected), and close when it
     /// went too.
     pub(crate) fn annotation_deleted(&mut self, before: &[Annotation], after: &[Annotation], gone: (usize, usize)) {
-        self.selected = self.selected.and_then(|k| after_delete(before, after, gone, k));
+        self.select(self.selected.and_then(|k| after_delete(before, after, gone, k)));
         self.editing = self.editing.take().and_then(|(p, i, text)| after_delete(before, after, gone, (p, i)).map(|(p, i)| (p, i, text)));
         if self.editing.is_none() {
             self.editor_focus = None;
@@ -257,7 +265,7 @@ impl CommentView {
     /// editor close, its unsaved text with it, rather than Save writing that text over whatever
     /// took its place.
     pub(crate) fn history_stepped(&mut self) {
-        self.selected = None;
+        self.select(None);
         self.editing = None;
         self.editor_focus = None;
     }

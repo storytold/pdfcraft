@@ -55,12 +55,12 @@ fn select_after_edit(
             if matches!(a.shape, pdfcraft_engine::Shape::Ink { .. })
                 && quick_tool == crate::QuickTool::Comment(crate::comments::CommentTool::Ink) =>
         {
-            view.comments.selected = None;
+            view.comments.select(None);
         }
         Edit::AddAnnotation(a) => {
             // Select the new comment (appended last among the page's comments).
             let newest = info.annotations.iter().filter(|x| x.page == a.page && !x.is_reply()).map(|x| x.index).max();
-            view.comments.selected = newest.map(|n| (a.page, n));
+            view.comments.select(newest.map(|n| (a.page, n)));
             view.comments.reveal = true;
             // A new highlight opens its note for typing straight away, as in Acrobat,
             // unless a note typed into another card is still unsaved.
@@ -647,7 +647,7 @@ impl PdfCraftApp {
                     .session
                     .get(view.id)
                     .and_then(|d| d.info.annotations.iter().filter(|a| a.page == page && !a.is_reply()).map(|a| a.index).max());
-                view.comments.selected = newest.map(|index| (page, index));
+                view.comments.select(newest.map(|index| (page, index)));
                 view.comments.reveal = true;
                 self.quick_tool = crate::QuickTool::Select;
             }

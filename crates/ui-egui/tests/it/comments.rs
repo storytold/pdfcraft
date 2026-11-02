@@ -3108,6 +3108,29 @@ fn delete_deletes_the_group_member_clicked() {
     assert_eq!(shapes(&h), [("Circle".to_string(), true)], "the Square goes, the Circle stays as a comment of its own");
 }
 
+/// #5517 review: the member a click on the page picked is forgotten once the selection is made
+/// anywhere else. After clicking the Circle, choosing the group's card in the Comments panel
+/// selects the comment the card shows, the Square, so Delete deletes the Square, not the Circle
+/// the page click remembered.
+#[test]
+fn choosing_the_groups_card_makes_delete_act_on_the_card_not_the_member_clicked() {
+    let shapes = |h: &Harness<'static, PdfCraftApp>| -> Vec<String> {
+        let mut out: Vec<String> = comments(h).iter().filter(|a| a.subtype != "Text").map(|a| a.subtype.clone()).collect();
+        out.sort();
+        out
+    };
+    let mut h = harness_with_bytes(GROUP_FIXTURE.to_vec(), |app| app.set_option("panel", "comments").unwrap());
+    click_pt(&mut h, (220.0, 150.0));
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "the Circle's click selects the group");
+    // The selected card's header row, with its author.
+    h.get_by_label("Alice").click();
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "the card selects the same group");
+    h.key_press(egui::Key::Delete);
+    h.run_steps(3);
+    assert_eq!(shapes(&h), ["Circle".to_string()], "the card's comment, the Square, goes; the Circle stays");
+}
+
 /// The Square's and the Circle's `/Rect` in [`GROUP_FIXTURE`] (or one built like it).
 fn group_rects(h: &Harness<'static, PdfCraftApp>) -> (Vec<f32>, Vec<f32>) {
     let all = comments(h);

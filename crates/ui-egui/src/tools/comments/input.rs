@@ -34,7 +34,7 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, 
         // On a group subordinate, its group (the primary), so the menu offers the comment's actions.
         match cx.click_hit(p) {
             Some(a) => cv.pick(cx, a),
-            None => cv.selected = None,
+            None => cv.select(None),
         }
     }
     let gestures = Gestures { ui, resp, cx, pointer, origin, page_rect, pressed_here, over_page };
@@ -275,7 +275,7 @@ fn select_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, view: &mu
                 cv.reveal = true;
                 consumed = true;
             }
-            None => cv.selected = None,
+            None => cv.select(None),
         }
     }
     if resp.double_clicked()
@@ -353,7 +353,7 @@ impl Gestures<'_> {
             && let Some(o) = origin
         {
             cv.gesture = Some(Gesture::Draw { page: cx.page, tool, points: vec![cx.to_user(o)] });
-            cv.selected = None;
+            cv.select(None);
         }
         if let Some(Gesture::Draw { page, tool, points }) = cv.gesture.as_mut()
             && *page == cx.page
@@ -393,7 +393,7 @@ impl Gestures<'_> {
             && let Some(p) = pointer
             && let Some(shape) = drawn_shape(tool, &[cx.to_user(p)])
         {
-            cv.selected = None;
+            cv.select(None);
             let now = ui.input(|i| i.time);
             cv.settle(now, cx.page, tool, &[cx.to_user(p)]);
             view.pending_edit = Some(new_comment(cx, tool, shape, String::new()));
@@ -444,7 +444,7 @@ impl Gestures<'_> {
                 }
                 _ => {
                     cv.gesture = Some(Gesture::Draw { page: cx.page, tool, points: vec![u] });
-                    cv.selected = None;
+                    cv.select(None);
                 }
             }
         }
@@ -476,7 +476,7 @@ impl Gestures<'_> {
             && let Some(o) = origin
         {
             cv.gesture = Some(Gesture::Draw { page: cx.page, tool: CommentTool::Callout, points: vec![cx.to_user(o)] });
-            cv.selected = None;
+            cv.select(None);
         }
         if let Some(Gesture::Draw { page, points, .. }) = cv.gesture.as_mut()
             && *page == cx.page
@@ -513,7 +513,7 @@ impl Gestures<'_> {
             && let Some(p) = pointer
         {
             cv.attach_at = Some((cx.page, cx.to_user(p)));
-            cv.selected = None;
+            cv.select(None);
         }
         true
     }
@@ -535,7 +535,7 @@ impl Gestures<'_> {
             let snapped = cx.info.pages.get(cx.page).zip(caret_text).and_then(|(page, t)| snapped_caret(page, t, vx, vy));
             let (at, size) = snapped.unwrap_or_else(|| (cx.to_user(p), CARET_SIZE));
             cv.composer = Some(Composer { page: cx.page, at, kind: ComposerKind::Caret { size }, text: String::new(), focus: true });
-            cv.selected = None;
+            cv.select(None);
         }
         true
     }
@@ -557,7 +557,7 @@ impl Gestures<'_> {
                 && let Some(o) = origin
             {
                 cv.gesture = Some(Gesture::Draw { page: cx.page, tool, points: vec![cx.to_user(o)] });
-                cv.selected = None;
+                cv.select(None);
             }
             if let Some(Gesture::Draw { page, points, .. }) = cv.gesture.as_mut()
                 && *page == cx.page
@@ -587,7 +587,7 @@ impl Gestures<'_> {
         {
             let kind = if tool == CommentTool::Note { ComposerKind::Note } else { ComposerKind::TextBox { size: None } };
             cv.composer = Some(Composer { page: cx.page, at: cx.to_user(p), kind, text: String::new(), focus: true });
-            cv.selected = None;
+            cv.select(None);
         }
         true
     }
@@ -613,7 +613,7 @@ pub(crate) fn keys(ctx: &egui::Context, view: &mut DocView, tool: &mut QuickTool
         && let Some((page, index)) = cv.target()
         && ctx.input(|i| i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace))
     {
-        cv.selected = None;
+        cv.select(None);
         view.pending_edit = Some(Edit::DeleteAnnotation { page, index });
     }
 }
