@@ -1798,11 +1798,25 @@ fn a_dictionary_that_names_itself_isnt_counted_as_stored() {
 fn what_is_made_direct_is_small_however_often_a_large_object_is_named() {
     let big = format!("[{}]", "1 ".repeat(100_000));
     let keys: String = (0..50).map(|k| format!(" /K{k} 2 0 R")).collect();
-    // Three filters, and parameters for 2,001: the entries past the filters are dropped.
-    let (filters, entries) = (" 2 0 R".repeat(2), " 2 0 R".repeat(2000));
+    // Three filters, and parameters for 2,001: the entries past the filters are dropped. Two name
+    // object 6, whose `/JBIG2Globals` is the large array given directly, which no decoder reads.
+    let (filters, entries) = (" 2 0 R".repeat(2), format!(" 6 0 R 6 0 R{}", " 2 0 R".repeat(1998)));
     let dict =
         format!("/Width 2 0 R /Height 2 0 R /Filter [/FlateDecode{filters}] /DecodeParms [<< /Predictor 3 0 R /Columns 2 0 R{keys} >>{entries}]");
-    let doc = pdf(vec![b"<< /Type /Catalog >>".to_vec(), big.into_bytes(), b"4 0 R".to_vec(), b"12".to_vec(), stream(&dict, b"")]);
+    let globals = format!("<< /JBIG2Globals {big} >>");
+    // A chain of more filters than any decoder takes is no filter, and its parameters aren't read:
+    // ten here, against eight and a `/Crypt`.
+    let long = format!("/Filter [{}] /DecodeParms 2 0 R", "/FlateDecode ".repeat(10));
+    let doc = pdf(vec![
+        b"<< /Type /Catalog >>".to_vec(),
+        big.into_bytes(),
+        b"4 0 R".to_vec(),
+        b"12".to_vec(),
+        stream(&dict, b""),
+        globals.into_bytes(),
+        stream(&long, b""),
+        stream(&format!("/Filter [{}]", "/FlateDecode ".repeat(9)), b""),
+    ]);
     let Object::Stream(s) = &*doc.get(ObjRef::new(5, 0)) else { panic!("object 5 is the stream") };
     let made = crate::globals::readable(&doc, s);
     let mut bytes = Vec::new();
@@ -1811,6 +1825,33 @@ fn what_is_made_direct_is_small_however_often_a_large_object_is_named() {
     let parms = made.dict.get(b"DecodeParms").and_then(Object::as_array).unwrap();
     assert_eq!(parms.first().and_then(Object::as_dict).and_then(|d| d.get(b"Predictor")), Some(&Object::Int(12)));
     assert_eq!(parms.len(), 3, "an entry for each filter");
+    assert!(parms[1].as_dict().is_some_and(|d| !d.contains(b"JBIG2Globals")), "{:?}", parms[1]);
+    let Object::Stream(s) = &*doc.get(ObjRef::new(7, 0)) else { panic!("object 7 is the stream") };
+    let made = crate::globals::readable(&doc, s);
+    assert_eq!(made.dict.get(b"Filter"), Some(&Object::Null));
+    assert_eq!(made.dict.get(b"DecodeParms").and_then(Object::as_array).map(Vec::len), Some(0));
+    // Eight filters and a `/Crypt` are as many as a decoder takes: those are read.
+    let Object::Stream(s) = &*doc.get(ObjRef::new(8, 0)) else { panic!("object 8 is the stream") };
+    let made = crate::globals::readable(&doc, s);
+    assert_eq!(made.dict.get(b"Filter").and_then(Object::as_array).map(Vec::len), Some(9));
+}
+
+/// What streams share by reference is read once a run, however many share it: a parameters array
+/// of 5,000 entries named by 100 streams costs the array and its one entry, once.
+#[test]
+fn a_shared_parameters_array_is_read_once_however_many_streams_share_it() {
+    let entries = " 4 0 R".repeat(5000);
+    let mut objects =
+        vec![b"<< /Type /Catalog >>".to_vec(), format!("[{entries}]").into_bytes(), stream("", b"symbols"), b"<< /JBIG2Globals 3 0 R >>".to_vec()];
+    objects.extend((0..100).map(|_| stream("/Filter /JBIG2Decode /DecodeParms 2 0 R", b"")));
+    let doc = pdf(objects);
+    let mut names = crate::globals::Names::default();
+    for n in 5..105 {
+        let Object::Stream(s) = &*doc.get(ObjRef::new(n, 0)) else { panic!("object {n} is a stream") };
+        let lists = names.of(&doc, s);
+        assert_eq!(lists.iter().map(|(list, _)| list.to_vec()).collect::<Vec<_>>(), [vec![3]]);
+    }
+    assert_eq!(names.read, 2);
 }
 
 /// A copy of the dictionary stored with a predictor is found whatever way its parameters are given,

@@ -7,6 +7,7 @@
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
+use std::rc::Rc;
 use std::sync::Arc;
 
 use pdfcraft_cos::{DECODE_PARMS_KEYS, Dict, Document, MAX_JBIG2_GLOBALS, Object, Stream, reachable};
@@ -33,39 +34,75 @@ pub(crate) fn followed(doc: &Document, o: &Object) -> Arc<Object> {
     at
 }
 
-/// Every object `s` names as `/JBIG2Globals`, and each reference on the way to one: in any entry of
-/// its parameters, whichever filter that entry belongs to and however the filters are given. A
+/// What a parameters value names as `/JBIG2Globals`, and the key it is remembered by: a value the
+/// file refers to, by its object number and whether it is read as a list of entries.
+pub(crate) type Listed = (Rc<[u32]>, Option<(u32, bool)>);
+
+/// Every object a stream names as `/JBIG2Globals`, and each reference on the way to one: in any entry
+/// of its parameters, whichever filter that entry belongs to and however the filters are given. A
 /// reader may use less of this, but leaving a dictionary behind is the failure that matters here.
-fn named(doc: &Document, s: &Stream) -> Vec<u32> {
-    let mut found = Vec::new();
-    let mut read = |entry: &Object| {
-        let held = followed(doc, entry);
-        let Some(mut at) = held.as_dict().and_then(|d| d.get(b"JBIG2Globals")).and_then(Object::as_ref) else { return };
-        for _ in 0..=MAX_HOPS {
-            found.push(at.num);
-            match &*doc.get(at) {
-                Object::Ref(next) => at = *next,
-                _ => return,
-            }
+///
+/// What a value the file refers to names is read once a run, so streams that share one, by
+/// reference or through an entry, cost it once however many there are.
+#[derive(Default)]
+pub(crate) struct Names {
+    memo: HashMap<(u32, bool), Rc<[u32]>>,
+    /// How many values were read rather than remembered.
+    pub(crate) read: usize,
+}
+
+impl Names {
+    /// What `s` names, one list for each key that gives it parameters.
+    pub(crate) fn of(&mut self, doc: &Document, s: &Stream) -> Vec<Listed> {
+        // `/FDecodeParms` too: those of data in another file, which a reader may draw instead.
+        [b"DecodeParms".as_slice(), b"DP", b"FDecodeParms"].into_iter().filter_map(|key| s.dict.get(key)).map(|v| self.value(doc, v, true)).collect()
+    }
+
+    /// What `v` names: one entry, or (`list`) an array of them or one.
+    fn value(&mut self, doc: &Document, v: &Object, list: bool) -> Listed {
+        let key = v.as_ref().map(|r| (r.num, list));
+        if let Some(hit) = key.and_then(|k| self.memo.get(&k)) {
+            return (hit.clone(), key);
         }
-    };
-    // `/FDecodeParms` too: those of data in another file, which a reader may draw instead.
-    for key in [b"DecodeParms".as_slice(), b"DP", b"FDecodeParms"] {
-        let Some(parms) = s.dict.get(key).map(|p| followed(doc, p)) else { continue };
-        match &*parms {
-            Object::Array(entries) => entries.iter().for_each(&mut read),
-            other => read(other),
+        self.read += 1;
+        let names: Rc<[u32]> = match (&*followed(doc, v), list) {
+            (Object::Array(entries), true) => {
+                let mut all: Vec<u32> = entries.iter().flat_map(|e| self.value(doc, e, false).0.to_vec()).collect();
+                all.sort_unstable();
+                all.dedup();
+                all.into()
+            }
+            (entry, _) => entry_names(doc, entry).into(),
+        };
+        if let Some(k) = key {
+            self.memo.insert(k, names.clone());
+        }
+        (names, key)
+    }
+}
+
+/// What one parameters entry names as `/JBIG2Globals`, and each reference on the way to it.
+fn entry_names(doc: &Document, entry: &Object) -> Vec<u32> {
+    let mut found = Vec::new();
+    let Some(mut at) = entry.as_dict().and_then(|d| d.get(b"JBIG2Globals")).and_then(Object::as_ref) else { return found };
+    for _ in 0..=MAX_HOPS {
+        found.push(at.num);
+        match &*doc.get(at) {
+            Object::Ref(next) => at = *next,
+            _ => break,
         }
     }
     found
 }
 
 /// A `/Filter` through any references, as a decoder reads it: a name, or an array of names, each
-/// entry through references too. Anything else is null, so nothing large is copied however often
-/// the file refers to it.
+/// entry through references too. Anything else is null, a chain longer than any decoder takes
+/// (`MAX_CHAIN`, and a `/Crypt`) included, so nothing large is copied however often the file refers
+/// to it, and a stream that names it is read as one with no filter.
 fn direct_filter(doc: &Document, v: &Object) -> Object {
     let name = |o: &Object| if matches!(o, Object::Name(_)) { o.clone() } else { Object::Null };
     match &*followed(doc, v) {
+        Object::Array(a) if a.len() > pdfcraft_filters::MAX_CHAIN + 1 => Object::Null,
         Object::Array(a) => Object::Array(a.iter().map(|e| name(&followed(doc, e))).collect()),
         other => name(other),
     }
@@ -80,8 +117,8 @@ fn direct_number(doc: &Document, v: &Object) -> Object {
 }
 
 /// `/DecodeParms` as a reader takes them, through any references, for `filters` filters: of each
-/// entry, the numbers and flags the decoders read ([`DECODE_PARMS_KEYS`]), and `/JBIG2Globals` as
-/// given. An entry that isn't a dictionary is null. As `Document::with_direct_parms`, nothing large
+/// entry, the numbers and flags the decoders read ([`DECODE_PARMS_KEYS`]), and `/JBIG2Globals` when it
+/// is a reference. An entry that isn't a dictionary is null. As `Document::with_direct_parms`, nothing large
 /// is copied however often the file refers to it.
 fn direct_parms(doc: &Document, v: &Object, filters: usize) -> Object {
     let entry = |e: &Object| match &*followed(doc, e) {
@@ -94,7 +131,9 @@ fn direct_parms(doc: &Document, v: &Object, filters: usize) -> Object {
                     made.set(key.to_vec(), (*value).clone());
                 }
             }
-            if let Some(globals) = d.get(b"JBIG2Globals") {
+            // As a reference only, as `Document::with_direct_parms` keeps it: a direct value is no
+            // stream, so no decoder reads it, and it may be large.
+            if let Some(globals @ Object::Ref(_)) = d.get(b"JBIG2Globals") {
                 made.set(b"JBIG2Globals".to_vec(), globals.clone());
             }
             Object::Dict(made)
@@ -122,8 +161,8 @@ pub(crate) fn readable(doc: &Document, s: &Stream) -> Stream {
     if let Some(v) = s.dict.get(b"DecodeParms") {
         let filters = match readable.dict.get(b"Filter") {
             Some(Object::Array(a)) => a.len(),
-            Some(_) => 1,
-            None => 0,
+            Some(Object::Name(_)) => 1,
+            _ => 0,
         };
         readable.dict.set(b"DecodeParms".to_vec(), direct_parms(doc, v, filters));
     }
@@ -196,12 +235,19 @@ fn without_dictionary(doc: &Document, s: &Stream) -> Option<Stream> {
 /// changed by then: a caller works on a copy it can drop.
 pub(crate) fn unshare(doc: &mut Document, before: &HashSet<u32>) -> Result<usize, crate::RedactError> {
     let now = kept(doc);
+    let mut names = Names::default();
     let mut dictionaries: HashSet<u32> = HashSet::new();
+    // A list the file refers to is added once, however many streams share it.
+    let mut added: HashSet<(u32, bool)> = HashSet::new();
     for &num in before.difference(&now) {
         if let Ok(object) = doc.try_get(num)
             && let Object::Stream(s) = &*object
         {
-            dictionaries.extend(named(doc, s));
+            for (list, key) in names.of(doc, s) {
+                if key.is_none_or(|k| added.insert(k)) {
+                    dictionaries.extend(list.iter());
+                }
+            }
         }
     }
     if dictionaries.is_empty() {
@@ -209,6 +255,11 @@ pub(crate) fn unshare(doc: &mut Document, before: &HashSet<u32>) -> Result<usize
     }
     let contents: HashSet<u64> = dictionaries.iter().filter_map(|n| content(doc, *n)).collect();
     let mut read: HashMap<u32, Option<u64>> = HashMap::new();
+    // Whether a name matches doesn't depend on order: it is a dictionary that left, or a copy of one
+    // (what is added below is only ever such a copy). So what a shared list matches is found once.
+    let left = dictionaries.clone();
+    let mut matches: HashMap<(u32, bool), Rc<[u32]>> = HashMap::new();
+    added.clear();
     let mut users = Vec::new();
     for (r, object) in doc.scan_objects() {
         let Object::Stream(s) = &*object else { continue };
@@ -220,9 +271,26 @@ pub(crate) fn unshare(doc: &mut Document, before: &HashSet<u32>) -> Result<usize
         // Only what matched has to leave, a copy found here included. Another dictionary this also
         // names was shared with nothing that left: what else uses it may keep it, whichever comes
         // first in the file.
-        let matched: Vec<u32> = named(doc, s).into_iter().filter(|n| dictionaries.contains(n) || copy(n, &mut read)).collect();
-        if !matched.is_empty() {
-            dictionaries.extend(matched);
+        let mut uses = false;
+        for (list, key) in names.of(doc, s) {
+            let matched = match key.and_then(|k| matches.get(&k)) {
+                Some(hit) => hit.clone(),
+                None => {
+                    let found: Rc<[u32]> = list.iter().copied().filter(|n| left.contains(n) || copy(n, &mut read)).collect();
+                    if let Some(k) = key {
+                        matches.insert(k, found.clone());
+                    }
+                    found
+                }
+            };
+            if !matched.is_empty() {
+                uses = true;
+                if key.is_none_or(|k| added.insert(k)) {
+                    dictionaries.extend(matched.iter());
+                }
+            }
+        }
+        if uses {
             users.push(r);
         }
     }
