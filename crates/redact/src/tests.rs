@@ -1884,6 +1884,21 @@ fn a_chain_of_references_is_named_to_the_limit() {
     assert_eq!(named(&mut run, 44), (2..=34).collect::<Vec<u32>>());
 }
 
+/// An image is charged the decoded size of each dictionary it names, as decoding it may undo that
+/// dictionary's filters again.
+#[test]
+fn an_image_is_charged_the_dictionaries_it_names() {
+    let image = "/Type /XObject /Subtype /Image /Width 8 /Height 8 /BitsPerComponent 1 /Filter /JBIG2Decode /DecodeParms << /JBIG2Globals 2 0 R >>";
+    let doc = pdf(vec![b"<< /Type /Catalog >>".to_vec(), stream("", vec![0u8; 40_000]), stream(image, b"not JBIG2")]);
+    let mut run = crate::globals::Run::new(crate::globals::RUN_BUDGET);
+    crate::globals::content(&mut run, &doc, 2).unwrap();
+    assert_eq!(run.spent, 10, "40,000 bytes: a unit and nine whole 4 KiB");
+    let Object::Stream(s) = &*doc.get(ObjRef::new(3, 0)) else { panic!("object 3 is the image") };
+    assert!(matches!(crate::globals::without_dictionary(&mut run, &doc, s), Ok(None)));
+    // The chain to 2 (a fetch and the number held), the dictionary's 10, the image's allowance 2.
+    assert_eq!(run.spent, 24);
+}
+
 /// What can't be decoded is charged as much as it was allowed to decode, so going past a limit
 /// costs as much as reaching it: a dictionary `MAX_JBIG2_GLOBALS` (here one behind a filter that
 /// isn't decoded here), an image its allowance.

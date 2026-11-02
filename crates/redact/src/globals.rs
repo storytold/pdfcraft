@@ -37,8 +37,9 @@ pub(crate) fn followed(doc: &Document, o: &Object) -> Arc<Object> {
 /// The most one run may spend finding what shares a dictionary with what left: objects fetched,
 /// names remembered, and decoded data, a unit and one for each whole 4 KiB. Past it the run is refused
 /// ([`RedactError::SharedJbig2Budget`](crate::RedactError::SharedJbig2Budget)). A scan reads a few
-/// objects a page, and its pages stored again a unit for each 4 KiB of their samples, so a book of
-/// thousands of pages sharing one dictionary stays well within it.
+/// objects a page, and its pages stored again a unit for each 4 KiB of their samples and of the
+/// dictionary they name, so a book of thousands of pages sharing a dictionary of a MiB or two stays
+/// within it.
 pub(crate) const RUN_BUDGET: usize = 1 << 22;
 
 /// What a parameters value names as `/JBIG2Globals`, and the key it is remembered by: a value the
@@ -75,7 +76,10 @@ enum How {
 /// What one redaction or Remove Hidden Information run reads, to find what shares a dictionary with
 /// what left, against [`RUN_BUDGET`]. Each object is fetched at most once a run for each way it is
 /// read, and kept only as what is read of it: a value many streams share, by reference, through a
-/// chain of them or through an entry, costs it once however many there are.
+/// chain of them or through an entry, costs it once however many there are. The exceptions are a
+/// `/JBIG2Globals` chain named part way, which is followed again from there, and a ring of
+/// references or a chain past the limit, read again (up to 33 fetches) wherever it is met; every
+/// fetch counts.
 pub(crate) struct Run {
     budget: usize,
     /// What was spent of the budget.
@@ -87,6 +91,9 @@ pub(crate) struct Run {
     names: HashMap<Key, (Rc<[u32]>, Key)>,
     /// What a `/JBIG2Globals` reference leads to: it and each reference after it, by its number.
     chains: HashMap<u32, Rc<[u32]>>,
+    /// What each dictionary was found to decode to, or its limit when it couldn't be: an image
+    /// naming it may undo its filters again, which costs as much.
+    sizes: HashMap<u32, usize>,
     /// How many values were read for their names rather than remembered.
     pub(crate) read: usize,
     /// How many objects were fetched.
@@ -95,7 +102,7 @@ pub(crate) struct Run {
 
 impl Run {
     pub(crate) fn new(budget: usize) -> Self {
-        Run { budget, spent: 0, reduced: HashMap::new(), names: HashMap::new(), chains: HashMap::new(), read: 0, fetched: 0 }
+        Run { budget, spent: 0, reduced: HashMap::new(), names: HashMap::new(), chains: HashMap::new(), sizes: HashMap::new(), read: 0, fetched: 0 }
     }
 
     /// Counts `units` against the budget.
@@ -175,13 +182,12 @@ impl Run {
         let held = fetched.as_deref().unwrap_or(v);
         let names: Rc<[u32]> = match (held, list) {
             (Object::Array(entries), true) => {
-                let mut all: Vec<u32> = Vec::new();
+                // A set as it is read, so many entries naming the same holds them once.
+                let mut all = std::collections::BTreeSet::new();
                 for e in entries {
                     all.extend(self.names_in(doc, e, false)?.0.iter());
                 }
-                all.sort_unstable();
-                all.dedup();
-                all.into()
+                all.into_iter().collect()
             }
             (entry, _) => self.entry_names(doc, entry)?.into(),
         };
@@ -206,8 +212,8 @@ impl Run {
     }
 
     /// `start` and each reference after it, up to the limit, remembered under `start` for the run,
-    /// so entries naming it, directly or not, fetch it once however many there are; a chain met
-    /// part way takes what is known from there.
+    /// so entries naming it, directly or not, fetch it once however many there are; a chain that
+    /// reaches the start of one already remembered takes what is known from there.
     fn chain(&mut self, doc: &Document, start: pdfcraft_cos::ObjRef) -> Result<Rc<[u32]>, crate::RedactError> {
         if let Some(hit) = self.chains.get(&start.num) {
             return Ok(hit.clone());
@@ -387,11 +393,13 @@ pub(crate) fn content(run: &mut Run, doc: &Document, num: u32) -> Result<Option<
     match &data {
         Ok(data) => {
             run.decoded(data.len())?;
+            run.sizes.insert(num, data.len());
             data.hash(&mut hash);
         }
         // What it took to find out it can't be read: as much as it was allowed to decode.
         Err(_) => {
             run.decoded(MAX_JBIG2_GLOBALS)?;
+            run.sizes.insert(num, MAX_JBIG2_GLOBALS);
             s.raw[..].hash(&mut hash);
         }
     }
@@ -429,6 +437,16 @@ pub(crate) fn without_dictionary(run: &mut Run, doc: &Document, s: &Stream) -> R
     else {
         return Ok(None);
     };
+    // Decoding it undoes the filters of each dictionary it names again when cos doesn't hold their
+    // bytes: charged as much as each was found to decode to.
+    let mut named = std::collections::BTreeSet::new();
+    for (list, _) in run.names_of(doc, s)? {
+        named.extend(list.iter().copied());
+    }
+    let undone = named.iter().filter_map(|n| run.sizes.get(n)).fold(0usize, |sum, size| sum.saturating_add(*size));
+    if undone > 0 {
+        run.decoded(undone)?;
+    }
     let Ok(data) = doc.decoded_image_within(&readable, allowance) else {
         // What it took to find out it can't be read: as much as it was allowed to decode.
         run.decoded(allowance)?;
