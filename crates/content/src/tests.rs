@@ -552,3 +552,15 @@ fn inline_images_end_where_the_renderer_ends_them() {
         assert_eq!((parsed.skipped, parsed.ambiguous_images), (0, 0), "{}", String::from_utf8_lossy(data));
     }
 }
+
+#[test]
+fn invert_accepts_small_scale_and_rejects_singular() {
+    let m = Matrix([1e-7, 0., 0., 1e-7, 0., 0.]);
+    let inv = m.invert().expect("a uniform 1e-7 scale is invertible");
+    let id = m.then(&inv).0;
+    for (got, want) in id.iter().zip(Matrix::IDENTITY.0) {
+        assert!((got - want).abs() < 1e-9, "{id:?}");
+    }
+    assert!(Matrix([1., 2., 2., 4., 0., 0.]).invert().is_none());
+    assert!(Matrix([f64::NAN, 0., 0., 1., 0., 0.]).invert().is_none());
+}

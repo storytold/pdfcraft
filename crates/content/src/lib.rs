@@ -730,7 +730,7 @@ impl Matrix {
     pub fn invert(&self) -> Option<Matrix> {
         let [a, b, c, d, e, f] = self.0;
         let det = a * d - b * c;
-        if det.abs() < 1e-12 || !det.is_finite() {
+        if det == 0.0 || !det.is_finite() || det.abs() <= 1e-12 * ((a * d).abs() + (b * c).abs()) {
             return None;
         }
         let (ia, ib, ic, id) = (d / det, -b / det, -c / det, a / det);
