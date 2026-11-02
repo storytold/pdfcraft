@@ -369,7 +369,8 @@ fn content_pass(doc: &mut Document, text: bool, layers: bool, write: bool) -> Re
         let resources = page.dict.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned()).unwrap_or_default();
         let mut report = Report::default();
         let mode = if write { Mode::Apply } else { Mode::Verify };
-        let mut scope = Scope::new(&[], mode, &mut report, budget);
+        let mut images = pdfcraft_cos::ImageBudget::new(doc);
+        let mut scope = Scope::new(&[], mode, &mut report, budget, &mut images);
         if text {
             let c = page.crop(doc);
             scope.hidden_text = Some([c[0].min(c[2]), c[1].min(c[3]), c[0].max(c[2]), c[1].max(c[3])]);
@@ -507,6 +508,20 @@ pub fn scan(doc: &Document) -> Vec<(Hidden, usize)> {
             (h, n)
         })
         .collect()
+}
+
+/// [`crate::globals::unshare`] for what left without marks: past `images` it is refused as finding
+/// what shares the dictionaries is, since the error redaction gives (redact fewer pages at a time)
+/// means nothing when no page was chosen.
+pub(crate) fn unshare_unmarked(
+    doc: &mut Document,
+    before: &std::collections::HashSet<u32>,
+    images: &mut pdfcraft_cos::ImageBudget,
+) -> Result<usize, RedactError> {
+    crate::globals::unshare(doc, before, images).map_err(|e| match e {
+        RedactError::ImagesPastAllowance => RedactError::SharedJbig2Budget,
+        e => e,
+    })
 }
 
 /// Remove the chosen categories. Returns what was removed per category.
@@ -674,7 +689,8 @@ pub fn remove_hidden(doc: &mut Document, which: &[Hidden]) -> Result<Vec<(Hidden
     if done.is_empty() {
         return Err(RedactError::NothingToApply);
     }
-    crate::globals::unshare(doc, &kept_before)?;
+    // Images stored again without a dictionary are decoded within an allowance of their own.
+    unshare_unmarked(doc, &kept_before, &mut pdfcraft_cos::ImageBudget::new(doc))?;
     doc.require_full_save();
     Ok(done)
 }

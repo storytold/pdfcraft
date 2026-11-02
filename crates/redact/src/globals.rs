@@ -10,7 +10,7 @@ use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 use std::sync::Arc;
 
-use pdfcraft_cos::{DECODE_PARMS_KEYS, Dict, Document, MAX_JBIG2_GLOBALS, Object, Stream, reachable};
+use pdfcraft_cos::{DECODE_PARMS_KEYS, Dict, Document, ImageBudget, MAX_JBIG2_GLOBALS, Object, Stream, reachable};
 
 /// The references followed from `/JBIG2Globals` towards a stream, so that a ring of them ends.
 const MAX_HOPS: usize = 32;
@@ -412,7 +412,7 @@ pub(crate) fn content(run: &mut Run, doc: &Document, num: u32) -> Result<Option<
 /// or known to have more than one component, which JBIG2 is drawn as one of whatever the dictionary
 /// says; for one whose data is in another file (`/F`), which readers draw instead of what is here;
 /// and for one that can't be decoded.
-pub(crate) fn without_dictionary(run: &mut Run, doc: &Document, s: &Stream) -> Result<Option<Stream>, crate::RedactError> {
+pub(crate) fn without_dictionary(run: &mut Run, doc: &Document, s: &Stream, images: &mut ImageBudget) -> Result<Option<Stream>, crate::RedactError> {
     if run.elsewhere(doc, s)? {
         return Ok(None);
     }
@@ -447,10 +447,18 @@ pub(crate) fn without_dictionary(run: &mut Run, doc: &Document, s: &Stream) -> R
     if undone > 0 {
         run.decoded(undone)?;
     }
-    let Ok(data) = doc.decoded_image_within(&readable, allowance) else {
-        // What it took to find out it can't be read: as much as it was allowed to decode.
-        run.decoded(allowance)?;
-        return Ok(None);
+    // Through the run's image allowance, which the decoder's own work, the dictionary's filters
+    // when they are undone again and the pixels are paid from. Past it the run is refused, as one
+    // clearing too many images is.
+    let refused = images.refused();
+    let data = match images.decode(doc, &readable, allowance) {
+        Ok(data) => data,
+        Err(_) if images.refused() > refused => return Err(crate::RedactError::ImagesPastAllowance),
+        Err(_) => {
+            // What it took to find out it can't be read: as much as it was allowed to decode.
+            run.decoded(allowance)?;
+            return Ok(None);
+        }
     };
     run.decoded(data.len())?;
     let mut dict = readable.dict.clone();
@@ -497,14 +505,16 @@ fn matches_left(
 /// An image another page still draws hasn't left: it keeps its pixels, so its dictionary keeps nothing
 /// more.
 ///
-/// What it reads and decodes is counted against [`RUN_BUDGET`] for the whole run.
+/// What it reads and decodes is counted against [`RUN_BUDGET`] for the whole run, and each image
+/// is decoded within `images`, the run's image allowance.
 ///
 /// Errors: [`RedactError::SharedJbig2Globals`](crate::RedactError::SharedJbig2Globals) when a dictionary would
 /// still be kept, as what names it can't be stored without it (counted) or something else refers to
 /// it (0 when that is all); [`RedactError::SharedJbig2Budget`](crate::RedactError::SharedJbig2Budget) when
-/// finding that would spend more than the budget. Such an image may still be drawn, on a page no mark
+/// finding that would spend more than the budget; [`RedactError::ImagesPastAllowance`](crate::RedactError::ImagesPastAllowance)
+/// when decoding the images would spend more than `images` has left. Such an image may still be drawn, on a page no mark
 /// reached, so it isn't removed, and `doc` is part changed by then: a caller works on a copy it can drop.
-pub(crate) fn unshare(doc: &mut Document, before: &HashSet<u32>) -> Result<usize, crate::RedactError> {
+pub(crate) fn unshare(doc: &mut Document, before: &HashSet<u32>, images: &mut ImageBudget) -> Result<usize, crate::RedactError> {
     let now = kept(doc);
     let mut run = Run::new(RUN_BUDGET);
     let mut dictionaries: HashSet<u32> = HashSet::new();
@@ -579,7 +589,7 @@ pub(crate) fn unshare(doc: &mut Document, before: &HashSet<u32>) -> Result<usize
     for &r in &users {
         let object = doc.get(r);
         let Object::Stream(s) = &*object else { continue };
-        match without_dictionary(&mut run, doc, s)? {
+        match without_dictionary(&mut run, doc, s, images)? {
             Some(stored) => {
                 doc.set(r, Object::Stream(stored));
                 stored_again += 1;
