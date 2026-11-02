@@ -224,7 +224,8 @@ impl ExtractDraft {
 
 /// `name` made safe as a file name on every platform: no path separators, reserved or control
 /// characters, no trailing dots or spaces (Windows drops them), no `.pdf` (added back on
-/// writing), at most 200 characters. Empty when nothing usable is left.
+/// writing), cut to at most 200 bytes on a character boundary (a reserved device name then gains
+/// a `_`). Empty when nothing usable is left.
 pub(crate) fn file_stem_from_user(name: &str) -> String {
     let name = name.trim();
     // Any case of ".pdf": it's added back on writing.
@@ -233,11 +234,7 @@ pub(crate) fn file_stem_from_user(name: &str) -> String {
     let cleaned: String =
         name.chars().map(|c| if c.is_control() || matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') { '_' } else { c }).collect();
     // At most 200 bytes, so " (page N).pdf" still fits the usual 255-byte file name limit.
-    let mut end = cleaned.len().min(200);
-    while !cleaned.is_char_boundary(end) {
-        end -= 1;
-    }
-    let cleaned = cleaned.get(..end).unwrap_or_default();
+    let cleaned = cleaned.get(..cleaned.floor_char_boundary(200)).unwrap_or_default();
     // Trimming trailing dots also leaves "." and ".." empty.
     let stem = cleaned.trim().trim_end_matches(['.', ' ']).trim_start();
     // Windows reserves these device names whatever the extension: "NUL.pdf" writes nowhere.
@@ -1129,6 +1126,8 @@ mod stem_tests {
         // At most 200 bytes, cut on a character boundary.
         let long = file_stem_from_user(&"文".repeat(300));
         assert!(long.len() <= 200 && long.chars().all(|c| c == '文'), "{}", long.len());
+        // A two-byte character straddling byte 200 is dropped whole.
+        assert_eq!(file_stem_from_user(&("a".repeat(199) + "é")), "a".repeat(199));
     }
     #[test]
     fn attachment_save_name_removes_bidi_without_hiding_the_extension() {
