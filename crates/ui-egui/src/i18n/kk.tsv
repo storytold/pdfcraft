@@ -1,3 +1,7 @@
+# Untranslated: English text until a translator fills these in.
+	Lowering this forgets the oldest files. At 0 there is no list.	Lowering this forgets the oldest files. At 0 there is no list.
+	Recent files to keep	Recent files to keep
+
 	Menu	Мәзір
 	File	Файл
 	Edit	Түзету
@@ -2521,6 +2525,26 @@ animation effects	Off	Өшірулі
 	One sheet per page	Әр бетке бір парақ
 	Each page on its own sheet, named Page 1, Page 2…	Әр бет өз парағында, атауы Page 1, Page 2…
 	Tables become cells; numbers, amounts, percentages and dates become values Excel can compute with, shown as on the page.	Кестелер ұяшықтарға айналады; сандар, сомалар, пайыздар мен күндер Excel есептей алатын мәндерге айналады және бетте көрінгендей көрсетіледі.
+	Clear search	Іздеуді тазалау
+	Pin	Бекіту
+	Pin a tool…	Құралды бекіту…
+	Pin to Home	Басты бетке бекіту
+	Pin tools to Home	Құралдарды басты бетке бекіту
+	Pin your favorite tools here for quick access.	Жылдам қол жеткізу үшін таңдаулы құралдарды осында бекітіңіз.
+	Pinned	Бекітілген
+	Pinned Tools	Бекітілген құралдар
+	Search tools…	Құралдарды іздеу…
+	Select tools to display on your Home page for quick access.	Жылдам қол жеткізу үшін басты бетте көрсетілетін құралдарды таңдаңыз.
+	Unpin from Home	Басты беттен алып тастау
+	Unpin tool	Құралды бекітуден шығару
+	Transform image	Кескінді түрлендіру
+	Select Tool	Таңдау құралы
+	Hand Tool	Қол құралы
+	Marquee Zoom	Аймақты масштабтау
+	Paste	Қою
+	Edit this PDF	Осы PDF файлын түзету
+	Export this PDF	Осы PDF файлын экспорттау
+	Find text or tools	Мәтінді немесе құралдарды табу
 	Create & Edit	Жасау және өңдеу
 	Review & Compare	Шолу және салыстыру
 	Forms & Signatures	Пішіндер және қолтаңбалар
@@ -2568,6 +2592,13 @@ animation effects	Off	Өшірулі
 	field names can't contain a period: {name}	өріс атауларында нүкте болмауы керек: {name}
 	two cells would both be named {name}	екі ұяшықтың да атауы {name} болар еді
 	a field named {name} already exists	{name} атты өріс бар
+	Arrange image	Суретті реттеу
+	Bring forward	Алға жылжыту
+	Bring to front	Алдыңғы планға шығару
+	Crop	Қию
+	Remove crop	Қиюды алып тастау
+	Send backward	Артқа жылжыту
+	Send to back	Артқы планға жіберу
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Бүгін
@@ -2585,3 +2616,10 @@ animation effects	Off	Өшірулі
 	Options for this reply	Осы жауаптың параметрлері
 	Export value	Экспорт мәні
 	Show Page Edge Shadows	Бет жиектерінің көлеңкелерін көрсету
+
+# Image paste and Home notifications (AI-assisted; not separately native-reviewed)
+	Search…	Іздеу…
+	Image pasted	Сурет қойылды
+	No image on clipboard to paste	Алмасу буферінде қоятын сурет жоқ
+	Pinned {tool} to Home	{tool} басты бетке бекітілді
+	Unpinned {tool} from Home	{tool} басты беттен ажыратылды

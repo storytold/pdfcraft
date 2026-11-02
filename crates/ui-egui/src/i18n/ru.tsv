@@ -8,6 +8,10 @@
 # Product and technology names (PdfCraft, PDF, Acrobat JavaScript ...) are not translated;
 # the trailing "…" of dialog commands is kept.
 
+# Untranslated: English text until a translator fills these in.
+	Lowering this forgets the oldest files. At 0 there is no list.	Lowering this forgets the oldest files. At 0 there is no list.
+	Recent files to keep	Recent files to keep
+
 	Menu	Меню
 	File	Файл
 	Edit	Редактирование
@@ -2436,6 +2440,26 @@ animation effects	Off	Выкл
 	One sheet per page	По листу на страницу
 	Each page on its own sheet, named Page 1, Page 2…	Каждая страница на своём листе с именем Page 1, Page 2…
 	Tables become cells; numbers, amounts, percentages and dates become values Excel can compute with, shown as on the page.	Таблицы становятся ячейками; числа, суммы, проценты и даты становятся значениями, с которыми Excel может считать, и выглядят как на странице.
+	Clear search	Очистить поиск
+	Pin	Закрепить
+	Pin a tool…	Закрепить инструмент…
+	Pin to Home	Закрепить на Главной
+	Pin tools to Home	Закрепить инструменты на Главной
+	Pin your favorite tools here for quick access.	Закрепите здесь избранные инструменты для быстрого доступа.
+	Pinned	Закреплено
+	Pinned Tools	Закрепленные инструменты
+	Search tools…	Поиск инструментов…
+	Select tools to display on your Home page for quick access.	Выберите инструменты для отображения на Главной странице для быстрого доступа.
+	Unpin from Home	Открепить от Главной
+	Unpin tool	Открепить инструмент
+	Transform image	Трансформировать изображение
+	Select Tool	Инструмент «Выделение»
+	Hand Tool	Инструмент «Рука»
+	Marquee Zoom	Масштаб выделением
+	Paste	Вставить
+	Edit this PDF	Редактировать этот PDF
+	Export this PDF	Экспортировать этот PDF
+	Find text or tools	Найти текст или инструменты
 	Create & Edit	Создание и редактирование
 	Review & Compare	Рецензирование и сравнение
 	Forms & Signatures	Формы и подписи
@@ -2483,6 +2507,13 @@ animation effects	Off	Выкл
 	field names can't contain a period: {name}	имена полей не могут содержать точку: {name}
 	two cells would both be named {name}	две ячейки получили бы одно имя {name}
 	a field named {name} already exists	поле с именем {name} уже существует
+	Arrange image	Упорядочить изображение
+	Bring forward	Переместить вперед
+	Bring to front	На передний план
+	Crop	Обрезать
+	Remove crop	Убрать обрезку
+	Send backward	Переместить назад
+	Send to back	На задний план
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Сегодня
@@ -2500,3 +2531,10 @@ animation effects	Off	Выкл
 	Options for this reply	Параметры этого ответа
 	Export value	Значение экспорта
 	Show Page Edge Shadows	Показывать тени по краям страниц
+
+# Image paste and Home notifications (AI-assisted; not separately native-reviewed)
+	Search…	Поиск…
+	Image pasted	Изображение вставлено
+	No image on clipboard to paste	В буфере обмена нет изображения для вставки
+	Pinned {tool} to Home	{tool} закреплён на главной
+	Unpinned {tool} from Home	{tool} откреплён от главной

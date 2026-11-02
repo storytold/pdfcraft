@@ -2,6 +2,11 @@
 #   context <TAB> English source <TAB> translation
 #   Clean-room translation written from the English source's meaning.
 #   License: MIT OR Apache-2.0.
+
+# Untranslated: English text until a translator fills these in.
+	Lowering this forgets the oldest files. At 0 there is no list.	Lowering this forgets the oldest files. At 0 there is no list.
+	Recent files to keep	Recent files to keep
+
 	Menu	मेनू
 	File	फ़ाइल
 	Edit	संपादित करें
@@ -2794,6 +2799,31 @@ theme	Appearance	स्वरूप
 	One sheet per page	हर पृष्ठ के लिए एक शीट
 	Sheets	शीट
 	Tables become cells; numbers, amounts, percentages and dates become values Excel can compute with, shown as on the page.	तालिकाएँ सेल बन जाती हैं; संख्याएँ, राशियाँ, प्रतिशत और तिथियाँ ऐसे मान बन जाते हैं जिनसे Excel गणना कर सकता है, जैसे पृष्ठ पर दिखते हैं।
+	Clear search	खोज साफ़ करें
+	Edit this PDF	इस PDF को संपादित करें
+	Export this PDF	इस PDF को निर्यात करें
+	Find text or tools	पाठ या उपकरण ढूंढें
+	Hand Tool	हैंड टूल
+	Marquee Zoom	मार्की ज़ूम
+	Pin	पिन करें
+	Pin a tool…	उपकरण पिन करें…
+	Pin to Home	होम पर पिन करें
+	Pin tools to Home	होम पर उपकरण पिन करें
+	Pin your favorite tools here for quick access.	त्वरित पहुँच के लिए अपने पसंदीदा उपकरण यहाँ पिन करें।
+	Pinned	पिन किया गया
+	Pinned Tools	पिन किए गए उपकरण
+	Search tools…	उपकरण खोजें…
+	Select Tool	चयन उपकरण
+	Select tools to display on your Home page for quick access.	त्वरित पहुँच के लिए अपने होम पेज पर प्रदर्शित करने हेतु उपकरण चुनें।
+	Unpin from Home	होम से अनपिन करें
+	Unpin tool	उपकरण अनपिन करें
+	Arrange image	छवि व्यवस्थित करें
+	Bring forward	आगे लाएँ
+	Bring to front	सबसे आगे लाएँ
+	Crop	क्रॉप करें
+	Remove crop	क्रॉप हटाएँ
+	Send backward	पीछे भेजें
+	Send to back	सबसे पीछे भेजें
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	आज
@@ -2817,3 +2847,10 @@ theme	Appearance	स्वरूप
 
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	इस जवाब के विकल्प
+
+# Image paste and Home notifications (AI-assisted; not separately native-reviewed)
+	Search…	खोजें…
+	Image pasted	छवि चिपकाई गई
+	No image on clipboard to paste	चिपकाने के लिए क्लिपबोर्ड में कोई छवि नहीं है
+	Pinned {tool} to Home	{tool} को होम पर पिन किया गया
+	Unpinned {tool} from Home	{tool} को होम से अनपिन किया गया

@@ -5,11 +5,38 @@
 
 use alloc::vec::Vec;
 
-use crate::error::{FormatError, ParseError, Result, bail};
+use crate::error::{FormatError, OverflowError, ParseError, Result, bail};
 use crate::reader::Reader;
 use crate::segment::{
     Segment, SegmentType, parse_segment, parse_segment_data, parse_segment_header,
 };
+
+/// PdfCraft patch: the most segments a stream, with its globals, may have. They are all parsed and
+/// sorted before the first is decoded, at about 64 bytes for 11 of input, so behind nested Flate a
+/// 4,765-byte PDF reached 5 GB and failed only afterwards.
+const MAX_SEGMENTS: usize = 1 << 20;
+
+/// PdfCraft patch: the most references those segments may make, 4 bytes each for 1 of input.
+const MAX_REFERENCES: usize = 1 << 22;
+
+/// PdfCraft patch: the segments of a stream so far (see [`MAX_SEGMENTS`], [`MAX_REFERENCES`]).
+#[derive(Default)]
+pub(crate) struct SegmentCount {
+    segments: usize,
+    references: usize,
+}
+
+impl SegmentCount {
+    /// Count one more segment, making `references` references.
+    fn add(&mut self, references: usize) -> Result<()> {
+        self.segments = self.segments.saturating_add(1);
+        self.references = self.references.saturating_add(references);
+        if self.segments > MAX_SEGMENTS || self.references > MAX_REFERENCES {
+            bail!(OverflowError::SegmentCount);
+        }
+        Ok(())
+    }
+}
 
 /// "There are two standalone file organizations possible for a JBIG2 bitstream."
 /// (Annex D)
@@ -140,7 +167,9 @@ fn parse_segments<'a>(
     let mut segments = Vec::new();
 
     match organization {
-        FileOrganization::Sequential => parse_segments_sequential(reader, &mut segments)?,
+        FileOrganization::Sequential => {
+            parse_segments_sequential(reader, &mut segments, &mut SegmentCount::default())?;
+        }
         FileOrganization::RandomAccess => parse_segments_random_access(reader, &mut segments)?,
     }
 
@@ -155,6 +184,7 @@ fn parse_segments<'a>(
 pub(crate) fn parse_segments_sequential<'a>(
     reader: &mut Reader<'a>,
     segments: &mut Vec<Segment<'a>>,
+    count: &mut SegmentCount,
 ) -> Result<()> {
     loop {
         if reader.at_end() {
@@ -162,6 +192,7 @@ pub(crate) fn parse_segments_sequential<'a>(
         }
 
         let segment = parse_segment(reader)?;
+        count.add(segment.header.referred_to_segments.len())?;
 
         // "If a file contains an end of file segment, it must be the last segment."
         // (7.4.11)
@@ -187,6 +218,7 @@ fn parse_segments_random_access<'a>(
     segments: &mut Vec<Segment<'a>>,
 ) -> Result<()> {
     let mut headers = Vec::new();
+    let mut count = SegmentCount::default();
 
     loop {
         if reader.at_end() {
@@ -194,6 +226,7 @@ fn parse_segments_random_access<'a>(
         }
 
         let header = parse_segment_header(reader)?;
+        count.add(header.referred_to_segments.len())?;
 
         // "If a file contains an end of file segment, it must be the last segment."
         // (7.4.11)

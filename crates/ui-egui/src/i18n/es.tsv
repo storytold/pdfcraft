@@ -9,6 +9,10 @@
 # Product and technology names (PdfCraft, PDF, Acrobat JavaScript ...) are not translated;
 # the trailing "…" of dialog commands is kept.
 
+# Untranslated: English text until a translator fills these in.
+	Lowering this forgets the oldest files. At 0 there is no list.	Lowering this forgets the oldest files. At 0 there is no list.
+	Recent files to keep	Recent files to keep
+
 	Menu	Menú
 	File	Archivo
 	Edit	Edición
@@ -2012,9 +2016,16 @@ action wizard	Start	Iniciar
 	Edit text	Editar texto
 	Load document font	Cargar fuente del documento
 	Move image	Mover imagen
+	Transform image	Transformar imagen
 	Rotate image	Girar imagen
 	Flip image	Voltear imagen
 	Delete image	Eliminar imagen
+	Bring to front	Traer al frente
+	Send to back	Enviar al fondo
+	Bring forward	Traer adelante
+	Send backward	Enviar atrás
+	Remove crop	Quitar recorte
+	Crop image	Recortar imagen
 	Add header & footer	Añadir encabezado y pie de página
 	Update header & footer	Actualizar encabezado y pie de página
 	Update watermark	Actualizar marca de agua
@@ -2687,6 +2698,25 @@ animation effects	Off	Desactivados
 	One sheet per page	Una hoja por página
 	Each page on its own sheet, named Page 1, Page 2…	Cada página en su propia hoja, llamada Page 1, Page 2…
 	Tables become cells; numbers, amounts, percentages and dates become values Excel can compute with, shown as on the page.	Las tablas se convierten en celdas; los números, importes, porcentajes y fechas pasan a ser valores con los que Excel puede calcular, mostrados como en la página.
+	Clear search	Borrar búsqueda
+	Pin	Anclar
+	Pin a tool…	Anclar una herramienta…
+	Pin to Home	Anclar en Inicio
+	Pin tools to Home	Anclar herramientas en Inicio
+	Pin your favorite tools here for quick access.	Ancla tus herramientas favoritas aquí para un acceso rápido.
+	Pinned	Anclado
+	Pinned Tools	Herramientas ancladas
+	Search tools…	Buscar herramientas…
+	Select tools to display on your Home page for quick access.	Selecciona las herramientas que se mostrarán en la página de Inicio para un acceso rápido.
+	Unpin from Home	Desanclar de Inicio
+	Unpin tool	Desanclar herramienta
+	Select Tool	Herramienta Selección
+	Hand Tool	Herramienta Mano
+	Marquee Zoom	Zoom por selección
+	Paste	Pegar
+	Edit this PDF	Editar este PDF
+	Export this PDF	Exportar este PDF
+	Find text or tools	Buscar texto o herramientas
 	Attach a file…	Adjuntar un archivo…
 	Delete attachment	Eliminar adjunto
 	Attaching files is not available on the web yet	Adjuntar archivos aún no está disponible en la web
@@ -2842,7 +2872,6 @@ theme	Appearance	Aspecto
 	Import	Importar
 	Move	Mover
 	Duplicate	Duplicar
-	Paste	Pegar
 	Select all	Seleccionar todo
 	Refresh	Actualizar
 	Next	Siguiente
@@ -2893,6 +2922,8 @@ theme	Appearance	Aspecto
 	field names can't contain a period: {name}	los nombres de campo no pueden contener un punto: {name}
 	two cells would both be named {name}	dos celdas se llamarían {name}
 	a field named {name} already exists	ya existe un campo llamado {name}
+	Arrange image	Organizar imagen
+	Crop	Recortar
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Hoy
@@ -2910,3 +2941,10 @@ theme	Appearance	Aspecto
 	Options for this reply	Opciones de esta respuesta
 	Export value	Valor de exportación
 	Show Page Edge Shadows	Mostrar sombras en los bordes de las páginas
+
+# Image paste and Home notifications (AI-assisted; not separately native-reviewed)
+	Search…	Buscar…
+	Image pasted	Imagen pegada
+	No image on clipboard to paste	No hay ninguna imagen en el portapapeles para pegar
+	Pinned {tool} to Home	{tool} fijado en Inicio
+	Unpinned {tool} from Home	{tool} desfijado de Inicio

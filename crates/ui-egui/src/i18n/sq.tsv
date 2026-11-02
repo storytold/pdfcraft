@@ -8,6 +8,10 @@
 # Product and technology names (PdfCraft, PDF, Acrobat JavaScript ...) are not translated;
 # the trailing "…" of dialog commands is kept.
 
+# Untranslated: English text until a translator fills these in.
+	Lowering this forgets the oldest files. At 0 there is no list.	Lowering this forgets the oldest files. At 0 there is no list.
+	Recent files to keep	Recent files to keep
+
 	Menu	Menyja
 	File	Skedari
 	Edit	Redakto
@@ -2385,7 +2389,7 @@ animation effects	Off	Joaktiv
 	Collapse all pages	Collapse all pages
 	Counting words… {n} pages read	Counting words… {n} pages read
 	Create Link…	Create Link…
-	Crop Image	Crop Image
+	Crop Image	Prit imazhin
 	Current page only	Current page only
 	Cut Image	Cut Image
 	Cuts each page to its printed area, turns it upright and fits it to the sheet without stretching. One label per sheet.	Cuts each page to its printed area, turns it upright and fits it to the sheet without stretching. One label per sheet.
@@ -2463,7 +2467,7 @@ animation effects	Off	Joaktiv
 	Recognize Text…	Recognize Text…
 	Redact Image	Redact Image
 	Redaction mark appearance	Redaction mark appearance
-	Remove Crop	Remove Crop
+	Remove Crop	Hiq prerjen
 	Remove this leaf tag from reading order and mark its direct content as an artifact	Remove this leaf tag from reading order and mark its direct content as an artifact
 	Resolution:	Resolution:
 	Save anyway	Save anyway
@@ -2549,6 +2553,32 @@ animation effects	Off	Joaktiv
 	One sheet per page	Një fletë për çdo faqe
 	Sheets	Fletët
 	Tables become cells; numbers, amounts, percentages and dates become values Excel can compute with, shown as on the page.	Tabelat bëhen qeliza; numrat, shumat, përqindjet dhe datat bëhen vlera me të cilat Excel mund të llogarisë, të shfaqura si në faqe.
+	Clear search	Pastro kërkimin
+	Edit this PDF	Redakto këtë PDF
+	Export this PDF	Eksporto këtë PDF
+	Find text or tools	Gjej tekst ose mjete
+	Hand Tool	Mjeti Dorë
+	Marquee Zoom	Zmadhim me kornizë
+	Paste	Ngjit
+	Pin	Fikso
+	Pin a tool…	Fikso një mjet…
+	Pin to Home	Fikso në Ballinë
+	Pin tools to Home	Fikso mjetet në Ballinë
+	Pin your favorite tools here for quick access.	Fiksoni mjetet tuaja të preferuara këtu për qasje të shpejtë.
+	Pinned	I fiksuar
+	Pinned Tools	Mjete të fiksuara
+	Search tools…	Kërko mjete…
+	Select Tool	Mjeti Përzgjedhje
+	Select tools to display on your Home page for quick access.	Zgjidhni mjetet për t'u shfaqur në faqen tuaj të Ballinës për qasje të shpejtë.
+	Unpin from Home	Hiq fiksimin nga Ballina
+	Unpin tool	Hiq fiksimin e mjetit
+	Arrange image	Rregullo figurën
+	Bring forward	Kalo përpara
+	Bring to front	Sille përpara
+	Crop	Prit
+	Remove crop	Hiq prerjen
+	Send backward	Kalo prapa
+	Send to back	Dërgo mbrapa
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Sot
@@ -2572,3 +2602,10 @@ animation effects	Off	Joaktiv
 
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opsionet për këtë përgjigje
+
+# Image paste and Home notifications (AI-assisted; not separately native-reviewed)
+	Search…	Kërko…
+	Image pasted	Imazhi u ngjit
+	No image on clipboard to paste	Nuk ka imazh në kujtesën e përkohshme për të ngjitur
+	Pinned {tool} to Home	{tool} u fiksua te Kreu
+	Unpinned {tool} from Home	{tool} u hoq nga fiksimi te Kreu
