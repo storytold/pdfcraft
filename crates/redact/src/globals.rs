@@ -9,7 +9,7 @@ use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-use pdfcraft_cos::{Document, MAX_JBIG2_GLOBALS, Object, Stream, reachable};
+use pdfcraft_cos::{DECODE_PARMS_KEYS, Dict, Document, MAX_JBIG2_GLOBALS, Object, Stream, reachable};
 
 /// The references followed from `/JBIG2Globals` towards a stream, so that a ring of them ends.
 const MAX_HOPS: usize = 32;
@@ -60,44 +60,72 @@ fn named(doc: &Document, s: &Stream) -> Vec<u32> {
     found
 }
 
-/// `v`, or what references lead to from it, inside an array too.
-fn direct(doc: &Document, v: &Object) -> Object {
+/// A `/Filter` through any references, as a decoder reads it: a name, or an array of names, each
+/// entry through references too. Anything else is null, so nothing large is copied however often
+/// the file refers to it.
+fn direct_filter(doc: &Document, v: &Object) -> Object {
+    let name = |o: &Object| if matches!(o, Object::Name(_)) { o.clone() } else { Object::Null };
     match &*followed(doc, v) {
-        Object::Array(a) => Object::Array(a.iter().map(|e| (*followed(doc, e)).clone()).collect()),
-        other => other.clone(),
+        Object::Array(a) => Object::Array(a.iter().map(|e| name(&followed(doc, e))).collect()),
+        other => name(other),
     }
 }
 
-/// `/DecodeParms` as a reader takes them, through any references: the array or dictionary, each
-/// entry, and each value made direct, but `/JBIG2Globals`, which stays the reference it is.
-fn direct_parms(doc: &Document, v: &Object) -> Object {
+/// A size through any references: a number, or null.
+fn direct_number(doc: &Document, v: &Object) -> Object {
+    match &*followed(doc, v) {
+        number @ (Object::Int(_) | Object::Real(_)) => number.clone(),
+        _ => Object::Null,
+    }
+}
+
+/// `/DecodeParms` as a reader takes them, through any references, for `filters` filters: of each
+/// entry, the numbers and flags the decoders read ([`DECODE_PARMS_KEYS`]), and `/JBIG2Globals` as
+/// given. An entry that isn't a dictionary is null. As `Document::with_direct_parms`, nothing large
+/// is copied however often the file refers to it.
+fn direct_parms(doc: &Document, v: &Object, filters: usize) -> Object {
     let entry = |e: &Object| match &*followed(doc, e) {
         Object::Dict(d) => {
-            let mut made = d.clone();
-            for (key, value) in d.iter().filter(|(key, _)| key.as_slice() != b"JBIG2Globals") {
-                made.set(key.to_vec(), (*followed(doc, value)).clone());
+            let mut made = Dict::new();
+            for key in DECODE_PARMS_KEYS {
+                let Some(value) = d.get(key) else { continue };
+                let value = followed(doc, value);
+                if matches!(*value, Object::Int(_) | Object::Real(_) | Object::Bool(_)) {
+                    made.set(key.to_vec(), (*value).clone());
+                }
+            }
+            if let Some(globals) = d.get(b"JBIG2Globals") {
+                made.set(b"JBIG2Globals".to_vec(), globals.clone());
             }
             Object::Dict(made)
         }
-        other => other.clone(),
+        _ => Object::Null,
     };
     match &*followed(doc, v) {
-        Object::Array(a) => Object::Array(a.iter().map(entry).collect()),
+        Object::Array(a) => Object::Array(a.iter().take(filters).map(entry).collect()),
         other => entry(other),
     }
 }
 
 /// `s` with what `decoded_image` and `decoded_within` read as given made direct: its size, filters
 /// and their parameters.
-fn readable(doc: &Document, s: &Stream) -> Stream {
+pub(crate) fn readable(doc: &Document, s: &Stream) -> Stream {
     let mut readable = s.clone();
-    for key in [b"Width".as_slice(), b"Height", b"Filter"] {
+    for key in [b"Width".as_slice(), b"Height"] {
         if let Some(v) = s.dict.get(key) {
-            readable.dict.set(key.to_vec(), direct(doc, v));
+            readable.dict.set(key.to_vec(), direct_number(doc, v));
         }
     }
+    if let Some(v) = s.dict.get(b"Filter") {
+        readable.dict.set(b"Filter".to_vec(), direct_filter(doc, v));
+    }
     if let Some(v) = s.dict.get(b"DecodeParms") {
-        readable.dict.set(b"DecodeParms".to_vec(), direct_parms(doc, v));
+        let filters = match readable.dict.get(b"Filter") {
+            Some(Object::Array(a)) => a.len(),
+            Some(_) => 1,
+            None => 0,
+        };
+        readable.dict.set(b"DecodeParms".to_vec(), direct_parms(doc, v, filters));
     }
     readable
 }

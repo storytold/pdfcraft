@@ -1565,6 +1565,7 @@ fn what_stays_is_stored_without_the_dictionary_however_it_names_it() {
         (format!("{image} /F 99 0 R"), scan.page.clone(), vec![]),
         // Through a reference to a reference: /F to null, the size, the filter, the colour space.
         (format!("{image} /F 10 0 R"), scan.page.clone(), vec![b"11 0 R".to_vec(), b"null".to_vec()]),
+        (shared_image("/DecodeParms 10 0 R"), scan.page.clone(), vec![b"11 0 R".to_vec(), b"<< /JBIG2Globals 9 0 R >>".to_vec()]),
         (image.replace("/Width 400", "/Width 10 0 R"), scan.page.clone(), vec![b"11 0 R".to_vec(), b"400".to_vec()]),
         (image.replace("/Height 40", "/Height 10 0 R"), scan.page.clone(), vec![b"11 0 R".to_vec(), b"40".to_vec()]),
         (image.replace("/Filter /JBIG2Decode", "/Filter 10 0 R"), scan.page.clone(), vec![b"11 0 R".to_vec(), b"/JBIG2Decode".to_vec()]),
@@ -1789,6 +1790,27 @@ fn a_dictionary_that_names_itself_isnt_counted_as_stored() {
     // The second page's image has its data in another file, so it can't be stored: one item.
     let mut doc = names_itself(SharedPages { other: format!("{} /F (p.jb2)", shared_image(SHARED)), ..SharedPages::new(&scan) });
     assert!(matches!(apply(&mut doc, None), Err(RedactError::SharedJbig2Globals(1))));
+}
+
+/// What a stream's size, filters and parameters are made direct to is small, however often they
+/// refer to a large object: only numbers, names and the parameters decoders read are copied.
+#[test]
+fn what_is_made_direct_is_small_however_often_a_large_object_is_named() {
+    let big = format!("[{}]", "1 ".repeat(100_000));
+    let keys: String = (0..50).map(|k| format!(" /K{k} 2 0 R")).collect();
+    // Three filters, and parameters for 2,001: the entries past the filters are dropped.
+    let (filters, entries) = (" 2 0 R".repeat(2), " 2 0 R".repeat(2000));
+    let dict =
+        format!("/Width 2 0 R /Height 2 0 R /Filter [/FlateDecode{filters}] /DecodeParms [<< /Predictor 3 0 R /Columns 2 0 R{keys} >>{entries}]");
+    let doc = pdf(vec![b"<< /Type /Catalog >>".to_vec(), big.into_bytes(), b"4 0 R".to_vec(), b"12".to_vec(), stream(&dict, b"")]);
+    let Object::Stream(s) = &*doc.get(ObjRef::new(5, 0)) else { panic!("object 5 is the stream") };
+    let made = crate::globals::readable(&doc, s);
+    let mut bytes = Vec::new();
+    pdfcraft_cos::serialize(&Object::Dict(made.dict.clone()), &mut bytes);
+    assert!(bytes.len() < 4096, "{} bytes made direct", bytes.len());
+    let parms = made.dict.get(b"DecodeParms").and_then(Object::as_array).unwrap();
+    assert_eq!(parms.first().and_then(Object::as_dict).and_then(|d| d.get(b"Predictor")), Some(&Object::Int(12)));
+    assert_eq!(parms.len(), 3, "an entry for each filter");
 }
 
 /// A copy of the dictionary stored with a predictor is found whatever way its parameters are given,

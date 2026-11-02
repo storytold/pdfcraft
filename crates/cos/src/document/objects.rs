@@ -781,7 +781,7 @@ impl Document {
 /// The `/DecodeParms` entries the decoders read (ISO 32000-2 Tables 8, 11 and 13: the Flate and
 /// LZW predictors, CCITT, DCT's colour transform): numbers and flags a file may give by
 /// reference, which [`Dict::int`] doesn't follow.
-const DECODE_PARMS_KEYS: [&[u8]; 13] = [
+pub const DECODE_PARMS_KEYS: [&[u8]; 13] = [
     b"Predictor",
     b"Colors",
     b"BitsPerComponent",

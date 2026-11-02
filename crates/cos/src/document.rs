@@ -19,6 +19,7 @@ mod reader;
 mod state;
 mod xref;
 
+pub use objects::DECODE_PARMS_KEYS;
 #[cfg(test)]
 pub(crate) use reader::find;
 #[cfg(test)]
