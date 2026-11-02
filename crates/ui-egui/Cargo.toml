@@ -11,6 +11,8 @@ workspace = true
 
 [dependencies]
 craft-ui = { workspace = true }
+# The file:// URI handed to the Linux file manager (menus::tab_context); already in the workspace through url.
+percent-encoding = { workspace = true }
 # The menus: native on macOS, an egui bar elsewhere, from one definition (menus.rs).
 craft-menu = { workspace = true }
 craft-keymap = { workspace = true }
