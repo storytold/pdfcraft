@@ -29,5 +29,8 @@ bytemuck = { version = "1" }
 getrandom = { version = "0.4", features = ["wasm_js"] }
 
 [dev-dependencies]
+# The content crate's parser, compared operator by operator against hayro's in
+# `tests/content_differential.rs` (L3 may depend on L2).
+pdfcraft-content = { workspace = true }
 # Builds the decompression-bomb streams in the raster tests.
 flate2 = { workspace = true }
