@@ -70,6 +70,7 @@ fn console_runs_scripts_against_the_document() {
     assert!(h.state().js_console.log.is_empty(), "{:?} {:?}", h.state().js_console.log, h.state().dialog);
 }
 
+/// A button's script fills a field and its message takes the toast.
 #[test]
 fn button_scripts_run_and_alert() {
     let mut h = harness();
@@ -78,6 +79,80 @@ fn button_scripts_run_and_alert() {
     h.run_steps(2);
     assert_eq!(value(&h, "greeting"), ["Hello from JavaScript"]);
     assert_eq!(h.state().toast.clone().unwrap().0, "Filled in");
+}
+
+/// One run's messages are all shown, in order (#4294): the first takes the toast with its title
+/// and icon (#4293), the next takes it when the first is gone, and a notice shown meanwhile
+/// doesn't lose the ones still waiting. Messages past the queue's room are counted and reported
+/// once the rest have been shown.
+#[test]
+fn every_message_a_script_shows_takes_the_toast_in_turn() {
+    use pdfcraft_engine::js::{MessageButtons, MessageIcon};
+    let mut h = harness();
+    let id = h.state().active_ids().unwrap().1;
+    h.state_mut().run_button_script(id, "hello", "app.alert('First', 1, 0, 'Order form'); app.alert('Second', 3); app.alert('Third');");
+    h.run_steps(2);
+    let shown = |h: &Harness<'static, PdfCraftApp>| h.state().toast.clone().map(|t| t.0);
+    assert_eq!(shown(&h).as_deref(), Some("First"));
+    let m = h.state().toast_script.clone().expect("the toast shows the script's message");
+    assert_eq!((m.title.as_deref(), m.icon, m.buttons), (Some("Order form"), MessageIcon::Warning, MessageButtons::Ok));
+    assert!(h.query_by_label("Order form").is_some(), "the title is drawn");
+    assert_eq!(h.state().script_messages.len(), 2);
+    // The first is gone: the second takes its place, with its own icon and no title.
+    h.state_mut().toast = None;
+    h.run_steps(2);
+    assert_eq!(shown(&h).as_deref(), Some("Second"));
+    assert_eq!(h.state().toast_script.as_ref().map(|m| (m.title.clone(), m.icon)), Some((None, MessageIcon::Status)));
+    // A notice of the app's own replaces it; the third still follows.
+    h.state_mut().notify("Saved");
+    assert_eq!(h.state().toast_script, None);
+    h.state_mut().toast = None;
+    h.run_steps(2);
+    assert_eq!(shown(&h).as_deref(), Some("Third"));
+    assert!(h.state().script_messages.is_empty());
+    // A notice the same run raises first (its submit request) isn't replaced: the message
+    // follows it.
+    h.state_mut().toast = None;
+    h.run_steps(2);
+    h.state_mut().run_button_script(id, "hello", "this.submitForm('https://example.com/form'); app.alert('Fourth');");
+    h.run_steps(2);
+    let notice = shown(&h).unwrap_or_default();
+    assert!(notice.contains("submitted"), "the submit notice stays: {notice}");
+    assert_eq!(h.state().script_messages.len(), 1);
+    h.state_mut().toast = None;
+    h.run_steps(2);
+    assert_eq!(shown(&h).as_deref(), Some("Fourth"));
+    // Past the 100 the queue holds, messages are counted, and the toast says how many once the
+    // rest have been shown.
+    h.state_mut().toast = None;
+    h.run_steps(2);
+    let many: Vec<_> = (0..105).map(|i| pdfcraft_engine::js::Message::plain(format!("Message {i}"))).collect();
+    h.state_mut().show_script_messages(many);
+    assert_eq!(shown(&h).as_deref(), Some("Message 0"));
+    for i in 1..100 {
+        assert!(h.state_mut().next_script_message());
+        assert_eq!(shown(&h), Some(format!("Message {i}")));
+    }
+    assert!(h.state_mut().next_script_message(), "the notice comes after the last message");
+    assert_eq!(shown(&h).as_deref(), Some("5 more messages from the form's scripts were left out."));
+    assert_eq!(h.state().toast_script, None, "an app notice, not a script message");
+    assert!(!h.state_mut().next_script_message(), "said once");
+    // Another notice replacing it before its time doesn't lose the count: once that notice has
+    // been shown its time, the count is said again, and then, its own time over, not again.
+    h.state_mut().notify("Saved");
+    assert_eq!(shown(&h).as_deref(), Some("Saved"));
+    let left_out = "5 more messages from the form's scripts were left out.";
+    let mut said_again = false;
+    for _ in 0..600 {
+        h.run_steps(1);
+        said_again |= shown(&h).as_deref() == Some(left_out);
+        if said_again && shown(&h).is_none() {
+            break;
+        }
+    }
+    assert!(said_again, "the count is said again after the notice that replaced it");
+    assert_eq!(shown(&h), None, "and once only");
+    assert!(!h.state_mut().next_script_message());
 }
 
 #[test]

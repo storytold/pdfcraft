@@ -7,6 +7,36 @@ const MAX_BOOKMARK_POSITION: f64 = 1_000_000.0;
 
 // ---- JSON helpers ----------------------------------------------------------------------------
 
+/// The most bookmark levels `bookmark_from_text_styles` takes.
+const MAX_STYLE_LEVELS: usize = 9;
+
+/// bookmark_from_text_styles' `levels`: one style per bookmark level, the first level 1, each
+/// `{ font, size, bold, italic }` as text_styles lists them.
+pub(crate) fn text_style_levels(a: &Args) -> Result<Vec<pdfcraft_engine::text_style_bookmarks::TextStyle>> {
+    let levels =
+        a.get("levels").and_then(Value::as_array).ok_or_else(|| ToolError::InvalidArgs("levels must list a style for each bookmark level".into()))?;
+    if levels.is_empty() || levels.len() > MAX_STYLE_LEVELS {
+        return Err(ToolError::InvalidArgs(format!("levels must list 1 to {MAX_STYLE_LEVELS} styles")));
+    }
+    levels
+        .iter()
+        .enumerate()
+        .map(|(i, v)| {
+            let bad = |what: &str| ToolError::InvalidArgs(format!("levels[{i}]: {what}"));
+            let font =
+                v.get("font").and_then(Value::as_str).filter(|f| !f.is_empty()).ok_or_else(|| bad("font must be a font name from text_styles"))?;
+            let size =
+                v.get("size").and_then(Value::as_f64).filter(|s| s.is_finite() && *s > 0.0).ok_or_else(|| bad("size must be a positive number"))?;
+            let flag = |key: &str| match v.get(key) {
+                None | Some(Value::Null) => Ok(false),
+                Some(Value::Bool(b)) => Ok(*b),
+                Some(_) => Err(bad(&format!("{key} must be true or false"))),
+            };
+            Ok(pdfcraft_engine::text_style_bookmarks::TextStyle { font: font.to_string(), size, bold: flag("bold")?, italic: flag("italic")? })
+        })
+        .collect()
+}
+
 pub(crate) fn parse_style_ranges(value: Option<&Value>) -> Result<Vec<pdfcraft_engine::RangeStyle>> {
     let Some(value) = value else { return Ok(Vec::new()) };
     let values = value.as_array().filter(|v| v.len() <= 1024).ok_or_else(|| Args::wrong("ranges", "an array of at most 1024 style objects"))?;

@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use pdfcraft_render::{Layer, LayerOp, RenderPool};
 
-use crate::{Document, render_threads};
+use crate::{Document, display_config, render_threads};
 
 /// Write `layers`' visibility into the default optional-content configuration of `cos` (a copy
 /// made for printing): `/BaseState /ON`, `/ON` the visible layers, `/OFF` the hidden ones. Its
@@ -31,7 +31,7 @@ pub(crate) fn set_default_layer_state(cos: &mut pdfcraft_cos::Document, layers: 
 pub(crate) fn use_layer_choices(doc: &mut Document) {
     let overrides: Vec<(i32, i32, bool)> = doc.info.layers.iter().map(|l| (l.id.0 as i32, l.id.1 as i32, l.visible)).collect();
     doc.config.layers = Arc::new(overrides);
-    doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), doc.config.clone());
+    doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), display_config(&doc.config));
 }
 
 /// Apply a set-layer-visibility action to `layers`, one change at a time, so a toggle flips the
