@@ -418,13 +418,11 @@ fn field_rpr(size: f64, spacing: f64) -> String {
     rpr
 }
 
-/// The form fields a Word document has written: their names (Word's field names, which name
-/// their bookmarks, must be unique) and how many there are (any at all protects the document for
-/// filling in forms).
+/// The form fields a Word document has written, by name: Word's field names name their
+/// bookmarks, so they must be unique.
 #[derive(Default)]
 struct Form {
     names: std::collections::HashSet<String>,
-    fields: usize,
 }
 
 impl Form {
@@ -510,8 +508,8 @@ fn field_look_xml(f: &Field, page_height: f64, id: usize) -> Option<String> {
     ))
 }
 
-/// A form field as a framed paragraph over the field's box, which a document protected for
-/// filling in forms lets its reader fill in: a text field is a Word form field, limited to the
+/// A form field as a framed paragraph over the field's box: a text field is a Word form field
+/// (filled in where it stands, or through Word's form protection), limited to the
 /// PDF field's maximum length when it has one (a comb field also spreads its characters over its
 /// cells); a check box is a content control that shows an X when checked (the PDF draws the box
 /// itself); a list is a drop-down content control.
@@ -530,7 +528,6 @@ fn field_xml(f: &Field, page_height: f64, id: usize, form: &mut Form) -> Option<
     // En spaces (half an em each) keep an empty field as wide as its box.
     let blank = |n: usize| "\u{2002}".repeat(n.clamp(1, 200));
     let fits = |advance: f64| if advance > 0.0 { (w / advance).floor() as usize } else { 1 };
-    form.fields = form.fields.saturating_add(1);
     let paragraph = match &f.kind {
         FieldKind::Text { value, multiline, comb, max_len } => {
             // A comb cell holds one character, centred: the run is spaced one cell per character.
@@ -725,7 +722,8 @@ fn positioned_page<'a>(page: &'a Page, media: &mut Vec<(String, &'a Image)>, sha
     }
     s.push_str("</w:p>");
     // Fields follow as framed paragraphs over their boxes (a form field in a text box can't be
-    // filled in once the document is protected), in front of the shapes behind the text.
+    // filled in once a reader protects the document for forms), in front of the shapes behind
+    // the text.
     for f in page.fields.iter().take(MAX_DOCX_PAGE_SHAPES) {
         *shape_id = shape_id.saturating_add(1);
         if let Some(xml) = field_xml(f, page.height, *shape_id, form) {
@@ -854,10 +852,9 @@ pub fn docx_checked(pages: &[Page], title: &str) -> (Vec<u8>, Vec<usize>) {
     }
     // Word shows a document background only when its settings say so (`settings.xml` below).
     let page_colour = word_background(pages);
-    // A document with form fields is protected for filling in forms, without a password: only
-    // the fields can be changed, and a text field takes no more characters than its PDF field
-    // allowed. Review ▸ Restrict Editing turns it off.
-    let protect = form.fields > 0;
+    // A document with form fields is not protected: its reader can still edit, cut and copy the
+    // form. Word enforces the fields' maximum lengths once the reader protects it for filling in
+    // forms (Review ▸ Restrict Editing).
     let background = page_colour.as_deref().map(|c| format!("<w:background w:color=\"{c}\"/>")).unwrap_or_default();
     let doc = format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n\
@@ -905,13 +902,12 @@ xmlns:mc=\"http://schemas.openxmlformats.org/markup-compatibility/2006\" mc:Igno
     z.add("word/document.xml", doc.as_bytes(), true);
     z.add("word/styles.xml", styles.as_bytes(), true);
     z.add("word/_rels/document.xml.rels", doc_rels.as_bytes(), true);
-    // Children in the schema's order: the background setting, the protection, then the
-    // compatibility mode. Word 2013 and later (15) lay the document out as current Word does
-    // and run its check boxes; without it Word opens the file in compatibility mode.
+    // Children in the schema's order: the background setting, then the compatibility mode. Word
+    // 2013 and later (15) lay the document out as current Word does and run its check boxes;
+    // without it Word opens the file in compatibility mode.
     let background = if page_colour.is_some() { "<w:displayBackgroundShape/>" } else { "" };
-    let protection = if protect { "<w:documentProtection w:edit=\"forms\" w:enforcement=\"1\"/>" } else { "" };
     let xml = format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<w:settings xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">{background}{protection}<w:compat><w:compatSetting w:name=\"compatibilityMode\" w:uri=\"http://schemas.microsoft.com/office/word\" w:val=\"15\"/></w:compat></w:settings>"
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<w:settings xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">{background}<w:compat><w:compatSetting w:name=\"compatibilityMode\" w:uri=\"http://schemas.microsoft.com/office/word\" w:val=\"15\"/></w:compat></w:settings>"
     );
     z.add("word/settings.xml", xml.as_bytes(), true);
     for (name, im) in &media {

@@ -999,7 +999,8 @@ fn word_keeps_a_forms_boxes_rules_and_labels_in_place() {
 }
 
 /// A form's fields become fields a Word user can fill in, over their boxes, limited to the
-/// PDF's maximum length, in a document protected for filling in forms.
+/// PDF's maximum length. The document is not protected, so it can still be edited, cut and
+/// copied; Word enforces the limits once its reader protects it for filling in forms.
 #[test]
 fn word_makes_a_forms_fields_fillable_within_their_limits() {
     let xml = part(&docx(&[form_page()], "Claim"), "word/document.xml");
@@ -1032,12 +1033,12 @@ fn word_makes_a_forms_fields_fillable_within_their_limits() {
     assert!(xml.contains("<w:dropDownList><w:listItem w:displayText=\"Health\" w:value=\"Health\"/>"), "{xml}");
     // Word reads the check boxes through the Word 2010 namespace, which older readers may skip.
     assert!(xml.contains("mc:Ignorable=\"w14 wps\""), "{xml}");
-    // The document is protected for filling in forms, without a password, so the limits hold
-    // and only the fields can be changed.
+    // Not protected: a protected form could not be copied or cut in Word (it only lets the
+    // fields be changed), which is how a reader reuses an exported form.
     let zip = docx(&[form_page()], "Claim");
     assert_eq!(
         part(&zip, "word/settings.xml"),
-        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<w:settings xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:documentProtection w:edit=\"forms\" w:enforcement=\"1\"/><w:compat><w:compatSetting w:name=\"compatibilityMode\" w:uri=\"http://schemas.microsoft.com/office/word\" w:val=\"15\"/></w:compat></w:settings>"
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<w:settings xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:compat><w:compatSetting w:name=\"compatibilityMode\" w:uri=\"http://schemas.microsoft.com/office/word\" w:val=\"15\"/></w:compat></w:settings>"
     );
     assert!(part(&zip, "[Content_Types].xml").contains("/word/settings.xml"));
     assert!(part(&zip, "word/_rels/document.xml.rels").contains("Target=\"settings.xml\""));

@@ -191,8 +191,9 @@ update the numbers.
   [#773](https://github.com/storytold/pdfcraft/issues/773) now covers absent inferred borders,
   floating watermark text and per-page section sizes. A form keeps its layout: vector rules and
   boxes become shapes behind the text, text is placed line by line in its PDF font's family, and
-  AcroForm fields become Word form fields with their `/MaxLen` in a document protected for
-  filling in forms (checked in LibreOffice, WordCraft and Word on a 7-page claim form).
+  AcroForm fields become Word form fields with their `/MaxLen`, which Word enforces once the
+  reader protects the document for filling in forms (checked in LibreOffice, WordCraft and Word
+  on a 7-page claim form).
   Holes in filled paths, clipping, shadings, transparency, radio groups, exact font matching
   and broader layout fidelity remain incomplete;
   `create.export-xlsx`, `create.export-pptx`, `create.from-office`, `create.from-html` planned.
