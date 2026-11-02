@@ -83,7 +83,7 @@ pub(super) fn draw_laid_shaped(
                 entry.insert(outline(c.script, *id).map_err(|e| match c.script {
                     ShapedScript::Arabic => arabic_error(e, &c.text),
                     ShapedScript::Hebrew => hebrew_error(e, &c.text),
-                    ShapedScript::Thai => thai_error(e, &c.text),
+                    ShapedScript::Thai | ShapedScript::ThaiBold => thai_error(e, &c.text),
                 })?);
             }
         }
@@ -220,6 +220,7 @@ fn type3_shaped(doc: &mut Document, clusters: &[&ShapedCluster], outlines: &Hash
                 ShapedScript::Arabic => "Arabic",
                 ShapedScript::Hebrew => "Hebrew",
                 ShapedScript::Thai => "Thai",
+                ShapedScript::ThaiBold => "ThaiBold",
             },
             |f| f.family,
         ),
