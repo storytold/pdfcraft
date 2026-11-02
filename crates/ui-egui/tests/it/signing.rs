@@ -369,13 +369,25 @@ fn clicking_an_empty_signature_field_signs_it() {
     let dir = dir().join("field");
     std::fs::create_dir_all(&dir).unwrap();
     let mut h = harness(dir.clone());
+    sign_the_empty_field(&mut h);
+    let s = h.state();
+    let sig = s.session.get(s.views[1].id).unwrap().signatures.iter().find(|x| x.field == "Approver").cloned().unwrap();
+    assert!(sig.signed && sig.visible);
+}
+
+/// The centre of `WITH_FIELD`'s signature field, opened as the second document.
+fn field_centre(h: &Harness<'static, PdfCraftApp>) -> Pos2 {
+    let r = h.state().views[1].page_screen_rect(0).expect("on screen");
+    pos2(r.left() + 150.0 / 300.0 * r.width(), r.top() + (200.0 - 50.0) / 200.0 * r.height())
+}
+
+/// Opens `WITH_FIELD` as the second document and signs its empty field with the test ID, by
+/// clicking the field.
+fn sign_the_empty_field(h: &mut Harness<'static, PdfCraftApp>) {
     h.state_mut().open_bytes("form.pdf", None, WITH_FIELD.to_vec()).unwrap();
     h.state_mut().active = Some(1);
     h.run_steps(6);
-    let p = {
-        let r = h.state().views[1].page_screen_rect(0).expect("on screen");
-        pos2(r.left() + 150.0 / 300.0 * r.width(), r.top() + (200.0 - 50.0) / 200.0 * r.height())
-    };
+    let p = field_centre(h);
     h.hover_at(p);
     h.run_steps(1);
     h.drag_at(p);
@@ -399,11 +411,41 @@ fn clicking_an_empty_signature_field_signs_it() {
         d.password = "test".into();
     }
     h.run_steps(2);
-    support::outside_menus(&h, "Sign").click();
+    support::outside_menus(h, "Sign").click();
     h.run_steps(6);
-    let s = h.state();
-    let sig = s.session.get(s.views[1].id).unwrap().signatures.iter().find(|x| x.field == "Approver").cloned().unwrap();
-    assert!(sig.signed && sig.visible);
+}
+
+/// Whether the page's hover tip shows and says `text`.
+fn tip_says(h: &Harness<'static, PdfCraftApp>, text: &str) -> bool {
+    let layer = egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique("canvas-hover"));
+    let Some(tip) = h.ctx.memory(|m| m.area_rect(egui::Id::unique("canvas-hover")).filter(|_| m.areas().is_visible(&layer))) else { return false };
+    h.query_all_by_label_contains(text).any(|n| tip.contains(n.rect().center()))
+}
+
+/// A signed field's validation badge is the viewer's own mark, not part of the page: its verdict
+/// is the tip with any tool, beside that tool's cursor.
+#[test]
+fn a_signature_badge_says_its_verdict_with_any_tool() {
+    let dir = dir().join("badge");
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut h = harness(dir.clone());
+    sign_the_empty_field(&mut h);
+    let verdict = {
+        let s = h.state();
+        let sig = s.session.get(s.views[1].id).unwrap().signatures.iter().find(|x| x.field == "Approver").cloned().unwrap();
+        sig.summary()
+    };
+    let p = field_centre(&h);
+    let hover = |h: &mut Harness<'static, PdfCraftApp>, tool: QuickTool, at: Pos2| {
+        h.state_mut().quick_tool = tool;
+        h.run_steps(4);
+        h.hover_at(at);
+        h.run_steps(4);
+        (h.output().platform_output.cursor_icon, tip_says(h, verdict))
+    };
+    assert!(hover(&mut h, QuickTool::Select, p).1, "the Select tool shows the verdict");
+    let stamp = QuickTool::Stamp(pdfcraft_engine::StampKind::DynApproved);
+    assert_eq!(hover(&mut h, stamp, p + egui::vec2(1.0, 0.0)), (egui::CursorIcon::Crosshair, true), "so does a stamp, beside its crosshair");
 }
 
 #[test]

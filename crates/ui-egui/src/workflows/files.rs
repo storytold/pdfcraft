@@ -28,33 +28,65 @@ pub enum FilePurpose {
     RedactWords,
 }
 
-/// Discover installed document fonts off the GUI thread, only when the picker is opened.
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) fn installed_font_files(ctx: &egui::Context) -> Option<Vec<pdfcraft_engine::text_fonts::FontFile>> {
+fn discover_fonts_safely(
+    discover: impl FnOnce() -> Vec<pdfcraft_engine::text_fonts::FontFile> + std::panic::UnwindSafe,
+) -> Vec<pdfcraft_engine::text_fonts::FontFile> {
+    std::panic::catch_unwind(discover).unwrap_or_default()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Default)]
+struct FontScanCache {
+    files: Option<Vec<pdfcraft_engine::text_fonts::FontFile>>,
+    loading: bool,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl FontScanCache {
+    fn begin(&mut self, reload: bool) -> bool {
+        if self.loading || (!reload && self.files.is_some()) {
+            return false;
+        }
+        self.loading = true;
+        self.files = None;
+        true
+    }
+
+    fn finish(&mut self, files: Vec<pdfcraft_engine::text_fonts::FontFile>) {
+        self.files = Some(files);
+        self.loading = false;
+    }
+}
+
+/// Discover installed document fonts off the GUI thread. Reload permits retrying a
+/// failed scan or discovering newly installed fonts without restarting the app.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn installed_font_files(ctx: &egui::Context, reload: bool) -> Option<Vec<pdfcraft_engine::text_fonts::FontFile>> {
     use std::sync::{Mutex, OnceLock};
-    type Files = Arc<Mutex<Option<Vec<pdfcraft_engine::text_fonts::FontFile>>>>;
+    type Files = Arc<Mutex<FontScanCache>>;
     static CACHE: OnceLock<Files> = OnceLock::new();
-    let files = CACHE.get_or_init(|| {
-        let files: Files = Arc::new(Mutex::new(None));
+    let files = CACHE.get_or_init(|| Arc::new(Mutex::new(FontScanCache::default())));
+    let start = files.lock().is_ok_and(|mut state| state.begin(reload));
+    if start {
         let result = files.clone();
         let ctx = ctx.clone();
         if std::thread::Builder::new()
             .name("document-font-discovery".into())
             .spawn(move || {
-                let fonts = pdfcraft_engine::text_fonts::discover(&pdfcraft_engine::text_fonts::installed_directories());
+                let fonts = discover_fonts_safely(|| pdfcraft_engine::text_fonts::discover(&pdfcraft_engine::text_fonts::installed_directories()));
                 if let Ok(mut result) = result.lock() {
-                    *result = Some(fonts);
+                    result.finish(fonts);
                 }
                 ctx.request_repaint();
             })
             .is_err()
             && let Ok(mut result) = files.lock()
         {
-            *result = Some(Vec::new());
+            result.finish(Vec::new());
         }
-        files
-    });
-    files.lock().ok().and_then(|f| f.clone())
+    }
+    files.lock().ok().and_then(|f| f.files.clone())
 }
 
 /// The picker for `purpose`: PDFs, and for Create and Insert also what they convert.
@@ -868,10 +900,24 @@ pub(crate) fn strip_pdf(name: &str) -> &str {
 }
 
 impl PdfCraftApp {
-    /// Comments ▸ Import comments / Prepare a form ▸ Import data: XFDF, FDF, XML, CSV or text.
+    /// Prepare a form ▸ Import data: XFDF, FDF, XML, CSV or text.
     pub fn import_data_dialog(&mut self) {
+        self.import_dialog(false);
+    }
+
+    /// Comments ▸ Import comments: the files Import data takes, or another PDF to copy the
+    /// comments of.
+    pub fn import_comments_dialog(&mut self) {
+        self.import_dialog(true);
+    }
+
+    fn import_dialog(&mut self, pdf: bool) {
         #[cfg(not(target_arch = "wasm32"))]
         {
+            let mut extensions = vec!["xfdf", "fdf", "xml", "xdp", "csv", "txt"];
+            if pdf {
+                extensions.insert(2, "pdf");
+            }
             let import = |app: &mut Self, path: std::path::PathBuf| match std::fs::read(&path) {
                 Ok(bytes) => {
                     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
@@ -880,11 +926,11 @@ impl PdfCraftApp {
                 Err(e) => app.notify_fmt("Couldn't read {name}: {e}", &[("name", &path.display().to_string()), ("e", &e.to_string())]),
             };
             match self.save_override.clone() {
-                Some(p) if [".xfdf", ".fdf", ".xml", ".xdp", ".csv", ".txt"].iter().any(|e| p.ends_with(e)) => import(self, p.into()),
+                Some(p) if extensions.iter().any(|e| p.ends_with(&format!(".{e}"))) => import(self, p.into()),
                 Some(_) => {}
                 None => {
                     let dialog = rfd::AsyncFileDialog::new()
-                        .add_filter(tl!("Comment and form data").to_string(), &["xfdf", "fdf", "xml", "xdp", "csv", "txt"])
+                        .add_filter(tl!("Comment and form data").to_string(), &extensions)
                         .set_title(tl!("Import data").to_string());
                     let target = self.active_ids().map(|(_, id)| id);
                     self.ask_one(crate::pickers::Ask::File(dialog), target, import);
@@ -892,7 +938,10 @@ impl PdfCraftApp {
             }
         }
         #[cfg(target_arch = "wasm32")]
-        self.notify_tr("Importing data arrives on the web with file pickers for data files");
+        {
+            let _ = pdf;
+            self.notify_tr("Importing data arrives on the web with file pickers for data files");
+        }
     }
 
     /// Export all comments / form data: the format follows the file name's extension.
@@ -1158,5 +1207,30 @@ mod stem_tests {
             if path.is_dir() { out.extend(walk(&path)) } else { out.push(path) }
         }
         out
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod font_scan_tests {
+    #[test]
+    fn completed_and_failed_font_scans_can_be_reloaded_without_duplicate_workers() {
+        let mut cache = super::FontScanCache::default();
+        assert!(cache.begin(false));
+        assert!(!cache.begin(true), "a reload during discovery must not start another worker");
+        cache.finish(Vec::new());
+        assert!(!cache.begin(false), "reuse a finished scan until explicitly reloaded");
+        assert!(cache.begin(true), "an empty or failed scan can be retried");
+        cache.finish(vec![pdfcraft_engine::text_fonts::FontFile {
+            path: "installed.ttf".into(),
+            family: "Installed".into(),
+            face: "Installed".into(),
+        }]);
+        assert!(cache.begin(true), "a populated scan can discover newly installed fonts");
+        assert!(cache.files.is_none());
+    }
+
+    #[test]
+    fn a_panicking_font_scan_finishes_with_an_empty_list() {
+        assert!(super::discover_fonts_safely(|| panic!("synthetic font scan failure")).is_empty());
     }
 }

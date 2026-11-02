@@ -2,6 +2,9 @@ use super::{
     AddedContent, Arc, Edit, EditError, FieldValue, ImageEdit, NewAnnotation, Shape, a11y, copy_image, decode_data_file, embed_image, fit_picture,
     image_content_type, is_xfa_data_file, js, mark_source, measure, open_source, strip_xfa, unrestricted, xfa, xfa_after_data_change,
 };
+use crate::SourceProblem;
+use crate::sources::{comment_source, import_pdf_comments};
+use pdfcraft_content::Matrix;
 
 /// Whether the opening password allows an edit (§7.6.4.2, Table 22).
 pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Result<(), EditError> {
@@ -30,6 +33,17 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
                 Ok(())
             } else {
                 Err(EditError::NotPermitted("page changes"))
+            }
+        }
+        // Creates bookmarks (assembly), and their titles are the document's text, copied out of it
+        // (Table 22, bit 5), as an export of it would be.
+        Edit::BookmarksFromTextStyles { .. } => {
+            if !p.assemble() {
+                Err(EditError::NotPermitted("page changes"))
+            } else if !p.copy() {
+                Err(EditError::NotPermitted("copying text and images"))
+            } else {
+                Ok(())
             }
         }
         Edit::AddMeasurement(_)
@@ -106,6 +120,7 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         | Edit::XfaToStatic
         | Edit::SetFieldProps { .. }
         | Edit::DeleteField { .. }
+        | Edit::DeleteWidget { .. }
         | Edit::DuplicateField { .. }
         | Edit::SetTabOrder { .. }
         | Edit::MoveInTabOrder { .. }
@@ -163,6 +178,8 @@ pub(crate) struct EditCtx {
     pub(crate) today: (i64, u32, u32),
     pub(crate) seed: u64,
     pub(crate) count: u64,
+    /// Platform CSPRNG (`getrandom::fill`). Tests replace it so Protect can fail closed.
+    pub(crate) rng: fn(&mut [u8]) -> Result<(), getrandom::Error>,
     /// Fields the edit renamed to keep imported names separate (old → new), for the repair
     /// log and the undo label.
     pub(crate) renamed_fields: Vec<(String, String)>,
@@ -195,24 +212,21 @@ impl EditCtx {
             today: (1970, 1, 1),
             seed,
             count: 0,
+            rng: getrandom::fill,
             renamed_fields: Vec::new(),
             redaction_overlays: Vec::new(),
         }
     }
 
-    /// 32 bytes of entropy for new encryption keys and salts. `RandomState` is seeded by the
-    /// operating system, so no extra dependency is needed.
-    fn entropy(&mut self) -> [u8; 32] {
-        use std::hash::{BuildHasher, Hasher};
+    /// 32 bytes of entropy for new encryption keys, salts and generated owner passwords from the
+    /// platform CSPRNG. Fails closed when secure randomness is unavailable.
+    fn entropy(&mut self) -> Result<[u8; 32], EditError> {
         let mut out = [0u8; 32];
-        for (i, chunk) in out.chunks_mut(8).enumerate() {
-            let mut h = std::collections::hash_map::RandomState::new().build_hasher();
-            h.write_u64(self.seed ^ i as u64);
-            h.write_u64(self.count);
-            self.count += 1;
-            chunk.copy_from_slice(&h.finish().to_le_bytes());
+        (self.rng)(&mut out).map_err(|e| EditError::Protection(format!("no secure randomness available: {e}")))?;
+        if out == [0u8; 32] {
+            return Err(EditError::Protection("no secure randomness available".into()));
         }
-        out
+        Ok(out)
     }
 
     /// A fresh `/NM`: a random-looking UUID (version 4 layout) from a splitmix64 stream.
@@ -235,6 +249,169 @@ impl EditCtx {
         );
         pdfcraft_annot::Meta { date: self.date.clone(), id }
     }
+}
+
+fn run_edit_page_image(doc: &mut pdfcraft_cos::Document, page: usize, index: usize, change: &ImageEdit) -> Result<(), EditError> {
+    match change {
+        ImageEdit::Move(to) if !to.iter().all(|v| v.is_finite()) => {
+            return Err(EditError::Edit(pdfcraft_edit::EditError::Invalid("invalid position".into())));
+        }
+        ImageEdit::Transform(t) => {
+            let [a, b, c, d, _, _] = *t;
+            let determinant = a * d - b * c;
+            if !t.iter().all(|v| v.is_finite()) || !determinant.is_finite() || determinant.abs() < 1e-9 {
+                return Err(EditError::Edit(pdfcraft_edit::EditError::Invalid("the image transform must be finite and nonsingular".into())));
+            }
+        }
+        ImageEdit::Crop(keep) if !keep.iter().all(|v| v.is_finite()) => {
+            return Err(EditError::Edit(pdfcraft_edit::EditError::Invalid("invalid crop".into())));
+        }
+        _ => {}
+    }
+    let img = pdfcraft_edit::page_images(doc, page)?
+        .into_iter()
+        .nth(index)
+        .ok_or_else(|| EditError::Edit(pdfcraft_edit::EditError::Invalid(format!("page {} has no image {}", page + 1, index + 1))))?;
+    let c = match change {
+        ImageEdit::Move(to) => pdfcraft_edit::ImageChange::Transform(pdfcraft_edit::rect_to_rect(img.rect, *to)),
+        ImageEdit::Transform(t) => pdfcraft_edit::ImageChange::Transform(*t),
+        ImageEdit::Rotate(q) => {
+            pdfcraft_edit::ImageChange::Transform(pdfcraft_edit::turn_about_centre(img.visible_rect.unwrap_or(img.rect), *q, false, false))
+        }
+        ImageEdit::RotateBy(degrees) => {
+            let t = pdfcraft_edit::turn_by_degrees(img.visible_rect.unwrap_or(img.rect), *degrees)
+                .ok_or_else(|| EditError::Edit(pdfcraft_edit::EditError::Invalid("the rotation angle must be a finite number".into())))?;
+            pdfcraft_edit::ImageChange::Transform(t)
+        }
+        ImageEdit::Flip { horizontal } => pdfcraft_edit::ImageChange::Transform(pdfcraft_edit::turn_about_centre(
+            img.visible_rect.unwrap_or(img.rect),
+            0,
+            *horizontal,
+            !*horizontal,
+        )),
+        ImageEdit::Replace { name, bytes } => {
+            if img.is_form {
+                return Err(EditError::Edit(pdfcraft_edit::EditError::Invalid("grouped Form artwork cannot be replaced with a bitmap".into())));
+            }
+            pdfcraft_edit::ImageChange::Replace(embed_image(doc, name, bytes)?.0)
+        }
+        ImageEdit::Crop(keep) => pdfcraft_edit::ImageChange::Crop(*keep),
+        ImageEdit::Delete => pdfcraft_edit::ImageChange::Delete,
+        ImageEdit::Arrange(order) => pdfcraft_edit::ImageChange::Arrange(*order),
+        ImageEdit::RemoveCrop => pdfcraft_edit::ImageChange::RemoveCrop,
+    };
+    let page_model = pdfcraft_model::pages(doc)
+        .into_iter()
+        .nth(page)
+        .ok_or_else(|| EditError::Edit(pdfcraft_edit::EditError::Invalid(format!("page {} not found", page + 1))))?;
+    let target_stream_obj = match page_model.dict.get(b"Contents") {
+        None => None,
+        Some(c) => match &*doc.resolve(c) {
+            pdfcraft_cos::Object::Array(a) => a.get(img.stream).and_then(|o| o.as_ref()),
+            _ if img.stream == 0 => c.as_ref(),
+            _ => None,
+        },
+    };
+
+    let added_items: Vec<(usize, pdfcraft_edit::Added)> = pdfcraft_edit::list_added(doc).into_iter().filter(|a| a.page == page).enumerate().collect();
+    // Ownership belongs to the drawing stream, not the XObject: original and added images may
+    // show the same resource without sharing an editable item.
+    let shows_image = |a: &pdfcraft_edit::Added| img.object.is_some_and(|t| matches!(&a.content, AddedContent::Image(ai) if ai.image == t));
+    let matched_added = added_items.iter().find(|(_, a)| target_stream_obj == Some(a.obj) && (img.object.is_none() || shows_image(a)));
+
+    let mut ai_to_update = None;
+    if let Some((added_idx, added_item)) = matched_added
+        && let AddedContent::Image(ai) = added_item.content.clone()
+    {
+        let has_active_crop = ai.crop.iter().any(|v| v.abs() > 1e-6)
+            || img.visible_rect.is_some_and(|v| {
+                (v[0] - img.rect[0]).abs() > 1e-4
+                    || (v[1] - img.rect[1]).abs() > 1e-4
+                    || (v[2] - img.rect[2]).abs() > 1e-4
+                    || (v[3] - img.rect[3]).abs() > 1e-4
+            });
+        let non_axis_transform = matches!(change, ImageEdit::Transform([a, b, c, d, _, _])
+            if !((b.abs() < 1e-5 && c.abs() < 1e-5) || (a.abs() < 1e-5 && d.abs() < 1e-5)));
+        let should_promote = has_active_crop
+            || non_axis_transform
+            || matches!(change, ImageEdit::Crop(_) | ImageEdit::RemoveCrop | ImageEdit::RotateBy(_) | ImageEdit::Arrange(_) | ImageEdit::Delete);
+
+        if should_promote {
+            doc.update_dict(added_item.obj, |d| {
+                d.remove(b"PCAdded");
+                d.remove(b"PCMark");
+            })
+            .map_err(|e| EditError::Edit(pdfcraft_edit::EditError::Invalid(e.to_string())))?;
+        } else {
+            ai_to_update = Some((*added_idx, ai));
+        }
+    }
+
+    if let Some((added_idx, mut ai)) = ai_to_update {
+        let view = Matrix(page_model.view_matrix(doc));
+        let to_display = view.invert().ok_or_else(|| EditError::Edit(pdfcraft_edit::EditError::Invalid("invalid page transform".into())))?;
+
+        match change {
+            ImageEdit::Move(to) => {
+                ai.rect = to_display.bbox(*to);
+                pdfcraft_edit::update_content(doc, page, added_idx, &AddedContent::Image(ai))?;
+            }
+            ImageEdit::Transform(_) | ImageEdit::Flip { .. } => {
+                let pdfcraft_edit::ImageChange::Transform(t) = c else {
+                    return Err(EditError::Edit(pdfcraft_edit::EditError::Invalid("expected transform".into())));
+                };
+                let t_display = view.then(&Matrix(t)).then(&to_display);
+                let [ta, tb, tc, td, _, _] = t_display.0;
+                let is_parallel = tb.abs() < 1e-5 && tc.abs() < 1e-5;
+                let is_perpendicular = ta.abs() < 1e-5 && td.abs() < 1e-5;
+
+                let (quarters_ccw, disp_flip_h, disp_flip_v) = if is_parallel {
+                    (0, ta < 0.0, td < 0.0)
+                } else if is_perpendicular {
+                    match (tb > 0.0, tc > 0.0) {
+                        (true, false) => (1, false, false),
+                        (false, true) => (3, false, false),
+                        (true, true) => (1, false, true),
+                        (false, false) => (1, true, false),
+                    }
+                } else {
+                    return Err(EditError::Edit(pdfcraft_edit::EditError::Invalid(
+                        "non-axis-aligned transforms are not supported for added images".into(),
+                    )));
+                };
+                let (toggle_h, toggle_v) = if ai.rotation % 2 == 1 { (disp_flip_v, disp_flip_h) } else { (disp_flip_h, disp_flip_v) };
+                ai.flip_h ^= toggle_h;
+                ai.flip_v ^= toggle_v;
+                ai.rotation = (ai.rotation + quarters_ccw) % 4;
+                ai.rect = t_display.bbox(ai.rect);
+                pdfcraft_edit::update_content(doc, page, added_idx, &AddedContent::Image(ai))?;
+            }
+            ImageEdit::Rotate(q) => {
+                let k = ((4 - q.rem_euclid(4)) % 4) as u8;
+                ai.rotation = (ai.rotation + k) % 4;
+                let r = ai.rect;
+                let (cx, cy) = ((r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0);
+                if k % 2 == 1 {
+                    let (w, h) = (r[2] - r[0], r[3] - r[1]);
+                    ai.rect = [cx - h / 2.0, cy - w / 2.0, cx + h / 2.0, cy + w / 2.0];
+                }
+                pdfcraft_edit::update_content(doc, page, added_idx, &AddedContent::Image(ai))?;
+            }
+            ImageEdit::Replace { .. } => {
+                let pdfcraft_edit::ImageChange::Replace(new_image) = c else {
+                    return Err(EditError::Edit(pdfcraft_edit::EditError::Invalid("expected replace".into())));
+                };
+                ai.image = new_image;
+                pdfcraft_edit::update_content(doc, page, added_idx, &AddedContent::Image(ai))?;
+            }
+            ImageEdit::Crop(_) | ImageEdit::RemoveCrop | ImageEdit::RotateBy(_) | ImageEdit::Arrange(_) | ImageEdit::Delete => {
+                pdfcraft_edit::change_image(doc, page, index, &c)?;
+            }
+        }
+    } else {
+        pdfcraft_edit::change_image(doc, page, index, &c)?;
+    }
+    Ok(())
 }
 
 /// Perform an edit on a working copy (the caller discards it on error).
@@ -280,8 +457,28 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         Edit::BookmarksFromStructure => {
             let entries: Vec<_> = pdfcraft_a11y::headings(doc)
                 .into_iter()
-                .map(|h| pdfcraft_organize::OutlineEntry { level: h.level, title: h.title, page: h.page, element: h.obj })
+                .map(|h| pdfcraft_organize::OutlineEntry { level: h.level, title: h.title, page: h.page, element: h.obj, top: None })
                 .collect();
+            pdfcraft_organize::add_bookmark_tree(doc, "Untitled", &entries)?;
+        }
+        Edit::BookmarksFromTextStyles { levels } => {
+            if levels.is_empty() {
+                return Err(EditError::Invalid("choose a text style for at least one bookmark level".into()));
+            }
+            // Each line goes to the first level whose style it is in: a style given again, or one
+            // within the size tolerance of an earlier level's, would leave its level empty.
+            for (i, a) in levels.iter().enumerate() {
+                if let Some(j) = levels.iter().skip(i.saturating_add(1)).position(|b| a.matches(b)) {
+                    let (first, second) = (i.saturating_add(1), i.saturating_add(j).saturating_add(2));
+                    return Err(EditError::Invalid(format!(
+                        "bookmark levels {first} and {second} have the same text style: choose a different one for each level"
+                    )));
+                }
+            }
+            let entries = crate::text_style_bookmarks::headings(doc, levels);
+            if entries.is_empty() {
+                return Err(EditError::Invalid("no text is set in the chosen styles".into()));
+            }
             pdfcraft_organize::add_bookmark_tree(doc, "Untitled", &entries)?;
         }
         Edit::NumberPages { from, to, style, prefix, first } => pdfcraft_organize::number_pages(doc, *from, *to, *style, prefix, *first)?,
@@ -446,6 +643,7 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             }
         }
         Edit::DeleteField { name } => pdfcraft_forms::delete_field(doc, name)?,
+        Edit::DeleteWidget { name, widget } => pdfcraft_forms::delete_widget(doc, name, *widget)?,
         Edit::SetTabOrder { pages, order } => pdfcraft_forms::set_tab_order(doc, pages, *order)?,
         Edit::MoveInTabOrder { name, earlier } => pdfcraft_forms::move_in_tab_order(doc, name, *earlier)?,
         // As after a script edit: the values the new order gives show at once.
@@ -491,40 +689,7 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         Edit::AddOcrText { page, words } => {
             pdfcraft_edit::stamp(doc, *page, "OCR", pdfcraft_ocr::text_layer(words))?;
         }
-        Edit::EditPageImage { page, index, change } => {
-            let img = pdfcraft_edit::page_images(doc, *page)?
-                .into_iter()
-                .nth(*index)
-                .ok_or_else(|| EditError::Edit(pdfcraft_edit::EditError::Invalid(format!("page {} has no image {}", page + 1, index + 1))))?;
-            let c = match change {
-                ImageEdit::Move(to) => pdfcraft_edit::ImageChange::Transform(pdfcraft_edit::rect_to_rect(img.rect, *to)),
-                ImageEdit::Rotate(q) => {
-                    pdfcraft_edit::ImageChange::Transform(pdfcraft_edit::turn_about_centre(img.visible_rect.unwrap_or(img.rect), *q, false, false))
-                }
-                ImageEdit::RotateBy(degrees) => {
-                    let t = pdfcraft_edit::turn_by_degrees(img.visible_rect.unwrap_or(img.rect), *degrees)
-                        .ok_or_else(|| EditError::Edit(pdfcraft_edit::EditError::Invalid("the rotation angle must be a finite number".into())))?;
-                    pdfcraft_edit::ImageChange::Transform(t)
-                }
-                ImageEdit::Flip { horizontal } => pdfcraft_edit::ImageChange::Transform(pdfcraft_edit::turn_about_centre(
-                    img.visible_rect.unwrap_or(img.rect),
-                    0,
-                    *horizontal,
-                    !*horizontal,
-                )),
-                ImageEdit::Replace { name, bytes } => {
-                    if img.is_form {
-                        return Err(EditError::Edit(pdfcraft_edit::EditError::Invalid(
-                            "grouped Form artwork cannot be replaced with a bitmap".into(),
-                        )));
-                    }
-                    pdfcraft_edit::ImageChange::Replace(embed_image(doc, name, bytes)?.0)
-                }
-                ImageEdit::Crop(keep) => pdfcraft_edit::ImageChange::Crop(*keep),
-                ImageEdit::Delete => pdfcraft_edit::ImageChange::Delete,
-            };
-            pdfcraft_edit::change_image(doc, *page, *index, &c)?;
-        }
+        Edit::EditPageImage { page, index, change } => run_edit_page_image(doc, *page, *index, change)?,
         Edit::MoveObjects { page, objects, offset } => pdfcraft_edit::move_objects(doc, *page, objects, *offset)?,
         Edit::EditTextBlock { page, block, text, style } => {
             pdfcraft_edit::rewrite_block(doc, *page, *block, Some(text), style)?;
@@ -633,7 +798,11 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
                 return Err(EditError::Edit(pdfcraft_edit::EditError::Invalid("no web addresses were found".into())));
             }
         }
-        Edit::ImportData { bytes, .. } => {
+        Edit::ImportData { name, bytes } if bytes.starts_with(b"%PDF-") => {
+            let src = comment_source(bytes).map_err(|p| EditError::Source(format!("{name}: {p}")))?;
+            import_pdf_comments(doc, &src)?;
+        }
+        Edit::ImportData { name, bytes } => {
             // An XFA form takes XFA data files (XDP, datasets, or a data document) as its data;
             // XFDF, FDF, Acrobat's XML and tables go the usual way.
             let text = (pdfcraft_xfa::read_packets(doc).ok().flatten().is_some()).then(|| decode_data_file(bytes)).flatten();
@@ -647,9 +816,21 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
                     cx.xfa_out.console.push(format!("Imported XFA data: {} node(s)", r.nodes));
                     xfa_after_data_change(doc, cx, true)?;
                 }
-                Some(Err(why)) => return Err(EditError::Invalid(why)),
+                Some(Err(why)) if !bytes[..bytes.len().min(1024)].windows(5).any(|w| w == b"%PDF-") => return Err(EditError::Invalid(why)),
                 _ => {
-                    pdfcraft_xfdf::import(doc, bytes)?;
+                    // A PDF with bytes before its header, within the 1,024 the reader allows, is read
+                    // as a PDF when it is not a data file. A file the PDF reader cannot open keeps
+                    // the data importer's error.
+                    let mut data = doc.clone();
+                    match pdfcraft_xfdf::import(&mut data, bytes) {
+                        Ok(_) => *doc = data,
+                        Err(e) if bytes[..bytes.len().min(1024)].windows(5).any(|w| w == b"%PDF-") => match comment_source(bytes) {
+                            Ok(src) => import_pdf_comments(doc, &src)?,
+                            Err(SourceProblem::Unreadable(_)) => return Err(e.into()),
+                            Err(p) => return Err(EditError::Source(format!("{name}: {p}"))),
+                        },
+                        Err(e) => return Err(e.into()),
+                    }
                 }
             }
         }
@@ -687,10 +868,13 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         }
         Edit::Protect(p) => {
             p.validate()?;
-            let seed = cx.entropy();
+            let seed = cx.entropy()?;
             // Without a permissions password nothing is restricted, so the owner password is a
             // random one nobody needs.
-            let random_owner: String = cx.entropy().iter().map(|b| format!("{b:02x}")).collect();
+            let random_owner = match p.permissions_password {
+                Some(_) => String::new(),
+                None => cx.entropy()?.iter().map(|b| format!("{b:02x}")).collect(),
+            };
             let params = pdfcraft_cos::NewEncryption {
                 algorithm: p.algorithm,
                 user_password: p.open_password.as_deref().unwrap_or(""),
