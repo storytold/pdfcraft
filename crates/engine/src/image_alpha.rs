@@ -104,18 +104,20 @@ fn build(cos: &pdfcraft_cos::Document, object: ObjRef) -> Option<Opacity> {
     // The picture and the mask images it brings are decoded in full before anything is scaled
     // down to the picture's size, so each must be small enough, in pixels and in decoded bytes,
     // before any of it is decoded.
+    // One decoding allowance for the picture and its masks (`ImageBudget`), however many there are.
+    let mut budget = pdfcraft_cos::ImageBudget::new(cos);
     let components = if stencil { 1 } else { components(cos, s.dict.get(b"ColorSpace")) };
-    if !within_budget(cos, s, components, stencil) {
+    if !within_budget(cos, &mut budget, s, components, stencil) {
         return None;
     }
     for key in [&b"SMask"[..], b"Mask"] {
         if let Some(Object::Stream(mask)) = s.dict.get(key).map(|v| cos.resolve(v)).as_deref()
-            && !within_budget(cos, mask, 1, key == b"Mask" || flag(cos, mask, b"ImageMask"))
+            && !within_budget(cos, &mut budget, mask, 1, key == b"Mask" || flag(cos, mask, b"ImageMask"))
         {
             return None;
         }
     }
-    let (_, bytes) = pdfcraft_create::image_file(cos, object).ok()?;
+    let (_, bytes) = pdfcraft_create::image_file_within(cos, object, &mut budget).ok()?;
     let format = image::guess_format(&bytes).ok()?;
     let mut reader = image::ImageReader::with_format(std::io::Cursor::new(bytes.as_slice()), format);
     let mut limits = image::Limits::default();
@@ -182,8 +184,15 @@ fn flag(cos: &pdfcraft_cos::Document, s: &pdfcraft_cos::Stream, key: &[u8]) -> b
 /// its samples are decoded through its filters, no more decoded bytes than its declared size
 /// needs, with room for padding a writer left after the samples. Without that bound a 1 × 1
 /// picture whose stream inflates to a gigabyte would be decoded in full on the first hover. JPEG,
-/// JPEG 2000 and JBIG2 data go to their own decoders instead.
-fn within_budget(cos: &pdfcraft_cos::Document, s: &pdfcraft_cos::Stream, components: u64, stencil: bool) -> bool {
+/// JPEG 2000 and JBIG2 data go to their own decoders instead. The decode is charged to
+/// `allowance`, the picture's shared [`ImageBudget`](pdfcraft_cos::ImageBudget).
+fn within_budget(
+    cos: &pdfcraft_cos::Document,
+    allowance: &mut pdfcraft_cos::ImageBudget,
+    s: &pdfcraft_cos::Stream,
+    components: u64,
+    stencil: bool,
+) -> bool {
     let size = |key: &[u8]| u64::try_from(s.dict.int(key).unwrap_or(0)).unwrap_or(0);
     let (w, h) = (size(b"Width"), size(b"Height"));
     if w.saturating_mul(h) > MAX_DECODE_PIXELS {
@@ -201,7 +210,7 @@ fn within_budget(cos: &pdfcraft_cos::Document, s: &pdfcraft_cos::Stream, compone
     let row = w.checked_mul(components).and_then(|n| n.checked_mul(bpc)).map(|bits| bits.div_ceil(8));
     let budget = row.and_then(|r| r.checked_mul(h)).and_then(|n| n.checked_add(n / 4)).and_then(|n| n.checked_add(DECODE_SLACK));
     let Some(budget) = budget.and_then(|n| usize::try_from(n).ok()) else { return false };
-    cos.decoded_image_within(s, budget).is_ok()
+    allowance.decode(cos, s, budget).is_ok()
 }
 
 /// The colour components of an image in colour space `space` (ISO 32000-2 §8.6): one for an
