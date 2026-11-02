@@ -281,6 +281,7 @@ impl Session {
                         unsaved_file: false,
                         undo: Vec::new(),
                         redo: Vec::new(),
+                        position: 0,
                         keys,
                         appearances: AppearanceCache::default(),
                         field_appearances: pdfcraft_forms::FieldAppearanceCache::default(),

@@ -186,6 +186,8 @@ pub enum Dialog {
     AuditSpace,
     /// Signatures ▸ Show certificate.
     CertificateViewer,
+    /// Use a certificate ▸ Remove signature (Acrobat: Clear Signature).
+    RemoveSignature,
     /// Pin tools to Home: selection modal.
     PinTool,
 }
