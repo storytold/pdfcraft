@@ -3095,6 +3095,40 @@ fn no_zoom_highlights_are_picked_where_their_quads_are_drawn() {
     assert_eq!(select(&mut h, (45.0, 175.0)), Some((0, 0)), "picked where it is drawn");
 }
 
+/// ISO 32000-2 §12.5.3: a NoZoom line or polygon is drawn scaled about the upper-left corner of its
+/// `/Rect` like any NoZoom comment, so its end and corner handles are where its points are drawn.
+/// At 400% the point stored at (80, 140), with the corner at (40, 180), is drawn at (50, 170);
+/// dragged from there to (60, 160) as drawn, it is stored at (120, 100), four times as far from
+/// the corner, and the other points stay where they are.
+#[test]
+fn no_zoom_lines_and_polygons_are_reshaped_where_their_points_are_drawn() {
+    for (subtype, points, moved) in [("Line", "/L [40 180 80 140]", 1), ("Polygon", "/Vertices [40 180 80 180 80 140]", 2)] {
+        let pdf = format!(
+            "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Annots [4 0 R] >> endobj
+4 0 obj << /Type /Annot /Subtype /{subtype} /F 12 /Rect [40 140 80 180] {points} /C [1 0 0] >> endobj
+trailer << /Root 1 0 R >>
+%%EOF"
+        );
+        let mut h = harness_with_bytes(pdf.into_bytes(), |app| {
+            app.set_option("zoom", "400").unwrap();
+            app.set_option("quick", "select").unwrap();
+        });
+        let before: Vec<[f32; 2]> = comments(&h)[0].points.clone();
+        click_pt(&mut h, (45.0, 175.0));
+        assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "{subtype}: picked where it is drawn");
+        drag_pt(&mut h, (50.0, 170.0), (60.0, 160.0));
+        let after: Vec<[f32; 2]> = comments(&h)[0].points.clone();
+        assert_eq!(after.len(), before.len(), "{subtype}");
+        for (i, (b, a)) in before.iter().zip(&after).enumerate() {
+            let want = if i == moved { [120.0, 100.0] } else { *b };
+            assert!((a[0] - want[0]).abs() < 1.0 && (a[1] - want[1]).abs() < 1.0, "{subtype}: point {i} is {a:?}, want {want:?} (all: {after:?})");
+        }
+    }
+}
+
 /// A snapshot copies the area as the page view shows it: at 400% a NoZoom comment covers a
 /// sixteenth of its `/Rect`, not all of it (ISO 32000-2 §12.5.3).
 #[test]

@@ -241,9 +241,15 @@ fn select_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, view: &mu
             Some(Gesture::Reshape { page, index, point, points }) if page == cx.page => {
                 cv.gesture = None;
                 let shift = ui.input(|i| i.modifiers.shift);
-                let moved = points.get(point).is_some_and(|q| cx.to_screen(*q).distance(p) >= 2.0);
+                // Where the point is drawn: a NoZoom comment's are scaled about its /Rect.
+                let a = cx.get(index);
+                let moved = points.get(point).is_some_and(|q| a.map_or(cx.to_screen(*q), |a| cx.point_to_screen(a, *q)).distance(p) >= 2.0);
                 if moved {
-                    view.pending_edit = Some(Edit::ReshapeAnnotation { page, index, points: reshaped(&points, point, cx.to_user(p), shift) });
+                    let points = match a {
+                        Some(a) => cx.reshaped_as_drawn(a, &points, point, p, shift),
+                        None => reshaped(&points, point, cx.to_user(p), shift),
+                    };
+                    view.pending_edit = Some(Edit::ReshapeAnnotation { page, index, points });
                 }
             }
             _ => {}

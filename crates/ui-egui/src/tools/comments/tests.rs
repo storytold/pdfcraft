@@ -8,14 +8,14 @@ fn a_moved_or_reshaped_line_is_drawn_at_its_new_points() {
     let to_user = |p: Pos2| [f64::from(p.x), f64::from(p.y)];
     let moving = Gesture::Move { page: 0, index: 3, from: pos2(20.0, 10.0) };
     let at = Some(pos2(25.0, 30.0));
-    assert_eq!(changing_points(Some(&moving), None, (0, 3), &line, to_user, at, false), Some(vec![[15.0, 30.0], [55.0, 30.0]]));
-    assert_eq!(changing_points(Some(&moving), None, (0, 4), &line, to_user, at, false), None, "another comment's move");
+    assert_eq!(changing_points(Some(&moving), None, (0, 3), &line, (to_user, |q| q), at, false), Some(vec![[15.0, 30.0], [55.0, 30.0]]));
+    assert_eq!(changing_points(Some(&moving), None, (0, 4), &line, (to_user, |q| q), at, false), None, "another comment's move");
     let released = Edit::MoveAnnotation { page: 0, index: 3, dx: 5.0, dy: 20.0 };
-    assert_eq!(changing_points(None, Some(&released), (0, 3), &line, to_user, None, false), Some(vec![[15.0, 30.0], [55.0, 30.0]]));
+    assert_eq!(changing_points(None, Some(&released), (0, 3), &line, (to_user, |q| q), None, false), Some(vec![[15.0, 30.0], [55.0, 30.0]]));
     let dragging = Gesture::Reshape { page: 0, index: 3, point: 1, points: line.to_vec() };
     let to = Some(pos2(60.0, 10.0));
-    assert_eq!(changing_points(Some(&dragging), None, (0, 3), &line, to_user, to, false), Some(vec![[10.0, 10.0], [60.0, 10.0]]));
-    assert_eq!(changing_points(None, None, (0, 3), &line, to_user, to, false), None, "not changing");
+    assert_eq!(changing_points(Some(&dragging), None, (0, 3), &line, (to_user, |q| q), to, false), Some(vec![[10.0, 10.0], [60.0, 10.0]]));
+    assert_eq!(changing_points(None, None, (0, 3), &line, (to_user, |q| q), to, false), None, "not changing");
 }
 
 /// A sticky note on a page turned a quarter is drawn upright beside its `/Rect`: an edit

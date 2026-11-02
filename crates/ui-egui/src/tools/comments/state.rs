@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use super::geometry::{corner_ratio, is_markup, resized, zoomed_quad, zoomed_rect};
+use super::geometry::{corner_ratio, is_markup, point_for_zoomed, resized, zoomed_point, zoomed_quad, zoomed_rect};
 use super::{Annotation, CommentPrefs, CommentTool, DocInfo, Edit, PagePointer, PageXform, Pos2, QuickTool, Rect};
 
 /// The user's login name, which Acrobat uses as the default comment author.
@@ -340,6 +340,30 @@ impl PageCx<'_> {
     pub(super) fn to_screen(&self, p: [f64; 2]) -> Pos2 {
         let v = self.info.pages[self.page].user_to_view(p[0] as f32, p[1] as f32);
         self.xf.norm_to_screen(v[0] / self.xf.pw, v[1] / self.xf.ph)
+    }
+
+    /// Where the point `q` of `a` (an end or corner) is drawn in user space at this page's
+    /// magnification ([`zoomed_point`]).
+    pub(super) fn shown_point(&self, a: &Annotation, q: [f64; 2]) -> [f64; 2] {
+        zoomed_point(a, q, self.magnification())
+    }
+
+    /// Where the point `q` of `a` is drawn on screen.
+    pub(super) fn point_to_screen(&self, a: &Annotation, q: [f64; 2]) -> Pos2 {
+        self.to_screen(self.shown_point(a, q))
+    }
+
+    /// `points` of `a` with point `i` dragged to the screen position `to`, as drawn: the new
+    /// point is where the drag ends on screen once the comment is drawn at this magnification.
+    pub(super) fn reshaped_as_drawn(&self, a: &Annotation, points: &[[f64; 2]], i: usize, to: Pos2, shift: bool) -> Vec<[f64; 2]> {
+        let m = self.magnification();
+        let shown: Vec<[f64; 2]> = points.iter().map(|q| zoomed_point(a, *q, m)).collect();
+        // The other points stay exactly as stored rather than going through the scale and back.
+        let mut out = points.to_vec();
+        if let (Some(d), Some(s)) = (out.get_mut(i), super::geometry::reshaped(&shown, i, self.to_user(to), shift).get(i)) {
+            *d = point_for_zoomed(a, *s, m);
+        }
+        out
     }
 
     /// The page's clockwise `/Rotate`.
