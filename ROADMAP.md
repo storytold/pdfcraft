@@ -1,7 +1,6 @@
 # PdfCraft roadmap
 
-> **Last reviewed:** 2026-11-02 | **Last updated:** 2026-11-02 | **Change:** patch (PR #5731 documentation follow-up: describe touched layout, direction, input and regression contracts; runtime behavior, qualification boundaries and estimates unchanged)
-
+> **Last reviewed:** 2026-11-02 | **Last updated:** 2026-11-02 | **Change:** patch (PR #5731 review: warn when explicit-direction form appearances require unsupported shaping; validate final visible values and option labels before property edits; focused refusal/persistence regressions pass; broader shaping and estimates unchanged)
 > **Last reviewed:** 2026-11-02 | **Last updated:** 2026-11-02 | **Change:** patch (PR #5731: select one complete encoding for directional rows and retain automatic direction per bookmark paragraph; focused regressions pass; current-main integration; broader qualification and estimates unchanged)
 
 > **Last reviewed:** 2026-11-02 | **Last updated:** 2026-11-02 | **Change:** minor (M7/M14 input candidate: eight native shell cases cover Arabic caret, selection, marks, multiline drafts and composition lifecycle; user-confirmed Windows typing observed; combined source-font/browser acceptance pending; estimates unchanged)

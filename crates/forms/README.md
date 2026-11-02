@@ -84,6 +84,12 @@ let cells: Vec<table::Cell> = grid.cells_for(names)?;      // "Table1_1", "Table
   unsupported-character warnings still apply. Explicit overrides on comb fields
   are refused. Directional text is bounded to 262,144 UTF-8 bytes; a loaded
   oversized appearance reports `Overflow::DirectionBudget` without changing `/V`.
+  Explicit-direction simple appearances also report `Overflow::DirectionUnsupported`
+  when the displayed text requires contextual shaping, even if its encoding holds
+  every character. Filled/imported values retain their logical text and Auto-order
+  fallback. Property edits validate displayed values and final choice labels before
+  mutation; password masking and Latin labels with non-Latin export identifiers remain
+  supported. Auto retains its existing policy and is not a complex-shaping guarantee.
 - New fields follow Acrobat: names Text1, Check Box1, Group1 (radio groups), Dropdown1, List Box1,
   Button1, Date1, Signature1; `/Helv` is added to `/DR`; appearances are drawn at once. Radio
   buttons joining a group become kid widgets with their own export state. Renaming changes only

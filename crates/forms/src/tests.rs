@@ -283,6 +283,125 @@ fn explicit_text_direction_budget_refuses_edits_and_reports_loaded_values() {
     assert_eq!(appearance::value_overflow(&doc, f, &f.widgets[0]), Some(appearance::Overflow::DirectionBudget));
 }
 
+/// Synthetic simple encoding that can encode two Arabic letters without providing a shaping path.
+fn shaping_required_fixture() -> Document {
+    let mut doc = fixture();
+    let mut encoding = Dict::new();
+    encoding.set(b"BaseEncoding".to_vec(), Object::name("WinAnsiEncoding"));
+    encoding.set(b"Differences".to_vec(), Object::Array(vec![Object::Int(128), Object::name("uni0628"), Object::name("uni062A")]));
+    doc.update_dict(pdfcraft_cos::ObjRef::new(5, 0), |font| {
+        font.set(b"Encoding".to_vec(), Object::Dict(encoding));
+        font.set(b"FirstChar".to_vec(), Object::Int(128));
+        font.set(b"LastChar".to_vec(), Object::Int(129));
+        font.set(b"Widths".to_vec(), Object::Array(vec![Object::Int(500), Object::Int(500)]));
+    })
+    .unwrap();
+    doc
+}
+
+/// Filled/imported Arabic stays logical and warns instead of silently applying unshaped bidi order.
+#[test]
+fn shaping_required_values_warn_after_explicit_direction_edits() {
+    use pdfcraft_fonts::TextDirection as D;
+    for direction in [D::RightToLeft, D::LeftToRight] {
+        let mut doc = shaping_required_fixture();
+        set_props(&mut doc, "name", &FieldProps { text_direction: Some(direction), ..Default::default() }).unwrap();
+        set_value(&mut doc, "name", &FieldValue::Text("بت".into())).unwrap();
+        let all = fields(&doc);
+        let f = field(&all, "name");
+        assert_eq!(f.value, ["بت"]);
+        assert!(undrawn_fields(&doc).is_empty(), "the fixture encodes both letters: this is a shaping refusal, not a missing-character warning");
+        assert_eq!(appearance::value_overflow(&doc, f, &f.widgets[0]), Some(appearance::Overflow::DirectionUnsupported));
+        assert_eq!(appearance_text(&doc, &f.widgets[0], b"Helv").1, [vec![128, 129]], "unsupported layout must retain the Auto-order fallback");
+        let mut doc = reopen(&doc);
+        let all = fields(&doc);
+        let f = field(&all, "name");
+        assert_eq!(f.value, ["بت"]);
+        assert_eq!(appearance::value_overflow(&doc, f, &f.widgets[0]), Some(appearance::Overflow::DirectionUnsupported));
+        set_props(&mut doc, "name", &FieldProps { text_direction: Some(D::Auto), ..Default::default() }).unwrap();
+        let all = fields(&doc);
+        let f = field(&all, "name");
+        assert_eq!(appearance::value_overflow(&doc, f, &f.widgets[0]), None, "Auto keeps its existing unqualified appearance policy");
+    }
+}
+
+/// Direction/property refusals are atomic; masking Arabic is safe and replacing list labels is checked.
+#[test]
+fn shaping_required_field_properties_are_refused_before_any_mutation() {
+    use pdfcraft_fonts::TextDirection as D;
+    let mut doc = shaping_required_fixture();
+    set_value(&mut doc, "name", &FieldValue::Text("بت".into())).unwrap();
+    for direction in [D::RightToLeft, D::LeftToRight] {
+        let before = pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap();
+        let error = set_props(
+            &mut doc,
+            "name",
+            &FieldProps { name: Some("renamed".into()), locked: Some(true), text_direction: Some(direction), ..Default::default() },
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("shaping"), "{error}");
+        assert_eq!(pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap(), before);
+    }
+    for name in ["country", "toppings"] {
+        set_props(&mut doc, name, &FieldProps { text_direction: Some(D::RightToLeft), ..Default::default() }).unwrap();
+        let before = pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap();
+        let error = set_props(
+            &mut doc,
+            name,
+            &FieldProps { name: Some("renamed".into()), locked: Some(true), options: Some(vec!["بت".into()]), ..Default::default() },
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("shaping"), "{error}");
+        assert_eq!(pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap(), before);
+    }
+    set_value(&mut doc, "pin", &FieldValue::Text("بت".into())).unwrap();
+    set_props(&mut doc, "pin", &FieldProps { text_direction: Some(D::RightToLeft), ..Default::default() }).unwrap();
+    let all = fields(&doc);
+    let pin = field(&all, "pin");
+    assert_eq!(appearance::value_overflow(&doc, pin, &pin.widgets[0]), None);
+    assert!(!ap(&doc, &pin.widgets[0]).contains("/ActualText"), "masked values must stay private");
+    let before = pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap();
+    assert!(set_props(&mut doc, "pin", &FieldProps { flags: vec![(flags::PASSWORD, false)], ..Default::default() }).is_err());
+    assert_eq!(pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap(), before, "unmasking must validate the final visible value");
+
+    // An Arabic export identifier is harmless when the displayed choice label is Latin.
+    let mut doc = shaping_required_fixture();
+    doc.update_dict(pdfcraft_cos::ObjRef::new(23, 0), |d| {
+        d.set(
+            b"Opt".to_vec(),
+            Object::Array(vec![Object::Array(vec![Object::String(PdfString::text("بت")), Object::String(PdfString::text("Safe"))])]),
+        );
+    })
+    .unwrap();
+    set_value(&mut doc, "country", &FieldValue::Choice(vec!["بت".into()])).unwrap();
+    set_props(&mut doc, "country", &FieldProps { text_direction: Some(D::RightToLeft), ..Default::default() }).unwrap();
+    let all = fields(&doc);
+    let f = field(&all, "country");
+    assert_eq!(appearance::value_overflow(&doc, f, &f.widgets[0]), None);
+}
+
+/// Loaded list labels are checked on redraw, and safe replacement labels can repair an imported field.
+#[test]
+fn shaping_required_list_labels_warn_after_loaded_option_replacement() {
+    use pdfcraft_fonts::TextDirection as D;
+    let mut doc = shaping_required_fixture();
+    set_props(&mut doc, "toppings", &FieldProps { options: Some(vec!["بت".into()]), ..Default::default() }).unwrap();
+    doc.update_dict(pdfcraft_cos::ObjRef::new(24, 0), |d| d.set(b"PCTextDirection".to_vec(), Object::name("RTL"))).unwrap();
+    set_value(&mut doc, "toppings", &FieldValue::Choice(vec!["بت".into()])).unwrap();
+    let all = fields(&doc);
+    let f = field(&all, "toppings");
+    assert_eq!(f.value, ["بت"]);
+    assert!(undrawn_fields(&doc).is_empty());
+    assert_eq!(appearance::value_overflow(&doc, f, &f.widgets[0]), Some(appearance::Overflow::DirectionUnsupported));
+    let mut doc = reopen(&doc);
+    set_props(&mut doc, "toppings", &FieldProps { options: Some(vec!["Safe".into()]), ..Default::default() }).unwrap();
+    let all = fields(&doc);
+    let f = field(&all, "toppings");
+    assert_eq!(f.text_direction, D::RightToLeft);
+    assert_eq!(f.options, [("Safe".into(), "Safe".into())]);
+    assert_eq!(appearance::value_overflow(&doc, f, &f.widgets[0]), None);
+}
+
 #[test]
 /// Verify stored direction preserves field value and physical quadding through reopen.
 fn explicit_text_direction_preserves_value_quadding_and_reopen() {

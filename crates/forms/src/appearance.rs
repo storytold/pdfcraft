@@ -721,6 +721,18 @@ pub enum Overflow {
     High { height: f64, room: f64, size: f64 },
 }
 
+/// Check the byte budget and shaping requirement of text destined for an explicit-direction simple appearance.
+/// Callers supply displayed text after password masking and choice-label resolution; mirroring failures remain a separate layout check.
+pub(crate) fn explicit_direction_issue(text: &str) -> Option<Overflow> {
+    if text.len() > pdfcraft_fonts::text_direction::MAX_DIRECTION_BYTES {
+        Some(Overflow::DirectionBudget)
+    } else if pdfcraft_fonts::source_shaping::required(text) {
+        Some(Overflow::DirectionUnsupported)
+    } else {
+        None
+    }
+}
+
 impl std::fmt::Display for Overflow {
     /// Describe field overflow or refused direction layout with the value's relevant size and available room.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -813,6 +825,10 @@ fn field_appearance_fit(doc: &Document, f: &Field, w: &Widget, values: &[String]
             unencodable = enc.first_unencodable(&text);
         }
         let visual = if f.text_direction == pdfcraft_fonts::TextDirection::Auto {
+            text.clone()
+        } else if let Some(warning) = explicit_direction_issue(&text) {
+            // Encodable letters still need contextual shaping; retain logical fallback order and report the refusal.
+            direction_warning = Some(warning);
             text.clone()
         } else {
             match f.text_direction.visual_plain(&text) {
