@@ -135,14 +135,14 @@ pub fn preferences_section(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens)
     preferences_section_with_context(ui, app, t, &mut ctx);
 }
 
-/// The Appearance section of Preferences with live search highlighting and scrolling context.
+/// The Appearance section of Preferences with live search highlighting and scrolling context. It
+/// has no heading of its own: it is drawn in the Appearance card, whose title names it.
 pub(crate) fn preferences_section_with_context(
     ui: &mut egui::Ui,
     app: &mut PdfCraftApp,
     t: &Tokens,
     ctx: &mut crate::dialogs::preferences::PrefSearchContext,
 ) {
-    ctx.label(ui, tl_ctx!("theme", "Appearance"), theme::semibold(13.0), t.text);
     ui.horizontal(|ui| {
         let label = ctx.label(ui, tl!("Appearance mode"), theme::regular(13.0), t.text);
         let combo = craft_ui::ComboBox::from_id_salt("appearance-mode").selected_text(tl!(mode_label(app.theme_preference))).show_ui(ui, |ui| {
