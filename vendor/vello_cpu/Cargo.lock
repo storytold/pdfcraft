@@ -425,6 +425,8 @@ checksum = "e6e4313cd5fcd3dad5cafa179702e2b244f760991f45397d14d4ebf38247da75"
 [[package]]
 name = "vello_common"
 version = "0.0.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3361bff7f7d82c0c496b92048db83846691f0e844cc28dee92b1c824291b55ee"
 dependencies = [
  "bytemuck",
  "fearless_simd",
@@ -452,31 +454,3 @@ dependencies = [
  "thread_local",
  "vello_common",
 ]
-
-[[patch.unused]]
-name = "hayro"
-version = "0.7.1"
-
-[[patch.unused]]
-name = "hayro-cmap"
-version = "0.1.0"
-
-[[patch.unused]]
-name = "hayro-interpret"
-version = "0.7.0"
-
-[[patch.unused]]
-name = "hayro-jbig2"
-version = "0.3.0"
-
-[[patch.unused]]
-name = "hayro-postscript"
-version = "0.1.0"
-
-[[patch.unused]]
-name = "hayro-syntax"
-version = "0.7.2"
-
-[[patch.unused]]
-name = "lopdf"
-version = "0.45.0"
