@@ -145,6 +145,7 @@ pub(crate) fn palette_section(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Toke
             resp.context_menu(|ui| {
                 if ui.button(tl!("Rename / change category…")).clicked() {
                     app.stamp_edit = Some(StampEdit { id: s.id, name: s.name.clone(), category: s.category.clone() });
+                    app.dialog = Some(Dialog::EditStamp);
                     ui.close();
                 }
                 if ui.button(tl!("Delete stamp")).clicked() {
