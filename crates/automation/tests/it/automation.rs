@@ -2822,12 +2822,12 @@ fn bulk_crop_through_tools() {
     assert_eq!(r["page_sizes"][0], json!([180.0, 260.0]));
     assert_eq!(r["page_sizes"][1], json!([160.0, 240.0]));
 
-    // Auto crop detection on text document shrinks around content
+    // Auto crop detection on text document shrinks around content (expected text extent + 10 pt padding each side)
     let r = ok(&mut a, "page_bulk_crop", json!({ "doc": doc, "auto_crop": true, "padding": 10.0 }));
     let w0 = r["page_sizes"][0][0].as_f64().unwrap();
     let h0 = r["page_sizes"][0][1].as_f64().unwrap();
-    assert!(w0 < 200.0 && w0 > 10.0, "w0: {w0}");
-    assert!(h0 < 300.0 && h0 > 10.0, "h0: {h0}");
+    assert!((w0 - 93.67).abs() < 1.0, "w0: {w0}");
+    assert!((h0 - 42.93).abs() < 1.0, "h0: {h0}");
 
     // Input validation: combining uniform margins with odd/even margins is rejected
     assert!(matches!(

@@ -211,6 +211,53 @@ fn bulk_crop_dialog_switching_to_page_by_page_marks_pages_edited() {
 }
 
 #[test]
+fn bulk_crop_dialog_switching_to_page_by_page_preserves_different_initial_crops() {
+    let mut h = harness();
+    let doc_id = h.state().views[0].id;
+    let _ = h.state_mut().session.apply(
+        doc_id,
+        pdfcraft_engine::Edit::SetPageBox {
+            pages: vec![0],
+            which: pdfcraft_engine::PageBox::Crop,
+            spec: pdfcraft_engine::BoxSpec::Margins([10.0; 4]),
+        },
+    );
+    let _ = h.state_mut().session.apply(
+        doc_id,
+        pdfcraft_engine::Edit::SetPageBox {
+            pages: vec![1],
+            which: pdfcraft_engine::PageBox::Crop,
+            spec: pdfcraft_engine::BoxSpec::Margins([30.0; 4]),
+        },
+    );
+    h.run_steps(2);
+    assert_eq!(size(&h, 0), (280.0, 380.0));
+    assert_eq!(size(&h, 1), (240.0, 340.0));
+
+    assert!(h.state_mut().execute("page.bulk_crop"));
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, Some(Dialog::BulkCrop));
+
+    // Switch to Page by page mode without editing blended_margins
+    h.get_by_label("Page by page").click();
+    h.run_steps(2);
+    assert_eq!(h.state().bulk_crop_draft.mode, pdfcraft_ui_egui::bulk_crop::BulkCropMode::PageByPage);
+
+    // Edit only page 0
+    h.state_mut().bulk_crop_draft.page_margins[0] = [15.0; 4];
+    h.state_mut().bulk_crop_draft.edited_pages.insert(0);
+    h.run_steps(2);
+
+    h.get_by_label("Crop Pages").click();
+    h.run_steps(4);
+    assert_eq!(h.state().dialog, None);
+
+    // Page 0 gets 15pt crop; page 1 preserves its original 30pt crop
+    assert_eq!(size(&h, 0), (270.0, 370.0));
+    assert_eq!(size(&h, 1), (240.0, 340.0));
+}
+
+#[test]
 fn duplicate_pages_copies_the_current_page() {
     let mut h = harness();
     assert!(h.state_mut().execute("page.duplicate"));

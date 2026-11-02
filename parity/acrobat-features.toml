@@ -3237,7 +3237,7 @@ evidence = [
     "crates/ui-egui/tests/it/pageboxes.rs::bulk_crop_dialog_applies_margins_across_pages",
     "crates/engine/src/bulk_crop.rs::content_bounds_detects_centered_box",
 ]
-notes = "Multi-page bulk cropping: Blended mode, Odd & Even mode, Page-by-Page mode, and Auto-crop"
+notes = "Multi-page bulk cropping: Blended mode, Odd & Even mode, Page-by-Page mode, and Auto-crop. UI tests do not cover Odd & Even mode or Auto-crop in the dialog, and Auto-crop uses a single luminance threshold without detecting background colors."
 
 [[feature]]
 id = "organize.remove-white-margins"
@@ -3252,7 +3252,7 @@ evidence = [
     "crates/engine/src/bulk_crop.rs::content_bounds_detects_centered_box",
     "crates/automation/tests/it/automation.rs::bulk_crop_through_tools",
 ]
-notes = "auto_crop: true detects non-white content bounds with padding across pages"
+notes = "auto_crop: true detects non-white content bounds with padding across pages. UI tests do not cover Auto-crop in the dialog, and Auto-crop uses a single luminance threshold without detecting background colors."
 
 [[feature]]
 id = "organize.change-page-size"

@@ -513,7 +513,10 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
         ui.add_space(297.0);
 
         let prev_enabled = current_page > 0;
-        let prev_btn = egui::Button::new("◀").fill(Color32::WHITE).stroke(Stroke::new(1.0, t.border)).corner_radius(CornerRadius::same(3));
+        let prev_btn = egui::Button::new(egui::RichText::new("◀").color(t.text))
+            .fill(t.field)
+            .stroke(Stroke::new(1.0, t.border))
+            .corner_radius(CornerRadius::same(3));
         if ui.add_sized(vec2(28.0, 28.0), prev_btn).clicked() && prev_enabled {
             d.current_page = current_page - 1;
             if d.mode == BulkCropMode::OddEven {
@@ -524,12 +527,16 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
         ui.add_space(4.0);
         ui.label(
             egui::RichText::new(crate::i18n::fmt(tl!("Page {p} of {n}"), &[("p", &(current_page + 1).to_string()), ("n", &total_pages.to_string())]))
-                .font(theme::medium(13.0)),
+                .font(theme::medium(13.0))
+                .color(t.text),
         );
         ui.add_space(4.0);
 
         let next_enabled = current_page + 1 < total_pages;
-        let next_btn = egui::Button::new("▶").fill(Color32::WHITE).stroke(Stroke::new(1.0, t.border)).corner_radius(CornerRadius::same(3));
+        let next_btn = egui::Button::new(egui::RichText::new("▶").color(t.text))
+            .fill(t.field)
+            .stroke(Stroke::new(1.0, t.border))
+            .corner_radius(CornerRadius::same(3));
         if ui.add_sized(vec2(28.0, 28.0), next_btn).clicked() && next_enabled {
             d.current_page = current_page + 1;
             if d.mode == BulkCropMode::OddEven {
@@ -540,7 +547,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
         // Right-aligned Cancel and Crop Pages buttons
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             let crop_btn = egui::Button::new(egui::RichText::new(tl!("Crop Pages")).color(Color32::WHITE).font(theme::medium(13.5)))
-                .fill(Color32::from_rgb(26, 115, 232))
+                .fill(t.accent)
                 .corner_radius(CornerRadius::same(4));
 
             if ui.add_sized(vec2(105.0, 32.0), crop_btn).clicked() {
@@ -549,9 +556,9 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
 
             ui.add_space(10.0);
 
-            let cancel_btn = egui::Button::new(egui::RichText::new(tl!("Cancel")).color(Color32::from_gray(50)).font(theme::medium(13.5)))
-                .fill(Color32::WHITE)
-                .stroke(Stroke::new(1.0, Color32::from_gray(200)))
+            let cancel_btn = egui::Button::new(egui::RichText::new(tl!("Cancel")).color(t.text).font(theme::medium(13.5)))
+                .fill(t.field)
+                .stroke(Stroke::new(1.0, t.border))
                 .corner_radius(CornerRadius::same(4));
 
             if ui.add_sized(vec2(75.0, 32.0), cancel_btn).clicked() {
@@ -574,64 +581,52 @@ fn render_thumbnail_strip(
     t: &Tokens,
 ) {
     let strip_w = 105.0;
-    egui::Frame::new().fill(Color32::WHITE).stroke(Stroke::new(1.0, t.border)).corner_radius(CornerRadius::same(6)).inner_margin(6.0).show(
-        ui,
-        |ui| {
-            ui.set_width(strip_w);
-            ui.set_height(col_h - 12.0);
-            ui.set_min_height(col_h - 12.0);
-            egui::ScrollArea::vertical().id_salt("bulk_crop_thumbs").auto_shrink([false, false]).max_width(strip_w).max_height(col_h - 12.0).show(
-                ui,
-                |ui| {
-                    ui.with_layout(Layout::top_down(Align::Center), |ui| {
-                        ui.spacing_mut().item_spacing = vec2(0.0, 8.0);
-                        for i in 0..total_pages {
-                            let (pw, ph) = doc.info.pages.get(i).map(|p| (p.width, p.height)).unwrap_or((612.0, 792.0));
-                            let thumb_w = 72.0;
-                            let thumb_h = (thumb_w * ph / pw.max(1.0)).clamp(55.0, 100.0);
+    egui::Frame::new().fill(t.card).stroke(Stroke::new(1.0, t.border)).corner_radius(CornerRadius::same(6)).inner_margin(6.0).show(ui, |ui| {
+        ui.set_width(strip_w);
+        ui.set_height(col_h - 12.0);
+        ui.set_min_height(col_h - 12.0);
+        egui::ScrollArea::vertical().id_salt("bulk_crop_thumbs").auto_shrink([false, false]).max_width(strip_w).max_height(col_h - 12.0).show(
+            ui,
+            |ui| {
+                ui.with_layout(Layout::top_down(Align::Center), |ui| {
+                    ui.spacing_mut().item_spacing = vec2(0.0, 8.0);
+                    for i in 0..total_pages {
+                        let (pw, ph) = doc.info.pages.get(i).map(|p| (p.width, p.height)).unwrap_or((612.0, 792.0));
+                        let thumb_w = 72.0;
+                        let thumb_h = (thumb_w * ph / pw.max(1.0)).clamp(55.0, 100.0);
 
-                            let card_size = vec2(thumb_w + 10.0, thumb_h + 10.0);
-                            let (card_rect, resp) = ui.allocate_exact_size(card_size, Sense::click());
-                            let is_selected = i == d.current_page;
+                        let card_size = vec2(thumb_w + 10.0, thumb_h + 10.0);
+                        let (card_rect, resp) = ui.allocate_exact_size(card_size, Sense::click());
+                        let is_selected = i == d.current_page;
 
-                            if resp.clicked() {
-                                d.current_page = i;
-                                if d.mode == BulkCropMode::OddEven {
-                                    d.odd_even_tab = if i.is_multiple_of(2) { OddEvenTab::Odd } else { OddEvenTab::Even };
-                                }
+                        if resp.clicked() {
+                            d.current_page = i;
+                            if d.mode == BulkCropMode::OddEven {
+                                d.odd_even_tab = if i.is_multiple_of(2) { OddEvenTab::Odd } else { OddEvenTab::Even };
                             }
-
-                            let card_fill = if is_selected { Color32::from_rgb(232, 240, 254) } else { Color32::WHITE };
-                            let card_stroke = if is_selected {
-                                Stroke::new(1.5, Color32::from_rgb(26, 115, 232))
-                            } else {
-                                Stroke::new(1.0, Color32::from_gray(220))
-                            };
-                            ui.painter().rect_filled(card_rect, CornerRadius::same(4), card_fill);
-                            ui.painter().rect_stroke(card_rect, CornerRadius::same(4), card_stroke, egui::StrokeKind::Inside);
-
-                            let img_rect = Rect::from_center_size(card_rect.center(), vec2(thumb_w, thumb_h));
-                            view.need_thumbnail(i, card_rect.intersects(ui.clip_rect()));
-                            if let Some(tex) = view.thumb(i) {
-                                ui.painter().image(tex.id(), img_rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
-                            } else {
-                                ui.painter().rect_filled(img_rect, CornerRadius::ZERO, Color32::WHITE);
-                            }
-                            ui.painter().rect_stroke(
-                                img_rect,
-                                CornerRadius::ZERO,
-                                Stroke::new(1.0, Color32::from_gray(215)),
-                                egui::StrokeKind::Inside,
-                            );
-
-                            let label_color = if is_selected { Color32::from_rgb(26, 115, 232) } else { t.text_muted };
-                            ui.label(egui::RichText::new((i + 1).to_string()).font(theme::medium(12.0)).color(label_color));
                         }
-                    });
-                },
-            );
-        },
-    );
+
+                        let card_fill = if is_selected { t.accent_soft } else { t.card };
+                        let card_stroke = if is_selected { Stroke::new(1.5, t.accent) } else { Stroke::new(1.0, t.border) };
+                        ui.painter().rect_filled(card_rect, CornerRadius::same(4), card_fill);
+                        ui.painter().rect_stroke(card_rect, CornerRadius::same(4), card_stroke, egui::StrokeKind::Inside);
+
+                        let img_rect = Rect::from_center_size(card_rect.center(), vec2(thumb_w, thumb_h));
+                        view.need_thumbnail(i, card_rect.intersects(ui.clip_rect()));
+                        if let Some(tex) = view.thumb(i) {
+                            ui.painter().image(tex.id(), img_rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+                        } else {
+                            ui.painter().rect_filled(img_rect, CornerRadius::ZERO, Color32::WHITE);
+                        }
+                        ui.painter().rect_stroke(img_rect, CornerRadius::ZERO, Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
+
+                        let label_color = if is_selected { t.accent_text } else { t.text_muted };
+                        ui.label(egui::RichText::new((i + 1).to_string()).font(theme::medium(12.0)).color(label_color));
+                    }
+                });
+            },
+        );
+    });
 }
 
 #[derive(Default)]
@@ -646,259 +641,262 @@ fn render_controls_sidebar(ui: &mut egui::Ui, d: &mut BulkCropDraft, total_pages
     let panel_w = 280.0;
     let current_page = d.current_page;
     let mut actions = SidebarActions::default();
-    egui::Frame::new().fill(Color32::WHITE).stroke(Stroke::new(1.0, t.border)).corner_radius(CornerRadius::same(6)).inner_margin(14.0).show(
-        ui,
-        |ui| {
-            ui.with_layout(Layout::top_down(Align::Min), |ui| {
-                ui.set_width(panel_w - 28.0);
-                ui.set_min_height(col_h - 28.0);
+    egui::Frame::new().fill(t.card).stroke(Stroke::new(1.0, t.border)).corner_radius(CornerRadius::same(6)).inner_margin(14.0).show(ui, |ui| {
+        ui.with_layout(Layout::top_down(Align::Min), |ui| {
+            ui.set_width(panel_w - 28.0);
+            ui.set_min_height(col_h - 28.0);
 
-                // --- 1. Preview mode ---
-                ui.label(egui::RichText::new(tl!("Preview mode")).font(theme::semibold(13.5)));
-                ui.add_space(6.0);
-                let prev_mode = d.mode;
-                ui.horizontal(|ui| {
-                    widgets::radio_value(ui, &mut d.mode, BulkCropMode::Blended, tl!("Blended"));
-                    widgets::radio_value(ui, &mut d.mode, BulkCropMode::OddEven, tl!("Odd & even"));
-                    widgets::radio_value(ui, &mut d.mode, BulkCropMode::PageByPage, tl!("Page by page"));
-                });
+            // --- 1. Preview mode ---
+            ui.label(egui::RichText::new(tl!("Preview mode")).font(theme::semibold(13.5)).color(t.text));
+            ui.add_space(6.0);
+            let prev_mode = d.mode;
+            ui.horizontal(|ui| {
+                widgets::radio_value(ui, &mut d.mode, BulkCropMode::Blended, tl!("Blended"));
+                widgets::radio_value(ui, &mut d.mode, BulkCropMode::OddEven, tl!("Odd & even"));
+                widgets::radio_value(ui, &mut d.mode, BulkCropMode::PageByPage, tl!("Page by page"));
+            });
 
-                // Smooth mode switching: preserve and propagate configured crop margins
-                if d.mode != prev_mode {
-                    match d.mode {
-                        BulkCropMode::PageByPage => {
-                            if prev_mode == BulkCropMode::Blended && d.blended_margins.iter().any(|&v| v > 0.0) {
-                                for (i, m) in d.page_margins.iter_mut().enumerate() {
-                                    *m = d.blended_margins;
-                                    d.edited_pages.insert(i);
-                                    d.revert_pages.remove(&i);
-                                }
-                            } else if prev_mode == BulkCropMode::OddEven {
-                                for (i, m) in d.page_margins.iter_mut().enumerate() {
-                                    *m = if i % 2 == 0 { d.odd_margins } else { d.even_margins };
-                                    d.edited_pages.insert(i);
-                                    d.revert_pages.remove(&i);
-                                }
+            // Smooth mode switching: preserve and propagate configured crop margins
+            if d.mode != prev_mode {
+                match d.mode {
+                    BulkCropMode::PageByPage => {
+                        if prev_mode == BulkCropMode::Blended
+                            && d.blended_margins.iter().any(|&v| v > 0.0)
+                            && d.blended_margins != d.initial_blended_margins
+                        {
+                            for (i, m) in d.page_margins.iter_mut().enumerate() {
+                                *m = d.blended_margins;
+                                d.edited_pages.insert(i);
+                                d.revert_pages.remove(&i);
+                            }
+                        } else if prev_mode == BulkCropMode::OddEven
+                            && (d.odd_margins != d.initial_odd_margins || d.even_margins != d.initial_even_margins)
+                        {
+                            for (i, m) in d.page_margins.iter_mut().enumerate() {
+                                *m = if i % 2 == 0 { d.odd_margins } else { d.even_margins };
+                                d.edited_pages.insert(i);
+                                d.revert_pages.remove(&i);
                             }
                         }
-                        BulkCropMode::OddEven => {
-                            d.odd_even_tab = if current_page.is_multiple_of(2) { OddEvenTab::Odd } else { OddEvenTab::Even };
-                            if prev_mode == BulkCropMode::Blended && d.blended_margins.iter().any(|&v| v > 0.0) {
-                                d.odd_margins = d.blended_margins;
-                                d.even_margins = d.blended_margins;
-                            }
+                    }
+                    BulkCropMode::OddEven => {
+                        d.odd_even_tab = if current_page.is_multiple_of(2) { OddEvenTab::Odd } else { OddEvenTab::Even };
+                        if prev_mode == BulkCropMode::Blended
+                            && d.blended_margins.iter().any(|&v| v > 0.0)
+                            && d.blended_margins != d.initial_blended_margins
+                        {
+                            d.odd_margins = d.blended_margins;
+                            d.even_margins = d.blended_margins;
                         }
-                        BulkCropMode::Blended => {
-                            if let Some(&m) = d.page_margins.get(current_page).filter(|m| m.iter().any(|&v| v > 0.0)) {
-                                d.blended_margins = m;
-                            }
+                    }
+                    BulkCropMode::Blended => {
+                        if let Some(&m) = d.page_margins.get(current_page).filter(|m| m.iter().any(|&v| v > 0.0)) {
+                            d.blended_margins = m;
                         }
                     }
                 }
+            }
 
-                ui.add_space(16.0);
+            ui.add_space(16.0);
 
-                // --- 2. Pages ---
-                ui.label(egui::RichText::new(tl!("Pages")).font(theme::semibold(13.5)));
-                ui.add_space(6.0);
-                widgets::radio_value(ui, &mut d.range_choice, PageRangeChoice::All, tl!("All"));
-                ui.add_space(4.0);
-                ui.horizontal(|ui| {
-                    let custom = d.range_choice == PageRangeChoice::Custom;
-                    if ui.add(widgets::radio(custom, tl!("Range"))).clicked() {
-                        d.range_choice = PageRangeChoice::Custom;
-                    }
-                    ui.add_space(2.0);
-                    ui.add_enabled_ui(custom, |ui| {
-                        ui.label(egui::RichText::new(tl!("From")).color(t.text_muted));
-                        ui.add_sized(vec2(44.0, 24.0), egui::DragValue::new(&mut d.range_from).range(1..=total_pages));
-                        ui.label(egui::RichText::new(tl!("to")).color(t.text_muted));
-                        ui.add_sized(vec2(44.0, 24.0), egui::DragValue::new(&mut d.range_to).range(d.range_from..=total_pages));
-                    });
-                });
-
-                ui.add_space(16.0);
-
-                // --- 3. Crop margins ---
-                ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new(tl!("Crop margins")).font(theme::semibold(13.5)));
-                    if d.mode == BulkCropMode::OddEven {
-                        let badge = if d.odd_even_tab == OddEvenTab::Odd { tl!("(Odd pages)") } else { tl!("(Even pages)") };
-                        ui.label(egui::RichText::new(badge).font(theme::regular(12.0)).color(Color32::from_rgb(26, 115, 232)));
-                    }
-                });
-                ui.add_space(8.0);
-
-                // Segmented Unit Selector [ in | cm | pt ] above margin inputs
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing = vec2(6.0, 0.0);
-                    let unit_w = (ui.available_width() - 12.0) / 3.0;
-                    for (u, label) in [(Unit::Inches, "in"), (Unit::Centimetres, "cm"), (Unit::Points, "pt")] {
-                        let is_sel = d.unit == u;
-                        let fill = if is_sel { Color32::from_rgb(232, 240, 254) } else { Color32::WHITE };
-                        let text_color = if is_sel { Color32::from_rgb(26, 115, 232) } else { Color32::from_gray(100) };
-                        let btn = egui::Button::new(egui::RichText::new(label).color(text_color).font(theme::medium(12.0)))
-                            .fill(fill)
-                            .stroke(if is_sel {
-                                Stroke::new(1.0, Color32::from_rgb(26, 115, 232))
-                            } else {
-                                Stroke::new(1.0, Color32::from_gray(215))
-                            })
-                            .corner_radius(CornerRadius::same(4));
-                        if ui.add_sized(vec2(unit_w, 26.0), btn).clicked() {
-                            d.unit = u;
-                        }
-                    }
-                });
-                ui.add_space(10.0);
-
-                let k = d.unit.per_point();
-                let speed = d.unit.speed();
-
-                // Borrow active margin slice corresponding to the selected mode and Odd/Even tab
-                let is_page_by_page = d.mode == BulkCropMode::PageByPage;
-                let active_margins = match d.mode {
-                    BulkCropMode::Blended => &mut d.blended_margins,
-                    BulkCropMode::OddEven => {
-                        if d.odd_even_tab == OddEvenTab::Odd {
-                            &mut d.odd_margins
-                        } else {
-                            &mut d.even_margins
-                        }
-                    }
-                    BulkCropMode::PageByPage => {
-                        if d.page_margins.len() < total_pages {
-                            d.page_margins.resize(total_pages, [0.0; 4]);
-                        }
-                        &mut d.page_margins[current_page]
-                    }
-                };
-
-                let col_w = 118.0;
-                let edit_h = 28.0;
-
-                // Uniform 2x2 Grid:
-                // Row 1: Top & Bottom
-                // Row 2: Left & Right
-                egui::Grid::new("crop_margins_grid").num_columns(2).spacing(vec2(16.0, 10.0)).show(ui, |ui| {
-                    // Row 1: Top & Bottom
-                    ui.vertical(|ui| {
-                        ui.label(egui::RichText::new(tl!("Top")).color(Color32::from_gray(80)));
-                        ui.add_space(2.0);
-                        let mut top = active_margins[3] * k;
-                        if ui
-                            .add_sized(vec2(col_w, edit_h), egui::DragValue::new(&mut top).speed(speed).range(0.0..=10_000.0).max_decimals(2))
-                            .changed()
-                        {
-                            active_margins[3] = (top / k).max(0.0);
-                            if is_page_by_page {
-                                d.edited_pages.insert(current_page);
-                                d.revert_pages.remove(&current_page);
-                            }
-                        }
-                    });
-
-                    ui.vertical(|ui| {
-                        ui.label(egui::RichText::new(tl!("Bottom")).color(Color32::from_gray(80)));
-                        ui.add_space(2.0);
-                        let mut bottom = active_margins[1] * k;
-                        if ui
-                            .add_sized(vec2(col_w, edit_h), egui::DragValue::new(&mut bottom).speed(speed).range(0.0..=10_000.0).max_decimals(2))
-                            .changed()
-                        {
-                            active_margins[1] = (bottom / k).max(0.0);
-                            if is_page_by_page {
-                                d.edited_pages.insert(current_page);
-                                d.revert_pages.remove(&current_page);
-                            }
-                        }
-                    });
-                    ui.end_row();
-
-                    // Row 2: Left & Right
-                    ui.vertical(|ui| {
-                        ui.label(egui::RichText::new(tl!("Left")).color(Color32::from_gray(80)));
-                        ui.add_space(2.0);
-                        let mut left = active_margins[0] * k;
-                        if ui
-                            .add_sized(vec2(col_w, edit_h), egui::DragValue::new(&mut left).speed(speed).range(0.0..=10_000.0).max_decimals(2))
-                            .changed()
-                        {
-                            active_margins[0] = (left / k).max(0.0);
-                            if is_page_by_page {
-                                d.edited_pages.insert(current_page);
-                                d.revert_pages.remove(&current_page);
-                            }
-                        }
-                    });
-
-                    ui.vertical(|ui| {
-                        ui.label(egui::RichText::new(tl!("Right")).color(Color32::from_gray(80)));
-                        ui.add_space(2.0);
-                        let mut right = active_margins[2] * k;
-                        if ui
-                            .add_sized(vec2(col_w, edit_h), egui::DragValue::new(&mut right).speed(speed).range(0.0..=10_000.0).max_decimals(2))
-                            .changed()
-                        {
-                            active_margins[2] = (right / k).max(0.0);
-                            if is_page_by_page {
-                                d.edited_pages.insert(current_page);
-                                d.revert_pages.remove(&current_page);
-                            }
-                        }
-                    });
-                    ui.end_row();
-                });
-
-                ui.add_space(14.0);
-
-                let reset_tooltip = if d.mode == BulkCropMode::PageByPage {
-                    tl!("Reset this page to its initial crop")
-                } else {
-                    tl!("Reset crop margins to initial state")
-                };
-
-                // Single Action Row: [ Reset ] [ Clear crop ] [ Auto-crop ]
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing = vec2(6.0, 0.0);
-                    let btn_w = (ui.available_width() - 12.0) / 3.0;
-                    let reset_btn = egui::Button::new(egui::RichText::new(tl!("Reset")).color(Color32::from_gray(60)).font(theme::medium(12.0)))
-                        .fill(Color32::WHITE)
-                        .stroke(Stroke::new(1.0, Color32::from_gray(215)))
-                        .corner_radius(CornerRadius::same(4));
-
-                    if ui.add_sized(vec2(btn_w, 32.0), reset_btn).on_hover_text(reset_tooltip).clicked() {
-                        actions.reset = true;
-                    }
-
-                    let clear_tooltip = if d.mode == BulkCropMode::PageByPage {
-                        tl!("Remove crop from this page (full sheet)")
-                    } else {
-                        tl!("Remove crop across all target pages (full sheet)")
-                    };
-                    let clear_btn =
-                        egui::Button::new(egui::RichText::new(tl!("Clear crop")).color(Color32::from_rgb(180, 45, 45)).font(theme::medium(12.0)))
-                            .fill(Color32::WHITE)
-                            .stroke(Stroke::new(1.0, Color32::from_gray(215)))
-                            .corner_radius(CornerRadius::same(4));
-
-                    if ui.add_sized(vec2(btn_w, 32.0), clear_btn).on_hover_text(clear_tooltip).clicked() {
-                        actions.clear_crop = true;
-                    }
-
-                    let auto_btn =
-                        egui::Button::new(egui::RichText::new(tl!("Auto-crop")).color(Color32::from_rgb(26, 115, 232)).font(theme::medium(12.0)))
-                            .fill(Color32::WHITE)
-                            .stroke(Stroke::new(1.0, Color32::from_rgb(26, 115, 232)))
-                            .corner_radius(CornerRadius::same(4));
-
-                    if ui.add_sized(vec2(btn_w, 32.0), auto_btn).on_hover_text(tl!("Detect margins automatically from content")).clicked() {
-                        actions.auto_crop = true;
-                    }
+            // --- 2. Pages ---
+            ui.label(egui::RichText::new(tl!("Pages")).font(theme::semibold(13.5)).color(t.text));
+            ui.add_space(6.0);
+            widgets::radio_value(ui, &mut d.range_choice, PageRangeChoice::All, tl!("All"));
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                let custom = d.range_choice == PageRangeChoice::Custom;
+                if ui.add(widgets::radio(custom, tl!("Range"))).clicked() {
+                    d.range_choice = PageRangeChoice::Custom;
+                }
+                ui.add_space(2.0);
+                ui.add_enabled_ui(custom, |ui| {
+                    ui.label(egui::RichText::new(tl!("From")).color(t.text_muted));
+                    ui.add_sized(vec2(44.0, 24.0), egui::DragValue::new(&mut d.range_from).range(1..=total_pages));
+                    ui.label(egui::RichText::new(tl!("to")).color(t.text_muted));
+                    ui.add_sized(vec2(44.0, 24.0), egui::DragValue::new(&mut d.range_to).range(d.range_from..=total_pages));
                 });
             });
-        },
-    );
+
+            ui.add_space(16.0);
+
+            // --- 3. Crop margins ---
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new(tl!("Crop margins")).font(theme::semibold(13.5)).color(t.text));
+                if d.mode == BulkCropMode::OddEven {
+                    let badge = if d.odd_even_tab == OddEvenTab::Odd { tl!("(Odd pages)") } else { tl!("(Even pages)") };
+                    ui.label(egui::RichText::new(badge).font(theme::regular(12.0)).color(t.accent_text));
+                }
+            });
+            ui.add_space(8.0);
+
+            // Segmented Unit Selector [ in | cm | pt ] above margin inputs
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing = vec2(6.0, 0.0);
+                let unit_w = (ui.available_width() - 12.0) / 3.0;
+                for (u, label) in [(Unit::Inches, "in"), (Unit::Centimetres, "cm"), (Unit::Points, "pt")] {
+                    let is_sel = d.unit == u;
+                    let fill = if is_sel { t.accent_soft } else { t.field };
+                    let text_color = if is_sel { t.accent_text } else { t.text_muted };
+                    let btn = egui::Button::new(egui::RichText::new(label).color(text_color).font(theme::medium(12.0)))
+                        .fill(fill)
+                        .stroke(if is_sel { Stroke::new(1.0, t.accent) } else { Stroke::new(1.0, t.border) })
+                        .corner_radius(CornerRadius::same(4));
+                    if ui.add_sized(vec2(unit_w, 26.0), btn).clicked() {
+                        d.unit = u;
+                    }
+                }
+            });
+            ui.add_space(10.0);
+
+            let k = d.unit.per_point();
+            let speed = d.unit.speed();
+
+            // Borrow active margin slice corresponding to the selected mode and Odd/Even tab
+            let is_page_by_page = d.mode == BulkCropMode::PageByPage;
+            let active_margins = match d.mode {
+                BulkCropMode::Blended => &mut d.blended_margins,
+                BulkCropMode::OddEven => {
+                    if d.odd_even_tab == OddEvenTab::Odd {
+                        &mut d.odd_margins
+                    } else {
+                        &mut d.even_margins
+                    }
+                }
+                BulkCropMode::PageByPage => {
+                    if d.page_margins.len() < total_pages {
+                        d.page_margins.resize(total_pages, [0.0; 4]);
+                    }
+                    &mut d.page_margins[current_page]
+                }
+            };
+
+            let col_w = 118.0;
+            let edit_h = 28.0;
+
+            // Uniform 2x2 Grid:
+            // Row 1: Top & Bottom
+            // Row 2: Left & Right
+            egui::Grid::new("crop_margins_grid").num_columns(2).spacing(vec2(16.0, 10.0)).show(ui, |ui| {
+                // Row 1: Top & Bottom
+                ui.vertical(|ui| {
+                    ui.label(egui::RichText::new(tl!("Top")).color(t.text_muted));
+                    ui.add_space(2.0);
+                    let mut top = active_margins[3] * k;
+                    if ui.add_sized(vec2(col_w, edit_h), egui::DragValue::new(&mut top).speed(speed).range(0.0..=10_000.0).max_decimals(2)).changed()
+                    {
+                        active_margins[3] = (top / k).max(0.0);
+                        if is_page_by_page {
+                            d.edited_pages.insert(current_page);
+                            d.revert_pages.remove(&current_page);
+                        }
+                    }
+                });
+
+                ui.vertical(|ui| {
+                    ui.label(egui::RichText::new(tl!("Bottom")).color(t.text_muted));
+                    ui.add_space(2.0);
+                    let mut bottom = active_margins[1] * k;
+                    if ui
+                        .add_sized(vec2(col_w, edit_h), egui::DragValue::new(&mut bottom).speed(speed).range(0.0..=10_000.0).max_decimals(2))
+                        .changed()
+                    {
+                        active_margins[1] = (bottom / k).max(0.0);
+                        if is_page_by_page {
+                            d.edited_pages.insert(current_page);
+                            d.revert_pages.remove(&current_page);
+                        }
+                    }
+                });
+                ui.end_row();
+
+                // Row 2: Left & Right
+                ui.vertical(|ui| {
+                    ui.label(egui::RichText::new(tl!("Left")).color(t.text_muted));
+                    ui.add_space(2.0);
+                    let mut left = active_margins[0] * k;
+                    if ui.add_sized(vec2(col_w, edit_h), egui::DragValue::new(&mut left).speed(speed).range(0.0..=10_000.0).max_decimals(2)).changed()
+                    {
+                        active_margins[0] = (left / k).max(0.0);
+                        if is_page_by_page {
+                            d.edited_pages.insert(current_page);
+                            d.revert_pages.remove(&current_page);
+                        }
+                    }
+                });
+
+                ui.vertical(|ui| {
+                    ui.label(egui::RichText::new(tl!("Right")).color(t.text_muted));
+                    ui.add_space(2.0);
+                    let mut right = active_margins[2] * k;
+                    if ui
+                        .add_sized(vec2(col_w, edit_h), egui::DragValue::new(&mut right).speed(speed).range(0.0..=10_000.0).max_decimals(2))
+                        .changed()
+                    {
+                        active_margins[2] = (right / k).max(0.0);
+                        if is_page_by_page {
+                            d.edited_pages.insert(current_page);
+                            d.revert_pages.remove(&current_page);
+                        }
+                    }
+                });
+                ui.end_row();
+            });
+
+            ui.add_space(14.0);
+
+            let reset_tooltip = if d.mode == BulkCropMode::PageByPage {
+                tl!("Reset this page to its initial crop")
+            } else {
+                tl!("Reset crop margins to initial state")
+            };
+
+            // Single Action Row: [ Reset ] [ Clear crop ] [ Auto-crop ]
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing = vec2(6.0, 0.0);
+                let btn_w = (ui.available_width() - 12.0) / 3.0;
+                let reset_btn = egui::Button::new(egui::RichText::new(tl!("Reset")).color(t.text).font(theme::medium(12.0)))
+                    .fill(t.field)
+                    .stroke(Stroke::new(1.0, t.border))
+                    .corner_radius(CornerRadius::same(4));
+
+                if ui.add_sized(vec2(btn_w, 32.0), reset_btn).on_hover_text(reset_tooltip).clicked() {
+                    actions.reset = true;
+                }
+
+                let clear_tooltip = if d.mode == BulkCropMode::PageByPage {
+                    tl!("Remove crop from this page (full sheet)")
+                } else {
+                    tl!("Remove crop across all target pages (full sheet)")
+                };
+                let clear_color = if t.kind == theme::ThemeKind::Dark { Color32::from_rgb(248, 113, 113) } else { Color32::from_rgb(180, 45, 45) };
+                let clear_btn = egui::Button::new(egui::RichText::new(tl!("Clear crop")).color(clear_color).font(theme::medium(12.0)))
+                    .fill(t.field)
+                    .stroke(Stroke::new(1.0, t.border))
+                    .corner_radius(CornerRadius::same(4));
+
+                if ui.add_sized(vec2(btn_w, 32.0), clear_btn).on_hover_text(clear_tooltip).clicked() {
+                    actions.clear_crop = true;
+                }
+
+                let auto_btn = egui::Button::new(egui::RichText::new(tl!("Auto-crop")).color(t.accent_text).font(theme::medium(12.0)))
+                    .fill(t.field)
+                    .stroke(Stroke::new(1.0, t.accent))
+                    .corner_radius(CornerRadius::same(4));
+
+                if ui.add_sized(vec2(btn_w, 32.0), auto_btn).on_hover_text(tl!("Detect margins automatically from content")).clicked() {
+                    actions.auto_crop = true;
+                }
+            });
+
+            ui.add_space(8.0);
+            ui.label(
+                egui::RichText::new(tl!("Cropping hides content rather than removing it. Use Redact to permanently remove confidential material."))
+                    .font(theme::regular(11.0))
+                    .color(t.text_muted),
+            );
+        });
+    });
 
     actions
 }
@@ -911,14 +909,15 @@ fn render_odd_even_tabs(
     odd_even_tab: &mut OddEvenTab,
     current_page: &mut usize,
     total_pages: usize,
+    t: &Tokens,
 ) {
     let pill_w = 320.0;
     let pill_h = 32.0;
     let pill_rect = Rect::from_center_size(pos2(r.center().x, r.top() + 26.0), vec2(pill_w, pill_h));
 
     // Pill background container
-    painter.rect_filled(pill_rect, CornerRadius::same(16), Color32::WHITE);
-    painter.rect_stroke(pill_rect, CornerRadius::same(16), Stroke::new(1.0, Color32::from_gray(215)), egui::StrokeKind::Outside);
+    painter.rect_filled(pill_rect, CornerRadius::same(16), t.card);
+    painter.rect_stroke(pill_rect, CornerRadius::same(16), Stroke::new(1.0, t.border), egui::StrokeKind::Outside);
 
     let inner_pad = 2.5;
     let tab_w = (pill_w - inner_pad * 2.0) / 2.0;
@@ -950,14 +949,14 @@ fn render_odd_even_tabs(
     let is_odd_active = *odd_even_tab == OddEvenTab::Odd;
 
     // Odd pages tab (active = soft blue fill, inactive = transparent)
-    let odd_fill = if is_odd_active { Color32::from_rgb(219, 234, 254) } else { Color32::TRANSPARENT };
-    let odd_text_color = if is_odd_active { Color32::from_rgb(26, 115, 232) } else { Color32::from_gray(80) };
+    let odd_fill = if is_odd_active { t.accent_soft } else { Color32::TRANSPARENT };
+    let odd_text_color = if is_odd_active { t.accent_text } else { t.text_muted };
     painter.rect_filled(odd_rect, CornerRadius::same(14), odd_fill);
     painter.text(odd_rect.center(), Align2::CENTER_CENTER, tl!("Odd pages (1, 3, 5, …)"), theme::medium(12.5), odd_text_color);
 
     // Even pages tab (active = soft blue fill, inactive = transparent)
-    let even_fill = if !is_odd_active { Color32::from_rgb(219, 234, 254) } else { Color32::TRANSPARENT };
-    let even_text_color = if !is_odd_active { Color32::from_rgb(26, 115, 232) } else { Color32::from_gray(80) };
+    let even_fill = if !is_odd_active { t.accent_soft } else { Color32::TRANSPARENT };
+    let even_text_color = if !is_odd_active { t.accent_text } else { t.text_muted };
     painter.rect_filled(even_rect, CornerRadius::same(14), even_fill);
     painter.text(even_rect.center(), Align2::CENTER_CENTER, tl!("Even pages (2, 4, 6, …)"), theme::medium(12.5), even_text_color);
 }
@@ -1088,8 +1087,8 @@ fn render_interactive_preview(
     let (response, painter) = ui.allocate_painter(preview_area_size, Sense::drag());
     let r = response.rect;
 
-    // Canvas background: medium neutral gray as in design mockup
-    let canvas_bg = Color32::from_rgb(108, 117, 125);
+    // Canvas background
+    let canvas_bg = t.pasteboard;
     painter.rect_filled(r, CornerRadius::same(4), canvas_bg);
     painter.rect_stroke(r, CornerRadius::same(4), Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
 
@@ -1097,7 +1096,7 @@ fn render_interactive_preview(
 
     // Render Dual Tabs for Odd & Even mode at the top of the canvas
     if is_odd_even {
-        render_odd_even_tabs(ui, &painter, r, odd_even_tab, current_page, total_pages);
+        render_odd_even_tabs(ui, &painter, r, odd_even_tab, current_page, total_pages, t);
     }
 
     // Dynamic aspect ratio based on actual PDF page dimensions
@@ -1115,10 +1114,10 @@ fn render_interactive_preview(
     let page_rect = Rect::from_center_size(page_center, vec2(page_w_pt * scale, page_h_pt * scale));
 
     // Page drop shadow
-    painter.rect_filled(page_rect.translate(vec2(2.0, 3.0)), CornerRadius::ZERO, Color32::from_black_alpha(45));
+    painter.rect_filled(page_rect.translate(vec2(2.0, 3.0)), CornerRadius::ZERO, t.page_shadow);
     // White page sheet
     painter.rect_filled(page_rect, CornerRadius::ZERO, Color32::WHITE);
-    painter.rect_stroke(page_rect, CornerRadius::ZERO, Stroke::new(1.0, Color32::from_gray(180)), egui::StrokeKind::Outside);
+    painter.rect_stroke(page_rect, CornerRadius::ZERO, Stroke::new(1.0, t.border), egui::StrokeKind::Outside);
 
     // Render page raster (blended when multiple pages)
     let alpha = if pages.len() <= 1 {
@@ -1158,8 +1157,8 @@ fn render_interactive_preview(
         }
     }
 
-    // Draw crop border in accent blue
-    let crop_stroke_color = Color32::from_rgb(26, 115, 232);
+    // Draw crop border in accent
+    let crop_stroke_color = t.accent;
     painter.rect_stroke(crop_rect, CornerRadius::ZERO, Stroke::new(1.5, crop_stroke_color), egui::StrokeKind::Middle);
 
     // Draw 8 interactive handles
