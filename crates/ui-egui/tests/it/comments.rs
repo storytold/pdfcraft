@@ -87,7 +87,12 @@ fn click_pt(h: &mut Harness<'static, PdfCraftApp>, p: (f32, f32)) {
 
 /// A text field by its placeholder ("Add a comment", "Add a reply").
 fn field<'a>(h: &'a Harness<'static, PdfCraftApp>, placeholder: &'a str) -> egui_kittest::Node<'a> {
-    h.query_all_by(|n| n.placeholder() == Some(placeholder)).next().unwrap_or_else(|| panic!("no field {placeholder:?}"))
+    h.query_all_by(|n| {
+        matches!(n.role(), egui::accesskit::Role::TextInput | egui::accesskit::Role::MultilineTextInput)
+            && (n.placeholder() == Some(placeholder) || n.label().as_deref() == Some(placeholder))
+    })
+    .next()
+    .unwrap_or_else(|| panic!("no field {placeholder:?}"))
 }
 
 fn comments(h: &Harness<'static, PdfCraftApp>) -> Vec<Annotation> {
