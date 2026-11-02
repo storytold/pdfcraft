@@ -3155,3 +3155,35 @@ fn a_reply_on_another_page_to_a_removed_popup_goes_too() {
         assert!(!bytes.windows(gone.len()).any(|w| w == gone), "{} survived", String::from_utf8_lossy(gone));
     }
 }
+
+/// A Type 3 glyph adds nothing to the clipping path in modes 4 to 7 (ISO 32000-2 §9.3.6), which
+/// the renderer has followed since #4430. So text shown only in a Type 3 font leaves no clip at
+/// `ET`, and taking it away cannot leave one to replace -- counting it installed an empty clip
+/// that masked painting the original left alone (#3663 review).
+///
+/// Its removal is right and stays: in modes 3 and 7 such text "shall not be rendered" (the same
+/// clause), so it is invisible and extractable, which is the hidden text this pass takes.
+#[test]
+fn a_type_3_glyph_in_a_clipping_mode_adds_no_clip_to_replace() {
+    use crate::sanitize::{Hidden, remove_hidden};
+
+    // A page whose /T3 is a Type 3 font with one glyph (`a`), plus a fill painted after the text.
+    let t3 = "<< /Type /Font /Subtype /Type3 /FontBBox [0 0 1000 1000] /FontMatrix [0.001 0 0 0.001 0 0] \
+              /CharProcs << /a 7 0 R >> /Encoding << /Type /Encoding /Differences [97 /a] >> \
+              /FirstChar 97 /LastChar 97 /Widths [1000] >>";
+    let body = b"q BT 7 Tr /T3 10 Tf 10 200 Td (a) Tj ET 1 0 0 rg 5 195 90 20 re f Q";
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /T3 5 0 R >> >> >>".to_vec(),
+        stream("", body),
+        t3.as_bytes().to_vec(),
+        b"[1000]".to_vec(),
+        stream("", b"1000 0 0 0 1000 1000 d1 0 0 1000 1000 re f"),
+    ]);
+
+    let _ = remove_hidden(&mut doc, &[Hidden::HiddenText]);
+    let c = content(&doc, 0);
+    assert_eq!(c.matches("0 0 0 0 re\nW\nn").count(), 0, "a Type 3 glyph never clipped, so nothing replaces it: {c}");
+    assert!(c.contains("5 195 90 20 re"), "and the fill it did not mask is still painted: {c}");
+}

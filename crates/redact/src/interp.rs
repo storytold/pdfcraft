@@ -61,6 +61,10 @@ struct Gs {
     /// `/WMode` is 1). Glyph layout here is horizontal, so such text cannot be placed under a
     /// region; apply fails closed when it meets any (see `show`).
     vertical: bool,
+    /// The current font is a Type 3. Its glyphs add nothing to the clipping path in modes 4 to 7
+    /// (ISO 32000-2 §9.3.6), which the renderer follows since #4430, so such a glyph must not be
+    /// counted as clipping text here either.
+    type3: bool,
     size: f64,
     char_spacing: f64,
     word_spacing: f64,
@@ -228,6 +232,7 @@ pub(crate) fn process(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<
         ctm,
         font: Rc::new(Metrics::fallback()),
         vertical: false,
+        type3: false,
         size: 0.0,
         char_spacing: 0.0,
         word_spacing: 0.0,
@@ -489,6 +494,7 @@ impl Walk {
         let Some(name) = op.name(0) else { return };
         let font_dict = self.fonts_res.get(name).and_then(|f| doc.resolve(f).as_dict().cloned());
         self.gs.vertical = font_dict.as_ref().is_some_and(|d| is_vertical(doc, d));
+        self.gs.type3 = font_dict.as_ref().is_some_and(|d| d.get(b"Subtype").is_some_and(|v| doc.resolve(v).as_name() == Some(b"Type3")));
         self.gs.font = match scope.fonts.get(name) {
             Some(f) => f.clone(),
             None => {
@@ -582,7 +588,16 @@ impl Walk {
         // would need an outline predicate in `pdfcraft-fonts` over the embedded sfnt.
         let font = Rc::clone(&self.gs.font);
         let outlined = move |o: &Object| matches!(o, Object::String(t) if font.codes(&t.bytes).iter().any(|(code, len)| !font.is_space(*code, *len)));
-        let clipping = (4..=7).contains(&self.gs.render_mode) && items.iter().any(&outlined);
+        // A Type 3 glyph adds nothing to the clipping path in modes 4 to 7 (ISO 32000-2 §9.3.6),
+        // which the renderer follows since #4430 -- so text shown only in a Type 3 font leaves no
+        // clip at `ET`, and removing it cannot leave one to replace. Counting it installed an
+        // empty clip that masked what the original left alone (noted in review).
+        //
+        // Its *removal* is right and stays: in modes 3 and 7 Type 3 text "shall not be rendered"
+        // (the same clause), so it is invisible and extractable -- hidden text, which is what
+        // this pass takes. Review asked for mode-7 Type 3 text to be kept as well; that would
+        // leave invisible text in the file, so only the clip tracking changes here.
+        let clipping = (4..=7).contains(&self.gs.render_mode) && !self.gs.type3 && items.iter().any(&outlined);
         let (new_items, removed) = show(scope, &self.gs, &mut self.tm, &items);
         if clipping {
             let kept = new_items.iter().any(&outlined);
