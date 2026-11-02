@@ -6345,11 +6345,14 @@ fn drawing_comments_through_tools() {
     ));
     // Replace Text: a strikeout over the found text, grouped under a caret holding the
     // replacement (the group's primary, ISO 32000-2 §12.5.6.2).
-    ok(&mut a, "comment_add", json!({ "doc": doc, "page": 2, "type": "replace", "find": "page 2", "contents": "second page" }));
+    ok(&mut a, "comment_add", json!({ "doc": doc, "page": 2, "type": "replace", "find": "page 2", "contents": "second page", "color": "green" }));
     let list = ok(&mut a, "comment_list", json!({ "doc": doc, "page": 2 }));
     let caret = list["comments"].as_array().unwrap().iter().find(|c| c["type"] == "Caret").unwrap().clone();
     assert_eq!(caret["contents"], "second page", "the replacement is on the caret");
     assert_eq!(caret["replies"][0]["type"], "StrikeOut", "the strikeout is grouped under the caret");
+    // Review on #5689 (CodeRabbit): the requested colour is the group's, so the primary has it.
+    assert_eq!(caret["replies"][0]["color"], caret["color"], "one colour for the pair: {caret}");
+    assert_eq!(caret["color"], json!("#2E9E5C"), "the requested green, not the caret's default blue: {caret}");
     assert!(matches!(a.call("comment_add", &json!({ "doc": doc, "page": 2, "type": "replace", "find": "page 2" })), Err(ToolError::InvalidArgs(_))));
     // A file attached as a comment.
     std::fs::write(dir.join("notes.txt"), b"remember").unwrap();
