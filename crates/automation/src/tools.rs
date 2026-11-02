@@ -1194,9 +1194,12 @@ pub fn tools() -> Vec<ToolDef> {
                 json!({ "doc": doc(), "field": { "type": "string" }, "event": { "type": "string", "enum": ["keystroke", "format", "validate", "calculate", "mouse_up"] }, "script": { "type": "string" } }),
                 &["doc", "field", "event"],
             )),
-        t("doc_export_office", "Export to Word, PowerPoint, HTML, RTF or Markdown", "Export a PDF ▸ Word (.docx), PowerPoint (.pptx, one slide per page), HTML (.html, one file with images inline), RTF (.rtf) or Markdown (.md or .markdown: pipe tables, images left out), chosen by path's extension: text, headings, bold and italic. Word uses borderless inferred tables and positioned editable shapes on pages with artwork, rotated or large text; each source page retains its size. Font matching and vector graphics remain limited. Export reads forms 50 deep and up to 50 000 a page, counting forms the page draws itself. Pages that go past either limit are listed in truncated_pages, with a warning; the text and images of the forms left out are missing.")
+        t("doc_export_office", "Export to Word, Excel, PowerPoint, HTML, RTF or Markdown", "Export a PDF ▸ Word (.docx), Excel (.xlsx: detected tables as cells, paragraphs as rows; numbers, amounts, percentages and unambiguous dates become values Excel computes with, shown as on the page, anything else stays text; images left out), PowerPoint (.pptx, one slide per page), HTML (.html, one file with images inline), RTF (.rtf) or Markdown (.md or .markdown: pipe tables, images left out), chosen by path's extension: text, headings, bold and italic. Word uses borderless inferred tables and positioned editable shapes on pages with artwork, rotated or large text; each source page retains its size. Font matching and vector graphics remain limited. Export reads forms 50 deep and up to 50 000 a page, counting forms the page draws itself. Pages that go past either limit are listed in truncated_pages, with a warning; the text and images of the forms left out are missing.")
             .cmd("export.docx")
-            .with(schema(json!({ "doc": doc(), "path": { "type": "string" } }), &["doc", "path"])),
+            .with(schema(
+                json!({ "doc": doc(), "path": { "type": "string" }, "sheets": { "type": "string", "enum": ["document", "page"], "description": "Excel only: one sheet for the whole document (default) or a sheet per page." } }),
+                &["doc", "path"],
+            )),
         t("pdfa_verify", "Verify PDF/A", "Standards ▸ Verify PDF/A compliance: the PDF/A-2b or 3b rules the document breaks (ISO 19005 clause, message, page, whether Save as PDF/A can fix it), plus what it declares.")
             .ro()
             .cmd("standards.pdfa")

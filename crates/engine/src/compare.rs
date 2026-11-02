@@ -134,10 +134,14 @@ impl Session {
     }
 }
 
-/// Export a PDF ▸ Word, PowerPoint, HTML or RTF.
+/// How an Excel export lays the document out on sheets.
+pub use pdfcraft_export::XlsxSheets;
+
+/// Export a PDF ▸ Word, Excel, PowerPoint, HTML or RTF.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OfficeFormat {
     Docx,
+    Xlsx,
     Pptx,
     Html,
     Rtf,
@@ -148,6 +152,7 @@ impl OfficeFormat {
     pub fn extension(self) -> &'static str {
         match self {
             OfficeFormat::Docx => "docx",
+            OfficeFormat::Xlsx => "xlsx",
             OfficeFormat::Pptx => "pptx",
             OfficeFormat::Html => "html",
             OfficeFormat::Rtf => "rtf",
@@ -158,6 +163,7 @@ impl OfficeFormat {
     pub fn from_extension(ext: &str) -> Option<OfficeFormat> {
         match ext.to_ascii_lowercase().as_str() {
             "docx" => Some(OfficeFormat::Docx),
+            "xlsx" => Some(OfficeFormat::Xlsx),
             "pptx" => Some(OfficeFormat::Pptx),
             "html" | "htm" => Some(OfficeFormat::Html),
             "rtf" => Some(OfficeFormat::Rtf),
@@ -167,7 +173,8 @@ impl OfficeFormat {
     }
 }
 
-/// A Word, PowerPoint, HTML, RTF or Markdown export ([`crate::Document::export_office_checked`]).
+/// A Word, Excel, PowerPoint, HTML, RTF or Markdown export ([`crate::Document::export_office_checked`],
+/// [`crate::Document::export_xlsx_checked`]).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct OfficeExport {
     /// The exported file.
@@ -284,11 +291,31 @@ impl crate::Document {
         let title = self.info.title.clone().unwrap_or_else(|| self.name.trim_end_matches(".pdf").to_string());
         let bytes = match format {
             OfficeFormat::Docx => pdfcraft_export::docx(&pages, &title),
+            OfficeFormat::Xlsx => pdfcraft_export::xlsx(&pages, &title, XlsxSheets::default()),
             OfficeFormat::Pptx => pdfcraft_export::pptx(&pages, &title),
             OfficeFormat::Html => pdfcraft_export::html(&pages, &title).into_bytes(),
             OfficeFormat::Rtf => pdfcraft_export::rtf(&pages).into_bytes(),
             OfficeFormat::Markdown => pdfcraft_export::markdown(&pages).into_bytes(),
         };
         OfficeExport { bytes, truncated_pages }
+    }
+
+    /// Export a PDF ▸ Excel with the sheets chosen: the whole document on one sheet, or a sheet
+    /// per page; `pages` (0-based) limits it to some pages, in document order.
+    pub fn export_xlsx(&self, sheets: XlsxSheets, pages: Option<&[usize]>) -> Vec<u8> {
+        self.export_xlsx_checked(sheets, pages).bytes
+    }
+
+    /// [`Self::export_xlsx`], and the pages among those exported whose text it had to leave out
+    /// ([`OfficeExport::truncated_pages`]).
+    pub fn export_xlsx_checked(&self, sheets: XlsxSheets, pages: Option<&[usize]>) -> OfficeExport {
+        // Excel leaves pictures out, so none is prepared.
+        let (mut all, mut truncated_pages) = self.export_pages_checked(false, 0);
+        if let Some(keep) = pages {
+            all = all.into_iter().enumerate().filter(|(i, _)| keep.contains(i)).map(|(_, p)| p).collect();
+            truncated_pages.retain(|i| keep.contains(i));
+        }
+        let title = self.info.title.clone().unwrap_or_else(|| self.name.trim_end_matches(".pdf").to_string());
+        OfficeExport { bytes: pdfcraft_export::xlsx(&all, &title, sheets), truncated_pages }
     }
 }
