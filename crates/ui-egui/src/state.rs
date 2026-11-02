@@ -84,17 +84,6 @@ impl DefaultPanel {
     pub fn from_token(s: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|p| p.token() == s)
     }
-
-    /// The Preferences label (English; the catalogs translate it).
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Auto => "Automatic",
-            Self::None => "None",
-            Self::Pages => "Pages",
-            Self::Bookmarks => "Bookmarks",
-            Self::Comments => "Comments",
-        }
-    }
 }
 
 /// Quick-action bar tools (the vertical floating strip).

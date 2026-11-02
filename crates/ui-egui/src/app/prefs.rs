@@ -147,6 +147,7 @@ impl PdfCraftApp {
         // Set outside json! above, which is at serde_json's macro recursion limit.
         v["hide_empty_highlight_hover"] = serde_json::Value::Bool(self.comment_prefs.hide_empty_highlight_hover);
         v["show_page_edge_shadows"] = self.show_page_edge_shadows.into();
+        v["hotbar"] = serde_json::to_value(&self.hotbar).unwrap_or_default();
         v["comment_tool_pinned"] = serde_json::Value::Bool(self.comment_prefs.pinned);
         v["show_secured_notice"] = serde_json::Value::Bool(self.show_secured_notice);
         v["organize_zoom"] = serde_json::json!(self.organize_zoom);
@@ -158,6 +159,10 @@ impl PdfCraftApp {
     /// Restore state written by `persist`. Unknown or malformed data is ignored.
     pub fn restore(&mut self, json: &str) {
         let Ok(v) = serde_json::from_str::<serde_json::Value>(json) else { return };
+        if let Ok(mut bar) = serde_json::from_value::<crate::hotbar::Hotbar>(v["hotbar"].clone()) {
+            bar.normalize();
+            self.hotbar = bar;
+        }
         let panels = side_panels::restore(&v);
         self.side_panels = panels.panels;
         if let Some(open) = panels.tools_open {
@@ -178,9 +183,9 @@ impl PdfCraftApp {
             self.organize_zoom = zoom.clamp(*canvas::GRID_ZOOM_RANGE.start(), *canvas::GRID_ZOOM_RANGE.end());
         }
         if let Ok(r) = serde_json::from_value::<Vec<RecentFile>>(v["recent"].clone()) {
-            // Only keep entries whose files still exist.
-            #[cfg(not(target_arch = "wasm32"))]
-            let r: Vec<RecentFile> = r.into_iter().filter(|f| std::path::Path::new(&f.path).exists()).collect();
+            // Entries whose files are gone leave once the window is up: asking here could block
+            // startup on a mount that has stopped answering (#5682).
+            self.recent_check.restored(r.iter().map(|f| f.path.clone()).collect());
             self.recent = r;
         }
         // Nonsense keeps the limit it had; settings from before the limit have none.
