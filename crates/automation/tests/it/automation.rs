@@ -10521,3 +10521,86 @@ fn mixed_script_tools_normalize_but_undo_restores_the_exact_mixture() {
         assert_eq!(page_text(&mut a, reopened)[0], plain);
     }
 }
+
+#[test]
+fn sound_comment_creates_valid_sound_annotation_and_survives_save_reopen() {
+    let dir = workdir("sound-comment");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+
+    let wav_bytes = {
+        let channels = 1u16;
+        let rate = 44100u32;
+        let bits = 16u16;
+        let block_align = channels * (bits / 8);
+        let byte_rate = rate * u32::from(block_align);
+        let pcm = [0x12, 0x34, 0x56, 0x78];
+
+        let mut fmt_payload = Vec::new();
+        fmt_payload.extend_from_slice(&1u16.to_le_bytes());
+        fmt_payload.extend_from_slice(&channels.to_le_bytes());
+        fmt_payload.extend_from_slice(&rate.to_le_bytes());
+        fmt_payload.extend_from_slice(&byte_rate.to_le_bytes());
+        fmt_payload.extend_from_slice(&block_align.to_le_bytes());
+        fmt_payload.extend_from_slice(&bits.to_le_bytes());
+
+        let mut body = Vec::new();
+        let bext = b"Metadata chunk before fmt";
+        body.extend_from_slice(b"bext");
+        body.extend_from_slice(&(bext.len() as u32).to_le_bytes());
+        body.extend_from_slice(bext);
+        if bext.len() % 2 != 0 {
+            body.push(0);
+        }
+
+        body.extend_from_slice(b"fmt ");
+        body.extend_from_slice(&(fmt_payload.len() as u32).to_le_bytes());
+        body.extend_from_slice(&fmt_payload);
+
+        body.extend_from_slice(b"data");
+        body.extend_from_slice(&(pcm.len() as u32).to_le_bytes());
+        body.extend_from_slice(&pcm);
+
+        let mut out = Vec::new();
+        out.extend_from_slice(b"RIFF");
+        out.extend_from_slice(&(4u32 + body.len() as u32).to_le_bytes());
+        out.extend_from_slice(b"WAVE");
+        out.extend_from_slice(&body);
+        out
+    };
+
+    std::fs::write(dir.join("voice.wav"), wav_bytes).unwrap();
+
+    let res = ok(
+        &mut a,
+        "comment_add",
+        json!({
+            "doc": doc,
+            "page": 1,
+            "type": "sound",
+            "at": [50, 50],
+            "path": "voice.wav",
+            "contents": "Voice memo",
+            "author": "Alice"
+        }),
+    );
+    assert_eq!(res["comment"]["page"], 1);
+
+    let list = ok(&mut a, "comment_list", json!({ "doc": doc }));
+    assert_eq!(list["count"], 1);
+    assert_eq!(list["comments"][0]["type"], "Sound");
+
+    // Test undo and redo
+    ok(&mut a, "edit_undo", json!({ "doc": doc }));
+    assert_eq!(ok(&mut a, "comment_list", json!({ "doc": doc }))["count"], 0);
+    ok(&mut a, "edit_redo", json!({ "doc": doc }));
+    assert_eq!(ok(&mut a, "comment_list", json!({ "doc": doc }))["count"], 1);
+
+    // Save and reopen
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "saved.pdf" }));
+    let doc2 = ok(&mut a, "doc_open", json!({ "path": "saved.pdf" }))["doc"].as_u64().unwrap();
+    let list2 = ok(&mut a, "comment_list", json!({ "doc": doc2 }));
+    assert_eq!(list2["count"], 1);
+    assert_eq!(list2["comments"][0]["type"], "Sound");
+    assert_eq!(list2["comments"][0]["contents"], "Voice memo");
+}

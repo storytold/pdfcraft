@@ -581,11 +581,8 @@ impl MobileSession {
         }
         let (bytes, config, pages) = self.with_doc(doc, |d| {
             // the app draws sticky notes itself, as fixed-size icons over the page
-            let config = RenderConfig {
-                password: d.password.as_deref().map(Arc::from),
-                hide_comments: d.comments_hidden(),
-                ..RenderConfig::default()
-            };
+            let config =
+                RenderConfig { password: d.password.as_deref().map(Arc::from), hide_comments: d.comments_hidden(), ..RenderConfig::default() };
             (d.display.clone(), config, d.info.pages.len())
         })?;
         let index = page as usize;

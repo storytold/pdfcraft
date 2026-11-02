@@ -174,3 +174,148 @@ fn button_export_edit_is_one_undo_step_and_survives_save() {
     assert_eq!(check["value"], true);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn form_fill_surfaces_calculation_alerts_and_requests() {
+    let (mut a, id, dir) = setup("calc-alerts");
+    tool(
+        &mut a,
+        "form_set_script",
+        json!({
+            "doc": id,
+            "field": "beta",
+            "event": "calculate",
+            "script": "if (this.getField(\"alpha\").value == \"trigger\") app.alert(\"Alert triggered\");"
+        }),
+    );
+    let normal = tool(&mut a, "form_fill", json!({"doc": id, "values": {"alpha": "normal"}}));
+    assert!(normal.get("alerts").is_none());
+    let triggered = tool(&mut a, "form_fill", json!({"doc": id, "values": {"alpha": "trigger"}}));
+    assert_eq!(triggered["alerts"][0]["message"], "Alert triggered");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn form_fill_multiple_alerts_and_viewer_requests() {
+    let (mut a, id, dir) = setup("multi-alerts");
+    tool(
+        &mut a,
+        "form_set_script",
+        json!({
+            "doc": id,
+            "field": "beta",
+            "event": "calculate",
+            "script": "if (this.getField(\"alpha\").value == \"both\") { app.alert(\"Alert 1\"); app.alert(\"Alert 2\"); app.beep(0); }"
+        }),
+    );
+
+    // No output when condition not met
+    let no_out = tool(&mut a, "form_fill", json!({"doc": id, "values": {"alpha": "quiet"}}));
+    assert!(no_out.get("alerts").is_none());
+    assert!(no_out.get("requests").is_none());
+
+    // Both alerts and requests captured
+    let res = tool(&mut a, "form_fill", json!({"doc": id, "values": {"alpha": "both"}}));
+    let alerts = res["alerts"].as_array().expect("alerts array");
+    assert_eq!(alerts.len(), 2);
+    assert_eq!(alerts[0]["message"], "Alert 1");
+    assert_eq!(alerts[1]["message"], "Alert 2");
+
+    let requests = res["requests"].as_array().expect("requests array");
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0]["beep"], true);
+
+    // Repeated invocation: output is taken, so subsequent edits do not duplicate old alerts
+    let second = tool(&mut a, "form_fill", json!({"doc": id, "values": {"alpha": "quiet"}}));
+    assert!(second.get("alerts").is_none());
+    assert!(second.get("requests").is_none());
+
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn form_fill_two_open_documents_do_not_leak_alerts() {
+    let (mut a, id1, dir) = setup("doc-leak-1");
+    let id2 = tool(&mut a, "doc_open", json!({"path": "form.pdf"}))["doc"].as_u64().unwrap();
+    assert_ne!(id1, id2);
+
+    // Set script on doc 1 only
+    tool(
+        &mut a,
+        "form_set_script",
+        json!({
+            "doc": id1,
+            "field": "beta",
+            "event": "calculate",
+            "script": "if (this.getField(\"alpha\").value == \"leak_test\") app.alert(\"Doc1 Alert\");"
+        }),
+    );
+
+    // Fill in Doc 2: should have NO alerts
+    let out2 = tool(&mut a, "form_fill", json!({"doc": id2, "values": {"alpha": "leak_test"}}));
+    assert!(out2.get("alerts").is_none(), "Doc 2 must not receive Doc 1 scripts or alerts");
+
+    // Fill in Doc 1: receives Doc1 Alert
+    let out1 = tool(&mut a, "form_fill", json!({"doc": id1, "values": {"alpha": "leak_test"}}));
+    assert_eq!(out1["alerts"][0]["message"], "Doc1 Alert");
+
+    // Further edit in Doc 2 still has no alerts
+    let out2_again = tool(&mut a, "form_fill", json!({"doc": id2, "values": {"alpha": "leak_test_again"}}));
+    assert!(out2_again.get("alerts").is_none());
+
+    // Close doc 1 with pending state, doc 2 remains functional
+    tool(&mut a, "doc_close", json!({"doc": id1, "discard_changes": true}));
+    let out2_after = tool(&mut a, "form_fill", json!({"doc": id2, "values": {"alpha": "final"}}));
+    assert!(out2_after.get("alerts").is_none());
+
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn form_fill_undo_redo_does_not_replay_alert_side_effects() {
+    let (mut a, id, dir) = setup("undo-alert");
+    tool(
+        &mut a,
+        "form_set_script",
+        json!({
+            "doc": id,
+            "field": "beta",
+            "event": "calculate",
+            "script": "if (this.getField(\"alpha\").value == \"warn\") app.alert(\"Warning message\");"
+        }),
+    );
+
+    let res = tool(&mut a, "form_fill", json!({"doc": id, "values": {"alpha": "warn"}}));
+    assert_eq!(res["alerts"][0]["message"], "Warning message");
+
+    // Undo should restore previous values without re-triggering alert
+    let undo_res = tool(&mut a, "edit_undo", json!({"doc": id}));
+    assert!(undo_res.get("alerts").is_none(), "Undo must not replay alerts");
+
+    // Redo should restore snapshot without re-triggering alert
+    let redo_res = tool(&mut a, "edit_redo", json!({"doc": id}));
+    assert!(redo_res.get("alerts").is_none(), "Redo must not replay alerts");
+
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn form_fill_invalid_script_does_not_panic_or_break_fill() {
+    let (mut a, id, dir) = setup("invalid-script");
+    tool(
+        &mut a,
+        "form_set_script",
+        json!({
+            "doc": id,
+            "field": "beta",
+            "event": "calculate",
+            "script": "syntax error !!! @#$%"
+        }),
+    );
+
+    // Filling form with syntax error in calculation script does not crash or panic
+    let res = tool(&mut a, "form_fill", json!({"doc": id, "values": {"alpha": "test"}}));
+    assert_eq!(res["filled"], 1);
+
+    std::fs::remove_dir_all(dir).unwrap();
+}

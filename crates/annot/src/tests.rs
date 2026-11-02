@@ -2250,3 +2250,26 @@ fn freehand_highlight_is_compatible_ink_with_marker_blending() {
         assert!((a - b).abs() < 1e-4, "expected [10, 90, 130, 110], got {rect_from_border:?}");
     }
 }
+
+#[test]
+fn sound_annotation_creates_valid_sound_stream_and_appearance() {
+    let shape = Shape::Sound { at: [50.0, 50.0], rate: 44100, channels: 1, samples: vec![0x12, 0x34, 0x56, 0x78] };
+    let mut annotation = new(0, shape.clone());
+    annotation.style = Style::default_for(&shape);
+    let mut doc = fixture();
+    let index = add_annotation(&mut doc, &annotation, &meta("voice comment")).unwrap();
+    let doc = reopen(&doc);
+    let sound_annot = &list(&doc, 0)[index];
+
+    assert_eq!(sound_annot.name(b"Subtype"), Some(&b"Sound"[..]));
+    assert_eq!(sound_annot.name(b"Name"), Some(&b"Mic"[..]));
+    let sound_ref = sound_annot.reference(b"Sound").unwrap();
+    let sound_dict = doc.get(sound_ref).as_dict().unwrap().clone();
+    assert_eq!(sound_dict.get(b"R").and_then(Object::as_int), Some(44100));
+    assert_eq!(sound_dict.get(b"C").and_then(Object::as_int), Some(1));
+    assert_eq!(sound_dict.get(b"B").and_then(Object::as_int), Some(16));
+    assert_eq!(sound_dict.name(b"E"), Some(&b"Signed"[..]));
+
+    let ap = sound_annot.get(b"AP").unwrap().as_dict().unwrap().reference(b"N").unwrap();
+    assert!(doc.get(ap).as_dict().is_some());
+}

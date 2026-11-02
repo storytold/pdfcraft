@@ -749,38 +749,7 @@ impl Automation {
     }
 }
 
-fn wav_samples(data: &[u8]) -> std::result::Result<(u32, u8, Vec<u8>), String> {
-    if data.len() < 44 || &data[..4] != b"RIFF" || &data[8..16] != b"WAVEfmt " {
-        return Err("not a WAV file".into());
-    }
-    let format = u16::from_le_bytes([data[20], data[21]]);
-    if format != 1 {
-        return Err("only uncompressed linear PCM recordings are supported".into());
-    }
-    let channels = u16::from_le_bytes([data[22], data[23]]);
-    let rate = u32::from_le_bytes([data[24], data[25], data[26], data[27]]);
-    let bits = u16::from_le_bytes([data[34], data[35]]);
-    if !(1..=2).contains(&channels) {
-        return Err("only mono or stereo recordings are supported".into());
-    }
-    if bits != 16 {
-        return Err("only 16-bit recordings are supported".into());
-    }
-    let mut pos = 36;
-    while pos + 8 <= data.len() {
-        let tag = &data[pos..pos + 4];
-        let len = u32::from_le_bytes([data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7]]) as usize;
-        pos += 8;
-        if tag == b"data" {
-            let end = pos.saturating_add(len).min(data.len());
-            let samples = data.get(pos..end).unwrap_or(&[]).to_vec();
-            let samples = samples.as_chunks::<2>().0.iter().flat_map(|s| [s[1], s[0]]).collect();
-            return Ok((rate, channels as u8, samples));
-        }
-        pos = pos.saturating_add(len);
-    }
-    Err("the WAV file has no data chunk".into())
-}
+use crate::wav::wav_samples;
 
 #[cfg(test)]
 mod tests {

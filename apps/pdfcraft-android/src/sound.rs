@@ -9,10 +9,7 @@ const MAX_SOUND_BYTES: usize = 48_000 * 2 * 2 * 3600;
 
 pub fn sound_wav(bytes: &[u8], password: Option<&str>, page: usize, index: usize) -> Result<Vec<u8>, String> {
     let run = || -> Result<Vec<u8>, String> {
-        let options = lopdf::LoadOptions {
-            password: password.map(str::to_owned),
-            ..lopdf::LoadOptions::default()
-        };
+        let options = lopdf::LoadOptions { password: password.map(str::to_owned), ..lopdf::LoadOptions::default() };
         let doc = Document::load_mem_with_options(bytes, options).map_err(|e| e.to_string())?;
         let pages = doc.get_pages();
         let page_key = (page.saturating_add(1)) as u32;
@@ -38,24 +35,32 @@ pub fn sound_wav(bytes: &[u8], password: Option<&str>, page: usize, index: usize
         };
         let num = |k: &[u8]| -> Option<f32> {
             stream.dict.get(k).ok().and_then(|o| match o {
-                Object::Real(f) => Some(*f as f32),
+                Object::Real(f) => Some(*f),
                 Object::Integer(i) => Some(*i as f32),
                 Object::Reference(r) => doc.get_object(*r).ok().and_then(|o2| match o2 {
-                    Object::Real(f) => Some(*f as f32),
+                    Object::Real(f) => Some(*f),
                     Object::Integer(i) => Some(*i as f32),
                     _ => None,
                 }),
                 _ => None,
             })
         };
-        let rate = num(b"R").filter(|r| r.is_finite() && *r >= 1.0 && *r <= 384_000.0).ok_or_else(|| "the recording has no sampling rate".to_string())? as u32;
+        let rate = num(b"R")
+            .filter(|r| r.is_finite() && *r >= 1.0 && *r <= 384_000.0)
+            .ok_or_else(|| "the recording has no sampling rate".to_string())? as u32;
         let channels = num(b"C").map_or(1, |c| if c.is_finite() { c.clamp(1.0, 8.0) as u16 } else { 1 });
         let bits = num(b"B").map_or(8, |b| if b.is_finite() { b as u16 } else { 8 });
-        let encoding = stream.dict.get(b"E").ok().and_then(|o| match o {
-            Object::Name(n) => Some(n.as_slice()),
-            Object::Reference(r) => doc.get_object(*r).ok().and_then(|o2| o2.as_name().ok()),
-            _ => None,
-        }).unwrap_or(b"Raw").to_vec();
+        let encoding = stream
+            .dict
+            .get(b"E")
+            .ok()
+            .and_then(|o| match o {
+                Object::Name(n) => Some(n.as_slice()),
+                Object::Reference(r) => doc.get_object(*r).ok().and_then(|o2| o2.as_name().ok()),
+                _ => None,
+            })
+            .unwrap_or(b"Raw")
+            .to_vec();
 
         let data = if stream.dict.get(b"Filter").is_ok() {
             stream.decompressed_content().map_err(|e| e.to_string())?
