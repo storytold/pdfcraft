@@ -163,10 +163,22 @@ fn decode_and_clear(doc: &Document, s: &Stream, ctm: &Matrix, rects: &[[f64; 4]]
         return Some(None);
     }
     let mut dict = s.dict.clone();
-    dict.remove(b"Length");
-    dict.remove(b"DecodeParms");
-    dict.remove(b"Alternates");
+    for key in [b"Length".as_slice(), b"DecodeParms", b"DP", b"Alternates"] {
+        dict.remove(key);
+    }
+    if !data_elsewhere(doc, s) {
+        // Parameters for data in another file mean nothing without `/F`, but may name a dictionary.
+        dict.remove(b"FFilter");
+        dict.remove(b"FDecodeParms");
+    }
     Some(Some(smallest(dict, &data, w, h, ncomp == 1 && bpc == 1, is_jbig2)))
+}
+
+/// Whether `s`'s data is in another file, which a reader may draw instead of what is here: a `/F`
+/// that isn't null (a null entry is as if absent, and a reference to no object is null, ISO
+/// 32000-2 §7.3.7 and §7.3.10).
+pub(crate) fn data_elsewhere(doc: &Document, s: &Stream) -> bool {
+    s.dict.get(b"F").is_some_and(|f| !matches!(&*doc.resolve(f), Object::Null))
 }
 
 /// The cleared samples `data` of a `w` × `h` image as a stream with `dict`: Flate, or, for one bit

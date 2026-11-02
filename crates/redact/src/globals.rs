@@ -98,7 +98,7 @@ fn content(doc: &Document, num: u32) -> Option<u64> {
 /// says; for one whose data is in another file (`/F`), which readers draw instead of what is here;
 /// and for one that can't be decoded.
 fn without_dictionary(doc: &Document, s: &Stream) -> Option<Stream> {
-    if s.dict.contains(b"F") {
+    if crate::image::data_elsewhere(doc, s) {
         return None;
     }
     let readable = readable(doc, s);
@@ -120,7 +120,9 @@ fn without_dictionary(doc: &Document, s: &Stream) -> Option<Stream> {
     let allowance = w.div_ceil(8).checked_mul(h)?.checked_add(h)?.checked_mul(3)?.checked_add(4096)?;
     let data = doc.decoded_image_within(&readable, allowance).ok()?;
     let mut dict = readable.dict.clone();
-    for key in [b"Length".as_slice(), b"DecodeParms", b"DP"] {
+    // `/FFilter` and `/FDecodeParms` too: with no data in another file they mean nothing, but
+    // `named` reads them.
+    for key in [b"Length".as_slice(), b"DecodeParms", b"DP", b"FFilter", b"FDecodeParms"] {
         dict.remove(key);
     }
     dict.set(b"BitsPerComponent".to_vec(), Object::Int(1));
@@ -182,6 +184,8 @@ pub(crate) fn unshare(doc: &mut Document, before: &HashSet<u32>) -> Result<usize
                 doc.set(r, Object::Stream(stored));
                 stored_again += 1;
             }
+            // A dictionary that names itself isn't something that uses one.
+            None if dictionaries.contains(&r.num) => {}
             None => stuck += 1,
         }
     }
