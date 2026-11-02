@@ -120,17 +120,18 @@ fn segmented_pill_controls_switch_modes_and_layouts() {
     h.run_steps(2);
     assert_eq!(h.state().view_defaults.layout, pdfcraft_ui_egui::canvas::PageLayout::TwoUp);
 
-    // Switch continuous scrolling pill
+    // Switch continuous scrolling pill (can be combined with Two-page view)
     let continuous_before = h.state().view_defaults.continuous;
     h.get_by_label("Continuous scrolling").click();
     h.run_steps(2);
     assert_eq!(h.state().view_defaults.continuous, !continuous_before);
+    assert_eq!(h.state().view_defaults.layout, pdfcraft_ui_egui::canvas::PageLayout::TwoUp, "two-page continuous scrolling is supported");
 
-    // Switch to single page mode
+    // Switch to single page mode (continuous setting remains independent)
     h.get_by_label("Single page").click();
     h.run_steps(2);
     assert_eq!(h.state().view_defaults.layout, pdfcraft_ui_egui::canvas::PageLayout::Single);
-    assert!(!h.state().view_defaults.continuous);
+    assert_eq!(h.state().view_defaults.continuous, !continuous_before);
 
     // Switch tools panel side via segmented pill
     h.get_by_label("Left").scroll_to_me();

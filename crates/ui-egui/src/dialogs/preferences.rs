@@ -56,8 +56,18 @@ pub fn segmented_pill_choice_a11y<T: PartialEq + Copy>(ui: &mut egui::Ui, t: &To
                     }
                     ui.painter().galley(rect.center() - label_galley.size() / 2.0, label_galley, text_color);
 
+                    if resp.has_focus() {
+                        ui.painter().rect_stroke(
+                            rect.expand(1.0),
+                            CornerRadius::same(13),
+                            Stroke::new(2.0, t.accent_text),
+                            egui::StrokeKind::Outside,
+                        );
+                    }
+
                     let resp = theme::hand(resp);
-                    if resp.clicked() && *current != value {
+                    let key_select = resp.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Space) || i.key_pressed(egui::Key::Enter));
+                    if (resp.clicked() || key_select) && *current != value {
                         *current = value;
                         changed = true;
                     }
@@ -68,7 +78,6 @@ pub fn segmented_pill_choice_a11y<T: PartialEq + Copy>(ui: &mut egui::Ui, t: &To
 }
 
 /// An independent toggle pill button (e.g. for standalone toggles).
-#[allow(dead_code)]
 pub fn toggle_pill(ui: &mut egui::Ui, t: &Tokens, active: &mut bool, label: &str) -> bool {
     let mut changed = false;
     let is_active = *active;
@@ -88,8 +97,13 @@ pub fn toggle_pill(ui: &mut egui::Ui, t: &Tokens, active: &mut bool, label: &str
     ui.painter().rect(rect, CornerRadius::same(13), fill, stroke, egui::StrokeKind::Inside);
     ui.painter().galley(rect.center() - label_galley.size() / 2.0, label_galley, text_color);
 
+    if resp.has_focus() {
+        ui.painter().rect_stroke(rect.expand(1.0), CornerRadius::same(14), Stroke::new(2.0, t.accent_text), egui::StrokeKind::Outside);
+    }
+
     let resp = theme::hand(resp);
-    if resp.clicked() {
+    let key_select = resp.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Space) || i.key_pressed(egui::Key::Enter));
+    if resp.clicked() || key_select {
         *active = !*active;
         changed = true;
     }
@@ -451,13 +465,6 @@ fn card_appearance(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) {
     reading_colours_section(ui, app, t);
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum DisplayModeChoice {
-    Single,
-    TwoUp,
-    Continuous,
-}
-
 /// Content for Card 3: Documents and View
 fn card_documents_and_view(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) {
     ui.horizontal(|ui| {
@@ -485,37 +492,13 @@ fn card_documents_and_view(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens)
     let defaults = &mut app.view_defaults;
     ui.horizontal(|ui| {
         ui.label(tl!("Default page display"));
-        let mut display_choice = if defaults.continuous {
-            DisplayModeChoice::Continuous
-        } else if defaults.layout == PageLayout::TwoUp {
-            DisplayModeChoice::TwoUp
-        } else {
-            DisplayModeChoice::Single
-        };
-        if segmented_pill_choice(
-            ui,
-            t,
-            &mut display_choice,
-            &[
-                (DisplayModeChoice::Single, tl!("Single page")),
-                (DisplayModeChoice::TwoUp, tl!("Two-page view")),
-                (DisplayModeChoice::Continuous, tl!("Continuous scrolling")),
-            ],
-        ) {
-            match display_choice {
-                DisplayModeChoice::Single => {
-                    defaults.layout = PageLayout::Single;
-                    defaults.continuous = false;
-                }
-                DisplayModeChoice::TwoUp => {
-                    defaults.layout = PageLayout::TwoUp;
-                    defaults.continuous = false;
-                }
-                DisplayModeChoice::Continuous => {
-                    defaults.layout = PageLayout::Single;
-                    defaults.continuous = true;
-                }
-            }
+        let mut layout_choice = defaults.layout;
+        if segmented_pill_choice(ui, t, &mut layout_choice, &[(PageLayout::Single, tl!("Single page")), (PageLayout::TwoUp, tl!("Two-page view"))]) {
+            defaults.layout = layout_choice;
+        }
+        let mut continuous = defaults.continuous;
+        if toggle_pill(ui, t, &mut continuous, tl!("Continuous scrolling")) {
+            defaults.continuous = continuous;
         }
     });
     ui.add(widgets::checkbox(&mut defaults.show_page_gaps, tl!("Show gaps between pages")));
