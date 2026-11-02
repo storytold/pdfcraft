@@ -2,6 +2,7 @@ use pdfcraft_cos::Document;
 use pdfcraft_fonts::{GlyphOutline, ShapedCluster, ShapedScript, embed_shaped_clusters};
 use std::collections::HashMap;
 
+/// Repeated uses of one outline must count toward the emitted geometry budget.
 #[test]
 fn repeated_glyphs_cannot_multiply_the_outline_output_budget() {
     let mut doc = Document::new_empty();

@@ -173,6 +173,7 @@ impl Automation {
         Ok((page, index))
     }
 
+    /// List comment threads with stable targets, review states and persisted Syriac family metadata.
     pub(crate) fn comment_list(&self, a: &Args) -> Result<Value> {
         let doc = self.doc(a)?;
         let only = a.opt_int("page")?.map(|p| (p.max(1) - 1) as usize);
@@ -248,6 +249,8 @@ impl Automation {
         Ok(json!({ "count": roots.len(), "comments": roots }))
     }
 
+    /// Parse a comment shape and its style, validate text-family applicability, then add the annotation.
+    /// Report created comment metadata for subsequent headless edits.
     pub(crate) fn comment_add(&mut self, a: &Args) -> Result<Value> {
         let page = self.page(a)?;
         let info = self.doc(a)?.info.pages[page].clone();
@@ -495,6 +498,8 @@ impl Automation {
         }))
     }
 
+    /// Place text, dates, typed/image signatures or simple Fill & Sign marks in displayed coordinates.
+    /// Validate family selection before applying it to text or signature outlines.
     pub(crate) fn fill_sign_add(&mut self, a: &Args) -> Result<Value> {
         use pdfcraft_engine::FillMark;
         let page = self.page(a)?;
@@ -652,6 +657,8 @@ impl Automation {
         self.deliver(a, &format!("Summary of comments on {stem}.pdf"), bytes)
     }
 
+    /// Apply requested content, style and geometry changes to one resolved comment target.
+    /// Reject family changes outside FreeText before collecting the edit batch.
     pub(crate) fn comment_edit(&mut self, a: &Args) -> Result<Value> {
         let (page, index) = self.comment_target(a)?;
         let info = self.doc(a)?.info.pages[page].clone();

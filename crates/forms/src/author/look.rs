@@ -462,6 +462,8 @@ pub(crate) fn button_appearance_in(doc: &mut Document, w: &Widget, field_da: &st
     }
 }
 
+/// Build a shaped caption with the persisted family while preserving button frame and icon.
+/// Return None when the caption cannot be drawn so the caller retains its fallback policy.
 fn button_appearance_syriac(doc: &mut Document, w: &Widget, field_da: &str) -> Option<(Stream, Option<char>)> {
     let (mut c, place) = frame_only(doc, w);
     let (width, height) = (place.layout_w, place.layout_h);

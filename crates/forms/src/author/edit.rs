@@ -118,6 +118,7 @@ fn set_widget_syriac_family(doc: &mut Document, f: &Field, family: Option<pdfcra
     Ok(())
 }
 
+/// Reject family selections on fields without editable text before changing their properties.
 fn validate_syriac_kind(f: &Field, props: &FieldProps) -> Result<(), FormError> {
     if props.syriac_family.is_some() && !matches!(f.kind, FieldKind::Text | FieldKind::Combo | FieldKind::List | FieldKind::PushButton) {
         return invalid("a Syriac family applies only to text fields, choice lists and push-button captions");

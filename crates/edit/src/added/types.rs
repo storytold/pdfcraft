@@ -119,6 +119,7 @@ impl AddedText {
 }
 
 impl Default for AddedText {
+    /// Start with empty, left-aligned black Helvetica text at 12 points and default Estrangela.
     fn default() -> Self {
         AddedText {
             rect: [0.0; 4],

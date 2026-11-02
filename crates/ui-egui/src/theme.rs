@@ -350,6 +350,8 @@ pub(crate) fn on_interface_baseline(mut data: FontData) -> FontData {
     data
 }
 
+/// Build interface font stacks with platform-adjusted primary faces and optional script fallbacks.
+/// Keep fallback baselines aligned and reuse the embedded craft-fonts bytes.
 fn font_definitions_for_platform(prefer_hans: bool, platform: FontPolicyPlatform) -> FontDefinitions {
     let mut fonts = FontDefinitions::default();
     let add = |fonts: &mut FontDefinitions, name: &str, bytes: &'static [u8]| {

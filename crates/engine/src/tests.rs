@@ -86,6 +86,7 @@ fn prepared_open_does_not_mutate_the_session_until_commit() {
     assert_eq!(session.get(id).expect("committed document").info.pages.len(), 3);
 }
 
+/// Image stamps preserve their displayed quadrant colors through every page rotation.
 #[test]
 fn custom_image_stamp_keeps_displayed_orientation_on_rotated_pages() {
     let colours = [[240, 20, 20, 255], [20, 180, 20, 255], [20, 20, 240, 255], [230, 180, 20, 255]];
@@ -2132,6 +2133,7 @@ fn pixel(s: &Session, id: DocId, page: usize, x: u32, y: u32) -> [u8; 4] {
     out.rgba[i..i + 4].try_into().unwrap()
 }
 
+/// Create a filled red rectangle annotation edit for synthetic comment and history checks.
 fn rect_comment(page: usize, rect: [f64; 4]) -> Edit {
     Edit::AddAnnotation(NewAnnotation {
         page,

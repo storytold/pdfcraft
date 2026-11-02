@@ -2001,6 +2001,7 @@ fn inserted_text_snaps_to_the_gap_between_characters_on_the_baseline() {
     assert!(((x0 + x1) / 2.0 - 200.0).abs() < 1.0 && (y1 - 60.0).abs() < 1.0 && (y1 - y0 - 8.0).abs() < 0.3, "{:?}", away.rect);
 }
 
+/// Comment filters hide the matching color/checkmark cards and Show all restores them.
 #[test]
 fn the_panel_filters_by_colour_and_checkmark() {
     let mut h = harness(|app| {
@@ -2039,6 +2040,7 @@ fn the_panel_filters_by_colour_and_checkmark() {
     assert_eq!(cards(&h), before);
 }
 
+/// Current comment properties become the tool default, persist across restore and style new comments.
 #[test]
 fn make_current_properties_default() {
     let mut h = harness(|app| {

@@ -188,15 +188,18 @@ pub(crate) fn bounded_outline(font: &FontRef, gid: GlyphId, width: f64) -> Resul
     Ok(GlyphOutline { contours: pen.contours, width, bbox })
 }
 
-/// The first character of `text` (other than white space) that neither the script font of typed
-/// signatures nor its Inter fallback has a glyph for: [`script_outline`] would leave it out.
-/// `None` when they can draw all of them.
+/// Preflight signature text using Estrangela when any Syriac is present; otherwise check
+/// Dancing Script and Inter for the first missing non-whitespace cmap character.
+/// For Syriac, any shaping failure or text-byte limit reports the first Syriac character
+/// as a rejection marker, not necessarily the missing glyph. `None` does not validate
+/// [`MAX_SIGNATURE_CHARS`] or the outline budget; see [`script_outline`].
 pub fn script_missing(text: &str) -> Option<char> {
     script_missing_for_family(text, crate::SyriacFamily::default())
 }
 
-/// Like [`script_missing`], with an explicit document face when the signature contains Syriac.
-/// Other scripts keep the bundled Dancing Script / Inter fallback policy.
+/// Like [`script_missing`], using exactly `family` for the whole line when Syriac is present.
+/// A failed Syriac layout returns its first Syriac character as a rejection marker.
+/// Text without Syriac keeps the Dancing Script / Inter cmap-coverage policy.
 pub fn script_missing_for_family(text: &str, family: crate::SyriacFamily) -> Option<char> {
     if crate::content_text::contains_syriac(text) {
         if text.len() > crate::content_text::MAX_TEXT_BYTES {
@@ -214,16 +217,19 @@ pub fn script_missing_for_family(text: &str, family: crate::SyriacFamily) -> Opt
     text.chars().find(|c| !c.is_whitespace() && charmap.map(*c).is_none() && fallback_map.as_ref().and_then(|m| m.map(*c)).is_none())
 }
 
-/// The outlines of `text` in the script font. Characters it lacks (Cyrillic, Greek, …) are drawn
-/// from Inter, slanted and scaled to the script's capital height; characters neither font has are
-/// skipped (check [`script_missing`] first where nobody sees a preview). Over-limit input returns
-/// an empty outline instead of a silently truncated signature.
+/// Build signature outlines with the default Estrangela selection; see [`script_outline_for_family`].
+/// Without Syriac, use Dancing Script with slanted, cap-height-scaled Inter fallback and skip
+/// characters neither font has. With Syriac, shaping failure returns an empty outline instead.
+/// Check [`script_missing`] before unpreviewed placement; over-limit input returns an empty outline.
 pub fn script_outline(text: &str) -> ScriptOutline {
     script_outline_for_family(text, crate::SyriacFamily::default())
 }
 
-/// Like [`script_outline`], shaping Syriac with exactly the selected document family.
-/// A missing selected face or unsupported text returns an empty bounded outline.
+/// Build signature outlines in em units, limited to [`MAX_SIGNATURE_CHARS`] characters.
+/// When Syriac is present, flatten CR/LF to spaces and shape the whole line with exactly
+/// `family`; unavailable glyphs/faces or shaping/outline failure return an empty outline.
+/// Without Syriac, use Dancing Script plus slanted Inter and skip unsupported characters.
+/// Exceeding the character or outline budget also returns an empty outline, never a truncated name.
 pub fn script_outline_for_family(text: &str, family: crate::SyriacFamily) -> ScriptOutline {
     if text.chars().take(MAX_SIGNATURE_CHARS + 1).count() > MAX_SIGNATURE_CHARS {
         return ScriptOutline::default();

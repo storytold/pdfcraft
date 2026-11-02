@@ -73,6 +73,7 @@ fn style(a: &Args, t: &mut AddedText) -> Result<()> {
     Ok(())
 }
 
+/// Parse an optional family selector and reject unknown names with the supported choices.
 pub(crate) fn opt_syriac_family(a: &Args) -> Result<Option<pdfcraft_engine::SyriacFamily>> {
     a.opt_str("syriac_family")?
         .map(|name| pdfcraft_engine::SyriacFamily::from_name(name).ok_or_else(|| bad("syriac_family must be estrangela, eastern or western")))
@@ -112,6 +113,7 @@ pub(crate) fn opt_aligns(a: &Args) -> Result<Option<Vec<Option<TextAlign>>>> {
 }
 
 impl Automation {
+    /// List added text and images in displayed coordinates, including each text item's stored family.
     pub(crate) fn content_list(&self, a: &Args) -> Result<Value> {
         let doc = self.doc(a)?;
         let mut per_page: std::collections::HashMap<usize, usize> = Default::default();
@@ -193,6 +195,8 @@ impl Automation {
         Ok((page, index as usize - 1, it.content.clone(), ph))
     }
 
+    /// Update added content while retaining unspecified text styles and paragraph alignments.
+    /// Validate text-only and image-only options before dispatching the corresponding edits.
     pub(crate) fn content_update(&mut self, a: &Args) -> Result<Value> {
         let (page, index, content, ph) = self.item(a)?;
         let mut content = match rect_arg(a, "rect")? {

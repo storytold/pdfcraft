@@ -165,6 +165,8 @@ struct CharacterPreparation<'a> {
 }
 
 impl CharacterPreparation<'_> {
+    /// Resolve source and requested fonts for styled spans, shaping complex text and tracking substitutions.
+    /// Install bounded fallback fonts for characters the resolved source cannot encode.
     fn prepare(self) -> Result<PreparedCharacters, EditError> {
         let Self { doc, first, lines, draft, spans, style, overrides, fonts, metrics, max_glyphs } = self;
         let mut chars = Vec::new();

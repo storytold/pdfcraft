@@ -52,6 +52,7 @@ fn measure_schema() -> Value {
     )
 }
 
+/// Describe the supported document-family selector and its preserve-on-omission edit policy.
 fn syriac_family() -> Value {
     json!({ "type": "string", "enum": ["estrangela", "eastern", "western"], "description": "Syriac document family (default Estrangela); preserves the stored choice when omitted during an edit. Applies only to supported text surfaces." })
 }

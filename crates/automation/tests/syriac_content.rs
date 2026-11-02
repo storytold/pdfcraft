@@ -6,12 +6,14 @@ use serde_json::{Value, json};
 const ORIGINAL: &str = "\u{072b}\u{0730}\u{0720}\u{0735}\u{0721} PDF 123";
 const EDITED: &str = "\u{0712}\u{0730}\u{0712} ABC 456";
 
+/// Allow optional-font skips locally while requiring the Syriac face in qualification runs.
 fn available() -> bool {
     let present = pdfcraft_fonts::document_syriac_font().is_some();
     assert!(present || std::env::var_os("PDFCRAFT_REQUIRE_SYRIAC").is_none(), "qualification requires Syriac fonts");
     present
 }
 
+/// Invoke an automation tool and require its first response to be structured JSON.
 fn call(auto: &mut Automation, name: &str, args: Value) -> Value {
     match auto.call(name, &args).unwrap().remove(0) {
         Content::Json(value) => value,
@@ -19,10 +21,12 @@ fn call(auto: &mut Automation, name: &str, args: Value) -> Value {
     }
 }
 
+/// Require the operation to produce no text-fidelity warnings.
 fn no_warning(result: &Value) {
     assert!(result.get("warnings").and_then(Value::as_array).is_none_or(Vec::is_empty), "{result}");
 }
 
+/// Write and open a synthetic one-page PDF inside a temporary automation root.
 fn blank(dir: &std::path::Path) -> (Automation, u64) {
     let session = Session::new();
     let bytes = session.create_blank(600.0, 800.0, 1).unwrap();
@@ -32,10 +36,12 @@ fn blank(dir: &std::path::Path) -> (Automation, u64) {
     (auto, id)
 }
 
+/// Read and trim the first page's extracted logical text through automation.
 fn extracted(auto: &mut Automation, id: u64) -> String {
     call(auto, "text_extract", json!({"doc":id}))["pages"][0]["text"].as_str().unwrap().trim().to_owned()
 }
 
+/// Build a minimal PDF containing one editable Helvetica text run for source-font tests.
 fn source_page() -> Vec<u8> {
     let contents = "BT /F1 16 Tf 1 0 0 1 40 700 Tm (Original) Tj ET";
     let objects = [
@@ -60,6 +66,7 @@ fn source_page() -> Vec<u8> {
     bytes
 }
 
+/// Check existing-text fallback and imported full faces through edits, undo/redo and save/reopen.
 #[test]
 fn existing_paragraph_uses_approved_fallback_and_explicit_source_styles() {
     if !available() {
@@ -94,6 +101,7 @@ fn existing_paragraph_uses_approved_fallback_and_explicit_source_styles() {
     }
 }
 
+/// Added Syriac text preserves logical extraction, search, history and rendered saved output.
 #[test]
 fn added_text_marks_mixed_bidi_history_search_and_reopen() {
     if !available() {
@@ -122,6 +130,7 @@ fn added_text_marks_mixed_bidi_history_search_and_reopen() {
     assert_eq!(auto.render_pixels(reopened, 1, 1.0).unwrap().2, pixels);
 }
 
+/// Default Syriac appearances on forms, comments, marks and signatures survive save/reopen.
 #[test]
 fn forms_comments_page_marks_and_signatures_keep_rendered_appearances() {
     if !available() {
@@ -170,6 +179,8 @@ fn forms_comments_page_marks_and_signatures_keep_rendered_appearances() {
     assert_eq!(auto.render_pixels(re, 1, 1.0).unwrap().2, pixels);
 }
 
+/// Compare all three families in isolated rendered regions across the supported content writers.
+/// Verify readback persistence, unrelated edits, save/reopen and atomic refusal of invalid selectors.
 #[test]
 fn selected_families_persist_across_content_surfaces_and_refuse_irrelevant_selectors() {
     use pdfcraft_fonts::{SyriacFamily, document_syriac_font_for_family};

@@ -34,10 +34,12 @@ pub enum ShapedScript {
 }
 
 impl ShapedScript {
+    /// Select the cache and glyph-id namespace for a Syriac document family.
     pub fn for_syriac(family: crate::SyriacFamily) -> Self {
         syriac_script(family)
     }
 
+    /// Recover the Syriac family, returning None for Arabic, Hebrew and Thai namespaces.
     pub fn syriac_family(self) -> Option<crate::SyriacFamily> {
         match self {
             Self::Syriac => Some(crate::SyriacFamily::Estrangela),
@@ -47,6 +49,7 @@ impl ShapedScript {
         }
     }
 
+    /// Return the optional document face owning this glyph-id namespace.
     pub fn font(self) -> Option<&'static crate::CraftFont> {
         match self {
             Self::Arabic => crate::document_arabic_font(),
@@ -59,6 +62,7 @@ impl ShapedScript {
     }
 }
 
+/// Cache parsed font and shaper data separately for each script and Syriac family.
 fn face(script: ShapedScript) -> Option<&'static (FontRef<'static>, ShaperData)> {
     static FACE: OnceLock<Option<(FontRef<'static>, ShaperData)>> = OnceLock::new();
     static HEBREW: OnceLock<Option<(FontRef<'static>, ShaperData)>> = OnceLock::new();
@@ -121,10 +125,12 @@ pub fn syriac_has(c: char) -> bool {
     syriac_has_for_family(c, crate::SyriacFamily::default())
 }
 
+/// Check cmap coverage in the selected family; return false if its face is absent.
 pub fn syriac_has_for_family(c: char, family: crate::SyriacFamily) -> bool {
     face(syriac_script(family)).is_some_and(|(font, _)| font.charmap().map(c).is_some())
 }
 
+/// Map a family to its distinct shaping namespace so glyph ids cannot cross faces.
 fn syriac_script(family: crate::SyriacFamily) -> ShapedScript {
     match family {
         crate::SyriacFamily::Estrangela => ShapedScript::Syriac,
@@ -139,6 +145,10 @@ pub fn shape_syriac(text: &str, rtl: bool) -> Result<Vec<ShapedCluster>, GlyphEr
     shape_syriac_for_family(text, rtl, crate::SyriacFamily::default())
 }
 
+/// Shape one directional run using exactly the selected Syriac family, with no family substitution.
+/// `rtl` supplies the run direction; output clusters are in drawing order, with positions in em units.
+/// Refuse input beyond 262144 UTF-8 bytes with TooComplex; unavailable faces and missing glyphs
+/// remain NoFont and Missing errors rather than being replaced or silently skipped.
 pub fn shape_syriac_for_family(text: &str, rtl: bool, family: crate::SyriacFamily) -> Result<Vec<ShapedCluster>, GlyphError> {
     if text.len() > 262_144 {
         return Err(GlyphError::TooComplex);
@@ -146,6 +156,8 @@ pub fn shape_syriac_for_family(text: &str, rtl: bool, family: crate::SyriacFamil
     shape_script(text, rtl, syriac_script(family))
 }
 
+/// Apply script-specific OpenType shaping and emit clusters in drawing order.
+/// Retain logical cluster text and positioned marks; reject unavailable faces or missing glyphs.
 fn shape_script(text: &str, rtl: bool, kind: ShapedScript) -> Result<Vec<ShapedCluster>, GlyphError> {
     let (font, data) = face(kind).ok_or(GlyphError::NoFont)?;
     let shaper = data.shaper(font).build();

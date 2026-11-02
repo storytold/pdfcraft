@@ -258,6 +258,7 @@ pub(super) fn draw(doc: &mut Document, c: &Content, view: [f64; 6], taken: &Dict
     Ok((out, res))
 }
 
+/// Serialize added text/image parameters, including persistent family choice and non-default transforms.
 pub(super) fn params(c: &Content) -> Dict {
     let mut d = Dict::new();
     let arr = |v: &[f64]| Object::Array(v.iter().map(|x| Object::Real(*x)).collect());

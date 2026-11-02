@@ -56,11 +56,15 @@ pub(crate) fn widget_syriac_family(doc: &Document, w: &Widget) -> pdfcraft_fonts
     pdfcraft_fonts::SyriacFamily::default()
 }
 
+/// Select the Syriac writer for unmasked text, labels or captions on supported field kinds.
+/// This selects a text appearance path; it does not filter hidden widgets.
 pub(crate) fn needs_syriac(doc: &Document, f: &Field, w: &Widget, values: &[String]) -> bool {
     syriac::requested(doc, f, w, values)
 }
 
 /// Font-backed field appearances, staged so a refused glyph never leaves resources behind.
+/// A shaping failure returns the legacy appearance and its first undrawn character.
+/// The caller owns the warning marker and NeedAppearances policy for that fallback.
 pub fn field_appearance_drawn_in(doc: &mut Document, f: &Field, w: &Widget, values: &[String], format: bool) -> (Stream, Option<char>) {
     if !needs_syriac(doc, f, w, values) {
         return field_appearance_drawn(doc, f, w, values, format);

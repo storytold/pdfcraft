@@ -63,6 +63,8 @@ impl Default for HeaderFooter {
     }
 }
 
+/// Accept Syriac when the selected face shapes the text; otherwise report the first non-WinAnsi character.
+/// The reported character identifies the fallback warning, not necessarily the glyph that made shaping fail.
 fn content_undrawable(text: &str, family: pdfcraft_fonts::SyriacFamily) -> Option<char> {
     if pdfcraft_fonts::content_text::contains_syriac(text) && pdfcraft_fonts::content_text::wrap_for_family(text, 1.0, f64::MAX, family).is_ok() {
         return None;
@@ -86,11 +88,11 @@ impl HeaderFooter {
         Ok((ascent, descent, (ascent - descent + 0.1).max(1.2)))
     }
 
-    /// The first character [`add_header_footer`] would refuse, because the standard fonts can't
-    /// draw it (#125). Tokens only add ASCII (Bates prefixes and suffixes are part of the
-    /// template), so checking the templates, split as `expand`'s output is, covers every page
-    /// (and a `\r` that would be drawn is refused too). The dialog asks this too, so its preview
-    /// never offers text that applying refuses (#2013).
+    /// Preflight header/footer template lines with the selected Syriac face or standard-font
+    /// WinAnsi coverage. A line that fails this check reports its first non-WinAnsi character
+    /// as a refusal marker, not necessarily the glyph that failed. Bates prefixes and suffixes
+    /// are checked as part of the template. `None` does not certify placement or outline budgets;
+    /// [`add_header_footer`](crate::add_header_footer) validates the expanded text and geometry when applying the mark.
     pub fn first_undrawable(&self) -> Option<char> {
         self.text.iter().flat_map(|t| t.lines()).find_map(|text| content_undrawable(text, self.syriac_family))
     }
@@ -176,8 +178,10 @@ pub struct Watermark {
 }
 
 impl Watermark {
-    /// The first character of a text watermark [`add_watermark`] would refuse, because the
-    /// standard fonts can't draw it (#125). A picture watermark draws no text.
+    /// Preflight trimmed watermark lines with the selected Syriac face or standard-font
+    /// WinAnsi coverage. On a failed coverage check, return the first non-WinAnsi character as a
+    /// refusal marker, not necessarily the missing glyph. Picture sources return `None`;
+    /// [`add_watermark`](crate::add_watermark) still validates placement and outline budgets for text marks.
     pub fn first_undrawable(&self) -> Option<char> {
         match self.source {
             Some(_) => None,
@@ -187,6 +191,7 @@ impl Watermark {
 }
 
 impl Default for Watermark {
+    /// Use an empty Estrangela text watermark with gray half-opacity, 45-degree rotation and centered placement.
     fn default() -> Self {
         Self {
             text: String::new(),

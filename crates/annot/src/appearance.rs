@@ -450,6 +450,7 @@ pub fn can_build(d: &Dict) -> bool {
     build(d).is_some()
 }
 
+/// Return Syriac FreeText contents eligible for the document-backed shaping path.
 pub(crate) fn syriac_contents(d: &Dict) -> Option<String> {
     if d.name(b"Subtype") != Some(b"FreeText") {
         return None;
@@ -469,6 +470,7 @@ pub fn build_in(doc: &mut Document, d: &Dict) -> Option<Stream> {
     Some(appearance)
 }
 
+/// Dispatch supported annotation appearances, passing optional document resources to FreeText.
 fn build_with(d: &Dict, doc: Option<&mut Document>) -> Option<Stream> {
     let context = appearance_context(d)?;
     let drawing = AppearanceDrawing::new(&context);
@@ -953,6 +955,8 @@ fn draw_stamp(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawing) -
     Some(form(rect, c.as_bytes(), res))
 }
 
+/// Draw FreeText or callout geometry and text, using shaped Syriac when resources are available.
+/// Preserve rotation and alignment, with a standard-font fallback when shaping is unavailable.
 fn draw_free_text(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawing, doc: Option<&mut Document>) -> Option<Stream> {
     let d = context.dict;
     let rect = context.rect;

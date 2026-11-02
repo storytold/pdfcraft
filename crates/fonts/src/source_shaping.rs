@@ -28,6 +28,8 @@ pub fn is_syriac(c: char) -> bool {
     matches!(u32::from(c), 0x0700..=0x074f | 0x0860..=0x086f)
 }
 
+/// Shape a bounded row from explicit font bytes with per-run bidi order and logical text.
+/// Refuse missing contextual tables, missing glyphs and excessive output geometry.
 pub fn shape(bytes: &[u8], text: &str) -> Result<ShapedRun, String> {
     if text.len() > 262_144 || text.contains(['\n', '\r']) {
         return Err("shape one bounded text row at a time".into());

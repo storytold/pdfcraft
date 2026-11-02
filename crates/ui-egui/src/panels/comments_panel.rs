@@ -382,6 +382,8 @@ struct CardContext<'a> {
     nav: &'a mut Option<Nav>,
 }
 
+/// Render a comment card and replies, collecting navigation or permitted edit actions.
+/// Keep author/content text logical for egui while exposing thread status and inline controls.
 fn card(ui: &mut egui::Ui, view: &mut DocView, context: CardContext<'_>) -> Option<Edit> {
     let CardContext { theme: t, annotation: a, rotation, thread, doc, prefs, allowed, nav } = context;
     let info = &doc.info;

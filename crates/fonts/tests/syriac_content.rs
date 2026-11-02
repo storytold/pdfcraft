@@ -2,12 +2,14 @@
 use pdfcraft_fonts::{CRAFT_FONTS, content_text, document_syriac_font, shape_syriac, source_shaping};
 use skrifa::{FontRef, raw::TableProvider};
 
+/// Skip optional-font checks locally but fail when Syriac qualification requires the input.
 fn available() -> bool {
     let present = document_syriac_font().is_some();
     assert!(present || std::env::var_os("PDFCRAFT_REQUIRE_SYRIAC").is_none(), "qualification requires the Syriac craft-fonts input");
     present
 }
 
+/// A source face without GSUB must be refused even when its cmap remains readable.
 #[test]
 fn source_without_gsub_is_refused_before_unjoined_text_can_be_written() {
     if !available() {
@@ -33,6 +35,7 @@ fn source_without_gsub_is_refused_before_unjoined_text_can_be_written() {
     assert!(error.contains("contextual substitution"), "{error}");
 }
 
+/// Verify contextual glyph changes, mark ownership and valid shaping in all three faces.
 #[test]
 fn joining_marks_and_all_three_source_faces_use_real_layout() {
     if !available() {
@@ -55,6 +58,7 @@ fn joining_marks_and_all_three_source_faces_use_real_layout() {
     assert!(content_text::wrap("\u{0860}", 12.0, 200.0).is_err(), "the selected releases lack the supplement");
 }
 
+/// Verify wrapped bidi direction, attached comb marks, digit order and input bounds.
 #[test]
 fn wrapping_keeps_paragraph_direction_and_comb_keeps_marks_and_digits() {
     if !available() {

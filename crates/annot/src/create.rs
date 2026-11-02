@@ -206,6 +206,7 @@ pub fn callout_attach(rect: [f64; 4], knee: [f64; 2]) -> [f64; 2] {
     }
 }
 
+/// Refuse a family on non-text shapes and validate explicitly selected FreeText shaping.
 fn validate_syriac_family(new: &NewAnnotation) -> Result<(), AnnotError> {
     let Some(family) = new.style.syriac_family else { return Ok(()) };
     if !matches!(&new.shape, Shape::TextBox { .. } | Shape::Typewriter { .. } | Shape::Callout { .. } | Shape::TypedSignature { .. }) {

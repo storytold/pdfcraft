@@ -8,10 +8,12 @@ use super::place::{
 use super::{Dict, Document, EditError, Object, added, backdrop, helvetica_width};
 use pdfcraft_fonts::content_text;
 
+/// Measure Syriac with the selected shaped face, otherwise use the caller's Latin metrics.
 fn content_width(text: &str, size: f64, family: pdfcraft_fonts::SyriacFamily, latin: impl FnOnce() -> f64) -> Result<f64, EditError> {
     if content_text::contains_syriac(text) { content_text::width_for_family(text, size, family).map_err(EditError::Invalid) } else { Ok(latin()) }
 }
 
+/// Merge prepared font resources into the page without dropping its current resources.
 fn install_shaped_fonts(doc: &mut Document, page: &pdfcraft_model::Page, prepared: &Dict) -> Result<(), EditError> {
     let current = doc.get(page.obj);
     let mut resources =
@@ -43,6 +45,7 @@ pub fn add_header_footer(doc: &mut Document, pages: &[usize], hf: &HeaderFooter,
     apply_mark_transaction(doc, |staged| add_header_footer_in_place(staged, pages, hf, replace, cx))
 }
 
+/// Write expanded header/footer text on the staged document, preserving layout and selected-family metrics.
 fn add_header_footer_in_place(doc: &mut Document, pages: &[usize], hf: &HeaderFooter, replace: bool, cx: &Context) -> Result<(), EditError> {
     let all = page_list(doc);
     check(pages, all.len())?;
@@ -181,6 +184,7 @@ pub fn add_watermark(doc: &mut Document, pages: &[usize], wm: &Watermark, replac
     apply_mark_transaction(doc, |staged| add_watermark_in_place(staged, pages, wm, replace))
 }
 
+/// Write a text or picture watermark into the staged document with requested placement and opacity.
 fn add_watermark_in_place(doc: &mut Document, pages: &[usize], wm: &Watermark, replace: bool) -> Result<(), EditError> {
     let all = page_list(doc);
     check(pages, all.len())?;

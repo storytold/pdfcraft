@@ -227,6 +227,7 @@ fn value_for(f: &FormField, v: &Value) -> Result<FieldValue> {
 }
 
 impl Automation {
+    /// Report field values, widget geometry and type-specific properties, including text-family choices.
     pub(crate) fn form_fields(&self, a: &Args) -> Result<Value> {
         let doc = self.doc(a)?;
         let out: Vec<Value> = doc
@@ -534,6 +535,7 @@ impl Automation {
         Ok(out)
     }
 
+    /// Build a partial field-property change, translating displayed geometry and validating selectors.
     fn field_props_arg(&self, a: &Args, name: &str) -> Result<FieldProps> {
         let doc = self.doc(a)?;
         let f = doc.form.iter().find(|f| f.name == name).ok_or_else(|| failed(format!("there is no field named {name:?} (see form_fields)")))?;

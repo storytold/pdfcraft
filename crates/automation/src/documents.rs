@@ -474,6 +474,8 @@ impl Automation {
         Ok(json!({ "pages": found }))
     }
 
+    /// Parse and apply header/footer, watermark, background or mark-removal requests.
+    /// Confine picture inputs and reject family selectors on non-text mark operations.
     pub(crate) fn marks(&mut self, tool: &str, a: &Args) -> Result<Value> {
         use pdfcraft_engine::{Background, HeaderFooter, MarkKind, Watermark};
         if a.get("syriac_family").is_some() && !matches!(tool, "doc_header_footer" | "doc_watermark") {

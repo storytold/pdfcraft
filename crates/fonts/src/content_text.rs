@@ -17,6 +17,7 @@ pub fn contains_syriac(text: &str) -> bool {
     text.chars().any(crate::source_shaping::is_syriac)
 }
 
+/// Translate shaping failures into actionable missing-font, missing-glyph or budget errors.
 fn error(error: GlyphError) -> String {
     match error {
         GlyphError::NoFont => "Syriac text needs a Syrc font in the optional craft-fonts build input".into(),
@@ -34,6 +35,7 @@ pub struct Line {
     clusters: Vec<ShapedCluster>,
 }
 
+/// Identify directional controls used for ordering but omitted from painted glyph input.
 fn bidi_control(c: char) -> bool {
     matches!(c, '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
 }
@@ -73,6 +75,8 @@ pub fn width(text: &str, size: f64) -> Result<f64, String> {
     width_for_family(text, size, SyriacFamily::default())
 }
 
+/// Return the selected face's em advance multiplied by the caller-supplied scale.
+/// Propagate shaping failures; this helper does not validate the scale itself.
 pub fn width_for_family(text: &str, size: f64, family: SyriacFamily) -> Result<f64, String> {
     Ok(line_for_family(text, unicode_bidi::get_base_direction(text) == unicode_bidi::Direction::Rtl, family)?.width * size)
 }
@@ -83,6 +87,8 @@ pub fn comb_cells(text: &str) -> Result<Vec<Line>, String> {
     comb_cells_for_family(text, SyriacFamily::default())
 }
 
+/// Lay out at most 4096 independent cells in visual order using the selected family.
+/// Keep nonspacing marks with their base and refuse multiline or oversized input.
 pub fn comb_cells_for_family(text: &str, family: SyriacFamily) -> Result<Vec<Line>, String> {
     if text.len() > MAX_TEXT_BYTES || text.contains(['\n', '\r']) {
         return Err("a comb value must be one bounded line".into());
@@ -127,6 +133,10 @@ pub fn wrap(text: &str, size: f64, width: f64) -> Result<Vec<Line>, String> {
     wrap_for_family(text, size, width, SyriacFamily::default())
 }
 
+/// Wrap at spaces with the selected face and an independent bidi base per paragraph.
+/// `size` and `width` must be positive finite values in points; input is bounded by MAX_TEXT_BYTES
+/// and output by 1024 rows. Joining words and attached marks stay intact, so an overlong word
+/// can exceed the requested width. Refuse invalid geometry, unavailable glyphs or exceeded budgets.
 pub fn wrap_for_family(text: &str, size: f64, width: f64, family: SyriacFamily) -> Result<Vec<Line>, String> {
     if text.len() > MAX_TEXT_BYTES || !size.is_finite() || size <= 0.0 || !width.is_finite() || width <= 0.0 {
         return Err("Syriac layout needs bounded text and positive finite size/width".into());
@@ -163,6 +173,7 @@ pub fn wrap_for_family(text: &str, size: f64, width: f64, family: SyriacFamily) 
 }
 
 type Key = (String, Vec<(u32, u64, u64)>, u64);
+/// Identify equivalent clusters by logical text, positioned glyph ids and exact advance bits.
 fn key(cluster: &ShapedCluster) -> Key {
     (cluster.text.clone(), cluster.glyphs.iter().map(|(id, xy)| (*id, xy[0].to_bits(), xy[1].to_bits())).collect(), cluster.advance.to_bits())
 }
@@ -190,7 +201,9 @@ impl Line {
     }
 
     /// Embed bounded Type 3 cluster fonts and emit text with both ToUnicode and
-    /// per-line ActualText. The caller stages its document before a multi-line operation.
+    /// per-line ActualText. `at` is a finite baseline position in PDF points; `size` is in (0, 500].
+    /// This mutates `doc` and `fonts`: a later cluster-font chunk can fail after earlier resources
+    /// were allocated. The caller must stage those objects when atomic multi-line updates are required.
     pub fn write(&self, doc: &mut Document, fonts: &mut Dict, at: [f64; 2], size: f64) -> Result<Vec<u8>, String> {
         if fonts.len() > 65_534 {
             return Err("the text surface has too many font resources".into());

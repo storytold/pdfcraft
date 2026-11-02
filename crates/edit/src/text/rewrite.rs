@@ -217,6 +217,8 @@ struct RewriteDispatch {
     use_styled_path: bool,
 }
 
+/// Choose single-style or styled rewriting from source geometry, scripts and requested fonts.
+/// Refuse unsupported turned, legacy-order or partially styled RTL combinations before rewriting.
 fn choose_rewrite_path(
     doc: &Document,
     fonts: &Dict,

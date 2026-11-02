@@ -583,6 +583,7 @@ pub struct StyleChange {
 }
 
 impl StyleChange {
+    /// Build a partial style change that leaves the stored Syriac family untouched.
     pub fn new(color: Option<Rgb>, opacity: Option<f64>, width: Option<f64>, endings: Option<Vec<LineEnding>>) -> Self {
         Self { color, opacity, width, endings, syriac_family: None }
     }
@@ -601,6 +602,7 @@ pub struct TextReplacement<'a> {
 }
 
 impl Default for Style {
+    /// Use an opaque yellow one-point stroke with no fill or explicit Syriac family.
     fn default() -> Self {
         Self { color: [1.0, 0.82, 0.0], opacity: 1.0, width: 1.0, fill: None, syriac_family: None }
     }

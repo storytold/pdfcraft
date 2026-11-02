@@ -36,6 +36,7 @@ fn meta(id: &str) -> Meta {
     Meta { date: Some("D:20261001120000Z".into()), id: id.into() }
 }
 
+/// Create a synthetic annotation with a stable blue style, sample text and author.
 fn new(page: usize, shape: Shape) -> NewAnnotation {
     NewAnnotation {
         page,
@@ -869,6 +870,7 @@ fn cloud_ys(path: &str) -> Vec<f64> {
         .collect()
 }
 
+/// Replacement markup keeps its strikeout and caret grouped through editing and saving.
 #[test]
 fn replace_text_groups_a_strikeout_and_a_caret() {
     let mut doc = fixture();
@@ -1036,6 +1038,7 @@ fn comments_without_appearances_get_one_for_display_only() {
     assert!(with_missing_appearances(&complete).is_none());
 }
 
+/// Unavailable Syriac glyphs retain logical contents, a marked fallback and restylability after saving.
 #[test]
 fn syriac_freetext_keeps_a_legacy_fallback_without_document_or_glyphs() {
     let mut bare = Dict::new();
@@ -1063,6 +1066,7 @@ fn syriac_freetext_keeps_a_legacy_fallback_without_document_or_glyphs() {
     assert!(ap_content(&reopened, &list(&reopened, 0)[index]).contains("(?)"));
 }
 
+/// Malformed Syriac annotations must not suppress valid neighboring display appearances or mutate input.
 #[test]
 fn one_unbuildable_syriac_comment_does_not_discard_other_display_appearances() {
     let doc = document_of(&[
@@ -2247,6 +2251,7 @@ fn degenerate_and_absurd_leader_and_caption_values_do_not_panic() {
     assert!(!long.contains(&"w".repeat(257)));
 }
 
+/// Freehand highlights save compatible Ink geometry with marker opacity and blend resources.
 #[test]
 fn freehand_highlight_is_compatible_ink_with_marker_blending() {
     let shape = Shape::FreehandHighlight { strokes: vec![vec![[20.0, 100.0], [120.0, 100.0]]] };

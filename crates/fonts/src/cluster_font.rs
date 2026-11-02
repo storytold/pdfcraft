@@ -4,11 +4,12 @@ use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream};
 use std::collections::HashMap;
 
 const MAX_POINTS: usize = 1_000_000;
-// Bounds coordinates before scaling to PDF glyph space, also bounding each emitted number.
+/// Bound coordinates before scaling to PDF glyph space, also bounding each emitted number.
 fn coordinate(v: f64) -> bool {
     v.is_finite() && v.abs() <= 1_000_000.0
 }
 
+/// Validate outline geometry and count path commands within the shared point budget.
 fn outline_costs(outlines: &HashMap<(ShapedScript, u32), GlyphOutline>) -> Result<HashMap<(ShapedScript, u32), usize>, String> {
     let mut total = 0usize;
     let mut costs = HashMap::new();
@@ -33,6 +34,7 @@ fn outline_costs(outlines: &HashMap<(ShapedScript, u32), GlyphOutline>) -> Resul
     Ok(costs)
 }
 
+/// Reject invalid cluster geometry and cap emitted outline cost, including repeated glyphs.
 fn validate_clusters(clusters: &[&ShapedCluster], outlines: &HashMap<(ShapedScript, u32), GlyphOutline>) -> Result<(), String> {
     if clusters.is_empty() || clusters.len() > 240 {
         return Err("a shaped font needs between one and 240 clusters".into());
@@ -61,6 +63,7 @@ fn validate_clusters(clusters: &[&ShapedCluster], outlines: &HashMap<(ShapedScri
     Ok(())
 }
 
+/// Format a PDF number to three decimals, trimming zeros and normalizing negative zero.
 fn n(v: f64) -> String {
     let s = format!("{:.3}", if v.abs() < 5e-4 { 0.0 } else { v });
     let s = s.trim_end_matches('0').trim_end_matches('.');

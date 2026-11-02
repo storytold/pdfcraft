@@ -5,6 +5,8 @@ use super::{
 };
 use pdfcraft_fonts::{SyriacFamily, content_text as text};
 
+/// Detect unmasked Syriac text, option labels or captions on eligible field kinds.
+/// Button state names are not text; this predicate does not filter hidden widgets.
 pub(crate) fn requested(doc: &Document, f: &Field, w: &Widget, values: &[String]) -> bool {
     if f.has(flags::PASSWORD) || !matches!(f.kind, FieldKind::Text | FieldKind::Combo | FieldKind::List | FieldKind::PushButton) {
         return false;
@@ -14,12 +16,14 @@ pub(crate) fn requested(doc: &Document, f: &Field, w: &Widget, values: &[String]
         || (f.kind == FieldKind::PushButton && caption(doc, w).is_some_and(|caption| text::contains_syriac(&caption)))
 }
 
+/// Read the widget caption through a possibly indirect appearance-characteristics dictionary.
 fn caption(doc: &Document, w: &Widget) -> Option<String> {
     let widget = doc.get(w.obj);
     let mk = widget.as_dict()?.get(b"MK").and_then(|mk| doc.dict(mk))?;
     mk.get(b"CA").and_then(|caption| doc.resolve(caption).as_string().map(|s| s.to_text()))
 }
 
+/// Combine baseline-relative ink bounds while retaining minimum Latin ascent and descent.
 fn extents(lines: &[text::Line]) -> Result<(f64, f64), String> {
     let (mut top, mut bottom) = (0.718f64, -0.207f64);
     for line in lines {
@@ -30,6 +34,7 @@ fn extents(lines: &[text::Line]) -> Result<(f64, f64), String> {
     Ok((top, bottom))
 }
 
+/// Measure list-label ink bounds with the selected family, refusing more than 1024 options.
 pub(super) fn option_extents(f: &Field, family: SyriacFamily) -> Result<(f64, f64), String> {
     if f.options.len() > 1024 {
         return Err("the Syriac choice list has too many options".into());
@@ -44,6 +49,7 @@ pub(super) fn option_extents(f: &Field, family: SyriacFamily) -> Result<(f64, f6
     Ok((top, bottom))
 }
 
+/// Lay out a field value with the selected face, wrapping multiline text and flattening other breaks.
 fn layout(value: &str, size: f64, width: f64, multiline: bool, family: SyriacFamily) -> Result<Vec<text::Line>, String> {
     if multiline {
         text::wrap_for_family(value, size, width, family)
@@ -53,11 +59,13 @@ fn layout(value: &str, size: f64, width: f64, multiline: bool, family: SyriacFam
     }
 }
 
+/// Ask the shared paragraph layout for base direction, defaulting to LTR if layout fails.
 fn unicode_bidi_rtl(value: &str, family: SyriacFamily) -> bool {
     // The layout helper owns UAX #9; an unwrapped paragraph gets the same base direction.
     text::wrap_for_family(value, 1.0, f64::MAX, family).ok().and_then(|lines| lines.first().map(|line| line.rtl)).unwrap_or(false)
 }
 
+/// Use an explicit size or compute an automatic size from shaped bounds, with a 4-point minimum.
 fn size_for(value: &str, wanted: Option<f64>, width: f64, height: f64, multiline: bool, family: SyriacFamily) -> Result<f64, String> {
     if let Some(size) = wanted {
         return Ok(size);
@@ -83,6 +91,7 @@ fn size_for(value: &str, wanted: Option<f64>, width: f64, height: f64, multiline
     }
 }
 
+/// Fit the widest visible cell and ink height against the full bounded comb cell count.
 fn comb_auto_size(width: f64, height: f64, cells: usize, widest: f64, ink_height: f64) -> Result<f64, String> {
     if !(1..=4096).contains(&cells)
         || !width.is_finite()
@@ -104,6 +113,7 @@ fn comb_auto_size(width: f64, height: f64, cells: usize, widest: f64, ink_height
     Ok(size)
 }
 
+/// Report measured fit separately from shaping errors so callers can apply fallback metrics.
 pub(super) fn fits(box_: &TextBox, value: &str) -> Result<bool, String> {
     let size = size_for(value, box_.size, box_.inner_w, box_.inner_h, box_.multiline, box_.syriac_family)?;
     let rows = layout(value, size, box_.inner_w, box_.multiline, box_.syriac_family)?;
@@ -113,6 +123,7 @@ pub(super) fn fits(box_: &TextBox, value: &str) -> Result<bool, String> {
     Ok(rows.iter().all(|line| line.width * size <= box_.inner_w + 0.01) && height <= box_.inner_h + 0.01)
 }
 
+/// Classify shaped text as too high, too many rows or too wide after field formatting.
 pub(super) fn overflow(box_: &TextBox, f: &Field) -> Result<Option<Overflow>, String> {
     let value = f.value.first().map_or("", String::as_str);
     if value.len() > text::MAX_TEXT_BYTES {
@@ -140,6 +151,8 @@ pub(super) fn overflow(box_: &TextBox, f: &Field) -> Result<Option<Overflow>, St
     Ok(None)
 }
 
+/// Build a bounded Syriac field appearance with the selected family and embedded cluster fonts.
+/// Handle choice highlights, comb cells, alignment and multiline baselines in widget layout space.
 pub(super) fn field(doc: &mut Document, f: &Field, w: &Widget, values: &[String], format: bool) -> Result<Stream, String> {
     let family = super::syriac_family(doc, f, w);
     let widget = doc.get(w.obj);
@@ -264,6 +277,7 @@ pub(super) fn field(doc: &mut Document, f: &Field, w: &Widget, values: &[String]
 mod tests {
     use super::*;
 
+    /// Sparse comb values still use MaxLen cell widths, actual mark height and bounded geometry.
     #[test]
     fn sparse_syriac_comb_auto_size_uses_the_maximum_cell_count() {
         // One 2-em isolated letter in a 24-cell field still has only 10 pt of room.
@@ -275,6 +289,7 @@ mod tests {
         assert!(comb_auto_size(f64::NAN, 30.0, 24, 2.0, 1.5).is_err());
     }
 
+    /// Syriac checkbox/radio state names must not replace their non-text appearance path.
     #[test]
     fn syriac_export_values_do_not_request_text_appearances_for_buttons() {
         let mut doc = Document::new_empty();

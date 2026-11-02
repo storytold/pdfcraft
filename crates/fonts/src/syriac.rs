@@ -11,6 +11,7 @@ pub enum SyriacFamily {
 impl SyriacFamily {
     pub const ALL: [Self; 3] = [Self::Estrangela, Self::Eastern, Self::Western];
 
+    /// Return the stable lowercase family identifier stored in PDFs and automation arguments.
     pub fn name(self) -> &'static str {
         match self {
             Self::Estrangela => "estrangela",
@@ -19,6 +20,7 @@ impl SyriacFamily {
         }
     }
 
+    /// Return the exact craft-fonts family name used to select this document face.
     pub fn font_family(self) -> &'static str {
         match self {
             Self::Estrangela => "Noto Sans Syriac",
@@ -27,6 +29,7 @@ impl SyriacFamily {
         }
     }
 
+    /// Parse case-insensitive identifiers or full family names, accepting Serto for Western.
     pub fn from_name(name: &str) -> Option<Self> {
         Self::ALL
             .into_iter()
