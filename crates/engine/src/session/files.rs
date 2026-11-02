@@ -1,7 +1,7 @@
 use super::{
-    Arc, CombineSource, Combined, DataFormat, DocId, EditError, Hidden, ImageResolution, LOW_RESOLUTION_PRINT_DPI, OptimizeReport, SaveOptions,
-    Session, SourceKind, SplitPart, decode_text, guard, open_source, open_source_with, optimize, print, print_raster, set_default_layer_state,
-    source_kind, writable, write_full,
+    Arc, CombineSource, Combined, DataFormat, DocId, EditError, Hairlines, HairlinesFixed, Hidden, ImageResolution, LOW_RESOLUTION_PRINT_DPI,
+    OptimizeReport, SaveOptions, Session, SourceKind, SplitPart, decode_text, guard, open_source, open_source_with, optimize, print, print_raster,
+    set_default_layer_state, source_kind, writable, write_full,
 };
 
 impl Session {
@@ -112,6 +112,15 @@ impl Session {
         })
         .map_err(EditError::Write)?
         .map_err(EditError::Write)
+    }
+
+    /// How many hairlines [`Edit::FixHairlines`] would change on `pages` of `id`, and on how many
+    /// pages, without changing the document (the edit itself refuses when there is nothing to fix).
+    pub fn count_hairlines(&self, id: DocId, pages: &[usize], settings: &Hairlines) -> HairlinesFixed {
+        let Some(doc) = self.get(id) else { return HairlinesFixed::default() };
+        let Some(editor) = doc.editor.as_ref() else { return HairlinesFixed::default() };
+        let mut cos = editor.cos.clone();
+        pdfcraft_edit::fix_hairlines(&mut cos, pages, settings).unwrap_or_default()
     }
 
     /// The print-ready PDF for `settings` (sheets laid out for the paper; see `pdfcraft-print`).

@@ -2816,6 +2816,16 @@ theme	Appearance	모양
 	Remove crop	자르기 제거
 	Send backward	뒤로 보내기
 	Send to back	맨 뒤로 보내기
+	Also	추가
+	Fix hairlines…	헤어라인 수정…
+	Fixed {n} hairlines on {p} pages	{p}페이지의 헤어라인 {n}개를 수정했습니다
+	Lines drawn inside Type 3 glyphs and tiling patterns; off by default.	Type 3 글리프와 타일링 패턴 안에 그려진 선이며, 기본값은 꺼짐입니다.
+	Narrower than	다음보다 좁음
+	New width	새 너비
+	No hairlines found on those pages	해당 페이지에서 헤어라인을 찾지 못했습니다
+	Pattern strokes	패턴 선
+	Type 3 font glyphs	Type 3 글꼴 글리프
+	Zero-width lines always count as narrower.	너비가 0인 선은 항상 더 좁은 것으로 간주됩니다.
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	오늘

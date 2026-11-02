@@ -2817,6 +2817,16 @@ theme	Appearance	Tampilan
 	Remove crop	Hapus pangkasan
 	Send backward	Mundur Selangkah
 	Send to back	Kirim ke Belakang
+	Also	Juga
+	Fix hairlines…	Perbaiki garis rambut…
+	Fixed {n} hairlines on {p} pages	Memperbaiki {n} garis rambut pada {p} halaman
+	Lines drawn inside Type 3 glyphs and tiling patterns; off by default.	Garis yang digambar di dalam glif Type 3 dan pola ubin; nonaktif secara default.
+	Narrower than	Lebih sempit dari
+	New width	Lebar baru
+	No hairlines found on those pages	Tidak ada garis rambut di halaman-halaman itu
+	Pattern strokes	Goresan pola
+	Type 3 font glyphs	Glif font Type 3
+	Zero-width lines always count as narrower.	Garis lebar nol selalu dianggap lebih sempit.
 
 # Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
 	Today	Hari ini
