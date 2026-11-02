@@ -1,6 +1,7 @@
 # Localization parity
 
 > **Last reviewed:** 2026-11-03 · **Last updated:** 2026-11-03 · **Change:** minor (Turkish: 2,867 entries, 0 missing in `cargo xtask i18n-report` on 2026-11-03; AI-assisted)
+> **Last reviewed:** 2026-11-02 · **Last updated:** 2026-11-02 · **Change:** minor (Dutch (`nl`, Netherlands vocabulary) added, covering the 2,852-key union measured the same day. Earlier rows below still quote the union of their own date. Scores and estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-25 · **Last updated:** 2026-10-25 · **Change:** minor (Persian (`fa`, 2,785 entries) added right-to-left like Arabic and Kurdish; Arabic current state corrected: catalogs stay logical, RTL labels take an explicit direction and stock chrome mirrors; native/browser RTL input, IME and complex workflows remain unqualified. Native release Hans face via LXGW WenKai Lite; release-pinned craft-fonts still has no Telugu face. Current union 2,798 keys. Scores and estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
 Per-language status of PdfCraft's interface against Acrobat Pro's. How translations work and how to
@@ -13,11 +14,13 @@ add a language: [localization.md](localization.md). Summary in [ROADMAP.md](../R
   keys across all catalogs, counting language-specific context rows such as `theme`/`Appearance`.
   **That union is a moving target**: every change that adds a string widens it, so a count is only
   comparable with others measured on the same date, and a catalog that reached 100% falls behind
-  without losing a single translation. Every figure here therefore carries its date. The current
-  union is **2,798** keys as of 2026-10-25, against the **2,143-key snapshot** of 2026-10-10; earlier
-  revisions quote the union of their own date (see the revision history), not this one. The
+  without losing a single translation. Every figure here therefore carries its date. The union was
+  **2,798** keys on 2026-10-25, against the **2,143-key snapshot** of 2026-10-10; the widest measurement
+  is the **2,852-key union** of 2026-11-02, which Dutch covers. Every row below quotes the union of its
+  own date (see the revision history), not 2,798. The
   twelve-language percentage table below still quotes the 2026-10-10 snapshot for every language
-  except Spanish, Vietnamese, Lithuanian and Brazilian Portuguese, which are measured against the current union. English is
+  except Spanish, Vietnamese, Lithuanian and Brazilian Portuguese, which are measured against the
+  2026-10-25 union. English is
   built in.
 - **Not counted:** error details from the engine and the operating system, which are shown in
   English inside a translated frame; there is no translated user documentation or help yet (Acrobat
@@ -81,10 +84,11 @@ help/docs polish (catalog and script work are already done), not missing UI stri
 | Romanian | `ro` | 2,798 entries (every current key) | partial; AI-assisted, not yet reviewed line by line by a native speaker | no |
 | Norwegian Bokmål | `nb` | 2,707 entries | partial; native-speaker terminology review by the contributor ([#1836](https://github.com/storytold/pdfcraft/pull/1836)), not yet line by line | yes |
 | Persian | `fa` | 2,785 entries (all but 13 keys of the current 2,798-key union) | partial; AI-assisted, not yet reviewed line by line by a native speaker | no |
+| Dutch | `nl` | 2,852 entries (every key of the 2,852-key union measured 2026-11-02) | partial; AI-assisted, Netherlands vocabulary, not yet reviewed line by line by a native speaker | yes |
 
-**20 other languages** ship (34 catalogs plus English = **35** interface languages in Preferences).
-The entry counts without percentages are as of 2026-10-25; they are not percentages of the older 2,143-key snapshot above. Their presence does not imply a detailed linguistic or runtime review.
-Acrobat languages PdfCraft lacks: Danish, Dutch, Swedish, Hebrew. Vietnamese is shipped here but not by Acrobat.
+**21 other languages** ship (35 catalogs plus English = **36** interface languages in Preferences).
+The entry counts without percentages are as of 2026-10-25, except Dutch, which was measured on 2026-11-02 against that day's union; they are not percentages of the older 2,143-key snapshot above. Their presence does not imply a detailed linguistic or runtime review.
+Acrobat languages PdfCraft lacks: Danish, Swedish, Hebrew. Vietnamese is shipped here but not by Acrobat.
 
 ## Revision history
 
@@ -95,6 +99,7 @@ Acrobat languages PdfCraft lacks: Danish, Dutch, Swedish, Hebrew. Vietnamese is 
 | 2026-10-21 | minor | Brazilian Portuguese (`pt-br`) now covers all 2,674 distinct keys in the current catalog union; no help or engine/OS error-detail localization; twelve-language mean still rounds to ≈ 68% |
 | 2026-10-20 | minor | Spanish: the 143 keys the other catalogs had and `es.tsv` was missing; `es` now covers the whole 2,674-key union, like `lt` and `vi`. Restated Lithuanian against the current union (its 2,585 was measured on 2026-10-13) and said plainly in *How this was measured* that the union moves, so counts only compare within a date |
 | 2026-11-03 | minor | Turkish: 2,867 entries after translating the 288 keys the translation gaps report listed (AI-assisted); measured with the report, not against the 2,798-key union of 2026-10-25, which predates keys added since |
+| 2026-11-02 | minor | Added Dutch (`nl`, Nederlands, Netherlands vocabulary) covering the 2,852-key union measured the same day. One/other plurals. AI-assisted, not yet native-reviewed. Not one of the twelve key languages, so the mean is unchanged |
 | 2026-10-19 | minor | Removed the 2026-10-13 status line and the 14-language summary that concurrent merges left beside the current ones; the summary keeps the Italian and Norwegian Bokmål measurement dates |
 | 2026-10-16 | minor | Czech: 2,674 entries after adding the keys the other catalogs had (the engine's sentences, weekday heads, certificate fields, shared buttons) and unifying "tag" as *tag* (not *značka*, which is a redaction mark) |
 | 2026-10-13 | minor | Vietnamese (`vi`) catalog: 2,591 entries (100% of current key union + `theme`/`Appearance`); twelve-language mean ≈ 68%; native-speaker community review; registered with `plural_none` |

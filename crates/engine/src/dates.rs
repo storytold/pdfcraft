@@ -63,7 +63,7 @@ const CKB_DAYS: [&str; 7] = ["یەکشەممە", "دووشەممە", "سێشەم
 
 /// The languages month and weekday names can be written in (Preferences ▸ Date format ▸ Language):
 /// the interface languages, in the same order and with the same names.
-pub static DATE_LANGUAGES: [DateLanguage; 35] = [
+pub static DATE_LANGUAGES: [DateLanguage; 36] = [
     DateLanguage {
         code: "en",
         name: "English",
@@ -575,6 +575,16 @@ pub static DATE_LANGUAGES: [DateLanguage; 35] = [
         days: ["søndag", "mandag", "tirsdag", "onsdag", "torsdag", "fredag", "lørdag"],
         days_short: ["søn.", "man.", "tir.", "ons.", "tor.", "fre.", "lør."],
     },
+    // Dutch month and weekday names stay lowercase, also standing alone (`maart 2026`).
+    DateLanguage {
+        code: "nl",
+        name: "Nederlands",
+        months: ["januari", "februari", "maart", "april", "mei", "juni", "juli", "augustus", "september", "oktober", "november", "december"],
+        months_with_day: None,
+        months_short: ["jan.", "feb.", "mrt.", "apr.", "mei", "jun.", "jul.", "aug.", "sep.", "okt.", "nov.", "dec."],
+        days: ["zondag", "maandag", "dinsdag", "woensdag", "donderdag", "vrijdag", "zaterdag"],
+        days_short: ["zo", "ma", "di", "wo", "do", "vr", "za"],
+    },
 ];
 
 /// The date language for `code` (any case), or `None` when there's none.
@@ -896,6 +906,8 @@ mod tests {
         assert_eq!(in_lang("ddd d mmm", "sq"), "sht 7 mar");
         assert_eq!(in_lang("dddd d. mmmm yyyy", "nb"), "lørdag 7. mars 2026");
         assert_eq!(in_lang("ddd d. mmm", "nb"), "lør. 7. mar.");
+        assert_eq!(in_lang("dddd d mmmm yyyy", "nl"), "zaterdag 7 maart 2026");
+        assert_eq!(in_lang("ddd d mmm", "nl"), "za 7 mrt.");
         assert_eq!(date_language("PT-BR").map(|l| l.code), Some("pt-br"));
         assert!(date_language("xx").is_none());
         for l in &DATE_LANGUAGES {

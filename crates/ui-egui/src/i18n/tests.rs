@@ -1003,6 +1003,33 @@ fn norwegian_bokmal_is_registered_and_persists() {
 }
 
 #[test]
+fn dutch_is_registered_and_persists() {
+    needs_catalogs!();
+    let nl = Lang::from_code("nl").expect("nl registered");
+    assert_eq!(nl.name(), "Nederlands");
+    assert_eq!(nl.english_name(), "Dutch");
+    assert_eq!(normalize_pref("NL"), Some("nl"));
+    for tag in ["nl", "nl-NL", "nl_NL.UTF-8", "NL-nl", "nl-BE"] {
+        assert_eq!(lang_from_tag(tag), Some(nl), "{tag}");
+    }
+    assert_eq!(first_supported("nl-NL\r\nen-US"), Some(nl));
+    // CLDR `nl`: one (1), other (0 and 2+) — the same rule PdfCraft had before craft-i18n.
+    assert_eq!(tr(nl, "Save"), "Opslaan");
+    assert_eq!(tr(nl, "Preferences…"), "Voorkeuren…");
+    assert_eq!(trn(nl, 1, "{n} page", "{n} pages"), "1 pagina");
+    assert_eq!(trn(nl, 0, "{n} page", "{n} pages"), "0 pagina's");
+    assert_eq!(trn(nl, 2, "{n} page", "{n} pages"), "2 pagina's");
+    let mut app = crate::PdfCraftApp::default();
+    app.set_option("language", "NL").unwrap();
+    assert_eq!(app.language, "nl");
+    let mut restored = crate::PdfCraftApp::default();
+    restored.restore(&app.persist());
+    assert_eq!(restored.language, "nl");
+    assert!(restored.set_option("language", "xx").is_err());
+    assert_eq!(restored.language, "nl");
+}
+
+#[test]
 fn vietnamese_is_registered_and_persists() {
     needs_catalogs!();
     let vi = Lang::from_code("vi").expect("vi registered");
