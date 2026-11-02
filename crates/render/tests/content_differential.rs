@@ -269,12 +269,14 @@ fn both_parsers_read_on_past_a_malformed_name_escape_but_only_the_content_crate_
 /// hayro used to read it as the two numbers 0 and -280, so `cm` took an extra operand and the
 /// renderer drew the page with the matrix `0 0 1 0 -280 10`. Closed by #3630 (766ff9d05): a
 /// doubled sign is one number to hayro too, so both read the matrix MuPDF applies (text at
-/// x = 120).
+/// x = 120). The content crate skips no byte: without the lexer's tolerance it would skip the
+/// first `-` and read the same `-280` from the rest, so the operands alone don't show it.
 #[test]
 fn both_parsers_read_a_doubled_minus_as_one_number() {
     let data = b"1 0 0 1 --280 10 cm";
     agree("doubled minus", data, &["cm"]);
     assert_eq!(content(data)[0].operands, ["1", "0", "0", "1", "-280", "10"]);
+    assert_eq!(pdfcraft_content::parse(data).skipped, 0, "--280 is read as one number, not recovered from -280");
 }
 
 // ── known divergences, pinned on both sides ─────────────────────────────────────────────────
