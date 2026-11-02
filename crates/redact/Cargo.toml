@@ -17,6 +17,8 @@ pdfcraft-forms = { workspace = true }
 pdfcraft-edit = { workspace = true }
 pdfcraft-annot = { workspace = true }
 pdfcraft-xfa = { workspace = true }
+# CCITT Group 4 and JBIG2 encoding for cleared one-bit images.
+pdfcraft-filters = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]

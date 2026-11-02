@@ -6,7 +6,10 @@
 //! TIFF/PNG predictors, `ASCIIHexDecode`, `ASCII85Decode`, `RunLengthDecode`).
 //! Image codecs (`DCTDecode`, `JPXDecode`, `JBIG2Decode`, `CCITTFaxDecode`),
 //! `Crypt` and unknown filters are reported as [`FilterError::Unsupported`] so
-//! callers keep such data encoded.
+//! callers keep such data encoded. CCITT fax and JBIG2 images decode on their own
+//! ([`decode_ccitt`], [`decode_jbig2`]), as `pdfcraft_cos::Document::decoded_image`
+//! does after the filters before them. 1-bit samples can be encoded as CCITT Group 4
+//! ([`encode_g4`]) or lossless JBIG2 ([`encode_jbig2`]).
 //!
 //! Every decoder is bounded by a caller-supplied `max_output` (decompression-bomb
 //! defence) and never panics on malformed input.
@@ -15,12 +18,18 @@
 
 mod ascii85;
 mod asciihex;
+mod ccitt;
 mod flate;
+mod jbig2;
 mod lzw;
+mod mq;
 mod predictor;
 mod runlength;
 
 use std::borrow::Cow;
+
+pub use ccitt::{CcittParams, MAX_CCITT_COLUMNS, MAX_G4_COLUMNS, decode_ccitt, encode_g4};
+pub use jbig2::{MAX_JBIG2_COLUMNS, MAX_JBIG2_PIXELS, decode_jbig2, encode_jbig2, encode_jbig2_generic};
 
 /// A PDF stream filter, identified by its `/Filter` name.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]

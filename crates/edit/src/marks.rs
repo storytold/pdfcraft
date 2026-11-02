@@ -173,11 +173,17 @@ pub struct Background {
     pub source: Option<MarkSource>,
     /// Pictures: size relative to the page (1.0 fits the page).
     pub scale: f64,
+    /// Replace a white backdrop the page paints itself, which would hide the background
+    /// ([`backdrop`](crate::backdrop)). Removing the background turns it back on where that is
+    /// still safe ([`backdrops_left_off`](crate::backdrops_left_off) are the pages where it isn't).
+    pub replace_backdrop: bool,
 }
 
 impl Default for Background {
+    /// A light yellow that still reads as a colour on screen (a near-white default looked as if
+    /// nothing had happened).
     fn default() -> Self {
-        Self { color: [1.0, 1.0, 0.85], opacity: 1.0, source: None, scale: 1.0 }
+        Self { color: [1.0, 0.95, 0.7], opacity: 1.0, source: None, scale: 1.0, replace_backdrop: true }
     }
 }
 

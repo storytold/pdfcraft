@@ -279,7 +279,8 @@ impl Automation {
     }
 
     pub(crate) fn doc_optimize(&mut self, a: &Args) -> Result<Value> {
-        use pdfcraft_engine::optimize::{Compatibility, Compression, ImageSettings, Preset};
+        use pdfcraft_engine::optimize::{Compatibility, Compression, ImageSettings, MonoCompression, Preset};
+        const MONO_KEYS: [&str; 4] = ["downsample", "ppi", "above_ppi", "compression"];
         let id = self.doc(a)?.id;
         let before = self.doc(a)?.bytes.len();
         let path = self.resolve(a.str("path")?, true)?;
@@ -317,6 +318,38 @@ impl Automation {
         };
         settings.color = images("color", settings.color)?;
         settings.gray = images("gray", settings.gray)?;
+        if let Some(mono) = a.get("mono") {
+            let unknown = |c: &Value| ToolError::InvalidArgs(format!("unknown mono compression {c} (ccitt_g4, jbig2, retain)"));
+            let mono = mono.as_object().ok_or_else(|| {
+                ToolError::InvalidArgs("mono must be an object: { downsample, ppi, above_ppi, compression: ccitt_g4|jbig2|retain }".into())
+            })?;
+            // A misspelled key would otherwise leave the preset's setting in place unnoticed.
+            if let Some(key) = mono.keys().find(|k| !MONO_KEYS.contains(&k.as_str())) {
+                return Err(ToolError::InvalidArgs(format!("unknown mono key {key:?} ({})", MONO_KEYS.join(", "))));
+            }
+            let m = &mut settings.mono;
+            if let Some(d) = mono.get("downsample") {
+                m.downsample = d.as_bool().ok_or_else(|| ToolError::InvalidArgs(format!("mono downsample must be true or false, not {d}")))?;
+            }
+            for (key, ppi) in [("ppi", &mut m.target_ppi), ("above_ppi", &mut m.above_ppi)] {
+                if let Some(p) = mono.get(key) {
+                    *ppi = p
+                        .as_f64()
+                        .filter(|p| p.is_finite())
+                        .ok_or_else(|| ToolError::InvalidArgs(format!("mono {key} must be a number, not {p}")))?
+                        .clamp(9.0, 2400.0);
+                }
+            }
+            m.above_ppi = m.above_ppi.max(m.target_ppi);
+            if let Some(c) = mono.get("compression") {
+                m.compression = match c.as_str() {
+                    Some("ccitt_g4" | "ccitt" | "g4") => MonoCompression::CcittG4,
+                    Some("jbig2") => MonoCompression::Jbig2,
+                    Some("retain") => MonoCompression::Retain,
+                    _ => return Err(unknown(c)),
+                };
+            }
+        }
         for (key, flag) in [
             ("merge_fragments", &mut settings.merge_fragments),
             ("discard_thumbnails", &mut settings.discard_thumbnails),
@@ -356,7 +389,9 @@ impl Automation {
                 let pw = self.doc(a).ok().and_then(|d| d.password.as_deref());
                 let doc = pdfcraft_cos::Document::open_with_password(bytes.clone(), pw).ok()?;
                 let root = doc.root()?;
-                doc.get(root).as_dict()?.name(b"Version").and_then(valid_version).map(str::to_owned)
+                // Through a reference too, as the optimizer reads it.
+                let version = doc.get(root).as_dict()?.get(b"Version")?.clone();
+                doc.resolve(&version).as_name().and_then(valid_version).map(str::to_owned)
             })
             .flatten();
         let header_version = bytes.strip_prefix(b"%PDF-").and_then(|b| b.get(..3)).and_then(valid_version);
@@ -414,6 +449,28 @@ impl Automation {
             out["warnings"] = json!(doc.edit_notices.iter().map(ToString::to_string).collect::<Vec<_>>());
         }
         Ok(out)
+    }
+
+    /// Pages whose own backdrop hides a background (see `pdfcraft_edit::backdrop`).
+    pub(crate) fn backdrops(&mut self, a: &Args) -> Result<Value> {
+        let n = self.doc(a)?.info.pages.len();
+        let pages = match a.opt_ints("pages")? {
+            Some(_) => self.pages(a, "pages")?,
+            None => (0..n).collect(),
+        };
+        let doc = self.doc(a)?;
+        let found: Vec<Value> = pages
+            .iter()
+            .zip(doc.page_backdrops(&pages))
+            .filter_map(|(p, found)| {
+                let kind = match found? {
+                    pdfcraft_engine::Backdrop::Fill => "fill",
+                    pdfcraft_engine::Backdrop::Image => "image",
+                };
+                Some(json!({ "page": p + 1, "backdrop": kind }))
+            })
+            .collect();
+        Ok(json!({ "pages": found }))
     }
 
     pub(crate) fn marks(&mut self, tool: &str, a: &Args) -> Result<Value> {
@@ -483,6 +540,7 @@ impl Automation {
                     color: color("color", [1.0; 3])?,
                     opacity: a.opt_num("opacity")?.unwrap_or(1.0),
                     scale: a.opt_num("scale")?.unwrap_or(1.0).clamp(0.01, 1.0),
+                    replace_backdrop: a.opt_bool("replace_backdrop")?.unwrap_or(true),
                     ..Background::default()
                 },
                 replace,

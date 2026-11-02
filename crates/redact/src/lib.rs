@@ -70,6 +70,12 @@ pub enum RedactError {
     /// could not be shown complete.
     #[error("the document's objects nest too deeply to remove hidden information completely; the operation was refused")]
     TooDeep,
+    /// A JBIG2 image shares its `/JBIG2Globals` with a redacted one and can't be stored again
+    /// without them, so the shapes they hold, those of marks under the area included, would stay.
+    #[error(
+        "{0} JBIG2 image(s) share their symbol data with a redacted image and can't be decoded to be stored without it, so that data, which can show what is under the marks, would stay in the file; nothing was redacted"
+    )]
+    SharedJbig2Globals(usize),
     #[error(transparent)]
     Edit(#[from] pdfcraft_edit::EditError),
     #[error(transparent)]
@@ -132,6 +138,9 @@ pub struct Report {
     pub glyphs: usize,
     pub images_removed: usize,
     pub images_cleared: usize,
+    /// JBIG2 images, anywhere in the document, stored again (as a cleared copy is) without the
+    /// `/JBIG2Globals` they shared with a redacted image, so those globals leave the file.
+    pub images_restored: usize,
     pub paths_removed: usize,
     pub paths_clipped: usize,
     pub forms_rewritten: usize,
@@ -509,6 +518,7 @@ fn apply_to(doc: &mut Document, pages: Option<&[usize]>) -> Result<Report, Redac
     // A removed image or form must not stay reachable through another resource dictionary (an
     // inherited or shared /Resources): a full save keeps whatever is still referenced.
     interp::unlink_doomed(doc, &doomed_xobjects, &retired_properties)?;
+    report.images_restored = restore_shared_jbig2(doc, &doomed_xobjects)?;
 
     // 5. Verify: nothing readable may remain under a region.
     let mut residue = 0;
@@ -531,6 +541,69 @@ fn apply_to(doc: &mut Document, pages: Option<&[usize]>) -> Result<Report, Redac
     // The previous revision still holds the removed content: the next save must rewrite.
     doc.require_full_save();
     Ok(report)
+}
+
+/// Most XObjects followed down from the removed and replaced ones to find their JBIG2 images.
+const MAX_JBIG2_WALK: usize = 100_000;
+
+/// The `/JBIG2Globals` of a redacted JBIG2 image hold the symbol dictionary of every image that
+/// shares them (`jbig2enc -s` and most scanners give one to all the pages of a scan): the bitmaps
+/// of marks drawn only under the area too. The image itself is replaced or removed, but the globals
+/// would stay for as long as another image uses them. So every image that uses the globals of a
+/// removed or replaced image (`doomed`), or of one drawn in a removed or replaced form, is decoded
+/// and stored again in place without them, as a cleared copy is, and a full save then leaves them
+/// out. An image that can't be stored again refuses the redaction (nothing changes, as `apply`
+/// works on a copy), but for a removed or replaced one, which is either unlinked or still drawn
+/// whole on another page. Returns how many images that weren't removed or replaced were stored again.
+fn restore_shared_jbig2(doc: &mut Document, doomed: &[ObjRef]) -> Result<usize, RedactError> {
+    let mut globals = HashSet::new();
+    let mut seen = HashSet::new();
+    let mut stack: Vec<ObjRef> = doomed.to_vec();
+    while let Some(r) = stack.pop() {
+        if !seen.insert(r) || seen.len() > MAX_JBIG2_WALK {
+            continue;
+        }
+        let object = doc.get(r);
+        let Object::Stream(s) = &*object else { continue };
+        if let Some(g) = doc.jbig2_globals_ref(s) {
+            globals.insert(g);
+        }
+        // A form's images, and its forms' (an image's /SMask is a stream of its own, found below).
+        let resources = s.dict.get(b"Resources").map(|r| doc.resolve(r));
+        let xobjects = resources.as_deref().and_then(Object::as_dict).and_then(|d| d.get(b"XObject")).map(|x| doc.resolve(x));
+        if let Some(x) = xobjects.as_deref().and_then(Object::as_dict) {
+            stack.extend(x.iter().filter_map(|(_, v)| v.as_ref()));
+        }
+        if let Some(m) = s.dict.get(b"SMask").and_then(Object::as_ref) {
+            stack.push(m);
+        }
+    }
+    if globals.is_empty() {
+        return Ok(0);
+    }
+    let sharing: Vec<ObjRef> = doc
+        .scan_objects()
+        .filter(|(_, o)| matches!(&**o, Object::Stream(s) if doc.jbig2_globals_ref(s).is_some_and(|g| globals.contains(&g))))
+        .map(|(r, _)| r)
+        .collect();
+    let doomed: HashSet<ObjRef> = doomed.iter().copied().collect();
+    let (mut restored, mut stuck) = (0, 0);
+    for r in sharing {
+        let object = doc.get(r);
+        let Object::Stream(s) = &*object else { continue };
+        match image::without_globals(doc, s) {
+            Some(new) => {
+                doc.set(r, Object::Stream(new));
+                restored += usize::from(!doomed.contains(&r));
+            }
+            None if doomed.contains(&r) => {}
+            None => stuck += 1,
+        }
+    }
+    if stuck > 0 {
+        return Err(RedactError::SharedJbig2Globals(stuck));
+    }
+    Ok(restored)
 }
 
 /// What applying the marks collects across pages.

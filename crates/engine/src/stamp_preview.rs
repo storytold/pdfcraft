@@ -1,4 +1,5 @@
-//! A stamp while it is moved or resized: the page without it, and the stamp alone.
+//! A stamp while it is moved or resized: the page without it, and the stamp alone. Any other
+//! comment while it is moved: the comment alone.
 
 use std::sync::Arc;
 
@@ -73,11 +74,67 @@ impl Document {
                 return Ok(None);
             }
             let mut background = editor.cos.clone();
-            pdfcraft_annot::delete_annotation(&mut background, page, index).map_err(|e| e.to_string())?;
+            pdfcraft_annot::lift_annotation(&mut background, page, index).map_err(|e| e.to_string())?;
             // The page beneath as it is displayed: comments without an appearance get theirs.
             let background = pdfcraft_annot::with_missing_appearances(&background).unwrap_or(background);
             let write = |cos: &pdfcraft_cos::Document| write_incremental(cos, &SaveOptions::default()).map(Arc::new).map_err(|e| e.to_string());
             Ok(Some(StampPreview { page, background: write(&background)?, stamp: write(&stamp)?, config: self.config.clone() }))
+        })?
+    }
+}
+
+/// Comments alone on a transparent page, for drawing them where they go while they are moved.
+/// The page beneath keeps showing them where they were until the move is applied: rendering the page
+/// without it would cost a whole page's render at every drag on a heavy plan. Read-only, as
+/// [`StampPreview`] is.
+pub struct CommentLayer {
+    page: usize,
+    bytes: Arc<Vec<u8>>,
+    config: RenderConfig,
+}
+
+impl CommentLayer {
+    /// One worker for the comments alone: their page has no content and no other annotations.
+    pub fn renderer(&self) -> RenderPool {
+        RenderPool::new(self.bytes.clone(), 1, self.transparent())
+    }
+
+    /// The comments alone, rendered synchronously with the renderer's normal pixel limits.
+    pub fn render(&self, scale: f32) -> Result<RenderedPage, String> {
+        if !scale.is_finite() || scale <= 0.0 {
+            return Err("preview scale must be finite and positive".into());
+        }
+        guard(|| {
+            let out =
+                PageRenderer::new(self.bytes.clone(), self.transparent()).render(RenderRequest { page: self.page, scale, ..Default::default() });
+            if let Some(e) = &out.error {
+                return Err(e.clone());
+            }
+            Ok(out)
+        })?
+    }
+
+    fn transparent(&self) -> RenderConfig {
+        RenderConfig { transparent: true, ..self.config.clone() }
+    }
+}
+
+impl Document {
+    /// The comments at `indices` on `page` alone (the ones moved together), drawn as on screen:
+    /// one without an appearance of its own gets the one the page view draws. `None` when one
+    /// of them doesn't exist or none has anything to draw.
+    pub fn comment_layer(&self, page: usize, indices: &[usize]) -> Result<Option<CommentLayer>, String> {
+        guard(|| {
+            let editor = self.editor.as_ref().ok_or("the document can't be read")?;
+            if indices.is_empty() || !indices.iter().all(|&i| self.info.annotations.iter().any(|a| a.page == page && a.index == i)) {
+                return Ok(None);
+            }
+            let mut alone = pdfcraft_annot::with_missing_appearances(&editor.cos).unwrap_or_else(|| editor.cos.clone());
+            if !pdfcraft_annot::isolate_annotations(&mut alone, page, indices).map_err(|e| e.to_string())? {
+                return Ok(None);
+            }
+            let bytes = write_incremental(&alone, &SaveOptions::default()).map(Arc::new).map_err(|e| e.to_string())?;
+            Ok(Some(CommentLayer { page, bytes, config: self.config.clone() }))
         })?
     }
 }
