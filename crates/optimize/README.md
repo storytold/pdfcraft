@@ -30,7 +30,8 @@ let report = optimize_with_progress(&mut doc, &settings, &mut |stage| keep_going
   threshold are resampled with a bicubic (Catmull-Rom) filter to a target resolution and
   stored as JPEG (Acrobat's quality steps) or ZIP; soft masks are resampled with their image.
   An image is replaced only if the result is smaller. Images over 80 million pixels are left
-  alone, here and below, whatever the settings (memory). Left alone by these colour and grey
+  alone by the image steps, here and below, whatever their settings (memory); Clean Up may still
+  Flate an unfiltered or LZW one. Left alone by these colour and grey
   settings: CMYK and other colour spaces, image masks, decode arrays, more than 8 bits, JPEG 2000,
   JBIG2 and CCITT (black-and-white images, CCITT and JBIG2 among them, are below). A JPEG is read with
   its colour transform (an Adobe marker's, else `/ColorTransform`, ISO 32000-2 §7.4.8), so one
