@@ -19,6 +19,7 @@ use std::collections::{HashMap, HashSet};
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, Stream};
 
 pub mod codes;
+mod holders;
 mod image;
 mod interp;
 mod overlay;

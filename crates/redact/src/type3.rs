@@ -5,10 +5,10 @@ use std::collections::{HashMap, HashSet};
 use pdfcraft_content::Pieces;
 use pdfcraft_cos::{CosError, Dict, Document, ObjRef, Object};
 
+use crate::holders::MAX_HOLDERS;
 use crate::{RedactError, page_streams};
 
 const MAX_DEPTH: usize = 64;
-const MAX_HOLDERS: usize = 1_000_000;
 
 fn res_dict(doc: &Document, res: &Dict, key: &[u8]) -> Dict {
     res.get(key).and_then(|o| doc.resolve(o).as_dict().cloned()).unwrap_or_default()
@@ -408,28 +408,7 @@ pub(crate) fn unlink_type3(doc: &mut Document) -> Result<(), RedactError> {
         return Ok(());
     };
 
-    // Find all page-tree nodes with /Resources of their own, and the pages that draw through them.
-    let mut holders: Vec<(ObjRef, Vec<ObjRef>)> = Vec::new();
-    let mut seen = HashSet::new();
-    let mut stack: Vec<(ObjRef, Option<usize>)> = vec![(top, None)];
-    while let Some((node, mut holder)) = stack.pop() {
-        if !seen.insert(node) || seen.len() > MAX_HOLDERS {
-            continue;
-        }
-        let obj = doc.get(node);
-        let Some(d) = obj.as_dict() else { continue };
-        if d.contains(b"Resources") {
-            holders.push((node, Vec::new()));
-            holder = Some(holders.len() - 1);
-        }
-        let is_pages = d.name(b"Type") == Some(b"Pages") || (d.contains(b"Kids") && d.name(b"Type") != Some(b"Page"));
-        if is_pages {
-            let kids = d.get(b"Kids").map(|k| doc.resolve(k)).and_then(|k| k.as_array().cloned()).unwrap_or_default();
-            stack.extend(kids.iter().filter_map(Object::as_ref).map(|k| (k, holder)));
-        } else if let Some(h) = holder.and_then(|i| holders.get_mut(i)) {
-            h.1.push(node);
-        }
-    }
+    let holders = crate::holders::resource_holders(doc, top);
 
     let form_holders = reachable_form_holders(doc, &holders)?;
 

@@ -68,30 +68,7 @@ pub(crate) fn unlink_doomed(doc: &mut Document, doomed: &[ObjRef], retired_prope
     }
     let doomed: HashSet<ObjRef> = doomed.iter().copied().collect();
     let Some(top) = doc.root().and_then(|root| doc.get(root).as_dict().and_then(|d| d.reference(b"Pages"))) else { return Ok(()) };
-    // Every page-tree node with a /Resources of its own, and the pages that draw through it
-    // (the nearest such node above a page, or the page itself). Cycles are cut as in
-    // `pdfcraft_model::pages`.
-    let mut holders: Vec<(ObjRef, Vec<ObjRef>)> = Vec::new();
-    let mut seen = HashSet::new();
-    let mut stack: Vec<(ObjRef, Option<usize>)> = vec![(top, None)];
-    while let Some((node, mut holder)) = stack.pop() {
-        if !seen.insert(node) || seen.len() > 1_000_000 {
-            continue;
-        }
-        let obj = doc.get(node);
-        let Some(d) = obj.as_dict() else { continue };
-        if d.contains(b"Resources") {
-            holders.push((node, Vec::new()));
-            holder = Some(holders.len() - 1);
-        }
-        let is_pages = d.name(b"Type") == Some(b"Pages") || (d.contains(b"Kids") && d.name(b"Type") != Some(b"Page"));
-        if is_pages {
-            let kids = d.get(b"Kids").map(|k| doc.resolve(k)).and_then(|k| k.as_array().cloned()).unwrap_or_default();
-            stack.extend(kids.iter().filter_map(Object::as_ref).map(|k| (k, holder)));
-        } else if let Some(h) = holder.and_then(|i| holders.get_mut(i)) {
-            h.1.push(node);
-        }
-    }
+    let holders = crate::holders::resource_holders(doc, top);
     let index: HashMap<ObjRef, usize> = pdfcraft_model::pages(doc).iter().enumerate().map(|(i, p)| (p.obj, i)).collect();
     let holder_nodes: Vec<ObjRef> = holders.iter().map(|(node, _)| *node).collect();
     for (node, users) in holders {
@@ -195,7 +172,7 @@ fn unlink_from_forms(doc: &mut Document, holders: &[ObjRef], doomed: &HashSet<Ob
             if !seen.insert(reference) {
                 continue;
             }
-            if seen.len() > 1_000_000 {
+            if seen.len() > crate::holders::MAX_HOLDERS {
                 return Err(CosError::Syntax { offset: 0, detail: "redaction could not fully inspect shared form resources".into() });
             }
             let object = doc.get(reference);
