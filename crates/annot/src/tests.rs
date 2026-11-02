@@ -1014,16 +1014,16 @@ fn comments_without_appearances_get_one_for_display_only() {
         b"<< /Type /Annot /Subtype /Sound /Rect [10 200 30 220] >>",
         b"<< /Type /XObject /Subtype /Form /BBox [10 10 50 50] /Length 0 >>\nstream\n\nendstream",
     ]);
-    let display = with_missing_appearances(&doc).expect("three comments need an appearance");
+    let display = with_missing_appearances(&doc).expect("four comments need an appearance");
     let has_ap = |doc: &Document| list(doc, 0).iter().map(|d| d.get(b"AP").is_some()).collect::<Vec<_>>();
     assert_eq!(has_ap(&doc), [false, false, false, true, false, false, false], "the document itself is untouched");
-    assert_eq!(has_ap(&display), [true, true, true, true, false, false, false], "FreeText, Ink and Text get one; the rest don't");
+    assert_eq!(has_ap(&display), [true, true, true, true, false, false, true], "FreeText, Ink, Text and Sound get one; the rest don't");
     let shown = list(&display, 0);
     let free_text = ap_content(&display, &shown[0]);
     assert!(free_text.contains("re f") && free_text.contains("Tj"), "background box and text: {free_text}");
     assert_eq!(shown[3].get(b"AP"), list(&doc, 0)[3].get(b"AP"), "an existing appearance is kept");
     // The display copy survives a save and reopen (what the renderer reads).
-    assert_eq!(has_ap(&reopen(&display)), [true, true, true, true, false, false, false]);
+    assert_eq!(has_ap(&reopen(&display)), [true, true, true, true, false, false, true]);
     // Nothing to add: no copy.
     let complete = document_of(&[
         b"<< /Type /Catalog /Pages 2 0 R >>",

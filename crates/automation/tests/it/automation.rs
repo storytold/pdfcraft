@@ -10549,7 +10549,7 @@ fn sound_comment_creates_valid_sound_annotation_and_survives_save_reopen() {
         body.extend_from_slice(b"bext");
         body.extend_from_slice(&(bext.len() as u32).to_le_bytes());
         body.extend_from_slice(bext);
-        if bext.len() % 2 != 0 {
+        if !bext.len().is_multiple_of(2) {
             body.push(0);
         }
 

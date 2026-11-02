@@ -368,7 +368,7 @@ mod tests {
         body.extend_from_slice(b"data");
         body.extend_from_slice(&(pcm.len() as u32).to_le_bytes());
         body.extend_from_slice(pcm);
-        if pcm.len() % 2 != 0 {
+        if !pcm.len().is_multiple_of(2) {
             body.push(0);
         }
 
@@ -461,7 +461,7 @@ mod tests {
         body.extend_from_slice(b"INFO");
         body.extend_from_slice(&(mid_chunk.len() as u32).to_le_bytes());
         body.extend_from_slice(mid_chunk);
-        if mid_chunk.len() % 2 != 0 {
+        if !mid_chunk.len().is_multiple_of(2) {
             body.push(0);
         }
 
