@@ -498,6 +498,12 @@ fn draw_markup(context: &AppearanceContext<'_>, drawing: &mut AppearanceDrawing)
     // Zigzag vertices for all the squiggly quads together: a file can list tens of thousands of
     // long, thin areas, and each alone is within its own cap.
     let mut vertices = MAX_SQUIGGLY_VERTICES;
+    let mut remaining = q.len() / 8;
+    // Range edits accept at most 50,000 quads: three vertices each need only 150,000.
+    // A larger imported annotation may not fit even that minimum; keep its old appearance.
+    if subtype == b"Squiggly" && remaining > MAX_SQUIGGLY_VERTICES / 3 {
+        return None;
+    }
     for quad in q.as_chunks::<8>().0.iter() {
         let p = |i: usize| (quad[2 * i], quad[2 * i + 1]);
         let (p1, p2, p3, p4) = (p(0), p(1), p(2), p(3));
@@ -521,8 +527,11 @@ fn draw_markup(context: &AppearanceContext<'_>, drawing: &mut AppearanceDrawing)
                 let amp = (h * 0.06).max(0.75);
                 let len = (p4.0 - p3.0).hypot(p4.1 - p3.1);
                 let step = (h / 4.0).max(1.5);
-                let steps = ((len / step).ceil() as usize).clamp(1, 10_000).min(vertices.saturating_sub(1).max(1));
-                vertices = vertices.saturating_sub(steps + 1);
+                remaining = remaining.saturating_sub(1);
+                // Reserve m + 2 l for every later quad before granting this one extra detail.
+                let available = vertices.saturating_sub(remaining.saturating_mul(3)).saturating_sub(1).max(2);
+                let steps = ((len / step).ceil() as usize).clamp(2, 10_000).min(available);
+                vertices = vertices.saturating_sub(steps.saturating_add(1));
                 c.push_str(&format!("{}{} w 1 j\n", rg_stroke(col), n(lw)));
                 for i in 0..=steps {
                     let t = i as f64 / steps as f64;

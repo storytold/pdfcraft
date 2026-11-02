@@ -3692,8 +3692,8 @@ milestone = "M5"
 status = "shipped"
 commands = ["comment.squiggly"]
 tools = ["comment_add"]
-evidence = ["crates/annot/src/tests.rs::every_tool_creates_a_drawable_comment", "crates/ui-egui/tests/it/comments.rs::the_squiggly_tool_marks_selected_text"]
-notes = "Highlight ▸ Squiggly underline (with Underline and Strikethrough), the agent tool and the engine"
+evidence = ["crates/annot/src/tests.rs::every_tool_creates_a_drawable_comment", "crates/ui-egui/tests/it/comments.rs::the_squiggly_tool_marks_selected_text", "crates/annot/src/tests.rs::set_quads_keeps_every_squiggly_zigzag_within_the_total_vertex_budget", "crates/annot/src/tests.rs::restyling_a_squiggly_refuses_more_quads_than_the_minimum_vertex_budget_allows"]
+notes = "Highlight ▸ Squiggly underline (with Underline and Strikethrough), the agent tool and the engine. Every squiggly quad retains at least three vertices within a shared 200,000-vertex appearance budget, including 50,000 mixed long/short areas. Imported squigglies whose minimum paths cannot fit are refused on restyling and retain their existing appearance."
 
 [[feature]]
 id = "comment.replace-text"

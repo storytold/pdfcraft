@@ -366,6 +366,58 @@ fn set_quads_bounds_the_squiggly_appearance_as_a_whole() {
     assert_eq!(content.matches(" m\n").count(), 50_000, "every area is still drawn");
 }
 
+/// Long quads must leave every later squiggly at least one zigzag, including very short quads.
+#[test]
+fn set_quads_keeps_every_squiggly_zigzag_within_the_total_vertex_budget() {
+    let mut doc = fixture();
+    let long = [0.0, 1.0, 20_000.0, 1.0, 0.0, 0.0, 20_000.0, 0.0];
+    let short = [0.0, 1.0, 1.0, 1.0, 0.0, 0.0, 1.0, 0.0];
+    let h = add_annotation(&mut doc, &new(0, Shape::TextMarkup { kind: Markup::Squiggly, quads: vec![long] }), &meta("s")).unwrap();
+    let mut quads = vec![long; 64];
+    quads.resize(50_000, short);
+    set_quads(&mut doc, 0, h, &quads, &meta("s2")).unwrap();
+    let content = ap_content(&doc, &list(&doc, 0)[h]);
+    let (mut paths, mut vertices) = (Vec::new(), 0usize);
+    for line in content.lines() {
+        if line.ends_with(" m") {
+            assert_eq!(vertices, 0, "the preceding path was stroked");
+            vertices = 1;
+        } else if line.ends_with(" l") {
+            vertices += 1;
+        } else if line == "S" {
+            paths.push(vertices);
+            vertices = 0;
+        }
+    }
+    assert_eq!(paths.len(), quads.len(), "every quad has its own stroked path");
+    assert_eq!(vertices, 0);
+    for (quad, vertices) in paths.iter().enumerate() {
+        assert!(*vertices >= 3, "quad {quad} has only {vertices} vertices: a squiggly needs m + 2 l");
+    }
+    let total = paths.iter().sum::<usize>();
+    assert!(total <= 200_000, "the appearance has {total} vertices, above the shared 200000 cap");
+}
+
+/// Imported annotations can exceed the range-edit limit. Refuse a redraw whose minimum
+/// zigzags cannot fit the appearance budget, preserving its existing dictionary and appearance.
+#[test]
+fn restyling_a_squiggly_refuses_more_quads_than_the_minimum_vertex_budget_allows() {
+    let short = [0.0, 1.0, 1.0, 1.0, 0.0, 0.0, 1.0, 0.0];
+    for (count, refused) in [(66_666, false), (66_667, true)] {
+        let mut doc = fixture();
+        let h = add_annotation(&mut doc, &new(0, Shape::TextMarkup { kind: Markup::Squiggly, quads: vec![short] }), &meta("s")).unwrap();
+        let (_, r) = crate::lookup::annot_ref(&mut doc, 0, h).unwrap();
+        doc.update_dict(r, |d| d.set(b"QuadPoints".to_vec(), create::num_array(&vec![short; count].concat()))).unwrap();
+        let before = pdfcraft_cos::write_full(&doc, &Default::default()).unwrap();
+        let change = StyleChange::new(Some([0.0, 1.0, 0.0]), None, None, None);
+        let result = set_style(&mut doc, 0, h, change, &meta("restyle"));
+        assert_eq!(result.is_err(), refused, "{count} quads need {} vertices", count * 3);
+        if refused {
+            assert_eq!(pdfcraft_cos::write_full(&doc, &Default::default()).unwrap(), before, "a refused redraw changes nothing");
+        }
+    }
+}
+
 /// Zero-area quadrilaterals, including collinear diagonals with a nonempty bounding box,
 /// never replace a markup. Reject them before even promoting an inline annotation to a reference.
 #[test]
