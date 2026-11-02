@@ -434,6 +434,24 @@ pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
             app.side_panels.tools_side = crate::side_panels::ToolsSide::Right;
         }
     });
+    ui.horizontal(|ui| {
+        ui.label(tl!("Navigation rail side"));
+        let right = app.side_panels.rail_on_right();
+        let left_btn = ui.selectable_label(!right, tl!("Left"));
+        left_btn.widget_info(|| {
+            egui::WidgetInfo::selected(egui::Role::Button, true, !right, format!("{}: {}", tl!("Navigation rail side"), tl!("Left")))
+        });
+        if left_btn.clicked() {
+            app.side_panels.rail_side = crate::side_panels::ToolsSide::Left;
+        }
+        let right_btn = ui.selectable_label(right, tl!("Right"));
+        right_btn.widget_info(|| {
+            egui::WidgetInfo::selected(egui::Role::Button, true, right, format!("{}: {}", tl!("Navigation rail side"), tl!("Right")))
+        });
+        if right_btn.clicked() {
+            app.side_panels.rail_side = crate::side_panels::ToolsSide::Right;
+        }
+    });
     ui.add_space(8.0);
     crate::appearance::preferences_section(ui, app, t);
     ui.add_space(8.0);
@@ -492,6 +510,15 @@ pub(crate) fn preferences_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
         }
     });
     ui.label(egui::RichText::new(tl!("For page sizes and margins.")).small().color(t.text_muted));
+    // The web build has no file paths to list.
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        ui.horizontal(|ui| {
+            let label = ui.label(tl!("Recent files to keep"));
+            ui.add(egui::DragValue::new(&mut app.recent_limit).range(0..=crate::RECENT_FILES_MAX)).labelled_by(label.id);
+        });
+        ui.label(egui::RichText::new(tl!("Lowering this forgets the oldest files. At 0 there is no list.")).small().color(t.text_muted));
+    }
     // The web build has no file paths to reopen.
     #[cfg(not(target_arch = "wasm32"))]
     ui.add(widgets::checkbox(&mut app.reopen_last_session, tl!("Reopen the files that were open when PdfCraft last closed")));
