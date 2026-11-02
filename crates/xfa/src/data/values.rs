@@ -64,11 +64,24 @@ fn radio_widgets(doc: &Document, f: &FieldDatum) -> Vec<(Option<String>, Option<
                 .map(|ap| doc.resolve(ap))
                 .and_then(|ap| ap.as_dict().and_then(|a| a.get(b"N").cloned()))
                 .and_then(|n| doc.resolve(&n).as_dict().cloned())
-                .and_then(|n| n.iter().map(|(k, _)| String::from_utf8_lossy(k).into_owned()).find(|k| k != "Off"));
+                .and_then(|n| n.iter().map(|(k, _)| name_text(k)).find(|k| k != "Off"));
             let export = exports.as_ref().and_then(|e| e.get(i).cloned().flatten());
             Some((original, state, export))
         })
         .collect()
+}
+
+/// An on-state name's bytes in the spelling a radio group's AcroForm value has, so the two can
+/// be compared: UTF-8 names read as themselves, other bytes (Shift-JIS states) and `#` are
+/// written `#XX`, as in PDF name syntax. This is `pdfcraft_forms::name_text`, which this crate
+/// can't depend on; the value saving gets is read through it, and the state opening returns is
+/// written back through its inverse, `pdfcraft_forms::name_bytes`.
+pub(crate) fn name_text(bytes: &[u8]) -> String {
+    let escape = |b: u8| format!("#{b:02X}");
+    match std::str::from_utf8(bytes) {
+        Ok(s) => s.replace('#', "#23"),
+        Err(_) => bytes.iter().map(|&b| if (0x21..=0x7e).contains(&b) && b != b'#' { char::from(b).to_string() } else { escape(b) }).collect(),
+    }
 }
 
 /// The datasets text for a radio group. The AcroForm value is an appearance-state name

@@ -6168,6 +6168,14 @@ fn stripping_xfa_takes_a_radio_items_pcon_as_the_fields_value() {
     s.apply(id, Edit::SetFieldValue { name: lang.into(), value: FieldValue::Radio(Some("0".into())) }).unwrap();
     s.apply(id, Edit::XfaToStatic).unwrap();
     assert_eq!(lost(&s, id), Vec::<String>::new());
+    // The data names a button by its `/Opt` entry (`2`, as data from elsewhere does), while
+    // saving would write that button's `/PCOn` (`fr`). Opening turned that button on, so the
+    // field shows what the data selects and nothing is lost, although the spellings differ.
+    let form = pdfcraft_xfa::fixtures::static_radio_shell_with_pcon("<form1><page1><lang>2</lang></page1></form1>", ["en", "fr"]);
+    let id = s.open("opt-item.pdf", None, Arc::new(form), None).unwrap();
+    assert_eq!(s.get(id).unwrap().form.iter().find(|f| f.name == lang).unwrap().value, ["1"]);
+    s.apply(id, Edit::XfaToStatic).unwrap();
+    assert_eq!(lost(&s, id), Vec::<String>::new());
 }
 
 /// Opening reads a radio group's data as saving writes it: with `/PCOn` items `4` `1` next to
