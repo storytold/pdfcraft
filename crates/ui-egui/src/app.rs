@@ -182,6 +182,8 @@ impl PdfCraftApp {
             #[cfg(not(target_arch = "wasm32"))]
             pickers: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
+            paste_reads: Default::default(),
+            #[cfg(not(target_arch = "wasm32"))]
             pick_override: None,
             export_dir_override: None,
             split_draft: SplitDraft::default(),
@@ -612,6 +614,8 @@ impl eframe::App for PdfCraftApp {
         self.process_file_requests();
         #[cfg(not(target_arch = "wasm32"))]
         self.process_picked();
+        #[cfg(not(target_arch = "wasm32"))]
+        self.finish_paste_reads();
         // Last, after everything that can open or answer the "save changes?" question.
         self.attend_save_prompt(ctx);
         self.sync_native_menu(ctx);
