@@ -272,7 +272,8 @@ fn typing_moving_styling_and_deleting_added_content() {
 #[test]
 fn a_picture_on_the_clipboard_is_pasted_onto_the_page() {
     use pdfcraft_ui_egui::Clip;
-    let mut h = harness();
+    // Three frames between modifier releases represent a short real key gesture.
+    let mut h = harness_with_step_dt(1.0 / 60.0);
     let v = |pressed, modifiers| egui::Event::Key { key: egui::Key::V, physical_key: None, pressed, repeat: false, modifiers };
     let images = |h: &Harness<'static, PdfCraftApp>| added(h).iter().filter(|a| matches!(a.content, pdfcraft_engine::AddedContent::Image(_))).count();
     // Text on the clipboard: egui gets a Paste event instead of the press; nothing lands on the page.
@@ -288,9 +289,8 @@ fn a_picture_on_the_clipboard_is_pasted_onto_the_page() {
     h.event(v(false, egui::Modifiers::NONE));
     h.run_steps(3);
     assert_eq!(images(&h), 0, "a plain V doesn't paste");
-    // A picture alone: egui-winit sends no Paste event and swallows the press, so only the
-    // release of V arrives.
-    h.event(v(false, egui::Modifiers::COMMAND));
+    // The integration delivers image pixels and consumes the native shortcut keys.
+    h.event(egui::Event::PasteImage(std::sync::Arc::new(egui::ColorImage::filled([30, 20], egui::Color32::GRAY))));
     h.run_steps(3);
     let a = added(&h);
     assert_eq!(a.len(), 1);
@@ -301,14 +301,17 @@ fn a_picture_on_the_clipboard_is_pasted_onto_the_page() {
         let s = h.state();
         assert_eq!(s.session.get(s.views[0].id).unwrap().can_undo(), Some("Add image"));
     }
-    // Ctrl let go a moment before V: the release comes without the modifier, and still pastes.
+    // Modifier release order does not change delivery of the next image paste.
+    h.event(egui::Event::ModifiersChanged(egui::Modifiers::COMMAND));
+    h.event(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
+    h.event(egui::Event::PasteImage(std::sync::Arc::new(egui::ColorImage::filled([30, 20], egui::Color32::GRAY))));
     h.event(v(false, egui::Modifiers::NONE));
     h.run_steps(3);
     assert_eq!(images(&h), 2, "Ctrl released first");
     // A text field with the keyboard keeps ⌘V for itself.
     assert!(h.state_mut().execute("edit.find"));
     h.run_steps(3);
-    h.event(v(false, egui::Modifiers::COMMAND));
+    h.event(egui::Event::PasteImage(std::sync::Arc::new(egui::ColorImage::filled([30, 20], egui::Color32::GRAY))));
     h.run_steps(3);
     assert_eq!(images(&h), 2, "the Find field has the keyboard");
     h.key_press(egui::Key::Escape);
@@ -317,7 +320,7 @@ fn a_picture_on_the_clipboard_is_pasted_onto_the_page() {
     assert!(h.state_mut().execute("page.organize"));
     h.run_steps(4);
     assert!(h.state().views[0].organize);
-    h.event(v(false, egui::Modifiers::COMMAND));
+    h.event(egui::Event::PasteImage(std::sync::Arc::new(egui::ColorImage::filled([30, 20], egui::Color32::GRAY))));
     h.run_steps(3);
     assert_eq!(images(&h), 2, "Organize Pages pastes pages");
     h.state_mut().views[0].organize = false;
@@ -326,7 +329,7 @@ fn a_picture_on_the_clipboard_is_pasted_onto_the_page() {
     assert!(h.state_mut().execute("form.prepare"));
     h.run_steps(3);
     assert!(h.state().is_preparing());
-    h.event(v(false, egui::Modifiers::COMMAND));
+    h.event(egui::Event::PasteImage(std::sync::Arc::new(egui::ColorImage::filled([30, 20], egui::Color32::GRAY))));
     h.run_steps(3);
     assert_eq!(images(&h), 2, "Prepare Form pastes fields");
 }
@@ -1079,6 +1082,9 @@ fn added_picture_resizes_repeatedly_and_drags_back_from_out_of_bounds_without_sm
     let upper_half = egui::Rect::from_min_max(moved.min + egui::vec2(4.0, 4.0), pos2(moved.max.x - 4.0, moved.center().y - 4.0));
     let lower_half = egui::Rect::from_min_max(pos2(moved.min.x + 4.0, moved.center().y + 4.0), moved.max - egui::vec2(4.0, 4.0));
     let pixels = h.render().unwrap();
+    if let Ok(dir) = std::env::var("PDFCRAFT_SHOTS") {
+        pixels.save(format!("{dir}/added-image-outside-page-drag.png")).unwrap();
+    }
     assert!(red(&pixels, upper_half) > 100, "the in-bounds half of the picture follows the drag");
     assert_eq!(red(&pixels, lower_half), 0, "the out-of-bounds half must not smear edge texels across the lower half");
     h.drop_at(grab + shift);
@@ -1592,4 +1598,41 @@ fn typing_in_one_tab_never_reaches_another_tabs_added_text() {
     h.key_press_modifiers(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, egui::Key::Z);
     h.run_steps(3);
     assert_eq!(h.state().views[1].content.draft.as_ref().map(|d| d.text.as_str()), Some("Reviewed"), "the other tab's typing stays out");
+}
+
+/// Out-of-page editing grips do not turn the invisible image body into a context-menu target.
+#[test]
+fn image_context_menu_requires_visible_body_even_when_the_frame_crosses_the_page() {
+    for visible in [false, true] {
+        let mut h = harness();
+        assert!(h.state_mut().execute("edit.edit_text"));
+        h.run_steps(2);
+        let mut png = Vec::new();
+        image::RgbImage::from_pixel(20, 20, image::Rgb([200, 30, 30]))
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        h.state_mut().add_image("edge.png".into(), png);
+        h.run_steps(3);
+        let image = match &added(&h)[0].content {
+            pdfcraft_engine::AddedContent::Image(i) => pdfcraft_engine::AddedImage { rect: [260.0, 150.0, 340.0, 230.0], ..i.clone() },
+            _ => panic!("added an image"),
+        };
+        assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::UpdateContent {
+            page: 0,
+            index: 0,
+            content: pdfcraft_engine::AddedContent::Image(image),
+        }));
+        h.run_steps(3);
+        h.state_mut().views[0].image_selection = Some(pdfcraft_ui_egui::ImageSelection::at(0, 0));
+        let x = if visible { 280.0 } else { 320.0 };
+        let point = item_on_screen(&h, [x, 190.0, x, 190.0]).center();
+        assert_eq!(h.state().views[0].page_screen_rect(0).unwrap().contains(point), visible);
+        h.hover_at(point);
+        h.run_steps(1);
+        h.event(egui::Event::PointerButton { pos: point, button: egui::PointerButton::Secondary, pressed: true, modifiers: Default::default() });
+        h.event(egui::Event::PointerButton { pos: point, button: egui::PointerButton::Secondary, pressed: false, modifiers: Default::default() });
+        h.run_steps(2);
+        // Flip horizontal also appears in the persistent sidebar; Arrange image is menu-only.
+        assert_eq!(h.query_all_by_label("Arrange image").next().is_some(), visible, "image menu requires visible body");
+    }
 }
