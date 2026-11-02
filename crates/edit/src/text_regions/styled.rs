@@ -84,6 +84,16 @@ impl FontResolver<'_> {
         self.embed_face(key, &bytes, &family, "the source font could not be loaded").map(Some)
     }
 
+    fn uniform_row_font(&mut self, source: &TextLine, text: &str) -> Result<Option<String>, EditError> {
+        // source_encodes deliberately permits positioned spaces. When a complete
+        // program exists, keep its space glyph and all letters in one encoding.
+        let missing_space = text.contains(' ') && self.metrics.get(&source.font).is_some_and(|metrics| metrics.encode(" ").is_none());
+        if missing_space && let Some(name) = self.complete_source_font(source, text)? {
+            return Ok(Some(name));
+        }
+        self.encodable_font(source, text, None)
+    }
+
     fn embed_face(&mut self, key: String, bytes: &[u8], family: &str, missing_message: &str) -> Result<String, EditError> {
         if let Some(name) = self.full_faces.get(&key) {
             return Ok(name.clone());
@@ -121,6 +131,7 @@ struct CharacterPreparation<'a> {
     first: &'a TextLine,
     lines: &'a [TextLine],
     draft: &'a str,
+    bases: &'a [pdfcraft_fonts::TextDirection],
     spans: Vec<(std::ops::Range<usize>, usize)>,
     style: &'a BlockStyle,
     overrides: &'a HashMap<usize, &'a RangeStyle>,
@@ -129,25 +140,77 @@ struct CharacterPreparation<'a> {
     max_glyphs: usize,
 }
 
+struct DirectionalRow<'a> {
+    start: usize,
+    uniform_text: Option<&'a str>,
+}
+
+type RowFontChoices = HashMap<usize, HashMap<String, Option<String>>>;
+
+fn directional_rows<'a>(draft: &'a str, bases: &[pdfcraft_fonts::TextDirection]) -> Vec<DirectionalRow<'a>> {
+    let mut starts = vec![0];
+    for (at, ch) in draft.char_indices() {
+        if ch == '\n' || ch == '\r' && !draft.get(at.saturating_add(1)..).is_some_and(|rest| rest.starts_with('\n')) {
+            starts.push(at.saturating_add(1));
+        }
+    }
+    starts
+        .iter()
+        .enumerate()
+        .map(|(row, &start)| {
+            let end = starts.get(row.saturating_add(1)).copied().unwrap_or(draft.len());
+            let text = draft.get(start..end).unwrap_or_default().trim_end_matches(['\r', '\n']);
+            let uniform = !text.is_empty() && direction_needs_uniform_row(bases.get(row).copied().unwrap_or_default(), text);
+            DirectionalRow { start, uniform_text: uniform.then_some(text) }
+        })
+        .collect()
+}
+
+fn prepare_directional_row_fonts(
+    rows: &[DirectionalRow<'_>],
+    span: std::ops::Range<usize>,
+    source: &TextLine,
+    resolver: &mut FontResolver<'_>,
+    cache: &mut RowFontChoices,
+) -> Result<(), EditError> {
+    let first = rows.partition_point(|row| row.start <= span.start).saturating_sub(1);
+    for (row, info) in rows.iter().enumerate().skip(first).take_while(|(_, row)| row.start < span.end) {
+        let Some(text) = info.uniform_text else { continue };
+        let choices = cache.entry(row).or_default();
+        let std::collections::hash_map::Entry::Vacant(entry) = choices.entry(source.font.clone()) else { continue };
+        // A sparse PDF encoding does not imply a sparse embedded program. Choose
+        // once for this whole row/source pair before resolving its characters.
+        entry.insert(resolver.uniform_row_font(source, text)?);
+    }
+    Ok(())
+}
+
 impl CharacterPreparation<'_> {
     fn prepare(self) -> Result<PreparedCharacters, EditError> {
-        let Self { doc, first, lines, draft, spans, style, overrides, fonts, metrics, max_glyphs } = self;
+        let Self { doc, first, lines, draft, bases, spans, style, overrides, fonts, metrics, max_glyphs } = self;
         let mut chars = Vec::new();
         let mut substituted = None;
         let mut fallback = FallbackBuilder::new(max_glyphs);
         let mut resolver = FontResolver { doc, fonts, metrics, full_faces: HashMap::new(), programs: HashMap::new() };
         let contextual = pdfcraft_fonts::source_shaping::required(draft);
+        let rows = directional_rows(draft, bases);
+        let mut row_fonts = RowFontChoices::new();
         for (range, index) in spans {
             let source = lines.get(index).unwrap_or(first);
             let start = range.start;
+            let end = range.end;
             let span = draft.get(range).unwrap_or_default();
-            let requested = overrides.get(&index).and_then(|range| range.resource.as_deref()).or(style.resource.as_deref());
+            let explicit = overrides.get(&index).and_then(|range| range.resource.as_deref()).or(style.resource.as_deref());
+            let first_row = rows.partition_point(|row| row.start <= start).saturating_sub(1);
+            if explicit.is_none() {
+                prepare_directional_row_fonts(&rows, start..end, source, &mut resolver, &mut row_fonts)?;
+            }
             // Choose one encoding before completing a contextual span or a Latin span
             // whose unencoded spaces would split the completed run. Separate text matrices
             // round positions differently from the same text in one full-font resource.
             let unencoded_spaces = span.contains(' ') && resolver.metrics.get(&source.font).is_some_and(|metrics| metrics.encode(" ").is_none());
             let complete = if (contextual || unencoded_spaces)
-                && requested.is_none()
+                && explicit.is_none()
                 && span
                     .chars()
                     .filter(|ch| !matches!(ch, '\n' | '\r'))
@@ -157,8 +220,12 @@ impl CharacterPreparation<'_> {
             } else {
                 None
             };
-            let requested = requested.or(complete.as_deref());
+            let mut row = first_row;
             for (offset, ch) in span.char_indices() {
+                let at = start.saturating_add(offset);
+                while rows.get(row.saturating_add(1)).is_some_and(|next| next.start <= at) {
+                    row = row.saturating_add(1);
+                }
                 if ch == '\n' {
                     chars.push((ch, index, source.font.clone()));
                     continue;
@@ -169,6 +236,9 @@ impl CharacterPreparation<'_> {
                     continue;
                 }
                 let text = ch.to_string();
+                let requested = explicit
+                    .or_else(|| row_fonts.get(&row).and_then(|fonts| fonts.get(&source.font)).and_then(Option::as_deref))
+                    .or(complete.as_deref());
                 let name = if let Some(name) = resolver.encodable_font(source, &text, requested)? {
                     name
                 } else if needs_type3(&text) {
@@ -1019,11 +1089,14 @@ pub(crate) fn rewrite_styled_block(
     let mut res = p.dict.get(b"Resources").and_then(|resource| doc.resolve(resource).as_dict().cloned()).unwrap_or_default();
     let (mut fonts, mut metrics) = page_font_metrics(doc, &res, block, lines);
     let (dx, dy, width) = paragraph_geometry(doc, &p, block, style)?;
+    let direction = style.direction.unwrap_or(block.text_direction);
+    let bases = draft_row_bases(block, draft, direction, source_breaks.as_deref());
     let prepared = CharacterPreparation {
         doc,
         first,
         lines,
         draft,
+        bases: &bases,
         spans: styled_spans,
         style,
         overrides: &overrides,
@@ -1072,7 +1145,6 @@ pub(crate) fn rewrite_styled_block(
             * across(source)
             * calibration.get(&item.1).copied().unwrap_or(1.0)
     };
-    let direction = style.direction.unwrap_or(block.text_direction);
     let measure = |items: &[(char, usize, String)], direction: pdfcraft_fonts::TextDirection| -> Result<f64, EditError> {
         let mut width = 0.0;
         let mut at = 0;
@@ -1107,7 +1179,6 @@ pub(crate) fn rewrite_styled_block(
     // Auto is a paragraph choice: a wrapped continuation beginning with a number or a
     // different script must keep the first strong character of its logical paragraph.
     // Keep Auto in the PDF metadata so a subsequent edit can choose a new first strong base.
-    let bases = draft_row_bases(block, draft, direction, source_breaks.as_deref());
     let row_width = source_breaks.as_ref().map_or(width, |_| f64::MAX);
     let (rows, row_ranges, row_lines, mut row_soft, mut row_gap) =
         wrap_styled_rows(&chars, row_width, |items, paragraph| measure(items, bases.get(paragraph).copied().unwrap_or(direction)))?;

@@ -1,6 +1,6 @@
 # PdfCraft roadmap: milestones and what's next
 
-> **Last reviewed:** 2026-11-02 | **Last updated:** 2026-11-02 | **Change:** minor (PR #5731: consolidate RTL spreads, bookmarks, comment hovers and native Find regressions; pure-Latin explicit-LTR formatting correction; wider qualification and estimates unchanged)
+> **Last reviewed:** 2026-11-02 | **Last updated:** 2026-11-02 | **Change:** patch (PR #5731: select one complete encoding for directional rows and retain automatic direction per bookmark paragraph; focused regressions pass; current-main integration; broader qualification and estimates unchanged)
 >
 
 > **Last reviewed:** 2026-11-02 | **Last updated:** 2026-11-02 | **Change:** patch (M7/PR #5731: current-main resource integration, paragraph-switch composition protection and source-operator preservation; estimates unchanged)

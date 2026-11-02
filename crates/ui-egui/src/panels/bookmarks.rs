@@ -105,9 +105,12 @@ fn title_format(item: &OutlineItem, depth: usize, t: &Tokens) -> egui::TextForma
     egui::TextFormat { font_id, color, italics: item.italic, ..Default::default() }
 }
 
-/// Whether a bookmark title's paragraph reads right to left. The title itself stays in typing order.
-fn bookmark_reads_right_to_left(title: &str) -> bool {
-    crate::bidi::wrap(title, |_| true).first().is_some_and(|line| line.rtl)
+/// Keep the title logical and let egui choose the base direction of each paragraph.
+/// A first Arabic paragraph must not force a following Latin paragraph to read RTL.
+fn title_job(item: &OutlineItem, depth: usize, t: &Tokens, wrap_width: f32) -> egui::text::LayoutJob {
+    let mut job = egui::text::LayoutJob::single_section(item.title.clone(), title_format(item, depth, t));
+    job.wrap.max_width = wrap_width;
+    job
 }
 
 /// Draw one bookmark row with expansion, inline rename and the editable context menu.
@@ -176,13 +179,7 @@ pub(super) fn outline_item(
         });
         let label_w = label_galley.as_ref().map_or(0.0, |g| g.size().x);
         let wrap_w = (ui.available_width() - indent - 20.0 - label_w - 12.0).max(60.0);
-        let mut job = egui::text::LayoutJob::single_section(item.title.clone(), title_format(item, depth, t));
-        // Keep the stored typing order. epaint reorders a right-to-left title; pre-reversing it
-        // would reverse it a second time (egui 0.37).
-        if bookmark_reads_right_to_left(&item.title) {
-            job.direction = egui::epaint::text::TextDirection::RightToLeft;
-        }
-        job.wrap.max_width = wrap_w;
+        let job = title_job(item, depth, t, wrap_w);
         let galley = ui.fonts_mut(|f| f.layout_job(job));
         let h = (galley.size().y + 12.0).max(28.0);
         let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), h), Sense::click());
@@ -323,7 +320,7 @@ mod label_column {
 
 #[cfg(test)]
 mod bookmark_filter {
-    use super::{bookmark_reads_right_to_left, outline_matches, title_format};
+    use super::{outline_matches, title_format, title_job};
     use crate::theme::{self, Tokens};
     use pdfcraft_render::OutlineItem;
 
@@ -362,20 +359,71 @@ mod bookmark_filter {
     /// reorders it. Handing the shaper the reversed string would show the words backwards.
     #[test]
     fn arabic_bookmark_titles_are_shown_in_reading_order() {
-        assert_eq!(crate::bidi::wrap("واحد اثنين", |_| true)[0].text, "واحد اثنين");
-        assert!(bookmark_reads_right_to_left("واحد اثنين"));
-        assert!(!bookmark_reads_right_to_left("Chapter 1"));
-    }
-
-    /// Arabic titles stay in typing order and are marked right to left, so epaint reorders them
-    /// once. Pre-reversing the string would show the words backwards on egui 0.37.
-    #[test]
-    fn arabic_bookmark_titles_keep_logical_order_and_read_right_to_left() {
-        assert!(bookmark_reads_right_to_left("واحد اثنين"));
-        assert!(!bookmark_reads_right_to_left("Chapter 1"));
         let lines = crate::bidi::wrap("واحد اثنين", |_| true);
         assert_eq!(lines[0].text, "واحد اثنين");
         assert!(lines[0].rtl);
+        assert!(!crate::bidi::wrap("Chapter 1", |_| true)[0].rtl);
+    }
+
+    fn laid_out_title(title: &str) -> std::sync::Arc<egui::Galley> {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(theme::font_definitions());
+        let mut galley = None;
+        ctx.run_ui(egui::RawInput::default(), |ui| {
+            let tokens = Tokens::for_kind(crate::theme::ThemeKind::Light);
+            let job = title_job(&item(title, Vec::new()), 0, &tokens, 1000.0);
+            galley = Some(ui.fonts_mut(|fonts| fonts.layout_job(job)));
+        })
+        .drop_without_applying_deltas();
+        galley.expect("the title was laid out")
+    }
+
+    /// Arabic stays logical in the production layout job and is actually positioned RTL.
+    #[test]
+    fn arabic_bookmark_titles_keep_logical_order_and_read_right_to_left() {
+        if pdfcraft_fonts::ui_arabic_fonts().is_empty() {
+            return;
+        }
+        let title = "واحد اثنين";
+        let galley = laid_out_title(title);
+        assert_eq!(galley.job.text, title);
+        assert_eq!(galley.rows.len(), 1);
+        let row = &galley.rows[0];
+        assert!(row.rtl_paragraph);
+        let x = |chr| row.glyphs.iter().find(|glyph| glyph.chr == chr).expect("the title contains the glyph").pos.x;
+        assert!(x('و') > x('ح') && x('ح') > x('د'), "the first word reads from right to left");
+        assert!(x('د') > x('ث'), "the first logical word is to the right of the second word");
+    }
+
+    /// Each newline-delimited bookmark paragraph chooses its own base direction. A first
+    /// RTL title must not move the following Latin-leading paragraph's Arabic run to its left.
+    #[test]
+    fn mixed_bookmark_paragraphs_use_their_own_direction_and_glyph_positions() {
+        assert!(
+            !pdfcraft_fonts::ui_arabic_fonts().is_empty() || std::env::var_os("PDFCRAFT_REQUIRE_ARABIC").is_none(),
+            "qualification needs the Arabic font input"
+        );
+        if pdfcraft_fonts::ui_arabic_fonts().is_empty() {
+            return;
+        }
+        let title = "واحد اثنين\nChapter واحد";
+        let galley = laid_out_title(title);
+        assert_eq!(galley.job.text, title, "the stored title remains in logical order");
+        assert_eq!(galley.rows.len(), 2, "each paragraph occupies one unwrapped row");
+        let (arabic, mixed) = (&galley.rows[0], &galley.rows[1]);
+        assert!(arabic.ends_with_newline && !mixed.ends_with_newline);
+        assert!(arabic.pos.y < mixed.pos.y, "the second paragraph is placed below the first");
+        assert!(arabic.rect().bottom() <= mixed.rect().top() + 1.0, "paragraph rows do not overlap beyond pixel rounding");
+        let latin: Vec<_> = mixed.glyphs.iter().filter(|glyph| glyph.chr.is_ascii_alphabetic()).collect();
+        let rtl: Vec<_> = mixed.glyphs.iter().filter(|glyph| ('\u{0600}'..='\u{06ff}').contains(&glyph.chr)).collect();
+        assert_eq!(latin.iter().map(|glyph| glyph.chr).collect::<String>(), "Chapter");
+        assert_eq!(rtl.iter().map(|glyph| glyph.chr).collect::<String>(), "واحد");
+        let latin_right = latin.iter().map(|glyph| glyph.pos.x + glyph.advance_width).reduce(f32::max).unwrap();
+        let arabic_left = rtl.iter().map(|glyph| glyph.pos.x).reduce(f32::min).unwrap();
+        assert!(latin_right <= arabic_left, "the Latin-leading run is left of the Arabic run: {:?}", mixed.glyphs);
+        assert!(latin.windows(2).all(|pair| pair[0].pos.x < pair[1].pos.x), "Chapter reads left to right");
+        assert!(rtl.windows(2).all(|pair| pair[0].pos.x > pair[1].pos.x), "the Arabic word reads right to left within its run");
+        assert!(arabic.rtl_paragraph && !mixed.rtl_paragraph);
     }
 
     /// Turkish dotted and dotless i match in any case, as in Find (#892).

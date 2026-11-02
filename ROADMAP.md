@@ -1,6 +1,6 @@
 # PdfCraft roadmap
 
-> **Last reviewed:** 2026-11-02 | **Last updated:** 2026-11-02 | **Change:** minor (PR #5731: consolidate #3347 reading surfaces and #3342 native Find regressions; allow pure-Latin explicit-LTR range styles; browser/provider qualification and estimates unchanged)
+> **Last reviewed:** 2026-11-02 | **Last updated:** 2026-11-02 | **Change:** patch (PR #5731: select one complete encoding for directional rows and retain automatic direction per bookmark paragraph; focused regressions pass; current-main integration; broader qualification and estimates unchanged)
 
 > **Last reviewed:** 2026-11-02 | **Last updated:** 2026-11-02 | **Change:** minor (M7/M14 input candidate: eight native shell cases cover Arabic caret, selection, marks, multiline drafts and composition lifecycle; user-confirmed Windows typing observed; combined source-font/browser acceptance pending; estimates unchanged)
 
@@ -226,6 +226,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 | 8 | 1.0 polish: performance, right-to-left, missing languages, keyboard-only (M14) | 55–95 |
 
 ## Progress log
+
+- **2026-11-02 (M7, #5731 review 5739601464):** Integrated main `168a3cb9`; directional text preselects one usable complete source encoding, and multiline bookmarks keep automatic paragraph direction. The public-tool font regression and three actual bookmark layout cases pass after witnessed failures of the reported old behaviors. Wider language/input qualification and estimates remain unchanged.
 
 - **2026-11-02 (M7, #5731 current main):** Integrated main `e2615187`, retaining decode-budget/resource-reading updates alongside Arabic numeric, mark and source-font fixes. Host composition ownership defers paragraph switches before native focus changes; the source-break policy leaves effective formatting and untouched operators alone. Existing engine undo bookkeeping and wider browser/provider qualification remain unchanged.
 

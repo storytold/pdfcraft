@@ -156,4 +156,24 @@ can use range formatting, including after save/reopen. RTL-base or RTL-content
 mixed-style rows retain the existing uniform-full-face restriction. A focused
 public-tool regression reproduced the rejection before the fix and passes with it.
 The `d7dd1de647ee` reference above is explicitly an earlier integration snapshot;
-the integrated main baseline remains `e2615187279bd5a916c4fe56abc0a135156e005d`.
+that checkpoint used main `e2615187279bd5a916c4fe56abc0a135156e005d`.
+
+
+### Review 5739601464 follow-up
+
+The next update integrates main `168a3cb91e90333a7069f2bac63835140c6d0f5b`.
+Directional rows choose one usable complete source encoding before characters are
+resolved. A sparse PDF encoding can therefore accept a new Latin character when
+its complete embedded font covers the row. Already encodable rows keep their
+resource; explicit resource requests and unsupported mixed-style RTL restrictions
+remain authoritative.
+
+Bookmark titles remain in logical order and use egui's automatic direction per
+paragraph. An Arabic first paragraph no longer forces a following Latin-leading
+paragraph to RTL. A production-layout regression checks actual glyph positions.
+
+Both reported failures were witnessed before correction. The focused public-tool
+font case passes preview/Apply, source-font controls and save/reopen; three bookmark
+layout cases pass. The remaining validation and exact-head publication record are
+reported in the PR description. This does not qualify broader fonts, forms/comments
+shaping, native-reader typography, browser input or provider-specific IME behavior.
