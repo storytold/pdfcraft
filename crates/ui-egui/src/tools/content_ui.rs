@@ -138,6 +138,12 @@ impl ContentView {
         self.draft.as_ref().and_then(|d| undrawable(d, &self.undrawable))
     }
 
+    /// The warning for a draft held because of `c`: the draft's own (Courier names the letters it
+    /// refuses), or the generic one when no draft is open.
+    pub(crate) fn blocked_message(&self, c: char) -> String {
+        self.draft.as_ref().map_or_else(|| undrawable_message(c), |d| draft_undrawable_message(d, c))
+    }
+
     /// Keeps a blocked draft open and focused instead of finishing or replacing it.
     pub(crate) fn hold_blocked(&mut self) -> bool {
         let blocked = self.blocked().is_some();
