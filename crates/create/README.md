@@ -27,11 +27,12 @@ Layer L4. Create a PDF (Acrobat's Create a PDF tool), execution plan M10.2:
 Every function returns a `pdfcraft_cos::Document`; the caller writes it.
 
 Image export and Save Image As apply each lossless image's Decode pair before converting its color components.
-JBIG2 images and masks (JBIG2 as their only filter) are decoded with `hayro-jbig2`, their `/JBIG2Globals` included,
-as `JBIG2Decode` gives them: black as 0. An image whose JBIG2 page has another width than the image, or more
-pixels than an exported image may have, or whose globals decode to more than 32 MiB (they are decoded before the
-page's size is known, so they have a limit of their own), is skipped; such a mask is left out and the image
-exported opaque, as JPX and CCITT masks are.
+JBIG2 images and masks are decoded through `pdfcraft_cos::Document::decoded_image` (`pdfcraft_filters::decode_jbig2`), behind
+other filters too, with the `/JBIG2Globals` of their own `/DecodeParms` entry, as `JBIG2Decode` gives them: black as 0. An image
+whose JBIG2 page isn't its size (PdfCraft's renderer draws the whole page into the image; the page is refused before it is decoded),
+or whose globals can't be read or decode to more than 32 MiB (they are decoded before the page's size is known, so they have a
+limit of their own), is skipped; such a mask is left out and the image exported opaque, as JPX and CCITT
+masks are.
 Indexed Decode values select palette entries after rounding and clipping. Color-key masks compare the original samples.
 Missing, null or malformed Decode arrays keep the default mapping.
 Soft-mask Decode intervals map samples to opacity before the mask is resized, including reversed ranges and indirect entries.
@@ -43,4 +44,4 @@ CCITT fax images (Group 3 and 4) are decoded for export through `pdfcraft_cos::D
 `ASCII85Decode` too. Byte-aligned Group 3 rows are read by their end-of-line codes, whether the fill starts each code on a byte or
 ends it on one, when the data starts with one (T.4 sends one before the first row), and on bytes otherwise, whatever `/EndOfLine`
 says; data that comes up short is reported. Data with codes but none before the first row is read on bytes, and is reported or,
-at `/K 0`, may come out wrong. JPEG 2000 and JBIG2 images are still reported, not exported.
+at `/K 0`, may come out wrong. JPEG 2000 images are still reported, not exported.
