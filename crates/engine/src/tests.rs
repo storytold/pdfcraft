@@ -6146,6 +6146,17 @@ fn a_static_xfa_radio_group_with_numeric_items_keeps_the_picked_button() {
     }
 }
 
+/// The XFA data layer keeps its own copy of the forms crate's name spelling (it can't depend on
+/// forms), and a radio group's value only finds its button while the two agree: UTF-8 as
+/// itself, `#` and bytes that aren't UTF-8 as `#XX`.
+#[test]
+fn xfa_and_forms_spell_names_alike() {
+    for bytes in [&b"Yes"[..], b"", b"a b", b"A#1", "はい".as_bytes(), b"\x82\xcd\x82\xa2", b"\xff#\x00", b"\x7f\x20~"] {
+        assert_eq!(pdfcraft_xfa::data::name_text(bytes), pdfcraft_forms::name_text(bytes), "{bytes:?}");
+        assert_eq!(pdfcraft_forms::name_bytes(&pdfcraft_xfa::data::name_text(bytes)), bytes, "{bytes:?}");
+    }
+}
+
 /// Taking the XFA out of a radio group whose buttons carry `/PCOn` as well as `/Opt` (the item
 /// saving writes ahead of the `/Opt` entry) notes no lost data when the data holds that item:
 /// one equal to the on state, and one equal to neither the state nor the `/Opt` entry.

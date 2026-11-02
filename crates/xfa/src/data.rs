@@ -36,9 +36,7 @@ pub use import::{DataImport, ImportNode, export_data, import_data, parse_data_fi
 pub use passwords::{clear_password_values, has_password_values};
 pub(crate) use path::template_field;
 pub use path::{data_path, parse_datasets, som_to_path};
-#[cfg(test)]
-pub(crate) use values::name_text;
-pub use values::{FieldData, FieldDatum, is_on, radio_dataset_value, radio_state_for_item, read_values, read_values_with};
+pub use values::{FieldData, FieldDatum, is_on, name_text, radio_dataset_value, radio_state_for_item, read_values, read_values_with};
 #[cfg(test)]
 pub(crate) use write::ENSURED;
 pub use write::{

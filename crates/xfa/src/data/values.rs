@@ -76,7 +76,8 @@ fn radio_widgets(doc: &Document, f: &FieldDatum) -> Vec<(Option<String>, Option<
 /// written `#XX`, as in PDF name syntax. This is `pdfcraft_forms::name_text`, which this crate
 /// can't depend on; the value saving gets is read through it, and the state opening returns is
 /// written back through its inverse, `pdfcraft_forms::name_bytes`.
-pub(crate) fn name_text(bytes: &[u8]) -> String {
+/// The engine checks that the two spell names alike (`xfa_and_forms_spell_names_alike`).
+pub fn name_text(bytes: &[u8]) -> String {
     let escape = |b: u8| format!("#{b:02X}");
     match std::str::from_utf8(bytes) {
         Ok(s) => s.replace('#', "#23"),
