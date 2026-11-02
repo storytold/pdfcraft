@@ -65,7 +65,10 @@ pub(crate) fn mark_source(doc: &mut pdfcraft_cos::Document, f: &MarkFile) -> Res
 /// (unlike a stamp), so on a page with `/Rotate` it turns with the page, as the model does.
 pub(crate) fn model_poster(doc: &mut pdfcraft_cos::Document, rect: [f64; 4], file: &MarkFile) -> Result<pdfcraft_annot::PosterPicture, EditError> {
     let src = mark_source(doc, file)?;
-    let (sw, sh) = (src.size.0.max(1.0), src.size.1.max(1.0));
+    let (sw, sh) = src.size;
+    if !(sw.is_finite() && sh.is_finite() && sw > 0.0 && sh > 0.0) {
+        return Err(EditError::Source(format!("{}: the poster has no area", file.name)));
+    }
     Ok(pdfcraft_annot::PosterPicture { xobject: src.xobject, image: src.image, size: (sw, sh), at: fit_picture(rect, sw, sh) })
 }
 

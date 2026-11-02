@@ -46,7 +46,7 @@ impl ModelFormat {
     }
 
     /// The PDF version a document holding it needs (§13.6): a 3D annotation is 1.6, a PRC stream
-    /// 1.7 (with Adobe's extension level 1, which is not written; PDF 2.0 takes PRC as standard).
+    /// 1.7 under Adobe's extension, declared by [`add_3d_model`] (PDF 2.0 takes PRC as standard).
     pub fn version(self) -> &'static str {
         match self {
             Self::U3d => "1.6",
@@ -154,17 +154,48 @@ pub fn add_3d_model(doc: &mut Document, new: &NewModel3d<'_>, meta: &Meta) -> Re
     list.push(Object::Ref(r));
     set_annots(doc, page, list)?;
     at_least_version(doc, format.version())?;
+    if format == ModelFormat::Prc && !at_least(doc, "2.0") {
+        declare_prc_extension(doc)?;
+    }
     Ok(index)
+}
+
+/// Whether the header or the catalog `/Version` says `min` or later (§7.7.2).
+fn at_least(doc: &Document, min: &str) -> bool {
+    let reached = |v: &[u8]| v.len() >= 3 && v >= min.as_bytes();
+    let catalog = doc.root().and_then(|root| doc.get(root).as_dict().and_then(|c| c.get(b"Version").cloned()));
+    let catalog = catalog.and_then(|v| doc.resolve(&v).as_name().map(<[u8]>::to_vec));
+    reached(doc.version().as_bytes()) || catalog.as_deref().is_some_and(reached)
+}
+
+/// PRC came before PDF 2.0 as an Adobe extension to 1.7: such a file declares
+/// `/Extensions /ADBE` with ExtensionLevel 1 or later (§7.12). Other extensions and an ADBE entry
+/// that already has a level are kept; one that is not a dictionary (an array of them) is left alone.
+fn declare_prc_extension(doc: &mut Document) -> Result<(), AnnotError> {
+    let Some(root) = doc.root() else { return Ok(()) };
+    let catalog = doc.get(root);
+    // `None` when present but not a dictionary; an empty one when absent.
+    let dict_or_new = |o: Option<&Object>| match o.map(|o| doc.resolve(o)) {
+        None => Some(Dict::new()),
+        Some(o) => o.as_dict().cloned(),
+    };
+    let Some(mut extensions) = dict_or_new(catalog.as_dict().and_then(|c| c.get(b"Extensions"))) else { return Ok(()) };
+    let Some(mut adbe) = dict_or_new(extensions.get(b"ADBE")) else { return Ok(()) };
+    if adbe.get(b"ExtensionLevel").map(|l| doc.resolve(l)).and_then(|l| l.as_int()).is_some_and(|l| l >= 1) {
+        return Ok(());
+    }
+    adbe.set(b"BaseVersion".to_vec(), Object::name("1.7"));
+    adbe.set(b"ExtensionLevel".to_vec(), Object::Int(1));
+    extensions.set(b"ADBE".to_vec(), Object::Dict(adbe));
+    doc.update_dict(root, |c| c.set(b"Extensions".to_vec(), Object::Dict(extensions)))?;
+    Ok(())
 }
 
 /// A document whose header and catalog `/Version` both say less than `min` gets `/Version min` in
 /// its catalog (§7.7.2: the later of the two applies).
 fn at_least_version(doc: &mut Document, min: &str) -> Result<(), AnnotError> {
-    let below = |v: &[u8]| v.len() < 3 || v < min.as_bytes();
     let Some(root) = doc.root() else { return Ok(()) };
-    let catalog = doc.get(root).as_dict().and_then(|c| c.get(b"Version").cloned());
-    let catalog = catalog.and_then(|v| doc.resolve(&v).as_name().map(<[u8]>::to_vec));
-    if below(doc.version().as_bytes()) && catalog.as_deref().is_none_or(below) {
+    if !at_least(doc, min) {
         doc.update_dict(root, |c| c.set(b"Version".to_vec(), Object::name(min)))?;
     }
     Ok(())
