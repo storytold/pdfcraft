@@ -563,4 +563,6 @@ fn invert_accepts_small_scale_and_rejects_singular() {
     }
     assert!(Matrix([1., 2., 2., 4., 0., 0.]).invert().is_none());
     assert!(Matrix([f64::NAN, 0., 0., 1., 0., 0.]).invert().is_none());
+    // A subnormal scale passes the relative check but its inverse overflows (CodeRabbit on #5703).
+    assert!(Matrix([1e-310, 0., 0., 1., 0., 0.]).invert().is_none());
 }
