@@ -262,12 +262,15 @@ impl Layouter<'_> {
 
     /// The height the text of a multi-line text field takes (its value in the data, else the
     /// template's), for a field without a fixed height, which grows to hold its text. `ctx`
-    /// is the field's own (its SOM ends in the field). Zero for anything else.
+    /// is the field's own (its SOM ends in the field). Zero for anything else. A nameless field
+    /// takes no part in data binding (XFA 3.3 p. 194), and its `ctx` ends in its parent: its
+    /// text is the template's.
     fn grown_text_height(&self, f: &Field, inner_w: f64, ctx: &Ctx) -> f64 {
-        if !f.grows_with_text() || f.common.name.is_none() {
+        if !f.grows_with_text() {
             return 0.0;
         }
-        let value = self.data.and_then(|d| d.value_at(&data_path(self.tpl, &ctx.som))).filter(|t| !t.trim().is_empty()).or_else(|| f.value.plain());
+        let bound = f.common.name.as_ref().and(self.data);
+        let value = bound.and_then(|d| d.value_at(&data_path(self.tpl, &ctx.som))).filter(|t| !t.trim().is_empty()).or_else(|| f.value.plain());
         let Some(value) = value.filter(|t| !t.trim().is_empty()) else { return 0.0 };
         // Beside a caption the text has what the caption leaves; a widget's text has 2pt of
         // padding on each side, a non-interactive field's (drawn as text) none, so it wraps

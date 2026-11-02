@@ -4278,6 +4278,63 @@ fn table_rows_of_minimum_height_cells_fill_the_page_at_that_height() {
     assert_eq!(pages(r#"h="0.5in""#, 30).0, [20, 10]);
 }
 
+/// An unnamed growable multi-line field grows to hold its text as a named one does, with a
+/// minimum height or without. A nameless field takes no part in data binding (XFA 3.3 p. 194),
+/// so the text it shows, and the layout measures, is the template's.
+#[test]
+fn an_unnamed_growable_field_grows_to_hold_its_text() {
+    let lay = |name: &str, min_h: &str| {
+        let body = format!(
+            r#"<subform name="s" layout="tb" w="7.5in"><field {name} w="2in" {min_h}><ui><textEdit multiLine="1"/></ui><value><text>{}</text></value></field><field name="after" w="2in" h="0.3in"/></subform>"#,
+            "word ".repeat(80)
+        );
+        let form = layout_xml(&one_area_form(r#"layout="tb""#, &body)).unwrap();
+        let ws = widgets(&form.pages[0]);
+        let field = ws.iter().find(|w| w.name != "after").map(|w| w.rect.h).unwrap();
+        let after = ws.iter().find(|w| w.name == "after").map(|w| w.rect.y).unwrap();
+        (field, after)
+    };
+    for min_h in ["", r#"minH="0.3in""#] {
+        let named = lay(r#"name="a""#, min_h);
+        assert!(named.0 > 100.0, "the named field grows: {named:?}");
+        let unnamed = lay("", min_h);
+        assert!(
+            (unnamed.0 - named.0).abs() < 0.01 && (unnamed.1 - named.1).abs() < 0.01,
+            "{min_h}: unnamed {unnamed:?}, named {named:?} (field height, next field's top)"
+        );
+    }
+}
+
+/// A growable `lr-tb` subform split at a page break inside a bordered, filled `tb` section breaks
+/// that section with it, as a break between the section's children does: a closed part on each
+/// page, its bottom margin ending the first and its top margin starting the second, no warning.
+#[test]
+fn a_split_lr_tb_subform_keeps_the_border_of_the_section_round_it() {
+    let rows: String = (0..6).map(|i| format!(r#"<field name="f{i}" w="7in" h="1in"/>"#)).collect();
+    let body = format!(
+        r#"<subform name="box" layout="tb" w="7.5in"><border><edge/><fill><color value="230,230,230"/></fill></border><margin topInset="0.1in" bottomInset="0.2in"/><field name="tall" w="7in" h="6in"/><subform name="s" layout="lr-tb" w="7.5in">{rows}</subform></subform>"#
+    );
+    let form = layout_xml(&one_area_form(r#"layout="tb""#, &body)).unwrap();
+    let rows_on: Vec<usize> =
+        (0..6).map(|i| form.pages.iter().position(|p| widgets(p).iter().any(|w| w.name == format!("f{i}"))).unwrap_or(9)).collect();
+    // After 0.1in of margin and the 6in field, three 1in rows fit the 10in area.
+    assert_eq!(rows_on, [0, 0, 0, 1, 1, 1]);
+    let fills = |page: usize| -> Vec<Rect> {
+        form.pages[page].items.iter().filter_map(|i| if let Item::Fill { rect, .. } = i { Some(*rect) } else { None }).collect()
+    };
+    let lines = |page: usize| form.pages[page].items.iter().filter(|i| matches!(i, Item::Line { .. })).count();
+    let (first, second) = (fills(0), fills(1));
+    assert_eq!((first.len(), second.len()), (1, 1), "a part on each page: {:?}", form.warnings);
+    assert_eq!((lines(0), lines(1)), (4, 4), "each part's border is closed");
+    // Page 1: the top margin, the field, three rows, the bottom margin.
+    assert!((first[0].y - 36.0).abs() < 0.01 && (first[0].bottom() - (36.0 + 7.2 + 432.0 + 216.0 + 14.4)).abs() < 0.01, "{:?}", first[0]);
+    // Page 2: the top margin again, the other three rows, the bottom margin.
+    assert!((second[0].y - 36.0).abs() < 0.01 && (second[0].bottom() - (36.0 + 7.2 + 216.0 + 14.4)).abs() < 0.01, "{:?}", second[0]);
+    let f3 = widgets(&form.pages[1]).into_iter().find(|w| w.name == "f3").map(|w| w.rect).unwrap();
+    assert!((f3.y - 43.2).abs() < 0.01, "the second part starts after the top margin: {f3:?}");
+    assert!(form.warnings.is_empty(), "{:?}", form.warnings);
+}
+
 /// A form with `draws` in a subform placed by position, on a letter page whose content area is a
 /// quarter inch in, with `master` on the page itself.
 fn form_of_draws(master: &str, draws: &str) -> String {

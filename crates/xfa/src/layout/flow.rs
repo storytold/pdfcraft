@@ -37,7 +37,7 @@ impl Layouter<'_> {
             self.place(h);
             return Ok(());
         }
-        self.split_block(first, y, drawn)
+        self.split_block(first, y, drawn, flows_on)
     }
 
     /// Remember that the items the last page got since `start` are one field or draw at
@@ -56,8 +56,11 @@ impl Layouter<'_> {
     /// Spread the items the last page holds from index `first` on (a block drawn from `top` to
     /// `end`, past the bottom of its content area) over this and the following content areas.
     /// Breaks fall between text, pictures and fields, never through one that fits in an area;
-    /// fills and lines are cut at the break.
-    fn split_block(&mut self, first: usize, top: f64, end: f64) -> Result<(), XfaError> {
+    /// fills and lines are cut at the break. A flowing subform (`flows_on`: one [`Self::flow_block`]
+    /// splits where it would otherwise move whole) breaks the flowed subforms round it there too
+    /// ([`Self::break_frames`]), so they keep their border; anything else just moves on, and
+    /// those subforms are drawn without theirs ([`Self::finish_frame`]).
+    fn split_block(&mut self, first: usize, top: f64, end: f64, flows_on: bool) -> Result<(), XfaError> {
         let items: Vec<Item> = match self.pages.last_mut() {
             Some(p) if first <= p.items.len() => p.items.split_off(first),
             _ => return Ok(()),
@@ -139,9 +142,21 @@ impl Layouter<'_> {
             rest = below;
             seg_top = cut;
             first_segment = false;
-            self.next_area()?;
-            let (rect, _, _) = self.cursor();
-            shift = cut - rect.y;
+            if flows_on {
+                // Each subform round it ends its part at the cut, after its bottom margin, and
+                // starts a new one after its top margin, where the rest goes on. A rest that fits
+                // an area has the top margins give way to it, as `make_room` does.
+                let (rect, _, _) = self.cursor();
+                if let Some(c) = &mut self.cur {
+                    c.y = (cut - shift).min(c.rect.bottom()).max(c.y);
+                }
+                let rest = (end - cut).max(0.0);
+                self.break_frames(if rest <= rect.h + 0.01 { rest } else { 0.0 }, false)?;
+            } else {
+                self.next_area()?;
+            }
+            let (rect, y, _) = self.cursor();
+            shift = cut - if flows_on { y } else { rect.y };
             dx = rect.x - origin_x;
         }
     }
