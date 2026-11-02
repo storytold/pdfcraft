@@ -90,12 +90,6 @@ pub fn segmented_pill_choice_a11y_query<T: PartialEq + Copy>(
     changed
 }
 
-/// An independent toggle pill button (e.g. for standalone toggles).
-#[expect(dead_code, reason = "convenience helpers for non-searched segmented pill controls")]
-pub fn toggle_pill(ui: &mut egui::Ui, t: &Tokens, active: &mut bool, label: &str) -> bool {
-    toggle_pill_query(ui, t, active, label, "")
-}
-
 /// An independent toggle pill button with optional query highlighting.
 pub fn toggle_pill_query(ui: &mut egui::Ui, t: &Tokens, active: &mut bool, label: &str, query: &str) -> bool {
     let mut changed = false;
@@ -376,7 +370,7 @@ fn preference_search_box_at(ui: &mut egui::Ui, t: &Tokens, query: &mut String, m
 
     let badge_text = if !query.trim().is_empty() {
         let count = matches_count.unwrap_or(0);
-        if count == 1 { Some("1 match".to_string()) } else { Some(format!("{count} matches")) }
+        Some(crate::i18n::trn(crate::i18n::current(), count as u64, "{n} match", "{n} matches"))
     } else {
         None
     };
