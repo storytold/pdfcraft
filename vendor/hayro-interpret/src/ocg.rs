@@ -1,6 +1,9 @@
-use hayro_syntax::object::dict::keys::{BASE_STATE, D, OCGS, OCMD, OCPROPERTIES, OFF, ON, P, TYPE, VE};
+use hayro_syntax::object::dict::keys::{
+    AS, BASE_STATE, D, OCGS, OCMD, OCPROPERTIES, OFF, ON, P, TYPE, USAGE, VE, VIEW, VIEW_STATE,
+};
 use hayro_syntax::object::{Array, Dict, MaybeRef, Name, Object, ObjectIdentifier};
-use std::collections::HashSet;
+use hayro_syntax::xref::XRef;
+use std::collections::{HashMap, HashSet};
 
 pub(crate) struct OcgState {
     inactive_ocgs: HashSet<ObjectIdentifier>,
@@ -30,7 +33,10 @@ impl OcgState {
         }
     }
 
-    pub(crate) fn from_catalog(catalog: &Dict<'_>) -> Self {
+    /// The groups' states as the document opens: the default configuration (`/BaseState`, then
+    /// `/ON` and `/OFF`), then, when `view_auto_state` is set (PdfCraft patch (67)), the auto
+    /// state its `/AS` array gives for the View event ([`apply_view_auto_state`]).
+    pub(crate) fn from_catalog(catalog: &Dict<'_>, xref: &XRef, view_auto_state: bool) -> Self {
         let Some(oc_properties) = catalog.get::<Dict<'_>>(OCPROPERTIES) else {
             return Self::dummy();
         };
@@ -82,6 +88,10 @@ impl OcgState {
 
         read_ocg_array(ON, true);
         read_ocg_array(OFF, false);
+
+        if view_auto_state {
+            apply_view_auto_state(&config, xref, &mut inactive);
+        }
 
         Self {
             inactive_ocgs: inactive,
@@ -210,6 +220,87 @@ impl OcgState {
 impl Default for OcgState {
     fn default() -> Self {
         Self::dummy()
+    }
+}
+
+/// PdfCraft patch (67): at most this many usage application dictionaries of an `/AS` array are
+/// read; the rest are ignored.
+const MAX_AUTO_STATE_APPLICATIONS: usize = 256;
+/// PdfCraft patch (67): at most this many `/OCGs` entries are read across all of them.
+const MAX_AUTO_STATE_GROUPS: usize = 4096;
+/// PdfCraft patch (67): at most this many `/Category` names are read per application.
+const MAX_AUTO_STATE_CATEGORIES: usize = 16;
+
+/// PdfCraft patch (67): apply the configuration's auto state for the View event (ISO 32000-2
+/// §8.11.4.4, Tables 99 and 101). For each usage application dictionary in `/AS` whose `/Event`
+/// is `/View`, each group in its `/OCGs` gets a recommended state from each category in its
+/// `/Category` that the group's `/Usage` gives one for. A group is ON only if every
+/// recommendation it receives, across all such dictionaries, is ON, and OFF otherwise; a group
+/// that receives none keeps its configured state.
+///
+/// Only the `/View` category (`/ViewState`) is evaluated. `/Zoom`, `/User` and `/Language` need
+/// the magnification, user and locale, which the interpreter doesn't know, so they give no
+/// recommendation. Malformed entries (not a dictionary, no `/Category`, a `/ViewState` other
+/// than ON or OFF) are skipped, and the walk is bounded by the caps above.
+fn apply_view_auto_state(config: &Dict<'_>, xref: &XRef, inactive: &mut HashSet<ObjectIdentifier>) {
+    let Some(applications) = config.get::<Array<'_>>(AS) else {
+        return;
+    };
+    let mut recommended: HashMap<ObjectIdentifier, bool> = HashMap::new();
+    let mut groups_left = MAX_AUTO_STATE_GROUPS;
+    for application in applications.raw_iter().take(MAX_AUTO_STATE_APPLICATIONS) {
+        let application = match application {
+            MaybeRef::Ref(r) => xref.get::<Dict<'_>>(r.into()),
+            MaybeRef::NotRef(Object::Dict(d)) => Some(d),
+            MaybeRef::NotRef(_) => None,
+        };
+        let Some(application) = application else {
+            continue;
+        };
+        if application.get::<Name<'_>>(b"Event").as_deref() != Some(VIEW) {
+            continue;
+        }
+        let views = application.get::<Array<'_>>(b"Category").is_some_and(|categories| {
+            categories
+                .raw_iter()
+                .take(MAX_AUTO_STATE_CATEGORIES)
+                .any(|c| matches!(c, MaybeRef::NotRef(Object::Name(n)) if n.as_ref() == VIEW))
+        });
+        if !views {
+            continue;
+        }
+        let Some(groups) = application.get::<Array<'_>>(OCGS) else {
+            continue;
+        };
+        for group in groups.raw_iter() {
+            if groups_left == 0 {
+                break;
+            }
+            groups_left -= 1;
+            let Some(r) = group.as_obj_ref() else {
+                continue;
+            };
+            let id: ObjectIdentifier = r.into();
+            let state = xref
+                .get::<Dict<'_>>(id)
+                .and_then(|g| g.get::<Dict<'_>>(USAGE))
+                .and_then(|u| u.get::<Dict<'_>>(VIEW))
+                .and_then(|v| v.get::<Name<'_>>(VIEW_STATE));
+            let on = match state.as_deref() {
+                Some(ON) => true,
+                Some(OFF) => false,
+                _ => continue,
+            };
+            let entry = recommended.entry(id).or_insert(true);
+            *entry &= on;
+        }
+    }
+    for (id, on) in recommended {
+        if on {
+            inactive.remove(&id);
+        } else {
+            inactive.insert(id);
+        }
     }
 }
 
