@@ -2753,6 +2753,14 @@ fn only_the_words_a_subset_cannot_show_are_substituted() {
     let lines = text::text_lines(&doc, 0).unwrap();
     let read: Vec<(&str, &str)> = lines.iter().map(|l| (l.text.trim(), l.font.as_str())).collect();
     assert_eq!(read, [("ab ba cab ba", "F2")]);
+    // Each word where its font puts it, the substituted `cab` included: no gap or overlap opens
+    // where the font changes (review on #2955).
+    let starts: Vec<f64> = lines[0].ink.iter().map(|b| b[0]).collect();
+    assert_eq!(starts.len(), 4, "{:?}", lines[0].ink);
+    for (got, want) in starts.iter().zip([72.0, 85.5, 98.48, 117.9]) {
+        assert!((got - want).abs() < 0.01, "word starts {starts:?}, want {want} among them");
+    }
+    assert!(lines[0].ink.windows(2).all(|w| w[0][2] < w[1][0]), "no word box overlaps the next: {:?}", lines[0].ink);
     for (text, first) in [("cab ab", "PCEdHelvetica"), ("ba cab", "F2")] {
         text::replace_line(&mut doc, 0, 0, text).unwrap();
         doc = reopen(&doc);
