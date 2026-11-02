@@ -104,6 +104,18 @@ impl PagePointer {
             ui.data_mut(|data| data.insert_temp(primary_press_blocked_key, true));
         }
         let primary_press_blocked = raw_primary_press_blocked || ui.data(|data| data.get_temp::<bool>(primary_press_blocked_key)).unwrap_or(false);
+        // Keep a ruler-owned primary interaction through its release frame. A release over a
+        // ruler does not acquire ownership when the corresponding press began on the document.
+        let blocked_release = if primary_press_blocked {
+            edges.iter().find_map(|edge| match edge {
+                Edge::Release(pos) if pos.is_finite() => Some(*pos),
+                Edge::Press(_) | Edge::Release(_) => None,
+            })
+        } else {
+            None
+        };
+        let blocked_interaction =
+            blocked_interaction.or(blocked_release.filter(|pos| !modal && ui.ctx().layer_id_at(*pos).is_none_or(|candidate| candidate == layer)));
         let started_blocked = raw_press_blocked || origin.or_else(|| first_press(&edges)).is_some_and(blocked_at);
         if started_blocked {
             ui.data_mut(|data| data.insert_temp(blocked_press_key, true));

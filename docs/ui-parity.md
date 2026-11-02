@@ -16,7 +16,7 @@ interface is copied. Gaps ranked in [gaps.md](gaps.md).
   (`view.menus-from-registry`).
 - **141 automation tools** (`crates/automation/src/tools.rs`), so every UI action can be checked
   headlessly.
-- **View area of the checklist: 62.5% breadth** (52 shipped, 11 partial of 92).
+- **View area of the checklist: 65.8% breadth** (55 shipped, 15 partial of 95).
 
 No dump of Acrobat's menu tree has been diffed against the registry yet (gap 24).
 
