@@ -26,6 +26,18 @@ impl PdfCraftApp {
         }
         let view = self.active.and_then(|i| self.views.get_mut(i));
         match (key, view) {
+            ("hotbar-size", _) => {
+                let size: f32 = value.parse().map_err(|_| "hotbar-size must be 24–64 pixels")?;
+                if !size.is_finite() || !(24.0..=64.0).contains(&size) {
+                    return Err("hotbar-size must be 24–64 pixels".into());
+                }
+                self.hotbar.button_size = size;
+            }
+            ("hotbar-full-side", _) => {
+                self.hotbar.full_side = value.parse().map_err(|_| "hotbar-full-side must be true or false")?;
+            }
+            ("hotbar-tools", _) => self.hotbar.set_tools(value)?,
+            ("hotbar-side", _) => self.hotbar.place(value)?,
             ("language", _) => {
                 let language = i18n::normalize_pref(value).ok_or_else(|| {
                     let codes: Vec<&str> = std::iter::once(i18n::AUTO).chain(i18n::Lang::all().map(i18n::Lang::code)).collect();
@@ -41,6 +53,9 @@ impl PdfCraftApp {
                     _ => return Err("theme must be light, dark, or system".into()),
                 };
                 self.set_theme_preference(preference);
+            }
+            ("show_page_edge_shadows", _) => {
+                self.show_page_edge_shadows = value.parse::<bool>().map_err(|_| "show_page_edge_shadows must be true or false")?;
             }
             ("scroll_speed", _) => {
                 self.scroll_speed = scroll_speed::ScrollSpeed::parse(value).ok_or("scroll_speed must be slow, normal, or fast")?;
@@ -183,6 +198,12 @@ impl PdfCraftApp {
                     _ => return Err("default-page-gaps must be on or off".into()),
                 };
             }
+            ("recent-files", _) => {
+                let max = crate::RECENT_FILES_MAX;
+                let limit = value.parse().ok().filter(|n| *n <= max).ok_or_else(|| format!("recent-files must be between 0 and {max}"))?;
+                self.recent_limit = limit;
+                self.recent.truncate(limit);
+            }
             ("cover", Some(v)) => {
                 let on = match value {
                     "on" => true,
@@ -222,6 +243,13 @@ impl PdfCraftApp {
                     "left" => side_panels::ToolsSide::Left,
                     "right" => side_panels::ToolsSide::Right,
                     _ => return Err("tools-side must be left or right".into()),
+                }
+            }
+            ("rail-side", _) => {
+                self.side_panels.rail_side = match value {
+                    "left" => side_panels::ToolsSide::Left,
+                    "right" => side_panels::ToolsSide::Right,
+                    _ => return Err("rail-side must be left or right".into()),
                 }
             }
             ("organize", Some(v)) => {
