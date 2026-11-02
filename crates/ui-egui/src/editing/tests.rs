@@ -296,6 +296,46 @@ fn one_page_pdf() -> Vec<u8> {
     out
 }
 
+/// `one_page_pdf`, opening without a password, whose permissions refuse changes.
+fn no_changes_pdf() -> Vec<u8> {
+    let mut doc = pdfcraft_cos::Document::open(std::sync::Arc::new(one_page_pdf())).unwrap();
+    let encryption = pdfcraft_cos::NewEncryption {
+        algorithm: pdfcraft_cos::Algorithm::Aes256,
+        user_password: "",
+        owner_password: "owner",
+        permissions: -1 ^ 8,
+        encrypt_metadata: true,
+        seed: [4; 32],
+    };
+    doc.set_encryption(&encryption).unwrap();
+    pdfcraft_cos::write_full(&doc, &Default::default()).unwrap()
+}
+
+/// Undo with a new text box open on a document that refuses changes: the box is put back as
+/// it was. Finishing it had asked for the new item to be selected, and that request stayed
+/// behind once the add was refused.
+#[test]
+fn a_refused_text_box_is_put_back_whole() {
+    let mut app = crate::PdfCraftApp::new();
+    app.set_option("language", "en").unwrap();
+    app.open_bytes("a.pdf", None, no_changes_pdf()).unwrap();
+    let style = crate::content_ui::default_style();
+    app.views[0].content.draft = Some(crate::content_ui::TextDraft {
+        page: 0,
+        index: None,
+        rect: [20.0, 20.0, 120.0, 40.0],
+        text: "Typed".into(),
+        style,
+        focus: false,
+        selection: None,
+        typing_from: None,
+    });
+    app.undo();
+    let content = &app.views[0].content;
+    assert_eq!(content.draft.as_ref().map(|d| d.text.as_str()), Some("Typed"), "the refused box stays open");
+    assert_eq!(content.select_added, None, "nothing was added to select");
+}
+
 #[test]
 fn save_commits_the_open_text_box() {
     let dir = staging_dir("open-text-box");
@@ -305,8 +345,16 @@ fn save_commits_the_open_text_box() {
     app.open_bytes("a.pdf", None, one_page_pdf()).unwrap();
     app.save_override = Some(dest.to_string_lossy().into_owned());
     let style = crate::content_ui::default_style();
-    app.views[0].content.draft =
-        Some(crate::content_ui::TextDraft { page: 0, index: None, rect: [20.0, 20.0, 120.0, 40.0], text: "Typed text".into(), style, focus: true });
+    app.views[0].content.draft = Some(crate::content_ui::TextDraft {
+        page: 0,
+        index: None,
+        rect: [20.0, 20.0, 120.0, 40.0],
+        text: "Typed text".into(),
+        style,
+        focus: true,
+        selection: None,
+        typing_from: None,
+    });
 
     assert!(app.save_active(SaveTarget::InPlace));
     let id = app.views[0].id;

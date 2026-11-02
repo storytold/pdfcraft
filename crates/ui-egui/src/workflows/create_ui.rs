@@ -57,19 +57,36 @@ pub enum Clip {
 }
 
 /// An image on the system clipboard, or else its text.
+pub(crate) const MAX_IMAGE_SIDE: usize = 16384;
+pub(crate) const MAX_IMAGE_BYTES: usize = 64 * 1024 * 1024;
+
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn read_clipboard() -> Option<Clip> {
-    let mut cb = arboard::Clipboard::new().ok()?;
-    if let Ok(img) = cb.get_image() {
-        return Some(Clip::Image { width: img.width, height: img.height, rgba: img.bytes.into_owned() });
-    }
-    cb.get_text().ok().filter(|t| !t.trim().is_empty()).map(Clip::Text)
+    crate::os_clipboard::with(|cb| {
+        if let Ok(img) = cb.get_image() {
+            let expected_len = img.width.checked_mul(img.height).and_then(|px| px.checked_mul(4));
+            if img.width > 0
+                && img.height > 0
+                && img.width <= MAX_IMAGE_SIDE
+                && img.height <= MAX_IMAGE_SIDE
+                && expected_len == Some(img.bytes.len())
+                && img.bytes.len() <= MAX_IMAGE_BYTES
+            {
+                return Ok(Some(Clip::Image { width: img.width, height: img.height, rgba: img.bytes.into_owned() }));
+            }
+            return Ok(None);
+        }
+        Ok(cb.get_text().ok().filter(|t| !t.trim().is_empty()).map(Clip::Text))
+    })
+    .ok()
+    .flatten()
 }
 
 pub(crate) fn png_from_rgba(width: usize, height: usize, rgba: &[u8]) -> Result<Vec<u8>, String> {
     let (w, h) = (u32::try_from(width).map_err(|e| e.to_string())?, u32::try_from(height).map_err(|e| e.to_string())?);
-    if w == 0 || h == 0 || rgba.len() != width * height * 4 {
-        return Err("the clipboard image is empty or malformed".into());
+    let expected = width.checked_mul(height).and_then(|p| p.checked_mul(4));
+    if w == 0 || h == 0 || width > MAX_IMAGE_SIDE || height > MAX_IMAGE_SIDE || expected != Some(rgba.len()) || rgba.len() > MAX_IMAGE_BYTES {
+        return Err("the clipboard image is empty, malformed or exceeds size limits".into());
     }
     let mut out = Vec::new();
     let mut enc = png::Encoder::new(&mut out, w, h);
@@ -141,9 +158,10 @@ impl PdfCraftApp {
         self.open_created_bytes("Clipboard.pdf", created.map_err(|e| e.to_string()))
     }
 
-    /// Create ▸ Blank page: a new untitled US Letter document.
+    /// Create ▸ Blank page: a new untitled document on the system region's paper (#5644).
     pub(crate) fn create_blank(&mut self) {
-        let created = self.session.create_blank(612.0, 792.0, 1).map_err(|e| e.to_string());
+        let (w, h) = self.blank_paper.points();
+        let created = self.session.create_blank(w, h, 1).map_err(|e| e.to_string());
         if let Err(e) = self.open_created_bytes("Untitled.pdf", created) {
             self.notify_fmt("Couldn't create a PDF: {e}", &[("e", &e.to_string())]);
         }

@@ -1,14 +1,14 @@
 use super::model::{DocInfo, FieldState, FieldType, Request};
 use super::run::MAX_ARRAY_LENGTH;
 use super::{
-    Arc, BTreeSet, Context, FunctionObjectBuilder, JsArray, JsError, JsFunction, JsNativeError, JsResult, JsString, JsValue, NativeFunction, RefCell,
-    xfa,
+    Arc, BTreeSet, Context, FunctionObjectBuilder, JsArray, JsError, JsFunction, JsNativeError, JsResult, JsString, JsValue, Message, NativeFunction,
+    RefCell, xfa,
 };
 
 pub(crate) struct Host {
     pub(crate) fields: Arc<Vec<FieldState>>,
     pub(crate) changed: BTreeSet<usize>,
-    pub(crate) alerts: Vec<String>,
+    pub(crate) alerts: Vec<Message>,
     pub(crate) console: Vec<String>,
     pub(crate) requests: Vec<Request>,
     pub(crate) doc: DocInfo,
@@ -33,10 +33,12 @@ impl Host {
         }
     }
 
-    pub(crate) fn alert(&mut self, m: String) {
+    /// Keep message `m`, its text and title charged to the run's byte budget, up to
+    /// [`xfa::MAX_ALERTS`] messages.
+    pub(crate) fn alert(&mut self, m: Message) {
         if self.alerts.len() >= xfa::MAX_ALERTS {
             self.dropped = self.dropped.saturating_add(1);
-        } else if self.room(m.len()) {
+        } else if self.room(m.bytes()) {
             self.alerts.push(m);
         }
     }

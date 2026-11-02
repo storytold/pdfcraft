@@ -107,6 +107,10 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                                     bm_action = Some(BmAction::FromStructure);
                                     ui.close();
                                 }
+                                if bm_editable && ui.button(tl!("New bookmarks from text styles…")).clicked() {
+                                    bm_action = Some(BmAction::FromTextStyles);
+                                    ui.close();
+                                }
                                 if !info.outline.is_empty() {
                                     for (levels, label) in [
                                         (usize::MAX, tl!("Expand all bookmarks")),
@@ -178,7 +182,7 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 }
                 egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| match panel {
                     RightPanel::Comments => {
-                        if let Some(e) = crate::comments_panel::show(ui, &t, info, view, prefs, comment_allowed, &mut nav) {
+                        if let Some(e) = crate::comments_panel::show(ui, &t, doc, view, prefs, comment_allowed, &mut nav) {
                             panel_edit = Some(e);
                         }
                     }
