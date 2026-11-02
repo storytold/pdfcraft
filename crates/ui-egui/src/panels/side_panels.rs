@@ -415,6 +415,22 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         .frame(egui::Frame::NONE.fill(t.panel))
         .body_margin(egui::Margin::ZERO)
         .show(ui, &open, |pane| Some(state_of(&panels, *pane)), &mut Content { app });
+
+    // Ensure panel resize handles do not bleed inward over panel interiors and scrollbars.
+    // The handle's active target is kept to the divider strip centered on the border.
+    for pane in &open {
+        let host_id = egui::Id::unique("pdfcraft-side-panels");
+        let s_id = host_id.with(("pane", *pane));
+        let resize_id = s_id.with("resize");
+        if let Some(resp) = ui.ctx().read_response(resize_id) {
+            let edge_layer = egui::LayerId::new(ui.layer_id().order, s_id.with("resize-layer"));
+            let edge_ui = ui.new_child(egui::UiBuilder::new().layer_id(edge_layer));
+            let old_rect = resp.rect;
+            let border = (old_rect.min.x + old_rect.max.x) / 2.0;
+            let new_rect = egui::Rect::from_x_y_ranges((border - 2.0)..=(border + 2.0), old_rect.y_range());
+            edge_ui.interact(new_rect, resize_id, egui::Sense::drag());
+        }
+    }
     for request in output.requests {
         match request {
             PaneRequest::Resize(pane, width) => app.side_panels.set_width(pane, width),

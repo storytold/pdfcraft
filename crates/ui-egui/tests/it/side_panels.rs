@@ -15,8 +15,8 @@ trailer << /Root 1 0 R >>
 const WIDTH: f32 = 1400.0;
 const NO_BOOKMARKS: &str = "This document has no bookmarks.";
 
-fn harness(setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(WIDTH, 900.0)).build_eframe(move |_cc| {
+fn harness_sized(size: egui::Vec2, setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> Harness<'static, PdfCraftApp> {
+    let mut h = Harness::builder().with_size(size).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
         app.set_option("language", "en").unwrap();
         app.open_bytes("doc.pdf", None, FIXTURE.to_vec()).unwrap();
@@ -25,6 +25,10 @@ fn harness(setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> Harness<'static, P
     });
     h.run_steps(6);
     h
+}
+
+fn harness(setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> Harness<'static, PdfCraftApp> {
+    harness_sized(egui::vec2(WIDTH, 900.0), setup)
 }
 
 fn rail(h: &Harness<'static, PdfCraftApp>) -> egui::Rect {
@@ -130,4 +134,102 @@ fn f4_toggles_the_side_panel_and_shift_f4_the_tools_panel() {
     h.key_press_modifiers(egui::Modifiers::SHIFT, egui::Key::F4);
     h.run_steps(3);
     h.get_by_label("Expand all tools");
+}
+
+#[test]
+fn scrollbar_and_panel_resize_handle_do_not_collide_on_either_dock_side() {
+    // 1. Left docking: tools panel on the left (resize handle on the right, scrollbar on the right).
+    let mut h = harness_sized(egui::vec2(1200.0, 450.0), |app| {
+        app.all_tools_expanded = true;
+    });
+    h.run_steps(4);
+
+    let splitters: Vec<_> = h.get_all_by_label("Resize panels").collect();
+    assert!(!splitters.is_empty(), "Splitter handle should exist");
+    let splitter_rect = splitters[0].rect();
+
+    // Find the scrollbar belonging to the Tools panel (left side of the window).
+    let sb_node = h.get_all_by_role(Role::ScrollBar).find(|s| s.rect().max.x < 300.0).expect("Tools panel scrollbar should exist");
+    let sb_rect = sb_node.rect();
+
+    // The scrollbar must sit strictly inside the panel, with clear gutter before the splitter.
+    assert!(sb_rect.max.x < splitter_rect.min.x);
+    assert!(splitter_rect.min.x - sb_rect.max.x >= 12.0, "Gutter must be at least 12px");
+
+    // Hovering directly over the scrollbar must NOT trigger panel resize cursor.
+    for x in [sb_rect.min.x, sb_rect.center().x, sb_rect.max.x - 0.5] {
+        h.hover_at(egui::pos2(x, sb_rect.center().y));
+        h.run_steps(1);
+        let cursor = h.output().platform_output.cursor_icon;
+        assert_ne!(cursor, egui::CursorIcon::ResizeHorizontal, "Hovering scrollbar at x={x} should not trigger resize handle");
+    }
+
+    // Hovering directly on the splitter handle MUST trigger panel resize cursor.
+    h.hover_at(splitter_rect.center());
+    h.run_steps(1);
+    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::ResizeHorizontal);
+
+    // Dragging the scrollbar down scrolls the content up without resizing the panel.
+    let initial_width = h.state().side_panels.tools_width;
+    let first_row_before = h.get_by_label("Edit a PDF").rect().top();
+    h.hover_at(sb_rect.center());
+    h.run_steps(1);
+    h.drag_at(sb_rect.center());
+    h.run_steps(1);
+    h.hover_at(sb_rect.center() + egui::vec2(0.0, 60.0));
+    h.run_steps(1);
+    h.drop_at(sb_rect.center() + egui::vec2(0.0, 60.0));
+    h.run_steps(2);
+    let first_row_after = h.get_by_label("Edit a PDF").rect().top();
+    assert!(first_row_after < first_row_before, "Content should scroll up when dragging scrollbar down");
+    assert_eq!(h.state().side_panels.tools_width, initial_width, "Dragging scrollbar must not resize the panel");
+
+    // Dragging the splitter smoothly resizes the panel.
+    h.hover_at(splitter_rect.center());
+    h.run_steps(1);
+    h.drag_at(splitter_rect.center());
+    h.run_steps(1);
+    h.hover_at(splitter_rect.center() + egui::vec2(40.0, 0.0));
+    h.run_steps(1);
+    h.drop_at(splitter_rect.center() + egui::vec2(40.0, 0.0));
+    h.run_steps(2);
+    let after_width = h.state().side_panels.tools_width;
+    assert!(after_width > initial_width);
+    assert!((after_width - (initial_width + 40.0)).abs() <= 5.0);
+
+    // 2. Right docking: tools panel on the right (resize handle on the left).
+    let mut h_right = harness_sized(egui::vec2(1200.0, 450.0), |app| {
+        app.set_option("tools-side", "right").unwrap();
+        app.all_tools_expanded = true;
+    });
+    h_right.run_steps(4);
+
+    let splitters_right: Vec<_> = h_right.get_all_by_label("Resize panels").collect();
+    assert!(!splitters_right.is_empty());
+    let right_splitter_rect = splitters_right[0].rect();
+
+    // Splitter is at the left boundary of the right-docked pane.
+    h_right.hover_at(right_splitter_rect.center());
+    h_right.run_steps(1);
+    assert_eq!(h_right.output().platform_output.cursor_icon, egui::CursorIcon::ResizeHorizontal);
+
+    // Dragging the splitter on right-docked pane smoothly resizes.
+    let initial_right_width = h_right.state().side_panels.tools_width;
+    h_right.hover_at(right_splitter_rect.center());
+    h_right.run_steps(1);
+    h_right.drag_at(right_splitter_rect.center());
+    h_right.run_steps(1);
+    // Moving left increases width of right-docked pane
+    h_right.hover_at(right_splitter_rect.center() - egui::vec2(30.0, 0.0));
+    h_right.run_steps(1);
+    h_right.drop_at(right_splitter_rect.center() - egui::vec2(30.0, 0.0));
+    h_right.run_steps(2);
+    let after_right_width = h_right.state().side_panels.tools_width;
+    assert!(after_right_width > initial_right_width);
+    assert!((after_right_width - (initial_right_width + 30.0)).abs() <= 5.0);
+
+    // Inside the right-docked panel (e.g. 15px inside from the splitter), cursor is not resize.
+    h_right.hover_at(right_splitter_rect.center() + egui::vec2(15.0, 0.0));
+    h_right.run_steps(1);
+    assert_ne!(h_right.output().platform_output.cursor_icon, egui::CursorIcon::ResizeHorizontal);
 }
