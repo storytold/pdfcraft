@@ -325,7 +325,7 @@ fn active_tool_controls(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ve
                 app.apply_edit(Edit::StyleAnnotation { page, index, color: Some(color), opacity: None, width: None, endings: None });
             }
         }
-        let resp = icons::button(ui, "sliders-horizontal", 32.0, false, tl!("Font size"));
+        let resp = icons::button(ui, "a-large-small", 32.0, false, tl!("Font size"));
         let resized = egui::Popup::menu(&resp)
             .align(egui::RectAlign::RIGHT_START)
             .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)

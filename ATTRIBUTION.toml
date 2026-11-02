@@ -3490,6 +3490,17 @@ usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
 sha256 = "d344d9f9222f6c1b698c0c82a753a2212d9bd7785f06c00cd6e4910fe2fee8f8"
 
 [[asset]]
+path = "assets/icons/a-large-small.svg"
+title = "Lucide icon \"a-large-small\""
+author = "Lucide Contributors (portions Cole Bemis, Feather)"
+source = "https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/a-large-small.svg)"
+licence = "ISC AND MIT"
+licence_file = "assets/icons/LICENSE-lucide.txt"
+kind = "icon"
+usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
+sha256 = "d4985fc71174d108e322c3b25cb6abe2837a115fe3f239a1918645db436743ec"
+
+[[asset]]
 path = "assets/icons/move-horizontal.svg"
 title = "Lucide icon \"move-horizontal\""
 author = "Lucide Contributors (portions Cole Bemis, Feather)"
