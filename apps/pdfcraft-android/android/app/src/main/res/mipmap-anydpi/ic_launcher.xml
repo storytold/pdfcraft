@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- PdfCraft's own icon (assets/app-icon/hicolor/512x512, copied in by the build as
+     drawable/ic_launcher_tile): the tile inset to the 72 dp a launcher shows, on its crimson. -->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@color/ic_launcher_background" />
+    <foreground>
+        <inset
+            android:drawable="@drawable/ic_launcher_tile"
+            android:inset="18dp" />
+    </foreground>
+</adaptive-icon>

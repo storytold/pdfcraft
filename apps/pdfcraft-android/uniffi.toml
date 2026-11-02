@@ -1,0 +1,5 @@
+# UniFFI bindings of the `pdfcraft_android` library.
+
+[bindings.kotlin]
+package_name = "io.github.dikshant363.pdfcraft.core"
+cdylib_name = "pdfcraft_android"

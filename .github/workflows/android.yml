@@ -1,0 +1,70 @@
+name: Android CI
+
+on:
+  push:
+    branches: [ android-port, main ]
+  pull_request:
+    branches: [ android-port, main ]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  build-and-test:
+    name: Build & Test Android
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Rust
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup target add aarch64-linux-android x86_64-linux-android
+
+      - name: Cache Cargo & Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/cargo-ndk
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-android-build-${{ hashFiles('**/Cargo.lock', '**/*.gradle*') }}
+          restore-keys: |
+            ${{ runner.os }}-android-build-
+
+      - name: Install cargo-ndk & Android NDK
+        run: |
+          which cargo-ndk || cargo install cargo-ndk --version 4.1.2 --locked
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;29.0.14206865" "platforms;android-37.0" >/dev/null
+
+      - name: Run Host Native Unit Tests
+        run: |
+          cargo test -p pdfcraft-android
+
+      - name: Run Android Unit Tests
+        working-directory: apps/pdfcraft-android/android
+        run: |
+          ./gradlew testDebugUnitTest
+
+      - name: Assemble Debug APK
+        working-directory: apps/pdfcraft-android/android
+        run: |
+          ./gradlew assembleDebug
+
+      - name: Upload Debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: pdfcraft-android-debug-apk
+          path: apps/pdfcraft-android/android/app/build/outputs/apk/debug/app-debug.apk

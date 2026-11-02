@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- the app's surface, so nothing flashes before the first frame -->
+    <color name="window_background">#FFFFFFFF</color>
+    <!-- PdfCraft green, the app icon's field (assets/app-icon/README.md) -->
+    <color name="ic_launcher_background">#FFB70228</color>
+
+    <style name="Theme.PdfCraft" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/window_background</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+    </style>
+</resources>

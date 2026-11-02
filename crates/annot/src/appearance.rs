@@ -19,7 +19,7 @@ use crate::{NOTE_SIZE, Rgb, n};
 mod symbols;
 
 pub(crate) use symbols::display_stamp;
-use symbols::{CAPTION_SIZE, attach_icon, ellipse, line_caption, line_layout, note_icon, stamp};
+use symbols::{CAPTION_SIZE, attach_icon, ellipse, line_caption, line_layout, note_icon, sound_icon, stamp};
 
 /// Length of an arrowhead for a line of width `w`.
 pub fn arrow_size(w: f64) -> f64 {
@@ -415,6 +415,12 @@ pub fn build(d: &Dict) -> Option<Stream> {
     match context.subtype {
         b"Text" => return draw_icon(&context, "Note", [1.0, 0.82, 0.0], drawing),
         b"FileAttachment" => return draw_icon(&context, "PushPin", [0.0, 0.47, 0.84], drawing),
+        b"Sound" => {
+            let col = context.stroke.unwrap_or([0.0, 0.47, 0.84]);
+            let mut drawing = drawing;
+            drawing.content.push_str(&sound_icon(col));
+            return Some(form([0.0, 0.0, NOTE_SIZE, NOTE_SIZE], drawing.content.as_bytes(), drawing.resources));
+        }
         b"Stamp" => return draw_stamp(&context, drawing),
         b"FreeText" => return draw_free_text(&context, drawing),
         _ => {}

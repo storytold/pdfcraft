@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Files of PdfCraft's that another app may reach through its FileProvider: a document being
+     shared, printed or opened in another app, and a photo the camera app takes for Scan -->
+<paths>
+    <cache-path name="share" path="share/" />
+    <cache-path name="camera" path="camera/" />
+</paths>
