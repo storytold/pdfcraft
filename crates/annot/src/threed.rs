@@ -199,8 +199,11 @@ fn annotation_dict(new: &NewModel3d<'_>, rect: [f64; 4], page: ObjRef, stream: O
 /// The poster drawing `p` into its box, which must lie within `rect`.
 fn picture_poster(rect: [f64; 4], p: &PosterPicture) -> Result<Stream, AnnotError> {
     let at = normalize(p.at);
-    let inside = finite(&p.at) && at[0] >= rect[0] && at[1] >= rect[1] && at[2] <= rect[2] && at[3] <= rect[3] && at[2] > at[0] && at[3] > at[1];
-    if !inside {
+    // A box fitted to `rect` in floating point can end a few ulps outside it: allow that, then clamp.
+    let slack = rect.iter().fold(1.0_f64, |m, v| m.max(v.abs())) * 1e-9;
+    let near = finite(&p.at) && at[0] >= rect[0] - slack && at[1] >= rect[1] - slack && at[2] <= rect[2] + slack && at[3] <= rect[3] + slack;
+    let at = [at[0].max(rect[0]), at[1].max(rect[1]), at[2].min(rect[2]), at[3].min(rect[3])];
+    if !(near && at[2] > at[0] && at[3] > at[1]) {
         return Err(AnnotError::Invalid("the poster must fit inside the 3D model's rectangle".into()));
     }
     let place = appearance::picture_place(at, p.image, Some(p.size)).ok_or_else(|| AnnotError::Invalid("the poster picture has no size".into()))?;
