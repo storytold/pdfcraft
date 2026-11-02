@@ -27,7 +27,9 @@ const MAX_SYMBOLS: usize = 1 << 16;
 const MAX_SYMBOL_PIXELS: usize = 1 << 24;
 
 /// The most symbols one plan codes. The decoder PdfCraft renders JBIG2 with (`hayro-jbig2`)
-/// refuses 32,768 symbols or more, and others may too, so a plan with more isn't made.
+/// refuses a dictionary whose new and exported symbols pass 65,535 together, and a plan exports
+/// every symbol it codes, so it refuses 32,768 or more; others may too, so a plan with more isn't
+/// made.
 const MAX_CODED_SYMBOLS: usize = (1 << 15) - 1;
 
 /// The most symbol instances one text region places. The decoder PdfCraft renders JBIG2 with

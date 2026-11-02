@@ -3619,6 +3619,71 @@ fn an_image_too_large_for_the_jbig2_decoder_stays_as_it_is() {
     }
 }
 
+/// Dark bars of irregular lengths across the long side of a `w` × `h` 1-bit image, which Flate
+/// shrinks less than JBIG2.
+fn bars(w: u32, h: u32) -> Vec<u8> {
+    let stride = (w as usize).div_ceil(8);
+    let mut data = vec![0xFF; stride * h as usize];
+    let mut state = 0x1234_5678u32;
+    let mut next = move || {
+        state ^= state << 13;
+        state ^= state >> 17;
+        state ^= state << 5;
+        state as usize
+    };
+    let long = w.max(h) as usize;
+    let mut at = 10;
+    while at + 60 < long {
+        let len = 5 + next() % 50;
+        for along in at..at + len {
+            for across in 0..12 {
+                let (x, y) = if w > h { (along, across) } else { (across, along) };
+                data[y * stride + x / 8] &= !(0x80 >> (x % 8));
+            }
+        }
+        at += len + 5 + next() % 50;
+    }
+    data
+}
+
+/// Past what the JBIG2 decoder takes on a side, an image packed from more bits, or one averaged
+/// to a size still past it, isn't stored as JBIG2 either: it becomes 1-bit Flate. Within the
+/// bound the same pictures do become JBIG2, so the fixtures reach that choice.
+#[test]
+fn what_is_too_large_for_jbig2_is_stored_another_way() {
+    let settings = |downsample| Settings {
+        mono: MonoSettings { compression: MonoCompression::Jbig2, downsample, ..MonoSettings::REDUCE },
+        ..Settings::default()
+    };
+    let h = 16u32;
+    // Eight-bit grey of only black and white, packed to one bit first.
+    for (w, stored) in [(65_535u32, &b"JBIG2Decode"[..]), (65_536, b"FlateDecode")] {
+        let (bits, stride) = (bars(w, h), (w as usize).div_ceil(8));
+        let grey: Vec<u8> = (0..h as usize)
+            .flat_map(|y| (0..w as usize).map(move |x| (y, x)))
+            .map(|(y, x)| if bits[y * stride + x / 8] & (0x80 >> (x % 8)) == 0 { 0 } else { 255 })
+            .collect();
+        let mut doc = Document::new_empty();
+        let image = mono_image(&mut doc, w, h, &grey, None, &[("BitsPerComponent", 8.into()), ("ColorSpace", Object::name("DeviceGray"))]);
+        page(&mut doc, &[("Im", image)], &format!("q {w} 0 0 {h} 0 0 cm /Im Do Q"));
+        optimize(&mut doc, &settings(false)).unwrap();
+        let s = stream(&doc, image);
+        assert_eq!(s.dict.name(b"Filter"), Some(stored), "{w}, packed");
+        assert_eq!(s.dict.int(b"BitsPerComponent"), Some(1), "{w}, packed");
+    }
+    // One bit, drawn at 600 ppi and averaged to 300: half as wide, so 140,000 is still past it.
+    for (w, stored) in [(70_000u32, &b"JBIG2Decode"[..]), (140_000, b"FlateDecode")] {
+        let mut doc = Document::new_empty();
+        let image = mono_image(&mut doc, w, h, &bars(w, h), None, &[("BitsPerComponent", 1.into()), ("ColorSpace", Object::name("DeviceGray"))]);
+        let (pw, ph) = (f64::from(w) * 72.0 / 600.0, f64::from(h) * 72.0 / 600.0);
+        page(&mut doc, &[("Im", image)], &format!("q {pw} 0 0 {ph} 0 0 cm /Im Do Q"));
+        optimize(&mut doc, &settings(true)).unwrap();
+        let s = stream(&doc, image);
+        assert_eq!(s.dict.name(b"Filter"), Some(stored), "{w}, averaged");
+        assert_eq!(s.dict.int(b"Width"), Some(i64::from(w / 2)), "{w}, averaged");
+    }
+}
+
 /// An indexed image also drawn where the optimizer doesn't read (an annotation's appearance, where
 /// other default colour spaces may be in force and change which palette entry is darker) keeps its
 /// resolution, as black-and-white RGB keeps its colour space; drawn only on the page, it is
