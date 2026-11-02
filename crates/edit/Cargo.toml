@@ -21,6 +21,9 @@ kurbo = { workspace = true }
 # Display order of right-to-left lines in added text, and reading and writing order in Edit text;
 # already in the tree via the interface.
 unicode-bidi = "0.3"
+# NFD to NFC for the text of headers, footers and watermarks (Telex-typed Vietnamese is decomposed);
+# the crate is already locked (a dependency of stringprep), so no new package enters Cargo.lock.
+unicode-normalization = "0.1"
 
 [dev-dependencies]
 hayro-syntax = { workspace = true }

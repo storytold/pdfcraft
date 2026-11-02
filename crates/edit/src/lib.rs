@@ -61,10 +61,12 @@ pub use added::{
 };
 
 mod apply;
+mod mark_font;
 mod marks;
 mod place;
 
 pub use apply::{add_background, add_header_footer, add_watermark, marks_present, remove_marks};
+pub use mark_font::sanitize_text as sanitize_mark_text;
 #[cfg(test)]
 use marks::bates_start;
 pub use marks::{Background, Context, HeaderFooter, MarkKind, MarkSource, Watermark, expand};

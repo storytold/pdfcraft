@@ -6,7 +6,7 @@
 use std::collections::{HashMap, HashSet};
 
 use egui::{Align, Color32, CornerRadius, Layout, Rect, Stroke, pos2, vec2};
-use pdfcraft_engine::{Backdrop, Background, DocId, Edit, FontFamily, HeaderFooter, MarkKind, Watermark};
+use pdfcraft_engine::{Backdrop, Background, DocId, Edit, FontFamily, HeaderFooter, MarkKind, Watermark, sanitize_mark_text};
 
 use crate::theme::{self, Tokens};
 use crate::{PdfCraftApp, icons, widgets};
@@ -689,11 +689,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
             }
             MarkKind::Watermark => {
                 let text = if wm.text.trim().is_empty() { "CONFIDENTIAL" } else { wm.text.trim() };
-                let size = if fit {
-                    (r.width().hypot(r.height()) * 0.5 / (text.len().max(1) as f32 * 0.55)).clamp(6.0, 80.0)
-                } else {
-                    (wm.font_size as f32 * s).max(5.0)
-                };
+                let size = if fit { watermark_auto_size(text, r.width(), r.height()) } else { (wm.font_size as f32 * s).max(5.0) };
                 let galley = p.layout_no_wrap(text.to_string(), egui::FontId::proportional(size), rgb32(wm.color).gamma_multiply(wm.opacity as f32));
                 let angle = -(wm.rotation as f32).to_radians();
                 let half = galley.size() / 2.0;
@@ -865,6 +861,18 @@ fn backdrop_options(ui: &mut egui::Ui, t: &Tokens, d: &mut MarksDraft, doc: &pdf
     }
 }
 
+/// Calculates the auto font size for a watermark to fit diagonally across the page.
+///
+/// Runs text through [`sanitize_mark_text`] (NFC composition and whitespace normalization) so
+/// the preview and engine apply see the exact same characters. The `0.55` factor is the upstream
+/// UI preview heuristic for average glyph advance width, kept to preserve UI preview performance
+/// and avoid layering violations between `ui-egui` and PDF font engines.
+pub fn watermark_auto_size(text: &str, w: f32, h: f32) -> f32 {
+    let sanitized = sanitize_mark_text(text);
+    let chars = sanitized.lines().map(|l| l.chars().count()).max().unwrap_or(1).max(1);
+    (w.hypot(h) * 0.5 / (chars as f32 * 0.55)).clamp(6.0, 80.0)
+}
+
 /// The edit the dialog's OK makes.
 pub fn edit(d: &MarksDraft, kind: MarkKind, count: usize) -> Edit {
     let pages = d.range.pages(count);
@@ -888,12 +896,16 @@ mod tests {
     #[test]
     fn text_applying_would_refuse_is_caught_in_the_dialog() {
         let mut d = MarksDraft::default();
-        d.hf.text[5] = "Страница <<1>> из <<n>> / Page <<1>> of <<n>>".into();
-        assert_eq!(undrawable(MarkKind::HeaderFooter, &d), Some('С'), "#2013: refused before OK, not after");
+        // Inter draws Cyrillic and Greek, so the dialog accepts them now.
+        d.hf.text[5] = "Страница <<1>> из <<n>> / Page <<1>> of <<n>> — Ελληνικά".into();
+        assert_eq!(undrawable(MarkKind::HeaderFooter, &d), None);
+        // Han is in neither the standard fonts nor Inter: still refused before OK.
+        d.hf.text[5] = "你好 <<1>> of <<n>>".into();
+        assert_eq!(undrawable(MarkKind::HeaderFooter, &d), Some('你'), "#2013: refused before OK, not after");
         d.hf.text[5] = "Page <<1>> of <<n>> — café".into();
         assert_eq!(undrawable(MarkKind::HeaderFooter, &d), None);
-        d.wm.text = "ΑΠΟΡΡΗΤΟ".into();
-        assert_eq!(undrawable(MarkKind::Watermark, &d), Some('Α'));
+        d.wm.text = "你好".into();
+        assert_eq!(undrawable(MarkKind::Watermark, &d), Some('你'));
         d.use_file = true;
         assert_eq!(undrawable(MarkKind::Watermark, &d), None, "a picture watermark draws no text");
         assert_eq!(undrawable(MarkKind::Background, &d), None);
@@ -1003,5 +1015,31 @@ mod tests {
             Edit::AddWatermark { settings, .. } => assert_eq!(settings.offset, [-72.0, 36.0]),
             other => panic!("expected AddWatermark, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn watermark_auto_size_measures_unicode_characters_not_bytes() {
+        // "СЕКРЕТНО" has 8 Cyrillic characters (16 UTF-8 bytes).
+        // "SECRETLY" has 8 ASCII characters (8 UTF-8 bytes).
+        // Both must produce the exact same preview font size.
+        let ascii_size = watermark_auto_size("SECRETLY", 500.0, 700.0);
+        let cyrillic_size = watermark_auto_size("СЕКРЕТНО", 500.0, 700.0);
+        assert_eq!(ascii_size, cyrillic_size);
+
+        // Decomposed (NFD) Vietnamese combining marks must produce the exact same
+        // preview font size as precomposed (NFC) Vietnamese.
+        // "TIẾNG VIỆT":
+        // NFC: 'T', 'I', 'Ế' (\u{1EBE}), 'N', 'G', ' ', 'V', 'I', 'Ệ' (\u{1EC7}), 'T' (10 chars)
+        // NFD: 'T', 'I', 'E', '\u{0302}', '\u{0301}', 'N', 'G', ' ', 'V', 'I', 'E', '\u{0323}', 'T' (13 chars)
+        let nfc_text = "TI\u{1EBE}NG VI\u{1EC7}T";
+        let nfd_text = "TIE\u{0302}\u{0301}NG VIE\u{0323}T";
+        assert_ne!(nfc_text.chars().count(), nfd_text.chars().count(), "NFD has more raw chars");
+        let nfc_size = watermark_auto_size(nfc_text, 500.0, 700.0);
+        let nfd_size = watermark_auto_size(nfd_text, 500.0, 700.0);
+        assert_eq!(nfc_size, nfd_size, "NFD and NFC must measure identically after NFC normalization");
+
+        // Multi-line watermarks measure the widest line, not total concatenated bytes.
+        let multiline = watermark_auto_size("SECRETLY\nSHORT", 500.0, 700.0);
+        assert_eq!(ascii_size, multiline);
     }
 }
