@@ -10,7 +10,7 @@
 /// driver's print capabilities). Trimmed Windows installations (NTLite) can lack them, and a
 /// load-time import of a missing DLL stops the program before `main` (#2630). Delay-loaded, they
 /// load on the first print; `pdfcraft_print::spool` checks they exist before calling in.
-/// Same list in `apps/pdfcraft{,-cli}/build.rs` and `crates/print/src/spool.rs`.
+/// Same list in `apps/pdfcraft{,-cli}/build.rs`, `crates/print/build.rs` and `crates/print/src/spool.rs`.
 const DELAY_LOADED: [&str; 2] = ["windows.data.pdf.dll", "prntvpt.dll"];
 
 fn main() {

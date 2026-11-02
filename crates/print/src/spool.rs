@@ -7,9 +7,9 @@ pub use craft_print::{
 };
 
 /// Windows: the in-box DLLs printing draws and describes jobs with. The executables delay-load
-/// them (`apps/pdfcraft{,-cli}/build.rs`, the same list) so a Windows installation without them
-/// still starts (#2630); a call into a missing delay-loaded DLL would end the process, so
-/// printing checks for them first.
+/// them (`apps/pdfcraft{,-cli}/build.rs`, and `build.rs` for this crate's tests: the same list)
+/// so a Windows installation without them still starts (#2630); a call into a missing
+/// delay-loaded DLL would end the process, so printing checks for them first.
 #[cfg(windows)]
 pub(crate) const PRINT_DLLS: [&str; 2] = ["windows.data.pdf.dll", "prntvpt.dll"];
 
