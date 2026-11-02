@@ -227,6 +227,15 @@ impl CommentTool {
         }
     }
 
+    /// Default single-key shortcut for this commenting tool, if any.
+    pub fn shortcut(self) -> Option<&'static str> {
+        match self {
+            Self::Highlight => Some("U"),
+            Self::Ink => Some("D"),
+            _ => None,
+        }
+    }
+
     /// Tools that draw with a drag gesture.
     pub fn draws(self) -> bool {
         matches!(self, Self::Ink | Self::FreehandHighlight | Self::Line | Self::Arrow | Self::Rectangle | Self::Oval | Self::Eraser)
