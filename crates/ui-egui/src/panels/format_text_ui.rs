@@ -152,6 +152,12 @@ pub(crate) fn panel(
                     out.font = Some(FontChoice::Family(f));
                 }
             }
+            if fonts.sources.is_none() && pdfcraft_fonts::chinese::face().is_some() {
+                let f = FontFamily::WenKai;
+                if ui.selectable_label(look.family == f, f.label()).clicked() {
+                    out.font = Some(FontChoice::Family(f));
+                }
+            }
             if fonts.sources.is_some() {
                 ui.separator();
                 if ui.selectable_label(false, tl!("Load font…")).clicked() {
@@ -289,10 +295,10 @@ pub(crate) fn panel(
     // Bold, italic, underline, superscript, subscript.
     let mut extras = extras;
     row(ui, |ui| {
-        if icons::button(ui, "bold", 30.0, look.bold, tl!("Bold")).clicked() {
+        if ui.add_enabled_ui(look.family != FontFamily::WenKai, |ui| icons::button(ui, "bold", 30.0, look.bold, tl!("Bold"))).inner.clicked() {
             look.bold = !look.bold;
         }
-        if icons::button(ui, "italic", 30.0, look.italic, tl!("Italic")).clicked() {
+        if ui.add_enabled_ui(look.family != FontFamily::WenKai, |ui| icons::button(ui, "italic", 30.0, look.italic, tl!("Italic"))).inner.clicked() {
             look.italic = !look.italic;
         }
         match extras.as_deref_mut() {

@@ -40,7 +40,8 @@ fn style(a: &Args, t: &mut AddedText) -> Result<()> {
             "helvetica" | "sans" | "arial" => FontFamily::Helvetica,
             "times" | "serif" => FontFamily::Times,
             "courier" | "mono" | "monospace" => FontFamily::Courier,
-            other => return Err(bad(format!("unknown font {other:?} (helvetica, times, courier)"))),
+            "wenkai" | "chinese" => FontFamily::WenKai,
+            other => return Err(bad(format!("unknown font {other:?} (helvetica, times, courier, wenkai)"))),
         };
     }
     if let Some(b) = a.opt_bool("bold")? {

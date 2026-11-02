@@ -127,6 +127,12 @@ fn validate(c: &Content) -> Result<(), EditError> {
     }
     match c {
         Content::Text(t) => {
+            if t.family == Family::WenKai && pdfcraft_fonts::chinese::face().is_none() {
+                return Err(EditError::Invalid("Chinese text needs the LXGW WenKai Lite face in this build".into()));
+            }
+            if t.family == Family::WenKai && (t.bold || t.italic) {
+                return Err(EditError::Invalid("the Chinese face currently supports regular style only".into()));
+            }
             if t.text.trim().is_empty() {
                 return Err(EditError::Invalid("type some text first".into()));
             }

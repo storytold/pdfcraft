@@ -827,3 +827,5 @@ PR #2133 retains document-local Pages sidebar focus for Ctrl/Cmd+A and Escape af
 PR #1952 retains per-widget checkbox/radio export-value editing in the split form-authoring and Prepare modules. Caption editing remains supported. Tests cover preserved appearances and selection, invalid/locked refusals, data-format round trips, and Apply/Cancel/Undo. Current-head hosted validation is pending; feature estimates are unchanged.
 
 - **2026-10-31 (#1577):** Reconciled the page-shadow preference with split viewer, organizer, settings and control modules, preserving upstream page-gap shadow suppression. CI validation pending.
+
+* 2026-11-02 (M7, Chinese Add Text): native builds with the existing LXGW WenKai Lite face offer it explicitly for new page text and preserve it through save/reopen/retyping. Regular style and existing CJK line-break rules; font import and form appearances remain separate.

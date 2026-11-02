@@ -10521,3 +10521,28 @@ fn mixed_script_tools_normalize_but_undo_restores_the_exact_mixture() {
         assert_eq!(page_text(&mut a, reopened)[0], plain);
     }
 }
+
+#[test]
+fn added_chinese_through_tools_saves_reopens_and_retypes() {
+    let dir = workdir("added-chinese");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path":"a.pdf"}))["doc"].as_u64().unwrap();
+    let args = json!({"doc":doc,"page":1,"text":"中文标注 ABC","at":[20,20],"width":160,"size":12,"font":"wenkai"});
+    if pdfcraft_fonts::chinese::face().is_none() {
+        assert!(a.call("page_add_text", &args).is_err());
+        assert_eq!(ok(&mut a, "content_list", json!({"doc":doc}))["count"], 0);
+        return;
+    }
+    ok(&mut a, "page_add_text", args);
+    assert!(page_text(&mut a, doc)[0].contains("中文标注 ABC"));
+    ok(&mut a, "doc_save", json!({"doc":doc,"path":"chinese.pdf"}));
+    let reopened = ok(&mut a, "doc_open", json!({"path":"chinese.pdf"}))["doc"].as_u64().unwrap();
+    let list = ok(&mut a, "content_list", json!({"doc":reopened}));
+    assert_eq!(list["items"][0]["font"], "LXGW WenKai Lite");
+    ok(&mut a, "content_update", json!({"doc":reopened,"page":1,"index":1,"text":"继续编辑中文"}));
+    ok(&mut a, "doc_save", json!({"doc":reopened}));
+    let reopened = ok(&mut a, "doc_open", json!({"path":"chinese.pdf"}))["doc"].as_u64().unwrap();
+    assert!(page_text(&mut a, reopened)[0].contains("继续编辑中文"));
+    assert!(a.call("content_update", &json!({"doc":reopened,"page":1,"index":1,"text":"中文\u{10ffff}"})).is_err());
+    assert!(page_text(&mut a, reopened)[0].contains("继续编辑中文"));
+}

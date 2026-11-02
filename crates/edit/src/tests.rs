@@ -10306,3 +10306,88 @@ fn review_inside_scope_group_move_matches_direct_transform_under_outer_scale() {
         }
     }
 }
+
+#[test]
+fn added_chinese_font_roundtrips_and_remains_editable() {
+    if !pdfcraft_fonts::CRAFT_FONTS.iter().any(|f| f.family == "LXGW WenKai Lite") {
+        return;
+    }
+    let mut doc = fixture();
+    // A newly added Chinese item must remain the same font after saving and reopening.
+    let family = Family::WenKai;
+    let text =
+        AddedText { family, text: "中文标注：文字 ABC 123。".into(), rect: [72.0, 678.4, 400.0, 700.0], size: 18.0, ..Default::default() };
+    assert!(added::first_undrawable(&text).is_none());
+    add_content(&mut doc, 0, &Content::Text(text.clone())).unwrap();
+    let mut doc = reopen(&doc);
+    let items = list_added(&doc);
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].content, Content::Text(text.clone()));
+    let lines = text::text_lines(&doc, 0).unwrap();
+    let extracted: String = lines.iter().map(|l| l.text.as_str()).collect();
+    assert!(extracted.contains("中文标注"), "{extracted}");
+    let changed = AddedText { text: "保存后继续编辑中文。".into(), ..text };
+    update_content(&mut doc, 0, 0, &Content::Text(changed.clone())).unwrap();
+    let mut doc = reopen(&doc);
+    assert_eq!(list_added(&doc)[0].content, Content::Text(changed));
+    delete_content(&mut doc, 0, 0).unwrap();
+    assert!(list_added(&reopen(&doc)).is_empty());
+    assert!(streams(&doc, 0).iter().any(|s| s.contains("(Hi)")), "unrelated page content stays intact");
+}
+
+#[test]
+fn added_chinese_wraps_and_refuses_unavailable_glyphs() {
+    if !pdfcraft_fonts::CRAFT_FONTS.iter().any(|f| f.family == "LXGW WenKai Lite") {
+        return;
+    }
+    let family = Family::WenKai;
+    let text =
+        AddedText {
+            family, text: "中文标注测试没有空格也应该自动换行".into(), rect: [72.0, 600.0, 160.0, 700.0], size: 18.0, ..Default::default()
+        };
+    let lines = added::lines(&text);
+    assert!(lines.len() > 1);
+    for line in lines {
+        assert!(family.width(&line, 18.0, false, false) <= 88.01);
+    }
+    let mut doc = fixture();
+    let invalid = AddedText { text: "中文\u{10ffff}".into(), ..text };
+    assert!(add_content(&mut doc, 0, &Content::Text(invalid)).is_err());
+    assert!(!doc.is_modified());
+}
+
+#[test]
+fn added_chinese_wraps_without_stranding_punctuation() {
+    if pdfcraft_fonts::chinese::face().is_none() {
+        return;
+    }
+    let text = AddedText {
+        family: Family::WenKai,
+        text: "中文，标注（测试）文字。继续编辑。".into(),
+        rect: [0.0, 0.0, 45.0, 300.0],
+        size: 18.0,
+        ..Default::default()
+    };
+    let lines = added::lines(&text);
+    assert!(lines.len() > 1);
+    assert_eq!(lines.concat(), text.text);
+    for line in lines {
+        assert!(line.chars().next().is_none_or(|c| !['，', '）', '。'].contains(&c)), "{line}");
+        assert!(!line.ends_with('（'), "{line}");
+    }
+}
+
+#[test]
+fn added_chinese_face_is_not_written_as_a_standard_header_or_paragraph_font() {
+    let mut doc = fixture();
+    let hf = HeaderFooter {
+        font: Family::WenKai,
+        text: ["Header".into(), String::new(), String::new(), String::new(), String::new(), String::new()],
+        ..Default::default()
+    };
+    assert!(add_header_footer(&mut doc, &[0], &hf, false, &cx()).is_err());
+    let style = text::BlockStyle { family: Some((Family::WenKai, false, false)), ..Default::default() };
+    assert!(text::rewrite_block(&mut doc, 0, 0, Some("Hello"), &style).is_err());
+    assert!(text::text_edit_layout(&doc, 0, 0, "Hello", &style).is_err());
+    assert!(!doc.is_modified());
+}
