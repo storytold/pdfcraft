@@ -1789,7 +1789,7 @@ fn bookmarks_add_rename_move_delete() {
 fn a_bookmark_tree_nests_entries_by_level_under_a_new_first_bookmark() {
     let mut d = doc_a();
     crate::add_bookmark(&mut d, &[], 0, "Existing", 0).unwrap();
-    let e = |level, title: &str, page, element| crate::OutlineEntry { level, title: title.into(), page, element };
+    let e = |level, title: &str, page, element| crate::OutlineEntry { level, title: title.into(), page, element, top: None };
     let se = ObjRef::new(4242, 0);
     let entries = [e(1, "One", 0, Some(se)), e(3, "Deep", 1, None), e(2, "Two", 1, None), e(1, "Next", 2, None)];
     assert_eq!(crate::add_bookmark_tree(&mut d, "Untitled", &entries).unwrap(), vec![0]);
@@ -3766,4 +3766,50 @@ fn bookmark_style_and_colour_are_set_as_the_table_says() {
     let saved = open(write_full(&doc, &SaveOptions::default()).unwrap());
     let got: Vec<_> = bookmarks(&saved).into_iter().map(|b| (b.color, b.bold, b.italic)).collect();
     assert_eq!(got, [(Some([0.0, 0.0, 1.0]), true, true), (None, false, false)]);
+}
+
+/// #3502: a `/Contents` array's pieces are joined with a space, as the renderer joins them, so a
+/// `%` comment at the end of a piece without a line break continues through the first line of the
+/// next piece in both resource pruning (`extract_pages`) and `page_as_form`.
+#[test]
+fn contents_pieces_join_with_a_space_across_a_trailing_comment() {
+    let build_doc = |first_piece: &str| {
+        let b: Vec<String> = vec![
+            "<< /Type /Catalog /Pages 2 0 R >>".into(),                                        // 1
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>".into(),        // 2
+            "<< /Type /Page /Parent 2 0 R /Contents [4 0 R 5 0 R] /Resources 6 0 R >>".into(), // 3
+            raw(first_piece),                                                                  // 4
+            raw("/ImHidden Do\n/ImShown Do"),                                                  // 5
+            "<< /XObject << /ImHidden 7 0 R /ImShown 8 0 R >> >>".into(),                      // 6
+            image(1, 1, 1),                                                                    // 7
+            image(1, 1, 1),                                                                    // 8
+        ];
+        open(build(&b, "/Root 1 0 R"))
+    };
+
+    // Without a trailing newline in piece 1, `% comment` swallows `/ImHidden Do` on the first
+    // line of piece 2; only `/ImShown` is drawn.
+    let commented = build_doc("q Q % comment without newline");
+    let extracted = full_roundtrip(&extract_pages(&commented, &[0]).unwrap());
+    assert_eq!(xobject_names(&extracted, 0), [b"ImShown".to_vec()], "commented-out Do across piece boundary is pruned");
+
+    let mut form_dst = Document::new_empty();
+    let (form_ref, _) = crate::page_as_form(&mut form_dst, &commented, 0).unwrap();
+    let Object::Stream(form_stream) = &*form_dst.get(form_ref) else { panic!("form stream") };
+    let form_bytes = form_stream.decoded().unwrap();
+    let drawn: Vec<Vec<u8>> = pdfcraft_content::parse(&form_bytes)
+        .ops
+        .into_iter()
+        .filter(|op| op.op == b"Do")
+        .filter_map(|op| op.operands.first().and_then(Object::as_name).map(|n| n.to_vec()))
+        .collect();
+    assert_eq!(drawn, [b"ImShown".to_vec()], "page_as_form keeps the first line of piece 2 inside the comment");
+
+    // Control: when piece 1 ends the comment with a newline, `/ImHidden Do` on piece 2's first
+    // line is a real operator and stays in both the extracted page and the form XObject.
+    let newline_ended = build_doc("q Q % comment with newline\n");
+    let extracted_ctrl = full_roundtrip(&extract_pages(&newline_ended, &[0]).unwrap());
+    let mut ctrl_names = xobject_names(&extracted_ctrl, 0);
+    ctrl_names.sort();
+    assert_eq!(ctrl_names, [b"ImHidden".to_vec(), b"ImShown".to_vec()]);
 }

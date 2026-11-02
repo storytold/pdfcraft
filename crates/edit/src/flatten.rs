@@ -16,6 +16,7 @@ use pdfcraft_cos::{Dict, Document, ObjRef, Object};
 use crate::{EditError, check, n, page_list, place_tagged};
 
 const HIDDEN: i64 = 2;
+const NO_ROTATE: i64 = 16;
 const NO_VIEW: i64 = 32;
 
 fn nums(doc: &Document, o: Option<&Object>) -> Option<Vec<f64>> {
@@ -72,6 +73,28 @@ fn placement(doc: &Document, form: &Dict, rect: [f64; 4]) -> Option<[f64; 6]> {
     }
     let (sx, sy) = ((rect[2] - rect[0]) / (x1 - x0), (rect[3] - rect[1]) / (y1 - y0));
     Some([sx, 0.0, 0.0, sy, rect[0] - x0 * sx, rect[1] - y0 * sy])
+}
+
+/// `m` followed by a turn of `degrees` (the page's /Rotate) about the upper-left corner of
+/// `rect`: a NoRotate annotation stays upright on a rotated page (ISO 32000-2 §12.5.3), its
+/// upper-left corner where it was, which is how MuPDF and Poppler draw it.
+fn upright(m: [f64; 6], degrees: i64, rect: [f64; 4]) -> [f64; 6] {
+    let (sin, cos) = match degrees.rem_euclid(360) {
+        90 => (1.0, 0.0),
+        180 => (0.0, -1.0),
+        270 => (-1.0, 0.0),
+        _ => return m,
+    };
+    let (px, py) = (rect[0], rect[3]);
+    let t = [cos, sin, -sin, cos, px - px * cos + py * sin, py - px * sin - py * cos];
+    [
+        m[0] * t[0] + m[1] * t[2],
+        m[0] * t[1] + m[1] * t[3],
+        m[2] * t[0] + m[3] * t[2],
+        m[2] * t[1] + m[3] * t[3],
+        m[4] * t[0] + m[5] * t[2] + t[4],
+        m[4] * t[1] + m[5] * t[3] + t[5],
+    ]
 }
 
 #[derive(Clone, Copy)]
@@ -194,6 +217,7 @@ fn flatten_in(doc: &mut Document, pages: &[usize], which: Which) -> Result<usize
         let mut gone_inline: HashSet<usize> = HashSet::new();
         // Selected, but nothing was drawn for it: it stays, pop-up and reply handling included.
         let mut undrawn: HashSet<ObjRef> = HashSet::new();
+        let rotation = page.dict.get(b"Rotate").map(|r| doc.resolve(r)).and_then(|r| r.as_int()).unwrap_or(0);
         // A viewer draws many comments from their dictionary even when the file stores no
         // appearance (notes, FreeText, ink, stamps…). Build the appearance it would show, so
         // flattening keeps a comment that still has ink on screen instead of deleting it.
@@ -230,6 +254,7 @@ fn flatten_in(doc: &mut Document, pages: &[usize], which: Which) -> Result<usize
             if let (Some(ap), Some(rect)) = (appearance(doc, d), rect) {
                 let form = doc.get(ap).as_dict().cloned().unwrap_or_default();
                 if let Some(m) = placement(doc, &form, rect) {
+                    let m = if flags & NO_ROTATE != 0 { upright(m, rotation, rect) } else { m };
                     let name = xobject_name(&existing_xo, &xobjects, &mut name_n);
                     content.push_str(&format!("q {} {} {} {} {} {} cm /{name} Do Q\n", n(m[0]), n(m[1]), n(m[2]), n(m[3]), n(m[4]), n(m[5])));
                     xobjects.set(name.into_bytes(), Object::Ref(ap));

@@ -48,7 +48,8 @@ pub(crate) use globals::menu_item;
 use globals::platform;
 use host::{arg, as_number, error, function, s, text};
 pub use model::{
-    DISPLAY_HIDDEN, DISPLAY_NO_PRINT, DISPLAY_NO_VIEW, DISPLAY_VISIBLE, DocInfo, Event, FieldState, FieldType, Limits, Outcome, Panel, Request,
+    DISPLAY_HIDDEN, DISPLAY_NO_PRINT, DISPLAY_NO_VIEW, DISPLAY_VISIBLE, DocInfo, Event, FieldState, FieldType, Limits, Message, MessageButtons,
+    MessageIcon, Outcome, Panel, Request,
 };
 #[cfg(not(target_arch = "wasm32"))]
 use run::SCRIPT_STACK;

@@ -11,12 +11,15 @@ use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream};
 use crate::{Field, FieldKind, FormError, Widget, appearance, fields, flags, page_refs};
 
 mod edit;
+mod join;
 mod lifecycle;
 mod look;
 mod tree;
 
+pub(crate) use tree::ancestor_sets;
+
 pub use edit::set_props;
-pub use lifecycle::{add_field, delete_field, delete_field_object, duplicate_field};
+pub use lifecycle::{add_field, delete_field, delete_field_object, delete_widget, duplicate_field};
 pub(crate) use look::button_appearance;
 pub use look::{BorderStyle, CheckStyle, FieldFont, Look, LookPatch, check_style, look, redraw_field, set_button_icon};
 pub(crate) use tree::{ensure_form, form_fonts_as_objects};
@@ -85,6 +88,9 @@ pub struct FieldProps {
     pub max_len: Option<Option<usize>>,
     /// Choice options (display texts; export values equal them).
     pub options: Option<Vec<String>>,
+    /// Change one button widget's export value without changing its appearance state.
+    /// Widgets sharing that state are kept in sync. The index is zero-based.
+    pub export_value: Option<(usize, String)>,
     /// Font size (0 = auto).
     pub font_size: Option<f64>,
     /// Position: move or resize one widget (its index in [`Field::widgets`]) to a new rect in
