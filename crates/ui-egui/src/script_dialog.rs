@@ -17,6 +17,13 @@ pub(crate) struct Pending {
     page: usize,
     serial: u32,
 }
+impl Pending {
+    /// Whether this invocation is waiting for an explicit user reply rather than worker execution.
+    pub(crate) fn has_prompt(&self) -> bool {
+        self.prompt.is_some()
+    }
+}
+
 /// Draw the bounded menu tree and return only the selected enabled leaf value.
 fn menu(ui: &mut egui::Ui, items: &[MenuItem], answer: &mut Option<String>) {
     for item in items {
@@ -109,7 +116,8 @@ impl PdfCraftApp {
                 Err(TryRecvError::Empty) => {}
             }
         }
-        ctx.request_repaint_after(Duration::from_millis(16));
+        // Input events wake egui immediately; idle prompts only need a coarse timeout check.
+        ctx.request_repaint_after(if pending.has_prompt() { Duration::from_secs(1) } else { Duration::from_millis(16) });
         self.script_pending = Some(pending);
     }
     /// Display the current typed prompt and send one answer/cancellation without replaying script side effects.
@@ -187,6 +195,42 @@ impl PdfCraftApp {
                 let _ = reply.send(answer);
             }
             pending.started = Instant::now();
+            ctx.request_repaint();
         }
+    }
+}
+
+#[cfg(test)]
+mod review_tests {
+    use super::*;
+    /// The central shortcut/page-input gate must see a real pending script prompt.
+    #[test]
+    fn a_script_prompt_blocks_document_input_until_answered() {
+        let mut app = PdfCraftApp::new();
+        let bytes = app.session.create_blank(200.0, 300.0, 1).unwrap();
+        app.open_bytes("synthetic.pdf", None, bytes.to_vec()).unwrap();
+        let id = app.active_ids().unwrap().1;
+        app.start_ui_script(id, "app.response({cQuestion:'Wait'});", None);
+        let ctx = egui::Context::default();
+        for _ in 0..300 {
+            app.poll_script_dialog(&ctx);
+            if app.script_pending.as_ref().is_some_and(|p| p.prompt.is_some()) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(app.script_pending.as_ref().unwrap().prompt.is_some());
+        assert!(app.modal_open(), "an unanswered script prompt must block document input");
+        let (_, reply) = app.script_pending.as_mut().unwrap().prompt.take().unwrap();
+        reply.send(None).unwrap();
+        for _ in 0..300 {
+            app.poll_script_dialog(&ctx);
+            if app.script_pending.is_none() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(app.script_pending.is_none());
+        assert!(!app.modal_open());
     }
 }

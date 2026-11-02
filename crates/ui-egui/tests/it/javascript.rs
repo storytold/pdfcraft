@@ -287,5 +287,36 @@ fn native_popup_completion_is_discarded_after_the_document_is_edited() {
         .apply(id, pdfcraft_engine::Edit::SetFieldValue { name: "greeting".into(), value: pdfcraft_engine::FieldValue::Text("current".into()) })
         .unwrap();
     h.run_steps(5);
+    assert!(h.query_by_label("Wait").is_none(), "the stale prompt must be dismissed");
     assert_eq!(value(&h, "greeting"), ["current"]);
+}
+
+/// Native Mouse Up must expose the same willCommit flag as the headless button path.
+#[test]
+fn native_button_events_match_headless_will_commit() {
+    let mut h = harness();
+    let id = h.state().active_ids().unwrap().1;
+    let headless = h.state_mut().session.run_javascript(id, "String(event.willCommit);", Some("hello")).unwrap();
+    assert_eq!(headless.result.as_deref(), Some("false"));
+    h.state_mut().run_button_script(id, "hello", "getField('greeting').value=String(event.willCommit);");
+    wait_value(&mut h, "greeting", "false");
+}
+
+/// A popup owns keyboard shortcuts; Undo must not edit the document below it.
+#[test]
+fn native_popup_keeps_undo_shortcuts_out_of_the_document() {
+    let mut h = harness();
+    let id = h.state().active_ids().unwrap().1;
+    h.state_mut()
+        .session
+        .apply(id, pdfcraft_engine::Edit::SetFieldValue { name: "greeting".into(), value: pdfcraft_engine::FieldValue::Text("current".into()) })
+        .unwrap();
+    h.state_mut().run_button_script(id, "hello", "app.popUpMenuEx({cName:'Wait',cReturn:'yes'});");
+    wait_for(&mut h, "Wait");
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Z);
+    h.run_steps(3);
+    assert_eq!(value(&h, "greeting"), ["current"]);
+    assert!(h.query_by_label("Wait").is_some());
+    h.get_by_label("Cancel").click();
+    h.run_steps(5);
 }

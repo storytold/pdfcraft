@@ -18,8 +18,10 @@ Changing the document-script sources recreates the context. Closing, reopening, 
 Revert and disabling JavaScript release/reset the context. PDF Undo/Redo restores PDF state;
 it does not serialize or rewind arbitrary JavaScript variables. Globals are not saved into the
 PDF. A worker fault resets its context; the existing cooperative source/loop/recursion bounds
-remain in force. The source preflight additionally caps arrow functions at 256 and right-associative
-assignment/exponentiation tokens at 4,096 per source; keyword unary/new chains share the prefix
+remain in force. The source preflight additionally caps active arrow chains at 256 and right-associative
+assignment/exponentiation chains at 4,096 across open bracket levels. Independent statements
+and comma-separated sibling expressions reset only their own level; comparisons do not count.
+Keyword unary/new chains share the prefix
 depth bound of 64. These conservative limits protect recursive parser/compiler paths before
 execution on the smaller worker stack. Boundary and refusal cases run in subprocess regressions.
 These bounds do not establish a hard JavaScript heap quota.
@@ -62,7 +64,9 @@ Undo/Redo and completed Save As, without reinitializing script globals.
 `app.popUpMenuEx` supports nested menus, separators, marked/disabled items, explicit return
 values and cancellation. `app.response` supports named and positional parameters, defaults,
 password masking and null cancellation. Alert replies use the documented numeric button ids.
-Only the worker waits for a reply; egui continues drawing/input. A reply resumes the same
+Only the worker waits for a reply; egui continues drawing/input. The central modal gate blocks
+document shortcuts and page input while a prompt is visible. Idle prompt polling uses a
+one-second repaint interval; replying wakes the UI immediately and worker polling remains 16 ms. A reply resumes the same
 invocation, without replaying the script or its side effects.
 
 An explicit button captures document identity, generation and view geometry. Closing/switching
@@ -91,6 +95,8 @@ The existing `js_run` accepts `answers`, an optional array of up to 32 strings o
 }
 ```
 
+The schema advertises a 4,096-character maximum per answer; the handler additionally enforces
+a 4,096-byte UTF-8 budget, so multi-byte strings can reach the byte limit earlier.
 Replies are consumed in prompt order. Null/missing replies cancel a menu/response; alert
 defaults choose acknowledgement, cancellation or No according to the button set. No direct
 file, process or network API is exposed by a prompt. Root confinement and permission-checked

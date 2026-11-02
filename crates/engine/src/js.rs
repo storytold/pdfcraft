@@ -776,7 +776,10 @@ impl Session {
         let states = std::sync::Arc::new(fields.iter().map(|f| field_state(cos, f, &runner.doc)).collect::<Vec<_>>());
         let job = pdfcraft_js::session::Job {
             script: script.into(),
-            event: target.map_or_else(|| pdfcraft_js::Event::doc("Console"), |t| pdfcraft_js::Event::field("Mouse Up", t, "")),
+            event: target.map_or_else(
+                || pdfcraft_js::Event::doc("Console"),
+                |t| pdfcraft_js::Event { will_commit: false, ..pdfcraft_js::Event::field("Mouse Up", t, "") },
+            ),
             doc: runner.doc,
             fields: states.clone(),
             doc_scripts: runner.doc_scripts,

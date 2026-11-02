@@ -376,6 +376,30 @@ mod tests {
         assert_eq!(worker.run(job("digit('8');"), &[]).result.as_deref(), Some("8"));
     }
 
+    /// Independent statements and comparisons must not consume a source-wide nesting budget.
+    #[test]
+    fn document_worker_accepts_large_flat_libraries() {
+        let scripts = [
+            format!("var a=1,b=0;{}b;", "if(a===1){b=2;}".repeat(2000)),
+            format!("{}f299();", (0..300).map(|i| format!("const f{i}=()=>1;")).collect::<String>()),
+            format!("var a=0;{}a;", "a+=1;".repeat(6000)),
+            format!("var a=0;{}a;", "a=2**3;".repeat(6000)),
+            format!("var a=0;{}a;", "a=(1===1)?1:2;".repeat(5000)),
+        ];
+        for (script, expected) in scripts.into_iter().zip(["2", "1", "6000", "8", "1"]) {
+            let mut worker = ScriptSession::default();
+            let result = worker.run(job(&script), &[]);
+            assert_eq!(result.error, None);
+            assert_eq!(result.result.as_deref(), Some(expected));
+        }
+        let mut document = job("f299();");
+        document.doc_scripts.push((0..300).map(|i| format!("const f{i}=()=>1;")).collect::<String>());
+        let result = ScriptSession::default().run(document, &[]);
+        assert_eq!(result.error, None);
+        assert!(result.doc_errors.is_empty());
+        assert_eq!(result.result.as_deref(), Some("1"));
+    }
+
     #[test]
     /// Retaining the realm must not re-enable eval or dynamic Function construction.
     fn persistent_context_keeps_dynamic_compilation_blocked() {

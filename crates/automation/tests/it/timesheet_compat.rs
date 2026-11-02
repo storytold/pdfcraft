@@ -150,3 +150,10 @@ fn popup_and_manual_response_resume_the_same_script_and_validate_choices() {
     assert_eq!(alert["result"], "4");
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+/// The advertised schema must bound prompt strings before clients dispatch them.
+#[test]
+fn prompt_answer_schema_advertises_the_length_budget() {
+    let tool = pdfcraft_automation::tools().into_iter().find(|t| t.name == "js_run").unwrap();
+    assert_eq!(tool.input_schema["properties"]["answers"]["items"]["maxLength"], 4096);
+}

@@ -25,12 +25,11 @@ const MAX_PREFIX_RUN: usize = 64;
 /// Most `?` (conditional expressions nest without brackets).
 const MAX_CONDITIONALS: usize = 4096;
 
-/// Conservative per-source arrow-function budget: right-associated arrows nest without brackets.
-/// Count all arrows outside strings/comments, rather than admitting a parser stack overflow.
+/// Longest active arrow-function chain across the currently open bracket levels.
 const MAX_ARROW_FUNCTIONS: usize = 256;
 
 /// Assignment and exponentiation associate right-to-left without increasing bracket depth.
-/// A conservative token budget bounds their recursive parse/compiler paths before Boa runs.
+/// Bound active chains, rather than the total operators in independent statements.
 const MAX_RIGHT_ASSOCIATIVE_OPERATORS: usize = 4096;
 
 /// The script thread's stack.
@@ -42,109 +41,11 @@ pub(crate) const SCRIPT_STACK: usize = 1 << 30;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) const DOCUMENT_WORKER_STACK: usize = 64 << 20;
 
-/// Why `source` is refused, if it is: too long, or nested deeper than any form needs. Strings
-/// and comments are skipped; brackets in regular expressions and templates count, which only
-/// errs on the safe side.
+mod preflight;
+
+/// Refuse unsafe source nesting before Boa parses it; independent statements do not share a chain budget.
 pub(crate) fn refuse(source: &str) -> Option<String> {
-    if source.len() > MAX_SCRIPT_BYTES {
-        return Some(format!("the script is too long ({} KiB; the limit is {} KiB)", source.len() / 1024, MAX_SCRIPT_BYTES / 1024));
-    }
-    let too_deep = || Some("the script is nested too deeply to run safely".to_string());
-    let b = source.as_bytes();
-    let (mut depth, mut prefix, mut conditionals, mut arrows, mut assignments, mut powers) = (0usize, 0usize, 0usize, 0usize, 0usize, 0usize);
-    let mut i = 0;
-    while let Some(&c) = b.get(i) {
-        i += 1;
-        match c {
-            b'\'' | b'"' => {
-                // To the closing quote (or the end of the line, where an unclosed string ends).
-                while let Some(&d) = b.get(i) {
-                    i += 1;
-                    if d == b'\\' {
-                        i += 1;
-                    } else if d == c || d == b'\n' {
-                        break;
-                    }
-                }
-                prefix = 0;
-            }
-            b'/' if b.get(i) == Some(&b'/') => {
-                while b.get(i).is_some_and(|d| *d != b'\n') {
-                    i += 1;
-                }
-            }
-            b'/' if b.get(i) == Some(&b'*') => {
-                i += 1;
-                while i < b.len() && !b[i..].starts_with(b"*/") {
-                    i += 1;
-                }
-                i += 2;
-            }
-            b'(' | b'[' | b'{' => {
-                depth += 1;
-                if depth > MAX_BRACKET_DEPTH {
-                    return too_deep();
-                }
-                prefix = 0;
-            }
-            b')' | b']' | b'}' => {
-                depth = depth.saturating_sub(1);
-                prefix = 0;
-            }
-            b'!' | b'~' | b'+' | b'-' => {
-                prefix += 1;
-                if prefix > MAX_PREFIX_RUN {
-                    return too_deep();
-                }
-            }
-            b'=' if b.get(i) == Some(&b'>') => {
-                arrows += 1;
-                if arrows > MAX_ARROW_FUNCTIONS {
-                    return Some("the script has too many arrow functions to parse safely".into());
-                }
-                prefix = 0;
-            }
-            b'=' => {
-                assignments += 1;
-                if assignments > MAX_RIGHT_ASSOCIATIVE_OPERATORS {
-                    return too_deep();
-                }
-                prefix = 0;
-            }
-            b'*' if b.get(i) == Some(&b'*') => {
-                i += 1;
-                powers += 1;
-                if powers > MAX_RIGHT_ASSOCIATIVE_OPERATORS {
-                    return too_deep();
-                }
-                prefix = 0;
-            }
-            c if c.is_ascii_alphabetic() || matches!(c, b'_' | b'$') => {
-                let start = i - 1;
-                while b.get(i).is_some_and(|c| c.is_ascii_alphanumeric() || matches!(c, b'_' | b'$')) {
-                    i += 1;
-                }
-                if matches!(b.get(start..i), Some(b"void" | b"typeof" | b"delete" | b"new")) {
-                    prefix += 1;
-                    if prefix > MAX_PREFIX_RUN {
-                        return too_deep();
-                    }
-                } else {
-                    prefix = 0;
-                }
-            }
-            b'?' => {
-                conditionals += 1;
-                if conditionals > MAX_CONDITIONALS {
-                    return too_deep();
-                }
-                prefix = 0;
-            }
-            c if c.is_ascii_whitespace() => {}
-            _ => prefix = 0,
-        }
-    }
-    None
+    preflight::refuse(source)
 }
 
 /// Run `script` for `event`, after the document-level scripts (`doc_scripts`, which define the
@@ -338,4 +239,40 @@ pub(crate) fn run_in_context(
         ctx.insert_data(RefCell::new(h));
     }
     out
+}
+
+#[cfg(test)]
+mod chain_budget_tests {
+    use super::refuse;
+    /// Shift assignments remain right-associative while comparison tokens consume no chain budget.
+    #[test]
+    fn comparisons_and_shift_assignments_are_distinguished() {
+        for token in ["==", "===", "!=", "!==", "<=", ">="] {
+            assert_eq!(refuse(&format!("var a=1;{}true;", format!("if(a{token}1){{;}}").repeat(5000))), None);
+        }
+        for token in ["=", ">>=", ">>>=", "<<=", "**=", "&&=", "||=", "??="] {
+            assert!(refuse(&format!("var a;{}1", format!("a{token}").repeat(5000))).is_some(), "{token}");
+        }
+    }
+    /// Inner statement separators must not reset a surrounding expression's active chain.
+    #[test]
+    fn inner_separators_do_not_erase_enclosing_chains() {
+        assert!(refuse(&format!("{}1", "a=function(){;}.x=".repeat(3000))).is_some());
+        assert!(refuse(&format!("{}({}1)", "a=>".repeat(200), "b=>".repeat(100))).is_some());
+        assert_eq!(refuse(&format!("var s='{}'; /* {} */ true;", "=>=".repeat(5000), "a=".repeat(5000))), None);
+    }
+}
+
+#[cfg(test)]
+mod literal_chain_tests {
+    use super::refuse;
+    /// Literal semicolons cannot erase a surrounding assignment chain; interpolations remain code.
+    #[test]
+    fn literal_separators_cannot_bypass_chain_guards() {
+        for part in ["a=`;`.x=", "a=/;/.x=", "a=/[;,]/.x="] {
+            assert!(refuse(&format!("{}1", part.repeat(6000))).is_some(), "{part}");
+        }
+        assert!(refuse(&format!("`${{{}1}}`", "a=".repeat(6000))).is_some());
+        assert_eq!(refuse(&format!("var x=`{}${{1+1}}`; true;", "=>;=".repeat(6000))), None);
+    }
 }

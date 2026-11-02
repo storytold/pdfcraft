@@ -328,6 +328,10 @@ impl PdfCraftApp {
     /// A dialog or prompt is open over the window: the keyboard is its own, and nothing may act
     /// on the document underneath it.
     pub(crate) fn modal_open(&self) -> bool {
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.script_pending.as_ref().is_some_and(|pending| pending.has_prompt()) {
+            return true;
+        }
         self.dialog.is_some()
             || self.close_request.is_some()
             || self.password_prompt.is_some()
