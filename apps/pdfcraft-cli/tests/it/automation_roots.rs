@@ -83,6 +83,40 @@ fn both_spellings_confine_the_server() {
 }
 
 #[test]
+fn a_repeated_flag_allows_every_folder_and_no_others() {
+    let base = folders("repeat");
+    let scratch = base.join("scratch");
+    std::fs::create_dir_all(&scratch).unwrap();
+    let (a, secret) = (s(&base.join("in/a.pdf")), s(&base.join("outside/secret.pdf")));
+    // `outside` is the second read root and `scratch` the second write root, given in both spellings.
+    let flags = vec![
+        "--automation-read-root".into(),
+        s(&base.join("in")),
+        format!("--automation-read-root={}", s(&base.join("outside"))),
+        format!("--automation-write-root={}", s(&base.join("out"))),
+        "--automation-write-root".into(),
+        s(&scratch),
+    ];
+    let calls = [
+        ("doc_open", json!({"path": a})),
+        ("doc_open", json!({"path": secret})),
+        ("doc_save", json!({"doc": 1, "path": s(&base.join("out/one.pdf"))})),
+        ("doc_save", json!({"doc": 1, "path": s(&scratch.join("two.pdf"))})),
+        ("doc_save", json!({"doc": 1, "path": s(&base.join("in/three.pdf"))})),
+        ("doc_open", json!({"path": s(&base.join("steps.json"))})),
+    ];
+    let (replies, stderr) = session(&flags, &calls);
+    for (i, what) in ["first read root", "second read root", "first write root", "second write root"].iter().enumerate() {
+        assert_eq!(replies[i]["result"]["isError"], false, "{what}: {replies:?}");
+    }
+    // The read roots do not grant writing, and the write roots do not grant reading.
+    assert!(text(&replies[4]).contains("outside the write roots"), "{replies:?}");
+    assert!(text(&replies[5]).contains("outside the read roots"), "{replies:?}");
+    assert!(base.join("out/one.pdf").is_file() && scratch.join("two.pdf").is_file() && !base.join("in/three.pdf").exists());
+    assert!(stderr.contains("files confined: read roots") && stderr.contains("scratch"), "{stderr}");
+}
+
+#[test]
 fn a_root_left_out_grants_none_of_its_access() {
     let base = folders("one");
     let read_only = vec!["--automation-read-root".to_string(), s(&base.join("in"))];
@@ -114,8 +148,11 @@ fn malformed_flags_are_errors_not_a_missing_root() {
     assert!(fails(&["--automation-read-root"]).contains("--automation-read-root needs a folder"));
     assert!(fails(&["--automation-write-root", "--compact"]).contains("--automation-write-root needs a folder; use --automation-write-root=<dir>"));
     assert!(fails(&["--automation-read-root="]).contains("--automation-read-root needs a non-empty folder"));
-    assert!(fails(&["--automation-read-root", &dir, "--automation-read-root", &dir]).contains("--automation-read-root given twice"));
-    assert!(fails(&["--automation-write-root", &dir, &format!("--automation-write-root={dir}")]).contains("--automation-write-root given twice"));
+    // A repeated flag adds a folder; a bad one among them stops the server like a bad single one.
+    let bad = fails(&["--automation-read-root", &dir, "--automation-read-root", "/definitely/not/a/folder"]);
+    assert!(bad.contains("mcp: cannot open the automation read root `/definitely/not/a/folder`"), "{bad}");
+    assert!(fails(&["--automation-write-root", &dir, "--automation-write-root"]).contains("--automation-write-root needs a folder"));
+    assert!(fails(&["--automation-write-root=", &format!("--automation-write-root={dir}")]).contains("needs a non-empty folder"));
     let missing = fails(&["--automation-read-root", "/definitely/not/a/folder"]);
     assert!(missing.contains("mcp: cannot open the automation read root"), "{missing}");
     let file = std::env::current_exe().unwrap();

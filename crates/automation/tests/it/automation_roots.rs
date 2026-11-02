@@ -8,7 +8,7 @@
 use std::path::{Path, PathBuf};
 
 use pdfcraft_automation::Automation;
-use pdfcraft_automation::file_access::AutomationRoots;
+use pdfcraft_automation::file_access::{AutomationRoots, MAX_ROOTS};
 use pdfcraft_automation::mcp::McpServer;
 use serde_json::{Value, json};
 
@@ -137,6 +137,91 @@ fn files_open_only_from_inside_the_read_root() {
     refused(&mut server, "doc_open", json!({"path": "Cargo.toml"}), "outside the read root");
     // Nothing was opened by the refused calls.
     assert_eq!(ok(&mut server, "doc_list", json!({}))["documents"].as_array().unwrap().len(), 1);
+}
+
+/// `text_font_files` without `directories` looks in every read root, however many there are.
+#[test]
+fn font_discovery_searches_every_read_root() {
+    let base = folders("fonts");
+    let roots: Vec<PathBuf> = (0..40).map(|i| base.join(format!("root{i}"))).collect();
+    for r in &roots {
+        std::fs::create_dir_all(r).unwrap();
+    }
+    // One font in the first root and one in the last: the scan takes roots from the end of its
+    // list, so only the first shows that the whole list was searched.
+    let fonts = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/fonts");
+    std::fs::copy(fonts.join("Inter-Regular.ttf"), roots[0].join("Inter-Regular.ttf")).unwrap();
+    std::fs::copy(fonts.join("JetBrainsMono-Regular.ttf"), roots[39].join("JetBrainsMono-Regular.ttf")).unwrap();
+    let roots = AutomationRoots::with_folders(&roots, &[]).unwrap();
+    let mut server = McpServer::new(Automation::new().with_automation_roots(roots).with_clock(|| 1_700_000_000));
+    let found = ok(&mut server, "text_font_files", json!({}));
+    for family in ["Inter", "JetBrains Mono"] {
+        assert!(found["fonts"].as_array().is_some_and(|f| f.iter().any(|f| f["family"] == family)), "{family}: {found}");
+    }
+}
+
+/// The most read roots a scan takes still leave it room to look inside them: the roots do not use
+/// up the scan's budget for files and folders.
+#[test]
+fn font_discovery_looks_inside_roots_when_given_the_most_roots() {
+    /// Removes the test's folders even when an assertion fails, so runs don't pile them up.
+    struct Cleanup(PathBuf);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let base = folders("fonts-many");
+    let _cleanup = Cleanup(base.clone());
+    let roots: Vec<PathBuf> = (0..MAX_ROOTS).map(|i| base.join(format!("r{i}"))).collect();
+    for r in &roots {
+        std::fs::create_dir_all(r).unwrap();
+    }
+    let fonts = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/fonts");
+    std::fs::copy(fonts.join("Inter-Regular.ttf"), roots[0].join("Inter-Regular.ttf")).unwrap();
+    std::fs::copy(fonts.join("JetBrainsMono-Regular.ttf"), roots[MAX_ROOTS - 1].join("JetBrainsMono-Regular.ttf")).unwrap();
+    let roots = AutomationRoots::with_folders(&roots, &[]).unwrap();
+    let mut server = McpServer::new(Automation::new().with_automation_roots(roots).with_clock(|| 1_700_000_000));
+    let found = ok(&mut server, "text_font_files", json!({}));
+    for family in ["Inter", "JetBrains Mono"] {
+        assert!(found["fonts"].as_array().is_some_and(|f| f.iter().any(|f| f["family"] == family)), "{family}: {found}");
+    }
+}
+
+/// A read root that contains `--root` is searched where the two meet: `--root` itself, and
+/// nothing of the read root outside it.
+#[test]
+fn font_discovery_searches_dash_dash_root_inside_a_read_root() {
+    let base = folders("fonts-meet");
+    let fonts = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/fonts");
+    std::fs::create_dir_all(base.join("in/fonts")).unwrap();
+    std::fs::copy(fonts.join("Inter-Regular.ttf"), base.join("in/fonts/Inter-Regular.ttf")).unwrap();
+    std::fs::copy(fonts.join("JetBrainsMono-Regular.ttf"), base.join("outside/JetBrainsMono-Regular.ttf")).unwrap();
+    // The only read root is `base`, which holds `--root` (`base/in`) and also `base/outside`.
+    let roots = AutomationRoots::with_folders(std::slice::from_ref(&base), &[]).unwrap();
+    let mut server = McpServer::new(Automation::new().with_root(base.join("in")).unwrap().with_automation_roots(roots));
+    let found = ok(&mut server, "text_font_files", json!({}));
+    let families: Vec<_> = found["fonts"].as_array().into_iter().flatten().filter_map(|f| f["family"].as_str()).collect();
+    assert!(families.contains(&"Inter"), "--root is searched: {found}");
+    assert!(!families.contains(&"JetBrains Mono"), "nothing outside --root is: {found}");
+}
+
+/// A read root that `--root` rules out is skipped by `text_font_files`; the others are still searched.
+#[test]
+fn font_discovery_skips_a_read_root_outside_dash_dash_root() {
+    let base = folders("fonts-root");
+    let (inside, outside) = (base.join("in/fonts"), base.join("outside"));
+    std::fs::create_dir_all(&inside).unwrap();
+    let font = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/fonts/Inter-Regular.ttf");
+    std::fs::copy(font, inside.join("Inter-Regular.ttf")).unwrap();
+    let roots = AutomationRoots::with_folders(&[outside.clone(), inside], &[]).unwrap();
+    let mut server = McpServer::new(Automation::new().with_root(base.join("in")).unwrap().with_automation_roots(roots));
+    let found = ok(&mut server, "text_font_files", json!({}));
+    assert!(found["fonts"].as_array().is_some_and(|f| f.iter().any(|f| f["family"] == "Inter")), "{found}");
+    // With nothing left to search, the refusal is the one that ruled the root out.
+    let only_outside = AutomationRoots::with_folders(&[outside], &[]).unwrap();
+    let mut server = McpServer::new(Automation::new().with_root(base.join("in")).unwrap().with_automation_roots(only_outside));
+    refused(&mut server, "text_font_files", json!({}), "outside the allowed directory");
 }
 
 #[test]

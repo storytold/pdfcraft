@@ -35,13 +35,14 @@ use pdfcraft_render::{PageRenderer, RenderConfig, RenderRequest, RequestKind, in
 macro_rules! mcp_usage {
     () => {
         "\
-pdfcraft-cli mcp    [--root DIR] [--compact] [--automation-read-root DIR] [--automation-write-root DIR]
+pdfcraft-cli mcp    [--root DIR] [--compact] [--automation-read-root DIR]... [--automation-write-root DIR]...
                                                            MCP server on stdin/stdout (opt-in)
                                                            --compact lists a core set of tools plus tool_search and tool_call
                                                            --automation-read-root / --automation-write-root confine the files the
                                                            agent's tools read (open, combine, import, fonts, certificates…) and
                                                            write (save, export, extract, split, reports…) to DIR, links followed;
-                                                           a root left out grants none of its access. --root, when also given,
+                                                           each may be repeated, a path then has to lie in one of them; a kind
+                                                           with no root grants none of its access. --root, when also given,
                                                            applies as well
 "
     };
