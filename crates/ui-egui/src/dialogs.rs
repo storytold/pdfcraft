@@ -1320,7 +1320,8 @@ fn dialog_print(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending) -> 
     let view = &mut app.views[i];
     view.set_print_grayscale(app.print_draft.grayscale);
     view.queue_print_previews(&rasters);
-    let (go, cancel) = crate::print_ui::body(ui, &mut app.print_draft, &t, &sizes, &labels, &mut |p| {
+    let on_disk = doc.on_disk.is_some();
+    let (go, cancel) = crate::print_ui::body(ui, &mut app.print_draft, &t, on_disk, &sizes, &labels, &mut |p| {
         view.need_thumbnail(p, true);
         view.page_preview(p)
     });
@@ -1805,8 +1806,7 @@ fn finish_redactions_and_fields(app: &mut PdfCraftApp, req: &mut Pending) {
     match req.redact_now.take() {
         Some(Dialog::RedactPages) => app.redact_pages(),
         Some(Dialog::RedactSearch) => {
-            let n = app.redact_search();
-            app.redact_search.found = Some(n);
+            app.redact_search.found = app.redact_search();
         }
         Some(Dialog::RemoveHidden) => {
             let which: Vec<pdfcraft_engine::Hidden> = app.hidden_draft.found.iter().filter(|f| f.2 && f.1 > 0).map(|f| f.0).collect();

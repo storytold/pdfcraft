@@ -253,7 +253,7 @@ pub(crate) enum CopyPage {
 /// layer as far as it was read, and the document to read the others from.
 pub(crate) struct DocumentCopyJob {
     pub(crate) pages: Vec<CopyPage>,
-    bytes: std::sync::Arc<Vec<u8>>,
+    source: pdfcraft_render::PdfSource,
     password: Option<std::sync::Arc<str>>,
 }
 
@@ -266,13 +266,15 @@ impl DocumentCopyJob {
                 None => CopyPage::ToRead,
             })
             .collect();
-        DocumentCopyJob { pages, bytes: doc.bytes.clone(), password: doc.password.as_deref().map(std::sync::Arc::from) }
+        DocumentCopyJob { pages, source: doc.source(), password: doc.password.as_deref().map(std::sync::Arc::from) }
     }
 
     /// The document's text in page order, a page per line run. Each page read here is let go
     /// once its text is taken, so a large document never holds every page's text layer at once.
-    /// `None` when `cancel` was set.
-    pub(crate) fn text(self, cancel: &std::sync::atomic::AtomicBool) -> Option<String> {
+    /// `None` when `cancel` was set, and an error when part of a file kept on disk could not be
+    /// read: the text would be short of those pages.
+    pub(crate) fn text(self, cancel: &std::sync::atomic::AtomicBool) -> Option<Result<String, &'static str>> {
+        let failed_reads = self.source.failed_reads();
         let mut renderer: Option<pdfcraft_render::PageRenderer> = None;
         let mut out = String::new();
         let mut push = |text: String| {
@@ -292,7 +294,7 @@ impl DocumentCopyJob {
                 CopyPage::ToRead => {
                     let r = renderer.get_or_insert_with(|| {
                         let config = pdfcraft_render::RenderConfig { password: self.password.clone(), ..Default::default() };
-                        pdfcraft_render::PageRenderer::new(self.bytes.clone(), config)
+                        pdfcraft_render::PageRenderer::new(self.source.clone(), config)
                     });
                     let req = pdfcraft_render::RenderRequest {
                         page,
@@ -305,11 +307,14 @@ impl DocumentCopyJob {
                     if let Some(t) = r.render(req).text {
                         push(t.text_of(0..t.glyphs.len()));
                     }
+                    if self.source.failed_reads() != failed_reads {
+                        return Some(Err(pdfcraft_render::PART_UNREAD));
+                    }
                 }
                 CopyPage::Skip => {}
             }
         }
-        Some(out)
+        Some(Ok(out))
     }
 }
 
@@ -346,6 +351,8 @@ pub(crate) struct OpenRequest {
     pub(crate) after_open: Option<pdfcraft_render::RemoteDestination>,
     pub(crate) recovered: Option<RecoveryMeta>,
     pub(crate) then: Option<&'static str>,
+    /// The document this reads again, in place of opening a new tab.
+    pub(crate) replaces: Option<DocId>,
 }
 
 /// Asks for the permissions password of an open document whose security restricts it, which

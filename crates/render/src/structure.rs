@@ -8,7 +8,7 @@ use std::sync::{
 };
 
 use lopdf::{Dictionary, Error, Object, ObjectId, Result};
-use pdfcraft_cos::{Document, Object as CosObject};
+use pdfcraft_cos::{Document, Object as CosObject, OnDiskFile};
 
 pub(crate) trait Structure {
     fn trailer(&self) -> &Dictionary;
@@ -139,21 +139,51 @@ pub(crate) struct LazyStructure {
     // input object number (which can be sparse or hostile). Only queried objects fill slots.
     objects: Vec<Slot>,
     failed: AtomicBool,
+    /// Stream bodies on disk longer than this read as empty, so that looking at the dictionaries
+    /// of a file's images doesn't read the images.
+    body_limit: usize,
 }
+
+/// How much of a stream on disk inspection reads: its XFA settings and the like, not its images.
+pub(crate) const ON_DISK_BODY_LIMIT: usize = 1 << 20;
 
 impl LazyStructure {
     pub(crate) fn new(bytes: Arc<Vec<u8>>, password: Option<&str>) -> std::result::Result<Self, String> {
         let source = Document::open_with_stream_limit(bytes, password, 256 << 20).map_err(|e| e.to_string())?;
+        Self::of(source, usize::MAX)
+    }
+
+    /// Read a file kept on disk, leaving bodies longer than `body_limit` there.
+    pub(crate) fn on_disk(file: Arc<OnDiskFile>, body_limit: usize) -> std::result::Result<Self, String> {
+        let source = Document::open_on_disk(file, 256 << 20).map_err(|e| e.to_string())?;
+        Self::of(source, body_limit)
+    }
+
+    fn of(source: Document, body_limit: usize) -> std::result::Result<Self, String> {
         if !source.repair_log().is_empty() {
             return Err("the structure requires compatibility repair".into());
         }
         let trailer = convert_dict(source.trailer(), 0).map_err(|e| e.to_string())?;
         let objects = source.object_numbers().into_iter().map(|n| (n, OnceLock::new())).collect();
-        Ok(Self { source, trailer, objects, failed: AtomicBool::new(false) })
+        Ok(Self { source, trailer, objects, failed: AtomicBool::new(false), body_limit })
     }
 
     pub(crate) fn failed(&self) -> bool {
         self.failed.load(Ordering::Relaxed)
+    }
+}
+
+impl LazyStructure {
+    fn converted(&self, object: &CosObject) -> Result<Object> {
+        match object {
+            CosObject::Stream(stream) if stream.raw.is_on_disk() && stream.raw.stored_len() > self.body_limit => {
+                let mut left = lopdf::Stream::new(convert_dict(&stream.dict, 1)?, Vec::new());
+                // What `Stream::new` set for an empty body, back to the length it has on disk.
+                left.dict.set("Length", i64::try_from(stream.raw.stored_len()).unwrap_or(i64::MAX));
+                Ok(Object::Stream(left))
+            }
+            object => convert(object, 0),
+        }
     }
 }
 
@@ -172,7 +202,7 @@ impl Structure for LazyStructure {
         }
         slot.1
             .get_or_init(|| {
-                let result = self.source.try_get(id.0).ok().and_then(|o| convert(&o, 0).ok()).map(Box::new);
+                let result = self.source.try_get(id.0).ok().and_then(|o| self.converted(&o).ok()).map(Box::new);
                 if result.is_none() {
                     self.failed.store(true, Ordering::Relaxed);
                 }

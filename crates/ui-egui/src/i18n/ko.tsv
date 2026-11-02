@@ -6,6 +6,10 @@
 # Untranslated: English text until a translator fills these in.
 	Lowering this forgets the oldest files. At 0 there is no list.	Lowering this forgets the oldest files. At 0 there is no list.
 	Recent files to keep	Recent files to keep
+	Load to edit	Load to edit
+	Loading {name}…	Loading {name}…
+	This large file is being read from disk to save memory, so it can't be edited, filled in or signed yet.	This large file is being read from disk to save memory, so it can't be edited, filled in or signed yet.
+	To print this large file, load all of it first with Load to edit.	To print this large file, load all of it first with Load to edit.
 
 	Menu	메뉴
 	File	파일

@@ -84,7 +84,7 @@ fn strict_text_collection_refuses_partial_results_but_keeps_successful_pages() {
 fn search_keeps_matches_around_failed_pages_and_continuations() {
     let mut a = Automation::new();
     let id = search_document(&mut a, 16);
-    let mut extract = |bytes: &Arc<Vec<u8>>, password, pages: &[usize]| {
+    let mut extract = |bytes: &PdfSource, password, pages: &[usize]| {
         extract_parallel(bytes, password, pages)
             .into_iter()
             .map(|(p, result)| (p, if [2, 6].contains(&p) { Err(format!("synthetic page {} failure", p + 1)) } else { result }))
@@ -144,6 +144,92 @@ fn search_bounds_warning_volume_and_does_not_reach_distant_failures() {
     let warnings = failures["warnings"].as_array().unwrap();
     assert_eq!(warnings.len(), FIND_MAX_WARNINGS);
     assert!(warnings.iter().all(|w| w["error"].as_str().unwrap().len() <= FIND_MAX_WARNING_BYTES && w["error_truncated"] == true));
+}
+
+/// A page of text over a stream large enough to stay on disk, in `dir` as `large.pdf`.
+fn large_file(dir: &Path) -> Vec<u8> {
+    let image = "x".repeat(60_000);
+    let pdf = pdfcraft_testkit::Pdf::new()
+        .obj("<</Type/Catalog/Pages 2 0 R>>")
+        .obj("<</Type/Pages/Kids[3 0 R]/Count 1>>")
+        .obj("<</Type/Page/Parent 2 0 R/MediaBox[0 0 200 200]/Contents 4 0 R/Resources<</Font<</F 5 0 R>>>>>>")
+        .stream("", format!("BT /F 12 Tf 10 100 Td (Far from memory) Tj ET % {image}"))
+        .obj("<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>")
+        .build();
+    std::fs::write(dir.join("large.pdf"), &pdf).unwrap();
+    pdf
+}
+
+#[test]
+fn a_file_opened_on_disk_reads_saves_as_a_copy_and_refuses_edits() {
+    let dir = std::env::temp_dir().join(format!("pdfcraft-automation-on-disk-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let pdf = large_file(&dir);
+    let mut a = Automation::new().with_root(&dir).unwrap();
+    let opened = json(&mut a, "doc_open", json!({ "path": "large.pdf", "on_disk": true }));
+    assert_eq!(opened["on_disk"], true);
+    assert_eq!(opened["editable"], false);
+    assert!(opened["read_only_reason"].as_str().is_some_and(|why| why.contains("large file")));
+    let doc = opened["doc"].clone();
+    let text = json(&mut a, "text_extract", json!({ "doc": doc }));
+    assert!(text.to_string().contains("Far from memory"), "{text}");
+    assert!(a.call("page_render", &json!({ "doc": doc, "page": 1 })).is_ok());
+    assert_eq!(json(&mut a, "doc_info", json!({ "doc": doc }))["file_size"], pdf.len());
+    let saved = json(&mut a, "doc_save", json!({ "doc": doc, "path": "copy.pdf" }));
+    assert_eq!(saved["bytes"], pdf.len());
+    assert_eq!(std::fs::read(dir.join("copy.pdf")).unwrap(), pdf, "the file itself, not the held bytes");
+    assert!(a.call("page_rotate", &json!({ "doc": doc, "pages": [1], "degrees": 90 })).is_err());
+    json(&mut a, "doc_save", json!({ "doc": doc }));
+    assert_eq!(std::fs::read(dir.join("large.pdf")).unwrap(), pdf, "saving over itself changes nothing");
+    let flattened = a.call("doc_save", &json!({ "doc": doc, "path": "flat.pdf", "flatten_fill_sign": true }));
+    assert!(flattened.is_err(), "a copy is not a flattened file");
+    assert!(!dir.join("flat.pdf").exists());
+    let rewritten = a.call("doc_save", &json!({ "doc": doc, "path": "full.pdf", "full": true }));
+    assert!(rewritten.is_err(), "and it is not a full rewrite");
+    assert!(!dir.join("full.pdf").exists());
+    std::fs::write(dir.join("large.pdf"), b"another program's newer file").unwrap();
+    assert!(a.call("doc_save", &json!({ "doc": doc })).is_err());
+    assert_eq!(std::fs::read(dir.join("large.pdf")).unwrap(), b"another program's newer file", "a newer file stays");
+    std::fs::remove_file(dir.join("large.pdf")).unwrap();
+    assert!(a.call("doc_save", &json!({ "doc": doc })).is_err(), "and a save does not say it kept a file that has gone");
+    assert!(!dir.join("large.pdf").exists());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_file_opened_on_disk_is_its_own_path_however_that_is_spelled() {
+    // Under the working directory, so that the same file has a relative and an absolute path.
+    let folder = format!("pdfcraft-automation-spelling-{}", std::process::id());
+    let dir = std::env::current_dir().unwrap().join(&folder);
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    large_file(&dir);
+    let mut a = Automation::new();
+    let doc = json(&mut a, "doc_open", json!({ "path": format!("{folder}/large.pdf"), "on_disk": true }))["doc"].clone();
+    // Renamed over it: the file still reads as it was, so a copy would go through.
+    std::fs::write(dir.join("newer.pdf"), b"another program's newer file").unwrap();
+    std::fs::rename(dir.join("newer.pdf"), dir.join("large.pdf")).unwrap();
+    let saved = a.call("doc_save", &json!({ "doc": doc, "path": dir.join("large.pdf") }));
+    let kept = std::fs::read(dir.join("large.pdf")).unwrap();
+    // It holds the file open, which some drives won't delete until it lets go.
+    drop(a);
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(saved.is_err());
+    assert_eq!(kept, b"another program's newer file");
+}
+
+#[test]
+fn a_file_is_read_whole_unless_it_is_asked_or_too_large_to_stay_on_disk() {
+    let dir = std::env::temp_dir().join(format!("pdfcraft-automation-whole-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    large_file(&dir);
+    let mut a = Automation::new().with_root(&dir).unwrap();
+    let opened = json(&mut a, "doc_open", json!({ "path": "large.pdf" }));
+    assert_eq!(opened["on_disk"], false);
+    assert_eq!(opened["editable"], true);
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]

@@ -157,6 +157,7 @@ impl DocView {
         self.forms.unbaked.clear();
         self.texts.clear();
         self.text_failed.clear();
+        self.text_unread.clear();
         self.errors.clear();
         self.slow_pages.clear();
         self.waiting_since.clear();
@@ -200,6 +201,7 @@ impl DocView {
         self.slow_pages.remove(&page);
         self.texts.remove(&page);
         self.text_failed.remove(&page);
+        self.text_unread.remove(&page);
         self.errors.remove(&page);
         self.last_queue.clear();
         if self.selection.is_some_and(|s| s.page == page) {
@@ -527,8 +529,12 @@ impl DocView {
                     self.refresh_find_page(r.request.page);
                 }
                 None => {
-                    log::warn!("page {} text: {}", r.request.page + 1, r.error.unwrap_or_default());
+                    let error = r.error.unwrap_or_default();
+                    log::warn!("page {} text: {error}", r.request.page + 1);
                     self.text_failed.insert(r.request.page);
+                    if error == pdfcraft_render::PART_UNREAD {
+                        self.text_unread.insert(r.request.page);
+                    }
                     if let Some(f) = self.find.as_mut() {
                         let previous = f.current.and_then(|c| f.matches.get(c).cloned());
                         let follow = f.follow_page(self.current);

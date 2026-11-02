@@ -65,6 +65,9 @@ impl Document {
     /// was saved. A linearized file's first-page section belongs to the revision it precedes, so
     /// ends only ever increase. Empty for a reconstructed file.
     pub fn revision_ends(&self) -> Vec<usize> {
+        if self.on_disk.is_some() {
+            return Vec::new();
+        }
         let d = &self.data[..];
         let mut ends: Vec<usize> = Vec::with_capacity(self.revisions.len());
         for r in self.revisions.iter() {
@@ -130,7 +133,7 @@ impl Document {
         match self.xref_entry(num) {
             None | Some(XrefEntry::Free { .. }) => true,
             Some(XrefEntry::InFile { offset, .. }) => {
-                let at = |off: usize| matches!(parse_indirect_shared(&self.data, off, &|_| None, &self.endstreams), Ok((id, _)) if id.num == num);
+                let at = |off: usize| self.held_offset(off).is_some_and(|off| matches!(self.parse_at(off, &|_| None), Ok((id, _)) if id.num == num));
                 // Offsets may count from a header that does not start the file.
                 usize::try_from(offset).is_ok_and(|off| at(off) || (self.header_offset != 0 && at(off.saturating_add(self.header_offset))))
             }
@@ -518,7 +521,20 @@ impl Document {
 
     /// Opened with a tighter stream limit than editing uses ([`Document::open_with_stream_limit`]).
     pub(crate) fn stream_limited(&self) -> bool {
-        self.stream_limit < crate::object::MAX_DECODED
+        self.stream_limit < crate::object::MAX_DECODED || self.on_disk.is_some()
+    }
+
+    /// Where file offset `offset` is in `data`: the same place, unless stream bodies stayed on disk.
+    pub(super) fn held_offset(&self, offset: usize) -> Option<usize> {
+        match &self.on_disk {
+            Some(file) => file.held_offset(offset as u64),
+            None => Some(offset),
+        }
+    }
+
+    /// Parse the object at `at`, a position in `data`.
+    pub(super) fn parse_at(&self, at: usize, resolve_length: &dyn Fn(ObjRef) -> Option<i64>) -> Result<(ObjRef, Object), CosError> {
+        parse_indirect_shared(&self.data, at, resolve_length, &self.endstreams, self.on_disk.as_ref())
     }
 
     pub(crate) fn object_reader(&self) -> ObjectReader {
@@ -544,7 +560,7 @@ impl Document {
                     length
                 };
                 let off = offset as usize;
-                let at = |off: usize| match parse_indirect_shared(&self.data, off, &resolve, &self.endstreams) {
+                let at = |off: usize| match self.parse_at(self.held_offset(off)?, &resolve) {
                     Ok((id, o)) if id.num == num => Some(self.decrypted(id, o)),
                     _ => None,
                 };
@@ -610,7 +626,7 @@ impl Document {
             if p > 0 && !is_whitespace(data[p - 1]) {
                 continue;
             }
-            if let Ok((id, o)) = parse_indirect_shared(data, p, &|_| None, &self.endstreams)
+            if let Ok((id, o)) = self.parse_at(p, &|_| None)
                 && id.num == num
             {
                 found = Some((id, o)); // keep the last (newest) definition

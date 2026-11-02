@@ -1,21 +1,46 @@
 //! Stream data that can share a larger buffer instead of copying out of it.
 
 use std::ops::{Deref, Range};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
+
+use crate::on_disk::{DiskBody, OnDiskFile};
 
 /// A stream's bytes: a buffer of their own, or a range of a larger shared buffer. Streams read
 /// from a file point into the file's bytes, which the document keeps anyway, so caching a
-/// parsed stream costs its dictionary and not a second copy of its data.
+/// parsed stream costs its dictionary and not a second copy of its data. A stream of a file kept
+/// on disk is read when its bytes are first wanted, and kept until these bytes are dropped.
 #[derive(Clone, Default)]
 pub struct Bytes {
     buf: Arc<Vec<u8>>,
     range: Range<usize>,
+    on_disk: Option<Arc<OnDisk>>,
+}
+
+struct OnDisk {
+    file: Arc<OnDiskFile>,
+    body: DiskBody,
+    read: OnceLock<Vec<u8>>,
 }
 
 impl Bytes {
     /// `range` of `buf`, without copying; `None` when the range is not within `buf`.
     pub(crate) fn view(buf: &Arc<Vec<u8>>, range: Range<usize>) -> Option<Self> {
-        (range.start <= range.end && range.end <= buf.len()).then(|| Self { buf: buf.clone(), range })
+        (range.start <= range.end && range.end <= buf.len()).then(|| Self { buf: buf.clone(), range, on_disk: None })
+    }
+
+    /// `body` of `file`, read when first wanted.
+    pub(crate) fn on_disk(file: Arc<OnDiskFile>, body: DiskBody) -> Self {
+        Self { on_disk: Some(Arc::new(OnDisk { file, body, read: OnceLock::new() })), ..Self::default() }
+    }
+
+    /// How long these bytes are, without reading them from disk.
+    pub fn stored_len(&self) -> usize {
+        self.on_disk.as_ref().map_or(self.range.len(), |d| usize::try_from(d.body.len).unwrap_or(usize::MAX))
+    }
+
+    /// Whether these bytes are read from disk when wanted.
+    pub fn is_on_disk(&self) -> bool {
+        self.on_disk.is_some()
     }
 
     /// Whether these bytes keep alive a larger buffer than themselves that isn't `owner`.
@@ -37,14 +62,14 @@ impl Bytes {
 impl From<Vec<u8>> for Bytes {
     fn from(v: Vec<u8>) -> Self {
         let range = 0..v.len();
-        Self { buf: Arc::new(v), range }
+        Self { buf: Arc::new(v), range, on_disk: None }
     }
 }
 
 impl From<Arc<Vec<u8>>> for Bytes {
     fn from(buf: Arc<Vec<u8>>) -> Self {
         let range = 0..buf.len();
-        Self { buf, range }
+        Self { buf, range, on_disk: None }
     }
 }
 
@@ -52,6 +77,10 @@ impl Deref for Bytes {
     type Target = [u8];
 
     fn deref(&self) -> &[u8] {
+        if let Some(d) = &self.on_disk {
+            // A read that fails reads as empty; `OnDiskFile::failed_reads` has it.
+            return d.read.get_or_init(|| d.file.read_body(d.body).unwrap_or_default());
+        }
         // `view` and `From` only build in-bounds ranges; an empty slice keeps this panic-free.
         self.buf.get(self.range.clone()).unwrap_or_default()
     }

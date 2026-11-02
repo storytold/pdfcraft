@@ -366,11 +366,11 @@ impl Automation {
         let record = json!({
             "schema": 1,
             "date": format!("{y}-{m:02}-{d:02}"),
-            "before": { "name": before.name, "sha256": hash(before.bytes.as_slice()), "summary": {
+            "before": { "name": before.name, "sha256": hash(before.whole().map_err(failed)?.as_slice()), "summary": {
                 "passed": before_report.count(Status::Passed), "failed": before_report.count(Status::Failed),
                 "manual": before_report.count(Status::Manual), "skipped": before_report.count(Status::Skipped),
             } },
-            "after": { "name": after.name, "sha256": hash(after.bytes.as_slice()), "summary": {
+            "after": { "name": after.name, "sha256": hash(after.whole().map_err(failed)?.as_slice()), "summary": {
                 "passed": after_report.count(Status::Passed), "failed": after_report.count(Status::Failed),
                 "manual": after_report.count(Status::Manual), "skipped": after_report.count(Status::Skipped),
             } },
@@ -393,7 +393,7 @@ impl Automation {
     pub(crate) fn a11y_review_save(&self, a: &Args) -> Result<Value> {
         let doc = self.doc(a)?;
         let decisions = review_decisions(a.get("decisions").ok_or_else(|| Args::missing("decisions"))?, doc.info.pages.len())?;
-        let hash = review_hash(doc.bytes.as_slice());
+        let hash = review_hash(doc.whole().map_err(failed)?.as_slice());
         let path = self.resolve(a.str("path")?, true)?;
         if path.exists() {
             let prior = read_review_sidecar(&path)?;
@@ -413,7 +413,7 @@ impl Automation {
         let doc = self.doc(a)?;
         let path = self.resolve(a.str("path")?, false)?;
         let review = parse_review_sidecar(&read_review_sidecar(&path)?)?;
-        if review["sha256"] != review_hash(doc.bytes.as_slice()) {
+        if review["sha256"] != review_hash(doc.whole().map_err(failed)?.as_slice()) {
             return Err(failed("review sidecar belongs to a different PDF revision"));
         }
         Ok(json!({ "path": path.to_string_lossy(), "review": review }))

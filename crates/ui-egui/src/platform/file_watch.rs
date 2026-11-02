@@ -333,7 +333,8 @@ impl PdfCraftApp {
     /// The documents to watch: every open one with a file, while the preference is on.
     fn watched(&self) -> impl Iterator<Item = (DocId, &str, Option<Stamp>, u64)> {
         self.views.iter().filter(|_| self.reload_changed_files).filter_map(|v| {
-            let path = self.session.get(v.id)?.path.as_deref()?;
+            let doc = self.session.get(v.id).filter(|d| d.on_disk.is_none())?;
+            let path = doc.path.as_deref()?;
             Some((v.id, path, self.watch.known.get(&v.id).copied(), self.watch.epoch(v.id)))
         })
     }
@@ -447,24 +448,28 @@ impl PdfCraftApp {
 
     /// Open `bytes` in place of tab `i`'s document, keeping the tab and the reader's place. A
     /// version that can't be opened leaves the document as it was, and says so.
-    fn reload_view(&mut self, i: usize, bytes: Arc<Vec<u8>>) {
+    pub(crate) fn reload_view(&mut self, i: usize, bytes: Arc<Vec<u8>>) {
         let Some(id) = self.views.get(i).map(|v| v.id) else { return };
         match self.session.reload(id, bytes) {
-            Ok(()) => {
-                // Whatever was unsaved is gone, so there is nothing left to recover.
-                self.forget_recovery(id);
-                if let (Some(view), Some(doc)) = (self.views.get_mut(i), self.session.get(id)) {
-                    view.document_replaced(&doc.info);
-                }
-                // What the form's scripts said while it opened, as on opening.
-                let out = self.session.take_js_output(id);
-                self.handle_js(id, out);
-            }
+            Ok(()) => self.document_reloaded(i),
             Err(e) => {
                 let name = self.session.get(id).map(|d| d.name.clone()).unwrap_or_default();
                 self.notify_fmt("Couldn't reload {name}: {e}", &[("name", &name), ("e", &e.to_string())]);
             }
         }
+    }
+
+    /// Tab `i`'s document was just read again, in its place.
+    pub(crate) fn document_reloaded(&mut self, i: usize) {
+        let Some(id) = self.views.get(i).map(|v| v.id) else { return };
+        // Whatever was unsaved is gone, so there is nothing left to recover.
+        self.forget_recovery(id);
+        if let (Some(view), Some(doc)) = (self.views.get_mut(i), self.session.get(id)) {
+            view.document_replaced(&doc.info);
+        }
+        // What the form's scripts said while it opened, as on opening.
+        let out = self.session.take_js_output(id);
+        self.handle_js(id, out);
     }
 }
 

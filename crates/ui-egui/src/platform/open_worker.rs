@@ -12,7 +12,10 @@ use pdfcraft_render::OpenError;
 const MAX_QUEUED_OPENS: usize = 16;
 
 pub(crate) enum Input {
+    /// A file, which stays on disk when it is large and can.
     Path(PathBuf),
+    /// A file read whole however large it is, to edit it.
+    WholePath(PathBuf),
     RemotePath(PathBuf),
     Recovery(RecoveryStore, String),
     Bytes(Arc<Vec<u8>>),
@@ -161,10 +164,17 @@ fn run(queue: Arc<(Mutex<Queue>, Condvar)>) {
 
 fn prepare(job: Job) -> ResultKind {
     let bytes = match &job.input {
-        Input::Path(path) => match std::fs::read(path) {
-            Ok(bytes) => Arc::new(bytes),
-            Err(error) => return ResultKind::ReadFailed(error.to_string()),
-        },
+        Input::Path(path) | Input::WholePath(path) => {
+            if matches!(job.input, Input::Path(_))
+                && let Some(prepared) = job.context.prepare_on_disk(job.name.clone(), path)
+            {
+                return ResultKind::Prepared { bytes: Arc::default(), result: Box::new(Ok(prepared)) };
+            }
+            match std::fs::read(path) {
+                Ok(bytes) => Arc::new(bytes),
+                Err(error) => return ResultKind::ReadFailed(error.to_string()),
+            }
+        }
         Input::RemotePath(path) => match pdfcraft_engine::read_remote_document(path) {
             Ok(bytes) => Arc::new(bytes),
             Err(error) => return ResultKind::RemoteFailed(error.to_string()),

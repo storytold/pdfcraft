@@ -352,6 +352,7 @@ impl PdfCraftApp {
                     name: meta.name.clone(),
                     path: None,
                     stamp: None,
+                    replaces: None,
                     input: crate::open_worker::Input::Recovery(store.clone(), key.clone()),
                     password: None,
                     activate: true,

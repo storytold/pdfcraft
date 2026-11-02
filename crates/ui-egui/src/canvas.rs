@@ -521,6 +521,8 @@ pub struct DocView {
     /// Text layers, extracted in the background on demand (selection, find, copy).
     pub(crate) texts: HashMap<usize, Arc<PageText>>,
     pub(crate) text_failed: HashSet<usize>,
+    /// Failed pages the file couldn't give: a copy of all the text refuses them.
+    pub(crate) text_unread: HashSet<usize>,
     pub find: Option<Find>,
     selection: Option<Selection>,
     /// Select All while scrolling continuously (#2639): the text of every page of the document,
@@ -919,6 +921,7 @@ impl DocView {
             tiles: HashMap::new(),
             texts: HashMap::new(),
             text_failed: HashSet::new(),
+            text_unread: HashSet::new(),
             find: None,
             selection: None,
             all_text: false,
@@ -3030,6 +3033,14 @@ fn apply_notice(app: &mut PdfCraftApp, index: usize, notice: Option<Notice>) {
         Some(Notice::Console) => app.dialog = Some(crate::Dialog::JsConsole),
         // Back on in Preferences ▸ General.
         Some(Notice::HideSecured) => app.show_secured_notice = false,
+        #[cfg(not(target_arch = "wasm32"))]
+        Some(Notice::LoadWhole) => {
+            if let Some(id) = app.views.get(index).map(|view| view.id) {
+                app.load_whole(id);
+            }
+        }
+        #[cfg(target_arch = "wasm32")]
+        Some(Notice::LoadWhole) => {}
         None => {}
     }
 }

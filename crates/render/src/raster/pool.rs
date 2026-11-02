@@ -1,7 +1,7 @@
 use super::{
-    Arc, AssertUnwindSafe, AtomicRenderStats, InterpreterSettings, JoinHandle, Mutex, Ordering, PageRenderer, Pdf, Pixels, RenderCache, RenderConfig,
-    RenderRequest, RenderStats, RenderedPage, RequestFailureKey, RequestKind, ResultReceiver, Stopwatch, SyncSender, WorkQueue, catch_unwind, finish,
-    panic_message, parse, render_page, take_warnings, warning_settings,
+    Arc, AssertUnwindSafe, AtomicRenderStats, InterpreterSettings, JoinHandle, Mutex, Ordering, PageRenderer, Pdf, PdfSource, Pixels, RenderCache,
+    RenderConfig, RenderRequest, RenderStats, RenderedPage, RequestFailureKey, RequestKind, ResultReceiver, Stopwatch, SyncSender, WorkQueue,
+    all_read, catch_unwind, finish, panic_message, parse, render_page, take_warnings, warning_settings,
 };
 #[cfg(not(target_arch = "wasm32"))]
 use super::{AtomicBool, Receiver, sync_channel};
@@ -241,7 +241,7 @@ pub struct RenderPool {
     wake: Mutex<Vec<SyncSender<()>>>,
     pub(super) results: ResultReceiver,
     pub(super) results_tx: Arc<WorkQueue>,
-    bytes: Arc<Vec<u8>>,
+    source: PdfSource,
     pub(super) config: RenderConfig,
     pub(super) _workers: Mutex<Vec<JoinHandle<()>>>,
     stuck_after: std::time::Duration,
@@ -253,11 +253,11 @@ pub struct RenderPool {
 }
 
 impl RenderPool {
-    pub fn new(bytes: Arc<Vec<u8>>, threads: usize, config: RenderConfig) -> Self {
-        Self::with_mode(bytes, threads, config, false)
+    pub fn new(source: impl Into<PdfSource>, threads: usize, config: RenderConfig) -> Self {
+        Self::with_mode(source.into(), threads, config, false)
     }
 
-    fn with_mode(bytes: Arc<Vec<u8>>, threads: usize, config: RenderConfig, inline: bool) -> Self {
+    fn with_mode(source: PdfSource, threads: usize, config: RenderConfig, inline: bool) -> Self {
         let threads = if inline || cfg!(target_arch = "wasm32") { 0 } else { threads.max(1) };
         let shared = Arc::new(Shared::default());
         let results_tx = shared.queue.clone();
@@ -267,7 +267,7 @@ impl RenderPool {
             wake: Mutex::new(Vec::new()),
             results,
             results_tx,
-            bytes: bytes.clone(),
+            source: source.clone(),
             config: config.clone(),
             _workers: Mutex::new(Vec::new()),
             stuck_after: STUCK_AFTER,
@@ -279,7 +279,7 @@ impl RenderPool {
             pool.spawn_worker();
         }
         if lock(&pool._workers).is_empty() {
-            pool.inline = Some(std::cell::RefCell::new(PageRenderer::new(bytes, config)));
+            pool.inline = Some(std::cell::RefCell::new(PageRenderer::new(source, config)));
         }
         pool
     }
@@ -298,7 +298,7 @@ impl RenderPool {
                 (busy.len() - 1, stop)
             };
             let (wtx, wrx) = sync_channel::<()>(1);
-            let (shared, out, bytes, config) = (self.shared.clone(), self.results_tx.clone(), self.bytes.clone(), self.config.clone());
+            let (shared, out, bytes, config) = (self.shared.clone(), self.results_tx.clone(), self.source.clone(), self.config.clone());
             match std::thread::Builder::new().name(format!("pdfcraft-render-{id}")).spawn(move || worker(id, bytes, config, shared, wrx, out, stop)) {
                 Ok(h) => {
                     lock(&self.wake).push(wtx);
@@ -314,8 +314,8 @@ impl RenderPool {
     }
 
     /// A pool without worker threads: renders inside `try_recv` (the web path; also used in tests).
-    pub fn new_inline(bytes: Arc<Vec<u8>>, config: RenderConfig) -> Self {
-        Self::with_mode(bytes, 0, config, true)
+    pub fn new_inline(source: impl Into<PdfSource>, config: RenderConfig) -> Self {
+        Self::with_mode(source.into(), 0, config, true)
     }
 
     /// `true` when rendering happens on the caller's thread (no worker threads available).
@@ -520,7 +520,7 @@ pub(super) fn worker_settings(config: &RenderConfig, stop: &Arc<std::sync::atomi
 #[cfg(not(target_arch = "wasm32"))]
 pub(super) fn worker(
     id: usize,
-    bytes: Arc<Vec<u8>>,
+    source: PdfSource,
     config: RenderConfig,
     shared: Arc<Shared>,
     wake: Receiver<()>,
@@ -528,8 +528,8 @@ pub(super) fn worker(
     stop: Arc<std::sync::atomic::AtomicBool>,
 ) {
     let warnings = Arc::new(Mutex::new(Vec::new()));
-    // A local cell keeps Pdf borrows used by RenderCache stable. Drop both on an
-    // epoch change/panic before publishing an error or taking another request.
+    // A local cell keeps Pdf borrows used by RenderCache stable. Drop both on an epoch
+    // change, panic or failed read before publishing an error or taking another request.
     loop {
         let reset_result = {
             let parsed = std::cell::OnceCell::new();
@@ -615,7 +615,7 @@ pub(super) fn worker(
                                 }
                             }
                             shared.stats.parser_builds.fetch_add(1, Ordering::Relaxed);
-                            parse(&bytes, config.password.as_deref())
+                            parse(&source, config.password.as_deref())
                         };
                         match shared.parser.acquire(load, || {
                             request_cancelled.load(Ordering::Acquire)
@@ -712,13 +712,14 @@ pub(super) fn worker(
                 }
                 let settings = warning_settings(&worker_settings(&config, &request_cancelled), warnings.clone());
                 lock(&warnings).clear();
+                let failed_reads = source.failed_reads();
                 let r = catch_unwind(AssertUnwindSafe(|| {
                     #[cfg(test)]
                     if *lock(&shared.panic_page) == Some(req.page) {
                         panic!("injected page panic");
                     }
                     match pdf {
-                        Some(pdf) => render_page(pdf, cache, &settings, &config, req),
+                        Some(pdf) => all_read(render_page(pdf, cache, &settings, &config, req), &source, failed_reads),
                         None => Err(("the document could not be parsed".into(), false)),
                     }
                 }))
@@ -744,7 +745,9 @@ pub(super) fn worker(
                 if *shared_generation {
                     valid.push(shared.parser.valid.clone());
                 }
-                if *shared_generation && !shared.parser.valid.load(Ordering::Acquire) {
+                // The cache may hold what failed to read: a later page would use that and read nothing.
+                let read_failed = source.failed_reads() != failed_reads;
+                if read_failed || (*shared_generation && !shared.parser.valid.load(Ordering::Acquire)) {
                     break Some((finish(req, start, r, request_warnings), valid));
                 }
                 if out.send_valid_with_tokens(finish(req, start, r, request_warnings), valid).is_err() {

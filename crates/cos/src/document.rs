@@ -11,6 +11,7 @@ use std::sync::{Arc, Mutex, Weak};
 
 use crate::CosError;
 use crate::object::{Dict, MAX_DECODED, MAX_JBIG2_GLOBALS, ObjRef, Object, Stream};
+use crate::on_disk::OnDiskFile;
 use crate::parser::{EndstreamIndex, Lexer, is_whitespace, parse_indirect, parse_indirect_shared};
 
 mod objects;
@@ -36,6 +37,8 @@ pub struct Document {
     data: Arc<Vec<u8>>,
     /// Where `endstream` occurs in `data`; see [`EndstreamIndex`].
     endstreams: Arc<EndstreamIndex>,
+    /// The file `data` is held from, when it stayed on disk: see [`Document::open_on_disk`].
+    on_disk: Option<Arc<OnDiskFile>>,
     source_identity: Arc<()>,
     entries: Arc<XrefIndex>,
     trailer: Dict,

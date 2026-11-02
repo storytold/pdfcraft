@@ -214,7 +214,7 @@ mod tests {
         draft.cancel();
         assert!(cancel.load(Ordering::Relaxed));
         let bytes = pdfcraft_engine::Session::new().create_blank(200.0, 300.0, 1).unwrap();
-        let source = || ExportSource { bytes: bytes.clone(), pages: 1, sizes: vec![(200.0, 300.0)], config: Default::default() };
+        let source = || ExportSource { bytes: bytes.clone().into(), pages: 1, sizes: vec![(200.0, 300.0)], config: Default::default() };
         draft.update(key, source, &egui::Context::default(), true);
         assert!(draft.result.is_none()); // still one worker, no competing replacement
         tx.send(Ok(Report { total: word_count::Counts { words: 999, ..Default::default() }, ..Default::default() })).unwrap();

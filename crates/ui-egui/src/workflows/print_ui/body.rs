@@ -79,12 +79,13 @@ fn combo<T: PartialEq + Copy>(ui: &mut egui::Ui, id: &str, name: &str, value: &m
         .accessible_name(name);
 }
 
-/// Draw the dialog. `thumb` gives a page's thumbnail texture when there is one. Returns
-/// (print, cancel).
+/// Draw the dialog. `thumb` gives a page's thumbnail texture when there is one, and `on_disk` says
+/// the document can't print until all of it is loaded. Returns (print, cancel).
 pub(crate) fn body(
     ui: &mut egui::Ui,
     d: &mut PrintDraft,
     t: &Tokens,
+    on_disk: bool,
     sizes: &[(f64, f64)],
     labels: &[String],
     thumb: &mut dyn FnMut(usize) -> Option<egui::TextureId>,
@@ -537,11 +538,18 @@ pub(crate) fn body(
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
         let looking = still_looking(d);
         let label = if d.printer.is_some() || looking { tl!("Print") } else { tl!("Save as PDF") };
-        if ui.add_enabled_ui(settings.is_ok() && !sheets.is_empty() && !looking, |ui| widgets::pill_button(ui, label, true)).inner.clicked() {
+        if ui
+            .add_enabled_ui(settings.is_ok() && !sheets.is_empty() && !looking && !on_disk, |ui| widgets::pill_button(ui, label, true))
+            .inner
+            .clicked()
+        {
             go = true;
         }
         if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
             cancel = true;
+        }
+        if on_disk {
+            ui.label(egui::RichText::new(tl!("To print this large file, load all of it first with Load to edit.")).small().color(t.text_muted));
         }
     });
     (go, cancel)

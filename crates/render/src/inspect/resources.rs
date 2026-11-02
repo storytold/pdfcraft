@@ -3,7 +3,7 @@ use super::core::inspect;
 use super::core::{Inspector, load_options};
 use super::model::{Attachment, AttachmentSource, FontInfo, Layer, PageTransition, TransitionStyle};
 use super::navigation::NameTreeSeen;
-use super::{AssertUnwindSafe, Dictionary, DocInfo, Document, HashSet, Object, ObjectId, catch_unwind};
+use super::{Arc, AssertUnwindSafe, Dictionary, DocInfo, Document, HashSet, LazyStructure, Object, ObjectId, OnDiskFile, Structure, catch_unwind};
 
 /// Decoded bytes read from an XFA form's configuration packet (or a whole-XDP `/XFA` stream) to
 /// find `dynamicRender`. Designer's packets are a few kilobytes; a whole XDP can hold the template.
@@ -219,7 +219,7 @@ impl<'a> Inspector<'a> {
                         .and_then(|p| p.get(b"Size").ok())
                         .and_then(|s| s.as_i64().ok())
                         .map(|s| s as usize)
-                        .or(Some(s.content.len())),
+                        .or_else(|| Some(stored_size(s))),
                     _ => None,
                 },
             );
@@ -231,12 +231,37 @@ impl<'a> Inspector<'a> {
     }
 }
 
+/// How long a stream's stored data is: a body left on disk has none here, only its `/Length`.
+fn stored_size(stream: &lopdf::Stream) -> usize {
+    match stream.content.len() {
+        0 => stream.dict.get(b"Length").ok().and_then(|n| n.as_i64().ok()).and_then(|n| usize::try_from(n).ok()).unwrap_or(0),
+        n => n,
+    }
+}
+
 /// Fetch an attachment's bytes (decoded). Capped at 1 GiB to defuse decompression bombs.
 pub fn attachment_data(bytes: &[u8], password: Option<&str>, att: &Attachment) -> Result<Vec<u8>, String> {
     let run = || -> Result<Vec<u8>, String> {
-        let options = load_options(password);
-        let doc = Document::load_mem_with_options(bytes, options).map_err(|e| e.to_string())?;
-        let insp = Inspector::new(&doc);
+        let doc = Document::load_mem_with_options(bytes, load_options(password)).map_err(|e| e.to_string())?;
+        read_attachment(&doc, att)
+    };
+    catch_unwind(AssertUnwindSafe(run)).unwrap_or_else(|p| Err(format!("reading the attachment crashed: {}", crate::raster::panic_message(&p))))
+}
+
+/// [`attachment_data`] for a file kept on disk.
+pub fn attachment_on_disk(file: &Arc<OnDiskFile>, att: &Attachment) -> Result<Vec<u8>, String> {
+    let run = || -> Result<Vec<u8>, String> {
+        let failed_reads = file.failed_reads();
+        let data = read_attachment(&LazyStructure::on_disk(file.clone(), usize::MAX)?, att)?;
+        // A body that can't be read reads as empty, and would save as an empty file.
+        if file.failed_reads() == failed_reads { Ok(data) } else { Err(crate::PART_UNREAD.into()) }
+    };
+    catch_unwind(AssertUnwindSafe(run)).unwrap_or_else(|p| Err(format!("reading the attachment crashed: {}", crate::raster::panic_message(&p))))
+}
+
+fn read_attachment(doc: &dyn Structure, att: &Attachment) -> Result<Vec<u8>, String> {
+    {
+        let insp = Inspector::new(doc);
         let spec: &Object = match &att.source {
             AttachmentSource::Document { key } => {
                 let names = doc.catalog().ok().and_then(|c| c.get(b"Names").ok()).and_then(|o| insp.dict(o)).ok_or("no /Names")?;
@@ -259,8 +284,7 @@ pub fn attachment_data(bytes: &[u8], password: Option<&str>, att: &Attachment) -
         } else {
             Ok(stream.content.clone())
         }
-    };
-    catch_unwind(AssertUnwindSafe(run)).unwrap_or_else(|p| Err(format!("reading the attachment crashed: {}", crate::raster::panic_message(&p))))
+    }
 }
 
 /// An XFA packet's bytes as text: UTF-16 (little- or big-endian, told by a byte order mark or by

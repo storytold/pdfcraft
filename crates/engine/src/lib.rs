@@ -36,6 +36,7 @@ pub mod js;
 mod layers;
 pub mod links;
 pub mod ocr;
+pub mod on_disk;
 mod open;
 pub mod optimizer;
 mod page_filter;

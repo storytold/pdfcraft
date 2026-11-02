@@ -403,11 +403,11 @@ title = "Lazy loading of very large (GB) files within a memory budget"
 area = "A"
 tier = "P0"
 milestone = "M1"
-status = "planned"
+status = "partial"
 commands = []
-tools = []
-evidence = []
-notes = "ByteSource (M1.5); files are buffered whole today. Viewing holds the file once and editing twice: edits let go of the previous working file before writing the next (a 1 GiB file peaked at three copies after a few edits, now two). Saving still peaks at three. Reading from disk on demand waits on the renderer (hayro parses one contiguous buffer, gap 2)."
+tools = ["doc_open"]
+evidence = ["crates/cos/src/on_disk.rs::objects_read_the_same_as_from_the_whole_file", "crates/render/src/raster/tests/on_disk.rs::pages_draw_the_same_with_their_bodies_on_disk", "crates/engine/src/on_disk.rs::a_large_file_opens_with_its_structure_and_draws_from_disk", "crates/ui-egui/tests/it/large_files.rs::a_large_file_opens_from_disk_and_a_click_makes_it_editable"]
+notes = "A clean, unencrypted PDF of 1 GiB or more opens from disk with only its structure in memory (OnDiskFile, ByteSource): a 2 GiB image file peaked at 76 MiB against 2,134 MiB read whole, with the same pixels. Pages, text, bookmarks, comments and attachments read; Save As copies the file a piece at a time. Not yet: editing, filling in, signing, printing or exporting images without Load to edit, which reads the whole file and then behaves as before (a working file held once or twice, saving peaks at three copies). Encrypted, damaged and XFA files are read whole, and so is a file that is mostly structure. On Windows, a program replacing such a file with MoveFileEx is refused while it is open here; renaming, deleting and ReplaceFile work. There is no global memory budget, and decoded images cost what they did."
 
 [[feature]]
 id = "core.pdf20-utf8-strings"

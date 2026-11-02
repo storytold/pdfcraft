@@ -2,8 +2,8 @@
 
 use std::sync::{Arc, OnceLock};
 
-use pdfcraft_cos::{SaveOptions, write_incremental};
-use pdfcraft_render::{DocInfo, RenderConfig, RenderPool};
+use pdfcraft_cos::{OnDiskFile, SaveOptions, write_incremental};
+use pdfcraft_render::{DocInfo, PdfSource, RenderConfig, RenderPool};
 
 use crate::history::Editor;
 use crate::{
@@ -17,11 +17,14 @@ pub struct Document {
     pub id: DocId,
     pub name: String,
     pub path: Option<String>,
-    /// The working file: what Save writes.
+    /// The working file: what Save writes. Empty for a document that stayed on disk.
     pub bytes: Arc<Vec<u8>>,
     /// What is displayed (the page view, `page_render`, page images): `bytes`, plus appearances
     /// drawn for display only for comments that have none ([`display_bytes`]). Never saved.
     pub display: Arc<Vec<u8>>,
+    /// The file, when only its structure is in memory and pages read the rest from disk. Such a
+    /// document is for reading: it has no editor, and [`Self::whole`] says what that rules out.
+    pub on_disk: Option<Arc<OnDiskFile>>,
     pub info: DocInfo,
     pub renderer: RenderPool,
     /// The password the document was opened with (needed to read attachments, etc.).
@@ -404,6 +407,21 @@ impl Document {
 
     pub fn editable(&self) -> bool {
         self.editor.is_some()
+    }
+
+    /// The working file, to read pages from.
+    pub fn source(&self) -> PdfSource {
+        self.on_disk.as_ref().map_or_else(|| self.bytes.clone().into(), |file| file.clone().into())
+    }
+
+    /// What is displayed ([`Self::display`]), to read pages from.
+    pub fn shown(&self) -> PdfSource {
+        self.on_disk.as_ref().map_or_else(|| self.display.clone().into(), |file| file.clone().into())
+    }
+
+    /// The working file's bytes, for what needs all of them.
+    pub fn whole(&self) -> Result<&Arc<Vec<u8>>, EditError> {
+        if self.on_disk.is_some() { Err(EditError::OnDisk) } else { Ok(&self.bytes) }
     }
 
     /// What the opening password allows; `None` when the document is not encrypted.

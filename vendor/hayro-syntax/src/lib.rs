@@ -108,6 +108,6 @@ pub mod byte_reader;
 #[doc(hidden)]
 pub mod reader;
 
-pub use data::PdfData;
+pub use data::{DetachedBodies, PdfData};
 pub use filter::*;
 pub use pdf::*;

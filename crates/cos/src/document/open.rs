@@ -1,7 +1,7 @@
 use super::reader::find;
 use super::state::Credentials;
 use super::xref::XrefIndex;
-use super::{Arc, BTreeMap, CosError, Dict, Document, ObjRef, Object};
+use super::{Arc, BTreeMap, CosError, Dict, Document, ObjRef, Object, OnDiskFile};
 
 impl Document {
     /// A new document with an empty page tree (for split / extract / combine). It has no
@@ -10,6 +10,7 @@ impl Document {
         let mut doc = Document {
             data: Arc::new(Vec::new()),
             endstreams: Arc::default(),
+            on_disk: None,
             source_identity: Arc::new(()),
             entries: Arc::new(XrefIndex::empty()),
             trailer: Dict::new(),
@@ -62,7 +63,22 @@ impl Document {
     /// document is read-only: objects in a larger object stream read as missing, so the
     /// writers refuse to save it ([`CosError::ReadOnlyLimit`]).
     pub fn open_with_stream_limit(data: Arc<Vec<u8>>, password: Option<&str>, stream_limit: usize) -> Result<Self, CosError> {
-        Self::open_as(data, Credentials::Password(password), stream_limit)
+        Self::open_as(data, None, Credentials::Password(password), stream_limit)
+    }
+
+    /// Open `file` for reading with its large stream bodies left on disk. Such a document can't be
+    /// saved, and offsets it reports are not the file's. Fails for a file that needs repair, whose
+    /// offsets can't be followed through the held bytes, and for an encrypted one, whose streams
+    /// this reader decrypts as it loads them: read such a file whole.
+    pub fn open_on_disk(file: Arc<OnDiskFile>, stream_limit: usize) -> Result<Self, CosError> {
+        let doc = Self::open_as(file.held().clone(), Some(file), Credentials::Password(None), stream_limit)?;
+        if doc.security.is_some() || doc.trailer.get(b"Encrypt").is_some() {
+            return Err(CosError::NeedsPassword);
+        }
+        match doc.repair_log.first() {
+            Some(note) => Err(CosError::Syntax { offset: 0, detail: note.clone() }),
+            None => Ok(doc),
+        }
     }
 
     /// Open `data`, an earlier revision of this file (the bytes a signature covers) or another
@@ -75,10 +91,10 @@ impl Document {
             Some(handler) => Credentials::Handler { handler, id0: self.first_id() },
             None => Credentials::Password(None),
         };
-        Self::open_as(data, credentials, self.stream_limit)
+        Self::open_as(data, None, credentials, self.stream_limit)
     }
 
-    fn open_as(data: Arc<Vec<u8>>, credentials: Credentials<'_>, stream_limit: usize) -> Result<Self, CosError> {
+    fn open_as(data: Arc<Vec<u8>>, on_disk: Option<Arc<OnDiskFile>>, credentials: Credentials<'_>, stream_limit: usize) -> Result<Self, CosError> {
         // Viewers accept files whose header is missing or damaged as long as the body looks
         // like PDF; so do we (a note goes to the repair log).
         let header = find(&data, b"%PDF-", 0, 1024);
@@ -94,6 +110,7 @@ impl Document {
         let mut doc = Document {
             data,
             endstreams: Arc::default(),
+            on_disk,
             source_identity: Arc::new(()),
             entries: Arc::new(XrefIndex::empty()),
             trailer: Dict::new(),

@@ -152,7 +152,7 @@ impl WebPrintJob {
         let dpi = plan_dpi(&sheets)?;
         let pdf = std::sync::Arc::new(pdf);
         let source = ExportSource {
-            bytes: pdf.clone(),
+            bytes: pdf.clone().into(),
             config: Default::default(),
             pages: sheets.len(),
             sizes: sheets.iter().map(|&(w, h)| (w as f32, h as f32)).collect(),

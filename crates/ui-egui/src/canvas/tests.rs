@@ -924,9 +924,69 @@ fn a_document_copy_reads_in_page_order_and_stops_when_cancelled() {
     let middle = r.render(RenderRequest { page: 1, kind: RequestKind::Text, ..Default::default() }).text.unwrap();
     app.views[0].texts.insert(1, middle);
     let job = || crate::DocumentCopyJob::of(&app.views[0], app.session.get(app.views[0].id).unwrap());
-    let text = job().text(&std::sync::atomic::AtomicBool::new(false)).unwrap();
+    let text = job().text(&std::sync::atomic::AtomicBool::new(false)).unwrap().unwrap();
     assert!(text.find("Alpha").unwrap() < text.find("Bravo").unwrap() && text.find("Bravo").unwrap() < text.find("Charlie").unwrap(), "{text:?}");
     assert_eq!(job().text(&std::sync::atomic::AtomicBool::new(true)), None, "cancelled");
+}
+
+/// A copy of all the text refuses a page the file couldn't give, without reading anything, and
+/// that holds with no other page left to read. A page that failed by itself stays left out.
+#[test]
+fn a_document_copy_refuses_a_page_the_file_could_not_give() {
+    let content = |page: usize| format!("BT /F 24 Tf 20 150 Td (Page {page}) Tj ET % {}", "x".repeat(30_000));
+    let pdf = pdfcraft_testkit::Pdf::new()
+        .obj("<</Type/Catalog/Pages 2 0 R>>")
+        .obj("<</Type/Pages/Kids[3 0 R 4 0 R]/Count 2/MediaBox[0 0 200 300]>>")
+        .obj("<</Type/Page/Parent 2 0 R/Contents 5 0 R/Resources<</Font<</F 7 0 R>>>>>>")
+        .obj("<</Type/Page/Parent 2 0 R/Contents 6 0 R/Resources<</Font<</F 7 0 R>>>>>>")
+        .stream("", content(1))
+        .stream("", content(2))
+        .obj("<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>")
+        .build();
+    let dir = std::env::temp_dir().join(format!("pdfcraft-failed-page-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("large.pdf");
+    std::fs::write(&path, pdf).unwrap();
+    let mut app = PdfCraftApp::new();
+    app.session = pdfcraft_engine::Session::default().with_on_disk_from(0);
+    app.open_path(&path.to_string_lossy());
+    let doc = app.session.get(app.views[0].id).unwrap();
+    assert!(doc.on_disk.is_some());
+    let mut r = pdfcraft_render::PageRenderer::new(doc.source(), Default::default());
+    let first = r.render(RenderRequest { page: 0, kind: RequestKind::Text, ..Default::default() }).text.unwrap();
+    app.views[0].texts.insert(0, first);
+    app.views[0].all_text = true;
+    std::fs::File::options().write(true).open(&path).unwrap().set_len(1_000).unwrap();
+    let request = RenderRequest { page: 1, kind: RequestKind::Text, ..Default::default() };
+    let unread = r.render(request);
+    app.views[0].last_queue = vec![request];
+    app.views[0].receive_result(&egui::Context::default(), unread);
+    assert!(app.views[0].text_failed.contains(&1) && app.views[0].text_unread.contains(&1));
+    assert!(!app.copy_selected_text(0, &egui::Context::default()));
+    assert!(app.document_copy.is_none(), "nothing is read for a copy that can't be complete");
+    assert!(app.toast.as_ref().is_some_and(|toast| toast.0.contains(pdfcraft_render::PART_UNREAD)));
+    // A page that failed by itself, as the watchdog fails it, is left out as it always was.
+    app.views[0].text_failed.clear();
+    app.views[0].text_unread.clear();
+    app.views[0].last_queue = vec![request];
+    let timed_out = pdfcraft_render::RenderedPage {
+        request,
+        width: 0,
+        height: 0,
+        rgba: Default::default(),
+        error: Some("the page took too long".into()),
+        text: None,
+        warnings: Vec::new(),
+        millis: 0,
+    };
+    app.views[0].receive_result(&egui::Context::default(), timed_out);
+    assert!(app.views[0].text_failed.contains(&1) && app.views[0].text_unread.is_empty());
+    let job = crate::DocumentCopyJob::of(&app.views[0], app.session.get(app.views[0].id).unwrap());
+    assert_eq!(job.text(&std::sync::atomic::AtomicBool::new(false)), Some(Ok("Page 1".into())));
+    assert!(app.copy_selected_text(0, &egui::Context::default()));
+    assert!(app.document_copy.is_none(), "copied from the pages at hand");
+    drop(app);
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// Select All keeps to the page shown one page at a time, and in a document of one page; of

@@ -1,11 +1,14 @@
 //! Opening a document: preparing it away from the session, then registering it.
 
+use std::path::Path;
 use std::sync::{Arc, OnceLock};
 
+use pdfcraft_cos::{ByteSource, OnDiskFile};
 use pdfcraft_cos::{SaveOptions, write_incremental};
-use pdfcraft_render::{DocInfo, OpenError, RenderConfig, RenderPool, inspect};
+use pdfcraft_render::{DocInfo, OpenError, PdfSource, RenderConfig, RenderPool, inspect, inspect_on_disk};
 
 use crate::history::{Editor, Keys, TextBlocksCache};
+use crate::on_disk::{FileSource, ON_DISK_FROM, ON_DISK_REASON};
 use crate::{
     AppearanceCache, DocId, Document, Session, TrustStore, XFA_SCRIPTS_OFF, XfaLayout, display_bytes, display_config, guard, info_fields, js,
     note_warnings, recovered_render_password, render_threads, same_pages, signatures_of, xfa, xfa_layout, xfa_values_from_datasets,
@@ -18,6 +21,7 @@ pub struct OpenContext {
     js_off: bool,
     trust: Arc<TrustStore>,
     xfa_time_scale: u32,
+    on_disk_from: u64,
 }
 
 /// A fully prepared document that has not yet been registered in a session.
@@ -25,10 +29,18 @@ pub struct PreparedDocument {
     document: Document,
 }
 
+impl PreparedDocument {
+    /// The size of the file.
+    pub fn file_size(&self) -> usize {
+        self.document.info.file_size
+    }
+}
+
 struct DocumentOpenData<'a> {
     name: String,
     path: Option<String>,
     bytes: Arc<Vec<u8>>,
+    on_disk: Option<Arc<OnDiskFile>>,
     info: DocInfo,
     structure: Result<Result<pdfcraft_cos::Document, pdfcraft_cos::CosError>, Box<dyn std::any::Any + Send>>,
     render_password: Option<String>,
@@ -37,6 +49,12 @@ struct DocumentOpenData<'a> {
 }
 
 impl OpenContext {
+    /// Open files of `size` and up from disk.
+    pub fn with_on_disk_from(mut self, size: u64) -> Self {
+        self.on_disk_from = size;
+        self
+    }
+
     /// Prepare a document without mutating the session that supplied this context.
     pub fn prepare_open(
         &self,
@@ -49,12 +67,59 @@ impl OpenContext {
         guard(|| Session::prepare_open_unguarded(self, name, path, bytes, password))
             .unwrap_or_else(|m| Err(OpenError::Invalid(format!("reading it failed unexpectedly ({m})"))))
     }
+
+    /// Prepare the large file at `path` to read from disk, with only its structure in memory.
+    /// `None` when it should be read whole: it is small, or not a PDF this can follow through
+    /// its bytes (damaged, encrypted, an XFA form, whose data goes into its fields at open, or mostly structure).
+    pub fn prepare_on_disk(&self, name: impl Into<String>, path: &Path) -> Option<PreparedDocument> {
+        let name = name.into();
+        guard(|| self.prepare_on_disk_unguarded(name, path)).ok().flatten()
+    }
+
+    fn prepare_on_disk_unguarded(&self, name: String, path: &Path) -> Option<PreparedDocument> {
+        let source = FileSource::open(path).ok()?;
+        if source.size() < self.on_disk_from || !starts_as_pdf(&source) {
+            return None;
+        }
+        let file = Arc::new(OnDiskFile::read(Arc::new(source)).ok()??);
+        let info = inspect_on_disk(&file).ok()??;
+        if info.xfa.is_some() {
+            return None;
+        }
+        let path = Some(path.to_string_lossy().into_owned());
+        let data = DocumentOpenData {
+            name,
+            path,
+            bytes: Arc::default(),
+            on_disk: Some(file),
+            info,
+            structure: Ok(Err(pdfcraft_cos::CosError::ReadOnlyLimit)),
+            render_password: None,
+            password: None,
+            xfa: None,
+        };
+        Some(PreparedDocument { document: Session::build_document(&self.trust, data) })
+    }
+}
+
+/// Whether the `%PDF-` header is where a reader looks for it, so that a large file of another
+/// kind isn't walked for nothing.
+fn starts_as_pdf(source: &FileSource) -> bool {
+    let mut head = [0; 1024];
+    let n = usize::try_from(source.size()).map_or(head.len(), |size| size.min(head.len()));
+    head.get_mut(..n).is_some_and(|head| source.read_at(0, head).is_ok() && head.windows(5).any(|w| w == b"%PDF-"))
 }
 
 impl Session {
     /// Snapshot the session state that affects open-time scripts, dates and signature trust.
     pub fn open_context(&self) -> OpenContext {
-        OpenContext { now: self.now(), js_off: self.js_off, trust: self.trust.clone(), xfa_time_scale: self.xfa_time_scale.unwrap_or(1) }
+        OpenContext {
+            now: self.now(),
+            js_off: self.js_off,
+            trust: self.trust.clone(),
+            xfa_time_scale: self.xfa_time_scale.unwrap_or(1),
+            on_disk_from: self.on_disk_from.unwrap_or(ON_DISK_FROM),
+        }
     }
 
     /// Prepare a document without adding it to this session.
@@ -252,8 +317,10 @@ impl Session {
         };
         // XFA notes survive the document being re-read after edits.
         let xfa_warnings: Vec<String> = if info.xfa.is_some() { info.warnings.clone() } else { Vec::new() };
-        let mut document =
-            Self::build_document(&context.trust, DocumentOpenData { name, path, bytes, info, structure: cos, render_password, password, xfa });
+        let mut document = Self::build_document(
+            &context.trust,
+            DocumentOpenData { name, path, bytes, on_disk: None, info, structure: cos, render_password, password, xfa },
+        );
         // A script that ran away on open turns the form's scripts off for this document.
         document.xfa_template = if ran_away { None } else { xfa_template };
         document.js_output.append(script_output);
@@ -267,7 +334,7 @@ impl Session {
 
     /// The last step of opening: build the document record and register it.
     fn build_document(trust: &Arc<TrustStore>, data: DocumentOpenData<'_>) -> Document {
-        let DocumentOpenData { name, path, bytes, mut info, structure: cos, render_password, password, xfa } = data;
+        let DocumentOpenData { name, path, bytes, on_disk, mut info, structure: cos, render_password, password, xfa } = data;
         let config = RenderConfig { password: render_password.as_deref().map(Arc::from), ..Default::default() };
         let (mut editor, read_only_reason) = match cos {
             Ok(Ok(cos)) => {
@@ -292,6 +359,7 @@ impl Session {
             Ok(Err(e)) => (None, Some(e.to_string())),
             Err(_) => (None, Some("the document structure could not be read for editing".into())),
         };
+        let read_only_reason = if on_disk.is_some() { Some(ON_DISK_REASON.to_string()) } else { read_only_reason };
         let sig_cache = Arc::new(pdfcraft_sign::DigestCache::default());
         let signatures = editor.as_ref().map(|e| signatures_of(&e.cos, &bytes, trust, &sig_cache)).unwrap_or_default();
         // The inspection reads only `/Info`; a file stating its title or author only in XMP still
@@ -304,7 +372,8 @@ impl Session {
             }
         }
         let display = display_bytes(editor.as_mut(), &bytes);
-        let renderer = RenderPool::new(display.clone(), render_threads(), display_config(&config));
+        let shown = on_disk.as_ref().map_or_else(|| display.clone().into(), |file| PdfSource::from(file.clone()));
+        let renderer = RenderPool::new(shown, render_threads(), display_config(&config));
         let (form, adopted) = editor
             .as_ref()
             .map(|e| {
@@ -330,6 +399,7 @@ impl Session {
             path,
             bytes,
             display,
+            on_disk,
             info,
             renderer,
             password: render_password,

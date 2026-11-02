@@ -44,6 +44,7 @@ impl PdfCraftApp {
             path: Some(path.clone()),
             stamp,
             input: open_worker::Input::RemotePath(std::path::PathBuf::from(path)),
+            replaces: None,
             password: None,
             activate: true,
             after_open: Some(destination),

@@ -123,7 +123,7 @@ impl PdfCraftApp {
     /// Returns `true` if written now.
     #[cfg(not(target_arch = "wasm32"))]
     fn save_doc_to_then(&mut self, id: pdfcraft_engine::DocId, dest: &str, target: SaveTarget, after: Box<dyn FnOnce(&mut Self) + Send>) -> bool {
-        let own = self.session.get(id).and_then(|d| d.path.as_deref()).is_some_and(|p| crate::same_file(p, dest));
+        let own = self.session.get(id).filter(|d| d.on_disk.is_none()).and_then(|d| d.path.as_deref()).is_some_and(|p| crate::same_file(p, dest));
         if own && self.watch.disk_differs(id, dest, self.session.get(id).map(|d| d.saved_bytes())) {
             self.pending_overwrite = Some(PendingOverwrite { id, dest: dest.to_string(), target, after });
             self.dialog = Some(crate::Dialog::OverwriteChanged);
@@ -157,6 +157,9 @@ impl PdfCraftApp {
     /// Write document `id` to `dest` and make it the document's file. Returns `true` if written.
     #[cfg(not(target_arch = "wasm32"))]
     fn save_doc_to(&mut self, id: pdfcraft_engine::DocId, dest: &str, target: SaveTarget) -> bool {
+        if let Some(file) = self.session.get(id).and_then(|d| d.on_disk.clone()) {
+            return self.save_on_disk(id, dest, &file);
+        }
         // Save As answers on a later frame: commit what was typed meanwhile, too (#166), even
         // if another tab is active by then.
         if !self.commit_typing_in(id) || !self.flatten_fill_sign_for_save(id) {
@@ -206,6 +209,36 @@ impl PdfCraftApp {
             }
             Err(e) => {
                 self.notify_fmt("Saved, but reopening failed: {e}", &[("e", &e.to_string())]);
+                false
+            }
+        }
+    }
+}
+
+impl PdfCraftApp {
+    /// Save a document that stayed on disk: it can't have changed, so that is copying the file a
+    /// piece at a time. It keeps reading from where it was, and to itself there is nothing to write.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn save_on_disk(&mut self, id: pdfcraft_engine::DocId, dest: &str, file: &pdfcraft_cos::OnDiskFile) -> bool {
+        let own = self.session.get(id).and_then(|d| d.path.as_deref()).is_some_and(|p| crate::same_file(p, dest));
+        let path = std::path::Path::new(dest);
+        if own {
+            return match pdfcraft_engine::on_disk::check_own_path(path, file) {
+                Ok(()) => true,
+                Err(e) => {
+                    self.notify_fmt("Couldn't save {name}: {e}", &[("name", dest), ("e", &e.to_string())]);
+                    false
+                }
+            };
+        }
+        match pdfcraft_platform::staging::write_atomically_from(path, pdfcraft_platform::staging::StagingName::TagThenSuffix, |out| file.copy_to(out))
+        {
+            Ok(()) => {
+                self.notify_fmt("Saved {name}", &[("name", &short_name(dest))]);
+                true
+            }
+            Err(e) => {
+                self.notify_fmt("Couldn't save {name}: {e}", &[("name", dest), ("e", &e.to_string())]);
                 false
             }
         }

@@ -28,6 +28,7 @@ impl PdfCraftApp {
                         path: None,
                         stamp: None,
                         input: open_worker::Input::Bytes(std::sync::Arc::new(bytes)),
+                        replaces: None,
                         password: None,
                         activate: true,
                         after_open: None,

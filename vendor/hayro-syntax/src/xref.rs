@@ -21,6 +21,7 @@ use crate::reader::{Readable, ReaderContext, ReaderExt};
 use crate::sync::{Arc, FxHashMap, Mutex, RwLock, RwLockExt};
 use crate::trivia::is_white_space_character;
 use crate::util::findr_needle;
+use crate::data::DetachedBodies;
 use crate::{PdfData, object};
 use alloc::collections::BTreeSet;
 use alloc::vec;
@@ -52,8 +53,15 @@ pub(crate) enum XRefError {
 pub(crate) fn root_xref(data: PdfData, password: &[u8]) -> Result<XRef, XRefError> {
     let mut xref_map = FxHashMap::default();
     let xref_pos = find_last_xref_pos(data.as_ref()).ok_or(XRefError::Unknown)?;
-    let trailer =
-        populate_xref_impl(data.as_ref(), xref_pos, &mut xref_map).ok_or(XRefError::Unknown)?;
+    let mut visited = BTreeSet::new();
+    let trailer = populate_xref_impl_inner(
+        data.as_ref(),
+        xref_pos,
+        &mut xref_map,
+        &mut visited,
+        data.detached(),
+    )
+    .ok_or(XRefError::Unknown)?;
 
     XRef::new(
         data.clone(),
@@ -429,6 +437,27 @@ impl XRef {
         }
 
         Ok(xref)
+    }
+
+    /// PdfCraft patch (34): the stream body cut out where `at`, which points into the bytes of
+    /// this file or elsewhere, starts.
+    pub(crate) fn detached_body_at(&self, at: &[u8]) -> Option<(u64, u64)> {
+        let Inner::Some(repr) = &self.0 else {
+            return None;
+        };
+        let bytes = repr.data.get();
+        let detached = bytes.detached()?;
+        // Compared as addresses: a reader of a decoded object stream points elsewhere.
+        let held = (at.as_ptr() as usize).checked_sub(bytes.as_ref().as_ptr() as usize)?;
+        detached.body_at(held).filter(|_| held <= bytes.as_ref().len())
+    }
+
+    /// PdfCraft patch (34): read a body [`Self::detached_body_at`] found.
+    pub(crate) fn read_detached(&self, (start, len): (u64, u64)) -> Option<Vec<u8>> {
+        let Inner::Some(repr) = &self.0 else {
+            return None;
+        };
+        repr.data.get().detached()?.read(start, len)
     }
 
     pub(crate) fn dummy() -> &'static Self {
@@ -871,9 +900,26 @@ impl XRefEntry {
     }
 }
 
+#[cfg(test)]
 fn populate_xref_impl<'a>(data: &'a [u8], pos: usize, xref_map: &mut XrefMap) -> Option<&'a [u8]> {
     let mut visited = BTreeSet::new();
-    populate_xref_impl_inner(data, pos, xref_map, &mut visited)
+    populate_xref_impl_inner(data, pos, xref_map, &mut visited, None)
+}
+
+/// PdfCraft patch (34): where a file offset is held. The xref map holds positions in the bytes, so
+/// the repair scan, which finds objects there, adds to it as it always has.
+fn held_offset(detached: Option<&dyn DetachedBodies>, offset: usize) -> Option<usize> {
+    match detached {
+        Some(detached) => detached.held_offset(offset),
+        None => Some(offset),
+    }
+}
+
+/// PdfCraft patch (34): where a table entry points. An offset inside a cut body becomes the end of
+/// the bytes: nothing reads there, so the entry still replaces older sections and the repair runs,
+/// as it does for such an entry in the whole file.
+fn held_entry(data: &[u8], detached: Option<&dyn DetachedBodies>, offset: usize) -> usize {
+    held_offset(detached, offset).unwrap_or(data.len())
 }
 
 /// The offset of the previous xref section (`Prev`).
@@ -912,6 +958,7 @@ fn populate_xref_impl_inner<'a>(
     pos: usize,
     xref_map: &mut XrefMap,
     visited: &mut BTreeSet<usize>,
+    detached: Option<&dyn DetachedBodies>,
 ) -> Option<&'a [u8]> {
     if !visited.insert(pos) {
         warn!("circular xref PREV chain detected at offset {}", pos);
@@ -929,7 +976,7 @@ fn populate_xref_impl_inner<'a>(
     }
 
     let mut reader = Reader::new(data);
-    reader.jump(pos);
+    reader.jump(held_offset(detached, pos)?);
     // In case the position points to before the object number of a xref stream.
     reader.skip_white_spaces_and_comments();
 
@@ -939,9 +986,9 @@ fn populate_xref_impl_inner<'a>(
         .read_without_context::<ObjectIdentifier>()
         .is_some()
     {
-        populate_from_xref_stream(data, &mut r2, xref_map, visited)
+        populate_from_xref_stream(data, &mut r2, xref_map, visited, detached)
     } else {
-        populate_from_xref_table(data, &mut r2, xref_map, visited)
+        populate_from_xref_table(data, &mut r2, xref_map, visited, detached)
     }
 }
 
@@ -968,6 +1015,7 @@ fn populate_from_xref_table<'a>(
     reader: &mut Reader<'a>,
     insert_map: &mut XrefMap,
     visited: &mut BTreeSet<usize>,
+    detached: Option<&dyn DetachedBodies>,
 ) -> Option<&'a [u8]> {
     let trailer = {
         let mut reader = reader.clone();
@@ -998,7 +1046,7 @@ fn populate_from_xref_table<'a>(
             if entry.used {
                 own.insert(
                     ObjectIdentifier::new(obj_number as i32, entry.gen_number),
-                    EntryType::Normal(entry.offset),
+                    EntryType::Normal(held_entry(data, detached, entry.offset)),
                 );
             }
         }
@@ -1006,13 +1054,13 @@ fn populate_from_xref_table<'a>(
 
     if let Some(prev) = prev_offset(data, &trailer, &own) {
         // First insert the entries from any previous xref tables.
-        populate_xref_impl_inner(data, prev, insert_map, visited)?;
+        populate_xref_impl_inner(data, prev, insert_map, visited, detached)?;
     }
 
     // In hybrid files, entries in `XRefStm` should have higher priority, therefore we insert them
     // after looking at `PREV`.
     if let Some(xref_stm) = trailer.get::<i32>(XREF_STM) {
-        populate_xref_impl_inner(data, xref_stm as usize, insert_map, visited)?;
+        populate_xref_impl_inner(data, xref_stm as usize, insert_map, visited, detached)?;
     }
 
     insert_map.extend(own);
@@ -1025,6 +1073,7 @@ fn populate_from_xref_stream<'a>(
     reader: &mut Reader<'a>,
     insert_map: &mut XrefMap,
     visited: &mut BTreeSet<usize>,
+    detached: Option<&dyn DetachedBodies>,
 ) -> Option<&'a [u8]> {
     let stream = reader
         .read_with_context::<IndirectObject<Stream<'_>>>(&ReaderContext::dummy())?
@@ -1064,9 +1113,17 @@ fn populate_from_xref_stream<'a>(
         xref_stream_subsection(&mut xref_reader, 0, size, f1_len, f2_len, f3_len, &mut own)?;
     }
 
+    if detached.is_some() {
+        for entry in own.values_mut() {
+            if let EntryType::Normal(offset) = entry {
+                *offset = held_entry(data, detached, *offset);
+            }
+        }
+    }
+
     if let Some(prev) = prev_offset(data, stream.dict(), &own) {
         // First insert the entries from any previous xref tables.
-        let _ = populate_xref_impl_inner(data, prev, insert_map, visited)?;
+        let _ = populate_xref_impl_inner(data, prev, insert_map, visited, detached)?;
     }
 
     insert_map.extend(own);
@@ -1614,6 +1671,7 @@ mod tests {
                 &mut Reader::new(&data),
                 &mut map,
                 &mut BTreeSet::new(),
+                None,
             );
             got.is_some()
         };
@@ -1754,6 +1812,123 @@ mod tests {
                     .is_none()
             );
         }
+    }
+
+    /// A file whose stream body at `start` is left out of the bytes.
+    #[cfg(feature = "std")]
+    struct CutBody {
+        file: Vec<u8>,
+        start: usize,
+        len: usize,
+        readable: bool,
+    }
+
+    #[cfg(feature = "std")]
+    impl DetachedBodies for CutBody {
+        fn held_offset(&self, offset: usize) -> Option<usize> {
+            match offset.checked_sub(self.start) {
+                None => Some(offset),
+                Some(past) => past.checked_sub(self.len).map(|past| self.start + past),
+            }
+        }
+        fn body_at(&self, held: usize) -> Option<(u64, u64)> {
+            (held == self.start).then_some((self.start as u64, self.len as u64))
+        }
+        fn read(&self, start: u64, len: u64) -> Option<Vec<u8>> {
+            let at = start as usize;
+            self.file
+                .get(at..at + len as usize)
+                .filter(|_| self.readable)
+                .map(<[u8]>::to_vec)
+        }
+    }
+
+    /// Objects 1 to 3 make a page, object 4 is a stream of 5000 `b`s. With `update`, an update
+    /// adds object 5 after them, its section reached through `/Prev`.
+    #[cfg(feature = "std")]
+    fn cut_fixture(update: bool, readable: bool) -> crate::Pdf {
+        let (file, start) = cut_file(update);
+        cut(file, start, readable)
+    }
+
+    #[cfg(feature = "std")]
+    fn cut(file: Vec<u8>, start: usize, readable: bool) -> crate::Pdf {
+        let mut held = file.clone();
+        held.drain(start..start + 5000);
+        let cut = CutBody { file, start, len: 5000, readable };
+        crate::Pdf::new(PdfData::with_detached(Arc::new(held), Arc::new(cut))).unwrap()
+    }
+
+    #[cfg(feature = "std")]
+    fn cut_file(update: bool) -> (Vec<u8>, usize) {
+        let mut file = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for body in [
+            "<</Type/Catalog/Pages 2 0 R>>",
+            "<</Type/Pages/Kids[3 0 R]/Count 1>>",
+            "<</Type/Page/Parent 2 0 R/MediaBox[0 0 10 10]>>",
+        ] {
+            offsets.push(file.len());
+            file.extend_from_slice(format!("{} 0 obj\n{body}\nendobj\n", offsets.len()).as_bytes());
+        }
+        offsets.push(file.len());
+        file.extend_from_slice(b"4 0 obj\n<</Length 5000>>\nstream\n");
+        let start = file.len();
+        file.extend_from_slice(&[b'b'; 5000]);
+        file.extend_from_slice(b"\nendstream\nendobj\n");
+        let table = file.len();
+        file.extend_from_slice(b"xref\n0 5\n0000000000 65535 f \n");
+        for offset in &offsets {
+            file.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+        }
+        file.extend_from_slice(format!("trailer\n<</Size 5/Root 1 0 R>>\nstartxref\n{table}\n%%EOF\n").as_bytes());
+        if update {
+            let added = file.len();
+            file.extend_from_slice(b"5 0 obj\n<</Added true>>\nendobj\n");
+            let last = file.len();
+            file.extend_from_slice(format!("xref\n5 1\n{added:010} 00000 n \ntrailer\n<</Size 6/Root 1 0 R/Prev {table}>>\nstartxref\n{last}\n%%EOF\n").as_bytes());
+        }
+        (file, start)
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn an_entry_inside_a_cut_body_repairs_as_in_the_whole_file() {
+        let (mut file, start) = cut_file(false);
+        let table = file.windows(9).position(|w| w == b"xref\n0 5\n").unwrap();
+        // Object 3 is the page: only a repair finds it.
+        let entry = table + 9 + 3 * 20;
+        file.splice(entry..entry + 10, format!("{:010}", start + 100).into_bytes());
+        let pdf = cut(file, start, true);
+        let page = pdf.xref().get::<Dict<'_>>(ObjectIdentifier::new(3, 0));
+        assert!(page.is_some());
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn a_body_cut_out_of_the_bytes_is_read_when_wanted() {
+        let pdf = cut_fixture(false, true);
+        assert_eq!(pdf.pages().len(), 1);
+        let stream = pdf.xref().get::<Stream<'_>>(ObjectIdentifier::new(4, 0)).unwrap();
+        assert_eq!(stream.raw_data().as_ref(), [b'b'; 5000].as_slice());
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn a_body_that_cannot_be_read_reads_as_empty() {
+        let pdf = cut_fixture(false, false);
+        let stream = pdf.xref().get::<Stream<'_>>(ObjectIdentifier::new(4, 0)).unwrap();
+        assert!(stream.raw_data().is_empty());
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn an_update_after_a_cut_body_is_found_through_it() {
+        let pdf = cut_fixture(true, true);
+        assert!(pdf.xref().get::<Dict<'_>>(ObjectIdentifier::new(5, 0)).is_some());
+        assert_eq!(pdf.pages().len(), 1);
+        let stream = pdf.xref().get::<Stream<'_>>(ObjectIdentifier::new(4, 0)).unwrap();
+        assert_eq!(stream.raw_data().len(), 5000);
     }
 
     #[cfg(feature = "std")]
