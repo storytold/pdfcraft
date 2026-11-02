@@ -1897,6 +1897,62 @@ fn dragging_the_fill_text_size_slider_is_one_undo_step() {
 }
 
 #[test]
+fn pressing_the_fill_text_size_slider_without_moving_it_adds_no_undo_step() {
+    let mut h = harness();
+    place_selected_text(&mut h, "Hold me");
+    let height = placed_height(&h, "Hold me");
+    h.get_by_label("Font size").click();
+    h.run_steps(2);
+    let slider = h.get_by_role(egui::accesskit::Role::Slider).rect();
+    let at = pos2(slider.min.x + (slider.max.x - slider.min.x) * 0.75, (slider.min.y + slider.max.y) / 2.0);
+    let press = |h: &mut Harness<'static, PdfCraftApp>| {
+        h.hover_at(at);
+        h.run_steps(1);
+        h.drag_at(at);
+        h.run_steps(1);
+        h.drop_at(at);
+        h.run_steps(3);
+    };
+    press(&mut h);
+    let resized = placed_height(&h, "Hold me");
+    assert!(resized > height, "the first press moves the size: {height} -> {resized}");
+    press(&mut h);
+    assert_eq!(placed_height(&h, "Hold me"), resized);
+    h.state_mut().execute("edit.undo");
+    h.run_steps(3);
+    assert_eq!(placed_height(&h, "Hold me"), height, "one undo takes back the only change; the second press added no step");
+}
+
+#[test]
+fn typing_a_fill_text_size_that_rounds_to_the_stored_one_adds_no_undo_step() {
+    let mut h = harness();
+    place_selected_text(&mut h, "Round me");
+    let height = placed_height(&h, "Round me");
+    h.get_by_label("Font size").click();
+    h.run_steps(2);
+    let type_size = |h: &mut Harness<'static, PdfCraftApp>, value: &str| {
+        h.query_all_by_role(egui::accesskit::Role::SpinButton)
+            .find(|n| n.value().is_some_and(|v| v.ends_with(" pt")))
+            .expect("the Font size control")
+            .click();
+        h.run_steps(2);
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.event(egui::Event::Text(value.into()));
+        h.run_steps(1);
+        h.key_press(egui::Key::Enter);
+        h.run_steps(4);
+    };
+    type_size(&mut h, "36.1234");
+    let resized = placed_height(&h, "Round me");
+    assert!(resized > height, "the first size applies: {height} -> {resized}");
+    type_size(&mut h, "36.1231");
+    assert_eq!(h.state().fill_text_size, 36.1231);
+    h.state_mut().execute("edit.undo");
+    h.run_steps(3);
+    assert_eq!(placed_height(&h, "Round me"), height, "one undo takes back the only change; the rounded retype added no step");
+}
+
+#[test]
 fn the_fill_colour_dot_recolours_the_selected_text() {
     let mut h = harness();
     place_selected_text(&mut h, "Paint me");

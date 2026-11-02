@@ -343,8 +343,15 @@ fn active_tool_controls(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ve
                 (size.changed() && !size.dragged()) || size.drag_stopped()
             })
             .is_some_and(|popup| popup.inner);
-        if resized && let Some((page, index)) = selected_fill_text(app) {
-            app.apply_edit(Edit::FontSizeAnnotation { page, index, size: app.fill_text_size });
+        let size = app.fill_text_size;
+        if resized
+            && let Some((page, index)) = selected_fill_text(app)
+            && app
+                .active_ids()
+                .and_then(|(_, id)| app.session.get(id)?.comment_props(page, index)?.font_size)
+                .is_none_or(|stored| format!("{stored:.3}") != format!("{size:.3}"))
+        {
+            app.apply_edit(Edit::FontSizeAnnotation { page, index, size });
         }
     }
     if let QuickTool::Comment(tool) = app.quick_tool {
