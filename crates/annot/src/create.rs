@@ -231,6 +231,10 @@ impl Side {
 pub fn callout_side(rect: [f64; 4], knee: [f64; 2]) -> Side {
     let [x0, y0, x1, y1] = normalize(rect);
     let [x, y] = knee;
+    // Before any comparison: one with NaN is false, so the other coordinate alone would decide.
+    if x.is_nan() || y.is_nan() {
+        return Side::Bottom;
+    }
     if x < x0 {
         Side::Left
     } else if x > x1 {

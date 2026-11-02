@@ -2470,7 +2470,7 @@ fn a_callouts_arrow_point_alone_keeps_its_knee() {
 #[test]
 fn a_callouts_knee_has_one_side_for_every_tie() {
     let tb = [100.0, 100.0, 200.0, 150.0];
-    let cases: [([f64; 2], Side, &str); 26] = [
+    let cases: [([f64; 2], Side, &str); 30] = [
         ([100.004, 125.0], Side::Left, "on the left edge, give or take an f32"),
         ([199.996, 125.0], Side::Right, "on the right edge, give or take an f32"),
         ([150.0, 149.996], Side::Top, "on the top edge, give or take an f32"),
@@ -2495,6 +2495,10 @@ fn a_callouts_knee_has_one_side_for_every_tie() {
         ([210.0, 90.0], Side::Right, "diagonally off the bottom-right corner"),
         ([f64::NAN, 125.0], Side::Bottom, "x not a number"),
         ([150.0, f64::NAN], Side::Bottom, "y not a number"),
+        ([f64::NAN, 160.0], Side::Bottom, "x not a number, y above the box"),
+        ([f64::NAN, 90.0], Side::Bottom, "x not a number, y below the box"),
+        ([90.0, f64::NAN], Side::Bottom, "y not a number, x left of the box"),
+        ([210.0, f64::NAN], Side::Bottom, "y not a number, x right of the box"),
         ([f64::NEG_INFINITY, 125.0], Side::Left, "infinitely far left"),
         ([150.0, f64::INFINITY], Side::Top, "infinitely far up"),
     ];
