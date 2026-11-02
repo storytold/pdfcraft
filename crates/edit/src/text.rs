@@ -24,6 +24,7 @@ use crate::EditError;
 mod regions;
 #[path = "text_session.rs"]
 mod session;
+pub use fallback::strip_subset_tag;
 use regions::{alignment_frame, group_blocks, is_centred, rewrite_styled_block};
 pub use session::TextSession;
 
@@ -47,13 +48,13 @@ pub use editor::{TextEditLayout, TextEditorFont, register_text_font, text_edit_l
 pub(crate) use fallback::SOURCE_SPACE_CALLS;
 use fallback::{
     MAX_TYPE3_GLYPHS, Type3Glyph, fallback_face, needs_type3, no_fallback_font, no_glyph_for, same_base_font, same_font, source_encodes,
-    source_family, source_program, source_show, source_space, source_width, strip_subset_tag, type3_faces, type3_glyph, write_type3_glyphs,
+    source_family, source_program, source_show, source_space, source_width, type3_faces, type3_glyph, write_type3_glyphs,
 };
 #[cfg(test)]
 use fallback::{add_type3_font, is_type3_fallback};
 use interp::{Origin, Paint, union};
 use lines::page_dict;
-pub(crate) use lines::{FormBudget, content_streams, content_streams_within, form_call, rewritten_contents, splice};
+pub(crate) use lines::{FormBudget, content_streams, content_streams_within, dict_in_place, form_call, resource_dict, rewritten_contents, splice};
 pub use lines::{MAX_FORM_DEPTH, MAX_FORM_VISITS, glyph_text_lines, text_lines};
 pub use rewrite::{LineEdit, replace_line, rewrite_block};
 use rewrite::{coincident_ops, rewrite_block_from};
