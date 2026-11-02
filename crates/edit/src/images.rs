@@ -379,34 +379,34 @@ pub fn reading_images(doc: &Document, page: usize) -> Result<Vec<PageImage>, Edi
         forms: &mut Forms,
         out: &mut Vec<PageImage>,
     ) -> Result<(), EditError> {
-        let xo = resources.get(b"XObject").map(|x| doc.resolve(x)).and_then(|x| x.as_dict().cloned()).unwrap_or_default();
+        let mut held = None;
+        let xo = crate::text::resource_dict(doc, resources, b"XObject", &mut held);
         for (i, op) in ops.iter().enumerate() {
             st.apply(op)?;
             let ctm = st.placement.matrix;
             if op.is("Do") {
                 let Some(name) = op.name(0) else { continue };
+                let drawn = xo.and_then(|xo| xo.get(name));
                 if let Some(form) = crate::text::form_call(doc, resources, name, ctm, &forms.path, &mut forms.budget) {
                     if let Some(r) = form.obj {
                         forms.path.push(r);
                     }
                     let bounds =
-                        xo.get(name).map(|o| doc.resolve(o)).and_then(|o| o.as_dict().and_then(|d| d.get(b"BBox")).map(|b| doc.resolve(b))).and_then(
-                            |b| {
-                                let a = b.as_array()?;
-                                let [x0, y0, x1, y1] = a.as_slice() else { return None };
-                                Some(form.ctm.bbox([x0.as_f64()?, y0.as_f64()?, x1.as_f64()?, y1.as_f64()?]))
-                            },
-                        );
+                        drawn.map(|o| doc.resolve(o)).and_then(|o| o.as_dict().and_then(|d| d.get(b"BBox")).map(|b| doc.resolve(b))).and_then(|b| {
+                            let a = b.as_array()?;
+                            let [x0, y0, x1, y1] = a.as_slice() else { return None };
+                            Some(form.ctm.bbox([x0.as_f64()?, y0.as_f64()?, x1.as_f64()?, y1.as_f64()?]))
+                        });
                     let clip = bounds.map_or(st.placement.clip, |b| intersection(st.placement.clip, b).unwrap_or([0.0; 4]));
                     let mut inner = ImageState::new(form.ctm, clip, st.placement.clips.clone());
                     let piece = stream(op);
-                    walk(doc, &parse(&form.data).ops, &form.resources, &mut inner, &|_| piece, forms, out)?;
+                    walk(doc, &parse(&form.data).ops, form.resources(resources), &mut inner, &|_| piece, forms, out)?;
                     if form.obj.is_some() {
                         forms.path.pop();
                     }
                     continue;
                 }
-                let Some(r) = xo.get(name).and_then(Object::as_ref) else { continue };
+                let Some(r) = drawn.and_then(Object::as_ref) else { continue };
                 let obj = doc.get(r);
                 let Object::Stream(s) = &*obj else { continue };
                 if s.dict.name(b"Subtype") != Some(b"Image") {
