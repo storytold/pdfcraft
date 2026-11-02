@@ -728,8 +728,11 @@ fn process(
     budget: &mut ImageBudget,
 ) -> Option<(Stream, Option<(ObjRef, Stream)>)> {
     let d = &s.dict;
+    // A colour-key mask names sample values, which resampling and JPEG would change. A stencil mask
+    // is an image of its own, with its own resolution (ISO 32000-2 §8.9.6.3): the picture can change
+    // under it and its edges stay as they are.
     if d.get(b"Decode").is_some_and(|a| !is_identity_decode(doc, a, n))
-        || d.contains(b"Mask")
+        || d.get(b"Mask").is_some_and(|m| !matches!(&*doc.resolve(m), Object::Stream(_)))
         || d.name(b"ImageMask").is_some()
         || matches!(d.get(b"ImageMask"), Some(Object::Bool(true)))
     {

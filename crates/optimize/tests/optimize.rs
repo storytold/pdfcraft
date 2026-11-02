@@ -3788,3 +3788,77 @@ fn mixed_text_and_small_halftone_regions_keep_their_tones_with_wide_white_margin
         assert_eq!(render(&saved), before, "local halftone {side}x{side}");
     }
 }
+
+/// A one-bit stencil of `w` × `h`, solid but for a hole in its middle.
+fn stencil(doc: &mut Document, w: u32, h: u32) -> ObjRef {
+    let row = (w as usize).div_ceil(8);
+    let mut bits = vec![0u8; row * h as usize];
+    for y in (h as usize / 3)..(2 * h as usize / 3) {
+        for x in (w as usize / 3)..(2 * w as usize / 3) {
+            bits[y * row + x / 8] |= 0x80 >> (x % 8);
+        }
+    }
+    let mut d = Dict::new();
+    d.set(b"Type".to_vec(), Object::name("XObject"));
+    d.set(b"Subtype".to_vec(), Object::name("Image"));
+    d.set(b"ImageMask".to_vec(), Object::Bool(true));
+    d.set(b"Width".to_vec(), Object::Int(i64::from(w)));
+    d.set(b"Height".to_vec(), Object::Int(i64::from(h)));
+    d.set(b"BitsPerComponent".to_vec(), Object::Int(1));
+    doc.add(Object::Stream(Stream::flate(d, &bits)))
+}
+
+/// A picture with a stencil mask is made smaller like any other: the mask has a resolution of its
+/// own, so it stays exactly as it was and the hole it cuts stays where it was.
+#[test]
+fn a_picture_with_a_stencil_mask_is_downsampled_under_its_mask() {
+    let mut doc = Document::new_empty();
+    let mask = stencil(&mut doc, 1200, 1200);
+    let img = image(&mut doc, 1200, 1200, 3, true, None);
+    let mut s = stream(&doc, img);
+    s.dict.set(b"Mask".to_vec(), Object::Ref(mask));
+    doc.set(img, Object::Stream(s));
+    let mask_before = stream(&doc, mask);
+    // 1200 pixels over two inches: 600 ppi.
+    page(&mut doc, &[("Im0", img)], "q 144 0 0 144 100 100 cm /Im0 Do Q");
+    let before = render(&doc);
+    let report = optimize(&mut doc, &Settings::default()).unwrap();
+    assert_eq!(report.images_resampled, 1, "{report:?}");
+    let after = stream(&doc, img);
+    assert_eq!(after.dict.int(b"Width"), Some(300), "150 ppi");
+    assert_eq!(after.dict.reference(b"Mask"), Some(mask), "the mask stays on it");
+    assert_eq!(stream(&doc, mask), mask_before, "and doesn't change");
+    let rendered = render(&doc);
+    assert_eq!(rendered.len(), before.len());
+    let changed = before.iter().zip(&rendered).filter(|(a, b)| a.abs_diff(**b) > 96).count();
+    assert!(changed * 200 < before.len(), "the masked picture looks the same: {changed} of {} samples far off", before.len());
+}
+
+/// A colour-key mask names sample values: resampling or JPEG would make holes where there were none
+/// and fill those there were, so the picture stays as it is, however the array is written. A mask
+/// that can't be read as a stencil is no reason to change the picture either.
+#[test]
+fn a_picture_whose_mask_is_not_a_stencil_is_left_alone() {
+    type Mask = fn(&mut Document) -> Object;
+    fn key() -> Object {
+        Object::Array([250, 255, 250, 255, 250, 255].map(Object::Int).to_vec())
+    }
+    let masks: [(&str, Mask); 3] = [
+        ("direct array", |_| key()),
+        ("array by reference", |doc| Object::Ref(doc.add(key()))),
+        ("nothing there", |doc| Object::Ref(doc.add(Object::Null))),
+    ];
+    for (what, mask) in masks {
+        let mut doc = Document::new_empty();
+        let img = image(&mut doc, 1200, 1200, 3, true, None);
+        let mut s = stream(&doc, img);
+        let mask = mask(&mut doc);
+        s.dict.set(b"Mask".to_vec(), mask);
+        doc.set(img, Object::Stream(s));
+        let before = stream(&doc, img);
+        page(&mut doc, &[("Im0", img)], "q 144 0 0 144 100 100 cm /Im0 Do Q");
+        let report = optimize(&mut doc, &Settings::default()).unwrap();
+        assert_eq!(report.images_resampled + report.images_recompressed, 0, "{what}: {report:?}");
+        assert_eq!(stream(&doc, img), before, "{what}");
+    }
+}
