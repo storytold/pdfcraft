@@ -2346,6 +2346,7 @@ animation effects	Off	끄기
 	No signature was found in the frame. Move the frame over the signature or raise the ink sensitivity.	프레임 안에서 서명을 찾지 못했습니다. 프레임을 서명 위로 옮기거나 잉크 민감도를 높이세요.
 	Couldn't use the photo: {e}	사진을 사용할 수 없습니다: {e}
 	Close Tab	탭 닫기
+	Duplicate Tab	탭 복제
 	Reopen Closed Tab	닫은 탭 다시 열기
 	Reveal in Finder	Finder에서 보기
 	Reveal in File Explorer	파일 탐색기에서 보기

@@ -2446,6 +2446,7 @@ animation effects	Off	Disattivati
 
 # PDF tab context menu (#1233)
 	Close Tab	Chiudi scheda
+	Duplicate Tab	Duplica scheda
 	Reopen Closed Tab	Riapri scheda chiusa
 	Reveal in Finder	Mostra nel Finder
 	Reveal in File Explorer	Mostra in Esplora file

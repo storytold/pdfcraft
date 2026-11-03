@@ -2437,6 +2437,7 @@ animation effects	Off	Désactivés
 
 # PDF tab context menu (#1233)
 	Close Tab	Fermer l’onglet
+	Duplicate Tab	Dupliquer l’onglet
 	Reopen Closed Tab	Rouvrir l’onglet fermé
 	Reveal in Finder	Afficher dans le Finder
 	Reveal in File Explorer	Afficher dans l’explorateur de fichiers

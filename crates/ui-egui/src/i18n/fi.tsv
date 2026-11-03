@@ -2364,6 +2364,7 @@ animation effects	Off	Ei käytössä
 	No signature was found in the frame. Move the frame over the signature or raise the ink sensitivity.	Kehyksestä ei löytynyt allekirjoitusta. Siirrä kehys allekirjoituksen päälle tai nosta musteen herkkyyttä.
 	Couldn't use the photo: {e}	Kuvaa ei voitu käyttää: {e}
 	Close Tab	Sulje välilehti
+	Duplicate Tab	Monista välilehti
 	Reopen Closed Tab	Avaa suljettu välilehti uudelleen
 	Reveal in Finder	Näytä Finderissa
 	Reveal in File Explorer	Näytä Resurssienhallinnassa

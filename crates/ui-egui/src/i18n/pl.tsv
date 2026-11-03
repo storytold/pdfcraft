@@ -2405,6 +2405,7 @@ animation effects	Off	Wyłączone
 
 # PDF tab context menu (#1233)
 	Close Tab	Zamknij kartę
+	Duplicate Tab	Duplikuj kartę
 	Reopen Closed Tab	Otwórz ponownie zamkniętą kartę
 	Reveal in Finder	Pokaż w Finderze
 	Reveal in File Explorer	Pokaż w Eksploratorze plików

@@ -2,7 +2,9 @@
 use pdfcraft_engine::DocId;
 
 pub(crate) enum Action {
-    Close(DocId),
+    /// A tab, by its [`crate::canvas::DocView::tab`] key: tabs of one document share its id.
+    Close(u64),
+    Duplicate(u64),
     Reopen,
     Reveal(DocId),
 }
@@ -10,9 +12,14 @@ pub(crate) enum Action {
 impl crate::PdfCraftApp {
     pub(crate) fn tab_action(&mut self, action: Action) {
         match action {
-            Action::Close(id) => {
-                if let Some(i) = self.views.iter().position(|v| v.id == id) {
+            Action::Close(key) => {
+                if let Some(i) = self.views.iter().position(|v| v.tab == key) {
                     self.request_close_tab(i);
+                }
+            }
+            Action::Duplicate(key) => {
+                if let Some(i) = self.views.iter().position(|v| v.tab == key) {
+                    self.duplicate_tab(i);
                 }
             }
             Action::Reopen => {
@@ -163,14 +170,15 @@ mod tests {
         let mut app = crate::PdfCraftApp::new();
         app.open_bytes("first.pdf", Some("/tmp/first.pdf".into()), PDF.to_vec()).unwrap();
         let first = app.views[0].id;
+        let first_tab = app.views[0].tab;
         app.open_bytes("second.pdf", None, PDF.to_vec()).unwrap();
         app.session.apply(first, pdfcraft_engine::Edit::InsertBlankPage { at: 0, width: 300.0, height: 400.0 }).unwrap();
-        app.tab_action(Action::Close(first));
+        app.tab_action(Action::Close(first_tab));
         assert_eq!(app.views.len(), 2);
         assert!(app.closed_tabs.is_empty());
         app.resolve_close(&egui::Context::default(), None);
         assert!(app.closed_tabs.is_empty());
-        app.tab_action(Action::Close(first));
+        app.tab_action(Action::Close(first_tab));
         app.resolve_close(&egui::Context::default(), Some(false));
         assert_eq!(app.views.len(), 1);
         assert_eq!(app.closed_tabs, ["/tmp/first.pdf"]);
@@ -283,6 +291,116 @@ mod tests {
     }
 }
 
+#[cfg(test)]
+mod duplicate_tests {
+    use crate::PdfCraftApp;
+    use pdfcraft_engine::Edit;
+    const PDF: &[u8] = include_bytes!("../../tests/data/form.pdf");
+
+    fn blank_page() -> Edit {
+        Edit::InsertBlankPage { at: 0, width: 300.0, height: 400.0 }
+    }
+
+    #[test]
+    fn a_duplicate_shares_the_document_and_keeps_it_open_until_the_last_tab_closes() {
+        let mut app = PdfCraftApp::new();
+        app.open_bytes("doc.pdf", Some("/tmp/doc.pdf".into()), PDF.to_vec()).unwrap();
+        let id = app.views[0].id;
+        assert!(app.duplicate_tab(0));
+        assert_eq!(app.views.len(), 2);
+        assert_eq!(app.active, Some(1), "the duplicate opens beside its source and is shown");
+        assert!(app.views.iter().all(|v| v.id == id));
+        assert_ne!(app.views[0].tab, app.views[1].tab);
+
+        // An edit made through one tab reaches the other on the next frame.
+        app.active = Some(1);
+        assert!(app.apply_edit(blank_page()));
+        let pages = app.session.get(id).unwrap().info.pages.len();
+        app.sync_document_views();
+        assert!(app.views.iter().all(|v| v.page_count() == pages), "both tabs show the edited page list");
+
+        app.close_tab(0);
+        assert_eq!(app.views.len(), 1);
+        assert!(app.session.get(id).is_some(), "the document stays open with its remaining tab");
+        assert!(app.closed_tabs.is_empty(), "the document is still open, so it is not in the closed history");
+
+        app.close_tab(0);
+        assert!(app.session.get(id).is_none(), "closing the last tab closes the document");
+        assert_eq!(app.closed_tabs, ["/tmp/doc.pdf"]);
+    }
+
+    #[test]
+    fn a_dirty_document_asks_once_at_its_last_tab() {
+        let mut app = PdfCraftApp::new();
+        app.open_bytes("doc.pdf", None, PDF.to_vec()).unwrap();
+        app.duplicate_tab(0);
+        app.active = Some(1);
+        assert!(app.apply_edit(blank_page()));
+        assert!(!app.needs_close_prompt(0), "a tab with another tab of the document closes without asking");
+        assert!(!app.needs_close_prompt(1));
+        app.close_tab(0);
+        assert!(app.needs_close_prompt(0), "the last tab asks about the document's edits");
+    }
+
+    #[test]
+    fn moving_a_tab_keeps_the_same_tab_active() {
+        let mut app = PdfCraftApp::new();
+        for name in ["a.pdf", "b.pdf", "c.pdf"] {
+            app.open_bytes(name, None, PDF.to_vec()).unwrap();
+        }
+        app.active = Some(0);
+        let a = app.views[0].id;
+        app.move_tab(0, 2);
+        assert_eq!(app.active.map(|i| app.views[i].id), Some(a));
+        app.move_tab(0, 1);
+        assert_eq!(app.active.map(|i| app.views[i].id), Some(a), "a tab moved past the active one keeps it active");
+        assert_eq!(app.active, Some(2));
+    }
+
+    #[test]
+    fn quit_asks_once_about_a_dirty_document_shown_in_two_tabs() {
+        let mut app = PdfCraftApp::new();
+        app.open_bytes("doc.pdf", None, PDF.to_vec()).unwrap();
+        app.duplicate_tab(0);
+        app.active = Some(1);
+        assert!(app.apply_edit(blank_page()));
+        assert_eq!(app.first_dirty(), Some(1), "the last tab asks; the first one does not");
+    }
+
+    #[test]
+    fn discarding_a_document_on_quit_closes_all_its_tabs() {
+        let mut app = PdfCraftApp::new();
+        app.open_bytes("doc.pdf", None, PDF.to_vec()).unwrap();
+        let id = app.views[0].id;
+        app.duplicate_tab(0);
+        app.active = Some(1);
+        assert!(app.apply_edit(blank_page()));
+        app.close_request = Some(crate::CloseRequest::All);
+        app.resolve_close(&egui::Context::default(), Some(false));
+        assert!(app.views.is_empty(), "the discard covers every tab of the document");
+        assert!(app.session.get(id).is_none());
+    }
+
+    #[test]
+    fn a_duplicate_opens_on_the_page_of_its_source() {
+        let mut app = PdfCraftApp::new();
+        let bytes = app.session.create_blank(200.0, 300.0, 3).unwrap();
+        app.open_bytes("doc.pdf", None, bytes.as_ref().clone()).unwrap();
+        app.views[0].go_to_page(1);
+        app.duplicate_tab(0);
+        assert_eq!(app.views[1].goto.map(|(page, _)| page), Some(1), "the duplicate is sent to the source page");
+    }
+
+    #[test]
+    fn a_snapshot_tab_cannot_be_duplicated() {
+        let mut app = PdfCraftApp::new();
+        app.open_bytes("doc.pdf", None, PDF.to_vec()).unwrap();
+        app.views[0].snapshot = Some(crate::canvas::Snapshot { kind: crate::canvas::SnapshotKind::Revision, revision: 1, from: "doc.pdf".into() });
+        assert!(!app.duplicate_tab(0));
+        assert_eq!(app.views.len(), 1);
+    }
+}
+
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod ui_tests {
     use crate::PdfCraftApp;
@@ -312,5 +430,25 @@ mod ui_tests {
         h.run_steps(3);
         assert_eq!(h.state().views.len(), 1);
         assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().name, "second.pdf");
+    }
+
+    #[test]
+    fn duplicate_tab_menu_opens_a_second_tab_of_the_same_document() {
+        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_| {
+            let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
+            app.open_bytes("first.pdf", None, include_bytes!("../../tests/data/form.pdf").to_vec()).unwrap();
+            app
+        });
+        h.run_steps(8);
+        h.get_by_role_and_label(egui::accesskit::Role::Tab, "first.pdf").click_secondary();
+        h.run_steps(2);
+        h.get_by_label("Duplicate Tab").click();
+        h.run_steps(3);
+        let state = h.state();
+        assert_eq!(state.views.len(), 2);
+        assert_eq!(state.views[0].id, state.views[1].id, "both tabs show the one document");
+        assert_ne!(state.views[0].tab, state.views[1].tab);
+        assert_eq!(state.active, Some(1));
     }
 }

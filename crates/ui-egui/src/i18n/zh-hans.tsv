@@ -2401,6 +2401,7 @@ animation effects	Off	关
 
 # PDF tab context menu (#1233)
 	Close Tab	关闭标签页
+	Duplicate Tab	复制标签页
 	Reopen Closed Tab	重新打开已关闭的标签页
 	Reveal in Finder	在 Finder 中显示
 	Reveal in File Explorer	在文件资源管理器中显示

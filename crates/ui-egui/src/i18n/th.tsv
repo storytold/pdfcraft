@@ -2320,6 +2320,7 @@ animation effects	Off	ปิด
 	No signature was found in the frame. Move the frame over the signature or raise the ink sensitivity.	ไม่พบลายเซ็นในกรอบ เลื่อนกรอบไปทับลายเซ็นหรือเพิ่มความไวของหมึก
 	Couldn't use the photo: {e}	ใช้รูปถ่ายไม่ได้: {e}
 	Close Tab	ปิดแท็บ
+	Duplicate Tab	ทำสำเนาแท็บ
 	Reopen Closed Tab	เปิดแท็บที่ปิดไปอีกครั้ง
 	Reveal in Finder	แสดงใน Finder
 	Reveal in File Explorer	แสดงใน File Explorer

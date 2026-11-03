@@ -2437,6 +2437,7 @@ animation effects	Off	Ki
 
 # PDF tab context menu (#1233)
 	Close Tab	Lap bezárása
+	Duplicate Tab	Lap duplikálása
 	Reopen Closed Tab	Bezárt lap újranyitása
 	Reveal in Finder	Megjelenítés a Finderben
 	Reveal in File Explorer	Megjelenítés a fájlkezelőben

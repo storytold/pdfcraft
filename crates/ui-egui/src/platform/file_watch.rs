@@ -419,7 +419,8 @@ impl PdfCraftApp {
         }
         self.watch.known.insert(c.doc, c.stamp);
         if self.has_unsaved_work(i) {
-            if let Some(view) = self.views.get_mut(i) {
+            // Every tab of the document shows the notice, so the one in view is not the only one.
+            for view in self.views.iter_mut().filter(|v| v.id == c.doc) {
                 view.disk_changed = true;
             }
             return;
@@ -453,8 +454,11 @@ impl PdfCraftApp {
             Ok(()) => {
                 // Whatever was unsaved is gone, so there is nothing left to recover.
                 self.forget_recovery(id);
-                if let (Some(view), Some(doc)) = (self.views.get_mut(i), self.session.get(id)) {
-                    view.document_replaced(&doc.info);
+                // Every tab of the document shows the new version, and none keeps state from the old.
+                if let Some(doc) = self.session.get(id) {
+                    for view in self.views.iter_mut().filter(|v| v.id == id) {
+                        view.document_replaced(&doc.info);
+                    }
                 }
                 // What the form's scripts said while it opened, as on opening.
                 let out = self.session.take_js_output(id);
