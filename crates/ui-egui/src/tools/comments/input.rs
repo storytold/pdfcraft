@@ -229,7 +229,9 @@ fn select_input(
     if matches!(cv.gesture, Some(Gesture::Move { page, .. } | Gesture::Resize { page, .. } | Gesture::Reshape { page, .. }) if page == cx.page) {
         consumed = true;
     }
-    if resp.drag_stopped()
+    // A move, resize or reshape ends where its drag stops, or once the button is up when the pages
+    // missed its release.
+    if (resp.drag_stopped() || !cx.ptr.primary_down)
         && let Some(p) = pointer
     {
         match cv.gesture.clone() {
