@@ -1050,15 +1050,17 @@ fn dialog_extract(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending) -
     let (selected, total) = app.active_ids().map_or((Vec::new(), 0), |(i, _)| (app.views[i].target_pages(), app.views[i].page_count()));
     ui.label(egui::RichText::new(tl!("Extract pages")).font(theme::semibold(18.0)));
     ui.add_space(8.0);
-    // Page ranges to take instead of the selection (#3593); the hint is the selection.
-    let hint = match crate::combine_ui::range_of(&selected, total) {
-        all if all.is_empty() && total > 1 => format!("1-{total}"),
-        all if all.is_empty() => "1".to_string(),
-        some => some,
-    };
     ui.horizontal(|ui| {
         let l = ui.label(tl!("Pages"));
-        ui.add(egui::TextEdit::singleline(&mut app.extract_draft.pages).hint_text(hint).desired_width(240.0)).labelled_by(l.id);
+        let mut field = egui::TextEdit::singleline(&mut app.extract_draft.pages).desired_width(240.0).show(ui);
+        let response = field.response.response.labelled_by(l.id);
+        if std::mem::take(&mut app.extract_draft.focus_pages) {
+            response.request_focus();
+            field.state.cursor.set_char_range(Some(egui::text::CCursorRange::select_all_str(&app.extract_draft.pages)));
+            field.state.store(ui.ctx(), response.id);
+            ui.ctx().request_repaint();
+        }
+        ui.label(crate::i18n::fmt(tl!("of {pages}"), &[("pages", &total.to_string())]));
     });
     let chosen = app.extract_draft.pages_to_extract(selected, total);
     match &chosen {
