@@ -132,6 +132,19 @@ fn depth_budget_bounds_emitted_closures_and_overflow_is_refused_on_top() {
     }
 }
 
+/// Content too large to read in full might leave a marked-content sequence (hidden optional
+/// content) open, so nothing is put on top of it, and the page stays as it was.
+#[test]
+fn a_mark_is_refused_on_top_of_content_too_large_to_read() {
+    let mut big = b"/OC /Hidden BDC\n".to_vec();
+    big.extend(b"0 g\n".repeat(1_000_001));
+    let mut doc = fixture(&[&big]);
+    let page = page_list(&doc).remove(0).obj;
+    let before = (*doc.get(page)).clone();
+    assert!(matches!(stamp(&mut doc, 0, "Probe", b"q Q\n".to_vec()), Err(EditError::Invalid(m)) if m.contains("too large")));
+    assert_eq!((*doc.get(page)).clone(), before);
+}
+
 /// Marks refused on top of content nested past the depth budget leave the page as it was: old
 /// marks are not removed and no resources are added before the refusal.
 #[test]
