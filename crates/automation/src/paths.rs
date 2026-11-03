@@ -114,13 +114,13 @@ pub(crate) fn child(dir: &Path, name: &str) -> PathBuf {
     dir.join(safe)
 }
 
-/// `<stem>.pdf` in `dir`, or `<stem> (2).pdf` and so on when that name is taken.
-pub(crate) fn unused(dir: &Path, stem: &str) -> PathBuf {
-    let first = child(dir, &format!("{stem}.pdf"));
-    if !first.exists() {
-        return first;
-    }
-    (2..10_000u32).map(|n| child(dir, &format!("{stem} ({n}).pdf"))).find(|p| !p.exists()).unwrap_or(first)
+/// `<stem>.pdf` in `dir`, or `<stem> (2).pdf` and so on when that name is taken; an error when
+/// every one of them is (never a name that is taken: writing there would replace that file).
+pub(crate) fn unused(dir: &Path, stem: &str) -> Result<PathBuf> {
+    std::iter::once(child(dir, &format!("{stem}.pdf")))
+        .chain((2..10_000u32).map(|n| child(dir, &format!("{stem} ({n}).pdf"))))
+        .find(|p| !p.exists())
+        .ok_or_else(|| failed(format!("{}: no unused output name available for {stem}", dir.display())))
 }
 
 /// Largest input file a tool reads into memory (512 MiB, matching `doc_batch`).
@@ -177,4 +177,26 @@ pub(crate) fn write_atomic_synced(
     // any step removes it and leaves the destination as it was.
     pdfcraft_platform::staging::write_atomically_with(path, bytes, StagingName::SuffixThenTag, suffixes, sync)
         .map_err(|e| failed(format!("{}: {e}", path.display())))
+}
+
+#[cfg(test)]
+mod unused_name_tests {
+    use super::unused;
+
+    /// With every numbered name taken, there is no name to write to: an error, never the taken
+    /// first name (a separate conversion wrote over it).
+    #[test]
+    fn no_unused_name_is_an_error_not_a_taken_name() {
+        let dir = std::env::temp_dir().join(format!("pc-unused-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.pdf"), "keep").unwrap();
+        assert_eq!(unused(&dir, "a").unwrap(), dir.join("a (2).pdf"));
+        for n in 2..10_000 {
+            std::fs::write(dir.join(format!("a ({n}).pdf")), "").unwrap();
+        }
+        assert!(unused(&dir, "a").is_err());
+        assert_eq!(std::fs::read_to_string(dir.join("a.pdf")).unwrap(), "keep");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
