@@ -61,7 +61,7 @@ fn golden_request() -> Result<(), RequestError> {
 #[test]
 fn haiku_gets_no_fallbacks_and_web_search_is_direct() -> Result<(), RequestError> {
     let turn = user_turn(&[], None, "Hi")?;
-    let search = WebSearch { max_uses: 0, allowed_domains: vec![" iso.org ".into(), String::new()], blocked_domains: vec!["spam.example".into()] };
+    let search = WebSearch { max_uses: 0, allowed_domains: vec![" iso.org ".into(), String::new()], blocked_domains: vec![" ".into()] };
     let opts = Options { model: &HAIKU, effort: crate::model::Effort::Low, max_tokens: 0, fallbacks: true, web_search: Some(&search) };
     let req = request(&opts, &key(), &[], &turn)?;
     let b = body(&req);
@@ -77,6 +77,57 @@ fn haiku_gets_no_fallbacks_and_web_search_is_direct() -> Result<(), RequestError
     let opts = Options { web_search: Some(&blocked_only), ..Options::new(&OPUS) };
     assert_eq!(body(&request(&opts, &key(), &[], &turn)?)["tools"][0]["blocked_domains"], json!(["spam.example"]));
     Ok(())
+}
+
+/// A domain filter is sent whole or not at all: cutting a block list would let its pages back in.
+#[test]
+fn web_search_filters_that_cant_be_sent_whole_are_refused() -> Result<(), RequestError> {
+    let turn = user_turn(&[], None, "Hi")?;
+    let refused = |search: WebSearch| request(&Options { web_search: Some(&search), ..Options::new(&OPUS) }, &key(), &[], &turn).err();
+    let many: Vec<String> = (0..=MAX_DOMAINS).map(|i| format!("site{i}.example")).collect();
+    assert_eq!(refused(WebSearch { max_uses: 1, allowed_domains: vec![], blocked_domains: many.clone() }), Some(RequestError::TooManyDomains));
+    assert_eq!(refused(WebSearch { max_uses: 1, allowed_domains: many, blocked_domains: vec![] }), Some(RequestError::TooManyDomains));
+    let long = vec![format!("{}.example", "a".repeat(MAX_DOMAIN_BYTES))];
+    assert_eq!(refused(WebSearch { max_uses: 1, allowed_domains: vec![], blocked_domains: long }), Some(RequestError::DomainTooLong));
+    let both = WebSearch { max_uses: 1, allowed_domains: vec!["iso.org".into()], blocked_domains: vec!["iso.org/private".into()] };
+    assert_eq!(refused(both), Some(RequestError::BothDomainLists));
+    let exactly: Vec<String> = (0..MAX_DOMAINS).map(|i| format!("site{i}.example")).collect();
+    assert_eq!(refused(WebSearch { max_uses: 1, allowed_domains: vec![], blocked_domains: exactly }), None);
+    Ok(())
+}
+
+#[test]
+fn web_citations_need_a_host() {
+    let event = |url: &str| {
+        format!(
+            "data: {{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{{\"type\":\"citations_delta\",\"citation\":{{\"type\":\"web_search_result_location\",\"url\":\"{url}\",\"title\":\"t\",\"encrypted_index\":\"E\",\"cited_text\":\"q\"}}}}}}\n\n"
+        )
+    };
+    let start = "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n";
+    for (url, cited) in [
+        ("https://", false),
+        ("https:///x", false),
+        ("HTTP://?q", false),
+        ("http://#a", false),
+        ("https://example.com/a", true),
+        ("HTTP://Example.com", true),
+    ] {
+        let body = format!("{start}{}", event(url));
+        let (events, _) = decode_with(vec![], &[body.as_bytes()]);
+        assert_eq!(events.iter().any(|e| matches!(e, Event::Citation { .. })), cited, "{url}: {events:?}");
+    }
+}
+
+/// One huge chunk from the transport decodes as the same events as small ones (it is read in
+/// pieces, so its events are never all queued at once).
+#[test]
+fn one_huge_chunk_decodes_like_small_ones() {
+    let body = SEARCH.repeat(400);
+    assert!(body.len() > 4 * DECODE_PIECE);
+    let (whole, _) = decode_with(vec![], &[body.as_bytes()]);
+    let pieces: Vec<&[u8]> = body.as_bytes().chunks(1000).collect();
+    let (small, _) = decode_with(vec![], &pieces);
+    assert_eq!(whole, small);
 }
 
 #[test]

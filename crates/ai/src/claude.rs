@@ -48,6 +48,11 @@ pub const MAX_ANSWER_BLOCKS: usize = 4_096;
 pub const MAX_STREAM_EVENTS: usize = 500_000;
 /// Domains in a web search filter.
 pub const MAX_DOMAINS: usize = 64;
+/// Longest domain (with an optional path) in a web search filter.
+pub const MAX_DOMAIN_BYTES: usize = 253;
+/// The decoder reads a body in pieces of this size, so one huge chunk from the transport can't
+/// queue more stream events than the event cap at once.
+const DECODE_PIECE: usize = 64 * 1024;
 
 /// The fixed system prompt. It is the start of every request, so it is cached.
 pub const SYSTEM_PROMPT: &str = "You are the assistant in PdfCraft, a PDF application. The user is reading a PDF and asks about part of it.
@@ -66,6 +71,12 @@ pub enum RequestError {
     TooManyPassages,
     #[error("the image is larger than the provider accepts")]
     ImageTooLarge,
+    #[error("web search takes at most {MAX_DOMAINS} domains in a list")]
+    TooManyDomains,
+    #[error("a web search domain is longer than {MAX_DOMAIN_BYTES} bytes")]
+    DomainTooLong,
+    #[error("web search takes allowed domains or blocked domains, not both")]
+    BothDomainLists,
     #[error("the conversation is too long to continue; start a new one")]
     HistoryTooLong,
     #[error("{0}")]
@@ -224,7 +235,7 @@ pub fn request(opts: &Options<'_>, key: &Secret, history: &[Message], turn: &Mes
             obj.insert("fallbacks".into(), json!("default"));
         }
         if let Some(search) = opts.web_search {
-            obj.insert("tools".into(), json!([web_search_tool(search)]));
+            obj.insert("tools".into(), json!([web_search_tool(search)?]));
         }
     }
     let body = serde_json::to_vec(&body).map_err(|e| RequestError::Json(e.to_string()))?;
@@ -262,7 +273,9 @@ fn message_json(m: &Message, breakpoint: bool) -> Value {
     json!({"role": m.role, "content": content})
 }
 
-fn web_search_tool(search: &WebSearch) -> Value {
+/// The web search tool. A filter that can't be sent whole is an error, never cut: a dropped
+/// blocked domain would let its pages back in.
+fn web_search_tool(search: &WebSearch) -> Result<Value, RequestError> {
     let mut tool = json!({
         "type": WEB_SEARCH_TOOL,
         "name": "web_search",
@@ -270,18 +283,31 @@ fn web_search_tool(search: &WebSearch) -> Value {
         // Version 20260209 calls search from code execution unless told to call it directly.
         "allowed_callers": ["direct"],
     });
-    let domains = |list: &[String]| list.iter().take(MAX_DOMAINS).map(|d| text::capped(d.trim(), 253)).filter(|d| !d.is_empty()).collect::<Vec<_>>();
+    let domains = |list: &[String]| -> Result<Vec<String>, RequestError> {
+        let list: Vec<String> = list.iter().map(|d| d.trim()).filter(|d| !d.is_empty()).map(str::to_owned).collect();
+        if list.len() > MAX_DOMAINS {
+            return Err(RequestError::TooManyDomains);
+        }
+        if list.iter().any(|d| d.len() > MAX_DOMAIN_BYTES) {
+            return Err(RequestError::DomainTooLong);
+        }
+        Ok(list)
+    };
+    let allowed = domains(&search.allowed_domains)?;
+    let blocked = domains(&search.blocked_domains)?;
+    // The API refuses a request with both lists.
+    if !allowed.is_empty() && !blocked.is_empty() {
+        return Err(RequestError::BothDomainLists);
+    }
     if let Some(obj) = tool.as_object_mut() {
-        let allowed = domains(&search.allowed_domains);
-        let blocked = domains(&search.blocked_domains);
-        // The API takes one list or the other; an allow list is the stricter of the two.
         if !allowed.is_empty() {
             obj.insert("allowed_domains".into(), json!(allowed));
-        } else if !blocked.is_empty() {
+        }
+        if !blocked.is_empty() {
             obj.insert("blocked_domains".into(), json!(blocked));
         }
     }
-    tool
+    Ok(tool)
 }
 
 /// The `source` of every `search_result` block in `messages`, in order: a citation names its
@@ -347,9 +373,15 @@ impl Decoder {
     }
 
     pub fn push(&mut self, bytes: &[u8], out: &mut Vec<Event>) {
-        if self.done {
-            return;
+        for piece in bytes.chunks(DECODE_PIECE) {
+            if self.done {
+                return;
+            }
+            self.push_piece(piece, out);
         }
+    }
+
+    fn push_piece(&mut self, bytes: &[u8], out: &mut Vec<Event>) {
         let mut items = std::mem::take(&mut self.items);
         self.sse.push(bytes, &mut items);
         for item in items.drain(..) {
@@ -585,7 +617,9 @@ impl Decoder {
             "web_search_result_location" => {
                 let url = c.get("url").and_then(Value::as_str)?;
                 let lower = url.to_ascii_lowercase();
-                if url.len() > MAX_URL || !(lower.starts_with("https://") || lower.starts_with("http://")) {
+                // http(s) with a host: `https://` or `https:///path` names no page.
+                let rest = lower.strip_prefix("https://").or_else(|| lower.strip_prefix("http://"))?;
+                if url.len() > MAX_URL || rest.is_empty() || rest.starts_with(['/', '?', '#']) {
                     return None;
                 }
                 let title = c.get("title").and_then(Value::as_str).unwrap_or_default();
