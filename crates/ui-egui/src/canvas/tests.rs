@@ -22,6 +22,7 @@ fn page_size_hint_zone_is_the_bottom_left_quadrant() {
 }
 
 use super::*;
+use egui_kittest::kittest::Queryable;
 
 #[test]
 fn typed_zoom_percentages_parse() {

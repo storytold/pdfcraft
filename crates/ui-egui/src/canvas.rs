@@ -3516,8 +3516,14 @@ fn paint_page_indicator(ui: &egui::Ui, avail: Rect, text: &str) {
     // Keep the theme's foreground/background pair readable over arbitrary PDF page colours.
     painter.rect(pill, CornerRadius::same(255), t.chrome.gamma_multiply(0.98), Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
     painter.galley(pill.center() - galley.size() / 2.0, galley, t.text);
-    ui.interact(pill, ui.id().with("page-indicator-status"), Sense::hover())
+    ui.interact(pill, ui.scope_id().with("page-indicator-status"), Sense::hover())
         .widget_info(|| egui::WidgetInfo::labeled(egui::accesskit::Role::Status, true, text));
+}
+
+fn paint_page_indicator_if_enabled(ui: &egui::Ui, enabled: bool, avail: Rect, text: String) {
+    if enabled {
+        paint_page_indicator(ui, avail, &text);
+    }
 }
 
 /// Draws the document tab at `index`: its notice bars, then its pages (or the Organize grid) in a
@@ -3557,9 +3563,12 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     if info.pages.is_empty() {
         app.views[index].auto_scroll.cancel();
         ui.centered_and_justified(|ui| ui.label(tl!("This document has no pages.")));
-        if app.show_page_indicator {
-            paint_page_indicator(ui, ui.max_rect(), &page_indicator_text(0, 0, ""));
-        }
+        paint_page_indicator_if_enabled(
+            ui,
+            app.show_page_indicator,
+            ui.max_rect(),
+            page_indicator_text(0, 0, ""),
+        );
         return;
     }
     // The print dialog queues its own rasters later in the frame. Closing it drops them.
@@ -3807,10 +3816,13 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
 
     view.viewport_screen = out.inner_rect;
     view.auto_scroll.paint(ui, avail);
-    if app.show_page_indicator {
-        let label = info.pages.get(view.current).map_or("", |p| p.label.as_str());
-        paint_page_indicator(ui, avail, &page_indicator_text(view.current, info.pages.len(), label));
-    }
+    let label = info.pages.get(view.current).map_or("", |p| p.label.as_str());
+    paint_page_indicator_if_enabled(
+        ui,
+        app.show_page_indicator,
+        avail,
+        page_indicator_text(view.current, info.pages.len(), label),
+    );
     if unobstructed && matches!(tool, QuickTool::Select | QuickTool::ColumnSelect) {
         copy_selected |= selection_actions(ui, avail, view, info, prefs, allowed && !comments_hidden, can_copy);
     }
