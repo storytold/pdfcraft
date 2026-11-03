@@ -289,10 +289,10 @@ impl PdfCraftApp {
         }
         #[cfg(target_arch = "wasm32")]
         {
-            let msg =
-                run(ExportTask { src, kind, dpi, format, min_side, pages, stem, status: &status, lang: crate::i18n::current() }, |name, bytes| {
-                    crate::editing::download(name, &bytes)
-                });
+            let msg = run(
+                ExportTask { src, kind, dpi, format, min_side, tagged_text, pages, stem, status: &status, lang: crate::i18n::current() },
+                |name, bytes| crate::editing::download(name, &bytes),
+            );
             if let Ok(mut s) = status.lock() {
                 *s = Some((0, 0, Some(msg)));
             }
