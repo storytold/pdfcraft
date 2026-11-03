@@ -3832,6 +3832,14 @@ fn a_picture_with_a_stencil_mask_is_downsampled_under_its_mask() {
     assert_eq!(rendered.len(), before.len());
     let changed = before.iter().zip(&rendered).filter(|(a, b)| a.abs_diff(**b) > 96).count();
     assert!(changed * 200 < before.len(), "the masked picture looks the same: {changed} of {} samples far off", before.len());
+    // The hole, the middle third of the picture on the 612 by 792 page, still shows what's behind it.
+    // Its first pixel all round is left out: the coarser picture blends into that a little.
+    for y in 597..643 {
+        for x in 149..195 {
+            let i = (y * 612 + x) * 4;
+            assert_eq!(rendered[i..i + 4], before[i..i + 4], "hole pixel ({x}, {y})");
+        }
+    }
 }
 
 /// A colour-key mask names sample values: resampling or JPEG would make holes where there were none
@@ -3843,10 +3851,27 @@ fn a_picture_whose_mask_is_not_a_stencil_is_left_alone() {
     fn key() -> Object {
         Object::Array([250, 255, 250, 255, 250, 255].map(Object::Int).to_vec())
     }
-    let masks: [(&str, Mask); 3] = [
+    fn not_a_stencil(doc: &mut Document, change: fn(&mut Dict)) -> Object {
+        let mask = stencil(doc, 1200, 1200);
+        let mut s = stream(doc, mask);
+        change(&mut s.dict);
+        doc.set(mask, Object::Stream(s));
+        Object::Ref(mask)
+    }
+    let masks: [(&str, Mask); 5] = [
         ("direct array", |_| key()),
         ("array by reference", |doc| Object::Ref(doc.add(key()))),
         ("nothing there", |doc| Object::Ref(doc.add(Object::Null))),
+        ("an image that says it isn't a stencil", |doc| {
+            not_a_stencil(doc, |d| {
+                d.set(b"ImageMask".to_vec(), Object::Bool(false));
+            })
+        }),
+        ("an image that doesn't say it is one", |doc| {
+            not_a_stencil(doc, |d| {
+                d.remove(b"ImageMask");
+            })
+        }),
     ];
     for (what, mask) in masks {
         let mut doc = Document::new_empty();

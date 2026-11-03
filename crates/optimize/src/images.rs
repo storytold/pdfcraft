@@ -717,6 +717,11 @@ fn image_stream(old: &Dict, px: &[u8], n: usize, w: u32, h: u32, compression: Co
     }
 }
 
+/// Whether a `/Mask` value is a stencil mask: an image that says `/ImageMask true`.
+fn is_stencil(doc: &Document, mask: &Object) -> bool {
+    matches!(&*doc.resolve(mask), Object::Stream(s) if matches!(s.dict.get(b"ImageMask"), Some(Object::Bool(true))))
+}
+
 /// One image: resample and/or recompress per `settings`; `ppi` is its effective resolution.
 /// Returns the new image and its new soft mask, if the result is smaller.
 fn process(
@@ -732,7 +737,7 @@ fn process(
     // is an image of its own, with its own resolution (ISO 32000-2 §8.9.6.3): the picture can change
     // under it and its edges stay as they are.
     if d.get(b"Decode").is_some_and(|a| !is_identity_decode(doc, a, n))
-        || d.get(b"Mask").is_some_and(|m| !matches!(&*doc.resolve(m), Object::Stream(_)))
+        || d.get(b"Mask").is_some_and(|m| !is_stencil(doc, m))
         || d.name(b"ImageMask").is_some()
         || matches!(d.get(b"ImageMask"), Some(Object::Bool(true)))
     {
