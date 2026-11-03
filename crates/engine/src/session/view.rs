@@ -120,17 +120,7 @@ impl Session {
                 let rects: Vec<[f64; 4]> = text
                     .line_rects(glyphs)
                     .into_iter()
-                    .map(|v| {
-                        let q = doc.info.pages[page].view_rect_to_quad(v);
-                        let xs = [q[0], q[2], q[4], q[6]];
-                        let ys = [q[1], q[3], q[5], q[7]];
-                        [
-                            xs.iter().copied().fold(f64::MAX, f64::min),
-                            ys.iter().copied().fold(f64::MAX, f64::min),
-                            xs.iter().copied().fold(f64::MIN, f64::max),
-                            ys.iter().copied().fold(f64::MIN, f64::max),
-                        ]
-                    })
+                    .map(|v| pdfcraft_geom::quad_bounds(&doc.info.pages[page].view_rect_to_quad(v)))
                     .filter(|r| {
                         !doc.links().iter().any(|l| l.page == page && l.rect[0] < r[2] && r[0] < l.rect[2] && l.rect[1] < r[3] && r[1] < l.rect[3])
                     })
