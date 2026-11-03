@@ -3912,11 +3912,12 @@ fn fill_sign_typed_signature_style_reaches_the_placed_appearance() {
     let dir = workdir("fill-sign-style");
     let mut a = auto(&dir);
     let doc = ok(&mut a, "doc_create", json!({ "from": "blank", "width": 400, "height": 300, "pages": 1 }))["doc"].as_u64().unwrap();
-    ok(&mut a, "fill_sign_add", json!({ "doc": doc, "page": 1, "type": "signature", "at": [20, 80], "text": "Ada Lovelace" }));
+    ok(&mut a, "fill_sign_add", json!({ "doc": doc, "page": 1, "type": "signature", "at": [20, 80], "text": "Ada Lovelace", "style": "script" }));
     ok(&mut a, "fill_sign_add", json!({ "doc": doc, "page": 1, "type": "signature", "at": [20, 160], "text": "Ada Lovelace", "style": "print" }));
+    ok(&mut a, "fill_sign_add", json!({ "doc": doc, "page": 1, "type": "signature", "at": [20, 230], "text": "Саша", "style": "script" }));
     let listed = ok(&mut a, "comment_list", json!({ "doc": doc }));
     let comments = listed["comments"].as_array().unwrap();
-    assert_eq!(comments.len(), 2);
+    assert_eq!(comments.len(), 3);
     let widths: Vec<f64> = comments
         .iter()
         .map(|c| {
@@ -3925,6 +3926,7 @@ fn fill_sign_typed_signature_style_reaches_the_placed_appearance() {
         })
         .collect();
     assert_ne!(widths[0], widths[1], "the selected style must change the placed outline");
+    assert!(widths[2] > 0.0, "the bundled Inter fallback draws Cyrillic in the script style");
     ok(&mut a, "doc_save", json!({ "doc": doc, "path": "styled.pdf", "full": true }));
     let reopened = ok(&mut a, "doc_open", json!({ "path": "styled.pdf" }))["doc"].as_u64().unwrap();
     let saved = ok(&mut a, "comment_list", json!({ "doc": reopened }));
@@ -3939,9 +3941,15 @@ fn fill_sign_typed_signature_style_reaches_the_placed_appearance() {
         .collect();
     assert_eq!(saved_widths, widths, "both chosen outlines survive save and reopen");
     assert!(
-        a.call("fill_sign_add", &json!({ "doc": doc, "page": 1, "type": "signature", "at": [20, 240], "text": "Ada", "style": "cursive" })).is_err()
+        matches!(
+            a.call("fill_sign_add", &json!({ "doc": doc, "page": 1, "type": "signature", "at": [20, 240], "text": "Ada", "style": "cursive" })),
+            Err(ToolError::InvalidArgs(message)) if message.contains("script") && message.contains("print")
+        )
     );
-    assert!(a.call("fill_sign_add", &json!({ "doc": doc, "page": 1, "type": "text", "at": [20, 260], "text": "Ada", "style": "print" })).is_err());
+    assert!(matches!(
+        a.call("fill_sign_add", &json!({ "doc": doc, "page": 1, "type": "text", "at": [20, 260], "text": "Ada", "style": "print" })),
+        Err(ToolError::InvalidArgs(message)) if message.contains("only for a typed signature")
+    ));
 }
 
 #[test]
