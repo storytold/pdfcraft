@@ -861,6 +861,11 @@ fn xobject(
             }
             let mut dict = s.dict.clone();
             dict.remove(b"Length");
+            if new_data.is_some() {
+                // As for page content streams: the source text of an added item (Edit ▸ Add
+                // content) would keep what the rewrite removed.
+                dict.remove(b"PCAdded");
+            }
             let mut cleaned_res = res.clone();
             // Install rewritten nested forms before finding live property names: a new form may
             // still inherit its caller's resources, and its new Do name must resolve here.

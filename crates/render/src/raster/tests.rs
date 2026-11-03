@@ -8325,6 +8325,61 @@ fn japanese_substitute_spaces_keep_pdf_widths_and_unicode() {
     }
 }
 
+/// One code, `<0010>`, in a Type 0 font named `base_font` that the PDF doesn't embed, with a
+/// `/ToUnicode` that maps it to the UTF-16 `unicode`. 0x10 is the hyphen's glyph index in Arial,
+/// and Identity-H with an identity `/CIDToGIDMap` makes the code that index, as Word writes it.
+fn soft_hyphen_pdf(base_font: &str, unicode: &str) -> Vec<u8> {
+    let content = "BT /F1 60 Tf 10 20 Td <0010> Tj ET";
+    let cmap = format!(
+        "/CIDInit /ProcSet findresource begin 12 dict begin begincmap
+/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def
+/CMapName /Adobe-Identity-UCS def /CMapType 2 def
+1 begincodespacerange <0000> <FFFF> endcodespacerange
+1 beginbfchar <0010> <{unicode}> endbfchar
+endcmap CMapName currentdict /CMap defineresource pop end end"
+    );
+    format!(
+        "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 60 60] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj
+4 0 obj << /Length {} >> stream
+{content}
+endstream endobj
+5 0 obj << /Type /Font /Subtype /Type0 /BaseFont /{base_font} /Encoding /Identity-H /DescendantFonts [6 0 R] /ToUnicode 8 0 R >> endobj
+6 0 obj << /Type /Font /Subtype /CIDFontType2 /BaseFont /{base_font} /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >>
+  /FontDescriptor 7 0 R /CIDToGIDMap /Identity /DW 1000 /W [16 [333]] >> endobj
+7 0 obj << /Type /FontDescriptor /FontName /{base_font} /Flags 32 /FontBBox [-665 -325 2000 1040] /ItalicAngle 0 /Ascent 728 /Descent -210 /CapHeight 716 /StemV 80 >> endobj
+8 0 obj << /Length {} >> stream
+{cmap}
+endstream endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+        content.len(),
+        cmap.len()
+    )
+    .into_bytes()
+}
+
+/// #5888: Windows exporters map the hyphen glyph of an Arial they don't embed to U+00AD. The
+/// standard substitute has no soft hyphen, so code 0x0010 was taken as its glyph 16 and drew
+/// `Ë` (`!` in bold). It draws the substitute's hyphen now, and the text keeps the soft hyphen.
+#[test]
+fn a_soft_hyphen_a_substitute_lacks_draws_its_hyphen() {
+    for base_font in ["ArialMT", "Arial-BoldMT"] {
+        let soft = soft_hyphen_pdf(base_font, "00AD");
+        let out = render_first_page(soft.clone());
+        let expected = render_first_page(soft_hyphen_pdf(base_font, "002D"));
+        assert!(expected.rgba.as_chunks::<4>().0.iter().any(|pixel| pixel[0] < 128), "{base_font}: the hyphen control must draw ink");
+        assert!(out.rgba.as_ref() == expected.rgba.as_ref(), "{base_font}: a soft hyphen draws as the substitute's hyphen");
+        let mut renderer = PageRenderer::new(Arc::new(soft), RenderConfig::default());
+        let text = renderer.render(RenderRequest { page: 0, kind: RequestKind::Text, ..Default::default() });
+        assert!(text.error.is_none(), "{:?}", text.error);
+        let glyphs: String = text.text.unwrap().glyphs.iter().map(|glyph| glyph.text.as_str()).collect();
+        assert_eq!(glyphs, "\u{ad}", "{base_font}: drawing the hyphen must not rewrite Unicode");
+    }
+}
+
 /// Half-width katakana are common in Japanese documents set in a non-embedded Mincho font
 /// such as HeiseiMin-W3. The Mincho substitute must have those glyphs: one that lacks them
 /// (Shippori Mincho) draws them as .notdef.
