@@ -2009,6 +2009,8 @@ fn the_page_indicator_reads_page_over_pages_with_the_label_when_it_differs() {
     assert_eq!(page_indicator_text(3, 42, ""), "4 / 42");
     assert_eq!(page_indicator_text(3, 42, "4"), "4 / 42");
     assert_eq!(page_indicator_text(3, 42, "iv"), "iv (4 / 42)");
+    let long = page_indicator_text(3, 42, &"頁".repeat(1_024));
+    assert_eq!(long, format!("{}… (4 / 42)", "頁".repeat(16)));
     // No pages, or a page past the end: never beyond the last.
     assert_eq!(page_indicator_text(0, 0, ""), "0 / 0");
     assert_eq!(page_indicator_text(9, 3, "x"), "3 / 3");

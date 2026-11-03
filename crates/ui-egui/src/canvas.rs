@@ -3503,7 +3503,12 @@ fn page_indicator_text(current: usize, count: usize, label: &str) -> String {
     if label.is_empty() || label == number.to_string() || current >= count {
         format!("{number} / {count}")
     } else {
-        format!("{label} ({number} / {count})")
+        // Page labels come from the PDF and can be much wider than the indicator. Keep the
+        // page count visible even when a document supplies an unusually long label.
+        let truncated = label.chars().count() > 16;
+        let label: String = label.chars().take(16).collect();
+        let ellipsis = if truncated { "…" } else { "" };
+        format!("{label}{ellipsis} ({number} / {count})")
     }
 }
 
