@@ -682,8 +682,9 @@ impl Document {
     ///
     /// Used when the working snapshot was restored from an earlier revision and the next
     /// incremental save must still append to this file (the last saved revision). Objects
-    /// that already match are left untouched. Reads go through private readers so neither
-    /// document's editing cache is filled.
+    /// that already match are left untouched, except members of an object stream of this file
+    /// whose stream number `current` frees or reuses: those are written again on their own.
+    /// Reads go through private readers so neither document's editing cache is filled.
     pub fn overlay_changes_from(&mut self, current: &Document) -> Result<(), CosError> {
         let saved_nums = self.object_numbers();
         let current_nums = current.object_numbers();
@@ -707,6 +708,22 @@ impl Document {
                 }
             }
         }
+        // An object stream of this file that is freed or replaced takes its members with it, so
+        // a member that is otherwise unchanged is written again on its own.
+        let gone = |n: u32| freed.binary_search(&n).is_ok() || changed.binary_search(&n).is_ok();
+        let orphaned: Vec<u32> = current_nums
+            .iter()
+            .copied()
+            .filter(|&num| changed.binary_search(&num).is_err())
+            .filter(|&num| {
+                let packed_in = match self.xref_entry(num) {
+                    Some(XrefEntry::InStream { stream, .. }) => Some(stream),
+                    _ => None,
+                };
+                packed_in.is_some_and(gone)
+            })
+            .collect();
+        changed.extend(orphaned);
         for num in freed {
             let generation = self.generation(num);
             self.free(ObjRef::new(num, generation));

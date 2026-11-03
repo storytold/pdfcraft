@@ -1701,3 +1701,29 @@ fn a_stream_whose_length_is_itself_and_never_ends_loads_quickly() {
     });
     rx.recv_timeout(std::time::Duration::from_secs(20)).expect("loading must not retry exponentially");
 }
+
+#[test]
+fn a_restored_revision_keeps_what_the_saved_file_held_in_object_streams() {
+    // The earlier revision: an empty document read back from a file whose catalog and pages
+    // sit in an object stream.
+    let earlier = Document::open(Arc::new(crate::write_full(&Document::new_empty(), &crate::SaveOptions::default()).unwrap())).unwrap();
+    // The saved revision adds an object the catalog links to, so a full save numbers its objects
+    // anew; an undo then returns to the earlier graph.
+    let mut later = earlier.clone();
+    let extra = later.add(Object::Int(7));
+    let root = later.root().unwrap();
+    later.update_dict(root, |c| c.set(b"Extra".to_vec(), Object::Ref(extra))).unwrap();
+    let saved = crate::write_full(&later, &crate::SaveOptions::default()).unwrap();
+    let mut base = Document::open(Arc::new(saved)).unwrap();
+    assert!(
+        base.object_numbers().iter().any(|&n| matches!(base.xref_entry(n), Some(XrefEntry::InStream { .. }))),
+        "the saved file holds objects in a stream"
+    );
+    base.overlay_changes_from(&earlier).unwrap();
+    let file = crate::write_incremental(&base, &crate::SaveOptions::default()).unwrap();
+    let reread = Document::open(Arc::new(file)).unwrap();
+    let catalog = reread.get(reread.root().unwrap()).as_dict().unwrap().clone();
+    assert!(catalog.get(b"Extra").is_none(), "the restored catalog");
+    let pages = reread.resolve(catalog.get(b"Pages").unwrap());
+    assert_eq!(pages.as_dict().and_then(|d| d.name(b"Type")), Some(&b"Pages"[..]), "the pages survive: {pages:?}");
+}
