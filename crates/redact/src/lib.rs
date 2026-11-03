@@ -147,6 +147,8 @@ pub struct Report {
     pub images_restored: usize,
     pub paths_removed: usize,
     pub paths_clipped: usize,
+    /// Shadings (`sh`) whose clip could reach a mark.
+    pub shadings_removed: usize,
     pub forms_rewritten: usize,
     pub forms_removed: usize,
     pub annotations: usize,

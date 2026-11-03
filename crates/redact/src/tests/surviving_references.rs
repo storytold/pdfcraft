@@ -106,6 +106,30 @@ fn an_image_another_page_draws_through_a_form_without_resources_is_kept() {
     assert!(full_save_holds(&doc, b"IMAGESECRET"), "the second page still draws the image through its form");
 }
 
+/// A shading paints its whole clip, so clipping the marks out of it kept its samples (and what it
+/// drew under the mark) in the file. One whose clip can reach a mark goes, with its resource
+/// entry; one clipped away from every mark stays.
+#[test]
+fn a_shading_under_a_mark_leaves_the_saved_file() {
+    let mesh = "/ShadingType 4 /ColorSpace /DeviceRGB /BitsPerCoordinate 8 /BitsPerComponent 8 /BitsPerFlag 8 /Decode [0 300 0 300 0 1 0 1 0 1]";
+    let mut doc = one_page(
+        b"/Sh1 sh q 200 200 50 50 re W n /Sh2 sh Q q 0 0 100 100 re W n /Sh3 sh Q",
+        "/Shading << /Sh1 7 0 R /Sh2 8 0 R /Sh3 9 0 R >>",
+        vec![stream(mesh, b"UNCLIPPED_SECRET_MESH"), stream(mesh, b"PUBLIC_MESH_FAR_AWAY"), stream(mesh, b"CLIPPED_SECRET_MESH")],
+    );
+    let rects = [[10.0, 10.0, 50.0, 50.0]];
+    assert_eq!(under(&mut doc, 0, &rects), 2, "the verifier counts the two shadings that can reach the mark");
+    mark(&mut doc, 0, &rects, "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!(r.shadings_removed, 2, "{r:?}");
+    let c = content(&doc, 0);
+    assert!(!c.contains("/Sh1 sh") && !c.contains("/Sh3 sh"), "{c}");
+    assert!(c.contains("200 200 50 50 re\nW\nn\n/Sh2 sh"), "the shading clipped away from the mark stays: {c}");
+    assert!(!full_save_holds(&doc, b"UNCLIPPED_SECRET_MESH"), "the unclipped shading is still reachable");
+    assert!(!full_save_holds(&doc, b"CLIPPED_SECRET_MESH"), "the shading clipped over the mark is still reachable");
+    assert!(full_save_holds(&doc, b"PUBLIC_MESH_FAR_AWAY"), "the surviving shading was lost");
+}
+
 /// A Type 3 font whose displayed glyphs are redacted has its unused glyph programs unlinked from
 /// /CharProcs and exclusive graphical resources pruned, so they do not survive in a full save (F-011).
 #[test]
