@@ -75,6 +75,13 @@ semantics; they never silently act on partial text.
 
 ## Shared field properties
 
+`form_add_field_table` accepts `source_field` and the optional 1-based `source_widget` to create
+independent copies of an existing text field or check box instead of blank text fields. Each copy
+starts with the source's value and properties but has its own name and can be filled independently.
+Radio groups, signatures, choice fields, buttons and check boxes with per-widget export values are
+not supported by this option yet. The grid is one undoable edit and any invalid cell or name
+refuses the entire operation.
+
 For an individual push button, `form_set_props` also edits its visible normal label:
 
 ```json

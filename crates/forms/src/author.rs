@@ -19,7 +19,7 @@ mod tree;
 pub(crate) use tree::ancestor_sets;
 
 pub use edit::set_props;
-pub use lifecycle::{add_field, delete_field, delete_field_object, delete_widget, duplicate_field};
+pub use lifecycle::{add_field, copy_field, delete_field, delete_field_object, delete_widget, duplicate_field};
 pub(crate) use look::button_appearance;
 pub use look::{BorderStyle, CheckStyle, FieldFont, Look, LookPatch, check_style, look, redraw_field, set_button_icon};
 pub(crate) use tree::{ensure_form, form_fonts_as_objects};

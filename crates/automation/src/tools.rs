@@ -436,7 +436,7 @@ pub fn tools() -> Vec<ToolDef> {
         t(
             "form_add_field_table",
             "Prepare form: add a table of text fields",
-            "Divide rect into rows and columns of text fields, one per cell, as one undo step. rect in points from the top-left of the displayed page [x0, y0, x1, y1]; rows 1-100 from the top; columns 1-50, or as many as names or widths list. Each column names its cells from its pattern in names: an N on its own after _ - / or : (price_N), # or {row} is the row number, {col} the column number, {seq} counts every cell along the rows, starting at first_row; with none of them the row number goes at the end. Rows count from first_row (default 1). Without names the columns are Table1_N, Table1_c2_N, … using the first free TableK. widths are relative (default equal); row_gap and column_gap are points between cells (default 0). Nothing is added if a cell would be under 4 points or a name would contain a period, repeat, or already exist; the error says which. Returns the fields' names. Undoable.",
+            "Divide rect into rows and columns of fields, one per cell, as one undo step. By default these are new text fields; source_field copies an existing text field or check box with its properties and initial value into independent fields. rect in points from the top-left of the displayed page [x0, y0, x1, y1]; rows 1-100 from the top; columns 1-50, or as many as names or widths list. Each column names its cells from its pattern in names: an N on its own after _ - / or : (price_N), # or {row} is the row number, {col} the column number, {seq} counts every cell along the rows, starting at first_row; with none of them the row number goes at the end. Rows count from first_row (default 1). Without names the columns are Table1_N, Table1_c2_N, … using the first free TableK. widths are relative (default equal); row_gap and column_gap are points between cells (default 0). Nothing is added if a cell would be under 4 points or a name would contain a period, repeat, or already exist; the error says which. Returns the fields' names. Undoable.",
         )
         .cmd("form.add.text_table")
         .with(schema(
@@ -451,6 +451,8 @@ pub fn tools() -> Vec<ToolDef> {
                 "row_gap": { "type": "number", "minimum": 0 },
                 "column_gap": { "type": "number", "minimum": 0 },
                 "first_row": { "type": "integer", "minimum": 0, "maximum": 99999 },
+                "source_field": { "type": "string", "description": "Copy this existing text field or check box into each cell instead of creating blank text fields." },
+                "source_widget": { "type": "integer", "minimum": 1, "description": "1-based widget of source_field (default 1)." },
             }),
             &["doc", "page", "rect", "rows"],
         )),

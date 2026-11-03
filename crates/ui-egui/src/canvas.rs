@@ -2642,6 +2642,14 @@ fn draw_pages(
                 field_menu = Some(FieldMenu::Duplicate(name.clone()));
                 ui.close();
             }
+            let can_copy = form
+                .iter()
+                .find(|f| f.name == name)
+                .is_some_and(|f| matches!(f.kind, pdfcraft_engine::FormFieldKind::Text | pdfcraft_engine::FormFieldKind::CheckBox));
+            if ui.add_enabled(can_modify && can_copy && view.prepare.also.is_empty(), egui::Button::new(tl!("Create Multiple Copies…"))).clicked() {
+                field_menu = Some(FieldMenu::Copies(name.clone(), wi));
+                ui.close();
+            }
             ui.separator();
             let delete = if view.prepare.also.is_empty() { "Delete" } else { "Delete selected fields" };
             if ui.add_enabled(can_modify, egui::Button::new(tl!(delete))).clicked() {
@@ -3929,10 +3937,35 @@ fn apply_frame_requests(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui, 
     if let Some((name, w)) = field_props {
         app.open_field_props(&name, w);
     }
-    if let Some(FieldMenu::Duplicate(name)) = field_menu {
-        let pages = app.session.get(app.views[index].id).map_or(1, |d| d.info.pages.len());
-        app.duplicate_draft = Some(crate::DuplicateDraft { name, all: true, from: 1, to: pages });
-        app.dialog = Some(crate::Dialog::DuplicateField);
+    match field_menu {
+        Some(FieldMenu::Duplicate(name)) => {
+            let pages = app.session.get(app.views[index].id).map_or(1, |d| d.info.pages.len());
+            app.duplicate_draft = Some(crate::DuplicateDraft { name, all: true, from: 1, to: pages });
+            app.dialog = Some(crate::Dialog::DuplicateField);
+        }
+        Some(FieldMenu::Copies(name, widget)) => {
+            let draft = (|| {
+                let doc = app.session.get(app.views[index].id)?;
+                let selected = form.iter().find(|f| f.name == name)?.widgets.get(widget)?;
+                let page = selected.page?;
+                let info = doc.info.pages.get(page)?;
+                let (rect, rows, columns) = crate::field_table_ui::copy_grid(info, selected.rect)?;
+                let mut draft = crate::field_table_ui::FieldTableDraft::new(doc.id, page, rect, &form, generation);
+                draft.table.rows = rows;
+                draft.table.set_columns(columns, "Copy");
+                draft.source = Some((name, widget));
+                Some(draft)
+            })();
+            if let Some(draft) = draft {
+                app.field_table_draft = Some(draft);
+                app.dialog = Some(crate::Dialog::FieldTable);
+                app.left = crate::LeftPanel::Tool("form");
+                app.reveal_tools();
+            } else {
+                app.notify_tr("There is not enough space beside this field for the copies.");
+            }
+        }
+        _ => {}
     }
     if let Some((page, rect)) = app.views[index].links.open_new.take() {
         app.open_link_props(page, Some(rect), None);
@@ -4118,6 +4151,7 @@ fn apply_frame_requests(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui, 
 enum FieldMenu {
     Properties,
     Duplicate(String),
+    Copies(String, usize),
 }
 
 #[cfg(test)]

@@ -577,6 +577,45 @@ fn duplicating_a_field_onto_every_page() {
 }
 
 #[test]
+fn copying_a_field_into_a_grid_from_its_context_menu() {
+    let mut h = harness();
+    h.state_mut().execute("form.prepare");
+    h.run_steps(3);
+    let before = names(&h);
+    let p = {
+        let s = h.state();
+        let doc = s.session.get(s.views[0].id).unwrap();
+        let f = doc.form.iter().find(|f| f.name == "city").unwrap();
+        pdfcraft_ui_egui::forms_ui::field_screen_rect(&s.views[0], &doc.info, f, 0).unwrap().center()
+    };
+    h.hover_at(p);
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Secondary, pressed: true, modifiers: Default::default() });
+    h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Secondary, pressed: false, modifiers: Default::default() });
+    h.run_steps(3);
+    h.get_by_label("Create Multiple Copies…").click();
+    h.run_steps(2);
+    h.get_by_label("Create Multiple Copies");
+    assert_eq!(h.state().field_table_draft.as_ref().unwrap().source.as_ref().unwrap().0, "city");
+    if let Ok(path) = std::env::var("PDFCRAFT_FIELD_COPIES_SHOT") {
+        let _gpu = crate::gpu();
+        for _ in 0..20 {
+            h.run_steps(2);
+            if !h.state().render_pending() {
+                break;
+            }
+        }
+        h.render().unwrap().save(path).unwrap();
+    }
+    h.get_by_label("Add fields").click();
+    h.run_steps(3);
+    assert_eq!(names(&h).len(), before.len() + 2);
+    h.state_mut().execute("edit.undo");
+    h.run_steps(2);
+    assert_eq!(names(&h), before);
+}
+
+#[test]
 fn aligning_distributing_and_sizing_several_fields() {
     use pdfcraft_ui_egui::prepare::{Arrange, arrange};
     let mut h = harness();

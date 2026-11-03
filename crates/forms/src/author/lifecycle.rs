@@ -1,5 +1,5 @@
 use super::look::redraw_field;
-use super::tree::{add_to_page, attach, clash, detach, ensure_form, free_name, name_parts, top_names};
+use super::tree::{add_to_page, attach, clash, detach, ensure_form, free_name, inherited, name_parts, top_names};
 use super::{
     Dict, Document, Field, FieldKind, FormError, MIN_FIELD_SIDE, NewField, ObjRef, Object, PdfString, Widget, appearance, fields, flags, invalid,
     page_refs, rgb,
@@ -323,6 +323,89 @@ pub(super) fn split_triggers(aa: &Dict) -> (Option<Dict>, Option<Dict>) {
     }
     let some = |d: Dict| (!d.is_empty()).then_some(d);
     (some(widget), some(field))
+}
+
+/// Copy one widget into a new, independently named field on a page.
+///
+/// The field's current value and properties are copied, but the new field has its own value.
+/// Radio groups and signature fields require special handling and are not supported here.
+pub fn copy_field(doc: &mut Document, name: &str, widget: usize, page: usize, rect: [f64; 4], new_name: &str) -> Result<(), FormError> {
+    let all = fields(doc);
+    let f = all.iter().find(|f| f.name == name).ok_or_else(|| FormError::NoSuchField(name.into()))?;
+    if !matches!(f.kind, FieldKind::Text | FieldKind::CheckBox) {
+        return invalid("only text fields and check boxes can be copied into a grid");
+    }
+    if f.kind == FieldKind::CheckBox && f.widgets.len() > 1 && !f.options.is_empty() {
+        return invalid("a check box with per-widget export values cannot yet be copied into a grid");
+    }
+    let w = f.widgets.get(widget).ok_or_else(|| FormError::Invalid(format!("{name} has no widget {}", widget.saturating_add(1))))?;
+    let page_ref = *page_refs(doc).get(page).ok_or_else(|| FormError::Invalid(format!("page {} does not exist", page.saturating_add(1))))?;
+    let width = rect[2] - rect[0];
+    let height = rect[3] - rect[1];
+    if !rect.iter().all(|v| v.is_finite()) || !width.is_finite() || !height.is_finite() || width < MIN_FIELD_SIDE || height < MIN_FIELD_SIDE {
+        return invalid("the field is too small");
+    }
+    let parts = name_parts(new_name)?;
+    if let Some(why) = all.iter().find_map(|other| clash(new_name, &other.name)) {
+        return invalid(why);
+    }
+    let mut field = doc.get(f.obj).as_dict().cloned().ok_or_else(|| FormError::Invalid("field is not a dictionary".into()))?;
+    let widget_dict = doc.get(w.obj).as_dict().cloned().ok_or_else(|| FormError::Invalid("widget is not a dictionary".into()))?;
+    for (k, v) in inherited(doc, f.obj).iter() {
+        field.set(k.to_vec(), v.clone());
+    }
+    if w.obj != f.obj {
+        // Preserve widget entries that aren't in the field dictionary, including unfamiliar
+        // annotation keys, while the field's own attributes keep their precedence.
+        for (key, value) in widget_dict.iter() {
+            if !field.contains(key) && !matches!(key.as_slice(), b"Parent" | b"Kids" | b"T" | b"AA" | b"NM" | b"StructParent") {
+                field.set(key.clone(), value.clone());
+            }
+        }
+        for key in WIDGET_KEYS {
+            if let Some(value) = widget_dict.get(key) {
+                field.set(key.to_vec(), value.clone());
+            }
+        }
+        if let Some(da) = widget_dict.get(b"DA") {
+            field.set(b"DA".to_vec(), da.clone());
+        }
+        // Keep both field and widget event dictionaries when they were separate.
+        let mut aa = field.get(b"AA").and_then(|a| doc.resolve(a).as_dict().cloned()).unwrap_or_default();
+        if let Some(widget_aa) = widget_dict.get(b"AA").and_then(|a| doc.resolve(a).as_dict().cloned()) {
+            for (k, v) in widget_aa.iter() {
+                aa.set(k.to_vec(), v.clone());
+            }
+        }
+        if aa.iter().next().is_some() {
+            field.set(b"AA".to_vec(), Object::Dict(aa));
+        }
+    }
+    for key in [&b"Kids"[..], b"Parent", b"T", b"NM", b"StructParent"] {
+        field.remove(key);
+    }
+    // The appearance editor updates indirect /MK and /BS dictionaries in place. Make these
+    // per-widget dictionaries direct so editing a copy cannot restyle the source or its siblings.
+    for key in [&b"MK"[..], b"BS"] {
+        if let Some(value) = field.get(key).filter(|v| Object::as_ref(v).is_some())
+            && let Some(dict) = doc.resolve(value).as_dict().cloned()
+        {
+            field.set(key.to_vec(), Object::Dict(dict));
+        }
+    }
+    field.set(b"P".to_vec(), Object::Ref(page_ref));
+    field.set(b"Rect".to_vec(), Object::Array(rect.iter().map(|v| Object::Real(*v)).collect()));
+    // Keep a custom appearance rather than replacing it with a generated approximation.
+    // A viewer scales its appearance stream to the new widget rectangle.
+    let has_appearance = field.get(b"AP").is_some_and(|o| matches!(&*doc.resolve(o), Object::Dict(d) if d.contains(b"N")));
+    let af = ensure_form(doc)?;
+    let copied = doc.add(Object::Dict(field));
+    attach(doc, af, copied, &parts)?;
+    add_to_page(doc, page_ref, copied)?;
+    if !has_appearance {
+        redraw_field(doc, new_name)?;
+    }
+    Ok(())
 }
 
 /// Duplicate a field onto other pages (Acrobat: right-click a field ▸ Duplicate): each page

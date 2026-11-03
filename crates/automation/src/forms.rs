@@ -448,12 +448,33 @@ impl Automation {
             table.column_gap = a.opt_num("column_gap")?.unwrap_or(0.0);
             table.first_row = a.opt_int("first_row")?.map_or(1, |n| usize::try_from(n).unwrap_or(usize::MAX));
             let info = doc.info.pages.get(page).ok_or_else(|| bad(format!("page {} does not exist", page + 1)))?;
-            let edit = field_table::edit(&table, page, info, &doc.form).map_err(|e| bad(e.to_string()))?;
+            let edit = if let Some(source) = a.opt_str("source_field")? {
+                let widget = a.opt_int("source_widget")?.unwrap_or(1);
+                let widget = usize::try_from(widget).ok().and_then(|n| n.checked_sub(1)).ok_or_else(|| bad("source_widget must be at least 1"))?;
+                let field = doc.form.iter().find(|f| f.name == source).ok_or_else(|| bad(format!("field {source:?} does not exist")))?;
+                if !matches!(field.kind, pdfcraft_engine::FormFieldKind::Text | pdfcraft_engine::FormFieldKind::CheckBox) {
+                    return Err(bad("only text fields and check boxes can be copied into a grid"));
+                }
+                if field.widgets.get(widget).is_none() {
+                    return Err(bad("source_widget does not exist"));
+                }
+                field_table::copy_edit(&table, page, info, &doc.form, source, widget).map_err(|e| bad(e.to_string()))?
+            } else {
+                if a.get("source_widget").is_some() {
+                    return Err(bad("source_widget requires source_field"));
+                }
+                field_table::edit(&table, page, info, &doc.form).map_err(|e| bad(e.to_string()))?
+            };
             // The names the batch adds, in the order it adds them.
             let fields: Vec<String> = match &edit {
-                Edit::Batch { edits, .. } => {
-                    edits.iter().filter_map(|e| if let Edit::AddField { name, .. } = e { name.clone() } else { None }).collect()
-                }
+                Edit::Batch { edits, .. } => edits
+                    .iter()
+                    .filter_map(|e| match e {
+                        Edit::AddField { name, .. } => name.clone(),
+                        Edit::CopyField { name, .. } => Some(name.clone()),
+                        _ => None,
+                    })
+                    .collect(),
                 _ => Vec::new(),
             };
             (edit, fields)
