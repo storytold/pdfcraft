@@ -3874,6 +3874,26 @@ fn split_pages_refuse_what_they_cannot_do_and_change_nothing() {
     assert_eq!(page_boxes(&doc).unwrap(), before);
 }
 
+/// CodeRabbit on #5587: the parts of a split page share its layers. A layer on a part is the
+/// document's own optional content group, not a copy of it, so showing or hiding the layer
+/// shows or hides it on every part, and the layer list keeps one entry.
+#[test]
+fn every_part_of_a_split_page_shares_its_layers() {
+    let mut doc = doc_c();
+    let layer = ObjRef::new(8, 0);
+    split_pages(&mut doc, &[1], 2, 1).unwrap();
+    let ps = pages(&doc).unwrap();
+    assert_eq!(ps.len(), 3);
+    for part in [1, 2] {
+        let page = doc.get(ps[part].obj).as_dict().cloned().unwrap();
+        let resources = page.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap();
+        let properties = resources.get(b"Properties").map(|p| doc.resolve(p)).and_then(|p| p.as_dict().cloned()).unwrap();
+        assert_eq!(properties.get(b"L1").and_then(Object::as_ref), Some(layer), "part {part} uses the document's layer");
+    }
+    let props = catalog(&doc).get(b"OCProperties").map(|o| doc.resolve(o)).and_then(|o| o.as_dict().cloned()).unwrap();
+    assert_eq!(props.get(b"OCGs").and_then(|o| o.as_array()).map(Vec::len), Some(1), "one layer, listed once");
+}
+
 /// jpeskov on #5587: a link on a page that is split leads where it did on every part. The parts
 /// are copies within the document, so a link to another page keeps that page instead of losing
 /// its destination, as a copy into another document does when the page isn't copied with it.

@@ -177,14 +177,30 @@ pub fn split_pages(doc: &mut Document, pages: &[usize], columns: u32, rows: u32)
     // Split a copy and keep it only when every page is done, so a page that can't be copied
     // (objects nested too deep, say) leaves the document as it was (CodeRabbit on #5587).
     let mut out = src.clone();
-    // The last page first, so the earlier ones keep their places in `src`'s order.
-    for (i, page, parts) in plan.into_iter().rev() {
-        // Copied within the document: the parts' links still lead to the pages they named.
-        let copies = crate::import::copy_pages_in_place(&mut out, &src, &vec![i; cells - 1], i + 1)?;
-        for (r, part) in std::iter::once(page).chain(copies).zip(parts) {
+    // Every part but the first of every page, copied in one pass at the end, then put in place
+    // with one rebuild of the page tree, not one per page (CodeRabbit on #5587). Copied within
+    // the document: the parts' links still lead to the pages they named.
+    let sources: Vec<usize> = plan.iter().flat_map(|(i, ..)| std::iter::repeat_n(*i, cells - 1)).collect();
+    let copies = crate::import::copy_pages_in_place(&mut out, &src, &sources, all.len())?;
+    let mut parts_of = std::collections::HashMap::new();
+    // `cells` is at least 2 (checked above), so the chunks are never empty.
+    for ((i, page, parts), copied) in plan.into_iter().zip(copies.chunks(cells - 1)) {
+        for (r, part) in std::iter::once(page).chain(copied.iter().copied()).zip(parts) {
             out.update_dict(r, |d| d.set(b"CropBox".to_vec(), Object::Array(part.iter().map(|v| Object::Real(*v)).collect())))?;
         }
+        parts_of.insert(i, copied.to_vec());
     }
+    // Each page's copies right after it, in reading order.
+    let placed: std::collections::HashMap<_, _> = walk(&out)?.into_iter().collect();
+    let entry = |r: pdfcraft_cos::ObjRef| placed.get(&r).map(|d| (r, d.clone()));
+    let mut order = Vec::with_capacity(placed.len());
+    for (i, (page, _)) in all.iter().enumerate() {
+        order.extend(entry(*page));
+        for copy in parts_of.get(&i).into_iter().flatten() {
+            order.extend(entry(*copy));
+        }
+    }
+    crate::rebuild(&mut out, &order)?;
     *doc = out;
     Ok(())
 }

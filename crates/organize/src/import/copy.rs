@@ -72,6 +72,13 @@ impl<'a> Copier<'a> {
         if let Some(d) = self.map.get(&r) {
             return Ok(*d);
         }
+        // Within one document a layer (optional content group) is the same layer on a copy:
+        // showing or hiding it shows or hides every copy's content, not only the original's
+        // (CodeRabbit on #5587).
+        if self.same_document && self.src.get(r).as_dict().is_some_and(|d| d.name(b"Type") == Some(b"OCG")) {
+            self.map.insert(r, r);
+            return Ok(r);
+        }
         // Reserve the number first so cycles (field ↔ widget) terminate.
         let new = dst.add(Object::Null);
         self.map.insert(r, new);
