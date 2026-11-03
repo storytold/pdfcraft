@@ -54,7 +54,7 @@ Anything else is forbidden, including assets whose licence you cannot prove from
   - SPDX licence, and the licence file in the repo;
   - SHA-256, except for translation catalogs (see below);
   - how it is used.
-- **Translation catalogs** (`crates/ui-egui/src/i18n/*.tsv`, `kind = "translation"`) are project files under the project licence. Their entries carry no `sha256`: git history records every change and who made it. Every other kind (fonts, images, data) is hashed.
+- **Translations** live in craft-i18n (`locales/<code>/common.tsv` and `pdfcraft.tsv`), embedded at build time from the checkout pinned in `craft-i18n.rev`; PdfCraft keeps no catalogs. `ATTRIBUTION.toml` records them as one `[[build_input]]` (`kind = "translation"`, no `sha256`); craft-i18n's own `ATTRIBUTION.md` credits the translators. Every other kind (fonts, images, data) is hashed.
 - **`ATTRIBUTION.md`** is generated from it (`cargo xtask assets --write`). Never edit it by hand.
 - **`NOTICE`** keeps the licence notices that the licences require.
 - **`cargo xtask assets`** runs in `cargo xtask ci`. It fails if:
