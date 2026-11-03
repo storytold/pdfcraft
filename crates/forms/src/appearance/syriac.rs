@@ -123,15 +123,41 @@ pub(super) fn fits(box_: &TextBox, value: &str) -> Result<bool, String> {
     Ok(rows.iter().all(|line| line.width * size <= box_.inner_w + 0.01) && height <= box_.inner_h + 0.01)
 }
 
-/// Classify shaped text as too high, too many rows or too wide after field formatting.
-pub(super) fn overflow(box_: &TextBox, f: &Field) -> Result<Option<Overflow>, String> {
-    let value = f.value.first().map_or("", String::as_str);
-    if value.len() > text::MAX_TEXT_BYTES {
+/// Measure the same visible isolated cells, fixed/automatic size and full cell width as drawing.
+/// Sparse values retain the field's full MaxLen count; no joined-word width substitutes for a cell.
+fn comb_overflow(box_: &TextBox, f: &Field, shown: &str) -> Result<Option<Overflow>, String> {
+    let cells = f.max_len.unwrap_or(1).max(1);
+    if cells > 4096 {
+        return Err("the Syriac comb field has too many cells".into());
+    }
+    let rows = text::comb_cells_for_family(shown, box_.syriac_family)?;
+    let visible = rows.get(..rows.len().min(cells)).unwrap_or_default();
+    let (top, bottom) = extents(visible)?;
+    let widest = visible.iter().map(|line| line.width).fold(0.0, f64::max);
+    let size = match box_.size {
+        Some(size) => size,
+        None => comb_auto_size(box_.outer_w, box_.inner_h, cells, widest, (top - bottom).max(0.1))?,
+    };
+    let height = (top - bottom) * size;
+    if height > box_.inner_h + 0.01 {
+        return Ok(Some(Overflow::High { height, room: box_.inner_h, size }));
+    }
+    let room = box_.outer_w / cells as f64;
+    let width = widest * size;
+    Ok((width > room + 0.01).then_some(Overflow::Wide { width, room, size }))
+}
+
+/// Classify the already formatted/display-label-resolved text with its selected widget family.
+/// Keep shaping failures distinct so the caller can retain the established fallback metrics.
+pub(super) fn overflow(box_: &TextBox, f: &Field, shown: &str) -> Result<Option<Overflow>, String> {
+    if shown.len() > text::MAX_TEXT_BYTES {
         return Err("the Syriac field value exceeds its text budget".into());
     }
-    let shown = crate::af::format_value(&f.actions.format, value);
-    let size = size_for(&shown, box_.size, box_.inner_w, box_.inner_h, box_.multiline, box_.syriac_family)?;
-    let rows = layout(&shown, size, box_.inner_w, box_.multiline, box_.syriac_family)?;
+    if box_.comb {
+        return comb_overflow(box_, f, shown);
+    }
+    let size = size_for(shown, box_.size, box_.inner_w, box_.inner_h, box_.multiline, box_.syriac_family)?;
+    let rows = layout(shown, size, box_.inner_w, box_.multiline, box_.syriac_family)?;
     let (top, bottom) = extents(&rows)?;
     let height = (top - bottom) * size;
     if height > box_.inner_h + 0.01 {
@@ -143,9 +169,7 @@ pub(super) fn overflow(box_: &TextBox, f: &Field) -> Result<Option<Overflow>, St
             return Ok(Some(Overflow::Tall { lines: rows.len(), room, size }));
         }
     }
-    if !box_.comb
-        && let Some(width) = rows.iter().map(|line| line.width * size).filter(|width| *width > box_.inner_w + 0.01).reduce(f64::max)
-    {
+    if let Some(width) = rows.iter().map(|line| line.width * size).filter(|width| *width > box_.inner_w + 0.01).reduce(f64::max) {
         return Ok(Some(Overflow::Wide { width, room: box_.inner_w, size }));
     }
     Ok(None)
@@ -180,7 +204,7 @@ pub(super) fn field(doc: &mut Document, f: &Field, w: &Widget, values: &[String]
         }
         value.push_str(part);
     }
-    if f.kind == FieldKind::Combo && f.text_direction == pdfcraft_fonts::TextDirection::Auto {
+    if f.kind == FieldKind::Combo {
         value = super::displayed_text(f, values, format);
     } else if format && matches!(f.kind, FieldKind::Text | FieldKind::Combo) && f.actions.format != crate::af::Format::None {
         value = crate::af::format_value(&f.actions.format, &value);

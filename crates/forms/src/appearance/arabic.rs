@@ -99,6 +99,7 @@ fn comb_layout(shown: &str, wanted: Option<f64>, width: f64, height: f64, cells:
 }
 
 /// At most 1024 rows and 17 automatic-size candidates (12 down to 4 points).
+/// An automatic candidate that exhausts the row cap retries smaller sizes; fixed sizes refuse.
 fn layout(shown: &str, wanted: Option<f64>, width: f64, height: f64, latin: Std14, multiline: bool) -> Option<Layout> {
     if !multiline {
         return single_line(shown, wanted, width, height, latin).map(|(line, size, overflow)| Layout { lines: vec![line], size, overflow });
@@ -108,7 +109,14 @@ fn layout(shown: &str, wanted: Option<f64>, width: f64, height: f64, latin: Std1
     }
     let mut size = wanted.unwrap_or(12.0);
     for attempt in 0..17 {
-        let lines = text::wrap_with_latin_bounded(shown, size, width, latin, 1024).ok()?;
+        let lines = match text::wrap_with_latin_bounded(shown, size, width, latin, 1024) {
+            Ok(lines) => lines,
+            Err(pdfcraft_fonts::GlyphError::TooComplex) if wanted.is_none() && attempt < 16 => {
+                size -= 0.5;
+                continue;
+            }
+            Err(_) => return None,
+        };
         let full_height = text::height(&lines, size);
         let high = lines.iter().map(|line| (line.ascent + line.descent) * size).find(|height_| *height_ > height + 0.01);
         let wide = lines.iter().map(|line| line.width).find(|width_| *width_ > width + 0.01);
@@ -232,6 +240,24 @@ pub(super) fn field(
 
 #[cfg(test)]
 mod comb_tests {
+    /// A row cap at the first auto-size candidate must not suppress a smaller supported layout.
+    #[test]
+    fn review5914_arabic_autosize_retries_after_row_budget() {
+        if pdfcraft_fonts::document_arabic_font().is_none() {
+            assert!(std::env::var_os("CRAFT_FONTS_DIR").is_none(), "supplied input must include Arabic");
+            return;
+        }
+        let value = "ب ".repeat(1100);
+        let latin = pdfcraft_fonts::Std14::Helvetica;
+        assert!(pdfcraft_fonts::appearance_text::wrap_with_latin_bounded(&value, 12.0, 12.0, latin, 1024).is_err());
+        assert!(pdfcraft_fonts::appearance_text::wrap_with_latin_bounded(&value, 4.0, 12.0, latin, 1024).is_ok());
+        let laid = super::layout(&value, None, 12.0, 20_000.0, latin, true).expect("a smaller bounded candidate must be tried");
+        assert!(laid.size < 12.0 && laid.size >= 4.0);
+        assert!(laid.lines.len() <= 1024);
+        assert!(laid.overflow.is_none());
+        assert!(super::layout(&value, Some(12.0), 12.0, 20_000.0, latin, true).is_none(), "fixed sizes keep the row cap");
+    }
+
     /// Comb placement centres complete glyph/mark ink within each visual cell, rather
     /// than centring advances that can leave bearings or marks outside the cell.
     #[test]

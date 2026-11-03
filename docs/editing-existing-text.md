@@ -81,10 +81,11 @@ ligatures (`fi`, `fl`) Word and Chrome wrap in ActualText mid-word, join their l
 
 Auto/LTR/RTL chooses the paragraph's base direction independently of physical alignment.
 For existing paragraphs, explicit Auto/LTR/RTL changes, including a reset to Auto,
-are refused for turned source baselines and legacy visual-order Indic fonts.
-Editing such a paragraph that retains saved non-Auto direction is also refused
-before any document mutation. Ordinary automatic single-style edits retain their
-existing turned-text and legacy Indic paths.
+are refused for general turned source baselines and legacy visual-order Indic fonts.
+A uniform single-row baseline at a quarter turn supports both an explicit direction
+change and edits that retain its saved direction. Other turned paragraphs retaining
+non-Auto direction are refused before any document mutation. Ordinary automatic
+single-style edits retain their existing turned-text and legacy Indic paths.
 
 A justified paragraph stretches each row but its last to the paragraph's width by widening its
 spaces. Word spacing (`Tw`) widens only single-byte code 32, so where the font shows a space with

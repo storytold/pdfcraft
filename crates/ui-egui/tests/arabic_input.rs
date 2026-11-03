@@ -218,6 +218,73 @@ fn composition_enter_tab_and_save_cannot_publish_a_candidate() {
     }
 }
 
+/// The focused form widget must receive a live preedit, and Save must leave both
+/// its accepted value and disk bytes unchanged until that same widget commits.
+/// ASCII isolates composition ownership from optional script-font coverage.
+#[test]
+fn form_composition_save_preserves_preedit_until_commit_and_persists_commit() {
+    let dir = std::env::temp_dir().join(format!("pdfcraft-form-ime-save-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let out = dir.join("saved.pdf");
+    let bytes = include_bytes!("data/form.pdf").to_vec();
+    std::fs::write(&out, &bytes).unwrap();
+    let path = out.to_string_lossy().into_owned();
+    let slot = Arc::new(Mutex::new(None));
+    let capture = Arc::clone(&slot);
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(0.25).build_eframe(move |cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        *capture.lock().unwrap() = Some(app.attach_control(&cc.egui_ctx));
+        app.open_bytes("form-ime.pdf", Some(path), bytes).unwrap();
+        app.set_option("left", "closed").unwrap();
+        app.set_option("zoom", "150").unwrap();
+        app
+    });
+    h.run_steps(4);
+    let client = slot.lock().unwrap().take().unwrap();
+    let field_value = |h: &Harness<'static, PdfCraftApp>| {
+        h.state().session.get(h.state().views[0].id).unwrap().form.iter().find(|field| field.name == "name").unwrap().value.clone()
+    };
+    let before_value = field_value(&h);
+    let at = {
+        let app = h.state();
+        let doc = app.session.get(app.views[0].id).unwrap();
+        let field = doc.form.iter().find(|field| field.name == "name").unwrap();
+        pdfcraft_ui_egui::forms_ui::field_screen_rect(&app.views[0], &doc.info, field, 0).expect("form field is visible").center()
+    };
+    click(&mut h, at);
+    let focus = h.state().views[0].forms.focus.as_ref().expect("actual form editor is open");
+    assert_eq!(focus.name, "name");
+    let before_draft = focus.text.clone();
+    select(&mut h, 0, before_draft.chars().count());
+    let owner = h.ctx.memory(|memory| memory.focused()).expect("form editor has native keyboard focus");
+    call(&mut h, &client, "ui.ime", json!({"phase":"preedit","text":"candidate"})).unwrap();
+    let focus = h.state().views[0].forms.focus.as_ref().unwrap();
+    assert_eq!((focus.name.as_str(), focus.text.as_str()), ("name", "candidate"), "ui.ime must reach the focused form widget");
+    assert_eq!(h.ctx.memory(|memory| memory.focused()), Some(owner));
+    let ime = h.output().platform_output.ime.as_ref().expect("focused form emits native IME state");
+    let egui::output::IMESurroundingText::Available(payload) = &ime.surrounding_text else { panic!("short form committed-text snapshot") };
+    assert_eq!(payload.text, before_draft, "native committed text must exclude the live candidate");
+    let before_saved = std::fs::read(&out).unwrap();
+    assert!(h.state_mut().execute("file.save"));
+    h.run_steps(3);
+    assert!(h.state().toast.as_ref().is_some_and(|(message, _)| message.contains("Finish composing text before applying this action.")));
+    assert_eq!(field_value(&h), before_value, "Save cannot commit preedit into the document field");
+    assert_eq!(std::fs::read(&out).unwrap(), before_saved, "blocked Save cannot replace the existing file");
+    assert_eq!(h.state().views[0].forms.focus.as_ref().unwrap().text, "candidate");
+    call(&mut h, &client, "ui.ime", json!({"phase":"commit","text":"Committed value"})).unwrap();
+    assert_eq!(h.state().views[0].forms.focus.as_ref().unwrap().text, "Committed value");
+    assert!(h.state_mut().execute("file.save"));
+    h.run_steps(3);
+    assert_eq!(field_value(&h), ["Committed value"]);
+    let mut reopened = PdfCraftApp::new();
+    reopened.open_bytes("saved.pdf", None, std::fs::read(&out).unwrap()).unwrap();
+    let saved_field = reopened.session.get(reopened.views[0].id).unwrap().form.iter().find(|field| field.name == "name").unwrap();
+    assert_eq!(saved_field.value, ["Committed value"], "the committed form value must survive the actual saved PDF");
+    std::fs::remove_file(out).unwrap();
+    std::fs::remove_dir(dir).unwrap();
+}
+
 #[test]
 /// Verify an outside paragraph click cannot publish preedit, while cancellation restores ordinary switching.
 fn composition_blocks_switching_to_another_paragraph() {

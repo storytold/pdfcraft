@@ -1,8 +1,9 @@
 # Arabic generated appearances
 
-Status: locally verified candidate, 2026-11-03. Affected tests, strict lint, WASM,
-metadata checks and the fresh CLI replay pass. Platform, native-reader, upstream
-and release acceptance remain pending.
+Status: review-correction checkpoint, 2026-11-03. The affected tests, strict lint,
+WASM, metadata and fresh CLI results below apply to baseline `c30bb5de`. Subsequent
+review corrections still require post-fix validation. Platform, native-reader,
+upstream and release acceptance remain pending.
 
 This slice builds on the Arabic/Syriac local integration and reuses the generated
 appearance implementation from [PR #3465](https://github.com/storytold/pdfcraft/pull/3465),
@@ -41,6 +42,10 @@ existing page resources, including on rotated pages. Typed Arabic signatures use
 bounded contextual outlines; unsupported names are refused as a whole. Signatures
 remain artwork, with no new searchable-text claim. Syriac retains its selected-family
 path on these surfaces.
+
+Header/footer and watermark requests select their Syriac family independently.
+Omitting `syriac_family` selects Estrangela, including during replacement; pass the
+family again to retain the previous face.
 
 Missing fonts retain the existing warning/refusal policy. These changes do not add
 arbitrary foreign annotation-font reuse, inherited-only choice-option support, or

@@ -11065,3 +11065,36 @@ fn contextual_paint_valid_latin_hint_guards_text_replacement_across_routes() {
     assert_eq!(page_content_bytes(&doc, 0), before);
     assert_eq!(page_font_programs(&doc), fonts);
 }
+
+/// A syntactically valid map cannot swap colours or shift a colour boundary away
+/// from the glyphs actually painted: a range edit must preserve the source instead.
+#[test]
+fn contextual_paint_mismatched_glyph_binding_refuses_lossy_recolour() {
+    for hint in ["/PCPaint [[0 1 0 0 1] [1 3 1 0 0]]", "/PCPaint [[0 2 1 0 0] [2 3 0 0 1]]"] {
+        let content = format!(
+            "/Span << /ActualText (abc) {hint} >> BDC BT /F1 12 Tf 72 700 Td \
+             1 0 0 rg (a) Tj 0 0 1 rg (bc) Tj ET EMC"
+        );
+        let mut doc = text_page(&content);
+        assert_eq!(text::text_blocks(&doc, 0).unwrap()[0].editor_text, "abc");
+        let before = page_content_bytes(&doc, 0);
+        let fonts = page_font_programs(&doc);
+        let style = text::BlockStyle {
+            ranges: vec![text::RangeStyle {
+                range: 2..3,
+                color: Some([0.0, 1.0, 0.0]),
+                family: None,
+                resource: None,
+                size: None,
+                underline: None,
+                char_spacing: None,
+                scale: None,
+            }],
+            ..Default::default()
+        };
+        let error = text::rewrite_block(&mut doc, 0, 0, None, &style).unwrap_err();
+        assert!(error.to_string().contains("logical paint map"), "{error}");
+        assert_eq!(page_content_bytes(&doc, 0), before, "unselected a/b colours must not be taken from the hostile hint");
+        assert_eq!(page_font_programs(&doc), fonts);
+    }
+}

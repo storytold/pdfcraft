@@ -1,7 +1,11 @@
 # Combined Arabic and Syriac language package
 
-Status: bounded implementation locally verified, 2026-11-03. Publication does not
-establish upstream CI acceptance, maintainer approval or release qualification.
+Status: review-correction checkpoint, 2026-11-03. The qualification results below
+belong to baseline `c30bb5de`; the subsequent CodeRabbit corrections have not
+completed post-fix tests, strict lint or WASM validation. Six focused regressions
+reproduced their defects before correction; the RTL persistence test was stopped
+during compilation, and the form IME Save/preedit case is unrun. Publication does
+not establish upstream CI acceptance, maintainer approval or release qualification.
 M4 physical keyboard/provider/browser and independent fluent-reader acceptance is
 explicitly deferred by the contributor for this delivery. App-wide variable-font
 conversion, OCR and general mixed-font/size/transform editing remain excluded.

@@ -4,6 +4,82 @@ use pdfcraft_cos::{Document, Object, SaveOptions, write_incremental};
 
 use super::*;
 
+/// Overflow follows the selected Syriac display label and family, never its export token.
+#[test]
+fn review5914_syriac_combo_overflow_uses_displayed_label_and_family() {
+    use pdfcraft_fonts::{SyriacFamily, content_text};
+    if pdfcraft_fonts::document_syriac_font_for_family(SyriacFamily::Eastern).is_none() {
+        assert!(std::env::var_os("CRAFT_FONTS_DIR").is_none(), "supplied input must include Eastern Syriac");
+        return;
+    }
+    let mut doc = fixture();
+    set_props(&mut doc, "country", &FieldProps { font_size: Some(12.0), syriac_family: Some(SyriacFamily::Eastern), ..Default::default() }).unwrap();
+    let obj = field(&fields(&doc), "country").obj;
+    let label = "ܫܠܡܐ ".repeat(20);
+    doc.update_dict(obj, |d| {
+        d.set(b"Opt".to_vec(), Object::Array(vec![Object::Array(vec![PdfString::text("code").into(), PdfString::text(&label).into()])]));
+    })
+    .unwrap();
+    set_value(&mut doc, "country", &FieldValue::Text("code".into())).unwrap();
+    let all = fields(&doc);
+    let f = field(&all, "country");
+    let mut w = f.widgets[0].clone();
+    w.rect = [0.0, 0.0, 40.0, 200.0];
+    let wanted = content_text::width_for_family(&label, 12.0, SyriacFamily::Eastern).unwrap();
+    match appearance::value_overflow(&doc, f, &w) {
+        Some(appearance::Overflow::Wide { width, size, .. }) => {
+            assert!((width - wanted).abs() < 0.001, "measure the selected family, not Estrangela");
+            assert_eq!(size, 12.0);
+        }
+        other => panic!("long displayed label must overflow despite its short export: {other:?}"),
+    }
+    // A retained explicit direction from an imported combo must measure its drawn label too.
+    let mut directional = f.clone();
+    directional.text_direction = pdfcraft_fonts::TextDirection::RightToLeft;
+    match appearance::value_overflow(&doc, &directional, &w) {
+        Some(appearance::Overflow::Wide { width, .. }) => assert!((width - wanted).abs() < 0.001),
+        other => panic!("retained explicit combo direction must not measure the Latin export: {other:?}"),
+    }
+    // A hidden Syriac export and an unselected Syriac option do not make a short Latin label overflow.
+    let mut latin = f.clone();
+    latin.value = vec![label.clone()];
+    latin.options = vec![(label, "OK".into()), ("other".into(), "ܫܠܡܐ ".repeat(20))];
+    assert_eq!(appearance::value_overflow(&doc, &latin, &w), None);
+}
+
+/// A fixed-size isolated Syriac glyph must fit its actual MaxLen cell, even in a tall widget.
+#[test]
+fn review5914_syriac_comb_reports_fixed_size_cell_overflow() {
+    use pdfcraft_fonts::{SyriacFamily, content_text};
+    if pdfcraft_fonts::document_syriac_font_for_family(SyriacFamily::Eastern).is_none() {
+        assert!(std::env::var_os("CRAFT_FONTS_DIR").is_none(), "supplied input must include Eastern Syriac");
+        return;
+    }
+    let mut doc = fixture();
+    set_props(&mut doc, "zip", &FieldProps { font_size: Some(12.0), syriac_family: Some(SyriacFamily::Eastern), ..Default::default() }).unwrap();
+    let all = fields(&doc);
+    let mut f = field(&all, "zip").clone();
+    f.value = vec!["ܫ".into()];
+    f.max_len = Some(24);
+    let mut w = f.widgets[0].clone();
+    w.rect = [0.0, 0.0, 24.0, 200.0];
+    let wanted = content_text::comb_cells_for_family("ܫ", SyriacFamily::Eastern).unwrap()[0].width * 12.0;
+    assert!(wanted > 1.0, "fixture must exceed its one-point cell");
+    match appearance::value_overflow(&doc, &f, &w) {
+        Some(appearance::Overflow::Wide { width, room, size }) => {
+            assert!((width - wanted).abs() < 0.001);
+            assert_eq!((room, size), (1.0, 12.0));
+        }
+        other => panic!("fixed-size comb glyph must report per-cell overflow: {other:?}"),
+    }
+    set_props(&mut doc, "zip", &FieldProps { font_size: Some(0.0), ..Default::default() }).unwrap();
+    let all = fields(&doc);
+    let mut automatic = field(&all, "zip").clone();
+    automatic.value = f.value;
+    automatic.max_len = f.max_len;
+    assert_eq!(appearance::value_overflow(&doc, &automatic, &w), None, "auto comb size fits the same cell");
+}
+
 /// Arabic appearances retain logical values, formatted text and regenerated resources.
 #[test]
 fn arabic_single_line_generated_appearance_and_reopen() {

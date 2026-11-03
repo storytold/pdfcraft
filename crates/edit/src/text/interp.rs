@@ -548,6 +548,64 @@ fn simple_fill(ops: &[Op]) -> Option<[f64; 3]> {
     }
 }
 
+/// Recover the visual glyph-to-logical-cluster sequence used by a generated span.
+/// Full embedded faces retain shaping provenance, including empty-text marks whose
+/// Unicode owner moved to the advancing body. Without a usable program, only the
+/// unambiguous one-byte ASCII control is admitted; foreign ligatures stay read-only.
+fn paint_glyphs(logical: &str, first: &Shown, program: Option<&[u8]>) -> Option<Vec<(String, std::ops::Range<usize>)>> {
+    if logical.len() > 262_144 {
+        return None;
+    }
+    if let Some(program) = program {
+        let shaped = pdfcraft_fonts::source_shaping::shape_with_direction(program, logical, first.text_direction).ok()?;
+        let mappings = shaped.pdf_mappings(program).ok()?;
+        return Some(mappings.into_iter().zip(shaped.glyphs).map(|((text, _), glyph)| (text, glyph.logical_range)).collect());
+    }
+    if logical.len() > 65_534 || !logical.bytes().all(|byte| byte.is_ascii_graphic() || byte == b' ') {
+        return None;
+    }
+    let bidi = unicode_bidi::ParagraphBidiInfo::new(logical, Some(first.text_direction.level(logical)));
+    let (levels, runs) = bidi.visual_runs(0..logical.len());
+    let mut glyphs = Vec::with_capacity(logical.len());
+    for run in runs {
+        let mut positions: Vec<_> = run.clone().collect();
+        if levels.get(run.start).is_some_and(unicode_bidi::Level::is_rtl) {
+            positions.reverse();
+        }
+        for position in positions {
+            let end = position.checked_add(1)?;
+            glyphs.push((logical.get(position..end)?.to_owned(), position..end));
+        }
+    }
+    Some(glyphs)
+}
+
+/// A hint is authoritative only when every actual shown glyph agrees with its
+/// logical cluster's paint. Colour-set membership alone cannot detect reversed
+/// ranges or shifted boundaries; reject ambiguity before it can recolour other text.
+fn paint_binding(logical: &str, paints: &[(std::ops::Range<usize>, [f64; 3])], shown: &[Shown], program: Option<&[u8]>) -> bool {
+    if paints.is_empty() {
+        return false;
+    }
+    let Some(first) = shown.first() else { return false };
+    let Some(expected) = paint_glyphs(logical, first, program) else { return false };
+    let mut cursor = 0usize;
+    for item in shown {
+        let Some(end) = cursor.checked_add(item.glyph_count) else { return false };
+        let Some(glyphs) = expected.get(cursor..end) else { return false };
+        let Some(color) = simple_fill(&item.state.fill) else { return false };
+        if glyphs.iter().any(|(_, range)| {
+            let index = paints.partition_point(|(paint, _)| paint.end <= range.start);
+            !paints.get(index).is_some_and(|(paint, expected)| paint.start <= range.start && paint.end >= range.end && *expected == color)
+        }) || glyphs.iter().map(|(text, _)| text.as_str()).collect::<String>() != item.text
+        {
+            return false;
+        }
+        cursor = end;
+    }
+    cursor == expected.len()
+}
+
 /// One replacement scope and its validated logical paint hints.
 struct ActualTextScope {
     start: usize,
@@ -564,9 +622,60 @@ struct MarkedContent {
     actual_text: Vec<Option<ActualTextScope>>,
     /// Aggregate decoded hint entries, including repeated named property lists.
     paint_entries: usize,
+    /// Shared proof work, charged even for hints whose binding is later rejected.
+    paint_binding_bytes: usize,
+    paint_binding_scopes: usize,
+    /// Cache at most 16 source resources; failed programs must not decode repeatedly.
+    paint_programs: HashMap<Vec<u8>, Option<Rc<Vec<u8>>>>,
+    /// One 64 MiB decode allowance shared by all hint source programs on this page.
+    paint_decode: Option<pdfcraft_cos::DecodeBudget>,
 }
 
 impl MarkedContent {
+    /// Prove hint ownership within shared page limits, before accepting private metadata.
+    /// Spend at most 4 MiB of logical shaping input and 1,024 scopes, decode at most
+    /// 64 MiB across 16 cached source resources, including unusable programs. Exhaustion
+    /// removes hint authority without altering standard ActualText or painted geometry.
+    fn bound_paints(
+        &mut self,
+        doc: &Document,
+        resources: &Dict,
+        logical: &str,
+        paints: &[(std::ops::Range<usize>, [f64; 3])],
+        shown: &[Shown],
+    ) -> bool {
+        if paints.is_empty() {
+            return false;
+        }
+        self.paint_binding_bytes = self.paint_binding_bytes.saturating_add(logical.len());
+        self.paint_binding_scopes = self.paint_binding_scopes.saturating_add(1);
+        if self.paint_binding_bytes > 4 << 20 || self.paint_binding_scopes > 1024 {
+            return false;
+        }
+        let Some(first) = shown.first() else { return false };
+        let program = if let Some(program) = self.paint_programs.get(&first.font) {
+            program.clone()
+        } else {
+            if self.paint_programs.len() >= 16 {
+                return false;
+            }
+            let fonts = resources.get(b"Font").and_then(|object| doc.dict(object)).unwrap_or_default();
+            let font = fonts.get(&first.font).and_then(|object| doc.dict(object));
+            let program = font.and_then(|font| {
+                let base = Metrics::from_dict(doc, &font).base_font;
+                if base.split_once('+').is_some_and(|(tag, _)| tag.len() == 6 && tag.bytes().all(|byte| byte.is_ascii_uppercase())) {
+                    return None;
+                }
+                let budget = self.paint_decode.get_or_insert_with(|| pdfcraft_cos::DecodeBudget::new(64 << 20, 0));
+                let bytes = pdfcraft_fonts::pdf::embedded_sfnt_within(doc, &font, budget)?;
+                pdfcraft_fonts::embedding::validate(&bytes).is_ok().then(|| Rc::new(bytes))
+            });
+            self.paint_programs.insert(first.font.clone(), program.clone());
+            program
+        };
+        paint_binding(logical, paints, shown, program.as_ref().map(|bytes| bytes.as_slice()))
+    }
+
     /// Open a marked-content scope, inheriting paragraph direction and resolving inline or named properties.
     /// Direction metadata is read even when the caller disables ActualText replacement; nested scopes retain their enclosing region.
     fn begin(&mut self, doc: &Document, op: &Op, index: usize, logical_text: Option<&Dict>, shown_count: usize, resources: &Dict) {
@@ -622,18 +731,15 @@ impl MarkedContent {
 
     /// Close a marked scope and combine its shown glyphs under ActualText.
     /// For eligible self-contained horizontal spans, use an agreeing advancing body's rise instead of a leading raised mark; mixed or transformed spans retain their source origin.
-    fn end(&mut self, index: usize, shown: &mut Vec<Shown>) {
+    fn end(&mut self, doc: &Document, resources: &Dict, index: usize, shown: &mut Vec<Shown>) {
         self.regions.pop();
         self.directions.pop();
         self.layers.pop();
         if let Some(Some(ActualTextScope { start, open, text: logical, paints })) = self.actual_text.pop() {
             let tail = shown.split_off(start.min(shown.len()));
+            let bound_paints = self.bound_paints(doc, resources, &logical, &paints, &tail);
             let mut items = tail.into_iter();
             if let Some(mut first) = items.next() {
-                let first_color = simple_fill(&first.state.fill);
-                let color_key = |color: Option<[f64; 3]>| color.map(|color| color.map(|v| if v == 0.0 { 0 } else { v.to_bits() }));
-                let mut color_keys = std::collections::HashSet::from([color_key(first_color)]);
-                let mut colors = vec![first_color];
                 let mut mixed_fill = false;
                 let mut uniform_shape = true;
                 let matrix = first.tm.then(&first.state.ctm);
@@ -657,10 +763,6 @@ impl MarkedContent {
                         && item.state.scale == first.state.scale
                         && item.state.render_mode == first.state.render_mode
                         && item.state.vertical.is_none();
-                    let color = simple_fill(&item.state.fill);
-                    if colors.len() <= 4096 && color_keys.insert(color_key(color)) {
-                        colors.push(color);
-                    }
                     turned_scope &= item.bt == first.bt
                         && item.font == first.font
                         && item.tlm.0 == first.tlm.0
@@ -706,11 +808,7 @@ impl MarkedContent {
                 // A private hint does not change extraction or geometry. If another writer
                 // drops it, refuse editing mixed paints instead of silently flattening them.
                 first.state.logical_paints = Rc::from([]);
-                let valid_paints = uniform_shape
-                    && colors.len() <= 4096
-                    && !paints.is_empty()
-                    && colors.iter().all(|color| color.is_some_and(|c| paints.iter().any(|(_, paint)| *paint == c)))
-                    && paints.iter().all(|(_, paint)| colors.contains(&Some(*paint)));
+                let valid_paints = uniform_shape && bound_paints;
                 if valid_paints {
                     first.state.logical_paints = paints.into();
                 } else if mixed_fill {
@@ -1027,7 +1125,7 @@ pub(super) fn interpret(
                 marked.begin(doc, op, i, logical_text, out.len(), resources);
             }
             b"EMC" => {
-                marked.end(i, &mut out);
+                marked.end(doc, resources, i, &mut out);
             }
             b"q" => stack.push((ts.clone(), tm, tlm)),
             b"Q" => {

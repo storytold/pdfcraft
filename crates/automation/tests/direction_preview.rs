@@ -148,3 +148,24 @@ fn explicit_ltr_latin_allows_range_styles_after_reopen() {
         "RTL-base mixed styles still need a uniform full-face row"
     );
 }
+
+/// Empty or inherited row-alignment hints do not turn soft wraps into hard breaks
+/// during implicit width reflow; Apply retains only the actual hard break.
+#[test]
+fn empty_or_inherited_aligns_reflow_soft_wraps() {
+    for aligns in [json!([]), json!([null]), json!([null, null]), json!(["inherit"]), json!(["inherit", null])] {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("wrapped.pdf"), page()).unwrap();
+        let mut auto = Automation::new().with_root(dir.path()).unwrap();
+        let doc = call(&mut auto, "doc_open", json!({"path":"wrapped.pdf"}))["doc"].clone();
+        let source = auto.session().docs().last().unwrap().text_blocks(0).remove(0);
+        assert_ne!(source.editor_text, source.reflow_text);
+        let implicit = json!({"doc":doc,"page":1,"paragraph":1,"width":400,"direction":"auto","aligns":aligns});
+        call(&mut auto, "text_edit", implicit);
+        assert_eq!(
+            call(&mut auto, "text_paragraphs", json!({"doc":doc,"page":1}))["paragraphs"][0]["editor_text"],
+            source.reflow_text,
+            "Apply must rejoin only soft wraps with {aligns}"
+        );
+    }
+}

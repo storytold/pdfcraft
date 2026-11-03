@@ -197,6 +197,8 @@ pub struct TextBox {
     /// Width and height inside the border and padding.
     inner_w: f64,
     inner_h: f64,
+    /// Full layout width: comb dividers span the widget, not only its padded text box.
+    outer_w: f64,
     /// The `/DA` size; `None` for an automatic (`0 Tf`) size, which shrinks to fit.
     size: Option<f64>,
     multiline: bool,
@@ -221,6 +223,7 @@ pub fn text_box(doc: &Document, f: &Field, w: &Widget) -> TextBox {
         font: dr_font(doc, &da.font).map(|(_, enc)| enc),
         inner_w: (place.layout_w - 2.0 * pad).max(1.0),
         inner_h: place.layout_h - 2.0 * pad,
+        outer_w: place.layout_w,
         size: (da.size > 0.0 && da.size.is_finite()).then_some(da.size),
         multiline,
         password: f.has(flags::PASSWORD),
@@ -887,25 +890,24 @@ impl std::fmt::Display for Overflow {
     }
 }
 
-/// Whether the text field's value, drawn in widget `w`, is cut off by its box.
+/// Whether a text/choice field's effective displayed value is cut off in widget `w`.
 pub fn value_overflow(doc: &Document, f: &Field, w: &Widget) -> Option<Overflow> {
-    let arabic_combo = f.kind == FieldKind::Combo && needs_arabic(doc, f, w, &f.value, true);
-    if f.kind != FieldKind::Text
-        && !arabic_combo
-        && (f.text_direction == pdfcraft_fonts::TextDirection::Auto || !matches!(f.kind, FieldKind::Combo | FieldKind::List))
-    {
+    if !matches!(f.kind, FieldKind::Text | FieldKind::Combo | FieldKind::List) {
+        return None;
+    }
+    let shown = displayed_text(f, &f.value, true);
+    let syriac_display = !f.has(flags::PASSWORD) && pdfcraft_fonts::content_text::contains_syriac(&shown);
+    let shaped_combo = f.kind == FieldKind::Combo && (syriac_display || needs_arabic(doc, f, w, &f.value, true));
+    if f.kind != FieldKind::Text && !shaped_combo && f.text_direction == pdfcraft_fonts::TextDirection::Auto {
         return None;
     }
     if f.kind == FieldKind::Text
         && f.text_direction != pdfcraft_fonts::TextDirection::Auto
-        && let Some(issue) = explicit_direction_issue(&displayed_text(f, &f.value, true))
+        && let Some(issue) = explicit_direction_issue(&shown)
     {
         return Some(issue);
     }
-    if !f.has(flags::PASSWORD)
-        && f.value.iter().any(|value| pdfcraft_fonts::content_text::contains_syriac(value))
-        && let Ok(overflow) = syriac::overflow(&text_box(doc, f, w), f)
-    {
+    if syriac_display && let Ok(overflow) = syriac::overflow(&text_box(doc, f, w), f, &shown) {
         return overflow;
     }
     field_appearance_fit(doc, f, w, &f.value, true).2

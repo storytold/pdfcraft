@@ -55,7 +55,7 @@ fn paragraph_replacement(args: &Args, block: &pdfcraft_engine::TextBlock, width:
     // Explicit row alignments keep editor rows; a width-only edit rejoins soft wraps.
     Ok(match args.opt_str("text")? {
         Some(text) => text.to_owned(),
-        None if args.get("aligns").is_some() => block.editor_text.clone(),
+        None if content::opt_aligns(args)?.is_some_and(|aligns| aligns.iter().any(Option::is_some)) => block.editor_text.clone(),
         None if width.is_some() => block.reflow_text.clone(),
         None if args.get("direction").is_some() => block.editor_text.clone(),
         None => block.editor_text.clone(),

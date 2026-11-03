@@ -50,9 +50,19 @@ pub fn line_for_family(text: &str, rtl: bool, family: SyriacFamily) -> Result<Li
     if text.len() > MAX_TEXT_BYTES || text.contains(['\n', '\r']) {
         return Err("shape one bounded Syriac line at a time".into());
     }
+    let bidi = ParagraphBidiInfo::new(text, Some(if rtl { Level::rtl() } else { Level::ltr() }));
+    paragraph_line(&bidi, 0..text.len(), family)
+}
+
+/// Shape one original paragraph range with its resolved embedding/override levels.
+/// Only line-level bidi processing is repeated; controls opened on previous wrapped
+/// rows remain effective, while the row's original logical text stays in ActualText.
+fn paragraph_line(paragraph: &ParagraphBidiInfo<'_>, range: std::ops::Range<usize>, family: SyriacFamily) -> Result<Line, String> {
+    let text = paragraph.text.get(range.clone()).ok_or("the Syriac line is outside its paragraph")?;
+    let rtl = paragraph.paragraph_level.is_rtl();
     let mut clusters = Vec::new();
     if !text.is_empty() {
-        let bidi = ParagraphBidiInfo::new(text, Some(if rtl { Level::rtl() } else { Level::ltr() }));
+        let bidi = crate::appearance_text::line_bidi(paragraph, range, text).map_err(error)?;
         let (levels, runs) = bidi.visual_runs(0..text.len());
         for run in runs {
             let input: String = text.get(run.clone()).unwrap_or_default().chars().filter(|c| !bidi_control(*c)).collect();
@@ -145,26 +155,28 @@ pub fn wrap_for_family(text: &str, size: f64, width: f64, family: SyriacFamily) 
     let mut output = Vec::new();
     for paragraph in normalized.split('\n') {
         let rtl = unicode_bidi::get_base_direction(paragraph) == unicode_bidi::Direction::Rtl;
+        let bidi = ParagraphBidiInfo::new(paragraph, Some(if rtl { Level::rtl() } else { Level::ltr() }));
         let space = line_for_family(" ", rtl, family)?.width * size;
-        let (mut current, mut used) = (String::new(), 0.0);
+        let (mut row_start, mut row_end, mut word_start, mut used) = (0usize, 0usize, 0usize, 0.0);
         for (index, word) in paragraph.split(' ').enumerate() {
-            let advance = line_for_family(word, rtl, family)?.width * size;
+            let word_end = word_start.saturating_add(word.len());
+            let advance = paragraph_line(&bidi, word_start..word_end, family)?.width * size;
             let gap = if index == 0 { 0.0 } else { space };
-            if !current.is_empty() && used + gap + advance > width {
+            if row_start < row_end && used + gap + advance > width {
                 if output.len() >= MAX_LINES {
                     return Err("the Syriac text has too many wrapped rows".into());
                 }
-                output.push(line_for_family(&current, rtl, family)?);
-                current.clear();
+                output.push(paragraph_line(&bidi, row_start..row_end, family)?);
+                row_start = word_start;
                 used = 0.0;
             } else if index != 0 {
-                current.push(' ');
                 used += space;
             }
-            current.push_str(word);
+            row_end = word_end;
+            word_start = word_end.saturating_add(1);
             used += advance;
         }
-        output.push(line_for_family(&current, rtl, family)?);
+        output.push(paragraph_line(&bidi, row_start..row_end, family)?);
         if output.len() > MAX_LINES {
             return Err("the Syriac text has too many wrapped rows".into());
         }
@@ -281,5 +293,30 @@ impl Line {
             pen += cluster.advance;
         }
         Ok(ScriptOutline { contours, width: self.width, ascent, descent })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A continuation row inherits an override opened on an earlier row, while
+    /// logical row text retains its original controls for ActualText extraction.
+    #[test]
+    fn wrapped_syriac_keeps_cross_row_bidi_override() {
+        if crate::document_syriac_font().is_none() {
+            assert!(std::env::var_os("PDFCRAFT_REQUIRE_SYRIAC").is_none(), "qualification requires the Syriac craft-fonts input");
+            return;
+        }
+        let rows = wrap("\u{0712} \u{202e}AB CD\u{202c}", 12.0, 1.0).unwrap();
+        assert_eq!(rows.len(), 3, "overlong joining words stay intact, one per row");
+        assert_eq!(rows[2].text, "CD\u{202c}");
+        let visual = |line: &Line| line.clusters.iter().map(|cluster| cluster.text.as_str()).collect::<String>();
+        let expected = line("\u{202e}CD\u{202c}", true).unwrap();
+        assert_eq!(visual(&expected), "DC", "the explicit override is observable on Latin letters");
+        assert_eq!(visual(&rows[2]), visual(&expected), "the row must inherit the paragraph's earlier RLO");
+        let control = wrap("\u{0712} \u{202e}AB\u{202c} CD", 12.0, 1.0).unwrap();
+        assert_eq!(visual(control.last().unwrap()), "CD", "a closed override must not leak to the next word");
+        assert!(rows.iter().all(|row| row.rtl));
     }
 }
