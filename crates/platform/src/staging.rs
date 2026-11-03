@@ -44,7 +44,7 @@ fn create_staging_as(
     keep: Option<&std::fs::Metadata>,
 ) -> std::io::Result<(PathBuf, std::fs::File)> {
     // One name, in `dir`: a separator in it would put the staging file somewhere else.
-    if name.is_empty() || name.contains(['/', '\\']) || std::path::Path::new(name).components().count() != 1 {
+    if name.is_empty() || name.contains(['/', '\\']) {
         return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "the file name is not a single name"));
     }
     // At most 128 bytes of the target's name, cut between characters, so the staging name fits
