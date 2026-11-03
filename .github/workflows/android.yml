@@ -152,38 +152,4 @@ jobs:
           force-avd-creation: false
           emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           disable-animations: true
-          script: |
-            DEBUG_APK=$(find apks -name "app-debug.apk" | head -n 1)
-            TEST_APK=$(find apks -name "app-debug-androidTest.apk" | head -n 1)
-            echo "Found debug APK: $DEBUG_APK"
-            echo "Found test APK: $TEST_APK"
-            if [ -z "$DEBUG_APK" ] || [ ! -f "$DEBUG_APK" ]; then
-              echo "Error: Debug APK not found in artifacts"
-              exit 1
-            fi
-            if [ -z "$TEST_APK" ] || [ ! -f "$TEST_APK" ]; then
-              echo "Error: Test APK not found in artifacts"
-              exit 1
-            fi
-
-            echo "Installing application under test..."
-            adb install -r "$DEBUG_APK"
-
-            echo "Installing instrumentation test package..."
-            adb install -r "$TEST_APK"
-
-            echo "Executing all four instrumentation test classes on emulator..."
-            OUTPUT=$(adb shell am instrument -w -r \
-              -e class io.github.dikshant363.pdfcraft.NativeEngineLoadingTest,io.github.dikshant363.pdfcraft.DocumentLifecycleTest,io.github.dikshant363.pdfcraft.ViewerOperationsTest,io.github.dikshant363.pdfcraft.AnnotationsAndMediaTest \
-              io.github.dikshant363.pdfcraft.test/androidx.test.runner.AndroidJUnitRunner)
-            echo "$OUTPUT"
-
-            if echo "$OUTPUT" | grep -qE "FAILURES!!!|INSTRUMENTATION_FAILED|Failure in"; then
-              echo "Error: Instrumentation tests reported failure."
-              exit 1
-            fi
-            if ! echo "$OUTPUT" | grep -q "OK ("; then
-              echo "Error: Instrumentation tests did not report successful completion."
-              exit 1
-            fi
-            echo "All four instrumentation test classes executed and passed successfully on emulator!"
+          script: bash .github/scripts/run-emulator-tests.sh
