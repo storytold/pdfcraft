@@ -62,6 +62,8 @@ const IMAGE_SHA_KEY: &[u8] = b"PCXfaSHA256";
 const MAX_PAGES_SEARCHED: usize = 10_000;
 /// Most pictures remembered.
 const MAX_REMEMBERED_IMAGES: usize = 1000;
+/// Most XObject entries read while looking for those images, reusable or not.
+const MAX_IMAGES_EXAMINED: usize = 100_000;
 
 struct Emitter<'a> {
     doc: &'a mut Document,
@@ -885,12 +887,28 @@ fn has_host(after: &str) -> bool {
 fn earlier_images(doc: &Document, pages: ObjRef) -> HashMap<[u8; 32], ObjRef> {
     let mut out = HashMap::new();
     let kids = doc.get(pages).as_dict().and_then(|d| d.get(b"Kids").map(|k| doc.resolve(k))).and_then(|k| k.as_array().cloned()).unwrap_or_default();
+    // A page, resource or XObject dictionary listed again is read once, and every entry read
+    // counts, whether or not it is a reusable image.
+    let mut seen = std::collections::HashSet::new();
+    let mut examined = 0usize;
     for page in kids.iter().filter_map(Object::as_ref).take(MAX_PAGES_SEARCHED) {
+        if !seen.insert(page) {
+            continue;
+        }
         let page = doc.get(page);
-        let Some(resources) = page.as_dict().and_then(|p| p.get(b"Resources")).map(|r| doc.resolve(r)) else { continue };
-        let Some(xobjects) = resources.as_dict().and_then(|r| r.get(b"XObject")).map(|x| doc.resolve(x)) else { continue };
+        let Some(res_entry) = page.as_dict().and_then(|p| p.get(b"Resources")) else { continue };
+        if res_entry.as_ref().is_some_and(|r| !seen.insert(r)) {
+            continue;
+        }
+        let resources = doc.resolve(res_entry);
+        let Some(xo_entry) = resources.as_dict().and_then(|r| r.get(b"XObject")) else { continue };
+        if xo_entry.as_ref().is_some_and(|r| !seen.insert(r)) {
+            continue;
+        }
+        let xobjects = doc.resolve(xo_entry);
         for r in xobjects.as_dict().into_iter().flat_map(|x| x.iter()).filter_map(|(_, v)| v.as_ref()) {
-            if out.len() >= MAX_REMEMBERED_IMAGES {
+            examined += 1;
+            if out.len() >= MAX_REMEMBERED_IMAGES || examined > MAX_IMAGES_EXAMINED {
                 return out;
             }
             if let Object::Stream(s) = &*doc.get(r)

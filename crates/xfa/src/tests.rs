@@ -4531,3 +4531,22 @@ fn a_container_is_as_wide_as_a_turned_draw_stands() {
         assert!((got - right).abs() < 0.01, "{rotate}: the neighbour stands {got} right of the anchor, not {right}");
     }
 }
+
+/// The saved state of a wide form is matched through one index of the template's names: 20,000
+/// same-named fields used to be scanned once for each of their 20,000 saved states.
+#[test]
+fn saved_state_of_a_wide_form_is_matched_by_index() {
+    const N: usize = 20_000;
+    let fields = "<field name=\"f\"/>".repeat(N);
+    let saved = format!("{}<field name=\"f\" presence=\"hidden\"/>", "<field name=\"f\"/>".repeat(N - 1));
+    let xml = format!(
+        "<xdp:xdp xmlns:xdp=\"http://ns.adobe.com/xdp/\"><template xmlns=\"http://www.xfa.org/schema/xfa-template/3.3/\"><subform name=\"form1\">{fields}</subform></template><form xmlns=\"http://www.xfa.org/schema/xfa-form/2.8/\"><subform name=\"form1\">{saved}</subform></form></xdp:xdp>"
+    );
+    let start = std::time::Instant::now();
+    let (t, _) = parse(&xml).unwrap();
+    assert!(start.elapsed() < std::time::Duration::from_secs(10), "{:?}", start.elapsed());
+    let presence: Vec<Presence> = t.root.children.iter().map(|n| n.common().presence).collect();
+    assert_eq!(presence.len(), N);
+    assert_eq!(presence.last(), Some(&Presence::Hidden), "the last saved state reaches the last field");
+    assert!(presence.iter().take(N - 1).all(|p| *p == Presence::Visible));
+}

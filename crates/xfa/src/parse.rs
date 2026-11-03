@@ -793,6 +793,14 @@ fn apply_saved_state(nodes: &mut [Node], saved: XmlNode, depth: usize) {
         return;
     }
     let mut seen: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    // The template siblings of each name, in order, indexed once: scanning every sibling for each
+    // saved one is quadratic in a wide form.
+    let mut by_name: std::collections::HashMap<String, Vec<usize>> = std::collections::HashMap::new();
+    for (i, n) in nodes.iter().enumerate() {
+        if let Some(name) = n.common().name.as_deref() {
+            by_name.entry(name.to_owned()).or_default().push(i);
+        }
+    }
     for c in saved.children().filter(|c| c.is_element()) {
         if !matches!(c.tag_name().name(), "subform" | "subformSet" | "area" | "field" | "draw" | "exclGroup") {
             continue;
@@ -803,9 +811,8 @@ fn apply_saved_state(nodes: &mut [Node], saved: XmlNode, depth: usize) {
             *k += 1;
             *k - 1
         };
-        let same: Vec<usize> = nodes.iter().enumerate().filter(|(_, n)| n.common().name.as_deref() == Some(name)).map(|(i, _)| i).collect();
         // More saved objects of the name than the template has: further instances.
-        let Some(target) = same.get(nth).copied().and_then(|i| nodes.get_mut(i)) else { continue };
+        let Some(target) = by_name.get(name).and_then(|same| same.get(nth)).copied().and_then(|i| nodes.get_mut(i)) else { continue };
         let presence = c.attribute("presence").map(|p| Presence::parse(Some(p)));
         match target {
             Node::Subform(s) => {
