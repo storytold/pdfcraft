@@ -14,6 +14,7 @@
 use std::io::{BufRead, Write};
 
 use base64::Engine as _;
+use pdfcraft_platform::line_read::{LineRead, drain_line, read_line_limited};
 use serde_json::{Value, json};
 
 use crate::{Automation, Content, ToolError};
@@ -345,53 +346,6 @@ fn unwrap_tool_call(args: &Value) -> Result<(String, Value), String> {
     Ok((name.to_owned(), inner))
 }
 
-/// What [`read_line_limited`] found.
-#[derive(Debug, PartialEq, Eq)]
-enum LineRead {
-    /// A line, now in the buffer (newline and a trailing `\r` stripped).
-    Line,
-    /// End of stream.
-    End,
-    /// The line is longer than the limit; at most `max + 1` bytes of it were read.
-    TooLong,
-}
-
-/// Read one `\n`-terminated line of at most `max` bytes into `buf`.
-fn read_line_limited(reader: &mut impl BufRead, buf: &mut Vec<u8>, max: usize) -> std::io::Result<LineRead> {
-    use std::io::Read as _;
-    buf.clear();
-    // `take` bounds what is buffered for one line: never more than `max + 1` bytes.
-    let limit = u64::try_from(max).unwrap_or(u64::MAX).saturating_add(1);
-    if reader.take(limit).read_until(b'\n', buf)? == 0 {
-        return Ok(LineRead::End);
-    }
-    if buf.last() == Some(&b'\n') {
-        buf.pop();
-        if buf.last() == Some(&b'\r') {
-            buf.pop();
-        }
-        return Ok(LineRead::Line);
-    }
-    // No newline: either the limit was passed, or this is a last line before end of stream.
-    Ok(if buf.len() > max { LineRead::TooLong } else { LineRead::Line })
-}
-
-/// Discard the rest of an overlong line up to `\n` or end of stream without buffering it.
-fn drain_line(reader: &mut impl BufRead) -> std::io::Result<()> {
-    loop {
-        let chunk = reader.fill_buf()?;
-        if chunk.is_empty() {
-            return Ok(());
-        }
-        if let Some(pos) = chunk.iter().position(|&b| b == b'\n') {
-            reader.consume(pos + 1);
-            return Ok(());
-        }
-        let len = chunk.len();
-        reader.consume(len);
-    }
-}
-
 /// Last-resort boundary shared by every tools/call route, including compact dispatch.
 fn guarded_tool(f: impl FnOnce() -> Result<Value, (i64, String)>) -> Result<Value, (i64, String)> {
     pdfcraft_engine::guard(f).unwrap_or_else(|message| Ok(tool_error(&format!("internal error: {message}"))))
@@ -612,27 +566,6 @@ mod tests {
         }
         let ok = super::guarded_dispatch("resources/list", || Ok(json!({"resources": []}))).unwrap();
         assert_eq!(ok["resources"], json!([]));
-    }
-
-    #[test]
-    fn read_line_limited_and_drain_line_respect_boundaries() {
-        use super::{LineRead, drain_line, read_line_limited};
-        let mut buf = Vec::new();
-        let mut input: &[u8] = b"aaaaaaaaaa\nbb\r\ncc";
-        assert_eq!(read_line_limited(&mut input, &mut buf, 10).unwrap(), LineRead::Line);
-        assert_eq!(buf, b"aaaaaaaaaa", "a line exactly at the limit is accepted");
-        assert_eq!(read_line_limited(&mut input, &mut buf, 10).unwrap(), LineRead::Line);
-        assert_eq!(buf, b"bb", "CRLF is stripped");
-        assert_eq!(read_line_limited(&mut input, &mut buf, 10).unwrap(), LineRead::Line);
-        assert_eq!(buf, b"cc", "a last line without a newline is still read");
-        assert_eq!(read_line_limited(&mut input, &mut buf, 10).unwrap(), LineRead::End);
-
-        let mut overlong: &[u8] = b"0123456789abcdef\nafter\n";
-        assert_eq!(read_line_limited(&mut overlong, &mut buf, 10).unwrap(), LineRead::TooLong);
-        assert_eq!(buf.len(), 11, "at most max + 1 bytes are buffered");
-        drain_line(&mut overlong).unwrap();
-        assert_eq!(read_line_limited(&mut overlong, &mut buf, 10).unwrap(), LineRead::Line);
-        assert_eq!(buf, b"after", "the next line after an overlong line is read cleanly");
     }
 
     #[test]

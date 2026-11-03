@@ -1,4 +1,6 @@
 use super::{ControlClient, Value, json};
+#[cfg(not(target_arch = "wasm32"))]
+use pdfcraft_platform::line_read::{LineRead, read_line_limited};
 
 // ---- transport (native only) -----------------------------------------------------------------
 
@@ -259,39 +261,6 @@ fn serve_with(client: ControlClient, limits: Limits) -> std::io::Result<Endpoint
 #[cfg(not(target_arch = "wasm32"))]
 const MAX_AUTH_LINE: usize = 4 * 1024;
 
-/// What [`read_line_limited`] found.
-#[cfg(not(target_arch = "wasm32"))]
-#[derive(Debug, PartialEq, Eq)]
-enum LineRead {
-    /// A line, now in the buffer (newline and a trailing `\r` stripped).
-    Line,
-    /// End of stream.
-    End,
-    /// The line is longer than the limit; at most limit + 1 bytes of it were read.
-    TooLong,
-}
-
-/// Read one `\n`-terminated line of at most `max` bytes into `buf`.
-#[cfg(not(target_arch = "wasm32"))]
-fn read_line_limited(reader: &mut impl std::io::BufRead, buf: &mut Vec<u8>, max: usize) -> std::io::Result<LineRead> {
-    use std::io::{BufRead, Read};
-    buf.clear();
-    // `take` bounds what is buffered for one line: never more than `max` + 1 bytes.
-    let limit = u64::try_from(max).unwrap_or(u64::MAX).saturating_add(1);
-    if reader.take(limit).read_until(b'\n', buf)? == 0 {
-        return Ok(LineRead::End);
-    }
-    if buf.last() == Some(&b'\n') {
-        buf.pop();
-        if buf.last() == Some(&b'\r') {
-            buf.pop();
-        }
-        return Ok(LineRead::Line);
-    }
-    // No newline: either the limit was passed, or this is a last line before end of stream.
-    Ok(if buf.len() > max { LineRead::TooLong } else { LineRead::Line })
-}
-
 #[cfg(not(target_arch = "wasm32"))]
 fn rpc_error(id: Value, code: i64, message: &str) -> Value {
     json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } })
@@ -348,25 +317,6 @@ mod transport_tests {
             Err(e) => matches!(e.kind(), ErrorKind::ConnectionReset | ErrorKind::ConnectionAborted),
         };
         assert!(closed, "the connection stayed open: {next:?}");
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    #[test]
-    fn lines_are_read_up_to_the_limit() {
-        use super::{LineRead, read_line_limited};
-        let mut buf = Vec::new();
-        let mut input: &[u8] = b"aaaaaaaaaa\nbb\r\ncc";
-        assert_eq!(read_line_limited(&mut input, &mut buf, 10).unwrap(), LineRead::Line);
-        assert_eq!(buf, b"aaaaaaaaaa", "a line exactly at the limit is accepted");
-        assert_eq!(read_line_limited(&mut input, &mut buf, 10).unwrap(), LineRead::Line);
-        assert_eq!(buf, b"bb", "CRLF is stripped");
-        assert_eq!(read_line_limited(&mut input, &mut buf, 10).unwrap(), LineRead::Line);
-        assert_eq!(buf, b"cc", "a last line without a newline is still read");
-        assert_eq!(read_line_limited(&mut input, &mut buf, 10).unwrap(), LineRead::End, "then end of stream");
-        let long = [b'x'; 100];
-        let mut input: &[u8] = &long;
-        assert_eq!(read_line_limited(&mut input, &mut buf, 10).unwrap(), LineRead::TooLong);
-        assert_eq!(input.len(), 100 - 11, "at most limit + 1 bytes are read; the rest is left");
     }
 
     /// Before authenticating, a line longer than [`super::MAX_AUTH_LINE`] is refused as soon as
