@@ -140,8 +140,8 @@ impl<'a> Ops<'a> {
         self.skipped
     }
 
-    /// Inline images read so far whose end is this parser's guess (as in
-    /// [`Parsed::ambiguous_images`]).
+    /// Inline images read so far that are ambiguous (as in [`Parsed::ambiguous_images`]): either
+    /// their end is this parser's guess, or the renderer reads them and this parser cannot.
     pub fn ambiguous_images(&self) -> usize {
         self.ambiguous_images
     }
