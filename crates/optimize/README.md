@@ -29,9 +29,10 @@ let report = optimize_with_progress(&mut doc, &settings, &mut |stage| keep_going
   If a use can't be
   measured (forms nested deeper, or drawn too many times), no image is resampled. Colour and grayscale images above a
   threshold are resampled with a bicubic (Catmull-Rom) filter to a target resolution and
-  stored as JPEG (Acrobat's quality steps) or ZIP; soft masks are resampled with their image.
+  stored as JPEG (Acrobat's quality steps) or ZIP; soft masks are resampled with their image. A
+  stencil `/Mask` has its own resolution, so the picture changes under it and it stays as it is.
   An image is replaced only if the result is smaller. Left alone by these colour and grey
-  settings: CMYK and other colour spaces, image masks, decode arrays, more than 8 bits, JPEG 2000,
+  settings: CMYK and other colour spaces, image masks, colour-key masks, decode arrays, more than 8 bits, JPEG 2000,
   JBIG2 and CCITT (black-and-white images, CCITT and JBIG2 among them, are below). A JPEG is read with
   its colour transform (an Adobe marker's, else `/ColorTransform`, ISO 32000-2 §7.4.8), so one
   stored untransformed keeps its colours; one whose marker and `/ColorTransform` disagree is left

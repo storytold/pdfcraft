@@ -95,12 +95,19 @@ impl OptimizeJob {
         let discarded = if discard.is_empty() {
             Vec::new()
         } else {
+            // Every ticked category, as `remove_hidden` decides between them: with form fields
+            // ticked, discarding hidden text also takes the hidden text the flattened appearances
+            // bring onto the page, which no scan before flattening counts. It refuses when its scan
+            // counts every one as 0, which would end the whole optimization, and may have changed
+            // the copy by then (an empty outline root goes with bookmarks), so the copy from before
+            // is kept instead: nothing is discarded.
+            let before = cos.clone();
             match pdfcraft_redact::sanitize::remove_hidden(&mut cos, &discard) {
-                Ok(removed) => removed,
-                // The sanitizer guarantees this result precedes every mutation.
-                // Selecting a category the PDF does not contain is already satisfied.
-                Err(pdfcraft_redact::RedactError::NothingToApply) => Vec::new(),
-                Err(error) => return Err(error.into()),
+                Err(pdfcraft_redact::RedactError::NothingToApply) => {
+                    cos = before;
+                    Vec::new()
+                }
+                r => r?,
             }
         };
         let report = optimize::optimize_with_progress(&mut cos, &settings, &mut |s| {

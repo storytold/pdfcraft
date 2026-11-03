@@ -524,18 +524,24 @@ pub fn remove_hidden(doc: &mut Document, which: &[Hidden]) -> Result<Vec<(Hidden
     let count = |h: Hidden| counts.iter().find(|c| c.0 == h).map_or(0, |c| c.1);
     // Empty categories are already satisfied. Do not normalize page/catalog structures,
     // or remove empty containers, then claim that nothing was changed. Filter them even
-    // alongside a populated category so every removal has a corresponding report entry.
-    let which: Vec<_> = which.iter().copied().filter(|h| count(*h) > 0).collect();
+    // alongside a populated category so every removal has a corresponding report entry. Form
+    // fields with an AcroForm still flatten, and the hidden text or layers their appearances
+    // bring onto the page are counted by no scan before it, so those stay chosen with them.
+    let (root, _) = catalog(doc).ok_or(RedactError::NothingToApply)?;
+    let has_acroform = doc.get(root).as_dict().is_some_and(|d| d.contains(b"AcroForm"));
+    let fields = which.contains(&Hidden::FormFields) && (count(Hidden::FormFields) > 0 || has_acroform);
+    let which: Vec<_> = which
+        .iter()
+        .copied()
+        .filter(|h| count(*h) > 0 || (fields && matches!(h, Hidden::FormFields | Hidden::HiddenText | Hidden::HiddenLayers)))
+        .collect();
     if which.is_empty() {
         return Err(RedactError::NothingToApply);
     }
-    let (root, _) = catalog(doc).ok_or(RedactError::NothingToApply)?;
     let mut done = Vec::new();
     // Every annotation the pages list now: whatever is no longer listed at the end (flattened
     // widgets included) leaves the structure tree too.
     let listed_before = listed_annotations(doc);
-    let has_acroform = doc.get(root).as_dict().is_some_and(|d| d.contains(b"AcroForm"));
-    let fields = which.contains(&Hidden::FormFields) && (count(Hidden::FormFields) > 0 || has_acroform);
     if fields {
         // Fields without appearances get one first, so their values stay visible.
         for f in pdfcraft_forms::fields(doc) {
