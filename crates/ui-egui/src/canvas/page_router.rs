@@ -182,7 +182,7 @@ pub(crate) struct PageRouter {
 impl PageRouter {
     /// A new press on the pages: the last one's owner goes, and until a page claims it the press is
     /// between the pages.
-    pub(crate) fn begin(&mut self) {
+    pub(in crate::canvas) fn begin(&mut self) {
         self.capture = None;
         self.began = Some(None);
     }
@@ -192,7 +192,7 @@ impl PageRouter {
     /// by nobody (the page's text, or a tool that acts anywhere on the page).
     /// Only a press just begun ([`Self::begin`]) is claimed, by the first page that does: pages
     /// that touch (the gaps hidden) can share a row of pixels, and a press there is one page's.
-    pub(crate) fn press(&mut self, page: usize, hits: impl IntoIterator<Item = Hit>, tool: QuickTool) {
+    pub(in crate::canvas) fn press(&mut self, page: usize, hits: impl IntoIterator<Item = Hit>, tool: QuickTool) {
         if self.began != Some(None) {
             return;
         }
@@ -201,7 +201,7 @@ impl PageRouter {
     }
 
     /// What `page` has to do with the press the pages hold.
-    pub(crate) fn press_for(&self, page: usize) -> PagePress {
+    pub(in crate::canvas) fn press_for(&self, page: usize) -> PagePress {
         match (self.began, &self.capture) {
             (None, _) => PagePress::Free,
             (Some(Some(p)), Some(capture)) if p == page => PagePress::Mine(capture.owner),
@@ -212,21 +212,21 @@ impl PageRouter {
 
     /// Whether the press is held by someone who keeps its drag: then the page's text is not
     /// selected by it.
-    pub(crate) fn keeps_drag(&self) -> bool {
+    pub(in crate::canvas) fn keeps_drag(&self) -> bool {
         self.capture.as_ref().is_some_and(|c| !c.declines_drag)
     }
 
     /// The press turned into a drag: an owner that declines its drag lets it go, and from then on
     /// the press is nobody's (a drag across a highlight selects the text under it; with the Link
     /// tool, a drag from a link draws a new one). Its click stayed the owner's.
-    pub(crate) fn drag_started(&mut self) {
+    pub(in crate::canvas) fn drag_started(&mut self) {
         if self.capture.as_ref().is_some_and(|c| c.declines_drag) {
             self.capture = None;
         }
     }
 
     /// The press is over once the button is up and its release has been seen.
-    pub(crate) fn settle(&mut self, any_down: bool, edges: bool) {
+    pub(in crate::canvas) fn settle(&mut self, any_down: bool, edges: bool) {
         if !any_down && !edges {
             self.capture = None;
             self.began = None;
@@ -235,7 +235,7 @@ impl PageRouter {
 
     /// Drops the press (Escape, automation's cancel): every page is the active tool's again
     /// ([`PagePress::Free`]). Page input skips a press Escape cancelled until the button is up.
-    pub(crate) fn cancel(&mut self) {
+    pub(in crate::canvas) fn cancel(&mut self) {
         self.capture = None;
         self.began = None;
     }

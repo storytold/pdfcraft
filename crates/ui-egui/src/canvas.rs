@@ -650,8 +650,9 @@ pub struct DocView {
     pub(crate) signature_drag: crate::signature_drag::SignatureDrag,
     /// What the page modules claim for the cursor this frame; `document_area` sets it once.
     pub(crate) cursor: crate::page_cursor::PageCursor,
-    /// Who the press the pages hold belongs to.
-    pub(crate) router: crate::page_router::PageRouter,
+    /// Who the press the pages hold belongs to. Only the page view reads it: it tells each page
+    /// module what the press is to its page (`PagePress`).
+    pub(in crate::canvas) router: crate::page_router::PageRouter,
     /// What the last right-click on a page went to, and on which page: the page's menu shows its
     /// entries, or the page's own when it went to nothing that has a menu.
     pub(crate) menu_for: Option<(usize, crate::page_router::Owner)>,

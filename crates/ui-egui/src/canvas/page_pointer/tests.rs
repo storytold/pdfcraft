@@ -525,9 +525,10 @@ fn hit_test_calls(line: &str) -> Vec<String> {
 
 /// The functions that call a hit test: (file, function, why). Hit tests are found by name (a
 /// function named `hit` or `…_hit`, called by path, bare or as a method). The comments' point test
-/// has a list of its own (`COMMENT_POINT_TESTERS`); the others by other names (added content's,
-/// Edit text's paragraphs', Redact's text test, the text layer's links) are not listed yet, and
-/// most are PR 4b's. `PageHits::hits` is the one: the hits
+/// has a list of its own (`COMMENT_POINT_TESTERS`). Point tests by other names are not seen: what is
+/// left of them paints (a picture's hover outline) or keeps a behaviour no hit stands for (added
+/// text's click with the tools that don't pick it up, crop mode's controls). `PageHits::hits` is the
+/// one: the hits
 /// at the press point decide its owner, and those under the pointer give its cursor, its tip, hover
 /// painting and a right-click.
 const HIT_TESTERS: [(&str, &str, &str); 1] = [(
@@ -571,13 +572,23 @@ const COMMENT_POINT_TESTERS: [(&str, &str, &str); 3] = [
 const ROUTER_READS: [&str; 4] = ["router.press_for(", "router.keeps_drag(", "PageRouter::press_for(", "PageRouter::keeps_drag("];
 
 /// The functions that read who holds the press: (file, function, why). The page view asks once per
-/// page and tells each module what the press is to its page (`PagePress`); an unused entry fails
-/// the test.
+/// page and tells each module what the press is to its page (`PagePress`): modules never read the
+/// router, and outside `canvas` the compiler refuses them (its methods are `pub(in crate::canvas)`).
+/// An unused entry fails the test.
 const ROUTER_READERS: [(&str, &str, &str); 1] = [(
     "canvas/page_input.rs",
     "page_tool_input",
     "the page view: what the press is to each page (`press_for`), and whether its drag is the text's (`keeps_drag`)",
 )];
+
+/// Words a page module's functions are not named with: a function that grabs or owns a press decides
+/// for itself whether the press is its own, which the page view tells it (`PagePress`).
+const PRESS_CLAIMING_WORDS: [&str; 2] = ["grabs", "owns"];
+
+/// The function `line` declares, when its name has one of [`PRESS_CLAIMING_WORDS`] in it.
+fn press_claiming_fn(line: &str) -> Vec<String> {
+    declares(line.trim_start()).filter(|name| PRESS_CLAIMING_WORDS.iter().any(|w| name.contains(w))).map(str::to_owned).into_iter().collect()
+}
 
 /// What ignores the press the pages hold until the button is up.
 const PRESS_IGNORES: [&str; 1] = ["press_cancelled = true"];
@@ -668,6 +679,13 @@ fn page_modules_act_on_a_press_only_through_the_router() {
          place that must ask? Add the function to PAGE_HITS_ASKERS in src/canvas/page_pointer/tests.rs, with why.",
         "no longer asks the page view's hits: remove it from PAGE_HITS_ASKERS.",
     ));
+    // A module is told what the press is to its page; none decides it for itself.
+    problems.extend(page_module_matches(press_claiming_fn).into_iter().map(|(file, _, n, name)| {
+        format!(
+            "src/{file}:{n}: `fn {name}` decides whether a press is its module's. The page view tells each module what the \
+             press is to its page (`PagePress`): act on that, in a function named for what it does."
+        )
+    }));
     problems.extend(misuses(
         &PRESS_IGNORES,
         &PRESS_IGNORERS,
@@ -726,6 +744,10 @@ fn the_page_guards_read_hit_tests_split_calls_and_aliases() {
     assert!(hit_test_calls("let all = self.hits(view, p, false);").is_empty());
     assert_eq!(declares("pub(crate) const fn crop_hit<'a>(view: &DocView) {"), Some("crop_hit"));
     assert_eq!(declares("let hit = 1;"), None);
+    assert_eq!(press_claiming_fn("    pub(crate) fn fill_grabs(view: &DocView) -> bool {"), ["fill_grabs"]);
+    assert_eq!(press_claiming_fn("fn owns_press() {"), ["owns_press"]);
+    assert!(press_claiming_fn("fn holds(&self, page: usize) -> bool {").is_empty());
+    assert!(press_claiming_fn("let grabs = 1;").is_empty());
     let source = "impl PageHits<'_> {\n    fn at(&self) {\n        self\n            .hits(view, p, false)\n    }\n}\nfn after() {\n    // view.router.owner(0)\n    let _ = view\n        .router\n        .owner(0);\n}\n";
     assert_eq!(
         code_lines(source),
