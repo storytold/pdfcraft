@@ -202,6 +202,84 @@ mod tests {
         assert_ne!(refined, page, "drawn");
     }
 
+    /// A refinement of the page refines "the current contents of the page buffer, restricted to the
+    /// area of the page buffer specified by this segment's region segment information field"
+    /// (ISO/IEC 14492 7.4.7.4), at an offset of 0 (Table 35), and reads 0 outside that area
+    /// (6.3.5.2). The decoder read the page around the area too, and refused a refinement wider or
+    /// taller than the page. A refinement of another region refines that region, not the page. And
+    /// a reference 32 or more left of a refinement (GRREFERENCEDX below −31, as a symbol refined
+    /// with an RDX below −31 has, Table 18) is read from where each row starts in it: each row's
+    /// first context read 0 for the reference column it starts at, and from 33 left for the one
+    /// before it too. Each stream is coded by the standard's procedures and decodes to its
+    /// picture, `#` for black. Vendored hayro-jbig2 patch 16.
+    #[test]
+    fn a_refinement_refines_the_page_in_its_area_and_any_reference_where_it_is() {
+        let cases: [(&str, &str, &[&str]); 5] = [
+            (
+                "a 48 × 6 page a generic region has inked, refined at 33: ink on both sides of the area, template 0",
+                "000000003000010000001300000030000000060000000000000000420000000000012600010000004100000030000000060000000000000000040003fffdff02fefefe331433558a5c5056cf412003ec9a38164df39bd4463b9331502c4fb1c267ab77b665aa5962ffac000000022a0001000000210000000c0000000600000021000000000400ffffffff9a6c35bbeee221f687ffac",
+                &[
+                    ".#..##.######..#.#..#####.##..#........##.##..##",
+                    ".#..####.####.#...###.##.##.#.#.....#.#.####.###",
+                    "##.#......#..#....#..#.###.#..#.#####.###.######",
+                    "......#....###.#.##..#.##........#.#.#...#####..",
+                    "#.##..###.#.#.##.....#...#.#..#.##.#..#...#...#.",
+                    ".###...#..#..#..##..#.#..#####.#.##.......###.##",
+                ],
+            ),
+            (
+                "a 24 × 8 inked page refined at 5, 1, template 1",
+                "000000003000010000001300000018000000080000000000000000420000000000012600010000003500000018000000080000000000000000040003fffdff02fefefeb1e133cb8bcbb8510e81d219bb880dfb40a311dc5c298819efffac000000022a00010000001b0000000a0000000500000005000000010401e55c0078dcd30fffac",
+                &[
+                    "#.##.##...##....##.##..#",
+                    "#.##.##...#.####..##..#.",
+                    "##..##.##...#...###..#.#",
+                    ".....#.#.##.#...###....#",
+                    "..#.#...#.#...#.#...##.#",
+                    "....######...#.####....#",
+                    "..######..##.#.#..##.#..",
+                    "...#..##.####.#..##...#.",
+                ],
+            ),
+            (
+                "a 16 × 5 inked page refined by a region 4 wider than it, template 0",
+                "000000003000010000001300000010000000050000000000000000420000000000012600010000002600000010000000050000000000000000040003fffdff02fefefe22e5e253a429cbf2c701ffac000000022a000100000023000000140000000500000000000000000400ffffffff3afa516532bbe3d481926fffac",
+                &[".#.#.#.#..#.#.#.", "##.####..###...#", "..####.#..####.#", ".###.#.....#..#.", "#.###..#########"],
+            ),
+            (
+                "an intermediate region at 4, 1 on an inked 20 × 8 page, refined there (OR): the region, not the page, template 0",
+                "000000003000010000001300000014000000080000000000000000420000000000012600010000003000000014000000080000000000000000040003fffdff02fefefeb91e434e1726ca89ed06c2bffb0fe5fa7fccc80fffac00000002240001000000230000000a000000050000000400000001000003fffdff02fefefece7a9826ba81bfffac000000032a2002010000001e0000000a0000000500000004000000010000ffffffffd046ee6f6190ffac",
+                &[
+                    "#.#.#....#.#...#....",
+                    "##..#.#.#.##.....##.",
+                    "##.#.#.#.#.###.##...",
+                    "###.##.####..###.#.#",
+                    "...#.###..###.#.#..#",
+                    "#...#######.#...####",
+                    "..##.##...#..##..#.#",
+                    "#...##...#.##....#..",
+                ],
+            ),
+            (
+                "a symbol refined in a symbol dictionary from a 40 × 6 one, RDX −33: 33 left, template 1",
+                "0000000030000100000013000000070000000600000000000000004200000000000100000100000036000003fffdff02fefefe00000001000000014f913296209e2187f37bddb8589c8beb7d70109de7124ebe47d04914ef7e655c3c4cffac00000002002001010000001f100203fffdff02fefefe00000001000000014fe451a27bddf49f7ef7e7ffac00000003062002010000001b0000000700000006000000000000000004001000000001a943ffac",
+                &[".####.#", ".##..##", "......#", "...#..#", "#.#.###", "....##."],
+            ),
+        ];
+        let hex = |text: &str| (0..text.len() / 2).map(|i| u8::from_str_radix(&text[i * 2..i * 2 + 2], 16).unwrap()).collect::<Vec<u8>>();
+        for (form, stream, picture) in cases {
+            let (w, h) = (picture[0].len(), picture.len());
+            // As the filter gives it: black as 0, each row padded to a byte with 0s.
+            let mut rows = vec![0u8; w.div_ceil(8) * h];
+            for (y, row) in picture.iter().enumerate() {
+                for (x, _) in row.bytes().enumerate().filter(|(_, c)| *c == b'.') {
+                    rows[y * w.div_ceil(8) + x / 8] |= 0x80 >> (x % 8);
+                }
+            }
+            assert_eq!(decode_jbig2(&hex(stream), None, w as u32, h as u32, usize::MAX).unwrap(), rows, "{form}");
+        }
+    }
+
     /// What a page costs is the same however much a run has left. Given exactly that it decodes,
     /// and less stops it: spending all that's left, and what comes after isn't read. A page that
     /// fails still spends what it took.

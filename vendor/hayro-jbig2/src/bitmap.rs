@@ -287,4 +287,42 @@ impl Bitmap {
 
         self.data[(row * self.stride + word_idx) as usize]
     }
+
+    /// PdfCraft patch: the `width` × `height` area of this bitmap at `x`, `y`, as a bitmap there.
+    /// It is what a refinement of the page refines: "a bitmap containing the current contents of
+    /// the page buffer, restricted to the area of the page buffer specified by this segment's
+    /// region segment information field" (7.4.7.4). Off this bitmap the area is 0, past its width
+    /// too whatever the padding of its rows holds, and outside the area the refinement reads 0
+    /// (6.3.5.2), where reading the page itself took in the pixels around the area.
+    pub(crate) fn area(&self, x: u32, y: u32, width: u32, height: u32) -> Result<Self> {
+        let mut area = Self::new_with(width, height, x, y, false)?;
+        for row in 0..height {
+            let Some(from_row) = y.checked_add(row).filter(|r| *r < self.height) else {
+                continue;
+            };
+            for word in 0..area.stride {
+                // The first column of this word of the area, in this bitmap; past its width,
+                // or past where a column can be, the rest of the row is 0.
+                let Some(from) = x.checked_add(word * WORD_BITS).filter(|c| *c < self.width) else {
+                    break;
+                };
+                let (index, shift) = (from / WORD_BITS, from % WORD_BITS);
+                let mut bits = self.get_word(from_row, index) << shift;
+                if shift > 0 {
+                    bits |= self.get_word(from_row, index + 1) >> (WORD_BITS - shift);
+                }
+                // Both are above 0: `from` is inside this bitmap, and `word` inside the area.
+                let ours = self.width - from;
+                let theirs = width - word * WORD_BITS;
+                let kept = ours.min(theirs);
+                if kept < WORD_BITS {
+                    bits &= !0 << (WORD_BITS - kept);
+                }
+                if let Some(slot) = area.data.get_mut((row * area.stride + word) as usize) {
+                    *slot = bits;
+                }
+            }
+        }
+        Ok(area)
+    }
 }

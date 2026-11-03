@@ -17,7 +17,6 @@ use crate::reader::Reader;
 pub(crate) fn decode(
     header: &GenericRefinementRegionHeader<'_>,
     reference: &Bitmap,
-    refines_page: bool,
     ctx: &mut ScratchBuffers,
 ) -> Result<RegionBitmap> {
     let mut region = Bitmap::new_with(
@@ -28,7 +27,7 @@ pub(crate) fn decode(
         false,
     )?;
 
-    decode_into(header, reference, refines_page, &mut region, ctx)?;
+    decode_into(header, reference, &mut region, ctx)?;
 
     Ok(RegionBitmap {
         bitmap: region,
@@ -36,29 +35,10 @@ pub(crate) fn decode(
     })
 }
 
-/// PdfCraft patch: the offsets of a refinement region segment's reference from the region at `x`,
-/// `y`, the GRREFERENCEDX and GRREFERENCEDY of 6.3.
-///
-/// "GRREFERENCEDX 0, GRREFERENCEDY 0" (Table 35): a refinement of another region refines it where
-/// it is, whatever their locations say (they should be equal, 7.4.7.5). They were subtracted, so a
-/// refinement of a region past `i32::MAX` was refused as an overflow, and the rest of the stream
-/// with it. A refinement of the page refines the page at the refinement's location (7.4.7.4), the
-/// page being at 0, 0. A location is unsigned (5.4.4), and the page is at most 65,535 pixels a
-/// side, so held to `i32::MAX` one past that still puts every page pixel the decoder reads outside
-/// the page, where they are 0 (6.3.5.2).
-fn reference_offsets(refines_page: bool, x: u32, y: u32) -> (i32, i32) {
-    if !refines_page {
-        return (0, 0);
-    }
-    let offset = |location: u32| i32::try_from(location).map_or(-i32::MAX, |location| -location);
-    (offset(x), offset(y))
-}
-
 /// Decode a generic refinement region directly into an existing bitmap.
 pub(crate) fn decode_into(
     header: &GenericRefinementRegionHeader<'_>,
     reference: &Bitmap,
-    refines_page: bool,
     region: &mut Bitmap,
     ctx: &mut ScratchBuffers,
 ) -> Result<()> {
@@ -66,13 +46,18 @@ pub(crate) fn decode_into(
 
     // Validate that the region fits within the reference bitmap.
     // When referring to another segment, dimensions must match exactly (7.4.7.5).
-    // When using the page bitmap as reference, the region must fit within the page.
+    // PdfCraft patch: a refinement of the page refines the page's area of its own size (7.4.7.4,
+    // `Bitmap::area`), which it always fits.
     if header.region_info.width > reference.width || header.region_info.height > reference.height {
         bail!(RegionError::InvalidDimension);
     }
 
-    let (reference_dx, reference_dy) =
-        reference_offsets(refines_page, header.region_info.x_location, header.region_info.y_location);
+    // PdfCraft patch: "GRREFERENCEDX 0, GRREFERENCEDY 0" (Table 35). The reference is another
+    // region, which a refinement refines where it is (their locations should be equal, 7.4.7.5),
+    // or the page restricted to the refinement's area (7.4.7.4, `Bitmap::area`). Offsetting it by
+    // the difference of the locations refused one past `i32::MAX` as an overflow, and read the
+    // page around a refinement of it.
+    let (reference_dx, reference_dy) = (0, 0);
 
     let mut decoder = ArithmeticDecoder::new(data);
     let num_context_bits = header.template.context_bits();
@@ -200,10 +185,24 @@ impl<'a> RefinementContextGatherer<'a> {
         };
         self.reg_cur = 0;
 
-        self.ref_cur_x = 0;
-        self.ref_m1 = ContextGatherer::load_word(reference, ref_y.wrapping_sub(1) as u32, 0);
-        self.ref_cur = ContextGatherer::load_word(reference, ref_y as u32, 0);
-        self.ref_p1 = ContextGatherer::load_word(reference, ref_y.wrapping_add(1) as u32, 0);
+        // PdfCraft patch: the buffers start a column left of the reference column the row starts
+        // at, as `maybe_reload_buffers` would load them, or at column 0 where that is left of the
+        // reference. The row's first context takes in that column and the one left of it, which
+        // from column 32 on lay outside a word loaded from column 0 and read as 0: with the
+        // reference offset 32 left of the region its first column, and from 33 both (GRREFERENCEDX
+        // below −31, which a refined text instance has from a narrower bitmap or an RDX below −31,
+        // and a refined symbol from such an RDX). The region decoded to other pixels than were
+        // coded, or failed.
+        self.ref_cur_x = self
+            .reference_dx
+            .checked_neg()
+            .and_then(|column| u32::try_from(column).ok())
+            .map_or(0, |column| column.saturating_sub(1));
+        self.ref_m1 =
+            ContextGatherer::load_word(reference, ref_y.wrapping_sub(1) as u32, self.ref_cur_x);
+        self.ref_cur = ContextGatherer::load_word(reference, ref_y as u32, self.ref_cur_x);
+        self.ref_p1 =
+            ContextGatherer::load_word(reference, ref_y.wrapping_add(1) as u32, self.ref_cur_x);
 
         self.ctx = match self.template {
             RefinementTemplate::Template1 => {
@@ -514,20 +513,4 @@ pub(crate) fn decode_bitmap(
     }
 
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// PdfCraft patch: a refinement of a region refines it where it is (Table 35), wherever their
-    /// locations are; a refinement of the page refines it at its own location, held to `i32::MAX`
-    /// past that.
-    #[test]
-    fn a_refinement_refines_a_region_where_it_is_and_the_page_at_its_location() {
-        assert_eq!(reference_offsets(false, 5, 0x8000_0000), (0, 0));
-        assert_eq!(reference_offsets(true, 5, 3), (-5, -3));
-        assert_eq!(reference_offsets(true, 0x7FFF_FFFF, 0), (-i32::MAX, 0), "in range");
-        assert_eq!(reference_offsets(true, 0x8000_0000, u32::MAX), (-i32::MAX, -i32::MAX));
-    }
 }
