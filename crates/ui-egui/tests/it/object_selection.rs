@@ -438,3 +438,16 @@ fn a_press_just_outside_a_picture_starts_an_area_selection() {
     h.run_steps(4);
     h.get_by_label("2 objects selected");
 }
+
+/// A double-click on one of the objects selected together leaves the group and reaches that one:
+/// added text opens for typing. The double-click only left the group.
+#[test]
+fn a_double_click_on_a_grouped_object_reaches_it() {
+    let mut h = harness();
+    marquee(&mut h);
+    // The added note is x 130..230, y 130..144 from the page's top.
+    let note = at(&h, 180.0, 137.0);
+    crate::support::input::double_click(&mut h, note);
+    h.run_steps(2);
+    assert!(h.state().views[0].content.draft.as_ref().is_some_and(|d| d.index == Some(0)), "the added note opens for typing");
+}

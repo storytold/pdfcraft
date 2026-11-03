@@ -108,9 +108,13 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
             && !egui::Popup::is_any_open(ui.ctx());
         let objects = adds.then(|| view.objects.inventory(doc, i));
         let at = hits.at(view, o, objects.as_ref());
-        // A press is the page's it lies on, or the one with something under it past its edge (the
-        // selected picture's rotate knob and grips).
-        if xf.rect.contains(o) || !at.is_empty() {
+        // A press is the page's it lies on, or past its edge the one whose selected picture has its
+        // rotate knob or a grip there (crop mode's grips too).
+        let past_edge = |h: &crate::page_router::Hit| {
+            use crate::page_router::PicturePart;
+            matches!(h.owner, Owner::Picture { part: PicturePart::Knob | PicturePart::Corner(_) | PicturePart::Crop(_), .. })
+        };
+        if xf.rect.contains(o) || at.iter().any(past_edge) {
             view.router.press(i, at, tool);
         }
     }
@@ -126,6 +130,16 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
     let wants_under = editing || resp.clicked() || resp.secondary_clicked() || matches!(tool, QuickTool::Fill(_)) && !ptr.any_down;
     let under = pointer.filter(|p| wants_under && xf.rect.contains(*p)).map(|p| hits.at(view, p, None)).unwrap_or_default();
     let hovered = top(under.iter().cloned(), tool);
+    // A double-click on the objects selected together is the object's under it: the double-click
+    // leaves the group (`object_ui`), and added text opens for typing, a picture or a paragraph is
+    // the one taken (the user's ruling).
+    let press = match press {
+        PagePress::Mine(Owner::Objects { part: crate::page_router::ObjectsPart::Selection }) if resp.double_clicked() => {
+            top(under.iter().filter(|h| !matches!(h.owner, Owner::Objects { .. })).cloned(), tool)
+                .map_or(PagePress::Free, |h| PagePress::Mine(h.owner))
+        }
+        press => press,
+    };
     let released_over = match press {
         PagePress::Mine(owner) if resp.clicked() => under.iter().any(|h| h.owner == owner),
         _ => false,
@@ -135,7 +149,12 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
     // released, the right-click's own frame included, so the button is what tells. A touch's long
     // press, which egui reports as a right-click with the finger still down, opens its menu.
     let press_held = ptr.primary_down && !resp.long_touched();
-    let right = frame.right_click_on(xf.rect);
+    // A right-click is the page's it lies on, or past its edge the one whose crop grip lies there,
+    // as a press is (#5835): what a right-click there would go to is asked only off the page.
+    let right = frame.right_click_on(|p| {
+        use crate::page_router::PicturePart;
+        xf.rect.contains(p) || matches!(hits.context_at(view, p, &[]), Some(Owner::Picture { part: PicturePart::Crop(_), .. }))
+    });
     let context = right.and_then(|p| right_click(&hits, &under, view, p, press_held));
     // Edit text: a right-click on a picture selects it for its menu, and one on anything else on the
     // page unselects it.
@@ -794,9 +813,9 @@ pub(super) fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut P
     let tool_cx = PageToolContext { ui, resp, xf: &xf, ptr, page: i, doc, info };
     let pcx = comments::PageCx { page: i, xf: &xf, ptr, info, tool, prefs, allowed, hidden: comments_hidden, redact_mark };
     // A press nobody holds picks the picture under it: a link's click follows the link only (ruling
-    // 5).
-    if tool == QuickTool::Select && input.press == PagePress::Free && !input.consumed {
-        crate::image_pick::page_input(resp, &xf, i, info, doc, ptr, view);
+    // 5), though its drag or double-click still lets the picked picture go.
+    if tool == QuickTool::Select && matches!(input.press, PagePress::Free | PagePress::Mine(Owner::Link { .. })) && !input.consumed {
+        crate::image_pick::page_input(resp, &xf, i, info, doc, ptr, input.press == PagePress::Free, view);
     }
     crate::image_pick::drop_stale(doc, view);
     crate::image_pick::paint(painter, &xf, i, info, view);

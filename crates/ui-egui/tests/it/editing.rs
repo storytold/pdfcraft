@@ -6503,6 +6503,15 @@ fn clipped_artwork_with_labels() -> Vec<u8> {
 
 /// `own_clip` draws the image alone in its clip (`q re W n cm Do Q`), which moves with it (#1049).
 fn clipped_artwork_with_labels_drawn(own_clip: bool) -> Vec<u8> {
+    artwork_drawn(if own_clip {
+        &b"q 30 170 130 80 re W* n 800 0 0 900 -300 -400 cm /Im0 Do Q BT /F1 12 Tf 30 130 Td (Editable caption) Tj ET BT /F1 12 Tf 40 220 Td (Overlay) Tj ET BT /F1 9 Tf 154 249 Td (Corner label) Tj ET"[..]
+    } else {
+        &b"q 30 170 130 80 re W* n q 800 0 0 900 -300 -400 cm /Im0 Do Q Q BT /F1 12 Tf 30 130 Td (Editable caption) Tj ET BT /F1 12 Tf 40 220 Td (Overlay) Tj ET BT /F1 9 Tf 154 249 Td (Corner label) Tj ET"[..]
+    })
+}
+
+/// [`fixture`]'s two pages, each drawn by `content`, with a one-pixel picture as `/Im0`.
+fn artwork_drawn(content: &[u8]) -> Vec<u8> {
     use pdfcraft_cos::{Dict, Document, Object, Stream, write_incremental};
     let mut doc = Document::open(std::sync::Arc::new(fixture(2))).unwrap();
     let mut image = Dict::new();
@@ -6514,12 +6523,7 @@ fn clipped_artwork_with_labels_drawn(own_clip: bool) -> Vec<u8> {
     image.set(b"ColorSpace".to_vec(), Object::name("DeviceRGB"));
     let image = doc.add(Object::Stream(Stream::flate(image, &[220, 235, 245])));
     for page in pdfcraft_model::pages(&doc) {
-        let contents = doc.add(Object::Stream(Stream::flate(Dict::new(),
-            if own_clip {
-                &b"q 30 170 130 80 re W* n 800 0 0 900 -300 -400 cm /Im0 Do Q BT /F1 12 Tf 30 130 Td (Editable caption) Tj ET BT /F1 12 Tf 40 220 Td (Overlay) Tj ET BT /F1 9 Tf 154 249 Td (Corner label) Tj ET"[..]
-            } else {
-                &b"q 30 170 130 80 re W* n q 800 0 0 900 -300 -400 cm /Im0 Do Q Q BT /F1 12 Tf 30 130 Td (Editable caption) Tj ET BT /F1 12 Tf 40 220 Td (Overlay) Tj ET BT /F1 9 Tf 154 249 Td (Corner label) Tj ET"[..]
-            })));
+        let contents = doc.add(Object::Stream(Stream::flate(Dict::new(), content)));
         let mut resources = doc.resolve(page.dict.get(b"Resources").unwrap()).as_dict().unwrap().clone();
         let mut xo = Dict::new();
         xo.set(b"Im0".to_vec(), Object::Ref(image));
@@ -7233,10 +7237,15 @@ fn cropping_a_picture_with_its_handles() {
 /// Both pages of [`clipped_artwork_with_labels`] at 100% in Edit text, the picture on page 0
 /// selected (and being cropped, with `crop`).
 fn picture_pages(crop: bool) -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1100.0)).build_eframe(|_cc| {
+    picture_pages_of(clipped_artwork_with_labels(), crop)
+}
+
+/// [`picture_pages`], of `pdf`.
+fn picture_pages_of(pdf: Vec<u8>, crop: bool) -> Harness<'static, PdfCraftApp> {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1100.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
         app.set_option("language", "en").unwrap();
-        app.open_bytes("clipped.pdf", None, clipped_artwork_with_labels()).unwrap();
+        app.open_bytes("clipped.pdf", None, pdf).unwrap();
         app.set_option("left", "closed").unwrap();
         app.set_option("zoom", "100").unwrap();
         app
@@ -7353,6 +7362,99 @@ fn in_crop_mode_a_right_click_on_another_picture_selects_it() {
     let selection = h.state().views[0].image_selection.clone();
     assert!(selection.as_ref().is_some_and(|s| s.index == 1 && s.crop.is_none()), "the other picture is selected: {selection:?}");
     assert!(h.query_by_label("Flip horizontal").is_some(), "its menu opens");
+}
+
+/// A drag from a hole in the selected picture (drawn through a clip with a hole in it) moves the
+/// picture: its frame is its own. The press fell through the hole, started an area selection and
+/// unselected it.
+#[test]
+fn a_drag_from_a_hole_in_the_selected_picture_moves_it() {
+    // The picture shows at x 30..160, y 170..250, around a hole at x 70..120, y 190..230.
+    let mut h = picture_pages_of(artwork_drawn(b"q 30 170 130 80 re 70 190 50 40 re W* n 800 0 0 900 -300 -400 cm /Im0 Do Q"), false);
+    let id = h.state().views[0].id;
+    let before = h.state().session.get(id).unwrap().page_images(0)[0].rect;
+    let hole = page_at(&h, 0, 95.0, 210.0);
+    h.hover_at(hole);
+    h.run_steps(1);
+    h.drag_at(hole);
+    h.run_steps(1);
+    for k in 1..=4 {
+        h.hover_at(hole + egui::vec2(5.0 * k as f32, 0.0));
+        h.run_steps(1);
+    }
+    h.drop_at(hole + egui::vec2(20.0, 0.0));
+    h.run_steps(4);
+    let after = h.state().session.get(id).unwrap().page_images(0)[0].rect;
+    assert!(after[0] - before[0] > 5.0, "the picture moved right: {before:?} → {after:?}");
+}
+
+/// A right-click on a crop grip past the page's edge, where those of a picture filling its page lie
+/// half, is the crop's, as on the page: crop mode stays and no menu opens (#5835). No page took it,
+/// which left crop mode.
+#[test]
+fn a_right_click_on_a_crop_grip_past_the_page_edge_keeps_crop_mode() {
+    let mut png = Vec::new();
+    image::RgbImage::from_pixel(80, 40, image::Rgb([200, 40, 40])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("picture.png", None, png.clone()).expect("opens");
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
+    let id = h.state().views[0].id;
+    let keep = h.state().session.get(id).unwrap().page_images(0)[0].visible_rect.unwrap();
+    let mut selection = pdfcraft_ui_egui::ImageSelection::at(0, 0);
+    selection.crop = Some(pdfcraft_ui_egui::CropMode::new(keep));
+    h.state_mut().views[0].image_selection = Some(selection);
+    h.run_steps(3);
+    let r = h.state().views[0].page_screen_rect(0).expect("on screen");
+    crop_secondary_click(&mut h, r.right_bottom() + egui::vec2(4.0, 4.0));
+    assert!(h.state().views[0].image_selection.as_ref().is_some_and(|s| s.crop.is_some()), "crop mode stays");
+    for label in ["Flip horizontal", "Rotate view clockwise"] {
+        assert!(h.query_all_by_label(label).next().is_none(), "no menu: {label}");
+    }
+}
+
+/// Crop mode's grips reach past the page's edge, where those of a picture filling its page lie
+/// half: a drag from just outside the page's corner trims the picture. Only the half on the page took
+/// the press.
+#[test]
+fn a_crop_grip_past_the_page_edge_drags() {
+    let mut png = Vec::new();
+    image::RgbImage::from_pixel(80, 40, image::Rgb([200, 40, 40])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("picture.png", None, png.clone()).expect("opens");
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
+    let id = h.state().views[0].id;
+    let before = h.state().session.get(id).unwrap().page_images(0)[0].visible_rect.unwrap();
+    let mut selection = pdfcraft_ui_egui::ImageSelection::at(0, 0);
+    selection.crop = Some(pdfcraft_ui_egui::CropMode::new(before));
+    h.state_mut().views[0].image_selection = Some(selection);
+    h.run_steps(3);
+    let r = h.state().views[0].page_screen_rect(0).expect("on screen");
+    let outside = r.right_bottom() + egui::vec2(4.0, 4.0);
+    let to = r.right_bottom() - egui::vec2(r.width() / 4.0, r.height() / 4.0);
+    h.hover_at(outside);
+    h.run_steps(1);
+    h.drag_at(outside);
+    h.run_steps(1);
+    for k in 1..=4 {
+        h.hover_at(outside + (to - outside) * (k as f32 / 4.0));
+        h.run_steps(1);
+    }
+    h.drop_at(to);
+    h.run_steps(2);
+    let keep = h.state().views[0].image_selection.as_ref().and_then(|s| s.crop.as_ref()).map(|c| c.keep);
+    assert!(keep.is_some_and(|k| k[2] < before[2] - 1.0 && k[1] > before[1] + 1.0), "trimmed from the corner: {keep:?} of {before:?}");
 }
 
 /// Delete removes the selected picture wherever the pointer is, on a paragraph too: the key is the

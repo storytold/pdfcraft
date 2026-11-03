@@ -81,6 +81,31 @@ fn linked_picture_pdf() -> Vec<u8> {
     ])
 }
 
+/// Two 300×400 pages, the first with a line of text at its bottom edge, at y 4, the second with one
+/// near its top, at y 380.
+fn bottom_line_pages_pdf() -> Vec<u8> {
+    let bottom = stream("BT /F1 12 Tf 40 4 Td (Bottom line) Tj ET");
+    let top = stream("BT /F1 12 Tf 40 380 Td (Top line) Tj ET");
+    pdf(&[
+        CATALOG,
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 300 400] >>",
+        "<< /Type /Page /Parent 2 0 R /Contents 5 0 R /Resources << /Font << /F1 7 0 R >> >> >>",
+        "<< /Type /Page /Parent 2 0 R /Contents 6 0 R /Resources << /Font << /F1 7 0 R >> >> >>",
+        bottom.as_str(),
+        top.as_str(),
+        HELVETICA,
+    ])
+}
+
+/// A 300×400 page with a picture at x 50..250, y 250..350, and graphics states nested deeper than
+/// the objects selected together are read through: they can't be selected together on this page.
+fn ungroupable_picture_pdf() -> Vec<u8> {
+    let picture =
+        "<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /Length 1 >>\nstream\nA\nendstream";
+    let content = stream(&format!("q 200 0 0 100 50 250 cm /Im0 Do Q {}{}", "q ".repeat(1030), "Q ".repeat(1030)));
+    pdf(&[CATALOG, PAGES, "<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /XObject << /Im0 5 0 R >> >> >>", content.as_str(), picture])
+}
+
 /// A 300×400 page with a line of text at y≈300 and a rectangle comment over it.
 fn comment_on_text_pdf() -> Vec<u8> {
     let text = stream(LINE);
@@ -1865,6 +1890,62 @@ fn with_edit_text_a_right_click_on_a_picture_under_a_link_selects_the_picture() 
     right_click(&mut h, on_link);
     let selected = h.state().views[0].image_selection.as_ref().map(|s| (s.page, s.index));
     assert_eq!(selected, Some((0, 0)), "the picture is selected for its menu");
+}
+
+/// With the gaps between pages hidden, a drag from the top of page 2 under page 1's open paragraph is
+/// page 2's: its area selection takes the line there. The paragraph's frame, which reaches past
+/// page 1's edge, took the press and did nothing with it.
+#[test]
+fn a_drag_past_a_pages_edge_under_its_open_paragraph_is_the_next_pages() {
+    let mut h = open(bottom_line_pages_pdf(), "100", false);
+    h.state_mut().views[0].show_page_gaps = false;
+    h.state_mut().quick_tool = QuickTool::EditText;
+    h.run_steps(4);
+    let (one, two) = {
+        let v = &h.state().views[0];
+        (v.page_screen_rect(0).expect("page 1 on screen"), v.page_screen_rect(1).expect("page 2 on screen"))
+    };
+    let line = egui::pos2(one.min.x + 60.0, one.max.y - 8.0);
+    mouse_click(&mut h, line);
+    assert!(h.state().views[0].line_editor.is_some(), "the bottom line is open");
+    let below = egui::pos2(one.min.x + 60.0, two.min.y + 3.0);
+    mouse_drag(&mut h, below, egui::vec2(200.0, 30.0));
+    // What the area selection took, Delete removes.
+    h.key_press(egui::Key::Delete);
+    h.run_steps(4);
+    let s = h.state();
+    assert!(s.session.get(s.views[0].id).unwrap().text_blocks(1).is_empty(), "page 2's area selection took its line");
+}
+
+/// With Edit text, a click on the empty page leaves the selected picture unselected, on a page whose
+/// objects can't be selected together too, where no area selection starts to do it. It stayed.
+#[test]
+fn a_click_beside_the_picture_unselects_it_where_objects_cant_be_grouped() {
+    let mut h = open(ungroupable_picture_pdf(), "150", false);
+    h.state_mut().quick_tool = QuickTool::EditText;
+    h.run_steps(4);
+    let s = h.state();
+    let doc = s.session.get(s.views[0].id).unwrap();
+    assert_eq!(doc.page_images(0).len(), 1, "the picture");
+    assert!(doc.editable_objects(0).is_err(), "and no objects to group");
+    h.state_mut().views[0].image_selection = Some(pdfcraft_ui_egui::ImageSelection::at(0, 0));
+    h.run_steps(2);
+    let blank = at(&h, 150.0, 100.0);
+    mouse_click(&mut h, blank);
+    assert!(h.state().views[0].image_selection.is_none(), "the picture is unselected");
+}
+
+/// With the Select tool a drag that starts on a link lets the picked picture go, as a drag elsewhere
+/// does, though the link's click picks none.
+#[test]
+fn a_drag_from_a_link_lets_the_picked_picture_go() {
+    let mut h = open(linked_picture_pdf(), "150", false);
+    let beside = at(&h, 70.0, 300.0);
+    mouse_click(&mut h, beside);
+    assert!(h.state().views[0].picked_image.is_some(), "the picture is picked");
+    let on_link = at(&h, 150.0, 300.0);
+    mouse_drag(&mut h, on_link, egui::vec2(30.0, 0.0));
+    assert!(h.state().views[0].picked_image.is_none(), "the drag lets it go");
 }
 
 /// With the Edit panel open and the Note tool, a click on added text is the added text's: no note is

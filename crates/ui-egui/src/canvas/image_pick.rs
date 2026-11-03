@@ -22,8 +22,10 @@ pub struct PickedImage {
 const BLUE: Color32 = Color32::from_rgb(0x3A, 0x7B, 0xF0);
 
 /// A click on page `page` (Select tool, not taken by anything else) selects the picture under
-/// it, even with text drawn over it (scans with an OCR layer, captions); dragging or a double
-/// click still selects text, and clears the picture.
+/// it, even with text drawn over it (scans with an OCR layer, captions), with `pick` (a press
+/// nobody holds: a link's click follows the link only); dragging or a double click still selects
+/// text, and clears the picture.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn page_input(
     resp: &egui::Response,
     xf: &PageXform,
@@ -31,6 +33,7 @@ pub(crate) fn page_input(
     info: &DocInfo,
     doc: &pdfcraft_engine::Document,
     ptr: &crate::page_pointer::PagePointer,
+    pick: bool,
     view: &mut DocView,
 ) {
     let Some(p) = ptr.pos.filter(|p| xf.rect.contains(*p)) else { return };
@@ -38,7 +41,7 @@ pub(crate) fn page_input(
         view.picked_image = None;
         return;
     }
-    if !resp.clicked() {
+    if !resp.clicked() || !pick {
         return;
     }
     let Some(info_page) = info.pages.get(page) else { return };

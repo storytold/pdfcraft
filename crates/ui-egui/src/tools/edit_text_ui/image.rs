@@ -571,40 +571,41 @@ pub(crate) fn handle_hit(
 /// The picture being cropped on `page`, under `p`: crop mode holds every press on its page, the
 /// controls beside its frame included, so the paragraphs under it and the empty page's marquee
 /// never take a crop button's press before the picture does. A grip of the box kept (within
-/// [`CROP_GRIP_REACH`]), the box itself, the picture outside it (its frame shown or its whole frame),
-/// or the rest of the page; and the controls past the page's edge, where they show the hand. `None`
-/// when no picture on `page` is being cropped, or `p` is off the page and its controls.
+/// [`CROP_GRIP_REACH`], past the page's edge too), the box itself, the picture outside it (its frame
+/// shown or its whole frame), or the rest of the page; and the controls past the page's edge, where
+/// they show the hand. `None` when no picture on `page` is being cropped, or `p` is off the page,
+/// its grips and its controls: the box and the picture stop at the page's edge, as a clipped
+/// artwork's whole frame can reach over the next pages.
 pub(crate) fn crop_hit(xf: &PageXform, page: usize, info: &DocInfo, images: &[pdfcraft_engine::PageImage], view: &DocView, p: Pos2) -> Option<Hit> {
     let s = view.image_selection.as_ref().filter(|s| s.page == page)?;
     let mode = s.crop.as_ref()?;
-    let control = mode.controls.iter().any(|r| r.contains(p));
-    if !control && !xf.rect.contains(p) {
-        return None;
-    }
     let crop = |part, icon| Some(Hit::new(Owner::Picture { index: s.index, part: PicturePart::Crop(part) }, Layer::Editor, icon));
-    if control {
+    if mode.controls.iter().any(|r| r.contains(p)) {
         return crop(CropPart::Page, egui::CursorIcon::PointingHand);
     }
-    let Some(image) = images.get(s.index) else { return crop(CropPart::Page, egui::CursorIcon::Default) };
-    if let Some((_, k)) = crop_frames(xf, info, page, image, mode.keep) {
-        if let Some(g) = crop_handles(k).iter().position(|h| h.distance(p) < CROP_GRIP_REACH) {
-            return crop(CropPart::Grip(g), GRIPS.get(g).map_or(egui::CursorIcon::Default, |grip| grip.cursor_icon()));
-        }
-        if k.contains(p) {
-            return crop(CropPart::Keep, egui::CursorIcon::Grab);
-        }
+    let image = images.get(s.index);
+    let kept = image.and_then(|image| crop_frames(xf, info, page, image, mode.keep)).map(|(_, k)| k);
+    // The grips reach past the page's edge, where those of a picture filling its page lie half.
+    if let Some(g) = kept.and_then(|k| crop_handles(k).iter().position(|h| h.distance(p) < CROP_GRIP_REACH)) {
+        return crop(CropPart::Grip(g), GRIPS.get(g).map_or(egui::CursorIcon::Default, |grip| grip.cursor_icon()));
     }
-    let shown = ImageObb::from_image(image, xf, info, page);
-    let whole = ImageObb::from_matrix(image.matrix, xf, info, page);
-    if quad_contains(shown.corners(), p) || quad_contains(whole.corners(), p) {
-        return crop(CropPart::Cut, egui::CursorIcon::Default);
+    if !xf.rect.contains(p) {
+        return None;
     }
-    crop(CropPart::Page, egui::CursorIcon::Default)
+    if kept.is_some_and(|k| k.contains(p)) {
+        return crop(CropPart::Keep, egui::CursorIcon::Grab);
+    }
+    let on_picture = image.is_some_and(|image| {
+        let shown = ImageObb::from_image(image, xf, info, page);
+        let whole = ImageObb::from_matrix(image.matrix, xf, info, page);
+        quad_contains(shown.corners(), p) || quad_contains(whole.corners(), p)
+    });
+    crop(if on_picture { CropPart::Cut } else { CropPart::Page }, egui::CursorIcon::Default)
 }
 
-/// The picture under `p` (its shape, not only its box): a click selects it, a drag moves the
-/// selected one. On the text layer, asked before the paragraphs: editable text on top of a
-/// picture takes the press.
+/// The picture under `p` (its shape, not only its box; for the selected one, its frame, a hole in it
+/// included): a click selects it, a drag moves the selected one. On the text layer, asked before
+/// the paragraphs: editable text on top of a picture takes the press.
 pub(crate) fn body_hit(xf: &PageXform, page: usize, info: &DocInfo, images: &[pdfcraft_engine::PageImage], view: &DocView, p: Pos2) -> Option<Hit> {
     if !xf.rect.contains(p) {
         return None;
@@ -613,7 +614,12 @@ pub(crate) fn body_hit(xf: &PageXform, page: usize, info: &DocInfo, images: &[pd
     let user = info.pages.get(page)?.view_to_user(x, y).map(f64::from);
     let index = images
         .iter()
-        .rposition(|im| im.visible_rect.is_some_and(|r| xf.user_rect(info, page, r.map(|v| v as f32)).contains(p)) && im.contains(user))?;
+        .rposition(|im| im.visible_rect.is_some_and(|r| xf.user_rect(info, page, r.map(|v| v as f32)).contains(p)) && im.contains(user))
+        .or_else(|| {
+            let s = view.image_selection.as_ref().filter(|s| s.page == page && s.crop.is_none())?;
+            let image = images.get(s.index)?;
+            quad_contains(ImageObb::from_image(image, xf, info, page).corners(), p).then_some(s.index)
+        })?;
     let selected = view.image_selection.as_ref().is_some_and(|s| s.page == page && s.index == index);
     let icon = if selected { egui::CursorIcon::Move } else { egui::CursorIcon::PointingHand };
     Some(Hit::new(Owner::Picture { index, part: PicturePart::Body }, Layer::Text, icon))
@@ -966,16 +972,19 @@ pub(crate) fn image_input(cx: &ImageCx<'_>, images: &[pdfcraft_engine::PageImage
             return true;
         }
     }
-    // A click selects the picture its press was on; its cursor is the hit's.
+    // A click selects the picture its press was on; its cursor is the hit's. One nobody holds on this
+    // page leaves it unselected (where the page's objects can be selected together, the area
+    // selection the press starts has done so already).
     let owner = match press {
         PagePress::Mine(Owner::Picture { index, .. }) => Some(index),
         _ => None,
     };
-    if gate
-        && resp.clicked()
-        && let Some(index) = owner
-    {
-        view.image_selection = Some(ImageSelection::at(page, index));
+    if gate && resp.clicked() {
+        match owner {
+            Some(index) => view.image_selection = Some(ImageSelection::at(page, index)),
+            None if press == PagePress::Free && ptr.released.is_some_and(|p| xf.rect.contains(p)) => view.image_selection = None,
+            None => {}
+        }
     }
     owner.is_some()
 }

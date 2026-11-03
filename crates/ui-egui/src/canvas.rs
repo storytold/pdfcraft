@@ -1242,11 +1242,10 @@ struct PageFrame<'a> {
 }
 
 impl PageFrame<'_> {
-    /// Where this frame's right-click is, on the page at `rect`, for the first page it is on: pages
-    /// that touch (the gaps hidden) can share a row of pixels, and a right-click there is one
-    /// page's, as a press is.
-    fn right_click_on(&mut self, rect: Rect) -> Option<Pos2> {
-        let p = self.pointer.filter(|p| !self.right_clicked && self.resp.secondary_clicked() && rect.contains(*p))?;
+    /// Where this frame's right-click is, for the first page it is `on`: pages that touch (the gaps
+    /// hidden) can share a row of pixels, and a right-click there is one page's, as a press is.
+    fn right_click_on(&mut self, on: impl FnOnce(Pos2) -> bool) -> Option<Pos2> {
+        let p = self.pointer.filter(|p| !self.right_clicked && self.resp.secondary_clicked() && on(*p))?;
         self.right_clicked = true;
         Some(p)
     }
@@ -1545,7 +1544,7 @@ fn draw_page(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_>, i
     // A cancelled press takes nothing until the button is up, though the page's menu still opens
     // where a right-click is.
     let input = if view.press_cancelled {
-        if let Some(p) = frame.right_click_on(xf.rect) {
+        if let Some(p) = frame.right_click_on(|p| xf.rect.contains(p)) {
             comments::anchor(&pcx, p, view);
         }
         PageInput {

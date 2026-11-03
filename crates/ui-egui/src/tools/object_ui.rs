@@ -187,6 +187,10 @@ fn leave_single(view: &mut DocView) {
 /// takes hold of the box as in Acrobat: a click selects it, a drag moves it, its text keeps the
 /// caret.
 pub(crate) fn hit(view: &DocView, xf: &PageXform, info: &DocInfo, page: usize, open: Option<Rect>, p: Pos2) -> Option<Hit> {
+    // Past the page's edge is no object's: the next page lies there.
+    if !xf.rect.contains(p) {
+        return None;
+    }
     let s = &view.objects;
     if s.page == Some(page) && !s.selected.is_empty() && s.selected.iter().fold(Rect::NOTHING, |r, o| r.union(screen(xf, info, page, o))).contains(p)
     {
