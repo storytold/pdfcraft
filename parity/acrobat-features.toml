@@ -6556,8 +6556,8 @@ milestone = "M10"
 status = "shipped"
 commands = ["ocr.recognize"]
 tools = ["ocr_recognize", "ocr_status"]
-evidence = ["crates/ocr/src/lib.rs::model_discovery_prefers_the_complete_onnx_pair", "crates/ocr/src/lib.rs::model_discovery_falls_back_to_legacy_when_the_onnx_pair_is_incomplete", "crates/ocr/src/lib.rs::model_discovery_refuses_mixed_format_pairs", "crates/ocr/src/lib.rs::model_discovery_keeps_legacy_only_installations", "crates/engine/src/tests.rs::recognize_text_makes_a_scanned_page_searchable", "crates/automation/tests/it/automation.rs::ocr_tools_make_a_scan_searchable", "crates/ui-egui/tests/it/ocr.rs::recognize_text_dialog_adds_searchable_text"]
-notes = "ocrs engine (MIT/Apache) with CC-BY-SA ONNX models fetched and SHA-256 checked by `cargo xtask models`; within each search directory, a complete ONNX pair takes precedence over a complete legacy RTEN pair, incomplete and mixed-format pairs are not combined, and directory precedence is unchanged; the desktop release packages ship them (#103; packaging/env.sh stage_models), the web build does not yet; runs on a worker thread with progress; one undoable step; pages with text are skipped unless asked (ocr.skip-renderable-text)."
+evidence = ["crates/ocr/src/lib.rs::model_discovery_prefers_the_complete_onnx_pair", "crates/ocr/src/lib.rs::model_discovery_falls_back_to_legacy_when_the_onnx_pair_is_incomplete", "crates/ocr/src/lib.rs::model_discovery_refuses_mixed_format_pairs", "crates/ocr/src/lib.rs::model_discovery_keeps_legacy_only_installations", "crates/engine/src/tests.rs::recognize_text_makes_a_scanned_page_searchable", "crates/engine/src/tests.rs::recognize_text_reads_russian_and_writes_cyrillic_search_text", "crates/automation/tests/it/automation.rs::ocr_tools_make_a_scan_searchable", "crates/automation/tests/it/automation.rs::ocr_tools_read_russian_scans", "crates/ui-egui/tests/it/ocr.rs::recognize_text_dialog_adds_searchable_text"]
+notes = "ocrs engine (MIT/Apache) with CC-BY-SA ONNX models fetched and SHA-256 checked by `cargo xtask models`; Russian, Ukrainian and Belarusian read Cyrillic with a PP-OCR East Slavic model (Apache-2.0) and its character dictionary, on the same local runtime, sharing ocrs's detector and line grouping; within each search directory, a complete ONNX pair takes precedence over a complete legacy RTEN pair, incomplete and mixed-format pairs are not combined, and directory precedence is unchanged; the desktop release packages ship them (#103; packaging/env.sh stage_models), the web build does not yet; runs on a worker thread with progress; one undoable step; pages with text are skipped unless asked (ocr.skip-renderable-text); Cyrillic search text is written with a generated Type 3 font and a ToUnicode map, so no font is embedded and the pixels do not change; letters both scripts draw alike (С/C, О/O, Р/P, А/A, Е/E) may be recognised in either script, at high confidence, which is the model's own limit (no setting can fix it) and is stated in file-format-parity.md."
 
 [[feature]]
 id = "ocr.recognize-range"
@@ -6568,7 +6568,7 @@ milestone = "M10"
 status = "shipped"
 commands = ["ocr.recognize"]
 tools = ["ocr_recognize"]
-evidence = ["crates/automation/tests/it/automation.rs::ocr_tools_make_a_scan_searchable", "crates/ui-egui/tests/it/ocr.rs::recognize_text_dialog_adds_searchable_text"]
+evidence = ["crates/automation/tests/it/automation.rs::ocr_tools_make_a_scan_searchable", "crates/automation/tests/it/automation.rs::ocr_tools_read_russian_scans", "crates/ui-egui/tests/it/ocr.rs::recognize_text_dialog_adds_searchable_text"]
 notes = "All pages, current page or a range."
 
 [[feature]]

@@ -39,7 +39,7 @@ update the numbers.
 | 3 | Editing existing text is fragile on real files | feature | 100–180 | [target-app-parity.md](target-app-parity.md) |
 | 5 | Chinese UI lacks a web glyph face | localization | 6–12 | [localization-parity.md](localization-parity.md) |
 | 6 | Open-issue backlog of wrong results in shipped features | stability | 45–80 | this file |
-| 7 | OCR reads only unaccented Latin | feature | 40–75 | [file-format-parity.md](file-format-parity.md) |
+| 7 | OCR reads Latin and Cyrillic only | feature | 30–60 | [file-format-parity.md](file-format-parity.md) |
 | 8 | Office export weak, Office import absent | file format | 55–100 | [file-format-parity.md](file-format-parity.md) |
 | 9 | No Preflight; PDF/A partial; PDF/X and PDF/UA absent | standards | 65–115 | [pdf-spec-parity.md](pdf-spec-parity.md) |
 | 10 | Signatures: no PKCS #11, timestamp servers or online revocation | feature, hardware | 40–70 | [pdf-spec-parity.md](pdf-spec-parity.md) |
@@ -161,16 +161,21 @@ update the numbers.
   (`AGENTS.md` §4).
 - **Estimate:** 45–80 h (≈ 0.2–0.4 h per issue). **Doc:** this file.
 
-### 7. OCR reads only unaccented Latin
+### 7. OCR reads Latin and Cyrillic only
 
-- **Missing:** every other script and accented Latin; editable-text output; deskew, rotation,
-  despeckle, background and camera clean-up; MRC compression; pluggable engines; OCR in the
-  browser; scanner input.
-- **Evidence:** `ocr.ocr-languages` partial ("the models read only the Latin alphabet without
-  accents"); 19 of 26 OCR features planned; [#744](https://github.com/storytold/pdfcraft/issues/744)
-  (Dutch). Acrobat ships on-device recognition for dozens of languages.
-- **Impact:** scanned documents are a core Pro workflow outside English.
-- **Estimate:** 40–75 h, partly blocked on openly licensed models. **Doc:**
+- **Missing:** accented Latin, Greek, CJK, Arabic, Hebrew and Indic scripts; editable-text
+  output; deskew, rotation, despeckle, background and camera clean-up; MRC compression;
+  pluggable engines; OCR in the browser; scanner input. Cyrillic reads Russian, Ukrainian and
+  Belarusian, but letters both scripts draw alike (С/C, О/O, Р/P) may come out in either, at
+  high confidence: word-level script resolution would need a different model or a language model.
+- **Evidence:** `ocr.ocr-languages` partial ("the models read the Latin alphabet without
+  accents, and Cyrillic"); the Latin pair is ocrs's, Cyrillic is PP-OCRv5 East Slavic through
+  `rten`; 19 of 26 OCR features planned; [#744](https://github.com/storytold/pdfcraft/issues/744)
+  (Dutch), [#1859](https://github.com/storytold/pdfcraft/issues/1859) (Russian). Acrobat ships
+  on-device recognition for dozens of languages.
+- **Impact:** scanned documents are a core Pro workflow outside English; Cyrillic is the largest
+  of the remaining markets.
+- **Estimate:** 30–60 h, partly blocked on openly licensed models. **Doc:**
   [file-format-parity.md](file-format-parity.md).
 
 ### 8. Office export weak, Office import absent

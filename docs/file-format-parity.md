@@ -99,9 +99,9 @@ features total).
 
 | Capability | Acrobat | PdfCraft | Fidelity |
 |---|---|---|---|
-| Searchable image (invisible text layer) | yes | yes (Tr 3 text fitted to word boxes) | good for English |
+| Searchable image (invisible text layer) | yes | yes (Tr 3 text fitted to word boxes) | good for English; basic for Cyrillic (see Languages) |
 | Editable text and images output | yes | no | none |
-| Languages | dozens (Latin with accents, Cyrillic, Greek, CJK, Arabic, Hebrew, Indic) | Latin without accents only (ocrs models) | **basic** (#744) |
+| Languages | dozens (Latin with accents, Cyrillic, Greek, CJK, Arabic, Hebrew, Indic) | Latin without accents (ocrs); Russian, Ukrainian and Belarusian (PP-OCR East Slavic), one line per text item. Cyrillic and Latin letters drawn alike (С/C, О/O, Р/P, А/A, Е/E) may come out in either script, at high confidence: the model's own limit, not a setting | **basic** (#744, #1859) |
 | Deskew, rotation, despeckle, background and halo removal, descreen | yes | no | none |
 | Camera images (edges, perspective, whiteboard, card) | yes | no | none |
 | MRC (adaptive) compression, PDF/A output of scans | yes | no | none |
@@ -110,6 +110,7 @@ features total).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-29 | minor | OCR reads Russian, Ukrainian and Belarusian (PP-OCR East Slavic model, same Apache-2.0 staging as the Latin pair); Unicode text layer for scripts the WinAnsi layer can't write. Look-alike letters may take either script. |
 | 2026-10-19 | patch | Certificates row: `.p7b`/`.p7c` bundles (DER or PEM `PKCS7`/`CMS`) are read for trust import. |
 | 2026-10-12 | minor | XDP split into data (read and write for XFA forms, already shipped under `form.xfa-data`) and opening `.xdp` as a document (none). Create PDF reads BigTIFF; malformed GIF headers are no longer detected as images. |
 | 2026-10-11 | minor | #773: inferred tables have no invented borders; rotated or overlapping invoice pages use floating shapes and page sections. Full Office layout fidelity remains partial. |
