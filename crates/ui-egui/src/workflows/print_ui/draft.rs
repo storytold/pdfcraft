@@ -196,9 +196,14 @@ impl PrintDraft {
             orientation: self.orientation,
             layout,
             content: self.content,
-            raster: self.as_image.then_some(print::Raster { dpi: self.dpi, grayscale: self.grayscale }),
+            raster: self.raster(),
             crops: self.crops.clone(),
         })
+    }
+
+    /// Print as image: pictures at the chosen resolution, grey when grayscale is asked for.
+    fn raster(&self) -> Option<print::Raster> {
+        self.as_image.then_some(print::Raster { dpi: self.dpi, grayscale: self.grayscale })
     }
 
     fn cut_and_stack(&self) -> bool {
@@ -222,7 +227,7 @@ impl PrintDraft {
                 self.duplex
             },
             scaling: spool::Scaling::Exact,
-            grayscale: self.grayscale,
+            grayscale: print::driver_needs_grayscale(self.grayscale, self.raster()),
             title: title.to_string(),
             // Only for the printer the options were read from.
             options: match (&self.printer, &self.driver_options) {

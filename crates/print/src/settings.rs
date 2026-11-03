@@ -159,6 +159,14 @@ impl Default for Raster {
     }
 }
 
+/// Whether a print asked to be `grayscale` needs the printer's driver to print in grayscale.
+/// Not when the pages go as grey pictures (`raster` with [`Raster::grayscale`]): they are grey
+/// already, so a driver that keeps no grayscale setting (Microsoft Print to PDF, many inkjets)
+/// still prints them instead of the job being refused (#5806).
+pub fn driver_needs_grayscale(grayscale: bool, raster: Option<Raster>) -> bool {
+    grayscale && !raster.is_some_and(|r| r.grayscale)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Crop {
     pub rect: [f64; 4],

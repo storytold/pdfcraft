@@ -8253,8 +8253,8 @@ milestone = "M10"
 status = "shipped"
 commands = ["print.dialog"]
 tools = ["doc_print"]
-evidence = ["crates/engine/src/tests.rs::printing_as_image_sends_pictures_instead_of_pages", "crates/ui-egui/tests/it/print.rs::print_as_image_is_an_advanced_choice_that_saves_pictures", "crates/automation/tests/it/automation.rs::doc_print_as_image"]
-notes = "asks the printer for monochrome (lp -o, and the Windows page settings as the job's); with Print as image the pictures themselves are rendered grey (Rec. 601 luma), so the print-ready PDF is grayscale too. Still missing against Acrobat: a grey conversion of the vector pages without rendering them."
+evidence = ["crates/engine/src/tests.rs::printing_as_image_sends_pictures_instead_of_pages", "crates/ui-egui/tests/it/print.rs::print_as_image_is_an_advanced_choice_that_saves_pictures", "crates/automation/tests/it/automation.rs::doc_print_as_image", "crates/automation/src/printing.rs::grey_pictures_dont_ask_the_driver_for_grayscale", "crates/ui-egui/src/workflows/print_ui.rs::grey_pictures_dont_ask_the_driver_for_grayscale"]
+notes = "asks the printer for monochrome (lp -o, and the Windows page settings as the job's); with Print as image the pictures themselves are rendered grey (Rec. 601 luma), so the print-ready PDF is grayscale too and the printer isn't asked for it: a driver that keeps no grayscale setting (Microsoft Print to PDF) prints them (#5806). Still missing against Acrobat: a grey conversion of the vector pages without rendering them, so vector pages to such a driver are refused rather than printed in colour."
 
 [[feature]]
 id = "print.print-as-image"
