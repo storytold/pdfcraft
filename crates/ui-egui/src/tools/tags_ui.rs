@@ -367,10 +367,11 @@ mod tests {
             tag.standard_kind = kind.into();
             let mut draft = Draft::from_tag(&tag);
             draft.kind = format!("Changed{kind}");
-            match property {
-                TagProperty::Summary => draft.summary = "A summary".into(),
-                TagProperty::Scope => draft.scope = "Row".into(),
-                _ => unreachable!(),
+            if property == TagProperty::Summary {
+                draft.summary = "A summary".into();
+            } else {
+                assert_eq!(property, TagProperty::Scope);
+                draft.scope = "Row".into();
             }
 
             assert!(matches!(
