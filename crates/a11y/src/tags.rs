@@ -147,14 +147,11 @@ pub fn move_tag(doc: &mut Document, object: ObjRef, anchor: ObjRef, placement: T
     Ok(())
 }
 
-fn text(doc: &Document, d: &pdfcraft_cos::Dict, key: &[u8]) -> Option<String> {
-    d.get(key).map(|o| doc.resolve(o)).and_then(|o| o.as_string().map(PdfString::to_text))
-}
-
 /// List reachable, indirect tags in structure-tree order.
 pub fn tags(doc: &Document) -> Vec<TagInfo> {
     let pages = pdfcraft_model::pages(doc);
     let page_index: std::collections::HashMap<ObjRef, usize> = pages.iter().enumerate().map(|(i, p)| (p.obj, i)).collect();
+    let mut budget = alt::TextBudget::new();
     alt::elements(doc)
         .into_iter()
         .filter_map(|e| {
@@ -163,11 +160,11 @@ pub fn tags(doc: &Document) -> Vec<TagInfo> {
                 parent: e.parent,
                 depth: e.depth,
                 kind: String::from_utf8_lossy(e.dict.name(b"S")?).into_owned(),
-                title: text(doc, &e.dict, b"T"),
-                actual_text: text(doc, &e.dict, b"ActualText"),
-                alt: text(doc, &e.dict, b"Alt"),
-                language: text(doc, &e.dict, b"Lang"),
-                summary: table_attribute(doc, &e.dict, b"Summary").and_then(|o| o.as_string().map(PdfString::to_text)),
+                title: budget.text(doc, &e.dict, b"T"),
+                actual_text: budget.text(doc, &e.dict, b"ActualText"),
+                alt: budget.text(doc, &e.dict, b"Alt"),
+                language: budget.text(doc, &e.dict, b"Lang"),
+                summary: table_attribute(doc, &e.dict, b"Summary").and_then(|o| o.as_string().and_then(|s| budget.string(s))),
                 scope: table_attribute(doc, &e.dict, b"Scope").and_then(|o| o.as_name().map(|n| String::from_utf8_lossy(n).into_owned())),
                 page: e.page.and_then(|p| page_index.get(&p).copied()),
             })
@@ -186,6 +183,8 @@ pub fn tag_content(doc: &Document, object: ObjRef) -> Result<Vec<TagContentItem>
     }
     // Each page's content is parsed once, however many of its MCIDs the tag owns.
     let mut texts: std::collections::HashMap<usize, std::collections::HashMap<i64, String>> = std::collections::HashMap::new();
+    // A mark listed twice (or a long run of text listed many times) copies its text each time.
+    let mut budget = alt::TextBudget::new();
     Ok(marks
         .into_iter()
         .map(|(page, mcid)| {
@@ -198,7 +197,7 @@ pub fn tag_content(doc: &Document, object: ObjRef) -> Result<Vec<TagContentItem>
                             e.insert(pages.get(i).map(|p| crate::headings::mcid_texts(doc, &p.dict)).unwrap_or_default())
                         }
                     };
-                    page_texts.get(&mcid).cloned()
+                    page_texts.get(&mcid).filter(|t| budget.charge(t.len())).cloned()
                 })
                 .unwrap_or_default();
             TagContentItem { page, mcid, text }

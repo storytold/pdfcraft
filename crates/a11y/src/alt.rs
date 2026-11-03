@@ -306,6 +306,42 @@ pub(crate) fn content_bboxes(doc: &Document, page: &Dict, ids: &HashSet<i64>) ->
     out
 }
 
+/// Bytes of document strings one listing (figures, tags, a tag's content) decodes and keeps in all.
+/// Many elements can name one large indirect string, and each would otherwise get a copy of it.
+pub(crate) const MAX_LISTED_TEXT: usize = 32 << 20;
+
+/// What is left of [`MAX_LISTED_TEXT`].
+pub(crate) struct TextBudget(usize);
+
+impl TextBudget {
+    pub(crate) fn new() -> Self {
+        TextBudget(MAX_LISTED_TEXT)
+    }
+
+    /// Spend `n` bytes: `false`, spending what is left, when they don't fit.
+    pub(crate) fn charge(&mut self, n: usize) -> bool {
+        let fits = n <= self.0;
+        self.0 = self.0.saturating_sub(n);
+        fits
+    }
+
+    /// The text of the string `key` holds, charged by the longer of its raw and decoded sizes
+    /// (nothing is decoded once the raw bytes alone don't fit). `None` past the allowance.
+    pub(crate) fn text(&mut self, doc: &Document, d: &Dict, key: &[u8]) -> Option<String> {
+        let o = doc.resolve(d.get(key)?);
+        self.string(o.as_string()?)
+    }
+
+    /// [`Self::text`] for a string already in hand.
+    pub(crate) fn string(&mut self, s: &PdfString) -> Option<String> {
+        if s.bytes.len() > self.0 {
+            return None;
+        }
+        let text = s.to_text();
+        self.charge(text.len().max(s.bytes.len())).then_some(text)
+    }
+}
+
 /// The figures, in document order.
 pub fn figures(doc: &Document) -> Vec<Figure> {
     let Some(root) = tree_root(doc) else { return Vec::new() };
@@ -328,10 +364,11 @@ pub fn figures(doc: &Document) -> Vec<Figure> {
     }
     let bounds: HashMap<usize, HashMap<i64, [f64; 4]>> =
         wanted.into_iter().filter_map(|(p, ids)| Some((p, content_bboxes(doc, &pages.get(p)?.dict, &ids)))).collect();
+    let mut text = TextBudget::new();
     figures
         .into_iter()
         .map(|(e, page)| {
-            let alt = e.dict.get(b"Alt").map(|o| doc.resolve(o)).and_then(|o| o.as_string().map(|s| s.to_text()));
+            let alt = text.text(doc, &e.dict, b"Alt");
             let on_page = page.and_then(|p| bounds.get(&p));
             let bbox = on_page.and_then(|b| mcids(doc, &e.dict).iter().filter_map(|id| b.get(id)).fold(None, |acc, b| Some(union(acc, *b))));
             Figure { obj: e.object, page, alt, bbox }
