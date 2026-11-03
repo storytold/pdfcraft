@@ -238,6 +238,8 @@ impl Automation {
         Ok(json!({ "files": out }))
     }
 
+    /// `page_extract`: the chosen pages as one new PDF, or with `separate` one file per page in
+    /// `out_dir`; with `delete` the pages are then removed from the original.
     pub(crate) fn page_extract(&mut self, a: &Args) -> Result<Value> {
         let doc = self.doc(a)?;
         let (id, name) = (doc.id, format!("{} (extract)", doc.name));
@@ -246,10 +248,13 @@ impl Automation {
         let mut out = if a.opt_bool("separate")?.unwrap_or(false) {
             // Each page as its own file.
             let dir = self.resolve(a.str("out_dir").map_err(|_| ToolError::InvalidArgs("separate files need out_dir".into()))?, true)?;
+            // Extract every page before touching the disk, so a refused or failed extraction leaves
+            // no output directory or partial set of files behind (as doc_split does).
+            let extracted =
+                pages.iter().map(|&p| self.session.extract(id, &[p]).map(|b| (p, b))).collect::<std::result::Result<Vec<_>, _>>().map_err(failed)?;
             std::fs::create_dir_all(&dir).map_err(|e| failed(format!("{}: {e}", dir.display())))?;
             let mut files = Vec::new();
-            for &p in &pages {
-                let bytes = self.session.extract(id, &[p]).map_err(failed)?;
+            for (p, bytes) in extracted {
                 let path = child(&dir, &format!("{stem}-page{}.pdf", p + 1));
                 write_atomic(&path, &bytes)?;
                 files.push(path.to_string_lossy().into_owned());

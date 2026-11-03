@@ -2508,6 +2508,8 @@ trailer << /Root 1 0 R >>
     assert_eq!((&reply["marked"], &reply["status"]), (&json!(true), &json!("Accepted")), "{reply}");
 }
 
+/// Protect through the tools, then reopen: the open password is required, the restrictions
+/// (including page extraction) hold for the user, and the permissions password lifts them.
 #[test]
 fn protecting_through_tools() {
     let dir = workdir("protect");
@@ -2525,12 +2527,14 @@ fn protecting_through_tools() {
         (r["security"]["printing"].as_str(), r["security"]["annotate"].as_bool(), r["security"]["copy"].as_bool()),
         (Some("low"), Some(true), Some(false))
     );
+    assert_eq!(r["security"]["extract_pages"], false);
     assert!(!r.to_string().contains("boss"), "passwords are never echoed");
     ok(&mut a, "doc_save", json!({ "doc": doc, "path": "locked.pdf" }));
     // Another session: the open password is required, and the restrictions hold.
     let mut b = auto(&dir);
     assert!(matches!(b.call("doc_open", &json!({ "path": "locked.pdf" })), Err(ToolError::Failed(_))));
     let re = ok(&mut b, "doc_open", json!({ "path": "locked.pdf", "password": "open" }))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut b, "doc_info", json!({ "doc": re }))["security"]["extract_pages"], false);
     assert!(matches!(b.call("page_delete", &json!({ "doc": re, "pages": [1] })), Err(ToolError::Failed(_))));
     assert!(matches!(b.call("doc_unprotect", &json!({ "doc": re })), Err(ToolError::Failed(_))));
     ok(&mut b, "comment_add", json!({ "doc": re, "page": 1, "type": "note", "at": [10, 10], "contents": "allowed" }));
@@ -2553,11 +2557,44 @@ fn protecting_through_tools() {
     assert_eq!(ok(&mut b, "text_find", json!({ "doc": re, "query": "Page" }))["count"], 3);
     // With the permissions password everything is possible, including removing security.
     let owner = ok(&mut b, "doc_open", json!({ "path": "locked.pdf", "password": "boss" }))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut b, "doc_info", json!({ "doc": owner }))["security"]["extract_pages"], true);
     assert!(ok(&mut b, "text_extract", json!({ "doc": owner }))["pages"][0]["text"].as_str().is_some_and(|t| t.contains("Page")));
     assert_eq!(ok(&mut b, "doc_unprotect", json!({ "doc": owner }))["security"]["protected"], false);
     ok(&mut b, "doc_save", json!({ "doc": owner, "path": "open.pdf" }));
     let mut c = auto(&dir);
     ok(&mut c, "doc_open", json!({ "path": "open.pdf" }));
+}
+
+/// "Any except extracting pages" (#5081): a refused `doc_split` or separate-file `page_extract`
+/// leaves no output directory behind.
+#[test]
+fn refused_extraction_writes_no_split_or_page_output() {
+    let dir = workdir("refused-extraction-output");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(
+        &mut a,
+        "doc_protect",
+        json!({
+            "doc": doc,
+            "open_password": "open",
+            "permissions_password": "boss",
+            "changes": "any-except-extract"
+        }),
+    );
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "restricted.pdf" }));
+
+    let mut b = auto(&dir);
+    let restricted = ok(&mut b, "doc_open", json!({ "path": "restricted.pdf", "password": "open" }))["doc"].as_u64().unwrap();
+    let security = ok(&mut b, "doc_info", json!({ "doc": restricted }))["security"].clone();
+    assert_eq!((security["assemble"].as_bool(), security["extract_pages"].as_bool()), (Some(true), Some(false)));
+    assert!(matches!(b.call("doc_split", &json!({ "doc": restricted, "every": 1, "out_dir": "blocked-split" })), Err(ToolError::Failed(_))));
+    assert!(!dir.join("blocked-split").exists(), "refused split creates no output directory");
+    assert!(matches!(
+        b.call("page_extract", &json!({ "doc": restricted, "pages": [1], "separate": true, "out_dir": "blocked-extract" })),
+        Err(ToolError::Failed(_))
+    ));
+    assert!(!dir.join("blocked-extract").exists(), "refused extraction creates no output directory");
 }
 
 /// A document that allows changes but not copying: the tools that return a page's text refuse,
