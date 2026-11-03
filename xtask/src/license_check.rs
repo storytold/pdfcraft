@@ -396,6 +396,7 @@ mod tests {
             kind: "model".into(),
             usage: "test".into(),
             sha256: "b".repeat(64),
+            optional: false,
         });
         assert!(check(&root, &docs, &m).is_empty());
         m.fetched.get_mut(0).unwrap().licence_sha256 = "z".repeat(64);
@@ -409,9 +410,9 @@ mod tests {
     fn required_ocr_models_cannot_be_missing() {
         let source = include_str!("../../crates/ocr/src/lib.rs");
         let original = assets::load(&assets::root()).unwrap();
-        assert_eq!(original.fetched.iter().filter(|f| f.kind == "model").count(), 5);
+        assert_eq!(original.fetched.iter().filter(|f| f.kind == "model" && !f.optional).count(), 5);
         assert!(check_required_ocr_metadata(source, &original).unwrap().is_empty());
-        for model in original.fetched.iter().filter(|f| f.kind == "model") {
+        for model in original.fetched.iter().filter(|f| f.kind == "model" && !f.optional) {
             let mut m = assets::load(&assets::root()).unwrap();
             m.fetched.retain(|f| f.file != model.file);
             assert!(check_required_ocr_metadata(source, &m).unwrap().iter().any(|p| p.contains(&model.file) && p.contains("missing")));
@@ -422,8 +423,8 @@ mod tests {
     fn required_ocr_models_cannot_be_misclassified() {
         let source = include_str!("../../crates/ocr/src/lib.rs");
         let original = assets::load(&assets::root()).unwrap();
-        assert_eq!(original.fetched.iter().filter(|f| f.kind == "model").count(), 5);
-        for model in original.fetched.iter().filter(|f| f.kind == "model") {
+        assert_eq!(original.fetched.iter().filter(|f| f.kind == "model" && !f.optional).count(), 5);
+        for model in original.fetched.iter().filter(|f| f.kind == "model" && !f.optional) {
             let mut m = assets::load(&assets::root()).unwrap();
             m.fetched.iter_mut().find(|f| f.file == model.file).unwrap().kind = "font".into();
             assert!(check_required_ocr_metadata(source, &m).unwrap().iter().any(|p| p.contains(&model.file) && p.contains("kind")));
