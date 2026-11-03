@@ -277,32 +277,35 @@ impl DecodeBudget {
     /// Decodes `stream` within `max` and the allowance, charging what every filter stage
     /// decoded: a stage's output counts even when a later stage shrinks it, and a corrupt stream
     /// pays for the bytes decoded before the error, so referencing a stream again and again
-    /// spends the allowance by the work each decode does.
+    /// spends the allowance by the work each decode does. A decode also pays at least for the
+    /// encoded bytes it reads: a long stream that decodes to little or nothing (whitespace under
+    /// `/ASCIIHexDecode`, say) still has to be scanned each time it is referenced.
     fn charge(&mut self, stream: &Stream, max: usize, decode: Decoder) -> Result<Vec<u8>, CosError> {
         if self.bytes == 0 && !stream.raw.is_empty() {
             return Err(CosError::Filter(FilterError::LimitExceeded(self.limit).to_string()));
         }
+        let read = stream.raw.len();
         if max < self.bytes {
             let result = decode(stream, max);
             let spent = match &result {
-                Ok((_, spent)) => *spent,
+                Ok((_, spent)) => (*spent).max(read),
                 Err((FilterError::LimitExceeded(_), _)) => max,
-                Err((_, spent)) => *spent,
+                Err((_, spent)) => (*spent).max(read),
             };
             self.bytes = self.bytes.saturating_sub(spent);
-            return result.map(|(data, _)| data).map_err(|(e, _)| CosError::Filter(e.to_string()));
+            return result.map(|(data, _)| compact(data)).map_err(|(e, _)| CosError::Filter(e.to_string()));
         }
         match decode(stream, self.bytes) {
             Ok((data, spent)) => {
-                self.bytes = self.bytes.saturating_sub(spent);
-                Ok(data)
+                self.bytes = self.bytes.saturating_sub(spent.max(read));
+                Ok(compact(data))
             }
             Err((FilterError::LimitExceeded(_), _)) => {
                 self.bytes = 0;
                 Err(CosError::Filter(FilterError::LimitExceeded(self.limit).to_string()))
             }
             Err((e, spent)) => {
-                self.bytes = self.bytes.saturating_sub(spent);
+                self.bytes = self.bytes.saturating_sub(spent.max(read));
                 Err(CosError::Filter(e.to_string()))
             }
         }
@@ -343,6 +346,16 @@ impl DecodeBudget {
             _ => Vec::new(),
         }
     }
+}
+
+/// `data` without capacity it doesn't use: a decoder sizes its buffer from its input, so a long
+/// stream that decodes to little would otherwise hold its input's size for as long as a caller
+/// keeps the result (every `/Contents` entry of a page, say).
+fn compact(mut data: Vec<u8>) -> Vec<u8> {
+    if data.capacity() > data.len().saturating_mul(2) {
+        data.shrink_to_fit();
+    }
+    data
 }
 
 #[cfg(test)]
@@ -805,9 +818,31 @@ mod tests {
         let mut dict = Dict::new();
         dict.set(b"Filter".to_vec(), Object::name("FlateDecode"));
         let stream = Stream::from_raw(dict, data);
+        let read = stream.raw.len();
+        assert!(read > 0x0601);
         let mut budget = DecodeBudget::new(10 * 0x0601, 1);
         assert!(budget.decode(&stream).unwrap().is_empty());
-        assert_eq!(budget.remaining(), 9 * 0x0601);
+        assert_eq!(budget.remaining(), 10 * 0x0601 - read, "the bytes it read, which are more than it decoded");
+    }
+
+    /// A stream that decodes to nothing is still read through each time: a page naming a long
+    /// whitespace-only `/ASCIIHexDecode` stream again and again pays for every scan, and what
+    /// comes back keeps no room for the input it was read from.
+    #[test]
+    fn references_to_a_stream_that_decodes_to_nothing_pay_for_reading_it() {
+        let mut doc = Document::new_empty();
+        let mut dict = Dict::new();
+        dict.set(b"Filter".to_vec(), Object::name("ASCIIHexDecode"));
+        let mut raw = vec![b' '; 1 << 16];
+        raw.push(b'>');
+        let blank = doc.add(Object::Stream(Stream::from_raw(dict, raw.clone())));
+        let contents = Object::Array(vec![Object::Ref(blank); 1000]);
+        let mut budget = DecodeBudget::new(10 * raw.len(), 1);
+        let decoded = budget.decode_contents(&doc, &contents);
+        assert_eq!(decoded.len(), 1000);
+        assert_eq!(decoded.iter().filter(|d| d.is_ok()).count(), 10, "the allowance reads it ten times");
+        assert!(decoded.iter().flatten().all(|d| d.is_empty() && d.capacity() == 0));
+        assert!(budget.exhausted());
     }
 
     /// A chain whose later stage shrinks the data pays for every stage's output: a Flate stage
