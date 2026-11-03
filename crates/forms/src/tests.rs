@@ -5537,3 +5537,19 @@ fn locked_button_export_edits_leave_the_document_unchanged() {
         assert_eq!(write_incremental(&doc, &SaveOptions::default()).unwrap(), before);
     }
 }
+
+/// A widget reached from `/Fields` as an unnamed kid of a plain field, whose own `/Parent` is an
+/// unlisted password field: the quick check must still read that `/Parent` chain.
+#[test]
+fn a_page_widget_seen_under_fields_still_has_its_parent_chain_checked() {
+    let doc = document(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R] >>".into(),
+        "<< /Fields [5 0 R] /DA (/Helv 0 Tf 0 g) >>".into(),
+        "<< /T (grp) /Kids [6 0 R] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /Parent 7 0 R /Rect [50 700 150 720] /P 3 0 R >>".into(),
+        "<< /FT /Tx /T (pin) /Ff 8192 /V (secret9) /Kids [6 0 R] >>".into(),
+    ]);
+    assert!(has_password_flag(&doc));
+}

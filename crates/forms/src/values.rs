@@ -539,10 +539,10 @@ pub(crate) fn has_password_flag(doc: &Document) -> bool {
     for p in page_refs(doc) {
         let annots =
             doc.get(p).as_dict().and_then(|d| d.get(b"Annots").map(|a| doc.resolve(a)).and_then(|a| a.as_array().cloned())).unwrap_or_default();
+        // Every widget's `/Parent` chain is read, even one already reached from `/Fields`: the
+        // field walk can adopt it under a different parent there. Each chain is at most
+        // MAX_FIELD_DEPTH long, and `subtree` returns at once for a root it has seen.
         for r in annots.iter().filter_map(Object::as_ref) {
-            if seen.contains(&r) {
-                continue;
-            }
             let chain = field_chain(doc, r);
             if chain.len() >= MAX_FIELD_DEPTH || chain.iter().copied().any(sets_it) {
                 return true;
