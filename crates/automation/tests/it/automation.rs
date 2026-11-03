@@ -10534,3 +10534,180 @@ fn mixed_script_tools_normalize_but_undo_restores_the_exact_mixture() {
         assert_eq!(page_text(&mut a, reopened)[0], plain);
     }
 }
+
+/// A `/VE` visibility expression is visible only in the state it describes, and the interpreter
+/// uses it in place of `/OCGs` and `/P`. `[/And A [/Not B]]` needs A on and B off, so searching
+/// a *set* of layer states cannot reach it: all on, all off and the document's own states each
+/// evaluate it false, and there are 2^n mixed states to choose from (noted in review of #3646).
+///
+/// The search ignores optional content instead, which answers "what text does this file contain"
+/// -- the question redaction is asking, since applying a mark removes the content whatever a
+/// reader would show.
+#[test]
+fn redaction_finds_text_behind_a_visibility_expression() {
+    let dir = workdir("redact-visibility-expression");
+    let secret = "BT /F1 18 Tf 40 140 Td (Account SECRET 4417) Tj ET";
+    // Page 1 on a layer that is off; page 2 behind a /VE that needs the off layer on and the on
+    // layer off -- a state no pass over layer states reaches.
+    let streams = [format!("/OC /L1 BDC {secret} EMC"), format!("/OC /L5 BDC {secret} EMC")];
+    let (ocg2, ve) = (5 + 2 * streams.len(), 6 + 2 * streams.len());
+    let mut objs: Vec<String> = vec![
+        format!("<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [4 0 R {ocg2} 0 R] /D << /OFF [4 0 R] /Order [4 0 R {ocg2} 0 R] >> >> >>"),
+        format!(
+            "<< /Type /Pages /Kids [{}] /Count {} >>",
+            (0..streams.len()).map(|i| format!("{} 0 R", 5 + 2 * i)).collect::<Vec<_>>().join(" "),
+            streams.len()
+        ),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+        "<< /Type /OCG /Name (Reviewer notes) >>".into(),
+    ];
+    for (i, c) in streams.iter().enumerate() {
+        objs.push(format!(
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 300] /Contents {} 0 R /Resources << /Font << /F1 3 0 R >> /Properties << /L1 4 0 R /L5 {ve} 0 R >> >> >>",
+            6 + 2 * i
+        ));
+        objs.push(format!("<< /Length {} >>\nstream\n{c}\nendstream", c.len()));
+    }
+    objs.push("<< /Type /OCG /Name (Print marks) >>".into());
+    objs.push(format!("<< /Type /OCMD /VE [/And 4 0 R [/Not {ocg2} 0 R]] >>"));
+    let mut pdf = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(pdf.len());
+        pdf.extend(format!("{} 0 obj\n{o}\nendobj\n", i + 1).into_bytes());
+    }
+    let xref = pdf.len();
+    pdf.extend(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).into_bytes());
+    for o in offsets {
+        pdf.extend(format!("{o:010} 00000 n \n").into_bytes());
+    }
+    pdf.extend(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).into_bytes());
+    std::fs::write(dir.join("ve.pdf"), pdf).unwrap();
+
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "ve.pdf" }))["doc"].as_u64().unwrap();
+    // Neither copy is visible to a reader, so Find sees none: this is the text the search has to
+    // reach without being shown it.
+    assert_eq!(ok(&mut a, "text_find", json!({ "doc": doc, "query": "SECRET" }))["count"], 0, "Find shows what a reader sees");
+
+    let marked = ok(&mut a, "redact_mark", json!({ "doc": doc, "find": "SECRET" }));
+    assert_eq!(marked["marked"], 2, "both copies are marked, the /VE one included: {marked}");
+    assert_eq!(marked["pages_marked"], json!([1, 2]), "{marked}");
+    assert_eq!(ok(&mut a, "redact_apply", json!({ "doc": doc }))["applied"], 2);
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "redacted.pdf" }));
+
+    // Decoded, since `redact_apply` rewrites a page's content with `Stream::flate`.
+    let saved = pdfcraft_cos::Document::open(std::sync::Arc::new(std::fs::read(dir.join("redacted.pdf")).unwrap())).expect("reopens");
+    let left: Vec<u32> = saved
+        .object_numbers()
+        .into_iter()
+        .filter(|n| {
+            saved.try_get(*n).ok().is_some_and(|o| match &*o {
+                pdfcraft_cos::Object::Stream(st) => st.decoded().is_ok_and(|b| String::from_utf8_lossy(&b).contains("SECRET")),
+                _ => false,
+            })
+        })
+        .collect();
+    assert!(left.is_empty(), "the word is gone from every decoded stream, objects still holding it: {left:?}");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Redaction searches text on a layer that is off. The renderer leaves such content out, so Find
+/// and the redaction search never saw it: a user who redacted every match of a word was told it
+/// was marked, and the word stayed in the saved file (#3646).
+///
+/// And it searches the document's own layer states too, because all layers on is not a superset
+/// of every visibility state: page 3's `/OCMD` has `/P /AnyOff`, so it is visible exactly because
+/// that layer is off, and forcing every layer on hides it. Searching only the all-on state marked
+/// pages 1 and 2 and left page 3's copy in the saved file (noted in review).
+#[test]
+fn redaction_finds_text_on_a_hidden_layer() {
+    let dir = workdir("redact-hidden-layer");
+    let public = "BT /F1 18 Tf 40 240 Td (Public summary) Tj ET";
+    let secret = "BT /F1 18 Tf 40 140 Td (Account SECRET 4417) Tj ET";
+    // Page 1 puts the line on a layer that is off; page 2 is the same line, visible; page 3 puts
+    // it in an /OCMD whose /P /AnyOff makes it visible *because* that layer is off; page 4 in one
+    // whose /P /AllOff lists that layer and a second one that is on, so it is visible neither in
+    // the document's own states nor with every layer on.
+    let streams = [
+        format!("{public} /OC /L1 BDC {secret} EMC"),
+        format!("{public} {secret}"),
+        format!("{public} /OC /L2 BDC {secret} EMC"),
+        format!("{public} /OC /L4 BDC {public} EMC /OC /L3 BDC {secret} EMC"),
+    ];
+    let mut objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [4 0 R 14 0 R] /D << /OFF [4 0 R] /Order [4 0 R 14 0 R] >> >> >>".into(),
+        "<< /Type /Pages /Kids [5 0 R 7 0 R 9 0 R 11 0 R] /Count 4 >>".into(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+        "<< /Type /OCG /Name (Reviewer notes) >>".into(),
+    ];
+    for (i, c) in streams.iter().enumerate() {
+        objs.push(format!(
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 300] /Contents {} 0 R /Resources << /Font << /F1 3 0 R >> /Properties << /L1 4 0 R /L2 {} 0 R /L3 {} 0 R /L4 {} 0 R >> >> >>",
+            6 + 2 * i,
+            5 + 2 * streams.len(),
+            7 + 2 * streams.len(),
+            6 + 2 * streams.len()
+        ));
+        objs.push(format!("<< /Length {} >>\nstream\n{c}\nendstream", c.len()));
+    }
+    // The /OCMDs and the second layer last, so their numbers do not shift the pages. The second
+    // /OCMD lists the off layer and the on one, so `/AllOff` holds only with every layer off.
+    objs.push("<< /Type /OCMD /OCGs [4 0 R] /P /AnyOff >>".into());
+    objs.push("<< /Type /OCG /Name (Print marks) >>".into());
+    objs.push("<< /Type /OCMD /OCGs [4 0 R 14 0 R] /P /AllOff >>".into());
+    let mut pdf = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(pdf.len());
+        pdf.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = pdf.len();
+    pdf.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        pdf.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    pdf.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    std::fs::write(dir.join("layers.pdf"), pdf).unwrap();
+
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "layers.pdf" }))["doc"].as_u64().unwrap();
+    let info = ok(&mut a, "doc_info", json!({ "doc": doc }));
+    assert_eq!(info["layers"][0]["visible"], false, "one layer is off");
+    assert_eq!(info["layers"][1]["visible"], true, "and one is on, so /AllOff holds in neither existing pass");
+
+    // Find still reports what the reader can see: that is a product choice, not this change.
+    // Find still reports what the reader can see: that is a product choice, not this change. It
+    // sees two -- page 2, and page 3 through the /AnyOff rule.
+    assert_eq!(ok(&mut a, "text_find", json!({ "doc": doc, "query": "SECRET" }))["count"], 2, "Find is unchanged");
+
+    // Redaction marks both, and applying removes the word from the file.
+    let marked = ok(&mut a, "redact_mark", json!({ "doc": doc, "find": "SECRET" }));
+    assert_eq!(marked["marked"], 4, "all four copies are marked, once each: {marked}");
+    assert_eq!(marked["pages_marked"], json!([1, 2, 3, 4]), "{marked}");
+    assert_eq!(marked["matched_words"], json!(null), "the find form reports no word list");
+    assert_eq!(ok(&mut a, "redact_apply", json!({ "doc": doc }))["applied"], 4);
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "redacted.pdf" }));
+    let saved = std::fs::read(dir.join("redacted.pdf")).unwrap();
+
+    // Decoded, not just the raw bytes: `redact_apply` rewrites a page's content with
+    // `Stream::flate`, so a word left inside a page it *did* rewrite would be compressed and a
+    // search of the file's bytes would pass without seeing it (noted in review). The raw check
+    // stays, because it is the one that catches a page nobody rewrote at all -- which is the
+    // leak this test is about.
+    assert!(!saved.windows(6).any(|w| w == b"SECRET"), "the word is gone from the saved bytes");
+    let reopened = pdfcraft_cos::Document::open(std::sync::Arc::new(saved.clone())).expect("the saved file reopens");
+    let streams: Vec<String> = reopened
+        .object_numbers()
+        .into_iter()
+        .filter_map(|n| {
+            let obj = reopened.try_get(n).ok()?;
+            let pdfcraft_cos::Object::Stream(s) = &*obj else { return None };
+            s.decoded().ok().map(|b| String::from_utf8_lossy(&b).into_owned())
+        })
+        .collect();
+    assert!(!streams.is_empty(), "the file has streams to look inside");
+    assert!(streams.iter().any(|s| s.contains("Public summary")), "the text that was kept is there to be found, so the check is not vacuous");
+    assert!(!streams.iter().any(|s| s.contains("SECRET")), "and the word is gone from every decoded stream");
+    let _ = std::fs::remove_dir_all(dir);
+}

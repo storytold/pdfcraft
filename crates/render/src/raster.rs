@@ -66,6 +66,10 @@ pub struct RenderConfig {
     pub password: Option<Arc<str>>,
     /// Layer (optional content group) visibility overrides: (object number, generation, visible).
     pub layers: Arc<Vec<(i32, i32, bool)>>,
+    /// Treat every optional content marker as visible, whatever the document or an `/OCMD` says.
+    /// For asking what a file *contains*, not for showing it: see
+    /// `InterpreterSettings::show_all_optional_content`.
+    pub show_all_layers: bool,
     /// View ▸ Hide all comments: markup annotations aren't drawn (fields and links still are).
     pub hide_comments: bool,
     /// Refuse a whole-page raster that would be reduced by the renderer's hard size caps.
@@ -109,6 +113,7 @@ impl RenderConfig {
         let system_fonts = self.system_fonts;
         InterpreterSettings {
             ocg_overrides: self.layers.clone(),
+            show_all_optional_content: self.show_all_layers,
             hide_comments: self.hide_comments,
             font_resolver: Arc::new(move |query| {
                 japanese_fallback(query).or_else(|| system_fonts.then(|| system_fallback(query)).flatten()).or_else(|| standard(query))

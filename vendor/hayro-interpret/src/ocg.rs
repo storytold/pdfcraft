@@ -8,6 +8,9 @@ pub(crate) struct OcgState {
     /// visibility expression naming anything else is known to be malformed.
     known_ocgs: HashSet<ObjectIdentifier>,
     visibility_stack: Vec<bool>,
+    /// PdfCraft patch: see `InterpreterSettings::show_all_optional_content`. Every marker counts
+    /// as visible, so no `/OCMD` policy or `/VE` expression can hide content from the caller.
+    show_all: bool,
 }
 
 impl OcgState {
@@ -27,6 +30,7 @@ impl OcgState {
             inactive_ocgs: HashSet::default(),
             known_ocgs: HashSet::default(),
             visibility_stack: vec![],
+            show_all: false,
         }
     }
 
@@ -87,6 +91,7 @@ impl OcgState {
             inactive_ocgs: inactive,
             known_ocgs: known,
             visibility_stack: Vec::new(),
+            show_all: false,
         }
     }
 
@@ -203,7 +208,12 @@ impl OcgState {
     }
 
     pub(crate) fn is_visible(&self) -> bool {
-        self.visibility_stack.last().copied().unwrap_or(true)
+        self.show_all || self.visibility_stack.last().copied().unwrap_or(true)
+    }
+
+    /// PdfCraft patch: see the field.
+    pub(crate) fn show_all(&mut self, show: bool) {
+        self.show_all = show;
     }
 }
 

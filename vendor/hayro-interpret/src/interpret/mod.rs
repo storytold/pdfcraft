@@ -111,6 +111,16 @@ pub struct InterpreterSettings {
     /// PdfCraft patch: viewer overrides for optional content groups (object number, generation,
     /// visible), applied on top of the document's default configuration (Layers panel toggles).
     pub ocg_overrides: Arc<Vec<(i32, i32, bool)>>,
+    /// PdfCraft patch: treat every optional content marker as visible, whatever the document's
+    /// configuration, the `/OCGs` and `/P` of an `/OCMD`, or a `/VE` visibility expression say.
+    ///
+    /// For a reader this is wrong -- it is the document's own choice what to show. It is for
+    /// asking what text a file *contains*, which is what redaction's search needs: applying a
+    /// mark removes hidden content, so a search that cannot see it reports every match as marked
+    /// and leaves the word in the file (#3646). No set of group states answers that question,
+    /// because a `/VE [/And A [/Not B]]` is visible only in a mixed state and there are 2^n of
+    /// them (noted in review).
+    pub show_all_optional_content: bool,
     /// PdfCraft patch: once this is `true`, interpretation stops before the next content
     /// operator. What was drawn is then incomplete, so only set it when the output will be
     /// thrown away (a viewer's render whose result nobody can receive any more).
@@ -144,6 +154,7 @@ impl Default for InterpreterSettings {
             render_annotations: true,
             hide_comments: false,
             ocg_overrides: Arc::new(Vec::new()),
+            show_all_optional_content: false,
             cancelled: None,
             preview: false,
             jbig2_work: hayro_syntax::MAX_PAGE_JBIG2_WORK,

@@ -242,6 +242,8 @@ impl<'a> Context<'a> {
                 .map(|catalog| OcgState::from_catalog(&catalog))
                 .unwrap_or_default()
         };
+        // PdfCraft patch: see `InterpreterSettings::show_all_optional_content`.
+        ocg_state.show_all(settings.show_all_optional_content);
         // PdfCraft patch: apply viewer layer toggles.
         for (num, generation, visible) in settings.ocg_overrides.iter() {
             ocg_state.set_active(hayro_syntax::object::ObjectIdentifier::new(*num, *generation), *visible);

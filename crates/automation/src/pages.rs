@@ -133,6 +133,43 @@ impl Automation {
         Ok(p as usize - 1)
     }
 
+    /// Page text with every optional content marker treated as visible, for redaction's search.
+    ///
+    /// [`Self::page_texts`] returns what the renderer shows, which leaves out content on a layer
+    /// that is off -- so a search for a word to redact never found it there, the user was told
+    /// every match was marked, and the word stayed in the saved file (#3646). Applying a mark
+    /// already removes hidden content: only the search missed it.
+    ///
+    /// Not a set of layer states, which cannot answer this. Forcing every group on hides an
+    /// `/OCMD` with `/P /AnyOff`; forcing them all off hides `/P /AnyOn`; and a `/VE`
+    /// visibility expression such as `[/And A [/Not B]]` is visible only in a mixed state, of
+    /// which there are 2^n (all three noted in review). Ignoring optional content answers
+    /// "what text does this file contain", which is the question redaction is asking.
+    ///
+    /// Not cached. The text cache holds what Find sees, and this is deliberately different.
+    pub(crate) fn page_texts_every_layer(&mut self, id: DocId, pages: &[usize]) -> Result<Vec<Arc<PageText>>> {
+        let doc = self.session.get(id).ok_or_else(|| failed("no such document"))?;
+        let n = doc.info.pages.len();
+        if let Some(p) = pages.iter().find(|p| **p >= n) {
+            return Err(failed(format!("page {} is out of range", p + 1)));
+        }
+        let bytes = doc.bytes.clone();
+        let password: Option<Arc<str>> = doc.password.as_deref().map(Arc::from);
+        // Keyed by page, then answered in the order the caller asked for: the parallel path
+        // returns pages sorted, and the caller pairs this list with its own page list by
+        // position. Redaction asks for the pages that hold matches, in match order, so a list
+        // that isn't ascending would otherwise mark one page with another page's matches.
+        let texts: HashMap<usize, _> = extract_showing_all_layers(&bytes, password, pages).into_iter().collect();
+        pages
+            .iter()
+            .map(|p| match texts.get(p) {
+                Some(Ok(text)) => Ok(text.clone()),
+                Some(Err(e)) => Err(failed(format!("page {}: {e}", p + 1))),
+                None => Err(failed(format!("page {}: text extraction returned no result", p + 1))),
+            })
+            .collect()
+    }
+
     /// The text of `pages` (0-based), from the cache or extracted in parallel.
     pub(crate) fn page_texts(&mut self, id: DocId, pages: &[usize]) -> Result<Vec<Arc<PageText>>> {
         self.page_text_results(id, pages, &mut extract_parallel)?
@@ -350,6 +387,18 @@ fn render_warning_text(warning: pdfcraft_render::RenderWarning) -> &'static str 
 
 /// Extract the text of `pages` (0-based) with one renderer per worker thread.
 pub(crate) fn extract_parallel(bytes: &Arc<Vec<u8>>, password: Option<Arc<str>>, pages: &[usize]) -> PageTexts {
+    extract_text(bytes, password, pages, false)
+}
+
+/// [`extract_parallel`] ignoring optional content, so a caller reads the text the file holds
+/// rather than the text a reader shows. Redaction's search uses it; see
+/// [`Session::page_texts_every_layer`].
+fn extract_showing_all_layers(bytes: &Arc<Vec<u8>>, password: Option<Arc<str>>, pages: &[usize]) -> PageTexts {
+    extract_text(bytes, password, pages, true)
+}
+
+/// The shared body of [`extract_parallel`] and [`extract_showing_all_layers`].
+fn extract_text(bytes: &Arc<Vec<u8>>, password: Option<Arc<str>>, pages: &[usize], show_all_layers: bool) -> PageTexts {
     let extract = |r: &mut PageRenderer, p: usize| {
         let out = r.render(RenderRequest { page: p, kind: RequestKind::Text, tile: None, scale: 1.0, tag: 0, preview: false });
         match out.error {
@@ -357,7 +406,7 @@ pub(crate) fn extract_parallel(bytes: &Arc<Vec<u8>>, password: Option<Arc<str>>,
             None => Ok(out.text.unwrap_or_default()),
         }
     };
-    let config = RenderConfig { password, ..Default::default() };
+    let config = RenderConfig { password, show_all_layers, ..Default::default() };
     let workers = if cfg!(target_arch = "wasm32") { 1 } else { std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get).min(8) };
     // Small jobs aren't worth a second parse of the document.
     if workers == 1 || pages.len() < 8 {
