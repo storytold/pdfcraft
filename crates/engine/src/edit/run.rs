@@ -139,6 +139,7 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         | Edit::DeleteField { .. }
         | Edit::DeleteWidget { .. }
         | Edit::DuplicateField { .. }
+        | Edit::CopyField { .. }
         | Edit::SetTabOrder { .. }
         | Edit::MoveInTabOrder { .. }
         | Edit::SetCalculationOrder { .. }
@@ -881,6 +882,10 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
         }
         Edit::DeleteWidget { name, widget } => {
             pdfcraft_forms::delete_widget(doc, name, *widget)?;
+            invalidate_form_script_snapshot(cx);
+        }
+        Edit::CopyField { source, widget, page, rect, name } => {
+            pdfcraft_forms::copy_field(doc, source, *widget, *page, *rect, name)?;
             invalidate_form_script_snapshot(cx);
         }
         Edit::SetTabOrder { pages, order } => pdfcraft_forms::set_tab_order(doc, pages, *order)?,

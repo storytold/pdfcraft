@@ -177,6 +177,7 @@ pub const BATCH_LABELS: &[&str] = &[
     "Run JavaScript",
     "Recognize text",
     field_table::LABEL,
+    field_table::COPY_LABEL,
     "Style",
     crate::find_replace::REPLACE_ALL,
 ];
@@ -268,6 +269,7 @@ impl Edit {
             Edit::SetFieldProps { .. } => Label::of("Change field properties"),
             Edit::DeleteField { .. } | Edit::DeleteWidget { .. } => Label::of("Delete field"),
             Edit::DuplicateField { .. } => Label::of("Duplicate field"),
+            Edit::CopyField { .. } => Label::of("Duplicate field"),
             Edit::SetTabOrder { .. } | Edit::MoveInTabOrder { .. } => Label::of("Set tab order"),
             Edit::SetCalculationOrder { .. } => Label::of("Set calculation order"),
             Edit::SetInitialView(_) => Label::of("Change initial view"),

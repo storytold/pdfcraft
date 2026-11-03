@@ -39,6 +39,114 @@ fn fixture() -> Document {
     document(&objs)
 }
 
+#[test]
+fn grid_copy_preserves_properties_and_has_an_independent_value() {
+    let mut doc = fixture();
+    let source = field(&fields(&doc), "notes").clone();
+    copy_field(&mut doc, "notes", 0, 0, [50.0, 400.0, 250.0, 480.0], "notes_1").unwrap();
+    let copied = field(&fields(&doc), "notes_1").clone();
+    assert_eq!(copied.kind, source.kind);
+    assert_eq!(copied.flags, source.flags);
+    assert_eq!(copied.da, source.da);
+    assert_eq!(copied.widgets[0].rect, [50.0, 400.0, 250.0, 480.0]);
+    set_value(&mut doc, "notes_1", &FieldValue::Text("new value".into())).unwrap();
+    let reopened = reopen(&doc);
+    let all = fields(&reopened);
+    assert_eq!(field(&all, "notes_1").value, ["new value"]);
+    assert_ne!(field(&all, "notes").value, ["new value"]);
+}
+
+#[test]
+fn grid_copy_checkbox_preserves_appearance_and_rejects_taken_names() {
+    let mut doc = fixture();
+    copy_field(&mut doc, "agree", 0, 0, [350.0, 400.0, 370.0, 420.0], "agree_copy").unwrap();
+    let all = fields(&doc);
+    assert_eq!(field(&all, "agree_copy").kind, FieldKind::CheckBox);
+    assert_eq!(field(&all, "agree_copy").widgets[0].on_state, field(&all, "agree").widgets[0].on_state);
+    let copied_ap = doc.get(field(&all, "agree_copy").widgets[0].obj).as_dict().unwrap().get(b"AP").cloned();
+    let source_ap = doc.get(field(&all, "agree").widgets[0].obj).as_dict().unwrap().get(b"AP").cloned();
+    assert_eq!(copied_ap, source_ap, "custom checkbox appearance is preserved");
+    set_value(&mut doc, "agree_copy", &FieldValue::Check(true)).unwrap();
+    let reopened = reopen(&doc);
+    let all = fields(&reopened);
+    assert_ne!(field(&all, "agree_copy").value, field(&all, "agree").value);
+    let before = all.len();
+    assert!(copy_field(&mut doc, "agree", 0, 0, [0.0, 0.0, 20.0, 20.0], "agree_copy").is_err());
+    assert_eq!(fields(&doc).len(), before);
+    assert!(copy_field(&mut doc, "size", 0, 0, [0.0, 0.0, 20.0, 20.0], "radio_copy").is_err());
+}
+
+#[test]
+fn grid_copy_does_not_share_indirect_appearance_dictionaries() {
+    let mut doc = fixture();
+    let source = field(&fields(&doc), "name").obj;
+    let source_dict = doc.get(source).as_dict().unwrap().clone();
+    let mk = doc.add(source_dict.get(b"MK").unwrap().clone());
+    let mut bs = pdfcraft_cos::Dict::new();
+    bs.set(b"W".to_vec(), Object::Real(1.0));
+    let bs = doc.add(Object::Dict(bs));
+    doc.update_dict(source, |d| {
+        d.set(b"MK".to_vec(), Object::Ref(mk));
+        d.set(b"BS".to_vec(), Object::Ref(bs));
+    })
+    .unwrap();
+    copy_field(&mut doc, "name", 0, 0, [50.0, 400.0, 250.0, 420.0], "name_copy").unwrap();
+    let before = look(&doc, field(&fields(&doc), "name"));
+    let props = FieldProps {
+        appearance: Some(LookPatch { fill: Some(Some([0.0, 0.0, 1.0])), width: Some(3.0), ..Default::default() }),
+        ..Default::default()
+    };
+    set_props(&mut doc, "name_copy", &props).unwrap();
+    let all = fields(&doc);
+    assert_eq!(look(&doc, field(&all, "name")), before);
+    assert_ne!(look(&doc, field(&all, "name_copy")), before);
+}
+
+#[test]
+fn grid_copy_preserves_inherited_properties_and_rejects_invalid_geometry() {
+    let mut doc = fixture();
+    let source = field(&fields(&doc), "address.city").obj;
+    let parent = doc.get(source).as_dict().unwrap().reference(b"Parent").unwrap();
+    doc.update_dict(source, |d| {
+        d.remove(b"FT");
+    })
+    .unwrap();
+    doc.update_dict(parent, |d| {
+        d.set(b"FT".to_vec(), Object::name("Tx"));
+        d.set(b"Ff".to_vec(), Object::Int(i64::from(flags::MULTILINE)));
+    })
+    .unwrap();
+    copy_field(&mut doc, "address.city", 0, 0, [50.0, 400.0, 250.0, 420.0], "city_copy").unwrap();
+    let all = fields(&doc);
+    assert!(field(&all, "city_copy").has(flags::MULTILINE));
+    let before = all.len();
+    for rect in [[f64::NAN, 0.0, 20.0, 20.0], [0.0, 0.0, f64::INFINITY, 20.0], [-f64::MAX, 0.0, f64::MAX, 20.0], [0.0; 4]] {
+        assert!(copy_field(&mut doc, "address.city", 0, 0, rect, "invalid_copy").is_err());
+        assert_eq!(fields(&doc).len(), before);
+    }
+}
+
+#[test]
+fn grid_copy_keeps_widget_overrides_when_field_and_widget_are_separate() {
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R] >>".into(),
+        "<< /Fields [5 0 R] >>".into(),
+        "<< /FT /Tx /T (source) /DA (/Helv 12 Tf 0 g) /Kids [6 0 R] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /P 3 0 R /Rect [20 300 120 320] /DA (/Helv 8 Tf 1 0 0 rg) /Foo (kept) /NM (unique) >>".into(),
+    ];
+    let mut doc = document(&objs);
+    copy_field(&mut doc, "source", 0, 0, [20.0, 250.0, 120.0, 270.0], "copy").unwrap();
+    let all = fields(&doc);
+    let copy = field(&all, "copy");
+    let object = doc.get(copy.obj);
+    let dict = object.as_dict().unwrap();
+    assert!(dict.contains(b"Foo"));
+    assert!(!dict.contains(b"NM"), "an annotation name must not be duplicated");
+    assert_eq!(copy.da, "/Helv 8 Tf 1 0 0 rg");
+}
+
 /// A PDF of the given objects (numbered from 1).
 fn document(objs: &[String]) -> Document {
     let mut out = b"%PDF-1.7\n".to_vec();

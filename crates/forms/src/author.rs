@@ -20,7 +20,7 @@ pub(crate) use tree::ancestor_sets;
 
 pub use edit::set_props;
 pub(crate) use edit::set_props_object;
-pub use lifecycle::{add_field, delete_field, delete_field_object, delete_widget, duplicate_field};
+pub use lifecycle::{add_field, copy_field, delete_field, delete_field_object, delete_widget, duplicate_field};
 pub(crate) use look::button_appearance;
 pub(crate) use look::redraw_field_object;
 pub use look::{

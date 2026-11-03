@@ -1239,6 +1239,7 @@ fn is_form_edit(edit: &Edit) -> bool {
             | Edit::DeleteField { .. }
             | Edit::DeleteWidget { .. }
             | Edit::DuplicateField { .. }
+            | Edit::CopyField { .. }
             | Edit::SetFieldProps { .. }
             | Edit::SetFieldImage { .. }
             | Edit::SetFieldImageTarget { .. }
