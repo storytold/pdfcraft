@@ -1504,3 +1504,19 @@ fn marking_a_tag_artifact_refuses_content_past_the_decode_budget() {
     assert_eq!(mark_tag_artifact(&mut doc, ObjRef::new(7, 0)), Err(ArtifactError::TooLarge));
     assert_eq!(doc.get(ObjRef::new(3, 0)).as_dict().unwrap().get(b"Contents"), Some(&contents), "the page keeps its content");
 }
+
+/// One structure element referenced under several generations is collected once: lookup goes by
+/// object number, so each alias would otherwise copy the element and its children again.
+#[test]
+fn a_structure_element_under_many_generations_is_collected_once() {
+    let aliases: String = (0..200).map(|g| format!(" 3 {g} R")).collect();
+    let doc = pdf(
+        &[
+            "<< /Type /Catalog /StructTreeRoot 2 0 R >>".into(),
+            format!("<< /Type /StructTreeRoot /K [{aliases}] >>"),
+            format!("<< /S /Figure /Alt (x) /K [{aliases}] >>"),
+        ],
+        "",
+    );
+    assert_eq!(crate::alt::elements(&doc).len(), 1);
+}
