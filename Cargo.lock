@@ -4605,6 +4605,7 @@ dependencies = [
  "pdfcraft-filters",
  "pdfcraft-fonts",
  "pdfcraft-forms",
+ "pdfcraft-geom",
  "pdfcraft-model",
  "pdfcraft-testkit",
  "pdfcraft-xfa",

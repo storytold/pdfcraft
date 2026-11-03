@@ -217,22 +217,8 @@ pub(crate) fn marks_checked(doc: &Document) -> (Vec<Mark>, Vec<usize>) {
                 .get(b"QuadPoints")
                 .and_then(|q| doc.resolve(q).as_array().map(|a| a.iter().filter_map(Object::as_f64).collect()))
                 .unwrap_or_default();
-            let mut rects: Vec<[f64; 4]> = quads
-                .as_chunks::<8>()
-                .0
-                .iter()
-                .map(|q| {
-                    let xs = [q[0], q[2], q[4], q[6]];
-                    let ys = [q[1], q[3], q[5], q[7]];
-                    [
-                        xs.iter().copied().fold(f64::MAX, f64::min),
-                        ys.iter().copied().fold(f64::MAX, f64::min),
-                        xs.iter().copied().fold(f64::MIN, f64::max),
-                        ys.iter().copied().fold(f64::MIN, f64::max),
-                    ]
-                })
-                .filter(|r| r.iter().all(|v| v.is_finite()))
-                .collect();
+            let mut rects: Vec<[f64; 4]> =
+                quads.as_chunks::<8>().0.iter().map(pdfcraft_geom::quad_bounds).filter(|r| r.iter().all(|v| v.is_finite())).collect();
             if rects.is_empty()
                 && let Some(r) = rect_of(doc, d.get(b"Rect"))
             {
