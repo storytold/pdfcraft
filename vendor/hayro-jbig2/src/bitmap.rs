@@ -194,8 +194,8 @@ impl Bitmap {
     ///
     /// "Unless otherwise specified, all multi-bit values shall be treated as unsigned values"
     /// (5.4.4), and a region's location (7.4.1.3, 7.4.1.4) is not specified otherwise. One past
-    /// `i32::MAX` is past any page, where cast to a signed coordinate it read as left of the page
-    /// or above it, and came back onto it.
+    /// `i32::MAX` is past any page. Cast to a signed coordinate it read as left of the page or above
+    /// it, and one within a region's size of 2^32 came back onto it.
     pub(crate) fn combine_region(&mut self, region: &Self, operator: CombinationOperator) {
         let signed = |location: u32| i32::try_from(location).unwrap_or(i32::MAX);
         self.combine(region, signed(region.x_location), signed(region.y_location), operator);

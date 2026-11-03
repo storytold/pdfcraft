@@ -816,6 +816,36 @@ mod tests {
         assert!(Image::new_embedded(&stream(1 << 20, 1 << 20), None).is_err());
     }
 
+    /// Segment `number` of `kind` on page 1, referring to `refers_to`.
+    fn segment(number: u8, kind: u8, refers_to: &[u8], data: &[u8]) -> Vec<u8> {
+        let mut segment = vec![0, 0, 0, number, kind, (refers_to.len() as u8) << 5];
+        segment.extend_from_slice(refers_to);
+        segment.push(1);
+        segment.extend_from_slice(&(data.len() as u32).to_be_bytes());
+        segment.extend_from_slice(data);
+        segment
+    }
+
+    /// A blank page of 8 × 8: resolution unknown, flags, not striped.
+    fn page_of_8() -> Vec<u8> {
+        segment(0, 48, &[], &[0, 0, 0, 8, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 0, 0x42, 0, 0])
+    }
+
+    /// Region information (7.4.1) of 4 × 4 at `x`, `y`, then the region's own `header`, then
+    /// arbitrary coded data.
+    fn region_of_4(x: u32, y: u32, operator: u8, header: &[u8]) -> Vec<u8> {
+        let mut data: Vec<u8> = [4u32, 4, x, y].iter().flat_map(|v| v.to_be_bytes()).collect();
+        data.push(operator);
+        data.extend_from_slice(header);
+        data.extend_from_slice(&[0x5a; 16]);
+        data
+    }
+
+    const GENERIC: &[u8] = &[0, 3, 0xFF, 0xFD, 0xFF, 2, 0xFE, 0xFE, 0xFE]; // template 0, AT
+    const REFINEMENT: &[u8] = &[0, 0xFF, 0xFF, 0xFF, 0xFF]; // template 0, AT
+    const OR: u8 = 0;
+    const REPLACE: u8 = 4;
+
     /// PdfCraft patch: a region's location is unsigned (5.4.4), so one past `i32::MAX` is off the
     /// page. Taken for a signed one, a region at 0xFFFFFFFE drew back onto the page two pixels left
     /// of it, and a refinement there was refused, and the rest of the stream with it. Each region
@@ -833,42 +863,20 @@ mod tests {
             }
             fn next_line(&mut self) {}
         }
-        let segment = |number: u8, kind: u8, refers_to: &[u8], data: &[u8]| {
-            let mut segment = vec![0, 0, 0, number, kind, (refers_to.len() as u8) << 5];
-            segment.extend_from_slice(refers_to);
-            segment.push(1); // the page it belongs to
-            segment.extend_from_slice(&(data.len() as u32).to_be_bytes());
-            segment.extend_from_slice(data);
-            segment
-        };
-        // Region information (7.4.1) of 4 × 4 at `x`, `y`, then the region's own header, then
-        // arbitrary coded data.
-        let region = |x: u32, y: u32, operator: u8, header: &[u8]| {
-            let mut data: Vec<u8> = [4u32, 4, x, y].iter().flat_map(|v| v.to_be_bytes()).collect();
-            data.push(operator);
-            data.extend_from_slice(header);
-            data.extend_from_slice(&[0x5a; 16]);
-            data
-        };
-        const GENERIC: &[u8] = &[0, 3, 0xFF, 0xFD, 0xFF, 2, 0xFE, 0xFE, 0xFE]; // template 0, AT
-        const REFINEMENT: &[u8] = &[0, 0xFF, 0xFF, 0xFF, 0xFF]; // template 0, AT
-        let (or, replace) = (0, 4);
         let ink = |x: u32, y: u32| {
-            // 8 × 8, resolution unknown, flags, not striped.
-            let page = segment(0, 48, &[], &[0, 0, 0, 8, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 0, 0x42, 0, 0]);
             let forms = [
                 // An immediate generic region.
-                vec![segment(1, 38, &[], &region(x, y, or, GENERIC))],
-                // An immediate refinement of the page, which reads the page in its own area (7.4.7.4).
-                vec![segment(1, 42, &[], &region(x, y, replace, REFINEMENT))],
+                vec![segment(1, 38, &[], &region_of_4(x, y, OR, GENERIC))],
+                // An immediate refinement of the page, which reads the page at its own location (7.4.7.4).
+                vec![segment(1, 42, &[], &region_of_4(x, y, REPLACE, REFINEMENT))],
                 // An immediate refinement of an intermediate region at the same place (7.4.7.5).
                 vec![
-                    segment(1, 36, &[], &region(x, y, or, GENERIC)),
-                    segment(2, 42, &[1], &region(x, y, or, REFINEMENT)),
+                    segment(1, 36, &[], &region_of_4(x, y, OR, GENERIC)),
+                    segment(2, 42, &[1], &region_of_4(x, y, OR, REFINEMENT)),
                 ],
             ];
             forms.map(|form| {
-                let stream = [page.clone(), form.concat()].concat();
+                let stream = [page_of_8(), form.concat()].concat();
                 let mut ink = Ink(0);
                 Image::new_embedded(&stream, None).and_then(|image| image.decode(&mut ink)).map(|()| ink.0)
             })
@@ -878,6 +886,50 @@ mod tests {
         }
         for (x, y) in [(0xFFFF_FFFE, 0), (0, 0xFFFF_FFFE), (0x8000_0000, 0x8000_0000), (u32::MAX, u32::MAX)] {
             assert_eq!(ink(x, y).map(|ink| ink.ok()), [Some(0); 3], "{x:#x}, {y:#x}");
+        }
+    }
+
+    /// PdfCraft patch: a refinement of a region refines it where it is, "GRREFERENCEDX 0,
+    /// GRREFERENCEDY 0" (Table 35), not the page at the refinement's location. A region and its
+    /// refinement, directly or through an intermediate refinement, decode otherwise than the same
+    /// refinements of the page, and at 2, 3 to the pixels they decode to at 0, 0, moved.
+    #[test]
+    fn a_refinement_of_a_region_decodes_the_same_wherever_they_are() {
+        #[derive(Default)]
+        struct Pixels(Vec<bool>);
+        impl Decoder for Pixels {
+            fn push_pixel(&mut self, black: bool) {
+                self.0.push(black);
+            }
+            fn push_pixel_chunk(&mut self, black: bool, chunks: u32) {
+                self.0.extend((0..8 * chunks).map(|_| black));
+            }
+            fn next_line(&mut self) {}
+        }
+        // The first refinement refers to the region before it, or `of_page`, to nothing: the page.
+        let decode = |x: u32, y: u32, through_intermediate: bool, of_page: bool| {
+            let first: &[u8] = if of_page { &[] } else { &[1] };
+            let mut form = vec![segment(1, 36, &[], &region_of_4(x, y, OR, GENERIC))];
+            if through_intermediate {
+                form.push(segment(2, 40, first, &region_of_4(x, y, OR, REFINEMENT)));
+                form.push(segment(3, 42, &[2], &region_of_4(x, y, OR, REFINEMENT)));
+            } else {
+                form.push(segment(2, 42, first, &region_of_4(x, y, OR, REFINEMENT)));
+            }
+            let stream = [page_of_8(), form.concat()].concat();
+            let mut pixels = Pixels::default();
+            Image::new_embedded(&stream, None).unwrap().decode(&mut pixels).unwrap();
+            pixels.0
+        };
+        for through_intermediate in [false, true] {
+            let at_origin = decode(0, 0, through_intermediate, false);
+            assert!(at_origin.contains(&true), "draws");
+            assert_ne!(at_origin, decode(0, 0, through_intermediate, true), "the page refined instead");
+            for (i, &black) in decode(2, 3, through_intermediate, false).iter().enumerate() {
+                let (x, y) = (i % 8, i / 8);
+                let moved = x >= 2 && y >= 3 && at_origin[(y - 3) * 8 + x - 2];
+                assert_eq!(black, moved, "{x}, {y}, through an intermediate refinement: {through_intermediate}");
+            }
         }
     }
 
