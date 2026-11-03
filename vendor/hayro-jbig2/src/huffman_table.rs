@@ -14,11 +14,27 @@ include!("huffman_tables_generated.rs");
 /// Maximum number of nodes in an inline Huffman table.
 const INLINE_TABLE_SIZE: usize = 43;
 
+/// PdfCraft patch: the most lines a custom table may have. A line takes 2 bits of input at least
+/// and 8 bytes here, so a table reading 250 MiB behind nested Flate, a 1,297-byte PDF, was killed
+/// at 8 GiB before it could be counted.
+const MAX_TABLE_LINES: usize = 1 << 16;
+
 /// A queryable Huffman table.
 #[derive(Debug, Clone)]
 pub(crate) struct HuffmanTable(Rc<InnerHuffmanTable>);
 
 impl HuffmanTable {
+    /// PdfCraft patch: the words this table holds. Every table takes the room of the inline
+    /// variant, however few nodes it has, and a dynamic one its nodes besides.
+    pub(crate) fn words(&self) -> usize {
+        let nodes = match &*self.0 {
+            InnerHuffmanTable::Inline { .. } => 0,
+            InnerHuffmanTable::Dynamic { nodes } => nodes.len(),
+        };
+        let bytes = nodes.saturating_mul(size_of::<HuffmanNode>());
+        bytes.saturating_add(size_of::<InnerHuffmanTable>()) / size_of::<u32>()
+    }
+
     /// Create a new inline Huffman table from a fixed-size node array.
     fn from_inline(nodes: [HuffmanNode; INLINE_TABLE_SIZE]) -> Self {
         Self(Rc::new(InnerHuffmanTable::Inline { nodes }))
@@ -219,6 +235,9 @@ impl HuffmanTable {
         // 5) "Decode each table line as follows:"
         //    d) "If CURRANGELOW ≥ HTHIGH then proceed to step 6."
         while current_range_low < maximum_value {
+            if lines.len() >= MAX_TABLE_LINES {
+                bail!(HuffmanError::InvalidCode);
+            }
             // a) "Read HTPS bits. Set PREFLEN[NTEMP] to the value decoded."
             let prefix_length = reader
                 .read_bits(prefix_length_bits)
@@ -448,11 +467,11 @@ impl HuffmanNode {
                     // 4) "Otherwise, if table line I is the lower range table line for this
                     //    table, then set: HTVAL = RANGELOW[I] − HTOFFSET"
                     // 5) "Otherwise, set: HTVAL = RANGELOW[I] + HTOFFSET"
-                    // `HTVAL`
+                    // `HTVAL`. Wrapping: a range line's offset can take it past what an `i32` holds.
                     let value = if leaf.is_lower {
-                        leaf.range_low - range_offset
+                        leaf.range_low.wrapping_sub(range_offset)
                     } else {
-                        leaf.range_low + range_offset
+                        leaf.range_low.wrapping_add(range_offset)
                     };
 
                     return Ok(Some(value));
