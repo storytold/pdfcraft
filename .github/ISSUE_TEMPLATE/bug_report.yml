@@ -7,7 +7,7 @@ body:
       value: |
         Thanks for reporting. Search [open and closed issues](https://github.com/storytold/pdfcraft/issues?q=is%3Aissue) first, and add details to an existing report if it describes the same problem.
 
-        If you opened this from PdfCraft's Help > Report an Issue… item, the version and system fields are already filled in: check them before you submit. Nothing is sent until you submit this form.
+        If you opened this from PdfCraft's Help > Report an Issue… item, the version and system fields are already filled in: check them before you submit. Opening this page sends its URL, including those details, to GitHub; submitting the form publishes the issue.
 
         **Reports and attachments are public.** Use made-up data only: don't attach confidential PDFs, and remove personal details, passwords and full local file paths from anything you paste. A small synthetic PDF is often enough.
   - type: input
