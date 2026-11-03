@@ -3529,3 +3529,13 @@ licence = "MIT OR Apache-2.0"
 licence_file = "LICENSE-MIT"
 kind = "translation"
 usage = "Catalan UI strings, compiled in by crates/ui-egui/src/i18n.rs"
+
+[[asset]]
+path = "crates/ui-egui/src/i18n/ta.tsv"
+title = "Tamil interface translation catalog"
+author = "PdfCraft contributors"
+source = "Contributor-original: clean-room translations of PdfCraft's English UI labels, written from their meaning; no proprietary localisation resources; 2026-10-22 page-gap labels are contributor-original AI-assisted translations from English, not separately native-reviewed; 2026-10-22 text-field-table labels are contributor-original AI-assisted translations from English, not separately native-reviewed; 2026-10-22 secured-document notice labels are contributor-original AI-assisted translations from English, not separately native-reviewed; the 2026-10-22 reply-count label is an AI-assisted translation from English, not separately native-reviewed"
+licence = "MIT OR Apache-2.0"
+licence_file = "LICENSE-MIT"
+kind = "translation"
+usage = "Tamil UI strings, compiled in by crates/ui-egui/src/i18n.rs"
