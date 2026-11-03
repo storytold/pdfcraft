@@ -361,3 +361,79 @@ fn page_modules_claim_the_cursor_and_never_set_it() {
     );
     assert!(problems.is_empty(), "{}", problems.join("\n"));
 }
+
+/// Hit producers are called only by the central routing table, not again by an input handler.
+const PAGE_HIT_CALLS: [&str; 8] = [
+    "prepare::hit(",
+    "forms_ui::hit(",
+    "comments::hit(",
+    "edit_text_ui::hit(",
+    "edit_text_ui::picture_hit(",
+    "edit_text_ui::picture_handle_hit(",
+    "object_ui::hit(",
+    "content_ui::hit(",
+];
+
+fn routed_press_handler(code: &str) -> bool {
+    let code = code.lines().filter(|line| !line.trim_start().starts_with("//")).collect::<Vec<_>>().join("\n");
+    code.contains("router.owner(")
+        && !PAGE_HIT_CALLS.iter().any(|call| code.contains(call))
+        && !uses(&code, "hit(")
+        && !uses(&code, "body_hit(")
+        && !uses(&code, "handle_hit(")
+}
+
+/// Source-level guard for the Page presses rule, alongside the raw-pointer and cursor guards.
+/// Runtime routing, capture lifetime and Escape behavior have separate behavioral tests.
+#[test]
+fn page_modules_take_presses_from_the_router_without_repeating_hit_tests() {
+    let mut problems = misuses(
+        &PAGE_HIT_CALLS,
+        &[("canvas.rs", "at", "the central PageHits table")],
+        "repeats a module hit test outside PageHits::at; use the captured router owner",
+        "no longer collects module hits",
+    );
+    problems.extend(misuses(
+        &["router.press("],
+        &[("canvas.rs", "page_tool_input", "the central press capture")],
+        "captures a page press outside the central routing path",
+        "no longer captures page presses",
+    ));
+    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    for (file, function) in [
+        ("tools/forms_ui.rs", "page_input"),
+        ("tools/prepare.rs", "page_input"),
+        ("tools/content_ui.rs", "page_input"),
+        ("tools/edit_text_ui.rs", "page_input"),
+        ("tools/edit_text_ui/image.rs", "image_input"),
+        ("tools/object_ui.rs", "input"),
+        ("tools/comments/input.rs", "select_input"),
+    ] {
+        let source = std::fs::read_to_string(src.join(file)).expect("page input module");
+        let body = source.lines().skip_while(|line| declares(line) != Some(function)).take_while(|line| *line != "}").collect::<Vec<_>>().join("\n");
+        // Forms reuse their hit test for hover text and to require release over the captured
+        // widget. Neither chooses the press owner. Pin both calls to the current pointer `p`,
+        // not the press origin, and reject an additional call or a changed argument.
+        let body = if file == "tools/forms_ui.rs" {
+            let call = "hit(xf, info, page, form, allowed, p)";
+            assert_eq!(body.matches(call).count(), 2, "only the existing hover and release checks are exempt");
+            body.replace(call, "hover_or_release_check")
+        } else {
+            body
+        };
+        if !routed_press_handler(&body) {
+            problems.push(format!("src/{file}: {function} must consume the captured router owner without repeating a hit test"));
+        }
+    }
+    assert!(problems.is_empty(), "{}", problems.join("\n"));
+}
+
+#[test]
+fn the_page_press_guard_rejects_missing_owners_and_second_hit_tests() {
+    assert!(routed_press_handler("let owner = view.router.owner(page);"));
+    assert!(!routed_press_handler("// view.router.owner(page)\nlet owner = None;"));
+    assert!(!routed_press_handler("let owner = view.router.owner(page);\nlet again = cx.hit(origin);"));
+    for call in PAGE_HIT_CALLS {
+        assert!(!routed_press_handler(&format!("let owner = view.router.owner(page);\n{call}origin);")), "{call}");
+    }
+}

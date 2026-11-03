@@ -345,7 +345,6 @@
 	Check box is checked by default	Polje za potvrdu je označeno prema zadanom
 	Check for accessibility	Provjeri pristupačnost
 	Check for accessibility…	Provjeri pristupačnost…
-	Check for updates	Provjeri ažuriranja
 	Check for updates…	Provjeri ažuriranja…
 	Check spelling	Provjeri pravopis
 	Check that the tags read in the order a sighted reader would. Use the Reading Order tool or the Tags panel to correct it.	Provjerite da se tagovi čitaju redoslijedom kojim bi čitao čitalac koji vidi. Za ispravku koristite alat Redoslijed čitanja ili panel Tagovi.
@@ -354,7 +353,6 @@
 	Checkbox	Polje za potvrdu
 	Checked	Označeno
 	Checking Options ({on} of 32 in all categories)	Opcije provjere ({on} od 32 u svim kategorijama)
-	Checking for a newer version…	Provjera nove verzije…
 	Checkmark	Kvačica
 	Choose a PNG or JPEG image (up to 4 MiB). Transparency is preserved.	Odaberite PNG ili JPEG sliku (do 4 MiB). Prozirnost se čuva.
 	Choose a folder for the exported files	Odaberite folder za izvezene datoteke
@@ -459,7 +457,6 @@
 	Correct recognized text	Ispravi prepoznati tekst
 	Could not save: {e}	Nije moguće sačuvati: {e}
 	Couldn't add {name}: {e}	Nije moguće dodati {name}: {e}
-	Couldn't check for updates: {e}	Nije moguće provjeriti ažuriranja: {e}
 	Couldn't combine files: {e}	Nije moguće kombinovati datoteke: {e}
 	Couldn't create a PDF: {e}	Nije moguće kreirati PDF: {e}
 	Couldn't download {name}: {e}	Nije moguće preuzeti {name}: {e}
@@ -1361,7 +1358,6 @@
 	PdfCraft on GitHub	PdfCraft na GitHubu
 	PdfCraft web page	Web stranica PdfCrafta
 	PdfCraft works offline. No telemetry, no account, and no cloud processing unless you add a provider.	PdfCraft radi van mreže. Bez telemetrije, bez računa i bez obrade u oblaku osim ako ne dodate pružaoca.
-	PdfCraft {c} is up to date.	PdfCraft {c} je ažuran.
 	PdfCraft {v} is available.	Dostupan je PdfCraft {v}.
 	People may need more time to respond. Check that nothing has a time limit.	Ljudima može trebati više vremena da odgovore. Provjerite da ništa nema vremensko ograničenje.
 	Percentage	Procenat
@@ -2046,7 +2042,6 @@
 	You are about to apply 1 redaction mark. Text, images and drawings under the marks, and comments and form fields that overlap them, are removed permanently.	Spremate se primijeniti 1 oznaku za redigovanje. Tekst, slike i crteži ispod oznaka te komentari i polja obrasca koji ih preklapaju trajno se uklanjaju.
 	You are about to apply {n} redaction marks. Text, images and drawings under the marks, and comments and form fields that overlap them, are removed permanently.	Spremate se primijeniti oznake za redigovanje: {n}. Tekst, slike i crteži ispod oznaka te komentari i polja obrasca koji ih preklapaju trajno se uklanjaju.
 	You can pin up to {n} folders. Unpin one first.	Možete prikvačiti najviše {n} foldera. Prvo otkvačite jedan.
-	You have version {c}. All releases are listed at {page}.	Imate verziju {c}. Sva izdanja su navedena na {page}.
 	You have version {c}. Download the new version from its release page.	Imate verziju {c}. Preuzmite novu verziju s njene stranice izdanja.
 	Your changes will be lost if you don't save them.	Vaše promjene će biti izgubljene ako ih ne sačuvate.
 	Your name	Vaše ime
@@ -2808,3 +2803,106 @@ theme	Appearance	Izgled
 	a table has 1 to {max} columns	tabela ima od 1 do {max} kolona
 	the first row number can be at most {max}	broj prvog reda može biti najviše {max}
 	the area, the spacing and the column widths must be numbers, the spacing 0 or more and each width more than 0	oblast, razmak i širine kolona moraju biti brojevi, razmak 0 ili veći, a svaka širina veća od 0
+	1 line	1 red
+	A picture covers page {pages} (a scan?), so the background won't show there.	Slika prekriva stranicu {pages} (sken?), pa se pozadina tamo neće vidjeti.
+	Add tools to hotbar	Dodaj alate na traku alata
+	Arrange image	Rasporedi sliku
+	Bring forward	Pomjeri naprijed
+	Bring to front	Postavi na vrh
+	CCITT Group 4	CCITT Group 4
+	Checking pages…	Provjera stranica…
+	Clear search	Očisti pretragu
+	Close menu	Zatvori meni
+	Crop	Izreži
+	Crop image	Izreži sliku
+	Custom scale	Prilagođena razmjera
+	Dock navigation rail on Left	Usidri navigacijsku traku lijevo
+	Dock navigation rail on Right	Usidri navigacijsku traku desno
+	Drag hotbar	Prevuci traku alata
+	Edit this PDF	Uredi ovaj PDF
+	Every line set in the style chosen for a level becomes a bookmark of that level, under a new first bookmark.	Svaki red u stilu odabranom za nivo postaje zabilješka tog nivoa, ispod nove prve zabilješke.
+	Export this PDF	Izvezi ovaj PDF
+	Export value	Izvozna vrijednost
+	Extend the docked toolbar along the entire side. Choose a side above to enable.	Produži usidrenu traku alata duž cijele strane. Odaberite stranu iznad da biste to omogućili.
+	Find text or tools	Pronađi tekst ili alate
+	Float (drag anywhere)	Plutajuće (prevucite bilo gdje)
+	Freehand-Highlight	Slobodno isticanje
+	Full-side strip	Traka duž cijele strane
+	General & Interface	Općenito i interfejs
+	Hand	Ruka
+	Hand Tool	Alat ruka
+	Hotbar settings	Postavke trake alata
+	Hotbar settings / add tools	Postavke trake alata / dodaj alate
+	Hotbar tools	Alati na traci
+	Image pasted	Slika je zalijepljena
+	Its script also reads fields whose names it builds as it runs, so those reads can't be checked.	Njegova skripta također čita polja čije nazive gradi tokom izvršavanja, pa se ta čitanja ne mogu provjeriti.
+	JBIG2 (lossless)	JBIG2 (bez gubitaka)
+	Level {n}	Nivo {n}
+	Lowering this forgets the oldest files. At 0 there is no list.	Smanjenjem se zaboravljaju najstarije datoteke. Na 0 nema liste.
+	Marquee Zoom	Zumiranje okvirom
+	Missing field	Nedostaje polje
+	Monochrome Images	Jednobojne slike
+	Navigation rail side	Strana navigacijske trake
+	New bookmarks from text styles	Nove zabilješke iz stilova teksta
+	New bookmarks from text styles…	Nove zabilješke iz stilova teksta…
+	No image on clipboard to paste	Nema slike u međuspremniku za lijepljenje
+	Options for this reply	Opcije za ovaj odgovor
+	Page Properties	Svojstva stranice
+	Page properties…	Svojstva stranice…
+	Page {pages} changed after the background was added, so its own white backdrop stays off. It looks the same on white paper.	Stranica {pages} je promijenjena nakon dodavanja pozadine, pa njena vlastita bijela podloga ostaje isključena. Na bijelom papiru izgleda isto.
+	Page {pages} paints its own white backdrop, which would hide the background. Replace it	Stranica {pages} iscrtava vlastitu bijelu podlogu, koja bi sakrila pozadinu. Zamijeni je
+	Pages {pages} changed after the background was added, so their own white backdrops stay off. They look the same on white paper.	Stranice {pages} su promijenjene nakon dodavanja pozadine, pa njihove vlastite bijele podloge ostaju isključene. Na bijelom papiru izgledaju isto.
+	Pages {pages} paint their own white backdrop, which would hide the background. Replace it	Stranice {pages} iscrtavaju vlastitu bijelu podlogu, koja bi sakrila pozadinu. Zamijeni je
+	Pictures cover pages {pages} (scans?), so the background won't show there.	Slike prekrivaju stranice {pages} (skenovi?), pa se pozadina tamo neće vidjeti.
+	Pin	Prikači
+	Pin a tool…	Prikači alat…
+	Pin to Home	Prikači na Početnu
+	Pin tools to Home	Prikači alate na Početnu
+	Pin your favorite tools here for quick access.	Prikačite omiljene alate ovdje za brz pristup.
+	Pinned	Prikačeno
+	Pinned Tools	Prikačeni alati
+	Pinned {tool} to Home	{tool} je prikačen na Početnu
+	Reads {name}, which the form doesn't have, so it gets no value there.	Čita {name}, koje obrazac nema, pa tamo ne dobija vrijednost.
+	Recent files to keep	Broj nedavnih datoteka
+	Remove crop	Ukloni izrezivanje
+	Remove from hotbar	Ukloni s trake alata
+	Removing the background puts the page's own backdrop back.	Uklanjanje pozadine vraća vlastitu podlogu stranice.
+	Reset side panels	Vrati bočne panele
+	Search all tools…	Pretraži sve alate…
+	Search settings…	Pretraži postavke…
+	Search tools…	Pretraži alate…
+	Search…	Pretraži…
+	Select	Odaberi
+	Select Tool	Alat za odabir
+	Select tools to display on your Home page for quick access.	Odaberite alate za prikaz na Početnoj stranici radi brzog pristupa.
+	Send backward	Pomjeri nazad
+	Send to back	Postavi na dno
+	Show Page Edge Shadows	Prikaži sjene ivica stranica
+	Show or hide the Tools panel	Prikaži ili sakrij panel Alati
+	Show or hide the side panel	Prikaži ili sakrij bočni panel
+	Some names are built as it runs	Neki nazivi se grade tokom izvršavanja
+	Stick to a side:	Prilijepi uz stranu:
+	Tab Order	Redoslijed tabulatora
+	This document has no text to make bookmarks from.	Ovaj dokument nema teksta iz kojeg bi se napravile zabilješke.
+	Toolbar size	Veličina trake alata
+	Transform image	Transformiši sliku
+	Unchecked reads	Neprovjerena čitanja
+	Unpin from Home	Otkači s Početne
+	Unpin tool	Otkači alat
+	Unpinned {tool} from Home	{tool} je otkačen s Početne
+	Unspecified	Nije navedeno
+	Use Column Order	Koristi redoslijed kolona
+	Use Document Structure	Koristi strukturu dokumenta
+	Use Row Order	Koristi redoslijed redova
+	Vertical layout	Uspravni raspored
+	Window	Prozor
+	bold	podebljano
+	italic	kurziv
+	{field} reads fields named as it runs	{field} čita polja imenovana tokom izvršavanja
+	{font}, {size} pt	{font}, {size} pt
+	{n} lines	{n} redova
+@plural	{fields} builds some field names as it runs, so those reads aren't checked.|{fields} build some field names as they run, so those reads aren't checked.	{fields} gradi neke nazive polja tokom izvršavanja, pa se ta čitanja ne provjeravaju.|{fields} grade neke nazive polja tokom izvršavanja, pa se ta čitanja ne provjeravaju.|{fields} grade neke nazive polja tokom izvršavanja, pa se ta čitanja ne provjeravaju.
+@plural	{fields} is missing|{fields} are missing	{fields} nedostaje|{fields} nedostaju|{fields} nedostaju
+@plural	{field} reads {fields}, which the form doesn't have.|{field} reads {fields}, which the form doesn't have.	{field} čita {fields}, koje obrazac nema.|{field} čita {fields}, koja obrazac nema.|{field} čita {fields}, koja obrazac nema.
+@plural	{n} formula reads a field the form doesn't have|{n} formulas read fields the form doesn't have	{n} formula čita polje koje obrazac nema|{n} formule čitaju polja koja obrazac nema|{n} formula čita polja koja obrazac nema
+@plural	{n} more formula reads a missing field.|{n} more formulas read missing fields.	Još {n} formula čita polje koje nedostaje.|Još {n} formule čitaju polja koja nedostaju.|Još {n} formula čita polja koja nedostaju.
