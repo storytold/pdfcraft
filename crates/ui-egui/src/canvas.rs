@@ -3338,9 +3338,9 @@ fn pinch_zoom(ui: &egui::Ui, view: &mut DocView, zoom_delta: f32, navigation_rec
 /// The middle-button auto-scroll's delta, and the edge scroll a drawing in progress asks for: the
 /// pointer in a band along any edge (or just past it) scrolls the view that way, so a point
 /// beyond what is shown can be reached without letting go of the tool.
-fn auto_scroll_deltas(ui: &egui::Ui, view: &mut DocView, avail: Rect, unobstructed: bool) -> (Vec2, Vec2) {
+fn auto_scroll_deltas(ui: &egui::Ui, view: &mut DocView, avail: Rect, unobstructed: bool, invert: bool) -> (Vec2, Vec2) {
     let auto_delta = if unobstructed {
-        view.auto_scroll.update(ui, avail, false)
+        view.auto_scroll.update(ui, avail, false, invert)
     } else {
         view.auto_scroll.cancel();
         Vec2::ZERO
@@ -3517,11 +3517,12 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let modal = app.modal_open();
     let unobstructed = !modal && !app.palette_open;
     let organize_zoom = app.organize_zoom;
+    let invert_middle = app.invert_middle_drag;
     let view = &mut app.views[index];
     if view.organize {
         // One remembered grid size for every document, kept in the settings.
         view.set_grid_zoom(organize_zoom);
-        organize_grid(view, doc, unobstructed, app.show_page_edge_shadows, ui, &t);
+        organize_grid(view, doc, unobstructed, app.show_page_edge_shadows, invert_middle, ui, &t);
         app.organize_zoom = view.grid_zoom();
         return;
     }
@@ -3541,7 +3542,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let present = presentation_click_state(ui, view, navigation_rect, navigation_enabled && app.quick_tool == QuickTool::Select);
     pinch_zoom(ui, view, zoom_delta, navigation_rect, navigation_enabled);
     view.viewport_screen = avail;
-    let (auto_delta, edge_delta) = auto_scroll_deltas(ui, view, avail, unobstructed);
+    let (auto_delta, edge_delta) = auto_scroll_deltas(ui, view, avail, unobstructed, invert_middle);
 
     let content_w = view.content_width(info, avail.width());
     let rects = view.layout(info, content_w, ui.ctx().pixels_per_point());
