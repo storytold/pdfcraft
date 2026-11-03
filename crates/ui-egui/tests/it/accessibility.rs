@@ -401,9 +401,13 @@ fn tags_panel_edits_role_mapped_table_summary_and_header_scope() {
     h.state_mut().undo();
     h.run_steps(2);
     assert_eq!(h.state().session.get(id).unwrap().tags()[1].scope.as_deref(), Some("Row"));
+    assert_eq!(h.get_by_role_and_label(Role::ComboBox, "Scope").value().as_deref(), Some("Row"));
     h.state_mut().undo();
     h.run_steps(2);
     assert_eq!(h.state().session.get(id).unwrap().tags()[0].summary.as_deref(), Some("Old summary"));
+    h.get_by_label("MyTable · 7").click();
+    h.run_steps(2);
+    assert_eq!(h.get_by_role_and_label(Role::TextInput, "Summary").value().as_deref(), Some("Old summary"));
 }
 
 #[test]

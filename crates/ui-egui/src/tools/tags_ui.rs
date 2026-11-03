@@ -17,6 +17,7 @@ pub(crate) struct State {
     collapsed: BTreeSet<ObjRef>,
     query: String,
     draft: Draft,
+    draft_source: Option<TagInfo>,
     /// The tag list per (document, edit generation): walking the structure tree is too slow
     /// to repeat every frame on a large tagged PDF.
     cache: Option<(DocId, u64, Arc<Vec<TagInfo>>)>,
@@ -124,6 +125,7 @@ impl State {
         self.doc = Some(doc);
         self.selected = Some(object);
         self.draft = Draft::from_tag(tag);
+        self.draft_source = Some(tag.clone());
         self.query.clear();
         self.collapsed.clear();
         true
@@ -144,6 +146,7 @@ pub(crate) fn panel(
         state.doc = Some(doc);
         state.selected = None;
         state.draft = Draft::default();
+        state.draft_source = None;
         state.query.clear();
         state.collapsed.clear();
     }
@@ -154,6 +157,7 @@ pub(crate) fn panel(
     if state.selected.is_none_or(|r| !tags.iter().any(|t| t.object == r)) {
         state.selected = Some(tags[0].object);
         state.draft = Draft::from_tag(&tags[0]);
+        state.draft_source = Some(tags[0].clone());
     }
     let search_label = ui.label(tl!("Find a tag"));
     ui.add(egui::TextEdit::singleline(&mut state.query).hint_text(tl!("Find a tag"))).labelled_by(search_label.id);
@@ -196,6 +200,7 @@ pub(crate) fn panel(
                 {
                     state.selected = Some(tag.object);
                     state.draft = Draft::from_tag(tag);
+                    state.draft_source = Some((*tag).clone());
                     page = tag.page;
                 }
             });
@@ -203,6 +208,17 @@ pub(crate) fn panel(
     });
     ui.separator();
     let Some(tag) = state.selected.and_then(|r| tags.iter().find(|t| t.object == r)) else { return (page, None) };
+    if let Some(source) = state.draft_source.as_ref().filter(|source| source.object == tag.object) {
+        if source.summary != tag.summary {
+            state.draft.summary = tag.summary.clone().unwrap_or_default();
+        }
+        if source.scope != tag.scope {
+            state.draft.scope = tag.scope.clone().unwrap_or_default();
+        }
+    } else {
+        state.draft = Draft::from_tag(tag);
+    }
+    state.draft_source = Some(tag.clone());
     ui.label(egui::RichText::new(format!("{} {} R", tag.object.num, tag.object.generation)).small().color(t.text_faint));
     if let Some(p) = tag.page
         && ui.button(crate::i18n::fmt(tl!("Go to page {p}"), &[("p", &(p + 1).to_string())])).clicked()
@@ -245,6 +261,7 @@ pub(crate) fn panel(
         save = ui.add_enabled(can_edit && !state.draft.kind.is_empty() && edit.is_some(), egui::Button::new(tl!("Save tag properties"))).clicked();
         if ui.add_enabled(dirty, egui::Button::new(tl!("Revert changes"))).clicked() {
             state.draft = Draft::from_tag(tag);
+            state.draft_source = Some(tag.clone());
         }
     });
     let (mut earlier, mut later, mut artifact) = (false, false, false);
