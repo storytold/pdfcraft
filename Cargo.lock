@@ -4674,7 +4674,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-jxl"
-version = "0.16.1"
+version = "0.18.1"
 dependencies = [
  "jixel",
  "jxl-oxide",
