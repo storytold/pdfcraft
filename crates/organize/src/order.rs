@@ -22,6 +22,21 @@ pub enum FileSort {
     Folder,
 }
 
+impl FileSort {
+    /// The sort a headless caller asked for by `name`, or what is wrong with `name`, worded to
+    /// follow the option's own name. [`FileSort::Rank`] has no name, because a rank is the caller's.
+    pub fn from_name(name: &str) -> Result<FileSort, String> {
+        match name {
+            "name" => Ok(FileSort::Name),
+            "pages" => Ok(FileSort::Pages),
+            "size" => Ok(FileSort::Size),
+            "modified" => Ok(FileSort::Modified),
+            "folder" => Ok(FileSort::Folder),
+            other => Err(format!("must be \"name\", \"pages\", \"size\", \"modified\" or \"folder\", not {other:?}")),
+        }
+    }
+}
+
 /// What a file is sorted on. A field only needs a real value when its [`FileSort`] is in use.
 #[derive(Clone, Copy, Debug)]
 pub struct FileFacts<'a> {
@@ -195,6 +210,15 @@ mod tests {
     fn ranks_sort_lowest_first() {
         let files = [FileFacts { rank: 2, ..named("fine") }, FileFacts { rank: 0, ..named("stuck") }, FileFacts { rank: 1, ..named("warned") }];
         assert_eq!(sorted(&files, FileSort::Rank, true), ["stuck", "warned", "fine"]);
+    }
+
+    #[test]
+    fn a_headless_caller_names_every_sort_but_rank() {
+        assert_eq!(FileSort::from_name("folder"), Ok(FileSort::Folder));
+        for wrong in ["rank", "Name", ""] {
+            let why = FileSort::from_name(wrong).unwrap_err();
+            assert!(why.contains("\"modified\"") && why.contains(&format!("{wrong:?}")), "{why}");
+        }
     }
 
     #[test]

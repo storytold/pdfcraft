@@ -145,7 +145,7 @@ use pictures::{embed_image, fit_picture, mark_source};
 use protection::unrestricted;
 pub use protection::{Changes, Printing, Protection, SecuritySummary};
 pub use session::Session;
-pub use sources::{CombineSource, Combined, combine_source_check, source_page_count};
+pub use sources::{CombineSource, Combined, SortedSource, combine_order, combine_source_check, source_page_count};
 use sources::{open_source, open_source_with};
 #[cfg(test)]
 use test_hooks::{check_refresh_panic, panic_on_refresh, record_link_scan, record_marker_scan, reset_secondary_scan_counts, secondary_scan_counts};

@@ -1,3 +1,6 @@
+use pdfcraft_engine::order::FileSort;
+use pdfcraft_engine::{SortedSource, combine_order};
+
 use super::options::{
     COMBINE_OPTIONS, EXTRACT_OPTIONS, INFO_OPTIONS, RENDER_OPTIONS, SPLIT_OPTIONS, TEXT_OPTIONS, can_be_path_value, flag, needs_value, positional,
     validate_options,
@@ -288,7 +291,31 @@ pub(crate) fn combine(args: &[String]) -> Result<(), CliError> {
     if inputs.len() < 2 {
         return Err("combine: give at least two input files".into());
     }
-    let sources = inputs.iter().map(|p| Ok((file_stem(p), read(p)?))).collect::<Result<Vec<_>, String>>()?;
+    let sort = match (args.iter().any(|a| a == "--sort"), flag(args, "--sort")) {
+        (true, None) => return Err("combine: --sort needs a value".into()),
+        (_, name) => name.map(FileSort::from_name).transpose().map_err(|e| format!("combine: --sort {e}"))?,
+    };
+    let descending = args.iter().any(|a| a == "--descending");
+    if descending && sort.is_none() {
+        return Err("combine: --descending needs --sort".into());
+    }
+    let mut sources = inputs.iter().map(|p| Ok((file_stem(p), read(p)?))).collect::<Result<Vec<_>, String>>()?;
+    if let Some(by) = sort {
+        let order = {
+            let files: Vec<SortedSource> = sources
+                .iter()
+                .zip(&inputs)
+                .map(|((_, bytes), path)| SortedSource {
+                    bytes,
+                    path: Path::new(path),
+                    modified: std::fs::metadata(path).and_then(|m| m.modified()).ok(),
+                    password: None,
+                })
+                .collect();
+            combine_order(&files, by, !descending)
+        };
+        sources = order.iter().filter_map(|at| sources.get(*at).cloned()).collect();
+    }
     let bytes = pdfcraft_engine::Session::new().combine(&sources).map_err(|e| e.to_string())?;
     write_pdf(Path::new(out), &bytes)
 }

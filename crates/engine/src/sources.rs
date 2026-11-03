@@ -1,6 +1,10 @@
 //! Other files to combine with or copy pages from: opening them, and why one can't be used.
 
+use std::path::Path;
 use std::sync::Arc;
+use std::time::SystemTime;
+
+use pdfcraft_organize::order::{FileFacts, FileSort, file_order};
 
 use crate::{EditError, SourceProblem};
 
@@ -59,6 +63,37 @@ fn source_document(bytes: &Arc<Vec<u8>>, password: Option<&str>) -> Result<pdfcr
 /// is pressed. The owner (permissions) password lifts the restriction on copying pages.
 pub fn combine_source_check(bytes: &Arc<Vec<u8>>, password: Option<&str>) -> Result<(), SourceProblem> {
     source_document(bytes, password).map(|_| ())
+}
+
+/// A file about to be combined, as [`combine_order`] reads it.
+#[derive(Clone, Copy, Debug)]
+pub struct SortedSource<'a> {
+    pub bytes: &'a Arc<Vec<u8>>,
+    pub path: &'a Path,
+    /// When the file was last modified, which the caller reads under its own rules for what it
+    /// may touch.
+    pub modified: Option<SystemTime>,
+    pub password: Option<&'a str>,
+}
+
+/// The order `files` go in when sorted `by`, ascending or not, as positions in `files`. A file
+/// whose pages can't be counted sorts as having none; combining it then says what is wrong with it.
+pub fn combine_order(files: &[SortedSource<'_>], by: FileSort, ascending: bool) -> Vec<usize> {
+    let names: Vec<String> = files.iter().map(|f| f.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()).collect();
+    let facts: Vec<FileFacts> = files
+        .iter()
+        .zip(&names)
+        .map(|(file, name)| FileFacts {
+            name,
+            // Counting opens the file, so only a sort by pages pays for it.
+            pages: if by == FileSort::Pages { source_page_count(file.bytes, file.password).unwrap_or(0) } else { 0 },
+            size: file.bytes.len(),
+            modified: file.modified,
+            folder: file.path.parent(),
+            rank: 0,
+        })
+        .collect();
+    file_order(&facts, by, ascending)
 }
 
 /// The number of pages of `bytes`, opened with `password` (user or owner) if given, whatever

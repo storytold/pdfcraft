@@ -1232,6 +1232,111 @@ fn combine_takes_images_and_text_files() {
     }
 }
 
+/// Put `path` under `dir`, in its folders, as a PDF of `pages` pages.
+fn write_pdf(dir: &Path, path: &str, pages: usize) {
+    let path = dir.join(path);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, fixture(pages)).unwrap();
+}
+
+/// Run doc_combine with `args`, opening the result: the files it holds, in order, by bookmark.
+fn combined_files(a: &mut Automation, mut args: Value) -> Vec<String> {
+    args["open"] = json!(true);
+    let combined = ok(a, "doc_combine", args);
+    let doc = combined["document"]["doc"].as_u64().unwrap();
+    let marks = ok(a, "bookmark_list", json!({ "doc": doc }))["bookmarks"].clone();
+    marks.as_array().unwrap().iter().map(|b| b["title"].as_str().unwrap().to_string()).collect()
+}
+
+#[test]
+fn combine_sorts_by_name_and_lists_the_order_it_used() {
+    let dir = workdir("combine-sort-name");
+    write_pdf(&dir, "scan10.pdf", 1);
+    write_pdf(&dir, "Scan2.pdf", 1);
+    let mut a = auto(&dir);
+    let paths = json!(["scan10.pdf", "b.pdf", "Scan2.pdf", "a.pdf"]);
+    assert_eq!(combined_files(&mut a, json!({ "paths": paths, "sort": "name" })), ["a", "b", "Scan2", "scan10"], "numbers by value, without case");
+    assert_eq!(combined_files(&mut a, json!({ "paths": paths, "sort": "name", "descending": true })), ["scan10", "Scan2", "b", "a"]);
+    let sorted = ok(&mut a, "doc_combine", json!({ "paths": paths, "sort": "name", "open": true }));
+    assert_eq!(sorted["order"], json!(["a.pdf", "b.pdf", "Scan2.pdf", "scan10.pdf"]), "as the caller wrote them");
+    let unsorted = ok(&mut a, "doc_combine", json!({ "paths": paths, "open": true }));
+    assert!(unsorted.get("order").is_none(), "without sort the paths are the order");
+}
+
+#[test]
+fn combine_sorts_by_pages_size_and_modified_time() {
+    let dir = workdir("combine-sort-facts");
+    // One page, yet the largest file: padding between the trailer and startxref moves no offset.
+    let padded = String::from_utf8(fixture(1)).unwrap().replace("startxref", &format!("{}\nstartxref", "% padding\n".repeat(5000)));
+    std::fs::write(dir.join("padded.pdf"), padded).unwrap();
+    let times = [("b.pdf", 100), ("padded.pdf", 200), ("a.pdf", 300)];
+    for (name, seconds) in times {
+        let file = std::fs::File::options().write(true).open(dir.join(name)).unwrap();
+        file.set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(seconds)).unwrap();
+    }
+    let mut a = auto(&dir);
+    let paths = json!(["a.pdf", "padded.pdf", "b.pdf"]);
+    assert_eq!(combined_files(&mut a, json!({ "paths": paths, "sort": "pages" })), ["padded", "b", "a"]);
+    assert_eq!(combined_files(&mut a, json!({ "paths": paths, "sort": "size" })), ["b", "a", "padded"]);
+    assert_eq!(combined_files(&mut a, json!({ "paths": paths, "sort": "modified" })), ["b", "padded", "a"]);
+    assert_eq!(combined_files(&mut a, json!({ "paths": paths, "sort": "modified", "descending": true })), ["a", "padded", "b"]);
+}
+
+#[test]
+fn combine_sorts_by_folder_a_folder_before_the_folders_inside_it() {
+    let dir = workdir("combine-sort-folder");
+    for path in ["sub b/side.pdf", "sub/top.pdf", "sub/inner/deep.pdf", "sub/inner/Alpha.pdf"] {
+        write_pdf(&dir, path, 1);
+    }
+    let mut a = auto(&dir);
+    let paths = json!(["sub b/side.pdf", "sub/inner/deep.pdf", "sub/top.pdf", "a.pdf", "sub/inner/Alpha.pdf"]);
+    assert_eq!(combined_files(&mut a, json!({ "paths": paths, "sort": "folder" })), ["a", "top", "Alpha", "deep", "side"]);
+    assert_eq!(
+        combined_files(&mut a, json!({ "paths": paths, "sort": "folder", "descending": true })),
+        ["side", "Alpha", "deep", "top", "a"],
+        "names stay in order within a folder"
+    );
+}
+
+#[test]
+fn a_sorted_file_keeps_its_pages_and_password() {
+    let dir = workdir("combine-sort-keeps");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "doc_protect", json!({ "doc": doc, "open_password": "open", "permissions_password": "boss", "changes": "none" }));
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "locked.pdf" }));
+    let ranged = ok(&mut a, "doc_combine", json!({ "paths": ["a.pdf", "b.pdf"], "pages": ["3", null], "sort": "pages", "open": true }));
+    assert_eq!(page_text(&mut a, ranged["document"]["doc"].as_u64().unwrap()), ["Page 1", "Page 2", "Page 3"], "b.pdf, then page 3 of a.pdf");
+    let args = |sort: &str, descending: bool| json!({ "paths": ["locked.pdf", "b.pdf"], "passwords": ["boss", null], "sort": sort, "descending": descending });
+    assert_eq!(combined_files(&mut a, args("name", false)), ["b", "locked"]);
+    // Its three pages are counted with its password: without it the file would count as none.
+    assert_eq!(combined_files(&mut a, args("pages", false)), ["b", "locked"]);
+    assert_eq!(combined_files(&mut a, args("pages", true)), ["locked", "b"]);
+    let sorted = ok(&mut a, "doc_combine", args("name", false));
+    assert!(!sorted.to_string().contains("boss"), "passwords are never echoed");
+}
+
+#[test]
+fn combine_says_what_is_wrong_with_a_sort() {
+    let dir = workdir("combine-sort-refused");
+    std::fs::write(dir.join("damaged.pdf"), b"not a pdf").unwrap();
+    let mut a = auto(&dir);
+    let refused = |a: &mut Automation, args: Value| match a.call("doc_combine", &args) {
+        Err(ToolError::InvalidArgs(why)) => why,
+        other => panic!("{args}: expected a refusal, got {other:?}"),
+    };
+    let paths = json!(["a.pdf", "b.pdf"]);
+    let why = refused(&mut a, json!({ "paths": paths, "sort": "colour" }));
+    assert!(why.contains("colour") && why.contains("\"folder\""), "{why}");
+    assert!(refused(&mut a, json!({ "paths": paths, "sort": 7 })).contains("sort"));
+    assert!(refused(&mut a, json!({ "paths": paths, "descending": true })).contains("needs sort"));
+    assert!(refused(&mut a, json!({ "paths": paths, "sort": "name", "descending": "yes" })).contains("descending"));
+    assert!(refused(&mut a, json!({ "paths": ["a.pdf", "b.pdf", "a.pdf"], "groups": [1, null, 1], "sort": "name" })).contains("groups"));
+    // A file sorted on what can't be read of it still stops the combine, and says which.
+    let damaged = a.call("doc_combine", &json!({ "paths": ["a.pdf", "damaged.pdf"], "sort": "pages" }));
+    assert!(matches!(&damaged, Err(ToolError::Failed(e)) if e.contains("damaged")), "{damaged:?}");
+}
+
 #[test]
 fn combine_extract_and_split() {
     let dir = workdir("organize");
