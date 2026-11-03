@@ -112,6 +112,10 @@ impl DataNode {
                 return None;
             }
             let have = node.children.iter().filter(|c| &c.name == name).count();
+            // Every skipped sibling owns a copy of the name: bounded as `Build::at` bounds a write.
+            if (*idx + 1).saturating_sub(have).saturating_mul(name.len()) > build::MAX_NEW_NAME_BYTES {
+                return None;
+            }
             for _ in have..=*idx {
                 node.children.push(DataNode { name: name.clone(), ..Default::default() });
             }

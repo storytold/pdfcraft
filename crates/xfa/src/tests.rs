@@ -4531,3 +4531,28 @@ fn a_container_is_as_wide_as_a_turned_draw_stands() {
         assert!((got - right).abs() < 0.01, "{rotate}: the neighbour stands {got} right of the anchor, not {right}");
     }
 }
+
+/// Every sibling a SOM index skips owns a copy of the element name: the in-memory builder refuses
+/// a path whose copies would pass the name-byte bound the writer holds itself to, and creates
+/// nothing for it.
+#[test]
+fn the_in_memory_data_builder_bounds_copied_name_bytes() {
+    let mut root = DataNode::default();
+    // 1 KiB x 9,999 skipped siblings is about 10 MB, over the 4 MiB bound.
+    let long = "n".repeat(1 << 10);
+    root.apply(&DataOp::Value { path: vec![(long.clone(), 9_999)], text: "x".into() });
+    assert!(root.children.is_empty());
+    // Within the bound, the same shape still builds (and keeps indexes).
+    root.apply(&DataOp::Value { path: vec![(long, 100)], text: "x".into() });
+    assert_eq!(root.children.len(), 101);
+}
+
+/// Each queued instance owns a copy of its parent path: a long ancestor stops the queue at the
+/// byte allowance, reported as capped, instead of being multiplied by the instance count.
+#[test]
+fn queued_instances_are_bounded_by_the_path_bytes_they_copy() {
+    let mut doc = Document::new_empty();
+    let parent: DataPath = vec![("a".repeat(16 << 20), 0), ("b".repeat(16 << 20), 0)];
+    let written = crate::data::write_data_ops(&mut doc, &[DataOp::Instances { parent, name: "row".into(), count: 100 }], None).unwrap();
+    assert!(written.warnings.iter().any(|w| w.contains("not written past")), "{:?}", written.warnings);
+}

@@ -82,6 +82,11 @@ pub fn remove_data_instance(doc: &mut Document, path: &DataPath) -> Result<Datas
 /// pass, which asks for the instances again).
 const MAX_ENSURED: usize = 200_000;
 
+/// Most bytes of path text those queued instances hold together: each one owns a copy of its
+/// parent path and its name (twice, once as the path and once as its label), so a long ancestor
+/// would otherwise be multiplied by the instance count. Ordinary paths are tens of bytes.
+const MAX_ENSURED_BYTES: usize = 128 << 20;
+
 // Instance nodes write_data_ops has queued on this thread, for tests that bound its work.
 #[cfg(test)]
 thread_local! {
@@ -99,7 +104,7 @@ pub fn write_data_ops(doc: &mut Document, ops: &[DataOp], reuse: Option<ObjRef>)
     let mut run: Vec<Want> = Vec::new();
     // Instances queued in this run, by parent and name: asking for more only queues the rest.
     let mut queued: HashMap<(&DataPath, &str), usize> = HashMap::new();
-    let (mut ensured, mut capped) = (0usize, false);
+    let (mut ensured, mut ensured_bytes, mut capped) = (0usize, 0usize, false);
     let flush = |run: &mut Vec<Want>, steps: &mut Vec<Vec<Want>>, removes: &mut Vec<Option<DataPath>>| {
         if !run.is_empty() {
             let mut seen = std::collections::HashSet::new();
@@ -117,12 +122,14 @@ pub fn write_data_ops(doc: &mut Document, ops: &[DataOp], reuse: Option<ObjRef>)
             }
             DataOp::Instances { parent, name, count } => {
                 let done = queued.entry((parent, name.as_str())).or_insert(0);
+                let per_instance = parent.iter().fold(name.len().saturating_mul(2), |n, (p, _)| n.saturating_add(p.len()).saturating_add(16));
                 while *done < (*count).min(MAX_INDEX) {
-                    if ensured >= MAX_ENSURED {
+                    if ensured >= MAX_ENSURED || ensured_bytes.saturating_add(per_instance) > MAX_ENSURED_BYTES {
                         capped = true;
                         break;
                     }
                     ensured += 1;
+                    ensured_bytes += per_instance;
                     #[cfg(test)]
                     ENSURED.with(|n| n.set(n.get() + 1));
                     let k = *done;

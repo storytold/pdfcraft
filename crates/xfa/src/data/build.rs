@@ -38,7 +38,7 @@ pub(super) const MAX_INDEX: usize = 10_000;
 
 /// Most bytes of names the nodes one write creates hold together: every sibling an index
 /// skips over gets its own copy of the name.
-const MAX_NEW_NAME_BYTES: usize = 4 << 20;
+pub(super) const MAX_NEW_NAME_BYTES: usize = 4 << 20;
 
 /// What one write may still create: nodes and bytes of their names.
 pub(super) struct NewNodes {
