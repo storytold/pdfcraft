@@ -407,9 +407,6 @@ mod tests {
             "publish",
             "check_unique_outputs",
             "probe_files_for_resolved_outputs",
-            "add_resolved_path",
-            "remove_resolved_paths",
-            "remove_resolved_probe",
         ];
         let mut dirs = vec![Path::new(env!("CARGO_MANIFEST_DIR")).join("src")];
         let mut files = vec![];

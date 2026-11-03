@@ -209,10 +209,12 @@ fn check_unique_outputs(targets: &[(String, PathBuf)], dry_run: bool) -> Result<
         let parent = target.parent().ok_or_else(|| failed(format!("output has no parent directory: {name}")))?;
         let identity = parent.canonicalize().map_err(failed)?;
         let probe_name = output_probe_name(target).map_err(failed)?;
-        groups.entry(identity).or_insert_with(|| (parent.to_path_buf(), Vec::new())).1.push((name.clone(), probe_name));
+        groups.entry(identity.clone()).or_insert_with(|| (identity, Vec::new())).1.push((name.clone(), probe_name));
     }
 
     if dry_run {
+        // Dry runs cannot probe the volume: Windows uses a conservative case-insensitive comparison,
+        // while Unix preserves case, so unusual case-sensitive Windows or case-insensitive Unix volumes can differ.
         for (_, (_, names)) in groups {
             for (index, (name, candidate)) in names.iter().enumerate() {
                 if names.iter().take(index).any(|(_, prior)| same_output_name(prior, candidate)) {
@@ -237,6 +239,7 @@ fn check_unique_outputs(targets: &[(String, PathBuf)], dry_run: bool) -> Result<
                     }
                 }
             }
+            #[cfg(windows)]
             Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => probe_files_for_resolved_outputs(&parent, names)?,
             Err(error) => return Err(failed(error)),
         }
@@ -244,51 +247,26 @@ fn check_unique_outputs(targets: &[(String, PathBuf)], dry_run: bool) -> Result<
     Ok(())
 }
 
+#[cfg(windows)]
 fn probe_files_for_resolved_outputs(parent: &Path, names: Vec<(String, std::ffi::OsString)>) -> Result<()> {
-    let mut probes = OutputProbeFiles::default();
+    use std::os::windows::fs::OpenOptionsExt;
+
+    const FILE_FLAG_DELETE_ON_CLOSE: u32 = 0x0400_0000;
+    let mut probes = Vec::with_capacity(names.len());
     for (name, probe_name) in names {
         let probe = parent.join(probe_name);
-        match std::fs::OpenOptions::new().write(true).create_new(true).open(&probe) {
-            Ok(file) => probes.add_resolved_path(probe, file),
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true).share_mode(0).custom_flags(FILE_FLAG_DELETE_ON_CLOSE);
+        match options.open(&probe) {
+            Ok(file) => probes.push(file),
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
                 return Err(failed(format!("two files use the same output path: {name}")));
             }
             Err(error) => return Err(failed(format!("could not validate output path {name}: {error}"))),
         }
     }
-    probes.remove_resolved_paths().map_err(|error| failed(format!("could not remove output preflight file: {error}")))
-}
-
-#[derive(Default)]
-struct OutputProbeFiles(Vec<PathBuf>);
-
-impl OutputProbeFiles {
-    fn add_resolved_path(&mut self, path: PathBuf, file: std::fs::File) {
-        drop(file);
-        self.0.push(path);
-    }
-
-    fn remove_resolved_paths(&mut self) -> std::io::Result<()> {
-        while let Some(path) = self.0.pop() {
-            if let Err(error) = remove_resolved_probe(&path) {
-                self.0.push(path);
-                return Err(error);
-            }
-        }
-        Ok(())
-    }
-}
-
-impl Drop for OutputProbeFiles {
-    fn drop(&mut self) {
-        for path in self.0.drain(..) {
-            let _ = remove_resolved_probe(&path);
-        }
-    }
-}
-
-fn remove_resolved_probe(path: &Path) -> std::io::Result<()> {
-    std::fs::remove_file(path)
+    drop(probes);
+    Ok(())
 }
 
 fn same_output_name(left: &std::ffi::OsStr, right: &std::ffi::OsStr) -> bool {
@@ -388,24 +366,6 @@ mod tests {
         assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
     }
 
-    #[test]
-    fn direct_file_probes_are_removed_after_success() {
-        let dir = tempfile::tempdir().unwrap();
-        let names = vec![("first.pdf".into(), "first.pdf".into()), ("second.pdf".into(), "second.pdf".into())];
-        super::probe_files_for_resolved_outputs(dir.path(), names).unwrap();
-        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
-    }
-
-    #[test]
-    fn direct_file_probes_are_removed_after_collision() {
-        let dir = tempfile::tempdir().unwrap();
-        let first = std::ffi::OsString::from("same.pdf");
-        let second = first.clone();
-        let names = vec![("first.pdf".into(), first), ("second.pdf".into(), second)];
-        assert!(super::probe_files_for_resolved_outputs(dir.path(), names).is_err());
-        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
-    }
-
     #[cfg(unix)]
     #[test]
     fn output_probe_paths_preserve_non_utf8_names() {
@@ -439,6 +399,30 @@ mod tests {
         let second = dir.path().join("CASE.pdf");
         let targets = vec![("first.pdf".into(), first), ("second.pdf".into(), second)];
         assert!(check_unique_outputs(&targets, true).is_err());
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn permission_denied_child_directory_uses_delete_on_close_file_probes() {
+        use std::process::Command;
+
+        let dir = tempfile::tempdir().unwrap();
+        let identity = Command::new("whoami.exe").args(["/user", "/fo", "csv", "/nh"]).output().unwrap();
+        assert!(identity.status.success());
+        let identity = String::from_utf8(identity.stdout).unwrap();
+        let sid = identity.split('"').nth(3).unwrap();
+        let acl = Command::new("icacls.exe").arg(dir.path()).arg("/deny").arg(format!("*{sid}:(AD)")).status().unwrap();
+        assert!(acl.success());
+
+        assert!(matches!(tempfile::tempdir_in(dir.path()), Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied));
+        let direct_probe = dir.path().join("direct-probe");
+        let file = std::fs::OpenOptions::new().write(true).create_new(true).open(&direct_probe).unwrap();
+        drop(file);
+        std::fs::remove_file(&direct_probe).unwrap();
+
+        let targets = vec![("first.pdf".into(), dir.path().join("first.pdf")), ("second.pdf".into(), dir.path().join("second.pdf"))];
+        assert!(check_unique_outputs(&targets, false).is_ok());
         assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
     }
 }
