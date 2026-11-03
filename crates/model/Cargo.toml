@@ -10,3 +10,6 @@ workspace = true
 
 [dependencies]
 pdfcraft-cos = { workspace = true }
+
+[dev-dependencies]
+pdfcraft-testkit = { workspace = true }

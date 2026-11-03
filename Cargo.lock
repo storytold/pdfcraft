@@ -4502,6 +4502,7 @@ name = "pdfcraft-model"
 version = "0.18.0"
 dependencies = [
  "pdfcraft-cos",
+ "pdfcraft-testkit",
 ]
 
 [[package]]
