@@ -300,6 +300,9 @@ fn a_pkcs12_without_base64_padding_still_opens() {
     assert_eq!(pkcs12::open(with_tab.as_bytes(), "test").unwrap().certificate, signer.certificate, "a vertical tab is whitespace");
     let pem = format!("-----BEGIN PKCS12-----\n{unpadded}\n-----END PKCS12-----\n");
     assert_eq!(pkcs12::open(pem.as_bytes(), "test").unwrap().certificate, signer.certificate);
+    // A vertical tab is whitespace around the armour too (RFC 7468), as for certificates.
+    let tabbed = format!("\u{b}{pem}\u{b}");
+    assert_eq!(pkcs12::open(tabbed.as_bytes(), "test").unwrap().certificate, signer.certificate, "a vertical tab around the armour");
     // A `=` inside the body is still not base64.
     let inside = format!("{}={}", &b64[..8], &b64[8..]);
     assert!(matches!(pkcs12::open(inside.as_bytes(), "test"), Err(SignError::Malformed(_))));

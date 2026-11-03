@@ -23,7 +23,7 @@ use hmac::Mac;
 use crate::SignError;
 use crate::der::{self, Tlv, tag};
 use crate::keys::{DigestAlg, PrivateKey};
-use crate::x509::Certificate;
+use crate::x509::{Certificate, is_pem_space};
 
 const DATA: &str = "1.2.840.113549.1.7.1";
 const ENCRYPTED_DATA: &str = "1.2.840.113549.1.7.6";
@@ -340,8 +340,8 @@ fn bags(safe_contents: &[u8], password: &str, out: &mut Vec<Bag>, budget: &mut B
 }
 
 fn normalize(bytes: &[u8]) -> Result<Cow<'_, [u8]>, SignError> {
-    let start = bytes.iter().position(|b| !b.is_ascii_whitespace()).unwrap_or(0);
-    let end = bytes.iter().rposition(|b| !b.is_ascii_whitespace()).map_or(0, |i| i + 1);
+    let start = bytes.iter().position(|b| !is_pem_space(*b)).unwrap_or(0);
+    let end = bytes.iter().rposition(|b| !is_pem_space(*b)).map_or(0, |i| i + 1);
     let trimmed = bytes.get(start..end).unwrap_or(b""); // hostile input: no slicing by hand
 
     // 1. A DER file starts with a SEQUENCE tag: borrow, no work.
@@ -355,7 +355,7 @@ fn normalize(bytes: &[u8]) -> Result<Cow<'_, [u8]>, SignError> {
     }
     // 3. Raw base64 text, armour or not (a real DER PFX always contains bytes
     //    outside the base64 alphabet, so this can't swallow a valid file).
-    if trimmed.iter().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'/' | b'=' | 0x0b) || b.is_ascii_whitespace()) {
+    if trimmed.iter().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'/' | b'=') || is_pem_space(*b)) {
         return Ok(Cow::Owned(decode_base64(trimmed)?));
     }
     // 4. Not recognisable: hand the bytes to Tlv::parse_all for a clear error.
@@ -375,7 +375,7 @@ fn pem_body(pem: &[u8]) -> Result<&[u8], SignError> {
     let body_start = text[begin..].find('\n').map_or(text.len(), |i| begin + i + 1);
     let body_end = text.find("-----END ").filter(|end| *end >= body_start).ok_or_else(|| bad("PEM file has no END marker"))?;
     let body = text.as_bytes().get(body_start..body_end).ok_or_else(|| bad("PEM body"))?;
-    if !body.iter().any(|b| !b.is_ascii_whitespace()) {
+    if body.iter().all(|b| is_pem_space(*b)) {
         return Err(bad("PEM file has an empty body"));
     }
     Ok(body)
