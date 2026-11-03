@@ -1,7 +1,7 @@
-# PdfCraft Android v0.17.0-rc.1 Release Notes
+# PdfCraft Android v0.18.0-rc.1 Release Notes
 
-**Version Name:** `0.17.0-rc.1`  
-**Version Code:** `1700010` (Multi-ABI) / `1700012` (arm64-v8a) / `1700013` (x86_64)  
+**Version Name:** `0.18.0-rc.1`  
+**Version Code:** `1800010` (Multi-ABI) / `1800012` (arm64-v8a) / `1800013` (x86_64)  
 **Package Name:** `io.github.dikshant363.pdfcraft`  
 **Minimum Android:** Android 12 (API level 31)  
 **Target Android:** Android 15 (API level 36)  
@@ -11,7 +11,7 @@
 
 ## 1. Overview
 
-PdfCraft Android v0.17.0-rc.1 is the first official release candidate of the native Android port of PdfCraft.
+PdfCraft Android v0.18.0-rc.1 is the first official release candidate of the native Android port of PdfCraft, aligned with upstream PdfCraft 0.18.0.
 
 Built completely from scratch using Kotlin and Jetpack Compose on top of the open-source Rust PDF engine via high-performance UniFFI bindings, PdfCraft Android delivers a fast, privacy-first, fully offline PDF viewing and editing workstation for mobile devices without using any WebViews, Flutter, or third-party cloud backends.
 
@@ -54,9 +54,9 @@ Built completely from scratch using Kotlin and Jetpack Compose on top of the ope
 
 | File | Target Architecture | Size | SHA-256 Digest |
 | :--- | :--- | :--- | :--- |
-| **`app-release-unsigned.apk`** | Universal (`arm64-v8a`, `x86_64`) | 70 MiB | `7707e5f13c2551d97f01795ec0876a32763d04ac3c4a351eccfbee67719d9224` |
-| **`app-release.aab`** | Google Play App Bundle | 67 MiB | `f86952c0fdff09e541baad0eb32a3c8adc17750107fe73ced06cc7230a6095f1` |
-| **`app-debug.apk`** | Universal (Debug) | 135 MiB | `5eee54dfc33a02d4f3fe19ebdb780b0009b99c43478cd46301ca5f7e449f2434` |
+| **`app-release-unsigned.apk`** | Universal (`arm64-v8a`, `x86_64`) | 70.2 MiB | `cac961bd0a598b89a8fc53599c45f469dbd1bff4078a65471338652bb3d2ded3` |
+| **`app-release.aab`** | Google Play App Bundle | 66.7 MiB | `53689c13a6edd9bcf2d1b6e999762754521adb46c541ffde72ffdff7d51f1468` |
+| **`app-debug.apk`** | Universal (Debug) | 134.6 MiB | `5eee54dfc33a02d4f3fe19ebdb780b0009b99c43478cd46301ca5f7e449f2434` |
 | **`app-debug-androidTest.apk`** | On-Device Test Runner | 2.3 MiB | `f5bf09718ad6b338c91c4b394fe22ac0b75cc071d80efab9c387b21f258ab5bc` |
 
 ---

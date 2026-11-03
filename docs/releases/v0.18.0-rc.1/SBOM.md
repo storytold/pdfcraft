@@ -1,7 +1,7 @@
-# Software Bill of Materials (SBOM) — PdfCraft Android v0.17.0-rc.1
+# Software Bill of Materials (SBOM) — PdfCraft Android v0.18.0-rc.1
 
 **Application Identifier:** `io.github.dikshant363.pdfcraft`  
-**Version:** `0.17.0-rc.1` (Version Code: `1700010`)  
+**Version:** `0.18.0-rc.1` (Version Code: `1800010`)  
 **Specification:** SPDX 2.3 / CycloneDX Alignment  
 **Target Architecture:** `arm64-v8a`, `x86_64`  
 **Minimum Android API:** 31 (Android 12)  
@@ -13,11 +13,11 @@
 
 | Component | Language / Ecosystem | Version | License | Role |
 | :--- | :--- | :--- | :--- | :--- |
-| **`io.github.dikshant363.pdfcraft`** | Kotlin / Jetpack Compose | 0.17.0-rc.1 | MIT OR Apache-2.0 | Android Native User Interface & Document Controller |
-| **`pdfcraft-android`** | Rust | 0.17.0 | MIT OR Apache-2.0 | Native C-ABI / UniFFI JNI bridge shared library |
-| **`pdfcraft-engine`** | Rust | 0.17.0 | MIT OR Apache-2.0 | Core PDF document model, layout, and tool execution |
-| **`pdfcraft-render`** | Rust | 0.17.0 | MIT OR Apache-2.0 | High-fidelity software and tiled rendering pipeline |
-| **`pdfcraft-automation`** | Rust | 0.17.0 | MIT OR Apache-2.0 | Headless tool execution, scripts, and AcroForm calculations |
+| **`io.github.dikshant363.pdfcraft`** | Kotlin / Jetpack Compose | 0.18.0-rc.1 | MIT OR Apache-2.0 | Android Native User Interface & Document Controller |
+| **`pdfcraft-android`** | Rust | 0.18.0 | MIT OR Apache-2.0 | Native C-ABI / UniFFI JNI bridge shared library |
+| **`pdfcraft-engine`** | Rust | 0.18.0 | MIT OR Apache-2.0 | Core PDF document model, layout, and tool execution |
+| **`pdfcraft-render`** | Rust | 0.18.0 | MIT OR Apache-2.0 | High-fidelity software and tiled rendering pipeline |
+| **`pdfcraft-automation`** | Rust | 0.18.0 | MIT OR Apache-2.0 | Headless tool execution, scripts, and AcroForm calculations |
 
 ---
 

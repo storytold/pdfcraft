@@ -4454,7 +4454,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-android"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "android_logger",
  "log",
@@ -4469,7 +4469,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-android-bindgen"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "uniffi",
 ]

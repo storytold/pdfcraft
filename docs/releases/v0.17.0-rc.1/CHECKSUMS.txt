@@ -1,8 +1,0 @@
-# PdfCraft Android v0.17.0-rc.1 Checksums
-# Generated on: 2026-11-03
-# Format: SHA-256 (64 hex characters)  Filename (Size)
-
-7707e5f13c2551d97f01795ec0876a32763d04ac3c4a351eccfbee67719d9224  app-release-unsigned.apk (73,400,320 bytes / 70 MiB)
-f86952c0fdff09e541baad0eb32a3c8adc17750107fe73ced06cc7230a6095f1  app-release.aab (70,254,592 bytes / 67 MiB)
-5eee54dfc33a02d4f3fe19ebdb780b0009b99c43478cd46301ca5f7e449f2434  app-debug.apk (141,557,760 bytes / 135 MiB)
-f5bf09718ad6b338c91c4b394fe22ac0b75cc071d80efab9c387b21f258ab5bc  app-debug-androidTest.apk (2,442,165 bytes / 2.3 MiB)

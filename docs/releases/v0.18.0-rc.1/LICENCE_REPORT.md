@@ -1,4 +1,4 @@
-# Software Licence and Attribution Report — PdfCraft Android v0.17.0-rc.1
+# Software Licence and Attribution Report — PdfCraft Android v0.18.0-rc.1
 
 **Application Identifier:** `io.github.dikshant363.pdfcraft`  
 **Licence:** MIT OR Apache-2.0 (Dual License)  
