@@ -5522,7 +5522,14 @@ fn calculation_order_cache_refreshes_after_inserting_pages() {
     let fields = pdfcraft_forms::fields(&doc);
     let qty = fields.iter().find(|field| field.name == "qty").unwrap();
     let js = cx.js.as_mut().unwrap();
-    js.run(FieldEvent::Format, "calculateNow();", qty, "", &fields);
+    let result = js.run(FieldEvent::Format, "calculateNow();", qty, "", &fields);
+    assert!(
+        result.changes.iter().any(|change| {
+            change.name == "importedTotal" && change.value.as_ref().is_some_and(|value| value.len() == 1 && value.first().is_some_and(|v| v == "9"))
+        }),
+        "imported calculation result: {:?}",
+        result.changes
+    );
     assert!(js.output.console.iter().any(|line| line == "inserted field calculated"), "{:#?}", js.output);
 }
 
