@@ -202,8 +202,22 @@ fn prune_font_forms(doc: &mut Document, font_res: &Dict) -> Result<(), CosError>
         if form.dict.name(b"Subtype") != Some(b"Form") {
             continue;
         }
-        // A Form without resources of its own draws through its caller's, which were pruned already.
-        let Some(mut res) = form.dict.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned()) else { continue };
+        // A Form without resources of its own (no key, or `null`) draws through its caller's,
+        // which were pruned already. Any other value that isn't a dictionary may still reference
+        // what a removed glyph drew, and can't be pruned: fail closed.
+        let mut res = match form.dict.get(b"Resources").map(|r| doc.resolve(r)) {
+            None => continue,
+            Some(r) if matches!(*r, Object::Null) => continue,
+            Some(r) => match r.as_dict() {
+                Some(d) => d.clone(),
+                None => {
+                    return Err(CosError::Syntax {
+                        offset: 0,
+                        detail: "redaction could not establish safe Type 3 font cleanup: a form's /Resources is not a dictionary".into(),
+                    });
+                }
+            },
+        };
         let data = form.decoded()?;
         let mut used = UsedInGlyphs::default();
         crate::interp::resource_ops(doc, &res, std::slice::from_ref(&data))?.iter().for_each(|op| record_used(op, &mut used));

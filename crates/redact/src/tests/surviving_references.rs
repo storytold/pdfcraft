@@ -322,3 +322,23 @@ fn type3_font_used_in_a_form_xobject_has_its_redacted_glyph_removed() {
     assert_eq!(report.glyphs, 1);
     assert!(!full_save_holds(&doc, b"SECRET_FORM_GLYPH_PAYLOAD"), "redacted glyph program survived");
 }
+
+/// A Form the surviving glyph draws holds `/Resources` as an array that references the removed
+/// glyph's image: it can't be pruned, so the redaction refuses rather than keep the image.
+#[test]
+fn a_type3_glyphs_form_with_non_dictionary_resources_fails_closed() {
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources 5 0 R >>".to_vec(),
+        stream("", b"BT /T3 10 Tf 10 100 Td (AB) Tj ET"),
+        b"<< /Font << /T3 6 0 R >> >>".to_vec(),
+        b"<< /Type /Font /Subtype /Type3 /FontBBox [0 -200 1000 800] /FontMatrix [0.001 0 0 0.001 0 0] /FirstChar 65 /LastChar 66 /Widths [500 500] /Encoding << /Differences [65 /A /B] >> /CharProcs << /A 7 0 R /B 8 0 R >> /Resources << /XObject << /ImA 9 0 R /Fm 10 0 R >> >> >>".to_vec(),
+        stream("", b"/ImA Do"),
+        stream("", b"/Fm Do"),
+        stream("/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", b"CONFIDENTIAL_IMAGE_A"),
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 1000 1000] /Resources [9 0 R]", b""),
+    ]);
+    mark(&mut doc, 0, &[[9.0, 95.0, 14.9, 110.0]], "");
+    assert!(apply(&mut doc, None).is_err());
+}
