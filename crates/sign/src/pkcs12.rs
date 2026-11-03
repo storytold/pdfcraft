@@ -16,7 +16,6 @@
 
 use std::borrow::Cow;
 
-use base64::Engine as _;
 use cbc::cipher::block_padding::Pkcs7;
 use cbc::cipher::{BlockModeDecrypt, BlockModeEncrypt, InnerIvInit, KeyIvInit};
 use hmac::Mac;
@@ -356,16 +355,17 @@ fn normalize(bytes: &[u8]) -> Result<Cow<'_, [u8]>, SignError> {
     }
     // 3. Raw base64 text, armour or not (a real DER PFX always contains bytes
     //    outside the base64 alphabet, so this can't swallow a valid file).
-    if trimmed.iter().all(|b| b.is_ascii_alphanumeric() || *b == b'+' || *b == b'/' || *b == b'=' || b.is_ascii_whitespace()) {
+    if trimmed.iter().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'/' | b'=' | 0x0b) || b.is_ascii_whitespace()) {
         return Ok(Cow::Owned(decode_base64(trimmed)?));
     }
     // 4. Not recognisable: hand the bytes to Tlv::parse_all for a clear error.
     Ok(Cow::Borrowed(trimmed))
 }
 
+/// The PEM base64 rules certificates follow (`x509::pem_base64`): up to two `=` at the end,
+/// with or without the padding the length needs.
 fn decode_base64(input: &[u8]) -> Result<Vec<u8>, SignError> {
-    let compact: Vec<u8> = input.iter().copied().filter(|b| !b.is_ascii_whitespace()).collect();
-    base64::engine::general_purpose::STANDARD.decode(&compact).map_err(|e| SignError::Malformed(format!("PKCS #12: base64: {e}")))
+    crate::x509::pem_base64(input).map_err(|e| SignError::Malformed(format!("PKCS #12: base64: {e}")))
 }
 
 /// The base64 lines between "-----BEGIN …-----" and "-----END …-----".
