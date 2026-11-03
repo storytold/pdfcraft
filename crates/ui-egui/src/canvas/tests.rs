@@ -2017,10 +2017,16 @@ fn the_page_indicator_reads_page_over_pages_with_the_label_when_it_differs() {
 
 #[test]
 fn the_page_indicator_is_announced_as_a_status() {
-    let mut h = egui_kittest::Harness::builder().with_size(vec2(400.0, 300.0)).build_ui(|ui| paint_page_indicator(ui, ui.max_rect(), "4 / 42"));
-    h.ctx.set_fonts(crate::theme::font_definitions());
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(800.0, 600.0)).build_eframe(|cc| {
+        cc.egui_ctx.set_fonts(crate::theme::font_definitions());
+        let mut app = PdfCraftApp::new();
+        let bytes = app.session.create_blank(300.0, 400.0, 1).unwrap();
+        app.open_bytes("page-status.pdf", None, bytes.as_ref().clone()).unwrap();
+        app.show_page_indicator = true;
+        app
+    });
     h.run_steps(2);
-    let _ = h.get_by_role_and_label(egui::accesskit::Role::Status, "4 / 42");
+    let _ = h.get_by_role_and_label(egui::accesskit::Role::Status, "1 / 1");
 }
 
 #[test]
