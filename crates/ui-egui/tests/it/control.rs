@@ -141,6 +141,25 @@ fn thumbnail_size_is_settable_and_inspectable_through_the_control_channel() {
 }
 
 #[test]
+fn page_shadows_are_an_observable_app_wide_preference() {
+    let (mut h, c) = harness();
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["show_page_edge_shadows"], true);
+    for value in ["false", "true"] {
+        ok(&mut h, &c, "ui.set", json!({ "key": "show_page_edge_shadows", "value": value }));
+        assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["show_page_edge_shadows"], value == "true");
+    }
+    for value in ["off", "1", "False", ""] {
+        assert!(call(&mut h, &c, "ui.set", json!({ "key": "show_page_edge_shadows", "value": value })).is_err());
+        assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["show_page_edge_shadows"], true);
+    }
+    ok(&mut h, &c, "ui.set", json!({ "key": "show_page_edge_shadows", "value": false }));
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["show_page_edge_shadows"], false);
+    h.state_mut().active = None;
+    ok(&mut h, &c, "ui.set", json!({ "key": "show_page_edge_shadows", "value": "false" }));
+    assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["show_page_edge_shadows"], false);
+}
+
+#[test]
 fn control_resize_reports_observed_dimensions_and_rejects_invalid_sizes() {
     let (mut h, c) = harness();
     for params in [
@@ -1727,8 +1746,14 @@ fn rail_opens_a_panel_then_closes_the_open_one() {
 #[test]
 fn control_quit_retains_inactive_fill_sign_typing_after_cancel() {
     let (mut h, c) = harness();
-    h.state_mut().views[0].fill_text =
-        Some(pdfcraft_ui_egui::fill_sign::TypeBox { page: 0, at: [40.0, 200.0], text: "Unsaved signature note".into(), size: 10.0, focus: false });
+    h.state_mut().views[0].fill_text = Some(pdfcraft_ui_egui::fill_sign::TypeBox {
+        page: 0,
+        at: [40.0, 200.0],
+        text: "Unsaved signature note".into(),
+        size: 10.0,
+        color: [0.0; 3],
+        focus: false,
+    });
     h.state_mut().active = None;
     assert!(!h.state().session.get(h.state().views[0].id).unwrap().dirty);
     assert_eq!(ok(&mut h, &c, "ui.quit", json!({})), json!({"quitting":false,"needs_confirmation":true}));
@@ -2063,4 +2088,44 @@ fn routine_continuous_scrolling_does_not_add_navigation_history() {
     assert!(h.state().views[0].current > 0, "the wheel really moved to a later page");
     assert!(h.state().views[0].back.is_empty());
     assert!(h.state().views[0].forward.is_empty());
+}
+
+#[test]
+fn accessible_labels_on_format_text_and_pin_dialog() {
+    let (mut h, c) = harness();
+
+    // 1. Check Dialog::PinTool accessibility labels
+    h.state_mut().dialog = Some(pdfcraft_ui_egui::Dialog::PinTool);
+    h.run_steps(3);
+
+    let search = ok(&mut h, &c, "ui.inspect", json!({"role": "TextInput", "query": "Search tools…"}));
+    assert!(search["count"].as_u64().unwrap() >= 1, "search box has accessible label: {search}");
+
+    let result_rows = ok(&mut h, &c, "ui.inspect", json!({"query": "Organize Pages"}));
+    assert!(result_rows["count"].as_u64().unwrap() >= 1, "result row has accessible label: {result_rows}");
+
+    let pin_toggles = ok(&mut h, &c, "ui.inspect", json!({"query": "Pin"}));
+    assert!(pin_toggles["count"].as_u64().unwrap() >= 1, "pin toggle has accessible label: {pin_toggles}");
+
+    h.state_mut().dialog = None;
+    h.run_steps(2);
+
+    // 2. Open Add Text so Format text panel is visible
+    ok(&mut h, &c, "ui.command", json!({"id": "edit.text"}));
+    h.run_steps(3);
+
+    let font_combo = ok(&mut h, &c, "ui.inspect", json!({"query": "Font", "role": "ComboBox"}));
+    assert!(font_combo["count"].as_u64().unwrap() >= 1, "format-font has accessible label: {font_combo}");
+
+    let size_combo = ok(&mut h, &c, "ui.inspect", json!({"query": "Font size"}));
+    assert!(size_combo["count"].as_u64().unwrap() >= 1, "format-size has accessible label: {size_combo}");
+
+    let line_spacing_combo = ok(&mut h, &c, "ui.inspect", json!({"query": "Line spacing", "role": "ComboBox"}));
+    assert!(line_spacing_combo["count"].as_u64().unwrap() >= 1, "format-line-spacing has accessible label: {line_spacing_combo}");
+
+    let scale_spin = ok(&mut h, &c, "ui.inspect", json!({"query": "Horizontal scale", "role": "SpinButton"}));
+    assert!(scale_spin["count"].as_u64().unwrap() >= 1, "horizontal scale spin button has accessible label: {scale_spin}");
+
+    let char_spin = ok(&mut h, &c, "ui.inspect", json!({"query": "Character spacing", "role": "SpinButton"}));
+    assert!(char_spin["count"].as_u64().unwrap() >= 1, "character spacing spin button has accessible label: {char_spin}");
 }
