@@ -248,8 +248,11 @@ mod tests {
     #[test]
     fn intents_past_the_bound_are_never_taken_for_the_same() {
         let first: Vec<String> = (0..MAX_INTENTS).map(|i| format!("cond{i}")).collect();
-        let ids = |last: &str| first.iter().map(String::as_str).chain([last]).collect::<Vec<_>>();
-        let (a, b) = (PrintStandard::of(&with_intents(&ids("A"))), PrintStandard::of(&with_intents(&ids("B"))));
+        let mut a_ids: Vec<&str> = first.iter().map(String::as_str).collect();
+        let mut b_ids = a_ids.clone();
+        a_ids.push("A");
+        b_ids.push("B");
+        let (a, b) = (PrintStandard::of(&with_intents(&a_ids)), PrintStandard::of(&with_intents(&b_ids)));
         assert!(!a.same_as(&b));
         let within: Vec<&str> = first.iter().map(String::as_str).collect();
         assert!(PrintStandard::of(&with_intents(&within)).same_as(&PrintStandard::of(&with_intents(&within))));
