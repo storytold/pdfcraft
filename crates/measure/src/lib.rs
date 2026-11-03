@@ -452,6 +452,13 @@ pub struct Listing {
     pub truncated: bool,
 }
 const MAX_ANNOTATIONS: usize = 100_000;
+/// Vertex pairs one listing compares for self-intersection in all: an area's boundary check
+/// is quadratic in its vertices, and many areas (or many annotations sharing one indirect vertex
+/// array) must not multiply that into a stall.
+const MAX_LISTED_WORK: usize = 50_000_000;
+/// Scales already read by one listing, by the indirect `/Measure` object: one scale shared by
+/// many annotations is read (and its ratio decoded) once, failures included.
+type Scales = std::collections::HashMap<ObjRef, std::result::Result<Scale, String>>;
 /// Points and text one listing keeps, as counted by [`retained`]: about a thousand
 /// measurements of [`MAX_POINTS`] points each.
 const MAX_LISTED_BYTES: usize = 32 << 20;
@@ -462,8 +469,12 @@ fn retained(m: &Measurement) -> usize {
         .into_iter()
         .fold(m.points.len().saturating_mul(std::mem::size_of::<Point>()), usize::saturating_add)
 }
-fn read_measurement(doc: &Document, d: &Dict, kind: Kind, page: usize, index: usize) -> Result<Measurement> {
-    let scale = Scale::read(doc, d.get(b"Measure").ok_or_else(|| invalid("measurement has no scale"))?)?;
+fn read_measurement(doc: &Document, d: &Dict, kind: Kind, page: usize, index: usize, scales: &mut Scales) -> Result<Measurement> {
+    let measure = d.get(b"Measure").ok_or_else(|| invalid("measurement has no scale"))?;
+    let scale = match measure.as_ref() {
+        Some(r) => scales.entry(r).or_insert_with(|| Scale::read(doc, measure).map_err(|e| e.to_string())).clone().map_err(|e| invalid(&e))?,
+        None => Scale::read(doc, measure)?,
+    };
     let key = if kind == Kind::Distance { &b"L"[..] } else { b"Vertices" };
     let o = doc.resolve(d.get(key).ok_or_else(|| invalid("measurement has no vertices"))?);
     let a = o.as_array().ok_or_else(|| invalid("invalid measurement vertices"))?;
@@ -482,7 +493,9 @@ pub fn list(doc: &Document) -> Listing {
     let mut out = Listing::default();
     let mut count = 0usize;
     let mut kept = 0usize;
+    let mut work = 0usize;
     let mut seen = std::collections::HashSet::new();
+    let mut scales = Scales::new();
     for (page, p) in pdfcraft_model::pages(doc).iter().enumerate() {
         let Some(o) = p.dict.get(b"Annots") else { continue };
         let o = doc.resolve(o);
@@ -507,7 +520,16 @@ pub fn list(doc: &Document) -> Listing {
                 Some(b"PolygonDimension") => Kind::Area,
                 _ => continue,
             };
-            match read_measurement(doc, d, kind, page, index) {
+            // The boundary check compares every pair of edges: charge it before reading the
+            // vertices, so a listing stops at its work bound rather than at a stall.
+            let vertices = d.get(if kind == Kind::Distance { b"L".as_slice() } else { b"Vertices" }).map(|v| doc.resolve(v));
+            let n = vertices.as_deref().and_then(Object::as_array).map_or(0, |a| a.len() / 2).min(MAX_POINTS);
+            work = work.saturating_add(n.saturating_mul(n));
+            if work > MAX_LISTED_WORK {
+                out.truncated = true;
+                return out;
+            }
+            match read_measurement(doc, d, kind, page, index, &mut scales) {
                 Ok(m) => {
                     kept = kept.saturating_add(retained(&m));
                     if kept > MAX_LISTED_BYTES {
