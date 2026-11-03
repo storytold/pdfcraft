@@ -2,6 +2,8 @@ use std::sync::Arc;
 
 use pdfcraft_cos::{DecodeBudget, Document, ObjRef, Object};
 
+use crate::headings::tagged_text_with_limit;
+
 use super::*;
 
 /// A PDF from object bodies (object n = bodies[n - 1]) and extra trailer entries.
