@@ -215,7 +215,8 @@ const MAX_CMAP_PROGRAM: usize = 4 << 20;
 /// renderer reads the program, not only the dictionary. Anything that can't be read fully counts
 /// as vertical, so redaction refuses rather than place the text horizontally.
 fn cmap_vertical(doc: &Document, s: &Stream, depth: usize) -> bool {
-    if s.dict.int(b"WMode").is_some_and(|w| w != 0) {
+    // (an indirect /WMode is followed: read as absent it would place vertical text horizontally)
+    if s.dict.get(b"WMode").is_some_and(|w| doc.resolve(w).as_int().is_some_and(|w| w != 0)) {
         return true;
     }
     match s.dict.get(b"UseCMap").map(|u| doc.resolve(u)).as_deref() {

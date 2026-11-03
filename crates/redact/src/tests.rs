@@ -258,17 +258,32 @@ fn vertical_writing_text_under_a_mark_fails_closed() {
 /// A page showing CIDs 1 to 4 at x 100, y 50 in a Type0 font whose embedded CMap sets its
 /// writing mode with `/WMode {wmode} def` in its program only, not in its dictionary.
 fn cmap_program_page(wmode: u8) -> Document {
+    cmap_page_with(wmode, "", Vec::new())
+}
+
+/// [`cmap_program_page`] with `dict` added to the CMap stream's dictionary, and `extra` objects (from 7 0).
+fn cmap_page_with(wmode: u8, dict: &str, extra: Vec<Vec<u8>>) -> Document {
     let program = format!(
         "/CIDInit /ProcSet findresource begin 12 dict begin begincmap /WMode {wmode} def 1 begincodespacerange <0000> <FFFF> endcodespacerange 1 begincidrange <0000> <FFFF> 0 endcidrange endcmap CMapName currentdict /CMap defineresource pop end end"
     );
-    pdf(vec![
+    let mut objects = vec![
         b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
         b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
         b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /F2 5 0 R >> >> >>".to_vec(),
         stream("", b"BT /F2 10 Tf 100 50 Td <0001000200030004> Tj ET"),
         b"<< /Type /Font /Subtype /Type0 /BaseFont /X /Encoding 6 0 R /DescendantFonts [<< /Type /Font /Subtype /CIDFontType2 /BaseFont /X /DW 1000 >>] >>".to_vec(),
-        stream("/Type /CMap /CMapName /Custom", program.as_bytes()),
-    ])
+        stream(&format!("/Type /CMap /CMapName /Custom {dict}"), program.as_bytes()),
+    ];
+    objects.extend(extra);
+    pdf(objects)
+}
+
+/// An indirect `/WMode 1` in the CMap's dictionary is vertical, whatever its program says.
+#[test]
+fn an_indirect_wmode_in_the_cmap_dictionary_fails_closed() {
+    let mut vdoc = cmap_page_with(0, "/WMode 7 0 R", vec![b"1".to_vec()]);
+    mark(&mut vdoc, 0, &[[95.0, 40.0, 140.0, 70.0]], "");
+    assert_eq!(apply(&mut vdoc, None), Err(RedactError::VerticalText(1)));
 }
 
 /// The renderer takes the writing mode from the CMap program; its dictionary need not repeat it.
