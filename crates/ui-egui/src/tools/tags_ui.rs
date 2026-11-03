@@ -209,6 +209,7 @@ pub(crate) fn panel(
     ui.separator();
     let Some(tag) = state.selected.and_then(|r| tags.iter().find(|t| t.object == r)) else { return (page, None) };
     if let Some(source) = state.draft_source.as_ref().filter(|source| source.object == tag.object) {
+        refresh_draft_field(&mut state.draft.kind, Some(source.kind.as_str()), Some(tag.kind.as_str()));
         refresh_draft_field(&mut state.draft.title, source.title.as_deref(), tag.title.as_deref());
         refresh_draft_field(&mut state.draft.actual_text, source.actual_text.as_deref(), tag.actual_text.as_deref());
         refresh_draft_field(&mut state.draft.alt, source.alt.as_deref(), tag.alt.as_deref());
