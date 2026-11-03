@@ -297,9 +297,14 @@ thread_local! {
 }
 
 /// The size a JPEG's header gives, which is what decoding it goes by, whatever its dictionary
-/// says: an image of one pixel can hold a header of 500 megapixels.
+/// says: an image of one pixel can hold a header of 500 megapixels. `None`, as for a JPEG that
+/// can't be read, when its metadata would take the decoder quadratic time
+/// ([`decodable_metadata`](crate::upright_image::decodable_metadata)).
 fn jpeg_size(data: &[u8]) -> Option<(usize, usize)> {
     use zune_jpeg::zune_core::{bytestream::ZCursor, options::DecoderOptions};
+    if !crate::upright_image::decodable_metadata(data) {
+        return None;
+    }
     let options = DecoderOptions::default().set_strict_mode(false).set_max_width(usize::from(u16::MAX)).set_max_height(usize::from(u16::MAX));
     let mut dec = zune_jpeg::JpegDecoder::new_with_options(ZCursor::new(data), options);
     dec.decode_headers().ok()?;
@@ -335,6 +340,9 @@ fn jpeg_samples(data: &[u8], space: &Space, w: usize, h: usize) -> Option<(Vec<u
 /// a decoder converting to RGB inverts them, with YCCK converted to CMYK.
 fn cmyk_jpeg_samples(data: &[u8], w: usize, h: usize) -> Option<Vec<u8>> {
     use zune_jpeg::zune_core::{bytestream::ZCursor, colorspace::ColorSpace, options::DecoderOptions};
+    if !crate::upright_image::decodable_metadata(data) {
+        return None;
+    }
     let options = DecoderOptions::default().set_strict_mode(false).set_max_width(usize::from(u16::MAX)).set_max_height(usize::from(u16::MAX));
     let mut dec = zune_jpeg::JpegDecoder::new_with_options(ZCursor::new(data), options);
     dec.decode_headers().ok()?;
