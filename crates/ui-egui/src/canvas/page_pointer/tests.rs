@@ -247,22 +247,32 @@ fn declares(line: &str) -> Option<&str> {
     rest.find(|c: char| !(c.is_alphanumeric() || c == '_')).map(|end| &rest[..end])
 }
 
-/// Whether `line` calls `read`, and not a longer name that ends in it.
-fn reads(line: &str, read: &str) -> bool {
-    line.match_indices(read).any(|(at, _)| !line[..at].ends_with(|c: char| c.is_alphanumeric() || c == '_'))
+/// Ways to set egui's cursor.
+const CURSOR_WRITES: [&str; 4] = ["set_cursor_icon(", ".cursor_icon = ", "on_hover_cursor(", "on_hover_and_drag_cursor("];
+
+/// Functions in the page modules that set a cursor other than the pages': (file, function, why).
+const NOT_PAGE_CURSOR: [(&str, &str, &str); 3] = [
+    ("tools/fill_sign/scan.rs", "scan_tab", "the signature dialog's Scan tab"),
+    ("tools/edit_text_ui.rs", "overlay", "the paragraph editor is an Area of its own over the page, drawn after the pages' cursor is set"),
+    ("tools/calc_order_ui.rs", "panel", "the Calculation order panel, whose rows are dragged to reorder them"),
+];
+
+/// Whether `line` uses `name`, and not a longer name that ends in it (a field, after its `.`, is
+/// never part of a longer name).
+fn uses(line: &str, name: &str) -> bool {
+    line.match_indices(name).any(|(at, _)| name.starts_with('.') || !line[..at].ends_with(|c: char| c.is_alphanumeric() || c == '_'))
 }
 
-/// Page modules read the pointer only through `PagePointer`. egui's raw state misses what is
-/// drawn over the pages and where a touch lifted, so a raw read in a page module brings back
-/// the bugs `PagePointer` fixed: a cursor or a press through a dialog, a tap that does nothing.
-#[test]
-fn page_modules_read_the_pointer_only_through_page_pointer() {
+/// Each use of one of `names` in the page modules' code (their tests left out) outside the
+/// functions `allowed` to, as "src/file:line: `name` why"; then each allowed function that uses
+/// none of them any more, as "src/file: fn function unused".
+fn misuses(names: &[&str], allowed: &[(&str, &str, &str)], why: &str, unused: &str) -> Vec<String> {
     let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut problems = Vec::new();
-    let mut needed = vec![false; NOT_PAGE_INPUT.len()];
+    let mut needed = vec![false; allowed.len()];
     for file in PAGE_MODULES {
         let source = std::fs::read_to_string(src.join(file)).expect("page module").replace("\r\n", "\n");
-        // Tests drive egui's input themselves.
+        // Tests drive egui's input and read its output themselves.
         let code = source.split("#[cfg(test)]\nmod ").next().unwrap_or_default();
         // The top-level function, or method of an `impl`, that each line is in.
         let (mut function, mut in_impl) = (None, false);
@@ -277,24 +287,36 @@ fn page_modules_read_the_pointer_only_through_page_pointer() {
             if line.trim_start().starts_with("//") {
                 continue;
             }
-            for read in RAW_READS.into_iter().filter(|read| reads(line, read)) {
-                match NOT_PAGE_INPUT.iter().position(|(f, name, _)| *f == file && function == Some(*name)) {
+            for name in names.iter().filter(|name| uses(line, name)) {
+                match allowed.iter().position(|(f, function_name, _)| *f == file && function == Some(*function_name)) {
                     Some(k) => needed[k] = true,
-                    None => problems.push(format!(
-                        "src/{file}:{}: `{read}` reads egui's pointer state in a page module. Read `PagePointer` \
-                             (src/page_pointer.rs) instead: it knows what is drawn over the pages and where a touch \
-                             lifted. Not page input? Add the function to NOT_PAGE_INPUT there, with why.",
-                        n + 1
-                    )),
+                    None => problems.push(format!("src/{file}:{}: `{name}` {why}", n + 1)),
                 }
             }
         }
     }
-    for ((file, name, _), needed) in NOT_PAGE_INPUT.iter().zip(needed) {
+    for ((file, name, _), needed) in allowed.iter().zip(needed) {
         if !needed {
-            problems.push(format!("src/{file}: fn {name} reads no pointer state any more: remove it from NOT_PAGE_INPUT."));
+            problems.push(format!("src/{file}: fn {name} {unused}"));
         }
     }
+    problems
+}
+
+/// Page modules read the pointer only through `PagePointer`. egui's raw state misses what is
+/// drawn over the pages and where a touch lifted, so a raw read in a page module brings back
+/// the bugs `PagePointer` fixed: a cursor or a press through a dialog, a tap that does nothing.
+#[test]
+fn page_modules_read_the_pointer_only_through_page_pointer() {
+    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut problems = misuses(
+        &RAW_READS,
+        &NOT_PAGE_INPUT,
+        "reads egui's pointer state in a page module. Read `PagePointer` (src/canvas/page_pointer.rs) instead: it \
+         knows what is drawn over the pages and where a touch lifted. Not page input? Add the function to \
+         NOT_PAGE_INPUT there, with why.",
+        "reads no pointer state any more: remove it from NOT_PAGE_INPUT.",
+    );
     // A module that takes the page pointer is a page module, so it is checked too.
     let mut dirs = vec![src.clone()];
     while let Some(dir) = dirs.pop() {
@@ -321,4 +343,97 @@ fn page_modules_read_the_pointer_only_through_page_pointer() {
         }
     }
     assert!(problems.is_empty(), "{}", problems.join("\n"));
+}
+
+/// Page modules claim the cursor and never set it. Where each set it, the last write of a frame
+/// won, so the order of the per-page chain decided the cursor and not what a press does: a
+/// link's hand over every tool, the I-beam over a comment that a drag moves.
+#[test]
+fn page_modules_claim_the_cursor_and_never_set_it() {
+    let problems = misuses(
+        &CURSOR_WRITES,
+        &NOT_PAGE_CURSOR,
+        "sets the cursor in a page module, where the last write of a frame would win. Claim it instead, on the layer \
+         of what is under the pointer (`view.cursor.claim`, src/canvas/page_cursor.rs): `document_area` sets it once, \
+         from the claim on the highest layer the active tool reaches. Not the pages' cursor? Add the function to \
+         NOT_PAGE_CURSOR in src/canvas/page_pointer/tests.rs, with why.",
+        "sets no cursor any more: remove it from NOT_PAGE_CURSOR.",
+    );
+    assert!(problems.is_empty(), "{}", problems.join("\n"));
+}
+
+/// Hit producers are called only by the central routing table, not again by an input handler.
+const PAGE_HIT_CALLS: [&str; 8] = [
+    "prepare::hit(",
+    "forms_ui::hit(",
+    "comments::hit(",
+    "edit_text_ui::hit(",
+    "edit_text_ui::picture_hit(",
+    "edit_text_ui::picture_handle_hit(",
+    "object_ui::hit(",
+    "content_ui::hit(",
+];
+
+fn routed_press_handler(code: &str) -> bool {
+    let code = code.lines().filter(|line| !line.trim_start().starts_with("//")).collect::<Vec<_>>().join("\n");
+    code.contains("router.owner(")
+        && !PAGE_HIT_CALLS.iter().any(|call| code.contains(call))
+        && !uses(&code, "hit(")
+        && !uses(&code, "body_hit(")
+        && !uses(&code, "handle_hit(")
+}
+
+/// Source-level guard for the Page presses rule, alongside the raw-pointer and cursor guards.
+/// Runtime routing, capture lifetime and Escape behavior have separate behavioral tests.
+#[test]
+fn page_modules_take_presses_from_the_router_without_repeating_hit_tests() {
+    let mut problems = misuses(
+        &PAGE_HIT_CALLS,
+        &[("canvas.rs", "at", "the central PageHits table")],
+        "repeats a module hit test outside PageHits::at; use the captured router owner",
+        "no longer collects module hits",
+    );
+    problems.extend(misuses(
+        &["router.press("],
+        &[("canvas.rs", "page_tool_input", "the central press capture")],
+        "captures a page press outside the central routing path",
+        "no longer captures page presses",
+    ));
+    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    for (file, function) in [
+        ("tools/forms_ui.rs", "page_input"),
+        ("tools/prepare.rs", "page_input"),
+        ("tools/content_ui.rs", "page_input"),
+        ("tools/edit_text_ui.rs", "page_input"),
+        ("tools/edit_text_ui/image.rs", "image_input"),
+        ("tools/object_ui.rs", "input"),
+        ("tools/comments/input.rs", "select_input"),
+    ] {
+        let source = std::fs::read_to_string(src.join(file)).expect("page input module");
+        let body = source.lines().skip_while(|line| declares(line) != Some(function)).take_while(|line| *line != "}").collect::<Vec<_>>().join("\n");
+        // Forms reuse their hit test for hover text and to require release over the captured
+        // widget. Neither chooses the press owner. Pin both calls to the current pointer `p`,
+        // not the press origin, and reject an additional call or a changed argument.
+        let body = if file == "tools/forms_ui.rs" {
+            let call = "hit(xf, info, page, form, allowed, p)";
+            assert_eq!(body.matches(call).count(), 2, "only the existing hover and release checks are exempt");
+            body.replace(call, "hover_or_release_check")
+        } else {
+            body
+        };
+        if !routed_press_handler(&body) {
+            problems.push(format!("src/{file}: {function} must consume the captured router owner without repeating a hit test"));
+        }
+    }
+    assert!(problems.is_empty(), "{}", problems.join("\n"));
+}
+
+#[test]
+fn the_page_press_guard_rejects_missing_owners_and_second_hit_tests() {
+    assert!(routed_press_handler("let owner = view.router.owner(page);"));
+    assert!(!routed_press_handler("// view.router.owner(page)\nlet owner = None;"));
+    assert!(!routed_press_handler("let owner = view.router.owner(page);\nlet again = cx.hit(origin);"));
+    for call in PAGE_HIT_CALLS {
+        assert!(!routed_press_handler(&format!("let owner = view.router.owner(page);\n{call}origin);")), "{call}");
+    }
 }
