@@ -3563,12 +3563,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     if info.pages.is_empty() {
         app.views[index].auto_scroll.cancel();
         ui.centered_and_justified(|ui| ui.label(tl!("This document has no pages.")));
-        paint_page_indicator_if_enabled(
-            ui,
-            app.show_page_indicator,
-            ui.max_rect(),
-            page_indicator_text(0, 0, ""),
-        );
+        paint_page_indicator_if_enabled(ui, app.show_page_indicator, ui.max_rect(), page_indicator_text(0, 0, ""));
         return;
     }
     // The print dialog queues its own rasters later in the frame. Closing it drops them.
@@ -3817,12 +3812,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     view.viewport_screen = out.inner_rect;
     view.auto_scroll.paint(ui, avail);
     let label = info.pages.get(view.current).map_or("", |p| p.label.as_str());
-    paint_page_indicator_if_enabled(
-        ui,
-        app.show_page_indicator,
-        avail,
-        page_indicator_text(view.current, info.pages.len(), label),
-    );
+    paint_page_indicator_if_enabled(ui, app.show_page_indicator, avail, page_indicator_text(view.current, info.pages.len(), label));
     if unobstructed && matches!(tool, QuickTool::Select | QuickTool::ColumnSelect) {
         copy_selected |= selection_actions(ui, avail, view, info, prefs, allowed && !comments_hidden, can_copy);
     }
