@@ -38,13 +38,21 @@ adb install -r "$DEBUG_APK"
 echo "=== Installing instrumentation test package ==="
 adb install -r "$TEST_APK"
 
+echo "=== Resolving installed instrumentation runner ==="
+adb shell pm list instrumentation || true
+RUNNER=$(adb shell pm list instrumentation 2>/dev/null | grep "pdfcraft" | sed -n 's/^instrumentation:\([^ ]*\).*/\1/p' | head -n 1 || true)
+if [ -z "$RUNNER" ]; then
+  RUNNER="io.github.dikshant363.pdfcraft.debug.test/androidx.test.runner.AndroidJUnitRunner"
+fi
+echo "Using instrumentation runner: $RUNNER"
+
 echo "=== Executing all four instrumentation test classes ==="
 CLASSES="io.github.dikshant363.pdfcraft.NativeEngineLoadingTest,io.github.dikshant363.pdfcraft.DocumentLifecycleTest,io.github.dikshant363.pdfcraft.ViewerOperationsTest,io.github.dikshant363.pdfcraft.AnnotationsAndMediaTest"
 
 set +e
 OUTPUT=$(adb shell am instrument -w -r \
   -e class "$CLASSES" \
-  io.github.dikshant363.pdfcraft.test/androidx.test.runner.AndroidJUnitRunner 2>&1)
+  "$RUNNER" 2>&1)
 EXIT_CODE=$?
 set -e
 
