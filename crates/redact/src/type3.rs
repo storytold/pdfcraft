@@ -135,7 +135,13 @@ fn collect_used_resources_in_stream(data: &[u8], used: &mut UsedInGlyphs) -> Res
     if parsed.skipped > 0 {
         return Err(CosError::Syntax { offset: 0, detail: "redaction could not fully inspect glyph stream syntax".into() });
     }
-    for op in parsed.ops {
+    parsed.ops.iter().for_each(|op| record_used(op, used));
+    Ok(())
+}
+
+/// Record the resource name `op` uses, if any.
+fn record_used(op: &pdfcraft_content::Op, used: &mut UsedInGlyphs) {
+    {
         match op.op.as_slice() {
             b"Do" => {
                 if let Some(n) = op.last_name() {
@@ -174,6 +180,37 @@ fn collect_used_resources_in_stream(data: &[u8], used: &mut UsedInGlyphs) -> Res
             }
             _ => {}
         }
+    }
+}
+
+/// Prune the own `/Resources` of every Form a Type 3 font's (already pruned) resources still
+/// list, and of the Forms those list in turn, to the names each Form's content uses. A Form a
+/// surviving glyph draws may name, unused, an image only a removed glyph drew; that entry would
+/// keep the image in the file. Pruning only unused entries is safe for a shared Form: no drawer
+/// of it can use a name its content doesn't. Fails closed when a Form can't be read.
+fn prune_font_forms(doc: &mut Document, font_res: &Dict) -> Result<(), CosError> {
+    let mut pending: Vec<(ObjRef, usize)> = res_dict(doc, font_res, b"XObject").iter().filter_map(|(_, v)| v.as_ref()).map(|r| (r, 0)).collect();
+    let mut seen = HashSet::new();
+    while let Some((form_ref, depth)) = pending.pop() {
+        if !seen.insert(form_ref) {
+            continue;
+        }
+        if depth > MAX_DEPTH || seen.len() > MAX_HOLDERS {
+            return Err(CosError::Syntax { offset: 0, detail: "redaction could not establish safe Type 3 font cleanup: forms nest too deep".into() });
+        }
+        let Object::Stream(form) = &*doc.get(form_ref) else { continue };
+        if form.dict.name(b"Subtype") != Some(b"Form") {
+            continue;
+        }
+        // A Form without resources of its own draws through its caller's, which were pruned already.
+        let Some(mut res) = form.dict.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned()) else { continue };
+        let data = form.decoded()?;
+        let mut used = UsedInGlyphs::default();
+        crate::interp::resource_ops(doc, &res, std::slice::from_ref(&data))?.iter().for_each(|op| record_used(op, &mut used));
+        if prune_type3_font_resources(doc, &mut res, &used) {
+            doc.update_dict(form_ref, |d| d.set(b"Resources".to_vec(), Object::Dict(res.clone())))?;
+        }
+        pending.extend(res_dict(doc, &res, b"XObject").iter().filter_map(|(_, v)| v.as_ref()).map(|r| (r, depth + 1)));
     }
     Ok(())
 }
@@ -631,6 +668,7 @@ fn clean_type3_font(
             }
         })?;
     }
+    prune_font_forms(doc, &f_res)?;
     Ok(())
 }
 

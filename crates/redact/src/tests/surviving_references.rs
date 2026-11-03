@@ -161,6 +161,30 @@ fn redacted_type3_glyph_and_exclusive_resources_do_not_survive_full_save() {
     assert!(t3_xo.contains(b"ImB"), "Type 3 font resources lost surviving image ImB");
 }
 
+/// The surviving glyph B draws a Form whose own resources also name A's image, which the Form
+/// never draws. Pruning only the font's resources left that entry, so the image of the removed
+/// glyph stayed in the file through the Form.
+#[test]
+fn a_redacted_type3_glyphs_image_does_not_survive_in_a_surviving_glyphs_form() {
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources 5 0 R >>".to_vec(),
+        stream("", b"BT /T3 10 Tf 10 100 Td (AB) Tj ET"),
+        b"<< /Font << /T3 6 0 R >> >>".to_vec(),
+        b"<< /Type /Font /Subtype /Type3 /FontBBox [0 -200 1000 800] /FontMatrix [0.001 0 0 0.001 0 0] /FirstChar 65 /LastChar 66 /Widths [500 500] /Encoding << /Differences [65 /A /B] >> /CharProcs << /A 7 0 R /B 8 0 R >> /Resources << /XObject << /ImA 9 0 R /Fm 10 0 R >> >> >>".to_vec(),
+        stream("", b"/ImA Do"),
+        stream("", b"/Fm Do"),
+        stream("/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", b"CONFIDENTIAL_IMAGE_A"),
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 1000 1000] /Resources << /XObject << /ImA 9 0 R /ImB 11 0 R >> >>", b"/ImB Do"),
+        stream("/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", b"PUBLIC_IMAGE_B"),
+    ]);
+    mark(&mut doc, 0, &[[9.0, 95.0, 14.9, 110.0]], "");
+    assert_eq!(apply(&mut doc, None).unwrap().glyphs, 1);
+    assert!(!full_save_holds(&doc, b"CONFIDENTIAL_IMAGE_A"), "the removed glyph's image survives through the surviving glyph's form");
+    assert!(full_save_holds(&doc, b"PUBLIC_IMAGE_B"), "the image the surviving glyph's form draws was lost");
+}
+
 /// When all glyphs of a Type 3 font are redacted, the entire font is removed from Resources (F-011).
 #[test]
 fn all_redacted_type3_glyphs_cause_font_removal_from_resources() {
