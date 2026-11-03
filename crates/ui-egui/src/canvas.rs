@@ -3309,7 +3309,9 @@ fn follow_link(
                 // Read before the jump: a null coordinate keeps the reader's place.
                 let landing = view.resolve_dest(dest, &doc.info);
                 view.go_to_dest(p, dest, &doc.info);
-                view.flash_dest(p, landing, &doc.info);
+                // `go_to_dest` clamps an out-of-range page to the document. Flash the page
+                // that actually became current, so the marker follows that navigation.
+                view.flash_dest(view.current, landing, &doc.info);
             }
         }
         LinkTarget::Uri(u) => app.request_document_url(&u, crate::LinkOrigin::Link),

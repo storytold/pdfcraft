@@ -2039,6 +2039,11 @@ fn a_followed_link_flashes_where_its_destination_lands() {
     assert!(v.flash.is_some());
     v.flash_dest(9, DestView::FitH { top: Some(300.0) }, &info);
     assert_eq!(v.flash, None);
+    // Link navigation clamps a nonexistent target to the last page; its flash follows it.
+    v.go_to_dest(usize::MAX, DestView::FitH { top: Some(300.0) }, &info);
+    v.flash_dest(v.current, DestView::FitH { top: Some(300.0) }, &info);
+    assert_eq!(v.current, 1);
+    assert_eq!(v.flash.map(|(page, _, _)| page), Some(v.current));
     // Nothing to mark: no position, a whole-page fit, an unknown page, or junk numbers.
     for (page, dest) in [
         (0, DestView::Top),
