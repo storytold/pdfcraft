@@ -49,6 +49,21 @@ pub(crate) enum PicturePart {
     Corner(usize),
     /// The selected picture's rotate knob: a drag turns it.
     Knob,
+    /// The picture being cropped, which holds every press on its page.
+    Crop(CropPart),
+}
+
+/// What of a picture being cropped a hit is on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CropPart {
+    /// A grip of the box kept, in `crop_handles` order (four corners, then the top, right, bottom
+    /// and left edge midpoints): a drag moves that side or corner.
+    Grip(usize),
+    /// The box kept: a drag moves it over the picture.
+    Keep,
+    /// The rest of the page, its Done and Cancel controls among it: a press there is crop mode's,
+    /// and moves nothing.
+    Page,
 }
 
 /// What of the objects a hit is on.

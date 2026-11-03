@@ -7230,6 +7230,123 @@ fn cropping_a_picture_with_its_handles() {
     assert!(h.state().views[0].image_selection.as_ref().is_none_or(|s| s.crop.is_none()));
 }
 
+/// Both pages of [`clipped_artwork_with_labels`] at 100% in Edit text, the picture on page 0
+/// selected (and being cropped, with `crop`).
+fn picture_pages(crop: bool) -> Harness<'static, PdfCraftApp> {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1100.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("clipped.pdf", None, clipped_artwork_with_labels()).unwrap();
+        app.set_option("left", "closed").unwrap();
+        app.set_option("zoom", "100").unwrap();
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(3);
+    let id = h.state().views[0].id;
+    let keep = h.state().session.get(id).unwrap().page_images(0)[0].visible_rect.unwrap();
+    let mut selection = pdfcraft_ui_egui::ImageSelection::at(0, 0);
+    selection.crop = crop.then(|| pdfcraft_ui_egui::CropMode::new(keep));
+    h.state_mut().views[0].image_selection = Some(selection);
+    h.run_steps(3);
+    h
+}
+
+/// The screen point at PDF (x, y) of `page` of [`picture_pages`].
+fn page_at(h: &Harness<'static, PdfCraftApp>, page: usize, x: f32, y: f32) -> egui::Pos2 {
+    let r = h.state().views[0].page_screen_rect(page).expect("both pages on screen");
+    egui::pos2(r.left() + x / 200.0 * r.width(), r.top() + (300.0 - y) / 300.0 * r.height())
+}
+
+fn cursor_over(h: &mut Harness<'static, PdfCraftApp>, p: egui::Pos2) -> egui::CursorIcon {
+    h.hover_at(p);
+    h.run_steps(2);
+    h.output().platform_output.cursor_icon
+}
+
+/// Crop mode holds every press on its page, and its cursor stays there: the grips show theirs and
+/// the box kept the hand that drags it, and on the next page the pointer shows what a press there
+/// takes (a paragraph's move arrow). Crop mode's cursor used to win on every page.
+#[test]
+fn crop_modes_cursor_stays_on_its_page() {
+    let mut h = picture_pages(true);
+    // The visible picture is x 30..160, y 170..250.
+    for (page, x, y, cursor, what) in [
+        (0, 160.0, 170.0, egui::CursorIcon::ResizeNwSe, "a corner grip"),
+        (0, 95.0, 210.0, egui::CursorIcon::Grab, "the box kept"),
+        (0, 65.0, 134.0, egui::CursorIcon::Default, "crop mode holds its page's paragraphs"),
+        (1, 65.0, 134.0, egui::CursorIcon::Move, "the next page's paragraph"),
+    ] {
+        let p = page_at(&h, page, x, y);
+        assert_eq!(cursor_over(&mut h, p), cursor, "{what}");
+    }
+}
+
+/// A press on a crop grip a little outside the picture drags that grip, and Escape in the middle
+/// of the drag cancels it: the box goes back and crop mode stays. Escape once the button is up
+/// leaves crop mode.
+#[test]
+fn escape_during_a_crop_drag_keeps_crop_mode() {
+    let mut h = picture_pages(true);
+    let before = h.state().views[0].image_selection.as_ref().unwrap().crop.as_ref().unwrap().keep;
+    let grip = page_at(&h, 0, 160.0, 170.0) + egui::vec2(5.0, 5.0);
+    h.hover_at(grip);
+    h.run_steps(1);
+    h.drag_at(grip);
+    h.run_steps(1);
+    for k in 1..=4 {
+        h.hover_at(grip - egui::vec2(10.0, 10.0) * k as f32);
+        h.run_steps(1);
+    }
+    let keep = |h: &Harness<'static, PdfCraftApp>| h.state().views[0].image_selection.as_ref().and_then(|s| s.crop.as_ref()).map(|c| c.keep);
+    assert!(keep(&h).is_some_and(|k| k[2] < before[2] - 5.0 && k[1] > before[1] + 5.0), "the grip outside the picture is dragged");
+    h.key_press(Key::Escape);
+    h.run_steps(2);
+    assert_eq!(keep(&h), Some(before), "Escape cancels the drag, and crop mode stays");
+    h.drop_at(grip - egui::vec2(40.0, 40.0));
+    h.run_steps(2);
+    assert_eq!(keep(&h), Some(before), "the cancelled drag's release crops nothing");
+    h.key_press(Key::Escape);
+    h.run_steps(2);
+    assert_eq!(keep(&h), None, "Escape leaves crop mode");
+    assert!(!dirty(&h));
+}
+
+/// Delete removes the selected picture wherever the pointer is, on a paragraph too: the key is the
+/// app's, not the pointer's.
+#[test]
+fn delete_removes_the_selected_picture_with_the_pointer_on_a_paragraph() {
+    let mut h = picture_pages(false);
+    let caption = page_at(&h, 0, 65.0, 134.0);
+    assert_eq!(cursor_over(&mut h, caption), egui::CursorIcon::Move, "on the caption's paragraph");
+    h.key_press(Key::Delete);
+    h.run_steps(3);
+    let id = h.state().views[0].id;
+    assert!(h.state().session.get(id).unwrap().page_images(0).is_empty(), "the picture is deleted");
+    assert!(h.state().views[0].image_selection.is_none());
+}
+
+/// With a dialog open, Delete is the dialog's: the selected picture stays, and so does crop mode
+/// under Escape and Enter.
+#[test]
+fn a_dialog_keeps_its_delete_while_a_picture_is_selected() {
+    let mut h = picture_pages(false);
+    let on_picture = page_at(&h, 0, 95.0, 210.0);
+    h.hover_at(on_picture);
+    h.run_steps(1);
+    assert!(h.state_mut().execute("app.preferences"));
+    h.run_steps(3);
+    for key in [Key::Delete, Key::Backspace] {
+        h.key_press(key);
+        h.run_steps(3);
+    }
+    let id = h.state().views[0].id;
+    assert_eq!(h.state().session.get(id).unwrap().page_images(0).len(), 1, "the picture stays under the dialog");
+    assert!(h.state().views[0].image_selection.is_some());
+    assert_eq!(h.state().dialog, Some(Dialog::Preferences));
+}
+
 /// Organize pages has Acrobat's panel whenever the grid shows, however it was opened, and the
 /// panel's Close ends Organize: the grid closes and All tools comes back.
 #[test]

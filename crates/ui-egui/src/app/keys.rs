@@ -66,6 +66,8 @@ impl PdfCraftApp {
             {
                 object_ui::nudge_keys(ctx, &mut self.views[i], doc);
                 object_ui::delete_keys(ctx, &mut self.views[i]);
+                let held = ctx.input(|input| input.pointer.any_down());
+                edit_text_ui::picture_keys(ctx, &mut self.views[i], doc, held);
             } else if let Some(doc) = self.session.get(self.views[i].id).filter(|d| d.allows_annotation()) {
                 comments::nudge_keys(ctx, &mut self.views[i], &doc.info);
             }

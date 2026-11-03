@@ -179,6 +179,7 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
             ptr,
             page: i,
             info,
+            press,
             allow_interaction: !others_own_pointer && (matches!(view.router.owner(i), Some(crate::page_router::Owner::Picture { .. })) || !text_used),
         };
         let image_used = crate::edit_text_ui::image_input(&image_cx, &images, view);
@@ -458,12 +459,9 @@ impl PageHits<'_> {
             images,
             clip,
         } = *self;
-        // Crop mode owns every press on its page (`edit_text_ui::crop_hit`).
-        if tool == QuickTool::EditText
-            && can_modify
-            && let Some(crop) = crate::edit_text_ui::crop_hit(view, page)
-        {
-            return vec![crop];
+        // Crop mode holds every press on its page (`edit_text_ui::crop_hit`).
+        if tool == QuickTool::EditText && can_modify && view.image_selection.as_ref().is_some_and(|s| s.page == page && s.crop.is_some()) {
+            return crate::edit_text_ui::crop_hit(xf, page, info, images, view, p).into_iter().collect();
         }
         let fields = if preparing {
             crate::prepare::hit(xf, info, page, form, field_tool, prepare_allowed, &view.prepare, p)
