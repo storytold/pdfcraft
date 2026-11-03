@@ -92,9 +92,7 @@ pub fn summaries(doc: &Document) -> Vec<Summary> {
         for (index, entry) in list.iter().enumerate() {
             let obj = entry.as_ref().map_or_else(|| doc.resolve(entry), |r| doc.get(final_ref(doc, r)));
             let Some(d) = obj.as_dict() else { continue };
-            let Some(subtype) = d.get(b"Subtype").and_then(|o| doc.resolve(o).as_name().map(|n| String::from_utf8_lossy(n).into_owned())) else {
-                continue;
-            };
+            let Some(subtype) = d.name(b"Subtype").map(|s| String::from_utf8_lossy(s).into_owned()) else { continue };
             if !is_comment_subtype(&subtype) {
                 continue;
             }
@@ -227,7 +225,7 @@ pub fn props(doc: &Document, page: usize, index: usize) -> Option<Props> {
     let entry = annots(doc, p).get(index).cloned()?;
     let obj = doc.resolve(&entry);
     let d = obj.as_dict()?;
-    let subtype = String::from_utf8_lossy(doc.resolve(d.get(b"Subtype")?).as_name()?).into_owned();
+    let subtype = String::from_utf8_lossy(d.name(b"Subtype")?).into_owned();
     let c: Vec<f64> = d.get(b"C").and_then(|o| o.as_array().map(|a| a.iter().filter_map(|x| x.as_f64()).collect())).unwrap_or_default();
     let color = if subtype == "FreeText" { Some(appearance::parse_da(d).0) } else { (c.len() == 3).then(|| [c[0], c[1], c[2]]) };
     let width = matches!(subtype.as_str(), "Square" | "Circle" | "Line" | "Ink" | "Polygon" | "PolyLine" | "FreeText").then(|| {
