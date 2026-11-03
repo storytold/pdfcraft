@@ -76,17 +76,7 @@ impl Automation {
             targets.push((output.to_string(), target));
             passwords.push(entry.get("password").and_then(Value::as_str).map(str::to_owned));
         }
-        let input_paths: std::collections::HashSet<_> = sources.iter().map(|(_, path)| path_key(path)).collect();
-        let mut output_paths = std::collections::HashSet::new();
-        for (name, path) in &targets {
-            let key = path_key(path);
-            if input_paths.contains(&key) {
-                return Err(failed(format!("output {name} names an input file; choose a separate output path")));
-            }
-            if !output_paths.insert(key) {
-                return Err(failed(format!("two files use the same output path: {name}")));
-            }
-        }
+        check_unique_outputs(&targets)?;
 
         let mut plans = Vec::with_capacity(files.len());
         let mut next = start;
@@ -208,15 +198,60 @@ impl Automation {
     }
 }
 
-fn path_key(path: &Path) -> String {
-    let path = path.to_string_lossy();
-    #[cfg(windows)]
-    {
-        path.to_lowercase()
+fn check_unique_outputs(targets: &[(String, PathBuf)]) -> Result<()> {
+    if targets.len() < 2 {
+        return Ok(());
     }
-    #[cfg(not(windows))]
-    {
-        path.into_owned()
+
+    // Let each target directory decide whether probe names collide; Windows case rules vary by volume and directory.
+    let parent = targets.first().and_then(|(_, path)| path.parent()).ok_or_else(|| failed("output has no parent directory"))?;
+    let marker = tempfile::NamedTempFile::new_in(parent).map_err(failed)?;
+    let marker_name = marker.path().file_name().ok_or_else(|| failed("could not name an output preflight file"))?.to_os_string();
+    drop(marker);
+
+    let mut probes = OutputProbes::default();
+    for (name, target) in targets {
+        let parent = target.parent().ok_or_else(|| failed(format!("output has no parent directory: {name}")))?;
+        let mut probe_name = target.file_name().ok_or_else(|| failed(format!("output has no file name: {name}")))?.to_os_string();
+        probe_name.push(".pdfcraft-bates-");
+        probe_name.push(&marker_name);
+        let probe = parent.join(probe_name);
+        match std::fs::OpenOptions::new().write(true).create_new(true).open(&probe) {
+            Ok(file) => probes.add(probe, file),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                return Err(failed(format!("two files use the same output path: {name}")));
+            }
+            Err(error) => return Err(failed(format!("could not validate output path {name}: {error}"))),
+        }
+    }
+    probes.cleanup().map_err(|error| failed(format!("could not remove output preflight file: {error}")))
+}
+
+#[derive(Default)]
+struct OutputProbes(Vec<PathBuf>);
+
+impl OutputProbes {
+    fn add(&mut self, path: PathBuf, file: std::fs::File) {
+        drop(file);
+        self.0.push(path);
+    }
+
+    fn cleanup(&mut self) -> std::io::Result<()> {
+        while let Some(path) = self.0.pop() {
+            if let Err(error) = std::fs::remove_file(&path) {
+                self.0.push(path);
+                return Err(error);
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Drop for OutputProbes {
+    fn drop(&mut self) {
+        for path in self.0.drain(..) {
+            let _ = std::fs::remove_file(path);
+        }
     }
 }
 
