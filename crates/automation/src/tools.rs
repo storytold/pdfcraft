@@ -1292,9 +1292,9 @@ pub fn tools() -> Vec<ToolDef> {
                 }),
                 &["doc", "folder"],
             )),
-        t("doc_export_text", "Export text", "Write the reading-order text of pages to a .txt file (pages separated by form feeds).")
+        t("doc_export_text", "Export text", "Write page text to a .txt file in visual order by default, or tagged structure-tree order when requested (pages separated by form feeds).")
             .cmd("export.text")
-            .with(schema(json!({ "doc": doc(), "path": { "type": "string" }, "pages": pages("to export (default: all)") }), &["doc", "path"])),
+            .with(schema(json!({ "doc": doc(), "path": { "type": "string" }, "pages": pages("to export (default: all)"), "order": { "type": "string", "enum": ["visual", "tagged"], "default": "visual", "description": "Use visual extraction order or the PDF structure tree order." } }), &["doc", "path"])),
         t(
             "fill_sign_add",
             "Fill & Sign: type text or place a mark",

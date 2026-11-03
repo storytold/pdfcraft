@@ -25,6 +25,45 @@ fn stream(data: &str) -> String {
     format!("<< /Length {} >>\nstream\n{data}\nendstream", data.len())
 }
 
+#[test]
+fn tagged_text_uses_tree_order_and_omits_artifact_content() {
+    let doc = pdf(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 6 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 300] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>".into(),
+            stream(
+                "BT /F1 12 Tf /P << /MCID 0 >> BDC (LEFT COLUMN) Tj EMC /P << /MCID 1 >> BDC (RIGHT COLUMN) Tj EMC /Artifact << /MCID 2 >> BDC (ARTIFACT FOOTER) Tj EMC ET",
+            ),
+            FONT.into(),
+            "<< /Type /StructTreeRoot /K 7 0 R >>".into(),
+            "<< /S /Document /K [8 0 R 9 0 R 10 0 R] >>".into(),
+            "<< /S /P /P 7 0 R /Pg 3 0 R /ActualText (Accessible right column) /K << /Type /MCR /Pg 3 0 R /MCID 1 >> >>".into(),
+            "<< /S /P /P 7 0 R /Pg 3 0 R /K 0 >>".into(),
+            "<< /S /Figure /P 7 0 R /Pg 3 0 R /Alt (A chart) >>".into(),
+        ],
+        "",
+    );
+    let tagged = tagged_text(&doc, &[0]);
+    assert_eq!(tagged.text, "Accessible right column\nLEFT COLUMN\nA chart");
+    assert!(tagged.warnings.is_empty(), "{:?}", tagged.warnings);
+}
+
+#[test]
+fn tagged_text_reports_repeated_and_missing_structure_references() {
+    let doc = pdf(
+        &[
+            "<< /Type /Catalog /StructTreeRoot 2 0 R >>".into(),
+            "<< /Type /StructTreeRoot /K [3 0 R 99 0 R] >>".into(),
+            "<< /S /Document /K 3 0 R >>".into(),
+        ],
+        "",
+    );
+    let tagged = tagged_text(&doc, &[]);
+    assert!(tagged.warnings.iter().any(|w| w.contains("cyclic or repeated")));
+    assert!(tagged.warnings.iter().any(|w| w.contains("missing structure reference 99")));
+}
+
 fn status(r: &Report, rule: Rule) -> Status {
     r.result(rule).unwrap().status
 }

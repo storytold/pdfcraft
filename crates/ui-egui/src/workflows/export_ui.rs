@@ -27,11 +27,13 @@ pub struct ExportDraft {
     pub format: ImageFormat,
     /// Export all images ▸ skip images with fewer pixels than this on their shorter side.
     pub min_side: u32,
+    /// Read text in PDF structure-tree order instead of visual extraction order.
+    pub tagged_text: bool,
 }
 
 impl Default for ExportDraft {
     fn default() -> Self {
-        Self { dpi: 150.0, range: PageRange::default(), format: ImageFormat::Png, min_side: 0 }
+        Self { dpi: 150.0, range: PageRange::default(), format: ImageFormat::Png, min_side: 0, tagged_text: false }
     }
 }
 
@@ -106,6 +108,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: E
         );
     } else {
         ui.label(egui::RichText::new(tl!("Plain text in reading order; pages are separated by form feeds.")).small().color(t.text_faint));
+        ui.add(widgets::checkbox(&mut d.tagged_text, tl!("Use tag-tree order")));
     }
     ui.add_space(6.0);
     ui.label(egui::RichText::new(tl!("Pages")).font(theme::semibold(12.5)));
@@ -131,6 +134,7 @@ struct ExportTask<'a> {
     dpi: f64,
     format: ImageFormat,
     min_side: u32,
+    tagged_text: bool,
     pages: Vec<usize>,
     stem: String,
     status: &'a ExportStatus,
@@ -138,7 +142,7 @@ struct ExportTask<'a> {
 }
 
 fn run(task: ExportTask<'_>, mut sink: impl FnMut(&str, Vec<u8>) -> Result<(), String>) -> String {
-    let ExportTask { src, kind, dpi, format, min_side, pages, stem, status, lang } = task;
+    let ExportTask { src, kind, dpi, format, min_side, tagged_text, pages, stem, status, lang } = task;
     // May run on a worker thread: messages are drawn in the UI's language.
     crate::i18n::set_current(lang);
     let total = pages.len();
@@ -208,13 +212,22 @@ fn run(task: ExportTask<'_>, mut sink: impl FnMut(&str, Vec<u8>) -> Result<(), S
         }
         ExportKind::Text => {
             set(0, None);
-            match ex.text_of(&pages).and_then(|text| sink(&format!("{stem}.txt"), text.into_bytes())) {
-                Ok(()) => {
-                    if total == 1 {
+            let extracted = if tagged_text {
+                ex.tagged_text_of(&pages).map(|tagged| (tagged.text, tagged.warnings))
+            } else {
+                ex.text_of(&pages).map(|text| (text, Vec::new()))
+            };
+            match extracted.and_then(|(text, warnings)| sink(&format!("{stem}.txt"), text.into_bytes()).map(|()| warnings)) {
+                Ok(warnings) => {
+                    let mut message = if total == 1 {
                         crate::i18n::fmt(tl!("Exported the text of 1 page"), &[])
                     } else {
                         crate::i18n::fmt(tl!("Exported the text of {n} pages"), &[("n", &total.to_string())])
+                    };
+                    if let Some(warning) = warnings.first() {
+                        message.push_str(&format!(" ({warning})"));
                     }
+                    message
                 }
                 Err(e) => crate::i18n::fmt(tl!("Export stopped: {e}"), &[("e", &e.to_string())]),
             }
@@ -240,6 +253,7 @@ impl PdfCraftApp {
         let dpi = self.export_draft.dpi;
         let format = self.export_draft.format;
         let min_side = self.export_draft.min_side;
+        let tagged_text = self.export_draft.tagged_text;
         let status: ExportStatus = Arc::new(Mutex::new(Some((0, pages.len(), None))));
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -251,7 +265,7 @@ impl PdfCraftApp {
                     let sink = |name: &str, bytes: Vec<u8>| {
                         crate::editing::write_atomically(&dir.join(name).to_string_lossy(), &bytes).map_err(|e| format!("{name}: {e}"))
                     };
-                    let msg = run(ExportTask { src, kind, dpi, format, min_side, pages, stem, status: &st, lang }, sink);
+                    let msg = run(ExportTask { src, kind, dpi, format, min_side, tagged_text, pages, stem, status: &st, lang }, sink);
                     if let Ok(mut s) = st.lock() {
                         let (done, total) = s.as_ref().map_or((0, 0), |(d, t, _)| (*d, *t));
                         let done_msg = crate::i18n::fmt(tl!("{msg} to {dir}"), &[("msg", &msg), ("dir", &shown)]);
