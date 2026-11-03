@@ -3925,3 +3925,29 @@ fn a_membership_dictionary_with_an_indirect_type_is_evaluated() {
         vec![b"<< /Type 9 0 R /OCGs [7 0 R] /P /AllOff >>".to_vec(), b"/OCMD".to_vec()],
     ));
 }
+
+#[test]
+fn a_rewritten_form_xobject_drops_the_source_text_of_added_content() {
+    // A form drawing invisible text whose dictionary repeats it in /PCAdded.
+    let form = stream(
+        "/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /Font << /F1 5 0 R >> >> /PCMark /Added /PCAdded << /Kind /Text /Text (LEAK_FORM_SOURCE) >>",
+        b"BT /F1 10 Tf 3 Tr 10 100 Td (HIDDEN) Tj ET BT /F1 10 Tf 10 200 Td (Shown) Tj ET",
+    );
+    let mut doc = one_page(b"/X Do", "/XObject << /X 7 0 R >>", vec![form]);
+    sanitize::remove_hidden(&mut doc, &[sanitize::Hidden::HiddenText]).unwrap();
+    let bytes = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
+    assert!(!bytes.windows(16).any(|w| w == b"LEAK_FORM_SOURCE"), "the form's added-content source text survived");
+}
+
+#[test]
+fn a_redacted_form_xobject_drops_the_source_text_of_added_content() {
+    let form = stream(
+        "/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /Font << /F1 5 0 R >> >> /PCMark /Added /PCAdded << /Kind /Text /Text (AB1234CD) >>",
+        b"BT /F1 10 Tf 10 100 Td (AB1234CD) Tj ET",
+    );
+    let mut doc = one_page(b"/X Do", "/XObject << /X 7 0 R >>", vec![form]);
+    mark(&mut doc, 0, &[[20.0, 95.0, 40.0, 110.0]], "");
+    apply(&mut doc, None).unwrap();
+    let bytes = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
+    assert!(!bytes.windows(4).any(|w| w == b"1234"), "redacted text left in the saved file");
+}

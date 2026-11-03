@@ -279,7 +279,11 @@ impl DocView {
         let Some(forward) = self.wheel.feed(unit, dy, phase, now, can_turn) else { return false };
         let before = self.current;
         self.step_page(forward);
-        self.current != before
+        if self.current == before {
+            self.wheel.unturn();
+            return false;
+        }
+        true
     }
 
     /// One wheel event in a non-continuous view whose page is taller than the window, where the
@@ -299,6 +303,7 @@ impl DocView {
         let before = self.current;
         self.step_page(forward);
         if self.current == before {
+            self.wheel.unturn();
             return false;
         }
         if !forward {

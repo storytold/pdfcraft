@@ -759,7 +759,11 @@ fn card_documents_and_view(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens,
     });
     ctx.label_secondary(ui, tl!("For page sizes and margins."), t);
     ui.add_space(6.0);
+    scrolling(ui, app, t, ctx);
+}
 
+/// The scroll speed and the middle button's direction, in Card 3.
+fn scrolling(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ctx: &mut PrefSearchContext) {
     ui.horizontal(|ui| {
         ctx.label_primary(ui, tl!("Scroll speed (mouse wheel and arrow keys)"), t);
         ctx.pill_choice(
@@ -773,6 +777,9 @@ fn card_documents_and_view(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens,
             ],
         );
     });
+    ui.add_space(6.0);
+    ctx.checkbox(ui, &mut app.invert_middle_drag, tl!("Invert middle-button drag"), t);
+    ctx.label_secondary(ui, tl!("Panning or auto-scrolling with the middle (wheel) button moves the page the other way."), t);
 }
 
 /// Content for Card 4: Identity
