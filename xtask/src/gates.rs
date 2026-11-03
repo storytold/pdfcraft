@@ -333,6 +333,35 @@ pub fn text_oracle(args: &[String]) -> anyhow::Result<()> {
 /// The score is the share of pixels with no near match in the other renderer's 3x3 neighbourhood
 /// (`pdfcraft_oracle::pixels`), which forgives antialiasing and subpixel placement but not
 /// missing or wrong content. **Lower is better; it is a disagreement rate, not a quality score.**
+/// A new folder in the temporary directory that only this user can open (0700 on Unix), removed
+/// when dropped, on success and on error alike.
+struct PrivateDir(PathBuf);
+
+impl PrivateDir {
+    fn new(prefix: &str) -> anyhow::Result<Self> {
+        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.subsec_nanos());
+        for attempt in 0..100u32 {
+            let path = std::env::temp_dir().join(format!("{prefix}-{}-{nanos}-{attempt}", std::process::id()));
+            let mut builder = std::fs::DirBuilder::new();
+            #[cfg(unix)]
+            std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+            // `create`, not `create_all`: a name that is already there is never used.
+            match builder.create(&path) {
+                Ok(()) => return Ok(Self(path)),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(e) => return Err(e).with_context(|| format!("create {}", path.display())),
+            }
+        }
+        bail!("no unused temporary folder name for {prefix}")
+    }
+}
+
+impl Drop for PrivateDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 pub fn render_oracle(args: &[String]) -> anyhow::Result<()> {
     let limit: usize = flag_num(args, "--limit").unwrap_or(usize::MAX);
     let dpi: u32 = flag_num(args, "--dpi").unwrap_or(72);
@@ -368,7 +397,10 @@ pub fn render_oracle(args: &[String]) -> anyhow::Result<()> {
         .collect();
     files.sort();
 
-    let out_pam = std::env::temp_dir().join(format!("pdfcraft-render-oracle-{}.pam", std::process::id()));
+    // The page's pixels go into a folder only this user can open, made for this run (never an
+    // existing one, which another user could have put a link in), and removed with it.
+    let private = PrivateDir::new("pdfcraft-render-oracle")?;
+    let out_pam = private.0.join("page.pam");
     let (mut scores, mut sizes_differed, mut ours_failed, mut theirs_failed) = (Vec::new(), 0usize, 0usize, 0usize);
     let mut worst: Vec<(f64, String)> = Vec::new();
     for file in files.iter().take(limit) {
@@ -410,7 +442,7 @@ pub fn render_oracle(args: &[String]) -> anyhow::Result<()> {
             Err(_) => sizes_differed = sizes_differed.saturating_add(1),
         }
     }
-    let _ = std::fs::remove_file(&out_pam);
+    drop(private);
 
     if scores.is_empty() {
         bail!(
@@ -551,7 +583,23 @@ fn f1(a: &BTreeMap<String, usize>, b: &BTreeMap<String, usize>) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{f1, order_score, root, word_sequence, words};
+    use super::{PrivateDir, f1, order_score, root, word_sequence, words};
+
+    /// Each run gets a new folder of its own, private to the user, gone when the run ends.
+    #[test]
+    fn the_oracle_folder_is_new_private_and_removed() {
+        let (a, b) = (PrivateDir::new("pdfcraft-private-test").unwrap(), PrivateDir::new("pdfcraft-private-test").unwrap());
+        assert_ne!(a.0, b.0);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(&a.0).unwrap().permissions().mode() & 0o777, 0o700);
+        }
+        let path = a.0.clone();
+        std::fs::write(path.join("page.pam"), b"x").unwrap();
+        drop(a);
+        assert!(!path.exists());
+    }
 
     /// The two scores answer different questions, and the point of adding the second one is the
     /// first row: F1 cannot tell a page from the same page read backwards.
