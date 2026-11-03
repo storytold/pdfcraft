@@ -440,6 +440,9 @@ impl Automation {
         }))
     }
 
+    /// Applies an edit to the target document, returning a summary of the document along with
+    /// any font warnings or AcroForm JavaScript alerts, viewer requests, console lines, and script
+    /// or document script execution errors produced during edit calculations.
     pub(crate) fn apply(&mut self, a: &Args, edit: Edit) -> Result<Value> {
         let id = self.doc(a)?.id;
         self.session.apply(id, edit).map_err(failed)?;
@@ -457,6 +460,15 @@ impl Automation {
         if !js.requests.is_empty() {
             let reqs: Vec<Value> = js.requests.iter().map(crate::a11y::form_tools::request_json).collect();
             out["requests"] = json!(reqs);
+        }
+        if !js.errors.is_empty() {
+            out["errors"] = json!(js.errors);
+        }
+        if !js.doc_errors.is_empty() {
+            out["doc_errors"] = json!(js.doc_errors);
+        }
+        if !js.console.is_empty() {
+            out["console"] = json!(js.console);
         }
         Ok(out)
     }
