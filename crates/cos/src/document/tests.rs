@@ -1964,6 +1964,42 @@ fn the_chain_row_limit_counts_hybrid_rows_set_aside() {
     assert!(detail.contains("more than 6 entries"), "{detail}");
 }
 
+/// A cross-reference stream whose `/Index [0 4 0 4]` lists objects 0 to 3 twice, the same rows
+/// both times: eight rows read, four entries (#5082). The chain's row limit counts the rows
+/// read, before deduplication, so a limit of 8 passes and a limit of 7 refuses it.
+#[test]
+fn the_chain_row_limit_counts_rows_an_xref_stream_index_repeats() {
+    let mut bytes = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for body in ["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>"] {
+        offsets.push(bytes.len());
+        bytes.extend_from_slice(format!("{} 0 obj\n{body}\nendobj\n", offsets.len()).as_bytes());
+    }
+    let x = bytes.len();
+    offsets.push(x);
+    let mut once = vec![0u8, 0, 0, 0, 0, 255];
+    for o in &offsets {
+        once.push(1);
+        once.extend_from_slice(&u32::try_from(*o).unwrap().to_be_bytes());
+        once.push(0);
+    }
+    let rows = [once.clone(), once].concat();
+    bytes.extend_from_slice(
+        format!("3 0 obj\n<< /Type /XRef /Size 4 /Root 1 0 R /W [1 4 1] /Index [0 4 0 4] /Length {} >>\nstream\n", rows.len()).as_bytes(),
+    );
+    bytes.extend_from_slice(&rows);
+    bytes.extend_from_slice(format!("\nendstream\nendobj\nstartxref\n{x}\n%%EOF\n").as_bytes());
+    let doc = Document::open(Arc::new(bytes)).unwrap();
+    let (entries, _, _, oddities, _) = doc.read_xref_chain_materialized_with_limit(&mut Vec::new(), 8).unwrap();
+    assert_eq!(entries.len(), 4);
+    assert!(oddities.is_empty(), "{oddities:?}");
+    let Err(CosError::Syntax { offset, detail }) = doc.read_xref_chain_materialized_with_limit(&mut Vec::new(), 7) else {
+        panic!("eight rows listing four objects must be refused by a limit of 7")
+    };
+    assert_eq!(offset, x);
+    assert!(detail.contains("more than 7 entries"), "{detail}");
+}
+
 #[test]
 fn a_stream_whose_length_is_itself_and_never_ends_loads_quickly() {
     // From the nightly fuzz job: `6 0 obj << /Length 6 0 R >> stream` with no `endstream`

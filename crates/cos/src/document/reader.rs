@@ -361,6 +361,8 @@ impl Document {
         let mut generation_repairs = Vec::new();
         let mut recorded = HashSet::new();
         let mut diagnose = true;
+        // Every row the sections (and their hybrid streams) list, counted by `read_section` as it
+        // reads them, before any are merged or deduplicated.
         let mut merged_rows = 0usize;
         let mut next = Some(first);
         while let Some(off) = next.take() {
@@ -372,13 +374,15 @@ impl Document {
             let mut sect = BTreeMap::new();
             // Object numbers whose entry in this section was set aside ([`Self::xref_oddities`]).
             let mut odd = Vec::new();
-            let ((sect_trailer, is_stream), header_relative) = match self.read_section(off as usize, &mut sect, &mut odd, log) {
+            let rows_before = merged_rows;
+            let ((sect_trailer, is_stream), header_relative) = match self.read_section(off as usize, &mut sect, &mut odd, &mut merged_rows, log) {
                 Ok(v) => (v, false),
                 Err(e) if self.header_offset > 0 => {
                     log.push(format!("xref at {off} unreadable ({e}); retrying relative to the header"));
                     sect.clear();
                     odd.clear();
-                    (self.read_section(off as usize + self.header_offset, &mut sect, &mut odd, log)?, true)
+                    merged_rows = rows_before;
+                    (self.read_section(off as usize + self.header_offset, &mut sect, &mut odd, &mut merged_rows, log)?, true)
                 }
                 Err(e) => {
                     // An unreadable older section loses every object only it locates (the page
@@ -413,7 +417,7 @@ impl Document {
                 }
             } else if let Some(x) = hybrid {
                 let mut stm = BTreeMap::new();
-                let read = match self.read_section(x as usize, &mut stm, &mut odd, log) {
+                let read = match self.read_section(x as usize, &mut stm, &mut odd, &mut merged_rows, log) {
                     Ok(_) => {
                         for (&num, &entry) in &stm {
                             if !diagnose {
@@ -445,21 +449,21 @@ impl Document {
                 }
             }
             // Each section's rows are capped, so the chain is too: at most `row_limit` rows
-            // (MAX_XREF_OBJECTS outside tests) merged in all, or the file is rebuilt from object
-            // headers, as when one section's stream decodes past that. This counts rows merged,
-            // not the map's size, since a chain that relists the same objects costs as much to
-            // merge. Rows set aside count too: they are kept for the whole chain, and a section can
-            // set aside nearly all it lists. A section's rows (its hybrid stream's included) never
-            // outnumber the rows the compact reader counts for it, and that reader stops at about
-            // a quarter of MAX_XREF_OBJECTS: no chain within its limit is refused.
-            let rows = sect.len().saturating_add(odd.len());
-            let Some(total) = merged_rows.checked_add(rows).filter(|total| *total <= row_limit) else {
+            // (MAX_XREF_OBJECTS outside tests) read in all, or the file is rebuilt from object
+            // headers, as when one section's stream decodes past that. This counts every row
+            // read, before deduplication, not the map's size: a chain that relists the same
+            // objects, or a stream whose `/Index` repeats a range (`[0 4 0 4]`), costs as much to
+            // merge (#5082). Rows set aside are among the rows read, and a row is set aside at
+            // most twice (in its section and against a hybrid stream), so they stay bounded too. A
+            // section's rows (its hybrid stream's included) never outnumber the rows the compact
+            // reader counts for it, and that reader stops at about a quarter of MAX_XREF_OBJECTS:
+            // no chain within its limit is refused.
+            if merged_rows > row_limit {
                 return Err(CosError::Syntax {
                     offset: usize::try_from(off).unwrap_or(usize::MAX),
                     detail: format!("cross-reference chain lists more than {row_limit} entries"),
                 });
-            };
-            merged_rows = total;
+            }
             oddities.extend(odd.into_iter().map(|num| (off, num)));
             for (num, e) in sect {
                 entries.entry(num).or_insert(e);
@@ -478,12 +482,14 @@ impl Document {
     }
 
     /// Read one section at `off`, adding entries not already known (newer sections win). `odd`
-    /// collects the object numbers whose entry here is set aside ([`Self::xref_oddities`]).
+    /// collects the object numbers whose entry here is set aside ([`Self::xref_oddities`]), and
+    /// `counted` grows by every row read, repeated and set-aside rows included (#5082).
     fn read_section(
         &self,
         off: usize,
         entries: &mut BTreeMap<u32, XrefEntry>,
         odd: &mut Vec<u32>,
+        counted: &mut usize,
         log: &mut Vec<String>,
     ) -> Result<(Dict, bool), CosError> {
         #[cfg(test)]
@@ -510,6 +516,7 @@ impl Document {
                 }
                 let start = shifted;
                 for i in 0..count {
+                    *counted = counted.saturating_add(1);
                     lx.skip_ws();
                     let o = lx.token();
                     lx.skip_ws();
@@ -580,6 +587,7 @@ impl Document {
             }
             for i in 0..*count {
                 let Some(r) = rows.next() else { break };
+                *counted = counted.saturating_add(1);
                 let t = field(r, 0, w[0], 1);
                 let a = field(r, w[0], w[1], 0);
                 let b = field(r, w[0] + w[1], w[2], 0);
