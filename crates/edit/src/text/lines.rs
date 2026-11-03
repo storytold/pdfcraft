@@ -143,7 +143,7 @@ pub(crate) fn rewritten_contents(doc: &mut Document, streams: &[(Object, Vec<u8>
 }
 
 pub(crate) fn page_dict(doc: &Document, page: usize) -> Result<pdfcraft_model::Page, EditError> {
-    pdfcraft_model::pages(doc).into_iter().nth(page).ok_or(EditError::NoSuchPage(page))
+    pdfcraft_model::page(doc, page).ok_or(EditError::NoSuchPage(page))
 }
 
 fn fill_color(fill: &[Op]) -> [f64; 3] {

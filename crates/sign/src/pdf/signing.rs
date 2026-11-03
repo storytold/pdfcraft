@@ -239,7 +239,7 @@ fn sign_inner(
             w.set(b"F".to_vec(), Object::Int(4 | 128));
             // On a page shown turned, the signature reads upright as the page is displayed: the
             // widget is turned back by the page's rotation (ISO 32000-2 §12.5.6.19, `/MK /R`).
-            let turn = pdfcraft_model::pages(&doc).get(opts.page).map_or(0, |p| p.rotation(&doc));
+            let turn = pdfcraft_model::page(&doc, opts.page).map_or(0, |p| p.rotation(&doc));
             if turn != 0 {
                 let mut mk = Dict::new();
                 mk.set(b"R".to_vec(), Object::Int(turn));

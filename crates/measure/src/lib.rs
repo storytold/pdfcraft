@@ -364,7 +364,7 @@ fn nums(v: impl IntoIterator<Item = f64>) -> Object {
     Object::Array(v.into_iter().map(Object::Real).collect())
 }
 fn page(doc: &Document, index: usize) -> Result<pdfcraft_model::Page> {
-    pdfcraft_model::pages(doc).get(index).cloned().ok_or_else(|| invalid("measurement page does not exist"))
+    pdfcraft_model::page(doc, index).ok_or_else(|| invalid("measurement page does not exist"))
 }
 fn annot(doc: &Document, page_index: usize, index: usize) -> Result<(ObjRef, Dict)> {
     let p = page(doc, page_index)?;

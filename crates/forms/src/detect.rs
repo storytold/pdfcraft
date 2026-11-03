@@ -127,7 +127,7 @@ impl DetectionPath {
 
 pub fn page_shapes(doc: &Document, page: usize) -> Shapes {
     let mut out = Shapes::default();
-    let Some(p) = pdfcraft_model::pages(doc).into_iter().nth(page) else { return out };
+    let Some(p) = pdfcraft_model::page(doc, page) else { return out };
     let list: Vec<Object> = match p.dict.get(b"Contents").map(|c| doc.resolve(c)) {
         Some(c) => match &*c {
             Object::Array(a) => a.clone(),

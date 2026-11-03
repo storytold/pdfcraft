@@ -256,7 +256,7 @@ pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> R
             d.set(b"Name".to_vec(), Object::name(mark.name()));
             border(&mut d);
             // Drawn upright for the page as displayed, as a stamp is (#2392).
-            let turn = pdfcraft_model::pages(doc).get(new.page).map_or(0, |p| p.rotation(doc));
+            let turn = pdfcraft_model::page(doc, new.page).map_or(0, |p| p.rotation(doc));
             if matches!(turn, 90 | 180 | 270) {
                 d.set(b"PCStampRotate".to_vec(), Object::Int(turn));
             }
@@ -271,7 +271,7 @@ pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> R
                 d.set(b"PCByLine".to_vec(), PdfString::text(b));
             }
             // The label is drawn for the page as displayed. A later page rotation is a new edit.
-            let turn = pdfcraft_model::pages(doc).get(new.page).map_or(0, |p| p.rotation(doc));
+            let turn = pdfcraft_model::page(doc, new.page).map_or(0, |p| p.rotation(doc));
             if matches!(turn, 90 | 180 | 270) {
                 d.set(b"PCStampRotate".to_vec(), Object::Int(turn));
             }
@@ -291,7 +291,7 @@ pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> R
             // An image signature's rectangle is in user space; on a turned page its appearance is
             // turned back (see `appearance::build`), so it reads upright as displayed.
             if *image && matches!(clean.as_str(), "Signature" | "Initials") {
-                let turn = pdfcraft_model::pages(doc).get(new.page).map_or(0, |p| p.rotation(doc));
+                let turn = pdfcraft_model::page(doc, new.page).map_or(0, |p| p.rotation(doc));
                 if turn != 0 {
                     d.set(b"PCPictureRotate".to_vec(), Object::Int(turn));
                 }
@@ -390,7 +390,7 @@ pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> R
             rich_text(&mut d);
             // The text is laid out for the page as displayed, like a stamp's label.
             if !matches!(new.shape, Shape::Callout { .. }) {
-                let turn = pdfcraft_model::pages(doc).get(new.page).map_or(0, |p| p.rotation(doc));
+                let turn = pdfcraft_model::page(doc, new.page).map_or(0, |p| p.rotation(doc));
                 if matches!(turn, 90 | 180 | 270) {
                     d.set(b"PCTextRotate".to_vec(), Object::Int(turn));
                 }

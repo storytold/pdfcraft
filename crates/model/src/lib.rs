@@ -91,6 +91,13 @@ pub fn pages(doc: &Document) -> Vec<Page> {
     PageTree::new(doc).collect()
 }
 
+/// The leaf page at `index` in document order, with its inherited attributes; `None` past the last
+/// page. Only that page's inherited values are copied, so unlike `pages(doc).get(index)` it finds a
+/// page past the [`MAX_INHERITED_COPIES`] budget of a whole walk, the way [`page_refs`] lists it.
+pub fn page(doc: &Document, index: usize) -> Option<Page> {
+    PageLeaves::new(doc).nth(index).and_then(|leaf| page_of(&leaf, |_| true))
+}
+
 /// The page object of each leaf page, in document order: [`PageLeaves`] without copying any
 /// dictionary.
 pub fn page_refs(doc: &Document) -> Vec<ObjRef> {
@@ -339,23 +346,32 @@ impl Iterator for PageTree<'_> {
 
     fn next(&mut self) -> Option<Page> {
         let leaf = self.leaves.next()?;
-        let mut dict = leaf.dict()?.clone();
-        for (key, owner) in INHERITABLE.iter().zip(&leaf.inherited) {
-            if !dict.contains(key)
-                && let Some((owner, weight)) = owner
-                && let Some(value) = owner.as_dict().and_then(|d| d.get(key))
-            {
-                // Past the budget the walk is cut off, like a tree too large to follow.
-                let Some(left) = self.budget.checked_sub(*weight) else {
-                    self.leaves.pending.clear();
-                    return None;
-                };
-                self.budget = left;
-                dict.set(key.to_vec(), value.clone());
-            }
+        let budget = &mut self.budget;
+        let page = page_of(&leaf, |weight| budget.checked_sub(weight).map(|left| *budget = left).is_some());
+        if page.is_none() {
+            // Past the budget the walk is cut off, like a tree too large to follow.
+            self.leaves.pending.clear();
         }
-        Some(Page { obj: leaf.obj, dict })
+        page
     }
+}
+
+/// `leaf` as a [`Page`], each inherited value it doesn't set itself copied into its dictionary;
+/// `charge` is asked to pay each copy's weight first, and `None` when it refuses one.
+fn page_of(leaf: &PageLeaf, mut charge: impl FnMut(usize) -> bool) -> Option<Page> {
+    let mut dict = leaf.dict()?.clone();
+    for (key, owner) in INHERITABLE.iter().zip(&leaf.inherited) {
+        if !dict.contains(key)
+            && let Some((owner, weight)) = owner
+            && let Some(value) = owner.as_dict().and_then(|d| d.get(key))
+        {
+            if !charge(*weight) {
+                return None;
+            }
+            dict.set(key.to_vec(), value.clone());
+        }
+    }
+    Some(Page { obj: leaf.obj, dict })
 }
 
 #[cfg(test)]
@@ -508,6 +524,23 @@ mod tests {
         let aliases: Vec<Object> = (0..5).map(|generation| Object::Ref(ObjRef { num: 3, generation })).collect();
         d.update_dict(root, |dict| dict.set(b"Kids".to_vec(), Object::Array(aliases))).unwrap();
         assert_eq!(page_refs(&d), [ObjRef { num: 3, generation: 0 }]);
+    }
+
+    /// `page` copies one page's inherited values only, so it finds a page past the copy budget of
+    /// a whole walk, with its inherited rotation.
+    #[test]
+    fn one_page_is_found_past_the_budget_of_a_whole_walk() {
+        let mut d = doc(90);
+        let root = ObjRef { num: 2, generation: 0 };
+        let leaf = d.get(ObjRef { num: 3, generation: 0 }).as_dict().unwrap().clone();
+        let kids: Vec<Object> = (0..3).map(|_| Object::Ref(d.add(leaf.clone()))).collect();
+        d.update_dict(root, |dict| dict.set(b"Kids".to_vec(), Object::Array(kids))).unwrap();
+        let tree = d.get(root);
+        let tree = tree.as_dict().unwrap();
+        let one_page: usize = INHERITABLE.iter().filter_map(|k| tree.get(k).map(|v| weight(v, 0))).sum();
+        assert_eq!(PageTree::with_budget(&d, one_page).count(), 1, "the whole walk stops after one page");
+        assert_eq!(page(&d, 2).map(|p| p.rotation(&d)), Some(90));
+        assert!(page(&d, 3).is_none());
     }
 
     /// A walk that ends at either cap says so; one that reads the whole tree does not.
