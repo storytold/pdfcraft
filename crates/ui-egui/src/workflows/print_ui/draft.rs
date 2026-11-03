@@ -61,6 +61,8 @@ pub struct PrintDraft {
     pub paper: usize,
     /// The paper chosen before Label put label stock in, so leaving Label gives it back (#3564).
     pub paper_before_label: Option<usize>,
+    /// The list of papers available for selection (standard PAPERS plus any detected from the driver).
+    pub papers: Vec<(String, (f64, f64))>,
     /// The sheet shown in the preview (0-based).
     pub sheet: usize,
     pub current_page: usize,
@@ -120,6 +122,7 @@ impl Default for PrintDraft {
             dpi: 300.0,
             paper: 0,
             paper_before_label: None,
+            papers: default_papers(),
             sheet: 0,
             current_page: 0,
             driver_options: None,
@@ -135,7 +138,88 @@ impl Default for PrintDraft {
     }
 }
 
+/// Standard fallback paper presets.
+pub fn default_papers() -> Vec<(String, (f64, f64))> {
+    PAPERS.iter().map(|(n, s)| (n.to_string(), *s)).collect()
+}
+
 impl PrintDraft {
+    pub fn paper_name(&self) -> &str {
+        self.papers.get(self.paper).map(|p| p.0.as_str()).or_else(|| PAPERS.get(self.paper).map(|p| p.0)).unwrap_or(PAPERS[0].0)
+    }
+
+    pub fn paper_size(&self) -> (f64, f64) {
+        self.papers.get(self.paper).map(|p| p.1).or_else(|| PAPERS.get(self.paper).map(|p| p.1)).unwrap_or(PAPERS[0].1)
+    }
+
+    pub fn matching_paper(&self, size: (f64, f64)) -> Option<usize> {
+        print::matching_paper(size).or_else(|| {
+            self.papers.iter().position(|(_, p)| {
+                ((p.0 - size.0).abs() <= 0.5 && (p.1 - size.1).abs() <= 0.5) || ((p.0 - size.1).abs() <= 0.5 && (p.1 - size.0).abs() <= 0.5)
+            })
+        })
+    }
+
+    pub fn update_printer_papers(&mut self) {
+        let mut papers = default_papers();
+        if let Some(ref printer) = self.printer {
+            let detected = spool::printer_papers(printer);
+            for (name, size) in detected {
+                let norm = (size.0.min(size.1), size.0.max(size.1));
+                if !papers.iter().any(|(n, s)| {
+                    n.eq_ignore_ascii_case(&name) || {
+                        let s_norm = (s.0.min(s.1), s.0.max(s.1));
+                        (s_norm.0 - norm.0).abs() <= 0.5 && (s_norm.1 - norm.1).abs() <= 0.5
+                    }
+                }) {
+                    papers.push((name, size));
+                }
+            }
+        }
+        let current_name = self.paper_name().to_string();
+        let current_size = self.paper_size();
+        self.papers = papers;
+        if let Some(pos) = self.papers.iter().position(|(n, _)| n == &current_name) {
+            self.paper = pos;
+        } else if let Some(pos) = self.papers.iter().position(|(_, s)| (s.0 - current_size.0).abs() <= 0.5 && (s.1 - current_size.1).abs() <= 0.5) {
+            self.paper = pos;
+        } else {
+            self.paper = self.paper.min(self.papers.len().saturating_sub(1));
+        }
+    }
+
+    /// Auto-select the printer's configured default paper (from DEVMODE / driver settings).
+    pub fn auto_select_default_paper(&mut self) {
+        if let Some(ref printer) = self.printer
+            && let Some((name, size)) = spool::printer_default_paper(printer)
+        {
+            self.apply_driver_paper(name, size);
+        }
+    }
+
+    /// Apply paper size and orientation chosen in printer properties or page setup.
+    pub fn apply_driver_paper(&mut self, name: String, size: (f64, f64)) {
+        if let Some(pos) = self.matching_paper(size) {
+            self.paper = pos;
+        } else if !name.is_empty() {
+            if let Some(pos) = self.papers.iter().position(|(n, _)| n.eq_ignore_ascii_case(&name)) {
+                self.paper = pos;
+            } else {
+                self.papers.push((name, size));
+                self.paper = self.papers.len() - 1;
+            }
+        } else if size.0 > 0.0 && size.1 > 0.0 {
+            let custom_name = format!("{:.1} x {:.1} pt", size.0, size.1);
+            self.papers.push((custom_name, size));
+            self.paper = self.papers.len() - 1;
+        }
+        if size.0 > size.1 {
+            self.orientation = Orientation::Landscape;
+        } else if size.1 > size.0 {
+            self.orientation = Orientation::Portrait;
+        }
+    }
+
     /// Choose Page Sizing & Handling. Label loads label stock and remembers the paper it
     /// replaced; leaving Label gives that paper back, unless another one was picked meanwhile.
     pub fn set_handling(&mut self, handling: Handling) {
@@ -192,7 +276,7 @@ impl PrintDraft {
         };
         Ok(print::Settings {
             pages,
-            paper: PAPERS[self.paper.min(PAPERS.len() - 1)].1,
+            paper: self.paper_size(),
             orientation: self.orientation,
             layout,
             content: self.content,

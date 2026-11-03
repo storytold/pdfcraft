@@ -1,7 +1,7 @@
 use super::draft::{Handling, PrintDraft, Which};
 use super::{
-    Binding, BookletSubset, Color32, Content, Orientation, PAPERS, PREVIEW_BOX, PREVIEW_H, PREVIEW_W, PageOrder, Pos2, Rect, SizeMode, Stroke,
-    Subset, Tokens, pos2, print, printer_label, spool, still_looking, theme, vec2, widgets,
+    Binding, BookletSubset, Color32, Content, Orientation, PREVIEW_BOX, PREVIEW_H, PREVIEW_W, PageOrder, Pos2, Rect, SizeMode, Stroke, Subset,
+    Tokens, pos2, print, printer_label, spool, still_looking, theme, vec2, widgets,
 };
 
 /// Properties… on CUPS: the driver's options for this print, grouped as the driver groups them.
@@ -141,7 +141,13 @@ pub(crate) fn body(
                         && let Some(p) = d.printer.clone()
                     {
                         if spool::HAS_PRINTER_PREFERENCES {
-                            d.driver_error = spool::open_printer_preferences(&p).err().map(|e| e.to_string());
+                            match spool::show_printer_properties(&p) {
+                                Ok(Some((name, size))) => {
+                                    d.apply_driver_paper(name, size);
+                                }
+                                Ok(None) => {}
+                                Err(e) => d.driver_error = Some(e.to_string()),
+                            }
                         } else {
                             if d.driver_options.as_ref().is_none_or(|(read_for, _)| *read_for != p) && d.driver_options_loading.as_deref() != Some(p.as_str()) {
                                 // Read off the GUI thread (#1818): `poll_print` starts it next frame.
@@ -158,6 +164,8 @@ pub(crate) fn body(
                     d.printer_picked = true;
                     d.show_driver_options = false;
                     d.driver_error = None;
+                    d.update_printer_papers();
+                    d.auto_select_default_paper();
                 }
                 ui.end_row();
                 // The spooler answered with no printer at all (#160): say so, rather than
@@ -202,15 +210,34 @@ pub(crate) fn body(
                     ui.end_row();
                 }
                 let paper_label = ui.label(tl!("Paper:"));
-                let paper_name = PAPERS.get(d.paper).map_or("US Letter", |p| p.0);
+                let paper_name = d.paper_name().to_string();
                 let before = d.paper;
-                craft_ui::ComboBox::from_id_salt("paper").selected_text(tl!(paper_name)).width(260.0).show_ui(ui, |ui| {
-                    for (i, (name, _)) in PAPERS.iter().enumerate() {
-                        ui.selectable_value(&mut d.paper, i, tl!(name));
+                ui.horizontal(|ui| {
+                    craft_ui::ComboBox::from_id_salt("paper").selected_text(tl!(&paper_name)).width(180.0).show_ui(ui, |ui| {
+                        for (i, (name, _)) in d.papers.iter().enumerate() {
+                            ui.selectable_value(&mut d.paper, i, tl!(name));
+                        }
+                    })
+                    .response
+                    .labelled_by(paper_label.id);
+                    let page_setup_tip = if spool::HAS_PRINTER_PREFERENCES {
+                        tl!("Opens the printer driver's page setup: paper size, orientation and source.")
+                    } else {
+                        tl!("The printer driver's page setup: paper size, orientation and source.")
+                    };
+                    let page_setup = ui.add_enabled(d.printer.is_some() && !browser, egui::Button::new(tl!("Page Setup…"))).on_hover_text(page_setup_tip);
+                    if page_setup.clicked()
+                        && let Some(p) = d.printer.clone()
+                    {
+                        match spool::show_printer_properties(&p) {
+                            Ok(Some((name, size))) => {
+                                d.apply_driver_paper(name, size);
+                            }
+                            Ok(None) => {}
+                            Err(e) => d.driver_error = Some(e.to_string()),
+                        }
                     }
-                })
-                .response
-                .labelled_by(paper_label.id);
+                });
                 // Label stock gets the label layout (cut, turned upright, fitted).
                 if d.paper != before && d.paper == print::LABEL_PAPER {
                     d.paper_before_label = Some(before);
@@ -242,7 +269,7 @@ pub(crate) fn body(
             if let Some(&source) = sizes.get(d.current_page) {
                 ui.horizontal_wrapped(|ui| {
                     ui.label(crate::i18n::fmt(tl!("PDF page: {size}"), &[("size", &d.units.size(source.0, source.1))]));
-                    let matched = print::matching_paper(source);
+                    let matched = d.matching_paper(source);
                     if ui.add_enabled(matched.is_some(), egui::Button::new(tl!("Match page at 100%"))).clicked()
                         && let Some(paper) = matched
                     {

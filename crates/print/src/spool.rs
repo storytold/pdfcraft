@@ -157,6 +157,94 @@ pub fn open_printer_preferences(printer: &str) -> Result<(), crate::PrintError> 
     craft_print::open_printer_preferences(printer).map_err(|e| crate::PrintError::Spool(e.to_string()))
 }
 
+/// A named paper with dimensions in points `(width, height)`.
+pub type Paper = (String, (f64, f64));
+
+/// The paper sizes supported by `printer` as reported by the system / printer driver.
+/// Empty when the printer reports none or on platforms where driver capabilities are not queried.
+#[cfg(windows)]
+pub fn printer_papers(printer: &str) -> Vec<Paper> {
+    use winprint::ticket::{FeatureOptionPack as _, FeatureOptionPackWithPredefined as _};
+    let Ok(devices) = winprint::printer::PrinterDevice::all() else { return Vec::new() };
+    let Some(device) = devices.into_iter().find(|d| d.name() == printer) else { return Vec::new() };
+    let Ok(capabilities) = winprint::ticket::PrintCapabilities::fetch(&device) else { return Vec::new() };
+    let mut papers = Vec::new();
+    for media in capabilities.page_media_sizes() {
+        let size = media.size();
+        let w_pts = (size.width_in_micron() as f64) * 72.0 / 25_400.0;
+        let h_pts = (size.height_in_micron() as f64) * 72.0 / 25_400.0;
+        if w_pts > 0.0 && h_pts > 0.0 {
+            let name = media.display_name().map(str::to_string).unwrap_or_else(|| {
+                if let Some(predefined) = media.as_predefined_name() { format!("{predefined:?}") } else { format!("{w_pts:.1} x {h_pts:.1} pt") }
+            });
+            let w_pts = (w_pts * 100.0).round() / 100.0;
+            let h_pts = (h_pts * 100.0).round() / 100.0;
+            if !papers.iter().any(|(n, (w, h)): &(String, (f64, f64))| n == &name && (*w - w_pts).abs() < 0.1 && (*h - h_pts).abs() < 0.1) {
+                papers.push((name, (w_pts, h_pts)));
+            }
+        }
+    }
+    papers
+}
+
+#[cfg(not(windows))]
+pub fn printer_papers(_printer: &str) -> Vec<Paper> {
+    Vec::new()
+}
+
+/// The default paper size configured for `printer` in the printer properties / DEVMODE.
+/// Returns `Some((name, (width, height)))` if readable.
+#[cfg(windows)]
+pub fn printer_default_paper(printer: &str) -> Option<Paper> {
+    let settings = craft_print::rgb::default_settings(printer).ok()?;
+    let page = craft_print::rgb::page(printer, Some(&settings)).ok()?;
+    let w_pts = (page.paper.0 * 100.0).round() / 100.0;
+    let h_pts = (page.paper.1 * 100.0).round() / 100.0;
+    let papers = printer_papers(printer);
+    let name = papers
+        .iter()
+        .find(|(_, (w, h))| ((*w - w_pts).abs() <= 1.0 && (*h - h_pts).abs() <= 1.0) || ((*w - h_pts).abs() <= 1.0 && (*h - w_pts).abs() <= 1.0))
+        .map(|(n, _)| n.clone())
+        .unwrap_or_default();
+    Some((name, (w_pts, h_pts)))
+}
+
+#[cfg(not(windows))]
+pub fn printer_default_paper(_printer: &str) -> Option<Paper> {
+    None
+}
+
+/// Shows the printer driver's Print Settings / DocumentProperties dialog (Windows).
+/// If the user clicks OK, returns the updated paper size.
+pub fn show_printer_properties(printer: &str) -> Result<Option<Paper>, crate::PrintError> {
+    #[cfg(windows)]
+    {
+        let devmode = match craft_print::rgb::settings_dialog(printer, None, None) {
+            Ok(Some(dm)) => dm,
+            Ok(None) => return Ok(None),
+            Err(_) => {
+                open_printer_preferences(printer)?;
+                return Ok(None);
+            }
+        };
+        let page = craft_print::rgb::page(printer, Some(&devmode)).map_err(|e| crate::PrintError::Spool(e.to_string()))?;
+        let w_pts = (page.paper.0 * 100.0).round() / 100.0;
+        let h_pts = (page.paper.1 * 100.0).round() / 100.0;
+        let papers = printer_papers(printer);
+        let name = papers
+            .iter()
+            .find(|(_, (w, h))| ((*w - w_pts).abs() <= 1.0 && (*h - h_pts).abs() <= 1.0) || ((*w - h_pts).abs() <= 1.0 && (*h - w_pts).abs() <= 1.0))
+            .map(|(n, _)| n.clone())
+            .unwrap_or_default();
+        Ok(Some((name, (w_pts, h_pts))))
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = printer;
+        Ok(None)
+    }
+}
+
 /// The PPD language codes (`*cupsLanguages`, the `ll` of `*ll.Translation`) to try for a UI
 /// language code, most specific first: `pt-br` → `pt_BR`, `pt`; `zh-hans` → `zh_CN`, `zh`.
 // Read only by the CUPS path; the tests exercise it everywhere.

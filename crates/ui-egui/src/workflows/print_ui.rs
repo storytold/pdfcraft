@@ -171,6 +171,10 @@ impl PdfCraftApp {
             which,
             ..keep
         };
+        self.print_draft.update_printer_papers();
+        if !picked && self.print_draft.paper == 0 {
+            self.print_draft.auto_select_default_paper();
+        }
         self.dialog = Some(crate::Dialog::Print);
     }
 
@@ -313,6 +317,10 @@ impl PdfCraftApp {
                     if !d.printer_picked || !offered(d.printer.as_deref(), &printers) {
                         d.printer_picked = false;
                         d.printer = default_printer(&printers);
+                        d.update_printer_papers();
+                        if d.paper == 0 {
+                            d.auto_select_default_paper();
+                        }
                     }
                     d.printers = printers;
                     d.printers_loading = false;

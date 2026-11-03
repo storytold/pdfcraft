@@ -1144,3 +1144,25 @@ fn contents_pieces_join_with_a_space_across_a_trailing_comment() {
     let printed_ctrl = impose(&with_newline, &settings(vec![0], Layout::Size(SizeMode::Actual))).unwrap();
     assert_eq!(form_strings(printed_ctrl), [b"HIDDEN".to_vec(), b"SHOWN".to_vec()]);
 }
+
+#[test]
+fn printer_papers_and_default_paper_api() {
+    // Nonexistent printer returns empty
+    assert!(crate::spool::printer_papers("Nonexistent Printer 12345").is_empty());
+    assert_eq!(crate::spool::printer_default_paper("Nonexistent Printer 12345"), None);
+
+    #[cfg(windows)]
+    {
+        // On Windows with installed printers, test detection if any installed
+        for p in crate::spool::printers() {
+            let papers = crate::spool::printer_papers(&p.name);
+            if !papers.is_empty() {
+                // Every paper has a valid positive size and a non-empty name
+                for (name, (w, h)) in &papers {
+                    assert!(!name.is_empty());
+                    assert!(*w > 0.0 && *h > 0.0);
+                }
+            }
+        }
+    }
+}

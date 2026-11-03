@@ -913,3 +913,45 @@ fn a_booklet_decides_two_sided_itself() {
     assert!(h.query_by_role_and_label(Role::ComboBox, "Two-sided:").is_some());
     assert_eq!(h.state().print_draft.job("x").duplex, Some(Duplex::LongEdge), "back to the choice");
 }
+
+/// #5861: The print dialog supports all papers detected from the printer driver, matches custom
+/// page sizes against them, and imposes on the chosen dimensions.
+#[test]
+fn printer_papers_and_properties_selection() {
+    let mut h = harness();
+    assert!(h.state_mut().execute("print.dialog"));
+    h.run_steps(3);
+
+    // Initial state offers standard PAPERS.
+    assert!(h.state().print_draft.papers.len() >= 21);
+    assert_eq!(h.state().print_draft.paper_name(), "US Letter");
+
+    // When the driver offers additional custom papers, they are available in d.papers.
+    let custom_paper = ("Custom 333x444".to_string(), (333.0, 444.0));
+    h.state_mut().print_draft.papers.push(custom_paper.clone());
+    let custom_index = h.state().print_draft.papers.len() - 1;
+
+    h.state_mut().print_draft.paper = custom_index;
+    assert_eq!(h.state().print_draft.paper_name(), "Custom 333x444");
+    assert_eq!(h.state().print_draft.paper_size(), (333.0, 444.0));
+
+    // Matching page at 100% finds the custom paper
+    assert_eq!(h.state().print_draft.matching_paper((333.0, 444.0)), Some(custom_index));
+
+    // Imposed settings use the exact dimensions of the detected paper
+    let settings = h.state().print_draft.settings(1, &["1".into()]).unwrap();
+    assert_eq!(settings.paper, (333.0, 444.0));
+
+    // Page Setup button is present in the dialog
+    h.get_by_label("Page Setup…");
+
+    // Applying driver paper adapts paper selection and orientation
+    h.state_mut().print_draft.apply_driver_paper("4 x 6 in label (101.6 x 152.4 mm)".into(), (288.0, 432.0));
+    assert_eq!(h.state().print_draft.paper, pdfcraft_engine::print::LABEL_PAPER);
+    assert_eq!(h.state().print_draft.orientation, pdfcraft_engine::print::Orientation::Portrait);
+
+    // Landscape driver media adapts orientation to Landscape
+    h.state_mut().print_draft.apply_driver_paper("Landscape Custom".into(), (500.0, 300.0));
+    assert_eq!(h.state().print_draft.orientation, pdfcraft_engine::print::Orientation::Landscape);
+    assert_eq!(h.state().print_draft.paper_name(), "Landscape Custom");
+}
