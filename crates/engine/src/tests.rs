@@ -10251,3 +10251,24 @@ fn image_transform_engine_refuses_singular_matrices_without_mutation() {
         assert_eq!(s.get(id).unwrap().bytes, before);
     }
 }
+
+/// A script asking for thousands of resets, each with a long list of names, is bounded: the
+/// names are taken apart once, and resets past the event's time budget are skipped, so the
+/// button answers promptly and the fields it named are reset.
+#[test]
+fn xfa_reset_requests_are_bounded() {
+    let names: Vec<String> = (0..500).map(|i| format!("nothing{i}")).chain(["qty".into()]).collect();
+    let script = format!(r#"for (var i = 0; i < 5000; i++) {{ xfa.host.resetData("{}"); }}"#, names.join(", "));
+    let tpl = pdfcraft_xfa::fixtures::scripted_template().replace(r#"xfa.host.messageBox("Hello " + qty.rawValue);"#, &script);
+    let bytes = Arc::new(pdfcraft_xfa::fixtures::shell(&tpl));
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("resets.pdf", None, bytes, None).expect("opens");
+    let value = |s: &Session, n: &str| s.get(id).unwrap().form.iter().find(|f| f.name == n).unwrap().value.clone();
+    s.apply(id, Edit::SetFieldValue { name: "qty".into(), value: FieldValue::Text("4".into()) }).unwrap();
+    s.apply(id, Edit::SetFieldValue { name: "price".into(), value: FieldValue::Text("9".into()) }).unwrap();
+    let started = std::time::Instant::now();
+    s.run_javascript(id, "", Some("hello")).unwrap();
+    assert!(started.elapsed() < std::time::Duration::from_secs(30), "{:?}", started.elapsed());
+    assert!(value(&s, "qty").is_empty(), "{:?}", value(&s, "qty"));
+    assert_eq!(value(&s, "price"), vec!["9".to_string()]);
+}

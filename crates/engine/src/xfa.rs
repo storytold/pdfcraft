@@ -198,16 +198,26 @@ fn plain_som(som: &str) -> String {
     out
 }
 
+/// The parts of a SOM or a script's name for one (`qty`, `page1.qty`, `xfa.form.form.page1.qty`),
+/// its indexes and form prefix left out.
+fn som_parts(name: &str) -> Vec<String> {
+    let n = plain_som(name.trim());
+    let n = n.strip_prefix("xfa.form.").or_else(|| n.strip_prefix("$form.")).unwrap_or(&n);
+    n.split('.').filter(|s| !s.is_empty()).map(str::to_owned).collect()
+}
+
 /// Does `name` from a script (`qty`, `page1.qty`, `xfa.form.form.page1.qty`, or a container
 /// such as `table`) name this SOM or one of its ancestors?
 fn som_matches(som: &str, name: &str) -> bool {
-    let plain = plain_som(som);
-    let n = plain_som(name.trim());
-    let n = n.strip_prefix("xfa.form.").or_else(|| n.strip_prefix("$form.")).unwrap_or(&n);
-    let want: Vec<&str> = n.split('.').filter(|s| !s.is_empty()).collect();
-    let have: Vec<&str> = plain.split('.').filter(|s| !s.is_empty()).collect();
-    !want.is_empty() && have.windows(want.len()).any(|w| w == want.as_slice())
+    let want = som_parts(name);
+    !want.is_empty() && som_parts(som).windows(want.len()).any(|w| w == want.as_slice())
 }
+
+/// Most SOM parts compared with requested names in one `resetData`: a script's long list of
+/// names against a large form would otherwise multiply; past it the rest of the form is not
+/// matched (a part of the reset the script asked for is skipped, as its scripts are past the
+/// event's budget).
+const MAX_RESET_COMPARISONS: usize = 1 << 22;
 
 /// A generated field as the runner tracks it: kind, value and on state.
 #[derive(Clone)]
@@ -534,12 +544,31 @@ impl<'a, 'b> Runner<'a, 'b> {
 
     /// `xfa.host.resetData`: the fields back to their defaults, in the form and the data.
     fn reset(&mut self, names: &[String]) -> Result<(), String> {
+        // A script may ask for thousands of resets, each a scan of the form: past the event's
+        // time budget they are skipped, as its remaining scripts are.
+        if self.clock.spent() {
+            self.skipped += 1;
+            return Ok(());
+        }
         self.flush()?;
         let by_som = self.by_som().clone();
         let listed: Option<Vec<String>> = if names.is_empty() {
             None
         } else {
-            Some(by_som.iter().filter(|(som, _)| names.iter().any(|n| som_matches(som, n))).map(|(_, f)| f.clone()).collect())
+            // Each name and each SOM is taken apart once, not once per pair, and the pairs
+            // compared are bounded.
+            let mut wanted: Vec<Vec<String>> = names.iter().map(|n| som_parts(n)).filter(|w| !w.is_empty()).collect();
+            wanted.sort();
+            wanted.dedup();
+            let mut comparisons = 0usize;
+            let mut matched = |som: &str| {
+                let have = som_parts(som);
+                wanted.iter().any(|w| {
+                    comparisons = comparisons.saturating_add(have.len());
+                    comparisons <= MAX_RESET_COMPARISONS && have.windows(w.len()).any(|x| x == w.as_slice())
+                })
+            };
+            Some(by_som.iter().filter(|(som, _)| matched(som)).map(|(_, f)| f.clone()).collect())
         };
         if listed.as_ref().is_some_and(Vec::is_empty) {
             return Ok(());
