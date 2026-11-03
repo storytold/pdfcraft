@@ -642,6 +642,7 @@ impl Document {
     pub fn set(&mut self, r: ObjRef, obj: impl Into<Object>) {
         let obj = self.adopt(obj.into());
         self.overlay.insert(r.num, Slot::Set(r.generation, Arc::new(obj)));
+        self.forget_member_failures(r.num);
         if r.num >= self.next_num {
             self.next_num = r.num.saturating_add(1);
         }
@@ -669,6 +670,16 @@ impl Document {
     /// Delete an object (its number becomes free with the next generation).
     pub fn free(&mut self, r: ObjRef) {
         self.overlay.insert(r.num, Slot::Freed(r.generation.saturating_add(1)));
+        self.forget_member_failures(r.num);
+    }
+
+    /// Forget cached failures of the members `stream` held in the file: they were failures of
+    /// the file's copy, and an edit of `stream` may read. Clones share the cache, so theirs are
+    /// searched again too, which costs time only. A poisoned lock leaves the cache as it is.
+    fn forget_member_failures(&self, stream: u32) {
+        if let Ok(mut cache) = self.cache.lock() {
+            cache.forget_failures(|n| matches!(self.entries.lookup(*n, &self.data), Some(XrefEntry::InStream { stream: s, .. }) if s == stream));
+        }
     }
 
     /// Free what was added since the file was read and nothing refers to any more: the objects

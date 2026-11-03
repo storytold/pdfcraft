@@ -250,6 +250,11 @@ impl ObjectCache {
         self.owned = 0;
     }
 
+    /// Drop the cached failures `stale` picks. A failure holds no bytes, so the total stands.
+    pub(crate) fn forget_failures(&mut self, mut stale: impl FnMut(&u32) -> bool) {
+        self.entries.retain(|num, (loaded, _)| loaded.is_ok() || !stale(num));
+    }
+
     pub(crate) fn retain(&mut self, mut keep: impl FnMut(&u32) -> bool) {
         self.entries.retain(|num, _| keep(num));
         self.owned = self.entries.values().fold(0usize, |n, (_, owned)| n.saturating_add(*owned));

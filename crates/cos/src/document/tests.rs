@@ -634,6 +634,26 @@ fn an_edited_object_stream_leaves_other_clones_members_alone() {
     assert_eq!(text_of(&doc, 3, b"Hidden").as_deref(), Some("yes"), "the replacement reached another clone");
 }
 
+/// A member that failed to load from the file's object stream is kept as a failure, but replacing
+/// or freeing that stream forgets it: the member then reads from the edit.
+#[test]
+fn an_edited_object_stream_forgets_its_members_failures() {
+    let file = Arc::new(object_stream_file("3 0 ", ") broken", 0));
+    let mut doc = Document::open(file.clone()).unwrap();
+    assert!(doc.try_get(3).is_err(), "the file's member does not parse");
+    let mut dict = Dict::new();
+    dict.set(b"Type".to_vec(), Object::name("ObjStm"));
+    dict.set(b"N".to_vec(), Object::Int(1));
+    dict.set(b"First".to_vec(), Object::Int(4));
+    doc.set(ObjRef::new(4, 0), crate::Stream::from_raw(dict, b"3 0 << /Hidden (fixed) >>".to_vec()));
+    assert_eq!(text_of(&doc, 3, b"Hidden").as_deref(), Some("fixed"), "the cached failure outlived the edit");
+    assert!(doc.try_get(3).is_ok());
+    let mut doc = Document::open(file).unwrap();
+    assert!(matches!(doc.try_get(3), Err(CosError::Syntax { .. })), "the file's member does not parse");
+    doc.free(ObjRef::new(4, 0));
+    assert_eq!(doc.try_get(3), Err(CosError::MissingObject(4)), "the freed stream's member");
+}
+
 /// An object stream framed by one clone's edit of its indirect `/Length` is that clone's alone:
 /// the others still read its members within the file's length.
 #[test]
