@@ -54,12 +54,10 @@ pub(crate) fn layout_galley(ui: &egui::Ui, text: &str, _wrap: f32) -> std::sync:
     // Past the cap the buffer stays in stored order, so the galley must too. Otherwise the caret
     // index and the glyph index name different characters.
     let screen = if count == 0 || count > MAX_CHARS || !crate::bidi::has_rtl(text) { None } else { Some(analyze(text)) };
-    // The shaper string is the same characters as the field shows, including spaces and marks.
-    // `visual_auto` drops a trailing space, and the caret then falls back to the frozen galley.
-    let shaped = match &screen {
-        Some(screen) => crate::bidi::for_shaper(&screen.text),
-        None => text.to_owned(),
-    };
+    // The Arabic face shapes the stored query and places the words in reading order. Passing
+    // `for_shaper` of the already-visual line reverses each word first, and the face then
+    // reverses the line, so the first typed word lands on the left.
+    let shaped = text.to_owned();
     // Single-line, like egui's own field: do not wrap. The widget clips what does not fit.
     let mut job = LayoutJob::simple_singleline(shaped, font_id, color);
     job.keep_trailing_whitespace = true;
@@ -127,7 +125,14 @@ fn place_caret_glyphs(galley: &mut Galley, chars: usize) {
     }
     let Some(row) = galley.rows.first_mut() else { return };
     let glyphs = std::sync::Arc::make_mut(&mut row.row);
+    // The glyphs are already in screen order, one per character. A right-to-left level would
+    // put the caret before the first character on that character's right edge, one letter in
+    // from the leading edge of the line.
+    for glyph in &mut kept {
+        glyph.bidi_level = 0;
+    }
     glyphs.glyphs = kept;
+    glyphs.rtl_paragraph = false;
     // One visual line. Extra rows would make the caret count characters twice.
     galley.rows.truncate(1);
 }

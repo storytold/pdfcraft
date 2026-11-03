@@ -5,9 +5,8 @@
 //! lines and lets epaint reorder each one. [`visual`], [`visual_auto`] and [`display_rtl`] are
 //! kept for the tests that prove the old preordering is gone; they must not be used for painting
 //! with egui 0.37, where they would reverse mixed-direction text a second time. [`for_shaper`]
-//! and [`mirrored`] are the exception: the find bar and the Search panel's editable field
-//! (`rtl_input::layout_galley`) already keep their own text in display order, and call these two
-//! directly for the per-script joining and bracket mirroring that step still needs.
+//! stays for those tests. [`mirrored`] is what the find field uses when it builds the on-screen
+//! order (`rtl_input::analyze`).
 
 #[cfg(test)]
 use std::borrow::Cow;
@@ -69,15 +68,17 @@ fn push_line(out: &mut String, text: &str, info: &BidiInfo<'_>, para: &Paragraph
 /// Latin) is drawn by the Latin face left to right and stays as it is. The stretches include
 /// Persian and Arabic-Indic digits: Arabic script to the shaper, though they read left to right.
 ///
-/// The find bar and the Search panel's editable field call this directly
-/// (`rtl_input::layout_galley`): the stored query is already in display order there, so only the
-/// per-script joining this function does is needed, not a full preordering.
+/// The find field used to call this before handing text to egui. The Arabic face already places
+/// the stored query in reading order, and this extra reversal swapped the words. Tests keep it
+/// to lock that old per-word step.
+#[cfg(test)]
 pub(crate) fn for_shaper(shown: &str) -> String {
     let mut out = String::with_capacity(shown.len());
     push_for_shaper(&mut out, shown);
     out
 }
 
+#[cfg(test)]
 fn push_for_shaper(out: &mut String, shown: &str) {
     let mut stretch: Vec<char> = Vec::new();
     for c in shown.chars() {
@@ -376,6 +377,7 @@ fn is_rtl_script(c: char) -> bool {
 
 /// The zero-width (non-)joiners inside a word (Persian `می‌روم`): egui shapes them with the
 /// letter before them.
+#[cfg(test)]
 fn is_joiner(c: char) -> bool {
     matches!(c, '\u{200C}' | '\u{200D}')
 }
