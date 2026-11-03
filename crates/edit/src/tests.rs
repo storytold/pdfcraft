@@ -10541,3 +10541,136 @@ fn a_justified_indent_from_a_spaced_source_reaches_the_margin() {
         assert!((right - 372.0).abs() < 0.5, "source Tw {source_tw}: requested margin 372, last ink {right}");
     }
 }
+
+#[test]
+fn styled_indents_keep_spaces_and_their_incompatible_font_or_size_after_reopening() {
+    for (family, size, expected_font, expected_size) in
+        [(Some((added::Family::Times, false, false)), None, "Times-Roman", 12.0), (None, Some(18.0), "Helvetica", 18.0)]
+    {
+        for (draft, justified) in [("    alpha beta", false), ("    alpha beta\nomega", false), ("    alpha beta\nomega", true)] {
+            let mut doc = text_page("BT /F1 12 Tf 72 700 Td (Old words) Tj ET");
+            if justified {
+                let style = text::BlockStyle {
+                    family: Some((added::Family::Helvetica, false, false)),
+                    align: Some(added::Align::Justify),
+                    // Leave room for the enlarged indent in the 300 pt edit below.
+                    width: Some(200.0),
+                    ..Default::default()
+                };
+                text::rewrite_block(&mut doc, 0, 0, Some(draft), &style).unwrap();
+                doc = reopen(&doc);
+            }
+            let range = text::RangeStyle { range: 0..4, family, resource: None, size, color: None, underline: None, char_spacing: None, scale: None };
+            let style = text::BlockStyle { width: Some(300.0), ranges: vec![range], ..Default::default() };
+            text::rewrite_block(&mut doc, 0, 0, Some(draft), &style).unwrap();
+            let mut doc = reopen(&doc);
+            let check = |doc: &Document, expected: &str| {
+                let blocks = text::text_blocks(doc, 0).unwrap();
+                assert_eq!(blocks.len(), 1, "the styled indent belongs to its paragraph: {blocks:?}");
+                assert_eq!(blocks[0].editor_text, expected, "leading spaces survive incompatible styled runs");
+                let lines = text::text_lines(doc, 0).unwrap();
+                let indent = lines.iter().find(|l| l.text == "    ").expect("the indent keeps its own visual run");
+                assert_eq!(indent.base_font, expected_font);
+                assert!((indent.size - expected_size).abs() < 0.01);
+                let words = lines.iter().find(|l| l.text.contains("alpha")).unwrap();
+                assert_eq!(words.base_font, "Helvetica");
+                assert!((words.size - 12.0).abs() < 0.01);
+                assert!((indent.rect[2] - words.rect[0]).abs() < 0.5, "words follow their indent without overlap");
+            };
+            check(&doc, draft);
+            let next = draft.replace("beta", "bet");
+            text::replace_block(&mut doc, 0, 0, &next).unwrap();
+            check(&reopen(&doc), &next);
+        }
+    }
+}
+
+#[test]
+fn isolated_blank_runs_do_not_become_editable_text() {
+    for blank in ["BT /F1 18 Tf 72 730 Td (    ) Tj ET", "BT /F1 18 Tf 10 700 Td (    ) Tj ET", "BT /F1 18 Tf 300 700 Td (    ) Tj ET"] {
+        let doc = text_page(&format!("{blank} BT /F1 12 Tf 72 700 Td (Body) Tj ET"));
+        let lines = text::text_lines(&doc, 0).unwrap();
+        assert_eq!(lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(), ["Body"]);
+        assert_eq!(text::text_blocks(&doc, 0).unwrap()[0].editor_text, "Body");
+        assert_eq!(text::reading_blocks(&doc, 0).unwrap()[0].text, "Body");
+    }
+}
+
+#[test]
+fn separate_word_spaces_keep_main_editor_reading_text_and_lines() {
+    let cases = [
+        (
+            "separate text objects",
+            "BT /F1 12 Tf 72 700 Td (alpha) Tj ET BT /F1 12 Tf 101.352 700 Td ( ) Tj ET BT /F1 12 Tf 104.688 700 Td (beta) Tj ET",
+            vec!["alpha beta"],
+        ),
+        (
+            "separate text objects with independent spacing",
+            "BT /F1 12 Tf 72 700 Td (alpha) Tj ET BT /F1 12 Tf 1 Tw 101.352 700 Td ( ) Tj ET BT /F1 12 Tf 0 Tw 105.688 700 Td (beta) Tj ET",
+            vec!["alpha", "beta"],
+        ),
+        ("font change inside one text object", "BT /F1 12 Tf 72 700 Td (alpha) Tj /F2 12 Tf ( ) Tj /F1 12 Tf (beta) Tj ET", vec!["alpha beta"]),
+    ];
+    let mut actual = Vec::new();
+    for (name, content, expected_lines) in cases {
+        let mut doc = text_page(content);
+        doc.update_dict(pdfcraft_cos::ObjRef::new(6, 0), |d| {
+            *d = pdfcraft_cos::Dict::new();
+            d.set(b"Type".to_vec(), pdfcraft_cos::Object::name("Font"));
+            d.set(b"Subtype".to_vec(), pdfcraft_cos::Object::name("Type1"));
+            d.set(b"BaseFont".to_vec(), pdfcraft_cos::Object::name("Times-Roman"));
+        })
+        .unwrap();
+        let editor: Vec<_> = text::text_blocks(&doc, 0).unwrap().into_iter().map(|b| b.editor_text).collect();
+        let reading: Vec<_> = text::reading_blocks(&doc, 0).unwrap().into_iter().map(|b| b.text).collect();
+        let lines: Vec<_> = text::text_lines(&doc, 0).unwrap().into_iter().map(|l| l.text).collect();
+        println!("{name}: editor={editor:?}, reading={reading:?}, lines={lines:?}");
+        actual.push((name, editor, reading, lines, expected_lines));
+    }
+    for (name, editor, reading, lines, expected_lines) in actual {
+        assert_eq!(editor, ["alpha beta"], "{name}: main editor text is unchanged");
+        assert_eq!(reading, ["alpha beta"], "{name}: main reading text is unchanged");
+        assert_eq!(lines, expected_lines, "{name}: main line list is unchanged");
+    }
+}
+
+#[test]
+fn interleaved_word_space_keeps_main_line_list() {
+    let doc = text_page(
+        "BT /F1 12 Tf 72 700 Td (alpha) Tj ET BT /F1 12 Tf 72 500 Td (Elsewhere) Tj ET BT /F1 12 Tf 1 Tw 101.352 700 Td ( ) Tj ET BT /F1 12 Tf 0 Tw 105.688 700 Td (beta) Tj ET",
+    );
+    // Earlier text on this row still disqualifies the space when another row was painted between.
+    let expected = ["alpha", "Elsewhere", "beta"];
+    assert_eq!(text::text_lines(&doc, 0).unwrap().into_iter().map(|l| l.text).collect::<Vec<_>>(), expected);
+    assert_eq!(text::text_blocks(&doc, 0).unwrap().into_iter().map(|b| b.editor_text).collect::<Vec<_>>(), expected);
+    assert_eq!(text::reading_blocks(&doc, 0).unwrap().into_iter().map(|b| b.text).collect::<Vec<_>>(), expected);
+}
+
+#[test]
+fn out_of_order_word_space_keeps_main_line_list() {
+    for content in [
+        // The blank is painted first, then the word on its right, then the word on its left.
+        "BT /F1 12 Tf 1 Tw 101.352 700 Td ( ) Tj ET BT /F1 12 Tf 0 Tw 105.688 700 Td (beta) Tj ET BT /F1 12 Tf 72 700 Td (alpha) Tj ET",
+        // Right word first, then the blank, then the left word.
+        "BT /F1 12 Tf 105.688 700 Td (beta) Tj ET BT /F1 12 Tf 1 Tw 101.352 700 Td ( ) Tj ET BT /F1 12 Tf 0 Tw 72 700 Td (alpha) Tj ET",
+    ] {
+        let doc = text_page(content);
+        let expected = ["beta", "alpha"];
+        assert_eq!(
+            text::text_lines(&doc, 0).unwrap().into_iter().map(|l| l.text).collect::<Vec<_>>(),
+            expected,
+            "out-of-order inter-word spaces keep main's line list"
+        );
+        assert_eq!(text::text_blocks(&doc, 0).unwrap().into_iter().map(|b| b.editor_text).collect::<Vec<_>>(), expected);
+        assert_eq!(text::reading_blocks(&doc, 0).unwrap().into_iter().map(|b| b.text).collect::<Vec<_>>(), expected);
+    }
+}
+
+#[test]
+fn out_of_order_leading_spaces_keep_their_indent() {
+    // The word painted first is on the right of the leading blank, so it cannot turn that
+    // blank into an inter-word separator. The indent still has its own 18 pt style.
+    let doc = text_page("BT /F1 12 Tf 200 700 Td (beta) Tj ET BT /F1 18 Tf 72 700 Td (    ) Tj ET BT /F1 12 Tf 92.016 700 Td (alpha) Tj ET");
+    assert_eq!(text::text_lines(&doc, 0).unwrap().into_iter().map(|l| l.text).collect::<Vec<_>>(), ["beta", "    ", "alpha"]);
+    assert_eq!(text::text_blocks(&doc, 0).unwrap().into_iter().map(|b| b.editor_text).collect::<Vec<_>>(), ["beta", "    alpha"]);
+}

@@ -1,5 +1,7 @@
 # PdfCraft roadmap
 
+> **Last reviewed:** 2026-11-03 | **Last updated:** 2026-11-03 | **Change:** patch (M7 #4487 review: retain leading spaces in incompatible styled runs through save/reopen and re-edit; rebase #5104 onto ecdd1e65; estimates unchanged)
+
 > **Last reviewed:** 2026-11-03 | **Last updated:** 2026-11-03 | **Change:** patch (M5 #5850 review: indirect typewriter intent and composer edits preserve outer whitespace; movement regression commits by outside click; estimates unchanged)
 
 > **Last reviewed:** 2026-11-03 | **Last updated:** 2026-11-03 | **Change:** patch (M5 #5850: Enter adds Fill & Sign line breaks; outside clicks commit, Escape cancels, and saved multiline appearances retain their text and height; estimates unchanged)
@@ -226,6 +228,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 | 8 | 1.0 polish: performance, right-to-left, missing languages, keyboard-only (M14) | 55–95 |
 
 ## Progress log
+
+- **2026-11-03 (M7, #4487 review):** Keep separate leading-space runs when they directly precede text on the same visual row and no nonblank text lies before the blank geometrically on that row and plane, retaining each run’s font, size and rewrite operators. Inter-word space runs retain main’s line list, editor text and reading text. Isolated blank runs remain outside editable text. Save/reopen/re-edit regressions cover font and size changes on one/two rows and previously justified text. Rebased #5104 onto `ecdd1e65`, preserving both roadmap histories and reviewing auto-merged source and test hunks. Estimates unchanged.
 
 - **2026-11-03 (M5, #5850 review):** Resolve indirect IT when recognizing typewriter contents and Fill & Sign marks. Comment listing and property lookup retain their existing direct-Subtype behavior. A real double-click Edit composer preserves the typewriter’s text as written; ordinary comment edits keep trimming. Regressions cover direct Subtype with indirect intent, save/reopen, raw posted contents and same-index comments on different pages. The existing live-movement test now commits its setup with an outside click rather than Enter. Estimates unchanged.
 
@@ -772,6 +776,7 @@ Newest first: the date, what moved, and the new overall estimate.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-03 | patch | M7 #4487 review: retain leading spaces in incompatible styled runs through save/reopen and re-edit; rebase #5104 onto ecdd1e65; estimates unchanged. |
 | 2026-11-03 | patch | M5 #5850 review: indirect typewriter intent and composer edits preserve outer whitespace; movement regression commits by outside click; estimates unchanged. |
 | 2026-11-03 | patch | M5 #5850: Enter adds Fill & Sign line breaks; outside clicks commit, Escape cancels, and saved multiline appearances retain their text and height; estimates unchanged. |
 | 2026-11-01 | patch | M7 #5657: header/footer, watermark and background operations commit all selected pages together; later-page errors preserve marks, content, shared/inherited resources and pending edits; estimates unchanged. |

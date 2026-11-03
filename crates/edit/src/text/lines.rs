@@ -5,6 +5,24 @@ use super::interp::{Carry, Origin, Pen, Shown, TextState, Ts, direction, interpr
 use super::{DecodeBudget, Dict, Document, EditError, HashMap, Matrix, Object, Op, Pieces, Stream, TextLine, parse, serialize_ops};
 
 impl TextLine {
+    /// Whether two runs share a paint scope and text-axis directions, independent of font size.
+    pub(super) fn same_plane(&self, other: &Self) -> bool {
+        let (a, b) = (self, other);
+        let at = Matrix(a.origin.tm).then(&Matrix(a.origin.ctm));
+        let bt = Matrix(b.origin.tm).then(&Matrix(b.origin.ctm));
+        a.scope == b.scope
+            && a.paint == b.paint
+            && [0, 2].iter().all(|axis| {
+                let ax = at.0.get(*axis).copied().unwrap_or(0.0);
+                let ay = at.0.get(axis + 1).copied().unwrap_or(0.0);
+                let bx = bt.0.get(*axis).copied().unwrap_or(0.0);
+                let by = bt.0.get(axis + 1).copied().unwrap_or(0.0);
+                let al = ax.hypot(ay);
+                let bl = bx.hypot(by);
+                al > 0.0 && bl > 0.0 && (ax / al - bx / bl).abs() < 0.001 && (ay / al - by / bl).abs() < 0.001
+            })
+    }
+
     /// The baseline's height in user space.
     pub fn origin_baseline(&self) -> f64 {
         self.origin.baseline
@@ -314,9 +332,70 @@ fn text_lines_in(doc: &Document, p: &pdfcraft_model::Page, actual_text: bool) ->
             l.runs.clear();
         }
     }
-    // Lines of only spaces aren't editable text.
-    lines.retain(|l| !l.text.trim().is_empty());
+    retain_leading_spaces(&mut lines);
     Ok(lines)
+}
+
+/// Keep separate leading spaces, with their own styles and operators, only when directly
+/// followed by text on their row. Inter-word and isolated blank runs keep the old behavior.
+fn retain_leading_spaces(lines: &mut Vec<TextLine>) {
+    let mut keep: Vec<bool> = lines
+        .iter()
+        .rev()
+        .scan(None, |next: &mut Option<&TextLine>, line| {
+            let keep = !line.text.trim().is_empty()
+                || (!line.text.is_empty()
+                    && line.text.bytes().all(|b| b == b' ')
+                    && next.is_some_and(|next| {
+                        let gap = next.frame_rect()[0] - line.frame_rect()[2];
+                        line.stream == next.stream
+                            && line.same_plane(next)
+                            && line.logical_order == next.logical_order
+                            && line.origin.state.render_mode == next.origin.state.render_mode
+                            && (line.frame_origin().1 - next.frame_origin().1).abs() < line.size.min(next.size) * 0.2
+                            && gap.abs() < line.size.max(next.size) * 0.2
+                    }));
+            *next = keep.then_some(line);
+            Some(keep)
+        })
+        .collect();
+    keep.reverse();
+    if lines.iter().zip(&keep).any(|(line, &keep)| keep && line.text.trim().is_empty()) {
+        // Index nonblank text by baseline only when there are candidate spaces. Search the
+        // whole row, including interleaved paint order, rather than just the previous run.
+        let mut text_rows: Vec<_> = lines
+            .iter()
+            .enumerate()
+            .filter_map(|(index, line)| {
+                let baseline = line.frame_origin().1;
+                (!line.text.trim().is_empty() && baseline.is_finite()).then_some((baseline, index))
+            })
+            .collect();
+        text_rows.sort_unstable_by(|a, b| a.0.total_cmp(&b.0));
+        for (line, keep) in lines.iter().zip(&mut keep) {
+            if !*keep || !line.text.trim().is_empty() {
+                continue;
+            }
+            let baseline = line.frame_origin().1;
+            let reach = line.size * 0.2;
+            if !baseline.is_finite() || !reach.is_finite() || reach <= 0.0 {
+                *keep = false;
+                continue;
+            }
+            let start = text_rows.partition_point(|(at, _)| *at < baseline - reach);
+            let end = text_rows.partition_point(|(at, _)| *at <= baseline + reach);
+            // A candidate's following text is at its right edge in the text frame. Text on
+            // the other side makes this an inter-word space, regardless of paint order.
+            *keep = !text_rows.get(start..end).unwrap_or_default().iter().any(|&(at, text_index)| {
+                lines.get(text_index).is_some_and(|text| {
+                    let size = line.size.min(text.size);
+                    line.same_plane(text) && (at - baseline).abs() < size * 0.2 && text.frame_rect()[2] <= line.frame_rect()[0] + size * 0.01
+                })
+            });
+        }
+    }
+    let mut keep = keep.into_iter();
+    lines.retain(|_| keep.next().unwrap_or(false));
 }
 
 /// Joining independent text objects is safe only when they use the same text and graphics
@@ -621,6 +700,6 @@ pub(super) fn reading_lines(doc: &Document, page: usize) -> Result<(Vec<TextLine
             l.runs.clear();
         }
     }
-    lines.retain(|l| !l.text.trim().is_empty());
+    retain_leading_spaces(&mut lines);
     Ok((lines, w.budget.truncated))
 }

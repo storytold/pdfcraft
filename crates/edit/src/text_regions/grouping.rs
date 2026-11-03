@@ -1,21 +1,5 @@
 use super::{BlockStyle, HashMap, Matrix, TextBlock, TextLine, paragraph_separator, same_base_font, same_font, strip_subset_tag, union};
 
-fn same_plane(a: &TextLine, b: &TextLine) -> bool {
-    let at = Matrix(a.origin.tm).then(&Matrix(a.origin.ctm));
-    let bt = Matrix(b.origin.tm).then(&Matrix(b.origin.ctm));
-    a.scope == b.scope
-        && a.paint == b.paint
-        && [0, 2].iter().all(|axis| {
-            let ax = at.0.get(*axis).copied().unwrap_or(0.0);
-            let ay = at.0.get(axis + 1).copied().unwrap_or(0.0);
-            let bx = bt.0.get(*axis).copied().unwrap_or(0.0);
-            let by = bt.0.get(axis + 1).copied().unwrap_or(0.0);
-            let al = ax.hypot(ay);
-            let bl = bx.hypot(by);
-            al > 0.0 && bl > 0.0 && (ax / al - bx / bl).abs() < 0.001 && (ay / al - by / bl).abs() < 0.001
-        })
-}
-
 pub(super) fn row_rect(row: &[usize], lines: &[TextLine]) -> Option<[f64; 4]> {
     row.iter().filter_map(|i| lines.get(*i)).map(|l| l.rect).reduce(union)
 }
@@ -122,7 +106,7 @@ pub(crate) fn group_reading_blocks(lines: &[TextLine]) -> Vec<TextBlock> {
     let mut blocks = Vec::new();
     let mut start = 0;
     let mut offset = 0;
-    for row in lines.chunk_by(|a, b| same_plane(a, b) && (a.origin.baseline - b.origin.baseline).abs() < a.size.min(b.size) * 0.2) {
+    for row in lines.chunk_by(|a, b| a.same_plane(b) && (a.origin.baseline - b.origin.baseline).abs() < a.size.min(b.size) * 0.2) {
         let mut text = String::new();
         for (i, line) in row.iter().enumerate() {
             if !text.ends_with(char::is_whitespace)
@@ -244,7 +228,7 @@ fn group_layout(lines: &[TextLine], mixed: bool) -> Vec<TextBlock> {
             let scanned = !mixed || (invisible(prev) == invisible(line) && (!invisible(line) || gap < prev.size.max(line.size) * 0.6));
             scanned
                 && (mixed || same_style(prev, line))
-                && same_plane(prev, line)
+                && prev.same_plane(line)
                 // A superscript or subscript run (a footnote marker, say) sits on the same visual
                 // row as the text around it, raised or lowered by `Ts` from the body baseline
                 // (#3252). That shift is typically up to half the body size, not the marker's own
@@ -324,7 +308,7 @@ fn group_layout(lines: &[TextLine], mixed: bool) -> Vec<TextBlock> {
                 let nfirst = next.first().and_then(|i| lines.get(*i))?;
                 let nframe = frame_row_rect(next, lines)?;
                 let ngap = first.frame_origin().1 - nfirst.frame_origin().1;
-                let same = same_plane(first, nfirst)
+                let same = first.same_plane(nfirst)
                     && (mixed || same_style(first, nfirst))
                     && first.size.min(nfirst.size) >= first.size.max(nfirst.size) * 0.4
                     && (nframe[0] - frame[0]).abs() < tol;
@@ -335,7 +319,7 @@ fn group_layout(lines: &[TextLine], mixed: bool) -> Vec<TextBlock> {
             // OCR lines stay apart: the scan fixes where each one is, so they never rewrap together.
             (!mixed || !(invisible(prev) || invisible(first)))
                 && (mixed || same_style(prev, first))
-                && same_plane(prev, first)
+                && prev.same_plane(first)
                 // The rewrite sets every row in the first one's horizontal scale.
                 && (prev.origin.state.scale - first.origin.state.scale).abs() < 1e-6
                 && aligned
