@@ -511,3 +511,27 @@ fn listing_reads_a_shared_scale_once_and_bounds_boundary_checks() {
     assert!((5..areas).contains(&l.measurements.len()), "{} listed", l.measurements.len());
     assert!(l.unsupported.is_empty(), "{:?}", l.unsupported);
 }
+
+/// Perimeters and distances read their vertices once: only areas pay for the pairwise boundary
+/// check, so many maximal perimeters list in full.
+#[test]
+fn perimeters_are_charged_linear_work() {
+    let measure = "<< /Type /Measure /Subtype /RL /R (1 pt = 1 pt) /X [<< /Type /NumberFormat /U (pt) /C 1 /D 100 >>] /D [<< /Type /NumberFormat /U (pt) /C 1 /D 100 >>] /A [<< /Type /NumberFormat /U (pt) /C 1 /D 100 >>] >>";
+    let verts: Vec<String> = (0..MAX_POINTS).map(|i| format!("{} {}", 10 + i % 500, 10 + i / 500 * 3 + (i % 2))).collect();
+    let verts = verts.join(" ");
+    let lines = 40;
+    let annots: Vec<String> = (0..lines).map(|i| format!("{} 0 R", 6 + i)).collect();
+    let mut pdf = Pdf::new()
+        .obj("<< /Type /Catalog /Pages 2 0 R >>")
+        .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>")
+        .obj(format!("<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Annots [{}] >>", annots.join(" ")))
+        .stream("", "")
+        .obj(measure);
+    for _ in 0..lines {
+        pdf = pdf.obj(format!("<< /Type /Annot /Subtype /PolyLine /IT /PolyLineDimension /Rect [0 0 612 792] /Vertices [{verts}] /Measure 5 0 R >>"));
+    }
+    let d = Document::open(Arc::new(pdf.build())).unwrap();
+    let l = list(&d);
+    assert!(!l.truncated, "{} listed", l.measurements.len());
+    assert_eq!(l.measurements.len() + l.unsupported.len(), lines, "{:?}", l.unsupported.first());
+}

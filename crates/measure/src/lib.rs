@@ -520,11 +520,12 @@ pub fn list(doc: &Document) -> Listing {
                 Some(b"PolygonDimension") => Kind::Area,
                 _ => continue,
             };
-            // The boundary check compares every pair of edges: charge it before reading the
-            // vertices, so a listing stops at its work bound rather than at a stall.
+            // An area's boundary check compares every pair of edges: charge it before reading the
+            // vertices, so a listing stops at its work bound rather than at a stall. Other kinds
+            // read their vertices once.
             let vertices = d.get(if kind == Kind::Distance { b"L".as_slice() } else { b"Vertices" }).map(|v| doc.resolve(v));
             let n = vertices.as_deref().and_then(Object::as_array).map_or(0, |a| a.len() / 2).min(MAX_POINTS);
-            work = work.saturating_add(n.saturating_mul(n));
+            work = work.saturating_add(if kind == Kind::Area { n.saturating_mul(n) } else { n.max(1) });
             if work > MAX_LISTED_WORK {
                 out.truncated = true;
                 return out;
