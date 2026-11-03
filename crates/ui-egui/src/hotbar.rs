@@ -17,6 +17,8 @@ pub(crate) struct Hotbar {
     pub button_size: f32,
     pub dock: Option<String>,
     pub full_side: bool,
+    #[serde(default)]
+    pub placed: bool,
     #[serde(skip)]
     search: String,
     #[serde(skip)]
@@ -33,6 +35,7 @@ impl Default for Hotbar {
             button_size: 32.0,
             dock: None,
             full_side: false,
+            placed: false,
             search: String::new(),
             picker_open: false,
         }
@@ -52,6 +55,9 @@ impl Hotbar {
         for coordinate in &mut self.position {
             *coordinate = if coordinate.is_finite() { coordinate.clamp(0.0, 1.0) } else { 0.5 };
         }
+        if self.dock.is_some() || self.position != [0.0, 0.0] {
+            self.placed = true;
+        }
     }
 
     /// Parse and validate a comma-separated list of command identifiers for the hotbar.
@@ -69,6 +75,7 @@ impl Hotbar {
     pub fn place(&mut self, side: &str) -> Result<(), String> {
         if side == "float" {
             self.dock = None;
+            self.placed = true;
             return Ok(());
         }
         let (position, vertical) = match side {
@@ -81,6 +88,7 @@ impl Hotbar {
         self.dock = Some(side.to_owned());
         self.position = position;
         self.vertical = vertical;
+        self.placed = true;
         Ok(())
     }
 }
@@ -314,7 +322,11 @@ fn active_tool_controls(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ve
             && let Some((page, annotation)) = app.views.get(index).and_then(|view| view.comments.selected)
             && app.session.get(id).is_some_and(|doc| {
                 doc.allows_annotation()
-                    && doc.info.annotations.iter().any(|a| a.page == page && a.index == annotation && !a.is_reply() && comments::made_by(a, tool))
+                    && doc
+                        .info
+                        .annotations
+                        .iter()
+                        .any(|a| a.page == page && a.index == annotation && !a.is_reply() && !a.locked && comments::made_by(a, tool))
             })
         {
             app.apply_edit(Edit::StyleAnnotation { page, index: annotation, color: Some(color), opacity: None, width: None, endings: None });
@@ -427,7 +439,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, area: Rect, page_left: Option<f32>, ui
     let default_x = crate::canvas::bars::quick_bar_offset(page_left.map_or(0.0, |left| left - area.left()), size.x);
     let pos = if full_side {
         bounds.min + vec2(travel.x * bar.position[0], travel.y * bar.position[1])
-    } else if bar.dock.is_none() && bar.position == [0.0, 0.0] {
+    } else if bar.dock.is_none() && !bar.placed {
         area.left_top() + vec2(default_x, crate::canvas::bars::QUICK_BAR_EDGE)
     } else {
         bounds.min + vec2(travel.x * bar.position[0], travel.y * bar.position[1])
@@ -462,7 +474,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, area: Rect, page_left: Option<f32>, ui
                         settings_button(ui, cell, &mut picker_open);
                         ui.add_space(4.0);
                         let remaining = ui.available_height().max(cell);
-                        egui::ScrollArea::vertical().max_width(cell).max_height(remaining).show(ui, |ui| {
+                        egui::ScrollArea::vertical().max_height(remaining).show(ui, |ui| {
                             ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
                                 core_tool_buttons(ui, app, cell, popup_align, &t);
                                 active_tool_controls(ui, app, &t, true);
@@ -507,7 +519,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, area: Rect, page_left: Option<f32>, ui
                     grip.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, drag_label));
                     if grip.dragged() && bar.dock.is_none() {
                         let delta = grip.drag_delta();
-                        if bar.position == [0.0, 0.0] {
+                        if !bar.placed {
                             let cur_x = (pos.x - bounds.min.x).max(0.0);
                             let cur_y = (pos.y - bounds.min.y).max(0.0);
                             bar.position[0] = (cur_x / travel.x.max(1.0)).clamp(0.0, 1.0);
@@ -515,25 +527,36 @@ pub(crate) fn show(app: &mut PdfCraftApp, area: Rect, page_left: Option<f32>, ui
                         }
                         bar.position[0] = (bar.position[0] + delta.x / travel.x.max(1.0)).clamp(0.0, 1.0);
                         bar.position[1] = (bar.position[1] + delta.y / travel.y.max(1.0)).clamp(0.0, 1.0);
+                        bar.placed = true;
                     }
-                    core_tool_buttons(ui, app, cell, popup_align, &t);
-                    active_tool_controls(ui, app, &t, bar.vertical);
-                    if !bar.tools.is_empty() {
-                        ui.separator();
-                        let scroll_max =
-                            if bar.vertical { (bounds.height() - cell - 50.0).max(cell) } else { (bounds.width() - cell - 50.0).max(cell) };
-                        let scroll = if bar.vertical {
-                            egui::ScrollArea::vertical().max_width(cell).max_height(scroll_max)
-                        } else {
-                            egui::ScrollArea::horizontal().max_height(cell).max_width(scroll_max)
-                        };
-                        scroll.auto_shrink([true, true]).show(ui, |ui| {
+                    if bar.vertical {
+                        let fixed_overhead = grip_size.y + cell + 24.0;
+                        let max_tools_length = (bounds.height() - fixed_overhead).max(cell);
+                        egui::ScrollArea::vertical().max_height(max_tools_length).show(ui, |ui| {
                             ui.with_layout(layout, |ui| {
-                                tool_buttons(ui, app, &bar.tools, cell, &mut run, &mut remove);
+                                core_tool_buttons(ui, app, cell, popup_align, &t);
+                                active_tool_controls(ui, app, &t, true);
+                                if !bar.tools.is_empty() {
+                                    ui.separator();
+                                    tool_buttons(ui, app, &bar.tools, cell, &mut run, &mut remove);
+                                }
                             });
                         });
+                        settings_button(ui, cell, &mut picker_open);
+                    } else {
+                        core_tool_buttons(ui, app, cell, popup_align, &t);
+                        active_tool_controls(ui, app, &t, false);
+                        if !bar.tools.is_empty() {
+                            ui.separator();
+                            let scroll_max = (bounds.width() - cell - 50.0).max(cell);
+                            egui::ScrollArea::horizontal().max_height(cell).max_width(scroll_max).show(ui, |ui| {
+                                ui.with_layout(layout, |ui| {
+                                    tool_buttons(ui, app, &bar.tools, cell, &mut run, &mut remove);
+                                });
+                            });
+                        }
+                        settings_button(ui, cell, &mut picker_open);
                     }
-                    settings_button(ui, cell, &mut picker_open);
                 });
             }
             if let Some(index) = remove {
@@ -580,6 +603,8 @@ pub(crate) fn show(app: &mut PdfCraftApp, area: Rect, page_left: Option<f32>, ui
         .resizable(false)
         .title_bar(false)
         .fixed_pos(picker_pos)
+        .max_height((screen.height() - 24.0).max(180.0))
+        .vscroll(true)
         .frame(
             egui::Frame::NONE
                 .fill(t.card)

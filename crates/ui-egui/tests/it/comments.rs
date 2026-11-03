@@ -3256,12 +3256,31 @@ fn hotbar_docked_left_does_not_override_quick_tools() {
         app.set_option("hotbar-side", "left").unwrap();
     });
     h.run_steps(5);
-    // When docked to the left, quick tools (Select, Hand, Comments) are integrated and accessible (#5890).
-    h.get_by_label("Select (V)");
-    h.get_by_label("Hand (H)");
-    h.get_by_label("Add a sticky note");
-    h.get_by_label("Highlight");
-    h.get_by_label("Draw");
-    h.get_by_label("Fill & Sign");
-    h.get_by_label("Hotbar settings");
+    // Controls in the docked bar share one layout, so none may overlap (#5890).
+    let labels = ["Drag hotbar", "Select (V)", "Hand (H)", "Add a sticky note", "Highlight", "Draw", "Fill & Sign", "Hotbar settings"];
+    let rects: Vec<_> = labels.iter().map(|&label| h.get_by_label(label).rect()).collect();
+    for (i, a) in rects.iter().enumerate() {
+        for (j, b) in rects.iter().enumerate().skip(i + 1) {
+            let overlap = a.min.x < b.max.x && b.min.x < a.max.x && a.min.y < b.max.y && b.min.y < a.max.y;
+            assert!(!overlap, "{} overlaps {}: {a:?} / {b:?}", labels[i], labels[j]);
+        }
+    }
+}
+
+#[test]
+fn hotbar_docked_in_compact_window_keeps_settings_button_visible() {
+    for side in ["left", "right"] {
+        let mut h = Harness::builder().with_size(egui::vec2(800.0, 480.0)).build_eframe(move |_cc| {
+            let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
+            app.open_bytes("text.pdf", None, TEXT_FIXTURE.to_vec()).expect("opens");
+            app.set_option("left", "closed").unwrap();
+            app.set_option("hotbar-side", side).unwrap();
+            app.set_option("hotbar-size", "48").unwrap();
+            app
+        });
+        h.run_steps(5);
+        let settings_rect = h.get_by_label("Hotbar settings").rect();
+        assert!(settings_rect.max.y <= 480.0, "{side} hotbar settings button must stay within window height: {settings_rect:?}");
+    }
 }
