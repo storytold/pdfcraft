@@ -256,3 +256,38 @@ fn a_fields_text_and_border_scale_with_the_page_unit() {
     assert_eq!((size, width), (20.0, Some(2.0)), "{rect:?}");
     assert!((rect[2] - rect[0] - 180.0).abs() < 0.01, "the box is twice as wide too: {rect:?}");
 }
+
+/// A field's font is the base font its `/DA` font resource names in the form's `/DR` (empty
+/// when the form has no such resource), and each button of a radio group says how many buttons
+/// its group has, so Word can say the group takes one choice.
+#[test]
+fn a_fields_font_and_radio_group_reach_the_export() {
+    let button = |state: &str, x: i32| {
+        format!(
+            "<< /Type /Annot /Subtype /Widget /Parent 7 0 R /Rect [{x} 50 {} 60] /P 3 0 R /AP << /N << /{state} 11 0 R /Off 11 0 R >> >> >>",
+            x + 10
+        )
+    };
+    let bytes = pdf(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R 6 0 R 7 0 R] /DR << /Font << /Cour 10 0 R >> >> >> >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /Annots [5 0 R 6 0 R 8 0 R 9 0 R] >>".into(),
+        stream("", ""),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (Typed) /DA (/Cour 9 Tf 0 g) /Rect [10 10 100 22] /P 3 0 R >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (Plain) /DA (/Missing 9 Tf 0 g) /Rect [10 30 100 42] /P 3 0 R >>".into(),
+        "<< /FT /Btn /Ff 49152 /T (Pay) /V /A /Kids [8 0 R 9 0 R] >>".into(),
+        button("A", 10),
+        button("B", 30),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>".into(),
+        stream("/Type /XObject /Subtype /Form /BBox [0 0 10 10]", ""),
+    ]);
+    let mut s = Session::new();
+    let id = s.open("fonts.pdf", None, Arc::new(bytes), None).unwrap();
+    let pages = s.get(id).unwrap().export_pages();
+    let fields = &pages[0].fields;
+    let field = |name: &str| fields.iter().filter(|f| f.name == name).collect::<Vec<_>>();
+    assert_eq!(field("Typed")[0].font, "Courier");
+    assert_eq!(field("Plain")[0].font, "", "a /DA font the form doesn't have");
+    let pay: Vec<&FieldKind> = field("Pay").iter().map(|f| &f.kind).collect();
+    assert_eq!(pay, [&FieldKind::Radio { checked: true, buttons: 2 }, &FieldKind::Radio { checked: false, buttons: 2 }], "{fields:#?}");
+}

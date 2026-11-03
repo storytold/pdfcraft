@@ -83,8 +83,10 @@ pub enum FieldKind {
     /// A text field. `comb`: the number of cells a comb field spreads its characters over;
     /// `max_len`: the most characters it takes.
     Text { value: String, multiline: bool, comb: Option<usize>, max_len: Option<usize> },
-    /// A check box, or one button of a radio group.
+    /// A check box.
     Check { checked: bool },
+    /// One button of a radio group of `buttons` buttons.
+    Radio { checked: bool, buttons: usize },
     /// A combo or list box: the shown value and the choices' display texts.
     Choice { value: String, options: Vec<String> },
 }
@@ -98,6 +100,9 @@ pub struct Field {
     pub rect: [f64; 4],
     /// Font size in points; 0 or less for auto (fit the box).
     pub size: f64,
+    /// The base font the field's text is set in (its `/DA` font, `Helvetica` say); empty when
+    /// the PDF names none.
+    pub font: String,
     pub kind: FieldKind,
     /// The border a PDF viewer draws around the field (its widget's `/MK /BC` and `/BS`), and
     /// the colour it fills the field with (`/MK /BG`); `None` for none. A form whose boxes only

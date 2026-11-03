@@ -207,9 +207,11 @@ fn export_field(
             max_len: f.max_len.filter(|n| *n > 0),
         },
         // A check box, or one button of a radio group: on when the value is its on state.
-        FieldKind::CheckBox | FieldKind::Radio => {
-            pdfcraft_export::FieldKind::Check { checked: w.on_state.as_ref().is_some_and(|on| f.value.iter().any(|v| v == on)) }
-        }
+        FieldKind::CheckBox => pdfcraft_export::FieldKind::Check { checked: w.on_state.as_ref().is_some_and(|on| f.value.iter().any(|v| v == on)) },
+        FieldKind::Radio => pdfcraft_export::FieldKind::Radio {
+            checked: w.on_state.as_ref().is_some_and(|on| f.value.iter().any(|v| v == on)),
+            buttons: f.widgets.len(),
+        },
         FieldKind::Combo | FieldKind::List => {
             pdfcraft_export::FieldKind::Choice { value: f.display_value(), options: f.options.iter().map(|(_, shown)| shown.clone()).collect() }
         }
@@ -219,15 +221,33 @@ fn export_field(
     // as it scales the page's text and strokes (a page with `/UserUnit` 2 draws them twice as big).
     let (border, background) = widget_look(cos, w);
     let border = border.map(|b| pdfcraft_export::Stroke { width: b.width * unit, ..b });
+    let da = pdfcraft_forms::appearance::parse_da(&f.da);
     Some(pdfcraft_export::Field {
         name: f.name.clone(),
         rect: visible(w.rect),
-        size: pdfcraft_forms::appearance::parse_da(&f.da).size * unit,
+        size: da.size * unit,
+        font: dr_base_font(cos, &da.font),
         kind,
         border,
         background,
     })
 }
+
+/// The base font of the form's default resource font `name` (a field's `/DA` font, `Helv` for
+/// `/Helvetica` say), or empty when the form has no such font; at most [`MAX_FONT_NAME_CHARS`]
+/// characters of it.
+fn dr_base_font(cos: &pdfcraft_cos::Document, name: &str) -> String {
+    let base = || {
+        let dr = cos.dict(pdfcraft_forms::acroform(cos)?.get(b"DR")?)?;
+        let font = cos.dict(cos.dict(dr.get(b"Font")?)?.get(name.as_bytes())?)?;
+        font.name(b"BaseFont").map(|n| String::from_utf8_lossy(n).chars().take(MAX_FONT_NAME_CHARS).collect())
+    };
+    base().unwrap_or_default()
+}
+
+/// How much of a base font's name an exported field keeps: any real font's name, and a hostile
+/// one can't grow each field.
+const MAX_FONT_NAME_CHARS: usize = 127;
 
 /// A colour array of `/MK` (ISO 32000-2 Table 192): none (transparent), gray, RGB or CMYK
 /// components, as plain sRGB; `None` for none or anything else.

@@ -930,6 +930,7 @@ fn form_page() -> Page {
             name: "Name".into(),
             rect: [60.0, 700.0, 300.0, 712.0],
             size: 0.0,
+            font: String::new(),
             kind: FieldKind::Text { value: String::new(), multiline: false, comb: None, max_len: None },
             border: None,
             background: None,
@@ -938,6 +939,7 @@ fn form_page() -> Page {
             name: "Postcode".into(),
             rect: [60.0, 520.0, 160.0, 532.0],
             size: 10.0,
+            font: String::new(),
             kind: FieldKind::Text { value: "10115".into(), multiline: false, comb: Some(5), max_len: Some(5) },
             border: None,
             background: None,
@@ -946,6 +948,7 @@ fn form_page() -> Page {
             name: "Notes".into(),
             rect: [60.0, 200.0, 540.0, 260.0],
             size: 9.0,
+            font: String::new(),
             kind: FieldKind::Text { value: "a & b".into(), multiline: true, comb: None, max_len: None },
             border: None,
             background: None,
@@ -954,6 +957,7 @@ fn form_page() -> Page {
             name: "Yes".into(),
             rect: [60.0, 150.0, 70.0, 160.0],
             size: 0.0,
+            font: String::new(),
             kind: FieldKind::Check { checked: true },
             border: None,
             background: None,
@@ -962,6 +966,7 @@ fn form_page() -> Page {
             name: "No".into(),
             rect: [90.0, 150.0, 100.0, 160.0],
             size: 0.0,
+            font: String::new(),
             kind: FieldKind::Check { checked: false },
             border: None,
             background: None,
@@ -970,6 +975,7 @@ fn form_page() -> Page {
             name: "Fund".into(),
             rect: [120.0, 150.0, 300.0, 162.0],
             size: 0.0,
+            font: String::new(),
             kind: FieldKind::Choice { value: "Health".into(), options: vec!["Health".into(), "Pension".into()] },
             border: None,
             background: None,
@@ -1083,6 +1089,7 @@ fn word_content_controls_keep_their_fields_names() {
         name: name.into(),
         rect: [60.0, 50.0, 200.0, 62.0],
         size: 0.0,
+        font: String::new(),
         kind: FieldKind::Text { value: String::new(), multiline: false, comb: None, max_len },
         border: None,
         background: None,
@@ -1142,6 +1149,7 @@ fn word_bounds_hostile_shapes_and_fields() {
         name: "<&>\u{0}".into(),
         rect: [f64::NAN, 0.0, 1.0, 1.0],
         size: f64::NAN,
+        font: String::new(),
         kind: FieldKind::Check { checked: true },
         border: None,
         background: None,
@@ -1150,6 +1158,7 @@ fn word_bounds_hostile_shapes_and_fields() {
         name: "x".into(),
         rect: [0.0, 0.0, 1e300, 1e300],
         size: -5.0,
+        font: String::new(),
         kind: FieldKind::Text { value: "1".into(), multiline: false, comb: Some(0), max_len: Some(0) },
         border: None,
         background: None,
@@ -1408,4 +1417,58 @@ fn a_list_past_the_drop_down_limit_cuts_its_page_short() {
     let (zip, cut) = docx_checked(&[list(MAX_DOCX_LIST_ITEMS + 1)], "List");
     assert_eq!(cut, [0]);
     assert_eq!(part(&zip, "word/document.xml").matches("<w:listItem ").count(), MAX_DOCX_LIST_ITEMS);
+}
+
+/// Word has no control that lets only one of several boxes, each in its own place, be on, so a
+/// radio button is a check box at its place whose title says its group takes one choice; a
+/// group of one button, or a check box, says nothing.
+#[test]
+fn word_titles_a_radio_button_with_its_groups_one_choice() {
+    let button = |name: &str, x: f64, checked: bool, buttons: usize| Field {
+        name: name.into(),
+        rect: [x, 150.0, x + 10.0, 160.0],
+        size: 0.0,
+        font: "ZapfDingbats".into(),
+        kind: FieldKind::Radio { checked, buttons },
+        border: None,
+        background: None,
+    };
+    let mut p = form_page();
+    p.fields = vec![button("Pay", 60.0, true, 2), button("Pay", 90.0, false, 2), button("Alone", 120.0, false, 1)];
+    let xml = part(&docx(&[p], "Radio"), "word/document.xml");
+    assert_eq!(xml.matches("<w:alias w:val=\"Pay (choose 1 of 2)\"/><w:tag w:val=\"Pay\"/>").count(), 2, "{xml}");
+    assert!(xml.contains("<w:alias w:val=\"Alone\"/><w:tag w:val=\"Alone\"/>"), "{xml}");
+    assert!(xml.contains("<w14:checked w14:val=\"1\"/>") && xml.contains("<w14:checked w14:val=\"0\"/>"), "{xml}");
+    // The X is Arial's, not the ZapfDingbats the PDF's buttons name.
+    assert!(!xml.contains("Zapf"), "{xml}");
+    let check = part(&docx(&[form_page()], "Check"), "word/document.xml");
+    assert!(check.contains("<w:alias w:val=\"Yes\"/>") && !check.contains("choose 1"), "{check}");
+}
+
+/// A text or list field's text is set in the family of the font its `/DA` names (it was always
+/// Arial, with other widths and maybe missing glyphs); a field naming none, or a symbol font,
+/// keeps Arial.
+#[test]
+fn word_sets_field_text_in_the_fields_font() {
+    let mut p = form_page();
+    let font = |p: &mut Page, name: &str, font: &str| {
+        if let Some(f) = p.fields.iter_mut().find(|f| f.name == name) {
+            f.font = font.into();
+        }
+    };
+    font(&mut p, "Name", "CourierNewPSMT");
+    font(&mut p, "Postcode", "ZapfDingbats");
+    font(&mut p, "Fund", "Times-Roman");
+    font(&mut p, "Yes", "Courier");
+    let xml = part(&docx(&[p], "Fonts"), "word/document.xml");
+    let family = |name: &str| {
+        let at = xml.find(&format!("<w:tag w:val=\"{name}\"/>")).unwrap_or_else(|| panic!("{name}: {xml}"));
+        let start = xml[..at].rfind("<w:sdtPr>").unwrap();
+        xml[start..].split("w:ascii=\"").nth(1).unwrap().split('"').next().unwrap().to_string()
+    };
+    assert_eq!(family("Name"), "Courier New");
+    assert_eq!(family("Postcode"), "Arial", "a symbol font's glyphs aren't letters in Word");
+    assert_eq!(family("Fund"), "Times New Roman");
+    assert_eq!(family("Notes"), "Arial", "a field naming no font");
+    assert_eq!(family("Yes"), "Arial", "a check box's X is Arial's");
 }

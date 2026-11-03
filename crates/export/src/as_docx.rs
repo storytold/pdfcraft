@@ -413,10 +413,18 @@ fn shape_xml(s: &Shape, page_height: f64, id: &mut usize, z: i64, budget: &mut A
     (!out.is_empty()).then_some(out)
 }
 
-/// The run properties of field text in `size` points, spread `spacing` points apart.
-fn field_rpr(size: f64, spacing: f64) -> String {
+/// The Word family field text in base font `font` is set in: the font's family, or Arial for a
+/// field that names none or a symbol font (whose glyphs aren't letters in Word).
+fn field_family(font: &str) -> String {
+    word_font(font).filter(|f| !matches!(f.as_str(), "Zapf Dingbats" | "Symbol")).unwrap_or_else(|| "Arial".to_string())
+}
+
+/// The run properties of field text in Word family `family` at `size` points, spread `spacing`
+/// points apart.
+fn field_rpr(family: &str, size: f64, spacing: f64) -> String {
     let half_points = (size * 2.0).round().clamp(2.0, 3276.0) as i64;
-    let mut rpr = String::from("<w:rPr><w:rFonts w:ascii=\"Arial\" w:hAnsi=\"Arial\" w:cs=\"Arial\"/>");
+    let family = esc(family);
+    let mut rpr = format!("<w:rPr><w:rFonts w:ascii=\"{family}\" w:hAnsi=\"{family}\" w:cs=\"{family}\"/>");
     let twips = (spacing * 20.0).round();
     if twips.is_finite() && twips != 0.0 {
         rpr.push_str(&format!("<w:spacing w:val=\"{}\"/>", twips.clamp(-31680.0, 31680.0) as i64));
@@ -553,16 +561,25 @@ fn field_xml(f: &Field, page_height: f64) -> Option<String> {
             let before = if *multiline { 0.0 } else { middle(size) };
             // The control's own run properties are what Word gives the text typed over its
             // placeholder: without them a typed value loses the font, size and comb spacing.
-            let rpr = field_rpr(size, spacing);
+            let rpr = field_rpr(&field_family(&f.font), size, spacing);
             format!(
                 "<w:p>{}<w:sdt><w:sdtPr>{rpr}<w:alias w:val=\"{title}\"/><w:tag w:val=\"{name}\"/>{placeholder}<w:text{multi}/></w:sdtPr><w:sdtContent><w:r>{rpr}{}</w:r></w:sdtContent></w:sdt></w:p>",
                 frame_ppr(frame, page_height, before, &indent),
                 text_xml
             )
         }
-        FieldKind::Check { checked } => {
+        FieldKind::Check { checked } | FieldKind::Radio { checked, .. } => {
             let size = (h.min(w) * 0.8).clamp(4.0, 24.0);
-            let rpr = field_rpr(size, 0.0);
+            // The X is Arial's, whatever font the PDF's field names (often ZapfDingbats).
+            let rpr = field_rpr("Arial", size, 0.0);
+            // Word has no control that lets only one of several boxes, each in its own place, be
+            // on: a radio button is a check box whose title says its group takes one choice.
+            let props = match &f.kind {
+                FieldKind::Radio { buttons, .. } if *buttons > 1 => {
+                    format!("<w:alias w:val=\"{}\"/><w:tag w:val=\"{name}\"/>", esc(&format!("{label} (choose 1 of {buttons})")))
+                }
+                _ => props,
+            };
             format!(
                 "<w:p>{}<w:sdt><w:sdtPr>{rpr}{props}<w14:checkbox><w14:checked w14:val=\"{}\"/><w14:checkedState w14:val=\"0058\" w14:font=\"Arial\"/><w14:uncheckedState w14:val=\"2002\" w14:font=\"Arial\"/></w14:checkbox></w:sdtPr><w:sdtContent><w:r>{rpr}<w:t xml:space=\"preserve\">{}</w:t></w:r></w:sdtContent></w:sdt></w:p>",
                 frame_ppr(r, page_height, middle(size), "<w:jc w:val=\"center\"/>"),
@@ -577,7 +594,7 @@ fn field_xml(f: &Field, page_height: f64) -> Option<String> {
                 items.push_str(&format!("<w:listItem w:displayText=\"{o}\" w:value=\"{o}\"/>"));
             }
             let (text, placeholder) = if value.is_empty() { (blank(fits(0.5 * size)), "<w:showingPlcHdr/>") } else { (value.clone(), "") };
-            let rpr = field_rpr(size, 0.0);
+            let rpr = field_rpr(&field_family(&f.font), size, 0.0);
             format!(
                 "<w:p>{}<w:sdt><w:sdtPr>{rpr}{props}{placeholder}<w:dropDownList>{items}</w:dropDownList></w:sdtPr><w:sdtContent><w:r>{rpr}<w:t xml:space=\"preserve\">{}</w:t></w:r></w:sdtContent></w:sdt></w:p>",
                 frame_ppr(r, page_height, middle(size), "<w:ind w:left=\"20\"/>"),
