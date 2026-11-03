@@ -716,14 +716,9 @@
 	Flip Vertical	ვერტიკალურად არეკვლა
 	Replace Image…	გამოსახულების ჩანაცვლება…
 	Save Image As…	გამოსახულების შენახვა როგორც…
-	Check for updates	განახლებების შემოწმება
 	No check has run yet.	შემოწმება ჯერ არ ჩატარებულა.
-	Checking for a newer version…	ახალი ვერსიის შემოწმება…
 	PdfCraft {v} is available.	ხელმისაწვდომია PdfCraft {v}.
 	You have version {c}. Download the new version from its release page.	თქვენ გაქვთ ვერსია {c}. ჩამოტვირთეთ ახალი ვერსია მისი გამოშვების გვერდიდან.
-	PdfCraft {c} is up to date.	PdfCraft {c} განახლებულია.
-	Couldn't check for updates: {e}	განახლებების შემოწმება ვერ მოხერხდა: {e}
-	You have version {c}. All releases are listed at {page}.	თქვენ გაქვთ ვერსია {c}. ყველა გამოშვება ჩამოთვლილია აქ: {page}.
 	Asks GitHub for the latest release. Nothing is downloaded or installed automatically.	GitHub-ს უახლეს გამოშვებას ეკითხება. ავტომატურად არაფერი ჩამოიტვირთება და არ დაყენდება.
 	Download	ჩამოტვირთვა
 	Later	მოგვიანებით
@@ -2869,3 +2864,39 @@ theme	Appearance	იერსახე
 	{n} lines	{n} სტრიქონი
 	This document has no text to make bookmarks from.	ამ დოკუმენტში სანიშნეების შესაქმნელი ტექსტი არ არის.
 	Every line set in the style chosen for a level becomes a bookmark of that level, under a new first bookmark.	დონისთვის არჩეული სტილით აწყობილი თითოეული სტრიქონი ამ დონის სანიშნე ხდება, ახალი პირველი სანიშნის ქვეშ.
+# Sync 2026-11-03: strings added upstream
+	Arrange image	გამოსახულების განლაგება
+	Bring forward	წინ გადმოტანა
+	Bring to front	წინა პლანზე გადმოტანა
+	Send backward	უკან გადატანა
+	Send to back	უკანა პლანზე გადატანა
+	Crop	ჩამოჭრა
+	Crop image	გამოსახულების ჩამოჭრა
+	Remove crop	ჩამოჭრის გაუქმება
+	Transform image	გამოსახულების გარდაქმნა
+	Select Tool	მონიშვნის ხელსაწყო
+	Hand Tool	ხელის ხელსაწყო
+	Marquee Zoom	მასშტაბირება ჩარჩოთი
+	Edit this PDF	ამ PDF-ის რედაქტირება
+	Export this PDF	ამ PDF-ის ექსპორტი
+	Find text or tools	ტექსტის ან ხელსაწყოების ძებნა
+	Show Page Edge Shadows	გვერდის კიდეების ჩრდილების ჩვენება
+	Recent files to keep	ბოლოს გახსნილი ფაილების რაოდენობა
+	Lowering this forgets the oldest files. At 0 there is no list.	მნიშვნელობის შემცირებისას ყველაზე ძველი ფაილები სიიდან ამოიშლება. 0-ზე სია აღარ იქნება.
+	Clear search	ძიების გასუფთავება
+	Search…	ძიება…
+	Search tools…	ხელსაწყოების ძიება…
+	Pin	მიმაგრება
+	Pinned	მიმაგრებულია
+	Pin a tool…	ხელსაწყოს მიმაგრება…
+	Pin to Home	საწყის ეკრანზე მიმაგრება
+	Pin tools to Home	ხელსაწყოების საწყის ეკრანზე მიმაგრება
+	Pin your favorite tools here for quick access.	სწრაფი წვდომისთვის აქ მიამაგრეთ თქვენი რჩეული ხელსაწყოები.
+	Pinned Tools	მიმაგრებული ხელსაწყოები
+	Select tools to display on your Home page for quick access.	აირჩიეთ ხელსაწყოები, რომლებიც სწრაფი წვდომისთვის საწყის ეკრანზე გამოჩნდება.
+	Unpin from Home	საწყისი ეკრანიდან მოხსნა
+	Unpin tool	ხელსაწყოს მოხსნა
+	Image pasted	გამოსახულება ჩაისვა
+	No image on clipboard to paste	გაცვლის ბუფერში ჩასასმელი გამოსახულება არ არის
+	Pinned {tool} to Home	{tool} მიმაგრდა საწყის ეკრანზე
+	Unpinned {tool} from Home	{tool} მოიხსნა საწყისი ეკრანიდან
