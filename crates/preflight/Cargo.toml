@@ -18,3 +18,4 @@ roxmltree = "0.21"
 
 [dev-dependencies]
 flate2 = { workspace = true }
+pdfcraft-testkit = { workspace = true }
