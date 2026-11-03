@@ -10068,7 +10068,6 @@ fn page_render_draws_stamps_without_an_appearance() {
     assert!(grey > 100 && grey == custom.len(), "an unknown name is a grey placeholder: {grey} of {}", custom.len());
 }
 
-<<<<<<< HEAD
 /// Photos turned into a PDF gave one page per image size, none of them a paper size (#3273).
 /// `pageSize` (or `pageWidth`/`pageHeight`) puts every image on a page of one size.
 #[test]
@@ -10166,7 +10165,8 @@ fn images_can_be_created_on_a_paper_size() {
         }
     }
     assert_eq!(checked, 2, "both images were written and measured: {separate}");
-=======
+}
+
 #[test]
 fn deleting_one_radio_button_through_tools_keeps_the_group() {
     let dir = workdir("delete-radio");
@@ -10632,5 +10632,4 @@ fn mixed_script_tools_normalize_but_undo_restores_the_exact_mixture() {
         let reopened = ok(&mut a, "doc_open", json!({"path":path}))["doc"].as_u64().unwrap();
         assert_eq!(page_text(&mut a, reopened)[0], plain);
     }
->>>>>>> origin/main
 }
