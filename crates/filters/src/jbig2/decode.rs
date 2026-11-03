@@ -182,6 +182,57 @@ mod tests {
         assert_eq!(u64::MAX - work, 4 * 14);
     }
 
+    /// A refinement whose reference is offset right of it (GRREFERENCEDX above 0, as a refined text
+    /// instance has from a wider bitmap, ISO/IEC 14492 Table 12, and a refined symbol from an RDX
+    /// above 0, Table 18) reads the reference from its first column. Left of the reference the
+    /// decoder emptied what it had read of it, and at its first column didn't read it again, so its
+    /// first 32 columns read as 0: such a refinement decoded to other pixels than were coded, or
+    /// failed. Each stream is a refinement coded by the standard's procedures on a page of its own
+    /// size, and decodes to its picture, `#` for black. Vendored hayro-jbig2 patch 15.
+    #[test]
+    fn a_refinement_reads_a_reference_right_of_it_from_its_first_column() {
+        let cases: [(&str, &str, &[&str]); 4] = [
+            (
+                "a text instance of an 8 × 6 symbol refined 6 wider: 3 right, template 0",
+                "00000000300001000000130000000e000000060000000000000000420000000000010000010000001d000003fffdff02fefefe00000001000000014fdd3dba48bdddde35ffac00000002062001010000002c0000000e000000060000000000000000040012ffffffff00000001a96b4a6b78b7fc094fadde1b3e881fffac",
+                &[".#.#.#....#...", "##.###....##.#", ".###...###..#.", "#.......#...#.", "#.####.#...#..", "#.##...###.#.."],
+            ),
+            (
+                "refined 2 wider and 2 taller, RDX and RDY 1: 2 right, 2 down, template 1",
+                "00000000300001000000130000000a000000080000000000000000420000000000010000010000001d000003fffdff02fefefe00000001000000014fdd9c52d3ea827a43ffac0000000206200101000000280000000a00000008000000000000000004801200000001a96c00cdac6dd5f6f848ce872411cfffac",
+                &["####.##...", "####..####", "####..##..", "...##...#.", "#......#..", "..#.....#.", "##....####", ".#........"],
+            ),
+            (
+                "a symbol refined in a symbol dictionary, RDX 5, RDY −1, template 0 with its AT pixels moved",
+                "00000000300001000000130000000c000000060000000000000000420000000000010000010000001e000003fffdff02fefefe00000001000000014fdda13efc4029efc95fffac000000020020010100000027000203fffdff02fefefefeff010100000001000000014fc98c352dd84a906f120ffb49793fffac00000003062002010000001b0000000c00000006000000000000000004001000000001a943ffac",
+                &["#.#.##.#.###", "..#.#.....##", "##..#...#...", "..##....##..", "##.#.##.####", ".#..#####..#"],
+            ),
+            (
+                "a text instance of a 40 × 5 symbol refined 2 wider, RDX 1: 2 right, across a word, template 0",
+                "00000000300001000000130000002a0000000500000000000000004200000000000100000100000031000003fffdff02fefefe00000001000000015240f590d953ae3f4069dede672090d4d61b377906d3f41aafa4f77107ffac00000002062001010000003c0000002a000000050000000000000000040012ffffffff00000001a96c0b9386d4b140486bdc3673dbd031490e468c7f7813d19068ab04a79cbfffac",
+                &[
+                    "##.#.#..##.##.#####.#....#.#.#..#..######.",
+                    ".#.#..###....#..##.#..#.####.#..#.###...##",
+                    ".#.#......#....#####....#...###...#####...",
+                    "#...##.##.......#...###.###...##..##.###.#",
+                    "..#..###..###..#...#.......##.#........##.",
+                ],
+            ),
+        ];
+        let hex = |text: &str| (0..text.len() / 2).map(|i| u8::from_str_radix(&text[i * 2..i * 2 + 2], 16).unwrap()).collect::<Vec<u8>>();
+        for (form, stream, picture) in cases {
+            let (w, h) = (picture[0].len(), picture.len());
+            // As the filter gives it: black as 0, each row padded to a byte with 0s.
+            let mut rows = vec![0u8; w.div_ceil(8) * h];
+            for (y, row) in picture.iter().enumerate() {
+                for (x, _) in row.bytes().enumerate().filter(|(_, c)| *c == b'.') {
+                    rows[y * w.div_ceil(8) + x / 8] |= 0x80 >> (x % 8);
+                }
+            }
+            assert_eq!(decode_jbig2(&hex(stream), None, w as u32, h as u32, usize::MAX).unwrap(), rows, "{form}");
+        }
+    }
+
     /// The page has to be the image's size, and is bounded before it is decoded, being decoded
     /// whole: within `max` as rows of one bit, and within [`MAX_JBIG2_PIXELS`]. Globals are given
     /// to the decoder: ones it skips decode, ones that aren't JBIG2 are an error, as is damaged
