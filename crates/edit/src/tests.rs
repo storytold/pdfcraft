@@ -1246,6 +1246,55 @@ fn arabic_font_names(doc: &Document, page: usize) -> Vec<String> {
     fonts.as_dict().unwrap().iter().map(|(k, _)| String::from_utf8_lossy(k).into_owned()).filter(|k| k.starts_with("PCAr")).collect()
 }
 
+/// The `/FontDescriptor /FontFamily` of each shaped-text (Type 3) font on `page`.
+fn shaped_font_families(doc: &Document, page: usize) -> Vec<String> {
+    let p = &pdfcraft_model::pages(doc)[page];
+    let res = doc.resolve(p.dict.get(b"Resources").unwrap());
+    let fonts = doc.resolve(res.as_dict().unwrap().get(b"Font").unwrap());
+    let fonts = fonts.as_dict().unwrap();
+    arabic_font_names(doc, page)
+        .iter()
+        .map(|name| {
+            let font = doc.resolve(fonts.get(name.as_bytes()).unwrap());
+            let descriptor = doc.resolve(font.as_dict().unwrap().get(b"FontDescriptor").unwrap());
+            descriptor.as_dict().unwrap().get(b"FontFamily").unwrap().as_string().unwrap().to_text()
+        })
+        .collect()
+}
+
+/// Thai Add Text is drawn from the document Thai face, whichever the build selected: Sarabun when
+/// craft-fonts' Thai document manifest is embedded, else the interface face (Noto Sans Thai), as
+/// before. Which face is selected is pinned in the fonts crate
+/// (`craft::tests::document_manifest_faces_are_never_interface_fallbacks`), which can see the
+/// embedded document faces; a manifest file on disk may have been skipped.
+#[test]
+fn added_thai_text_is_drawn_from_the_document_thai_face() {
+    let Some(face) = pdfcraft_fonts::document_thai_font() else { return };
+    let mut doc = fixture();
+    let t = AddedText { rect: [72.0, 600.0, 400.0, 700.0], text: "สวัสดี น้ำ".into(), size: 14.0, ..AddedText::default() };
+    add_content(&mut doc, 0, &Content::Text(t)).unwrap();
+    let families = shaped_font_families(&doc, 0);
+    assert!(!families.is_empty());
+    assert!(families.iter().all(|f| f == face.family), "{families:?}, expected {}", face.family);
+}
+
+/// Spaces, digits and punctuation that follow Thai are drawn from the Thai face too, so a Thai
+/// line is shown with one font and keeps the width the Thai face measured for it.
+#[test]
+fn added_thai_text_draws_following_spaces_digits_and_punctuation_with_the_thai_face() {
+    if pdfcraft_fonts::document_thai_font().is_none() {
+        return;
+    }
+    let mut doc = fixture();
+    let t = AddedText { rect: [72.0, 600.0, 400.0, 700.0], text: "ข้อ 12. ทดสอบ".into(), size: 14.0, ..AddedText::default() };
+    add_content(&mut doc, 0, &Content::Text(t)).unwrap();
+    let s = String::from_utf8_lossy(&stream_bytes(&doc, &Object::Ref(list_added(&doc)[0].obj)).unwrap()).into_owned();
+    let words: Vec<&str> = s.split_whitespace().collect();
+    let fonts: Vec<&str> = words.windows(3).filter(|w| w[2] == "Tf").filter_map(|w| w[0].strip_prefix('/')).collect();
+    assert!(!fonts.is_empty());
+    assert!(fonts.iter().all(|f| f.starts_with("PCAr")), "one shaped face for the whole line: {fonts:?}");
+}
+
 #[test]
 fn arabic_items_keep_their_own_fonts_through_saves_updates_and_deletes() {
     let mut doc = fixture();
@@ -5788,6 +5837,57 @@ fn added_thai_text_wraps_clusters_and_survives_reopen() {
     delete_content(&mut doc, 0, 0).unwrap();
     assert!(list_added(&doc).is_empty());
     assert!(arabic_font_names(&doc, 0).is_empty());
+}
+
+#[test]
+fn added_thai_text_wraps_between_dictionary_words() {
+    if pdfcraft_fonts::document_thai_font().is_none() {
+        eprintln!("skipping the Thai word wrapping checks: built without craft-fonts (set CRAFT_FONTS_DIR)");
+        return;
+    }
+    let text = "การประปาส่วนภูมิภาคให้บริการน้ำประปาที่สะอาดแก่ประชาชนทั่วประเทศ";
+    let t = AddedText { rect: [0.0, 0.0, 90.0, 400.0], text: text.into(), size: 16.0, ..AddedText::default() };
+    let rows = super::added::lines(&t);
+    assert!(rows.len() > 2, "{rows:?}");
+    assert_eq!(rows.concat(), text, "no space is added or lost between the rows");
+    // Every row ends where the dictionary lets one end, never inside a word such as ประปา.
+    let cuts = crate::linebreak::breaks(text);
+    let mut at = 0;
+    for row in rows.iter().take(rows.len() - 1) {
+        at += row.len();
+        assert!(cuts.contains(&at), "row {row:?} ends inside a word: {rows:?}");
+    }
+    // Spaces where a row ends are dropped, as for Latin text, and a word wider than the row is
+    // still broken between clusters.
+    let spaced =
+        AddedText { text: "น้ำประปา สะอาด ปลอดภัย".into(), rect: [0.0, 0.0, 60.0, 400.0], ..t.clone() };
+    let rows = super::added::lines(&spaced);
+    assert!(rows.iter().all(|r| !r.starts_with(' ') && !r.ends_with(' ')), "{rows:?}");
+    assert_eq!(rows.concat(), "น้ำประปาสะอาดปลอดภัย");
+    let narrow = AddedText { rect: [0.0, 0.0, 16.0, 200.0], text: "กิ่กิ่กิ่".into(), ..t.clone() };
+    assert_eq!(super::added::lines(&narrow), ["กิ่", "กิ่", "กิ่"]);
+    // Spaces that open a paragraph are kept, but they are not a row of their own: a first word
+    // too wide to fit after them stays on the first row (or breaks between clusters there).
+    for width in [16.0, 40.0, 60.0, 90.0] {
+        let indented = AddedText { rect: [0.0, 0.0, width, 400.0], text: "      ประปาสะอาด".into(), ..t.clone() };
+        let rows = super::added::lines(&indented);
+        assert!(rows.iter().all(|r| !r.trim().is_empty()), "an empty row at width {width}: {rows:?}");
+        assert!(rows[0].starts_with("      "), "the opening spaces are kept at width {width}: {rows:?}");
+        assert_eq!(rows.concat().trim_start(), "ประปาสะอาด");
+    }
+    // A first word that fits a row alone but not after the opening spaces breaks between clusters
+    // on the first row rather than running past its end.
+    let word = "ประปา";
+    let word_w = super::added::shaped_width(&t, word, false);
+    let indent_w = super::added::shaped_width(&t, "      ", false);
+    let width = word_w + indent_w / 2.0;
+    let indented = AddedText { rect: [0.0, 0.0, width, 400.0], text: format!("      {word}"), ..t.clone() };
+    let rows = super::added::lines(&indented);
+    for row in &rows {
+        assert!(super::added::shaped_width(&t, row, false) <= width + 0.5, "{row:?} overflows {width}: {rows:?}");
+    }
+    assert!(rows.len() > 1 && rows[0].starts_with("      "), "{rows:?}");
+    assert_eq!(rows.concat().trim_start(), word);
 }
 
 #[test]
