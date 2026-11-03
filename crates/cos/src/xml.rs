@@ -9,11 +9,30 @@
 /// Otherwise it cannot under-count a real element; a stray `<` in text is invalid XML and only
 /// makes it over-count, which errs towards refusing the document.
 pub fn xml_nesting_depth(text: &str) -> usize {
+    xml_shape(text).depth
+}
+
+/// How deep and how attribute-heavy a piece of XML is, as [`xml_shape`] measures it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct XmlShape {
+    /// The element nesting depth ([`xml_nesting_depth`]).
+    pub depth: usize,
+    /// Attributes in all start tags: each unquoted `=` in a start tag introduces one, namespace
+    /// bindings included.
+    pub attributes: usize,
+    /// The most attributes in any one start tag.
+    pub max_tag_attributes: usize,
+}
+
+/// [`xml_nesting_depth`] together with the attribute counts, from the same single scan, so a
+/// reader can bound an XML parser's work before it builds a tree.
+pub fn xml_shape(text: &str) -> XmlShape {
     fn find(hay: &[u8], from: usize, needle: &[u8]) -> Option<usize> {
         (from..hay.len()).find(|&p| hay[p..].starts_with(needle))
     }
     let b = text.as_bytes();
-    let (mut i, mut depth, mut max) = (0usize, 0usize, 0usize);
+    let (mut i, mut depth) = (0usize, 0usize);
+    let mut shape = XmlShape::default();
     while i < b.len() {
         if b[i] != b'<' {
             i += 1;
@@ -32,13 +51,14 @@ pub fn xml_nesting_depth(text: &str) -> usize {
             i = find(b, i + 2, b">").map_or(b.len(), |p| p + 1);
         } else {
             depth += 1;
-            max = max.max(depth);
+            shape.depth = shape.depth.max(depth);
             // Skip the rest of the start tag, over any quoted attribute value, and remember its last
             // significant byte: a tag that ends in `/` closes itself, so it is one level deep while it
             // is read rather than a level left open.
             i += 1;
             let mut quote = 0u8;
             let mut last = 0u8;
+            let mut attributes = 0usize;
             while i < b.len() {
                 let c = b[i];
                 if quote != 0 {
@@ -50,17 +70,22 @@ pub fn xml_nesting_depth(text: &str) -> usize {
                 } else if c == b'>' {
                     i += 1;
                     break;
+                } else if c == b'=' {
+                    attributes += 1;
+                    shape.attributes = shape.attributes.saturating_add(1);
+                    last = c;
                 } else if !c.is_ascii_whitespace() {
                     last = c;
                 }
                 i += 1;
             }
+            shape.max_tag_attributes = shape.max_tag_attributes.max(attributes);
             if last == b'/' {
                 depth -= 1;
             }
         }
     }
-    max
+    shape
 }
 
 /// Past the end of the DOCTYPE whose body starts at `from`: its `>`, skipping quoted literals and
@@ -131,5 +156,17 @@ mod tests {
         assert_eq!(d(&format!("<!DOCTYPE r [{}<r/>", "[".repeat(100_000))), 0, "one pass");
         // Another declaration still ends at its first `>`, a quote in it or not.
         assert_eq!(d(r#"<a><!x "><b><c/></b></a>"#), 3);
+    }
+
+    /// Each unquoted `=` in a start tag is an attribute; one in a quoted value, an end tag,
+    /// a comment, CDATA or a processing instruction is not.
+    #[test]
+    fn attributes_are_counted_per_tag_and_in_all() {
+        use super::{XmlShape, xml_shape};
+        let shape = |depth, attributes, max_tag_attributes| XmlShape { depth, attributes, max_tag_attributes };
+        assert_eq!(xml_shape(r#"<a x="1" y='2'><b z="a=b"/></a>"#), shape(2, 3, 2));
+        assert_eq!(xml_shape(r#"<?pi a="1"?><!-- b="2" --><a><![CDATA[c="3"]]></a d="4">"#), shape(1, 0, 0));
+        assert_eq!(xml_shape(r#"<r xmlns:n="urn:x" n:a="1"/>"#), shape(1, 2, 2));
+        assert_eq!(xml_shape(""), XmlShape::default());
     }
 }
