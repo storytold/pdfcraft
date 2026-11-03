@@ -596,7 +596,7 @@ pub fn tools() -> Vec<ToolDef> {
                 "reverse": { "type": "boolean" },
                 "layout": { "type": "string", "enum": ["fit", "actual", "shrink", "custom", "multiple", "booklet", "poster", "view"] },
                 "view_page": { "type": "integer", "minimum": 1, "description": "1-based source page to print for layout view." },
-                "view_rect": { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4, "description": "[x0,y0,x1,y1] in displayed page points; the rectangle is clipped to the page." },
+                "view_rect": { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4, "description": "[x0,y0,x1,y1] in displayed page points with a bottom-left origin; the rectangle is clipped to the page." },
                 "scale": { "type": "number", "exclusiveMinimum": 0 },
                 "per_sheet": { "type": "integer", "minimum": 1, "maximum": 256 },
                 "order": { "type": "string", "enum": ["horizontal", "horizontal-reversed", "vertical", "vertical-reversed", "cut-stack"] },
