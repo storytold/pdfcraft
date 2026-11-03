@@ -279,11 +279,15 @@ fn drag_across(ui: &egui::Ui, response: Response, checked: &mut bool) -> Respons
         return response;
     }
     // The way the pointer came this frame, not only where it is: a fast drag jumps over boxes
-    // between two frames. The box counts where that way first meets it.
+    // between two frames. The box counts where that way first meets the part of it in view, so a
+    // box half scrolled away is set when the way crosses its shown half, wherever the way began
+    // (CodeRabbit on #4552).
+    let shown = response.rect.intersect(ui.clip_rect());
     let over = ctx
         .input(|i| i.pointer.latest_pos().map(|p| (p - i.pointer.delta(), p)))
-        .and_then(|(from, to)| segment_entry(response.rect, from, to))
-        .is_some_and(|p| ui.clip_rect().contains(p) && ctx.layer_id_at(p) == Some(response.layer_id));
+        .filter(|_| shown.is_positive())
+        .and_then(|(from, to)| segment_entry(shown, from, to))
+        .is_some_and(|p| ctx.layer_id_at(p) == Some(response.layer_id));
     if over && *checked != target {
         *checked = target;
         response.mark_changed();
@@ -1105,6 +1109,40 @@ mod drag_across_tests {
         frame(&ctx, &mut state, None, vec![button(at(1), false)]);
         frame(&ctx, &mut state, None, vec![]);
         assert_eq!(state, [true, false, false, false], "the drag up cleared the boxes it went over and stopped there");
+    }
+
+    /// CodeRabbit on #4552: a box half clipped out of view (its list scrolled) is set when the
+    /// drag crosses its shown half, also when the way began in its hidden half.
+    #[test]
+    fn a_drag_that_comes_into_a_half_hidden_box_from_its_hidden_half_sets_it() {
+        let ctx = egui::Context::default();
+        let mut state = [false, false, false];
+        let (rects, _) = frame(&ctx, &mut state, None, vec![]);
+        let third = rects[2];
+        // The view ends halfway down the third box.
+        let clip = Rect::from_min_max(Pos2::ZERO, Pos2::new(400.0, third.center().y));
+        let run = |state: &mut [bool; 3], events: Vec<Event>| {
+            let input = egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(400.0, 300.0))), events, ..Default::default() };
+            ctx.run_ui(input, |ui| {
+                ui.set_clip_rect(clip);
+                for v in state.iter_mut() {
+                    ui.add(checkbox(v, "Show the grid"));
+                }
+            })
+            .drop_without_applying_deltas();
+        };
+        let start = rects[0].left_center() + vec2(6.0, 0.0);
+        run(&mut state, vec![Event::PointerMoved(start), button(start, true)]);
+        // Off to the right of the boxes, down into the hidden half of the third, then up into its
+        // shown half in one frame: the way starts inside the box, where it can't be seen.
+        let right = rects[0].right() + 40.0;
+        let hidden = Pos2::new(third.left() + 6.0, third.center().y + 0.4 * third.height());
+        for p in [Pos2::new(right, start.y), Pos2::new(right, hidden.y), hidden, Pos2::new(hidden.x, third.top() + 1.0)] {
+            run(&mut state, vec![Event::PointerMoved(p)]);
+        }
+        run(&mut state, vec![button(Pos2::new(hidden.x, third.top() + 1.0), false)]);
+        run(&mut state, vec![]);
+        assert_eq!(state, [true, false, true], "the first box and the third, whose shown half the drag crossed");
     }
 
     /// The segment test behind a fast drag: where the way first meets the box, nothing when it
