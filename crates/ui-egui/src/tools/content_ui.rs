@@ -423,7 +423,11 @@ pub(crate) fn page_input(
     let PageToolContext { resp, xf, ptr, page, info, .. } = cx;
     let mut consumed = false;
     let pointer = ptr.pos;
-    snap_move(snap, added, view);
+    // The moved text's raster was painted with the last frame's snap: once it changes, the next
+    // frame paints it where its frame now is.
+    if snap_move(snap, added, view) {
+        resp.ctx.request_repaint();
+    }
     let cv = &mut view.content;
     if let Some((gp, grab, start)) = cv.grab
         && gp == page
@@ -555,18 +559,21 @@ pub(crate) fn page_input(
 
 /// Snapping while an added item is moved on this page with F3 on: one of its corners, the
 /// middles of its sides or its centre lands on the drawing (or a comment) in reach, Tab picks
-/// which, and the markers show where.
-fn snap_move(cx: &crate::comments::PageCx<'_>, added: &[Added], view: &mut DocView) {
+/// which, and the markers show where. `true` when where the item goes changed: the page painted
+/// the moved item before this ran (with the snap it had), so it wants a repaint.
+fn snap_move(cx: &crate::comments::PageCx<'_>, added: &[Added], view: &mut DocView) -> bool {
     let cv = &mut view.content;
-    let Some((page, index)) = cv.moving().filter(|(page, _)| *page == cx.page) else { return };
+    let Some((page, index)) = cv.moving().filter(|(page, _)| *page == cx.page) else { return false };
     let (Some((_, grab, start)), Some(p), Some((_, a))) = (cv.grab, cx.ptr.pos, on_page(added, page).into_iter().find(|(i, _)| *i == index)) else {
-        return;
+        return false;
     };
     let r = screen_rect(cx.xf, cx.info, page, a.content.rect());
     let (moved, from, anchor) = cx.snap_box_move(&mut view.comments, r, (start, p), cv.anchor, cv.anchor_steps);
     cv.grab = Some((page, grab, from));
     (cv.anchor, cv.anchor_steps) = (anchor, 0);
+    let before = cv.snapped;
     cv.snapped = (moved != p).then_some(moved);
+    cv.snapped != before
 }
 
 /// Outlines of added items (hover and selection with handles) and the box being dragged, the
