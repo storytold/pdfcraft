@@ -208,6 +208,9 @@ fn sign_inner(
             if f.signature(&doc).is_some() {
                 return Err(SignError::Pdf(format!("the field {:?} is already signed", f.name)));
             }
+            if f.read_only(&doc) {
+                return Err(SignError::Pdf(format!("the field {:?} is read-only", f.name)));
+            }
             if f.has_foreign_value(&doc) {
                 return Err(SignError::Pdf(format!("the value of the field {:?} is not a signature", f.name)));
             }

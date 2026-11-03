@@ -2954,3 +2954,35 @@ fn signing_a_field_with_a_null_value_after_another_signature_keeps_the_first_val
         all.iter().map(|s| (&s.status, &s.modification)).collect::<Vec<_>>()
     );
 }
+
+/// A field the form marks ReadOnly (its own `/Ff`, or inherited from a parent) is not signed
+/// through the shared signer, as ordinary form writes refuse it too.
+#[test]
+fn a_read_only_signature_field_is_not_signed() {
+    let id = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
+    let page: &[u8] = b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Annots [6 0 R] >>";
+    let own = write_pdf(&[
+        b"<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R] >> >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        page,
+        b"<< /Length 0 >>\nstream\n\nendstream",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        b"<< /Type /Annot /Subtype /Widget /FT /Sig /Ff 1 /T (Approval) /Rect [150 20 280 70] /P 3 0 R /F 4 >>",
+    ]);
+    let inherited = write_pdf(&[
+        b"<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [7 0 R] >> >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        page,
+        b"<< /Length 0 >>\nstream\n\nendstream",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        b"<< /Type /Annot /Subtype /Widget /T (Approval) /Parent 7 0 R /Rect [150 20 280 70] /P 3 0 R /F 4 >>",
+        b"<< /FT /Sig /Ff 1 /T (Group) /Kids [6 0 R] >>",
+    ]);
+    for (what, bytes, field) in [("own flag", own, "Approval"), ("inherited flag", inherited, "Group.Approval")] {
+        let r = pdfcraft_sign::sign(&open(&bytes), &id, &SignOptions { field: Some(field.into()), ..opts() });
+        assert!(matches!(&r, Err(pdfcraft_sign::SignError::Pdf(m)) if m.contains("read-only")), "{what}: {r:?}");
+    }
+    // The same fixture without the flag signs.
+    let ok = pdfcraft_sign::sign(&open(&fixture()), &id, &SignOptions { field: Some("Approval".into()), ..opts() });
+    assert!(ok.is_ok());
+}

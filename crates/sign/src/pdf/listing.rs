@@ -185,6 +185,19 @@ pub(super) struct Field {
 }
 
 impl Field {
+    /// The field's ReadOnly flag (`/Ff` bit 1, inheritable from its ancestors).
+    pub(super) fn read_only(&self, doc: &Document) -> bool {
+        let mut d = self.dict.clone();
+        for _ in 0..64 {
+            if let Some(ff) = d.get(b"Ff").map(|f| doc.resolve(f)).and_then(|f| f.as_int()) {
+                return ff & 1 != 0;
+            }
+            let Some(parent) = d.get(b"Parent").map(|p| doc.resolve(p)).and_then(|p| p.as_dict().cloned()) else { return false };
+            d = parent;
+        }
+        false
+    }
+
     /// The signature dictionary in /V. A field without one is unsigned, whether /V is missing,
     /// null or not a dictionary.
     pub(super) fn signature(&self, doc: &Document) -> Option<Dict> {
