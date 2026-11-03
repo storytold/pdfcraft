@@ -3,7 +3,7 @@
 //! other image as a lossless PNG (with its transparency). The clipboard gets the file, as when a
 //! file is copied in Finder or Explorer; Copy Image copies the pixels instead.
 
-use egui::{Color32, CornerRadius, Pos2, Stroke};
+use egui::{Color32, CornerRadius, Stroke};
 
 use crate::PdfCraftApp;
 use crate::canvas::{DocView, PageXform};
@@ -30,11 +30,11 @@ pub(crate) fn page_input(
     page: usize,
     info: &DocInfo,
     doc: &pdfcraft_engine::Document,
-    pointer: Option<Pos2>,
+    ptr: &crate::page_pointer::PagePointer,
     view: &mut DocView,
 ) {
-    let Some(p) = pointer.filter(|p| xf.rect.contains(*p)) else { return };
-    if resp.drag_started() || resp.double_clicked() || resp.triple_clicked() {
+    let Some(p) = ptr.pos.filter(|p| xf.rect.contains(*p)) else { return };
+    if ptr.drag_started || resp.double_clicked() || resp.triple_clicked() {
         view.picked_image = None;
         return;
     }

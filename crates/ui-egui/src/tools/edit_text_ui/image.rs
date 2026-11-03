@@ -280,7 +280,7 @@ fn crop_input(cx: &ImageCx<'_>, view: &mut DocView, i: usize, image: &pdfcraft_e
 
     // A drag takes what its press was on ([`crop_hit`]).
     if gate
-        && resp.drag_started()
+        && ptr.drag_started
         && let Some(o) = ptr.origin
         && let PagePress::Mine(Owner::Picture { part: PicturePart::Crop(part), .. }) = press
     {
@@ -768,7 +768,7 @@ pub(crate) fn image_input(cx: &ImageCx<'_>, images: &[pdfcraft_engine::PageImage
         // A drag of the selected picture takes what its press was on ([`body_hit`], [`handle_hit`]):
         // the rotate knob turns it, a grip resizes it, the picture itself moves.
         if gate
-            && resp.drag_started()
+            && ptr.drag_started
             && let Some(o) = ptr.origin
             && let PagePress::Mine(Owner::Picture { index, part }) = press
             && index == i

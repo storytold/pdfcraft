@@ -194,7 +194,7 @@ fn select_input(
     };
     let cv = &mut view.comments;
     let mut consumed = false;
-    if resp.drag_started()
+    if cx.ptr.drag_started
         && let (Some((a, part)), Some(o)) = (owner, origin)
     {
         match part {
@@ -356,7 +356,7 @@ impl Gestures<'_> {
         if over_page {
             view.cursor.claim(Layer::ToolArea, egui::CursorIcon::Crosshair);
         }
-        if resp.drag_started()
+        if cx.ptr.drag_started
             && pressed_here
             && let Some(o) = origin
         {
@@ -479,7 +479,7 @@ impl Gestures<'_> {
         if over_page {
             view.cursor.claim(Layer::ToolArea, egui::CursorIcon::Crosshair);
         }
-        if resp.drag_started()
+        if cx.ptr.drag_started
             && pressed_here
             && let Some(o) = origin
         {
@@ -560,7 +560,7 @@ impl Gestures<'_> {
         // A text box also takes a drag, as in Acrobat: the box is drawn at that size and its
         // text wraps inside it (#2669).
         if tool == CommentTool::TextBox {
-            if resp.drag_started()
+            if cx.ptr.drag_started
                 && pressed_here
                 && let Some(o) = origin
             {

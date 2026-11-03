@@ -271,6 +271,18 @@ fn declares(line: &str) -> Option<&str> {
     rest.find(|c: char| !(c.is_alphanumeric() || c == '_')).map(|end| &rest[..end])
 }
 
+/// egui's drag start, which counts every button: a right-button drag would start what a left one
+/// does. Page modules read `PagePointer::drag_started`, the primary button's.
+const ANY_BUTTON_DRAG: [&str; 1] = [".drag_started()"];
+
+/// Functions in the page modules that start a drag of a widget of their own, not of the pages:
+/// (file, function, why).
+const NOT_PAGE_DRAGS: [(&str, &str, &str); 3] = [
+    ("canvas/organize.rs", "drag_pages", "Organize Pages drags thumbnails, not pages"),
+    ("tools/fill_sign.rs", "signature_pad", "the signature dialog's drawing pad"),
+    ("tools/fill_sign/scan.rs", "scan_tab", "the signature dialog's Scan tab"),
+];
+
 /// Ways to set egui's cursor.
 const CURSOR_WRITES: [&str; 4] = ["set_cursor_icon(", ".cursor_icon = ", "on_hover_cursor(", "on_hover_and_drag_cursor("];
 
@@ -462,6 +474,14 @@ fn page_modules_read_the_pointer_only_through_page_pointer() {
             }
         }
     }
+    problems.extend(misuses(
+        &ANY_BUTTON_DRAG,
+        &NOT_PAGE_DRAGS,
+        "starts a drag with any button: a right-button drag would start what a left one does. Read \
+         `PagePointer::drag_started` (the primary button's) instead. A widget of its own, not the pages? Add the \
+         function to NOT_PAGE_DRAGS in src/canvas/page_pointer/tests.rs, with why.",
+        "starts no drag of its own any more: remove it from NOT_PAGE_DRAGS.",
+    ));
     assert!(problems.is_empty(), "{}", problems.join("\n"));
 }
 
@@ -486,12 +506,12 @@ fn page_modules_claim_the_cursor_and_never_set_it() {
 const ROUTER_WRITES: [&str; 10] = [
     "router.begin(",
     "router.press(",
-    "router.drag_started(",
+    "router.drag_began(",
     "router.settle(",
     "router.cancel(",
     "PageRouter::begin(",
     "PageRouter::press(",
-    "PageRouter::drag_started(",
+    "PageRouter::drag_began(",
     "PageRouter::settle(",
     "PageRouter::cancel(",
 ];

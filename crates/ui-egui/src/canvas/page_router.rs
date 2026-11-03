@@ -219,7 +219,7 @@ impl PageRouter {
     /// The press turned into a drag: an owner that declines its drag lets it go, and from then on
     /// the press is nobody's (a drag across a highlight selects the text under it; with the Link
     /// tool, a drag from a link draws a new one). Its click stayed the owner's.
-    pub(in crate::canvas) fn drag_started(&mut self) {
+    pub(in crate::canvas) fn drag_began(&mut self) {
         if self.capture.as_ref().is_some_and(|c| c.declines_drag) {
             self.capture = None;
         }
@@ -327,11 +327,11 @@ mod tests {
         let mut r = PageRouter::default();
         r.begin();
         r.press(1, [Hit { declines_drag: true, ..hit(Layer::Comment, 0) }], QuickTool::Select);
-        r.drag_started();
+        r.drag_began();
         assert_eq!((r.press_for(1), r.press_for(0)), (PagePress::Free, PagePress::Elsewhere));
         r.begin();
         r.press(1, [hit(Layer::Comment, 2)], QuickTool::Select);
-        r.drag_started();
+        r.drag_began();
         assert_eq!(r.press_for(1), PagePress::Mine(hit(Layer::Comment, 2).owner));
     }
 }

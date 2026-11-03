@@ -49,6 +49,9 @@ pub(crate) struct PagePointer {
     /// The modifier keys held at this frame's first primary press, or else now: a press with Shift
     /// or ⌘ adds to a selection.
     pub modifiers: Modifiers,
+    /// A primary press the pages hold turned into a drag this frame. egui's own `drag_started()`
+    /// counts every button, so a right-button drag would start what a left-button drag does.
+    pub drag_started: bool,
 }
 
 impl PagePointer {
@@ -79,9 +82,10 @@ impl PagePointer {
             resp.dragged() || resp.drag_stopped() || (!modal && (resp.interact_pointer_pos().is_some() || press_origin.is_some_and(|p| on_top(&p))));
         let pos = at.filter(|p| held || on_top(p));
         if !held {
-            return Self { pos, origin: None, edges: Vec::new(), released: None, primary_down, any_down, modifiers };
+            return Self { pos, origin: None, edges: Vec::new(), released: None, primary_down, any_down, modifiers, drag_started: false };
         }
-        Self { pos, origin: press_origin, edges, released, primary_down, any_down, modifiers }
+        let drag_started = resp.drag_started_by(PointerButton::Primary);
+        Self { pos, origin: press_origin, edges, released, primary_down, any_down, modifiers, drag_started }
     }
 
     /// Where the pointer is, when it is inside `r`.

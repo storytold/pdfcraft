@@ -390,7 +390,7 @@ pub(crate) fn page_input(
     // A drag starts from where its press began on this page: egui may see it only once the pointer
     // is past the page's edge.
     if allowed
-        && resp.drag_started()
+        && ptr.drag_started
         && (held || free)
         && let Some(origin) = ptr.origin.filter(|o| xf.rect.contains(*o))
     {

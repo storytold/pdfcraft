@@ -485,7 +485,7 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, ccx: ContentCx<'_>, view: &mut
     }
     // A drag on what the press was on: a corner resizes the selected item, the item itself moves,
     // with the tools that pick added content up.
-    if resp.drag_started() {
+    if ptr.drag_started {
         let origin = ptr.origin.unwrap_or(p);
         match owned.filter(|_| picks_up) {
             Some((_, Some((left, top)))) => {

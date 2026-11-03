@@ -115,10 +115,10 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, free: bool, owner: Option<usiz
         }
         return true;
     }
-    // A drag that nobody holds (a link's hit lets its drag go, `PageRouter::drag_started`) draws a
+    // A drag that nobody holds (a link's hit lets its drag go, `PageRouter::drag_began`) draws a
     // new link from where its press began on this page. egui may see the drag only once the pointer
     // is past the page's edge.
-    if resp.drag_started()
+    if ptr.drag_started
         && free
         && let Some(origin) = ptr.origin.filter(|o| xf.rect.contains(*o))
     {

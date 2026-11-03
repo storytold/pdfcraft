@@ -770,7 +770,7 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, lines: &[pdfcraft_engine::Text
         PagePress::Mine(Owner::Paragraph { block, part }) => Some((block, part)),
         _ => None,
     };
-    if resp.drag_started()
+    if ptr.drag_started
         && active.is_none()
         && let Some(o) = ptr.origin
         && let Some((block, part)) = owner

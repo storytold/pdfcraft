@@ -115,8 +115,8 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
         }
     }
     // A drag that the press's owner declines is nobody's once it starts.
-    if resp.drag_started_by(egui::PointerButton::Primary) {
-        view.router.drag_started();
+    if ptr.drag_started {
+        view.router.drag_began();
     }
     // What this page has to do with the press: its owner's, the active tool's, or another page's.
     let press = view.router.press_for(i);
@@ -663,7 +663,7 @@ fn update_selection_on_press(ui: &egui::Ui, view: &mut DocView, text: &PageText,
             view.selection = Some(Selection::run(gesture.page, first, last));
         }
     }
-    if gesture.resp.drag_started() && press_here && gesture.text_drag {
+    if gesture.ptr.drag_started && press_here && gesture.text_drag {
         view.actions_dismissed = None;
         view.selection_drag = true;
         let origin = gesture.ptr.origin.unwrap_or(gesture.pointer);
@@ -778,7 +778,7 @@ pub(super) fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut P
     // A press nobody holds picks the picture under it: a link's click follows the link only (ruling
     // 5).
     if tool == QuickTool::Select && input.press == PagePress::Free && !input.consumed {
-        crate::image_pick::page_input(resp, &xf, i, info, doc, pointer, view);
+        crate::image_pick::page_input(resp, &xf, i, info, doc, ptr, view);
     }
     crate::image_pick::drop_stale(doc, view);
     crate::image_pick::paint(painter, &xf, i, info, view);

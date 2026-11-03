@@ -1438,6 +1438,79 @@ fn a_right_click_on_a_comment_under_a_camera_corner_opens_the_comments_menu() {
     assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "the comment is selected for its menu");
 }
 
+/// A right-button drag from `a` to `b`, in frames of their own.
+fn right_drag(h: &mut Harness<'_, PdfCraftApp>, a: egui::Pos2, b: egui::Pos2) {
+    let button = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Secondary, pressed, modifiers: egui::Modifiers::NONE };
+    h.hover_at(a);
+    h.run_steps(1);
+    h.event(button(a, true));
+    h.run_steps(1);
+    for k in 1..=4 {
+        h.hover_at(a + (b - a) * (k as f32 / 4.0));
+        h.run_steps(1);
+    }
+    h.event(button(b, false));
+    h.run_steps(3);
+}
+
+// A right-button drag starts nothing a left-button drag does. egui's drag start counts every
+// button, and each of these started on it.
+
+/// With the Rectangle tool, a right-button drag draws no rectangle.
+#[test]
+fn a_right_button_drag_draws_no_rectangle() {
+    let mut h = open(text_pdf(), "150", false);
+    h.state_mut().quick_tool = QuickTool::Comment(CommentTool::Rectangle);
+    h.run_steps(4);
+    let (a, b) = (at(&h, 60.0, 150.0), at(&h, 200.0, 80.0));
+    right_drag(&mut h, a, b);
+    let s = h.state();
+    assert!(s.session.get(s.views[0].id).unwrap().info.annotations.is_empty(), "no rectangle is drawn");
+}
+
+/// With Prepare open, a right-button drag around a field selects it by no selection rectangle.
+#[test]
+fn a_right_button_drag_selects_no_field() {
+    let mut h = open(comment_and_checkbox_pdf(), "150", false);
+    assert!(h.state_mut().execute("form.prepare"));
+    h.run_steps(4);
+    let (a, b) = (at(&h, 60.0, 250.0), at(&h, 140.0, 180.0));
+    right_drag(&mut h, a, b);
+    assert!(h.state().views[0].prepare.selected.is_none(), "no field is selected");
+}
+
+/// With the Link tool, a right-button drag draws no link.
+#[test]
+fn a_right_button_drag_draws_no_link() {
+    let mut h = open(text_pdf(), "150", false);
+    link_tool(&mut h);
+    let (a, b) = (at(&h, 60.0, 150.0), at(&h, 200.0, 80.0));
+    right_drag(&mut h, a, b);
+    assert!(h.state().link_draft.is_none() && h.state().dialog != Some(Dialog::LinkProps), "no link is drawn");
+}
+
+/// With the camera, a right-button drag on another page leaves the quadrilateral where it is.
+#[test]
+fn a_right_button_drag_leaves_the_camera_quadrilateral() {
+    let mut h = open(two_pages_pdf(), "100", false);
+    h.state_mut().quick_tool = QuickTool::EnhanceCamera;
+    h.run_steps(4);
+    assert_eq!(h.state().views[0].camera.as_ref().map(|q| q.page), Some(0));
+    let two = h.state().views[0].page_screen_rect(1).expect("page 2 on screen");
+    right_drag(&mut h, two.min + egui::vec2(40.0, 40.0), two.min + egui::vec2(120.0, 100.0));
+    assert_eq!(h.state().views[0].camera.as_ref().map(|q| q.page), Some(0), "the quadrilateral stays on page 1");
+}
+
+/// With the Select tool, a right-button drag across text selects none.
+#[test]
+fn a_right_button_drag_selects_no_text() {
+    let mut h = open(text_pdf(), "150", false);
+    let (a, b) = (at(&h, 45.0, 303.0), at(&h, 200.0, 303.0));
+    assert_eq!(wait_for_cursor(&mut h, a, |c| c == egui::CursorIcon::Text), egui::CursorIcon::Text, "the page's text has arrived");
+    right_drag(&mut h, a, b);
+    assert!(h.state().views[0].selected_text().is_none(), "no text is selected");
+}
+
 /// A 300×400 page with a web link along its left edge, x 0..100, y 300..350.
 fn edge_link_pdf() -> Vec<u8> {
     pdf(&[
