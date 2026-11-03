@@ -7369,6 +7369,38 @@ fn delete_removes_the_selected_picture_with_the_pointer_on_a_paragraph() {
     assert!(h.state().views[0].image_selection.is_none());
 }
 
+/// Delete on a selected added picture deletes it alone: the added text placed after it stays. The
+/// key's second reader, added content's own Delete, took the text that the picture's index then
+/// named.
+#[test]
+fn delete_on_a_selected_added_picture_deletes_it_alone() {
+    let mut h = edit_page(pdfcraft_ui_egui::QuickTool::EditText);
+    let mut png = Vec::new();
+    image::RgbImage::from_pixel(30, 20, image::Rgb([20, 90, 200])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    h.state_mut().add_image("logo.png".into(), png);
+    h.run_steps(3);
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::AddText {
+        page: 0,
+        text: pdfcraft_engine::AddedText { rect: [20.0, 20.0, 120.0, 35.0], text: "Caption".into(), ..Default::default() },
+    }));
+    h.run_steps(3);
+    let id = h.state().views[0].id;
+    let images = h.state().session.get(id).unwrap().page_images(0).len();
+    assert_eq!(images, 1, "the added picture is the page's picture");
+    h.state_mut().views[0].image_selection = Some(pdfcraft_ui_egui::ImageSelection::at(0, 0));
+    h.run_steps(3);
+    h.key_press(Key::Delete);
+    h.run_steps(4);
+    let doc = h.state().session.get(id).unwrap();
+    assert!(doc.page_images(0).is_empty(), "the picture is deleted");
+    let texts: Vec<&str> = doc
+        .added()
+        .iter()
+        .filter_map(|a| if let pdfcraft_engine::AddedContent::Text(t) = &a.content { Some(t.text.as_str()) } else { None })
+        .collect();
+    assert_eq!(texts, ["Caption"], "and the text placed after it stays");
+}
+
 /// With a dialog open, Delete is the dialog's: the selected picture stays, and so does crop mode
 /// under Escape and Enter.
 #[test]

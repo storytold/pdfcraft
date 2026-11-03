@@ -493,7 +493,16 @@ pub(crate) fn picture_keys(ctx: &egui::Context, view: &mut DocView, doc: &pdfcra
             s.crop = None;
         }
     } else if !s.dragging() && !s.turning && (key(egui::Key::Delete) || key(egui::Key::Backspace)) && image().is_some() {
+        // The key is the picture's: added content's own Delete runs later this frame, after this
+        // edit has applied.
+        ctx.input_mut(|i| {
+            i.consume_key(egui::Modifiers::NONE, egui::Key::Delete);
+            i.consume_key(egui::Modifiers::NONE, egui::Key::Backspace);
+        });
         view.image_selection = None;
+        // Added content's selection follows the picture's (`content_ui::sync_image_selection`), and
+        // goes with it: once the picture is gone it would be the next added item's.
+        view.content.selected = None;
         view.pending_edit = Some(Edit::EditPageImage { page, index, change: pdfcraft_engine::ImageEdit::Delete });
     }
 }
