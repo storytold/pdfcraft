@@ -5372,7 +5372,7 @@ fn calculate_now_uses_calculation_order_and_bounds_recursion() {
     s.apply(id, Edit::SetFieldScript { name: "total".into(), event: "calculate".into(), script: Some("calculateNow(); event.value = 12;".into()) })
         .unwrap();
     let out = s.run_javascript(id, "calculateNow();", None).unwrap();
-    assert!(out.error.as_deref().is_some_and(|e| e.contains("calculateNow recursion limit exceeded")), "{out:?}");
+    assert!(out.console.iter().any(|line| line.contains("calculateNow recursion limit exceeded")), "{out:?}");
     s.set_javascript(false);
     assert!(s.run_javascript(id, "calculateNow();", None).is_err());
     s.set_javascript(true);
@@ -5407,6 +5407,36 @@ fn calculation_order_cache_tracks_script_edits_in_a_batch() {
         .unwrap();
     let total = session.get(id).unwrap().form.iter().find(|field| field.name == "total").unwrap().value.clone();
     assert_eq!(total, ["8"]);
+}
+
+#[test]
+fn calculation_order_cache_tracks_field_property_edits_in_a_batch() {
+    use form_scripts::{CalcOp, Calculate};
+
+    let mut session = Session::new().with_clock(|| 1_700_000_000);
+    let id = session.open("calculate-props-batch.pdf", None, Arc::new(scripted_form()), None).unwrap();
+    session
+        .apply(
+            id,
+            Edit::Batch {
+                label: "Change calculation".into(),
+                edits: vec![
+                    Edit::SetFieldValue { name: "qty".into(), value: FieldValue::Text("3".into()) },
+                    Edit::SetFieldProps {
+                        name: "total".into(),
+                        props: Box::new(FieldProps {
+                            calculate: Some(Calculate::Simple { op: CalcOp::Sum, fields: vec!["qty".into()] }),
+                            ..FieldProps::default()
+                        }),
+                    },
+                    Edit::SetFieldValue { name: "qty".into(), value: FieldValue::Text("4".into()) },
+                ],
+            },
+        )
+        .unwrap();
+
+    let total = session.get(id).unwrap().form.iter().find(|field| field.name == "total").unwrap().value.clone();
+    assert_eq!(total, ["4"]);
 }
 
 /// XFA forms check `xfa_installed` and `xfa_version` in a document script that runs before
