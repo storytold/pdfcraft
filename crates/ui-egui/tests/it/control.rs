@@ -936,6 +936,25 @@ fn middle_button_pans_while_held_outside_linux() {
     assert!(!h.state().session.get(h.state().views[0].id).unwrap().dirty);
 }
 
+/// With Invert middle-button drag on, a held middle drag moves the view the way the pointer goes.
+#[cfg(not(target_os = "linux"))]
+#[test]
+fn inverted_middle_drag_moves_the_view_the_way_the_pointer_goes() {
+    let (mut h, c) = harness();
+    h.state_mut().set_option("zoom", "400").unwrap();
+    ok(&mut h, &c, "ui.set", json!({ "key": "invert_middle_drag", "value": "true" }));
+    h.run_steps(3);
+    h.state_mut().views[0].go_to_page(1);
+    h.run_steps(2);
+    let p = h.state().views[0].viewport_rect().center();
+    let top = h.state().views[0].page_screen_rect(1).unwrap().top();
+    ok(&mut h, &c, "ui.drag", json!({ "from": [p.x, p.y], "to": [p.x, p.y - 60.0], "steps": 12, "button": "middle" }));
+    h.run_steps(2);
+    let moved = h.state().views[0].page_screen_rect(1).unwrap().top();
+    assert!((moved - (top + 60.0)).abs() < 1.0, "dragging up scrolls up, so the page moves down: {top} -> {moved}");
+    assert!(!h.state().session.get(h.state().views[0].id).unwrap().dirty);
+}
+
 #[test]
 fn state_and_view_options() {
     let (mut h, c) = harness();

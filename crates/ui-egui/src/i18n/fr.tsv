@@ -2886,3 +2886,20 @@ certificate	Version	Version
 # Touch and pen controls
 	Touch and pen	Tactile et stylet
 	Larger drawing tools. Use two fingers to move or zoom; use Hand to move with one finger.	Outils de dessin agrandis. Utilisez deux doigts pour déplacer ou zoomer, ou l’outil Main pour déplacer avec un doigt.
+# The strings the report listed as missing for fr.
+	Crop image	Recadrer l'image
+	Mouse wheel scroll speed	Vitesse de défilement à la molette
+	Remove {standard} identification	Supprimer l'identification {standard}
+	The certificate of {} has critical extensions PdfCraft does not recognize, so it is not used to vouch for {}.	Le certificat de {} comporte des extensions critiques que PdfCraft ne reconnaît pas ; il n'est donc pas utilisé pour attester {}.
+	The password must have at least 8 characters.	Le mot de passe doit comporter au moins 8 caractères.
+	The signature's signed attributes have no content type, which CMS requires; it was read anyway.	Les attributs signés de la signature n'ont pas de type de contenu, exigé par CMS ; elle a néanmoins été lue.
+	The signature's signed attributes have no message digest, so the signature does not cover the document.	Les attributs signés de la signature n'ont pas de condensat de message ; la signature ne couvre donc pas le document.
+	The signature's signed attributes name a content type other than data, so it is not a signature of the document.	Les attributs signés de la signature indiquent un type de contenu autre que des données ; ce n'est donc pas une signature du document.
+	The timestamp authority's certificate is not issued for time stamping.	Le certificat de l'autorité d'horodatage n'est pas émis pour l'horodatage.
+	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	Ce fichier a changé sur le disque. Rechargez-le pour voir la nouvelle version ; vos modifications non enregistrées seront perdues.
+	This signature uses an RSA key shorter than 2048 bits, which is no longer considered strong enough for signatures. It still validates, but it should not be relied on.	Cette signature utilise une clé RSA de moins de 2048 bits, ce qui n'est plus considéré comme suffisamment robuste pour des signatures. Elle se valide toujours, mais il ne faut pas s'y fier.
+	a table has 1 to {max} columns	un tableau a de 1 à {max} colonnes
+	a table has 1 to {max} rows	un tableau a de 1 à {max} lignes
+	the area, the spacing and the column widths must be numbers, the spacing 0 or more and each width more than 0	l'aire, l'espacement et les largeurs de colonnes doivent être des nombres, l'espacement 0 ou plus et chaque largeur supérieure à 0
+	the first row number can be at most {max}	le numéro de la première ligne peut être au maximum {max}
+theme	Appearance	Apparence
