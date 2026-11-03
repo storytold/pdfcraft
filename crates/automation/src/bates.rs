@@ -24,17 +24,21 @@ impl Automation {
         if files.is_empty() || files.len() > 1000 {
             return Err(ToolError::InvalidArgs("files must contain 1 to 1000 entries".into()));
         }
-        let start = args.0.get("start_number").and_then(Value::as_u64).unwrap_or(1);
-        if start == 0 {
-            return Err(ToolError::InvalidArgs("start_number must be at least 1".into()));
-        }
+        let start = match args.0.get("start_number") {
+            None | Some(Value::Null) => 1,
+            Some(value) => value
+                .as_u64()
+                .filter(|n| *n >= 1)
+                .ok_or_else(|| ToolError::InvalidArgs("start_number must be a whole number of at least 1".into()))?,
+        };
         let digits = args.opt_int("digits")?.unwrap_or(6);
         let digits =
             u8::try_from(digits).ok().filter(|d| (1..=12).contains(d)).ok_or_else(|| ToolError::InvalidArgs("digits must be from 1 to 12".into()))?;
         let prefix = args.opt_str("prefix")?.unwrap_or("");
         let suffix = args.opt_str("suffix")?.unwrap_or("");
-        if prefix.len() > 128 || suffix.len() > 128 || prefix.contains('#') || suffix.contains('#') {
-            return Err(ToolError::InvalidArgs("prefix and suffix must be at most 128 bytes and cannot contain #".into()));
+        // `#` separates the token's fields and `>>` ends it: either would cut the token short.
+        if prefix.len() > 128 || suffix.len() > 128 || [prefix, suffix].iter().any(|s| s.contains('#') || s.contains(">>")) {
+            return Err(ToolError::InvalidArgs("prefix and suffix must be at most 128 bytes and cannot contain # or >>".into()));
         }
         let dry_run = args.opt_bool("dry_run")?.unwrap_or(false);
 
@@ -102,10 +106,7 @@ impl Automation {
                 return Err(failed(format!("{input_name} has no pages to number")));
             }
             let count = u64::try_from(pages).map_err(|_| failed(format!("page count is too large for {input_name}")))?;
-            let last = next
-                .checked_add(count)
-                .and_then(|n| n.checked_sub(1))
-                .ok_or_else(|| failed(format!("Bates number range overflows for {input_name}")))?;
+            let last = next.checked_add(count.saturating_sub(1)).ok_or_else(|| failed(format!("Bates number range overflows for {input_name}")))?;
             plans.push(FilePlan {
                 input: input_name.clone(),
                 source: input_path.clone(),
@@ -115,7 +116,9 @@ impl Automation {
                 first: next,
                 last,
             });
-            next = last.checked_add(1).ok_or_else(|| failed(format!("Bates sequence overflows after {input_name}")))?;
+            if index + 1 < sources.len() {
+                next = last.checked_add(1).ok_or_else(|| failed(format!("Bates sequence overflows after {input_name}")))?;
+            }
         }
 
         let intervals: Vec<Value> = plans
@@ -160,10 +163,11 @@ impl Automation {
             let result = applied.and_then(|()| self.session.save_full_bytes(id));
             match result {
                 Ok(bytes) => {
-                    output_bytes = output_bytes.saturating_add(u64::try_from(bytes.len()).unwrap_or(u64::MAX));
-                    if output_bytes > 512 * 1024 * 1024 {
+                    let total = output_bytes.saturating_add(u64::try_from(bytes.len()).unwrap_or(u64::MAX));
+                    if total > 512 * 1024 * 1024 {
                         results.push(json!({"input":plan.input,"output":plan.output,"status":"error","pages":plan.pages,"first":plan.first,"last":plan.last,"error":"combined Bates output exceeds the 512 MiB safety limit"}));
                     } else {
+                        output_bytes = total;
                         staged.push((plan.output.clone(), bytes));
                     }
                 }

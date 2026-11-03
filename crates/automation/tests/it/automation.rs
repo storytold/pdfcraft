@@ -2858,6 +2858,16 @@ fn bates_numbers_continue_across_files_and_report_preflight_and_permission_failu
     let overflow = err(&mut a, "doc_bates_multi", json!({"files":[{"input":"b.pdf","output":"overflow.pdf"}],"start_number":u64::MAX}));
     assert!(overflow.to_string().contains("overflows"));
     assert!(!dir.join("overflow.pdf").exists());
+    // A range may end at u64::MAX itself.
+    let at_max = ok(&mut a, "doc_bates_multi", json!({"files":[{"input":"b.pdf","output":"max.pdf"}],"start_number":u64::MAX - 1,"dry_run":true}));
+    assert_eq!(at_max["files"][0]["last"], u64::MAX);
+    for bad in
+        [json!({"start_number":-3}), json!({"start_number":2.5}), json!({"start_number":"7"}), json!({"prefix":"CASE>>"}), json!({"suffix":"A>>B"})]
+    {
+        let mut args = json!({"files":[{"input":"b.pdf","output":"bad.pdf"}],"dry_run":true});
+        args.as_object_mut().unwrap().extend(bad.as_object().unwrap().clone());
+        assert!(a.call("doc_bates_multi", &args).is_err(), "{bad}");
+    }
 
     use pdfcraft_engine::{Changes, Edit, Protection, Session};
     let mut session = Session::new();

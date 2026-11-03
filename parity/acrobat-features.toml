@@ -2607,11 +2607,11 @@ title = "Bates numbering across multiple files"
 area = "C"
 tier = "P1"
 milestone = "M7"
-status = "shipped"
+status = "partial"
 commands = []
 tools = ["doc_bates_multi"]
 evidence = ["crates/automation/tests/it/automation.rs::bates_numbers_continue_across_files_and_report_preflight_and_permission_failures"]
-notes = "The headless batch tool allocates inclusive intervals in input order and reports per-file failures; it refuses existing output paths. A dedicated GUI batch dialog is not included."
+notes = "The headless batch tool allocates inclusive intervals in input order and reports per-file failures; it refuses existing output paths. Missing: a GUI batch dialog (Acrobat sets this up from Header & Footer ▸ Add Bates numbering with a file list), so it is reachable only through `doc_bates_multi`."
 
 [[feature]]
 id = "edit.bates-remove"
