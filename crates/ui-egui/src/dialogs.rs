@@ -132,7 +132,7 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
             Dialog::Print => 820.0,
             Dialog::FieldProps | Dialog::BulkFieldProps => 600.0,
             Dialog::Preferences => 610.0,
-            Dialog::About => 780.0,
+            Dialog::About => 820.0,
             Dialog::PinTool => 540.0,
             _ => 520.0,
         });
