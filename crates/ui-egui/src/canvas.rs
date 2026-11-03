@@ -878,18 +878,13 @@ impl DocView {
         if let Some(q) = &mut self.camera {
             q.grab = None;
         }
-        self.block_drag = None;
         self.org_drag = None;
         self.panel_drag = None;
         self.selection_drag = false;
         self.router.cancel();
         self.auto_scroll.cancel();
         self.prepare.cancel_pointer_gesture();
-        self.content.cancel_pointer_gesture();
-        self.objects.cancel_pointer_gesture();
-        if let Some(image) = &mut self.image_selection {
-            image.cancel_pointer_gesture();
-        }
+        self.cancel_edit_text_gestures();
     }
 
     /// Abandon Edit text's pointer gestures (a paragraph moved or rewrapped, a picture moved,

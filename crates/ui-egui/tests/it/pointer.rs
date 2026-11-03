@@ -1856,7 +1856,7 @@ fn with_prepare_a_right_click_beside_the_selected_field_opens_the_pages_menu() {
     let blank = at(&h, 60.0, 300.0);
     right_click(&mut h, blank);
     assert!(h.query_by_label("Duplicate…").is_none(), "no field menu on the empty page");
-    assert!(h.query_all_by_label_contains("Copy").next().is_some(), "the page's menu");
+    assert!(h.query_by_label("Marquee Zoom").is_some(), "the page's menu");
     h.key_press(egui::Key::Escape);
     h.run_steps(3);
     right_click(&mut h, on_box);

@@ -7503,8 +7503,7 @@ fn delete_on_a_selected_added_picture_deletes_it_alone() {
     assert_eq!(texts, ["Caption"], "and the text placed after it stays");
 }
 
-/// With a dialog open, Delete is the dialog's: the selected picture stays, and so does crop mode
-/// under Escape and Enter.
+/// With a dialog open, Delete and Backspace are the dialog's: the selected picture stays.
 #[test]
 fn a_dialog_keeps_its_delete_while_a_picture_is_selected() {
     let mut h = picture_pages(false);

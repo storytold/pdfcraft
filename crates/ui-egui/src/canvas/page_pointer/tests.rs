@@ -260,7 +260,11 @@ fn declares(line: &str) -> Option<&str> {
     let mut rest = line;
     loop {
         let before = rest;
-        for prefix in ["pub(crate) ", "pub(super) ", "pub ", "const ", "async ", "unsafe "] {
+        // `pub(crate)`, `pub(super)`, `pub(in crate::canvas)` and the like.
+        if let Some(scoped) = rest.strip_prefix("pub(") {
+            rest = scoped.split_once(") ").map_or(rest, |(_, after)| after);
+        }
+        for prefix in ["pub ", "const ", "async ", "unsafe "] {
             rest = rest.strip_prefix(prefix).unwrap_or(rest);
         }
         if rest == before {
@@ -605,9 +609,21 @@ const ROUTER_READERS: [(&str, &str, &str); 1] = [(
 /// for itself whether the press is its own, which the page view tells it (`PagePress`).
 const PRESS_CLAIMING_WORDS: [&str; 2] = ["grabs", "owns"];
 
-/// The function `line` declares, when its name has one of [`PRESS_CLAIMING_WORDS`] in it.
+/// The function `line` declares, when one of the words of its name is one of
+/// [`PRESS_CLAIMING_WORDS`].
 fn press_claiming_fn(line: &str) -> Vec<String> {
-    declares(line.trim_start()).filter(|name| PRESS_CLAIMING_WORDS.iter().any(|w| name.contains(w))).map(str::to_owned).into_iter().collect()
+    declares(line.trim_start())
+        .filter(|name| name.split('_').any(|word| PRESS_CLAIMING_WORDS.contains(&word)))
+        .map(str::to_owned)
+        .into_iter()
+        .collect()
+}
+
+/// Whether `line` takes the router whole (`let r = &view.router;`), which the checks by method
+/// name would not see through: anything but a method call on it.
+fn takes_the_router(line: &str) -> bool {
+    line.match_indices(".router")
+        .any(|(at, name)| line[at + name.len()..].chars().next().is_none_or(|c| c != '.' && !(c.is_alphanumeric() || c == '_')))
 }
 
 /// What ignores the press the pages hold until the button is up.
@@ -665,7 +681,7 @@ fn page_modules_act_on_a_press_only_through_the_router() {
     // functions use it.
     let known: Vec<&str> = ROUTER_WRITES.iter().chain(ROUTER_READS.iter()).copied().collect();
     let unlisted = page_module_matches(|line| {
-        let router = uses(line, ".router.") || uses(line, "PageRouter::");
+        let router = uses(line, ".router.") || uses(line, "PageRouter::") || takes_the_router(line);
         if router && !known.iter().any(|name| uses(line, name)) { vec!["router".to_owned()] } else { Vec::new() }
     });
     problems.extend(
@@ -766,6 +782,11 @@ fn the_page_guards_read_hit_tests_split_calls_and_aliases() {
     assert_eq!(declares("let hit = 1;"), None);
     assert_eq!(press_claiming_fn("    pub(crate) fn fill_grabs(view: &DocView) -> bool {"), ["fill_grabs"]);
     assert_eq!(press_claiming_fn("fn owns_press() {"), ["owns_press"]);
+    assert_eq!(press_claiming_fn("    pub(in crate::canvas) fn link_grabs(view: &DocView) {"), ["link_grabs"]);
+    assert!(press_claiming_fn("fn dropdowns() {").is_empty(), "a word that ends in one");
+    assert_eq!(declares("pub(in crate::canvas) fn drag_began(&mut self) {"), Some("drag_began"));
+    assert!(takes_the_router("let r = &view.router;") && takes_the_router("keep(view.router, 1)"));
+    assert!(!takes_the_router("view.router.press_for(i)") && !takes_the_router("view.routers.len()"));
     assert!(press_claiming_fn("fn holds(&self, page: usize) -> bool {").is_empty());
     assert!(press_claiming_fn("let grabs = 1;").is_empty());
     let source = "impl PageHits<'_> {\n    fn at(&self) {\n        self\n            .hits(view, p, false)\n    }\n}\nfn after() {\n    // view.router.owner(0)\n    let _ = view\n        .router\n        .owner(0);\n}\n";

@@ -160,6 +160,12 @@ fn screen(xf: &PageXform, info: &DocInfo, page: usize, object: &EditableObject) 
     xf.user_rect(info, page, object.rect.map(|v| v as f32))
 }
 
+/// A menu is open (the page's, or another popup): the objects selected together leave the pointer
+/// alone, and a press with Shift or ⌘ is not theirs.
+pub(crate) fn menu_open(ui: &egui::Ui, resp: &egui::Response) -> bool {
+    resp.context_menu_opened() || egui::Popup::is_any_open(ui.ctx())
+}
+
 /// Whether `modifiers` make a press add to the objects selected together, or take from them.
 pub(crate) fn adds(modifiers: egui::Modifiers) -> bool {
     modifiers.shift || modifiers.ctrl || modifiers.command
@@ -247,7 +253,7 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, press: PagePress, view: &mut D
     if view.objects.input_blocked {
         return true;
     }
-    if resp.context_menu_opened() || egui::Popup::is_any_open(ui.ctx()) {
+    if menu_open(ui, resp) {
         return false;
     }
     match press {

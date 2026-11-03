@@ -6,8 +6,10 @@
 //! press point decide who captures it ([`PageRouter::press`]), by the same table: the highest layer
 //! the active tool reaches. Until the button is up only the owner acts on the press, its drag and
 //! its release, so what the cursor promised is what the press does, and nothing takes a gesture
-//! back halfway. Each page is told what it has to do with the press ([`PagePress`]): its owner's,
-//! the active tool's, or none of its business.
+//! back halfway; an owner that declines the drag (text markup, a link with the Link tool) lets it
+//! go as it starts, and the drag is nobody's. Each page is told what it has to do with the press
+//! ([`PagePress`]): its owner's, the active tool's, or none of its business. Only the page view
+//! reads the router: its methods are `canvas`'s alone.
 
 use egui::CursorIcon;
 use pdfcraft_engine::ObjectTarget;
@@ -143,8 +145,9 @@ pub(crate) enum PagePress {
     /// The press began on this page, and the owner's hit won it: its module acts on it. Others
     /// only let go of their own state (a click on anything but the selected comment unselects it).
     Mine(Owner),
-    /// No button is down, or the press began on this page and nobody's hit won it: the active
-    /// tool's. Also every page's while a press the page view does not hold is down (one that began
+    /// No button is down, or the press began on this page and nobody's hit won it, or its owner let
+    /// its drag go ([`PageRouter::drag_began`]): the active tool's. Also every page's while a
+    /// press the page view does not hold is down (one that began
     /// over a panel), and after the press was dropped ([`PageRouter::cancel`]) until the button is
     /// up (`Elsewhere` instead when Escape came in the press's own frame; page input skips a
     /// cancelled press either way).

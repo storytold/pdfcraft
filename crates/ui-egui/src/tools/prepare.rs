@@ -380,7 +380,8 @@ pub(crate) fn page_input(
 
     // The Select tool: what the press is on ([`hit`]), a corner handle or a field; a press nobody
     // holds draws a selection rectangle, or a field with a field tool. A press held by something
-    // drawn over the fields (a comment) is not Prepare's.
+    // drawn over the fields (a comment) is not Prepare's, though its drag is once that something
+    // lets it go (a highlight's, `PageRouter::drag_began`).
     let free = press == PagePress::Free;
     let held = matches!(press, PagePress::Mine(Owner::PrepareField { .. } | Owner::PrepareCorner { .. }));
     let hit = match press {

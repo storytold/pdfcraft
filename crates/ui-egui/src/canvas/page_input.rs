@@ -104,8 +104,7 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
             && can_modify
             && xf.rect.contains(o)
             && crate::object_ui::adds(ptr.modifiers)
-            && !resp.context_menu_opened()
-            && !egui::Popup::is_any_open(ui.ctx());
+            && !crate::object_ui::menu_open(ui, resp);
         let objects = adds.then(|| view.objects.inventory(doc, i));
         let at = hits.at(view, o, objects.as_ref());
         // A press is the page's it lies on, or past its edge the one whose selected picture has its
@@ -549,9 +548,9 @@ impl PageHits<'_> {
                 .filter(|e| !e.has_changes())
                 .and_then(|e| lines.get(e.block))
                 .map(|l| xf.user_rect(info, page, l.rect.map(|v| v as f32)).expand(2.0));
-            // Add text acts on the page's paragraphs only in their boxes, edges included (it
-            // finishes the box being typed there, `over_source`): not on pictures, nor beside a
-            // paragraph, where a click starts a new box.
+            // Add text acts on the page's paragraphs only in their boxes, edges included (its click
+            // there finishes the box being typed and opens the paragraph, `ParagraphCx::adding`):
+            // not on pictures, nor beside a paragraph, where a click starts a new box.
             let edit_text = tool == QuickTool::EditText;
             let on_paragraphs = edit_text || crate::edit_text_ui::over_paragraph(xf, info, page, lines, p);
             (
