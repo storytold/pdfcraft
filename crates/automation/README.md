@@ -151,10 +151,15 @@ transport; see the ADR "AI assistant"):
 - **The library file.** `library` is the JSON file kept inside `--root` and rewritten atomically.
   A file that exists but can't be read is refused and left as it is. Without `library`, the tools
   use the last library named, or one kept for the session.
+- **Access.** Reading the file needs read access (`--automation-read-root`), and the tools that
+  change it need write access too.
+- **Another process.** If another process changes the file, it is read again. A change made
+  while the file changed underneath it is refused rather than written over the other one.
 - **Asking.** `ai_ask {doc, page, question, rect?, k?, model?, effort?, web_search?, dry_run: true}`
   returns the exact Claude request a question would send, with the key masked, and its passages.
   It refuses documents that forbid copying, and counts the glyphs it left out under redaction
-  marks.
+  marks. Library results leave out the document itself, and any copy of it indexed from the same
+  path, which may still hold text it has since marked for redaction.
 
 ## Moving several page objects
 

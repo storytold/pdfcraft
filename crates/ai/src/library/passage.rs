@@ -1,6 +1,7 @@
 //! Page text split into passages of about [`TARGET_CHARS`] characters on sentence boundaries,
 //! each starting with the last sentence of the one before, so a fact that straddles two passages
-//! is whole in one of them.
+//! is whole in one of them. A last sentence longer than half a passage ([`MAX_OVERLAP_CHARS`]) is
+//! not repeated: it is a passage's worth of text on its own, and repeating it would double it.
 
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -8,6 +9,8 @@ use unicode_segmentation::UnicodeSegmentation;
 pub const TARGET_CHARS: usize = 1_000;
 /// A single sentence longer than this is cut, at a space where there is one.
 pub const MAX_SENTENCE_CHARS: usize = 2_000;
+/// The longest last sentence repeated at the start of the next passage.
+pub const MAX_OVERLAP_CHARS: usize = TARGET_CHARS / 2;
 
 pub fn split(text: &str) -> Vec<String> {
     let mut pieces = Vec::new();
@@ -34,7 +37,7 @@ pub fn split(text: &str) -> Vec<String> {
             fresh = 0;
             if let Some(last) = overlap {
                 let len = last.chars().count();
-                if len <= TARGET_CHARS / 2 {
+                if len <= MAX_OVERLAP_CHARS {
                     current.push(last);
                     chars = len;
                 }
@@ -104,6 +107,19 @@ mod tests {
         for i in 0..40 {
             assert!(passages.iter().any(|p| p.contains(&format!("number {i} "))), "{i}");
         }
+    }
+
+    #[test]
+    fn a_long_last_sentence_is_not_repeated() {
+        let short = |i: usize| format!("Short sentence {i} about the topic. ");
+        let long = format!("{}. ", "Long ".repeat(120).trim_end());
+        assert!(long.chars().count() > MAX_OVERLAP_CHARS && long.chars().count() < TARGET_CHARS);
+        let text = format!("{}{long}{}", (0..10).map(short).collect::<String>(), (10..40).map(short).collect::<String>());
+        let passages = split(&text);
+        let holding: Vec<&String> = passages.iter().filter(|p| p.contains("Long Long")).collect();
+        assert_eq!(holding.len(), 1, "{passages:?}");
+        // The sentence after it still overlaps as usual.
+        assert!(passages.windows(2).any(|w| w[0].contains("Long Long") && !w[1].contains("Long Long")));
     }
 
     #[test]

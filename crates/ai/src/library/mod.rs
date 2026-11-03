@@ -72,6 +72,20 @@ pub enum Status {
     NoText,
 }
 
+impl Status {
+    /// How much of the document could be read: a later read of the same bytes that could read
+    /// more (an open copy with its password, or with the owner's) replaces what an earlier one
+    /// recorded, and one that could read less doesn't.
+    fn reach(self) -> u8 {
+        match self {
+            Self::NeedsPassword => 0,
+            Self::NotPermitted => 1,
+            Self::NoText => 2,
+            Self::Indexed => 3,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Entry {
     pub doc: DocRef,
@@ -208,24 +222,30 @@ impl Library {
         };
         let path = text::capped(&new.path, MAX_PATH_BYTES);
         if let Some(pos) = self.entries.iter().position(|e| e.doc.sha256 == new.doc.sha256) {
-            let reindex = self.entries.get(pos).is_some_and(|e| e.status != Status::Indexed && status == Status::Indexed);
-            if reindex {
-                self.check_room(&passages, 0)?;
+            let Some(old) = self.entries.get(pos) else { return Err(LibraryError::Unreadable("entry vanished".into())) };
+            // A read that reaches further replaces the old record; so does a full index of an entry
+            // that lost passages (a damaged saved library).
+            let replace = status.reach() > old.status.reach() || (status == Status::Indexed && old.passages < count(&passages));
+            if replace {
+                self.check_room(&passages, 0, Some(&new.doc.sha256))?;
             }
             let Some(entry) = self.entries.get_mut(pos) else { return Err(LibraryError::Unreadable("entry vanished".into())) };
             entry.paths.retain(|p| *p != path);
             entry.paths.insert(0, path);
             entry.paths.truncate(MAX_PATHS);
-            if reindex {
+            if replace {
                 entry.status = status;
                 entry.passages = count(&passages);
                 entry.pages_without_text = pages_without_text;
-                self.push_passages(passages);
+                let sha = new.doc.sha256;
+                let mut kept: Vec<StoredPassage> = std::mem::take(&mut self.passages).into_iter().filter(|p| p.doc != sha).collect();
+                kept.extend(passages);
+                self.reindex(kept);
             }
             let entry = self.entries.get(pos).ok_or_else(|| LibraryError::Unreadable("entry vanished".into()))?;
             return Ok(Added::Known { status: entry.status, passages: entry.passages });
         }
-        self.check_room(&passages, 1)?;
+        self.check_room(&passages, 1, None)?;
         let passage_count = count(&passages);
         self.entries.push(Entry {
             doc: new.doc,
@@ -241,15 +261,21 @@ impl Library {
         Ok(Added::New { status, passages: passage_count })
     }
 
-    fn check_room(&self, passages: &[StoredPassage], documents: usize) -> Result<(), LibraryError> {
+    /// Whether `passages` (and `documents` more entries) fit, counting out the passages of
+    /// `replacing`, which they take the place of.
+    fn check_room(&self, passages: &[StoredPassage], documents: usize, replacing: Option<&Sha256>) -> Result<(), LibraryError> {
+        let (old_count, old_bytes) = match replacing {
+            Some(sha) => self.passages.iter().filter(|p| p.doc == *sha).fold((0usize, 0usize), |(n, b), p| (n + 1, b.saturating_add(p.text.len()))),
+            None => (0, 0),
+        };
         if self.entries.len().saturating_add(documents) > MAX_DOCUMENTS {
             return Err(LibraryError::Full("documents"));
         }
-        if self.passages.len().saturating_add(passages.len()) > MAX_PASSAGES {
+        if self.passages.len().saturating_sub(old_count).saturating_add(passages.len()) > MAX_PASSAGES {
             return Err(LibraryError::Full("passages"));
         }
         let bytes = passages.iter().fold(0usize, |n, p| n.saturating_add(p.text.len()));
-        if self.text_bytes.saturating_add(bytes) > MAX_TEXT_BYTES {
+        if self.text_bytes.saturating_sub(old_bytes).saturating_add(bytes) > MAX_TEXT_BYTES {
             return Err(LibraryError::Full("text"));
         }
         Ok(())
@@ -283,9 +309,9 @@ impl Library {
     }
 
     /// The `k` best passages for `query`, at most one per page and, while other documents have
-    /// matches, at most half of them from one document. `exclude` leaves out a document (the one
+    /// matches, at most half of them from one document. `exclude` leaves out documents (the one
     /// being read, whose own text is sent anyway).
-    pub fn search(&self, query: &str, k: usize, exclude: Option<&Sha256>) -> Vec<Hit> {
+    pub fn search(&self, query: &str, k: usize, exclude: &[Sha256]) -> Vec<Hit> {
         let k = k.min(MAX_RESULTS);
         let mut terms = Vec::new();
         tokenize::tokens(text::prefix(query, MAX_QUERY_BYTES), &mut terms);
@@ -313,7 +339,7 @@ impl Library {
         let mut ranked: Vec<(u32, f64)> = scores.into_iter().filter(|(_, s)| *s > 0.0).collect();
         ranked.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
         let ranked: Vec<(&StoredPassage, f64)> =
-            ranked.into_iter().filter_map(|(id, s)| Some((self.passages.get(id as usize)?, s))).filter(|(p, _)| exclude != Some(&p.doc)).collect();
+            ranked.into_iter().filter_map(|(id, s)| Some((self.passages.get(id as usize)?, s))).filter(|(p, _)| !exclude.contains(&p.doc)).collect();
         pick(&ranked, k)
     }
 
@@ -325,10 +351,10 @@ impl Library {
     /// Read a saved library. A wrong format or version is an error (the caller starts a new
     /// library and says so); damaged parts of a readable file are dropped, each with a warning.
     pub fn from_json(bytes: &[u8]) -> Result<(Self, Vec<String>), LibraryError> {
-        Self::from_json_within(bytes, MAX_FILE_BYTES)
+        Self::from_json_within(bytes, MAX_FILE_BYTES, MAX_TEXT_BYTES)
     }
 
-    fn from_json_within(bytes: &[u8], max_bytes: usize) -> Result<(Self, Vec<String>), LibraryError> {
+    fn from_json_within(bytes: &[u8], max_bytes: usize, max_text: usize) -> Result<(Self, Vec<String>), LibraryError> {
         if bytes.len() > max_bytes {
             return Err(LibraryError::FileTooLarge);
         }
@@ -339,11 +365,18 @@ impl Library {
         if header.version != FORMAT_VERSION {
             return Err(LibraryError::WrongVersion(header.version));
         }
+        // Each entry and passage is read on its own, so a damaged one is dropped, not the library.
         let saved: Saved = serde_json::from_slice(bytes).map_err(|e| LibraryError::Unreadable(e.to_string()))?;
         let mut warnings = Vec::new();
         let mut library = Self::new();
         let mut seen = HashSet::new();
-        for mut entry in saved.entries {
+        let mut recorded: HashMap<Sha256, u32> = HashMap::new();
+        let mut damaged = 0usize;
+        for Lenient(entry) in saved.entries {
+            let Some(mut entry) = entry else {
+                damaged = damaged.saturating_add(1);
+                continue;
+            };
             if library.entries.len() >= MAX_DOCUMENTS {
                 warnings.push(format!("more than {MAX_DOCUMENTS} documents; the rest were left out"));
                 break;
@@ -354,27 +387,50 @@ impl Library {
             }
             entry.paths = entry.paths.iter().take(MAX_PATHS).map(|p| text::capped(p, MAX_PATH_BYTES)).collect();
             text::truncate(&mut entry.title, MAX_TITLE_BYTES);
+            recorded.insert(entry.doc.sha256, entry.passages);
             entry.passages = 0;
             library.entries.push(entry);
+        }
+        if damaged > 0 {
+            warnings.push(format!("{damaged} documents couldn't be read and were left out"));
         }
         let indexed: HashSet<Sha256> = library.entries.iter().filter(|e| e.status == Status::Indexed).map(|e| e.doc.sha256).collect();
         let mut passages = Vec::new();
         let mut dropped = 0usize;
         let mut bytes_kept = 0usize;
-        for mut p in saved.passages {
-            if !indexed.contains(&p.doc) || passages.len() >= MAX_PASSAGES || bytes_kept >= MAX_TEXT_BYTES {
+        for Lenient(p) in saved.passages {
+            let Some(mut p) = p else {
+                dropped = dropped.saturating_add(1);
+                continue;
+            };
+            text::truncate(&mut p.text, MAX_PAGE_TEXT_BYTES);
+            // The caps are checked with this passage counted in, so a loaded library is never over
+            // them (and never refuses the next document for room it doesn't have).
+            let total = bytes_kept.saturating_add(p.text.len());
+            if !indexed.contains(&p.doc) || passages.len() >= MAX_PASSAGES || total > max_text {
                 dropped = dropped.saturating_add(1);
                 continue;
             }
-            text::truncate(&mut p.text, MAX_PAGE_TEXT_BYTES);
-            bytes_kept = bytes_kept.saturating_add(p.text.len());
+            bytes_kept = total;
             passages.push(p);
         }
         if dropped > 0 {
-            warnings.push(format!("{dropped} passages belonged to no indexed document or passed the limits and were dropped"));
+            warnings.push(format!("{dropped} passages were damaged, belonged to no indexed document or passed the limits, and were dropped"));
         }
+        let mut per_document: HashMap<Sha256, u32> = HashMap::new();
+        for p in &passages {
+            let n = per_document.entry(p.doc).or_insert(0);
+            *n = n.saturating_add(1);
+        }
+        let mut short = 0usize;
         for entry in &mut library.entries {
-            entry.passages = count_of(&passages, &entry.doc.sha256);
+            entry.passages = per_document.get(&entry.doc.sha256).copied().unwrap_or(0);
+            if entry.status == Status::Indexed && recorded.get(&entry.doc.sha256).is_some_and(|n| entry.passages < *n) {
+                short = short.saturating_add(1);
+            }
+        }
+        if short > 0 {
+            warnings.push(format!("{short} documents lost passages; add them again to index them in full"));
         }
         library.reindex(passages);
         Ok((library, warnings))
@@ -383,10 +439,6 @@ impl Library {
 
 fn count(passages: &[StoredPassage]) -> u32 {
     u32::try_from(passages.len()).unwrap_or(u32::MAX)
-}
-
-fn count_of(passages: &[StoredPassage], doc: &Sha256) -> u32 {
-    u32::try_from(passages.iter().filter(|p| p.doc == *doc).count()).unwrap_or(u32::MAX)
 }
 
 /// Passages for the pages given, and how many of the document's pages had no text.
@@ -441,8 +493,19 @@ struct Header {
 
 #[derive(Deserialize)]
 struct Saved {
-    entries: Vec<Entry>,
-    passages: Vec<StoredPassage>,
+    entries: Vec<Lenient<Entry>>,
+    passages: Vec<Lenient<StoredPassage>>,
+}
+
+/// One element of a saved list, or `None` if it is damaged: read through a `Value` of its own, so
+/// a bad element is dropped alone and only one element's `Value` is held at a time.
+struct Lenient<T>(Option<T>);
+
+impl<'de, T: serde::de::DeserializeOwned> Deserialize<'de> for Lenient<T> {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let value = serde_json::Value::deserialize(d)?;
+        Ok(Self(serde_json::from_value(value).ok()))
+    }
 }
 
 #[derive(Serialize)]

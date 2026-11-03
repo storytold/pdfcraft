@@ -1,4 +1,5 @@
 use super::*;
+use crate::{Edit, NewAnnotation, Shape, Style, rect_quad};
 use pdfcraft_ai::library::{Added, Status};
 
 /// One 200 × 300 pt page with two lines, the second optionally under an unapplied redaction mark.
@@ -120,7 +121,7 @@ fn a_document_that_needs_a_password_is_indexed_from_its_open_copy() {
     let opened = s.library_document(id, 2).unwrap();
     assert_eq!(opened.doc, DocRef::of(&s.get(id).unwrap().bytes));
     assert_eq!(lib.add(opened), Ok(Added::Known { status: Status::Indexed, passages: 1 }));
-    assert_eq!(lib.search("salary", 3, None).len(), 1);
+    assert_eq!(lib.search("salary", 3, &[]).len(), 1);
 }
 
 #[test]
@@ -146,9 +147,80 @@ fn passages_name_this_document_and_the_library() {
     let other_hash = other.doc.sha256;
     lib.add(other).unwrap();
     // The document being read is left out of the library results; the other one answers.
-    let found = library_passages(&lib, "How did the figures rise?", Some(&ctx), Some(&current_hash), 6);
+    let found = library_passages(&lib, "How did the figures rise?", Some(&ctx), &[current_hash], 6);
     assert!(!found.is_empty());
     assert!(found.iter().all(|p| p.id == SourceId::Library { sha256: other_hash, page: 0 }), "{found:?}");
     assert_eq!(found[0].title, "salaries.pdf, page 1");
     assert_eq!(s.document_sha256(id), Some(current_hash));
+}
+
+/// A mark added in this session (not one already in the file) is honoured too: the context and
+/// the library read the document as it is now.
+#[test]
+fn text_under_a_mark_added_after_open_is_never_sent() {
+    let (mut s, id) = open(two_lines(false));
+    let shape = Shape::Redact { quads: vec![rect_quad([10.0, 140.0, 190.0, 170.0])], overlay: String::new(), look: Default::default() };
+    let mark =
+        Edit::AddAnnotation(NewAnnotation { page: 0, style: Style::default_for(&shape), shape, contents: String::new(), author: "Test".into() });
+    s.apply(id, mark).unwrap();
+    let ctx = s.assistant_context(id, 0, &Selected::Page).unwrap();
+    assert!(!ctx.text.contains("Secret") && ctx.text.contains("Public"), "{:?}", ctx.text);
+    assert!(ctx.redacted_glyphs > 0);
+    assert!(!pages_text(&s.library_document(id, 0).unwrap()).contains("Secret"));
+}
+
+/// The library copy of a file indexed before it was marked for redaction is left out of the
+/// questions about the open, marked document: it is the same file, and it still holds the text.
+#[test]
+fn earlier_copies_of_the_open_file_are_left_out_of_library_results() {
+    let mut lib = Library::new();
+    let before = library_document_from_file("/docs/report.pdf", "report.pdf", Arc::new(two_lines(false)), 0).unwrap();
+    let before_hash = before.doc.sha256;
+    lib.add(before).unwrap();
+    let mut s = Session::new();
+    let id = s.open("report.pdf", Some("/docs/report.pdf".into()), Arc::new(two_lines(true)), None).unwrap();
+    let excluded = s.library_exclusions(id, &lib);
+    assert!(excluded.contains(&before_hash), "the copy last seen at the open file's path");
+    assert!(excluded.contains(&s.document_sha256(id).unwrap()));
+    let ctx = s.assistant_context(id, 0, &Selected::Page).unwrap();
+    let found = library_passages(&lib, "salary", Some(&ctx), &excluded, 6);
+    assert!(found.is_empty(), "{found:?}");
+    // A document opened from somewhere else excludes only itself.
+    let elsewhere = s.open("copy.pdf", Some("/elsewhere/copy.pdf".into()), Arc::new(two_lines(true)), None).unwrap();
+    assert!(!s.library_exclusions(elsewhere, &lib).contains(&before_hash));
+}
+
+#[test]
+fn a_long_question_leaves_room_for_the_selection_in_the_library_query() {
+    let mut lib = Library::new();
+    lib.add(library_document_from_file("/lib/salaries.pdf", "salaries.pdf", Arc::new(two_lines(false)), 0).unwrap()).unwrap();
+    let ctx = SelectionContext {
+        page: 0,
+        page_label: "1".into(),
+        text: "salary".into(),
+        surrounding: String::new(),
+        title: "notes.pdf".into(),
+        encrypted: false,
+        redacted_glyphs: 0,
+    };
+    let question = "why ".repeat(2_000);
+    assert!(!library_passages(&lib, &question, Some(&ctx), &[], 6).is_empty(), "the selection's terms still reach the search");
+}
+
+/// Pages whose text can't be read are an error when no page gave text, not "no text" (which
+/// would suggest OCR for a damaged file); when other pages read, they are left out. The renderer
+/// fails a page's text only when it crashes, so the reader is given here.
+#[test]
+fn pages_whose_text_cant_be_read() {
+    let doc = inspect(Arc::new(two_lines(false)), None).unwrap();
+    let mut info = doc.clone();
+    info.pages = vec![doc.pages[0].clone(), doc.pages[0].clone()];
+    let readable = page_text(&Arc::new(two_lines(false)), None, 0).unwrap();
+    let all_fail = read_pages(&info, |_| Err("renderer crashed".into()));
+    assert_eq!(all_fail, Err("page 1: renderer crashed".into()));
+    let one_fails = read_pages(&info, |page| if page == 0 { Err("renderer crashed".into()) } else { Ok(Some(readable.clone())) }).unwrap();
+    assert_eq!(one_fails.len(), 1);
+    assert!(one_fails[0].text.contains("Public") && one_fails[0].page == 1);
+    // Pages that read with no text (a scan) are "no text", not an error.
+    assert_eq!(read_pages(&info, |_| Ok(Some(Arc::new(PageText::default())))).map(|p| p.len()), Ok(2));
 }

@@ -210,3 +210,90 @@ fn library_paths_stay_inside_the_root() {
     assert_eq!(std::fs::read(dir.join("outside.json")).unwrap(), b"{}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A library file that exists but can't be read (here a folder, which fails on every system) is
+/// refused, and nothing is written in its place.
+#[test]
+fn a_library_that_cant_be_read_is_refused() {
+    let dir = workdir("unreadable");
+    std::fs::create_dir_all(dir.join("root/lib.json")).unwrap();
+    let mut a = auto(&dir);
+    assert!(a.call("ai_library_add", &json!({"paths": ["birds.pdf"], "library": "lib.json"})).is_err());
+    assert!(a.call("ai_library_list", &json!({"library": "lib.json"})).is_err());
+    assert!(dir.join("root/lib.json").is_dir());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Two sessions on one library file: each change is made to what the file holds now, so neither
+/// writes over what the other saved.
+#[test]
+fn two_sessions_on_one_library_keep_each_others_additions() {
+    let dir = workdir("two-sessions");
+    let mut a = auto(&dir);
+    let mut b = auto(&dir);
+    ok(&mut a, "ai_library_add", json!({"paths": ["birds.pdf"], "library": "lib.json"}));
+    assert_eq!(ok(&mut b, "ai_library_list", json!({"library": "lib.json"}))["documents"].as_array().map(Vec::len), Some(1));
+    ok(&mut a, "ai_library_add", json!({"paths": ["report.pdf"]}));
+    std::fs::create_dir_all(dir.join("root/moved")).unwrap();
+    std::fs::write(dir.join("root/moved/renamed.pdf"), birds()).unwrap();
+    ok(&mut b, "ai_library_add", json!({"paths": ["moved/renamed.pdf"]}));
+    let mut c = auto(&dir);
+    let titles: Vec<String> = ok(&mut c, "ai_library_list", json!({"library": "lib.json"}))["documents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|d| d["title"].as_str().unwrap_or_default().to_owned())
+        .collect();
+    assert_eq!(titles.len(), 2, "b kept a's report.pdf: {titles:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// With separate read and write folders, a library in the write folder alone can't be read
+/// (its titles, paths and text would come back in the results), while one in the read folder can.
+#[test]
+fn a_library_is_read_only_from_the_read_folder() {
+    use pdfcraft_automation::file_access::AutomationRoots;
+    let dir = workdir("roots");
+    for d in ["in", "out"] {
+        std::fs::create_dir_all(dir.join(d)).unwrap();
+    }
+    std::fs::write(dir.join("in/birds.pdf"), birds()).unwrap();
+    // A library with a document in it, in each folder.
+    let mut plain = Automation::new().with_root(&dir).unwrap();
+    for f in ["in/lib.json", "out/lib.json"] {
+        ok(&mut plain, "ai_library_add", json!({"paths": ["in/birds.pdf"], "library": f}));
+    }
+    let s = |p: &str| dir.join(p).to_string_lossy().into_owned();
+    let roots = AutomationRoots::new(Some(dir.join("in").as_path()), Some(dir.join("out").as_path())).unwrap();
+    let mut a = Automation::new().with_automation_roots(roots);
+    for (tool, args) in [
+        ("ai_library_list", json!({"library": s("out/lib.json")})),
+        ("ai_library_search", json!({"query": "kestrels", "library": s("out/lib.json")})),
+        ("ai_library_add", json!({"paths": [s("in/birds.pdf")], "library": s("out/lib.json")})),
+    ] {
+        let e = a.call(tool, &args);
+        assert!(e.is_err(), "{tool} read a library outside the read folder: {e:?}");
+    }
+    assert_eq!(ok(&mut a, "ai_library_list", json!({"library": s("in/lib.json")}))["documents"].as_array().map(Vec::len), Some(1));
+    // Named by a tool that only reads, the read folder's library still can't be written.
+    assert!(a.call("ai_library_add", &json!({"paths": [s("in/birds.pdf")]})).is_err());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A copy of the open file indexed before it was marked for redaction is not searched for a
+/// question about it: it still holds the text the mark hides.
+#[test]
+fn ai_ask_leaves_out_an_earlier_copy_of_the_open_file() {
+    let dir = workdir("stale");
+    let unmarked = pdf(&[&["Rates rose three percent.", "Secret salary 90000."]], false);
+    std::fs::write(dir.join("root/report.pdf"), unmarked).unwrap();
+    let mut a = auto(&dir);
+    ok(&mut a, "ai_library_add", json!({"paths": ["report.pdf", "birds.pdf"], "library": "lib.json"}));
+    // The file is marked for redaction since, and opened.
+    std::fs::write(dir.join("root/report.pdf"), report()).unwrap();
+    let doc = ok(&mut a, "doc_open", json!({"path": "report.pdf"}))["doc"].clone();
+    let asked = ok(&mut a, "ai_ask", json!({"doc": doc, "page": 1, "question": "What is the secret salary?", "dry_run": true}));
+    let sent = asked["request"]["body"].to_string();
+    assert!(!sent.contains("Secret") && !sent.contains("90000"), "{sent}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

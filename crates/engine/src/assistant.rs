@@ -119,7 +119,7 @@ impl Session {
             let bytes = doc.bytes.clone();
             let password = doc.password.clone();
             let info = doc.info.clone();
-            Content::Pages(guard(move || extract_pages(bytes, password.as_deref(), &info)).map_err(AssistError::Text)?)
+            Content::Pages(guard(move || extract_pages(bytes, password.as_deref(), &info)).map_err(AssistError::Text)?.map_err(AssistError::Text)?)
         } else {
             Content::NotPermitted
         };
@@ -136,6 +136,20 @@ impl Session {
     /// The SHA-256 of an open document's working file, by which the library knows it.
     pub fn document_sha256(&self, id: DocId) -> Option<Sha256> {
         self.get(id).map(|d| Sha256::of(&d.bytes))
+    }
+
+    /// The library documents a question about `id` leaves out: its own bytes, whose text is sent
+    /// anyway, and every entry last seen at its path. An earlier copy, indexed before an edit
+    /// such as a redaction mark, could still hold what the open document no longer sends.
+    pub fn library_exclusions(&self, id: DocId, lib: &Library) -> Vec<Sha256> {
+        let Some(doc) = self.get(id) else { return Vec::new() };
+        let mut out = vec![Sha256::of(&doc.bytes)];
+        if let Some(path) = doc.path.as_deref() {
+            out.extend(lib.entries().iter().filter(|e| e.paths.iter().any(|p| p == path)).map(|e| e.doc.sha256));
+        }
+        out.sort_unstable();
+        out.dedup();
+        out
     }
 }
 
@@ -161,8 +175,11 @@ pub fn library_document_from_file(path: &str, name: &str, bytes: Arc<Vec<u8>>, a
             .map_err(AssistError::Unreadable)?
             .map_err(|e| AssistError::Unreadable(e.to_string()))?
     };
-    new.content =
-        if copy { Content::Pages(guard(move || extract_pages(bytes, None, &info)).map_err(AssistError::Text)?) } else { Content::NotPermitted };
+    new.content = if copy {
+        Content::Pages(guard(move || extract_pages(bytes, None, &info)).map_err(AssistError::Text)?.map_err(AssistError::Text)?)
+    } else {
+        Content::NotPermitted
+    };
     Ok(new)
 }
 
@@ -181,14 +198,16 @@ pub fn context_passages(ctx: &SelectionContext) -> Vec<Passage> {
 }
 
 /// The library passages for a question: searched with the question and the start of the
-/// selection, leaving out the document being read (`current`), whose own text is sent anyway.
-pub fn library_passages(lib: &Library, question: &str, ctx: Option<&SelectionContext>, current: Option<&Sha256>, k: usize) -> Vec<Passage> {
-    let mut query = question.to_owned();
+/// selection, leaving out `exclude` ([`Session::library_exclusions`]). The question is cut to
+/// leave the selection room in the query, so a long question can't push it out.
+pub fn library_passages(lib: &Library, question: &str, ctx: Option<&SelectionContext>, exclude: &[Sha256], k: usize) -> Vec<Passage> {
+    let room = library::MAX_QUERY_BYTES.saturating_sub(QUERY_SELECTION_BYTES).saturating_sub(1);
+    let mut query = pdfcraft_ai::text::prefix(question, room).to_owned();
     if let Some(ctx) = ctx {
         query.push(' ');
         query.push_str(pdfcraft_ai::text::prefix(&ctx.text, QUERY_SELECTION_BYTES));
     }
-    lib.search(&query, k, current)
+    lib.search(&query, k, exclude)
         .into_iter()
         .map(|hit| {
             let title = lib.entry(&hit.doc).map_or("Library document", |e| e.title.as_str());
@@ -217,19 +236,39 @@ fn page_text(bytes: &Arc<Vec<u8>>, password: Option<&str>, page: usize) -> Resul
 }
 
 /// The text of every page, without what redaction marks cover, one renderer for the document.
-/// Pages past [`library::MAX_PAGES`], or once the text passes what a whole library may hold, are
-/// left out (and counted by the library as without text).
-fn extract_pages(bytes: Arc<Vec<u8>>, password: Option<&str>, info: &DocInfo) -> Vec<library::PageText> {
+fn extract_pages(bytes: Arc<Vec<u8>>, password: Option<&str>, info: &DocInfo) -> Result<Vec<library::PageText>, String> {
     let config = RenderConfig { password: password.map(Arc::from), ..Default::default() };
     let mut r = PageRenderer::new(bytes, config);
+    read_pages(info, |page| {
+        let rendered = r.render(RenderRequest { page, kind: RequestKind::Text, scale: 1.0, ..Default::default() });
+        match rendered.error {
+            Some(e) => Err(e),
+            None => Ok(rendered.text),
+        }
+    })
+}
+
+/// The text of each page as `read` gives it, without what redaction marks cover. Pages past
+/// [`library::MAX_PAGES`], or once the text passes what a whole library may hold, are left out
+/// (and counted by the library as without text). A page whose text can't be read is left out
+/// too, unless no page gave any text: then the error is returned, since "no text" would send the
+/// user to Scan & OCR for a file that is damaged.
+fn read_pages(info: &DocInfo, mut read: impl FnMut(usize) -> Result<Option<Arc<PageText>>, String>) -> Result<Vec<library::PageText>, String> {
     let mut out = Vec::new();
     let mut total = 0usize;
+    let mut first_error: Option<String> = None;
     for page in 0..info.pages.len().min(library::MAX_PAGES) {
         if total >= library::MAX_TEXT_BYTES {
             break;
         }
-        let rendered = r.render(RenderRequest { page, kind: RequestKind::Text, scale: 1.0, ..Default::default() });
-        let Some(text) = rendered.text else { continue };
+        let text = match read(page) {
+            Ok(Some(text)) => text,
+            Ok(None) => continue,
+            Err(e) => {
+                first_error.get_or_insert_with(|| format!("page {}: {e}", page.saturating_add(1)));
+                continue;
+            }
+        };
         let areas = redaction_areas(info, page);
         let kept = (0..text.glyphs.len()).filter(|&i| text.glyphs.get(i).is_some_and(|g| !areas.iter().any(|a| inside(centre(g.rect), *a))));
         let mut s = text_of(&text, kept);
@@ -237,7 +276,10 @@ fn extract_pages(bytes: Arc<Vec<u8>>, password: Option<&str>, info: &DocInfo) ->
         total = total.saturating_add(s.len());
         out.push(library::PageText { page: u32::try_from(page).unwrap_or(u32::MAX), text: s });
     }
-    out
+    match first_error {
+        Some(e) if out.iter().all(|p| p.text.trim().is_empty()) => Err(e),
+        _ => Ok(out),
+    }
 }
 
 /// The rectangles of the page's redaction marks, in view space.

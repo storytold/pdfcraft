@@ -27,17 +27,17 @@ fn corpus() -> Library {
 #[test]
 fn ranks_the_matching_passage_first() {
     let lib = corpus();
-    let hits = lib.search("What is the length normalisation parameter?", 3, None);
+    let hits = lib.search("What is the length normalisation parameter?", 3, &[]);
     assert_eq!(hits.first().map(|h| (h.doc, h.page)), Some((Sha256::of(b"bm25"), 1)), "{hits:?}");
-    let hits = lib.search("cross-reference INCREMENTAL", 3, None);
+    let hits = lib.search("cross-reference INCREMENTAL", 3, &[]);
     assert_eq!(hits.first().map(|h| (h.doc, h.page)), Some((Sha256::of(b"pdf"), 1)));
-    let hits = lib.search("首都", 3, None);
+    let hits = lib.search("首都", 3, &[]);
     assert_eq!(hits.first().map(|h| h.doc), Some(Sha256::of(b"jp")));
-    assert!(lib.search("zebra", 3, None).is_empty());
-    assert!(lib.search("", 3, None).is_empty());
-    assert!(lib.search("pdf", 0, None).is_empty());
+    assert!(lib.search("zebra", 3, &[]).is_empty());
+    assert!(lib.search("", 3, &[]).is_empty());
+    assert!(lib.search("pdf", 0, &[]).is_empty());
     // The document being read is left out: its own text goes in the request anyway.
-    assert!(lib.search("ISO 32000-2", 3, Some(&Sha256::of(b"pdf"))).iter().all(|h| h.doc != Sha256::of(b"pdf")));
+    assert!(lib.search("ISO 32000-2", 3, &[Sha256::of(b"pdf")]).iter().all(|h| h.doc != Sha256::of(b"pdf")));
 }
 
 #[test]
@@ -70,7 +70,7 @@ fn the_same_bytes_are_one_document_wherever_they_are() {
     let mut lib = Library::new();
     lib.add(NewDocument { content: Content::NeedsPassword, ..doc("secret", &[]) }).unwrap();
     assert_eq!(lib.add(doc("secret", &["Now readable."])), Ok(Added::Known { status: Status::Indexed, passages: 1 }));
-    assert_eq!(lib.search("readable", 1, None).len(), 1);
+    assert_eq!(lib.search("readable", 1, &[]).len(), 1);
 }
 
 #[test]
@@ -78,8 +78,8 @@ fn removing_a_document_removes_its_passages() {
     let mut lib = corpus();
     assert!(lib.remove(&Sha256::of(b"bm25")));
     assert!(!lib.remove(&Sha256::of(b"bm25")));
-    assert!(lib.search("BM25", 5, None).is_empty());
-    assert_eq!(lib.search("ISO", 5, None).first().map(|h| h.doc), Some(Sha256::of(b"pdf")));
+    assert!(lib.search("BM25", 5, &[]).is_empty());
+    assert_eq!(lib.search("ISO", 5, &[]).first().map(|h| h.doc), Some(Sha256::of(b"pdf")));
 }
 
 #[test]
@@ -89,13 +89,13 @@ fn results_spread_across_pages_and_documents() {
     let refs: Vec<&str> = pages.iter().map(String::as_str).collect();
     lib.add(doc("birds", &refs)).unwrap();
     lib.add(doc("other", &["A kestrel is a falcon."])).unwrap();
-    let hits = lib.search("kestrel", 4, None);
+    let hits = lib.search("kestrel", 4, &[]);
     assert_eq!(hits.len(), 4);
     assert!(hits.iter().any(|h| h.doc == Sha256::of(b"other")), "{hits:?}");
     let pages: HashSet<(Sha256, u32)> = hits.iter().map(|h| (h.doc, h.page)).collect();
     assert_eq!(pages.len(), 4);
     // With one document matching, the cap per document doesn't apply.
-    assert_eq!(lib.search("number", 6, None).len(), 6);
+    assert_eq!(lib.search("number", 6, &[]).len(), 6);
 }
 
 #[test]
@@ -105,7 +105,7 @@ fn saved_form_round_trips() {
     let (back, warnings) = Library::from_json(&bytes).unwrap();
     assert!(warnings.is_empty(), "{warnings:?}");
     assert_eq!(back.entries(), lib.entries());
-    assert_eq!(back.search("BM25", 3, None), lib.search("BM25", 3, None));
+    assert_eq!(back.search("BM25", 3, &[]), lib.search("BM25", 3, &[]));
 }
 
 #[test]
@@ -117,7 +117,7 @@ fn damaged_files_are_errors_or_warnings_never_panics() {
         Library::from_json(br#"{"format":"pdfcraft-ai-library","version":2,"entries":[],"passages":[]}"#).err(),
         Some(LibraryError::WrongVersion(2))
     );
-    assert_eq!(Library::from_json_within(&[b' '; 65], 64).err(), Some(LibraryError::FileTooLarge));
+    assert_eq!(Library::from_json_within(&[b' '; 65], 64, MAX_TEXT_BYTES).err(), Some(LibraryError::FileTooLarge));
 
     let lib = corpus();
     let mut v: serde_json::Value = serde_json::from_slice(&lib.to_json().unwrap()).unwrap();
@@ -127,7 +127,7 @@ fn damaged_files_are_errors_or_warnings_never_panics() {
     let (back, warnings) = Library::from_json(v.to_string().as_bytes()).unwrap();
     assert_eq!(back.entries().len(), 3);
     assert_eq!(warnings.len(), 2, "{warnings:?}");
-    assert!(back.search("orphan", 3, None).is_empty());
+    assert!(back.search("orphan", 3, &[]).is_empty());
 }
 
 #[test]
@@ -145,15 +145,81 @@ proptest::proptest! {
         let mut lib = Library::new();
         let refs: Vec<&str> = pages.iter().map(String::as_str).collect();
         lib.add(doc("d", &refs)).unwrap();
-        let hits = lib.search(&query, k, None);
+        let hits = lib.search(&query, k, &[]);
         proptest::prop_assert!(hits.len() <= k.min(MAX_RESULTS));
         proptest::prop_assert!(hits.iter().all(|h| h.score.is_finite() && h.score > 0.0));
         let (back, _) = Library::from_json(&lib.to_json().unwrap()).unwrap();
-        proptest::prop_assert_eq!(back.search(&query, k, None), hits);
+        proptest::prop_assert_eq!(back.search(&query, k, &[]), hits);
     }
 
     #[test]
     fn arbitrary_files_never_panic(bytes in proptest::collection::vec(proptest::num::u8::ANY, 0..512)) {
         let _ = Library::from_json(&bytes);
     }
+}
+
+#[test]
+fn a_later_read_that_reaches_further_updates_the_entry() {
+    let mut lib = Library::new();
+    let locked = || NewDocument { content: Content::NeedsPassword, ..doc("x", &[]) };
+    let forbidden = || NewDocument { content: Content::NotPermitted, ..doc("x", &[]) };
+    lib.add(locked()).unwrap();
+    // Opened with the user password: copying is forbidden. That is more than "needs a password".
+    assert_eq!(lib.add(forbidden()), Ok(Added::Known { status: Status::NotPermitted, passages: 0 }));
+    // Adding the file again without a password doesn't take it back.
+    assert_eq!(lib.add(locked()), Ok(Added::Known { status: Status::NotPermitted, passages: 0 }));
+    // Opened with the owner password: the text can be read.
+    assert_eq!(lib.add(doc("x", &["Readable at last."])), Ok(Added::Known { status: Status::Indexed, passages: 1 }));
+    assert_eq!(lib.add(forbidden()), Ok(Added::Known { status: Status::Indexed, passages: 1 }));
+    assert_eq!(lib.entries().len(), 1);
+    assert_eq!(lib.passage_count(), 1);
+}
+
+#[test]
+fn one_damaged_entry_is_dropped_alone() {
+    let lib = corpus();
+    let mut v: serde_json::Value = serde_json::from_slice(&lib.to_json().unwrap()).unwrap();
+    v["entries"][0]["doc"] = serde_json::json!("not a document reference");
+    v["passages"][0]["page"] = serde_json::json!("not a page");
+    let (back, warnings) = Library::from_json(v.to_string().as_bytes()).unwrap();
+    assert_eq!(back.entries().len(), 2, "{warnings:?}");
+    assert!(warnings.iter().any(|w| w.contains("couldn't be read")), "{warnings:?}");
+    assert!(!back.search("ISO", 3, &[]).is_empty());
+}
+
+#[test]
+fn an_entry_that_lost_passages_is_indexed_again_when_added_again() {
+    let lib = corpus();
+    let mut v: serde_json::Value = serde_json::from_slice(&lib.to_json().unwrap()).unwrap();
+    let bm25 = Sha256::of(b"bm25").to_hex();
+    v["passages"].as_array_mut().unwrap().retain(|p| p["doc"] != serde_json::json!(bm25));
+    let (mut back, warnings) = Library::from_json(v.to_string().as_bytes()).unwrap();
+    assert!(warnings.iter().any(|w| w.contains("lost passages")), "{warnings:?}");
+    assert!(back.search("BM25", 3, &[]).is_empty());
+    let again = back.add(doc(
+        "bm25",
+        &["Okapi BM25 ranks documents by term frequency and inverse document frequency.", "The length normalisation parameter b is usually 0.75."],
+    ));
+    assert_eq!(again, Ok(Added::Known { status: Status::Indexed, passages: 2 }));
+    assert_eq!(back.search("BM25", 3, &[]).first().map(|h| h.doc), Some(Sha256::of(b"bm25")));
+    // Already complete: adding it again changes nothing.
+    assert_eq!(back.add(doc("bm25", &["Okapi BM25 ranks documents."])), Ok(Added::Known { status: Status::Indexed, passages: 2 }));
+    assert_eq!(back.passage_count(), lib.passage_count());
+}
+
+#[test]
+fn a_loaded_library_is_never_over_its_text_cap() {
+    let mut lib = Library::new();
+    lib.add(doc("two", &["Ten bytes.", "Ten again."])).unwrap();
+    let (back, warnings) = Library::from_json_within(&lib.to_json().unwrap(), MAX_FILE_BYTES, 15).unwrap();
+    assert_eq!(back.passage_count(), 1, "{warnings:?}");
+    assert!(back.text_bytes <= 15);
+}
+
+#[test]
+fn one_cjk_character_finds_the_words_it_is_in() {
+    let mut lib = Library::new();
+    lib.add(doc("tokyo", &["東京都の地図"])).unwrap();
+    assert_eq!(lib.search("京", 3, &[]).len(), 1);
+    assert_eq!(lib.search("東京", 3, &[]).len(), 1);
 }

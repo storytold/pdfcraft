@@ -1,5 +1,6 @@
 //! Library tokens: NFKC, lowercase, Unicode word boundaries (UAX #29), and Chinese, Japanese and
-//! Korean as overlapping character bigrams, since those scripts don't separate words with spaces.
+//! Korean as each character plus each overlapping pair, since those scripts don't separate words
+//! with spaces: pairs rank a word match, single characters let a one-character query match.
 
 use unicode_normalization::UnicodeNormalization;
 use unicode_segmentation::UnicodeSegmentation;
@@ -47,10 +48,11 @@ fn push_word(word: &mut String, out: &mut Vec<String>) {
 }
 
 fn flush_cjk(run: &mut Vec<char>, out: &mut Vec<String>) {
-    match run.as_slice() {
-        [] => {}
-        [one] => out.push(one.to_string()),
-        chars => out.extend(chars.windows(2).map(|pair| pair.iter().collect::<String>())),
+    for (i, c) in run.iter().enumerate() {
+        out.push(c.to_string());
+        if let Some(next) = run.get(i + 1) {
+            out.push([*c, *next].iter().collect());
+        }
     }
     run.clear();
 }
@@ -89,11 +91,11 @@ mod tests {
     }
 
     #[test]
-    fn cjk_becomes_bigrams() {
-        assert_eq!(toks("東京都"), ["東京", "京都"]);
-        assert_eq!(toks("日本語のPDF"), ["日本", "本語", "語の", "pdf"]);
+    fn cjk_becomes_characters_and_pairs() {
+        assert_eq!(toks("東京都"), ["東", "東京", "京", "京都", "都"]);
+        assert_eq!(toks("日本語のPDF"), ["日", "日本", "本", "本語", "語", "語の", "の", "pdf"]);
         assert_eq!(toks("中。国"), ["中", "国"]);
-        assert_eq!(toks("한국어 문서"), ["한국", "국어", "문서"]);
+        assert_eq!(toks("한국어 문서"), ["한", "한국", "국", "국어", "어", "문", "문서", "서"]);
         // Halfwidth katakana is folded to fullwidth by NFKC first.
         assert_eq!(toks("ｶﾀｶﾅ"), toks("カタカナ"));
     }

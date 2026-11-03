@@ -24,11 +24,28 @@ use super::{Automation, DocId, file_access};
 /// Files and documents one `ai_library_add` takes.
 const MAX_ADD: usize = 1_000;
 
-/// The library the tools work on, and the file it was read from.
+/// The library the tools work on, the file it was read from, and that file's size and
+/// modification time then: another process that changes the file is noticed, so its additions are
+/// read rather than written over.
 #[derive(Default)]
 pub(crate) struct Loaded {
     file: Option<PathBuf>,
     library: Library,
+    stamp: Option<Stamp>,
+}
+
+type Stamp = (u64, Option<std::time::SystemTime>);
+
+/// The size and modification time of `path`, which the caller resolved (the library file).
+fn stamp_of(path: &std::path::Path) -> Option<Stamp> {
+    std::fs::metadata(path).ok().map(|m| (m.len(), m.modified().ok()))
+}
+
+/// Whether a tool only reads the library or also changes it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Use {
+    Read,
+    Change,
 }
 
 fn status_name(s: Status) -> &'static str {
@@ -69,25 +86,38 @@ fn source_json(id: &SourceId) -> Value {
 }
 
 impl Automation {
-    /// The library named by `library`, read on first use. Without it, the last library named,
-    /// or one kept in memory for the session.
-    fn library(&mut self, a: &Args) -> Result<&mut Library> {
+    /// The library named by `library`, read on first use and again whenever its file changed.
+    /// Without `library`, the last library named, or one kept in memory for the session. Reading
+    /// a file needs read access to it, and a tool that changes the library write access too.
+    fn library(&mut self, a: &Args, need: Use) -> Result<&mut Library> {
         let file = match a.opt_str("library")? {
-            Some(p) => Some(self.resolve(p, true)?),
+            Some(p) => {
+                let access = if need == Use::Change { file_access::Access::Write } else { file_access::Access::Read };
+                Some(self.resolve_for(p, access, true)?)
+            }
             None => self.ai.as_ref().and_then(|l| l.file.clone()),
         };
-        let current = self.ai.as_ref().map(|l| &l.file);
-        if current != Some(&file) {
-            let library = match &file {
+        // A file first named by a tool that only reads must not be written through another one.
+        if need == Use::Change
+            && let Some(path) = &file
+        {
+            self.check_roots(&path.to_string_lossy(), path, file_access::Access::Write)?;
+        }
+        let fresh = self.ai.as_ref().is_some_and(|l| l.file == file && file.as_deref().is_none_or(|path| l.stamp == stamp_of(path)));
+        if !fresh {
+            let (library, stamp) = match &file {
                 Some(path) if path.exists() => {
+                    // A library in the write root alone is not readable through it.
+                    self.check_roots(&path.to_string_lossy(), path, file_access::Access::Read)?;
+                    let stamp = stamp_of(path);
                     let bytes = read_input(path)?;
                     let (library, _warnings) = Library::from_json(&bytes)
                         .map_err(|e| failed(format!("{}: {e}. Move it away or name another library file; it was not changed.", path.display())))?;
-                    library
+                    (library, stamp)
                 }
-                _ => Library::new(),
+                _ => (Library::new(), None),
             };
-            self.ai = Some(Loaded { file, library });
+            self.ai = Some(Loaded { file, library, stamp });
         }
         match self.ai.as_mut() {
             Some(l) => Ok(&mut l.library),
@@ -95,20 +125,27 @@ impl Automation {
         }
     }
 
-    /// Write the library back to its file, if it has one. If that fails the file still holds the
-    /// library as it was, so it is read again next time rather than trusting the changed copy.
+    /// Write the library back to its file, if it has one. If the file changed since it was read
+    /// (another process saved to it), nothing is written: the change is refused rather than
+    /// written over theirs. If the write fails the file still holds the library as it was. Either
+    /// way it is read again next time rather than trusting the changed copy.
     fn save_library(&mut self) -> Result<()> {
-        let Some(Loaded { file: Some(path), library }) = self.ai.as_ref() else { return Ok(()) };
-        let written = library.to_json().map_err(failed).and_then(|bytes| write_atomic(path, &bytes));
-        if written.is_err() {
-            self.ai = None;
+        let Some(Loaded { file: Some(path), library, stamp }) = self.ai.as_ref() else { return Ok(()) };
+        let written = if stamp_of(path) == *stamp {
+            library.to_json().map_err(failed).and_then(|bytes| write_atomic(path, &bytes))
+        } else {
+            Err(failed(format!("{}: the library file changed while this change was made, so nothing was written. Try again.", path.display())))
+        };
+        match (&written, self.ai.as_mut()) {
+            (Ok(()), Some(l)) => l.stamp = l.file.as_deref().and_then(stamp_of),
+            _ => self.ai = None,
         }
         written
     }
 
     pub(crate) fn ai_library_add(&mut self, a: &Args) -> Result<Value> {
         // The library file first: one outside the root, or unreadable, refuses the whole call.
-        self.library(a)?;
+        self.library(a, Use::Change)?;
         let paths: Vec<String> = match a.get("paths") {
             Some(_) => a.strs("paths")?.into_iter().map(str::to_owned).collect(),
             None => Vec::new(),
@@ -171,9 +208,9 @@ impl Automation {
     }
 
     pub(crate) fn ai_library_remove(&mut self, a: &Args) -> Result<Value> {
-        self.library(a)?;
+        self.library(a, Use::Change)?;
         let hash = Sha256::from_hex(a.str("sha256")?).ok_or_else(|| ToolError::InvalidArgs("sha256 must be 64 hex digits".into()))?;
-        let removed = self.library(a)?.remove(&hash);
+        let removed = self.library(a, Use::Change)?.remove(&hash);
         if removed {
             self.save_library()?;
         }
@@ -181,7 +218,7 @@ impl Automation {
     }
 
     pub(crate) fn ai_library_list(&mut self, a: &Args) -> Result<Value> {
-        let library = self.library(a)?;
+        let library = self.library(a, Use::Read)?;
         Ok(json!({
             "documents": library.entries().iter().map(entry_json).collect::<Vec<_>>(),
             "passages": library.passage_count(),
@@ -191,9 +228,9 @@ impl Automation {
     pub(crate) fn ai_library_search(&mut self, a: &Args) -> Result<Value> {
         let query = a.str("query")?.to_owned();
         let k = result_count(a, "k", pdfcraft_ai::library::DEFAULT_RESULTS)?;
-        let library = self.library(a)?;
+        let library = self.library(a, Use::Read)?;
         let results: Vec<Value> = library
-            .search(&query, k, None)
+            .search(&query, k, &[])
             .into_iter()
             .map(|h| {
                 let title = library.entry(&h.doc).map(|e| e.title.clone()).unwrap_or_default();
@@ -205,7 +242,7 @@ impl Automation {
 
     pub(crate) fn ai_ask(&mut self, a: &Args) -> Result<Value> {
         if a.opt_str("library")?.is_some() {
-            self.library(a)?;
+            self.library(a, Use::Read)?;
         }
         if !a.opt_bool("dry_run")?.unwrap_or(false) {
             return Err(failed(
@@ -234,12 +271,15 @@ impl Automation {
         };
         let k = result_count(a, "k", pdfcraft_ai::library::DEFAULT_RESULTS)?;
         let ctx = self.session.assistant_context(id, page, &selected).map_err(failed)?;
-        let current = self.session.document_sha256(id);
         let mut passages: Vec<Passage> = assistant::context_passages(&ctx);
         let uses_library = a.opt_str("library")?.is_some() || self.ai.is_some();
         if k > 0 && uses_library {
-            let library = self.library(a)?;
-            passages.extend(assistant::library_passages(library, &question, Some(&ctx), current.as_ref(), k));
+            self.library(a, Use::Read)?;
+            // The open document's own bytes, and any copy of it indexed from the same path before
+            // an edit (a redaction mark, say), are left out.
+            let library = self.ai.as_ref().map(|l| &l.library).ok_or_else(|| failed("the library could not be loaded"))?;
+            let exclude = self.session.library_exclusions(id, library);
+            passages.extend(assistant::library_passages(library, &question, Some(&ctx), &exclude, k));
         }
         passages.truncate(claude::MAX_PASSAGES);
         let turn = claude::user_turn(&passages, None, &question).map_err(failed)?;

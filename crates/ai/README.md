@@ -81,11 +81,15 @@ removed, so a request never carries more than two.
 - Stream lines and event data are capped at 1 MiB each.
 - One answer keeps at most 4 MiB of text, 4,096 blocks and 500,000 events. After that it stops with
   `StopReason::TooLong`.
-- Malformed JSON, unknown events, deltas for blocks that never started and citations of passages
-  that weren't sent each become an `Event::Skipped`. A stream that ends early stops with
-  `StopReason::Truncated`.
+- Malformed JSON, deltas for blocks that never started and citations of passages that weren't
+  sent each become an `Event::Skipped`. Unknown event types are ignored, as the API asks clients
+  to do. A stream that ends early stops with `StopReason::Truncated`.
+- Bodies are decoded in 64 KiB pieces, so one huge chunk from the transport can't queue more
+  events than the cap.
+- A web search domain filter is sent whole or refused: more than 64 domains, a domain over 253
+  bytes, or both an allow list and a block list is a `RequestError`.
 - Citations are checked against what was sent: the index must name a passage of ours, and the
-  echoed `source` must match it. Web citations must be `http(s)` addresses.
+  echoed `source` must match it. Web citations must be `http(s)` addresses with a host.
 - Library limits: 10,000 documents, 20,000 pages per document, 256 KiB of text per page, 500,000
   passages and 256 MiB of text in all, 512 MiB for a saved file. A saved library in the wrong
   format or version is an error. A damaged but readable one keeps what is valid, with warnings.
@@ -93,12 +97,22 @@ removed, so a request never carries more than two.
 ## Library
 
 - Passages are about 1,000 characters, cut on sentence boundaries. Each starts with the last
-  sentence of the one before.
+  sentence of the one before, unless that sentence is longer than 500 characters.
 - Tokens are NFKC, lowercased and split on Unicode word boundaries. Chinese, Japanese and Korean
-  become overlapping character bigrams.
+  become each character plus each overlapping pair of characters, so a one-character query
+  matches too.
 - Ranking is BM25 (k1 = 1.2, b = 0.75), at most one passage per page. While other documents also
   match, at most half the results come from one document.
 - The index is rebuilt from the passages when a library is loaded, and isn't saved.
+- **Loading.** A saved library is read entry by entry: a damaged entry or passage is dropped
+  alone, with a warning. A loaded library is never over the caps. An entry that lost passages
+  is indexed in full when its file is added again.
+- **A later read of the same bytes.** If it reaches further (an open copy read with its
+  password, or with the owner's), it replaces the entry's status: needs password, then not
+  permitted, then no text, then indexed.
+- **Search exclusions.** `search` leaves out any number of documents. For the document being
+  read, `engine::Session::library_exclusions` names its own bytes and any copy last seen at its
+  path.
 - Prices in `model.rs` are display estimates, dated in `PRICES_AS_OF`. The provider's bill is the
   authority.
 
