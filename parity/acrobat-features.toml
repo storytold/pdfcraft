@@ -9696,7 +9696,19 @@ status = "planned"
 commands = []
 tools = []
 evidence = []
-notes = ""
+notes = "The request builder and stream decoder exist in pdfcraft-ai (Claude Messages API: passages as cited search results, citations checked against what was sent), with no transport, panel or tool yet."
+
+[[feature]]
+id = "misc.ai-library"
+title = "Personal PDF library searched locally; answers cite its documents and pages"
+area = "N"
+tier = "P2"
+milestone = "M13"
+status = "planned"
+commands = []
+tools = []
+evidence = []
+notes = "Beyond Acrobat. The index exists in pdfcraft-ai (passages on sentence boundaries, BM25, CJK bigrams, documents known by SHA-256); no ingest from PDFs, tool or panel yet."
 
 [[feature]]
 id = "misc.ai-conversational-edit"
