@@ -33,7 +33,8 @@ impl Interp<'_> {
     }
 
     /// `more` nodes into `out`, each once, never past [`MAX_LIST`]. Every node visited costs a
-    /// step, kept or not.
+    /// step, kept or not, and the call itself one more: a search that matches nothing still
+    /// costs work when it is repeated over a long list.
     pub(super) fn gather(&mut self, out: &mut Vec<usize>, seen: &mut HashSet<usize>, more: impl IntoIterator<Item = usize>) -> R<()> {
         for i in more {
             self.step()?;
@@ -44,7 +45,7 @@ impl Interp<'_> {
                 }
             }
         }
-        Ok(())
+        self.step()
     }
 
     /// The nodes of `v`, each once.
