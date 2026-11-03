@@ -26,6 +26,14 @@ pub struct TaggedText {
     pub warnings: Vec<String>,
 }
 
+#[derive(Default)]
+pub(crate) struct McidTexts {
+    pub(crate) by_id: HashMap<i64, String>,
+    bytes: usize,
+    pub(crate) limited: bool,
+    pub(crate) unmarked_text: bool,
+}
+
 fn tagged_warning(out: &mut TaggedText, warning: String) {
     if out.warnings.contains(&warning) {
         return;
@@ -45,149 +53,368 @@ pub fn tagged_text(doc: &Document, selected_pages: &[usize]) -> TaggedText {
     };
     let pages = pdfcraft_model::pages(doc);
     let page_index: HashMap<ObjRef, usize> = pages.iter().enumerate().map(|(i, p)| (p.obj, i)).collect();
-    let selected: HashSet<usize> = selected_pages.iter().copied().collect();
-    let mut texts = HashMap::<usize, HashMap<i64, String>>::new();
-    let mut seen = HashSet::new();
-    let objects: HashSet<u32> = doc.object_numbers().into_iter().collect();
-    let mut out = TaggedText::default();
-    let mut used_marks = HashSet::new();
-    let mut replacement_pages = HashSet::new();
-    let mut last_page = None;
-    if root.get(b"K").is_none() {
-        tagged_warning(&mut out, "the structure tree has no root content".into());
+    let mut walker = TaggedWalker::new(doc, &pages, page_index, selected_pages, &root);
+    let mut tasks = root.get(b"K").cloned().map(|k| vec![(k, None, 0, None, None)]).unwrap_or_default();
+    if tasks.is_empty() {
+        tagged_warning(&mut walker.out, "the structure tree has no root content".into());
     }
-    let mut tasks: Vec<(Object, Option<ObjRef>, usize)> = root.get(b"K").cloned().map(|k| vec![(k, None, 0)]).unwrap_or_default();
+    while let Some((item, page, depth, element, stream)) = tasks.pop() {
+        walker.visit(item, page, depth, element, stream, &mut tasks);
+    }
+    walker.finish(&pages)
+}
+
+type TaggedTask = (Object, Option<ObjRef>, usize, Option<usize>, Option<ObjRef>);
+
+struct TaggedWalker<'a> {
+    doc: &'a Document,
+    pages: &'a [Page],
+    role_map: Dict,
+    page_index: HashMap<ObjRef, usize>,
+    selected: HashSet<usize>,
+    objects: HashSet<u32>,
+    seen: HashSet<ObjRef>,
+    texts: HashMap<usize, McidTexts>,
+    form_texts: HashMap<ObjRef, McidTexts>,
+    used_marks: HashSet<(usize, Option<ObjRef>, i64)>,
+    extracted_text: usize,
+    visits: usize,
+    next_element: usize,
+    last_page: Option<usize>,
+    last_element: Option<usize>,
+    out: TaggedText,
+}
+
+impl<'a> TaggedWalker<'a> {
+    fn new(doc: &'a Document, pages: &'a [Page], page_index: HashMap<ObjRef, usize>, selected: &[usize], root: &Dict) -> Self {
+        Self {
+            doc,
+            pages,
+            role_map: root.get(b"RoleMap").map(|o| doc.resolve(o)).and_then(|o| o.as_dict().cloned()).unwrap_or_default(),
+            page_index,
+            selected: selected.iter().copied().collect(),
+            objects: doc.object_numbers().into_iter().collect(),
+            seen: HashSet::new(),
+            texts: HashMap::new(),
+            form_texts: HashMap::new(),
+            used_marks: HashSet::new(),
+            extracted_text: 0,
+            visits: 0,
+            next_element: 0,
+            last_page: None,
+            last_element: None,
+            out: TaggedText::default(),
+        }
+    }
+
+    fn visit(
+        &mut self,
+        item: Object,
+        page: Option<ObjRef>,
+        depth: usize,
+        element: Option<usize>,
+        stream: Option<ObjRef>,
+        tasks: &mut Vec<TaggedTask>,
+    ) {
+        self.visits = self.visits.saturating_add(1);
+        if self.visits > MAX_VISITS || depth > MAX_DEPTH {
+            tagged_warning(&mut self.out, "structure traversal stopped at its safety limit".into());
+            return;
+        }
+        let item = match item {
+            Object::Ref(reference) => {
+                if !self.objects.contains(&reference.num) {
+                    tagged_warning(&mut self.out, format!("missing structure reference {}", reference.num));
+                    return;
+                }
+                if !self.seen.insert(reference) {
+                    tagged_warning(&mut self.out, format!("cyclic or repeated structure reference {}", reference.num));
+                    return;
+                }
+                (*self.doc.get(reference)).clone()
+            }
+            other => other,
+        };
+        match item {
+            Object::Array(items) => self.visit_array(items, page, depth, element, stream, tasks),
+            Object::Int(mcid) => self.visit_mcid(mcid, page, stream, element),
+            Object::Dict(dict) => self.visit_dict(dict, page, depth, element, tasks),
+            _ => tagged_warning(&mut self.out, "unsupported structure-tree content was skipped".into()),
+        }
+    }
+
+    fn visit_array(
+        &mut self,
+        items: Vec<Object>,
+        page: Option<ObjRef>,
+        depth: usize,
+        element: Option<usize>,
+        stream: Option<ObjRef>,
+        tasks: &mut Vec<TaggedTask>,
+    ) {
+        let count = items.len().min(MAX_TAGGED_TASKS.saturating_sub(tasks.len()));
+        if count < items.len() {
+            tagged_warning(&mut self.out, "structure traversal stopped at its pending-item limit".into());
+        }
+        tasks.extend(items.into_iter().take(count).rev().map(|item| (item, page, depth + 1, element, stream)));
+    }
+
+    fn visit_dict(&mut self, dict: Dict, inherited_page: Option<ObjRef>, depth: usize, element: Option<usize>, tasks: &mut Vec<TaggedTask>) {
+        let page = dict.get(b"Pg").and_then(Object::as_ref).or(inherited_page);
+        if dict.name(b"Type") == Some(b"MCR") {
+            self.visit_mcr(&dict, page, depth, element, tasks);
+            return;
+        }
+        if dict.contains(b"S") {
+            if dict.name(b"S") == Some(b"Artifact") {
+                return;
+            }
+            let element = Some(self.next_element);
+            self.next_element = self.next_element.saturating_add(1);
+            if let Some(replacement) = structure_replacement(self.doc, &self.role_map, &dict) {
+                self.visit_replacement(replacement, page, element);
+                if let Some(kids) = dict.get(b"K") {
+                    let mut state = CoverState {
+                        page_index: &self.page_index,
+                        selected: &self.selected,
+                        objects: &self.objects,
+                        used_marks: &mut self.used_marks,
+                        warnings: &mut self.out,
+                    };
+                    cover_struct_content(self.doc, kids, page, &mut state);
+                }
+                return;
+            }
+            if dict.get(b"K").is_none() {
+                tagged_warning(&mut self.out, "structure element has no content or alternate text".into());
+            }
+            if let Some(kids) = dict.get(b"K") {
+                tasks.push((kids.clone(), page, depth + 1, element, None));
+            }
+        }
+    }
+
+    fn visit_mcr(&mut self, dict: &Dict, page: Option<ObjRef>, depth: usize, element: Option<usize>, tasks: &mut Vec<TaggedTask>) {
+        let Some(mcid) = dict.get(b"MCID").and_then(Object::as_int) else {
+            tagged_warning(&mut self.out, "marked-content reference has no MCID".into());
+            return;
+        };
+        let stream = dict.get(b"Stm").and_then(Object::as_ref);
+        tasks.push((Object::Int(mcid), dict.get(b"Pg").and_then(Object::as_ref).or(page), depth + 1, element, stream));
+        if let Some(stream) = stream {
+            let _ = self.form_texts.entry(stream).or_insert_with(|| {
+                let remaining = MAX_TAGGED_TEXT.saturating_sub(self.extracted_text);
+                let texts = form_mcid_texts(self.doc, stream, remaining).unwrap_or_default();
+                self.extracted_text = self.extracted_text.saturating_add(texts.bytes);
+                texts
+            });
+        }
+    }
+
+    fn visit_mcid(&mut self, mcid: i64, page_ref: Option<ObjRef>, stream: Option<ObjRef>, element: Option<usize>) {
+        let Some(page) = page_ref.and_then(|reference| self.page_index.get(&reference).copied()) else {
+            let message = if page_ref.is_some() {
+                format!("marked content {mcid} references a missing page")
+            } else {
+                format!("marked content {mcid} has no page association")
+            };
+            tagged_warning(&mut self.out, message);
+            return;
+        };
+        if !self.selected.contains(&page) {
+            return;
+        }
+        let key = (page, stream, mcid);
+        if !self.used_marks.insert(key) {
+            tagged_warning(&mut self.out, format!("marked content {mcid} on page {} is referenced more than once", page + 1));
+            return;
+        }
+        let remaining = MAX_TAGGED_TEXT.saturating_sub(self.extracted_text);
+        let text = if let Some(stream) = stream {
+            self.form_texts.get(&stream).and_then(|texts| texts.by_id.get(&mcid)).cloned()
+        } else {
+            if !self.texts.contains_key(&page) {
+                let texts = self.pages.get(page).map(|p| mcid_texts_limited(self.doc, &p.dict, MAX_TAGGED_TEXT, remaining)).unwrap_or_default();
+                self.extracted_text = self.extracted_text.saturating_add(texts.bytes);
+                self.texts.insert(page, texts);
+            }
+            let Some(texts) = self.texts.get(&page) else { return };
+            let found = texts.by_id.get(&mcid).cloned();
+            if texts.limited {
+                tagged_warning(&mut self.out, format!("text extraction reached its size limit on page {}", page + 1));
+            }
+            found
+        };
+        if let Some(text) = text {
+            if !append_tagged_text(&mut self.out, &text, page, element, &mut self.last_page, &mut self.last_element) {
+                tagged_warning(&mut self.out, "tagged text stopped at its size limit".into());
+            }
+        } else {
+            tagged_warning(&mut self.out, format!("missing marked content {mcid} on page {}", page + 1));
+        }
+    }
+
+    fn visit_replacement(&mut self, text: String, page_ref: Option<ObjRef>, element: Option<usize>) {
+        if let Some(page) = page_ref.and_then(|reference| self.page_index.get(&reference).copied()) {
+            if self.selected.contains(&page) && !append_tagged_text(&mut self.out, &text, page, element, &mut self.last_page, &mut self.last_element)
+            {
+                tagged_warning(&mut self.out, "tagged text stopped at its size limit".into());
+            }
+        } else if page_ref.is_none() {
+            tagged_warning(&mut self.out, "alternate text has no page association".into());
+        }
+    }
+
+    fn finish(mut self, pages: &[Page]) -> TaggedText {
+        warn_unstructured_pages(self.doc, pages, &self.selected, &mut self.texts, &self.used_marks, &mut self.extracted_text, &mut self.out);
+        self.out.warnings.sort();
+        self.out.warnings.dedup();
+        self.out
+    }
+}
+
+fn append_tagged_text(
+    out: &mut TaggedText,
+    text: &str,
+    page: usize,
+    element: Option<usize>,
+    last_page: &mut Option<usize>,
+    last_element: &mut Option<usize>,
+) -> bool {
+    if text.is_empty() {
+        return true;
+    }
+    let separator = if last_page.is_some_and(|previous| previous != page) {
+        "\u{c}"
+    } else if !out.text.is_empty() && !out.text.ends_with('\n') && *last_element != element {
+        "\n"
+    } else {
+        ""
+    };
+    if out.text.len().saturating_add(separator.len()).saturating_add(text.len()) > MAX_TAGGED_TEXT {
+        return false;
+    }
+    out.text.push_str(separator);
+    out.text.push_str(text);
+    *last_page = Some(page);
+    *last_element = element;
+    true
+}
+
+fn structure_replacement(doc: &Document, role_map: &Dict, dict: &Dict) -> Option<String> {
+    if let Some(actual_text) = dict.get(b"ActualText").map(|value| doc.resolve(value)).and_then(|value| value.as_string().map(|s| s.to_text())) {
+        return Some(actual_text);
+    }
+    if dict.name(b"S").is_some_and(|s| standard(doc, role_map, s) == b"Figure") {
+        return dict
+            .get(b"Alt")
+            .map(|value| doc.resolve(value))
+            .and_then(|value| value.as_string().map(|s| s.to_text()))
+            .filter(|text| !text.is_empty());
+    }
+    None
+}
+
+fn form_mcid_texts(doc: &Document, reference: ObjRef, max_total: usize) -> Option<McidTexts> {
+    let object = doc.get(reference);
+    let Object::Stream(stream) = &*object else { return None };
+    if stream.dict.name(b"Subtype") != Some(b"Form") {
+        return None;
+    }
+    let mut form = stream.dict.clone();
+    form.set(b"Contents", Object::Ref(reference));
+    Some(mcid_texts_limited(doc, &form, MAX_TAGGED_TEXT, max_total))
+}
+
+struct CoverState<'a> {
+    page_index: &'a HashMap<ObjRef, usize>,
+    selected: &'a HashSet<usize>,
+    objects: &'a HashSet<u32>,
+    used_marks: &'a mut HashSet<(usize, Option<ObjRef>, i64)>,
+    warnings: &'a mut TaggedText,
+}
+
+fn cover_struct_content(doc: &Document, root: &Object, page: Option<ObjRef>, state: &mut CoverState<'_>) {
+    let mut tasks = vec![(root.clone(), page, 0usize)];
+    let mut seen = HashSet::new();
     let mut visits = 0usize;
     while let Some((item, inherited_page, depth)) = tasks.pop() {
         visits = visits.saturating_add(1);
-        if visits > 1_000_000 || depth > MAX_DEPTH {
-            tagged_warning(&mut out, "structure traversal stopped at its safety limit".into());
+        if visits > MAX_VISITS || depth > MAX_DEPTH {
+            tagged_warning(state.warnings, "structure replacement traversal stopped at its safety limit".into());
             break;
         }
         let item = match item {
-            Object::Ref(r) => {
-                if !objects.contains(&r.num) {
-                    tagged_warning(&mut out, format!("missing structure reference {}", r.num));
+            Object::Ref(reference) => {
+                if !state.objects.contains(&reference.num) {
+                    tagged_warning(state.warnings, format!("missing structure reference {}", reference.num));
                     continue;
                 }
-                if !seen.insert(r) {
-                    tagged_warning(&mut out, format!("cyclic or repeated structure reference {}", r.num));
+                if !seen.insert(reference) {
+                    tagged_warning(state.warnings, format!("cyclic or repeated structure reference {}", reference.num));
                     continue;
                 }
-                (*doc.get(r)).clone()
+                (*doc.get(reference)).clone()
             }
             item => item,
         };
         match item {
+            Object::Int(mcid) => {
+                if let Some(index) = inherited_page.and_then(|page| state.page_index.get(&page).copied()).filter(|page| state.selected.contains(page))
+                {
+                    state.used_marks.insert((index, None, mcid));
+                }
+            }
             Object::Array(items) => {
                 let count = items.len().min(MAX_TAGGED_TASKS.saturating_sub(tasks.len()));
                 if count < items.len() {
-                    tagged_warning(&mut out, "structure traversal stopped at its pending-item limit".into());
+                    tagged_warning(state.warnings, "structure replacement traversal stopped at its pending-item limit".into());
                 }
                 tasks.extend(items.into_iter().take(count).rev().map(|item| (item, inherited_page, depth + 1)));
             }
-            Object::Int(mcid) => match inherited_page.and_then(|p| page_index.get(&p).copied()) {
-                Some(page) if selected.contains(&page) => {
-                    let page_text = texts
-                        .entry(page)
-                        .or_insert_with(|| pages.get(page).map(|p| mcid_texts_limited(doc, &p.dict, MAX_TAGGED_TEXT)).unwrap_or_default());
-                    match page_text.get(&mcid) {
-                        Some(text) if text.len() < MAX_TAGGED_TEXT && out.text.len().saturating_add(text.len()) <= MAX_TAGGED_TEXT => {
-                            if !used_marks.insert((page, mcid)) {
-                                tagged_warning(&mut out, format!("marked content {mcid} on page {} is referenced more than once", page + 1));
-                                continue;
-                            }
-                            if last_page.is_some_and(|previous| previous != page) {
-                                out.text.push('\u{c}');
-                            } else if !out.text.is_empty() && !out.text.ends_with('\n') {
-                                out.text.push('\n');
-                            }
-                            last_page = Some(page);
-                            out.text.push_str(text);
-                        }
-                        Some(_) => {
-                            tagged_warning(&mut out, "tagged text stopped at its size limit".into());
-                            break;
-                        }
-                        None => tagged_warning(&mut out, format!("missing marked content {mcid} on page {}", page + 1)),
-                    }
-                }
-                Some(_) => {}
-                None if inherited_page.is_some() => tagged_warning(&mut out, format!("marked content {mcid} references a missing page")),
-                None => tagged_warning(&mut out, format!("marked content {mcid} has no page association")),
-            },
-            Object::Dict(dict) => {
-                let page = dict.get(b"Pg").and_then(Object::as_ref).or(inherited_page);
-                if dict.name(b"Type") == Some(b"MCR") {
-                    if let Some(mcid) = dict.get(b"MCID").and_then(Object::as_int) {
-                        tasks.push((Object::Int(mcid), dict.get(b"Pg").and_then(Object::as_ref).or(page), depth + 1));
-                    } else {
-                        tagged_warning(&mut out, "marked-content reference has no MCID".into());
-                    }
-                    continue;
-                }
-                if dict.contains(b"S") {
-                    if dict.name(b"S") == Some(b"Artifact") {
-                        continue;
-                    }
-                    let replacement = [b"ActualText".as_slice(), b"Alt".as_slice()]
-                        .into_iter()
-                        .filter(|key| *key != b"Alt" || dict.name(b"S") == Some(b"Figure"))
-                        .find_map(|key| {
-                            dict.get(key)
-                                .map(|value| doc.resolve(value))
-                                .and_then(|value| value.as_string().map(|s| s.to_text()))
-                                .filter(|s| !s.is_empty())
-                        });
-                    if let Some(replacement) = replacement {
-                        if let Some(index) = page.and_then(|p| page_index.get(&p).copied()).filter(|p| selected.contains(p)) {
-                            replacement_pages.insert(index);
-                            if out.text.len().saturating_add(replacement.len()) <= MAX_TAGGED_TEXT {
-                                if last_page.is_some_and(|previous| previous != index) {
-                                    out.text.push('\u{c}');
-                                } else if !out.text.is_empty() && !out.text.ends_with('\n') {
-                                    out.text.push('\n');
-                                }
-                                last_page = Some(index);
-                                out.text.push_str(&replacement);
-                            } else {
-                                tagged_warning(&mut out, "tagged text stopped at its size limit".into());
-                                break;
-                            }
-                        } else if page.is_none() {
-                            tagged_warning(&mut out, "alternate text has no page association".into());
-                        }
-                        continue;
-                    } else if dict.get(b"K").is_none() {
-                        tagged_warning(&mut out, "structure element has no content or alternate text".into());
-                    }
-                    if let Some(kids) = dict.get(b"K") {
-                        tasks.push((kids.clone(), page, depth + 1));
-                    }
+            Object::Dict(dict) if dict.name(b"Type") == Some(b"MCR") => {
+                if let Some(mcid) = dict.get(b"MCID").and_then(Object::as_int)
+                    && let Some(index) = dict
+                        .get(b"Pg")
+                        .and_then(Object::as_ref)
+                        .or(inherited_page)
+                        .and_then(|page| state.page_index.get(&page).copied())
+                        .filter(|page| state.selected.contains(page))
+                {
+                    state.used_marks.insert((index, dict.get(b"Stm").and_then(Object::as_ref), mcid));
                 }
             }
-            _ => tagged_warning(&mut out, "unsupported structure-tree content was skipped".into()),
+            Object::Dict(dict) if dict.name(b"S") != Some(b"Artifact") => {
+                if let Some(kids) = dict.get(b"K") {
+                    tasks.push((kids.clone(), dict.get(b"Pg").and_then(Object::as_ref).or(inherited_page), depth + 1));
+                }
+            }
+            _ => {}
         }
     }
-    warn_unstructured_pages(doc, &pages, &selected, &mut texts, &replacement_pages, &used_marks, &mut out);
-    out.warnings.sort();
-    out.warnings.dedup();
-    out
 }
 
 fn warn_unstructured_pages(
     doc: &Document,
     pages: &[Page],
     selected: &HashSet<usize>,
-    texts: &mut HashMap<usize, HashMap<i64, String>>,
-    replacement_pages: &HashSet<usize>,
-    used_marks: &HashSet<(usize, i64)>,
+    texts: &mut HashMap<usize, McidTexts>,
+    used_marks: &HashSet<(usize, Option<ObjRef>, i64)>,
+    extracted_text: &mut usize,
     out: &mut TaggedText,
 ) {
     for page in selected {
-        let page_text =
-            texts.entry(*page).or_insert_with(|| pages.get(*page).map(|p| mcid_texts_limited(doc, &p.dict, MAX_TAGGED_TEXT)).unwrap_or_default());
-        if !replacement_pages.contains(page) && page_text.iter().any(|(mcid, text)| !text.trim().is_empty() && !used_marks.contains(&(*page, *mcid)))
+        let page_text = texts.entry(*page).or_insert_with(|| {
+            let remaining = MAX_TAGGED_TEXT.saturating_sub(*extracted_text);
+            let text = pages.get(*page).map(|p| mcid_texts_limited(doc, &p.dict, MAX_TAGGED_TEXT, remaining)).unwrap_or_default();
+            *extracted_text = extracted_text.saturating_add(text.bytes);
+            text
+        });
+        if page_text.limited {
+            tagged_warning(out, format!("text extraction reached its size limit on page {}", page + 1));
+        }
+        if page_text.unmarked_text
+            || page_text.by_id.iter().any(|(mcid, text)| !text.trim().is_empty() && !used_marks.contains(&(*page, None, *mcid)))
         {
             tagged_warning(out, format!("page {} contains text outside the structure tree", page + 1));
         }
@@ -357,16 +584,18 @@ fn sub(doc: &Document, d: &Dict, key: &[u8]) -> Dict {
 /// Text-positioning operators alone don't break words: producers that place every glyph with its
 /// own `Td` (Chromium) would otherwise read as "C h a p t e r".
 pub(crate) fn mcid_texts(doc: &Document, page: &Dict) -> HashMap<i64, String> {
-    mcid_texts_limited(doc, page, MAX_TITLE * 4)
+    mcid_texts_limited(doc, page, MAX_TITLE * 4, usize::MAX).by_id
 }
 
-fn mcid_texts_limited(doc: &Document, page: &Dict, max_text: usize) -> HashMap<i64, String> {
+pub(crate) fn mcid_texts_limited(doc: &Document, page: &Dict, max_text: usize, max_total: usize) -> McidTexts {
     let res = sub(doc, page, b"Resources");
     let (fonts, props) = (sub(doc, &res, b"Font"), sub(doc, &res, b"Properties"));
     let mut metrics: HashMap<Vec<u8>, Metrics> = HashMap::new();
     // The id each open marked-content sequence is in: its own, else the enclosing one's.
     let mut stack: Vec<(Option<i64>, bool)> = Vec::new();
-    let mut out: HashMap<i64, String> = HashMap::new();
+    let mut out = McidTexts::default();
+    let mut total_text = 0usize;
+    let mut replacements = HashMap::<i64, String>::new();
     // Where each id's last glyph ended, in user space.
     let mut ends: HashMap<i64, (f64, f64)> = HashMap::new();
     let mut gs = TextState::default();
@@ -383,14 +612,19 @@ fn mcid_texts_limited(doc: &Document, page: &Dict, max_text: usize) -> HashMap<i
         match op.op.as_slice() {
             b"BMC" => stack.push((inherited_id, artifact || op.name(0) == Some(b"Artifact"))),
             b"BDC" => {
-                let mcid = match op.operands.get(1) {
-                    Some(Object::Dict(d)) => d.get(b"MCID").and_then(Object::as_int),
-                    Some(Object::Name(n)) => {
-                        props.get(n).map(|x| doc.resolve(x)).and_then(|x| x.as_dict().and_then(|d| d.get(b"MCID").and_then(Object::as_int)))
-                    }
+                let properties = match op.operands.get(1) {
+                    Some(Object::Dict(d)) => Some(d.clone()),
+                    Some(Object::Name(n)) => props.get(n).map(|x| doc.resolve(x)).and_then(|x| x.as_dict().cloned()),
                     _ => None,
                 }
-                .or(inherited_id);
+                .unwrap_or_default();
+                let mcid = properties.get(b"MCID").and_then(Object::as_int).or(inherited_id);
+                if !artifact
+                    && let (Some(id), Some(actual_text)) =
+                        (mcid, properties.get(b"ActualText").map(|value| doc.resolve(value)).and_then(|value| value.as_string().map(|s| s.to_text())))
+                {
+                    replacements.insert(id, actual_text);
+                }
                 stack.push((mcid, artifact || op.name(0) == Some(b"Artifact")));
             }
             b"EMC" => {
@@ -473,16 +707,24 @@ fn mcid_texts_limited(doc: &Document, page: &Dict, max_text: usize) -> HashMap<i
             for (code, len) in m.codes(&s.bytes) {
                 let trm = tm.then(&gs.ctm);
                 // A glyph's text is only built while its id still takes more.
-                if let Some(id) = id
-                    && out.get(&id).is_none_or(|t| t.len() < max_text)
-                    && let Some(glyph) = m.text_of(code)
-                {
-                    let text = out.entry(id).or_default();
-                    let breaks = ends.get(&id).is_some_and(|end| new_word(&trm, *end, gs.size, gs.scale));
-                    if breaks && !text.is_empty() && !text.ends_with(' ') && !glyph.starts_with(' ') {
-                        text.push(' ');
+                if let Some(glyph) = m.text_of(code) {
+                    if let Some(id) = id {
+                        let text = out.by_id.entry(id).or_default();
+                        let breaks = ends.get(&id).is_some_and(|end| new_word(&trm, *end, gs.size, gs.scale));
+                        let separator = breaks && !text.is_empty() && !text.ends_with(' ') && !glyph.starts_with(' ');
+                        let added = glyph.len().saturating_add(usize::from(separator));
+                        if text.len() < max_text && total_text.saturating_add(added) <= max_total {
+                            if separator {
+                                text.push(' ');
+                            }
+                            text.push_str(&glyph);
+                            total_text = total_text.saturating_add(added);
+                        } else {
+                            out.limited = true;
+                        }
+                    } else if !artifact && !glyph.trim().is_empty() {
+                        out.unmarked_text = true;
                     }
-                    text.push_str(&glyph);
                 }
                 let advance = m.width(code) * gs.size + gs.char_spacing + if m.is_space(code, len) { gs.word_spacing } else { 0.0 };
                 tm = Matrix::translate(advance * gs.scale, 0.0).then(&tm);
@@ -492,6 +734,17 @@ fn mcid_texts_limited(doc: &Document, page: &Dict, max_text: usize) -> HashMap<i
             }
         }
     }
+    for (id, replacement) in replacements {
+        let previous = out.by_id.get(&id).map_or(0, String::len);
+        let bytes = total_text.saturating_sub(previous).saturating_add(replacement.len());
+        if replacement.len() <= max_text && bytes <= max_total {
+            total_text = bytes;
+            out.by_id.insert(id, replacement);
+        } else {
+            out.limited = true;
+        }
+    }
+    out.bytes = total_text;
     out
 }
 

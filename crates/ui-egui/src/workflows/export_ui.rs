@@ -225,7 +225,13 @@ fn run(task: ExportTask<'_>, mut sink: impl FnMut(&str, Vec<u8>) -> Result<(), S
                         crate::i18n::fmt(tl!("Exported the text of {n} pages"), &[("n", &total.to_string())])
                     };
                     if let Some(warning) = warnings.first() {
-                        message.push_str(&format!(" ({warning})"));
+                        let additional = warnings.len().saturating_sub(1);
+                        let suffix = if additional == 0 {
+                            String::new()
+                        } else {
+                            format!("; {additional} more warning{}", if additional == 1 { "" } else { "s" })
+                        };
+                        message.push_str(&format!(" ({warning}{suffix})"));
                     }
                     message
                 }

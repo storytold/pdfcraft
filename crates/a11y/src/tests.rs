@@ -36,11 +36,11 @@ fn tagged_text_uses_tree_order_and_omits_artifact_content() {
                 "BT /F1 12 Tf /P << /MCID 0 >> BDC (LEFT COLUMN) Tj EMC /P << /MCID 1 >> BDC (RIGHT COLUMN) Tj EMC /Artifact << /MCID 2 >> BDC (ARTIFACT FOOTER) Tj EMC ET",
             ),
             FONT.into(),
-            "<< /Type /StructTreeRoot /K 7 0 R >>".into(),
+            "<< /Type /StructTreeRoot /RoleMap << /Chart /Figure >> /K 7 0 R >>".into(),
             "<< /S /Document /K [8 0 R 9 0 R 10 0 R] >>".into(),
             "<< /S /P /P 7 0 R /Pg 3 0 R /ActualText (Accessible right column) /K << /Type /MCR /Pg 3 0 R /MCID 1 >> >>".into(),
             "<< /S /P /P 7 0 R /Pg 3 0 R /K 0 >>".into(),
-            "<< /S /Figure /P 7 0 R /Pg 3 0 R /Alt (A chart) >>".into(),
+            "<< /S /Chart /P 7 0 R /Pg 3 0 R /Alt (A chart) >>".into(),
         ],
         "",
     );
@@ -62,6 +62,83 @@ fn tagged_text_reports_repeated_and_missing_structure_references() {
     let tagged = tagged_text(&doc, &[]);
     assert!(tagged.warnings.iter().any(|w| w.contains("cyclic or repeated")));
     assert!(tagged.warnings.iter().any(|w| w.contains("missing structure reference 99")));
+}
+
+#[test]
+fn tagged_text_caps_total_marked_content_per_page() {
+    let doc = pdf(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>".into(),
+            stream("BT /F1 12 Tf /P << /MCID 0 >> BDC (AB) Tj EMC /P << /MCID 1 >> BDC (CD) Tj EMC ET"),
+            FONT.into(),
+        ],
+        "",
+    );
+    let page = pdfcraft_model::pages(&doc).remove(0);
+    let texts = crate::headings::mcid_texts_limited(&doc, &page.dict, 1024, 2);
+    assert!(texts.limited);
+    assert_eq!(texts.by_id.values().map(String::len).sum::<usize>(), 2);
+}
+
+#[test]
+fn tagged_text_joins_marks_from_one_element_and_applies_marked_actual_text() {
+    let doc = pdf(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 6 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>".into(),
+            stream("BT /F1 12 Tf /P << /MCID 0 /ActualText (corrected ) >> BDC (wrong) Tj EMC /P << /MCID 1 >> BDC (world) Tj EMC ET"),
+            FONT.into(),
+            "<< /Type /StructTreeRoot /K 7 0 R >>".into(),
+            "<< /S /Document /K 8 0 R >>".into(),
+            "<< /S /P /P 7 0 R /Pg 3 0 R /K [0 1] >>".into(),
+        ],
+        "",
+    );
+    assert_eq!(tagged_text(&doc, &[0]).text, "corrected world");
+}
+
+#[test]
+fn tagged_text_keeps_empty_structure_actual_text_as_a_replacement() {
+    let doc = pdf(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 6 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>".into(),
+            stream("BT /F1 12 Tf /P << /MCID 0 >> BDC (hidden replacement) Tj EMC ET"),
+            FONT.into(),
+            "<< /Type /StructTreeRoot /K 7 0 R >>".into(),
+            "<< /S /Document /K 8 0 R >>".into(),
+            "<< /S /Figure /P 7 0 R /Pg 3 0 R /ActualText () /Alt (must not be used) /K 0 >>".into(),
+        ],
+        "",
+    );
+    assert_eq!(tagged_text(&doc, &[0]).text, "");
+}
+
+#[test]
+fn tagged_text_reads_marked_content_from_a_form_stream() {
+    let content = "BT /F1 12 Tf /P << /MCID 4 >> BDC (IN FORM) Tj EMC ET";
+    let form = format!(
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /Font << /F1 5 0 R >> >> /Length {} >>\nstream\n{content}\nendstream",
+        content.len()
+    );
+    let doc = pdf(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 6 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] >>".into(),
+            form,
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into(),
+            "<< /Type /StructTreeRoot /K 7 0 R >>".into(),
+            "<< /S /Document /K 8 0 R >>".into(),
+            "<< /S /P /P 7 0 R /Pg 3 0 R /K << /Type /MCR /Pg 3 0 R /Stm 4 0 R /MCID 4 >> >>".into(),
+        ],
+        "",
+    );
+    assert_eq!(tagged_text(&doc, &[0]).text, "IN FORM");
 }
 
 fn status(r: &Report, rule: Rule) -> Status {

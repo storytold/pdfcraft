@@ -36,7 +36,7 @@ fn fixture(n: usize) -> Vec<u8> {
 }
 
 fn tagged_reading_order_fixture() -> Vec<u8> {
-    let content = "BT /F1 12 Tf 1 0 0 1 40 240 Tm /P << /MCID 0 >> BDC (LEFT COLUMN) Tj EMC 1 0 0 1 230 240 Tm /P << /MCID 1 >> BDC (RIGHT COLUMN) Tj EMC 1 0 0 1 40 20 Tm /Artifact << /MCID 2 >> BDC (ARTIFACT FOOTER) Tj EMC ET";
+    let content = "BT /F1 12 Tf 1 0 0 1 40 240 Tm /P << /MCID 0 >> BDC (LEFT COLUMN) Tj EMC 1 0 0 1 230 240 Tm /P << /MCID 1 >> BDC (RIGHT COLUMN) Tj EMC 1 0 0 1 40 20 Tm /Artifact << /MCID 2 >> BDC (ARTIFACT FOOTER) Tj EMC /P << /MCID 3 >> BDC (UNSTRUCTURED) Tj EMC ET";
     let objs = [
         "<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 6 0 R >>".to_string(),
         "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
@@ -44,7 +44,7 @@ fn tagged_reading_order_fixture() -> Vec<u8> {
         format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
         "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_string(),
         "<< /Type /StructTreeRoot /K 7 0 R >>".to_string(),
-        "<< /S /Document /K [8 0 R 9 0 R] >>".to_string(),
+        "<< /S /Document /K [8 0 R 9 0 R 99 0 R] >>".to_string(),
         "<< /S /P /P 7 0 R /Pg 3 0 R /K << /Type /MCR /Pg 3 0 R /MCID 1 >> >>".to_string(),
         "<< /S /P /P 7 0 R /Pg 3 0 R /K 0 >>".to_string(),
     ];
@@ -2961,7 +2961,9 @@ fn tagged_text_export_follows_structure_and_reports_omissions() {
     assert!(visual.contains("LEFT COLUMN") && visual.contains("RIGHT COLUMN") && visual.contains("ARTIFACT FOOTER"), "{visual:?}");
     let result = ok(&mut a, "doc_export_text", json!({ "doc": doc, "path": "tagged.txt", "order": "tagged" }));
     assert_eq!(std::fs::read_to_string(dir.join("tagged.txt")).unwrap(), "RIGHT COLUMN\nLEFT COLUMN");
-    assert_eq!(result["warnings"], json!([]));
+    assert_eq!(result["warnings"].as_array().unwrap().len(), 2);
+    assert!(result["warnings"].to_string().contains("missing structure reference 99"));
+    assert!(result["warnings"].to_string().contains("outside the structure tree"));
 }
 
 #[test]

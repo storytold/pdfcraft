@@ -13,7 +13,7 @@ trailer << /Root 1 0 R >>
 %%EOF";
 
 fn tagged_fixture() -> Vec<u8> {
-    let content = "BT /F1 12 Tf /P << /MCID 0 >> BDC (LEFT COLUMN) Tj EMC /P << /MCID 1 >> BDC (RIGHT COLUMN) Tj EMC /Artifact << /MCID 2 >> BDC (ARTIFACT FOOTER) Tj EMC ET";
+    let content = "BT /F1 12 Tf /P << /MCID 0 >> BDC (LEFT COLUMN) Tj EMC /P << /MCID 1 >> BDC (RIGHT COLUMN) Tj EMC /Artifact << /MCID 2 >> BDC (ARTIFACT FOOTER) Tj EMC /P << /MCID 3 >> BDC (UNSTRUCTURED) Tj EMC ET";
     let objs = [
         "<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 6 0 R >>".to_string(),
         "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
@@ -21,7 +21,7 @@ fn tagged_fixture() -> Vec<u8> {
         format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
         "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_string(),
         "<< /Type /StructTreeRoot /K 7 0 R >>".to_string(),
-        "<< /S /Document /K [8 0 R 9 0 R] >>".to_string(),
+        "<< /S /Document /K [8 0 R 9 0 R 99 0 R] >>".to_string(),
         "<< /S /P /P 7 0 R /Pg 3 0 R /K << /Type /MCR /Pg 3 0 R /MCID 1 >> >>".to_string(),
         "<< /S /P /P 7 0 R /Pg 3 0 R /K 0 >>".to_string(),
     ];
@@ -96,4 +96,5 @@ fn text_export_dialog_can_use_tag_tree_order() {
     h.get_by_label("Export").click();
     h.run_steps(4);
     assert_eq!(std::fs::read_to_string(dir.join("tagged.txt")).unwrap(), "RIGHT COLUMN\nLEFT COLUMN");
+    h.get_by_label_contains("1 more warning");
 }
