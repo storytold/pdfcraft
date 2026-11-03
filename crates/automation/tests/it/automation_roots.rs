@@ -371,7 +371,8 @@ fn other_shares_and_devices_are_refused_by_name() {
 
 /// A device name is refused with `--root` and without, as with the roots: joined to the
 /// canonicalized root (`\\?\…`) it was created as a file Explorer can neither open nor delete,
-/// and without a root it wrote into the device, `NUL` swallowing the document.
+/// and without a root it wrote into the device, `NUL` swallowing the document. Reading is refused
+/// too, with a root and without.
 #[cfg(windows)]
 #[test]
 fn device_names_are_refused_with_a_root_and_without() {
@@ -386,6 +387,7 @@ fn device_names_are_refused_with_a_root_and_without() {
         refused(&mut rooted, "doc_save", json!({"doc": 1, "path": name}), "reserved device names");
         refused(&mut free, "doc_save", json!({"doc": 1, "path": s(&base.join("in2").join(name))}), "reserved device names");
         refused(&mut rooted, "doc_open", json!({"path": name}), "reserved device names");
+        refused(&mut free, "doc_open", json!({"path": s(&base.join("in2").join(name))}), "reserved device names");
     }
     // Listed through `\\?\`, which shows such a file if one was made.
     let listed: Vec<String> =
