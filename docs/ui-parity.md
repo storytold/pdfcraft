@@ -1,6 +1,6 @@
 # UI and interaction parity
 
-> **Last reviewed:** 2026-10-21 · **Last updated:** 2026-11-03 · **Change:** minor (the Bookmarks panel marks the bookmark of the page on screen, or of the section it is in, and scrolls it into view when the page changes (Acrobat's Highlight Current Bookmark)) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-10-21 · **Last updated:** 2026-11-03 · **Change:** minor (the Bookmarks panel marks the bookmark of the page on screen, or of the section it is in, and scrolls it into view when the marked bookmark changes (Acrobat's Highlight Current Bookmark)) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
 How PdfCraft's tools, panels, shortcuts and feel compare with Acrobat Pro's current interface (the
 2023+ "new Acrobat": All tools pane on the left, quick-action toolbar, Home view). Behaviour is
@@ -82,7 +82,7 @@ No dump of Acrobat's menu tree has been diffed against the registry yet (gap 24)
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-03 | minor | The Bookmarks panel marks the bookmark of the page on screen, or of the section it is in, and scrolls it into view when the page changes (Acrobat's Highlight Current Bookmark) |
+| 2026-11-03 | minor | The Bookmarks panel marks the bookmark of the page on screen, or of the section it is in, and scrolls it into view when the marked bookmark changes (Acrobat's Highlight Current Bookmark) |
 | 2026-10-21 | minor | Pages inspector thumbnail sizing (#3808), separate from page and Organize zoom; view setting retained on reload and exposed through UI control. Not persisted between sessions. |
 | 2026-10-15 | minor | A selected field nudges with the arrow keys in Prepare a form: a point, Shift ten points, one undo step per press (#2608) |
 | 2026-10-14 | minor | Full screen shows one fitted page (or spread) at a time on black with click and key paging, as Acrobat's Full Screen Mode (#379, #1459, #1353) |

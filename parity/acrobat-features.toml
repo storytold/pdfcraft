@@ -1310,7 +1310,7 @@ milestone = "M4"
 status = "shipped"
 commands = []
 tools = []
-evidence = ["crates/ui-egui/tests/it/bookmarks.rs::the_bookmark_of_the_page_on_screen_is_marked", "crates/ui-egui/src/panels/bookmarks.rs::the_current_bookmark_is_the_one_of_the_nearest_page_at_or_before"]
+evidence = ["crates/ui-egui/tests/it/bookmarks.rs::the_bookmark_of_the_page_on_screen_is_marked", "crates/ui-egui/tests/it/bookmarks.rs::a_closed_bookmark_is_marked_for_the_child_on_screen", "crates/ui-egui/src/panels/bookmarks.rs::the_current_bookmark_is_the_one_of_the_nearest_page_at_or_before"]
 notes = "always on: the bookmark of the page on screen, else of the nearest page before it (the section it is in), is marked as selected and scrolled into view when it changes; under a closed bookmark that one is marked"
 
 [[feature]]

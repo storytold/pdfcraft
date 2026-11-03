@@ -96,8 +96,10 @@ pub(super) struct OutlineCtx<'a> {
     /// The bookmark of the page on screen ([`current_bookmark`]), marked as selected; under a
     /// closed bookmark, that one is marked.
     pub(super) marked: Option<&'a [usize]>,
-    /// The marked bookmark changed this frame: its row scrolls into view.
+    /// The marked bookmark changed: its row scrolls into view when it is drawn.
     pub(super) reveal: bool,
+    /// Set when the marked row was drawn and scrolled to ([`Self::reveal`]).
+    pub(super) revealed: bool,
 }
 
 /// The destination page label gets its own right-aligned column in a bookmark row; drawing
@@ -223,6 +225,7 @@ pub(super) fn outline_item(
         theme::Press::track(ui, &resp).wash(ui, rect, 6, marked);
         if marked && cx.reveal {
             resp.scroll_to_me(None);
+            cx.revealed = true;
         }
         let x0 = rect.left() + indent;
         if !item.children.is_empty() {

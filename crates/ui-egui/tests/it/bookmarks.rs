@@ -120,6 +120,47 @@ fn the_bookmark_of_the_page_on_screen_is_marked() {
     assert!(marked(&h, "Results") && !marked(&h, "Intro"));
 }
 
+/// Under a closed bookmark, the marked one is out of sight: the closed bookmark is marked in its
+/// place, and once opened, the child itself.
+#[test]
+fn a_closed_bookmark_is_marked_for_the_child_on_screen() {
+    const NESTED: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R /Outlines 10 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 /MediaBox [0 0 300 400] >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R >> endobj
+4 0 obj << /Type /Page /Parent 2 0 R >> endobj
+5 0 obj << /Type /Page /Parent 2 0 R >> endobj
+10 0 obj << /Type /Outlines /First 11 0 R /Last 12 0 R /Count 2 >> endobj
+11 0 obj << /Title (Cover) /Parent 10 0 R /Next 12 0 R /Dest [3 0 R /Fit] >> endobj
+12 0 obj << /Title (Section) /Parent 10 0 R /Prev 11 0 R /First 21 0 R /Last 21 0 R /Count -1 /Dest [4 0 R /Fit] >> endobj
+21 0 obj << /Title (Detail) /Parent 12 0 R /Dest [5 0 R /Fit] >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+    let mut h = harness();
+    h.state_mut().open_bytes("nested.pdf", None, NESTED.to_vec()).unwrap();
+    h.run_steps(4);
+    let marked = |h: &Harness<'static, PdfCraftApp>, title: &str| {
+        h.query_by_label(title).is_some_and(|n| n.accesskit_node().toggled() == Some(egui::accesskit::Toggled::True))
+    };
+    h.state_mut().set_option("page", "3").unwrap();
+    h.run_steps(3);
+    assert!(h.query_by_label("Detail").is_none(), "the child is hidden under its closed bookmark");
+    assert!(marked(&h, "Section") && !marked(&h, "Cover"), "the closed bookmark stands for its child on screen");
+    // Opened, the child is marked itself.
+    let row = h.get_by_label("Section").rect();
+    let at = egui::pos2(row.left() + 8.0, row.top() + 14.0);
+    h.hover_at(at);
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(3);
+    assert!(marked(&h, "Detail") && !marked(&h, "Section"), "open: the child itself");
+    // On the section's own page, the section.
+    h.state_mut().set_option("page", "2").unwrap();
+    h.run_steps(3);
+    assert!(marked(&h, "Section") && !marked(&h, "Detail"));
+}
+
 /// The side panel's width as egui keeps it from one frame to the next.
 fn panel_width(h: &Harness<'static, PdfCraftApp>) -> f32 {
     h.ctx.data(|data| data.get_temp::<egui::Rect>(egui::Id::unique("pdfcraft-inspector-body"))).expect("the inspector body is shown").width()
