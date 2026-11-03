@@ -323,16 +323,6 @@ pub fn text_oracle(args: &[String]) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Compare our rendering against Poppler's, page 1 of every PDF in a directory.
-///
-/// This is the measured half of the fidelity gap (`docs/gaps.md` gap 12): until it exists, every
-/// claim about rendering quality is a judgement. It reports rather than gates, because the corpus
-/// is not fetched on CI and because a first reading of a borrowed renderer is a baseline to
-/// improve on, not a bar to clear.
-///
-/// The score is the share of pixels with no near match in the other renderer's 3x3 neighbourhood
-/// (`pdfcraft_oracle::pixels`), which forgives antialiasing and subpixel placement but not
-/// missing or wrong content. **Lower is better; it is a disagreement rate, not a quality score.**
 /// A new folder in the temporary directory that only this user can open (0700 on Unix), removed
 /// when dropped, on success and on error alike.
 struct PrivateDir(PathBuf);
@@ -362,6 +352,16 @@ impl Drop for PrivateDir {
     }
 }
 
+/// Compare our rendering against Poppler's, page 1 of every PDF in a directory.
+///
+/// This is the measured half of the fidelity gap (`docs/gaps.md` gap 12): until it exists, every
+/// claim about rendering quality is a judgement. It reports rather than gates, because the corpus
+/// is not fetched on CI and because a first reading of a borrowed renderer is a baseline to
+/// improve on, not a bar to clear.
+///
+/// The score is the share of pixels with no near match in the other renderer's 3x3 neighbourhood
+/// (`pdfcraft_oracle::pixels`), which forgives antialiasing and subpixel placement but not
+/// missing or wrong content. **Lower is better; it is a disagreement rate, not a quality score.**
 pub fn render_oracle(args: &[String]) -> anyhow::Result<()> {
     let limit: usize = flag_num(args, "--limit").unwrap_or(usize::MAX);
     let dpi: u32 = flag_num(args, "--dpi").unwrap_or(72);
