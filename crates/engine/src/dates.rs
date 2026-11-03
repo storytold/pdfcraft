@@ -581,7 +581,7 @@ pub static DATE_LANGUAGES: [DateLanguage; 36] = [
         months: ["ஜனவரி", "பிப்ரவரி", "மார்ச்", "ஏப்ரல்", "மே", "ஜூன்", "ஜூலை", "ஆகஸ்ட்", "செப்டம்பர்", "அக்டோபர்", "நவம்பர்", "டிசம்பர்"],
         months_with_day: None,
         months_short: ["ஜன.", "பிப்.", "மார்.", "ஏப்.", "மே", "ஜூன்", "ஜூலை", "ஆக.", "செப்.", "அக்டோ.", "நவ.", "டிச."],
-        days: ["ஞாயிற்றுக்கிழமை", "திங்கட்கிழமை", "செவ்வாய்கிழமை", "புதன்கிழமை", "வியாழக்கிழமை", "வெள்ளிக்கிழமை", "சனிக்கிழமை"],
+        days: ["ஞாயிற்றுக்கிழமை", "திங்கட்கிழமை", "செவ்வாய்க்கிழமை", "புதன்கிழமை", "வியாழக்கிழமை", "வெள்ளிக்கிழமை", "சனிக்கிழமை"],
         days_short: ["ஞாயிறு", "திங்கள்", "செவ்வாய்", "புதன்", "வியாழன்", "வெள்ளி", "சனி"],
     },
 ];
@@ -1023,5 +1023,24 @@ mod tests {
         assert!(e.contains("火曜日") && e.contains("can't be written into the PDF yet"), "{e}");
         assert!(s.today_text_for_pdf(Some("dd.mm.yyyy"), Some("ja")).is_ok(), "numbers are fine in any language");
         assert!(s.today_text_for_pdf(Some("yyyy\\年mm\\月"), Some("ja")).unwrap_err().contains("年月"));
+    }
+}
+
+    /// Tamil names are the same with and after a day number. Not Western European, so the
+    /// date-text path refuses them with what to use instead.
+    #[test]
+    fn tamil_month_and_weekday_names() {
+        assert_eq!(in_lang("d mmmm yyyy", "ta"), "7 மார்ச் 2026");
+        assert_eq!(in_lang("d mmm yyyy", "ta"), "7 மார். 2026");
+        assert_eq!(in_lang("mmmm yyyy", "ta"), "மார்ச் 2026");
+        assert_eq!(in_lang("dddd, mmmm", "ta"), "சனிக்கிழமை, மார்ச்");
+        assert_eq!(in_lang("ddd, d mmm", "ta"), "சனி, 7 மார்.");
+        assert_eq!(in_lang("dddd, d mmmm yyyy", "ta"), "சனிக்கிழமை, 7 மார்ச் 2026");
+        assert_eq!(in_lang("mmmm d, yyyy, ddd", "ta"), "மார்ச் 7, 2026, சனி");
+        let mut s = Session::new().with_clock(|| 1_700_000_000);
+        s.set_date_language(Some("ta")).unwrap();
+        assert!(s.today_text_for_pdf(Some("d mmmm yyyy"), None).unwrap_err().contains("dd.mm.yyyy"));
+        assert!(s.today_text_for_pdf(Some("dddd"), None).unwrap_err().contains("dd.mm.yyyy"));
+        assert!(s.today_text_for_pdf(Some("dd.mm.yyyy"), None).is_ok(), "numbers are fine in any language");
     }
 }
