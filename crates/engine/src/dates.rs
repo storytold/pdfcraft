@@ -1024,7 +1024,6 @@ mod tests {
         assert!(s.today_text_for_pdf(Some("dd.mm.yyyy"), Some("ja")).is_ok(), "numbers are fine in any language");
         assert!(s.today_text_for_pdf(Some("yyyy\\年mm\\月"), Some("ja")).unwrap_err().contains("年月"));
     }
-}
 
     /// Tamil names are the same with and after a day number. Not Western European, so the
     /// date-text path refuses them with what to use instead.
