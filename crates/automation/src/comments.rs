@@ -74,42 +74,49 @@ fn hex(c: [f32; 3]) -> String {
 /// A shape's points moved onto the page's drawing or the comments drawn over it (`geometries`)
 /// where one lies within `tolerance` (user units), the better target of them: line ends, polygon
 /// and polyline vertices, a box's corners (a rectangle's, an oval's, a text box's). How many
-/// points moved (a point already on its target doesn't count).
+/// points moved (a point already on its target doesn't count). A box that both its corners would
+/// flatten onto one target keeps its corners.
 fn snap_shape(shape: Shape, geometries: &[&measure::snap::Geometry], tolerance: f64) -> (Shape, Option<usize>) {
     let options = measure::snap::SnapOptions::default();
-    let mut count = 0usize;
-    let mut snap = |p: [f64; 2]| -> [f64; 2] {
-        let best = geometries.iter().filter_map(|g| g.snap(p, tolerance, options).ok().flatten()).min_by(measure::snap::candidate_order);
-        match best {
-            Some(hit) => {
-                if hit.distance > 0.0 {
-                    count += 1;
-                }
-                hit.point
-            }
-            None => p,
+    let path = |s: &measure::snap::Snap| s.kind == measure::snap::SnapKind::Path;
+    // The target a point goes to, as the drawing tools pick it from the page's paths and the
+    // comments together: a point in reach before a mere path, then the nearer.
+    let target = |p: [f64; 2]| -> Option<measure::snap::Snap> {
+        geometries
+            .iter()
+            .filter_map(|g| g.candidates(p, tolerance, options).ok())
+            .flatten()
+            .min_by(|a, b| path(a).cmp(&path(b)).then_with(|| measure::snap::candidate_order(a, b)))
+    };
+    let count = std::cell::Cell::new(0usize);
+    let moved = |hit: &Option<measure::snap::Snap>| usize::from(hit.is_some_and(|s| s.distance > 0.0));
+    let snap = |p: [f64; 2]| -> [f64; 2] {
+        let hit = target(p);
+        count.set(count.get() + moved(&hit));
+        hit.map_or(p, |s| s.point)
+    };
+    let snap_box = |rect: [f64; 4]| -> [f64; 4] {
+        let (a, b) = (target([rect[0], rect[1]]), target([rect[2], rect[3]]));
+        let (pa, pb) = (a.map_or([rect[0], rect[1]], |s| s.point), b.map_or([rect[2], rect[3]], |s| s.point));
+        let snapped = [pa[0].min(pb[0]), pa[1].min(pb[1]), pa[0].max(pb[0]), pa[1].max(pb[1])];
+        // Both corners on one target (or one line) would leave no box, which can't be added.
+        if snapped[2] - snapped[0] < 1.0 || snapped[3] - snapped[1] < 1.0 {
+            return rect;
         }
+        count.set(count.get() + moved(&a) + moved(&b));
+        snapped
     };
     let shape = match shape {
         Shape::Line { from, to, start, end } => Shape::Line { from: snap(from), to: snap(to), start, end },
-        Shape::Polygon { vertices, cloud } => Shape::Polygon { vertices: vertices.into_iter().map(&mut snap).collect(), cloud },
-        Shape::PolyLine { vertices, start, end } => Shape::PolyLine { vertices: vertices.into_iter().map(&mut snap).collect(), start, end },
-        Shape::Rectangle { rect } => {
-            let (a, b) = (snap([rect[0], rect[1]]), snap([rect[2], rect[3]]));
-            Shape::Rectangle { rect: [a[0].min(b[0]), a[1].min(b[1]), a[0].max(b[0]), a[1].max(b[1])] }
-        }
-        Shape::Oval { rect } => {
-            let (a, b) = (snap([rect[0], rect[1]]), snap([rect[2], rect[3]]));
-            Shape::Oval { rect: [a[0].min(b[0]), a[1].min(b[1]), a[0].max(b[0]), a[1].max(b[1])] }
-        }
+        Shape::Polygon { vertices, cloud } => Shape::Polygon { vertices: vertices.into_iter().map(snap).collect(), cloud },
+        Shape::PolyLine { vertices, start, end } => Shape::PolyLine { vertices: vertices.into_iter().map(snap).collect(), start, end },
+        Shape::Rectangle { rect } => Shape::Rectangle { rect: snap_box(rect) },
+        Shape::Oval { rect } => Shape::Oval { rect: snap_box(rect) },
         // A text box by its corners too, as the Text box tool's corners snap in the app.
-        Shape::TextBox { rect, font_size } => {
-            let (a, b) = (snap([rect[0], rect[1]]), snap([rect[2], rect[3]]));
-            Shape::TextBox { rect: [a[0].min(b[0]), a[1].min(b[1]), a[0].max(b[0]), a[1].max(b[1])], font_size }
-        }
+        Shape::TextBox { rect, font_size } => Shape::TextBox { rect: snap_box(rect), font_size },
         other => other,
     };
-    (shape, Some(count))
+    (shape, Some(count.get()))
 }
 
 fn to_user(p: &PageInfo, x: f64, y: f64) -> [f64; 2] {

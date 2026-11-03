@@ -3606,7 +3606,7 @@ fn snap_paths_stay_cached_per_page_until_an_edit() {
     assert!(std::sync::Arc::ptr_eq(&first, &again), "page 0 stays cached while page 1 is in use");
     assert!(std::sync::Arc::ptr_eq(&second, &cache.geometry(doc, 1, &mut notice).unwrap()));
     assert!(notice.is_none(), "{notice:?}");
-    drop((first, second, again));
+    drop((second, again));
     // An edit (even to a comment) is a new generation: the paths are read again.
     let mut h = h;
     let shape = pdfcraft_engine::Shape::Rectangle { rect: [20.0, 20.0, 60.0, 60.0] };
@@ -3621,6 +3621,7 @@ fn snap_paths_stay_cached_per_page_until_an_edit() {
     let doc = h.state().session.get(id).unwrap();
     let before = cache.geometry(doc, 0, &mut notice).expect("page 0 reads");
     let after = cache.geometry(doc, 0, &mut notice).expect("page 0 reads");
+    assert!(!std::sync::Arc::ptr_eq(&before, &first), "the edit has page 0 read again");
     assert!(std::sync::Arc::ptr_eq(&before, &after), "read once for the new generation");
 }
 

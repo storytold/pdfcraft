@@ -693,6 +693,27 @@ fn a_centre_out_of_range_is_no_snap_target() {
     assert!(g.centres.iter().flatten().all(|v| v.is_finite() && v.abs() <= 1e9), "{:?}", g.centres);
     assert!(g.centres.contains(&[5.0, 5.0]), "{:?}", g.centres);
 }
+/// A line drawn on after `h` without `m` starts a subpath of its own: the closed square keeps its
+/// centre, and the open line has none.
+#[test]
+fn a_line_after_h_does_not_widen_the_closed_figure() {
+    let d = fixture("0 0 m 10 0 l 10 10 l 0 10 l h 50 50 l S", "", &[]);
+    let g = snap::geometry(&d, 0).unwrap();
+    assert!(g.centres.contains(&[5.0, 5.0]), "{:?}", g.centres);
+    assert!(!g.centres.iter().any(|c| (c[0] - 25.0).abs() < 1e-6), "the line isn't part of the square's box: {:?}", g.centres);
+}
+
+/// A slightly sloped rule bounds the box where it passes the point, not at its middle: the top
+/// rule here rises 5 pt over 1000, so above (10, 10) it is at 20.05, while its middle is at 22.5.
+#[test]
+fn a_sloped_rule_bounds_the_box_where_it_passes_the_point() {
+    let d = fixture("0 0 m 1000 0 l S 0 20 m 1000 25 l S 0 0 m 0 30 l S 20 0 m 20 30 l S", "", &[]);
+    let g = snap::geometry(&d, 0).unwrap();
+    let b = g.enclosing_box([10.0, 10.0], 50.0).expect("a box around the point");
+    let want = [0.0, 0.0, 20.0, 20.05];
+    assert!(b.iter().zip(want).all(|(v, w)| (v - w).abs() < 1e-9), "{b:?}");
+}
+
 /// A closed figure drawn with a curve has its centre in the middle of the curve as drawn: its box
 /// reaches the curve's extremes, not only its ends and middle. This loop bulges furthest at a
 /// third of the way in x (133.3) and at two thirds in y (44.4).

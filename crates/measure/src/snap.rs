@@ -432,6 +432,19 @@ fn cubic_extremes([a, b, c, d]: [Point; 4]) -> impl Iterator<Item = Point> {
     ts.flatten().filter(|t| *t > 0.0 && *t < 1.0).map(at).filter(|p| p.iter().all(|v| v.is_finite()))
 }
 
+/// After `h` (or `re`) a subpath is done: a line or curve drawn on without `m` starts a new one
+/// where the closed one began (the current point), as PostScript's closepath leaves it, so the
+/// closed figure's box and centre stay its own. `false` when there is no room for another.
+fn continue_subpath(subpaths: &mut Vec<Subpath>, from: Point) -> bool {
+    if subpaths.last().is_some_and(|sp| sp.closed) {
+        if subpaths.len() >= MAX_SEGMENTS {
+            return false;
+        }
+        subpaths.push(Subpath::new(from));
+    }
+    true
+}
+
 /// Save a subpath's implicit closing edge for fill operations. An unpainted or
 /// stroke-only open path must not gain that edge.
 fn remember_close(closures: &mut Vec<[Point; 2]>, current: Option<Point>, start: Option<Point>) -> bool {
@@ -554,15 +567,18 @@ impl Geometry {
             // Within half a degree of the axis.
             let level = dy.abs() <= length * 0.01;
             let upright = dx.abs() <= length * 0.01;
+            // A side is measured where it passes the point (a long rule may slope a little).
             if level && at[0] >= a[0].min(b[0]) && at[0] <= a[0].max(b[0]) {
-                let d = (a[1] + b[1]) / 2.0 - at[1];
+                let t = if dx != 0.0 { (at[0] - a[0]) / dx } else { 0.5 };
+                let d = a[1] + t * dy - at[1];
                 if d > 1e-9 {
                     above = above.min(d);
                 } else if d < -1e-9 {
                     below = below.min(-d);
                 }
             } else if upright && at[1] >= a[1].min(b[1]) && at[1] <= a[1].max(b[1]) {
-                let d = (a[0] + b[0]) / 2.0 - at[0];
+                let t = if dy != 0.0 { (at[1] - a[1]) / dy } else { 0.5 };
+                let d = a[0] + t * dx - at[0];
                 if d > 1e-9 {
                     right = right.min(d);
                 } else if d < -1e-9 {
@@ -814,6 +830,10 @@ impl Walker<'_> {
                 }
                 "l" => {
                     if let (Some(a), Some([x, y])) = (current, op.nums::<2>()) {
+                        if !continue_subpath(&mut subpaths, a) {
+                            self.geometry.truncated = true;
+                            break;
+                        }
                         let b = point(matrix, x, y);
                         path.edge(a, b);
                         current = Some(b);
@@ -837,6 +857,10 @@ impl Walker<'_> {
                         if let Some([a, b, c, d]) = curve
                             && check_points(&[a, b, c, d]).is_ok()
                         {
+                            if !continue_subpath(&mut subpaths, a) {
+                                self.geometry.truncated = true;
+                                break;
+                            }
                             let before = path.segments.len();
                             path.curve([a, b, c, d], 0);
                             if path.segments.len() > before {

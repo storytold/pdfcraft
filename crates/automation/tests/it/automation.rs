@@ -10855,6 +10855,19 @@ fn comment_add_snaps_points_to_the_drawing_on_request() {
     assert!(xfdf.contains("<vertices>10,20;60,20;150,150</vertices>"), "{xfdf}");
     let plain = ok(&mut a, "comment_add", json!({ "doc": doc, "page": 1, "type": "line", "from": [12, 278], "to": [58, 282] }));
     assert!(plain.get("snapped").is_none());
+    // Without `snap` the points stay where they were given.
+    let points_of = |a: &mut Automation, id: &Value| -> Vec<Vec<f64>> {
+        let list = ok(a, "comment_list", json!({ "doc": doc, "page": 1 }));
+        let c = list["comments"].as_array().unwrap().iter().find(|c| c["id"] == *id).cloned().expect("the comment");
+        c["points"].as_array().unwrap().iter().map(|p| p.as_array().unwrap().iter().map(|v| v.as_f64().unwrap()).collect()).collect()
+    };
+    assert_eq!(points_of(&mut a, &plain["comment"]["id"]), [[12.0, 278.0], [58.0, 282.0]]);
+    // Points before paths, as in the app: a line drawn up from (90, 25) in user space, then a
+    // point 1 pt off the page's line (y 20) but 4 pt from that end goes onto the end.
+    ok(&mut a, "comment_add", json!({ "doc": doc, "page": 1, "type": "line", "from": [90, 275], "to": [90, 200] }));
+    let ranked = ok(&mut a, "comment_add", json!({ "doc": doc, "page": 1, "type": "line", "from": [91, 279], "to": [200, 150], "snap": true }));
+    assert_eq!(ranked["snapped"], 1, "{ranked}");
+    assert_eq!(points_of(&mut a, &ranked["comment"]["id"])[0], [90.0, 275.0], "the end, not the nearer path");
     assert!(matches!(
         a.call(
             "comment_add",
@@ -10898,4 +10911,17 @@ fn snap_takes_the_comments_already_drawn() {
     // A point already on a target stays and isn't counted as moved.
     let out = ok(&mut a, "comment_add", json!({ "doc": doc, "page": 1, "type": "line", "from": [20, 40], "to": [70, 140], "snap": true }));
     assert_eq!(out["snapped"], 0, "{out}");
+    // A small box around the line's end: both corners would go onto it and leave no box, so it
+    // keeps its corners and is added.
+    let out = ok(
+        &mut a,
+        "comment_add",
+        json!({ "doc": doc, "page": 1, "type": "rectangle", "rect": [117, 37, 123, 43], "contents": "Small", "snap": true }),
+    );
+    assert_eq!(out["snapped"], 0, "{out}");
+    let list = ok(&mut a, "comment_list", json!({ "doc": doc, "page": 1 }));
+    let small = list["comments"].as_array().unwrap().iter().find(|c| c["contents"] == "Small").cloned().expect("the small box");
+    let r: Vec<f64> = small["rect"].as_array().unwrap().iter().map(|v| v.as_f64().unwrap()).collect();
+    let want = [117.0, 37.0, 123.0, 43.0];
+    assert!(r.iter().zip(want).all(|(v, w)| (v - w).abs() < 1e-3), "{r:?}");
 }
