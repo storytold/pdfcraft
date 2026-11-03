@@ -725,6 +725,15 @@ fn georgian_is_registered_and_persists() {
 }
 
 #[test]
+fn georgian_titles_stay_uncapitalised() {
+    set_current(Lang::from_code("ka").expect("ka registered"));
+    assert_eq!(upper_label("Advanced"), "დამატებითი");
+    // A label with no Georgian row is still English and keeps the English rule.
+    assert_eq!(upper_label("Untranslated title"), "UNTRANSLATED TITLE");
+    set_current(Lang::EN);
+}
+
+#[test]
 fn norwegian_bokmal_is_registered_and_persists() {
     let nb = Lang::from_code("nb").expect("nb registered");
     assert_eq!(nb.name(), "Norsk bokmål");
