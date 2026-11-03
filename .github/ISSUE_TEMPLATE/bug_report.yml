@@ -19,6 +19,12 @@ body:
     validations:
       required: true
   - type: input
+    id: environment
+    attributes:
+      label: Environment details
+      description: Filled in by Report an Issue with the operating system and document type.
+      placeholder: "Operating system and document type"
+  - type: input
     id: os
     attributes:
       label: Operating system
