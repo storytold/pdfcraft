@@ -210,15 +210,19 @@ impl PageRouter {
         }
     }
 
-    /// Who holds the press on `page`.
-    pub(crate) fn owner(&self, page: usize) -> Option<Owner> {
-        self.press_for(page).owner()
-    }
-
     /// Whether the press is held by someone who keeps its drag: then the page's text is not
     /// selected by it.
     pub(crate) fn keeps_drag(&self) -> bool {
         self.capture.as_ref().is_some_and(|c| !c.declines_drag)
+    }
+
+    /// The press turned into a drag: an owner that declines its drag lets it go, and from then on
+    /// the press is nobody's (a drag across a highlight selects the text under it; with the Link
+    /// tool, a drag from a link draws a new one). Its click stayed the owner's.
+    pub(crate) fn drag_started(&mut self) {
+        if self.capture.as_ref().is_some_and(|c| c.declines_drag) {
+            self.capture = None;
+        }
     }
 
     /// The press is over once the button is up and its release has been seen.
@@ -260,16 +264,16 @@ mod tests {
         let mut r = PageRouter::default();
         r.begin();
         r.press(2, [hit(Layer::Comment, 7)], QuickTool::Select);
-        assert_eq!(r.owner(2), Some(hit(Layer::Comment, 7).owner));
-        assert_eq!(r.owner(1), None, "only on its page");
+        assert_eq!(r.press_for(2).owner(), Some(hit(Layer::Comment, 7).owner));
+        assert_eq!(r.press_for(1).owner(), None, "only on its page");
         assert!(r.keeps_drag());
         r.settle(false, true);
-        assert!(r.owner(2).is_some(), "the release frame still belongs to the press");
+        assert!(r.press_for(2).owner().is_some(), "the release frame still belongs to the press");
         r.settle(false, false);
-        assert_eq!(r.owner(2), None);
+        assert_eq!(r.press_for(2).owner(), None);
         r.begin();
         r.press(0, [], QuickTool::Select);
-        assert_eq!(r.owner(0), None, "a press nobody claims is held by nobody");
+        assert_eq!(r.press_for(0).owner(), None, "a press nobody claims is held by nobody");
         assert!(!r.keeps_drag());
     }
 
@@ -311,8 +315,23 @@ mod tests {
         let mut r = PageRouter::default();
         r.begin();
         r.press(0, [Hit { declines_drag: true, ..hit(Layer::Comment, 0) }], QuickTool::Select);
-        assert!(r.owner(0).is_some() && !r.keeps_drag());
+        assert!(r.press_for(0).owner().is_some() && !r.keeps_drag());
         r.cancel();
-        assert_eq!(r.owner(0), None);
+        assert_eq!(r.press_for(0).owner(), None);
+    }
+
+    /// A drag the owner declines is nobody's once it starts, on the page it began on; a drag the
+    /// owner keeps stays its own.
+    #[test]
+    fn a_declined_drag_is_nobodys_once_it_starts() {
+        let mut r = PageRouter::default();
+        r.begin();
+        r.press(1, [Hit { declines_drag: true, ..hit(Layer::Comment, 0) }], QuickTool::Select);
+        r.drag_started();
+        assert_eq!((r.press_for(1), r.press_for(0)), (PagePress::Free, PagePress::Elsewhere));
+        r.begin();
+        r.press(1, [hit(Layer::Comment, 2)], QuickTool::Select);
+        r.drag_started();
+        assert_eq!(r.press_for(1), PagePress::Mine(hit(Layer::Comment, 2).owner));
     }
 }

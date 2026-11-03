@@ -12,7 +12,13 @@ use crate::{QuickTool, comments, icons};
 
 /// What the page's tools did with the pointer this frame.
 pub(super) struct PageInput {
-    /// A tool, a field or a comment took the pointer: text selection must leave it alone.
+    /// What the press the pages hold is to this page.
+    pub(super) press: PagePress,
+    /// The press's drag is the page's text's: nobody holds it, or its owner lets its drag go (text
+    /// markup: a click selects it, a drag selects the text under it).
+    pub(super) text_drag: bool,
+    /// A tool, a field or a comment took the pointer this frame (its own press, or a gesture of the
+    /// active tool's): text selection and image pick leave it alone.
     pub(super) consumed: bool,
     /// Redact or Highlight draws boxes off text.
     pub(super) area_tool: bool,
@@ -108,6 +114,10 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
             view.router.press(i, at, tool);
         }
     }
+    // A drag that the press's owner declines is nobody's once it starts.
+    if resp.drag_started_by(egui::PointerButton::Primary) {
+        view.router.drag_started();
+    }
     // What this page has to do with the press: its owner's, the active tool's, or another page's.
     let press = view.router.press_for(i);
     // What lies under the pointer before the tools act, on the frames that need it: for a click's
@@ -157,7 +167,7 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
         let text = view.page_text(i);
         let over_text = |p: Pos2| {
             let (vx, vy) = xf.screen_to_view(p);
-            text.as_ref().is_some_and(|t| t.glyphs.iter().any(|g| vx >= g.rect[0] && vx <= g.rect[2] && vy >= g.rect[1] && vy <= g.rect[3]))
+            text.as_ref().is_some_and(|t| t.glyph_at(vx, vy).is_some())
         };
         crate::redact_ui::page_input(cx, over_text, press == PagePress::Free, view)
     };
@@ -216,7 +226,7 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
     let on_comment = comments::page_input(ui, resp, &pcx, press, taken, view);
     let consumed = taken || on_comment;
     let hover = pointer.and_then(|p| claim_under(&hits, view, p, frame.env.unobstructed));
-    PageInput { consumed, area_tool, hover, released_over }
+    PageInput { press, text_drag: !view.router.keeps_drag(), consumed, area_tool, hover, released_over }
 }
 
 /// What lies under the pointer at `p`, after the tools act: its top, what a press there would take,
@@ -529,7 +539,7 @@ impl PageHits<'_> {
 
 /// Text layer: find matches, selection, I-beam and drag-to-select.
 pub(super) fn text_layer(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_>, slot: &PageSlot, input: &PageInput) {
-    let PageEnv { info, selects_text, tool, .. } = frame.env;
+    let PageEnv { selects_text, tool, .. } = frame.env;
     let PageSlot { i, r, xf } = *slot;
     let PageFrame { resp, ptr, pointer, .. } = *frame;
     if let Some(text) = view.texts.get(&i).cloned() {
@@ -538,7 +548,11 @@ pub(super) fn text_layer(ui: &mut egui::Ui, view: &mut DocView, frame: &mut Page
             && !input.consumed
             && let Some(p) = pointer.filter(|p| r.contains(*p))
         {
-            text_pointer_input(ui, view, &text, TextPointer { page: i, xf, rect: r, info, tool, resp, ptr: ptr.clone(), pointer: p });
+            // The I-beam drops where a press would go to a link (ruling E: the tools that select a
+            // link's text show it there).
+            let over_link = input.hover.as_ref().is_some_and(|h| matches!(h.owner, Owner::Link { .. }));
+            let pointer = TextPointer { page: i, xf, rect: r, tool, resp, ptr: ptr.clone(), pointer: p, over_link, text_drag: input.text_drag };
+            text_pointer_input(ui, view, &text, pointer);
         }
     }
 }
@@ -583,11 +597,14 @@ struct TextPointer<'a> {
     page: usize,
     xf: PageXform,
     rect: Rect,
-    info: &'a DocInfo,
     tool: QuickTool,
     resp: &'a egui::Response,
     ptr: PagePointer,
     pointer: Pos2,
+    /// A press under the pointer would go to a link.
+    over_link: bool,
+    /// The press's drag is the page's text's ([`PageInput::text_drag`]).
+    text_drag: bool,
 }
 
 struct TextGesture<'a> {
@@ -602,16 +619,16 @@ struct TextGesture<'a> {
     vy: f32,
     over_text: bool,
     over_link: bool,
+    text_drag: bool,
     column: bool,
 }
 
 fn text_pointer_input(ui: &mut egui::Ui, view: &mut DocView, text: &PageText, pointer: TextPointer<'_>) {
-    let TextPointer { page, xf, rect, info, tool, resp, ptr, pointer: screen_pointer } = pointer;
+    let TextPointer { page, xf, rect, tool, resp, ptr, pointer: screen_pointer, over_link, text_drag } = pointer;
     let (vx, vy) = xf.screen_to_view(screen_pointer);
-    let over_text = text.glyphs.iter().any(|glyph| vx >= glyph.rect[0] && vx <= glyph.rect[2] && vy >= glyph.rect[1] && vy <= glyph.rect[3]);
-    let over_link = info.links.iter().any(|link| link.page == page && xf.user_rect(info, page, link.rect).contains(screen_pointer));
+    let over_text = text.glyph_at(vx, vy).is_some();
     let column = tool == QuickTool::ColumnSelect || ui.input(|input| input.modifiers.alt);
-    let gesture = TextGesture { page, xf, rect, tool, ptr, resp, pointer: screen_pointer, vx, vy, over_text, over_link, column };
+    let gesture = TextGesture { page, xf, rect, tool, ptr, resp, pointer: screen_pointer, vx, vy, over_text, over_link, text_drag, column };
     update_text_cursor(view, &gesture);
     update_selection_on_press(ui, view, text, &gesture);
     update_dragged_selection(view, text, &gesture);
@@ -631,7 +648,7 @@ fn update_selection_on_press(ui: &egui::Ui, view: &mut DocView, text: &PageText,
     // A press held by what keeps its drag (a link, a comment that moves) selects no text; one on
     // text markup lets its drag select the text underneath.
     let press_here = gesture.ptr.origin.is_some_and(|origin| gesture.rect.contains(origin));
-    if gesture.ptr.pressed().is_some() && press_here && !view.router.keeps_drag() {
+    if gesture.ptr.pressed().is_some() && press_here && gesture.text_drag {
         let now = ui.input(|input| input.time);
         let (max_delay, max_dist) = ui.ctx().options(|options| (options.input_options.max_double_click_delay, options.input_options.max_click_dist));
         let consecutive = now - view.last_press_time <= max_delay && view.last_press_pos.is_some_and(|pos| pos.distance(gesture.pointer) <= max_dist);
@@ -646,7 +663,7 @@ fn update_selection_on_press(ui: &egui::Ui, view: &mut DocView, text: &PageText,
             view.selection = Some(Selection::run(gesture.page, first, last));
         }
     }
-    if gesture.resp.drag_started() && press_here && !view.router.keeps_drag() {
+    if gesture.resp.drag_started() && press_here && gesture.text_drag {
         view.actions_dismissed = None;
         view.selection_drag = true;
         let origin = gesture.ptr.origin.unwrap_or(gesture.pointer);
@@ -718,7 +735,7 @@ fn finish_text_pointer_gesture(ui: &egui::Ui, view: &mut DocView, text: &PageTex
         && let Some((first, last)) = text.nearest(gesture.vx, gesture.vy).and_then(|anchor| click_unit(text, clicks, anchor))
     {
         view.selection = Some(Selection::run(gesture.page, first, last));
-    } else if gesture.resp.clicked() && view.clicks < 2 && !view.router.keeps_drag() {
+    } else if gesture.resp.clicked() && view.clicks < 2 && gesture.text_drag {
         let shift = ui.input(|input| input.modifiers.shift);
         match (
             view.selection.as_mut().filter(|selection| shift && selection.page == gesture.page).map(|selection| &mut selection.span),
@@ -758,7 +775,9 @@ pub(super) fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut P
     let painter = ui.painter();
     let tool_cx = PageToolContext { ui, resp, xf: &xf, ptr, page: i, doc, info };
     let pcx = comments::PageCx { page: i, xf: &xf, ptr, info, tool, prefs, allowed, hidden: comments_hidden, redact_mark };
-    if tool == QuickTool::Select && !input.consumed {
+    // A press nobody holds picks the picture under it: a link's click follows the link only (ruling
+    // 5).
+    if tool == QuickTool::Select && input.press == PagePress::Free && !input.consumed {
         crate::image_pick::page_input(resp, &xf, i, info, doc, pointer, view);
     }
     crate::image_pick::drop_stale(doc, view);
@@ -815,7 +834,7 @@ pub(super) fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut P
         && resp.clicked()
         && tool == QuickTool::Select
         && !input.consumed
-        && let Some(Owner::Link { index }) = view.router.owner(i)
+        && let PagePress::Mine(Owner::Link { index }) = input.press
         && input.released_over
         && let Some(l) = info.links.iter().find(|l| l.page == i && l.index == index)
     {

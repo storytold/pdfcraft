@@ -1546,7 +1546,14 @@ fn draw_page(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_>, i
         if let Some(p) = frame.right_click_on(xf.rect) {
             comments::anchor(&pcx, p, view);
         }
-        PageInput { consumed: true, area_tool: false, hover: None, released_over: false }
+        PageInput {
+            press: crate::page_router::PagePress::Elsewhere,
+            text_drag: false,
+            consumed: true,
+            area_tool: false,
+            hover: None,
+            released_over: false,
+        }
     } else {
         page_tool_input(ui, view, frame, &slot)
     };

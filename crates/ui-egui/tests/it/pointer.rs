@@ -65,6 +65,22 @@ fn linked_text_pdf() -> Vec<u8> {
     ])
 }
 
+/// A 300×400 page with a picture at x 50..250, y 250..350 and a web link over its middle, at
+/// x 100..200, y 280..320.
+fn linked_picture_pdf() -> Vec<u8> {
+    let picture =
+        "<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /Length 1 >>\nstream\nA\nendstream";
+    let content = stream("q 200 0 0 100 50 250 cm /Im0 Do Q");
+    pdf(&[
+        CATALOG,
+        PAGES,
+        "<< /Type /Page /Parent 2 0 R /Contents 5 0 R /Resources << /XObject << /Im0 6 0 R >> >> /Annots [4 0 R] >>",
+        "<< /Type /Annot /Subtype /Link /Rect [100 280 200 320] /Border [0 0 0] /A << /S /URI /URI (https://example.org/) >> >>",
+        content.as_str(),
+        picture,
+    ])
+}
+
 /// A 300×400 page with a line of text at y≈300 and a rectangle comment over it.
 fn comment_on_text_pdf() -> Vec<u8> {
     let text = stream(LINE);
@@ -342,6 +358,35 @@ fn a_drag_from_text_onto_a_link_selects_the_text() {
     mouse_drag(&mut h, plain, linked - plain);
     let selected = h.state().views[0].selected_text().unwrap_or_default();
     assert!(selected.contains("example.org"), "the drag selected across the link: {selected:?}");
+}
+
+/// With the Select tool a click on a link over a picture follows the link and picks no picture; one
+/// on the picture beside the link picks it. The link's click used to pick the picture under it too.
+#[test]
+fn a_click_on_a_link_over_a_picture_follows_it_and_picks_no_picture() {
+    let mut h = open(linked_picture_pdf(), "150", false);
+    let beside = at(&h, 70.0, 300.0);
+    mouse_click(&mut h, beside);
+    assert!(h.state().views[0].picked_image.is_some(), "the picture beside the link is picked");
+    h.state_mut().views[0].picked_image = None;
+    let on_link = at(&h, 150.0, 300.0);
+    mouse_click(&mut h, on_link);
+    assert_eq!(pending_url(&h).as_deref(), Some("https://example.org/"), "the link is followed");
+    assert!(h.state().views[0].picked_image.is_none(), "and no picture is picked");
+}
+
+/// The I-beam drops over a link only where a press would go to it: with the Select tool the link's
+/// hand shows there, and with the highlighter, whose drag selects the link's text, the I-beam. The
+/// highlighter's I-beam used to drop over every link.
+#[test]
+fn the_i_beam_drops_over_a_link_only_where_the_press_goes_to_it() {
+    let mut h = open(linked_text_pdf(), "150", false);
+    let (plain, linked) = (at(&h, 200.0, 303.0), at(&h, 100.0, 303.0));
+    assert_eq!(wait_for_cursor(&mut h, plain, |c| c == egui::CursorIcon::Text), egui::CursorIcon::Text, "the page's text has arrived");
+    assert_eq!(cursor_at(&mut h, linked), egui::CursorIcon::PointingHand, "the Select tool follows the link");
+    h.state_mut().quick_tool = QuickTool::Comment(CommentTool::Highlight);
+    h.run_steps(2);
+    assert_eq!(cursor_at(&mut h, linked), egui::CursorIcon::Text, "the highlighter selects its text");
 }
 
 /// Over two comments the tip names the one drawn on top (#3620), and a click should select that

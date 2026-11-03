@@ -483,20 +483,22 @@ fn page_modules_claim_the_cursor_and_never_set_it() {
 }
 
 /// What decides, keeps or drops the press the pages hold.
-const ROUTER_WRITES: [&str; 8] = [
+const ROUTER_WRITES: [&str; 10] = [
     "router.begin(",
     "router.press(",
+    "router.drag_started(",
     "router.settle(",
     "router.cancel(",
     "PageRouter::begin(",
     "PageRouter::press(",
+    "PageRouter::drag_started(",
     "PageRouter::settle(",
     "PageRouter::cancel(",
 ];
 
 /// The functions that decide, keep or drop the press the pages hold: (file, function, why).
 const ROUTER_WRITERS: [(&str, &str, &str); 3] = [
-    ("canvas/page_input.rs", "page_tool_input", "the hits at the press point decide its owner, once per press"),
+    ("canvas/page_input.rs", "page_tool_input", "the hits at the press point decide its owner, once per press, and a declined drag lets it go"),
     ("canvas.rs", "draw_pages", "the press is over once the button is up and its release seen, and a new one drops the last owner"),
     ("canvas.rs", "cancel_pointer_gestures", "every pointer gesture's cancel: Escape, automation's cancel"),
 ];
@@ -566,18 +568,16 @@ const COMMENT_POINT_TESTERS: [(&str, &str, &str); 3] = [
 ];
 
 /// What reads who holds the press the pages hold.
-const ROUTER_READS: [&str; 6] =
-    ["router.press_for(", "router.owner(", "router.keeps_drag(", "PageRouter::press_for(", "PageRouter::owner(", "PageRouter::keeps_drag("];
+const ROUTER_READS: [&str; 4] = ["router.press_for(", "router.keeps_drag(", "PageRouter::press_for(", "PageRouter::keeps_drag("];
 
 /// The functions that read who holds the press: (file, function, why). The page view asks once per
-/// page and tells each module what the press is to its page (`PagePress`); the text layer and link
-/// following still ask, until they are told too (PR 4b), and an unused entry fails the test.
-const ROUTER_READERS: [(&str, &str, &str); 4] = [
-    ("canvas/page_input.rs", "page_tool_input", "the page view: what the press is to each page (`press_for`)"),
-    ("canvas/page_input.rs", "update_selection_on_press", "the text layer selects no text under a press held by what keeps its drag (4b)"),
-    ("canvas/page_input.rs", "finish_text_pointer_gesture", "a click held by what keeps its drag leaves the text selection alone (4b)"),
-    ("canvas/page_input.rs", "page_overlays", "a click follows the link that holds its press (4b)"),
-];
+/// page and tells each module what the press is to its page (`PagePress`); an unused entry fails
+/// the test.
+const ROUTER_READERS: [(&str, &str, &str); 1] = [(
+    "canvas/page_input.rs",
+    "page_tool_input",
+    "the page view: what the press is to each page (`press_for`), and whether its drag is the text's (`keeps_drag`)",
+)];
 
 /// What ignores the press the pages hold until the button is up.
 const PRESS_IGNORES: [&str; 1] = ["press_cancelled = true"];
