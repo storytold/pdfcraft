@@ -72,7 +72,8 @@ fn write_real(r: f64, out: &mut Vec<u8>) {
 fn write_name(n: &[u8], out: &mut Vec<u8>) {
     out.push(b'/');
     for &b in n {
-        let regular = (b'!'..=b'~').contains(&b) && !matches!(b, b'(' | b')' | b'<' | b'>' | b'[' | b']' | b'{' | b'}' | b'/' | b'%' | b'#');
+        // `#` starts an escape in a name (ISO 32000-2 §7.3.5), so it is written escaped too.
+        let regular = (b'!'..=b'~').contains(&b) && !crate::is_delimiter(b) && b != b'#';
         if regular {
             out.push(b);
         } else {
@@ -672,6 +673,19 @@ mod tests {
         let mut out = Vec::new();
         serialize(o, &mut out);
         Lexer::new(&out, 0).object().expect("parses")
+    }
+
+    /// A name escapes exactly the bytes the hand-written list it replaced did: outside `!`..=`~`,
+    /// the ten delimiters, and `#`.
+    #[test]
+    fn write_name_escapes_the_same_bytes_as_the_old_list() {
+        let old = |b: u8| (b'!'..=b'~').contains(&b) && !matches!(b, b'(' | b')' | b'<' | b'>' | b'[' | b']' | b'{' | b'}' | b'/' | b'%' | b'#');
+        for b in 0..=u8::MAX {
+            let mut out = Vec::new();
+            write_name(&[b], &mut out);
+            let expected = if old(b) { vec![b'/', b] } else { format!("/#{b:02X}").into_bytes() };
+            assert_eq!(out, expected, "byte {b:#04x}");
+        }
     }
 
     #[test]
