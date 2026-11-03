@@ -1639,9 +1639,9 @@ fn a_right_click_selects_its_comment_though_a_gesture_was_left_over() {
     assert_eq!(h.state().views[0].comments.selected, Some((0, 1)), "the note under the right-click is selected");
 }
 
-/// A comment's move ends once its button is up, though the pages missed its release: a drag elsewhere
-/// later moves nothing. The move waited for the next drag's end on the page, and took the comment
-/// there.
+/// A comment's move ends once its button is up, though the pages missed its release, and applies
+/// nothing: where it came up is not known, and the pointer has moved on. A drag elsewhere later moves
+/// nothing either. The move waited for the next drag's end on the page, and took the comment there.
 #[test]
 fn a_comment_move_whose_release_the_pages_missed_ends_once_the_button_is_up() {
     let mut h = open(stacked_comments_pdf(), "150", false);
@@ -1652,9 +1652,11 @@ fn a_comment_move_whose_release_the_pages_missed_ends_once_the_button_is_up() {
     let before = rect(&h);
     let bottom = at(&h, 60.0, 160.0);
     h.state_mut().views[0].comments.gesture = Some(pdfcraft_ui_egui::comments::Gesture::Move { page: 0, index: 0, from: bottom });
-    h.hover_at(bottom);
+    let elsewhere = at(&h, 250.0, 100.0);
+    h.hover_at(elsewhere);
     h.run_steps(2);
     assert!(h.state().views[0].comments.gesture.is_none(), "the move is over");
+    assert_eq!(rect(&h), before, "and moved nothing to where the pointer turned up");
     let blank = at(&h, 250.0, 60.0);
     mouse_drag(&mut h, blank, egui::vec2(30.0, 0.0));
     assert_eq!(rect(&h), before, "nothing moved the comment");

@@ -226,12 +226,18 @@ fn select_input(
             CommentPart::Body => {}
         }
     }
-    if matches!(cv.gesture, Some(Gesture::Move { page, .. } | Gesture::Resize { page, .. } | Gesture::Reshape { page, .. }) if page == cx.page) {
+    let live =
+        matches!(cv.gesture, Some(Gesture::Move { page, .. } | Gesture::Resize { page, .. } | Gesture::Reshape { page, .. }) if page == cx.page);
+    if live {
         consumed = true;
     }
-    // A move, resize or reshape ends where its drag stops, or once the button is up when the pages
-    // missed its release.
-    if (resp.drag_stopped() || !cx.ptr.primary_down)
+    // A move, resize or reshape ends where its drag stops. One whose release the pages missed (the
+    // button is up, and no drag stopped here) ends with nothing applied: where it came up is not
+    // known, and the pointer may be anywhere by now.
+    if live && !resp.drag_stopped() && !cx.ptr.primary_down {
+        cv.gesture = None;
+    }
+    if resp.drag_stopped()
         && let Some(p) = pointer
     {
         match cv.gesture.clone() {
