@@ -284,7 +284,9 @@ impl DecodeBudget {
         if self.bytes == 0 && !stream.raw.is_empty() {
             return Err(CosError::Filter(FilterError::LimitExceeded(self.limit).to_string()));
         }
-        let read = stream.raw.len();
+        // A `/Filter` that is not a name or an array of names fails before any byte is read: it
+        // pays nothing, so it can't spend the allowance the streams after it need.
+        let read = if stream.readable_filters().is_ok() { stream.raw.len() } else { 0 };
         if max < self.bytes {
             let result = decode(stream, max);
             let spent = match &result {
@@ -863,5 +865,18 @@ mod tests {
         assert_eq!(budget.remaining(), (10 << 20) - 2 * charged);
         assert!(budget.decode_strict(&chained).is_ok());
         assert_eq!(budget.remaining(), (10 << 20) - 3 * charged);
+    }
+
+    /// A stream whose `/Filter` can't be read fails without reading a byte, so it pays nothing:
+    /// the allowance it would have spent is left for the next stream.
+    #[test]
+    fn an_unreadable_filter_does_not_spend_the_allowance() {
+        let mut dict = Dict::new();
+        dict.set(b"Filter".to_vec(), Object::Int(5));
+        let bad = Stream::from_raw(dict, vec![b' '; 1000]);
+        let good = Stream::from_raw(Dict::new(), vec![b'x'; 1000]);
+        let mut budget = DecodeBudget::new(1500, 0);
+        assert!(budget.decode(&bad).is_err());
+        assert_eq!(budget.decode(&good).unwrap(), vec![b'x'; 1000]);
     }
 }
