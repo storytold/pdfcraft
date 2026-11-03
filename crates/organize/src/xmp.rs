@@ -194,7 +194,7 @@ fn list_items(inner: &str) -> Vec<(Option<String>, &str)> {
         let Some(end) = tag_end(inner, after) else { break };
         let tag = inner.get(i..end).unwrap_or_default();
         // The item's own attribute, not a lookalike inside another attribute's quoted value.
-        let lang = attribute_span(tag, "xml:lang").and_then(|(_, s, e, _)| tag.get(s..e)).map(str::to_string);
+        let lang = attribute_span(tag, "xml:lang").and_then(|(_, s, e, _)| tag.get(s..e)).map(unescape);
         scan.advance(end + 1);
         if tag.ends_with('/') {
             items.push((lang, ""));
@@ -214,13 +214,16 @@ fn unescape(text: &str) -> String {
     while let Some(i) = rest.find('&') {
         out.push_str(rest.get(..i).unwrap_or_default());
         let after = rest.get(i..).unwrap_or_default();
-        // A reference is at most 12 bytes up to its `;`: look no further, so a run of `&` with no
-        // `;` after it costs one short look each rather than a scan of the rest of the text.
-        let Some(semi) = after.as_bytes().iter().take(13).position(|&b| b == b';') else {
+        // A reference's name is letters, digits and `#`, and any number of them (a character
+        // reference may have leading zeros). The look stops at the first other byte, such as the
+        // next `&`, so each byte is looked at a bounded number of times and the pass is linear.
+        let name = after.as_bytes().get(1..).unwrap_or_default();
+        let semi = 1 + name.iter().take_while(|b| b.is_ascii_alphanumeric() || **b == b'#').count();
+        if after.as_bytes().get(semi) != Some(&b';') {
             out.push('&');
             rest = after.get(1..).unwrap_or_default();
             continue;
-        };
+        }
         let entity = after.get(1..semi).unwrap_or_default();
         let c = match entity {
             "amp" => Some('&'),
@@ -515,6 +518,8 @@ mod tests {
         let lookalike = "<rdf:li hint=\"a > xml:lang='x-default'\">Draft</rdf:li><rdf:li xml:lang=\"x-default\">Report</rdf:li>";
         assert_eq!(get(lookalike).as_deref(), Some("Report"));
         assert_eq!(get("<rdf:li xml:lang='fr'>Rapport</rdf:li><rdf:li xml:lang='x-default'>Report</rdf:li>").as_deref(), Some("Report"));
+        // The language is read as XML: an encoded `x-default` is `x-default`.
+        assert_eq!(get("<rdf:li xml:lang='fr'>Rapport</rdf:li><rdf:li xml:lang='x&#45;default'>Report</rdf:li>").as_deref(), Some("Report"));
         // An element is not found inside `<!-->…-->` or `<?>…?>` either.
         let packet = "<!--><pdf:Producer>Hidden</pdf:Producer>--><pdf:Producer>Shown</pdf:Producer>";
         assert_eq!(get_property(packet, "pdf:Producer", Shape::Text).as_deref(), Some("Shown"));
@@ -544,16 +549,18 @@ mod tests {
         assert!(out.ends_with("</rdf:Description>\n</rdf:RDF><!-- </rdf:RDF> -->"), "{out}");
     }
 
-    /// Each `&` looks at most 13 bytes ahead for its `;`: a long run of them with no `;` is one
-    /// pass, not a scan of the rest of the text per `&`, and reads unchanged.
+    /// Each `&` looks ahead only across its reference name (letters, digits and `#`) for its `;`:
+    /// long runs of `&` or of names with no `;` are one pass, not a scan of the rest of the text
+    /// per `&`, and read unchanged. A character reference may have any number of digits.
     #[test]
     fn a_long_run_of_ampersands_is_one_pass() {
-        let text = "&".repeat(400_000);
         let started = std::time::Instant::now();
-        assert_eq!(unescape(&text), text);
+        for text in ["&".repeat(400_000), "&#".repeat(200_000), "&x".repeat(200_000), format!("&{}", "a".repeat(400_000))] {
+            assert_eq!(unescape(&text), text);
+        }
         assert!(started.elapsed() < std::time::Duration::from_secs(2), "{:?}", started.elapsed());
-        // A `;` past the 12-byte limit is not a reference's end, as before.
-        assert_eq!(unescape("&#x0000000041; &#65;"), "&#x0000000041; A");
+        assert_eq!(unescape("&#x0000000041; &#00065;"), "A A");
+        assert_eq!(unescape("&amp &x;y &#;"), "&amp &x;y &#;");
     }
 
     #[test]
