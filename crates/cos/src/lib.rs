@@ -22,7 +22,7 @@ mod parser;
 mod security;
 mod writer;
 
-pub use budget::{DecodeBudget, MAX_PAGE_DECODED, MAX_PAGE_FORMS};
+pub use budget::{DecodeBudget, ImageBudget, MAX_PAGE_DECODED, MAX_PAGE_FORMS};
 pub use bytes::Bytes;
 pub use document::{Document, ReadState, Revision, SourceIdentity, XrefEntry};
 pub use object::{Dict, MAX_DECODED, MAX_JBIG2_GLOBALS, Name, ObjRef, Object, PdfString, Stream};
