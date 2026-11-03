@@ -436,8 +436,11 @@ fn pattern_indirect_vector_filter_control_still_applies() {
 #[test]
 fn pattern_depth_and_total_decoded_budgets_fail_closed() {
     let mut deep = fixture(b"0 0 20 20 re f", false, true, false);
+    // Two frames a level (the array, then the reference): 300 levels run past the 512-frame
+    // depth budget long before the object budget, so it is the depth budget that refuses, and it
+    // does so without overflowing the stack.
     let mut nested = Object::Int(1);
-    for _ in 0..70 {
+    for _ in 0..300 {
         nested = Object::Array(vec![Object::Ref(deep.add(nested))]);
     }
     deep.update_dict(ObjRef::new(6, 0), |dict| dict.set(b"Extra".to_vec(), nested)).unwrap();

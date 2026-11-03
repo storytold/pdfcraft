@@ -12,7 +12,15 @@ use pdfcraft_cos::{Dict, Document, ObjRef, Object, Stream};
 
 use crate::RedactError;
 
-const MAX_DEPTH: usize = 64;
+/// How deep the walk may recurse. Every step down (a reference, an array, a dictionary, a stream,
+/// a resources map) is one frame, and a nested form costs about four of them: the 50-deep chain
+/// in `a_deeply_nested_form_keeps_the_text_nobody_marked` peaks at 200. The interpreter follows
+/// forms as deep as the renderer and Edit text read (`interp::MAX_DEPTH`, #3645), so this must
+/// reach at least that far, or the guard would refuse a document the redaction itself handles.
+/// Total work is bounded separately by `MAX_OBJECTS`, and 512 frames stay far inside a thread's
+/// stack.
+const MAX_DEPTH: usize = 512;
+const _: () = assert!(MAX_DEPTH >= 8 * crate::interp::MAX_DEPTH, "the guard must walk past the deepest form the interpreter follows");
 const MAX_OBJECTS: usize = 16_384;
 const MAX_STREAM_BYTES: usize = 1 << 20;
 const MAX_TOTAL_BYTES: usize = 8 << 20;
