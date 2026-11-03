@@ -36,12 +36,9 @@ fn click_toolbar(h: &mut Harness<'static, PdfCraftApp>, label: &str) {
 }
 
 fn open_view_menu(h: &mut Harness<'static, PdfCraftApp>) {
-    h.get_by_label("Menu").click();
-    h.run_steps(2);
-    h.get_by_label("View").hover();
-    h.run_steps(3);
+    crate::support::open_menu(h, "View");
     assert!(h.query_by_label("Switch light / dark theme").is_none());
-    h.get_by_label("Display theme").hover();
+    crate::support::menu_row(h, "Display theme").hover();
     h.run_steps(3);
     for choice in ["Use system setting", "Light gray", "Dark gray"] {
         h.get_by_label(choice);
@@ -245,11 +242,11 @@ fn preferences_theme_cards_and_use_system_setting_stay_in_sync() {
     assert_theme(&h, ThemePreference::System, ThemeKind::Dark);
     assert_eq!(mode_shown(&h), "Use system setting");
 
-    // The OS is dark: the Dark card's radio row picks Dark, and the combo box says so.
+    // The OS is dark: the Dark card picks Dark, and the combo box says so.
     // The cards sit below the fold of the Preferences scroll area at this window size.
-    h.get_by_label("Dark gray").scroll_to_me();
+    h.get_by_label("Dark theme").scroll_to_me();
     h.run_steps(3);
-    h.get_by_label("Dark gray").click();
+    h.get_by_label("Dark theme").click();
     h.run_steps(3);
     assert_theme(&h, ThemePreference::Dark, ThemeKind::Dark);
     assert_eq!(mode_shown(&h), "Dark");

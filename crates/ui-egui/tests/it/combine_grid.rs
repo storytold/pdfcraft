@@ -530,6 +530,10 @@ fn combine_follows_the_order_shown_in_the_grid() {
 
 #[test]
 fn long_and_unusual_names_are_shortened_on_the_card_but_kept_whole() {
+    if crate::support::skip_without_glyphs("long_and_unusual_names_are_shortened_on_the_card_but_kept_whole", "en", "日本語のファイル名.pdf")
+    {
+        return;
+    }
     let long = "Überweisungsbestätigung für das dritte Quartal 2026 – Endfassung (unterschrieben).pdf";
     let mut h = grid_of(vec![(long, fixture(1)), ("日本語のファイル名.pdf", fixture(1)), ("a&b <c> 'd'.pdf", fixture(1))], vec2(1400.0, 900.0));
     // The card's label is the whole name; only the drawing is shortened.

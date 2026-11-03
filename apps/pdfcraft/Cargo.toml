@@ -29,9 +29,6 @@ chrono = { workspace = true }
 # crate registers the handler (Objective-C interop needs unsafe, which our workspace forbids)
 # behind a safe API. Same version as PhotoCraft. Pinned exactly: review the diff before bumping.
 fmv-macos-events = "=0.1.0"
-# ⌘Q asks about unsaved changes like the close button (#1136): an app menu whose Quit asks the
-# window to close instead of winit's, which ends the process without asking.
-craft-quit = { workspace = true, features = ["menu"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # Asks the Wayland compositor which GPU it draws with (linux-dmabuf feedback), so the window is
