@@ -124,7 +124,11 @@ pub fn export_data(doc: &Document, format: Format) -> String {
             )
         }
         _ => {
-            let clean = |s: &str| s.replace(['\t', '\n', '\r'], " ");
+            // A formula-like cell gets a leading `'`, as in CSV; `tab_delimited` takes it off.
+            let clean = |s: &str| {
+                let s = if csv_guarded(s) { format!("'{s}") } else { s.to_string() };
+                s.replace(['\t', '\n', '\r'], " ")
+            };
             format!(
                 "{}\n{}\n",
                 fields.iter().map(|f| clean(&f.0)).collect::<Vec<_>>().join("\t"),
@@ -171,7 +175,7 @@ pub fn data_values(bytes: &[u8]) -> Result<Vec<(String, Vec<String>)>, DataError
     }
     let mut values = Vec::new();
     if let Some(fields) = root.children().find(|c| c.has_tag_name("fields")) {
-        walk_xfdf(fields, "", &mut values, 0)?;
+        walk_xfdf(fields, "", &mut values, 0, &mut 0)?;
     }
     Ok(values)
 }
@@ -184,9 +188,10 @@ pub fn data_values(bytes: &[u8]) -> Result<Vec<(String, Vec<String>)>, DataError
 /// is written with a leading `'`, which keeps it text; a plain number such as `-12.5` is not.
 pub fn merge_csv(files: &[Vec<(String, Vec<String>)>]) -> String {
     let mut columns: Vec<&str> = Vec::new();
+    let mut known: HashSet<&str> = HashSet::new();
     for f in files {
         for (k, _) in f {
-            if !columns.contains(&k.as_str()) {
+            if known.insert(k.as_str()) {
                 columns.push(k);
             }
         }
@@ -199,7 +204,12 @@ pub fn merge_csv(files: &[Vec<(String, Vec<String>)>]) -> String {
     let mut out = columns.iter().map(|c| q(c)).collect::<Vec<_>>().join(",");
     out.push('\n');
     for f in files {
-        let row: Vec<String> = columns.iter().map(|c| f.iter().find(|(k, _)| k == c).map_or(String::new(), |(_, v)| q(&v.join(", ")))).collect();
+        // The first value of a name repeated in one file wins, as the scan it replaces found it.
+        let mut by_name: HashMap<&str, &Vec<String>> = HashMap::new();
+        for (k, v) in f {
+            by_name.entry(k.as_str()).or_insert(v);
+        }
+        let row: Vec<String> = columns.iter().map(|c| by_name.get(c).map_or(String::new(), |v| q(&v.join(", ")))).collect();
         out.push_str(&row.join(","));
         out.push('\n');
     }
@@ -326,7 +336,7 @@ fn import_table(doc: &mut Document, text: &str) -> Result<Report, DataError> {
 fn tab_delimited(t: &str) -> Result<Vec<(String, Vec<String>)>, DataError> {
     let mut lines = t.lines();
     let (Some(head), Some(row)) = (lines.next(), lines.next()) else { return Err(DataError::UnknownFormat) };
-    Ok(head.split('\t').map(str::to_string).zip(row.split('\t')).map(|(k, v)| (k, vec![v.to_string()])).collect())
+    Ok(head.split('\t').map(|k| csv_text(k.to_string())).zip(row.split('\t')).map(|(k, v)| (k, vec![csv_text(v.to_string())])).collect())
 }
 
 /// Import comments and/or field values from XFDF, FDF, XML, CSV or tab-delimited text
