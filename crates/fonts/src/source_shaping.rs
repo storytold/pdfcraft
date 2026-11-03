@@ -78,7 +78,7 @@ pub fn shape(bytes: &[u8], text: &str) -> Result<ShapedRun, String> {
 #[cfg(test)]
 mod tests {
     use super::shape;
-    use skrifa::{FontRef, raw::TableProvider};
+    use skrifa::{FontRef, MetadataProvider, raw::TableProvider};
 
     fn assert_contextual_shaping(font: &crate::CraftFont, text: &str) {
         let face = FontRef::new(font.bytes).expect("craft-fonts entry is a valid font");
