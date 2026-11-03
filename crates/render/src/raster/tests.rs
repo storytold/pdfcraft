@@ -8280,7 +8280,7 @@ fn a_soft_hyphen_a_substitute_lacks_draws_its_hyphen() {
 fn mincho_substitute_covers_half_width_katakana() {
     use hayro::hayro_interpret::font::FallbackFontQuery;
     use hayro::hayro_interpret::hayro_cmap::CharacterCollection;
-    use skrifa::MetadataProvider;
+    use skrifa_test::MetadataProvider;
     let query = FontQuery::Fallback(FallbackFontQuery {
         post_script_name: Some("HeiseiMin-W3".into()),
         character_collection: Some(CharacterCollection { family: CidFamily::AdobeJapan1, supplement: 2 }),
@@ -8290,7 +8290,7 @@ fn mincho_substitute_covers_half_width_katakana() {
         eprintln!("built without craft-fonts (CRAFT_FONTS_DIR unset): no Japanese face to check");
         return;
     };
-    let font = skrifa::FontRef::from_index((*data).as_ref(), index).expect("a craft-fonts face parses");
+    let font = skrifa_test::FontRef::from_index((*data).as_ref(), index).expect("a craft-fonts face parses");
     let charmap = font.charmap();
     let missing: Vec<char> = ('\u{FF61}'..='\u{FF9F}').chain(['日', '本']).filter(|&c| charmap.map(c).is_none()).collect();
     assert!(missing.is_empty(), "the Mincho substitute lacks {missing:?}");

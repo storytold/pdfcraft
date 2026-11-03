@@ -3,8 +3,8 @@
 
 use super::*;
 use hayro::hayro_interpret::font::FontData;
-use skrifa::MetadataProvider as _;
-use skrifa::string::StringId;
+use skrifa_test::MetadataProvider as _;
+use skrifa_test::string::StringId;
 
 /// Compare the real GBK PDF path with explicit Unicode and a known installed face. Unlike an
 /// ink count or extracted text, this fails if drawing chooses another glyph or font family.
@@ -26,11 +26,11 @@ pub(super) fn assert_expected_glyphs(pdf: &Arc<Vec<u8>>, base_font: &str) {
     let bytes = Arc::new(std::fs::read(path).expect("read installed reference font"));
     let index = (0..32)
         .find(|&index| {
-            skrifa::FontRef::from_index(&bytes, index)
+            skrifa_test::FontRef::from_index(&bytes, index)
                 .is_ok_and(|font| font.localized_strings(StringId::POSTSCRIPT_NAME).any(|name| name.chars().collect::<String>() == expected))
         })
         .expect("reference file contains the expected PostScript face");
-    let face = skrifa::FontRef::from_index(&bytes, index).unwrap();
+    let face = skrifa_test::FontRef::from_index(&bytes, index).unwrap();
     for character in ['\u{4e2d}', '\u{6587}'] {
         assert!(face.charmap().map(character).is_some_and(|id| id.to_u32() != 0), "{expected} must contain {character}");
     }
