@@ -31,30 +31,30 @@ Before preparing contributions, every patch was audited against upstream's manda
 ### 2.1 PR #5833: Automation Apply Alerts, Requests & Diagnostics
 - **Target Pull Request:** `https://github.com/storytold/pdfcraft/pull/5833`
 - **Topic Branch:** `upstream/automation-apply-alerts`
-- **Latest Verified Commit:** `447d4a2d` (`fix(automation): preserve script errors and console diagnostics in apply`)
+- **Latest Verified Commit:** `ee786423` (`test(automation): add document-level script error and cross-doc isolation regression tests`)
 - **Base Commit:** `0cba87ae` (`storytold/pdfcraft:main`)
 - **CodeRabbit Review Remediation:**
   - Surfaced `errors`, `doc_errors`, and `console` diagnostics in `Automation::apply` output (`crates/automation/src/documents.rs`).
   - Added comprehensive docstring documentation to `apply`.
   - Added integration test `form_fill_surfaces_script_errors_and_console_diagnostics` in `tests/it/form_bulk.rs` verifying multi-alert delivery, console diagnostics, document isolation, repeated call drainage, and undo/redo non-replay.
 - **Verification Evidence:**
-  - `cargo test --locked -p pdfcraft-automation`: 324 passed, 0 failed.
+  - `cargo test --locked -p pdfcraft-automation`: 382 passed (61 unit, 321 integration), 0 failed.
   - `cargo clippy -p pdfcraft-automation --tests --locked -- -D warnings`: 0 warnings.
   - Pushed to `origin/upstream/automation-apply-alerts` and updated GitHub PR description.
 
 ### 2.2 PR #5834: ISO 32000-2 Sound Annotations & Bounded RIFF Parser
 - **Target Pull Request:** `https://github.com/storytold/pdfcraft/pull/5834`
 - **Topic Branch:** `upstream/sound-annotations`
-- **Latest Verified Commit:** `81aaf0e3` (`fix(annot): validate stereo frames and bound WAV file loading to 64 MiB`)
+- **Latest Verified Commit:** `183bd806` (`fix(annot,automation): address review feedback on sound annotations and bounded WAV reader`)
 - **Base Commit:** `0cba87ae` (`storytold/pdfcraft:main`)
 - **CodeRabbit Review Remediation:**
   - Audio frame calculation: In `crates/annot/src/create.rs`, validates channel count before computing frame size (`bytes_per_frame = 2 * channels`); rejects non-multiples of whole frames (e.g. 2-byte or 6-byte stereo samples).
-  - Bounded WAV reading: In `crates/automation/src/comments.rs`, performs pre-allocation file metadata check rejecting files $>64\text{ MiB}$; caps reading with `take(MAX_WAV_FILE_SIZE + 1)`.
-  - Added unit test `sound_annotation_validates_channel_frames_and_samples` in `crates/annot/src/tests.rs`.
-  - Added regression test `sound_comment_rejects_oversized_and_malformed_audio_files` in `crates/automation/tests/it/automation.rs`.
+  - Bounded WAV reading: In `crates/automation/src/comments.rs`, performs pre-allocation file metadata check rejecting files $>64\text{ MiB}$ and special files (FIFOs); caps reading with `take(MAX_WAV_FILE_SIZE + 1)`.
+  - Added unit tests in `crates/annot/src/tests.rs` and `crates/automation/src/wav.rs`.
+  - Added regression tests in `crates/automation/tests/it/automation.rs`.
 - **Verification Evidence:**
   - `cargo test --locked -p pdfcraft-annot`: 78 passed, 0 failed.
-  - `cargo test --locked -p pdfcraft-automation`: 320 integration passed, 60 unit passed, 0 failed.
+  - `cargo test --locked -p pdfcraft-automation`: 382 passed (61 unit, 321 integration), 0 failed.
   - `cargo clippy -p pdfcraft-annot -p pdfcraft-automation --tests --locked -- -D warnings`: 0 warnings.
   - `cargo xtask assets`: 289 assets, 0 violations.
   - Pushed to `origin/upstream/sound-annotations` and updated GitHub PR description with Never-Crash, Security, Parity, and Reviewer-Focus sections.
@@ -64,5 +64,19 @@ Before preparing contributions, every patch was audited against upstream's manda
 ## 3. PR #5907: Native Android Platform Port
 - **Target Pull Request:** `https://github.com/storytold/pdfcraft/pull/5907`
 - **Head Branch:** `dikshant363:android-port`
-- **Status:** Open for maintainer review.
-- **Tenets:** Independent `apps/pdfcraft-android` module, native Rust PDF engine via UniFFI, offline-first Material 3 Compose UI, no impact on desktop-only contributors.
+- **Latest Verified Commit:** `c2444102` (`fix(android): address PR #5907 review findings and form-field back persistence`)
+- **Status:** Open for maintainer review; review remediations implemented and verified.
+- **CodeRabbit Review Remediation:**
+  - Uncommitted form field text preserved on Android Back / doc close via `DisposableEffect.onDispose` and `commitFieldEdit()`.
+  - LRU cache bounds (64 items) on `PagesScreen` thumbnails; top-8 priority eviction on `PageImages`.
+  - Safe atomic file writes using `copyTo(overwrite = true)` + `delete()` in place of destructive delete-before-rename.
+  - Audio recording header write before `startRecording()`; immediate stop on negative error codes; unique play cache files.
+  - `sound.rs` decompression bomb prevention via `decompressed_content_with_limit(MAX_SOUND_BYTES)`.
+  - Document liveness verification in `return_renderer`.
+  - Clean asset attribution in `ATTRIBUTION.toml` (327 verified assets, 0 violations).
+- **Verification Evidence:**
+  - `cargo test -p pdfcraft-android`: 17 passed, 0 failed.
+  - `./gradlew testDebugUnitTest`: BUILD SUCCESSFUL (all unit tests passed).
+  - `cargo clippy -p pdfcraft-android --tests --locked -- -D warnings`: 0 warnings.
+  - `cargo fmt --check`: passed.
+  - `cargo xtask assets`: 327 assets, 0 violations.

@@ -22,6 +22,11 @@
 | **DEF-009** | Medium | Automation / JS | AcroForm script errors and console diagnostics consumed in `apply` | RESOLVED | PR #5833 fix `447d4a2d` returns `errors`, `doc_errors`, `console`; verified by integration tests |
 | **DEF-010** | High | Annot / Audio | Incomplete stereo frames accepted and unbounded file reads in WAV loading | RESOLVED | PR #5834 fix `81aaf0e3` validates whole frames and bounds file reading to 64 MiB |
 | **DEF-011** | Medium | Runtime / Storage | Storage permission denial on Android 12 when viewing raw file URIs | RESOLVED | Sandboxed internal storage lifecycle verified on physical Vivo Android 12 device |
+| **DEF-012** | High | UI / Forms | Uncommitted form field text lost on Android system Back or document close | RESOLVED | Added `commit(vm)` to `DisposableEffect.onDispose`, `commitFieldEdit()` in `closeDocument()` and `BackHandler`, verified by `FormFieldCommitTest` |
+| **DEF-013** | Medium | UI / Memory | Unbounded thumbnail cache in `PagesScreen` and aggressive prefetch in `PageImages` | RESOLVED | LRU eviction capping thumbnails at 64 entries; priority eviction retaining top 8 requests with strict byte budget |
+| **DEF-014** | High | Storage / IO | Unsafe `file.delete()` before rename in atomic file writes; unvalidated ContentResolver file sizes | RESOLVED | Replaced delete-before-rename with `copyTo(file, overwrite = true)` + `tmp.delete()`; guarded against null/non-positive size in `LocalFiles` |
+| **DEF-015** | High | Audio / Safety | Audio file open race condition in `VoiceRecorder`; sound stream decompression bomb vulnerability | RESOLVED | Opened and formatted WAV header before `startRecording()`; enforced `decompressed_content_with_limit(MAX_SOUND_BYTES)` in `sound.rs` |
+| **DEF-016** | Medium | Engine / Cache | Document renderer retained in cache after document closure; thumbnail scale lower clamp | RESOLVED | Checked document liveness in `return_renderer`; removed inappropriate `0.01` lower clamp in `file_thumbnail` |
 
 ---
 
@@ -146,5 +151,59 @@
   - Sandboxed document loading through the application's internal files directory (`context.filesDir`, `/data/user/0/<package>/files/Created/`) via ContentResolver / InputStream.
   - Pushed test PDF to internal app sandbox, allowing native engine to open, parse, and render the document without external storage permissions.
 - **Verification:** Physical Vivo Android 12 smartphone rendered `form.pdf` with zero permission exceptions and zero crashes. Evidence screenshots archived in `docs/audit/evidence/physical_device/`.
+
+---
+
+### DEF-012: Form Field Uncommitted Text Lost on Android Back or Document Close
+- **Severity:** High (Data Loss / UX)
+- **Problem Statement:** In the Compose form-fill flow, pressing the Android system Back button, tapping the TopBar back arrow, or closing the document while editing a text field bypassed uncommitted Compose draft state. Changes entered into the text field were never committed to the native Rust document model, resulting in silent data loss.
+- **Resolution:**
+  - Added `currentText: String`, `isCommitted: Boolean`, and `commit(vm): Job?` to `FieldEdit`.
+  - Added `DisposableEffect.onDispose` to `FieldEditor` triggering `edit.commit(vm)` when the editor composable unmounts.
+  - Updated `AppViewModel.closeDocument()` to invoke `val pendingCommit = commitFieldEdit()` and await `pendingCommit?.join()` prior to persisting document state.
+  - Updated `ViewerScreen.kt`'s `BackHandler` to commit field edits before clearing the editor or navigating away.
+- **Verification:** Added `FormFieldCommitTest.kt` in `apps/pdfcraft-android/android/app/src/test/java/.../ui/` verifying property preservation; executed `./gradlew testDebugUnitTest` (BUILD SUCCESSFUL).
+
+---
+
+### DEF-013: Unbounded In-Memory Page Thumbnail and Image Tile Caches
+- **Severity:** Medium (Resource Exhaustion / OOM on Large Documents)
+- **Problem Statement:** `PagesScreen` held page thumbnails in an unbounded `mutableStateMapOf`, causing unbounded memory consumption when scrolling through large PDF documents (e.g., hundreds or thousands of pages). Furthermore, `PageImages` prefetching could exceed memory limits when navigating across diverse document sections.
+- **Resolution:**
+  - Added LRU distance eviction to `PagesScreen.kt` capping cached thumbnails to 64 items, evicting the furthest thumbnails relative to the currently visible page viewport.
+  - Modified `PageImages.kt` eviction to prioritize and protect the top 8 visible tile requests while strictly enforcing `budgetBytes` compliance on speculative off-screen requests.
+- **Verification:** Verified compilation and execution under Android unit test suite.
+
+---
+
+### DEF-014: Non-Atomic File Write Safety and Unvalidated Content Sizes
+- **Severity:** High (Data Corruption / Atomic Write Invariant)
+- **Problem Statement:** In `DigitalIds.kt`, `RecentFiles.kt`, and `UserBookmarks.kt`, if `tmp.renameTo(file)` failed, the code previously called `file.delete()` before retrying the rename. If the second rename failed, the destination file was permanently deleted with zero recovery. In `LocalFiles.kt`, files with unknown or non-positive size returned by ContentResolver were copied blindly.
+- **Resolution:**
+  - Replaced unsafe delete-before-rename with `tmp.copyTo(file, overwrite = true)` followed by `tmp.delete()`, logging any failures with `android.util.Log.w`.
+  - In `LocalFiles.kt`, verified `size != null && size > 0L && size <= MAX_COPY` prior to initiating any file caching.
+- **Verification:** Android unit test suite `./gradlew testDebugUnitTest` passes cleanly.
+
+---
+
+### DEF-015: Audio Recording Initialization Race and Sound Decompression Bomb Vulnerability
+- **Severity:** High (Crash / Denial of Service / Spec Compliance)
+- **Problem Statement:** (1) `VoiceRecorder.kt` called `rec.startRecording()` before the output file was opened and formatted on the IO dispatcher, risking dropped audio frames and unhandled IO exceptions. Also, negative error codes from `AudioRecord.read()` were ignored rather than halting the loop. (2) `apps/pdfcraft-android/src/sound.rs` did not limit decompression of compressed `/Sound` streams or check uncompressed content size against maximum bounds.
+- **Resolution:**
+  - Opened and pre-formatted the WAV header synchronously before calling `rec.startRecording()`; terminated recording loop immediately on negative `rec.read()` error return codes.
+  - Assigned distinct cache filenames (`voice-play-${doc.id}-${c.page}-${c.index}.wav`) in `VoiceSheet.kt` and `AppViewModel.kt` to avoid collision when playing multiple voice comments.
+  - In `sound.rs`, applied `decompressed_content_with_limit(MAX_SOUND_BYTES)` on filtered streams and verified uncompressed streams do not exceed `MAX_SOUND_BYTES`.
+- **Verification:** `cargo test -p pdfcraft-android` (17 passed); Clippy passed with 0 warnings.
+
+---
+
+### DEF-016: Document Renderer Retention After Closure and Thumbnail Scale Distortion
+- **Severity:** Medium (Resource Leak / Visual Quality)
+- **Problem Statement:** (1) In `apps/pdfcraft-android/src/lib.rs`, `return_renderer` inserted page renderers into the session cache without checking if the document had already been closed by the user, leaking native engine resources. (2) In `file_thumbnail`, `scale` was clamped to a minimum of `0.01`, causing extreme upscale distortion for large-dimension architectural or poster PDFs.
+- **Resolution:**
+  - Added document liveness check `self.lock().session().get(DocId(doc)).is_none()` in `return_renderer`.
+  - Removed arbitrary `0.01` lower clamp in `file_thumbnail`.
+- **Verification:** `cargo test -p pdfcraft-android` passes 17 tests; `cargo clippy` passes 0 warnings.
+
 
 

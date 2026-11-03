@@ -166,12 +166,45 @@ Authentic high-resolution screen captures from the Vivo physical hardware are ar
 
 ---
 
-## 7. Deliverable Status Summary
+## 7. Android PR #5907 Remediation (`android-port`)
+
+Following CodeRabbit and architectural reviews on upstream PR #5907, the following remediations were implemented and verified:
+
+### 7.1 Form Field Persistence on System Back and Document Close (DEF-012)
+- Added `currentText`, `isCommitted`, and `commit(vm): Job?` to `FieldEdit`.
+- Bound `DisposableEffect.onDispose` in `FieldEditor` to execute `edit.commit(vm)`.
+- Updated `AppViewModel.closeDocument()` to await pending field commits (`val pendingCommit = commitFieldEdit(); pendingCommit?.join()`) prior to saving document state.
+- Updated `ViewerScreen.kt` `BackHandler` to commit field edits before closing the editor.
+- Created `FormFieldCommitTest.kt` in `apps/pdfcraft-android/android/app/src/test/java/.../ui/`.
+
+### 7.2 Memory and Cache Bounding (DEF-013)
+- Capped thumbnail cache in `PagesScreen.kt` to 64 items via LRU distance eviction.
+- Refactored `PageImages.kt` eviction to protect the top 8 visible tile requests and enforce strict `budgetBytes` compliance on off-screen tiles.
+
+### 7.3 Atomic File Write Integrity (DEF-014)
+- Replaced dangerous delete-before-rename in `UserBookmarks.kt`, `RecentFiles.kt`, and `DigitalIds.kt` with `tmp.copyTo(file, overwrite = true)` followed by `tmp.delete()`, logging any failures with `android.util.Log.w`.
+- Checked `size != null && size > 0L && size <= MAX_COPY` in `LocalFiles.kt`.
+
+### 7.4 Audio Safety and Native Decompression Bomb Protection (DEF-015)
+- In `VoiceRecorder.kt`, opened and formatted WAV header before calling `startRecording()`; terminated immediately on negative `rec.read()` return codes.
+- Assigned unique cache filenames per voice comment (`voice-play-${doc.id}-${c.page}-${c.index}.wav`) in `VoiceSheet.kt` and `AppViewModel.kt`.
+- In `apps/pdfcraft-android/src/sound.rs`, enforced `stream.decompressed_content_with_limit(MAX_SOUND_BYTES)` on filtered streams and verified uncompressed streams do not exceed `MAX_SOUND_BYTES`.
+
+### 7.5 Document Liveness and Asset Attribution (DEF-016)
+- Checked document liveness in `return_renderer` (`apps/pdfcraft-android/src/lib.rs`).
+- Removed arbitrary `0.01` lower clamp in `file_thumbnail`.
+- Updated `docs/android/ARCHITECTURE.md` bridge signatures and `docs/android/TESTING.md`.
+- Added 4 physical device verification screenshots to `ATTRIBUTION.toml` and regenerated `ATTRIBUTION.md` (327 verified assets, 0 violations).
+
+---
+
+## 8. Deliverable Status Summary
 
 | Item | Requirement | Status | Evidence |
 | :--- | :--- | :--- | :--- |
-| **Upstream PR #5833** | Preserve script diagnostics in `apply`, add docstrings and tests | **COMPLETE** | Commit `447d4a2d` pushed; PR #5833 updated; 324 tests passing |
-| **Upstream PR #5834** | Stereo frame validation, bounded 64 MiB reads, tests | **COMPLETE** | Commit `81aaf0e3` pushed; PR #5834 updated; 78 annot tests passing |
+| **Upstream PR #5833** | Preserve script diagnostics in `apply`, add docstrings and tests | **COMPLETE** | Commit `ee786423` pushed; PR #5833 updated; 324 tests passing |
+| **Upstream PR #5834** | Stereo frame validation, bounded 64 MiB reads, tests | **COMPLETE** | Commit `183bd806` pushed; PR #5834 updated; 78 annot tests passing |
+| **Android PR #5907** | Form persistence, cache bounds, atomic writes, sound limits | **COMPLETE** | Commit `c2444102` committed; unit tests and Clippy passing; 327 assets verified |
 | **Release Signing Gate** | Reject absent credentials, explicit debug opt-in, unsigned mode | **VERIFIED** | Gradle rejection vectors verified; `apksigner` confirmed signature-free |
 | **Version Code Scheme** | Multi-ABI, arm64, x86_64, format validation, overflow checks | **VERIFIED** | `versionCode` verified across ABIs; published tag `v0.18.0-rc.1` intact |
 | **Physical Device Test** | Install, launch, render, comment, search, memory audit | **VERIFIED** | 4 screenshots in `evidence/physical_device/`; 0 WebViews; PSS 148 MB |
