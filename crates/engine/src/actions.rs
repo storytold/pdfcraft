@@ -151,6 +151,8 @@ fn images_refused_note(images: usize) -> Option<String> {
     (images > 0).then(|| format!("Reduce file size: {images} image(s) stayed as they were, past what one run may decode"))
 }
 
+/// Apply one action step to document `id`, adding what it did to `log`; returns the new
+/// document when the step replaced it.
 fn apply_step(s: &mut Session, id: DocId, step: &Step, log: &mut Vec<String>) -> Result<Option<DocId>, EditError> {
     let pages = s.get(id).map_or(0, |d| d.info.pages.len());
     let all: Vec<usize> = (0..pages).collect();

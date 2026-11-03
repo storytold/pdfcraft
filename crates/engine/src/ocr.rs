@@ -229,6 +229,7 @@ pub struct FileResult {
 }
 
 impl FileResult {
+    /// How many words were recognized on all of the file's pages.
     pub fn words(&self) -> usize {
         self.pages.iter().map(|p| p.words.len()).sum()
     }

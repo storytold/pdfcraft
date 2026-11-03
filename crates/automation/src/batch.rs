@@ -24,6 +24,8 @@ struct Recipe<'a> {
 }
 
 impl<'a> Recipe<'a> {
+    /// Read and validate `doc_batch`'s steps and settings, taking the JavaScript preference from
+    /// `auto`'s session.
     fn parse(auto: &Automation, args: &'a Args) -> Result<Self> {
         let steps = args.strs("steps")?;
         if steps.is_empty() || steps.len() > 3 {
@@ -70,6 +72,8 @@ impl<'a> Recipe<'a> {
         extension == "pdf" || (self.steps.contains(&"convert") && pdfcraft_engine::CONVERTIBLE.contains(&extension.as_str()))
     }
 
+    /// Run the recipe's steps on the file at `path` in a fresh session; returns the output bytes
+    /// and a report entry per step.
     fn process(&self, path: &Path) -> Result<(Arc<Vec<u8>>, Vec<Value>)> {
         // A fresh session per file bounds retained document state and never touches caller tabs.
         // It keeps the caller's JavaScript preference, set before any open runs open-time scripts.

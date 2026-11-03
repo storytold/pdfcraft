@@ -7516,6 +7516,8 @@ fn comparing_documents_through_tools() {
     assert!(a.call("doc_compare", &json!({ "doc": v2, "other": 999 })).is_err());
 }
 
+/// `action_list` and `action_run`: built-in actions by name and ad-hoc steps run on files,
+/// missing inputs are reported per file, and an unknown step is refused.
 #[test]
 fn actions_through_tools() {
     let dir = workdir("actions");

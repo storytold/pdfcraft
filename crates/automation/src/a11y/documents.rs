@@ -118,6 +118,9 @@ impl Automation {
         Ok(json!({ "actions": actions, "steps": steps }))
     }
 
+    /// `action_run`: run a named action or a list of steps on each file in `paths`, writing the
+    /// results into `folder`; each file is processed in its own session that keeps this
+    /// session's JavaScript preference.
     pub(crate) fn action_run(&mut self, a: &Args) -> Result<Value> {
         use pdfcraft_engine::actions::{Action, Step, builtin, run_on};
         let action = if let Some(name) = a.opt_str("action")? {
