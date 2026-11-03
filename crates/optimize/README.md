@@ -28,11 +28,12 @@ let report = optimize_with_progress(&mut doc, &settings, &mut |stage| keep_going
   If a use can't be
   measured (forms nested deeper, or drawn too many times), no image is resampled. Colour and grayscale images above a
   threshold are resampled with a bicubic (Catmull-Rom) filter to a target resolution and
-  stored as JPEG (Acrobat's quality steps) or ZIP; soft masks are resampled with their image.
+  stored as JPEG (Acrobat's quality steps) or ZIP; soft masks are resampled with their image. A
+  stencil `/Mask` has its own resolution, so the picture changes under it and it stays as it is.
   An image is replaced only if the result is smaller. Images over 80 million pixels are left
   alone by the image steps, here and below, whatever their settings (memory); Clean Up may still
   Flate an unfiltered or LZW one. Left alone by these colour and grey
-  settings: CMYK and other colour spaces, image masks, decode arrays, more than 8 bits, JPEG 2000,
+  settings: CMYK and other colour spaces, image masks, colour-key masks, decode arrays, more than 8 bits, JPEG 2000,
   JBIG2 and CCITT (black-and-white images, CCITT and JBIG2 among them, are below). A JPEG is read with
   its colour transform (an Adobe marker's, else `/ColorTransform`, ISO 32000-2 §7.4.8), so one
   stored untransformed keeps its colours; one whose marker and `/ColorTransform` disagree is left
@@ -103,13 +104,19 @@ let report = optimize_with_progress(&mut doc, &settings, &mut |stage| keep_going
 
   - Lossless JBIG2 uses bounded generic-region encoding or exact-copy symbol dictionaries when
     smaller. No lossy symbol substitution is used. Export, redaction and this step read JBIG2
-    images, with bounded shared globals.
+    images, with bounded shared globals. All of a run's images share one allowance of decoding
+    (`pdfcraft_cos::ImageBudget`), filters, decoders and pixels alike, JPEG samples and merged
+    pictures too: about
+    1,000 scanned pages' worth, plus more for each byte of the file, enough to decode a stream
+    about 8 times at Flate's best. Images past it stay as they are, and `Report::images_refused`
+    counts those the image step read. Streams it only stores with Flate (below) aren't counted.
 - **Discard objects:** thumbnails, alternate images, document tags, print settings.
 - **Clean up:** Flate for streams with no filter; for streams with an outer ASCII85 or ASCIIHex
   layer, that layer is removed when the result is smaller (the inner filters keep their encoded
   bytes; streams with `/DecodeParms`, images and object streams keep their ASCII layer. LZW-compressed
   streams, content and images alike, are decoded and stored with Flate instead (Acrobat's "In
-  streams that use LZW encoding, use Flate instead"): a predictor carries over to Flate without
+  streams that use LZW encoding, use Flate instead"), from the run's allowance, past which they
+  stay LZW: a predictor carries over to Flate without
   `EarlyChange`, filters applied before the LZW one go with it and those after it keep their
   bytes. A stream whose LZW data doesn't decode cleanly is left as it is. Not yet: inline images.
 
