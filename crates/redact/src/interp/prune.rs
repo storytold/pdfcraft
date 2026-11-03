@@ -20,33 +20,45 @@ pub(crate) fn prune(xo: &mut Dict, replaced: &[Vec<u8>], content: &[Vec<u8>]) {
     }
 }
 
-/// Whether `content` draws the XObject `name` of the resource dictionary `xo`: directly, or
-/// through a form that has no /Resources of its own (such a form draws through its caller's).
-/// `None` when that cannot be told (a form that will not decode, or nesting past the limit).
-fn content_draws(doc: &Document, content: &[Vec<u8>], xo: &Dict, name: &[u8], depth: usize, seen: &mut HashSet<ObjRef>) -> Option<bool> {
-    let joined = Pieces::join(content);
-    let ops = joined.parse().ops;
-    for op in ops.iter().filter(|op| op.is("Do")) {
-        let Some(n) = op.last_name() else { continue };
-        if n == name {
-            return Some(true);
-        }
-        let Some(r) = xo.get(n).and_then(Object::as_ref) else { continue };
-        let obj = doc.get(r);
-        let Object::Stream(s) = &*obj else { continue };
-        if s.dict.name(b"Subtype") != Some(b"Form") || s.dict.contains(b"Resources") || !seen.insert(r) {
-            continue;
-        }
-        if depth >= MAX_DEPTH {
-            return None;
-        }
-        let Ok(data) = s.decoded() else { return None };
-        match content_draws(doc, std::slice::from_ref(&data), xo, name, depth + 1, seen) {
-            Some(false) => {}
-            other => return other,
+/// The XObject names of the resource dictionary `xo` that `content` draws: directly, or through
+/// a form that has no /Resources of its own (such a form draws through its caller's). Each such
+/// form is read once, however many names are asked about. The flag says whether some of what
+/// `content` draws could not be read (a form that will not decode, or nesting past the limit), so
+/// a name missing from the set may still be drawn.
+fn names_drawn(doc: &Document, content: &[Vec<u8>], xo: &Dict) -> (HashSet<Vec<u8>>, bool) {
+    let mut drawn = HashSet::new();
+    let mut seen = HashSet::new();
+    let mut pending = vec![(Pieces::join(content).parse().ops, 0)];
+    while let Some((ops, depth)) = pending.pop() {
+        for n in ops.iter().filter(|op| op.is("Do")).filter_map(Op::last_name) {
+            if !drawn.insert(n.to_vec()) {
+                continue;
+            }
+            let Some(r) = xo.get(n).and_then(Object::as_ref) else { continue };
+            let obj = doc.get(r);
+            let Object::Stream(s) = &*obj else { continue };
+            if s.dict.name(b"Subtype") != Some(b"Form") || s.dict.contains(b"Resources") || !seen.insert(r) {
+                continue;
+            }
+            match s.decoded() {
+                Ok(data) if depth < MAX_DEPTH => pending.push((pdfcraft_content::parse(&data).ops, depth + 1)),
+                _ => return (drawn, true),
+            }
         }
     }
-    Some(false)
+    (drawn, false)
+}
+
+/// Whether any of `drawn` (from [`names_drawn`]) draws `name`: `None` when none is known to and
+/// one could not be read in full.
+fn any_draws(drawn: &[(HashSet<Vec<u8>>, bool)], name: &[u8]) -> Option<bool> {
+    if drawn.iter().any(|(names, _)| names.contains(name)) {
+        Some(true)
+    } else if drawn.iter().any(|(_, unknown)| *unknown) {
+        None
+    } else {
+        Some(false)
+    }
 }
 
 /// Unlink the XObjects a rewrite dropped or replaced (`doomed`) from every page-tree resource
@@ -112,15 +124,10 @@ pub(crate) fn unlink_doomed(doc: &mut Document, doomed: &[ObjRef], retired_prope
             contents.push(page_streams(doc, &page, index.get(user).copied().unwrap_or(0))?.1);
         }
         let mut pruned = false;
+        // What each page draws through this dictionary, worked out once for all the names.
+        let drawn: Vec<_> = if names.is_empty() { Vec::new() } else { contents.iter().map(|content| names_drawn(doc, content, &xo)).collect() };
         for n in names {
-            let mut drawn = Some(false);
-            for content in &contents {
-                drawn = content_draws(doc, content, &xo, &n, 0, &mut HashSet::new());
-                if drawn != Some(false) {
-                    break;
-                }
-            }
-            match drawn {
+            match any_draws(&drawn, &n) {
                 Some(true) => {}
                 Some(false) => {
                     xo.remove(&n);
@@ -230,8 +237,12 @@ fn unlink_from_forms(doc: &mut Document, holders: &[ObjRef], doomed: &HashSet<Ob
 
 fn prune_doomed_xobjects(doc: &Document, content: &[Vec<u8>], xo: &mut Dict, doomed_names: &[Vec<u8>]) -> Result<bool, CosError> {
     let mut pruned = false;
+    if doomed_names.is_empty() {
+        return Ok(false);
+    }
+    let drawn = [names_drawn(doc, content, xo)];
     for name in doomed_names {
-        match content_draws(doc, content, xo, name, 0, &mut HashSet::new()) {
+        match any_draws(&drawn, name) {
             Some(true) => {}
             Some(false) => pruned |= xo.remove(name).is_some(),
             None => return Err(CosError::Syntax { offset: 0, detail: "redaction could not fully inspect shared form resources".into() }),
