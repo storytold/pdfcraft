@@ -300,6 +300,7 @@ Estimates unchanged.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-02 | patch | M10 #5743: macOS print jobs carry the job name and owner some vendors' filters need; not yet checked on a physical printer |
 | 2026-11-01 | patch | M7 #5657: header/footer, watermark and background operations commit all selected pages together; later-page errors preserve marks, content, shared/inherited resources and pending edits; estimates unchanged. |
 | 2026-10-31 | patch | #1577: reconcile optional page shadows with current viewer/organizer and settings modules; CI validation pending. |
 | 2026-10-31 | patch | M3 #1354: reconcile the launch override with split app/file modules and the structured open result; preserve headless help/version exits. CI validation pending. |
