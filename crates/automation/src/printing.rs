@@ -36,10 +36,15 @@ fn job_duplex(value: &str, layout: &Layout, two_sided: impl FnOnce() -> Option<b
 }
 
 /// Whether the driver of `printer` (a name, or "default") takes two-sided settings from other
-/// programs, as the printer list reports it; `None` when the list doesn't say or has no such
-/// printer.
+/// programs, as the system's printer list reports it ([`two_sided_in`]).
 fn printer_two_sided(printer: &str) -> Option<bool> {
-    spool::printers().into_iter().find(|p| if printer == "default" { p.default } else { p.name == printer })?.two_sided
+    two_sided_in(&spool::printers(), printer)
+}
+
+/// What `printers` say about `printer`'s two-sided support: the default printer's for
+/// "default"; `None` when the list doesn't say or has no such printer.
+fn two_sided_in(printers: &[spool::Printer], printer: &str) -> Option<bool> {
+    printers.iter().find(|p| if printer == "default" { p.default } else { p.name == printer })?.two_sided
 }
 
 /// An invalid-arguments error saying `m`.
@@ -252,6 +257,22 @@ mod tests {
         }
         assert!(job_duplex("sideways", &booklet(BookletSubset::BothSides), || None).is_err());
         assert_eq!(job_duplex("long-edge", &Layout::Size(SizeMode::Fit), unread).ok(), Some(Some(spool::Duplex::LongEdge)), "other layouts keep it");
+    }
+
+    /// #5772: a booklet's printer is found by name, or as the default for "default", and only
+    /// what the list says about it counts.
+    #[test]
+    fn a_printers_two_sided_support_comes_from_the_list() {
+        let printer = |name: &str, default, two_sided| spool::Printer { name: name.into(), default, two_sided, description: String::new() };
+        let list = [printer("Epson", false, Some(false)), printer("Laser", true, Some(true)), printer("Network", false, None)];
+        assert_eq!(two_sided_in(&list, "Epson"), Some(false));
+        assert_eq!(two_sided_in(&list, "Laser"), Some(true));
+        assert_eq!(two_sided_in(&list, "default"), Some(true), "the default printer's");
+        assert_eq!(two_sided_in(&list, "Network"), None, "the list doesn't say");
+        assert_eq!(two_sided_in(&list, "Gone"), None, "no such printer");
+        assert_eq!(two_sided_in(&list, "epson"), None, "names are exact");
+        let without_default = [printer("Epson", false, Some(false))];
+        assert_eq!(two_sided_in(&without_default, "default"), None);
     }
 
     /// `printer` leaves two-sided to the printer's own default (#2422); cut and stack still asks
