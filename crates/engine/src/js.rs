@@ -165,6 +165,7 @@ pub struct JsRunner {
     // otherwise reparse every widget for every calculation. Values/flags still come from
     // the live `fields` snapshot on each call. A new edit gets a new runner and cache.
     displays: std::collections::HashMap<pdfcraft_cos::ObjRef, i32>,
+    calculations: Option<std::sync::Arc<Vec<(String, String)>>>,
 }
 
 impl JsRunner {
@@ -180,7 +181,22 @@ impl JsRunner {
         // Packets alone are not enough: static XFA and an unlaid-out shell keep their scripts.
         let xfa_active = xfa && pdfcraft_xfa::existing_layout(cos).is_some();
         let doc_scripts = if xfa_active { Vec::new() } else { pdfcraft_forms::document_scripts(cos) };
-        JsRunner { doc, doc_scripts, output: JsOutput::default(), cos: cos.clone(), displays: std::collections::HashMap::new() }
+        JsRunner { doc, doc_scripts, output: JsOutput::default(), cos: cos.clone(), displays: std::collections::HashMap::new(), calculations: None }
+    }
+
+    fn calculations(&mut self, fields: &[Field]) -> std::sync::Arc<Vec<(String, String)>> {
+        if let Some(calculations) = &self.calculations {
+            return std::sync::Arc::clone(calculations);
+        }
+        let calculations = std::sync::Arc::new(calculation_scripts(&self.cos, fields));
+        self.calculations = Some(std::sync::Arc::clone(&calculations));
+        calculations
+    }
+
+    pub(crate) fn invalidate_calculations(&mut self, cos: &pdfcraft_cos::Document) {
+        self.cos = cos.clone();
+        self.displays.clear();
+        self.calculations = None;
     }
 }
 
@@ -240,7 +256,7 @@ impl Scripts for JsRunner {
             .collect();
         let states = std::sync::Arc::new(states);
         let ev = pdfcraft_js::Event::field(event.name(), &target.name, value);
-        let calculations = calculations_for_script(&self.cos, fields, script);
+        let calculations = if script.contains("calculateNow") { self.calculations(fields) } else { std::sync::Arc::new(Vec::new()) };
         let o = pdfcraft_js::run_shared_calculations_shared(
             script,
             &ev,

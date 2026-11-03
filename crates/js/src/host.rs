@@ -14,6 +14,7 @@ pub(crate) struct Host {
     pub(crate) doc: DocInfo,
     pub(crate) calculations: Arc<Vec<(String, String)>>,
     pub(crate) calculate_depth: usize,
+    pub(crate) calculate_steps: usize,
     /// Bytes of text kept in alerts, console lines and requests, against [`xfa::MAX_PAYLOAD`].
     pub(crate) kept: usize,
     /// Alerts, console lines and requests the limits left out.

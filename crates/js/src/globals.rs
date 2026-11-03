@@ -168,14 +168,25 @@ fn calculate_now(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsVa
     };
     let result = (|| {
         for (name, script) in calculations.iter() {
+            {
+                let mut h = host(ctx)?.borrow_mut();
+                if h.calculate_steps >= super::run::MAX_CALCULATE_STEPS {
+                    return Err(error("calculateNow evaluation limit exceeded"));
+                }
+                h.calculate_steps = h.calculate_steps.saturating_add(1);
+            }
             let Some(field) = host(ctx)?.borrow().fields.iter().find(|f| f.name == *name).cloned() else { continue };
             if let Some(why) = super::run::refuse(script) {
-                return Err(error(why));
+                host(ctx)?.borrow_mut().print(format!("calculation script for {name} failed: {why}"));
+                continue;
             }
             let event = Event::field("Calculate", name, &field.value.first().cloned().unwrap_or_default());
             let object = event_object(ctx, &event);
             ctx.global_object().set(js_string!("event"), object.clone(), true, ctx)?;
-            ctx.eval(Source::from_bytes(&script))?;
+            if let Err(cause) = ctx.eval(Source::from_bytes(script)) {
+                host(ctx)?.borrow_mut().print(format!("calculation script for {name} failed: {cause}"));
+                continue;
+            }
             let rc = object.get(js_string!("rc"), ctx)?;
             if !rc.to_boolean() {
                 continue;

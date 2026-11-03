@@ -16,6 +16,9 @@ pub(crate) const MAX_PRINTF_OUTPUT_BYTES: usize = 1 << 20;
 /// length costs the script nothing but the host one string per item; real lists are tiny.
 pub(crate) const MAX_ARRAY_LENGTH: u64 = 1 << 20;
 
+/// Maximum calculated field scripts evaluated by `calculateNow()` during one JavaScript run.
+pub(crate) const MAX_CALCULATE_STEPS: usize = 4096;
+
 /// Deepest nesting of `(`, `[` and `{`.
 const MAX_BRACKET_DEPTH: usize = 64;
 
@@ -235,6 +238,7 @@ fn run_here(script: &str, event: &Event, doc: &DocInfo, fields: Arc<Vec<FieldSta
         doc: doc.clone(),
         calculations: Arc::clone(setup.calculations),
         calculate_depth: 0,
+        calculate_steps: 0,
         kept: 0,
         dropped: 0,
     }));
