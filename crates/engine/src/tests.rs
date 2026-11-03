@@ -5348,6 +5348,19 @@ fn calculate_now_updates_live_fields_in_one_undo_step() {
 }
 
 #[test]
+fn calculation_scripts_are_built_only_for_scripts_that_call_calculate_now() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("calculate-list.pdf", None, Arc::new(scripted_form()), None).unwrap();
+    crate::js::CALCULATION_SCRIPT_BUILDS.with(|calls| calls.set(0));
+
+    s.run_javascript(id, "1 + 1", None).unwrap();
+    assert_eq!(crate::js::CALCULATION_SCRIPT_BUILDS.with(std::cell::Cell::get), 0);
+
+    s.run_javascript(id, "calculateNow();", None).unwrap();
+    assert_eq!(crate::js::CALCULATION_SCRIPT_BUILDS.with(std::cell::Cell::get), 1);
+}
+
+#[test]
 fn calculate_now_uses_calculation_order_and_bounds_recursion() {
     let mut s = Session::new().with_clock(|| 1_700_000_000);
     let id = s.open("calculate-chain.pdf", None, Arc::new(scripted_form()), None).unwrap();

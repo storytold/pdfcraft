@@ -108,7 +108,7 @@ pub fn run(script: &str, event: &Event, doc: &DocInfo, fields: &[FieldState], do
 /// context; the first field write copies the snapshot, so neither the caller nor another
 /// script can observe uncommitted writes. Read-only calculations avoid copying the whole form.
 pub fn run_shared(script: &str, event: &Event, doc: &DocInfo, fields: Arc<Vec<FieldState>>, doc_scripts: &[String], limits: Limits) -> Outcome {
-    run_shared_calculations(script, event, doc, fields, doc_scripts, &[], limits)
+    run_shared_calculations(script, event, doc, fields, doc_scripts, &Arc::new(Vec::new()), limits)
 }
 
 /// Like [`run_shared`], with the document's ordered calculated fields available to
@@ -120,6 +120,19 @@ pub fn run_shared_calculations(
     fields: Arc<Vec<FieldState>>,
     doc_scripts: &[String],
     calculations: &[(String, String)],
+    limits: Limits,
+) -> Outcome {
+    run_shared_calculations_shared(script, event, doc, fields, doc_scripts, &Arc::new(calculations.to_vec()), limits)
+}
+
+/// Like [`run_shared_calculations`], sharing its ordered calculation scripts with the context.
+pub fn run_shared_calculations_shared(
+    script: &str,
+    event: &Event,
+    doc: &DocInfo,
+    fields: Arc<Vec<FieldState>>,
+    doc_scripts: &[String],
+    calculations: &Arc<Vec<(String, String)>>,
     limits: Limits,
 ) -> Outcome {
     let failed = |why: String| Outcome { rc: true, value: event.value.clone(), change: event.change.clone(), error: Some(why), ..Default::default() };
@@ -200,7 +213,7 @@ fn doc_error(index: usize, error: &dyn std::fmt::Display) -> String {
 struct ScriptSetup<'a> {
     doc_scripts: &'a [(usize, &'a str)],
     skipped: &'a [(usize, String)],
-    calculations: &'a [(String, String)],
+    calculations: &'a Arc<Vec<(String, String)>>,
 }
 
 fn run_here(script: &str, event: &Event, doc: &DocInfo, fields: Arc<Vec<FieldState>>, setup: ScriptSetup<'_>, limits: Limits) -> Outcome {
@@ -220,7 +233,7 @@ fn run_here(script: &str, event: &Event, doc: &DocInfo, fields: Arc<Vec<FieldSta
         console: Vec::new(),
         requests: Vec::new(),
         doc: doc.clone(),
-        calculations: setup.calculations.to_vec(),
+        calculations: Arc::clone(setup.calculations),
         calculate_depth: 0,
         kept: 0,
         dropped: 0,

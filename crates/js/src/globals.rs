@@ -154,7 +154,7 @@ fn calculate_now(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsVa
             return Err(error("calculateNow recursion limit exceeded"));
         }
         h.calculate_depth += 1;
-        h.calculations.clone()
+        Arc::clone(&h.calculations)
     };
     let previous_event = match ctx.global_object().get(js_string!("event"), ctx) {
         Ok(event) => event,
@@ -167,12 +167,12 @@ fn calculate_now(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsVa
         }
     };
     let result = (|| {
-        for (name, script) in calculations {
-            let Some(field) = host(ctx)?.borrow().fields.iter().find(|f| f.name == name).cloned() else { continue };
-            if let Some(why) = super::run::refuse(&script) {
+        for (name, script) in calculations.iter() {
+            let Some(field) = host(ctx)?.borrow().fields.iter().find(|f| f.name == *name).cloned() else { continue };
+            if let Some(why) = super::run::refuse(script) {
                 return Err(error(why));
             }
-            let event = Event::field("Calculate", &name, &field.value.first().cloned().unwrap_or_default());
+            let event = Event::field("Calculate", name, &field.value.first().cloned().unwrap_or_default());
             let object = event_object(ctx, &event);
             ctx.global_object().set(js_string!("event"), object.clone(), true, ctx)?;
             ctx.eval(Source::from_bytes(&script))?;
@@ -184,7 +184,7 @@ fn calculate_now(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsVa
             let value = text(&value, ctx)?;
             let shared = host(ctx)?;
             let mut h = shared.borrow_mut();
-            if let Some((index, _)) = h.fields.iter().enumerate().find(|(_, f)| f.name == name) {
+            if let Some((index, _)) = h.fields.iter().enumerate().find(|(_, f)| f.name == *name) {
                 let target = Arc::make_mut(&mut h.fields).get_mut(index).ok_or_else(|| error("the field is no longer available"))?;
                 target.value = vec![value];
                 h.changed.insert(index);

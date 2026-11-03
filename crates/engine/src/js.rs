@@ -185,6 +185,8 @@ impl JsRunner {
 }
 
 fn calculation_scripts(cos: &pdfcraft_cos::Document, fields: &[Field]) -> Vec<(String, String)> {
+    #[cfg(test)]
+    CALCULATION_SCRIPT_BUILDS.with(|calls| calls.set(calls.get().saturating_add(1)));
     pdfcraft_forms::calculation_order(cos, fields)
         .fields
         .iter()
@@ -200,6 +202,15 @@ fn calculation_scripts(cos: &pdfcraft_cos::Document, fields: &[Field]) -> Vec<(S
             Some((field.name.clone(), script))
         })
         .collect()
+}
+
+#[cfg(test)]
+thread_local! {
+    pub(crate) static CALCULATION_SCRIPT_BUILDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+fn calculations_for_script(cos: &pdfcraft_cos::Document, fields: &[Field], script: &str) -> std::sync::Arc<Vec<(String, String)>> {
+    if script.contains("calculateNow") { std::sync::Arc::new(calculation_scripts(cos, fields)) } else { std::sync::Arc::new(Vec::new()) }
 }
 
 /// The Info dictionary as `this.info` keys (lower-case).
@@ -229,8 +240,8 @@ impl Scripts for JsRunner {
             .collect();
         let states = std::sync::Arc::new(states);
         let ev = pdfcraft_js::Event::field(event.name(), &target.name, value);
-        let calculations = calculation_scripts(&self.cos, fields);
-        let o = pdfcraft_js::run_shared_calculations(
+        let calculations = calculations_for_script(&self.cos, fields, script);
+        let o = pdfcraft_js::run_shared_calculations_shared(
             script,
             &ev,
             &self.doc,
@@ -323,8 +334,8 @@ impl Session {
             Some(t) => pdfcraft_js::Event { will_commit: false, ..pdfcraft_js::Event::field("Mouse Up", t, "") },
             None => pdfcraft_js::Event::doc("Console"),
         };
-        let calculations = calculation_scripts(&cos, &fields);
-        let mut o = pdfcraft_js::run_shared_calculations(
+        let calculations = calculations_for_script(&cos, &fields, script);
+        let mut o = pdfcraft_js::run_shared_calculations_shared(
             script,
             &event,
             &runner.doc,
