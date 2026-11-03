@@ -441,8 +441,8 @@ fn an_id_row_that_changes_the_label_s_shape_is_not_used() {
     set_current(Lang::EN);
     assert!(same_shape("{b} und {a}", "{a} and {b}"), "placeholders may be reordered");
     assert!(!same_shape("Öffnen {name…", "Open…"), "a placeholder left open");
-    assert!(!same_shape("Öffnen name}…", "Open…"), "a `}` without its `{`");
-    assert!(!same_shape("{name}} öffnen", "Open {name}"), "a second `}`");
+    assert!(!same_shape("Öffnen name}…", "Open…"), "a closing brace without its opening one");
+    assert!(!same_shape("{name}} öffnen", "Open {name}"), "a second closing brace");
 }
 
 /// Command ids go by PdfCraft's own `@id` rows only: the shared catalog's are keyed by the other
