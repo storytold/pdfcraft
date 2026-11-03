@@ -15,21 +15,7 @@ fn fixture() -> Document {
         b"[6 0 R]",                                                                 // 5
         b"<< /Type /Annot /Subtype /Stamp /Rect [100 100 200 150] /Name /Approved /Foo (kept) >>", // 6
     ];
-    let mut out = b"%PDF-1.7\n".to_vec();
-    let mut offsets = Vec::new();
-    for (i, o) in objs.iter().enumerate() {
-        offsets.push(out.len());
-        out.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
-        out.extend_from_slice(o);
-        out.extend_from_slice(b"\nendobj\n");
-    }
-    let xref = out.len();
-    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
-    for o in offsets {
-        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
-    }
-    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
-    Document::open(Arc::new(out)).expect("opens")
+    Document::open(Arc::new(pdfcraft_testkit::Pdf::new().objs(objs.iter()).build())).expect("opens")
 }
 
 fn meta(id: &str) -> Meta {
@@ -982,21 +968,7 @@ fn the_eraser_cuts_strokes_and_removes_empty_drawings() {
 
 /// A one-page document from object bodies (object 1 is the catalog, 3 the page).
 fn document_of(objs: &[&[u8]]) -> Document {
-    let mut out = b"%PDF-1.7\n".to_vec();
-    let mut offsets = Vec::new();
-    for (i, o) in objs.iter().enumerate() {
-        offsets.push(out.len());
-        out.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
-        out.extend_from_slice(o);
-        out.extend_from_slice(b"\nendobj\n");
-    }
-    let xref = out.len();
-    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
-    for o in offsets {
-        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
-    }
-    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
-    Document::open(Arc::new(out)).expect("opens")
+    Document::open(Arc::new(pdfcraft_testkit::Pdf::new().objs(objs.iter()).build())).expect("opens")
 }
 
 #[test]
@@ -1757,19 +1729,7 @@ fn a_link_batch_with_a_bad_entry_creates_no_objects() {
 }
 
 fn doc_of(objs: &[String]) -> Document {
-    let mut out = b"%PDF-1.7\n".to_vec();
-    let mut offsets = Vec::new();
-    for (i, o) in objs.iter().enumerate() {
-        offsets.push(out.len());
-        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
-    }
-    let xref = out.len();
-    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
-    for o in offsets {
-        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
-    }
-    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
-    Document::open(Arc::new(out)).expect("opens")
+    Document::open(Arc::new(pdfcraft_testkit::Pdf::new().objs(objs.iter()).build())).expect("opens")
 }
 
 #[test]

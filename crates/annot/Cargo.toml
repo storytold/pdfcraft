@@ -18,3 +18,4 @@ percent-encoding = { workspace = true }
 
 [dev-dependencies]
 hayro-syntax = { workspace = true }
+pdfcraft-testkit = { workspace = true }
