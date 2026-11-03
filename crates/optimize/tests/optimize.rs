@@ -2570,6 +2570,20 @@ fn links_and_bookmarks_to_other_documents_are_discarded_and_links_within_stay() 
 }
 
 #[test]
+fn discarding_a_remote_action_keeps_the_links_local_destination() {
+    let (mut doc, p, _) =
+        linked_doc(|_, p| vec![link_with(Some(action("GoToR", None)), Some(Object::Array(vec![Object::Ref(p), Object::name("Fit")])))], &[]);
+    let report = optimize(&mut doc, &Settings { discard_external_refs: true, ..Settings::default() }).unwrap();
+    assert_eq!(report.external_links, 1);
+    let bytes = write_full(&doc, &SaveOptions::default()).unwrap();
+    let reopened = Document::open(Arc::new(bytes)).unwrap();
+    let links = annots_of(&reopened, p);
+    assert_eq!(links.len(), 1);
+    assert!(links[0].get(b"A").is_none());
+    assert_eq!(links[0].get(b"Dest"), Some(&Object::Array(vec![Object::Ref(p), Object::name("Fit")])));
+}
+
+#[test]
 fn repeated_indirect_remote_link_is_removed_from_one_page() {
     let (mut doc, p, _) = linked_doc(
         |doc, _| {
@@ -2707,6 +2721,31 @@ fn a_long_chain_of_indirect_actions_stays_indirect_and_reads_back_after_saving()
     let reopened = Document::open(Arc::new(bytes)).unwrap();
     let a = annots_of(&reopened, p)[0].get(b"A").cloned().unwrap();
     assert_eq!(chain(&reopened, &a), vec!["URI"; 130], "every web link reads back");
+}
+
+#[test]
+fn promoted_action_chains_read_back_after_saving() {
+    let (doc, p, _) = linked_doc(
+        |doc, _| {
+            let tail = (0..126).fold(action("Named", None), |next, _| action("Named", Some(next)));
+            let first = doc.add(tail);
+            let next = Object::Array(vec![Object::Ref(first), action("URI", None)]);
+            let link = doc.add(link_with(Some(action("GoToR", Some(next))), None));
+            vec![Object::Ref(link)]
+        },
+        &[],
+    );
+    let bytes = write_full(&doc, &SaveOptions::default()).unwrap();
+    let mut doc = Document::open(Arc::new(bytes)).unwrap();
+    let original = annots_of(&doc, p)[0].get(b"A").cloned().unwrap();
+    assert_eq!(chain(&doc, &original).len(), 129);
+    let report = optimize(&mut doc, &Settings { discard_external_refs: true, ..Settings::default() }).unwrap();
+    assert_eq!(report.external_links, 1);
+    let bytes = write_full(&doc, &SaveOptions::default()).unwrap();
+    let reopened = Document::open(Arc::new(bytes)).unwrap();
+    let a = annots_of(&reopened, p)[0].get(b"A").cloned().unwrap();
+    let expected: Vec<_> = std::iter::repeat_n("Named".to_string(), 127).chain(["URI".to_string()]).collect();
+    assert_eq!(chain(&reopened, &a), expected);
 }
 
 #[test]

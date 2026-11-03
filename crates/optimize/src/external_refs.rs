@@ -219,7 +219,7 @@ impl Walk {
                 match rest {
                     Some(Kept::Now(v)) => {
                         let mut d = d.clone();
-                        set_next(&mut d, v);
+                        set_next(doc, &mut d, v);
                         Kept::Now(vec![Object::Dict(d)])
                     }
                     _ => Kept::Same,
@@ -230,13 +230,16 @@ impl Walk {
     }
 }
 
-fn set_next(d: &mut Dict, mut v: Vec<Object>) {
+fn set_next(doc: &mut Document, d: &mut Dict, mut v: Vec<Object>) {
     match v.len() {
         0 => {
             d.remove(b"Next");
         }
         1 => d.set(b"Next".to_vec(), v.remove(0)),
-        _ => d.set(b"Next".to_vec(), Object::Array(v)),
+        _ => {
+            let next = v.into_iter().map(|a| if matches!(a, Object::Dict(_) | Object::Array(_)) { Object::Ref(doc.add(a)) } else { a }).collect();
+            d.set(b"Next".to_vec(), Object::Array(next));
+        }
     }
 }
 
@@ -278,8 +281,8 @@ fn strip_action(doc: &mut Document, a: &Object, owner: ObjRef) -> Result<Option<
     let Some(mut d) = doc.resolve(&first).as_dict().cloned() else { return Ok(Some(None)) };
     let mut next = d.get(b"Next").map(|n| listed(doc, n)).unwrap_or_default();
     next.extend(v);
-    set_next(&mut d, next);
-    Ok(Some(Some(Object::Dict(d))))
+    set_next(doc, &mut d, next);
+    Ok(Some(Some(Object::Ref(doc.add(Object::Dict(d))))))
 }
 
 /// The outline walk: bookmarks stored as their own objects wait on `stack`; those stored inside
