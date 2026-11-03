@@ -503,29 +503,57 @@ fn password_fields(doc: &Document) -> Vec<Field> {
 /// again only makes the answer cautious. It reads only `/Ff`, `/Kids` and `/Parent`, so a save
 /// or recovery snapshot of a form without such a field doesn't build every [`Field`]. Like
 /// [`fields`], it looks at the form's field tree and at the widgets on the pages, which may be
-/// missing from `/Fields`. Each dictionary is visited once and at most 64 levels deep.
+/// missing from `/Fields`, together with the whole tree above and below them that [`fields`]
+/// adopts. Each dictionary is visited once.
+///
+/// It must never answer `false` for a form whose [`fields`] include a password field, or a typed
+/// password would be saved. So where it can't look as far as [`fields`] may (a branch deeper than
+/// the field walk's limit, which depends on the order the tree is visited in, or a `/Parent`
+/// chain too long to follow), it answers `true` and the caller reads every field.
 pub(crate) fn has_password_flag(doc: &Document) -> bool {
+    const MAX_FIELD_DEPTH: usize = 64;
     let sets_it = |r: ObjRef| doc.get(r).as_dict().and_then(|d| field_flags(doc, d)).is_some_and(|ff| ff & flags::PASSWORD != 0);
-    let top = acroform(doc).and_then(|af| af.get(b"Fields").map(|o| doc.resolve(o)).and_then(|o| o.as_array().cloned())).unwrap_or_default();
-    let mut stack: Vec<(Object, usize)> = top.into_iter().map(|o| (o, 0)).collect();
+    let kids_of =
+        |r: ObjRef| doc.get(r).as_dict().and_then(|d| d.get(b"Kids").map(|k| doc.resolve(k)).and_then(|k| k.as_array().cloned())).unwrap_or_default();
     let mut seen = std::collections::HashSet::new();
-    while let Some((o, depth)) = stack.pop() {
-        let Object::Ref(r) = o else { continue };
-        if depth > 64 || !seen.insert(r) {
-            continue;
+    // Whether a dictionary below `start` sets the flag, or the walk was cut short.
+    let subtree = |start: Vec<Object>, seen: &mut std::collections::HashSet<ObjRef>| {
+        let mut stack: Vec<(Object, usize)> = start.into_iter().map(|o| (o, 0)).collect();
+        while let Some((o, depth)) = stack.pop() {
+            let Object::Ref(r) = o else { continue };
+            if !seen.insert(r) {
+                continue;
+            }
+            if depth > MAX_FIELD_DEPTH || sets_it(r) {
+                return true;
+            }
+            stack.extend(kids_of(r).into_iter().map(|k| (k, depth + 1)));
         }
-        if sets_it(r) {
-            return true;
-        }
-        let kids = doc.get(r).as_dict().and_then(|d| d.get(b"Kids").map(|k| doc.resolve(k)).and_then(|k| k.as_array().cloned())).unwrap_or_default();
-        stack.extend(kids.into_iter().map(|k| (k, depth + 1)));
+        false
+    };
+    let top = acroform(doc).and_then(|af| af.get(b"Fields").map(|o| doc.resolve(o)).and_then(|o| o.as_array().cloned())).unwrap_or_default();
+    if subtree(top, &mut seen) {
+        return true;
     }
-    // Widgets on the pages, and the fields above them.
-    page_refs(doc).into_iter().any(|p| {
+    // Widgets on the pages, the fields above them, and the fields below the topmost one.
+    for p in page_refs(doc) {
         let annots =
             doc.get(p).as_dict().and_then(|d| d.get(b"Annots").map(|a| doc.resolve(a)).and_then(|a| a.as_array().cloned())).unwrap_or_default();
-        annots.iter().filter_map(Object::as_ref).filter(|r| !seen.contains(r)).any(|r| field_chain(doc, r).into_iter().any(sets_it))
-    })
+        // Every widget's `/Parent` chain is read, even one already reached from `/Fields`: the
+        // field walk can adopt it under a different parent there. Each chain is at most
+        // MAX_FIELD_DEPTH long, and `subtree` returns at once for a root it has seen.
+        for r in annots.iter().filter_map(Object::as_ref) {
+            let chain = field_chain(doc, r);
+            if chain.len() >= MAX_FIELD_DEPTH || chain.iter().copied().any(sets_it) {
+                return true;
+            }
+            let root = chain.last().copied().unwrap_or(r);
+            if subtree(vec![Object::Ref(root)], &mut seen) {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// Whether any text field with the Password flag holds a value in `doc`.
