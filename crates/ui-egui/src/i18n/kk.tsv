@@ -2604,6 +2604,12 @@ animation effects	Off	Өшірулі
 	Extract the selected pages…	Таңдалған беттерді шығарып алу…
 	Delete the selected pages	Таңдалған беттерді жою
 
+# Sanitize: removing a signed document's signatures (#4622) (AI-assisted, not separately native-reviewed)
+	Sanitize document and remove signatures	Құжаттан құпия деректерді тазарту және қолтаңбаларды жою
+	Sanitize document and flatten signatures	Құжаттан құпия деректерді тазарту және қолтаңбаларды тегістеу
+	Keep only how the signatures look, as page content (a name or date they show stays visible)	Қолтаңбалардың тек сыртқы түрін бет мазмұны ретінде сақтау (олар көрсететін аты-жөн немесе күн көрінетін болып қалады)
+	Remove the digital signatures: their fields, how they look on the page and their validation data	Цифрлық қолтаңбаларды жою: олардың өрістері, беттегі көрінісі және тексеру деректері
+	This document is digitally signed. Sanitizing rewrites the whole file, which invalidates the signatures, so it can only go ahead without them.	Бұл құжатқа цифрлық қолтаңба қойылған. Тазарту бүкіл файлды қайта жазады, бұл қолтаңбаларды жарамсыз етеді, сондықтан оны тек оларсыз жалғастыруға болады.
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Осы жауаптың параметрлері
 	Export value	Экспорт мәні

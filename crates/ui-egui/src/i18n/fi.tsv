@@ -2877,6 +2877,12 @@ theme	Appearance	Teema
 	Extract the selected pages…	Pura valitut sivut…
 	Delete the selected pages	Poista valitut sivut
 
+# Sanitize: removing a signed document's signatures (#4622) (AI-assisted, not separately native-reviewed)
+	Sanitize document and remove signatures	Puhdista asiakirja ja poista allekirjoitukset
+	Sanitize document and flatten signatures	Puhdista asiakirja ja litistä allekirjoitukset
+	Keep only how the signatures look, as page content (a name or date they show stays visible)	Säilytä vain allekirjoitusten ulkoasu sivun sisältönä (niissä näkyvä nimi tai päivämäärä pysyy näkyvissä)
+	Remove the digital signatures: their fields, how they look on the page and their validation data	Poista digitaaliset allekirjoitukset: niiden kentät, niiden ulkoasu sivulla ja niiden vahvistustiedot
+	This document is digitally signed. Sanitizing rewrites the whole file, which invalidates the signatures, so it can only go ahead without them.	Tämä asiakirja on allekirjoitettu digitaalisesti. Puhdistus kirjoittaa koko tiedoston uudelleen, mikä mitätöi allekirjoitukset, joten se voi jatkua vain ilman niitä.
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Tämän vastauksen asetukset
 

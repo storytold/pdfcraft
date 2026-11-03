@@ -2837,6 +2837,12 @@ theme	Appearance	स्वरूप
 	Extract the selected pages…	चयनित पृष्ठ निकालें…
 	Delete the selected pages	चयनित पृष्ठ हटाएँ
 
+# Sanitize: removing a signed document's signatures (#4622) (AI-assisted, not separately native-reviewed)
+	Sanitize document and remove signatures	दस्तावेज़ सैनिटाइज़ करें और हस्ताक्षर हटाएँ
+	Sanitize document and flatten signatures	दस्तावेज़ सैनिटाइज़ करें और हस्ताक्षर समतल करें
+	Keep only how the signatures look, as page content (a name or date they show stays visible)	केवल हस्ताक्षरों का रूप पृष्ठ सामग्री के रूप में रखें (उनमें दिखने वाला नाम या तारीख दिखाई देती रहती है)
+	Remove the digital signatures: their fields, how they look on the page and their validation data	डिजिटल हस्ताक्षर हटाएँ: उनके फ़ील्ड, पृष्ठ पर उनका रूप और उनका सत्यापन डेटा
+	This document is digitally signed. Sanitizing rewrites the whole file, which invalidates the signatures, so it can only go ahead without them.	यह दस्तावेज़ डिजिटल रूप से हस्ताक्षरित है। सैनिटाइज़ करने से पूरी फ़ाइल फिर से लिखी जाती है, जिससे हस्ताक्षर अमान्य हो जाते हैं, इसलिए यह केवल उनके बिना आगे बढ़ सकता है।
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	इस जवाब के विकल्प
 

@@ -766,3 +766,50 @@ fn signing_preserves_destination_opening_attributes() {
     assert_eq!(xattr::get(&dest, "com.apple.quarantine").unwrap(), Some(b"0082;1234;Preview;".to_vec()));
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// #4622: Sanitize on a signed document waits for the signatures to be given up, then removes
+/// them with everything else, as one undo step.
+#[test]
+fn sanitizing_a_signed_document_asks_to_remove_its_signatures() {
+    let p12 = concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12");
+    let digital_id = pdfcraft_engine::sign::pkcs12::open(&std::fs::read(p12).unwrap(), "test").unwrap();
+    let mut s = pdfcraft_engine::Session::new();
+    let id = s.open("contract.pdf", None, std::sync::Arc::new(FIXTURE.to_vec()), None).unwrap();
+    let opts = pdfcraft_engine::SignOptions { page: 0, rect: Some([20.0, 20.0, 180.0, 60.0]), ..Default::default() };
+    let bytes = s.sign(id, &digital_id, opts).unwrap().to_vec();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("contract.pdf", None, bytes).expect("opens");
+        app
+    });
+    h.run_steps(4);
+    let signed = |h: &Harness<'static, PdfCraftApp>| h.state().session.get(h.state().views[0].id).unwrap().is_signed();
+    assert!(signed(&h));
+    h.state_mut().execute("redact.sanitize");
+    h.run_steps(2);
+    h.get_by_label_contains("This document is digitally signed");
+    assert!(h.query_by(|n| n.label().as_deref() == Some("Sanitize") && n.is_disabled()).is_some(), "Sanitize waits for the signatures to go");
+    h.get_by_label("Remove the digital signatures: their fields, how they look on the page and their validation data").click();
+    h.run_steps(2);
+    h.get_by_label("Sanitize").click();
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, None);
+    assert!(!signed(&h));
+    assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Sanitize document and remove signatures"));
+    // The next time it asks again.
+    h.state_mut().undo();
+    h.run_steps(2);
+    assert!(signed(&h));
+    h.state_mut().execute("redact.sanitize");
+    h.run_steps(2);
+    assert!(h.state().sanitize_signatures.is_none());
+    assert!(h.query_by(|n| n.label().as_deref() == Some("Sanitize") && n.is_disabled()).is_some());
+    // Keeping only their look is the other choice.
+    h.get_by_label("Keep only how the signatures look, as page content (a name or date they show stays visible)").click();
+    h.run_steps(2);
+    h.get_by_label("Sanitize").click();
+    h.run_steps(3);
+    assert!(!signed(&h));
+    assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Sanitize document and flatten signatures"));
+}

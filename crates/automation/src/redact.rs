@@ -201,7 +201,18 @@ impl Automation {
     }
 
     pub(crate) fn doc_remove_hidden(&mut self, a: &Args) -> Result<Value> {
+        // What happens to digital signatures, which a sanitized rewrite can't keep (#4622).
+        let signatures = match a.opt_str("signatures")? {
+            None | Some("abort") => None,
+            Some("remove") => Some(pdfcraft_engine::SanitizeSignatures::Remove),
+            Some("flatten") => Some(pdfcraft_engine::SanitizeSignatures::Flatten),
+            Some(other) => return Err(ToolError::InvalidArgs(format!("signatures must be abort, remove or flatten, not {other:?}"))),
+        };
+        if signatures.is_some() && a.get("categories").is_some() {
+            return Err(ToolError::InvalidArgs("signatures: remove or flatten goes with Sanitize (no categories)".into()));
+        }
         let edit = match a.get("categories") {
+            None if let Some(how) = signatures => Edit::SanitizeSigned(how),
             None => Edit::Sanitize,
             Some(_) => {
                 let which = a

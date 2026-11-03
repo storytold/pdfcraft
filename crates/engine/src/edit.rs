@@ -13,7 +13,7 @@ mod labels;
 mod run;
 
 pub use labels::{BATCH_LABELS, EDIT_LABELS};
-pub(crate) use run::{EditCtx, check_permission, run_edit};
+pub(crate) use run::{EditCtx, check_permission, run_edit, unsigns};
 
 /// Edits that can be applied to a document. Page indices are 0-based.
 #[derive(Clone, Debug, PartialEq)]
@@ -540,6 +540,10 @@ pub enum Edit {
     },
     /// Sanitize Document: every category, then a full rewrite on save.
     Sanitize,
+    /// Sanitize Document on a signed file, removing its digital signatures or keeping only how they
+    /// look (`/Perms` and `/DSS` go either way), which a sanitized rewrite would invalidate anyway
+    /// (#4622). Allowed on signed documents, unlike every other full rewrite.
+    SanitizeSigned(pdfcraft_redact::sanitize::Signatures),
     /// An XFA form made an ordinary (static) PDF form: the XFA packets, `/NeedsRendering` and
     /// PdfCraft's private keys go, the pages as laid out and the fields with their values
     /// stay, so every viewer shows the same form and none lays it out again. Its scripts no

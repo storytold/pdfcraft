@@ -2818,6 +2818,12 @@ theme	Appearance	ظاهر
 	a field named {name} already exists	فیلدی با نام {name} از قبل وجود دارد
 	Today	امروز
 
+# Sanitize: a signed document's signatures (#4622) (AI-assisted, not separately native-reviewed)
+	Sanitize document and remove signatures	پاک‌سازی سند و حذف امضاها
+	Sanitize document and flatten signatures	پاک‌سازی سند و تخت‌کردن امضاها
+	Keep only how the signatures look, as page content (a name or date they show stays visible)	فقط ظاهر امضاها به‌صورت محتوای صفحه بماند (نام یا تاریخی که نشان می‌دهند دیده می‌شود)
+	Remove the digital signatures: their fields, how they look on the page and their validation data	حذف امضاهای دیجیتال: فیلدهایشان، ظاهرشان در صفحه و داده‌های اعتبارسنجی‌شان
+	This document is digitally signed. Sanitizing rewrites the whole file, which invalidates the signatures, so it can only go ahead without them.	این سند امضای دیجیتال دارد. پاک‌سازی کل فایل را دوباره می‌نویسد و امضاها را نامعتبر می‌کند، پس فقط بدون آن‌ها انجام می‌شود.
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	گزینه‌های این پاسخ
 

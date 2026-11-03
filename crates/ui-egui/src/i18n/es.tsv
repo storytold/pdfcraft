@@ -2929,6 +2929,12 @@ theme	Appearance	Aspecto
 	Extract the selected pages…	Extraer las páginas seleccionadas…
 	Delete the selected pages	Eliminar las páginas seleccionadas
 
+# Sanitize: removing a signed document's signatures (#4622) (AI-assisted, not separately native-reviewed)
+	Sanitize document and remove signatures	Sanear el documento y quitar las firmas
+	Sanitize document and flatten signatures	Sanear el documento y acoplar las firmas
+	Keep only how the signatures look, as page content (a name or date they show stays visible)	Conservar solo el aspecto de las firmas, como contenido de la página (el nombre o la fecha que muestran siguen visibles)
+	Remove the digital signatures: their fields, how they look on the page and their validation data	Quitar las firmas digitales: sus campos, su aspecto en la página y sus datos de validación
+	This document is digitally signed. Sanitizing rewrites the whole file, which invalidates the signatures, so it can only go ahead without them.	Este documento está firmado digitalmente. Sanearlo reescribe todo el archivo, lo que invalida las firmas, así que solo puede continuar sin ellas.
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opciones de esta respuesta
 	Export value	Valor de exportación

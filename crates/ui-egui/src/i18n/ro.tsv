@@ -2867,6 +2867,12 @@ theme	Appearance	Aspect
 	Extract the selected pages…	Extrage paginile selectate…
 	Delete the selected pages	Șterge paginile selectate
 
+# Sanitize: removing a signed document's signatures (#4622) (AI-assisted, not separately native-reviewed)
+	Sanitize document and remove signatures	Igienizare document și eliminarea semnăturilor
+	Sanitize document and flatten signatures	Igienizare document și aplatizarea semnăturilor
+	Keep only how the signatures look, as page content (a name or date they show stays visible)	Păstrează doar aspectul semnăturilor, ca și conținut al paginii (un nume sau o dată afișată rămâne vizibilă)
+	Remove the digital signatures: their fields, how they look on the page and their validation data	Elimină semnăturile digitale: câmpurile lor, cum arată pe pagină și datele lor de validare
+	This document is digitally signed. Sanitizing rewrites the whole file, which invalidates the signatures, so it can only go ahead without them.	Acest document este semnat digital. Igienizarea rescrie tot fișierul, ceea ce invalidează semnăturile, așa că poate continua doar fără ele.
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opțiuni pentru acest răspuns
 

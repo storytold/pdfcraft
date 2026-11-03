@@ -562,13 +562,14 @@ pub fn tools() -> Vec<ToolDef> {
         t(
             "doc_remove_hidden",
             "Remove hidden information / Sanitize",
-            "Remove the listed categories (see doc_hidden_info), or every category when none are listed (Sanitize Document). Form fields are flattened so their values stay visible. The next save rewrites the whole file. Undoable until saved.",
+            "Remove the listed categories (see doc_hidden_info), or every category when none are listed (Sanitize Document). Form fields are flattened so their values stay visible. The next save rewrites the whole file. Undoable until saved. A signed document is refused (signatures: abort, the default), because the rewrite would invalidate its signatures; signatures: remove sanitizes it anyway and removes every signature field with its widgets and appearance, /Perms and /DSS, valid or not; signatures: flatten does the same but keeps how each signature looks, as page content.",
         )
         .destructive()
         .with(schema(
             json!({
                 "doc": doc(),
                 "categories": { "type": "array", "items": { "type": "string", "enum": ["metadata", "attachments", "comments", "form-fields", "hidden-text", "hidden-layers", "bookmarks", "links-actions-scripts", "private-data"] } },
+                "signatures": { "type": "string", "enum": ["abort", "remove", "flatten"], "description": "Sanitize only: what happens to digital signatures. abort (default) refuses a signed document; remove removes them; flatten keeps only their look as page content." },
             }),
             &["doc"],
         )),
