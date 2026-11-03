@@ -1,5 +1,5 @@
-use super::as_docx::{hex, rgb8};
-use super::layout::{Item, Page, items};
+use super::as_docx::{hex, rgb8, room_for};
+use super::layout::{Image, Item, Page, items};
 
 /// Whether a character may appear in the output. XML 1.0 forbids the C0 controls other than tab,
 /// line feed and carriage return, and U+FFFE/U+FFFF. Text extracted from PDFs often holds them
@@ -44,6 +44,7 @@ img{{max-width:100%}}hr{{border:0;border-top:1px solid #ccc;margin:2em 0}}\
 table{{border-collapse:collapse;margin:1em 0}}td,th{{border:1px solid #999;padding:2px 6px;vertical-align:top}}</style>\n</head>\n<body>\n",
         esc(title)
     );
+    let mut embedded: Vec<(String, &Image)> = Vec::new();
     for it in items(pages) {
         match it {
             Item::Para(runs, lvl) => {
@@ -91,10 +92,14 @@ table{{border-collapse:collapse;margin:1em 0}}td,th{{border:1px solid #999;paddi
                 }
                 s.push_str("</table>\n");
             }
-            Item::Img(im) => {
+            // Each place a picture is drawn embeds it whole, so the places count against the
+            // media limits, as Word's pictures do; one past them is left out.
+            Item::Img(im) if room_for(&embedded, im) => {
                 let mime = if im.ext == "jpg" { "image/jpeg" } else { "image/png" };
                 s.push_str(&format!("<p><img alt=\"\" src=\"data:{mime};base64,{}\"></p>\n", base64(&im.bytes)));
+                embedded.push((String::new(), im));
             }
+            Item::Img(_) => {}
             Item::PageBreak => s.push_str("<hr>\n"),
         }
     }

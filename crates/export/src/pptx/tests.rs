@@ -391,3 +391,18 @@ fn pptx_opens_in_libreoffice() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A picture drawn in many places is one media part, referred to from each place; the package
+/// stays within the media limits however many places there are.
+#[test]
+fn pptx_packages_a_repeated_picture_once() {
+    let mut p = sample_page();
+    let one = p.images[0].clone();
+    p.images = std::iter::repeat_n(one, 2 * crate::as_docx::MAX_MEDIA).collect();
+    let bytes = pptx(&[p], "Deck");
+    let rels = part(&bytes, "ppt/slides/_rels/slide1.xml.rels");
+    assert_eq!(rels.matches("relationships/image\"").count(), 2 * crate::as_docx::MAX_MEDIA, "every place refers to the picture");
+    assert!(rels.contains("Target=\"../media/image1.png\"") && !rels.contains("image2."), "one media part");
+    assert_eq!(part(&bytes, "ppt/slides/slide1.xml").matches("<p:pic>").count(), 2 * crate::as_docx::MAX_MEDIA);
+    assert_eq!(bytes.windows(20).filter(|w| *w == b"ppt/media/image1.png").count(), 2, "its local header and central directory entry");
+}
