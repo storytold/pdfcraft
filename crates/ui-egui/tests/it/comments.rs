@@ -4035,7 +4035,25 @@ fn edit_composer_preserves_only_typewriter_whitespace(kind: u8) {
     };
     support::input::double_click(&mut h, point);
     h.run_steps(3);
-    let c = h.state().views[0].comments.composer.as_ref().expect("double-click opens the edit composer");
+    if kind == 2 {
+        // A double-click on a sticky note opens its pop-up window, as in Acrobat; its edit
+        // composer is the page menu's "Edit text…".
+        let popup_open = |h: &Harness<'static, PdfCraftApp>| {
+            let s = h.state();
+            let doc = s.session.get(s.views[0].id).unwrap();
+            doc.info.annotations.iter().find(|a| a.page == 1 && a.index == 0).unwrap().popup.is_some_and(|p| p.open)
+        };
+        assert!(h.state().views[0].comments.composer.is_none(), "a note's double-click opens no composer");
+        assert!(popup_open(&h), "a note's double-click opens its pop-up");
+        h.hover_at(point);
+        h.run_steps(1);
+        h.event(egui::Event::PointerButton { pos: point, button: egui::PointerButton::Secondary, pressed: true, modifiers: Default::default() });
+        h.event(egui::Event::PointerButton { pos: point, button: egui::PointerButton::Secondary, pressed: false, modifiers: Default::default() });
+        h.run_steps(3);
+        h.get_all_by_label("Edit text…").last().unwrap().click();
+        h.run_steps(3);
+    }
+    let c = h.state().views[0].comments.composer.as_ref().expect("the edit composer is open");
     assert_eq!(c.page, 1);
     assert_eq!(c.kind, pdfcraft_ui_egui::comments::ComposerKind::Edit(0));
     h.input_mut().events.push(egui::Event::Text(" edited\n\n".into()));
