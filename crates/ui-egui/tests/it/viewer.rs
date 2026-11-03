@@ -248,6 +248,8 @@ fn the_find_box_stays_put_while_the_status_changes() {
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
     h.run_steps(2);
+    let found = h.state().views[0].find.as_ref().unwrap().matches.len();
+    assert_eq!(found, 15, "the search ended at the deadline, so \"1 of 15\" was never shown");
     assert!((left(&h) - empty).abs() < 0.5, "\"1 of 15\" moved the box from {empty} to {}", left(&h));
     h.state_mut().views[0].find.as_mut().unwrap().query = "nowhere".into();
     h.state_mut().views[0].rerun_find();

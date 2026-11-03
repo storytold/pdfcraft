@@ -327,3 +327,30 @@ pub(super) fn find_bar(view: &mut DocView, pages: usize, area: Rect, ui: &mut eg
         view.find_step(forward);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    /// #5957: the status width the find bar starts with fits every "Searching… s/p" the count can
+    /// show, in the app's own faces, whose digits differ in width, so the counting phase never
+    /// widens the bar (an integration test can't hold page text back to see that phase drawn).
+    #[test]
+    fn the_steady_width_fits_every_count_while_searching() {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(crate::theme::font_definitions());
+        let mut checked = 0;
+        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let font = crate::theme::regular(12.0);
+            for pages in [9, 400, 1234] {
+                let steady = super::steady_status_width(ui, pages, &font);
+                for searched in 0..=pages {
+                    let text = crate::i18n::fmt(tl!("Searching… {s}/{p}"), &[("s", &searched.to_string()), ("p", &pages.to_string())]);
+                    let width = ui.painter().layout_no_wrap(text, font.clone(), egui::Color32::WHITE).size().x;
+                    assert!(width <= steady + 0.01, "{searched}/{pages} needs {width}, more than {steady}");
+                    checked += 1;
+                }
+            }
+        });
+        output.drop_without_applying_deltas();
+        assert_eq!(checked, 10 + 401 + 1235);
+    }
+}
