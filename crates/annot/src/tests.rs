@@ -2385,3 +2385,27 @@ fn a_3d_poster_fitted_to_its_rectangle_with_rounding_is_taken() {
     };
     assert_eq!(add_3d_model(&mut doc, &new, &meta("m")), Ok(1));
 }
+
+#[test]
+fn indirect_typewriter_names_keep_outer_whitespace_in_summaries() {
+    let mut doc = fixture();
+    let intent = Object::Ref(doc.add(Object::name("FreeTextTypeWriter")));
+    let page = page_refs(&doc).unwrap()[0];
+    let mut entries = annots(&doc, page);
+    let Object::Dict(annotation) = &mut entries[0] else { panic!("fixture annotation is inline") };
+    annotation.set(b"Subtype".to_vec(), Object::name("FreeText"));
+    annotation.set(b"IT".to_vec(), intent);
+    let contents = " \nAda\n\nLovelace\n\n ";
+    annotation.set(b"Contents".to_vec(), PdfString::text(contents));
+    set_annots(&mut doc, page, entries).unwrap();
+    let check = |doc: &Document| {
+        let list = summaries(doc);
+        let summary = list.iter().find(|a| a.page == 0 && a.index == 0).expect("direct Subtype is listed");
+        assert_eq!(summary.contents.as_deref(), Some(contents), "indirect typewriter intent preserves outer whitespace");
+        assert_eq!(summary.subtype, "FreeText");
+        assert_eq!(summary.intent.as_deref(), Some("FreeTextTypeWriter"));
+        assert!(summary.fill_sign, "indirect intent still identifies a Fill & Sign mark");
+    };
+    check(&doc);
+    check(&reopen(&doc));
+}
