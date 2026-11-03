@@ -1727,6 +1727,10 @@ fn unreadable_objects_are_listed_with_the_reason() {
     let scanned = doc.clone();
     assert_eq!(scanned.scan_objects_checked().filter(|(_, o)| o.is_err()).count(), 1);
     assert_eq!(doc.unreadable_objects(), lines, "the scan found the same object");
+    let unread = Document::open(Arc::new(with_unreadable_info())).unwrap();
+    let scanned = unread.clone();
+    assert_eq!(scanned.scan_objects_checked().filter(|(_, o)| o.is_err()).count(), 1);
+    assert_eq!(unread.unreadable_objects(), lines, "a clone's scan reaches the original");
     let mut edited = doc.clone();
     edited.set(ObjRef::new(3, 0), Object::Dict(Dict::new()));
     assert!(edited.unreadable_objects().is_empty(), "the edit replaced it");
