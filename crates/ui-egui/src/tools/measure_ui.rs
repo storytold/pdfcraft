@@ -367,6 +367,25 @@ fn finish(state: &mut MeasureView, pending: &mut Option<Edit>, doc: &Document, p
         state.cancel();
     }
 }
+const RATIO_WIDTH: f32 = 56.0;
+
+/// Width of the unwrapped drawing-scale row, including its combo arrow and scroll gutter.
+pub(crate) fn minimum_width(ui: &egui::Ui) -> f32 {
+    let text_width =
+        |text: &str, style| egui::WidgetText::from(text).into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, style).size().x;
+    let spacing = ui.spacing();
+    (text_width(tl!("Drawing scale"), egui::TextStyle::Body)
+        + RATIO_WIDTH
+        + text_width(tl!("Common scales"), egui::TextStyle::Button)
+        + 2.0 * spacing.button_padding.x
+        + spacing.icon_width
+        + 3.0 * spacing.item_spacing.x
+        + spacing.scroll.bar_width
+        + spacing.scroll.bar_inner_margin
+        + spacing.scroll.bar_outer_margin)
+        .ceil()
+}
+
 pub(crate) fn panel(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
     egui::ScrollArea::vertical().id_salt("measure-panel").show(ui, |ui| panel_body(app, ui, t));
 }
@@ -446,7 +465,7 @@ fn panel_body(app: &mut PdfCraftApp, ui: &mut egui::Ui, _t: &Tokens) {
     let fields = scale_fields(state);
     ui.horizontal(|ui| {
         ui.label(tl!("Drawing scale")).on_hover_text(tl!("Applying a scale switches units to m / mm."));
-        let typed = ui.add(crate::widgets::line(&mut state.ratio_text).hint_text("1:100").desired_width(56.0).char_limit(16));
+        let typed = ui.add(crate::widgets::line(&mut state.ratio_text).hint_text("1:100").desired_width(RATIO_WIDTH).char_limit(16));
         typed.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, tl!("Scale")));
         state.ratio_dirty |= typed.changed();
         if typed.lost_focus() && std::mem::take(&mut state.ratio_dirty) {

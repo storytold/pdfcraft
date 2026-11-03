@@ -328,6 +328,7 @@ pub fn command(app: &mut PdfCraftApp, reset: bool, params: &Value) -> Result<Val
 
 struct Content<'a> {
     app: &'a mut PdfCraftApp,
+    tools_min_width: f32,
 }
 
 impl PaneContent<Pane> for Content<'_> {
@@ -354,7 +355,10 @@ impl PaneContent<Pane> for Content<'_> {
     }
 
     fn size_range(&self, pane: &Pane) -> RangeInclusive<f32> {
-        pane.range()
+        match pane {
+            Pane::Tools => self.tools_min_width..=TOOLS_RANGE.end().max(self.tools_min_width),
+            Pane::Side => pane.range(),
+        }
     }
 
     fn movable(&self, _pane: &Pane) -> bool {
@@ -435,6 +439,12 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let t = crate::theme::Tokens::get(ui.ctx());
     let labels = PaneLabels { resize: crate::i18n::t("Resize panels").to_owned(), ..PaneLabels::default() };
     let panels = app.side_panels;
+    // Only Measure needs its translated scale row to raise the pane's normal minimum.
+    let tools_min_width = if app.left == crate::LeftPanel::Tool("measure") && app.active.is_some() {
+        TOOLS_RANGE.start().max(crate::measure_ui::minimum_width(ui) + TOOLS_GUTTERS)
+    } else {
+        *TOOLS_RANGE.start()
+    };
     // Columns: both panes may share the right edge, Tools outermost, as `open` lists them.
     let host = egui::Id::unique("pdfcraft-side-panels");
     let output = PaneHost::new(host)
@@ -443,7 +453,7 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         .labels(labels)
         .frame(egui::Frame::NONE.fill(t.panel))
         .body_margin(egui::Margin::ZERO)
-        .show(ui, &open, |pane| Some(state_of(&panels, *pane)), &mut Content { app });
+        .show(ui, &open, |pane| Some(state_of(&panels, *pane)), &mut Content { app, tools_min_width });
 
     keep_resize_edges_off_scrollbars(ui, host, &open);
     for request in output.requests {
