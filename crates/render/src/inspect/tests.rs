@@ -1870,3 +1870,55 @@ trailer << /Root 1 0 R >>
     assert!((p.width - 3874.96).abs() < 0.1, "width expected ~3874.96, got {}", p.width);
     assert!((p.height - 5493.54).abs() < 0.1, "height expected ~5493.54, got {}", p.height);
 }
+
+/// A file whose document information is in its XMP metadata, as PDF 2.0 asks (#3672), with
+/// `/Info` disagreeing where it states anything at all — the shape a file edited by a tool
+/// that writes only one of the two has.
+fn xmp_info_pdf(properties: &str) -> Vec<u8> {
+    let packet = format!(
+        "<?xpacket begin=\"\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\
+         <x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\
+         <rdf:Description rdf:about=\"\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\" \
+         xmlns:pdf=\"http://ns.adobe.com/pdf/1.3/\">{properties}</rdf:Description></rdf:RDF></x:xmpmeta>\
+         <?xpacket end=\"w\"?>"
+    );
+    format!(
+        "%PDF-1.7\n\
+         1 0 obj << /Type /Catalog /Pages 2 0 R /Metadata 5 0 R >> endobj\n\
+         2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >> endobj\n\
+         3 0 obj << /Type /Page /Parent 2 0 R >> endobj\n\
+         4 0 obj << /Title (From Info) /Author (From Info) /Creator (Only in Info) >> endobj\n\
+         5 0 obj << /Type /Metadata /Subtype /XML /Length {} >>\nstream\n{packet}\nendstream endobj\n\
+         trailer << /Root 1 0 R /Info 4 0 R >>\n%%EOF",
+        packet.len()
+    )
+    .into_bytes()
+}
+
+#[test]
+fn document_information_stated_in_the_xmp_metadata_is_read() {
+    let info = inspect(
+        Arc::new(xmp_info_pdf(
+            "<dc:title><rdf:Alt><rdf:li xml:lang=\"fr-FR\">Rapport</rdf:li>\
+             <rdf:li xml:lang=\"x-default\">Quarterly report</rdf:li></rdf:Alt></dc:title>\
+             <dc:creator><rdf:Seq><rdf:li>Ada</rdf:li><rdf:li>Grace</rdf:li></rdf:Seq></dc:creator>\
+             <pdf:Keywords>q4, report</pdf:Keywords>",
+        )),
+        None,
+    )
+    .expect("opens");
+    // The packet is what a viewer shows, so it wins where the two disagree. A language
+    // alternative answers with its x-default, wherever in the list that is, and an ordered
+    // array with every author, as Document Properties lists them.
+    assert_eq!(info.title.as_deref(), Some("Quarterly report"));
+    assert_eq!(info.author.as_deref(), Some("Ada, Grace"));
+    assert_eq!(info.keywords.as_deref(), Some("q4, report"));
+    // What the packet doesn't state is still read from /Info, and what neither states is
+    // nothing: the packet replaces an entry, it doesn't blank the dictionary.
+    assert_eq!(info.creator.as_deref(), Some("Only in Info"));
+    assert_eq!((info.subject.as_deref(), info.producer.as_deref()), (None, None));
+    // A property stated empty is no value, so /Info keeps standing.
+    let empty =
+        inspect(Arc::new(xmp_info_pdf("<dc:title><rdf:Alt><rdf:li xml:lang=\"x-default\"></rdf:li></rdf:Alt></dc:title>")), None).expect("opens");
+    assert_eq!(empty.title.as_deref(), Some("From Info"));
+}

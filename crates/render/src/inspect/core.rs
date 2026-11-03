@@ -1,3 +1,5 @@
+use pdfcraft_cos::xmp;
+
 use super::annotations::MAX_LINK_ATTACHMENT_TEXT_BYTES;
 use super::model::{AttachmentSource, PageInfo, Xfa};
 use super::navigation::text_string;
@@ -161,6 +163,16 @@ impl<'a> Inspector<'a> {
         me
     }
 
+    /// The catalog's XMP metadata packet, as text. A packet that isn't a stream, doesn't decode
+    /// within [`xmp::MAX_PACKET_BYTES`] or isn't UTF-8 (which XMP in a PDF is, ISO 32000-2
+    /// §14.3.2) is no packet: the information dictionary then stands on its own.
+    fn xmp_packet(&self, catalog: &Dictionary) -> Option<String> {
+        let stream = self.resolve(catalog.get(b"Metadata").ok()?);
+        let stream = stream.as_stream().ok()?;
+        let bytes = stream.decompressed_content_with_limit(xmp::MAX_PACKET_BYTES).ok()?;
+        String::from_utf8(bytes).ok()
+    }
+
     pub(super) fn fill(&self, info: &mut DocInfo) {
         // lopdf drops /Encrypt from the trailer once it has decrypted the file.
         info.encrypted = self.doc.encrypted();
@@ -190,6 +202,24 @@ impl<'a> Inspector<'a> {
                 .collect();
         }
         let Ok(catalog) = self.doc.catalog() else { return };
+        // PDF 2.0 deprecates the information dictionary for everything but the two dates
+        // (ISO 32000-2 §14.3.3), so a file may state its title only in its XMP metadata, and a
+        // file stating both is shown by its packet, which is what viewers read first (#3672).
+        if let Some(packet) = self.xmp_packet(catalog) {
+            let fields: [(&[u8], &mut Option<String>); 6] = [
+                (b"Title", &mut info.title),
+                (b"Author", &mut info.author),
+                (b"Subject", &mut info.subject),
+                (b"Keywords", &mut info.keywords),
+                (b"Creator", &mut info.creator),
+                (b"Producer", &mut info.producer),
+            ];
+            for (key, field) in fields {
+                if let Some(value) = xmp::mirrors_info(key).and_then(|name| xmp::property(&packet, name)) {
+                    *field = Some(value);
+                }
+            }
+        }
         info.tagged = catalog
             .get(b"MarkInfo")
             .ok()

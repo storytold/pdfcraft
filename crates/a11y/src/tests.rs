@@ -230,6 +230,39 @@ fn marked_as_an_indirect_reference_still_counts_as_tagged() {
     assert_eq!(status(&check(&pdf(&none, ""), &Options { rules: [Rule::TaggedPdf].into(), pages: None }), Rule::TaggedPdf), Status::Failed);
 }
 
+/// PDF 2.0 deprecates the information dictionary, so a PDF 2.0 file — every PDF/UA-2 file among
+/// them — states its title in its XMP metadata and may carry no `/Info` at all. The rule read
+/// `/Info /Title` alone and reported such a document as having no title (#3672).
+#[test]
+fn a_title_stated_only_in_the_xmp_metadata_counts_as_a_title() {
+    fn title_rule(bodies: &[String], trailer: &str) -> Status {
+        status(&check(&pdf(bodies, trailer), &Options { rules: [Rule::Title].into(), pages: None }), Rule::Title)
+    }
+    /// `good()` with its title moved out of `/Info` and into a `dc:title` holding `text`.
+    fn titled_by_xmp(text: &str) -> Vec<String> {
+        let mut bodies = good();
+        let packet = format!(
+            "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\
+             <rdf:Description rdf:about=\"\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\">\
+             <dc:title><rdf:Alt><rdf:li xml:lang=\"x-default\">{text}</rdf:li></rdf:Alt></dc:title>\
+             </rdf:Description></rdf:RDF></x:xmpmeta>"
+        );
+        let at = bodies.len() + 1;
+        bodies[0] = bodies[0].replace("/Pages 2 0 R", &format!("/Pages 2 0 R /Metadata {at} 0 R"));
+        bodies.push(format!("<< /Type /Metadata /Subtype /XML /Length {} >>\nstream\n{packet}\nendstream", packet.len()));
+        bodies
+    }
+
+    // The packet states the title and the trailer has no /Info.
+    assert_eq!(title_rule(&titled_by_xmp("Quarterly report"), ""), Status::Passed);
+    // /Info /Title alone still passes, as it must for every PDF 1.x file.
+    assert_eq!(title_rule(&good(), "/Info 8 0 R"), Status::Passed);
+    // A title stated in neither place still fails, and a packet that states one but leaves it
+    // empty states no title: neither turns the rule into one that always passes.
+    assert_eq!(title_rule(&good(), ""), Status::Failed);
+    assert_eq!(title_rule(&titled_by_xmp(""), ""), Status::Failed);
+}
+
 /// A tagged document that passes every automatic rule.
 fn good() -> Vec<String> {
     vec![

@@ -21,6 +21,7 @@ pub mod page_labels;
 mod parser;
 mod security;
 mod writer;
+pub mod xmp;
 
 pub use budget::{DecodeBudget, ImageBudget, MAX_PAGE_DECODED, MAX_PAGE_FORMS};
 pub use bytes::Bytes;

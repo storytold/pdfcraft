@@ -6,7 +6,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
-use pdfcraft_cos::{DecodeBudget, Dict, Document, ObjRef, Object};
+use pdfcraft_cos::{DecodeBudget, Dict, Document, ObjRef, Object, xmp};
 use pdfcraft_model::Page;
 
 use crate::{Finding, Rule};
@@ -166,6 +166,16 @@ fn resolved(doc: &Document, o: &Object) -> std::sync::Arc<Object> {
     value
 }
 
+/// The catalog's XMP metadata packet, as text. A packet that isn't a stream, doesn't decode
+/// within [`xmp::MAX_PACKET_BYTES`] or isn't UTF-8 (which XMP in a PDF is, ISO 32000-2 §14.3.2)
+/// is no packet: the information dictionary then stands on its own.
+fn xmp_packet(doc: &Document, cat: &Dict) -> Option<String> {
+    match &*doc.resolve(cat.get(b"Metadata")?) {
+        Object::Stream(s) => String::from_utf8(s.decoded_within(xmp::MAX_PACKET_BYTES).ok()?).ok(),
+        _ => None,
+    }
+}
+
 fn text_of(doc: &Document, d: &Dict, key: &[u8]) -> Option<String> {
     d.get(key).map(|o| doc.resolve(o)).and_then(|o| o.as_string().map(|s| s.to_text())).map(|s| s.trim().to_owned()).filter(|s| !s.is_empty())
 }
@@ -214,7 +224,10 @@ pub(crate) fn document_rule(doc: &Document, rule: Rule, pages: &[Page], scan: &S
         Rule::Title => {
             let mut out = Vec::new();
             let info = doc.trailer().get(b"Info").map(|i| doc.resolve(i)).and_then(|i| i.as_dict().cloned()).unwrap_or_default();
-            if text_of(doc, &info, b"Title").is_none() {
+            // PDF 2.0 deprecates the information dictionary for everything but the two dates
+            // (ISO 32000-2 §14.3.3), so a PDF 2.0 file — every PDF/UA-2 file among them — states
+            // its title in its XMP metadata as `dc:title` and may carry no `/Info` at all (#3672).
+            if text_of(doc, &info, b"Title").is_none() && xmp_packet(doc, &cat).and_then(|p| xmp::property(&p, "dc:title")).is_none() {
                 out.push(Finding::plain(None, "The document has no title"));
             }
             let shows = cat
