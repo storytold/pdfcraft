@@ -403,6 +403,11 @@ fn font_definitions_for_platform(prefer_hans: bool, platform: FontPolicyPlatform
             }
         }
     }
+    // JetBrains Mono's symbols last among the bundled faces, for characters none of the faces above
+    // has: craft-menu labels its overflow menu "⋯" (U+22EF), which Inter lacks, and egui draws a
+    // missing glyph as a box. Last, so it draws nothing an earlier face has; installed system faces
+    // still follow it.
+    fonts.families.entry(FontFamily::Proportional).or_default().push("JetBrainsMono".to_owned());
     let fallback: Vec<String> = fonts.families[&FontFamily::Proportional].clone();
     for (fam, primary) in [("medium", "Inter-Medium"), ("semibold", "Inter-SemiBold")] {
         let mut stack = vec![primary.to_owned()];
