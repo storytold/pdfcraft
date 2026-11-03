@@ -1,5 +1,5 @@
 use super::screenshot::{Geometry, MAX_IMAGE_BYTES, retried_reservation, screenshot_png};
-use super::*;
+use super::{Arc, Control, Host, Pending, Reply, Sender, Value, not_drawn, timeout};
 
 /// A screenshot pending in the `finish_pending` pass, with ownership of its reply.
 struct PendingCapture {

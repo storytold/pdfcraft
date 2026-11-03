@@ -2,7 +2,7 @@ use super::build::{escape, fresh_datasets, xml_name};
 use super::merge::{Op, WRAP_CLOSE, WRAP_OPEN, qname, start_tag_end};
 use super::values::Want;
 use super::write::{DatasetsWrite, rewrite};
-use super::*;
+use super::{DataPath, Document, MAX_DEPTH, MAX_NODES, ObjRef, Object, XFA_DATA_NS, XfaError};
 
 /// Data read from a file, held as a tree so it can be written into any packet with the
 /// prefix that packet uses, never as the file's own markup.
@@ -192,7 +192,7 @@ pub fn parse_data_file(text: &str, expect_root: Option<&str>) -> Result<Vec<Impo
     if crate::xml_nesting_depth(text) > MAX_IMPORT_DEPTH {
         return Err(XfaError::TooLarge(format!("the data file nests more than {MAX_IMPORT_DEPTH} levels deep")));
     }
-    let opts = roxmltree::ParsingOptions { allow_dtd: false, nodes_limit: MAX_NODES };
+    let opts = roxmltree::ParsingOptions { allow_dtd: false, nodes_limit: MAX_NODES, ..Default::default() };
     let parsed = roxmltree::Document::parse_with_options(text, opts).map_err(|e| XfaError::Malformed(format!("the data file is not XML: {e}")))?;
     let root = parsed.root_element();
     let local = root.tag_name().name();
@@ -304,14 +304,14 @@ pub fn export_data(doc: &Document, xdp: bool, pdf_name: &str) -> Result<String, 
 /// data element), each with the namespaces it uses declared on it. `Ok(None)`: no datasets
 /// element; `Err`: the text can't be read.
 fn datasets_markup(text: &str) -> Result<Option<(String, String)>, ()> {
-    let opts = roxmltree::ParsingOptions { allow_dtd: false, nodes_limit: MAX_NODES };
+    let opts = || roxmltree::ParsingOptions { allow_dtd: false, nodes_limit: MAX_NODES, ..Default::default() };
     if crate::xml_nesting_depth(text) > crate::MAX_XML_DEPTH {
         return Err(());
     }
     let wrapped = format!("{WRAP_OPEN}{text}{WRAP_CLOSE}");
-    let (src, parsed) = match roxmltree::Document::parse_with_options(text, opts) {
+    let (src, parsed) = match roxmltree::Document::parse_with_options(text, opts()) {
         Ok(d) => (text, d),
-        Err(_) => (wrapped.as_str(), roxmltree::Document::parse_with_options(&wrapped, opts).map_err(|_| ())?),
+        Err(_) => (wrapped.as_str(), roxmltree::Document::parse_with_options(&wrapped, opts()).map_err(|_| ())?),
     };
     let Some(ds) = parsed.descendants().find(|n| n.is_element() && n.tag_name().name() == "datasets") else { return Ok(None) };
     let data = ds.children().find(|n| n.is_element() && n.tag_name().name() == "data");

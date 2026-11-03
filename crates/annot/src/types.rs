@@ -1,5 +1,5 @@
 use super::create::normalize;
-use super::*;
+use super::{ObjRef, appearance};
 
 pub type Rgb = [f64; 3];
 
@@ -355,6 +355,10 @@ pub enum Shape {
         start: LineEnding,
         end: LineEnding,
     },
+    /// Translucent freehand highlighting, stored as ink with a distinct intent.
+    FreehandHighlight {
+        strokes: Vec<Vec<[f64; 2]>>,
+    },
     /// Freehand strokes (Draw tool).
     Ink {
         strokes: Vec<Vec<[f64; 2]>>,
@@ -474,6 +478,7 @@ pub fn rect_quad(r: [f64; 4]) -> [f64; 8] {
 }
 
 impl Shape {
+    /// Return the PDF `/Subtype` name for this annotation shape.
     pub fn subtype(&self) -> &'static str {
         match self {
             Shape::Note { .. } => "Text",
@@ -481,7 +486,7 @@ impl Shape {
             Shape::Rectangle { .. } => "Square",
             Shape::Oval { .. } => "Circle",
             Shape::Line { .. } => "Line",
-            Shape::Ink { .. } | Shape::Signature { .. } => "Ink",
+            Shape::Ink { .. } | Shape::FreehandHighlight { .. } | Shape::Signature { .. } => "Ink",
             Shape::TextBox { .. } | Shape::Typewriter { .. } | Shape::Callout { .. } => "FreeText",
             Shape::Mark { .. } | Shape::Stamp { .. } | Shape::CustomStamp { .. } | Shape::TypedSignature { .. } => "Stamp",
             Shape::Redact { .. } => "Redact",
@@ -563,6 +568,33 @@ pub struct Style {
     pub fill: Option<Rgb>,
 }
 
+/// The style properties changed by one annotation edit. `None` leaves a property unchanged.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct StyleChange {
+    pub color: Option<Rgb>,
+    pub opacity: Option<f64>,
+    pub width: Option<f64>,
+    pub endings: Option<Vec<LineEnding>>,
+}
+
+impl StyleChange {
+    pub fn new(color: Option<Rgb>, opacity: Option<f64>, width: Option<f64>, endings: Option<Vec<LineEnding>>) -> Self {
+        Self { color, opacity, width, endings }
+    }
+}
+
+/// Inputs for replacing selected text with a grouped strikeout and caret annotation.
+pub struct TextReplacement<'a> {
+    pub page: usize,
+    pub quads: &'a [[f64; 8]],
+    pub replacement: &'a str,
+    pub author: &'a str,
+    pub strike: &'a Style,
+    pub caret: &'a Style,
+    pub strike_meta: &'a Meta,
+    pub caret_meta: &'a Meta,
+}
+
 impl Default for Style {
     fn default() -> Self {
         Self { color: [1.0, 0.82, 0.0], opacity: 1.0, width: 1.0, fill: None }
@@ -583,6 +615,7 @@ impl Style {
             }
             Shape::Callout { .. } => ([0.0, 0.0, 0.0], 1.0),
             Shape::Caret { .. } | Shape::Attachment { .. } => ([0.0, 0.47, 0.84], 1.0),
+            Shape::FreehandHighlight { .. } => return Self { color: [1.0, 0.94, 0.0], opacity: 0.35, width: 14.0, fill: None },
             Shape::Ink { .. } => ([0.0, 0.4, 0.87], 2.0),
             Shape::TextBox { .. } | Shape::Typewriter { .. } => ([0.0, 0.0, 0.0], 0.0),
             Shape::Mark { .. } => ([0.0, 0.0, 0.0], 1.5),

@@ -1,6 +1,6 @@
 use super::types::{Modification, Status, TrustStore};
 use super::validate::{is_doc_timestamp, validate_doc_timestamp, validate_into};
-use super::*;
+use super::{Arc, Dict, DigestAlg, Document, HashMap, HashSet, ObjRef, Object, SignatureInfo};
 
 /// Digests of signed byte ranges (and parsed signed revisions), kept across revalidations of
 /// one document: incremental edits only append to the file, so the signed bytes and their
