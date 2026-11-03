@@ -90,8 +90,10 @@ let report = optimize_with_progress(&mut doc, &settings, &mut |stage| keep_going
     `/JBIG2Globals` of its own. With JBIG2 asked for, the images stored as JBIG2, up to 16 at a
     time, then share one symbol dictionary in a new `/JBIG2Globals` stream, holding the marks found
     in more than one of them: those that come out smaller that way, when together they save more
-    than it takes. Redacting one of them stores the others of its group again without it, so the
-    group keeps that to 15 images, and each image's decode reads the dictionary of 16 at most. A
+    than it takes. Only images that redaction can store again without it share one: image masks
+    and DeviceGray images, of at most 64 Mi pixels (redaction's limit); others are coded alone.
+    Redacting one of them stores the others of its group again without it, so the group keeps that
+    to 15 images, and each image's decode reads the dictionary of 16 at most. A
     JBIG2 image whose page isn't its size (PdfCraft's
     renderer draws the whole page into the image) is left alone. With Retain, a resampled image
     keeps its kind of compression (CCITT, JBIG2, or Flate) and nothing else changes; an image of

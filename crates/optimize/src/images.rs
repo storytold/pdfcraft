@@ -1229,6 +1229,21 @@ const SHARED_IMAGES: usize = 16;
 /// The most bytes of 1-bit samples a group holds: a group is coded before it would pass them.
 const SHARED_BYTES: usize = 64 << 20;
 
+/// The most pixels an image sharing a dictionary has: redaction's own limit (64 Mi) on the images
+/// it stores again (see [`shares`]).
+const SHARED_PIXELS: u64 = 1 << 26;
+
+/// Whether an image stored as JBIG2 (its dictionary `d`) may share a dictionary: only one that
+/// redaction can store again without it, an image mask or a DeviceGray image, named directly, of
+/// at most [`SHARED_PIXELS`]. Redacting one image of a group stores the others so, as the
+/// dictionary can hold the shapes of marks under the area, and refuses the redaction for one it
+/// can't; an image of another colour space, though redaction may take it, is coded alone.
+fn shares(d: &Dict) -> bool {
+    let side = |key: &[u8]| d.int(key).and_then(|v| u64::try_from(v).ok());
+    let within = side(b"Width").zip(side(b"Height")).is_some_and(|(w, h)| w.saturating_mul(h) <= SHARED_PIXELS);
+    within && (matches!(d.get(b"ImageMask"), Some(Object::Bool(true))) || d.name(b"ColorSpace") == Some(b"DeviceGray"))
+}
+
 /// An image the run stored as JBIG2, held to be stored again sharing a dictionary ([`share`]): its
 /// 1-bit samples, `width` × `height`.
 struct Held {
@@ -1350,6 +1365,7 @@ pub(crate) fn run(
             }
             jbig2 |= new.dict.name(b"Filter") == Some(b"JBIG2Decode");
             let size = (new.dict.int(b"Width"), new.dict.int(b"Height"));
+            let bits = bits.filter(|_| shares(&new.dict));
             doc.set(r, Object::Stream(new));
             hold(doc, r, size, bits, report);
             continue;
@@ -1379,6 +1395,7 @@ pub(crate) fn run(
                 report.images_recompressed += 1;
             }
             let size = (new.dict.int(b"Width"), new.dict.int(b"Height"));
+            let bits = bits.filter(|_| shares(&new.dict));
             doc.set(r, Object::Stream(new));
             hold(doc, r, size, bits, report);
             continue;
@@ -1428,6 +1445,29 @@ fn at_least_pdf_1_4(doc: &mut Document) -> Result<(), OptimizeError> {
 #[cfg(test)]
 mod dimension_tests {
     use super::*;
+
+    /// Only what redaction can store again without the dictionary shares one: an image mask, or
+    /// DeviceGray named directly, of at most 2^26 pixels.
+    #[test]
+    fn only_what_redaction_can_store_again_shares_a_dictionary() {
+        let dict = |entries: Vec<(&str, Object)>| {
+            let mut d = Dict::new();
+            for (k, v) in entries {
+                d.set(k.as_bytes().to_vec(), v);
+            }
+            d
+        };
+        let sized = |w: i64, h: i64, cs: Object| dict(vec![("Width", Object::Int(w)), ("Height", Object::Int(h)), ("ColorSpace", cs)]);
+        assert!(shares(&sized(8192, 8192, Object::name("DeviceGray"))));
+        assert!(!shares(&sized(8192, 8193, Object::name("DeviceGray"))), "a row past 2^26 pixels");
+        assert!(shares(&dict(vec![("Width", Object::Int(8)), ("Height", Object::Int(8)), ("ImageMask", Object::Bool(true))])));
+        let device_n =
+            Object::Array(vec![Object::name("DeviceN"), Object::Array(vec![Object::name("Black")]), Object::name("DeviceGray"), Object::Null]);
+        assert!(!shares(&sized(8, 8, device_n)));
+        assert!(!shares(&sized(8, 8, Object::name("CalGray"))));
+        assert!(!shares(&sized(8, 8, Object::Ref(ObjRef { num: 3, generation: 0 }))), "a colour space by reference");
+        assert!(!shares(&dict(vec![("ColorSpace", Object::name("DeviceGray"))])), "no size");
+    }
 
     #[test]
     fn pixel_reader_rejects_hostile_dimensions_before_decoding() {

@@ -1951,12 +1951,17 @@ fn black_and_white_images_become_jbig2() {
     assert!(r.image_bytes_after < as_g4.image_bytes_after, "JBIG2 {} bytes, Group 4 {}", r.image_bytes_after, as_g4.image_bytes_after);
     let images: Vec<Stream> = image_refs(&jbig2).into_iter().map(|i| stream(&jbig2, i)).collect();
     assert_eq!(images.len(), 3);
-    // The same text three times: the images share one symbol dictionary.
-    let globals = images[0].dict.get(b"DecodeParms").and_then(Object::as_dict).and_then(|d| d.reference(b"JBIG2Globals"));
-    assert!(globals.is_some());
+    // The same text three times: the grey image and the mask share one symbol dictionary, and the
+    // indexed image, which only those share, is coded alone.
+    let globals_of = |s: &Stream| s.dict.get(b"DecodeParms").and_then(Object::as_dict).map(|d| (d.len(), d.reference(b"JBIG2Globals")));
+    let is_indexed = |s: &Stream| s.dict.get(b"ColorSpace").and_then(Object::as_array).is_some();
+    let shared: Vec<_> = images.iter().filter(|s| !is_indexed(s)).map(globals_of).collect();
+    assert!(shared.len() == 2 && shared[0].is_some_and(|(n, g)| n == 1 && g.is_some()) && shared[0] == shared[1], "{shared:?}");
     for s in &images {
         assert_eq!(s.dict.name(b"Filter"), Some(&b"JBIG2Decode"[..]));
-        assert_eq!(s.dict.get(b"DecodeParms").and_then(Object::as_dict).map(|d| (d.len(), d.reference(b"JBIG2Globals"))), Some((1, globals)));
+        if is_indexed(s) {
+            assert!(!s.dict.contains(b"DecodeParms"));
+        }
     }
     assert!(images.iter().any(|s| s.dict.get(b"Decode") == Some(&decode)), "the decode array stays");
     let indexed_kept =
