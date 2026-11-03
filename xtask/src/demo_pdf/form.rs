@@ -38,6 +38,15 @@ struct Builder<'a> {
     fields: Vec<ObjectId>,
 }
 
+struct TextFieldSpec<'a> {
+    field: &'a str,
+    tooltip: &'a str,
+    rect: Rect,
+    value: &'a str,
+    display: Option<&'a str>,
+    quadding: i64,
+}
+
 pub fn build(doc: &mut Document, annotator: &mut Annotator, inputs: FormInputs<'_>) -> FormPage {
     let page = doc.new_object_id();
     let mut b = Builder { doc, fonts: inputs.fonts, page, widgets: Vec::new(), fields: Vec::new() };
@@ -48,26 +57,76 @@ pub fn build(doc: &mut Document, annotator: &mut Annotator, inputs: FormInputs<'
     section(&mut c, 612.0, "Contact");
     let row1 = 575.0;
     label(&mut c, LEFT, row1 + 24.0, "Full name");
-    b.text_field("name", "Full name", Rect::new(LEFT, row1, 296.0, row1 + 20.0), "Ada Typesetter", None, 0, |_| {});
+    b.text_field(
+        TextFieldSpec {
+            field: "name",
+            tooltip: "Full name",
+            rect: Rect::new(LEFT, row1, 296.0, row1 + 20.0),
+            value: "Ada Typesetter",
+            display: None,
+            quadding: 0,
+        },
+        |_| {},
+    );
     label(&mut c, COL2, row1 + 24.0, "Email");
-    b.text_field("email", "Email address", Rect::new(COL2, row1, RIGHT, row1 + 20.0), "ada@example.com", None, 0, |_| {});
+    b.text_field(
+        TextFieldSpec {
+            field: "email",
+            tooltip: "Email address",
+            rect: Rect::new(COL2, row1, RIGHT, row1 + 20.0),
+            value: "ada@example.com",
+            display: None,
+            quadding: 0,
+        },
+        |_| {},
+    );
 
     let row2 = 531.0;
     label(&mut c, LEFT, row2 + 24.0, "Date  (AFDate_FormatEx yyyy-mm-dd)");
-    b.text_field("date", "Date", Rect::new(LEFT, row2, 296.0, row2 + 20.0), "2026-09-30", None, 0, |d| {
-        d.set("AA", js_actions("AFDate_FormatEx(\"yyyy-mm-dd\");", "AFDate_KeystrokeEx(\"yyyy-mm-dd\");"));
-    });
+    b.text_field(
+        TextFieldSpec {
+            field: "date",
+            tooltip: "Date",
+            rect: Rect::new(LEFT, row2, 296.0, row2 + 20.0),
+            value: "2026-09-30",
+            display: None,
+            quadding: 0,
+        },
+        |d| {
+            d.set("AA", js_actions("AFDate_FormatEx(\"yyyy-mm-dd\");", "AFDate_KeystrokeEx(\"yyyy-mm-dd\");"));
+        },
+    );
     label(&mut c, COL2, row2 + 24.0, "Amount  (AFNumber_Format, right-aligned)");
-    b.text_field("amount", "Amount in US dollars", Rect::new(COL2, row2, RIGHT, row2 + 20.0), "1234.5", Some("$1,234.50"), 2, |d| {
-        d.set("AA", js_actions("AFNumber_Format(2, 0, 0, 0, \"$\", true);", "AFNumber_Keystroke(2, 0, 0, 0, \"$\", true);"));
-    });
+    b.text_field(
+        TextFieldSpec {
+            field: "amount",
+            tooltip: "Amount in US dollars",
+            rect: Rect::new(COL2, row2, RIGHT, row2 + 20.0),
+            value: "1234.5",
+            display: Some("$1,234.50"),
+            quadding: 2,
+        },
+        |d| {
+            d.set("AA", js_actions("AFNumber_Format(2, 0, 0, 0, \"$\", true);", "AFNumber_Keystroke(2, 0, 0, 0, \"$\", true);"));
+        },
+    );
 
     label(&mut c, LEFT, 510.0, "Comments  (multiline)");
     let comments = "PdfCraft renders this field from its own appearance stream, so it looks \
                     the same in every viewer. Edit it to see your viewer regenerate the text.";
-    b.text_field("comments", "Comments", Rect::new(LEFT, 446.0, RIGHT, 506.0), comments, None, 0, |d| {
-        d.set("Ff", 4096);
-    });
+    b.text_field(
+        TextFieldSpec {
+            field: "comments",
+            tooltip: "Comments",
+            rect: Rect::new(LEFT, 446.0, RIGHT, 506.0),
+            value: comments,
+            display: None,
+            quadding: 0,
+        },
+        |d| {
+            d.set("Ff", 4096);
+        },
+    );
 
     // --- Preferences -----------------------------------------------------------
     section(&mut c, 418.0, "Preferences");
@@ -239,17 +298,8 @@ impl Builder<'_> {
 
     /// A text field; `display` overrides the appearance text (for formatted values),
     /// `quadding` is 0 left, 1 centre, 2 right.
-    #[allow(clippy::too_many_arguments)]
-    fn text_field(
-        &mut self,
-        field: &str,
-        tooltip: &str,
-        r: Rect,
-        value: &str,
-        display: Option<&str>,
-        quadding: i64,
-        customise: impl FnOnce(&mut Dictionary),
-    ) {
+    fn text_field(&mut self, spec: TextFieldSpec<'_>, customise: impl FnOnce(&mut Dictionary)) {
+        let TextFieldSpec { field, tooltip, rect: r, value, display, quadding } = spec;
         let (w, h) = (r.w(), r.h());
         let mut d = self.widget_base(r);
         d.set("FT", "Tx");

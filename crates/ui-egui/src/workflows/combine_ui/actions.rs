@@ -1,7 +1,7 @@
 use super::files::{Preview, RowAction};
 use super::parts::{moved_pages, removed_pages, step_to};
 use super::view::expandable;
-use super::*;
+use super::{BTreeSet, PdfCraftApp};
 
 impl PdfCraftApp {
     pub(crate) fn combine_apply(&mut self, action: RowAction) {
@@ -29,11 +29,38 @@ impl PdfCraftApp {
             a => a,
         };
         // Page edits work on the list as parts.
+        let Some(action) = self.combine_page_action(action) else { return };
+        // A file's card clicked (or the list's keys): the files are selected, no page.
+        if matches!(action, RowAction::Click(..) | RowAction::SelectAll | RowAction::Step { .. }) {
+            self.combine_tab.selected_pages.clear();
+        }
         match action {
-            RowAction::ClickPage(id, nth, m) => return self.combine_click_page(id, nth, m),
+            RowAction::Click(..) | RowAction::SelectAll | RowAction::Step { .. } | RowAction::Unlock(..) => self.combine_select_action(action),
+            RowAction::MoveUp
+            | RowAction::MoveDown
+            | RowAction::Remove
+            | RowAction::RemoveFile(_)
+            | RowAction::Drop { .. }
+            | RowAction::DropAt { .. }
+            | RowAction::Sort(_) => {
+                self.combine_order_action(action);
+            }
+            // (Page edits were done above.)
+            RowAction::ClickPage(..) | RowAction::MovePages { .. } | RowAction::RemovePages(_) => {}
+            _ => self.combine_preview_action(action),
+        }
+    }
+
+    /// Page edits work on the list as parts. Returns the action back when it is not one.
+    fn combine_page_action(&mut self, action: RowAction) -> Option<RowAction> {
+        match action {
+            RowAction::ClickPage(id, nth, m) => {
+                self.combine_click_page(id, nth, m);
+                return None;
+            }
             RowAction::MovePages { page, revision, gap } => {
                 if revision != self.combine_tab.revision {
-                    return;
+                    return None;
                 }
                 let moving =
                     if self.combine_tab.selected_pages.contains(&page) { self.combine_tab.selected_pages.clone() } else { BTreeSet::from([page]) };
@@ -47,7 +74,7 @@ impl PdfCraftApp {
                 if let Some(moved) = moved_pages(&parts, &moving, gap, &mut new_id) {
                     self.combine_set_parts(moved);
                 }
-                return;
+                return None;
             }
             RowAction::RemovePages(one) => {
                 let removing = match one {
@@ -55,7 +82,7 @@ impl PdfCraftApp {
                     None => self.combine_tab.selected_pages.clone(),
                 };
                 if removing.is_empty() {
-                    return;
+                    return None;
                 }
                 let parts = self.combine_parts();
                 let next = &mut self.combine_tab.next_id;
@@ -68,14 +95,15 @@ impl PdfCraftApp {
                 if let Some(left) = removed_pages(&parts, &removing, &mut new_id) {
                     self.combine_set_parts(left);
                 }
-                return;
+                return None;
             }
             _ => {}
         }
-        // A file's card clicked (or the list's keys): the files are selected, no page.
-        if matches!(action, RowAction::Click(..) | RowAction::SelectAll | RowAction::Step { .. }) {
-            self.combine_tab.selected_pages.clear();
-        }
+        Some(action)
+    }
+
+    /// Selecting files, and asking for the passwords of locked ones.
+    fn combine_select_action(&mut self, action: RowAction) {
         let ids: Vec<u64> = self.combine_draft.iter().map(|f| f.id).collect();
         let n = ids.len();
         let index_of = |id: Option<u64>| id.and_then(|id| ids.iter().position(|x| *x == id));
@@ -129,6 +157,31 @@ impl PdfCraftApp {
                 tab.cursor = Some(id);
                 tab.reveal = Some(id);
             }
+            RowAction::Unlock(row, at) => {
+                let locked: BTreeSet<u64> = self.combine_draft.iter().filter(|f| f.lock.is_some()).map(|f| f.id).collect();
+                let rows: Vec<u64> = match row.and_then(|i| ids.get(i).copied()) {
+                    // A selected row brings the rest of the selection.
+                    Some(id) if tab.selected.contains(&id) => {
+                        ids.iter().copied().filter(|x| tab.selected.contains(x) && locked.contains(x)).collect()
+                    }
+                    Some(id) => {
+                        tab.selected = BTreeSet::from([id]);
+                        (tab.anchor, tab.cursor) = (Some(id), Some(id));
+                        vec![id]
+                    }
+                    None => ids.iter().copied().filter(|x| tab.selected.contains(x) && locked.contains(x)).collect(),
+                };
+                self.combine_ask_password(rows, at);
+            }
+            _ => {}
+        }
+    }
+
+    /// Moving, removing, dropping and sorting files.
+    fn combine_order_action(&mut self, action: RowAction) {
+        let ids: Vec<u64> = self.combine_draft.iter().map(|f| f.id).collect();
+        let tab = &mut self.combine_tab;
+        match action {
             RowAction::MoveUp | RowAction::MoveDown => {
                 let up = matches!(action, RowAction::MoveUp);
                 let selected: Vec<bool> = ids.iter().map(|id| tab.selected.contains(id)).collect();
@@ -181,6 +234,39 @@ impl PdfCraftApp {
                     self.combine_tab.cursor = None;
                 }
             }
+            RowAction::Drop { from, to } => {
+                let (Some(&dragged), Some(&target)) = (ids.get(from), ids.get(to)) else { return };
+                // Dragging a selected file takes the whole selection along.
+                let moving: BTreeSet<u64> = if tab.selected.contains(&dragged) { tab.selected.clone() } else { BTreeSet::from([dragged]) };
+                // Dropped on the selection itself: nothing to do.
+                if moving.contains(&target) {
+                    return;
+                }
+                // Below the row when dragged down, above it when dragged up.
+                self.combine_move_to_gap(moving, if from < to { to + 1 } else { to });
+            }
+            RowAction::DropAt { file, revision, gap } => {
+                // The list changed under the drag (e.g. undo): the gap no longer means the same.
+                if revision != tab.revision || !ids.contains(&file) {
+                    return;
+                }
+                let moving: BTreeSet<u64> = if tab.selected.contains(&file) { tab.selected.clone() } else { BTreeSet::from([file]) };
+                self.combine_move_to_gap(moving, gap);
+            }
+            RowAction::Sort(key) => {
+                let ascending = !matches!(tab.sort, Some((k, true)) if k == key);
+                self.combine_record();
+                self.combine_sort(key, ascending);
+            }
+            _ => {}
+        }
+    }
+
+    /// Previewing and expanding files.
+    fn combine_preview_action(&mut self, action: RowAction) {
+        let ids: Vec<u64> = self.combine_draft.iter().map(|f| f.id).collect();
+        let tab = &mut self.combine_tab;
+        match action {
             RowAction::Preview(id) => {
                 if ids.contains(&id) {
                     self.combine_tab.preview = Some(Preview { file: id, at: 0, page: None, pages: None });
@@ -228,48 +314,7 @@ impl PdfCraftApp {
                     self.combine_tab.preview = Some(Preview { file: id, at, page: None, pages: None });
                 }
             }
-            // (Page edits were done above.)
-            RowAction::ClickPage(..) | RowAction::MovePages { .. } | RowAction::RemovePages(_) => {}
-            RowAction::Drop { from, to } => {
-                let (Some(&dragged), Some(&target)) = (ids.get(from), ids.get(to)) else { return };
-                // Dragging a selected file takes the whole selection along.
-                let moving: BTreeSet<u64> = if tab.selected.contains(&dragged) { tab.selected.clone() } else { BTreeSet::from([dragged]) };
-                // Dropped on the selection itself: nothing to do.
-                if moving.contains(&target) {
-                    return;
-                }
-                // Below the row when dragged down, above it when dragged up.
-                self.combine_move_to_gap(moving, if from < to { to + 1 } else { to });
-            }
-            RowAction::DropAt { file, revision, gap } => {
-                // The list changed under the drag (e.g. undo): the gap no longer means the same.
-                if revision != tab.revision || !ids.contains(&file) {
-                    return;
-                }
-                let moving: BTreeSet<u64> = if tab.selected.contains(&file) { tab.selected.clone() } else { BTreeSet::from([file]) };
-                self.combine_move_to_gap(moving, gap);
-            }
-            RowAction::Unlock(row, at) => {
-                let locked: BTreeSet<u64> = self.combine_draft.iter().filter(|f| f.lock.is_some()).map(|f| f.id).collect();
-                let rows: Vec<u64> = match row.and_then(|i| ids.get(i).copied()) {
-                    // A selected row brings the rest of the selection.
-                    Some(id) if tab.selected.contains(&id) => {
-                        ids.iter().copied().filter(|x| tab.selected.contains(x) && locked.contains(x)).collect()
-                    }
-                    Some(id) => {
-                        tab.selected = BTreeSet::from([id]);
-                        (tab.anchor, tab.cursor) = (Some(id), Some(id));
-                        vec![id]
-                    }
-                    None => ids.iter().copied().filter(|x| tab.selected.contains(x) && locked.contains(x)).collect(),
-                };
-                self.combine_ask_password(rows, at);
-            }
-            RowAction::Sort(key) => {
-                let ascending = !matches!(tab.sort, Some((k, true)) if k == key);
-                self.combine_record();
-                self.combine_sort(key, ascending);
-            }
+            _ => {}
         }
     }
 }

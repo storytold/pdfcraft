@@ -1,8 +1,11 @@
 use super::layout::{
-    Piece, arabic_error, hebrew_error, is_arabic, is_hebrew, is_thai, latin_width, lines, norm, shaped_layout, text_rect, thai_error, wrapped,
+    Piece, arabic_error, hebrew_error, is_arabic, is_hebrew, is_thai, latin_width, norm, shaped_layout, text_rect, thai_error, wrapped,
 };
 use super::types::{AddedText, Align, Family};
-use super::*;
+use super::{
+    Content, Dict, Document, EditError, GlyphError, GlyphOutline, HashMap, HashSet, ObjRef, Object, PdfString, ShapedCluster, ShapedScript, Stream,
+    align_code, literal, matrix_number, n, shaped_glyph, win_ansi,
+};
 
 fn font_name(base: &str) -> String {
     format!("PCF{}", base.replace('-', ""))
@@ -13,8 +16,26 @@ fn font_name(base: &str) -> String {
 pub(super) const GLYPHS_PER_FONT: usize = 240;
 
 /// A line of a shaped-text item after layout: its text, whether its paragraph runs right to left,
-/// its pieces in drawing order and its width at the item's size.
-pub(super) type LaidLine = (String, bool, Vec<Piece>, f64);
+/// its paragraph, its pieces in drawing order and its width at the item's size.
+pub(super) type LaidLine = (String, bool, usize, Vec<Piece>, f64);
+
+/// Where line `i` (`w` wide unstretched, with `spaces` spaces) starts in the box `r`, and its word
+/// spacing. `paragraphs` holds each line's paragraph: a line takes its paragraph's alignment, and
+/// every line of a justified paragraph but its last is stretched to the box's width.
+fn placed(t: &AddedText, r: [f64; 4], paragraphs: &[usize], i: usize, w: f64, spaces: usize, rtl: bool) -> (f64, f64) {
+    let paragraph = paragraphs.get(i).copied().unwrap_or(0);
+    let align = t.paragraph_align(paragraph);
+    let ends_paragraph = paragraphs.get(i + 1) != Some(&paragraph);
+    let tw = if align == Align::Justify && !ends_paragraph && spaces > 0 { ((r[2] - r[0]) - w).max(0.0) / spaces as f64 } else { 0.0 };
+    let x = match align {
+        // A right-to-left paragraph's unstretched last line ends at the right edge.
+        Align::Justify if rtl => r[2] - w - tw * spaces as f64,
+        Align::Left | Align::Justify => r[0],
+        Align::Center => r[0] + ((r[2] - r[0]) - w) / 2.0,
+        Align::Right => r[2] - w,
+    };
+    (x, tw)
+}
 
 /// Draw a text item that has Arabic, Hebrew or Thai in it. Each line is laid out in display order; their glyphs
 /// come from Type 3 fonts drawn from the craft-fonts face's outlines (no font file is embedded),
@@ -22,7 +43,7 @@ pub(super) type LaidLine = (String, bool, Vec<Piece>, f64);
 fn draw_shaped(doc: &mut Document, t: &AddedText, taken: &Dict, fonts: &mut Dict, out: &mut Vec<u8>) -> Result<(), EditError> {
     let laid = wrapped(t)
         .into_iter()
-        .map(|(line, rtl)| shaped_layout(t, &line, rtl).map(|(pieces, w)| (line, rtl, pieces, w)))
+        .map(|(line, rtl, paragraph)| shaped_layout(t, &line, rtl).map(|(pieces, w)| (line, rtl, paragraph, pieces, w)))
         .collect::<Result<Vec<_>, _>>()?;
     draw_laid_shaped(doc, t, &laid, taken, fonts, out, shaped_glyph)
 }
@@ -44,7 +65,7 @@ pub(super) fn draw_laid_shaped(
     // one of the fonts, so copy and search get each character exactly once.
     let mut keys: Vec<&ShapedCluster> = Vec::new();
     let mut index: HashMap<ClusterKey, usize> = HashMap::new();
-    for c in laid.iter().flat_map(|(_, _, pieces, _)| pieces).flat_map(|p| match p {
+    for c in laid.iter().flat_map(|(_, _, _, pieces, _)| pieces).flat_map(|p| match p {
         Piece::Shaped(clusters) => clusters.as_slice(),
         Piece::Latin(_) => &[],
     }) {
@@ -89,21 +110,14 @@ pub(super) fn draw_laid_shaped(
     if t.char_spacing != 0.0 {
         out.extend(format!("{} Tc\n", n(t.char_spacing)).bytes());
     }
-    for (i, (line, rtl, pieces, w)) in laid.iter().enumerate() {
+    let paragraphs: Vec<usize> = laid.iter().map(|(_, _, p, ..)| *p).collect();
+    for (i, (line, rtl, _, pieces, w)) in laid.iter().enumerate() {
         // Shaped glyphs are painted in visual order. Keep the original line's typing order
         // explicitly, including marks, ligatures, digits and mixed-script punctuation.
         let logical: String = line.encode_utf16().map(|u| format!("{u:04X}")).collect();
         out.extend(format!("/Span <</ActualText <FEFF{logical}>>> BDC\n").bytes());
         let spaces = line.matches(' ').count();
-        // Justified: the spaces of every line but the last stretch to fill the box.
-        let tw = if t.align == Align::Justify && i + 1 < laid.len() && spaces > 0 { ((r[2] - r[0]) - w).max(0.0) / spaces as f64 } else { 0.0 };
-        let x = match t.align {
-            // A right-to-left paragraph's unstretched last line ends at the right edge.
-            Align::Justify if *rtl => r[2] - w - tw * spaces as f64,
-            Align::Left | Align::Justify => r[0],
-            Align::Center => r[0] + ((r[2] - r[0]) - w) / 2.0,
-            Align::Right => r[2] - w,
-        };
+        let (x, tw) = placed(t, r, &paragraphs, i, *w, spaces, *rtl);
         let y = r[3] - (i as f64 * 1.2 + 0.95) * t.size;
         let mut pen = x;
         let mut current: Option<&str> = None;
@@ -284,20 +298,14 @@ pub(super) fn draw(doc: &mut Document, c: &Content, view: [f64; 6], taken: &Dict
             if t.char_spacing != 0.0 {
                 out.extend(format!("{} Tc\n", n(t.char_spacing)).bytes());
             }
-            let all = lines(t);
-            for (i, line) in all.iter().enumerate() {
+            let all = wrapped(t);
+            let paragraphs: Vec<usize> = all.iter().map(|(_, _, p)| *p).collect();
+            for (i, (line, ..)) in all.iter().enumerate() {
                 let w = latin_width(t, line);
-                let x = match t.align {
-                    Align::Left | Align::Justify => r[0],
-                    Align::Center => r[0] + ((r[2] - r[0]) - w) / 2.0,
-                    Align::Right => r[2] - w,
-                };
                 // Baseline: 0.8 em below the line top.
                 let y = r[3] - (i as f64 * 1.2 + 0.95) * t.size;
-                // Justified: word spacing makes every line but the last fill the box.
-                let spaces = line.matches(' ').count();
-                let tw =
-                    if t.align == Align::Justify && i + 1 < all.len() && spaces > 0 { ((r[2] - r[0]) - w).max(0.0) / spaces as f64 } else { 0.0 };
+                // Justified: word spacing makes every line of a paragraph but its last fill the box.
+                let (x, tw) = placed(t, r, &paragraphs, i, w, line.matches(' ').count(), false);
                 out.extend(format!("1 0 0 1 {} {} Tm {} Tw ", n(x), n(y), n(tw)).bytes());
                 out.extend(literal(&win_ansi(line)));
                 out.extend_from_slice(b" Tj\n");
@@ -347,15 +355,12 @@ pub(super) fn params(c: &Content) -> Dict {
             d.set(b"Font".to_vec(), Object::name(t.family.base_font(t.bold, t.italic)));
             d.set(b"Size".to_vec(), Object::Real(t.size));
             d.set(b"Color".to_vec(), arr(&t.color));
-            d.set(
-                b"Align".to_vec(),
-                Object::Int(match t.align {
-                    Align::Left => 0,
-                    Align::Center => 1,
-                    Align::Right => 2,
-                    Align::Justify => 3,
-                }),
-            );
+            d.set(b"Align".to_vec(), Object::Int(align_code(t.align)));
+            // Each paragraph's own alignment, or null where it follows /Align.
+            let aligns = crate::paragraph_align::tidy(t.aligns.clone(), t.align);
+            if !aligns.is_empty() {
+                d.set(b"Aligns".to_vec(), Object::Array(aligns.iter().map(|a| a.map_or(Object::Null, |a| Object::Int(align_code(a)))).collect()));
+            }
             d.set(b"Rect".to_vec(), arr(&text_rect(t)));
             if t.char_spacing != 0.0 {
                 d.set(b"CharSpacing".to_vec(), Object::Real(t.char_spacing));
