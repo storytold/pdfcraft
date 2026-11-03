@@ -183,10 +183,12 @@ pub fn data_values(bytes: &[u8]) -> Result<Vec<(String, Vec<String>)>, DataError
 /// that starts with `=`, `+`, `-` or `@` (after any leading whitespace) as a formula. Such a cell
 /// is written with a leading `'`, which keeps it text; a plain number such as `-12.5` is not.
 pub fn merge_csv(files: &[Vec<(String, Vec<String>)>]) -> String {
+    // Indexed, not searched: files with many distinct names made each lookup a scan of all of them.
     let mut columns: Vec<&str> = Vec::new();
+    let mut known = std::collections::HashSet::new();
     for f in files {
         for (k, _) in f {
-            if !columns.contains(&k.as_str()) {
+            if known.insert(k.as_str()) {
                 columns.push(k);
             }
         }
@@ -199,7 +201,12 @@ pub fn merge_csv(files: &[Vec<(String, Vec<String>)>]) -> String {
     let mut out = columns.iter().map(|c| q(c)).collect::<Vec<_>>().join(",");
     out.push('\n');
     for f in files {
-        let row: Vec<String> = columns.iter().map(|c| f.iter().find(|(k, _)| k == c).map_or(String::new(), |(_, v)| q(&v.join(", ")))).collect();
+        // The first value of a name repeated in one file wins, as the scan it replaces found it.
+        let mut by_name = std::collections::HashMap::new();
+        for (k, v) in f {
+            by_name.entry(k.as_str()).or_insert(v);
+        }
+        let row: Vec<String> = columns.iter().map(|c| by_name.get(c).map_or(String::new(), |v| q(&v.join(", ")))).collect();
         out.push_str(&row.join(","));
         out.push('\n');
     }

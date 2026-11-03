@@ -2099,3 +2099,17 @@ fn an_fdf_comment_popup_without_a_rect_is_dropped() {
     let popups = page.iter().filter(|a| dst.resolve(a).as_dict().is_some_and(|d| d.name(b"Subtype") == Some(b"Popup".as_slice()))).count();
     assert_eq!(popups, 0);
 }
+
+#[test]
+fn merge_csv_keeps_first_value_of_a_repeated_name_and_column_order() {
+    let one = vec![
+        ("b".to_string(), vec!["1".to_string()]),
+        ("a".to_string(), vec!["x".to_string(), "y".to_string()]),
+        ("b".to_string(), vec!["2".to_string()]),
+    ];
+    let two = vec![("c".to_string(), vec!["3".to_string()]), ("a".to_string(), vec!["z".to_string()])];
+    assert_eq!(merge_csv(&[one, two]), "b,a,c\n1,\"x, y\",\n,z,3\n");
+    // Many distinct names: one row, as many columns.
+    let wide: Vec<(String, Vec<String>)> = (0..20_000).map(|i| (format!("f{i}"), vec![i.to_string()])).collect();
+    assert_eq!(merge_csv(&[wide]).lines().count(), 2);
+}
