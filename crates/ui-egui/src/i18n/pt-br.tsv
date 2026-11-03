@@ -1629,6 +1629,8 @@
 	{n} pages	{n} páginas
 	Copy or cut pages first	Copie ou recorte as páginas primeiro
 	Couldn't save {name}: {e}	Não foi possível salvar {name}: {e}
+	the website did not confirm that it stored the file	o site não confirmou que armazenou o arquivo
+	earlier saves are still waiting for the website	salvamentos anteriores ainda aguardam o site
 	Saved {name}	{name} salvo
 	Saved, but reopening failed: {e}	Salvo, mas a reabertura falhou: {e}
 	Downloaded {name}	{name} baixado

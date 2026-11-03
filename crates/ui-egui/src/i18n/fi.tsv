@@ -1737,6 +1737,8 @@
 	{n} pages	{n} sivua
 	Copy or cut pages first	Kopioi tai leikkaa ensin sivuja
 	Couldn't save {name}: {e}	Tiedoston {name} tallennus epäonnistui: {e}
+	the website did not confirm that it stored the file	verkkosivusto ei vahvistanut tallentaneensa tiedostoa
+	earlier saves are still waiting for the website	aiemmat tallennukset odottavat yhä verkkosivustoa
 	Saved {name}	Tallennettiin {name}
 	Saved, but reopening failed: {e}	Tallennettiin, mutta uudelleen avaaminen epäonnistui: {e}
 	Downloaded {name}	Ladattiin {name}

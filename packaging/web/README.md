@@ -92,3 +92,73 @@ PdfCraft renders with wgpu. It uses **WebGPU** when the browser has it and falls
 For example: `<iframe src="https://example.com/pdfcraft/?webgl" ...>`.
 
 A browser with neither WebGPU nor WebGL2 gets a message in place of the app.
+
+## Host mode: saving into the embedding page
+
+A page on the same origin as PdfCraft can use it as its PDF editor, as the Nextcloud app does:
+it hands documents in and takes saves back over `postMessage`, instead of the user downloading
+the file. Add `?host=parent` to the iframe `src`. Messages are plain objects with a `type`.
+PdfCraft hears only its parent window on its own origin, and posts only to it.
+
+| Message | Direction | Fields |
+|---|---|---|
+| `pdfcraft:ready` | to the page | `version`. PdfCraft is listening: send `pdfcraft:init` (optional) and files now. |
+| `pdfcraft:init` | from the page | `acknowledgeSaves`, `saveTimeoutMs`. Both optional, see below. |
+| `pdfcraft:open` | from the page | `name`, `bytes` (an `ArrayBuffer` or `Uint8Array` holding a PDF). It opens in a tab. |
+| `pdfcraft:save` | to the page | `name`, `saveAs` (`true` for Save As), `bytes` (a transferred `ArrayBuffer`), and `saveId` after `acknowledgeSaves`. |
+| `pdfcraft:saved` | from the page | `saveId`: the file of that save is stored. |
+| `pdfcraft:save-failed` | from the page | `saveId`, `error` (a string; the user sees it). |
+| `pdfcraft:dirty` | to the page | `dirty`: whether any document has unsaved work. Sent when it changes. |
+| `pdfcraft:failed` | to the page | `error`: PdfCraft could not start (no WebGL, for example). |
+
+`?author=<name>` on the `src` signs the user's comments with the page's name for them, unless
+they chose a name in PdfCraft.
+
+### When a save counts
+
+**Without `acknowledgeSaves`**, which is the original protocol and what existing embedders keep
+getting, a save counts as done once `pdfcraft:save` is posted. The document is marked saved,
+`pdfcraft:dirty` turns `false`, the browser stops warning before leaving, and Save in the "save
+changes?" prompt closes the document at once. If the page then fails to store the file, or
+isn't listening, the edits are lost when the document is closed. The page reports its own
+errors.
+
+**With `acknowledgeSaves: true`**, the page promises to answer every save, and PdfCraft waits
+for the answer:
+
+- The document keeps its unsaved work (`pdfcraft:dirty` stays `true`, and the browser still
+  warns before leaving) until `pdfcraft:saved` names the save's `saveId`.
+- Save in the "save changes?" prompt closes the document only then.
+- `pdfcraft:save-failed`, or no answer within `saveTimeoutMs` milliseconds (120000 by
+  default, kept between 1000 and 3600000), leaves the document open and unsaved, and PdfCraft
+  says "Couldn't save *name*: *error*". The user can save again. A later answer for that save
+  is ignored.
+- If the user edits the document while the page stores it, the page has the earlier version:
+  the newer edits stay unsaved, and the document doesn't close.
+- An answer whose `saveId` no save is waiting for is ignored. Ids are strings, unique to this
+  copy of PdfCraft: send them back unchanged, and don't answer a save of an earlier copy after
+  the iframe reloads (it sends `pdfcraft:ready` again).
+- Up to eight saves wait at once. Another save is refused with a notice until one is answered.
+
+Send `pdfcraft:init` once, in answer to `pdfcraft:ready`. Older versions of PdfCraft ignore it
+and send `pdfcraft:save` without a `saveId`: such a save counts once posted, as above.
+
+```js
+const frame = document.querySelector("iframe");
+const post = (message) => frame.contentWindow.postMessage(message, location.origin);
+window.addEventListener("message", async (event) => {
+  if (event.origin !== location.origin || event.source !== frame.contentWindow) return;
+  const message = event.data;
+  if (message.type === "pdfcraft:ready") {
+    post({ type: "pdfcraft:init", acknowledgeSaves: true, saveTimeoutMs: 300000 });
+    post({ type: "pdfcraft:open", name: "report.pdf", bytes: await (await fetch("report.pdf")).arrayBuffer() });
+  } else if (message.type === "pdfcraft:save") {
+    try {
+      await storeFile(message.name, message.bytes, message.saveAs); // your upload
+      if (message.saveId !== undefined) post({ type: "pdfcraft:saved", saveId: message.saveId });
+    } catch (error) {
+      if (message.saveId !== undefined) post({ type: "pdfcraft:save-failed", saveId: message.saveId, error: String(error) });
+    }
+  }
+});
+```

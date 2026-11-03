@@ -37,7 +37,8 @@ impl PdfCraftApp {
     }
 
     /// [`Self::save_view`], then `after` once the document is written: now, or on a later frame
-    /// when the user had to choose where. `after` never runs when the save fails or is cancelled.
+    /// when the user had to choose where or an embedding page has yet to confirm it
+    /// ([`crate::host`]). `after` never runs when the save fails or is cancelled.
     pub(crate) fn save_then(&mut self, index: usize, target: SaveTarget, after: impl FnOnce(&mut Self) + Send + 'static) -> bool {
         // What's typed in a field is part of what's saved (#166).
         if let Some(id) = self.views.get(index).map(|v| v.id)
@@ -48,6 +49,10 @@ impl PdfCraftApp {
         let Some(id) = self.views.get(index).map(|v| v.id) else { return false };
         let Some(doc) = self.session.get(id) else { return false };
         let (name, path) = (doc.name.clone(), doc.path.clone());
+        // An embedding page that asked for saves (`?host=parent`, web) gets the bytes.
+        if self.host_save.is_some() {
+            return self.save_to_host(id, &name, target, Box::new(after));
+        }
         #[cfg(not(target_arch = "wasm32"))]
         {
             let doc_path = path.clone();
@@ -82,14 +87,7 @@ impl PdfCraftApp {
                     return false;
                 }
             };
-            // An embedding page that asked for saves (`?host=parent`) gets the bytes; otherwise
-            // the browser downloads them.
-            let to_host = self.host_save.is_some();
-            let delivered = match &self.host_save {
-                Some(save) => save(&name, &bytes, matches!(target, SaveTarget::As)),
-                None => download(&name, &bytes),
-            };
-            match delivered {
+            match download(&name, &bytes) {
                 Ok(()) => {
                     let _ = self.session.mark_saved(id, bytes, None);
                     if let Some(doc) = self.session.get(id)
@@ -97,21 +95,60 @@ impl PdfCraftApp {
                     {
                         view.document_changed(&doc.info);
                     }
-                    // The host reports where the file went (and any failure) itself.
-                    if !to_host {
-                        self.notify_fmt("Downloaded {name}", &[("name", &name)]);
-                    }
+                    self.notify_fmt("Downloaded {name}", &[("name", &name)]);
                     after(self);
                     true
-                }
-                Err(e) if to_host => {
-                    self.notify_fmt("Couldn't save {name}: {e}", &[("name", &name), ("e", &e)]);
-                    false
                 }
                 Err(e) => {
                     self.notify_fmt("Couldn't download {name}: {e}", &[("name", &name), ("e", &e.to_string())]);
                     false
                 }
+            }
+        }
+    }
+
+    /// Hand document `id` to the embedding page ([`crate::HostSaveFn`]). A page that doesn't
+    /// answer saves has it once it is handed over: the document is saved and `after` runs now.
+    /// A page that answers (see [`crate::host`]) has it when it says so: until then the document
+    /// keeps its unsaved work and `after` waits, and neither happens if the page fails, doesn't
+    /// answer in time, or the document changes meanwhile (#1792). Returns `true` if saved now.
+    fn save_to_host(&mut self, id: pdfcraft_engine::DocId, name: &str, target: SaveTarget, after: Box<dyn FnOnce(&mut Self) + Send>) -> bool {
+        if !self.flatten_fill_sign_for_save(id) {
+            return false;
+        }
+        let bytes = match self.session.save_bytes(id) {
+            Ok(b) => b,
+            Err(e) => {
+                self.notify_fmt("Couldn't save {name}: {e}", &[("name", name), ("e", &e.to_string())]);
+                return false;
+            }
+        };
+        let Ok(save_id) = self.host_saves.start() else {
+            self.notify_fmt("Couldn't save {name}: {e}", &[("name", name), ("e", tl!("earlier saves are still waiting for the website"))]);
+            return false;
+        };
+        let Some(save) = &self.host_save else { return false };
+        let handed = save(crate::host::HostSave { name, bytes: &bytes, save_as: matches!(target, SaveTarget::As), save_id: save_id.as_deref() });
+        if let Err(e) = handed {
+            self.notify_fmt("Couldn't save {name}: {e}", &[("name", name), ("e", &e)]);
+            return false;
+        }
+        match save_id {
+            Some(save_id) => {
+                let Some(generation) = self.session.get(id).map(|d| d.edit_generation()) else { return false };
+                self.host_saves.wait(save_id, crate::host::WaitingSave { id, generation, bytes, name: name.to_string(), after });
+                // The next frame starts the timeout and schedules a frame for it, even if nothing
+                // else asks for one before the page answers.
+                if let Some(ctx) = &self.ctx {
+                    ctx.request_repaint();
+                }
+                false
+            }
+            // The page reports where the file went (and any failure) itself.
+            None => {
+                self.host_has(id, bytes);
+                after(self);
+                true
             }
         }
     }

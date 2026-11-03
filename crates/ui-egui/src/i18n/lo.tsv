@@ -1770,6 +1770,8 @@
 	{n} pages	{n} ໜ້າ
 	Copy or cut pages first	ສຳເນົາ ຫຼື ຕັດໜ້າກ່ອນ
 	Couldn't save {name}: {e}	ບໍ່ສາມາດບັນທຶກ {name} ໄດ້: {e}
+	the website did not confirm that it stored the file	ເວັບໄຊຕ໌ບໍ່ໄດ້ຢືນຢັນວ່າໄດ້ບັນທຶກໄຟລ໌ແລ້ວ
+	earlier saves are still waiting for the website	ການບັນທຶກກ່ອນໜ້ານີ້ຍັງລໍຖ້າເວັບໄຊຕ໌ຢູ່
 	Saved {name}	ບັນທຶກ {name} ແລ້ວ
 	Saved, but reopening failed: {e}	ບັນທຶກແລ້ວ, ແຕ່ການເປີດຄືນໃໝ່ບໍ່ສຳເລັດ: {e}
 	Downloaded {name}	ດາວໂຫຼດ {name} ແລ້ວ
