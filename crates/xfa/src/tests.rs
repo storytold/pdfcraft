@@ -679,6 +679,22 @@ fn empty_repeating_subforms_spend_the_layout_budget() {
 }
 
 #[test]
+fn large_text_drawn_in_many_instances_spends_the_draw_budget() {
+    // A draw whose text overflows its fixed height is re-measured up to six times to shrink it,
+    // and a repeating subform draws it once per instance. Large text drawn in many instances
+    // used to cost one full text layout per instance per pass, for seconds of work on a small
+    // file; each pass now counts its characters against the draw budget.
+    let words = "word ".repeat(4000); // 20,000 characters
+    let draw = format!("<draw w=\"1in\" h=\"0.5in\"><value><text>{words}</text></value></draw>");
+    let many =
+        format!("<template><subform layout=\"tb\"><subform layout=\"tb\"><occur initial=\"50\" max=\"-1\"/>{draw}</subform></subform></template>");
+    assert!(matches!(layout_xml(&many), Err(XfaError::TooLarge(_))), "large text in many instances must be refused");
+    // One copy of the same draw lays out: the budget does not reject an ordinary form.
+    let one = format!("<template><subform layout=\"tb\">{draw}</subform></template>");
+    assert!(layout_xml(&one).is_ok(), "a single large draw must lay out");
+}
+
+#[test]
 fn a_packet_stream_listed_many_times_is_read_once() {
     let mut doc = Document::open(Arc::new(shell("<template><subform/></template>"))).unwrap();
     let packet = pdfcraft_cos::ObjRef::new(5, 0);
