@@ -1789,7 +1789,7 @@ fn bookmarks_add_rename_move_delete() {
 fn a_bookmark_tree_nests_entries_by_level_under_a_new_first_bookmark() {
     let mut d = doc_a();
     crate::add_bookmark(&mut d, &[], 0, "Existing", 0).unwrap();
-    let e = |level, title: &str, page, element| crate::OutlineEntry { level, title: title.into(), page, element };
+    let e = |level, title: &str, page, element| crate::OutlineEntry { level, title: title.into(), page, element, top: None };
     let se = ObjRef::new(4242, 0);
     let entries = [e(1, "One", 0, Some(se)), e(3, "Deep", 1, None), e(2, "Two", 1, None), e(1, "Next", 2, None)];
     assert_eq!(crate::add_bookmark_tree(&mut d, "Untitled", &entries).unwrap(), vec![0]);
@@ -2460,10 +2460,89 @@ fn an_unchanged_opening_destination_keeps_its_position_and_name() {
         assert_eq!(crate::initial_view(&doc), crate::InitialView { hide_toolbar: true, ..v.clone() });
         // A changed magnification writes a destination of its own.
         let mut doc = doc;
-        crate::set_initial_view(&mut doc, &crate::InitialView { magnification: Magnification::FitPage, ..v }).unwrap();
+        crate::set_initial_view(&mut doc, &crate::InitialView { magnification: Magnification::FitWidth, ..v }).unwrap();
         let catalog = doc.get(root).as_dict().cloned().unwrap();
         assert_ne!(catalog.get(b"OpenAction"), Some(&action));
-        assert_eq!(crate::initial_view(&doc).magnification, Magnification::FitPage);
+        assert_eq!(crate::initial_view(&doc).magnification, Magnification::FitWidth);
+    }
+}
+
+/// A document whose `/OpenAction` is `action`, with the named destination `there` (page 3 at
+/// 200%) in the catalog `/Dests` and `here` (page 1, fit) in a `/Names /Dests` tree.
+fn doc_opening_at(action: Object) -> Document {
+    let page1 = Object::Ref(pdfcraft_cos::ObjRef::new(4, 0));
+    let page3 = Object::Ref(pdfcraft_cos::ObjRef::new(6, 0));
+    let mut dests = pdfcraft_cos::Dict::new();
+    dests.set(b"there".to_vec(), Object::Array(vec![page3, Object::name("XYZ"), Object::Null, Object::Null, Object::Int(2)]));
+    let mut tree = pdfcraft_cos::Dict::new();
+    tree.set(b"Names".to_vec(), Object::Array(vec![Object::String(PdfString::text("here")), Object::Array(vec![page1, Object::name("Fit")])]));
+    let mut names = pdfcraft_cos::Dict::new();
+    names.set(b"Dests".to_vec(), Object::Dict(tree));
+    let mut doc = open(fixture());
+    let root = doc.root().unwrap();
+    doc.update_dict(root, |c| {
+        c.set(b"OpenAction".to_vec(), action);
+        c.set(b"Dests".to_vec(), Object::Dict(dests));
+        c.set(b"Names".to_vec(), Object::Dict(names));
+    })
+    .unwrap();
+    doc
+}
+
+fn open_action(doc: &Document) -> Option<Object> {
+    doc.get(doc.root().unwrap()).as_dict().and_then(|c| c.get(b"OpenAction").cloned())
+}
+
+/// ISO 32000-2 §12.3.2.4: a named destination stands for the explicit one it names. Choosing
+/// page 1 in Document Properties on a document that opens at a named destination elsewhere
+/// writes a destination to page 1; it used to read the name as page 1 and change nothing.
+#[test]
+fn choosing_page_one_replaces_a_named_opening_destination() {
+    use crate::view::Magnification;
+    let page1 = Object::Ref(pdfcraft_cos::ObjRef::new(4, 0));
+    let mut goto = pdfcraft_cos::Dict::new();
+    goto.set(b"S".to_vec(), Object::name("GoTo"));
+    goto.set(b"D".to_vec(), Object::name("there"));
+    for action in [Object::Dict(goto), Object::name("there"), Object::String(PdfString::text("there"))] {
+        let mut doc = doc_opening_at(action.clone());
+        // The dialog shows where the document really opens.
+        let v = crate::initial_view(&doc);
+        assert_eq!((v.page, v.magnification), (2, Magnification::Percent(200.0)), "{action:?}");
+        // Page 1 at the same magnification: an explicit destination to page 1.
+        crate::set_initial_view(&mut doc, &crate::InitialView { page: 0, ..v.clone() }).unwrap();
+        let written = Object::Array(vec![page1.clone(), Object::name("XYZ"), Object::Null, Object::Null, Object::Real(2.0)]);
+        assert_eq!(open_action(&doc), Some(written), "{action:?}");
+        let reopened = save_and_reopen(&doc);
+        assert_eq!(crate::initial_view(&reopened), crate::InitialView { page: 0, ..v.clone() }, "{action:?}");
+        // Page 1 at the default magnification: no opening action, so the first page opens.
+        let mut doc = doc_opening_at(action.clone());
+        crate::set_initial_view(&mut doc, &crate::InitialView { page: 0, magnification: Magnification::Default, ..v }).unwrap();
+        assert_eq!(open_action(&doc), None, "{action:?}");
+        assert_eq!(crate::initial_view(&save_and_reopen(&doc)).page, 0, "{action:?}");
+    }
+}
+
+/// A named opening destination that already goes to the chosen page and magnification is kept,
+/// and so is one that names nothing (it reads as page 1) until another page is chosen.
+#[test]
+fn a_named_opening_destination_is_kept_while_it_still_holds() {
+    use crate::view::Magnification;
+    let page2 = Object::Ref(pdfcraft_cos::ObjRef::new(5, 0));
+    for (action, magnification) in
+        [(Object::String(PdfString::text("here")), Magnification::FitPage), (Object::name("nowhere"), Magnification::Default)]
+    {
+        let mut doc = doc_opening_at(action.clone());
+        let v = crate::initial_view(&doc);
+        assert_eq!((v.page, v.magnification), (0, magnification), "{action:?}");
+        crate::set_initial_view(&mut doc, &crate::InitialView { hide_toolbar: true, ..v.clone() }).unwrap();
+        assert_eq!(open_action(&doc), Some(action.clone()), "{action:?}");
+        crate::set_initial_view(&mut doc, &crate::InitialView { page: 1, ..v.clone() }).unwrap();
+        let kind = if magnification == Magnification::FitPage { "Fit" } else { "XYZ" };
+        assert_eq!(
+            open_action(&doc).as_ref().and_then(Object::as_array).map(|a| (a.first().cloned(), a.get(1).cloned())),
+            Some((Some(page2.clone()), Some(Object::name(kind)))),
+            "{action:?}"
+        );
     }
 }
 
@@ -3687,4 +3766,50 @@ fn bookmark_style_and_colour_are_set_as_the_table_says() {
     let saved = open(write_full(&doc, &SaveOptions::default()).unwrap());
     let got: Vec<_> = bookmarks(&saved).into_iter().map(|b| (b.color, b.bold, b.italic)).collect();
     assert_eq!(got, [(Some([0.0, 0.0, 1.0]), true, true), (None, false, false)]);
+}
+
+/// #3502: a `/Contents` array's pieces are joined with a space, as the renderer joins them, so a
+/// `%` comment at the end of a piece without a line break continues through the first line of the
+/// next piece in both resource pruning (`extract_pages`) and `page_as_form`.
+#[test]
+fn contents_pieces_join_with_a_space_across_a_trailing_comment() {
+    let build_doc = |first_piece: &str| {
+        let b: Vec<String> = vec![
+            "<< /Type /Catalog /Pages 2 0 R >>".into(),                                        // 1
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>".into(),        // 2
+            "<< /Type /Page /Parent 2 0 R /Contents [4 0 R 5 0 R] /Resources 6 0 R >>".into(), // 3
+            raw(first_piece),                                                                  // 4
+            raw("/ImHidden Do\n/ImShown Do"),                                                  // 5
+            "<< /XObject << /ImHidden 7 0 R /ImShown 8 0 R >> >>".into(),                      // 6
+            image(1, 1, 1),                                                                    // 7
+            image(1, 1, 1),                                                                    // 8
+        ];
+        open(build(&b, "/Root 1 0 R"))
+    };
+
+    // Without a trailing newline in piece 1, `% comment` swallows `/ImHidden Do` on the first
+    // line of piece 2; only `/ImShown` is drawn.
+    let commented = build_doc("q Q % comment without newline");
+    let extracted = full_roundtrip(&extract_pages(&commented, &[0]).unwrap());
+    assert_eq!(xobject_names(&extracted, 0), [b"ImShown".to_vec()], "commented-out Do across piece boundary is pruned");
+
+    let mut form_dst = Document::new_empty();
+    let (form_ref, _) = crate::page_as_form(&mut form_dst, &commented, 0).unwrap();
+    let Object::Stream(form_stream) = &*form_dst.get(form_ref) else { panic!("form stream") };
+    let form_bytes = form_stream.decoded().unwrap();
+    let drawn: Vec<Vec<u8>> = pdfcraft_content::parse(&form_bytes)
+        .ops
+        .into_iter()
+        .filter(|op| op.op == b"Do")
+        .filter_map(|op| op.operands.first().and_then(Object::as_name).map(|n| n.to_vec()))
+        .collect();
+    assert_eq!(drawn, [b"ImShown".to_vec()], "page_as_form keeps the first line of piece 2 inside the comment");
+
+    // Control: when piece 1 ends the comment with a newline, `/ImHidden Do` on piece 2's first
+    // line is a real operator and stays in both the extracted page and the form XObject.
+    let newline_ended = build_doc("q Q % comment with newline\n");
+    let extracted_ctrl = full_roundtrip(&extract_pages(&newline_ended, &[0]).unwrap());
+    let mut ctrl_names = xobject_names(&extracted_ctrl, 0);
+    ctrl_names.sort();
+    assert_eq!(ctrl_names, [b"ImHidden".to_vec(), b"ImShown".to_vec()]);
 }
