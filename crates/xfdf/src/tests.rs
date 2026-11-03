@@ -2176,3 +2176,20 @@ fn same_name_import_keeps_a_widget_with_an_inherited_field_type() {
     let annots = doc.get(page).as_dict().unwrap().get(b"Annots").unwrap().as_array().unwrap().len();
     assert_eq!(annots, 2);
 }
+
+#[test]
+fn a_field_type_up_to_64_parents_away_protects_the_annotation() {
+    // the forms crate follows /Parent 64 levels: so does the import's protection check
+    let mut doc = blank();
+    let mut top = Dict::new();
+    top.set(b"FT".to_vec(), Object::name("Tx"));
+    let mut parent = doc.add(Object::Dict(top));
+    for _ in 0..40 {
+        let mut d = Dict::new();
+        d.set(b"Parent".to_vec(), Object::Ref(parent));
+        parent = doc.add(Object::Dict(d));
+    }
+    let mut annot = Dict::new();
+    annot.set(b"Parent".to_vec(), Object::Ref(parent));
+    assert!(crate::xfdf::is_field(&doc, &annot));
+}

@@ -383,13 +383,13 @@ fn import_protected(doc: &Document, x: &Dict) -> bool {
 
 /// Whether `x` is a form field or a widget of one: it has `/FT`, or a `/Parent` up the field
 /// tree does (a widget inherits its field's type).
-fn is_field(doc: &Document, x: &Dict) -> bool {
+pub(crate) fn is_field(doc: &Document, x: &Dict) -> bool {
     if x.contains(b"FT") {
         return true;
     }
     let mut parent = x.reference(b"Parent");
     let mut seen = std::collections::HashSet::new();
-    while let Some(r) = parent.filter(|r| seen.len() < 32 && seen.insert(*r)) {
+    while let Some(r) = parent.filter(|r| seen.len() < 64 && seen.insert(*r)) {
         let o = doc.get(r);
         let Some(d) = o.as_dict() else { return false };
         if d.contains(b"FT") {
