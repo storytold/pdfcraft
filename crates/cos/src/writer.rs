@@ -641,14 +641,14 @@ pub fn pdf_date(unix_secs: i64) -> String {
     format!("D:{y:04}{m:02}{d:02}{:02}{:02}{:02}Z", secs / 3600, secs / 60 % 60, secs % 60)
 }
 
-/// Days since 1970-01-01 → proleptic Gregorian (year, month, day).
+/// Days since 1970-01-01 → proleptic Gregorian (year, month, day). Total for any `i64` count.
 ///
 /// A `from_timestamp` epoch fallback would change dates past `NaiveDate`'s ±262143-year range,
 /// which the old hand-rolled converter formatted directly. The Gregorian calendar repeats every
 /// 400 years (146_097 days), so chrono converts the day within one cycle and whole cycles go back
 /// into the year (an `i128` so the extremes can't overflow), keeping chrono as the only calendar
 /// logic and reproducing the old result exactly. 1970-01-01 is `num_days_from_ce` 719_163.
-fn civil_from_days(days: i64) -> (i64, u32, u32) {
+pub fn civil_from_days(days: i64) -> (i64, u32, u32) {
     use chrono::Datelike;
     let (cycles, rest) = (days.div_euclid(146_097), days.rem_euclid(146_097));
     // `rest + 719_163` is 719_163..865_259, always a valid CE day.
