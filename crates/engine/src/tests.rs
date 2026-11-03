@@ -10251,3 +10251,39 @@ fn image_transform_engine_refuses_singular_matrices_without_mutation() {
         assert_eq!(s.get(id).unwrap().bytes, before);
     }
 }
+
+/// Table 22, bit 4 (modify) withheld while forms may be filled in: the console's script may
+/// set values, but not make a field read-only, required or hidden, which the property editor
+/// refuses too; optimizing (a rewrite that removes data) is refused; bookmarks from the
+/// structure copy the headings' text out, so they need copying (bit 5) as the text-style
+/// bookmarks do.
+#[test]
+fn fill_only_documents_refuse_property_changes_from_the_console_and_optimizing() {
+    let encrypt = |bytes: Vec<u8>, permissions: i32| {
+        let mut doc = pdfcraft_cos::Document::open(Arc::new(bytes)).unwrap();
+        doc.set_encryption(&pdfcraft_cos::NewEncryption {
+            algorithm: pdfcraft_cos::Algorithm::Aes256,
+            user_password: "",
+            owner_password: "owner",
+            permissions,
+            encrypt_metadata: true,
+            seed: [7; 32],
+        })
+        .unwrap();
+        Arc::new(pdfcraft_cos::write_full(&doc, &Default::default()).unwrap())
+    };
+    let refused = Err(EditError::NotPermitted("changes to the document"));
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("order.pdf", None, encrypt(scripted_form(), -1 ^ 0b1000), None).unwrap();
+    assert!(s.get(id).unwrap().allows_form_filling() && !s.get(id).unwrap().allows_modification());
+    assert_eq!(s.run_javascript(id, "getField('total').readonly = true;", None).map(|_| ()), refused);
+    assert_eq!(s.run_javascript(id, "getField('total').display = display.hidden;", None).map(|_| ()), refused);
+    assert!(!s.get(id).unwrap().form.iter().find(|f| f.name == "total").unwrap().read_only(), "nothing changed");
+    s.run_javascript(id, "getField('price').value = 3;", None).unwrap();
+    assert_eq!(s.get(id).unwrap().form.iter().find(|f| f.name == "price").unwrap().value, ["3"], "values may be filled in");
+    assert_eq!(s.optimize_job(id, &optimize::Settings::default(), &[]).map(|_| ()), refused);
+
+    let id = s.open("tagged.pdf", None, encrypt(tagged_headings_fixture(), -1 ^ 0b1_0000), None).unwrap();
+    assert_eq!(s.apply(id, Edit::BookmarksFromStructure), Err(EditError::NotPermitted("copying text and images")));
+    assert!(s.get(id).unwrap().info.outline.is_empty());
+}

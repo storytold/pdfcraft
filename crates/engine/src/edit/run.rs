@@ -27,7 +27,6 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         | Edit::SetBookmarkPage { .. }
         | Edit::SetBookmarkColor { .. }
         | Edit::SetBookmarkStyle { .. }
-        | Edit::BookmarksFromStructure
         | Edit::NumberPages { .. } => {
             if p.assemble() {
                 Ok(())
@@ -37,7 +36,7 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         }
         // Creates bookmarks (assembly), and their titles are the document's text, copied out of it
         // (Table 22, bit 5), as an export of it would be.
-        Edit::BookmarksFromTextStyles { .. } => {
+        Edit::BookmarksFromTextStyles { .. } | Edit::BookmarksFromStructure => {
             if !p.assemble() {
                 Err(EditError::NotPermitted("page changes"))
             } else if !p.copy() {
@@ -594,6 +593,10 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             ran.map_err(EditError::Invalid)?;
         }
         Edit::SetFieldImage { name, image } => {
+            // As filling a value does: a read-only field keeps its picture.
+            if pdfcraft_forms::fields(doc).iter().any(|f| f.name == *name && f.read_only()) {
+                return Err(pdfcraft_forms::FormError::ReadOnly(name.clone()).into());
+            }
             let (img, _) = embed_image(doc, name, image)?;
             let px = match &*doc.get(img) {
                 pdfcraft_cos::Object::Stream(s) => (s.dict.int(b"Width").unwrap_or(1) as u32, s.dict.int(b"Height").unwrap_or(1) as u32),

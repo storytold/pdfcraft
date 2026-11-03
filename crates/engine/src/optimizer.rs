@@ -64,6 +64,10 @@ impl Session {
             return Err(EditError::Signed);
         }
         let editor = doc.editor.as_ref().ok_or_else(|| EditError::ReadOnly(doc.read_only_reason.clone().unwrap_or_default()))?;
+        // A rewrite that takes data out of the document, as Remove Hidden Information does.
+        if !doc.allows_modification() {
+            return Err(EditError::NotPermitted("changes to the document"));
+        }
         Ok(OptimizeJob {
             cos: editor.cos.clone(),
             settings: settings.clone(),

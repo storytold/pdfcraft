@@ -298,6 +298,12 @@ impl Session {
         };
         let mut o = pdfcraft_js::run(script, &event, &runner.doc, &states, &runner.doc_scripts, Limits::default());
         let changes = changes(&states, &o.changed);
+        // Console input is the user's, not the document's: making a field read-only, required,
+        // hidden or shown is a change to the form (Table 22, bit 4), which filling it in is not.
+        let properties = |c: &FieldChange| c.read_only.is_some() || c.required.is_some() || c.display.is_some();
+        if target.is_none() && changes.iter().any(properties) && !doc.allows_modification() {
+            return Err(EditError::NotPermitted("changes to the document"));
+        }
         let resets: Vec<Vec<String>> = o
             .requests
             .iter()
