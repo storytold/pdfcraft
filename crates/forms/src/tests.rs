@@ -4336,6 +4336,58 @@ fn a_page_widget_inheriting_password_flag_beyond_depth_32_is_recognized() {
     assert!(!has_password_values(&doc));
 }
 
+/// A field reachable both near the top of the tree and at the end of a long branch: the field
+/// walk reaches it near the top and reads the password field below it, so the quick check must
+/// not stop at the long branch's depth limit and conclude there is none. The password field's
+/// widget is on the page but names no `/Parent`, so the page widgets alone don't find it either.
+#[test]
+fn a_password_field_past_the_depth_limit_on_one_branch_is_still_found() {
+    let chain = 64;
+    let x = 6 + chain; // the shared field
+    let y = x + 1; // the password field
+    let w = y + 1; // its widget
+    let mut objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        format!("<< /Type /Page /Parent 2 0 R /Annots [{w} 0 R] >>"),
+        "<< /Fields [5 0 R 6 0 R] /DA (/Helv 0 Tf 0 g) >>".into(),
+        format!("<< /T (short) /Kids [{x} 0 R] >>"),
+    ];
+    for d in 0..chain {
+        let next = if d + 1 == chain { x } else { 7 + d };
+        objs.push(format!("<< /T (n{d}) /Kids [{next} 0 R] >>"));
+    }
+    objs.push(format!("<< /T (shared) /Kids [{y} 0 R] >>"));
+    objs.push(format!("<< /FT /Tx /T (pin) /Ff 8192 /V (deepsecret) /Kids [{w} 0 R] >>"));
+    objs.push("<< /Type /Annot /Subtype /Widget /Rect [50 600 150 620] /P 3 0 R >>".into());
+    let mut doc = document(&objs);
+    assert!(fields(&doc).iter().any(|f| f.has(flags::PASSWORD)), "the field walk reads the password field");
+    assert!(has_password_flag(&doc));
+    assert!(has_password_values(&doc));
+    assert_eq!(clear_password_values(&mut doc).unwrap(), 1);
+    assert!(!has_password_values(&doc));
+}
+
+/// A password field below an unlisted field whose other widget is on the page: the field walk
+/// adopts the whole unlisted field from that widget, so the quick check looks below it too.
+#[test]
+fn a_password_field_below_an_adopted_page_field_is_found() {
+    let mut doc = document(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R] >>".into(),
+        "<< /Fields [] /DA (/Helv 0 Tf 0 g) >>".into(),
+        "<< /T (grp) /Kids [6 0 R 7 0 R] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (name) /Parent 5 0 R /Rect [50 700 150 720] /P 3 0 R >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (pin) /Ff 8192 /V (secret8) /Parent 5 0 R /Rect [0 0 0 0] >>".into(),
+    ]);
+    assert!(fields(&doc).iter().any(|f| f.has(flags::PASSWORD)), "the field walk adopts the password field");
+    assert!(has_password_flag(&doc));
+    assert!(has_password_values(&doc));
+    assert_eq!(clear_password_values(&mut doc).unwrap(), 1);
+    assert!(!has_password_values(&doc));
+}
+
 /// #4018: a value that doesn't fit its box at the field's font size is reported (it is drawn cut
 /// at the box). An auto-sized field shrinks to fit, and a short or empty value fits.
 #[test]
