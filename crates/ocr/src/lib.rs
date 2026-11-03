@@ -258,7 +258,7 @@ impl Ocr {
 
     /// Each detected line's bounding box, and its fitted box when it is skewed enough to be read
     /// straightened.
-    fn line_regions(&self, image: &image::RgbImage) -> Result<Vec<([f32; 4], Option<lines::LineBox>)>, OcrError> {
+    fn line_regions(&self, image: &image::RgbImage) -> Result<Vec<LineRegion>, OcrError> {
         use rten_imageproc::BoundingRect;
         let source = ocrs::ImageSource::from_bytes(image.as_raw(), image.dimensions()).map_err(|e| OcrError::Recognize(e.to_string()))?;
         let input = self.engine.prepare_input(source).map_err(|e| OcrError::Recognize(e.to_string()))?;
@@ -293,6 +293,9 @@ impl Ocr {
         self.multilingual.orientation(image)
     }
 }
+
+/// A detected line's bounding box and, when it is skewed enough, its fitted box.
+type LineRegion = ([f32; 4], Option<lines::LineBox>);
 
 /// Whether `line` is read straightened. Only when its baseline climbs more than a quarter of
 /// its height from end to end: below that its bounding box takes in no neighbours, and a short
