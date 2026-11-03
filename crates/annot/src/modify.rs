@@ -435,19 +435,38 @@ pub fn set_points(doc: &mut Document, page: usize, index: usize, points: &[[f64;
 
 /// Scale a drawing's strokes into `rect`. The margin between the strokes and the old `/Rect` (half
 /// the line width and a little more) stays the same on each side, so the line isn't clipped.
+/// Most stroke points a stored drawing may have for resizing or erasing it. Counted as each
+/// stroke is resolved, so one stroke array referenced again and again can't expand past it.
+const MAX_STORED_INK_POINTS: usize = 1_000_000;
+/// Most points the eraser densifies a drawing into before testing them against its path.
+const MAX_ERASE_SAMPLES: usize = 4_000_000;
+
+/// The strokes of an ink annotation's `/InkList`, at most [`MAX_STORED_INK_POINTS`] points.
+fn ink_strokes(doc: &Document, d: &Dict) -> Result<Vec<Vec<[f64; 2]>>, AnnotError> {
+    let too_many = || AnnotError::Invalid(format!("the drawing has more than {MAX_STORED_INK_POINTS} points"));
+    let list = d.get(b"InkList").map(|l| doc.resolve(l));
+    let mut points = 0usize;
+    let mut strokes = Vec::new();
+    for s in list.as_deref().and_then(Object::as_array).map(Vec::as_slice).unwrap_or_default() {
+        let stroke = doc.resolve(s);
+        let Some(a) = stroke.as_array() else {
+            strokes.push(Vec::new());
+            continue;
+        };
+        // Charged before the coordinates are read: a shared array costs each time it is listed.
+        points = points.saturating_add(a.len() / 2);
+        if points > MAX_STORED_INK_POINTS {
+            return Err(too_many());
+        }
+        let v: Vec<f64> = a.iter().filter_map(|x| doc.resolve(x).as_f64()).collect();
+        strokes.push(v.as_chunks::<2>().0.iter().map(|p| [p[0], p[1]]).collect());
+    }
+    Ok(strokes)
+}
+
 fn resize_ink(doc: &mut Document, r: ObjRef, rect: [f64; 4], meta: &Meta) -> Result<(), AnnotError> {
     let d = annot_dict(doc, r);
-    let strokes: Vec<Vec<[f64; 2]>> = d
-        .get(b"InkList")
-        .map(|l| doc.resolve(l))
-        .and_then(|l| l.as_array().cloned())
-        .unwrap_or_default()
-        .iter()
-        .map(|s| {
-            let v: Vec<f64> = doc.resolve(s).as_array().map(|a| a.iter().filter_map(|x| doc.resolve(x).as_f64()).collect()).unwrap_or_default();
-            v.as_chunks::<2>().0.iter().map(|p| [p[0], p[1]]).collect()
-        })
-        .collect();
+    let strokes = ink_strokes(doc, &d)?;
     let Some(inner) = bounds(strokes.iter().flatten().copied()) else {
         return Err(AnnotError::Invalid("the drawing has no strokes".into()));
     };
@@ -799,17 +818,7 @@ pub fn erase_ink(doc: &mut Document, page: usize, index: usize, path: &[[f64; 2]
     if path.is_empty() || !path.iter().all(|p| finite(p)) || !radius.is_finite() || radius <= 0.0 {
         return Err(AnnotError::Invalid("invalid eraser path".into()));
     }
-    let strokes: Vec<Vec<[f64; 2]>> = d
-        .get(b"InkList")
-        .map(|l| doc.resolve(l))
-        .and_then(|l| l.as_array().cloned())
-        .unwrap_or_default()
-        .iter()
-        .map(|s| {
-            let v: Vec<f64> = doc.resolve(s).as_array().map(|a| a.iter().filter_map(|x| doc.resolve(x).as_f64()).collect()).unwrap_or_default();
-            v.as_chunks::<2>().0.iter().map(|p| [p[0], p[1]]).collect()
-        })
-        .collect();
+    let strokes = ink_strokes(doc, &d)?;
     // Distance from a point to the eraser's path (segments, or a single point).
     let near = |p: [f64; 2]| -> bool {
         if path.len() == 1 {
@@ -825,11 +834,16 @@ pub fn erase_ink(doc: &mut Document, page: usize, index: usize, path: &[[f64; 2]
     };
     let mut kept: Vec<Vec<[f64; 2]>> = Vec::new();
     let mut erased = false;
+    let mut samples = 0usize;
     for s in &strokes {
         // Densify so long segments are cut where the eraser crosses them.
         let mut pts: Vec<[f64; 2]> = Vec::new();
         for w in s.windows(2) {
             let n = ((w[1][0] - w[0][0]).hypot(w[1][1] - w[0][1]) / (radius / 2.0)).ceil().clamp(1.0, 2000.0) as usize;
+            samples = samples.saturating_add(n);
+            if samples > MAX_ERASE_SAMPLES {
+                return Err(AnnotError::Invalid("the drawing is too large to erase at this eraser size".into()));
+            }
             for k in 0..n {
                 let t = k as f64 / n as f64;
                 pts.push([w[0][0] + (w[1][0] - w[0][0]) * t, w[0][1] + (w[1][1] - w[0][1]) * t]);
