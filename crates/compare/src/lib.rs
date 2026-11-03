@@ -397,6 +397,12 @@ mod tests {
     }
 }
 
+/// Byte offset of pixel (`x`, `y`) in a `w`-wide RGBA buffer, in wide integers so an image past 4 GiB
+/// (its `y * w` or `* 4` would wrap a `u32`) still indexes the right pixel; past `usize` it is out of range.
+fn rgba_index(x: u32, y: u32, w: u32) -> usize {
+    usize::try_from((u128::from(y) * u128::from(w) + u128::from(x)) * 4).unwrap_or(usize::MAX)
+}
+
 /// Visual compare: the regions where two renderings of a page differ, as pixel boxes
 /// `[x0, y0, x1, y1]` (y down) in `a`'s image. Both images are RGBA; `b` is sampled at the
 /// same relative position when sizes differ. Pixels count as different when a channel differs
@@ -419,9 +425,8 @@ pub fn visual_regions(a: (&[u8], u32, u32), b: (&[u8], u32, u32), tolerance: u8)
         let yb = (y as u64 * hb as u64 / ha as u64) as u32;
         for x in 0..wa {
             let xb = (x as u64 * wb as u64 / wa as u64) as u32;
-            let ia = ((y * wa + x) * 4) as usize;
-            let ib = ((yb * wb + xb) * 4) as usize;
-            let (Some(ca), Some(cb)) = (pa.get(ia..ia + 3), pb.get(ib..ib + 3)) else { continue };
+            let (ia, ib) = (rgba_index(x, y, wa), rgba_index(xb, yb, wb));
+            let (Some(ca), Some(cb)) = (pa.get(ia..ia.saturating_add(3)), pb.get(ib..ib.saturating_add(3))) else { continue };
             if ca.iter().zip(cb).any(|(p, q)| p.abs_diff(*q) > tolerance) {
                 grid[((y / CELL) * gw + x / CELL) as usize] = true;
             }
@@ -501,5 +506,18 @@ mod visual_hostile_tests {
         let px = [0u8; 16];
         let r = visual_regions((&px, u32::MAX, u32::MAX), (&px, 2, 2), 0);
         assert!(r.is_empty());
+    }
+
+    #[test]
+    fn pixel_offsets_past_four_gib_do_not_wrap() {
+        // A 32768 x 32769 RGBA image is 4,295,098,368 bytes, so a buffer that large passes the size check;
+        // its last pixel sits past u32::MAX and must not wrap back onto an early pixel.
+        let (w, h) = (32768u32, 32769u32);
+        let last = rgba_index(w - 1, h - 1, w);
+        assert_eq!(last as u64, (u64::from(h - 1) * u64::from(w) + u64::from(w - 1)) * 4);
+        assert!(last as u64 > u64::from(u32::MAX));
+        assert_eq!(rgba_index(0, 0, w), 0);
+        // Out of range for any buffer: saturates instead of overflowing.
+        assert_eq!(rgba_index(u32::MAX, u32::MAX, u32::MAX), usize::MAX);
     }
 }
