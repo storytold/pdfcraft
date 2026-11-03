@@ -50,6 +50,26 @@ fn tagged_text_uses_tree_order_and_omits_artifact_content() {
 }
 
 #[test]
+fn tagged_text_reads_mcid_from_a_page_content_stream_reference() {
+    let doc = pdf(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 6 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>".into(),
+            stream("BT /F1 12 Tf /P << /MCID 0 >> BDC (STREAM TEXT) Tj EMC ET"),
+            FONT.into(),
+            "<< /Type /StructTreeRoot /K 7 0 R >>".into(),
+            "<< /S /Document /K 8 0 R >>".into(),
+            "<< /S /P /P 7 0 R /Pg 3 0 R /K << /Type /MCR /Pg 3 0 R /Stm 4 0 R /MCID 0 >> >>".into(),
+        ],
+        "",
+    );
+    let tagged = tagged_text(&doc, &[0]);
+    assert_eq!(tagged.text, "STREAM TEXT");
+    assert!(tagged.warnings.is_empty(), "{:?}", tagged.warnings);
+}
+
+#[test]
 fn tagged_text_reports_repeated_and_missing_structure_references() {
     let doc = pdf(
         &[
@@ -130,6 +150,90 @@ fn tagged_text_budget_keeps_earlier_tree_marks_found_late_in_paint_order() {
 }
 
 #[test]
+fn tagged_text_budget_does_not_spend_priority_on_replaced_content() {
+    let doc = pdf(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 6 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>".into(),
+            stream("BT /F1 12 Tf /P << /MCID 0 >> BDC (AAAA) Tj EMC /P << /MCID 1 >> BDC (BBBB) Tj EMC ET"),
+            FONT.into(),
+            "<< /Type /StructTreeRoot /K 7 0 R >>".into(),
+            "<< /S /Document /K [8 0 R 9 0 R] >>".into(),
+            "<< /S /Figure /P 7 0 R /Pg 3 0 R /ActualText (ALT) /K 0 >>".into(),
+            "<< /S /P /P 7 0 R /Pg 3 0 R /K 1 >>".into(),
+        ],
+        "",
+    );
+    assert_eq!(tagged_text_with_limit(&doc, &[0], 4).text, "ALT\nBBBB");
+}
+
+#[test]
+fn tagged_text_does_not_evict_text_for_an_oversized_actual_text() {
+    let doc = pdf(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>".into(),
+            stream("BT /F1 12 Tf /P << /MCID 1 >> BDC (BBBB) Tj EMC /P << /MCID 0 /ActualText (AAAAAAAA) >> BDC (hidden) Tj EMC ET"),
+            FONT.into(),
+        ],
+        "",
+    );
+    let page = pdfcraft_model::pages(&doc).remove(0);
+    let priorities = [(0, 0), (1, 1)].into_iter().collect();
+    let texts = crate::headings::mcid_texts_limited(&doc, &page.dict, 1024, 4, Some(&priorities));
+    assert_eq!(texts.by_id.get(&1).map(String::as_str), Some("BBBB"));
+    assert!(!texts.by_id.contains_key(&0));
+    assert!(texts.limited);
+}
+
+#[test]
+fn tagged_text_forms_do_not_spend_the_page_budget_before_their_tree_reference() {
+    let form_text = "BT /F1 12 Tf /P << /MCID 0 >> BDC (FORM) Tj EMC ET";
+    let form = format!("<< /Type /XObject /Subtype /Form /BBox [0 0 300 300] /Length {} >>\nstream\n{form_text}\nendstream", form_text.len());
+    let doc = pdf(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 6 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Resources << /XObject << /Fm 4 0 R >> /Font << /F1 5 0 R >> >> /Contents 10 0 R >>".into(),
+            form,
+            FONT.into(),
+            "<< /Type /StructTreeRoot /K 7 0 R >>".into(),
+            "<< /S /Document /K [8 0 R 9 0 R] >>".into(),
+            "<< /S /P /P 7 0 R /Pg 3 0 R /K 1 >>".into(),
+            "<< /S /P /P 7 0 R /Pg 3 0 R /K << /Type /MCR /Pg 3 0 R /Stm 4 0 R /MCID 0 >> >>".into(),
+            stream("q /Fm Do Q BT /F1 12 Tf /P << /MCID 1 >> BDC (PAGE) Tj EMC ET"),
+        ],
+        "",
+    );
+    assert_eq!(tagged_text_with_limit(&doc, &[0], 8).text, "PAGE\nFORM");
+    assert_eq!(tagged_text_with_limit(&doc, &[0], 4).text, "PAGE");
+}
+
+#[test]
+fn tagged_text_ignores_unreferenced_form_bytes_in_the_page_text_budget() {
+    let form_text = "BT /F1 12 Tf /P << /MCID 4 >> BDC (FORM) Tj EMC ET";
+    let form = format!("<< /Type /XObject /Subtype /Form /BBox [0 0 300 300] /Length {} >>\nstream\n{form_text}\nendstream", form_text.len());
+    let doc = pdf(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Resources << /XObject << /Fm 4 0 R >> /Font << /F1 5 0 R >> >> /Contents 6 0 R >>"
+                .into(),
+            form,
+            FONT.into(),
+            stream("q /Fm Do Q BT /F1 12 Tf /P << /MCID 0 >> BDC (TREE) Tj EMC ET"),
+        ],
+        "",
+    );
+    let page = pdfcraft_model::pages(&doc).remove(0);
+    let texts = crate::headings::mcid_texts_limited(&doc, &page.dict, 1024, 4, None);
+    assert_eq!(texts.by_id.get(&0).map(String::as_str), Some("TREE"));
+    assert_eq!(texts.form_texts.get(&ObjRef { num: 4, generation: 0 }).and_then(|form| form.by_id.get(&4)).map(String::as_str), Some("FORM"));
+}
+
+#[test]
 fn tagged_text_applies_shrinking_actual_text_before_growing_replacements() {
     let doc = pdf(
         &[
@@ -182,6 +286,28 @@ fn tagged_text_applies_nested_actual_text_only_to_its_span() {
         "",
     );
     assert_eq!(tagged_text(&doc, &[0]).text, "before corrected after");
+    assert!(tagged_text(&doc, &[0]).warnings.is_empty());
+}
+
+#[test]
+fn tagged_text_does_not_report_artifact_form_text_as_unstructured() {
+    let form_text = "BT /F1 12 Tf (ARTIFACT FORM) Tj ET";
+    let form = format!("<< /Type /XObject /Subtype /Form /BBox [0 0 300 300] /Length {} >>\nstream\n{form_text}\nendstream", form_text.len());
+    let doc = pdf(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 6 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Resources << /XObject << /Fm 4 0 R >> /Font << /F1 5 0 R >> >> /Contents 8 0 R >>"
+                .into(),
+            form,
+            FONT.into(),
+            "<< /Type /StructTreeRoot /K 7 0 R >>".into(),
+            "<< /S /Document /K [] >>".into(),
+            stream("/Artifact BMC q /Fm Do Q EMC"),
+        ],
+        "",
+    );
+    assert!(tagged_text(&doc, &[0]).warnings.is_empty());
 }
 
 #[test]
@@ -287,8 +413,9 @@ fn tagged_text_shares_the_form_visit_budget_across_references() {
         "",
     );
     let mut budget = DecodeBudget::new(1024, 1);
-    let first = crate::headings::form_mcid_texts(&doc, ObjRef { num: 4, generation: 0 }, 1024, None, &mut budget).unwrap();
-    let second = crate::headings::form_mcid_texts(&doc, ObjRef { num: 5, generation: 0 }, 1024, None, &mut budget).unwrap();
+    let resources = pdfcraft_cos::Dict::new();
+    let first = crate::headings::stream_mcid_texts(&doc, ObjRef { num: 4, generation: 0 }, 1024, None, &mut budget, &resources, None).unwrap();
+    let second = crate::headings::stream_mcid_texts(&doc, ObjRef { num: 5, generation: 0 }, 1024, None, &mut budget, &resources, None).unwrap();
     assert_eq!(first.by_id.get(&4).map(String::as_str), Some("FORM"));
     assert!(second.limited);
     assert!(second.by_id.is_empty());

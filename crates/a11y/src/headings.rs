@@ -73,10 +73,11 @@ pub(crate) fn tagged_text_with_limit(doc: &Document, selected_pages: &[usize], t
 }
 
 type TaggedTask = (Object, Option<ObjRef>, usize, Option<usize>, Option<ObjRef>);
-type MarkPriorities = HashMap<(usize, Option<ObjRef>), HashMap<i64, usize>>;
+pub(crate) type MarkPriorities = HashMap<(usize, Option<ObjRef>), HashMap<i64, usize>>;
 
 fn structure_mark_priorities(doc: &Document, root: &Dict, page_index: &HashMap<ObjRef, usize>, selected: &HashSet<usize>) -> MarkPriorities {
     let mut priorities = MarkPriorities::new();
+    let role_map = root.get(b"RoleMap").map(|value| doc.resolve(value)).and_then(|value| value.as_dict().cloned()).unwrap_or_default();
     let mut tasks = root.get(b"K").cloned().map(|item| vec![(item, None, 0usize)]).unwrap_or_default();
     let mut seen = HashSet::new();
     let objects: HashSet<u32> = doc.object_numbers().into_iter().collect();
@@ -112,6 +113,9 @@ fn structure_mark_priorities(doc: &Document, root: &Dict, page_index: &HashMap<O
             }
             Object::Dict(dict) => {
                 let page = dict.get(b"Pg").and_then(Object::as_ref).or(inherited_page);
+                if structure_replacement(doc, &role_map, &dict).is_some() {
+                    continue;
+                }
                 if dict.name(b"Type") == Some(b"MCR") {
                     if let Some((page, mcid)) = dict
                         .get(b"MCID")
@@ -147,7 +151,7 @@ struct TaggedWalker<'a> {
     objects: HashSet<u32>,
     seen: HashSet<ObjRef>,
     texts: HashMap<usize, McidTexts>,
-    form_texts: HashMap<(usize, ObjRef), McidTexts>,
+    direct_stream_texts: HashMap<(usize, ObjRef), McidTexts>,
     decode_budgets: HashMap<usize, DecodeBudget>,
     mark_priorities: MarkPriorities,
     text_limit: usize,
@@ -179,7 +183,7 @@ impl<'a> TaggedWalker<'a> {
             objects: doc.object_numbers().into_iter().collect(),
             seen: HashSet::new(),
             texts: HashMap::new(),
-            form_texts: HashMap::new(),
+            direct_stream_texts: HashMap::new(),
             decode_budgets: HashMap::new(),
             mark_priorities,
             text_limit,
@@ -294,13 +298,24 @@ impl<'a> TaggedWalker<'a> {
             let priorities = priority_page.and_then(|page| self.mark_priorities.get(&(page, Some(stream))));
             if let Some(page_index) = priority_page {
                 let cache_key = (page_index, stream);
-                if !self.form_texts.contains_key(&cache_key) && self.texts.get(&page_index).and_then(|texts| find_form_text(texts, stream)).is_none()
+                if !self.direct_stream_texts.contains_key(&cache_key)
+                    && self.texts.get(&page_index).and_then(|texts| find_form_text(texts, stream)).is_none()
                 {
                     let remaining = self.text_limit.saturating_sub(self.extracted_text);
                     let budget = self.decode_budgets.entry(page_index).or_insert_with(DecodeBudget::page);
-                    let parsed = form_mcid_texts(self.doc, stream, remaining, priorities, budget).unwrap_or_default();
+                    let parent_resources = self.pages.get(page_index).map(|page| sub(self.doc, &page.dict, b"Resources")).unwrap_or_default();
+                    let parsed = stream_mcid_texts(
+                        self.doc,
+                        stream,
+                        remaining,
+                        priorities,
+                        budget,
+                        &parent_resources,
+                        Some((&self.mark_priorities, page_index)),
+                    )
+                    .unwrap_or_default();
                     self.extracted_text = self.extracted_text.saturating_add(parsed.bytes);
-                    self.form_texts.insert(cache_key, parsed);
+                    self.direct_stream_texts.insert(cache_key, parsed);
                 }
             }
         }
@@ -326,7 +341,8 @@ impl<'a> TaggedWalker<'a> {
         }
         let remaining = self.text_limit.saturating_sub(self.extracted_text);
         let text = if let Some(stream) = stream {
-            let Some(texts) = self.form_texts.get(&(page, stream)).or_else(|| self.texts.get(&page).and_then(|texts| find_form_text(texts, stream)))
+            let Some(texts) =
+                self.direct_stream_texts.get(&(page, stream)).or_else(|| self.texts.get(&page).and_then(|texts| find_form_text(texts, stream)))
             else {
                 tagged_warning(&mut self.out, format!("missing marked content {mcid} on page {}", page + 1));
                 return;
@@ -345,7 +361,16 @@ impl<'a> TaggedWalker<'a> {
                     .pages
                     .get(page)
                     .map(|p| {
-                        mcid_texts_limited_skipping_with_budget(self.doc, &p.dict, MAX_TAGGED_TEXT, remaining, priorities, &skipped_forms, budget)
+                        let mut forms = HashSet::new();
+                        let mut state = McidParseState {
+                            doc: self.doc,
+                            max_text: MAX_TAGGED_TEXT,
+                            skipped_forms: &skipped_forms,
+                            budget,
+                            forms: &mut forms,
+                            tree_priorities: Some((&self.mark_priorities, page)),
+                        };
+                        mcid_texts_within(&mut state, &p.dict, None, None, remaining, priorities, 0)
                     })
                     .unwrap_or_default();
                 self.extracted_text = self.extracted_text.saturating_add(texts.bytes);
@@ -396,20 +421,18 @@ impl TaggedWalker<'_> {
                 let skipped_forms: HashSet<_> =
                     self.used_marks.iter().filter_map(|(used_page, source, _)| (*used_page == *page).then_some(*source).flatten()).collect();
                 let budget = self.decode_budgets.entry(*page).or_insert_with(DecodeBudget::page);
-                let text = pages
-                    .get(*page)
-                    .map(|p| {
-                        mcid_texts_limited_skipping_with_budget(
-                            self.doc,
-                            &p.dict,
-                            MAX_TAGGED_TEXT,
-                            remaining,
-                            page_priorities,
-                            &skipped_forms,
-                            budget,
-                        )
-                    })
-                    .unwrap_or_default();
+                let text = pages.get(*page).map_or_else(McidTexts::default, |p| {
+                    let mut forms = HashSet::new();
+                    let mut state = McidParseState {
+                        doc: self.doc,
+                        max_text: MAX_TAGGED_TEXT,
+                        skipped_forms: &skipped_forms,
+                        budget,
+                        forms: &mut forms,
+                        tree_priorities: Some((&self.mark_priorities, *page)),
+                    };
+                    mcid_texts_within(&mut state, &p.dict, None, None, remaining, page_priorities, 0)
+                });
                 self.extracted_text = self.extracted_text.saturating_add(text.bytes);
                 self.texts.insert(*page, text);
             }
@@ -419,7 +442,7 @@ impl TaggedWalker<'_> {
             }
             if page_text.unmarked_text
                 || page_text.by_id.iter().any(|(mcid, text)| !text.trim().is_empty() && !self.used_marks.contains(&(*page, None, *mcid)))
-                || has_unstructured_form_text(*page, page_text, &self.form_texts, &self.used_marks)
+                || has_unstructured_form_text(*page, page_text, &self.direct_stream_texts, &self.used_marks)
             {
                 tagged_warning(&mut self.out, format!("page {} contains text outside the structure tree", page + 1));
             }
@@ -469,24 +492,26 @@ fn structure_replacement(doc: &Document, role_map: &Dict, dict: &Dict) -> Option
     None
 }
 
-pub(crate) fn form_mcid_texts(
+pub(crate) fn stream_mcid_texts(
     doc: &Document,
     reference: ObjRef,
     max_total: usize,
     priorities: Option<&HashMap<i64, usize>>,
     budget: &mut DecodeBudget,
+    parent_resources: &Dict,
+    tree_priorities: Option<(&MarkPriorities, usize)>,
 ) -> Option<McidTexts> {
     let object = doc.get(reference);
     let Object::Stream(stream) = &*object else { return None };
-    if stream.dict.name(b"Subtype") != Some(b"Form") {
-        return None;
-    }
-    if !budget.enter_form() {
+    let is_form = stream.dict.name(b"Subtype") == Some(b"Form");
+    if is_form && !budget.enter_form() {
         return Some(McidTexts { limited: true, ..McidTexts::default() });
     }
     let Ok(data) = budget.decode(stream) else { return Some(McidTexts { limited: true, ..McidTexts::default() }) };
     let mut forms = HashSet::from([reference]);
-    Some(mcid_texts_within(doc, &stream.dict, Some(&data), None, MAX_TAGGED_TEXT, max_total, priorities, &HashSet::new(), budget, &mut forms, 0))
+    let skipped_forms = HashSet::new();
+    let mut state = McidParseState { doc, max_text: MAX_TAGGED_TEXT, skipped_forms: &skipped_forms, budget, forms: &mut forms, tree_priorities };
+    Some(mcid_texts_within(&mut state, &stream.dict, Some(&data), Some(parent_resources), max_total, priorities, 0))
 }
 
 struct CoverState<'a> {
@@ -560,11 +585,11 @@ fn cover_struct_content(doc: &Document, root: &Object, page: Option<ObjRef>, sta
 fn has_unstructured_form_text(
     page: usize,
     root: &McidTexts,
-    direct_forms: &HashMap<(usize, ObjRef), McidTexts>,
+    direct_streams: &HashMap<(usize, ObjRef), McidTexts>,
     used_marks: &HashSet<(usize, Option<ObjRef>, i64)>,
 ) -> bool {
     let mut forms: Vec<(ObjRef, &McidTexts)> = root.form_texts.iter().map(|(reference, text)| (*reference, text)).collect();
-    forms.extend(direct_forms.iter().filter_map(|((form_page, reference), text)| (*form_page == page).then_some((*reference, text))));
+    forms.extend(direct_streams.iter().filter_map(|((form_page, reference), text)| (*form_page == page).then_some((*reference, text))));
     while let Some((reference, texts)) = forms.pop() {
         if texts.unmarked_text
             || texts.by_id.iter().any(|(mcid, text)| !text.trim().is_empty() && !used_marks.contains(&(page, Some(reference), *mcid)))
@@ -762,6 +787,22 @@ struct MarkedFrame {
     apply_replacement: bool,
 }
 
+struct McidParseState<'a> {
+    doc: &'a Document,
+    max_text: usize,
+    skipped_forms: &'a HashSet<ObjRef>,
+    budget: &'a mut DecodeBudget,
+    forms: &'a mut HashSet<ObjRef>,
+    tree_priorities: Option<(&'a MarkPriorities, usize)>,
+}
+
+impl McidParseState<'_> {
+    fn form_priorities(&self, reference: ObjRef) -> Option<&HashMap<i64, usize>> {
+        let (priorities, page) = self.tree_priorities?;
+        priorities.get(&(page, Some(reference)))
+    }
+}
+
 pub(crate) fn mcid_texts_limited(
     doc: &Document,
     page: &Dict,
@@ -794,30 +835,28 @@ fn mcid_texts_limited_skipping_with_budget(
     budget: &mut DecodeBudget,
 ) -> McidTexts {
     let mut forms = HashSet::new();
-    mcid_texts_within(doc, page, None, None, max_text, max_total, priorities, skipped_forms, budget, &mut forms, 0)
+    let mut state = McidParseState { doc, max_text, skipped_forms, budget, forms: &mut forms, tree_priorities: None };
+    mcid_texts_within(&mut state, page, None, None, max_total, priorities, 0)
 }
 
-#[allow(clippy::cognitive_complexity, clippy::too_many_arguments)]
+#[allow(clippy::cognitive_complexity)]
 fn mcid_texts_within(
-    doc: &Document,
+    state: &mut McidParseState<'_>,
     page: &Dict,
     content: Option<&[u8]>,
     parent_resources: Option<&Dict>,
-    max_text: usize,
     max_total: usize,
     priorities: Option<&HashMap<i64, usize>>,
-    skipped_forms: &HashSet<ObjRef>,
-    budget: &mut DecodeBudget,
-    forms: &mut HashSet<ObjRef>,
     depth: usize,
 ) -> McidTexts {
+    let max_text = state.max_text;
     let res = page
         .get(b"Resources")
-        .map(|value| doc.resolve(value))
+        .map(|value| state.doc.resolve(value))
         .and_then(|value| value.as_dict().cloned())
         .or_else(|| parent_resources.cloned())
         .unwrap_or_default();
-    let (fonts, props) = (sub(doc, &res, b"Font"), sub(doc, &res, b"Properties"));
+    let (fonts, props) = (sub(state.doc, &res, b"Font"), sub(state.doc, &res, b"Properties"));
     let mut metrics: HashMap<Vec<u8>, Metrics> = HashMap::new();
     // The id each open marked-content sequence is in: its own, else the enclosing one's.
     let mut stack = Vec::<MarkedFrame>::new();
@@ -836,8 +875,8 @@ fn mcid_texts_within(
     let mut unsaved = 0usize;
     let mut form_cache = HashSet::<ObjRef>::new();
     let (mut tm, mut tlm) = (Matrix::IDENTITY, Matrix::IDENTITY);
-    let xobjects = sub(doc, &res, b"XObject");
-    let decoded_page_data = content.is_none().then(|| page_content_within(doc, page, budget));
+    let xobjects = sub(state.doc, &res, b"XObject");
+    let decoded_page_data = content.is_none().then(|| page_content_within(state.doc, page, state.budget));
     let page_data = content.or(decoded_page_data.as_deref()).unwrap_or_default();
     for op in pdfcraft_content::parse(page_data).ops {
         crate::count_mark_reads(1);
@@ -848,44 +887,35 @@ fn mcid_texts_within(
         match op.op.as_slice() {
             b"Do" => {
                 let Some(reference) = op.name(0).and_then(|name| xobjects.get(name)).and_then(Object::as_ref) else { continue };
-                if skipped_forms.contains(&reference) {
+                if artifact || state.skipped_forms.contains(&reference) {
                     continue;
                 }
-                let object = doc.get(reference);
+                let object = state.doc.get(reference);
                 let Object::Stream(stream) = &*object else { continue };
                 if stream.dict.name(b"Subtype") != Some(b"Form") {
+                    continue;
+                }
+                if state.form_priorities(reference).is_some() {
+                    form_cache.insert(reference);
                     continue;
                 }
                 if form_cache.contains(&reference) {
                     continue;
                 }
-                if depth >= MAX_TAGGED_FORM_DEPTH || forms.contains(&reference) || !budget.enter_form() {
+                if depth >= MAX_TAGGED_FORM_DEPTH || state.forms.contains(&reference) || !state.budget.enter_form() {
                     out.limited = true;
                     continue;
                 }
-                let Ok(data) = budget.decode(stream) else {
+                let Ok(data) = state.budget.decode(stream) else {
                     out.limited = true;
                     continue;
                 };
-                forms.insert(reference);
-                let remaining = max_total.saturating_sub(total_text);
-                let form_resources = stream.dict.get(b"Resources").map(|value| doc.resolve(value)).and_then(|value| value.as_dict().cloned());
+                state.forms.insert(reference);
+                let remaining = MAX_TAGGED_TEXT;
+                let form_resources = stream.dict.get(b"Resources").map(|value| state.doc.resolve(value)).and_then(|value| value.as_dict().cloned());
                 let form_dict = stream.dict.clone();
-                let form = mcid_texts_within(
-                    doc,
-                    &form_dict,
-                    Some(&data),
-                    form_resources.as_ref().or(Some(&res)),
-                    max_text,
-                    remaining,
-                    None,
-                    skipped_forms,
-                    budget,
-                    forms,
-                    depth + 1,
-                );
-                forms.remove(&reference);
-                total_text = total_text.saturating_add(form.bytes);
+                let form = mcid_texts_within(state, &form_dict, Some(&data), form_resources.as_ref().or(Some(&res)), remaining, None, depth + 1);
+                state.forms.remove(&reference);
                 out.limited |= form.limited;
                 out.unmarked_text |= form.unmarked_text;
                 form_cache.insert(reference);
@@ -903,7 +933,7 @@ fn mcid_texts_within(
             b"BDC" => {
                 let properties = match op.operands.get(1) {
                     Some(Object::Dict(d)) => Some(d.clone()),
-                    Some(Object::Name(n)) => props.get(n).map(|x| doc.resolve(x)).and_then(|x| x.as_dict().cloned()),
+                    Some(Object::Name(n)) => props.get(n).map(|x| state.doc.resolve(x)).and_then(|x| x.as_dict().cloned()),
                     _ => None,
                 }
                 .unwrap_or_default();
@@ -912,7 +942,7 @@ fn mcid_texts_within(
                 let opens_artifact = artifact || op.name(0) == Some(b"Artifact");
                 let has_outer_replacement = stack.iter().any(|frame| frame.suppresses_text);
                 let actual_text =
-                    properties.get(b"ActualText").map(|value| doc.resolve(value)).and_then(|value| value.as_string().map(|s| s.to_text()));
+                    properties.get(b"ActualText").map(|value| state.doc.resolve(value)).and_then(|value| value.as_string().map(|s| s.to_text()));
                 let has_actual_text = !opens_artifact && actual_text.is_some();
                 let mut local_actual_text = None;
                 let mut unmarked_actual_text = None;
@@ -953,7 +983,7 @@ fn mcid_texts_within(
                     if let Some((id, replacement)) = frame.local_actual_text {
                         let rank = priorities.and_then(|items| items.get(&id)).copied().unwrap_or(usize::MAX);
                         let text_len = out.by_id.get(&id).map_or(0, String::len);
-                        if text_len.saturating_add(replacement.len()) <= max_text {
+                        if text_len.saturating_add(replacement.len()) <= max_text && replacement.len() <= max_total {
                             while total_text.saturating_add(replacement.len()) > max_total
                                 && let Some((worst_rank, worst_id)) = retained.iter().next_back().copied()
                                 && worst_id != id
@@ -970,7 +1000,7 @@ fn mcid_texts_within(
                         }
                         let text = out.by_id.entry(id).or_default();
                         let updated = text.len().saturating_add(replacement.len());
-                        if updated <= max_text && total_text.saturating_add(replacement.len()) <= max_total {
+                        if updated <= max_text && replacement.len() <= max_total && total_text.saturating_add(replacement.len()) <= max_total {
                             text.push_str(&replacement);
                             total_text = total_text.saturating_add(replacement.len());
                             retained.insert((rank, id));
@@ -1001,9 +1031,9 @@ fn mcid_texts_within(
                 gs.font = op.name(0).map(<[u8]>::to_vec);
                 if let Some(name) = op.name(0)
                     && !metrics.contains_key(name)
-                    && let Some(f) = fonts.get(name).map(|f| doc.resolve(f)).and_then(|f| f.as_dict().cloned())
+                    && let Some(f) = fonts.get(name).map(|f| state.doc.resolve(f)).and_then(|f| f.as_dict().cloned())
                 {
-                    metrics.insert(name.to_vec(), Metrics::from_dict(doc, &f));
+                    metrics.insert(name.to_vec(), Metrics::from_dict(state.doc, &f));
                 }
             }
             b"Tc" => gs.char_spacing = op.num(0).unwrap_or(0.0),
@@ -1095,7 +1125,7 @@ fn mcid_texts_within(
                             out.limited = true;
                             truncated.insert(id);
                         }
-                    } else if !artifact && !glyph.trim().is_empty() {
+                    } else if !artifact && !suppressed && !glyph.trim().is_empty() {
                         out.unmarked_text = true;
                     }
                 }
@@ -1115,6 +1145,7 @@ fn mcid_texts_within(
         let previous = out.by_id.get(&id).map_or(0, String::len);
         let rank = priorities.and_then(|items| items.get(&id)).copied().unwrap_or(usize::MAX);
         while replacement.len() <= max_text
+            && replacement.len() <= max_total
             && total_text.saturating_sub(previous).saturating_add(replacement.len()) > max_total
             && let Some((worst_rank, worst_id)) = retained.iter().next_back().copied()
             && worst_id != id

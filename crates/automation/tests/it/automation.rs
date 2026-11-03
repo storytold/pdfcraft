@@ -2969,6 +2969,7 @@ fn tagged_text_export_follows_structure_and_reports_omissions() {
     let untagged_doc = ok(&mut a, "doc_open", json!({ "path": "untagged.pdf" }))["doc"].as_u64().unwrap();
     let untagged = ok(&mut a, "doc_export_text", json!({ "doc": untagged_doc, "path": "untagged.txt", "order": "tagged" }));
     assert_eq!(untagged["warnings"], json!(["the document has no structure tree"]));
+    assert_eq!(std::fs::read_to_string(dir.join("untagged.txt")).unwrap(), "");
 }
 
 #[test]
