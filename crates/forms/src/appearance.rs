@@ -895,6 +895,10 @@ pub fn value_overflow(doc: &Document, f: &Field, w: &Widget) -> Option<Overflow>
     if !matches!(f.kind, FieldKind::Text | FieldKind::Combo | FieldKind::List) {
         return None;
     }
+    if f.kind == FieldKind::List && needs_syriac_display(doc, f, w, &f.value, true) {
+        // Lists draw visible option labels, never the selected export value.
+        return syriac::list_overflow(doc, f, w).ok().flatten();
+    }
     let shown = displayed_text(f, &f.value, true);
     let syriac_display = !f.has(flags::PASSWORD) && pdfcraft_fonts::content_text::contains_syriac(&shown);
     let shaped_combo = f.kind == FieldKind::Combo && (syriac_display || needs_arabic(doc, f, w, &f.value, true));

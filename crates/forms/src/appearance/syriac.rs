@@ -153,7 +153,7 @@ pub(super) fn overflow(box_: &TextBox, f: &Field, shown: &str) -> Result<Option<
     if shown.len() > text::MAX_TEXT_BYTES {
         return Err("the Syriac field value exceeds its text budget".into());
     }
-    if box_.comb {
+    if box_.comb && f.kind == FieldKind::Text {
         return comb_overflow(box_, f, shown);
     }
     let size = size_for(shown, box_.size, box_.inner_w, box_.inner_h, box_.multiline, box_.syriac_family)?;
@@ -173,6 +173,32 @@ pub(super) fn overflow(box_: &TextBox, f: &Field, shown: &str) -> Result<Option<
         return Ok(Some(Overflow::Wide { width, room: box_.inner_w, size }));
     }
     Ok(None)
+}
+
+/// Measure only labels drawn after `/TI`, using the writer's row size, family and rotated box.
+/// Shaping failures remain distinct from measured overflow; export values never supply metrics.
+pub(super) fn list_overflow(doc: &Document, f: &Field, w: &Widget) -> Result<Option<Overflow>, String> {
+    let box_ = super::text_box(doc, f, w);
+    // The writer validates all option extents before drawing any visible label.
+    option_extents(f, box_.syriac_family)?;
+    let widget = doc.get(w.obj);
+    let wd = widget.as_dict().cloned().unwrap_or_default();
+    let place = placement(mk_rotation(doc, &wd), (w.rect[2] - w.rect[0]).max(1.0), (w.rect[3] - w.rect[1]).max(1.0));
+    let rows = list_rows(doc, f, w);
+    let mut y = place.layout_h - rows.inset;
+    let mut width = 0.0f64;
+    for (_, label) in f.options.iter().skip(rows.top) {
+        if y - rows.row < 0.0 {
+            break;
+        }
+        if label.len() > text::MAX_TEXT_BYTES {
+            return Err("the Syriac choice list exceeds its drawing budget".into());
+        }
+        let line = text::line_for_family(label, unicode_bidi_rtl(label, box_.syriac_family), box_.syriac_family)?;
+        width = width.max(line.width * rows.size);
+        y -= rows.row;
+    }
+    Ok((width > box_.inner_w + 0.01).then_some(Overflow::Wide { width, room: box_.inner_w, size: rows.size }))
 }
 
 /// Build a bounded Syriac field appearance with the selected family and embedded cluster fonts.

@@ -4,6 +4,71 @@ use pdfcraft_cos::{Document, Object, SaveOptions, write_incremental};
 
 use super::*;
 
+/// List warnings follow visible labels, widget size and family in Auto and explicit direction.
+#[test]
+fn review5914_followup_syriac_list_overflow_measures_visible_labels() {
+    use pdfcraft_fonts::{SyriacFamily, TextDirection, content_text};
+    if pdfcraft_fonts::document_syriac_font_for_family(SyriacFamily::Eastern).is_none() {
+        assert!(std::env::var_os("CRAFT_FONTS_DIR").is_none(), "supplied input must include Eastern Syriac");
+        return;
+    }
+    let mut doc = fixture();
+    let all = fields(&doc);
+    let mut f = field(&all, "toppings").clone();
+    let mut w = f.widgets[0].clone();
+    doc.update_dict(w.obj, |d| {
+        d.set(b"DA".to_vec(), PdfString::text("/Helv 14 Tf 0 g"));
+        d.set(SyriacFamily::PDF_KEY.to_vec(), Object::name("Eastern"));
+        d.set(b"TI".to_vec(), Object::Int(1));
+    })
+    .unwrap();
+    let label = "ܫܠܡܐ ".repeat(20);
+    f.options = vec![("before".into(), label.clone()), ("code".into(), label.clone()), ("after".into(), label.clone())];
+    f.value = vec!["code".into()];
+    let rows = appearance::list_rows(&doc, &f, &w);
+    w.rect = [0.0, 0.0, 70.0, rows.inset + rows.row * 1.5];
+    assert_eq!(rows.visible(w.rect[3]), 1);
+    let wanted = content_text::width_for_family(&label, 14.0, SyriacFamily::Eastern).unwrap();
+    for direction in [TextDirection::Auto, TextDirection::RightToLeft, TextDirection::LeftToRight] {
+        f.text_direction = direction;
+        match appearance::value_overflow(&doc, &f, &w) {
+            Some(appearance::Overflow::Wide { width, size, .. }) => {
+                assert!((width - wanted).abs() < 0.001, "measure the visible label with the widget's family");
+                assert_eq!(size, 14.0);
+            }
+            other => panic!("wide visible list label must warn in {direction:?}: {other:?}"),
+        }
+        // Wide labels above and below the viewport and a wide export are not drawn.
+        f.options[1] = (label.clone(), "OK".into());
+        f.value = vec![label.clone()];
+        assert_eq!(appearance::value_overflow(&doc, &f, &w), None, "only the visible label matters in {direction:?}");
+        f.options[1] = ("code".into(), label.clone());
+        f.value = vec!["code".into()];
+    }
+}
+
+/// Imported Comb flags on choices must not substitute cell widths for ordinary text widths.
+#[test]
+fn review5914_followup_syriac_choice_ignores_comb_overflow() {
+    use pdfcraft_fonts::SyriacFamily;
+    if pdfcraft_fonts::document_syriac_font_for_family(SyriacFamily::Eastern).is_none() {
+        assert!(std::env::var_os("CRAFT_FONTS_DIR").is_none(), "supplied input must include Eastern Syriac");
+        return;
+    }
+    let mut doc = fixture();
+    set_props(&mut doc, "country", &FieldProps { font_size: Some(12.0), syriac_family: Some(SyriacFamily::Eastern), ..Default::default() }).unwrap();
+    let all = fields(&doc);
+    let mut f = field(&all, "country").clone();
+    let mut w = f.widgets[0].clone();
+    w.rect = [0.0, 0.0, 100.0, 200.0];
+    f.options = vec![("code".into(), "ܫ".into())];
+    f.value = vec!["code".into()];
+    assert_eq!(appearance::value_overflow(&doc, &f, &w), None);
+    f.flags |= flags::COMB;
+    f.max_len = Some(100);
+    assert_eq!(appearance::value_overflow(&doc, &f, &w), None, "a combo draws an ordinary label despite imported Comb flags");
+}
+
 /// Overflow follows the selected Syriac display label and family, never its export token.
 #[test]
 fn review5914_syriac_combo_overflow_uses_displayed_label_and_family() {
