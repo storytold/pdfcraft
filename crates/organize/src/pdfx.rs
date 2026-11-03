@@ -16,6 +16,9 @@ use crate::OrganizeError;
 
 /// Decoding limit for an output profile or an XMP packet (ICC profiles are a few MB at most).
 const MAX_DECODED: usize = 64 << 20;
+/// Most output intents read: each may carry a profile of [`MAX_DECODED`] bytes, decoded and
+/// kept to compare; a real file declares one or two.
+const MAX_INTENTS: usize = 8;
 
 /// What a document declares about the print standard it meets.
 #[derive(Debug, Default)]
@@ -40,8 +43,12 @@ impl PrintStandard {
         let catalog = doc.root().and_then(|r| doc.get(r).as_dict().cloned()).unwrap_or_default();
         let intents = catalog.get(b"OutputIntents").cloned();
         let list = intents.as_ref().and_then(|o| doc.resolve(o).as_array().cloned()).unwrap_or_default();
+        let mut seen = std::collections::HashSet::new();
         let conditions = list
             .iter()
+            // One intent object listed again is the same declaration: read it once.
+            .filter(|oi| oi.as_ref().is_none_or(|r| seen.insert(r)))
+            .take(MAX_INTENTS)
             .map(|oi| {
                 let oi = doc.resolve(oi);
                 let d = oi.as_dict();

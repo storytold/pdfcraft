@@ -385,6 +385,16 @@ fn named_dest(src: &Document, name: &[u8]) -> Option<Object> {
     name_tree_lookup(src, &tree, name, 0, &mut HashSet::new())
 }
 
+/// The `/Kids` array of a name-tree node, unless it is an indirect array already read under
+/// another node: a cyclic or shared array of direct child dictionaries would otherwise be read
+/// again under each of them, exponentially in the depth.
+fn name_tree_kids(src: &Document, d: &Dict, seen: &mut HashSet<ObjRef>) -> Option<std::sync::Arc<Object>> {
+    match d.get(b"Kids")? {
+        Object::Ref(r) if !seen.insert(*r) => None,
+        kids => Some(src.resolve(kids)),
+    }
+}
+
 /// Name trees are read once per node: a node listed twice (or a cycle) is skipped.
 fn name_tree_lookup(src: &Document, node: &Object, key: &[u8], depth: u8, seen: &mut HashSet<ObjRef>) -> Option<Object> {
     if depth > 32 || node.as_ref().is_some_and(|r| !seen.insert(r)) {
@@ -394,7 +404,8 @@ fn name_tree_lookup(src: &Document, node: &Object, key: &[u8], depth: u8, seen: 
     crate::work(1);
     let node = src.resolve(node);
     let d = node.as_dict()?;
-    if let Some(names) = d.get(b"Names").map(|n| src.resolve(n)).and_then(|n| n.as_array().cloned()) {
+    let names = d.get(b"Names").map(|n| src.resolve(n));
+    if let Some(names) = names.as_deref().and_then(Object::as_array) {
         for pair in names.chunks(2) {
             if let [k, v] = pair
                 && src.resolve(k).as_string().is_some_and(|s| s.bytes == key)
@@ -403,12 +414,31 @@ fn name_tree_lookup(src: &Document, node: &Object, key: &[u8], depth: u8, seen: 
             }
         }
     }
-    let kids = d.get(b"Kids").map(|k| src.resolve(k)).and_then(|k| k.as_array().cloned()).unwrap_or_default();
-    kids.iter().find_map(|k| name_tree_lookup(src, k, key, depth + 1, seen))
+    let kids = name_tree_kids(src, d, seen);
+    kids.as_deref().and_then(Object::as_array).into_iter().flatten().find_map(|k| name_tree_lookup(src, k, key, depth + 1, seen))
 }
 
-/// All (key, value) pairs of a name tree, in order, each node read once.
+/// Most entries [`name_tree_entries`] reads from one tree, and most bytes of keys it keeps:
+/// the rest of a larger tree is left out.
+pub(crate) const MAX_NAME_TREE_ENTRIES: usize = 100_000;
+pub(crate) const MAX_NAME_TREE_KEY_BYTES: usize = 64 << 20;
+
+/// All (key, value) pairs of a name tree, in order, each node read once, up to
+/// [`MAX_NAME_TREE_ENTRIES`] entries and [`MAX_NAME_TREE_KEY_BYTES`] of keys (one key string
+/// named by many entries is copied once per entry).
 pub(crate) fn name_tree_entries(src: &Document, node: &Object, depth: u8, seen: &mut HashSet<ObjRef>, out: &mut Vec<(Vec<u8>, Object)>) {
+    let mut key_bytes = out.iter().map(|(k, _)| k.len()).fold(0usize, usize::saturating_add);
+    name_tree_entries_within(src, node, depth, seen, out, &mut key_bytes);
+}
+
+fn name_tree_entries_within(
+    src: &Document,
+    node: &Object,
+    depth: u8,
+    seen: &mut HashSet<ObjRef>,
+    out: &mut Vec<(Vec<u8>, Object)>,
+    key_bytes: &mut usize,
+) {
     if depth > 32 || node.as_ref().is_some_and(|r| !seen.insert(r)) {
         return;
     }
@@ -416,17 +446,23 @@ pub(crate) fn name_tree_entries(src: &Document, node: &Object, depth: u8, seen: 
     crate::work(1);
     let node = src.resolve(node);
     let Some(d) = node.as_dict() else { return };
-    if let Some(names) = d.get(b"Names").map(|n| src.resolve(n)).and_then(|n| n.as_array().cloned()) {
+    let names = d.get(b"Names").map(|n| src.resolve(n));
+    if let Some(names) = names.as_deref().and_then(Object::as_array) {
         for pair in names.chunks(2) {
             if let [k, v] = pair
                 && let Some(k) = src.resolve(k).as_string()
             {
+                *key_bytes = key_bytes.saturating_add(k.bytes.len());
+                if out.len() >= MAX_NAME_TREE_ENTRIES || *key_bytes > MAX_NAME_TREE_KEY_BYTES {
+                    return;
+                }
                 out.push((k.bytes.clone(), v.clone()));
             }
         }
     }
-    for k in d.get(b"Kids").map(|k| src.resolve(k)).and_then(|k| k.as_array().cloned()).unwrap_or_default() {
-        name_tree_entries(src, &k, depth + 1, seen, out);
+    let kids = name_tree_kids(src, d, seen);
+    for k in kids.as_deref().and_then(Object::as_array).into_iter().flatten() {
+        name_tree_entries_within(src, k, depth + 1, seen, out, key_bytes);
     }
 }
 
@@ -501,7 +537,8 @@ pub fn page_as_form(dst: &mut Document, src: &Document, page: usize) -> Result<(
     let rotate = d.get(b"Rotate").and_then(|r| src.resolve(r).as_int()).unwrap_or(0).rem_euclid(360);
     // Content: the page's streams, decoded and joined.
     let content = match own.get(b"Contents") {
-        Some(c) => crate::prune::content_bytes(src, c).map_err(|e| OrganizeError::Invalid(format!("page {} content: {e}", page + 1)))?,
+        Some(c) => crate::prune::content_bytes(src, c, &mut pdfcraft_cos::DecodeBudget::page())
+            .map_err(|e| OrganizeError::Invalid(format!("page {} content: {e}", page + 1)))?,
         None => Vec::new(),
     };
     let mut copier = Copier::new(src, HashMap::new(), HashMap::new());

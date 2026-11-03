@@ -64,11 +64,11 @@ fn collect_resource_refs(doc: &Document, o: &Object, out: &mut HashSet<ObjRef>) 
             if let Object::Ref(r) = v {
                 out.insert(*r);
             }
-            let res = doc.resolve(v);
-            if let Some(res) = res.as_dict() {
+            let mut held_res = None;
+            if let Some(res) = borrowed(doc, v, &mut held_res).as_dict() {
                 for cat in RESOURCE_CATEGORIES {
-                    let entries = res.get(cat).map(|c| doc.resolve(c));
-                    if let Some(entries) = entries.as_ref().and_then(|e| e.as_dict()) {
+                    let mut held_cat = None;
+                    if let Some(entries) = res.get(cat).map(|c| borrowed(doc, c, &mut held_cat)).and_then(Object::as_dict) {
                         out.extend(entries.iter().filter_map(|(_, v)| if let Object::Ref(r) = v { Some(*r) } else { None }));
                     }
                 }
@@ -76,6 +76,15 @@ fn collect_resource_refs(doc: &Document, o: &Object, out: &mut HashSet<ObjRef>) 
         } else if matches!(v, Object::Dict(_) | Object::Array(_)) {
             collect_resource_refs(doc, v, out);
         }
+    }
+}
+
+/// `o` itself when written inline, else the object it refers to, kept alive in `held`:
+/// resolving a direct value would copy it, once per owner that holds it.
+fn borrowed<'o>(doc: &Document, o: &'o Object, held: &'o mut Option<std::sync::Arc<Object>>) -> &'o Object {
+    match o {
+        Object::Ref(_) => held.insert(doc.resolve(o)),
+        direct => direct,
     }
 }
 
@@ -100,7 +109,12 @@ fn hash_obj(o: &Object, doc: &Document, map: &HashMap<ObjRef, ObjRef>, h: &mut i
         Object::Bool(b) => (1u8, b).hash(h),
         Object::Int(i) => (2u8, i).hash(h),
         Object::Real(f) => (3u8, f.to_bits()).hash(h),
-        Object::String(s) => (4u8, &s.bytes).hash(h),
+        Object::String(s) => {
+            // A long string hashes by its length and ends: one named by many references would
+            // otherwise be hashed whole once per reference. Equality still compares every byte.
+            let n = s.bytes.len();
+            (4u8, n, s.bytes.get(..256).unwrap_or(&s.bytes), s.bytes.get(n.saturating_sub(256)..).unwrap_or(&s.bytes)).hash(h)
+        }
         Object::Name(n) => (5u8, n).hash(h),
         Object::Array(a) => {
             (6u8, a.len()).hash(h);
@@ -135,6 +149,12 @@ fn hash_obj(o: &Object, doc: &Document, map: &HashMap<ObjRef, ObjRef>, h: &mut i
 }
 
 fn eq_obj(a: &Object, b: &Object, doc: &Document, map: &HashMap<ObjRef, ObjRef>) -> bool {
+    // One object is equal to itself: two references to it need not read its value.
+    if let (Object::Ref(x), Object::Ref(y)) = (a, b)
+        && canon(map, *x) == canon(map, *y)
+    {
+        return true;
+    }
     // Plain values behind references compare as the values (as `hash_obj` hashes them).
     let plain = |o: &Object| if let Object::Ref(r) = o { plain_value(doc, canon(map, *r)) } else { None };
     match (plain(a), plain(b)) {

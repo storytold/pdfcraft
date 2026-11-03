@@ -216,7 +216,13 @@ fn name_tree(doc: &Document) -> HashMap<Vec<u8>, Object> {
                 }
             }
         }
-        let kids = d.get(b"Kids").map(|k| doc.resolve(k));
+        // An indirect `/Kids` array shared by several nodes is read under the first one only:
+        // its entries are the same, and each is read once anyway.
+        let kids = match d.get(b"Kids") {
+            Some(Object::Ref(r)) if !seen.insert(*r) => None,
+            Some(k) => Some(doc.resolve(k)),
+            None => None,
+        };
         if let Some(kids) = kids.as_deref().and_then(Object::as_array) {
             for kid in kids.iter().rev() {
                 stack.push((kid.clone(), depth + 1));
@@ -305,7 +311,12 @@ fn item_dest(doc: &Document, targets: &mut Targets, d: &Dict) -> Option<Vec<Obje
     explicit_dest(doc, targets, dest, 0)
 }
 
-/// A bookmark's title as viewers show it: the decoded text, without NULs or surrounding space.
+/// Longest bookmark title listed, in characters: one long string named as the title of many
+/// items would otherwise be copied once per item.
+const MAX_TITLE_CHARS: usize = 4_096;
+
+/// A bookmark's title as viewers show it: the decoded text, without NULs or surrounding space,
+/// cut to [`MAX_TITLE_CHARS`].
 fn title_of(doc: &Document, d: &Dict) -> String {
     let title = d.get(b"Title").map(|t| doc.resolve(t));
     let text = match title.as_deref() {
@@ -313,7 +324,11 @@ fn title_of(doc: &Document, d: &Dict) -> String {
         Some(Object::Name(n)) => String::from_utf8_lossy(n).into_owned(),
         _ => return String::new(),
     };
-    text.trim_matches('\0').trim().to_string()
+    let text = text.trim_matches('\0').trim();
+    match text.char_indices().nth(MAX_TITLE_CHARS) {
+        Some((at, _)) => text.get(..at).unwrap_or_default().to_string(),
+        None => text.to_string(),
+    }
 }
 
 fn describe(doc: &Document, targets: &mut Targets, obj: ObjRef, path: Vec<usize>) -> Bookmark {

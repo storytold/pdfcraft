@@ -91,6 +91,9 @@ pub fn import_comments(dst: &mut Document, src: &Document) -> Result<usize, Orga
     }
     for (i, target, _) in &planned {
         if let Some(popup) = dst.get(*target).as_dict().and_then(|d| d.reference(b"Popup"))
+            // Only a pop-up goes on the page with its comment: a `/Popup` naming any other
+            // annotation (a redaction mark, say) would smuggle it past the import's exclusions.
+            && dst.get(popup).as_dict().is_some_and(|p| p.name(b"Subtype") == Some(b"Popup".as_slice()))
             && let Some(annots) = lists[*i].as_mut()
         {
             annots.push(popup);

@@ -180,7 +180,8 @@ fn unescape(text: &str) -> String {
     while let Some(i) = rest.find('&') {
         out.push_str(rest.get(..i).unwrap_or_default());
         let after = rest.get(i..).unwrap_or_default();
-        let Some(semi) = after.find(';').filter(|&n| n <= 12) else {
+        // Only as far as an entity can run: a `&` without a `;` must not scan the rest.
+        let Some(semi) = after.bytes().take(13).position(|b| b == b';') else {
             out.push('&');
             rest = after.get(1..).unwrap_or_default();
             continue;
