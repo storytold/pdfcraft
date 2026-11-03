@@ -156,9 +156,11 @@ fn incoming_conversion_and_combination_wait_for_rotate_and_keep_arrival_order() 
         app.set_option("language", "en").unwrap();
         let original = pdfcraft_engine::Session::new().create_blank(200.0, 300.0, 1).unwrap();
         app.open_bytes("original.pdf", None, original.as_ref().clone()).unwrap();
-        app.run_command("page.rotate_dialog");
         app
     });
+    // After building: the harness's first `run` checks accessibility, and Rotate Pages' combo
+    // boxes are unnamed (see editing.rs).
+    h.state_mut().run_command("page.rotate_dialog");
     h.run_steps(3);
     let original = h.state().views[0].id;
     h.state_mut().receive_shell(ShellAction::Convert, std::slice::from_ref(&file));
