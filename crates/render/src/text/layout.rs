@@ -1,7 +1,7 @@
 use super::device::{DIRECTION_TOLERANCE, Drawn, WORD_GAP};
 use super::order::{
-    NONE, REDRAW_CANDIDATES, Run, SAME_LINE_GAP, Scratch, Seg, fingerprint, is_script_on, measure_cluster_gaps, place_glyphs, redraws, restarts_run,
-    reverse_rtl, same_line,
+    NONE, REDRAW_CANDIDATES, Run, SAME_LINE_GAP, Scratch, Seg, fingerprint, ink_of, is_script_on, measure_cluster_gaps, place_glyphs, redraws,
+    restarts_run, reverse_rtl, same_line,
 };
 use super::{HashMap, PageText, TextGlyph};
 
@@ -171,7 +171,8 @@ pub(super) fn union(a: &mut [f32; 4], b: &[f32; 4]) {
 /// Heuristics (documented so they can be tuned and tested; plan/architecture.md §8):
 /// 1. *Segments:* consecutive glyphs (content order) on one baseline with no column-sized gap.
 ///    A smaller glyph right next to the previous one (a sub- or superscript) stays in the segment.
-///    Segments on the same baseline that nearly touch are merged (text drawn out of order).
+///    Segments on the same baseline that nearly touch are merged (text drawn out of order), and so
+///    is a table cell padded with spaces with the next cell of its row (`PADDED_FIELD`).
 /// 2. *Blocks:* segments stacked with line-sized gaps and overlapping horizontally.
 /// 3. *Block order:* repeatedly take the top-most remaining block, preferring a block to its left
 ///    that overlaps it vertically (so columns read left, then right). A column goes on first (#3658):
@@ -263,9 +264,10 @@ fn arrange(glyphs: &[TextGlyph]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
             attach_mark(&glyphs, &mut anchor, i);
             s.first.end = i + 1;
             s.extend_box(&g, hi);
+            s.ink = s.ink.max(ink_of(glyphs[i]));
             furthest_progress = furthest_progress.max((g[0] - run_start_x).abs()).max((g[2] - run_start_x).abs());
         } else {
-            segs.push(Seg::new(Run { start: i, end: i + 1 }, g, hi));
+            segs.push(Seg::new(Run { start: i, end: i + 1 }, g, hi, ink_of(glyphs[i])));
             run_start_x = g[0];
             furthest_progress = 0.0;
         }
@@ -314,7 +316,7 @@ fn arrange(glyphs: &[TextGlyph]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
         kept_runs
     };
     segs.truncate(retained);
-    // Merge same-baseline segments that nearly touch, then attach any remaining superscript or
+    // Merge same-baseline segments that nearly touch, and a padded cell with the next of its row, then attach any remaining superscript or
     // subscript segments to the closest host line segment they sit on.
     let mut merged = true;
     while merged {
@@ -327,7 +329,8 @@ fn arrange(glyphs: &[TextGlyph]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
                 let (sa, sb) = (&segs[a], &segs[b]);
                 let h = sa.h.min(sb.h);
                 let gap = (sb.bbox[0] - sa.bbox[2]).max(sa.bbox[0] - sb.bbox[2]);
-                if (sa.cy() - sb.cy()).abs() < h * 0.3 && (sa.h / sb.h - 1.0).abs() < 0.35 && gap < h * 1.2 {
+                let joined = gap < h * 1.2 || sa.padded_towards(sb, h);
+                if (sa.cy() - sb.cy()).abs() < h * 0.3 && (sa.h / sb.h - 1.0).abs() < 0.35 && joined {
                     let sb = segs.remove(b);
                     let a = if b < a { a - 1 } else { a };
                     segs[a].merge(sb);
