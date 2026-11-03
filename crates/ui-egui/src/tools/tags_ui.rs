@@ -63,10 +63,10 @@ impl Draft {
         add(TagProperty::ActualText, tag.actual_text.as_deref(), &self.actual_text);
         add(TagProperty::AlternateText, tag.alt.as_deref(), &self.alt);
         add(TagProperty::Language, tag.language.as_deref(), &self.language);
-        if tag.standard_kind == "Table" && self.kind == tag.kind {
+        if tag.standard_kind == "Table" {
             add(TagProperty::Summary, tag.summary.as_deref(), &self.summary);
         }
-        if tag.standard_kind == "TH" && self.kind == tag.kind {
+        if tag.standard_kind == "TH" {
             add(TagProperty::Scope, tag.scope.as_deref(), &self.scope);
         }
         match edits.len() {
@@ -319,5 +319,48 @@ fn field(ui: &mut Ui, label: &str, value: &mut String, multiline: bool) {
         ui.add(widgets::block(value).desired_rows(2).desired_width(f32::INFINITY)).labelled_by(l.id);
     } else {
         ui.add(egui::TextEdit::singleline(value).desired_width(f32::INFINITY)).labelled_by(l.id);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn keeps_table_attributes_when_the_tag_type_changes() {
+        let base = TagInfo {
+            object: ObjRef::new(1, 0),
+            parent: None,
+            depth: 0,
+            kind: String::new(),
+            standard_kind: String::new(),
+            title: None,
+            actual_text: None,
+            alt: None,
+            language: None,
+            summary: None,
+            scope: None,
+            page: None,
+        };
+        let cases = [("Table", TagProperty::Summary), ("TH", TagProperty::Scope)];
+
+        for (kind, property) in cases {
+            let mut tag = base.clone();
+            tag.kind = format!("Original{kind}");
+            tag.standard_kind = kind.into();
+            let mut draft = Draft::from_tag(&tag);
+            draft.kind = format!("Changed{kind}");
+            match property {
+                TagProperty::Summary => draft.summary = "A summary".into(),
+                TagProperty::Scope => draft.scope = "Row".into(),
+                _ => unreachable!(),
+            }
+
+            assert!(matches!(
+                draft.edit(&tag),
+                Some(Edit::Batch { edits, .. })
+                    if edits.iter().any(|edit| matches!(edit, Edit::SetTagProperty { property: p, .. } if *p == property))
+            ));
+        }
     }
 }
