@@ -285,7 +285,7 @@ pub fn remove_marks(doc: &mut Document, pages: &[usize], kind: MarkKind) -> Resu
         if before != kept.len() {
             let wrappers = match isolation(doc, &kept) {
                 Isolation::Clean { wrappers, .. } => wrappers,
-                Isolation::Unknown { .. } | Isolation::TooDeep => {
+                Isolation::Unknown { .. } | Isolation::TooDeep | Isolation::TooLarge => {
                     let mut opens = Vec::new();
                     let mut pairs = Vec::new();
                     for (i, o) in kept.iter().enumerate() {
