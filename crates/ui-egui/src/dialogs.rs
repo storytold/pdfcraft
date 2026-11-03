@@ -1047,6 +1047,9 @@ fn dialog_redact_props(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pendi
 
 /// `Dialog::Extract` content. Returns `false` when it has its own buttons and no footer is wanted.
 fn dialog_extract(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending) -> bool {
+    if app.extract_draft.source != app.active_ids().map(|(_, id)| id) {
+        app.open_extract_dialog();
+    }
     let (selected, total) = app.active_ids().map_or((Vec::new(), 0), |(i, _)| (app.views[i].target_pages(), app.views[i].page_count()));
     ui.label(egui::RichText::new(tl!("Extract pages")).font(theme::semibold(18.0)));
     ui.add_space(8.0);

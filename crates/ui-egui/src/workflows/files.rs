@@ -191,6 +191,8 @@ pub enum SplitPlan {
 /// Organize ▸ Extract options.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ExtractDraft {
+    /// The document whose name and page range were filled into the dialog.
+    pub source: Option<DocId>,
     /// Each page as its own file.
     pub separate: bool,
     /// Delete the pages after extracting them.
@@ -665,6 +667,7 @@ impl PdfCraftApp {
     /// Show Extract pages with the document's file name and the selected/current page range.
     /// Select the Pages field once so typing immediately replaces that range.
     pub fn open_extract_dialog(&mut self) {
+        self.extract_draft.source = self.active_ids().map(|(_, id)| id);
         self.extract_draft.name =
             self.active_ids().and_then(|(_, id)| self.session.get(id)).map(|d| strip_pdf(&d.name).to_string()).unwrap_or_default();
         let (selected, total) = self.active_ids().map_or((Vec::new(), 0), |(i, _)| (self.views[i].target_pages(), self.views[i].page_count()));
@@ -680,6 +683,10 @@ impl PdfCraftApp {
     /// Copy the pages typed in Extract pages, else the selected pages (or the current page), into
     /// a new unsaved document tab.
     pub fn extract_selection(&mut self) {
+        if self.extract_draft.source.is_some() && self.extract_draft.source != self.active_ids().map(|(_, id)| id) {
+            self.notify_tr("The document changed while you were choosing a file, so nothing was changed.");
+            return;
+        }
         // What's typed in a form field is part of the document (#166).
         if !self.commit_form_typing() {
             return;
