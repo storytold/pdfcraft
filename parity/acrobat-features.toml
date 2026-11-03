@@ -9696,7 +9696,7 @@ status = "planned"
 commands = []
 tools = []
 evidence = []
-notes = "The request builder and stream decoder exist in pdfcraft-ai (Claude Messages API: passages as cited search results, citations checked against what was sent), with no transport, panel or tool yet."
+notes = "Not usable yet: nothing is sent (outbound network is the owner's decision). ai_ask with dry_run returns the exact Claude Messages API request: the selection, the text around it and library passages as cited search results, the question, and the key masked. Copy-forbidden documents are refused and text under unapplied redaction marks is left out. pdfcraft-ai decodes streamed answers and accepts only citations of passages that were sent. Missing: the transport, the Assistant panel and its entry points, the conversation, citation chips and jumps, image questions, consent and keys in the keychain."
 
 [[feature]]
 id = "misc.ai-library"
@@ -9704,11 +9704,11 @@ title = "Personal PDF library searched locally; answers cite its documents and p
 area = "N"
 tier = "P2"
 milestone = "M13"
-status = "planned"
+status = "partial"
 commands = []
-tools = []
-evidence = []
-notes = "Beyond Acrobat. The index exists in pdfcraft-ai (passages on sentence boundaries, BM25, CJK bigrams, documents known by SHA-256); no ingest from PDFs, tool or panel yet."
+tools = ["ai_library_add", "ai_library_remove", "ai_library_list", "ai_library_search"]
+evidence = ["crates/automation/tests/it/ai_assistant.rs::the_library_lives_in_its_file_and_knows_documents_by_their_bytes", "crates/automation/tests/it/ai_assistant.rs::copy_forbidden_documents_are_refused_and_never_indexed", "crates/ai/src/library/tests.rs::ranks_the_matching_passage_first", "crates/engine/src/assistant/tests.rs::text_under_unapplied_redaction_marks_is_never_sent", "crates/engine/src/assistant/tests.rs::a_document_that_needs_a_password_is_indexed_from_its_open_copy"]
+notes = "Beyond Acrobat. Headless only. Offline search: passages on sentence boundaries, BM25, CJK bigrams. Documents are known by SHA-256, so a moved file is the same document. Copy-forbidden files are listed and never indexed, encrypted ones are indexed from an open copy, and text under unapplied redaction marks is left out. The library is kept in a JSON file inside --root. Missing: the Library tab of the Assistant panel, a library folder in the app's data directory, Add folder, re-indexing a changed file, OCR suggestions for scans, and embeddings (not planned: local BM25 only, D6)."
 
 [[feature]]
 id = "misc.ai-conversational-edit"
