@@ -487,6 +487,10 @@ fn read_mode_hides_the_quick_toolbar() {
     h.run_steps(3);
     assert_eq!(h.state().mode, Mode::AllTools);
     h.get_by_label("Select (V)");
+    h.get_by_label("Highlight (U)");
+    h.get_by_label("Draw (D)").click();
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::Comment(pdfcraft_ui_egui::comments::CommentTool::Ink));
 }
 
 /// Opening a document with Read as the default mode puts down the tool in use, as entering Read

@@ -1488,7 +1488,7 @@ fn up_and_down_turn_pages_in_single_page_view() {
 fn v_h_and_space_pick_the_quick_tools() {
     // The toolbar's tooltips promise "Select (V)" and "Hand (H)", but the keys did nothing.
     use egui::{Key, Modifiers};
-    use pdfcraft_ui_egui::QuickTool;
+    use pdfcraft_ui_egui::{QuickTool, comments::CommentTool};
     let mut h = harness();
     h.state_mut().active = Some(0);
     h.run_steps(2);
@@ -1499,6 +1499,8 @@ fn v_h_and_space_pick_the_quick_tools() {
     };
     assert_eq!(press(&mut h, Key::H), QuickTool::Hand);
     assert_eq!(press(&mut h, Key::V), QuickTool::Select);
+    assert_eq!(press(&mut h, Key::D), QuickTool::Comment(CommentTool::Ink));
+    assert_eq!(press(&mut h, Key::U), QuickTool::Comment(CommentTool::Highlight));
     // V leaves any other tool too, as the toolbar button does.
     h.state_mut().quick_tool = QuickTool::Crop;
     assert_eq!(press(&mut h, Key::V), QuickTool::Select);
@@ -1514,11 +1516,19 @@ fn v_h_and_space_pick_the_quick_tools() {
     h.key_press_modifiers(Modifiers::SHIFT, Key::H);
     h.run_steps(2);
     assert_eq!(h.state().quick_tool, QuickTool::Crop);
+    h.key_press_modifiers(Modifiers::SHIFT, Key::D);
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::Crop);
+    h.key_press_modifiers(Modifiers::SHIFT, Key::U);
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::Crop);
     // They are letters to a text field: typing in the find bar keeps the tool.
     h.state_mut().quick_tool = QuickTool::Select;
     h.state_mut().views[0].open_find();
     h.run_steps(4);
     assert_eq!(press(&mut h, Key::H), QuickTool::Select, "typing H in the find bar");
+    assert_eq!(press(&mut h, Key::D), QuickTool::Select, "typing D in the find bar");
+    assert_eq!(press(&mut h, Key::U), QuickTool::Select, "typing U in the find bar");
     h.key_down(Key::Space);
     h.run_steps(2);
     h.key_up(Key::Space);

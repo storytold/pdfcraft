@@ -329,7 +329,11 @@ pub(super) fn quick_bar(app: &mut PdfCraftApp, area: Rect, page_left: Option<f32
                     for g in 0..comments::GROUPS.len() {
                         let current = app.comment_prefs.group_tool[g];
                         let active = matches!(app.quick_tool, QuickTool::Comment(t) if t.group() == g);
-                        let resp = icons::button(ui, current.icon(), 32.0, active, tl!(current.label()));
+                        let tip = match current.shortcut() {
+                            Some(k) => format!("{} ({k})", tl!(current.label())),
+                            None => tl!(current.label()).to_string(),
+                        };
+                        let resp = icons::button(ui, current.icon(), 32.0, active, &tip);
                         if comments::GROUPS[g].len() == 1 {
                             if resp.clicked() {
                                 app.execute(current.command());

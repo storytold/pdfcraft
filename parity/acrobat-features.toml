@@ -3656,8 +3656,8 @@ milestone = "M5"
 status = "shipped"
 commands = ["comment.highlight"]
 tools = ["comment_add"]
-evidence = ["crates/ui-egui/tests/it/comments.rs::dragging_over_text_with_the_highlighter_highlights_it", "crates/ui-egui/tests/it/comments.rs::a_new_highlight_opens_its_note_for_typing", "crates/engine/src/tests.rs::highlight_multiplies_over_text"]
-notes = "drag over text, or pick the tool with text selected; a new highlight opens its note for typing in the Comments panel; agents can highlight by text search"
+evidence = ["crates/ui-egui/tests/it/comments.rs::dragging_over_text_with_the_highlighter_highlights_it", "crates/ui-egui/tests/it/comments.rs::a_new_highlight_opens_its_note_for_typing", "crates/engine/src/tests.rs::highlight_multiplies_over_text", "crates/ui-egui/tests/it/viewer.rs::v_h_and_space_pick_the_quick_tools", "crates/ui-egui/tests/it/comments.rs::pressing_u_marks_selected_text_with_highlight"]
+notes = "drag over text, or pick the tool with text selected; U picks it; a new highlight opens its note for typing in the Comments panel; agents can highlight by text search"
 
 [[feature]]
 id = "comment.underline"
@@ -3764,8 +3764,8 @@ milestone = "M5"
 status = "shipped"
 commands = ["comment.ink"]
 tools = ["comment_add"]
-evidence = ["crates/ui-egui/tests/it/comments.rs::shapes_and_ink_are_drawn_by_dragging", "crates/annot/src/tests.rs::ink_strokes_are_smooth_curves_through_their_points", "crates/annot/src/tests.rs::drawings_resize_by_scaling_their_strokes"]
-notes = "one ink annotation per stroke; strokes are drawn as smooth curves through their points, as in Acrobat; resize with the 8 handles (the strokes scale into the new box)"
+evidence = ["crates/ui-egui/tests/it/comments.rs::shapes_and_ink_are_drawn_by_dragging", "crates/annot/src/tests.rs::ink_strokes_are_smooth_curves_through_their_points", "crates/annot/src/tests.rs::drawings_resize_by_scaling_their_strokes", "crates/ui-egui/tests/it/viewer.rs::v_h_and_space_pick_the_quick_tools"]
+notes = "one ink annotation per stroke; D picks the tool; strokes are drawn as smooth curves through their points, as in Acrobat; resize with the 8 handles (the strokes scale into the new box)"
 
 [[feature]]
 id = "comment.eraser"
