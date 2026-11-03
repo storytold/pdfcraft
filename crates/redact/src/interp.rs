@@ -30,6 +30,7 @@ mod layers;
 mod prune;
 
 use layers::strip_hidden_layers;
+pub(crate) use layers::{is_ocg, target_ref};
 use prune::{clip_out, extgstate_font, prune_form_resources};
 pub(crate) use prune::{prune, prune_properties, resource_ops, unlink_doomed};
 

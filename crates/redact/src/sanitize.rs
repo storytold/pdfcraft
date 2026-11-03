@@ -7,7 +7,7 @@
 use pdfcraft_content::Matrix;
 use pdfcraft_cos::{Dict, Document, ObjRef, Object};
 
-use crate::interp::{Mode, Scope, process};
+use crate::interp::{Mode, Scope, is_ocg, process, target_ref};
 use crate::{RedactError, Report, annots_of, listed_annotations, page_streams, page_streams_within};
 
 /// The categories of Acrobat's Remove Hidden Information panel that PdfCraft handles.
@@ -324,15 +324,68 @@ fn is_comment(subtype: &[u8]) -> bool {
     !matches!(subtype, b"FileAttachment" | b"Redact") && pdfcraft_annot::is_comment_subtype(&String::from_utf8_lossy(subtype))
 }
 
+/// Match content evaluation's terminal identity, retaining the raw reference if a chain
+/// is unresolved, cyclic or exceeds the shared resolution bound.
+fn group_ref(doc: &Document, group: &Object) -> Option<ObjRef> {
+    target_ref(doc, group).filter(|r| !matches!(&*doc.get(*r), Object::Null)).or_else(|| group.as_ref())
+}
+
+/// Read direct or chained configuration arrays with the same reference bound as group identities.
+/// Non-Order cleanup leaves unresolved, cyclic and overlong containers untouched.
+fn configuration_array(doc: &Document, value: &Object) -> Option<Vec<Object>> {
+    if matches!(value, Object::Ref(_)) { doc.get(target_ref(doc, value)?).as_array().cloned() } else { value.as_array().cloned() }
+}
+
+/// Clean only the optional layer-display ordering, retaining labels and surviving groups.
+/// Failure means the caller must omit /Order, not leave possibly hidden metadata reachable.
+fn prune_layer_order(
+    doc: &Document,
+    value: &Object,
+    keep: &impl Fn(&Object) -> bool,
+    depth: usize,
+    budget: &mut usize,
+    path: &mut std::collections::HashSet<ObjRef>,
+) -> Result<Option<Object>, ()> {
+    if depth > 64 || *budget == 0 {
+        return Err(());
+    }
+    *budget -= 1;
+    if !keep(value) {
+        return Ok(None);
+    }
+    let reference = if matches!(value, Object::Ref(_)) { Some(target_ref(doc, value).ok_or(())?) } else { None };
+    let resolved = reference.map(|r| doc.get(r));
+    let Object::Array(array) = resolved.as_deref().unwrap_or(value) else { return Ok(Some(value.clone())) };
+    if array.len() > *budget || reference.is_some_and(|r| !path.insert(r)) {
+        return Err(());
+    }
+    let mut out = Vec::with_capacity(array.len());
+    for item in array {
+        if let Some(item) = prune_layer_order(doc, item, keep, depth + 1, budget, path)? {
+            out.push(item);
+        }
+    }
+    if let Some(r) = reference {
+        path.remove(&r);
+    }
+    Ok(Some(Object::Array(out)))
+}
+
 /// The layers that are off in the default configuration.
 fn hidden_layers(doc: &Document) -> Vec<ObjRef> {
     let Some((_, cat)) = catalog(doc) else { return Vec::new() };
     let Some(oc) = sub(doc, &cat, b"OCProperties") else { return Vec::new() };
     let Some(d) = sub(doc, &oc, b"D") else { return Vec::new() };
-    let all: Vec<ObjRef> =
-        oc.get(b"OCGs").and_then(|g| doc.resolve(g).as_array().map(|a| a.iter().filter_map(Object::as_ref).collect())).unwrap_or_default();
+    let all: Vec<ObjRef> = oc
+        .get(b"OCGs")
+        .and_then(|g| configuration_array(doc, g))
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|g| group_ref(doc, g))
+        .filter(|r| matches!(&*doc.get(*r), Object::Dict(d) if is_ocg(doc, d)))
+        .collect();
     let list = |k: &[u8]| -> Vec<ObjRef> {
-        d.get(k).and_then(|g| doc.resolve(g).as_array().map(|a| a.iter().filter_map(Object::as_ref).collect())).unwrap_or_default()
+        d.get(k).and_then(|g| configuration_array(doc, g)).unwrap_or_default().iter().filter_map(|g| group_ref(doc, g)).collect()
     };
     let (on, off) = (list(b"ON"), list(b"OFF"));
     if d.name(b"BaseState") == Some(b"OFF") {
@@ -632,14 +685,26 @@ pub fn remove_hidden(doc: &mut Document, which: &[Hidden]) -> Result<Vec<(Hidden
             Hidden::HiddenLayers if !off.is_empty() => {
                 // The off layers leave the configuration (their content is gone already).
                 if let Some(mut oc) = sub(doc, &cat, b"OCProperties") {
-                    let keep = |o: &Object| !o.as_ref().is_some_and(|r| off.contains(&r) && !retained_off_layers.contains(&r));
-                    if let Some(Object::Array(a)) = oc.get(b"OCGs").map(|g| (*doc.resolve(g)).clone()) {
+                    let keep = |o: &Object| !group_ref(doc, o).is_some_and(|r| off.contains(&r) && !retained_off_layers.contains(&r));
+                    if let Some(a) = oc.get(b"OCGs").and_then(|g| configuration_array(doc, g)) {
                         oc.set(b"OCGs".to_vec(), Object::Array(a.into_iter().filter(keep).collect()));
                     }
                     if let Some(mut d) = sub(doc, &oc, b"D") {
-                        for k in [&b"ON"[..], b"OFF", b"Order", b"Locked"] {
-                            if let Some(Object::Array(a)) = d.get(k).map(|g| (*doc.resolve(g)).clone()) {
+                        for k in [&b"ON"[..], b"OFF", b"Locked"] {
+                            if let Some(a) = d.get(k).and_then(|g| configuration_array(doc, g)) {
                                 d.set(k.to_vec(), Object::Array(a.into_iter().filter(keep).collect()));
+                            }
+                        }
+                        if let Some(order) = d.get(b"Order") {
+                            // /Order affects the layer panel, not layer visibility. If it cannot be
+                            // cleaned completely, omit it rather than retain removed group metadata.
+                            match prune_layer_order(doc, order, &keep, 0, &mut 4096, &mut std::collections::HashSet::new()) {
+                                Ok(Some(order)) => {
+                                    d.set(b"Order".to_vec(), order);
+                                }
+                                Ok(None) | Err(()) => {
+                                    d.remove(b"Order");
+                                }
                             }
                         }
                         oc.set(b"D".to_vec(), Object::Dict(d));
@@ -687,5 +752,60 @@ pub fn sanitize(doc: &mut Document) -> Result<Vec<(Hidden, usize)>, RedactError>
             Ok(Vec::new())
         }
         r => r,
+    }
+}
+
+#[cfg(test)]
+mod identity_tests {
+    use super::{Dict, Document, ObjRef, Object, configuration_array, group_ref, prune_layer_order};
+
+    #[test]
+    fn group_identity_preserves_unresolved_cyclic_and_overlong_references() {
+        let mut doc = Document::new_empty();
+        let missing = ObjRef::new(1000, 3);
+        let dangling = doc.add(Object::Ref(missing));
+        assert_eq!(group_ref(&doc, &Object::Ref(dangling)), Some(dangling));
+        let cycle = doc.add(Object::Null);
+        doc.set(cycle, Object::Ref(cycle));
+        assert_eq!(group_ref(&doc, &Object::Ref(cycle)), Some(cycle));
+        let terminal = doc.add(Object::Dict(Dict::new()));
+        let hop = doc.add(Object::Ref(terminal));
+        assert_eq!(group_ref(&doc, &Object::Ref(hop)), Some(terminal));
+        let mut chain = hop;
+        for _ in 0..16 {
+            chain = doc.add(Object::Ref(chain));
+        }
+        assert_eq!(group_ref(&doc, &Object::Ref(chain)), Some(chain));
+    }
+    #[test]
+    fn configuration_arrays_have_bounded_chain_resolution() {
+        let mut doc = Document::new_empty();
+        let mut value = Object::Array(vec![Object::Int(1)]);
+        assert_eq!(configuration_array(&doc, &value), Some(vec![Object::Int(1)]));
+        for depth in 1..=17 {
+            value = Object::Ref(doc.add(value));
+            assert_eq!(configuration_array(&doc, &value).is_some(), depth <= 16, "depth={depth}");
+        }
+        let cycle = doc.add(Object::Null);
+        doc.set(cycle, Object::Ref(cycle));
+        assert!(configuration_array(&doc, &Object::Ref(cycle)).is_none());
+        assert!(configuration_array(&doc, &Object::Ref(ObjRef::new(1000, 3))).is_none());
+        assert!(configuration_array(&doc, &Object::Int(42)).is_none());
+    }
+    #[test]
+    fn order_walk_limits_accept_the_boundary_and_preserve_non_arrays() {
+        let doc = Document::new_empty();
+        let keep = |_: &Object| true;
+        let clean = |value: &Object| prune_layer_order(&doc, value, &keep, 0, &mut 4096, &mut std::collections::HashSet::new());
+        assert_eq!(clean(&Object::Int(42)), Ok(Some(Object::Int(42))));
+        assert!(clean(&Object::Array(vec![Object::Int(0); 4095])).is_ok());
+        assert!(clean(&Object::Array(vec![Object::Int(0); 4096])).is_err());
+        let mut value = Object::Int(0);
+        for _ in 0..64 {
+            value = Object::Array(vec![value]);
+        }
+        assert!(clean(&value).is_ok());
+        value = Object::Array(vec![value]);
+        assert!(clean(&value).is_err());
     }
 }
