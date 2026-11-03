@@ -316,6 +316,76 @@ fn form_fill_invalid_script_does_not_panic_or_break_fill() {
     // Filling form with syntax error in calculation script does not crash or panic
     let res = tool(&mut a, "form_fill", json!({"doc": id, "values": {"alpha": "test"}}));
     assert_eq!(res["filled"], 1);
+    let errors = res["errors"].as_array().expect("errors array");
+    assert!(!errors.is_empty(), "script errors must be captured and reported in apply output");
+
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn form_fill_surfaces_script_errors_and_console_diagnostics() {
+    let (mut a, id1, dir) = setup("diagnostics-test-1");
+    let id2 = tool(&mut a, "doc_open", json!({"path": "form.pdf"}))["doc"].as_u64().unwrap();
+    assert_ne!(id1, id2);
+
+    // Set script on doc 1 that emits alerts, viewer requests, console output, and throws an error
+    tool(
+        &mut a,
+        "form_set_script",
+        json!({
+            "doc": id1,
+            "field": "beta",
+            "event": "calculate",
+            "script": "if (this.getField(\"alpha\").value == \"trigger\") { console.println(\"calc diagnostic 1\"); console.println(\"calc diagnostic 2\"); app.alert(\"Alert diag\"); app.beep(0); throw new Error(\"calc failed intentionally\"); }"
+        }),
+    );
+
+    // Doc 2 edit: completely clean, no diagnostics from doc 1 leaked
+    let res2 = tool(&mut a, "form_fill", json!({"doc": id2, "values": {"alpha": "trigger"}}));
+    assert!(res2.get("alerts").is_none());
+    assert!(res2.get("requests").is_none());
+    assert!(res2.get("console").is_none());
+    assert!(res2.get("errors").is_none());
+
+    // Doc 1 edit: surfaces alerts, requests, console, and errors
+    let res1 = tool(&mut a, "form_fill", json!({"doc": id1, "values": {"alpha": "trigger"}}));
+    let alerts = res1["alerts"].as_array().expect("alerts array");
+    assert_eq!(alerts.len(), 1);
+    assert_eq!(alerts[0]["message"], "Alert diag");
+
+    let reqs = res1["requests"].as_array().expect("requests array");
+    assert_eq!(reqs.len(), 1);
+    assert_eq!(reqs[0]["beep"], true);
+
+    let console = res1["console"].as_array().expect("console array");
+    assert_eq!(console.len(), 2);
+    assert_eq!(console[0], "calc diagnostic 1");
+    assert_eq!(console[1], "calc diagnostic 2");
+
+    let errors = res1["errors"].as_array().expect("errors array");
+    assert_eq!(errors.len(), 1);
+    assert!(errors[0].as_str().unwrap().contains("calc failed intentionally"));
+
+    // Repeated call: diagnostics are drained, so subsequent clean fill has none
+    let res1_clean = tool(&mut a, "form_fill", json!({"doc": id1, "values": {"alpha": "other"}}));
+    assert!(res1_clean.get("alerts").is_none());
+    assert!(res1_clean.get("requests").is_none());
+    assert!(res1_clean.get("console").is_none());
+    assert!(res1_clean.get("errors").is_none());
+
+    // Undo: does NOT replay side effects or diagnostics
+    let undo_res = tool(&mut a, "edit_undo", json!({"doc": id1}));
+    assert!(undo_res.get("alerts").is_none());
+    assert!(undo_res.get("requests").is_none());
+    assert!(undo_res.get("console").is_none());
+    assert!(undo_res.get("errors").is_none());
+
+    // Redo: does NOT replay side effects or diagnostics
+    let redo_res = tool(&mut a, "edit_redo", json!({"doc": id1}));
+    assert!(redo_res.get("alerts").is_none());
+    assert!(redo_res.get("requests").is_none());
+    assert!(redo_res.get("console").is_none());
+    assert!(redo_res.get("errors").is_none());
 
     std::fs::remove_dir_all(dir).unwrap();
 }
