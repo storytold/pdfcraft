@@ -228,6 +228,34 @@ fn find_shortcuts_work_from_the_find_field() {
     assert!(h.ctx.egui_wants_keyboard_input(), "and keeps it");
 }
 
+/// #5957: the find bar is anchored on its right edge, so its text box must stay put while the
+/// status beside it changes ("", "1 of 15", "No matches"): a status that changed the bar's width
+/// slid the box sideways under the pointer.
+#[test]
+fn the_find_box_stays_put_while_the_status_changes() {
+    let mut h = harness();
+    h.state_mut().active = Some(0);
+    h.run_steps(2);
+    h.state_mut().views[0].open_find();
+    h.run_steps(2);
+    let left = |h: &Harness<'static, PdfCraftApp>| h.get_by_label("Find text").rect().left();
+    let empty = left(&h);
+    h.state_mut().views[0].find.as_mut().unwrap().query = "page".into();
+    h.state_mut().views[0].rerun_find();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while std::time::Instant::now() < deadline && h.state().views[0].find.as_ref().unwrap().matches.len() < 15 {
+        h.run_steps(2);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    h.run_steps(2);
+    assert!((left(&h) - empty).abs() < 0.5, "\"1 of 15\" moved the box from {empty} to {}", left(&h));
+    h.state_mut().views[0].find.as_mut().unwrap().query = "nowhere".into();
+    h.state_mut().views[0].rerun_find();
+    h.run_steps(2);
+    assert!(h.state().views[0].find.as_ref().unwrap().matches.is_empty());
+    assert!((left(&h) - empty).abs() < 0.5, "\"No matches\" moved the box from {empty} to {}", left(&h));
+}
+
 /// Open the find bar on the first document, search for the single uppercase "PAGE" on each
 /// page, and wait until every text layer has answered. Returns the document's view index.
 fn find_one_match_per_page(h: &mut Harness<'static, PdfCraftApp>) -> usize {
