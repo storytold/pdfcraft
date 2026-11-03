@@ -361,9 +361,19 @@ fn toggle_switch(ui: &mut egui::Ui, on: &mut bool, t: &Tokens) -> egui::Response
 
 /// Render the segmented dock placement bar: [ Float | Left | Right | Top | Bottom ].
 fn segmented_dock_picker(ui: &mut egui::Ui, bar: &mut Hotbar, t: &Tokens) {
+    let min_width = 270.0;
+    if ui.available_width() < min_width {
+        egui::ScrollArea::horizontal().auto_shrink([false, false]).show(ui, |ui| {
+            render_dock_segments(ui, bar, t, min_width);
+        });
+    } else {
+        render_dock_segments(ui, bar, t, ui.available_width());
+    }
+}
+
+fn render_dock_segments(ui: &mut egui::Ui, bar: &mut Hotbar, t: &Tokens, total_width: f32) {
     let sides: [(&str, Option<&str>); 5] =
         [("Float", None), ("Left", Some("left")), ("Right", Some("right")), ("Top", Some("top")), ("Bottom", Some("bottom"))];
-    let total_width = ui.available_width().max(280.0);
     let height = 30.0;
     let item_width = total_width / (sides.len() as f32);
 
@@ -594,10 +604,13 @@ pub(crate) fn show(app: &mut PdfCraftApp, area: Rect, page_left: Option<f32>, ui
     expanded.set_open(true);
     expanded.store(&ctx);
     let screen = ctx.content_rect().shrink(12.0);
-    let card_width = 280.0;
-    let picker_x = if pos.x + cell + card_width + 24.0 < screen.right() { pos.x + cell + 14.0 } else { pos.x - card_width - 14.0 };
+    let margin_x = 14.0;
+    let card_margin_total = margin_x * 2.0;
+    let card_width = 280.0f32.min((screen.width() - card_margin_total).max(180.0));
+    let outer_width = card_width + card_margin_total;
+    let picker_x = if pos.x + cell + outer_width + 10.0 < screen.right() { pos.x + cell + 14.0 } else { pos.x - outer_width - 14.0 };
     let picker_pos = egui::pos2(
-        picker_x.clamp(screen.left(), (screen.right() - card_width).max(screen.left())),
+        picker_x.clamp(screen.left(), (screen.right() - outer_width).max(screen.left())),
         pos.y.clamp(screen.top(), (screen.bottom() - 480.0).max(screen.top())),
     );
     let mut close_dialog = false;
@@ -639,7 +652,8 @@ pub(crate) fn show(app: &mut PdfCraftApp, area: Rect, page_left: Option<f32>, ui
             // Toolbar size slider row
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(tl!("Toolbar size")).size(12.5).color(t.text));
-                ui.spacing_mut().slider_width = 140.0;
+                let slider_width = (ui.available_width() - 55.0).clamp(50.0, 140.0);
+                ui.spacing_mut().slider_width = slider_width;
                 ui.add(egui::Slider::new(&mut bar.button_size, 24.0..=64.0).show_value(false));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.label(egui::RichText::new(format!("{:.0} px", bar.button_size)).size(12.0).color(t.text_muted));
