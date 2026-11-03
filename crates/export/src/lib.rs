@@ -33,7 +33,7 @@ pub(crate) use as_html::allowed;
 #[cfg(test)]
 use as_html::base64;
 pub(crate) use as_html::esc;
-pub use as_html::html;
+pub use as_html::{html, html_simple};
 pub use as_markdown::markdown;
 #[cfg(test)]
 use as_markdown::{emphasis, paragraph};
