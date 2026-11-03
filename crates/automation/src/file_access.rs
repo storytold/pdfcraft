@@ -135,7 +135,9 @@ fn absolute(shown: &str, path: &Path) -> Result<PathBuf, String> {
         return Err("automation path rejected: path is empty".into());
     }
     // Checked as given: making `…\NUL` absolute gives the device path `\\.\NUL` on Windows.
-    if cfg!(windows) && path.components().any(|c| matches!(c, Component::Normal(n) if is_device_name(&n.to_string_lossy()))) {
+    if cfg!(windows)
+        && path.components().any(|c| matches!(c, Component::Normal(n) if pdfcraft_platform::file_names::is_windows_device_name(&n.to_string_lossy())))
+    {
         return Err(format!("automation path rejected: reserved device names are not allowed: {shown}"));
     }
     std::path::absolute(path).map_err(|e| format!("automation path rejected: cannot resolve {shown}: {e}"))
@@ -215,13 +217,6 @@ pub(crate) fn foreign_share(path: &Path, root: &Path) -> bool {
         Some(format!("{kind}\\{}\\{}", a.to_string_lossy(), b.to_string_lossy()).to_lowercase())
     }
     share(path).is_some_and(|s| share(root).as_ref() != Some(&s))
-}
-
-/// A Windows device name (`CON`, `NUL`, `COM1`… also with an extension), which names no file.
-fn is_device_name(component: &str) -> bool {
-    let stem = component.split('.').next().unwrap_or(component).trim_end_matches(' ').to_ascii_uppercase();
-    let numbered = |prefix: &str| stem.strip_prefix(prefix).is_some_and(|n| matches!(n, "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9"));
-    matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL" | "CLOCK$" | "CONIN$" | "CONOUT$") || numbered("COM") || numbered("LPT")
 }
 
 #[cfg(test)]
@@ -381,6 +376,9 @@ mod tests {
         let e = roots.check(&s(base.join("out/NUL")), Access::Write).unwrap_err();
         assert!(e.contains("reserved device names"), "{e}");
         assert!(roots.check(&s(base.join("out/com1.txt")), Access::Write).is_err());
+        // The superscript digits name a port too.
+        let e = roots.check(&s(base.join("out/COM¹.pdf")), Access::Write).unwrap_err();
+        assert!(e.contains("reserved device names"), "{e}");
         assert_eq!(roots.check(&s(base.join("out/console.txt")), Access::Write), Ok(()));
         let _ = std::fs::remove_dir_all(base);
     }
