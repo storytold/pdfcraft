@@ -576,7 +576,7 @@ pub fn tools() -> Vec<ToolDef> {
         t(
             "doc_remove_hidden",
             "Remove hidden information / Sanitize",
-            "Remove the listed categories (see doc_hidden_info), or every category when none are listed (Sanitize Document). Form fields are flattened so their values stay visible. The next save rewrites the whole file. Undoable until saved.",
+            "Remove the listed categories (see doc_hidden_info), or every category when none are listed (Sanitize Document). Fails when the listed categories hold nothing. Form fields are flattened so their values stay visible. The next save rewrites the whole file. Undoable until saved.",
         )
         .destructive()
         .with(schema(
