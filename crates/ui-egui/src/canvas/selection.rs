@@ -351,4 +351,16 @@ mod title_tests {
         let exact = "b".repeat(BOOKMARK_TITLE_CHARS);
         assert_eq!(title_of(&exact).as_deref(), Some(exact.as_str()), "a title that fits is kept whole");
     }
+
+    /// FredApps on #5615: right-to-left words keep their logical order, are put on one line the
+    /// same way, and a long run of them is cut at a character, not inside one.
+    #[test]
+    fn a_right_to_left_title_keeps_its_order_and_is_cut_at_a_character() {
+        assert_eq!(title_of(" שלום \n עולם ").as_deref(), Some("שלום עולם"));
+        assert_eq!(title_of("مرحبا\tبالعالم").as_deref(), Some("مرحبا بالعالم"));
+        let long = "مرحبا ".repeat(BOOKMARK_TITLE_CHARS);
+        let title = title_of(&long).unwrap();
+        assert_eq!(title.chars().count(), BOOKMARK_TITLE_CHARS);
+        assert!(title.starts_with("مرحبا مرحبا") && title.ends_with('…'), "{title}");
+    }
 }

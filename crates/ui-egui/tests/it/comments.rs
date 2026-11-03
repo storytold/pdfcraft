@@ -3183,4 +3183,9 @@ fn every_word_of_a_page_selected_by_hand_names_the_bookmark() {
     assert_eq!(outline.len(), 1);
     let title = outline[0].title.as_str();
     assert!(title != "Untitled" && title.starts_with("The quick"), "{title}");
+    // FredApps on #5615: a selection over several lines names it on one line, and the bookmark
+    // points at the selection's first word, not the page's top.
+    assert!(!title.contains(['\n', '\r', '\t']) && !title.contains("  "), "{title:?}");
+    let at_the_words = matches!(outline[0].view, pdfcraft_render::DestView::Xyz { left: Some(_), top: Some(_), .. });
+    assert!(at_the_words, "a left and top of its own: {:?}", outline[0].view);
 }
