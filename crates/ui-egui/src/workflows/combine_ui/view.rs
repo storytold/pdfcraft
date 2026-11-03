@@ -445,7 +445,7 @@ fn sort_menu(app: &PdfCraftApp, ui: &mut egui::Ui, n: usize) -> Option<RowAction
     egui::Popup::menu(&response).show(|ui| {
         ui.set_min_width(180.0);
         ui.label(egui::RichText::new(tl!("Sort by")).small());
-        for by in SortBy::MENU {
+        for by in SortBy::offered(cfg!(target_arch = "wasm32")) {
             let item = ui.add(widgets::radio(current == Some(by), by.label()));
             let item = if by == SortBy::Folder { item.on_hover_text(tl!("The folder each file was added from, then its name")) } else { item };
             if item.clicked() {
@@ -620,6 +620,15 @@ fn zoom_controls(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, edge: f32
     });
 }
 
+/// What the empty list invites the user to drop. A browser's drop brings files, never a folder.
+pub(super) fn drop_hint(web: bool) -> &'static str {
+    if web {
+        tl!("Drop PDFs, images or text files here, or choose them.")
+    } else {
+        tl!("Drop PDFs, images, text files or folders here, or choose them.")
+    }
+}
+
 fn empty_state(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, files_hovering: bool) {
     ui.vertical_centered(|ui| {
         ui.add_space((ui.available_height() / 2.0 - 70.0).max(16.0));
@@ -627,7 +636,7 @@ fn empty_state(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, files_hover
         ui.add_space(10.0);
         ui.label(egui::RichText::new(tl!("Add the files to combine")).font(theme::medium(15.0)));
         ui.add_space(4.0);
-        ui.label(egui::RichText::new(tl!("Drop PDFs, images, text files or folders here, or choose them.")).color(t.text_faint));
+        ui.label(egui::RichText::new(drop_hint(cfg!(target_arch = "wasm32"))).color(t.text_faint));
         ui.add_space(12.0);
         let folders = cfg!(not(target_arch = "wasm32"));
         // Centre the buttons: measure them first.

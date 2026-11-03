@@ -59,6 +59,12 @@ impl SortBy {
         SortBy::Folder,
     ];
 
+    /// What the Sort menu offers. A browser gives a file no folder or modification time, so on
+    /// the `web` every file would tie on those.
+    pub(super) fn offered(web: bool) -> impl Iterator<Item = SortBy> {
+        SortBy::MENU.into_iter().filter(move |by| !web || !matches!(by, SortBy::Folder | SortBy::Column(SortKey::Modified)))
+    }
+
     pub(super) fn label(self) -> &'static str {
         match self {
             SortBy::Column(key) => key.label(),
