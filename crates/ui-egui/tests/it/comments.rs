@@ -2001,6 +2001,7 @@ fn inserted_text_snaps_to_the_gap_between_characters_on_the_baseline() {
     assert!(((x0 + x1) / 2.0 - 200.0).abs() < 1.0 && (y1 - 60.0).abs() < 1.0 && (y1 - y0 - 8.0).abs() < 0.3, "{:?}", away.rect);
 }
 
+/// Comment filters hide the matching color/checkmark cards and Show all restores them.
 #[test]
 fn the_panel_filters_by_colour_and_checkmark() {
     let mut h = harness(|app| {
@@ -2018,6 +2019,7 @@ fn the_panel_filters_by_colour_and_checkmark() {
         opacity: None,
         width: None,
         endings: None,
+        syriac_family: None,
     });
     h.state_mut().apply_edit(pdfcraft_engine::Edit::MarkAnnotation { page: 0, index: 0, marked: true, author: "Tester".into() });
     h.run_steps(2);
@@ -2038,6 +2040,7 @@ fn the_panel_filters_by_colour_and_checkmark() {
     assert_eq!(cards(&h), before);
 }
 
+/// Current comment properties become the tool default, persist across restore and style new comments.
 #[test]
 fn make_current_properties_default() {
     let mut h = harness(|app| {
@@ -2053,6 +2056,7 @@ fn make_current_properties_default() {
         opacity: Some(0.5),
         width: Some(5.0),
         endings: None,
+        syriac_family: None,
     });
     h.run_steps(2);
     h.get_by_label("More").click();
@@ -2142,6 +2146,7 @@ fn an_arrows_default_does_not_restyle_lines() {
         opacity: Some(0.5),
         width: Some(6.0),
         endings: None,
+        syriac_family: None,
     });
     h.run_steps(2);
     h.get_by_label("More").click();
@@ -2865,7 +2870,7 @@ fn a_moved_comment_is_drawn_where_it_goes_before_release() {
     for shape in
         [pdfcraft_engine::Shape::Rectangle { rect: [30.0, 30.0, 70.0, 70.0] }, pdfcraft_engine::Shape::Oval { rect: [230.0, 30.0, 270.0, 70.0] }]
     {
-        let style = pdfcraft_engine::Style { color: [1.0, 0.0, 0.0], opacity: 1.0, width: 2.0, fill: Some([1.0, 0.0, 0.0]) };
+        let style = pdfcraft_engine::Style { color: [1.0, 0.0, 0.0], opacity: 1.0, width: 2.0, fill: Some([1.0, 0.0, 0.0]), syriac_family: None };
         assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
             page: 0,
             shape,

@@ -1,10 +1,11 @@
 use super::layout::{
-    Piece, arabic_error, hebrew_error, is_arabic, is_hebrew, is_thai, latin_width, norm, shaped_layout, text_rect, thai_error, wrapped,
+    Piece, arabic_error, hebrew_error, is_arabic, is_hebrew, is_syriac, is_thai, latin_width, norm, shaped_layout, syriac_error, text_rect,
+    thai_error, wrapped,
 };
 use super::types::{AddedText, Align, Family};
 use super::{
-    Content, Dict, Document, EditError, GlyphError, GlyphOutline, HashMap, HashSet, ObjRef, Object, PdfString, ShapedCluster, ShapedScript, Stream,
-    align_code, literal, matrix_number, n, shaped_glyph, win_ansi,
+    Content, Dict, Document, EditError, GlyphError, GlyphOutline, HashMap, HashSet, Object, PdfString, ShapedCluster, ShapedScript, align_code,
+    literal, matrix_number, n, shaped_glyph, win_ansi,
 };
 
 fn font_name(base: &str) -> String {
@@ -86,9 +87,10 @@ pub(super) fn draw_laid_shaped(
         for (id, _) in &c.glyphs {
             if let std::collections::hash_map::Entry::Vacant(entry) = outlines.entry((c.script, *id)) {
                 entry.insert(outline(c.script, *id).map_err(|e| match c.script {
-                    ShapedScript::Arabic => arabic_error(e, &c.text),
+                    ShapedScript::Arabic | ShapedScript::ArabicBold => arabic_error(e, &c.text),
                     ShapedScript::Hebrew => hebrew_error(e, &c.text),
                     ShapedScript::Thai => thai_error(e, &c.text),
+                    ShapedScript::Syriac | ShapedScript::SyriacEastern | ShapedScript::SyriacWestern => syriac_error(e, &c.text),
                 })?);
             }
         }
@@ -97,7 +99,7 @@ pub(super) fn draw_laid_shaped(
     let mut taken_names: HashSet<Vec<u8>> = taken.iter().chain(fonts.iter()).map(|(name, _)| name.clone()).collect();
     let mut names = Vec::new();
     for chunk in keys.chunks(GLYPHS_PER_FONT) {
-        let font = type3_shaped(doc, chunk, &outlines);
+        let font = pdfcraft_fonts::embed_shaped_clusters(doc, chunk, &outlines).map_err(EditError::Invalid)?;
         // A name no font on the page has, so items never replace each other's fonts (object
         // numbers alone don't do: a full save renumbers objects but keeps resource names).
         let mut name = format!("PCAr{}", font.num);
@@ -167,96 +169,6 @@ fn cluster_key(c: &ShapedCluster) -> ClusterKey<'_> {
     (c.script, c.text.as_str(), c.glyphs.iter().map(|(id, [x, y])| (*id, x.to_bits(), y.to_bits())).collect(), c.advance.to_bits())
 }
 
-/// A Type 3 font with `clusters` as codes 1…, each drawn from its script face's glyph `outlines`.
-fn type3_shaped(doc: &mut Document, clusters: &[&ShapedCluster], outlines: &HashMap<(ShapedScript, u32), GlyphOutline>) -> ObjRef {
-    let mut charprocs = Dict::new();
-    let mut differences = vec![Object::Int(1)];
-    let mut widths = Vec::with_capacity(clusters.len());
-    let mut bbox = [0.0f64; 4];
-    let mut to_unicode = Vec::new();
-    for (i, c) in clusters.iter().enumerate() {
-        let code = i + 1;
-        // Glyph space is 1000 units per em.
-        let mut paths = Vec::new();
-        let mut ink: Option<[f64; 4]> = None;
-        for (id, [dx, dy]) in &c.glyphs {
-            let Some(g) = outlines.get(&(c.script, *id)) else { continue };
-            for contour in &g.contours {
-                for (j, p) in contour.iter().enumerate() {
-                    paths.extend(format!("{} {} {}\n", n((p[0] + dx) * 1000.0), n((p[1] + dy) * 1000.0), if j == 0 { "m" } else { "l" }).bytes());
-                }
-                paths.extend_from_slice(b"h\n");
-                let b = [g.bbox[0] + dx, g.bbox[1] + dy, g.bbox[2] + dx, g.bbox[3] + dy];
-                ink = Some(ink.map_or(b, |a| [a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])]));
-            }
-        }
-        // Rounded outwards so no ink is clipped.
-        let [x0, y0, x1, y1] =
-            ink.map_or([0.0; 4], |b| [(b[0] * 1000.0).floor(), (b[1] * 1000.0).floor(), (b[2] * 1000.0).ceil(), (b[3] * 1000.0).ceil()]);
-        bbox = [bbox[0].min(x0), bbox[1].min(y0), bbox[2].max(x1), bbox[3].max(y1)];
-        let mut proc = format!("{} 0 {} {} {} {} d1\n", n(c.advance * 1000.0), n(x0), n(y0), n(x1), n(y1)).into_bytes();
-        if !paths.is_empty() {
-            proc.extend(paths);
-            proc.extend_from_slice(b"f\n");
-        }
-        let glyph = format!("g{code:02X}");
-        charprocs.set(glyph.clone().into_bytes(), Object::Ref(doc.add(Object::Stream(Stream::flate(Dict::new(), &proc)))));
-        differences.push(Object::name(&glyph));
-        widths.push(Object::Real((c.advance * 1000.0).round()));
-        if !c.text.is_empty() {
-            let hex: String = c.text.encode_utf16().map(|u| format!("{u:04X}")).collect();
-            to_unicode.push(format!("<{code:02X}> <{hex}>\n"));
-        }
-    }
-    let mut cmap = String::from(
-        "/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n/CMapType 2 def\n1 begincodespacerange\n<01> <FF>\nendcodespacerange\n",
-    );
-    // A CMap block holds at most 100 entries.
-    for block in to_unicode.chunks(100) {
-        cmap.push_str(&format!("{} beginbfchar\n{}endbfchar\n", block.len(), block.concat()));
-    }
-    cmap.push_str("endcmap\nCMapName currentdict /CMap defineresource pop\nend\nend\n");
-    let cmap = doc.add(Object::Stream(Stream::flate(Dict::new(), cmap.as_bytes())));
-    // The face's family when every glyph comes from one script; without the face, the script's
-    // name (as Arabic items were always named).
-    let family = match clusters.first().map(|c| c.script).filter(|s| clusters.iter().all(|c| c.script == *s)) {
-        Some(script) => script.font().map_or(
-            match script {
-                ShapedScript::Arabic => "Arabic",
-                ShapedScript::Hebrew => "Hebrew",
-                ShapedScript::Thai => "Thai",
-            },
-            |f| f.family,
-        ),
-        None => "PdfCraft Shaped Text",
-    };
-    let mut descriptor = Dict::new();
-    descriptor.set(b"Type".to_vec(), Object::name("FontDescriptor"));
-    descriptor.set(b"FontName".to_vec(), Object::name(&family.replace(' ', "")));
-    descriptor.set(b"FontFamily".to_vec(), Object::String(PdfString::literal(family.as_bytes().to_vec())));
-    descriptor.set(b"Flags".to_vec(), Object::Int(4));
-    descriptor.set(b"ItalicAngle".to_vec(), Object::Int(0));
-    let mut encoding = Dict::new();
-    encoding.set(b"Type".to_vec(), Object::name("Encoding"));
-    encoding.set(b"Differences".to_vec(), Object::Array(differences));
-    let mut font = Dict::new();
-    font.set(b"Type".to_vec(), Object::name("Font"));
-    font.set(b"Subtype".to_vec(), Object::name("Type3"));
-    font.set(b"FontDescriptor".to_vec(), Object::Ref(doc.add(Object::Dict(descriptor))));
-    font.set(b"FontBBox".to_vec(), Object::Array(bbox.iter().map(|v| Object::Real(*v)).collect()));
-    font.set(
-        b"FontMatrix".to_vec(),
-        Object::Array(vec![Object::Real(0.001), Object::Int(0), Object::Int(0), Object::Real(0.001), Object::Int(0), Object::Int(0)]),
-    );
-    font.set(b"FirstChar".to_vec(), Object::Int(1));
-    font.set(b"LastChar".to_vec(), Object::Int(clusters.len() as i64));
-    font.set(b"Widths".to_vec(), Object::Array(widths));
-    font.set(b"Encoding".to_vec(), Object::Dict(encoding));
-    font.set(b"CharProcs".to_vec(), Object::Dict(charprocs));
-    font.set(b"ToUnicode".to_vec(), Object::Ref(cmap));
-    doc.add(Object::Dict(font))
-}
-
 /// Content and resources for an item; `view` maps display space to user space. `taken` holds the
 /// page's font names. `existing`: the item is being replaced, so a build without the Arabic or
 /// Hebrew face keeps drawing that text as `?`, as before it was supported, rather than refusing to
@@ -291,6 +203,7 @@ pub(super) fn draw(doc: &mut Document, c: &Content, view: [f64; 6], taken: &Dict
                 || t.text.chars().any(is_thai)
                 || face_or_new(is_arabic, pdfcraft_fonts::document_arabic_font().is_some())
                 || face_or_new(is_hebrew, pdfcraft_fonts::document_hebrew_font(false).is_some())
+                || face_or_new(is_syriac, pdfcraft_fonts::document_syriac_font_for_family(t.syriac_family).is_some())
             {
                 draw_shaped(doc, t, taken, &mut fonts, &mut out)?;
                 res.set(b"Font".to_vec(), Object::Dict(fonts));
@@ -360,6 +273,7 @@ pub(super) fn params(c: &Content) -> Dict {
             d.set(b"Kind".to_vec(), Object::name("Text"));
             d.set(b"Text".to_vec(), PdfString::text(&t.text));
             d.set(b"Font".to_vec(), Object::name(t.family.base_font(t.bold, t.italic)));
+            d.set(pdfcraft_fonts::SyriacFamily::PDF_KEY.to_vec(), Object::name(t.syriac_family.name()));
             d.set(b"Size".to_vec(), Object::Real(t.size));
             d.set(b"Color".to_vec(), arr(&t.color));
             d.set(b"Align".to_vec(), Object::Int(align_code(t.align)));

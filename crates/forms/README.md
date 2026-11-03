@@ -3,6 +3,18 @@
 Interactive forms (AcroForm, ISO 32000-2 §12.7). Layer L3; depends on `pdfcraft-cos` and
 `pdfcraft-fonts`.
 
+The document-backed appearance path also shapes Syriac text and choice values,
+comb cells and push-button captions with the optional craft-fonts Syrc faces.
+Password fields retain masking. The immutable legacy appearance helper cannot
+allocate those glyph resources. See [supported content and limits](../../docs/syriac-content.md).
+
+Auto-direction text, combo, list and comb fields also have an Arabic fallback when
+their selected encoding cannot represent the effective displayed text. Multiline
+drawing and fitting share row metrics; list selections and comb marks retain their
+semantics. Encodable selected fonts retain their appearance and metrics.
+Explicit-direction Arabic form shaping remains outside this fallback; see
+[Arabic generated appearances](../../docs/arabic-generated-appearances.md).
+
 ## API
 
 ```rust

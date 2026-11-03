@@ -447,6 +447,11 @@ checkpoint. The [consolidated integration record](docs/arabic-milestone-integrat
 includes Auto/LTR/RTL direction controls and focused UI tests. Wider UI/IME,
 form-appearance and mixed-formatting qualification remain follow-up work.
 
+**Combined Arabic/Syriac package:** the [package and verification record](docs/arabic-syriac-language-package.md)
+links foundation PRs #5731/#5776, reused appearance work, locally verified generated
+surfaces and bounded source editing. Broader physical input, browser and reader
+acceptance is deferred; upstream and release acceptance remain separate.
+
 ---
 
 ## Downloads

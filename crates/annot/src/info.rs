@@ -213,6 +213,8 @@ pub struct Props {
     pub fill: Option<Rgb>,
     /// Text boxes, typewriter text and callouts: the `/DA` font size in points.
     pub font_size: Option<f64>,
+    /// Selected Syriac face for FreeText and outlined typed signatures; absent on other comments.
+    pub syriac_family: Option<pdfcraft_fonts::SyriacFamily>,
 }
 
 /// The current properties of the comment at `(page, index)`.
@@ -239,11 +241,13 @@ pub fn props(doc: &Document, page: usize, index: usize) -> Option<Props> {
         width,
         icon: (subtype == "Text").then(|| d.name(b"Name").and_then(|n| NoteIcon::from_name(&String::from_utf8_lossy(n))).unwrap_or(NoteIcon::Note)),
         modified: text_value(doc, d, b"M"),
-        restylable: appearance::build(d).is_some(),
+        restylable: appearance::can_build(d),
         locked: annotation_flags(doc, d) & FLAG_LOCKED != 0,
         fillable: fillable(&subtype),
         fill: fill_of(d),
         font_size: (subtype == "FreeText").then(|| appearance::parse_da(d).1),
+        syriac_family: (subtype == "FreeText" || (subtype == "Stamp" && d.name(b"Name") == Some(b"PCTypedSignature")))
+            .then(|| pdfcraft_fonts::SyriacFamily::from_dict(d)),
         subtype,
         endings: line_endings_of(d),
     })

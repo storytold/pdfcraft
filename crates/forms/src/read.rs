@@ -533,7 +533,9 @@ fn walk(
                         value.as_string().map(|s| s.to_text())
                     })
                     .flatten(),
-                list: (kind == FieldKind::List).then(|| appearance::list_rows_of(doc, inh.da.as_deref().unwrap_or("/Helv 0 Tf 0 g"), Some(d), wd)),
+                list: (kind == FieldKind::List).then(|| {
+                    appearance::list_rows_of(doc, inh.da.as_deref().unwrap_or("/Helv 0 Tf 0 g"), Some(d), wd, inh.text_direction.unwrap_or_default())
+                }),
                 round: kind == FieldKind::Radio || (kind == FieldKind::CheckBox && appearance::is_round(doc, wd)),
             })
         })

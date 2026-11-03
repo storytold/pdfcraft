@@ -254,6 +254,7 @@ impl FieldDraft {
         let o = self.original.as_ref().as_ref()?;
         let ch = |a: bool, b: bool| (a != b).then_some(a);
         let p = FieldProps {
+            syriac_family: None,
             name: (self.name.trim() != o.name).then(|| self.name.trim().to_string()),
             tooltip: (self.tooltip != o.tooltip).then(|| self.tooltip.clone()),
             caption: (self.caption != o.caption).then(|| (self.widget, self.caption.clone())),

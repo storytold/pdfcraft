@@ -12,6 +12,8 @@ pub(super) struct TextState {
     pub(super) leading: f64,
     pub(crate) rise: f64,
     pub(crate) fill: Vec<Op>,
+    /// Validated logical paint hints for one generated ActualText span; never geometry.
+    pub(crate) logical_paints: Rc<[(std::ops::Range<usize>, [f64; 3])]>,
     /// The text rendering mode (`Tr`); 3 is invisible text, as in an OCR layer over a scan.
     pub(crate) render_mode: i64,
     /// The stroke colour operators, the line width and the ExtGStates selected (see [`Ts`]):
@@ -25,6 +27,8 @@ pub(super) struct TextState {
 }
 
 impl TextState {
+    /// Capture the effective text/graphics state, retaining shared validated logical
+    /// paint hints so later rewriting preserves colour ownership without copying the map.
     pub(super) fn of(ts: &Ts) -> Self {
         TextState {
             font: ts.font.as_ref().map(|(n, _)| (String::from_utf8_lossy(n).into_owned(), ts.size)),
@@ -34,6 +38,7 @@ impl TextState {
             leading: ts.leading,
             rise: ts.rise,
             fill: ts.fill.clone(),
+            logical_paints: ts.logical_paints.clone(),
             render_mode: ts.render_mode,
             stroke: ts.stroke.clone(),
             line_width: ts.line_width,
@@ -182,6 +187,22 @@ pub(super) fn direction(m: &Matrix) -> (f64, f64) {
     if length.is_finite() && length > 1e-9 { (x / length, y / length) } else { (1.0, 0.0) }
 }
 
+/// The bounded source-edit frame: a positive, uniformly scaled quarter turn.
+/// Reject skew, reflection, arbitrary rotation and nonuniform scale.
+pub(super) fn quarter_turn_axes(matrix: Matrix) -> Option<(f64, f64)> {
+    let [a, b, c, d, x, y] = matrix.0;
+    if ![a, b, c, d, x, y].iter().all(|v| v.is_finite()) {
+        return None;
+    }
+    let scale = a.hypot(b);
+    if scale <= 1e-9 || (c.hypot(d) - scale).abs() > scale * 1e-6 {
+        return None;
+    }
+    let (u, v) = (a / scale, b / scale);
+    let cardinal = [(1.0, 0.0), (0.0, 1.0), (-1.0, 0.0), (0.0, -1.0)].into_iter().find(|(x, y)| (u - x).abs() < 1e-6 && (v - y).abs() < 1e-6)?;
+    ((c / scale + cardinal.1).abs() < 1e-6 && (d / scale - cardinal.0).abs() < 1e-6).then_some(cardinal)
+}
+
 /// User-space point `p` as `(along, across)` a baseline running in unit direction `dir`. Upright
 /// text (`dir` = `(1, 0)`) keeps its coordinates, so lines and rows of turned text are found the
 /// same way (#1443).
@@ -199,6 +220,7 @@ pub(super) struct Ts {
     pub(super) ctm: Matrix,
     /// The operators that set the current fill colour (`g`, `rg`, `k`, or `cs` + `sc`/`scn`).
     pub(super) fill: Vec<Op>,
+    pub(super) logical_paints: Rc<[(std::ops::Range<usize>, [f64; 3])]>,
     pub(super) font: Option<(Vec<u8>, Rc<Metrics>)>,
     /// The Japanese or Hebrew fallback face the font subsets, when the font is one (see [`is_type3_fallback`]).
     pub(super) face: Option<String>,
@@ -459,6 +481,7 @@ impl Carry {
         let ts = Ts {
             ctm: Matrix::IDENTITY,
             fill: Vec::new(),
+            logical_paints: Rc::from([]),
             font: None,
             face: None,
             size: 0.0,
@@ -488,12 +511,59 @@ type CachedFont = (Rc<Metrics>, Option<String>, Result<Option<f64>, String>);
 /// A `Do` met while interpreting: its operator index, XObject name and the state there.
 type Invocation = (usize, Vec<u8>, Ts);
 
+/// Decode a direct `PCPaint` array of `[start, end, r, g, b]` entries.
+/// At most 4,096 nonempty ranges must cover the complete logical text contiguously
+/// at valid UTF-8 boundaries, with finite RGB channels in `0..=1`. Any malformed map
+/// has no authority. The caller separately charges all decoded entries, including
+/// malformed/repeated maps, against a 65,536-entry page budget before this allocation.
+fn logical_paints(value: &Object, text: &str) -> Option<Vec<(std::ops::Range<usize>, [f64; 3])>> {
+    let entries = value.as_array().filter(|items| !items.is_empty() && items.len() <= 4096)?;
+    let mut paints = Vec::with_capacity(entries.len());
+    let mut previous = 0;
+    for entry in entries {
+        let fields = entry.as_array().filter(|fields| fields.len() == 5)?;
+        let start = usize::try_from(fields.first()?.as_int()?).ok()?;
+        let end = usize::try_from(fields.get(1)?.as_int()?).ok()?;
+        if start != previous || end <= start || text.get(start..end).is_none() {
+            return None;
+        }
+        let channel = |i: usize| fields.get(i)?.as_f64().filter(|v| v.is_finite() && (0.0..=1.0).contains(v));
+        paints.push((start..end, [channel(2)?, channel(3)?, channel(4)?]));
+        previous = end;
+    }
+    (previous == text.len()).then_some(paints)
+}
+
+/// Generated hints use RGB; foreign colour spaces are deliberately not guessed.
+fn simple_fill(ops: &[Op]) -> Option<[f64; 3]> {
+    let Some(op) = ops.last() else {
+        return Some([0.0; 3]);
+    };
+    if op.is("rg") {
+        Some([op.operands.first()?.as_f64()?, op.operands.get(1)?.as_f64()?, op.operands.get(2)?.as_f64()?])
+    } else if op.is("g") {
+        Some([op.operands.first()?.as_f64()?; 3])
+    } else {
+        None
+    }
+}
+
+/// One replacement scope and its validated logical paint hints.
+struct ActualTextScope {
+    start: usize,
+    open: usize,
+    text: String,
+    paints: Vec<(std::ops::Range<usize>, [f64; 3])>,
+}
+
 #[derive(Default)]
 struct MarkedContent {
     directions: Vec<pdfcraft_fonts::TextDirection>,
     regions: Vec<Option<usize>>,
     layers: Vec<Option<Vec<u8>>>,
-    actual_text: Vec<Option<(usize, usize, String)>>,
+    actual_text: Vec<Option<ActualTextScope>>,
+    /// Aggregate decoded hint entries, including repeated named property lists.
+    paint_entries: usize,
 }
 
 impl MarkedContent {
@@ -532,7 +602,22 @@ impl MarkedContent {
             .map(pdfcraft_fonts::TextDirection::from_name)
             .unwrap_or_else(|| self.directions.last().copied().unwrap_or_default());
         self.directions.push(direction);
-        self.actual_text.push(logical.map(|text| (shown_count, index, text)));
+        self.actual_text.push(logical.map(|text| {
+            let paints = list
+                .as_ref()
+                .and_then(|d| d.get(b"PCPaint"))
+                .and_then(|value| {
+                    // Charge before validation/allocation, including malformed repeated hints.
+                    let count = value.as_array()?.len();
+                    self.paint_entries = self.paint_entries.saturating_add(count);
+                    if self.paint_entries > 65_536 {
+                        return None;
+                    }
+                    logical_paints(value, &text)
+                })
+                .unwrap_or_default();
+            ActualTextScope { start: shown_count, open: index, text, paints }
+        }));
     }
 
     /// Close a marked scope and combine its shown glyphs under ActualText.
@@ -541,18 +626,49 @@ impl MarkedContent {
         self.regions.pop();
         self.directions.pop();
         self.layers.pop();
-        if let Some(Some((start, open, logical))) = self.actual_text.pop() {
+        if let Some(Some(ActualTextScope { start, open, text: logical, paints })) = self.actual_text.pop() {
             let tail = shown.split_off(start.min(shown.len()));
             let mut items = tail.into_iter();
             if let Some(mut first) = items.next() {
+                let first_color = simple_fill(&first.state.fill);
+                let color_key = |color: Option<[f64; 3]>| color.map(|color| color.map(|v| if v == 0.0 { 0 } else { v.to_bits() }));
+                let mut color_keys = std::collections::HashSet::from([color_key(first_color)]);
+                let mut colors = vec![first_color];
+                let mut mixed_fill = false;
+                let mut uniform_shape = true;
                 let matrix = first.tm.then(&first.state.ctm);
+                let turned_axes = quarter_turn_axes(matrix).filter(|axes| *axes != (1.0, 0.0));
+                let mut turned_scope = turned_axes.is_some() && first.bt_op > open && first.state.vertical.is_none();
                 // A self-contained horizontal replacement may paint a raised, zero-advance
                 // mark first. Its temporary Ts must not become the whole line's source rise.
                 // Inline, multi-object, rotated/skewed or mixed-body-rise spans stay untouched.
-                let mut body_origin =
-                    !first.has_advance && first.bt_op > open && first.state.vertical.is_none() && matrix.0[1] == 0.0 && matrix.0[2] == 0.0;
+                let mut body_origin = !first.has_advance
+                    && first.bt_op > open
+                    && first.state.vertical.is_none()
+                    && ((matrix.0[1] == 0.0 && matrix.0[2] == 0.0) || turned_axes.is_some());
                 let mut body_rise = None;
                 for item in items {
+                    mixed_fill |= item.state.fill != first.state.fill;
+                    uniform_shape &= item.bt == first.bt
+                        && item.font == first.font
+                        && item.tlm.0 == first.tlm.0
+                        && item.state.ctm.0 == first.state.ctm.0
+                        && item.state.size == first.state.size
+                        && item.state.scale == first.state.scale
+                        && item.state.render_mode == first.state.render_mode
+                        && item.state.vertical.is_none();
+                    let color = simple_fill(&item.state.fill);
+                    if colors.len() <= 4096 && color_keys.insert(color_key(color)) {
+                        colors.push(color);
+                    }
+                    turned_scope &= item.bt == first.bt
+                        && item.font == first.font
+                        && item.tlm.0 == first.tlm.0
+                        && item.state.ctm.0 == first.state.ctm.0
+                        && item.tm.0.get(..4) == first.tm.0.get(..4)
+                        && item.state.size == first.state.size
+                        && item.state.scale == first.state.scale
+                        && item.state.vertical.is_none();
                     body_origin &= item.bt == first.bt
                         && item.font == first.font
                         && item.tlm.0 == first.tlm.0
@@ -587,6 +703,20 @@ impl MarkedContent {
                         first.baseline = baseline;
                     }
                 }
+                // A private hint does not change extraction or geometry. If another writer
+                // drops it, refuse editing mixed paints instead of silently flattening them.
+                first.state.logical_paints = Rc::from([]);
+                let valid_paints = uniform_shape
+                    && colors.len() <= 4096
+                    && !paints.is_empty()
+                    && colors.iter().all(|color| color.is_some_and(|c| paints.iter().any(|(_, paint)| *paint == c)))
+                    && paints.iter().all(|(_, paint)| colors.contains(&Some(*paint)));
+                if valid_paints {
+                    first.state.logical_paints = paints.into();
+                } else if mixed_fill {
+                    first.state.unreadable =
+                        Some(Rc::from("mixed paint inside ActualText has no valid logical paint map; preserve the source appearance"));
+                }
                 first.extra_ops.extend([open, index]);
                 // Only right-to-left ActualText is already in typing order and must stay out of
                 // bidi recovery. Word and Chrome also wrap Latin ligatures mid-word.
@@ -597,6 +727,16 @@ impl MarkedContent {
                 first.end_x = first.rect[2];
                 first.end_y = first.baseline;
                 first.advance = (first.end_x - first.start_x) / first.tm.then(&first.state.ctm).0[0].abs().max(1e-6);
+                if turned_scope && let Some((u, v)) = turned_axes {
+                    // A logical start follows the baseline, never the page's left edge.
+                    let (x, y) = matrix.apply(0.0, first.state.rise);
+                    let across = y * u - x * v;
+                    first.start_x = x;
+                    first.baseline = y;
+                    first.end_x = first.frame[2] * u - across * v;
+                    first.end_y = first.frame[2] * v + across * u;
+                    first.advance = (first.frame[2] - first.frame[0]) / matrix.0[0].hypot(matrix.0[1]).max(1e-6);
+                }
                 shown.push(first);
             }
         }

@@ -26,6 +26,7 @@ fn parse(doc: &Document, d: &Dict) -> Option<Content> {
                 rect,
                 text,
                 family,
+                syriac_family: pdfcraft_fonts::SyriacFamily::from_dict(d),
                 bold,
                 italic,
                 size: d.get(b"Size").and_then(Object::as_f64).unwrap_or(12.0),

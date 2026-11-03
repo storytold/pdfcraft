@@ -62,16 +62,22 @@ pub fn with_field_appearances_cached(doc: &Document, cache: &mut FieldAppearance
                 continue;
             }
             let inputs = appearance_inputs(doc, w);
-            let stream = match cache.get(w.obj, &inputs) {
-                Some(stream) => stream,
-                None => {
-                    let stream = match f.kind {
-                        FieldKind::CheckBox | FieldKind::Radio => appearance::button_state_shown(doc, &f, w, state.as_deref() != Some("Off")),
-                        FieldKind::PushButton => appearance::push_button_shown(doc, &f, w),
-                        _ => appearance::field_appearance_drawn(doc, &f, w, &f.value, true).0,
-                    };
-                    cache.insert(w.obj, inputs, &stream);
-                    stream
+            let stream = if appearance::needs_syriac(doc, &f, w, &f.value) || appearance::needs_arabic(doc, &f, w, &f.value, true) {
+                // Font objects allocated in one display copy cannot be reused in another.
+                let current = copy.get_or_insert_with(|| doc.clone());
+                appearance::field_appearance_drawn_in(current, &f, w, &f.value, true).0
+            } else {
+                match cache.get(w.obj, &inputs) {
+                    Some(stream) => stream,
+                    None => {
+                        let stream = match f.kind {
+                            FieldKind::CheckBox | FieldKind::Radio => appearance::button_state_shown(doc, &f, w, state.as_deref() != Some("Off")),
+                            FieldKind::PushButton => appearance::push_button_shown(doc, &f, w),
+                            _ => appearance::field_appearance_drawn(doc, &f, w, &f.value, true).0,
+                        };
+                        cache.insert(w.obj, inputs, &stream);
+                        stream
+                    }
                 }
             };
             let target = copy.get_or_insert_with(|| doc.clone());

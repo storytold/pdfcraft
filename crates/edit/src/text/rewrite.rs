@@ -46,6 +46,9 @@ pub(crate) fn replace_line_with_limit(doc: &mut Document, page: usize, line: usi
     let lines = text_lines(doc, page)?;
     let target = lines.get(line).cloned().ok_or_else(|| EditError::Invalid(format!("page {} has no line {}", page + 1, line + 1)))?;
     target.ensure_editable()?;
+    if text.chars().any(pdfcraft_fonts::source_shaping::is_syriac) {
+        return Err(EditError::Invalid("Syriac text needs paragraph shaping; edit its paragraph instead of replacing one line".into()));
+    }
     // Copies of the line drawn on the same baseline go with it, so the replacement is all that
     // shows. Which operators go is settled here, before any font is generated, so that a refusal
     // leaves the document untouched.
@@ -214,17 +217,85 @@ struct RewriteDispatch {
     use_styled_path: bool,
 }
 
+/// Admit the bounded quarter-turn path from actual shown operators, not only the
+/// first state retained by an ActualText owner. Require one row, no range styling,
+/// enabled underline or saved logical paints, and no vertical or visual-order source.
+/// Every selected show must share the same positive uniform quarter-turn linear transform,
+/// font, size, spacing, paint and baseline state; unsupported geometry returns `false`
+/// before font registration or rewriting can change the document.
+fn quarter_turn_source(
+    doc: &Document,
+    page: usize,
+    block: &TextBlock,
+    members: &[&TextLine],
+    first: &TextLine,
+    text: &str,
+    style: &BlockStyle,
+) -> Result<bool, EditError> {
+    if block.rows.len() != 1
+        || !style.ranges.is_empty()
+        || style.underline == Some(true)
+        || text.contains(['\n', '\r'])
+        || members.iter().any(|line| line.visual_order || !line.origin.state.logical_paints.is_empty())
+    {
+        return Ok(false);
+    }
+    let matrix = Matrix(first.origin.tm).then(&Matrix(first.origin.ctm));
+    let Some(axes) = super::interp::quarter_turn_axes(matrix) else {
+        return Ok(false);
+    };
+    if members.iter().any(|line| super::interp::quarter_turn_axes(Matrix(line.origin.tm).then(&Matrix(line.origin.ctm))) != Some(axes)) {
+        return Ok(false);
+    }
+    let p = page_dict(doc, page)?;
+    let resources = p.dict.get(b"Resources").and_then(|r| doc.dict(r)).unwrap_or_default();
+    let streams = content_streams(doc, &p.dict)?;
+    let pieces = Pieces::join(&streams.iter().map(|(_, data)| data.as_slice()).collect::<Vec<_>>());
+    let ops = pieces.parse().ops;
+    let chosen: std::collections::HashSet<_> = members.iter().flat_map(|line| line.ops.iter().copied()).collect();
+    let shown = interpret(doc, &ops, &resources, &mut HashMap::new(), &mut Carry::new(), None, None)?;
+    let mut retained = shown.iter().filter(|item| chosen.contains(&item.op));
+    let Some(reference) = retained.next() else {
+        return Ok(false);
+    };
+    let source_matrix = reference.tm.then(&reference.state.ctm);
+    if reference.state.vertical.is_some() || super::interp::quarter_turn_axes(source_matrix) != Some(axes) {
+        return Ok(false);
+    }
+    Ok(retained.all(|item| {
+        let current = item.tm.then(&item.state.ctm);
+        current.0.get(..4) == source_matrix.0.get(..4)
+            && item.font == reference.font
+            && item.state.size == reference.state.size
+            && item.state.scale == reference.state.scale
+            && item.state.char_spacing == reference.state.char_spacing
+            && item.state.word_spacing == reference.state.word_spacing
+            && item.state.fill == reference.state.fill
+            && item.state.gs == reference.state.gs
+            && item.state.render_mode == reference.state.render_mode
+            && item.state.vertical.is_none()
+            && item.tlm.then(&item.state.ctm).0 == reference.tlm.then(&reference.state.ctm).0
+    }))
+}
+
+/// Source paragraph and its already validated member selection.
+struct RewriteSource<'a> {
+    block: &'a TextBlock,
+    members: &'a [&'a TextLine],
+    first: &'a TextLine,
+}
+
 /// Select the supported paragraph rewrite path before any font or content mutation.
 /// Explicit or retained non-Auto direction refuses turned baselines and legacy visual-order Indic text rather than writing an incompatible layout.
 fn choose_rewrite_path(
     doc: &Document,
+    page: usize,
     fonts: &Dict,
-    block: &TextBlock,
-    members: &[&TextLine],
-    first: &TextLine,
+    source: RewriteSource<'_>,
     text: Option<&str>,
     style: &BlockStyle,
 ) -> Result<RewriteDispatch, EditError> {
+    let RewriteSource { block, members, first } = source;
     let registered_face = fonts.iter().any(|(name, _)| name.starts_with(b"PCFull"));
     // Hebrew is written back in drawing order by the single-style path. Styled regions do not
     // reorder right-to-left runs.
@@ -237,18 +308,25 @@ fn choose_rewrite_path(
     // Turned text is rewritten in its own text space by the single-style path. Styled layout uses
     // page x-coordinates and cannot safely apply those operations to rotated runs.
     let upright = members.iter().all(|line| line.upright());
-    if !upright && (!style.ranges.is_empty() || style.resource.is_some()) {
+    let quarter = !upright && quarter_turn_source(doc, page, block, members, first, text.unwrap_or(&block.editor_text), style)?;
+    if !upright && !quarter && (!style.ranges.is_empty() || style.resource.is_some()) {
         return Err(EditError::Invalid("formatting part of turned text, or choosing a document font for it, isn't supported yet".into()));
     }
     let visual_indic = members.iter().any(|line| line.visual_order);
     let explicit_direction = style.direction.is_some() || block.text_direction != pdfcraft_fonts::TextDirection::Auto;
     // Direction uses styled layout too: it must not bypass the text-space and legacy
     // visual-order exclusions that keep those paragraphs on the single-style path.
-    if explicit_direction && !upright {
+    if explicit_direction && !upright && !quarter {
         return Err(EditError::Invalid("explicit text direction for turned text isn't supported yet".into()));
     }
     if explicit_direction && visual_indic {
         return Err(EditError::Invalid("explicit text direction for legacy visual-order Indic text isn't supported yet".into()));
+    }
+    let syriac = text.unwrap_or(&block.editor_text).chars().any(pdfcraft_fonts::source_shaping::is_syriac);
+    if syriac && ((!upright && !quarter) || visual_indic) {
+        return Err(EditError::Invalid(
+            "Syriac paragraph editing needs upright Unicode source text; turned and legacy visual-order text are not supported".into(),
+        ));
     }
     let has_special_text = text.is_some_and(|draft| {
         draft.contains(['\n', '\r'])
@@ -263,10 +341,10 @@ fn choose_rewrite_path(
     Ok(RewriteDispatch {
         upright,
         use_styled_path: explicit_direction
-            || (upright
+            || ((upright || quarter)
                 && !hebrew
                 && !visual_indic
-                && (explicit_styled_text || (source_requires_styled_path && style.family.is_none() && style.bold.is_none()))),
+                && (syriac || explicit_styled_text || (source_requires_styled_path && style.family.is_none() && style.bold.is_none()))),
     })
 }
 
@@ -804,6 +882,16 @@ pub(crate) fn rewrite_block_from(
 ) -> Result<LineEdit, EditError> {
     let blocks = group_blocks(&lines);
     let b = blocks.get(block).cloned().ok_or_else(|| EditError::Invalid(format!("page {} has no paragraph {}", page + 1, block + 1)))?;
+    // Replacing text needs a new logical paint-range mapping. Until that is
+    // supported, guard every route, including the legacy single-style writer.
+    // None or the identical editor text still permits whole-cluster recoloring.
+    if text.is_some_and(|draft| draft != b.editor_text)
+        && b.lines.iter().filter_map(|index| lines.get(*index)).any(|line| !line.origin.state.logical_paints.is_empty())
+    {
+        return Err(EditError::Invalid(
+            "changing text with preserved contextual paint ranges is not yet supported; recolor whole clusters instead".into(),
+        ));
+    }
     // Existing PDF paragraphs do not yet persist selected-row alignment intent. Refuse
     // that operation before writing anything; whole-paragraph `align` remains supported.
     if style.aligns.iter().any(Option::is_some) {
@@ -831,7 +919,7 @@ pub(crate) fn rewrite_block_from(
     let p = page_dict(doc, page)?;
     let mut res = p.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
     let mut fonts_res = res.get(b"Font").map(|f| doc.resolve(f)).and_then(|f| f.as_dict().cloned()).unwrap_or_default();
-    let dispatch = choose_rewrite_path(doc, &fonts_res, &b, &members, first, text, style)?;
+    let dispatch = choose_rewrite_path(doc, page, &fonts_res, RewriteSource { block: &b, members: &members, first }, text, style)?;
     let styled = dispatch.use_styled_path;
     if styled
         && (style.align == Some(crate::added::Align::Justify) || style.aligns.iter().flatten().any(|align| *align == crate::added::Align::Justify))

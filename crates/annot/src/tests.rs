@@ -36,11 +36,12 @@ fn meta(id: &str) -> Meta {
     Meta { date: Some("D:20261001120000Z".into()), id: id.into() }
 }
 
+/// Create a synthetic annotation with a stable blue style, sample text and author.
 fn new(page: usize, shape: Shape) -> NewAnnotation {
     NewAnnotation {
         page,
         shape,
-        style: Style { color: [0.0, 0.4, 1.0], opacity: 1.0, width: 2.0, fill: None },
+        style: Style { color: [0.0, 0.4, 1.0], opacity: 1.0, width: 2.0, fill: None, syriac_family: None },
         contents: "hello".into(),
         author: "Ada".into(),
     }
@@ -869,12 +870,13 @@ fn cloud_ys(path: &str) -> Vec<f64> {
         .collect()
 }
 
+/// Replacement markup keeps its strikeout and caret grouped through editing and saving.
 #[test]
 fn replace_text_groups_a_strikeout_and_a_caret() {
     let mut doc = fixture();
     let quads = [[100.0, 720.0, 200.0, 720.0, 100.0, 706.0, 200.0, 706.0]];
-    let red = Style { color: [0.89, 0.13, 0.13], opacity: 1.0, width: 1.0, fill: None };
-    let blue = Style { color: [0.0, 0.47, 0.84], opacity: 1.0, width: 1.0, fill: None };
+    let red = Style { color: [0.89, 0.13, 0.13], opacity: 1.0, width: 1.0, fill: None, syriac_family: None };
+    let blue = Style { color: [0.0, 0.47, 0.84], opacity: 1.0, width: 1.0, fill: None, syriac_family: None };
     let i = add_text_replacement(
         &mut doc,
         TextReplacement {
@@ -1034,6 +1036,60 @@ fn comments_without_appearances_get_one_for_display_only() {
         b"<< /Type /XObject /Subtype /Form /BBox [10 10 50 50] /Length 0 >>\nstream\n\nendstream",
     ]);
     assert!(with_missing_appearances(&complete).is_none());
+}
+
+/// Unavailable Syriac glyphs retain logical contents, a marked fallback and restylability after saving.
+#[test]
+fn syriac_freetext_keeps_a_legacy_fallback_without_document_or_glyphs() {
+    let mut bare = Dict::new();
+    bare.set(b"Subtype".to_vec(), Object::name("FreeText"));
+    bare.set(b"Rect".to_vec(), num_array(&[20.0, 20.0, 200.0, 70.0]));
+    bare.set(b"Contents".to_vec(), PdfString::text("ܒ"));
+    let stream = appearance::build(&bare).expect("dictionary-only callers retain the standard-font appearance");
+    assert!(String::from_utf8_lossy(&stream.decoded().unwrap()).contains("(?)"));
+    assert_eq!(text(&bare, b"Contents"), "ܒ", "fallback drawing keeps the logical text");
+
+    // All approved Syriac releases lack this supplement glyph. This exercises
+    // the missing-face/glyph fallback without switching the build's font input.
+    let mut doc = fixture();
+    let mut boxed = new(0, Shape::TextBox { rect: [100.0, 600.0, 300.0, 650.0], font_size: 12.0 });
+    boxed.contents = "\u{0860}".into();
+    let index = add_annotation(&mut doc, &boxed, &meta("missing-syriac")).expect("unavailable glyphs retain a marked fallback appearance");
+    assert_eq!(text(&list(&doc, 0)[index], b"Contents"), "\u{0860}");
+    assert_eq!(pdfcraft_fonts::undrawn_mark(&list(&doc, 0)[index]), Some('\u{0860}'));
+    assert!(ap_content(&doc, &list(&doc, 0)[index]).contains("(?)"));
+    assert!(props(&doc, 0, index).unwrap().restylable, "our marked fallback remains restylable");
+    set_style(&mut doc, 0, index, StyleChange::new(Some([1.0, 0.0, 0.0]), None, None, None), &meta("restyled")).unwrap();
+    let reopened = reopen(&doc);
+    assert_eq!(text(&list(&reopened, 0)[index], b"Contents"), "\u{0860}");
+    assert_eq!(pdfcraft_fonts::undrawn_mark(&list(&reopened, 0)[index]), Some('\u{0860}'));
+    assert!(ap_content(&reopened, &list(&reopened, 0)[index]).contains("(?)"));
+}
+
+/// Malformed Syriac annotations must not suppress valid neighboring display appearances or mutate input.
+#[test]
+fn one_unbuildable_syriac_comment_does_not_discard_other_display_appearances() {
+    let doc = document_of(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>",
+        b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R 6 0 R] >>",
+        b"<< /Type /Annot /Subtype /Square /Rect [10 10 50 50] /C [1 0 0] >>",
+        // Malformed geometry remains unbuildable even with the text fallback.
+        b"<< /Type /Annot /Subtype /FreeText /Rect [20 20] /Contents <FEFF0712> >>",
+        b"<< /Type /Annot /Subtype /Circle /Rect [100 100 150 150] /C [0 0 1] >>",
+    ]);
+    let before = write_incremental(&doc, &SaveOptions::default()).unwrap();
+    let mut cache = AppearanceCache::default();
+    for _ in 0..2 {
+        let display = with_missing_appearances_cached(&doc, &mut cache).expect("valid comments before and after the bad comment remain visible");
+        let shown = list(&display, 0);
+        assert!(shown[0].get(b"AP").is_some(), "keep the appearance built before the failed annotation");
+        assert!(shown[1].get(b"AP").is_none(), "skip only the unbuildable annotation");
+        assert!(shown[2].get(b"AP").is_some(), "continue to later annotations, including on a cache hit");
+        assert_eq!(text(&shown[1], b"Contents"), "ܒ");
+    }
+    assert!(list(&doc, 0).iter().all(|annotation| annotation.get(b"AP").is_none()));
+    assert_eq!(write_incremental(&doc, &SaveOptions::default()).unwrap(), before, "display-only recovery does not mutate the original document");
 }
 
 fn line_dict(coords: [f64; 4], ending: &str) -> pdfcraft_cos::Dict {
@@ -2195,6 +2251,7 @@ fn degenerate_and_absurd_leader_and_caption_values_do_not_panic() {
     assert!(!long.contains(&"w".repeat(257)));
 }
 
+/// Freehand highlights save compatible Ink geometry with marker opacity and blend resources.
 #[test]
 fn freehand_highlight_is_compatible_ink_with_marker_blending() {
     let shape = Shape::FreehandHighlight { strokes: vec![vec![[20.0, 100.0], [120.0, 100.0]]] };
@@ -2218,18 +2275,33 @@ fn freehand_highlight_is_compatible_ink_with_marker_blending() {
         list(doc, 0)[idx].get(b"Rect").unwrap().as_array().unwrap().iter().filter_map(Object::as_f64).collect()
     };
     let rect_before = rect_of(&doc, index);
-    set_style(&mut doc, 0, index, StyleChange { color: None, opacity: None, width: Some(34.0), endings: None }, &meta("wider")).unwrap();
+    set_style(&mut doc, 0, index, StyleChange { color: None, opacity: None, width: Some(34.0), endings: None, syriac_family: None }, &meta("wider"))
+        .unwrap();
     let rect_after = rect_of(&doc, index);
     assert!((rect_after[0] - (rect_before[0] - 10.0)).abs() < 1e-4);
     assert!((rect_after[2] - (rect_before[2] + 10.0)).abs() < 1e-4);
 
     // Repeated increase/decrease cycles must keep bounds stable and never accumulate padding.
-    set_style(&mut doc, 0, index, StyleChange { color: None, opacity: None, width: Some(14.0), endings: None }, &meta("narrower")).unwrap();
+    set_style(
+        &mut doc,
+        0,
+        index,
+        StyleChange { color: None, opacity: None, width: Some(14.0), endings: None, syriac_family: None },
+        &meta("narrower"),
+    )
+    .unwrap();
     let rect_restored = rect_of(&doc, index);
     for (a, b) in rect_restored.iter().zip(rect_before.iter()) {
         assert!((a - b).abs() < 1e-4, "expected {rect_before:?}, got {rect_restored:?}");
     }
-    set_style(&mut doc, 0, index, StyleChange { color: None, opacity: None, width: Some(34.0), endings: None }, &meta("wider-again")).unwrap();
+    set_style(
+        &mut doc,
+        0,
+        index,
+        StyleChange { color: None, opacity: None, width: Some(34.0), endings: None, syriac_family: None },
+        &meta("wider-again"),
+    )
+    .unwrap();
     let rect_second_wide = rect_of(&doc, index);
     for (a, b) in rect_second_wide.iter().zip(rect_after.iter()) {
         assert!((a - b).abs() < 1e-4, "expected {rect_after:?}, got {rect_second_wide:?}");
@@ -2244,9 +2316,113 @@ fn freehand_highlight_is_compatible_ink_with_marker_blending() {
         d.set(b"Rect".to_vec(), create::num_array(&[5.0, 85.0, 135.0, 115.0]));
     })
     .unwrap();
-    set_style(&mut doc, 0, index, StyleChange { color: None, opacity: None, width: Some(10.0), endings: None }, &meta("border-shrink")).unwrap();
+    set_style(
+        &mut doc,
+        0,
+        index,
+        StyleChange { color: None, opacity: None, width: Some(10.0), endings: None, syriac_family: None },
+        &meta("border-shrink"),
+    )
+    .unwrap();
     let rect_from_border = rect_of(&doc, index);
     for (a, b) in rect_from_border.iter().zip([10.0, 90.0, 130.0, 110.0]) {
         assert!((a - b).abs() < 1e-4, "expected [10, 90, 130, 110], got {rect_from_border:?}");
     }
+}
+
+/// Generated font resources stay local to each display copy, including cached rebuilds
+/// and save/reopen; logical Contents and explicit PDF text state survive regeneration.
+#[test]
+fn arabic_generated_comments_roundtrip_and_cache_indirect_fonts() {
+    if pdfcraft_fonts::document_arabic_font().is_none() {
+        return;
+    }
+    let mut doc = fixture();
+    let mut entry = new(0, Shape::Typewriter { rect: [50.0, 500.0, 300.0, 560.0], font_size: 18.0 });
+    entry.contents = "سَلَام 123 PDF".into();
+    let index = add_annotation(&mut doc, &entry, &meta("arabic-typewriter")).unwrap();
+    let r = annots(&doc, page_refs(&doc).unwrap()[0])[index].as_ref().unwrap();
+    let check = |doc: &Document| {
+        let d = &list(doc, 0)[index];
+        assert_eq!(text(d, b"Contents"), entry.contents);
+        assert!(pdfcraft_fonts::undrawn_mark(d).is_none());
+        let content = ap_content(doc, d);
+        assert!(content.contains("/ActualText"));
+        let operators = content.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(operators.contains("BT 0 Tc 0 Tw 100 Tz 0 Ts 0 Tr"), "all generated text state must be explicit");
+        let ap = doc.dict(d.get(b"AP").unwrap()).unwrap();
+        let normal = doc.resolve(ap.get(b"N").unwrap());
+        let Object::Stream(stream) = normal.as_ref() else { panic!("normal stream") };
+        let resources = doc.dict(stream.dict.get(b"Resources").unwrap()).unwrap();
+        let fonts = doc.dict(resources.get(b"Font").unwrap()).unwrap();
+        let mut shaped = 0;
+        for (_, value) in fonts.iter() {
+            let font = doc.dict(value).unwrap();
+            if font.name(b"Subtype") != Some(b"Type3") {
+                continue;
+            }
+            shaped += 1;
+            assert!(matches!(font.get(b"ToUnicode"), Some(Object::Ref(_))));
+            let procs = doc.dict(font.get(b"CharProcs").unwrap()).unwrap();
+            assert!(procs.iter().all(|(_, proc)| matches!(proc, Object::Ref(_))));
+        }
+        assert!(shaped > 0);
+    };
+    check(&reopen(&doc));
+    doc.update_dict(r, |d| {
+        d.remove(b"AP");
+    })
+    .unwrap();
+    let mut cache = AppearanceCache::default();
+    let a = with_missing_appearances_cached(&doc, &mut cache).unwrap();
+    let b = with_missing_appearances_cached(&doc, &mut cache).unwrap();
+    assert!(cache.hits() > 0);
+    check(&reopen(&a));
+    check(&reopen(&b));
+}
+
+/// Missing quadding follows the RTL paragraph, explicit left stays left, and multiline
+/// box height includes the generated rows' ink rather than assuming Latin metrics.
+#[test]
+fn arabic_generated_comments_keep_explicit_left_and_size_from_ink() {
+    if pdfcraft_fonts::document_arabic_font().is_none() {
+        return;
+    }
+    let mut d = Dict::new();
+    d.set(b"Subtype".to_vec(), Object::name("FreeText"));
+    d.set(b"Rect".to_vec(), Object::Array([0.0, 0.0, 300.0, 80.0].map(Object::Real).to_vec()));
+    d.set(b"Contents".to_vec(), pdfcraft_cos::PdfString::text("سَلَام"));
+    d.set(b"DA".to_vec(), pdfcraft_cos::PdfString::text("/Helv 24 Tf 0 g"));
+    let content = |dict: &Dict| String::from_utf8(appearance::build(dict).unwrap().decoded().unwrap()).unwrap();
+    let default = content(&d);
+    d.set(b"Q".to_vec(), Object::Int(0));
+    let left = content(&d);
+    d.set(b"Q".to_vec(), Object::Int(2));
+    let right = content(&d);
+    assert_eq!(default, right, "absent quadding follows the RTL paragraph");
+    assert_ne!(left, right, "explicit left alignment stays left");
+    let text = "سَلَام\nمَرْحَبًا";
+    let size = 32.0;
+    let measured = appearance::text_box_size_for_family(text, size, Default::default()).unwrap();
+    let lines = pdfcraft_fonts::appearance_text::wrap(text, size, 592.0).unwrap();
+    assert!(measured[1] >= pdfcraft_fonts::appearance_text::height(&lines, size) + 6.0 - 0.001);
+}
+
+/// A contextual-layout budget failure rolls back both creation and content replacement,
+/// preserving incremental bytes, appearance geometry and allocated objects.
+#[test]
+fn arabic_generated_comment_budget_failure_is_atomic() {
+    if pdfcraft_fonts::document_arabic_font().is_none() {
+        return;
+    }
+    let mut doc = fixture();
+    let mut entry = new(0, Shape::TextBox { rect: [50.0, 500.0, 300.0, 560.0], font_size: 12.0 });
+    let index = add_annotation(&mut doc, &entry, &meta("before")).unwrap();
+    let snapshot = |doc: &Document| write_incremental(doc, &SaveOptions::default()).unwrap();
+    let before = snapshot(&doc);
+    entry.contents = format!("مرحبا{}", "\u{200e}".repeat(90_000));
+    assert!(add_annotation(&mut doc, &entry, &meta("refused")).is_err());
+    assert_eq!(snapshot(&doc), before, "failed creation includes object allocation rollback");
+    assert!(set_contents(&mut doc, 0, index, &entry.contents, &meta("refused")).is_err());
+    assert_eq!(snapshot(&doc), before, "failed content replacement keeps text, box, appearance and objects");
 }

@@ -7,15 +7,21 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod appearance_text;
 #[cfg(test)]
 mod cjk_scripts;
+mod cluster_font;
+pub mod content_text;
 mod craft;
+pub use cluster_font::embed_shaped_clusters;
 pub mod embedding;
 mod encodings;
 pub mod fallback;
 pub mod pdf;
 mod script;
 mod shaping;
+mod syriac;
+pub use syriac::SyriacFamily;
 pub mod source_shaping;
 pub mod text_direction;
 pub use text_direction::TextDirection;
@@ -23,16 +29,19 @@ mod std14;
 mod std14_metrics;
 pub use craft::{
     CRAFT_FONTS, CraftFont, SHIPPORI_MINCHO, document_arabic_font, document_devanagari_font, document_hebrew_font, document_japanese_font,
-    document_japanese_font_for_style, document_japanese_fonts_for_style, document_latin_fonts, document_thai_font, ui_arabic_fonts, ui_chinese_fonts,
-    ui_cjk_fonts, ui_devanagari_fonts, ui_hebrew_fonts, ui_japanese_fonts, ui_telugu_fonts, ui_thai_fonts,
+    document_japanese_font_for_style, document_japanese_fonts_for_style, document_latin_fonts, document_syriac_font, document_syriac_font_for_family,
+    document_thai_font, ui_arabic_fonts, ui_chinese_fonts, ui_cjk_fonts, ui_devanagari_fonts, ui_hebrew_fonts, ui_japanese_fonts, ui_telugu_fonts,
+    ui_thai_fonts,
 };
 pub use script::{
-    GlyphError, GlyphOutline, INTER_REGULAR, MAX_SIGNATURE_CHARS, ScriptOutline, japanese_glyph, japanese_glyph_from, script_missing, script_outline,
+    GlyphError, GlyphOutline, INTER_REGULAR, MAX_SIGNATURE_CHARS, ScriptOutline, japanese_glyph, japanese_glyph_from, script_missing,
+    script_missing_for_family, script_outline, script_outline_for_family,
 };
 pub use shaping::{
-    ShapedCluster, ShapedScript, arabic_glyph, arabic_has, hebrew_has, shape_arabic, shape_hebrew, shape_thai, shaped_glyph, thai_has,
+    ShapedCluster, ShapedScript, arabic_bold_available, arabic_glyph, arabic_has, hebrew_has, shape_arabic, shape_arabic_bold, shape_hebrew,
+    shape_syriac, shape_syriac_for_family, shape_thai, shaped_bounds, shaped_glyph, syriac_has, syriac_has_for_family, thai_has,
 };
-pub use std14::Std14;
+pub use std14::{Match as Std14Match, Std14};
 
 /// Advance of `s` in Helvetica at `size` points, using the exact standard-14 metrics.
 ///

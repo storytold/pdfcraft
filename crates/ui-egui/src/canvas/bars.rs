@@ -523,6 +523,7 @@ pub(super) fn quick_bar(app: &mut PdfCraftApp, area: Rect, page_left: Option<f32
                                 opacity: None,
                                 width: None,
                                 endings: None,
+                                syriac_family: None,
                             });
                         }
                     }

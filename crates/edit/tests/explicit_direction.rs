@@ -74,13 +74,15 @@ fn devanagari_page(content: &str) -> Document {
 }
 
 #[test]
-/// Verify explicit-direction dispatch rejects turned and legacy visual-order Indic sources without mutation.
-fn explicit_direction_dispatch_refuses_turned_and_visual_indic_atomically() {
+/// Exercise explicit Auto/LTR/RTL and retained RTL through the public dispatch.
+/// General-angle and legacy visual-order Indic sources must reach their intended
+/// refusal with the complete serialized document unchanged.
+fn explicit_direction_dispatch_refuses_general_turns_and_visual_indic_atomically() {
     for visual_indic in [false, true] {
         for (direction, stored) in
             [(Some(TextDirection::Auto), false), (Some(TextDirection::LeftToRight), false), (Some(TextDirection::RightToLeft), false), (None, true)]
         {
-            let source = if visual_indic { "BT /F1 12 Tf 40 500 Td (ABCDE) Tj ET" } else { "BT /F1 12 Tf 0 1 -1 0 300 300 Tm (Only line) Tj ET" };
+            let source = if visual_indic { "BT /F1 12 Tf 40 500 Td (ABCDE) Tj ET" } else { "BT /F1 12 Tf 1 1 -1 1 300 300 Tm (Only line) Tj ET" };
             let content = if stored { format!("/Span << /PCTextDirection /RTL >> BDC {source} EMC") } else { source.to_owned() };
             let mut doc = if visual_indic { devanagari_page(&content) } else { text_page(&content) };
 
@@ -93,8 +95,8 @@ fn explicit_direction_dispatch_refuses_turned_and_visual_indic_atomically() {
             let expected_text = if visual_indic { "\u{092C}\u{0922}\u{093C}\u{093F}\u{092F}\u{093E}" } else { "Only line" };
             assert_eq!(lines[0].text, expected_text, "the synthetic font mapping must decode the intended source");
             // TextLine::upright is private. With one source line, this public
-            // baseline angle pins its equivalent concrete 0° or 90° geometry.
-            let expected_rotation = if visual_indic { 0.0 } else { 90.0 };
+            // baseline angle pins the upright or unsupported 45° geometry.
+            let expected_rotation = if visual_indic { 0.0 } else { 45.0 };
             assert!((blocks[0].rotation - expected_rotation).abs() < 1e-6, "unexpected fixture rotation: {}", blocks[0].rotation);
             let expected_direction = if stored { TextDirection::RightToLeft } else { TextDirection::Auto };
             assert_eq!(lines[0].text_direction, expected_direction);
@@ -108,5 +110,26 @@ fn explicit_direction_dispatch_refuses_turned_and_visual_indic_atomically() {
             assert!(error.to_string().contains(expected), "{error}");
             assert_eq!(write_full(&doc, &SaveOptions::default()).unwrap(), before, "refusal must preserve every object, not only the page stream");
         }
+    }
+}
+
+/// A uniform 90-degree source row is the admitted control for general-angle refusal:
+/// requested Auto/LTR/RTL or retained RTL must survive serialization without changing
+/// its logical text or baseline angle.
+#[test]
+fn explicit_direction_dispatch_accepts_uniform_quarter_turns() {
+    for (direction, stored) in
+        [(Some(TextDirection::Auto), false), (Some(TextDirection::LeftToRight), false), (Some(TextDirection::RightToLeft), false), (None, true)]
+    {
+        let source = "BT /F1 12 Tf 0 1 -1 0 300 300 Tm (Only line) Tj ET";
+        let content = if stored { format!("/Span << /PCTextDirection /RTL >> BDC {source} EMC") } else { source.to_owned() };
+        let mut doc = text_page(&content);
+        text::rewrite_block(&mut doc, 0, 0, None, &text::BlockStyle { direction, ..Default::default() }).unwrap();
+        let doc = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
+        let blocks = text::text_blocks(&doc, 0).unwrap();
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].editor_text, "Only line");
+        assert!((blocks[0].rotation - 90.0).abs() < 1e-6);
+        assert_eq!(blocks[0].text_direction, direction.unwrap_or(TextDirection::RightToLeft));
     }
 }

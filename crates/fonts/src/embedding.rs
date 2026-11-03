@@ -22,9 +22,20 @@ pub fn matching_faces(name: &str) -> Vec<&'static crate::CraftFont> {
     crate::CRAFT_FONTS.iter().filter(|f| face_key(f.family) == key || face_key(&f.name()) == key).collect()
 }
 
-/// Whether a complete font program can show every non-newline character.
+/// Unicode default-ignorable characters steer shaping or have no independent ink. They do not
+/// require a cmap entry (in particular Arabic joining and bidirectional controls).
+pub fn default_ignorable(c: char) -> bool {
+    matches!(u32::from(c),
+        0x00ad | 0x034f | 0x061c | 0x115f..=0x1160 | 0x17b4..=0x17b5 |
+        0x180b..=0x180f | 0x200b..=0x200f | 0x202a..=0x202e | 0x2060..=0x206f |
+        0x3164 | 0xfe00..=0xfe0f | 0xfeff | 0xffa0 | 0xfff0..=0xfff8 |
+        0x1bca0..=0x1bca3 | 0x1d173..=0x1d17a | 0xe0000..=0xe0fff)
+}
+
+/// Whether a complete font program can show every character that requires a glyph.
 pub fn covers(bytes: &[u8], text: &str) -> bool {
-    FontRef::new(bytes).is_ok_and(|f| text.chars().all(|c| matches!(c, '\n' | '\r') || f.charmap().map(c).is_some_and(|g| g.to_u32() != 0)))
+    FontRef::new(bytes)
+        .is_ok_and(|f| text.chars().all(|c| matches!(c, '\n' | '\r') || default_ignorable(c) || f.charmap().map(c).is_some_and(|g| g.to_u32() != 0)))
 }
 
 /// Names come from the program, never a caller's guessed family.

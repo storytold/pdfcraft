@@ -52,6 +52,11 @@ fn measure_schema() -> Value {
     )
 }
 
+/// Describe the supported document-family selector and its preserve-on-omission edit policy.
+fn syriac_family() -> Value {
+    json!({ "type": "string", "enum": ["estrangela", "eastern", "western"], "description": "Syriac document family (default Estrangela); preserves the stored choice when omitted during an edit. Applies only to supported text surfaces." })
+}
+
 fn color() -> Value {
     json!({ "type": "string", "description": "#RRGGBB or a name: yellow, red, orange, green, blue, purple, pink, black, gray, white." })
 }
@@ -471,6 +476,7 @@ pub fn tools() -> Vec<ToolDef> {
         .with(schema(
             json!({
                 "direction": {"type":"string", "enum":["auto","ltr","rtl"], "description":"Paragraph base direction, independent of alignment and logical Unicode."},
+                "syriac_family": syriac_family(),
                 "doc": doc(),
                 "field": { "type": "string", "description": "The field's current name." },
                 "fields": { "type": "array", "items": { "type": "string" }, "minItems": 1, "maxItems": 1000, "uniqueItems": true, "description": "Apply the same changes to these fields in one atomic edit. Use either field or fields." },
@@ -626,7 +632,7 @@ pub fn tools() -> Vec<ToolDef> {
         t(
             "page_add_text",
             "Add text to a page",
-            "Add text as page content (not a comment). Place it with at [x, y] (top-left, points from the top-left of the displayed page) and width (wrap width, default 200), or rect. Newlines start new lines; long lines wrap. Style: font helvetica/times/courier, size, bold, italic, color (#RRGGBB or a name), align left/center/right, char_spacing (points after each character). Text must be Western European (WinAnsi) characters, or Arabic, Hebrew or Thai when the build has their craft-fonts faces (drawn right to left where the text is); others are refused. It stays editable with content_update. Undoable.",
+            "Add text as page content (not a comment). Place it with at [x, y] (top-left, points from the top-left of the displayed page) and width (wrap width, default 200), or rect. Newlines start new lines; long lines wrap. Style: font helvetica/times/courier, size, bold, italic, color (#RRGGBB or a name), align left/center/right, char_spacing (points after each character). Text must be Western European (WinAnsi) characters, or Arabic, Hebrew, Thai or Syriac when the build has their craft-fonts faces (drawn right to left where the text is); others are refused. It stays editable with content_update. Undoable.",
         )
         .cmd("edit.text")
         .with(schema(
@@ -641,6 +647,7 @@ pub fn tools() -> Vec<ToolDef> {
                 "align": { "type": "string", "enum": ["left", "center", "right", "justify"] },
                 "aligns": { "type": "array", "maxItems": 4096, "items": { "type": "string", "enum": ["left", "center", "right", "justify", "inherit"] }, "description": "Each paragraph's (line's) own alignment, by index; inherit (or legacy null) follows align." },
                 "char_spacing": { "type": "number", "minimum": -500, "maximum": 500, "description": "Points after each character." },
+                "syriac_family": { "type": "string", "enum": ["estrangela", "eastern", "western"], "description": "The Syriac document family; other scripts keep their own face." },
             }),
             &["doc", "page", "text"],
         )),
@@ -665,6 +672,7 @@ pub fn tools() -> Vec<ToolDef> {
                     "align": { "type": "string", "enum": ["left", "center", "right", "justify"] },
                     "aligns": { "type": "array", "maxItems": 4096, "items": { "type": "string", "enum": ["left", "center", "right", "justify", "inherit"] }, "description": "Each paragraph's (line's) own alignment, by index; inherit (or legacy null) follows align." },
                     "char_spacing": { "type": "number", "minimum": -500, "maximum": 500, "description": "Points after each character." },
+                    "syriac_family": { "type": "string", "enum": ["estrangela", "eastern", "western"], "description": "Change or retain the text item's stored Syriac family." },
                     "rotate": { "type": "integer" }, "flip_h": { "type": "boolean" }, "flip_v": { "type": "boolean" },
                     "crop": { "type": "array", "items": { "type": "number", "minimum": 0, "maximum": 0.95 }, "minItems": 4, "maxItems": 4, "description": "Fractions trimmed: left, bottom, right, top. Left and right together, and bottom and top together, trim at most 0.95." },
                     "image": { "type": "string", "description": "Replace the picture with this file." },
@@ -755,6 +763,7 @@ pub fn tools() -> Vec<ToolDef> {
         )
         .with(schema(
             json!({
+                "syriac_family": syriac_family(),
                 "doc": doc(),
                 "page": { "type": "integer", "minimum": 1 },
                 "type": { "type": "string", "enum": ["note", "highlight", "underline", "strikeout", "squiggly", "replace", "rectangle", "oval", "line", "arrow", "ink", "freehand_highlight", "textbox", "stamp", "polygon", "cloud", "polyline", "callout", "caret", "attachment"] },
@@ -911,6 +920,7 @@ pub fn tools() -> Vec<ToolDef> {
             )),
         t("comment_edit", "Edit a comment", "Change a comment's text, colour, opacity, line width, font size (text box/typewriter/callout), fill (rectangle/oval/polygon/text box/callout; \"none\" removes it), rectangle (rectangle/oval/text box/stamp), position (`move` [dx, dy] in points) or shape (`points`: a line's two ends, or the corners of connected lines, a polygon or a cloud). Stamps keep their original appearance when resized. One undo step.").with(schema(
             comment_ref(json!({
+                "syriac_family": syriac_family(),
                 "contents": { "type": "string" },
                 "color": color(),
                 "opacity": { "type": "number", "minimum": 0, "maximum": 1 },
@@ -1000,6 +1010,7 @@ pub fn tools() -> Vec<ToolDef> {
         .cmd("edit.header_footer")
         .with(schema(
             json!({
+                "syriac_family": syriac_family(),
                 "doc": doc(),
                 "pages": pages("to mark (default: all)"),
                 "header_left": { "type": "string" }, "header_center": { "type": "string" }, "header_right": { "type": "string" },
@@ -1018,6 +1029,7 @@ pub fn tools() -> Vec<ToolDef> {
             .cmd("edit.watermark")
             .with(schema(
                 json!({
+                "syriac_family": syriac_family(),
                     "doc": doc(),
                     "pages": pages("to mark (default: all)"),
                     "text": { "type": "string", "minLength": 1 },
@@ -1306,6 +1318,7 @@ pub fn tools() -> Vec<ToolDef> {
         .cmd("sign.fill.text")
         .with(schema(
             json!({
+                "syriac_family": syriac_family(),
                 "doc": doc(),
                 "page": { "type": "integer", "minimum": 1 },
                 "type": { "type": "string", "enum": ["text", "check", "cross", "dot", "line", "date", "signature", "initials"] },

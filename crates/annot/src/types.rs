@@ -566,6 +566,9 @@ pub struct Style {
     pub width: f64,
     /// Interior fill for rectangles and ovals (`/IC`), background for text boxes.
     pub fill: Option<Rgb>,
+    /// Document face for Syriac FreeText or an initially outlined typed signature.
+    /// `None` keeps the default Estrangela face and makes no request on other shapes.
+    pub syriac_family: Option<pdfcraft_fonts::SyriacFamily>,
 }
 
 /// The style properties changed by one annotation edit. `None` leaves a property unchanged.
@@ -575,11 +578,14 @@ pub struct StyleChange {
     pub opacity: Option<f64>,
     pub width: Option<f64>,
     pub endings: Option<Vec<LineEnding>>,
+    /// Only FreeText can change its family after creation; typed signatures retain outlines.
+    pub syriac_family: Option<pdfcraft_fonts::SyriacFamily>,
 }
 
 impl StyleChange {
+    /// Build a partial style change that leaves the stored Syriac family untouched.
     pub fn new(color: Option<Rgb>, opacity: Option<f64>, width: Option<f64>, endings: Option<Vec<LineEnding>>) -> Self {
-        Self { color, opacity, width, endings }
+        Self { color, opacity, width, endings, syriac_family: None }
     }
 }
 
@@ -596,8 +602,9 @@ pub struct TextReplacement<'a> {
 }
 
 impl Default for Style {
+    /// Use an opaque yellow one-point stroke with no fill or explicit Syriac family.
     fn default() -> Self {
-        Self { color: [1.0, 0.82, 0.0], opacity: 1.0, width: 1.0, fill: None }
+        Self { color: [1.0, 0.82, 0.0], opacity: 1.0, width: 1.0, fill: None, syriac_family: None }
     }
 }
 
@@ -615,7 +622,9 @@ impl Style {
             }
             Shape::Callout { .. } => ([0.0, 0.0, 0.0], 1.0),
             Shape::Caret { .. } | Shape::Attachment { .. } => ([0.0, 0.47, 0.84], 1.0),
-            Shape::FreehandHighlight { .. } => return Self { color: [1.0, 0.94, 0.0], opacity: 0.35, width: 14.0, fill: None },
+            Shape::FreehandHighlight { .. } => {
+                return Self { color: [1.0, 0.94, 0.0], opacity: 0.35, width: 14.0, fill: None, syriac_family: None };
+            }
             Shape::Ink { .. } => ([0.0, 0.4, 0.87], 2.0),
             Shape::TextBox { .. } | Shape::Typewriter { .. } => ([0.0, 0.0, 0.0], 0.0),
             Shape::Mark { .. } => ([0.0, 0.0, 0.0], 1.5),
@@ -624,9 +633,11 @@ impl Style {
             Shape::CustomStamp { .. } => ([0.0, 0.0, 0.0], 0.0),
             Shape::TypedSignature { .. } => ([0.0, 0.0, 0.0], 0.0),
             // Red outline while marked; a black box once applied.
-            Shape::Redact { .. } => return Self { color: [0.89, 0.13, 0.13], opacity: 1.0, width: 1.0, fill: Some([0.0, 0.0, 0.0]) },
+            Shape::Redact { .. } => {
+                return Self { color: [0.89, 0.13, 0.13], opacity: 1.0, width: 1.0, fill: Some([0.0, 0.0, 0.0]), syriac_family: None };
+            }
         };
-        Self { color, opacity: 1.0, width, fill: None }
+        Self { color, opacity: 1.0, width, fill: None, syriac_family: None }
     }
 }
 

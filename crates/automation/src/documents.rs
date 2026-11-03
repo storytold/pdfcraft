@@ -474,8 +474,17 @@ impl Automation {
         Ok(json!({ "pages": found }))
     }
 
+    /// Parse and apply header/footer, watermark, background or mark-removal requests.
+    /// Confine picture inputs and reject family selectors on non-text mark operations.
     pub(crate) fn marks(&mut self, tool: &str, a: &Args) -> Result<Value> {
         use pdfcraft_engine::{Background, HeaderFooter, MarkKind, Watermark};
+        if a.get("syriac_family").is_some() && !matches!(tool, "doc_header_footer" | "doc_watermark") {
+            return Err(ToolError::InvalidArgs("syriac_family applies only to header/footer text or a text watermark".into()));
+        }
+        let syriac_family = crate::content::opt_syriac_family(a)?;
+        if syriac_family.is_some() && tool == "doc_watermark" && a.opt_str("file")?.is_some() {
+            return Err(ToolError::InvalidArgs("syriac_family applies to text watermarks, not picture watermarks".into()));
+        }
         let n = self.doc(a)?.info.pages.len();
         let pages = match a.opt_ints("pages")? {
             Some(_) => self.pages(a, "pages")?,
@@ -486,7 +495,7 @@ impl Automation {
         let replace = a.opt_bool("replace")?.unwrap_or(false);
         let edit = match tool {
             "doc_header_footer" => {
-                let mut hf = HeaderFooter::default();
+                let mut hf = HeaderFooter { syriac_family: syriac_family.unwrap_or_default(), ..HeaderFooter::default() };
                 for (k, key) in ["header_left", "header_center", "header_right", "footer_left", "footer_center", "footer_right"].iter().enumerate() {
                     hf.text[k] = a.opt_str(key)?.unwrap_or_default().to_string();
                 }
@@ -521,6 +530,7 @@ impl Automation {
                 };
                 let wm = Watermark {
                     text,
+                    syriac_family: syriac_family.unwrap_or_default(),
                     source: None,
                     scale: a.opt_num("scale")?.unwrap_or(d.scale).clamp(0.01, 1.0),
                     font_size: a.opt_num("font_size")?.unwrap_or(0.0),

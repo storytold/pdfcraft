@@ -20,8 +20,8 @@ pub(crate) use tree::ancestor_sets;
 
 pub use edit::set_props;
 pub use lifecycle::{add_field, delete_field, delete_field_object, delete_widget, duplicate_field};
-pub(crate) use look::button_appearance;
 pub use look::{BorderStyle, CheckStyle, FieldFont, Look, LookPatch, check_style, look, redraw_field, set_button_icon};
+pub(crate) use look::{button_appearance, button_appearance_in};
 pub(crate) use tree::{ensure_form, form_fonts_as_objects};
 
 /// The smallest width and height of a field's widget, in points: a smaller one is refused.
@@ -77,6 +77,8 @@ impl NewField {
 /// Field properties the Properties dialog edits (`None` leaves a value unchanged).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct FieldProps {
+    /// Syriac content face, persisted independently of the standard `/DA` font.
+    pub syriac_family: Option<pdfcraft_fonts::SyriacFamily>,
     pub name: Option<String>,
     pub tooltip: Option<String>,
     /// Normal push-button label (`/MK /CA`) of one widget (0-based index).

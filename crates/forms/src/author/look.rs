@@ -323,7 +323,7 @@ pub(super) fn redraw_widgets(doc: &mut Document, name: &str, only: Option<usize>
         let mut missing = None;
         let ap = match f.kind {
             FieldKind::Text | FieldKind::Combo | FieldKind::List => {
-                let (s, m) = appearance::field_appearance_drawn(doc, &f, w, &f.value, true);
+                let (s, m) = appearance::field_appearance_drawn_in(doc, &f, w, &f.value, true);
                 missing = m;
                 let r = doc.add(Object::Stream(s));
                 let mut d = Dict::new();
@@ -335,7 +335,7 @@ pub(super) fn redraw_widgets(doc: &mut Document, name: &str, only: Option<usize>
                 appearance::check_box_states(doc, w, f.kind, &on, &f.da)
             }
             FieldKind::PushButton => {
-                let (s, m) = button_appearance(doc, w, &f.da);
+                let (s, m) = button_appearance_in(doc, w, &f.da);
                 missing = m;
                 let r = doc.add(Object::Stream(s));
                 let mut d = Dict::new();
@@ -438,6 +438,91 @@ pub(crate) fn button_appearance(doc: &Document, w: &Widget, field_da: &str) -> (
         res.set(b"XObject".to_vec(), Object::Dict(xobjects));
     }
     (form_stream(place, content, res), missing)
+}
+
+/// Embed Syriac caption glyphs without replacing an icon or leaving partial resources.
+pub(crate) fn button_appearance_in(doc: &mut Document, w: &Widget, field_da: &str) -> (Stream, Option<char>) {
+    let widget = doc.get(w.obj);
+    let caption = widget
+        .as_dict()
+        .and_then(|d| d.get(b"MK"))
+        .and_then(|mk| doc.dict(mk))
+        .and_then(|mk| mk.get(b"CA").and_then(|c| doc.resolve(c).as_string().map(|s| s.to_text())))
+        .unwrap_or_default();
+    if !pdfcraft_fonts::content_text::contains_syriac(&caption) {
+        return button_appearance(doc, w, field_da);
+    }
+    let mut staged = doc.clone();
+    match button_appearance_syriac(&mut staged, w, field_da) {
+        Some(appearance) => {
+            *doc = staged;
+            appearance
+        }
+        None => button_appearance(doc, w, field_da),
+    }
+}
+
+/// Build a shaped caption with the persisted family while preserving button frame and icon.
+/// Return None when the caption cannot be drawn so the caller retains its fallback policy.
+fn button_appearance_syriac(doc: &mut Document, w: &Widget, field_da: &str) -> Option<(Stream, Option<char>)> {
+    let (mut c, place) = frame_only(doc, w);
+    let (width, height) = (place.layout_w, place.layout_h);
+    let wobj = doc.get(w.obj);
+    let mk = wobj.as_dict().and_then(|d| d.get(b"MK")).map(|m| doc.resolve(m)).and_then(|m| m.as_dict().cloned()).unwrap_or_default();
+    let caption = mk.get(b"CA").map(|c| doc.resolve(c)).and_then(|c| c.as_string().map(|s| s.to_text())).unwrap_or_default();
+    if caption.len() > pdfcraft_fonts::content_text::MAX_TEXT_BYTES {
+        return None;
+    }
+    let icon_only = mk.get(b"TP").and_then(|t| doc.resolve(t).as_int()) == Some(1);
+    let mut content = std::mem::take(&mut c).into_bytes();
+    let mut xobjects = Dict::new();
+    if let Some(icon) = mk.get(b"I").and_then(Object::as_ref)
+        && let Object::Stream(s) = &*doc.get(icon)
+    {
+        let bb = s
+            .dict
+            .get(b"BBox")
+            .and_then(Object::as_array)
+            .filter(|a| a.len() == 4)
+            .and_then(|a| Some([a.first()?.as_f64()?, a.get(1)?.as_f64()?, a.get(2)?.as_f64()?, a.get(3)?.as_f64()?]));
+        if let Some([x0, y0, x1, y1]) = bb
+            && [x0, y0, x1, y1].iter().all(|v| v.is_finite())
+            && x1 > x0
+            && y1 > y0
+        {
+            // Proportional, as large as fits (Acrobat's default icon placement), centred.
+            let k = ((width - 2.0) / (x1 - x0)).min((height - 2.0) / (y1 - y0)).max(0.0);
+            let (dx, dy) = ((width - (x1 - x0) * k) / 2.0 - x0 * k, (height - (y1 - y0) * k) / 2.0 - y0 * k);
+            content.extend(format!("q {k:.6} 0 0 {k:.6} {dx:.3} {dy:.3} cm /Icon Do Q\n").bytes());
+            xobjects.set(b"Icon".to_vec(), Object::Ref(icon));
+        }
+    }
+    let missing = None;
+    let mut fonts = Dict::new();
+    if !icon_only && !caption.is_empty() {
+        let da = wobj.as_dict().and_then(|d| d.get(b"DA")).and_then(|o| doc.resolve(o).as_string().map(|s| s.to_text()));
+        let auto = ((height - 4.0) * 0.6).clamp(4.0, 14.0);
+        let da = appearance::parse_da(da.as_deref().unwrap_or(field_da));
+        let family = appearance::widget_syriac_family(doc, w);
+        let lines = pdfcraft_fonts::content_text::wrap_for_family(&caption.replace(['\n', '\r'], " "), 1.0, f64::MAX, family).ok()?;
+        let line = lines.first()?;
+        let (top, bottom) = line.vertical_extents().ok()?;
+        let size = if da.size > 0.0 {
+            da.size
+        } else {
+            auto.min((width - 4.0).max(1.0) / line.width.max(0.01)).min((height - 4.0).max(1.0) / (top - bottom).max(0.1)).max(4.0)
+        };
+        content.extend(format!("{}\n", da.color).bytes());
+        content.extend(
+            line.write(doc, &mut fonts, [(width - line.width * size) / 2.0, (height - (top - bottom) * size) / 2.0 - bottom * size], size).ok()?,
+        );
+    }
+    let mut res = Dict::new();
+    res.set(b"Font".to_vec(), Object::Dict(fonts));
+    if !xobjects.is_empty() {
+        res.set(b"XObject".to_vec(), Object::Dict(xobjects));
+    }
+    Some((form_stream(place, content, res), missing))
 }
 
 /// Give a push button (an image field) the picture `image` (an image XObject of `px` pixels):

@@ -138,7 +138,7 @@ pub fn edits(d: &PropsDraft) -> Vec<Edit> {
     let width = (e.width != o.width).then_some(e.width).flatten();
     let endings = (e.endings != o.endings).then(|| e.endings.clone()).flatten();
     if e.restylable && (color.is_some() || opacity.is_some() || width.is_some() || endings.is_some()) {
-        out.push(Edit::StyleAnnotation { page: d.page, index: d.index, color, opacity, width, endings });
+        out.push(Edit::StyleAnnotation { page: d.page, index: d.index, color, opacity, width, endings, syriac_family: None });
     }
     if e.restylable && e.fillable && e.fill != o.fill {
         out.push(Edit::FillAnnotation { page: d.page, index: d.index, fill: e.fill });

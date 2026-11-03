@@ -31,6 +31,8 @@ pub struct HeaderFooter {
     pub text: [String; 6],
     /// The standard face the text is drawn in (#3754): Helvetica (the default), Times or Courier.
     pub font: added::Family,
+    /// Document face for Syriac content; defaults to Estrangela, independently of the Latin face.
+    pub syriac_family: pdfcraft_fonts::SyriacFamily,
     pub font_size: f64,
     pub color: Rgb,
     pub underline: bool,
@@ -50,6 +52,7 @@ impl Default for HeaderFooter {
         Self {
             text: Default::default(),
             font: added::Family::Helvetica,
+            syriac_family: pdfcraft_fonts::SyriacFamily::default(),
             font_size: 8.0,
             color: [0.0; 3],
             underline: false,
@@ -60,14 +63,93 @@ impl Default for HeaderFooter {
     }
 }
 
+/// Whether this line uses Arabic layout; any Syriac keeps its explicitly selected family path.
+pub(crate) fn arabic_text(text: &str) -> bool {
+    !pdfcraft_fonts::content_text::contains_syriac(text) && text.chars().any(pdfcraft_fonts::source_shaping::is_arabic)
+}
+
+/// The standard Latin face used beside Arabic in a header or footer.
+pub(crate) fn latin_face(family: added::Family) -> pdfcraft_fonts::Std14 {
+    match family {
+        added::Family::Helvetica => pdfcraft_fonts::Std14::Helvetica,
+        added::Family::Times => pdfcraft_fonts::Std14::TimesRoman,
+        added::Family::Courier => pdfcraft_fonts::Std14::Courier,
+    }
+}
+
+/// Shape exactly one Arabic mark line using the selected Latin metrics and bounded writer.
+pub(crate) fn arabic_line(text: &str, size: f64, latin: pdfcraft_fonts::Std14) -> Result<pdfcraft_fonts::appearance_text::Line, EditError> {
+    if text.contains(['\r', '\n']) {
+        return Err(EditError::Invalid("an Arabic page-mark line cannot contain a line break".into()));
+    }
+    if let Some(ch) = pdfcraft_fonts::appearance_text::first_undrawable(text) {
+        return Err(super::place::undrawable(ch));
+    }
+    pdfcraft_fonts::appearance_text::wrap_with_latin(text, size, f64::MAX, latin)
+        .map_err(|error| EditError::Invalid(format!("Arabic page-mark shaping failed: {error:?}")))?
+        .into_iter()
+        .next()
+        .ok_or_else(|| EditError::Invalid("the Arabic page-mark line is missing".into()))
+}
+
+/// Accept supported shaped text; otherwise report the first non-WinAnsi character.
+/// The reported character identifies the fallback warning, not necessarily the glyph that made shaping fail.
+fn content_undrawable(text: &str, family: pdfcraft_fonts::SyriacFamily) -> Option<char> {
+    if pdfcraft_fonts::content_text::contains_syriac(text) && pdfcraft_fonts::content_text::wrap_for_family(text, 1.0, f64::MAX, family).is_ok() {
+        return None;
+    }
+    if arabic_text(text) {
+        if text.contains('\r') {
+            return Some('\r');
+        }
+        if arabic_line(text, 1.0, pdfcraft_fonts::Std14::Helvetica).is_ok() {
+            return None;
+        }
+        return pdfcraft_fonts::appearance_text::first_undrawable(text)
+            .or_else(|| text.chars().find(|c| pdfcraft_fonts::source_shaping::is_arabic(*c)));
+    }
+    pdfcraft_fonts::first_non_win_ansi(text)
+}
+
 impl HeaderFooter {
-    /// The first character [`add_header_footer`] would refuse, because the standard fonts can't
-    /// draw it (#125). Tokens only add ASCII (Bates prefixes and suffixes are part of the
-    /// template), so checking the templates, split as `expand`'s output is, covers every page
-    /// (and a `\r` that would be drawn is refused too). The dialog asks this too, so its preview
-    /// never offers text that applying refuses (#2013).
+    /// Shared baseline metrics for a column, including Syriac vowel and dot ink.
+    pub(crate) fn column_metrics(
+        text: &str,
+        family: pdfcraft_fonts::SyriacFamily,
+        latin: pdfcraft_fonts::Std14,
+    ) -> Result<(f64, f64, f64), EditError> {
+        if arabic_text(text) {
+            if text.len() > pdfcraft_fonts::content_text::MAX_TEXT_BYTES || text.lines().take(1025).count() > 1024 {
+                return Err(EditError::Invalid("Arabic page marks need at most 262144 UTF-8 bytes and 1024 lines per text box".into()));
+            }
+            let (mut ascent, mut descent) = (0.8f64, -0.2f64);
+            for line in text.lines() {
+                let row = arabic_line(line, 1.0, latin)?;
+                ascent = ascent.max(row.ascent);
+                descent = descent.min(-row.descent);
+            }
+            return Ok((ascent, descent, (ascent - descent + 0.1).max(1.2)));
+        }
+        if !pdfcraft_fonts::content_text::contains_syriac(text) {
+            return Ok((0.8, 0.0, 1.2));
+        }
+        let rows = pdfcraft_fonts::content_text::wrap_for_family(text, 1.0, f64::MAX, family).map_err(EditError::Invalid)?;
+        let (mut ascent, mut descent) = (0.8f64, -0.2f64);
+        for row in rows {
+            let (a, d) = row.vertical_extents().map_err(EditError::Invalid)?;
+            ascent = ascent.max(a);
+            descent = descent.min(d);
+        }
+        Ok((ascent, descent, (ascent - descent + 0.1).max(1.2)))
+    }
+
+    /// Preflight header/footer template lines with the selected Syriac face or standard-font
+    /// WinAnsi coverage. A line that fails this check reports its first non-WinAnsi character
+    /// as a refusal marker, not necessarily the glyph that failed. Bates prefixes and suffixes
+    /// are checked as part of the template. `None` does not certify placement or outline budgets;
+    /// [`add_header_footer`](crate::add_header_footer) validates the expanded text and geometry when applying the mark.
     pub fn first_undrawable(&self) -> Option<char> {
-        self.text.iter().flat_map(|t| t.lines()).find_map(pdfcraft_fonts::first_non_win_ansi)
+        self.text.iter().flat_map(|t| t.lines()).find_map(|text| content_undrawable(text, self.syriac_family))
     }
 
     /// The room the header and the footer take at the top and the bottom of a page, in points:
@@ -75,13 +157,23 @@ impl HeaderFooter {
     /// without text takes none. This is the room [`HeaderFooter::shrink`] keeps free.
     pub fn bands(&self) -> (f64, f64) {
         let size = self.font_size;
-        let line_h = size * 1.2;
-        let lines = |boxes: &[String]| boxes.iter().filter(|t| !t.trim().is_empty()).map(|t| t.lines().count().max(1)).max();
+        let room = |boxes: &[String], header: bool| {
+            boxes
+                .iter()
+                .filter(|t| !t.trim().is_empty())
+                .map(|t| {
+                    let (ascent, descent, pitch) = Self::column_metrics(t, self.syriac_family, latin_face(self.font)).unwrap_or((0.8, 0.0, 1.2));
+                    let rows = t.lines().count().max(1);
+                    let ink = if header { (ascent - descent).max(1.0) } else { ascent - descent };
+                    (ink + rows.saturating_sub(1) as f64 * pitch + 0.5) * size
+                })
+                .reduce(f64::max)
+        };
         let (header, footer) = self.text.split_at(3);
         // Header lines hang below the top margin (a full line each); the footer's last line sits
         // on the bottom margin, so only its capitals (0.8 of the size) rise above it.
-        let top = lines(header).map_or(0.0, |n| self.margins[0] + size + (n - 1) as f64 * line_h + size / 2.0);
-        let bottom = lines(footer).map_or(0.0, |n| self.margins[1] + size * 0.8 + (n - 1) as f64 * line_h + size / 2.0);
+        let top = room(header, true).map_or(0.0, |height| self.margins[0] + height);
+        let bottom = room(footer, false).map_or(0.0, |height| self.margins[1] + height);
         (top, bottom)
     }
 }
@@ -122,6 +214,8 @@ pub struct MarkSource {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Watermark {
     pub text: String,
+    /// Document face for Syriac text watermarks; defaults to Estrangela. Pictures do not use it.
+    pub syriac_family: pdfcraft_fonts::SyriacFamily,
     pub source: Option<MarkSource>,
     /// Pictures: size relative to the page (1.0 fits the page).
     pub scale: f64,
@@ -139,20 +233,24 @@ pub struct Watermark {
 }
 
 impl Watermark {
-    /// The first character of a text watermark [`add_watermark`] would refuse, because the
-    /// standard fonts can't draw it (#125). A picture watermark draws no text.
+    /// Preflight trimmed watermark lines with the selected Syriac face or standard-font
+    /// WinAnsi coverage. On a failed coverage check, return the first non-WinAnsi character as a
+    /// refusal marker, not necessarily the missing glyph. Picture sources return `None`;
+    /// [`add_watermark`](crate::add_watermark) still validates placement and outline budgets for text marks.
     pub fn first_undrawable(&self) -> Option<char> {
         match self.source {
             Some(_) => None,
-            None => self.text.trim().lines().find_map(pdfcraft_fonts::first_non_win_ansi),
+            None => self.text.trim().lines().find_map(|text| content_undrawable(text, self.syriac_family)),
         }
     }
 }
 
 impl Default for Watermark {
+    /// Use an empty Estrangela text watermark with gray half-opacity, 45-degree rotation and centered placement.
     fn default() -> Self {
         Self {
             text: String::new(),
+            syriac_family: pdfcraft_fonts::SyriacFamily::default(),
             source: None,
             scale: 0.5,
             font_size: 0.0,

@@ -12,6 +12,9 @@ pub struct ShapedGlyph {
     pub id: GlyphId,
     pub position: [f64; 2],
     pub text: String,
+    /// Original input UTF-8 byte range of this glyph's shaping cluster, including
+    /// auxiliary marks whose `text` is empty. The range is logical, not visual order.
+    pub logical_range: std::ops::Range<usize>,
 }
 #[derive(Clone, Debug)]
 pub struct ShapedRun {
@@ -70,10 +73,18 @@ pub fn is_arabic(c: char) -> bool {
 /// but do not gain a joining-table requirement merely by sharing the Arabic font route.
 fn needs_contextual_substitution(c: char) -> bool {
     (is_arabic(c) && !matches!(u32::from(c), 0xfb50..=0xfdff | 0xfe70..=0xfefc | 0x1ee00..=0x1eeff))
+        || is_syriac(c)
         || matches!(u32::from(c), 0x08a0..=0x0fff | 0x1780..=0x17ff)
 }
 
-/// Shape one bounded source-font row with automatic paragraph-base selection.
+/// Syriac and its supplement share joining behavior, even when a selected face
+/// lacks a supplement glyph (which remains an explicit missing-glyph error).
+pub fn is_syriac(c: char) -> bool {
+    matches!(u32::from(c), 0x0700..=0x074f | 0x0860..=0x086f)
+}
+
+/// Shape a bounded row from explicit font bytes with per-run bidi order and logical text.
+/// Refuse missing contextual tables, missing glyphs and excessive output geometry.
 pub fn shape(bytes: &[u8], text: &str) -> Result<ShapedRun, String> {
     shape_with_direction(bytes, text, crate::TextDirection::Auto)
 }
@@ -117,11 +128,22 @@ pub fn shape_with_direction(bytes: &[u8], text: &str, direction: crate::TextDire
             }
             let start = g.cluster as usize;
             let end = starts.get(starts.partition_point(|i| *i <= start)).copied().unwrap_or(input.len());
-            let logical = if seen.insert(start) { input.get(start..end).unwrap_or_default().to_string() } else { String::new() };
+            let cluster_text =
+                input.get(start..end).filter(|_| start < end).ok_or_else(|| "the shaper returned an invalid logical cluster boundary".to_string())?;
+            // The buffer receives the original bidi-run substring without removing controls.
+            // HarfRust cluster offsets are UTF-8 byte positions in that substring. Translate
+            // them directly; repeated cluster text cannot safely recover this provenance.
+            let logical_start = run.start.checked_add(start).ok_or_else(|| "logical cluster offset overflow".to_string())?;
+            let logical_end = run.start.checked_add(end).ok_or_else(|| "logical cluster offset overflow".to_string())?;
+            if logical_end > run.end || text.get(logical_start..logical_end).is_none() {
+                return Err("the shaper returned a cluster outside its original text run".into());
+            }
+            let logical = if seen.insert(start) { cluster_text.to_string() } else { String::new() };
             glyphs.push(ShapedGlyph {
                 id: GlyphId::new(g.glyph_id),
                 position: [x + f64::from(p.x_offset) / em, f64::from(p.y_offset) / em],
                 text: logical,
+                logical_range: logical_start..logical_end,
             });
             x += f64::from(p.x_advance) / em;
         }

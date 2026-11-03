@@ -2,6 +2,10 @@
 
 Agent control for PdfCraft: a headless tool table over the engine, and an opt-in MCP server.
 
+The existing content, form, comment, Fill & Sign and page-mark tools accept bounded
+Syriac content when built with the companion craft-fonts Syrc faces. No new tool or
+network default is introduced. See [font inputs, supported surfaces and limits](../../docs/syriac-content.md).
+
 - **Layer:** L7 (architecture §13), but headless. It depends on `engine`, `render` and `organize`, never on a UI toolkit.
 - **Status:** over a hundred tools; `pdfcraft-cli tools` lists the current set with their schemas (the count isn't repeated here, so it can't go stale). They cover inspection, rendering, text, page edits and organizing, page labels, bookmarks, comments and their review, form filling and authoring (fields, properties, scripts, data exchange, detection), redaction and sanitizing, password protection and signatures, calibrated 2D measurements and CSV export, adding text, images, links and stamps, optimizing, OCR, printing, export, metadata, undo/redo, save, combine, extract and split. Comment tools take geometry in the same top-left-origin points as everything else, and `comment_add` can mark text by searching for it (`find`). The MCP server also serves the open documents as resources, page images included. The running app's UI is driven separately, through the `ui.*` control channel in `pdfcraft-ui-egui`.
 

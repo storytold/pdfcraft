@@ -57,6 +57,126 @@ fn cx() -> Context {
     Context { date: (2026, 10, 1) }
 }
 
+/// Arabic page marks own their fonts inside private forms, preserve old names, and survive rotated pages.
+#[test]
+fn arabic_marks_keep_private_resources_logical_text_and_rotated_page_ink() {
+    if !pdfcraft_fonts::arabic_has('س') {
+        assert!(std::env::var_os("CRAFT_FONTS_REQUIRED").is_none(), "Arabic font required");
+        return;
+    }
+    let mut doc = fixture();
+    let old_font = Object::Ref(pdfcraft_cos::ObjRef::new(8, 0));
+    let old_form = doc.add(Object::Stream(Stream::from_raw(
+        Dict::from_iter([
+            (b"Type".to_vec(), Object::name("XObject")),
+            (b"Subtype".to_vec(), Object::name("Form")),
+            (b"BBox".to_vec(), Object::Array([0, 0, 1, 1].map(Object::Int).to_vec())),
+        ]),
+        Vec::new(),
+    )));
+    doc.update_dict(pdfcraft_cos::ObjRef::new(6, 0), |resources| {
+        resources.set(
+            b"Font".to_vec(),
+            Object::Dict(Dict::from_iter([
+                (b"F1".to_vec(), old_font.clone()),
+                (b"Helv".to_vec(), old_font.clone()),
+                (b"PCHelv".to_vec(), old_font.clone()),
+                (b"PCShaped0".to_vec(), old_font.clone()),
+            ])),
+        );
+        resources.set(b"XObject".to_vec(), Object::Dict(Dict::from_iter([(b"PCArabicMark0".to_vec(), Object::Ref(old_form))])));
+    })
+    .unwrap();
+    let text = "سَلام 123";
+    let hf = HeaderFooter {
+        text: [text.into(), String::new(), String::new(), String::new(), String::new(), String::new()],
+        font: added::Family::Courier,
+        font_size: 20.0,
+        ..Default::default()
+    };
+    assert_eq!(hf.first_undrawable(), None);
+    add_header_footer(&mut doc, &[0, 1, 2], &hf, false, &cx()).unwrap();
+    add_watermark(
+        &mut doc,
+        &[0, 1, 2],
+        &Watermark { text: text.into(), font_size: 24.0, rotation: 30.0, color: [1.0, 0.0, 0.0], opacity: 1.0, ..Default::default() },
+        false,
+    )
+    .unwrap();
+    let doc = reopen(&doc);
+    let pages = pdfcraft_model::pages(&doc);
+    for (index, page) in pages.iter().enumerate() {
+        let resources = doc.dict(page.dict.get(b"Resources").unwrap()).unwrap();
+        let fonts = doc.dict(resources.get(b"Font").unwrap()).unwrap();
+        for name in [b"Helv".as_slice(), b"PCHelv".as_slice(), b"PCShaped0".as_slice()] {
+            assert_eq!(fonts.get(name).and_then(Object::as_ref), old_font.as_ref(), "existing font replaced");
+        }
+        let objects = doc.dict(resources.get(b"XObject").unwrap()).unwrap();
+        assert_eq!(objects.get(b"PCArabicMark0").and_then(Object::as_ref), Some(old_form));
+        let generated: Vec<_> = objects.iter().filter(|(name, _)| name.as_slice() != b"PCArabicMark0").collect();
+        assert!(generated.len() >= 2, "header and watermark must have separate forms");
+        for (_, object) in generated {
+            let object = doc.resolve(object);
+            let Object::Stream(stream) = &*object else { panic!("mark form") };
+            assert_eq!(stream.dict.name(b"Subtype"), Some(b"Form".as_slice()));
+            assert!(String::from_utf8(stream.decoded().unwrap()).unwrap().contains("/ActualText"));
+        }
+        // Page-editable text_lines deliberately excludes Form XObjects. The export
+        // reader follows forms with their own resources and ActualText scopes.
+        let extracted = text::reading_blocks(&doc, index).unwrap();
+        assert!(
+            extracted.iter().any(|block| block.text == text),
+            "logical Arabic lost: {:?}",
+            extracted.iter().map(|block| &block.text).collect::<Vec<_>>()
+        );
+    }
+    let mut renderer = pdfcraft_render::PageRenderer::new(
+        Arc::new(write_incremental(&doc, &SaveOptions::default()).unwrap()),
+        pdfcraft_render::RenderConfig::default(),
+    );
+    for page in 0..3 {
+        let pixels =
+            renderer.render(pdfcraft_render::RenderRequest { page, kind: pdfcraft_render::RequestKind::Pixels, scale: 0.5, ..Default::default() });
+        assert!(
+            pixels.rgba.chunks_exact(4).any(|pixel| pixel[0] > 150 && pixel[1] < 100 && pixel[2] < 100),
+            "Arabic watermark has no red ink on page {page}"
+        );
+    }
+}
+
+/// An Arabic mark failure after earlier pages allocated fonts rolls back the entire operation.
+#[test]
+fn arabic_marks_rollback_resources_after_later_page_failure() {
+    if !pdfcraft_fonts::arabic_has('س') {
+        assert!(std::env::var_os("CRAFT_FONTS_REQUIRED").is_none(), "Arabic font required");
+        return;
+    }
+    for kind in [MarkKind::HeaderFooter, MarkKind::Watermark] {
+        let mut doc = fixture();
+        let before = write_incremental(&doc, &SaveOptions::default()).unwrap();
+        let objects = doc.scan_objects().count();
+        crate::place::MARK_PLACEMENT_FAILURE.with(|failure| failure.set(Some((kind, 2, 0))));
+        let result = match kind {
+            MarkKind::HeaderFooter => add_header_footer(
+                &mut doc,
+                &[0, 1, 2],
+                &HeaderFooter {
+                    text: ["سلام".into(), String::new(), String::new(), String::new(), String::new(), String::new()],
+                    ..Default::default()
+                },
+                true,
+                &cx(),
+            ),
+            _ => add_watermark(&mut doc, &[0, 1, 2], &Watermark { text: "سلام".into(), ..Default::default() }, true),
+        };
+        let completed = crate::place::MARK_PLACEMENT_FAILURE.with(|failure| failure.replace(None).unwrap().2);
+        assert_eq!(completed, 2, "must reach the injected late failure: {result:?}");
+        assert!(result.is_err());
+        assert_eq!(doc.scan_objects().count(), objects);
+        assert_eq!(write_incremental(&doc, &SaveOptions::default()).unwrap(), before);
+    }
+}
+
 #[test]
 fn an_image_turns_by_any_angle_about_its_centre_and_saves_the_matrix() {
     // 100,100..300,200 is 200 x 100 around (200, 150).
@@ -10645,4 +10765,303 @@ fn explicit_direction_justification_is_refused_without_changing_content() {
         assert!(error.to_string().contains(expected), "{error}");
         assert_eq!(page_content_bytes(&doc, 0), before);
     }
+}
+
+/// Two whole-cluster recolours across reopen retain both selected colours and the
+/// unselected black text, original glyph geometry and complete font program.
+#[test]
+fn contextual_paint_ranges_survive_reopen_and_second_edit() {
+    let inter = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
+    let arabic = static_arabic_source_fixture();
+    let mut cases: Vec<(&[u8], &str, usize)> = vec![(inter, "q\u{301}x\u{301} 123", 3)];
+    if let Some(bytes) = &arabic {
+        cases.push((bytes, "سَسَ 123", 4));
+    }
+    for (bytes, typed, boundary) in cases {
+        let mut doc = text_page("BT /F1 12 Tf 72 700 Td (Stable text) Tj ET");
+        let resource = text::register_text_font(&mut doc, 0, bytes).unwrap();
+        text::rewrite_block(&mut doc, 0, 0, Some(typed), &text::BlockStyle { width: Some(400.0), resource: Some(resource), ..Default::default() })
+            .unwrap();
+        let original = text::glyph_text_lines(&doc, &pdfcraft_model::pages(&doc)[0]).unwrap();
+        let original_rect = text::text_lines(&doc, 0).unwrap()[0].rect;
+        let paint = |range, color| text::BlockStyle {
+            ranges: vec![text::RangeStyle {
+                range,
+                color: Some(color),
+                family: None,
+                resource: None,
+                size: None,
+                underline: None,
+                char_spacing: None,
+                scale: None,
+            }],
+            ..Default::default()
+        };
+        text::rewrite_block(&mut doc, 0, 0, None, &paint(0..boundary, [1.0, 0.0, 0.0])).unwrap();
+        let mut doc = reopen(&doc);
+        assert_eq!(text::text_blocks(&doc, 0).unwrap()[0].editor_text, typed);
+        text::rewrite_block(&mut doc, 0, 0, None, &paint(boundary..boundary * 2, [0.0, 0.0, 1.0])).unwrap();
+        let doc = reopen(&doc);
+        assert_eq!(text::text_blocks(&doc, 0).unwrap()[0].editor_text, typed);
+        let glyph_lines = text::glyph_text_lines(&doc, &pdfcraft_model::pages(&doc)[0]).unwrap();
+        assert!(glyph_lines.iter().any(|l| l.color == [1.0, 0.0, 0.0]), "first paint survives: {glyph_lines:?}");
+        assert!(glyph_lines.iter().any(|l| l.color == [0.0, 0.0, 1.0]), "second paint survives: {glyph_lines:?}");
+        assert!(glyph_lines.iter().any(|l| l.color == [0.0, 0.0, 0.0]), "unselected text keeps paint");
+        let rect = text::text_lines(&doc, 0).unwrap()[0].rect;
+        for (before, after) in original_rect.into_iter().zip(rect) {
+            assert!((before - after).abs() < 0.02, "paint preserves shaped geometry: {original:?} {glyph_lines:?}");
+        }
+        assert!(page_font_programs(&doc).iter().any(|(_, program)| program.as_deref() == Some(bytes)));
+    }
+}
+
+/// Selecting only the base of a base-plus-mark cluster must refuse before changing
+/// the page stream or embedding another font program.
+#[test]
+fn contextual_paint_range_splitting_cluster_is_atomic() {
+    let bytes = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
+    let mut doc = text_page("BT /F1 12 Tf 72 700 Td (Stable text) Tj ET");
+    let resource = text::register_text_font(&mut doc, 0, bytes).unwrap();
+    text::rewrite_block(
+        &mut doc,
+        0,
+        0,
+        Some("q\u{301}x\u{301}"),
+        &text::BlockStyle { resource: Some(resource), width: Some(400.0), ..Default::default() },
+    )
+    .unwrap();
+    let before = page_content_bytes(&doc, 0);
+    let fonts = page_font_programs(&doc);
+    let error = text::rewrite_block(
+        &mut doc,
+        0,
+        0,
+        None,
+        &text::BlockStyle {
+            ranges: vec![text::RangeStyle {
+                range: 0..1,
+                color: Some([1.0, 0.0, 0.0]),
+                family: None,
+                resource: None,
+                size: None,
+                underline: None,
+                char_spacing: None,
+                scale: None,
+            }],
+            ..Default::default()
+        },
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("cluster"), "specific actionable boundary error: {error}");
+    assert_eq!(page_content_bytes(&doc, 0), before);
+    assert_eq!(page_font_programs(&doc), fonts);
+}
+
+/// Missing, out-of-range and invalid-colour hints must leave standard ActualText
+/// readable while refusing a replacement that would flatten the mixed source paint.
+#[test]
+fn contextual_paint_missing_or_malformed_hint_preserves_text_and_refuses_edit() {
+    for hint in ["", "/PCPaint [[0 1 1 0 0] [1 99 0 0 1]]", "/PCPaint [[0 1 2 0 0] [1 2 0 0 1]]"] {
+        let content = format!("/Span << /ActualText (ab) {hint} >> BDC BT /F1 12 Tf 72 700 Td 1 0 0 rg (a) Tj 0 0 1 rg (b) Tj ET EMC");
+        let mut doc = text_page(&content);
+        assert_eq!(text::text_blocks(&doc, 0).unwrap()[0].editor_text, "ab");
+        let before = page_content_bytes(&doc, 0);
+        assert!(
+            text::rewrite_block(&mut doc, 0, 0, Some("ac"), &text::BlockStyle::default()).is_err(),
+            "unsupported mixed ActualText paint must not disappear: {hint}"
+        );
+        assert_eq!(page_content_bytes(&doc, 0), before);
+    }
+}
+
+/// External static oracle input, never a shipped asset or production instancing claim.
+fn static_arabic_source_fixture() -> Option<Vec<u8>> {
+    match std::env::var_os("PDFCRAFT_TEST_ARABIC_STATIC_FONT") {
+        Some(path) => Some(std::fs::read(path).expect("PDFCRAFT_TEST_ARABIC_STATIC_FONT must name a readable approved static Arabic fixture")),
+        None => {
+            assert!(
+                std::env::var_os("CRAFT_FONTS_REQUIRED").is_none(),
+                "Arabic source qualification requires PDFCRAFT_TEST_ARABIC_STATIC_FONT: the approved bundled Arabic face is variable and cannot be registered as a full source face yet"
+            );
+            eprintln!("Arabic source fixture absent: Inter control only; Arabic source paint is not qualified");
+            None
+        }
+    }
+}
+
+/// Compare preview/apply and reopened bounds at all four cardinal source angles,
+/// then recolour again without moving the baseline or losing the full font/artwork.
+/// Latin marks always run; Arabic uses the external static oracle and Syriac its
+/// optional approved face, rather than claiming general font-instance support.
+#[test]
+fn quarter_turn_contextual_source_preview_apply_and_repeat_keep_baseline() {
+    let arabic = static_arabic_source_fixture();
+    let mut cases: Vec<(&[u8], &str)> = vec![(include_bytes!("../../../assets/fonts/Inter-Regular.ttf"), "q\u{301}x\u{323} 123")];
+    if let Some(bytes) = &arabic {
+        cases.push((bytes, "سَسَ 123"));
+    }
+    if let Some(font) = pdfcraft_fonts::document_syriac_font() {
+        cases.push((font.bytes, "ܫܠܳܡܳܐ 123"));
+    }
+    for (bytes, typed) in cases {
+        let mut reference = None;
+        for [a, b, c, d] in [[1.0, 0.0, 0.0, 1.0], [0.0, 1.0, -1.0, 0.0], [-1.0, 0.0, 0.0, -1.0], [0.0, -1.0, 1.0, 0.0]] {
+            let mut doc =
+                embedded_program_page(&format!("0.2 g 10 10 5 5 re f BT /F1 12 Tf {a} {b} {c} {d} 300 400 Tm (Stable text) Tj ET"), "Inter-Regular");
+            let resource = text::register_text_font(&mut doc, 0, bytes).unwrap();
+            let style = text::BlockStyle {
+                width: Some(220.0),
+                resource: Some(resource),
+                direction: Some(pdfcraft_fonts::TextDirection::Auto),
+                ..Default::default()
+            };
+            let before = page_content_bytes(&doc, 0);
+            let preview = text::text_edit_layout(&doc, 0, 0, typed, &style).unwrap();
+            assert_eq!(page_content_bytes(&doc, 0), before, "preview is read-only");
+            assert_eq!(text::rewrite_block(&mut doc, 0, 0, Some(typed), &style).unwrap().substituted, None);
+            let mut doc = reopen(&doc);
+            let block = text::text_blocks(&doc, 0).unwrap().remove(0);
+            assert_eq!(block.editor_text, typed);
+            let rect = block.rect;
+            for (want, got) in preview.draft_rect.unwrap().into_iter().zip(rect) {
+                assert!((want - got).abs() < 0.02);
+            }
+            if let Some(base) = reference {
+                let base: [f64; 4] = base;
+                let corners = [[base[0], base[1]], [base[0], base[3]], [base[2], base[1]], [base[2], base[3]]]
+                    .map(|[x, y]| [300.0 + a * (x - 300.0) + c * (y - 400.0), 400.0 + b * (x - 300.0) + d * (y - 400.0)]);
+                let expected = [
+                    corners.iter().map(|p| p[0]).fold(f64::INFINITY, f64::min),
+                    corners.iter().map(|p| p[1]).fold(f64::INFINITY, f64::min),
+                    corners.iter().map(|p| p[0]).fold(f64::NEG_INFINITY, f64::max),
+                    corners.iter().map(|p| p[1]).fold(f64::NEG_INFINITY, f64::max),
+                ];
+                for (want, got) in expected.into_iter().zip(rect) {
+                    assert!((want - got).abs() < 0.05, "quarter-turn placement {typed}: expected {expected:?}, got {rect:?}");
+                }
+            } else {
+                reference = Some(rect);
+            }
+            let repeat = text::BlockStyle {
+                width: Some(220.0),
+                color: Some([0.0, 0.0, 1.0]),
+                direction: Some(pdfcraft_fonts::TextDirection::Auto),
+                ..Default::default()
+            };
+            let preview = text::text_edit_layout(&doc, 0, 0, typed, &repeat).unwrap();
+            text::rewrite_block(&mut doc, 0, 0, Some(typed), &repeat).unwrap();
+            let doc = reopen(&doc);
+            let again = text::text_blocks(&doc, 0).unwrap().remove(0);
+            assert_eq!(again.editor_text, typed);
+            for ((before, after), preview) in rect.into_iter().zip(again.rect).zip(preview.draft_rect.unwrap()) {
+                assert!((before - after).abs() < 0.05, "second edit must not move marked text: {rect:?} {:?}", again.rect);
+                assert!((preview - after).abs() < 0.02);
+            }
+            assert!(page_font_programs(&doc).iter().any(|(_, program)| program.as_deref() == Some(bytes)));
+            assert!(String::from_utf8_lossy(&page_content_bytes(&doc, 0)).contains("10 10 5 5 re"), "unrelated drawing remains");
+        }
+    }
+}
+
+/// General rotation, skew, nonuniform scale and mixed transforms hidden under
+/// ActualText must be refused without changing the original page operators.
+#[test]
+fn quarter_turn_source_refuses_general_and_mixed_transforms_atomically() {
+    for matrix in ["0.707 0.707 -0.707 0.707", "0 1 -1 0.2", "0 2 -1 0"] {
+        let mut doc = embedded_program_page(&format!("BT /F1 12 Tf {matrix} 300 400 Tm (Stable text) Tj ET"), "Inter-Regular");
+        let resource = text::register_text_font(&mut doc, 0, include_bytes!("../../../assets/fonts/Inter-Regular.ttf")).unwrap();
+        let style = text::BlockStyle { resource: Some(resource), direction: Some(pdfcraft_fonts::TextDirection::Auto), ..Default::default() };
+        let before = page_content_bytes(&doc, 0);
+        assert!(text::text_edit_layout(&doc, 0, 0, "q\u{301}", &style).is_err());
+        assert!(text::rewrite_block(&mut doc, 0, 0, Some("q\u{301}"), &style).is_err());
+        assert_eq!(page_content_bytes(&doc, 0), before);
+    }
+    let mut doc = embedded_program_page(
+        "/Span << /ActualText (ab) >> BDC BT /F1 12 Tf 0 1 -1 0 300 400 Tm (a) Tj 0 2 -1 0 300 410 Tm (b) Tj ET EMC",
+        "Inter-Regular",
+    );
+    let resource = text::register_text_font(&mut doc, 0, include_bytes!("../../../assets/fonts/Inter-Regular.ttf")).unwrap();
+    let before = page_content_bytes(&doc, 0);
+    assert!(text::rewrite_block(&mut doc, 0, 0, Some("q\u{301}"), &text::BlockStyle { resource: Some(resource), ..Default::default() }).is_err());
+    assert_eq!(page_content_bytes(&doc, 0), before);
+}
+
+/// A page-level display rotation must not rotate the source baseline twice:
+/// preview bounds in user space remain identical and match the reopened rewrite.
+#[test]
+fn quarter_turn_source_page_rotation_does_not_change_user_space_layout() {
+    let mut doc = embedded_program_page("BT /F1 12 Tf 0 1 -1 0 300 400 Tm (Stable text) Tj ET", "Inter-Regular");
+    let resource = text::register_text_font(&mut doc, 0, include_bytes!("../../../assets/fonts/Inter-Regular.ttf")).unwrap();
+    let style =
+        text::BlockStyle { resource: Some(resource), width: Some(220.0), direction: Some(pdfcraft_fonts::TextDirection::Auto), ..Default::default() };
+    let typed = "q\u{301}x\u{323}";
+    let original = text::text_edit_layout(&doc, 0, 0, typed, &style).unwrap();
+    let page = pdfcraft_model::pages(&doc).remove(0);
+    doc.update_dict(page.obj, |dict| {
+        dict.set(b"Rotate".to_vec(), Object::Int(90));
+    })
+    .unwrap();
+    let rotated = text::text_edit_layout(&doc, 0, 0, typed, &style).unwrap();
+    assert_eq!(original, rotated, "page display rotation must not rotate user-space text coordinates a second time");
+    text::rewrite_block(&mut doc, 0, 0, Some(typed), &style).unwrap();
+    assert_eq!(text::text_blocks(&reopen(&doc), 0).unwrap()[0].rect, rotated.draft_rect.unwrap());
+}
+
+/// Seventeen references to a valid 4,096-entry named map exhaust the shared page
+/// decode budget: ActualText stays readable and an edit of the exhausted row is atomic.
+#[test]
+fn contextual_paint_repeated_named_hints_exhaust_budget_without_losing_text() {
+    let logical = "a".repeat(4096);
+    let mut hint = Dict::new();
+    hint.set(b"ActualText".to_vec(), Object::String(pdfcraft_cos::PdfString::text(&logical)));
+    hint.set(
+        b"PCPaint".to_vec(),
+        Object::Array(
+            (0..4096_i64)
+                .map(|i| {
+                    let color = if i % 2 == 0 { [1.0, 0.0, 0.0] } else { [0.0, 0.0, 1.0] };
+                    Object::Array(vec![Object::Int(i), Object::Int(i + 1), Object::Real(color[0]), Object::Real(color[1]), Object::Real(color[2])])
+                })
+                .collect(),
+        ),
+    );
+    let mut properties = Dict::new();
+    properties.set(b"PaintHint".to_vec(), Object::Dict(hint));
+    let content: String = (0..17)
+        .map(|i| format!("/P BMC /Span /PaintHint BDC BT /F1 12 Tf 72 {} Td 1 0 0 rg (a) Tj 0 0 1 rg (b) Tj ET EMC EMC\n", 740 - i * 30))
+        .collect();
+    let mut doc = text_page(&content);
+    let page = pdfcraft_model::pages(&doc).remove(0);
+    let mut resources = doc.resolve(page.dict.get(b"Resources").unwrap()).as_dict().unwrap().clone();
+    resources.set(b"Properties".to_vec(), Object::Dict(properties));
+    doc.update_dict(page.obj, |dict| {
+        dict.set(b"Resources".to_vec(), Object::Dict(resources));
+    })
+    .unwrap();
+    let blocks = text::text_blocks(&doc, 0).unwrap();
+    assert_eq!(blocks.len(), 17);
+    assert!(blocks.iter().all(|block| block.editor_text == logical), "budget exhaustion never changes standard ActualText");
+    let before = page_content_bytes(&doc, 0);
+    let error = text::rewrite_block(&mut doc, 0, 16, None, &text::BlockStyle { color: Some([0.0, 1.0, 0.0]), ..Default::default() }).unwrap_err();
+    assert!(error.to_string().contains("logical paint map"), "over-budget hints must refuse lossy edits: {error}");
+    assert_eq!(page_content_bytes(&doc, 0), before);
+    assert_eq!(text::text_blocks(&doc, 0).unwrap()[16].editor_text, logical);
+}
+
+/// A valid mixed-colour Latin hint must permit same-text recolouring but refuse
+/// changed text even on the legacy route, preserving source operators and fonts.
+#[test]
+fn contextual_paint_valid_latin_hint_guards_text_replacement_across_routes() {
+    let content = "/Span << /ActualText (ab) /PCPaint [[0 1 1 0 0] [1 2 0 0 1]] >> BDC BT /F1 12 Tf 72 700 Td 1 0 0 rg (a) Tj 0 0 1 rg (b) Tj ET EMC";
+    let mut doc = text_page(content);
+    assert_eq!(text::text_blocks(&doc, 0).unwrap()[0].editor_text, "ab");
+    let mut recolored = doc.clone();
+    text::rewrite_block(&mut recolored, 0, 0, Some("ab"), &text::BlockStyle { color: Some([0.0, 1.0, 0.0]), ..Default::default() }).unwrap();
+    assert_eq!(text::text_blocks(&reopen(&recolored), 0).unwrap()[0].editor_text, "ab");
+    let before = page_content_bytes(&doc, 0);
+    let fonts = page_font_programs(&doc);
+    let error = text::rewrite_block(&mut doc, 0, 0, Some("ac"), &text::BlockStyle::default()).unwrap_err();
+    assert!(error.to_string().contains("preserved contextual paint ranges"), "a valid mixed paint hint also guards the legacy route: {error}");
+    assert_eq!(page_content_bytes(&doc, 0), before);
+    assert_eq!(page_font_programs(&doc), fonts);
 }

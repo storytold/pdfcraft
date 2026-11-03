@@ -161,6 +161,26 @@ fn button_export_options(f: &Field, index: usize, value: &str) -> Result<Vec<Obj
     Ok(out)
 }
 
+/// Captions can be regenerated through a widget-only path, so retain the field's
+/// family on each widget too. Unrelated property updates leave the choice untouched.
+fn set_widget_syriac_family(doc: &mut Document, f: &Field, family: Option<pdfcraft_fonts::SyriacFamily>) -> Result<(), FormError> {
+    let Some(family) = family else { return Ok(()) };
+    for w in &f.widgets {
+        if w.obj != f.obj {
+            doc.update_dict(w.obj, |d| d.set(pdfcraft_fonts::SyriacFamily::PDF_KEY.to_vec(), Object::name(family.name())))?;
+        }
+    }
+    Ok(())
+}
+
+/// Reject family selections on fields without editable text before changing their properties.
+fn validate_syriac_kind(f: &Field, props: &FieldProps) -> Result<(), FormError> {
+    if props.syriac_family.is_some() && !matches!(f.kind, FieldKind::Text | FieldKind::Combo | FieldKind::List | FieldKind::PushButton) {
+        return invalid("a Syriac family applies only to text fields, choice lists and push-button captions");
+    }
+    Ok(())
+}
+
 /// Change a field's properties (General and Options tabs) and redraw it.
 pub fn set_props(doc: &mut Document, name: &str, props: &FieldProps) -> Result<String, FormError> {
     if props.font_size.is_some_and(|size| !size.is_finite() || size < 0.0) {
@@ -181,6 +201,7 @@ pub fn set_props(doc: &mut Document, name: &str, props: &FieldProps) -> Result<S
     let all = fields(doc);
     let f = all.iter().find(|f| f.name == name).ok_or_else(|| FormError::NoSuchField(name.into()))?.clone();
     validate_text_direction(&f, props)?;
+    validate_syriac_kind(&f, props)?;
     let export_options = props.export_value.as_ref().map(|(index, value)| button_export_options(&f, *index, value)).transpose()?;
     if props.export_value.is_some() && props.options.is_some() {
         return invalid("give export_value or options, not both");
@@ -292,6 +313,9 @@ pub fn set_props(doc: &mut Document, name: &str, props: &FieldProps) -> Result<S
     let parent_default = ancestor_sets(doc, f.obj, b"DV");
     doc.update_dict(f.obj, |d| {
         d.set(b"Ff".to_vec(), Object::Int(ff as i64));
+        if let Some(family) = props.syriac_family {
+            d.set(pdfcraft_fonts::SyriacFamily::PDF_KEY.to_vec(), Object::name(family.name()));
+        }
         if let Some(t) = &props.tooltip {
             if t.is_empty() {
                 d.remove(b"TU");
@@ -353,6 +377,7 @@ pub fn set_props(doc: &mut Document, name: &str, props: &FieldProps) -> Result<S
             d.set(b"DA".to_vec(), PdfString::literal(new_da.clone().into_bytes()));
         }
     })?;
+    set_widget_syriac_family(doc, &f, props.syriac_family)?;
     if props.appearance.is_some() || (props.font_size.is_some() && props.look.is_none()) {
         let patch = &props.appearance.unwrap_or_default();
         for w in &f.widgets {

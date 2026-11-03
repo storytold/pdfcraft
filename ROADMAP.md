@@ -1,5 +1,7 @@
 # PdfCraft roadmap
 
+> **Last reviewed:** 2026-11-03 | **Last updated:** 2026-11-03 | **Change:** minor (local Arabic/Syriac M2/M3 candidate: generated surfaces and bounded cluster-colour/quarter-turn editing pass affected gates and fresh CLI replays; human/platform/upstream/release acceptance and estimates unchanged)
+
 > **Last reviewed:** 2026-11-02 | **Last updated:** 2026-11-02 | **Change:** patch (PR #5731: share formatted display preflight, measure logical shaping fallbacks, and unify extended Arabic font routing; bounded regressions; broader shaping and estimates unchanged)
 > **Last reviewed:** 2026-11-02 | **Last updated:** 2026-11-02 | **Change:** patch (PR #5731 review: warn when explicit-direction form appearances require unsupported shaping; validate final visible values and option labels before property edits; focused refusal/persistence regressions pass; broader shaping and estimates unchanged)
 > **Last reviewed:** 2026-11-02 | **Last updated:** 2026-11-02 | **Change:** patch (PR #5731: select one complete encoding for directional rows and retain automatic direction per bookmark paragraph; focused regressions pass; current-main integration; broader qualification and estimates unchanged)
@@ -8,6 +10,9 @@
 >
 > **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** minor (M7/M6 candidate: explicit Auto/LTR/RTL controls with engine/tool/storage paths; targeted direction verification passed; complex Arabic forms and native/browser IME unqualified; estimates unchanged)
 >
+> **Last reviewed:** 2026-11-02 | **Last updated:** 2026-11-02 | **Change:** patch (PR #5776 documentation follow-up: describe touched Syriac shaping, appearance, fallback and regression contracts; runtime behavior, release dependencies and estimates unchanged)
+> **Last reviewed:** 2026-11-02 | **Last updated:** 2026-11-02 | **Change:** patch (PR #5776 review: preserve unsupported FreeText and form values with fallback metrics, isolate display recovery failures, and correct font/milestone notes; companion/release qualification and estimates unchanged)
+
 > **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M7, PR #2155 further review: inherited drawing/text state, affine image gestures, paste/selection ownership, no-op scripts and menu permissions; estimates unchanged)
 >
 > **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M7, PR #2155 latest comments: explicit image-paste events, mixed-size field refresh, and documented mixed-script normalization with Undo; estimates unchanged)
@@ -229,6 +234,10 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 ## Progress log
 
+- **2026-11-03 (local Arabic/Syriac M2/M3):** Auto Arabic generated form/comment/page-mark/signature surfaces and bounded cluster-colour/quarter-turn source editing pass 900 unit tests, 13 integration cases, affected WASM, unchanged-source strict lint, layers/assets/parity and fresh CLI render/save/reopen/refusal replays. This remains an uncommitted combined candidate; no upstream merge, release, variable-font conversion or human/platform acceptance is claimed. Estimates unchanged.
+
+- **2026-11-02 (M6 local integration):** Combined the reviewed Arabic/Syriac tracks and adapted PR #3465's generated-text infrastructure for bounded Auto single-line Arabic form fallback. Formatting, selected-font priority, measured overflow, text-state isolation and output budgets have local regressions. Headless integration and release/native-reader qualification remain separate; see `docs/arabic-generated-appearances.md`.
+
 - **2026-11-02 (M7, #5731 display/font review):** Property preflight shares effective native formatting, final choice labels and masking with appearance drawing; rejected shaping rows measure their logical fallback. Extended Arabic source/Add Text routing shares one detector and preserves explicit missing-glyph refusal. Complete embedded source-font priority and broader language qualification remain unchanged.
 
 - **2026-11-02 (M7, #5731 allocation review):** Reused one font tuple per styled text segment during plain-width measurement, removing per-character font-name copies without changing measured values or bidi ordering. Existing paragraph and subset-space checks pass; no new performance threshold or broader qualification is claimed.
@@ -244,6 +253,9 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 - **2026-11-02 (M7, #5731 review):** Completed native text-editor pointer interruptions release composition command keys at the common frame boundary; single-line/multiline click/drag component coverage passes. README direction status is clarified. Preview/Apply text-selection review remains open; broader browser/form/IME qualification and estimates are unchanged.
 
 - **2026-11-02 (M7, #5731):** Consolidated Arabic integration follows upstream main `d7dd1de647ee`; retained both roadmap histories and reviewed automatic app initialization merges. Supported-font and Chrome/native-reader limitations remain unchanged. Estimates unchanged.
+- **2026-11-02 (M7, #5776 review):** Corrected unavailable-Syriac FreeText fallback, isolated failed display-appearance recovery, and retained fitting unsupported field edits using existing placeholder metrics while enforcing real overflow. Three focused regressions passed after witnessed failures. Integrated main `168a3cb9`; font companion/release-pin and wider qualification remain separate.
+
+- **2026-11-02 (M7, bounded Syriac content):** Page edits and generated form/FreeText/mark/signature appearances have passing focused font4/forms2/automation4 results, including selected-family render/readback/save/reopen. Seven-crate all-target strict lint and formatting pass. Estrangela, Eastern and Western OFL inputs are published separately in craft-fonts #61. Remaining publication gates, font acceptance and release pin adoption stay pending; native-reader, interface and keyboard qualification are not claimed. Estimates unchanged.
 
 - **2026-11-01 (M7, #5657):** Header/footer, watermark and background additions and replacements stage the complete call before committing. Synthetic later-page failures preserve exact incremental bytes, object count, dirty state and allocation cursor; success controls retain other marks and shared/inherited resources. Estimates unchanged.
 
