@@ -330,7 +330,7 @@ fn hosts_are_shown_as_the_browser_receives_them() {
 fn the_report_address_carries_version_and_system_only_and_stays_short() {
     use super::report_issue_url as url;
     let u = url("0.7.1", "linux x86_64", Some("pdf"));
-    assert!(u.starts_with("https://github.com/storytold/pdfcraft/issues/new?template=bug_report.yml&version=0.7.1&environment=linux%20x86_64%3B%20document%3A%20pdf&os=linux%20x86_64&body="), "{u}");
+    assert!(u.starts_with("https://github.com/storytold/pdfcraft/issues/new?template=bug_report.yml&version=0.7.1&system-info=linux%20x86_64%3B%20document%3A%20pdf&os=linux%20x86_64&body="), "{u}");
     // Hostile text and an unusual extension can't add a parameter, leak, or grow the address.
     let u = url(&"\u{1F600}".repeat(99), &"&#=".repeat(99), Some("x.y/Z"));
     assert_eq!(u.matches('?').count() + u.matches('#').count(), 1, "{u}");
