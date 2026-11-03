@@ -12,11 +12,11 @@
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
-use crate::Limits;
 use crate::xfa::{
     HNode, XHost, XfaDoc, XfaEffect, XfaEvent, XfaKind, XfaNode, XfaOutcome, child_named, clip, clip_result, descendants_named, instances,
     reset_names, resolve_som, run_within,
 };
+use crate::{Limits, Message, MessageButtons, MessageIcon};
 
 mod access;
 mod ast;
@@ -226,5 +226,23 @@ mod tests {
         assert_eq!(num_text(0.1 + 0.2), "0.3");
         assert_eq!(parse_num("12abc"), Some(12.0));
         assert_eq!(parse_num("abc"), None);
+    }
+
+    /// A number prints to at most fifteen significant digits, so the binary noise of a value
+    /// with six digits before the point (279893.88 is 279893.880000000004656… as a double) stays
+    /// hidden, while small values keep their twelve decimals.
+    #[test]
+    fn num_text_prints_at_most_fifteen_significant_digits() {
+        assert_eq!(num_text(279_893.88), "279893.88");
+        assert_eq!(num_text(-279_893.88), "-279893.88");
+        assert_eq!(num_text(279_893.88 + 291_774.12 + 304_171.06 + 317_107.44 + 273_970.85), "1466917.35");
+        assert_eq!(num_text(1_000_000.0 / 3.0), "333333.333333333");
+        assert_eq!(num_text(1.0 / 3.0), "0.333333333333");
+        assert_eq!(num_text(0.3 - 0.1 - 0.2), "0", "noise below twelve decimals is zero");
+        // Past fifteen digits before the point no decimals are left, and the integer keeps its zeros.
+        assert_eq!(num_text(1e15 + 0.5), "1000000000000000");
+        assert_eq!(num_text(1e20), "100000000000000000000");
+        assert_eq!(num_text(-1e20), "-100000000000000000000");
+        assert_eq!(num_text(f64::MAX).len(), 309);
     }
 }
