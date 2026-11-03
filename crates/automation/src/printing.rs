@@ -213,6 +213,7 @@ impl Automation {
             }
             (None, Some(printer)) => {
                 let job = spool_job(a, printer, self.doc(a)?.name.clone(), duplex, paper_index)?;
+                let bytes = pdfcraft_engine::spooler::spooler_copy(bytes);
                 out["job"] = json!(spool::submit(&bytes, &job).map_err(|e| failed(e.to_string()))?);
             }
             _ => return Err(bad("pass either path (save the print-ready PDF) or printer (a name from printers, or \"default\")")),

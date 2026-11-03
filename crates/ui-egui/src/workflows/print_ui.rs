@@ -443,6 +443,9 @@ impl PdfCraftApp {
                     ctx.request_repaint();
                 }
             };
+            // Large pictures become tiles on Windows (#5131): work on the whole file, kept off the
+            // UI thread with the rest.
+            let bytes = pdfcraft_engine::spooler::spooler_copy(bytes);
             // The receiver may be gone (the app quit): nothing to report to then.
             let result = spool::submit_with_progress(&bytes, &job, &mut |sent, sheets| {
                 let _ = tx.send(JobNews::Sent(sent, sheets));
