@@ -69,10 +69,15 @@ pub fn import_comments(dst: &mut Document, src: &Document) -> Result<usize, Orga
             continue;
         }
         let mut annots = PageAnnots::read(dst, *page);
-        for Incoming { entry, dict } in list {
+        for Incoming { entry, mut dict } in list {
             // The same comment listed twice on a page is copied once.
             if entry.as_ref().is_some_and(|r| copier.map.contains_key(&r)) {
                 continue;
+            }
+            // A `/Popup` naming anything but a pop-up (a redaction mark, say) would be copied
+            // along with the comment, past the import's exclusions: it goes before the copy.
+            if dict.get(b"Popup").is_some_and(|p| !is_popup(src, p)) {
+                dict.remove(b"Popup");
             }
             let (target, dict) = reserve(dst, src, &mut annots, dict);
             if let Some(r) = entry.as_ref() {
@@ -93,7 +98,7 @@ pub fn import_comments(dst: &mut Document, src: &Document) -> Result<usize, Orga
         if let Some(popup) = dst.get(*target).as_dict().and_then(|d| d.reference(b"Popup"))
             // Only a pop-up goes on the page with its comment: a `/Popup` naming any other
             // annotation (a redaction mark, say) would smuggle it past the import's exclusions.
-            && dst.get(popup).as_dict().is_some_and(|p| p.name(b"Subtype") == Some(b"Popup".as_slice()))
+            && is_popup(dst, &Object::Ref(popup))
             && let Some(annots) = lists[*i].as_mut()
         {
             annots.push(popup);
@@ -313,6 +318,12 @@ impl PageAnnots {
         let removed = self.removed;
         self.list.into_iter().filter(|a| a.as_ref().is_none_or(|r| !removed.contains(&r))).collect()
     }
+}
+
+/// Whether `o` is an annotation whose `/Subtype` (resolved: it may be an indirect name) is
+/// `Popup`.
+fn is_popup(doc: &Document, o: &Object) -> bool {
+    doc.resolve(o).as_dict().and_then(|d| d.get(b"Subtype").map(|s| doc.resolve(s))).is_some_and(|s| s.as_name() == Some(b"Popup".as_slice()))
 }
 
 #[cfg(test)]
@@ -656,5 +667,33 @@ mod tests {
         ]);
         assert_eq!(import_comments(&mut doc, &src).unwrap(), 0);
         assert_eq!(page_annots(&doc, 0).len(), before);
+    }
+
+    /// A comment whose `/Popup` names a redaction mark doesn't bring the mark along; a pop-up
+    /// whose `/Subtype` is an indirect name is still listed on the page.
+    #[test]
+    fn a_popup_link_is_followed_only_to_a_popup() {
+        let src = build(&[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>",
+            "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 6 0 R] >>",
+            "<< /Type /Annot /Subtype /Text /Contents (smuggler) /Rect [10 10 30 30] /Popup 5 0 R /P 3 0 R >>",
+            "<< /Type /Annot /Subtype /Redact /Rect [0 200 20 220] /Contents (MARK-SECRET) /P 3 0 R >>",
+            "<< /Type /Annot /Subtype /Text /Contents (noted) /Rect [50 10 70 30] /Popup 7 0 R /P 3 0 R >>",
+            "<< /Type /Annot /Subtype 8 0 R /Rect [40 40 200 120] /Parent 6 0 R /P 3 0 R >>",
+            "/Popup",
+        ]);
+        let mut doc = build(&[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>",
+            "<< /Type /Page /Parent 2 0 R >>",
+        ]);
+        import_comments(&mut doc, &src).unwrap();
+        let one = page_annots(&doc, 0);
+        assert!(by_contents(&one, "smuggler").1.get(b"Popup").is_none(), "the link to the mark goes");
+        let all = pdfcraft_cos::write_full(&doc, &pdfcraft_cos::SaveOptions { object_streams: false, ..Default::default() }).unwrap();
+        assert!(!all.windows(11).any(|w| w == b"MARK-SECRET"), "the mark was copied");
+        let popup = by_contents(&one, "noted").1.reference(b"Popup").unwrap();
+        assert!(one.iter().any(|(r, _)| *r == popup), "the pop-up with an indirect /Subtype is listed");
     }
 }
