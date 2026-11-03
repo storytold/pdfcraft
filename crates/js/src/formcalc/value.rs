@@ -21,7 +21,11 @@ pub(super) enum Val {
     Sink,
 }
 
-/// A number as FormCalc prints it: integers without a fraction, otherwise up to 15 digits.
+/// A number as FormCalc prints it: integers without a fraction, otherwise to at most 12
+/// decimals and 15 significant digits, without trailing zeros. 15 digits is the most a double
+/// holds for every value, so a value typed with up to 15 digits prints back as typed
+/// (`279893.88 * 1` is `279893.88`, not `279893.880000000005`), and the binary noise past
+/// them never shows. The 12 decimals hide noise left by sums that should be zero.
 pub(super) fn num_text(n: f64) -> String {
     if !n.is_finite() {
         return if n.is_nan() {
@@ -35,8 +39,12 @@ pub(super) fn num_text(n: f64) -> String {
     if n.fract() == 0.0 && n.abs() < 1e15 {
         return format!("{}", n as i64);
     }
-    let s = format!("{n:.12}");
-    let s = s.trim_end_matches('0').trim_end_matches('.');
+    // Digits before the point (at most 309 for a finite double); 1 for |n| < 1.
+    let int_digits = format!("{:.0}", n.abs().trunc()).len();
+    let decimals = 15usize.saturating_sub(int_digits).min(12);
+    let s = format!("{n:.decimals$}");
+    // Only a fraction loses its trailing zeros: with no decimals left they belong to the integer.
+    let s = if s.contains('.') { s.trim_end_matches('0').trim_end_matches('.') } else { s.as_str() };
     if s.is_empty() || s == "-0" { "0".into() } else { s.to_string() }
 }
 

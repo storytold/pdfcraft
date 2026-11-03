@@ -3,7 +3,8 @@
 //! Header "Comments N" (comments, as Acrobat counts them) with "N replies" under it and search;
 //! an "Add a comment" box that posts a sticky note on the current page; cards grouped by page.
 //! Selecting a card selects the comment on the page and opens its reply box and "…" menu (Edit,
-//! Set status, Delete). Status replies show as a badge.
+//! Set status, Delete), and gives each reply a "…" of its own (Edit, Copy text, Delete). Status
+//! replies show as a badge.
 
 use std::collections::HashMap;
 
@@ -114,13 +115,14 @@ fn any_contains<'a>(fields: impl IntoIterator<Item = &'a str>, q: &str) -> bool 
 pub(crate) fn show(
     ui: &mut egui::Ui,
     t: &Tokens,
-    info: &DocInfo,
+    doc: &pdfcraft_engine::Document,
     view: &mut DocView,
     prefs: &CommentPrefs,
     allowed: bool,
     nav: &mut Option<Nav>,
 ) -> Option<Edit> {
     crate::widgets::begin_dialog(ui);
+    let info = &doc.info;
     let mut edit = None;
     // Search (the header's magnifier toggles it).
     if let Some(q) = view.comments.search.as_mut() {
@@ -239,6 +241,10 @@ pub(crate) fn show(
     }
     let mut page = usize::MAX;
     let mut group: Option<String> = None;
+    // A card (or page header) out of view that was measured at this width only takes up its
+    // height: laying out hundreds of them every frame put the panel over the frame budget
+    // (#5488). Shorter lists are laid out whole, so every card stays in the accessibility tree.
+    let virtual_list = roots.len() > LAY_OUT_WHOLE;
     for a in roots {
         if sort != SortBy::Page {
             let g = group_of(a);
@@ -250,46 +256,116 @@ pub(crate) fn show(
             }
         } else if a.page != page {
             page = a.page;
-            let n = page_counts.get(&page).copied().unwrap_or_default();
-            let open = !view.comments.collapsed_pages.contains(&page);
-            ui.add_space(6.0);
-            let clicked = ui
-                .horizontal(|ui| {
-                    let chevron = if open { "chevron-down" } else { "chevron-right" };
-                    let toggle = icons::button(ui, chevron, 18.0, false, if open { tl!("Collapse") } else { tl!("Expand") }).clicked();
-                    let label = ui.add(
-                        egui::Label::new(
-                            egui::RichText::new(crate::i18n::fmt(tl!("Page {label}"), &[("label", &info.pages[page].label)]))
-                                .font(theme::semibold(12.5))
-                                .color(t.text_muted),
-                        )
-                        .sense(Sense::click()),
-                    );
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        ui.label(egui::RichText::new(n.to_string()).color(t.text_faint).small())
-                    });
-                    toggle || label.clicked()
-                })
-                .inner;
-            if clicked {
-                if open {
-                    view.comments.collapsed_pages.push(page);
-                } else {
-                    view.comments.collapsed_pages.retain(|&c| c != page);
+            // Per document: two documents shown at the same width don't share heights.
+            let header = ui.scope_id().with(("comment-page-header", view.id, page));
+            if !(virtual_list && skip_if_hidden(ui, header)) {
+                let top = ui.cursor().min.y;
+                page_header(ui, t, info, page, page_counts.get(&page).copied().unwrap_or_default(), &mut view.comments.collapsed_pages);
+                if virtual_list {
+                    remember_height(ui, header, top);
                 }
             }
-            ui.add_space(2.0);
         }
         if sort == SortBy::Page && view.comments.collapsed_pages.contains(&a.page) {
             continue;
         }
+        let key = (a.page, a.index);
         let thread = replies_of(a);
+        let selected = view.comments.selected == Some(key);
+        // A height is kept for what the card showed when it was measured: its document, what the
+        // thread says, whether it was the selected card (which draws its menu and editor) and
+        // whether an editor was open on it. An
+        // edit, undo or redo that changes the card measures it afresh; other cards keep theirs.
+        // A card with an editor open on it or on a reply is always drawn too (CodeRabbit on
+        // #5583): a kept height would show it at its size before the editor opened.
+        let editing = view.comments.editing.as_ref().is_some_and(|(p, i, _)| (*p, *i) == key || thread.iter().any(|r| (r.page, r.index) == (*p, *i)));
+        let id = ui.scope_id().with(("comment-card", view.id, key, card_signature(a, thread), selected, editing));
+        // The selected card is always drawn, so it can scroll itself into view and keep its menu
+        // and editor.
+        if virtual_list && !selected && !editing && skip_if_hidden(ui, id) {
+            continue;
+        }
         let rotation = info.pages.get(a.page).map_or(0, |p| p.rotation);
-        if let Some(e) = card(ui, view, CardContext { theme: t, annotation: a, rotation, thread, info, prefs, allowed, nav }) {
+        let top = ui.cursor().min.y;
+        if let Some(e) = card(ui, view, CardContext { theme: t, annotation: a, rotation, thread, doc, prefs, allowed, nav }) {
             edit = Some(e);
+        }
+        if virtual_list {
+            remember_height(ui, id, top);
         }
     }
     edit
+}
+
+/// The "Page N" group header with its fold chevron and comment count `n`; a click folds or
+/// unfolds the page.
+fn page_header(ui: &mut egui::Ui, t: &Tokens, info: &DocInfo, page: usize, n: usize, collapsed: &mut Vec<usize>) {
+    let open = !collapsed.contains(&page);
+    ui.add_space(6.0);
+    let clicked = ui
+        .horizontal(|ui| {
+            let chevron = if open { "chevron-down" } else { "chevron-right" };
+            let toggle = icons::button(ui, chevron, 18.0, false, if open { tl!("Collapse") } else { tl!("Expand") }).clicked();
+            let label = ui.add(
+                egui::Label::new(
+                    egui::RichText::new(crate::i18n::fmt(tl!("Page {label}"), &[("label", info.pages.get(page).map_or("?", |p| p.label.as_str()))]))
+                        .font(theme::semibold(12.5))
+                        .color(t.text_muted),
+                )
+                .sense(Sense::click()),
+            );
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| ui.label(egui::RichText::new(n.to_string()).color(t.text_faint).small()));
+            toggle || label.clicked()
+        })
+        .inner;
+    ui.add_space(2.0);
+    if clicked {
+        if open {
+            collapsed.push(page);
+        } else {
+            collapsed.retain(|&c| c != page);
+        }
+    }
+}
+
+/// What a card's height depends on in the document: the comment and its replies as shown (their
+/// kind, author, text, date, status, colour and lock). Two cards with the same signature lay out
+/// alike at one width.
+fn card_signature(a: &Annotation, thread: &[&Annotation]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    for x in std::iter::once(a).chain(thread.iter().copied()) {
+        (&x.subtype, &x.author, &x.contents, &x.modified, &x.state, x.locked).hash(&mut h);
+        x.color.map(|c| c.map(f32::to_bits)).hash(&mut h);
+    }
+    h.finish()
+}
+
+/// Comment lists up to this long are laid out whole; longer ones lay out only what is in view.
+const LAY_OUT_WHOLE: usize = 100;
+
+/// For a part of the list (a card or a page header) that was measured at this width and would
+/// fall out of view: takes up its height without laying it out, and returns `true`.
+fn skip_if_hidden(ui: &mut egui::Ui, id: egui::Id) -> bool {
+    let width = ui.available_width();
+    let Some(height) = ui.data(|d| d.get_temp::<(f32, f32)>(id)).filter(|(w, _)| (w - width).abs() < 0.5).map(|(_, h)| h) else {
+        return false;
+    };
+    if ui.is_rect_visible(egui::Rect::from_min_size(ui.cursor().min, vec2(width, height))) {
+        return false;
+    }
+    ui.allocate_space(vec2(width, height));
+    true
+}
+
+/// Records the height part `id` took since the cursor was at `top`, for [`skip_if_hidden`]: less
+/// the spacing `allocate_space` adds back after it.
+fn remember_height(ui: &egui::Ui, id: egui::Id, top: f32) {
+    let height = ui.cursor().min.y - top - ui.spacing().item_spacing.y;
+    if height.is_finite() && height > 0.0 {
+        let width = ui.available_width();
+        ui.data_mut(|d| d.insert_temp(id, (width, height)));
+    }
 }
 
 /// Draw one comment thread card, including author, body or inline editor, replies, status and per-comment
@@ -300,14 +376,15 @@ struct CardContext<'a> {
     // The clockwise `/Rotate` of the comment's page.
     rotation: u16,
     thread: &'a [&'a Annotation],
-    info: &'a DocInfo,
+    doc: &'a pdfcraft_engine::Document,
     prefs: &'a CommentPrefs,
     allowed: bool,
     nav: &'a mut Option<Nav>,
 }
 
 fn card(ui: &mut egui::Ui, view: &mut DocView, context: CardContext<'_>) -> Option<Edit> {
-    let CardContext { theme: t, annotation: a, rotation, thread, info, prefs, allowed, nav } = context;
+    let CardContext { theme: t, annotation: a, rotation, thread, doc, prefs, allowed, nav } = context;
+    let info = &doc.info;
     let mut edit = None;
     let key = (a.page, a.index);
     let selected = view.comments.selected == Some(key);
@@ -358,27 +435,10 @@ fn card(ui: &mut egui::Ui, view: &mut DocView, context: CardContext<'_>) -> Opti
             });
             egui::Frame::NONE.inner_margin(egui::Margin { left: 34, right: 0, top: 4, bottom: 0 }).show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                if editing && let Some((_, _, text)) = view.comments.editing.as_mut() {
-                    let r = ui.add(crate::widgets::block(text).desired_rows(2).desired_width(f32::INFINITY).id_salt(("comment-edit", key)));
-                    match view.comments.editor_focus.take() {
-                        Some(crate::comments::EditorFocus::Take) => r.request_focus(),
-                        Some(crate::comments::EditorFocus::Release) => r.surrender_focus(),
-                        None => {}
+                if editing {
+                    if let Some(e) = inline_editor(ui, t, view, key, 2) {
+                        edit = Some(e);
                     }
-                    let submit = crate::comments::submit_key(ui, &r, false);
-                    ui.horizontal(|ui| {
-                        if (ui
-                            .add(egui::Button::new(egui::RichText::new(tl!("Save")).color(Color32::WHITE)).fill(t.accent).corner_radius(12))
-                            .clicked()
-                            || submit)
-                            && let Some((page, index, text)) = view.comments.editing.take()
-                        {
-                            edit = Some(Edit::SetAnnotationContents { page, index, text });
-                        }
-                        if ui.button(tl!("Cancel")).clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                            view.comments.editing = None;
-                        }
-                    });
                 } else {
                     let body = a.contents.as_deref().unwrap_or("");
                     if body.is_empty() {
@@ -405,6 +465,7 @@ fn card(ui: &mut egui::Ui, view: &mut DocView, context: CardContext<'_>) -> Opti
             for r in &replies {
                 ui.add_space(8.0);
                 let mut me = egui::Rect::NOTHING;
+                let reply_key = (r.page, r.index);
                 ui.horizontal(|ui| {
                     me = avatar(ui, t, None, Some(&initials(r.author.as_deref().unwrap_or("?"))), t.text_faint);
                     ui.vertical(|ui| {
@@ -415,8 +476,25 @@ fn card(ui: &mut egui::Ui, view: &mut DocView, context: CardContext<'_>) -> Opti
                             if let Some(m) = &r.modified {
                                 ui.add(egui::Label::new(egui::RichText::new(m).font(theme::regular(11.0)).color(t.text_faint)).truncate());
                             }
+                            // Each reply has its own "…" (Edit, Copy text, Delete), as in Acrobat.
+                            // A Replace Text caret is half of its comment, not a reply: it has none.
+                            if selected && allowed && !r.grouped {
+                                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                    let more = icons::button(ui, "ellipsis", 20.0, false, tl!("Options for this reply"));
+                                    if let Some(e) = reply_menu(ui, view, r, doc, &more) {
+                                        edit = Some(e);
+                                    }
+                                });
+                            }
                         });
-                        widgets::wrapped_text(ui, r.contents.as_deref().unwrap_or(""), theme::regular(12.5), t.text, false);
+                        let open = view.comments.editing.as_ref().is_some_and(|(p, i, _)| (*p, *i) == reply_key);
+                        if open {
+                            if let Some(e) = inline_editor(ui, t, view, reply_key, 1) {
+                                edit = Some(e);
+                            }
+                        } else {
+                            widgets::wrapped_text(ui, r.contents.as_deref().unwrap_or(""), theme::regular(12.5), t.text, false);
+                        }
                     });
                 });
                 // The circles are 12 px in radius; leave a 1 px gap at each end.
@@ -522,9 +600,70 @@ fn card(ui: &mut egui::Ui, view: &mut DocView, context: CardContext<'_>) -> Opti
                 ui.close();
             }
             ui.separator();
-            if ui.add_enabled(!a.locked, egui::Button::new(tl!("Delete"))).clicked() {
+            // A locked reply can't be deleted, so it keeps the comment it answers too.
+            if ui.add_enabled(doc.annotation_deletable(a.page, a.index), egui::Button::new(tl!("Delete"))).clicked() {
                 view.comments.selected = None;
                 edit = Some(Edit::DeleteAnnotation { page: a.page, index: a.index });
+                ui.close();
+            }
+        });
+    edit
+}
+
+/// The inline editor open on comment or reply `key` in the panel, with Save and Cancel; returns
+/// the edit Save makes.
+fn inline_editor(ui: &mut egui::Ui, t: &Tokens, view: &mut DocView, key: (usize, usize), rows: usize) -> Option<Edit> {
+    let mut edit = None;
+    let (_, _, text) = view.comments.editing.as_mut()?;
+    let r = ui.add(crate::widgets::block(text).desired_rows(rows).desired_width(f32::INFINITY).id_salt(("comment-edit", key)));
+    match view.comments.editor_focus.take() {
+        Some(crate::comments::EditorFocus::Take) => r.request_focus(),
+        Some(crate::comments::EditorFocus::Release) => r.surrender_focus(),
+        None => {}
+    }
+    let submit = crate::comments::submit_key(ui, &r, false);
+    ui.horizontal(|ui| {
+        if (ui.add(egui::Button::new(egui::RichText::new(tl!("Save")).color(Color32::WHITE)).fill(t.accent).corner_radius(12)).clicked() || submit)
+            && let Some((page, index, text)) = view.comments.editing.take()
+        {
+            edit = Some(Edit::SetAnnotationContents { page, index, text });
+        }
+        if ui.button(tl!("Cancel")).clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            view.comments.editing = None;
+        }
+    });
+    edit
+}
+
+/// A reply's "…" menu, hung from its button `more`: Edit, Copy text and Delete. Delete takes
+/// the reply alone, with what hangs off it (its own replies, status changes and pop-up), as
+/// deleting a comment takes its thread; the comment and its other replies stay. Returns the
+/// edit to apply.
+fn reply_menu(ui: &egui::Ui, view: &mut DocView, r: &Annotation, doc: &pdfcraft_engine::Document, more: &egui::Response) -> Option<Edit> {
+    let mut edit = None;
+    let menu_id = ui.scope_id().with(("reply-menu", r.page, r.index));
+    if more.clicked() {
+        egui::Popup::open_id(ui.ctx(), menu_id);
+    }
+    egui::Popup::new(menu_id, ui.ctx().clone(), egui::PopupAnchor::ParentRect(more.rect), ui.layer_id())
+        .open_memory(None)
+        .kind(egui::PopupKind::Menu)
+        .layout(Layout::top_down_justified(Align::Min))
+        .show(|ui| {
+            ui.set_min_width(140.0);
+            if ui.button(tl_ctx!("comment menu", "Edit")).clicked() {
+                view.comments.open_editor(r.page, r.index, r.contents.clone().unwrap_or_default());
+                ui.close();
+            }
+            if ui.button(tl!("Copy text")).clicked() {
+                ui.ctx().copy_text(r.contents.clone().unwrap_or_default());
+                ui.close();
+            }
+            ui.separator();
+            // The card stays selected: the app finds its comment again after the delete. A locked
+            // reply to this one keeps it.
+            if ui.add_enabled(doc.annotation_deletable(r.page, r.index), egui::Button::new(tl!("Delete"))).clicked() {
+                edit = Some(Edit::DeleteAnnotation { page: r.page, index: r.index });
                 ui.close();
             }
         });

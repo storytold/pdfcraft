@@ -571,5 +571,12 @@ impl PdfCraftApp {
     }
 }
 
+/// The render configuration of a Combine thumbnail. Thumbnails are only shown on screen, so
+/// installed CJK faces may draw fonts a PDF doesn't embed, as in the viewer; the combined file
+/// itself is written from the original bytes and never from these rasters (AGENTS.md §1.4).
+fn thumbnail_config(password: Option<Arc<str>>) -> RenderConfig {
+    RenderConfig { password, ..Default::default() }.on_screen()
+}
+
 #[cfg(test)]
 mod tests;

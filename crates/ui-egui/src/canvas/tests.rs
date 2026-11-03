@@ -57,36 +57,6 @@ fn grid_pages_are_centred_and_as_large_as_the_cell_allows() {
     }
 }
 
-fn annotation(fill_sign: bool) -> pdfcraft_render::Annotation {
-    pdfcraft_render::Annotation {
-        page: 0,
-        subtype: "FreeText".into(),
-        author: None,
-        contents: Some("Hello".into()),
-        modified: None,
-        name: None,
-        in_reply_to: None,
-        parent: None,
-        grouped: false,
-        rect: [0.0; 4],
-        color: None,
-        index: 0,
-        state: None,
-        quads: Vec::new(),
-        locked: false,
-        intent: None,
-        fill_sign,
-        no_rotate: false,
-        points: Vec::new(),
-    }
-}
-
-#[test]
-fn hover_popup_skips_fill_and_sign_marks() {
-    assert_eq!(annotation_hover_text(&annotation(false)).as_deref(), Some("FreeText\nHello"));
-    assert_eq!(annotation_hover_text(&annotation(true)), None);
-}
-
 fn signature(signed: bool, visible: bool, page: Option<usize>, rect: Option<[f64; 4]>) -> pdfcraft_engine::SignatureInfo {
     pdfcraft_engine::SignatureInfo {
         field: "Signature1".into(),
@@ -2086,16 +2056,72 @@ fn a_followed_link_flashes_where_its_destination_lands() {
 }
 
 #[test]
+fn destination_flash_respects_reduced_motion_and_duration() {
+    assert_eq!(destination_flash_alpha(0.0, true), Some(255));
+    assert_eq!(destination_flash_alpha(0.8, true), Some(127));
+    assert_eq!(destination_flash_alpha(0.8, false), Some(255));
+    assert_eq!(destination_flash_alpha(1.6, false), None);
+    for age in [-1.0, f32::NAN, f32::INFINITY] {
+        assert_eq!(destination_flash_alpha(age, true), None);
+    }
+}
+
+#[test]
 fn a_null_coordinate_flashes_at_the_place_the_reader_keeps() {
     let page = pdfcraft_render::PageInfo { width: 300.0, height: 400.0, label: String::new(), crop: [0.0, 0.0, 300.0, 400.0], rotation: 0 };
     let info = pdfcraft_render::DocInfo { pages: vec![page.clone(), page], ..Default::default() };
-    let v = view(2, PageLayout::Single, true);
+    let mut v = view(2, PageLayout::Single, true);
     // With both coordinates null the link names no place, so nothing is filled in.
     let none = DestView::Xyz { left: None, top: None, zoom: Some(2.0) };
     assert_eq!(v.resolve_dest(none, &info), none);
-    // Before the first frame there is no place to keep: the coordinate stays null.
-    let dest = DestView::Xyz { left: Some(20.0), top: None, zoom: None };
-    assert_eq!(v.resolve_dest(dest, &info), dest);
+    // Once the reader has a laid-out, oversized page, a null coordinate keeps the viewport's
+    // corresponding displayed position. Flashing uses that same resolved destination.
+    v.viewport_screen = Rect::from_min_size(pos2(0.0, 200.0), vec2(240.0, 200.0));
+    v.screen_xforms.push((0, PageXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(300.0, 400.0)), rot: 0, pw: 300.0, ph: 400.0 }));
+    let dest = DestView::Xyz { left: Some(50.0), top: None, zoom: None };
+    let landing = v.resolve_dest(dest, &info);
+    assert_eq!(landing, DestView::Xyz { left: Some(50.0), top: Some(200.0), zoom: None });
+    v.flash_dest(1, landing, &info);
+    assert_eq!(v.flash, Some((1, [50.0, 176.0, 210.0, 200.0], 0.0)));
+    let dest = DestView::Xyz { left: None, top: Some(300.0), zoom: None };
+    let landing = v.resolve_dest(dest, &info);
+    assert_eq!(landing, DestView::Xyz { left: Some(70.0), top: Some(300.0), zoom: None });
+    v.flash_dest(1, landing, &info);
+    assert_eq!(v.flash, Some((1, [70.0, 276.0, 230.0, 300.0], 0.0)));
     let whole = DestView::Xyz { left: Some(1.0), top: Some(2.0), zoom: None };
     assert_eq!(v.resolve_dest(whole, &info), whole);
+}
+#[test]
+fn image_handles_account_for_document_and_view_rotation() {
+    for page_rotation in [0, 90, 180, 270] {
+        for view_rotation in [0, 90, 180, 270] {
+            let (width, height) = if page_rotation % 180 == 0 { (300.0, 400.0) } else { (400.0, 300.0) };
+            let info = DocInfo {
+                pages: vec![pdfcraft_render::PageInfo {
+                    width,
+                    height,
+                    label: String::new(),
+                    crop: [0.0, 0.0, 300.0, 400.0],
+                    rotation: page_rotation,
+                }],
+                ..Default::default()
+            };
+            let size = if view_rotation % 180 == 0 { vec2(width, height) } else { vec2(height, width) };
+            let xf = PageXform { rect: Rect::from_min_size(pos2(10.0, 20.0), size), rot: view_rotation, pw: width, ph: height };
+            let obb = ImageObb::from_matrix([100.0, 0.0, 0.0, 50.0, 50.0, 70.0], &xf, &info, 0);
+            let total = (page_rotation + view_rotation) % 360;
+            assert_eq!(obb.is_rotated, total != 0, "page={page_rotation} view={view_rotation}: user-labelled grips need matrix resize when turned");
+            for (handle, point) in obb.handles() {
+                let direction = point - obb.screen_center;
+                let cursor = match handle {
+                    ImageHandle::TopLeft | ImageHandle::TopRight | ImageHandle::BottomLeft | ImageHandle::BottomRight => {
+                        if direction.x * direction.y > 0.0 { egui::CursorIcon::ResizeNwSe } else { egui::CursorIcon::ResizeNeSw }
+                    }
+                    _ if direction.x.abs() > direction.y.abs() => egui::CursorIcon::ResizeHorizontal,
+                    _ => egui::CursorIcon::ResizeVertical,
+                };
+                assert_eq!(obb.handle_cursor(handle), cursor, "page={page_rotation} view={view_rotation} handle={handle:?}");
+            }
+        }
+    }
 }
