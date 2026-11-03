@@ -74,3 +74,38 @@ pub fn shape(bytes: &[u8], text: &str) -> Result<ShapedRun, String> {
     }
     Ok(ShapedRun { glyphs, advance: x })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::shape;
+    use skrifa::{FontRef, raw::TableProvider};
+
+    fn assert_contextual_shaping(font: &crate::CraftFont, text: &str) {
+        let face = FontRef::new(font.bytes).expect("craft-fonts entry is a valid font");
+        let unshaped: Vec<_> = text.chars().map(|c| face.charmap().map(c).expect("test text is covered").to_u32()).collect();
+        let shaped = shape(font.bytes, text).expect("script text should shape");
+        let glyphs: Vec<_> = shaped.glyphs.iter().map(|g| g.id.to_u32()).collect();
+
+        assert!(!glyphs.is_empty());
+        assert!(glyphs.iter().all(|id| *id != 0), "shaping must not produce .notdef glyphs");
+        assert_ne!(glyphs, unshaped, "script shaping must change the cmap glyph sequence");
+    }
+
+    #[test]
+    fn arabic_source_text_uses_contextual_substitution() {
+        let Some(font) = crate::document_arabic_font() else {
+            eprintln!("skipping Arabic shaping regression check: built without the craft-fonts Arabic face");
+            return;
+        };
+        assert_contextual_shaping(font, "سلام");
+    }
+
+    #[test]
+    fn devanagari_source_text_uses_cluster_shaping() {
+        let Some(font) = crate::document_devanagari_font() else {
+            eprintln!("skipping Devanagari shaping regression check: built without the craft-fonts Devanagari face");
+            return;
+        };
+        assert_contextual_shaping(font, "कि");
+    }
+}
