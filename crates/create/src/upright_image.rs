@@ -99,22 +99,43 @@ fn extended_xmp_chunks(bytes: &[u8]) -> usize {
 /// The resolution in a JFIF header, if the file has one in inches or centimetres.
 fn jfif_density(bytes: &[u8]) -> Option<PixelDensity> {
     let mut i = 2usize;
-    while let Some(&[0xFF, marker, hi, lo]) = bytes.get(i..i.saturating_add(4)) {
-        let len = usize::from(u16::from_be_bytes([hi, lo]));
-        let seg = bytes.get(i + 4..i + 2 + len)?;
-        if marker == 0xE0 && seg.starts_with(b"JFIF\0") {
-            let &[unit, x0, x1, y0, y1] = seg.get(7..12)? else { return None };
-            let unit = match unit {
-                1 => PixelDensityUnit::Inches,
-                2 => PixelDensityUnit::Centimeters,
-                _ => return None,
-            };
-            return Some(PixelDensity { density: (u16::from_be_bytes([x0, x1]), u16::from_be_bytes([y0, y1])), unit });
+    while let Some(&byte) = bytes.get(i) {
+        if byte != 0xFF {
+            i += 1;
+            continue;
         }
-        if marker == 0xDA {
-            return None;
+        let &marker = bytes.get(i.saturating_add(1))?;
+        match marker {
+            0xFF => i += 1,
+            0x00 | 0x01 | 0xD0..=0xD7 => i += 2,
+            0xDA | 0xD9 => return None,
+            _ => {
+                let &[hi, lo] = bytes.get(i.saturating_add(2)..i.saturating_add(4))? else { return None };
+                let len = usize::from(u16::from_be_bytes([hi, lo]));
+                if len < 2 {
+                    return None;
+                }
+                let seg = bytes.get(i.saturating_add(4)..i.saturating_add(2).saturating_add(len))?;
+                if marker == 0xE0
+                    && seg.starts_with(b"JFIF\0")
+                    && let Some(&[unit, x0, x1, y0, y1]) = seg.get(7..12)
+                {
+                    let unit = match unit {
+                        1 => Some(PixelDensityUnit::Inches),
+                        2 => Some(PixelDensityUnit::Centimeters),
+                        _ => None,
+                    };
+                    let (dx, dy) = (u16::from_be_bytes([x0, x1]), u16::from_be_bytes([y0, y1]));
+                    if let Some(unit) = unit
+                        && dx > 0
+                        && dy > 0
+                    {
+                        return Some(PixelDensity { density: (dx, dy), unit });
+                    }
+                }
+                i = i.saturating_add(2).saturating_add(len);
+            }
         }
-        i += 2 + len;
     }
     None
 }
@@ -155,7 +176,14 @@ mod tests {
         let photo = phone_jpeg(6, 144);
         let with = |n: usize| [&photo[..2], b"\0".as_slice(), &chunk(n), &photo[2..]].concat();
         DECODES.with(|c| c.set(0));
-        assert!(matches!(upright(&with(4)), Cow::Owned(_)), "a few chunks are an ordinary photo");
+        let few = with(4);
+        let turned = upright(&few);
+        assert!(matches!(turned, Cow::Owned(_)), "a few chunks are an ordinary photo");
+        assert_eq!(
+            jfif_density(&turned),
+            Some(PixelDensity { density: (72, 144), unit: PixelDensityUnit::Inches }),
+            "JFIF density is preserved past stray bytes, fill bytes, and preceding segments"
+        );
         assert!(matches!(upright(&with(5_000)), Cow::Borrowed(_)));
         assert_eq!(DECODES.with(std::cell::Cell::get), 1, "only the ordinary photo reached the decoder");
     }
