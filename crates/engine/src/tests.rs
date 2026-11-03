@@ -10253,9 +10253,10 @@ fn image_transform_engine_refuses_singular_matrices_without_mutation() {
 }
 
 /// Optimize has JBIG2 images share a symbol dictionary only where redaction can store each again
-/// without it. Of three pages of the same scan, the two in DeviceGray share one; the third, in a
-/// DeviceN of one colourant, which redaction doesn't store again, is coded alone. Redacting the
-/// first page then stores the second again without the dictionary, which leaves the file.
+/// without it. Of four pages of the same scan, the two in DeviceGray and the image mask share one;
+/// the one in a DeviceN of one colourant, which redaction doesn't store again, is coded alone.
+/// Redacting the first page then stores the second and the mask again without the dictionary,
+/// which leaves the file.
 #[test]
 fn redacting_an_optimized_jbig2_page_stores_the_rest_of_its_group_again() {
     use pdfcraft_cos::{Dict, Document, ObjRef, Object, SaveOptions, Stream, write_full};
@@ -10294,14 +10295,15 @@ fn redacting_an_optimized_jbig2_page_stores_the_rest_of_its_group_again() {
         Object::Dict(tint)
     }]);
     let mut images: Vec<ObjRef> = Vec::new();
-    for (k, colour_space) in [Object::name("DeviceGray"), Object::name("DeviceGray"), device_n].into_iter().enumerate() {
+    let grey = || ("ColorSpace", Object::name("DeviceGray"));
+    for (k, (key, value)) in [grey(), grey(), ("ColorSpace", device_n), ("ImageMask", Object::Bool(true))].into_iter().enumerate() {
         let mut d = Dict::new();
         d.set(b"Type".to_vec(), Object::name("XObject"));
         d.set(b"Subtype".to_vec(), Object::name("Image"));
         d.set(b"Width".to_vec(), Object::Int(w as i64));
         d.set(b"Height".to_vec(), Object::Int(h as i64));
         d.set(b"BitsPerComponent".to_vec(), Object::Int(1));
-        d.set(b"ColorSpace".to_vec(), colour_space);
+        d.set(key.as_bytes().to_vec(), value);
         let image = doc.add(Object::Stream(Stream::flate(d, &bits)));
         images.push(image);
         let content = doc.add(Object::Stream(Stream::from_raw(Dict::new(), b"q 144 0 0 115.2 36 600 cm /Im Do Q".to_vec())));
@@ -10343,7 +10345,7 @@ fn redacting_an_optimized_jbig2_page_stores_the_rest_of_its_group_again() {
         _ => None,
     };
     let shared = globals(&doc, images[0]);
-    assert!(shared.is_some() && globals(&doc, images[1]) == shared, "the two DeviceGray pages share a dictionary");
+    assert!(shared.is_some() && globals(&doc, images[1]) == shared && globals(&doc, images[3]) == shared, "DeviceGray and the mask share");
     assert_eq!(globals(&doc, images[2]), None, "the DeviceN page is coded alone");
     pdfcraft_redact::apply(&mut doc, None).unwrap();
     let saved = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();

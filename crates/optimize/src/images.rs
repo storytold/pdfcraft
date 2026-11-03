@@ -1229,9 +1229,9 @@ const SHARED_IMAGES: usize = 16;
 /// The most bytes of 1-bit samples a group holds: a group is coded before it would pass them.
 const SHARED_BYTES: usize = 64 << 20;
 
-/// The most pixels an image sharing a dictionary has: redaction's own limit (64 Mi) on the images
-/// it stores again (see [`shares`]).
-const SHARED_PIXELS: u64 = 1 << 26;
+/// The most pixels an image sharing a dictionary has: redaction's own limit on the images it
+/// stores again (see [`shares`]).
+const SHARED_PIXELS: u64 = pdfcraft_cos::MAX_REDACTED_IMAGE_PIXELS;
 
 /// Whether an image stored as JBIG2 (its dictionary `d`) may share a dictionary: only one that
 /// redaction can store again without it, an image mask or a DeviceGray image, named directly, of
