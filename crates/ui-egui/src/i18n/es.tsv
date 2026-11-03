@@ -9,6 +9,10 @@
 # Product and technology names (PdfCraft, PDF, Acrobat JavaScript ...) are not translated;
 # the trailing "…" of dialog commands is kept.
 
+# Untranslated: English text until a translator fills these in.
+	Lowering this forgets the oldest files. At 0 there is no list.	Lowering this forgets the oldest files. At 0 there is no list.
+	Recent files to keep	Recent files to keep
+
 	Menu	Menú
 	File	Archivo
 	Edit	Edición
@@ -18,8 +22,12 @@
 	Preferences	Preferencias
 	Preferences…	Preferencias…
 	Interface language	Idioma de la interfaz
+	Interface size	Tamaño de la interfaz
+	Auto ({percent}%)	Automático ({percent} %)
+	Auto follows the system's text size. Pages always render at the display's full resolution.	Automático sigue el tamaño del texto del sistema. Las páginas siempre se muestran con la resolución completa de la pantalla.
 	Identity	Identidad
 	Name on new comments	Nombre en los comentarios nuevos
+	Hide hover previews for highlights without comment text	Ocultar las vistas previas al pasar el puntero en resaltados sin texto de comentario
 	Open…	Abrir…
 	Open Recent	Abrir recientes
 	Clear Recent Files	Borrar archivos recientes
@@ -48,6 +56,7 @@
 	Create PDF from file…	Crear PDF a partir de un archivo…
 	Create PDF from images…	Crear PDF a partir de imágenes…
 	Create PDF from multiple files…	Crear PDF a partir de varios archivos…
+	Create separate PDFs…	Crear PDF separados…
 	Create PDF from clipboard	Crear PDF a partir del portapapeles
 	Combine files…	Combinar archivos…
 	Save	Guardar
@@ -67,8 +76,11 @@
 	Fit visible	Ajustar al contenido visible
 	Marquee zoom	Zoom por selección
 	Take a snapshot	Tomar una instantánea
+	Column select	Selección de columna
 	Full screen mode	Modo de pantalla completa
 	Read mode	Modo de lectura
+	Next tab	Pestaña siguiente
+	Previous tab	Pestaña anterior
 	Switch light / dark theme	Cambiar entre tema claro y oscuro
 	Comments panel	Panel de comentarios
 	Form fields panel	Panel de campos de formulario
@@ -81,6 +93,8 @@
 	Display theme	Tema de visualización
 	Side panels	Paneles laterales
 	Enable Acrobat JavaScript	Activar Acrobat JavaScript
+	Flatten Fill & Sign when saving	Acoplar Rellenar y firmar al guardar
+	Text, marks and signatures become part of the page. Other comments stay editable.	El texto, las marcas y las firmas pasan a formar parte de la página. Los demás comentarios siguen siendo editables.
 	OK	Aceptar
 	Join our Discord	Únete a nuestro Discord
 	Close	Cerrar
@@ -89,7 +103,7 @@
 	Double-click	Doble clic
 	Select a word	Seleccionar una palabra
 	Clear selection / close find	Borrar la selección / cerrar la búsqueda
-	Zoom in / out (also pinch or ⌘-scroll)	Acercar / alejar (también con pellizco o ⌘ + desplazamiento)
+	Zoom in / out (also pinch or {key}-scroll)	Acercar / alejar (también con pellizco o {key} + desplazamiento)
 	Rotate view	Girar la vista
 	First / last page	Primera / última página
 	Previous / next page	Página anterior / siguiente
@@ -97,16 +111,22 @@
 	Select all pages (Organize)	Seleccionar todas las páginas (Organizar)
 	Home	Inicio
 	Open	Abrir
-	Open a PDF (⌘O)	Abrir un PDF (⌘O)
+	Open a PDF ({key})	Abrir un PDF ({key})
 	Dark gray theme	Tema gris oscuro
 	Light theme	Tema claro
+	Appearance mode	Modo de apariencia
+	Light	Claro
+	Dark	Oscuro
+	Active	Activo
+	Dark theme	Tema oscuro
+	Appearance settings…	Ajustes de apariencia…
 	All tools	Todas las herramientas
 	Read	Leer
 	Convert	Convertir
 	E-Sign	Firma electrónica
-	Print (⌘P)	Imprimir (⌘P)
-	Save (M4)	Guardar (M4)
-	Document properties (⌘D)	Propiedades del documento (⌘D)
+	Print ({key})	Imprimir ({key})
+	Save ({key})	Guardar ({key})
+	Document properties ({key})	Propiedades del documento ({key})
 	Find tools and commands	Buscar herramientas y comandos
 	Fit to height	Ajustar al alto
 	Zoom in	Acercar
@@ -118,6 +138,8 @@
 	Next view	Vista siguiente
 	Page display	Presentación de página
 	Continuous scrolling	Desplazamiento continuo
+	Show gaps between pages	Mostrar espacios entre páginas
+	Hide gaps to join page edges. Margins inside the PDF remain unchanged.	Oculte los espacios para unir los bordes de las páginas. Los márgenes dentro del PDF no cambian.
 	Two-page view	Vista de dos páginas
 	Single page	Una sola página
 	Show cover page in two-page view	Mostrar la portada en la vista de dos páginas
@@ -135,13 +157,14 @@
 	Compare	Comparar
 	Page thumbnails	Miniaturas de página
 	Form fields	Campos de formulario
-	Zoom out (⌘−)	Alejar (⌘−)
-	Zoom in (⌘+)	Acercar (⌘+)
-	Rotate view clockwise (⇧⌘+)	Girar la vista a la derecha (⇧⌘+)
+	Zoom out ({key})	Alejar ({key})
+	Zoom in ({key})	Acercar ({key})
+	Rotate view clockwise ({key})	Girar la vista a la derecha ({key})
 	Toggle fit page / fit width	Alternar entre ajustar a la página y al ancho
 	Next page	Página siguiente
 	Previous page	Página anterior
 	Current page — type a page number or label (such as iv) and press Enter	Página actual: escribe un número o una etiqueta de página (por ejemplo, iv) y pulsa Intro
+	Zoom — type a percentage and press Enter	Zoom: escribe un porcentaje y pulsa Intro
 	Welcome to PdfCraft	Te damos la bienvenida a PdfCraft
 	An open-source PDF workbench — local, private, and scriptable.	Un banco de trabajo PDF de código abierto: local, privado y automatizable.
 	Join the ArtCraft community	Únete a la comunidad de ArtCraft
@@ -161,6 +184,15 @@
 	Available	Disponible
 	Ready	Listo
 	Search tools and commands…	Buscar herramientas y comandos…
+
+# Accessible names for inputs that have no visible label.
+	Added text	Texto añadido
+	Link URL	URL del enlace
+	Search tools and commands	Buscar herramientas y comandos
+	Text editing line	Línea de edición de texto
+	Text to place	Texto que colocar
+	Tooltip	Información sobre herramientas
+	Words or phrases to redact	Palabras o frases que censurar
 	No matching tools	Ninguna herramienta coincide
 	Tool	Herramienta
 	Command	Comando
@@ -208,6 +240,9 @@
 	Add or edit links	Añadir o editar enlaces
 	Create links from URLs	Crear enlaces a partir de URL
 	Remove all links	Quitar todos los enlaces
+	No links to remove	No hay vínculos que quitar
+	Removed 1 link	Se quitó 1 vínculo
+	Removed {n} links	Se quitaron {n} vínculos
 	Add Bates numbering…	Añadir numeración Bates…
 	Add image…	Añadir imagen…
 	Redact text and images	Censurar texto e imágenes
@@ -246,6 +281,7 @@
 	Optimize PDF…	Optimizar PDF…
 	Export to text…	Exportar a texto…
 	Export to Word…	Exportar a Word…
+	Export to PowerPoint…	Exportar a PowerPoint…
 	Export to HTML…	Exportar a HTML…
 	Export to RTF…	Exportar a RTF…
 	JavaScript console…	Consola de JavaScript…
@@ -271,6 +307,7 @@
 	Security properties…	Propiedades de seguridad…
 	Organize pages	Organizar páginas
 	New bookmark	Nuevo marcador
+	New bookmarks from structure	Nuevos marcadores a partir de la estructura
 	Rotate pages clockwise	Girar páginas a la derecha
 	Rotate pages counterclockwise	Girar páginas a la izquierda
 	Delete pages	Eliminar páginas
@@ -329,6 +366,7 @@
 	Create from	Crear a partir de
 	Single file	Un solo archivo
 	Multiple files	Varios archivos
+	Separate PDFs	PDF separados
 	Images	Imágenes
 	Clipboard	Portapapeles
 	Blank page	Página en blanco
@@ -345,6 +383,7 @@
 	Split	Dividir
 	More	Más
 	Set page boxes	Definir cuadros de página
+	Set page transitions	Definir transiciones de página
 	Page labels	Etiquetas de página
 	Page transitions	Transiciones de página
 	Add comments	Añadir comentarios
@@ -491,6 +530,42 @@
 	Could not save: {e}	No se pudo guardar: {e}
 	Earlier in tab order	Antes en el orden de tabulación
 	Later in tab order	Después en el orden de tabulación
+	Calculation order	Orden de cálculo
+	Fix order	Corregir orden
+	Move only what must move, so every field calculates after the fields it reads.	Mueve solo lo que debe moverse, para que cada campo se calcule después de los campos que lee.
+	Earlier in calculation order	Antes en el orden de cálculo
+	Later in calculation order	Después en el orden de cálculo
+	Too early	Demasiado pronto
+	Reads {name}, which calculates later, so it shows an old value.	Lee {name}, que se calcula después, así que muestra un valor antiguo.
+	Loop	Bucle
+	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	Lee {names}, que a su vez lo leen. Ningún orden puede corregir un bucle: cambia una de las fórmulas.
+	Not in order	Fuera del orden
+	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	Falta en el orden de cálculo guardado en el PDF: otros visores de PDF podrían no calcularlo.
+	Reads {name}, which the form doesn't have, so it gets no value there.	Lee {name}, que no existe en el formulario, así que no obtiene ningún valor de ahí.
+	Its script also reads fields whose names it builds as it runs, so those reads can't be checked.	Su script también lee campos cuyos nombres construye mientras se ejecuta, así que esas lecturas no se pueden comprobar.
+	Missing field	Falta un campo
+	Unchecked reads	Lecturas sin comprobar
+	{field} reads fields named as it runs	{field} lee campos nombrados mientras se ejecuta
+	Some names are built as it runs	Algunos nombres se construyen al ejecutarse
+	Back to Prepare a form	Volver a Preparar un formulario
+	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	Ningún campo de este formulario calcula todavía su valor. Dale a un campo un cálculo en la pestaña Calcular de sus propiedades y aparecerá aquí.
+	{names} and {last}	{names} y {last}
+	{field} reads no other field	{field} no lee ningún otro campo
+	{field} reads {fields}	{field} lee {fields}
+	No field reads it	Ningún campo lo lee
+	The order saved in the PDF needs tidying	El orden guardado en el PDF necesita una limpieza
+	Moves only what must move	Mueve solo lo que debe moverse
+	Every field calculates after the fields it reads.	Cada campo se calcula después de los campos que lee.
+	Every field outside a loop calculates after the fields it reads.	Cada campo fuera de un bucle se calcula después de los campos que lee.
+	{field} reads its own value	{field} lee su propio valor
+	{fields} read each other	{fields} se leen entre sí
+	No order can fix a loop. Change one of the formulas.	Ningún orden puede corregir un bucle. Cambia una de las fórmulas.
+	Edit {field}'s formula	Editar la fórmula de {field}
+	Order · top calculates first	Orden · lo de arriba se calcula primero
+	Script	Script
+	Links on page	Vínculos en la página
+	Show on the page which fields each field reads	Mostrar en la página qué campos lee cada campo
+	Drag a field to move it, or select it and press {up} or {down}.	Arrastra un campo para moverlo, o selecciónalo y pulsa {up} o {down}.
 	From:	Desde:
 	To:	Hasta:
 	High Resolution	Alta resolución
@@ -528,6 +603,9 @@
 	Clean Up	Limpieza
 	Color Images	Imágenes en color
 	Grayscale Images	Imágenes en escala de grises
+	Monochrome Images	Imágenes monocromas
+	CCITT Group 4	CCITT grupo 4
+	JBIG2 (lossless)	JBIG2 (sin pérdida)
 	Bicubic downsampling to	Reducción de resolución bicúbica a
 	for images above	para imágenes por encima de
 	Compression	Compresión
@@ -551,12 +629,14 @@
 	Discard private data of other applications	Descartar datos privados de otras aplicaciones
 	Discard hidden text	Descartar texto oculto
 	Use Flate to encode streams that are not encoded	Usar Flate para codificar las secuencias sin codificar
+	In streams that use LZW encoding, use Flate instead	En las secuencias con codificación LZW, usar Flate en su lugar
 	Remove invalid links and bookmarks	Quitar enlaces y marcadores no válidos
 	Remove unreferenced named destinations	Quitar destinos con nombre sin referencias
 	Compress document structure (object streams)	Comprimir la estructura del documento (secuencias de objetos)
 	Remove unused objects and merge identical ones	Quitar objetos sin usar y fusionar los idénticos
 	Audit space usage…	Auditar uso del espacio…
 	Space Audit	Auditoría de espacio
+	What takes up the space in this file, by kind of content.	Qué ocupa el espacio de este archivo, por tipo de contenido.
 	Bytes	Bytes
 	Content Streams	Secuencias de contenido
 	X Object Forms	Formularios XObject
@@ -645,7 +725,7 @@
 	Social Security Number	Número de la Seguridad Social
 	Arbitrary Mask	Máscara arbitraria
 	Mask:	Máscara:
-	9 digit, A letter, O letter or digit, X any character	9 dígito, A letra, O letra o dígito, X cualquier carácter
+	9 digit, A letter, O letter or digit, X any character	9: dígito; A: letra; O: letra o dígito; X: cualquier carácter
 	Example: {sample}	Ejemplo: {sample}
 	Field value is not validated	El valor del campo no se valida
 	Field value is in range:	El valor del campo está en el intervalo:
@@ -681,6 +761,11 @@
 	of the following fields:	de los campos siguientes:
 	Simplified field notation:	Notación de campos simplificada:
 	Field names with + - * / and parentheses; put \\ before spaces in names.	Nombres de campo con + - * / y paréntesis; pon \\ antes de los espacios en los nombres.
+	Finding document fonts…	Buscando fuentes del documento…
+	Installed fonts…	Fuentes instaladas…
+	Keep source fonts	Conservar las fuentes originales
+	Load font…	Cargar fuente…
+	No openly licensed document fonts found. Load a font file.	No se encontraron fuentes de documento con licencia abierta. Cargue un archivo de fuente.
 	Format text	Dar formato al texto
 	Bold	Negrita
 	Italic	Cursiva
@@ -688,7 +773,7 @@
 	Centre	Centrar
 	Align right	Alinear a la derecha
 	Justify	Justificar
-	Standard fonts; text outside Windows-1252 isn't supported yet.	Fuentes estándar; el texto fuera de Windows-1252 aún no es compatible.
+	Thai and Arabic use regular fallback fonts when available.	El tailandés y el árabe usan fuentes alternativas de estilo normal cuando están disponibles.
 	Edit image	Editar imagen
 	Rotate counterclockwise	Girar a la izquierda
 	Rotate clockwise	Girar a la derecha
@@ -730,14 +815,15 @@
 	Flip Vertical	Voltear verticalmente
 	Replace Image…	Reemplazar imagen…
 	Save Image As…	Guardar imagen como…
-	Check for updates	Buscar actualizaciones
+	Copy Image	Copiar imagen
+	The image has been copied ({w} × {h} pixels)	Se ha copiado la imagen ({w} × {h} píxeles)
+	Couldn't copy the image: {e}	No se pudo copiar la imagen: {e}
+	Copy Image in Original Format	Copiar imagen en formato original
+	The image has been copied as a {ext} file	Se ha copiado la imagen como archivo {ext}
+	The page has changed; select the image again	La página ha cambiado; vuelva a seleccionar la imagen
 	No check has run yet.	Aún no se ha hecho ninguna comprobación.
-	Checking for a newer version…	Buscando una versión más reciente…
 	PdfCraft {v} is available.	PdfCraft {v} está disponible.
 	You have version {c}. Download the new version from its release page.	Tienes la versión {c}. Descarga la nueva versión desde su página de publicación.
-	PdfCraft {c} is up to date.	PdfCraft {c} está actualizado.
-	Couldn't check for updates: {e}	No se pudieron buscar actualizaciones: {e}
-	You have version {c}. All releases are listed at {page}.	Tienes la versión {c}. Todas las versiones aparecen en {page}.
 	Asks GitHub for the latest release. Nothing is downloaded or installed automatically.	Consulta a GitHub cuál es la última versión. No se descarga ni se instala nada automáticamente.
 	Download	Descargar
 	Later	Más tarde
@@ -759,7 +845,7 @@
 	{verb} Header and Footer	{verb} encabezado y pie de página
 	{verb} Watermark	{verb} marca de agua
 	{verb} Background	{verb} fondo
-	Margins (in)	Márgenes (pulgadas)
+	Margins	Márgenes
 	Left Header Text	Texto del encabezado izquierdo
 	Center Header Text	Texto del encabezado central
 	Right Header Text	Texto del encabezado derecho
@@ -769,17 +855,27 @@
 	Insert Page Number	Insertar número de página
 	Insert Date	Insertar fecha
 	Start page number	Número de página inicial
+	Shrink the page content to make room for the header and footer	Reducir el contenido de la página para dejar espacio al encabezado y al pie de página
 	Source	Origen
 	Fit to page	Ajustar a la página
 	Rotation	Rotación
 	Appear behind page	Mostrar detrás de la página
 	Appear on top of page	Mostrar encima de la página
+	Offset from centre	Desplazamiento desde el centro
 	From colour	A partir de un color
 	Page Range Options	Opciones de intervalo de páginas
 	Preview: page {p} of {n}	Vista previa: página {p} de {n}
 	Applies to 1 page	Se aplica a 1 página
 	Applies to {n} pages	Se aplica a {n} páginas
 	Replaces the existing one on those pages.	Reemplaza al existente en esas páginas.
+	Checking pages…	Comprobando páginas…
+	Page {pages} paints its own white backdrop, which would hide the background. Replace it	La página {pages} tiene su propio relleno blanco, que ocultaría el fondo. Reemplazarlo
+	Pages {pages} paint their own white backdrop, which would hide the background. Replace it	Las páginas {pages} tienen su propio relleno blanco, que ocultaría el fondo. Reemplazarlo
+	Removing the background puts the page's own backdrop back.	Al quitar el fondo, se restaura el relleno blanco propio de la página.
+	A picture covers page {pages} (a scan?), so the background won't show there.	Una imagen cubre la página {pages} (¿un escaneo?), así que el fondo no se verá ahí.
+	Pictures cover pages {pages} (scans?), so the background won't show there.	Hay imágenes que cubren las páginas {pages} (¿escaneos?), así que el fondo no se verá ahí.
+	Page {pages} changed after the background was added, so its own white backdrop stays off. It looks the same on white paper.	La página {pages} cambió después de añadir el fondo, así que su propio relleno blanco sigue desactivado. Se ve igual sobre papel blanco.
+	Pages {pages} changed after the background was added, so their own white backdrops stay off. They look the same on white paper.	Las páginas {pages} cambiaron después de añadir el fondo, así que sus propios rellenos blancos siguen desactivados. Se ven igual sobre papel blanco.
 	PDF or image	PDF o imagen
 	No file chosen	Ningún archivo elegido
 	Page number	Número de página
@@ -816,8 +912,15 @@
 	Windows store  ·  	Almacén de Windows  ·  
 	Issued by: 	Emitido por: 
 	, Expires: 	, caduca: 
+	Digitally signed by	Firmado digitalmente por
+	DN: 	DN: 
+	Reason: 	Motivo: 
+	Location: 	Ubicación: 
+	Date: 	Fecha: 
+	The labels are in English: the signature's font can't draw them in this language.	Las etiquetas están en inglés: la fuente de la firma no puede dibujarlas en este idioma.
 	No digital IDs yet.	Aún no hay ningún ID digital.
 	Configure New Digital ID	Configurar un nuevo ID digital
+	Remove "{name}" from this list? The file itself is not deleted.	¿Quitar «{name}» de esta lista? El archivo en sí no se elimina.
 	Continue	Continuar
 	Configure a Digital ID for Signing	Configurar un ID digital para firmar
 	Use a Digital ID from a file	Usar un ID digital de un archivo
@@ -838,6 +941,10 @@
 	The signature will be invisible.	La firma será invisible.
 	Distinguished name	Nombre distintivo
 	Labels	Etiquetas
+	Graphic	Gráfico
+	Signer's name	Nombre del firmante
+	Fill & Sign signature	Firma de Rellenar y firmar
+	Choose image…	Elegir imagen…
 	Permitted actions after certifying	Acciones permitidas después de certificar
 	No changes allowed	No se permite ningún cambio
 	Annotations, form fill-in, and digital signatures	Anotaciones, rellenado de formularios y firmas digitales
@@ -908,6 +1015,7 @@
 	Remove hidden information, metadata, scripts and embedded content, and rewrite the files.	Quita la información oculta, los metadatos, los scripts y el contenido incrustado, y reescribe los archivos.
 	Type text	Escribe texto
 	Text to insert	Texto que insertar
+	Inserted text	Texto insertado
 	Replacement text	Texto de reemplazo
 	Edit text…	Editar texto…
 	Add a sticky note here	Añadir una nota adhesiva aquí
@@ -918,6 +1026,7 @@
 	This comment's appearance can't be changed yet.	El aspecto de este comentario todavía no se puede cambiar.
 	Icon	Icono
 	Thickness	Grosor
+	Line ending	Extremo de línea
 	Modified	Fecha de modificación
 	No status has been set.	No se ha establecido ningún estado.
 	Compare Files	Comparar archivos
@@ -1087,13 +1196,21 @@
 	Dates	Fechas
 	Text in images isn't found; recognise text (OCR) first.	El texto de las imágenes no se encuentra; reconoce antes el texto (OCR).
 	No matches.	Sin coincidencias.
+	Some bookmarks are not shown here: the panel lists a limited number, nested a limited depth.	Algunos marcadores no se muestran aquí: el panel muestra un número limitado, con una profundidad de anidación limitada.
 	{n} match(es) marked for redaction.	{n} coincidencia(s) marcada(s) para censurar.
+	Multiple words or phrases	Varias palabras o frases
+	One word or phrase per line	Una palabra o frase por línea
+	Import list…	Importar lista…
+	{n} word(s) or phrase(s)	{n} palabra(s) o frase(s)
+	{name} is too large for a word list (at most 1 MB).	{name} es demasiado grande para una lista de palabras (máximo 1 MB).
 	Redaction Tool Properties	Propiedades de la herramienta de censura
 	Redacted area fill colour:	Color de relleno del área censurada:
 	Use overlay text	Usar texto superpuesto
 	Custom text:	Texto personalizado:
+	Redaction code:	Código de censura:
 	Font:	Fuente:
 	Font size:	Tamaño de fuente:
+	Font size	Tamaño de fuente
 	Auto-size text to fit redaction region	Ajustar automáticamente el tamaño del texto a la zona censurada
 	Font colour:	Color de fuente:
 	Repeat overlay text	Repetir el texto superpuesto
@@ -1126,6 +1243,7 @@
 	Off	Desactivado
 	Flip on long edge	Voltear por el borde largo
 	Flip on short edge	Voltear por el borde corto
+	Printer default	Predeterminado de la impresora
 	Paper:	Papel:
 	Pages to Print	Páginas que imprimir
 	More options:	Más opciones:
@@ -1193,6 +1311,8 @@
 	Searchable Image (Exact)	Imagen con búsqueda (exacta)
 	Adds invisible text over each word; the page image is not changed	Añade texto invisible sobre cada palabra; la imagen de la página no cambia
 	Downsample to	Reducir resolución a
+	Also recognize pages that already have text	Reconocer también las páginas que ya tienen texto
+	Pictures on those pages are recognized too; words already in the page's text are not added again	También se reconocen las imágenes de esas páginas; las palabras que ya están en el texto de la página no se vuelven a añadir
 	Text recognition isn't installed: its model files are missing. Reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them.	El reconocimiento de texto no está instalado: faltan sus archivos de modelo. Reinstala PdfCraft o define PDFCRAFT_MODELS con la carpeta que los contiene.
 	Settings	Ajustes
 	Optional	Opcional
@@ -1202,7 +1322,7 @@
 	1 mark	1 marca
 	{n} marks	{n} marcas
 	Dynamic	Dinámicos
-	Sign Here	Firme aquí
+	Sign Here	Firma aquí
 	Standard Business	Empresariales estándar
 	Choose a stamp, then click on the page to place it.	Elige un sello y haz clic en la página para colocarlo.
 	Note	Nota
@@ -1232,6 +1352,7 @@
 	Copy text	Copiar texto
 	Properties…	Propiedades…
 	Make Current Properties Default	Usar las propiedades actuales como predeterminadas
+	Make Properties Default	Usar las propiedades como predeterminadas
 	More options	Más opciones
 	Sort by	Ordenar por
 	Author	Autor
@@ -1261,11 +1382,13 @@
 	Expand all bookmarks	Expandir todos los marcadores
 	Expand top-level bookmarks	Expandir los marcadores de primer nivel
 	Collapse all bookmarks	Contraer todos los marcadores
-	New bookmark (⌘B)	Nuevo marcador (⌘B)
+	New bookmark ({key})	Nuevo marcador ({key})
 	This document has no bookmarks.	Este documento no tiene marcadores.
 	This document has no layers.	Este documento no tiene capas.
 	This document has no attachments.	Este documento no tiene archivos adjuntos.
 	Hide layer	Ocultar capa
+	Layer options	Opciones de capas
+	Reset to Initial Visibility	Restablecer visibilidad inicial
 	Show layer	Mostrar capa
 	Set layer visibility	Definir visibilidad de capas
 	on page {label}	en la página {label}
@@ -1276,8 +1399,8 @@
 	No matches	Sin coincidencias
 	Searching… {s}/{p}	Buscando… {s}/{p}
 	{c} of {n}{more}	{c} de {n}{more}
-	Previous (⇧⌘G)	Anterior (⇧⌘G)
-	Next (⌘G)	Siguiente (⌘G)
+	Previous ({key})	Anterior ({key})
+	Next ({key})	Siguiente ({key})
 	Find options	Opciones de búsqueda
 	Whole words only	Solo palabras completas
 	Case-sensitive	Distinguir mayúsculas y minúsculas
@@ -1353,6 +1476,9 @@
 	Sort comments by:	Ordenar comentarios por:
 	Create PDF Comment Summary	Crear resumen de comentarios en PDF
 	Revert to the previously saved version of “{name}”? Changes since then can't be undone afterwards.	¿Revertir a la última versión guardada de «{name}»? Los cambios hechos desde entonces no se podrán deshacer después.
+	Save over the changed file?	¿Guardar sobre el archivo modificado?
+	“{name}” changed on disk after it was opened or last saved. Saving now replaces that newer version with this one.	«{name}» cambió en el disco después de abrirse o guardarse por última vez. Guardar ahora reemplaza esa versión más reciente por esta.
+	Save anyway	Guardar de todos modos
 	Number pages	Numerar páginas
 	Style	Estilo
 	None (prefix only)	Ninguno (solo prefijo)
@@ -1483,6 +1609,8 @@
 	Right Edge	Borde derecho
 	Language	Idioma
 	Saved {place}: {before} → {after} ({pct}% smaller){detail}	Guardado {place}: {before} → {after} ({pct}% más pequeño){detail}
+	This file is already as small as it can be made ({size}). No copy was saved.	Este archivo ya es lo más pequeño posible ({size}). No se guardó ninguna copia.
+	Saved {place}: {before} → {after} (not smaller){detail}	Guardado {place}: {before} → {after} (no es más pequeño){detail}
 	Couldn't save the image: {e}	No se pudo guardar la imagen: {e}
 	Adding images arrives on the web with file pickers for images	Añadir imágenes llegará a la versión web con los selectores de archivos de imagen
 	Replacing images on page {p} arrives on the web with image pickers ({i})	Reemplazar imágenes en la página {p} llegará a la versión web con los selectores de imagen ({i})
@@ -1494,7 +1622,7 @@
 	Couldn't optimize the file: {e}	No se pudo optimizar el archivo: {e}
 	Couldn't write {path}: {e}	No se pudo escribir {path}: {e}
 	The form asks to be submitted to {u}; PdfCraft doesn't send form data. Save the document to keep your entries.	El formulario pide enviarse a {u}; PdfCraft no envía datos de formulario. Guarda el documento para conservar lo que has introducido.
-	{s} actions run in the JavaScript engine (M6)	Las acciones {s} se ejecutan en el motor de JavaScript (M6)
+	This PDF uses the unsupported {s} action.	Este PDF usa una acción {s} no compatible.
 	{name}: the {other} action isn't supported yet	{name}: la acción {other} aún no es compatible
 	{name} submits the form to {url}; PdfCraft doesn't send form data. Save the document to keep your entries.	{name} envía el formulario a {url}; PdfCraft no envía datos de formulario. Guarda el documento para conservar lo que has introducido.
 	Export stopped: {e}	Exportación detenida: {e}
@@ -1555,7 +1683,13 @@
 	{file} is too large for a stamp (at most {n} MB)	{file} es demasiado grande para un sello (como máximo {n} MB)
 	Sent to {printer}	Enviado a {printer}
 	Sent to {printer}: {msg}	Enviado a {printer}: {msg}
+	Looking for printers…	Buscando impresoras…
+	Sending sheet {s} of {n} to {printer}…	Enviando la hoja {s} de {n} a {printer}…
+	No printers were found. Check that the printer is installed and the print spooler is running, then open Print again.	No se encontró ninguna impresora. Compruebe que la impresora está instalada y que la cola de impresión está en marcha, y vuelva a abrir Imprimir.
+	Reading the printer's settings…	Leyendo la configuración de la impresora…
+	Sending to {printer}…	Enviando a {printer}…
 	Choose a folder for the searchable files	Elige una carpeta para los archivos con búsqueda
+	Files are combined in this order. Leave Pages empty to take every page.	Los archivos se combinan en este orden. Deja Páginas vacío para incluir todas las páginas.
 	Files are combined from top to bottom. Leave Pages empty to take every page.	Los archivos se combinan de arriba abajo. Deja Páginas vacío para incluir todas las páginas.
 	Unlock…	Desbloquear…
 	Select a password-protected file first	Selecciona primero un archivo protegido con contraseña
@@ -1572,16 +1706,22 @@
 	Opened, but its security settings don't allow combining. Enter the permissions password.	Se abrió, pero su configuración de seguridad no permite combinarlo. Introduce la contraseña de permisos.
 	Unlocked: the combined file won't be password-protected	Desbloqueado: el archivo combinado no estará protegido con contraseña
 	Unlocked {n} of {m} files	Se desbloquearon {n} de {m} archivos
-	Drop PDFs or folders here, or choose them.	Suelta aquí PDF o carpetas, o elígelos.
+	Drop PDFs, images, text files or folders here, or choose them.	Suelta aquí PDF, imágenes, archivos de texto o carpetas, o elígelos.
 	Add folder…	Añadir carpeta…
 	Add folder and subfolders…	Añadir carpeta y subcarpetas…
 	More ways to add files	Más formas de añadir archivos
-	Every PDF in the folder	Todos los PDF de la carpeta
-	Every PDF in the folder and the folders inside it	Todos los PDF de la carpeta y de las carpetas que contiene
+	Every PDF, image and text file in the folder	Todos los PDF, imágenes y archivos de texto de la carpeta
+	Every PDF, image and text file in the folder and the folders inside it	Todos los PDF, imágenes y archivos de texto de la carpeta y de las carpetas que contiene
 	Add folder	Añadir carpeta
 	Add folder and subfolders	Añadir carpeta y subcarpetas
-	No PDFs found in {folder}	No se encontraron PDF en {folder}
-	Added the first {n} PDFs in {folder}	Se añadieron los primeros {n} PDF de {folder}
+	No PDFs, images or text files found in {folder}	No se encontraron PDF, imágenes ni archivos de texto en {folder}
+	Added the first {n} files in {folder}	Se añadieron los primeros {n} archivos de {folder}
+comment menu	Edit	Editar
+	Undo {action}	Deshacer {action}
+	Redo {action}	Rehacer {action}
+signature pad	Type	Escribir
+certificate	Subject	Titular
+action wizard	Start	Iniciar
 	Click to sort, drag to move the column. Drag its edge to resize it.	Haz clic para ordenar; arrastra para mover la columna. Arrastra su borde para cambiar el ancho.
 	Reset columns	Restablecer columnas
 	Remove {n} files	Quitar {n} archivos
@@ -1599,7 +1739,7 @@
 	{n} files need attention	{n} archivos necesitan atención
 	{name} can't be combined: {why}	No se puede combinar {name}: {why}
 	Check the pages of {name}: {why}	Revisa las páginas de {name}: {why}
-	Add the PDFs to combine	Añade los PDF que quieres combinar
+	Add the files to combine	Añade los archivos que quieres combinar
 	File name	Nombre de archivo
 	Warnings	Advertencias
 	Drag to reorder	Arrastra para reordenar
@@ -1612,6 +1752,10 @@
 	Password-protected	Protegido con contraseña
 	Its security settings don't allow copying pages	Su configuración de seguridad no permite copiar páginas
 	Can't be read: {e}	No se puede leer: {e}
+	Leave out files that can't be read?	¿Omitir los archivos que no se pueden leer?
+	These files can't be read, so they won't be in the combined PDF:	Estos archivos no se pueden leer, así que no estarán en el PDF combinado:
+	Combine the rest	Combinar el resto
+	and {n} more	y {n} más
 	Includes unsaved changes	Incluye cambios sin guardar
 	Pages of {name} to combine, e.g. 1-3, 6	Páginas de {name} que combinar, p. ej., 1-3, 6
 	Remove {name}	Quitar {name}
@@ -1634,6 +1778,7 @@
 	Couldn't use {name}: {e}	No se pudo usar {name}: {e}
 	Couldn't extract pages: {e}	No se pudieron extraer las páginas: {e}
 	Couldn't write {name}: {e}	No se pudo escribir {name}: {e}
+	the name is not a plain file name	el nombre no es un nombre de archivo simple
 	Wrote 1 file to {dir}	Se ha escrito 1 archivo en {dir}
 	Wrote {n} files to {dir}	Se han escrito {n} archivos en {dir}
 	No pages match those choices	Ninguna página coincide con esas opciones
@@ -1687,8 +1832,15 @@
 	watermark	marca de agua
 	background	fondo
 	This document isn't password-protected	Este documento no está protegido con contraseña
-	Only the document's owner can change its security (open it with the permissions password)	Solo el propietario del documento puede cambiar su seguridad (ábrelo con la contraseña de permisos)
+	Enter permissions password…	Introducir contraseña de permisos…
+	Permissions password	Contraseña de permisos
+	“{name}” has security restrictions. Enter its permissions password to lift them.	«{name}» tiene restricciones de seguridad. Introduce su contraseña de permisos para quitarlas.
+	Restrictions lifted	Restricciones quitadas
+	Couldn't unlock {name}: {e}	No se pudo desbloquear {name}: {e}
+	This document has no restrictions to lift	Este documento no tiene restricciones que quitar
 	The document's security settings don't allow this change	La configuración de seguridad del documento no permite este cambio
+	The document's security settings don't allow copying text and images	La configuración de seguridad del documento no permite copiar texto ni imágenes
+	The document's security settings don't allow printing	La configuración de seguridad del documento no permite imprimir
 	Open a document first	Abre primero un documento
 	Security will be removed when you save	La seguridad se quitará al guardar
 	Click text or an image to edit it	Haz clic en un texto o una imagen para editarlo
@@ -1798,6 +1950,8 @@
 	The document is encrypted	El documento está cifrado
 	Device colour is used, but there is no PDF/A output intent	Se usa color de dispositivo, pero no hay propósito de salida PDF/A
 	DeviceCMYK is used: it needs a CMYK output intent (not added automatically)	Se usa DeviceCMYK: necesita un propósito de salida CMYK (no se añade automáticamente)
+	DeviceCMYK is used, but the PDF/A output intent isn't a CMYK profile	Se usa DeviceCMYK, pero el propósito de salida PDF/A no es un perfil CMYK
+	DeviceRGB is used, but the PDF/A output intent isn't an RGB profile	Se usa DeviceRGB, pero el propósito de salida PDF/A no es un perfil RGB
 	The document has additional actions (/AA)	El documento tiene acciones adicionales (/AA)
 	The document has document-level JavaScript	El documento tiene JavaScript de nivel de documento
 	The form asks viewers to make appearances (NeedAppearances)	El formulario pide a los visores que generen las apariencias (NeedAppearances)
@@ -1827,6 +1981,8 @@
 	{month} {y}	{month} de {y}
 	Change {key}	Cambiar {key}
 	Insert pages from {name}	Insertar páginas de {name}
+	Insert pages from {name} — 1 field renamed	Insertar páginas de {name} — 1 campo renombrado
+	Insert pages from {name} — fields renamed	Insertar páginas de {name} — campos renombrados
 	Fill in {name}	Rellenar {name}
 	Set the image of {name}	Definir la imagen de {name}
 	Edit script of {name}	Editar el script de {name}
@@ -1850,6 +2006,7 @@
 	Delete field	Eliminar campo
 	Duplicate field	Duplicar campo
 	Set tab order	Definir orden de tabulación
+	Set calculation order	Establecer el orden de cálculo
 	Change initial view	Cambiar vista inicial
 	Set alternate text	Definir texto alternativo
 	Mark figure as decorative	Marcar figura como decorativa
@@ -1857,10 +2014,18 @@
 	Delete document JavaScript	Eliminar JavaScript del documento
 	Edit document JavaScript	Editar JavaScript del documento
 	Edit text	Editar texto
+	Load document font	Cargar fuente del documento
 	Move image	Mover imagen
+	Transform image	Transformar imagen
 	Rotate image	Girar imagen
 	Flip image	Voltear imagen
 	Delete image	Eliminar imagen
+	Bring to front	Traer al frente
+	Send to back	Enviar al fondo
+	Bring forward	Traer adelante
+	Send backward	Enviar atrás
+	Remove crop	Quitar recorte
+	Crop image	Recortar imagen
 	Add header & footer	Añadir encabezado y pie de página
 	Update header & footer	Actualizar encabezado y pie de página
 	Update watermark	Actualizar marca de agua
@@ -1875,6 +2040,7 @@
 	Delete link	Eliminar enlace
 	Create link	Crear enlace
 	Flatten	Acoplar
+	Flatten Fill & Sign	Acoplar Rellenar y firmar
 	Add sticky note	Añadir nota adhesiva
 	Add highlight	Añadir resaltado
 	Add underline	Añadir subrayado
@@ -1923,6 +2089,10 @@
 	Perimeter	Perímetro
 	Area	Área
 	Drawing scale	Escala del dibujo
+	Scale	Escala
+	Common scales	Escalas habituales
+	Enter a scale such as 1:50.	Introduzca una escala como 1:50.
+	Applying a scale switches units to m / mm.	Al aplicar una escala, las unidades cambian a m / mm.
 	Snapping	Ajuste
 	Export measurements	Exportar mediciones
 	Open a PDF to measure it.	Abre un PDF para medirlo.
@@ -1980,9 +2150,11 @@
 	DPI sets the printed page size without resampling the image.	Los PPP determinan el tamaño de la página impresa sin remuestrear la imagen.
 	Create	Crear
 	Dynamic XFA form laid out from its template: {pages}, {fields}.	Formulario XFA dinámico maquetado a partir de su plantilla: {pages}, {fields}.
+	This form's scripts are turned off because one ran too long. Reopen the document to run them again.	Los scripts de este formulario están desactivados porque uno tardó demasiado en ejecutarse. Vuelve a abrir el documento para ejecutarlos de nuevo.
 	XFA form: its fields and its XFA data are kept in step, so other viewers show what you fill in.	Formulario XFA: sus campos y sus datos XFA se mantienen sincronizados, para que otros visores muestren lo que rellenes.
 @plural	{n} page|{n} pages	{n} página|{n} páginas
 @plural	{n} field|{n} fields	{n} campo|{n} campos
+@plural	{n} field name collides with earlier files and will be renamed: {list}|{n} field names collide with earlier files and will be renamed: {list}	{n} nombre de campo coincide con el de archivos anteriores y se renombrará: {list}|{n} nombres de campo coinciden con los de archivos anteriores y se renombrarán: {list}
 	Switch to two-page view first to show the cover page	Cambia primero a la vista de dos páginas para mostrar la portada
 	Page display: {layout}	Presentación de página: {layout}
 	Fit to width scrolling	Desplazamiento ajustado al ancho
@@ -1990,7 +2162,81 @@
 	Default page display	Presentación de página predeterminada
 	Default zoom	Zoom predeterminado
 	Used when a PDF doesn't ask for a layout or zoom. Continuous scrolling never snaps between pages.	Se usa cuando un PDF no pide una presentación ni un zoom. El desplazamiento continuo nunca salta de página en página.
+	Show	Mostrar
+	Sort	Ordenar
+	Reverse the order	Invertir el orden
+	Grab bag	Miscelánea
+	Table	Tabla
+	Username	Nombre de usuario
+	Display name	Nombre para mostrar
+	Real name	Nombre real
+	Name (A–Z)	Nombre (A–Z)
+	Merged PRs	PR fusionados
+	PRs	PR
+	Commits	Commits
+	Lines added	Líneas añadidas
+	+LOC	+LOC
+	Lines deleted	Líneas eliminadas
+	−LOC	−LOC
+	Line delta	Diferencia de líneas
+	ΔLOC	ΔLOC
+	Binary assets added	Recursos binarios añadidos
+	+Bin	+Bin
+	Binary assets removed	Recursos binarios eliminados
+	−Bin	−Bin
+	First commit	Primer commit
+	First	Primero
+	Last commit	Último commit
+	Last	Último
+	No contributor data was built into this copy.	Esta copia no incluye datos de colaboradores.
+	No model credits were built into this copy.	Esta copia no incluye créditos de modelos.
+	{n} contributors · {c} commits	{n} colaboradores · {c} commits
+	Company	Empresa
+	Model	Modelo
+	% of all commits	% de todos los commits
+	Lines +/−	Líneas +/−
+	@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} lines (Δ {delta}), +{bin_added} / −{bin_deleted} binary assets, {first} – {last}	@{login}: {prs} PR, {commits} commits, +{added} / −{deleted} líneas (Δ {delta}), +{bin_added} / −{bin_deleted} recursos binarios, {first} – {last}
 	Reopen the files that were open when PdfCraft last closed	Volver a abrir los archivos que estaban abiertos al cerrar PdfCraft por última vez
+	Restore the last view (page, zoom and page display) when a document is opened again	Restaurar la última vista (página, zoom y presentación de páginas) al volver a abrir un documento
+	Add {what}	Añadir {what}
+	Use {what}	Usar {what}
+	Place saved {what}	Colocar {what} desde lo guardado
+	Remove saved {what}	Quitar {what} de lo guardado
+	A link	Un enlace
+	A button	Un botón
+	A script	Un script
+	{who} in this document tried to open an address PdfCraft won't open: {e}.	{who} de este documento intentó abrir una dirección que PdfCraft no abre: {e}.
+	{who} in this document tried to open an address PdfCraft won't open: {e}. Only web (http, https) and email (mailto) links open from documents.	{who} de este documento intentó abrir una dirección que PdfCraft no abre: {e}. Desde los documentos solo se abren enlaces web (http, https) y de correo (mailto).
+	Another file dialog is still open. Finish with it first.	Todavía hay otro cuadro de archivos abierto. Termina primero con ese.
+	Couldn't show the file picker. Please try again.	No se pudo mostrar el selector de archivos. Inténtalo de nuevo.
+	The document changed while you were choosing a file, so nothing was changed.	El documento cambió mientras elegías un archivo, así que no se modificó nada.
+	The document was closed before it could be saved.	El documento se cerró antes de poder guardarlo.
+	The pages were extracted but not deleted, because the document changed while you were choosing a folder.	Las páginas se extrajeron pero no se eliminaron, porque el documento cambió mientras elegías una carpeta.
+	That didn't work: an internal error stopped it ({m}).	No ha funcionado: un error interno lo ha detenido ({m}).
+	The Windows store's digital IDs couldn't be listed: {e}	No se pudieron listar los ID digitales del almacén de Windows: {e}
+	Align fields	Alinear campos
+	Distribute fields	Distribuir campos
+	Match field sizes	Igualar el tamaño de los campos
+	Mark for redaction	Marcar para censurar
+	Mark pages for redaction	Marcar páginas para censurar
+	Change document properties	Cambiar propiedades del documento
+	Mark differences	Marcar diferencias
+	Run form script	Ejecutar script del formulario
+	Scripted content must be usable with a keyboard and assistive technology. Check the document's scripts.	El contenido con scripts debe poder usarse con teclado y con tecnologías de asistencia. Revisa los scripts del documento.
+	Table rows belong directly in a table or its head, body or foot. Fix the table's tags.	Las filas de una tabla van directamente en la tabla o en su encabezado, cuerpo o pie. Corrige las etiquetas de la tabla.
+	Basic constraints	Restricciones básicas
+	SHA-1 digest	Huella SHA-1
+	SHA-256 digest	Huella SHA-256
+	Squiggly	Ondulado
+	Home / End	Inicio / Fin
+	H / Space (hold)	H / Espacio (mantener)
+	Reload documents when their files change on disk	Recargar los documentos cuando sus archivos cambien en el disco
+	Don't show again	No volver a mostrar
+	Show a notice when a document is secured	Mostrar un aviso cuando un documento está protegido
+	Always use my default zoom and page layout	Usar siempre mi zoom y presentación de página predeterminados
+	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	Este archivo cambió en el disco. Recargar muestra la versión nueva y descarta los cambios sin guardar; Guardar la reemplaza por esta versión.
+	Reload	Recargar
+	Couldn't reload {name}: {e}	No se pudo recargar {name}: {e}
 	Created a PDF from {n} files	Se creó un PDF a partir de {n} archivos
 	PDF, images and text	PDF, imágenes y texto
 	Insert a file before page {label}	Insertar un archivo antes de la página {label}
@@ -2000,11 +2246,20 @@
 	No changes to save	No hay cambios que guardar
 	Created a PDF from {n} files; left out: {names}	Se creó un PDF a partir de {n} archivos; omitidos: {names}
 	Created a PDF from the first {n} files	Se creó un PDF a partir de los primeros {n} archivos
-	None of those files can be made into a PDF; use PDFs, images or .txt files	Ninguno de esos archivos se puede convertir en PDF; use archivos PDF, imágenes o .txt
-	Choose a PNG or JPEG image (up to 4 MiB). Transparency is preserved.	Elija una imagen PNG o JPEG (hasta 4 MiB). Se conserva la transparencia.
+	None of those files can be made into a PDF; use PDFs, images or .txt files	Ninguno de esos archivos se puede convertir en PDF; usa archivos PDF, imágenes o .txt
+	Choose a PNG or JPEG image (up to 4 MiB). Transparency is preserved.	Elige una imagen PNG o JPEG (hasta 4 MiB). Se conserva la transparencia.
 	Couldn't import the signature image: {e}	No se pudo importar la imagen de la firma: {e}
 	Go to page…	Ir a la página…
+	About	Acerca de
+	Contributors	Colaboradores
+	Models	Modelos
+	Only continue if you trust this document. An address can carry information from the document, such as what you typed into its form.	Continúa solo si confías en este documento. Una dirección puede llevar información del documento, como lo que escribiste en su formulario.
+	Print single-sided. Keep the sheets in order, cut at the marks, then stack the piles left to right, top to bottom.	Imprime a una cara. Mantén las hojas en orden, corta por las marcas y apila los montones de izquierda a derecha y de arriba abajo.
+	For page sizes and margins.	Para tamaños de página y márgenes.
+	The PDF text fonts can't draw “{c}” ({code}). Choose supported text.	Las fuentes de texto PDF no pueden mostrar «{c}» ({code}). Elige texto compatible.
 	The standard fonts can't draw “{c}” ({code}). Only Western European characters can be added as text for now.	Las fuentes estándar no pueden mostrar «{c}» ({code}). Por ahora solo se pueden añadir como texto caracteres de Europa occidental.
+	This field's font can't draw “{c}” ({code}), so PdfCraft shows ? in its place. The value is saved, and other PDF viewers redraw the field from it.	La fuente de este campo no puede mostrar «{c}» ({code}), así que PdfCraft muestra ? en su lugar. El valor se guarda y los demás visores de PDF vuelven a dibujar el campo a partir de él.
+	The fonts PdfCraft writes with can't draw “{c}” ({code}), so it shows as ? in every PDF viewer. The text is saved.	Las fuentes con las que escribe PdfCraft no pueden mostrar «{c}» ({code}), así que aparece como ? en todos los visores de PDF. El texto se guarda.
 	Open arrow	Flecha abierta
 	Closed arrow	Flecha cerrada
 	Butt	Extremo recto
@@ -2050,3 +2305,638 @@
 	The field {name} no longer exists.	El campo {name} ya no existe.
 	A selected field has no widget on any page, so the fields can't be edited together.	Un campo seleccionado no tiene ningún widget en ninguna página, así que los campos no se pueden editar juntos.
 	 ({n} at {dpi} dpi, the largest size they can be drawn at)	 ({n} a {dpi} ppp, el mayor tamaño al que se pueden dibujar)
+
+# What the layers below word for themselves, now that the engine hands the wording over apart from
+# the document's own words: `pdfcraft_a11y::{WORDINGS, REPORT_WORDS}`, `pdfcraft_preflight::WORDINGS`,
+# `pdfcraft_sign::pdf::{WORDINGS, kind::ALL}`, `pdfcraft_print::WORDINGS` and the engine's
+# `EDIT_LABELS`. `spanish_covers_what_the_engine_says` keeps this section complete.
+#
+# What the checker finds (a11y::WORDINGS).
+	The security settings don't allow screen readers to read the text	La configuración de seguridad no permite que los lectores de pantalla lean el texto
+	No page has text: the document appears to be images of pages	Ninguna página tiene texto: el documento parece ser imágenes de páginas
+	The document has no tags (structure tree)	El documento no tiene etiquetas (árbol de estructura)
+	The document isn't marked as tagged (MarkInfo Marked)	El documento no está marcado como etiquetado (MarkInfo Marked)
+	No document language is set	No se ha indicado el idioma del documento
+	The document has no title	El documento no tiene título
+	The window shows the file name, not the title (Initial View > Show)	La ventana muestra el nombre del archivo, no el título (Vista inicial > Mostrar)
+	{n} pages and no bookmarks	{n} páginas y ningún marcador
+	The document isn't tagged, so none of its content is	El documento no está etiquetado, así que su contenido tampoco lo está
+	Page {p}: {n} untagged content item	Página {p}: {n} elemento de contenido sin etiquetar
+	Page {p}: {n} untagged content items	Página {p}: {n} elementos de contenido sin etiquetar
+	Form field on page {p} isn't tagged	Un campo de formulario de la página {p} no está etiquetado
+	{} annotation on page {p} isn't tagged	Una anotación {} de la página {p} no está etiquetada
+	Page {p} doesn't tab in structure order	La página {p} no se tabula en el orden de la estructura
+	Font {} on page {p} doesn't map its characters to Unicode	La fuente {} de la página {p} no asigna sus caracteres a Unicode
+	Font (unnamed) on page {p} doesn't map its characters to Unicode	Una fuente sin nombre de la página {p} no asigna sus caracteres a Unicode
+	Field "{}" on page {p} has no description (tooltip)	El campo «{}» de la página {p} no tiene descripción (información sobre herramientas)
+	{ty} element: {what}	Elemento {ty}: {what}
+	{ty} element on page {p}: {what}	Elemento {ty} de la página {p}: {what}
+	no alternate text	sin texto alternativo
+	its alternate text is inside another element's and will never be read	su texto alternativo está dentro del de otro elemento y nunca se leerá
+	alternate text on an element with no page content	texto alternativo en un elemento sin contenido de página
+	alternate text hides an annotation inside it	el texto alternativo oculta una anotación que hay dentro
+	not in a Table, THead, TBody or TFoot	no está dentro de un Table, THead, TBody ni TFoot
+	not in a TR	no está dentro de un TR
+	no header cells (TH)	sin celdas de encabezado (TH)
+	rows have between {min} and {max} columns	las filas tienen entre {min} y {max} columnas
+	no summary	sin resumen
+	not in an L (list)	no está dentro de una L (lista)
+	not in an LI (list item)	no está dentro de un LI (elemento de lista)
+	the first heading is an H{n}; headings should not skip levels	el primer encabezado es un H{n}; los encabezados no deben saltarse niveles
+	H{n} follows an H{d}; headings should not skip levels	un H{n} va después de un H{d}; los encabezados no deben saltarse niveles
+	… and {n} more	… y {n} más
+# The saved accessibility report (a11y::REPORT_WORDS).
+	Accessibility Report	Informe de accesibilidad
+	Filename	Nombre del archivo
+	Report created	Informe creado
+	The checker found problems which may prevent the document from being fully accessible.	El comprobador ha encontrado problemas que pueden impedir que el documento sea del todo accesible.
+	Detailed Report	Informe detallado
+	Rule Name	Nombre de la regla
+# What the PDF/A verifier reports (preflight::WORDINGS).
+	The metadata doesn't identify the file as {}	Los metadatos no identifican el archivo como {}
+	Page {} has additional actions	La página {} tiene acciones adicionales
+	A {} action isn't allowed	No se permite una acción {}
+	{} annotations aren't allowed	No se permiten las anotaciones {}
+	A {} annotation isn't set to print, or is hidden	Una anotación {} no está marcada para imprimirse, o está oculta
+	A {} annotation has no appearance stream	Una anotación {} no tiene flujo de apariencia
+	A {} annotation has additional actions	Una anotación {} tiene acciones adicionales
+	The font {} isn't embedded	La fuente {} no está incrustada
+	A font isn't embedded	Hay una fuente que no está incrustada
+# What a signature's details say (sign::pdf::WORDINGS).
+	The signature has no valid byte range.	La firma no tiene un intervalo de bytes válido.
+	The signature's byte range does not match the file.	El intervalo de bytes de la firma no se corresponde con el archivo.
+	The signature's byte range does not exclude exactly its contents.	El intervalo de bytes de la firma no excluye exactamente su contenido.
+	The signature contents are not hexadecimal.	El contenido de la firma no es hexadecimal.
+	The signature could not be read ({}).	No se ha podido leer la firma ({}).
+	PdfCraft can't check this signature yet: {}.	PdfCraft todavía no puede comprobar esta firma: {}.
+	The signature uses the legacy adbe.x509.rsa_sha1 format.	La firma usa el formato antiguo adbe.x509.rsa_sha1.
+# What was read leniently on the way, each sentence worded where the reading happens.
+	The signature is BER-encoded (indefinite lengths) rather than DER; it was read leniently.	La firma está codificada en BER (longitudes indefinidas) en vez de en DER; se ha leído con indulgencia.
+	The signed content is a constructed (segmented) OCTET STRING, as BER allows; it was read anyway.	El contenido firmado es un OCTET STRING construido (segmentado), como permite BER; se ha leído igualmente.
+	The RSA signature value does not have the length of the key's modulus (leading zero bytes dropped or added); it was read anyway.	El valor de la firma RSA no tiene la longitud del módulo de la clave (se han quitado o añadido ceros iniciales); se ha leído igualmente.
+	The RSA signature's DigestInfo has no NULL parameter (older signers write it so); it was read anyway.	El DigestInfo de la firma RSA no lleva el parámetro NULL (los firmadores antiguos lo escriben así); se ha leído igualmente.
+	The ECDSA signature is not in canonical DER (trailing bytes, padding or a missing sign byte); it was read anyway.	La firma ECDSA no está en DER canónico (bytes de sobra, relleno o falta el byte de signo); se ha leído igualmente.
+	The ECDSA signature is the raw r and s values instead of a DER sequence; it was read anyway.	La firma ECDSA son los valores r y s en bruto en vez de una secuencia DER; se ha leído igualmente.
+	The signature algorithm and the SignerInfo's digest algorithm name different hashes; the signature was made with the SignerInfo's.	El algoritmo de la firma y el algoritmo de resumen del SignerInfo nombran hashes distintos; la firma se hizo con el del SignerInfo.
+	The signature's signed attributes have no content type, which CMS requires; it was read anyway.	Los atributos firmados de la firma no tienen tipo de contenido, que CMS exige; se ha leído igualmente.
+# What a signature that validates with an old hash still does not prove.
+	This signature uses SHA-1, a weak hash algorithm: collisions in it have been demonstrated. It still validates because many documents signed years ago use it, but it should not be relied on.	Esta firma usa SHA-1, un algoritmo de hash débil: se han demostrado colisiones en él. Sigue siendo válida porque muchos documentos firmados hace años lo usan, pero no conviene fiarse de ella.
+	This signature uses RIPEMD-160, a legacy 160-bit hash algorithm that is no longer recommended for signatures. It still validates, but it should not be relied on.	Esta firma usa RIPEMD-160, un algoritmo de hash heredado de 160 bits que ya no se recomienda para firmas. Sigue siendo válida, pero no conviene fiarse de ella.
+	This signature uses an RSA key shorter than 2048 bits, which is no longer considered strong enough for signatures. It still validates, but it should not be relied on.	Esta firma usa una clave RSA de menos de 2048 bits, que ya no se considera lo bastante fuerte para firmas. Sigue siendo válida, pero no conviene fiarse de ella.
+	The signature's signed attributes have no message digest, so the signature does not cover the document.	Los atributos firmados de la firma no tienen resumen del mensaje, así que la firma no cubre el documento.
+	The signature's signed attributes name a content type other than data, so it is not a signature of the document.	Los atributos firmados de la firma indican un tipo de contenido distinto de datos, así que no es una firma del documento.
+	The document has been altered or corrupted since the signature was applied.	El documento se ha alterado o se ha dañado desde que se aplicó la firma.
+	The signer's certificate is not in the signature.	El certificado del firmante no está en la firma.
+	The signature value does not match the signer's certificate: the signature is corrupt.	El valor de la firma no se corresponde con el certificado del firmante: la firma está dañada.
+	The signature could not be checked ({}).	No se ha podido comprobar la firma ({}).
+	The signature could not be verified ({}).	No se ha podido verificar la firma ({}).
+	This document has not been modified since this signature was applied.	Este documento no se ha modificado desde que se aplicó esta firma.
+	The document has been modified since this signature was applied, but the changes are permitted ({}).	El documento se ha modificado desde que se aplicó esta firma, pero son cambios que permite ({}).
+	The document has been altered since this signature was applied in ways it does not permit ({}).	El documento se ha alterado desde que se aplicó esta firma de maneras que no permite ({}).
+	The signer's certificate was not valid at the time of signing.	El certificado del firmante no era válido en el momento de la firma.
+	The signer's certificate does not allow digital signatures (its key usage has neither digital signature nor non-repudiation).	El certificado del firmante no permite firmas digitales (su uso de clave no incluye ni firma digital ni no repudio).
+	The signer's certificate is not issued for signing documents (its extended key usage has no document-signing purpose).	El certificado del firmante no está emitido para firmar documentos (su uso extendido de clave no incluye ningún propósito de firma de documentos).
+	The signer's certificate has critical extensions PdfCraft does not recognize ({}).	El certificado del firmante tiene extensiones críticas que PdfCraft no reconoce ({}).
+# Why a certificate that matched the issuer was not used to build the chain.
+	The certificate of {} is not a CA certificate that may issue certificates, so it is not used to vouch for {}.	El certificado de {} no es un certificado de CA que pueda emitir certificados, así que no se usa para avalar a {}.
+	The certificate of {} has critical extensions PdfCraft does not recognize, so it is not used to vouch for {}.	El certificado de {} tiene extensiones críticas que PdfCraft no reconoce, así que no se usa para avalar a {}.
+	The certificate of {} does not allow this many CA certificates below it (path length), so it is not used to vouch for {}.	El certificado de {} no admite tantos certificados de CA por debajo (longitud de ruta), así que no se usa para avalar a {}.
+	The certificate of {} was not valid at the time of signing, so it is not used to vouch for {}.	El certificado de {} no era válido en el momento de la firma, así que no se usa para avalar a {}.
+	The signer's identity is unknown because it has not been included in your list of trusted certificates and none of its parent certificates are trusted certificates.	La identidad del firmante es desconocida porque no está en tu lista de certificados de confianza y ninguno de los certificados superiores es de confianza.
+	The signer's identity is valid.	La identidad del firmante es válida.
+	The signature includes an embedded timestamp.	La firma incluye un sello de tiempo incrustado.
+	Signing time is from the clock on the signer's computer.	La hora de la firma es la del reloj del ordenador del firmante.
+	The signature's timestamp token does not cover the signature value.	El sello de tiempo de la firma no cubre el valor de la firma.
+	The signature's timestamp token could not be verified ({}).	No se ha podido verificar el sello de tiempo de la firma ({}).
+	The embedded timestamp token is valid and its authority is trusted; trusted time is {}.	El sello de tiempo incrustado es válido y su autoridad es de confianza; la hora de confianza es {}.
+	The signature carries an unverified timestamp ({}): the timestamp authority is not in your list of trusted certificates, so the signing time claimed by the signer is used instead.	La firma lleva un sello de tiempo sin verificar ({}): la autoridad de sellado de tiempo no está en tu lista de certificados de confianza, así que se usa la hora de firma que indica el firmante.
+	The signer's certificate has been revoked ({}).	El certificado del firmante está revocado ({}).
+	The document's embedded revocation information shows that the signer's certificate has not been revoked.	La información de revocación incrustada en el documento indica que el certificado del firmante no está revocado.
+	The timestamp has no valid byte range.	El sello de tiempo no tiene un intervalo de bytes válido.
+	The timestamp's byte range does not match the file.	El intervalo de bytes del sello de tiempo no se corresponde con el archivo.
+	The timestamp's byte range does not exclude exactly its contents.	El intervalo de bytes del sello de tiempo no excluye exactamente su contenido.
+	The timestamp contents are not hexadecimal.	El contenido del sello de tiempo no es hexadecimal.
+	The timestamp token could not be read ({}).	No se ha podido leer el sello de tiempo ({}).
+	The document has been altered or corrupted since the timestamp was applied.	El documento se ha alterado o se ha dañado desde que se aplicó el sello de tiempo.
+	The timestamp authority's certificate was not valid at the time of timestamping.	El certificado de la autoridad de sellado de tiempo no era válido en el momento del sellado.
+	The timestamp authority's certificate is not issued for time stamping.	El certificado de la autoridad de sellado de tiempo no está emitido para sellar el tiempo.
+	This document has not been modified since this timestamp was applied.	Este documento no se ha modificado desde que se aplicó este sello de tiempo.
+	The document has been modified since this timestamp was applied, but the changes are permitted ({}).	El documento se ha modificado desde que se aplicó este sello de tiempo, pero son cambios que permite ({}).
+	The document has been altered since this timestamp was applied in ways it does not permit ({}).	El documento se ha alterado desde que se aplicó este sello de tiempo de maneras que no permite ({}).
+	The timestamp token is valid and its authority is trusted.	El sello de tiempo es válido y su autoridad es de confianza.
+	The timestamp token is valid, but the timestamp authority is not in your list of trusted certificates.	El sello de tiempo es válido, pero la autoridad de sellado de tiempo no está en tu lista de certificados de confianza.
+	Unsigned signature field	Campo de firma sin firmar
+	Signature is valid	La firma es válida
+	Signature validity is unknown	La validez de la firma es desconocida
+	Signature is invalid	La firma no es válida
+# The changes a signature allows or does not allow, as they are listed in those sentences
+# (sign::pdf::kind::ALL): words in an enumeration, so no article and no capital.
+	page content	contenido de las páginas
+	form fill	relleno de formularios
+	comments	comentarios
+	document security store	almacén de seguridad del documento
+	metadata	metadatos
+	links	enlaces
+	document structure	estructura del documento
+	pages added or removed	páginas añadidas o quitadas
+	other changes	otros cambios
+	the signed version could not be read	no se ha podido leer la versión firmada
+# What can be wrong with the pages to print (print::WORDINGS).
+	page {n} is out of range (1–{count})	la página {n} está fuera del intervalo (1–{count})
+	{page} is not a page number or label	{page} no es un número ni una etiqueta de página
+# What an edit is called in the Edit menu and the history (EDIT_LABELS, BATCH_LABELS).
+	Change Title	Cambiar el título
+	Change Author	Cambiar el autor
+	Change Subject	Cambiar el asunto
+	Change Keywords	Cambiar las palabras clave
+	Save as {level}	Guardar como {level}
+	Remove {standard} identification	Quitar la identificación {standard}
+	Create links	Crear enlaces
+
+# Multi-object selection and movement (#844)
+@plural	{n} object selected|{n} objects selected	{n} objeto seleccionado|{n} objetos seleccionados
+	Drag the selection to move it. Esc clears the selection.	Arrastra la selección para moverla. Esc borra la selección.
+	Shift-click to select several objects. Drag empty space to select an area.	Pulsa Mayús y haz clic para seleccionar varios objetos. Arrastra en un espacio vacío para seleccionar un área.
+	Select at most 1000 objects at a time.	Selecciona como máximo 1000 objetos a la vez.
+	Finish or discard the text being edited before selecting several objects.	Termina o descarta la edición del texto antes de seleccionar varios objetos.
+	Move object	Mover objeto
+	Move objects	Mover objetos
+	Vertical text cannot be moved with this selection.	El texto vertical no se puede mover con esta selección.
+	Text used as a clipping path cannot be moved with this selection.	El texto usado como trazado de recorte no se puede mover con esta selección.
+	These objects could not be moved. Select them again and try a smaller move.	No se pudieron mover estos objetos. Vuelve a seleccionarlos e intenta un desplazamiento menor.
+	This page contains objects that cannot be selected together.	Esta página contiene objetos que no se pueden seleccionar juntos.
+	Fill colour	Color de relleno
+	No fill	Sin relleno
+	Fill colour: none	Color de relleno: ninguno
+
+# Keyboard key names, distinct from command labels.
+key	Ctrl	Ctrl
+key	Shift	Mayús
+key	Delete	Supr
+key	Esc	Esc
+key	Home	Inicio
+key	End	Fin
+key	Space	Espacio
+	Grid view	Vista de cuadrícula
+	List view	Vista de lista
+	Files are combined in the order shown. Drag them to change it.	Los archivos se combinan en el orden mostrado. Arrástralos para cambiarlo.
+	Preview unavailable: {e}	Vista previa no disponible: {e}
+	Pages: {k} of {n}	Páginas: {k} de {n}
+	Check the pages	Revisa las páginas
+	Switch to List view to change the pages it takes.	Cambia a la vista de lista para cambiar las páginas que se incluyen.
+	Expand all	Expandir todo
+	Collapse all	Contraer todo
+	Collapse all pages	Contraer todas las páginas
+	Expand all pages	Expandir todas las páginas
+	Remove page	Quitar página
+	Remove {n} pages	Quitar {n} páginas
+
+# Shared panel docking
+	Reset panel layout	Restablecer disposición de paneles
+	Float panel	Hacer flotante el panel
+	Move to group	Mover al grupo
+	Panels	Paneles
+	Resize panels	Cambiar tamaño de paneles
+	Resize panel window	Cambiar tamaño de la ventana del panel
+	Tools	Herramientas
+	Inspector	Inspector
+
+# Architectural print controls (follow-up to #599).
+	PDF page: {size}	Página PDF: {size}
+	Match page at 100%	Ajustar el papel a la página al 100 %
+	PDF scale: {scale}%	Escala del PDF: {scale} %
+	Printer paper and scaling may differ. Check driver settings.	El papel y la escala de la impresora pueden variar. Revisa los ajustes del controlador.
+	Drawing scale changes. Use Actual size for full-scale plans.	La escala del dibujo cambia. Usa Tamaño real para los planos a escala.
+	Select page {label}	Seleccionar la página {label}
+	Rotate page {label} counterclockwise	Girar la página {label} a la izquierda
+	Rotate page {label} clockwise	Girar la página {label} a la derecha
+	Delete page {label}	Eliminar la página {label}
+	Scroll speed (mouse wheel and arrow keys)	Velocidad de desplazamiento (rueda del ratón y teclas de flecha)
+scroll speed	Slow	Lenta
+scroll speed	Normal	Normal
+scroll speed	Fast	Rápida
+	Animation effects	Efectos de animación
+animation effects	On	Activados
+animation effects	Off	Desactivados
+	Enhance camera image	Mejorar foto de cámara
+	Drag the corners onto the document's edges, then choose Enhance page.	Arrastra las esquinas hasta los bordes del documento y elige Mejorar página.
+	Enhance page	Mejorar página
+	Done adding text	Terminar de añadir texto
+	Discard this text (Esc)	Descartar este texto (Esc)
+	Certificate authority	Autoridad de certificación
+	End entity	Entidad final
+	Clean-up	Limpieza
+	Original	Original
+	Greyscale	Escala de grises
+	Black and white	Blanco y negro
+	This printer's driver doesn't take two-sided settings from other programs, so its own setting applies. Change it in Properties…	El controlador de esta impresora no acepta los ajustes de doble cara de otros programas, así que se aplica su propio ajuste. Cámbialo en Propiedades…
+	Browser's print dialog	Diálogo de impresión del navegador
+	Copies, two-sided printing and colour are chosen in the browser's print dialog.	Las copias, la impresión a doble cara y el color se eligen en el diálogo de impresión del navegador.
+	Preparing {n} sheets for printing…	Preparando {n} hojas para imprimir…
+	Preparing sheet {done} of {total} for printing…	Preparando la hoja {done} de {total} para imprimir…
+	Opening the browser's print dialog…	Abriendo el diálogo de impresión del navegador…
+	Couldn't print from the browser ({e}); downloaded {name} to print instead	No se pudo imprimir desde el navegador ({e}); se descargó {name} para imprimirlo
+	Tools panel side	Lado del panel de herramientas
+	Add comment	Añadir comentario
+	Change tag properties	Cambiar propiedades de la etiqueta
+# Accessibility structure tags.
+	Tags panel	Panel de etiquetas
+	Tags	Etiquetas
+	Tag type	Tipo de etiqueta
+	Actual text	Texto real
+	Find a tag	Buscar una etiqueta
+	Collapse tag	Contraer etiqueta
+	Expand tag	Expandir etiqueta
+	Revert changes	Descartar cambios
+	Save tag properties	Guardar propiedades de la etiqueta
+	This document has no editable structure tags.	Este documento no tiene etiquetas de estructura editables.
+	{n} tags	{n} etiquetas
+	Save or revert changes before selecting another tag.	Guarda o descarta los cambios antes de seleccionar otra etiqueta.
+	Left out: {names}	Omitidos: {names}
+	already a PDF	ya es un PDF
+	no unused output name	no hay un nombre de salida libre
+	no output folder was chosen	no se eligió ninguna carpeta de salida
+@plural	Downloaded {n} PDF|Downloaded {n} PDFs	Se descargó {n} PDF|Se descargaron {n} PDF
+@plural	{n} calculation now uses the new name.|{n} calculations now use the new name.	{n} cálculo usa ahora el nuevo nombre.|{n} cálculos usan ahora el nuevo nombre.
+@plural	The calculation order has {n} entry that calculates nothing. Fix order removes it.|The calculation order has {n} entries that calculate nothing. Fix order removes them.	El orden de cálculo tiene {n} entrada que no calcula nada. «Corregir orden» la elimina.|El orden de cálculo tiene {n} entradas que no calculan nada. «Corregir orden» las elimina.
+@plural	{fields} reads it|{fields} read it	{fields} lo lee|{fields} lo leen
+@plural	{n} field shows an old value|{n} fields show old values	{n} campo muestra un valor antiguo|{n} campos muestran valores antiguos
+@plural	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.	{field} se calcula antes que {fields}, que lee.|{field} se calcula antes que {fields}, que lee.
+@plural	{n} more field calculates too early.|{n} more fields calculate too early.	{n} campo más se calcula demasiado pronto.|{n} campos más se calculan demasiado pronto.
+@plural	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.	{fields} falta en el orden guardado en el PDF, así que otros visores de PDF podrían no calcularlo.|{fields} faltan en el orden guardado en el PDF, así que otros visores de PDF podrían no calcularlos.
+@plural	{n} formula reads a field the form doesn't have|{n} formulas read fields the form doesn't have	{n} fórmula lee un campo que no existe en el formulario|{n} fórmulas leen campos que no existen en el formulario
+@plural	{field} reads {fields}, which the form doesn't have.|{field} reads {fields}, which the form doesn't have.	{field} lee {fields}, que no existe en el formulario.|{field} lee {fields}, que no existen en el formulario.
+@plural	{n} more formula reads a missing field.|{n} more formulas read missing fields.	{n} fórmula más lee un campo que falta.|{n} fórmulas más leen campos que faltan.
+@plural	{fields} builds some field names as it runs, so those reads aren't checked.|{fields} build some field names as they run, so those reads aren't checked.	{fields} construye algunos nombres de campo al ejecutarse, así que esas lecturas no se comprueban.|{fields} construyen algunos nombres de campo al ejecutarse, así que esas lecturas no se comprueban.
+@plural	{fields} is missing|{fields} are missing	Falta {fields}|Faltan {fields}
+	Scan	Escanear
+	Sign a sheet of white paper and take a photo of it in bright, even light (use the flash). Choose the photo or drop it here: PdfCraft finds the signature and removes the paper.	Firma en una hoja de papel blanco y hazle una foto con luz intensa y uniforme (usa el flash). Elige la foto o suéltala aquí: PdfCraft encuentra la firma y elimina el papel.
+	Choose photo…	Elegir foto…
+	No photo chosen	No se ha elegido ninguna foto
+	Photo	Foto
+	Ink sensitivity	Sensibilidad de la tinta
+	No signature was found in the frame. Move the frame over the signature or raise the ink sensitivity.	No se encontró ninguna firma en el marco. Mueve el marco sobre la firma o aumenta la sensibilidad de la tinta.
+	Couldn't use the photo: {e}	No se puede usar la foto: {e}
+
+# PDF tab context menu (#1233)
+	Close Tab	Cerrar pestaña
+	Reopen Closed Tab	Reabrir pestaña cerrada
+	Reveal in Finder	Mostrar en Finder
+	Reveal in File Explorer	Mostrar en el explorador de archivos
+	Other colour…	Otro color…
+	Recent colours	Colores recientes
+	Reading colours	Colores de lectura
+	Replace document colours	Reemplazar colores del documento
+	Page background	Fondo de página
+	Only change the colour of black text or line art	Cambiar solo el color del texto negro o los dibujos lineales
+	Change the colour of line art as well as text	Cambiar también el color de los dibujos lineales, no solo del texto
+	Colours are remapped while rendering; the document itself never changes.	Los colores se reasignan al mostrar la página; el documento en sí nunca cambia.
+	Black on white	Negro sobre blanco
+	White on black	Blanco sobre negro
+	Yellow on black	Amarillo sobre negro
+	Green on black	Verde sobre negro
+	Couldn't follow linked PDF: {reason}	No se pudo abrir el PDF vinculado: {reason}
+	The linked PDF opened, but its named destination was not applied.	El PDF vinculado se abrió, pero no se aplicó su destino con nombre.
+	The linked PDF opened, but its page destination was out of range.	El PDF vinculado se abrió, pero su página de destino está fuera de rango.
+	Local cross-PDF links require the desktop app	Los enlaces locales entre PDF requieren la aplicación de escritorio
+	The existing action will be preserved.	Se conservará la acción existente.
+	Cut Image	Cortar imagen
+	Redact Image	Censurar imagen
+	Create Link…	Crear enlace…
+	Recognize Text…	Reconocer texto…
+	Minimize	Minimizar
+	Maximize	Maximizar
+	Restore	Restaurar
+	Use system title bar	Usar la barra de título del sistema
+	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	Mostrar una barra de título básica para los botones de la ventana en lugar de la barra de pestañas. GNOME no dibuja barras de título para las aplicaciones, así que esta no sigue su tema.
+
+# Absolute local GoToR confirmation (#1364).
+	Allow	Permitir
+	Only allow this if you trust the source document.	Permite esta acción solo si confías en el documento de origen.
+	Open in Full Screen mode?	¿Abrir en modo de pantalla completa?
+	This document asks to open in Full Screen mode: the page fills the screen and nothing else shows. Press Esc at any time to leave it.	Este documento pide abrirse en modo de pantalla completa: la página llena la pantalla y no se muestra nada más. Pulse Esc en cualquier momento para salir.
+	Full Screen	Pantalla completa
+	Not now	Ahora no
+	Open this local PDF?	¿Abrir este PDF local?
+	This document is trying to open a local file:	Este documento intenta abrir un archivo local:
+	Move tag earlier	Mover etiqueta antes
+	Move tag later	Mover etiqueta después
+	Turn upside down (180°)	Girar boca abajo (180°)
+	4 x 6 in label (101.6 x 152.4 mm)	Etiqueta 4 × 6 in (101,6 × 152,4 mm)
+	Cuts each page to its printed area, turns it upright and fits it to the sheet without stretching. One label per sheet.	Recorta cada página a su área impresa, la endereza y la ajusta a la hoja sin deformarla. Una etiqueta por hoja.
+	Find untagged content	Buscar contenido sin etiquetar
+	No untagged content was found.	No se encontró contenido sin etiquetar.
+	Found {n} untagged content problems.	Se encontraron {n} problemas de contenido sin etiquetar.
+	Tag form fields	Etiquetar campos de formulario
+	Mark as artifact	Marcar como artefacto
+	Remove this leaf tag from reading order and mark its direct content as an artifact	Quite esta etiqueta hoja del orden de lectura y marque su contenido directo como artefacto
+	Mark content as artifact	Marcar contenido como artefacto
+	Word count	Recuento de palabras
+	Current page only	Solo la página actual
+	Exclude tagged tables	Excluir tablas etiquetadas
+	Exclude tagged code blocks	Excluir bloques de código etiquetados
+	Exclude image/OCR text	Excluir texto de imágenes/OCR
+	Exclusions use PDF tags. Untagged tables and code remain included. Image exclusion also removes invisible text.	Las exclusiones usan etiquetas PDF. Las tablas y el código sin etiquetas siguen incluidos. Excluir imágenes también elimina el texto invisible.
+	Words	Palabras
+	Characters	Caracteres
+	Characters without spaces	Caracteres sin espacios
+	Pages counted	Páginas contadas
+	Some pages contain no countable text. Scanned images need OCR first.	Algunas páginas no contienen texto que se pueda contar. Las imágenes escaneadas requieren OCR primero.
+	Some content could not be classified safely and was kept in the count.	Parte del contenido no se pudo clasificar de forma fiable y se mantuvo en el recuento.
+	Counting words… {n} pages read	Contando palabras… {n} páginas leídas
+	Word counting stopped unexpectedly.	El recuento de palabras se detuvo inesperadamente.
+	Word count…	Recuento de palabras…
+@id	file.word_count	Recuento de palabras…
+	Standard	Estándar
+	Mobile	Móvil
+	Merge image fragments	Combinar fragmentos de imagen
+	Optimizing… merging image fragments	Optimizando… combinando fragmentos de imagen
+	Side by side	Lado a lado
+	New file only	Solo el archivo nuevo
+	Old file: {name}	Archivo antiguo: {name}
+	New file: {name}	Archivo nuevo: {name}
+	Print as image	Imprimir como imagen
+	Resolution:	Resolución:
+	Use it when a printer skips text, shading or transparency. The print is no longer searchable text; with Print in grayscale, the pictures are grey.	Úsalo cuando una impresora omite texto, sombreados o transparencias. La impresión deja de ser texto que se puede buscar; con Imprimir en escala de grises, las imágenes son grises.
+	Crop Image	Recortar imagen
+	Remove Crop	Quitar recorte
+	Trim the picture with its handles; Enter or Done applies	Recorta la imagen con sus tiradores; Intro o Hecho lo aplica
+	Redaction mark appearance	Aspecto de la marca de censura
+	Outline colour:	Color del contorno:
+	Fill colour:	Color de relleno:
+	Shown while the pointer is over a mark.	Se muestra mientras el puntero está sobre una marca.
+	Opacity:	Opacidad:
+	Make properties default	Usar como propiedades predeterminadas
+	Pages selected	Páginas seleccionadas
+	Page properties	Propiedades de página
+	Create & Edit	Crear y editar
+	Review & Compare	Revisar y comparar
+	Forms & Signatures	Formularios y firmas
+	Protect & Standardize	Proteger y estandarizar
+	Customize & Automate	Personalizar y automatizar
+	No tools match your search.	Ninguna herramienta coincide con la búsqueda.
+	Expand all tools	Expandir todas las herramientas
+	Collapse all tools	Contraer todas las herramientas
+	Font	Fuente
+	Bulleted list	Lista con viñetas
+	Numbered list	Lista numerada
+	Alignment	Alineación
+	Superscript	Superíndice
+	Subscript	Subíndice
+	Paragraph spacing	Espaciado entre párrafos
+	Less	Menos
+	Other options	Otras opciones
+
+# Historical snapshot notice bar (View signed version / View revision).
+	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	Estás viendo la versión firmada de «{from}» (revisión {rev}). Es una instantánea: los cambios aquí no afectarán al original.
+	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	Estás viendo la revisión {rev} de «{from}». Es una instantánea: los cambios aquí no afectarán al original.
+	Clear search	Borrar búsqueda
+	Pin	Anclar
+	Pin a tool…	Anclar una herramienta…
+	Pin to Home	Anclar en Inicio
+	Pin tools to Home	Anclar herramientas en Inicio
+	Pin your favorite tools here for quick access.	Ancla tus herramientas favoritas aquí para un acceso rápido.
+	Pinned	Anclado
+	Pinned Tools	Herramientas ancladas
+	Search tools…	Buscar herramientas…
+	Select tools to display on your Home page for quick access.	Selecciona las herramientas que se mostrarán en la página de Inicio para un acceso rápido.
+	Unpin from Home	Desanclar de Inicio
+	Unpin tool	Desanclar herramienta
+	Select Tool	Herramienta Selección
+	Hand Tool	Herramienta Mano
+	Marquee Zoom	Zoom por selección
+	Paste	Pegar
+	Edit this PDF	Editar este PDF
+	Export this PDF	Exportar este PDF
+	Find text or tools	Buscar texto o herramientas
+	Attach a file…	Adjuntar un archivo…
+	Delete attachment	Eliminar adjunto
+	Attaching files is not available on the web yet	Adjuntar archivos aún no está disponible en la web
+	Attach {name}	Adjuntar {name}
+	Delete attachment {key}	Eliminar adjunto {key}
+	Thumbnail size	Tamaño de las miniaturas
+	Smaller thumbnails	Miniaturas más pequeñas
+	Larger thumbnails	Miniaturas más grandes
+# Lines, connected lines and polygons reshaped by their ends and corners (M5).
+	Reshape comment	Cambiar la forma del comentario
+
+#
+# Keys the other catalogs carry that this one was missing, so Spanish covers the bundled key union
+# the way Lithuanian and Vietnamese do (`lithuanian_covers_bundled_catalog_keys_including_dynamic_dialog_labels`).
+# Same clean-room rule as the header: written from the plain meaning of the English label, reusing
+# the vocabulary already in this file (ID digital, marcador, Acercar / alejar, Portapapeles).
+#
+# The date picker.
+calendar date	January	enero
+calendar date	February	febrero
+calendar date	March	marzo
+calendar date	April	abril
+calendar date	May	mayo
+calendar date	June	junio
+calendar date	July	julio
+calendar date	August	agosto
+calendar date	September	septiembre
+calendar date	October	octubre
+calendar date	November	noviembre
+calendar date	December	diciembre
+calendar weekday	Mo	Lu
+calendar weekday	Tu	Ma
+calendar weekday	We	Mi
+calendar weekday	Th	Ju
+calendar weekday	Fr	Vi
+calendar weekday	Sa	Sá
+calendar weekday	Su	Do
+#
+# Certificate details, in their own context beside the plain labels.
+certificate	Issued to	Emitido a
+certificate	Issued by	Emitido por
+certificate	Issuer	Emisor
+certificate	Serial number	Número de serie
+certificate	Version	Versión
+certificate	Public key	Clave pública
+certificate	Key usage	Uso de la clave
+certificate	Intended usage	Uso previsto
+certificate	Basic constraints	Restricciones básicas
+certificate	Self-signed	Autofirmado
+certificate	Valid from	Válido desde
+certificate	Valid to	Válido hasta
+certificate	Validity starts	La validez empieza
+certificate	Validity ends	La validez termina
+certificate	SHA-1 digest	Huella SHA-1
+certificate	SHA-256 digest	Huella SHA-256
+#
+# What a certificate's key may be used for (X.509 key usage), as the details list them.
+	Digital Signature	Firma digital
+	Non-Repudiation	No repudio
+	Key Encipherment	Cifrado de claves
+	Data Encipherment	Cifrado de datos
+	Key Agreement	Acuerdo de claves
+	Certificate Signing	Firma de certificados
+	CRL Signing	Firma de CRL
+	Encipher Only	Solo cifrado
+	Decipher Only	Solo descifrado
+#
+# Signatures, revisions and digital IDs.
+	{who}, certificate issued by {issuer}.	{who}, certificado emitido por {issuer}.
+	{who}, certificate issued by an unknown issuer.	{who}, certificado emitido por un emisor desconocido.
+	Rev. {rev}: Signed by {name}	Rev. {rev}: Firmado por {name}
+	Rev. {rev}: Signed by an unknown signer	Rev. {rev}: Firmado por un firmante desconocido
+	Rev. {rev}: Certified by {name}	Rev. {rev}: Certificado por {name}
+	Rev. {rev}: Certified by an unknown signer	Rev. {rev}: Certificado por un firmante desconocido
+	Unsigned signature field: {name}	Campo de firma sin firmar: {name}
+	Choose a digital ID.	Elige un ID digital.
+	There is no folder to save the digital ID in.	No hay ninguna carpeta donde guardar el ID digital.
+#
+# Passwords.
+	The password is incorrect.	La contraseña es incorrecta.
+	The password must have at least 6 characters.	La contraseña debe tener al menos 6 caracteres.
+	The password must have at least 8 characters.	La contraseña debe tener al menos 8 caracteres.
+	The passwords do not match.	Las contraseñas no coinciden.
+	Only the document's owner can change its security (open it with the permissions password)	Solo el propietario del documento puede cambiar su seguridad (ábrelo con la contraseña de permisos)
+#
+# Counts.
+@plural	{n} byte|{n} bytes	{n} byte|{n} bytes
+@plural	{n} pixel|{n} pixels	{n} píxel|{n} píxeles
+@plural	{n} file|{n} files	{n} archivo|{n} archivos
+@plural	{n} comment|{n} comments	{n} comentario|{n} comentarios
+@plural	{n} result|{n} results	{n} resultado|{n} resultados
+@plural	{n} image optimized|{n} images optimized	{n} imagen optimizada|{n} imágenes optimizadas
+@plural	{n} item discarded|{n} items discarded	{n} elemento descartado|{n} elementos descartados
+@plural	Delete {n} field|Delete {n} fields	Eliminar {n} campo|Eliminar {n} campos
+#
+# Combining PDFs from a folder.
+	Add the PDFs to combine	Añade los PDF que vas a combinar
+	Drop PDFs or folders here, or choose them.	Suelta aquí PDF o carpetas, o elígelos.
+	Every PDF in the folder	Todos los PDF de la carpeta
+	Every PDF in the folder and the folders inside it	Todos los PDF de la carpeta y de las carpetas que contiene
+	Added the first {n} PDFs in {folder}	Se han añadido los primeros {n} PDF de {folder}
+	No PDFs found in {folder}	No se ha encontrado ningún PDF en {folder}
+#
+# Panels, rendering and notices.
+	Panel layout could not be restored: {error}	No se ha podido restaurar la disposición de los paneles: {error}
+	Panel move was not applied: {error}	No se ha aplicado el movimiento del panel: {error}
+	Rendering…	Renderizando…
+	Still rendering — this page is unusually complex…	Sigue renderizando: esta página es excepcionalmente compleja…
+	Loading…	Cargando…
+	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	Este archivo cambió en el disco. Recárgalo para ver la versión nueva; se perderán los cambios sin guardar.
+	Text recognition isn't installed: its models are missing (run `cargo xtask models`, or set PDFCRAFT_MODELS).	El reconocimiento de texto no está instalado: faltan sus modelos (ejecuta `cargo xtask models` o define PDFCRAFT_MODELS).
+	Cut and stack needs Two-sided: Off. Print single-sided sheets.	Cortar y apilar necesita «A doble cara: Desactivado». Imprime hojas a una cara.
+	Error	Error
+	Warning	Advertencia
+	Information	Información
+	Success	Correcto
+#
+# Asking for something, and choosing it.
+	Enter a name.	Introduce un nombre.
+	Enter a page number	Introduce un número de página
+	Enter a URL	Introduce una URL
+	Enter the field names	Introduce los nombres de los campos
+	Choose…	Elegir…
+	Choose a file…	Elegir un archivo…
+	Choose a folder…	Elegir una carpeta…
+	Create folder	Crear carpeta
+	Open folder	Abrir carpeta
+	Save file	Guardar archivo
+	Save changes?	¿Guardar los cambios?
+#
+# Settings and their values.
+	Theme	Tema
+theme	Appearance	Aspecto
+	System	Sistema
+	English	Inglés
+	Always	Siempre
+	Never	Nunca
+	Automatically	Automáticamente
+	On	Activado
+	Enabled	Activado
+	Disabled	Desactivado
+	Mouse wheel scroll speed	Velocidad de desplazamiento de la rueda del ratón
+	Margins (in)	Márgenes (pulg.)
+#
+# Labels and commands the catalogs name on their own.
+	Color	Color
+	Folder	Carpeta
+	Comment	Comentario
+	Comment and review	Comentar y revisar
+	Creator	Creador
+	Producer	Productor
+	Organize	Organizar
+	Import	Importar
+	Move	Mover
+	Duplicate	Duplicar
+	Select all	Seleccionar todo
+	Refresh	Actualizar
+	Next	Siguiente
+	Previous	Anterior
+	of	de
+	No results	Sin resultados
+	Search results	Resultados de la búsqueda
+	Copy to clipboard	Copiar al portapapeles
+	Copied to clipboard	Copiado al portapapeles
+	Help…	Ayuda…
+	 on page {label}	 en la página {label}
+	Page {n}	Página {n}
+	Page {n} of {total}	Página {n} de {total}
+#
+# Tooltips that spell their shortcut out.
+	Open a PDF (⌘O)	Abrir un PDF (⌘O)
+	Print (⌘P)	Imprimir (⌘P)
+	Document properties (⌘D)	Propiedades del documento (⌘D)
+	New bookmark (⌘B)	Nuevo marcador (⌘B)
+	Next (⌘G)	Siguiente (⌘G)
+	Previous (⇧⌘G)	Anterior (⇧⌘G)
+	Zoom in (⌘+)	Acercar (⌘+)
+	Zoom out (⌘−)	Alejar (⌘−)
+	Zoom in / out (also pinch or ⌘-scroll)	Acercar / alejar (también con pellizco o ⌘ + desplazamiento)
+	Rotate view clockwise (⇧⌘+)	Girar la vista a la derecha (⇧⌘+)
+	Save (M4)	Guardar (M4)
+
+# Prepare a form ▸ Text field table
+	Add text field table	Añadir tabla de campos de texto
+	Text field table	Tabla de campos de texto
+	Text Field Table	Tabla de campos de texto
+	Columns	Columnas
+	Row spacing	Espacio entre filas
+	Column spacing	Espacio entre columnas
+	First row number	Número de la primera fila
+	Column widths	Anchos de columna
+	Distribute evenly	Repartir por igual
+	Field names	Nombres de los campos
+	N or {row} is the row number, {col} the column number, {seq} the cell number. With none of them, the row number goes last.	N o {row} es el número de fila, {col} el de columna y {seq} el de celda. Si no hay ninguno, el número de fila va al final.
+	Column {n}	Columna {n}
+	Add fields	Añadir campos
+	a table has 1 to {max} rows	una tabla tiene de 1 a {max} filas
+	a table has 1 to {max} columns	una tabla tiene de 1 a {max} columnas
+	the first row number can be at most {max}	el número de la primera fila puede ser como mucho {max}
+	the area, the spacing and the column widths must be numbers, the spacing 0 or more and each width more than 0	el área, el espaciado y los anchos de columna deben ser números, el espaciado 0 o más y cada ancho mayor que 0
+	the rows are too short: make the area taller, or use fewer rows or less row spacing	las filas son demasiado bajas: haz el área más alta o usa menos filas o menos espacio entre filas
+	a column is too narrow: make the area wider, give the column more of it, or use fewer columns or less column spacing	una columna es demasiado estrecha: haz el área más ancha, dale más anchura a la columna o usa menos columnas o menos espacio entre columnas
+	field names can't contain a period: {name}	los nombres de campo no pueden contener un punto: {name}
+	two cells would both be named {name}	dos celdas se llamarían {name}
+	a field named {name} already exists	ya existe un campo llamado {name}
+	Arrange image	Organizar imagen
+	Crop	Recortar
+
+# Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
+	Today	Hoy
+@plural	{n} reply|{n} replies	{n} respuesta|{n} respuestas
+
+# Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
+	Page tools	Herramientas de página
+	Insert pages from a file after the selection…	Insertar páginas de un archivo después de la selección…
+	Rotate the selected pages counterclockwise	Girar las páginas seleccionadas en sentido antihorario
+	Rotate the selected pages clockwise	Girar las páginas seleccionadas en sentido horario
+	Extract the selected pages…	Extraer las páginas seleccionadas…
+	Delete the selected pages	Eliminar las páginas seleccionadas
+
+# Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
+	Options for this reply	Opciones de esta respuesta
+	Export value	Valor de exportación
+	Show Page Edge Shadows	Mostrar sombras en los bordes de las páginas
+
+# Image paste and Home notifications (AI-assisted; not separately native-reviewed)
+	Search…	Buscar…
+	Image pasted	Imagen pegada
+	No image on clipboard to paste	No hay ninguna imagen en el portapapeles para pegar
+	Pinned {tool} to Home	{tool} fijado en Inicio
+	Unpinned {tool} from Home	{tool} desfijado de Inicio

@@ -278,6 +278,12 @@ fn pss_params(params: Option<&Tlv<'_>>) -> Result<(DigestAlg, PssParams), SignEr
     Ok((hash, PssParams { mgf, salt_len: Some(salt_len) }))
 }
 
+/// The length in bits of the RSA modulus `n` (big-endian; leading zero bytes don't count).
+fn rsa_bits(n: &[u8]) -> usize {
+    let n = n.iter().position(|b| *b != 0).and_then(|i| n.get(i..)).unwrap_or_default();
+    n.first().map_or(0, |b| n.len() * 8 - b.leading_zeros() as usize)
+}
+
 /// A public key from a `SubjectPublicKeyInfo`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PublicKey {
@@ -300,6 +306,15 @@ pub enum PublicKey {
         what: String,
         spki: Vec<u8>,
     },
+}
+
+/// The private key a platform key store (the Windows certificate store, through CNG) must
+/// hold to sign for a certificate, see [`PublicKey::store_signing_key`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StoreKey {
+    Rsa,
+    /// ECDSA with a key of this many bits.
+    Ecdsa(u32),
 }
 
 impl PublicKey {
@@ -371,7 +386,7 @@ impl PublicKey {
     /// "RSA 2048-bit", "ECDSA P-256"…
     pub fn describe(&self) -> String {
         match self {
-            PublicKey::Rsa { n, .. } => format!("RSA {}-bit", n.len() * 8),
+            PublicKey::Rsa { n, .. } => format!("RSA {}-bit", rsa_bits(n)),
             PublicKey::P256(_) => "ECDSA P-256".into(),
             PublicKey::P384(_) => "ECDSA P-384".into(),
             PublicKey::P521(_) => "ECDSA P-521".into(),
@@ -383,6 +398,48 @@ impl PublicKey {
         }
     }
 
+    // The two decisions below are what `windows.rs` asks of a key. They live here, with every
+    // variant named and no `_` arm, so that a new variant fails to compile on every platform
+    // rather than only in the Windows-only module (#386 added six and broke the Windows build).
+
+    /// The key a platform key store must hold to sign for this public key, or `None` when
+    /// PdfCraft doesn't sign with this kind of key (it only verifies P-521, brainpool and
+    /// Ed25519 signatures), so the store's identity is skipped.
+    pub fn store_signing_key(&self) -> Option<StoreKey> {
+        match self {
+            PublicKey::Rsa { .. } => Some(StoreKey::Rsa),
+            PublicKey::P256(_) => Some(StoreKey::Ecdsa(256)),
+            PublicKey::P384(_) => Some(StoreKey::Ecdsa(384)),
+            PublicKey::P521(_)
+            | PublicKey::BrainpoolP256(_)
+            | PublicKey::BrainpoolP384(_)
+            | PublicKey::BrainpoolP512(_)
+            | PublicKey::Ed25519(_)
+            | PublicKey::Unsupported { .. } => None,
+        }
+    }
+
+    /// A key store's signature as a CMS signature carries it: RSA unchanged, ECDSA's fixed-size
+    /// `r ‖ s` (what CNG returns) as a DER `ECDSA-Sig-Value`. Keys [`Self::store_signing_key`]
+    /// rejects give [`SignError::Unsupported`].
+    pub fn store_signature_der(&self, raw: &[u8]) -> Result<Vec<u8>, SignError> {
+        match self {
+            PublicKey::Rsa { .. } => Ok(raw.to_vec()),
+            PublicKey::P256(_) => p256::ecdsa::Signature::from_slice(raw)
+                .map(|s| s.to_der().as_bytes().to_vec())
+                .map_err(|e| SignError::Crypto(format!("the key store returned an invalid P-256 signature: {e}"))),
+            PublicKey::P384(_) => p384::ecdsa::Signature::from_slice(raw)
+                .map(|s| s.to_der().as_bytes().to_vec())
+                .map_err(|e| SignError::Crypto(format!("the key store returned an invalid P-384 signature: {e}"))),
+            PublicKey::P521(_)
+            | PublicKey::BrainpoolP256(_)
+            | PublicKey::BrainpoolP384(_)
+            | PublicKey::BrainpoolP512(_)
+            | PublicKey::Ed25519(_)
+            | PublicKey::Unsupported { .. } => Err(SignError::Unsupported(format!("signing with {} keys", self.describe()))),
+        }
+    }
+
     /// Check `sig` over a message whose digest (with `alg`) is `digest`. Encodings are read
     /// leniently (see [`crate::rsa_pad`], [`ecdsa_rs`]); the cryptographic check never is.
     /// `Err(Unsupported)` means "can't tell", as opposed to `Ok(false)`: "doesn't match".
@@ -390,10 +447,31 @@ impl PublicKey {
         self.verify_noting(scheme, alg, digest, sig, &mut Vec::new())
     }
 
-    /// [`PublicKey::verify`], noting in `notes` each encoding irregularity it tolerated. Only
-    /// meaningful when it returns `Ok(true)`: a signature that doesn't verify may leave notes
-    /// about how far it got.
+    /// [`PublicKey::verify`], noting in `notes` each encoding irregularity it tolerated, and a key
+    /// too small to rely on ([`PublicKey::weakness`]). Only meaningful when it returns `Ok(true)`:
+    /// a signature that doesn't verify may leave notes about how far it got.
     pub fn verify_noting(&self, scheme: Scheme, alg: DigestAlg, digest: &[u8], sig: &[u8], notes: &mut Vec<&'static str>) -> Result<bool, SignError> {
+        let verified = self.verify_scheme(scheme, alg, digest, sig, notes);
+        if let Ok(true) = verified
+            && let Some(weak) = self.weakness()
+        {
+            notes.push(weak);
+        }
+        verified
+    }
+
+    /// What to tell the user when a signature that still validates was made with this key, or
+    /// `None` for one that is fine, as [`DigestAlg::weakness`] does for hashes.
+    pub fn weakness(&self) -> Option<&'static str> {
+        match self {
+            PublicKey::Rsa { n, .. } if rsa_bits(n) < 2048 => Some(
+                "This signature uses an RSA key shorter than 2048 bits, which is no longer considered strong enough for signatures. It still validates, but it should not be relied on.",
+            ),
+            _ => None,
+        }
+    }
+
+    fn verify_scheme(&self, scheme: Scheme, alg: DigestAlg, digest: &[u8], sig: &[u8], notes: &mut Vec<&'static str>) -> Result<bool, SignError> {
         match (self, scheme) {
             (PublicKey::Unsupported { what, .. }, _) => Err(SignError::Unsupported(what.clone())),
             (PublicKey::Rsa { n, e }, Scheme::RsaPkcs1) => crate::rsa_pad::pkcs1_verify(n, e, alg, digest, sig, notes),

@@ -71,8 +71,10 @@ object!(Array<'a>, Array);
 impl Skippable for Array<'_> {
     fn skip(r: &mut Reader<'_>, is_content_stream: bool) -> Option<()> {
         r.forward_tag(b"[")?;
+        r.enter_container()?;
 
-        loop {
+        // PdfCraft patch: leave even when an element's skip fails through `?`.
+        let result = (|| loop {
             r.skip_white_spaces_and_comments();
 
             if let Some(()) = r.forward_tag(b"]") {
@@ -82,7 +84,9 @@ impl Skippable for Array<'_> {
             } else {
                 r.skip::<MaybeRef<Object<'_>>>(false)?;
             }
-        }
+        })();
+        r.leave_container();
+        result
     }
 }
 
@@ -187,6 +191,12 @@ impl<'a> FlexArrayIter<'a> {
         self.reader.skip_white_spaces_and_comments();
 
         if !self.reader.at_end() {
+            // PdfCraft patch (32): its items each follow a reference. Read as one that might be, a
+            // reference at the start was taken for the whole group, which it can't be, and lost.
+            if T::GROUP {
+                return self.reader.read_with_context::<T>(&self.ctx);
+            }
+
             return match self.reader.read_with_context::<MaybeRef<T>>(&self.ctx)? {
                 MaybeRef::Ref(r) => self.ctx.xref().get_with::<T>(r.into(), &self.ctx),
                 MaybeRef::NotRef(i) => Some(i),

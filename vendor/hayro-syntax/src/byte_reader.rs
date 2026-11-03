@@ -1,6 +1,11 @@
 //! A byte reader.
 
+use core::cell::Cell;
 use core::ops::Range;
+
+/// PdfCraft patch: how deeply direct arrays and dictionaries may nest (the same cap as `pdfcraft-cos`; a
+/// chain of 64 direct stitching functions is exactly this deep).
+const MAX_CONTAINER_DEPTH: usize = 128;
 
 /// A reader for reading bytes and PDF objects.
 #[derive(Clone, Debug)]
@@ -9,25 +14,70 @@ pub struct Reader<'a> {
     pub data: &'a [u8],
     /// The current byte-offset.
     pub offset: usize,
+    /// PdfCraft patch: set when a read needed a byte past the end of `data`. A decision made from
+    /// such a read could change if more data followed (see `content::UntypedIter`).
+    past_end: Cell<bool>,
+    // PdfCraft patch: bound direct-object nesting while skipping arrays and dictionaries
+    // and while parsing dictionaries (`Dict::skip`, `Array::skip`, `parse_dict_with`).
+    skip_depth: usize,
 }
 
 impl<'a> Reader<'a> {
     /// Create a new reader.
     #[inline]
     pub fn new(data: &'a [u8]) -> Self {
-        Self { data, offset: 0 }
+        Self::new_with(data, 0)
     }
 
     /// Create a new reader at the given offset.
     #[inline]
     pub fn new_with(data: &'a [u8], offset: usize) -> Self {
-        Self { data, offset }
+        Self { data, offset, past_end: Cell::new(false), skip_depth: 0 }
+    }
+
+    /// PdfCraft patch: whether a read needed bytes past the end of the data since the flag was
+    /// last cleared.
+    #[inline]
+    pub(crate) fn looked_past_end(&self) -> bool {
+        self.past_end.get()
+    }
+
+    /// PdfCraft patch: clears the flag set by [`Reader::looked_past_end`].
+    #[inline]
+    pub(crate) fn clear_looked_past_end(&self) {
+        self.past_end.set(false);
+    }
+
+    pub(crate) fn enter_container(&mut self) -> Option<()> {
+        if self.skip_depth >= MAX_CONTAINER_DEPTH {
+            return None;
+        }
+        self.skip_depth += 1;
+        Some(())
+    }
+
+    pub(crate) fn leave_container(&mut self) {
+        self.skip_depth -= 1;
     }
 
     /// Returns `true` if the reader has reached the end of the data.
     #[inline]
     pub fn at_end(&self) -> bool {
-        self.offset >= self.data.len()
+        let at_end = self.offset >= self.data.len();
+        if at_end {
+            // PdfCraft patch: a parser that stops at the end decides from it (see `past_end`).
+            self.past_end.set(true);
+        }
+
+        at_end
+    }
+
+    /// PdfCraft patch: carries over whether `other`, a clone of this reader, looked past the end.
+    #[inline]
+    pub(crate) fn absorb_past_end(&self, other: &Reader<'_>) {
+        if other.past_end.get() {
+            self.past_end.set(true);
+        }
     }
 
     /// Moves the reader offset to the end of the data.
@@ -99,15 +149,26 @@ impl<'a> Reader<'a> {
     /// Peeks the specified number of bytes.
     #[inline]
     pub fn peek_bytes(&self, len: usize) -> Option<&'a [u8]> {
-        self.offset
+        let bytes = self
+            .offset
             .checked_add(len)
-            .and_then(|end| self.data.get(self.offset..end))
+            .and_then(|end| self.data.get(self.offset..end));
+        if bytes.is_none() {
+            self.past_end.set(true);
+        }
+
+        bytes
     }
 
     /// Peeks a single byte.
     #[inline]
     pub fn peek_byte(&self) -> Option<u8> {
-        self.data.get(self.offset).copied()
+        let byte = self.data.get(self.offset).copied();
+        if byte.is_none() {
+            self.past_end.set(true);
+        }
+
+        byte
     }
 
     /// Eat the next byte if it satisfies the condition.
@@ -178,6 +239,7 @@ impl<'a> Reader<'a> {
             if cloned.peek_byte() == Some(b) {
                 cloned.forward();
             } else {
+                self.past_end.set(cloned.past_end.get());
                 return None;
             }
         }

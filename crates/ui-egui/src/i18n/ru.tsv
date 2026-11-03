@@ -8,6 +8,10 @@
 # Product and technology names (PdfCraft, PDF, Acrobat JavaScript ...) are not translated;
 # the trailing "…" of dialog commands is kept.
 
+# Untranslated: English text until a translator fills these in.
+	Lowering this forgets the oldest files. At 0 there is no list.	Lowering this forgets the oldest files. At 0 there is no list.
+	Recent files to keep	Recent files to keep
+
 	Menu	Меню
 	File	Файл
 	Edit	Редактирование
@@ -17,8 +21,12 @@
 	Preferences	Настройки
 	Preferences…	Настройки…
 	Interface language	Язык интерфейса
+	Interface size	Размер интерфейса
+	Auto ({percent}%)	Авто ({percent}%)
+	Auto follows the system's text size. Pages always render at the display's full resolution.	В режиме «Авто» используется размер текста из настроек системы. Страницы всегда отображаются в полном разрешении экрана.
 	Identity	Идентификация
 	Name on new comments	Имя в новых комментариях
+	Hide hover previews for highlights without comment text	Скрывать всплывающий просмотр для выделений без текста комментария
 	Open…	Открыть…
 	Open Recent	Открыть недавние
 	Clear Recent Files	Очистить недавние файлы
@@ -65,8 +73,11 @@
 	Fit visible	По видимой области
 	Marquee zoom	Масштаб выделением
 	Take a snapshot	Сделать снимок
+	Column select	Выделение столбца
 	Full screen mode	Полноэкранный режим
 	Read mode	Режим чтения
+	Next tab	Следующая вкладка
+	Previous tab	Предыдущая вкладка
 	Switch light / dark theme	Переключить светлую / тёмную тему
 	Comments panel	Панель комментариев
 	Form fields panel	Панель полей формы
@@ -89,7 +100,7 @@
 	Double-click	Двойной щелчок
 	Select a word	Выделить слово
 	Clear selection / close find	Снять выделение / закрыть поиск
-	Zoom in / out (also pinch or ⌘-scroll)	Масштаб (также щипок или ⌘-прокрутка)
+	Zoom in / out (also pinch or {key}-scroll)	Масштаб (также щипок или {key}-прокрутка)
 	Rotate view	Повернуть вид
 	First / last page	Первая / последняя страница
 	Previous / next page	Предыдущая / следующая страница
@@ -97,16 +108,22 @@
 	Select all pages (Organize)	Выделить все страницы (Организация)
 	Home	Главная
 	Open	Открыть
-	Open a PDF (⌘O)	Открыть PDF (⌘O)
+	Open a PDF ({key})	Открыть PDF ({key})
 	Dark gray theme	Тёмно-серая тема
 	Light theme	Светлая тема
+	Appearance mode	Режим оформления
+	Light	Светлое
+	Dark	Тёмное
+	Active	Активно
+	Dark theme	Тёмная тема
+	Appearance settings…	Настройки оформления…
 	All tools	Все инструменты
 	Read	Чтение
 	Convert	Конвертация
 	E-Sign	Электронная подпись
-	Print (⌘P)	Печать (⌘P)
-	Save (M4)	Сохранить (M4)
-	Document properties (⌘D)	Свойства документа (⌘D)
+	Print ({key})	Печать ({key})
+	Save ({key})	Сохранить ({key})
+	Document properties ({key})	Свойства документа ({key})
 	Find tools and commands	Найти инструменты и команды
 	Fit to height	По высоте
 	Zoom in	Увеличить
@@ -118,6 +135,8 @@
 	Next view	Следующий вид
 	Page display	Отображение страниц
 	Continuous scrolling	Непрерывная прокрутка
+	Show gaps between pages	Показывать промежутки между страницами
+	Hide gaps to join page edges. Margins inside the PDF remain unchanged.	Скройте промежутки, чтобы соединить края страниц. Поля внутри PDF останутся без изменений.
 	Two-page view	Двухстраничный вид
 	Single page	Одна страница
 	Show cover page in two-page view	Показывать титульную страницу в двухстраничном виде
@@ -135,13 +154,14 @@
 	Compare	Сравнить
 	Page thumbnails	Миниатюры страниц
 	Form fields	Поля формы
-	Zoom out (⌘−)	Уменьшить (⌘−)
-	Zoom in (⌘+)	Увеличить (⌘+)
-	Rotate view clockwise (⇧⌘+)	Повернуть вид по часовой стрелке (⇧⌘+)
+	Zoom out ({key})	Уменьшить ({key})
+	Zoom in ({key})	Увеличить ({key})
+	Rotate view clockwise ({key})	Повернуть вид по часовой стрелке ({key})
 	Toggle fit page / fit width	Переключить по странице / по ширине
 	Next page	Следующая страница
 	Previous page	Предыдущая страница
 	Current page — type a page number or label (such as iv) and press Enter	Текущая страница — введите номер или метку страницы (например, iv) и нажмите Enter
+	Zoom — type a percentage and press Enter	Масштаб — введите процент и нажмите Enter
 	Welcome to PdfCraft	Добро пожаловать в PdfCraft
 	An open-source PDF workbench — local, private, and scriptable.	Открытый PDF-редактор — локальный, приватный и программируемый.
 	Join the ArtCraft community	Присоединяйтесь к сообществу ArtCraft
@@ -161,6 +181,15 @@
 	Available	Доступно
 	Ready	Готово
 	Search tools and commands…	Поиск инструментов и команд…
+
+# Accessible names for inputs that have no visible label.
+	Added text	Добавленный текст
+	Link URL	URL-адрес ссылки
+	Search tools and commands	Поиск инструментов и команд
+	Text editing line	Строка редактирования текста
+	Text to place	Текст для размещения
+	Tooltip	Подсказка
+	Words or phrases to redact	Слова или фразы для скрытия
 	No matching tools	Нет подходящих инструментов
 	Tool	Инструмент
 	Command	Команда
@@ -208,6 +237,9 @@
 	Add or edit links	Добавить или изменить ссылки
 	Create links from URLs	Создать ссылки из URL
 	Remove all links	Удалить все ссылки
+	No links to remove	Нет ссылок для удаления
+	Removed 1 link	Удалена 1 ссылка
+	Removed {n} links	Удалено ссылок: {n}
 	Add Bates numbering…	Добавить нумерацию Бейтса…
 	Add image…	Добавить изображение…
 	Redact text and images	Скрыть текст и изображения
@@ -246,6 +278,7 @@
 	Optimize PDF…	Оптимизировать PDF…
 	Export to text…	Экспортировать в текст…
 	Export to Word…	Экспортировать в Word…
+	Export to PowerPoint…	Экспортировать в PowerPoint…
 	Export to HTML…	Экспортировать в HTML…
 	Export to RTF…	Экспортировать в RTF…
 	JavaScript console…	Консоль JavaScript…
@@ -271,6 +304,7 @@
 	Security properties…	Свойства безопасности…
 	Organize pages	Организовать страницы
 	New bookmark	Новая закладка
+	New bookmarks from structure	Новые закладки из структуры
 	Rotate pages clockwise	Повернуть страницы по часовой стрелке
 	Rotate pages counterclockwise	Повернуть страницы против часовой стрелки
 	Delete pages	Удалить страницы
@@ -329,6 +363,7 @@
 	Create from	Создать из
 	Single file	Один файл
 	Multiple files	Несколько файлов
+	Separate PDFs	Отдельные PDF
 	Images	Изображения
 	Clipboard	Буфер обмена
 	Blank page	Пустая страница
@@ -345,6 +380,7 @@
 	Split	Разделить
 	More	Ещё
 	Set page boxes	Задать поля страниц
+	Set page transitions	Задать переходы между страницами
 	Page labels	Метки страниц
 	Page transitions	Переходы страниц
 	Add comments	Добавить комментарии
@@ -491,6 +527,42 @@
 	Could not save: {e}	Не удалось сохранить: {e}
 	Earlier in tab order	Раньше в порядке табуляции
 	Later in tab order	Позже в порядке табуляции
+	Calculation order	Порядок вычислений
+	Fix order	Исправить порядок
+	Move only what must move, so every field calculates after the fields it reads.	Перемещает только то, что необходимо, чтобы каждое поле вычислялось после полей, которые оно читает.
+	Earlier in calculation order	Раньше в порядке вычислений
+	Later in calculation order	Позже в порядке вычислений
+	Too early	Слишком рано
+	Reads {name}, which calculates later, so it shows an old value.	Читает {name}, которое вычисляется позже, поэтому показывает старое значение.
+	Loop	Цикл
+	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	Читает {names}, которые в свою очередь читают его. Никакой порядок не исправит цикл: измените одну из формул.
+	Not in order	Вне порядка
+	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	Отсутствует в порядке вычислений, сохранённом в PDF: другие программы просмотра PDF могут его не вычислять.
+	Reads {name}, which the form doesn't have, so it gets no value there.	Читает {name}, которого нет в форме, поэтому не получает оттуда значения.
+	Its script also reads fields whose names it builds as it runs, so those reads can't be checked.	Его скрипт также читает поля, имена которых составляет во время выполнения, поэтому эти чтения нельзя проверить.
+	Missing field	Нет поля
+	Unchecked reads	Непроверенные чтения
+	{field} reads fields named as it runs	{field} читает поля, имена которых задаются при выполнении
+	Some names are built as it runs	Некоторые имена составляются при выполнении
+	Back to Prepare a form	Назад к «Подготовить форму»
+	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	Ни одно поле этой формы пока не вычисляет своё значение. Задайте полю вычисление на вкладке «Вычислить» его свойств, и оно появится здесь.
+	{names} and {last}	{names} и {last}
+	{field} reads no other field	{field} не читает других полей
+	{field} reads {fields}	{field} читает {fields}
+	No field reads it	Его не читает ни одно поле
+	The order saved in the PDF needs tidying	Сохранённый в PDF порядок нуждается в исправлении
+	Moves only what must move	Перемещает только то, что нужно
+	Every field calculates after the fields it reads.	Каждое поле вычисляется после полей, которые оно читает.
+	Every field outside a loop calculates after the fields it reads.	Каждое поле вне цикла вычисляется после полей, которые оно читает.
+	{field} reads its own value	{field} читает собственное значение
+	{fields} read each other	{fields} читают друг друга
+	No order can fix a loop. Change one of the formulas.	Никакой порядок не исправит цикл. Измените одну из формул.
+	Edit {field}'s formula	Изменить формулу {field}
+	Order · top calculates first	Порядок · верхнее вычисляется первым
+	Script	Скрипт
+	Links on page	Связи на странице
+	Show on the page which fields each field reads	Показывать на странице, какие поля читает каждое поле
+	Drag a field to move it, or select it and press {up} or {down}.	Перетащите поле, чтобы переместить его, или выберите его и нажмите {up} или {down}.
 	From:	От:
 	To:	До:
 	High Resolution	Высокое разрешение
@@ -528,6 +600,9 @@
 	Clean Up	Очистить
 	Color Images	Цветные изображения
 	Grayscale Images	Изображения в оттенках серого
+	Monochrome Images	Монохромные изображения
+	CCITT Group 4	CCITT группа 4
+	JBIG2 (lossless)	JBIG2 (без потерь)
 	Bicubic downsampling to	Бикубическое уменьшение до
 	for images above	для изображений выше
 	Compression	Сжатие
@@ -551,12 +626,14 @@
 	Discard private data of other applications	Удалить личные данные других приложений
 	Discard hidden text	Удалить скрытый текст
 	Use Flate to encode streams that are not encoded	Использовать Flate для кодирования некодированных потоков
+	In streams that use LZW encoding, use Flate instead	Использовать Flate вместо LZW в потоках с кодированием LZW
 	Remove invalid links and bookmarks	Удалить недействительные ссылки и закладки
 	Remove unreferenced named destinations	Удалить неиспользуемые именованные места назначения
 	Compress document structure (object streams)	Сжать структуру документа (потоки объектов)
 	Remove unused objects and merge identical ones	Удалить неиспользуемые объекты и объединить одинаковые
 	Audit space usage…	Анализ использования места…
 	Space Audit	Анализ места
+	What takes up the space in this file, by kind of content.	Что занимает место в этом файле, по типу содержимого.
 	Bytes	Байты
 	Content Streams	Потоки содержимого
 	X Object Forms	Формы X Object
@@ -681,6 +758,14 @@
 	of the following fields:	из следующих полей:
 	Simplified field notation:	Упрощённая запись полей:
 	Field names with + - * / and parentheses; put \\ before spaces in names.	Имена полей с + - * / и скобками; ставьте \\ перед пробелами в именах.
+
+# Document font selection
+	Finding document fonts…	Поиск шрифтов для документа…
+	Installed fonts…	Установленные шрифты…
+	Keep source fonts	Сохранить исходные шрифты
+	Load font…	Загрузить шрифт…
+	No openly licensed document fonts found. Load a font file.	Шрифты с открытой лицензией не найдены. Загрузите файл шрифта.
+
 	Format text	Форматировать текст
 	Bold	Полужирный
 	Italic	Курсив
@@ -688,7 +773,7 @@
 	Centre	По центру
 	Align right	Выровнять вправо
 	Justify	По ширине
-	Standard fonts; text outside Windows-1252 isn't supported yet.	Стандартные шрифты; текст вне Windows-1252 пока не поддерживается.
+	Thai and Arabic use regular fallback fonts when available.	Для тайского и арабского текста используются доступные резервные шрифты обычного начертания.
 	Edit image	Редактировать изображение
 	Rotate counterclockwise	Повернуть против часовой стрелки
 	Rotate clockwise	Повернуть по часовой стрелке
@@ -730,14 +815,15 @@
 	Flip Vertical	Отразить по вертикали
 	Replace Image…	Заменить изображение…
 	Save Image As…	Сохранить изображение как…
-	Check for updates	Проверить обновления
+	Copy Image	Копировать изображение
+	The image has been copied ({w} × {h} pixels)	Изображение скопировано ({w} × {h} пикселей)
+	Couldn't copy the image: {e}	Не удалось скопировать изображение: {e}
+	Copy Image in Original Format	Копировать изображение в исходном формате
+	The image has been copied as a {ext} file	Изображение скопировано как файл {ext}
+	The page has changed; select the image again	Страница изменилась; выберите изображение снова
 	No check has run yet.	Проверка ещё не выполнялась.
-	Checking for a newer version…	Проверка новой версии…
 	PdfCraft {v} is available.	Доступна PdfCraft {v}.
 	You have version {c}. Download the new version from its release page.	У вас версия {c}. Скачайте новую версию со страницы релизов.
-	PdfCraft {c} is up to date.	У вас последняя версия PdfCraft {c}.
-	Couldn't check for updates: {e}	Не удалось проверить обновления: {e}
-	You have version {c}. All releases are listed at {page}.	У вас версия {c}. Все релизы перечислены на {page}.
 	Asks GitHub for the latest release. Nothing is downloaded or installed automatically.	Запрашивает у GitHub последний релиз. Ничего не скачивается и не устанавливается автоматически.
 	Download	Скачать
 	Later	Позже
@@ -759,7 +845,7 @@
 	{verb} Header and Footer	{verb} колонтитулы
 	{verb} Watermark	{verb} водяной знак
 	{verb} Background	{verb} фон
-	Margins (in)	Поля (дюймы)
+	Margins	Поля
 	Left Header Text	Текст левого колонтитула
 	Center Header Text	Текст центрального колонтитула
 	Right Header Text	Текст правого колонтитула
@@ -769,17 +855,27 @@
 	Insert Page Number	Вставить номер страницы
 	Insert Date	Вставить дату
 	Start page number	Начальный номер страницы
+	Shrink the page content to make room for the header and footer	Уменьшить содержимое страницы, чтобы освободить место для колонтитулов
 	Source	Источник
 	Fit to page	По странице
 	Rotation	Поворот
 	Appear behind page	Позади страницы
 	Appear on top of page	Поверх страницы
+	Offset from centre	Смещение от центра
 	From colour	Из цвета
 	Page Range Options	Параметры диапазона страниц
 	Preview: page {p} of {n}	Предпросмотр: стр. {p} из {n}
 	Applies to 1 page	Применяется к 1 странице
 	Applies to {n} pages	Применяется к {n} страницам
 	Replaces the existing one on those pages.	Заменяет существующий на этих страницах.
+	Checking pages…	Проверка страниц…
+	Page {pages} paints its own white backdrop, which would hide the background. Replace it	Страница с собственной белой заливкой, которая скроет фон: {pages}. Заменить
+	Pages {pages} paint their own white backdrop, which would hide the background. Replace it	Страницы с собственной белой заливкой, которая скроет фон: {pages}. Заменить
+	Removing the background puts the page's own backdrop back.	При удалении фона собственная белая заливка страницы возвращается.
+	A picture covers page {pages} (a scan?), so the background won't show there.	Страница, закрытая изображением (скан?): {pages}; фон там не будет виден.
+	Pictures cover pages {pages} (scans?), so the background won't show there.	Страницы, закрытые изображениями (сканы?): {pages}; фон там не будет виден.
+	Page {pages} changed after the background was added, so its own white backdrop stays off. It looks the same on white paper.	Страница изменена после добавления фона, поэтому её собственная белая заливка остаётся выключенной: {pages}. На белой бумаге она выглядит так же.
+	Pages {pages} changed after the background was added, so their own white backdrops stay off. They look the same on white paper.	Страницы изменены после добавления фона, поэтому их собственные белые заливки остаются выключенными: {pages}. На белой бумаге они выглядят так же.
 	PDF or image	PDF или изображение
 	No file chosen	Файл не выбран
 	Page number	Номер страницы
@@ -816,8 +912,15 @@
 	Windows store  ·  	Хранилище Windows  ·
 	Issued by: 	Выдан:
 	, Expires: 	, Истекает:
+	Digitally signed by	Цифровая подпись
+	DN: 	DN: 
+	Reason: 	Причина: 
+	Location: 	Местоположение: 
+	Date: 	Дата: 
+	The labels are in English: the signature's font can't draw them in this language.	Метки на английском: шрифт подписи не может отобразить их на этом языке.
 	No digital IDs yet.	Нет цифровых идентификаторов.
 	Configure New Digital ID	Настроить новый цифровой идентификатор
+	Remove "{name}" from this list? The file itself is not deleted.	Убрать «{name}» из этого списка? Сам файл не удаляется.
 	Continue	Продолжить
 	Configure a Digital ID for Signing	Настроить цифровой идентификатор для подписи
 	Use a Digital ID from a file	Использовать цифровой идентификатор из файла
@@ -836,8 +939,13 @@
 	{verb} as "{name}"	{verb} как «{name}»
 	Certify	Сертифицировать
 	The signature will be invisible.	Подпись будет невидимой.
+	The existing action will be preserved.	Существующее действие будет сохранено.
 	Distinguished name	Уникальное имя
 	Labels	Метки
+	Graphic	Графика
+	Signer's name	Имя подписывающего
+	Fill & Sign signature	Подпись из «Заполнить и подписать»
+	Choose image…	Выбрать изображение…
 	Permitted actions after certifying	Разрешённые действия после сертификации
 	No changes allowed	Изменения не разрешены
 	Annotations, form fill-in, and digital signatures	Аннотации, заполнение форм и цифровые подписи
@@ -1094,13 +1202,21 @@
 	Dates	Даты
 	Text in images isn't found; recognise text (OCR) first.	Текст в изображениях не находится; сначала распознайте текст (OCR).
 	No matches.	Совпадений нет.
+	Some bookmarks are not shown here: the panel lists a limited number, nested a limited depth.	Некоторые закладки здесь не показаны: панель показывает ограниченное число закладок с ограниченной глубиной вложенности.
 	{n} match(es) marked for redaction.	Отмечено для сокрытия: {n} совпад.
+	Multiple words or phrases	Несколько слов или фраз
+	One word or phrase per line	По одному слову или фразе в строке
+	Import list…	Импортировать список…
+	{n} word(s) or phrase(s)	Слов или фраз: {n}
+	{name} is too large for a word list (at most 1 MB).	Файл {name} слишком велик для списка слов (не более 1 МБ).
 	Redaction Tool Properties	Свойства инструмента сокрытия
 	Redacted area fill colour:	Цвет заливки скрытой области:
 	Use overlay text	Использовать текст поверх
 	Custom text:	Свой текст:
+	Redaction code:	Код сокрытия:
 	Font:	Шрифт:
 	Font size:	Размер шрифта:
+	Font size	Размер шрифта
 	Auto-size text to fit redaction region	Автоподбор размера текста по области сокрытия
 	Font colour:	Цвет шрифта:
 	Repeat overlay text	Повторять текст поверх
@@ -1133,6 +1249,7 @@
 	Off	Выкл
 	Flip on long edge	Переворот по длинной стороне
 	Flip on short edge	Переворот по короткой стороне
+	Printer default	По умолчанию для принтера
 	Paper:	Бумага:
 	Pages to Print	Страницы для печати
 	More options:	Дополнительные параметры:
@@ -1200,6 +1317,8 @@
 	Searchable Image (Exact)	Доступное для поиска изображение (точное)
 	Adds invisible text over each word; the page image is not changed	Добавляет невидимый текст над каждым словом; изображение страницы не меняется
 	Downsample to	Уменьшить до
+	Also recognize pages that already have text	Распознавать и страницы, на которых уже есть текст
+	Pictures on those pages are recognized too; words already in the page's text are not added again	Изображения на этих страницах тоже распознаются; слова, которые уже есть в тексте страницы, повторно не добавляются
 	Text recognition isn't installed: its model files are missing. Reinstall PdfCraft, or set PDFCRAFT_MODELS to the folder that holds them.	Распознавание текста не установлено: отсутствуют файлы моделей. Переустановите PdfCraft или задайте в PDFCRAFT_MODELS папку, в которой они лежат.
 	Settings	Настройки
 	Optional	Опционально
@@ -1239,6 +1358,7 @@
 	Copy text	Копировать текст
 	Properties…	Свойства…
 	Make Current Properties Default	Сделать текущие свойства по умолчанию
+	Make Properties Default	Сделать свойства по умолчанию
 	More options	Ещё
 	Sort by	Сортировать по
 	Author	Автор
@@ -1268,11 +1388,13 @@
 	Expand all bookmarks	Развернуть все закладки
 	Expand top-level bookmarks	Развернуть закладки верхнего уровня
 	Collapse all bookmarks	Свернуть все закладки
-	New bookmark (⌘B)	Новая закладка (⌘B)
+	New bookmark ({key})	Новая закладка ({key})
 	This document has no bookmarks.	В этом документе нет закладки.
 	This document has no layers.	В этом документе нет слоёв.
 	This document has no attachments.	В этом документе нет вложений.
 	Hide layer	Скрыть слой
+	Layer options	Параметры слоёв
+	Reset to Initial Visibility	Восстановить исходную видимость
 	Show layer	Показать слой
 	Set layer visibility	Задать видимость слоя
 	on page {label}	на стр. {label}
@@ -1283,8 +1405,8 @@
 	No matches	Совпадений нет
 	Searching… {s}/{p}	Поиск… {s}/{p}
 	{c} of {n}{more}	{c} из {n}{more}
-	Previous (⇧⌘G)	Предыдущее (⇧⌘G)
-	Next (⌘G)	Следующее (⌘G)
+	Previous ({key})	Предыдущее ({key})
+	Next ({key})	Следующее ({key})
 	Find options	Параметры поиска
 	Whole words only	Только целые слова
 	Case-sensitive	С учётом регистра
@@ -1360,6 +1482,9 @@
 	Sort comments by:	Сортировать комментарии по:
 	Create PDF Comment Summary	Создать сводку комментариев в PDF
 	Revert to the previously saved version of “{name}”? Changes since then can't be undone afterwards.	Вернуть к ранее сохранённой версии «{name}»? Изменения с тех пор нельзя будет отменить.
+	Save over the changed file?	Сохранить поверх изменённого файла?
+	“{name}” changed on disk after it was opened or last saved. Saving now replaces that newer version with this one.	«{name}» был изменён на диске после открытия или последнего сохранения. Сохранение сейчас заменит ту более новую версию этой.
+	Save anyway	Всё равно сохранить
 	Number pages	Пронумеровать страницы
 	Style	Стиль
 	None (prefix only)	Нет (только префикс)
@@ -1490,6 +1615,8 @@
 	Right Edge	Правый край
 	Language	Язык
 	Saved {place}: {before} → {after} ({pct}% smaller){detail}	Сохранено {place}: {before} → {after} (на {pct}% меньше){detail}
+	This file is already as small as it can be made ({size}). No copy was saved.	Этот файл уже минимального размера ({size}). Копия не сохранена.
+	Saved {place}: {before} → {after} (not smaller){detail}	Сохранено {place}: {before} → {after} (не меньше){detail}
 	Couldn't save the image: {e}	Не удалось сохранить изображение: {e}
 	Adding images arrives on the web with file pickers for images	Добавление изображений появится в веб-версии с выбором файлов изображений
 	Replacing images on page {p} arrives on the web with image pickers ({i})	Замена изображений на стр. {p} появится в веб-версии с выбором изображений ({i})
@@ -1501,7 +1628,7 @@
 	Couldn't optimize the file: {e}	Не удалось оптимизировать файл: {e}
 	Couldn't write {path}: {e}	Не удалось записать {path}: {e}
 	The form asks to be submitted to {u}; PdfCraft doesn't send form data. Save the document to keep your entries.	Форма просит отправить данные на {u}; PdfCraft не отправляет данные форм. Сохраните документ, чтобы сохранить введённые данные.
-	{s} actions run in the JavaScript engine (M6)	{s} действий выполняется в движке JavaScript (M6)
+	This PDF uses the unsupported {s} action.	В этом PDF используется неподдерживаемое действие {s}.
 	{name}: the {other} action isn't supported yet	{name}: действие {other} пока не поддерживается
 	{name} submits the form to {url}; PdfCraft doesn't send form data. Save the document to keep your entries.	{name} отправляет форму на {url}; PdfCraft не отправляет данные форм. Сохраните документ, чтобы сохранить введённые данные.
 	Export stopped: {e}	Экспорт остановлен: {e}
@@ -1553,6 +1680,11 @@
 	{file} is too large for a stamp (at most {n} MB)	{file} слишком велик для штампа (не более {n} МБ)
 	Sent to {printer}	Отправлено на {printer}
 	Sent to {printer}: {msg}	Отправлено на {printer}: {msg}
+	Looking for printers…	Поиск принтеров…
+	Sending sheet {s} of {n} to {printer}…	Отправка листа {s} из {n} на {printer}…
+	No printers were found. Check that the printer is installed and the print spooler is running, then open Print again.	Принтеры не найдены. Проверьте, что принтер установлен, а диспетчер печати запущен, и снова откройте «Печать».
+	Reading the printer's settings…	Чтение настроек принтера…
+	Sending to {printer}…	Отправка на {printer}…
 	Choose a folder for the searchable files	Выберите папку для доступных для поиска файлов
 	Files are combined from top to bottom. Leave Pages empty to take every page.	Файлы объединяются сверху вниз. Оставьте «Страницы» пустыми, чтобы взять все страницы.
 	Unlock…	Разблокировать…
@@ -1570,16 +1702,16 @@
 	Opened, but its security settings don't allow combining. Enter the permissions password.	Открыто, но настройки безопасности не разрешают объединение. Введите пароль разрешений.
 	Unlocked: the combined file won't be password-protected	Разблокировано: объединённый файл не будет защищён паролем
 	Unlocked {n} of {m} files	Разблокировано {n} из {m} файлов
-	Drop PDFs or folders here, or choose them.	Перетащите PDF или папки сюда или выберите их.
+	Drop PDFs, images, text files or folders here, or choose them.	Перетащите PDF, изображения, текстовые файлы или папки сюда или выберите их.
 	Add folder…	Добавить папку…
 	Add folder and subfolders…	Добавить папку и вложенные папки…
 	More ways to add files	Больше способов добавить файлы
-	Every PDF in the folder	Каждый PDF в папке
-	Every PDF in the folder and the folders inside it	Каждый PDF в папке и вложенных папках
+	Every PDF, image and text file in the folder	Каждый PDF, изображение и текстовый файл в папке
+	Every PDF, image and text file in the folder and the folders inside it	Каждый PDF, изображение и текстовый файл в папке и вложенных папках
 	Add folder	Добавить папку
 	Add folder and subfolders	Добавить папку и вложенные папки
-	No PDFs found in {folder}	В {folder} не найдено PDF
-	Added the first {n} PDFs in {folder}	Добавлены первые {n} PDF из {folder}
+	No PDFs, images or text files found in {folder}	В {folder} не найдено PDF, изображений или текстовых файлов
+	Added the first {n} files in {folder}	Добавлены первые {n} файлов из {folder}
 	Click to sort, drag to move the column. Drag its edge to resize it.	Щёлкните для сортировки, перетащите, чтобы переместить столбец. Перетащите край, чтобы изменить размер.
 	Reset columns	Сбросить столбцы
 	Remove {n} files	Удалить {n} файлов
@@ -1597,7 +1729,7 @@
 	{n} files need attention	{n} файлов требуют внимания
 	{name} can't be combined: {why}	{name} нельзя объединить: {why}
 	Check the pages of {name}: {why}	Проверьте страницы {name}: {why}
-	Add the PDFs to combine	Добавить PDF для объединения
+	Add the files to combine	Добавить файлы для объединения
 	File name	Имя файла
 	Warnings	Предупреждения
 	Drag to reorder	Перетащить для изменения порядка
@@ -1610,6 +1742,10 @@
 	Password-protected	Защищён паролем
 	Its security settings don't allow copying pages	Его настройки безопасности не разрешают копировать страницы
 	Can't be read: {e}	Нельзя прочитать: {e}
+	Leave out files that can't be read?	Пропустить файлы, которые не удаётся прочитать?
+	These files can't be read, so they won't be in the combined PDF:	Эти файлы не удаётся прочитать, поэтому их не будет в объединённом PDF:
+	Combine the rest	Объединить остальные
+	and {n} more	и ещё {n}
 	Includes unsaved changes	Включает несохранённые изменения
 	Pages of {name} to combine, e.g. 1-3, 6	Страницы {name} для объединения, например 1-3, 6
 	Remove {name}	Удалить {name}
@@ -1632,6 +1768,7 @@
 	Couldn't use {name}: {e}	Не удалось использовать {name}: {e}
 	Couldn't extract pages: {e}	Не удалось извлечь страницы: {e}
 	Couldn't write {name}: {e}	Не удалось записать {name}: {e}
+	the name is not a plain file name	имя не является простым именем файла
 	Wrote 1 file to {dir}	Записан 1 файл в {dir}
 	Wrote {n} files to {dir}	Записано {n} файлов в {dir}
 	No pages match those choices	Страницы не соответствуют этим выбору
@@ -1683,8 +1820,15 @@
 	watermark	водяной знак
 	background	фон
 	This document isn't password-protected	Этот документ не защищён паролем
-	Only the document's owner can change its security (open it with the permissions password)	Только владелец документа может изменить его безопасность (откройте его с паролем разрешений)
+	Enter permissions password…	Ввести пароль разрешений…
+	Permissions password	Пароль разрешений
+	“{name}” has security restrictions. Enter its permissions password to lift them.	У «{name}» есть ограничения безопасности. Введите пароль разрешений, чтобы снять их.
+	Restrictions lifted	Ограничения сняты
+	Couldn't unlock {name}: {e}	Не удалось разблокировать «{name}»: {e}
+	This document has no restrictions to lift	У этого документа нет ограничений, которые можно снять
 	The document's security settings don't allow this change	Настройки безопасности документа не разрешают это изменение
+	The document's security settings don't allow copying text and images	Настройки безопасности документа не разрешают копировать текст и изображения
+	The document's security settings don't allow printing	Настройки безопасности документа не разрешают печать
 	Open a document first	Сначала откройте документ
 	Security will be removed when you save	Безопасность будет удалена при сохранении
 	Click text or an image to edit it	Щёлкните текст или изображение, чтобы редактировать
@@ -1823,6 +1967,8 @@
 	{month} {y}	{month} {y}
 	Change {key}	Изменить {key}
 	Insert pages from {name}	Вставить страницы из {name}
+	Insert pages from {name} — 1 field renamed	Вставить страницы из {name} — 1 поле переименовано
+	Insert pages from {name} — fields renamed	Вставить страницы из {name} — поля переименованы
 	Fill in {name}	Заполнить {name}
 	Set the image of {name}	Задать изображение: {name}
 	Edit script of {name}	Редактировать скрипт: {name}
@@ -1846,6 +1992,7 @@
 	Delete field	Удалить поле
 	Duplicate field	Дублировать поле
 	Set tab order	Задать порядок табуляции
+	Set calculation order	Задать порядок вычислений
 	Change initial view	Изменить начальный вид
 	Set alternate text	Задать альтернативный текст
 	Mark figure as decorative	Пометить фигуру как декоративную
@@ -1853,6 +2000,7 @@
 	Delete document JavaScript	Удалить JavaScript документа
 	Edit document JavaScript	Редактировать JavaScript документа
 	Edit text	Редактировать текст
+	Load document font	Загрузить шрифт документа
 	Move image	Переместить изображение
 	Rotate image	Повернуть изображение
 	Flip image	Отразить изображение
@@ -1919,6 +2067,10 @@
 	Perimeter	Периметр
 	Area	Площадь
 	Drawing scale	Масштаб чертежа
+	Scale	Масштаб
+	Common scales	Распространённые масштабы
+	Enter a scale such as 1:50.	Введите масштаб, например 1:50.
+	Applying a scale switches units to m / mm.	При применении масштаба единицы переключаются на м / мм.
 	Snapping	Привязка
 	Export measurements	Экспортировать измерения
 	Open a PDF to measure it.	Откройте PDF для измерения.
@@ -1976,6 +2128,7 @@
 	DPI sets the printed page size without resampling the image.	DPI задаёт размер печатной страницы без передискретизации изображения.
 	Create	Создать
 	Dynamic XFA form laid out from its template: {pages}, {fields}.	Динамическая форма XFA, сверстанная по шаблону: {pages}, {fields}.
+	This form's scripts are turned off because one ran too long. Reopen the document to run them again.	Скрипты этой формы выключены: один из них выполнялся слишком долго. Чтобы запустить их снова, откройте документ заново.
 	XFA form: its fields and its XFA data are kept in step, so other viewers show what you fill in.	Форма XFA: её поля и данные XFA синхронизированы, поэтому другие просмотрщики показывают то, что вы заполняете.
 	Switch to two-page view first to show the cover page	Сначала переключитесь в двухстраничный вид, чтобы показать титульную страницу
 	Page display: {layout}	Отображение страниц: {layout}
@@ -1985,12 +2138,22 @@
 	Default zoom	Масштаб по умолчанию
 	Used when a PDF doesn't ask for a layout or zoom. Continuous scrolling never snaps between pages.	Используется, когда PDF не запрашивает макет или масштаб. Непрерывная прокрутка никогда не привязывается между страницами.
 	Reopen the files that were open when PdfCraft last closed	Повторно открывать файлы, которые были открыты при последнем закрытии PdfCraft
+	Restore the last view (page, zoom and page display) when a document is opened again	Восстанавливать последний вид (страницу, масштаб и показ страниц) при повторном открытии документа
+	Reload documents when their files change on disk	Перезагружать документы при изменении их файлов на диске
+	Don't show again	Больше не показывать
+	Show a notice when a document is secured	Показывать уведомление, когда документ защищён
+	Always use my default zoom and page layout	Всегда использовать мой масштаб и макет страницы по умолчанию
+	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	Этот файл был изменён на диске. «Перезагрузить» покажет новую версию и отбросит несохранённые изменения; «Сохранить» заменит её этой версией.
+	Reload	Перезагрузить
+	Couldn't reload {name}: {e}	Не удалось перезагрузить {name}: {e}
 	Choose a PNG or JPEG image (up to 4 MiB). Transparency is preserved.	Выберите изображение PNG или JPEG (до 4 МиБ). Прозрачность сохраняется.
 	Couldn't import the signature image: {e}	Не удалось импортировать изображение подписи: {e}
 
 @plural	{n} page|{n} pages	{n} страница|{n} страницы|{n} страниц
 @plural	{n} field|{n} fields	{n} поле|{n} поля|{n} полей
+@plural	{n} field name collides with earlier files and will be renamed: {list}|{n} field names collide with earlier files and will be renamed: {list}	Имя {n} поля конфликтует с предыдущими файлами и будет переименовано: {list}|Названия {n} полей конфликтуют с предыдущими файлами и будут переименованы: {list}|Названия {n} полей конфликтуют с предыдущими файлами и будут переименованы: {list}
 	Create PDF from multiple files…	Создать PDF из нескольких файлов…
+	Create separate PDFs…	Создать отдельные PDF…
 	Optimizing… removing user data	Оптимизация… удаление пользовательских данных
 	Optimizing… image {d} of {t}	Оптимизация… изображение {d} из {t}
 	Optimizing… cleaning up	Оптимизация… очистка
@@ -2007,7 +2170,11 @@
 	Created a PDF from {n} files; left out: {names}	PDF создан из файлов: {n}; пропущены: {names}
 	Created a PDF from the first {n} files	PDF создан из первых файлов: {n}
 	Go to page…	Перейти на страницу…
+	For page sizes and margins.	Для размеров страниц и полей.
+	The PDF text fonts can't draw “{c}” ({code}). Choose supported text.	Шрифты текста PDF не могут отобразить «{c}» ({code}). Выберите поддерживаемый текст.
 	The standard fonts can't draw “{c}” ({code}). Only Western European characters can be added as text for now.	Стандартные шрифты не могут отобразить «{c}» ({code}). Пока в виде текста можно добавлять только западноевропейские символы.
+	This field's font can't draw “{c}” ({code}), so PdfCraft shows ? in its place. The value is saved, and other PDF viewers redraw the field from it.	Шрифт этого поля не может отобразить «{c}» ({code}), поэтому PdfCraft показывает на его месте ?. Значение сохранено, и другие программы просмотра PDF перерисуют поле по нему.
+	The fonts PdfCraft writes with can't draw “{c}” ({code}), so it shows as ? in every PDF viewer. The text is saved.	Шрифты, которыми пишет PdfCraft, не могут отобразить «{c}» ({code}), поэтому во всех программах просмотра PDF на его месте будет ?. Текст сохранён.
 	Larger pages	Крупнее страницы
 	Smaller pages	Мельче страницы
 	Reset page size	Сбросить размер страниц
@@ -2047,3 +2214,319 @@
 	The field {name} no longer exists.	Поле {name} больше не существует.
 	A selected field has no widget on any page, so the fields can't be edited together.	У одного из выбранных полей нет виджета ни на одной странице, поэтому поля нельзя изменить вместе.
 	 ({n} at {dpi} dpi, the largest size they can be drawn at)	 ({n} — с разрешением {dpi} dpi, максимальным, с каким их можно отрисовать)
+
+# Multi-object selection and movement (#844)
+@plural	{n} object selected|{n} objects selected	Выделен {n} объект|Выделено {n} объекта|Выделено {n} объектов
+	Drag the selection to move it. Esc clears the selection.	Перетащите выделение, чтобы переместить его. Esc снимает выделение.
+	Shift-click to select several objects. Drag empty space to select an area.	Щёлкните с Shift, чтобы выбрать несколько объектов. Протяните рамку на пустом месте, чтобы выделить область.
+	Select at most 1000 objects at a time.	Выбирайте не более 1000 объектов одновременно.
+	Finish or discard the text being edited before selecting several objects.	Завершите или отмените редактирование текста, прежде чем выбирать несколько объектов.
+	Move object	Переместить объект
+	Move objects	Переместить объекты
+	Vertical text cannot be moved with this selection.	Вертикальный текст нельзя переместить вместе с этим выделением.
+	Text used as a clipping path cannot be moved with this selection.	Текст, используемый как обтравочный контур, нельзя переместить вместе с этим выделением.
+	These objects could not be moved. Select them again and try a smaller move.	Не удалось переместить эти объекты. Выберите их снова и попробуйте меньшее смещение.
+	This page contains objects that cannot be selected together.	На этой странице есть объекты, которые нельзя выделить вместе.
+	Fill colour	Цвет заливки
+	No fill	Без заливки
+	Fill colour: none	Цвет заливки: нет
+
+# Keyboard key names, distinct from command labels.
+key	Ctrl	Ctrl
+key	Shift	Shift
+key	Delete	Delete
+key	Esc	Esc
+key	Home	Home
+key	End	End
+key	Space	Пробел
+	Grid view	Вид сеткой
+	List view	Вид списком
+	Files are combined in the order shown. Drag them to change it.	Файлы объединяются в показанном порядке. Перетащите их, чтобы изменить его.
+	Preview unavailable: {e}	Предпросмотр недоступен: {e}
+	Pages: {k} of {n}	Страницы: {k} из {n}
+	Check the pages	Проверьте страницы
+	Switch to List view to change the pages it takes.	Переключитесь на вид списком, чтобы изменить, какие страницы взять.
+	Expand all	Развернуть все
+	Collapse all	Свернуть все
+	Collapse all pages	Свернуть все страницы
+	Expand all pages	Развернуть все страницы
+	Remove page	Удалить страницу
+	Remove {n} pages	Удалить страницы: {n}
+
+# Shared panel docking
+	Reset panel layout	Сбросить расположение панелей
+	Float panel	Сделать панель плавающей
+	Move to group	Переместить в группу
+	Panels	Панели
+	Resize panels	Изменить размеры панелей
+	Resize panel window	Изменить размер окна панели
+	Tools	Инструменты
+	Inspector	Инспектор
+
+# Architectural print controls (follow-up to #599).
+	PDF page: {size}	Страница PDF: {size}
+	Match page at 100%	Подобрать бумагу, масштаб 100%
+	PDF scale: {scale}%	Масштаб PDF: {scale}%
+	Printer paper and scaling may differ. Check driver settings.	Бумага и масштаб принтера могут отличаться. Проверьте настройки драйвера.
+	Drawing scale changes. Use Actual size for full-scale plans.	Масштаб чертежа изменяется. Для печати в исходном масштабе выберите Фактический размер.
+	Select page {label}	Выбрать страницу {label}
+	Rotate page {label} counterclockwise	Повернуть страницу {label} против часовой стрелки
+	Rotate page {label} clockwise	Повернуть страницу {label} по часовой стрелке
+	Delete page {label}	Удалить страницу {label}
+	Scroll speed (mouse wheel and arrow keys)	Скорость прокрутки (колесо мыши и клавиши со стрелками)
+scroll speed	Slow	Низкая
+scroll speed	Normal	Обычная
+scroll speed	Fast	Высокая
+	Animation effects	Эффекты анимации
+animation effects	On	Вкл
+animation effects	Off	Выкл
+	Enhance camera image	Улучшить снимок с камеры
+	Drag the corners onto the document's edges, then choose Enhance page.	Перетащите углы к краям документа, затем выберите «Улучшить страницу».
+	Enhance page	Улучшить страницу
+	Done adding text	Завершить добавление текста
+	Discard this text (Esc)	Отклонить этот текст (Esc)
+	Clean-up	Очистка
+	Original	Оригинал
+	Greyscale	Оттенки серого
+	Black and white	Чёрно-белый
+	Reading colours	Цвета для чтения
+	Replace document colours	Заменить цвета документа
+	Black on white	Чёрный на белом
+	White on black	Белый на чёрном
+	Yellow on black	Жёлтый на чёрном
+	Green on black	Зелёный на чёрном
+	Page background	Фон страницы
+	Only change the colour of black text or line art	Менять только цвет чёрного текста и линий
+	Change the colour of line art as well as text	Менять цвет и линий, а не только текста
+	Colours are remapped while rendering; the document itself never changes.	Цвета меняются при отрисовке; сам документ никогда не изменяется.
+	This printer's driver doesn't take two-sided settings from other programs, so its own setting applies. Change it in Properties…	Драйвер этого принтера не принимает настройки двусторонней печати от других программ, поэтому действует его собственная настройка. Измените её в окне Свойства…
+	Browser's print dialog	Диалог печати браузера
+	Copies, two-sided printing and colour are chosen in the browser's print dialog.	Число копий, двустороннюю печать и цвет выбирают в диалоге печати браузера.
+	Preparing {n} sheets for printing…	Подготовка листов к печати: {n}…
+	Preparing sheet {done} of {total} for printing…	Подготовка к печати листа {done} из {total}…
+	Opening the browser's print dialog…	Открывается диалог печати браузера…
+	Couldn't print from the browser ({e}); downloaded {name} to print instead	Не удалось напечатать из браузера ({e}); вместо этого для печати скачан файл {name}
+	Tools panel side	Сторона панели инструментов
+	Add comment	Добавить комментарий
+	Change tag properties	Изменить свойства тега
+# Accessibility structure tags.
+	Tags panel	Панель тегов
+	Tags	Теги
+	Tag type	Тип тега
+	Actual text	Фактический текст
+	Find a tag	Найти тег
+	Collapse tag	Свернуть тег
+	Expand tag	Развернуть тег
+	Revert changes	Отменить изменения
+	Save tag properties	Сохранить свойства тега
+	This document has no editable structure tags.	В этом документе нет редактируемых структурных тегов.
+	{n} tags	{n} тегов
+	Save or revert changes before selecting another tag.	Сохраните или отмените изменения перед выбором другого тега.
+	Left out: {names}	Пропущены: {names}
+	already a PDF	уже PDF
+	no unused output name	нет свободного имени для выходного файла
+	no output folder was chosen	не выбрана папка для вывода
+@plural	Downloaded {n} PDF|Downloaded {n} PDFs	Скачан {n} PDF-файл|Скачано {n} PDF-файла|Скачано {n} PDF-файлов
+@plural	{n} calculation now uses the new name.|{n} calculations now use the new name.	{n} вычисление теперь использует новое имя.|{n} вычисления теперь используют новое имя.|{n} вычислений теперь используют новое имя.
+@plural	The calculation order has {n} entry that calculates nothing. Fix order removes it.|The calculation order has {n} entries that calculate nothing. Fix order removes them.	В порядке вычислений {n} запись, которая ничего не вычисляет. «Исправить порядок» удалит её.|В порядке вычислений {n} записи, которые ничего не вычисляют. «Исправить порядок» удалит их.|В порядке вычислений {n} записей, которые ничего не вычисляют. «Исправить порядок» удалит их.
+@plural	{fields} reads it|{fields} read it	{fields} читает его|{fields} читают его|{fields} читают его
+@plural	{n} field shows an old value|{n} fields show old values	{n} поле показывает старое значение|{n} поля показывают старые значения|{n} полей показывают старые значения
+@plural	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.	{field} вычисляется раньше {fields}, которое оно читает.|{field} вычисляется раньше {fields}, которые оно читает.|{field} вычисляется раньше {fields}, которые оно читает.
+@plural	{n} more field calculates too early.|{n} more fields calculate too early.	Ещё {n} поле вычисляется слишком рано.|Ещё {n} поля вычисляются слишком рано.|Ещё {n} полей вычисляются слишком рано.
+@plural	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.	{fields} нет в порядке, сохранённом в PDF, поэтому другие программы просмотра PDF могут его не вычислить.|{fields} нет в порядке, сохранённом в PDF, поэтому другие программы просмотра PDF могут их не вычислить.|{fields} нет в порядке, сохранённом в PDF, поэтому другие программы просмотра PDF могут их не вычислить.
+@plural	{n} formula reads a field the form doesn't have|{n} formulas read fields the form doesn't have	{n} формула читает поле, которого нет в форме|{n} формулы читают поля, которых нет в форме|{n} формул читают поля, которых нет в форме
+@plural	{field} reads {fields}, which the form doesn't have.|{field} reads {fields}, which the form doesn't have.	{field} читает {fields}, которого нет в форме.|{field} читает {fields}, которых нет в форме.|{field} читает {fields}, которых нет в форме.
+@plural	{n} more formula reads a missing field.|{n} more formulas read missing fields.	Ещё {n} формула читает отсутствующее поле.|Ещё {n} формулы читают отсутствующие поля.|Ещё {n} формул читают отсутствующие поля.
+@plural	{fields} builds some field names as it runs, so those reads aren't checked.|{fields} build some field names as they run, so those reads aren't checked.	{fields} составляет некоторые имена полей при выполнении, поэтому эти чтения не проверяются.|{fields} составляют некоторые имена полей при выполнении, поэтому эти чтения не проверяются.|{fields} составляют некоторые имена полей при выполнении, поэтому эти чтения не проверяются.
+@plural	{fields} is missing|{fields} are missing	{fields} отсутствует|{fields} отсутствуют|{fields} отсутствуют
+	Scan	Сканировать
+	Sign a sheet of white paper and take a photo of it in bright, even light (use the flash). Choose the photo or drop it here: PdfCraft finds the signature and removes the paper.	Распишитесь на листе белой бумаги и сфотографируйте его при ярком равномерном освещении (со вспышкой). Выберите фото или перетащите его сюда: PdfCraft найдёт подпись и уберёт бумагу.
+	Choose photo…	Выбрать фото…
+	No photo chosen	Фото не выбрано
+	Photo	Фото
+	Ink sensitivity	Чувствительность к чернилам
+	No signature was found in the frame. Move the frame over the signature or raise the ink sensitivity.	В рамке не найдена подпись. Наведите рамку на подпись или увеличьте чувствительность к чернилам.
+	Couldn't use the photo: {e}	Не удалось использовать фото: {e}
+
+# PDF tab context menu (#1233)
+	Close Tab	Закрыть вкладку
+	Reopen Closed Tab	Открыть закрытую вкладку
+	Reveal in Finder	Показать в Finder
+	Reveal in File Explorer	Показать в проводнике
+	Other colour…	Другой цвет…
+	Recent colours	Недавние цвета
+	Couldn't follow linked PDF: {reason}	Не удалось открыть связанный PDF: {reason}
+	The linked PDF opened, but its named destination was not applied.	Связанный PDF открыт, но его именованное назначение не применено.
+	The linked PDF opened, but its page destination was out of range.	Связанный PDF открыт, но страница назначения вне допустимого диапазона.
+	Local cross-PDF links require the desktop app	Локальные ссылки между PDF работают только в настольном приложении
+	Cut Image	Вырезать изображение
+	Redact Image	Скрыть изображение
+	Create Link…	Создать ссылку…
+	Recognize Text…	Распознать текст…
+	Minimize	Свернуть
+	Maximize	Развернуть
+	Restore	Восстановить
+	Use system title bar	Использовать системный заголовок окна
+	Show a basic title bar for the window buttons instead of the tab strip. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme.	Показывать простой заголовок окна с кнопками вместо полосы вкладок. GNOME не рисует заголовки для приложений, поэтому этот заголовок не следует его теме.
+
+# Absolute local GoToR confirmation (#1364).
+	Allow	Разрешить
+	Only allow this if you trust the source document.	Разрешите это действие, только если доверяете исходному документу.
+	Open in Full Screen mode?	Открыть в полноэкранном режиме?
+	This document asks to open in Full Screen mode: the page fills the screen and nothing else shows. Press Esc at any time to leave it.	Этот документ просит открыть его в полноэкранном режиме: страница занимает весь экран, и больше ничего не отображается. Нажмите Esc в любой момент, чтобы выйти.
+	Full Screen	Полный экран
+	Not now	Не сейчас
+	Open this local PDF?	Открыть этот локальный PDF?
+	This document is trying to open a local file:	Этот документ пытается открыть локальный файл:
+	Move tag earlier	Переместить тег раньше
+	Move tag later	Переместить тег позже
+
+# Historical snapshot notice bar (View signed version / View revision).
+	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	Вы просматриваете подписанную версию документа «{from}» (ревизия {rev}). Это снимок: изменения здесь не затронут оригинал.
+	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	Вы просматриваете ревизию {rev} документа «{from}». Это снимок: изменения здесь не затронут оригинал.
+	Turn upside down (180°)	Перевернуть (180°)
+	4 x 6 in label (101.6 x 152.4 mm)	Этикетка 4 × 6 дюйма (101,6 × 152,4 мм)
+	Cuts each page to its printed area, turns it upright and fits it to the sheet without stretching. One label per sheet.	Обрезает каждую страницу по напечатанной области, разворачивает её прямо и вписывает в лист без искажений. Одна этикетка на лист.
+	Find untagged content	Найти нетегированный контент
+	No untagged content was found.	Нетегированный контент не найден.
+	Found {n} untagged content problems.	Найдено проблем с нетегированным контентом: {n}.
+	Tag form fields	Пометить поля формы
+	Mark as artifact	Пометить как артефакт
+	Remove this leaf tag from reading order and mark its direct content as an artifact	Удалите этот конечный тег из порядка чтения и пометьте его непосредственное содержимое как артефакт
+	Mark content as artifact	Пометить содержимое как артефакт
+	Word count	Количество слов
+	Current page only	Только текущая страница
+	Exclude tagged tables	Исключить таблицы с тегами
+	Exclude tagged code blocks	Исключить блоки кода с тегами
+	Exclude image/OCR text	Исключить текст изображений и OCR
+	Exclusions use PDF tags. Untagged tables and code remain included. Image exclusion also removes invisible text.	Исключения используют теги PDF. Таблицы и код без тегов остаются в подсчёте. Исключение изображений также удаляет невидимый текст.
+	Words	Слова
+	Characters	Символы
+	Characters without spaces	Символы без пробелов
+	Pages counted	Подсчитанные страницы
+	Some pages contain no countable text. Scanned images need OCR first.	На некоторых страницах нет текста для подсчёта. Для отсканированных изображений сначала требуется OCR.
+	Some content could not be classified safely and was kept in the count.	Часть содержимого не удалось надёжно классифицировать, поэтому она осталась в подсчёте.
+	Counting words… {n} pages read	Подсчёт слов… прочитано страниц: {n}
+	Word counting stopped unexpectedly.	Подсчёт слов неожиданно остановился.
+	Word count…	Количество слов…
+@id	file.word_count	Количество слов…
+	Standard	Стандартные
+	Mobile	Мобильные устройства
+	Merge image fragments	Объединять фрагменты изображений
+	Optimizing… merging image fragments	Оптимизация… объединение фрагментов изображений
+	Side by side	Рядом
+	New file only	Только новый файл
+	Old file: {name}	Старый файл: {name}
+	New file: {name}	Новый файл: {name}
+	Print as image	Печать как изображение
+	Resolution:	Разрешение:
+	Use it when a printer skips text, shading or transparency. The print is no longer searchable text; with Print in grayscale, the pictures are grey.	Используйте, когда принтер пропускает текст, заливки или прозрачность. Отпечаток больше не текст с поиском; при печати в оттенках серого изображения серые.
+	Crop Image	Обрезать изображение
+	Remove Crop	Убрать обрезку
+	Trim the picture with its handles; Enter or Done applies	Обрежьте изображение за маркеры; Enter или «Готово» применяет
+	Redaction mark appearance	Вид метки скрытия
+	Outline colour:	Цвет контура:
+	Fill colour:	Цвет заливки:
+	Shown while the pointer is over a mark.	Показывается, пока указатель над меткой.
+	Opacity:	Непрозрачность:
+	Make properties default	Сделать свойства стандартными
+	Pages selected	Выделенные страницы
+	Page properties	Свойства страницы
+	Clear search	Очистить поиск
+	Pin	Закрепить
+	Pin a tool…	Закрепить инструмент…
+	Pin to Home	Закрепить на Главной
+	Pin tools to Home	Закрепить инструменты на Главной
+	Pin your favorite tools here for quick access.	Закрепите здесь избранные инструменты для быстрого доступа.
+	Pinned	Закреплено
+	Pinned Tools	Закрепленные инструменты
+	Search tools…	Поиск инструментов…
+	Select tools to display on your Home page for quick access.	Выберите инструменты для отображения на Главной странице для быстрого доступа.
+	Unpin from Home	Открепить от Главной
+	Unpin tool	Открепить инструмент
+	Transform image	Трансформировать изображение
+	Select Tool	Инструмент «Выделение»
+	Hand Tool	Инструмент «Рука»
+	Marquee Zoom	Масштаб выделением
+	Paste	Вставить
+	Edit this PDF	Редактировать этот PDF
+	Export this PDF	Экспортировать этот PDF
+	Find text or tools	Найти текст или инструменты
+	Create & Edit	Создание и редактирование
+	Review & Compare	Рецензирование и сравнение
+	Forms & Signatures	Формы и подписи
+	Protect & Standardize	Защита и стандартизация
+	Customize & Automate	Настройка и автоматизация
+	No tools match your search.	Нет инструментов, соответствующих запросу.
+	Expand all tools	Развернуть все инструменты
+	Collapse all tools	Свернуть все инструменты
+	Attach a file…	Прикрепить файл…
+	Delete attachment	Удалить вложение
+	Attaching files is not available on the web yet	Прикрепление файлов в веб-версии пока недоступно
+	Attach {name}	Прикрепить {name}
+	Delete attachment {key}	Удалить вложение {key}
+	Font	Шрифт
+	Bulleted list	Маркированный список
+	Numbered list	Нумерованный список
+	Alignment	Выравнивание
+	Superscript	Надстрочный
+	Subscript	Подстрочный
+	Paragraph spacing	Интервал между абзацами
+	Less	Меньше
+	Other options	Другие параметры
+	Thumbnail size	Размер миниатюр
+	Smaller thumbnails	Уменьшить миниатюры
+	Larger thumbnails	Увеличить миниатюры
+# Lines, connected lines and polygons reshaped by their ends and corners (M5).
+	Reshape comment	Изменить форму комментария
+
+# Prepare a form ▸ Text field table
+	Add text field table	Добавить таблицу текстовых полей
+	Text field table	Таблица текстовых полей
+	Text Field Table	Таблица текстовых полей
+	Columns	Столбцы
+	Row spacing	Интервал между строками
+	Column spacing	Интервал между столбцами
+	First row number	Номер первой строки
+	Column widths	Ширина столбцов
+	Distribute evenly	Распределить равномерно
+	Field names	Имена полей
+	N or {row} is the row number, {col} the column number, {seq} the cell number. With none of them, the row number goes last.	N или {row} — номер строки, {col} — номер столбца, {seq} — номер ячейки. Если их нет, номер строки добавляется в конец.
+	Column {n}	Столбец {n}
+	Add fields	Добавить поля
+	the rows are too short: make the area taller, or use fewer rows or less row spacing	строки слишком низкие: увеличьте высоту области, уменьшите число строк или интервал между ними
+	a column is too narrow: make the area wider, give the column more of it, or use fewer columns or less column spacing	столбец слишком узкий: расширьте область, отдайте столбцу больше ширины, уменьшите число столбцов или интервал между ними
+	field names can't contain a period: {name}	имена полей не могут содержать точку: {name}
+	two cells would both be named {name}	две ячейки получили бы одно имя {name}
+	a field named {name} already exists	поле с именем {name} уже существует
+	Arrange image	Упорядочить изображение
+	Bring forward	Переместить вперед
+	Bring to front	На передний план
+	Crop	Обрезать
+	Remove crop	Убрать обрезку
+	Send backward	Переместить назад
+	Send to back	На задний план
+
+# Date picker: Today button (#4274) (AI-assisted, not separately native-reviewed)
+	Today	Сегодня
+@plural	{n} reply|{n} replies	{n} ответ|{n} ответа|{n} ответов
+
+# Pages panel: the Page tools menu (#4415) (AI-assisted, not separately native-reviewed)
+	Page tools	Инструменты страниц
+	Insert pages from a file after the selection…	Вставить страницы из файла после выделения…
+	Rotate the selected pages counterclockwise	Повернуть выбранные страницы против часовой стрелки
+	Rotate the selected pages clockwise	Повернуть выбранные страницы по часовой стрелке
+	Extract the selected pages…	Извлечь выбранные страницы…
+	Delete the selected pages	Удалить выбранные страницы
+
+# Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
+	Options for this reply	Параметры этого ответа
+	Export value	Значение экспорта
+	Show Page Edge Shadows	Показывать тени по краям страниц
+
+# Image paste and Home notifications (AI-assisted; not separately native-reviewed)
+	Search…	Поиск…
+	Image pasted	Изображение вставлено
+	No image on clipboard to paste	В буфере обмена нет изображения для вставки
+	Pinned {tool} to Home	{tool} закреплён на главной
+	Unpinned {tool} from Home	{tool} откреплён от главной

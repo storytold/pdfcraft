@@ -4,6 +4,7 @@
 use crate::SignError;
 use crate::der::{self, Time, Tlv, tag};
 use crate::keys::{self, DigestAlg, PrivateKey, PublicKey};
+use crate::pdf::{Detail, Fill};
 
 const CN: &str = "2.5.4.3";
 const C: &str = "2.5.4.6";
@@ -55,6 +56,11 @@ impl Name {
 
     pub fn country(&self) -> Option<&str> {
         self.get(C)
+    }
+
+    /// The name Acrobat shows: the common name, else the organization, else the DN.
+    pub fn display_name(&self) -> String {
+        self.common_name().or(self.organization()).map(str::to_string).unwrap_or_else(|| self.display())
     }
 
     /// "CN=Ada Lovelace, O=Example, E=ada@example.com"
@@ -135,7 +141,38 @@ pub struct Certificate {
     pub crl_urls: Vec<String>,
     /// The `version` field: 0 for v1, 1 for v2, 2 for v3.
     pub version: u64,
+    /// OIDs of extensions marked critical that PdfCraft does not process (RFC 5280 §4.2).
+    pub unknown_critical: Vec<String>,
 }
+
+/// Extensions PdfCraft reads or may safely ignore when they are critical: the ones
+/// `Extensions::read` handles, subject/issuer alternative names, and certificate policies
+/// (accepted as any policy).
+/// qcStatements (1.3.6.1.5.5.7.1.3) is included: RFC 3739 lets qualified (eIDAS and other national)
+/// certificates mark it critical, and it declares the certificate's status rather than limiting
+/// what the key may sign.
+const PROCESSED_EXTENSIONS: [&str; 11] = [
+    "2.5.29.19",
+    "2.5.29.15",
+    "2.5.29.14",
+    "2.5.29.35",
+    "2.5.29.37",
+    "1.3.6.1.5.5.7.1.1",
+    "2.5.29.31",
+    "2.5.29.17",
+    "2.5.29.18",
+    "2.5.29.32",
+    "1.3.6.1.5.5.7.1.3",
+];
+
+/// id-kp-timeStamping (RFC 5280 §4.2.1.12), required of a timestamp authority (RFC 3161 §2.3).
+const EKU_TIME_STAMPING: &str = "1.3.6.1.5.5.7.3.8";
+
+/// Extended key usages that allow signing documents: anyExtendedKeyUsage, emailProtection,
+/// codeSigning, documentSigning (RFC 9336), Adobe Authentic Documents and Microsoft document
+/// signing.
+const DOCUMENT_SIGNING_EKUS: [&str; 6] =
+    ["2.5.29.37.0", "1.3.6.1.5.5.7.3.4", "1.3.6.1.5.5.7.3.3", "1.3.6.1.5.5.7.3.36", "1.2.840.113583.1.1.5", "1.3.6.1.4.1.311.10.3.12"];
 
 /// The certificate extensions `Certificate::parse` reads, gathered tolerantly: an
 /// extension that does not parse leaves its field at the default instead of failing the
@@ -197,11 +234,15 @@ impl Extensions {
                     self.authority_key_id = aki.children().ok().and_then(|c| c.into_iter().find(|t| t.tag == tag::ctx(0))).map(|t| t.value.to_vec());
                 }
             }
-            // ExtendedKeyUsage: a SEQUENCE OF OID.
+            // ExtendedKeyUsage: a SEQUENCE OF OID. Like keyUsage, one that is present restricts
+            // the key even when it doesn't parse: an unreadable one allows no purpose at all.
             "2.5.29.37" => {
-                if let Ok(eku) = Tlv::parse_all(value.value) {
-                    self.extended_key_usage = eku.children().ok().map(|c| c.into_iter().filter_map(|t| t.oid().ok()).collect::<Vec<_>>());
-                }
+                let purposes = Tlv::parse_all(value.value)
+                    .ok()
+                    .filter(|eku| eku.tag == tag::SEQUENCE)
+                    .and_then(|eku| eku.children().ok())
+                    .and_then(|c| c.iter().map(|t| t.oid().ok()).collect::<Option<Vec<_>>>());
+                self.extended_key_usage = Some(purposes.unwrap_or_default());
             }
             // Authority Information Access: OCSP and CA-issuer locations.
             "1.3.6.1.5.5.7.1.1" => {
@@ -265,6 +306,7 @@ impl Certificate {
         let subject = Name::parse(&f.next().ok_or_else(|| SignError::Malformed("subject".into()))?)?;
         let public_key = PublicKey::from_spki(&f.next().ok_or_else(|| SignError::Malformed("public key".into()))?)?;
         let mut ext = Extensions::default();
+        let mut unknown_critical = Vec::new();
         for t in f {
             if t.tag != tag::ctx(3) {
                 continue;
@@ -273,6 +315,10 @@ impl Certificate {
                 let e = ext_tlv.children()?;
                 let Some(o) = e.first().and_then(|o| o.oid().ok()) else { continue };
                 let Some(value) = e.last().filter(|v| v.tag == tag::OCTET_STRING) else { continue };
+                let critical = e.len() == 3 && e.get(1).is_some_and(|b| b.tag == tag::BOOLEAN && b.value != [0]);
+                if critical && !PROCESSED_EXTENSIONS.contains(&o.as_str()) {
+                    unknown_critical.push(o.clone());
+                }
                 // A malformed or unreadable extension must never reject the whole certificate:
                 // unreadable ones are skipped and the fields they carry keep their defaults.
                 ext.read(o.as_str(), value);
@@ -310,6 +356,55 @@ impl Certificate {
             ocsp_urls,
             crl_urls,
             version,
+            unknown_critical,
+        })
+    }
+
+    /// Why this certificate may not sign documents, if it may not (RFC 5280 §4.2.1.3,
+    /// §4.2.1.12, §4.2): a key usage without digitalSignature or nonRepudiation, an extended key
+    /// usage without a document-signing purpose, or a critical extension PdfCraft doesn't process.
+    /// The sentences are wordings of this crate's, listed in [`WORDINGS`](crate::pdf::WORDINGS), so an
+    /// interface reading in another language says them in it; only the extensions' own OIDs go in as
+    /// they stand.
+    pub fn signing_problem(&self) -> Option<Detail> {
+        /// keyUsage bits 0 (digitalSignature) and 1 (nonRepudiation).
+        const SIGNING_BITS: u16 = 0b11;
+        if self.key_usage.is_some_and(|u| u & SIGNING_BITS == 0) {
+            Some(Detail::plain(
+                "The signer's certificate does not allow digital signatures (its key usage has neither digital signature nor non-repudiation).",
+            ))
+        } else if self.extended_key_usage.as_ref().is_some_and(|e| !e.iter().any(|o| DOCUMENT_SIGNING_EKUS.contains(&o.as_str()))) {
+            Some(Detail::plain(
+                "The signer's certificate is not issued for signing documents (its extended key usage has no document-signing purpose).",
+            ))
+        } else if !self.unknown_critical.is_empty() {
+            Some(Detail::of(
+                "The signer's certificate has critical extensions PdfCraft does not recognize ({}).",
+                Fill::Value(self.unknown_critical.join(", ")),
+            ))
+        } else {
+            None
+        }
+    }
+
+    /// Whether this certificate may stamp trusted time (RFC 3161 §2.3): its extended key usage
+    /// includes timeStamping, its key usage (if any) allows digital signatures or
+    /// non-repudiation, and it has no critical extension PdfCraft doesn't process. A certificate
+    /// issued for another purpose proves who signed, not when.
+    pub fn may_timestamp(&self) -> bool {
+        /// keyUsage bits 0 (digitalSignature) and 1 (nonRepudiation).
+        const SIGNING_BITS: u16 = 0b11;
+        self.extended_key_usage.as_ref().is_some_and(|e| e.iter().any(|o| o == EKU_TIME_STAMPING))
+            && self.key_usage.is_none_or(|u| u & SIGNING_BITS != 0)
+            && self.unknown_critical.is_empty()
+    }
+
+    /// [`signing_problem`](Self::signing_problem) as a clause that follows the certificate's
+    /// name ("it is not issued for signing documents (…)"), for lists of digital IDs.
+    pub fn signing_problem_clause(&self) -> Option<String> {
+        self.signing_problem().map(|d| match d.message.strip_prefix("The signer's certificate ") {
+            Some(rest) => format!("it {}", rest.strip_suffix('.').unwrap_or(rest)),
+            None => d.message,
         })
     }
 
@@ -346,7 +441,7 @@ impl Certificate {
 
     /// The display name Acrobat uses: the common name, else the organization, else the DN.
     pub fn display_name(&self) -> String {
-        self.subject.common_name().or(self.subject.organization()).map(str::to_string).unwrap_or_else(|| self.subject.display())
+        self.subject.display_name()
     }
 
     /// SHA-256 fingerprint as upper-case hex pairs.
@@ -398,8 +493,22 @@ impl Certificate {
     }
 }
 
+/// The subject alone, to name a certificate `Certificate::parse` rejects (one with a key type
+/// PdfCraft doesn't support, say). `None` when even that can't be read.
+pub fn subject_of(raw: &[u8]) -> Option<Name> {
+    let cert = Tlv::parse_all(raw).ok()?.expect(tag::SEQUENCE, "Certificate").ok()?;
+    let tbs = cert.children().ok()?.into_iter().next()?;
+    let mut f = tbs.children().ok()?.into_iter().peekable();
+    if f.peek().is_some_and(|t| t.tag == tag::ctx(0)) {
+        f.next();
+    }
+    // serial, signature algorithm, issuer, validity, then the subject.
+    Name::parse(&f.nth(4)?).ok()
+}
+
 /// The chain from `leaf` up through `pool`, as far as issuers can be found and may issue: each
-/// issuer's key verifies the certificate below it, it is a CA allowed to sign certificates, its
+/// issuer's key verifies the certificate below it, it is a CA allowed to sign certificates, it
+/// has no critical extension PdfCraft doesn't process (unless it is self-signed), its
 /// `pathLenConstraint` allows the CA certificates below it, and (when `at` is given) it was valid
 /// then. Stops at a self-signed certificate. Certificates embedded in a document are in `pool`
 /// too, so an ordinary end-entity certificate must never be accepted as an issuer.
@@ -409,7 +518,11 @@ pub fn build_chain<'a>(leaf: &'a Certificate, pool: &'a [Certificate], at: Optio
 
 /// [`build_chain`], and why it stopped where it did if a certificate that matched the issuer by
 /// name and signature was refused.
-pub fn build_chain_noted<'a>(leaf: &'a Certificate, pool: &'a [Certificate], at: Option<Time>) -> (Vec<&'a Certificate>, Option<String>) {
+///
+/// The reason is a whole sentence of ours, listed in [`WORDINGS`](crate::pdf::WORDINGS), with the two
+/// certificates' own names put in afterwards, so an interface reading in another language says it in
+/// it.
+pub fn build_chain_noted<'a>(leaf: &'a Certificate, pool: &'a [Certificate], at: Option<Time>) -> (Vec<&'a Certificate>, Option<Detail>) {
     let mut chain = vec![leaf];
     let mut refused = None;
     while chain.len() < 10 {
@@ -421,12 +534,18 @@ pub fn build_chain_noted<'a>(leaf: &'a Certificate, pool: &'a [Certificate], at:
         let below = chain.len() - 1;
         let mut found = None;
         for c in pool.iter().filter(|c| c.subject.raw == last.issuer.raw && !chain.contains(c) && last.signed_by(&c.public_key)) {
+            // Each reason is a whole sentence, not a phrase stitched into one: a language puts the
+            // two names where it needs them.
             let why = if !c.may_issue() {
-                Some("is not a CA certificate that may issue certificates")
+                Some("The certificate of {} is not a CA certificate that may issue certificates, so it is not used to vouch for {}.")
+            } else if !c.unknown_critical.is_empty() && !c.is_self_signed() {
+                // What such an extension limits (name constraints, policy constraints) would
+                // go unchecked. A self-signed root's extensions are the trust store's business.
+                Some("The certificate of {} has critical extensions PdfCraft does not recognize, so it is not used to vouch for {}.")
             } else if c.path_len.is_some_and(|n| below > n as usize) {
-                Some("does not allow this many CA certificates below it (path length)")
+                Some("The certificate of {} does not allow this many CA certificates below it (path length), so it is not used to vouch for {}.")
             } else if at.is_some_and(|t| !c.valid_at(t)) {
-                Some("was not valid at the time of signing")
+                Some("The certificate of {} was not valid at the time of signing, so it is not used to vouch for {}.")
             } else {
                 None
             };
@@ -435,9 +554,7 @@ pub fn build_chain_noted<'a>(leaf: &'a Certificate, pool: &'a [Certificate], at:
                     found = Some(c);
                     break;
                 }
-                Some(why) => {
-                    refused = Some(format!("The certificate of {} {why}, so it is not used to vouch for {}.", c.display_name(), last.display_name()))
-                }
+                Some(why) => refused = Some(Detail::of(why, Fill::Names(c.display_name(), last.display_name()))),
             }
         }
         let Some(issuer) = found else { break };
@@ -448,27 +565,44 @@ pub fn build_chain_noted<'a>(leaf: &'a Certificate, pool: &'a [Certificate], at:
 }
 
 /// Certificates from a file: DER, or PEM with one or more `CERTIFICATE` blocks (`.cer`, `.crt`,
-/// `.pem`, Acrobat's `.fdf`-free exports).
+/// `.pem`, Acrobat's `.fdf`-free exports), or a PKCS #7 bundle (`.p7b`, `.p7c`) in DER or as a
+/// PEM `PKCS7`/`CMS` block, as Windows, Acrobat and certificate authorities export chains.
 pub fn load_certificates(bytes: &[u8]) -> Result<Vec<Certificate>, SignError> {
     if bytes.first() == Some(&0x30) {
-        return Ok(vec![Certificate::parse(bytes)?]);
+        // One DER certificate, else a DER bundle; a file that is neither reports the
+        // certificate's error, the common case.
+        return match Certificate::parse(bytes) {
+            Ok(cert) => Ok(vec![cert]),
+            Err(e) => crate::cms::certificate_bundle(bytes).map_err(|_| e),
+        };
     }
     let text = String::from_utf8_lossy(bytes);
     let mut out = Vec::new();
-    let mut block: Option<String> = None;
+    // The block being read: its label and its base64 so far.
+    let mut block: Option<(&str, String)> = None;
     for line in text.lines().map(str::trim) {
-        if line == "-----BEGIN CERTIFICATE-----" {
-            block = Some(String::new());
-        } else if line == "-----END CERTIFICATE-----" {
-            if let Some(b) = block.take() {
-                out.push(Certificate::parse(&base64(&b).ok_or_else(|| SignError::Malformed("PEM base64".into()))?)?);
+        if let Some(label) = line.strip_prefix("-----BEGIN ").and_then(|l| l.strip_suffix("-----")) {
+            block = matches!(label, "CERTIFICATE" | "PKCS7" | "CMS").then(|| (label, String::new()));
+        } else if let Some(label) = line.strip_prefix("-----END ").and_then(|l| l.strip_suffix("-----")) {
+            // An END that doesn't close the open block ends nothing.
+            if let Some((open, b)) = block.take_if(|(open, _)| *open == label) {
+                let der = base64(&b).ok_or_else(|| SignError::Malformed("PEM base64".into()))?;
+                if open == "CERTIFICATE" {
+                    out.push(Certificate::parse(&der)?);
+                } else {
+                    out.extend(crate::cms::certificate_bundle(&der)?);
+                }
             }
-        } else if let Some(b) = block.as_mut() {
+        } else if let Some((_, b)) = block.as_mut() {
             b.push_str(line);
         }
     }
+    // Certificates before a block that never ends are not a smaller set: the file is damaged.
+    if block.is_some() {
+        return Err(SignError::Malformed("a PEM block is not closed".into()));
+    }
     if out.is_empty() {
-        return Err(SignError::Malformed("no certificate found (expected DER or PEM)".into()));
+        return Err(SignError::Malformed("no certificate found (expected DER, PEM or a PKCS #7 bundle)".into()));
     }
     Ok(out)
 }

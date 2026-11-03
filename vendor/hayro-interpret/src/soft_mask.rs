@@ -1,4 +1,4 @@
-use crate::color::{Color, ColorComponents, ColorSpace};
+use crate::color::{Color, ColorComponents, ColorSpace, DeviceFamily, device_cmyk_to_gray};
 use crate::context::{Context, InterpreterCache};
 use crate::device::Device;
 use crate::function::Function;
@@ -48,6 +48,7 @@ impl TransferFunction {
 }
 
 struct Repr<'a> {
+    cache_key: u128,
     obj_id: ObjectIdentifier,
     group: FormXObject<'a>,
     mask_type: MaskType,
@@ -58,6 +59,9 @@ struct Repr<'a> {
     transfer_function: Option<TransferFunction>,
     settings: InterpreterSettings,
     background: Color,
+    // PdfCraft patch (63).
+    /// A luminosity mask whose group colour space is `/DeviceCMYK`.
+    luminosity_in_device_cmyk: bool,
     xref: &'a XRef,
     nesting_depth: u32,
 }
@@ -65,7 +69,6 @@ struct Repr<'a> {
 impl Hash for Repr<'_> {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.obj_id.hash(state);
-        self.root_transform.cache_key().hash(state);
     }
 }
 
@@ -89,7 +92,7 @@ impl Eq for SoftMask<'_> {}
 
 impl CacheKey for SoftMask<'_> {
     fn cache_key(&self) -> u128 {
-        hash128(self)
+        self.0.cache_key
     }
 }
 
@@ -107,10 +110,17 @@ impl<'a> SoftMask<'a> {
         // PdfCraft patch: the group's /CS is optional (ISO 32000-2 §11.6.5.2; Chrome/Skia omit
         // it). Upstream returned None here, silently dropping the whole soft mask. Fall back to
         // DeviceRGB, the blending space our renderer composites in.
-        let cs = group
+        let cs_object = group
             .dict
             .get::<Dict<'_>>(GROUP)
-            .and_then(|g| g.get::<Object<'_>>(CS))
+            .and_then(|g| g.get::<Object<'_>>(CS));
+        // PdfCraft patch (63): the group is composited in `/DeviceCMYK` itself. An ICC-based
+        // or calibrated group space keeps its own conversion.
+        let group_in_device_cmyk = cs_object
+            .as_ref()
+            .and_then(DeviceFamily::of_object)
+            .is_some_and(|family| family == DeviceFamily::Cmyk);
+        let cs = cs_object
             .and_then(|o| ColorSpace::new(o, &context.interpreter_cache.object_cache))
             .unwrap_or_else(ColorSpace::device_rgb);
         let transfer_function = dict
@@ -121,7 +131,19 @@ impl<'a> SoftMask<'a> {
             LUMINOSITY => {
                 let color = dict
                     .get::<ColorComponents>(BC)
-                    .map(|c| Color::new(cs, c, 1.0))
+                    .map(|c| {
+                        // PdfCraft patch (63): a DeviceCMYK backdrop's luminosity is its gray
+                        // (ISO 32000-2 §11.5.3), as for the group's content.
+                        if group_in_device_cmyk && c.len() == 4 {
+                            Color::new(
+                                ColorSpace::device_gray(),
+                                smallvec![device_cmyk_to_gray(&c)],
+                                1.0,
+                            )
+                        } else {
+                            Color::new(cs, c, 1.0)
+                        }
+                    })
                     .unwrap_or(Color::new(ColorSpace::device_gray(), smallvec![0.0], 1.0));
 
                 (MaskType::Luminosity, color)
@@ -134,18 +156,30 @@ impl<'a> SoftMask<'a> {
             _ => return None,
         };
         let nesting_depth = context.nesting_depth() + 1;
+        let root_transform = context.get().ctm;
+        let bbox = context.bbox();
+        let resources_key = resources_cache_key(&parent_resources);
+        let cache_key = hash128(&(
+            dict.cache_key(),
+            root_transform.cache_key(),
+            [bbox.x0.to_bits(), bbox.y0.to_bits(), bbox.x1.to_bits(), bbox.y1.to_bits()],
+            resources_key,
+            nesting_depth,
+        ));
 
         Some(Self(Rc::new(Repr {
+            cache_key,
             obj_id,
             group,
             mask_type,
-            root_transform: context.get().ctm,
+            root_transform,
             transfer_function,
             bbox: context.bbox(),
             interpreter_cache: context.interpreter_cache.clone(),
             settings: context.settings.clone(),
             xref: context.xref,
             background,
+            luminosity_in_device_cmyk: group_in_device_cmyk && mask_type == MaskType::Luminosity,
             parent_resources,
             nesting_depth,
         })))
@@ -163,6 +197,7 @@ impl<'a> SoftMask<'a> {
             state,
             self.0.nesting_depth,
         );
+        ctx.luminosity_in_device_cmyk = self.0.luminosity_in_device_cmyk;
         draw_form_xobject(&self.0.parent_resources, &self.0.group, &mut ctx, device);
     }
 
@@ -187,4 +222,17 @@ impl<'a> SoftMask<'a> {
     pub fn transfer_function(&self) -> Option<&TransferFunction> {
         self.0.transfer_function.as_ref()
     }
+}
+
+fn resources_cache_key(resources: &Resources<'_>) -> u128 {
+    let local = (
+        resources.ext_g_states.obj_id(),
+        resources.fonts.obj_id(),
+        resources.properties.obj_id(),
+        resources.color_spaces.obj_id(),
+        resources.x_objects.obj_id(),
+        resources.patterns.obj_id(),
+        resources.shadings.obj_id(),
+    );
+    hash128(&(local, resources.parent().map(resources_cache_key)))
 }

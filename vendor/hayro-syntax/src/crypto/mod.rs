@@ -162,20 +162,38 @@ pub(crate) fn get(
     };
 
     let mut decryption_key = if revision <= 4 {
-        let key = decryption_key_rev1234(
-            password,
-            encrypt_metadata,
-            revision,
-            byte_length,
-            &owner_string,
-            permissions,
-            id,
-        )?;
-        authenticate_user_password_rev234(revision, &key, id, &user_string)?;
-
-        key
+        // PdfCraft patch: (see vendor/README.md hayro-syntax (14)) the password is tried as
+        // given and then in PDFDocEncoding, which revisions 2–4 specify.
+        let mut found = Err(DecryptionError::PasswordProtected);
+        for candidate in legacy_passwords(password) {
+            found = decryption_key_rev1234(
+                &candidate,
+                encrypt_metadata,
+                revision,
+                byte_length,
+                &owner_string,
+                permissions,
+                id,
+            )
+            .and_then(|key| {
+                authenticate_user_password_rev234(revision, &key, id, &user_string).map(|()| key)
+            });
+            if found.is_ok() {
+                break;
+            }
+        }
+        found?
     } else {
-        decryption_key_rev56(dict, revision, password, &owner_string, &user_string)?
+        // PdfCraft patch: (see vendor/README.md hayro-syntax (16)) the password is tried in its
+        // SASLprep form, which revisions 5–6 specify, and then as given.
+        let mut found = Err(DecryptionError::PasswordProtected);
+        for candidate in aes256_passwords(password) {
+            found = decryption_key_rev56(dict, revision, &candidate, &owner_string, &user_string);
+            if found.is_ok() {
+                break;
+            }
+        }
+        found?
     };
 
     // See pdf.js issue 19484.
@@ -448,6 +466,77 @@ fn compute_hash_rev56(
     Ok(result)
 }
 
+/// `PdfCraft` patch: the byte strings to try as a revision 2–4 password. Revisions 2–4 take the
+/// password in `PDFDocEncoding` (ISO 32000-2 §7.6.4.3.2, Algorithm 2 a), but the password arrives
+/// as UTF-8 text: first the bytes as given (what earlier versions used, and what some writers
+/// store), then, for text with characters outside ASCII that `PDFDocEncoding` all has ("ılık€",
+/// "Çok güzel"), its `PDFDocEncoding` bytes.
+fn legacy_passwords(password: &[u8]) -> Vec<Vec<u8>> {
+    let mut out = vec![password.to_vec()];
+    if let Ok(text) = core::str::from_utf8(password)
+        && !text.is_ascii()
+        && let Some(doc) = text.chars().map(pdf_doc_byte).collect::<Option<Vec<u8>>>()
+    {
+        out.push(doc);
+    }
+    out
+}
+
+/// `PdfCraft` patch: `PDFDocEncoding` (ISO 32000-2 Annex D) of `c`, `None` when it has none.
+/// It differs from Latin-1 in 0x18–0x1F and 0x80–0xA0 (0x9F is undefined).
+fn pdf_doc_byte(c: char) -> Option<u8> {
+    const LOW: [char; 8] = ['˘', 'ˇ', 'ˆ', '˙', '˝', '˛', '˚', '˜'];
+    const HIGH: [char; 33] = [
+        '•', '†', '‡', '…', '—', '–', 'ƒ', '⁄', '‹', '›', '−', '‰', '„', '“', '”', '‘', '’', '‚',
+        '™', 'ﬁ', 'ﬂ', 'Ł', 'Œ', 'Š', 'Ÿ', 'Ž', 'ı', 'ł', 'œ', 'š', 'ž', '\u{FFFD}', '€',
+    ];
+    let at = |table: &[char], base: u8| {
+        table
+            .iter()
+            .position(|&t| t == c && t != '\u{FFFD}')
+            .and_then(|i| u8::try_from(i).ok())
+            .map(|i| base + i)
+    };
+    at(&LOW, 0x18)
+        .or_else(|| at(&HIGH, 0x80))
+        .or_else(|| match u32::from(c) {
+            0x18..=0x1F | 0x80..=0xA0 => None,
+            n => u8::try_from(n).ok(),
+        })
+}
+
+/// `PdfCraft` patch: the byte strings to try as a revision 5–6 password. Revisions 5–6 take the
+/// password processed with `SASLprep` (RFC 4013) and in UTF-8, at most 127 bytes (ISO 32000-2
+/// §7.6.4.3.3, Algorithm 2.A a–b), but the password arrives as typed: first its `SASLprep`
+/// form, as pdfcraft-crypt writes it (a decomposed "café" composed, a fullwidth "ａｂ" narrowed,
+/// a no-break space made a space), then, when that differs, the bytes as given (what earlier
+/// versions used, and what writers that skip `SASLprep` store), each at most 127 bytes.
+fn aes256_passwords(password: &[u8]) -> Vec<Vec<u8>> {
+    let given = password.get(..127).unwrap_or(password).to_vec();
+    match sasl_prepared(password) {
+        Some(prepared) if prepared != given => vec![prepared, given],
+        _ => vec![given],
+    }
+}
+
+/// `PdfCraft` patch: `password` processed with `SASLprep`, in UTF-8 and truncated to 127 bytes,
+/// as pdfcraft-crypt does it: a password `SASLprep` refuses (one with prohibited or unassigned
+/// characters) is taken as given. `None` when `password` isn't UTF-8.
+#[cfg(feature = "std")]
+fn sasl_prepared(password: &[u8]) -> Option<Vec<u8>> {
+    let text = core::str::from_utf8(password).ok()?;
+    let prepared = stringprep::saslprep(text).map_or_else(|_| text.to_string(), |p| p.into_owned());
+    let mut bytes = prepared.into_bytes();
+    bytes.truncate(127);
+    Some(bytes)
+}
+
+/// `PdfCraft` patch: without `std`, which stringprep needs, passwords are taken as given.
+#[cfg(not(feature = "std"))]
+fn sasl_prepared(_: &[u8]) -> Option<Vec<u8>> {
+    None
+}
+
 /// Algorithm 2: Computing a file encryption key in order to encrypt a document (revision 4 and earlier)
 fn decryption_key_rev1234(
     password: &[u8],
@@ -460,7 +549,7 @@ fn decryption_key_rev1234(
 ) -> Result<Vec<u8>, DecryptionError> {
     let mut md5_input = vec![];
 
-    // TODO: Convert to PDFDocEncoding.
+    // (PDFDocEncoding: see `legacy_passwords`, PdfCraft patch.)
     // a) Pad or truncate password to 32 bytes using PASSWORD_PADDING.
     let mut padded_password = [0_u8; 32];
     let copy_len = password.len().min(32);
@@ -600,7 +689,7 @@ fn decryption_key_rev56(
     // a) The UTF-8 password string shall be generated from Unicode input by processing the input string with
     // the SASLprep (Internet RFC 4013) profile of stringprep (Internet RFC 3454) using the Normalize and BiDi
     // options, and then converting to a UTF-8 representation.
-    // TODO: Do the above.
+    // (SASLprep: see `aes256_passwords`, PdfCraft patch.)
     // b) Truncate the UTF-8 representation to 127 bytes if it is longer than 127 bytes.
     let password = &password[..password.len().min(127)];
 
@@ -671,4 +760,146 @@ fn decryption_key_rev56(
     // the file encryption key as the key. Verify that bytes 9-11 of the result are the characters "a", "d",
     // "b". Bytes 0-3 of the decrypted Perms entry, treated as a little-endian integer, are the user
     // permissions. They shall match the value in the P key.
+}
+
+#[cfg(test)]
+mod pdfcraft_password_tests {
+    use super::*;
+
+    #[test]
+    fn legacy_passwords_are_tried_as_given_then_in_pdf_doc_encoding() {
+        assert_eq!(legacy_passwords(b"pw"), [b"pw".to_vec()]);
+        assert_eq!(
+            legacy_passwords("ılık€".as_bytes()),
+            ["ılık€".as_bytes().to_vec(), vec![0x9A, b'l', 0x9A, b'k', 0xA0]]
+        );
+        assert_eq!(
+            legacy_passwords("Çok".as_bytes()),
+            ["Çok".as_bytes().to_vec(), vec![0xC7, b'o', b'k']]
+        );
+        // PDFDocEncoding has no ş: only the bytes as given.
+        assert_eq!(legacy_passwords("şifre".as_bytes()), ["şifre".as_bytes().to_vec()]);
+        assert_eq!(legacy_passwords(&[0xFF, 0x00]), [vec![0xFF, 0x00]]);
+    }
+
+    #[test]
+    #[cfg(feature = "std")]
+    fn aes256_passwords_are_tried_in_their_saslprep_form_then_as_given() {
+        let both = |prepared: &str, given: &str| [prepared.into(), given.as_bytes().to_vec()];
+        assert_eq!(aes256_passwords(b"pw"), [b"pw".to_vec()]);
+        assert_eq!(
+            aes256_passwords("caf\u{E9}".as_bytes()),
+            ["caf\u{E9}".as_bytes().to_vec()]
+        );
+        assert_eq!(
+            aes256_passwords("cafe\u{301}".as_bytes()),
+            both("caf\u{E9}", "cafe\u{301}")
+        );
+        assert_eq!(
+            aes256_passwords("a\u{A0}b".as_bytes()),
+            both("a b", "a\u{A0}b")
+        );
+        assert_eq!(
+            aes256_passwords("\u{FF41}\u{FF42}".as_bytes()),
+            both("ab", "\u{FF41}\u{FF42}")
+        );
+        // A soft hyphen is mapped to nothing.
+        assert_eq!(
+            aes256_passwords("pass\u{AD}word".as_bytes()),
+            both("password", "pass\u{AD}word")
+        );
+        // SASLprep refuses a control character: as given.
+        assert_eq!(aes256_passwords(b"a\x07b"), [b"a\x07b".to_vec()]);
+        // Not UTF-8: as given.
+        assert_eq!(aes256_passwords(&[0xFF, 0x00]), [vec![0xFF, 0x00]]);
+        // At most 127 bytes, cut after SASLprep: 64 decomposed é (192 bytes) become 128 bytes of
+        // precomposed é, cut inside the last one.
+        let long = "e\u{301}".repeat(64);
+        let prepared = "\u{E9}".repeat(64);
+        assert_eq!(
+            aes256_passwords(long.as_bytes()),
+            [
+                prepared.as_bytes()[..127].to_vec(),
+                long.as_bytes()[..127].to_vec()
+            ]
+        );
+    }
+
+    /// A revision 5 or 6 `/Encrypt` dictionary whose user and owner passwords are the bytes
+    /// `user` and `owner` and whose file key is `key` (ISO 32000-2 Algorithms 8 and 9).
+    #[cfg(feature = "std")]
+    fn rev56_dict(revision: u8, user: &[u8], owner: &[u8], key: &[u8; 32]) -> Vec<u8> {
+        let hash = |password: &[u8], salt: &[u8], u: Option<&[u8]>| {
+            compute_hash_rev56(password, salt, u, revision).unwrap()
+        };
+        // AES-256 in CBC mode without padding: `encrypt_cbc` pads, which only adds a block.
+        let wrap =
+            |k: [u8; 32]| AES256Cipher::new(&k).unwrap().encrypt_cbc(key, &[0; 16])[..32].to_vec();
+        let (user_validation, user_key, owner_validation, owner_key) =
+            ([1; 8], [2; 8], [3; 8], [4; 8]);
+        let u = [
+            &hash(user, &user_validation, None)[..],
+            &user_validation,
+            &user_key,
+        ]
+        .concat();
+        let ue = wrap(hash(user, &user_key, None));
+        let o_hash = hash(owner, &owner_validation, Some(&u));
+        let o = [&o_hash[..], &owner_validation, &owner_key].concat();
+        let oe = wrap(hash(owner, &owner_key, Some(&u)));
+        let hex = |b: &[u8]| b.iter().map(|b| format!("{b:02X}")).collect::<String>();
+        let (o, u, oe, ue) = (hex(&o), hex(&u), hex(&oe), hex(&ue));
+        format!(
+            "<< /Filter /Standard /V 5 /R {revision} /Length 256 /P -4 \
+             /CF << /StdCF << /CFM /AESV3 /Length 32 >> >> /StmF /StdCF /StrF /StdCF \
+             /O <{o}> /U <{u}> /OE <{oe}> /UE <{ue}> >>"
+        )
+        .into_bytes()
+    }
+
+    /// The file key that `password` unlocks in the `/Encrypt` dictionary `dict`.
+    #[cfg(feature = "std")]
+    fn unlock(dict: &[u8], password: &str) -> Result<Vec<u8>, DecryptionError> {
+        use crate::reader::{Reader, ReaderContext, ReaderExt};
+        let dict = Reader::new(dict).read_with_context::<Dict<'_>>(&ReaderContext::dummy());
+        match get(&dict.unwrap(), b"", password.as_bytes())? {
+            Decryptor::Aes256 { key, .. } => Ok(key),
+            other => panic!("not AES-256: {other:?}"),
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "std")]
+    fn aes256_passwords_open_as_typed_and_in_their_saslprep_form() {
+        let key = [9; 32];
+        // As typed, and the SASLprep form that ISO 32000-2 keys the file on (and pdfcraft-crypt
+        // writes): a decomposed é (NFKC composes it), a no-break space (mapped to a space) and
+        // fullwidth letters (what a Japanese IME types in full-width mode; NFKC narrows them).
+        // Precomposed "café" is the control: SASLprep leaves it as it is.
+        let cases = [
+            ("cafe\u{301}", "caf\u{E9}"),
+            ("a\u{A0}b", "a b"),
+            ("\u{FF41}\u{FF42}", "ab"),
+            ("caf\u{E9}", "caf\u{E9}"),
+        ];
+        let (ok, wrong) = (Ok(key.to_vec()), Err(DecryptionError::PasswordProtected));
+        // Revision 5 hashes once, so it takes every case; revision 6, whose hash is far slower
+        // in a debug build, takes the first.
+        for (typed, prepared) in cases {
+            let user = rev56_dict(5, prepared.as_bytes(), b"owner", &key);
+            let owner = rev56_dict(5, b"user", prepared.as_bytes(), &key);
+            for pw in [typed, prepared] {
+                assert_eq!(unlock(&user, pw), ok, "{typed:?}: user {pw:?}");
+                assert_eq!(unlock(&owner, pw), ok, "{typed:?}: owner {pw:?}");
+            }
+            assert_eq!(unlock(&user, "cafe"), wrong, "{typed:?}");
+            // A writer that skipped SASLprep keyed the file on the password as typed: it opens
+            // with that.
+            let unprepared = rev56_dict(5, typed.as_bytes(), b"owner", &key);
+            assert_eq!(unlock(&unprepared, typed), ok, "{typed:?}: unprepared");
+        }
+        let user = rev56_dict(6, "caf\u{E9}".as_bytes(), b"owner", &key);
+        assert_eq!(unlock(&user, "cafe\u{301}"), ok, "R6");
+        assert_eq!(unlock(&user, "cafe"), wrong, "R6");
+    }
 }

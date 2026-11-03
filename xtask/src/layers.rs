@@ -55,6 +55,7 @@ pub const TABLE: &[(&str, Class)] = &[
     ("organize", Class::Layer(4)),
     ("security", Class::Layer(4)),
     ("redact", Class::Layer(4)),
+    ("audit", Class::Layer(4)),
     ("xfdf", Class::Layer(4)),
     ("sign", Class::Layer(4)),
     ("ocr", Class::Layer(4)),
@@ -96,6 +97,7 @@ pub const STANDALONE_DEPS: &[(&str, &[&str])] = &[("cos", &["filters", "crypt", 
 /// Allowed same-layer edges (architecture §3 rule 1). `forms → js` is deliberately absent.
 pub const SIDEWAYS: &[(&str, &str)] = &[
     ("redact", "edit"),
+    ("audit", "edit"),
     ("a11y", "preflight"),
     ("prepress", "preflight"),
     ("export", "ocr"),
@@ -106,7 +108,7 @@ pub const SIDEWAYS: &[(&str, &str)] = &[
 ];
 
 /// External crates that constitute a UI toolkit / windowing dependency (prefix match with `*`).
-pub const UI_CRATES: &[&str] = &["egui", "eframe", "winit", "egui_kittest", "egui_extras", "egui_dock", "egui_tiles", "rfd", "wgpu*"];
+pub const UI_CRATES: &[&str] = &["egui", "eframe", "winit", "egui_kittest", "craft-ui", "egui_extras", "egui_dock", "egui_tiles", "rfd", "wgpu*"];
 pub const UI_MIN_LAYER: u8 = 7;
 
 pub fn short_name(pkg: &str) -> &str {
@@ -180,6 +182,34 @@ impl std::fmt::Display for Violation {
     }
 }
 
+/// Layer and testkit rules for one dependency of `c` that is itself a workspace crate.
+fn check_workspace_dep(c: &Crate, class: Class, layer: u8, d: &Dep, out: &mut Vec<Violation>) {
+    let dep_class = classify(&d.name);
+    // Test support is a dev-dependency only (`Class::Testkit`) and so never reaches
+    // the product graph a standalone crate publishes. Checking it against the
+    // standalone allow-list would stop `cos` using the shared oracles in its own
+    // tests, which is the one thing those crates exist for.
+    let testkit_dev = dep_class == Some(Class::Testkit) && d.kind == DepKind::Dev;
+    if matches!(class, Class::Standalone(_)) && !testkit_dev && !standalone_allowed(&c.name, &d.name) {
+        out.push(Violation::StandaloneHasWorkspaceDep { krate: c.name.clone(), dep: d.name.clone() });
+        return;
+    }
+    match dep_class {
+        None => {}
+        Some(Class::Testkit) if d.kind != DepKind::Dev && class != Class::Testkit => {
+            out.push(Violation::TestkitAsNormalDep { krate: c.name.clone(), dep: d.name.clone() });
+        }
+        Some(Class::Testkit) => {}
+        Some(dc) => {
+            let to = dc.layer().unwrap_or(u8::MAX);
+            let ok = to < layer || (to == layer && sideways_allowed(&c.name, &d.name));
+            if !ok {
+                out.push(Violation::Upward { krate: c.name.clone(), dep: d.name.clone(), from: layer, to: to.min(8), kind: d.kind });
+            }
+        }
+    }
+}
+
 pub fn check(crates: &[Crate]) -> Vec<Violation> {
     let mut out = Vec::new();
     for c in crates {
@@ -196,31 +226,14 @@ pub fn check(crates: &[Crate]) -> Vec<Violation> {
                 continue;
             }
             if d.workspace {
-                if matches!(class, Class::Standalone(_)) && !standalone_allowed(&c.name, &d.name) {
-                    out.push(Violation::StandaloneHasWorkspaceDep { krate: c.name.clone(), dep: d.name.clone() });
-                    continue;
-                }
-                match classify(&d.name) {
-                    None => {}
-                    Some(Class::Testkit) if d.kind != DepKind::Dev && class != Class::Testkit => {
-                        out.push(Violation::TestkitAsNormalDep { krate: c.name.clone(), dep: d.name.clone() });
-                    }
-                    Some(Class::Testkit) => {}
-                    Some(dc) => {
-                        let to = dc.layer().unwrap_or(u8::MAX);
-                        let ok = to < layer || (to == layer && sideways_allowed(&c.name, &d.name));
-                        if !ok {
-                            out.push(Violation::Upward { krate: c.name.clone(), dep: d.name.clone(), from: layer, to: to.min(8), kind: d.kind });
-                        }
-                    }
-                }
+                check_workspace_dep(c, class, layer, d, &mut out);
             } else if layer < UI_MIN_LAYER && is_ui_crate(&d.name) && !(class == Class::Testkit || d.kind == DepKind::Dev && d.name == "egui_kittest")
             {
                 out.push(Violation::UiBelowL7 { krate: c.name.clone(), dep: d.name.clone(), layer });
             }
         }
     }
-    out.sort_by_key(|v| v.to_string());
+    out.sort_by_key(ToString::to_string);
     out.dedup();
     out
 }
@@ -305,11 +318,12 @@ mod tests {
 
     #[test]
     fn ui_crates_below_l7_flagged() {
-        for dep in ["egui", "eframe", "winit", "rfd", "wgpu", "wgpu-core", "egui_dock"] {
+        for dep in ["egui", "eframe", "winit", "rfd", "wgpu", "wgpu-core", "egui_dock", "craft-ui"] {
             let v = check(&[c("pdfcraft-engine", &[(dep, Normal, false)])]);
             assert!(matches!(v[..], [Violation::UiBelowL7 { layer: 6, .. }]), "{dep}");
         }
         assert!(check(&[c("pdfcraft-platform", &[("winit", Normal, false)])]).is_empty());
+        assert!(check(&[c("pdfcraft-ui-egui", &[("craft-ui", Normal, false)])]).is_empty());
     }
 
     #[test]
@@ -319,6 +333,17 @@ mod tests {
         assert!(check(&[c("pdfcraft-render", &[("pdfcraft-oracle", Dev, true)])]).is_empty());
         let v = check(&[c("pdfcraft-render", &[("pdfcraft-oracle", Normal, true)])]);
         assert!(matches!(v[..], [Violation::TestkitAsNormalDep { .. }]));
+
+        // A standalone crate may use test support in its own tests: a dev-dependency is not part
+        // of the graph the standalone rule protects. `cos` is where the qpdf oracle is needed.
+        assert!(check(&[c("pdfcraft-cos", &[("pdfcraft-oracle", Dev, true)])]).is_empty());
+        assert!(check(&[c("pdfcraft-geom", &[("pdfcraft-testkit", Dev, true)])]).is_empty());
+        // ...but only as a dev-dependency, and only for test support. Product crates are still
+        // off-limits to a standalone crate however they are depended on.
+        let v = check(&[c("pdfcraft-cos", &[("pdfcraft-oracle", Normal, true)])]);
+        assert!(matches!(v[..], [Violation::StandaloneHasWorkspaceDep { .. }]), "{v:?}");
+        let v = check(&[c("pdfcraft-cos", &[("pdfcraft-model", Dev, true)])]);
+        assert!(matches!(v[..], [Violation::StandaloneHasWorkspaceDep { .. }]), "{v:?}");
     }
 
     #[test]

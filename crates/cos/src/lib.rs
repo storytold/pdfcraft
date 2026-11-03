@@ -13,6 +13,7 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+mod budget;
 mod bytes;
 mod document;
 mod object;
@@ -21,11 +22,14 @@ mod parser;
 mod security;
 mod writer;
 
+pub use budget::{DecodeBudget, ImageBudget, MAX_PAGE_DECODED, MAX_PAGE_FORMS};
 pub use bytes::Bytes;
-pub use document::{Document, Revision, SourceIdentity, XrefEntry};
-pub use object::{Dict, MAX_DECODED, Name, ObjRef, Object, PdfString, Stream};
-pub use parser::{Lexer, parse_indirect};
-pub use pdfcraft_crypt::{Algorithm, Auth, Method as CryptMethod, NewEncryption, Permissions, SecurityHandler};
+pub use document::{Document, ReadState, Revision, SourceIdentity, XrefEntry};
+pub use object::{Dict, MAX_DECODED, MAX_JBIG2_GLOBALS, Name, ObjRef, Object, PdfString, Stream};
+pub use parser::{Lexer, is_whitespace, parse_indirect};
+pub use pdfcraft_crypt::{
+    Algorithm, Auth, Method as CryptMethod, NewEncryption, Permissions, SecurityHandler, effective_password, pdfdoc_byte, pdfdoc_char,
+};
 pub use writer::{SaveOptions, pdf_date, serialize, write_full, write_incremental};
 
 #[derive(Debug, thiserror::Error, Clone, PartialEq)]

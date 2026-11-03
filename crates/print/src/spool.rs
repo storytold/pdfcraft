@@ -1,408 +1,284 @@
-//! The system print spooler. On macOS and Linux this is CUPS: printers come from `lpstat` — its
-//! queues, and the driverless destinations it can print to without one — and jobs are piped to
-//! `lp` with the job options (copies, collation, duplex, colour). Other platforms report that
-//! printing isn't available yet; the print-ready PDF can still be saved.
+//! System print spooler supplied by craft-print. PDF composition and permission checks
+//! stay in PdfCraft; these adapters retain the application's print-error surface.
 
-use crate::PrintError;
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Printer {
-    pub name: String,
-    pub default: bool,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub enum Duplex {
-    #[default]
-    Off,
-    LongEdge,
-    ShortEdge,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct Job {
-    /// `None` = the system default printer.
-    pub printer: Option<String>,
-    pub copies: u32,
-    pub collate: bool,
-    pub duplex: Duplex,
-    pub grayscale: bool,
-    pub title: String,
-    /// The printer driver's own job options (a PPD keyword and the chosen value), such as the
-    /// paper tray or paper type; see [`printer_options`]. CUPS only.
-    pub options: Vec<(String, String)>,
-}
-
-impl Default for Job {
-    fn default() -> Self {
-        Job { printer: None, copies: 1, collate: true, duplex: Duplex::Off, grayscale: false, title: "PdfCraft".into(), options: Vec::new() }
-    }
-}
-
-/// The `lpstat -d` line's destination name, when the spooler has a default.
-fn default_destination(out: &str) -> Option<&str> {
-    out.lines().find_map(|l| l.strip_prefix("system default destination:")).map(str::trim)
-}
-
-/// Parse `lpstat -p -d` output.
-pub fn parse_lpstat(out: &str) -> Vec<Printer> {
-    let default = default_destination(out);
-    out.lines()
-        .filter_map(|l| l.strip_prefix("printer "))
-        .filter_map(|l| l.split_whitespace().next())
-        .map(|n| Printer { name: n.to_string(), default: default == Some(n) })
-        .collect()
-}
-
-/// Parse `lpstat -e` output: destination names, one per line.
-pub fn parse_lpstat_e(out: &str) -> Vec<String> {
-    out.lines().map(str::trim).filter(|l| !l.is_empty()).map(str::to_string).collect()
-}
-
-/// The `lp` arguments for a job. There is no file argument: `lp` reads the job from stdin.
-pub fn lp_args(job: &Job) -> Vec<String> {
-    let mut a = Vec::new();
-    if let Some(p) = &job.printer {
-        a.extend(["-d".to_string(), p.clone()]);
-    }
-    a.extend(["-n".to_string(), job.copies.clamp(1, 999).to_string()]);
-    a.extend(["-t".to_string(), job.title.clone()]);
-    let mut opt = |o: &str| a.extend(["-o".to_string(), o.to_string()]);
-    opt(if job.collate { "collate=true" } else { "collate=false" });
-    opt(match job.duplex {
-        Duplex::Off => "sides=one-sided",
-        Duplex::LongEdge => "sides=two-sided-long-edge",
-        Duplex::ShortEdge => "sides=two-sided-short-edge",
-    });
-    if job.grayscale {
-        opt("print-color-mode=monochrome");
-    }
-    // The sheets are already laid out at their final size.
-    opt("fit-to-page=false");
-    for (key, value) in &job.options {
-        // Driver options are PPD keywords; anything else is not something lp can be given.
-        if is_ppd_keyword(key) && is_ppd_keyword(value) && !HANDLED_OPTIONS.contains(&key.as_str()) {
-            a.extend(["-o".to_string(), format!("{key}={value}")]);
-        }
-    }
-    a
-}
-
-/// One of the printer driver's job options (a PPD `OpenUI` entry), such as the paper tray.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PrinterOption {
-    /// The PPD keyword (`InputSlot`).
-    pub key: String,
-    /// What the driver calls it (`Paper tray`); the keyword when it gives no name.
-    pub label: String,
-    /// The driver's group (`Paper Handling`); empty outside a group.
-    pub group: String,
-    /// The choices: keyword and label (`Tray2`, `Tray 2`).
-    pub choices: Vec<(String, String)>,
-    /// The choice the printer uses when a job doesn't say.
-    pub default: String,
-}
-
-/// Options PdfCraft's Print dialog sets itself (paper, two-sided, collation), so the driver's
-/// copies of them are neither shown nor sent.
-pub const HANDLED_OPTIONS: &[&str] = &["PageSize", "PageRegion", "Duplex", "Collate", "ImageableArea", "PaperDimension"];
-
-/// Caps on what a PPD may make the dialog hold (PPDs are text files from the printer vendor).
-const MAX_OPTIONS: usize = 400;
-const MAX_CHOICES: usize = 400;
-
-/// A PPD keyword: printable ASCII without spaces, `/`, `:` or `=`.
-fn is_ppd_keyword(s: &str) -> bool {
-    !s.is_empty() && s.len() <= 64 && s.bytes().all(|b| b.is_ascii_graphic() && !matches!(b, b'/' | b':' | b'=' | b'"'))
-}
-
-/// `Name/Label` → (`Name`, `Label`), the label falling back to the name.
-fn name_label(s: &str) -> (&str, &str) {
-    match s.split_once('/') {
-        Some((n, l)) if !l.trim().is_empty() => (n.trim(), l.trim()),
-        Some((n, _)) => (n.trim(), n.trim()),
-        None => (s.trim(), s.trim()),
-    }
-}
-
-/// The job options a PPD offers, in file order, without the installable-hardware group and the
-/// options PdfCraft sets itself ([`HANDLED_OPTIONS`]). Lenient: malformed lines are skipped.
-pub fn parse_ppd(ppd: &str) -> Vec<PrinterOption> {
-    let mut out: Vec<PrinterOption> = Vec::new();
-    let (mut group, mut group_key) = (String::new(), String::new());
-    let mut open: Option<PrinterOption> = None;
-    for line in ppd.lines() {
-        let line = line.trim_end_matches('\r');
-        if let Some(rest) = line.strip_prefix("*OpenGroup:") {
-            let (k, l) = name_label(rest);
-            (group_key, group) = (k.to_string(), l.to_string());
-        } else if line.starts_with("*CloseGroup") {
-            (group_key, group) = (String::new(), String::new());
-        } else if let Some(rest) = line.strip_prefix("*OpenUI") {
-            let Some((head, _kind)) = rest.trim().rsplit_once(':') else { continue };
-            let (key, label) = name_label(head.trim().trim_start_matches('*'));
-            open = is_ppd_keyword(key).then(|| PrinterOption {
-                key: key.to_string(),
-                label: label.to_string(),
-                group: group.clone(),
-                choices: Vec::new(),
-                default: String::new(),
-            });
-        } else if line.starts_with("*CloseUI") {
-            if let Some(o) = open.take()
-                && !o.choices.is_empty()
-                && group_key != "InstallableOptions"
-                && !HANDLED_OPTIONS.contains(&o.key.as_str())
-                && out.len() < MAX_OPTIONS
-            {
-                out.push(o);
-            }
-        } else if let Some(o) = open.as_mut() {
-            let Some(rest) = line.strip_prefix('*') else { continue };
-            if let Some(value) = rest.strip_prefix("Default").and_then(|r| r.strip_prefix(o.key.as_str())).and_then(|r| r.strip_prefix(':')) {
-                o.default = value.trim().to_string();
-            } else if let Some(rest) = rest.strip_prefix(o.key.as_str()).and_then(|r| r.strip_prefix(' ')) {
-                // `*InputSlot Tray2/Tray 2: "<< ... >>"`; the code after the colon is the driver's.
-                let head = rest.split_once(':').map_or(rest, |(h, _)| h);
-                let (choice, label) = name_label(head);
-                if is_ppd_keyword(choice) && o.choices.len() < MAX_CHOICES && o.choices.iter().all(|(c, _)| c != choice) {
-                    o.choices.push((choice.to_string(), label.to_string()));
-                }
-            }
-        }
-    }
-    for o in &mut out {
-        if !o.choices.iter().any(|(c, _)| *c == o.default) {
-            o.default = o.choices.first().map(|(c, _)| c.clone()).unwrap_or_default();
-        }
-    }
-    out
-}
-
-/// The current choice of each option in `lpoptions -p NAME -l` output (`Key/Label: a *b c`): the
-/// queue's defaults, including the user's own (`~/.cups/lpoptions`).
-pub fn parse_lpoptions(out: &str) -> Vec<(String, String)> {
-    out.lines()
-        .filter_map(|l| {
-            let (head, choices) = l.split_once(':')?;
-            let (key, _) = name_label(head);
-            let current = choices.split_whitespace().find_map(|c| c.strip_prefix('*'))?;
-            Some((key.to_string(), current.to_string()))
-        })
-        .collect()
-}
-
-/// A PPD's text: UTF-8, or ISO Latin-1 (the PPD default) when it isn't valid UTF-8.
-pub fn ppd_text(bytes: &[u8]) -> String {
-    match std::str::from_utf8(bytes) {
-        Ok(s) => s.to_string(),
-        Err(_) => bytes.iter().map(|&b| char::from(b)).collect(),
-    }
-}
+pub use craft_print::{
+    Duplex, HANDLED_OPTIONS, HAS_PRINTER_PREFERENCES, Job, Printer, PrinterOption, Scaling, lp_args, lpstat_command, parse_lpoptions, parse_lpstat,
+    parse_lpstat_e, parse_ppd, parse_windows_printers, ppd_text, printers, printers_parsed,
+};
 
 /// The driver's job options for a printer (CUPS: its PPD, with the queue's current defaults);
 /// empty when it has none or on other platforms. Reads files and runs `lpoptions`, so call it
 /// when the user asks, not every frame.
 pub fn printer_options(printer: &str) -> Vec<PrinterOption> {
+    printer_options_in(printer, "en")
+}
+
+/// [`printer_options`] with the driver's own names in `lang` (a UI language code such as `bg`,
+/// `pt-br` or `zh-hans`) where its PPD has them (`*bg.Translation`, `*bg.InputSlot Tray2/…`);
+/// the driver's default names otherwise.
+pub fn printer_options_in(printer: &str, lang: &str) -> Vec<PrinterOption> {
     #[cfg(all(unix, not(target_arch = "wasm32")))]
     {
-        // Queue names never contain `/`; anything else is not a queue and not a path to follow.
-        if !is_ppd_keyword(printer) {
-            return Vec::new();
-        }
-        const PPD_CAP: u64 = 16 << 20;
-        let ppd = std::fs::File::open(format!("/etc/cups/ppd/{printer}.ppd")).ok().and_then(|f| {
-            use std::io::Read as _;
-            let mut bytes = Vec::new();
-            f.take(PPD_CAP).read_to_end(&mut bytes).ok().map(|_| bytes)
-        });
-        let mut options = ppd.map(|b| parse_ppd(&ppd_text(&b))).unwrap_or_default();
-        let current = std::process::Command::new("lpoptions")
-            .args(["-p", printer, "-l"])
-            .output()
-            .map(|o| parse_lpoptions(&String::from_utf8_lossy(&o.stdout)))
-            .unwrap_or_default();
-        for (key, value) in current {
-            if let Some(o) = options.iter_mut().find(|o| o.key == key)
-                && o.choices.iter().any(|(c, _)| *c == value)
-            {
-                o.default = value;
-            }
-        }
-        options
+        printer_options_via_within(printer, std::path::Path::new("/etc/cups/ppd"), std::process::Command::new("lpoptions"), LPOPTIONS_LIMIT, lang)
     }
     #[cfg(not(all(unix, not(target_arch = "wasm32"))))]
     {
-        let _ = printer;
-        Vec::new()
+        let _ = lang;
+        craft_print::printer_options(printer)
     }
 }
 
-/// Whether [`open_printer_preferences`] can show the driver's own settings window (Windows).
-pub const HAS_PRINTER_PREFERENCES: bool = cfg!(windows);
-
-/// Open the printer driver's Printing Preferences window (Windows: `printui.dll`). What the user
-/// sets there is saved as that printer's defaults for this Windows user, which every job starts
-/// from; the Print dialog's copies, two-sided, grayscale and paper still apply on top.
-pub fn open_printer_preferences(printer: &str) -> Result<(), PrintError> {
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        // printui takes the name in quotes; Windows printer names can't contain one anyway.
-        if printer.is_empty() || printer.contains('"') {
-            return Err(PrintError::Spool("not a printer name".into()));
-        }
-        let root = std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into());
-        let rundll = std::path::Path::new(&root).join("System32").join("rundll32.exe");
-        std::process::Command::new(rundll)
-            .raw_arg("printui.dll,PrintUIEntry")
-            .raw_arg("/e")
-            .raw_arg("/n")
-            .raw_arg(format!("\"{printer}\""))
-            .spawn()
-            .map(|_| ())
-            .map_err(|e| PrintError::Spool(format!("the printer's preferences could not be opened: {e}")))
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = printer;
-        Err(PrintError::Spool("printer preferences open only on Windows; use the printer's options instead".into()))
-    }
-}
-
-/// `lpstat`, forced to print untranslated messages so [`parse_lpstat`] and [`parse_lpstat_e`] can
-/// read them.
-///
-/// `LC_ALL`/`LANG=C` is enough on Linux. macOS CUPS ignores them and follows the user's
-/// interface language (`AppleLanguages`) unless `SOFTWARE` is set, in which case it uses `LANG`.
-fn lpstat_with(args: &[&str]) -> std::process::Command {
-    let mut c = std::process::Command::new("lpstat");
-    c.args(args).env("LC_ALL", "C").env("LANG", "C").env("SOFTWARE", "PdfCraft");
-    c
-}
-
-/// `lpstat -p -d`: the spooler's queues and the default destination.
-pub fn lpstat_command() -> std::process::Command {
-    lpstat_with(&["-p", "-d"])
-}
-
-/// `lpstat -e`: every destination CUPS can print to, including driverless network printers no
-/// permanent queue exists for (a queue is built only when a job needs one). GTK's and macOS's
-/// print dialogs list them the same way. CUPS ≥ 1.7 (2013).
-///
-/// Gated like its only caller, `printers`' unix block: off unix this is dead code, and the
-/// Windows clippy gate builds with `-D warnings`.
+/// How long `lpoptions` may take: a CUPS that has stopped answering must not hold whoever asked
+/// (#1818). After this the PPD's own defaults stand.
 #[cfg(all(unix, not(target_arch = "wasm32")))]
-fn lpstat_e_command() -> std::process::Command {
-    lpstat_with(&["-e"])
-}
+const LPOPTIONS_LIMIT: std::time::Duration = std::time::Duration::from_secs(10);
 
-/// The printers the system knows (empty when there are none or no spooler): its queues, then the
-/// driverless destinations CUPS can print to without one.
-pub fn printers() -> Vec<Printer> {
-    #[cfg(all(unix, not(target_arch = "wasm32")))]
-    {
-        let Some(queues) = lpstat_command().output().ok().map(|o| String::from_utf8_lossy(&o.stdout).into_owned()) else {
-            return Vec::new();
-        };
-        // A spooler without `-e`, or one whose discovery times out, only loses the driverless names.
-        let available = lpstat_e_command().output().ok().map(|o| String::from_utf8_lossy(&o.stdout).into_owned());
-        printers_parsed(&queues, available.as_deref())
-    }
-    #[cfg(not(all(unix, not(target_arch = "wasm32"))))]
-    {
-        Vec::new()
-    }
-}
-
-/// The Print dialog's printers from lpstat's two answers: the spooler's queues (`-p -d`), then
-/// the driverless destinations of `available` (`-e`) that have no queue — CUPS builds a temporary
-/// queue when `lp` sends them a job. Each destination once, queues first; the default still comes
-/// from `-d`, so a driverless default keeps its marker. `None` when the spooler doesn't know `-e`
-/// (CUPS < 1.7, 2013), which loses only the driverless names.
-pub fn printers_parsed(queues: &str, available: Option<&str>) -> Vec<Printer> {
-    let mut printers = parse_lpstat(queues);
-    let default = default_destination(queues);
-    if let Some(names) = available {
-        for name in parse_lpstat_e(names) {
-            if !printers.iter().any(|p| p.name == name) {
-                printers.push(Printer { default: default == Some(name.as_str()), name });
-            }
-        }
-    }
-    printers
-}
-
-/// Send a print-ready PDF to the spooler. Returns the spooler's message (the job id).
-pub fn submit(pdf: &[u8], job: &Job) -> Result<String, PrintError> {
-    #[cfg(all(unix, not(target_arch = "wasm32")))]
-    {
-        submit_via(std::process::Command::new("lp"), pdf, job)
-    }
-    #[cfg(not(all(unix, not(target_arch = "wasm32"))))]
-    {
-        let _ = (pdf, job);
-        Err(PrintError::Spool("printing to a printer isn't available on this platform yet; save the print-ready PDF instead".into()))
-    }
-}
-
-/// [`submit`] with the spooler command given, so tests can stand in for `lp`.
-///
-/// The job goes to `lp` on stdin, never through a file: a predictable job folder in a shared
-/// temp directory lets another local user read printed documents or swap the file before `lp`
-/// reads it.
+/// The most of a command's output that is kept (`lpoptions -l` is a few kilobytes).
 #[cfg(any(test, all(unix, not(target_arch = "wasm32"))))]
-pub(crate) fn submit_via(mut lp: std::process::Command, pdf: &[u8], job: &Job) -> Result<String, PrintError> {
-    use std::io::Write;
+const OUTPUT_CAP: u64 = 4 << 20;
+
+/// Run `command` and collect its standard output, giving it `limit`: a command still running
+/// then is killed and reaped, and the error is `TimedOut`. Standard input and error are not
+/// connected. The exit status is not checked, as `Command::output` leaves it to the caller.
+/// Only CUPS runs a command today; the tests cover every desktop platform.
+#[cfg(any(test, all(unix, not(target_arch = "wasm32"))))]
+pub(crate) fn output_within(command: &mut std::process::Command, limit: std::time::Duration) -> std::io::Result<Vec<u8>> {
+    use std::io::Read as _;
     use std::process::Stdio;
-    let mut child = lp
-        .args(lp_args(job))
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| PrintError::Spool(format!("the print spooler is not available: {e}")))?;
-    let stdin = child.stdin.take();
-    // Feed the job on its own thread while collecting the output, so neither side can fill a
-    // pipe and wait on the other. Dropping `stdin` at the end closes it: the end of the job.
-    let fed_and_out = std::thread::scope(|s| {
-        let feeder = std::thread::Builder::new().name("print job".into()).spawn_scoped(s, move || match stdin {
-            Some(mut stdin) => stdin.write_all(pdf),
-            None => Err(std::io::Error::other("no pipe to the spooler")),
-        });
-        match feeder {
-            Ok(feeder) => {
-                let out = child.wait_with_output();
-                Ok((feeder.join(), out))
+    let mut child = command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn()?;
+    let stop = |child: &mut std::process::Child| {
+        let _ = child.kill();
+        let _ = child.wait();
+    };
+    let Some(mut stdout) = child.stdout.take() else {
+        stop(&mut child);
+        return Err(std::io::Error::other("the command's output could not be read"));
+    };
+    // Read on a thread of its own, so a full pipe never holds the command while the deadline is
+    // kept here. Past the cap the rest is drained and dropped, so the command still finishes.
+    // The output comes back over a channel rather than through `join`: a process the command
+    // started can keep the pipe open after the command itself has exited or been killed, and
+    // the wait for the output must end at the deadline too. Such a reader is left to finish on
+    // its own when that process closes the pipe.
+    let (tx, rx) = std::sync::mpsc::channel();
+    let reader = std::thread::Builder::new().name("command output".into()).spawn(move || {
+        let mut out = Vec::new();
+        let read = (&mut stdout).take(OUTPUT_CAP).read_to_end(&mut out);
+        let _ = std::io::copy(&mut stdout, &mut std::io::sink());
+        let _ = tx.send(read.map(|_| out));
+    });
+    if let Err(e) = reader {
+        stop(&mut child);
+        return Err(e);
+    }
+    let timed_out = || std::io::Error::new(std::io::ErrorKind::TimedOut, format!("the command did not answer within {limit:?}"));
+    let deadline = std::time::Instant::now() + limit;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => {
+                // A moment's grace, so output written just before an exit at the deadline counts.
+                let left = deadline.saturating_duration_since(std::time::Instant::now()).max(std::time::Duration::from_millis(100));
+                return match rx.recv_timeout(left) {
+                    Ok(read) => read,
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Err(timed_out()),
+                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => Err(std::io::Error::other("the command's output was lost")),
+                };
             }
+            Ok(None) if std::time::Instant::now() >= deadline => {
+                stop(&mut child);
+                return Err(timed_out());
+            }
+            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(10)),
             Err(e) => {
-                // No thread to feed it: stop `lp` rather than leave it with an empty job.
-                let _ = child.kill();
-                let _ = child.wait();
-                Err(PrintError::Spool(format!("the print job could not be sent to the spooler: {e}")))
+                stop(&mut child);
+                return Err(e);
             }
         }
-    });
-    let (fed, out) = fed_and_out?;
-    let out = out.map_err(|e| PrintError::Spool(format!("the print spooler is not available: {e}")))?;
-    if !out.status.success() {
-        // `lp` may refuse before reading the job (an unknown printer); its message says why,
-        // and the broken pipe that leaves behind does not.
-        let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
-        return Err(PrintError::Spool(if err.is_empty() { "the print job was refused".into() } else { err }));
-    }
-    match fed {
-        Ok(Ok(())) => Ok(job_message(&out.stdout)),
-        Ok(Err(e)) => Err(PrintError::Spool(format!("the print job could not be sent to the spooler: {e}"))),
-        Err(_) => Err(PrintError::Spool("the print job could not be sent to the spooler".into())),
     }
 }
 
-/// `lp`'s reply ("request id is Office-12"), without the "(0 file(s))" CUPS adds when the job came
-/// on stdin: it reads as if nothing was sent.
-#[cfg(any(test, all(unix, not(target_arch = "wasm32"))))]
-pub(crate) fn job_message(stdout: &[u8]) -> String {
-    let s = String::from_utf8_lossy(stdout);
-    let s = s.trim();
-    s.strip_suffix("(0 file(s))").map_or(s, str::trim_end).to_string()
+/// Read a destination's options with the PPD directory and command supplied, so tests need
+/// neither a system queue nor a physical printer. CUPS instances share their queue's PPD but
+/// have their own defaults, queried with the complete `queue/instance` destination. `limit` is
+/// how long the command may take before the PPD's defaults stand on their own.
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+pub(crate) fn printer_options_via_within(
+    printer: &str,
+    ppd_dir: &std::path::Path,
+    mut lpoptions: std::process::Command,
+    limit: std::time::Duration,
+    lang: &str,
+) -> Vec<PrinterOption> {
+    let (queue, instance) = printer.split_once('/').map_or((printer, None), |(q, i)| (q, Some(i)));
+    // Retain the conservative name checks, applied to each component. Neither component is
+    // a path: reject dot components, backslashes and any additional separator before I/O.
+    let valid = |name: &str| {
+        !name.is_empty()
+            && name.len() <= 64
+            && !matches!(name, "." | "..")
+            && name.bytes().all(|b| b.is_ascii_graphic() && !matches!(b, b'/' | b'\\' | b':' | b'=' | b'"'))
+    };
+    if !valid(queue) || instance.is_some_and(|name| !valid(name)) {
+        return Vec::new();
+    }
+    const PPD_CAP: u64 = 16 << 20;
+    let ppd = std::fs::File::open(ppd_dir.join(format!("{queue}.ppd"))).ok().and_then(|f| {
+        use std::io::Read as _;
+        let mut bytes = Vec::new();
+        f.take(PPD_CAP).read_to_end(&mut bytes).ok().map(|_| bytes)
+    });
+    let mut options = ppd.as_deref().map(|b| parse_ppd(&ppd_text(b))).unwrap_or_default();
+    if let Some(b) = &ppd {
+        localize(&mut options, b, lang);
+    }
+    let current =
+        output_within(lpoptions.args(["-p", printer, "-l"]), limit).map(|out| parse_lpoptions(&String::from_utf8_lossy(&out))).unwrap_or_default();
+    for (key, value) in current {
+        if let Some(o) = options.iter_mut().find(|o| o.key == key)
+            && o.choices.iter().any(|(c, _)| *c == value)
+        {
+            o.default = value;
+        }
+    }
+    options
+}
+
+/// The keys the macOS print dialog names a job's title and owner under.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+const JOB_NAME_KEY: &str = "com.apple.print.JobInfo.PMJobName";
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+const JOB_OWNER_KEY: &str = "com.apple.print.JobInfo.PMJobOwner";
+
+/// `text` as a job option's value: `lp_args` passes on only printable ASCII, up to 64 bytes,
+/// without `/ : = "`, and CUPS would take `'` and `\` as quoting and `{` as the start of a
+/// collection, so all of these become `_`. Text with nothing left of it, such as a title in
+/// another script, takes `fallback`: the job must still name something. So does a bare `true` or
+/// `false`, which CUPS would send as a boolean, not the name a filter reads.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn job_option_value(text: &str, fallback: &str) -> String {
+    let kept = |c: char| c.is_ascii_graphic() && !matches!(c, '/' | ':' | '=' | '"' | '\'' | '\\' | '{');
+    let value: String = text.chars().take(64).map(|c| if kept(c) { c } else { '_' }).collect();
+    if !text.chars().any(kept) || value.eq_ignore_ascii_case("true") || value.eq_ignore_ascii_case("false") {
+        return fallback.to_string();
+    }
+    value
+}
+
+/// `job` naming its title and `owner` as a job from the macOS print dialog does. `lp` sends
+/// neither, and a driver's filter can depend on them: Kyocera's crashes without them, so nothing
+/// prints, while the same file sent with both does (#5743). A value the caller set stands: the
+/// last of a repeated option wins in CUPS, which compares their names without case.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub(crate) fn with_job_info(job: &Job, owner: Option<&str>) -> Job {
+    let mut named = job.clone();
+    for (key, value) in [(JOB_NAME_KEY, job.title.as_str()), (JOB_OWNER_KEY, owner.unwrap_or_default())] {
+        if !job.options.iter().any(|(k, _)| k.eq_ignore_ascii_case(key)) {
+            named.options.push((key.to_string(), job_option_value(value, "PdfCraft")));
+        }
+    }
+    named
+}
+
+/// The job as the system spooler takes it.
+fn spooled(job: &Job) -> Job {
+    #[cfg(target_os = "macos")]
+    {
+        with_job_info(job, std::env::var("USER").ok().as_deref())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        job.clone()
+    }
+}
+
+pub fn submit(pdf: &[u8], job: &Job) -> Result<String, crate::PrintError> {
+    craft_print::submit(pdf, &spooled(job)).map_err(|e| crate::PrintError::Spool(e.to_string()))
+}
+
+/// [`submit`], told `(sent, sheets)` as each sheet reaches the spooler (Windows; CUPS takes the
+/// whole PDF at once and reports nothing).
+pub fn submit_with_progress(pdf: &[u8], job: &Job, progress: &mut dyn FnMut(usize, usize)) -> Result<String, crate::PrintError> {
+    craft_print::submit_with_progress(pdf, &spooled(job), progress).map_err(|e| crate::PrintError::Spool(e.to_string()))
+}
+
+pub fn open_printer_preferences(printer: &str) -> Result<(), crate::PrintError> {
+    craft_print::open_printer_preferences(printer).map_err(|e| crate::PrintError::Spool(e.to_string()))
+}
+
+/// The PPD language codes (`*cupsLanguages`, the `ll` of `*ll.Translation`) to try for a UI
+/// language code, most specific first: `pt-br` → `pt_BR`, `pt`; `zh-hans` → `zh_CN`, `zh`.
+// Read only by the CUPS path; the tests exercise it everywhere.
+#[cfg_attr(not(all(unix, not(target_arch = "wasm32"))), allow(dead_code))]
+fn ppd_languages(lang: &str) -> Vec<String> {
+    let lang = lang.to_ascii_lowercase();
+    let mut parts = lang.split(['-', '_']).filter(|p| !p.is_empty());
+    let Some(primary) = parts.next() else { return Vec::new() };
+    let region = match (primary, parts.next()) {
+        ("zh", Some("hans")) => Some("CN".to_string()),
+        ("zh", Some("hant")) => Some("TW".to_string()),
+        (_, Some(r)) if r.len() == 2 => Some(r.to_ascii_uppercase()),
+        _ => None,
+    };
+    region.map(|r| format!("{primary}_{r}")).into_iter().chain(std::iter::once(primary.to_string())).collect()
+}
+
+/// Give `options` the driver's own names in `lang` from the PPD's localization lines
+/// (`*ll.Translation Key/Label: ""` for options and groups, `*ll.Key choice/Label: ""` for
+/// choices). Each line is read as UTF-8 on its own: drivers write them so in files whose other
+/// text is Latin-1. Names with no translation, or an empty one, stay as they are.
+// Read only by the CUPS path; the tests exercise it everywhere.
+#[cfg_attr(not(all(unix, not(target_arch = "wasm32"))), allow(dead_code))]
+pub(crate) fn localize(options: &mut [PrinterOption], ppd: &[u8], lang: &str) {
+    use std::collections::HashMap;
+    let Some(code) = ppd_languages(lang).into_iter().find(|code| {
+        let prefix = format!("*{code}.");
+        ppd.split(|b| *b == b'\n').any(|l| l.starts_with(prefix.as_bytes()))
+    }) else {
+        return;
+    };
+    if code == "en" {
+        return;
+    }
+    let prefix = format!("*{code}.");
+    let mut names: HashMap<String, String> = HashMap::new();
+    let mut choices: HashMap<(String, String), String> = HashMap::new();
+    let mut groups: HashMap<String, String> = HashMap::new();
+    for line in ppd.split(|b| *b == b'\n') {
+        let Some(text) = std::str::from_utf8(line).ok() else { continue };
+        let text = text.trim_end_matches('\r');
+        if let Some(rest) = text.strip_prefix("*OpenGroup:") {
+            // Group label → keyword, since options carry their group's label.
+            let rest = rest.trim();
+            if let Some((key, label)) = rest.split_once('/') {
+                groups.insert(label.trim().to_string(), key.trim().to_string());
+            }
+            continue;
+        }
+        let Some(rest) = text.strip_prefix(prefix.as_str()) else { continue };
+        let Some((head, _)) = rest.split_once(':') else { continue };
+        let Some((main, spec)) = head.split_once(' ') else { continue };
+        let Some((key, label)) = spec.split_once('/') else { continue };
+        let label = label.trim();
+        if label.is_empty() {
+            continue;
+        }
+        if main == "Translation" {
+            names.insert(key.trim().to_string(), label.to_string());
+        } else {
+            choices.insert((main.to_string(), key.trim().to_string()), label.to_string());
+        }
+    }
+    for o in options.iter_mut() {
+        if let Some(label) = names.get(&o.key) {
+            o.label = label.clone();
+        }
+        if let Some(label) = groups.get(&o.group).and_then(|key| names.get(key)) {
+            o.group = label.clone();
+        }
+        for (choice, label) in o.choices.iter_mut() {
+            if let Some(t) = choices.get(&(o.key.clone(), choice.clone())) {
+                *label = t.clone();
+            }
+        }
+    }
 }

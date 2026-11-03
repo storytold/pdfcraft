@@ -1,4 +1,4 @@
-use crate::function::{Clamper, Function, TupleVec, Values, interpolate};
+use crate::function::{Clamper, Function, StitchingBounds, TupleVec, Values, interpolate};
 use hayro_syntax::object::Array;
 use hayro_syntax::object::Dict;
 use hayro_syntax::object::Object;
@@ -82,6 +82,51 @@ impl Type3 {
         self.clamper.clamp_output(&mut evaluated);
 
         Some(evaluated)
+    }
+
+    // PdfCraft patch (backport of hayro 0.8).
+    pub(crate) fn stitching_bounds(&self) -> StitchingBounds {
+        let mut stitching_bounds = StitchingBounds::new();
+        if self.bounds.len() > 2 {
+            stitching_bounds.extend_from_slice(&self.bounds[1..self.bounds.len() - 1]);
+        }
+
+        for (index, function) in self.functions.iter().enumerate() {
+            let Some(bounds_i_minus_1) = self.bounds.get(index).copied() else {
+                continue;
+            };
+            let Some(bounds_i) = self.bounds.get(index + 1).copied() else {
+                continue;
+            };
+
+            let Some((encode_min, encode_max)) = self.encode.get(index).copied() else {
+                continue;
+            };
+
+            if (encode_max - encode_min).abs() <= f32::EPSILON {
+                continue;
+            }
+
+            for child_bound in function.stitching_bounds() {
+                let bound = interpolate(
+                    child_bound,
+                    encode_min,
+                    encode_max,
+                    bounds_i_minus_1,
+                    bounds_i,
+                );
+                let min_bound = bounds_i_minus_1.min(bounds_i);
+                let max_bound = bounds_i_minus_1.max(bounds_i);
+                if bound > min_bound && bound < max_bound {
+                    stitching_bounds.push(bound);
+                }
+            }
+        }
+
+        stitching_bounds.sort_by(f32::total_cmp);
+        stitching_bounds.dedup_by(|a, b| (*a - *b).abs() <= f32::EPSILON);
+
+        stitching_bounds
     }
 }
 
@@ -174,8 +219,10 @@ mod tests {
             Some(smallvec![0.5])
         );
         let data = function_limits_stitching(65);
-        let object = Object::from_bytes(data.as_bytes()).unwrap();
-        assert!(Function::new(&object).is_none());
+        // Direct nesting beyond the hayro-syntax cap (PdfCraft patch) is refused while parsing,
+        // before this guard; the guard is tested with indirect references in pdfcraft-render
+        // (`function_limits_depth_guard_refuses_a_chain_of_references`).
+        assert!(Object::from_bytes(data.as_bytes()).is_none());
     }
 
     fn function_limits_fanout(children: usize) -> String {

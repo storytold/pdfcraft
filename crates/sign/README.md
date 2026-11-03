@@ -20,7 +20,12 @@ for s in signatures(&doc, &bytes, &trust) {                                // li
   no fix, so `rsa` is only used to verify). ECDSA signs with deterministic nonces (RFC 6979).
 - **Signing:** PAdES B-B (`ETSI.CAdES.detached`, signing-certificate-v2, SHA-256/384, no SHA-1).
   An existing unsigned field or a new one (visible with Acrobat's name-and-details appearance,
-  or invisible); certification with DocMDP P=1/2/3. The document is written incrementally
+  or invisible); certification with DocMDP P=1/2/3. A visible signature can show a `Graphic`
+  where the large name would be: drawn strokes, filled outlines (a typed signature) or RGBA
+  pixels (an image XObject with a soft mask), checked and size-capped first. On a page shown
+  turned (`/Rotate`, inherited or not), a new visible signature reads upright as displayed: its
+  widget gets `/MK /R` and its appearance is laid out in the displayed box and turned back by a
+  `/Matrix`; an existing field follows its own `/MK /R`. The document is written incrementally
   with a zero-filled `/Contents` and fixed-width `/ByteRange`, which are then patched in
   place. Encrypted documents are refused for now.
 - **Timestamps (PAdES B-T):** the `timestamp` module builds and parses RFC 3161 requests,
@@ -47,10 +52,18 @@ for s in signatures(&doc, &bytes, &trust) {                                // li
   signer's chain and a verified revocation invalidates the signature.
 
 Not yet: revocation fetching (AIA/CRLDP extraction and a fetcher), timestamp-server
-configuration, FieldMDP locks, certificate security, smart cards and PKCS #11 tokens.
+configuration, FieldMDP locks, certificate security, direct PKCS #11 access to tokens.
 macOS Keychain and Windows Current User Personal (My) store identities sign through
 `ExternalKey` without exporting private keys. Windows CNG supports RSA PKCS #1 v1.5 and
-ECDSA P-256/P-384; the store integration is tested with software-backed keys.
+ECDSA P-256/P-384; the store integration is tested with software-backed keys. A smart card
+or token whose driver registers a CNG key storage provider is such an identity too: the key
+is opened for signing without the silent flag, so the provider shows its own PIN dialog
+(checked by hand with a SafeNet token; CI has no hardware). A store identity signs with the
+issuers Windows chains its certificate to, without the root. Store certificates that can't
+sign (no private key, another key type, a key CNG can't open) are returned by
+`windows::list` as `unusable` with the reason and the Windows error code, shown greyed in
+the Sign dialog and by `sign_windows_ids`, instead of being left out silently; a key that
+needs a prompt to open is listed and asks at signing (issue #179).
 - **Validation:** `/ByteRange` and the CMS are read from the file's own bytes; the digest,
   the signature value and the signer's chain (against a `TrustStore`) are checked. Later
   revisions are diffed against the signed one, and the changes are classified (signing, form
@@ -62,12 +75,24 @@ ECDSA P-256/P-384; the store integration is tested with software-backed keys.
   `pathLenConstraint` that allows the CAs below it, and, given the signing time, validity then.
   Certificates embedded in a document are in the pool too, so an ordinary subscriber certificate
   can never vouch for another one; when an issuer is refused, the signature's details say why.
+- **The signer's certificate must allow signing documents** (`Certificate::signing_problem`): a
+  key usage needs digitalSignature or nonRepudiation, an extended key usage needs a
+  document-signing purpose (any, emailProtection, codeSigning, RFC 9336 documentSigning, Adobe
+  Authentic Documents, Microsoft document signing), and no critical extension may be one PdfCraft
+  doesn't process. Otherwise the verdict is unknown, never valid, and the details say why.
 - **BER as well as DER.** The CMS is read with `der::Tlv::parse_ber`, as Windows CryptoAPI, Adobe
   PPKMS, DocuSign, Documenso and `openssl cms -stream` write it: indefinite lengths and an
   OCTET STRING split into segments. Only the structure is read that way; certificates and signed
   attributes are still verified over their own exact bytes (signed attributes written with an
   indefinite length are re-encoded as DER first, as RFC 5652 §5.4 has them signed). Nesting is
   bounded, and the details say that the signature was BER. High tag numbers are not read.
+- **One content type, one message digest.** A CMS whose signed attributes repeat the content type
+  or the message digest, or give either of them more or fewer than one value, is not read (RFC
+  5652 §11.1, §11.2). Neither is one whose content-type attribute differs from `eContentType`:
+  the signature covers the attribute but not `eContentType`. Both content types must be object
+  identifiers, and a PDF signature's must be data. A signature with signed attributes but no
+  content-type attribute is read anyway, with a note, although §11.1 requires one: then
+  `eContentType` alone says that the content is data.
 - **Later changes are classified narrowly.** Only the catalog's own `/Metadata` stream is the
   document's XMP, and only objects reached through the `/DSS` keys above are the security store. A
   `/Type /Metadata` or `/Type /DSS` *label* on any other dictionary or stream (a page's Form
