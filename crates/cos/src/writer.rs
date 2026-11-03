@@ -245,7 +245,7 @@ pub fn write_incremental(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, 
     if let Some(p) = prev {
         trailer.set(b"Prev".to_vec(), Object::Int(p as i64));
     }
-    let size = doc.next_num().max(trailer.int(b"Size").unwrap_or(0) as u32);
+    let size = doc.next_num().max(trailer.int(b"Size").map_or(0, |n| n.clamp(0, i64::from(u32::MAX)) as u32));
     if as_stream {
         let rows = offsets.iter().map(|(n, (o, g, used))| (*n, if *used { Row::InFile(*o, *g) } else { Row::Free(*g) })).collect();
         write_xref_stream(&mut out, base, &mut trailer, rows, size);

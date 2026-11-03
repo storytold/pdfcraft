@@ -226,16 +226,33 @@ pub fn picture_rotation(doc: &Document, page: usize, index: usize) -> Result<i64
 /// over the page while it is dragged. `false`, with `doc` unchanged, when the annotation has no
 /// normal appearance (`/AP /N`) for that render to draw.
 pub fn isolate_annotation(doc: &mut Document, page: usize, index: usize) -> Result<bool, AnnotError> {
+    isolate_annotations(doc, page, &[index])
+}
+
+/// [`isolate_annotation`] for several annotations of one page: those of them with a normal
+/// appearance stay, in their order on the page. `false`, with `doc` unchanged, when none has one.
+/// An index that isn't one of the page's annotations is an error even when the others are, and
+/// leaves `doc` unchanged too.
+pub fn isolate_annotations(doc: &mut Document, page: usize, indices: &[usize]) -> Result<bool, AnnotError> {
     let p = page_ref(doc, page)?;
-    let entry = annots(doc, p).get(index).cloned().ok_or(AnnotError::NoSuchAnnotation { page, index })?;
-    let has_normal = {
-        let obj = doc.resolve(&entry);
-        obj.as_dict().and_then(|d| d.get(b"AP")).is_some_and(|ap| doc.resolve(ap).as_dict().is_some_and(|ap| ap.contains(b"N")))
-    };
-    if !has_normal {
+    let list = annots(doc, p);
+    let mut kept = Vec::new();
+    for (index, entry) in list.iter().enumerate() {
+        if !indices.contains(&index) {
+            continue;
+        }
+        let obj = doc.resolve(entry);
+        if obj.as_dict().and_then(|d| d.get(b"AP")).is_some_and(|ap| doc.resolve(ap).as_dict().is_some_and(|ap| ap.contains(b"N"))) {
+            kept.push(entry.clone());
+        }
+    }
+    if let Some(&index) = indices.iter().find(|&&i| i >= list.len()) {
+        return Err(AnnotError::NoSuchAnnotation { page, index });
+    }
+    if kept.is_empty() {
         return Ok(false);
     }
-    set_annots(doc, p, vec![entry])?;
+    set_annots(doc, p, kept)?;
     doc.update_dict(p, |d| {
         d.remove(b"Contents");
     })?;

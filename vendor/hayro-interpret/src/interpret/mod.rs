@@ -120,6 +120,10 @@ pub struct InterpreterSettings {
     /// costs a decode and a resample each for pixels nobody can see. Never set it for a final
     /// render (tiles, whole pages, print, export).
     pub preview: bool,
+    /// PdfCraft patch (73): the steps of JBIG2 decoding a page's images may take between them
+    /// ([`hayro_syntax::MAX_PAGE_JBIG2_WORK`] by default). Images past it aren't drawn, nor images
+    /// whose masks are past it, each with [`InterpreterWarning::ContentTruncated`].
+    pub jbig2_work: u64,
 }
 
 impl Default for InterpreterSettings {
@@ -142,6 +146,7 @@ impl Default for InterpreterSettings {
             ocg_overrides: Arc::new(Vec::new()),
             cancelled: None,
             preview: false,
+            jbig2_work: hayro_syntax::MAX_PAGE_JBIG2_WORK,
         }
     }
 }
@@ -163,12 +168,25 @@ pub enum InterpreterWarning {
     ColorFallback,
 }
 
+/// PdfCraft patch (73): ends a page's JBIG2 allowance with the page, so that what decodes on its
+/// thread afterwards has no page to run out on.
+struct PageJbig2Work;
+
+impl Drop for PageJbig2Work {
+    fn drop(&mut self) {
+        hayro_syntax::set_page_jbig2_work(u64::MAX);
+    }
+}
+
 /// interpret the contents of the page and render them into the device.
 pub fn interpret_page<'a>(
     page: &Page<'a>,
     context: &mut Context<'a>,
     device: &mut impl Device<'a>,
 ) {
+    // PdfCraft patch (73): a context used again is another page.
+    hayro_syntax::set_page_jbig2_work(context.settings.jbig2_work);
+    let _allowance = PageJbig2Work;
     let resources = page.resources();
     let mut content = page.content_reader();
     // PdfCraft patch: the page's own contents count against its content budget too, where they
@@ -460,6 +478,12 @@ fn interpret_window<'a>(
         }
         match op {
             TypedInstruction::SaveState(_) => context.save_state(),
+            // PdfCraft patch (68): in a form or an appearance stream, a `Q` with no `q` of that
+            // stream to match is ignored, so it cannot pop the states of the content that drew
+            // it. Page content keeps its old behaviour (`stream_floor` stays 0 there).
+            TypedInstruction::RestoreState(_) if context.stream_floor_reached() => {
+                warn!("ignored a `Q` with no matching `q` in its content stream");
+            }
             TypedInstruction::StrokeColorDeviceRgb(s) => {
                 // PdfCraft patch (38): DeviceRGB, or the DefaultRGB that replaces it.
                 context.get_mut().graphics_state.stroke_cs = defaults.device(DeviceFamily::Rgb);
@@ -1024,12 +1048,14 @@ pub fn interpret<'a>(
     let num_states = context.num_states();
 
     context.save_state();
+    let outer_floor = context.enter_stream();
 
     interpret_window(&mut ops, resources, context, device);
 
     while context.num_states() > num_states {
         context.restore_state(device);
     }
+    context.leave_stream(outer_floor);
     // PdfCraft patch (18): say that content was skipped, so a truncated page isn't a clean render.
     if crate::context::content_was_truncated() {
         (context.settings.warning_sink)(InterpreterWarning::ContentTruncated);
