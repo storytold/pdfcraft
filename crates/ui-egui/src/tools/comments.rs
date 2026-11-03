@@ -5,8 +5,9 @@
 //!   bar in three flyout groups, as in Acrobat's comment toolbar (audit `a14-*`).
 //! - **On the page:** drawing gestures with live previews; with the Select tool, comments can be
 //!   hovered, selected (blue frame with 8 round handles), moved, resized (rectangles, ovals and
-//!   text boxes), edited (double-click) and deleted (⌫ / Delete); a context menu offers Edit,
-//!   Reply, Set status, Colour and Delete.
+//!   text boxes), turned (stamps and drawn signatures, by a rotate knob), edited (double-click)
+//!   and deleted (⌫ / Delete); a context menu offers Edit, Reply, Set status, Colour, Rotate and
+//!   Delete.
 //! - **Composer:** the floating "Add a comment" card used for new notes, text boxes and edits.
 //!
 //! Everything is turned into `pdfcraft_engine::Edit`s, queued on the view as `pending_edit` and

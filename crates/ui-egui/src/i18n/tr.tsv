@@ -2901,3 +2901,5 @@ calendar weekday	Su	Pz
 calendar weekday	Th	Pe
 calendar weekday	Tu	Sa
 calendar weekday	We	Ça
+# Turning a stamp or drawn signature by its rotate knob: the undo label (M5).
+	Rotate comment	Yorumu döndür

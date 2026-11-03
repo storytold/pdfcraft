@@ -3,7 +3,7 @@
 //! Builders for the comment types Acrobat's commenting tools create (sticky note, highlight,
 //! underline, strikethrough, squiggly, rectangle, oval, line/arrow, freehand ink, text box),
 //! appearance streams for them ([`appearance`]), and the edits a comment goes through: reply,
-//! change its text, recolour, move, resize and delete.
+//! change its text, recolour, move, resize, turn and delete.
 //!
 //! Addressing: a comment is `(page, index)`, its position in the page's `/Annots` array, which
 //! is what `pdfcraft_render::Annotation::index` reports. Inline annotation dictionaries are
@@ -23,6 +23,7 @@ mod draw;
 mod info;
 mod lookup;
 mod modify;
+mod turn;
 mod types;
 
 #[cfg(test)]
@@ -41,6 +42,7 @@ pub use modify::{
     add_reply, add_text_replacement, deletable, delete_annotation, erase_ink, fillable, goes_with, lift_annotation, move_annotation, set_contents,
     set_fill, set_font_size, set_locked, set_marked, set_points, set_rect, set_review_state, set_style, with_replies_and_popups,
 };
+pub use turn::rotate_annotation;
 pub use types::{
     AttachIcon, FillMark, LineEnding, Markup, Meta, NOTE_SIZE, NewAnnotation, NoteIcon, OverlayFont, OverlayLook, ReviewState, Rgb, Shape,
     StampGroup, StampKind, Style, StyleChange, TextReplacement, rect_quad,

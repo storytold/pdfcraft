@@ -341,9 +341,28 @@ pub struct Annotation {
     /// The points that shape a line (its two ends, `/L`) or connected lines, a polygon or a
     /// cloud (their corners, `/Vertices`), in user space; empty for other comments.
     pub points: Vec<[f32; 2]>,
+    /// A stamp turned about its middle (`/PCAngle`, `/PCSize`, see `pdfcraft_annot::rotate_annotation`):
+    /// degrees counterclockwise, and the width and height of its upright box. `rect` is then the
+    /// turned box's hull.
+    pub turn: Option<(f32, [f32; 2])>,
 }
 
 impl Annotation {
+    /// A turned stamp's angle (degrees counterclockwise) and its upright box in user space, which
+    /// that angle turns about its middle: the largest of its proportions whose hull fits `rect`.
+    /// Keep in step with `pdfcraft_annot`'s `own_box`.
+    pub fn turned_box(&self) -> Option<(f32, [f32; 4])> {
+        let (angle, [w, h]) = self.turn?;
+        let [x0, y0, x1, y1] = self.rect;
+        let (sin, cos) = angle.to_radians().sin_cos();
+        let (sin, cos) = (sin.abs(), cos.abs());
+        let scale = ((x1 - x0) / (cos * w + sin * h)).min((y1 - y0) / (sin * w + cos * h));
+        let (w, h) = (w * scale / 2.0, h * scale / 2.0);
+        let (cx, cy) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
+        let own = [cx - w, cy - h, cx + w, cy + h];
+        own.iter().all(|v| v.is_finite()).then_some((angle, own))
+    }
+
     /// A checkmark reply (`/StateModel /Marked`): "Marked" or "Unmarked" rather than a review status.
     pub fn is_mark(&self) -> bool {
         matches!(self.state.as_deref(), Some("Marked" | "Unmarked"))

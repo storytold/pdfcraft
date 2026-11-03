@@ -410,4 +410,85 @@ mod tests {
         assert!(pixels[2][3] > 0 && pixels[2][3] < 255, "near-white must fade");
         assert_eq!(pixels[3][3], 100, "existing transparency must be kept");
     }
+
+    /// An image signature (dark on the left, clear on the right) turned a quarter and at an angle:
+    /// the pixels show it, after saving and flattening too, and undo puts it back.
+    #[test]
+    fn a_turned_image_signature_is_drawn_turned_saved_and_flattened() {
+        let mut source = image::RgbaImage::from_pixel(100, 20, image::Rgba([0, 0, 0, 0]));
+        for x in 0..50 {
+            for y in 0..20 {
+                source.put_pixel(x, y, image::Rgba([0, 0, 0, 255]));
+            }
+        }
+        let mut encoded = Cursor::new(Vec::new());
+        source.write_to(&mut encoded, ImageFormat::Png).unwrap();
+        let image = SignatureImage::from_bytes(&encoded.into_inner()).unwrap();
+        let mut session = crate::Session::new();
+        let blank = session.create_blank(300.0, 400.0, 1).unwrap();
+        let id = session.open_new("form.pdf", blank).unwrap();
+        session.apply(id, image.edit(0, &page(0), [100.0, 200.0], false, "Ada").unwrap()).unwrap();
+        let placed = session.get(id).unwrap().info.annotations[0].rect;
+        let [x0, y0, x1, y1] = placed;
+        let (cx, cy) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
+        let width = x1 - x0;
+
+        // A dark pixel at user-space (x, y) of the document's bytes.
+        let dark = |bytes: &Arc<Vec<u8>>, x: f32, y: f32| {
+            let out = pdfcraft_render::PageRenderer::new(bytes.clone(), Default::default()).render(pdfcraft_render::RenderRequest {
+                page: 0,
+                scale: 1.0,
+                ..Default::default()
+            });
+            assert!(out.error.is_none(), "{:?}", out.error);
+            let at = ((400 - y as u32) * out.width + x as u32) as usize * 4;
+            out.rgba[at] < 128
+        };
+
+        let doc = session.get(id).unwrap();
+        assert!(dark(&doc.bytes, cx - width / 4.0, cy) && !dark(&doc.bytes, cx + width / 4.0, cy), "dark on its left, placed upright");
+
+        // A quarter turn counterclockwise: its left end points down.
+        session.apply(id, Edit::RotateAnnotation { page: 0, index: 0, degrees: 90.0 }).unwrap();
+        let doc = session.get(id).unwrap();
+        assert_eq!(doc.can_undo(), Some("Rotate comment"));
+        let a = &doc.info.annotations[0];
+        assert_eq!(a.turn, Some((90.0, [width, y1 - y0])));
+        assert!((a.rect[3] - a.rect[1] - width).abs() < 0.01, "tall as it was wide: {:?}", a.rect);
+        assert!(dark(&doc.bytes, cx, cy - width / 4.0), "its dark end below the middle");
+        assert!(!dark(&doc.bytes, cx, cy + width / 4.0), "its clear end above the middle");
+        assert!(!dark(&doc.bytes, cx - width / 4.0, cy), "nothing where it was");
+
+        // A dragged turned signature is laid over the page as a stamp, not as its upright image.
+        assert!(doc.stamp_preview(0, 0).unwrap().is_some());
+
+        // Survives saving and reopening.
+        let saved = session.save_bytes(id).unwrap();
+        let again = session.open("again.pdf", None, saved.clone(), None).unwrap();
+        assert_eq!(session.get(again).unwrap().info.annotations[0].turn, Some((90.0, [width, y1 - y0])));
+        assert!(dark(&saved, cx, cy - width / 4.0), "saved turned");
+
+        // On 45 degrees its dark half lies down and to the left of the middle.
+        session.apply(id, Edit::RotateAnnotation { page: 0, index: 0, degrees: -45.0 }).unwrap();
+        let doc = session.get(id).unwrap();
+        let along = width / 4.0 * std::f32::consts::FRAC_1_SQRT_2;
+        assert!(dark(&doc.bytes, cx - along, cy - along), "dark end down and to the left");
+        assert!(!dark(&doc.bytes, cx + along, cy + along), "clear end up and to the right");
+
+        // Flattened into the page, it stays as it was.
+        let mut flat = session.get(id).unwrap().bytes.clone();
+        let flat_id = session.open("flat.pdf", None, flat.clone(), None).unwrap();
+        session.apply(flat_id, Edit::Flatten { comments: true, fields: false }).unwrap();
+        flat.clone_from(&session.get(flat_id).unwrap().bytes);
+        assert!(session.get(flat_id).unwrap().info.annotations.is_empty());
+        assert!(dark(&flat, cx - along, cy - along) && !dark(&flat, cx + along, cy + along), "flattened turned");
+
+        // One undo step each.
+        session.undo(id).unwrap();
+        session.undo(id).unwrap();
+        let doc = session.get(id).unwrap();
+        assert_eq!(doc.info.annotations[0].rect, placed);
+        assert_eq!(doc.info.annotations[0].turn, None);
+        assert!(dark(&doc.bytes, cx - width / 4.0, cy), "back as it was placed");
+    }
 }

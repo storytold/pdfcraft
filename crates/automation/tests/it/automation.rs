@@ -10642,3 +10642,40 @@ fn multiline_fill_sign_engine_round_trip_preserves_lines_and_appearance() {
     assert_eq!(rendered, re.call("page_render", &json!({"doc":reopened,"page":1,"dpi":72})).unwrap(), "saved appearances are identical");
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+/// A signature is turned through `comment_edit` and reports its angle; the arguments are checked,
+/// and what can't turn says so.
+#[test]
+fn signatures_are_turned_through_comment_edit() {
+    let dir = workdir("turn-signature");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "fill_sign_add", json!({ "doc": doc, "page": 1, "type": "signature", "at": [20, 150], "text": "Ada Lovelace" }));
+    let list = ok(&mut a, "comment_list", json!({ "doc": doc, "page": 1 }));
+    let line = &list["comments"][0];
+    let (page, index) = (line["page"].clone(), line["index"].clone());
+    assert!(line.get("angle").is_none(), "upright: {line}");
+    let was = line["rect"].clone();
+
+    ok(&mut a, "comment_edit", json!({ "doc": doc, "page": page, "index": index, "rotate": 90 }));
+    let list = ok(&mut a, "comment_list", json!({ "doc": doc, "page": 1 }));
+    let line = &list["comments"][0];
+    assert_eq!(line["angle"], json!(90.0));
+    let side = |v: &Value, i: usize| v[i + 2].as_f64().unwrap() - v[i].as_f64().unwrap();
+    // `rect` is rounded to hundredths.
+    assert!((side(&line["rect"], 0) - side(&was, 1)).abs() < 0.05 && (side(&line["rect"], 1) - side(&was, 0)).abs() < 0.05, "{was} -> {line}");
+    assert_eq!(ok(&mut a, "edit_undo", json!({ "doc": doc }))["undone"], "Rotate comment");
+    let list = ok(&mut a, "comment_list", json!({ "doc": doc, "page": 1 }));
+    assert_eq!(list["comments"][0]["rect"], was);
+    assert!(list["comments"][0].get("angle").is_none());
+
+    assert!(matches!(a.call("comment_edit", &json!({ "doc": doc, "page": page, "index": index, "rotate": 361 })), Err(ToolError::InvalidArgs(_))));
+    assert!(matches!(
+        a.call("comment_edit", &json!({ "doc": doc, "page": page, "index": index, "rotate": "a lot" })),
+        Err(ToolError::InvalidArgs(_))
+    ));
+    ok(&mut a, "comment_add", json!({ "doc": doc, "page": 1, "type": "rectangle", "rect": [10, 10, 60, 40] }));
+    let list = ok(&mut a, "comment_list", json!({ "doc": doc, "page": 1 }));
+    let square = list["comments"].as_array().unwrap().iter().find(|c| c["type"] == "Square").unwrap();
+    assert!(a.call("comment_edit", &json!({ "doc": doc, "page": 1, "index": square["index"], "rotate": 90 })).is_err(), "a rectangle doesn't turn");
+}

@@ -4074,6 +4074,18 @@ evidence = ["crates/annot/src/tests.rs::lines_and_polygons_are_reshaped_by_their
 notes = "A selected line, arrow, connected lines, polygon or cloud has a handle on each end or corner (instead of the frame); dragging one changes the length and angle (Shift holds it to 45° from the point before), with the new shape drawn while dragging, as one undo step (Edit::ReshapeAnnotation). The drawing tools keep drawing from an end (a new line starts there); the Select tool reshapes. /Rect follows the points with room for the width and arrowheads, and the appearance is drawn anew. Headless: comment_edit `points`; comment_list reports them. Measurements keep the points they measured; locked comments keep their shape. Not yet: adding or removing a corner."
 
 [[feature]]
+id = "comment.rotate-signature"
+title = "Rotate a signature or stamp on the page"
+area = "E"
+tier = "P1"
+milestone = "M5"
+status = "shipped"
+commands = []
+tools = ["comment_edit"]
+evidence = ["crates/ui-egui/tests/it/fill_sign.rs::signatures_turn_by_their_rotate_knob", "crates/ui-egui/tests/it/fill_sign.rs::a_turned_signature_snaps_keeps_its_shape_and_is_hit_inside_its_box", "crates/engine/src/signature_image.rs::a_turned_image_signature_is_drawn_turned_saved_and_flattened", "crates/annot/src/tests.rs::a_turned_stamp_stays_turned_when_moved_resized_and_redrawn", "crates/automation/tests/it/automation.rs::signatures_are_turned_through_comment_edit"]
+notes = "a rotate knob on the selected stamp or drawn signature (Shift: 15-degree steps) and quarter turns in the page's menu. A stamp's appearance is turned by its form /Matrix with /Rect as the turned box's hull, so every viewer shows it turned; a drawn signature turns its ink points. Still missing: the drag shows the turned outline rather than the signature itself; a turned stamp resizes from its corners only; other comment types (see #4148) don't turn."
+
+[[feature]]
 id = "comment.move-preview"
 title = "A moved comment is drawn where it goes while it is dragged"
 area = "E"

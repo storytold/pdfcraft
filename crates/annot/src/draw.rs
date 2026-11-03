@@ -1,6 +1,7 @@
 use super::create::{finite, num_array};
 use super::lookup::{annot_dict, annots, page_refs};
 use super::modify::refuse_foreign_text;
+use super::turn::{turn_form, turn_of, upright_dict};
 use super::types::NOTE_SIZE;
 use super::{AnnotError, Dict, Document, ObjRef, Object, Stream, appearance};
 
@@ -40,6 +41,12 @@ pub(crate) fn draw_appearance(doc: &mut Document, r: ObjRef) -> Result<(), Annot
 /// Draw the appearance for an annotation dictionary: the expensive half of [`set_appearance`].
 /// Pure from the dictionary and the objects it points at, so [`AppearanceCache`] can reuse it.
 fn build_appearance(doc: &Document, d: &Dict) -> Option<Stream> {
+    // A turned stamp is drawn upright in its own box, then turned: `/Rect` is the turned box's hull.
+    if let Some(turn) = turn_of(doc, d).filter(|_| d.name(b"Subtype") == Some(b"Stamp")) {
+        let mut stream = appearance::build(&upright_dict(doc, d, &turn)?)?;
+        turn_form(doc, d, &turn, &mut stream.dict)?;
+        return Some(stream);
+    }
     let mut stream = appearance::build(d)?;
     // Picture-stamp restyling must retain the placement's page-axis correction.
     if d.get(b"PCPicture").is_some() {

@@ -2624,3 +2624,5 @@ animation effects	Off	Ανενεργά
 	No image on clipboard to paste	Δεν υπάρχει εικόνα στο πρόχειρο για επικόλληση
 	Pinned {tool} to Home	Το {tool} καρφιτσώθηκε στην Αρχική
 	Unpinned {tool} from Home	Το {tool} ξεκαρφιτσώθηκε από την Αρχική
+# Turning a stamp or drawn signature by its rotate knob: the undo label (M5).
+	Rotate comment	Περιστροφή σχολίου

@@ -85,6 +85,7 @@ pub const EDIT_LABELS: &[&str] = &[
     "Move comment",
     "Reshape comment",
     "Resize comment",
+    "Rotate comment",
     "Change comment properties",
     "Fill in {name}",
     "Set the image of {name}",
@@ -225,6 +226,7 @@ impl Edit {
             Edit::MoveAnnotation { .. } => Label::of("Move comment"),
             Edit::ReshapeAnnotation { .. } => Label::of("Reshape comment"),
             Edit::ResizeAnnotation { .. } => Label::of("Resize comment"),
+            Edit::RotateAnnotation { .. } => Label::of("Rotate comment"),
             Edit::StyleAnnotation { .. } | Edit::FillAnnotation { .. } | Edit::FontSizeAnnotation { .. } | Edit::SetAnnotationInfo { .. } => {
                 Label::of("Change comment properties")
             }

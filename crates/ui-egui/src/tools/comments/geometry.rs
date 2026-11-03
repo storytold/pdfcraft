@@ -11,6 +11,12 @@ pub(super) fn resizable(a: &Annotation) -> bool {
     matches!(a.subtype.as_str(), "Square" | "Circle" | "FreeText" | "Stamp" | "Ink") && a.intent.as_deref() != Some("FreeTextCallout")
 }
 
+/// Stamps (image and typed signatures among them) and drawn signatures: they turn about their
+/// middle. One kept upright on the page (NoRotate) doesn't, nor a locked one.
+pub(super) fn rotatable(a: &Annotation) -> bool {
+    !a.locked && !a.no_rotate && (a.subtype == "Stamp" || a.subtype == "Ink" && a.fill_sign)
+}
+
 /// Lines, connected lines, polygons and clouds: their ends and corners have handles of their own
 /// (measurements keep the points they measured, and a locked comment its shape).
 pub(super) fn reshapable(a: &Annotation) -> bool {
@@ -48,6 +54,14 @@ pub(crate) fn reshaped(points: &[[f64; 2]], i: usize, to: [f64; 2], shift: bool)
 }
 
 pub(super) const HANDLES: [(i8, i8); 8] = [(-1, -1), (0, -1), (1, -1), (1, 0), (1, 1), (0, 1), (-1, 1), (-1, 0)];
+
+const CORNERS: [(i8, i8); 4] = [(-1, -1), (1, -1), (1, 1), (-1, 1)];
+
+/// The resize handles `a` has. A turned stamp has its corners only: pulling one side of its upright
+/// hull would shear it.
+pub(super) fn handles(a: &Annotation) -> &'static [(i8, i8)] {
+    if a.turn.is_some() { &CORNERS } else { &HANDLES }
+}
 
 pub(super) fn handle_pos(r: Rect, (hx, hy): (i8, i8)) -> Pos2 {
     let x = match hx {

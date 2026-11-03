@@ -76,6 +76,8 @@ pub(crate) enum CommentPart {
     Handle(i8, i8),
     /// A point of the selected line, polygon or cloud.
     Point(usize),
+    /// The rotate knob of the selected stamp or drawn signature: a drag turns it.
+    Rotate,
 }
 
 /// What lies under a point, for one page module.

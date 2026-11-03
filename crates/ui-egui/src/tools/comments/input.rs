@@ -1,6 +1,6 @@
 use super::geometry::{
-    CARET_SIZE, HANDLES, clamp_to, corner_ratio, drawn_box, grabs_points, handle_pos, is_markup, point_handle, reshapable, reshaped, resizable,
-    resized, snapped_caret,
+    CARET_SIZE, clamp_to, corner_ratio, drawn_box, grabs_points, handle_pos, handles, is_markup, point_handle, reshapable, reshaped, resizable,
+    resized, rotatable, snapped_caret,
 };
 use super::paint::{drawn_shape, edit_anchor, erase, new_comment};
 use super::state::{Composer, ComposerKind, Gesture, PageCx};
@@ -80,7 +80,7 @@ pub(crate) fn hit(cx: &PageCx<'_>, view: &DocView, p: Pos2) -> Option<Hit> {
             return Some(Hit::new(Owner::Comment { index: a.index, part: CommentPart::Point(point) }, Layer::Handle, egui::CursorIcon::Crosshair));
         }
         if resizable(a)
-            && let Some((x, y)) = HANDLES.into_iter().find(|h| handle_pos(cx.screen_rect(a), *h).distance(p) <= 7.0)
+            && let Some(&(x, y)) = handles(a).iter().find(|h| handle_pos(cx.screen_rect(a), **h).distance(p) <= 7.0)
         {
             let icon = match (x, y) {
                 (0, _) => egui::CursorIcon::ResizeVertical,
@@ -89,6 +89,9 @@ pub(crate) fn hit(cx: &PageCx<'_>, view: &DocView, p: Pos2) -> Option<Hit> {
                 _ => egui::CursorIcon::ResizeNeSw,
             };
             return Some(Hit::new(Owner::Comment { index: a.index, part: CommentPart::Handle(x, y) }, Layer::Handle, icon));
+        }
+        if rotatable(a) && crate::edit_text_ui::rotate_knob(cx.screen_rect(a), cx.xf.rect).0.distance(p) <= 8.0 {
+            return Some(Hit::new(Owner::Comment { index: a.index, part: CommentPart::Rotate }, Layer::Handle, egui::CursorIcon::Grab));
         }
     }
     let a = cx.hit(p).filter(|a| bodies && pick(a))?;
@@ -109,7 +112,7 @@ pub(crate) fn hit(cx: &PageCx<'_>, view: &DocView, p: Pos2) -> Option<Hit> {
 /// under the pointer), so the tools beneath leave it: a live move, resize or reshape, or a press
 /// held by a comment that keeps its drag.
 fn grabs(cx: &PageCx<'_>, view: &DocView) -> bool {
-    if matches!(view.comments.gesture, Some(Gesture::Move { page, .. } | Gesture::Resize { page, .. } | Gesture::Reshape { page, .. }) if page == cx.page)
+    if matches!(view.comments.gesture, Some(Gesture::Move { page, .. } | Gesture::Resize { page, .. } | Gesture::Reshape { page, .. } | Gesture::Rotate { page, .. }) if page == cx.page)
     {
         return true;
     }
@@ -192,12 +195,17 @@ fn select_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, view: &mu
                 // On screen, the image is also turned by the view's rotation.
                 let turned = !cx.xf.rot.is_multiple_of(180);
                 let aspect_ratio = view.signature_drag.aspect_ratio(cx.page, a.index).map(|ratio| if turned { ratio.recip() } else { ratio });
-                // A drawn signature keeps its shape from the corners, as image signatures do.
+                // A drawn signature keeps its shape from the corners, as image signatures do, and
+                // so does a turned stamp.
                 let aspect_ratio = aspect_ratio.or_else(|| {
                     let r = cx.screen_rect(a);
-                    (a.fill_sign && a.subtype == "Ink" && r.height() > 0.0).then(|| r.width() / r.height())
+                    ((a.fill_sign && a.subtype == "Ink" || a.turn.is_some()) && r.height() > 0.0).then(|| r.width() / r.height())
                 });
                 cv.gesture = Some(Gesture::Resize { page: cx.page, index: a.index, handle: (x, y), from: o, aspect_ratio });
+                consumed = true;
+            }
+            CommentPart::Rotate => {
+                cv.gesture = Some(Gesture::Rotate { page: cx.page, index: a.index, from: o });
                 consumed = true;
             }
             CommentPart::Body if !is_markup(&a.subtype) => {
@@ -211,13 +219,26 @@ fn select_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, view: &mu
             CommentPart::Body => {}
         }
     }
-    if matches!(cv.gesture, Some(Gesture::Move { page, .. } | Gesture::Resize { page, .. } | Gesture::Reshape { page, .. }) if page == cx.page) {
+    if matches!(cv.gesture, Some(Gesture::Move { page, .. } | Gesture::Resize { page, .. } | Gesture::Reshape { page, .. } | Gesture::Rotate { page, .. }) if page == cx.page)
+    {
         consumed = true;
+    }
+    if matches!(cv.gesture, Some(Gesture::Rotate { page, .. }) if page == cx.page) {
+        view.cursor.claim(Layer::Drag, egui::CursorIcon::Grabbing);
     }
     if resp.drag_stopped()
         && let Some(p) = pointer
     {
         match cv.gesture.clone() {
+            Some(Gesture::Rotate { page, index, from }) if page == cx.page => {
+                cv.gesture = None;
+                if let Some(a) = cx.get(index) {
+                    let degrees = cx.turned_by(a, from, p, ui.input(|i| i.modifiers.shift));
+                    if degrees.abs() >= 0.05 {
+                        view.pending_edit = Some(Edit::RotateAnnotation { page, index, degrees: -f64::from(degrees) });
+                    }
+                }
+            }
             Some(Gesture::Move { page, index, from }) if page == cx.page => {
                 cv.gesture = None;
                 let (a, b) = (cx.to_user(from), cx.to_user(p));
