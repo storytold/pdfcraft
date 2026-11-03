@@ -374,11 +374,15 @@ pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> R
             d.set(b"RD".to_vec(), num_array(&[tb[0] - rect[0], tb[1] - rect[1], rect[2] - tb[2], rect[3] - tb[3]]));
         }
         Shape::Sound { rate, channels, samples, .. } => {
-            if samples.is_empty() || samples.len() % 2 != 0 {
-                return Err(AnnotError::Invalid("the recording has no samples".into()));
-            }
             if !(1..=2).contains(channels) || !(4000..=96000).contains(rate) {
                 return Err(AnnotError::Invalid("the recording must be mono or stereo at 4 to 96 kHz".into()));
+            }
+            let bytes_per_frame = 2 * (*channels as usize);
+            if samples.is_empty() {
+                return Err(AnnotError::Invalid("the recording has no samples".into()));
+            }
+            if samples.len() % bytes_per_frame != 0 {
+                return Err(AnnotError::Invalid("the recording sample data is not a multiple of whole frames".into()));
             }
             d.set(b"C".to_vec(), rgb(style.color));
             d.set(b"Name".to_vec(), Object::name("Mic"));
