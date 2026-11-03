@@ -5114,3 +5114,13 @@ fn a_field_split_into_areas_smaller_than_its_sections_margins_still_moves_on() {
         assert!(bordered.warnings.iter().any(|w| w.contains("without its border")), "{margin}: {:?}", bordered.warnings);
     }
 }
+
+/// Only a template that is a packet of the XDP is the form's: one inside imported data (a
+/// dataset holding XML that looks like a template) is not read, and neither are its scripts.
+#[test]
+fn a_template_inside_the_data_is_not_the_form() {
+    let nested = "<xdp:xdp xmlns:xdp=\"http://ns.adobe.com/xdp/\"><xfa:datasets xmlns:xfa=\"http://www.xfa.org/schema/xfa-data/1.0/\"><xfa:data><template xmlns=\"http://www.xfa.org/schema/xfa-template/3.3/\"><subform name=\"evil\"><event activity=\"initialize\"><script>xfa.host.messageBox(1)</script></event></subform></template></xfa:data></xfa:datasets></xdp:xdp>";
+    assert!(parse(nested).is_err(), "no template packet");
+    let real = "<xdp:xdp xmlns:xdp=\"http://ns.adobe.com/xdp/\"><template xmlns=\"http://www.xfa.org/schema/xfa-template/3.3/\"><subform name=\"form1\"/></template></xdp:xdp>";
+    assert_eq!(parse(real).unwrap().0.root.common.name.as_deref(), Some("form1"));
+}
