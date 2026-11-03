@@ -4573,6 +4573,7 @@ dependencies = [
  "pdfcraft-cos",
  "pdfcraft-model",
  "pdfcraft-render",
+ "pdfcraft-testkit",
  "thiserror 2.0.21",
 ]
 
