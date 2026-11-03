@@ -2016,9 +2016,7 @@ fn the_page_indicator_reads_page_over_pages_with_the_label_when_it_differs() {
 
 #[test]
 fn the_page_indicator_is_announced_as_a_status() {
-    let mut h = egui_kittest::Harness::builder()
-        .with_size(vec2(400.0, 300.0))
-        .build_ui(|ui| paint_page_indicator(ui, ui.max_rect(), "4 / 42"));
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(400.0, 300.0)).build_ui(|ui| paint_page_indicator(ui, ui.max_rect(), "4 / 42"));
     h.run();
     let _ = h.get_by_role_and_label(egui::accesskit::Role::Status, "4 / 42");
 }
