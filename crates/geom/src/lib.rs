@@ -54,17 +54,18 @@ impl Rotation {
 
 /// The axis-aligned box `[x0, y0, x1, y1]` around a quadrilateral given as its four corners
 /// `[x1, y1, x2, y2, x3, y3, x4, y4]` (one quad of a markup or redaction annotation's `/QuadPoints`),
-/// in any corner order. A NaN coordinate is passed over by the min/max. When every x (or y) is NaN
-/// that axis comes out inverted, `f64::MAX` to `f64::MIN`, both finite: a caller that must not get
-/// such a box checks `x0 <= x1` and `y0 <= y1`.
+/// in any corner order. A NaN coordinate is passed over by the min/max, and an infinite one is kept
+/// (every x at `+inf` gives `x0 = x1 = +inf`). When every x (or y) is NaN that axis comes out
+/// inverted and infinite, `+inf` to `-inf`: a caller that must not get such a box checks that the
+/// coordinates are finite, or `x0 <= x1` and `y0 <= y1`.
 pub fn quad_bounds(q: &[f64; 8]) -> [f64; 4] {
     let xs = [q[0], q[2], q[4], q[6]];
     let ys = [q[1], q[3], q[5], q[7]];
     [
-        xs.iter().copied().fold(f64::MAX, f64::min),
-        ys.iter().copied().fold(f64::MAX, f64::min),
-        xs.iter().copied().fold(f64::MIN, f64::max),
-        ys.iter().copied().fold(f64::MIN, f64::max),
+        xs.iter().copied().fold(f64::INFINITY, f64::min),
+        ys.iter().copied().fold(f64::INFINITY, f64::min),
+        xs.iter().copied().fold(f64::NEG_INFINITY, f64::max),
+        ys.iter().copied().fold(f64::NEG_INFINITY, f64::max),
     ]
 }
 
@@ -92,6 +93,9 @@ mod tests {
         assert_eq!(quad_bounds(&[5.0, 5.0, 5.0, 5.0, 5.0, 5.0, 5.0, 5.0]), [5.0, 5.0, 5.0, 5.0]);
         assert_eq!(quad_bounds(&[f64::NAN, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0]), [2.0, 1.0, 6.0, 7.0], "a NaN is passed over");
         let all_nan = quad_bounds(&[f64::NAN, 0.0, f64::NAN, 0.0, f64::NAN, 0.0, f64::NAN, 0.0]);
-        assert_eq!((all_nan[0], all_nan[2]), (f64::MAX, f64::MIN));
+        assert_eq!((all_nan[0], all_nan[2]), (f64::INFINITY, f64::NEG_INFINITY));
+        // An axis that is all `+inf` stays there: not `f64::MAX`, which would pass for finite.
+        let inf = f64::INFINITY;
+        assert_eq!(quad_bounds(&[inf, 0.0, inf, 1.0, inf, 2.0, inf, 3.0]), [inf, 0.0, inf, 3.0]);
     }
 }
