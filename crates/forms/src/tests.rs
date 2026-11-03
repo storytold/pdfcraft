@@ -5485,3 +5485,19 @@ fn locked_button_export_edits_leave_the_document_unchanged() {
         assert_eq!(write_incremental(&doc, &SaveOptions::default()).unwrap(), before);
     }
 }
+
+/// A radio button that is read-only on its own (its own `/Ff`) can't be picked, and a selected one
+/// can't be switched away from, though the group as a whole is writable.
+#[test]
+fn a_read_only_radio_button_is_neither_picked_nor_left() {
+    let lock = |doc: &mut Document, num: u32| doc.update_dict(pdfcraft_cos::ObjRef::new(num, 0), |d| d.set(b"Ff".to_vec(), Object::Int(1))).unwrap();
+    let mut doc = radio_group_form();
+    lock(&mut doc, 7); // Medium
+    assert!(matches!(set_value(&mut doc, "size", &FieldValue::Radio(Some("M".into()))), Err(FormError::ReadOnly(_))));
+    set_value(&mut doc, "size", &FieldValue::Radio(Some("L".into()))).expect("an unlocked button is picked");
+    // Small (selected) locked: the group stays on it.
+    let mut doc = radio_group_form();
+    lock(&mut doc, 6);
+    assert!(matches!(set_value(&mut doc, "size", &FieldValue::Radio(Some("L".into()))), Err(FormError::ReadOnly(_))));
+    assert_eq!(field(&fields(&doc), "size").value, ["S"]);
+}

@@ -260,6 +260,13 @@ pub(crate) fn write_value(doc: &mut Document, f: &Field, value: &FieldValue, scr
             if choice.is_none() && f.has(flags::NO_TOGGLE_TO_OFF) && !f.value.is_empty() {
                 return invalid(format!("{:?} must keep one option selected", f.name));
             }
+            // A button of the group can be read-only on its own: it can't be picked, and a
+            // selected one can't be switched off by picking another.
+            let selects = |w: &Widget| w.on_state.is_some() && w.on_state.as_deref() == choice.as_deref();
+            let selected = |w: &Widget| w.state.is_some() && w.state == w.on_state;
+            if f.widgets.iter().any(|w| w.read_only && (selects(w) || selected(w))) {
+                return Err(FormError::ReadOnly(f.name.clone()));
+            }
             set_states(doc, f, choice.as_deref())
         }
         (FieldKind::Combo | FieldKind::List, FieldValue::Choice(_) | FieldValue::Text(_)) => {
