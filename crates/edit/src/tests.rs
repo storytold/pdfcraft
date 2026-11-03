@@ -9819,19 +9819,28 @@ fn inline_image(data: char) -> String {
 }
 
 /// What page 0 paints, in order: `BI x` for an inline image with sample `x`, `Do x,y` for an
-/// XObject placed by a `cm` translating to x,y, and `Tj` for text.
+/// XObject placed by a `cm` translating to x,y, and `Tj` for text. A `cm` lasts until its `Q`, so an
+/// XObject moved out of its `q`/`Q` wrapper shows as a bare `Do `.
 fn painted(doc: &Document) -> Vec<String> {
-    let mut at = String::new();
+    let mut at = vec![String::new()];
     pdfcraft_content::parse(&page_content_bytes(doc, 0))
         .ops
         .iter()
         .filter_map(|op| match op.op.as_slice() {
-            b"cm" => {
-                let m = op.nums::<6>().unwrap();
-                at = format!("{},{}", m[4], m[5]);
+            b"q" => {
+                at.push(at.last().unwrap().clone());
                 None
             }
-            b"Do" => Some(format!("Do {at}")),
+            b"Q" => {
+                at.pop();
+                None
+            }
+            b"cm" => {
+                let m = op.nums::<6>().unwrap();
+                *at.last_mut().unwrap() = format!("{},{}", m[4], m[5]);
+                None
+            }
+            b"Do" => Some(format!("Do {}", at.last().unwrap())),
             b"BI" => Some(format!("BI {}", String::from_utf8_lossy(&op.inline.as_ref().unwrap().1))),
             b"Tj" => Some("Tj".into()),
             _ => None,
