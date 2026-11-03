@@ -3969,3 +3969,24 @@ fn a_redacted_form_xobject_drops_the_source_text_of_added_content() {
     let bytes = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
     assert!(!bytes.windows(4).any(|w| w == b"1234"), "redacted text left in the saved file");
 }
+
+#[test]
+fn an_inline_widget_takes_its_field_even_with_no_referenced_widget() {
+    // The field's only widget is written in place in `/Annots`, so no referenced widget names it:
+    // the field (and its value) must still go with the widget under the mark.
+    let objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R] >> >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Annots [<< /Type /Annot /Subtype /Widget /Rect [20 20 60 30] /Parent 6 0 R >>] >>"
+            .to_vec(),
+        stream("", b"BT ET"),
+        b"<< >>".to_vec(),
+        b"<< /FT /Tx /T (name) /V (FIELD-SECRET) >>".to_vec(),
+    ];
+    let mut doc = pdf(objs);
+    mark(&mut doc, 0, &[[10.0, 10.0, 70.0, 40.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!(r.fields, 1, "{r:?}");
+    let bytes = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
+    assert!(!bytes.windows(12).any(|w| w == b"FIELD-SECRET"), "the field value survived the save");
+}

@@ -829,10 +829,10 @@ fn remove_page_annotations(
                 None => inline_gone[i] = true,
             }
             if kind == b"Widget" {
-                // A widget written in place has no reference of its own; its `/Parent` is the field.
-                let owner = r
-                    .and_then(|r| widget_owner.iter().find(|(w, _)| *w == r).map(|(_, f)| *f))
-                    .or_else(|| d.reference(b"Parent").filter(|p| widget_owner.iter().any(|(_, f)| f == p)));
+                // A widget written in place has no reference of its own; its `/Parent` is the field,
+                // even one no referenced widget belongs to (it then has no entry in `widget_owner`).
+                // Step 3 deletes only what the form lists as a field, so any `/Parent` is safe here.
+                let owner = r.and_then(|r| widget_owner.iter().find(|(w, _)| *w == r).map(|(_, f)| *f)).or_else(|| d.reference(b"Parent"));
                 if let Some(field) = owner
                     && !doomed_fields.contains(&field)
                 {
