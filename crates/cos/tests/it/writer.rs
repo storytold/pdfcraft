@@ -580,7 +580,15 @@ fn saves_are_byte_identical_across_runs_and_keep_associated_files() {
             assert!(saved.windows(2).all(|w| w[0] == w[1]), "full save differs between runs");
             let again = write_full(&Document::open(Arc::new(saved[0].clone())).unwrap(), &opts).unwrap();
             assert_eq!(again, write_full(&Document::open(Arc::new(saved[0].clone())).unwrap(), &opts).unwrap());
-            let inc: Vec<Vec<u8>> = (0..4).map(|_| write_incremental(&Document::open(Arc::new(bytes.clone())).unwrap(), &opts).unwrap()).collect();
+            let inc: Vec<Vec<u8>> = (0..4)
+                .map(|_| {
+                    let mut doc = Document::open(Arc::new(bytes.clone())).unwrap();
+                    doc.update_dict(ObjRef::new(1, 0), |d| d.set(b"Lang".to_vec(), Object::String(pdfcraft_cos::PdfString::literal(b"en".to_vec()))))
+                        .unwrap();
+                    doc.update_dict(ObjRef::new(3, 0), |d| d.set(b"Rotate".to_vec(), Object::Int(90))).unwrap();
+                    write_incremental(&doc, &opts).unwrap()
+                })
+                .collect();
             assert!(inc.windows(2).all(|w| w[0] == w[1]), "incremental save differs between runs");
             if bytes == af_fixture() {
                 assert!(af_survives(saved[0].clone()) && af_survives(inc[0].clone()));
