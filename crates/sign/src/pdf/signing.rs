@@ -130,9 +130,9 @@ fn check_certification(doc: &Document) -> Result<(), SignError> {
             }
             let Some(old) = cache.revision(doc, bytes, end) else { return false };
             sig_fields(&old).iter().filter_map(|f| f.signature(&old)).any(|s| {
-                nums(&old, &s, b"ByteRange").is_some_and(|r| {
-                    r.len() == 4 && r.iter().all(|n| n.is_finite() && *n >= 0.0) && r[2] + r[3] == end as f64
-                }) && super::validate::docmdp(&old, &s) == Some(1)
+                nums(&old, &s, b"ByteRange")
+                    .is_some_and(|r| r.len() == 4 && r.iter().all(|n| n.is_finite() && *n >= 0.0) && r[2] + r[3] == end as f64)
+                    && super::validate::docmdp(&old, &s) == Some(1)
             })
         })
     });
