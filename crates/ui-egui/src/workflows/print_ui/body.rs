@@ -81,13 +81,11 @@ fn combo<T: PartialEq + Copy>(ui: &mut egui::Ui, id: &str, name: &str, value: &m
 
 /// A wide, searchable fleet list; filtering never changes the selected destination.
 fn printer_picker(ui: &mut egui::Ui, d: &mut PrintDraft) -> egui::Response {
-    // ComboBox derives its button id from the prehashed salt stored by its builder.
-    let open = craft_ui::ComboBox::is_open(ui.ctx(), ui.make_persistent_id(egui::IdSalt::new("printer")));
     let filter_id = ui.make_persistent_id("printer-filter");
-    let mut filter = ui.data(|data| data.get_temp::<String>(filter_id)).unwrap_or_default();
-    if !open {
-        filter.clear();
-    }
+    // Keep the search only while the combo box renders its popup contents.
+    let previous_filter = ui.data(|data| data.get_temp::<String>(filter_id));
+    let opening = previous_filter.is_none();
+    let mut filter = previous_filter.unwrap_or_default();
     let shown = match d.printer.as_deref() {
         Some(p) => printer_label(p),
         None if still_looking(d) => tl!("Looking for printers…").to_string(),
@@ -107,7 +105,7 @@ fn printer_picker(ui: &mut egui::Ui, d: &mut PrintDraft) -> egui::Response {
             ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
             let search_label = ui.label(tl!("Search printers"));
             let search = ui.add(widgets::line(&mut filter).desired_width(f32::INFINITY).char_limit(256)).labelled_by(search_label.id);
-            if !open {
+            if opening {
                 search.request_focus();
             }
             let query = pdfcraft_render::text::fold_case(filter.trim());
@@ -137,7 +135,7 @@ fn printer_picker(ui: &mut egui::Ui, d: &mut PrintDraft) -> egui::Response {
                     };
                     let selected = d.printer.as_deref() == Some(p.name.as_str());
                     let choice = ui.selectable_value(&mut d.printer, Some(p.name.clone()), label);
-                    if !open && selected {
+                    if opening && selected {
                         choice.scroll_to_me(Some(egui::Align::Center));
                     }
                     if choice.clicked() {
@@ -156,9 +154,14 @@ fn printer_picker(ui: &mut egui::Ui, d: &mut PrintDraft) -> egui::Response {
                 ui.close();
             }
         });
-    let response = response.response.on_hover_text(shown);
-    ui.data_mut(|data| data.insert_temp(filter_id, filter));
-    response
+    ui.data_mut(|data| {
+        if response.inner.is_some() {
+            data.insert_temp(filter_id, filter);
+        } else {
+            data.remove::<String>(filter_id);
+        }
+    });
+    response.response.on_hover_text(shown)
 }
 
 /// Draw the dialog. `thumb` gives a page's thumbnail texture when there is one. Returns
