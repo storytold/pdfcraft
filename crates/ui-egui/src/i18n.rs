@@ -591,28 +591,12 @@ fn same_shape(translated: &str, english: &str) -> bool {
 /// Fill `{name}` placeholders in one pass. Unknown placeholders are left as written, and inserted
 /// values are never read as templates again, so a file name containing `{n}` stays intact. Unlike
 /// the crate's `fmt` it adds no bidi isolates: the egui fork orders each run for display.
+///
+/// The filling is [`pdfcraft_model::say`]'s; `args` name each hole without its braces.
 pub fn fmt(template: &str, args: &[(&str, &str)]) -> String {
-    let mut out = String::with_capacity(template.len());
-    let mut rest = template;
-    while let Some((before, after_open)) = rest.split_once('{') {
-        out.push_str(before);
-        let Some((name, after_close)) = after_open.split_once('}') else {
-            out.push('{');
-            out.push_str(after_open);
-            return out;
-        };
-        match args.iter().find(|(key, _)| *key == name) {
-            Some((_, value)) => out.push_str(value),
-            None => {
-                out.push('{');
-                out.push_str(name);
-                out.push('}');
-            }
-        }
-        rest = after_close;
-    }
-    out.push_str(rest);
-    out
+    let holes: Vec<String> = args.iter().map(|(name, _)| format!("{{{name}}}")).collect();
+    let values: Vec<(&str, String)> = holes.iter().zip(args).map(|(hole, (_, value))| (hole.as_str(), (*value).to_owned())).collect();
+    pdfcraft_model::say(template, &values)
 }
 
 /// A generated history label (the action part of "Undo …") in the current language. Captured

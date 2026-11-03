@@ -319,6 +319,40 @@ fn formatting_reorders_parameters_without_reinterpreting_user_text() {
     assert_eq!(fmt("unchanged", &[]), "unchanged");
 }
 
+/// `fmt` fills every template as the hand-written filler it replaced did.
+#[test]
+fn fmt_matches_the_old_filler() {
+    fn old_fmt(template: &str, args: &[(&str, &str)]) -> String {
+        let mut out = String::with_capacity(template.len());
+        let mut rest = template;
+        while let Some((before, after_open)) = rest.split_once('{') {
+            out.push_str(before);
+            let Some((name, after_close)) = after_open.split_once('}') else {
+                out.push('{');
+                out.push_str(after_open);
+                return out;
+            };
+            match args.iter().find(|(key, _)| *key == name) {
+                Some((_, value)) => out.push_str(value),
+                None => {
+                    out.push('{');
+                    out.push_str(name);
+                    out.push('}');
+                }
+            }
+            rest = after_close;
+        }
+        out.push_str(rest);
+        out
+    }
+    let args = [("n", "2"), ("", "empty"), ("a{b", "nested"), ("n", "second n"), ("file", "{n}}{")];
+    for template in
+        ["", "{", "}", "{}", "{{}}", "{n}", "{n", "n}", "}{n}{", "{a{b}", "{{n}}", "{n}{n}{file}", "x{unknown}y", "{ n }", "é{n}日本{file}"]
+    {
+        assert_eq!(fmt(template, &args), old_fmt(template, &args), "{template:?}");
+    }
+}
+
 /// Every literal passed to `tl!(…)` or `crate::i18n::t(…)` in the UI source (test modules
 /// aside), unescaped, including literals on a line of their own.
 fn ui_literals() -> std::collections::BTreeSet<String> {
