@@ -2891,6 +2891,9 @@ theme	Appearance	Aparência
 	Extract the selected pages…	Extrair as páginas selecionadas…
 	Delete the selected pages	Excluir as páginas selecionadas
 
+# Render warnings on the page in the viewer (#4340) (AI-assisted, not separately native-reviewed)
+	Part of this page isn't shown: its content goes past the most PdfCraft draws for one page.	Parte desta página não é exibida: o conteúdo ultrapassa o máximo que o PdfCraft desenha para uma página.
+	A colour on this page couldn't be computed and is shown in a fallback colour.	Não foi possível calcular uma cor desta página, que é exibida em uma cor alternativa.
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Opções desta resposta
 	Export value	Valor de exportação

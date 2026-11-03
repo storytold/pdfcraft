@@ -71,6 +71,7 @@ mod recent_files;
 mod recovery;
 mod redact;
 mod reload;
+mod render_warnings;
 mod script_noop;
 mod side_panels;
 mod signing;

@@ -2607,6 +2607,9 @@ animation effects	Off	Aus
 	Extract the selected pages…	Ausgewählte Seiten extrahieren…
 	Delete the selected pages	Ausgewählte Seiten löschen
 
+# Render warnings on the page in the viewer (#4340) (AI-assisted, not separately native-reviewed)
+	Part of this page isn't shown: its content goes past the most PdfCraft draws for one page.	Ein Teil dieser Seite wird nicht angezeigt: Ihr Inhalt übersteigt das, was PdfCraft höchstens für eine Seite zeichnet.
+	A colour on this page couldn't be computed and is shown in a fallback colour.	Eine Farbe auf dieser Seite konnte nicht berechnet werden und wird in einer Ersatzfarbe angezeigt.
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Optionen für diese Antwort
 	Export value	Exportwert
