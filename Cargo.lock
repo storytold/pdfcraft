@@ -4243,6 +4243,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "pdfcraft-ai"
+version = "0.18.0"
+dependencies = [
+ "base64 0.23.1",
+ "proptest",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "thiserror 2.0.21",
+ "unicode-normalization",
+ "unicode-segmentation",
+]
+
+[[package]]
 name = "pdfcraft-annot"
 version = "0.18.0"
 dependencies = [

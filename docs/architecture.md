@@ -1,6 +1,6 @@
 # PdfCraft architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-23 · **Change:** minor (xtask ci: translation gaps report) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-03 · **Change:** minor (`ai` crate: the AI assistant's network-free core) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
 How PdfCraft is built today. The design rationale and the planned crates live in
 `plan/architecture.md` and `plan/adr/` (local-only); this file describes what is on `main`. Each
@@ -31,12 +31,12 @@ standalone and publishable.
 | L1 objects | `cos` | Lazy, tolerant parser with xref repair; copy-on-write object graph; incremental and full writers with object streams; decryption on load and re-encryption on save |
 | L2 core model | `content`, `model`, `fonts` | Content-stream operators with source spans and a serializer; typed page tree with inherited attributes and display geometry (`/UserUnit`, `/Rotate`); font metrics and encodings for generated appearances |
 | L3 core services | `render`, `annot`, `forms`, `js`, `xfa` | Rendering and inspection (bootstrap: vendored `hayro`, `lopdf`); annotation builders and appearance streams; AcroForm model, filling, appearances; sandboxed JavaScript (boa) and FormCalc; XFA template layout and data |
-| L4 features | `edit`, `organize`, `redact`, `xfdf`, `sign`, `ocr`, `create`, `export`, `optimize`, `preflight`, `a11y`, `compare`, `measure`, `print` | One crate per Acrobat tool family |
+| L4 features | `edit`, `organize`, `redact`, `xfdf`, `sign`, `ocr`, `create`, `export`, `optimize`, `preflight`, `a11y`, `compare`, `measure`, `print`, `ai` | One crate per Acrobat tool family; `ai` is the network-free core of the AI assistant (requests, stream decoding, citations, the local library index) |
 | L6 façade | `engine` | Session, open documents, edit history, the command registry and tool catalogue. Frontends never reach past it |
 | L7 platform and frontends | `platform`, `ui-egui`, `automation` | OS services; the egui shell (desktop and web); headless JSON-Schema tools, CLI and MCP |
 
 Planned crates that the layer table already reserves (`arlington`, `color`, `ops`, `text`, `ml`,
-`security`, `prepress`, `search`, `media`, `ai`, `viewport`, `tools`, `ui-common`) don't exist yet.
+`security`, `prepress`, `search`, `media`, `viewport`, `tools`, `ui-common`) don't exist yet.
 
 ## Data model and editing
 
@@ -116,6 +116,7 @@ built by `.github/workflows/release.yml` ([releasing.md](releasing.md)).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-03 | minor | `ai` (L4) added: Claude request building and stream decoding, citations, the local library index; no network |
 | 2026-10-23 | minor | `xtask ci` prints the translation gaps (`xtask i18n-report`); a missing translation never fails it |
 | 2026-10-23 | minor | `xtask ci` runs nextest and doctests, checks the CLI without default features, and checks wasm in one call |
 | 2026-10-10 | major | Created from the code on main (crate list, `xtask/src/layers.rs`, crate READMEs, `vendor/README.md`) |

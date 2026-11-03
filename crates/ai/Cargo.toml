@@ -1,0 +1,26 @@
+[package]
+name = "pdfcraft-ai"
+description = "Sans-IO core of the AI assistant: Claude request building and stream decoding, citations, and a local BM25 library index"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# Image blocks; the same version `pdfcraft-automation` already uses.
+base64 = "0.23"
+serde = { workspace = true }
+serde_json = { workspace = true }
+# Library identity: documents are known by the SHA-256 of their bytes.
+sha2 = "0.11"
+thiserror = { workspace = true }
+# Library tokens: NFKC and Unicode word and sentence boundaries; both already in the tree.
+unicode-normalization = "0.1.25"
+unicode-segmentation = "1.13"
+
+[dev-dependencies]
+proptest = { workspace = true }
