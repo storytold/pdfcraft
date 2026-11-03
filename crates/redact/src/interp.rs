@@ -124,7 +124,9 @@ pub(crate) struct Scope<'a> {
     xobject_oc_cache: HashMap<ObjRef, bool>,
     /// Content removed from hidden layers (blocks and XObjects).
     pub layer_blocks: usize,
-    fonts: HashMap<Vec<u8>, Rc<Metrics>>,
+    /// Per font resource name: its metrics, and whether it writes vertically (reading a CMap
+    /// program for that once, not at every `Tf`).
+    fonts: HashMap<Vec<u8>, (Rc<Metrics>, bool)>,
     used_names: Vec<Vec<u8>>,
     depth: usize,
     /// Form entries and decoded bytes left for this page, its content streams already charged:
@@ -193,16 +195,41 @@ fn res_dict(doc: &Document, res: &Dict, key: &[u8]) -> Dict {
 
 /// Does this font write vertically? Only a Type0 (composite) font can: its `/Encoding` is a
 /// predefined CMap name ending in `-V` (Identity-V and the like), or an embedded CMap stream
-/// whose `/WMode` is 1 (ISO 32000-2 §9.7.5).
+/// that is vertical (ISO 32000-2 §9.7.5).
 fn is_vertical(doc: &Document, font: &Dict) -> bool {
     if font.name(b"Subtype") != Some(b"Type0".as_slice()) {
         return false;
     }
     match font.get(b"Encoding").map(|e| doc.resolve(e)).as_deref() {
         Some(Object::Name(n)) => n.ends_with(b"-V"),
-        Some(Object::Stream(s)) => s.dict.int(b"WMode") == Some(1),
+        Some(Object::Stream(s)) => cmap_vertical(doc, s, 0),
         _ => false,
     }
+}
+
+/// Largest embedded CMap program read for its writing mode; a larger one counts as vertical.
+const MAX_CMAP_PROGRAM: usize = 4 << 20;
+
+/// Whether an embedded CMap writes vertically: its dictionary's `/WMode`, its program's
+/// `/WMode … def`, or a vertical CMap it uses (`/UseCMap`, or `usecmap` in the program). The
+/// renderer reads the program, not only the dictionary. Anything that can't be read fully counts
+/// as vertical, so redaction refuses rather than place the text horizontally.
+fn cmap_vertical(doc: &Document, s: &Stream, depth: usize) -> bool {
+    if s.dict.int(b"WMode").is_some_and(|w| w != 0) {
+        return true;
+    }
+    match s.dict.get(b"UseCMap").map(|u| doc.resolve(u)).as_deref() {
+        Some(Object::Name(n)) if n.ends_with(b"-V") => return true,
+        Some(Object::Stream(parent)) if depth >= 8 || cmap_vertical(doc, parent, depth + 1) => return true,
+        _ => {}
+    }
+    let Ok(data) = s.decoded_within(MAX_CMAP_PROGRAM) else { return true };
+    let mut ops = pdfcraft_content::ops(&data);
+    let vertical = ops.by_ref().any(|op| {
+        (op.is("def") && op.name(0) == Some(b"WMode".as_slice()) && op.num(1).is_none_or(|w| w != 0.0))
+            || (op.is("usecmap") && op.name(0).is_some_and(|n| n.ends_with(b"-V")))
+    });
+    vertical || ops.skipped() > 0
 }
 
 fn fresh_name(scope: &mut Scope<'_>, xobjects: &Dict) -> Vec<u8> {
@@ -466,14 +493,14 @@ impl Walk {
     fn select_font(&mut self, doc: &Document, scope: &mut Scope<'_>, op: &Op) {
         self.gs.size = op.num(1).unwrap_or(self.gs.size);
         let Some(name) = op.name(0) else { return };
-        let font_dict = self.fonts_res.get(name).and_then(|f| doc.resolve(f).as_dict().cloned());
-        self.gs.vertical = font_dict.as_ref().is_some_and(|d| is_vertical(doc, d));
-        self.gs.font = match scope.fonts.get(name) {
+        (self.gs.font, self.gs.vertical) = match scope.fonts.get(name) {
             Some(f) => f.clone(),
             None => {
+                let font_dict = self.fonts_res.get(name).and_then(|f| doc.resolve(f).as_dict().cloned());
                 let m = font_dict.as_ref().map_or_else(|| self.fallback.clone(), |d| Rc::new(Metrics::from_dict(doc, d)));
-                scope.fonts.insert(name.to_vec(), m.clone());
-                m
+                let f = (m, font_dict.as_ref().is_some_and(|d| is_vertical(doc, d)));
+                scope.fonts.insert(name.to_vec(), f.clone());
+                f
             }
         };
     }
@@ -533,13 +560,12 @@ impl Walk {
             _ => op.operands.last().cloned().into_iter().collect(),
         };
         // Vertical-writing text is laid out horizontally by `show`, so its glyphs are
-        // never matched against a region. Rather than ship a document whose vertical
-        // text was silently left under a mark, record it so apply can fail closed.
+        // never matched against a region, nor told to lie off the page. Rather than ship a
+        // document whose vertical text was silently left under a mark (or off the page while
+        // sanitizing hidden text), record it so apply and sanitizing can fail closed.
         // (Full vertical-text removal is a future enhancement.)
         if self.gs.vertical
-            && scope.mode == Mode::Apply
-            && scope.hidden_text.is_none()
-            && !scope.rects.is_empty()
+            && (scope.hidden_text.is_some() || (scope.mode == Mode::Apply && !scope.rects.is_empty()))
             && items.iter().any(|o| matches!(o, Object::String(s) if !s.bytes.is_empty()))
         {
             self.out.vertical = true;
