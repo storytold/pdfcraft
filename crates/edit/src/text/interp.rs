@@ -480,6 +480,13 @@ impl Carry {
 /// The advance is an error message when the font's writing mode can't be read.
 type CachedFont = (Rc<Metrics>, Option<String>, Result<Option<f64>, String>);
 
+#[cfg(test)]
+thread_local! {
+    /// Font metrics built by [`interpret`] on this thread, for the test that keeps font aliases
+    /// sharing one set.
+    pub(crate) static METRICS_BUILT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// A `Do` met while interpreting: its operator index, XObject name and the state there.
 type Invocation = (usize, Vec<u8>, Ts);
 
@@ -777,6 +784,7 @@ pub(super) fn interpret(
     let fonts_res = super::resource_dict(doc, resources, b"Font", &mut held_fonts).unwrap_or(&none);
     let states = super::resource_dict(doc, resources, b"ExtGState", &mut held_states).unwrap_or(&none);
     let mut out: Vec<Shown> = Vec::new();
+    let mut by_font: HashMap<pdfcraft_cos::ObjRef, CachedFont> = HashMap::new();
     let mut ts = carry.ts.clone();
     let mut at_bt = (0usize, ts.clone());
     let mut stack: Vec<(Ts, Matrix, Matrix)> = std::mem::take(&mut carry.stack);
@@ -856,11 +864,23 @@ pub(super) fn interpret(
                 ts.size = op.num(1).unwrap_or(ts.size);
                 if let Some(name) = op.name(0) {
                     let (m, face, vertical) = cache.entry(name.to_vec()).or_insert_with(|| {
+                        // Names that refer to one font object share what was built for it: a
+                        // thousand aliases of one font are one set of metrics, not a thousand.
+                        let font = fonts_res.get(name).and_then(Object::as_ref);
+                        if let Some(built) = font.and_then(|r| by_font.get(&r)) {
+                            return built.clone();
+                        }
+                        #[cfg(test)]
+                        METRICS_BUILT.with(|n| n.set(n.get() + 1));
                         let dict = fonts_res.get(name).and_then(|f| doc.resolve(f).as_dict().cloned());
                         let metrics = dict.as_ref().map_or_else(Metrics::fallback, |d| Metrics::from_dict(doc, d));
                         let vertical = dict.as_ref().map_or(Ok(None), |d| vertical_advance(doc, d).map_err(|e| e.to_string()));
                         let face = dict.filter(is_type3_fallback).map(|_| metrics.base_font.clone());
-                        (Rc::new(metrics), face, vertical)
+                        let built: CachedFont = (Rc::new(metrics), face, vertical);
+                        if let Some(r) = font {
+                            by_font.insert(r, built.clone());
+                        }
+                        built
                     });
                     ts.font = Some((name.to_vec(), m.clone()));
                     ts.face = face.clone();

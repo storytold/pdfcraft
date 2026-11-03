@@ -181,7 +181,9 @@ fn sub(doc: &Document, d: &Dict, key: &[u8]) -> Dict {
 pub(crate) fn mcid_texts(doc: &Document, page: &Dict) -> HashMap<i64, String> {
     let res = sub(doc, page, b"Resources");
     let (fonts, props) = (sub(doc, &res, b"Font"), sub(doc, &res, b"Properties"));
-    let mut metrics: HashMap<Vec<u8>, Metrics> = HashMap::new();
+    let mut metrics: HashMap<Vec<u8>, std::rc::Rc<Metrics>> = HashMap::new();
+    // Built once per font object, however many resource names alias it.
+    let mut by_font: HashMap<ObjRef, std::rc::Rc<Metrics>> = HashMap::new();
     // The id each open marked-content sequence is in: its own, else the enclosing one's.
     let mut stack: Vec<Option<i64>> = Vec::new();
     let mut out: HashMap<i64, String> = HashMap::new();
@@ -230,9 +232,20 @@ pub(crate) fn mcid_texts(doc: &Document, page: &Dict) -> HashMap<i64, String> {
                 gs.font = op.name(0).map(<[u8]>::to_vec);
                 if let Some(name) = op.name(0)
                     && !metrics.contains_key(name)
-                    && let Some(f) = fonts.get(name).map(|f| doc.resolve(f)).and_then(|f| f.as_dict().cloned())
                 {
-                    metrics.insert(name.to_vec(), Metrics::from_dict(doc, &f));
+                    let font = fonts.get(name).and_then(Object::as_ref);
+                    let built = match font.and_then(|r| by_font.get(&r)) {
+                        Some(m) => Some(m.clone()),
+                        None => {
+                            fonts.get(name).map(|f| doc.resolve(f)).and_then(|f| f.as_dict().map(|d| std::rc::Rc::new(Metrics::from_dict(doc, d))))
+                        }
+                    };
+                    if let Some(m) = built {
+                        if let Some(r) = font {
+                            by_font.insert(r, m.clone());
+                        }
+                        metrics.insert(name.to_vec(), m);
+                    }
                 }
             }
             b"Tc" => gs.char_spacing = op.num(0).unwrap_or(0.0),

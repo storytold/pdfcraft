@@ -52,6 +52,8 @@ use fallback::{
 };
 #[cfg(test)]
 use fallback::{add_type3_font, is_type3_fallback};
+#[cfg(test)]
+pub(crate) use interp::METRICS_BUILT;
 use interp::{Origin, Paint, union};
 use lines::page_dict;
 pub(crate) use lines::{FormBudget, content_streams, content_streams_within, dict_in_place, form_call, resource_dict, rewritten_contents, splice};
