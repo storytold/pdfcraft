@@ -1839,6 +1839,22 @@ fn the_scroll_speed_preference_scales_mouse_wheel_notches() {
     assert_eq!(again.scroll_speed, ScrollSpeed::Fast);
 }
 
+#[test]
+fn the_invert_middle_drag_preference_is_off_by_default_and_kept_in_the_settings() {
+    let mut app = PdfCraftApp::new();
+    assert!(!app.invert_middle_drag, "the middle button keeps its direction unless asked");
+    app.set_option("invert_middle_drag", "true").unwrap();
+    assert!(app.set_option("invert_middle_drag", "yes").unwrap_err().contains("true or false"));
+    let mut again = PdfCraftApp::new();
+    again.restore(&app.persist());
+    assert!(again.invert_middle_drag, "turned on, it survives a restart");
+    again.set_option("invert_middle_drag", "false").unwrap();
+    let mut off = PdfCraftApp::new();
+    off.invert_middle_drag = true;
+    off.restore(&again.persist());
+    assert!(!off.invert_middle_drag, "turned off, that is saved too");
+}
+
 /// A 40 × 30 picture (one red corner) and a harness showing a PDF of it.
 fn picture_harness() -> (image::RgbaImage, Harness<'static, PdfCraftApp>) {
     picture_harness_sized(egui::vec2(1400.0, 900.0))
