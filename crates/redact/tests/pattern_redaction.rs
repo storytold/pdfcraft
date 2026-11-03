@@ -86,9 +86,12 @@ fn pattern_whole_fill_saved_output_is_confidential_or_refused() {
 
 #[test]
 fn pattern_partial_fill_saved_output_is_confidential_or_refused() {
+    // The mark hits part of the patterned path, which is removed whole (F-008), so nothing paints
+    // with the pattern any more: it is pruned with its cell, and the redaction is confidential
+    // rather than refused. Once a hit path was clipped instead, its paint kept the cell in use.
     let cell = [CELL, b"BT /F1 20 Tf 300 120 Td (SAFE) Tj ET\n"].concat();
     for compressed in [false, true] {
-        assert_confidential_or_refused(fixture(&cell, compressed, true, false), true);
+        assert_confidential_or_refused(fixture(&cell, compressed, true, false), false);
     }
 }
 
@@ -101,10 +104,13 @@ fn pattern_inherited_resources_saved_output_is_confidential_or_refused() {
 fn pattern_vector_only_control_still_applies_and_preserves_the_cell() {
     let cell = b"0.2 0.4 0.6 rg 40 120 15 15 re f\n";
     let mut doc = fixture(cell, true, true, false);
+    // The guard's control: a plain vector cell some surviving paint still uses is inspected and
+    // kept, not refused. The hit path is removed whole (F-008), so keep another paint in use.
+    keep_pattern_in_use(&mut doc, 0);
     mark(&mut doc, 0);
     let report = apply(&mut doc, None).unwrap();
     assert_eq!(report.marks, 1);
-    assert_eq!(report.paths_clipped, 1);
+    assert_eq!((report.paths_removed, report.paths_clipped, report.patterns_removed), (1, 0, 0));
     assert!(marks(&doc).is_empty());
     let reopened = Document::open(Arc::new(saved(&doc))).unwrap();
     let page = &pdfcraft_model::pages(&reopened)[0];
@@ -169,6 +175,9 @@ fn shared_annotation_appearance_on_unselected_page_is_refused() {
 #[test]
 fn pattern_refusal_on_second_page_does_not_change_the_first_page() {
     let mut doc = two_pages();
+    // The second page's pattern must stay in use for it to refuse: its hit path alone would be
+    // removed whole (F-008) and the pattern pruned.
+    keep_pattern_in_use(&mut doc, 1);
     mark(&mut doc, 0);
     mark(&mut doc, 1);
     let before = saved(&doc);
@@ -202,7 +211,24 @@ fn pattern_stream(doc: &Document) -> Stream {
     stream.clone()
 }
 
+/// Paint with the pattern once more, well away from the mark. A path the mark hits is removed
+/// whole (F-008), and a pattern nothing surviving paints with is pruned along with its cell, so
+/// the guard only ever inspects a pattern that some surviving paint still uses. This keeps one,
+/// so the guard has to inspect this cell rather than the pattern simply leaving the file.
+fn keep_pattern_in_use(doc: &mut Document, page: usize) {
+    let page = pdfcraft_model::pages(doc).swap_remove(page);
+    let extra = doc.add(Object::Stream(Stream::from_raw(Dict::new(), b"/Pattern cs /P0 scn 300 200 100 40 re f".to_vec())));
+    let mut list = match page.dict.get(b"Contents") {
+        Some(Object::Array(items)) => items.clone(),
+        Some(other) => vec![other.clone()],
+        None => Vec::new(),
+    };
+    list.push(Object::Ref(extra));
+    doc.update_dict(page.obj, |d| d.set(b"Contents".to_vec(), Object::Array(list))).unwrap();
+}
+
 fn assert_refused(mut doc: Document, reason: PatternProblem) {
+    keep_pattern_in_use(&mut doc, 0);
     mark(&mut doc, 0);
     let before = saved(&doc);
     let error = apply(&mut doc, None).unwrap_err();
@@ -631,4 +657,18 @@ fn pattern_null_resource_categories_and_entries_are_absent() {
     plain.set(ObjRef::new(5, 0), Object::Stream(Stream::from_raw(Dict::new(), b"40 120 20 20 re f".to_vec())));
     mark(&mut plain, 0);
     assert_eq!(apply(&mut plain, None).unwrap().marks, 1);
+}
+
+#[test]
+fn a_pattern_whose_only_paint_was_redacted_leaves_the_file_with_its_cell() {
+    // The mark hits the patterned path, which is removed whole (F-008). Nothing paints with the
+    // pattern any more, so it leaves the page's resources and its cell -- text included -- leaves
+    // the saved file: the redaction applies rather than refusing.
+    for compressed in [false, true] {
+        let mut doc = fixture(CELL, compressed, true, false);
+        mark(&mut doc, 0);
+        let report = apply(&mut doc, None).unwrap();
+        assert_eq!(report.patterns_removed, 1, "compressed: {compressed}");
+        assert!(!has_decoded_secret(saved(&doc)), "the cell's text is not in the saved file (compressed: {compressed})");
+    }
 }
