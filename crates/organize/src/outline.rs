@@ -518,14 +518,10 @@ fn destination_at(doc: &Document, page: usize, left: Option<f64>, top: Option<f6
     Ok(go_to_at(*p, left, top))
 }
 
-/// `/XYZ null null null`: go to the page, keeping the reader's zoom (what Acrobat writes for a
-/// new bookmark when the view has no specific position).
-fn go_to(page: ObjRef) -> Object {
-    go_to_at(page, None, None)
-}
-
 /// `/XYZ left top null`: the point (`left`, `top`) at the window's upper-left corner, at the
-/// reader's zoom; a coordinate that is left out keeps the reader's position.
+/// reader's zoom; a coordinate that is left out keeps the reader's position. With neither,
+/// `/XYZ null null null` goes to the page, keeping the reader's zoom (what Acrobat writes for a
+/// new bookmark when the view has no specific position).
 fn go_to_at(page: ObjRef, left: Option<f64>, top: Option<f64>) -> Object {
     let coordinate = |v: Option<f64>| v.map_or(Object::Null, Object::Real);
     Object::Array(vec![Object::Ref(page), Object::name("XYZ"), coordinate(left), coordinate(top), Object::Null])
@@ -569,7 +565,7 @@ pub fn add_bookmark_at(
     Ok(path)
 }
 
-/// One bookmark of a generated tree (New Bookmarks from Structure).
+/// One bookmark of a generated tree (New Bookmarks from Structure, or from text styles).
 #[derive(Clone, Debug, PartialEq)]
 pub struct OutlineEntry {
     /// 1 = directly under the new parent; deeper levels nest under the last shallower entry.
@@ -578,6 +574,9 @@ pub struct OutlineEntry {
     pub page: usize,
     /// The structure element it stands for (`/SE`).
     pub element: Option<ObjRef>,
+    /// Where on the page it goes: this height (user space) at the top of the window, at the
+    /// reader's zoom. `None` goes to the page, keeping the reader's position.
+    pub top: Option<f64>,
 }
 
 /// Add a new top-level bookmark `parent_title` (first in the list) holding `entries` nested by
@@ -601,7 +600,7 @@ pub fn add_bookmark_tree(doc: &mut Document, parent_title: &str, entries: &[Outl
     for (e, page) in entries.iter().zip(targets) {
         let mut d = Dict::new();
         d.set(b"Title".to_vec(), Object::String(PdfString::text(&e.title)));
-        d.set(b"Dest".to_vec(), go_to(page));
+        d.set(b"Dest".to_vec(), go_to_at(page, None, e.top));
         if let Some(se) = e.element {
             d.set(b"SE".to_vec(), Object::Ref(se));
         }

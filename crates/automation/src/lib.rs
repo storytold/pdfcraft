@@ -62,7 +62,7 @@ use error::{Result, failed};
 pub(crate) use json::destination;
 pub use json::view_rect;
 use json::{Args, info, summary};
-use pages::{DEFAULT_DPI, MAX_DPI, encode_png};
+use pages::{DEFAULT_DPI, MAX_DPI, encode_png, rendered_content};
 #[cfg(test)]
 use pages::{FIND_FIRST_BATCH, FIND_MAX_WARNING_BYTES, FIND_MAX_WARNINGS, extract_parallel};
 #[cfg(test)]
