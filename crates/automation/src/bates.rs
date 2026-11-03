@@ -8,6 +8,8 @@ use super::json::Args;
 use super::paths::read_input;
 use super::{Arc, Automation, Path, PathBuf};
 
+const MAX_BATES_BYTES: u64 = 512 * 1024 * 1024;
+
 struct FilePlan {
     input: String,
     source: PathBuf,
@@ -26,19 +28,23 @@ impl Automation {
         }
         let start = match args.0.get("start_number") {
             None | Some(Value::Null) => 1,
-            Some(value) => value
-                .as_u64()
-                .filter(|n| *n >= 1)
-                .ok_or_else(|| ToolError::InvalidArgs("start_number must be a whole number of at least 1".into()))?,
+            Some(value) => {
+                value.as_u64().filter(|n| *n >= 1).ok_or_else(|| ToolError::InvalidArgs("start_number must be an integer of at least 1".into()))?
+            }
         };
         let digits = args.opt_int("digits")?.unwrap_or(6);
         let digits =
             u8::try_from(digits).ok().filter(|d| (1..=12).contains(d)).ok_or_else(|| ToolError::InvalidArgs("digits must be from 1 to 12".into()))?;
         let prefix = args.opt_str("prefix")?.unwrap_or("");
         let suffix = args.opt_str("suffix")?.unwrap_or("");
-        // `#` separates the token's fields and `>>` ends it: either would cut the token short.
-        if prefix.len() > 128 || suffix.len() > 128 || [prefix, suffix].iter().any(|s| s.contains('#') || s.contains(">>")) {
-            return Err(ToolError::InvalidArgs("prefix and suffix must be at most 128 bytes and cannot contain # or >>".into()));
+        if prefix.chars().count() > 128
+            || suffix.chars().count() > 128
+            || prefix.contains('#')
+            || suffix.contains('#')
+            || prefix.contains(">>")
+            || suffix.contains(">>")
+        {
+            return Err(ToolError::InvalidArgs("prefix and suffix must be at most 128 characters and cannot contain # or >>".into()));
         }
         let dry_run = args.opt_bool("dry_run")?.unwrap_or(false);
 
@@ -70,13 +76,14 @@ impl Automation {
             targets.push((output.to_string(), target));
             passwords.push(entry.get("password").and_then(Value::as_str).map(str::to_owned));
         }
-        let input_paths: std::collections::HashSet<_> = sources.iter().map(|(_, path)| path.clone()).collect();
+        let input_paths: std::collections::HashSet<_> = sources.iter().map(|(_, path)| path_key(path)).collect();
         let mut output_paths = std::collections::HashSet::new();
         for (name, path) in &targets {
-            if input_paths.contains(path) {
+            let key = path_key(path);
+            if input_paths.contains(&key) {
                 return Err(failed(format!("output {name} names an input file; choose a separate output path")));
             }
-            if !output_paths.insert(path.clone()) {
+            if !output_paths.insert(key) {
                 return Err(failed(format!("two files use the same output path: {name}")));
             }
         }
@@ -88,13 +95,13 @@ impl Automation {
             let size = std::fs::metadata(input_path).map_err(failed)?.len();
             input_bytes = input_bytes
                 .checked_add(size)
-                .filter(|total| *total <= 512 * 1024 * 1024)
+                .filter(|total| *total <= MAX_BATES_BYTES)
                 .ok_or_else(|| failed("combined Bates input exceeds the 512 MiB safety limit"))?;
             let bytes = read_input(input_path)?;
             input_bytes = input_bytes
                 .saturating_sub(size)
                 .checked_add(u64::try_from(bytes.len()).unwrap_or(u64::MAX))
-                .filter(|total| *total <= 512 * 1024 * 1024)
+                .filter(|total| *total <= MAX_BATES_BYTES)
                 .ok_or_else(|| failed("combined Bates input exceeds the 512 MiB safety limit"))?;
             let display_name = input_path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
             let password = passwords.get(index).and_then(Option::as_deref);
@@ -106,7 +113,8 @@ impl Automation {
                 return Err(failed(format!("{input_name} has no pages to number")));
             }
             let count = u64::try_from(pages).map_err(|_| failed(format!("page count is too large for {input_name}")))?;
-            let last = next.checked_add(count.saturating_sub(1)).ok_or_else(|| failed(format!("Bates number range overflows for {input_name}")))?;
+            let last_offset = count.checked_sub(1).ok_or_else(|| failed(format!("{input_name} has no pages to number")))?;
+            let last = next.checked_add(last_offset).ok_or_else(|| failed(format!("Bates number range overflows for {input_name}")))?;
             plans.push(FilePlan {
                 input: input_name.clone(),
                 source: input_path.clone(),
@@ -116,7 +124,7 @@ impl Automation {
                 first: next,
                 last,
             });
-            if index + 1 < sources.len() {
+            if index + 1 < files.len() {
                 next = last.checked_add(1).ok_or_else(|| failed(format!("Bates sequence overflows after {input_name}")))?;
             }
         }
@@ -163,12 +171,14 @@ impl Automation {
             let result = applied.and_then(|()| self.session.save_full_bytes(id));
             match result {
                 Ok(bytes) => {
-                    let total = output_bytes.saturating_add(u64::try_from(bytes.len()).unwrap_or(u64::MAX));
-                    if total > 512 * 1024 * 1024 {
-                        results.push(json!({"input":plan.input,"output":plan.output,"status":"error","pages":plan.pages,"first":plan.first,"last":plan.last,"error":"combined Bates output exceeds the 512 MiB safety limit"}));
-                    } else {
+                    let candidate = output_bytes
+                        .checked_add(u64::try_from(bytes.len()).unwrap_or(u64::MAX))
+                        .filter(|total| *total <= MAX_BATES_BYTES);
+                    if let Some(total) = candidate {
                         output_bytes = total;
                         staged.push((plan.output.clone(), bytes));
+                    } else {
+                        results.push(json!({"input":plan.input,"output":plan.output,"status":"error","pages":plan.pages,"first":plan.first,"last":plan.last,"error":"combined Bates output exceeds the 512 MiB safety limit"}));
                     }
                 }
                 Err(error) => results.push(json!({"input":plan.input,"output":plan.output,"status":"error","pages":plan.pages,"first":plan.first,"last":plan.last,"error":error.to_string()})),
@@ -195,6 +205,18 @@ impl Automation {
         let completed = results.iter().filter(|r| r["status"] == "ok").count();
         let failed_count = results.len().saturating_sub(completed);
         Ok(json!({"dry_run":false,"completed":completed,"failed":failed_count,"files":results}))
+    }
+}
+
+fn path_key(path: &Path) -> String {
+    let path = path.to_string_lossy();
+    #[cfg(windows)]
+    {
+        path.to_lowercase()
+    }
+    #[cfg(not(windows))]
+    {
+        path.into_owned()
     }
 }
 
