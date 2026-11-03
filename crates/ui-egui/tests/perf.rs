@@ -1,6 +1,6 @@
-//! Frame-time budget on a 500-page document (parity view.large-document-performance). The budget
-//! scales with a plain egui layout workload on slow machines. Rendering runs on worker threads and
-//! is not part of the measurement.
+//! The frame-time budget applies to a 500-page document (parity view.large-document-performance).
+//! The budget scales with the measured duration of a fixed integer workload on slow machines.
+//! Rendering runs on worker threads and is not part of the measurement.
 
 use egui_kittest::Harness;
 use pdfcraft_ui_egui::PdfCraftApp;
@@ -34,7 +34,7 @@ static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Base budget for debug builds. Calibration can increase it by at most three times.
 const BUDGET: std::time::Duration = std::time::Duration::from_millis(40);
-const CALIBRATION_REFERENCE: std::time::Duration = std::time::Duration::from_millis(16);
+const CALIBRATION_REFERENCE: std::time::Duration = std::time::Duration::from_millis(17);
 
 fn budget_scale(calibration: std::time::Duration) -> f64 {
     (calibration.as_secs_f64() / CALIBRATION_REFERENCE.as_secs_f64()).clamp(1.0, 3.0)
@@ -43,23 +43,21 @@ fn budget_scale(calibration: std::time::Duration) -> f64 {
 #[test]
 fn calibration_scales_slow_machines_without_exceeding_the_cap() {
     assert_eq!(budget_scale(std::time::Duration::from_millis(8)), 1.0);
-    assert_eq!(budget_scale(std::time::Duration::from_millis(16)), 1.0);
-    assert_eq!(budget_scale(std::time::Duration::from_millis(40)), 2.5);
+    assert_eq!(budget_scale(std::time::Duration::from_millis(17)), 1.0);
+    assert_eq!(budget_scale(std::time::Duration::from_micros(42_500)), 2.5);
     assert_eq!(budget_scale(std::time::Duration::from_millis(64)), 3.0);
 }
 
-/// Lay out labels through egui without running PdfCraft code.
+/// Measure 18 million integer updates, taking the fastest of three trials.
 fn calibration_average() -> std::time::Duration {
-    let ctx = egui::Context::default();
     let mut best = std::time::Duration::MAX;
     for _ in 0..3 {
+        let mut value = std::hint::black_box(0x9e3779b97f4a7c15_u64);
         let start = std::time::Instant::now();
-        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
-            for i in 0..10_000 {
-                ui.label(format!("Calibration label {i} with text"));
-            }
-        });
-        output.drop_without_applying_deltas();
+        for _ in 0..18_000_000 {
+            value = value.wrapping_mul(0xd1342543de82ef95).rotate_left(17).wrapping_add(0x94d049bb133111eb);
+        }
+        std::hint::black_box(value);
         best = best.min(start.elapsed());
     }
     best
