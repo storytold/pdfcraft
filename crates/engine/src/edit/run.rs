@@ -186,6 +186,9 @@ pub(crate) struct EditCtx {
     /// The overlay streams the edit's applied redactions added, which alone the renderer's check
     /// leaves out.
     pub(crate) redaction_overlays: Vec<pdfcraft_cos::ObjRef>,
+    /// The marks the edit's applied redactions took out (a batch's included), as they were when
+    /// each apply ran, for the renderer's check.
+    pub(crate) redaction_marks: Vec<pdfcraft_redact::Mark>,
 }
 
 impl EditCtx {
@@ -215,6 +218,7 @@ impl EditCtx {
             rng: getrandom::fill,
             renamed_fields: Vec::new(),
             redaction_overlays: Vec::new(),
+            redaction_marks: Vec::new(),
         }
     }
 
@@ -778,7 +782,8 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             pdfcraft_edit::add_content(doc, *page, &content)?;
         }
         Edit::ApplyRedactions { pages } => {
-            cx.redaction_overlays = pdfcraft_redact::apply(doc, pages.as_deref())?.overlays;
+            cx.redaction_marks.extend(pdfcraft_redact::marks(doc).into_iter().filter(|m| pages.as_ref().is_none_or(|p| p.contains(&m.page))));
+            cx.redaction_overlays.extend(pdfcraft_redact::apply(doc, pages.as_deref())?.overlays);
         }
         Edit::ClearRedactions => {
             pdfcraft_redact::clear_marks(doc, None)?;

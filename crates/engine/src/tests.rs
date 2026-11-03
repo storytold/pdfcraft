@@ -10251,3 +10251,25 @@ fn image_transform_engine_refuses_singular_matrices_without_mutation() {
         assert_eq!(s.get(id).unwrap().bytes, before);
     }
 }
+
+/// The renderer's check covers a redaction applied inside a batch too, with the marks as they
+/// were when it ran: one the batch itself added is checked, and text a later edit of the batch
+/// puts back under a mark refuses the whole batch.
+#[test]
+fn redactions_applied_in_a_batch_get_the_renderer_check() {
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let page = one_line_page_with("/Font << /F1 4 0 R >>", "", "BT /F1 16 Tf 20 150 Td (Public words then SECRET42) Tj ET");
+    let id = s.open("batch.pdf", None, Arc::new(page), None).unwrap();
+    mark_shown_text(&mut s, id, "SECRET42");
+    let apply = Edit::ApplyRedactions { pages: None };
+    // Text added where the mark was shows under it again: the renderer sees it and refuses.
+    let under = AddedText { rect: [150.0, 120.0, 300.0, 180.0], text: "SECRET42 SECRET42".into(), ..Default::default() };
+    let refused = s.apply(id, Edit::Batch { label: "Redact then write".into(), edits: vec![apply.clone(), Edit::AddText { page: 0, text: under }] });
+    assert!(matches!(refused, Err(EditError::Redact(pdfcraft_redact::RedactError::Residue(n))) if n > 0), "{refused:?}");
+    assert!(page_texts(&s, id)[0].contains("SECRET42"), "nothing changed");
+    assert_eq!(s.get(id).unwrap().redaction_marks(), 1);
+    // Applied alone in a batch, the redaction goes through, and the text is gone.
+    s.apply(id, Edit::Batch { label: "Redact".into(), edits: vec![apply] }).unwrap();
+    assert!(!page_texts(&s, id)[0].contains("SECRET42"), "{:?}", page_texts(&s, id));
+    assert_eq!(s.get(id).unwrap().redaction_marks(), 0);
+}

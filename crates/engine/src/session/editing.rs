@@ -69,15 +69,15 @@ impl Session {
         }
         cx.renamed_fields.clear();
         cx.redaction_overlays.clear();
+        cx.redaction_marks.clear();
         // `next` is a copy: if the edit fails or crashes, the document is unchanged.
         guard(|| run_edit(&mut next, &edit, &mut cx))
             .unwrap_or_else(|m| Err(EditError::Invalid(format!("{} failed unexpectedly ({m}); the document was not changed", edit.label()))))?;
         // Redaction removed what its own interpreter places under the marks. The marks were drawn
-        // over the page as the renderer shows it, so the renderer has the last word.
-        if let Edit::ApplyRedactions { pages } = &edit {
-            let marks: Vec<pdfcraft_redact::Mark> =
-                pdfcraft_redact::marks(&editor.cos).into_iter().filter(|m| pages.as_ref().is_none_or(|p| p.contains(&m.page))).collect();
-            guard(|| shown_under_redactions(&next, &marks, &cx.redaction_overlays, &doc.info.pages, doc.password.as_deref()))
+        // over the page as the renderer shows it, so the renderer has the last word: on every
+        // apply the edit ran, a batch's included.
+        if !cx.redaction_marks.is_empty() {
+            guard(|| shown_under_redactions(&next, &cx.redaction_marks, &cx.redaction_overlays, &doc.info.pages, doc.password.as_deref()))
                 .unwrap_or_else(|m| Err(EditError::Invalid(format!("{} failed unexpectedly ({m}); the document was not changed", edit.label()))))?;
         }
         // Renamed fields are said, not slipped in: a repair-log note (with the caveat that
