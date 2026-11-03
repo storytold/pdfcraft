@@ -53,18 +53,15 @@ pub fn extract_images(doc: &Document, pages: &[usize], min_side: u32) -> ImageEx
 pub(crate) fn extract_images_within(doc: &Document, pages: &[usize], min_side: u32, budget: &mut ImageBudget, max_bytes: usize) -> ImageExport {
     let all = pdfcraft_model::pages(doc);
     let mut out = ImageExport::default();
-    let mut seen = HashSet::new();
+    let (mut visited, mut seen) = (HashSet::new(), HashSet::new());
     let mut held = 0usize;
     for &p in pages {
         let Some(page) = all.get(p) else { continue };
         let mut refs = Vec::new();
-        if let Some(res) = page.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()) {
-            collect(doc, &res, 0, &mut HashSet::new(), &mut refs);
+        if let Some(res) = page.dict.get(b"Resources") {
+            collect(doc, res, 0, &mut visited, &mut seen, &mut refs);
         }
         for r in refs {
-            if !seen.insert(r) {
-                continue;
-            }
             let obj = doc.get(r);
             let Object::Stream(s) = &*obj else { continue };
             let (w, h) = (s.dict.int(b"Width").unwrap_or(0), s.dict.int(b"Height").unwrap_or(0));
@@ -100,26 +97,63 @@ pub fn image_file_within(doc: &Document, image: ObjRef, budget: &mut ImageBudget
     }
 }
 
-/// The image XObjects reachable from `res`, through form XObjects, in resource order.
-fn collect(doc: &Document, res: &Dict, depth: usize, forms: &mut HashSet<ObjRef>, out: &mut Vec<ObjRef>) {
+/// The image XObjects reachable from resources `res`, through form XObjects, in resource order,
+/// those not in `images` yet, which they join. `visited` holds the forms, and the resource and
+/// XObject dictionaries given by reference, already gone through, on this page or an earlier one:
+/// all their images are in `images` already. So a dictionary that thousands of forms share is
+/// read once, not once for each, and the work is no more than the file's objects.
+pub(crate) fn collect(
+    doc: &Document,
+    res: &Object,
+    depth: usize,
+    visited: &mut HashSet<ObjRef>,
+    images: &mut HashSet<ObjRef>,
+    out: &mut Vec<ObjRef>,
+) {
     if depth > 12 {
         return;
     }
-    let Some(xobjects) = res.get(b"XObject").map(|x| doc.resolve(x)).and_then(|x| x.as_dict().cloned()) else { return };
+    let Some(res) = dict_once(doc, res, visited) else { return };
+    let Some(xobjects) = res.get(b"XObject").and_then(|x| dict_once(doc, x, visited)) else { return };
+    #[cfg(test)]
+    XOBJECT_DICTS_READ.with(|n| n.set(n.get() + 1));
     for (_, v) in xobjects.iter() {
         let Some(r) = v.as_ref() else { continue };
+        if images.contains(&r) || visited.contains(&r) {
+            continue;
+        }
         let obj = doc.get(r);
         let Object::Stream(s) = &*obj else { continue };
         match s.dict.name(b"Subtype") {
-            Some(b"Image") => out.push(r),
-            Some(b"Form") if forms.insert(r) => {
-                if let Some(inner) = s.dict.get(b"Resources").map(|x| doc.resolve(x)).and_then(|x| x.as_dict().cloned()) {
-                    collect(doc, &inner, depth + 1, forms, out);
+            Some(b"Image") => {
+                images.insert(r);
+                out.push(r);
+            }
+            Some(b"Form") if visited.insert(r) => {
+                if let Some(inner) = s.dict.get(b"Resources") {
+                    collect(doc, inner, depth + 1, visited, images, out);
                 }
             }
             _ => {}
         }
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// XObject dictionaries [`collect`] went through, for the test that keeps a shared one from
+    /// being read again for each form using it.
+    pub(crate) static XOBJECT_DICTS_READ: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// `value` as a dictionary, unless it is a reference already in `visited`, which it joins.
+fn dict_once(doc: &Document, value: &Object, visited: &mut HashSet<ObjRef>) -> Option<Dict> {
+    if let Some(r) = value.as_ref()
+        && !visited.insert(r)
+    {
+        return None;
+    }
+    doc.resolve(value).as_dict().cloned()
 }
 
 fn filters(s: &Stream) -> Vec<Vec<u8>> {

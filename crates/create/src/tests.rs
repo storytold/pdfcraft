@@ -845,6 +845,49 @@ fn damaged_masks_and_sizes_never_panic() {
 }
 
 #[test]
+fn forms_sharing_one_resource_dictionary_read_it_once() {
+    // Thousands of forms whose resources are one dictionary listing every form and one image: each
+    // form used to go through the whole list again, and add the image again each time.
+    let mut doc = from_images(&[("flat.png".into(), png_bytes(false))]).unwrap();
+    let image = doc.add(Object::Stream(Stream::from_raw(image_dict(1, 1, "DeviceGray", 8), vec![9])));
+    let xobjects = doc.add(Object::Dict(Dict::new()));
+    let mut res = Dict::new();
+    res.set(b"XObject".to_vec(), Object::Ref(xobjects));
+    let res = doc.add(Object::Dict(res));
+    let mut list = Dict::new();
+    list.set(b"Im".to_vec(), Object::Ref(image));
+    for i in 0..2_000 {
+        let mut d = Dict::new();
+        d.set(b"Type".to_vec(), Object::name("XObject"));
+        d.set(b"Subtype".to_vec(), Object::name("Form"));
+        d.set(b"Resources".to_vec(), Object::Ref(res));
+        let form = doc.add(Object::Stream(Stream::from_raw(d, Vec::new())));
+        list.set(format!("F{i}").into_bytes(), Object::Ref(form));
+    }
+    doc.set(xobjects, Object::Dict(list));
+    let (mut visited, mut images, mut out) = (std::collections::HashSet::new(), std::collections::HashSet::new(), Vec::new());
+    crate::extract::XOBJECT_DICTS_READ.with(|n| n.set(0));
+    crate::extract::collect(&doc, &Object::Ref(res), 0, &mut visited, &mut images, &mut out);
+    assert_eq!(out, [image]);
+    assert_eq!(crate::extract::XOBJECT_DICTS_READ.with(std::cell::Cell::get), 1, "the shared list is read once");
+    // Read again, from another page sharing them, the resources give nothing new.
+    let mut again = Vec::new();
+    crate::extract::collect(&doc, &Object::Ref(res), 0, &mut visited, &mut images, &mut again);
+    assert!(again.is_empty());
+
+    // Through a page that draws one of the forms, the image is exported once, after the page's own.
+    let page = pdfcraft_model::pages(&doc)[0].clone();
+    let mut page_res = doc.resolve(page.dict.get(b"Resources").unwrap()).as_dict().cloned().unwrap();
+    let mut xo = doc.resolve(page_res.get(b"XObject").unwrap()).as_dict().cloned().unwrap();
+    xo.set(b"Fm".to_vec(), Dict::clone(doc.get(xobjects).as_dict().unwrap()).get(b"F0").unwrap().clone());
+    page_res.set(b"XObject".to_vec(), Object::Dict(xo));
+    doc.update_dict(page.obj, |d| d.set(b"Resources".to_vec(), Object::Dict(page_res))).unwrap();
+    let out = extract_images(&doc, &[0], 0);
+    assert_eq!(out.images.iter().map(|i| i.object).filter(|r| *r == image).count(), 1);
+    assert_eq!(out.images.len(), 2, "{out:?}");
+}
+
+#[test]
 fn indexed_image_export_clamps_samples_to_hival() {
     for palette in [vec![255, 0, 0, 0, 0, 255], vec![255, 0, 0, 0, 0, 255, 0, 255, 0, 255, 255, 255]] {
         let mut doc = from_images(&[("flat.png".into(), png_bytes(false))]).unwrap();
