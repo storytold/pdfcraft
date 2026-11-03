@@ -175,13 +175,13 @@ impl OfficeFormat {
 pub struct OfficeExport {
     /// The exported file.
     pub bytes: Vec<u8>,
-    /// Pages (0-based) that draw forms nested deeper than [`MAX_FORM_DEPTH`] or more of them
-    /// than [`MAX_FORM_VISITS`], pictures past [`MAX_EXPORT_IMAGE_BYTES`] or past what one export
-    /// may decode, or (Word, on a page whose layout it keeps) more paths than
-    /// [`pdfcraft_edit::MAX_PAGE_SHAPES`] or more shapes, points or fields than a Word page holds
-    /// ([`pdfcraft_export::docx_checked`]): export stops
-    /// there to stay bounded on hostile files, so the text and images of those forms, those
-    /// pictures, shapes or fields are missing from `bytes`.
+    /// Pages (0-based) the export left something out of to stay bounded on hostile files: forms
+    /// nested deeper than [`MAX_FORM_DEPTH`] or more of them than [`MAX_FORM_VISITS`] (their text
+    /// and images are missing from `bytes`), pictures past [`MAX_EXPORT_IMAGE_BYTES`] or past what
+    /// one export may decode (those pictures are missing), or, on a page whose layout Word keeps,
+    /// paths past [`pdfcraft_edit::MAX_PAGE_SHAPES`] or that couldn't be read, and shapes, points,
+    /// fields or list items past what a Word page holds ([`pdfcraft_export::docx_checked`]: only
+    /// those are missing; the page's text and images stay).
     pub truncated_pages: Vec<usize>,
 }
 
@@ -196,6 +196,7 @@ fn export_field(
     f: &pdfcraft_forms::Field,
     w: &pdfcraft_forms::Widget,
     visible: &dyn Fn([f64; 4]) -> [f64; 4],
+    unit: f64,
 ) -> Option<pdfcraft_export::Field> {
     use pdfcraft_forms::{FieldKind, flags};
     let kind = match f.kind {
@@ -214,11 +215,14 @@ fn export_field(
         }
         FieldKind::PushButton | FieldKind::Signature => return None,
     };
+    // The font size and border width are in the page's units, as its box is: `unit` scales them
+    // as it scales the page's text and strokes (a page with `/UserUnit` 2 draws them twice as big).
     let (border, background) = widget_look(cos, w);
+    let border = border.map(|b| pdfcraft_export::Stroke { width: b.width * unit, ..b });
     Some(pdfcraft_export::Field {
         name: f.name.clone(),
         rect: visible(w.rect),
-        size: pdfcraft_forms::appearance::parse_da(&f.da).size,
+        size: pdfcraft_forms::appearance::parse_da(&f.da).size * unit,
         kind,
         border,
         background,
@@ -429,7 +433,7 @@ impl crate::Document {
                     .collect();
                 let fields = fields_by_page
                     .get(&i)
-                    .map_or_else(Vec::new, |on_page| on_page.iter().filter_map(|(f, w)| export_field(cos, f, w, &visible_rect)).collect());
+                    .map_or_else(Vec::new, |on_page| on_page.iter().filter_map(|(f, w)| export_field(cos, f, w, &visible_rect, unit)).collect());
                 pdfcraft_export::Page {
                     width: info.width as f64,
                     height: info.height as f64,

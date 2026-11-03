@@ -230,3 +230,29 @@ fn word_export_reports_a_page_whose_paths_it_cannot_read() {
     let id = s.open("unreadable.pdf", None, Arc::new(doc), None).unwrap();
     assert_eq!(s.get(id).unwrap().export_office_checked(OfficeFormat::Docx).truncated_pages, [0]);
 }
+
+/// A field's font size and border width are in its page's units, as its box is: on a page of
+/// `/UserUnit` 2 they are twice as big in the export (they came out at half size, the text too
+/// small for its box).
+#[test]
+fn a_fields_text_and_border_scale_with_the_page_unit() {
+    let field = |unit: &str| {
+        let bytes = pdf(&[
+            "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R] >> >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+            format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200]{unit} /Contents 4 0 R /Annots [5 0 R] >>"),
+            stream("", ""),
+            "<< /Type /Annot /Subtype /Widget /FT /Tx /T (Name) /DA (/Helv 10 Tf 0 g) /MK << /BC [0] >> /BS << /W 1 >> /Rect [10 10 100 30] /P 3 0 R >>"
+                .into(),
+        ]);
+        let mut s = Session::new();
+        let id = s.open("unit.pdf", None, Arc::new(bytes), None).unwrap();
+        let pages = s.get(id).unwrap().export_pages();
+        let f = pages[0].fields[0].clone();
+        (f.size, f.border.map(|b| b.width), f.rect)
+    };
+    assert_eq!(field(""), (10.0, Some(1.0), [10.0, 10.0, 100.0, 30.0]));
+    let (size, width, rect) = field(" /UserUnit 2");
+    assert_eq!((size, width), (20.0, Some(2.0)), "{rect:?}");
+    assert!((rect[2] - rect[0] - 180.0).abs() < 0.01, "the box is twice as wide too: {rect:?}");
+}
