@@ -1,14 +1,14 @@
 //! The document's headings (H, H1–H6 after the role map) with the text they mark: what New
 //! Bookmarks from Structure turns into bookmarks.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use pdfcraft_content::Matrix;
-use pdfcraft_cos::{Dict, Document, ObjRef, Object};
+use pdfcraft_cos::{DecodeBudget, Dict, Document, ObjRef, Object};
 use pdfcraft_fonts::pdf::Metrics;
 use pdfcraft_model::Page;
 
-use crate::alt::{page_content, standard, tree_root};
+use crate::alt::{page_content_within, standard, tree_root};
 
 const MAX_HEADINGS: usize = 10_000;
 const MAX_VISITS: usize = 1_000_000;
@@ -18,6 +18,7 @@ const MAX_TITLE: usize = 256;
 const MAX_TAGGED_TEXT: usize = 32 * 1024 * 1024;
 const MAX_TAGGED_WARNINGS: usize = 100;
 const MAX_TAGGED_TASKS: usize = 100_000;
+const MAX_TAGGED_FORM_DEPTH: usize = 12;
 
 /// Text in structure-tree order and repairs or omissions found while reading it.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -26,9 +27,10 @@ pub struct TaggedText {
     pub warnings: Vec<String>,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(crate) struct McidTexts {
     pub(crate) by_id: HashMap<i64, String>,
+    pub(crate) form_texts: HashMap<ObjRef, McidTexts>,
     bytes: usize,
     pub(crate) limited: bool,
     pub(crate) unmarked_text: bool,
@@ -48,12 +50,18 @@ fn tagged_warning(out: &mut TaggedText, warning: String) {
 /// Read reachable marked content in tree order. Artifacts are absent because they have no
 /// structure-tree reference. Cycles, missing objects, and limits are reported instead of guessed.
 pub fn tagged_text(doc: &Document, selected_pages: &[usize]) -> TaggedText {
+    tagged_text_with_limit(doc, selected_pages, MAX_TAGGED_TEXT)
+}
+
+pub(crate) fn tagged_text_with_limit(doc: &Document, selected_pages: &[usize], text_limit: usize) -> TaggedText {
     let Some(root) = tree_root(doc) else {
         return TaggedText { text: String::new(), warnings: vec!["the document has no structure tree".into()] };
     };
     let pages = pdfcraft_model::pages(doc);
     let page_index: HashMap<ObjRef, usize> = pages.iter().enumerate().map(|(i, p)| (p.obj, i)).collect();
-    let mut walker = TaggedWalker::new(doc, &pages, page_index, selected_pages, &root);
+    let selected: HashSet<usize> = selected_pages.iter().copied().collect();
+    let mark_priorities = structure_mark_priorities(doc, &root, &page_index, &selected);
+    let mut walker = TaggedWalker::new(doc, &pages, page_index, selected_pages, &root, mark_priorities, text_limit);
     let mut tasks = root.get(b"K").cloned().map(|k| vec![(k, None, 0, None, None)]).unwrap_or_default();
     if tasks.is_empty() {
         tagged_warning(&mut walker.out, "the structure tree has no root content".into());
@@ -65,6 +73,70 @@ pub fn tagged_text(doc: &Document, selected_pages: &[usize]) -> TaggedText {
 }
 
 type TaggedTask = (Object, Option<ObjRef>, usize, Option<usize>, Option<ObjRef>);
+type MarkPriorities = HashMap<(usize, Option<ObjRef>), HashMap<i64, usize>>;
+
+fn structure_mark_priorities(doc: &Document, root: &Dict, page_index: &HashMap<ObjRef, usize>, selected: &HashSet<usize>) -> MarkPriorities {
+    let mut priorities = MarkPriorities::new();
+    let mut tasks = root.get(b"K").cloned().map(|item| vec![(item, None, 0usize)]).unwrap_or_default();
+    let mut seen = HashSet::new();
+    let objects: HashSet<u32> = doc.object_numbers().into_iter().collect();
+    let mut visits = 0usize;
+    let mut order = 0usize;
+    while let Some((item, inherited_page, depth)) = tasks.pop() {
+        visits = visits.saturating_add(1);
+        if visits > MAX_VISITS || depth > MAX_DEPTH {
+            break;
+        }
+        let item = match item {
+            Object::Ref(reference)
+                if objects.contains(&reference.num) && reference.generation == doc.generation(reference.num) && seen.insert(reference) =>
+            {
+                (*doc.get(reference)).clone()
+            }
+            Object::Ref(_) => continue,
+            other => other,
+        };
+        match item {
+            Object::Array(items) => {
+                let count = items.len().min(MAX_TAGGED_TASKS.saturating_sub(tasks.len()));
+                tasks.extend(items.into_iter().take(count).rev().map(|item| (item, inherited_page, depth + 1)));
+            }
+            Object::Int(mcid) => {
+                if let Some(page) = inherited_page.and_then(|reference| page_index.get(&reference).copied()).filter(|page| selected.contains(page)) {
+                    let ranks = priorities.entry((page, None)).or_default();
+                    if !ranks.contains_key(&mcid) {
+                        ranks.insert(mcid, order);
+                        order = order.saturating_add(1);
+                    }
+                }
+            }
+            Object::Dict(dict) => {
+                let page = dict.get(b"Pg").and_then(Object::as_ref).or(inherited_page);
+                if dict.name(b"Type") == Some(b"MCR") {
+                    if let Some((page, mcid)) = dict
+                        .get(b"MCID")
+                        .and_then(Object::as_int)
+                        .and_then(|mcid| page.and_then(|reference| page_index.get(&reference).copied()).map(|page| (page, mcid)))
+                        .filter(|(page, _)| selected.contains(page))
+                    {
+                        let stream = dict.get(b"Stm").and_then(Object::as_ref);
+                        let ranks = priorities.entry((page, stream)).or_default();
+                        if !ranks.contains_key(&mcid) {
+                            ranks.insert(mcid, order);
+                            order = order.saturating_add(1);
+                        }
+                    }
+                } else if dict.name(b"S") != Some(b"Artifact")
+                    && let Some(kids) = dict.get(b"K")
+                {
+                    tasks.push((kids.clone(), page, depth + 1));
+                }
+            }
+            _ => {}
+        }
+    }
+    priorities
+}
 
 struct TaggedWalker<'a> {
     doc: &'a Document,
@@ -75,7 +147,9 @@ struct TaggedWalker<'a> {
     objects: HashSet<u32>,
     seen: HashSet<ObjRef>,
     texts: HashMap<usize, McidTexts>,
-    form_texts: HashMap<ObjRef, McidTexts>,
+    form_texts: HashMap<(usize, ObjRef), McidTexts>,
+    mark_priorities: MarkPriorities,
+    text_limit: usize,
     used_marks: HashSet<(usize, Option<ObjRef>, i64)>,
     extracted_text: usize,
     visits: usize,
@@ -86,7 +160,15 @@ struct TaggedWalker<'a> {
 }
 
 impl<'a> TaggedWalker<'a> {
-    fn new(doc: &'a Document, pages: &'a [Page], page_index: HashMap<ObjRef, usize>, selected: &[usize], root: &Dict) -> Self {
+    fn new(
+        doc: &'a Document,
+        pages: &'a [Page],
+        page_index: HashMap<ObjRef, usize>,
+        selected: &[usize],
+        root: &Dict,
+        mark_priorities: MarkPriorities,
+        text_limit: usize,
+    ) -> Self {
         Self {
             doc,
             pages,
@@ -97,6 +179,8 @@ impl<'a> TaggedWalker<'a> {
             seen: HashSet::new(),
             texts: HashMap::new(),
             form_texts: HashMap::new(),
+            mark_priorities,
+            text_limit,
             used_marks: HashSet::new(),
             extracted_text: 0,
             visits: 0,
@@ -123,7 +207,7 @@ impl<'a> TaggedWalker<'a> {
         }
         let item = match item {
             Object::Ref(reference) => {
-                if !self.objects.contains(&reference.num) {
+                if !self.objects.contains(&reference.num) || reference.generation != self.doc.generation(reference.num) {
                     tagged_warning(&mut self.out, format!("missing structure reference {}", reference.num));
                     return;
                 }
@@ -204,12 +288,19 @@ impl<'a> TaggedWalker<'a> {
         if let Some(stream) = stream
             && page.and_then(|reference| self.page_index.get(&reference).copied()).is_some_and(|page| self.selected.contains(&page))
         {
-            let _ = self.form_texts.entry(stream).or_insert_with(|| {
-                let remaining = MAX_TAGGED_TEXT.saturating_sub(self.extracted_text);
-                let texts = form_mcid_texts(self.doc, stream, remaining).unwrap_or_default();
-                self.extracted_text = self.extracted_text.saturating_add(texts.bytes);
-                texts
-            });
+            let priority_page = page.and_then(|reference| self.page_index.get(&reference).copied());
+            let priorities = priority_page.and_then(|page| self.mark_priorities.get(&(page, Some(stream))));
+            if let Some(page_index) = priority_page {
+                let cache_key = (page_index, stream);
+                if !self.form_texts.contains_key(&cache_key) {
+                    if self.texts.get(&page_index).and_then(|texts| find_form_text(texts, stream)).is_none() {
+                        let remaining = self.text_limit.saturating_sub(self.extracted_text);
+                        let parsed = form_mcid_texts(self.doc, stream, remaining, priorities).unwrap_or_default();
+                        self.extracted_text = self.extracted_text.saturating_add(parsed.bytes);
+                        self.form_texts.insert(cache_key, parsed);
+                    }
+                }
+            }
         }
     }
 
@@ -231,9 +322,10 @@ impl<'a> TaggedWalker<'a> {
             tagged_warning(&mut self.out, format!("marked content {mcid} on page {} is referenced more than once", page + 1));
             return;
         }
-        let remaining = MAX_TAGGED_TEXT.saturating_sub(self.extracted_text);
+        let remaining = self.text_limit.saturating_sub(self.extracted_text);
         let text = if let Some(stream) = stream {
-            let Some(texts) = self.form_texts.get(&stream) else {
+            let Some(texts) = self.form_texts.get(&(page, stream)).or_else(|| self.texts.get(&page).and_then(|texts| find_form_text(texts, stream)))
+            else {
                 tagged_warning(&mut self.out, format!("missing marked content {mcid} on page {}", page + 1));
                 return;
             };
@@ -243,7 +335,14 @@ impl<'a> TaggedWalker<'a> {
             texts.by_id.get(&mcid).cloned()
         } else {
             if !self.texts.contains_key(&page) {
-                let texts = self.pages.get(page).map(|p| mcid_texts_limited(self.doc, &p.dict, MAX_TAGGED_TEXT, remaining)).unwrap_or_default();
+                let priorities = self.mark_priorities.get(&(page, None));
+                let skipped_forms: HashSet<_> =
+                    self.used_marks.iter().filter_map(|(used_page, source, _)| (*used_page == page).then_some(*source).flatten()).collect();
+                let texts = self
+                    .pages
+                    .get(page)
+                    .map(|p| mcid_texts_limited_skipping(self.doc, &p.dict, MAX_TAGGED_TEXT, remaining, priorities, &skipped_forms))
+                    .unwrap_or_default();
                 self.extracted_text = self.extracted_text.saturating_add(texts.bytes);
                 self.texts.insert(page, texts);
             }
@@ -269,13 +368,25 @@ impl<'a> TaggedWalker<'a> {
             {
                 tagged_warning(&mut self.out, "tagged text stopped at its size limit".into());
             }
-        } else if page_ref.is_none() {
-            tagged_warning(&mut self.out, "alternate text has no page association".into());
+        } else {
+            let warning = if page_ref.is_some() { "alternate text references a missing page" } else { "alternate text has no page association" };
+            tagged_warning(&mut self.out, warning.into());
         }
     }
 
     fn finish(mut self, pages: &[Page]) -> TaggedText {
-        warn_unstructured_pages(self.doc, pages, &self.selected, &mut self.texts, &self.used_marks, &mut self.extracted_text, &mut self.out);
+        warn_unstructured_pages(
+            self.doc,
+            pages,
+            &self.selected,
+            &self.mark_priorities,
+            self.text_limit,
+            &mut self.texts,
+            &self.form_texts,
+            &self.used_marks,
+            &mut self.extracted_text,
+            &mut self.out,
+        );
         self.out.warnings.sort();
         self.out.warnings.dedup();
         self.out
@@ -324,7 +435,7 @@ fn structure_replacement(doc: &Document, role_map: &Dict, dict: &Dict) -> Option
     None
 }
 
-fn form_mcid_texts(doc: &Document, reference: ObjRef, max_total: usize) -> Option<McidTexts> {
+fn form_mcid_texts(doc: &Document, reference: ObjRef, max_total: usize, priorities: Option<&HashMap<i64, usize>>) -> Option<McidTexts> {
     let object = doc.get(reference);
     let Object::Stream(stream) = &*object else { return None };
     if stream.dict.name(b"Subtype") != Some(b"Form") {
@@ -332,7 +443,7 @@ fn form_mcid_texts(doc: &Document, reference: ObjRef, max_total: usize) -> Optio
     }
     let mut form = stream.dict.clone();
     form.set(b"Contents", Object::Ref(reference));
-    Some(mcid_texts_limited(doc, &form, MAX_TAGGED_TEXT, max_total))
+    Some(mcid_texts_limited(doc, &form, MAX_TAGGED_TEXT, max_total, priorities))
 }
 
 struct CoverState<'a> {
@@ -355,7 +466,7 @@ fn cover_struct_content(doc: &Document, root: &Object, page: Option<ObjRef>, sta
         }
         let item = match item {
             Object::Ref(reference) => {
-                if !state.objects.contains(&reference.num) {
+                if !state.objects.contains(&reference.num) || reference.generation != doc.generation(reference.num) {
                     tagged_warning(state.warnings, format!("missing structure reference {}", reference.num));
                     continue;
                 }
@@ -407,15 +518,24 @@ fn warn_unstructured_pages(
     doc: &Document,
     pages: &[Page],
     selected: &HashSet<usize>,
+    priorities: &MarkPriorities,
+    text_limit: usize,
     texts: &mut HashMap<usize, McidTexts>,
+    form_texts: &HashMap<(usize, ObjRef), McidTexts>,
     used_marks: &HashSet<(usize, Option<ObjRef>, i64)>,
     extracted_text: &mut usize,
     out: &mut TaggedText,
 ) {
     for page in selected {
         let page_text = texts.entry(*page).or_insert_with(|| {
-            let remaining = MAX_TAGGED_TEXT.saturating_sub(*extracted_text);
-            let text = pages.get(*page).map(|p| mcid_texts_limited(doc, &p.dict, MAX_TAGGED_TEXT, remaining)).unwrap_or_default();
+            let remaining = text_limit.saturating_sub(*extracted_text);
+            let page_priorities = priorities.get(&(*page, None));
+            let skipped_forms: HashSet<_> =
+                used_marks.iter().filter_map(|(used_page, source, _)| (*used_page == *page).then_some(*source).flatten()).collect();
+            let text = pages
+                .get(*page)
+                .map(|p| mcid_texts_limited_skipping(doc, &p.dict, MAX_TAGGED_TEXT, remaining, page_priorities, &skipped_forms))
+                .unwrap_or_default();
             *extracted_text = extracted_text.saturating_add(text.bytes);
             text
         });
@@ -424,10 +544,41 @@ fn warn_unstructured_pages(
         }
         if page_text.unmarked_text
             || page_text.by_id.iter().any(|(mcid, text)| !text.trim().is_empty() && !used_marks.contains(&(*page, None, *mcid)))
+            || has_unstructured_form_text(*page, page_text, form_texts, used_marks)
         {
             tagged_warning(out, format!("page {} contains text outside the structure tree", page + 1));
         }
     }
+}
+
+fn has_unstructured_form_text(
+    page: usize,
+    root: &McidTexts,
+    direct_forms: &HashMap<(usize, ObjRef), McidTexts>,
+    used_marks: &HashSet<(usize, Option<ObjRef>, i64)>,
+) -> bool {
+    let mut forms: Vec<(ObjRef, &McidTexts)> = root.form_texts.iter().map(|(reference, text)| (*reference, text)).collect();
+    forms.extend(direct_forms.iter().filter_map(|((form_page, reference), text)| (*form_page == page).then_some((*reference, text))));
+    while let Some((reference, texts)) = forms.pop() {
+        if texts.unmarked_text
+            || texts.by_id.iter().any(|(mcid, text)| !text.trim().is_empty() && !used_marks.contains(&(page, Some(reference), *mcid)))
+        {
+            return true;
+        }
+        forms.extend(texts.form_texts.iter().map(|(reference, text)| (*reference, text)));
+    }
+    false
+}
+
+fn find_form_text(root: &McidTexts, wanted: ObjRef) -> Option<&McidTexts> {
+    let mut forms: Vec<(ObjRef, &McidTexts)> = root.form_texts.iter().map(|(reference, text)| (*reference, text)).collect();
+    while let Some((reference, texts)) = forms.pop() {
+        if reference == wanted {
+            return Some(texts);
+        }
+        forms.extend(texts.form_texts.iter().map(|(reference, text)| (*reference, text)));
+    }
+    None
 }
 
 /// A heading element.
@@ -593,17 +744,68 @@ fn sub(doc: &Document, d: &Dict, key: &[u8]) -> Dict {
 /// Text-positioning operators alone don't break words: producers that place every glyph with its
 /// own `Td` (Chromium) would otherwise read as "C h a p t e r".
 pub(crate) fn mcid_texts(doc: &Document, page: &Dict) -> HashMap<i64, String> {
-    mcid_texts_limited(doc, page, MAX_TITLE * 4, usize::MAX).by_id
+    mcid_texts_limited(doc, page, MAX_TITLE * 4, usize::MAX, None).by_id
 }
 
-pub(crate) fn mcid_texts_limited(doc: &Document, page: &Dict, max_text: usize, max_total: usize) -> McidTexts {
-    let res = sub(doc, page, b"Resources");
+struct MarkedFrame {
+    id: Option<i64>,
+    artifact: bool,
+    suppresses_text: bool,
+    local_actual_text: Option<(i64, String)>,
+    unmarked_actual_text: Option<String>,
+    apply_replacement: bool,
+}
+
+pub(crate) fn mcid_texts_limited(
+    doc: &Document,
+    page: &Dict,
+    max_text: usize,
+    max_total: usize,
+    priorities: Option<&HashMap<i64, usize>>,
+) -> McidTexts {
+    mcid_texts_limited_skipping(doc, page, max_text, max_total, priorities, &HashSet::new())
+}
+
+fn mcid_texts_limited_skipping(
+    doc: &Document,
+    page: &Dict,
+    max_text: usize,
+    max_total: usize,
+    priorities: Option<&HashMap<i64, usize>>,
+    skipped_forms: &HashSet<ObjRef>,
+) -> McidTexts {
+    let mut budget = DecodeBudget::page();
+    let mut forms = HashSet::new();
+    mcid_texts_within(doc, page, None, None, max_text, max_total, priorities, skipped_forms, &mut budget, &mut forms, 0)
+}
+
+fn mcid_texts_within(
+    doc: &Document,
+    page: &Dict,
+    content: Option<&[u8]>,
+    parent_resources: Option<&Dict>,
+    max_text: usize,
+    max_total: usize,
+    priorities: Option<&HashMap<i64, usize>>,
+    skipped_forms: &HashSet<ObjRef>,
+    budget: &mut DecodeBudget,
+    forms: &mut HashSet<ObjRef>,
+    depth: usize,
+) -> McidTexts {
+    let res = page
+        .get(b"Resources")
+        .map(|value| doc.resolve(value))
+        .and_then(|value| value.as_dict().cloned())
+        .or_else(|| parent_resources.cloned())
+        .unwrap_or_default();
     let (fonts, props) = (sub(doc, &res, b"Font"), sub(doc, &res, b"Properties"));
     let mut metrics: HashMap<Vec<u8>, Metrics> = HashMap::new();
     // The id each open marked-content sequence is in: its own, else the enclosing one's.
-    let mut stack: Vec<(Option<i64>, bool)> = Vec::new();
+    let mut stack = Vec::<MarkedFrame>::new();
     let mut out = McidTexts::default();
     let mut total_text = 0usize;
+    let mut retained = BTreeSet::<(usize, i64)>::new();
+    let mut truncated = HashSet::<i64>::new();
     let mut replacements = HashMap::<i64, String>::new();
     // Where each id's last glyph ended, in user space.
     let mut ends: HashMap<i64, (f64, f64)> = HashMap::new();
@@ -613,13 +815,72 @@ pub(crate) fn mcid_texts_limited(doc: &Document, page: &Dict, max_text: usize, m
     // errata, issue 368), as the renderer does.
     let mut saved: Vec<(TextState, Matrix, Matrix)> = Vec::new();
     let mut unsaved = 0usize;
+    let mut form_cache = HashSet::<ObjRef>::new();
     let (mut tm, mut tlm) = (Matrix::IDENTITY, Matrix::IDENTITY);
-    for op in pdfcraft_content::parse(&page_content(doc, page)).ops {
+    let xobjects = sub(doc, &res, b"XObject");
+    let decoded_page_data = content.is_none().then(|| page_content_within(doc, page, budget));
+    let page_data = content.or(decoded_page_data.as_deref()).unwrap_or_default();
+    for op in pdfcraft_content::parse(page_data).ops {
         crate::count_mark_reads(1);
-        let (inherited_id, artifact) = stack.last().copied().unwrap_or((None, false));
-        let id = (!artifact).then_some(inherited_id).flatten();
+        let inherited_id = stack.last().and_then(|frame| frame.id);
+        let artifact = stack.last().is_some_and(|frame| frame.artifact);
+        let suppressed = stack.iter().any(|frame| frame.suppresses_text);
+        let id = (!artifact && !suppressed).then_some(inherited_id).flatten();
         match op.op.as_slice() {
-            b"BMC" => stack.push((inherited_id, artifact || op.name(0) == Some(b"Artifact"))),
+            b"Do" => {
+                let Some(reference) = op.name(0).and_then(|name| xobjects.get(name)).and_then(Object::as_ref) else { continue };
+                if skipped_forms.contains(&reference) {
+                    continue;
+                }
+                let object = doc.get(reference);
+                let Object::Stream(stream) = &*object else { continue };
+                if stream.dict.name(b"Subtype") != Some(b"Form") {
+                    continue;
+                }
+                if form_cache.contains(&reference) {
+                    continue;
+                }
+                if depth >= MAX_TAGGED_FORM_DEPTH || forms.contains(&reference) || !budget.enter_form() {
+                    out.limited = true;
+                    continue;
+                }
+                let Ok(data) = budget.decode(stream) else {
+                    out.limited = true;
+                    continue;
+                };
+                forms.insert(reference);
+                let remaining = max_total.saturating_sub(total_text);
+                let form_resources = stream.dict.get(b"Resources").map(|value| doc.resolve(value)).and_then(|value| value.as_dict().cloned());
+                let form_dict = stream.dict.clone();
+                let form = mcid_texts_within(
+                    doc,
+                    &form_dict,
+                    Some(&data),
+                    form_resources.as_ref().or(Some(&res)),
+                    max_text,
+                    remaining,
+                    None,
+                    skipped_forms,
+                    budget,
+                    forms,
+                    depth + 1,
+                );
+                forms.remove(&reference);
+                total_text = total_text.saturating_add(form.bytes);
+                out.limited |= form.limited;
+                out.unmarked_text |= form.unmarked_text;
+                form_cache.insert(reference);
+                out.form_texts.insert(reference, form);
+                continue;
+            }
+            b"BMC" => stack.push(MarkedFrame {
+                id: inherited_id,
+                artifact: artifact || op.name(0) == Some(b"Artifact"),
+                suppresses_text: suppressed,
+                local_actual_text: None,
+                unmarked_actual_text: None,
+                apply_replacement: false,
+            }),
             b"BDC" => {
                 let properties = match op.operands.get(1) {
                     Some(Object::Dict(d)) => Some(d.clone()),
@@ -627,17 +888,62 @@ pub(crate) fn mcid_texts_limited(doc: &Document, page: &Dict, max_text: usize, m
                     _ => None,
                 }
                 .unwrap_or_default();
-                let mcid = properties.get(b"MCID").and_then(Object::as_int).or(inherited_id);
-                if !artifact
-                    && let (Some(id), Some(actual_text)) =
-                        (mcid, properties.get(b"ActualText").map(|value| doc.resolve(value)).and_then(|value| value.as_string().map(|s| s.to_text())))
-                {
-                    replacements.insert(id, actual_text);
+                let own_id = properties.get(b"MCID").and_then(Object::as_int);
+                let mcid = own_id.or(inherited_id);
+                let opens_artifact = artifact || op.name(0) == Some(b"Artifact");
+                let has_outer_replacement = stack.iter().any(|frame| frame.suppresses_text);
+                let actual_text =
+                    properties.get(b"ActualText").map(|value| doc.resolve(value)).and_then(|value| value.as_string().map(|s| s.to_text()));
+                let has_actual_text = !opens_artifact && actual_text.is_some();
+                let mut local_actual_text = None;
+                let mut unmarked_actual_text = None;
+                let mut apply_replacement = false;
+                if has_actual_text && !has_outer_replacement {
+                    if let Some(actual_text) = actual_text {
+                        match (own_id, mcid) {
+                            (Some(_), Some(id)) => {
+                                replacements.insert(id, actual_text);
+                            }
+                            (None, Some(id)) => {
+                                local_actual_text = Some((id, actual_text));
+                                apply_replacement = true;
+                            }
+                            (None, None) => {
+                                unmarked_actual_text = Some(actual_text);
+                                apply_replacement = true;
+                            }
+                            _ => {}
+                        }
+                    }
                 }
-                stack.push((mcid, artifact || op.name(0) == Some(b"Artifact")));
+                stack.push(MarkedFrame {
+                    id: mcid,
+                    artifact: opens_artifact,
+                    suppresses_text: suppressed || has_actual_text,
+                    local_actual_text,
+                    unmarked_actual_text,
+                    apply_replacement,
+                });
             }
             b"EMC" => {
-                stack.pop();
+                if let Some(frame) = stack.pop()
+                    && frame.apply_replacement
+                    && !stack.iter().any(|outer| outer.suppresses_text)
+                {
+                    if let Some((id, replacement)) = frame.local_actual_text {
+                        let text = out.by_id.entry(id).or_default();
+                        let updated = text.len().saturating_add(replacement.len());
+                        if updated <= max_text && total_text.saturating_add(replacement.len()) <= max_total {
+                            text.push_str(&replacement);
+                            total_text = total_text.saturating_add(replacement.len());
+                        } else {
+                            out.limited = true;
+                        }
+                    }
+                    if frame.unmarked_actual_text.is_some_and(|text| !text.trim().is_empty()) {
+                        out.unmarked_text = true;
+                    }
+                }
             }
             b"q" if saved.len() < MAX_SAVED => saved.push((gs.clone(), tm, tlm)),
             b"q" => unsaved += 1,
@@ -718,18 +1024,38 @@ pub(crate) fn mcid_texts_limited(doc: &Document, page: &Dict, max_text: usize, m
                 // A glyph's text is only built while its id still takes more.
                 if let Some(glyph) = m.text_of(code) {
                     if let Some(id) = id {
-                        let text = out.by_id.entry(id).or_default();
+                        let text_len = out.by_id.get(&id).map_or(0, String::len);
+                        let ends_word = out.by_id.get(&id).is_some_and(|text| !text.is_empty() && !text.ends_with(' '));
                         let breaks = ends.get(&id).is_some_and(|end| new_word(&trm, *end, gs.size, gs.scale));
-                        let separator = breaks && !text.is_empty() && !text.ends_with(' ') && !glyph.starts_with(' ');
+                        let separator = breaks && ends_word && !glyph.starts_with(' ');
                         let added = glyph.len().saturating_add(usize::from(separator));
-                        if text.len() < max_text && total_text.saturating_add(added) <= max_total {
+                        let rank = priorities.and_then(|items| items.get(&id)).copied().unwrap_or(usize::MAX);
+                        while text_len < max_text
+                            && !truncated.contains(&id)
+                            && total_text.saturating_add(added) > max_total
+                            && let Some((worst_rank, worst_id)) = retained.iter().next_back().copied()
+                            && worst_id != id
+                            && worst_rank > rank
+                        {
+                            if let Some(removed) = out.by_id.remove(&worst_id) {
+                                total_text = total_text.saturating_sub(removed.len());
+                                ends.remove(&worst_id);
+                                retained.remove(&(worst_rank, worst_id));
+                                truncated.insert(worst_id);
+                                out.limited = true;
+                            }
+                        }
+                        if text_len < max_text && !truncated.contains(&id) && total_text.saturating_add(added) <= max_total {
+                            let text = out.by_id.entry(id).or_default();
                             if separator {
                                 text.push(' ');
                             }
                             text.push_str(&glyph);
                             total_text = total_text.saturating_add(added);
+                            retained.insert((rank, id));
                         } else {
                             out.limited = true;
+                            truncated.insert(id);
                         }
                     } else if !artifact && !glyph.trim().is_empty() {
                         out.unmarked_text = true;
@@ -737,18 +1063,45 @@ pub(crate) fn mcid_texts_limited(doc: &Document, page: &Dict, max_text: usize, m
                 }
                 let advance = m.width(code) * gs.size + gs.char_spacing + if m.is_space(code, len) { gs.word_spacing } else { 0.0 };
                 tm = Matrix::translate(advance * gs.scale, 0.0).then(&tm);
-                if let Some(id) = id {
+                if let Some(id) = id.filter(|id| out.by_id.contains_key(id) && !truncated.contains(id)) {
                     ends.insert(id, tm.then(&gs.ctm).apply(0.0, 0.0));
                 }
             }
         }
     }
+    let mut replacements: Vec<(i64, String)> = replacements.into_iter().collect();
+    replacements.sort_by_key(|(id, replacement)| {
+        (replacement.len() > out.by_id.get(id).map_or(0, String::len), priorities.and_then(|items| items.get(id)).copied().unwrap_or(usize::MAX), *id)
+    });
     for (id, replacement) in replacements {
         let previous = out.by_id.get(&id).map_or(0, String::len);
+        let rank = priorities.and_then(|items| items.get(&id)).copied().unwrap_or(usize::MAX);
+        while replacement.len() <= max_text
+            && total_text.saturating_sub(previous).saturating_add(replacement.len()) > max_total
+            && let Some((worst_rank, worst_id)) = retained.iter().next_back().copied()
+            && worst_id != id
+            && worst_rank > rank
+        {
+            if let Some(removed) = out.by_id.remove(&worst_id) {
+                total_text = total_text.saturating_sub(removed.len());
+                ends.remove(&worst_id);
+                retained.remove(&(worst_rank, worst_id));
+                truncated.insert(worst_id);
+                out.limited = true;
+            }
+        }
         let bytes = total_text.saturating_sub(previous).saturating_add(replacement.len());
         if replacement.len() <= max_text && bytes <= max_total {
             total_text = bytes;
-            out.by_id.insert(id, replacement);
+            if previous > 0 {
+                retained.remove(&(rank, id));
+            }
+            if replacement.is_empty() {
+                out.by_id.insert(id, replacement);
+            } else {
+                retained.insert((rank, id));
+                out.by_id.insert(id, replacement);
+            }
         } else {
             out.limited = true;
         }
