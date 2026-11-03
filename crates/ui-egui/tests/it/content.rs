@@ -757,19 +757,40 @@ fn format_text_fits_the_tools_pane_at_its_narrowest() {
     }
 }
 
+/// Whether this machine's interface faces draw every translation in `catalog` (a catalog file's
+/// text) in the families the panels use. A script with no face at all fails (Lao without system
+/// fonts), and so does one a fallback face covers only in part: on Windows without a Japanese face,
+/// the Korean fallback draws 日本語 but not the katakana "ー", on which egui's
+/// `MissingGlyphPolicy::Panic` aborts the frame.
+fn draws_catalog(ctx: &egui::Context, catalog: &str) -> bool {
+    let chars: std::collections::BTreeSet<char> = catalog
+        .lines()
+        .filter(|line| !line.starts_with('#'))
+        // Context and source, then the translation and any further plural forms.
+        .flat_map(|line| line.split('\t').skip(2))
+        .flat_map(str::chars)
+        .filter(|c| !c.is_whitespace())
+        .collect();
+    let text: String = chars.into_iter().collect();
+    [egui::FontFamily::Proportional, egui::FontFamily::Name("medium".into()), egui::FontFamily::Name("semibold".into())]
+        .into_iter()
+        .all(|family| ctx.fonts_mut(|f| f.has_glyphs(&egui::FontId::new(13.0, family), &text)))
+}
+
 /// The lists and the size row in Format text fit the narrowest Tools pane in every interface
 /// language: "Auto" in the line spacing list and "Mixed" in the size field are translated, and in
 /// Czech or French they are much longer. The font list spans the pane, so nothing may end past it.
 #[test]
 fn format_text_lists_fit_the_narrowest_tools_pane_in_every_language() {
     use egui::accesskit::Role;
-    for lang in pdfcraft_ui_egui::i18n::Lang::all() {
+    let mut checked = Vec::new();
+    for info in &pdfcraft_ui_egui::i18n::LANGUAGES {
         let mut h = harness();
-        // A script with no face on this machine (Lao without system fonts) can't be drawn at all.
-        if !h.ctx.fonts_mut(|f| f.has_glyphs(&egui::FontId::proportional(13.0), lang.name())) {
+        if !draws_catalog(&h.ctx, info.source) {
             continue;
         }
-        h.state_mut().set_option("language", lang.code()).unwrap();
+        checked.push(info.code);
+        h.state_mut().set_option("language", info.code).unwrap();
         h.state_mut().side_panels.tools_width = 0.0;
         assert!(h.state_mut().execute("edit.text"));
         h.run_steps(3);
@@ -778,11 +799,15 @@ fn format_text_lists_fit_the_narrowest_tools_pane_in_every_language() {
         // could make another list the widest.
         let font = h.query_all_by_role(Role::ComboBox).find(|n| n.value().as_deref() == Some("Helvetica")).map(|n| n.rect()).expect("the font list");
         for r in &lists {
-            assert!(r.right() <= font.right() + 0.5, "{}: {r:?} reaches past the font list ({font:?})", lang.code());
+            assert!(r.right() <= font.right() + 0.5, "{}: {r:?} reaches past the font list ({font:?})", info.code);
         }
         // The size row too: its field reserves room for a translated "Mixed".
         let align = h.get_by_label(pdfcraft_ui_egui::i18n::t("Alignment")).rect();
-        assert!(align.right() <= font.right() + 0.5, "{}: Alignment {align:?} reaches past the font list ({font:?})", lang.code());
+        assert!(align.right() <= font.right() + 0.5, "{}: Alignment {align:?} reaches past the font list ({font:?})", info.code);
+    }
+    // The app's own faces draw these on every machine, so the skip above can't hide them.
+    for code in ["en", "cs", "fr"] {
+        assert!(checked.contains(&code), "{code} was skipped as undrawable");
     }
 }
 
