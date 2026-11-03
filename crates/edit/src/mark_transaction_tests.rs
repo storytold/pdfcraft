@@ -121,6 +121,7 @@ fn apply_replacement(doc: &mut Document, kind: MarkKind, source: MarkSource, rep
         MarkKind::Background => {
             add_background(doc, SELECTED, &Background { color: [0.1, 0.3, 0.7], replace_backdrop: true, ..Default::default() }, replace)
         }
+        MarkKind::PrinterMarks => Ok(()),
     }
 }
 
@@ -172,6 +173,7 @@ fn replacements_commit_all_selected_pages_and_preserve_other_marks_and_shared_re
             MarkKind::HeaderFooter => "(New header)".to_string(),
             MarkKind::Watermark => format!("/PCPic{} Do", source.xobject.num),
             MarkKind::Background => "0.1 0.3 0.7 rg".to_string(),
+            MarkKind::PrinterMarks => String::new(),
         };
         apply_replacement(&mut doc, kind, source, true).unwrap();
         let doc = reopen(&doc);
