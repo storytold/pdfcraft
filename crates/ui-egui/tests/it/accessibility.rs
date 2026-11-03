@@ -265,7 +265,7 @@ const TABLE_TAGS: &[u8] = b"%PDF-1.7
 3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R >> endobj
 4 0 obj << /Length 0 >> stream
 endstream endobj
-5 0 obj << /Type /StructTreeRoot /K [7 0 R 8 0 R] /RoleMap << /MyTable /Table /MyHeader /TH >> >> endobj
+5 0 obj << /Type /StructTreeRoot /K [7 0 R 8 0 R] /RoleMap << /MyTable /Table /MyHeader /TH /ChangedTable /Table /ChangedHeader /TH >> >> endobj
 7 0 obj << /S /MyTable /P 5 0 R /A [<< /O /Layout /Placement /Block >> << /O /Table /Summary (Old summary) >>] >> endobj
 8 0 obj << /S /MyHeader /P 5 0 R /A [<< /O /Layout /Placement /Block >> << /O /Table /Scope /Row >>] >> endobj
 trailer << /Root 1 0 R >>
@@ -378,9 +378,16 @@ fn tags_panel_edits_role_mapped_table_summary_and_header_scope() {
     h.key_combination_modifiers(egui::Modifiers::COMMAND, &[egui::Key::A]);
     h.key_press(egui::Key::Backspace);
     summary.type_text("Updated summary");
+    let tag_type = h.get_by_role_and_label(Role::TextInput, "Tag type");
+    tag_type.focus();
+    h.key_combination_modifiers(egui::Modifiers::COMMAND, &[egui::Key::A]);
+    h.key_press(egui::Key::Backspace);
+    tag_type.type_text("ChangedTable");
     h.get_by_label("Save tag properties").click();
     h.run_steps(2);
     let id = h.state().views[0].id;
+    assert_eq!(h.state().session.get(id).unwrap().tags()[0].kind, "ChangedTable");
+    assert_eq!(h.state().session.get(id).unwrap().tags()[0].standard_kind, "Table");
     assert_eq!(h.state().session.get(id).unwrap().tags()[0].summary.as_deref(), Some("Updated summary"));
     assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("Change tag properties"));
     h.get_by_label("MyHeader · 8").click();
@@ -390,8 +397,15 @@ fn tags_panel_edits_role_mapped_table_summary_and_header_scope() {
     h.run_steps(2);
     h.get_by_role_and_label(Role::Button, "Column").click();
     h.run_steps(1);
+    let tag_type = h.get_by_role_and_label(Role::TextInput, "Tag type");
+    tag_type.focus();
+    h.key_combination_modifiers(egui::Modifiers::COMMAND, &[egui::Key::A]);
+    h.key_press(egui::Key::Backspace);
+    tag_type.type_text("ChangedHeader");
     h.get_by_label("Save tag properties").click();
     h.run_steps(2);
+    assert_eq!(h.state().session.get(id).unwrap().tags()[1].kind, "ChangedHeader");
+    assert_eq!(h.state().session.get(id).unwrap().tags()[1].standard_kind, "TH");
     assert_eq!(h.state().session.get(id).unwrap().tags()[1].scope.as_deref(), Some("Column"));
     let saved = h.state().session.save_bytes(id).unwrap();
     let mut reopened = pdfcraft_engine::Session::new();
@@ -402,11 +416,11 @@ fn tags_panel_edits_role_mapped_table_summary_and_header_scope() {
     h.run_steps(2);
     assert_eq!(h.state().session.get(id).unwrap().tags()[1].scope.as_deref(), Some("Row"));
     assert_eq!(h.get_by_role_and_label(Role::ComboBox, "Scope").value().as_deref(), Some("Row"));
+    h.get_by_label("ChangedTable · 7").click();
+    h.run_steps(2);
     h.state_mut().undo();
     h.run_steps(2);
     assert_eq!(h.state().session.get(id).unwrap().tags()[0].summary.as_deref(), Some("Old summary"));
-    h.get_by_label("MyTable · 7").click();
-    h.run_steps(2);
     assert_eq!(h.get_by_role_and_label(Role::TextInput, "Summary").value().as_deref(), Some("Old summary"));
 }
 

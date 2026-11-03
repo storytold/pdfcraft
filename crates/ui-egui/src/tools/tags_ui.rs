@@ -209,12 +209,12 @@ pub(crate) fn panel(
     ui.separator();
     let Some(tag) = state.selected.and_then(|r| tags.iter().find(|t| t.object == r)) else { return (page, None) };
     if let Some(source) = state.draft_source.as_ref().filter(|source| source.object == tag.object) {
-        if source.summary != tag.summary {
-            state.draft.summary = tag.summary.clone().unwrap_or_default();
-        }
-        if source.scope != tag.scope {
-            state.draft.scope = tag.scope.clone().unwrap_or_default();
-        }
+        refresh_draft_field(&mut state.draft.title, source.title.as_deref(), tag.title.as_deref());
+        refresh_draft_field(&mut state.draft.actual_text, source.actual_text.as_deref(), tag.actual_text.as_deref());
+        refresh_draft_field(&mut state.draft.alt, source.alt.as_deref(), tag.alt.as_deref());
+        refresh_draft_field(&mut state.draft.language, source.language.as_deref(), tag.language.as_deref());
+        refresh_draft_field(&mut state.draft.summary, source.summary.as_deref(), tag.summary.as_deref());
+        refresh_draft_field(&mut state.draft.scope, source.scope.as_deref(), tag.scope.as_deref());
     } else {
         state.draft = Draft::from_tag(tag);
     }
@@ -339,46 +339,24 @@ fn field(ui: &mut Ui, label: &str, value: &mut String, multiline: bool) {
     }
 }
 
+fn refresh_draft_field(draft: &mut String, previous: Option<&str>, current: Option<&str>) {
+    if previous != current && draft == previous.unwrap_or_default() {
+        *draft = current.unwrap_or_default().to_owned();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn keeps_table_attributes_when_the_tag_type_changes() {
-        let base = TagInfo {
-            object: ObjRef::new(1, 0),
-            parent: None,
-            depth: 0,
-            kind: String::new(),
-            standard_kind: String::new(),
-            title: None,
-            actual_text: None,
-            alt: None,
-            language: None,
-            summary: None,
-            scope: None,
-            page: None,
-        };
-        let cases = [("Table", TagProperty::Summary), ("TH", TagProperty::Scope)];
+    fn refreshes_only_clean_draft_fields_from_the_restored_tag() {
+        let mut clean = "Saved value".to_owned();
+        refresh_draft_field(&mut clean, Some("Saved value"), Some("Restored value"));
+        assert_eq!(clean, "Restored value");
 
-        for (kind, property) in cases {
-            let mut tag = base.clone();
-            tag.kind = format!("Original{kind}");
-            tag.standard_kind = kind.into();
-            let mut draft = Draft::from_tag(&tag);
-            draft.kind = format!("Changed{kind}");
-            if property == TagProperty::Summary {
-                draft.summary = "A summary".into();
-            } else {
-                assert_eq!(property, TagProperty::Scope);
-                draft.scope = "Row".into();
-            }
-
-            assert!(matches!(
-                draft.edit(&tag),
-                Some(Edit::Batch { edits, .. })
-                    if edits.iter().any(|edit| matches!(edit, Edit::SetTagProperty { property: p, .. } if *p == property))
-            ));
-        }
+        let mut dirty = "Unfinished edit".to_owned();
+        refresh_draft_field(&mut dirty, Some("Saved value"), Some("Restored value"));
+        assert_eq!(dirty, "Unfinished edit");
     }
 }
