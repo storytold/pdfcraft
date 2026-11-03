@@ -566,3 +566,13 @@ fn invert_accepts_small_scale_and_rejects_singular() {
     // A subnormal scale passes the relative check but its inverse overflows (CodeRabbit on #5703).
     assert!(Matrix([1e-310, 0., 0., 1., 0., 0.]).invert().is_none());
 }
+
+#[test]
+fn parse_limited_stops_at_the_operator_ceiling() {
+    let pieces = Pieces::join(&[b"q\n".repeat(10), b"Q\n".repeat(10)]);
+    assert_eq!(pieces.parse_limited(20).map(|p| p.ops.len()), Some(20));
+    assert!(pieces.parse_limited(19).is_none());
+    // Same result as parse() when it fits.
+    assert_eq!(pieces.parse_limited(100).unwrap().ops, pieces.parse().ops);
+    assert!(pieces.parse_limited(0).is_none());
+}
