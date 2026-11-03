@@ -2032,6 +2032,22 @@ fn the_page_indicator_is_announced_as_a_status() {
 }
 
 #[test]
+fn the_empty_document_page_indicator_is_announced_as_a_status() {
+    const PDF: &str = "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+        2 0 obj << /Type /Pages /Kids [] /Count 0 >> endobj\n\
+        trailer << /Root 1 0 R >>\n%%EOF";
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(800.0, 600.0)).build_eframe(|cc| {
+        cc.egui_ctx.set_fonts(crate::theme::font_definitions());
+        let mut app = PdfCraftApp::new();
+        app.open_bytes("empty-page-status.pdf", None, PDF.as_bytes().to_vec()).unwrap();
+        app.show_page_indicator = true;
+        app
+    });
+    h.run_steps(2);
+    let _ = h.get_by_role_and_label(egui::accesskit::Role::Status, "0 / 0");
+}
+
+#[test]
 fn image_handles_account_for_document_and_view_rotation() {
     for page_rotation in [0, 90, 180, 270] {
         for view_rotation in [0, 90, 180, 270] {
