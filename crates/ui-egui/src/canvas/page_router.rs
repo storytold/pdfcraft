@@ -62,6 +62,9 @@ pub(crate) enum CropPart {
     Grip(usize),
     /// The box kept: a drag moves it over the picture.
     Keep,
+    /// The picture outside the box kept, shown or cut away: a press there moves nothing, and a
+    /// right-click is the crop's, as on the box and its grips (#5835).
+    Cut,
     /// The rest of the page, its Done and Cancel controls among it: a press there is crop mode's,
     /// and moves nothing.
     Page,
@@ -146,7 +149,8 @@ pub(crate) enum PagePress {
     /// up (`Elsewhere` instead when Escape came in the press's own frame; page input skips a
     /// cancelled press either way).
     Free,
-    /// The press began on another page, or off the pages (between them, or beside one).
+    /// The press began on another page, or off the pages (between them, or beside one) where no
+    /// page has anything under it.
     Elsewhere,
 }
 
@@ -183,8 +187,9 @@ impl PageRouter {
         self.began = Some(None);
     }
 
-    /// A press on `page`: `hits` at the press point decide who it belongs to. A press nobody's
-    /// hit claims is held by nobody (the page's text, or a tool that acts anywhere on the page).
+    /// A press on `page`, or past its edge where `hits` are under it (the selected picture's rotate
+    /// knob): `hits` at the press point decide who it belongs to. A press nobody's hit claims is held
+    /// by nobody (the page's text, or a tool that acts anywhere on the page).
     /// Only a press just begun ([`Self::begin`]) is claimed, by the first page that does: pages
     /// that touch (the gaps hidden) can share a row of pixels, and a press there is one page's.
     pub(crate) fn press(&mut self, page: usize, hits: impl IntoIterator<Item = Hit>, tool: QuickTool) {

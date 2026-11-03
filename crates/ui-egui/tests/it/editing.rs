@@ -7347,6 +7347,117 @@ fn a_dialog_keeps_its_delete_while_a_picture_is_selected() {
     assert_eq!(h.state().dialog, Some(Dialog::Preferences));
 }
 
+/// A click that slips a few pixels between its press and its release, within egui's click distance.
+fn slipping_click(h: &mut Harness<'static, PdfCraftApp>, press: egui::Pos2, release: egui::Pos2) {
+    h.hover_at(press);
+    h.run_steps(1);
+    h.drag_at(press);
+    h.run_steps(1);
+    h.drop_at(release);
+    h.run_steps(4);
+}
+
+/// [`harness`]'s page 1 in Edit text (`tool`), and the screen point at PDF (x, y) on it.
+fn edit_page(tool: pdfcraft_ui_egui::QuickTool) -> Harness<'static, PdfCraftApp> {
+    let mut h = harness(2, |_| {});
+    h.state_mut().quick_tool = tool;
+    h.run_steps(3);
+    h
+}
+
+fn point_on(h: &Harness<'static, PdfCraftApp>, x: f64, y: f64) -> egui::Pos2 {
+    let r = h.state().views[0].page_screen_rect(0).expect("on screen");
+    let k = r.width() / 200.0;
+    egui::pos2(r.left() + x as f32 * k, r.top() + (300.0 - y as f32) * k)
+}
+
+/// A click on a paragraph opens it where it was pressed, though the button came up just below its
+/// box: an owner acts where its press was. It opened nothing.
+#[test]
+fn a_click_on_a_paragraph_released_just_below_it_opens_it() {
+    let mut h = edit_page(pdfcraft_ui_egui::QuickTool::EditText);
+    let id = h.state().views[0].id;
+    let block = h.state().session.get(id).unwrap().text_blocks(0)[0].clone();
+    // The box reaches 2 px below the text: pressed 1 px inside it, released 3 px below it.
+    let bottom = point_on(&h, (block.rect[0] + block.rect[2]) / 2.0, block.rect[1]) + egui::vec2(0.0, 2.0);
+    slipping_click(&mut h, bottom - egui::vec2(0.0, 1.0), bottom + egui::vec2(0.0, 3.0));
+    assert!(h.state().views[0].line_editor.is_some(), "the paragraph pressed is open for typing");
+}
+
+/// With the Select tool and the Edit panel open, a click on added text selects it where it was
+/// pressed, though the button came up just beside it. It left nothing selected.
+#[test]
+fn a_click_on_added_text_released_just_beside_it_selects_it() {
+    let mut h = edit_page(pdfcraft_ui_egui::QuickTool::Select);
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::AddText {
+        page: 0,
+        text: pdfcraft_engine::AddedText { rect: [40.0, 250.0, 140.0, 265.0], text: "Added".into(), ..Default::default() },
+    }));
+    assert!(h.state_mut().execute("edit.text"));
+    h.run_steps(3);
+    h.state_mut().quick_tool = pdfcraft_ui_egui::QuickTool::Select;
+    h.run_steps(3);
+    // The item takes presses 2 px past its box: pressed 1 px inside that, released 3 px past it.
+    let edge = point_on(&h, 140.0, 258.0) + egui::vec2(2.0, 0.0);
+    slipping_click(&mut h, edge - egui::vec2(1.0, 0.0), edge + egui::vec2(3.0, 0.0));
+    assert_eq!(h.state().views[0].content.selected, Some((0, 0)), "the added text pressed is selected");
+}
+
+/// With Add text, a click pressed beside a paragraph and released inside its box starts a new box
+/// where it was pressed. It finished the text being typed and placed nothing.
+#[test]
+fn an_add_text_click_pressed_beside_a_paragraph_starts_a_box_there() {
+    let mut h = edit_page(pdfcraft_ui_egui::QuickTool::AddText);
+    let id = h.state().views[0].id;
+    let block = h.state().session.get(id).unwrap().text_blocks(0)[0].clone();
+    // The box reaches 2 px past the text: pressed 2 px left of it, released 2 px inside it.
+    let left = point_on(&h, block.rect[0], (block.rect[1] + block.rect[3]) / 2.0) - egui::vec2(2.0, 0.0);
+    slipping_click(&mut h, left - egui::vec2(2.0, 0.0), left + egui::vec2(2.0, 0.0));
+    let draft = h.state().views[0].content.draft.as_ref().map(|d| d.rect);
+    let x = draft.map(|r| r[0]);
+    assert!(x.is_some_and(|x| x < block.rect[0]), "a new box at the press, left of the paragraph: {x:?} of {:?}", block.rect);
+    assert!(h.state().views[0].line_editor.is_none(), "the paragraph stays closed");
+}
+
+/// The rotate knob of a picture that fills its page lies past the page's edge, and a drag there
+/// still turns the picture: the press is the page's whose knob it is.
+#[test]
+fn dragging_the_rotate_knob_past_the_page_edge_turns_the_picture() {
+    let mut png = Vec::new();
+    image::RgbImage::from_pixel(80, 40, image::Rgb([200, 40, 40])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("picture.png", None, png.clone()).expect("opens");
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
+    h.state_mut().views[0].image_selection = Some(pdfcraft_ui_egui::ImageSelection::at(0, 0));
+    h.run_steps(3);
+    let r = h.state().views[0].page_screen_rect(0).expect("on screen");
+    // Above the top edge, or below the bottom one when the view has no room above.
+    let knob = [egui::pos2(r.center().x, r.top() - 22.0), egui::pos2(r.center().x, r.bottom() + 22.0)]
+        .into_iter()
+        .find(|p| cursor_over(&mut h, *p) == egui::CursorIcon::Grab)
+        .expect("the knob past the page's edge");
+    assert!(!r.contains(knob));
+    let to = egui::pos2(r.right() + 60.0, r.center().y);
+    h.hover_at(knob);
+    h.run_steps(1);
+    h.drag_at(knob);
+    h.run_steps(1);
+    for k in 1..=4 {
+        h.hover_at(knob + (to - knob) * (k as f32 / 4.0));
+        h.run_steps(1);
+    }
+    h.drop_at(to);
+    h.run_steps(4);
+    let id = h.state().views[0].id;
+    assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("Rotate image"));
+}
+
 /// Organize pages has Acrobat's panel whenever the grid shows, however it was opened, and the
 /// panel's Close ends Organize: the grid closes and All tools comes back.
 #[test]
@@ -8136,6 +8247,34 @@ fn test_image_context_menu_crop_overlapping_image_and_handle() {
         assert!(h.state().views[0].image_selection.is_none());
         assert!(h.query_by_label("Rotate view clockwise").is_some());
     }
+}
+
+/// A right-click on the part of a picture its crop cuts away is the crop's, as one on the box kept:
+/// crop mode stays and no menu opens (#5835).
+#[test]
+fn a_right_click_on_the_part_a_crop_cuts_away_keeps_crop_mode() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1400.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("cut.pdf", None, two_image_fixture()).unwrap();
+        app
+    });
+    h.run_steps(4);
+    let id = h.state().views[0].id;
+    let rect = h.state().session.get(id).unwrap().page_images(0)[0].rect;
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(4);
+    // Keep the picture's left half.
+    let mut selection = pdfcraft_ui_egui::ImageSelection::at(0, 0);
+    selection.crop = Some(pdfcraft_ui_egui::CropMode::new([rect[0], rect[1], (rect[0] + rect[2]) / 2.0, rect[3]]));
+    h.state_mut().views[0].image_selection = Some(selection);
+    h.run_steps(2);
+    let xf = h.state().views[0].page_xform(0).unwrap();
+    let doc = h.state().session.get(id).unwrap();
+    let b = pdfcraft_ui_egui::canvas::image_screen_rect(&doc.page_images(0)[0], &xf, &doc.info, 0);
+    assert!(b.width() > 60.0, "the picture is wide enough for a point clear of the grips: {b:?}");
+    crop_secondary_click(&mut h, b.lerp_inside(egui::vec2(0.8, 0.5)));
+    assert_crop_context_preserved(&h);
 }
 
 #[test]

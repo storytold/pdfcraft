@@ -48,6 +48,17 @@ impl ObjectSelection {
         self.selected.len()
     }
 
+    /// Edit text's input is blocked: a dialog, the palette, another window or another tab has it.
+    pub(crate) fn input_blocked(&self) -> bool {
+        self.input_blocked
+    }
+
+    /// The objects selected together are on `page`, or a gesture of theirs runs there: the hover
+    /// outlines of what lies under them wait.
+    pub(crate) fn holds(&self, page: usize) -> bool {
+        self.page == Some(page) && (!self.selected.is_empty() || self.gesture.is_some())
+    }
+
     /// A preview belongs to the active, focused document. Returning from another tab or a
     /// modal must not turn a release that happened elsewhere into a document edit.
     pub fn set_input_blocked(&mut self, blocked: bool) {

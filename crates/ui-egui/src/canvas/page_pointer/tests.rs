@@ -570,21 +570,13 @@ const ROUTER_READS: [&str; 6] =
     ["router.press_for(", "router.owner(", "router.keeps_drag(", "PageRouter::press_for(", "PageRouter::owner(", "PageRouter::keeps_drag("];
 
 /// The functions that read who holds the press: (file, function, why). The page view asks once per
-/// page and tells each module what the press is to its page (`PagePress`); the Edit text group, the
-/// text layer and link following still ask, until they are told too (PR 4b), and an unused entry
-/// fails the test.
-const ROUTER_READERS: [(&str, &str, &str); 7] = [
-    (
-        "canvas/page_input.rs",
-        "page_tool_input",
-        "the page view: what the press is to each page (`press_for`); Add text's paragraph and the pictures until 4b",
-    ),
+/// page and tells each module what the press is to its page (`PagePress`); the text layer and link
+/// following still ask, until they are told too (PR 4b), and an unused entry fails the test.
+const ROUTER_READERS: [(&str, &str, &str); 4] = [
+    ("canvas/page_input.rs", "page_tool_input", "the page view: what the press is to each page (`press_for`)"),
     ("canvas/page_input.rs", "update_selection_on_press", "the text layer selects no text under a press held by what keeps its drag (4b)"),
     ("canvas/page_input.rs", "finish_text_pointer_gesture", "a click held by what keeps its drag leaves the text selection alone (4b)"),
     ("canvas/page_input.rs", "page_overlays", "a click follows the link that holds its press (4b)"),
-    ("tools/content_ui.rs", "page_input", "added text and pictures, until they are told (4b)"),
-    ("tools/edit_text_ui.rs", "page_input", "Edit text's paragraphs, until they are told (4b)"),
-    ("tools/edit_text_ui/image.rs", "image_input", "Edit text's pictures, until they are told (4b)"),
 ];
 
 /// What ignores the press the pages hold until the button is up.
@@ -594,8 +586,8 @@ const PRESS_IGNORES: [&str; 1] = ["press_cancelled = true"];
 const PRESS_IGNORERS: [(&str, &str, &str); 1] =
     [("canvas/page_input.rs", "cancel_on_escape", "Escape abandons the gesture the press drives, whichever tool's")];
 
-/// The module hit tests, called by path: a press handler calls none of them (HIT_TESTERS says who
-/// may).
+/// The module hit tests, called by path (HIT_TESTERS says who may): an entry no page module calls
+/// any more fails the test.
 const PAGE_HIT_CALLS: [&str; 13] = [
     "link_ui::hit(",
     "prepare::hit(",
@@ -611,17 +603,6 @@ const PAGE_HIT_CALLS: [&str; 13] = [
     "object_ui::modified_hit(",
     "content_ui::hit(",
 ];
-
-/// Whether a press handler's `code` acts on the owner the router captured, and calls no hit test
-/// of its own to choose one.
-fn routed_press_handler(code: &str) -> bool {
-    let code = code.lines().filter(|line| !line.trim_start().starts_with("//")).collect::<Vec<_>>().join("\n");
-    code.contains("router.owner(")
-        && !PAGE_HIT_CALLS.iter().any(|call| code.contains(call))
-        && !uses(&code, "hit(")
-        && !uses(&code, "body_hit(")
-        && !uses(&code, "handle_hit(")
-}
 
 /// Page modules act on a press only when the router says it is theirs. The hits at the press
 /// point decide its owner once, in one place, and a `Hit` comes only from a module's hit test,
@@ -694,16 +675,6 @@ fn page_modules_act_on_a_press_only_through_the_router() {
          `DocView::cancel_pointer_gestures` instead.",
         "no longer ignores a press: remove it from PRESS_IGNORERS.",
     ));
-    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-    for (file, function) in
-        [("tools/content_ui.rs", "page_input"), ("tools/edit_text_ui.rs", "page_input"), ("tools/edit_text_ui/image.rs", "image_input")]
-    {
-        let source = std::fs::read_to_string(src.join(file)).expect("page input module");
-        let body = source.lines().skip_while(|line| declares(line) != Some(function)).take_while(|line| *line != "}").collect::<Vec<_>>().join("\n");
-        if !routed_press_handler(&body) {
-            problems.push(format!("src/{file}: {function} must consume the captured router owner without repeating a hit test"));
-        }
-    }
     // A hit test is a function named `hit` or `…_hit`: one answer to "what of mine is here?",
     // which gives the module's cursor, its tip and its press.
     problems.extend(misuses_in(
@@ -773,14 +744,4 @@ fn the_page_guards_read_hit_tests_split_calls_and_aliases() {
         "fn a() {}\n\n#[cfg(any())]\nuse crate::camera_ui::hit as corner_under;\nuse crate::x::{\n    hit as x_hit,\n    picture_hit as under,\n};\n";
     let aliases: Vec<(String, String)> = [("hit", "corner_under"), ("picture_hit", "under")].map(|(a, b)| (a.to_owned(), b.to_owned())).to_vec();
     assert_eq!(aliased_hit_tests(source), aliases);
-}
-
-#[test]
-fn the_page_press_guard_rejects_missing_owners_and_second_hit_tests() {
-    assert!(routed_press_handler("let owner = view.router.owner(page);"));
-    assert!(!routed_press_handler("// view.router.owner(page)\nlet owner = None;"));
-    assert!(!routed_press_handler("let owner = view.router.owner(page);\nlet again = cx.hit(origin);"));
-    for call in PAGE_HIT_CALLS {
-        assert!(!routed_press_handler(&format!("let owner = view.router.owner(page);\n{call}origin);")), "{call}");
-    }
 }

@@ -1604,8 +1604,6 @@ fn draw_pages(
         prefs,
         preparing,
         selection_wheel,
-        ppp,
-        rects,
         single_paging,
         tool,
         unobstructed,
@@ -1674,54 +1672,9 @@ fn draw_pages(
         view.links.context = None;
         // Set again below by the page right-clicked: a right-click off the pages (between them,
         // beside one) anchors no page's menu, which then acts on the current page. It deselects the
-        // comment too (below), as one on a page's empty part does. A selected Prepare field keeps
-        // its menu, off the pages as on them.
+        // comment, and Edit text's picture, too (below), as one on a page's empty part does. A
+        // selected Prepare field keeps its menu, off the pages as on them.
         view.comments.context_at = None;
-        let mut over_image = false;
-        if tool == QuickTool::EditText {
-            let pointer_pos = ptr.pos;
-            if let Some(p) = pointer_pos {
-                for &page_idx in visible_pages {
-                    let r = snap_to_pixels(rects[page_idx].translate(origin.to_vec2()), ppp);
-                    if !r.intersects(visible) {
-                        continue;
-                    }
-                    let xf =
-                        PageXform { rect: r, rot: view.rotation, pw: info.pages[page_idx].width.max(1.0), ph: info.pages[page_idx].height.max(1.0) };
-                    let images = cached_edit_images(view, doc, page_idx).to_vec();
-                    // Crop controls own the click even when another image overlaps them.
-                    if view.image_selection.as_ref().is_some_and(|s| {
-                        s.page == page_idx
-                            && s.crop
-                                .as_ref()
-                                .zip(images.get(s.index))
-                                .is_some_and(|(crop, img)| crop_contains_point(img, crop, &xf, info, page_idx, p))
-                    }) {
-                        over_image = true;
-                        break;
-                    }
-                    for (idx, img) in images.iter().enumerate().rev() {
-                        let obb = ImageObb::from_image(img, &xf, info, page_idx);
-                        let b = image_screen_rect(img, &xf, info, page_idx);
-                        let selected_crop = view.image_selection.as_ref().is_some_and(|s| s.page == page_idx && s.index == idx && s.crop.is_some());
-                        let hit = if selected_crop { crate::edit_text_ui::quad_contains(obb.corners(), p) } else { obb.contains(b, p) };
-                        if hit {
-                            over_image = true;
-                            if view.image_selection.as_ref().is_none_or(|s| s.page != page_idx || s.index != idx) {
-                                view.image_selection = Some(crate::edit_text_ui::ImageSelection::at(page_idx, idx));
-                            }
-                            break;
-                        }
-                    }
-                    if over_image {
-                        break;
-                    }
-                }
-            }
-        }
-        if !over_image && tool == QuickTool::EditText {
-            view.image_selection = None;
-        }
     }
     let mut frame = PageFrame {
         env: *env,
@@ -1759,9 +1712,13 @@ fn draw_pages(
         right_clicked,
         ..
     } = frame;
-    // A right-click no page took deselects the comment, so the page's menu opens, not the comment's.
+    // A right-click no page took deselects the comment, so the page's menu opens, not the comment's,
+    // and with Edit text the picture (one on a page went to that page, `page_input`).
     if resp.secondary_clicked() && !right_clicked {
         view.comments.selected = None;
+        if tool == QuickTool::EditText {
+            view.image_selection = None;
+        }
     }
     let PageOut {
         mut canvas_action,

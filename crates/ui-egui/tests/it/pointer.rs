@@ -1418,19 +1418,25 @@ fn the_link_tools_hand_stops_at_the_pages_edge() {
     assert_ne!(cursor_at(&mut h, beside), egui::CursorIcon::PointingHand, "just off the page");
 }
 
-/// With Edit text a right-click on a paragraph is Edit text's, as before, though a comment lies
-/// over it: the comment is not selected. The page's menu is anchored there all the same (Paste on
-/// the picture menu, Delete page); it used to stay where the last right-click comments saw was.
+/// With Edit text a right-click goes to what lies on top under it, as with every tool: on a
+/// paragraph under a comment, the comment, selected for its menu; on the paragraph beside it, the
+/// paragraph, and the comment is unselected. The page's menu is anchored there either way (Paste on
+/// the picture menu, Delete page). Edit text used to keep the right-clicks on its paragraphs, and
+/// left the comment over them unselected.
 #[test]
-fn a_right_click_with_edit_text_on_a_paragraph_under_a_comment_selects_no_comment() {
+fn a_right_click_with_edit_text_on_a_paragraph_under_a_comment_selects_the_comment() {
     let mut h = open(comment_on_text_pdf(), "150", false);
     h.state_mut().quick_tool = QuickTool::EditText;
     h.run_steps(4);
     let on_text = at(&h, 100.0, 303.0);
     wait_for_cursor(&mut h, on_text, |c| c != egui::CursorIcon::Default);
     right_click(&mut h, on_text);
-    assert_eq!(h.state().views[0].comments.selected, None);
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "the comment over the paragraph is selected");
     assert_eq!(h.state().views[0].comments.context_at.map(|(page, _)| page), Some(0), "the menu is anchored on the page");
+    // The rectangle ends at x 200; the line goes on.
+    let beside = at(&h, 230.0, 303.0);
+    right_click(&mut h, beside);
+    assert_eq!(h.state().views[0].comments.selected, None, "the paragraph beside the comment leaves it unselected");
 }
 
 /// With a Prepare field tool a right-click is the tool's, as before: a comment under it is not
@@ -1591,8 +1597,8 @@ fn a_right_click_after_escape_cancelled_the_press_anchors_the_menu_on_its_page()
     assert_eq!(menu_page_after_a_right_click_with_the_button_held(true), Some(1), "the menu is page 2's");
 }
 
-/// With Edit text a right-click on added text reaches comments, as before (Edit text keeps those on
-/// its own paragraphs and pictures): the selected comment is unselected.
+/// With Edit text a right-click on added text reaches comments, as before: the selected comment is
+/// unselected.
 #[test]
 fn a_right_click_with_edit_text_on_added_text_unselects_the_comment() {
     let mut h = open(comment_on_text_pdf(), "150", false);
@@ -1757,11 +1763,12 @@ fn a_right_click_between_the_pages_opens_the_page_menu_not_the_selected_comments
     assert!(h.query_by_label("Reply").is_none(), "not the comment's");
 }
 
-/// Where pages touch, a right-click on the row they share is page 1's, and a picture on page 2 there
-/// opens its menu, whose Paste then places the image as Ctrl+V does. It used to centre the image on
-/// page 1's point, which on page 2 lies at its foot.
+/// Where pages touch, a right-click on the row they share is page 1's, whatever lies there on page 2:
+/// page 2's picture across its top edge opens no menu, and page 1's menu pastes on page 1, where it
+/// opened. The page view's own picture scan used to open page 2's picture's menu there, whose Paste
+/// centred the image on page 1's point, which on page 2 lies at its foot.
 #[test]
-fn paste_from_a_picture_menu_where_two_pages_touch_keeps_off_the_first_pages_point() {
+fn paste_from_a_right_click_where_two_pages_touch_keeps_to_the_first_page() {
     let (mut h, seam) = touching_pages(|app| {
         app.system_clipboard = false;
         app.quick_tool = QuickTool::EditText;
@@ -1774,16 +1781,18 @@ fn paste_from_a_picture_menu_where_two_pages_touch_keeps_off_the_first_pages_poi
     h.run_steps(4);
     right_click(&mut h, seam);
     assert_eq!(h.state().views[0].comments.context_at.map(|(page, _)| page), Some(0), "page 1 takes the right-click");
-    assert_eq!(h.state().views[0].image_selection.as_ref().map(|s| s.page), Some(1), "page 2's picture opens its menu");
-    h.get_by_label("Paste").click();
+    assert!(h.state().views[0].image_selection.is_none(), "page 2's picture is not selected for its menu");
+    h.get_by_label_contains("Paste").click();
     h.run_steps(3);
-    let pasted = {
+    let images = |page| {
         let s = h.state();
-        s.session.get(s.views[0].id).unwrap().page_images(1)
+        s.session.get(s.views[0].id).unwrap().page_images(page)
     };
-    assert_eq!(pasted.len(), 2, "the image is pasted on page 2");
-    let r = pasted[1].rect;
-    assert!((r[1] + r[3]) / 2.0 > 100.0, "not centred at page 2's foot: {r:?}");
+    assert_eq!(images(1).len(), 1, "nothing is pasted on page 2");
+    let pasted = images(0);
+    assert_eq!(pasted.len(), 1, "the image is pasted on page 1");
+    let r = pasted[0].rect;
+    assert!((r[1] + r[3]) / 2.0 < 100.0, "at page 1's foot, where its menu opened: {r:?}");
 }
 
 /// With the camera tool, a click on another page moves the quadrilateral there, as a drag from it
