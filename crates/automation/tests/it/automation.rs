@@ -2964,6 +2964,11 @@ fn tagged_text_export_follows_structure_and_reports_omissions() {
     assert_eq!(result["warnings"].as_array().unwrap().len(), 2);
     assert!(result["warnings"].to_string().contains("missing structure reference 99"));
     assert!(result["warnings"].to_string().contains("outside the structure tree"));
+
+    std::fs::write(dir.join("untagged.pdf"), fixture(1)).unwrap();
+    let untagged_doc = ok(&mut a, "doc_open", json!({ "path": "untagged.pdf" }))["doc"].as_u64().unwrap();
+    let untagged = ok(&mut a, "doc_export_text", json!({ "doc": untagged_doc, "path": "untagged.txt", "order": "tagged" }));
+    assert_eq!(untagged["warnings"], json!(["the document has no structure tree"]));
 }
 
 #[test]

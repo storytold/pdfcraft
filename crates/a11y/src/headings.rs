@@ -951,11 +951,29 @@ fn mcid_texts_within(
                     && !stack.iter().any(|outer| outer.suppresses_text)
                 {
                     if let Some((id, replacement)) = frame.local_actual_text {
+                        let rank = priorities.and_then(|items| items.get(&id)).copied().unwrap_or(usize::MAX);
+                        let text_len = out.by_id.get(&id).map_or(0, String::len);
+                        if text_len.saturating_add(replacement.len()) <= max_text {
+                            while total_text.saturating_add(replacement.len()) > max_total
+                                && let Some((worst_rank, worst_id)) = retained.iter().next_back().copied()
+                                && worst_id != id
+                                && worst_rank > rank
+                            {
+                                if let Some(removed) = out.by_id.remove(&worst_id) {
+                                    total_text = total_text.saturating_sub(removed.len());
+                                    ends.remove(&worst_id);
+                                    retained.remove(&(worst_rank, worst_id));
+                                    truncated.insert(worst_id);
+                                    out.limited = true;
+                                }
+                            }
+                        }
                         let text = out.by_id.entry(id).or_default();
                         let updated = text.len().saturating_add(replacement.len());
                         if updated <= max_text && total_text.saturating_add(replacement.len()) <= max_total {
                             text.push_str(&replacement);
                             total_text = total_text.saturating_add(replacement.len());
+                            retained.insert((rank, id));
                         } else {
                             out.limited = true;
                         }

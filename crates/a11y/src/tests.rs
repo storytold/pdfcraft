@@ -185,6 +185,28 @@ fn tagged_text_applies_nested_actual_text_only_to_its_span() {
 }
 
 #[test]
+fn tagged_text_budget_keeps_higher_priority_nested_actual_text() {
+    let doc = pdf(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>".into(),
+            stream(
+                "BT /F1 12 Tf /P << /MCID 1 >> BDC (BBBBBBBB) Tj EMC /P << /MCID 0 >> BDC /Span << /ActualText (AAAAAAAA) >> BDC (hidden) Tj EMC EMC ET",
+            ),
+            FONT.into(),
+        ],
+        "",
+    );
+    let page = pdfcraft_model::pages(&doc).remove(0);
+    let priorities = [(0, 0), (1, 1)].into_iter().collect();
+    let texts = crate::headings::mcid_texts_limited(&doc, &page.dict, 1024, 8, Some(&priorities));
+    assert_eq!(texts.by_id.get(&0).map(String::as_str), Some("AAAAAAAA"));
+    assert!(!texts.by_id.contains_key(&1));
+    assert!(texts.limited);
+}
+
+#[test]
 fn tagged_text_ignores_actual_text_inside_an_artifact_scope() {
     let doc = pdf(
         &[
