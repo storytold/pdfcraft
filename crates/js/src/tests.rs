@@ -496,6 +496,8 @@ fn deeply_nested_scripts_fail_instead_of_crashing() {
     assert!(o.doc_errors.len() == 1 && o.doc_errors[0].contains("nested too deeply"), "{:?}", o.doc_errors);
 }
 
+/// Ordinary nesting below the guard's limits runs, while many opening brackets in strings and
+/// comments are refused, since the guard counts opening brackets everywhere (#5079).
 #[test]
 fn ordinary_nesting_still_runs() {
     let n = 40;
@@ -507,6 +509,64 @@ fn ordinary_nesting_still_runs() {
     let s = format!("// {}\nevent.value = '{}'.length;", "(".repeat(1000), "[".repeat(1000));
     let o = go(&s, &Event::field("Calculate", "a", ""));
     assert!(o.error.as_deref().is_some_and(|e| e.contains("nested too deeply")), "{o:?}");
+}
+
+/// The reported #5079 reproduction: a regex literal whose body holds a quote (`/'/`) must not
+/// hide the brackets that follow it from the nesting guard. The guard's byte scan reads `'` as
+/// the start of a string, so before the fix every `(` after `/'/` on the line was skipped and
+/// `depth` stayed 0; boa's unbounded recursive parser then overflowed the script thread's stack
+/// (the console's `js_run` path, on the `pdfcraft-js` thread) and aborted the app. Opening
+/// brackets now count inside the skipped run, so the script is refused before it reaches boa.
+/// With the fix reverted, 200 brackets fail this assertion cleanly (boa reports a SyntaxError)
+/// and 64,000, the issue's file, overflow the stack.
+#[test]
+fn a_quote_in_a_regex_cannot_hide_nesting_from_the_guard() {
+    for n in [200, 64_000] {
+        let s = format!("event.value = /'/ {}1;", "(".repeat(n));
+        let o = go(&s, &Event::field("Calculate", "a", ""));
+        assert!(o.error.as_deref().is_some_and(|e| e.contains("nested too deeply")), "{n}: {:?}", o.error);
+    }
+}
+
+/// A quote in a regex character class can look like a string opener to the guard's scan, with
+/// the real nesting inside that apparent string: it is refused, while ordinary string and regex
+/// literals below the limit, a string of exactly 64 opening brackets among them, still run.
+#[test]
+fn nesting_guard_counts_brackets_hidden_by_a_regex_quote() {
+    let hidden = format!("var r = /['\"]/; event.value = {}1{}; event.value = 'ok';", "(".repeat(65), ")".repeat(65));
+    assert!(super::run::refuse(&hidden).is_some_and(|e| e.contains("nested too deeply")), "the regex quote must not hide parser nesting");
+
+    let o = go("event.value = '()[]{}'.length;", &Event::field("Calculate", "a", ""));
+    assert_eq!((o.error, o.value.as_str()), (None, "6"));
+    let o = go("var r = /['\"]/; event.value = r.test(\"'\") ? 1 : 0;", &Event::field("Calculate", "a", ""));
+    assert_eq!((o.error, o.value.as_str()), (None, "1"));
+    let o = go(&format!("event.value = '{}'.length;", "(".repeat(64)), &Event::field("Calculate", "a", ""));
+    assert_eq!((o.error, o.value.as_str()), (None, "64"));
+    assert!(super::run::refuse(&format!("event.value = '{}'.length;", "(".repeat(65))).is_some());
+}
+
+/// The guard's three limits sit exactly where documented: 64 nested brackets, a run of 64
+/// prefix operators and 4,096 conditionals pass, and one more of each is refused.
+#[test]
+fn nesting_guard_limits_brackets_prefixes_and_conditionals_separately() {
+    assert_eq!(super::run::refuse(&format!("{}1{}", "(".repeat(64), ")".repeat(64))), None);
+    assert!(super::run::refuse(&format!("{}1{}", "(".repeat(65), ")".repeat(65))).is_some());
+
+    assert_eq!(super::run::refuse(&format!("{}1", "!".repeat(64))), None);
+    assert!(super::run::refuse(&format!("{}1", "!".repeat(65))).is_some());
+
+    assert_eq!(super::run::refuse(&"?".repeat(4096)), None);
+    assert!(super::run::refuse(&"?".repeat(4097)).is_some());
+}
+
+/// Closing brackets inside a comment don't cancel real nesting (#5079): 1,000 groups of 50
+/// opening brackets, each followed by a block comment holding 50 closing ones, nest 50,000 deep
+/// for the parser, and the guard refuses the script before boa parses it.
+#[test]
+fn closing_brackets_in_comments_do_not_cancel_nesting() {
+    let group = format!("{}/*{}*/", "(".repeat(50), ")".repeat(50));
+    let s = group.repeat(1000);
+    assert_eq!(super::run::refuse(&s).as_deref(), Some("the script is nested too deeply to run safely"));
 }
 
 /// Code built from strings at run time would reach the parser without the size and nesting
@@ -1721,6 +1781,20 @@ mod session {
             assert_eq!(o.error, None, "{o:?}");
         }
         assert!(started.elapsed() < std::time::Duration::from_secs(10), "{:?}", started.elapsed());
+    }
+
+    /// The #5079 reproduction on the XFA-open path: an initialize script of `/'/` followed by
+    /// 64,000 `(` overflowed the `pdfcraft-xfa-session` thread's stack and aborted the app. The
+    /// nesting guard now counts the brackets the regex's quote hides, so the script is refused
+    /// and the session stays alive for the next one.
+    #[test]
+    fn a_quote_in_a_regex_cannot_hide_nesting_from_an_initialize_script() {
+        let mut s = XfaSession::new(XfaDoc::default());
+        let hostile = format!("/'/ {}1", "(".repeat(64_000));
+        let o = s.run(script(&hostile, false, "form1[0].page1[0].total[0]", "initialize"));
+        assert!(o.error.as_deref().is_some_and(|e| e.contains("nested too deeply")), "{:?}", o.error);
+        assert_eq!(s.dead(), None);
+        assert_eq!(s.run(script("1 + 1", false, "form1[0].page1[0].total[0]", "calculate")).result.as_deref(), Some("2"));
     }
 
     /// A JavaScript or FormCalc script whose engine takes longer to be ready than the script's
