@@ -1226,8 +1226,22 @@ fn mono(
 /// group keeps both to that many; most of what sharing saves comes with the first few images.
 const SHARED_IMAGES: usize = 16;
 
-/// The most bytes of 1-bit samples a group holds: a group is coded before it would pass them.
+/// The most bytes of 1-bit samples a group holds: a group is coded before it would pass them
+/// ([`hold_in`]). An image that shares has at most [`SHARED_PIXELS`], and as its rows are whole
+/// bytes, at most that many bytes, which is this: one always fits a group with nothing in it.
 const SHARED_BYTES: usize = 64 << 20;
+
+/// Adds `image` to `group`, coding the group (`share`, which empties it) first when the image's
+/// samples would take it past `cap` bytes, and after when it has [`SHARED_IMAGES`].
+fn hold_in(group: &mut Vec<Held>, image: Held, cap: usize, mut share: impl FnMut(&mut Vec<Held>)) {
+    if group.iter().map(|h| h.bits.len()).fold(image.bits.len(), usize::saturating_add) > cap {
+        share(group);
+    }
+    group.push(image);
+    if group.len() == SHARED_IMAGES {
+        share(group);
+    }
+}
 
 /// The most pixels an image sharing a dictionary has: redaction's own limit on the images it
 /// stores again (see [`shares`]).
@@ -1335,10 +1349,7 @@ pub(crate) fn run(
     let mut hold = |doc: &mut Document, image: ObjRef, size: (Option<i64>, Option<i64>), bits: Option<Vec<u8>>, report: &mut Report| {
         let side = |v: Option<i64>| v.and_then(|v| u32::try_from(v).ok());
         let (Some(bits), Some(width), Some(height)) = (bits, side(size.0), side(size.1)) else { return };
-        group.push(Held { image, bits, width, height });
-        if group.len() == SHARED_IMAGES || group.iter().map(|h| h.bits.len()).fold(0, usize::saturating_add) >= SHARED_BYTES {
-            share(doc, &mut group, report);
-        }
+        hold_in(&mut group, Held { image, bits, width, height }, SHARED_BYTES, |group| share(doc, group, report));
     };
     for (done, (r, ppi)) in refs.into_iter().enumerate() {
         if !progress(Stage::Images { done, total }) {
@@ -1445,6 +1456,35 @@ fn at_least_pdf_1_4(doc: &mut Document) -> Result<(), OptimizeError> {
 #[cfg(test)]
 mod dimension_tests {
     use super::*;
+
+    /// A group is coded before an image's samples would take it past its limit, and once it has
+    /// [`SHARED_IMAGES`]: with room for 10 bytes, images of 4 go two to a group, never three, and
+    /// with room for 8, two of 4 fill one exactly; one of exactly the limit joins a group with
+    /// nothing in it.
+    #[test]
+    fn a_group_is_coded_before_its_samples_would_pass_the_limit() {
+        let held = |bytes: usize| Held { image: ObjRef { num: 1, generation: 0 }, bits: vec![0; bytes], width: 8, height: 8 };
+        let mut coded: Vec<Vec<usize>> = Vec::new();
+        let mut group = Vec::new();
+        let mut code = |g: &mut Vec<Held>| coded.push(std::mem::take(g).iter().map(|h| h.bits.len()).collect());
+        for _ in 0..5 {
+            hold_in(&mut group, held(4), 10, &mut code);
+        }
+        hold_in(&mut group, held(10), 10, &mut code);
+        assert_eq!(coded, [vec![4, 4], vec![4, 4], vec![4]]);
+        assert_eq!(group.iter().map(|h| h.bits.len()).collect::<Vec<_>>(), [10]);
+        // Exactly the limit is within it: with room for 8, two images of 4 stay together.
+        let (mut count, mut group) = (0, Vec::new());
+        let mut code = |g: &mut Vec<Held>| count += std::mem::take(g).len();
+        hold_in(&mut group, held(4), 8, &mut code);
+        hold_in(&mut group, held(4), 8, &mut code);
+        assert_eq!((count, group.len()), (0, 2));
+        let (mut count, mut group) = (0, Vec::new());
+        for _ in 0..SHARED_IMAGES {
+            hold_in(&mut group, held(1), usize::MAX, |g| count += std::mem::take(g).len());
+        }
+        assert_eq!((count, group.len()), (SHARED_IMAGES, 0), "coded on the 16th");
+    }
 
     /// Only what redaction can store again without the dictionary shares one: an image mask, or
     /// DeviceGray named directly, of at most 2^26 pixels.

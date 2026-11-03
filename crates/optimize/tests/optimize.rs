@@ -2234,10 +2234,11 @@ fn retained_jbig2_shares_nothing() {
 fn sixteen_images_at_most_share_a_dictionary() {
     let mut doc = Document::new_empty();
     let (w, h) = (600u32, 480u32);
-    let images: Vec<ObjRef> = (1..=18u64)
-        .map(|k| {
-            let text = font_text(w, h, k.wrapping_mul(0x9E37_79B9_7F4A_7C15));
-            let im = mono_image(&mut doc, w, h, &text, None, &[("BitsPerComponent", 1.into()), ("ColorSpace", Object::name("DeviceGray"))]);
+    let texts: Vec<Vec<u8>> = (1..=18u64).map(|k| font_text(w, h, k.wrapping_mul(0x9E37_79B9_7F4A_7C15))).collect();
+    let images: Vec<ObjRef> = texts
+        .iter()
+        .map(|text| {
+            let im = mono_image(&mut doc, w, h, text, None, &[("BitsPerComponent", 1.into()), ("ColorSpace", Object::name("DeviceGray"))]);
             page(&mut doc, &[("Im", im)], "q 600 0 0 480 6 300 cm /Im Do Q");
             im
         })
@@ -2248,6 +2249,9 @@ fn sixteen_images_at_most_share_a_dictionary() {
     assert!(globals.iter().all(Option::is_some), "{globals:?}");
     assert!(globals[..16].iter().all(|g| *g == globals[0]) && globals[16..].iter().all(|g| *g == globals[16]), "{globals:?}");
     assert_ne!(globals[0], globals[16]);
+    for (k, (im, text)) in images.iter().zip(&texts).enumerate() {
+        assert!(decoded_image(&doc, &stream(&doc, *im)).unwrap() == *text, "image {k} decodes to its samples");
+    }
 }
 
 /// A JBIG2 scan goes through Monochrome Images like any black-and-white image. Above 450 ppi it
