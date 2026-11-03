@@ -133,7 +133,7 @@ impl Drop for WakeOnExit {
 
 impl PdfCraftApp {
     pub fn open_print(&mut self) {
-        let Some((i, _)) = self.active_ids() else { return };
+        let Some((i, id)) = self.active_ids() else { return };
         let (printers, printers_loading) = match self.printer_source.clone() {
             // The list from the last time the dialog opened, until the fresh one arrives.
             #[cfg(not(target_arch = "wasm32"))]
@@ -146,6 +146,14 @@ impl PdfCraftApp {
         let default = default_printer(&printers);
         let current = self.views[i].current;
         let selected: Vec<usize> = self.views[i].selected.iter().copied().collect();
+        // Where the pages that draw with Type 3 fonts print as images, the dialog says so (#2684).
+        // Every printed choice is covered: the page content and every annotation that prints.
+        let type3_pages = if spool::TYPE3_AS_IMAGE {
+            let count = self.session.get(id).map_or(0, |d| d.info.pages.len());
+            self.session.print_type3_pages(id, &(0..count).collect::<Vec<_>>(), Content::DocumentAndMarkups)
+        } else {
+            Vec::new()
+        };
         let keep = std::mem::take(&mut self.print_draft);
         // The printer picked last time, Save as PDF included, while it is still listed (#3537).
         let picked = keep.printer_picked && offered(keep.printer.as_deref(), &printers);
@@ -160,6 +168,7 @@ impl PdfCraftApp {
         self.print_draft = PrintDraft {
             crops: Vec::new(),
             crop_pages: None,
+            type3_pages,
             printers,
             printers_loading,
             printer_picked: picked,
@@ -403,6 +412,16 @@ impl PdfCraftApp {
             }
         };
         let name = doc.name.clone();
+        if settings.type3_raster.is_some() {
+            let pages = self.session.print_type3_pages(id, &settings.pages, settings.content);
+            if !pages.is_empty() {
+                let list: Vec<String> = pages.iter().map(|p| p.saturating_add(1).to_string()).collect();
+                log::info!(
+                    "printing page(s) {} as images: they use Type 3 fonts, which the Windows print component can crash on (#2684)",
+                    list.join(", ")
+                );
+            }
+        }
         let bytes = match self.session.print_pdf(id, &settings) {
             Ok(b) => b,
             Err(e) => {

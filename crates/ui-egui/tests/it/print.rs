@@ -886,6 +886,78 @@ fn restored_paper_keeps_preview_and_saved_sheet_dimensions() {
     std::fs::remove_file(out).unwrap();
 }
 
+/// Two pages: the first draws a glyph, a space and a glyph with a Chrome-style Type 3 font
+/// (#2684), the second Helvetica text.
+fn type3_and_helvetica_pdf() -> Vec<u8> {
+    pdfcraft_testkit::Pdf::new()
+        .obj("<< /Type /Catalog /Pages 2 0 R >>")
+        .obj("<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 200 300] >>")
+        .obj("<< /Type /Page /Parent 2 0 R /Contents 5 0 R /Resources << /Font << /F9 7 0 R >> >> >>")
+        .obj("<< /Type /Page /Parent 2 0 R /Contents 6 0 R /Resources << /Font << /F1 10 0 R >> >> >>")
+        .stream("", "1 0 0 -1 0 300 cm BT /F9 40 Tf 1 0 0 -1 30 80 Tm <010F01> Tj ET")
+        .stream("", "BT /F1 24 Tf 20 150 Td (Page 2) Tj ET")
+        .obj(
+            "<< /Type /Font /Subtype /Type3 /FontMatrix [0.001 0 0 -0.001 0 0] /FontBBox [0 -700 600 0] /FirstChar 0 /LastChar 15 \
+             /Widths [0 600 0 0 0 0 0 0 0 0 0 0 0 0 0 250] /Encoding << /Differences [1 /g3B 15 /g3] >> /CharProcs << /g3B 8 0 R /g3 9 0 R >> >>",
+        )
+        .stream("", "600 0 0 -700 600 0 d1\n0 -700 600 700 re f")
+        .stream("", "250 0 0 0 0 0 d1")
+        .obj("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
+        .build()
+}
+
+/// On Windows, the pages that draw with Type 3 fonts go to a printer as pictures, at the Print as
+/// image resolution, because the Windows print component can close the app on them (#2684), and
+/// the dialog says so while such a page is being printed. Save as PDF, Print as image (every page
+/// a picture already) and other systems leave the pages as they are, and say nothing.
+#[test]
+fn type3_pages_go_to_windows_printers_as_images_and_the_dialog_says_so() {
+    use pdfcraft_engine::print::{Raster, spool::Printer};
+    use pdfcraft_ui_egui::PrintWhich;
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("chrome.pdf", None, type3_and_helvetica_pdf()).unwrap();
+        app
+    });
+    h.run_steps(4);
+    h.state_mut().printer_source =
+        Some(std::sync::Arc::new(|| vec![Printer { name: "Office".into(), default: true, two_sided: Some(true), description: String::new() }]));
+    assert!(h.state_mut().execute("print.dialog"));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while h.state().print_draft.printers_loading && std::time::Instant::now() < deadline {
+        h.run_steps(1);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    h.run_steps(2);
+    assert_eq!(h.state().print_draft.printer.as_deref(), Some("Office"));
+    let windows = cfg!(windows);
+    let note = "Pages that use Type 3 fonts print as images";
+    let type3 = |h: &Harness<'_, PdfCraftApp>| h.state().print_draft.settings(2, &[]).unwrap().type3_raster;
+    assert_eq!(h.state().print_draft.type3_pages, if windows { vec![0] } else { Vec::new() });
+    assert_eq!(type3(&h), windows.then_some(Raster { dpi: 300.0, grayscale: false }));
+    assert_eq!(h.query_by_label_contains(note).is_some(), windows);
+    // The second page alone has no Type 3 font: nothing to say.
+    h.state_mut().print_draft.which = PrintWhich::Range;
+    h.state_mut().print_draft.range = "2".into();
+    h.run_steps(2);
+    assert!(h.query_by_label_contains(note).is_none());
+    h.state_mut().print_draft.which = PrintWhich::All;
+    h.run_steps(2);
+    assert_eq!(h.query_by_label_contains(note).is_some(), windows);
+    // Print as image already prints every page as a picture.
+    h.state_mut().print_draft.as_image = true;
+    h.run_steps(2);
+    assert_eq!(type3(&h), None);
+    assert!(h.query_by_label_contains(note).is_none());
+    h.state_mut().print_draft.as_image = false;
+    // Save as PDF keeps the pages as they are.
+    h.state_mut().print_draft.printer = None;
+    h.run_steps(2);
+    assert_eq!(type3(&h), None);
+    assert!(h.query_by_label_contains(note).is_none());
+}
+
 /// #2707: a booklet decides two-sided itself, as Acrobat does (its Print dialog hides Two-sided
 /// while Booklet is chosen): the job flips on the short edge for both sides and prints
 /// one-sided for the front or back only, and the Two-sided choice is kept for other layouts.
