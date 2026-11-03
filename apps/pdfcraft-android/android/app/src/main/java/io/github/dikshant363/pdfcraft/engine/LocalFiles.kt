@@ -160,11 +160,11 @@ class Thumbnails(private val context: Context) {
         val (size, modified) = runCatching {
             resolver.query(uri, arrayOf(OpenableColumns.SIZE, DocumentsContract.Document.COLUMN_LAST_MODIFIED), null, null, null)?.use { c ->
                 if (!c.moveToFirst()) null
-                else (if (c.isNull(0)) 0L else c.getLong(0)) to (if (c.columnCount > 1 && !c.isNull(1)) c.getLong(1) else 0L)
+                else (if (c.isNull(0)) null else c.getLong(0)) to (if (c.columnCount > 1 && !c.isNull(1)) c.getLong(1) else 0L)
             }
         }.getOrNull() ?: return null
-        // a very large file isn't copied just for its first page
-        if (size > MAX_COPY) return null
+        // a very large file or one whose size is unknown isn't copied just for its first page
+        if (size == null || size <= 0L || size > MAX_COPY) return null
         return cached(sha("$uri|$modified|$size|$maxSide")) {
             val tmp = File.createTempFile("thumb", ".pdf", context.cacheDir)
             try {

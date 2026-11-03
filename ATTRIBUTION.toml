@@ -3906,3 +3906,48 @@ licence = "MIT OR Apache-2.0"
 licence_file = "LICENSE-MIT"
 kind = "translation"
 usage = "Catalan UI strings, compiled in by crates/ui-egui/src/i18n.rs"
+
+[[asset]]
+path = "docs/audit/evidence/physical_device/01_app_welcome.png"
+title = "PdfCraft Android physical device verification screenshot: Home / Welcome"
+author = "Dikshant Agarwal (contributor original)"
+source = "this repository"
+licence = "MIT OR Apache-2.0"
+licence_file = "LICENSE-MIT"
+kind = "image"
+usage = "Android physical device verification evidence on Vivo 1904 (Android 12, ARM64)"
+sha256 = "614c02d5ec60e8f8d559539b78a464492bf2f5d41f3758c491c90164a0adaa33"
+
+[[asset]]
+path = "docs/audit/evidence/physical_device/02_viewer_open.png"
+title = "PdfCraft Android physical device verification screenshot: Document Viewer"
+author = "Dikshant Agarwal (contributor original)"
+source = "this repository"
+licence = "MIT OR Apache-2.0"
+licence_file = "LICENSE-MIT"
+kind = "image"
+usage = "Android physical device verification evidence on Vivo 1904 (Android 12, ARM64)"
+sha256 = "252c86d8217d92986f339e2d43cd96b2c15317a40edce0623cddc80b26ec6b1a"
+
+[[asset]]
+path = "docs/audit/evidence/physical_device/03_comment_tools.png"
+title = "PdfCraft Android physical device verification screenshot: Comment Tools"
+author = "Dikshant Agarwal (contributor original)"
+source = "this repository"
+licence = "MIT OR Apache-2.0"
+licence_file = "LICENSE-MIT"
+kind = "image"
+usage = "Android physical device verification evidence on Vivo 1904 (Android 12, ARM64)"
+sha256 = "b06abbac8a77085f823ecec40e09541eb8ee9968c43eb6f3061badd1f80cea04"
+
+[[asset]]
+path = "docs/audit/evidence/physical_device/04_search_results.png"
+title = "PdfCraft Android physical device verification screenshot: Search Results"
+author = "Dikshant Agarwal (contributor original)"
+source = "this repository"
+licence = "MIT OR Apache-2.0"
+licence_file = "LICENSE-MIT"
+kind = "image"
+usage = "Android physical device verification evidence on Vivo 1904 (Android 12, ARM64)"
+sha256 = "5407ac97892124e51513feb722abfa31c5954cac556d5f22447774bed6427813"
+

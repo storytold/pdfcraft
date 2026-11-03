@@ -74,30 +74,30 @@ The Rust engine wraps a document in an atomic session:
 ### Exported Bridge Methods
 ```text
 // Lifecycle
-MobileSession::open(path: String, password: Option<String>) -> Result<MobileSession, MobileError>
-MobileSession::save_to(path: String) -> Result<(), MobileError>
-MobileSession::save_copy_to(path: String) -> Result<(), MobileError>
-MobileSession::close()
+MobileSession::new() -> MobileSession
+session.open(path: String, password: Option<String>) -> Result<DocumentInfo, MobileError>
+session.save_to(doc: u64, path: String) -> Result<(), MobileError>
+session.save_copy_to(doc: u64, path: String) -> Result<(), MobileError>
+session.close(doc: u64)
 
 // Document Metadata
-MobileSession::document_info() -> Result<DocumentInfo, MobileError>
-MobileSession::page_info(page: u32) -> Result<PageInfo, MobileError>
-MobileSession::outline() -> Result<Vec<OutlineEntry>, MobileError>
+session.document_info(doc: u64) -> Result<DocumentInfo, MobileError>
+session.page_info(doc: u64, page: u32) -> Result<PageInfo, MobileError>
+session.outline(doc: u64) -> Result<Vec<OutlineEntry>, MobileError>
 
 // Rendering & Text
-MobileSession::render_page(page: u32, scale: f32) -> Result<RenderedImage, MobileError>
-MobileSession::render_tile(page: u32, scale: f32, tile: TileRect) -> Result<RenderedImage, MobileError>
-MobileSession::search(query: String) -> Result<Vec<SearchHit>, MobileError>
-MobileSession::text_rects(range: TextRange) -> Result<Vec<f32>, MobileError>
-MobileSession::reading_blocks(page: u32) -> Result<Vec<ReadingBlock>, MobileError>
+session.render_page(doc: u64, request: RenderRequest) -> Result<RenderedImage, MobileError>
+session.search(doc: u64, query: String) -> Result<Vec<SearchHit>, MobileError>
+session.text_rects(doc: u64, range: TextRange) -> Result<Vec<f32>, MobileError>
+session.reading_blocks(doc: u64, page: u32) -> Result<Vec<ReadingBlock>, MobileError>
 
 // Tool Execution (Atomic mutations)
-MobileSession::execute(tool: String, args_json: String) -> Result<String, MobileError>
-MobileSession::undo() -> Result<(), MobileError>
-MobileSession::redo() -> Result<(), MobileError>
+session.tool(doc: u64, name: String, args_json: String) -> Result<String, MobileError>
 
 // Global & Utility
 file_thumbnail(path: String, max_side: u32) -> Result<RenderedImage, MobileError>
+save_sound(doc: u64, page: u32, index: u32, path: String) -> Result<(), MobileError>
+```
 digital_id_info(path: String, password: String) -> Result<DigitalIdInfo, MobileError>
 engine_version() -> String
 init_logging()
@@ -137,11 +137,11 @@ Every document mutation—adding a comment, drawing ink, rotating a page, fillin
 
 Android 11+ enforces scoped storage. The application interacts with external files using Android's `Intent.ACTION_OPEN_DOCUMENT` and `Intent.ACTION_CREATE_DOCUMENT`:
 
-1. **Transient Working Cache**: Files opened via `content://` URIs are copied into the app's secure private sandbox (`context.cacheDir/working/`).
-2. **In-Place Mutations**: The Rust engine operates directly on the local sandbox copy with fast seekable POSIX I/O.
-3. **Safe Write-Back**:
-   - When saving back to a `content://` URI, the application opens a `ParcelFileDescriptor` with mode `"rwt"` (read/write/truncate).
-   - Data is streamed via atomic buffer channels. If an error occurs, the original remote file is not corrupted.
+1. **Working Copies**: Files opened via `content://` URIs are copied into the app's secure private directory (`context.filesDir/Documents/<sha>/<name>`).
+2. **In-Place Mutations**: The Rust engine operates directly on the local sandbox working copy with fast seekable POSIX I/O.
+3. **Write-Back**:
+   - When saving back to a writable `content://` URI, the application opens an output stream with mode `"wt"` (write/truncate) and copies the working file into the provider.
+   - If an I/O error or process interruption occurs during write-back, the remote file may be left truncated. The local working copy in `context.filesDir/Documents/` is preserved, allowing the user to save a copy or recover their changes via the read-only / copy prompt.
 4. **Offline Isolation**: The Android app requests **zero network permissions** in `AndroidManifest.xml` (`android.permission.INTERNET` is omitted). No user document or telemetry ever leaves the device.
 
 ---

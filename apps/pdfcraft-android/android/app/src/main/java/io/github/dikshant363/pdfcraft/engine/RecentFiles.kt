@@ -82,11 +82,15 @@ class RecentFiles(private val file: File) {
                     .put("lastX", r.lastX.toDouble()).put("lastY", r.lastY.toDouble()).put("lastZoom", r.lastZoom.toDouble()),
             )
         }
-        val tmp = File(file.parentFile, file.name + ".tmp")
-        tmp.writeText(a.toString())
-        if (!tmp.renameTo(file)) {
-            file.delete()
-            tmp.renameTo(file)
+        runCatching {
+            val tmp = File(file.parentFile, file.name + ".tmp")
+            tmp.writeText(a.toString())
+            if (!tmp.renameTo(file)) {
+                tmp.copyTo(file, overwrite = true)
+                tmp.delete()
+            }
+        }.onFailure {
+            android.util.Log.w("PdfCraft", "failed to save recent files: ${it.message}")
         }
     }
 

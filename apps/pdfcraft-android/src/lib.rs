@@ -160,7 +160,7 @@ pub fn file_thumbnail(path: String, max_side: u32) -> Result<RenderedImage, Mobi
         return Err(MobileError::Render(e));
     }
     let (w, h) = (probe.width.max(1) as f32 / 0.05, probe.height.max(1) as f32 / 0.05);
-    let scale = (max_side.clamp(16, 2048) as f32 / w.max(h)).max(0.01);
+    let scale = max_side.clamp(16, 2048) as f32 / w.max(h);
     let out = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale, tag: 0, preview: true });
     if let Some(e) = out.error {
         return Err(MobileError::Render(e));
@@ -459,6 +459,10 @@ impl MobileSession {
 
     /// Give a renderer back for the next render, unless the document has changed since.
     fn return_renderer(&self, doc: u64, bytes: &Arc<Vec<u8>>, renderer: PageRenderer) {
+        // do not cache renderers for documents that have already been closed
+        if self.lock().session().get(DocId(doc)).is_none() {
+            return;
+        }
         let mut cache = self.cache();
         let entry = cache.entry(doc).or_insert_with(|| (bytes.clone(), Vec::new()));
         if !Arc::ptr_eq(&entry.0, bytes) {

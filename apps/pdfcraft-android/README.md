@@ -31,7 +31,7 @@ words are PdfCraft's own.
 ## Build and run
 
 You need:
-- Rust ≥ 1.95 with the Android targets: `rustup target add aarch64-linux-android x86_64-linux-android`
+- Rust ≥ 1.95 with the Android targets: `rustup target add aarch64-linux-android x86_64-linux-android armv7-linux-androideabi`
 - [cargo-ndk](https://github.com/bbqsrc/cargo-ndk): `cargo install cargo-ndk`
 - the Android SDK with NDK 29.0.14206865 (Android Studio → SDK Manager → SDK Tools → NDK)
 - JDK 17 or newer (Android Studio's bundled one is fine)

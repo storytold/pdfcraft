@@ -56,9 +56,20 @@ class VoiceRecorder(private val file: File, private val scope: CoroutineScope) {
             return false
         }
         val ns = if (NoiseSuppressor.isAvailable()) runCatching { NoiseSuppressor.create(rec.audioSessionId)?.apply { enabled = true } }.getOrNull() else null
+        val out = try {
+            RandomAccessFile(file, "rw").apply {
+                setLength(0)
+                write(ByteArray(44)) // the header, filled in when recording stops
+            }
+        } catch (e: Exception) {
+            ns?.release()
+            rec.release()
+            return false
+        }
         try {
             rec.startRecording()
         } catch (e: Exception) {
+            runCatching { out.close() }
             ns?.release()
             rec.release()
             return false
@@ -67,16 +78,14 @@ class VoiceRecorder(private val file: File, private val scope: CoroutineScope) {
         elapsedMs = 0L
         recording = true
         job = scope.launch(Dispatchers.IO) {
-            val out = RandomAccessFile(file, "rw")
             try {
-                out.setLength(0)
-                out.write(ByteArray(44)) // the header, filled in when recording stops
                 val buf = ShortArray(rate / 20) // 50 ms
                 val bytes = ByteArray(buf.size * 2)
                 var samples = 0L
                 while (isActive && recording) {
                     val n = rec.read(buf, 0, buf.size)
-                    if (n <= 0) continue
+                    if (n < 0) break
+                    if (n == 0) continue
                     var peak = 0
                     for (i in 0 until n) {
                         val s = buf[i].toInt()

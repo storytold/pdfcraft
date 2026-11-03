@@ -146,16 +146,25 @@ class PageImages(
         }
     }
 
-    /** Drop least recently used images over budget, never the ones wanted now. */
+    /** Drop least recently used images over budget. */
     private fun evict() {
         if (bytes <= budgetBytes) return
-        val keep = wanted.mapTo(HashSet()) { it.key }
+        // First pass: keep active requests (highest priority on-screen requests), evicting off-screen prefetches
+        val keep = wanted.take(8).mapTo(HashSet()) { it.key }
         val it = cache.entries.iterator()
         while (bytes > budgetBytes && it.hasNext()) {
             val e = it.next()
             if (e.key in keep) continue
             bytes -= e.value.bytes
             it.remove()
+            if (fallback[e.key.page]?.key == e.key) fallback.remove(e.key.page)
+        }
+        // Second pass: if still over budget, evict least recently used entries to enforce memory bound
+        val it2 = cache.entries.iterator()
+        while (bytes > budgetBytes && it2.hasNext()) {
+            val e = it2.next()
+            bytes -= e.value.bytes
+            it2.remove()
             if (fallback[e.key.page]?.key == e.key) fallback.remove(e.key.page)
         }
     }

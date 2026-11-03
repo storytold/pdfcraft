@@ -161,7 +161,16 @@ fun PagesScreen(vm: AppViewModel, doc: OpenDocument, onClose: () -> Unit) {
                             val eng = vm.engine ?: return@LaunchedEffect
                             val scale = 300f / maxOf(p.width, p.height).coerceAtLeast(1f)
                             val img = runCatching { withContext(eng.thumbnails) { eng.session.renderPage(doc.id, i.toUInt(), scale, null).toBitmap().asImageBitmap() } }.getOrNull()
-                            if (img != null) thumbs[i] = img
+                            if (img != null) {
+                                if (thumbs.size >= 64) {
+                                    val current = grid.firstVisibleItemIndex
+                                    val furthest = thumbs.keys.maxByOrNull { kotlin.math.abs(it - current) }
+                                    if (furthest != null && kotlin.math.abs(furthest - current) > 16) {
+                                        thumbs.remove(furthest)
+                                    }
+                                }
+                                thumbs[i] = img
+                            }
                         }
                     }
                     val isSel = selected[i] == true

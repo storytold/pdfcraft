@@ -63,9 +63,11 @@ pub fn sound_wav(bytes: &[u8], password: Option<&str>, page: usize, index: usize
             .to_vec();
 
         let data = if stream.dict.get(b"Filter").is_ok() {
-            stream.decompressed_content().map_err(|e| e.to_string())?
+            stream.decompressed_content_with_limit(MAX_SOUND_BYTES).map_err(|e| format!("failed to decompress sound stream: {e}"))?
+        } else if stream.content.len() > MAX_SOUND_BYTES {
+            return Err(format!("sound stream exceeds limit of {MAX_SOUND_BYTES} bytes"));
         } else {
-            stream.content.get(..stream.content.len().min(MAX_SOUND_BYTES)).unwrap_or_default().to_vec()
+            stream.content.clone()
         };
 
         let (pcm, bits) = match (encoding.as_slice(), bits) {

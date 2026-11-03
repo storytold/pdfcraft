@@ -112,8 +112,10 @@ private fun writeAtomically(file: File, text: String) {
         val tmp = File(file.parentFile, file.name + ".tmp")
         tmp.writeText(text)
         if (!tmp.renameTo(file)) {
-            file.delete()
-            tmp.renameTo(file)
+            tmp.copyTo(file, overwrite = true)
+            tmp.delete()
         }
+    }.onFailure {
+        android.util.Log.w("PdfCraft", "failed to write ${file.name}: ${it.message}")
     }
 }

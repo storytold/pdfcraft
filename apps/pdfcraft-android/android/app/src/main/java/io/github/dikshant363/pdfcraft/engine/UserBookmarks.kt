@@ -86,9 +86,11 @@ class UserBookmarks(private val file: File) {
             val tmp = File(file.parentFile, file.name + ".tmp")
             tmp.writeText(o.toString())
             if (!tmp.renameTo(file)) {
-                file.delete()
-                tmp.renameTo(file)
+                tmp.copyTo(file, overwrite = true)
+                tmp.delete()
             }
+        }.onFailure {
+            android.util.Log.w("PdfCraft", "failed to save bookmarks: ${it.message}")
         }
     }
 }

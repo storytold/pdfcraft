@@ -60,8 +60,20 @@ import io.github.dikshant363.pdfcraft.ui.SheetTitle
 import io.github.dikshant363.pdfcraft.ui.pdfColors
 import kotlin.math.roundToInt
 
-/** A field being filled in: the widget tapped. */
-class FieldEdit(val doc: OpenDocument, val widget: WidgetInfo)
+/** A field being filled in: the widget tapped and its current draft value. */
+class FieldEdit(val doc: OpenDocument, val widget: WidgetInfo) {
+    var currentText: String = widget.value.orEmpty()
+    var isCommitted: Boolean = false
+
+    fun commit(vm: AppViewModel): kotlinx.coroutines.Job? {
+        if (!isCommitted && currentText != widget.value.orEmpty()) {
+            isCommitted = true
+            if (!widget.password) vm.rememberSuggestion(currentText)
+            return vm.fillField(doc, widget.field, currentText)
+        }
+        return null
+    }
+}
 
 /**
  * Filling in a field where it is: a text field over its box with the field toolbar (Reset,
@@ -97,7 +109,7 @@ fun BoxScope.FieldEditor(vm: AppViewModel, edit: FieldEdit) {
         }
         return
     }
-    var text by remember(w) { mutableStateOf(w.value.orEmpty()) }
+    var text by remember(w) { mutableStateOf(edit.currentText) }
     val focus = remember(w) { FocusRequester() }
     LaunchedEffect(w) {
         // bring the field into the upper part of the screen, clear of the keyboard
@@ -114,17 +126,18 @@ fun BoxScope.FieldEditor(vm: AppViewModel, edit: FieldEdit) {
     // the field's own text size on the page (most forms set about 60 % of a one-line box)
     val fontSize = with(density) { (if (w.multiline) minOf(heightPx * 0.25f, 12f * doc.viewer.pixelsPerPoint(page)) else heightPx * 0.6f).toSp() }
     fun commit() {
-        if (text != w.value.orEmpty()) {
-            vm.fillField(doc, w.field, text)
-            if (!w.password) vm.rememberSuggestion(text)
-        }
+        edit.commit(vm)
     }
     // a tap off the field commits it
     Box(Modifier.fillMaxSize().pointerInput(w) { detectTapGestures { commit(); vm.fieldEdit = null } })
     Box(Modifier.offset { IntOffset(a.x.roundToInt(), a.y.roundToInt()) }) {
         BasicTextField(
             value = text,
-            onValueChange = { v -> text = w.maxLength?.let { v.take(it.toInt()) } ?: v },
+            onValueChange = { v ->
+                val trimmed = w.maxLength?.let { v.take(it.toInt()) } ?: v
+                text = trimmed
+                edit.currentText = trimmed
+            },
             singleLine = !w.multiline,
             textStyle = TextStyle(color = Color.Black, fontSize = fontSize, lineHeight = fontSize * 1.15f),
             cursorBrush = SolidColor(Color(0xFF1473E6)),
@@ -147,21 +160,24 @@ fun BoxScope.FieldEditor(vm: AppViewModel, edit: FieldEdit) {
     if (suggestions.isNotEmpty()) {
         Row(Modifier.align(Alignment.BottomCenter).fillMaxWidth().imePadding().background(c.surface).height(44.dp), verticalAlignment = Alignment.CenterVertically) {
             for (sug in suggestions) {
-                Text(sug, color = c.text, maxLines = 1, modifier = Modifier.weight(1f).clickable { text = sug }.padding(horizontal = 12.dp, vertical = 10.dp))
+                Text(sug, color = c.text, maxLines = 1, modifier = Modifier.weight(1f).clickable { text = sug; edit.currentText = sug }.padding(horizontal = 12.dp, vertical = 10.dp))
             }
         }
     }
     // the top bar's Reset and arrows act on this field
-    DisposableEffect(w) {
+    DisposableEffect(edit) {
         val fillable = doc.widgets.filter { !it.readOnly && (it.kind == "text" || it.kind == "combo" || it.kind == "list") }
         val i = fillable.indexOfFirst { it.field == w.field && it.page == w.page && it.rect == w.rect }
         vm.fieldActions = FieldActions(
-            reset = { text = "" },
+            reset = { text = ""; edit.currentText = "" },
             step = { forward -> commit(); vm.nextField(doc, w, forward) },
             canBack = i > 0,
             canForward = i in 0 until fillable.size - 1,
         )
-        onDispose { vm.fieldActions = null }
+        onDispose {
+            commit()
+            vm.fieldActions = null
+        }
     }
 }
 

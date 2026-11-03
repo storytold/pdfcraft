@@ -47,6 +47,7 @@ import io.github.dikshant363.pdfcraft.engine.userMessage
 import io.github.dikshant363.pdfcraft.ui.viewer.PageImages
 import java.io.File
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -238,7 +239,9 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
         val doc = document ?: return
         val eng = engine ?: return
         if (doc.controller.tool != ViewerTool.None) leaveTool(doc)
+        val pendingCommit = commitFieldEdit()
         viewModelScope.launch {
+            pendingCommit?.join()
             // changes the file's place can't take (known read-only, or found so now) are offered as a copy
             if ((doc.info.dirty || doc.notWrittenBack) && (!doc.writable || !save(doc, quiet = true))) {
                 readOnlyPrompt = doc
@@ -1026,7 +1029,7 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
     /** Voice comment [c]'s recording as a WAV file to play, or null when it can't be read. */
     suspend fun voiceRecording(doc: OpenDocument, c: io.github.dikshant363.pdfcraft.core.CommentInfo): File? {
         val eng = engine ?: return null
-        val f = File(getApplication<Application>().cacheDir, "voice-play.wav")
+        val f = File(getApplication<Application>().cacheDir, "voice-play-${doc.id}-${c.page}-${c.index}.wav")
         return withContext(eng.commands) {
             runCatching { eng.session.saveSound(doc.id, c.page, c.index, f.absolutePath); f }.getOrNull()
         }
@@ -1847,9 +1850,9 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
         }
     }
 
-    fun fillField(doc: OpenDocument, field: String, value: Any) {
-        val eng = engine ?: return
-        viewModelScope.launch {
+    fun fillField(doc: OpenDocument, field: String, value: Any): Job? {
+        val eng = engine ?: return null
+        return viewModelScope.launch {
             try {
                 val r = eng.tool("form_fill", mapOf("doc" to doc.id, "values" to mapOf(field to value)))
                 refresh(doc)
@@ -1860,6 +1863,13 @@ class AppViewModel(app: Application, private val saved: SavedStateHandle) : Andr
                 showScriptAlert(e.userMessage)
             }
         }
+    }
+
+    /** Commits any active form field editor text before closing or navigating away. */
+    fun commitFieldEdit(): Job? {
+        val edit = fieldEdit ?: return null
+        fieldEdit = null
+        return edit.commit(this)
     }
 
     /** What a form's scripts said (their alerts), shown one at a time. */

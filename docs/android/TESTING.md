@@ -20,7 +20,7 @@ PdfCraft Android uses a multi-tier testing strategy ensuring engine correctness,
 │        (318 tests: ISO 32000-2, Redaction, XFA)        │
 ├────────────────────────────────────────────────────────┤
 │                 Asset & Policy Linter                  │
-│             (xtask assets: 351 assets verified)        │
+│             (xtask assets: 327 assets verified)        │
 └────────────────────────────────────────────────────────┘
 ```
 
