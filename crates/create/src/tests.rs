@@ -125,6 +125,27 @@ fn text_is_wrapped_and_paginated() {
 }
 
 #[test]
+fn text_of_many_form_feeds_makes_its_pages_in_linear_time() {
+    // Each form feed starts a page: adding each to the page tree copied all the pages before it,
+    // which made forty thousand of them take over a minute in a debug build, against about two
+    // seconds when the tree is written once.
+    let text = "x\u{c}".repeat(40_000);
+    let start = std::time::Instant::now();
+    let doc = from_text("many", &text, LETTER, 11.0).unwrap();
+    let took = start.elapsed();
+    let tree = doc.get(doc.get(doc.root().unwrap()).as_dict().unwrap().reference(b"Pages").unwrap());
+    let tree = tree.as_dict().unwrap();
+    assert_eq!(tree.get(b"Kids").and_then(|k| k.as_array()).map(|a| a.len()), Some(40_001));
+    assert_eq!(tree.int(b"Count"), Some(40_001));
+    assert!(took < std::time::Duration::from_secs(30), "{took:?}");
+    // Blank documents and pages made from images keep their pages, in order.
+    let doc = reopen(&blank(200.0, 300.0, 3).unwrap());
+    assert_eq!(pages(&doc).len(), 3);
+    let doc = reopen(&from_images(&[("a.png".into(), png_bytes(false)), ("b.png".into(), png_bytes(true))]).unwrap());
+    assert_eq!(pages(&doc).len(), 2);
+}
+
+#[test]
 fn text_keeps_leading_spaces_and_tabs() {
     let doc = reopen(&from_text("t", "    indented\n\ttabbed\nplain", LETTER, 11.0).unwrap());
     let p = pages(&doc);

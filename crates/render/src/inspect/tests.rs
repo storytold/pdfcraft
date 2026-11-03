@@ -1967,3 +1967,45 @@ trailer << /Root 1 0 R >>
     assert!((p.width - 3874.96).abs() < 0.1, "width expected ~3874.96, got {}", p.width);
     assert!((p.height - 5493.54).abs() < 0.1, "height expected ~5493.54, got {}", p.height);
 }
+
+/// Inspection keeps every object it reads, converted, for as long as it runs, and nothing it
+/// reports comes from `/PieceInfo`. InDesign writes kilobytes of that private data into every
+/// page, and a 1,412-page book held over a gigabyte of it (#5873). It is left out of what
+/// inspection keeps, and what inspection reports is the same as for the page without it.
+#[test]
+fn inspection_keeps_no_private_page_data() {
+    use lopdf::dictionary;
+    let make = |private: bool| -> Vec<u8> {
+        let mut doc = Document::with_version("1.7");
+        let pages_id = doc.new_object_id();
+        let mut page = dictionary! {
+            "Type" => "Page",
+            "Parent" => pages_id,
+            "MediaBox" => vec![0.into(), 0.into(), 200.into(), 300.into()],
+            "Rotate" => 90,
+        };
+        if private {
+            let map: Dictionary = (0..50).map(|i| (i.to_string(), Object::Array(vec![Object::Integer(i), Object::Real(116.22)]))).collect();
+            page.set("PieceInfo", dictionary! { "InDesign" => dictionary! { "PageItemUIDToLocationDataMap" => map } });
+        }
+        let page_id = doc.add_object(page);
+        doc.objects.insert(pages_id, dictionary! { "Type" => "Pages", "Kids" => vec![page_id.into()], "Count" => 1 }.into());
+        let catalog = doc.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages_id });
+        doc.trailer.set("Root", catalog);
+        let mut out = Vec::new();
+        doc.save_to(&mut out).unwrap();
+        out
+    };
+    let (with, without) = (make(true), make(false));
+    let lazy = LazyStructure::new(Arc::new(with.clone()), None).unwrap();
+    let page = lazy.get_object((2, 0)).unwrap().as_dict().unwrap();
+    assert!(!page.has(b"PieceInfo"), "the private data is not kept");
+    assert!(page.has(b"MediaBox") && page.has(b"Rotate") && page.has(b"Parent"), "the rest of the page is");
+
+    let report = |bytes: Vec<u8>| {
+        let mut info = inspect(Arc::new(bytes), None).unwrap();
+        info.file_size = 0;
+        format!("{info:?}")
+    };
+    assert_eq!(report(with), report(without), "what inspection reports does not change");
+}
