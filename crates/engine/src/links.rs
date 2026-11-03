@@ -227,7 +227,21 @@ pub fn read_remote_document(path: &Path) -> Result<Vec<u8>, RemoteDocumentPathEr
     if meta.len() > MAX_REMOTE_DOCUMENT_BYTES {
         return Err(RemoteDocumentPathError::TooLarge);
     }
-    let file = std::fs::File::open(path).map_err(|e| RemoteDocumentPathError::Read(e.to_string()))?;
+    // The path can change between that check and the open (a file replaced by a FIFO): opened
+    // without blocking, and checked again on the handle, which is what is read.
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        // O_NONBLOCK: Linux 0o4000, macOS and the BSDs 0x4.
+        options.custom_flags(if cfg!(target_os = "linux") { 0o4000 } else { 0x4 });
+    }
+    let file = options.open(path).map_err(|e| RemoteDocumentPathError::Read(e.to_string()))?;
+    let meta = file.metadata().map_err(|e| RemoteDocumentPathError::Read(e.to_string()))?;
+    if !meta.is_file() {
+        return Err(RemoteDocumentPathError::NotAFile);
+    }
     let mut bytes = Vec::with_capacity(usize::try_from(meta.len()).unwrap_or(0));
     file.take(MAX_REMOTE_DOCUMENT_BYTES.saturating_add(1)).read_to_end(&mut bytes).map_err(|e| RemoteDocumentPathError::Read(e.to_string()))?;
     if u64::try_from(bytes.len()).map_or(true, |n| n > MAX_REMOTE_DOCUMENT_BYTES) {
