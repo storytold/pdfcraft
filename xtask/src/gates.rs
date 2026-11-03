@@ -587,9 +587,9 @@ mod tests {
     fn translation_summary_fences_untrusted_markdown() {
         let report = ["`<img src=x> [link](https://example.test)", "```\n<script>"];
         let summary = translation_summary(&report);
-        assert!(summary.starts_with("####\n"), "the fence is longer than catalog backtick runs");
+        assert!(summary.starts_with("### Translation gaps\n\n````\n"), "the fence is longer than catalog backtick runs");
         assert!(summary.contains("<script>"), "catalog text stays inside the fenced block");
-        assert!(summary.ends_with("\n####\n"));
+        assert!(summary.ends_with("\n````\n"));
     }
 
     /// The two scores answer different questions, and the point of adding the second one is the
