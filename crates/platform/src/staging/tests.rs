@@ -464,7 +464,8 @@ fn a_replaced_link_keeps_its_own_attributes_not_its_targets() {
 #[test]
 fn a_name_with_path_components_is_refused() {
     let dir = test_dir("components");
-    for name in ["../out.pdf", "sub/out.pdf", "sub\\out.pdf", "/out.pdf", ""] {
+    let windows_only: &[&str] = if cfg!(windows) { &["sub\\out.pdf"] } else { &[] };
+    for &name in ["../out.pdf", "sub/out.pdf", "/out.pdf", ""].iter().chain(windows_only) {
         let err = create_staging(&dir, name, StagingName::SuffixThenTag, [0xab]).unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput, "{name:?}");
     }
