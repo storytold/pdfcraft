@@ -5899,11 +5899,18 @@ fn doc_open_reads_open_parameters_after_the_file_name() {
         assert_eq!(opened["destination_applied"], true, "{path}: {opened}");
         assert_eq!((opened["destination"]["kind"].as_str(), opened["destination"]["page"].as_u64()), (Some(kind), Some(page)), "{path}");
     }
-    for (path, warning) in [("manual.pdf#nameddest=Nowhere", "named destination"), ("manual.pdf#page=9", "out of range")] {
+    for (path, warning) in
+        [("manual.pdf#nameddest=Nowhere", "named destination"), ("manual.pdf#page=9", "out of range"), ("manual.pdf#page=99999", "out of range")]
+    {
         let opened = ok(&mut a, "doc_open", json!({ "path": path }));
         assert_eq!(opened["destination_applied"], false, "{path}");
         assert!(opened["warning"].as_str().is_some_and(|w| w.contains(warning)), "{path}: {opened}");
     }
+    // A parameter that can't be applied isn't a failure: the file opens at its default view.
+    let opened = ok(&mut a, "doc_open", json!({ "path": "manual.pdf#page=0" }));
+    assert_eq!(opened["pages"].as_u64(), Some(3));
+    assert_eq!((opened["destination_applied"].as_bool(), opened["destination"]["kind"].as_str()), (Some(true), Some("default")), "{opened}");
+    assert!(opened["warning"].is_null(), "{opened}");
     // A file whose own name has a `#` opens as itself, and a plain path reports no destination.
     let opened = ok(&mut a, "doc_open", json!({ "path": "odd#page=2.pdf" }));
     assert_eq!((opened["name"].as_str(), opened["pages"].as_u64()), (Some("odd#page=2.pdf"), Some(1)));
