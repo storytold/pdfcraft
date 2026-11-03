@@ -1146,3 +1146,62 @@ fn extract_pages_untouched_prefill_extracts_the_selected_or_current_pages() {
         assert_eq!(h.state().session.save_bytes(source).unwrap(), before, "the original is unchanged");
     }
 }
+
+#[test]
+fn extract_dialog_refills_after_tab_command_and_deletes_only_from_its_new_source() {
+    for command in ["view.next_tab", "view.previous_tab"] {
+        let mut h = harness(&[4, 6]);
+        h.state_mut().active = Some(0);
+        h.state_mut().views[0].select_pages(&[0, 2]);
+        h.state_mut().views[1].select_pages(&[1, 4]);
+        let a = h.state().views[0].id;
+        let b = h.state().views[1].id;
+        let before_a = h.state().session.save_bytes(a).unwrap();
+        assert!(h.state_mut().execute("page.extract"));
+        h.run_steps(3);
+        assert_eq!(h.state().extract_draft.pages, "1, 3");
+        assert_eq!(h.state().extract_draft.name, "doc0");
+        h.state_mut().extract_draft.delete = true;
+        assert!(h.state_mut().execute(command));
+        h.run_steps(3);
+        assert_eq!(h.state().active, Some(1));
+        assert_eq!(h.state().extract_draft.pages, "2, 5", "the new document owns the prefilled range");
+        assert_eq!(h.state().extract_draft.name, "doc1", "the name follows the new document too");
+        h.get_by_label("of 6");
+        h.get_by_label("Extract").click();
+        h.run_steps(3);
+        assert_eq!(h.state().views.len(), 3);
+        let result = h.state().session.get(h.state().views[2].id).unwrap();
+        let text: Vec<_> = (0..result.info.pages.len()).flat_map(|p| result.text_blocks(p).into_iter().map(|b| b.text)).collect();
+        assert_eq!(text, ["Page 2", "Page 5"]);
+        assert_eq!(result.name, "doc1 (extract).pdf");
+        let remaining = h.state().session.get(b).unwrap();
+        let text: Vec<_> = (0..remaining.info.pages.len()).flat_map(|p| remaining.text_blocks(p).into_iter().map(|b| b.text)).collect();
+        assert_eq!(text, ["Page 1", "Page 3", "Page 4", "Page 6"]);
+        assert_eq!(h.state().session.save_bytes(a).unwrap(), before_a, "doc A remains byte-for-byte unchanged");
+    }
+}
+
+#[test]
+fn extract_selection_refuses_a_tab_change_before_the_dialog_refreshes() {
+    let mut h = harness(&[4, 6]);
+    h.state_mut().active = Some(0);
+    h.state_mut().views[0].select_pages(&[0, 2]);
+    let a = h.state().views[0].id;
+    let b = h.state().views[1].id;
+    assert!(h.state_mut().execute("page.extract"));
+    h.run_steps(3);
+    h.state_mut().extract_draft.delete = true;
+    let before_a = h.state().session.save_bytes(a).unwrap();
+    let before_b = h.state().session.save_bytes(b).unwrap();
+    assert!(h.state_mut().execute("view.next_tab"));
+    // Invoke before another UI frame can refresh the stale draft.
+    h.state_mut().extract_selection();
+    assert_eq!(h.state().views.len(), 2, "no extraction can use another document's draft");
+    assert_eq!(
+        h.state().toast.as_ref().map(|(text, _)| text.as_str()),
+        Some("The document changed while you were choosing a file, so nothing was changed.")
+    );
+    assert_eq!(h.state().session.save_bytes(a).unwrap(), before_a);
+    assert_eq!(h.state().session.save_bytes(b).unwrap(), before_b);
+}
