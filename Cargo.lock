@@ -4544,7 +4544,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "chrono",
  "craft-update",
@@ -4568,7 +4568,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-a11y"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "pdfcraft-content",
  "pdfcraft-cos",
@@ -4580,7 +4580,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-annot"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "hayro-syntax",
  "pdfcraft-cos",
@@ -4591,7 +4591,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-audit"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "pdfcraft-content",
  "pdfcraft-cos",
@@ -4602,7 +4602,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-automation"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "base64 0.23.1",
  "flate2",
@@ -4626,7 +4626,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-cli"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "base64 0.23.1",
  "pdfcraft-audit",
@@ -4644,11 +4644,11 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-compare"
-version = "0.17.0"
+version = "0.18.0"
 
 [[package]]
 name = "pdfcraft-content"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "hayro-syntax",
  "pdfcraft-cos",
@@ -4656,7 +4656,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-cos"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "chrono",
  "hayro-syntax",
@@ -4671,7 +4671,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-create"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "encoding_rs",
  "hayro-ccitt",
@@ -4690,7 +4690,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-crypt"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "aes 0.9.3",
  "md-5",
@@ -4702,7 +4702,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-edit"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "hayro-syntax",
  "kurbo 0.13.1",
@@ -4720,7 +4720,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-engine"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "chrono",
  "craft-docpath",
@@ -4778,14 +4778,14 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-export"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "flate2",
 ]
 
 [[package]]
 name = "pdfcraft-filters"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "fax",
  "flate2",
@@ -4798,7 +4798,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-fonts"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "harfrust",
  "pdfcraft-cos",
@@ -4808,7 +4808,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-forms"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "hayro-syntax",
  "pdfcraft-content",
@@ -4821,11 +4821,11 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-geom"
-version = "0.17.0"
+version = "0.18.0"
 
 [[package]]
 name = "pdfcraft-hot-folder"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "chrono",
  "craft-ui",
@@ -4849,7 +4849,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-hot-folder-service"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "ctrlc",
  "serde",
@@ -4859,7 +4859,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-js"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "boa_engine",
  "chrono",
@@ -4867,7 +4867,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-measure"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "pdfcraft-annot",
  "pdfcraft-content",
@@ -4880,14 +4880,14 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-model"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "pdfcraft-cos",
 ]
 
 [[package]]
 name = "pdfcraft-ocr"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "image",
  "ocrs",
@@ -4901,7 +4901,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-optimize"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "image",
  "pdfcraft-annot",
@@ -4917,11 +4917,11 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-oracle"
-version = "0.17.0"
+version = "0.18.0"
 
 [[package]]
 name = "pdfcraft-organize"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "hayro-syntax",
  "pdfcraft-content",
@@ -4932,7 +4932,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-platform"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "async-channel",
  "futures-lite",
@@ -4942,7 +4942,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-preflight"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "flate2",
  "pdfcraft-content",
@@ -4953,7 +4953,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-print"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "craft-print",
  "pdfcraft-content",
@@ -4965,7 +4965,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-redact"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "pdfcraft-annot",
  "pdfcraft-content",
@@ -4982,7 +4982,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-render"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "bytemuck",
  "flate2",
@@ -5001,7 +5001,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-sign"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "aes 0.9.3",
  "aws-lc-rs",
@@ -5037,11 +5037,11 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-testkit"
-version = "0.17.0"
+version = "0.18.0"
 
 [[package]]
 name = "pdfcraft-ui-egui"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "arboard",
  "base64 0.23.1",
@@ -5095,7 +5095,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-web"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "eframe",
  "egui",
@@ -5107,7 +5107,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-xfa"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "base64 0.23.1",
  "image",
@@ -5121,7 +5121,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-xfdf"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "pdfcraft-annot",
  "pdfcraft-cos",
