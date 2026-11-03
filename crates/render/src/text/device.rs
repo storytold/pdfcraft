@@ -24,7 +24,7 @@ pub(super) struct TextDevice {
     depth: usize,
     /// The outermost open `/ActualText` replacement: its depth, text and the glyphs drawn inside
     /// it (with no text of their own yet).
-    actual: Option<(usize, String, Vec<Drawn>)>,
+    pub(super) actual: Option<(usize, String, Vec<Drawn>)>,
     /// Every `/ActualText` replacement made on the page.
     pub(super) replaced: Vec<Replaced>,
     /// Visible page bounds in view space (`intersected_crop_box` after `initial_transform`).
@@ -34,6 +34,8 @@ pub(super) struct TextDevice {
     actual_filtered: bool,
     actual_cropped: bool,
     partial_replacement: bool,
+    /// What is left of [`MAX_ACTUAL_TEXT`] for this page.
+    actual_budget: usize,
 }
 
 /// An `/ActualText` replacement: the glyph standing for it in `TextDevice::glyphs` (none for an
@@ -56,6 +58,12 @@ const MAX_CELLS: i64 = 4096;
 /// would otherwise make ~10^10 comparisons; past the budget the remaining replacements keep
 /// their unmarked redraws (the text reads twice, as it would without `/ActualText`).
 const MAX_REDRAW_WORK: usize = 1 << 22;
+
+/// Most `/ActualText` bytes one page decodes and keeps. A span keeps its replacement twice (in the
+/// glyph standing for it and in `replaced`), and a named property can be reused by any number of
+/// spans, so each one is charged both copies up front. Past it a span is read as if it had no
+/// replacement: its glyphs keep their own Unicode.
+pub(super) const MAX_ACTUAL_TEXT: usize = 32 << 20;
 
 /// Most replacement text bytes the redraw dedupe in `TextDevice::finish` copies on one page.
 pub(super) const MAX_REDRAW_TEXT: usize = 1 << 22;
@@ -118,6 +126,7 @@ impl TextDevice {
             actual_filtered: false,
             actual_cropped: false,
             partial_replacement: false,
+            actual_budget: MAX_ACTUAL_TEXT,
         }
     }
 
@@ -361,8 +370,12 @@ impl<'a> Device<'a> for TextDevice {
     }
     fn actual_text(&mut self, text: &[u8]) {
         // A replacement nested in another is already covered by the outer one.
-        if self.actual.is_none() && self.excluded_depth.is_none() {
-            self.actual = Some((self.depth, pdfcraft_cos::PdfString::literal(text).to_text(), Vec::new()));
+        if self.actual.is_none() && self.excluded_depth.is_none() && text.len() <= self.actual_budget {
+            let raw = text.len();
+            let text = pdfcraft_cos::PdfString::literal(text).to_text();
+            // The raw bytes read, or the two copies kept, whichever is more (and never nothing).
+            self.actual_budget = self.actual_budget.saturating_sub(raw.max(text.len().saturating_mul(2)).max(1));
+            self.actual = Some((self.depth, text, Vec::new()));
         }
     }
     fn end_marked_content(&mut self) {
