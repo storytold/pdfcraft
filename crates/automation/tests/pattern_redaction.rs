@@ -14,7 +14,10 @@ fn tool(automation: &mut Automation, name: &str, args: Value) -> Value {
     }
 }
 
-fn fixture(cell: &[u8], partial: bool, compressed: bool) -> Vec<u8> {
+/// `retained`: paint with the pattern once more, away from the mark (x 290..340 lies right of it).
+/// A path the mark hits is removed whole (F-008) and a pattern nothing surviving paints with is
+/// pruned, so only a pattern that some surviving paint still uses reaches the guard.
+fn fixture(cell: &[u8], partial: bool, compressed: bool, retained: bool) -> Vec<u8> {
     let mut pattern = Dict::from_iter([
         (b"Type".to_vec(), Object::name("Pattern")),
         (b"PatternType".to_vec(), Object::Int(1)),
@@ -32,7 +35,8 @@ fn fixture(cell: &[u8], partial: bool, compressed: bool) -> Vec<u8> {
         )])),
     );
     let width = if partial { 400 } else { 170 };
-    let content = format!("BT /F1 20 Tf 40 250 Td (PUBLIC) Tj ET /Pattern cs /P0 scn 35 110 {width} 35 re f");
+    let survivor = if retained { " 290 115 50 30 re f" } else { "" };
+    let content = format!("BT /F1 20 Tf 40 250 Td (PUBLIC) Tj ET /Pattern cs /P0 scn 35 110 {width} 35 re f{survivor}");
     let mut page_stream = Vec::new();
     pdfcraft_cos::serialize(&Object::Stream(Stream::from_raw(Dict::new(), content.into_bytes())), &mut page_stream);
     let mut pattern_stream = Vec::new();
@@ -75,10 +79,10 @@ fn saved_has_secret(bytes: Vec<u8>) -> bool {
 #[test]
 fn pattern_redaction_tools_remove_or_refuse_without_leaking_or_changing_undo() {
     let dir = tempfile::tempdir().unwrap();
-    for partial in [false, true] {
+    for (partial, retained) in [(false, false), (true, false), (true, true)] {
         for compressed in [false, true] {
             let cell = b"BT /F1 20 Tf 40 120 Td (CELLSECRET) Tj ET BT /F1 20 Tf 300 120 Td (SAFE) Tj ET";
-            let bytes = fixture(cell, partial, compressed);
+            let bytes = fixture(cell, partial, compressed, retained);
             assert!(saved_has_secret(bytes.clone()));
             std::fs::write(dir.path().join("input.pdf"), bytes).unwrap();
             let mut automation = Automation::new().with_root(dir.path()).unwrap().with_clock(|| 1_700_000_000);
@@ -88,7 +92,7 @@ fn pattern_redaction_tools_remove_or_refuse_without_leaking_or_changing_undo() {
             let pixels = automation.render_pixels(id, 1, 1.0).unwrap();
             match automation.call("redact_apply", &json!({"doc": id})) {
                 Ok(_) => {
-                    assert!(!partial, "a retained text-bearing cell must not be reported safe");
+                    assert!(!retained, "a text-bearing cell still in use must not be reported safe (partial: {partial})");
                     tool(&mut automation, "doc_save", json!({"doc": id, "path": "redacted.pdf"}));
                     assert!(
                         !saved_has_secret(std::fs::read(dir.path().join("redacted.pdf")).unwrap()),
@@ -96,7 +100,7 @@ fn pattern_redaction_tools_remove_or_refuse_without_leaking_or_changing_undo() {
                     );
                 }
                 Err(error) => {
-                    assert!(partial, "a fully removed pattern should apply: {error}");
+                    assert!(retained, "a pattern nothing surviving paints with should apply (partial: {partial}): {error}");
                     assert!(error.to_string().contains("tiling pattern"), "{error}");
                     assert!(!error.to_string().contains("CELLSECRET"));
                     let document = automation.session().get(DocId(id)).unwrap();
@@ -115,7 +119,9 @@ fn pattern_redaction_tools_remove_or_refuse_without_leaking_or_changing_undo() {
 #[test]
 fn pattern_redaction_vector_control_saves_reopens_and_preserves_outside_pixels() {
     let dir = tempfile::tempdir().unwrap();
-    let bytes = fixture(b"0.2 0.4 0.6 rg 40 120 15 15 re f 300 120 30 20 re f", true, true);
+    // The guard's control: the cell is plain vectors and a paint outside the mark still uses it,
+    // so it is inspected and kept, not refused, and what that paint draws is unchanged.
+    let bytes = fixture(b"0.2 0.4 0.6 rg 40 120 15 15 re f 300 120 30 20 re f", true, true, true);
     std::fs::write(dir.path().join("vectors.pdf"), bytes).unwrap();
     let mut automation = Automation::new().with_root(dir.path()).unwrap().with_clock(|| 1_700_000_000);
     let id = tool(&mut automation, "doc_open", json!({"path": "vectors.pdf"}))["doc"].as_u64().unwrap();
