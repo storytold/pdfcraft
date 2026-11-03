@@ -820,3 +820,101 @@ fn form_entries_past_the_page_allowance_fail_the_audit() {
     let page: Dict = [(b"Contents".to_vec(), Object::Ref(draws)), (b"Resources".to_vec(), Object::Dict(resources))].into_iter().collect();
     assert!(matches!(crate::cover::filled_rects(&doc, &page), Err(crate::AuditError::TooManyForms)));
 }
+
+/// The renderer takes an operator's operands from the end and ignores surplus ones before them:
+/// `0 1 g` paints white, `1 0 g` black. The audit reads the same operand, so surplus operands do
+/// not turn a black cover white, or a white one black.
+#[test]
+fn surplus_gray_operands_are_read_from_the_end() {
+    for (fill, expected) in [("1 0 g", 1), ("0 1 g", 0)] {
+        let content = format!("BT /F1 24 Tf 100 700 Td (SECRET DATA 123) Tj ET\n{fill}\n100 688 220 32 re f\n");
+        let findings = audit_redactions(&open(one_page(content.as_bytes(), ""))).expect("audit must run");
+        assert_eq!(findings.len(), expected, "{fill}: {findings:?}");
+    }
+}
+
+/// `Do` and `gs` act on their last operand: a surplus name before it must not make the audit
+/// inspect another form or graphics state than the one the page draws with.
+#[test]
+fn surplus_name_operands_are_read_from_the_end() {
+    let page = |content: &[u8]| {
+        let mut b = Builder::new();
+        b.add("<< /Type /Catalog /Pages 2 0 R >>");
+        b.add("<< /Type /Pages /Kids [3 0 R] /Count 1 >>");
+        b.add(
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> \
+             /XObject << /Empty 6 0 R /Cover 7 0 R >> /ExtGState << /Clear << /ca 0.2 >> /Solid << /ca 1 >> >> >> >>",
+        );
+        b.add_stream(content);
+        b.add(FONT);
+        b.add_stream_with(b"", "/Type /XObject /Subtype /Form /BBox [0 0 612 792]");
+        b.add_stream_with(b"0 g\n100 688 220 32 re f\n", "/Type /XObject /Subtype /Form /BBox [0 0 612 792]");
+        b.build()
+    };
+    let text = "BT /F1 24 Tf 100 700 Td (SECRET DATA 123) Tj ET\n";
+    for (draw, expected) in [
+        ("/Empty /Cover Do", 1),
+        ("/Cover /Empty Do", 0),
+        ("/Clear /Solid gs 0 g 100 688 220 32 re f", 1),
+        ("/Solid /Clear gs 0 g 100 688 220 32 re f", 0),
+    ] {
+        let findings = audit_redactions(&open(page(format!("{text}{draw}\n").as_bytes()))).expect("audit must run");
+        assert_eq!(findings.len(), expected, "{draw}: {findings:?}");
+    }
+}
+
+/// One fill paints every subpath of its path: a cover drawn before another rectangle in the
+/// same path is still a cover, however the rectangles are drawn.
+#[test]
+fn every_rectangle_in_a_compound_path_is_a_cover() {
+    let covers: [&[u8]; 4] = [
+        b"0 g\n100 688 220 32 re 400 100 10 10 re f\n",
+        b"0 g\n100 688 220 32 re 400 100 10 10 re f*\n",
+        b"0 g\n100 688 m 320 688 l 320 720 l 100 720 l h 400 100 10 10 re f\n",
+        b"0 g\n100 688 220 32 re 400 100 m 410 100 l 410 110 l 400 110 l h f\n",
+    ];
+    for cover in covers {
+        let mut content = b"BT /F1 24 Tf 100 700 Td (SECRET DATA 123) Tj ET\n".to_vec();
+        content.extend_from_slice(cover);
+        let findings = audit_redactions(&open(one_page(&content, ""))).expect("audit must run");
+        assert_eq!(findings.len(), 1, "{:?}: {findings:?}", String::from_utf8_lossy(cover));
+        assert_eq!(findings[0].rect, [100.0, 688.0, 320.0, 720.0], "{:?}", String::from_utf8_lossy(cover));
+        assert_eq!(findings[0].covered_text, "SECRET DATA 123");
+    }
+}
+
+/// Where compound subpaths overlap, the fill rule decides what is painted: a hole the even-odd
+/// rule, or a subpath winding the other way under the nonzero rule, cuts out of a cover leaves the
+/// text in it visible, while the same rectangles winding one way under the nonzero rule paint
+/// their union.
+#[test]
+fn holes_in_a_compound_path_are_not_covers() {
+    let outer = "90 680 240 50 re";
+    let cases: [(String, usize); 4] = [
+        // Even-odd: the inner rectangle is a hole.
+        (format!("{outer} 100 688 220 32 re f*"), 0),
+        // Nonzero, inner drawn clockwise (negative width): a hole.
+        (format!("{outer} 320 688 -220 32 re f"), 0),
+        // Nonzero, both counterclockwise: the union, the outer frame and all, is painted.
+        (format!("{outer} 100 688 220 32 re f"), 1),
+        // A cover beside the hole is still found.
+        (format!("{outer} 100 688 220 32 re 100 600 220 32 re f*"), 1),
+    ];
+    for (path, expected) in cases {
+        let content = format!("BT /F1 24 Tf 100 700 Td (SECRET DATA 123) Tj ET\nBT /F1 24 Tf 100 610 Td (OTHER) Tj ET\n0 g\n{path}\n");
+        let findings = audit_redactions(&open(one_page(content.as_bytes(), ""))).expect("audit must run");
+        assert_eq!(findings.len(), expected, "{path}: {findings:?}");
+    }
+}
+
+/// The painted region of a compound path, rectangle by rectangle: an even-odd frame is four
+/// strips around its hole.
+#[test]
+fn an_even_odd_frame_paints_four_strips() {
+    let mut work = 0;
+    let frame = vec![([0.0, 0.0, 10.0, 10.0], 1), ([2.0, 2.0, 8.0, 8.0], 1)];
+    let mut strips = crate::cover::painted(frame, true, &mut work).expect("within the bound");
+    strips.sort_by(|a, b| a.partial_cmp(b).expect("finite"));
+    assert_eq!(strips, [[0.0, 0.0, 10.0, 2.0], [0.0, 2.0, 2.0, 8.0], [0.0, 8.0, 10.0, 10.0], [8.0, 2.0, 10.0, 8.0]]);
+    assert!(work > 0);
+}
