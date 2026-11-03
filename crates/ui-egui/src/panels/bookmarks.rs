@@ -1,4 +1,4 @@
-use super::*;
+use super::{DocInfo, Nav, OutlineItem, Rect, Sense, Tokens, icons, pos2, theme, vec2};
 
 /// What the user asked to do with a bookmark (applied after the panel is drawn).
 #[derive(Clone, Debug, PartialEq)]
@@ -21,6 +21,8 @@ pub enum BmAction {
     Outdent(Vec<usize>),
     /// Bookmarks from the tagged headings, under a new first "Untitled" bookmark.
     FromStructure,
+    /// Open New bookmarks from text styles, to choose a style per bookmark level (#1693).
+    FromTextStyles,
 }
 
 /// Matching titles plus their ancestors, keeping document paths rather than filtered indexes.

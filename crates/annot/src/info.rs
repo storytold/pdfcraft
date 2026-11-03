@@ -3,7 +3,7 @@ use super::draw::set_appearance;
 use super::lookup::{annot_dict, annot_ref, annotation_flags, annots, drawn_upright, is_fill_sign, page_ref, page_refs};
 use super::modify::{fillable, touch, unlocked};
 use super::types::{FLAG_LOCKED, LineEnding, Meta, NoteIcon, Rgb};
-use super::*;
+use super::{AnnotError, Dict, Document, ObjRef, Object, PdfString, appearance};
 
 // ── reading ─────────────────────────────────────────────────────────────────────────────────
 

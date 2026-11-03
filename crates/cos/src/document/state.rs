@@ -1,5 +1,5 @@
 use super::xref::XrefEntry;
-use super::*;
+use super::{Arc, BTreeMap, CosError, Dict, Document, HashMap, ObjRef, Object, Weak};
 
 thread_local! {
     /// The objects being loaded on this thread, innermost last (see `Document::try_get`).

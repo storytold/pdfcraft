@@ -1,4 +1,4 @@
-use super::*;
+use super::{DataError, Dict, Document, Object};
 
 // ── names ───────────────────────────────────────────────────────────────────────────────────
 
@@ -86,7 +86,7 @@ pub(crate) fn check_form_xml_depth(text: &str) -> Result<(), DataError> {
 }
 
 pub(crate) fn parse_form_xml(text: &str) -> Result<roxmltree::Document<'_>, roxmltree::Error> {
-    roxmltree::Document::parse_with_options(text, roxmltree::ParsingOptions { allow_dtd: false, nodes_limit: MAX_NODES })
+    roxmltree::Document::parse_with_options(text, roxmltree::ParsingOptions { allow_dtd: false, nodes_limit: MAX_NODES, ..Default::default() })
 }
 
 pub(crate) const SUBTYPES: [(&str, &str); 17] = [

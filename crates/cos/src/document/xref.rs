@@ -1,4 +1,4 @@
-use super::*;
+use super::{Arc, BTreeMap, Lexer};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum XrefEntry {
