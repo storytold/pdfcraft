@@ -3200,6 +3200,29 @@ fn hotbar_vertical_size_and_docking() {
 }
 
 #[test]
+fn hotbar_settings_layout_and_side_controls_are_reachable_by_label() {
+    let mut h = harness(|_| {});
+    h.get_by_label("Hotbar settings").click();
+    h.run_steps(3);
+    fn vertical(h: &Harness<'static, PdfCraftApp>) -> serde_json::Value {
+        serde_json::from_str::<serde_json::Value>(&h.state().persist()).unwrap()["hotbar"]["vertical"].clone()
+    }
+    let before = vertical(&h);
+    h.get_by_role_and_label(Role::Switch, "Vertical layout").click();
+    h.run_steps(3);
+    assert_ne!(vertical(&h), before, "the layout switch toggles by its label");
+    h.get_by_role_and_label(Role::RadioButton, "Right").click();
+    h.run_steps(3);
+    let saved: serde_json::Value = serde_json::from_str(&h.state().persist()).unwrap();
+    assert_eq!(saved["hotbar"]["dock"], "right");
+    assert_eq!(saved["hotbar"]["vertical"], true, "docking at the side lays the bar out vertically");
+    h.get_by_role_and_label(Role::RadioButton, "Float").click();
+    h.run_steps(3);
+    let saved: serde_json::Value = serde_json::from_str(&h.state().persist()).unwrap();
+    assert!(saved["hotbar"]["dock"].is_null());
+}
+
+#[test]
 fn hotbar_settings_reopen_even_with_remembered_collapsed_state() {
     let mut h = harness(|_| {});
     let mut collapsed =
@@ -3246,5 +3269,113 @@ fn hotbar_full_side_strip_spans_each_edge_and_returns_to_float() {
     h.state_mut().set_option("hotbar-side", "float").unwrap();
     h.run_steps(5);
     let size = h.ctx.data_mut(|d| d.get_temp::<egui::Vec2>(egui::Id::unique("custom-hotbar"))).unwrap();
-    assert!(size.x < 150.0 && size.y < 150.0, "floating toolbar is compact: {size:?}");
+    let (length, thickness) = if size.y > size.x { (size.y, size.x) } else { (size.x, size.y) };
+    assert!(thickness <= 64.0 && length < 550.0, "floating toolbar is compact: {size:?}");
+}
+
+#[test]
+fn hotbar_docked_left_does_not_override_quick_tools() {
+    let mut h = harness(|app| {
+        app.set_option("hotbar-side", "left").unwrap();
+    });
+    h.run_steps(5);
+    // Controls in the docked bar share one layout, so none may overlap (#5890).
+    let labels = ["Drag hotbar", "Select (V)", "Hand (H)", "Add a sticky note", "Highlight", "Draw", "Fill & Sign", "Hotbar settings"];
+    let rects: Vec<_> = labels.iter().map(|&label| h.get_by_label(label).rect()).collect();
+    for (i, a) in rects.iter().enumerate() {
+        for (j, b) in rects.iter().enumerate().skip(i + 1) {
+            let overlap = a.min.x < b.max.x && b.min.x < a.max.x && a.min.y < b.max.y && b.min.y < a.max.y;
+            assert!(!overlap, "{} overlaps {}: {a:?} / {b:?}", labels[i], labels[j]);
+        }
+    }
+}
+
+#[test]
+fn hotbar_docked_in_compact_window_keeps_settings_button_visible() {
+    for side in ["left", "right"] {
+        let mut h = Harness::builder().with_size(egui::vec2(800.0, 480.0)).build_eframe(move |_cc| {
+            let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
+            app.open_bytes("text.pdf", None, TEXT_FIXTURE.to_vec()).expect("opens");
+            app.set_option("left", "closed").unwrap();
+            app.set_option("hotbar-side", side).unwrap();
+            app.set_option("hotbar-size", "48").unwrap();
+            app
+        });
+        h.run_steps(5);
+        let settings_rect = h.get_by_label("Hotbar settings").rect();
+        assert!(settings_rect.max.y <= 480.0, "{side} hotbar settings button must stay within window height: {settings_rect:?}");
+    }
+}
+
+#[test]
+fn hotbar_settings_menu_closes_on_click_outside() {
+    let mut h = harness(|app| {
+        app.open_bytes("text.pdf", None, TEXT_FIXTURE.to_vec()).expect("opens");
+    });
+    h.get_by_label("Hotbar settings").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Close menu").is_some());
+
+    // Clicking outside on the canvas dismisses the settings menu
+    h.event(egui::Event::PointerButton {
+        pos: egui::pos2(600.0, 300.0),
+        button: egui::PointerButton::Primary,
+        pressed: true,
+        modifiers: Default::default(),
+    });
+    h.event(egui::Event::PointerButton {
+        pos: egui::pos2(600.0, 300.0),
+        button: egui::PointerButton::Primary,
+        pressed: false,
+        modifiers: Default::default(),
+    });
+    h.run_steps(3);
+    assert!(h.query_by_label("Close menu").is_none(), "clicking outside closes the hotbar settings menu");
+
+    // Reopening and clicking another tool outside dismisses the menu and activates that tool
+    h.get_by_label("Hotbar settings").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Close menu").is_some());
+    h.get_by_label("Hand (H)").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Close menu").is_none());
+    assert_eq!(h.state().quick_tool, QuickTool::Hand);
+}
+
+#[test]
+fn hotbar_picker_in_narrow_viewport_fits_within_screen_width() {
+    let mut h = Harness::builder().with_size(egui::vec2(270.0, 480.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("text.pdf", None, TEXT_FIXTURE.to_vec()).expect("opens");
+        app
+    });
+    h.get_by_label("Hotbar settings").click();
+    h.run_steps(5);
+    let close_btn = h.get_by_label("Close menu");
+    assert!(close_btn.rect().max.x <= 270.0, "Close menu button must stay within viewport width: {:?}", close_btn.rect());
+}
+
+#[test]
+fn hotbar_floating_picker_does_not_overlap_rendered_bar() {
+    let mut h = Harness::builder().with_size(egui::vec2(1000.0, 600.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("text.pdf", None, TEXT_FIXTURE.to_vec()).expect("opens");
+        app
+    });
+    let settings_btn = h.get_by_label("Hotbar settings");
+    let settings_rect = settings_btn.rect();
+    settings_btn.click();
+    h.run_steps(5);
+
+    let picker_close = h.get_by_label("Close menu");
+    let picker_rect = picker_close.rect();
+    assert!(
+        picker_rect.min.x >= settings_rect.max.x || picker_rect.max.x <= settings_rect.min.x,
+        "picker ({:?}) must not overlap the settings button ({:?}) on the floating bar",
+        picker_rect,
+        settings_rect
+    );
 }
