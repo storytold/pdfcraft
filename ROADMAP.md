@@ -15,8 +15,6 @@
 > **Last reviewed:** 2026-10-26 · **Last updated:** 2026-10-26 · **Change:** patch (M2, PR #4172: print preview excludes installed CJK fonts and isolates its font cache from the viewer; estimates unchanged)
 > **Last reviewed:** 2026-10-26 · **Last updated:** 2026-10-26 · **Change:** patch (M2, PR #4172: reconcile current main while retaining display-only CJK fallback and upstream Japanese font selection; estimates unchanged)
 > **Last reviewed:** 2026-10-23 · **Last updated:** 2026-10-23 · **Change:** minor (M2, PR #4172: extend on-screen CJK fallback to Combine thumbnails and figure previews; recognise FangSong and subset-prefixed Founder names; estimates unchanged)
-> **Last reviewed:** 2026-10-22 · **Last updated:** 2026-10-22 · **Change:** patch (PR #3836: refreshed OCR font substitution and same-face Type3 calibration against upstream `9a0ec645`, preserving both upstream and PR regression tests; estimates unchanged).
-> **2026-10-21 · M7:** Coalesced same-face Type3 subsets retain measured TJ spacing during ordinary text edits; regression covers formatting-only edits, longer replacements, and unrelated-face metrics. The 197 edit-crate tests pass; no parity estimates changed.
 > **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-15 · **Change:** minor (typed small Edit font sizes and Fill & Sign text/date colour, #2444/#2496; estimates unchanged)
 
 **Stage: alpha** · next: beta, ~25% (ready for real work 50% → 75%) and ~400–700 h away
@@ -221,7 +219,7 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 ## Progress log
 
-- **2026-11-02 (M7, PR #3836):** Preserve Glyphless OCR edit regression coverage alongside upstream text-edit property and regression tests. Integration candidate against upstream d3384340; estimates unchanged.
+- **2026-11-02 (M10, #5743):** macOS print jobs name their title and owner (`com.apple.print.JobInfo.PMJobName`, `PMJobOwner`), as the system print dialog does, because a Kyocera filter crashes on a job without them. Checked by a test and through `doc_print` against a stand-in `lp`; not yet on a physical printer.
 
 - **2026-11-01 (M7, #5657):** Header/footer, watermark and background additions and replacements stage the complete call before committing. Synthetic later-page failures preserve exact incremental bytes, object count, dirty state and allocation cursor; success controls retain other marks and shared/inherited resources. Estimates unchanged.
 
