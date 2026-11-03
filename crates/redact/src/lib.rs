@@ -183,6 +183,19 @@ pub(crate) fn annots_of(doc: &Document, page: &Dict) -> Vec<Object> {
     page.get(b"Annots").map(|a| doc.resolve(a)).and_then(|a| a.as_array().cloned()).unwrap_or_default()
 }
 
+/// An annotation's `/Subtype`, resolved: it may be an indirect reference (ISO 32000-2 §7.3.10),
+/// and the audit reads it that way, so a mark it reports must not be one [`apply`] passes over.
+pub(crate) fn subtype(doc: &Document, d: &Dict) -> Option<Vec<u8>> {
+    d.get(b"Subtype").and_then(|s| doc.resolve(s).as_name().map(<[u8]>::to_vec))
+}
+
+/// The pop-up `d` names (`/Popup`), when it is one: it goes with `d`. Anything else it might name
+/// (a mark on another page, say) is left alone.
+fn named_popup(doc: &Document, d: &Dict) -> Option<ObjRef> {
+    let r = d.reference(b"Popup")?;
+    doc.get(r).as_dict().is_some_and(|p| subtype(doc, p).as_deref() == Some(b"Popup")).then_some(r)
+}
+
 /// Every annotation the pages list. Compared before and after a removal, what is no longer listed
 /// leaves the structure tree too ([`tags::drop_object_refs`]).
 pub(crate) fn listed_annotations(doc: &Document) -> HashSet<ObjRef> {
@@ -203,14 +216,14 @@ pub(crate) fn marks_checked(doc: &Document) -> (Vec<Mark>, Vec<usize>) {
             let Some(r) = a.as_ref() else {
                 // A mark written in place has no object to find, apply or remove: refuse it
                 // rather than apply the others as if it were not there.
-                if doc.resolve(&a).as_dict().is_some_and(|d| d.name(b"Subtype") == Some(b"Redact")) {
+                if doc.resolve(&a).as_dict().is_some_and(|d| subtype(doc, d).as_deref() == Some(b"Redact")) {
                     unreadable.push(pi);
                 }
                 continue;
             };
             let obj = doc.get(r);
             let Some(d) = obj.as_dict() else { continue };
-            if d.name(b"Subtype") != Some(b"Redact") {
+            if subtype(doc, d).as_deref() != Some(b"Redact") {
                 continue;
             }
             let quads: Vec<f64> = d
@@ -459,18 +472,30 @@ fn apply_within(doc: &mut Document, pages: Option<&[usize]>, images: pdfcraft_co
             let annots = annots_of(doc, &p.dict);
             let mut kept = Vec::with_capacity(annots.len());
             for a in &annots {
-                let Some(r) = a.as_ref() else {
-                    kept.push(a.clone());
-                    continue;
-                };
-                let obj = doc.get(r);
+                // An entry written in place is read as one listed by reference: its `/IRT` or
+                // `/Parent` keeps a removed comment reachable all the same, and it has its own text.
+                let obj = doc.resolve(a);
                 let Some(d) = obj.as_dict() else {
                     kept.push(a.clone());
                     continue;
                 };
-                let is_reply =
-                    d.get(b"IRT").and_then(Object::as_ref).is_some_and(|x| removed_everywhere.contains(&x)) && d.name(b"Subtype") != Some(b"Widget");
-                let is_popup = d.get(b"Parent").and_then(Object::as_ref).is_some_and(|x| removed_everywhere.contains(&x));
+                let is_reply = d.reference(b"IRT").is_some_and(|x| removed_everywhere.contains(&x)) && subtype(doc, d).as_deref() != Some(b"Widget");
+                let is_popup = d.reference(b"Parent").is_some_and(|x| removed_everywhere.contains(&x));
+                let Some(r) = a.as_ref() else {
+                    if is_reply || is_popup {
+                        grew = true;
+                        if is_reply {
+                            report.annotations += 1;
+                        }
+                        // It has no reference to remove elsewhere; the pop-up it names has.
+                        if let Some(p) = named_popup(doc, d) {
+                            removed_everywhere.insert(p);
+                        }
+                    } else {
+                        kept.push(a.clone());
+                    }
+                    continue;
+                };
                 if removed_everywhere.contains(&r) || is_reply || is_popup {
                     if removed_everywhere.insert(r) {
                         grew = true;
@@ -752,30 +777,66 @@ fn remove_page_annotations(
     page_marks: &[&Mark],
 ) -> Result<(), RedactError> {
     let Applying { report, doomed_fields, widget_owner, removed_everywhere, .. } = applying;
-    // 2. Annotations: the marks, and whatever lies under them (with their pop-ups).
+    // 2. Annotations: the marks, and whatever lies under them (with their pop-ups). An entry
+    // written in place (a dictionary in `/Annots`, not a reference) is judged like any other: its
+    // `/Contents` and `/IRT` stay in the file for as long as the page lists it.
     let annots = annots_of(doc, &doc.get(page.obj).as_dict().cloned().unwrap_or_default());
+    /// What decides an entry's fate, read once.
+    struct Entry {
+        r: Option<ObjRef>,
+        widget: bool,
+        irt: Option<ObjRef>,
+        parent: Option<ObjRef>,
+        popup: Option<ObjRef>,
+    }
+    let entries: Vec<Option<Entry>> = annots
+        .iter()
+        .map(|a| {
+            let obj = doc.resolve(a);
+            let d = obj.as_dict()?;
+            Some(Entry {
+                r: a.as_ref(),
+                widget: subtype(doc, d).as_deref() == Some(b"Widget"),
+                irt: d.reference(b"IRT"),
+                parent: d.reference(b"Parent"),
+                popup: named_popup(doc, d),
+            })
+        })
+        .collect();
     let mut removed: Vec<ObjRef> = Vec::new();
-    for a in &annots {
-        let Some(r) = a.as_ref() else { continue };
-        let obj = doc.get(r);
+    // Entries written in place that go, by position in `/Annots`.
+    let mut inline_gone = vec![false; annots.len()];
+    for (i, a) in annots.iter().enumerate() {
+        let obj = doc.resolve(a);
         let Some(d) = obj.as_dict() else { continue };
-        let subtype = d.name(b"Subtype").unwrap_or(b"");
-        if subtype == b"Redact" {
-            if page_marks.iter().any(|m| m.obj == r) {
+        let r = a.as_ref();
+        let kind = subtype(doc, d).unwrap_or_default();
+        if kind == b"Redact" {
+            // A mark written in place was refused before anything changed.
+            if let Some(r) = r
+                && page_marks.iter().any(|m| m.obj == r)
+            {
                 removed.push(r);
             }
             continue;
         }
-        if subtype == b"Popup" {
+        if kind == b"Popup" {
             continue;
         }
         if rect_of(doc, d.get(b"Rect")).is_some_and(|b| rects.iter().any(|x| pdfcraft_content::overlaps(*x, b, 0.0))) {
-            removed.push(r);
-            if subtype == b"Widget" {
-                if let Some((_, field)) = widget_owner.iter().find(|(w, _)| *w == r)
-                    && !doomed_fields.contains(field)
+            match r {
+                Some(r) => removed.push(r),
+                None => inline_gone[i] = true,
+            }
+            if kind == b"Widget" {
+                // A widget written in place has no reference of its own; its `/Parent` is the field.
+                let owner = r
+                    .and_then(|r| widget_owner.iter().find(|(w, _)| *w == r).map(|(_, f)| *f))
+                    .or_else(|| d.reference(b"Parent").filter(|p| widget_owner.iter().any(|(_, f)| f == p)));
+                if let Some(field) = owner
+                    && !doomed_fields.contains(&field)
                 {
-                    doomed_fields.push(*field);
+                    doomed_fields.push(field);
                 }
             } else {
                 report.annotations += 1;
@@ -786,47 +847,56 @@ fn remove_page_annotations(
     // those: a reply placed elsewhere would keep its parent — the comment and the QuadPoints
     // of the redacted words — in the file through its `/IRT` (#2659). Each pass removes at
     // least one more annotation of this page or stops, so it ends.
-    let replies: Vec<(ObjRef, ObjRef)> = annots
-        .iter()
-        .filter_map(Object::as_ref)
-        .filter_map(|r| {
-            let obj = doc.get(r);
-            let d = obj.as_dict()?;
-            (d.name(b"Subtype") != Some(b"Widget")).then_some(())?;
-            Some((r, d.get(b"IRT").and_then(Object::as_ref)?))
-        })
-        .collect();
     loop {
-        let before = removed.len();
-        for (r, parent) in &replies {
-            if !removed.contains(r) && removed.contains(parent) {
-                removed.push(*r);
-                report.annotations += 1;
+        let mut grew = false;
+        for (i, e) in entries.iter().enumerate() {
+            let Some(e) = e else { continue };
+            let gone = e.r.map_or(inline_gone[i], |r| removed.contains(&r));
+            if gone || e.widget || !e.irt.is_some_and(|p| removed.contains(&p)) {
+                continue;
             }
+            match e.r {
+                Some(r) => removed.push(r),
+                None => inline_gone[i] = true,
+            }
+            report.annotations += 1;
+            grew = true;
         }
-        if removed.len() == before {
+        if !grew {
             break;
         }
     }
-    removed_everywhere.extend(removed.iter().copied());
-    // Pop-ups dropped with their parent below count too: a reply on another page may answer one.
-    for a in &annots {
-        let Some(r) = a.as_ref() else { continue };
-        if doc.get(r).as_dict().and_then(|d| d.get(b"Parent")).and_then(Object::as_ref).is_some_and(|p| removed.contains(&p)) {
-            removed_everywhere.insert(r);
+    // Pop-ups go with their annotation: those that name it (`/Parent`), and those it names
+    // (`/Popup`), the only link an annotation written in place can have to its pop-up.
+    let mut going: HashSet<ObjRef> = removed.iter().copied().collect();
+    for (i, e) in entries.iter().enumerate() {
+        let Some(e) = e else { continue };
+        let gone = e.r.map_or(inline_gone[i], |r| removed.contains(&r));
+        if gone {
+            going.extend(e.popup);
         }
     }
+    for (i, e) in entries.iter().enumerate() {
+        let Some(e) = e else { continue };
+        if e.parent.is_some_and(|p| removed.contains(&p)) {
+            match e.r {
+                Some(r) => {
+                    going.insert(r);
+                }
+                None => inline_gone[i] = true,
+            }
+        }
+    }
+    // Pop-ups dropped with their parent count too: a reply on another page may answer one.
+    removed_everywhere.extend(going.iter().copied());
     let kept: Vec<Object> = annots
         .into_iter()
-        .filter(|a| {
-            let Some(r) = a.as_ref() else { return true };
-            if removed.contains(&r) {
-                return false;
-            }
-            // Pop-ups of removed annotations go too.
-            let obj = doc.get(r);
-            !obj.as_dict().and_then(|d| d.get(b"Parent")).and_then(Object::as_ref).is_some_and(|p| removed.contains(&p))
+        .enumerate()
+        .filter(|(i, a)| match a.as_ref() {
+            Some(r) => !going.contains(&r),
+            None => !inline_gone[*i],
         })
+        .map(|(_, a)| a)
         .collect();
     doc.update_dict(page.obj, |d| {
         if kept.is_empty() {
