@@ -1137,9 +1137,12 @@ mod drag_across_tests {
         // shown half in one frame: the way starts inside the box, where it can't be seen.
         let right = rects[0].right() + 40.0;
         let hidden = Pos2::new(third.left() + 6.0, third.center().y + 0.4 * third.height());
-        for p in [Pos2::new(right, start.y), Pos2::new(right, hidden.y), hidden, Pos2::new(hidden.x, third.top() + 1.0)] {
+        for p in [Pos2::new(right, start.y), Pos2::new(right, hidden.y), hidden] {
             run(&mut state, vec![Event::PointerMoved(p)]);
         }
+        // CodeRabbit on #4552: in the hidden half, the third box is still as it was.
+        assert_eq!(state, [true, false, false], "nothing set from where it can't be seen");
+        run(&mut state, vec![Event::PointerMoved(Pos2::new(hidden.x, third.top() + 1.0))]);
         run(&mut state, vec![button(Pos2::new(hidden.x, third.top() + 1.0), false)]);
         run(&mut state, vec![]);
         assert_eq!(state, [true, false, true], "the first box and the third, whose shown half the drag crossed");
