@@ -7419,6 +7419,36 @@ fn an_add_text_click_pressed_beside_a_paragraph_starts_a_box_there() {
     assert!(h.state().views[0].line_editor.is_none(), "the paragraph stays closed");
 }
 
+/// A paragraph drag in Edit text ends when Edit text's input is blocked (the window loses focus), as
+/// a drag of the objects selected together does: nothing moves once the input comes back. It
+/// waited, and moved the paragraph to wherever the pointer then was.
+#[test]
+fn a_paragraph_drag_ends_when_the_window_loses_focus() {
+    let mut h = edit_page(pdfcraft_ui_egui::QuickTool::EditText);
+    let id = h.state().views[0].id;
+    let before = h.state().session.get(id).unwrap().text_blocks(0)[0].rect;
+    let from = point_on(&h, (before[0] + before[2]) / 2.0, (before[1] + before[3]) / 2.0);
+    h.hover_at(from);
+    h.run_steps(1);
+    h.drag_at(from);
+    h.run_steps(1);
+    for k in 1..=4 {
+        h.hover_at(from + egui::vec2(0.0, 10.0 * k as f32));
+        h.run_steps(1);
+    }
+    assert!(h.state().views[0].block_drag.is_some(), "the paragraph is being moved");
+    h.input_mut().focused = false;
+    h.run_steps(2);
+    h.drop_at(from + egui::vec2(0.0, 40.0));
+    h.run_steps(2);
+    h.input_mut().focused = true;
+    h.hover_at(from + egui::vec2(0.0, 80.0));
+    h.run_steps(4);
+    assert!(h.state().views[0].block_drag.is_none(), "the drag is over");
+    assert_eq!(h.state().session.get(id).unwrap().text_blocks(0)[0].rect, before, "nothing moved");
+    assert!(!dirty(&h));
+}
+
 /// The rotate knob of a picture that fills its page lies past the page's edge, and a drag there
 /// still turns the picture: the press is the page's whose knob it is.
 #[test]

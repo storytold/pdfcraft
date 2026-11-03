@@ -890,6 +890,18 @@ impl DocView {
         }
     }
 
+    /// Abandon Edit text's pointer gestures (a paragraph moved or rewrapped, a picture moved,
+    /// resized, turned or cropped, added content moved, the objects' area selection or move), as
+    /// [`Self::cancel_pointer_gestures`] does: what they were previewing is not applied.
+    pub(crate) fn cancel_edit_text_gestures(&mut self) {
+        self.block_drag = None;
+        self.content.cancel_pointer_gesture();
+        self.objects.cancel_pointer_gesture();
+        if let Some(image) = &mut self.image_selection {
+            image.cancel_pointer_gesture();
+        }
+    }
+
     /// A view of a newly opened document, shown as `defaults` say. Opening a file then applies
     /// any layout or zoom the PDF itself asks for.
     pub fn new(id: DocId, info: &DocInfo, defaults: ViewDefaults) -> Self {
