@@ -20,6 +20,21 @@ pub(crate) const FIND_MAX_WARNINGS: usize = 100;
 
 pub(crate) const FIND_MAX_WARNING_BYTES: usize = 1024;
 
+/// Longest text one `text_find` match returns. A match is normally about the query's length, but
+/// one glyph can stand for a large `/ActualText`, and many matches can name that one glyph.
+pub(crate) const FIND_MAX_MATCH_TEXT_BYTES: usize = 64 << 10;
+
+/// Text bytes one `text_find` response holds in all; the search continues from `next` past it.
+pub(crate) const FIND_MAX_RESPONSE_TEXT_BYTES: usize = 8 << 20;
+
+/// `text` cut to [`FIND_MAX_MATCH_TEXT_BYTES`] at a character boundary, and whether it was cut.
+pub(crate) fn clip_match_text(mut text: String) -> (String, bool) {
+    let end = text.floor_char_boundary(FIND_MAX_MATCH_TEXT_BYTES.min(text.len()));
+    let cut = end < text.len();
+    text.truncate(end);
+    (text, cut)
+}
+
 impl Automation {
     // ---- pages and text ----------------------------------------------------------------------
 
@@ -245,6 +260,7 @@ impl Automation {
         let mut next = None;
         let mut warnings = Vec::new();
         let mut warning_count = 0usize;
+        let mut response_text = 0usize;
         let (mut first, mut batch) = (start, FIND_FIRST_BATCH);
         'search: while first < n {
             let end = first.saturating_add(batch).min(n);
@@ -273,7 +289,17 @@ impl Automation {
                         next = Some(json!({ "start_page": p + 1, "skip": k }));
                         break 'search;
                     }
-                    matches.push(json!({ "page": p + 1, "text": text.text_of(r.clone()), "rects": text.line_rects(r) }));
+                    let (matched, cut) = clip_match_text(text.text_of(r.clone()));
+                    if response_text.saturating_add(matched.len()) > FIND_MAX_RESPONSE_TEXT_BYTES && !matches.is_empty() {
+                        next = Some(json!({ "start_page": p + 1, "skip": k }));
+                        break 'search;
+                    }
+                    response_text += matched.len();
+                    let mut found = json!({ "page": p + 1, "text": matched, "rects": text.line_rects(r) });
+                    if let (true, Some(o)) = (cut, found.as_object_mut()) {
+                        o.insert("text_truncated".into(), json!(true));
+                    }
+                    matches.push(found);
                 }
             }
             first = end;
