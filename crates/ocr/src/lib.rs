@@ -5,26 +5,57 @@
 //! [`Ocr::recognize`] finds the words in them, and [`text_layer`] turns words placed in user space
 //! into page content: invisible text (rendering mode 3) over each word, so the page becomes a
 //! searchable image (Acrobat's "Searchable Image (Exact)": the image is left untouched).
+//! [`text_layer`] writes only what WinAnsi can spell; the engine places other scripts (Cyrillic)
+//! with a generated Type 3 font and a ToUnicode map instead (crates/engine/src/ocr/layer.rs).
 //!
-//! The models read the Latin alphabet (English and other languages written without accents).
+//! English reads the Latin alphabet (a language written without accents) with ocrs's own model.
+//! Russian, Ukrainian and Belarusian read Cyrillic with a PP-OCR recognition model (Apache-2.0)
+//! on the same local runtime, its character dictionary fetched beside it. The ocrs detector and
+//! its line grouping are shared by both.
+//!
+//! # What the model reads, and what it does not
+//!
+//! The East Slavic model was trained on Cyrillic and Latin text, and it reads both; but where a
+//! Cyrillic letter and a Latin one are the same shape (`С`/`C`, `О`/`O`, `Р`/`P`, `А`/`A`, `Е`/`E`)
+//! it can pick the Latin class with high confidence, so a word of nothing but look-alike letters
+//! ("СОР") may come out in Latin. The recognition scores do not carry the language, so this is a
+//! limit of the model, not of the decoder.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 use std::path::{Path, PathBuf};
+
+use rten_imageproc::BoundingRect;
+
+mod ppocr;
 
 pub use pdfcraft_fonts::helvetica_width;
 
 /// The model files, as named in ATTRIBUTION.toml.
 pub const DETECTION_MODEL: &str = "text-detection.onnx";
 pub const RECOGNITION_MODEL: &str = "text-recognition.onnx";
+/// The legacy RTEN pair, still installed by older builds.
+const LEGACY_DETECTION_MODEL: &str = "text-detection.rten";
+const LEGACY_RECOGNITION_MODEL: &str = "text-recognition.rten";
+/// The PP-OCR recognition model and the character dictionary its classes follow.
+pub const ESLAV_MODEL: &str = "eslav-recognition.onnx";
+pub const ESLAV_DICTIONARY: &str = "eslav-keys.txt";
+
+/// The PP-OCR languages: (code, recognition model, character dictionary, output classes). The
+/// class count is one CTC blank, one class per dictionary line, and the appended space; it is
+/// pinned per model, so a wrong, short or updated dictionary fails at load instead of decoding
+/// into the wrong letters.
+const PP_OCR: &[(&str, &str, &str, usize)] =
+    &[("ru", ESLAV_MODEL, ESLAV_DICTIONARY, 519), ("uk", ESLAV_MODEL, ESLAV_DICTIONARY, 519), ("be", ESLAV_MODEL, ESLAV_DICTIONARY, 519)];
 
 /// The recognition model's alphabet, as it was trained (ocrs-models' `DEFAULT_ALPHABET`): its
 /// output classes follow this order. The ocrs crate's own copy has an `E` where the training had
 /// `€`, which made a scanned "€250" read as "E250".
 pub const ALPHABET: &str = " 0123456789!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~€ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 
-/// The languages the models read (ISO 639-1); all use the Latin alphabet without accents.
-pub const LANGUAGES: &[(&str, &str)] = &[("en", "English")];
+/// The languages the models read (ISO 639-1). `en` uses ocrs's Latin model; `ru`, `uk` and `be`
+/// read Cyrillic with the East Slavic PP-OCR model, which also reads the Latin words in them.
+pub const LANGUAGES: &[(&str, &str)] = &[("en", "English"), ("ru", "Russian"), ("uk", "Ukrainian"), ("be", "Belarusian")];
 
 #[derive(Debug, thiserror::Error)]
 pub enum OcrError {
@@ -38,6 +69,8 @@ pub enum OcrError {
     Recognize(String),
     #[error("the image is empty")]
     EmptyImage,
+    #[error("unsupported OCR language {0:?}; choose a language from ocr_status")]
+    Language(String),
 }
 
 /// Where the two model files are.
@@ -48,19 +81,38 @@ pub struct Models {
 }
 
 impl Models {
-    /// A complete model pair in `dir`, preferring current ONNX files over legacy RTEN files.
-    /// An incomplete update never mixes formats or hides an intact legacy pair.
+    /// A complete model pair in `dir` for English, preferring current ONNX files over legacy RTEN
+    /// files. An incomplete update never mixes formats or hides an intact legacy pair.
     pub fn in_dir(dir: &Path) -> Option<Models> {
-        [(DETECTION_MODEL, RECOGNITION_MODEL), ("text-detection.rten", "text-recognition.rten")].into_iter().find_map(|(detection, recognition)| {
+        [(DETECTION_MODEL, RECOGNITION_MODEL), (LEGACY_DETECTION_MODEL, LEGACY_RECOGNITION_MODEL)].into_iter().find_map(|(detection, recognition)| {
             let m = Models { detection: dir.join(detection), recognition: dir.join(recognition) };
             (m.detection.is_file() && m.recognition.is_file()).then_some(m)
         })
+    }
+
+    /// A language's models in `dir`: the ocrs pair for English, or the shared detector plus a
+    /// PP-OCR recognition model and its dictionary for the others. `None` when a language is
+    /// unknown or any file it needs is missing.
+    pub fn in_dir_for(dir: &Path, language: &str) -> Option<Models> {
+        let language = LANGUAGES.iter().find(|l| l.0 == language)?.0;
+        let Some(&(_, recognition, dictionary, _)) = PP_OCR.iter().find(|(code, ..)| *code == language) else {
+            return Self::in_dir(dir);
+        };
+        // The detector is the English layout's own; either format is fine for it, ONNX first.
+        let detection = [DETECTION_MODEL, LEGACY_DETECTION_MODEL].into_iter().map(|f| dir.join(f)).find(|p| p.is_file())?;
+        let m = Models { detection, recognition: dir.join(recognition) };
+        (m.recognition.is_file() && dir.join(dictionary).is_file()).then_some(m)
     }
 
     /// Look for the models: `$PDFCRAFT_MODELS`, then where the release packages install them
     /// beside the executable ([`Models::dirs_beside_exe`]), then the source tree's `assets/models/`.
     pub fn find() -> Option<Models> {
         Self::search_dirs().iter().find_map(|d| Self::in_dir(d))
+    }
+
+    /// The models for `language`, searched as [`Models::find`] does.
+    pub fn find_for(language: &str) -> Option<Models> {
+        Self::search_dirs().iter().find_map(|d| Self::in_dir_for(d, language))
     }
 
     /// The directories [`Models::find`] looks in, in order.
@@ -109,24 +161,45 @@ impl Line {
 /// A loaded recogniser. Loading takes a moment; keep one and reuse it.
 pub struct Ocr {
     engine: ocrs::OcrEngine,
+    /// Set for the PP-OCR languages, which read whole line crops with their own model instead of
+    /// ocrs's per-word recogniser. The ocrs detector and line grouping still find the lines.
+    ppocr: Option<ppocr::PpOcr>,
 }
 
 impl Ocr {
     pub fn load(models: &Models) -> Result<Ocr, OcrError> {
         let load = |p: &Path| rten::Model::load_file(p).map_err(|e| OcrError::Load(p.display().to_string(), e.to_string()));
+        // A PP-OCR recognition model is not an ocrs model: it needs its dictionary, and ocrs must
+        // be given no recognition model of its own.
+        let ppocr = PP_OCR
+            .iter()
+            .find(|(_, model, _, _)| models.recognition.file_name().is_some_and(|f| f == *model))
+            .map(|(_, _, dictionary, classes)| ppocr::PpOcr::load(&models.recognition, &models.recognition.with_file_name(dictionary), *classes))
+            .transpose()?;
         let params = ocrs::OcrEngineParams {
             detection_model: Some(load(&models.detection)?),
-            recognition_model: Some(load(&models.recognition)?),
+            recognition_model: match ppocr {
+                Some(_) => None,
+                None => Some(load(&models.recognition)?),
+            },
             alphabet: Some(ALPHABET.into()),
             ..Default::default()
         };
         let engine = ocrs::OcrEngine::new(params).map_err(|e| OcrError::Load("ocr engine".into(), e.to_string()))?;
-        Ok(Ocr { engine })
+        Ok(Ocr { engine, ppocr })
     }
 
-    /// Load the models found by [`Models::find`].
+    /// Load the models found by [`Models::find`] (English).
     pub fn find() -> Result<Ocr, OcrError> {
         Self::load(&Models::find().ok_or(OcrError::NoModels)?)
+    }
+
+    /// Load `language`'s models, which must be installed.
+    pub fn find_for(language: &str) -> Result<Ocr, OcrError> {
+        if !LANGUAGES.iter().any(|l| l.0 == language) {
+            return Err(OcrError::Language(language.into()));
+        }
+        Self::load(&Models::find_for(language).ok_or(OcrError::NoModels)?)
     }
 
     /// Recognise the text in an RGBA (or RGB, or grey) image, `width` × `height` pixels.
@@ -137,6 +210,9 @@ impl Ocr {
         // ocrs wants 1 or 3 channels.
         let rgb: std::borrow::Cow<[u8]> = if pixels.len() == (width * height * 4) as usize {
             pixels.as_chunks::<4>().0.iter().flat_map(|p| [p[0], p[1], p[2]]).collect::<Vec<u8>>().into()
+        } else if pixels.len() == (width * height) as usize {
+            // PP-OCR crops read three channels; ocrs normalises one itself.
+            pixels.iter().flat_map(|p| [*p; 3]).collect::<Vec<_>>().into()
         } else {
             pixels.into()
         };
@@ -145,6 +221,24 @@ impl Ocr {
         let input = self.engine.prepare_input(source).map_err(|e| err(&e))?;
         let found = self.engine.detect_words(&input).map_err(|e| err(&e))?;
         let lines = self.engine.find_text_lines(&input, &found);
+        // The PP-OCR recogniser reads one line crop at a time; the detector still supplies the
+        // reading order, and each line is one segment of text.
+        if let Some(ppocr) = &self.ppocr {
+            let mut out = Vec::new();
+            for line in lines {
+                let rect = line
+                    .iter()
+                    .map(|r| r.bounding_rect())
+                    .fold(None, |rect: Option<rten_imageproc::Rect<f32>>, r| Some(rect.map_or(r, |b| b.union(r))));
+                let Some(r) = rect else { continue };
+                let rect = [r.left(), r.top(), r.right(), r.bottom()];
+                let text = ppocr.recognize(&rgb, width, height, rect)?;
+                if !text.is_empty() {
+                    out.push(Line { words: vec![Word { text, rect }] });
+                }
+            }
+            return Ok(out);
+        }
         let read = self.engine.recognize_text(&input, &lines).map_err(|e| err(&e))?;
         use ocrs::TextItem;
         Ok(read

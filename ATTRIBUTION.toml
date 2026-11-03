@@ -3381,6 +3381,32 @@ kind = "model"
 usage = "Scan & OCR: reads the words it finds (cargo xtask models)"
 sha256 = "86c145c2edb96c8caed5b1ebb8f44d706408922211451c309c625157dd6061c5"
 
+[[fetched]]
+file = "eslav-recognition.onnx"
+url = "https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.9.2/onnx/PP-OCRv5/rec/eslav_PP-OCRv5_rec_mobile.onnx"
+title = "PP-OCRv5 mobile East Slavic (Cyrillic) recognition model (ONNX)"
+author = "PaddlePaddle Authors; RapidAI contributors (ONNX conversion)"
+source = "https://github.com/RapidAI/RapidOCR/tree/v3.9.2; PaddleOCR PP-OCRv5 East Slavic recognition model (Russian, Ukrainian, Belarusian, and the Latin text among them), converted to ONNX by RapidAI"
+licence = "Apache-2.0"
+licence_url = "https://raw.githubusercontent.com/PaddlePaddle/PaddleOCR/v3.1.1/LICENSE"
+licence_sha256 = "3840c5c0c61c294264d2dd77b8777be6ddd90121ef4e0e64abcd22edea581d6e"
+kind = "model"
+usage = "Scan & OCR: Russian, Ukrainian and Belarusian (cargo xtask models)"
+sha256 = "08705d6721849b1347d26187f15a5e362c431963a2a62bfff4feac578c489aab"
+
+[[fetched]]
+file = "eslav-keys.txt"
+url = "https://raw.githubusercontent.com/PaddlePaddle/PaddleOCR/v3.1.1/ppocr/utils/dict/ppocrv5_eslav_dict.txt"
+title = "PaddleOCR PP-OCRv5 East Slavic character dictionary"
+author = "PaddlePaddle Authors"
+source = "https://github.com/PaddlePaddle/PaddleOCR/blob/v3.1.1/ppocr/utils/dict/ppocrv5_eslav_dict.txt"
+licence = "Apache-2.0"
+licence_url = "https://raw.githubusercontent.com/PaddlePaddle/PaddleOCR/v3.1.1/LICENSE"
+licence_sha256 = "3840c5c0c61c294264d2dd77b8777be6ddd90121ef4e0e64abcd22edea581d6e"
+kind = "model"
+usage = "Scan & OCR: character classes for the East Slavic recogniser (cargo xtask models)"
+sha256 = "3e95f1581557162870cacdba5af91a4c6be2890710d395b0c3c7578e7ee5e6eb"
+
 [[build_input]]
 name = "craft-fonts"
 option = "CRAFT_FONTS_DIR"

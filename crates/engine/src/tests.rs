@@ -4857,6 +4857,113 @@ fn recognize_text_makes_a_scanned_page_searchable() {
     assert!(again[0].skipped.is_some());
 }
 
+/// A 300 DPI scan of `lines` set in Inter (the bundled face, which covers Cyrillic), black on
+/// white, encoded as a PNG.
+fn cyrillic_scan(lines: &[&str]) -> Vec<u8> {
+    use ab_glyph::{Font, FontRef, PxScale, ScaleFont, point};
+    let font = FontRef::try_from_slice(pdfcraft_fonts::INTER_REGULAR).expect("the bundled Inter face");
+    let size = 48.0_f32;
+    let scaled = font.as_scaled(PxScale::from(size));
+    let (w, h) = (1300u32, 40 + 80 * lines.len() as u32);
+    let mut rgba = vec![255u8; (w * h * 4) as usize];
+    for (i, line) in lines.iter().enumerate() {
+        let mut x = 40.0;
+        for ch in line.chars() {
+            let id = scaled.glyph_id(ch);
+            assert_ne!(id.0, 0, "the fixture font must cover {ch}");
+            let glyph = id.with_scale_and_position(size, point(x, 60.0 + 80.0 * i as f32));
+            if let Some(outline) = font.outline_glyph(glyph) {
+                let bounds = outline.px_bounds();
+                outline.draw(|gx, gy, coverage| {
+                    let (px, py) = (bounds.min.x as i32 + gx as i32, bounds.min.y as i32 + gy as i32);
+                    if px >= 0 && py >= 0 && (px as u32) < w && (py as u32) < h {
+                        let v = (255.0 * (1.0 - coverage)) as u8;
+                        let o = ((py as u32 * w + px as u32) * 4) as usize;
+                        rgba[o..o + 3].copy_from_slice(&[v, v, v]);
+                    }
+                });
+            }
+            x += scaled.h_advance(id);
+        }
+    }
+    export::encode_png(w, h, &rgba).expect("a PNG of the scan")
+}
+
+/// `text` with every Latin letter that a Cyrillic one is drawn as folded into Cyrillic, so a
+/// comparison does not turn on which script the model chose for a glyph both scripts draw the
+/// same way (С/C, О/O, Р/P, А/A, Е/E). The model's own limit: it cannot tell those apart.
+fn fold_look_alike(text: &str) -> String {
+    const TWINS: &[(char, char)] = &[
+        ('a', 'а'),
+        ('b', 'в'),
+        ('c', 'с'),
+        ('e', 'е'),
+        ('h', 'н'),
+        ('k', 'к'),
+        ('m', 'м'),
+        ('o', 'о'),
+        ('p', 'р'),
+        ('t', 'т'),
+        ('x', 'х'),
+        ('y', 'у'),
+        ('A', 'А'),
+        ('B', 'В'),
+        ('C', 'С'),
+        ('E', 'Е'),
+        ('H', 'Н'),
+        ('K', 'К'),
+        ('M', 'М'),
+        ('O', 'О'),
+        ('P', 'Р'),
+        ('T', 'Т'),
+        ('X', 'Х'),
+        ('Y', 'У'),
+    ];
+    text.chars().map(|c| TWINS.iter().find(|(latin, _)| *latin == c).map_or(c, |(_, cyrillic)| *cyrillic)).collect()
+}
+
+/// Scan & OCR ▸ Recognize text in Russian: the Cyrillic model reads the lines, and the searchable
+/// text it writes is Cyrillic that survives copying, saving and undo (needs the models: `cargo
+/// xtask models`; skipped without them).
+#[test]
+fn recognize_text_reads_russian_and_writes_cyrillic_search_text() {
+    if !ocr::available_for("ru") {
+        eprintln!("skipped: East Slavic OCR models not installed");
+        return;
+    }
+    let lines = ["Договор 42 от 14 марта 2026", "Общество с ограниченной ответственностью"];
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let scan = s.create_from_images_with_resolution(&[("scan.png".into(), cyrillic_scan(&lines))], ImageResolution::Dpi(300.0)).unwrap();
+    let id = s.open("scan.pdf", None, scan, None).unwrap();
+    assert_eq!(page_texts(&s, id), [""], "a picture has no text");
+    let before = export::Exporter::new(s.get(id).unwrap()).png(0, 72.0).unwrap();
+
+    let settings = ocr::OcrSettings { language: "ru".into(), ..Default::default() };
+    let found = s.recognize_text(id, &[], settings).unwrap();
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].skipped, None);
+    let read = fold_look_alike(&page_texts(&s, id)[0]);
+    for line in lines {
+        assert!(read.contains(&fold_look_alike(line)), "no {line:?} in {read:?}");
+    }
+    // The text is real Cyrillic, not question marks: the Unicode layer picked a font that carries it.
+    let text = page_texts(&s, id)[0].clone();
+    assert!(text.chars().any(|c| ('а'..='я').contains(&c)), "{text:?}");
+    assert!(!text.contains('?'), "{text:?}");
+    assert_eq!(s.get(id).unwrap().can_undo(), Some("Recognize text"));
+    assert_eq!(export::Exporter::new(s.get(id).unwrap()).png(0, 72.0).unwrap(), before, "search text changes no pixels");
+
+    // Copying the page's text, and reopening the saved file, keep the Cyrillic.
+    let saved = s.save_bytes(id).unwrap();
+    let reopened = s.open("searchable.pdf", None, saved, None).unwrap();
+    assert_eq!(fold_look_alike(&page_texts(&s, reopened)[0]), read, "Cyrillic survives save and reopen");
+
+    s.undo(id).unwrap();
+    assert_eq!(page_texts(&s, id), [""], "one undo removes the layer");
+    s.redo(id).unwrap();
+    assert!(page_texts(&s, id)[0].contains('я') || page_texts(&s, id)[0].contains('о'));
+}
+
 /// #1028: a page with its own text and a picture of text. By default it is skipped, as before;
 /// with `skip_text_pages: false` the picture is read and the page's own text is not added again.
 #[test]

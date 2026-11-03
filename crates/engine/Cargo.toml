@@ -53,4 +53,5 @@ unicode-segmentation = "1.13"
 chrono = { workspace = true, features = ["clock"] }
 
 [dev-dependencies]
+ab_glyph = "0.2"
 pdfcraft-testkit = { workspace = true }

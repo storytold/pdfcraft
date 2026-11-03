@@ -78,7 +78,7 @@ impl<'a> Recipe<'a> {
             match *step {
                 "convert" => bytes = session.convert_to_pdf(name, &bytes)?.1,
                 "ocr" => {
-                    let engine = ocr::engine().map_err(failed)?;
+                    let engine = ocr::engine_for(&self.ocr.language).map_err(failed)?;
                     let result = ocr::recognize_file(name, bytes, None, self.ocr.clone(), &engine, |_, _| true).map_err(failed)?;
                     log.push(
                         json!({"step":"ocr","words":result.words(),"skipped_pages":result.pages.iter().filter(|p| p.skipped.is_some()).count()}),

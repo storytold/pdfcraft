@@ -6533,6 +6533,103 @@ fn ocr_tools_make_a_scan_searchable() {
     assert!(matches!(a.call("ocr_recognize", &json!({ "doc": scan, "language": "xx" })), Err(ToolError::InvalidArgs(_))));
 }
 
+/// Russian scans: `language: "ru"` reads Cyrillic with its own model (the English one cannot), on
+/// the open document and through the batch path, which writes an editable copy.
+#[test]
+fn ocr_tools_read_russian_scans() {
+    let dir = workdir("ocr-ru");
+    let mut a = auto(&dir);
+    let status = ok(&mut a, "ocr_status", json!({}));
+    let languages = status["languages"].as_array().unwrap().clone();
+    let ru = languages.iter().find(|l| l["code"] == "ru").expect("Russian is offered").clone();
+    assert_eq!(ru["name"], "Russian");
+    assert!(languages.iter().any(|l| l["code"] == "uk" && l["name"] == "Ukrainian"));
+    if ru["available"] != true {
+        eprintln!("skipped: East Slavic OCR models not installed");
+        return;
+    }
+    std::fs::write(dir.join("scan.png"), cyrillic_scan(&["Договор поставки номер 42"])).unwrap();
+    let scan = ok(&mut a, "doc_create", json!({ "from": "images", "paths": ["scan.png"], "name": "scan.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "doc_save", json!({ "doc": scan, "path": "scan.pdf" }));
+
+    let r = ok(&mut a, "ocr_recognize", json!({ "doc": scan, "language": "ru" }));
+    let text = r["pages"][0]["text"].as_str().expect("the page's recognised text").to_string();
+    assert!(fold_look_alike(&text).contains(&fold_look_alike("Договор поставки")), "{text:?}");
+    assert!(!text.contains('?'), "{text:?}");
+
+    // The batch path loads the models for the language asked for too.
+    let files = ok(&mut a, "ocr_recognize_files", json!({ "paths": ["scan.pdf"], "folder": "out", "language": "ru" }));
+    assert!(files["files"][0]["error"].is_null(), "{files}");
+    let copy = ok(&mut a, "doc_open", json!({ "path": "out/scan.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "doc_export_text", json!({ "doc": copy, "path": "out.txt" }));
+    let exported = std::fs::read_to_string(dir.join("out.txt")).unwrap();
+    assert!(fold_look_alike(&exported).contains(&fold_look_alike("Договор поставки")), "{exported:?}");
+}
+
+/// A 300 DPI scan of `lines` set in Inter (the bundled face, which covers Cyrillic), black on
+/// white, as a PNG.
+fn cyrillic_scan(lines: &[&str]) -> Vec<u8> {
+    use ab_glyph::{Font, FontRef, PxScale, ScaleFont, point};
+    let font = FontRef::try_from_slice(pdfcraft_fonts::INTER_REGULAR).expect("the bundled Inter face");
+    let size = 48.0_f32;
+    let scaled = font.as_scaled(PxScale::from(size));
+    let (w, h) = (1300u32, 40 + 80 * lines.len() as u32);
+    let mut rgba = vec![255u8; (w * h * 4) as usize];
+    for (i, line) in lines.iter().enumerate() {
+        let mut x = 40.0;
+        for ch in line.chars() {
+            let id = scaled.glyph_id(ch);
+            assert_ne!(id.0, 0, "the fixture font must cover {ch}");
+            let glyph = id.with_scale_and_position(size, point(x, 60.0 + 80.0 * i as f32));
+            if let Some(outline) = font.outline_glyph(glyph) {
+                let bounds = outline.px_bounds();
+                outline.draw(|gx, gy, coverage| {
+                    let (px, py) = (bounds.min.x as i32 + gx as i32, bounds.min.y as i32 + gy as i32);
+                    if px >= 0 && py >= 0 && (px as u32) < w && (py as u32) < h {
+                        let v = (255.0 * (1.0 - coverage)) as u8;
+                        let o = ((py as u32 * w + px as u32) * 4) as usize;
+                        rgba[o..o + 3].copy_from_slice(&[v, v, v]);
+                    }
+                });
+            }
+            x += scaled.h_advance(id);
+        }
+    }
+    pdfcraft_engine::export::encode_png(w, h, &rgba).expect("a PNG of the scan")
+}
+
+/// `text` with every Latin letter a Cyrillic one is drawn as folded into Cyrillic: the model
+/// cannot tell those apart (С/C, О/O, Р/P, А/A, Е/E), so a comparison should not depend on it.
+fn fold_look_alike(text: &str) -> String {
+    const TWINS: &[(char, char)] = &[
+        ('a', 'а'),
+        ('b', 'в'),
+        ('c', 'с'),
+        ('e', 'е'),
+        ('h', 'н'),
+        ('k', 'к'),
+        ('m', 'м'),
+        ('o', 'о'),
+        ('p', 'р'),
+        ('t', 'т'),
+        ('x', 'х'),
+        ('y', 'у'),
+        ('A', 'А'),
+        ('B', 'В'),
+        ('C', 'С'),
+        ('E', 'Е'),
+        ('H', 'Н'),
+        ('K', 'К'),
+        ('M', 'М'),
+        ('O', 'О'),
+        ('P', 'Р'),
+        ('T', 'Т'),
+        ('X', 'Х'),
+        ('Y', 'У'),
+    ];
+    text.chars().map(|c| TWINS.iter().find(|(latin, _)| *latin == c).map_or(c, |(_, cyrillic)| *cyrillic)).collect()
+}
+
 /// #1028: `skip_text_pages: false` reads a picture on a page that has its own text, and the
 /// page's own words are left out (counted) instead of being added a second time.
 #[test]
