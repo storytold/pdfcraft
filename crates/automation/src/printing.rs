@@ -23,13 +23,23 @@ fn duplex(value: &str, cut_stack: bool) -> Result<Option<spool::Duplex>> {
 }
 
 /// [`duplex`] for a job laid out as `layout`: the name is checked either way, and a booklet
-/// decides two-sided itself (#2707), as the Print dialog does (`print::booklet_duplex`).
-fn job_duplex(value: &str, layout: &Layout) -> Result<Option<spool::Duplex>> {
+/// decides two-sided itself (#2707) as far as the printer's driver takes it, as the Print dialog
+/// does (`print::booklet_job_duplex`). `two_sided` says whether it does; it is only asked for a
+/// booklet's both sides, the one job it changes.
+fn job_duplex(value: &str, layout: &Layout, two_sided: impl FnOnce() -> Option<bool>) -> Result<Option<spool::Duplex>> {
     let chosen = duplex(value, matches!(layout, Layout::Multiple { order: PageOrder::CutStack, .. }))?;
     Ok(match layout {
-        Layout::Booklet { subset, .. } => Some(print::booklet_duplex(*subset)),
+        Layout::Booklet { subset: BookletSubset::BothSides, .. } => print::booklet_job_duplex(BookletSubset::BothSides, two_sided()),
+        Layout::Booklet { subset, .. } => print::booklet_job_duplex(*subset, None),
         _ => chosen,
     })
+}
+
+/// Whether the driver of `printer` (a name, or "default") takes two-sided settings from other
+/// programs, as the printer list reports it; `None` when the list doesn't say or has no such
+/// printer.
+fn printer_two_sided(printer: &str) -> Option<bool> {
+    spool::printers().into_iter().find(|p| if printer == "default" { p.default } else { p.name == printer })?.two_sided
 }
 
 /// An invalid-arguments error saying `m`.
@@ -171,7 +181,8 @@ impl Automation {
             },
             l => return Err(bad(format!("unknown layout {l:?}"))),
         };
-        let duplex = job_duplex(a.opt_str("duplex")?.unwrap_or("off"), &layout)?;
+        let printer = a.opt_str("printer")?;
+        let duplex = job_duplex(a.opt_str("duplex")?.unwrap_or("off"), &layout, || printer.and_then(printer_two_sided))?;
         if a.opt_str("order")? == Some("cut-stack") && !matches!(layout, Layout::Multiple { .. }) {
             return Err(bad("cut-stack order needs layout multiple"));
         }
@@ -226,16 +237,21 @@ mod tests {
     use super::*;
 
     /// #2707: a booklet sets two-sided itself whatever `duplex` asks; a bad name is still an error.
+    /// #5772: its both sides leave two-sided to a driver that doesn't take the setting, and only
+    /// they look the printer up.
     #[test]
     fn a_booklet_decides_two_sided_itself() {
         let booklet = |subset| Layout::Booklet { subset, binding: Binding::Left };
+        let unread = || -> Option<bool> { panic!("the printer's two-sided support is read for nothing") };
         for asked in ["printer", "off", "long-edge", "short-edge"] {
-            assert_eq!(job_duplex(asked, &booklet(BookletSubset::BothSides)).ok(), Some(Some(spool::Duplex::ShortEdge)), "{asked}");
-            assert_eq!(job_duplex(asked, &booklet(BookletSubset::FrontOnly)).ok(), Some(Some(spool::Duplex::Off)), "{asked}");
-            assert_eq!(job_duplex(asked, &booklet(BookletSubset::BackOnly)).ok(), Some(Some(spool::Duplex::Off)), "{asked}");
+            assert_eq!(job_duplex(asked, &booklet(BookletSubset::BothSides), || Some(true)).ok(), Some(Some(spool::Duplex::ShortEdge)), "{asked}");
+            assert_eq!(job_duplex(asked, &booklet(BookletSubset::BothSides), || None).ok(), Some(Some(spool::Duplex::ShortEdge)), "{asked}");
+            assert_eq!(job_duplex(asked, &booklet(BookletSubset::BothSides), || Some(false)).ok(), Some(None), "{asked}");
+            assert_eq!(job_duplex(asked, &booklet(BookletSubset::FrontOnly), unread).ok(), Some(Some(spool::Duplex::Off)), "{asked}");
+            assert_eq!(job_duplex(asked, &booklet(BookletSubset::BackOnly), unread).ok(), Some(Some(spool::Duplex::Off)), "{asked}");
         }
-        assert!(job_duplex("sideways", &booklet(BookletSubset::BothSides)).is_err());
-        assert_eq!(job_duplex("long-edge", &Layout::Size(SizeMode::Fit)).ok(), Some(Some(spool::Duplex::LongEdge)), "other layouts keep it");
+        assert!(job_duplex("sideways", &booklet(BookletSubset::BothSides), || None).is_err());
+        assert_eq!(job_duplex("long-edge", &Layout::Size(SizeMode::Fit), unread).ok(), Some(Some(spool::Duplex::LongEdge)), "other layouts keep it");
     }
 
     /// `printer` leaves two-sided to the printer's own default (#2422); cut and stack still asks
