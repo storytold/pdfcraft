@@ -55,16 +55,21 @@ pub(super) fn wrapped(t: &AddedText) -> Vec<(String, bool, usize)> {
         let measure = |s: &str| if rtl_script || thai { shaped_width(t, s, rtl) } else { latin_width(t, s) };
         let space = measure(" ");
         let (mut line, mut line_w) = (String::new(), 0.0);
+        // Widths add up (the standard-14 widths have no kerning), so each word is measured once
+        // and appended in place: a line that never fills (negative character spacing) stays
+        // linear instead of being copied and measured again for every word.
         for word in para.split(' ') {
-            let candidate = if line.is_empty() { word.to_string() } else { format!("{line} {word}") };
-            let candidate_w =
-                if rtl_script || thai { if line.is_empty() { measure(word) } else { line_w + space + measure(word) } } else { measure(&candidate) };
+            let word_w = measure(word);
+            let candidate_w = if line.is_empty() { word_w } else { line_w + space + word_w };
             if !line.is_empty() && candidate_w > width {
                 out.push((std::mem::take(&mut line), rtl, index));
-                line = word.to_string();
-                line_w = measure(word);
+                line.push_str(word);
+                line_w = word_w;
             } else {
-                line = candidate;
+                if !line.is_empty() {
+                    line.push(' ');
+                }
+                line.push_str(word);
                 line_w = candidate_w;
             }
         }

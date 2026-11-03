@@ -292,8 +292,11 @@ pub fn isolate_content(doc: &mut Document, page: usize, index: usize) -> Result<
 /// names them so), so they go when the item is replaced or deleted.
 fn own_fonts(doc: &Document, obj: ObjRef) -> Vec<Vec<u8>> {
     let Object::Stream(s) = &*doc.get(obj) else { return Vec::new() };
-    let Ok(data) = s.decoded() else { return Vec::new() };
-    data.split(u8::is_ascii_whitespace).filter_map(|w| w.strip_prefix(b"/")).filter(|w| w.starts_with(b"PCAr")).map(<[u8]>::to_vec).collect()
+    let Ok(data) = s.decoded_within(pdfcraft_cos::MAX_PAGE_DECODED) else { return Vec::new() };
+    // Each name once: a stream that repeats a name is not copied out once per use.
+    let names: std::collections::BTreeSet<&[u8]> =
+        data.split(u8::is_ascii_whitespace).filter_map(|w| w.strip_prefix(b"/")).filter(|w| w.starts_with(b"PCAr")).collect();
+    names.into_iter().map(<[u8]>::to_vec).collect()
 }
 
 fn drop_fonts(doc: &Document, res: &mut Dict, names: &[Vec<u8>]) {
