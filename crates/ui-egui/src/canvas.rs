@@ -653,9 +653,10 @@ pub struct DocView {
     /// Who the press the pages hold belongs to. Only the page view reads it: it tells each page
     /// module what the press is to its page (`PagePress`).
     pub(in crate::canvas) router: crate::page_router::PageRouter,
-    /// What the last right-click on a page went to, and on which page: the page's menu shows its
-    /// entries, or the page's own when it went to nothing that has a menu.
-    pub(crate) menu_for: Option<(usize, crate::page_router::Owner)>,
+    /// What the last right-click on a page went to, and on which page (`None` off the pages, and for
+    /// Add text, which takes every right-click): the page's menu shows its entries when it has a menu
+    /// and is the one selected, or else the page's own.
+    pub(in crate::canvas) menu_for: Option<(usize, crate::page_router::Owner)>,
     /// Escape cancelled the press the pages hold: the page ignores it until the button is up, so
     /// its release neither clicks nor ends a drag.
     pub(crate) press_cancelled: bool,
@@ -1798,19 +1799,28 @@ fn draw_pages(
         view.current = current;
     }
     // The menu of what the right-click went to (`menu_for`), or else the page's.
-    use crate::page_router::{CropPart, Owner, PicturePart};
+    use crate::page_router::{Owner, PicturePart};
     let menu_for = view.menu_for.map(|(_, owner)| owner);
+    // A right-click while a press is held leaves the selections alone, so the menu is its owner's only
+    // when that owner is the one selected.
+    let on_selected_field = match menu_for {
+        Some(Owner::PrepareField { field, widget }) => {
+            form.get(field).is_some_and(|f| view.prepare.selected.as_ref().is_some_and(|(name, w)| *name == f.name && *w == widget))
+        }
+        Some(Owner::PrepareCorner { .. }) => true,
+        _ => false,
+    };
     resp.context_menu(|ui| {
         // Crop mode has no menu: a right-click on the picture being cropped, its box or its grips is
         // the crop's (#5835).
-        if matches!(menu_for, Some(Owner::Picture { part: PicturePart::Crop(part), .. }) if part != CropPart::Page) {
+        if matches!(menu_for, Some(Owner::Picture { part: PicturePart::Crop(_), .. })) {
             egui::Popup::close_all(ui.ctx());
             ui.close();
             return;
         }
         // Preparing a form: the selected field's menu, on a field.
         if preparing
-            && matches!(menu_for, Some(Owner::PrepareField { .. } | Owner::PrepareCorner { .. }))
+            && on_selected_field
             && let Some((name, wi)) = view.prepare.selected.clone()
         {
             // Several fields: Align, Center, Distribute, Set Fields to Same Size.
@@ -1883,8 +1893,8 @@ fn draw_pages(
         }
         let can_paste_image = env.can_paste_image;
         if tool == QuickTool::EditText
-            && matches!(menu_for, Some(Owner::Picture { .. }))
-            && let Some(sel) = view.image_selection.clone()
+            && let Some((page, Owner::Picture { index, .. })) = view.menu_for
+            && let Some(sel) = view.image_selection.clone().filter(|s| (s.page, s.index) == (page, index))
         {
             let images = cached_edit_images(view, doc, sel.page).to_vec();
             // Paste lands where the menu opened, on the picture's page: the right-click that opened

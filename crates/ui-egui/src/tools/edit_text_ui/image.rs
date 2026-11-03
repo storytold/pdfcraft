@@ -971,9 +971,9 @@ pub(crate) fn image_input(cx: &ImageCx<'_>, images: &[pdfcraft_engine::PageImage
     owner.is_some()
 }
 
-/// A right-click on `page` that went to its picture `index` (on it, a grip of it, or the box kept
-/// while it is cropped) selects it for its menu, keeping it as it is if it was selected; one that
-/// went to anything else (`None`) unselects the picture selected.
+/// A right-click on `page` that went to its picture `index` (on it or a grip of it) selects it for
+/// its menu, keeping it as it is if it was selected (crop mode included); one that went to anything
+/// else (`None`) unselects the picture selected.
 pub(crate) fn picture_context(page: usize, index: Option<usize>, view: &mut DocView) {
     match index {
         Some(index) if view.image_selection.as_ref().is_none_or(|s| (s.page, s.index) != (page, index)) => {

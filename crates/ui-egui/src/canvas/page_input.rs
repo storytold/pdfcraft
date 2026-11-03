@@ -141,7 +141,7 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
     // page unselects it.
     if right.is_some() && tool == QuickTool::EditText && can_modify && !press_held {
         let picture = match context {
-            Some(Owner::Picture { index, part }) if part != crate::page_router::PicturePart::Crop(crate::page_router::CropPart::Page) => Some(index),
+            Some(Owner::Picture { index, .. }) => Some(index),
             _ => None,
         };
         crate::edit_text_ui::picture_context(i, picture, view);
@@ -357,13 +357,9 @@ fn right_click(hits: &PageHits<'_>, under: &[crate::page_router::Hit], view: &mu
     let context = hits.context_at(view, p, under);
     // Delete page, Paste and Copy Image act where the menu opened, whoever takes the right-click.
     comments::anchor(hits.pcx, p, view);
-    // The menu is what the right-click went to: Add text's is the page's. While a press is held only
-    // a link takes its menu, as only links take theirs then.
-    view.menu_for = match context {
-        Some(owner @ Owner::Link { .. }) => Some((hits.page, owner)),
-        _ if press_held || hits.tool == QuickTool::AddText && hits.can_modify => None,
-        owner => owner.map(|o| (hits.page, o)),
-    };
+    // The menu is what the right-click went to (Add text's is the page's), when that is selected:
+    // under a held press, the selections stay as they are.
+    view.menu_for = context.filter(|_| !(hits.tool == QuickTool::AddText && hits.can_modify)).map(|o| (hits.page, o));
     if press_held {
         return context;
     }
@@ -432,6 +428,11 @@ struct PageHits<'a> {
 }
 
 impl PageHits<'_> {
+    /// Edit text's crop mode is on for a picture on this page.
+    fn cropping(&self, view: &DocView) -> bool {
+        self.tool == QuickTool::EditText && self.can_modify && view.image_selection.as_ref().is_some_and(|s| s.page == self.page && s.crop.is_some())
+    }
+
     /// The hits at `p`, bottom up ([`Self::hits`]). For a press with Shift or ⌘ in Edit text, the
     /// page's `objects` ([`crate::object_ui::ObjectSelection::inventory`]), which take it whole.
     fn at(&self, view: &DocView, p: Pos2, objects: Option<&Result<Vec<pdfcraft_engine::EditableObject>, String>>) -> Vec<crate::page_router::Hit> {
@@ -439,8 +440,11 @@ impl PageHits<'_> {
     }
 
     /// What a right-click at `p` is on: what lies on top there, as for a press, but with every
-    /// tool reaching comments and links, as a comment's menu shows whatever the tool. A highlight
-    /// over a link is the highlight's ([`comments::context_hit`]).
+    /// tool reaching comments, as a comment's menu shows whatever the tool, and a Prepare field
+    /// whatever the field tool. Links count for the tools that reach them (Select; the Link tool,
+    /// below). Edit text's paragraphs have no menu, and give way to the picture under them (the
+    /// user's ruling): with Edit text, a picture under a link or a paragraph takes the right-click.
+    /// A highlight over a link is the highlight's ([`comments::context_hit`]).
     /// The Link tool edits links and reaches no comment: on a document it can change, its
     /// right-click is what its press there would take (`under`, the hits at `p`), when that is
     /// anything.
@@ -451,7 +455,11 @@ impl PageHits<'_> {
         {
             return Some(press.owner);
         }
-        top(self.hits(view, p, true, None), QuickTool::Select).map(|h| h.owner)
+        let reached = self
+            .hits(view, p, true, None)
+            .into_iter()
+            .filter(|h| (h.layer != Layer::Link || h.layer.reached_by(self.tool)) && !matches!(h.owner, Owner::Paragraph { .. }));
+        top(reached, QuickTool::Select).map(|h| h.owner)
     }
 
     /// The hits at `p`, bottom up: links, comments; Edit text's pictures under its paragraphs (text
@@ -459,7 +467,8 @@ impl PageHits<'_> {
     /// open paragraph's frame, the selected picture's grips over them all; the camera tool's corners;
     /// then form fields (Prepare's, being moved, over the comments; filled ones under added content
     /// and the comments that move). For a press with Shift or ⌘ in Edit text, only the objects
-    /// (`objects`, the page's); in crop mode, only the picture being cropped.
+    /// (`objects`, the page's); in crop mode, only the picture being cropped, which a right-click
+    /// reaches only on the crop.
     /// For a right-click (`context`), comments by [`comments::context_hit`], and no camera corner (it
     /// has no menu).
     fn hits(
@@ -492,10 +501,19 @@ impl PageHits<'_> {
         if let Some(objects) = objects {
             return crate::object_ui::modified_hit(view, xf, info, page, objects, clip, p).into_iter().collect();
         }
-        // Crop mode holds every press on its page (`edit_text_ui::crop_hit`).
-        if tool == QuickTool::EditText && can_modify && view.image_selection.as_ref().is_some_and(|s| s.page == page && s.crop.is_some()) {
-            return crate::edit_text_ui::crop_hit(xf, page, info, images, view, p).into_iter().collect();
+        // Crop mode holds every press on its page (`edit_text_ui::crop_hit`). A right-click is the
+        // crop's only on the picture being cropped, its box or its grips (#5835), where it keeps crop
+        // mode and opens no menu; elsewhere it goes to what lies there, as without crop mode.
+        if self.cropping(view) {
+            use crate::page_router::{CropPart, PicturePart};
+            let crop = crate::edit_text_ui::crop_hit(xf, page, info, images, view, p);
+            let on_crop = crop.as_ref().is_some_and(|h| !matches!(h.owner, Owner::Picture { part: PicturePart::Crop(CropPart::Page), .. }));
+            if !context || on_crop {
+                return crop.into_iter().collect();
+            }
         }
+        // A right-click reaches a Prepare field whatever the field tool, and while a table is set up.
+        let (field_tool, prepare_allowed) = if context { (None, true) } else { (field_tool, prepare_allowed) };
         let fields = if preparing {
             crate::prepare::hit(xf, info, page, form, field_tool, prepare_allowed, &view.prepare, p)
         } else if tool == QuickTool::Select {

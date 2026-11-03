@@ -7313,6 +7313,48 @@ fn escape_during_a_crop_drag_keeps_crop_mode() {
     assert!(!dirty(&h));
 }
 
+/// With Edit text, a right-click on text lying over a picture is the picture's, which is selected
+/// for its menu: paragraphs have no menu of their own (the user's ruling).
+#[test]
+fn a_right_click_on_text_over_a_picture_selects_the_picture() {
+    let mut h = picture_pages(false);
+    h.state_mut().views[0].image_selection = None;
+    h.run_steps(2);
+    // "Overlay" lies on the picture, at x 40, y 220.
+    let overlay = page_at(&h, 0, 50.0, 224.0);
+    right_click_at(&mut h, overlay);
+    let selected = h.state().views[0].image_selection.as_ref().map(|s| (s.page, s.index));
+    assert_eq!(selected, Some((0, 0)), "the picture under the text is selected for its menu");
+}
+
+/// In crop mode, a right-click on another picture selects it for its menu, as without crop mode. It
+/// went to crop mode's whole-page hit, which unselected every picture.
+#[test]
+fn in_crop_mode_a_right_click_on_another_picture_selects_it() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1400.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("two.pdf", None, two_image_fixture()).unwrap();
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(4);
+    let id = h.state().views[0].id;
+    let rect = h.state().session.get(id).unwrap().page_images(0)[0].rect;
+    let mut selection = pdfcraft_ui_egui::ImageSelection::at(0, 0);
+    selection.crop = Some(pdfcraft_ui_egui::CropMode::new(rect));
+    h.state_mut().views[0].image_selection = Some(selection);
+    h.run_steps(2);
+    let xf = h.state().views[0].page_xform(0).unwrap();
+    let doc = h.state().session.get(id).unwrap();
+    let other = pdfcraft_ui_egui::canvas::image_screen_rect(&doc.page_images(0)[1], &xf, &doc.info, 0);
+    crop_secondary_click(&mut h, other.center());
+    let selection = h.state().views[0].image_selection.clone();
+    assert!(selection.as_ref().is_some_and(|s| s.index == 1 && s.crop.is_none()), "the other picture is selected: {selection:?}");
+    assert!(h.query_by_label("Flip horizontal").is_some(), "its menu opens");
+}
+
 /// Delete removes the selected picture wherever the pointer is, on a paragraph too: the key is the
 /// app's, not the pointer's.
 #[test]

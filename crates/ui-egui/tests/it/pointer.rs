@@ -1838,6 +1838,35 @@ fn with_prepare_a_right_click_beside_the_selected_field_opens_the_pages_menu() {
     assert!(h.query_by_label("Duplicate…").is_some(), "the field's menu on the field");
 }
 
+/// With a Prepare field tool picked, a right-click on a field selects it and opens its menu, as with
+/// Prepare's Select tool: the tool's hit leaves fields out (it draws new ones over them), but a
+/// right-click reaches them.
+#[test]
+fn with_a_field_tool_a_right_click_on_a_field_opens_its_menu() {
+    let mut h = open(comment_and_checkbox_pdf(), "150", false);
+    assert!(h.state_mut().execute("form.prepare"));
+    h.run_steps(4);
+    assert!(h.state_mut().execute("form.add.text"));
+    h.run_steps(4);
+    let on_box = at(&h, 110.0, 210.0);
+    right_click(&mut h, on_box);
+    assert!(h.state().views[0].prepare.selected.is_some(), "the field is selected");
+    assert!(h.query_by_label("Duplicate…").is_some(), "the field's menu");
+}
+
+/// With Edit text, a right-click on a picture under a link is the picture's (Edit text doesn't
+/// follow links): it is selected for its menu.
+#[test]
+fn with_edit_text_a_right_click_on_a_picture_under_a_link_selects_the_picture() {
+    let mut h = open(linked_picture_pdf(), "150", false);
+    h.state_mut().quick_tool = QuickTool::EditText;
+    h.run_steps(4);
+    let on_link = at(&h, 150.0, 300.0);
+    right_click(&mut h, on_link);
+    let selected = h.state().views[0].image_selection.as_ref().map(|s| (s.page, s.index));
+    assert_eq!(selected, Some((0, 0)), "the picture is selected for its menu");
+}
+
 /// With the Edit panel open and the Note tool, a click on added text is the added text's: no note is
 /// started under it, as before.
 #[test]
