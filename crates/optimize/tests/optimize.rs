@@ -1951,8 +1951,12 @@ fn black_and_white_images_become_jbig2() {
     assert!(r.image_bytes_after < as_g4.image_bytes_after, "JBIG2 {} bytes, Group 4 {}", r.image_bytes_after, as_g4.image_bytes_after);
     let images: Vec<Stream> = image_refs(&jbig2).into_iter().map(|i| stream(&jbig2, i)).collect();
     assert_eq!(images.len(), 3);
+    // The same text three times: the images share one symbol dictionary.
+    let globals = images[0].dict.get(b"DecodeParms").and_then(Object::as_dict).and_then(|d| d.reference(b"JBIG2Globals"));
+    assert!(globals.is_some());
     for s in &images {
-        assert_eq!((s.dict.name(b"Filter"), s.dict.contains(b"DecodeParms")), (Some(&b"JBIG2Decode"[..]), false));
+        assert_eq!(s.dict.name(b"Filter"), Some(&b"JBIG2Decode"[..]));
+        assert_eq!(s.dict.get(b"DecodeParms").and_then(Object::as_dict).map(|d| (d.len(), d.reference(b"JBIG2Globals"))), Some((1, globals)));
     }
     assert!(images.iter().any(|s| s.dict.get(b"Decode") == Some(&decode)), "the decode array stays");
     let indexed_kept =
@@ -1999,6 +2003,11 @@ fn a_catalog_version_given_by_reference_is_read() {
 /// `#` a 3 × 3 block, three columns apart with a wider gap between words, every copy of a letter
 /// the same to the pixel.
 fn rendered_text(w: u32, h: u32) -> Vec<u8> {
+    rendered_text_from(w, h, 0x2545_F491_4F6C_DD1D)
+}
+
+/// [`rendered_text`], its letters picked from `seed`, which isn't 0.
+fn rendered_text_from(w: u32, h: u32, mut seed: u64) -> Vec<u8> {
     const LETTERS: [&[&str]; 5] = [
         &["##", "##", "##", "##", "##", "##", "##", "##", "##", "##"],
         &["......", ".####.", "##..##", "##..##", "##..##", "##..##", ".####."],
@@ -2008,7 +2017,6 @@ fn rendered_text(w: u32, h: u32) -> Vec<u8> {
     ];
     let stride = (w as usize).div_ceil(8);
     let mut data = vec![0xFF; stride * h as usize];
-    let mut seed = 0x2545_F491_4F6C_DD1Du64;
     let mut next = move || {
         seed ^= seed << 13;
         seed ^= seed >> 7;
@@ -2053,7 +2061,147 @@ fn rendered_text_becomes_jbig2_symbols() {
     assert_eq!(s.dict.name(b"Filter"), Some(&b"JBIG2Decode"[..]));
     let generic = pdfcraft_filters::encode_jbig2_generic(&text, w, h).unwrap();
     assert!(s.raw.len() * 2 < generic.len(), "symbols {} bytes, generic {}", s.raw.len(), generic.len());
+    assert!(!s.dict.contains(b"DecodeParms"), "alone, it shares no dictionary");
     assert!(render(&doc) == before, "the page looks the same");
+}
+
+/// Page `index` of `doc`, saved and opened again, rendered at scale 1.
+fn render_page(doc: &Document, index: usize) -> Vec<u8> {
+    let bytes = write_full(doc, &SaveOptions::default()).unwrap();
+    let mut r = pdfcraft_render::PageRenderer::new(Arc::new(bytes), pdfcraft_render::RenderConfig::default());
+    let out = r.render(pdfcraft_render::RenderRequest { page: index, scale: 1.0, ..Default::default() });
+    assert!(out.error.is_none(), "{:?}", out.error);
+    out.rgba.to_vec()
+}
+
+/// Text in a font of 26 letters, about 10 pt at 300 dpi: each letter 32 rows of a run from a stem
+/// down its left side, of 2 to 24 pixels, every copy the same to the pixel; lines 44 rows apart,
+/// the letters picked from `seed`, which isn't 0.
+fn font_text(w: u32, h: u32, mut seed: u64) -> Vec<u8> {
+    let mut font_seed = 0x2545_F491_4F6C_DD1Du64;
+    let next = |seed: &mut u64| {
+        *seed ^= *seed << 13;
+        *seed ^= *seed >> 7;
+        *seed ^= *seed << 17;
+        *seed
+    };
+    let letters: Vec<Vec<usize>> = (0..26).map(|_| (0..16).map(|_| 1 + (next(&mut font_seed) % 12) as usize).collect()).collect();
+    let stride = (w as usize).div_ceil(8);
+    let mut data = vec![0xFF; stride * h as usize];
+    for top in (8..(h as usize).saturating_sub(40)).step_by(44) {
+        let mut x = 8;
+        while x + 32 < w as usize {
+            let letter = &letters[(next(&mut seed) % 26) as usize];
+            for (row, run) in letter.iter().enumerate() {
+                for y in [top + 2 * row, top + 2 * row + 1] {
+                    for px in x..x + 2 * run {
+                        data[y * stride + px / 8] &= !(0x80 >> (px % 8));
+                    }
+                }
+            }
+            x += 2 * letter.iter().max().unwrap() + 4 + if next(&mut seed) % 6 == 0 { 14 } else { 0 };
+        }
+    }
+    data
+}
+
+/// The `/JBIG2Globals` an image names in its `/DecodeParms`.
+fn globals_of(doc: &Document, image: ObjRef) -> Option<ObjRef> {
+    stream(doc, image).dict.get(b"DecodeParms")?.as_dict()?.reference(b"JBIG2Globals")
+}
+
+/// Pages of text in one font, each letter the same to the pixel on every page, stored as JBIG2
+/// share one symbol dictionary (`/JBIG2Globals`): together they take less than each page coded
+/// alone, and every page looks the same, the last one, whose crosses no other page has, placing
+/// them from a dictionary of its own beside the shared one. The report counts the bytes they
+/// take, the globals once.
+#[test]
+fn jbig2_pages_share_one_symbol_dictionary() {
+    let mut doc = Document::new_empty();
+    let (w, h) = (600u32, 480u32);
+    let stride = (w as usize).div_ceil(8);
+    let pages: Vec<Vec<u8>> = (1..=4u64)
+        .map(|k| {
+            let mut text = font_text(w, h, k.wrapping_mul(0x9E37_79B9_7F4A_7C15));
+            if k == 4 {
+                // Crosses down the right margin, three pixels a stroke.
+                for top in (40..440).step_by(40) {
+                    for (dx, dy) in (0..9).map(|i| (i, 4)).chain((0..9).map(|i| (4, i))) {
+                        let (x, y) = (580 + dx, top + dy);
+                        text[y * stride + x / 8] &= !(0x80 >> (x % 8));
+                    }
+                }
+            }
+            text
+        })
+        .collect();
+    let images: Vec<ObjRef> = pages
+        .iter()
+        .map(|text| {
+            let im = mono_image(&mut doc, w, h, text, None, &[("BitsPerComponent", 1.into()), ("ColorSpace", Object::name("DeviceGray"))]);
+            page(&mut doc, &[("Im", im)], "q 600 0 0 480 6 300 cm /Im Do Q");
+            im
+        })
+        .collect();
+    let before: Vec<Vec<u8>> = (0..pages.len()).map(|p| render_page(&doc, p)).collect();
+    let alone: usize = pages.iter().map(|text| pdfcraft_filters::encode_jbig2(text, w, h).unwrap().len()).sum();
+    let settings = Settings { mono: MonoSettings { compression: MonoCompression::Jbig2, ..MonoSettings::REDUCE }, ..Settings::default() };
+    let report = optimize(&mut doc, &settings).unwrap();
+    let globals = globals_of(&doc, images[0]).expect("the first page names the globals");
+    assert!(images.iter().all(|im| globals_of(&doc, *im) == Some(globals)), "every page names the same globals");
+    let shared = stream(&doc, globals).raw.len() + images.iter().map(|im| stream(&doc, *im).raw.len()).sum::<usize>();
+    assert!(shared * 4 < alone * 3, "shared {shared} bytes, alone {alone}");
+    assert_eq!(report.image_bytes_after, shared);
+    for (p, before) in before.iter().enumerate() {
+        assert!(render_page(&doc, p) == *before, "page {p} looks the same");
+        let s = stream(&doc, images[p]);
+        assert_eq!(decoded_image(&doc, &s).unwrap(), pages[p], "page {p} decodes to its samples");
+    }
+}
+
+/// Images share a dictionary only where that saves more than it takes: two pages of five small
+/// letters save less than their globals would take, and stay as they are coded alone.
+#[test]
+fn a_dictionary_that_saves_less_than_it_takes_isnt_shared() {
+    let mut doc = Document::new_empty();
+    let (w, h) = (600u32, 480u32);
+    let images: Vec<ObjRef> = (1..=2u64)
+        .map(|k| {
+            let text = rendered_text_from(w, h, k.wrapping_mul(0x9E37_79B9_7F4A_7C15));
+            let im = mono_image(&mut doc, w, h, &text, None, &[("BitsPerComponent", 1.into()), ("ColorSpace", Object::name("DeviceGray"))]);
+            page(&mut doc, &[("Im", im)], "q 600 0 0 480 6 300 cm /Im Do Q");
+            im
+        })
+        .collect();
+    let settings = Settings { mono: MonoSettings { compression: MonoCompression::Jbig2, ..MonoSettings::REDUCE }, ..Settings::default() };
+    let report = optimize(&mut doc, &settings).unwrap();
+    assert_eq!(report.images_recompressed, 2);
+    for im in images {
+        let s = stream(&doc, im);
+        assert_eq!((s.dict.name(b"Filter"), s.dict.contains(b"DecodeParms")), (Some(&b"JBIG2Decode"[..]), false));
+    }
+}
+
+/// Sixteen images at most share one dictionary: of twenty, the first sixteen share one and the
+/// other four another.
+#[test]
+fn sixteen_images_at_most_share_a_dictionary() {
+    let mut doc = Document::new_empty();
+    let (w, h) = (300u32, 200u32);
+    let images: Vec<ObjRef> = (1..=20u64)
+        .map(|k| {
+            let text = font_text(w, h, k.wrapping_mul(0x9E37_79B9_7F4A_7C15));
+            let im = mono_image(&mut doc, w, h, &text, None, &[("BitsPerComponent", 1.into()), ("ColorSpace", Object::name("DeviceGray"))]);
+            page(&mut doc, &[("Im", im)], "q 300 0 0 200 6 300 cm /Im Do Q");
+            im
+        })
+        .collect();
+    let settings = Settings { mono: MonoSettings { compression: MonoCompression::Jbig2, ..MonoSettings::REDUCE }, ..Settings::default() };
+    optimize(&mut doc, &settings).unwrap();
+    let globals: Vec<Option<ObjRef>> = images.iter().map(|im| globals_of(&doc, *im)).collect();
+    assert!(globals.iter().all(Option::is_some), "{globals:?}");
+    assert!(globals[..16].iter().all(|g| *g == globals[0]) && globals[16..].iter().all(|g| *g == globals[16]), "{globals:?}");
+    assert_ne!(globals[0], globals[16]);
 }
 
 /// A JBIG2 scan goes through Monochrome Images like any black-and-white image. Above 450 ppi it

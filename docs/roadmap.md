@@ -298,6 +298,7 @@ Estimates unchanged.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-03 | minor | M11: Optimize's JBIG2 images share a symbol dictionary (`/JBIG2Globals`), up to 16 at a time and when smaller (`pdfcraft_filters::encode_jbig2_shared`): 41–46% smaller on rendered text in proportional fonts, 10% in Courier |
 | 2026-11-02 | patch | M10 #5743: macOS print jobs carry the job name and owner some vendors' filters need; not yet checked on a physical printer |
 | 2026-11-01 | patch | M7 #5657: header/footer, watermark and background operations commit all selected pages together; later-page errors preserve marks, content, shared/inherited resources and pending edits; estimates unchanged. |
 | 2026-10-31 | patch | #1577: reconcile optional page shadows with current viewer/organizer and settings modules; CI validation pending. |

@@ -1117,12 +1117,23 @@ fn downsample_bits_checked(data: &[u8], w: u32, h: u32, nw: u32, nh: u32, dark_i
 ///   to be resampled, and so is JBIG2 alone when Group 4 is asked for; Group 3, Group 4 inside
 ///   another filter, and JBIG2 otherwise are stored again like any other. With `Retain`, a resampled image keeps its kind of compression (CCITT, JBIG2, or
 ///   Flate), and nothing else changes: an image of more bits stays as it is, for the grey or
-///   colour settings. A JBIG2 image stored again refers to no `/JBIG2Globals`.
+///   colour settings. A JBIG2 image stored again refers to no `/JBIG2Globals`; with `Jbig2`, [`share`]
+///   may then have a group of them share one.
 ///
 /// The samples keep their meaning, so the colour space, decode array and `/Mask` stay, but for
 /// black-and-white RGB, which becomes grey with one decode pair, and an indexed image's default
 /// decode array, which goes as the default at one bit.
-fn mono(doc: &Document, s: &Stream, ppi: f64, defaults: bool, settings: &MonoSettings, budget: &mut ImageBudget) -> Option<(Stream, bool)> {
+///
+/// Stored as JBIG2 with `Jbig2`, it comes with the 1-bit samples it was coded from, for [`share`]
+/// to code again with the run's other JBIG2 images.
+fn mono(
+    doc: &Document,
+    s: &Stream,
+    ppi: f64,
+    defaults: bool,
+    settings: &MonoSettings,
+    budget: &mut ImageBudget,
+) -> Option<(Stream, bool, Option<Vec<u8>>)> {
     let d = &s.dict;
     let downsample = settings.downsample && ppi.is_finite() && ppi > settings.above_ppi && settings.target_ppi > 0.0 && !d.contains(b"SMask");
     let retain = settings.compression == MonoCompression::Retain;
@@ -1206,7 +1217,72 @@ fn mono(doc: &Document, s: &Stream, ppi: f64, defaults: bool, settings: &MonoSet
     let flate = ((resampled || packed_from_more) && !(retain && (ccitt || jbig2))).then(|| Stream::flate(dict, &data));
     // Smaller as stored, counting the dictionary: a tiny image can lose by Group 4's parameters.
     let best = [g4, jbig, flate].into_iter().flatten().filter_map(|c| Some((crate::stored_len(&c)?, c))).min_by_key(|(len, _)| *len)?;
-    (best.0 < crate::stored_len(s)?).then_some((best.1, resampled))
+    let shareable = settings.compression == MonoCompression::Jbig2 && best.1.dict.name(b"Filter") == Some(b"JBIG2Decode");
+    (best.0 < crate::stored_len(s)?).then(|| (best.1, resampled, shareable.then_some(data)))
+}
+
+/// The most images that share one symbol dictionary ([`share`]). Redaction stores again every
+/// image that shares a redacted one's dictionary, and each image's decode reads all of it, so a
+/// group keeps both to that many; most of what sharing saves comes with the first few images.
+const SHARED_IMAGES: usize = 16;
+
+/// The most bytes of 1-bit samples a group holds: a group is coded before it would pass them.
+const SHARED_BYTES: usize = 64 << 20;
+
+/// An image the run stored as JBIG2, held to be stored again sharing a dictionary ([`share`]): its
+/// 1-bit samples, `width` × `height`.
+struct Held {
+    image: ObjRef,
+    bits: Vec<u8>,
+    width: u32,
+    height: u32,
+}
+
+/// Stores the images of `group`, each JBIG2 already, again sharing one symbol dictionary in a
+/// `/JBIG2Globals` stream ([`pdfcraft_filters::encode_jbig2_shared`]): those that come out smaller
+/// that way, if together they save more than the globals take. The others stay as they are, and
+/// so do all of them when that saves nothing. `report` counts the bytes as they end up, the globals
+/// included.
+fn share(doc: &mut Document, group: &mut Vec<Held>, report: &mut Report) {
+    let held = std::mem::take(group);
+    if held.len() < 2 {
+        return;
+    }
+    let images: Vec<(&[u8], u32, u32)> = held.iter().map(|h| (&h.bits[..], h.width, h.height)).collect();
+    let Ok(Some(shared)) = pdfcraft_filters::encode_jbig2_shared(&images) else { return };
+    let with_globals = |s: &Stream, coded: Vec<u8>, globals: ObjRef| {
+        let mut dict = s.dict.clone();
+        let mut parms = Dict::new();
+        parms.set(b"JBIG2Globals".to_vec(), Object::Ref(globals));
+        dict.set(b"DecodeParms".to_vec(), Object::Dict(parms));
+        Stream::from_raw(dict, coded)
+    };
+    // Weighed naming the globals with the longest reference there is: the real one is no longer.
+    let longest = ObjRef { num: u32::MAX, generation: u16::MAX };
+    let (mut chosen, mut saved) = (Vec::new(), 0usize);
+    for (h, coded) in held.iter().zip(shared.images) {
+        let Some(coded) = coded else { continue };
+        let object = doc.get(h.image);
+        let Object::Stream(alone) = &*object else { continue };
+        let shorter = crate::stored_len(alone).zip(crate::stored_len(&with_globals(alone, coded.clone(), longest))).filter(|(a, b)| b < a);
+        if let Some((before, after)) = shorter {
+            saved = saved.saturating_add(before - after);
+            chosen.push((h.image, coded));
+        }
+    }
+    let globals = Stream::from_raw(Dict::new(), shared.globals);
+    if chosen.is_empty() || crate::stored_len(&globals).is_none_or(|takes| saved <= takes) {
+        return;
+    }
+    report.image_bytes_after = report.image_bytes_after.saturating_add(globals.raw.len());
+    let globals = doc.add(Object::Stream(globals));
+    for (image, coded) in chosen {
+        let object = doc.get(image);
+        let Object::Stream(alone) = &*object else { continue };
+        report.image_bytes_after = report.image_bytes_after.saturating_sub(alone.raw.len()).saturating_add(coded.len());
+        let new = with_globals(alone, coded, globals);
+        doc.set(image, Object::Stream(new));
+    }
 }
 
 /// One pass over the document's images, within `budget`. An image past it stays as it is, and is
@@ -1239,6 +1315,16 @@ pub(crate) fn run(
     refs.sort_by_key(|(r, _)| r.num);
     let total = refs.len();
     let mut jbig2 = false;
+    let mut group: Vec<Held> = Vec::new();
+    // Holds a JBIG2 image for `share`, which codes the group once it is full.
+    let mut hold = |doc: &mut Document, image: ObjRef, size: (Option<i64>, Option<i64>), bits: Option<Vec<u8>>, report: &mut Report| {
+        let side = |v: Option<i64>| v.and_then(|v| u32::try_from(v).ok());
+        let (Some(bits), Some(width), Some(height)) = (bits, side(size.0), side(size.1)) else { return };
+        group.push(Held { image, bits, width, height });
+        if group.len() == SHARED_IMAGES || group.iter().map(|h| h.bits.len()).fold(0, usize::saturating_add) >= SHARED_BYTES {
+            share(doc, &mut group, report);
+        }
+    };
     for (done, (r, ppi)) in refs.into_iter().enumerate() {
         if !progress(Stage::Images { done, total }) {
             return Err(OptimizeError::Cancelled);
@@ -1254,7 +1340,7 @@ pub(crate) fn run(
             Some(m) if packed_from_more => (Some(m), None),
             m => (None, m),
         };
-        if let Some((new, resampled)) = mono {
+        if let Some((new, resampled, bits)) = mono {
             report.image_bytes_before += s.raw.len();
             report.image_bytes_after += new.raw.len();
             if resampled {
@@ -1263,7 +1349,9 @@ pub(crate) fn run(
                 report.images_recompressed += 1;
             }
             jbig2 |= new.dict.name(b"Filter") == Some(b"JBIG2Decode");
+            let size = (new.dict.int(b"Width"), new.dict.int(b"Height"));
             doc.set(r, Object::Stream(new));
+            hold(doc, r, size, bits, report);
             continue;
         }
         let n = s.dict.get(b"ColorSpace").and_then(|cs| components(doc, cs));
@@ -1278,10 +1366,10 @@ pub(crate) fn run(
             }),
         };
         let total = |new: &Stream, smask: Option<&(ObjRef, Stream)>| Some(crate::stored_len(new)?.saturating_add(smask_len(smask).unwrap_or(0)));
-        let packed_wins = packed.as_ref().is_some_and(|(p, _)| {
+        let packed_wins = packed.as_ref().is_some_and(|(p, _, _)| {
             processed.as_ref().is_none_or(|(new, smask)| total(p, None).zip(total(new, smask.as_ref())).is_some_and(|(a, b)| a <= b))
         });
-        if let Some((new, resampled)) = packed.filter(|_| packed_wins) {
+        if let Some((new, resampled, bits)) = packed.filter(|_| packed_wins) {
             jbig2 |= new.dict.name(b"Filter") == Some(b"JBIG2Decode");
             report.image_bytes_before += s.raw.len();
             report.image_bytes_after += new.raw.len();
@@ -1290,7 +1378,9 @@ pub(crate) fn run(
             } else {
                 report.images_recompressed += 1;
             }
+            let size = (new.dict.int(b"Width"), new.dict.int(b"Height"));
             doc.set(r, Object::Stream(new));
+            hold(doc, r, size, bits, report);
             continue;
         }
         let Some((new, smask)) = processed else {
@@ -1311,6 +1401,7 @@ pub(crate) fn run(
             doc.set(mr, Object::Stream(m));
         }
     }
+    share(doc, &mut group, report);
     if !progress(Stage::Images { done: total, total }) {
         return Err(OptimizeError::Cancelled);
     }
