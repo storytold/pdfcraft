@@ -187,7 +187,7 @@ pub(crate) fn embedded_file_targets(doc: &Document) -> std::collections::HashSet
             }
             match o {
                 Object::Dict(d) => {
-                    if let Some(Object::Dict(ef)) = d.get(b"EF") {
+                    if let Some(ef) = d.get(b"EF").map(|value| doc.resolve(value)).and_then(|value| value.as_dict().cloned()) {
                         found.extend(ef.iter().filter_map(|(_, v)| v.as_ref()).map(|r| r.num));
                     }
                     stack.extend(d.iter().map(|(_, v)| (v, depth + 1)));
@@ -243,11 +243,62 @@ fn walk(
             let kind = match (&named, ty) {
                 (Some(n), _) => StreamKind::Named(n),
                 (None, Some(b"EmbeddedFile")) => StreamKind::EmbeddedFile,
+                (None, _) if attachment => StreamKind::EmbeddedFile,
                 _ => StreamKind::Normal,
             };
             let raw = if decrypt { h.decrypt_stream(num, generation, &s.raw, kind) } else { h.encrypt_stream(num, generation, &s.raw, kind) };
             Object::Stream(Stream { dict, raw: raw.into() })
         }
         other => other.clone(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn attachment_encryption() -> pdfcraft_crypt::NewEncryption<'static> {
+        pdfcraft_crypt::NewEncryption {
+            algorithm: pdfcraft_crypt::Algorithm::Aes128,
+            user_password: "pw",
+            owner_password: "owner",
+            permissions: -1,
+            encrypt_metadata: true,
+            seed: [7; 32],
+        }
+    }
+
+    #[test]
+    fn embedded_file_targets_resolve_an_indirect_ef_dictionary() {
+        let bytes = pdfcraft_testkit::Pdf::new()
+            .obj("<< /Type /Catalog /Pages 2 0 R /Names << /EmbeddedFiles 5 0 R >> >>")
+            .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 100 100] >>")
+            .obj("<< /Type /Page /Parent 2 0 R >>")
+            .obj("<< /Type /Filespec /F (file.bin) /EF 6 0 R >>")
+            .obj("<< /Names [(file.bin) 4 0 R] >>")
+            .obj("<< /F 7 0 R >>")
+            .stream("", "secret attachment")
+            .build();
+        let mut doc = Document::open(std::sync::Arc::new(bytes)).unwrap();
+        doc.set_attachment_encryption(&attachment_encryption()).unwrap();
+
+        assert!(embedded_file_targets(&doc).contains(&7));
+    }
+
+    #[test]
+    fn typeless_attachment_streams_use_the_embedded_file_crypt_filter() {
+        let bytes = pdfcraft_testkit::Pdf::new()
+            .obj("<< /Type /Catalog /Pages 2 0 R >>")
+            .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 100 100] >>")
+            .obj("<< /Type /Page /Parent 2 0 R >>")
+            .build();
+        let mut doc = Document::open(std::sync::Arc::new(bytes)).unwrap();
+        doc.set_attachment_encryption(&attachment_encryption()).unwrap();
+        let handler = doc.output_security().0.unwrap();
+        let stream = Object::Stream(Stream { dict: Dict::new(), raw: b"secret attachment".to_vec().into() });
+
+        let encrypted = transform(handler, &stream, 7, 0, Pass::EncryptReplacing, true);
+        let Object::Stream(encrypted) = encrypted else { panic!("transform kept the stream object") };
+        assert_ne!(encrypted.raw.as_ref(), b"secret attachment");
     }
 }
