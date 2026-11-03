@@ -573,15 +573,15 @@ fn own_id(lang: Lang, id: &str, label: &str) -> bool {
     lang.has_own("@id", id) && lang.i18n().get(lang.lang, "@id", id).is_some_and(|translated| same_shape(translated, label))
 }
 
-/// Whether `translated` has the `{placeholders}` (in any order) and the trailing `…` of `english`:
-/// the check craft-i18n makes on every row whose source is English text.
+/// Whether `translated` has the `{placeholders}` (in any order) and the trailing `…` of `english`,
+/// the check craft-i18n makes on every row whose source is English text, and no `{` left open.
 fn same_shape(translated: &str, english: &str) -> bool {
-    let placeholders = |text: &str| {
-        let mut names: Vec<String> = text.split('{').skip(1).filter_map(|p| p.split_once('}')).map(|(name, _)| name.to_owned()).collect();
+    let placeholders = |text: &str| -> Option<Vec<String>> {
+        let mut names = text.split('{').skip(1).map(|p| p.split_once('}').map(|(name, _)| name.to_owned())).collect::<Option<Vec<_>>>()?;
         names.sort_unstable();
-        names
+        Some(names)
     };
-    translated.ends_with('…') == english.ends_with('…') && placeholders(translated) == placeholders(english)
+    translated.ends_with('…') == english.ends_with('…') && placeholders(translated).is_some_and(|names| Some(names) == placeholders(english))
 }
 
 /// Fill `{name}` placeholders in one pass. Unknown placeholders are left as written, and inserted

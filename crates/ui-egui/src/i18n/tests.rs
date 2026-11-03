@@ -440,6 +440,7 @@ fn an_id_row_that_changes_the_label_s_shape_is_not_used() {
     assert_eq!(menu_label("file.save", "Save…"), "Sichern…");
     set_current(Lang::EN);
     assert!(same_shape("{b} und {a}", "{a} and {b}"), "placeholders may be reordered");
+    assert!(!same_shape("Öffnen {name…", "Open…"), "a placeholder left open");
 }
 
 /// Command ids go by PdfCraft's own `@id` rows only: the shared catalog's are keyed by the other
@@ -1379,9 +1380,9 @@ fn arabic_labels_have_glyphs() {
     }
 }
 
-/// The language list is well-formed, and the embedded catalogs are consistent with PdfCraft's
-/// commands. Problems in the catalogs are printed, not failed: craft-i18n checks its rows, and a
-/// row PdfCraft can't use shows in English.
+/// The language list is well-formed. Problems in the embedded catalogs are not failed: craft-i18n
+/// checks its rows, a row PdfCraft can't use shows in English, and `translation_gaps_report`
+/// lists the `@id` rows PdfCraft doesn't use ([`unused_id_rows`]).
 #[test]
 fn bundled_catalogs_are_consistent() {
     let mut codes = std::collections::HashSet::new();
@@ -1397,24 +1398,33 @@ fn bundled_catalogs_are_consistent() {
     if !problems.is_empty() {
         println!("{} catalog rows are skipped (they show in English):\n{problems:#?}", problems.len());
     }
+}
+
+/// The `@id` rows of the embedded PdfCraft catalogs that are never shown, for the translation gaps
+/// report: a row for a command PdfCraft doesn't have, and one that doesn't keep its label's
+/// placeholders or trailing `…` ([`same_shape`]), whose label's translation shows instead. One
+/// line each under a heading; empty when there are none.
+fn unused_id_rows() -> String {
+    let mut out = Vec::new();
     for lang in Lang::all().filter(|l| *l != Lang::EN) {
         for (_, id, translation) in rows(app_catalog(lang.code())).into_iter().filter(|(c, ..)| c == "@id") {
             if id == "language.name" {
                 continue;
             }
             let Some(command) = pdfcraft_engine::commands::command(&id) else {
-                println!("{}: @id row for a command PdfCraft doesn't have: {id:?}", lang.code());
+                out.push(format!("{}: @id {id:?} names a command PdfCraft doesn't have", lang.code()));
                 continue;
             };
             if !same_shape(&translation, command.label) {
-                println!(
-                    "{}: @id {id:?} doesn't keep the placeholders or ellipsis of {:?}, so it isn't used: {translation:?}",
-                    lang.code(),
-                    command.label
-                );
+                let label = command.label;
+                out.push(format!("{}: @id {id:?} doesn't keep the placeholders or ellipsis of {label:?}: {translation:?}", lang.code()));
             }
         }
     }
+    if out.is_empty() {
+        return String::new();
+    }
+    format!("{} @id rows not used (their label's translation shows):\n{}", out.len(), out.iter().map(|row| format!("  {row}\n")).collect::<String>())
 }
 
 /// The (context, English source) keys PdfCraft looks up: the UI source's literals, the commands,
@@ -1512,6 +1522,7 @@ fn translation_gaps_report() {
         report.push_str(&line);
         report.push('\n');
     }
+    report.push_str(&unused_id_rows());
     println!("{REPORT_START}\n{report}{REPORT_END}");
 }
 
