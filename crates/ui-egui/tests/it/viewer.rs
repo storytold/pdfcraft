@@ -1916,6 +1916,12 @@ fn zoom_in_and_out_go_by_the_zoom_increment_preference() {
     crate::support::menu_row(&h, "Zoom in").click();
     h.run_steps(3);
     assert!((percent(&h) - 100.0).abs() < 0.01, "View ▸ Zoom ▸ Zoom in: {}", percent(&h));
+    crate::support::open_menu(&mut h, "View");
+    crate::support::menu_row(&h, "Zoom").hover();
+    h.run_steps(3);
+    crate::support::menu_row(&h, "Zoom out").click();
+    h.run_steps(3);
+    assert!((percent(&h) - 90.0).abs() < 0.01, "View ▸ Zoom ▸ Zoom out: {}", percent(&h));
 
     // A fitted zoom lands on the next multiple of 10 up, and of 10 down.
     h.state_mut().views[0].fit = pdfcraft_ui_egui::canvas::Fit::Width;

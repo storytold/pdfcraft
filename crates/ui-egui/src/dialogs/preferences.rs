@@ -780,7 +780,7 @@ fn zoom_increment(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ctx: &mu
     });
     ctx.label_secondary(
         ui,
-        tl!("Standard levels follow Acrobat's zoom menu (100%, 125%, 150%, 200%…). A percentage zooms in or out by that much each time."),
+        tl!("Standard levels follow Acrobat's zoom menu (100%, 125%, 150%, 200%…). A percentage steps to the next multiple of itself, in or out."),
         t,
     );
     ui.add_space(6.0);

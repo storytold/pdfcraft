@@ -951,7 +951,7 @@ status = "shipped"
 commands = []
 tools = []
 evidence = ["crates/ui-egui/tests/it/ui.rs::zoom_keeps_the_point_under_the_cursor_still", "crates/ui-egui/tests/it/ui.rs::trackpad_pinch_zooms_the_pdf_under_the_pointer", "crates/ui-egui/tests/it/viewer.rs::zoom_in_and_out_go_by_the_zoom_increment_preference"]
-notes = "A trackpad pinch zooms the PDF beneath the pointer in either direction, keeping the same page point in place. The viewer handles the platform's zoom gesture where it is available. Beyond Acrobat: Preferences ▸ Zoom In and Zoom Out step replaces the standard levels with a fixed 5, 10 or 25 percentage points for Zoom In and Zoom Out (keys, rail buttons, View menu; ui.set zoom_increment) (#5884)."
+notes = "A trackpad pinch zooms the PDF beneath the pointer in either direction, keeping the same page point in place. The viewer handles the platform's zoom gesture where it is available. Beyond Acrobat: Preferences ▸ Zoom In and Zoom Out step replaces the standard levels with steps to the next multiple of 5, 10 or 25 percent for Zoom In and Zoom Out (keys, rail buttons, View menu; ui.set zoom_increment) (#5884)."
 
 [[feature]]
 id = "view.zoom-to-percent"
