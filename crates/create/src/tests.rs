@@ -316,6 +316,13 @@ fn a_tiny_png_claiming_huge_dimensions_is_refused_before_allocating() {
     }
 }
 
+#[test]
+fn a_small_png_claiming_a_large_frame_is_refused_before_zero_filling() {
+    // 100 MP RGBA = 400 MB is under the 2 GiB ceiling, but 68 bytes cannot hold it.
+    let r = from_images(&[("big.png".into(), png_claiming(10_000, 10_000))]);
+    assert!(matches!(&r, Err(CreateError::Image(_, m)) if m.contains("too large")));
+}
+
 /// Likewise a PNG: the png crate's limits don't cover the frame buffer, which its header sizes
 /// (60000x60000 RGBA is 14.4 GB). Refused before anything is allocated, not after.
 #[test]
