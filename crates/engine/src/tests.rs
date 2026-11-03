@@ -5750,6 +5750,23 @@ fn visual_difference_kind_includes_raster_images_and_widgets() {
 }
 
 #[test]
+fn visual_difference_kind_includes_inline_images() {
+    let mut s = Session::new();
+    let blank = s.create_blank(200.0, 300.0, 1).unwrap();
+    let old = s.open("old.pdf", None, blank, None).unwrap();
+    let content = "q 40 0 0 30 40 40 cm BI /W 1 /H 1 /CS /RGB /BPC 8 /F /AHx ID F01414> EI Q";
+    let pdf = format!(
+        "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 300] /Resources << >> /Contents 4 0 R >> endobj\n4 0 obj << /Length {} >> stream\n{}\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF",
+        content.len(),
+        content
+    );
+    let new = s.open("inline-image.pdf", None, Arc::new(pdf.into_bytes()), None).unwrap();
+
+    assert_eq!(s.visual_kind(old, new, 0, [50.0, 50.0, 60.0, 60.0]).unwrap(), compare::VisualKind::Image);
+    assert_eq!(s.visual_kinds(old, new, &[(0, [50.0, 50.0, 60.0, 60.0])]).unwrap(), [compare::VisualKind::Image]);
+}
+
+#[test]
 fn actions_run_their_steps_on_files() {
     let s = Session::new();
     let src = s.create_from_text("t", "Quarterly numbers").unwrap();

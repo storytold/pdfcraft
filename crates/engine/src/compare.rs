@@ -184,7 +184,9 @@ impl Session {
 
 fn raster_image_rects(doc: &crate::Document, page: usize) -> Result<Vec<[f64; 4]>, EditError> {
     let Some(editor) = doc.editor.as_ref() else { return Ok(Vec::new()) };
-    Ok(pdfcraft_edit::reading_images(&editor.cos, page)?.into_iter().filter_map(|image| image.visible_rect).collect())
+    let mut rects: Vec<[f64; 4]> = pdfcraft_edit::reading_images(&editor.cos, page)?.into_iter().filter_map(|image| image.visible_rect).collect();
+    rects.extend(pdfcraft_edit::reading_inline_image_rects(&editor.cos, page)?);
+    Ok(rects)
 }
 
 fn classify_visual_kind(docs: [&crate::Document; 2], page: usize, new_rect: [f64; 4], old_rect: [f64; 4], images: [&[[f64; 4]]; 2]) -> VisualKind {
