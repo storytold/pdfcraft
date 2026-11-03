@@ -50,7 +50,7 @@ class AnnotationsAndMediaTest {
                 "doc": ${info.id},
                 "page": 1,
                 "type": "note",
-                "point": [100.0, 500.0],
+                "at": [100.0, 500.0],
                 "contents": "Test mobile annotation"
             }
         """.trimIndent()
