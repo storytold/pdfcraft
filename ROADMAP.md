@@ -1,5 +1,9 @@
 # PdfCraft roadmap
 
+> **Last reviewed:** 2026-11-03 | **Last updated:** 2026-11-03 | **Change:** patch (M5 #5850 review: indirect typewriter intent and composer edits preserve outer whitespace; movement regression commits by outside click; estimates unchanged)
+
+> **Last reviewed:** 2026-11-03 | **Last updated:** 2026-11-03 | **Change:** patch (M5 #5850: Enter adds Fill & Sign line breaks; outside clicks commit, Escape cancels, and saved multiline appearances retain their text and height; estimates unchanged)
+
 > **Last reviewed:** 2026-11-02 · **Last updated:** 2026-11-02 · **Change:** patch (M7, PR #5003: reconcile with main d3384340; preserve Type 1 subset regression coverage and both progress histories; estimates unchanged)
 
 > **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M7, PR #2155 further review: inherited drawing/text state, affine image gestures, paste/selection ownership, no-op scripts and menu permissions; estimates unchanged)
@@ -221,6 +225,12 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 | 8 | 1.0 polish: performance, right-to-left, missing languages, keyboard-only (M14) | 55–95 |
 
 ## Progress log
+
+- **2026-11-03 (M7, PR #5003 follow-up):** Integrated main ecdd1e65 after it advanced during validation; retained upstream typewriter and automation changes alongside Type 1 subset regressions. Validation: 463 fonts/automation tests, scoped all-target Clippy with -D warnings, scoped WASM, formatting, layers, assets and parity passed. Behavior scope and estimates unchanged.
+
+- **2026-11-03 (M5, #5850 review):** Resolve indirect IT when recognizing typewriter contents and Fill & Sign marks. Comment listing and property lookup retain their existing direct-Subtype behavior. A real double-click Edit composer preserves the typewriter’s text as written; ordinary comment edits keep trimming. Regressions cover direct Subtype with indirect intent, save/reopen, raw posted contents and same-index comments on different pages. The existing live-movement test now commits its setup with an outside click rather than Enter. Estimates unchanged.
+
+- **2026-11-03 (M5, #5850):** Fill & Sign Enter inserts a line break in a growing editor; clicking outside commits and Escape cancels. Nonempty text keeps leading, internal and trailing line breaks. The headless fill_sign_add path sizes its typewriter box for the same wrapped lines so saved appearances show every row. Production-order keyboard and engine save/reopen/render regressions exercise the UI and headless callers. Estimates unchanged.
 
 - **2026-11-03 (M7, PR #5003):** Reconciled with main eb696a3f; preserved Type 1 subset glyph checks, automation regressions and both roadmap histories. Validation: 461 fonts/automation tests, scoped all-target Clippy with -D warnings, scoped WASM checks, formatting, layers, assets and parity passed. Behavior scope and estimates unchanged.
 
@@ -759,6 +769,8 @@ Newest first: the date, what moved, and the new overall estimate.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-03 | patch | M5 #5850 review: indirect typewriter intent and composer edits preserve outer whitespace; movement regression commits by outside click; estimates unchanged. |
+| 2026-11-03 | patch | M5 #5850: Enter adds Fill & Sign line breaks; outside clicks commit, Escape cancels, and saved multiline appearances retain their text and height; estimates unchanged. |
 | 2026-11-02 | patch | M7, PR #5003: integrate main d3384340, retaining Type 1 subset checks, upstream automation regressions and parity evidence; estimates unchanged. |
 | 2026-11-01 | patch | M7 #5657: header/footer, watermark and background operations commit all selected pages together; later-page errors preserve marks, content, shared/inherited resources and pending edits; estimates unchanged. |
 | 2026-10-28 | patch | M2, PR #4172: integrate main 5af10276 and retain both roadmap histories; viewer-only CJK and print/output font policies and estimates unchanged. |
