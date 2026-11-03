@@ -489,17 +489,21 @@ fn preset_arrow(ui: &mut egui::Ui, label: &str) -> egui::Response {
 fn boxed<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
     let t = Tokens::get(ui.ctx());
     let edge = if ui.is_enabled() { t.border } else { t.border.gamma_multiply(0.5) };
-    egui::Frame::new().fill(t.field).stroke(Stroke::new(1.0, edge)).corner_radius(CornerRadius::same(4)).show(ui, |ui| {
-        let w = &mut ui.visuals_mut().widgets;
-        for state in [&mut w.inactive, &mut w.hovered, &mut w.active, &mut w.open] {
-            state.bg_stroke = Stroke::NONE;
-        }
-        w.inactive.weak_bg_fill = Color32::TRANSPARENT;
-        ui.spacing_mut().item_spacing.x = 0.0;
-        ui.spacing_mut().button_padding.x = 2.0;
-        add(ui)
-    })
-    .inner
+    egui::Frame::new()
+        .fill(t.field)
+        .stroke(Stroke::new(1.0, edge))
+        .corner_radius(CornerRadius::same(4))
+        .show(ui, |ui| {
+            let w = &mut ui.visuals_mut().widgets;
+            for state in [&mut w.inactive, &mut w.hovered, &mut w.active, &mut w.open] {
+                state.bg_stroke = Stroke::NONE;
+            }
+            w.inactive.weak_bg_fill = Color32::TRANSPARENT;
+            ui.spacing_mut().item_spacing.x = 0.0;
+            ui.spacing_mut().button_padding.x = 2.0;
+            add(ui)
+        })
+        .inner
 }
 
 /// A number field with an arrow beside it that lists common values, in `width` all told: type any
@@ -521,7 +525,6 @@ fn number_with_presets(ui: &mut egui::Ui, n: Number<'_>, presets: &[f64], width:
         });
         field
     })
-    .inner
 }
 
 /// The text colour as a square swatch that opens the palette.
