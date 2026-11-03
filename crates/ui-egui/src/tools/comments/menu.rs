@@ -26,6 +26,7 @@ pub(crate) fn attachment_items(ui: &mut egui::Ui, view: &mut DocView, info: &Doc
 /// `can_modify`: the document's pages may change (Flatten comments draws into them).
 /// `deletable`: whether Delete would delete the comment at (page, index) (the engine's
 /// `Document::annotation_deletable`: unlocked, and no locked reply to it).
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn context_menu(
     ui: &mut egui::Ui,
     view: &mut DocView,
@@ -34,6 +35,7 @@ pub(crate) fn context_menu(
     prefs: &CommentPrefs,
     allowed: bool,
     can_modify: bool,
+    can_copy: bool,
 ) -> Option<CanvasAction> {
     let mut action = None;
     let selected = view.comments.selected.and_then(|(p, i)| info.annotations.iter().find(|a| a.page == p && a.index == i && !a.is_reply()));
@@ -87,7 +89,8 @@ pub(crate) fn context_menu(
                 action = Some(CanvasAction::Edit(Box::new(Edit::MarkAnnotation { page, index, marked: !marked, author: prefs.author.clone() })));
                 ui.close();
             }
-            if ui.button(tl!("Copy text")).clicked() {
+            // The document's copy permission covers comment text as it does page text.
+            if ui.add_enabled(can_copy, egui::Button::new(tl!("Copy text"))).clicked() {
                 ui.ctx().copy_text(a.contents.clone().unwrap_or_default());
                 ui.close();
             }

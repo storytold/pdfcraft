@@ -19,7 +19,7 @@ pub(super) fn combinable_in(dir: &std::path::Path, recursive: bool) -> (Vec<std:
                 if recursive && !hidden && depth < MAX_FOLDER_DEPTH {
                     folders.push((path, depth + 1));
                 }
-            } else if path.extension().is_some_and(|e| combinable(&e.to_string_lossy())) && path.is_file() {
+            } else if path.extension().is_some_and(|e| combinable(&e.to_string_lossy())) && kind.is_file() {
                 if found.len() >= MAX_FOLDER_FILES {
                     more = true;
                     break 'walk;

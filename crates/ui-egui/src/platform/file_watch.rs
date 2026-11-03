@@ -433,7 +433,10 @@ impl PdfCraftApp {
         let Some(i) = self.views.iter().position(|v| v.id == doc) else { return };
         let Some(path) = self.session.get(doc).and_then(|d| d.path.clone()) else { return };
         let stamp = Stamp::at(&path);
-        match std::fs::read(&path) {
+        // A FIFO or device under the document's name would block this thread on open.
+        let regular =
+            std::fs::metadata(&path).map_err(|e| e.to_string()).and_then(|m| if m.is_file() { Ok(()) } else { Err("not a regular file".into()) });
+        match regular.and_then(|()| std::fs::read(&path).map_err(|e| e.to_string())) {
             Ok(bytes) => {
                 self.watch.known_as(doc, stamp);
                 self.reload_view(i, Arc::new(bytes));

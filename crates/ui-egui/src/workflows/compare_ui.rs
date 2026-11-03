@@ -2,6 +2,8 @@
 //! (replaced blue, inserted green, deleted red), shades them on the newer document's pages, and
 //! offers a report or the differences as comments.
 
+use std::collections::HashMap;
+
 use egui::{Align, Color32, Layout};
 use pdfcraft_engine::DocId;
 use pdfcraft_engine::compare::{Comparison, Kind};
@@ -306,20 +308,28 @@ impl PdfCraftApp {
 /// shading. Hidden kinds are left out after the overlap test, so hiding the text does not uncover
 /// the visual differences a text change explains.
 fn shading(s: &CompareState, old: bool) -> Vec<(usize, [f32; 4], Color32)> {
-    let overlaps = |p: usize, r: [f32; 4], marks: &[(usize, [f32; 4], Color32)]| {
-        marks.iter().any(|(mp, m, _)| *mp == p && m[0] <= r[2] && r[0] <= m[2] && m[1] <= r[3] && r[1] <= m[3])
-    };
+    let overlaps = |r: [f32; 4], marks: &[[f32; 4]]| marks.iter().any(|m| m[0] <= r[2] && r[0] <= m[2] && m[1] <= r[3] && r[1] <= m[3]);
     let mut text = Vec::new();
+    // The overlap test reads one page's marks, not every page's: a document with many
+    // differences is not compared region against region across the whole file.
+    let mut text_by_page: HashMap<usize, Vec<[f32; 4]>> = HashMap::new();
     for ch in s.result.changes.iter().filter(|ch| !(old && ch.kind == Kind::Inserted)) {
         let side = if old { &ch.old } else { &ch.new };
-        text.extend(side.rects.iter().map(|r| (side.page, r.map(|v| v as f32), colour(ch.kind))));
+        for r in &side.rects {
+            let r = r.map(|v| v as f32);
+            text.push((side.page, r, colour(ch.kind)));
+            text_by_page.entry(side.page).or_default().push(r);
+        }
     }
     let mut visual = Vec::new();
+    let mut visual_by_page: HashMap<usize, Vec<[f32; 4]>> = HashMap::new();
     for (p, r) in &s.visual {
         let r = r.map(|v| v as f32);
+        let on = |by_page: &HashMap<usize, Vec<[f32; 4]>>| by_page.get(p).is_some_and(|marks| overlaps(r, marks));
         // The old file's half also skips a region overlapping one it already shades.
-        if !overlaps(*p, r, &text) && !(old && overlaps(*p, r, &visual)) {
+        if !on(&text_by_page) && !(old && on(&visual_by_page)) {
             visual.push((*p, r, VISUAL));
+            visual_by_page.entry(*p).or_default().push(r);
         }
     }
     let mut out = if s.show_text { text } else { Vec::new() };

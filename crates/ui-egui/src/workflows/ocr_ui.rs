@@ -373,6 +373,12 @@ fn recognize_files(
                 if let Ok(mut s) = p.lock() {
                     s.done = i;
                 }
+                // The output goes under the chosen folder by this name: a path, or a name with
+                // directory parts, would write somewhere else.
+                if !super::files::is_plain_file_name(&name) {
+                    failed.push(format!("{name}: not a plain file name"));
+                    continue;
+                }
                 let r = pdfcraft_engine::ocr::recognize_file(&name, Arc::new(bytes), None, settings.clone(), &ocr, |_, _| true);
                 let saved = r.and_then(|r| {
                     #[cfg(not(target_arch = "wasm32"))]

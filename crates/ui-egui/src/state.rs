@@ -273,9 +273,12 @@ impl DocumentCopyJob {
     /// once its text is taken, so a large document never holds every page's text layer at once.
     /// `None` when `cancel` was set.
     pub(crate) fn text(self, cancel: &std::sync::atomic::AtomicBool) -> Option<String> {
+        /// Most text one copy of a whole document puts on the clipboard: pages sharing one long
+        /// `/ActualText` would otherwise multiply it without bound.
+        const MAX_COPY_BYTES: usize = 256 << 20;
         let mut renderer: Option<pdfcraft_render::PageRenderer> = None;
         let mut out = String::new();
-        let mut push = |text: String| {
+        let push = |out: &mut String, text: String| {
             if !text.is_empty() {
                 if !out.is_empty() {
                     out.push('\n');
@@ -287,8 +290,12 @@ impl DocumentCopyJob {
             if cancel.load(std::sync::atomic::Ordering::Relaxed) {
                 return None;
             }
+            if out.len() >= MAX_COPY_BYTES {
+                // What fits is copied; the rest of the document is left unread.
+                break;
+            }
             match p {
-                CopyPage::Read(t) => push(t.text_of(0..t.glyphs.len())),
+                CopyPage::Read(t) => push(&mut out, t.text_of(0..t.glyphs.len())),
                 CopyPage::ToRead => {
                     let r = renderer.get_or_insert_with(|| {
                         let config = pdfcraft_render::RenderConfig { password: self.password.clone(), ..Default::default() };
@@ -303,7 +310,7 @@ impl DocumentCopyJob {
                         preview: false,
                     };
                     if let Some(t) = r.render(req).text {
-                        push(t.text_of(0..t.glyphs.len()));
+                        push(&mut out, t.text_of(0..t.glyphs.len()));
                     }
                 }
                 CopyPage::Skip => {}

@@ -2646,7 +2646,16 @@ fn draw_pages(
             return;
         }
         if view.comments.selected.is_some() {
-            canvas_action = comments::context_menu(ui, view, info, &|page, index| doc.annotation_deletable(page, index), prefs, allowed, can_modify);
+            canvas_action = comments::context_menu(
+                ui,
+                view,
+                info,
+                &|page, index| doc.annotation_deletable(page, index),
+                prefs,
+                allowed,
+                can_modify,
+                doc.allows_copying(),
+            );
             return;
         }
         // Over a picture (and no comment): Copy Image, as in Acrobat's page menu.

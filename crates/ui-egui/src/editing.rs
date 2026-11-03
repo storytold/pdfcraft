@@ -87,9 +87,19 @@ fn form_edit_pages(
 ) -> (std::collections::BTreeSet<usize>, Vec<(String, usize)>) {
     let mut changed_pages = std::collections::BTreeSet::new();
     let mut unbaked = Vec::new();
+    // Each list by name, the first field of a name winning as a scan would: a form with many
+    // fields is compared in one pass each way, not one scan per field.
+    fn index(list: &[pdfcraft_engine::FormField]) -> std::collections::HashMap<&str, &pdfcraft_engine::FormField> {
+        let mut by_name = std::collections::HashMap::new();
+        for f in list {
+            by_name.entry(f.name.as_str()).or_insert(f);
+        }
+        by_name
+    }
+    let (old_by_name, new_by_name) = (index(before), index(after));
     for f in after {
         let pages = |field: &pdfcraft_engine::FormField| field.widgets.iter().filter_map(|w| w.page).collect::<Vec<_>>();
-        match before.iter().find(|old| old.name == f.name) {
+        match old_by_name.get(f.name.as_str()).copied() {
             Some(old) if old == f => {}
             Some(old) => {
                 changed_pages.extend(pages(f));
@@ -104,7 +114,7 @@ fn form_edit_pages(
             }
         }
     }
-    for old in before.iter().filter(|old| !after.iter().any(|f| f.name == old.name)) {
+    for old in before.iter().filter(|old| !new_by_name.contains_key(old.name.as_str())) {
         changed_pages.extend(old.widgets.iter().filter_map(|w| w.page));
     }
     (changed_pages, unbaked)
