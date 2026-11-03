@@ -5046,27 +5046,60 @@ fn deleting_pages_from_the_pages_panel_menu() {
 
 #[test]
 fn duplicating_pages_from_the_pages_panel_menu_preserves_targets_and_undo() {
-    for (selection, clicked, expected) in [
-        (vec![], "Page 2", vec!["Page 1", "Page 2", "Page 2", "Page 3"]),
-        (vec![0, 2], "Page 3", vec!["Page 1", "Page 2", "Page 3", "Page 1", "Page 3"]),
-        (vec![0, 2], "Page 2", vec!["Page 1", "Page 2", "Page 2", "Page 3"]),
+    for (selection, clicked, before, after) in [
+        (vec![], "Page 1", vec!["Page 1", "Page 1", "Page 2", "Page 3"], vec!["Page 1", "Page 1", "Page 2", "Page 3"]),
+        (vec![], "Page 2", vec!["Page 1", "Page 2", "Page 2", "Page 3"], vec!["Page 1", "Page 2", "Page 2", "Page 3"]),
+        (vec![], "Page 3", vec!["Page 1", "Page 2", "Page 3", "Page 3"], vec!["Page 1", "Page 2", "Page 3", "Page 3"]),
+        (
+            vec![0, 2],
+            "Page 3",
+            vec!["Page 1", "Page 3", "Page 1", "Page 2", "Page 3"],
+            vec!["Page 1", "Page 2", "Page 3", "Page 1", "Page 3"],
+        ),
+        (vec![0, 2], "Page 2", vec!["Page 1", "Page 2", "Page 2", "Page 3"], vec!["Page 1", "Page 2", "Page 2", "Page 3"]),
+    ] {
+        for (label, expected) in [("Duplicate & insert before", &before), ("Duplicate & insert after", &after)] {
+            let mut h = pages_panel(3);
+            h.state_mut().views[0].select_pages(&selection);
+            h.run_steps(2);
+            let at = panel_thumb(&h, clicked);
+            right_click_at(&mut h, at);
+            for label in ["Extract pages", "Split document…", "Replace pages…", "Cut", "Copy", "Paste after", "Delete pages"] {
+                h.get_by_label(label);
+            }
+            h.get_by_label(label).click();
+            h.run_steps(4);
+            assert_eq!(&page_texts(h.state()), expected);
+            assert!(h.state_mut().execute("edit.undo"));
+            h.run_steps(3);
+            assert_eq!(page_texts(h.state()), ["Page 1", "Page 2", "Page 3"]);
+            assert!(h.state_mut().execute("edit.redo"));
+            h.run_steps(3);
+            assert_eq!(&page_texts(h.state()), expected);
+        }
+    }
+}
+
+#[test]
+fn the_pages_menu_duplicates_before_and_after_the_selection() {
+    for (label, command, expected) in [
+        ("Duplicate & insert before", "page.duplicate_before", vec!["Page 1", "Page 3", "Page 1", "Page 2", "Page 3"]),
+        ("Duplicate & insert after", "page.duplicate", vec!["Page 1", "Page 2", "Page 3", "Page 1", "Page 3"]),
     ] {
         let mut h = pages_panel(3);
-        h.state_mut().views[0].select_pages(&selection);
-        h.run_steps(2);
-        let at = panel_thumb(&h, clicked);
-        right_click_at(&mut h, at);
-        for label in ["Extract pages", "Split document…", "Replace pages…", "Cut", "Copy", "Paste after", "Delete pages"] {
-            h.get_by_label(label);
-        }
-        h.get_by_label("Duplicate pages").click();
+        h.state_mut().views[0].select_pages(&[0, 2]);
+        support::open_menu(&mut h, "Edit");
+        support::menu_row(&h, "Pages").hover();
+        h.run_steps(3);
+        support::menu_row(&h, label).click();
         h.run_steps(4);
         assert_eq!(page_texts(h.state()), expected);
         assert!(h.state_mut().execute("edit.undo"));
         h.run_steps(3);
-        assert_eq!(page_texts(h.state()), ["Page 1", "Page 2", "Page 3"]);
-        assert!(h.state_mut().execute("edit.redo"));
-        h.run_steps(3);
+        // Existing command callers keep the same placement as the menu, including page.duplicate.
+        h.state_mut().views[0].select_pages(&[0, 2]);
+        assert!(h.state_mut().execute(command));
+        h.run_steps(4);
         assert_eq!(page_texts(h.state()), expected);
     }
 }
@@ -5085,11 +5118,20 @@ fn the_pages_panel_duplicate_menu_respects_assembly_permissions() {
     });
     let at = panel_thumb(&h, "Page 1");
     right_click_at(&mut h, at);
-    for label in ["Duplicate pages", "Cut", "Replace pages…", "Delete pages"] {
+    for label in ["Duplicate & insert before", "Duplicate & insert after", "Cut", "Replace pages…", "Delete pages"] {
         assert!(h.get_by_label(label).accesskit_node().is_disabled(), "{label}");
     }
     assert!(!h.get_by_label("Copy").accesskit_node().is_disabled());
     assert!(!h.state_mut().execute("page.duplicate"));
+    assert!(!h.state_mut().execute("page.duplicate_before"));
+    h.key_press(Key::Escape);
+    h.run_steps(2);
+    support::open_menu(&mut h, "Edit");
+    support::menu_row(&h, "Pages").hover();
+    h.run_steps(3);
+    for label in ["Duplicate & insert before", "Duplicate & insert after"] {
+        assert!(support::menu_row(&h, label).accesskit_node().is_disabled());
+    }
     h.run_steps(2);
     let app = h.state();
     let doc = app.session.get(app.views[app.active.unwrap()].id).unwrap();

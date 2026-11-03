@@ -388,6 +388,11 @@ impl PdfCraftApp {
             "page.copy" => self.copy_pages(false),
             "page.cut" => self.copy_pages(true),
             "page.paste" => self.paste_pages(),
+            "page.duplicate_before" => {
+                if let Some(at) = targets.iter().copied().min() {
+                    self.apply_edit(Edit::DuplicatePages { pages: targets, at: Some(at) });
+                }
+            }
             "page.duplicate" => {
                 self.apply_edit(Edit::DuplicatePages { pages: targets, at: None });
             }

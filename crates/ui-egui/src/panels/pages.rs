@@ -210,7 +210,14 @@ pub(super) fn pages(ui: &mut egui::Ui, t: &Tokens, info: &DocInfo, view: &mut cr
                     view.pending_action = Some(crate::canvas::ViewAction::PastePages);
                     ui.close();
                 }
-                if ui.add_enabled(editable, egui::Button::new(tl!("Duplicate pages"))).clicked() {
+                if ui.add_enabled(editable, egui::Button::new(tl!("Duplicate & insert before"))).clicked() {
+                    let pages = view.target_pages();
+                    if let Some(at) = pages.iter().copied().min() {
+                        view.pending_edit = Some(pdfcraft_engine::Edit::DuplicatePages { pages, at: Some(at) });
+                    }
+                    ui.close();
+                }
+                if ui.add_enabled(editable, egui::Button::new(tl!("Duplicate & insert after"))).clicked() {
                     view.pending_edit = Some(pdfcraft_engine::Edit::DuplicatePages { pages: view.target_pages(), at: None });
                     ui.close();
                 }
