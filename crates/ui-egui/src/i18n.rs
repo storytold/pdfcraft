@@ -574,10 +574,14 @@ fn own_id(lang: Lang, id: &str, label: &str) -> bool {
 }
 
 /// Whether `translated` has the `{placeholders}` (in any order) and the trailing `…` of `english`,
-/// the check craft-i18n makes on every row whose source is English text, and no `{` left open.
+/// the check craft-i18n makes on every row whose source is English text, and no `{` left open or
+/// `}` without its `{`.
 fn same_shape(translated: &str, english: &str) -> bool {
     let placeholders = |text: &str| -> Option<Vec<String>> {
         let mut names = text.split('{').skip(1).map(|p| p.split_once('}').map(|(name, _)| name.to_owned())).collect::<Option<Vec<_>>>()?;
+        if text.matches('}').count() != names.len() {
+            return None;
+        }
         names.sort_unstable();
         Some(names)
     };
