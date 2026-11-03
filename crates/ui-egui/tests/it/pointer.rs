@@ -245,16 +245,13 @@ fn tip_says(h: &Harness<'_, PdfCraftApp>, text: &str) -> bool {
 }
 
 /// Hovers `p` until `want` accepts the cursor there (text layers and paragraph boxes arrive from
-/// worker threads), and returns the last cursor seen.
-fn wait_for_cursor(h: &mut Harness<'_, PdfCraftApp>, p: egui::Pos2, want: impl Fn(egui::CursorIcon) -> bool) -> egui::CursorIcon {
+/// worker threads, `support::step_until`), and returns the last cursor seen.
+fn wait_for_cursor(h: &mut Harness<'static, PdfCraftApp>, p: egui::Pos2, want: impl Fn(egui::CursorIcon) -> bool) -> egui::CursorIcon {
     let mut cursor = egui::CursorIcon::Default;
-    for _ in 0..50 {
+    let _ = crate::support::step_until(h, |h| {
         cursor = cursor_at(h, p);
-        if want(cursor) {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
+        want(cursor)
+    });
     cursor
 }
 
@@ -408,7 +405,7 @@ fn a_comments_tip_shows_with_every_tool_beside_its_cursor() {
     let mut h = open(comment_on_text_pdf(), "150", false);
     // Inside the rectangle comment by "Reviewer": where there is no text, and over a word.
     let (blank, on_text) = (at(&h, 120.0, 315.0), at(&h, 60.0, 303.0));
-    let hover = |h: &mut Harness<'_, PdfCraftApp>, tool: QuickTool, p: egui::Pos2, want: egui::CursorIcon| {
+    let hover = |h: &mut Harness<'static, PdfCraftApp>, tool: QuickTool, p: egui::Pos2, want: egui::CursorIcon| {
         h.state_mut().quick_tool = tool;
         h.run_steps(4);
         let cursor = wait_for_cursor(h, p, |c| c == want);
