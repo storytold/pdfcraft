@@ -3887,3 +3887,31 @@ fn a_reply_on_another_page_to_a_removed_popup_goes_too() {
         assert!(!bytes.windows(gone.len()).any(|w| w == gone), "{} survived", String::from_utf8_lossy(gone));
     }
 }
+
+/// A hairline under a shrinking CTM still paints about a device pixel: its pad must not shrink
+/// with the CTM, or a mark on that ink misses it.
+#[test]
+fn a_hairline_under_a_shrinking_ctm_is_padded_by_half_a_unit() {
+    // Device line from (10, 10) to (50, 10); the mark lies on its painted pixel, above its axis.
+    let mut doc = one_page(b"0.01 0 0 0.01 0 0 cm 0 w 1000 1000 m 5000 1000 l S", "", vec![]);
+    mark(&mut doc, 0, &[[20.0, 10.2, 30.0, 10.4]], "");
+    assert_eq!(apply(&mut doc, None).unwrap().paths_removed, 1);
+}
+
+/// One `re` has four mitred corners: it is padded by the miter limit like any joined path.
+#[test]
+fn a_rectangle_stroke_is_padded_for_its_mitred_corners() {
+    let mut doc = one_page(b"2 w 100 100 50 50 re S", "", vec![]);
+    // Past half the line width from the rectangle, inside the miter reach.
+    mark(&mut doc, 0, &[[155.0, 120.0, 160.0, 130.0]], "");
+    assert_eq!(apply(&mut doc, None).unwrap().paths_removed, 1);
+}
+
+/// A projecting square cap's outer corner reaches lw/2 x sqrt(2) from the endpoint. Under a shear
+/// it maps past a pad of lw/2 times the CTM's stretch (the review's example: corner at x = 12).
+#[test]
+fn a_square_cap_corner_under_a_shear_is_inside_the_pad() {
+    let mut doc = one_page(b"1 0 1 1 0 0 cm 2 J 2 w 0 0 m 10 0 l S", "", vec![]);
+    mark(&mut doc, 0, &[[11.8, 0.8, 11.9, 0.95]], "");
+    assert_eq!(apply(&mut doc, None).unwrap().paths_removed, 1);
+}

@@ -72,6 +72,8 @@ struct Gs {
     line_width: f64,
     miter_limit: f64,
     line_join: i64,
+    /// `J` / ExtGState `/LC`: a projecting square cap (2) reaches past the endpoint's corner.
+    line_cap: i64,
 }
 
 /// What processing a scope produced.
@@ -245,6 +247,7 @@ pub(crate) fn process(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<
         line_width: 1.0,
         miter_limit: 10.0,
         line_join: 0,
+        line_cap: 0,
     };
     process_from(doc, scope, streams, resources, gs)
 }
@@ -389,7 +392,7 @@ impl Walk {
             self.clip = false;
         }
         let kept = match o {
-            b"q" | b"Q" | b"cm" | b"Tf" | b"gs" | b"w" | b"M" | b"j" => {
+            b"q" | b"Q" | b"cm" | b"Tf" | b"gs" | b"w" | b"M" | b"j" | b"J" => {
                 self.graphics_state(doc, scope, &op);
                 Some(op)
             }
@@ -427,15 +430,20 @@ impl Walk {
 
     /// The box a stroke of the current path can paint, grown from its construction box `b` by
     /// what the pen adds: half the line width (a width of 0 is one device pixel, taken as one
-    /// unit), times the miter limit when the path has joins and they are mitred, scaled by the
-    /// CTM's largest stretch. Caps and joins never reach further, so a hit test on it is
-    /// conservative, and a horizontal or vertical line no longer has a zero-area box.
+    /// unit) scaled by the CTM's largest stretch, and never less than half a unit of page space
+    /// (a renderer paints a hairline, or a line a CTM shrinks, about a device pixel wide); times
+    /// the miter limit when the path has joins and they are mitred (a rectangle has four), or
+    /// √2 for a projecting square cap (its outer corner). Caps and joins never reach further, so
+    /// a hit test on it is conservative, and a horizontal or vertical line no longer has a
+    /// zero-area box.
     fn stroke_box(&self, b: [f64; 4]) -> [f64; 4] {
         let m = self.gs.ctm.0;
         let scale = (m[0] * m[0] + m[1] * m[1] + m[2] * m[2] + m[3] * m[3]).sqrt();
-        let joins = self.path.iter().filter(|op| matches!(op.op.as_slice(), b"l" | b"c" | b"v" | b"y" | b"h" | b"re")).count() >= 2;
+        let joins = self.path.iter().filter(|op| matches!(op.op.as_slice(), b"l" | b"c" | b"v" | b"y" | b"h" | b"re")).count() >= 2
+            || self.path.iter().any(|op| op.op.as_slice() == b"re");
         let miter = if joins && self.gs.line_join == 0 { self.gs.miter_limit.max(1.0) } else { 1.0 };
-        let pad = self.gs.line_width.max(1.0) / 2.0 * miter * scale;
+        let reach = if self.gs.line_cap == 2 { miter.max(std::f64::consts::SQRT_2) } else { miter };
+        let pad = (self.gs.line_width.max(1.0) / 2.0 * scale).max(0.5) * reach;
         [b[0] - pad, b[1] - pad, b[2] + pad, b[3] + pad]
     }
 
@@ -480,6 +488,7 @@ impl Walk {
             b"w" => self.gs.line_width = op.num(0).unwrap_or(self.gs.line_width),
             b"M" => self.gs.miter_limit = op.num(0).unwrap_or(self.gs.miter_limit),
             b"j" => self.gs.line_join = op.num(0).map_or(self.gs.line_join, |j| j as i64),
+            b"J" => self.gs.line_cap = op.num(0).map_or(self.gs.line_cap, |j| j as i64),
             _ => {
                 if let Some((font, vertical, size)) = op.name(0).and_then(|n| extgstate_font(doc, scope, &self.ext_gstates, n, &self.fallback)) {
                     (self.gs.font, self.gs.vertical, self.gs.size) = (font, vertical, size);
@@ -489,6 +498,7 @@ impl Walk {
                     self.gs.line_width = num(b"LW").unwrap_or(self.gs.line_width);
                     self.gs.miter_limit = num(b"ML").unwrap_or(self.gs.miter_limit);
                     self.gs.line_join = num(b"LJ").map_or(self.gs.line_join, |j| j as i64);
+                    self.gs.line_cap = num(b"LC").map_or(self.gs.line_cap, |j| j as i64);
                 }
             }
         }
