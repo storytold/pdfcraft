@@ -1,24 +1,28 @@
 # Localization parity
 
-> **Last reviewed:** 2026-11-03 · **Last updated:** 2026-11-03 · **Change:** minor (Turkish: 2,867 entries, 0 missing in `cargo xtask i18n-report` on 2026-11-03; AI-assisted)
-> **Last reviewed:** 2026-10-25 · **Last updated:** 2026-10-25 · **Change:** minor (Persian (`fa`, 2,785 entries) added right-to-left like Arabic and Kurdish; Arabic current state corrected: catalogs stay logical, RTL labels take an explicit direction and stock chrome mirrors; native/browser RTL input, IME and complex workflows remain unqualified. Native release Hans face via LXGW WenKai Lite; release-pinned craft-fonts still has no Telugu face. Current union 2,798 keys. Scores and estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-11-03 · **Last updated:** 2026-11-03 · **Change:** minor (every catalog restated from `cargo xtask i18n-report` on `main` at `14ae839a`: 2,897 strings the interface looks up; Hindi, Indonesian, Korean, Thai, Lao and Central Kurdish listed with their catalogs. Scores and estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
 Per-language status of PdfCraft's interface against Acrobat Pro's. How translations work and how to
 add a language: [localization.md](localization.md). Summary in [ROADMAP.md](../ROADMAP.md).
 
 ## How this was measured
 
-- **Strings translated** is measured: the catalogs in `crates/ui-egui/src/i18n/<code>.tsv` (since moved to craft-i18n's `locales/<code>/`), counted
-  as distinct `(context, English)` keys with a non-empty translation. The denominator is the union of
-  keys across all catalogs, counting language-specific context rows such as `theme`/`Appearance`.
-  **That union is a moving target**: every change that adds a string widens it, so a count is only
-  comparable with others measured on the same date, and a catalog that reached 100% falls behind
-  without losing a single translation. Every figure here therefore carries its date. The current
-  union is **2,798** keys as of 2026-10-25, against the **2,143-key snapshot** of 2026-10-10; earlier
-  revisions quote the union of their own date (see the revision history), not this one. The
-  twelve-language percentage table below still quotes the 2026-10-10 snapshot for every language
-  except Spanish, Vietnamese, Lithuanian and Brazilian Portuguese, which are measured against the current union. English is
-  built in.
+- **Strings translated** is measured with `cargo xtask i18n-report`, which CI also runs: the
+  English strings the interface can look up, less the ones a catalog has no translation for. On
+  `main` at `14ae839a` (2026-11-03) the interface looks up **2,897** strings, and every count and
+  percentage in the tables below is of that number. The denominator is what the code asks for, so
+  a catalog's own context rows (such as `theme`/`Appearance`) don't count against the others. It
+  still grows whenever the interface gains a string, so a catalog that was complete falls behind
+  without losing a translation, and every figure here carries its date. English is built in.
+- **Catalogs:** the figures above were taken from the in-repo catalogs
+  (`crates/ui-egui/src/i18n/<code>.tsv`), which have since moved to craft-i18n's `locales/<code>/`.
+  The report reads the catalogs the build embeds, so measuring again needs `CRAFT_I18N_DIR` set to a
+  craft-i18n checkout at the commit in `craft-i18n.rev`; without it the report says it was
+  skipped.
+- **Before 2026-11-03** this page counted distinct `(context, English)` keys against the union of
+  keys across all catalogs: 2,143 keys on 2026-10-10, 2,798 on 2026-10-25, and 2,895 on
+  `14ae839a`. That union also grew whenever one catalog added a key no other had, so it moved every
+  row at once. Earlier revisions in the history quote it, at the size of their own date.
 - **Not counted:** error details from the engine and the operating system, which are shown in
   English inside a translated frame; there is no translated user documentation or help yet (Acrobat
   ships localized help).
@@ -32,64 +36,71 @@ add a language: [localization.md](localization.md). Summary in [ROADMAP.md](../R
 
 ## The twelve key languages
 
-| Language | Code | UI strings translated | Dialogs / tooltips / help | Script support | Native review | Status | Acrobat ships it | To `full` (h) |
+| Language | Code | UI strings translated (of 2,897, 2026-11-03) | Dialogs / tooltips / help | Script support | Native review | Status | Acrobat ships it | To `full` (h) |
 |---|---|---|---|---|---|---|---|---|
 | English | `en` | built in (100%) | all; README and docs | Latin | yes | **full** | yes | 0 |
-| Simplified Chinese | `zh-hans` | 2,088 (97.4%) | dialogs and tooltips through `tl!`; no help | CJK text and IME work; native craft-fonts builds embed the **LXGW WenKai Lite** Hans face, while the web build has no Hans face beyond BIZ UDPGothic, and missing-glyph reports (#826, #688, #728, #758; Flatpak #689) predate the native face | no | partial | yes | 6–12 |
-| Spanish | `es` | 2,798 (100% of current key union) | dialogs and tooltips; no help | Latin | no | partial | yes | 2–4 |
-| Hindi | `hi` | 0 | none | Devanagari not tested (egui shapes Telugu conjuncts, so shaping is likely workable); the pinned craft-fonts manifest has Noto Sans Devanagari Regular; rendering remains unqualified | no | none | no | 10–18 |
-| Arabic | `ar` | 2,143 (100%) | dialogs and tooltips; no help | Logical-order catalog; egui 0.37's epaint reorders with UAX #9, Arabic, Kurdish and Persian labels use an explicit right-to-left paragraph direction, and stock chrome is mirrored. Native/browser RTL input and IME, and complex bidirectional workflows, are not yet qualified (`localization.md` §Arabic) | no | partial | yes (Middle East edition) | 25–45 |
-| French | `fr` | 2,128 (99.3%) | dialogs and tooltips; no help | Latin | no | partial | yes | 1–2 |
-| Portuguese (Brazil) | `pt-br` | 2,798 (100% of current union) | dialogs and tooltips; no help | Latin | community (#288) | partial | yes | 1–2 |
-| Indonesian | `id` | 0 | none | Latin | no | none | no | 3–5 |
-| Japanese | `ja` | 2,123 (99.1%) | dialogs and tooltips; no help | BIZ UDPGothic from craft-fonts; IME patched on macOS, Windows, X11, Wayland; vertical text renders but can't be edited | no | partial | yes | 4–8 |
-| German | `de` | 2,128 (99.3%) | dialogs and tooltips; no help | Latin | community, in progress (#828: terminology, clipping) | partial | yes | 2–4 |
-| Korean | `ko` | 0 | none | Hangul IME patched (Microsoft and Apple Korean, `vendor/README.md` winit 3, 6, 9, 10); no Hangul UI face in craft-fonts | no | none | yes | 6–10 |
-| Vietnamese | `vi` | 2,798 (100% of current key union) | dialogs and tooltips; no help | Latin with stacked diacritics; bundled Inter covers them (fonts test) | community | partial | no | 2–4 |
+| Simplified Chinese | `zh-hans` | 2,560 (88.4%) | dialogs and tooltips through `tl!`; no help | CJK text and IME work; native craft-fonts builds embed the **LXGW WenKai Lite** Hans face, while the web build has no Hans face beyond BIZ UDPGothic, and missing-glyph reports (#826, #688, #728, #758; Flatpak #689) predate the native face | no | partial | yes | 6–12 |
+| Spanish | `es` | 2,851 (98.4%) | dialogs and tooltips; no help | Latin | no | partial | yes | 2–4 |
+| Hindi | `hi` | 2,825 (97.5%) | dialogs and tooltips; no help | Devanagari not tested (egui shapes Telugu conjuncts, so shaping is likely workable); the pinned craft-fonts manifest has Noto Sans Devanagari Regular; rendering remains unqualified | no | partial | no | 10–18 |
+| Arabic | `ar` | 2,836 (97.9%) | dialogs and tooltips; no help | Logical-order catalog; egui 0.37's epaint reorders with UAX #9, Arabic, Kurdish and Persian labels use an explicit right-to-left paragraph direction, and stock chrome is mirrored. Native/browser RTL input and IME, and complex bidirectional workflows, are not yet qualified (`localization.md` §Arabic) | no | partial | yes (Middle East edition) | 25–45 |
+| French | `fr` | 2,851 (98.4%) | dialogs and tooltips; no help | Latin | no | partial | yes | 1–2 |
+| Portuguese (Brazil) | `pt-br` | 2,851 (98.4%) | dialogs and tooltips; no help | Latin | community (#288) | partial | yes | 1–2 |
+| Indonesian | `id` | 2,825 (97.5%) | dialogs and tooltips; no help | Latin | no | partial | no | 3–5 |
+| Japanese | `ja` | 2,597 (89.6%) | dialogs and tooltips; no help | BIZ UDPGothic from craft-fonts; IME patched on macOS, Windows, X11, Wayland; vertical text renders but can't be edited | no | partial | yes | 4–8 |
+| German | `de` | 2,600 (89.7%) | dialogs and tooltips; no help | Latin | community, in progress (#828: terminology, clipping) | partial | yes | 2–4 |
+| Korean | `ko` | 2,825 (97.5%) | dialogs and tooltips; no help | Hangul IME patched (Microsoft and Apple Korean, `vendor/README.md` winit 3, 6, 9, 10); no Hangul UI face in craft-fonts | no | partial | yes | 6–10 |
+| Vietnamese | `vi` | 2,851 (98.4%) | dialogs and tooltips; no help | Latin with stacked diacritics; bundled Inter covers them (fonts test) | community | partial | no | 2–4 |
 
-**Localization dimension ≈ 68%**: the mean over the twelve, counting a catalog's percentage but only
-60% for Chinese and Arabic until their script problems are fixed, and 0 for Hindi, Indonesian and
-Korean (still missing). Vietnamese moved from 0% to 100% in that mean (59% → 68%). **≈ 55–110 h**
+**Localization dimension ≈ 68%** (scored 2026-10-13, before the counts above): the mean over the
+twelve, counting a catalog's percentage of the 2,143-key snapshot but only 60% for Chinese and
+Arabic until their script problems are fixed, and 0 for Hindi, Indonesian and Korean, which had no
+catalog yet. Vietnamese moved from 0% to 100% in that mean (59% → 68%). Hindi, Indonesian and
+Korean now have catalogs, so the score understates them. It is not re-scored here, because that
+decides how their script caveats count (Devanagari rendering unqualified, no Hangul UI face). **≈ 55–110 h**
 to bring all twelve to `full`, of which ≈ 35–60 h is engineering (remaining RTL qualification, a web Hans face, bidi text)
 and the rest catalogs and fixes; native-speaker review needs humans.
 
 No language is `full` except English: every catalog leaves engine error details in English, and
-none has translated help. The **To `full`** hours of Vietnamese and Spanish are therefore residual
-help/docs polish (catalog and script work are already done), not missing UI strings.
+none has translated help. The **To `full`** hours of Vietnamese and Spanish are therefore mostly
+help/docs polish: their script work is done, and each catalog lacks 46 strings on 2026-11-03.
 
 ## Other shipped languages
 
-| Language | Code | UI strings translated | Status | Acrobat ships it |
+| Language | Code | UI strings translated (of 2,897, 2026-11-03) | Status | Acrobat ships it |
 |---|---|---|---|---|
-| Traditional Chinese | `zh-hant` | 2,016 (94.1%) | partial (same Hans/Hant face caveat) | yes |
-| Russian | `ru` | 2,043 (95.3%) | partial | yes |
-| Bulgarian | `bg` | 2,094 (97.7%) | partial | no |
-| Czech | `cs` | 2,794 entries (all but four keys of the current union; the engine's sentences, weekdays and certificate fields) | partial | yes |
-| Telugu | `te` | 2,058 (96.0%) | partial (the release-pinned craft-fonts has no Telugu face yet) | no |
-| Hungarian | `hu` | 2,126 (99.2%) | partial | yes |
-| Ukrainian | `uk` | 2,142 (100%) | partial | yes |
-| Italian | `it` | 2,736 entries (all but 62 keys of the current union) | partial | yes |
-| Kazakh | `kk` | 2,539 entries | partial | no |
-| Polish | `pl` | 2,611 entries | partial | yes |
-| Slovenian | `sl` | 2,536 entries | partial | no |
-| Greek | `el` | 2,545 entries | partial | no |
-| Turkish | `tr` | 2,867 entries (0 missing in `cargo xtask i18n-report`, 2026-11-03) | partial; AI-assisted, judgement calls reviewed by a native speaker, full proofreading pending | yes |
-| Lithuanian | `lt` | 2,798 (100% of current key union) | partial; community native-speaker review ([#1401](https://github.com/storytold/pdfcraft/pull/1401)) | no |
-| Finnish | `fi` | 2,798 entries (every current key) | partial; AI-assisted, native proofreading pending | yes |
-| Albanian | `sq` | 2,524 entries | partial; not yet reviewed by a native speaker | no |
-| Catalan | `ca` | 2,798 entries | partial: no translated help, engine error details in English; native-speaker review by the contributor | no |
-| Romanian | `ro` | 2,798 entries (every current key) | partial; AI-assisted, not yet reviewed line by line by a native speaker | no |
-| Norwegian Bokmål | `nb` | 2,707 entries | partial; native-speaker terminology review by the contributor ([#1836](https://github.com/storytold/pdfcraft/pull/1836)), not yet line by line | yes |
-| Persian | `fa` | 2,785 entries (all but 13 keys of the current 2,798-key union) | partial; AI-assisted, not yet reviewed line by line by a native speaker | no |
+| Traditional Chinese | `zh-hant` | 2,559 (88.3%) | partial (same Hans/Hant face caveat) | yes |
+| Russian | `ru` | 2,515 (86.8%) | partial | yes |
+| Bulgarian | `bg` | 2,564 (88.5%) | partial | no |
+| Czech | `cs` | 2,847 (98.3%) | partial | yes |
+| Telugu | `te` | 2,513 (86.7%) | partial (the release-pinned craft-fonts has no Telugu face yet) | no |
+| Hungarian | `hu` | 2,599 (89.7%) | partial | yes |
+| Ukrainian | `uk` | 2,600 (89.7%) | partial | yes |
+| Italian | `it` | 2,790 (96.3%) | partial | yes |
+| Kazakh | `kk` | 2,609 (90.1%) | partial | no |
+| Polish | `pl` | 2,681 (92.5%) | partial | yes |
+| Slovenian | `sl` | 2,618 (90.4%) | partial | no |
+| Greek | `el` | 2,615 (90.3%) | partial | no |
+| Turkish | `tr` | 2,895 (99.9%) | partial; AI-assisted, judgement calls reviewed by a native speaker, full proofreading pending | yes |
+| Lithuanian | `lt` | 2,851 (98.4%) | partial; community native-speaker review ([#1401](https://github.com/storytold/pdfcraft/pull/1401)) | no |
+| Finnish | `fi` | 2,849 (98.3%) | partial; AI-assisted, native proofreading pending | yes |
+| Albanian | `sq` | 2,604 (89.9%) | partial; not yet reviewed by a native speaker | no |
+| Catalan | `ca` | 2,849 (98.3%) | partial: no translated help, engine error details in English; native-speaker review by the contributor | no |
+| Romanian | `ro` | 2,849 (98.3%) | partial; AI-assisted, not yet reviewed line by line by a native speaker | no |
+| Norwegian Bokmål | `nb` | 2,758 (95.2%) | partial; native-speaker terminology review by the contributor ([#1836](https://github.com/storytold/pdfcraft/pull/1836)), not yet line by line | yes |
+| Persian | `fa` | 2,801 (96.7%) | partial; AI-assisted, not yet reviewed line by line by a native speaker | no |
+| Central Kurdish (Sorani) | `ckb` | 2,754 (95.1%) | partial; right-to-left like Arabic | no |
+| Thai | `th` | 2,751 (95.0%) | partial | no |
+| Lao | `lo` | 2,504 (86.4%) | partial | no |
 
-**20 other languages** ship (34 catalogs plus English = **35** interface languages in Preferences).
-The entry counts without percentages are as of 2026-10-25; they are not percentages of the older 2,143-key snapshot above. Their presence does not imply a detailed linguistic or runtime review.
+**23 other languages** ship (34 catalogs plus English = **35** interface languages in Preferences).
+Their presence does not imply a detailed linguistic or runtime review.
 Acrobat languages PdfCraft lacks: Danish, Dutch, Swedish, Hebrew. Vietnamese is shipped here but not by Acrobat.
 
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-03 | minor | Every catalog restated from `cargo xtask i18n-report` on `14ae839a` (of 2,897 strings the interface looks up), replacing the catalog-union measure, which had reached 2,895 keys and left rows "100%" that were 44 short (#5805). Hindi, Indonesian and Korean restated from 0 to their catalogs, and Thai, Lao and Central Kurdish added to the table. The ≈ 68% score is not re-scored |
 | 2026-10-25 | minor | Arabic current state corrected: catalogs stay logical, Arabic/Kurdish labels take an explicit RTL direction, and stock chrome mirrors; native/browser RTL input, IME and complex workflows remain unqualified. Native Simplified Chinese uses LXGW WenKai Lite; the web build still has no Hans face and the release-pinned craft-fonts still has no Telugu face. Scores and estimates unchanged |
 | 2026-10-25 | minor | Added Persian (`fa`, 2,785 entries, all but 13 of the current 2,798-key union); right-to-left like Arabic and Kurdish, with logical entries reordered by egui 0.37's epaint; AI-assisted, not yet native-reviewed |
 | 2026-10-21 | minor | Brazilian Portuguese (`pt-br`) now covers all 2,674 distinct keys in the current catalog union; no help or engine/OS error-detail localization; twelve-language mean still rounds to ≈ 68% |
