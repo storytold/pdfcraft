@@ -135,6 +135,17 @@ fn child_som(parent_som: String, name: &str, index: usize) -> String {
     }
 }
 
+/// Bytes a copy of `src`'s subtree keeps: a node, its name and its SOM (the copy's SOMs differ
+/// in their indices only) for every node [`clone_subtree`] copies.
+fn subtree_bytes(h: &XHost, src: usize, depth: usize) -> usize {
+    let Some(n) = h.nodes.get(src).filter(|_| depth <= MAX_DEPTH) else { return 0 };
+    let own = std::mem::size_of::<HNode>().saturating_add(n.name.len()).saturating_add(n.som.len());
+    n.children
+        .iter()
+        .filter(|&&k| !h.nodes.get(k).is_some_and(|c| c.gone || c.repeatable && c.index > 0))
+        .fold(own, |sum, &k| sum.saturating_add(subtree_bytes(h, k, depth + 1)))
+}
+
 /// A copy of `src`'s subtree (values cleared) under `parent`, returning the copy's index.
 fn clone_subtree(h: &mut XHost, src: usize, parent: Option<usize>, depth: usize) -> Option<usize> {
     if depth > MAX_DEPTH || h.nodes.len() >= MAX_NODES {
@@ -209,7 +220,10 @@ impl XHost {
         let name = h.nodes.get(first).map(|n| n.name.clone()).unwrap_or_default();
         let parent_som = h.nodes.get(parent).map(|p| p.som.clone()).unwrap_or_default();
         let som = child_som(parent_som, &name, live.len());
-        if !h.reserve(&XfaEffect::AddInstance { som: String::new() }, som.len()) {
+        // The copy's nodes, their names and SOMs, are charged to the run's byte budget before
+        // they are made: a subtree with long names must not be copied past it.
+        let copied = subtree_bytes(h, first, 0);
+        if !h.reserve(&XfaEffect::AddInstance { som: String::new() }, som.len().saturating_add(copied)) {
             return None;
         }
         let new = clone_subtree(h, first, Some(parent), 0)?;
