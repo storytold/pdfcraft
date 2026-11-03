@@ -171,7 +171,13 @@ impl Session {
                 Err(_) => return Vec::new(),
             },
         };
-        (0..doc.info.pages.len()).map(|i| pages.contains(&i) && pdfcraft_print::text_reads_up(&cos, i)).collect()
+        // The page tree is read once, and each page is looked up, not searched for, in `pages`.
+        let mut out = vec![false; doc.info.pages.len()];
+        let wanted: Vec<usize> = pages.iter().copied().filter(|&p| p < out.len()).collect::<std::collections::BTreeSet<_>>().into_iter().collect();
+        for (p, up) in wanted.iter().zip(pdfcraft_print::texts_read_up(&cos, &wanted)) {
+            out[*p] = up;
+        }
+        out
     }
 
     /// Combine whole files, in order, into new PDF bytes (one bookmark per file).
