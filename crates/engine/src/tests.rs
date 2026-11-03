@@ -5449,6 +5449,11 @@ fn calculation_order_cache_tracks_field_property_edits_in_a_batch() {
             Edit::Batch {
                 label: "Change calculation".into(),
                 edits: vec![
+                    Edit::SetFieldScript {
+                        name: "qty".into(),
+                        event: "format".into(),
+                        script: Some("calculateNow(); console.println(getField('total').value);".into()),
+                    },
                     Edit::SetFieldValue { name: "qty".into(), value: FieldValue::Text("3".into()) },
                     Edit::SetFieldProps {
                         name: "total".into(),
@@ -5465,6 +5470,47 @@ fn calculation_order_cache_tracks_field_property_edits_in_a_batch() {
 
     let total = session.get(id).unwrap().form.iter().find(|field| field.name == "total").unwrap().value.clone();
     assert_eq!(total, ["4"]);
+    let output = session.take_js_output(id);
+    assert!(output.console.iter().any(|line| line == "4"), "calculateNow observed the refreshed Sum: {output:?}");
+}
+
+#[test]
+fn calculation_order_cache_refreshes_after_inserting_pages() {
+    use pdfcraft_forms::{FieldEvent, Scripts};
+
+    let mut doc = pdfcraft_cos::Document::open(Arc::new(scripted_form())).unwrap();
+    pdfcraft_forms::set_value(&mut doc, "qty", &FieldValue::Text("3".into())).unwrap();
+    let fields = pdfcraft_forms::fields(&doc);
+    let qty = fields.iter().find(|field| field.name == "qty").unwrap();
+    let mut js = crate::js::JsRunner::new(&doc, "destination.pdf");
+    js.run(FieldEvent::Format, "calculateNow();", qty, "", &fields);
+
+    let source = pdfcraft_testkit::Pdf::new()
+        .obj("<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] /CO [4 0 R] >> >>")
+        .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >>")
+        .obj("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 300] /Annots [4 0 R] >>")
+        .obj("<< /Type /Annot /Subtype /Widget /FT /Tx /T (importedTotal) /Rect [20 200 180 220] /V (0) /AA << /C << /S /JavaScript /JS (event.value = 9; console.println('inserted field calculated');) >> >> >>")
+        .build();
+    let mut cx = EditCtx::new(None, 0);
+    cx.js = Some(js);
+    run_edit(
+        &mut doc,
+        &Edit::InsertPagesFrom {
+            name: "source.pdf".into(),
+            bytes: Arc::new(source),
+            pages: None,
+            at: 1,
+            field_conflicts: pdfcraft_organize::FieldConflicts::Rename,
+        },
+        &mut cx,
+    )
+    .unwrap();
+
+    let fields = pdfcraft_forms::fields(&doc);
+    let qty = fields.iter().find(|field| field.name == "qty").unwrap();
+    let js = cx.js.as_mut().unwrap();
+    js.run(FieldEvent::Format, "calculateNow();", qty, "", &fields);
+    assert!(js.output.console.iter().any(|line| line == "inserted field calculated"), "{:#?}", js.output);
 }
 
 /// XFA forms check `xfa_installed` and `xfa_version` in a document script that runs before

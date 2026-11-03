@@ -442,6 +442,9 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             let title = std::path::Path::new(name).file_stem().map_or_else(|| name.clone(), |s| s.to_string_lossy().into_owned());
             let outcome = pdfcraft_organize::insert_file_pages(doc, &src, &title, &pages, *at, *field_conflicts)?;
             cx.renamed_fields = outcome.renamed_fields;
+            if let Some(js) = cx.js.as_mut() {
+                js.invalidate_calculations(doc);
+            }
         }
         Edit::AddBookmark { parent, index, title, page, left, top } => {
             pdfcraft_organize::add_bookmark_at(doc, parent, *index, title, *page, *left, *top)?;
