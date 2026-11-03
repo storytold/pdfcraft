@@ -138,16 +138,25 @@ struct Budget {
 }
 
 impl Budget {
-    /// Resets the comparison count for a page with these `lines`.
+    /// Resets the comparison count for a page with these `lines`. A line costs its word boxes
+    /// or its runs, whichever are more (at least one): a cover check walks the boxes, and the
+    /// covered text walks the runs, which can draw no words at all (`( ) Tj`).
     fn start_page(&mut self, lines: &[TextLine]) {
         self.comparisons = 0;
-        self.page_cost = lines.iter().fold(0, |n, line| n.saturating_add(line.ink.len().max(1)));
+        self.page_cost = lines.iter().fold(0, |n, line| n.saturating_add(line.ink.len().max(line.runs().count()).max(1)));
     }
 
-    /// The text of the `lines` that `hides`, joined with single spaces, or `None` when they show
-    /// no text. Without `copying` the text is empty and never assembled: one long line under many
-    /// covers would otherwise be copied once per cover, outside both bounds.
-    fn hidden_text(&mut self, lines: &[TextLine], copying: bool, hides: impl Fn(&TextLine) -> bool) -> Result<Option<String>, AuditError> {
+    /// The text `cover` hides in the `lines` that `hides` ([`covered_words`]), joined with single
+    /// spaces, or `None` when they show no text. Without `copying` the text is empty and never
+    /// assembled: one long line under many covers would otherwise be copied once per cover,
+    /// outside both bounds.
+    fn hidden_text(
+        &mut self,
+        lines: &[TextLine],
+        copying: bool,
+        cover: &[f64; 4],
+        hides: impl Fn(&TextLine) -> bool,
+    ) -> Result<Option<String>, AuditError> {
         self.comparisons = self.comparisons.saturating_add(self.page_cost);
         if self.comparisons > self.limits.comparisons {
             return Err(AuditError::TooManyComparisons);
@@ -160,7 +169,7 @@ impl Budget {
             if !covered.is_empty() {
                 covered.push(' ');
             }
-            covered.push_str(line.text.trim());
+            covered_words(cover, line, &mut covered);
         }
         Ok((!covered.trim().is_empty()).then_some(covered))
     }
@@ -188,14 +197,17 @@ fn audit(doc: &Document, limits: Limits) -> Result<Vec<AuditFinding>, AuditError
         budget.start_page(&lines);
         // 1. Opaque filled rectangles over extractable text.
         for r in cover::filled_rects(doc, &page.dict)? {
-            if let Some(covered) = budget.hidden_text(&lines, copying, |line| is_cover(&r, line))? {
+            if let Some(covered) = budget.hidden_text(&lines, copying, &r.rect, |line| is_cover(&r, line))? {
                 let covered_text = budget.report_text(covered, copying)?;
                 out.push(AuditFinding { page: n, kind: FindingKind::CoveredText, rect: r.rect, covered_text });
             }
         }
         // 2. Annotation covers over extractable text.
         for annot in annots(doc, &page.dict)? {
-            if let Some(covered) = budget.hidden_text(&lines, copying, |line| match &annot {
+            let cover = match &annot {
+                AnnotationCover::Redact(rect) | AnnotationCover::Square { rect, .. } => *rect,
+            };
+            if let Some(covered) = budget.hidden_text(&lines, copying, &cover, |line| match &annot {
                 AnnotationCover::Redact(rect) => covers(rect, line),
                 AnnotationCover::Square { rect, rgb } => covers(rect, line) && contrast(line.color, *rgb) < COVER_CONTRAST,
             })? {
@@ -248,6 +260,34 @@ fn covers(cover: &[f64; 4], line: &TextLine) -> bool {
     let boxed = fraction(std::slice::from_ref(&line.rect)) >= COVER_FRACTION;
     let word_intersects = || line.ink.iter().any(|w| hidden(w) > 0.0);
     inked || (boxed && (line.ink.is_empty() || word_intersects()))
+}
+
+/// Appends the text of `line` that `cover` lies on to `out`: the runs whose words it overlaps
+/// (#4164), so the words of the line painted beside the cover, which stay visible, are not
+/// reported as hidden. Neighbouring runs are joined as the line joins them, so a word split
+/// across runs stays one word; runs with others left out between them are spaced. The whole
+/// line when its runs can't say: a single run, a line whose text was reordered for reading, or
+/// a cover that overlaps the line's box but none of its words.
+fn covered_words(cover: &[f64; 4], line: &TextLine, out: &mut String) {
+    let overlaps = |w: &[f64; 4]| area(&[cover[0].max(w[0]), cover[1].max(w[1]), cover[2].min(w[2]), cover[3].min(w[3])]) > 0.0;
+    let mut words = String::new();
+    let mut last = None;
+    for (i, (text, ink, spaced)) in line.runs().enumerate() {
+        if text.trim().is_empty() || !ink.iter().any(overlaps) {
+            continue;
+        }
+        let apart = last.is_some_and(|l: usize| l.saturating_add(1) != i || spaced);
+        if apart && !words.ends_with(char::is_whitespace) && !text.starts_with(char::is_whitespace) {
+            words.push(' ');
+        }
+        words.push_str(text);
+        last = Some(i);
+    }
+    if line.runs().nth(1).is_none() || last.is_none() {
+        out.push_str(line.text.trim());
+    } else {
+        out.push_str(words.trim());
+    }
 }
 
 /// The area of a rectangle, 0 when it is empty or inverted.

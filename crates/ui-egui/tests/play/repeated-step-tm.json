@@ -1,0 +1,9 @@
+{
+  "name": "repeated step one Tm per row",
+  "content": "BT /F1 12 Tf 1 0 0 1 72 700 Tm (One) Tj ET BT /F1 12 Tf 1 0 0 1 72 672.4 Tm (Two) Tj ET BT /F1 12 Tf 1 0 0 1 72 644.8 Tm (Three) Tj ET",
+  "steps": [
+    {"command": {"id": "edit.edit_text"}},
+    {"click_page": {"x": 90, "y": 676}},
+    {"expect_editor": {"contains": "Two", "text": "One\nTwo\nThree"}}
+  ]
+}

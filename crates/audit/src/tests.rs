@@ -645,6 +645,33 @@ fn later_text_on_the_line_does_not_clear_an_earlier_cover() {
     assert!(findings[0].covered_text.contains("SECRET"), "{findings:?}");
 }
 
+/// #4164: a cover over part of a line reports the words under it, not the words of the same
+/// line painted beside it, which stay visible.
+#[test]
+fn covered_text_leaves_out_the_words_beside_the_cover() {
+    let covered = |content: &[u8]| {
+        let findings = audit_redactions(&open(one_page(content, ""))).expect("audit must run");
+        findings.into_iter().map(|f| f.covered_text).collect::<Vec<_>>()
+    };
+    assert_eq!(covered(b"0 g\nBT /F1 24 Tf 100 700 Td (SECRET) Tj ET\n98 688 94 32 re f\nBT /F1 24 Tf 200 700 Td (tail) Tj ET\n"), ["SECRET"]);
+    // A word shown in two runs with nothing between them stays one word (review on #4198).
+    assert_eq!(covered(b"0 g\nBT /F1 24 Tf 100 700 Td (SE) Tj (CRET) Tj ET\n98 688 94 32 re f\nBT /F1 24 Tf 200 700 Td (tail) Tj ET\n"), ["SECRET"]);
+
+    // The same for an unapplied redaction mark over the first run only. A mark over both runs
+    // reports both, with the space the line has between them (`tail` is set apart here).
+    for (rect, expected) in [("[98 688 192 720]", "SECRET"), ("[98 688 310 720]", "SECRET tail")] {
+        let mut b = Builder::new();
+        b.add("<< /Type /Catalog /Pages 2 0 R >>");
+        b.add("<< /Type /Pages /Kids [3 0 R] /Count 1 >>");
+        b.add("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> /Annots [6 0 R] >>");
+        b.add_stream(b"BT /F1 24 Tf 100 700 Td (SECRET) Tj ET\nBT /F1 24 Tf 250 700 Td (tail) Tj ET\n");
+        b.add(FONT);
+        b.add(&format!("<< /Type /Annot /Subtype /Redact /Rect {rect} >>"));
+        let findings = audit_redactions(&open(b.build())).expect("audit must run");
+        assert_eq!(findings.iter().map(|f| (f.kind.clone(), f.covered_text.as_str())).collect::<Vec<_>>(), [(FindingKind::UnappliedMark, expected)]);
+    }
+}
+
 /// Many covers over the same long line repeat its text in every finding: a small file must not
 /// expand into an unbounded report. Past the budget the audit fails rather than truncate.
 #[test]
@@ -675,6 +702,28 @@ fn cover_and_line_comparisons_are_bounded() {
     assert!(matches!(crate::audit(&doc, limits), Err(crate::AuditError::TooManyComparisons)));
     let limits = crate::Limits { comparisons: 800, covered_text: usize::MAX };
     assert!(crate::audit(&doc, limits).expect("within the budget").is_empty());
+}
+
+/// A run that draws no word still costs a comparison: the covered text walks every run of a
+/// covered line, so a word followed by many `( ) Tj` must not be checked for free (review on
+/// #4198).
+#[test]
+fn runs_without_words_count_against_the_comparison_bound() {
+    let mut content = b"BT /F1 24 Tf 100 700 Td (SECRET) Tj".to_vec();
+    content.extend_from_slice(&b" ( ) Tj".repeat(50));
+    content.extend_from_slice(
+        b" ET
+0 g
+98 688 94 32 re f
+",
+    );
+    let doc = open(one_page(&content, ""));
+    let lines = pdfcraft_edit::glyph_text_lines(&doc, &pdfcraft_model::pages(&doc)[0]).expect("text");
+    assert_eq!(lines.iter().map(|l| (l.ink.len(), l.runs().count())).collect::<Vec<_>>(), [(1, 51)]);
+    let limits = crate::Limits { comparisons: 50, covered_text: usize::MAX };
+    assert!(matches!(crate::audit(&doc, limits), Err(crate::AuditError::TooManyComparisons)));
+    let limits = crate::Limits { comparisons: 51, covered_text: usize::MAX };
+    assert_eq!(crate::audit(&doc, limits).expect("within the budget").len(), 1);
 }
 
 /// Covered text is document text: a document whose permissions withhold copying reports where
@@ -714,14 +763,15 @@ fn copy_restricted_documents_withhold_covered_text() {
 /// per cover, a volume neither the comparison nor the output bound charges.
 #[test]
 fn withheld_covered_text_is_not_assembled() {
+    const PAGE: [f64; 4] = [0.0, 0.0, 612.0, 792.0];
     let doc = open(one_page(b"BT /F1 24 Tf 100 700 Td (SECRET DATA 123) Tj ET\n", ""));
     let lines = pdfcraft_edit::text_lines(&doc, 0).expect("text");
     let mut budget = crate::Budget { limits: crate::Limits::DEFAULT, comparisons: 0, page_cost: 0, covered_text: 0 };
     budget.start_page(&lines);
-    let withheld = budget.hidden_text(&lines, false, |_| true).expect("within the budget");
+    let withheld = budget.hidden_text(&lines, false, &PAGE, |_| true).expect("within the budget");
     assert_eq!(withheld.map(|t| t.capacity()), Some(0), "a finding, with no text built for it");
-    assert_eq!(budget.hidden_text(&lines, false, |_| false).expect("within the budget"), None);
-    let copied = budget.hidden_text(&lines, true, |_| true).expect("within the budget");
+    assert_eq!(budget.hidden_text(&lines, false, &PAGE, |_| false).expect("within the budget"), None);
+    let copied = budget.hidden_text(&lines, true, &PAGE, |_| true).expect("within the budget");
     assert_eq!(copied.as_deref(), Some("SECRET DATA 123"));
 }
 

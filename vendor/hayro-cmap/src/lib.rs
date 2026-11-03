@@ -737,6 +737,17 @@ endcodespacerange
         CMap::parse(&data, |_| None).unwrap()
     }
 
+    /// PdfCraft patch test: a binary CMap whose `usecmap` names itself stops at the nesting limit.
+    #[cfg(feature = "embed-cmaps")]
+    #[test]
+    fn self_referencing_binary_usecmap_stops_at_the_nesting_limit() {
+        // Header (magic, version, file length 19), then one usecmap segment (length 9) naming "Self".
+        const SELF_REF: &[u8] = &[
+            b'b', b'c', b'm', b'a', b'p', 1, 0, 0, 0, 19, 0x09, 0, 0, 0, 9, b'S', b'e', b'l', b'f',
+        ];
+        assert!(CMap::parse(SELF_REF, |_| Some(SELF_REF)).is_none());
+    }
+
     #[test]
     fn metadata_parsing() {
         let data = br#"

@@ -14,6 +14,8 @@ set_value(&mut doc, "name", &FieldValue::Text("Ada".into()))?;
 set_value(&mut doc, "agree", &FieldValue::Check(true))?;
 set_value(&mut doc, "size", &FieldValue::Radio(Some("L".into())))?;
 set_value(&mut doc, "toppings", &FieldValue::Choice(vec!["Ham".into()]))?;
+// Many values: as set_value one by one, but reading the form once and recalculating once.
+let results: Vec<Result<(), FormError>> = set_values(&mut doc, &[("name".into(), FieldValue::Text("Ada".into()))])?;
 reset(&mut doc, None)?;                                      // Clear form (back to /DV)
 
 // Prepare a form
@@ -39,8 +41,9 @@ let cells: Vec<table::Cell> = grid.cells_for(names)?;      // "Table1_1", "Table
 
 - Inheritable attributes (`/FT`, `/Ff`, `/V`, `/DV`, `/DA`, `/Q`, `/MaxLen`) are resolved down the
   field tree; the form's `/DA` and `/Q` are the last fallback.
-- Text and choice fields get new appearance streams (`/Tx BMC … EMC`): auto-size (`0 Tf`), comb,
-  multiline wrapping, password masking, quadding, `/MK` background and border, list-box selection.
+- Text and choice fields get new appearance streams (`/Tx BMC … EMC`): auto-size (`0 Tf`), comb
+  (cells parted in the border colour), multiline wrapping, password masking, quadding, `/MK`
+  background and border, list-box selection.
   The `/DA` font is used when `/DR` has it as a simple font or a composite font with a predefined
   Unicode CMap; otherwise Helvetica (WinAnsi). A value or button caption the font can't hold
   (Chinese in a Helvetica field, a character beyond U+FFFF in a UCS-2 CMap) is kept, as Acrobat
@@ -55,7 +58,11 @@ let cells: Vec<table::Cell> = grid.cells_for(names)?;      // "Table1_1", "Table
   drawn from their values, as typing them would draw them; the engine shows and prints that copy
   and saves the file as it was (#3470). `with_field_appearances_cached` keeps each widget's
   drawing while the objects it was drawn from are the same (`FieldAppearanceCache`), so typing in
-  one field redraws that field, not the form.
+  one field redraws that field, not the form. Check boxes and radio buttons with no appearance for
+  their state are drawn from `/MK` (border, background, and when on the `/MK /CA` ZapfDingbats
+  symbol in the `/DA` colour), and with `/NeedAppearances` so is every one that has an `/MK`,
+  over the appearance the file carries; push buttons with none are drawn from `/MK`, `/BS` and
+  their caption.
 - Check boxes and radio buttons switch `/V` and each widget's `/AS`. Widgets with no appearances
   get PdfCraft's own (a drawn check mark or dot; no symbol font needed).
 - Imported `/MaxLen 0` is treated as unlimited (also clearing an inherited limit), while the
@@ -80,10 +87,15 @@ let cells: Vec<table::Cell> = grid.cells_for(names)?;      // "Table1_1", "Table
   left alone. `calculations_changed` compares two readings of a form to say which formulas an
   edit rewrote.
 - The calculation order (`/CO`, §12.7.3): `calculation_order` lists the calculated fields in the
-  order `recalculate` runs them, with the fields each formula reads (`Calculate::reads`,
+  order `recalculate` runs them, each with its field object (two can share a name in a malformed
+  form), with the fields each formula reads (`Calculate::reads`,
   `af::calculation_reads`; names built at run time aren't known) and what is wrong with the
   order: a field reading one that calculates later, a loop, a field `/CO` leaves out, and `/CO`
-  entries that calculate nothing. `CalculationOrder::fixed` is Fix order: a stable topological
+  entries that calculate nothing. Two issues are about the formula itself: it reads a field the
+  form doesn't have (`MissingField`; the field of that name and a field under it count as there,
+  as recalculation and `getField` find them, but not an Acrobat widget name such as `price.0`,
+  which neither resolves), or its script builds names at run time (`BuiltNames`,
+  `af::reads_built_names`), so its reads are incomplete. `CalculationOrder::fixed` is Fix order: a stable topological
   sort that keeps the current order wherever it can and leaves loops as they are.
   `set_calculation_order` writes `/CO` afresh. A field that gets a calculation joins the end of
   the order; one whose calculation changes keeps its place.
@@ -101,3 +113,7 @@ Rich-text values and exact appearance metrics/layout remain incomplete. JavaScri
 execution and FDF/XFDF exchange are integrated through the engine; this crate provides
 field actions and native AF rules. `/MK /R` rotation (0, 90, 180, 270) is drawn into the
 appearance.
+
+## Button export values
+
+`FieldProps::export_value` edits a zero-based widget's `/Opt` value while preserving appearance names, `/AP`, `/AS`, `/V` and `/DV`. Widgets sharing an on-state remain consistent. Export-only changes do not regenerate appearances. Invalid indices, empty/Off values and ambiguous/conflicting mappings are rejected. `Field::export_values` resolves selected states for data export.

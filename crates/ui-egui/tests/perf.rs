@@ -18,7 +18,7 @@ fn load_average() -> Option<f64> {
 /// Frame budgets only mean something on a machine that isn't overcommitted: with the load
 /// average above twice the core count (other builds running), skip and say so.
 fn overloaded() -> bool {
-    let cores = std::thread::available_parallelism().map_or(4, |n| n.get()) as f64;
+    let cores = std::thread::available_parallelism().map_or(4, std::num::NonZeroUsize::get) as f64;
     match load_average() {
         Some(l) if l > 2.0 * cores => {
             eprintln!("PERF skipped: load average {l:.0} on {cores} cores; frame budgets need a quiet machine");
@@ -94,7 +94,7 @@ fn pdf(objs: Vec<String>) -> Vec<u8> {
     out
 }
 
-/// Named roots exercise thread lookups even when none of the comments has replies.
+/// Named roots, none with replies: the panel still looks up every root's thread.
 fn named_comments(n: usize) -> Vec<u8> {
     let annots: Vec<String> = (0..n).map(|i| format!("{} 0 R", i + 4)).collect();
     let mut objs = vec![
