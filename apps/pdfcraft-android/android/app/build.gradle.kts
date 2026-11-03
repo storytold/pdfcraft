@@ -45,11 +45,17 @@ val appVersionCode: Int = run {
 }
 
 // The release key, when the build is given one (the release workflow passes it from the repository's
-// secrets). Without one a release build is signed with the debug key: it installs, but it can't
-// update a published release; or, with -Ppdfcraft.unsigned=true (F-Droid's build), not signed at
-// all, so the published APK's signature can be checked against it.
+// secrets). Without one, production builds must NOT silently fall back to the debug key.
+// Explicit unsigned release builds (e.g. for F-Droid or verification) are enabled via
+// -Ppdfcraft.unsigned=true or PDFCRAFT_UNSIGNED_RELEASE=true, which leaves signingConfig = null.
+// For local developer convenience, an explicit debug-signed release may be produced only when
+// -Ppdfcraft.allowDebugSignedRelease=true or PDFCRAFT_ALLOW_DEBUG_SIGNED_RELEASE=true is set.
 val releaseKeystore: String? = providers.environmentVariable("PDFCRAFT_KEYSTORE").orNull
-val unsignedRelease: Boolean = providers.gradleProperty("pdfcraft.unsigned").orNull == "true"
+    ?: providers.gradleProperty("pdfcraft.keystore").orNull
+val unsignedRelease: Boolean = providers.gradleProperty("pdfcraft.unsigned").orNull?.equals("true", ignoreCase = true) == true
+    || providers.environmentVariable("PDFCRAFT_UNSIGNED_RELEASE").orNull?.let { it == "1" || it.equals("true", ignoreCase = true) } == true
+val allowDebugSignedRelease: Boolean = providers.gradleProperty("pdfcraft.allowDebugSignedRelease").orNull?.equals("true", ignoreCase = true) == true
+    || providers.environmentVariable("PDFCRAFT_ALLOW_DEBUG_SIGNED_RELEASE").orNull?.let { it == "1" || it.equals("true", ignoreCase = true) } == true
 
 /** rustup's `cargo` (Android Studio may not see rustup's PATH), else `cargo` from PATH; `CARGO` overrides. */
 val cargoExecutable: String = run {
@@ -248,10 +254,23 @@ android {
     signingConfigs {
         if (releaseKeystore != null) {
             create("release") {
-                storeFile = file(releaseKeystore)
+                val keystoreFile = file(releaseKeystore)
+                if (!keystoreFile.exists()) {
+                    throw GradleException("Configured release keystore does not exist: ${keystoreFile.absolutePath}")
+                }
+                storeFile = keystoreFile
                 storePassword = providers.environmentVariable("PDFCRAFT_KEYSTORE_PASSWORD").orNull
+                    ?: providers.gradleProperty("pdfcraft.keystorePassword").orNull
                 keyAlias = providers.environmentVariable("PDFCRAFT_KEY_ALIAS").orNull
+                    ?: providers.gradleProperty("pdfcraft.keyAlias").orNull
                 keyPassword = providers.environmentVariable("PDFCRAFT_KEY_PASSWORD").orNull
+                    ?: providers.gradleProperty("pdfcraft.keyPassword").orNull
+                if (storePassword.isNullOrBlank() || keyAlias.isNullOrBlank() || keyPassword.isNullOrBlank()) {
+                    throw GradleException(
+                        "Release keystore specified ($releaseKeystore), but PDFCRAFT_KEYSTORE_PASSWORD, " +
+                        "PDFCRAFT_KEY_ALIAS, or PDFCRAFT_KEY_PASSWORD is missing or blank."
+                    )
+                }
             }
         }
     }
@@ -266,15 +285,35 @@ android {
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-            signingConfig = if (unsignedRelease) null else signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
+            signingConfig = when {
+                unsignedRelease -> null
+                signingConfigs.findByName("release") != null -> signingConfigs.getByName("release")
+                allowDebugSignedRelease -> signingConfigs.getByName("debug")
+                else -> null
+            }
             // reproducible builds: no record of the checkout in the APK
             vcsInfo { include = false }
         }
     }
+
     // reproducible builds: no dependency metadata signing block (F-Droid's check rejects it)
     dependenciesInfo {
         includeInApk = false
         includeInBundle = false
+    }
+
+    // Guard against silent debug key signing in production release builds
+    gradle.taskGraph.whenReady {
+        val hasReleaseTask = allTasks.any { it.name.contains("Release") && (it.name.startsWith("assemble") || it.name.startsWith("bundle") || it.name.startsWith("package")) }
+        if (hasReleaseTask && !unsignedRelease && !allowDebugSignedRelease && releaseKeystore == null) {
+            throw GradleException(
+                "Production release build failed: No release keystore configured.\n" +
+                "Production releases must NOT be signed with the debug keystore.\n" +
+                "- For signed production release: Set PDFCRAFT_KEYSTORE, PDFCRAFT_KEYSTORE_PASSWORD, PDFCRAFT_KEY_ALIAS, PDFCRAFT_KEY_PASSWORD.\n" +
+                "- For explicit unsigned release (F-Droid): Pass -Ppdfcraft.unsigned=true or set PDFCRAFT_UNSIGNED_RELEASE=true.\n" +
+                "- For local developer testing ONLY: Pass -Ppdfcraft.allowDebugSignedRelease=true."
+            )
+        }
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
