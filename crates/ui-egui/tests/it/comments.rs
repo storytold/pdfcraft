@@ -3166,6 +3166,23 @@ fn a_bookmark_made_after_select_all_of_a_page_is_untitled() {
     assert_eq!(outline.iter().map(|b| b.title.as_str()).collect::<Vec<_>>(), ["Untitled"]);
 }
 
+/// CodeRabbit on #5615: after Select All, the same words selected again by hand are no Select
+/// All: they name the bookmark.
+#[test]
+fn the_page_selected_again_by_hand_after_select_all_names_the_bookmark() {
+    let mut h = harness(|app| app.set_option("layout", "single").unwrap());
+    assert!(h.state_mut().views[0].select_all());
+    h.run_steps(3);
+    let glyphs = (0..10_000).take_while(|&i| h.state().views[0].glyph_screen_pos(0, i).is_some()).count();
+    h.state_mut().views[0].select_text(0, 0, glyphs - 1);
+    h.run_steps(3);
+    h.state_mut().execute("bookmark.add");
+    h.run_steps(3);
+    let s = h.state();
+    let outline = &s.session.get(s.views[0].id).unwrap().info.outline;
+    assert!(outline.first().is_some_and(|b| b.title.starts_with("The quick")), "{outline:?}");
+}
+
 /// CodeRabbit on #5615: words selected by hand name the bookmark even when they are all of the
 /// page's text (a double-click on a one-word page, a triple-click on a one-line page): only
 /// Select All gives "Untitled".

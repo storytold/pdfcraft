@@ -1983,6 +1983,8 @@ fn update_selection_on_press(ui: &egui::Ui, view: &mut DocView, text: &PageText,
             && let Some((first, last)) = text.nearest(gesture.vx, gesture.vy).and_then(|anchor| click_unit(text, clicks, anchor))
         {
             view.selection = Some(Selection::run(gesture.page, first, last));
+            // Words selected by hand are no Select All, even all of a page's (CodeRabbit on #5615).
+            view.page_select_all = None;
         }
     }
     if gesture.resp.drag_started() && press_here && !view.router.keeps_drag() {
@@ -1991,6 +1993,7 @@ fn update_selection_on_press(ui: &egui::Ui, view: &mut DocView, text: &PageText,
         let origin = gesture.ptr.origin.unwrap_or(gesture.pointer);
         let (ox, oy) = gesture.xf.screen_to_view(origin);
         if view.clicks < 2 {
+            view.page_select_all = None;
             view.selection = if gesture.column {
                 Some(Selection { page: gesture.page, span: Span::Column { rect: [ox, oy, gesture.vx, gesture.vy] } })
             } else {
@@ -2057,6 +2060,7 @@ fn finish_text_pointer_gesture(ui: &egui::Ui, view: &mut DocView, text: &PageTex
         && let Some((first, last)) = text.nearest(gesture.vx, gesture.vy).and_then(|anchor| click_unit(text, clicks, anchor))
     {
         view.selection = Some(Selection::run(gesture.page, first, last));
+        view.page_select_all = None;
     } else if gesture.resp.clicked() && view.clicks < 2 && !view.router.keeps_drag() {
         let shift = ui.input(|input| input.modifiers.shift);
         match (

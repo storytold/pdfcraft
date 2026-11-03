@@ -70,6 +70,7 @@ impl DocView {
     /// Select text on `page` from glyph `from` to glyph `to` (tests and automation).
     pub fn select_text(&mut self, page: usize, from: usize, to: usize) {
         self.all_text = false;
+        self.page_select_all = None;
         self.selection = Some(Selection::run(page, from, to));
     }
 
