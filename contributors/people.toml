@@ -181,5 +181,10 @@ sync_github_name = true
 [people.dylanmtaylor]
 sync_github_name = true
 
+[people.newsbaba24x7]
+real_name = "Mohan Raj"
+display_name = "Newsbaba"
+sync_github_name = false
+
 [people.Combiler01]
 sync_github_name = true
