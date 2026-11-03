@@ -4,10 +4,6 @@
 #
 # Clean-room: clean-room translations of PdfCraft's English UI labels, no proprietary localisation resources.
 
-# Untranslated: English text until a translator fills these in.
-	Lowering this forgets the oldest files. At 0 there is no list.	Lowering this forgets the oldest files. At 0 there is no list.
-	Recent files to keep	Recent files to keep
-
 	Menu	Menü
 	File	Dosya
 	Edit	Düzen
@@ -2646,3 +2642,295 @@ animation effects	Off	Kapalı
 	The historical model detects its supported scripts automatically; Japanese is not included.	Tarihî model desteklediği yazıları otomatik olarak algılar; Japonca dahil değildir.
 	Historical handwriting (Kurrent)	Tarihî el yazısı (Kurrent)
 	Handwriting requires upright horizontal lines in one text column. Columns, tables and marginal notes are not supported.	El yazısı, tek bir metin sütununda dik ve yatay satırlar gerektirir. Sütunlar, tablolar ve kenar notları desteklenmez.
+
+# Strings the translation gaps report listed on 2026-11-03 (AI-assisted; a native Turkish speaker reviewed the judgement calls: "of", hotbar, navigation rail, certificate terms, weekday heads).
+	Lowering this forgets the oldest files. At 0 there is no list.	Bu değeri düşürmek en eski dosyaları unutturur. 0'da liste olmaz.
+	Recent files to keep	Saklanacak son dosya sayısı
+	 on page {label}	 {label}. sayfada
+	1 line	1 satır
+	A font isn't embedded	Bir yazı tipi gömülü değil
+	A {} action isn't allowed	{} eylemine izin verilmiyor
+	A {} annotation has additional actions	Bir {} açıklamasının ek eylemleri var
+	A {} annotation has no appearance stream	Bir {} açıklamasının görünüm akışı yok
+	A {} annotation isn't set to print, or is hidden	Bir {} açıklaması yazdırılacak şekilde ayarlanmamış ya da gizli
+	Accessibility Report	Erişilebilirlik Raporu
+	Add tools to hotbar	Kısayol çubuğuna araç ekle
+	Always	Her zaman
+	Automatically	Otomatik
+	CRL Signing	CRL İmzalama
+	Certificate Signing	Sertifika İmzalama
+	Certificate authority	Sertifika yetkilisi
+	Change Author	Yazarı Değiştir
+	Change Keywords	Anahtar Kelimeleri Değiştir
+	Change Subject	Konuyu Değiştir
+	Change Title	Başlığı Değiştir
+	Choose a digital ID.	Bir dijital kimlik seçin.
+	Choose a file…	Dosya seç…
+	Choose a folder…	Klasör seç…
+	Choose…	Seç…
+	Close menu	Menüyü kapat
+	Color	Renk
+	Comment	Yorum
+	Comment and review	Yorumla ve incele
+	Copied to clipboard	Panoya kopyalandı
+	Copy to clipboard	Panoya kopyala
+	Create folder	Klasör oluştur
+	Create links	Bağlantı oluştur
+	Creator	Oluşturan
+	Crop image	Resmi kırp
+	Custom scale	Özel ölçek
+	Cut and stack needs Two-sided: Off. Print single-sided sheets.	Kes ve istifle için Çift taraflı: Kapalı olmalı. Tek taraflı sayfalar yazdırın.
+	Data Encipherment	Veri Şifreleme
+	Decipher Only	Yalnızca Şifre Çözme
+	Detailed Report	Ayrıntılı Rapor
+	DeviceCMYK is used, but the PDF/A output intent isn't a CMYK profile	DeviceCMYK kullanılıyor ancak PDF/A çıktı amacı bir CMYK profili değil
+	DeviceRGB is used, but the PDF/A output intent isn't an RGB profile	DeviceRGB kullanılıyor ancak PDF/A çıktı amacı bir RGB profili değil
+	Digital Signature	Dijital İmza
+	Disabled	Devre dışı
+	Dock navigation rail on Left	Gezinme çubuğunu sola yerleştir
+	Dock navigation rail on Right	Gezinme çubuğunu sağa yerleştir
+	Document properties (⌘D)	Belge özellikleri (⌘D)
+	Drag hotbar	Kısayol çubuğunu sürükle
+	Duplicate	Çoğalt
+	Enabled	Etkin
+	Encipher Only	Yalnızca Şifreleme
+	End entity	Son varlık
+	English	İngilizce
+	Enter a URL	Bir URL girin
+	Enter a name.	Bir ad girin.
+	Enter a page number	Bir sayfa numarası girin
+	Enter the field names	Alan adlarını girin
+	Error	Hata
+	Every line set in the style chosen for a level becomes a bookmark of that level, under a new first bookmark.	Bir düzey için seçilen stille yazılmış her satır, yeni bir ilk yer işaretinin altında o düzeyin yer işareti olur.
+	Extend the docked toolbar along the entire side. Choose a side above to enable.	Yerleştirilmiş araç çubuğunu kenar boyunca uzat. Etkinleştirmek için yukarıdan bir kenar seçin.
+	Field "{}" on page {p} has no description (tooltip)	{p}. sayfadaki "{}" alanının açıklaması (araç ipucu) yok
+	Filename	Dosya adı
+	Flatten Fill & Sign	Doldur ve İmzala'yı düzleştir
+	Float (drag anywhere)	Serbest (istediğin yere sürükle)
+	Folder	Klasör
+	Font (unnamed) on page {p} doesn't map its characters to Unicode	{p}. sayfadaki (adsız) yazı tipi karakterlerini Unicode'a eşlemiyor
+	Font {} on page {p} doesn't map its characters to Unicode	{p}. sayfadaki {} yazı tipi karakterlerini Unicode'a eşlemiyor
+	Form field on page {p} isn't tagged	{p}. sayfadaki form alanı etiketli değil
+	Freehand-Highlight	Serbest Vurgulama
+	Full-side strip	Tam kenar şeridi
+	General & Interface	Genel ve Arayüz
+	Hand	El
+	Help…	Yardım…
+	Hotbar settings	Kısayol çubuğu ayarları
+	Hotbar settings / add tools	Kısayol çubuğu ayarları / araç ekle
+	Hotbar tools	Kısayol çubuğu araçları
+	H{n} follows an H{d}; headings should not skip levels	H{n}, bir H{d} ardından geliyor; başlıklar düzey atlamamalı
+	Import	İçe aktar
+	Information	Bilgi
+	Key Agreement	Anahtar Anlaşması
+	Key Encipherment	Anahtar Şifreleme
+	Level {n}	Düzey {n}
+	Loading…	Yükleniyor…
+	Mouse wheel scroll speed	Fare tekerleği kaydırma hızı
+	Move	Taşı
+	Navigation rail side	Gezinme çubuğunun kenarı
+	Never	Hiçbir zaman
+	New bookmark (⌘B)	Yeni yer işareti (⌘B)
+	New bookmarks from text styles	Metin stillerinden yeni yer işaretleri
+	New bookmarks from text styles…	Metin stillerinden yeni yer işaretleri…
+	Next	Sonraki
+	Next (⌘G)	Sonraki (⌘G)
+	No document language is set	Belge dili ayarlanmamış
+	No page has text: the document appears to be images of pages	Hiçbir sayfada metin yok: belge sayfa resimlerinden oluşuyor gibi görünüyor
+	No results	Sonuç yok
+	Non-Repudiation	İnkâr Edilemezlik
+	On	Açık
+	Open a PDF (⌘O)	PDF aç (⌘O)
+	Open folder	Klasörü aç
+	Organize	Düzenle
+	Page Properties	Sayfa Özellikleri
+	Page properties…	Sayfa özellikleri…
+	Page {n}	Sayfa {n}
+	Page {n} of {total}	Sayfa {n} / {total}
+	Page {p} doesn't tab in structure order	{p}. sayfanın sekme sırası yapı sırasını izlemiyor
+	Page {p}: {n} untagged content item	Sayfa {p}: {n} etiketsiz içerik öğesi
+	Page {p}: {n} untagged content items	Sayfa {p}: {n} etiketsiz içerik öğesi
+	Page {} has additional actions	{}. sayfanın ek eylemleri var
+	Panel layout could not be restored: {error}	Panel düzeni geri yüklenemedi: {error}
+	Panel move was not applied: {error}	Panel taşıma uygulanmadı: {error}
+	PdfCraft can't check this signature yet: {}.	PdfCraft bu imzayı henüz denetleyemiyor: {}.
+	Previous	Önceki
+	Previous (⇧⌘G)	Önceki (⇧⌘G)
+	Print (⌘P)	Yazdır (⌘P)
+	Producer	Üretici
+	Refresh	Yenile
+	Remove from hotbar	Kısayol çubuğundan kaldır
+	Remove {standard} identification	{standard} tanımlamasını kaldır
+	Rendering…	İşleniyor…
+	Report created	Rapor oluşturuldu
+	Reset side panels	Yan panelleri sıfırla
+	Rev. {rev}: Certified by an unknown signer	Rev. {rev}: Bilinmeyen bir imzalayan tarafından onaylandı
+	Rev. {rev}: Certified by {name}	Rev. {rev}: {name} tarafından onaylandı
+	Rev. {rev}: Signed by an unknown signer	Rev. {rev}: Bilinmeyen bir imzalayan tarafından imzalandı
+	Rev. {rev}: Signed by {name}	Rev. {rev}: {name} tarafından imzalandı
+	Rotate view clockwise (⇧⌘+)	Görünümü saat yönünde döndür (⇧⌘+)
+	Rule Name	Kural Adı
+	Save as {level}	{level} olarak kaydet
+	Save changes?	Değişiklikler kaydedilsin mi?
+	Save file	Dosyayı kaydet
+	Search all tools…	Tüm araçlarda ara…
+	Search results	Arama sonuçları
+	Search settings…	Ayarlarda ara…
+	Select	Seç
+	Select all	Tümünü seç
+	Show or hide the Tools panel	Araçlar panelini göster veya gizle
+	Show or hide the side panel	Yan paneli göster veya gizle
+	Signature is invalid	İmza geçersiz
+	Signature is valid	İmza geçerli
+	Signature validity is unknown	İmzanın geçerliliği bilinmiyor
+	Signing time is from the clock on the signer's computer.	İmzalama zamanı, imzalayanın bilgisayarındaki saatten alınmıştır.
+	Stick to a side:	Bir kenara yapıştır:
+	Still rendering — this page is unusually complex…	Hâlâ işleniyor — bu sayfa alışılmadık derecede karmaşık…
+	Success	Başarılı
+	System	Sistem
+	Tab Order	Sekme Sırası
+	Text recognition isn't installed: its models are missing (run `cargo xtask models`, or set PDFCRAFT_MODELS).	Metin tanıma kurulu değil: modelleri eksik (`cargo xtask models` çalıştırın ya da PDFCRAFT_MODELS ayarlayın).
+	The ECDSA signature is not in canonical DER (trailing bytes, padding or a missing sign byte); it was read anyway.	ECDSA imzası kurallı DER biçiminde değil (sondaki baytlar, dolgu ya da eksik işaret baytı); yine de okundu.
+	The ECDSA signature is the raw r and s values instead of a DER sequence; it was read anyway.	ECDSA imzası bir DER dizisi yerine ham r ve s değerlerinden oluşuyor; yine de okundu.
+	The RSA signature value does not have the length of the key's modulus (leading zero bytes dropped or added); it was read anyway.	RSA imza değeri, anahtarın modülüyle aynı uzunlukta değil (baştaki sıfır baytlar atılmış ya da eklenmiş); yine de okundu.
+	The RSA signature's DigestInfo has no NULL parameter (older signers write it so); it was read anyway.	RSA imzasının DigestInfo alanında NULL parametresi yok (eski imzalayıcılar böyle yazar); yine de okundu.
+	The certificate of {} does not allow this many CA certificates below it (path length), so it is not used to vouch for {}.	{} sertifikası altında bu kadar çok CA sertifikasına izin vermiyor (yol uzunluğu), bu yüzden {} için güvence olarak kullanılmıyor.
+	The certificate of {} has critical extensions PdfCraft does not recognize, so it is not used to vouch for {}.	{} sertifikasında PdfCraft'ın tanımadığı kritik uzantılar var, bu yüzden {} için güvence olarak kullanılmıyor.
+	The certificate of {} is not a CA certificate that may issue certificates, so it is not used to vouch for {}.	{} sertifikası, sertifika verebilen bir CA sertifikası değil, bu yüzden {} için güvence olarak kullanılmıyor.
+	The certificate of {} was not valid at the time of signing, so it is not used to vouch for {}.	{} sertifikası imzalama sırasında geçerli değildi, bu yüzden {} için güvence olarak kullanılmıyor.
+	The checker found problems which may prevent the document from being fully accessible.	Denetleyici, belgenin tam olarak erişilebilir olmasını engelleyebilecek sorunlar buldu.
+	The document has been altered or corrupted since the signature was applied.	Belge, imza uygulandıktan sonra değiştirilmiş ya da bozulmuş.
+	The document has been altered or corrupted since the timestamp was applied.	Belge, zaman damgası uygulandıktan sonra değiştirilmiş ya da bozulmuş.
+	The document has been altered since this signature was applied in ways it does not permit ({}).	Belge, bu imza uygulandıktan sonra imzanın izin vermediği biçimlerde değiştirilmiş ({}).
+	The document has been altered since this timestamp was applied in ways it does not permit ({}).	Belge, bu zaman damgası uygulandıktan sonra damganın izin vermediği biçimlerde değiştirilmiş ({}).
+	The document has been modified since this signature was applied, but the changes are permitted ({}).	Belge, bu imza uygulandıktan sonra değiştirilmiş ancak değişikliklere izin veriliyor ({}).
+	The document has been modified since this timestamp was applied, but the changes are permitted ({}).	Belge, bu zaman damgası uygulandıktan sonra değiştirilmiş ancak değişikliklere izin veriliyor ({}).
+	The document has no tags (structure tree)	Belgede etiket (yapı ağacı) yok
+	The document has no title	Belgenin başlığı yok
+	The document isn't marked as tagged (MarkInfo Marked)	Belge etiketli olarak işaretlenmemiş (MarkInfo Marked)
+	The document isn't tagged, so none of its content is	Belge etiketli değil, dolayısıyla içeriğinin hiçbir kısmı etiketli değil
+	The document's embedded revocation information shows that the signer's certificate has not been revoked.	Belgeye gömülü iptal bilgileri, imzalayanın sertifikasının iptal edilmediğini gösteriyor.
+	The embedded timestamp token is valid and its authority is trusted; trusted time is {}.	Gömülü zaman damgası belirteci geçerli ve yetkilisine güveniliyor; güvenilir zaman {}.
+	The font {} isn't embedded	{} yazı tipi gömülü değil
+	The metadata doesn't identify the file as {}	Meta veriler dosyayı {} olarak tanımlamıyor
+	The password is incorrect.	Parola yanlış.
+	The password must have at least 6 characters.	Parola en az 6 karakter olmalıdır.
+	The password must have at least 8 characters.	Parola en az 8 karakter olmalıdır.
+	The passwords do not match.	Parolalar eşleşmiyor.
+	The security settings don't allow screen readers to read the text	Güvenlik ayarları ekran okuyucuların metni okumasına izin vermiyor
+	The signature algorithm and the SignerInfo's digest algorithm name different hashes; the signature was made with the SignerInfo's.	İmza algoritması ile SignerInfo'nun özet algoritması farklı karma işlevleri belirtiyor; imza SignerInfo'dakiyle oluşturulmuş.
+	The signature carries an unverified timestamp ({}): the timestamp authority is not in your list of trusted certificates, so the signing time claimed by the signer is used instead.	İmza doğrulanmamış bir zaman damgası taşıyor ({}): zaman damgası yetkilisi güvenilen sertifikalar listenizde değil, bu yüzden onun yerine imzalayanın bildirdiği imzalama zamanı kullanılıyor.
+	The signature contents are not hexadecimal.	İmza içeriği onaltılık değil.
+	The signature could not be checked ({}).	İmza denetlenemedi ({}).
+	The signature could not be read ({}).	İmza okunamadı ({}).
+	The signature could not be verified ({}).	İmza doğrulanamadı ({}).
+	The signature has no valid byte range.	İmzanın geçerli bir bayt aralığı yok.
+	The signature includes an embedded timestamp.	İmza gömülü bir zaman damgası içeriyor.
+	The signature is BER-encoded (indefinite lengths) rather than DER; it was read leniently.	İmza DER yerine BER ile kodlanmış (belirsiz uzunluklar); esnek biçimde okundu.
+	The signature uses the legacy adbe.x509.rsa_sha1 format.	İmza eski adbe.x509.rsa_sha1 biçimini kullanıyor.
+	The signature value does not match the signer's certificate: the signature is corrupt.	İmza değeri imzalayanın sertifikasıyla eşleşmiyor: imza bozuk.
+	The signature's byte range does not exclude exactly its contents.	İmzanın bayt aralığı tam olarak kendi içeriğini dışarıda bırakmıyor.
+	The signature's byte range does not match the file.	İmzanın bayt aralığı dosyayla eşleşmiyor.
+	The signature's signed attributes have no content type, which CMS requires; it was read anyway.	İmzanın imzalı özniteliklerinde CMS'in gerektirdiği içerik türü yok; yine de okundu.
+	The signature's signed attributes have no message digest, so the signature does not cover the document.	İmzanın imzalı özniteliklerinde ileti özeti yok, bu yüzden imza belgeyi kapsamıyor.
+	The signature's signed attributes name a content type other than data, so it is not a signature of the document.	İmzanın imzalı öznitelikleri data dışında bir içerik türü belirtiyor, bu yüzden bu bir belge imzası değil.
+	The signature's timestamp token could not be verified ({}).	İmzanın zaman damgası belirteci doğrulanamadı ({}).
+	The signature's timestamp token does not cover the signature value.	İmzanın zaman damgası belirteci imza değerini kapsamıyor.
+	The signed content is a constructed (segmented) OCTET STRING, as BER allows; it was read anyway.	İmzalanan içerik, BER'in izin verdiği gibi oluşturulmuş (parçalı) bir OCTET STRING; yine de okundu.
+	The signer's certificate does not allow digital signatures (its key usage has neither digital signature nor non-repudiation).	İmzalayanın sertifikası dijital imzaya izin vermiyor (anahtar kullanımında ne dijital imza ne de inkâr edilemezlik var).
+	The signer's certificate has been revoked ({}).	İmzalayanın sertifikası iptal edilmiş ({}).
+	The signer's certificate has critical extensions PdfCraft does not recognize ({}).	İmzalayanın sertifikasında PdfCraft'ın tanımadığı kritik uzantılar var ({}).
+	The signer's certificate is not in the signature.	İmzalayanın sertifikası imzada yok.
+	The signer's certificate is not issued for signing documents (its extended key usage has no document-signing purpose).	İmzalayanın sertifikası belge imzalamak için verilmemiş (genişletilmiş anahtar kullanımında belge imzalama amacı yok).
+	The signer's certificate was not valid at the time of signing.	İmzalayanın sertifikası imzalama sırasında geçerli değildi.
+	The signer's identity is unknown because it has not been included in your list of trusted certificates and none of its parent certificates are trusted certificates.	İmzalayanın kimliği bilinmiyor; çünkü güvenilen sertifikalar listenize eklenmemiş ve üst sertifikalarının hiçbiri güvenilen sertifika değil.
+	The signer's identity is valid.	İmzalayanın kimliği geçerli.
+	The standard fonts can't draw “{c}” ({code}). Only Western European characters can be added as text for now.	Standart yazı tipleri “{c}” ({code}) karakterini çizemiyor. Şimdilik metin olarak yalnızca Batı Avrupa karakterleri eklenebilir.
+	The timestamp authority's certificate is not issued for time stamping.	Zaman damgası yetkilisinin sertifikası zaman damgalama için verilmemiş.
+	The timestamp authority's certificate was not valid at the time of timestamping.	Zaman damgası yetkilisinin sertifikası zaman damgalama sırasında geçerli değildi.
+	The timestamp contents are not hexadecimal.	Zaman damgası içeriği onaltılık değil.
+	The timestamp has no valid byte range.	Zaman damgasının geçerli bir bayt aralığı yok.
+	The timestamp token could not be read ({}).	Zaman damgası belirteci okunamadı ({}).
+	The timestamp token is valid and its authority is trusted.	Zaman damgası belirteci geçerli ve yetkilisine güveniliyor.
+	The timestamp token is valid, but the timestamp authority is not in your list of trusted certificates.	Zaman damgası belirteci geçerli ancak zaman damgası yetkilisi güvenilen sertifikalar listenizde değil.
+	The timestamp's byte range does not exclude exactly its contents.	Zaman damgasının bayt aralığı tam olarak kendi içeriğini dışarıda bırakmıyor.
+	The timestamp's byte range does not match the file.	Zaman damgasının bayt aralığı dosyayla eşleşmiyor.
+	The window shows the file name, not the title (Initial View > Show)	Pencere başlığı değil dosya adını gösteriyor (İlk Görünüm > Göster)
+	Theme	Tema
+	There is no folder to save the digital ID in.	Dijital kimliğin kaydedileceği bir klasör yok.
+	This document has no text to make bookmarks from.	Bu belgede yer işareti oluşturulacak metin yok.
+	This document has not been modified since this signature was applied.	Bu belge, bu imza uygulandığından beri değiştirilmemiş.
+	This document has not been modified since this timestamp was applied.	Bu belge, bu zaman damgası uygulandığından beri değiştirilmemiş.
+	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	Bu dosya diskte değişti. Yeni sürümü görmek için yeniden yükleyin; kaydedilmemiş değişiklikleriniz kaybolacak.
+	This signature uses RIPEMD-160, a legacy 160-bit hash algorithm that is no longer recommended for signatures. It still validates, but it should not be relied on.	Bu imza, artık imzalar için önerilmeyen eski bir 160 bitlik karma algoritması olan RIPEMD-160'ı kullanıyor. Hâlâ doğrulanıyor ancak güvenilmemelidir.
+	This signature uses SHA-1, a weak hash algorithm: collisions in it have been demonstrated. It still validates because many documents signed years ago use it, but it should not be relied on.	Bu imza, zayıf bir karma algoritması olan SHA-1'i kullanıyor: bu algoritmada çakışmalar gösterilmiştir. Yıllar önce imzalanmış birçok belge onu kullandığı için hâlâ doğrulanıyor ancak güvenilmemelidir.
+	This signature uses an RSA key shorter than 2048 bits, which is no longer considered strong enough for signatures. It still validates, but it should not be relied on.	Bu imza, artık imzalar için yeterince güçlü sayılmayan, 2048 bitten kısa bir RSA anahtarı kullanıyor. Hâlâ doğrulanıyor ancak güvenilmemelidir.
+	Toolbar size	Araç çubuğu boyutu
+	Unsigned signature field	İmzalanmamış imza alanı
+	Unsigned signature field: {name}	İmzalanmamış imza alanı: {name}
+	Unspecified	Belirtilmemiş
+	Use Column Order	Sütun Sırasını Kullan
+	Use Document Structure	Belge Yapısını Kullan
+	Use Row Order	Satır Sırasını Kullan
+	Vertical layout	Dikey düzen
+	Warning	Uyarı
+	Window	Pencere
+	Zoom in (⌘+)	Yakınlaştır (⌘+)
+	Zoom in / out (also pinch or ⌘-scroll)	Yakınlaştır / uzaklaştır (iki parmakla sıkıştırma ya da ⌘-kaydırma ile de)
+	Zoom out (⌘−)	Uzaklaştır (⌘−)
+	a table has 1 to {max} columns	bir tabloda 1 ile {max} arası sütun olur
+	a table has 1 to {max} rows	bir tabloda 1 ile {max} arası satır olur
+	alternate text hides an annotation inside it	alternatif metin içindeki bir açıklamayı gizliyor
+	alternate text on an element with no page content	sayfa içeriği olmayan bir öğede alternatif metin
+	bold	kalın
+	comments	yorumlar
+	document security store	belge güvenlik deposu
+	document structure	belge yapısı
+	form fill	form doldurma
+	italic	italik
+	its alternate text is inside another element's and will never be read	alternatif metni başka bir öğeninkinin içinde ve hiçbir zaman okunmayacak
+	links	bağlantılar
+	metadata	meta veriler
+	no alternate text	alternatif metin yok
+	no header cells (TH)	başlık hücresi (TH) yok
+	no summary	özet yok
+	not in a TR	bir TR içinde değil
+	not in a Table, THead, TBody or TFoot	bir Table, THead, TBody ya da TFoot içinde değil
+	not in an L (list)	bir L (liste) içinde değil
+	not in an LI (list item)	bir LI (liste öğesi) içinde değil
+	of	/
+	other changes	diğer değişiklikler
+	page content	sayfa içeriği
+	page {n} is out of range (1–{count})	{n}. sayfa aralığın dışında (1–{count})
+	pages added or removed	eklenen ya da kaldırılan sayfalar
+	rows have between {min} and {max} columns	satırlarda {min} ile {max} arası sütun var
+	the area, the spacing and the column widths must be numbers, the spacing 0 or more and each width more than 0	alan, aralık ve sütun genişlikleri sayı olmalı; aralık 0 veya daha büyük, her genişlik 0'dan büyük olmalı
+	the first heading is an H{n}; headings should not skip levels	ilk başlık bir H{n}; başlıklar düzey atlamamalı
+	the first row number can be at most {max}	ilk satır numarası en fazla {max} olabilir
+	the signed version could not be read	imzalı sürüm okunamadı
+	{font}, {size} pt	{font}, {size} pt
+	{n} lines	{n} satır
+	{n} pages and no bookmarks	{n} sayfa ve hiç yer işareti yok
+	{page} is not a page number or label	{page} bir sayfa numarası ya da etiketi değil
+	{ty} element on page {p}: {what}	{p}. sayfadaki {ty} öğesi: {what}
+	{ty} element: {what}	{ty} öğesi: {what}
+	{who}, certificate issued by an unknown issuer.	{who}, sertifikayı bilinmeyen bir yayımcı vermiş.
+	{who}, certificate issued by {issuer}.	{who}, sertifikayı {issuer} vermiş.
+	{} annotation on page {p} isn't tagged	{p}. sayfadaki {} açıklaması etiketli değil
+	{} annotations aren't allowed	{} açıklamalarına izin verilmiyor
+	… and {n} more	… ve {n} tane daha
+@plural	Delete {n} field|Delete {n} fields	{n} alanı sil
+@plural	{n} byte|{n} bytes	{n} bayt
+@plural	{n} comment|{n} comments	{n} yorum
+@plural	{n} file|{n} files	{n} dosya
+@plural	{n} image optimized|{n} images optimized	{n} resim iyileştirildi
+@plural	{n} item discarded|{n} items discarded	{n} öğe atıldı
+@plural	{n} pixel|{n} pixels	{n} piksel
+@plural	{n} result|{n} results	{n} sonuç
+calendar weekday	Fr	Cu
+calendar weekday	Mo	Pt
+calendar weekday	Sa	Ct
+calendar weekday	Su	Pz
+calendar weekday	Th	Pe
+calendar weekday	Tu	Sa
+calendar weekday	We	Ça

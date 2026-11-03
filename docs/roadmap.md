@@ -309,6 +309,7 @@ Estimates unchanged.
 | Date | Change | Summary |
 |---|---|---|
 | 2026-11-02 | minor | M10 #1012: integrate main 168a3cb9; annotated skewed pages are recognized without deskew instead of failing the run; batch OCR always adds text. Estimates unchanged |
+| 2026-11-02 | patch | M10 #5743: macOS print jobs carry the job name and owner some vendors' filters need; not yet checked on a physical printer |
 | 2026-10-20 | minor | M10 #1012: refresh against ec0a9650; isolate Unicode OCR graphics state; preserve OCR replacement metrics with cached font space widths and retain both sets of catalog additions. Estimates unchanged |
 | 2026-11-01 | patch | M7 #5657: header/footer, watermark and background operations commit all selected pages together; later-page errors preserve marks, content, shared/inherited resources and pending edits; estimates unchanged. |
 | 2026-10-31 | patch | #1577: reconcile optional page shadows with current viewer/organizer and settings modules; CI validation pending. |
