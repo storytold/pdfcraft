@@ -10251,3 +10251,23 @@ fn image_transform_engine_refuses_singular_matrices_without_mutation() {
         assert_eq!(s.get(id).unwrap().bytes, before);
     }
 }
+
+/// A PDF used as a watermark or background has a page copied into the document: one whose
+/// security settings withhold copying (Table 22, bit 5) or assembly (bit 11) is refused, as a
+/// Combine source is, and the owner password lifts it.
+#[test]
+fn restricted_pdf_mark_sources_are_refused() {
+    let (mut s, id) = session_with(1);
+    let mark = |bytes: Arc<Vec<u8>>| Edit::AddWatermark {
+        pages: vec![0],
+        settings: Watermark::default(),
+        replace: false,
+        file: Some(MarkFile { name: "src.pdf".into(), bytes, page: 0 }),
+    };
+    for withheld in [0b1_0000, 0b100_0000_0000] {
+        let err = s.apply(id, mark(protected("", "owner", -1 ^ withheld))).unwrap_err();
+        assert_eq!(err, EditError::Source("src.pdf: its security settings don't allow copying pages".into()));
+    }
+    assert!(s.get(id).unwrap().info.outline.is_empty() && s.get(id).unwrap().can_undo().is_none(), "nothing changed");
+    s.apply(id, mark(protected("", "owner", -1))).unwrap();
+}

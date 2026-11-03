@@ -52,6 +52,11 @@ pub(crate) fn mark_source(doc: &mut pdfcraft_cos::Document, f: &MarkFile) -> Res
     let head = &f.bytes[..f.bytes.len().min(1024)];
     if head.windows(5).any(|w| w == b"%PDF-") {
         let src = pdfcraft_cos::Document::open(f.bytes.clone()).map_err(|e| EditError::Source(format!("{}: {e}", f.name)))?;
+        // The page's content is copied into another document, which its security settings may
+        // withhold, as Combine's and Extract's sources are checked (Table 22, bits 5 and 11).
+        if src.permissions().is_some_and(|p| !p.copy() || !p.assemble()) {
+            return Err(EditError::Source(format!("{}: {}", f.name, crate::SourceProblem::NotPermitted)));
+        }
         let (xobject, size) = pdfcraft_organize::page_as_form(doc, &src, f.page)?;
         Ok(pdfcraft_edit::MarkSource { xobject, size, image: false })
     } else {
