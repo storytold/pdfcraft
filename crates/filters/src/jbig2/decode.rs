@@ -213,4 +213,87 @@ mod tests {
             let _ = decode_jbig2(&data[..end], None, w, h, usize::MAX);
         }
     }
+
+    /// Pixels past a bitmap's edge are 0 (ISO/IEC 14492 6.3.5.2). A page whose default pixel is 1,
+    /// and an intermediate text or halftone region whose default pixel is 1, kept 1s past their
+    /// width in their last word of each row, and a refinement, which reads its reference a word at
+    /// a time, read them as pixels: of rows not a multiple of 32 wide, it decoded to other pixels
+    /// than were coded. Each stream is a refinement coded by the standard's procedures from a
+    /// reference read as 0 past its edge, and decodes to the picture given, `#` for black.
+    /// Vendored hayro-jbig2 patch 13.
+    #[test]
+    fn a_refinement_reads_nothing_past_its_references_width() {
+        // A page of 7 × 6, then of 33 × 6, whose default pixel is 1, refined whole.
+        const PAGE_7: &str = "000000003000010000001300000007000000060000000000000000460000000000012a00010000001e000000070000000600000000000000000400ffffffffe42d7e889ebcffac";
+        const PAGE_33: &str = "000000003000010000001300000021000000060000000000000000460000000000012a000100000034000000210000000600000000000000000400ffffffff314a8d598037eb3f915ab3d526ccae915ad6a6a7b814111b124ae60fffac";
+        // An intermediate text region of 31 × 6 whose default pixel is 1, then one of 7 × 6 on a
+        // page of 40, each refined into the page.
+        const TEXT_31: &str = "00000000300001000000130000001f0000000600000000000000004200000000000100000100000030000003fffdff02fefefe00000001000000014f96dceb76c7f1ff585971969cd9f88e538261a6f713be68d77e8e1fffac00000002042001010000001b0000001f00000006000000000000000000029000000001a943ffac000000032a2002010000002f0000001f0000000600000000000000000400ffffffff9ac311688adbc8f570a2f96aef93d332e3b1f4b27b704bffac";
+        const TEXT_7: &str = "000000003000010000001300000028000000060000000000000000420000000000010000010000001d000003fffdff02fefefe00000001000000014fe1f79f4a95c5b77fffac00000002042001010000001b0000000700000006000000000000000000029000000001a943ffac000000032a2002010000001e000000070000000600000000000000000400ffffffffa71dae12bd7fffac";
+        // An intermediate halftone region of 33 × 6 whose default pixel is 1, refined into the page.
+        const HALFTONE_33: &str = "000000003000010000001300000021000000060000000000000000420000000000011000010000000a000101000000011fffac00000002142001010000004100000021000000060000000000000000009000000021000000060000000000000000010000004ea6618f551d48ff24c2c5c98124d449f2adea6fca76e4297fffac000000032a20020100000032000000210000000600000000000000000400ffffffffe87db809393a3251e565e7a749e6470ab37f7aef186ceaf5167bffac";
+        let cases: [(&str, &str, [&str; 6]); 5] = [
+            ("page 7", PAGE_7, ["###.#.#", ".......", "#.####.", "######.", "#.#...#", ".#...##"]),
+            (
+                "page 33",
+                PAGE_33,
+                [
+                    ".#..##........###..####....#.##.#",
+                    ".#.###.###.##.##..#..#...#.....##",
+                    ".....##..#....#.##.######.###..#.",
+                    "##...#..##.###..###.##..#.#.#.#.#",
+                    ".##.#........##.#.#.....###......",
+                    "...#.#####.#..#.###......###..###",
+                ],
+            ),
+            (
+                "text 31",
+                TEXT_31,
+                [
+                    "....##....###......#.##.#.#....",
+                    ".#.....##.......##..###.#...#..",
+                    ".#.#.#.####...#####.####...#.#.",
+                    "......#...#...#.##...##...#..#.",
+                    ".#..##.###.#.###..####...#...#.",
+                    "#...#...#..#.#....#.##.#.....#.",
+                ],
+            ),
+            (
+                "text 7 on a page of 40",
+                TEXT_7,
+                [
+                    "......#.................................",
+                    ".....##.................................",
+                    "##...##.................................",
+                    "..#.....................................",
+                    "##......................................",
+                    "..#.....................................",
+                ],
+            ),
+            (
+                "halftone 33",
+                HALFTONE_33,
+                [
+                    "##...#.###.#.###.....#.####..####",
+                    "##.##.#...#.##.##.##.#...#.#.###.",
+                    "###..#.#....##.###...#..##.##..##",
+                    "##..#...###...##..#.####.###.#...",
+                    "####.###.###.#..#..#.#.####...###",
+                    "#.#..#........#....#.#.##.##..#.#",
+                ],
+            ),
+        ];
+        let hex = |text: &str| (0..text.len() / 2).map(|i| u8::from_str_radix(&text[i * 2..i * 2 + 2], 16).unwrap()).collect::<Vec<u8>>();
+        for (form, stream, picture) in cases {
+            let w = picture[0].len();
+            // As the filter gives it: black as 0, each row padded to a byte with 0s.
+            let mut rows = vec![0u8; w.div_ceil(8) * picture.len()];
+            for (y, row) in picture.iter().enumerate() {
+                for (x, _) in row.bytes().enumerate().filter(|(_, c)| *c == b'.') {
+                    rows[y * w.div_ceil(8) + x / 8] |= 0x80 >> (x % 8);
+                }
+            }
+            assert_eq!(decode_jbig2(&hex(stream), None, w as u32, 6, usize::MAX).unwrap(), rows, "{form}");
+        }
+    }
 }
