@@ -3873,6 +3873,27 @@ fn a_reply_on_another_page_to_a_removed_popup_goes_too() {
 }
 
 #[test]
+fn a_reply_with_a_parent_link_is_counted_whatever_order_the_walk_takes() {
+    // 7 hangs off 6 (/Parent) and off 8 (/IRT): the walk can reach it by its /Parent link first
+    let objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 5 0 R /Annots [6 0 R 8 0 R] >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 5 0 R /Annots [7 0 R] >>".to_vec(),
+        stream("", b"BT ET"),
+        b"<< /Type /Annot /Subtype /Text /Rect [20 20 40 40] /Contents (PARENT-NOTE) /Popup 8 0 R >>".to_vec(),
+        b"<< /Type /Annot /Subtype /Text /Rect [250 250 270 270] /Parent 6 0 R /IRT 8 0 R /Contents (BOTH-LINKS) >>".to_vec(),
+        b"<< /Type /Annot /Subtype /Popup /Rect [200 150 290 190] /Parent 6 0 R >>".to_vec(),
+    ];
+    let mut doc = pdf(objs);
+    mark(&mut doc, 0, &[[10.0, 10.0, 70.0, 50.0]], "");
+    let report = apply(&mut doc, None).unwrap();
+    let second = pdfcraft_model::pages(&doc).swap_remove(1);
+    assert!(annots_of(&doc, &second.dict).is_empty());
+    assert_eq!(report.annotations, 2, "the mark's own comment and the one reply: {report:?}");
+}
+
+#[test]
 fn a_rewritten_form_xobject_drops_the_source_text_of_added_content() {
     // A form drawing invisible text whose dictionary repeats it in /PCAdded.
     let form = stream(

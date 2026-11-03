@@ -458,11 +458,17 @@ fn apply_within(doc: &mut Document, pages: Option<&[usize]>, images: pdfcraft_co
     let pages = pdfcraft_model::pages(doc);
     let hanging = hanging_annotations(doc, pages.iter().flat_map(|p| annots_of(doc, &p.dict)));
     let mut todo: Vec<ObjRef> = removed_everywhere.iter().copied().collect();
+    // (a reply is counted once, by whichever link reaches it: one with both `/IRT` and `/Parent`
+    // is a reply however the walk orders them)
+    let (mut reached, mut counted) = (HashSet::new(), HashSet::new());
     while let Some(parent) = todo.pop() {
         for &(r, reply) in hanging.get(&parent).into_iter().flatten() {
             if removed_everywhere.insert(r) {
-                report.annotations += usize::from(reply);
+                reached.insert(r);
                 todo.push(r);
+            }
+            if reply && reached.contains(&r) && counted.insert(r) {
+                report.annotations += 1;
             }
         }
     }
