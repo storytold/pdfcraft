@@ -10252,9 +10252,9 @@ fn image_transform_engine_refuses_singular_matrices_without_mutation() {
     }
 }
 
-/// An XFA form's datasets export (XML, XDP) copies the form's data out whole: a document whose
-/// security settings withhold copying (Table 22, bit 5) refuses it, as the text exports do,
-/// and the owner password lifts it.
+/// Exporting comments or form data (an XFA form's datasets whole, as XML or XDP) copies them out
+/// of the document: one whose security settings withhold copying (Table 22, bit 5) refuses it,
+/// as the text exports do, and the owner password lifts it.
 #[test]
 fn xfa_data_export_needs_copying_permission() {
     let data = "<form><page1><country>JP</country></page1></form>";
@@ -10272,7 +10272,7 @@ fn xfa_data_export_needs_copying_permission() {
     let mut s = Session::new().with_clock(|| 1_700_000_000);
     let id = s.open("fields.pdf", None, bytes.clone(), None).unwrap();
     assert!(s.get(id).unwrap().info.xfa.is_some() && !s.get(id).unwrap().allows_copying());
-    for format in [DataFormat::Xml, DataFormat::Xdp] {
+    for format in [DataFormat::Xml, DataFormat::Xdp, DataFormat::Xfdf, DataFormat::Fdf] {
         assert_eq!(s.export_data(id, format, false, true).map(|_| ()), Err(EditError::NotPermitted("copying text and images")));
     }
     let oid = s.open("fields.pdf", None, bytes, Some("owner")).unwrap();

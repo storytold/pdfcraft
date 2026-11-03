@@ -102,10 +102,9 @@ impl Session {
         if format == DataFormat::Xdp && !xfa {
             return Err(EditError::Invalid("XDP holds XFA form data; this document is not an XFA form (use .xml, .csv or .txt)".into()));
         }
-        // The datasets are the form's content, copied out whole (Table 22, bit 5).
-        if xfa && matches!(format, DataFormat::Xml | DataFormat::Xdp) {
-            doc.check_copying()?;
-        }
+        // Comments and form data, the XFA datasets whole, are the document's content copied out
+        // of it (Table 22, bit 5), as the text exports are.
+        doc.check_copying()?;
         guard(|| match format {
             DataFormat::Xfdf => Ok(pdfcraft_xfdf::export_xfdf(&cos, comments, fields, &doc.name).into_bytes()),
             DataFormat::Fdf => pdfcraft_xfdf::export_fdf(&cos, comments, fields, &doc.name).map_err(|e| e.to_string()),
