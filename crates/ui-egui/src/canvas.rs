@@ -253,9 +253,8 @@ impl ImageObb {
     }
 }
 
-/// Whether pointer `p` is within an image being cropped or its active crop controls (#5835).
+/// Whether pointer `p` is on an image being cropped, its crop box or its handles (#5835).
 pub(crate) fn crop_contains_point(
-    painter: &egui::Painter,
     img: &pdfcraft_engine::PageImage,
     crop: &crate::edit_text_ui::CropMode,
     xf: &PageXform,
@@ -267,7 +266,7 @@ pub(crate) fn crop_contains_point(
     let full_obb = ImageObb::from_matrix(img.matrix, xf, info, page);
     crate::edit_text_ui::quad_contains(obb.corners(), p)
         || crate::edit_text_ui::quad_contains(full_obb.corners(), p)
-        || crate::edit_text_ui::crop_controls_contain(painter, img, crop, xf, info, page, p)
+        || crate::edit_text_ui::crop_controls_contain(img, crop, xf, info, page, p)
 }
 
 /// The page display as it was before full screen, put back on leaving it
@@ -2464,7 +2463,7 @@ fn draw_pages(
                             && s.crop
                                 .as_ref()
                                 .zip(images.get(s.index))
-                                .is_some_and(|(crop, img)| crop_contains_point(ui.painter(), img, crop, &xf, info, page_idx, p))
+                                .is_some_and(|(crop, img)| crop_contains_point(img, crop, &xf, info, page_idx, p))
                     }) {
                         over_image = true;
                         break;
@@ -2595,7 +2594,7 @@ fn draw_pages(
                 let Some((_, xf)) = view.screen_xforms.iter().find(|(page_idx, _)| *page_idx == sel.page).cloned() else { return false };
                 let images = cached_edit_images(view, doc, sel.page).to_vec();
                 let Some(img) = images.get(sel.index) else { return false };
-                crop_contains_point(ui.painter(), img, crop, &xf, info, sel.page, p)
+                crop_contains_point(img, crop, &xf, info, sel.page, p)
             });
         if is_crop_over_image {
             ui.ctx().data_mut(|d| d.insert_temp(crate::edit_text_ui::image_menu_id(), false));
