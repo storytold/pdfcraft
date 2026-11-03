@@ -7604,6 +7604,16 @@ fn exporting_to_word_html_and_rtf() {
     }
     let html = std::fs::read_to_string(dir.join("a.html")).unwrap();
     assert!(html.contains("Page 1") && html.contains("Page 3") && html.matches("<hr>").count() == 2, "{html}");
+    ok(&mut a, "doc_export_office", json!({ "doc": doc, "path": "simple.html", "html_mode": "simple" }));
+    let simple_html = std::fs::read_to_string(dir.join("simple.html")).unwrap();
+    assert!(
+        simple_html.contains("Page 1")
+            && !simple_html.contains("<style")
+            && !simple_html.contains("style=")
+            && !simple_html.contains("<span")
+            && !simple_html.contains("<div")
+    );
+    assert!(a.call("doc_export_office", &json!({ "doc": doc, "path": "bad.html", "html_mode": "compact" })).is_err());
     assert!(std::fs::read(dir.join("a.docx")).unwrap().starts_with(b"PK"));
     assert!(std::fs::read(dir.join("a.pptx")).unwrap().starts_with(b"PK"));
     assert!(std::fs::read_to_string(dir.join("a.rtf")).unwrap().contains("Page 2"));

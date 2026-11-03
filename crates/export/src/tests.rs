@@ -86,6 +86,40 @@ fn html_has_headings_paragraphs_and_images_in_order() {
 }
 
 #[test]
+fn simple_html_parses_without_css_or_layout_elements() {
+    use html5ever::{parse_document, tendril::TendrilSink};
+    use markup5ever_rcdom::{Handle, NodeData, RcDom};
+
+    let mut p = page();
+    let mut unicode = block("naïve 日本語.", 72.0, 300.0, 300.0, 311.0);
+    unicode.bold = true;
+    unicode.italic = true;
+    p.blocks.push(unicode);
+    let source = html_simple(&[p, table_page()], "Simple export");
+    let dom = parse_document(RcDom::default(), Default::default()).one(source.clone());
+    let mut tags = Vec::new();
+    let mut styles = Vec::new();
+    fn visit(node: &Handle, tags: &mut Vec<String>, styles: &mut Vec<String>) {
+        if let NodeData::Element { name, attrs, .. } = &node.data {
+            tags.push(name.local.to_string());
+            styles.extend(attrs.borrow().iter().filter(|a| a.name.local.as_ref() == "style").map(|a| a.name.local.to_string()));
+        }
+        for child in node.children.borrow().iter() {
+            visit(child, tags, styles);
+        }
+    }
+    visit(&dom.document, &mut tags, &mut styles);
+    assert!(!tags.iter().any(|tag| matches!(tag.as_str(), "style" | "div" | "span")));
+    assert!(styles.is_empty());
+    assert!(tags.iter().any(|tag| tag == "h1"));
+    assert!(tags.iter().any(|tag| tag == "p"));
+    assert!(tags.iter().any(|tag| tag == "strong"), "{source}");
+    assert!(tags.iter().any(|tag| tag == "em"), "{source}");
+    assert!(tags.iter().any(|tag| tag == "table"));
+    assert!(source.contains("naïve 日本語."));
+}
+
+#[test]
 fn docx_is_a_word_package() {
     let d = docx(&[page()], "Report");
     assert!(d.starts_with(b"PK"));

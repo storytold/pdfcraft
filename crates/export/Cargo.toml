@@ -12,3 +12,7 @@ workspace = true
 
 [dependencies]
 flate2.workspace = true
+
+[dev-dependencies]
+html5ever = "0.39"
+markup5ever_rcdom = "0.39.0"
