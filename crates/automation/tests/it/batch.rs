@@ -97,6 +97,8 @@ fn invalid_batch_arguments_and_outside_paths_write_nothing() {
         json!({"ppi":2000}),
         json!({"steps":["ocr"],"language":"not-a-language"}),
         json!({"steps":["ocr"],"dpi":1}),
+        json!({"steps":["ocr"],"auto_rotate":"yes"}),
+        json!({"steps":["ocr"],"deskew":1}),
     ] {
         let mut args = json!({"paths":["input"],"steps":["optimize"],"out_dir":"out"});
         args.as_object_mut().unwrap().extend(change.as_object().unwrap().clone());
@@ -237,4 +239,44 @@ fn mcp_batch_errors_keep_the_structured_per_file_report() {
     let report: Value = serde_json::from_slice(&out).unwrap();
     assert_eq!(report["result"]["isError"], true, "{report}");
     assert_eq!(report["result"]["structuredContent"]["failed"], 1);
+}
+
+/// An image-only scan of a page of text, stored upside down (no text layer).
+fn upside_down_scan() -> Vec<u8> {
+    let mut s = Session::new();
+    let text = s.create_from_text("t", "The quick brown fox jumps over the lazy dog.\nPack my box with five dozen liquor jugs.").unwrap();
+    let id = s.open("text.pdf", None, text, None).unwrap();
+    s.apply(id, pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 180 }).unwrap();
+    let png = pdfcraft_engine::export::Exporter::new(s.get(id).unwrap()).png(0, 150.0).unwrap();
+    s.create_from_images(&[("scan.png".into(), png)]).unwrap().as_ref().clone()
+}
+
+/// The OCR step takes Recognize text's auto_rotate and deskew (both on by default), and only
+/// together with the ocr step.
+#[test]
+fn ocr_corrections_can_be_turned_off_for_a_batch() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("scan.pdf"), upside_down_scan()).unwrap();
+    let mut auto = Automation::new().with_root(dir.path()).unwrap();
+    for flag in ["auto_rotate", "deskew"] {
+        let args = json!({"paths":["scan.pdf"],"steps":["optimize"],"out_dir":"out", flag: false});
+        assert!(auto.call("doc_batch", &args).is_err(), "{flag} needs the ocr step");
+    }
+    let rotation = |out: &str| {
+        let mut s = Session::new();
+        let bytes = std::sync::Arc::new(std::fs::read(dir.path().join(out).join("scan.pdf")).unwrap());
+        let id = s.open("scan.pdf", None, bytes, None).unwrap();
+        s.get(id).unwrap().info.pages[0].rotation
+    };
+    let off = result(&mut auto, json!({"paths":["scan.pdf"],"steps":["ocr"],"out_dir":"off","auto_rotate":false,"deskew":false}));
+    if !pdfcraft_engine::ocr::available() {
+        assert_eq!(off["failed"], 1, "{off}");
+        assert!(off["files"][0]["error"].as_str().unwrap().contains("model"), "{off}");
+        return;
+    }
+    assert_eq!((off["completed"].as_u64(), off["files"][0]["steps"][0]["skipped_pages"].as_u64()), (Some(1), Some(0)), "{off}");
+    assert_eq!(rotation("off"), 0, "auto_rotate false leaves the page as scanned");
+    let on = result(&mut auto, json!({"paths":["scan.pdf"],"steps":["ocr"],"out_dir":"on"}));
+    assert_eq!(on["completed"], 1, "{on}");
+    assert_eq!(rotation("on"), 180, "by default the upside-down scan is turned upright");
 }
