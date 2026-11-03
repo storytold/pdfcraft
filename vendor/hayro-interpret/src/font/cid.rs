@@ -316,12 +316,12 @@ impl Type0Font {
         None
     }
 
-    pub(crate) fn outline_glyph(&self, glyph: GlyphId, code: u32) -> BezPath {
+    pub(crate) fn outline_glyph(&self, glyph: GlyphId, code: u32) -> Option<BezPath> {
         let path = match &self.font_type {
             FontType::OpenType(t) => t.outline_glyph(glyph),
             FontType::Cff(c) => c.outline_glyph(glyph),
             FontType::Type1(t) => t.outline_glyph(glyph),
-        };
+        }?;
 
         if self.fallback
             && let FontType::OpenType(t) = &self.font_type
@@ -331,10 +331,10 @@ impl Type0Font {
             // not the default width, as it leads to weird results from my testing.
             && let Some(expected_width) = self.widths.get(&cid).copied()
         {
-            return stretch_glyph(path, expected_width, actual_width);
+            return Some(stretch_glyph(path, expected_width, actual_width));
         }
 
-        path
+        Some(path)
     }
 
     pub(crate) fn font_data(&self) -> Option<crate::font::FontData> {

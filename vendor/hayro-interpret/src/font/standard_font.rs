@@ -333,11 +333,14 @@ impl StandardFontBlob {
         }
     }
 
-    pub(crate) fn outline_glyph(&self, glyph: GlyphId) -> BezPath {
+    pub(crate) fn outline_glyph(&self, glyph: GlyphId) -> Option<BezPath> {
         // Standard fonts have empty outlines for these, but in Liberation Sans
         // they are a .notdef rectangle.
+        //
+        // PdfCraft patch: `Some`, not `None`. This outline is empty on purpose rather than
+        // missing, so a clipping render mode clips to nothing here, as it does for a space.
         if glyph == GlyphId::NOTDEF {
-            return BezPath::new();
+            return Some(BezPath::new());
         }
 
         match self {
@@ -450,10 +453,12 @@ impl StandardKind {
     fn composite_outline(&self, glyph: GlyphId) -> Option<BezPath> {
         let code = u8::try_from(glyph.to_u32().checked_sub(COMPOSITE_GLYPH_BASE)?).ok()?;
         let (base, accent, place) = accented_parts(self.code_to_ps_name(code)?)?;
+        // PdfCraft patch: `and_then`, since a part the blob has no outline for is no longer an
+        // empty path -- a composite whose parts cannot be drawn is not a composite.
         let outline = |name: &str| {
             self.base_font_blob
                 .name_to_glyph(name)
-                .map(|g| self.base_font_blob.outline_glyph(g))
+                .and_then(|g| self.base_font_blob.outline_glyph(g))
         };
         let mut path = outline(base)?;
         let mut accent = outline(accent)?;
@@ -503,10 +508,15 @@ impl StandardKind {
         Some(path)
     }
 
-    pub(crate) fn outline_glyph(&self, glyph: GlyphId) -> BezPath {
+    pub(crate) fn outline_glyph(&self, glyph: GlyphId) -> Option<BezPath> {
         let composite = self.composite_outline(glyph);
         let is_composite = composite.is_some();
-        let path = composite.unwrap_or_else(|| self.base_font_blob.outline_glyph(glyph));
+        // PdfCraft patch: the base blob may have no outline for this glyph, which is not the
+        // same as an empty one (see `OpenTypeFontBlob::outline_glyph`).
+        let path = match composite {
+            Some(path) => path,
+            None => self.base_font_blob.outline_glyph(glyph)?,
+        };
 
         // If the font is not embedded, we might need to stretch it so that
         // it matches the metrics of the actual underlying font blob.
@@ -533,7 +543,7 @@ impl StandardKind {
                 if let Some(Width::Value(w)) = self.widths.get(code as usize).copied() {
                     w
                 } else {
-                    return path;
+                    return Some(path);
                 }
             } else if let Some(w) = self
                 .code_to_ps_name(code)
@@ -541,7 +551,7 @@ impl StandardKind {
             {
                 w
             } else {
-                return path;
+                return Some(path);
             };
 
             // PdfCraft patch (57): a stand-in for a font the document names is narrowed to a
@@ -553,10 +563,10 @@ impl StandardKind {
             } else {
                 should_width
             };
-            return stretch_glyph(path, should_width, actual_width);
+            return Some(stretch_glyph(path, should_width, actual_width));
         }
 
-        path
+        Some(path)
     }
 
     pub(crate) fn glyph_width(&self, code: u8) -> Option<f32> {

@@ -18,7 +18,10 @@ fn be32(out: &mut Vec<u8>, n: u32) {
 }
 
 /// A TrueType font whose (1, 0) and (3, 0) subtables disagree about the code `A`.
-fn disagreeing_font() -> Vec<u8> {
+///
+/// Three glyphs, so `pub(super)`: the clip test next door needs an embedded font with a known
+/// glyph count, to ask it for a glyph id past the end.
+pub(super) fn disagreeing_font() -> Vec<u8> {
     // Glyph 2: one contour, the square 0..1000 on both axes (glyph 0 and 1 are empty).
     let mut square = Vec::new();
     for n in [1i16, 0, 0, 1000, 1000] {

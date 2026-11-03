@@ -129,8 +129,19 @@ pub struct OutlineGlyph {
 }
 
 impl OutlineGlyph {
-    /// Return the outline of the glyph, assuming an upem value of 1000.
+    /// Return the outline of the glyph, assuming an upem value of 1000. A glyph the font has no
+    /// outline for comes back empty; [`Self::try_outline`] tells the two apart.
     pub fn outline(&self) -> BezPath {
+        self.try_outline().unwrap_or_default()
+    }
+
+    /// PdfCraft patch: the outline of the glyph, or `None` when the font has no outline for it.
+    ///
+    /// An empty [`BezPath`] is a glyph that is drawn by drawing nothing -- a space -- and the
+    /// lookup failing gave the same answer. A clipping render mode (4 to 7) needs the difference:
+    /// an empty outline clips to nothing, while for a glyph the font does not have the clip is
+    /// unknown and what follows is better left unclipped than hidden (noted in review of #3447).
+    pub fn try_outline(&self) -> Option<BezPath> {
         self.font.outline_glyph(self.id, self.char_code)
     }
 

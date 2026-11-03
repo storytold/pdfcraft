@@ -89,7 +89,7 @@ impl TrueTypeFont {
         }
     }
 
-    pub(crate) fn outline_glyph(&self, glyph: GlyphId) -> BezPath {
+    pub(crate) fn outline_glyph(&self, glyph: GlyphId) -> Option<BezPath> {
         match &self.kind {
             Kind::Embedded(e) => e.outline_glyph(glyph),
             Kind::Standard(s) => s.outline_glyph(glyph),
@@ -297,7 +297,7 @@ impl EmbeddedKind {
             .or_else(|| win_ansi::get(code))
     }
 
-    fn outline_glyph(&self, glyph: GlyphId) -> BezPath {
+    fn outline_glyph(&self, glyph: GlyphId) -> Option<BezPath> {
         self.base_font.outline_glyph(glyph)
     }
 
