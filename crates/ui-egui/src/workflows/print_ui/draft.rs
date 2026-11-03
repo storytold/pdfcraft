@@ -172,10 +172,12 @@ impl PrintDraft {
         };
         // Selected and Current are positions, not a typed range: a range would read numbers as
         // page labels first.
+        // An area prints the page it was dragged on, even with Odd or Even pages kept for later.
+        let subset = if self.handling == Handling::Area { Subset::All } else { self.subset };
         let pages = match self.which {
-            Which::Selected => print::select_listed(count, &self.selected, self.subset, self.reverse),
-            Which::Current => print::select_listed(count, &[self.current_page], self.subset, self.reverse),
-            Which::All | Which::Range => print::select_pages(count, range.as_deref(), labels, self.subset, self.reverse),
+            Which::Selected => print::select_listed(count, &self.selected, subset, self.reverse),
+            Which::Current => print::select_listed(count, &[self.current_page], subset, self.reverse),
+            Which::All | Which::Range => print::select_pages(count, range.as_deref(), labels, subset, self.reverse),
         }
         // What the person got wrong about what to print is said in their language: the engine hands
         // the wording over whole and the page numbers apart from it.

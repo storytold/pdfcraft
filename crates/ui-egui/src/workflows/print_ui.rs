@@ -193,7 +193,8 @@ impl PdfCraftApp {
         let d = &mut self.print_draft;
         d.which = Which::Current;
         d.current_page = page;
-        d.handling = Handling::Area;
+        // Through set_handling, so leaving Label still gives its paper back.
+        d.set_handling(Handling::Area);
         d.crops = (0..count).map(|p| (p == page).then_some(print::Crop { rect, text_up: false })).collect();
         d.crop_pages = Some(vec![page]);
         d.sheet = 0;
@@ -710,6 +711,25 @@ mod tests {
         assert!(cut.settings(4, &[]).is_ok(), "the printer's default doesn't block cut and stack");
         cut.duplex = Some(spool::Duplex::ShortEdge);
         assert!(cut.settings(4, &[]).is_err());
+    }
+
+    /// Area prints the page it was dragged on whatever Odd or Even says, and the subset is still
+    /// there for the other handlings; going to Area from Label gives Label's paper back.
+    #[test]
+    fn an_area_prints_its_page_and_leaves_label_paper() {
+        let mut draft = PrintDraft { which: Which::Current, current_page: 0, subset: Subset::Even, ..PrintDraft::default() };
+        assert!(draft.settings(5, &[]).is_err());
+        draft.set_handling(Handling::Area);
+        assert_eq!(draft.settings(5, &[]).unwrap().pages, vec![0]);
+        assert_eq!(draft.subset, Subset::Even);
+        draft.set_handling(Handling::Size);
+        assert!(draft.settings(5, &[]).is_err());
+
+        let paper = draft.paper;
+        draft.set_handling(Handling::Label);
+        assert_eq!(draft.paper, print::LABEL_PAPER);
+        draft.set_handling(Handling::Area);
+        assert_eq!(draft.paper, paper);
     }
 
     /// A job being spooled holds the progress card, counting its sheets as the spooler reports
