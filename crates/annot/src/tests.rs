@@ -2423,7 +2423,14 @@ fn comment_text_the_standard_fonts_cannot_draw_is_kept_and_marked() {
         &meta("s"),
     )
     .unwrap();
-    assert_eq!(mark(&doc, s), Some('张'));
+    // A build with craft-fonts draws the name as outlines, so nothing is marked; without, `?`.
+    let by = "By 张三 at 2:14 pm, Oct 02, 2026";
+    if pdfcraft_fonts::line_missing(by, &StampLang::En.faces(false)).is_none() {
+        assert_eq!(mark(&doc, s), None);
+        assert!(ap_content(&doc, &list(&doc, 0)[s]).contains("/ActualText"), "{}", ap_content(&doc, &list(&doc, 0)[s]));
+    } else {
+        assert_eq!(mark(&doc, s), Some('张'));
+    }
     // Our own `?` appearance is redrawn on a restyle; Western European text clears the mark.
     set_style(&mut doc, 0, t, StyleChange::new(Some([1.0, 0.0, 0.0]), None, None, None), &meta("")).unwrap();
     assert_eq!(mark(&doc, t), Some('签'));
