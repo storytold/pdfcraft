@@ -194,12 +194,11 @@ pub fn declared(doc: &Document) -> Declared {
                     .get(b"OutputConditionIdentifier")
                     .and_then(|v| {
                         doc.resolve(v).as_string().map(|s| {
-                            // An even cut keeps UTF-16 text whole code units.
-                            let n = s.bytes.len().min(MAX_IDENTIFIER_BYTES) & !1;
-                            if n == s.bytes.len() {
+                            if s.bytes.len() <= MAX_IDENTIFIER_BYTES {
                                 s.to_text()
                             } else {
-                                pdfcraft_cos::PdfString { bytes: s.bytes[..n].to_vec(), hex: s.hex }.to_text()
+                                // An even cut keeps UTF-16 text whole code units.
+                                pdfcraft_cos::PdfString { bytes: s.bytes[..MAX_IDENTIFIER_BYTES & !1].to_vec(), hex: s.hex }.to_text()
                             }
                         })
                     })

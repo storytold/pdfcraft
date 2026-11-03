@@ -541,7 +541,8 @@ fn convert_adds_no_srgb_intent_when_colour_could_not_all_be_read() {
             "<< /Type /Catalog /Pages 2 0 R >>",
             "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
             "<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << >> >>",
-            "<< /Length 9 /Filter /FlateDecode >>\nstream\nnot flate\nendstream",
+            // A /Filter that isn't a name can't be decoded: the content isn't read.
+            "<< /Length 9 /Filter 5 >>\nstream\nnot flate\nendstream",
         ],
         "",
     );
