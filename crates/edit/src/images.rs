@@ -584,6 +584,10 @@ fn sequence_end(ops: &[Op], i: usize, end: usize, opens: &[&str], close: &str) -
     end
 }
 
+/// The stacking units of `ops[scan_start..scan_end]` that Arrange moves past one another, in
+/// paint order: a `q … Q`, `BT … ET` or marked-content sequence up to its matching close (or the
+/// end of the scan), a single `Do`, `sh` or inline image, or a run of other operators that ends
+/// at a path-painting operator or before the next unit. Units that paint nothing are left out.
 pub(crate) fn content_units(ops: &[Op], scan_start: usize, scan_end: usize) -> Vec<std::ops::Range<usize>> {
     let mut units = Vec::new();
     let mut i = scan_start;
