@@ -68,6 +68,10 @@ struct Gs {
     scale: f64,
     leading: f64,
     rise: f64,
+    /// The stroke parameters that widen a painted path beyond its construction points.
+    line_width: f64,
+    miter_limit: f64,
+    line_join: i64,
 }
 
 /// What processing a scope produced.
@@ -238,6 +242,9 @@ pub(crate) fn process(doc: &mut Document, scope: &mut Scope<'_>, streams: &[Vec<
         scale: 1.0,
         leading: 0.0,
         rise: 0.0,
+        line_width: 1.0,
+        miter_limit: 10.0,
+        line_join: 0,
     };
     process_from(doc, scope, streams, resources, gs)
 }
@@ -382,7 +389,7 @@ impl Walk {
             self.clip = false;
         }
         let kept = match o {
-            b"q" | b"Q" | b"cm" | b"Tf" | b"gs" => {
+            b"q" | b"Q" | b"cm" | b"Tf" | b"gs" | b"w" | b"M" | b"j" => {
                 self.graphics_state(doc, scope, &op);
                 Some(op)
             }
@@ -418,10 +425,25 @@ impl Walk {
         self.path.push(op);
     }
 
+    /// The box a stroke of the current path can paint, grown from its construction box `b` by
+    /// what the pen adds: half the line width (a width of 0 is one device pixel, taken as one
+    /// unit), times the miter limit when the path has joins and they are mitred, scaled by the
+    /// CTM's largest stretch. Caps and joins never reach further, so a hit test on it is
+    /// conservative, and a horizontal or vertical line no longer has a zero-area box.
+    fn stroke_box(&self, b: [f64; 4]) -> [f64; 4] {
+        let m = self.gs.ctm.0;
+        let scale = (m[0] * m[0] + m[1] * m[1] + m[2] * m[2] + m[3] * m[3]).sqrt();
+        let joins = self.path.iter().filter(|op| matches!(op.op.as_slice(), b"l" | b"c" | b"v" | b"y" | b"h" | b"re")).count() >= 2;
+        let miter = if joins && self.gs.line_join == 0 { self.gs.miter_limit.max(1.0) } else { 1.0 };
+        let pad = self.gs.line_width.max(1.0) / 2.0 * miter * scale;
+        [b[0] - pad, b[1] - pad, b[2] + pad, b[3] + pad]
+    }
+
     /// A painting operator ends the path; one under a region is removed (or kept as a clip).
     fn paint_path(&mut self, scope: &mut Scope<'_>, op: Op, piece: &mut Piece) {
+        let strokes = matches!(op.op.as_slice(), b"S" | b"s" | b"B" | b"B*" | b"b" | b"b*");
+        let bbox = self.path_box.take().map(|b| if strokes { self.stroke_box(b) } else { b });
         let body = std::mem::take(&mut self.path);
-        let bbox = self.path_box.take();
         let clips = std::mem::replace(&mut self.clip, false);
         let hit = scope.mode == Mode::Apply && op.op.as_slice() != b"n" && bbox.is_some_and(|b| scope.hits(b));
         if !hit {
@@ -455,9 +477,18 @@ impl Walk {
                 }
             }
             b"Tf" => self.select_font(doc, scope, op),
+            b"w" => self.gs.line_width = op.num(0).unwrap_or(self.gs.line_width),
+            b"M" => self.gs.miter_limit = op.num(0).unwrap_or(self.gs.miter_limit),
+            b"j" => self.gs.line_join = op.num(0).map_or(self.gs.line_join, |j| j as i64),
             _ => {
                 if let Some((font, vertical, size)) = op.name(0).and_then(|n| extgstate_font(doc, scope, &self.ext_gstates, n, &self.fallback)) {
                     (self.gs.font, self.gs.vertical, self.gs.size) = (font, vertical, size);
+                }
+                if let Some(state) = op.name(0).and_then(|n| self.ext_gstates.get(n)).and_then(|s| doc.resolve(s).as_dict().cloned()) {
+                    let num = |key: &[u8]| state.get(key).and_then(|v| doc.resolve(v).as_f64());
+                    self.gs.line_width = num(b"LW").unwrap_or(self.gs.line_width);
+                    self.gs.miter_limit = num(b"ML").unwrap_or(self.gs.miter_limit);
+                    self.gs.line_join = num(b"LJ").map_or(self.gs.line_join, |j| j as i64);
                 }
             }
         }
