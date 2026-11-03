@@ -42,6 +42,7 @@ mod motion;
 mod reopen;
 mod settings;
 mod single_instance;
+mod start_failure;
 mod startup;
 mod text_scale;
 #[cfg(test)]
@@ -280,7 +281,7 @@ fn main() -> eframe::Result {
             &apple_events,
         ),
     );
-    match result {
+    let result = match result {
         // Only a renderer that couldn't start: without a window or display at all, OpenGL can't
         // help either, and winit's own error says more.
         Err(e @ eframe::Error::Wgpu(_)) if retry_with_gl(choice, started.get()) => {
@@ -300,7 +301,12 @@ fn main() -> eframe::Result {
             )
         }
         other => other,
+    };
+    // Say why instead of exiting silently (`start_failure`).
+    if let Err(e) = &result {
+        start_failure::report(e);
     }
+    result
 }
 
 /// Which renderer to start with, from `PDFCRAFT_RENDERER`.
