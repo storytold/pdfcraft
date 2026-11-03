@@ -324,8 +324,8 @@ fn active_tool_controls(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ve
 
 /// Render a modern iOS-style pill toggle switch.
 fn toggle_switch(ui: &mut egui::Ui, on: &mut bool, t: &Tokens) -> egui::Response {
-    let width = 34.0;
-    let height = 18.0;
+    let width = 28.0;
+    let height = 16.0;
     let (rect, mut response) = ui.allocate_exact_size(vec2(width, height), Sense::click());
     if response.clicked() {
         *on = !*on;
@@ -337,7 +337,7 @@ fn toggle_switch(ui: &mut egui::Ui, on: &mut bool, t: &Tokens) -> egui::Response
         let radius = height / 2.0;
         let bg_color = if *on { Color32::from_rgb(45, 85, 150) } else { t.border };
         ui.painter().rect(rect, CornerRadius::same(radius as u8), bg_color, Stroke::NONE, egui::StrokeKind::Inside);
-        let circle_radius = radius - 2.5;
+        let circle_radius = radius - 2.0;
         let circle_x = if *on { rect.max.x - radius } else { rect.min.x + radius };
         ui.painter().circle_filled(egui::pos2(circle_x, rect.center().y), circle_radius, Color32::WHITE);
     }
@@ -348,13 +348,13 @@ fn toggle_switch(ui: &mut egui::Ui, on: &mut bool, t: &Tokens) -> egui::Response
 fn segmented_dock_picker(ui: &mut egui::Ui, bar: &mut Hotbar, t: &Tokens) {
     let sides: [(&str, Option<&str>); 5] =
         [("Float", None), ("Left", Some("left")), ("Right", Some("right")), ("Top", Some("top")), ("Bottom", Some("bottom"))];
-    let total_width = ui.available_width().max(280.0);
-    let height = 32.0;
+    let total_width = ui.available_width().max(230.0);
+    let height = 24.0;
     let item_width = total_width / (sides.len() as f32);
 
     let (outer_rect, _) = ui.allocate_exact_size(vec2(total_width, height), Sense::hover());
 
-    ui.painter().rect(outer_rect, CornerRadius::same(6), t.card.gamma_multiply(0.6), Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
+    ui.painter().rect(outer_rect, CornerRadius::same(5), t.card.gamma_multiply(0.6), Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
 
     for (i, (label, side_val)) in sides.iter().enumerate() {
         let is_selected = match (bar.dock.as_deref(), *side_val) {
@@ -376,9 +376,9 @@ fn segmented_dock_picker(ui: &mut egui::Ui, bar: &mut Hotbar, t: &Tokens) {
             }
         }
         if is_selected {
-            ui.painter().rect(item_rect.shrink(1.0), CornerRadius::same(5), Color32::from_rgb(38, 58, 98), Stroke::NONE, egui::StrokeKind::Inside);
+            ui.painter().rect(item_rect.shrink(1.0), CornerRadius::same(4), Color32::from_rgb(38, 58, 98), Stroke::NONE, egui::StrokeKind::Inside);
         } else if resp.hovered() {
-            ui.painter().rect(item_rect.shrink(1.0), CornerRadius::same(5), t.hover, Stroke::NONE, egui::StrokeKind::Inside);
+            ui.painter().rect(item_rect.shrink(1.0), CornerRadius::same(4), t.hover, Stroke::NONE, egui::StrokeKind::Inside);
         }
 
         if i > 0 && !is_selected {
@@ -388,7 +388,7 @@ fn segmented_dock_picker(ui: &mut egui::Ui, bar: &mut Hotbar, t: &Tokens) {
                 _ => false,
             };
             if !prev_selected {
-                ui.painter().vline(x_start, (outer_rect.min.y + 4.0)..=(outer_rect.max.y - 4.0), Stroke::new(1.0, t.border));
+                ui.painter().vline(x_start, (outer_rect.min.y + 3.0)..=(outer_rect.max.y - 3.0), Stroke::new(1.0, t.border));
             }
         }
 
@@ -399,7 +399,7 @@ fn segmented_dock_picker(ui: &mut egui::Ui, bar: &mut Hotbar, t: &Tokens) {
         } else {
             t.text_muted
         };
-        let font = theme::medium(13.0);
+        let font = theme::medium(11.0);
         let galley = ui.painter().layout_no_wrap(tl!(*label).to_string(), font, text_color);
         ui.painter().galley(item_rect.center() - vec2(galley.size().x / 2.0, galley.size().y / 2.0), galley, text_color);
     }
@@ -566,10 +566,10 @@ pub(crate) fn show(app: &mut PdfCraftApp, area: Rect, page_left: Option<f32>, ui
     expanded.set_open(true);
     expanded.store(&ctx);
     let screen = ctx.content_rect().shrink(12.0);
-    let picker_x = if pos.x + cell + 380.0 < screen.right() { pos.x + cell + 20.0 } else { pos.x - 360.0 };
+    let picker_x = if pos.x + cell + 260.0 < screen.right() { pos.x + cell + 14.0 } else { pos.x - 250.0 };
     let picker_pos = egui::pos2(
-        picker_x.clamp(screen.left(), (screen.right() - 350.0).max(screen.left())),
-        pos.y.clamp(screen.top(), (screen.bottom() - 640.0).max(screen.top())),
+        picker_x.clamp(screen.left(), (screen.right() - 250.0).max(screen.left())),
+        pos.y.clamp(screen.top(), (screen.bottom() - 460.0).max(screen.top())),
     );
     let mut close_dialog = false;
     egui::Window::new(tl!("Hotbar tools"))
@@ -584,58 +584,58 @@ pub(crate) fn show(app: &mut PdfCraftApp, area: Rect, page_left: Option<f32>, ui
             egui::Frame::NONE
                 .fill(t.card)
                 .stroke(Stroke::new(1.0, t.border))
-                .corner_radius(CornerRadius::same(12))
-                .shadow(egui::Shadow { offset: [0, 8], blur: 24, spread: 0, color: Color32::from_black_alpha(if t.dark() { 120 } else { 35 }) })
-                .inner_margin(egui::Margin::same(16)),
+                .corner_radius(CornerRadius::same(10))
+                .shadow(egui::Shadow { offset: [0, 6], blur: 20, spread: 0, color: Color32::from_black_alpha(if t.dark() { 120 } else { 35 }) })
+                .inner_margin(egui::Margin::symmetric(12, 10)),
         )
         .show(&ctx, |ui| {
-            ui.set_min_width(300.0);
+            ui.set_width(230.0);
 
             // Title bar: "Hotbar Tools" on the left, "X" close button on the right
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(tl!("Hotbar tools")).size(16.0).strong().color(t.text));
+                ui.label(egui::RichText::new(tl!("Hotbar tools")).size(13.5).strong().color(t.text));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if icons::button(ui, "x", 20.0, false, tl!("Close menu")).clicked() {
+                    if icons::button(ui, "x", 16.0, false, tl!("Close menu")).clicked() {
                         close_dialog = true;
                     }
                 });
             });
 
-            ui.add_space(14.0);
+            ui.add_space(8.0);
 
             // Section 1: Layout & Sizing
-            ui.label(egui::RichText::new(tl!("Layout & Sizing")).size(13.5).strong().color(t.text));
-            ui.add_space(6.0);
+            ui.label(egui::RichText::new(tl!("Layout & Sizing")).size(11.5).strong().color(t.text));
+            ui.add_space(4.0);
 
             // Toolbar size slider row
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(tl!("Toolbar size")).color(t.text));
-                ui.spacing_mut().slider_width = 160.0;
+                ui.label(egui::RichText::new(tl!("Toolbar size")).size(11.5).color(t.text));
+                ui.spacing_mut().slider_width = 100.0;
                 ui.add(egui::Slider::new(&mut bar.button_size, 24.0..=64.0).show_value(false));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(egui::RichText::new(format!("{:.0} px", bar.button_size)).color(t.text_muted));
+                    ui.label(egui::RichText::new(format!("{:.0} px", bar.button_size)).size(11.0).color(t.text_muted));
                 });
             });
 
-            ui.add_space(8.0);
+            ui.add_space(5.0);
 
             // Vertical layout toggle switch row
             ui.horizontal(|ui| {
                 ui.add_enabled_ui(bar.dock.is_none(), |ui| {
                     toggle_switch(ui, &mut bar.vertical, &t);
-                    ui.add_space(6.0);
-                    ui.label(egui::RichText::new(tl!("Vertical layout")).color(t.text));
+                    ui.add_space(5.0);
+                    ui.label(egui::RichText::new(tl!("Vertical layout")).size(11.5).color(t.text));
                 });
             });
 
-            ui.add_space(10.0);
+            ui.add_space(6.0);
 
             // Stick to a side section with segmented control
-            ui.label(egui::RichText::new(tl!("Stick to a side:")).color(t.text));
-            ui.add_space(6.0);
+            ui.label(egui::RichText::new(tl!("Stick to a side:")).size(11.5).color(t.text));
+            ui.add_space(4.0);
             segmented_dock_picker(ui, &mut bar, &t);
 
-            ui.add_space(8.0);
+            ui.add_space(6.0);
 
             // Full-side strip checkbox
             let strip_hint = tl!("Extend the docked toolbar along the entire side. Choose a side above to enable.");
@@ -643,24 +643,24 @@ pub(crate) fn show(app: &mut PdfCraftApp, area: Rect, page_left: Option<f32>, ui
                 .on_hover_text(strip_hint)
                 .on_disabled_hover_text(strip_hint);
 
-            ui.add_space(12.0);
+            ui.add_space(8.0);
             ui.separator();
-            ui.add_space(10.0);
+            ui.add_space(6.0);
 
             // Section 2: Add Tools to Hotbar
-            ui.label(egui::RichText::new(tl!("Add Tools to Hotbar")).size(13.5).strong().color(t.text));
-            ui.add_space(8.0);
+            ui.label(egui::RichText::new(tl!("Add Tools to Hotbar")).size(11.5).strong().color(t.text));
+            ui.add_space(5.0);
 
             // Search bar pill
             let search_frame = egui::Frame::NONE
                 .fill(t.field)
                 .stroke(Stroke::new(1.0, t.border))
-                .corner_radius(CornerRadius::same(8))
-                .inner_margin(egui::Margin::symmetric(10, 6));
+                .corner_radius(CornerRadius::same(6))
+                .inner_margin(egui::Margin::symmetric(8, 3));
             search_frame.show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 8.0;
-                    ui.add(icons::image("search", 14.0, t.text_faint));
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    ui.add(icons::image("search", 12.0, t.text_faint));
                     ui.add(
                         egui::TextEdit::singleline(&mut bar.search)
                             .hint_text(tl!("Search all tools…"))
@@ -670,11 +670,11 @@ pub(crate) fn show(app: &mut PdfCraftApp, area: Rect, page_left: Option<f32>, ui
                 });
             });
 
-            ui.add_space(8.0);
+            ui.add_space(6.0);
 
             // Scrollable tools list with checkboxes
-            egui::ScrollArea::vertical().max_height(240.0).auto_shrink([false, false]).show(ui, |ui| {
-                ui.spacing_mut().item_spacing.y = 6.0;
+            egui::ScrollArea::vertical().max_height(150.0).auto_shrink([false, false]).show(ui, |ui| {
+                ui.spacing_mut().item_spacing.y = 4.0;
                 for spec in COMMANDS {
                     if !matches_search(spec, &bar.search) {
                         continue;
