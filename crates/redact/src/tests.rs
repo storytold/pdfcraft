@@ -3905,6 +3905,24 @@ fn an_indirect_base_state_off_hides_the_layer() {
 }
 
 #[test]
+fn a_chained_base_state_off_hides_the_layer() {
+    assert_layer_secret_removed(layer_state_page(
+        vec![("BaseState", Object::Ref(ObjRef::new(8, 0)))],
+        "7 0 R",
+        vec![b"9 0 R".to_vec(), b"/OFF".to_vec()],
+    ));
+}
+
+#[test]
+fn a_chained_membership_type_is_evaluated() {
+    assert_layer_secret_removed(layer_state_page(
+        vec![("BaseState", Object::name("ON"))],
+        "8 0 R",
+        vec![b"<< /Type 9 0 R /OCGs [7 0 R] /P /AllOff >>".to_vec(), b"10 0 R".to_vec(), b"/OCMD".to_vec()],
+    ));
+}
+
+#[test]
 fn off_wins_over_on_when_the_base_state_is_off() {
     assert_layer_secret_removed(layer_state_page(
         vec![

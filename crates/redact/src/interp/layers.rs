@@ -258,5 +258,5 @@ pub(super) fn strip_hidden_layers(doc: &Document, scope: &mut Scope<'_>, ops: Ve
 /// Is this dictionary's `/Type` the given name? An indirect `/Type` is followed, as a viewer
 /// follows it: a group or membership dictionary must not escape classification through one.
 fn has_type(doc: &Document, d: &Dict, name: &[u8]) -> bool {
-    d.get(b"Type").is_some_and(|t| doc.resolve(t).as_name() == Some(name))
+    d.get(b"Type").is_some_and(|t| crate::resolve_chain(doc, t).as_name() == Some(name))
 }

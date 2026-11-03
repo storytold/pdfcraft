@@ -334,10 +334,12 @@ fn hidden_layers(doc: &Document) -> Vec<ObjRef> {
     let list = |k: &[u8]| -> Vec<ObjRef> {
         d.get(k).and_then(|g| doc.resolve(g).as_array().map(|a| a.iter().filter_map(Object::as_ref).collect())).unwrap_or_default()
     };
-    let (on, off) = (list(b"ON"), list(b"OFF"));
+    // sets: the lists are the document's, and a filter over every group would scan them each time
+    let (on, off): (std::collections::HashSet<ObjRef>, std::collections::HashSet<ObjRef>) =
+        (list(b"ON").into_iter().collect(), list(b"OFF").into_iter().collect());
     // The default state is /BaseState, then /ON turns groups on and /OFF turns them off, so a
     // group both lists name ends up off (§8.11.4.3, Table 101) — the viewer reads it the same way.
-    let base_off = d.get(b"BaseState").map(|b| doc.resolve(b)).is_some_and(|b| b.as_name() == Some(b"OFF".as_slice()));
+    let base_off = d.get(b"BaseState").map(|b| crate::resolve_chain(doc, b)).is_some_and(|b| b.as_name() == Some(b"OFF".as_slice()));
     all.into_iter().filter(|g| off.contains(g) || (base_off && !on.contains(g))).collect()
 }
 
