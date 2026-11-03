@@ -80,6 +80,7 @@ family (`sign`, `sign_with_timestamp`, `timestamp_document`, `embed_ltv`).
 | `links` | Link creation, properties, and finding URLs in page text |
 | `js` | The bridge to `pdfcraft-js`. `forms` never depends on `js` directly; the engine injects it, so a build without JavaScript is possible |
 | `xfa`, `ocr`, `compare`, `export` | Façades over the L3/L4 crates of the same names |
+| `assistant` | What a question to the AI assistant may send: a selection's text and the page around it, without text under unapplied redaction marks, refused when the document forbids copying. Also the library's view of a PDF (read without a password, or from an open copy). It builds the passages `pdfcraft-ai` sends; nothing is sent from here |
 
 ## Not done here
 
