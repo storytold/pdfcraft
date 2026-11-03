@@ -2859,3 +2859,50 @@ key	Space	স্পেস
 	No image on clipboard to paste	পেস্ট করার মতো কোনো ছবি ক্লিপবোর্ডে নেই
 	Pinned {tool} to Home	{tool} হোমে পিন করা হয়েছে
 	Unpinned {tool} from Home	{tool} হোম থেকে আনপিন করা হয়েছে
+# Strings main added by 2026-11-03 (AI-assisted translations from English, not separately native-reviewed).
+	1 line	১টি লাইন
+	Add tools to hotbar	শর্টকাট বারে সরঞ্জাম যোগ করুন
+	Close menu	মেনু বন্ধ করুন
+	Custom scale	নিজস্ব স্কেল
+	Dock navigation rail on Left	নেভিগেশন বার বাঁ দিকে রাখুন
+	Dock navigation rail on Right	নেভিগেশন বার ডান দিকে রাখুন
+	Drag hotbar	শর্টকাট বার টানুন
+	Every line set in the style chosen for a level becomes a bookmark of that level, under a new first bookmark.	কোনো স্তরের জন্য বাছা ধরনে লেখা প্রতিটি লাইন একটি নতুন প্রথম বুকমার্কের নিচে সেই স্তরের বুকমার্ক হয়ে যায়।
+	Extend the docked toolbar along the entire side. Choose a side above to enable.	লাগানো সরঞ্জাম বারটি পুরো পাশ জুড়ে বাড়ান। চালু করতে ওপরে একটি পাশ বাছুন।
+	Float (drag anywhere)	ভাসমান (যেকোনো জায়গায় টানুন)
+	Freehand-Highlight	মুক্তহাতে হাইলাইট
+	Full-side strip	পুরো পাশের ফালি
+	General & Interface	সাধারণ ও ইন্টারফেস
+	Hand	হাত
+	Hotbar settings	শর্টকাট বারের সেটিংস
+	Hotbar settings / add tools	শর্টকাট বারের সেটিংস / সরঞ্জাম যোগ করুন
+	Hotbar tools	শর্টকাট বারের সরঞ্জাম
+	Level {n}	স্তর {n}
+	Navigation rail side	নেভিগেশন বারের পাশ
+	New bookmarks from text styles	লেখার ধরন থেকে নতুন বুকমার্ক
+	New bookmarks from text styles…	লেখার ধরন থেকে নতুন বুকমার্ক…
+	Page Properties	পৃষ্ঠার বৈশিষ্ট্য
+	Page properties…	পৃষ্ঠার বৈশিষ্ট্য…
+	Remove from hotbar	শর্টকাট বার থেকে সরান
+	Reset side panels	পার্শ্ব প্যানেল রিসেট করুন
+	Search all tools…	সব সরঞ্জামে খুঁজুন…
+	Search settings…	সেটিংসে খুঁজুন…
+	Select	নির্বাচন
+	Show or hide the Tools panel	সরঞ্জাম প্যানেল দেখান বা লুকান
+	Show or hide the side panel	পার্শ্ব প্যানেল দেখান বা লুকান
+	Stick to a side:	একটি পাশে আটকে রাখুন:
+	Tab Order	ট্যাবের ক্রম
+	This document has no text to make bookmarks from.	এই নথিতে বুকমার্ক তৈরির মতো কোনো লেখা নেই।
+	Toolbar size	সরঞ্জাম বারের আকার
+	Unspecified	অনির্দিষ্ট
+	Use Column Order	কলামের ক্রম ব্যবহার করুন
+	Use Document Structure	নথির কাঠামো ব্যবহার করুন
+	Use Row Order	সারির ক্রম ব্যবহার করুন
+	Vertical layout	উল্লম্ব বিন্যাস
+	Window	উইন্ডো
+	bold	গাঢ়
+	italic	তির্যক
+	{font}, {size} pt	{font}, {size} pt
+	{n} lines	{n}টি লাইন
+	Invert middle-button drag	মাঝের বোতামে টানার দিক উল্টান
+	Panning or auto-scrolling with the middle (wheel) button moves the page the other way.	মাঝের (চাকা) বোতাম দিয়ে সরালে বা স্বয়ংক্রিয়ভাবে স্ক্রোল করলে পৃষ্ঠা উল্টো দিকে যায়।

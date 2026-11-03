@@ -219,7 +219,9 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 ## Progress log
 
-- **2026-11-02 (M14, #1142):** Bengali (`bn`) and Urdu (`ur`) interface and date languages, 2,852 catalog entries each. Urdu is right to left and uses the Arabic craft-fonts face; Bengali draws with an installed face (`system_fonts::bengali_fallback`) until craft-fonts has one, and the picker shows "Bengali" where none can. AI-assisted translations, not native-reviewed. Estimates unchanged.
+- **2026-11-02 (M14, #1142):** Bengali (`bn`) and Urdu (`ur`) interface and date languages, 2,898 catalog entries each (0 missing in `cargo xtask i18n-report` on 2026-11-03). Urdu is right to left and uses the Arabic craft-fonts face; Bengali draws with an installed face (`system_fonts::bengali_fallback`) until craft-fonts has one, and the picker shows "Bengali" where none can. AI-assisted translations, not native-reviewed. Estimates unchanged.
+
+- **2026-11-02 (M10, #5743):** macOS print jobs name their title and owner (`com.apple.print.JobInfo.PMJobName`, `PMJobOwner`), as the system print dialog does, because a Kyocera filter crashes on a job without them. Checked by a test and through `doc_print` against a stand-in `lp`; not yet on a physical printer.
 
 - **2026-11-01 (M7, #5657):** Header/footer, watermark and background additions and replacements stage the complete call before committing. Synthetic later-page failures preserve exact incremental bytes, object count, dirty state and allocation cursor; success controls retain other marks and shared/inherited resources. Estimates unchanged.
 

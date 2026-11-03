@@ -2860,3 +2860,50 @@ key	Space	اسپیس
 	No image on clipboard to paste	کلپ بورڈ میں چسپاں کرنے کے لیے کوئی تصویر نہیں
 	Pinned {tool} to Home	{tool} ہوم پر پن کر دیا گیا
 	Unpinned {tool} from Home	{tool} کا ہوم سے پن ہٹا دیا گیا
+# Strings main added by 2026-11-03 (AI-assisted translations from English, not separately native-reviewed).
+	1 line	1 سطر
+	Add tools to hotbar	شارٹ کٹ پٹی میں اوزار شامل کریں
+	Close menu	مینو بند کریں
+	Custom scale	اپنی مرضی کا پیمانہ
+	Dock navigation rail on Left	نیویگیشن پٹی بائیں جانب لگائیں
+	Dock navigation rail on Right	نیویگیشن پٹی دائیں جانب لگائیں
+	Drag hotbar	شارٹ کٹ پٹی کھینچیں
+	Every line set in the style chosen for a level becomes a bookmark of that level, under a new first bookmark.	کسی سطح کے لیے منتخب انداز میں لکھی ہر سطر ایک نئے پہلے بُک مارک کے نیچے اسی سطح کا بُک مارک بن جاتی ہے۔
+	Extend the docked toolbar along the entire side. Choose a side above to enable.	لگی ہوئی اوزار کی پٹی کو پوری جانب پھیلائیں۔ فعال کرنے کے لیے اوپر ایک جانب منتخب کریں۔
+	Float (drag anywhere)	آزاد (کہیں بھی کھینچیں)
+	Freehand-Highlight	آزاد ہاتھ سے نمایاں کریں
+	Full-side strip	پوری جانب کی پٹی
+	General & Interface	عمومی اور انٹرفیس
+	Hand	ہاتھ
+	Hotbar settings	شارٹ کٹ پٹی کی ترتیبات
+	Hotbar settings / add tools	شارٹ کٹ پٹی کی ترتیبات / اوزار شامل کریں
+	Hotbar tools	شارٹ کٹ پٹی کے اوزار
+	Level {n}	سطح {n}
+	Navigation rail side	نیویگیشن پٹی کی جانب
+	New bookmarks from text styles	متن کے انداز سے نئے بُک مارکس
+	New bookmarks from text styles…	متن کے انداز سے نئے بُک مارکس…
+	Page Properties	صفحے کی خصوصیات
+	Page properties…	صفحے کی خصوصیات…
+	Remove from hotbar	شارٹ کٹ پٹی سے ہٹائیں
+	Reset side panels	پہلو کے پینل ری سیٹ کریں
+	Search all tools…	تمام اوزاروں میں تلاش کریں…
+	Search settings…	ترتیبات میں تلاش کریں…
+	Select	انتخاب
+	Show or hide the Tools panel	اوزار پینل دکھائیں یا چھپائیں
+	Show or hide the side panel	پہلو کا پینل دکھائیں یا چھپائیں
+	Stick to a side:	ایک جانب چپکائیں:
+	Tab Order	ٹیب کی ترتیب
+	This document has no text to make bookmarks from.	اس دستاویز میں بُک مارکس بنانے کے لیے کوئی متن نہیں۔
+	Toolbar size	اوزار کی پٹی کا سائز
+	Unspecified	غیر متعین
+	Use Column Order	کالموں کی ترتیب استعمال کریں
+	Use Document Structure	دستاویز کی ساخت استعمال کریں
+	Use Row Order	قطاروں کی ترتیب استعمال کریں
+	Vertical layout	عمودی ترتیب
+	Window	ونڈو
+	bold	جلی
+	italic	ترچھا
+	{font}, {size} pt	{font}، {size} pt
+	{n} lines	{n} سطریں
+	Invert middle-button drag	درمیانی بٹن سے کھینچنے کی سمت الٹیں
+	Panning or auto-scrolling with the middle (wheel) button moves the page the other way.	درمیانی (پہیے والے) بٹن سے کھسکانے یا خودکار اسکرول کرنے پر صفحہ الٹی سمت جاتا ہے۔
