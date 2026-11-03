@@ -1,5 +1,7 @@
 # PdfCraft roadmap
 
+> **Last reviewed:** 2026-11-03 | **Last updated:** 2026-11-03 | **Change:** patch (M12: Tags panel exposes table Summary and header Scope, including mapped roles; estimates unchanged)
+
 > **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M7, PR #2155 further review: inherited drawing/text state, affine image gestures, paste/selection ownership, no-op scripts and menu permissions; estimates unchanged)
 
 > **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M7, PR #2155 latest comments: explicit image-paste events, mixed-size field refresh, and documented mixed-script normalization with Undo; estimates unchanged)
@@ -218,6 +220,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 | 8 | 1.0 polish: performance, right-to-left, missing languages, keyboard-only (M14) | 55–95 |
 
 ## Progress log
+
+- **2026-11-03 (M12, tag properties):** The Tags panel exposes Summary for Table tags and Scope for TH tags, including custom roles mapped to those standard types. The synthetic Windows UI test verifies mapped-role visibility, a Summary edit, undo and save/reopen; existing automation coverage exercises Scope values, validation, undo and save/reopen. Formatting checks pass; the focused Windows UI test passed.
 
 - **2026-11-03 (M7, #5835):** In image crop mode, a right-click on the image, its crop box or its handles keeps the crop and opens no menu, so the menu no longer switches as the pointer moves. A right-click elsewhere clears the selection and opens the page menu. UI tests cover all four page rotations, overlapping images, a 45° image, and a check that the Done/Cancel/Remove Crop pills at a page edge still keep the crop.
 

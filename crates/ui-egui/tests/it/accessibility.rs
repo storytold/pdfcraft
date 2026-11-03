@@ -259,6 +259,18 @@ endstream endobj
 trailer << /Root 1 0 R >>
 %%EOF";
 
+const TABLE_TAGS: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R /MarkInfo << /Marked true >> /StructTreeRoot 5 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R >> endobj
+4 0 obj << /Length 0 >> stream
+endstream endobj
+5 0 obj << /Type /StructTreeRoot /K [7 0 R 8 0 R] /RoleMap << /MyTable /Table /MyHeader /TH >> >> endobj
+7 0 obj << /S /MyTable /P 5 0 R /A [<< /O /Layout /Placement /Block >> << /O /Table /Summary (Old summary) >>] >> endobj
+8 0 obj << /S /MyHeader /P 5 0 R /A [<< /O /Layout /Placement /Block >> << /O /Table /Scope /Row >>] >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+
 #[test]
 fn checker_shows_a_figure_finding_on_its_page() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
@@ -345,6 +357,44 @@ fn tags_panel_edits_a_tag_property_and_undoes_it() {
     h.get_by_label("Document · 6");
     h.get_by_label("Photo · 8");
     assert!(h.query_by_label("First figure · 7").is_none());
+}
+
+#[test]
+fn tags_panel_edits_role_mapped_table_summary_and_header_scope() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("table.pdf", None, TABLE_TAGS.to_vec()).unwrap();
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state_mut().execute("a11y.tags"));
+    h.run_steps(2);
+    assert_eq!(h.state().right, Some(RightPanel::Tags));
+    h.get_by_label("MyTable · 7").click();
+    h.run_steps(2);
+    let summary = h.get_by_role_and_label(Role::TextInput, "Summary");
+    summary.focus();
+    h.key_combination_modifiers(egui::Modifiers::COMMAND, &[egui::Key::A]);
+    h.key_press(egui::Key::Backspace);
+    summary.type_text("Updated summary");
+    h.get_by_label("Save tag properties").click();
+    h.run_steps(2);
+    let id = h.state().views[0].id;
+    assert_eq!(h.state().session.get(id).unwrap().tags()[0].summary.as_deref(), Some("Updated summary"));
+    assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("Change tag properties"));
+    h.get_by_label("MyHeader · 8").click();
+    h.run_steps(2);
+    assert!(h.query_by_role_and_label(Role::TextInput, "Summary").is_none());
+    assert!(h.query_by_role_and_label(Role::ComboBox, "Scope").is_some());
+    let saved = h.state().session.save_bytes(id).unwrap();
+    let mut reopened = pdfcraft_engine::Session::new();
+    let reopened_id = reopened.open_new("saved.pdf", saved).unwrap();
+    assert_eq!(reopened.get(reopened_id).unwrap().tags()[0].summary.as_deref(), Some("Updated summary"));
+    assert_eq!(reopened.get(reopened_id).unwrap().tags()[1].scope.as_deref(), Some("Row"));
+    h.state_mut().undo();
+    h.run_steps(2);
+    assert_eq!(h.state().session.get(id).unwrap().tags()[0].summary.as_deref(), Some("Old summary"));
 }
 
 #[test]

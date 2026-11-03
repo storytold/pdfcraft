@@ -32,6 +32,8 @@ struct Draft {
     actual_text: String,
     alt: String,
     language: String,
+    summary: String,
+    scope: String,
 }
 
 impl Draft {
@@ -42,6 +44,8 @@ impl Draft {
             actual_text: tag.actual_text.clone().unwrap_or_default(),
             alt: tag.alt.clone().unwrap_or_default(),
             language: tag.language.clone().unwrap_or_default(),
+            summary: tag.summary.clone().unwrap_or_default(),
+            scope: tag.scope.clone().unwrap_or_default(),
         }
     }
 
@@ -58,6 +62,12 @@ impl Draft {
         add(TagProperty::ActualText, tag.actual_text.as_deref(), &self.actual_text);
         add(TagProperty::AlternateText, tag.alt.as_deref(), &self.alt);
         add(TagProperty::Language, tag.language.as_deref(), &self.language);
+        if tag.standard_kind == "Table" && self.kind == tag.kind {
+            add(TagProperty::Summary, tag.summary.as_deref(), &self.summary);
+        }
+        if tag.standard_kind == "TH" && self.kind == tag.kind {
+            add(TagProperty::Scope, tag.scope.as_deref(), &self.scope);
+        }
         match edits.len() {
             0 => None,
             1 => edits.pop(),
@@ -200,6 +210,25 @@ pub(crate) fn panel(
     }
     ui.add_enabled_ui(can_edit, |ui| {
         field(ui, tl!("Tag type"), &mut state.draft.kind, false);
+        if tag.standard_kind == "Table" && state.draft.kind == tag.kind {
+            field(ui, tl!("Summary"), &mut state.draft.summary, false);
+        }
+        if tag.standard_kind == "TH" && state.draft.kind == tag.kind {
+            ui.horizontal(|ui| {
+                let scope_label = match state.draft.scope.as_str() {
+                    "Row" => tl!("Row"),
+                    "Column" => tl!("Column"),
+                    "Both" => tl!("Both"),
+                    _ => tl!("Unspecified"),
+                };
+                egui::ComboBox::new("tag_scope", tl!("Scope")).selected_text(scope_label).show_ui(ui, |ui| {
+                    ui.selectable_value(&mut state.draft.scope, String::new(), tl!("Unspecified"));
+                    for (scope, label) in [("Row", tl!("Row")), ("Column", tl!("Column")), ("Both", tl!("Both"))] {
+                        ui.selectable_value(&mut state.draft.scope, scope.to_owned(), label);
+                    }
+                });
+            });
+        }
         field(ui, tl!("Title"), &mut state.draft.title, false);
         field(ui, tl!("Actual text"), &mut state.draft.actual_text, true);
         field(ui, tl!("Alternate text"), &mut state.draft.alt, true);

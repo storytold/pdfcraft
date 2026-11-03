@@ -13,6 +13,8 @@ pub struct TagInfo {
     /// Indentation level among reachable indirect tags.
     pub depth: usize,
     pub kind: String,
+    /// Standard structure type after applying the document's role map.
+    pub standard_kind: String,
     pub title: Option<String>,
     pub actual_text: Option<String>,
     pub alt: Option<String>,
@@ -155,6 +157,7 @@ fn text(doc: &Document, d: &pdfcraft_cos::Dict, key: &[u8]) -> Option<String> {
 pub fn tags(doc: &Document) -> Vec<TagInfo> {
     let pages = pdfcraft_model::pages(doc);
     let page_index: std::collections::HashMap<ObjRef, usize> = pages.iter().enumerate().map(|(i, p)| (p.obj, i)).collect();
+    let role_map = alt::tree_root(doc).and_then(|r| r.get(b"RoleMap").map(|o| doc.resolve(o))).and_then(|o| o.as_dict().cloned()).unwrap_or_default();
     alt::elements(doc)
         .into_iter()
         .filter_map(|e| {
@@ -163,6 +166,7 @@ pub fn tags(doc: &Document) -> Vec<TagInfo> {
                 parent: e.parent,
                 depth: e.depth,
                 kind: String::from_utf8_lossy(e.dict.name(b"S")?).into_owned(),
+                standard_kind: String::from_utf8_lossy(&alt::standard(doc, &role_map, e.dict.name(b"S")?)).into_owned(),
                 title: text(doc, &e.dict, b"T"),
                 actual_text: text(doc, &e.dict, b"ActualText"),
                 alt: text(doc, &e.dict, b"Alt"),
