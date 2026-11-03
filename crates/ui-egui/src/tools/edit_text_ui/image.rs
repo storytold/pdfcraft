@@ -263,6 +263,11 @@ fn crop_input(cx: &ImageCx<'_>, view: &mut DocView, i: usize, image: &pdfcraft_e
         return true;
     }
 
+    if resp.secondary_clicked() {
+        ui.ctx().data_mut(|d| d.insert_temp(image_menu_id(), false));
+        egui::Popup::close_all(ui.ctx());
+    }
+
     if allow_interaction
         && resp.drag_started()
         && let Some(o) = ptr.origin

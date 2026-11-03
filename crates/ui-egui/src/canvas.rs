@@ -253,6 +253,31 @@ impl ImageObb {
     }
 }
 
+/// Whether pointer `p` is within an image being cropped or its active crop controls (#5835).
+pub(crate) fn crop_contains_point(
+    img: &pdfcraft_engine::PageImage,
+    crop: &crate::edit_text_ui::CropMode,
+    xf: &PageXform,
+    info: &DocInfo,
+    page: usize,
+    p: Pos2,
+) -> bool {
+    let obb = ImageObb::from_image(img, xf, info, page);
+    let full_obb = ImageObb::from_matrix(img.matrix, xf, info, page);
+    let crop_b = xf.user_rect(info, page, crop.keep.map(|v| v as f32));
+    let handles_b = crop_b.expand(10.0);
+    let pills_b = if crop_b.max.y + 32.0 < xf.rect.max.y {
+        Rect::from_min_max(Pos2::new(crop_b.min.x.min(crop_b.max.x - 200.0), crop_b.max.y), Pos2::new(crop_b.max.x + 10.0, crop_b.max.y + 32.0))
+    } else {
+        Rect::from_min_max(Pos2::new(crop_b.min.x.min(crop_b.max.x - 200.0), crop_b.min.y - 32.0), Pos2::new(crop_b.max.x + 10.0, crop_b.min.y))
+    };
+
+    crate::edit_text_ui::quad_contains(obb.corners(), p)
+        || crate::edit_text_ui::quad_contains(full_obb.corners(), p)
+        || handles_b.contains(p)
+        || pills_b.contains(p)
+}
+
 /// The page display as it was before full screen, put back on leaving it
 /// ([`DocView::enter_presentation`]).
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -2442,9 +2467,18 @@ fn draw_pages(
                         PageXform { rect: r, rot: view.rotation, pw: info.pages[page_idx].width.max(1.0), ph: info.pages[page_idx].height.max(1.0) };
                     let images = cached_edit_images(view, doc, page_idx).to_vec();
                     for (idx, img) in images.iter().enumerate().rev() {
-                        let obb = ImageObb::from_image(img, &xf, info, page_idx);
-                        let b = image_screen_rect(img, &xf, info, page_idx);
-                        if obb.contains(b, p) {
+                        let is_crop = view.image_selection.as_ref().is_some_and(|s| s.page == page_idx && s.index == idx && s.crop.is_some());
+                        let hit = if is_crop {
+                            view.image_selection
+                                .as_ref()
+                                .and_then(|s| s.crop.as_ref())
+                                .is_some_and(|crop| crop_contains_point(img, crop, &xf, info, page_idx, p))
+                        } else {
+                            let obb = ImageObb::from_image(img, &xf, info, page_idx);
+                            let b = image_screen_rect(img, &xf, info, page_idx);
+                            obb.contains(b, p)
+                        };
+                        if hit {
                             over_image = true;
                             if view.image_selection.as_ref().is_none_or(|s| s.page != page_idx || s.index != idx) {
                                 view.image_selection = Some(crate::edit_text_ui::ImageSelection::at(page_idx, idx));
@@ -2557,6 +2591,22 @@ fn draw_pages(
         view.current = current;
     }
     resp.context_menu(|ui| {
+        let is_crop_over_image = tool == QuickTool::EditText
+            && view.image_selection.clone().is_some_and(|sel| {
+                let Some(ref crop) = sel.crop else { return false };
+                let pointer_pos = ptr.pos;
+                let Some(p) = pointer_pos else { return false };
+                let Some((_, xf)) = view.screen_xforms.iter().find(|(page_idx, _)| *page_idx == sel.page).cloned() else { return false };
+                let images = cached_edit_images(view, doc, sel.page).to_vec();
+                let Some(img) = images.get(sel.index) else { return false };
+                crop_contains_point(img, crop, &xf, info, sel.page, p)
+            });
+        if is_crop_over_image {
+            ui.ctx().data_mut(|d| d.insert_temp(crate::edit_text_ui::image_menu_id(), false));
+            egui::Popup::close_all(ui.ctx());
+            ui.close();
+            return;
+        }
         // Preparing a form: the selected field's menu.
         if preparing && let Some((name, wi)) = view.prepare.selected.clone() {
             // Several fields: Align, Center, Distribute, Set Fields to Same Size.
