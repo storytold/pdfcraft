@@ -382,18 +382,20 @@ mod tests {
         let scripts = [
             format!("var a=1,b=0;{}b;", "if(a===1){b=2;}".repeat(2000)),
             format!("{}f299();", (0..300).map(|i| format!("const f{i}=()=>1;")).collect::<String>()),
+            format!("{}f299()", (0..300).map(|i| format!("const f{i}=()=>1\n")).collect::<String>()),
+            format!("var a=0\n{}a", "a=2**3\n".repeat(6000)),
             format!("var a=0;{}a;", "a+=1;".repeat(6000)),
             format!("var a=0;{}a;", "a=2**3;".repeat(6000)),
             format!("var a=0;{}a;", "a=(1===1)?1:2;".repeat(5000)),
         ];
-        for (script, expected) in scripts.into_iter().zip(["2", "1", "6000", "8", "1"]) {
+        for (script, expected) in scripts.into_iter().zip(["2", "1", "1", "8", "6000", "8", "1"]) {
             let mut worker = ScriptSession::default();
             let result = worker.run(job(&script), &[]);
             assert_eq!(result.error, None);
             assert_eq!(result.result.as_deref(), Some(expected));
         }
         let mut document = job("f299();");
-        document.doc_scripts.push((0..300).map(|i| format!("const f{i}=()=>1;")).collect::<String>());
+        document.doc_scripts.push((0..300).map(|i| format!("const f{i}=()=>1\n")).collect::<String>());
         let result = ScriptSession::default().run(document, &[]);
         assert_eq!(result.error, None);
         assert!(result.doc_errors.is_empty());

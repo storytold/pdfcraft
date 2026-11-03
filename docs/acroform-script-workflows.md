@@ -110,3 +110,5 @@ writeback on #5499, and normal captions on #5505. The bounded menu parser was ad
 integration are developed here, with related state/icon work also tracked in #344 and #4751.
 Those contributors' branches are not modified by this contribution. See the PR description
 for the exact imported heads and validation actually performed on the combined source.
+
+The lexical preflight recognizes unambiguous top-level ASI boundaries before identifiers, including declarations and assignments separated by line breaks or comments. It preserves counters after operators and member access, and across binary keyword operators. Inside brackets it remains conservative; this is not a complete ECMAScript parser or ASI implementation.

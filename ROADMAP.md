@@ -1,5 +1,6 @@
 # PdfCraft roadmap
 
+> **2026-11-03 (M6, PR #5699 follow-up):** Accept independent top-level statements separated by automatic semicolon insertion while retaining continuation-chain limits; assert cyclic calculation results and preserve upstream multiline Fill & Sign coverage.
 > **Last reviewed:** 2026-11-03 | **Last updated:** 2026-11-03 | **Change:** patch (M5 #5850 review: indirect typewriter intent and composer edits preserve outer whitespace; movement regression commits by outside click; estimates unchanged)
 
 > **Last reviewed:** 2026-11-03 | **Last updated:** 2026-11-03 | **Change:** patch (M5 #5850: Enter adds Fill & Sign line breaks; outside clicks commit, Escape cancels, and saved multiline appearances retain their text and height; estimates unchanged)

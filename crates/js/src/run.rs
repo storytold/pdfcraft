@@ -254,6 +254,17 @@ mod chain_budget_tests {
             assert!(refuse(&format!("var a;{}1", format!("a{token}").repeat(5000))).is_some(), "{token}");
         }
     }
+    /// Newline boundaries admit flat libraries but never erase a continued expression.
+    #[test]
+    fn newline_continuations_keep_their_chain_budget() {
+        for part in ["a=>\n", "a=\n", "a=function(){}.\nx=", "a=1\n**", "a=1\nin x=", "a=1\ninstanceof x="] {
+            assert!(refuse(&format!("{}1", part.repeat(6000))).is_some(), "{part}");
+        }
+        for newline in ["\n", "\r\n", "/*\n*/", "// comment\n"] {
+            let flat = (0..300).map(|i| format!("const f{i}=()=>1{newline}")).collect::<String>();
+            assert_eq!(refuse(&flat), None, "{newline:?}");
+        }
+    }
     /// Inner statement separators must not reset a surrounding expression's active chain.
     #[test]
     fn inner_separators_do_not_erase_enclosing_chains() {

@@ -12,6 +12,7 @@ struct Guard<'a> {
     operand: bool,
     property: bool,
     prefix: usize,
+    line_break: bool,
 }
 impl<'a> Guard<'a> {
     /// Allocate fixed-size nesting state; no input controls an allocation size here.
@@ -26,6 +27,7 @@ impl<'a> Guard<'a> {
             operand: true,
             property: false,
             prefix: 0,
+            line_break: false,
         }
     }
     /// Consume one exact ASCII byte when present.
@@ -101,6 +103,7 @@ impl<'a> Guard<'a> {
     fn block_comment(&mut self) {
         self.i = self.i.saturating_add(1);
         while self.bytes.get(self.i..).is_some_and(|rest| !rest.is_empty() && !rest.starts_with(b"*/")) {
+            self.line_break |= matches!(self.bytes.get(self.i), Some(b'\n' | b'\r'));
             self.i = self.i.saturating_add(1);
         }
         self.i = self.i.saturating_add(2);
@@ -158,6 +161,13 @@ impl<'a> Guard<'a> {
             self.i = self.i.saturating_add(1);
         }
         let token = self.bytes.get(start..self.i);
+        // At source level, an identifier after a completed value cannot continue that
+        // expression (except the two binary keyword operators). ASI separates it.
+        // Stay conservative inside brackets and after operators/member access.
+        if self.depth == 0 && self.line_break && !self.operand && !self.property && !matches!(token, Some(b"in" | b"instanceof")) {
+            self.separator();
+        }
+        self.line_break = false;
         let unary = !self.property && matches!(token, Some(b"void" | b"typeof" | b"delete" | b"new"));
         self.operand =
             !self.property && (unary || matches!(token, Some(b"return" | b"throw" | b"case" | b"yield" | b"await" | b"in" | b"instanceof")));
@@ -209,6 +219,12 @@ impl<'a> Guard<'a> {
     }
     /// Scan one code token without entering the JavaScript parser.
     fn token(&mut self, c: u8) -> bool {
+        let comment = c == b'/' && matches!(self.bytes.get(self.i), Some(b'/' | b'*'));
+        if matches!(c, b'\n' | b'\r') {
+            self.line_break = true;
+        } else if !c.is_ascii_whitespace() && !comment && !(c.is_ascii_alphabetic() || matches!(c, b'_' | b'$')) {
+            self.line_break = false;
+        }
         match c {
             b'`' => {
                 self.template_text = true;

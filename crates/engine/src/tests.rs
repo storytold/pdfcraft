@@ -5423,13 +5423,24 @@ fn calculate_now_uses_calculation_order_and_bounds_recursion() {
     assert!(out.error.is_none(), "{out:?}");
     assert!(out.console.iter().any(|line| line == "8"), "{out:?}");
 
+    s.set_javascript(false); // Installing scripts must not change the 4/8 starting values.
     for (name, script) in
         [("qty", "event.value = Number(getField('total').value) + 1;"), ("total", "event.value = Number(getField('qty').value) + 1;")]
     {
         s.apply(id, Edit::SetFieldScript { name: name.into(), event: "calculate".into(), script: Some(script.into()) }).unwrap();
     }
-    let cyclic = s.run_javascript(id, "calculateNow();", None).unwrap();
+    s.set_javascript(true);
+    let starting = |name: &str| s.get(id).unwrap().form.iter().find(|f| f.name == name).unwrap().value.clone();
+    assert_eq!(starting("qty"), ["4"]);
+    assert_eq!(starting("total"), ["8"]);
+    let cyclic =
+        s.run_javascript(id, "calculateNow(); console.println(getField('qty').value); console.println(getField('total').value);", None).unwrap();
     assert!(cyclic.error.is_none(), "a cyclic calculation runs once in order: {cyclic:?}");
+    let field = |name: &str| s.get(id).unwrap().form.iter().find(|f| f.name == name).unwrap().value.clone();
+    assert_eq!(cyclic.console, ["9", "10"], "the explicit ordered pass runs exactly once");
+    // Applying the value delta invokes the existing automatic form-recalculation pass.
+    assert_eq!(field("qty"), ["11"]);
+    assert_eq!(field("total"), ["12"]);
 
     s.apply(id, Edit::SetFieldScript { name: "total".into(), event: "calculate".into(), script: Some("calculateNow(); event.value = 12;".into()) })
         .unwrap();
