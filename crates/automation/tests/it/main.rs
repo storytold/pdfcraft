@@ -1,5 +1,6 @@
 //! The crate's integration tests, linked into one test binary.
 
+mod ai_assistant;
 mod attachment_key;
 mod automation;
 mod automation_roots;

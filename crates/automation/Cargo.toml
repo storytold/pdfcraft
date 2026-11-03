@@ -10,6 +10,8 @@ workspace = true
 
 [dependencies]
 pdfcraft-engine = { workspace = true }
+# The AI assistant's requests and library (`ai_*` tools); no network.
+pdfcraft-ai = { workspace = true }
 pdfcraft-cos = { workspace = true }
 pdfcraft-render = { workspace = true }
 pdfcraft-organize = { workspace = true }

@@ -15,6 +15,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod a11y;
+mod assistant;
 mod batch;
 mod bates;
 mod comments;
@@ -89,6 +90,8 @@ pub struct Automation {
     /// Documents that lost a listing to the cap. A page of one with no listing is refused rather
     /// than read as "a number is a position", which the page may no longer match.
     evicted: HashSet<DocId>,
+    /// The AI assistant's library, once a tool has used it.
+    ai: Option<assistant::Loaded>,
 }
 
 impl Default for Automation {
@@ -107,6 +110,7 @@ impl Automation {
             texts: TextCache::default(),
             listed: HashMap::new(),
             evicted: HashSet::new(),
+            ai: None,
         }
     }
 

@@ -172,6 +172,11 @@ impl Automation {
             "command_run" => return self.command_run(&a),
             "command_batch" => self.command_batch(&a)?,
             "doc_inspect" => self.doc_inspect(&a)?,
+            "ai_library_add" => self.ai_library_add(&a)?,
+            "ai_library_remove" => self.ai_library_remove(&a)?,
+            "ai_library_list" => self.ai_library_list(&a)?,
+            "ai_library_search" => self.ai_library_search(&a)?,
+            "ai_ask" => self.ai_ask(&a)?,
             "render_preview" => return self.render_preview(&a),
             "page_number" => {
                 use pdfcraft_organize::LabelStyle as L;

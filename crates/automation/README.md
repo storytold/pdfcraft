@@ -136,6 +136,26 @@ claude mcp add pdfcraft -- pdfcraft-cli mcp --root <dir>
 4. Add an end-to-end test in `tests/it/automation.rs`. `tool_table_is_well_formed` checks names, schemas and command links.
 
 
+## AI assistant (offline)
+
+The assistant's library and its requests, with nothing sent (this build has no network
+transport; see the ADR "AI assistant"):
+- **Adding.** `ai_library_add {paths?, docs?, library?}` adds PDF files or open documents to the
+  personal library. A document is known by the SHA-256 of its bytes, so adding the same file from
+  elsewhere records its new path. A file that needs a password is listed as `needs_password` and
+  indexed when added as an open document. One that forbids copying is `not_permitted` and never
+  indexed, and text under unapplied redaction marks is left out. Every path is resolved before
+  any is read, so one outside `--root` refuses the call.
+- **Managing.** `ai_library_list`, `ai_library_search {query, k?}` (offline BM25, 1-based pages)
+  and `ai_library_remove {sha256}`.
+- **The library file.** `library` is the JSON file kept inside `--root` and rewritten atomically.
+  A file that exists but can't be read is refused and left as it is. Without `library`, the tools
+  use the last library named, or one kept for the session.
+- **Asking.** `ai_ask {doc, page, question, rect?, k?, model?, effort?, web_search?, dry_run: true}`
+  returns the exact Claude request a question would send, with the key masked, and its passages.
+  It refuses documents that forbid copying, and counts the glyphs it left out under redaction
+  marks.
+
 ## Moving several page objects
 
 `object_list {doc, page}` inventories recognised paragraphs, Image/Form artwork and added items

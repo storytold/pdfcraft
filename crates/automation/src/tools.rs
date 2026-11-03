@@ -73,6 +73,10 @@ fn comment_ref(mut extra: Value) -> Value {
     extra
 }
 
+fn library_arg() -> Value {
+    json!({ "type": "string", "description": "A file path: the AI library's JSON file (relative to --root when set), created on first change. Without it, the last library named, or one kept for the session." })
+}
+
 fn schema(props: Value, required: &[&str]) -> Value {
     json!({ "type": "object", "properties": props, "required": required, "additionalProperties": false })
 }
@@ -1505,6 +1509,32 @@ pub fn tools() -> Vec<ToolDef> {
             .destructive().with(schema(json!({"steps":{"type":"array","items":schema(json!({"id":{"type":"string"},"params":{"type":"object"}}), &["id"])},"stop_on_error":{"type":"boolean"}}), &["steps"])),
         t("doc_inspect", "Inspect open documents", "With doc, return doc_info; otherwise return information for every open document (empty documents array when none are open).")
             .ro().with(schema(json!({"doc":doc()}), &[])),
+        t("ai_library_add", "Add to the AI library", "Add PDFs to the AI assistant's personal library, searched on this machine (nothing is sent anywhere). paths are PDF files; docs are open documents, read with the password they were opened with (how an encrypted file gets in). A document is known by the SHA-256 of its bytes: adding the same file again, from anywhere, records its new location. Files that need a password are listed as needs_password, files that forbid copying as not_permitted (never indexed), files with no text layer as no_text. Text under unapplied redaction marks is left out. Per-item results; one failure doesn't stop the rest. library names the JSON file to keep it in (inside --root; rewritten atomically, never replaced if unreadable); without it, the last library named or one kept for the session.")
+            .with(schema(json!({
+                "paths": {"type":"array","items":{"type":"string","minLength":1},"maxItems":1000,"description":"PDF files to add (relative to --root when set)."},
+                "docs": {"type":"array","items":{"type":"integer","minimum":1},"maxItems":1000,"description":"Open documents to add, by id."},
+                "library": library_arg(),
+            }), &[])),
+        t("ai_library_remove", "Remove from the AI library", "Remove a document and its passages from the AI library, by its sha256 (from ai_library_list). removed is false when it wasn't there.")
+            .destructive()
+            .with(schema(json!({"sha256":{"type":"string","minLength":64,"maxLength":64,"description":"The document's SHA-256, 64 hex digits."},"library":library_arg()}), &["sha256"])),
+        t("ai_library_list", "List the AI library", "The documents in the AI library: sha256, size, title, last-known paths (most recent first), pages, pages without text, passages, status (indexed, needs_password, not_permitted, no_text) and when each was added (Unix seconds); and the total passage count.")
+            .ro()
+            .with(schema(json!({"library":library_arg()}), &[])),
+        t("ai_library_search", "Search the AI library", "Search the AI library offline (BM25 over passages of about 1,000 characters): the k best passages (default 6, at most 50), at most one per page, spread across documents while several match, each with sha256, title, 1-based page, text and score.")
+            .ro()
+            .with(schema(json!({"query":{"type":"string","minLength":1},"k":{"type":"integer","minimum":0,"maximum":50},"library":library_arg()}), &["query"])),
+        t("ai_ask", "Ask the AI assistant (dry run)", "Build the exact Claude request a question about a page or a selection would send, without sending it (this build has no network; dry_run must be true). The selection is rect (points from the top-left of the displayed page; omit for the whole page). Sent: the selection, the page's text around it, and up to k library passages (default 6; 0 for none; only when a library is in use), as cited search results, then the question. Refused for documents that forbid copying; text under unapplied redaction marks is left out and counted. Returns the request with the API key masked, the passages and their sources (1-based pages).")
+            .ro()
+            .with(schema(json!({
+                "doc": doc(), "page": {"type":"integer","minimum":1}, "question": {"type":"string","minLength":1,"maxLength":32768},
+                "rect": {"type":"array","items":{"type":"number"},"minItems":4,"maxItems":4,"description":"[x0, y0, x1, y1] in points from the top-left of the displayed page."},
+                "k": {"type":"integer","minimum":0,"maximum":50}, "library": library_arg(),
+                "model": {"type":"string","enum":pdfcraft_ai::model::MODELS.iter().map(|m| m.id).collect::<Vec<_>>(),"description":format!("Default {}.", pdfcraft_ai::model::default_model().id)},
+                "effort": {"type":"string","enum":["low","medium","high","xhigh","max"],"description":"Default medium."},
+                "web_search": {"type":"boolean","description":"Let the provider search the web (default false)."},
+                "dry_run": {"type":"boolean","description":"Must be true: return the request instead of sending it."},
+            }), &["doc", "page", "question", "dry_run"])),
         t("render_preview", "Render a preview", "Render a PNG bounded by max_side (default 1024), without changing or saving the document. Page defaults to 1; doc may be omitted when exactly one document is open. Render warnings follow the image as page_render gives them.")
             .ro().with(schema(json!({"doc":doc(),"page":{"type":"integer","minimum":1},"max_side":{"type":"integer","minimum":1,"maximum":4096}}), &[])),
     ]
