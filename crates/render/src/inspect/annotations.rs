@@ -118,6 +118,20 @@ impl<'a> Inspector<'a> {
             if comments_full {
                 continue;
             }
+            // Text that trims to nothing is not kept, so `retained` never sees it: charge what is
+            // read, so many comments sharing one huge blank string stop being decoded over and over.
+            let raw: usize = [&b"T"[..], b"Contents", b"M", b"NM", b"State", b"DA"]
+                .iter()
+                .filter_map(|k| match d.get(k).map(|o| self.resolve(o)) {
+                    Ok(Object::String(b, _) | Object::Name(b)) => Some(b.len()),
+                    _ => None,
+                })
+                .fold(0, usize::saturating_add);
+            kept = kept.saturating_add(raw);
+            if kept > MAX_ANNOTATION_BYTES {
+                comments_full = true;
+                continue;
+            }
             let rect = rect4(self.resolve(d.get(b"Rect").unwrap_or(&Object::Null)));
             let mut color = match d.get(b"C").map(|o| self.resolve(o)) {
                 Ok(Object::Array(c)) if c.len() == 3 => {
@@ -214,7 +228,11 @@ impl<'a> Inspector<'a> {
                 Some("SetOCGState") => self.layer_state(a),
                 Some("GoToR") => self.remote_go_to(a).unwrap_or_else(|| LinkTarget::Other("GoToR".into())),
                 Some("Launch") => self.launch_pdf(a).unwrap_or_else(|| LinkTarget::Other("Launch".into())),
-                Some(other) => LinkTarget::Other(other.to_string()),
+                // The name is the document's own: charged to the shared allowance, and an action
+                // that does not fit is listed without it.
+                Some(other) => {
+                    LinkTarget::Other(spend(other.as_bytes(), text_budget, |b| String::from_utf8_lossy(b).into_owned()).unwrap_or_default())
+                }
                 None => return None,
             }
         };
@@ -351,12 +369,16 @@ impl<'a> Inspector<'a> {
         }
         let Some(d) = self.dict(o) else { return };
         let (parent_name, parent_ft, parent_ff) = parent.unwrap_or(("", None, None));
-        let partial = self.text(d, b"T");
+        let partial = self.field_text(d, b"T");
         let full = match (&partial, parent_name.is_empty()) {
             (Some(t), true) => t.clone(),
             (Some(t), false) => format!("{parent_name}.{t}"),
             (None, _) => parent_name.to_string(),
         };
+        // Every field copies its parent's full name: charge it, and list no more once it is spent.
+        if !self.field_charge(full.len()) {
+            return;
+        }
         let ft = self.name(d, b"FT").or(parent_ft);
         let ff = d.get(b"Ff").ok().and_then(|x| x.as_i64().ok()).or(parent_ff);
         // Non-terminal: has kids that are fields (they carry /T). Widgets-only kids are terminal.
@@ -383,12 +405,12 @@ impl<'a> Inspector<'a> {
             _ => FieldKind::Unknown,
         };
         let value = match d.get(b"V").map(|v| self.resolve(v)) {
-            Ok(Object::Name(n)) => Some(String::from_utf8_lossy(n).into_owned()),
-            Ok(Object::String(bytes, _)) => Some(text_string(bytes)),
+            Ok(Object::Name(n)) => self.field_spend(n, |n| String::from_utf8_lossy(n).into_owned()),
+            Ok(Object::String(bytes, _)) => self.field_spend(bytes, text_string),
             Ok(Object::Array(a)) => Some(
                 a.iter()
                     .filter_map(|x| match self.resolve(x) {
-                        Object::String(bytes, _) => Some(text_string(bytes)),
+                        Object::String(bytes, _) => self.field_spend(bytes, text_string),
                         _ => None,
                     })
                     .collect::<Vec<_>>()
@@ -402,7 +424,7 @@ impl<'a> Inspector<'a> {
         let page = widget.and_then(|w| w.get(b"P").ok()).and_then(|p| self.page_of(p)).or_else(|| self.find_widget_page(o, kids));
         let has_actions = d.get(b"AA").is_ok() || widget.is_some_and(|w| w.get(b"AA").is_ok() || w.get(b"A").is_ok());
         let rect = widget.and_then(|w| w.get(b"Rect").ok()).map(|r| rect4(self.resolve(r)));
-        out.push(Field { name: full, kind, value, page, tooltip: self.text(d, b"TU"), has_actions, rect });
+        out.push(Field { name: full, kind, value, page, tooltip: self.field_text(d, b"TU"), has_actions, rect });
     }
 
     /// The first page whose `/Annots` lists the field or one of its kids.
