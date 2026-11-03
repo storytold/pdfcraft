@@ -77,29 +77,9 @@ impl Stamp {
     pub fn from_unix(secs: i64) -> Self {
         let (days, rem) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
         let (h, mi, s) = (rem / 3600, rem % 3600 / 60, rem % 60);
-        let (y, m, d) = Self::civil_from_days(days);
+        let (y, m, d) = pdfcraft_cos::civil_from_days(days);
         // `{y:04}` rather than `%Y`, which writes a `+` before years past 9999.
         Stamp { unix: secs, pdf: format!("D:{y:04}{m:02}{d:02}{h:02}{mi:02}{s:02}Z"), iso: format!("{y:04}-{m:02}-{d:02}T{h:02}:{mi:02}:{s:02}Z") }
-    }
-
-    /// Days since 1970-01-01 → proleptic Gregorian (year, month, day).
-    ///
-    /// Past `NaiveDate`'s ±262143-year range the old hand-rolled converter still produced a date,
-    /// which both stamps formatted directly; a `from_timestamp` epoch fallback would change it.
-    /// The Gregorian calendar repeats every 400 years (146_097 days), so chrono converts the day
-    /// within one cycle and whole cycles go back into the year (an `i128` so the extremes can't
-    /// overflow), keeping chrono as the only calendar logic. 1970-01-01 is `num_days_from_ce` 719_163.
-    fn civil_from_days(days: i64) -> (i64, u32, u32) {
-        use chrono::Datelike;
-        let (cycles, rest) = (days.div_euclid(146_097), days.rem_euclid(146_097));
-        // `rest + 719_163` is 719_163..865_259, always a valid CE day.
-        match i32::try_from(rest + 719_163).ok().and_then(chrono::NaiveDate::from_num_days_from_ce_opt) {
-            Some(d) => {
-                let y = i128::from(d.year()) + i128::from(cycles) * 400;
-                (i64::try_from(y).unwrap_or(if y < 0 { i64::MIN } else { i64::MAX }), d.month(), d.day())
-            }
-            None => (1970, 1, 1), // unreachable
-        }
     }
 
     /// The same moment shifted by `minutes` (used to order threaded replies).

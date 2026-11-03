@@ -8373,7 +8373,6 @@ name = "xtask"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "chrono",
  "lopdf",
  "pdfcraft-cos",
  "pdfcraft-oracle",
