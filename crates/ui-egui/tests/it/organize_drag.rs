@@ -26,6 +26,88 @@ fn document(prefix: &str) -> std::sync::Arc<Vec<u8>> {
     session.save_bytes(id).unwrap()
 }
 
+fn two_documents() -> Harness<'static, PdfCraftApp> {
+    let mut h = organize();
+    h.state_mut().open_bytes("target.pdf", None, document("Target").as_ref().clone()).unwrap();
+    h.state_mut().active = Some(0);
+    h.state_mut().views[0].selected = [0, 2].into();
+    h.run_steps(4);
+    h
+}
+
+#[test]
+fn dragging_selected_pages_to_another_tab_copies_them_as_one_undo_step() {
+    let mut h = two_documents();
+    h.state_mut().apply_edit(Edit::RotatePages { pages: vec![0], degrees: 90 });
+    h.run_steps(3);
+    let source = h.state().views[0].id;
+    let source_bytes = h.state().session.get(source).unwrap().bytes.clone();
+    let (_, modifiers) = start_drag(&mut h, false);
+    let tab = h.get_by_label("target.pdf").rect().center();
+    h.hover_at(tab);
+    h.run_steps(3);
+    assert_eq!(h.state().active, Some(1), "holding pages over the other tab activates it");
+    assert!(h.state().views[1].organize);
+    let gap = h.get_by_label("Page 2").rect().left_center() + egui::vec2(5.0, 0.0);
+    h.hover_at(gap);
+    h.run_steps(2);
+    release(&mut h, gap, modifiers);
+    let app = h.state();
+    let target = app.views[1].id;
+    let doc = app.session.get(target).unwrap();
+    assert_eq!(doc.info.pages.len(), 6);
+    assert_eq!(doc.info.pages[1].rotation, 90, "unsaved edits are included");
+    assert_eq!(app.views[1].selected, [1, 2].into());
+    assert!(std::sync::Arc::ptr_eq(&app.session.get(source).unwrap().bytes, &source_bytes), "the source stays unchanged");
+    let mut renderer = PageRenderer::new(doc.bytes.clone(), Default::default());
+    for (page, expected) in [(1, "Page 1"), (2, "Page 3")] {
+        let text = renderer.render(RenderRequest { page, kind: RequestKind::Text, scale: 1.0, ..Default::default() }).text.unwrap();
+        assert_eq!(text.plain_text().trim(), expected);
+    }
+    let saved = app.session.save_bytes(target).unwrap();
+    let mut reopened = Session::new();
+    let id = reopened.open("saved.pdf", None, saved, None).unwrap();
+    assert_eq!(reopened.get(id).unwrap().info.pages.len(), 6);
+    h.state_mut().execute("edit.undo");
+    assert_eq!(h.state().session.get(target).unwrap().info.pages.len(), 4);
+    h.state_mut().execute("edit.redo");
+    assert_eq!(h.state().session.get(target).unwrap().info.pages.len(), 6);
+}
+
+#[test]
+fn a_source_edit_during_a_cross_tab_page_drag_cancels_the_transfer() {
+    let mut h = two_documents();
+    let (_, modifiers) = start_drag(&mut h, false);
+    h.state_mut().apply_edit(Edit::DeletePages { pages: vec![0] });
+    h.run_steps(3);
+    let tab = h.get_by_label("target.pdf").rect().center();
+    h.hover_at(tab);
+    h.run_steps(3);
+    let gap = h.get_by_label("Page 2").rect().left_center() + egui::vec2(5.0, 0.0);
+    h.hover_at(gap);
+    h.run_steps(2);
+    release(&mut h, gap, modifiers);
+    assert_eq!(h.state().session.get(h.state().views[1].id).unwrap().info.pages.len(), 4);
+    assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().info.pages.len(), 3);
+}
+
+#[test]
+fn escape_during_a_cross_tab_page_drag_keeps_both_documents() {
+    let mut h = two_documents();
+    let (_, modifiers) = start_drag(&mut h, false);
+    let tab = h.get_by_label("target.pdf").rect().center();
+    h.hover_at(tab);
+    h.run_steps(3);
+    assert_eq!(h.state().active, Some(1));
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    let gap = h.get_by_label("Page 2").rect().left_center() + egui::vec2(5.0, 0.0);
+    release(&mut h, gap, modifiers);
+    for v in &h.state().views {
+        assert_eq!(h.state().session.get(v.id).unwrap().info.pages.len(), 4);
+    }
+}
+
 fn organize() -> Harness<'static, PdfCraftApp> {
     let bytes = document("Page");
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
@@ -189,4 +271,138 @@ fn replacing_a_document_cancels_an_organize_drag_before_pointer_release() {
     release(&mut h, to, modifiers);
     assert_eq!(page_texts(h.state()), expected, "releasing the old drag must not reorder replacement pages");
     assert_saved_order(&h, &expected);
+}
+
+#[test]
+fn dragging_password_protected_pages_uses_the_open_source_credentials() {
+    let mut h = two_documents();
+    assert!(
+        h.state_mut().apply_edit(Edit::Protect(pdfcraft_engine::Protection { open_password: Some("source-secret".into()), ..Default::default() }))
+    );
+    h.run_steps(3);
+    let source = h.state().views[0].id;
+    let doc = h.state().session.get(source).unwrap();
+    assert!(doc.password.is_some());
+    assert!(pdfcraft_cos::Document::open(doc.bytes.clone()).is_err());
+    let (_, modifiers) = start_drag(&mut h, false);
+    let tab = h.get_by_label("target.pdf").rect().center();
+    h.hover_at(tab);
+    h.run_steps(3);
+    let gap = h.get_by_label("Page 2").rect().left_center() + egui::vec2(5.0, 0.0);
+    h.hover_at(gap);
+    h.run_steps(2);
+    release(&mut h, gap, modifiers);
+    let target = h.state().views[1].id;
+    assert_eq!(h.state().session.get(target).unwrap().info.pages.len(), 6);
+    h.state_mut().undo();
+    assert_eq!(h.state().session.get(target).unwrap().info.pages.len(), 4);
+    assert_eq!(h.state().session.get(source).unwrap().info.pages.len(), 4);
+}
+
+#[test]
+fn opening_a_drag_target_grid_clears_a_stale_selection_even_if_cancelled() {
+    let mut h = two_documents();
+    h.state_mut().views[1].selected = [3].into();
+    assert_eq!(h.state().views[1].current, 0);
+    let (_, modifiers) = start_drag(&mut h, false);
+    let tab = h.get_by_label("target.pdf").rect().center();
+    h.hover_at(tab);
+    h.run_steps(3);
+    assert!(h.state().views[1].organize);
+    assert!(h.state().views[1].selected.is_empty());
+    h.key_press(egui::Key::Escape);
+    release(&mut h, tab, modifiers);
+    assert_eq!(h.state().views[1].target_pages(), vec![0]);
+}
+
+#[test]
+fn restricted_page_copy_does_not_replace_the_clipboard_even_after_source_close() {
+    use pdfcraft_engine::{Changes, Protection};
+    let mut source = Session::new();
+    let id = source.open("secret.pdf", None, document("Secret"), None).unwrap();
+    source
+        .apply(
+            id,
+            Edit::Protect(Protection {
+                open_password: Some("reader".into()),
+                permissions_password: Some("owner".into()),
+                changes: Changes::Pages,
+                copy: false,
+                ..Default::default()
+            }),
+        )
+        .unwrap();
+    let encrypted = source.save_bytes(id).unwrap();
+    let mut h = two_documents();
+    let allowed = h.state().views[0].id;
+    h.state_mut().copy_pages(false);
+    h.state_mut().open_bytes("secret.pdf", None, encrypted.as_ref().clone()).unwrap();
+    assert!(crate::support::step_until(&mut h, |h| {
+        h.run_steps(1);
+        h.state().password_prompt.is_some()
+    }));
+    h.state_mut().submit_password(Some("reader".into()));
+    assert!(crate::support::step_until(&mut h, |h| {
+        h.run_steps(1);
+        h.state().views.len() == 3
+    }));
+    let restricted = h.state().views[2].id;
+    let doc = h.state().session.get(restricted).unwrap();
+    assert!(doc.allows_assembly());
+    assert!(!doc.allows_copying());
+    let before = doc.bytes.clone();
+    for cut in [false, true] {
+        h.state_mut().copy_pages(cut);
+        assert_eq!(h.state().page_clipboard.as_ref().unwrap().from, allowed);
+        assert_eq!(h.state().session.get(restricted).unwrap().bytes, before, "a refused cut must not delete pages");
+    }
+    h.state_mut().execute("file.close");
+    h.run_steps(3);
+    assert!(h.state().session.get(restricted).is_none());
+    h.state_mut().active = Some(1);
+    h.state_mut().paste_pages();
+    let doc = h.state().session.get(h.state().views[1].id).unwrap();
+    assert_eq!(doc.info.pages.len(), 6);
+    let mut renderer = PageRenderer::new(doc.bytes.clone(), Default::default());
+    let text = renderer.render(RenderRequest { page: 1, kind: RequestKind::Text, scale: 1.0, ..Default::default() }).text.unwrap();
+    assert_eq!(text.plain_text().trim(), "Page 1", "only the earlier authorized clipboard can be pasted");
+}
+
+/// A separate viewport renders with its own pointer state. Parking and restoring the views
+/// mirrors a window-state swap without depending on the separate multi-window contribution.
+#[test]
+fn rendering_another_window_keeps_the_source_page_drag_alive() {
+    let mut h = two_documents();
+    h.state_mut().open_bytes("other-window.pdf", None, document("Other").as_ref().clone()).unwrap();
+    assert!(crate::support::step_until(&mut h, |h| {
+        h.run_steps(1);
+        h.state().views.len() == 3
+    }));
+    let other = h.state_mut().views.pop().unwrap();
+    h.state_mut().active = Some(0);
+    h.run_steps(3);
+    let (_, modifiers) = start_drag(&mut h, false);
+    let tab = h.get_by_label("target.pdf").rect().center();
+    let mut app = std::mem::replace(h.state_mut(), PdfCraftApp::new());
+    let parked = std::mem::replace(&mut app.views, vec![other]);
+    app.active = Some(0);
+    let fonts = h.ctx.fonts(|fonts| fonts.definitions().clone());
+    let mut second = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |cc| {
+        cc.egui_ctx.set_fonts(fonts);
+        app
+    });
+    second.run_steps(3);
+    let mut app = std::mem::replace(second.state_mut(), PdfCraftApp::new());
+    app.views = parked;
+    app.active = Some(0);
+    *h.state_mut() = app;
+    h.hover_at(tab);
+    h.run_steps(1);
+    assert_eq!(h.state().active, Some(1), "another viewport must not cancel the held source-window gesture");
+    h.run_steps(2);
+    let gap = h.get_by_label("Page 2").rect().left_center() + egui::vec2(5.0, 0.0);
+    h.hover_at(gap);
+    h.run_steps(2);
+    release(&mut h, gap, modifiers);
+    assert_eq!(h.state().session.get(h.state().views[1].id).unwrap().info.pages.len(), 6);
 }

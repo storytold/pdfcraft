@@ -528,7 +528,7 @@ pub(super) fn organize_grid(
     // where the pointer is until the files are dropped; then the whole grid is the target.
     let pointer = ui.input(|i| i.pointer.hover_pos()).filter(|p| viewport.contains(*p));
     view.grid_gap = pointer.filter(|_| editable && view.org_drag.is_none()).and_then(|p| drop_gap(&cells, p));
-    if editable && ui.input(|i| !i.raw.hovered_files.is_empty()) {
+    if editable && (crate::page_transfer::incoming(ui.ctx()) || ui.input(|i| !i.raw.hovered_files.is_empty())) {
         let painter = ui.painter().with_clip_rect(viewport);
         painter.rect_stroke(viewport.shrink(2.0), CornerRadius::same(6), Stroke::new(2.0, t.accent), egui::StrokeKind::Inside);
         if let Some(gap) = view.grid_gap {

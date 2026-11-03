@@ -234,6 +234,8 @@ pub struct PagePropsDraft {
 /// Copied pages: their document's name and bytes (as it was when copied) and the pages.
 #[derive(Clone, Debug)]
 pub struct PageClip {
+    /// Credentials used only to reopen this in-memory source snapshot.
+    pub password: Option<String>,
     /// The document the pages were copied from: pasting back into it keeps field names.
     pub from: DocId,
     pub name: String,
