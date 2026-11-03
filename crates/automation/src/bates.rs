@@ -258,6 +258,21 @@ fn output_probe_name(path: &Path) -> std::io::Result<std::ffi::OsString> {
     }
 }
 
+/// Publish a PDF atomically while refusing a target created by another process after preflight.
+fn publish_new(path: &Path, bytes: &[u8]) -> Result<()> {
+    let parent = path.parent().ok_or_else(|| failed("output has no parent directory"))?;
+    let mut temp = tempfile::NamedTempFile::new_in(parent).map_err(failed)?;
+    temp.write_all(bytes).map_err(failed)?;
+    temp.as_file().sync_all().map_err(failed)?;
+    temp.persist_noclobber(path).map(|_| ()).map_err(|error| {
+        if error.error.kind() == std::io::ErrorKind::AlreadyExists {
+            failed(format!("output appeared after preflight; refusing to replace it: {}", path.display()))
+        } else {
+            failed(error.error)
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::check_unique_outputs;
@@ -305,19 +320,4 @@ mod tests {
         let verbatim = Path::new(r"\\?\C:\root\report.pdf. ");
         assert_eq!(super::output_probe_name(verbatim).unwrap(), OsString::from("report.pdf. "));
     }
-}
-
-/// Publish a PDF atomically while refusing a target created by another process after preflight.
-fn publish_new(path: &Path, bytes: &[u8]) -> Result<()> {
-    let parent = path.parent().ok_or_else(|| failed("output has no parent directory"))?;
-    let mut temp = tempfile::NamedTempFile::new_in(parent).map_err(failed)?;
-    temp.write_all(bytes).map_err(failed)?;
-    temp.as_file().sync_all().map_err(failed)?;
-    temp.persist_noclobber(path).map(|_| ()).map_err(|error| {
-        if error.error.kind() == std::io::ErrorKind::AlreadyExists {
-            failed(format!("output appeared after preflight; refusing to replace it: {}", path.display()))
-        } else {
-            failed(error.error)
-        }
-    })
 }
