@@ -87,8 +87,8 @@ pub fn skip_without_glyphs(name: &str, language: &str, text: &str) -> bool {
     if std::env::var("CRAFT_FONTS_REQUIRED").as_deref() == Ok("1") {
         return false;
     }
-    let catalog = i18n::LANGUAGES.iter().find(|l| l.code == language).map_or("", |l| l.source);
-    let translations = catalog.lines().filter(|l| !l.starts_with('#')).filter_map(|l| l.split('\t').nth(2));
+    let catalogs: Vec<&str> = i18n::Lang::from_code(language).into_iter().flat_map(i18n::Lang::catalog_texts).collect();
+    let translations = catalogs.iter().flat_map(|c| c.lines()).filter(|l| !l.starts_with('#')).filter_map(|l| l.split('\t').nth(2));
     let chars: BTreeSet<char> = std::iter::once(text).chain(translations).flat_map(str::chars).filter(|c| !c.is_control()).collect();
     let cjk = theme::CjkPreference::for_language(language);
     let missing = [theme::CjkPreference::Default, cjk].into_iter().find_map(|cjk| {

@@ -674,9 +674,13 @@ fn the_flatpak_manifests_pin_the_craft_i18n_rev() {
     assert!(rev.len() == 40 && rev.bytes().all(|b| b.is_ascii_hexdigit()), "craft-i18n.rev holds one full SHA: {rev:?}");
     for manifest in ["ai.storyteller.pdfcraft.yml", "ai.storyteller.pdfcraft.bundle.yml"] {
         let text = std::fs::read_to_string(root.join("packaging/linux/flatpak").join(manifest)).unwrap();
-        let source = text.split("url: https://github.com/storytold/craft-i18n").nth(1).unwrap_or_else(|| panic!("{manifest}: a craft-i18n git source"));
+        let source =
+            text.split("url: https://github.com/storytold/craft-i18n").nth(1).unwrap_or_else(|| panic!("{manifest}: a craft-i18n git source"));
         let source = source.split("- type:").next().unwrap_or(source);
-        let commit = source.lines().find_map(|l| l.trim().strip_prefix("commit:")).unwrap_or_else(|| panic!("{manifest}: the craft-i18n source pins a commit"));
+        let commit = source
+            .lines()
+            .find_map(|l| l.trim().strip_prefix("commit:"))
+            .unwrap_or_else(|| panic!("{manifest}: the craft-i18n source pins a commit"));
         assert_eq!(commit.trim().trim_matches(['\'', '"']), rev, "{manifest}");
         assert!(text.contains("CRAFT_I18N_DIR: /run/build/pdfcraft/craft-i18n"), "{manifest}: the build names the catalogs");
     }

@@ -540,6 +540,10 @@ fn the_signature_labels_follow_the_interface_language() {
     let p12 = concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12");
     let cert = pdfcraft_engine::sign::pkcs12::open(&std::fs::read(p12).unwrap(), "test").unwrap().certificate;
     let note = "The labels are in English: the signature's font can't draw them in this language.";
+    if !pdfcraft_ui_egui::i18n::catalogs_embedded() {
+        eprintln!("skipping the_signature_labels_follow_the_interface_language: built without craft-i18n (set CRAFT_I18N_DIR)");
+        return;
+    }
     for (code, labels, in_english) in [("de", ["(Digital", "(Grund:", "(Datum:"], false), ("zh-hans", ["(Digitally", "(Reason:", "(Date:"], true)] {
         let dir = dir().join(code);
         std::fs::create_dir_all(&dir).unwrap();

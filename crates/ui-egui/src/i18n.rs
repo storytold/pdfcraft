@@ -1,19 +1,28 @@
-//! UI localisation. Strings in code stay English and are the default lookup keys; a per-language
-//! catalog (`*.tsv`, see `ja.tsv` for the format) maps them to display text at render time. Command
-//! ids, document text, file names, the control channel, the CLI and MCP never see translated text,
-//! so agents and scripts are unaffected. A string without a translation is shown in English, so
-//! coverage can grow incrementally.
+//! UI localisation. Strings in code stay English and are the default lookup keys; the craft-i18n
+//! catalogs map them to display text at render time. Command ids, document text, file names, the
+//! control channel, the CLI and MCP never see translated text, so agents and scripts are
+//! unaffected. A string without a translation is shown in English, so coverage can grow
+//! incrementally, and a missing translation never fails a build, a test or a release.
 //!
-//! The system is the one PhotoCraft uses (`photocraft/crates/ui-egui/src/i18n`), so catalogs and
-//! habits carry over between the two apps.
+//! The catalogs live in [storytold/craft-i18n](https://github.com/storytold/craft-i18n)
+//! (`locales/<code>/common.tsv`, shared by the Crafting Apps, and `pdfcraft.tsv`), not in this
+//! repository. `build.rs` embeds them from `CRAFT_I18N_DIR` (CI and releases check out the commit
+//! in `craft-i18n.rev`); without it the build is English only. Lookup, fallback (PdfCraft's rows
+//! over shared ones), plural forms (CLDR) and language names are the `craft-i18n` crate's
+//! (craft-libs). Which languages are offered, how the system locale picks one, right to left and
+//! `{name}` placeholders stay here.
+//!
+//! # Adding or changing a translation
+//! In craft-i18n: add rows to `locales/<code>/pdfcraft.tsv` (its `docs/integration.md`). They show
+//! here once `craft-i18n.rev` moves to a commit that has them. A feature PR here adds the English
+//! only.
 //!
 //! # Adding a language
-//! 1. Add `xx.tsv` next to `ja.tsv` (copy its header; translate from the *meaning* of the English
-//!    text, clean-room, see `ja.tsv`).
-//! 2. Add one row to [`LANGUAGES`] (code, native name, catalog, plural rule).
+//! 1. craft-i18n gets `locales/<code>/pdfcraft.tsv` with its `@id language.name` row.
+//! 2. Add one row to [`LANGUAGES`] (code, right to left), and its English name to
+//!    [`Lang::english_name`].
 //!
-//! That is all: the Preferences dropdown, the system-locale match and the catalog tests (parse,
-//! placeholders, plural forms) pick it up from the registry.
+//! The Preferences dropdown and the system-locale match pick it up from there.
 //!
 //! # Looking strings up
 //! - `tl!` / [`t`]: a plain string in the current language. [`tr`]: in a given one.
@@ -23,323 +32,173 @@
 //! - [`trn`]: plural-aware (`{n}` is filled in). [`fmt`]: fill `{name}` placeholders after [`tr`];
 //!   translators may reorder placeholders freely.
 
-mod catalog;
-
 use std::cell::Cell;
-use std::sync::OnceLock;
+use std::collections::HashSet;
+use std::sync::{LazyLock, OnceLock};
 
-use catalog::Catalog;
+use craft_i18n::I18n;
+
+include!(concat!(env!("OUT_DIR"), "/craft_i18n.rs"));
+
+/// The embedded catalogs, offering exactly the languages in [`LANGUAGES`]. Built on first use; a
+/// locale is parsed on its first lookup.
+static I18N: LazyLock<I18n> = LazyLock::new(|| {
+    let offered: Vec<&str> = LANGUAGES.iter().map(|l| l.code).collect();
+    let (i18n, problems) = I18n::new(CRAFT_I18N, &offered);
+    for problem in problems {
+        log::warn!("interface catalogs: {problem}");
+    }
+    i18n
+});
 
 /// The `language` preference value that follows the system locale.
 pub const AUTO: &str = "auto";
 
-/// One supported UI language.
+/// One UI language PdfCraft offers, when its catalogs are embedded: what the app needs beyond
+/// them. Its name and translations come from craft-i18n.
 pub struct LangInfo {
-    /// BCP 47 code, lowercase (`ja`, `zh-hans`, `pt-br`). Also the `language` preference value.
+    /// BCP 47 code, lowercase (`ja`, `zh-hans`, `pt-br`). Also the `language` preference value and
+    /// the craft-i18n locale.
     pub code: &'static str,
-    /// The language's name in itself, shown in the Preferences dropdown.
-    pub name: &'static str,
-    /// Catalog file contents (empty for the built-in English).
-    pub source: &'static str,
-    /// Plural form index for a count (English: 0 = one, 1 = other; Japanese: always 0). A catalog's
-    /// `@plural` entries list one form per index.
-    pub plural: fn(u64) -> usize,
     /// The language is written right to left. Catalogs stay in logical order: the egui 0.37 fork
     /// owns bidi shaping/reordering (E5/E12), so preordering here would reverse Arabic twice.
     pub rtl: bool,
-    catalog: OnceLock<Catalog>,
 }
 
-fn plural_one_other(n: u64) -> usize {
-    usize::from(n != 1)
-}
+/// How many languages [`LANGUAGES`] lists.
+const LANGUAGE_COUNT: usize = 35;
 
-fn plural_none(_: u64) -> usize {
-    0
-}
-
-/// Romanian (CLDR `ro`): 1 is `one`; 0 and numbers whose last two digits are 1–19 (2, 19, 101,
-/// 119) are `few`; everything else (20, 100, 120) is `other`, the form with "de" ("20 de pagini").
-fn plural_ro(n: u64) -> usize {
-    if n == 1 {
-        0
-    } else if n == 0 || (1..=19).contains(&(n % 100)) {
-        1
-    } else {
-        2
-    }
-}
-
-/// Lithuanian: one (ending in 1 except 11), few (ending in 2–9 except 12–19), other otherwise.
-fn plural_lithuanian(n: u64) -> usize {
-    match (n % 10, n % 100) {
-        (1, 11) => 2,
-        (1, _) => 0,
-        (2..=9, 12..=19) => 2,
-        (2..=9, _) => 1,
-        _ => 2,
-    }
-}
-
-/// Czech: 1 → one, 2–4 → few, everything else (0, 5+) → other.
-fn plural_cs(n: u64) -> usize {
-    match n {
-        1 => 0,
-        2..=4 => 1,
-        _ => 2,
-    }
-}
-
-/// Portuguese: 0 and 1 take the singular, everything else the plural.
-fn plural_pt(n: u64) -> usize {
-    usize::from(n > 1)
-}
-
-/// French (CLDR `fr`): 0 and 1 take the singular, everything else the plural.
-fn plural_fr(n: u64) -> usize {
-    usize::from(n > 1)
-}
-
-/// Russian: 1 (but not 11) is `one`, 2–4 (but not 12–14) `few`, everything else `many`.
-fn plural_russian(n: u64) -> usize {
-    match n % 100 {
-        11..=14 => 2,
-        _ => match n % 10 {
-            1 => 0,
-            2..=4 => 1,
-            _ => 2,
-        },
-    }
-}
-
-/// Ukrainian (CLDR `uk`, integer counts): one (1, 21), few (2–4, 22–24), many (0, 5–19).
-/// Counts ending in 11–14 always take many, regardless of the last digit.
-fn plural_ukrainian(n: u64) -> usize {
-    match n % 100 {
-        11..=14 => 2,
-        _ => match n % 10 {
-            1 => 0,
-            2..=4 => 1,
-            _ => 2,
-        },
-    }
-}
-
-/// Arabic (CLDR `ar`, integer counts): zero (0), one (1), two (2), few (3–10, 103–110),
-/// many (11–99, 111–199), other (100–102, 200–202).
-fn plural_arabic(n: u64) -> usize {
-    match (n, n % 100) {
-        (0, _) => 0,
-        (1, _) => 1,
-        (2, _) => 2,
-        (_, 3..=10) => 3,
-        (_, 11..=99) => 4,
-        _ => 5,
-    }
-}
-
-/// Polish integer counts: 1 is one; endings 2–4 except 12–14 are few; the rest are many.
-fn plural_polish(n: u64) -> usize {
-    match (n, n % 100, n % 10) {
-        (1, _, _) => 0,
-        (_, 12..=14, _) => 2,
-        (_, _, 2..=4) => 1,
-        _ => 2,
-    }
-}
-
-/// Slovene (CLDR `sl`): one (1, 101, 201 ...) | two (2, 102 ...) | few (3, 4, 103 ...) | other.
-fn plural_sl(n: u64) -> usize {
-    match n % 100 {
-        1 => 0,
-        2 => 1,
-        3 | 4 => 2,
-        _ => 3,
-    }
-}
-
-/// The registry. English first: it is the fallback and the source language.
-pub static LANGUAGES: [LangInfo; 35] = [
-    LangInfo { code: "en", name: "English", source: "", plural: plural_one_other, rtl: false, catalog: OnceLock::new() },
-    LangInfo { code: "ja", name: "日本語", source: include_str!("i18n/ja.tsv"), plural: plural_none, rtl: false, catalog: OnceLock::new() },
+/// The languages PdfCraft offers. English first: it is the fallback and the source language.
+pub static LANGUAGES: [LangInfo; LANGUAGE_COUNT] = [
+    LangInfo { code: "en", rtl: false },
+    LangInfo { code: "ja", rtl: false },
     // Simplified Chinese; `zh`, `zh-CN`, `zh-SG` and `zh-Hans-*` locales resolve here (see `candidates`).
-    LangInfo {
-        code: "zh-hans",
-        name: "简体中文",
-        source: include_str!("i18n/zh-hans.tsv"),
-        plural: plural_none,
-        rtl: false,
-        catalog: OnceLock::new(),
-    },
+    LangInfo { code: "zh-hans", rtl: false },
     // Traditional Chinese in the vocabulary used in Taiwan; `zh-TW`, `zh-HK`, `zh-MO` and `zh-Hant-*`
     // locales all resolve here (see `candidates`).
-    LangInfo {
-        code: "zh-hant",
-        name: "繁體中文",
-        source: include_str!("i18n/zh-hant.tsv"),
-        plural: plural_none,
-        rtl: false,
-        catalog: OnceLock::new(),
-    },
-    LangInfo { code: "cs", name: "Čeština", source: include_str!("i18n/cs.tsv"), plural: plural_cs, rtl: false, catalog: OnceLock::new() },
+    LangInfo { code: "zh-hant", rtl: false },
+    LangInfo { code: "cs", rtl: false },
     // Brazilian Portuguese; `pt`, `pt-BR` and `pt-PT` locales all resolve here (see `candidates`).
-    LangInfo {
-        code: "pt-br",
-        name: "Português (Brasil)",
-        source: include_str!("i18n/pt-br.tsv"),
-        plural: plural_pt,
-        rtl: false,
-        catalog: OnceLock::new(),
-    },
+    LangInfo { code: "pt-br", rtl: false },
     // German (informal "du"); every `de-*` locale (`de-DE`, `de-AT`, `de-CH` ...) resolves here.
-    LangInfo { code: "de", name: "Deutsch", source: include_str!("i18n/de.tsv"), plural: plural_one_other, rtl: false, catalog: OnceLock::new() },
+    LangInfo { code: "de", rtl: false },
     // Spanish (European vocabulary); every `es-*` locale (`es-ES`, `es-MX`, `es-419` ...) resolves here.
-    LangInfo { code: "es", name: "Español", source: include_str!("i18n/es.tsv"), plural: plural_one_other, rtl: false, catalog: OnceLock::new() },
+    LangInfo { code: "es", rtl: false },
     // French; every `fr-*` locale (`fr-FR`, `fr-CA`, `fr-BE` ...) resolves here.
-    LangInfo { code: "fr", name: "Français", source: include_str!("i18n/fr.tsv"), plural: plural_fr, rtl: false, catalog: OnceLock::new() },
+    LangInfo { code: "fr", rtl: false },
     // Russian; every `ru-*` locale (`ru-RU`, `ru-BY`, `ru-KZ` ...) resolves here.
-    LangInfo {
-        code: "ru", name: "Русский", source: include_str!("i18n/ru.tsv"), plural: plural_russian, rtl: false, catalog: OnceLock::new()
-    },
+    LangInfo { code: "ru", rtl: false },
     // Kazakh; every `kk-*` locale (`kk-KZ`, `kk-KZ.UTF-8`) resolves here.
-    LangInfo {
-        code: "kk", name: "Қазақша", source: include_str!("i18n/kk.tsv"), plural: plural_one_other, rtl: false, catalog: OnceLock::new()
-    },
+    LangInfo { code: "kk", rtl: false },
     // Bulgarian; every `bg-*` locale (`bg-BG`) resolves here.
-    LangInfo {
-        code: "bg", name: "Български", source: include_str!("i18n/bg.tsv"), plural: plural_one_other, rtl: false, catalog: OnceLock::new()
-    },
+    LangInfo { code: "bg", rtl: false },
     // Telugu; every `te-*` locale (`te-IN`) resolves here.
-    LangInfo {
-        code: "te", name: "తెలుగు", source: include_str!("i18n/te.tsv"), plural: plural_one_other, rtl: false, catalog: OnceLock::new()
-    },
+    LangInfo { code: "te", rtl: false },
     // Hungarian; every `hu-*` locale (`hu-HU`) resolves here.
-    LangInfo { code: "hu", name: "Magyar", source: include_str!("i18n/hu.tsv"), plural: plural_one_other, rtl: false, catalog: OnceLock::new() },
+    LangInfo { code: "hu", rtl: false },
     // Ukrainian; every `uk-*` locale (`uk-UA`, `uk_UA.UTF-8`) resolves here.
-    LangInfo {
-        code: "uk", name: "Українська", source: include_str!("i18n/uk.tsv"), plural: plural_ukrainian, rtl: false, catalog: OnceLock::new()
-    },
+    LangInfo { code: "uk", rtl: false },
     // Italian; every `it-*` locale (`it-IT`) resolves here.
-    LangInfo { code: "it", name: "Italiano", source: include_str!("i18n/it.tsv"), plural: plural_one_other, rtl: false, catalog: OnceLock::new() },
+    LangInfo { code: "it", rtl: false },
     // Arabic (Modern Standard, Western digits); every `ar-*` locale (`ar-MA`, `ar-EG`, `ar-SA` ...)
     // resolves here. Right to left: see `LangInfo::rtl`.
-    LangInfo { code: "ar", name: "العربية", source: include_str!("i18n/ar.tsv"), plural: plural_arabic, rtl: true, catalog: OnceLock::new() },
+    LangInfo { code: "ar", rtl: true },
     // Central Kurdish (Sorani); every `ckb-*` locale (`ckb-IQ`, `ckb-IR`) resolves here. Right to
     // left like Arabic: see `LangInfo::rtl`. CLDR `ckb` counts have two forms (one, other).
-    LangInfo {
-        code: "ckb",
-        name: "کوردیی ناوەندی",
-        source: include_str!("i18n/ckb.tsv"),
-        plural: plural_one_other,
-        rtl: true,
-        catalog: OnceLock::new(),
-    },
+    LangInfo { code: "ckb", rtl: true },
     // Persian (Farsi); every `fa-*` locale (`fa-IR`, `fa_IR.UTF-8`, `fa-AF` ...) resolves here. Right
     // to left like Arabic: see `LangInfo::rtl`. CLDR `fa` counts have two forms (one: i = 0 or n = 1,
     // other), which for whole counts is the French rule, so `@plural` entries list two forms.
-    LangInfo { code: "fa", name: "فارسی", source: include_str!("i18n/fa.tsv"), plural: plural_fr, rtl: true, catalog: OnceLock::new() },
+    LangInfo { code: "fa", rtl: true },
     // Polish; every `pl-*` locale (`pl-pl`, `pl_pl.UTF-8`) resolves here.
-    LangInfo { code: "pl", name: "Polski", source: include_str!("i18n/pl.tsv"), plural: plural_polish, rtl: false, catalog: OnceLock::new() },
+    LangInfo { code: "pl", rtl: false },
     // Slovene; every `sl-*` locale (`sl-SI`) resolves here. Four plural forms (one, two, few, other).
-    LangInfo { code: "sl", name: "Slovenščina", source: include_str!("i18n/sl.tsv"), plural: plural_sl, rtl: false, catalog: OnceLock::new() },
-    LangInfo {
-        code: "el", name: "Ελληνικά", source: include_str!("i18n/el.tsv"), plural: plural_one_other, rtl: false, catalog: OnceLock::new()
-    },
-    // Turkish; every `tr-*` locale (`tr-TR`, `tr_TR.UTF-8`) resolves here.
-    LangInfo { code: "tr", name: "Türkçe", source: include_str!("i18n/tr.tsv"), plural: plural_none, rtl: false, catalog: OnceLock::new() },
+    LangInfo { code: "sl", rtl: false },
+    LangInfo { code: "el", rtl: false },
+    // Turkish; every `tr-*` locale (`tr-TR`, `tr_TR.UTF-8`) resolves here. CLDR `tr` has two forms
+    // (one, other); the catalog's counted nouns read the same in both, so its `@plural` rows repeat
+    // the one form.
+    LangInfo { code: "tr", rtl: false },
     // Lithuanian; every `lt-*` locale (`lt-LT`, `lt_LT.UTF-8`) resolves here. Three plural forms (one, few, other).
-    LangInfo { code: "lt", name: "Lietuvių", source: include_str!("i18n/lt.tsv"), plural: plural_lithuanian, rtl: false, catalog: OnceLock::new() },
+    LangInfo { code: "lt", rtl: false },
     // Indonesian; every `id-*` locale (`id-ID`, `id_ID.UTF-8`) resolves here. CLDR `id` counts have
     // one form ("other"), so `@plural` entries list a single form.
-    LangInfo { code: "id", name: "Bahasa Indonesia", source: include_str!("i18n/id.tsv"), plural: plural_none, rtl: false, catalog: OnceLock::new() },
+    LangInfo { code: "id", rtl: false },
     // Vietnamese; every `vi-*` locale (`vi-VN`, `vi_VN.UTF-8`) resolves here. CLDR `vi` counts have
     // one form ("other"), so `@plural` entries list a single form.
-    LangInfo { code: "vi", name: "Tiếng Việt", source: include_str!("i18n/vi.tsv"), plural: plural_none, rtl: false, catalog: OnceLock::new() },
+    LangInfo { code: "vi", rtl: false },
     // Finnish; every `fi-*` locale (`fi-FI`, `fi_FI.UTF-8`) resolves here. Two plural forms (one, other):
     // the partitive singular follows any number but 1 (`1 sivu`, `2 sivua`).
-    LangInfo { code: "fi", name: "Suomi", source: include_str!("i18n/fi.tsv"), plural: plural_one_other, rtl: false, catalog: OnceLock::new() },
+    LangInfo { code: "fi", rtl: false },
     // Albanian; every `sq-*` locale (`sq-AL`, `sq_AL.UTF-8`, `sq-XK`) resolves here. One/other plural, like English.
-    LangInfo { code: "sq", name: "Shqip", source: include_str!("i18n/sq.tsv"), plural: plural_one_other, rtl: false, catalog: OnceLock::new() },
+    LangInfo { code: "sq", rtl: false },
     // Thai; every `th-*` locale (`th-TH`, `th_TH.UTF-8`) resolves here. No grammatical plural.
-    LangInfo { code: "th", name: "ไทย", source: include_str!("i18n/th.tsv"), plural: plural_none, rtl: false, catalog: OnceLock::new() },
+    LangInfo { code: "th", rtl: false },
     // Catalan; every `ca-*` locale (`ca-ES`, `ca_ES.UTF-8`, `ca_ES@valencia`) resolves here.
-    LangInfo { code: "ca", name: "Català", source: include_str!("i18n/ca.tsv"), plural: plural_one_other, rtl: false, catalog: OnceLock::new() },
+    LangInfo { code: "ca", rtl: false },
     // Romanian; every `ro-*` locale (`ro-RO`, `ro_RO.UTF-8`, `ro-MD`) resolves here. Three plural forms (one, few, other).
-    LangInfo { code: "ro", name: "Română", source: include_str!("i18n/ro.tsv"), plural: plural_ro, rtl: false, catalog: OnceLock::new() },
+    LangInfo { code: "ro", rtl: false },
     // Lao; every `lo-*` locale (`lo-LA`, `lo_LA.UTF-8` ...) resolves here.
-    LangInfo {
-        code: "lo", name: "ພາສາລາວ", source: include_str!("i18n/lo.tsv"), plural: plural_none, rtl: false, catalog: OnceLock::new()
-    },
+    LangInfo { code: "lo", rtl: false },
     // Hindi; every `hi-*` locale (`hi-IN`, `hi_IN.UTF-8`) resolves here. CLDR `hi` has "one"
-    // (0 and 1) and "other", but the catalog's nouns are the same in both ("{n} पृष्ठ"), so
-    // `@plural` entries list a single form.
-    LangInfo {
-        code: "hi", name: "हिन्दी", source: include_str!("i18n/hi.tsv"), plural: plural_none, rtl: false, catalog: OnceLock::new()
-    },
+    // (0 and 1) and "other", but the catalog's nouns are the same in both ("{n} पृष्ठ"), so its
+    // `@plural` rows repeat the one form.
+    LangInfo { code: "hi", rtl: false },
     // Korean; every `ko-*` locale (`ko-KR`, `ko_KR.UTF-8`) resolves here. CLDR `ko` counts have
     // one form ("other"), so `@plural` entries list a single form.
-    LangInfo { code: "ko", name: "한국어", source: include_str!("i18n/ko.tsv"), plural: plural_none, rtl: false, catalog: OnceLock::new() },
+    LangInfo { code: "ko", rtl: false },
     // Norwegian Bokmål; every `nb-*` locale resolves here, and so do general Norwegian (`no-*`) and
     // Nynorsk (`nn-*`), which have no catalog of their own (see `candidates`).
-    LangInfo {
-        code: "nb",
-        name: "Norsk bokmål",
-        source: include_str!("i18n/nb.tsv"),
-        plural: plural_one_other,
-        rtl: false,
-        catalog: OnceLock::new(),
-    },
+    LangInfo { code: "nb", rtl: false },
 ];
 
-impl LangInfo {
-    /// How many plural forms the language's `@plural` entries list.
-    fn plural_forms(&self) -> usize {
-        (0..=1000).map(self.plural).max().unwrap_or(0).saturating_add(1)
-    }
+/// Per language of [`LANGUAGES`], the (context, source) keys of PdfCraft's own catalog as written
+/// (escaped), read on first use ([`Lang::has_own`]).
+static OWN_ROWS: [OnceLock<HashSet<(&'static str, &'static str)>>; LANGUAGE_COUNT] = [const { OnceLock::new() }; LANGUAGE_COUNT];
 
-    /// Return the parsed catalogue, building it on first use and warning about entries that fall back to
-    /// English.
-    fn catalog(&self) -> &Catalog {
-        self.catalog.get_or_init(|| {
-            let (catalog, errors) = Catalog::parse(self.source, self.plural_forms());
-            for error in errors {
-                log::warn!("{} interface catalog: {error}; that entry shows in English", self.code);
-            }
-            // Catalogs keep logical text: the fork shapes and reorders each run once. Accessibility
-            // names, copied text and search therefore see the same logical string as the source.
-            catalog
-        })
-    }
-}
-
-/// A language the UI can be shown in (a handle into [`LANGUAGES`]).
+/// A language the UI can be shown in: English, or one of [`LANGUAGES`] whose catalogs are
+/// embedded.
 #[derive(Clone, Copy)]
-pub struct Lang(&'static LangInfo);
+pub struct Lang {
+    lang: craft_i18n::Lang,
+    /// The catalogs it is looked up in: the embedded ones ([`I18N`]), or a test fixture's.
+    catalogs: Option<&'static I18n>,
+}
 
 impl std::fmt::Debug for Lang {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Lang({})", self.0.code)
+        write!(f, "Lang({})", self.code())
     }
 }
 
 impl PartialEq for Lang {
     fn eq(&self, other: &Self) -> bool {
-        self.0.code == other.0.code
+        self.code() == other.code()
     }
 }
 
 impl Eq for Lang {}
 
 impl Lang {
-    pub const EN: Lang = Lang(&LANGUAGES[0]);
+    pub const EN: Lang = Lang { lang: craft_i18n::Lang::EN, catalogs: None };
 
-    pub fn code(self) -> &'static str {
-        self.0.code
+    fn i18n(self) -> &'static I18n {
+        self.catalogs.unwrap_or_else(|| LazyLock::force(&I18N))
     }
 
-    /// A language by its exact code.
+    fn info(self) -> Option<&'static LangInfo> {
+        let code = self.code();
+        LANGUAGES.iter().find(|l| l.code == code)
+    }
+
+    pub fn code(self) -> &'static str {
+        self.i18n().code(self.lang)
+    }
+
+    /// A language by its exact code (any case): one of [`LANGUAGES`] whose catalogs are embedded.
     pub fn from_code(code: &str) -> Option<Lang> {
-        LANGUAGES.iter().find(|l| l.code.eq_ignore_ascii_case(code)).map(Lang)
+        let info = LANGUAGES.iter().find(|l| l.code.eq_ignore_ascii_case(code))?;
+        I18N.from_code(info.code).map(|lang| Lang { lang, catalogs: None })
     }
 
     /// Resolve the `language` preference: a language code, or [`AUTO`] (and anything unknown,
@@ -348,9 +207,10 @@ impl Lang {
         Lang::from_code(pref).unwrap_or_else(system_lang)
     }
 
-    /// Every registered language.
+    /// Every language the interface can be shown in: [`LANGUAGES`] in order, those whose catalogs
+    /// are embedded (English alone in a build without craft-i18n).
     pub fn all() -> impl Iterator<Item = Lang> {
-        LANGUAGES.iter().map(Lang)
+        LANGUAGES.iter().filter_map(|l| Lang::from_code(l.code))
     }
 
     /// Every registered language in the order a picker lists them: English first (the source
@@ -372,8 +232,10 @@ impl Lang {
         std::iter::once(Lang::EN).chain(rest).collect()
     }
 
+    /// The language's name in itself (its `@id language.name` row), shown in the Preferences
+    /// dropdown.
     pub fn name(self) -> &'static str {
-        self.0.name
+        self.i18n().name(self.lang)
     }
 
     /// The language's name in English, used by [`picker_name`](Self::picker_name) when this
@@ -417,7 +279,7 @@ impl Lang {
             "ko" => "Korean",
             // Only reached if a language is added to `LANGUAGES` without an English name; the
             // code still tells the reader which entry it is.
-            _ => self.0.code,
+            code => code,
         }
     }
 
@@ -432,12 +294,46 @@ impl Lang {
     /// Whether the language is written right to left. Lookups stay logical; the egui fork
     /// shapes and reorders each run for display (see [`LangInfo::rtl`]).
     pub fn rtl(self) -> bool {
-        self.0.rtl
+        self.info().is_some_and(|l| l.rtl)
     }
 
-    fn catalog(self) -> &'static Catalog {
-        self.0.catalog()
+    /// Whether PdfCraft's own catalog (`pdfcraft.tsv`, not the shared `common.tsv`) has the row
+    /// (`context`, `source`). The shared catalog's `@id` rows are keyed by the other apps' command
+    /// ids, which can name another command (in Bulgarian and Indonesian its `file.close` row holds
+    /// an id rather than a label), so command-id lookups ask this; every `@id` row PdfCraft had is
+    /// in its own catalog. A test fixture has no shared catalog: its rows are its own.
+    fn has_own(self, context: &str, source: &str) -> bool {
+        if let Some(fixture) = self.catalogs {
+            return fixture.get(self.lang, context, source).is_some();
+        }
+        let code = self.code();
+        let Some(slot) = LANGUAGES.iter().position(|l| l.code == code).and_then(|i| OWN_ROWS.get(i)) else { return false };
+        let rows: &HashSet<(&str, &str)> = slot.get_or_init(|| {
+            let app = CRAFT_I18N.iter().find(|(c, ..)| c.eq_ignore_ascii_case(code)).map_or("", |(_, _, app)| *app);
+            app.lines()
+                .filter(|l| !l.starts_with('#'))
+                .filter_map(|l| {
+                    let mut columns = l.split('\t');
+                    Some((columns.next()?, columns.next()?))
+                })
+                .collect()
+        });
+        let escape = |s: &str| s.replace('\\', "\\\\").replace('\n', "\\n").replace('\t', "\\t");
+        rows.contains(&(escape(context).as_str(), escape(source).as_str()))
     }
+
+    /// The embedded catalog texts this language reads, the shared one then PdfCraft's; none for
+    /// English. For checks that the interface fonts draw every translation.
+    pub fn catalog_texts(self) -> impl Iterator<Item = &'static str> {
+        let code = self.code();
+        CRAFT_I18N.iter().filter(move |(c, ..)| c.eq_ignore_ascii_case(code)).flat_map(|(_, shared, app)| [*shared, *app])
+    }
+}
+
+/// Whether this build embeds the craft-i18n catalogs (`CRAFT_I18N_DIR` was set). Without them the
+/// interface is English only; tests that need a translation skip with a note.
+pub fn catalogs_embedded() -> bool {
+    !CRAFT_I18N.is_empty()
 }
 
 /// The canonical `language` preference for user input: [`AUTO`] or a registered code (any case).
@@ -500,10 +396,8 @@ pub fn system_lang() -> Lang {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn detect_system_lang() -> Lang {
-    for var in ["LC_ALL", "LC_MESSAGES", "LANG"] {
-        if let Some(l) = std::env::var(var).ok().and_then(|v| language_override(&v)) {
-            return l;
-        }
+    if let Some(l) = env_lang(|var| std::env::var(var).ok()) {
+        return l;
     }
     // Apps started from the Finder don't inherit LANG: use the macOS preferred-languages list.
     // The absolute path keeps a `defaults` earlier on PATH from running; any failure means English.
@@ -519,6 +413,13 @@ fn detect_system_lang() -> Lang {
         return l;
     }
     Lang::EN
+}
+
+/// The language the locale variables name, `LC_ALL` first, then `LC_MESSAGES`, then `LANG`;
+/// `var` reads one.
+#[cfg(not(target_arch = "wasm32"))]
+fn env_lang(var: impl Fn(&str) -> Option<String>) -> Option<Lang> {
+    ["LC_ALL", "LC_MESSAGES", "LANG"].into_iter().find_map(|name| var(name).and_then(|v| language_override(&v)))
 }
 
 /// A named locale can override the display language. On Windows, the neutral
@@ -622,7 +523,7 @@ pub fn current() -> Lang {
 
 /// Does `lang` have a catalog entry for this plain string? (English never does: it is the source.)
 pub fn has(lang: Lang, s: &str) -> bool {
-    lang.catalog().plain(s).is_some()
+    lang.i18n().get(lang.lang, "", s).is_some()
 }
 
 /// Translate an English UI string into the current language ([`tr`] with [`current`]).
@@ -633,12 +534,13 @@ pub fn t(s: &str) -> &str {
 /// The name of a keyboard key, distinct from a command such as Delete. Missing key-name
 /// translations use the English key name, never a plain command translation.
 pub fn key_name(s: &str) -> &str {
-    current().catalog().contextual("key", s).unwrap_or(s)
+    let lang = current();
+    lang.i18n().get(lang.lang, "key", s).unwrap_or(s)
 }
 
 /// Translate an English UI string; unknown strings come back unchanged.
 pub fn tr(lang: Lang, s: &str) -> &str {
-    lang.catalog().plain(s).unwrap_or(s)
+    lang.i18n().t(lang.lang, s)
 }
 
 /// How the layers below say their own sentences in the current language.
@@ -654,16 +556,18 @@ pub fn words(wording: &str) -> String {
 
 /// Like [`tr`], for an English string that needs a disambiguating `context`.
 pub fn tr_ctx<'a>(lang: Lang, context: &str, s: &'a str) -> &'a str {
-    lang.catalog().contextual(context, s).unwrap_or_else(|| tr(lang, s))
+    lang.i18n().tc(lang.lang, context, s)
 }
 
-/// A string keyed by its command id, falling back to the translation of the English `label`.
+/// A string keyed by its command id, falling back to the translation of the English `label`. Only
+/// PdfCraft's own `@id` rows count ([`Lang::has_own`]): command ids are each app's own.
 pub fn tr_id<'a>(lang: Lang, id: &str, label: &'a str) -> &'a str {
-    lang.catalog().id(id).unwrap_or_else(|| tr(lang, label))
+    if lang.has_own("@id", id) { lang.i18n().tid(lang.lang, id, label) } else { tr(lang, label) }
 }
 
 /// Fill `{name}` placeholders in one pass. Unknown placeholders are left as written, and inserted
-/// values are never read as templates again, so a file name containing `{n}` stays intact.
+/// values are never read as templates again, so a file name containing `{n}` stays intact. Unlike
+/// the crate's `fmt` it adds no bidi isolates: the egui fork orders each run for display.
 pub fn fmt(template: &str, args: &[(&str, &str)]) -> String {
     let mut out = String::with_capacity(template.len());
     let mut rest = template;
@@ -728,12 +632,14 @@ pub fn edit_label(label: &pdfcraft_engine::Label) -> String {
 
 /// A command label such as "Undo Insert pages from a.pdf" in the current language. A catalog
 /// whose word order doesn't put the verb first translates "Undo {action}" and "Redo {action}"
-/// as whole phrases; otherwise the translated verb goes before the action.
+/// as whole phrases, both of them; otherwise the translated verb goes before the action. (The
+/// shared catalog has "Undo {action}" without "Redo {action}" in some languages, where one phrase
+/// alone would word Undo and Redo differently.)
 pub fn command_label(text: &str) -> String {
     for (prefix, template) in [("Undo", "Undo {action}"), ("Redo", "Redo {action}")] {
         if let Some(action) = text.strip_prefix(prefix).and_then(|tail| tail.strip_prefix(' ')) {
             let action = action_label(action);
-            if has(current(), template) {
+            if has(current(), "Undo {action}") && has(current(), "Redo {action}") {
                 return fmt(t(template), &[("action", &action)]);
             }
             return format!("{} {action}", t(prefix));
@@ -742,20 +648,21 @@ pub fn command_label(text: &str) -> String {
     t(text).to_owned()
 }
 
-/// A registered command's menu label: its `@id` catalog entry if there is one, otherwise
-/// [`command_label`] of the current English label.
+/// A registered command's menu label: its `@id` entry in PdfCraft's own catalog if there is one,
+/// otherwise [`command_label`] of the current English label.
 pub fn menu_label(id: &str, label: &str) -> String {
-    match current().catalog().id(id) {
+    let lang = current();
+    match lang.has_own("@id", id).then(|| lang.i18n().get(lang.lang, "@id", id)).flatten() {
         Some(translated) => translated.to_owned(),
         None => command_label(label),
     }
 }
 
 /// A plural-aware message: `one`/`other` are the English forms (with `{n}` where the count goes).
+/// The form is the language's CLDR category; `{n}` is written in `0`–`9` without grouping or
+/// isolate marks, as PdfCraft always has.
 pub fn trn(lang: Lang, n: u64, one: &str, other: &str) -> String {
-    let idx = (lang.0.plural)(n);
-    let text = lang.catalog().plural(one, other, idx).unwrap_or(if n == 1 { one } else { other });
-    fmt(text, &[("n", &n.to_string())])
+    lang.i18n().trn_plain(lang.lang, n, one, other)
 }
 
 /// `name` lowercased with the Latin accents that occur in language names folded away, so a
@@ -777,6 +684,27 @@ fn name_sort_key(name: &str) -> String {
             c => c,
         })
         .collect()
+}
+
+/// A test language whose PdfCraft catalog is `source` (catalog format), so tests of lookup code
+/// don't depend on the embedded catalogs' wording. `code` picks the CLDR plural rules.
+#[cfg(test)]
+pub(crate) fn fixture_lang(code: &'static str, source: &'static str) -> Lang {
+    let embedded: &'static craft_i18n::Embedded = Box::leak(Box::new([(code, "", source)]));
+    let (i18n, _) = I18n::new(embedded, &[code]);
+    let i18n: &'static I18n = Box::leak(Box::new(i18n));
+    let lang = i18n.from_code(code).unwrap_or(craft_i18n::Lang::EN);
+    Lang { lang, catalogs: Some(i18n) }
+}
+
+/// For a test that needs the embedded catalogs: `false`, with a note, when none were embedded
+/// (`CRAFT_I18N_DIR` unset), so the test can skip; the interface is then English only.
+#[cfg(test)]
+pub(crate) fn needs_catalogs() -> bool {
+    if !catalogs_embedded() {
+        eprintln!("skipped: built without craft-i18n (set CRAFT_I18N_DIR to a craft-i18n checkout); the interface is English only");
+    }
+    catalogs_embedded()
 }
 
 #[cfg(test)]
