@@ -521,6 +521,9 @@ pub struct DocView {
     /// Pages on screen this frame. Their rasters and tiles are always admitted: the viewport
     /// bounds them, and the byte and count limits apply to prefetch only.
     frame_visible: HashSet<usize>,
+    /// Pages whose whole-page raster this frame asks for, on screen or prefetched. An arriving
+    /// raster over the allowance evicts the other cached pages first.
+    frame_demanded: HashSet<usize>,
     /// Thumbnails that are out of date (still shown until their replacement arrives).
     stale_thumbs: HashSet<usize>,
     /// Tiles that are out of date (still shown until their replacement arrives).
@@ -712,6 +715,13 @@ pub struct DocView {
     /// in-flight ones cannot be cancelled mid-operator. Older tiles and the backdrop stay
     /// stretched meanwhile; fresh tiles go out once the pan settles.
     pub(crate) last_scroll: Vec2,
+    /// The way the view last moved vertically: 1 down, -1 up, 0 before any move and after the
+    /// content's size changes (a zoom or a layout change). A jump to a page or a search result
+    /// counts as a move. It stays set while the view is still, so the pages prefetched ahead stay
+    /// in the render queue until they arrive.
+    scroll_dir: i8,
+    /// The content's size when `scroll_dir` was last updated.
+    scroll_content: Vec2,
     /// Side-by-side compare: scroll to here this frame, following the other half.
     pub(crate) sync_scroll: Option<Vec2>,
     /// The page widget's id, by which the Hand tool finds its drag before the pages are laid out.
@@ -929,6 +939,7 @@ impl DocView {
             frame_queue: Vec::new(),
             frame_geometry_changed: false,
             frame_visible: HashSet::new(),
+            frame_demanded: HashSet::new(),
             stale_thumbs: HashSet::new(),
             stale_tiles: HashSet::new(),
             current_scale_tag: 0,
@@ -996,6 +1007,8 @@ impl DocView {
             last_scale: 0.0,
             sharp_hold_until: 0.0,
             last_scroll: Vec2::ZERO,
+            scroll_dir: 0,
+            scroll_content: Vec2::ZERO,
             sync_scroll: None,
             page_widget: None,
             pan_hold_until: 0.0,
@@ -2917,6 +2930,56 @@ fn read_wheel(ui: &mut egui::Ui, view: &mut DocView, avail: Rect, single_paging:
     Wheel { precise_scroll, line_base, boost_extra, has_page, paging_owns_vertical }
 }
 
+/// Rows of pages that continuous view prefetches past the window in the direction it last
+/// moved.
+const PREFETCH_ROWS: usize = 2;
+
+/// The pages continuous view prefetches past the window: the next [`PREFETCH_ROWS`] rows the way
+/// it last moved, nearest first, and none before it moves. The web build renders on the UI
+/// thread, so it prefetches none.
+fn scroll_prefetch(view: &DocView, visible_now: &[usize]) -> Vec<usize> {
+    if !view.continuous || cfg!(target_arch = "wasm32") {
+        return Vec::new();
+    }
+    let n = PREFETCH_ROWS * if view.layout == PageLayout::Single { 1 } else { 2 };
+    match (view.scroll_dir, visible_now.iter().min(), visible_now.iter().max()) {
+        (1, _, Some(&last)) => (last.saturating_add(1)..=last.saturating_add(n)).collect(),
+        (-1, Some(&first), _) => (first.saturating_sub(n)..first).rev().collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// The whole-page raster a prefetch asks for: the page at this scale, or the backdrop of a page
+/// that is tiled at this scale. A cached raster sharper than the backdrop stays demanded as it
+/// is, as `paint_page_surface` demands it under tiles.
+fn prefetch_demand(view: &DocView, p: &pdfcraft_render::PageInfo, i: usize, scale: f32, tag: u64, max_side: f32) -> (usize, f32, u64, Option<Tile>) {
+    let side = p.width.max(p.height).max(1.0);
+    if side * scale <= TILE_THRESHOLD.min(max_side) {
+        return (i, scale, tag, None);
+    }
+    let bs = BASE_SIDE.min(max_side) / side;
+    match view.pages.get(&i).filter(|c| c.tag != STALE_TAG && tag_scale(c.tag) >= bs) {
+        Some(c) => (i, tag_scale(c.tag), c.tag, None),
+        None => (i, bs, scale_tag(bs), None),
+    }
+}
+
+/// Whether `page` lies behind the way continuous view last moved: above the current page while
+/// scrolling down, below it while scrolling up. `false` outside continuous view.
+fn behind_scroll(continuous: bool, scroll_dir: i8, current: usize, page: usize) -> bool {
+    continuous && ((scroll_dir > 0 && page < current) || (scroll_dir < 0 && page > current))
+}
+
+/// Orders a frame's demand: pages on screen first, then off-screen pages ahead of the way the
+/// view last moved, then those behind it, each nearest the current page first.
+fn order_demand(view: &DocView, wanted: &mut [(usize, f32, u64, Option<Tile>)], visible_now: &[usize]) {
+    let cur = view.current;
+    wanted.sort_by_key(|w| {
+        let shown = visible_now.contains(&w.0);
+        (!shown, !shown && behind_scroll(view.continuous, view.scroll_dir, cur, w.0), w.0.abs_diff(cur), w.3.is_some())
+    });
+}
+
 /// What decides which renders a frame asks for.
 #[derive(Clone, Copy)]
 struct RenderPlan<'a> {
@@ -2929,7 +2992,8 @@ struct RenderPlan<'a> {
 }
 
 /// Queues the renders for the pages and tiles `renders` wants (nearest the view first), prefetches the
-/// rows either side, frees tiles of far pages and old zooms, and asks for the text layers.
+/// rows either side (in continuous view, the rows ahead in the scroll direction), frees tiles of far
+/// pages and old zooms, and asks for the text layers.
 fn plan_renders(ui: &egui::Ui, view: &mut DocView, info: &DocInfo, renders: PageRenders, plan: &RenderPlan<'_>) {
     let (mut wanted, visible_now) = renders;
     let RenderPlan { visible_pages, tag, scale, sharp_held, pan_held, hand } = *plan;
@@ -2944,17 +3008,20 @@ fn plan_renders(ui: &egui::Ui, view: &mut DocView, info: &DocInfo, renders: Page
         for i in (last.saturating_add(1)..=last.saturating_add(n)).chain(first.saturating_sub(n)..first) {
             let Some(p) = info.pages.get(i).filter(|_| !view.errors.contains_key(&i)) else { continue };
             // As drawn: the whole page at this scale, or the backdrop of a tiled page.
-            let side = p.width.max(p.height).max(1.0);
-            wanted.push(if side * scale > TILE_THRESHOLD.min(max_side) {
-                let bs = BASE_SIDE.min(max_side) / side;
-                (i, bs, scale_tag(bs), None)
-            } else {
-                (i, scale, tag, None)
-            });
+            wanted.push(prefetch_demand(view, p, i, scale, tag, max_side));
         }
     }
+    // Continuous view also asks for the rows ahead of the way it last moved.
+    let max_side = ui.ctx().input(|inp| inp.max_texture_side) as f32;
+    for i in scroll_prefetch(view, &visible_now) {
+        if view.errors.contains_key(&i) || wanted.iter().any(|w| w.0 == i) {
+            continue;
+        }
+        let Some(p) = info.pages.get(i) else { continue };
+        wanted.push(prefetch_demand(view, p, i, scale, tag, max_side));
+    }
     let cur = view.current;
-    wanted.sort_by_key(|w| (!visible_now.contains(&w.0), w.0.abs_diff(cur), w.3.is_some()));
+    order_demand(view, &mut wanted, &visible_now);
     // Tiles of far-away pages are useless: free them. Tiles of an earlier zoom stay for a page
     // that is on screen, whether or not the page is tiled at this zoom (#2196): a zoom out below
     // the tiling threshold used to drop the tiles of the zoom just left, so coming back to it
@@ -3187,9 +3254,10 @@ fn page_scroll_area(ui: &egui::Ui, view: &mut DocView, geometry: &ScrollGeometry
     scroll
 }
 
-/// Notes how far the page view scrolled this frame: reader-owned scrolling ends search following,
-/// a pan holds back fresh tile renders until it settles, and a glide keeps going or stops. Whether
-/// a pan is still settling.
+/// Notes how far and which way the page view scrolled this frame: reader-owned scrolling ends
+/// search following, a pan holds back fresh tile renders until it settles, a glide keeps going or
+/// stops, and the vertical direction is kept for continuous view's prefetch. Whether a pan is
+/// still settling.
 fn track_scroll<T>(ui: &egui::Ui, view: &mut DocView, out: &egui::containers::scroll_area::ScrollAreaOutput<T>, glide: Vec2) -> bool {
     let scroll_offset = out.state.clamped_offset();
     // The document ScrollArea's own scroll surfaces move the offset without the wheel deltas
@@ -3213,8 +3281,25 @@ fn track_scroll<T>(ui: &egui::Ui, view: &mut DocView, out: &egui::containers::sc
     if glide != Vec2::ZERO {
         view.fling.moved((scroll_offset - view.last_scroll).length() > 0.01);
     }
+    view.scroll_dir = scroll_direction(view.scroll_dir, scroll_offset.y - view.last_scroll.y, out.content_size != view.scroll_content);
+    view.scroll_content = out.content_size;
     view.last_scroll = scroll_offset;
     now_settle < view.pan_hold_until
+}
+
+/// The way the view moves after a frame whose offset changed by `dy` points: down (1) or up (-1)
+/// for a move of more than half a point, `dir` otherwise, and 0 when the content's size changed
+/// (a zoom or a layout change).
+fn scroll_direction(dir: i8, dy: f32, resized: bool) -> i8 {
+    if resized {
+        0
+    } else if dy > 0.5 {
+        1
+    } else if dy < -0.5 {
+        -1
+    } else {
+        dir
+    }
 }
 
 /// The hover tip, find bar, size hint and the in-place editors drawn over the pages. Whether the
