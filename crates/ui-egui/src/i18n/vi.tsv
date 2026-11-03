@@ -7,6 +7,11 @@
 # Plural rule: `plural_none` — every @plural row lists exactly one form.
 # Context-sensitive wording and intentional unchanged strings are regression-tested in i18n/mod.rs.
 #
+
+# Untranslated: English text until a translator fills these in.
+	Lowering this forgets the oldest files. At 0 there is no list.	Lowering this forgets the oldest files. At 0 there is no list.
+	Recent files to keep	Recent files to keep
+
 	Menu	Trình đơn
 	Edit	Chỉnh sửa
 	Pages	Trang

@@ -186,25 +186,28 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 crate::folders_ui::section(app, ui);
             }
 
-            ui.add_space(26.0);
             let mut clear = false;
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(tl!("Recent")).font(theme::semibold(17.0)));
-                if !app.recent.is_empty() {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let resp = widgets::ghost_button(ui, "trash-2", tl!("Clear"));
-                        resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Clear Recent Files")));
-                        clear = resp.on_hover_text(tl!("Clear Recent Files")).clicked();
-                    });
+            // Preferences can turn the list off (#5572).
+            if app.recent_limit > 0 {
+                ui.add_space(26.0);
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new(tl!("Recent")).font(theme::semibold(17.0)));
+                    if !app.recent.is_empty() {
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let resp = widgets::ghost_button(ui, "trash-2", tl!("Clear"));
+                            resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Clear Recent Files")));
+                            clear = resp.on_hover_text(tl!("Clear Recent Files")).clicked();
+                        });
+                    }
+                });
+                ui.add_space(8.0);
+                if app.recent.is_empty() {
+                    ui.label(egui::RichText::new(tl!("Files you open in PdfCraft appear here. Drop a PDF anywhere to open it.")).color(t.text_muted));
                 }
-            });
-            ui.add_space(8.0);
-            if app.recent.is_empty() {
-                ui.label(egui::RichText::new(tl!("Files you open in PdfCraft appear here. Drop a PDF anywhere to open it.")).color(t.text_muted));
             }
             let mut open = None;
             let mut remove = None;
-            for r in &app.recent {
+            for r in app.recent.iter().take(app.recent_limit) {
                 let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 46.0), Sense::click());
                 resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &r.name));
                 let press = theme::Press::track(ui, &resp);

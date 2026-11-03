@@ -7,6 +7,10 @@
 # names stay in Latin letters; the trailing ellipsis of dialog commands is kept. Thai has one
 # plural form.
 
+# Untranslated: English text until a translator fills these in.
+	Lowering this forgets the oldest files. At 0 there is no list.	Lowering this forgets the oldest files. At 0 there is no list.
+	Recent files to keep	Recent files to keep
+
 	Menu	เมนู
 	File	ไฟล์
 	Edit	แก้ไข

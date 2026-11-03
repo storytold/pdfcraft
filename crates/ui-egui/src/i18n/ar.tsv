@@ -20,6 +20,10 @@
 # reorders each line with UAX #9, so preordering here would reverse right-to-left text twice.
 # Spaces and a colon at either end of an entry stay at that end, next to what the code appends.
 
+# Untranslated: English text until a translator fills these in.
+	Lowering this forgets the oldest files. At 0 there is no list.	Lowering this forgets the oldest files. At 0 there is no list.
+	Recent files to keep	Recent files to keep
+
 	Menu	القائمة
 	File	ملف
 	Edit	تحرير
