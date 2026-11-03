@@ -221,7 +221,7 @@ pub(crate) fn panel(
                     "Both" => tl!("Both"),
                     _ => tl!("Unspecified"),
                 };
-                egui::ComboBox::new("tag_scope", tl!("Scope")).selected_text(scope_label).show_ui(ui, |ui| {
+                craft_ui::ComboBox::from_id_salt("tag_scope").selected_text(scope_label).show_ui(ui, |ui| {
                     ui.selectable_value(&mut state.draft.scope, String::new(), tl!("Unspecified"));
                     for (scope, label) in [("Row", tl!("Row")), ("Column", tl!("Column")), ("Both", tl!("Both"))] {
                         ui.selectable_value(&mut state.draft.scope, scope.to_owned(), label);
