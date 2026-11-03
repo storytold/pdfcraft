@@ -95,7 +95,7 @@ pub enum Route {
     Run {
         command: PathBuf,
         args: Vec<String>,
-        /// Written to the helper's standard input (an AppleScript).
+        /// Written to the helper's standard input (an AppleScript; the Simple MAPI script's values).
         stdin: Option<String>,
         watch: Watch,
     },
@@ -157,7 +157,7 @@ pub enum Why {
 pub enum MailError {
     /// The file to attach is not a file that exists.
     NoFile(PathBuf),
-    /// A recipient is empty, starts with `-` or contains a control character.
+    /// A recipient is empty, starts with `-` or `mailto:`, or contains a control character.
     BadRecipient(String),
     /// No email program can be asked on this system (the web build).
     Unsupported,
@@ -179,12 +179,14 @@ impl std::fmt::Display for MailError {
 impl std::error::Error for MailError {}
 
 /// Refuse what can't be sent before anything runs: a file that isn't there, a recipient that
-/// isn't an address a command line or a message header can carry as it is.
+/// isn't an address a command line or a message header can carry as it is. A `mailto:` link is not
+/// an address either: `xdg-email` reads one as the whole message (its `bcc` and `attach` included).
 pub fn check(compose: &Compose) -> Result<(), MailError> {
     if !compose.path.is_file() {
         return Err(MailError::NoFile(compose.path.clone()));
     }
-    if let Some(bad) = compose.to.iter().find(|a| a.trim().is_empty() || a.starts_with('-') || a.chars().any(char::is_control)) {
+    let is_mailto = |a: &str| a.trim_start().get(.."mailto:".len()).is_some_and(|head| head.eq_ignore_ascii_case("mailto:"));
+    if let Some(bad) = compose.to.iter().find(|a| a.trim().is_empty() || a.starts_with('-') || is_mailto(a) || a.chars().any(char::is_control)) {
         return Err(MailError::BadRecipient(bad.clone()));
     }
     Ok(())
@@ -229,14 +231,16 @@ pub fn plan_for(os: &str, default: &DefaultMail, compose: &Compose) -> Result<Pl
     match (os, default) {
         ("macos" | "windows" | "linux" | "freebsd" | "openbsd" | "netbsd" | "dragonfly", DefaultMail::Nothing) => Ok(offer(None, Why::NoProgram)),
         ("macos", DefaultMail::AppleMail | DefaultMail::Outlook) => {
-            let (program, script) = if *default == DefaultMail::Outlook {
-                ("Microsoft Outlook", outlook_script(&path, compose))
-            } else {
-                ("Mail", mail_app_script(&path, compose))
-            };
+            let (program, script) = if *default == DefaultMail::Outlook { ("Microsoft Outlook", OUTLOOK_SCRIPT) } else { ("Mail", MAIL_APP_SCRIPT) };
+            // The script is fixed text: the subject, body, file and recipients reach it as
+            // arguments (`on run argv`), never inside its source.
+            // Line breaks as AppleScript writes them.
+            let body = compose.body.replace("\r\n", "\n").replace('\r', "\n");
+            let mut args = vec!["-".to_string(), compose.subject.clone(), body, path];
+            args.extend(compose.to.iter().map(|a| a.trim().to_string()));
             Ok(Plan {
                 program: Some(program.into()),
-                route: Route::Run { command: "/usr/bin/osascript".into(), args: vec!["-".into()], stdin: Some(script), watch: Watch::Exit },
+                route: Route::Run { command: "/usr/bin/osascript".into(), args, stdin: Some(script.into()), watch: Watch::Exit },
             })
         }
         ("windows", DefaultMail::NewOutlook(olk)) => Ok(Plan {
@@ -247,8 +251,8 @@ pub fn plan_for(os: &str, default: &DefaultMail, compose: &Compose) -> Result<Pl
             program: Some(name.clone()),
             route: Route::Run {
                 command: system_program("WindowsPowerShell\\v1.0\\powershell.exe"),
-                args: powershell_args(&mapi_script(compose, std::process::id())),
-                stdin: None,
+                args: powershell_args(&mapi_script(std::process::id())),
+                stdin: Some(mapi_input(compose)),
                 watch: Watch::Answers,
             },
         }),
@@ -664,83 +668,60 @@ fn hide_console(command: &mut Command) {
 #[cfg(not(windows))]
 fn hide_console(_command: &mut Command) {}
 
-/// A string inside AppleScript double quotes.
-fn applescript_string(text: &str) -> String {
-    let mut out = String::with_capacity(text.len() + 2);
-    out.push('"');
-    for c in text.chars() {
-        match c {
-            '\\' => out.push_str("\\\\"),
-            '"' => out.push_str("\\\""),
-            '\r' | '\n' => out.push_str("\\n"),
-            c => out.push(c),
-        }
-    }
-    out.push('"');
-    out
+/// Mail's AppleScript. Its values arrive as `argv`: 1 the subject, 2 the body, 3 the file's path,
+/// then one item per recipient.
+const MAIL_APP_SCRIPT: &str = "on run argv
+	set theSubject to item 1 of argv
+	set theBody to item 2 of argv
+	set thePath to item 3 of argv
+	tell application \"Mail\"
+		set msg to make new outgoing message with properties {subject:theSubject, content:theBody, visible:true}
+		repeat with i from 4 to count of argv
+			tell msg to make new to recipient at end of to recipients with properties {address:(item i of argv)}
+		end repeat
+		tell msg to make new attachment with properties {file name:(POSIX file thePath)} at after the last paragraph
+		activate
+	end tell
+end run
+";
+
+/// Outlook's AppleScript, with the same `argv` as [`MAIL_APP_SCRIPT`].
+const OUTLOOK_SCRIPT: &str = "on run argv
+	set theSubject to item 1 of argv
+	set theBody to item 2 of argv
+	set thePath to item 3 of argv
+	tell application \"Microsoft Outlook\"
+		set msg to make new outgoing message with properties {subject:theSubject, content:theBody}
+		repeat with i from 4 to count of argv
+			make new recipient at msg with properties {email address:{address:(item i of argv)}}
+		end repeat
+		make new attachment at msg with properties {file:(POSIX file thePath)}
+		open msg
+		activate
+	end tell
+end run
+";
+
+/// The Simple MAPI script. It holds no text of the message: the values come in on its standard
+/// input ([`mapi_input`]), so a long body never lengthens the command line (Windows refuses one
+/// over 32 767 characters, and the script travels encoded on it). `caller` is this program's
+/// process: its own windows (whose title can carry the subject too) never count as the compose
+/// window.
+fn mapi_script(caller: u32) -> String {
+    fill(MAPI_SCRIPT, &[("CALLER", caller.to_string()), ("SECONDS", MAPI_SECONDS.to_string())])
 }
 
-fn outlook_script(path: &str, compose: &Compose) -> String {
-    let recipients: String = compose
-        .to
-        .iter()
-        .map(|a| format!("\tmake new recipient at msg with properties {{email address:{{address:{}}}}}\n", applescript_string(a.trim())))
-        .collect();
-    format!(
-        "tell application \"Microsoft Outlook\"\n\
-         \tset msg to make new outgoing message with properties {{subject:{s}, content:{b}}}\n\
-         {recipients}\
-         \tmake new attachment at msg with properties {{file:POSIX file {p}}}\n\
-         \topen msg\n\
-         \tactivate\n\
-         end tell\n",
-        s = applescript_string(&compose.subject),
-        b = applescript_string(&compose.body),
-        p = applescript_string(path),
-    )
-}
-
-fn mail_app_script(path: &str, compose: &Compose) -> String {
-    let recipients: String = compose
-        .to
-        .iter()
-        .map(|a| {
-            format!("\ttell msg to make new to recipient at end of to recipients with properties {{address:{}}}\n", applescript_string(a.trim()))
-        })
-        .collect();
-    format!(
-        "tell application \"Mail\"\n\
-         \tset msg to make new outgoing message with properties {{subject:{s}, content:{b}, visible:true}}\n\
-         {recipients}\
-         \ttell msg to make new attachment with properties {{file name:POSIX file {p}}} at after the last paragraph\n\
-         \tactivate\n\
-         end tell\n",
-        s = applescript_string(&compose.subject),
-        b = applescript_string(&compose.body),
-        p = applescript_string(path),
-    )
-}
-
-/// The Simple MAPI script with `compose`'s values. Every value goes in as base64 of its UTF-8, so
-/// no text (quotes of any kind, PowerShell treats ‘ ’ as quotes too) can end a string early.
-/// `caller` is this program's process: its own windows (whose title can carry the subject too)
-/// never count as the compose window.
-fn mapi_script(compose: &Compose, caller: u32) -> String {
+/// What the Simple MAPI script reads from its standard input, one value per line in the order it
+/// reads them: the file's path, its name, the subject, the body and the recipients (one per line
+/// inside the value). Every value is base64 of its UTF-8, so no text (line breaks, quotes of any
+/// kind) can end a line early or reach the script as anything but data.
+fn mapi_input(compose: &Compose) -> String {
     let path = compose.path.to_string_lossy();
     let to = compose.to.iter().map(|a| a.trim()).collect::<Vec<_>>().join("\n");
-    let b64 = |t: &str| format!("'{}'", base64(t.as_bytes()));
-    fill(
-        MAPI_SCRIPT,
-        &[
-            ("PATH", b64(&path)),
-            ("NAME", b64(&file_name(&compose.path))),
-            ("SUBJECT", b64(&compose.subject)),
-            ("BODY", b64(&compose.body)),
-            ("TO", b64(&to)),
-            ("CALLER", caller.to_string()),
-            ("SECONDS", MAPI_SECONDS.to_string()),
-        ],
-    )
+    [&*path, file_name(&compose.path).as_str(), compose.subject.as_str(), compose.body.as_str(), to.as_str()]
+        .iter()
+        .map(|value| format!("{}\n", base64(value.as_bytes())))
+        .collect()
 }
 
 /// `template` with each `@@KEY@@` replaced by its value, in one pass, so a value that happens to
@@ -776,13 +757,14 @@ fn fill(template: &str, values: &[(&str, String)]) -> String {
 /// (`Add-Type`), which every Windows has: `MAPISendMailW` runs on a thread of its own while the
 /// script looks for a new window, not this program's, whose title carries the subject (Outlook's
 /// "<subject> - Message", Thunderbird's "Write: <subject>"). A client that answers without a
-/// window (an error) is reported by its code.
+/// window (an error) is reported by its code. The message's values are read from standard input,
+/// one base64 line each, in the order [`mapi_input`] writes them.
 const MAPI_SCRIPT: &str = r##"$ErrorActionPreference = 'Stop'
 trap { 'failed ' + $_.Exception.Message; exit 0 }
 $utf8 = New-Object System.Text.UTF8Encoding($false)
 $text = { param($b) $utf8.GetString([Convert]::FromBase64String($b)) }
-$path = & $text @@PATH@@; $name = & $text @@NAME@@; $subject = & $text @@SUBJECT@@; $body = & $text @@BODY@@
-$to = [string[]]@((& $text @@TO@@) -split "`n" | Where-Object { $_ -ne '' })
+$path = & $text ([Console]::In.ReadLine()); $name = & $text ([Console]::In.ReadLine()); $subject = & $text ([Console]::In.ReadLine()); $body = & $text ([Console]::In.ReadLine())
+$to = [string[]]@((& $text ([Console]::In.ReadLine())) -split "`n" | Where-Object { $_ -ne '' })
 $caller = @@CALLER@@
 $src = @'
 using System;
@@ -922,7 +904,7 @@ mod tests {
     }
 
     /// A file name and a subject are data on every route: quotes and `$(...)` stay in their string
-    /// in AppleScript, quoted base64 in the PowerShell script, one argument each for `xdg-email`.
+    /// in AppleScript, base64 on PowerShell's standard input, one argument each for `xdg-email`.
     #[test]
     fn a_hostile_file_name_stays_data() {
         let (path, subject) = ("/tmp/a\"b$(x).pdf", "s\"; do shell script \"x");
@@ -930,15 +912,28 @@ mod tests {
 
         for default in [DefaultMail::AppleMail, DefaultMail::Outlook] {
             let p = plan_for("macos", &default, &c).unwrap();
-            let script = run_of(&p).2.unwrap();
-            assert!(script.contains("POSIX file \"/tmp/a\\\"b$(x).pdf\""), "{script}");
-            assert!(script.contains("subject:\"s\\\"; do shell script \\\"x\""), "{script}");
+            let (_, args, script, _) = run_of(&p);
+            let script = script.unwrap();
+            // Fixed script text; the values are separate arguments after the `-` that names stdin.
+            assert!(!script.contains("$(x)") && !script.contains("do shell script") && !script.contains(subject), "{script}");
+            assert_eq!(args, ["-", subject, "", path], "{args:?}");
         }
+        // A newline in the subject and a recipient list go one item each.
+        let multi = Compose { subject: "one\ntwo".into(), to: vec![" a@example.org ".into(), "b@example.org".into()], ..c.clone() };
+        let p = plan_for("macos", &DefaultMail::AppleMail, &multi).unwrap();
+        assert_eq!(run_of(&p).1, ["-", "one\ntwo", "", path, "a@example.org", "b@example.org"]);
+        let p = plan_for("windows", &DefaultMail::Mapi("Outlook".into()), &multi).unwrap();
+        let (_, args, input, _) = run_of(&p);
+        assert!(!args.concat().contains("one") && input.unwrap().lines().nth(2) == Some(base64(b"one\ntwo").as_str()));
+        let p = plan_for("linux", &DefaultMail::XdgEmail("/usr/bin/xdg-email".into()), &multi).unwrap();
+        assert!(run_of(&p).1.iter().any(|a| a == "one\ntwo"));
 
-        let script = mapi_script(&c, 1);
-        assert!(!script.contains("$(x)") && !script.contains("do shell script"), "{script}");
-        assert!(script.contains(&format!("'{}'", base64(path.as_bytes()))), "{script}");
-        assert!(script.contains(&format!("'{}'", base64(subject.as_bytes()))), "{script}");
+        let p = plan_for("windows", &DefaultMail::Mapi("Outlook".into()), &c).unwrap();
+        let (_, args, input, _) = run_of(&p);
+        let input = input.unwrap();
+        assert!(!args.concat().contains("$(x)") && !input.contains("$(x)"), "{args:?} {input}");
+        assert_eq!(input.lines().next(), Some(base64(path.as_bytes()).as_str()));
+        assert_eq!(input.lines().nth(2), Some(base64(subject.as_bytes()).as_str()));
 
         let p = plan_for("linux", &DefaultMail::XdgEmail("/usr/bin/xdg-email".into()), &c).unwrap();
         let args = run_of(&p).1;
@@ -950,15 +945,14 @@ mod tests {
         let p = plan_for("macos", &DefaultMail::Outlook, &compose()).unwrap();
         assert_eq!(p.program.as_deref(), Some("Microsoft Outlook"));
         let (command, args, script, watch) = run_of(&p);
-        assert_eq!((command, args, watch), (Path::new("/usr/bin/osascript"), &["-".to_string()][..], Watch::Exit));
+        assert_eq!((command, watch), (Path::new("/usr/bin/osascript"), Watch::Exit));
+        assert_eq!(args, ["-", "Invoice 26340", "", "/tmp/Invoice \"26340\".pdf"]);
         let script = script.unwrap();
-        assert!(script.starts_with("tell application \"Microsoft Outlook\""));
-        assert!(script.contains("POSIX file \"/tmp/Invoice \\\"26340\\\".pdf\""), "quotes escaped: {script}");
-        assert!(script.contains("subject:\"Invoice 26340\""));
+        assert!(script.contains("tell application \"Microsoft Outlook\""));
 
         let p = plan_for("macos", &DefaultMail::AppleMail, &compose()).unwrap();
         assert_eq!(p.program.as_deref(), Some("Mail"));
-        assert!(run_of(&p).2.unwrap().starts_with("tell application \"Mail\""));
+        assert!(run_of(&p).2.unwrap().contains("tell application \"Mail\""));
 
         // A browser (a webmail site) or any other program: the message without the file, and the file shown.
         let p = plan_for("macos", &DefaultMail::Other(Some("Firefox".into())), &compose()).unwrap();
@@ -998,7 +992,7 @@ mod tests {
         let p = plan_for("windows", &DefaultMail::Mapi("Mozilla Thunderbird".into()), &compose()).unwrap();
         assert_eq!(p.program.as_deref(), Some("Mozilla Thunderbird"));
         let (command, args, stdin, watch) = run_of(&p);
-        assert!(command.ends_with("powershell.exe") && stdin.is_none() && watch == Watch::Answers);
+        assert!(command.ends_with("powershell.exe") && stdin.is_some_and(|s| s.lines().count() == 5) && watch == Watch::Answers);
         assert_eq!(args[args.len() - 2], "-EncodedCommand");
         let encoded = &args[args.len() - 1];
         assert!(encoded.chars().all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '/' || c == '='));
@@ -1046,12 +1040,21 @@ mod tests {
         c.subject = "Núñez’s 'invoice'".into();
         c.body = "Hola\nadiós".into();
         c.to = vec!["ap@example.org".into(), "b@example.org".into()];
-        let script = mapi_script(&c, 4242);
+        let script = mapi_script(4242);
         assert!(!script.contains("@@"), "every value filled: {script}");
         assert!(!script.contains("Núñez") && !script.contains("invoice"), "no text goes in as text: {script}");
-        assert!(script.contains(&format!("$subject = & $text '{}'", base64("Núñez’s 'invoice'".as_bytes()))));
-        assert!(script.contains(&format!("$name = & $text '{}'", base64("Núñez’s 'x'.pdf".as_bytes()))));
-        assert!(script.contains(&format!("(& $text '{}')", base64(b"ap@example.org\nb@example.org"))));
+        assert_eq!(script.matches("[Console]::In.ReadLine()").count(), 5);
+        let lines: Vec<String> = mapi_input(&c).lines().map(str::to_string).collect();
+        assert_eq!(
+            lines,
+            [
+                base64("C:\\Temp\\Núñez’s 'x'.pdf".as_bytes()),
+                base64("Núñez’s 'x'.pdf".as_bytes()),
+                base64("Núñez’s 'invoice'".as_bytes()),
+                base64("Hola\nadiós".as_bytes()),
+                base64(b"ap@example.org\nb@example.org"),
+            ]
+        );
         assert!(script.contains("$caller = 4242") && script.contains(&format!("[uint32]$caller, {MAPI_SECONDS})")));
         assert!(script.contains("MAPISendMailW"));
         let bytes: Vec<u8> = script.encode_utf16().flat_map(|u| u.to_le_bytes()).collect();
@@ -1161,9 +1164,10 @@ mod tests {
         let mut c = compose();
         c.to = vec!["ap@example.org".into(), "billing@example.org".into()];
         let mac = plan_for("macos", &DefaultMail::AppleMail, &c).unwrap();
-        assert!(run_of(&mac).2.unwrap().contains("make new to recipient at end of to recipients with properties {address:\"ap@example.org\"}"));
+        let tail = |plan: &Plan| run_of(plan).1[4..].to_vec();
+        assert_eq!(tail(&mac), ["ap@example.org", "billing@example.org"]);
         let outlook = plan_for("macos", &DefaultMail::Outlook, &c).unwrap();
-        assert!(run_of(&outlook).2.unwrap().contains("email address:{address:\"billing@example.org\"}"));
+        assert_eq!(tail(&outlook), ["ap@example.org", "billing@example.org"]);
         let plan = plan_for("windows", &DefaultMail::Nothing, &c).unwrap();
         let (_, fallback) = fallback_of(&plan);
         assert!(fallback.mailto.starts_with("mailto:ap@example.org,billing@example.org?"));

@@ -14,6 +14,7 @@ pub(super) mod credits;
 pub(super) mod marks_ui;
 pub(super) mod pageboxes;
 pub(super) mod palette;
+pub(super) mod preferences;
 mod prompts;
 pub(super) mod protect;
 pub(super) mod standards_ui;
@@ -127,6 +128,7 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
             Dialog::Properties(_) => 640.0,
             Dialog::Print => 820.0,
             Dialog::FieldProps | Dialog::BulkFieldProps => 600.0,
+            Dialog::Preferences => 610.0,
             Dialog::About => 780.0,
             Dialog::PinTool => 540.0,
             _ => 520.0,
@@ -1364,10 +1366,13 @@ fn dialog_signature(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending)
 
 /// `Dialog::Preferences` content. Returns `false` when it has its own buttons and no footer is wanted.
 fn dialog_preferences(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending) -> bool {
+    ui.set_width(610.0);
     let t = Tokens::get(ui.ctx());
+    preferences::preferences_header(ui, &t);
+    ui.add_space(10.0);
     // The settings outgrow a short window: scroll them rather than run off the screen.
     // The OK row stays below the scroll, in reach however far the settings are scrolled.
-    let max = (ui.ctx().content_rect().height() - 120.0 - crate::js_ui::PREFERENCES_BUTTON_ROW).max(crate::js_ui::PREFERENCES_MIN_SCROLL);
+    let max = (ui.ctx().content_rect().height() - 120.0 - preferences::PREFERENCES_BUTTON_ROW - 40.0).max(preferences::PREFERENCES_MIN_SCROLL);
     // A scroll area starts from the room the dialog offers it, and a modal offers more
     // each frame for the first few, so with OK outside the scroll the dialog would grow
     // over those frames. Asking for the full height as the least it may scroll in
@@ -1376,9 +1381,17 @@ fn dialog_preferences(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pendin
     // cards and other full-width rows (#3557).
     ui.scope(|ui| {
         ui.spacing_mut().scroll.floating = false;
-        egui::ScrollArea::vertical().max_height(max).min_scrolled_height(max).show(ui, |ui| crate::js_ui::preferences_body(ui, app, &t));
+        ui.spacing_mut().scroll.bar_inner_margin = 14.0;
+        ui.spacing_mut().scroll.bar_outer_margin = 2.0;
+        ui.style_mut().scroll_animation = egui::style::ScrollAnimation::duration(0.25);
+        egui::ScrollArea::vertical()
+            .id_salt("preferences-dialog-scroll")
+            .max_height(max)
+            .min_scrolled_height(max)
+            .animated(true)
+            .show(ui, |ui| preferences::preferences_body(ui, app, &t));
     });
-    req.close = crate::js_ui::preferences_buttons(ui);
+    req.close = preferences::preferences_buttons(ui);
     false
 }
 
