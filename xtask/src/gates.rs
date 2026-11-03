@@ -162,10 +162,33 @@ pub fn i18n_report(args: &[String]) -> anyhow::Result<()> {
     // Under GitHub Actions, also show the report in the job summary. Best effort: never fails the build.
     if let (Some(path), false) = (std::env::var_os("GITHUB_STEP_SUMMARY"), report.is_empty()) {
         use std::io::Write;
-        let text = format!("### Translation gaps\n\n```\n{}\n```\n", report.join("\n"));
+        let text = translation_summary(&report);
         let _ = std::fs::OpenOptions::new().append(true).create(true).open(path).and_then(|mut f| f.write_all(text.as_bytes()));
     }
     Ok(())
+}
+
+/// Fence contributor-supplied catalog text so it cannot escape into GitHub-flavored Markdown.
+fn translation_summary(report: &[String]) -> String {
+    let longest = report
+        .iter()
+        .map(|line| {
+            let mut longest = 0usize;
+            let mut run = 0usize;
+            for ch in line.chars() {
+                if ch == '`' {
+                    run = run.saturating_add(1);
+                } else {
+                    longest = longest.max(run);
+                    run = 0;
+                }
+            }
+            longest.max(run)
+        })
+        .max()
+        .unwrap_or(0);
+    let fence = "`".repeat(longest.saturating_add(1).max(3));
+    format!("### Translation gaps\n\n{fence}\n{}\n{fence}\n", report.join("\n"))
 }
 
 /// Dependency licences, bans, sources and advisories (`deny.toml`). Skipped with a hint when
@@ -558,7 +581,16 @@ fn f1(a: &BTreeMap<String, usize>, b: &BTreeMap<String, usize>) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{f1, order_score, root, word_sequence, words};
+    use super::{f1, order_score, root, translation_summary, word_sequence, words};
+
+    #[test]
+    fn translation_summary_fences_untrusted_markdown() {
+        let report = vec!["`<img src=x> [link](https://example.test)".to_string(), "```\n<script>".to_string()];
+        let summary = translation_summary(&report);
+        assert!(summary.starts_with("####\n"), "the fence is longer than catalog backtick runs");
+        assert!(summary.contains("<script>"), "catalog text stays inside the fenced block");
+        assert!(summary.ends_with("\n####\n"));
+    }
 
     /// The two scores answer different questions, and the point of adding the second one is the
     /// first row: F1 cannot tell a page from the same page read backwards.
