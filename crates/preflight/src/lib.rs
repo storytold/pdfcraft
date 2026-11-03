@@ -149,7 +149,8 @@ pub struct Declared {
     /// `pdfaid:part` and `pdfaid:conformance`, e.g. (2, "B").
     pub pdfa: Option<(u8, String)>,
     pub pdfua: Option<u8>,
-    /// Output intents' condition identifiers.
+    /// Output intents' condition identifiers: every intent the document lists (each object
+    /// once), each identifier cut to [`MAX_IDENTIFIER_BYTES`].
     pub output_intents: Vec<String>,
 }
 
@@ -183,12 +184,26 @@ pub fn declared(doc: &Document) -> Declared {
     let cat = catalog(doc);
     let list = cat.get(b"OutputIntents").map(|o| doc.resolve(o));
     if let Some(list) = list.as_deref().and_then(Object::as_array) {
-        // One intent object listed again is one declaration, and a real file declares one or
-        // two: its identifier (a string of any length) is not copied once per listing.
+        // One intent object listed again is one declaration: its identifier is not copied once
+        // per listing. Every distinct one is kept (verification reads them all too), and only
+        // the start of an identifier longer than any real one.
         let mut seen = std::collections::HashSet::new();
-        for oi in list.iter().filter(|oi| oi.as_ref().is_none_or(|r| seen.insert(r))).take(MAX_OUTPUT_INTENTS) {
+        for oi in list.iter().filter(|oi| oi.as_ref().is_none_or(|r| seen.insert(r))) {
             if let Some(od) = doc.resolve(oi).as_dict() {
-                let id = od.get(b"OutputConditionIdentifier").and_then(|v| doc.resolve(v).as_string().map(|s| s.to_text())).unwrap_or_default();
+                let id = od
+                    .get(b"OutputConditionIdentifier")
+                    .and_then(|v| {
+                        doc.resolve(v).as_string().map(|s| {
+                            // An even cut keeps UTF-16 text whole code units.
+                            let n = s.bytes.len().min(MAX_IDENTIFIER_BYTES) & !1;
+                            if n == s.bytes.len() {
+                                s.to_text()
+                            } else {
+                                pdfcraft_cos::PdfString { bytes: s.bytes[..n].to_vec(), hex: s.hex }.to_text()
+                            }
+                        })
+                    })
+                    .unwrap_or_default();
                 d.output_intents.push(id);
             }
         }
@@ -196,8 +211,9 @@ pub fn declared(doc: &Document) -> Declared {
     d
 }
 
-/// Most output intents [`declared`] reads.
-const MAX_OUTPUT_INTENTS: usize = 8;
+/// The most bytes of an output condition identifier [`declared`] keeps (a real one is a few
+/// dozen).
+const MAX_IDENTIFIER_BYTES: usize = 1024;
 
 /// Decoded bytes one verification reads looking for device colour, all content streams
 /// together. Past it, content is not inspected, and the report says so.
@@ -776,6 +792,12 @@ fn chain_forbidden(doc: &Document, a: &Dict) -> Option<String> {
         let dicts: Vec<&Dict> = match &*o {
             Object::Dict(d) => vec![d],
             Object::Array(list) => {
+                // An array read is work too, with its entries: a chain of arrays alone must
+                // still reach the limit.
+                read = read.saturating_add(1 + list.len().min(MAX_ACTION_CHAIN));
+                if read > MAX_ACTION_CHAIN {
+                    return Some("too deeply chained".into());
+                }
                 // More than the chain limit can't be read anyway.
                 hold_referenced(doc, list, &mut seen, &mut held);
                 list.iter().filter_map(Object::as_dict).take(MAX_ACTION_CHAIN).collect()
@@ -823,6 +845,7 @@ fn walk_chain(
         match d.get(b"Next") {
             Some(Object::Dict(next)) => stack.push(next),
             Some(Object::Array(list)) => {
+                *read = read.saturating_add(list.len().min(MAX_ACTION_CHAIN));
                 hold_referenced(doc, list, seen, held);
                 stack.extend(list.iter().filter_map(Object::as_dict));
             }
@@ -906,8 +929,10 @@ pub fn convert(doc: &mut Document, level: Level) -> Result<Report, pdfcraft_cos:
         fixed.push("Cleared NeedAppearances".into());
     }
     // An sRGB output intent describes RGB and gray content only: a document with CMYK content
-    // needs a CMYK output condition, which only the user can choose (#667).
-    if !has_pdfa_intent(doc) && !uses_device_colour(doc, &objects(doc)).cmyk {
+    // needs a CMYK output condition, which only the user can choose (#667). Content that could
+    // not all be read may hold CMYK too, so it gets none either.
+    let colour = uses_device_colour(doc, &objects(doc));
+    if !has_pdfa_intent(doc) && !colour.cmyk && !colour.incomplete {
         let mut icc = Dict::new();
         icc.set(b"N".to_vec(), Object::Int(3));
         let profile = doc.add(Object::Stream(Stream::flate(icc, &icc::srgb())));
