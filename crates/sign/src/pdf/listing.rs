@@ -268,6 +268,9 @@ pub fn list_cached(doc: &Document, bytes: &[u8], trust: &TrustStore, cache: &Dig
     let pages = annot_pages(doc);
     let mut out = Vec::new();
     let mut field_values: HashSet<ObjRef> = HashSet::new();
+    // Fields that name one signature value are judged once: validation does not depend on the
+    // field, and repeating it per field would repeat the digest, chain and evidence work.
+    let mut judged: HashMap<ObjRef, SignatureInfo> = HashMap::new();
     for f in sig_fields(doc) {
         if let Some(v_ref) = f.dict.get(b"V").and_then(Object::as_ref) {
             field_values.insert(v_ref);
@@ -310,8 +313,18 @@ pub fn list_cached(doc: &Document, bytes: &[u8], trust: &TrustStore, cache: &Dig
             modification: Modification::None,
             details: Vec::new(),
         };
+        let shared = f.dict.get(b"V").and_then(Object::as_ref).filter(|_| v.is_some());
+        if let Some(first) = shared.and_then(|r| judged.get(&r)) {
+            let own =
+                SignatureInfo { field: info.field, signed: info.signed, page: info.page, rect: info.rect, visible: info.visible, ..first.clone() };
+            out.push(own);
+            continue;
+        }
         if let Some(v) = v {
             validate_into(doc, bytes, trust, &v, &mut info, cache);
+        }
+        if let Some(r) = shared {
+            judged.insert(r, info.clone());
         }
         out.push(info);
     }
