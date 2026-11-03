@@ -2876,6 +2876,9 @@ theme	Appearance	იერსახე
 	Transform image	გამოსახულების გარდაქმნა
 	Select Tool	მონიშვნის ხელსაწყო
 	Hand Tool	ხელის ხელსაწყო
+	Select	მონიშვნა
+	Hand	ხელი
+	Freehand-Highlight	თავისუფალი მარკერი
 	Marquee Zoom	მასშტაბირება ჩარჩოთი
 	Edit this PDF	ამ PDF-ის რედაქტირება
 	Export this PDF	ამ PDF-ის ექსპორტი
@@ -2900,3 +2903,22 @@ theme	Appearance	იერსახე
 	No image on clipboard to paste	გაცვლის ბუფერში ჩასასმელი გამოსახულება არ არის
 	Pinned {tool} to Home	{tool} მიმაგრდა საწყის ეკრანზე
 	Unpinned {tool} from Home	{tool} მოიხსნა საწყისი ეკრანიდან
+	General & Interface	ზოგადი და ინტერფეისი
+	Search settings…	პარამეტრების ძიება…
+	Navigation rail side	ნავიგაციის ზოლის მხარე
+	Dock navigation rail on Left	ნავიგაციის ზოლის მარცხნივ მიმაგრება
+	Dock navigation rail on Right	ნავიგაციის ზოლის მარჯვნივ მიმაგრება
+	Hotbar settings	სწრაფი წვდომის ზოლის პარამეტრები
+	Hotbar settings / add tools	სწრაფი წვდომის ზოლის პარამეტრები / ხელსაწყოების დამატება
+	Hotbar tools	სწრაფი წვდომის ზოლის ხელსაწყოები
+	Add tools to hotbar	ხელსაწყოების დამატება სწრაფი წვდომის ზოლზე
+	Remove from hotbar	სწრაფი წვდომის ზოლიდან ამოშლა
+	Drag hotbar	სწრაფი წვდომის ზოლის გადათრევა
+	Search all tools…	ყველა ხელსაწყოს ძიება…
+	Toolbar size	ხელსაწყოთა ზოლის ზომა
+	Vertical layout	ვერტიკალური განლაგება
+	Float (drag anywhere)	თავისუფალი (გადაათრიეთ ნებისმიერ ადგილას)
+	Stick to a side:	მხარეზე მიმაგრება:
+	Full-side strip	ზოლი მთელ მხარეზე
+	Extend the docked toolbar along the entire side. Choose a side above to enable.	მიმაგრებული ხელსაწყოთა ზოლის მთელ მხარეზე გაშლა. ჩასართავად ზემოთ აირჩიეთ მხარე.
+	Close menu	მენიუს დახურვა
