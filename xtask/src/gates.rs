@@ -169,7 +169,7 @@ pub fn i18n_report(args: &[String]) -> anyhow::Result<()> {
 }
 
 /// Fence contributor-supplied catalog text so it cannot escape into GitHub-flavored Markdown.
-fn translation_summary(report: &[String]) -> String {
+fn translation_summary(report: &[&str]) -> String {
     let longest = report
         .iter()
         .map(|line| {
@@ -585,7 +585,7 @@ mod tests {
 
     #[test]
     fn translation_summary_fences_untrusted_markdown() {
-        let report = vec!["`<img src=x> [link](https://example.test)".to_string(), "```\n<script>".to_string()];
+        let report = ["`<img src=x> [link](https://example.test)", "```\n<script>"];
         let summary = translation_summary(&report);
         assert!(summary.starts_with("####\n"), "the fence is longer than catalog backtick runs");
         assert!(summary.contains("<script>"), "catalog text stays inside the fenced block");
