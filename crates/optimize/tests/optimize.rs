@@ -3820,7 +3820,7 @@ fn a_picture_with_a_stencil_mask_is_downsampled_under_its_mask() {
     doc.set(img, Object::Stream(s));
     let mask_before = stream(&doc, mask);
     // 1200 pixels over two inches: 600 ppi.
-    page(&mut doc, &[("Im0", img)], "q 144 0 0 144 100 100 cm /Im0 Do Q");
+    page(&mut doc, &[("Im0", img)], "0 0 1 rg 0 0 612 792 re f q 144 0 0 144 100 100 cm /Im0 Do Q");
     let before = render(&doc);
     let report = optimize(&mut doc, &Settings::default()).unwrap();
     assert_eq!(report.images_resampled, 1, "{report:?}");
