@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use pdfcraft_cos::{Document, Object};
+use pdfcraft_cos::{DecodeBudget, Document, ObjRef, Object};
 
 use super::*;
 
@@ -244,6 +244,32 @@ fn tagged_text_reads_marked_content_and_reports_unstructured_form_text() {
     let tagged = tagged_text(&doc, &[0]);
     assert_eq!(tagged.text, "IN FORM");
     assert!(tagged.warnings.iter().any(|warning| warning.contains("outside the structure tree")));
+}
+
+#[test]
+fn tagged_text_shares_the_form_visit_budget_across_references() {
+    let form_text = "BT /F1 12 Tf /P << /MCID 4 >> BDC (FORM) Tj EMC ET";
+    let form = format!(
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /Font << /F1 6 0 R >> >> /Length {} >>\nstream\n{form_text}\nendstream",
+        form_text.len()
+    );
+    let doc = pdf(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] >>".into(),
+            form.clone(),
+            form,
+            FONT.into(),
+        ],
+        "",
+    );
+    let mut budget = DecodeBudget::new(1024, 1);
+    let first = crate::headings::form_mcid_texts(&doc, ObjRef { num: 4, generation: 0 }, 1024, None, &mut budget).unwrap();
+    let second = crate::headings::form_mcid_texts(&doc, ObjRef { num: 5, generation: 0 }, 1024, None, &mut budget).unwrap();
+    assert_eq!(first.by_id.get(&4).map(String::as_str), Some("FORM"));
+    assert!(second.limited);
+    assert!(second.by_id.is_empty());
 }
 
 #[test]
