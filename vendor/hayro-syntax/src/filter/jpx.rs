@@ -17,13 +17,25 @@ impl ImageColorSpace {
     }
 }
 
-/// PdfCraft patch (29): the most pixels a codestream may decode to (2^28, the renderer's
+/// PdfCraft patch (35): the most pixels a codestream may decode to (2^28, the renderer's
 /// `MAX_IMAGE_PIXELS` and hayro-interpret's `image_size_ok`). Its size comes from the SIZ marker,
 /// not the image dictionary, and the decoder allocates it infallibly: a tiny file could ask for
 /// tens of gigabytes and abort the process (#5078).
 const MAX_PIXELS: u64 = 1 << 28;
 
+/// Decode a JPEG 2000 image (JP2 file or raw codestream) for an image XObject described by
+/// `params`, refusing codestreams over [`MAX_PIXELS`]; `None` when it can't be decoded.
 pub(crate) fn decode(data: &[u8], params: &ImageDecodeParams) -> Option<FilterResult<'static>> {
+    decode_with_pixel_limit(data, params, MAX_PIXELS)
+}
+
+/// [`decode`] with `max_pixels` in place of [`MAX_PIXELS`], so a test can exercise the
+/// full-resolution size check on a small image without an attacker-sized allocation.
+fn decode_with_pixel_limit(
+    data: &[u8],
+    params: &ImageDecodeParams,
+    max_pixels: u64,
+) -> Option<FilterResult<'static>> {
     use crate::object::stream::ImageColorSpace;
 
     let settings = DecodeSettings {
@@ -43,7 +55,7 @@ pub(crate) fn decode(data: &[u8], params: &ImageDecodeParams) -> Option<FilterRe
     // image fail, so the page drew blank (#3306). Then it is decoded as if it had no colour
     // specification, as MuPDF and Poppler draw it: grey, RGB or CMYK by its component count.
     //
-    // PdfCraft patch (29): the header is read at full resolution first, because
+    // PdfCraft patch (35): the header is read at full resolution first, because
     // `target_resolution` shrinks `width()` and `height()` but each tile's coefficients are still
     // allocated at full size (review on #5086); see `MAX_PIXELS`.
     let full_resolution = DecodeSettings {
@@ -59,7 +71,7 @@ pub(crate) fn decode(data: &[u8], params: &ImageDecodeParams) -> Option<FilterRe
             (repaired.as_slice(), image)
         }
     };
-    if u64::from(full.width()) * u64::from(full.height()) > MAX_PIXELS {
+    if u64::from(full.width()) * u64::from(full.height()) > max_pixels {
         return None;
     }
     let image = match settings.target_resolution {
@@ -264,7 +276,7 @@ fn scale(
 
 #[cfg(test)]
 mod tests {
-    use super::{decode, scale, without_refused_enumerated_colour};
+    use super::{decode, decode_with_pixel_limit, scale, without_refused_enumerated_colour};
     use crate::bit_reader::{BitReader, bit_mask};
     use crate::object::stream::{ImageColorSpace, ImageDecodeParams};
     use alloc::vec::Vec;
@@ -501,5 +513,65 @@ mod tests {
         }
         assert_eq!(bpc(&one_bit_jp2(&palette)), Some(8));
         assert_eq!(bpc(&one_bit_jp2(&[])), Some(1));
+    }
+
+    /// `one_bit_jp2`'s file with the SIZ image and tile sizes set to `xsiz` x `ysiz` (one tile
+    /// covering the whole image, so the header still parses cheaply) and a matching `ihdr`.
+    fn jp2_with_size(xsiz: u32, ysiz: u32) -> Vec<u8> {
+        let jp2_box = |kind: &[u8], body: &[u8]| {
+            let mut b = ((8 + body.len()) as u32).to_be_bytes().to_vec();
+            b.extend_from_slice(kind);
+            b.extend_from_slice(body);
+            b
+        };
+        let mut codestream = alloc::vec![0xff, 0x4f, 0xff, 0x51, 0, 41, 0, 0];
+        // Xsiz, Ysiz, XOsiz, YOsiz, XTsiz, YTsiz, XTOsiz, YTOsiz: one tile spans the whole image.
+        for value in [xsiz, ysiz, 0, 0, xsiz, ysiz, 0, 0] {
+            codestream.extend_from_slice(&value.to_be_bytes());
+        }
+        codestream.extend_from_slice(&[0, 1, 0, 1, 1]);
+        codestream.extend_from_slice(&[0xff, 0x52, 0, 12, 0, 0, 0, 1, 0, 0, 4, 4, 0, 1]);
+        codestream.extend_from_slice(&[0xff, 0x5c, 0, 4, 0x40, 0x40]);
+        codestream.extend_from_slice(&[0xff, 0x90, 0, 10, 0, 0, 0, 0, 0, 15, 0, 1, 0xff, 0x93, 0]);
+        codestream.extend_from_slice(&[0xff, 0xd9]);
+        let mut ihdr = ysiz.to_be_bytes().to_vec();
+        ihdr.extend_from_slice(&xsiz.to_be_bytes());
+        ihdr.extend_from_slice(&[0, 1, 0, 7, 0, 0]);
+        let mut header = jp2_box(b"ihdr", &ihdr);
+        header.extend(jp2_box(b"colr", &[1, 0, 0, 0, 0, 0, 16]));
+        let mut out = alloc::vec![0, 0, 0, 12, b'j', b'P', b' ', b' ', 0x0d, 0x0a, 0x87, 0x0a];
+        out.extend(jp2_box(b"ftyp", b"jp2 \0\0\0\0jp2 "));
+        out.extend(jp2_box(b"jp2h", &header));
+        out.extend(jp2_box(b"jp2c", &codestream));
+        out
+    }
+
+    /// #5078: a `/Width 1 /Height 1` image whose codestream SIZ declares more than 2^28 pixels
+    /// is refused before the decoder makes its full-resolution, infallible allocation (tens of
+    /// gigabytes from a tiny file, which aborts the process), with or without a small target
+    /// resolution, since a target shrinks the reported size but not the per-tile buffers. The
+    /// same builder at 1 x 1 decodes, so the `None` at 65536 x 65536 (2^32 pixels) is the cap
+    /// and not a parse error.
+    #[test]
+    fn a_codestream_over_the_pixel_cap_is_refused() {
+        let params = ImageDecodeParams { width: 1, height: 1, ..ImageDecodeParams::default() };
+        assert!(decode(&jp2_with_size(1, 1), &params).is_some());
+        assert!(decode(&jp2_with_size(65536, 65536), &params).is_none());
+        let small_target = ImageDecodeParams { target_dimension: Some((1, 1)), ..params };
+        assert!(decode(&jp2_with_size(65536, 65536), &small_target).is_none());
+    }
+
+    /// The size check uses the full-resolution size, not the target's: with a 4-pixel limit the
+    /// 4x2 palette image is refused even when a 1x1 target would shrink it under the limit, and
+    /// it decodes normally under the real cap. The small limit lets the unfixed check be seen
+    /// failing without an attacker-sized allocation.
+    #[test]
+    fn jpx_size_guard_uses_full_resolution_before_target_resolution() {
+        let normal_params = ImageDecodeParams { width: 4, height: 2, ..ImageDecodeParams::default() };
+        let normal = decode(PALETTE_JP2, &normal_params).expect("small JPX image should decode");
+        assert_eq!(normal.image_data.as_ref().map(|image| (image.width, image.height)), Some((4, 2)));
+        let small_target =
+            ImageDecodeParams { width: 1, height: 1, target_dimension: Some((1, 1)), ..ImageDecodeParams::default() };
+        assert!(decode_with_pixel_limit(PALETTE_JP2, &small_target, 4).is_none());
     }
 }
