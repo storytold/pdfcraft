@@ -276,6 +276,35 @@ fn pem_with_lax_trailing_padding_still_loads() {
     assert!(matches!(load(too_much.as_bytes()), Err(SignError::Malformed(m)) if m == "PEM base64"));
 }
 
+/// RFC 7468 counts the vertical tab as whitespace in a PEM body; `is_ascii_whitespace` does not.
+#[test]
+fn a_vertical_tab_inside_a_pem_body_is_whitespace() {
+    use pdfcraft_sign::x509::load_certificates as load;
+    let text = String::from_utf8(data("rsa.crt.pem")).unwrap();
+    let body_start = text.find('\n').unwrap() + 1;
+    let with_tab = format!("{}\u{b}{}", &text[..body_start + 4], &text[body_start + 4..]);
+    assert_eq!(load(with_tab.as_bytes()).unwrap(), load(text.as_bytes()).unwrap());
+}
+
+/// A `.p12` in PEM armour or bare base64 follows the PEM rules certificates do: the padding the
+/// length needs may be left off.
+#[test]
+fn a_pkcs12_without_base64_padding_still_opens() {
+    let der = data("rsa-aes.p12");
+    let signer = pkcs12::open(&der, "test").unwrap();
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&der);
+    assert!(b64.ends_with('='), "the fixture's base64 needs padding");
+    let unpadded = b64.trim_end_matches('=');
+    assert_eq!(pkcs12::open(unpadded.as_bytes(), "test").unwrap().certificate, signer.certificate);
+    let with_tab = format!("{}\u{b}{}", &unpadded[..8], &unpadded[8..]);
+    assert_eq!(pkcs12::open(with_tab.as_bytes(), "test").unwrap().certificate, signer.certificate, "a vertical tab is whitespace");
+    let pem = format!("-----BEGIN PKCS12-----\n{unpadded}\n-----END PKCS12-----\n");
+    assert_eq!(pkcs12::open(pem.as_bytes(), "test").unwrap().certificate, signer.certificate);
+    // A `=` inside the body is still not base64.
+    let inside = format!("{}={}", &b64[..8], &b64[8..]);
+    assert!(matches!(pkcs12::open(inside.as_bytes(), "test"), Err(SignError::Malformed(_))));
+}
+
 /// Base64 in 64-column lines, for PEM armour.
 fn encode_base64(der: &[u8]) -> String {
     let s = base64::engine::general_purpose::STANDARD.encode(der);

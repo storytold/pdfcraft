@@ -589,7 +589,7 @@ pub fn load_certificates(bytes: &[u8]) -> Result<Vec<Certificate>, SignError> {
         } else if let Some(label) = line.strip_prefix("-----END ").and_then(|l| l.strip_suffix("-----")) {
             // An END that doesn't close the open block ends nothing.
             if let Some((open, b)) = block.take_if(|(open, _)| *open == label) {
-                let der = base64(&b).ok_or_else(|| SignError::Malformed("PEM base64".into()))?;
+                let der = pem_base64(b.as_bytes()).map_err(|_| SignError::Malformed("PEM base64".into()))?;
                 if open == "CERTIFICATE" {
                     out.push(Certificate::parse(&der)?);
                 } else {
@@ -619,16 +619,17 @@ pub fn to_pem(cert: &Certificate) -> String {
     format!("-----BEGIN CERTIFICATE-----\n{}\n-----END CERTIFICATE-----\n", body.join("\n"))
 }
 
-/// The bytes of a PEM block's base64 body, ASCII whitespace (line breaks included) ignored.
+/// The bytes of a PEM block's base64 body, whitespace (line breaks included) ignored: ASCII
+/// whitespace and the vertical tab, which RFC 7468 counts and `is_ascii_whitespace` leaves out.
 /// RFC 7468's lax grammar, which parsers should accept (writers must pad, and `to_pem` does),
 /// allows zero, one or two `=` at the end whatever the length, so up to two are dropped and the
-/// rest must be unpadded base64. `None` for anything else that isn't base64: a `=` inside
+/// rest must be unpadded base64. An error for anything else that isn't base64: a `=` inside
 /// the body or a third one at the end, a one-character tail, non-zero bits after the last byte
-/// (RFC 4648 §3.5).
-fn base64(s: &str) -> Option<Vec<u8>> {
-    let compact: Vec<u8> = s.bytes().filter(|c| !c.is_ascii_whitespace()).collect();
+/// (RFC 4648 §3.5). `.p12` files in PEM armour or bare base64 go through it too.
+pub(crate) fn pem_base64(text: &[u8]) -> Result<Vec<u8>, base64::DecodeError> {
+    let compact: Vec<u8> = text.iter().copied().filter(|c| !c.is_ascii_whitespace() && *c != 0x0b).collect();
     let body = compact.strip_suffix(b"==").or_else(|| compact.strip_suffix(b"=")).unwrap_or(&compact);
-    STANDARD_NO_PAD.decode(body).ok()
+    STANDARD_NO_PAD.decode(body)
 }
 
 #[cfg(test)]
