@@ -53,7 +53,7 @@ pub fn extract_images(doc: &Document, pages: &[usize], min_side: u32) -> ImageEx
 pub(crate) fn extract_images_within(doc: &Document, pages: &[usize], min_side: u32, budget: &mut ImageBudget, max_bytes: usize) -> ImageExport {
     let all = pdfcraft_model::pages(doc);
     let mut out = ImageExport::default();
-    let (mut visited, mut seen) = (HashSet::new(), HashSet::new());
+    let (mut visited, mut seen) = (Visited::new(), HashSet::new());
     let mut held = 0usize;
     for &p in pages {
         let Some(page) = all.get(p) else { continue };
@@ -97,29 +97,40 @@ pub fn image_file_within(doc: &Document, image: ObjRef, budget: &mut ImageBudget
     }
 }
 
+/// Forms, and resource and XObject dictionaries given by reference, gone through so far, each
+/// with the shallowest depth it was read at.
+pub(crate) type Visited = std::collections::HashMap<ObjRef, usize>;
+
+/// Whether `r` is to be gone through at `depth`: never yet, or only deeper. One first met near
+/// the depth limit, where its subtree was cut, is gone through again from a shallower path, so
+/// its images are still found; each is read at most once per depth, so the work stays bounded.
+fn first_at(visited: &mut Visited, r: ObjRef, depth: usize) -> bool {
+    match visited.get(&r) {
+        Some(&d) if d <= depth => false,
+        _ => {
+            visited.insert(r, depth);
+            true
+        }
+    }
+}
+
 /// The image XObjects reachable from resources `res`, through form XObjects, in resource order,
 /// those not in `images` yet, which they join. `visited` holds the forms, and the resource and
-/// XObject dictionaries given by reference, already gone through, on this page or an earlier one:
-/// all their images are in `images` already. So a dictionary that thousands of forms share is
-/// read once, not once for each, and the work is no more than the file's objects.
-pub(crate) fn collect(
-    doc: &Document,
-    res: &Object,
-    depth: usize,
-    visited: &mut HashSet<ObjRef>,
-    images: &mut HashSet<ObjRef>,
-    out: &mut Vec<ObjRef>,
-) {
+/// XObject dictionaries given by reference, already gone through as shallow, on this page or an
+/// earlier one: all their images are in `images` already. So a dictionary that thousands of
+/// forms share is read once (or once per depth), not once for each, and the work stays bounded
+/// by the file's objects times the depth limit.
+pub(crate) fn collect(doc: &Document, res: &Object, depth: usize, visited: &mut Visited, images: &mut HashSet<ObjRef>, out: &mut Vec<ObjRef>) {
     if depth > 12 {
         return;
     }
-    let Some(res) = dict_once(doc, res, visited) else { return };
-    let Some(xobjects) = res.get(b"XObject").and_then(|x| dict_once(doc, x, visited)) else { return };
+    let Some(res) = dict_once(doc, res, visited, depth) else { return };
+    let Some(xobjects) = res.get(b"XObject").and_then(|x| dict_once(doc, x, visited, depth)) else { return };
     #[cfg(test)]
     XOBJECT_DICTS_READ.with(|n| n.set(n.get() + 1));
     for (_, v) in xobjects.iter() {
         let Some(r) = v.as_ref() else { continue };
-        if images.contains(&r) || visited.contains(&r) {
+        if images.contains(&r) || visited.get(&r).is_some_and(|&d| d <= depth + 1) {
             continue;
         }
         let obj = doc.get(r);
@@ -129,7 +140,7 @@ pub(crate) fn collect(
                 images.insert(r);
                 out.push(r);
             }
-            Some(b"Form") if visited.insert(r) => {
+            Some(b"Form") if first_at(visited, r, depth + 1) => {
                 if let Some(inner) = s.dict.get(b"Resources") {
                     collect(doc, inner, depth + 1, visited, images, out);
                 }
@@ -146,10 +157,11 @@ thread_local! {
     pub(crate) static XOBJECT_DICTS_READ: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// `value` as a dictionary, unless it is a reference already in `visited`, which it joins.
-fn dict_once(doc: &Document, value: &Object, visited: &mut HashSet<ObjRef>) -> Option<Dict> {
+/// `value` as a dictionary, unless it is a reference already gone through at `depth` or
+/// shallower ([`first_at`]).
+fn dict_once(doc: &Document, value: &Object, visited: &mut Visited, depth: usize) -> Option<Dict> {
     if let Some(r) = value.as_ref()
-        && !visited.insert(r)
+        && !first_at(visited, r, depth)
     {
         return None;
     }
