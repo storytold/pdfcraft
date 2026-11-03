@@ -6,8 +6,8 @@ use super::fallback::{
 use super::interp::{Carry, Origin, TextState, interpret};
 use super::lines::{content_streams, page_dict, rewritten_contents, splice, text_lines};
 use super::{
-    Dict, Document, EditError, HashMap, Matrix, Metrics, Object, Op, PdfString, Pieces, TextLine, TextSession, group_blocks, is_centred, parse,
-    rewrite_styled_block,
+    Dict, Document, EditError, HashMap, Matrix, Metrics, Object, Op, PdfString, Pieces, TextLine, TextSession, alignment_frame, group_blocks,
+    is_centred, parse, rewrite_styled_block,
 };
 
 /// What replacing a line did.
@@ -501,7 +501,6 @@ fn underline_ops(fill: &[Op], tm: &[f64; 6], size: f64, underlines: &[(f64, f64,
 
 /// Alignment: each line's offset from the left edge.
 struct Alignment {
-    align: Option<crate::added::Align>,
     width: f64,
     k: f64,
     anchored_right: bool,
@@ -510,10 +509,11 @@ struct Alignment {
 }
 
 impl Alignment {
-    /// `visible` is the width the line is aligned on, in user space; the offset is in text space.
-    fn offset(&self, visible: f64) -> f64 {
+    /// `visible` is the width the line is aligned on, in user space, and `align` its row's
+    /// alignment; the offset is in text space.
+    fn offset(&self, visible: f64, align: Option<crate::added::Align>) -> f64 {
         let free = (self.width - visible).max(0.0) / self.k;
-        match self.align {
+        match align {
             Some(crate::added::Align::Center) => free / 2.0,
             // A right-to-left line anchored at its right edge may start left of the old box.
             Some(crate::added::Align::Right) if self.anchored_right => (self.right_edge - visible) / self.k,
@@ -531,7 +531,9 @@ struct LineWriter<'a> {
     alignment: Alignment,
     encode: &'a Encoder,
     source: Option<&'a Metrics>,
-    justify: bool,
+    /// The paragraph's alignment, and the rows aligned on their own ([`BlockStyle::aligns`]).
+    align: Option<crate::added::Align>,
+    aligns: &'a [Option<crate::added::Align>],
     /// Whether `Tw` reaches every shown space.
     word_spacing_reaches_spaces: bool,
     width: f64,
@@ -551,13 +553,18 @@ struct LineCursor {
 }
 
 impl LineWriter<'_> {
+    /// Row `row`'s alignment: its own, or the paragraph's.
+    fn align_of(&self, row: usize) -> Option<crate::added::Align> {
+        self.aligns.get(row).copied().flatten().or(self.align)
+    }
+
     /// Justify: each line but the last fills the width. A stretched line shows only its words, as
     /// before #4199: word spacing would reach the spaces before its first word and after its
     /// last, so they are left out. Nothing to stretch over, or a paragraph drawn at `0 Tz`, isn't
     /// justified.
-    fn stretch(&self, body: &str, last: bool) -> f64 {
+    fn stretch(&self, body: &str, last: bool, justify: bool) -> f64 {
         let interior = body.matches(' ').count();
-        if self.justify && !last && interior > 0 && self.scale.abs() > 1e-6 {
+        if justify && !last && interior > 0 && self.scale.abs() > 1e-6 {
             Some((self.width - self.advance.of(body)).max(0.0) / self.k / self.scale / interior as f64).filter(|tw| tw.is_finite()).unwrap_or(0.0)
         } else {
             0.0
@@ -578,14 +585,41 @@ impl LineWriter<'_> {
         }
     }
 
-    /// Writes one wrapped line, returning its underline (x0, x1, y) in text space.
-    fn write_line(&self, index: usize, line: &str, last: bool, cursor: &mut LineCursor, ops: &mut Vec<Op>) -> Result<(f64, f64, f64), EditError> {
+    /// Writes one wrapped line of its logical draft row, returning its underline (x0, x1, y) in text space. `wrap`: whether
+    /// this line continues the previous one because a word did not fit, and, when it does, how
+    /// many separator characters the wrap consumed (0 for a Chinese/Japanese word split).
+    fn write_line(
+        &self,
+        index: usize,
+        line: &str,
+        wrap: (usize, bool, usize),
+        last: bool,
+        cursor: &mut LineCursor,
+        ops: &mut Vec<Op>,
+    ) -> Result<(f64, f64, f64), EditError> {
         let n = pdfcraft_content::num;
+        let (row, soft, gap) = wrap;
+        let line_align = self.align_of(row);
         let body = line.trim_matches(' ');
         let interior = body.matches(' ').count();
-        let tw = self.stretch(body, last);
+        let tw = self.stretch(body, last, line_align == Some(crate::added::Align::Justify));
         let (shown, visible) = self.shown(line, body, tw);
-        let dx = if tw > 0.0 { 0.0 } else { self.alignment.offset(visible) };
+        let dx = if tw > 0.0 { 0.0 } else { self.alignment.offset(visible, line_align) };
+        if index > 0 {
+            // Inside this text object, so the marker starts and ends here. `/PCHard` is a newline
+            // that was already in the text. `/PCSoft` rejoins when the box widens, with `/N` the
+            // exact number of separator characters the wrap consumed (0 for a Chinese/Japanese
+            // word split), so a rejoin restores what was actually there instead of guessing a
+            // single space and silently dropping the rest of a typed run (#2529).
+            if soft {
+                let mut properties = Dict::new();
+                properties.set(b"N".to_vec(), Object::Int(i64::try_from(gap).unwrap_or(i64::MAX)));
+                ops.push(Op::new("BDC", vec![Object::name("PCSoft"), Object::Dict(properties)]));
+            } else {
+                ops.push(Op::new("BMC", vec![Object::name("PCHard")]));
+            }
+            ops.push(Op::new("EMC", vec![]));
+        }
         if index > 0 || dx != 0.0 {
             ops.push(Op::new("Td", vec![n(dx - cursor.x), n(if index > 0 { -self.lead } else { 0.0 })]));
         }
@@ -633,8 +667,18 @@ impl LineWriter<'_> {
     }
 
     /// Writes every wrapped line, returning their underlines.
-    fn write_all(&self, wrapped: &[String], cursor: &mut LineCursor, ops: &mut Vec<Op>) -> Result<Vec<(f64, f64, f64)>, EditError> {
-        wrapped.iter().enumerate().map(|(i, line)| self.write_line(i, line, i + 1 == wrapped.len(), cursor, ops)).collect()
+    fn write_all(&self, wrapped: &[(String, bool, usize)], cursor: &mut LineCursor, ops: &mut Vec<Op>) -> Result<Vec<(f64, f64, f64)>, EditError> {
+        let mut row = 0usize;
+        wrapped
+            .iter()
+            .enumerate()
+            .map(|(i, (line, soft, gap))| {
+                if i > 0 && !soft {
+                    row = row.saturating_add(1);
+                }
+                self.write_line(i, line, (row, *soft, *gap), i + 1 == wrapped.len(), cursor, ops)
+            })
+            .collect()
     }
 }
 
@@ -653,7 +697,7 @@ struct BlockPlan<'a> {
     underline: bool,
 }
 
-fn block_ops(plan: &BlockPlan<'_>, writer: &LineWriter<'_>, wrapped: &[String], show_font: String) -> Result<Vec<Op>, EditError> {
+fn block_ops(plan: &BlockPlan<'_>, writer: &LineWriter<'_>, wrapped: &[(String, bool, usize)], show_font: String) -> Result<Vec<Op>, EditError> {
     let n = pdfcraft_content::num;
     let mut ops = vec![Op::new("q", vec![])];
     ops.extend(reveal_ops(plan.block, plan.lines, plan.style, plan.emit.ctm)?);
@@ -747,6 +791,23 @@ pub(crate) fn rewrite_block_from(
 ) -> Result<LineEdit, EditError> {
     let blocks = group_blocks(&lines);
     let b = blocks.get(block).cloned().ok_or_else(|| EditError::Invalid(format!("page {} has no paragraph {}", page + 1, block + 1)))?;
+    // Existing PDF paragraphs do not yet persist selected-row alignment intent. Refuse
+    // that operation before writing anything; whole-paragraph `align` remains supported.
+    if style.aligns.iter().any(Option::is_some) {
+        return Err(EditError::Invalid(
+            "selected-row alignment of existing paragraphs is not supported until it can be preserved across editing sessions".into(),
+        ));
+    }
+    // An alignment for a one-row paragraph is laid out across the column it sits in, as a
+    // paragraph of that width moved to its left edge.
+    let framed;
+    let style = match alignment_frame(&lines, &blocks, &b, style, text.unwrap_or(&b.editor_text)) {
+        Some([left, right]) => {
+            framed = BlockStyle { width: Some(right - left), offset: Some([left - b.rect[0], 0.0]), ..style.clone() };
+            &framed
+        }
+        None => style,
+    };
     let members: Vec<&TextLine> = b.lines.iter().map(|i| &lines[*i]).collect();
     // One clipping run is enough: rewriting the paragraph would drop its mask with the rest.
     let mut dropped = coincident_ops(&lines, &members);
@@ -758,6 +819,9 @@ pub(crate) fn rewrite_block_from(
     let mut res = p.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
     let mut fonts_res = res.get(b"Font").map(|f| doc.resolve(f)).and_then(|f| f.as_dict().cloned()).unwrap_or_default();
     let dispatch = choose_rewrite_path(doc, &fonts_res, &b, &members, first, text, style)?;
+    if dispatch.use_styled_path && style.align == Some(crate::added::Align::Justify) {
+        return Err(EditError::Invalid("justification of mixed-style existing paragraphs is not supported".into()));
+    }
     if dispatch.use_styled_path {
         return rewrite_styled_block(doc, page, &b, &lines, text, style, max_glyphs);
     }
@@ -852,10 +916,11 @@ pub(crate) fn rewrite_block_from(
     };
     let writer = LineWriter {
         advance: &advance,
-        alignment: Alignment { align, width, k, anchored_right, right_edge, rtl },
+        alignment: Alignment { width, k, anchored_right, right_edge, rtl },
         encode: &font.encode,
         source: source_metrics,
-        justify: align == Some(crate::added::Align::Justify),
+        align,
+        aligns: &style.aligns,
         word_spacing_reaches_spaces,
         width,
         scale: o_state.scale,
