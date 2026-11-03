@@ -6,7 +6,7 @@
 **Application ID:** `io.github.dikshant363.pdfcraft`  
 **Version Code:** `1800010` (Multi-ABI)  
 **Date:** 2026-11-03  
-**Status:** RELEASE CANDIDATE VERIFIED  
+**Status:** RELEASE CANDIDATE VERIFIED & SIGN-OFF COMPLETE  
 
 ---
 
@@ -19,6 +19,26 @@ The previous engineering report cited GitHub Actions CI run `41496071519` on com
 - **Verdict:** VERIFIED (PASS).
 - **Run URL:** `https://github.com/dikshant363/pdfcraft-android/actions/runs/41496071519`
 - **Result:** Success across all 18 execution steps in 31 minutes 49 seconds.
+
+### 1.2 Final Multi-Job Release CI Verification (Run 41568730560)
+- **Verdict:** VERIFIED (PASS across both jobs).
+- **Run URL:** `https://github.com/dikshant363/pdfcraft-android/actions/runs/41568730560`
+- **Commit:** `2bde3e9725011b47e96d8bf85ee2717d8c2a8e6e`
+- **Job 1 (Build and test Android):** SUCCESS (30m 6s, ID `125696417446`)
+  - `Check Rust formatting`: PASS
+  - `Check Clippy linter (--locked -D warnings)`: PASS
+  - `Verify asset policy (cargo xtask assets & license-check)`: PASS
+  - `Run Android bridge tests`: PASS
+  - `Run automation tests`: PASS
+  - `Run annotation tests`: PASS
+  - `Run Android JVM unit tests`: PASS
+  - `Assemble Android instrumentation tests`: PASS
+  - `Assemble debug APK`: PASS
+  - `Assemble release APK and AAB (unsigned)`: PASS
+- **Job 2 (Run Android instrumentation tests on emulator):** SUCCESS (2m 19s, ID `125706121777`)
+  - Target: Android 13 (`api-level: 33`, `target: google_apis`, `arch: x86_64`)
+  - Runner Script: `.github/scripts/run-emulator-tests.sh`
+  - Instrumentation Output: `OK (7 tests)` executed in 8.79s with exit code 0.
 
 ---
 
@@ -54,9 +74,17 @@ The CI pipeline `.github/workflows/android.yml` features two jobs:
    - Spawns an `x86_64` Android 13 (API 33) Google APIs system image via `reactivecircus/android-emulator-runner@v2`.
    - Executes all 4 instrumentation test classes via ADB runner:
      1. `io.github.dikshant363.pdfcraft.NativeEngineLoadingTest`
+        - `nativeLibraryLoadsAndReportsVersion`: PASS
+        - `mobileSessionInitializesAndExecutesOnDevice`: PASS
      2. `io.github.dikshant363.pdfcraft.DocumentLifecycleTest`
+        - `externalViewIntentLaunchesMainActivity`: PASS
+        - `opensDocumentFromSandboxedStorage`: PASS
      3. `io.github.dikshant363.pdfcraft.ViewerOperationsTest`
+        - `textSearchFindsMatchesAcrossDocument`: PASS
+        - `rendersPageAndTilesAtMultipleScales`: PASS
      4. `io.github.dikshant363.pdfcraft.AnnotationsAndMediaTest`
+        - `addsNoteAnnotationAndSurvivesSaveReopen`: PASS
+   - Result: `OK (7 tests)` in 8.79s, 0 failures.
 
 ---
 
@@ -99,8 +127,8 @@ Both upstream topic branches were revalidated cleanly against `storytold/pdfcraf
 
 ## 7. Device & Emulator Testing Status
 
-- **CI Headless Emulator (API 33 x86_64):** Automated via GitHub Actions runner (`emulator-test`).
-- **Local Emulator:** NOT RUN (no local emulator configured on workstation host).
+- **CI Headless Emulator (API 33 x86_64):** PASS (7/7 instrumentation tests passed in CI run `41568730560`).
+- **Local Emulator:** NOT RUN (no local emulator configured on workstation host; verified on CI).
 - **Physical ARM64 Hardware:** NOT TESTED locally (no physical device attached to workstation host).
 - **Status Attestation:** In accordance with GEMINI.md §13, statuses are reported honestly without fabrication.
 
