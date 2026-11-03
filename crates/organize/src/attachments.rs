@@ -93,7 +93,7 @@ fn entries(doc: &Document) -> Vec<(Vec<u8>, Object)> {
         return Vec::new();
     };
     let mut out = Vec::new();
-    name_tree_entries(doc, &tree, 0, &mut std::collections::HashSet::new(), &mut out);
+    name_tree_entries(doc, &tree, 0, &mut crate::import::Seen::new(), &mut out);
     out
 }
 

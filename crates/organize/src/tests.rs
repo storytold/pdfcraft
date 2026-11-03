@@ -3843,6 +3843,31 @@ fn a_shared_name_tree_kids_array_is_read_once() {
     doc.set(kids, Object::Array(vec![inner.clone(), inner]));
     let mut out = Vec::new();
     crate::take_work();
-    crate::import::name_tree_entries(&doc, &Object::Dict(node), 0, &mut std::collections::HashSet::new(), &mut out);
+    crate::import::name_tree_entries(&doc, &Object::Dict(node), 0, &mut crate::import::Seen::new(), &mut out);
     assert!(crate::take_work() <= 4, "the shared array was read again");
+}
+
+/// The same for the import's name-tree walk: a shared `/Kids` array first met past the depth
+/// limit is read again from a shallower node.
+#[test]
+fn a_shared_name_tree_kids_array_first_met_deep_is_read_again_shallower() {
+    let mut doc = Document::new_empty();
+    let mut leaf = Dict::new();
+    leaf.set(b"Names".to_vec(), Object::Array(vec![Object::String(pdfcraft_cos::PdfString::literal(b"deep".to_vec())), Object::Int(7)]));
+    let shared = doc.add(Object::Array(vec![Object::Dict(leaf)]));
+    let mut node = Dict::new();
+    node.set(b"Kids".to_vec(), Object::Ref(shared));
+    // The innermost node sits at depth 32: it reads the array, whose entries are past the limit.
+    for _ in 0..31 {
+        let mut up = Dict::new();
+        up.set(b"Kids".to_vec(), Object::Array(vec![Object::Dict(node)]));
+        node = up;
+    }
+    let mut near = Dict::new();
+    near.set(b"Kids".to_vec(), Object::Ref(shared));
+    let mut root = Dict::new();
+    root.set(b"Kids".to_vec(), Object::Array(vec![Object::Dict(node), Object::Dict(near)]));
+    let mut out = Vec::new();
+    crate::import::name_tree_entries(&doc, &Object::Dict(root), 0, &mut crate::import::Seen::new(), &mut out);
+    assert_eq!(out, vec![(b"deep".to_vec(), Object::Int(7))]);
 }

@@ -1,5 +1,5 @@
 use super::copy::Copier;
-use super::{Dict, Document, HashMap, HashSet, ObjRef, Object, OrganizeError, name_tree_entries};
+use super::{Dict, Document, HashMap, ObjRef, Object, OrganizeError, name_tree_entries};
 
 /// Copy a source's document-level attachments (`/Names /EmbeddedFiles`) into `dst`.
 pub(super) fn collect_attachments(dst: &mut Document, src: &Document, out: &mut Vec<(Vec<u8>, Object)>) -> Result<(), OrganizeError> {
@@ -12,7 +12,7 @@ pub(super) fn collect_attachments(dst: &mut Document, src: &Document, out: &mut 
         return Ok(());
     };
     let mut entries = Vec::new();
-    name_tree_entries(src, &tree, 0, &mut HashSet::new(), &mut entries);
+    name_tree_entries(src, &tree, 0, &mut crate::import::Seen::new(), &mut entries);
     let mut copier = Copier::new(src, HashMap::new(), HashMap::new());
     for (k, v) in entries {
         let v = copier.copy_value(dst, &v, None)?;

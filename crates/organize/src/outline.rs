@@ -194,13 +194,23 @@ fn name_tree(doc: &Document) -> HashMap<Vec<u8>, Object> {
     let Some(tree) = names.as_dict().and_then(|n| n.get(b"Dests").cloned()) else { return out };
     // Nodes still to read, with their depth. Kids go on the stack in reverse, so they are read in order.
     let mut stack = vec![(tree, 0usize)];
-    let mut seen: HashSet<ObjRef> = HashSet::new();
+    // Each node and shared `/Kids` array with the shallowest depth it was read at: one first met
+    // deep, where the depth limit cut its subtree, is read again from a shallower path, so its
+    // entries aren't lost. Each is read at most once per depth, so the work stays bounded.
+    let mut seen: HashMap<ObjRef, usize> = HashMap::new();
+    let mut first_at = |r: ObjRef, depth: usize| match seen.get(&r) {
+        Some(&d) if d <= depth => false,
+        _ => {
+            seen.insert(r, depth);
+            true
+        }
+    };
     while let Some((raw, depth)) = stack.pop() {
         if depth > NAME_TREE_DEPTH {
             continue;
         }
         if let Object::Ref(r) = raw
-            && !seen.insert(r)
+            && !first_at(r, depth)
         {
             continue;
         }
@@ -219,7 +229,7 @@ fn name_tree(doc: &Document) -> HashMap<Vec<u8>, Object> {
         // An indirect `/Kids` array shared by several nodes is read under the first one only:
         // its entries are the same, and each is read once anyway.
         let kids = match d.get(b"Kids") {
-            Some(Object::Ref(r)) if !seen.insert(*r) => None,
+            Some(Object::Ref(r)) if !first_at(*r, depth) => None,
             Some(k) => Some(doc.resolve(k)),
             None => None,
         };
@@ -745,4 +755,41 @@ pub fn set_bookmark_open(doc: &mut Document, path: &[usize], open: bool) -> Resu
         recount(doc)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod name_tree_tests {
+    use super::{NAME_TREE_DEPTH, name_tree};
+    use pdfcraft_cos::{Dict, Document, Object, PdfString};
+
+    /// A `/Kids` array shared by a node at the depth limit and by the root: first read at the
+    /// limit (its entries are past it), it is read again from the root, so its name is found.
+    #[test]
+    fn a_shared_kids_array_first_met_at_the_limit_is_read_from_the_root() {
+        let mut doc = Document::new_empty();
+        let mut leaf = Dict::new();
+        leaf.set(b"Names".to_vec(), Object::Array(vec![Object::String(PdfString::literal(b"deep".to_vec())), Object::Int(7)]));
+        let shared = doc.add(Object::Array(vec![Object::Dict(leaf)]));
+        // A chain reaching the shared array at NAME_TREE_DEPTH, read first (kids go on the stack
+        // in reverse, so the first kid is read first).
+        let mut node = Dict::new();
+        node.set(b"Kids".to_vec(), Object::Ref(shared));
+        for _ in 0..NAME_TREE_DEPTH - 1 {
+            let mut up = Dict::new();
+            up.set(b"Kids".to_vec(), Object::Array(vec![Object::Dict(node)]));
+            node = up;
+        }
+        let mut near = Dict::new();
+        near.set(b"Kids".to_vec(), Object::Ref(shared));
+        let mut root = Dict::new();
+        root.set(b"Kids".to_vec(), Object::Array(vec![Object::Dict(node), Object::Dict(near)]));
+        let mut names = Dict::new();
+        names.set(b"Dests".to_vec(), Object::Dict(root));
+        let mut catalog = Dict::new();
+        catalog.set(b"Type".to_vec(), Object::name("Catalog"));
+        catalog.set(b"Names".to_vec(), Object::Dict(names));
+        let catalog = doc.add(Object::Dict(catalog));
+        doc.trailer_mut().set(b"Root".to_vec(), Object::Ref(catalog));
+        assert_eq!(name_tree(&doc).get(b"deep".as_slice()), Some(&Object::Int(7)));
+    }
 }
