@@ -188,6 +188,32 @@ fn the_template_parses_with_fonts_captions_and_rich_text() {
     assert!(last.break_before_page);
 }
 
+/// A page area that declares far more content areas than any real master keeps only the first
+/// 128, with a warning. `split_block` walks every content area of a page before starting a new
+/// one, re-scanning the unplaced items each time, so tens of thousands of them cost time
+/// quadratic in a splittable subform's paragraphs. Capping the count bounds that walk.
+#[test]
+fn a_page_area_keeps_at_most_a_hundred_and_twenty_eight_content_areas() {
+    let areas = (0..200).map(|i| format!("<contentArea x=\"0.5in\" y=\"{}pt\" w=\"7in\" h=\"1pt\"/>", i)).collect::<String>();
+    let xml = format!(
+        r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet>
+  <pageArea name="front"><medium stock="letter" short="8.5in" long="11in"/>{areas}</pageArea>
+ </pageSet>
+</subform>
+</template>
+</xdp:xdp>
+"##
+    );
+    let (tpl, warnings) = parse(&xml).unwrap();
+    let ps = tpl.root.page_set.as_ref().unwrap();
+    assert_eq!(ps.areas[0].content.len(), 128, "the content areas are capped");
+    assert!(warnings.iter().any(|w| w.contains("content areas")), "a warning records the cap: {warnings:?}");
+}
+
 #[test]
 fn rich_text_max_length_reaches_the_field_and_layout() {
     for (attribute, expected) in [
