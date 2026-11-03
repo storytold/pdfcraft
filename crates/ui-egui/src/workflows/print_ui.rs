@@ -672,6 +672,7 @@ mod tests {
         assert!(vector.job("a.pdf").grayscale, "vector pages: the driver makes them grey");
         let pictures = PrintDraft { grayscale: true, as_image: true, ..PrintDraft::default() };
         assert!(!pictures.job("a.pdf").grayscale, "grey pictures: nothing for the driver to do");
+        assert!(pictures.settings(1, &[]).unwrap().raster.is_some_and(|r| r.grayscale), "grey pictures: the pages are rendered grey");
         assert!(!PrintDraft::default().job("a.pdf").grayscale);
     }
 
