@@ -616,3 +616,22 @@ fn raising_the_version_saves_the_header_with_it() {
     assert!(saved.starts_with(b"%PDF-2.0"), "an incremental save must not keep the old header under UTF-8 strings");
     assert_eq!(Document::open(Arc::new(saved)).unwrap().version(), "2.0");
 }
+
+#[test]
+fn reverting_the_version_clears_the_full_save_requirement() {
+    let mut doc = Document::open(Arc::new(af_fixture())).unwrap();
+    let original = doc.version().to_owned();
+    let changed = if original == "2.0" { "1.7" } else { "2.0" };
+    doc.set_version(changed);
+    assert!(doc.is_modified());
+    assert!(doc.full_save_required());
+
+    doc.set_version(&original);
+    assert!(!doc.is_modified());
+    assert!(!doc.full_save_required());
+
+    doc.require_full_save();
+    doc.set_version(changed);
+    doc.set_version(&original);
+    assert!(doc.full_save_required(), "explicit full-save requirements remain set");
+}

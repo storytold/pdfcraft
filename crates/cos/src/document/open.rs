@@ -25,6 +25,7 @@ impl Document {
             next_num: 1,
             header_offset: 0,
             version: "1.7".into(),
+            saved_version: "1.7".into(),
             security: None,
             encrypt_num: None,
             encryption_changed: false,
@@ -108,6 +109,7 @@ impl Document {
             overlay: BTreeMap::new(),
             next_num: 1,
             header_offset,
+            saved_version: version.clone(),
             version,
             security: None,
             encrypt_num: None,
@@ -246,7 +248,7 @@ impl Document {
 
     /// The next save must rewrite the whole file (see [`Document::require_full_save`]).
     pub fn full_save_required(&self) -> bool {
-        self.full_save
+        self.full_save || self.version != self.saved_version
     }
 
     /// Security was set or removed since the document was opened (the next save applies it).

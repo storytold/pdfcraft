@@ -356,11 +356,11 @@ pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> R
             let mut fs = Dict::new();
             fs.set(b"Type".to_vec(), Object::name("Filespec"));
             fs.set(b"F".to_vec(), PdfString::text(file.trim()));
-            fs.set(b"UF".to_vec(), PdfString::text(file.trim()));
+            fs.set(b"UF".to_vec(), doc.text_string(file.trim()));
             fs.set(b"EF".to_vec(), Object::Dict(efd));
             d.set(b"FS".to_vec(), Object::Ref(doc.add(Object::Dict(fs))));
             if new.contents.is_empty() {
-                d.set(b"Contents".to_vec(), PdfString::text(file.trim()));
+                d.set(b"Contents".to_vec(), doc.text_string(file.trim()));
             }
         }
         Shape::Callout { rect: tb, knee, point, ending, .. } => {

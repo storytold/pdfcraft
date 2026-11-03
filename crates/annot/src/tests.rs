@@ -931,20 +931,27 @@ fn replace_text_groups_a_strikeout_and_a_caret() {
 #[test]
 fn files_attach_as_comments() {
     let mut doc = fixture();
+    doc.set_version("2.0");
     let data = b"col1,col2\n1,2\n".to_vec();
-    let shape = Shape::Attachment { at: [300.0, 500.0], icon: AttachIcon::Paperclip, file: "data.csv".into(), data: data.clone() };
+    let file = "data-\u{1f600}.csv";
+    let shape = Shape::Attachment { at: [300.0, 500.0], icon: AttachIcon::Paperclip, file: file.into(), data: data.clone() };
     let i = add_annotation(
         &mut doc,
         &NewAnnotation { page: 0, shape, style: Style::default(), contents: String::new(), author: "Ada".into() },
         &meta("f"),
     )
     .unwrap();
+    let created = &list(&doc, 0)[i];
+    let created_fs = doc.resolve(created.get(b"FS").unwrap());
+    let created_fs = created_fs.as_dict().unwrap();
+    assert_eq!(&created_fs.get(b"UF").and_then(Object::as_string).unwrap().bytes[..3], &[0xEF, 0xBB, 0xBF]);
+    assert_eq!(&created.get(b"Contents").and_then(Object::as_string).unwrap().bytes[..3], &[0xEF, 0xBB, 0xBF]);
     let doc = reopen(&doc);
     let a = &list(&doc, 0)[i];
     assert_eq!((a.name(b"Subtype"), a.name(b"Name")), (Some(&b"FileAttachment"[..]), Some(&b"Paperclip"[..])));
-    assert_eq!(text(a, b"Contents"), "data.csv", "the file name describes it");
+    assert_eq!(text(a, b"Contents"), file, "the file name describes it");
     let fs = doc.resolve(a.get(b"FS").unwrap()).as_dict().cloned().unwrap();
-    assert_eq!(text(&fs, b"UF"), "data.csv");
+    assert_eq!(text(&fs, b"UF"), file);
     let ef = fs.get(b"EF").and_then(|e| e.as_dict()).and_then(|e| e.reference(b"F")).unwrap();
     let Object::Stream(s) = &*doc.get(ef) else { panic!() };
     assert_eq!(s.decoded().unwrap(), data);

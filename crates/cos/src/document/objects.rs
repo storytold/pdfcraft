@@ -34,10 +34,6 @@ impl Document {
     /// Set the PDF header version (`"1.4"`, `"1.7"`, `"2.0"`, …) written by a full save.
     pub fn set_version(&mut self, version: impl Into<String>) {
         let version = version.into();
-        // An incremental save keeps the original header, so a changed version needs a full save.
-        if version != self.version {
-            self.full_save = true;
-        }
         self.version = version;
     }
 
@@ -109,7 +105,7 @@ impl Document {
     /// the trailer (as MuPDF writes it) changes no object, and is an edit all the same, as is a
     /// pending full rewrite (a changed PDF version).
     pub fn is_modified(&self) -> bool {
-        !self.overlay.is_empty() || self.encryption_changed || self.full_save
+        !self.overlay.is_empty() || self.encryption_changed || self.full_save_required()
     }
 
     /// Object numbers changed since the document was opened (or last saved).
