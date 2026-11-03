@@ -278,12 +278,14 @@ fn boolean(input: ParserInput) -> NomResult<Object> {
     .parse(input)
 }
 
+/// `null`.
 fn null(input: ParserInput) -> NomResult<Object> {
     map(tag(&b"null"[..]), |_| Object::Null).parse(input)
 }
 
-// PdfCraft patch: every element is charged to `nodes` (see `_direct_object`), which bounds the
-// element count of one array and of all arrays nested in it.
+/// An array, nested at most `depth` levels. PdfCraft patch: every element is charged to `nodes`
+/// (see `_direct_object`), which bounds the element count of one array and of all arrays nested
+/// in it.
 fn array(depth: usize, nodes: &Cell<usize>) -> impl Fn(ParserInput) -> NomResult<Vec<Object>> {
     move |input| {
         delimited(
@@ -295,11 +297,13 @@ fn array(depth: usize, nodes: &Cell<usize>) -> impl Fn(ParserInput) -> NomResult
     }
 }
 
+/// A dictionary, from a node budget of its own (`MAX_OBJECT_NODES`).
 pub(crate) fn dictionary(input: ParserInput) -> NomResult<Dictionary> {
     let nodes = Cell::new(MAX_OBJECT_NODES);
     _dictionary(crate::reader::MAX_NESTING_DEPTH, &nodes)(input)
 }
 
+/// `<< ... >>`, nested at most `depth` levels, its values charged to `nodes`.
 fn _dictionary(depth: usize, nodes: &Cell<usize>) -> impl Fn(ParserInput) -> NomResult<Dictionary> {
     move |input| {
         delimited(
@@ -311,6 +315,7 @@ fn _dictionary(depth: usize, nodes: &Cell<usize>) -> impl Fn(ParserInput) -> Nom
     }
 }
 
+/// A dictionary's key-value pairs, without its delimiters; each value is charged to `nodes`.
 fn inner_dictionary(depth: usize, nodes: &Cell<usize>) -> impl Fn(ParserInput) -> NomResult<Dictionary> {
     move |input| {
         fold_many0(
@@ -325,6 +330,7 @@ fn inner_dictionary(depth: usize, nodes: &Cell<usize>) -> impl Fn(ParserInput) -
     }
 }
 
+/// A CMap's `N dict dup begin /Key value def ...` dictionary, from a node budget of its own.
 pub(crate) fn dict_dup(input: ParserInput) -> NomResult<Dictionary> {
     let nodes = Cell::new(MAX_OBJECT_NODES);
     delimited(
@@ -453,6 +459,7 @@ fn reference(input: ParserInput) -> NomResult<Object> {
     map(terminated(object_id, tag(&b"R"[..])), Object::Reference).parse(input)
 }
 
+/// Any direct object, its nested arrays and dictionaries at most `depth` levels deep.
 fn _direct_objects(depth: usize, nodes: &Cell<usize>) -> impl Fn(ParserInput) -> NomResult<Object> {
     move |input| {
         alt((
@@ -471,6 +478,8 @@ fn _direct_objects(depth: usize, nodes: &Cell<usize>) -> impl Fn(ParserInput) ->
     }
 }
 
+/// A direct object and the whitespace after it, charged one node once built; a spent budget
+/// or a depth of 0 is a nom `Failure`.
 fn _direct_object(depth: usize, nodes: &Cell<usize>) -> impl Fn(ParserInput) -> NomResult<Object> {
     move |input| {
         if depth == 0 {
@@ -488,7 +497,8 @@ fn _direct_object(depth: usize, nodes: &Cell<usize>) -> impl Fn(ParserInput) -> 
     }
 }
 
-// PdfCraft patch: object streams now parse through `direct_object_within`; only tests use this.
+/// One direct object from a fresh node budget. PdfCraft patch: object streams now parse through
+/// `direct_object_within`; only tests use this.
 #[cfg(test)]
 pub fn direct_object(input: ParserInput) -> Option<Object> {
     direct_object_within(input, &Cell::new(MAX_OBJECT_NODES))
@@ -500,6 +510,7 @@ pub(crate) fn direct_object_within(input: ParserInput, nodes: &Cell<usize>) -> O
     strip_nom(_direct_object(crate::reader::MAX_NESTING_DEPTH, nodes)(input))
 }
 
+/// An indirect object's body (a stream or a direct object), from a node budget of its own.
 fn object<'a>(
     input: ParserInput<'a>, reader: &Reader, already_seen: &mut HashSet<ObjectId>, recover_stream_length: bool,
     recovery_bound: Option<usize>,
@@ -725,6 +736,7 @@ fn operator(input: ParserInput) -> NomResult<String> {
     .parse(input)
 }
 
+/// One content-stream operand, from a node budget of its own.
 fn operand(input: ParserInput) -> NomResult<Object> {
     let nodes = Cell::new(MAX_OBJECT_NODES);
     terminated(
@@ -761,6 +773,7 @@ fn inline_image(input: ParserInput) -> NomResult<(Vec<Object>, String)> {
     preceded(pair(tag(&b"BI"[..]), content_space), cut(inline_image_impl)).parse(input)
 }
 
+/// An inline image after `BI`: its dictionary (from a node budget of its own) and data.
 fn inline_image_impl(input: ParserInput) -> NomResult<(Vec<Object>, String)> {
     let nodes = Cell::new(MAX_OBJECT_NODES);
     let (input, stream_dict) = inner_dictionary(crate::reader::MAX_NESTING_DEPTH, &nodes).parse(input)?;
@@ -1337,6 +1350,7 @@ EI";
             .unwrap();
     }
 
+    /// Arrays nested past the depth limit are an error, not a stack overflow.
     #[test]
     fn deeply_nested_array_is_rejected() {
         on_big_stack(|| {
@@ -1350,6 +1364,7 @@ EI";
         });
     }
 
+    /// Dictionaries nested past the depth limit are an error, not a stack overflow.
     #[test]
     fn deeply_nested_dictionary_is_rejected() {
         on_big_stack(|| {
@@ -1367,6 +1382,7 @@ EI";
         });
     }
 
+    /// Nesting well within the limit still parses.
     #[test]
     fn modestly_nested_array_still_parses() {
         let input = b"[[[[[1]]]]]";

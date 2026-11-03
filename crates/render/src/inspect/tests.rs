@@ -249,6 +249,8 @@ fn object_stream_member_extents_bound_owned_strings() {
     assert!(!parsed.objects.contains_key(&(201, 0)));
 }
 
+/// Members are read at their indexed offsets, in any order and with any whitespace around
+/// them; a number listed twice keeps its last entry.
 #[test]
 fn object_stream_member_extents_preserve_index_order_and_whitespace() {
     let members = b" \n42\n /Name \n[true 7]\n << /Key (value) >>\n (last)";
@@ -260,6 +262,93 @@ fn object_stream_member_extents_preserve_index_order_and_whitespace() {
     assert_eq!(parsed.objects.get(&(10, 0)).unwrap().as_name().unwrap(), b"Name");
     assert_eq!(parsed.objects.get(&(11, 0)).unwrap().as_array().unwrap(), &[Object::Boolean(true), Object::Integer(7)]);
     assert_eq!(parsed.objects.get(&(12, 0)).unwrap().as_dict().unwrap().get(b"Key").unwrap().as_str().unwrap(), b"value");
+}
+
+/// lopdf patch (7), #5083: a decoded object-stream member could build any number of objects
+/// (`0 0 0 ...` inside the decompression limit built ~120M and aborted). A member now builds at
+/// most the per-object node cap (1 << 22), so one array with more elements than that is skipped
+/// while a small member is kept. Without the node charge in the vendored parser the oversize
+/// array builds in full, so object 11 is present and the last assertion fails.
+#[test]
+fn object_stream_members_over_the_node_cap_are_skipped() {
+    let small = b"[ 1 2 3 ]";
+    let mut big = vec![b'['];
+    for _ in 0..4_300_000 {
+        big.extend_from_slice(b"0 ");
+    }
+    big.push(b']');
+    let mut members = small.to_vec();
+    let big_off = members.len();
+    members.extend_from_slice(&big);
+    let stream = indexed_object_stream(&[(10, 0), (11, big_off)], &members);
+    let parsed = lopdf::ObjectStream::new_with_limit(&stream, Some(16 << 20)).unwrap();
+    assert!(parsed.objects.contains_key(&(10, 0)), "the small member is kept");
+    assert!(!parsed.objects.contains_key(&(11, 0)), "the oversize member is skipped");
+}
+
+/// lopdf patch (7), #5083: an object stream reads at most 1,000,000 index entries (cos's `/N`
+/// clamp), so a huge index can't allocate an entry list or parse a member per entry. Of
+/// 1,000,001 distinct one-byte members, the last is never built.
+#[test]
+fn object_stream_index_entries_past_the_clamp_are_ignored() {
+    let count = 1_000_001_u32;
+    let mut members = Vec::with_capacity(2 * count as usize);
+    let pairs: Vec<(u32, usize)> = (1..=count)
+        .map(|id| {
+            let at = members.len();
+            members.extend_from_slice(b"0 ");
+            (id, at)
+        })
+        .collect();
+    let parsed = lopdf::ObjectStream::new_with_limit(&indexed_object_stream(&pairs, &members), None).unwrap();
+    assert_eq!(parsed.objects.len(), 1_000_000);
+    assert!(parsed.objects.contains_key(&(1_000_000, 0)));
+    assert!(!parsed.objects.contains_key(&(count, 0)), "the entry past the clamp is ignored");
+}
+
+/// Six object streams, each holding one nested member of seven objects.
+fn nested_object_streams() -> Vec<lopdf::Stream> {
+    (0..6).map(|i| indexed_object_stream(&[(100 + i, 0)], b"<< /A [1 [2]] /B << /C 3 >> >>")).collect()
+}
+
+/// lopdf patch (7), #5083: one load's object streams share a single node budget (the load-wide
+/// `MAX_LOAD_NODES`, here 12 nodes so the test stays small), so later streams are skipped once
+/// earlier ones spent it. A stream given a budget of its own would load all six.
+#[test]
+fn object_streams_of_one_load_share_their_node_budget() {
+    let streams = nested_object_streams();
+    let budget = lopdf::NodeBudget::new(12);
+    let loaded: usize = streams.iter().map(|s| lopdf::ObjectStream::new_within(s, None, &budget).unwrap().objects.len()).sum();
+    assert!(loaded > 0);
+    assert!(loaded < streams.len(), "the budget is shared by all streams");
+    assert!(budget.spent());
+}
+
+/// The shared budget holds across threads too, as rayon's workers load object streams in
+/// parallel: members reserve their share before parsing, so together they can't overshoot.
+#[test]
+fn object_streams_loaded_in_parallel_share_their_node_budget() {
+    let streams = nested_object_streams();
+    let budget = &lopdf::NodeBudget::new(12);
+    let loaded: usize = std::thread::scope(|scope| {
+        let workers: Vec<_> =
+            streams.iter().map(|s| scope.spawn(move || lopdf::ObjectStream::new_within(s, None, budget).unwrap().objects.len())).collect();
+        workers.into_iter().map(|w| w.join().unwrap()).sum()
+    });
+    assert!(loaded > 0);
+    assert!(loaded < streams.len(), "the budget is shared by all streams");
+}
+
+/// A member that fails to parse gives back the nodes it reserved and did not build, so a
+/// malformed member doesn't use up the budget of the members after it.
+#[test]
+fn a_malformed_object_stream_member_refunds_its_reservation() {
+    let stream = indexed_object_stream(&[(10, 0), (11, 3)], b"[1 [2]");
+    let budget = lopdf::NodeBudget::new(5);
+    let parsed = lopdf::ObjectStream::new_within(&stream, None, &budget).unwrap();
+    assert!(!parsed.objects.contains_key(&(10, 0)));
+    assert!(parsed.objects.contains_key(&(11, 0)));
+    assert!(!budget.spent(), "unused reservation from the malformed member is refunded");
 }
 
 #[test]

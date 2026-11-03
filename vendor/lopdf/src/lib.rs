@@ -47,7 +47,7 @@ pub use encryption::{EncryptionState, EncryptionVersion, Permissions};
 pub use error::{DecompressError, Error, ParseError, Result};
 pub use incremental_document::IncrementalDocument;
 pub use load_options::{FilterFunc, LoadOptions};
-pub use object_stream::{ObjectStream, ObjectStreamBuilder, ObjectStreamConfig};
+pub use object_stream::{NodeBudget, ObjectStream, ObjectStreamBuilder, ObjectStreamConfig};
 pub use outlines::Outline;
 pub use reader::{PdfMetadata, Reader};
 pub use save_options::{SaveOptions, SaveOptionsBuilder};

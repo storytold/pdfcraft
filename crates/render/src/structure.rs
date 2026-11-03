@@ -164,6 +164,8 @@ impl Structure for LazyStructure {
     fn encrypted(&self) -> bool {
         self.source.security().is_some() || self.trailer.has(b"Encrypt")
     }
+    /// The object `id`, read from the lazy source and converted once, then kept; a failed
+    /// conversion marks the structure so the caller can fall back to the eager loader.
     fn get_object(&self, id: ObjectId) -> Result<&Object> {
         let missing = || Error::ObjectNotFound(id);
         let slot = self.objects.binary_search_by_key(&id.0, |(n, _)| *n).ok().and_then(|i| self.objects.get(i)).ok_or_else(missing)?;
@@ -188,7 +190,8 @@ impl Structure for LazyStructure {
 /// nesting into a lazy-reader failure and force the eager lopdf fallback.
 const CONVERT_DEPTH: usize = 128;
 
-// `depth` is the nesting level of the dictionary itself; its values sit one level deeper.
+/// Convert a cos dictionary to lopdf's, without `/PieceInfo`. `depth` is the nesting level of
+/// the dictionary itself; its values sit one level deeper.
 fn convert_dict(dict: &pdfcraft_cos::Dict, depth: usize) -> Result<Dictionary> {
     if depth > CONVERT_DEPTH {
         return Err(Error::RecursionLimit);
@@ -207,6 +210,8 @@ fn convert_dict(dict: &pdfcraft_cos::Dict, depth: usize) -> Result<Dictionary> {
 /// untouched; this is the read-only view inspection walks.
 const PRIVATE_DATA: &[u8] = b"PieceInfo";
 
+/// Convert a cos object to lopdf's, failing past [`CONVERT_DEPTH`] levels of arrays and
+/// dictionaries.
 fn convert(object: &CosObject, depth: usize) -> Result<Object> {
     if depth > CONVERT_DEPTH {
         return Err(Error::RecursionLimit);

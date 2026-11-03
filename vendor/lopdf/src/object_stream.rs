@@ -24,11 +24,13 @@ pub(crate) const MAX_LOAD_NODES: usize = 1 << 23;
 
 /// PdfCraft patch: the objects parsing may still build, shared by every object stream one load
 /// parses (and by rayon workers, hence atomic). Each member reserves its share before parsing
-/// and refunds what it did not use, so concurrent members cannot overshoot the total.
-pub(crate) struct NodeBudget(AtomicUsize);
+/// and refunds what it did not use, so concurrent members cannot overshoot the total. Public so
+/// PdfCraft's tests can load object streams from a small budget.
+pub struct NodeBudget(AtomicUsize);
 
 impl NodeBudget {
-    pub(crate) fn new(nodes: usize) -> Self {
+    /// A budget of `nodes` objects.
+    pub fn new(nodes: usize) -> Self {
         Self(AtomicUsize::new(nodes))
     }
 
@@ -55,7 +57,8 @@ impl NodeBudget {
         self.0.fetch_add(nodes, Ordering::Relaxed);
     }
 
-    fn spent(&self) -> bool {
+    /// Whether nothing is left to build from.
+    pub fn spent(&self) -> bool {
         self.0.load(Ordering::Relaxed) == 0
     }
 }
@@ -111,7 +114,7 @@ impl ObjectStream {
     /// PdfCraft patch: [`ObjectStream::new_with_limit`], building members from `budget`, which a
     /// load shares between all of its object streams. A member that would exceed its share, or
     /// any member once the budget is spent, is skipped with a warning.
-    pub(crate) fn new_within(
+    pub fn new_within(
         stream: &Stream, max_decompressed_size: Option<usize>, budget: &NodeBudget,
     ) -> Result<ObjectStream> {
         let content = match max_decompressed_size {

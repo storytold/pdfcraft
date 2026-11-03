@@ -838,6 +838,8 @@ impl Reader<'_> {
         Ok(self.document)
     }
 
+    /// Load an encrypted document: read every object's raw bytes first, then decrypt and parse
+    /// them, object streams from one shared node budget.
     fn load_encrypted_document(&mut self, _filter_func: Option<FilterFunc>) -> Result<()> {
         // First, extract all raw object bytes without parsing
         let entries: Vec<_> = self
@@ -962,6 +964,8 @@ impl Reader<'_> {
         self.document.reference_table = xref;
     }
 
+    /// Load every object in the cross-reference table, expanding object streams from one node
+    /// budget shared by the whole load.
     fn load_objects_raw(&mut self, filter_func: Option<FilterFunc>) -> Result<()> {
         let is_encrypted = self.document.trailer.get(b"Encrypt").is_ok();
         let zero_length_streams = Mutex::new(vec![]);
