@@ -5764,6 +5764,29 @@ fn visual_difference_kind_includes_inline_images() {
 
     assert_eq!(s.visual_kind(old, new, 0, [50.0, 50.0, 60.0, 60.0]).unwrap(), compare::VisualKind::Image);
     assert_eq!(s.visual_kinds(old, new, &[(0, [50.0, 50.0, 60.0, 60.0])]).unwrap(), [compare::VisualKind::Image]);
+
+    let clipped_content = "q 45 45 5 5 re W n 40 0 0 30 40 40 cm BI /W 1 /H 1 /CS /RGB /BPC 8 /F /AHx ID F01414> EI Q";
+    let clipped_pdf = format!(
+        "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 300] /Resources << >> /Contents 4 0 R >> endobj\n4 0 obj << /Length {} >> stream\n{}\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF",
+        clipped_content.len(),
+        clipped_content
+    );
+    let clipped = s.open("clipped-inline-image.pdf", None, Arc::new(clipped_pdf.into_bytes()), None).unwrap();
+    assert_eq!(s.visual_kind(old, clipped, 0, [46.0, 46.0, 49.0, 49.0]).unwrap(), compare::VisualKind::Image);
+    assert_eq!(s.visual_kind(old, clipped, 0, [70.0, 60.0, 75.0, 65.0]).unwrap(), compare::VisualKind::Other);
+    assert_eq!(s.visual_kinds(old, clipped, &[(0, [70.0, 60.0, 75.0, 65.0])]).unwrap(), [compare::VisualKind::Other]);
+
+    let form_content = "q /Fm Do Q";
+    let form_pdf = format!(
+        "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 300] /Resources << /XObject << /Fm 5 0 R >> >> /Contents 4 0 R >> endobj\n4 0 obj << /Length {} >> stream\n{}\nendstream endobj\n5 0 obj << /Type /XObject /Subtype /Form /BBox [0 0 200 300] /Resources << >> /Length {} >> stream\n{}\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF",
+        form_content.len(),
+        form_content,
+        content.len(),
+        content
+    );
+    let in_form = s.open("form-inline-image.pdf", None, Arc::new(form_pdf.into_bytes()), None).unwrap();
+    assert_eq!(s.visual_kind(old, in_form, 0, [50.0, 50.0, 60.0, 60.0]).unwrap(), compare::VisualKind::Image);
+    assert_eq!(s.visual_kinds(old, in_form, &[(0, [50.0, 50.0, 60.0, 60.0])]).unwrap(), [compare::VisualKind::Image]);
 }
 
 #[test]
