@@ -88,11 +88,18 @@ pub(super) fn thumbnail_size(ui: &mut egui::Ui, t: &Tokens, view: &mut crate::Do
 /// offers Extract, Cut, Copy and Paste on the selection, or on the page clicked; dragging
 /// moves the selection, or the page grabbed, to the gap it is dropped on.
 pub(super) fn pages(ui: &mut egui::Ui, t: &Tokens, info: &DocInfo, view: &mut crate::DocView, modal: bool, editable: bool, nav: &mut Option<Nav>) {
+    let focus_id = ui.make_persistent_id(("pages-keyboard", view.id));
+    view.pages_focus_id = Some(focus_id);
+    let keyboard = ui.interact(ui.clip_rect(), focus_id, Sense::focusable_noninteractive());
+    keyboard.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Group, ui.is_enabled(), tl!("Pages")));
+    let owns_keyboard = keyboard.has_focus();
+    // Escape remains with the panel after the pointer moves away.
+    ui.memory_mut(|m| m.set_focus_lock_filter(focus_id, egui::EventFilter { escape: true, ..Default::default() }));
     // Escape drops the selection while the pointer is over the panel and nothing else wants the key.
     if !modal
         && !view.selected.is_empty()
-        && !ui.ctx().egui_wants_keyboard_input()
-        && ui.rect_contains_pointer(ui.clip_rect())
+        && (owns_keyboard || !ui.ctx().egui_wants_keyboard_input())
+        && (owns_keyboard || ui.rect_contains_pointer(ui.clip_rect()))
         && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
     {
         view.clear_page_selection(Some(view.current));
@@ -100,8 +107,8 @@ pub(super) fn pages(ui: &mut egui::Ui, t: &Tokens, info: &DocInfo, view: &mut cr
     // Delete (or Backspace) deletes the selection, or the current page, likewise.
     if !modal
         && editable
-        && !ui.ctx().egui_wants_keyboard_input()
-        && ui.rect_contains_pointer(ui.clip_rect())
+        && (owns_keyboard || !ui.ctx().egui_wants_keyboard_input())
+        && (owns_keyboard || ui.rect_contains_pointer(ui.clip_rect()))
         && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Delete) || i.consume_key(egui::Modifiers::NONE, egui::Key::Backspace))
     {
         delete_pages(view, info.pages.len());
@@ -167,6 +174,7 @@ pub(super) fn pages(ui: &mut egui::Ui, t: &Tokens, info: &DocInfo, view: &mut cr
             }
             let resp = theme::hand(resp);
             if resp.clicked() {
+                ui.memory_mut(|m| m.request_focus(focus_id));
                 let m = ui.input(|i| i.modifiers);
                 if m.shift || m.command {
                     view.click_page(i, m, true);

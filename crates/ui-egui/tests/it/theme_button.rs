@@ -20,6 +20,20 @@ fn preference(h: &Harness<'static, PdfCraftApp>) -> String {
 }
 
 #[test]
+fn preferences_gear_is_right_of_theme_and_opens_preferences() {
+    let mut h = harness();
+    let theme = h.get_by_label("Display theme: Use system setting").rect();
+    let gear = h.get_by_label("Preferences").rect();
+    assert!(gear.left() >= theme.right());
+    h.get_by_label("Preferences").click();
+    h.run_steps(6);
+    assert!(h.query_by_label("Appearance mode").is_some());
+    assert!(h.query_by_label("Light theme").is_some());
+    assert!(h.query_by_label("Dark theme").is_some());
+    assert_eq!(preference(&h), "System");
+}
+
+#[test]
 fn a_click_cycles_the_theme_and_a_right_click_opens_the_menu() {
     let mut h = harness();
     assert_eq!(preference(&h), "System", "a fresh install follows the desktop (#1248)");
