@@ -5791,6 +5791,7 @@ fn visual_difference_kind_includes_inline_images() {
     let in_form = s.open("form-inline-image.pdf", None, Arc::new(form_pdf.into_bytes()), None).unwrap();
     assert_eq!(s.visual_kind(old, in_form, 0, [150.0, 50.0, 160.0, 60.0]).unwrap(), compare::VisualKind::Image);
     assert_eq!(s.visual_kind(old, in_form, 0, [50.0, 50.0, 60.0, 60.0]).unwrap(), compare::VisualKind::Other);
+    assert_eq!(s.visual_kind(old, in_form, 0, [190.0, 200.0, 195.0, 205.0]).unwrap(), compare::VisualKind::Other);
     assert_eq!(s.visual_kinds(old, in_form, &[(0, [150.0, 50.0, 160.0, 60.0])]).unwrap(), [compare::VisualKind::Image]);
 }
 
