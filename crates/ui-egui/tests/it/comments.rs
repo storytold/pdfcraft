@@ -3333,3 +3333,26 @@ fn hotbar_picker_in_narrow_viewport_fits_within_screen_width() {
     let close_btn = h.get_by_label("Close menu");
     assert!(close_btn.rect().max.x <= 270.0, "Close menu button must stay within viewport width: {:?}", close_btn.rect());
 }
+
+#[test]
+fn hotbar_floating_picker_does_not_overlap_rendered_bar() {
+    let mut h = Harness::builder().with_size(egui::vec2(1000.0, 600.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("text.pdf", None, TEXT_FIXTURE.to_vec()).expect("opens");
+        app
+    });
+    let settings_btn = h.get_by_label("Hotbar settings");
+    let settings_rect = settings_btn.rect();
+    settings_btn.click();
+    h.run_steps(5);
+
+    let picker_close = h.get_by_label("Close menu");
+    let picker_rect = picker_close.rect();
+    assert!(
+        picker_rect.min.x >= settings_rect.max.x || picker_rect.max.x <= settings_rect.min.x,
+        "picker ({:?}) must not overlap the settings button ({:?}) on the floating bar",
+        picker_rect,
+        settings_rect
+    );
+}

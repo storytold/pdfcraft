@@ -608,11 +608,17 @@ pub(crate) fn show(app: &mut PdfCraftApp, area: Rect, page_left: Option<f32>, ui
     let card_margin_total = margin_x * 2.0;
     let card_width = 280.0f32.min((screen.width() - card_margin_total).max(180.0));
     let outer_width = card_width + card_margin_total;
-    let picker_x = if pos.x + cell + outer_width + 10.0 < screen.right() { pos.x + cell + 14.0 } else { pos.x - outer_width - 14.0 };
-    let picker_pos = egui::pos2(
-        picker_x.clamp(screen.left(), (screen.right() - outer_width).max(screen.left())),
-        pos.y.clamp(screen.top(), (screen.bottom() - 480.0).max(screen.top())),
-    );
+    let bar_rect = shown.response.rect;
+    let picker_x =
+        if bar_rect.right() + outer_width + 10.0 < screen.right() { bar_rect.right() + 14.0 } else { bar_rect.left() - outer_width - 14.0 };
+    let picker_y = if bar.dock.as_deref() == Some("top") {
+        (bar_rect.bottom() + 10.0).clamp(screen.top(), (screen.bottom() - 480.0).max(screen.top()))
+    } else if bar.dock.as_deref() == Some("bottom") {
+        (bar_rect.top() - 500.0).clamp(screen.top(), (screen.bottom() - 480.0).max(screen.top()))
+    } else {
+        bar_rect.top().clamp(screen.top(), (screen.bottom() - 480.0).max(screen.top()))
+    };
+    let picker_pos = egui::pos2(picker_x.clamp(screen.left(), (screen.right() - outer_width).max(screen.left())), picker_y);
     let mut close_dialog = false;
     let picker_resp = egui::Window::new(tl!("Hotbar tools"))
         .id(picker_id)
