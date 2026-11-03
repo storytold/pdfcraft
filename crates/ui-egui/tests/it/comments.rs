@@ -2925,7 +2925,7 @@ fn moved_fill_and_sign_text_is_drawn_where_it_goes_before_release() {
     click_pt(&mut h, (40.0, 150.0));
     h.event(egui::Event::Text("WWWWWW".into()));
     h.run_steps(1);
-    h.key_press(egui::Key::Enter);
+    click(&mut h, pos2(350.0, 850.0)); // Outside the field: Enter now inserts a line break.
     h.run_steps(3);
     let a = comments(&h).into_iter().find(|a| a.contents.as_deref() == Some("WWWWWW")).expect("the typed text");
     assert!(a.fill_sign && a.subtype == "FreeText", "{a:?}");
@@ -3378,4 +3378,86 @@ fn hotbar_floating_picker_does_not_overlap_rendered_bar() {
         picker_rect,
         settings_rect
     );
+}
+
+fn edit_composer_preserves_only_typewriter_whitespace(kind: u8) {
+    let shots = std::env::var_os("PDFCRAFT_COMPOSER_SHOTS").is_some();
+    let _gpu = shots.then(crate::gpu);
+    use pdfcraft_engine::{Edit, NewAnnotation, NoteIcon, Shape, Style};
+    let mut h = harness(move |app| {
+        app.set_option("layout", "single").unwrap();
+        app.set_option("panel", "comments").unwrap();
+        app.quick_tool = QuickTool::Select;
+        // Both pages use index 0, with opposite intents. The lookup must use page AND index.
+        for page in 0..2 {
+            let typewriter = if page == 0 { kind != 0 } else { kind == 0 };
+            let shape = if typewriter {
+                Shape::Typewriter { rect: [40.0, 40.0, 180.0, 90.0], font_size: 10.0 }
+            } else if kind == 2 {
+                Shape::Note { at: [80.0, 80.0], icon: NoteIcon::Comment }
+            } else {
+                Shape::TextBox { rect: [40.0, 40.0, 180.0, 90.0], font_size: 10.0 }
+            };
+            let style = Style::default_for(&shape);
+            assert!(app.apply_edit(Edit::AddAnnotation(NewAnnotation { page, shape, style, contents: "Original".into(), author: "Tester".into() })));
+        }
+    });
+    h.state_mut().views[0].go_to_page(1);
+    h.run_steps(4);
+    support::settle(&mut h);
+    let point = {
+        let s = h.state();
+        let v = &s.views[0];
+        let doc = s.session.get(v.id).unwrap();
+        let a = doc.info.annotations.iter().find(|a| a.page == 1 && a.index == 0).unwrap();
+        let page = v.page_screen_rect(1).expect("the second page is visible");
+        let info = &doc.info.pages[1];
+        let p = info.user_to_view((a.rect[0] + a.rect[2]) / 2.0, (a.rect[1] + a.rect[3]) / 2.0);
+        page.min + egui::vec2(p[0], p[1]) * (page.width() / info.width)
+    };
+    support::input::double_click(&mut h, point);
+    h.run_steps(3);
+    let c = h.state().views[0].comments.composer.as_ref().expect("double-click opens the edit composer");
+    assert_eq!(c.page, 1);
+    assert_eq!(c.kind, pdfcraft_ui_egui::comments::ComposerKind::Edit(0));
+    h.input_mut().events.push(egui::Event::Text(" edited\n\n".into()));
+    let ctx = h.ctx.clone();
+    let mut raw = std::mem::take(h.input_mut());
+    h.state_mut().prepare_raw_input(&ctx, &mut raw);
+    *h.input_mut() = raw;
+    h.step();
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].comments.composer.as_ref().unwrap().text, "Original edited\n\n");
+    if shots {
+        h.render().unwrap().save(format!("/tmp/5954-composer-{kind}.png")).unwrap();
+    }
+    h.get_all_by_label("Post").last().unwrap().click();
+    h.run_steps(3);
+    assert!(h.state().views[0].comments.composer.is_none());
+    let id = h.state().views[0].id;
+    let bytes = h.state().session.save_bytes(id).unwrap();
+    // Check the raw saved string: ordinary-comment reader trimming must not hide a bad post.
+    let cos = pdfcraft_cos::Document::open(bytes.clone()).unwrap();
+    let pages = pdfcraft_model::pages(&cos);
+    let annots = cos.resolve(pages[1].dict.get(b"Annots").unwrap());
+    let annot = cos.resolve(&annots.as_array().unwrap()[0]);
+    let contents = cos.resolve(annot.as_dict().unwrap().get(b"Contents").unwrap());
+    let expected = if kind == 0 { "Original edited\n\n" } else { "Original edited" };
+    assert_eq!(contents.as_string().unwrap().to_text(), expected, "only a typewriter edit preserves trailing blank lines");
+    let mut reopened = pdfcraft_engine::Session::new();
+    let again = reopened.open("edited.pdf", None, bytes, None).unwrap();
+    let saved = reopened.get(again).unwrap().info.annotations.iter().find(|a| a.page == 1 && a.index == 0).unwrap();
+    assert_eq!(saved.contents.as_deref(), Some(expected));
+}
+
+#[test]
+fn typewriter_edit_composer_keeps_trailing_blank_lines() {
+    edit_composer_preserves_only_typewriter_whitespace(0);
+}
+
+#[test]
+fn other_edit_composers_keep_trimming_trailing_whitespace() {
+    for kind in [1, 2] {
+        edit_composer_preserves_only_typewriter_whitespace(kind);
+    }
 }
