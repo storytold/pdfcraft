@@ -488,7 +488,8 @@ pub fn scan_only(doc: &Document, which: &[Hidden]) -> Vec<(Hidden, usize)> {
         })
     };
     let count_sub = |s: &[u8]| annots().iter().filter(|a| a.name(b"Subtype") == Some(s)).count();
-    let names = sub(doc, &cat, b"Names").unwrap_or_default();
+    let names_read = std::cell::OnceCell::<Dict>::new();
+    let names = || names_read.get_or_init(|| sub(doc, &cat, b"Names").unwrap_or_default());
     let held = std::cell::OnceCell::<Vec<usize>>::new();
     let owned = |h: Hidden| {
         let held = held.get_or_init(|| {
@@ -512,7 +513,7 @@ pub fn scan_only(doc: &Document, which: &[Hidden]) -> Vec<(Hidden, usize)> {
                     info + owned(Hidden::Metadata)
                 }
                 Hidden::Attachments => {
-                    sub(doc, &names, b"EmbeddedFiles").map_or(0, |t| name_tree_len(doc, &t))
+                    sub(doc, names(), b"EmbeddedFiles").map_or(0, |t| name_tree_len(doc, &t))
                         + count_sub(b"FileAttachment")
                         + owned(Hidden::Attachments)
                 }
@@ -538,7 +539,7 @@ pub fn scan_only(doc: &Document, which: &[Hidden]) -> Vec<(Hidden, usize)> {
                         + usize::from(cat.get(b"OpenAction").is_some_and(|a| doc.resolve(a).as_dict().is_some()))
                         + owned(Hidden::LinksActionsScripts)
                         + annots().iter().filter(|a| !a.contains(b"AA") && a.name(b"Subtype") == Some(b"Widget") && a.contains(b"A")).count()
-                        + sub(doc, &names, b"JavaScript").map_or(0, |t| name_tree_len(doc, &t))
+                        + sub(doc, names(), b"JavaScript").map_or(0, |t| name_tree_len(doc, &t))
                 }
                 Hidden::PrivateData => owned(Hidden::PrivateData),
             };

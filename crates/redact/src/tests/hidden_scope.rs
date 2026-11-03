@@ -13,6 +13,8 @@ fn passes_of<T>(work: impl FnOnce() -> T) -> (T, (usize, usize)) {
     (out, (after.0 - before.0, after.1 - before.1))
 }
 
+/// Every category counted alone gives what the full scan gives it; lists come back in scan
+/// order, once each.
 #[test]
 fn each_category_counts_alone_what_the_full_scan_counts() {
     let doc = hidden_fixture();
@@ -29,6 +31,8 @@ fn each_category_counts_alone_what_the_full_scan_counts() {
     assert!(scan_only(&doc, &[]).is_empty());
 }
 
+/// What each category costs: content passes for hidden text and layers, one shared object walk
+/// for the owned entries, neither for the rest.
 #[test]
 fn a_category_reads_page_content_or_walks_every_object_only_when_it_needs_to() {
     let doc = hidden_fixture();
@@ -38,6 +42,7 @@ fn a_category_reads_page_content_or_walks_every_object_only_when_it_needs_to() {
     assert_eq!(passes_of(|| scan_only(&doc, &[Hidden::Metadata, Hidden::PrivateData])).1, (0, 1), "one walk counts both");
 }
 
+/// Bookmarks alone: no content pass or walk, only the catalog edited, the rest still counted.
 #[test]
 fn removing_bookmarks_changes_the_catalog_alone() {
     let mut doc = hidden_fixture();
@@ -58,6 +63,7 @@ fn removing_bookmarks_changes_the_catalog_alone() {
     assert_eq!(after, before.into_iter().filter(|c| c.0 != Hidden::Bookmarks).collect::<Vec<_>>());
 }
 
+/// Hidden text alone: one pass to count it and one to remove it, no object walk.
 #[test]
 fn removing_hidden_text_reads_the_pages_for_it_alone() {
     let mut doc = hidden_fixture();
@@ -68,6 +74,7 @@ fn removing_hidden_text_reads_the_pages_for_it_alone() {
     assert!(c.contains("(Visible)") && !c.contains("Hidden") && c.contains("(Layer)"), "{c}");
 }
 
+/// Comments alone still rewrite the pages' annotation lists, without reading their content.
 #[test]
 fn removing_comments_still_takes_them_off_every_page() {
     let mut doc = hidden_fixture();

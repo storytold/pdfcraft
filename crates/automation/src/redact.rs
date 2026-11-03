@@ -200,6 +200,9 @@ impl Automation {
         Ok(json!({ "findings": items, "count": items.len() }))
     }
 
+    /// `doc_remove_hidden`: remove the listed categories of hidden information, or all of them
+    /// (Sanitize Document) when none are listed, and report how many items the listed
+    /// categories lost as `removed`.
     pub(crate) fn doc_remove_hidden(&mut self, a: &Args) -> Result<Value> {
         let which = match a.get("categories") {
             None => None,
