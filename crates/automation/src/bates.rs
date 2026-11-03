@@ -203,16 +203,6 @@ fn check_unique_outputs(targets: &[(String, PathBuf)], dry_run: bool) -> Result<
         return Ok(());
     }
 
-    if dry_run {
-        let mut seen = std::collections::HashSet::new();
-        for (name, path) in targets {
-            if !seen.insert(path.as_os_str().to_os_string()) {
-                return Err(failed(format!("two files use the same output path: {name}")));
-            }
-        }
-        return Ok(());
-    }
-
     // Probe exact basenames in a directory under each canonical parent, so the filesystem applies its own name rules.
     let mut groups: std::collections::HashMap<PathBuf, (PathBuf, Vec<(String, std::ffi::OsString)>)> = std::collections::HashMap::new();
     for (name, target) in targets {
@@ -222,20 +212,109 @@ fn check_unique_outputs(targets: &[(String, PathBuf)], dry_run: bool) -> Result<
         groups.entry(identity).or_insert_with(|| (parent.to_path_buf(), Vec::new())).1.push((name.clone(), probe_name));
     }
 
-    for (_, (parent, names)) in groups {
-        let probes = tempfile::tempdir_in(parent).map_err(failed)?;
-        for (name, probe_name) in names {
-            let probe = probes.path().join(probe_name);
-            match std::fs::OpenOptions::new().write(true).create_new(true).open(&probe) {
-                Ok(file) => drop(file),
-                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+    if dry_run {
+        for (_, (_, names)) in groups {
+            for (index, (name, candidate)) in names.iter().enumerate() {
+                if names.iter().take(index).any(|(_, prior)| same_output_name(prior, candidate)) {
                     return Err(failed(format!("two files use the same output path: {name}")));
                 }
-                Err(error) => return Err(failed(format!("could not validate output path {name}: {error}"))),
             }
+        }
+        return Ok(());
+    }
+
+    for (_, (parent, names)) in groups {
+        match tempfile::tempdir_in(&parent) {
+            Ok(probes) => {
+                for (name, probe_name) in names {
+                    let probe = probes.path().join(probe_name);
+                    match std::fs::OpenOptions::new().write(true).create_new(true).open(&probe) {
+                        Ok(file) => drop(file),
+                        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                            return Err(failed(format!("two files use the same output path: {name}")));
+                        }
+                        Err(error) => return Err(failed(format!("could not validate output path {name}: {error}"))),
+                    }
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => probe_files_for_resolved_outputs(&parent, names)?,
+            Err(error) => return Err(failed(error)),
         }
     }
     Ok(())
+}
+
+fn probe_files_for_resolved_outputs(parent: &Path, names: Vec<(String, std::ffi::OsString)>) -> Result<()> {
+    let mut probes = OutputProbeFiles::default();
+    for (name, probe_name) in names {
+        let probe = parent.join(probe_name);
+        match std::fs::OpenOptions::new().write(true).create_new(true).open(&probe) {
+            Ok(file) => probes.add_resolved_path(probe, file),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                return Err(failed(format!("two files use the same output path: {name}")));
+            }
+            Err(error) => return Err(failed(format!("could not validate output path {name}: {error}"))),
+        }
+    }
+    probes.remove_resolved_paths().map_err(|error| failed(format!("could not remove output preflight file: {error}")))
+}
+
+#[derive(Default)]
+struct OutputProbeFiles(Vec<PathBuf>);
+
+impl OutputProbeFiles {
+    fn add_resolved_path(&mut self, path: PathBuf, file: std::fs::File) {
+        drop(file);
+        self.0.push(path);
+    }
+
+    fn remove_resolved_paths(&mut self) -> std::io::Result<()> {
+        while let Some(path) = self.0.pop() {
+            if let Err(error) = remove_resolved_probe(&path) {
+                self.0.push(path);
+                return Err(error);
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Drop for OutputProbeFiles {
+    fn drop(&mut self) {
+        for path in self.0.drain(..) {
+            let _ = remove_resolved_probe(&path);
+        }
+    }
+}
+
+fn remove_resolved_probe(path: &Path) -> std::io::Result<()> {
+    std::fs::remove_file(path)
+}
+
+fn same_output_name(left: &std::ffi::OsStr, right: &std::ffi::OsStr) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        fn key(name: &std::ffi::OsStr) -> Vec<u32> {
+            std::char::decode_utf16(name.encode_wide())
+                .map(|decoded| match decoded {
+                    Ok(character) => {
+                        let mut uppercase = character.to_uppercase();
+                        match (uppercase.next(), uppercase.next()) {
+                            (Some(single), None) => single as u32,
+                            _ => character as u32,
+                        }
+                    }
+                    Err(error) => 0x11_0000 + u32::from(error.unpaired_surrogate()),
+                })
+                .collect()
+        }
+        return key(left) == key(right);
+    }
+    #[cfg(not(windows))]
+    {
+        left == right
+    }
 }
 
 fn output_probe_name(path: &Path) -> std::io::Result<std::ffi::OsString> {
@@ -286,6 +365,19 @@ mod tests {
         assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn dry_run_detects_output_parent_aliases_without_writing() {
+        let dir = tempfile::tempdir().unwrap();
+        let alias = dir.path().join("alias");
+        std::os::unix::fs::symlink(dir.path(), &alias).unwrap();
+        let first = dir.path().join("same.pdf");
+        let second = alias.join("same.pdf");
+        let targets = vec![("first.pdf".into(), first), ("second.pdf".into(), second)];
+        assert!(check_unique_outputs(&targets, true).is_err());
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
+
     #[test]
     fn long_output_names_fit_in_probe_directory() {
         let dir = tempfile::tempdir().unwrap();
@@ -293,6 +385,24 @@ mod tests {
         let second = dir.path().join(format!("{}.pdf", "b".repeat(220)));
         let targets = vec![("first.pdf".into(), first), ("second.pdf".into(), second)];
         assert!(check_unique_outputs(&targets, false).is_ok());
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn direct_file_probes_are_removed_after_success() {
+        let dir = tempfile::tempdir().unwrap();
+        let names = vec![("first.pdf".into(), "first.pdf".into()), ("second.pdf".into(), "second.pdf".into())];
+        super::probe_files_for_resolved_outputs(dir.path(), names).unwrap();
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn direct_file_probes_are_removed_after_collision() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = std::ffi::OsString::from("same.pdf");
+        let second = first.clone();
+        let names = vec![("first.pdf".into(), first), ("second.pdf".into(), second)];
+        assert!(super::probe_files_for_resolved_outputs(dir.path(), names).is_err());
         assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
     }
 
@@ -319,5 +429,16 @@ mod tests {
 
         let verbatim = Path::new(r"\\?\C:\root\report.pdf. ");
         assert_eq!(super::output_probe_name(verbatim).unwrap(), OsString::from("report.pdf. "));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn dry_run_detects_case_only_output_collisions_without_writing() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = dir.path().join("Case.pdf");
+        let second = dir.path().join("CASE.pdf");
+        let targets = vec![("first.pdf".into(), first), ("second.pdf".into(), second)];
+        assert!(check_unique_outputs(&targets, true).is_err());
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
     }
 }
