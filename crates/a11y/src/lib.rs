@@ -503,37 +503,11 @@ pub fn in_english(wording: &str) -> String {
     wording.to_owned()
 }
 
-/// A wording with its holes filled.
-///
-/// A hole is a name in braces, such as `{p}`; what is not in `values` is left as it is written.
-/// Values go in during a single pass over the wording, so a value that itself contains braces is
-/// never read as a hole: the document's own words reach the screen as they stand.
+/// From `pdfcraft_model`.
 ///
 /// An interface says a [`Finding`] in its own language with this, after translating the pattern
 /// and, if there is one, the wording in `{what}`.
-pub fn say(pattern: &str, values: &[(&str, String)]) -> String {
-    let mut out = String::with_capacity(pattern.len() + 16);
-    let mut rest = pattern;
-    while let Some(open) = rest.find('{') {
-        let (before, from_brace) = rest.split_at(open);
-        out.push_str(before);
-        // `find` counts from the brace, and `}` is one byte, so this is a char boundary; `get`
-        // rather than slicing in case it ever isn't.
-        let Some(close) = from_brace.find('}') else {
-            // A brace with nothing closing it is just text.
-            out.push_str(from_brace);
-            return out;
-        };
-        let Some(hole) = from_brace.get(..=close) else { return out + from_brace };
-        match values.iter().find(|(name, _)| *name == hole) {
-            Some((_, value)) => out.push_str(value),
-            None => out.push_str(hole),
-        }
-        rest = from_brace.get(close + 1..).unwrap_or_default();
-    }
-    out.push_str(rest);
-    out
-}
+pub use pdfcraft_model::say;
 
 /// Every sentence the checker can say: each [`Finding::pattern`] and each wording that goes in a
 /// `{what}` hole, in English, with its holes still in it.

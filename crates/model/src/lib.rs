@@ -4,6 +4,9 @@
 
 use pdfcraft_cos::{Dict, Document, ObjRef, Object};
 
+mod wording;
+pub use wording::say;
+
 /// Attributes a page inherits from its ancestors (ISO 32000-2 §7.7.3.4).
 pub const INHERITABLE: [&[u8]; 4] = [b"Resources", b"MediaBox", b"CropBox", b"Rotate"];
 
