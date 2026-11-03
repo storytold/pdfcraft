@@ -112,7 +112,29 @@ fn check_certification(doc: &Document) -> Result<(), SignError> {
             level.map(|s| super::validate::docmdp(&old, &s))
         });
         // A signature whose revision can't be read keeps the level it states now.
-        signed.unwrap_or_else(|| super::validate::docmdp(doc, &v)) == Some(1)
+        if signed == Some(Some(1)) {
+            return true;
+        }
+        if signed.is_some() {
+            return false;
+        }
+        if super::validate::docmdp(doc, &v) == Some(1) {
+            return true;
+        }
+        // If the current byte range was rewritten, look for this certification in an
+        // earlier saved revision. A historical signature whose range ended that revision
+        // is still evidence of the original permission.
+        doc.revision_ends().into_iter().any(|end| {
+            if end > bytes.len() {
+                return false;
+            }
+            let Some(old) = cache.revision(doc, bytes, end) else { return false };
+            sig_fields(&old).iter().filter_map(|f| f.signature(&old)).any(|s| {
+                nums(&old, &s, b"ByteRange").is_some_and(|r| {
+                    r.len() == 4 && r.iter().all(|n| n.is_finite() && *n >= 0.0) && r[2] + r[3] == end as f64
+                }) && super::validate::docmdp(&old, &s) == Some(1)
+            })
+        })
     });
     if certified {
         return Err(SignError::Pdf(

@@ -388,8 +388,8 @@ fn a_no_changes_certification_refuses_another_signature() {
     });
     let e = again(&relaxed).unwrap_err().to_string();
     assert!(e.contains("certified with no changes allowed"), "relaxed: {e}");
-    // A later revision that rewrites the other numbers of the /ByteRange does not hide the signature
-    // either: it is the one whose range still ends the signed revision.
+    // A later revision that rewrites the /ByteRange so it no longer matches the
+    // signed revision cannot hide the historical P 1 certification.
     let reranged = edit_after(&certified, |doc| {
         let catalog = doc.get(doc.root().unwrap()).as_dict().cloned().unwrap();
         let sig = doc.resolve(catalog.get(b"Perms").unwrap()).as_dict().and_then(|p| p.get(b"DocMDP").and_then(Object::as_ref)).unwrap();
@@ -398,6 +398,11 @@ fn a_no_changes_certification_refuses_another_signature() {
                 && let Some(Object::Int(n)) = range.get_mut(1)
             {
                 *n -= 1;
+            }
+            if let Some(Object::Array(range)) = v.get_mut(b"ByteRange")
+                && let Some(Object::Int(n)) = range.get_mut(3)
+            {
+                *n += 1;
             }
             if let Some(Object::Array(r)) = v.get_mut(b"Reference")
                 && let Some(Object::Dict(sr)) = r.first_mut()
