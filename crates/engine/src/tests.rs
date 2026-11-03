@@ -5775,8 +5775,12 @@ fn visual_difference_kind_includes_inline_images() {
     assert_eq!(s.visual_kind(old, clipped, 0, [46.0, 46.0, 49.0, 49.0]).unwrap(), compare::VisualKind::Image);
     assert_eq!(s.visual_kind(old, clipped, 0, [70.0, 60.0, 75.0, 65.0]).unwrap(), compare::VisualKind::Other);
     assert_eq!(s.visual_kinds(old, clipped, &[(0, [70.0, 60.0, 75.0, 65.0])]).unwrap(), [compare::VisualKind::Other]);
+    assert_eq!(
+        s.visual_kinds(old, clipped, &[(0, [46.0, 46.0, 49.0, 49.0]), (0, [70.0, 60.0, 75.0, 65.0])]).unwrap(),
+        [compare::VisualKind::Image, compare::VisualKind::Other]
+    );
 
-    let form_content = "q /Fm Do Q";
+    let form_content = "q 1 0 0 1 100 0 cm /Fm Do Q";
     let form_pdf = format!(
         "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 300] /Resources << /XObject << /Fm 5 0 R >> >> /Contents 4 0 R >> endobj\n4 0 obj << /Length {} >> stream\n{}\nendstream endobj\n5 0 obj << /Type /XObject /Subtype /Form /BBox [0 0 200 300] /Resources << >> /Length {} >> stream\n{}\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF",
         form_content.len(),
@@ -5785,8 +5789,9 @@ fn visual_difference_kind_includes_inline_images() {
         content
     );
     let in_form = s.open("form-inline-image.pdf", None, Arc::new(form_pdf.into_bytes()), None).unwrap();
-    assert_eq!(s.visual_kind(old, in_form, 0, [50.0, 50.0, 60.0, 60.0]).unwrap(), compare::VisualKind::Image);
-    assert_eq!(s.visual_kinds(old, in_form, &[(0, [50.0, 50.0, 60.0, 60.0])]).unwrap(), [compare::VisualKind::Image]);
+    assert_eq!(s.visual_kind(old, in_form, 0, [150.0, 50.0, 160.0, 60.0]).unwrap(), compare::VisualKind::Image);
+    assert_eq!(s.visual_kind(old, in_form, 0, [50.0, 50.0, 60.0, 60.0]).unwrap(), compare::VisualKind::Other);
+    assert_eq!(s.visual_kinds(old, in_form, &[(0, [150.0, 50.0, 160.0, 60.0])]).unwrap(), [compare::VisualKind::Image]);
 }
 
 #[test]
