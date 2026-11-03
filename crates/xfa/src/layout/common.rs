@@ -164,7 +164,7 @@ pub fn formatted_value(picture: &str, raw: &str) -> Option<String> {
     // A picture with parts this can't show yet (month or weekday names, `MMM` or `EEE`) would
     // leave them as letters: the raw value stands then.
     let shows = |t: &String| !t.chars().all(|c| c.is_ascii_alphabetic()) || matches!(t.as_str(), "yyyy" | "yy" | "mm" | "m" | "dd" | "d");
-    if !crate::data::date_tokens(&pattern).iter().all(shows) {
+    if !crate::data::date_tokens(&pattern)?.iter().all(shows) {
         return None;
     }
     // Only the ISO date's own shape (`2026-10-20`): `2026-1-2` is not one, and stands.

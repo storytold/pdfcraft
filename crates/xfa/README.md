@@ -61,6 +61,17 @@ that warning and keeps the existing layout and accepted widget values.
   filled there shows them here. The engine does both: values on open (recorded in the
   document's warnings), the packet after every form edit.
 
+Date picture conversions check Gregorian month lengths and leap years through `chrono`.
+An impossible date (such as `1900-02-29` or `2026-04-31`) or one outside its supported range
+is not converted: stored text stays visible as written, including in the live script tree.
+An unchanged synchronization and an unrelated field edit preserve those stored values through
+incremental save/reopen, including data no field binds to.
+Tokenization accepts at most 4096 UTF-8 bytes per date pattern, checked before allocating
+its character/token lists. Oversized patterns use the same raw-value fallback, including
+through incremental save/reopen. This is an application resource budget, not an XFA limit;
+XML/picture extraction still has its existing packet-sized costs. It does not bound the
+whole form's memory use or add picture tokens, locale support or field-edit rejection.
+
 Layout measures each container once per (node, width): width-less containers would otherwise
 be measured exponentially often in their nesting. A measurement budget backs this up.
 
