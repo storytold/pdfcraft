@@ -1,4 +1,4 @@
-use super::files::{CombineFile, CombineView, Lock, RowAction};
+use super::files::{CombineFile, CombineView, Lock, RowAction, SortBy, SortKey};
 use super::table::{TableEvents, table};
 use super::{Align, BTreeSet, CornerRadius, ERROR, Layout, Modifiers, PdfCraftApp, Rect, Stroke, Tokens, icons, theme, vec2, widgets};
 
@@ -146,6 +146,10 @@ pub(crate) fn page(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
             let unlock = tool(ui, locked, "lock-open", tl!("Unlock…"), tl!("Select a password-protected file first"));
             if unlock.clicked() {
                 events.action = Some(RowAction::Unlock(None, unlock.rect.left_bottom() + vec2(0.0, 6.0)));
+            }
+            group(ui, &t, edge, 80.0);
+            if let Some(action) = sort_menu(app, ui, n) {
+                events.action = Some(action);
             }
             group(ui, &t, edge, 2.0 * 30.0 + 6.0);
             let (undo, redo) = (!app.combine_tab.undo.is_empty(), !app.combine_tab.redo.is_empty());
@@ -426,6 +430,44 @@ fn group(ui: &mut egui::Ui, t: &Tokens, edge: f32, width: f32) {
     } else {
         separator(ui, t);
     }
+}
+
+/// The toolbar's Sort menu, the same in the grid and the list: sorted by a column or the folder,
+/// either way, or the order turned round.
+fn sort_menu(app: &PdfCraftApp, ui: &mut egui::Ui, n: usize) -> Option<RowAction> {
+    let response = ui.add_enabled_ui(n > 1, |ui| widgets::icon_pill(ui, "arrow-up-down", tl!("Sort"), false)).inner;
+    response.clone().on_disabled_hover_text(tl!("Add at least two files first"));
+    let (current, ascending) = match app.combine_tab.sort {
+        Some((by, ascending)) => (Some(by), ascending),
+        None => (None, true),
+    };
+    let mut action = None;
+    egui::Popup::menu(&response).show(|ui| {
+        ui.set_min_width(180.0);
+        ui.label(egui::RichText::new(tl!("Sort by")).small());
+        for by in SortBy::MENU {
+            let item = ui.add(widgets::radio(current == Some(by), by.label()));
+            let item = if by == SortBy::Folder { item.on_hover_text(tl!("The folder each file was added from, then its name")) } else { item };
+            if item.clicked() {
+                action = Some(RowAction::SortBy(by, ascending));
+                ui.close();
+            }
+        }
+        ui.separator();
+        // A direction picked while unsorted sorts by name.
+        for (way, label) in [(true, tl!("Ascending")), (false, tl!("Descending"))] {
+            if ui.add(widgets::radio(current.is_some() && ascending == way, label)).clicked() {
+                action = Some(RowAction::SortBy(current.unwrap_or(SortBy::Column(SortKey::Name)), way));
+                ui.close();
+            }
+        }
+        ui.separator();
+        if ui.button(tl!("Reverse order")).clicked() {
+            action = Some(RowAction::Reverse);
+            ui.close();
+        }
+    });
+    action
 }
 
 /// A toolbar icon button, disabled with a reason.

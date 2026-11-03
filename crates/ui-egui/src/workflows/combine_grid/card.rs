@@ -240,6 +240,10 @@ impl Card {
             Some(page) => format!("{}\n{page}", f.name),
             None => format!("{}\n{pages} · {}", f.name, crate::panels::human_size(f.bytes.len())),
         };
+        if let Some(folder) = &f.folder {
+            tip.push('\n');
+            tip.push_str(&folder.display().to_string());
+        }
         for line in why.into_iter().chain(f.notes.iter().map(String::as_str)) {
             tip.push('\n');
             tip.push_str(line);

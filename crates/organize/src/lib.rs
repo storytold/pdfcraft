@@ -19,6 +19,7 @@ mod comments;
 mod dedupe;
 mod import;
 mod labels;
+pub mod order;
 mod outline;
 mod pdfx;
 mod prune;

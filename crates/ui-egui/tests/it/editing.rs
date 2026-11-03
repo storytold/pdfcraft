@@ -1813,6 +1813,44 @@ fn a_folder_adds_its_pdfs_images_and_text_in_order_and_optionally_its_subfolders
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+#[test]
+fn sort_by_folder_groups_files_by_their_folder_and_files_from_no_folder_go_last() {
+    use pdfcraft_ui_egui::{CombineSortBy, FilePurpose};
+    let dir = temp_path("combine-sort-folder");
+    let _ = std::fs::remove_dir_all(&dir);
+    let files = ["B/one.pdf", "a/two.pdf", "a b/three.pdf", "a/inner/four.pdf", "a/ten.pdf"];
+    for name in files {
+        let path = dir.join(name);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, fixture(1)).unwrap();
+    }
+    // A file that came from no folder (picked in a browser, say).
+    let mut h = harness(1, |app| app.use_files(FilePurpose::Combine, vec![("loose.pdf".into(), fixture(1))]));
+    h.state_mut().pick_override = Some(files.iter().map(|n| dir.join(n).to_string_lossy().into_owned()).collect());
+    h.get_by_label("Add files…").click();
+    h.run_steps(4);
+    let pick = |h: &mut Harness<'static, PdfCraftApp>, item: &str| {
+        h.get_by_label("Sort").click();
+        h.run_steps(2);
+        h.get_by_label(item).click();
+        h.run_steps(2);
+    };
+    pick(&mut h, "Folder");
+    // A folder before the folders inside it, those before its next sibling; names in natural order.
+    assert_eq!(combine_names(&h), ["ten.pdf", "two.pdf", "four.pdf", "three.pdf", "one.pdf", "loose.pdf"]);
+    pick(&mut h, "Descending");
+    assert_eq!(combine_names(&h), ["one.pdf", "three.pdf", "four.pdf", "ten.pdf", "two.pdf", "loose.pdf"], "no folder stays last");
+    assert_eq!(h.state().combine_tab.sort, Some((CombineSortBy::Folder, false)));
+    // A file added to the sorted list goes among its folder's files.
+    let more = dir.join("a b/zero.pdf");
+    std::fs::write(&more, fixture(1)).unwrap();
+    h.state_mut().pick_override = Some(vec![more.to_string_lossy().into_owned()]);
+    h.get_by_label("Add files…").click();
+    h.run_steps(4);
+    assert_eq!(combine_names(&h), ["one.pdf", "three.pdf", "zero.pdf", "four.pdf", "ten.pdf", "two.pdf", "loose.pdf"]);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// #569: an image or a text file added to Combine files becomes a PDF as it joins the list, an
 /// ordinary row with its pages.
 #[test]

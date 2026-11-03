@@ -76,6 +76,7 @@ pub use pdfcraft_organize::{BoxSpec, FieldConflicts, PageBox, SplitBy, Transitio
 pub use pdfcraft_organize::LabelStyle;
 pub use pdfcraft_organize::Standard;
 pub use pdfcraft_organize::check_custom_key;
+pub use pdfcraft_organize::order;
 pub use pdfcraft_organize::view::{InitialView, Layout as InitialLayout, Magnification, Navigation};
 
 pub use pdfcraft_cos::Algorithm;

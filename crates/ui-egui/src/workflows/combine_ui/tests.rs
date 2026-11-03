@@ -210,3 +210,8 @@ fn removing_pages_drops_emptied_parts_and_joins_what_meets() {
     // A page that isn't there: nothing changes, and it says so.
     assert_eq!(removed_pages(&two, &BTreeSet::from([(1, 9)]), &mut new_id), None);
 }
+
+#[test]
+fn the_sort_menu_leaves_warnings_to_the_column_heading() {
+    assert!(!SortBy::MENU.contains(&SortBy::Column(SortKey::Warnings)));
+}
