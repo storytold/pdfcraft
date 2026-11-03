@@ -246,6 +246,66 @@ fn same_rect(a: [f64; 4], b: [f64; 4]) -> bool {
     a.into_iter().zip(b).all(|(a, b)| (a - b).abs() < 1e-3)
 }
 
+/// Shared measured layout for painting and secondary-click routing.
+fn crop_pills(painter: &egui::Painter, k: Rect, page_rect: Rect, has_crop: bool) -> (Rect, Rect, Option<Rect>) {
+    let font = egui::FontId::proportional(12.5);
+    let done_w = painter.layout_no_wrap(tl!("Done").to_string(), font.clone(), Color32::WHITE).size().x + 22.0;
+    let cancel_w = painter.layout_no_wrap(tl!("Cancel").to_string(), font.clone(), Color32::WHITE).size().x + 22.0;
+    let reset_w =
+        if has_crop { Some(painter.layout_no_wrap(tl!("Remove Crop").to_string(), font.clone(), Color32::WHITE).size().x + 22.0) } else { None };
+    let spacing = 6.0;
+    let total_w = done_w + spacing + cancel_w + reset_w.map_or(0.0, |w| w + spacing);
+
+    // Position pills below crop box if there's room, otherwise above
+    let y = if k.max.y + 32.0 < page_rect.max.y {
+        k.max.y + 6.0
+    } else if k.min.y - 28.0 > page_rect.min.y {
+        k.min.y - 28.0
+    } else {
+        k.max.y + 6.0
+    };
+
+    // Right-align pills with k.max.x, clamped inside the page bounds
+    let mut right = k.max.x.min(page_rect.max.x - 8.0);
+    if right - total_w < page_rect.min.x + 8.0 {
+        right = (page_rect.min.x + 8.0 + total_w).min(page_rect.max.x - 8.0);
+    }
+
+    let done = Rect::from_min_size(Pos2::new(right - done_w, y), egui::vec2(done_w, 22.0));
+    let cancel = Rect::from_min_size(Pos2::new(done.min.x - spacing - cancel_w, y), egui::vec2(cancel_w, 22.0));
+    let reset = reset_w.map(|w| Rect::from_min_size(Pos2::new(cancel.min.x - spacing - w, y), egui::vec2(w, 22.0)));
+
+    (done, cancel, reset)
+}
+
+fn crop_bounds(image: &pdfcraft_engine::PageImage, xf: &PageXform, info: &DocInfo, page: usize) -> Rect {
+    let full = xf.user_rect(info, page, image.rect.map(|v| v as f32));
+    if full.is_positive() { full } else { xf.user_rect(info, page, image.visible_rect.unwrap_or(image.rect).map(|v| v as f32)) }
+}
+
+pub(crate) fn crop_controls_contain(
+    painter: &egui::Painter,
+    image: &pdfcraft_engine::PageImage,
+    mode: &CropMode,
+    xf: &PageXform,
+    info: &DocInfo,
+    page: usize,
+    p: Pos2,
+) -> bool {
+    let b = crop_bounds(image, xf, info, page);
+    let k = xf.user_rect(info, page, mode.keep.map(|v| v as f32)).intersect(b);
+    if !b.is_finite() || !b.is_positive() || !b.size().is_finite() || !k.is_finite() || !k.is_positive() {
+        return false;
+    }
+    let has_crop = image.has_editor_crop() || !same_rect(mode.keep, image.visible_rect.unwrap_or(image.rect));
+    let (done, cancel, reset) = crop_pills(painter, k, xf.rect, has_crop);
+    k.contains(p)
+        || crop_handles(k).iter().any(|h| h.distance(p) < 10.0)
+        || done.contains(p)
+        || cancel.contains(p)
+        || reset.is_some_and(|r| r.contains(p))
+}
+
 /// Crop mode for the selected image `i` whose visible frame is `b` (screen). Returns `true`
 /// (the pointer and keys are the crop's while it lasts).
 #[allow(clippy::cognitive_complexity)]
@@ -254,8 +314,7 @@ fn crop_input(cx: &ImageCx<'_>, view: &mut DocView, i: usize, image: &pdfcraft_e
     let painter = ui.painter();
     let Some(mode) = view.image_selection.as_mut().and_then(|s| s.crop.as_mut()) else { return false };
     let hover_pos = ptr.pos;
-    let full_b = xf.user_rect(info, page, image.rect.map(|v| v as f32));
-    let b = if full_b.is_positive() { full_b } else { xf.user_rect(info, page, image.visible_rect.unwrap_or(image.rect).map(|v| v as f32)) };
+    let b = crop_bounds(image, xf, info, page);
     let keep_screen = |keep: [f64; 4]| xf.user_rect(info, page, keep.map(|v| v as f32)).intersect(b);
     let k = keep_screen(mode.keep);
     if !b.is_finite() || !b.is_positive() || !b.size().is_finite() || !k.is_finite() || !k.is_positive() {
@@ -339,35 +398,10 @@ fn crop_input(cx: &ImageCx<'_>, view: &mut DocView, i: usize, image: &pdfcraft_e
         draw_handle(painter, *h, is_active, is_hovered, true, CROP_ACCENT);
     }
 
-    // Action pills
     let font = egui::FontId::proportional(12.5);
-    let done_w = painter.layout_no_wrap(tl!("Done").to_string(), font.clone(), Color32::WHITE).size().x + 22.0;
-    let cancel_w = painter.layout_no_wrap(tl!("Cancel").to_string(), font.clone(), Color32::WHITE).size().x + 22.0;
     let initial_keep = image.visible_rect.unwrap_or(image.rect);
     let has_crop = image.has_editor_crop() || !same_rect(mode.keep, initial_keep);
-    let reset_w =
-        if has_crop { Some(painter.layout_no_wrap(tl!("Remove Crop").to_string(), font.clone(), Color32::WHITE).size().x + 22.0) } else { None };
-    let spacing = 6.0;
-    let total_w = done_w + spacing + cancel_w + reset_w.map_or(0.0, |w| w + spacing);
-
-    // Position pills below crop box if there's room, otherwise above
-    let y = if k.max.y + 32.0 < xf.rect.max.y {
-        k.max.y + 6.0
-    } else if k.min.y - 28.0 > xf.rect.min.y {
-        k.min.y - 28.0
-    } else {
-        k.max.y + 6.0
-    };
-
-    // Right-align pills with k.max.x, clamped inside the page bounds
-    let mut right = k.max.x.min(xf.rect.max.x - 8.0);
-    if right - total_w < xf.rect.min.x + 8.0 {
-        right = (xf.rect.min.x + 8.0 + total_w).min(xf.rect.max.x - 8.0);
-    }
-
-    let done = Rect::from_min_size(Pos2::new(right - done_w, y), egui::vec2(done_w, 22.0));
-    let cancel = Rect::from_min_size(Pos2::new(done.min.x - spacing - cancel_w, y), egui::vec2(cancel_w, 22.0));
-    let reset = reset_w.map(|w| Rect::from_min_size(Pos2::new(cancel.min.x - spacing - w, y), egui::vec2(w, 22.0)));
+    let (done, cancel, reset) = crop_pills(painter, k, xf.rect, has_crop);
 
     let done_id = ui.scope_id().with("crop_pill_done").with(page).with(i);
     let cancel_id = ui.scope_id().with("crop_pill_cancel").with(page).with(i);

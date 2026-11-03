@@ -7963,6 +7963,115 @@ fn test_image_context_menu_in_crop_mode_and_when_moved() {
     assert!(h.query_all_by_label("Rotate view clockwise").next().is_some(), "canvas background menu triggers outside image");
 }
 
+fn crop_secondary_click(h: &mut Harness<'static, PdfCraftApp>, p: egui::Pos2) {
+    assert!(h.state().views[0].viewport_rect().contains(p), "test point must be visible: {p:?}");
+    h.hover_at(p);
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Secondary, pressed: true, modifiers: Default::default() });
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Secondary, pressed: false, modifiers: Default::default() });
+    h.run_steps(2);
+}
+
+fn assert_crop_context_preserved(h: &Harness<'static, PdfCraftApp>) {
+    let selection = h.state().views[0].image_selection.as_ref().expect("crop remains selected");
+    assert_eq!(selection.index, 0, "an overlapping image must not steal the crop");
+    assert!(selection.crop.is_some(), "crop mode remains active");
+    for label in ["Flip horizontal", "Rotate view clockwise", "Take a snapshot"] {
+        assert!(h.query_all_by_label(label).next().is_none(), "unexpected menu: {label}");
+    }
+    assert!(h.query_by_label("Done").is_some());
+    assert!(h.query_by_label("Cancel").is_some());
+}
+
+#[test]
+fn test_image_context_menu_crop_overlapping_image_and_handle() {
+    for rotation in [0, 90, 180, 270] {
+        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1400.0)).build_eframe(move |_cc| {
+            let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
+            app.open_bytes("overlap.pdf", None, two_image_fixture()).unwrap();
+            app.views[0].rotation = rotation;
+            app
+        });
+        h.run_steps(4);
+        let id = h.state().views[0].id;
+        let rect = h.state().session.get(id).unwrap().page_images(0)[0].rect;
+        h.state_mut().apply_edit(pdfcraft_engine::Edit::EditPageImage { page: 0, index: 1, change: pdfcraft_engine::ImageEdit::Move(rect) });
+        let images = h.state().session.get(id).unwrap().page_images(0);
+        assert_eq!(images.len(), 2);
+        assert_eq!(images[0].rect, images[1].rect, "fixture images must overlap");
+        assert!(h.state_mut().execute("edit.edit_text"));
+        h.run_steps(4);
+        let mut selection = pdfcraft_ui_egui::ImageSelection::at(0, 0);
+        selection.crop = Some(pdfcraft_ui_egui::CropMode::new(rect));
+        h.state_mut().views[0].image_selection = Some(selection);
+        h.run_steps(2);
+        let xf = h.state().views[0].page_xform(0).unwrap();
+        let doc = h.state().session.get(id).unwrap();
+        let image_rect = pdfcraft_ui_egui::canvas::image_screen_rect(&doc.page_images(0)[0], &xf, &doc.info, 0);
+        crop_secondary_click(&mut h, image_rect.center());
+        assert_crop_context_preserved(&h);
+        // This point is outside both images, but inside the left handle's grip.
+        crop_secondary_click(&mut h, image_rect.left_center() - egui::vec2(5.0, 0.0));
+        assert_crop_context_preserved(&h);
+        crop_secondary_click(&mut h, image_rect.left_center() - egui::vec2(20.0, 0.0));
+        assert!(h.state().views[0].image_selection.is_none());
+        assert!(h.query_by_label("Rotate view clockwise").is_some());
+    }
+}
+
+#[test]
+fn test_image_context_menu_crop_page_edge_pills() {
+    for rotation in [0, 90, 180, 270] {
+        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1400.0)).build_eframe(move |_cc| {
+            let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
+            app.open_bytes("edge.pdf", None, two_image_fixture()).unwrap();
+            app.views[0].rotation = rotation;
+            app.views[0].fit = pdfcraft_ui_egui::canvas::Fit::Page;
+            app
+        });
+        h.run_steps(4);
+        // A small image at a page corner exercises horizontal clamping and above placement.
+        let rect = [1.0, 1.0, 21.0, 21.0];
+        h.state_mut().apply_edit(pdfcraft_engine::Edit::EditPageImage { page: 0, index: 0, change: pdfcraft_engine::ImageEdit::Move(rect) });
+        h.state_mut().apply_edit(pdfcraft_engine::Edit::EditPageImage {
+            page: 0,
+            index: 1,
+            change: pdfcraft_engine::ImageEdit::Move([100.0, 150.0, 120.0, 170.0]),
+        });
+        assert!(h.state_mut().execute("edit.edit_text"));
+        h.run_steps(4);
+        let mut selection = pdfcraft_ui_egui::ImageSelection::at(0, 0);
+        selection.crop = Some(pdfcraft_ui_egui::CropMode::new([2.0, 2.0, 20.0, 20.0]));
+        h.state_mut().views[0].image_selection = Some(selection);
+        h.run_steps(2);
+        for label in ["Done", "Cancel", "Remove Crop"] {
+            let p = h.get_by_label(label).rect().center();
+            crop_secondary_click(&mut h, p);
+            assert_crop_context_preserved(&h);
+        }
+        // Beyond egui's 5-point interaction radius, empty space beside the rightmost pill is canvas.
+        let beside = h.get_by_label("Done").rect().right_center() + egui::vec2(8.0, 0.0);
+        let view = &h.state().views[0];
+        let doc = h.state().session.get(view.id).unwrap();
+        let xf = view.page_xform(0).unwrap();
+        assert!(
+            doc.page_images(0).iter().all(|img| !pdfcraft_ui_egui::canvas::image_screen_rect(img, &xf, &doc.info, 0).contains(beside)),
+            "background test point must miss both images"
+        );
+        crop_secondary_click(&mut h, beside);
+        assert!(
+            h.state().views[0].image_selection.is_none(),
+            "empty pill-adjacent space, rotation={rotation}, point={beside:?}, viewport={:?}, selection={:?}",
+            h.state().views[0].viewport_rect(),
+            h.state().views[0].image_selection
+        );
+        assert!(h.query_by_label("Rotate view clockwise").is_some());
+    }
+}
+
 #[test]
 fn crop_action_pills_interactive_and_apply_cancel_reset() {
     let mut png = Vec::new();
