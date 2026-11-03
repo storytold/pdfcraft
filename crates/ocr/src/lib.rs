@@ -14,6 +14,7 @@ pub mod historical;
 mod lines;
 mod multilingual;
 pub mod scan;
+mod typography;
 
 pub use pdfcraft_fonts::helvetica_width;
 
@@ -220,17 +221,33 @@ impl Ocr {
         if !LANGUAGES.iter().any(|l| l.0 == language) {
             return Err(OcrError::Recognize(format!("unsupported language: {language}")));
         }
-        let rects = self.line_regions(image)?;
+        let lines = self.line_regions(image)?;
         // CJK's centred punctuation can split one horizontal line into several detections.
         // Join their geometry before padded crops reach the recognizer, avoiding duplicate ink.
-        let rects = if matches!(language, "zh-Hant" | "zh-Hans") { lines::join_fragments(rects) } else { rects };
-        Self::recognize_lines(rects, |rect| self.multilingual.read_line(image, rect, language))
+        let lines = if matches!(language, "zh-Hant" | "zh-Hans") {
+            lines::join_fragments(lines.into_iter().map(|(rect, _)| rect).collect()).into_iter().map(|rect| (rect, None)).collect()
+        } else {
+            lines
+        };
+        let mut out = Vec::new();
+        for (rect, skewed) in lines {
+            let words = match skewed {
+                Some(line) => self.multilingual.read_skewed_line(image, &line, language)?,
+                None => self.multilingual.read_line(image, rect, language)?,
+            };
+            let words = typography::correct(words, language);
+            if !words.is_empty() {
+                out.push(Line { words });
+            }
+        }
+        Ok(out)
     }
 
     /// Recognize historical print with an explicitly installed add-on.
     /// Detection and output coordinates use the same path as ordinary recognition.
     pub fn recognize_historical(&self, image: &image::RgbImage, historical: &historical::Historical) -> Result<Vec<Line>, OcrError> {
-        let regions = historical::line_regions(self.line_regions(image)?, image.dimensions());
+        let rects = self.line_regions(image)?.into_iter().map(|(rect, _)| rect).collect();
+        let regions = historical::line_regions(rects, image.dimensions());
         Self::recognize_lines(regions, |rect| historical.read_line(image, rect))
     }
 
@@ -239,20 +256,26 @@ impl Ocr {
         Self::recognize_lines(handwriting::lines(image)?, |rect| historical.read_line(image, rect))
     }
 
-    fn line_regions(&self, image: &image::RgbImage) -> Result<Vec<[f32; 4]>, OcrError> {
+    /// Each detected line's bounding box, and its fitted box when it is skewed enough to be read
+    /// straightened.
+    fn line_regions(&self, image: &image::RgbImage) -> Result<Vec<([f32; 4], Option<lines::LineBox>)>, OcrError> {
         use rten_imageproc::BoundingRect;
         let source = ocrs::ImageSource::from_bytes(image.as_raw(), image.dimensions()).map_err(|e| OcrError::Recognize(e.to_string()))?;
         let input = self.engine.prepare_input(source).map_err(|e| OcrError::Recognize(e.to_string()))?;
         let found = self.engine.detect_words(&input).map_err(|e| OcrError::Recognize(e.to_string()))?;
         let boxes = self.engine.find_text_lines(&input, &found);
-        let mut regions = Vec::new();
-        for line in boxes {
-            let rect = line.iter().map(|r| r.bounding_rect()).fold([f32::INFINITY, f32::INFINITY, 0.0f32, 0.0f32], |a, r| {
-                [a[0].min(r.left()), a[1].min(r.top()), a[2].max(r.right()), a[3].max(r.bottom())]
-            });
-            regions.push(rect);
-        }
-        Ok(regions)
+        Ok(boxes
+            .into_iter()
+            .map(|line| {
+                let rect = line.iter().map(|r| r.bounding_rect()).fold([f32::INFINITY, f32::INFINITY, 0.0f32, 0.0f32], |a, r| {
+                    [a[0].min(r.left()), a[1].min(r.top()), a[2].max(r.right()), a[3].max(r.bottom())]
+                });
+                let directions: Vec<_> = line.iter().map(reading_direction).collect();
+                let corners: Vec<_> = line.iter().flat_map(|r| r.corners()).map(|p| [p.x, p.y]).collect();
+                let skewed = lines::LineBox::fit(&directions, &corners).filter(skewed_enough);
+                (rect, skewed)
+            })
+            .collect())
     }
 
     fn recognize_lines(regions: Vec<[f32; 4]>, read_line: impl Fn([f32; 4]) -> Result<Vec<Word>, OcrError>) -> Result<Vec<Line>, OcrError> {
@@ -269,6 +292,23 @@ impl Ocr {
     pub fn orientation(&self, image: &image::RgbImage) -> Result<u16, OcrError> {
         self.multilingual.orientation(image)
     }
+}
+
+/// Whether `line` is read straightened. Only when its baseline climbs more than a quarter of
+/// its height from end to end: below that its bounding box takes in no neighbours, and a short
+/// word's box angle is mostly noise. More than 20° is no line skew but a turned page, which
+/// orientation handles.
+fn skewed_enough(line: &lines::LineBox) -> bool {
+    let angle = line.angle().abs();
+    angle <= 20.0 && line.length() * angle.to_radians().sin() > 0.25 * line.height()
+}
+
+/// A detected word's reading direction and its length along it. The detector's boxes have
+/// no orientation, so this is whichever side is nearer horizontal.
+fn reading_direction(word: &rten_imageproc::RotatedRect) -> ([f32; 2], f32) {
+    let up = word.up_axis();
+    let side = up.perpendicular();
+    if side.x.abs() >= side.y.abs() { ([side.x, side.y], word.width()) } else { ([up.x, up.y], word.height()) }
 }
 
 /// A word placed on a page, in PDF user space: the bottom-left corner of its box, and the

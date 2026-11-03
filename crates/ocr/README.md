@@ -54,8 +54,24 @@ outside ASCII/Latin-1/Latin Extended-A, while preserving other European names,
 digits and punctuation. Japanese and both Chinese choices retain the full dictionary. This is not a
 language-specific spelling filter. Community French checks still found missed
 `ï`, capital `Œ`/`Æ` and `Ë`, and inconsistent straight/curly apostrophes; the model
-does not guarantee exact transcription. Apostrophe equivalence in search remains
-separate work.
+does not guarantee exact transcription. Search treats `'`, `’`, `‘`, `ʼ` and `＇` as one
+character in both case modes, so either apostrophe finds the other.
+
+Lines skewed by up to 20° whose baseline climbs more than a quarter of the line height
+from end to end (for example in photographed pages read without deskew) are resampled
+straight along their detected direction before recognition, so the recognizer sees neither
+the neighbouring lines their bounding box would take in nor a sloping baseline. Chinese keeps axis-aligned crops, which its joined line fragments need.
+
+After recognition, `typography.rs` repairs a few characters the model reliably confuses.
+Each rule needs letters around the repaired character, so names, numbers and literal
+text keep what was read:
+
+| Languages | Read as | Becomes |
+|---|---|---|
+| all but Japanese and Chinese | `-` standing alone between two words | `–` |
+| German | `"` or `,,` before a word / `"` after a word | `„` / `“` (`5"` stays) |
+| French, Italian, Catalan | `1'` or `1’` starting a word, before a letter | `l'` / `l’` |
+| Catalan | `l-l`, `l.l`, `l•l` between same-case `l` with letters around | `l·l` |
 
 Validation: `cargo test -p pdfcraft-engine --test scan_ocr` covers actual models,
 languages, all quarter-turns, deskew, crop offsets and padding, unchanged exact-mode pixels, save/reopen, undo
@@ -108,7 +124,8 @@ vertical writing, or thin numerals the detector misses entirely.
 
 Catalan (`ca`, including `ca-ES`, `ca-AD` and Valencian locale variants) uses the same
 Latin decoder. A model-backed regression checks accents after save/reopen with
-unchanged pixels. Community checks still report missing `ï` and `l·l` read as `l-l`.
-There is no automatic separator substitution: names, addresses and literal text
-must remain intact. The current model dictionary also lacks Spanish `¡`; a decoder
-filter cannot recover a class the model does not have.
+unchanged pixels. Community checks still report missing `ï`. The geminated `l·l`,
+which the model reads as `l-l` or `l.l`, is repaired only between two `l` of the same
+case with letters on both sides (`col·legi`, `IL·LUSIÓ`), so names, addresses and
+literal text such as `ball-2` or `www.ll.cat` stay intact. The current model dictionary
+also lacks Spanish `¡`; a decoder filter cannot recover a class the model does not have.

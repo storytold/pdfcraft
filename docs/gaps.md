@@ -1,6 +1,7 @@
 # Where PdfCraft falls short of Acrobat Pro
 
 > **Last reviewed:** 2026-11-02 · **Last updated:** 2026-11-02 · **Change:** minor (gap 7: optional historical Fraktur/Kurrent OCR add-on, #1059; estimates unchanged)
+> **Last reviewed:** 2026-11-02 · **Last updated:** 2026-11-02 · **Change:** minor (gap 7: skewed lines are read straightened, OCR typography repairs, apostrophe forms match in search; estimates unchanged)
 > **Last reviewed:** 2026-11-02 · **Last updated:** 2026-11-02 · **Change:** minor (gap 7: Catalan and horizontal Chinese listed, vertical Chinese missing; annotated skewed pages are recognized without deskew; estimates unchanged)
 > **Last reviewed:** 2026-10-25 · **Last updated:** 2026-10-25 · **Change:** minor (gaps 5 and 14 current state: native release Hans face via LXGW WenKai Lite; Arabic logical catalog, explicit RTL direction and mirrored stock chrome, with native/browser/IME workflows unqualified; no readiness re-estimate)
 > **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-15 · **Change:** minor (gap 3: #2517 a blank line stays a paragraph break; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
@@ -178,7 +179,9 @@ update the numbers.
   Bokmål, Swedish, Finnish, Portuguese, horizontal Japanese and horizontal traditional/simplified
   Chinese (Chinese scan accuracy not yet measured), Unicode search/copy,
   automatic quarter-turn correction and deskew up to 12 degrees, including correction without OCR.
-  A skewed page with annotations is recognized but left unstraightened.
+  A skewed page with annotations is recognized but left unstraightened; lines skewed up to 20 degrees
+  are read straightened even without deskew. OCR repairs a few reliably confused characters per language
+  (dashes, German quotes, French/Italian/Catalan `l'`, Catalan `l·l`), and search matches `'` and `’`.
   Clear paper edges can now define an automatic crop with safety padding; ambiguous white borders
   stay unchanged, and original image pixels remain in the PDF.
   An explicit optional download adds offline historical print/handwriting recognition, including

@@ -1,7 +1,7 @@
 //! PaddleOCR's Apache-2.0 PP-OCRv6 recognizer and document orientation classifier.
 //! Preprocessing follows the pinned inference.yml files in ATTRIBUTION.toml.
-use crate::{OcrError, Word};
-use image::{RgbImage, imageops};
+use crate::{OcrError, Word, lines::LineBox};
+use image::{Rgb, RgbImage, imageops};
 use rten_tensor::{NdTensor, Tensor, prelude::*};
 
 pub(crate) struct Multilingual {
@@ -43,6 +43,45 @@ fn line_crop(image: &RgbImage, rect: [f32; 4]) -> Option<[u32; 4]> {
     let bottom = (b + 0.15 * pad).ceil().clamp(0.0, image.height() as f32) as u32;
     let (w, h) = (right.saturating_sub(x), bottom.saturating_sub(y));
     (w > 0 && h > 0).then_some([x, y, w, h])
+}
+
+/// The pixel at `(x, y)` (pixel centres at half-integers), interpolated bilinearly, with
+/// white paper outside the image.
+fn bilinear(image: &RgbImage, x: f32, y: f32) -> Rgb<u8> {
+    let (x, y) = (x - 0.5, y - 0.5);
+    let (x0, y0) = (x.floor(), y.floor());
+    let (fx, fy) = (x - x0, y - y0);
+    let at = |x: f32, y: f32| -> [f32; 3] {
+        if x < 0.0 || y < 0.0 || x >= image.width() as f32 || y >= image.height() as f32 {
+            return [255.0; 3];
+        }
+        image.get_pixel(x as u32, y as u32).0.map(f32::from)
+    };
+    let (a, b, c, d) = (at(x0, y0), at(x0 + 1.0, y0), at(x0, y0 + 1.0), at(x0 + 1.0, y0 + 1.0));
+    Rgb(std::array::from_fn(|i| {
+        let top = a[i] + (b[i] - a[i]) * fx;
+        let bottom = c[i] + (d[i] - c[i]) * fx;
+        (top + (bottom - top) * fy).round().clamp(0.0, 255.0) as u8
+    }))
+}
+
+/// `line` with the same margins as [`line_crop`], resampled straight: returns the image and
+/// the line coordinates of its left edge.
+fn straighten(image: &RgbImage, line: &LineBox) -> Option<(RgbImage, f32)> {
+    let pad = line.height().max(1.0);
+    let (u0, v0) = (line.u[0] - 0.3 * pad, line.v[0] - 0.15 * pad);
+    let w = (line.length() + 0.6 * pad).ceil();
+    let h = (line.height() + 0.3 * pad).ceil();
+    // A line never exceeds the image's own perimeter; anything longer is broken geometry.
+    let limit = 2.0 * (image.width() + image.height()) as f32;
+    if !(w >= 1.0 && h >= 1.0 && w <= limit && h <= limit) {
+        return None;
+    }
+    let straight = RgbImage::from_fn(w as u32, h as u32, |i, j| {
+        let [x, y] = line.point(u0 + i as f32 + 0.5, v0 + j as f32 + 0.5);
+        bilinear(image, x, y)
+    });
+    Some((straight, u0))
 }
 
 fn error(e: impl std::fmt::Display) -> OcrError {
@@ -118,9 +157,38 @@ impl Multilingual {
             return Ok(Vec::new());
         }
         let crop = imageops::crop_imm(image, x, y, w, h).to_image();
+        let words = self.recognize(&crop, language)?;
+        Ok(words
+            .into_iter()
+            .map(|(text, start, end)| Word { text, rect: [x as f32 + start, top, (x as f32 + end).min(image.width() as f32), bottom] })
+            .collect())
+    }
+
+    /// Read a skewed line straightened along its own direction, so the recognizer sees
+    /// neither the neighbouring lines a skewed line's bounding box takes in nor a sloping
+    /// baseline. Each word's box is the axis-aligned bounds of its stretch of the line.
+    pub fn read_skewed_line(&self, image: &RgbImage, line: &LineBox, language: &str) -> Result<Vec<Word>, OcrError> {
+        let Some((straight, u0)) = straighten(image, line) else {
+            return Ok(Vec::new());
+        };
+        let (width, height) = (image.width() as f32, image.height() as f32);
+        let words = self.recognize(&straight, language)?;
+        Ok(words
+            .into_iter()
+            .filter_map(|(text, start, end)| {
+                let [l, t, r, b] = line.bounds(u0 + start, u0 + end);
+                let rect = [l.clamp(0.0, width), t.clamp(0.0, height), r.clamp(0.0, width), b.clamp(0.0, height)];
+                (rect[2] > rect[0] && rect[3] > rect[1]).then_some(Word { text, rect })
+            })
+            .collect())
+    }
+
+    /// The words recognized in a line image, with their horizontal extent in its pixels.
+    fn recognize(&self, crop: &RgbImage, language: &str) -> Result<Vec<(String, f32, f32)>, OcrError> {
+        let (w, h) = crop.dimensions();
         let rw = ((48.0 * w as f64 / h as f64).ceil() as u32).clamp(1, 3200);
         let width = rw.max(320) as usize;
-        let resized = imageops::resize(&crop, rw, 48, imageops::FilterType::Triangle);
+        let resized = imageops::resize(crop, rw, 48, imageops::FilterType::Triangle);
         let mut input = NdTensor::<f32, 4>::zeros([1, 3, 48, width]);
         // Paddle's recognizer takes BGR in [-1,1], with zero right-padding.
         for (x, y, p) in resized.enumerate_pixels() {
@@ -139,12 +207,9 @@ impl Multilingual {
         let mut words = Vec::new();
         let (mut text, mut previous, mut start, mut end, mut confidence, mut count) = (String::new(), 0, 0, 0, 0.0, 0);
         let scale = width as f32 / rw as f32 * w as f32 / steps.max(1) as f32;
-        let flush = |words: &mut Vec<Word>, text: &mut String, start: usize, end: usize, confidence: f32, count: usize| {
+        let flush = |words: &mut Vec<(String, f32, f32)>, text: &mut String, start: usize, end: usize, confidence: f32, count: usize| {
             if !text.is_empty() && confidence / count.max(1) as f32 >= 0.5 {
-                words.push(Word {
-                    text: std::mem::take(text),
-                    rect: [x as f32 + start as f32 * scale, top, (x as f32 + (end + 1) as f32 * scale).min(image.width() as f32), bottom],
-                });
+                words.push((std::mem::take(text), start as f32 * scale, ((end + 1) as f32 * scale).min(w as f32)));
             } else {
                 text.clear();
             }
@@ -214,6 +279,33 @@ mod tests {
         assert_eq!(best_class(&row, None).unwrap().0, 2, "Japanese retains full-width punctuation");
         assert_eq!(best_class(&[0.1, 0.1, 0.9, 0.95, 0.8], Some(&mask)).unwrap().0, 4);
         assert_eq!(best_class(&[0.6, 0.1, 0.9, 0.95, 0.2], Some(&mask)).unwrap().0, 0, "CTC blank stays available");
+    }
+
+    #[test]
+    fn straightening_a_skewed_line_levels_it_with_white_outside_the_image() {
+        // A dark 100 × 10 bar turned 4° clockwise, whose line also runs off the image's left edge.
+        let (s, c) = 4f32.to_radians().sin_cos();
+        let image = RgbImage::from_fn(140, 60, |x, y| {
+            let (dx, dy) = (x as f32 + 0.5 - 50.0, y as f32 + 0.5 - 30.0);
+            let (u, v) = (dx * c + dy * s, -dx * s + dy * c);
+            if (-50.0..50.0).contains(&u) && (-5.0..5.0).contains(&v) { Rgb([0, 0, 0]) } else { Rgb([200, 200, 200]) }
+        });
+        let at = |u: f32, v: f32| [50.0 + u * c - v * s, 30.0 + u * s + v * c];
+        let corners = [at(-50.0, -5.0), at(50.0, -5.0), at(50.0, 5.0), at(-50.0, 5.0)];
+        let line = LineBox::fit(&[([c, s], 100.0)], &corners).unwrap();
+        let (straight, u0) = straighten(&image, &line).unwrap();
+        // 100 × 10 with margins of 3 and 1.5, give or take the fit's rounding.
+        assert!(matches!(straight.dimensions(), (106..=107, 13)), "{:?}", straight.dimensions());
+        assert!((u0 - (line.u[0] - 3.0)).abs() < 1e-3);
+        // Every row through the bar is dark from end to end: the bar is level.
+        for y in 4..10 {
+            assert!((6..100).all(|x| straight.get_pixel(x, y)[0] < 60), "row {y} is not level");
+        }
+        // The margin rows hold the page around the bar, and the left margin runs off the image.
+        assert!((6..100).all(|x| straight.get_pixel(x, 0)[0] > 150));
+        assert_eq!(*straight.get_pixel(0, 12), Rgb([255, 255, 255]));
+        let broken = LineBox { across: [1.0, 0.0], u: [0.0, 1e9], v: [0.0, 10.0] };
+        assert!(straighten(&image, &broken).is_none());
     }
 
     #[test]
