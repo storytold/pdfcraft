@@ -512,6 +512,9 @@
 	Clean Up	გასუფთავება
 	Color Images	ფერადი გამოსახულებები
 	Grayscale Images	რუხი ტონების გამოსახულებები
+	Monochrome Images	მონოქრომული გამოსახულებები
+	CCITT Group 4	CCITT ჯგუფი 4
+	JBIG2 (lossless)	JBIG2 (უდანაკარგო)
 	Bicubic downsampling to	ბიკუბური შემცირება გარჩევადობამდე
 	for images above	თუ გამოსახულების გარჩევადობა აღემატება
 	Compression	შეკუმშვა
@@ -763,6 +766,14 @@
 	Applies to 1 page	ვრცელდება 1 გვერდზე
 	Applies to {n} pages	ვრცელდება გვერდებზე: {n}
 	Replaces the existing one on those pages.	ცვლის არსებულს ამ გვერდებზე.
+	Checking pages…	გვერდების შემოწმება…
+	Page {pages} paints its own white backdrop, which would hide the background. Replace it	გვერდი {pages} საკუთარ თეთრ შევსებას ხატავს, რომელიც ფონს დამალავს. მისი ჩანაცვლება
+	Pages {pages} paint their own white backdrop, which would hide the background. Replace it	გვერდები {pages} საკუთარ თეთრ შევსებას ხატავს, რომელიც ფონს დამალავს. მისი ჩანაცვლება
+	Removing the background puts the page's own backdrop back.	ფონის მოშორება გვერდს საკუთარ შევსებას დაუბრუნებს.
+	A picture covers page {pages} (a scan?), so the background won't show there.	გვერდი {pages} სურათითაა დაფარული (სკანი?), ამიტომ ფონი იქ არ გამოჩნდება.
+	Pictures cover pages {pages} (scans?), so the background won't show there.	გვერდები {pages} სურათებითაა დაფარული (სკანები?), ამიტომ ფონი იქ არ გამოჩნდება.
+	Page {pages} changed after the background was added, so its own white backdrop stays off. It looks the same on white paper.	გვერდი {pages} ფონის დამატების შემდეგ შეიცვალა, ამიტომ მისი საკუთარი თეთრი შევსება გამორთული რჩება. თეთრ ქაღალდზე ის ისევე გამოიყურება.
+	Pages {pages} changed after the background was added, so their own white backdrops stay off. They look the same on white paper.	გვერდები {pages} ფონის დამატების შემდეგ შეიცვალა, ამიტომ მათი საკუთარი თეთრი შევსება გამორთული რჩება. თეთრ ქაღალდზე ისინი ისევე გამოიყურება.
 	PDF or image	PDF ან გამოსახულება
 	No file chosen	ფაილი არჩეული არ არის
 	Page number	გვერდის ნომერი
@@ -2708,6 +2719,12 @@ theme	Appearance	იერსახე
 	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	კითხულობს {names}-ს, რომლებიც თავის მხრივ მას კითხულობენ. ციკლს ვერცერთი რიგი ვერ გაასწორებს: შეცვალეთ ერთ-ერთი ფორმულა.
 	Not in order	რიგში არ არის
 	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	PDF-ში შენახულ გამოთვლის რიგში არ არის: სხვა PDF-მნახველებმა შეიძლება ვერ გამოთვალონ.
+	Reads {name}, which the form doesn't have, so it gets no value there.	კითხულობს {name}-ს, რომელიც ფორმაში არ არის, ამიტომ იქიდან მნიშვნელობას ვერ იღებს.
+	Its script also reads fields whose names it builds as it runs, so those reads can't be checked.	მისი სკრიპტი ასევე კითხულობს ველებს, რომელთა დასახელებებსაც შესრულებისას აგებს, ამიტომ ამ წაკითხვების შემოწმება შეუძლებელია.
+	Missing field	ველი აკლია
+	Unchecked reads	შეუმოწმებელი წაკითხვები
+	{field} reads fields named as it runs	{field} კითხულობს ველებს, რომელთა დასახელებები შესრულებისას იქმნება
+	Some names are built as it runs	ზოგი დასახელება შესრულებისას იქმნება
 	Back to Prepare a form	ფორმის მომზადებაზე დაბრუნება
 	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	ამ ფორმაში ჯერ არცერთი ველი არ ითვლის თავის მნიშვნელობას. ველის თვისებების „გამოთვლა“ ჩანართზე მიეცით მას გამოთვლა და ის აქ გამოჩნდება.
 	{names} and {last}	{names} და {last}
@@ -2735,6 +2752,11 @@ theme	Appearance	იერსახე
 @plural	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.	{field} ითვლება {fields}-მდე, თუმცა მათ კითხულობს.
 @plural	{n} more field calculates too early.|{n} more fields calculate too early.	ზედმეტად ადრე ითვლება კიდევ ველი: {n}.
 @plural	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.	PDF-ში შენახულ რიგში არ არის: {fields}, ამიტომ სხვა PDF-მნახველებმა შეიძლება ვერ გამოთვალონ.
+@plural	{n} formula reads a field the form doesn't have|{n} formulas read fields the form doesn't have	ფორმულები, რომლებიც ფორმაში არარსებულ ველს კითხულობს: {n}
+@plural	{field} reads {fields}, which the form doesn't have.|{field} reads {fields}, which the form doesn't have.	{field} კითხულობს ფორმაში არარსებულს: {fields}.
+@plural	{n} more formula reads a missing field.|{n} more formulas read missing fields.	კიდევ {n} ფორმულა არარსებულ ველს კითხულობს.
+@plural	{fields} builds some field names as it runs, so those reads aren't checked.|{fields} build some field names as they run, so those reads aren't checked.	{fields} ზოგიერთი ველის დასახელებას შესრულებისას აგებს, ამიტომ ეს წაკითხვები არ მოწმდება.
+@plural	{fields} is missing|{fields} are missing	ფორმაში არ არის: {fields}
 	Bulleted list	ბურთულებიანი სია
 	Numbered list	დანომრილი სია
 	Alignment	სწორება
@@ -2799,6 +2821,8 @@ theme	Appearance	იერსახე
 	Delete attachment	დანართის წაშლა
 	Delete attachment {key}	დანართის წაშლა: {key}
 	Delete the selected pages	მონიშნული გვერდების წაშლა
+	Options for this reply	ამ პასუხის პარამეტრები
+	Export value	ექსპორტის მნიშვნელობა
 	Don't show again	აღარ აჩვენო
 	Enter a scale such as 1:50.	შეიყვანეთ მასშტაბი, მაგალითად 1:50.
 	Expand all tools	ყველა ხელსაწყოს ჩამოშლა
@@ -2828,3 +2852,20 @@ theme	Appearance	იერსახე
 	Show or hide the Tools panel	ხელსაწყოების პანელის ჩვენება ან დამალვა
 	Show or hide the side panel	გვერდითი პანელის ჩვენება ან დამალვა
 	Window	ფანჯარა
+	New bookmarks from text styles…	ახალი სანიშნეები ტექსტის სტილებიდან…
+	New bookmarks from text styles	ახალი სანიშნეები ტექსტის სტილებიდან
+	Page properties…	გვერდის თვისებები…
+	Page Properties	გვერდის თვისებები
+	Tab Order	ტაბულაციის რიგი
+	Use Row Order	მწკრივების რიგის გამოყენება
+	Use Column Order	სვეტების რიგის გამოყენება
+	Use Document Structure	დოკუმენტის სტრუქტურის გამოყენება
+	Unspecified	მითითებული არ არის
+	Level {n}	დონე {n}
+	{font}, {size} pt	{font}, {size} პტ
+	bold	მუქი
+	italic	დახრილი
+	1 line	1 სტრიქონი
+	{n} lines	{n} სტრიქონი
+	This document has no text to make bookmarks from.	ამ დოკუმენტში სანიშნეების შესაქმნელი ტექსტი არ არის.
+	Every line set in the style chosen for a level becomes a bookmark of that level, under a new first bookmark.	დონისთვის არჩეული სტილით აწყობილი თითოეული სტრიქონი ამ დონის სანიშნე ხდება, ახალი პირველი სანიშნის ქვეშ.
