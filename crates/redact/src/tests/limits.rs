@@ -53,3 +53,26 @@ fn a_change_inside_nested_marked_content_touches_every_enclosing_mcid() {
     assert_eq!(changed, HashSet::from([0, 1]));
     assert_eq!(empty, HashSet::from([1]));
 }
+
+/// The layers that are off were found by searching one file-supplied list for every entry of the
+/// other: 100 000 groups each way cost ten billion comparisons. Sets make it linear.
+#[test]
+fn many_layers_are_classified_in_linear_work() {
+    use crate::sanitize::{Hidden, scan};
+    const N: usize = 100_000;
+    let mut doc = one_page(b"", "", vec![]);
+    let groups: Vec<Object> =
+        (0..N).map(|i| Object::Ref(doc.add(Object::Dict(Dict::from_iter([(b"Name".to_vec(), Object::Int(i as i64))]))))).collect();
+    let off = groups[..N / 2].to_vec();
+    let mut config = Dict::new();
+    config.set(b"OFF".to_vec(), Object::Array(off));
+    let mut properties = Dict::new();
+    properties.set(b"OCGs".to_vec(), Object::Array(groups.clone()));
+    properties.set(b"D".to_vec(), Object::Dict(config));
+    let catalog = doc.root().unwrap();
+    doc.update_dict(catalog, |d| d.set(b"OCProperties".to_vec(), Object::Dict(properties))).unwrap();
+    let started = std::time::Instant::now();
+    let counts: HashMap<Hidden, usize> = scan(&doc).into_iter().collect();
+    assert_eq!(counts[&Hidden::HiddenLayers], N / 2);
+    assert!(started.elapsed() < std::time::Duration::from_secs(30), "{:?}", started.elapsed());
+}

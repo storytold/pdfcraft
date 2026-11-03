@@ -334,11 +334,14 @@ fn hidden_layers(doc: &Document) -> Vec<ObjRef> {
     let list = |k: &[u8]| -> Vec<ObjRef> {
         d.get(k).and_then(|g| doc.resolve(g).as_array().map(|a| a.iter().filter_map(Object::as_ref).collect())).unwrap_or_default()
     };
-    let (on, off) = (list(b"ON"), list(b"OFF"));
+    // Membership through sets: both lists come from the file, so a scan of one for each entry of
+    // the other would cost their product.
     if d.name(b"BaseState") == Some(b"OFF") {
+        let on: std::collections::HashSet<ObjRef> = list(b"ON").into_iter().collect();
         all.into_iter().filter(|g| !on.contains(g)).collect()
     } else {
-        off.into_iter().filter(|g| all.contains(g)).collect()
+        let all: std::collections::HashSet<ObjRef> = all.into_iter().collect();
+        list(b"OFF").into_iter().filter(|g| all.contains(g)).collect()
     }
 }
 
