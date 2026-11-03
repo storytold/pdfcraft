@@ -5485,3 +5485,33 @@ fn locked_button_export_edits_leave_the_document_unchanged() {
         assert_eq!(write_incremental(&doc, &SaveOptions::default()).unwrap(), before);
     }
 }
+
+/// Thousands of unlabelled blanks are named Text1, Text2, … in one pass: the names taken are a
+/// set, and each label remembers the next number to try.
+#[test]
+fn detection_names_many_unlabelled_fields_in_linear_time() {
+    use crate::detect::*;
+    let n = 5_000;
+    let shapes = Shapes { boxes: Vec::new(), rules: (0..n).map(|i| [50.0, 20.0 + i as f64 * 24.0, 200.0, 20.0 + i as f64 * 24.0]).collect() };
+    let taken: Vec<String> = (1..=n).map(|i| format!("Text{i}")).collect();
+    let started = std::time::Instant::now();
+    let found = detect(&[], &shapes, &[], &taken);
+    assert_eq!(found.len(), n, "{}", found.len());
+    let mut names: Vec<&str> = found.iter().map(|c| c.name.as_str()).collect();
+    names.sort_unstable();
+    names.dedup();
+    assert_eq!(names.len(), n, "every name is its own");
+    assert!(names.iter().all(|x| x.strip_prefix("Text").and_then(|k| k.parse::<usize>().ok()).is_some_and(|k| k > n)), "past the taken ones");
+    assert!(started.elapsed() < std::time::Duration::from_secs(5), "{:?}", started.elapsed());
+}
+
+/// A cell-name pattern of unmatched braces is looked past once each: the pattern counts up to a
+/// fixed length, so a long one can't make naming the table's cells take minutes.
+#[test]
+fn cell_name_patterns_of_unmatched_braces_are_bounded() {
+    let pattern = "{".repeat(200_000);
+    let started = std::time::Instant::now();
+    let name = crate::table::cell_name(&pattern, 3, 1, 1);
+    assert!(name.starts_with("{{{") && name.ends_with('3'), "{}", name.len());
+    assert!(started.elapsed() < std::time::Duration::from_secs(5), "{:?}", started.elapsed());
+}

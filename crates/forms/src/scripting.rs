@@ -194,8 +194,12 @@ pub fn document_scripts_named(doc: &Document) -> Vec<(String, String)> {
         }
         let node = doc.resolve(&raw);
         let Some(d) = node.as_dict() else { continue };
-        if let Some(kids) = d.get(b"Kids").map(|k| doc.resolve(k)).and_then(|k| k.as_array().cloned()) {
-            stack.extend(kids);
+        // A kids array shared by reference is read once, and what is scheduled counts as visited:
+        // nodes sharing one array can't multiply it.
+        if let Some(kids) = d.get(b"Kids").filter(|k| !matches!(k, Object::Ref(r) if !seen.insert(*r))).map(|k| doc.resolve(k)).and_then(|k| k.as_array().cloned())
+        {
+            let room = 10_000usize.saturating_sub(visited + stack.len());
+            stack.extend(kids.into_iter().take(room));
         }
         if let Some(pairs) = d.get(b"Names").map(|n| doc.resolve(n)).and_then(|n| n.as_array().cloned()) {
             for pair in pairs.chunks(2) {
