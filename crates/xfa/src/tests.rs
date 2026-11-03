@@ -705,6 +705,25 @@ fn empty_repeating_subforms_spend_the_layout_budget() {
 }
 
 #[test]
+fn a_block_split_across_very_many_pages_spends_the_layout_budget() {
+    // One-point content areas slice a flowed subform's paragraphs one line to a page, so the
+    // block is split across hundreds of pages; split_block rescans the still-unplaced
+    // paragraphs once per page, which is quadratic in their number. Fewer paragraphs than this
+    // lay out (188 pages here), so the page limit does not catch it; the rescans spend the
+    // work budget instead.
+    let areas: String = (0..128).map(|i| format!("<contentArea x=\"0.5in\" y=\"{i}pt\" w=\"7in\" h=\"1pt\"/>")).collect();
+    let paras: String = (0..2500).map(|i| format!("<p>Paragraph number {i} with a few words to fill a line.</p>")).collect();
+    let tpl = format!(
+        "<template><subform name=\"form\" layout=\"tb\"><pageSet><pageArea name=\"p\">\
+         <medium stock=\"letter\" short=\"8.5in\" long=\"11in\"/>{areas}</pageArea></pageSet>\
+         <subform name=\"body\" layout=\"tb\"><field name=\"t\" w=\"7in\"><ui><textEdit multiLine=\"1\"/></ui>\
+         <value><exData contentType=\"text/html\"><body xmlns=\"http://www.w3.org/1999/xhtml\">{paras}</body></exData></value>\
+         </field></subform></subform></template>"
+    );
+    assert!(matches!(layout_xml(&tpl), Err(XfaError::TooLarge(_))), "a block split across very many pages must be refused");
+}
+
+#[test]
 fn a_packet_stream_listed_many_times_is_read_once() {
     let mut doc = Document::open(Arc::new(shell("<template><subform/></template>"))).unwrap();
     let packet = pdfcraft_cos::ObjRef::new(5, 0);
