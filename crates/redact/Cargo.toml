@@ -10,7 +10,6 @@ workspace = true
 
 [dependencies]
 pdfcraft-cos = { workspace = true }
-pdfcraft-filters = { workspace = true }
 pdfcraft-content = { workspace = true }
 pdfcraft-fonts = { workspace = true }
 pdfcraft-model = { workspace = true }
@@ -18,6 +17,8 @@ pdfcraft-forms = { workspace = true }
 pdfcraft-edit = { workspace = true }
 pdfcraft-annot = { workspace = true }
 pdfcraft-xfa = { workspace = true }
+# CCITT Group 4 and JBIG2 encoding for cleared one-bit images.
+pdfcraft-filters = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]

@@ -82,14 +82,36 @@ pub fn view_matrix_for(rotation: i64, crop: [f64; 4]) -> [f64; 6] {
 }
 
 /// Leaf pages in document order, with inherited attributes resolved. Cycles and absurdly deep
-/// trees are cut off rather than followed.
+/// trees are cut off rather than followed, as is a tree whose inherited values would take more
+/// than [`MAX_INHERITED_COPIES`] bytes to copy into its leaves.
 pub fn pages(doc: &Document) -> Vec<Page> {
     PageTree::new(doc).collect()
 }
 
+/// Approximate bytes of inherited values copied into leaf dictionaries by one page walk.
+pub const MAX_INHERITED_COPIES: usize = 1 << 30;
+
+/// Approximate heap bytes of `o`: one [`Object`] per node plus string, name and key bytes.
+/// Values nested deeper than the parser allows weigh as too large.
+fn weight(o: &Object, depth: usize) -> usize {
+    if depth > 256 {
+        return usize::MAX;
+    }
+    let own = std::mem::size_of::<Object>();
+    match o {
+        Object::String(s) => own.saturating_add(s.bytes.len()),
+        Object::Name(n) => own.saturating_add(n.len()),
+        Object::Array(a) => a.iter().fold(own, |n, v| n.saturating_add(weight(v, depth + 1))),
+        Object::Dict(d) => d.iter().fold(own, |n, (k, v)| n.saturating_add(k.len()).saturating_add(weight(v, depth + 1))),
+        Object::Stream(s) => s.dict.iter().fold(own, |n, (k, v)| n.saturating_add(k.len()).saturating_add(weight(v, depth + 1))),
+        _ => own,
+    }
+}
+
 // Retain the owner of each inherited value rather than deep-cloning direct Resources on
-// every edge. Only the final Page dictionaries need owned copies of those values.
-type Inherited = [Option<std::sync::Arc<Object>>; 4];
+// every edge. Only the final Page dictionaries need owned copies of those values. Each owner
+// carries the value's weight, measured once where the value is declared.
+type Inherited = [Option<(std::sync::Arc<Object>, usize)>; 4];
 
 struct Children {
     owner: std::sync::Arc<Object>,
@@ -112,16 +134,23 @@ struct PageTree<'a> {
     // One cursor per ancestor, never one entry per child. This also preserves the first
     // depth-first occurrence's attributes when malformed trees share a child.
     pending: Vec<Children>,
+    // Weight left for copying inherited values into leaves. A large direct value on an
+    // ancestor of many leaves would otherwise be copied once per leaf.
+    budget: usize,
 }
 
 impl<'a> PageTree<'a> {
     fn new(doc: &'a Document) -> Self {
+        Self::with_budget(doc, MAX_INHERITED_COPIES)
+    }
+
+    fn with_budget(doc: &'a Document, budget: usize) -> Self {
         let top = doc.root().and_then(|r| doc.get(r).as_dict().and_then(|d| d.reference(b"Pages")));
         let pending = top
             .into_iter()
             .map(|r| Children { owner: std::sync::Arc::new(Object::Array(vec![Object::Ref(r)])), next: 0, inherited: Default::default() })
             .collect();
-        Self { doc, seen: Default::default(), pending }
+        Self { doc, seen: Default::default(), pending, budget }
     }
 }
 
@@ -149,8 +178,8 @@ impl Iterator for PageTree<'_> {
             let Some(d) = obj.as_dict() else { continue };
             let mut inherited = parent.inherited.clone();
             for (key, owner) in INHERITABLE.iter().zip(&mut inherited) {
-                if d.contains(key) {
-                    *owner = Some(obj.clone());
+                if let Some(value) = d.get(key) {
+                    *owner = Some((obj.clone(), weight(value, 0)));
                 }
             }
             let is_pages = d.name(b"Type") == Some(b"Pages") || (d.contains(b"Kids") && d.name(b"Type") != Some(b"Page"));
@@ -165,8 +194,15 @@ impl Iterator for PageTree<'_> {
                 let mut dict = d.clone();
                 for (key, owner) in INHERITABLE.iter().zip(&inherited) {
                     if !dict.contains(key)
-                        && let Some(value) = owner.as_ref().and_then(|o| o.as_dict()).and_then(|d| d.get(key))
+                        && let Some((owner, weight)) = owner
+                        && let Some(value) = owner.as_dict().and_then(|d| d.get(key))
                     {
+                        // Past the budget the walk is cut off, like a tree too large to follow.
+                        let Some(left) = self.budget.checked_sub(*weight) else {
+                            self.pending.clear();
+                            return None;
+                        };
+                        self.budget = left;
                         dict.set(key.to_vec(), value.clone());
                     }
                 }
@@ -207,6 +243,29 @@ mod tests {
         }
         out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{x}\n%%EOF\n", objs.len() + 1).as_bytes());
         Document::open(Arc::new(out)).unwrap()
+    }
+
+    #[test]
+    fn inherited_copies_stop_at_a_budget() {
+        let mut d = doc(0);
+        let root = ObjRef { num: 2, generation: 0 };
+        let leaf = d.get(ObjRef { num: 3, generation: 0 }).as_dict().unwrap().clone();
+        let kids: Vec<_> = (0..200).map(|_| Object::Ref(d.add(leaf.clone()))).collect();
+        let mut resources = Dict::new();
+        resources.set(b"Payload".to_vec(), Object::Array(vec![Object::Int(42); 8192]));
+        let resources = Object::Dict(resources);
+        let each = weight(&resources, 0);
+        d.update_dict(root, |dict| {
+            dict.set(b"Kids".to_vec(), Object::Array(kids));
+            dict.set(b"Resources".to_vec(), resources);
+        })
+        .unwrap();
+        let budget = 1 << 20;
+        let pages: Vec<Page> = PageTree::with_budget(&d, budget).collect();
+        let copied: usize = pages.iter().filter_map(|p| p.dict.get(b"Resources")).map(|r| weight(r, 0)).sum();
+        assert!(copied <= budget, "{copied} bytes of inherited values copied into {} pages", pages.len());
+        assert_eq!(pages.len(), budget / each);
+        assert_eq!(super::pages(&d).len(), 200);
     }
 
     #[test]
