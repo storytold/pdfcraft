@@ -68,6 +68,9 @@ struct Path {
     lines: Option<(Vec<[f64; 2]>, bool)>,
     /// A CTM change mid-path, or a clip: the path is not read at all.
     unreadable: bool,
+    /// A `re` drawn under a CTM that is not axis-aligned: it is kept as its bounding box, so a
+    /// hole cut from that box can reach past the real inner shape.
+    skewed: bool,
 }
 
 impl Path {
@@ -291,7 +294,7 @@ impl<'a> Walker<'a> {
                 }
                 b"gs" => {
                     if let Some(name) = op.last_name() {
-                        gs.alpha = ext_alpha(self.doc, resources, name);
+                        gs.alpha = ext_alpha(self.doc, resources, name, gs.alpha);
                     }
                 }
                 b"re" => {
@@ -302,6 +305,7 @@ impl<'a> Walker<'a> {
                         if [x, y, w, h].iter().all(|v| v.is_finite()) && w != 0.0 && h != 0.0 {
                             let r = gs.ctm.bbox([x.min(x + w), y.min(y + h), x.max(x + w), y.max(y + h)]);
                             let [a, b, c, d, ..] = gs.ctm.0;
+                            path.skewed |= !((b == 0.0 && c == 0.0) || (a == 0.0 && d == 0.0));
                             // Counterclockwise in pattern space when `w` and `h` share a sign;
                             // a mirroring CTM turns it around.
                             let winding = if (w * h).signum() * (a * d - b * c).signum() < 0.0 { -1 } else { 1 };
@@ -337,9 +341,15 @@ impl<'a> Walker<'a> {
                 // `b`/`b*` close the path before filling it, which the fill does anyway.
                 b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*" => {
                     let even_odd = op.op.ends_with(b"*");
-                    let rects = std::mem::take(&mut path).finish();
+                    let filled = std::mem::take(&mut path);
+                    let skewed = filled.skewed;
+                    let rects = filled.finish();
                     if gs.alpha >= 1.0 {
-                        for r in painted(rects, even_odd, &mut self.path_work)? {
+                        // A skewed rectangle's box overstates any hole it cuts: count every
+                        // rectangle as painted, as past `MAX_EXACT_SUBPATHS`.
+                        let painted =
+                            if skewed { rects.into_iter().map(|(r, _)| r).collect() } else { painted(rects, even_odd, &mut self.path_work)? };
+                        for r in painted {
                             self.out.push(FilledRect { rect: r, rgb: gs.fill, pos });
                         }
                     }
@@ -407,8 +417,9 @@ fn user_point(gs: &Gs, op: &Op) -> Option<[f64; 2]> {
     Some([x, y])
 }
 
-/// The non-stroking alpha (`/ca`) of a named ExtGState, defaulting to opaque.
-fn ext_alpha(doc: &Document, resources: &Dict, name: &[u8]) -> f64 {
+/// The non-stroking alpha (`/ca`) of a named ExtGState, or `current` when it sets none (a `gs`
+/// changes only the parameters its dictionary holds).
+fn ext_alpha(doc: &Document, resources: &Dict, name: &[u8], current: f64) -> f64 {
     let alpha = resources
         .get(b"ExtGState")
         .map(|o| doc.resolve(o))
@@ -416,7 +427,7 @@ fn ext_alpha(doc: &Document, resources: &Dict, name: &[u8]) -> f64 {
         .and_then(|d| d.get(name).map(|o| doc.resolve(o)))
         .and_then(|o| o.as_dict().cloned())
         .and_then(|d| d.get(b"ca").map(|o| doc.resolve(o)).and_then(|o| o.as_f64()));
-    alpha.filter(|a| a.is_finite()).map(|a| a.clamp(0.0, 1.0)).unwrap_or(1.0)
+    alpha.filter(|a| a.is_finite()).map_or(current, |a| a.clamp(0.0, 1.0))
 }
 
 /// Every opaque filled rectangle drawn by a page's content (and its form XObjects), with paint

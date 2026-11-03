@@ -918,3 +918,32 @@ fn an_even_odd_frame_paints_four_strips() {
     assert_eq!(strips, [[0.0, 0.0, 10.0, 2.0], [0.0, 2.0, 2.0, 8.0], [0.0, 8.0, 10.0, 10.0], [8.0, 2.0, 10.0, 8.0]]);
     assert!(work > 0);
 }
+
+/// A `gs` whose dictionary has no `/ca` leaves the fill alpha as it was: a translucent box drawn
+/// after it is no cover.
+#[test]
+fn a_gs_without_ca_keeps_the_current_alpha() {
+    let mut b = Builder::new();
+    b.add("<< /Type /Catalog /Pages 2 0 R >>");
+    b.add("<< /Type /Pages /Kids [3 0 R] /Count 1 >>");
+    b.add(
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> \
+         /ExtGState << /Clear << /ca 0.2 >> /NoCa << /LW 2 >> >> >> >>",
+    );
+    b.add_stream(b"BT /F1 24 Tf 100 700 Td (SECRET DATA 123) Tj ET\n/Clear gs /NoCa gs 0 g 100 688 220 32 re f\n");
+    b.add(FONT);
+    let findings = audit_redactions(&open(b.build())).expect("audit must run");
+    assert!(findings.is_empty(), "{findings:?}");
+}
+
+/// A rectangle under a shear is kept as its bounding box, which overstates a hole it cuts: text
+/// under the frame's real ink, inside the inner box's bounds, is still reported.
+#[test]
+fn a_skewed_hole_does_not_hide_text_under_the_frame() {
+    // Shear x by 0.1 y: at y = 715 the real inner edge is at x = 171.5, its bounding box starts
+    // at 168.8. The text sits between them, under the frame's ink.
+    let content = b"BT /F1 4 Tf 169.3 715 Td (I) Tj ET\n0 g 1 0 0.1 1 0 0 cm 90 680 240 50 re 100 688 220 32 re f*\n";
+    let findings = audit_redactions(&open(one_page(content, ""))).expect("audit must run");
+    // Both rectangles now count as painted, so each reports the text it covers.
+    assert!(!findings.is_empty() && findings.iter().all(|f| f.covered_text == "I"), "{findings:?}");
+}
