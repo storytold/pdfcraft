@@ -100,17 +100,19 @@ pub struct DateTime {
     pub ss: u32,
 }
 
-/// `y` moved into 0..400. The Gregorian calendar repeats every 400 years (146,097 days, a whole
-/// number of weeks), so month lengths and weekdays are the same, and the year is always one
-/// chrono can represent, whatever `y` is.
-fn cycle_year(y: i32) -> i32 {
-    y.rem_euclid(400)
+/// `y` for chrono: `y` itself while chrono can represent it and the year after (`days_in` reads
+/// the next January), and past that range `y` moved into 0..400. The Gregorian calendar repeats
+/// every 400 years (146,097 days, a whole number of weeks), so month lengths and weekdays are the
+/// same.
+fn chrono_year(y: i32) -> i32 {
+    let fits = |y: i32| chrono::NaiveDate::from_ymd_opt(y, 1, 1).is_some();
+    if fits(y) && y.checked_add(1).is_some_and(fits) { y } else { y.rem_euclid(400) }
 }
 
 /// Number of days in month `m` (1-12) of year `y`, from chrono (the first of the next month less
 /// the first of this one). An invalid month counts 31 days, as before.
 fn days_in(y: i32, m: u32) -> u32 {
-    let y = cycle_year(y);
+    let y = chrono_year(y);
     let first = |y: i32, m: u32| chrono::NaiveDate::from_ymd_opt(y, m, 1);
     let next = if m == 12 { first(y + 1, 1) } else { first(y, m.saturating_add(1)) };
     match (first(y, m), next) {
@@ -123,7 +125,7 @@ fn days_in(y: i32, m: u32) -> u32 {
 /// range, or a day the month doesn't have).
 fn weekday(y: i32, m: u32, d: u32) -> Option<usize> {
     use chrono::Datelike;
-    let date = chrono::NaiveDate::from_ymd_opt(cycle_year(y), m, d)?;
+    let date = chrono::NaiveDate::from_ymd_opt(chrono_year(y), m, d)?;
     usize::try_from(date.weekday().num_days_from_sunday()).ok()
 }
 
@@ -547,7 +549,8 @@ pub fn validate(v: &Validate, value: &str) -> Result<(), String> {
 
 #[cfg(test)]
 mod calendar_tests {
-    use super::{DateTime, format_date, parse_date};
+    use super::{DateTime, chrono_year, days_in, format_date, parse_date, weekday};
+    use chrono::Datelike;
 
     fn day(y: i32, m: u32, d: u32) -> DateTime {
         DateTime { y, m, d, hh: 0, mm: 0, ss: 0 }
@@ -578,6 +581,16 @@ mod calendar_tests {
         assert_eq!(format_date(day(2_000_000_000, 1, 1), "dddd"), "Saturday");
         // i32::MIN.rem_euclid(400) is 352, and 352-01-01 was a Tuesday.
         assert_eq!(format_date(day(i32::MIN, 1, 1), "dddd"), "Tuesday");
+        // At the edge of chrono's range, chrono's own answer and the cycle's agree.
+        let last = chrono::NaiveDate::MAX.year();
+        for y in [last - 1, last, last + 1, -last - 1, -last] {
+            assert_eq!(chrono_year(y).rem_euclid(400), y.rem_euclid(400));
+            for m in 1..=12 {
+                assert_eq!(days_in(y, m), days_in(y.rem_euclid(400), m), "{y}-{m}");
+                assert_eq!(weekday(y, m, 1), weekday(y.rem_euclid(400), m, 1), "{y}-{m}");
+            }
+        }
+        assert_eq!(chrono_year(2026), 2026, "a year chrono represents is passed through");
         // Year 0 began on a Saturday. Sakamoto's method with truncating division put January and
         // February of year 0 (and of negative years) one day late.
         assert_eq!(format_date(day(0, 1, 1), "dddd"), "Saturday");
