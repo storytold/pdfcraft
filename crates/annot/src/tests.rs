@@ -2250,3 +2250,33 @@ fn freehand_highlight_is_compatible_ink_with_marker_blending() {
         assert!((a - b).abs() < 1e-4, "expected [10, 90, 130, 110], got {rect_from_border:?}");
     }
 }
+
+#[test]
+fn indirect_typewriter_names_keep_outer_whitespace_in_summaries() {
+    for (indirect_subtype, indirect_intent) in [(false, true), (true, false), (true, true)] {
+        let mut doc = fixture();
+        let subtype = Object::name("FreeText");
+        let subtype = if indirect_subtype { Object::Ref(doc.add(subtype)) } else { subtype };
+        let intent = Object::name("FreeTextTypeWriter");
+        let intent = if indirect_intent { Object::Ref(doc.add(intent)) } else { intent };
+        let page = page_refs(&doc).unwrap()[0];
+        let mut entries = annots(&doc, page);
+        let Object::Dict(annotation) = &mut entries[0] else { panic!("fixture annotation is inline") };
+        annotation.set(b"Subtype".to_vec(), subtype);
+        annotation.set(b"IT".to_vec(), intent);
+        let contents = " \nAda\n\nLovelace\n\n ";
+        annotation.set(b"Contents".to_vec(), PdfString::text(contents));
+        set_annots(&mut doc, page, entries).unwrap();
+        let check = |doc: &Document| {
+            let list = summaries(doc);
+            let summary = list.iter().find(|a| a.page == 0 && a.index == 0).expect("indirect Subtype is still listed");
+            assert_eq!(summary.contents.as_deref(), Some(contents), "indirect typewriter metadata preserves outer whitespace");
+            assert_eq!(summary.subtype, "FreeText");
+            assert_eq!(summary.intent.as_deref(), Some("FreeTextTypeWriter"));
+            assert!(summary.fill_sign, "indirect names still identify a Fill & Sign mark");
+            assert!(props(doc, 0, 0).is_some(), "indirect names still expose comment properties");
+        };
+        check(&doc);
+        check(&reopen(&doc));
+    }
+}

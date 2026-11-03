@@ -288,7 +288,7 @@ impl<'a> Inspector<'a> {
     }
 
     pub(super) fn text(&self, d: &Dictionary, key: &[u8]) -> Option<String> {
-        // Typewriter line breaks belong to the text (keep in step with annot's summaries).
+        // Typewriter outer whitespace belongs to the text (keep in step with annot's summaries).
         let s = if key == b"Contents"
             && self.name(d, b"Subtype").as_deref() == Some("FreeText")
             && self.name(d, b"IT").as_deref() == Some("FreeTextTypeWriter")
