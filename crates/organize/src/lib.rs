@@ -22,6 +22,7 @@ mod labels;
 mod outline;
 mod pdfx;
 mod prune;
+mod split_dests;
 mod transition;
 pub mod view;
 mod xmp;

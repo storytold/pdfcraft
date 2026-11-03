@@ -3910,6 +3910,91 @@ fn every_part_of_a_split_page_keeps_its_links_destinations() {
     assert_eq!(dest.first().and_then(Object::as_ref), Some(chapter_two), "and it leads to chapter two");
 }
 
+/// CodeRabbit on #5587: a destination showing a point of a split page goes to the part holding
+/// that point, wherever it is held: a bookmark, a link's /Dest or GoTo action (held directly or
+/// by reference), a named destination in the tree or the legacy dictionary, the opening view.
+/// One showing the whole page, or a point the first part holds, stays on the first part.
+#[test]
+fn a_destination_to_a_split_page_goes_to_the_part_holding_its_point() {
+    let mut doc = doc_c();
+    let page = pages(&doc).unwrap()[0].obj;
+    let dest = |rest: &str| {
+        let mut a = vec![Object::Ref(page)];
+        for t in rest.split(' ') {
+            a.push(match t.parse::<f64>() {
+                Ok(v) => Object::Real(v),
+                Err(_) if t == "null" => Object::Null,
+                Err(_) => Object::name(t),
+            });
+        }
+        Object::Array(a)
+    };
+    // The page is [0 0 200 200]: split in two columns, the right part holds x from 100 to 200.
+    let bookmark = outline::items(&doc)[0];
+    doc.update_dict(bookmark, |d| d.set(b"Dest".to_vec(), dest("XYZ 150 180 0"))).unwrap();
+    let shared = doc.add(dest("XYZ 160 null null"));
+    let mut goto = Dict::new();
+    goto.set(b"S".to_vec(), Object::name("GoTo"));
+    goto.set(b"D".to_vec(), dest("FitV 30"));
+    let mut by_ref = Dict::new();
+    by_ref.set(b"S".to_vec(), Object::name("GoTo"));
+    by_ref.set(b"D".to_vec(), dest("FitR 120 10 190 50"));
+    let by_ref = doc.add(Object::Dict(by_ref));
+    let link = |key: &str, value: Object| {
+        let mut l = Dict::new();
+        l.set(b"Type".to_vec(), Object::name("Annot"));
+        l.set(b"Subtype".to_vec(), Object::name("Link"));
+        l.set(b"Rect".to_vec(), Object::Array(vec![Object::Int(0), Object::Int(0), Object::Int(9), Object::Int(9)]));
+        l.set(key.as_bytes().to_vec(), value);
+        l
+    };
+    let links: Vec<Object> = [link("Dest", Object::Ref(shared)), link("A", Object::Dict(goto)), link("A", Object::Ref(by_ref))]
+        .into_iter()
+        .map(|l| Object::Ref(doc.add(Object::Dict(l))))
+        .collect();
+    let other = pages(&doc).unwrap()[1].obj;
+    doc.update_dict(other, |d| d.set(b"Annots".to_vec(), Object::Array(links))).unwrap();
+    let root = doc.root().unwrap();
+    let names = doc.get(root).as_dict().and_then(|c| c.get(b"Names").cloned()).unwrap();
+    let tree = names.as_dict().and_then(|n| n.get(b"Dests")).and_then(Object::as_ref).unwrap();
+    let mut legacy = Dict::new();
+    legacy.set(b"right".to_vec(), dest("FitBV 150"));
+    legacy.set(b"whole".to_vec(), dest("Fit"));
+    legacy.set(b"top".to_vec(), dest("FitH 50"));
+    doc.update_dict(root, |c| {
+        c.set(b"OpenAction".to_vec(), dest("XYZ 190 10 0"));
+        c.set(b"Dests".to_vec(), Object::Dict(legacy));
+    })
+    .unwrap();
+    doc.update_dict(tree, |t| t.set(b"Names".to_vec(), Object::Array(vec![Object::String(PdfString::text("right")), dest("XYZ 120 null 0")])))
+        .unwrap();
+
+    split_pages(&mut doc, &[0], 2, 1).unwrap();
+    let right = pages(&doc).unwrap()[1].obj;
+    let target = |o: Option<&Object>| {
+        let o = doc.resolve(o.expect("a destination"));
+        let a = match o.as_dict() {
+            Some(d) => doc.resolve(d.get(b"D").expect("/D")),
+            None => o,
+        };
+        a.as_array().and_then(|a| a.first()).and_then(Object::as_ref)
+    };
+    let mark = doc.get(bookmark).as_dict().cloned().unwrap();
+    assert_eq!(target(mark.get(b"Dest")), Some(right), "the bookmark, to a point on the right");
+    let on_two = annots(&doc, 2);
+    assert_eq!(target(on_two[0].get(b"Dest")), Some(right), "the link to a left edge on the right, held by reference");
+    assert_eq!(target(on_two[1].get(b"A")), Some(page), "the link to a left edge on the left stays");
+    assert_eq!(target(on_two[2].get(b"A")), Some(right), "the GoTo action held by reference, to a rectangle on the right");
+    let catalog = doc.get(root).as_dict().cloned().unwrap();
+    assert_eq!(target(catalog.get(b"OpenAction")), Some(right), "the opening view");
+    let legacy = catalog.get(b"Dests").and_then(Object::as_dict).cloned().unwrap();
+    assert_eq!(target(legacy.get(b"right")), Some(right), "the legacy named destination");
+    assert_eq!(target(legacy.get(b"whole")), Some(page), "a whole-page view stays on the first part");
+    assert_eq!(target(legacy.get(b"top")), Some(page), "a top both parts hold goes to the first");
+    let pairs = doc.get(tree).as_dict().and_then(|t| t.get(b"Names").cloned()).unwrap();
+    assert_eq!(target(pairs.as_array().and_then(|p| p.get(1))), Some(right), "the name tree's destination");
+}
+
 /// CodeRabbit on #5587: page 1 can't be copied (an object nested deeper than a copy follows), and
 /// pages are split from the last, so page 2 is already split when page 1 fails. The document is
 /// left as it was, not half split.

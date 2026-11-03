@@ -140,7 +140,9 @@ pub const MAX_SPLIT_PAGES: usize = 10_000;
 /// the content outside the cell stays in the file. Every part keeps all of the page's comments,
 /// links and form widgets, so one that straddles a cut shows, cut short, on each part it crosses
 /// (a widget's copies are widgets of the same field, filled in together); the parts' links lead
-/// to the pages they named (jpeskov on #5587). Nothing changes when any page would split into
+/// to the pages they named (jpeskov on #5587). A destination anywhere in the document that shows
+/// a point of a split page (a link, a bookmark, a named destination, the opening view) goes to
+/// the part holding that point. Nothing changes when any page would split into
 /// parts smaller than a point, or when one can't be copied.
 pub fn split_pages(doc: &mut Document, pages: &[usize], columns: u32, rows: u32) -> Result<(), OrganizeError> {
     if !(1..=MAX_SPLIT).contains(&columns) || !(1..=MAX_SPLIT).contains(&rows) {
@@ -183,11 +185,15 @@ pub fn split_pages(doc: &mut Document, pages: &[usize], columns: u32, rows: u32)
     let sources: Vec<usize> = plan.iter().flat_map(|(i, ..)| std::iter::repeat_n(*i, cells - 1)).collect();
     let copies = crate::import::copy_pages_in_place(&mut out, &src, &sources, all.len())?;
     let mut parts_of = std::collections::HashMap::new();
+    let mut cut = crate::split_dests::Parts::new();
     // `cells` is at least 2 (checked above), so the chunks are never empty.
     for ((i, page, parts), copied) in plan.into_iter().zip(copies.chunks(cells - 1)) {
+        let mut placed = Vec::with_capacity(cells);
         for (r, part) in std::iter::once(page).chain(copied.iter().copied()).zip(parts) {
             out.update_dict(r, |d| d.set(b"CropBox".to_vec(), Object::Array(part.iter().map(|v| Object::Real(*v)).collect())))?;
+            placed.push((r, part));
         }
+        cut.insert(page, placed);
         parts_of.insert(i, copied.to_vec());
     }
     // Each page's copies right after it, in reading order.
@@ -201,6 +207,8 @@ pub fn split_pages(doc: &mut Document, pages: &[usize], columns: u32, rows: u32)
         }
     }
     crate::rebuild(&mut out, &order)?;
+    // A link or bookmark to a point of a split page goes to the part showing that point.
+    crate::split_dests::retarget(&mut out, &cut)?;
     *doc = out;
     Ok(())
 }
