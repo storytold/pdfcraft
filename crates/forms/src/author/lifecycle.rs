@@ -1,6 +1,9 @@
 use super::look::redraw_field;
 use super::tree::{add_to_page, attach, clash, detach, ensure_form, free_name, name_parts, top_names};
-use super::*;
+use super::{
+    Dict, Document, Field, FieldKind, FormError, MIN_FIELD_SIDE, NewField, ObjRef, Object, PdfString, Widget, appearance, fields, flags, invalid,
+    page_refs, rgb,
+};
 
 fn widget_dict(page: ObjRef, rect: [f64; 4]) -> Dict {
     let mut d = Dict::new();
@@ -194,8 +197,78 @@ pub fn delete_field_object(doc: &mut Document, obj: ObjRef) -> Result<(), FormEr
     delete_found_field(doc, f)
 }
 
+/// Delete widget `widget` (an index into the field's widgets) of the field `name`, keeping the
+/// field and its other widgets: one radio button of a group, or one copy of a duplicated field,
+/// as Acrobat's Prepare Form deletes the selected one (#4609). A field with one widget is deleted
+/// whole. A per-widget `/Opt` entry goes with its widget, and a check box or radio group that was
+/// on through the deleted widget alone turns off.
+pub fn delete_widget(doc: &mut Document, name: &str, widget: usize) -> Result<(), FormError> {
+    let f = fields(doc).into_iter().find(|f| f.name == name).ok_or_else(|| FormError::NoSuchField(name.into()))?;
+    let Some(w) = f.widgets.get(widget).cloned() else {
+        return invalid(format!("{name} has no widget {}", widget.saturating_add(1)));
+    };
+    // A field merged with its widget is that widget's only one.
+    if f.widgets.len() < 2 || w.obj == f.obj {
+        return delete_found_field(doc, f);
+    }
+    let per_widget_opt = matches!(f.kind, FieldKind::CheckBox | FieldKind::Radio) && f.options.len() == f.widgets.len();
+    // Turn the group off when no button left *shows* the deleted one's state: a twin with the same
+    // on-state name that is currently off does not keep the choice visible.
+    let on_only_here = w.on_state.as_deref().is_some_and(|on| {
+        f.value.iter().any(|v| v == on) && !f.widgets.iter().enumerate().any(|(i, o)| i != widget && o.state.as_deref() == Some(on))
+    });
+    drop_from_pages(doc, &std::iter::once(w.obj).collect())?;
+    detach(doc, w.obj)?;
+    drop_from_calculation_order(doc, |r| r == w.obj)?;
+    let mut d = doc.get(f.obj).as_dict().cloned().unwrap_or_default();
+    let mut changed = false;
+    // The field's own `/Kids` is what made the widget its: `detach` follows the widget's
+    // `/Parent`, which a damaged file can leave out or point elsewhere, so the field would keep
+    // a widget no page shows.
+    if let Some(kids) = d.get(b"Kids").map(|o| doc.resolve(o)).and_then(|o| o.as_array().cloned())
+        && kids.iter().any(|k| k.as_ref() == Some(w.obj))
+    {
+        d.set(b"Kids".to_vec(), Object::Array(kids.into_iter().filter(|k| k.as_ref() != Some(w.obj)).collect()));
+        changed = true;
+    }
+    if per_widget_opt
+        && let Some(opt) = d.get(b"Opt").map(|o| doc.resolve(o)).and_then(|o| o.as_array().cloned())
+        && opt.len() == f.widgets.len()
+    {
+        let kept: Vec<Object> = opt.into_iter().enumerate().filter(|(i, _)| *i != widget).map(|(_, o)| o).collect();
+        d.set(b"Opt".to_vec(), Object::Array(kept));
+        changed = true;
+    }
+    if on_only_here && d.get(b"V").is_some() {
+        d.set(b"V".to_vec(), Object::name("Off"));
+        changed = true;
+    }
+    // The default (`/DV`, what Reset puts back) can't name a state no button has any more.
+    let dv_only_here = w.on_state.as_deref().is_some_and(|on| {
+        d.get(b"DV").map(|v| doc.resolve(v)).and_then(|v| v.as_name().map(<[u8]>::to_vec)).is_some_and(|dv| dv == on.as_bytes())
+            && !f.widgets.iter().enumerate().any(|(i, o)| i != widget && o.on_state.as_deref() == Some(on))
+    });
+    if dv_only_here {
+        d.set(b"DV".to_vec(), Object::name("Off"));
+        changed = true;
+    }
+    if changed {
+        doc.set(f.obj, Object::Dict(d));
+    }
+    Ok(())
+}
+
 fn delete_found_field(doc: &mut Document, f: Field) -> Result<(), FormError> {
     let widgets: std::collections::HashSet<ObjRef> = f.widgets.iter().map(|w| w.obj).collect();
+    drop_from_pages(doc, &widgets)?;
+    detach(doc, f.obj)?;
+    // Out of the calculation order too: a `/CO` entry would keep the field, its value and its
+    // widgets reachable for a full save.
+    drop_from_calculation_order(doc, |r| r == f.obj || widgets.contains(&r))
+}
+
+/// Take the annotations `widgets` off every page's `/Annots`, held directly or by reference.
+fn drop_from_pages(doc: &mut Document, widgets: &std::collections::HashSet<ObjRef>) -> Result<(), FormError> {
     for p in page_refs(doc) {
         let Some(a) = doc.get(p).as_dict().and_then(|d| d.get(b"Annots").cloned()) else { continue };
         let list = doc.resolve(&a).as_array().cloned().unwrap_or_default();
@@ -207,15 +280,12 @@ fn delete_found_field(doc: &mut Document, f: Field) -> Result<(), FormError> {
             }
         }
     }
-    detach(doc, f.obj)?;
-    // Out of the calculation order too: a `/CO` entry would keep the field, its value and its
-    // widgets reachable for a full save.
-    drop_from_calculation_order(doc, |r| r == f.obj || widgets.contains(&r))
+    Ok(())
 }
 
 /// Remove the `/CO` entries `gone` matches, whether the form and the array are held directly or
 /// by reference.
-fn drop_from_calculation_order(doc: &mut Document, gone: impl Fn(ObjRef) -> bool) -> Result<(), FormError> {
+pub(super) fn drop_from_calculation_order(doc: &mut Document, gone: impl Fn(ObjRef) -> bool) -> Result<(), FormError> {
     let Some(root) = doc.root() else { return Ok(()) };
     let Some(af_obj) = doc.get(root).as_dict().and_then(|d| d.get(b"AcroForm").cloned()) else { return Ok(()) };
     let Some(mut af) = doc.resolve(&af_obj).as_dict().cloned() else { return Ok(()) };
@@ -237,7 +307,23 @@ fn drop_from_calculation_order(doc: &mut Document, gone: impl Fn(ObjRef) -> bool
 }
 
 /// Widget-only keys: they stay with each widget when a merged field is split.
-const WIDGET_KEYS: [&[u8]; 12] = [b"Type", b"Subtype", b"Rect", b"P", b"AP", b"AS", b"MK", b"F", b"BS", b"Border", b"H", b"StructParent"];
+const WIDGET_KEYS: [&[u8]; 13] = [b"Type", b"Subtype", b"Rect", b"P", b"AP", b"AS", b"MK", b"F", b"BS", b"Border", b"H", b"StructParent", b"A"];
+
+/// The `/AA` triggers of a widget annotation (ISO 32000-2 §12.6.3, Table 197). The rest (`K`,
+/// `F`, `V`, `C`, Table 199) belong to the field.
+const WIDGET_TRIGGERS: [&[u8]; 10] = [b"E", b"X", b"D", b"U", b"Fo", b"Bl", b"PO", b"PC", b"PV", b"PI"];
+
+/// Split additional-actions dictionary `aa` into the widget's triggers and the field's.
+/// An empty half is `None`.
+pub(super) fn split_triggers(aa: &Dict) -> (Option<Dict>, Option<Dict>) {
+    let (mut widget, mut field) = (Dict::new(), Dict::new());
+    for (k, v) in aa.iter() {
+        let to = if WIDGET_TRIGGERS.contains(&k.as_slice()) { &mut widget } else { &mut field };
+        to.set(k.clone(), v.clone());
+    }
+    let some = |d: Dict| (!d.is_empty()).then_some(d);
+    (some(widget), some(field))
+}
 
 /// Duplicate a field onto other pages (Acrobat: right-click a field ▸ Duplicate): each page
 /// gets a widget at the same place, belonging to the same field, so they share one value.
@@ -258,40 +344,7 @@ pub fn duplicate_field(doc: &mut Document, name: &str, pages: &[usize]) -> Resul
         return Ok(0);
     }
     // A merged field/widget becomes a field with one widget kid.
-    let mut model_ref = model.obj;
-    if model.obj == f.obj {
-        let d = doc.get(f.obj).as_dict().cloned().unwrap_or_default();
-        let mut kid = Dict::new();
-        for k in WIDGET_KEYS {
-            if let Some(v) = d.get(k) {
-                kid.set(k.to_vec(), v.clone());
-            }
-        }
-        kid.set(b"Parent".to_vec(), Object::Ref(f.obj));
-        let kr = doc.add(Object::Dict(kid));
-        doc.update_dict(f.obj, |d| {
-            for k in WIDGET_KEYS {
-                d.remove(k);
-            }
-            d.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(kr)]));
-        })?;
-        // The page lists the widget now, not the field.
-        if let Some(p) = model.page {
-            let pr = refs[p];
-            let annots = doc.get(pr).as_dict().and_then(|d| d.get(b"Annots").cloned());
-            let swap =
-                |a: Vec<Object>| -> Vec<Object> { a.into_iter().map(|o| if o.as_ref() == Some(f.obj) { Object::Ref(kr) } else { o }).collect() };
-            match annots {
-                Some(Object::Ref(ar)) => {
-                    let a = doc.get(ar).as_array().cloned().unwrap_or_default();
-                    doc.set(ar, Object::Array(swap(a)));
-                }
-                Some(Object::Array(a)) => doc.update_dict(pr, |d| d.set(b"Annots".to_vec(), Object::Array(swap(a))))?,
-                _ => {}
-            }
-        }
-        model_ref = kr;
-    }
+    let model_ref = if model.obj == f.obj { split_merged(doc, &f, &model)? } else { model.obj };
     let template = doc.get(model_ref).as_dict().cloned().unwrap_or_default();
     let mut added = Vec::new();
     for p in &targets {
@@ -323,4 +376,53 @@ pub fn duplicate_field(doc: &mut Document, name: &str, pages: &[usize]) -> Resul
     })?;
     redraw_field(doc, name)?;
     Ok(added.len())
+}
+
+/// Split field `f`, which is also its only widget `model`, into a field and one widget kid that
+/// takes the widget's keys and its place in the page's `/Annots`. Returns the kid.
+pub(super) fn split_merged(doc: &mut Document, f: &Field, model: &Widget) -> Result<ObjRef, FormError> {
+    let refs = page_refs(doc);
+    let d = doc.get(f.obj).as_dict().cloned().unwrap_or_default();
+    let mut kid = Dict::new();
+    for k in WIDGET_KEYS {
+        if let Some(v) = d.get(k) {
+            kid.set(k.to_vec(), v.clone());
+        }
+    }
+    // The widget's own triggers go with it; the field's stay.
+    let aa = d.get(b"AA").and_then(|a| doc.resolve(a).as_dict().cloned());
+    let (widget_aa, field_aa) = aa.as_ref().map(split_triggers).unwrap_or_default();
+    if let Some(w) = widget_aa {
+        kid.set(b"AA".to_vec(), Object::Dict(w));
+    }
+    kid.set(b"Parent".to_vec(), Object::Ref(f.obj));
+    let kr = doc.add(Object::Dict(kid));
+    doc.update_dict(f.obj, |d| {
+        for k in WIDGET_KEYS {
+            d.remove(k);
+        }
+        if aa.is_some() {
+            match field_aa {
+                Some(fa) => d.set(b"AA".to_vec(), Object::Dict(fa)),
+                None => {
+                    d.remove(b"AA");
+                }
+            }
+        }
+        d.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(kr)]));
+    })?;
+    // The page lists the widget now, not the field.
+    if let Some(&pr) = model.page.and_then(|p| refs.get(p)) {
+        let annots = doc.get(pr).as_dict().and_then(|d| d.get(b"Annots").cloned());
+        let swap = |a: Vec<Object>| -> Vec<Object> { a.into_iter().map(|o| if o.as_ref() == Some(f.obj) { Object::Ref(kr) } else { o }).collect() };
+        match annots {
+            Some(Object::Ref(ar)) => {
+                let a = doc.get(ar).as_array().cloned().unwrap_or_default();
+                doc.set(ar, Object::Array(swap(a)));
+            }
+            Some(Object::Array(a)) => doc.update_dict(pr, |d| d.set(b"Annots".to_vec(), Object::Array(swap(a))))?,
+            _ => {}
+        }
+    }
+    Ok(kr)
 }

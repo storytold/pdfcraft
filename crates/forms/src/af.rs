@@ -19,10 +19,10 @@ mod script;
 
 #[cfg(test)]
 use calc::{Notation, eval_notation, notation_name, notation_tokens, unique};
-pub use calc::{calculate, calculation_reads, notation_js, rename_in_calculation};
+pub use calc::{calculate, calculation_reads, notation_js, reads_built_names, rename_in_calculation};
 pub use format::{DATE_PRESETS, DateTime, TIME_PRESETS, format_date, format_value, js_number, keystroke, make_number, parse_date, validate};
 use script::{Arg, call};
-pub use script::{calculate_js, format_js, parse_calculate, parse_format, parse_validate, validate_js};
+pub use script::{NOTATION_NOT_STORABLE, calculate_js, format_js, notation_storable, parse_calculate, parse_format, parse_validate, validate_js};
 
 /// The Format tab.
 #[derive(Clone, Debug, PartialEq, Default)]

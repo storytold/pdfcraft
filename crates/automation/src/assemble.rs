@@ -1,7 +1,7 @@
 use super::error::{Result, ToolError, failed};
 use super::json::{Args, one_based, summary};
 use super::paths::{child, read_input, read_input_bytes, unused, write_atomic};
-use super::*;
+use super::{Arc, Automation, CombineSource, Edit, Path, PathBuf, Value, json};
 
 impl Automation {
     pub(crate) fn doc_create(&mut self, a: &Args) -> Result<Value> {

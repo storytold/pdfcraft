@@ -1711,6 +1711,73 @@ fn the_calculation_order_is_checked_fixed_and_kept() {
     assert_eq!(order.fixed(), ["sub", "total", "tax", "grand"], "only tax moves, to just after total");
 }
 
+/// `set_props` refuses a notation it couldn't store as written before it writes anything: the
+/// tooltip given with it, which is written before the calculation, isn't set either.
+#[test]
+fn a_notation_that_cannot_be_stored_changes_nothing() {
+    use crate::af::Calculate;
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R] >>".into(),
+        "<< /Fields [5 0 R] /DA (/Helv 0 Tf 0 g) >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (total) /Rect [50 700 140 711] /P 3 0 R >>".into(),
+    ];
+    let mut doc = document(&objs);
+    for n in ["", "a EVCALC b", "a */ b", "a\\"] {
+        let props = FieldProps { tooltip: Some("Total".into()), calculate: Some(Calculate::Notation(n.into())), ..Default::default() };
+        assert!(set_props(&mut doc, "total", &props).is_err(), "{n:?}");
+        let all = fields(&doc);
+        let f = field(&all, "total");
+        assert_eq!((f.tooltip.as_deref(), &f.actions.calculate), (None, &Calculate::None), "{n:?} changed nothing");
+    }
+}
+
+/// A formula that reads a field the form doesn't have is flagged, whichever kind of formula it
+/// is: a field deleted from under a sum, a typo in notation, a script's `getField`. So is a
+/// script that builds the names it reads. Neither is an order Fix order can fix.
+#[test]
+fn missing_fields_and_built_names_are_flagged() {
+    use crate::af::{CalcOp, Calculate};
+    use crate::calc_order::CalculationIssue::{BuiltNames, MissingField};
+    let mut doc = one_page();
+    let text = NewField::Text { multiline: false };
+    for (i, name) in ["qty", "gone", "sum", "notation", "script", "built"].into_iter().enumerate() {
+        let y = 700.0 - 40.0 * i as f64;
+        add_field(&mut doc, 0, [50.0, y, 250.0, y + 20.0], &text, Some(name)).unwrap();
+    }
+    let calculate = |c: Calculate| FieldProps { calculate: Some(c), ..FieldProps::default() };
+    set_props(&mut doc, "sum", &calculate(Calculate::Simple { op: CalcOp::Sum, fields: vec!["qty".into(), "gone".into()] })).unwrap();
+    set_props(&mut doc, "notation", &calculate(Calculate::Notation("qty * nope".into()))).unwrap();
+    // qty has one widget, but a widget name is no field: recalculation and getField give qty.0
+    // nothing, so it is as missing as qty.1.
+    let script = "event.value = getField(\"qty\").value + getField(\"ghost\").value + getField(\"qty.0\").value + getField(\"qty.1\").value;";
+    set_field_script(&mut doc, "script", "calculate", Some(script)).unwrap();
+    set_field_script(&mut doc, "built", "calculate", Some("event.value = getField(\"qty\").value + getField(\"row\" + 1).value;")).unwrap();
+    let issues = |doc: &Document| {
+        let order = calculation_order(doc, &fields(doc));
+        assert!(!order.fixable(), "nothing Fix order can fix");
+        order.fields.into_iter().map(|f| (f.name, f.issues)).collect::<Vec<_>>()
+    };
+    let expected = |sum: Vec<_>| {
+        vec![
+            ("sum".to_owned(), sum),
+            ("notation".to_owned(), vec![MissingField { field: "nope".into() }]),
+            (
+                "script".to_owned(),
+                vec![MissingField { field: "ghost".into() }, MissingField { field: "qty.0".into() }, MissingField { field: "qty.1".into() }],
+            ),
+            ("built".to_owned(), vec![BuiltNames]),
+        ]
+    };
+    assert_eq!(issues(&doc), expected(vec![]));
+    delete_field(&mut doc, "gone").unwrap();
+    assert_eq!(issues(&doc), expected(vec![MissingField { field: "gone".into() }]), "a deleted field leaves the sum reading nothing");
+    assert_eq!(issues(&reopen(&doc)), expected(vec![MissingField { field: "gone".into() }]));
+    let order = calculation_order(&doc, &fields(&doc));
+    assert_eq!(order.fields[3].reads, ["qty"], "the names it does know are still read");
+}
+
 /// `/CO` as other tools leave it: a calculated field missing, a field without a calculation, an
 /// entry repeated, a reference to nothing and a number. The order reads around them, and setting
 /// the order writes `/CO` afresh.
@@ -1775,6 +1842,12 @@ fn two_fields_with_one_name_keep_their_places_in_the_order() {
     };
     let row = |name: &str, reads: &str, ok: bool| (name.to_owned(), vec![reads.to_owned()], ok);
     assert_eq!(rows(&doc), [row("dup", "src", false), row("src", "x", true), row("dup", "x", true)]);
+    // Each row is its own field object, so a caller can find the right formula for each dup.
+    let all = fields(&doc);
+    for c in calculation_order(&doc, &all).fields {
+        let f = all.iter().find(|f| f.obj == c.obj).unwrap();
+        assert_eq!((&f.name, f.actions.calculate.reads()), (&c.name, c.reads.clone()));
+    }
     let current: Vec<String> = ["dup", "src", "dup"].map(String::from).into();
     set_calculation_order(&mut doc, &current).unwrap();
     assert_eq!(rows(&doc), [row("dup", "src", false), row("src", "x", true), row("dup", "x", true)], "the current order sets back unchanged");
@@ -1796,7 +1869,7 @@ fn two_fields_with_one_name_keep_their_places_in_the_order() {
 #[test]
 fn new_text_fields_fit_their_box() {
     // #1888: a fixed 12 pt was clipped in a short box. New text and date fields take Acrobat's
-    // Auto size: 12 pt where there is room, smaller where there isn't.
+    // Auto size: the size the box's height gives, smaller where the text is too wide.
     let mut doc = one_page();
     let tf_size = |ap: &str| {
         ap.split("/Helv ")
@@ -1815,7 +1888,9 @@ fn new_text_fields_fit_their_box() {
     }
     add_field(&mut doc, 0, [20.0, 50.0, 200.0, 72.0], &NewField::Text { multiline: false }, Some("tall")).unwrap();
     set_value(&mut doc, "tall", &FieldValue::Text("Hello world".into())).unwrap();
-    assert_eq!(tf_size(&ap(&doc, &field(&fields(&doc), "tall").widgets[0])), 12.0, "a box with room keeps the 12 pt look");
+    // 22 pt tall, less a 1 pt border and 2 pt padding each side: 16 / 1.15.
+    let tall = tf_size(&ap(&doc, &field(&fields(&doc), "tall").widgets[0]));
+    assert!((tall - 16.0 / 1.15).abs() < 0.01, "a box with room fills its height, not 12 pt: {tall}");
     // An explicit size still wins.
     set_props(&mut doc, "short", &FieldProps { font_size: Some(12.0), ..FieldProps::default() }).unwrap();
     assert_eq!(tf_size(&ap(&doc, &field(&fields(&doc), "short").widgets[0])), 12.0);
@@ -1873,6 +1948,73 @@ fn tab_order_follows_the_page_setting() {
     let doc = reopen(&doc);
     assert_eq!(order(&doc), "ACBD", "saved as /Tabs");
     assert!(set_tab_order(&mut doc.clone(), &[3], TabOrder::Row).is_err());
+}
+
+#[test]
+fn rows_and_columns_tab_right_to_left_in_a_document_bound_on_the_right() {
+    let mut doc = one_page();
+    let text = NewField::Text { multiline: false };
+    // A (50,700)  B (300,700)
+    // C (50,600)  D (300,600)
+    for (name, x, y) in [("C", 50.0, 600.0), ("A", 50.0, 700.0), ("D", 300.0, 600.0), ("B", 300.0, 700.0)] {
+        add_field(&mut doc, 0, [x, y, x + 200.0, y + 20.0], &text, Some(name)).unwrap();
+    }
+    let order = |doc: &Document| -> String {
+        let mut all: Vec<(usize, String)> = fields(doc).into_iter().map(|f| (f.widgets[0].tab, f.name)).collect();
+        all.sort();
+        all.into_iter().map(|x| x.1).collect()
+    };
+    let root = doc.root().unwrap();
+    let mut prefs = pdfcraft_cos::Dict::new();
+    prefs.set(b"Direction".to_vec(), Object::name("R2L"));
+    let prefs = doc.add(prefs);
+    doc.update_dict(root, |c| c.set(b"ViewerPreferences".to_vec(), Object::Ref(prefs))).unwrap();
+    set_tab_order(&mut doc, &[0], TabOrder::Row).unwrap();
+    assert_eq!(order(&doc), "BADC", "rows top to bottom, each right to left");
+    set_tab_order(&mut doc, &[0], TabOrder::Column).unwrap();
+    assert_eq!(order(&doc), "BDAC", "columns right to left, each top to bottom");
+    assert_eq!(order(&reopen(&doc)), "BDAC");
+    set_tab_order(&mut doc, &[0], TabOrder::Annotations).unwrap();
+    assert_eq!(order(&doc), "CADB", "unspecified keeps annotation order");
+    doc.update_dict(prefs, |p| p.set(b"Direction".to_vec(), Object::name("L2R"))).unwrap();
+    set_tab_order(&mut doc, &[0], TabOrder::Row).unwrap();
+    assert_eq!(order(&doc), "ABCD", "bound on the left");
+}
+
+#[test]
+fn tab_orders_are_read_for_each_page() {
+    let mut doc = document(&[
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R 6 0 R 7 0 R] /Count 5 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Tabs /C >>".into(),
+        "<< /Type /Page /Parent 2 0 R >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Tabs /S >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Tabs /W >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Tabs 8 0 R >>".into(),
+        "/R".into(),
+    ]);
+    use TabOrder::{Annotations, Column, Row, Structure};
+    assert_eq!(tab_orders(&doc), [Column, Annotations, Structure, Annotations, Row], "no /Tabs, or an unknown name: unspecified");
+    set_tab_order(&mut doc, &[1], Row).unwrap();
+    set_tab_order(&mut doc, &[0, 4], Annotations).unwrap();
+    let doc = reopen(&doc);
+    assert_eq!(tab_orders(&doc), [Annotations, Row, Structure, Annotations, Annotations]);
+}
+
+#[test]
+fn an_indirect_tabs_value_orders_the_page() {
+    let mut doc = one_page();
+    let text = NewField::Text { multiline: false };
+    for (name, x, y) in [("C", 50.0, 600.0), ("A", 50.0, 700.0), ("D", 300.0, 600.0), ("B", 300.0, 700.0)] {
+        add_field(&mut doc, 0, [x, y, x + 200.0, y + 20.0], &text, Some(name)).unwrap();
+    }
+    let column = doc.add(Object::name("C"));
+    let page = page_refs(&doc)[0];
+    doc.update_dict(page, |p| p.set(b"Tabs".to_vec(), Object::Ref(column))).unwrap();
+    let mut all: Vec<(usize, String)> = fields(&doc).into_iter().map(|f| (f.widgets[0].tab, f.name)).collect();
+    all.sort();
+    assert_eq!(all.into_iter().map(|x| x.1).collect::<String>(), "ACBD", "columns, as a direct /C orders them");
+    assert_eq!(tab_orders(&doc), [TabOrder::Column]);
 }
 
 #[test]
@@ -3158,8 +3300,12 @@ fn auto_text_size_fits_single_and_multiline_text() {
     assert_eq!(auto_text_size("Hi", 94.0, 8.0, false, helvetica_width), 8.0 / 1.15);
     let s = auto_text_size(long, 194.0, 8.0, false, helvetica_width);
     assert!(s > 4.0 && s < 8.0 / 1.15 && helvetica_width(long, s) <= 194.0 + 1e-9, "{s}");
-    // Never past 12 pt or under 4 pt.
-    assert_eq!(auto_text_size("Hi", 500.0, 500.0, false, helvetica_width), 12.0);
+    // A tall single-line box gets text as tall as it allows (Acrobat has no 12 pt cap there),
+    // bounded by the largest page; never under 4 pt.
+    assert_eq!(auto_text_size("Hi", 500.0, 24.0, false, helvetica_width), 24.0 / 1.15);
+    assert_eq!(auto_text_size("", 500.0, 1e300, false, helvetica_width), crate::appearance::MAX_AUTO_HEIGHT / 1.15);
+    let s = auto_text_size("Hi", 500.0, 500.0, false, helvetica_width);
+    assert!(s > 12.0 && helvetica_width("Hi", s) <= 500.0 + 1e-9, "{s}");
     assert_eq!(auto_text_size(&long.repeat(20), 20.0, 8.0, false, helvetica_width), 4.0);
     // Multiline: the largest size whose wrapped lines fit the height.
     let m = auto_text_size(long, 114.0, 44.0, true, helvetica_width);
@@ -3601,13 +3747,17 @@ fn dotted_field_names_are_made_with_parent_fields() {
     })
     .unwrap();
 
+    invalid_dotted_field_names_are_rejected(&mut doc, &text);
+}
+
+fn invalid_dotted_field_names_are_rejected(doc: &mut Document, text: &NewField) {
     for bad in ["MASTER", "MASTER.street1.x", "MASTER..x", ".x", "x.", "MASTER. "] {
-        assert!(add_field(&mut doc, 0, [300.0, 200.0, 450.0, 220.0], &text, Some(bad)).is_err(), "{bad:?}");
-        assert!(set_props(&mut doc, "name", &FieldProps { name: Some(bad.into()), ..FieldProps::default() }).is_err(), "{bad:?}");
+        assert!(add_field(doc, 0, [300.0, 200.0, 450.0, 220.0], text, Some(bad)).is_err(), "{bad:?}");
+        assert!(set_props(doc, "name", &FieldProps { name: Some(bad.into()), ..FieldProps::default() }).is_err(), "{bad:?}");
     }
     let deep = vec!["p"; 33].join(".");
-    assert!(add_field(&mut doc, 0, [300.0, 200.0, 450.0, 220.0], &text, Some(&deep)).is_err(), "too deep");
-    assert!(set_props(&mut doc, "name", &FieldProps { name: Some("MASTER.street1".into()), ..FieldProps::default() }).is_err(), "taken");
+    assert!(add_field(doc, 0, [300.0, 200.0, 450.0, 220.0], text, Some(&deep)).is_err(), "too deep");
+    assert!(set_props(doc, "name", &FieldProps { name: Some("MASTER.street1".into()), ..FieldProps::default() }).is_err(), "taken");
 }
 
 /// Review on #2957: a parent left empty by a move keeps its name from the next default name
@@ -3801,95 +3951,134 @@ fn existing_form_fonts_are_kept_and_an_unchanged_resource_dictionary_is_not_rewr
 /// - Helv, TiRo and Cour are there.
 #[test]
 fn every_shape_of_form_fonts_ends_as_objects() {
-    let font = |base: &str| format!("<< /Type /Font /Subtype /Type1 /BaseFont /{base} >>");
     let mut cases = 0;
     for dr_shape in ["missing", "inline", "object"] {
         for font_shape in ["missing", "inline", "object", "number"] {
             for helv in ["missing", "inline", "object", "dangling", "null", "number"] {
                 for mine in ["missing", "inline", "object"] {
-                    if dr_shape == "missing" && (font_shape != "missing" || helv != "missing" || mine != "missing") {
-                        continue;
-                    }
-                    if matches!(font_shape, "missing" | "number") && (helv != "missing" || mine != "missing") {
+                    let case = FontShapeCase::new(dr_shape, font_shape, helv, mine);
+                    if !case.is_valid() {
                         continue;
                     }
                     cases += 1;
-                    let what = format!("/DR {dr_shape}, /Font {font_shape}, /Helv {helv}, /Mine {mine}");
-                    let mut entries = String::new();
-                    match helv {
-                        "inline" => entries += &format!("/Helv {} ", font("Arial")),
-                        "object" => entries += "/Helv 7 0 R ",
-                        "dangling" => entries += "/Helv 99 0 R ",
-                        "null" => entries += "/Helv null ",
-                        "number" => entries += "/Helv 3 ",
-                        _ => {}
-                    }
-                    match mine {
-                        "inline" => entries += &format!("/Mine {} ", font("Symbol")),
-                        "object" => entries += "/Mine 8 0 R ",
-                        _ => {}
-                    }
-                    let fonts_value = match font_shape {
-                        "inline" => format!("<< {entries}>>"),
-                        "object" => "6 0 R".into(),
-                        "number" => "7".into(),
-                        _ => String::new(),
-                    };
-                    let dr_dict = if fonts_value.is_empty() { "<< >>".to_string() } else { format!("<< /Font {fonts_value} >>") };
-                    let dr_value = match dr_shape {
-                        "inline" => dr_dict.clone(),
-                        "object" => "5 0 R".into(),
-                        _ => String::new(),
-                    };
-                    let af = if dr_value.is_empty() { "<< /Fields [] >>".to_string() } else { format!("<< /Fields [] /DR {dr_value} >>") };
-                    let mut doc = document(&[
-                        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
-                        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
-                        "<< /Type /Page /Parent 2 0 R >>".into(),
-                        af,
-                        if dr_shape == "object" { dr_dict } else { "null".into() },
-                        if font_shape == "object" { format!("<< {entries}>>") } else { "null".into() },
-                        font("Helvetica-Oblique"),
-                        font("ZapfDingbats"),
-                    ]);
-                    add_field(&mut doc, 0, [40.0, 600.0, 300.0, 630.0], &NewField::Text { multiline: false }, Some("name"))
-                        .unwrap_or_else(|e| panic!("{what}: {e}"));
-                    let doc = reopen(&doc);
-                    let af = acroform(&doc).unwrap();
-                    let dr = doc.resolve(af.get(b"DR").unwrap_or_else(|| panic!("{what}: no /DR")));
-                    let fonts = dr_fonts(&doc);
-                    for (name, value) in fonts.iter() {
-                        assert!(value.as_dict().is_none(), "{what}: {} is inline", String::from_utf8_lossy(name));
-                    }
-                    for name in ["Helv", "TiRo", "Cour"] {
-                        assert!(fonts.contains(name.as_bytes()), "{what}: no {name}");
-                    }
-                    let base =
-                        |name: &[u8]| fonts.reference(name).and_then(|r| doc.get(r).as_dict().and_then(|f| f.name(b"BaseFont").map(<[u8]>::to_vec)));
-                    match helv {
-                        "inline" => assert_eq!(base(b"Helv").as_deref(), Some(&b"Arial"[..]), "{what}"),
-                        "object" => assert_eq!(fonts.reference(b"Helv"), Some(pdfcraft_cos::ObjRef::new(7, 0)), "{what}"),
-                        "dangling" => assert_eq!(fonts.reference(b"Helv"), Some(pdfcraft_cos::ObjRef::new(99, 0)), "{what}"),
-                        "null" => assert_eq!(fonts.get(b"Helv"), Some(&Object::Null), "{what}"),
-                        "number" => assert_eq!(fonts.get(b"Helv"), Some(&Object::Int(3)), "{what}"),
-                        _ => assert_eq!(base(b"Helv").as_deref(), Some(&b"Helvetica"[..]), "{what}"),
-                    }
-                    match mine {
-                        "inline" => assert_eq!(base(b"Mine").as_deref(), Some(&b"Symbol"[..]), "{what}"),
-                        "object" => assert_eq!(fonts.reference(b"Mine"), Some(pdfcraft_cos::ObjRef::new(8, 0)), "{what}"),
-                        _ => assert!(!fonts.contains(b"Mine"), "{what}"),
-                    }
-                    if dr_shape == "object" {
-                        assert_eq!(af.reference(b"DR"), Some(pdfcraft_cos::ObjRef::new(5, 0)), "{what}: /DR stays its object");
-                    }
-                    if font_shape == "object" {
-                        assert_eq!(dr.as_dict().unwrap().reference(b"Font"), Some(pdfcraft_cos::ObjRef::new(6, 0)), "{what}: /Font stays its object");
-                    }
+                    assert_font_shape_case(&case);
                 }
             }
         }
     }
     assert_eq!(cases, 1 + 2 * (2 + 2 * 6 * 3), "every shape was tried");
+}
+
+struct FontShapeCase<'a> {
+    dr: &'a str,
+    fonts: &'a str,
+    helv: &'a str,
+    mine: &'a str,
+    description: String,
+}
+
+impl<'a> FontShapeCase<'a> {
+    fn new(dr: &'a str, fonts: &'a str, helv: &'a str, mine: &'a str) -> Self {
+        Self { dr, fonts, helv, mine, description: format!("/DR {dr}, /Font {fonts}, /Helv {helv}, /Mine {mine}") }
+    }
+
+    fn is_valid(&self) -> bool {
+        let only_default_dr = self.dr == "missing" && self.fonts == "missing" && self.helv == "missing" && self.mine == "missing";
+        let invalid_fonts = matches!(self.fonts, "missing" | "number") && (self.helv != "missing" || self.mine != "missing");
+        !(self.dr == "missing" && !only_default_dr || invalid_fonts)
+    }
+}
+
+fn assert_font_shape_case(case: &FontShapeCase<'_>) {
+    let mut doc = font_shape_document(case);
+    add_field(&mut doc, 0, [40.0, 600.0, 300.0, 630.0], &NewField::Text { multiline: false }, Some("name"))
+        .unwrap_or_else(|e| panic!("{}: {e}", case.description));
+    let doc = reopen(&doc);
+    let acro = acroform(&doc).unwrap();
+    let dr = doc.resolve(acro.get(b"DR").unwrap_or_else(|| panic!("{}: no /DR", case.description)));
+    let fonts = dr_fonts(&doc);
+    assert_font_entries_are_references(&fonts, &case.description);
+    assert_required_form_fonts(&fonts, &case.description);
+    assert_requested_font_shapes(&doc, &acro, &dr, &fonts, case);
+}
+
+fn font_shape_document(case: &FontShapeCase<'_>) -> Document {
+    let mut entries = String::new();
+    match case.helv {
+        "inline" => entries += &format!("/Helv {} ", form_font("Arial")),
+        "object" => entries += "/Helv 7 0 R ",
+        "dangling" => entries += "/Helv 99 0 R ",
+        "null" => entries += "/Helv null ",
+        "number" => entries += "/Helv 3 ",
+        _ => {}
+    }
+    match case.mine {
+        "inline" => entries += &format!("/Mine {} ", form_font("Symbol")),
+        "object" => entries += "/Mine 8 0 R ",
+        _ => {}
+    }
+    let fonts_value = match case.fonts {
+        "inline" => format!("<< {entries}>>"),
+        "object" => "6 0 R".into(),
+        "number" => "7".into(),
+        _ => String::new(),
+    };
+    let dr_dict = if fonts_value.is_empty() { "<< >>".to_string() } else { format!("<< /Font {fonts_value} >>") };
+    let dr_value = match case.dr {
+        "inline" => dr_dict.clone(),
+        "object" => "5 0 R".into(),
+        _ => String::new(),
+    };
+    let acroform = if dr_value.is_empty() { "<< /Fields [] >>".to_string() } else { format!("<< /Fields [] /DR {dr_value} >>") };
+    document(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R >>".into(),
+        acroform,
+        if case.dr == "object" { dr_dict } else { "null".into() },
+        if case.fonts == "object" { format!("<< {entries}>>") } else { "null".into() },
+        form_font("Helvetica-Oblique"),
+        form_font("ZapfDingbats"),
+    ])
+}
+
+fn form_font(base: &str) -> String {
+    format!("<< /Type /Font /Subtype /Type1 /BaseFont /{base} >>")
+}
+
+fn assert_font_entries_are_references(fonts: &Dict, description: &str) {
+    for (name, value) in fonts.iter() {
+        assert!(value.as_dict().is_none(), "{description}: {} is inline", String::from_utf8_lossy(name));
+    }
+}
+
+fn assert_required_form_fonts(fonts: &Dict, description: &str) {
+    for name in ["Helv", "TiRo", "Cour"] {
+        assert!(fonts.contains(name.as_bytes()), "{description}: no {name}");
+    }
+}
+
+fn assert_requested_font_shapes(doc: &Document, acro: &Dict, dr: &Object, fonts: &Dict, case: &FontShapeCase<'_>) {
+    let base = |name: &[u8]| fonts.reference(name).and_then(|r| doc.get(r).as_dict().and_then(|f| f.name(b"BaseFont").map(<[u8]>::to_vec)));
+    match case.helv {
+        "inline" => assert_eq!(base(b"Helv").as_deref(), Some(&b"Arial"[..]), "{}", case.description),
+        "object" => assert_eq!(fonts.reference(b"Helv"), Some(pdfcraft_cos::ObjRef::new(7, 0)), "{}", case.description),
+        "dangling" => assert_eq!(fonts.reference(b"Helv"), Some(pdfcraft_cos::ObjRef::new(99, 0)), "{}", case.description),
+        "null" => assert_eq!(fonts.get(b"Helv"), Some(&Object::Null), "{}", case.description),
+        "number" => assert_eq!(fonts.get(b"Helv"), Some(&Object::Int(3)), "{}", case.description),
+        _ => assert_eq!(base(b"Helv").as_deref(), Some(&b"Helvetica"[..]), "{}", case.description),
+    }
+    match case.mine {
+        "inline" => assert_eq!(base(b"Mine").as_deref(), Some(&b"Symbol"[..]), "{}", case.description),
+        "object" => assert_eq!(fonts.reference(b"Mine"), Some(pdfcraft_cos::ObjRef::new(8, 0)), "{}", case.description),
+        _ => assert!(!fonts.contains(b"Mine"), "{}", case.description),
+    }
+    if case.dr == "object" {
+        assert_eq!(acro.reference(b"DR"), Some(pdfcraft_cos::ObjRef::new(5, 0)), "{}: /DR stays its object", case.description);
+    }
+    if case.fonts == "object" {
+        assert_eq!(dr.as_dict().unwrap().reference(b"Font"), Some(pdfcraft_cos::ObjRef::new(6, 0)), "{}: /Font stays its object", case.description);
+    }
 }
 
 /// #3441 (review follow-up): filling a field converts the form's inline `/DR` fonts, so a form
@@ -4576,4 +4765,723 @@ fn set_values_reads_the_form_once_not_per_value() {
     assert!(set_values(&mut doc, &again).unwrap().iter().all(Result::is_ok));
     let reads = form_reads() - before;
     assert_eq!(reads, 3, "one to fill, one when f0 comes again, one to recalculate");
+}
+
+/// A radio group `size` with the buttons Small (on), Medium and Large, a per-widget `/Opt`, and
+/// the group's buttons in the calculation order; and a text field `name` with two widgets.
+fn radio_group_form() -> Document {
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),                         // 1
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),         // 2
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R 7 0 R 8 0 R 10 0 R 11 0 R] >>".into(), // 3
+        "<< /Fields [5 0 R 9 0 R] /DA (/Helv 0 Tf 0 g) /CO [7 0 R] >>".into(),              // 4
+        "<< /FT /Btn /Ff 49152 /T (size) /V /S /Opt [(small) (medium) (large)] /Kids [6 0 R 7 0 R 8 0 R] >>".into(), // 5
+        "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /Rect [50 700 64 714] /P 3 0 R /AS /S /AP << /N << /S 12 0 R /Off 12 0 R >> >> >>".into(), // 6
+        "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /Rect [80 700 94 714] /P 3 0 R /AS /Off /AP << /N << /M 12 0 R /Off 12 0 R >> >> >>".into(), // 7
+        "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /Rect [110 700 124 714] /P 3 0 R /AS /Off /AP << /N << /L 12 0 R /Off 12 0 R >> >> >>".into(), // 8
+        "<< /FT /Tx /T (name) /V (Ann) /Kids [10 0 R 11 0 R] >>".into(), // 9
+        "<< /Type /Annot /Subtype /Widget /Parent 9 0 R /Rect [50 600 250 620] /P 3 0 R >>".into(), // 10
+        "<< /Type /Annot /Subtype /Widget /Parent 9 0 R /Rect [300 600 500 620] /P 3 0 R >>".into(), // 11
+        "<< /Length 0 >>\nstream\n\nendstream".into(),                   // 12
+    ];
+    document(&objs)
+}
+
+fn annots(doc: &Document) -> Vec<u32> {
+    let p = page_refs(doc)[0];
+    let a = doc.resolve(doc.get(p).as_dict().unwrap().get(b"Annots").unwrap());
+    a.as_array().unwrap().iter().map(|o| o.as_ref().unwrap().num).collect()
+}
+
+#[test]
+fn deleting_one_radio_button_keeps_the_group_and_its_other_buttons() {
+    let mut doc = radio_group_form();
+    delete_widget(&mut doc, "size", 1).unwrap();
+    let doc = reopen(&doc);
+    let all = fields(&doc);
+    let size = field(&all, "size");
+    assert_eq!(size.widgets.iter().map(|w| w.obj.num).collect::<Vec<_>>(), [6, 8], "only Medium is gone");
+    assert_eq!(size.value, ["S"], "the group keeps its choice");
+    // The per-widget /Opt loses Medium's entry, so the others keep their export values.
+    assert_eq!((size.export_of(0), size.export_of(1)), (Some("small"), Some("large")));
+    assert_eq!(annots(&doc), [6, 8, 10, 11], "the button left the page");
+    let co = doc.resolve(doc.get(ObjRef::new(4, 0)).as_dict().unwrap().get(b"CO").unwrap()).as_array().cloned().unwrap();
+    assert!(co.is_empty(), "and the calculation order");
+    assert!(field(&all, "name").widgets.len() == 2, "other fields are untouched");
+}
+
+#[test]
+fn deleting_the_chosen_radio_button_turns_the_group_off() {
+    let mut doc = radio_group_form();
+    delete_widget(&mut doc, "size", 0).unwrap();
+    let all = fields(&reopen(&doc));
+    let size = field(&all, "size");
+    assert_eq!(size.widgets.iter().map(|w| w.obj.num).collect::<Vec<_>>(), [7, 8]);
+    assert!(size.value.is_empty(), "no button is on any more: {:?}", size.value);
+    assert_eq!((size.export_of(0), size.export_of(1)), (Some("medium"), Some("large")));
+}
+
+#[test]
+fn deleting_the_chosen_radio_button_turns_the_group_off_when_a_twin_is_not_shown_on() {
+    // Medium shares Small's on-state name but shows Off: once Small is gone, no button shows
+    // the group's /V, so the group must not keep reporting it.
+    let mut doc = radio_group_form();
+    let twin = ObjRef::new(7, 0);
+    let blank = Object::Ref(ObjRef::new(12, 0));
+    let mut n = Dict::new();
+    n.set(b"S".to_vec(), blank.clone());
+    n.set(b"Off".to_vec(), blank);
+    let mut ap = Dict::new();
+    ap.set(b"N".to_vec(), Object::Dict(n));
+    let mut w = doc.get(twin).as_dict().cloned().unwrap();
+    w.set(b"AP".to_vec(), Object::Dict(ap));
+    doc.set(twin, Object::Dict(w));
+    delete_widget(&mut doc, "size", 0).unwrap();
+    let all = fields(&reopen(&doc));
+    let size = field(&all, "size");
+    assert_eq!(size.widgets.iter().map(|w| w.obj.num).collect::<Vec<_>>(), [7, 8]);
+    assert!(size.value.is_empty(), "no button shows S any more: {:?}", size.value);
+}
+
+#[test]
+fn deleting_the_default_radio_button_clears_the_default_too() {
+    // The group is off, but Reset would put back Small, which no button has once it is gone.
+    let mut doc = radio_group_form();
+    let size = ObjRef::new(5, 0);
+    let mut d = doc.get(size).as_dict().cloned().unwrap();
+    d.set(b"V".to_vec(), Object::name("Off"));
+    d.set(b"DV".to_vec(), Object::name("S"));
+    doc.set(size, Object::Dict(d));
+    delete_widget(&mut doc, "size", 0).unwrap();
+    let doc = reopen(&doc);
+    let dv = doc.get(size).as_dict().and_then(|d| d.get(b"DV").cloned());
+    assert_eq!(dv, Some(Object::name("Off")));
+    // A default another button still has stays.
+    let mut doc = radio_group_form();
+    let mut d = doc.get(size).as_dict().cloned().unwrap();
+    d.set(b"DV".to_vec(), Object::name("S"));
+    doc.set(size, Object::Dict(d));
+    delete_widget(&mut doc, "size", 1).unwrap();
+    assert_eq!(doc.get(size).as_dict().and_then(|d| d.get(b"DV").cloned()), Some(Object::name("S")));
+}
+
+#[test]
+fn deleting_one_copy_of_a_field_keeps_the_field_and_its_value() {
+    let mut doc = radio_group_form();
+    delete_widget(&mut doc, "name", 0).unwrap();
+    let doc = reopen(&doc);
+    let all = fields(&doc);
+    let name = field(&all, "name");
+    assert_eq!((name.widgets.iter().map(|w| w.obj.num).collect::<Vec<_>>(), name.value.clone()), (vec![11], vec!["Ann".to_string()]));
+    assert_eq!(annots(&doc), [6, 7, 8, 11]);
+    // The last widget takes the field with it, as deleting the field does.
+    let mut doc = doc;
+    delete_widget(&mut doc, "name", 0).unwrap();
+    let doc = reopen(&doc);
+    assert!(!fields(&doc).iter().any(|f| f.name == "name"));
+    assert_eq!(annots(&doc), [6, 7, 8]);
+}
+
+#[test]
+fn deleting_a_radio_button_without_its_parent_link_takes_it_out_of_the_group() {
+    // A damaged file: the group lists Medium in its /Kids, but Medium has no /Parent.
+    for parent in [None, Some(Object::Ref(ObjRef::new(9, 0)))] {
+        let mut doc = radio_group_form();
+        let medium = ObjRef::new(7, 0);
+        let mut w = doc.get(medium).as_dict().cloned().unwrap();
+        w.remove(b"Parent");
+        if let Some(p) = parent.clone() {
+            w.set(b"Parent".to_vec(), p);
+        }
+        doc.set(medium, Object::Dict(w));
+        delete_widget(&mut doc, "size", 1).unwrap();
+        let doc = reopen(&doc);
+        let all = fields(&doc);
+        assert_eq!(field(&all, "size").widgets.iter().map(|w| w.obj.num).collect::<Vec<_>>(), [6, 8], "/Parent {parent:?}");
+        let kids = doc.resolve(doc.get(ObjRef::new(5, 0)).as_dict().unwrap().get(b"Kids").unwrap()).as_array().cloned().unwrap();
+        assert!(!kids.iter().any(|k| k.as_ref() == Some(medium)), "/Parent {parent:?}: {kids:?}");
+        assert_eq!(field(&all, "name").widgets.len(), 2, "/Parent {parent:?}: the other field is untouched");
+        assert_eq!(annots(&doc), [6, 8, 10, 11]);
+    }
+}
+
+#[test]
+fn deleting_a_widget_that_is_not_there_changes_nothing() {
+    let mut doc = radio_group_form();
+    assert_eq!(delete_widget(&mut doc, "size", 3), Err(FormError::Invalid("size has no widget 4".into())));
+    assert_eq!(delete_widget(&mut doc, "nope", 0), Err(FormError::NoSuchField("nope".into())));
+    assert_eq!(delete_widget(&mut doc, "size", usize::MAX), Err(FormError::Invalid(format!("size has no widget {}", usize::MAX))));
+    assert_eq!(field(&fields(&doc), "size").widgets.len(), 3);
+}
+/// Two new radio groups on one page, "Group1" (export `a`) and "Group2" (export `b`).
+fn two_radio_groups(a: &str, b: &str) -> Document {
+    let mut doc = one_page();
+    let radio = |export: &str| NewField::Radio { group: None, export: export.into() };
+    assert_eq!(add_field(&mut doc, 0, [50.0, 600.0, 64.0, 614.0], &radio(a), None).unwrap(), "Group1");
+    assert_eq!(add_field(&mut doc, 0, [80.0, 600.0, 94.0, 614.0], &radio(b), None).unwrap(), "Group2");
+    doc
+}
+
+fn rename_to(doc: &mut Document, from: &str, to: &str) -> Result<String, FormError> {
+    set_props(doc, from, &FieldProps { name: Some(to.into()), ..FieldProps::default() })
+}
+
+fn page_widgets(doc: &Document) -> Vec<ObjRef> {
+    let page = page_refs(doc)[0];
+    let annots = doc.get(page).as_dict().unwrap().get(b"Annots").cloned().unwrap();
+    doc.resolve(&annots).as_array().unwrap().iter().filter_map(|o| o.as_ref()).collect()
+}
+
+/// #4949: a radio button given its group's name is one of the group's buttons, so the group can
+/// be built up by naming buttons alike, as in Acrobat.
+#[test]
+fn a_radio_button_renamed_to_a_groups_name_joins_the_group() {
+    let mut doc = two_radio_groups("Yes", "No");
+    set_value(&mut doc, "Group1", &FieldValue::Radio(Some("Yes".into()))).unwrap();
+    let before = page_widgets(&doc);
+    assert_eq!(rename_to(&mut doc, "Group2", "Group1").unwrap(), "Group1");
+    assert_eq!(page_widgets(&doc), before, "the buttons stay on the page where they were");
+    let mut doc = reopen(&doc);
+    let all = fields(&doc);
+    assert_eq!(all.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), ["Group1"]);
+    let group = field(&all, "Group1");
+    assert_eq!(group.widgets.iter().filter_map(|w| w.on_state.clone()).collect::<Vec<_>>(), ["Yes", "No"]);
+    assert_eq!(group.value, ["Yes"], "the group keeps its value");
+    assert_eq!(group.widgets.iter().map(|w| w.state.clone()).collect::<Vec<_>>(), [Some("Yes".into()), Some("Off".into())]);
+    assert_eq!(page_widgets(&doc), group.widgets.iter().map(|w| w.obj).collect::<Vec<_>>());
+    // Choosing the moved button turns the other off: they are one group.
+    set_value(&mut doc, "Group1", &FieldValue::Radio(Some("No".into()))).unwrap();
+    let group = field(&fields(&doc), "Group1").clone();
+    assert_eq!(group.widgets.iter().map(|w| w.state.clone()).collect::<Vec<_>>(), [Some("Off".into()), Some("No".into())]);
+}
+
+/// Joining redraws only the buttons that moved: the group's own keep their appearances, which may
+/// be custom ones a redraw would replace.
+#[test]
+fn joining_a_group_leaves_its_own_buttons_appearances_as_they_are() {
+    let mut doc = two_radio_groups("Yes", "No");
+    let own = field(&fields(&doc), "Group1").widgets[0].obj;
+    let look = |doc: &Document| doc.get(own).as_dict().and_then(|d| d.get(b"AP").cloned());
+    let before = look(&doc);
+    assert!(before.is_some());
+    rename_to(&mut doc, "Group2", "Group1").unwrap();
+    assert_eq!(look(&doc), before);
+    let group = field(&fields(&doc), "Group1").clone();
+    assert!(group.widgets[1].on_state.as_deref() == Some("No"), "the moved button is drawn with its states");
+}
+
+/// A joining button whose export value a button of the group already has takes the next free
+/// "ChoiceN", in its appearance states too, so the two can be chosen apart.
+#[test]
+fn a_joining_radio_button_with_a_taken_export_value_takes_a_free_one() {
+    let mut doc = two_radio_groups("Choice1", "Choice1");
+    rename_to(&mut doc, "Group2", "Group1").unwrap();
+    let doc = reopen(&doc);
+    let all = fields(&doc);
+    let group = field(&all, "Group1");
+    assert_eq!(group.widgets.iter().filter_map(|w| w.on_state.clone()).collect::<Vec<_>>(), ["Choice1", "Choice2"]);
+    let moved = doc.get(group.widgets[1].obj).as_dict().unwrap().clone();
+    let normal = doc.resolve(moved.get(b"AP").unwrap()).as_dict().unwrap().get(b"N").cloned().unwrap();
+    let normal = doc.resolve(&normal).as_dict().unwrap().clone();
+    assert!(normal.contains(b"Choice2") && !normal.contains(b"Choice1"));
+}
+
+/// A group whose `/Kids` is an indirect array keeps its own buttons when another joins it.
+#[test]
+fn a_group_with_indirect_kids_keeps_its_buttons_when_joined() {
+    let mut doc = two_radio_groups("Yes", "No");
+    let group = field(&fields(&doc), "Group1").obj;
+    let kids = doc.get(group).as_dict().unwrap().get(b"Kids").cloned().unwrap();
+    let held = doc.add(kids);
+    doc.update_dict(group, |d| d.set(b"Kids".to_vec(), Object::Ref(held))).unwrap();
+    rename_to(&mut doc, "Group2", "Group1").unwrap();
+    let doc = reopen(&doc);
+    let all = fields(&doc);
+    assert_eq!(field(&all, "Group1").widgets.iter().filter_map(|w| w.on_state.clone()).collect::<Vec<_>>(), ["Yes", "No"]);
+}
+
+/// Buttons of the joining group that share an export value (a button repeated on another page,
+/// on together) still share it after the join, under one fresh name.
+#[test]
+fn joining_radio_buttons_that_share_a_value_keep_sharing_it() {
+    let mut doc = two_radio_groups("Choice1", "Choice1");
+    let pages = doc.get(doc.root().unwrap()).as_dict().unwrap().reference(b"Pages").unwrap();
+    let mut p = pdfcraft_cos::Dict::new();
+    p.set(b"Type".to_vec(), Object::name("Page"));
+    p.set(b"Parent".to_vec(), Object::Ref(pages));
+    p.set(b"MediaBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 600.into(), 800.into()]));
+    let r = doc.add(Object::Dict(p));
+    doc.update_dict(pages, |d| {
+        let mut kids = d.get(b"Kids").unwrap().as_array().unwrap().clone();
+        kids.push(Object::Ref(r));
+        d.set(b"Count".to_vec(), Object::Int(kids.len() as i64));
+        d.set(b"Kids".to_vec(), Object::Array(kids));
+    })
+    .unwrap();
+    assert_eq!(duplicate_field(&mut doc, "Group2", &[1]).unwrap(), 1);
+    rename_to(&mut doc, "Group2", "Group1").unwrap();
+    let doc = reopen(&doc);
+    let all = fields(&doc);
+    let group = field(&all, "Group1");
+    assert_eq!(group.widgets.iter().filter_map(|w| w.on_state.clone()).collect::<Vec<_>>(), ["Choice1", "Choice2", "Choice2"]);
+}
+
+/// One page holding radio fields that are each their own only widget, as other writers make
+/// one-button groups: `(name, export value, x)`.
+fn merged_radios(specs: &[(&str, &str, f64)]) -> Document {
+    let mut doc = one_page();
+    let page = page_refs(&doc)[0];
+    let af = crate::author::ensure_form(&mut doc).unwrap();
+    let mut made = Vec::new();
+    for &(name, state, x) in specs {
+        let look = doc.add(Object::Stream(pdfcraft_cos::Stream::from_raw(pdfcraft_cos::Dict::new(), b"0 g".to_vec())));
+        let mut n = pdfcraft_cos::Dict::new();
+        n.set(state.as_bytes().to_vec(), Object::Ref(look));
+        n.set(b"Off".to_vec(), Object::Ref(look));
+        let mut ap = pdfcraft_cos::Dict::new();
+        ap.set(b"N".to_vec(), Object::Dict(n));
+        let mut d = pdfcraft_cos::Dict::new();
+        d.set(b"Type".to_vec(), Object::name("Annot"));
+        d.set(b"Subtype".to_vec(), Object::name("Widget"));
+        d.set(b"FT".to_vec(), Object::name("Btn"));
+        d.set(b"Ff".to_vec(), Object::Int(i64::from(flags::RADIO)));
+        d.set(b"T".to_vec(), pdfcraft_cos::PdfString::text(name));
+        d.set(b"Rect".to_vec(), Object::Array(vec![x.into(), 600.into(), (x + 14.0).into(), 614.into()]));
+        d.set(b"P".to_vec(), Object::Ref(page));
+        d.set(b"AP".to_vec(), Object::Dict(ap));
+        d.set(b"AS".to_vec(), Object::name("Off"));
+        let r = doc.add(Object::Dict(d));
+        doc.update_dict(af, |a| {
+            let mut list = a.get(b"Fields").and_then(|l| l.as_array().cloned()).unwrap_or_default();
+            list.push(Object::Ref(r));
+            a.set(b"Fields".to_vec(), Object::Array(list));
+        })
+        .unwrap();
+        made.push(r);
+    }
+    doc.update_dict(page, |p| p.set(b"Annots".to_vec(), Object::Array(made.iter().map(|r| Object::Ref(*r)).collect()))).unwrap();
+    doc
+}
+
+/// A radio field that is its own (only) widget, as other writers make one-button groups, can
+/// both join a group and be joined.
+#[test]
+fn radio_fields_that_are_their_own_widget_join_and_are_joined() {
+    let mut doc = merged_radios(&[("solo", "A", 50.0), ("other", "B", 80.0)]);
+    assert_eq!(rename_to(&mut doc, "other", "solo").unwrap(), "solo");
+    let doc = reopen(&doc);
+    let all = fields(&doc);
+    assert_eq!(all.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), ["solo"]);
+    let group = field(&all, "solo");
+    assert_eq!(group.widgets.iter().filter_map(|w| w.on_state.clone()).collect::<Vec<_>>(), ["A", "B"]);
+    // The joined field's widget became a kid; the moved one shed its field entries.
+    let kids: Vec<ObjRef> = group.widgets.iter().map(|w| w.obj).collect();
+    assert!(!kids.contains(&group.obj));
+    let moved = doc.get(group.widgets[1].obj).as_dict().unwrap().clone();
+    assert!(!moved.contains(b"T") && !moved.contains(b"FT") && moved.reference(b"Parent") == Some(group.obj));
+    let mut on_page = page_widgets(&doc);
+    on_page.sort();
+    let mut kids = kids;
+    kids.sort();
+    assert_eq!(on_page, kids, "the page lists the widgets, not the field");
+}
+
+/// A group that is its own only widget keeps its button's actions when another button joins
+/// it: the new widget takes `/A` and the widget triggers of `/AA`, and the field keeps its own.
+#[test]
+fn a_joined_merged_groups_button_keeps_its_actions() {
+    let mut doc = merged_radios(&[("solo", "A", 50.0), ("other", "B", 80.0)]);
+    let solo = field(&fields(&doc), "solo").obj;
+    let js = |code: &str| {
+        let mut a = pdfcraft_cos::Dict::new();
+        a.set(b"S".to_vec(), Object::name("JavaScript"));
+        a.set(b"JS".to_vec(), pdfcraft_cos::PdfString::text(code));
+        Object::Dict(a)
+    };
+    let mut aa = pdfcraft_cos::Dict::new();
+    aa.set(b"Fo".to_vec(), js("focus();"));
+    aa.set(b"V".to_vec(), js("validate();"));
+    let aa = doc.add(Object::Dict(aa));
+    doc.update_dict(solo, |d| {
+        d.set(b"A".to_vec(), js("up();"));
+        d.set(b"AA".to_vec(), Object::Ref(aa));
+    })
+    .unwrap();
+    rename_to(&mut doc, "other", "solo").unwrap();
+    let doc = reopen(&doc);
+    assert_eq!(
+        field_actions(&doc, "solo").unwrap(),
+        [(Trigger::MouseUp, FieldAction::JavaScript("up();".into())), (Trigger::OnFocus, FieldAction::JavaScript("focus();".into()))]
+    );
+    let group = field(&fields(&doc), "solo").clone();
+    let fd = doc.get(group.obj).as_dict().unwrap().clone();
+    let field_aa = doc.resolve(fd.get(b"AA").unwrap()).as_dict().unwrap().clone();
+    assert!(!fd.contains(b"A") && field_aa.contains(b"V") && !field_aa.contains(b"Fo"), "the field keeps only its own trigger");
+    let wd = doc.get(group.widgets[0].obj).as_dict().unwrap().clone();
+    let widget_aa = doc.resolve(wd.get(b"AA").unwrap()).as_dict().unwrap().clone();
+    assert!(widget_aa.contains(b"Fo") && !widget_aa.contains(b"V"));
+}
+
+/// A joining button that was its own field keeps its widget triggers and drops the field's.
+#[test]
+fn a_joining_merged_button_sheds_its_fields_triggers() {
+    let mut doc = merged_radios(&[("solo", "A", 50.0), ("other", "B", 80.0)]);
+    let other = field(&fields(&doc), "other").obj;
+    let js = |code: &str| {
+        let mut a = pdfcraft_cos::Dict::new();
+        a.set(b"S".to_vec(), Object::name("JavaScript"));
+        a.set(b"JS".to_vec(), pdfcraft_cos::PdfString::text(code));
+        Object::Dict(a)
+    };
+    let mut aa = pdfcraft_cos::Dict::new();
+    aa.set(b"U".to_vec(), js("up();"));
+    aa.set(b"V".to_vec(), js("validate();"));
+    aa.set(b"C".to_vec(), js("calc();"));
+    let aa = doc.add(Object::Dict(aa));
+    doc.update_dict(other, |d| d.set(b"AA".to_vec(), Object::Ref(aa))).unwrap();
+    rename_to(&mut doc, "other", "solo").unwrap();
+    let doc = reopen(&doc);
+    let group = field(&fields(&doc), "solo").clone();
+    let moved = group.widgets.iter().find(|w| w.on_state.as_deref() == Some("B")).unwrap();
+    let wd = doc.get(moved.obj).as_dict().unwrap().clone();
+    let widget_aa = doc.resolve(wd.get(b"AA").unwrap()).as_dict().unwrap().clone();
+    assert!(widget_aa.contains(b"U") && !widget_aa.contains(b"V") && !widget_aa.contains(b"C"), "only the widget's trigger stays");
+    let mut once = merged_radios(&[("solo", "A", 50.0), ("other", "B", 80.0)]);
+    let other = field(&fields(&once), "other").obj;
+    let mut aa = pdfcraft_cos::Dict::new();
+    aa.set(b"V".to_vec(), js("validate();"));
+    once.update_dict(other, |d| d.set(b"AA".to_vec(), Object::Dict(aa))).unwrap();
+    rename_to(&mut once, "other", "solo").unwrap();
+    let once = reopen(&once);
+    let group = field(&fields(&once), "solo").clone();
+    let moved = group.widgets.iter().find(|w| w.on_state.as_deref() == Some("B")).unwrap();
+    let wd = once.get(moved.obj).as_dict().unwrap().clone();
+    assert!(!wd.contains(b"AA"), "a widget left with no trigger has no /AA");
+}
+
+/// However many "ChoiceN" names a group already uses, a joining button with a clashing export
+/// value gets a free one, so the two buttons can still be chosen apart.
+#[test]
+fn a_joining_button_gets_a_free_export_value_when_choice_names_run_long() {
+    let mut doc = two_radio_groups("Choice1", "Choice1");
+    let group = field(&fields(&doc), "Group1").clone();
+    let model = doc.get(group.widgets[0].obj).as_dict().unwrap().clone();
+    let look = doc.add(Object::Stream(pdfcraft_cos::Stream::from_raw(pdfcraft_cos::Dict::new(), b"0 g".to_vec())));
+    let mut kids = vec![Object::Ref(group.widgets[0].obj)];
+    for i in 2..=10_000 {
+        let mut n = pdfcraft_cos::Dict::new();
+        n.set(format!("Choice{i}").into_bytes(), Object::Ref(look));
+        n.set(b"Off".to_vec(), Object::Ref(look));
+        let mut ap = pdfcraft_cos::Dict::new();
+        ap.set(b"N".to_vec(), Object::Dict(n));
+        let mut w = model.clone();
+        w.set(b"AP".to_vec(), Object::Dict(ap));
+        w.remove(b"P");
+        kids.push(Object::Ref(doc.add(Object::Dict(w))));
+    }
+    doc.update_dict(group.obj, |d| d.set(b"Kids".to_vec(), Object::Array(kids))).unwrap();
+    rename_to(&mut doc, "Group2", "Group1").unwrap();
+    let group = field(&fields(&doc), "Group1").clone();
+    let states: Vec<String> = group.widgets.iter().filter_map(|w| w.on_state.clone()).collect();
+    assert_eq!(states.len(), 10_001);
+    assert_eq!(states.last().map(String::as_str), Some("Choice10001"));
+}
+
+/// Only a radio button joins by name: other clashes are refused as before, and a locked group
+/// isn't changed.
+#[test]
+fn joining_by_name_is_only_for_radio_buttons_and_unlocked_groups() {
+    let mut doc = two_radio_groups("Yes", "No");
+    add_field(&mut doc, 0, [50.0, 700.0, 250.0, 720.0], &NewField::Text { multiline: false }, Some("note")).unwrap();
+    assert!(rename_to(&mut doc, "note", "Group1").is_err(), "a text field doesn't join a radio group");
+    assert!(rename_to(&mut doc, "Group2", "note").is_err(), "a radio button doesn't join a text field");
+    set_props(&mut doc, "Group1", &FieldProps { locked: Some(true), ..FieldProps::default() }).unwrap();
+    assert!(rename_to(&mut doc, "Group2", "Group1").is_err(), "a locked group");
+    assert_eq!(fields(&doc).len(), 3);
+}
+
+/// `/I` of field `name`: the selected positions in `/Opt`, or `None` when absent.
+fn selection_indices(doc: &Document, name: &str) -> Option<Vec<i64>> {
+    let f = field(&fields(doc), name).clone();
+    let d = doc.get(f.obj).as_dict().cloned().unwrap();
+    d.get(b"I").map(|i| doc.resolve(i).as_array().unwrap().iter().map(|o| o.as_int().unwrap()).collect())
+}
+
+#[test]
+fn changing_a_lists_options_repoints_its_selected_indices() {
+    let mut doc = one_page();
+    let list =
+        add_field(&mut doc, 0, [50.0, 600.0, 250.0, 680.0], &NewField::List { options: vec!["A".into(), "B".into(), "C".into()], multi: true }, None)
+            .unwrap();
+    set_value(&mut doc, &list, &FieldValue::Choice(vec!["C".into(), "B".into()])).unwrap();
+    assert_eq!(selection_indices(&doc, &list), Some(vec![1, 2]));
+    let f = field(&fields(&doc), &list).clone();
+    doc.update_dict(f.obj, |d| d.set(b"TI".to_vec(), Object::Int(2))).unwrap();
+    // Removing A moves B and C up one place.
+    let opts = |o: &[&str]| FieldProps { options: Some(o.iter().map(|s| s.to_string()).collect()), ..FieldProps::default() };
+    set_props(&mut doc, &list, &opts(&["B", "C", "D"])).unwrap();
+    assert_eq!(selection_indices(&doc, &list), Some(vec![0, 1]));
+    // Removing B leaves only C selected; the top row would point past the end.
+    set_props(&mut doc, &list, &opts(&["C"])).unwrap();
+    assert_eq!(selection_indices(&doc, &list), Some(vec![0]));
+    assert_eq!(top_row(&doc, f.obj), Some(0), "the list scrolls back to its only row");
+    // No selected value is offered any more.
+    set_props(&mut doc, &list, &opts(&["X", "Y"])).unwrap();
+    assert_eq!(selection_indices(&doc, &list), None);
+    let doc = reopen(&doc);
+    assert_eq!(selection_indices(&doc, &list), None);
+}
+
+fn top_row(doc: &Document, obj: ObjRef) -> Option<i64> {
+    doc.get(obj).as_dict().and_then(|d| d.get(b"TI")).and_then(|o| o.as_int())
+}
+
+#[test]
+fn shrinking_a_lists_options_scrolls_a_widget_with_its_own_top_row() {
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [7 0 R] >>".into(),
+        "<< /Fields [6 0 R] /DA (/Helv 10 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> >>".into(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into(),
+        "<< /FT /Ch /T (pick) /Opt [(A) (B) (C) (D) (E) (F)] /V (F) /I [5] /Kids [7 0 R] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /Parent 6 0 R /TI 5 /Rect [50 700 250 720] /P 3 0 R >>".into(),
+    ];
+    let mut doc = document(&objs);
+    let widget = ObjRef::new(7, 0);
+    set_props(&mut doc, "pick", &FieldProps { options: Some(vec!["F".into(), "A".into()]), ..FieldProps::default() }).unwrap();
+    assert_eq!(selection_indices(&doc, "pick"), Some(vec![0]));
+    // The widget's own /TI is read before the field's; row 5 no longer exists.
+    assert_eq!(top_row(&doc, widget), Some(0), "the widget scrolls to F, now row 0");
+    let doc = reopen(&doc);
+    assert_eq!(top_row(&doc, widget), Some(0));
+}
+
+#[test]
+fn each_widget_with_its_own_top_row_scrolls_by_itself() {
+    // Widget 7 shows from the field's top row; widget 8 keeps its own /TI 4.
+    let objs = |v: &str| -> Vec<String> {
+        vec![
+            "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+            "<< /Type /Page /Parent 2 0 R /Annots [7 0 R 8 0 R] >>".into(),
+            "<< /Fields [6 0 R] /DA (/Helv 10 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> >>".into(),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into(),
+            format!("<< /FT /Ch /T (pick) /Opt [(A) (B) (C) (D) (E) (F)] {v} /Kids [7 0 R 8 0 R] >>"),
+            "<< /Type /Annot /Subtype /Widget /Parent 6 0 R /Rect [50 700 250 740] /P 3 0 R >>".into(),
+            "<< /Type /Annot /Subtype /Widget /Parent 6 0 R /TI 4 /Rect [50 600 250 620] /P 3 0 R >>".into(),
+        ]
+    };
+    let (first, other) = (ObjRef::new(7, 0), ObjRef::new(8, 0));
+    // The options shrink: the first widget already shows A, the other's row 4 is gone.
+    let mut doc = document(&objs("/V (A) /I [0]"));
+    set_props(&mut doc, "pick", &FieldProps { options: Some(vec!["A".into(), "B".into()]), ..FieldProps::default() }).unwrap();
+    assert_eq!(top_row(&doc, first), None);
+    assert_eq!(top_row(&reopen(&doc), other), Some(0), "options: the other widget scrolls to A");
+    // A new value the first widget already shows, below the other's view.
+    let mut doc = document(&objs("/V (B) /I [1]"));
+    set_value(&mut doc, "pick", &FieldValue::Choice(vec!["A".into()])).unwrap();
+    assert_eq!(top_row(&doc, ObjRef::new(6, 0)), None, "the field's top row did not move");
+    assert_eq!(top_row(&reopen(&doc), other), Some(0), "value: the other widget scrolls to A");
+}
+
+/// A list box's top row is chosen with the font size set in the same edit: at the larger size
+/// fewer rows fit, so it scrolls further to keep the selection in view.
+#[test]
+fn a_list_boxs_top_row_follows_a_font_size_changed_with_its_items() {
+    let mut doc = document(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R] >>".into(),
+        "<< /Fields [6 0 R] /DA (/Helv 10 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> >>".into(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into(),
+        "<< /FT /Ch /T (pick) /Opt [(A) (B) (C) (D) (E)] /V (C) /I [2] /Type /Annot /Subtype /Widget /Rect [50 700 250 740] /P 3 0 R >>".into(),
+    ]);
+    let items = ["Z", "A", "B", "C", "D"].map(String::from).to_vec();
+    set_props(&mut doc, "pick", &FieldProps { options: Some(items), font_size: Some(20.0), ..FieldProps::default() }).unwrap();
+    let doc = reopen(&doc);
+    let g = field(&fields(&doc), "pick").clone();
+    let w = &g.widgets[0];
+    let rows = w.list.unwrap();
+    let shown = rows.top..rows.top + rows.visible(w.rect[3] - w.rect[1]);
+    assert!(shown.contains(&3), "C is row 3; rows {shown:?} show");
+}
+
+#[test]
+fn sorting_a_combo_boxs_items_repoints_its_selected_index() {
+    let mut doc = one_page();
+    let combo = add_field(
+        &mut doc,
+        0,
+        [50.0, 600.0, 250.0, 620.0],
+        &NewField::Combo { options: vec!["Pear".into(), "apple".into(), "Fig".into()], editable: false },
+        None,
+    )
+    .unwrap();
+    set_value(&mut doc, &combo, &FieldValue::Choice(vec!["Pear".into()])).unwrap();
+    assert_eq!(selection_indices(&doc, &combo), Some(vec![0]));
+    set_props(&mut doc, &combo, &FieldProps { flags: vec![(flags::SORT, true)], ..FieldProps::default() }).unwrap();
+    // apple, Fig, Pear: the selection follows Pear to the end.
+    assert_eq!(selection_indices(&doc, &combo), Some(vec![2]));
+    assert_eq!(field(&fields(&doc), &combo).value, vec!["Pear".to_string()]);
+}
+
+#[test]
+fn sorting_keeps_which_of_two_items_with_one_export_value_is_selected() {
+    let mut doc = one_page();
+    let list = add_field(&mut doc, 0, [50.0, 600.0, 250.0, 680.0], &NewField::List { options: vec!["a".into()], multi: false }, None).unwrap();
+    let f = field(&fields(&doc), &list).clone();
+    let item = |e: &str, shown: &str| Object::Array(vec![Object::String(PdfString::text(e)), Object::String(PdfString::text(shown))]);
+    // Zeta and Alpha both export "x"; `/I` says Zeta is the one selected.
+    doc.update_dict(f.obj, |d| {
+        d.set(b"Opt".to_vec(), Object::Array(vec![item("x", "Zeta"), item("x", "Alpha"), item("y", "Mid")]));
+        d.set(b"V".to_vec(), PdfString::text("x"));
+        d.set(b"I".to_vec(), Object::Array(vec![Object::Int(0)]));
+    })
+    .unwrap();
+    set_props(&mut doc, &list, &FieldProps { flags: vec![(flags::SORT, true)], ..FieldProps::default() }).unwrap();
+    // Alpha, Mid, Zeta: the selection follows Zeta, not the first item exporting "x".
+    assert_eq!(selection_indices(&doc, &list), Some(vec![2]));
+}
+
+#[test]
+fn clearing_a_kids_default_does_not_bring_back_its_parents() {
+    let mut doc = fixture();
+    let all = fields(&doc);
+    let city = field(&all, "address.city").clone();
+    let parent = doc.get(city.obj).as_dict().unwrap().reference(b"Parent").unwrap();
+    doc.update_dict(parent, |d| d.set(b"DV".to_vec(), PdfString::text("Main St"))).unwrap();
+    set_props(&mut doc, "address.city", &FieldProps { default_value: Some(Some("Elm".into())), ..FieldProps::default() }).unwrap();
+    assert_eq!(field(&fields(&doc), "address.city").default, ["Elm"]);
+    set_props(&mut doc, "address.city", &FieldProps { default_value: Some(None), ..FieldProps::default() }).unwrap();
+    let mut doc = reopen(&doc);
+    let f = field(&fields(&doc), "address.city").clone();
+    assert!(f.default.iter().all(String::is_empty), "no default, not the parent's: {:?}", f.default);
+    let own = doc.get(f.obj).as_dict().and_then(|d| d.get(b"DV")).and_then(|o| o.as_string()).map(PdfString::to_text);
+    assert_eq!(own.as_deref(), Some(""), "the kid holds an empty default of its own");
+    set_value(&mut doc, "address.city", &FieldValue::Text("Oak".into())).unwrap();
+    reset(&mut doc, None).unwrap();
+    assert!(field(&fields(&doc), "address.city").value.iter().all(String::is_empty), "reset clears it");
+    // Without a parent default, clearing still removes the key.
+    set_props(&mut doc, "name", &FieldProps { default_value: Some(None), ..FieldProps::default() }).unwrap();
+    let name = field(&fields(&doc), "name").clone();
+    assert!(doc.get(name.obj).as_dict().unwrap().get(b"DV").is_none());
+}
+
+#[test]
+fn clearing_a_kids_value_does_not_bring_back_its_parents() {
+    // A text kid, then a list box kid, under a parent with both a value and a default.
+    for (ft, set) in [("/FT /Tx", FieldValue::Text("Oak".into())), ("/FT /Ch /Opt [(Main St) (Oak)]", FieldValue::Choice(vec!["Oak".into()]))] {
+        let mut doc = document(&[
+            "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+            "<< /Type /Page /Parent 2 0 R /Annots [6 0 R] >>".into(),
+            "<< /Fields [5 0 R] /DA (/Helv 0 Tf 0 g) >>".into(),
+            format!("<< /T (address) {ft} /V (Main St) /DV (Main St) /Kids [6 0 R] >>"),
+            "<< /Type /Annot /Subtype /Widget /T (city) /Parent 5 0 R /Rect [10 10 110 60] /P 3 0 R >>".into(),
+        ]);
+        set_props(&mut doc, "address.city", &FieldProps { default_value: Some(None), ..FieldProps::default() }).unwrap();
+        set_value(&mut doc, "address.city", &set).unwrap();
+        assert_eq!(field(&fields(&doc), "address.city").value, ["Oak"], "{ft}");
+        reset(&mut doc, None).unwrap();
+        let doc = reopen(&doc);
+        let f = field(&fields(&doc), "address.city").clone();
+        assert!(f.value.iter().all(String::is_empty), "{ft}: reset leaves it empty, not the parent's: {:?}", f.value);
+        let mut doc = doc;
+        set_value(&mut doc, "address.city", &set).unwrap();
+        let clear = if ft.contains("Ch") { FieldValue::Choice(Vec::new()) } else { FieldValue::Text(String::new()) };
+        set_value(&mut doc, "address.city", &clear).unwrap();
+        let f = field(&fields(&reopen(&doc)), "address.city").clone();
+        if ft.contains("Ch") {
+            assert!(f.value.is_empty(), "{ft}: clearing leaves no choice selected: {:?}", f.value);
+        } else {
+            assert!(f.value.iter().all(String::is_empty), "{ft}: clearing leaves it empty: {:?}", f.value);
+        }
+    }
+}
+
+#[test]
+fn clearing_a_buttons_default_under_a_parent_with_one_leaves_it_off() {
+    // A check box, then a radio button (flags 49152, inherited from the parent).
+    for flags in ["", "/Ff 49152"] {
+        let mut doc = document(&[
+            "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+            "<< /Type /Page /Parent 2 0 R /Annots [6 0 R] >>".into(),
+            "<< /Fields [5 0 R] /DA (/Helv 0 Tf 0 g) >>".into(),
+            format!("<< /T (opts) /FT /Btn {flags} /DV /Yes /Kids [6 0 R] >>"),
+            "<< /Type /Annot /Subtype /Widget /T (a) /Parent 5 0 R /V /Off /AS /Off /Rect [10 10 25 25] /P 3 0 R /AP << /N << /Yes 7 0 R /Off 7 0 R >> >> >>".into(),
+            "<< /Length 0 >>
+stream
+
+endstream".into(),
+        ]);
+        let kind = field(&fields(&doc), "opts.a").kind;
+        assert_eq!(kind == FieldKind::Radio, !flags.is_empty());
+        set_props(&mut doc, "opts.a", &FieldProps { default_value: Some(None), ..FieldProps::default() }).unwrap();
+        let f = field(&fields(&doc), "opts.a").clone();
+        assert_eq!(doc.get(f.obj).as_dict().and_then(|d| d.get(b"DV")).and_then(|o| o.as_name()), Some(&b"Off"[..]), "{kind:?}");
+        let on = if kind == FieldKind::Radio { FieldValue::Radio(Some("Yes".into())) } else { FieldValue::Check(true) };
+        set_value(&mut doc, "opts.a", &on).unwrap();
+        assert_eq!(field(&fields(&doc), "opts.a").value, ["Yes"]);
+        reset(&mut doc, None).unwrap();
+        let f = field(&fields(&doc), "opts.a").clone();
+        assert!(f.value.iter().all(String::is_empty), "{kind:?}: reset leaves it off, not the parent's Yes: {:?}", f.value);
+    }
+}
+
+#[test]
+fn editing_button_export_values_preserves_selection_and_appearance() {
+    let mut doc = fixture();
+    set_value(&mut doc, "size", &FieldValue::Radio(Some("S".into()))).unwrap();
+    let before = field(&fields(&doc), "size").clone();
+    let appearances: Vec<_> = before.widgets.iter().map(|w| doc.get(w.obj).as_dict().unwrap().get(b"AP").cloned()).collect();
+    set_props(&mut doc, "size", &FieldProps { export_value: Some((0, "Small å".into())), ..Default::default() }).unwrap();
+    let after = field(&fields(&doc), "size").clone();
+    assert_eq!(after.value, before.value);
+    assert_eq!(after.default, before.default);
+    assert_eq!(after.widgets, before.widgets);
+    assert_eq!(after.export_of(0), Some("Small å"));
+    assert_eq!(after.export_of(1), before.export_of(1));
+    assert_eq!(after.export_values(), vec!["Small å"]);
+    assert_eq!(appearances, after.widgets.iter().map(|w| doc.get(w.obj).as_dict().unwrap().get(b"AP").cloned()).collect::<Vec<_>>());
+    let mut saved = reopen(&doc);
+    assert_eq!(field(&fields(&saved), "size").export_of(0), Some("Small å"));
+    set_value(&mut saved, "size", &FieldValue::Radio(Some("Small å".into()))).unwrap();
+    reset(&mut saved, None).unwrap();
+    assert_eq!(field(&fields(&saved), "size").value, before.default);
+
+    set_value(&mut doc, "agree", &FieldValue::Check(true)).unwrap();
+    set_props(&mut doc, "agree", &FieldProps { export_value: Some((0, "Accepted".into())), ..Default::default() }).unwrap();
+    let check = field(&fields(&doc), "agree").clone();
+    assert_eq!(check.value, vec!["Yes"]);
+    assert_eq!(check.export_values(), vec!["Accepted"]);
+    assert_eq!(field(&fields(&reopen(&doc)), "agree").export_of(0), Some("Accepted"));
+}
+
+#[test]
+fn invalid_button_export_edits_leave_document_unchanged() {
+    let mut doc = fixture();
+    let before = write_incremental(&doc, &SaveOptions::default()).unwrap();
+    for (field_name, index, value) in [("size", 99, "new"), ("size", 0, ""), ("size", 0, "Off"), ("size", 0, "L"), ("name", 0, "new")] {
+        assert!(set_props(&mut doc, field_name, &FieldProps { export_value: Some((index, value.into())), ..Default::default() }).is_err());
+        assert_eq!(write_incremental(&doc, &SaveOptions::default()).unwrap(), before);
+    }
+}
+
+#[test]
+fn locked_button_export_edits_leave_the_document_unchanged() {
+    for name in ["agree", "size"] {
+        let mut doc = fixture();
+        set_props(&mut doc, name, &FieldProps { locked: Some(true), ..Default::default() }).unwrap();
+        let before = write_incremental(&doc, &SaveOptions::default()).unwrap();
+        let error = set_props(
+            &mut doc,
+            name,
+            &FieldProps { export_value: Some((0, "Changed".into())), tooltip: Some("Must not change".into()), ..Default::default() },
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("locked"));
+        assert_eq!(write_incremental(&doc, &SaveOptions::default()).unwrap(), before);
+    }
 }

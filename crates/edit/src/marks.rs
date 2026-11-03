@@ -1,4 +1,4 @@
-use super::*;
+use super::{Document, EditError, Object, Rgb, added};
 
 /// The kinds of page marks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -173,11 +173,17 @@ pub struct Background {
     pub source: Option<MarkSource>,
     /// Pictures: size relative to the page (1.0 fits the page).
     pub scale: f64,
+    /// Replace a white backdrop the page paints itself, which would hide the background
+    /// ([`backdrop`](crate::backdrop)). Removing the background turns it back on where that is
+    /// still safe ([`backdrops_left_off`](crate::backdrops_left_off) are the pages where it isn't).
+    pub replace_backdrop: bool,
 }
 
 impl Default for Background {
+    /// A light yellow that still reads as a colour on screen (a near-white default looked as if
+    /// nothing had happened).
     fn default() -> Self {
-        Self { color: [1.0, 1.0, 0.85], opacity: 1.0, source: None, scale: 1.0 }
+        Self { color: [1.0, 0.95, 0.7], opacity: 1.0, source: None, scale: 1.0, replace_backdrop: true }
     }
 }
 
@@ -280,7 +286,12 @@ pub fn expand(template: &str, page_number: u32, count: usize, bates: u64, cx: &C
                 let digits = parts.get(1).and_then(|d| d.parse::<usize>().ok()).unwrap_or(6).clamp(1, 15);
                 format!("{}{:0digits$}{}", parts.get(3).unwrap_or(&""), bates, parts.get(4).unwrap_or(&""))
             }
-            _ => format!("<<{token}>>"),
+            _ => {
+                // Not a token: emit one `<` and retry, so a later token is still found.
+                out.push('<');
+                rest = &rest[start + 1..];
+                continue;
+            }
         };
         out.push_str(&value);
         rest = &after[end + 2..];
@@ -295,4 +306,17 @@ pub(crate) fn bates_start(template: &str) -> Option<u64> {
     let t = &template[i + 2..];
     let t = &t[..t.find(">>")?];
     t.split('#').nth(2).and_then(|s| s.parse().ok()).or(Some(1))
+}
+
+#[cfg(test)]
+mod expand_tests {
+    use super::*;
+
+    #[test]
+    fn expand_token_after_extra_angle_brackets() {
+        let cx = Context::default();
+        assert_eq!(expand("<<<1>>>", 3, 9, 1, &cx), "<3>");
+        assert_eq!(expand("<< <<1>>", 3, 9, 1, &cx), "<< 3");
+        assert_eq!(expand("<<x>> <<1>>", 3, 9, 1, &cx), "<<x>> 3");
+    }
 }
