@@ -1,7 +1,5 @@
 # PdfCraft roadmap
 
-> **Last reviewed:** 2026-11-02 | **Last updated:** 2026-11-02 | **Change:** patch (M7, PR #4625: shared-controller image resize frames, page-clipped previews and visible-body context menus; estimates unchanged)
-
 > **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M7, PR #2155 further review: inherited drawing/text state, affine image gestures, paste/selection ownership, no-op scripts and menu permissions; estimates unchanged)
 
 > **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M7, PR #2155 latest comments: explicit image-paste events, mixed-size field refresh, and documented mixed-script normalization with Undo; estimates unchanged)
@@ -221,9 +219,7 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 ## Progress log
 
-- **2026-11-02 (M7, PR #4625):** Integrated upstream 168a3cb9, preserving both the visible-body image-menu regression and the upstream rail-field sizing regression. Existing image-frame, ownership and preview fixes are unchanged; estimates unchanged.
-
-- **2026-11-02 (M7, PR #4625):** Reconciled with upstream d3384340 and its shared image controller. Selected resize frames keep off-page handles while explicit PDF/editor clips remain effective; page clipping no longer drops added-image identity. Drag previews clip source pixels and their destination together, and image context menus require visible body. Rendered resize/pixel regressions, explicit-clip save/reopen controls, ownership and central-routing checks pass; scoped edit/engine/UI tests, clippy, layers, assets and wasm are green locally. Estimates unchanged.
+- **2026-11-02 (M10, #5743):** macOS print jobs name their title and owner (`com.apple.print.JobInfo.PMJobName`, `PMJobOwner`), as the system print dialog does, because a Kyocera filter crashes on a job without them. Checked by a test and through `doc_print` against a stand-in `lp`; not yet on a physical printer.
 
 - **2026-11-01 (M7, #5657):** Header/footer, watermark and background additions and replacements stage the complete call before committing. Synthetic later-page failures preserve exact incremental bytes, object count, dirty state and allocation cursor; success controls retain other marks and shared/inherited resources. Estimates unchanged.
 
