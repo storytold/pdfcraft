@@ -422,6 +422,26 @@ fn history_labels_keep_captured_names() {
     set_current(Lang::EN);
 }
 
+/// An `@id` row that drops the English label's trailing `…` or changes its `{placeholders}` is not
+/// used, by the menus or by `tr_id`: the label's translation shows instead. craft-i18n checks
+/// neither for `@id` rows, whose source is the command id.
+#[test]
+fn an_id_row_that_changes_the_label_s_shape_is_not_used() {
+    let l = fixture_lang(
+        "x-shape",
+        "@id\tfile.open\tÖffnen\n@id\tfile.close\tSchließen {name}\n@id\tfile.save\tSichern…\n\tOpen…\tÖffnen…\n\tClose\tSchließen\n",
+    );
+    assert_eq!(tr_id(l, "file.open", "Open…"), "Öffnen…", "the row drops the ellipsis");
+    assert_eq!(tr_id(l, "file.close", "Close"), "Schließen", "the row adds a placeholder");
+    assert_eq!(tr_id(l, "file.save", "Save…"), "Sichern…", "a row that keeps the shape is used");
+    set_current(l);
+    assert_eq!(menu_label("file.open", "Open…"), "Öffnen…");
+    assert_eq!(menu_label("file.close", "Close"), "Schließen");
+    assert_eq!(menu_label("file.save", "Save…"), "Sichern…");
+    set_current(Lang::EN);
+    assert!(same_shape("{b} und {a}", "{a} and {b}"), "placeholders may be reordered");
+}
+
 /// Command ids go by PdfCraft's own `@id` rows only: the shared catalog's are keyed by the other
 /// apps' command ids (in Bulgarian its `file.close` row is the id itself). The Undo/Redo phrases
 /// are used only as a pair: a shared "Undo {action}" comes without its "Redo {action}".
@@ -1386,11 +1406,12 @@ fn bundled_catalogs_are_consistent() {
                 println!("{}: @id row for a command PdfCraft doesn't have: {id:?}", lang.code());
                 continue;
             };
-            let holes = |s: &str| {
-                s.split('{').skip(1).filter_map(|p| p.split_once('}')).map(|(n, _)| n.to_owned()).collect::<std::collections::BTreeSet<_>>()
-            };
-            if holes(&translation) != holes(command.label) || translation.ends_with('…') != command.label.ends_with('…') {
-                println!("{}: @id {id:?} doesn't keep the placeholders or ellipsis of {:?}: {translation:?}", lang.code(), command.label);
+            if !same_shape(&translation, command.label) {
+                println!(
+                    "{}: @id {id:?} doesn't keep the placeholders or ellipsis of {:?}, so it isn't used: {translation:?}",
+                    lang.code(),
+                    command.label
+                );
             }
         }
     }

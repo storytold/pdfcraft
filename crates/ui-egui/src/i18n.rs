@@ -560,9 +560,28 @@ pub fn tr_ctx<'a>(lang: Lang, context: &str, s: &'a str) -> &'a str {
 }
 
 /// A string keyed by its command id, falling back to the translation of the English `label`. Only
-/// PdfCraft's own `@id` rows count ([`Lang::has_own`]): command ids are each app's own.
+/// PdfCraft's own `@id` rows count ([`own_id`]).
 pub fn tr_id<'a>(lang: Lang, id: &str, label: &'a str) -> &'a str {
-    if lang.has_own("@id", id) { lang.i18n().tid(lang.lang, id, label) } else { tr(lang, label) }
+    if own_id(lang, id, label) { lang.i18n().tid(lang.lang, id, label) } else { tr(lang, label) }
+}
+
+/// Whether `lang` has PdfCraft's own `@id` row for `id` ([`Lang::has_own`]: command ids are each
+/// app's own) and it keeps the `{placeholders}` and trailing `…` of the English `label`. craft-i18n
+/// can't check that, because an `@id` row's source is the id, so a row that doesn't is skipped
+/// here and the label's translation shows instead.
+fn own_id(lang: Lang, id: &str, label: &str) -> bool {
+    lang.has_own("@id", id) && lang.i18n().get(lang.lang, "@id", id).is_some_and(|translated| same_shape(translated, label))
+}
+
+/// Whether `translated` has the `{placeholders}` (in any order) and the trailing `…` of `english`:
+/// the check craft-i18n makes on every row whose source is English text.
+fn same_shape(translated: &str, english: &str) -> bool {
+    let placeholders = |text: &str| {
+        let mut names: Vec<String> = text.split('{').skip(1).filter_map(|p| p.split_once('}')).map(|(name, _)| name.to_owned()).collect();
+        names.sort_unstable();
+        names
+    };
+    translated.ends_with('…') == english.ends_with('…') && placeholders(translated) == placeholders(english)
 }
 
 /// Fill `{name}` placeholders in one pass. Unknown placeholders are left as written, and inserted
@@ -648,11 +667,12 @@ pub fn command_label(text: &str) -> String {
     t(text).to_owned()
 }
 
-/// A registered command's menu label: its `@id` entry in PdfCraft's own catalog if there is one,
-/// otherwise [`command_label`] of the current English label.
+/// A registered command's menu label: its `@id` entry in PdfCraft's own catalog if there is one
+/// that keeps the label's shape ([`own_id`]), otherwise [`command_label`] of the current English
+/// label.
 pub fn menu_label(id: &str, label: &str) -> String {
     let lang = current();
-    match lang.has_own("@id", id).then(|| lang.i18n().get(lang.lang, "@id", id)).flatten() {
+    match own_id(lang, id, label).then(|| lang.i18n().get(lang.lang, "@id", id)).flatten() {
         Some(translated) => translated.to_owned(),
         None => command_label(label),
     }
