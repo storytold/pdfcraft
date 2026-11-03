@@ -64,7 +64,7 @@ Before preparing contributions, every patch was audited against upstream's manda
 ## 3. PR #5907: Native Android Platform Port
 - **Target Pull Request:** `https://github.com/storytold/pdfcraft/pull/5907`
 - **Head Branch:** `dikshant363:android-port`
-- **Latest Verified Commit:** `c2444102` (`fix(android): address PR #5907 review findings and form-field back persistence`)
+- **Latest Verified Commit:** `19c6d9c3` (`fix(automation): preserve script errors and console diagnostics in apply`)
 - **Status:** Open for maintainer review; review remediations implemented and verified.
 - **CodeRabbit Review Remediation:**
   - Uncommitted form field text preserved on Android Back / doc close via `DisposableEffect.onDispose` and `commitFieldEdit()`.

@@ -204,7 +204,7 @@ Following CodeRabbit and architectural reviews on upstream PR #5907, the followi
 | :--- | :--- | :--- | :--- |
 | **Upstream PR #5833** | Preserve script diagnostics in `apply`, add docstrings and tests | **COMPLETE** | Commit `ee786423` pushed; PR #5833 updated; 324 tests passing |
 | **Upstream PR #5834** | Stereo frame validation, bounded 64 MiB reads, tests | **COMPLETE** | Commit `183bd806` pushed; PR #5834 updated; 78 annot tests passing |
-| **Android PR #5907** | Form persistence, cache bounds, atomic writes, sound limits | **COMPLETE** | Commit `c2444102` committed; unit tests and Clippy passing; 327 assets verified |
+| **Android PR #5907** | Form persistence, cache bounds, atomic writes, sound limits | **COMPLETE** | Commits `c2444102` & `19c6d9c3` pushed; all unit & bridge tests and Clippy passing; 327 assets verified |
 | **Release Signing Gate** | Reject absent credentials, explicit debug opt-in, unsigned mode | **VERIFIED** | Gradle rejection vectors verified; `apksigner` confirmed signature-free |
 | **Version Code Scheme** | Multi-ABI, arm64, x86_64, format validation, overflow checks | **VERIFIED** | `versionCode` verified across ABIs; published tag `v0.18.0-rc.1` intact |
 | **Physical Device Test** | Install, launch, render, comment, search, memory audit | **VERIFIED** | 4 screenshots in `evidence/physical_device/`; 0 WebViews; PSS 148 MB |
