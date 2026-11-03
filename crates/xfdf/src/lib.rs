@@ -23,7 +23,7 @@ mod fdf;
 mod xfdf;
 
 #[cfg(test)]
-use common::{MAX_DEPTH, MAX_XML_DEPTH, arr, nums_of, parse_hex, text_of, xml_nesting_depth};
+use common::{MAX_DEPTH, MAX_XML_DEPTH, arr, nums_of, parse_hex, text_of};
 use common::{check_form_xml_depth, esc, parse_form_xml, walk_xfdf, xml_name};
 pub use fdf::export_fdf;
 use fdf::{ImportBudget, fdf_body, import_fdf, walk_fdf};

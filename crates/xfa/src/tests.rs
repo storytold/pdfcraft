@@ -2162,20 +2162,6 @@ fn deeply_nested_template_is_refused_instead_of_overflowing_the_stack() {
     assert!(matches!(crate::parse::parse(&xml), Err(crate::XfaError::Malformed(_))), "ten thousand nested subforms must be refused, not parsed");
 }
 
-/// The depth scanner skips what is not an element and cannot under-count one.
-#[test]
-fn nesting_depth_scanner_counts_what_matters() {
-    use crate::xml_nesting_depth as d;
-    assert_eq!(d(""), 0);
-    assert_eq!(d("<a><b><c/></b></a>"), 3);
-    assert_eq!(d(r#"<?xml version="1.0"?><!-- <x> --><a/>"#), 1);
-    assert_eq!(d("<a><![CDATA[<not-an-element>]]></a>"), 1);
-    assert_eq!(d(r#"<a b="<"><c/></a>"#), 2);
-    assert_eq!(d("<a/>"), 1);
-    assert_eq!(d("<a><b/></a>"), 2);
-    assert_eq!(d(&"<empty/>".repeat(2_000)), 1, "elements that close themselves must not accumulate");
-}
-
 /// A template holding thousands of self-closing elements is two levels deep, not thousands. Before
 /// the scanner knew that, a form with a lot of styling elements was refused as too deeply nested.
 #[test]

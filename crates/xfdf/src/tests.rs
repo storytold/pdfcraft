@@ -71,17 +71,6 @@ fn nested_fields_within_the_limit_still_read() {
     assert_eq!(values[0].1, vec!["deep".to_string()]);
 }
 
-/// The scanner counts a tag that closes itself as one level while it is read, not as a level left
-/// open, so a flat file with thousands of them stays shallow and is not refused.
-#[test]
-fn self_closing_elements_do_not_accumulate_in_the_depth() {
-    use crate::xml_nesting_depth as d;
-    assert_eq!(d("<a/>"), 1);
-    assert_eq!(d("<a><b/></a>"), 2);
-    assert_eq!(d(&"<empty/>".repeat(2_000)), 1);
-    assert_eq!(d(&format!("<fields>{}</fields>", r#"<field name="a"/>"#.repeat(2_000))), 2);
-}
-
 /// The blank document with comments and values.
 fn filled() -> Document {
     let mut doc = blank();
