@@ -1,3 +1,5 @@
+use pdfcraft_model::say;
+
 /// What can go wrong when printing.
 ///
 /// The three things a *person* can be wrong about — there is nothing to print, a page number past
@@ -54,31 +56,4 @@ impl PrintError {
             fault => fault.to_string(),
         }
     }
-}
-
-/// A wording with its holes filled.
-///
-/// A hole is a name in braces, such as `{n}`; what is not in `values` is left as it is written.
-/// Values go in during a single pass, so a value with braces in it is never read as a hole.
-fn say(wording: &str, values: &[(&str, String)]) -> String {
-    let mut out = String::with_capacity(wording.len() + 8);
-    let mut rest = wording;
-    while let Some(open) = rest.find('{') {
-        let (before, from_brace) = rest.split_at(open);
-        out.push_str(before);
-        // `find` counts from the brace and `}` is one byte, so this is a char boundary.
-        let Some(close) = from_brace.find('}') else {
-            // A brace with nothing closing it is just text.
-            out.push_str(from_brace);
-            return out;
-        };
-        let Some(hole) = from_brace.get(..=close) else { return out + from_brace };
-        match values.iter().find(|(name, _)| *name == hole) {
-            Some((_, value)) => out.push_str(value),
-            None => out.push_str(hole),
-        }
-        rest = from_brace.get(close + 1..).unwrap_or_default();
-    }
-    out.push_str(rest);
-    out
 }

@@ -12,7 +12,9 @@ L3/L4 crates need:
   from 1 up, at most 75,000; anything else counts as 1. A `/Rotate` that isn't a multiple of 90
   counts as 0, as the renderer draws it.
   `view_matrix_for(rotation, rect)` is the same matrix for any rectangle, e.g. to draw a
-  comment's picture upright inside its user-space `/Rect` on a turned page.
+  comment's picture upright inside its user-space `/Rect` on a turned page;
+- `say(wording, values)`: a wording with its `{name}` holes filled in one pass, so a value that
+  contains braces is never read as a hole (a11y findings, print errors, form table messages).
 
 The page-tree walk keeps one cursor per ancestor and shares inherited attribute owners.
 Repeated child references are skipped before copying attributes, with first depth-first

@@ -1400,19 +1400,6 @@ fn report_words_are_complete() {
     assert!(unsaid.is_empty(), "REPORT_WORDS lists words the page no longer says: {unsaid:#?}");
 }
 
-/// `say` puts the values in, and what it puts in is never read as a hole of its own: a document that
-/// names a font `{p}` cannot make a finding say which page it is on.
-#[test]
-fn say_fills_holes_once() {
-    let values = [("{p}", "7".to_string()), ("{}", "{p} {n}".to_string())];
-    assert_eq!(
-        say("Font {} on page {p} doesn't map its characters to Unicode", &values),
-        "Font {p} {n} on page 7 doesn't map its characters to Unicode"
-    );
-    // A hole with nothing for it, and a brace with nothing closing it, are left as they stand.
-    assert_eq!(say("{a} {p} {", &values), "{a} 7 {");
-}
-
 /// A finding whose frame holds another wording says the whole thing in English, holes and all
 /// filled, and still hands the interface the two wordings to translate.
 #[test]

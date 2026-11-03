@@ -12,6 +12,8 @@
 use std::collections::HashSet;
 use std::fmt;
 
+use pdfcraft_model::say;
+
 use crate::MIN_FIELD_SIDE;
 
 /// The most rows a table can have.
@@ -372,30 +374,6 @@ impl fmt::Display for TableError {
 }
 
 impl std::error::Error for TableError {}
-
-/// A wording with its holes filled. A hole is a name in braces, such as `{max}`; what is not in
-/// `values` is left as it is written.
-fn say(wording: &str, values: &[(&str, String)]) -> String {
-    let mut out = String::with_capacity(wording.len() + 8);
-    let mut rest = wording;
-    while let Some(open) = rest.find('{') {
-        let (before, from_brace) = rest.split_at(open);
-        out.push_str(before);
-        // `find` counts from the brace and `}` is one byte, so this is a char boundary.
-        let Some(close) = from_brace.find('}') else {
-            out.push_str(from_brace);
-            return out;
-        };
-        let Some(hole) = from_brace.get(..=close) else { return out + from_brace };
-        match values.iter().find(|(name, _)| *name == hole) {
-            Some((_, value)) => out.push_str(value),
-            None => out.push_str(hole),
-        }
-        rest = from_brace.get(close + 1..).unwrap_or_default();
-    }
-    out.push_str(rest);
-    out
-}
 
 #[cfg(test)]
 mod tests {
