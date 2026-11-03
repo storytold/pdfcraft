@@ -4757,6 +4757,40 @@ fn removing_hidden_information_through_tools() {
     assert!(matches!(&refused, Err(ToolError::Failed(m)) if m.contains("can't be edited")), "{refused:?}");
 }
 
+/// `removed` counts what went from the listed categories. Flattening a field whose appearance
+/// draws invisible text puts that text on the page, where hidden text (not listed) counts it;
+/// a count over every category took it off what was removed (#5873).
+#[test]
+fn removed_hidden_information_counts_the_listed_categories() {
+    let appearance = "BT /Helv 12 Tf 2 4 Td (Ada) Tj 3 Tr (Secret) Tj ET";
+    let appearance = format!(
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 140 18] /Resources << /Font << /Helv 7 0 R >> >> /Length {} >>\nstream\n{appearance}\nendstream",
+        appearance.len()
+    );
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 400 300] >>",
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R] /Resources << /Font << /Helv 7 0 R >> >> >>",
+        "<< /Fields [5 0 R] /DA (/Helv 12 Tf 0 g) /DR << /Font << /Helv 7 0 R >> >> >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (name) /V (Ada) /Rect [10 250 150 268] /P 3 0 R /AP << /N 6 0 R >> >>",
+        &appearance,
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+    ];
+    let dir = workdir("hidden-listed");
+    std::fs::write(dir.join("form.pdf"), pdf_of(&objs)).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "form.pdf" }))["doc"].as_u64().unwrap();
+    let count = |a: &mut Automation, c: &str| {
+        let info = ok(a, "doc_hidden_info", json!({ "doc": doc }));
+        info["categories"].as_array().unwrap().iter().find(|x| x["category"] == c).unwrap()["count"].as_u64().unwrap()
+    };
+    assert_eq!((count(&mut a, "form-fields"), count(&mut a, "hidden-text")), (1, 0));
+    let r = ok(&mut a, "doc_remove_hidden", json!({ "doc": doc, "categories": ["form-fields"] }));
+    assert_eq!(r["removed"], 1, "{r}");
+    assert_eq!(count(&mut a, "form-fields"), 0);
+    assert_eq!(count(&mut a, "hidden-text"), 6, "the flattened appearance's invisible word is page content now");
+}
+
 /// A one-page PDF whose text "TOP SECRET" sits under an opaque black rectangle.
 fn faux_redacted_fixture() -> Vec<u8> {
     helvetica_page("BT /F1 24 Tf 100 700 Td (TOP SECRET) Tj ET\n0 g\n90 688 220 32 re f")
