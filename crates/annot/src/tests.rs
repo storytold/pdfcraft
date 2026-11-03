@@ -2292,6 +2292,13 @@ fn sound_annotation_validates_channel_frames_and_samples() {
     let err = add_annotation(&mut doc, &a, &meta("voice")).unwrap_err();
     assert!(err.to_string().contains("not a multiple of whole frames"));
 
+    // Zero channels rejected
+    let no_channels = Shape::Sound { at: [50.0, 50.0], rate: 44100, channels: 0, samples: vec![1, 2] };
+    let mut a = new(0, no_channels.clone());
+    a.style = Style::default_for(&no_channels);
+    let err = add_annotation(&mut doc, &a, &meta("voice")).unwrap_err();
+    assert!(err.to_string().contains("must be mono or stereo"));
+
     // Stereo: incomplete frame (2 bytes is only 1 sample, stereo requires 4 bytes per frame)
     let stereo_incomplete = Shape::Sound { at: [50.0, 50.0], rate: 44100, channels: 2, samples: vec![0x12, 0x34] };
     let mut a = new(0, stereo_incomplete.clone());
@@ -2306,6 +2313,12 @@ fn sound_annotation_validates_channel_frames_and_samples() {
     let err = add_annotation(&mut doc, &a, &meta("voice")).unwrap_err();
     assert!(err.to_string().contains("not a multiple of whole frames"));
 
+    // Stereo: one complete frame (4 bytes) -> accepted
+    let stereo_one_frame = Shape::Sound { at: [50.0, 50.0], rate: 44100, channels: 2, samples: vec![1, 2, 3, 4] };
+    let mut a = new(0, stereo_one_frame.clone());
+    a.style = Style::default_for(&stereo_one_frame);
+    assert!(add_annotation(&mut doc, &a, &meta("voice")).is_ok());
+
     // Stereo: valid 8 bytes (2 complete frames) -> accepted
     let stereo_valid = Shape::Sound { at: [50.0, 50.0], rate: 48000, channels: 2, samples: vec![1, 2, 3, 4, 5, 6, 7, 8] };
     let mut a = new(0, stereo_valid.clone());
@@ -2315,7 +2328,10 @@ fn sound_annotation_validates_channel_frames_and_samples() {
     let annot = &list(&re, 0)[idx];
     assert_eq!(annot.name(b"Subtype"), Some(&b"Sound"[..]));
     let sref = annot.reference(b"Sound").unwrap();
-    let sdict = re.get(sref).as_dict().unwrap().clone();
-    assert_eq!(sdict.get(b"C").and_then(Object::as_int), Some(2));
-    assert_eq!(sdict.get(b"R").and_then(Object::as_int), Some(48000));
+    let Object::Stream(s) = &*re.get(sref) else { panic!("Sound is not a stream") };
+    assert_eq!(s.dict.get(b"C").and_then(Object::as_int), Some(2));
+    assert_eq!(s.dict.get(b"R").and_then(Object::as_int), Some(48000));
+    assert_eq!(s.dict.get(b"B").and_then(Object::as_int), Some(16));
+    assert_eq!(s.dict.get(b"E").and_then(Object::as_name), Some(&b"Signed"[..]));
+    assert_eq!(s.decoded().unwrap(), vec![1, 2, 3, 4, 5, 6, 7, 8]);
 }

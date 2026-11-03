@@ -10603,6 +10603,53 @@ fn sound_comment_creates_valid_sound_annotation_and_survives_save_reopen() {
     assert_eq!(list2["count"], 1);
     assert_eq!(list2["comments"][0]["type"], "Sound");
     assert_eq!(list2["comments"][0]["contents"], "Voice memo");
+
+    // Verify stored Sound stream dictionary keys and PCM sample payload in saved.pdf
+    use pdfcraft_cos::Object;
+    let saved = pdfcraft_cos::Document::open(std::sync::Arc::new(std::fs::read(dir.join("saved.pdf")).unwrap())).unwrap();
+    let catalog = saved.get(saved.root().unwrap()).as_dict().cloned().unwrap();
+    let pages = saved.get(catalog.reference(b"Pages").unwrap()).as_dict().cloned().unwrap();
+    let kids = pages.get(b"Kids").unwrap().as_array().unwrap();
+    let page0_ref = kids[0].as_ref().unwrap();
+    let page0_dict = saved.get(page0_ref).as_dict().unwrap().clone();
+    let annots_arr = page0_dict.get(b"Annots").unwrap().as_array().unwrap();
+    assert_eq!(annots_arr.len(), 1);
+    let annot_ref = annots_arr[0].as_ref().unwrap();
+    let annot_dict = saved.get(annot_ref).as_dict().unwrap().clone();
+    assert_eq!(annot_dict.name(b"Subtype"), Some(&b"Sound"[..]));
+    let sref = annot_dict.reference(b"Sound").unwrap();
+    let Object::Stream(s) = &*saved.get(sref) else { panic!("Sound is not a stream") };
+    assert_eq!(s.dict.get(b"C").and_then(Object::as_int), Some(1));
+    assert_eq!(s.dict.get(b"R").and_then(Object::as_int), Some(44100));
+    assert_eq!(s.dict.get(b"B").and_then(Object::as_int), Some(16));
+    assert_eq!(s.dict.get(b"E").and_then(Object::as_name), Some(&b"Signed"[..]));
+    assert_eq!(s.decoded().unwrap(), vec![0x34, 0x12, 0x78, 0x56]);
+}
+
+#[cfg(unix)]
+#[test]
+fn sound_comment_rejects_fifo_special_file() {
+    let dir = workdir("sound-fifo");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let fifo_path = dir.join("test.fifo");
+    let status = std::process::Command::new("mkfifo").arg(&fifo_path).status();
+    if let Ok(s) = status
+        && s.success()
+    {
+        let e = err(
+            &mut a,
+            "comment_add",
+            json!({
+                "doc": doc,
+                "page": 1,
+                "type": "sound",
+                "at": [50, 50],
+                "path": "test.fifo"
+            }),
+        );
+        assert!(e.to_string().contains("not a regular file"), "expected not a regular file, got: {e}");
+    }
 }
 
 #[test]
