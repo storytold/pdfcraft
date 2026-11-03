@@ -185,7 +185,8 @@ impl PageText {
     /// a longer cell in the next row does not win; but a point in the leading right beside another
     /// line, parted by a gutter (see [`Self::gutter_between`]) from the row level with it, takes
     /// that line: between two lines of one column, it is not taken by another column's line that
-    /// different baselines put level.
+    /// different baselines put level. Nor is a point beside a barcode drawn with a font taken by
+    /// the code's row level with it.
     pub fn nearest(&self, x: f32, y: f32) -> Option<usize> {
         let centre_distance = |g: &TextGlyph| {
             let (cx, cy) = (g.quad.iter().map(|q| q[0]).sum::<f32>() / 4.0, g.quad.iter().map(|q| q[1]).sum::<f32>() / 4.0);
@@ -242,7 +243,11 @@ impl PageText {
                 let toward_right = x > g.rect[2];
                 let from = self.line_span(r).map_or(if toward_right { g.rect[2] } else { g.rect[0] }, |(l0, l1)| if toward_right { l0 } else { l1 });
                 let reach = h * GUTTER_ROWS;
-                Some(if beside && self.gutter_between(from, x, y - reach, y + reach, h) { i } else { r })
+                // A barcode drawn with a font has a row at every height beside it; the point is only
+                // on one of them when it is over the code.
+                let off_barcode = self.line_span(r).is_some_and(|(r0, r1)| !(r0..=r1).contains(&x))
+                    && self.line_of.get(r).is_some_and(|l| self.barcode_lines().contains(l));
+                Some(if off_barcode || (beside && self.gutter_between(from, x, y - reach, y + reach, h)) { i } else { r })
             }
             (on_row, any) => on_row.or(any).map(|(i, _, _)| i),
         }
@@ -385,7 +390,7 @@ impl PageText {
             let right = if other_column { f32::INFINITY } else { a1.max(b1).max(pointer.unwrap_or(f32::NEG_INFINITY)) };
             let mut lines: BTreeMap<u32, (f32, f32)> = BTreeMap::new();
             for (g, &l) in self.glyphs.iter().zip(&self.line_of) {
-                if (top..=bottom).contains(&centre(g)) {
+                if (top..=bottom).contains(&centre(g)) && !g.text.trim().is_empty() {
                     let span = lines.entry(l).or_insert((f32::INFINITY, f32::NEG_INFINITY));
                     *span = (span.0.min(g.rect[0]), span.1.max(g.rect[2]));
                 }
@@ -570,11 +575,35 @@ impl PageText {
         left.len() <= SIDE_BY_SIDE_LINES && right.len() <= SIDE_BY_SIDE_LINES && column(left) && column(right)
     }
 
-    /// The left and right edges of the line glyph `i` is on.
+    /// The lines that are rows of a barcode drawn with a font (a QR or Aztec code), as the layout
+    /// finds them: such rows read after all other text.
+    fn barcode_lines(&self) -> HashSet<u32> {
+        let mut lines: Vec<(u32, usize, [f32; 4])> = Vec::new();
+        for (g, &l) in self.glyphs.iter().zip(&self.line_of) {
+            match lines.last_mut() {
+                Some((id, n, bb)) if *id == l => {
+                    *n += 1;
+                    union(bb, &g.rect);
+                }
+                _ => lines.push((l, 1, g.rect)),
+            }
+        }
+        let rows: Vec<(usize, [f32; 4])> = lines.iter().map(|&(_, n, bb)| (n, bb)).collect();
+        lines.iter().zip(barcode_rows(&rows)).filter(|(_, barcode)| *barcode).map(|((l, _, _), _)| *l).collect()
+    }
+
+    /// The left and right edges of the ink of the line glyph `i` is on: spaces padding it out (a
+    /// heading indented with spaces past a barcode beside it) are not where its text is. A line of
+    /// spaces only spans its spaces.
     fn line_span(&self, i: usize) -> Option<(f32, f32)> {
         let (first, last) = self.line_at(i)?;
         let line = self.glyphs.get(first..=last)?;
-        Some(line.iter().fold((f32::INFINITY, f32::NEG_INFINITY), |(x0, x1), g| (x0.min(g.rect[0]), x1.max(g.rect[2]))))
+        let span = |inked: bool| {
+            line.iter()
+                .filter(|g| !inked || !g.text.trim().is_empty())
+                .fold((f32::INFINITY, f32::NEG_INFINITY), |(x0, x1), g| (x0.min(g.rect[0]), x1.max(g.rect[2])))
+        };
+        Some(Some(span(true)).filter(|(x0, x1)| x0 <= x1).unwrap_or_else(|| span(false)))
     }
 
     /// The glyphs whose centre lies inside `rect` (view space, corners in either order), in
@@ -693,6 +722,7 @@ pub use layout::layout;
 #[cfg(test)]
 use layout::{from_upright, to_upright};
 use layout::{is_rtl, union};
+use order::barcode_rows;
 #[cfg(test)]
 use order::{Run, Scratch, Seg, collide, restarts_run};
 

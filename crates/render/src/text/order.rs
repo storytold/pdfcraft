@@ -1,5 +1,5 @@
-use super::TextGlyph;
 use super::layout::is_rtl;
+use super::{HashMap, TextGlyph};
 
 /// Glyphs `start..end` of the glyph list [`arrange`] lays out, drawn one after another.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -33,6 +33,8 @@ pub(super) struct Seg {
     /// The right edge of its visible glyphs; the box may reach further with trailing spaces.
     /// Negative infinity when every glyph is blank.
     pub(super) ink: f32,
+    /// A row of a barcode drawn with a font (see [`mark_barcode_rows`]): it joins no other text.
+    pub(super) barcode: bool,
 }
 
 #[derive(Default)]
@@ -73,7 +75,7 @@ pub(super) fn is_script_on(host_bbox: &[f32; 4], host_h: f32, script_bbox: &[f32
 
 impl Seg {
     pub(super) fn new(first: Run, bbox: [f32; 4], h: f32, ink: f32) -> Self {
-        Seg { first, extra: None, bbox, h, ink }
+        Seg { first, extra: None, bbox, h, ink, barcode: false }
     }
 
     /// Whether this segment is a table cell padded with spaces towards `next`, the next cell on
@@ -118,6 +120,58 @@ impl Seg {
             extra.more.extend(o.more);
         }
     }
+}
+
+/// A barcode font (a QR or Aztec code on an invoice, as on every Mexican CFDI) draws its symbol as
+/// rows of glyphs stacked flush with no leading: at least this many rows ...
+const BARCODE_ROWS: usize = 4;
+/// ... of at least this many glyphs each.
+const BARCODE_ROW_GLYPHS: usize = 8;
+
+/// Mark the segments that are rows of a barcode drawn with a font (see [`barcode_rows`]). Text
+/// beside the code sits on the same baselines and would otherwise join its rows, so the code's
+/// rows and the text would interleave in reading order.
+pub(super) fn mark_barcode_rows(segs: &mut [Seg]) {
+    let rows: Vec<(usize, [f32; 4])> = segs.iter().map(|s| (if s.extra.is_none() { s.first.len() } else { 0 }, s.bbox)).collect();
+    for (s, barcode) in segs.iter_mut().zip(barcode_rows(&rows)) {
+        s.barcode = barcode;
+    }
+}
+
+/// Which of the rows of text `rows`, each as its glyph count and box, are rows of a barcode drawn
+/// with a font: runs of at least [`BARCODE_ROWS`] rows of one glyph count, height, left and right
+/// edge, each starting where the one above ends. Text set solid still has lines of different
+/// lengths and glyph counts.
+pub(super) fn barcode_rows(rows: &[(usize, [f32; 4])]) -> Vec<bool> {
+    // Positions to an eighth of a point: a barcode's rows are placed exactly.
+    let q = |v: f32| (v * 8.0).round() as i64;
+    let height = |bb: &[f32; 4]| bb[3] - bb[1];
+    let mut stacks: HashMap<(usize, i64, i64, i64), Vec<usize>> = HashMap::new();
+    for (k, (n, bb)) in rows.iter().enumerate() {
+        if *n >= BARCODE_ROW_GLYPHS && bb.iter().all(|v| v.is_finite()) {
+            stacks.entry((*n, q(bb[0]), q(bb[2]), q(height(bb)))).or_default().push(k);
+        }
+    }
+    let mut barcode = vec![false; rows.len()];
+    for stack in stacks.values_mut().filter(|stack| stack.len() >= BARCODE_ROWS) {
+        stack.sort_by(|&a, &b| rows[a].1[1].total_cmp(&rows[b].1[1]));
+        let mut start = 0;
+        for k in 1..=stack.len() {
+            let flush = stack.get(k).is_some_and(|&r| {
+                let (above, below) = (&rows[stack[k - 1]].1, &rows[r].1);
+                (below[1] - above[3]).abs() <= height(above) * 0.05
+            });
+            if !flush {
+                if k - start >= BARCODE_ROWS {
+                    for &r in &stack[start..k] {
+                        barcode[r] = true;
+                    }
+                }
+                start = k;
+            }
+        }
+    }
+    barcode
 }
 
 /// A segment whose box runs on past its last visible glyph by this many line heights of spaces is

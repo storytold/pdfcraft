@@ -1960,6 +1960,60 @@ fn a_long_level_line_does_not_hide_the_gutter_from_its_column() {
     assert!(t.glyphs[i].rect[0] >= 200.0, "took {:?} at {:?}", t.glyphs[i].text, t.glyphs[i].rect);
 }
 
+/// An invoice's seal beside its QR code, the code drawn with a barcode font: eight flush rows of
+/// twelve 4 × 6 pt glyphs, and five 8 pt lines of text 5 pt to their right, every other one on a
+/// code row's baseline.
+fn barcode_beside_text() -> PageText {
+    const SEAL: [&str; 5] = ["one two three", "four five six", "seven eight", "nine ten", "eleven twelve"];
+    let mut v = Vec::new();
+    for row in 0..8 {
+        let y = 100.0 + row as f32 * 6.0;
+        for k in 0..12 {
+            let c = char::from(b'A' + ((row * 5 + k) % 26) as u8);
+            let x = 10.0 + k as f32 * 4.0;
+            v.push(em_box(&c.to_string(), x, y, x + 4.0, y + 6.0));
+        }
+    }
+    for (line, text) in SEAL.into_iter().enumerate() {
+        let y = 100.0 + line as f32 * 9.0;
+        for (k, c) in text.chars().enumerate() {
+            let x = 63.0 + k as f32 * 4.8;
+            v.push(em_box(&c.to_string(), x, y, x + 4.8, y + 8.0));
+        }
+    }
+    layout(v)
+}
+
+/// The seal's lines read on together, not each joined to the code row beside it, and the code
+/// reads after all the text.
+#[test]
+fn a_barcode_drawn_with_a_font_reads_apart_from_the_text_beside_it() {
+    let t = barcode_beside_text();
+    let text = t.plain_text();
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.get(..5), Some(&["one two three", "four five six", "seven eight", "nine ten", "eleven twelve"][..]), "{text}");
+    assert_eq!(lines.len(), 13, "{text}");
+    assert!(lines[5..].iter().all(|l| l.len() == 12 && l.chars().all(|c| c.is_ascii_uppercase())), "{text}");
+}
+
+/// A point in the leading right of the seal's text, level with a row of the code, takes the
+/// seal's line, and a drag down the seal selects none of the code.
+#[test]
+fn a_point_beside_a_barcode_takes_the_text_not_the_code_row() {
+    let t = barcode_beside_text();
+    let is_code = |i: usize| t.glyphs[i].rect[2] <= 58.0;
+    // Right of "four five six" (ends at 125.4), in the leading below it and level with code row 3.
+    let i = t.nearest(120.0, 117.5).expect("a glyph");
+    assert!(!is_code(i), "took the code's {:?} at {:?}", t.glyphs[i].text, t.glyphs[i].rect);
+    // Over the code, its row still wins.
+    let i = t.nearest(30.0, 117.5).expect("a glyph");
+    assert!(is_code(i));
+    // From "one" to the end of "nine ten", the pointer past it.
+    let (one, ten) = (t.nearest(65.0, 104.0).expect("one"), t.nearest(100.0, 131.0).expect("ten"));
+    let picked = t.visual_between(one, ten, Some(110.0)).unwrap_or_else(|| (one.min(ten)..=one.max(ten)).collect());
+    assert!(!picked.iter().any(|&i| is_code(i)), "{:?}", t.column_text(&picked));
+}
+
 /// A rectangle that misses every glyph, or is not a number, selects nothing.
 #[test]
 fn an_empty_or_degenerate_column_selection_is_empty() {

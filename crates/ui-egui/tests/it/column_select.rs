@@ -239,10 +239,15 @@ fn four_clicks_then_a_short_drag_keep_the_whole_page() {
 }
 
 fn uneven_harness() -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 60.0).build_eframe(|_cc| {
+    opened("uneven.pdf", uneven_columns())
+}
+
+/// A harness with the one-page PDF `bytes` open, its text layer ready.
+fn opened(name: &'static str, bytes: Vec<u8>) -> Harness<'static, PdfCraftApp> {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 60.0).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
         app.set_option("language", "en").unwrap();
-        app.open_bytes("uneven.pdf", None, uneven_columns()).expect("opens");
+        app.open_bytes(name, None, bytes).expect("opens");
         app
     });
     crate::support::wait_until(&mut h, "the page's text layer", |app| app.views[0].glyph_screen_pos(0, 0).is_some() && !app.render_pending());
@@ -264,4 +269,49 @@ fn a_double_click_drag_over_table_rows_selects_the_rows() {
     }
     drag(&mut h, name, two, Modifiers::NONE);
     assert_eq!(text(&h).as_deref(), Some("Name\tQty\nApple\t12"));
+}
+
+/// An invoice's seal beside its QR code, the code drawn with a font as on a Mexican CFDI: eight
+/// rows of twelve 6 pt Courier glyphs stacked flush (6 pt apart), and five 8 pt lines 5 pt to their
+/// right, every other one on a code row's baseline. The seal reads first: glyphs 0–12 "one two
+/// three", 13–25 "four five six", 26–36 "seven eight", 37–44 "nine ten", 45–57 "eleven twelve".
+fn barcode_beside_seal() -> Vec<u8> {
+    let rows: String = BARCODE_ROWS.iter().map(|row| format!("({row}) Tj T* ")).collect();
+    let seal: String = SEAL.iter().map(|line| format!("({line}) Tj T* ")).collect();
+    let content = format!("BT /F1 6 Tf 6 TL 20 250 Td {rows}ET BT /F1 8 Tf 9 TL 68.2 250 Td {seal}ET");
+    format!(
+        "%PDF-1.7\n\
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj\n\
+4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Courier >> endobj\n\
+trailer << /Root 1 0 R >>\n%%EOF",
+        content.len()
+    )
+    .into_bytes()
+}
+
+const BARCODE_ROWS: [&str; 8] =
+    ["ABCDEFGHIJKL", "FGHIJKLMNOPQ", "KLMNOPQRSTUV", "PQRSTUVWXYZA", "UVWXYZABCDEF", "ZABCDEFGHIJK", "EFGHIJKLMNOP", "JKLMNOPQRSTU"];
+const SEAL: [&str; 5] = ["one two three", "four five six", "seven eight", "nine ten", "eleven twelve"];
+
+/// A drag down the seal beside a QR code drawn with a font selects the seal's lines, in order,
+/// and none of the code, whichever way it goes; the code's rows would otherwise join the seal's
+/// lines level with them.
+#[test]
+fn a_drag_down_text_beside_a_barcode_selects_only_the_text() {
+    let mut h = opened("cfdi.pdf", barcode_beside_seal());
+    // From just left of "one" to past the end of "nine ten".
+    let (from, to) = (glyph(&h, 0) - vec2(4.0, 0.0), glyph(&h, 44) + vec2(12.0, 0.0));
+    for (a, b) in [(from, to), (to, from)] {
+        h.key_press(egui::Key::Escape);
+        h.run_steps(60);
+        drag(&mut h, a, b, Modifiers::NONE);
+        assert_eq!(text(&h).as_deref(), Some("one two three\nfour five six\nseven eight\nnine ten"));
+    }
+    // Select all: the seal, then the code.
+    assert!(h.state_mut().views[0].select_all());
+    h.run_steps(1);
+    assert_eq!(text(&h), Some([SEAL.join("\n"), BARCODE_ROWS.join("\n")].join("\n")));
 }
