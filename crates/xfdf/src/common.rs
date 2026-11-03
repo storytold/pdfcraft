@@ -19,63 +19,7 @@ pub(crate) const MAX_DEPTH: usize = 64;
 /// room than the walks below, which cut off at 64.
 pub(crate) const MAX_XML_DEPTH: usize = 1_024;
 
-/// Element nesting depth of `text`, skipping comments, CDATA, processing instructions, the DOCTYPE
-/// and quoted attribute values. A tag that closes itself (`<field/>`) is one level while it is read
-/// and does not stay open, so a long run of them cannot accumulate into the bound. It cannot
-/// under-count a real element; a stray `<` in text is invalid XML and only makes it over-count,
-/// which errs towards refusing the file.
-pub(crate) fn xml_nesting_depth(text: &str) -> usize {
-    fn find(hay: &[u8], from: usize, needle: &[u8]) -> Option<usize> {
-        (from..hay.len()).find(|&p| hay[p..].starts_with(needle))
-    }
-    let b = text.as_bytes();
-    let (mut i, mut depth, mut max) = (0usize, 0usize, 0usize);
-    while i < b.len() {
-        if b[i] != b'<' {
-            i += 1;
-        } else if b[i..].starts_with(b"<!--") {
-            i = find(b, i + 4, b"-->").map_or(b.len(), |p| p + 3);
-        } else if b[i..].starts_with(b"<![CDATA[") {
-            i = find(b, i + 9, b"]]>").map_or(b.len(), |p| p + 3);
-        } else if b[i..].starts_with(b"<?") {
-            i = find(b, i + 2, b"?>").map_or(b.len(), |p| p + 2);
-        } else if b[i..].starts_with(b"<!") {
-            i = find(b, i + 2, b">").map_or(b.len(), |p| p + 1);
-        } else if b[i..].starts_with(b"</") {
-            depth = depth.saturating_sub(1);
-            i = find(b, i + 2, b">").map_or(b.len(), |p| p + 1);
-        } else {
-            depth += 1;
-            max = max.max(depth);
-            // Skip the rest of the start tag, over any quoted attribute value, and remember its last
-            // significant byte: a tag that ends in `/` closes itself, so it is one level deep while it
-            // is read rather than a level left open.
-            i += 1;
-            let mut quote = 0u8;
-            let mut last = 0u8;
-            while i < b.len() {
-                let c = b[i];
-                if quote != 0 {
-                    if c == quote {
-                        quote = 0;
-                    }
-                } else if c == b'"' || c == b'\'' {
-                    quote = c;
-                } else if c == b'>' {
-                    i += 1;
-                    break;
-                } else if !c.is_ascii_whitespace() {
-                    last = c;
-                }
-                i += 1;
-            }
-            if last == b'/' {
-                depth -= 1;
-            }
-        }
-    }
-    max
-}
+pub(crate) use pdfcraft_cos::xml_nesting_depth;
 
 pub(crate) fn check_form_xml_depth(text: &str) -> Result<(), DataError> {
     let depth = xml_nesting_depth(text);
