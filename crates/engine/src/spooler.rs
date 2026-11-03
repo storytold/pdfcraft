@@ -94,4 +94,17 @@ mod tests {
         let small = page_with_image(100, 100);
         assert_eq!(spooler_copy(small.clone()), small);
     }
+
+    /// On Windows the spooler gets the tiled copy ([`tiled`]); elsewhere the bytes as they are.
+    #[test]
+    fn the_spooler_gets_tiles_on_windows_only() {
+        let large = page_with_image(2100, 2100);
+        let sent = spooler_copy(large.clone());
+        if cfg!(windows) {
+            assert_eq!(Some(&sent), tiled(Arc::new(large.clone())).as_ref());
+            assert_ne!(sent, large);
+        } else {
+            assert_eq!(sent, large);
+        }
+    }
 }
