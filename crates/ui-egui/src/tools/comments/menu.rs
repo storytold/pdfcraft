@@ -376,7 +376,11 @@ pub(crate) fn apply_quick_bar_color(app: &mut crate::PdfCraftApp, tool: CommentT
         && let Some((page, annotation)) = app.views.get(index).and_then(|view| view.comments.selected)
         && app.session.get(id).is_some_and(|doc| {
             doc.allows_annotation()
-                && doc.info.annotations.iter().any(|a| a.page == page && a.index == annotation && !a.is_reply() && super::made_by(a, tool))
+                && doc
+                    .info
+                    .annotations
+                    .iter()
+                    .any(|a| a.page == page && a.index == annotation && !a.is_reply() && !a.locked && super::made_by(a, tool))
         })
     {
         app.apply_edit(Edit::StyleAnnotation { page, index: annotation, color: Some(color), opacity: None, width: None, endings: None });
