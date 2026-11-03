@@ -567,6 +567,12 @@ impl Document {
     pub fn repair_log(&self) -> Vec<String> {
         self.editor.as_ref().map(|e| e.cos.repair_log().to_vec()).unwrap_or_default()
     }
+
+    /// Whether anything was repaired while opening, without copying the notes: the top bar asks
+    /// every frame (CodeRabbit on #5336).
+    pub fn was_repaired(&self) -> bool {
+        self.editor.as_ref().is_some_and(|e| !e.cos.repair_log().is_empty())
+    }
 }
 
 /// A title that names no document: what a web browser writes when it saves a blank page or a

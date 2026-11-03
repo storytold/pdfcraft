@@ -28,7 +28,7 @@ impl PdfCraftApp {
     /// greyed out otherwise, as Organize's Save pages is (#5307).
     pub(crate) fn save_has_work(&self, index: usize) -> bool {
         let Some(doc) = self.views.get(index).and_then(|v| self.session.get(v.id)) else { return false };
-        self.has_unsaved_work(index) || doc.path.as_deref().is_none_or(is_mail_temp_copy) || !doc.repair_log().is_empty()
+        self.has_unsaved_work(index) || doc.path.as_deref().is_none_or(is_mail_temp_copy) || doc.was_repaired()
     }
 
     /// Save the active document. Returns `true` if it was written.
