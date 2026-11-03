@@ -276,6 +276,10 @@ fn axis_rect(points: &[[f64; 2]]) -> Option<[f64; 4]> {
 /// more keeps the first ones and is listed by [`docx_checked`].
 pub const MAX_DOCX_PAGE_SHAPES: usize = 5000;
 
+/// Most items a list field's drop-down holds in Word; a page with a longer list keeps its first
+/// items and is listed by [`docx_checked`].
+pub(crate) const MAX_DOCX_LIST_ITEMS: usize = 500;
+
 /// Most points all of one Word page's shapes hold together (a hostile path of millions of
 /// segments); past it a page keeps the shapes that fit and is listed by [`docx_checked`].
 pub const MAX_DOCX_PAGE_POINTS: usize = 200_000;
@@ -568,7 +572,7 @@ fn field_xml(f: &Field, page_height: f64) -> Option<String> {
         }
         FieldKind::Choice { value, options } => {
             let mut items = String::new();
-            for o in options.iter().take(500) {
+            for o in options.iter().take(MAX_DOCX_LIST_ITEMS) {
                 let o = esc(o);
                 items.push_str(&format!("<w:listItem w:displayText=\"{o}\" w:value=\"{o}\"/>"));
             }
@@ -611,8 +615,8 @@ fn rows(lines: &[Block]) -> Vec<Vec<&Block>> {
     out
 }
 
-/// A page that keeps its layout, and whether it had to leave shapes or fields out to stay within
-/// [`MAX_DOCX_PAGE_SHAPES`] and [`MAX_DOCX_PAGE_POINTS`].
+/// A page that keeps its layout, and whether it had to leave shapes, fields or list items out to
+/// stay within [`MAX_DOCX_PAGE_SHAPES`], [`MAX_DOCX_PAGE_POINTS`] and [`MAX_DOCX_LIST_ITEMS`].
 fn positioned_page<'a>(page: &'a Page, media: &mut Vec<(String, &'a Image)>, shape_id: &mut usize) -> (String, bool) {
     // One 1 pt paragraph anchors the whole page. Shapes never reserve body space, so even a
     // page-sized watermark cannot push the invoice footer onto another page.
@@ -724,12 +728,14 @@ fn positioned_page<'a>(page: &'a Page, media: &mut Vec<(String, &'a Image)>, sha
     s.push_str("</w:p>");
     // Fields follow as framed paragraphs over their boxes, in front of the shapes behind the
     // text.
+    let mut long_list = false;
     for f in page.fields.iter().take(MAX_DOCX_PAGE_SHAPES) {
         if let Some(xml) = field_xml(f, page.height) {
             s.push_str(&xml);
+            long_list |= matches!(&f.kind, FieldKind::Choice { options, .. } if options.len() > MAX_DOCX_LIST_ITEMS);
         }
     }
-    (s, budget.dropped || page.fields.len() > MAX_DOCX_PAGE_SHAPES)
+    (s, budget.dropped || page.fields.len() > MAX_DOCX_PAGE_SHAPES || long_list)
 }
 
 fn word_page_size(page: &Page) -> (i64, i64) {

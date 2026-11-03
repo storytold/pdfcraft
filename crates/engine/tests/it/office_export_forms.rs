@@ -209,3 +209,24 @@ fn unread_paths_cut_only_a_positioned_page_short() {
     assert_eq!(truncated(false), Vec::<usize>::new(), "a flowing page lost none of its paths");
     assert_eq!(truncated(true), [0]);
 }
+
+/// A form page whose paths can't be read at all, its content being past the page's decode
+/// budget, is listed as cut short: the reader's error left Word's page without its art and
+/// without a word.
+#[test]
+fn word_export_reports_a_page_whose_paths_it_cannot_read() {
+    // One 1 MiB content stream drawn 300 times is more than the page's decode budget.
+    let refs = "6 0 R ".repeat(300);
+    let doc = pdf(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R] >> >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents [4 0 R {refs}] /Annots [5 0 R] >>"),
+        stream("", "0 G 0 0 m 100 0 l S"),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (Name) /Rect [10 10 100 22] /P 3 0 R >>".into(),
+        stream("", &" ".repeat(1 << 20)),
+    ]);
+    const { assert!(300 << 20 > pdfcraft_cos::MAX_PAGE_DECODED) };
+    let mut s = Session::new();
+    let id = s.open("unreadable.pdf", None, Arc::new(doc), None).unwrap();
+    assert_eq!(s.get(id).unwrap().export_office_checked(OfficeFormat::Docx).truncated_pages, [0]);
+}

@@ -1367,3 +1367,24 @@ fn unread_paths_cut_a_page_short_only_where_word_keeps_its_layout() {
     let text = Page { art_truncated: true, ..text };
     assert!(docx_checked(&[text], "Report").1.is_empty());
 }
+
+/// A list field with more items than a Word drop-down holds keeps the first ones, and its page
+/// is listed as cut short: the rest were left out without a word.
+#[test]
+fn a_list_past_the_drop_down_limit_cuts_its_page_short() {
+    let list = |n: usize| {
+        let mut p = form_page();
+        p.fields.retain(|f| matches!(f.kind, FieldKind::Choice { .. }));
+        let options: Vec<String> = (0..n).map(|i| format!("Option {i}")).collect();
+        if let Some(f) = p.fields.first_mut() {
+            f.kind = FieldKind::Choice { value: String::new(), options };
+        }
+        p
+    };
+    let (zip, cut) = docx_checked(&[list(MAX_DOCX_LIST_ITEMS)], "List");
+    assert!(cut.is_empty());
+    assert_eq!(part(&zip, "word/document.xml").matches("<w:listItem ").count(), MAX_DOCX_LIST_ITEMS);
+    let (zip, cut) = docx_checked(&[list(MAX_DOCX_LIST_ITEMS + 1)], "List");
+    assert_eq!(cut, [0]);
+    assert_eq!(part(&zip, "word/document.xml").matches("<w:listItem ").count(), MAX_DOCX_LIST_ITEMS);
+}

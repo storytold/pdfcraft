@@ -396,7 +396,13 @@ impl crate::Document {
                         })
                     })
                     .collect();
-                let art_read = if art { pdfcraft_edit::reading_shapes(cos, i).unwrap_or_default() } else { pdfcraft_edit::ReadingShapes::default() };
+                // A page whose paths can't be read at all (its content is past the decode budget)
+                // lost them as surely as one cut short.
+                let art_read = if art {
+                    pdfcraft_edit::reading_shapes(cos, i).unwrap_or_else(|_| pdfcraft_edit::ReadingShapes { truncated: true, ..Default::default() })
+                } else {
+                    pdfcraft_edit::ReadingShapes::default()
+                };
                 // Paths left unread matter only to a page Word positions; the writer decides that.
                 let art_truncated = art_read.truncated;
                 if forms_unread || over_budget {
@@ -458,7 +464,7 @@ impl crate::Document {
         let title = self.info.title.clone().unwrap_or_else(|| self.name.trim_end_matches(".pdf").to_string());
         let bytes = match format {
             OfficeFormat::Docx => {
-                // The Word writer says which pages it had to cut short (shapes, points, fields).
+                // The Word writer says which pages it had to cut short (shapes, points, fields, list items).
                 let (bytes, dropped) = pdfcraft_export::docx_checked(&pages, &title);
                 truncated_pages.extend(dropped);
                 truncated_pages.sort_unstable();
