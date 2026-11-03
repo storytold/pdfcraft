@@ -8,7 +8,7 @@ mod epub;
 mod extract;
 mod upright_image;
 pub use epub::{A4, Converted, EpubError, from_epub, is_epub, paper_for_region, region_of};
-pub use extract::{ExtractedImage, ImageExport, extract_images, image_file};
+pub use extract::{ExtractedImage, ImageExport, extract_images, image_file, image_file_within};
 use pdfcraft_fonts::{literal, win_ansi, wrap};
 
 #[derive(Debug, thiserror::Error, PartialEq)]
