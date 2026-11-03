@@ -290,6 +290,22 @@ fn vectors_are_removed_or_clipped_and_inline_images_go() {
     assert!(c.contains("150 150 m"), "the line elsewhere stays");
 }
 
+/// A horizontal stroke's construction box has no area, so it overlapped nothing and stayed under
+/// the mark. The painted stroke is as wide as the line: a 12 pt line centred 5 pt above the mark
+/// reaches into it and goes; a 1 pt line there does not and stays.
+#[test]
+fn a_stroke_is_removed_by_its_painted_width() {
+    let src = b"12 w 10 60 m 100 60 l S 1 w 10 60 m 100 60 l S 4 w 10 50 m 100 50 l S";
+    let mut doc = one_page(src, "", vec![]);
+    mark(&mut doc, 0, &[[40.0, 45.0, 60.0, 55.0]], "");
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!(r.paths_removed, 2, "{r:?}");
+    let c = content(&doc, 0);
+    assert!(!c.contains("12 w\n10 60 m"), "the wide line reaches the mark: {c}");
+    assert!(c.contains("1 w\n10 60 m\n100 60 l\nS"), "the thin line beside it stays: {c}");
+    assert!(!c.contains("10 50 m"), "the line through the mark goes: {c}");
+}
+
 #[test]
 fn partially_covered_vector_paths_do_not_leak_drawing_commands() {
     // A vector path with detailed drawing commands (e.g. outlined text or confidential geometry)
