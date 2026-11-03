@@ -609,3 +609,10 @@ fn operands_without_an_operator_are_bounded() {
     assert_eq!(p.skipped + cm.operands.len(), n + 5);
     assert_eq!(cm.span.start, 0);
 }
+
+/// `skipped` counts bytes: operands dropped without an operator count their bytes, not 1 each.
+#[test]
+fn dropped_operands_count_their_bytes() {
+    let p = parse(b"q Q 123 /Name (str)");
+    assert_eq!(p.skipped, b"123".len() + b"/Name".len() + b"(str)".len());
+}

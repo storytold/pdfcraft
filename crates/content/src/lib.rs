@@ -124,6 +124,8 @@ pub struct Ops<'a> {
     data: &'a [u8],
     lx: Lexer<'a>,
     operands: Vec<Object>,
+    /// The source bytes of each held operand, so dropping one counts its bytes in `skipped`.
+    operand_bytes: Vec<usize>,
     start: Option<usize>,
     skipped: usize,
     ambiguous_images: usize,
@@ -141,6 +143,7 @@ impl<'a> Ops<'a> {
             data,
             lx: Lexer::new(data, 0),
             operands: Vec::new(),
+            operand_bytes: Vec::new(),
             start: None,
             skipped: 0,
             ambiguous_images: 0,
@@ -167,14 +170,14 @@ impl Iterator for Ops<'_> {
     type Item = Op;
 
     fn next(&mut self) -> Option<Op> {
-        let Ops { data, lx, operands, start, skipped, ambiguous_images, ends, boundary, comment_edges: edges, rescanned } = self;
+        let Ops { data, lx, operands, operand_bytes, start, skipped, ambiguous_images, ends, boundary, comment_edges: edges, rescanned } = self;
         let (data, ends): (&[u8], &[usize]) = (data, ends);
         let rescan_limit = data.len().saturating_mul(RESCAN_PER_BYTE).max(MIN_RESCAN);
         loop {
             if operands.len() >= 2 * MAX_OPERANDS {
                 let dropped = operands.len() - MAX_OPERANDS;
                 operands.drain(..dropped);
-                *skipped += dropped;
+                *skipped += operand_bytes.drain(..dropped).sum::<usize>();
             }
             let trivia = lx.pos;
             lx.skip_ws();
@@ -185,7 +188,7 @@ impl Iterator for Ops<'_> {
             }
             let Some(&b) = data.get(lx.pos) else {
                 // Operands left without an operator.
-                *skipped += operands.len();
+                *skipped += operand_bytes.drain(..).sum::<usize>();
                 operands.clear();
                 return None;
             };
@@ -196,6 +199,7 @@ impl Iterator for Ops<'_> {
                     Ok(o) => {
                         start.get_or_insert(at);
                         operands.push(o);
+                        operand_bytes.push(lx.pos - at);
                     }
                     Err(_) if b == b'(' => {
                         // An unterminated string runs to the end of the stream.
@@ -238,14 +242,17 @@ impl Iterator for Ops<'_> {
                 b"true" => {
                     start.get_or_insert(at);
                     operands.push(Object::Bool(true));
+                    operand_bytes.push(lx.pos - at);
                 }
                 b"false" => {
                     start.get_or_insert(at);
                     operands.push(Object::Bool(false));
+                    operand_bytes.push(lx.pos - at);
                 }
                 b"null" => {
                     start.get_or_insert(at);
                     operands.push(Object::Null);
+                    operand_bytes.push(lx.pos - at);
                 }
                 b"BI" => {
                     let image = inline_image(data, at, lx.pos, *rescanned > rescan_limit);
@@ -256,6 +263,7 @@ impl Iterator for Ops<'_> {
                     let end = image.end;
                     lx.pos = end;
                     operands.clear();
+                    operand_bytes.clear();
                     match image.image {
                         Some((dict, img)) => {
                             return Some(Op {
@@ -273,6 +281,7 @@ impl Iterator for Ops<'_> {
                 }
                 _ => {
                     let s = start.take().unwrap_or(at);
+                    operand_bytes.clear();
                     return Some(Op { op: kw.to_vec(), operands: std::mem::take(operands), inline: None, span: s..lx.pos });
                 }
             }
