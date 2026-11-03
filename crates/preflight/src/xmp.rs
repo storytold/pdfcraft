@@ -47,70 +47,11 @@ fn parsed_identifier(xmp: &str, namespace: &str, local: &str) -> Result<Option<S
     Ok(None)
 }
 
-/// Reject deep XML and start tags with too many attributes before roxmltree checks duplicates.
-/// Each unquoted `=` in a valid start tag introduces an attribute, including namespace bindings.
-/// Every `b[i]` and `hay[p..]` below is guarded by `i < b.len()` / `p < hay.len()`.
+/// Reject deep XML and start tags with too many attributes before roxmltree checks duplicates
+/// (`pdfcraft_cos::xml_shape`, the scanner XFA and XFDF bound their XML with).
 fn xml_limits_ok(text: &str) -> bool {
-    fn find(hay: &[u8], from: usize, needle: &[u8]) -> Option<usize> {
-        (from..hay.len()).find(|&p| hay[p..].starts_with(needle))
-    }
-    let b = text.as_bytes();
-    let (mut i, mut depth, mut total_attributes) = (0usize, 0usize, 0usize);
-    while i < b.len() {
-        if b[i] != b'<' {
-            i += 1;
-        } else if b[i..].starts_with(b"<!--") {
-            i = find(b, i + 4, b"-->").map_or(b.len(), |p| p + 3);
-        } else if b[i..].starts_with(b"<![CDATA[") {
-            i = find(b, i + 9, b"]]>").map_or(b.len(), |p| p + 3);
-        } else if b[i..].starts_with(b"<?") {
-            i = find(b, i + 2, b"?>").map_or(b.len(), |p| p + 2);
-        } else if b[i..].starts_with(b"<!") {
-            i = find(b, i + 2, b">").map_or(b.len(), |p| p + 1);
-        } else if b[i..].starts_with(b"</") {
-            depth = depth.saturating_sub(1);
-            i = find(b, i + 2, b">").map_or(b.len(), |p| p + 1);
-        } else {
-            depth += 1;
-            if depth > 1024 {
-                return false;
-            }
-            // Skip the rest of the start tag, over any quoted attribute value, and remember its last
-            // significant byte: a tag that ends in `/` closes itself, so it is one level deep while it
-            // is read rather than a level left open.
-            i += 1;
-            let mut quote = 0u8;
-            let mut last = 0u8;
-            let mut attributes = 0usize;
-            while i < b.len() {
-                let c = b[i];
-                if quote != 0 {
-                    if c == quote {
-                        quote = 0;
-                    }
-                } else if c == b'"' || c == b'\'' {
-                    quote = c;
-                } else if c == b'>' {
-                    i += 1;
-                    break;
-                } else if c == b'=' {
-                    attributes += 1;
-                    total_attributes += 1;
-                    if attributes > 128 || total_attributes > 4096 {
-                        return false;
-                    }
-                    last = c;
-                } else if !c.is_ascii_whitespace() {
-                    last = c;
-                }
-                i += 1;
-            }
-            if last == b'/' {
-                depth -= 1;
-            }
-        }
-    }
-    true
+    let shape = pdfcraft_cos::xml_shape(text);
+    shape.depth <= 1024 && shape.max_tag_attributes <= 128 && shape.attributes <= 4096
 }
 
 /// The value of a simple XMP property, written either as an attribute (`pdfaid:part="2"`) or
