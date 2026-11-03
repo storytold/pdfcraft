@@ -17,9 +17,9 @@
 # stay in Latin letters; the trailing "…" of dialog commands is kept. Calendar headings use the
 # nominative month (`Lokakuu 2026`); dates use the partitive (`14. lokakuuta 2026`).
 
-# Untranslated: English text until a translator fills these in.
-	Lowering this forgets the oldest files. At 0 there is no list.	Lowering this forgets the oldest files. At 0 there is no list.
-	Recent files to keep	Recent files to keep
+# Preferences: how many recent files to keep (AI-assisted, not separately native-reviewed)
+	Lowering this forgets the oldest files. At 0 there is no list.	Pienentäminen unohtaa vanhimmat tiedostot. Arvolla 0 luetteloa ei ole.
+	Recent files to keep	Säilytettävät viimeisimmät tiedostot
 
 	Menu	Valikko
 	File	Tiedosto
@@ -2879,6 +2879,30 @@ theme	Appearance	Teema
 
 # Comments panel: each reply's own "…" menu (AI-assisted, not separately native-reviewed)
 	Options for this reply	Tämän vastauksen asetukset
+	Window	Ikkuna
+	Show or hide the side panel	Näytä tai piilota sivupaneeli
+	Show or hide the Tools panel	Näytä tai piilota työkalupaneeli
+	Reset side panels	Palauta sivupaneelit
+	Custom scale	Mukautettu skaala
+	1 line	1 rivi
+	{n} lines	{n} riviä
+	Every line set in the style chosen for a level becomes a bookmark of that level, under a new first bookmark.	Jokaisesta rivistä, joka on tasolle valitussa tyylissä, tulee sen tason kirjanmerkki uuden ensimmäisen kirjanmerkin alle.
+	Export value	Vientiarvo
+	Level {n}	Taso {n}
+	New bookmarks from text styles	Uudet kirjanmerkit tekstityyleistä
+	New bookmarks from text styles…	Uudet kirjanmerkit tekstityyleistä…
+	Page Properties	Sivun ominaisuudet
+	Page properties…	Sivun ominaisuudet…
+	Show Page Edge Shadows	Näytä sivun reunojen varjot
+	Tab Order	Sarkainjärjestys
+	This document has no text to make bookmarks from.	Tässä asiakirjassa ei ole tekstiä, josta voisi tehdä kirjanmerkkejä.
+	Unspecified	Määrittämätön
+	Use Column Order	Käytä sarakejärjestystä
+	Use Document Structure	Käytä asiakirjan rakennetta
+	Use Row Order	Käytä rivijärjestystä
+	bold	lihavoitu
+	italic	kursivoitu
+	{font}, {size} pt	{font}, {size} pt
 
 # Image paste and Home notifications (AI-assisted; not separately native-reviewed)
 	Search…	Hae…
@@ -2886,3 +2910,32 @@ theme	Appearance	Teema
 	No image on clipboard to paste	Leikepöydällä ei ole liitettävää kuvaa
 	Pinned {tool} to Home	{tool} kiinnitetty aloitussivulle
 	Unpinned {tool} from Home	{tool} irrotettu aloitussivulta
+
+# Hotbar, navigation rail and preferences search (AI-assisted, not separately native-reviewed)
+	Add Tools to Hotbar	Lisää työkaluja pikapalkkiin
+	Add tools to hotbar	Lisää työkaluja pikapalkkiin
+	Close menu	Sulje valikko
+	Dock navigation rail on Left	Kiinnitä siirtymispalkki vasemmalle
+	Dock navigation rail on Right	Kiinnitä siirtymispalkki oikealle
+	Drag hotbar	Vedä pikapalkkia
+	Extend the docked toolbar along the entire side. Choose a side above to enable.	Jatka kiinnitetty työkalupalkki koko reunan mittaiseksi. Ota käyttöön valitsemalla reuna yläpuolelta.
+	Float	Vapaa
+	Float (drag anywhere)	Vapaa (vedä mihin tahansa)
+	Freehand-Highlight	Vapaa korostus
+	Full-side strip	Koko reunan palkki
+	General & Interface	Yleiset ja käyttöliittymä
+	Hand	Käsi
+	Hotbar settings	Pikapalkin asetukset
+	Hotbar settings / add tools	Pikapalkin asetukset / lisää työkaluja
+	Hotbar tools	Pikapalkin työkalut
+	Invert middle-button drag	Käännä keskipainikkeella vetämisen suunta
+	Layout & Sizing	Asettelu ja koko
+	Navigation rail side	Siirtymispalkin puoli
+	Panning or auto-scrolling with the middle (wheel) button moves the page the other way.	Panorointi tai automaattinen vieritys keskipainikkeella (rullalla) siirtää sivua vastakkaiseen suuntaan.
+	Remove from hotbar	Poista pikapalkista
+	Search all tools…	Etsi kaikista työkaluista…
+	Search settings…	Etsi asetuksista…
+	Select	Valinta
+	Stick to a side:	Kiinnitä reunaan:
+	Toolbar size	Työkalupalkin koko
+	Vertical layout	Pystyasettelu
