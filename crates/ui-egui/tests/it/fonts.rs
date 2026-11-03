@@ -17,16 +17,6 @@ fn catalog(code: &str) -> String {
     pdfcraft_ui_egui::i18n::Lang::from_code(code).map(|l| l.catalog_texts().collect::<Vec<_>>().join("\n")).unwrap_or_default()
 }
 
-/// Whether the test `name` must skip because no catalogs were embedded (`CRAFT_I18N_DIR` unset):
-/// the interface is then English only. Prints the skip line.
-fn skip_without_catalogs(name: &str) -> bool {
-    let skip = !pdfcraft_ui_egui::i18n::catalogs_embedded();
-    if skip {
-        eprintln!("skipping {name}: built without craft-i18n (set CRAFT_I18N_DIR to a craft-i18n checkout)");
-    }
-    skip
-}
-
 fn families() -> Vec<FontId> {
     vec![FontId::proportional(13.0), FontId::monospace(13.0), theme::medium(13.0), theme::semibold(17.0)]
 }
@@ -345,7 +335,7 @@ fn installed_chinese_face_covers(cjk: theme::CjkPreference, catalog: &str, name:
 /// catalog's characters.
 #[test]
 fn simplified_chinese_ui_uses_an_installed_hans_face_without_an_embedded_one() {
-    if skip_without_catalogs("simplified_chinese_ui_uses_an_installed_hans_face_without_an_embedded_one") {
+    if crate::support::skip_without_catalogs("simplified_chinese_ui_uses_an_installed_hans_face_without_an_embedded_one") {
         return;
     }
     if !pdfcraft_fonts::ui_chinese_fonts().is_empty() {
@@ -360,7 +350,7 @@ fn simplified_chinese_ui_uses_an_installed_hans_face_without_an_embedded_one() {
 /// Traditional-only characters, and Japanese-first fallback would otherwise win.
 #[test]
 fn traditional_chinese_ui_keeps_an_installed_hant_face_before_japanese() {
-    if skip_without_catalogs("traditional_chinese_ui_keeps_an_installed_hant_face_before_japanese") {
+    if crate::support::skip_without_catalogs("traditional_chinese_ui_keeps_an_installed_hant_face_before_japanese") {
         return;
     }
     installed_chinese_face_covers(theme::CjkPreference::TraditionalChinese, &catalog("zh-hant"), "Traditional");
@@ -395,7 +385,7 @@ fn ui_fonts_work_without_craft_fonts() {
 /// `has_glyphs` can't answer this: with only the primary face it is also the replacement face.)
 #[test]
 fn primary_ui_fonts_cover_latin_and_cyrillic_catalogs() {
-    if skip_without_catalogs("primary_ui_fonts_cover_latin_and_cyrillic_catalogs") {
+    if crate::support::skip_without_catalogs("primary_ui_fonts_cover_latin_and_cyrillic_catalogs") {
         return;
     }
     use skrifa::MetadataProvider as _;

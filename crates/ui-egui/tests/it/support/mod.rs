@@ -103,3 +103,12 @@ pub fn skip_without_glyphs(name: &str, language: &str, text: &str) -> bool {
     eprintln!("skipping {name}: no interface font draws {missing:?} (set CRAFT_FONTS_DIR to a craft-fonts checkout with a face for it)");
     true
 }
+
+/// Whether `name` is skipped because the build embeds no craft-i18n catalogs (English only).
+pub fn skip_without_catalogs(name: &str) -> bool {
+    let skip = !pdfcraft_ui_egui::i18n::catalogs_embedded();
+    if skip {
+        eprintln!("skipping {name}: built without craft-i18n (set CRAFT_I18N_DIR to a craft-i18n checkout)");
+    }
+    skip
+}
