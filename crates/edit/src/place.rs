@@ -213,10 +213,8 @@ pub(crate) fn isolation(doc: &Document, list: &[Object]) -> Isolation {
         data.push(bytes);
     }
     let pieces = pdfcraft_content::Pieces::join(&data);
-    let parsed = pieces.parse();
-    if parsed.ops.len() > ISOLATION_MAX_OPS {
-        return Isolation::TooLarge;
-    }
+    // Stops at the operator ceiling: a stream of short operators is not built in full to be refused.
+    let Some(parsed) = pieces.parse_limited(ISOLATION_MAX_OPS) else { return Isolation::TooLarge };
     if parsed.skipped != 0 {
         return unknown;
     }

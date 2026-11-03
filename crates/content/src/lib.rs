@@ -605,6 +605,17 @@ impl Pieces {
         parse_pieces(&self.data, &self.ends)
     }
 
+    /// [`Pieces::parse`] that gives up (`None`) as soon as the stream holds more than `max_ops`
+    /// operators, instead of building every one of them first.
+    pub fn parse_limited(&self, max_ops: usize) -> Option<Parsed> {
+        let mut reader = Ops::new(&self.data, &self.ends);
+        let ops: Vec<Op> = reader.by_ref().take(max_ops.saturating_add(1)).collect();
+        if ops.len() > max_ops {
+            return None;
+        }
+        Some(Parsed { ops, skipped: reader.skipped, ambiguous_images: reader.ambiguous_images, comment_edges: reader.comment_edges })
+    }
+
     /// Per piece, from `parsed` (this piece set's [`Pieces::parse`]): whether a comment runs
     /// into it from the piece before, and whether one runs out of it into the next. A writer
     /// that rewrites a piece without its comments must keep both: end the incoming comment
