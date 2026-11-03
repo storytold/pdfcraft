@@ -657,21 +657,7 @@ impl Automation {
                 }
                 out
             }
-            "text_edit" => {
-                let page = self.page(&a)?;
-                let n = self.doc(&a)?.text_lines(page).len();
-                let line = a.int("line")?;
-                if line < 1 || line as usize > n {
-                    return Err(ToolError::InvalidArgs(format!("line {line} is out of range: page {} has {n} lines", page + 1)));
-                }
-                let text = a.str("text")?.to_owned();
-                let mut out = self.apply(&a, Edit::EditTextLine { page, line: line as usize - 1, text })?;
-                let after = self.doc(&a)?.text_lines(page);
-                if let Some(l) = after.get(line as usize - 1) {
-                    out["line"] = json!({ "text": l.text, "font": l.base_font });
-                }
-                out
-            }
+            "text_edit" => self.text_edit_line(&a)?,
             "text_script" => self.text_script(&a)?,
             "doc_audit_space" => {
                 let rows: Vec<Value> = self
@@ -867,6 +853,31 @@ impl Automation {
 
     /// `text_script`: Format text ▸ Superscript or Subscript on a paragraph, or on a byte range
     /// of its editor text, written as `text_edit` writes the paragraph.
+    /// `text_edit` by line number: replace the line's text.
+    fn text_edit_line(&mut self, a: &Args) -> Result<Value> {
+        let page = self.page(a)?;
+        let n = self.doc(a)?.text_lines(page).len();
+        let line = a.int("line")?;
+        if line < 1 || line as usize > n {
+            return Err(ToolError::InvalidArgs(format!("line {line} is out of range: page {} has {n} lines", page + 1)));
+        }
+        let text = a.str("text")?.to_owned();
+        let wanted: String = text.split_whitespace().collect();
+        let mut out = self.apply(a, Edit::EditTextLine { page, line: line as usize - 1, text })?;
+        let doc = self.doc(a)?;
+        let after = doc.text_lines(page);
+        // Only the line that now shows the requested text is the edited one: a neighbour that
+        // took its number (the edit emptied the line) is the document's own text, echoed only
+        // when the document allows copying it, as for a paragraph.
+        if let Some(l) = after.get(line as usize - 1).filter(|l| l.text.split_whitespace().collect::<String>() == wanted) {
+            out["line"] = json!({ "font": l.base_font });
+            if doc.allows_copying() {
+                out["line"]["text"] = json!(l.text);
+            }
+        }
+        Ok(out)
+    }
+
     fn text_script(&mut self, a: &Args) -> Result<Value> {
         use pdfcraft_engine::text_script::{Script, toggle};
         let name = a.str("script")?;

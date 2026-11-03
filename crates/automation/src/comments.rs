@@ -129,7 +129,11 @@ impl Automation {
         let [w, h] = preview.image.size();
         let layer = a.opt_str("layer")?.unwrap_or("background");
         let image = match layer {
-            "image" => Content::Png { data: preview.image.bytes().as_ref().clone(), width: w as u32, height: h as u32 },
+            "image" => {
+                // The signature's artwork on its own is an image taken out of the document.
+                doc.check_copying().map_err(failed)?;
+                Content::Png { data: preview.image.bytes().as_ref().clone(), width: w as u32, height: h as u32 }
+            }
             "background" => {
                 let out = preview.render_background((dpi / 72.0) as f32).map_err(failed)?;
                 Content::Png { data: encode_png(out.width, out.height, &out.rgba)?, width: out.width, height: out.height }

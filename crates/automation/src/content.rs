@@ -105,6 +105,8 @@ pub(crate) fn opt_aligns(a: &Args) -> Result<Option<Vec<Option<TextAlign>>>> {
 impl Automation {
     pub(crate) fn content_list(&self, a: &Args) -> Result<Value> {
         let doc = self.doc(a)?;
+        // Stored text is the document's: left out when it doesn't allow copying, like `text_edit`.
+        let copy = doc.allows_copying();
         let mut per_page: std::collections::HashMap<usize, usize> = Default::default();
         let items: Vec<Value> = doc
             .added()
@@ -118,7 +120,9 @@ impl Automation {
                 match &it.content {
                     AddedContent::Text(t) => {
                         v["type"] = json!("text");
-                        v["text"] = json!(t.text);
+                        if copy {
+                            v["text"] = json!(t.text);
+                        }
                         v["font"] = json!(t.family.label());
                         v["size"] = json!(t.size);
                         v["bold"] = json!(t.bold);
@@ -312,12 +316,18 @@ impl Automation {
         let doc = self.doc(a)?;
         let info = doc.info.pages.get(page).ok_or_else(|| bad("the page no longer exists"))?;
         let objects = doc.editable_objects(page).map_err(failed)?;
+        // The objects' text is the document's: left out when it doesn't allow copying.
+        let copy = doc.allows_copying();
         let items = objects
             .iter()
             .map(|o| {
                 let rect = crate::comments::rect_to_view(info, o.rect.map(|v| v as f32));
-                json!({"kind":o.target.kind.as_str(),"index":o.target.index.saturating_add(1),"type":o.content_type,
-                "rect":rect.map(|v|(f64::from(v)*100.0).round()/100.0),"text":o.text})
+                let mut v = json!({"kind":o.target.kind.as_str(),"index":o.target.index.saturating_add(1),"type":o.content_type,
+                "rect":rect.map(|v|(f64::from(v)*100.0).round()/100.0)});
+                if copy {
+                    v["text"] = json!(o.text);
+                }
+                v
             })
             .collect::<Vec<_>>();
         Ok(json!({"page":page+1,"generation":doc.edit_generation(),"count":items.len(),"objects":items}))
