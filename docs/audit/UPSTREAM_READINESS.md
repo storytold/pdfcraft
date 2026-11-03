@@ -64,8 +64,8 @@ Before preparing contributions, every patch was audited against upstream's manda
 ## 3. PR #5907: Native Android Platform Port
 - **Target Pull Request:** `https://github.com/storytold/pdfcraft/pull/5907`
 - **Head Branch:** `dikshant363:android-port`
-- **Latest Verified Commit:** `19c6d9c3` (`fix(automation): preserve script errors and console diagnostics in apply`)
-- **Status:** Open for maintainer review; review remediations implemented and verified.
+- **Latest Verified Commit:** `20180585` (`fix(annot): validate stereo frames and check multiple of frame bytes`)
+- **Status:** Open for maintainer review; all review findings remediated and verified passing in CI run `41629592671`.
 - **CodeRabbit Review Remediation:**
   - Uncommitted form field text preserved on Android Back / doc close via `DisposableEffect.onDispose` and `commitFieldEdit()`.
   - LRU cache bounds (64 items) on `PagesScreen` thumbnails; top-8 priority eviction on `PageImages`.
@@ -75,8 +75,11 @@ Before preparing contributions, every patch was audited against upstream's manda
   - Document liveness verification in `return_renderer`.
   - Clean asset attribution in `ATTRIBUTION.toml` (327 verified assets, 0 violations).
 - **Verification Evidence:**
+  - Remote GitHub Actions CI run `41629592671`: **SUCCESS** (Build & Test + Emulator Instrumentation)
   - `cargo test -p pdfcraft-android`: 17 passed, 0 failed.
-  - `./gradlew testDebugUnitTest`: BUILD SUCCESSFUL (all unit tests passed).
+  - `cargo test --locked -p pdfcraft-automation`: 382 passed (61 unit, 321 integration), 0 failed.
+  - `cargo test --locked -p pdfcraft-annot`: 78 passed, 0 failed.
+  - `./gradlew testDebugUnitTest`: BUILD SUCCESSFUL (13 test classes passed).
   - `cargo clippy -p pdfcraft-android --tests --locked -- -D warnings`: 0 warnings.
   - `cargo fmt --check`: passed.
   - `cargo xtask assets`: 327 assets, 0 violations.
