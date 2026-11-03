@@ -1319,6 +1319,24 @@ fn q_inside_a_text_object_restores_the_text_matrices() {
 }
 
 #[test]
+fn headings_naming_one_large_string_stop_decoding_it_at_the_allowance() {
+    let count = 100;
+    let kids = (0..count).map(|i| format!("{} 0 R", 8 + i)).collect::<Vec<_>>().join(" ");
+    let mut objects = vec![
+        "<< /Type /Catalog /Pages 2 0 R /MarkInfo << /Marked true >> /StructTreeRoot 5 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R >>".to_string(),
+        stream("BT ET"),
+        "<< /Type /StructTreeRoot /K 6 0 R >>".to_string(),
+        format!("<< /S /Document /P 5 0 R /K [{kids}] >>"),
+        format!("({})", "a".repeat(512 << 10)),
+    ];
+    objects.extend((0..count).map(|_| "<< /S /H1 /P 6 0 R /Pg 3 0 R /ActualText 7 0 R >>".to_string()));
+    let found = headings(&pdf(&objects, ""));
+    assert!(!found.is_empty() && found.len() < count, "{}", found.len());
+}
+
+#[test]
 fn an_untagged_document_has_no_headings() {
     let mut objs = headings_doc();
     objs[0] = "<< /Type /Catalog /Pages 2 0 R >>".into();
