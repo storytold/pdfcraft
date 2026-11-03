@@ -192,6 +192,14 @@ mod tests {
                 .unwrap();
             assert_ne!(decode(&segments.replace(off, on)), page, "{kind} on the page");
         }
+
+        // A refinement at 2, 0 of an intermediate region at 0x80000000, 0. A refinement of a
+        // region refines it where it is, "GRREFERENCEDX 0, GRREFERENCEDY 0" (Table 35), and the two
+        // should be at one place (7.4.7.5). Where they aren't, it decodes as it does where they are.
+        const ELSEWHERE: &str = "000000022400010000002300000008000000068000000000000000000003fffdff02fefefe1bca3149568cdfffac000000032a2002010000001e000000080000000600000002000000000000ffffffff784a909cc761ffac";
+        let refined = decode(ELSEWHERE);
+        assert_eq!(refined, decode(&ELSEWHERE.replace("8000000000000000", "0000000200000000")), "the region at 2, 0 too");
+        assert_ne!(refined, page, "drawn");
     }
 
     /// What a page costs is the same however much a run has left. Given exactly that it decodes,

@@ -527,16 +527,17 @@ fn decode_segments(
             }
             SegmentType::IntermediateGenericRefinementRegion => {
                 // Same logic as immediate refinement, but store result instead of combining.
-                let reference = seg
+                let referred_segment = seg
                     .header
                     .referred_to_segments
                     .first()
-                    .and_then(|&num| page_state.get_referred_segment(num))
-                    .unwrap_or(page_bitmap);
+                    .and_then(|&num| page_state.get_referred_segment(num));
 
                 let header = generic_refinement::parse(&mut reader)?;
                 charge_work(work_left, region_work(&header.region_info))?;
-                let region = generic_refinement::decode(&header, reference, scratch_buffers)?;
+                let reference = referred_segment.unwrap_or(page_bitmap);
+                let refines_page = referred_segment.is_none();
+                let region = generic_refinement::decode(&header, reference, refines_page, scratch_buffers)?;
                 page_state.store_region(seg.header.segment_number, region.bitmap)?;
             }
             SegmentType::ImmediateGenericRefinementRegion
@@ -561,12 +562,14 @@ fn decode_segments(
                     generic_refinement::decode_into(
                         &header,
                         referred_segment,
+                        false,
                         page_bitmap,
                         scratch_buffers,
                     )?;
                 } else {
                     let reference = referred_segment.unwrap_or(page_bitmap);
-                    let region = generic_refinement::decode(&header, reference, scratch_buffers)?;
+                    let refines_page = referred_segment.is_none();
+                    let region = generic_refinement::decode(&header, reference, refines_page, scratch_buffers)?;
                     page_bitmap.combine_region(&region.bitmap, region.combination_operator);
                 }
                 page_state.page_pristine = false;
