@@ -83,10 +83,7 @@ pub fn outside_menus<'h>(h: &'h Harness<'static, PdfCraftApp>, label: &str) -> e
 ///
 /// A build that requires craft-fonts or oracles never skips: a missing glyph there is a failure.
 pub fn skip_without_glyphs(name: &str, language: &str, text: &str) -> bool {
-    if fonts_are_required(
-        std::env::var("CRAFT_FONTS_REQUIRED").as_deref() == Ok("1"),
-        std::env::var("PDFCRAFT_ORACLES_REQUIRED").as_deref() == Ok("1"),
-    ) {
+    if fonts_are_required(std::env::var_os("CRAFT_FONTS_REQUIRED"), std::env::var_os("PDFCRAFT_ORACLES_REQUIRED")) {
         return false;
     }
     let catalog = i18n::LANGUAGES.iter().find(|l| l.code == language).map_or("", |l| l.source);
@@ -106,18 +103,18 @@ pub fn skip_without_glyphs(name: &str, language: &str, text: &str) -> bool {
     true
 }
 
-fn fonts_are_required(craft_fonts: bool, oracles: bool) -> bool {
-    craft_fonts || oracles
+fn fonts_are_required(craft_fonts: Option<std::ffi::OsString>, oracles: Option<std::ffi::OsString>) -> bool {
+    craft_fonts.is_some() || oracles.is_some()
 }
 
 /// No interface font draws a private-use plane-16 character, so the skip path is taken without
 /// craft-fonts or system faces; plain Latin text is always drawn and never skips.
 #[test]
 fn skip_without_glyphs_skips_only_for_undrawable_text() {
-    let craft_fonts_required = std::env::var("CRAFT_FONTS_REQUIRED").as_deref() == Ok("1");
-    let oracles_required = std::env::var("PDFCRAFT_ORACLES_REQUIRED").as_deref() == Ok("1");
+    let craft_fonts_required = std::env::var_os("CRAFT_FONTS_REQUIRED");
+    let oracles_required = std::env::var_os("PDFCRAFT_ORACLES_REQUIRED");
     let required = fonts_are_required(craft_fonts_required, oracles_required);
     assert_eq!(skip_without_glyphs("test", "en", "\u{10FFFD}"), !required);
     assert!(!skip_without_glyphs("test", "en", "Hello"));
-    assert!(fonts_are_required(false, true));
+    assert!(fonts_are_required(None, Some("0".into())));
 }
