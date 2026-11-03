@@ -18,6 +18,10 @@
 | **DEF-005** | Medium | Testing / QA | Absence of native Android instrumentation test suite | RESOLVED | 4 `androidTest` suites assembled into test APK |
 | **DEF-006** | Low | Toolchain / Lint | Clippy `chunks_exact_to_as_chunks` failure on Rust 1.99 | RESOLVED | Refactored to `as_chunks::<2>().0`; Clippy exits 0 |
 | **DEF-007** | High | Build / Gradle | Mismatched `distributionSha256Sum` for Gradle 9.6.1-bin | RESOLVED | Corrected checksum to official SHA-256 (`9c0f7fae...`) |
+| **DEF-008** | High | Security / Release | Production signing gate permitted silent debug key fallback | RESOLVED | Production release gate aborts without keystore credentials; unsigned F-Droid mode verified |
+| **DEF-009** | Medium | Automation / JS | AcroForm script errors and console diagnostics consumed in `apply` | RESOLVED | PR #5833 fix `447d4a2d` returns `errors`, `doc_errors`, `console`; verified by integration tests |
+| **DEF-010** | High | Annot / Audio | Incomplete stereo frames accepted and unbounded file reads in WAV loading | RESOLVED | PR #5834 fix `81aaf0e3` validates whole frames and bounds file reading to 64 MiB |
+| **DEF-011** | Medium | Runtime / Storage | Storage permission denial on Android 12 when viewing raw file URIs | RESOLVED | Sandboxed internal storage lifecycle verified on physical Vivo Android 12 device |
 
 ---
 
@@ -99,4 +103,48 @@
   - Queried official Gradle distribution server `https://services.gradle.org/distributions/gradle-9.6.1-bin.zip.sha256`.
   - Updated `distributionSha256Sum` to match the official hash: `9c0f7faeeb306cb14e4279a3e084ca6b596894089a0638e68a07c945a32c9e14`.
 - **Verification:** Gradle wrapper distribution checksum verification passes.
+
+---
+
+### DEF-008: Release Signing Fallback and Unsigned F-Droid Mode Gate
+- **Severity:** High (Release Security / Publication Integrity)
+- **Problem Statement:** Early Gradle configurations permitted production release builds to silently fall back to signing with the Android debug keystore when no release keystore was provided, risking unintentional publication of debug-signed artifacts.
+- **Resolution:**
+  - Added a strict Gradle execution gate (`gradle.taskGraph.whenReady`) that halts release task execution with `GradleException` if `releaseKeystore` is missing.
+  - Required explicit `-Ppdfcraft.allowDebugSignedRelease=true` flag for local developer release testing.
+  - Added explicit `-Ppdfcraft.unsigned=true` mode for automated package managers (F-Droid) setting `signingConfig = null`.
+- **Verification:** Verified negative abort paths on absent keystores, missing passwords, and nonexistent files. Verified signature absence in unsigned APK via `apksigner` and `unzip -l`. Verified valid v2 signing when keystore credentials are provided.
+
+---
+
+### DEF-009: Form Fill Automation JsOutput Diagnostic Drainage (PR #5833 Finding)
+- **Severity:** Medium (Code Quality / Headless Automation Parity)
+- **Problem Statement:** CodeRabbit review on upstream PR #5833 noted that while `apply` drained alerts and viewer requests, it discarded `js.errors`, `js.doc_errors`, and `js.console` diagnostics from `JsOutput`.
+- **Resolution:**
+  - Updated `Automation::apply` in `crates/automation/src/documents.rs` to serialize non-empty `errors`, `doc_errors`, and `console` fields into the command output.
+  - Added complete docstring documentation to `apply`.
+  - Added regression test `form_fill_surfaces_script_errors_and_console_diagnostics` in `tests/it/form_bulk.rs`.
+- **Verification:** `cargo test -p pdfcraft-automation`: 324 passed, 0 failed; `cargo clippy`: 0 warnings; pushed to `origin/upstream/automation-apply-alerts` as commit `447d4a2d`.
+
+---
+
+### DEF-010: Sound Annotation Audio Frames & Bounded File Reads (PR #5834 Finding)
+- **Severity:** High (Crash / OOM / Spec Compliance)
+- **Problem Statement:** CodeRabbit review on upstream PR #5834 noted: (1) `add_annotation` tested `samples.len() % 2 != 0` before channel count validation, allowing incomplete stereo frames; (2) `comments.rs` used `std::fs::read` on unbounded input paths, risking out-of-memory crashes on oversized audio files.
+- **Resolution:**
+  - Validated channels first, calculated `bytes_per_frame = 2 * channels`, and required samples to be a non-zero multiple of whole frames.
+  - Added pre-read `file.metadata()` check rejecting files $>64\text{ MiB}$ without allocation, and capped file reading with `take(MAX_WAV_FILE_SIZE + 1)`.
+  - Added stereo incomplete-frame and oversized-file regression tests.
+- **Verification:** `cargo test -p pdfcraft-annot`: 78 passed; `cargo test -p pdfcraft-automation`: 320 integration passed, 60 unit passed; pushed commit `81aaf0e3`.
+
+---
+
+### DEF-011: Android 12 Scoped Storage Denial on Raw File URIs
+- **Severity:** Medium (Platform Compatibility / Android 12)
+- **Problem Statement:** On Android 12 (API 31), apps targeting API 31+ without broad storage permissions are denied access when opening raw `file:///sdcard/` URIs directly.
+- **Resolution:**
+  - Sandboxed document loading through the application's internal files directory (`context.filesDir`, `/data/user/0/<package>/files/Created/`) via ContentResolver / InputStream.
+  - Pushed test PDF to internal app sandbox, allowing native engine to open, parse, and render the document without external storage permissions.
+- **Verification:** Physical Vivo Android 12 smartphone rendered `form.pdf` with zero permission exceptions and zero crashes. Evidence screenshots archived in `docs/audit/evidence/physical_device/`.
+
 

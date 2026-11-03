@@ -2,13 +2,13 @@
 
 **Repository:** `https://github.com/dikshant363/pdfcraft-android`  
 **Application ID:** `io.github.dikshant363.pdfcraft`  
-**Version Code:** `199`  
-**Version Name:** `0.17.0`  
+**Version Code:** `1800010` (Universal), `1800012` (arm64-v8a), `1800013` (x86_64)  
+**Version Name:** `0.18.0-rc.1`  
 **Target SDK:** 36 (Android 15)  
 **Min SDK:** 31 (Android 12)  
 **Compile SDK:** 37  
 **Supported ABIs:** `arm64-v8a`, `x86_64`  
-**Audit Date:** 2026-11-02  
+**Audit Date:** 2026-11-03  
 
 ---
 
@@ -56,49 +56,88 @@ unzip -l app-release.apk | grep "lib/"
 
 ## 4. Signing Architecture and Secret Protection
 
-### 4.1 Production Signing Protocol
+### 4.1 Production Signing Protocol and Release Gates
 
-The build script in `apps/pdfcraft-android/android/app/build.gradle.kts` defines a secure credential isolation boundary:
+The build script in `apps/pdfcraft-android/android/app/build.gradle.kts` enforces a strict credential isolation boundary and production release gate:
 
 ```kotlin
 signingConfigs {
     if (releaseKeystore != null) {
         create("release") {
-            storeFile = file(releaseKeystore)
+            val keystoreFile = file(releaseKeystore)
+            if (!keystoreFile.exists()) {
+                throw GradleException("Configured release keystore does not exist: ${keystoreFile.absolutePath}")
+            }
+            storeFile = keystoreFile
             storePassword = providers.environmentVariable("PDFCRAFT_KEYSTORE_PASSWORD").orNull
+                ?: providers.gradleProperty("pdfcraft.keystorePassword").orNull
             keyAlias = providers.environmentVariable("PDFCRAFT_KEY_ALIAS").orNull
+                ?: providers.gradleProperty("pdfcraft.keyAlias").orNull
             keyPassword = providers.environmentVariable("PDFCRAFT_KEY_PASSWORD").orNull
+                ?: providers.gradleProperty("pdfcraft.keyPassword").orNull
+            if (storePassword.isNullOrBlank() || keyAlias.isNullOrBlank() || keyPassword.isNullOrBlank()) {
+                throw GradleException(
+                    "Release keystore specified ($releaseKeystore), but PDFCRAFT_KEYSTORE_PASSWORD, " +
+                    "PDFCRAFT_KEY_ALIAS, or PDFCRAFT_KEY_PASSWORD is missing or blank."
+                )
+            }
         }
     }
 }
 ```
 
-- **Environment Variables:** Credentials are read exclusively from process environment variables (`PDFCRAFT_KEYSTORE_PASSWORD`, `PDFCRAFT_KEY_ALIAS`, `PDFCRAFT_KEY_PASSWORD`).
-- **No Hardcoded Secrets:** No keystore files, passphrases, or alias names exist in the repository, git logs, or config files.
-- **Unsigned Release Mode:** Setting `PDFCRAFT_UNSIGNED_RELEASE=1` configures `signingConfig = null`, enabling automated package managers (like F-Droid) to sign builds in their own isolated HSMs.
-- **Local Fallback:** In developer environments where no release keystore is provided, the release build automatically defaults to the debug keystore, allowing test installations without failing the build.
+- **Strict Production Gate (`gradle.taskGraph.whenReady`):** Release tasks (`assembleRelease`, `bundleRelease`, `packageRelease`) cannot proceed without credentials. If no keystore is provided and neither unsigned mode nor debug opt-in is active, Gradle immediately halts with a `GradleException`.
+- **No Silent Debug Fallback:** Unlike traditional setups, release builds **never** silently fall back to the Android debug keystore.
+- **Explicit Developer Opt-in:** Local developer release testing requires passing `-Ppdfcraft.allowDebugSignedRelease=true` or setting `PDFCRAFT_ALLOW_DEBUG_SIGNED_RELEASE=true`.
+- **Explicit Unsigned Mode for F-Droid:** Setting `-Ppdfcraft.unsigned=true` or `PDFCRAFT_UNSIGNED_RELEASE=true` sets `signingConfig = null`, allowing F-Droid and third-party build servers to generate bit-for-bit unsigned APKs (`app-release-unsigned.apk`) without embedding signatures.
 
-### 4.2 Signature Verification Evidence
+### 4.2 Signature Verification & Gate Testing Evidence
 
-The built `app-release.apk` was verified using Android's `apksigner`:
+1. **Gate Rejection Test (Absent Keystore):**
+   ```bash
+   ./gradlew assembleRelease
+   ```
+   **Output:**
+   ```
+   FAILURE: Build failed with an exception.
+   * What went wrong:
+   Production release build failed: No release keystore configured.
+   Production releases must NOT be signed with the debug keystore.
+   - For signed production release: Set PDFCRAFT_KEYSTORE, PDFCRAFT_KEYSTORE_PASSWORD, PDFCRAFT_KEY_ALIAS, PDFCRAFT_KEY_PASSWORD.
+   - For explicit unsigned release (F-Droid): Pass -Ppdfcraft.unsigned=true or set PDFCRAFT_UNSIGNED_RELEASE=true.
+   - For local developer testing ONLY: Pass -Ppdfcraft.allowDebugSignedRelease=true.
+   ```
 
-```bash
-apksigner verify --verbose --print-certs app-release.apk
-```
+2. **Unsigned Mode Verification (F-Droid Inspection):**
+   ```bash
+   apksigner verify --verbose apps/pdfcraft-android/android/app/build/outputs/apk/release/app-release-unsigned.apk
+   ```
+   **Output:**
+   ```
+   DOES NOT VERIFY
+   ERROR: Missing META-INF/MANIFEST.MF
+   ```
+   `unzip -l app-release-unsigned.apk | grep "META-INF"` confirms zero `*.RSA`, `*.SF`, or `MANIFEST.MF` signature files exist.
 
-**Output:**
-```
-Verifies
-Verified using v1 scheme (JAR signing): false
-Verified using v2 scheme (APK Signature Scheme v2): true
-Verified using v3 scheme (APK Signature Scheme v3): false
-Verified using v3.1 scheme (APK Signature Scheme v3.1): false
-Verified using v4 scheme (APK Signature Scheme v4): false
-Verified for SourceStamp: false
-Number of signers: 1
-Signer #1 key algorithm: RSA
-Signer #1 key size (bits): 2048
-```
+3. **Signed Release Verification (Configured Keystore):**
+   Built with a 2048-bit RSA release keystore:
+   ```bash
+   apksigner verify --verbose --print-certs app-release.apk
+   ```
+   **Output:**
+   ```
+   Verifies
+   Verified using v1 scheme (JAR signing): false
+   Verified using v2 scheme (APK Signature Scheme v2): true
+   Verified using v3 scheme (APK Signature Scheme v3): false
+   Verified using v3.1 scheme (APK Signature Scheme v3.1): false
+   Verified using v4 scheme (APK Signature Scheme v4): false
+   Verified for SourceStamp: false
+   Number of signers: 1
+   Signer #1 certificate DN: CN=Test, OU=Dev, O=Test, L=City, ST=State, C=US
+   Signer #1 key algorithm: RSA
+   Signer #1 key size (bits): 2048
+   ```
 
 ---
 

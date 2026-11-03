@@ -2,8 +2,8 @@
 
 **Target Repository:** `https://github.com/storytold/pdfcraft` (`main` @ `0cba87ae`)  
 **Origin Fork:** `https://github.com/dikshant363/pdfcraft-android`  
-**Audit Date:** 2026-11-02  
-**Status:** READY FOR USER AUTHORIZATION TO SUBMIT
+**Audit Date:** 2026-11-03  
+**Status:** PR #5833, PR #5834, AND PR #5907 OPEN ON UPSTREAM; CODERABBIT REVIEW FINDINGS FULLY REMEDIATED
 
 ---
 
@@ -14,7 +14,7 @@ Before preparing contributions, every patch was audited against upstream's manda
 1. **Asset Policy (Absolute Cleanliness — `AGENTS.md` §1):**
    - Zero Adobe assets, logos, fonts, or cursors.
    - All UI icons sourced strictly from Lucide (ISC).
-   - All assets cataloged in `ATTRIBUTION.toml` and verified via `cargo xtask assets` (323 items verified, 0 violations).
+   - All assets cataloged in `ATTRIBUTION.toml` and verified via `cargo xtask assets` (289 repository assets, 0 violations).
 2. **Clean-Room Rules (`AGENTS.md` §2):**
    - Implementations derived purely from ISO 32000-2 and public RFC specifications. Zero Acrobat decompilation or binary inspection.
 3. **Headless Automation Reachability (`AGENTS.md` §3):**
@@ -26,51 +26,43 @@ Before preparing contributions, every patch was audited against upstream's manda
 
 ---
 
-## 2. Contribution Track B Breakdown
+## 2. Upstream Pull Request Status and Remediation Breakdown
 
-### 2.1 PR 1: Automation Apply Alerts & Viewer Requests
+### 2.1 PR #5833: Automation Apply Alerts, Requests & Diagnostics
+- **Target Pull Request:** `https://github.com/storytold/pdfcraft/pull/5833`
 - **Topic Branch:** `upstream/automation-apply-alerts`
-- **Verified Commit:** `f2526d6c` (`test(automation): add comprehensive AcroForm calculation alerts and requests tests`)
+- **Latest Verified Commit:** `447d4a2d` (`fix(automation): preserve script errors and console diagnostics in apply`)
 - **Base Commit:** `0cba87ae` (`storytold/pdfcraft:main`)
-- **Changeset:**
-  - `crates/automation/src/documents.rs`: Harvests alerts and viewer requests from `take_js_output(id)` and attaches them to the `apply()` tool response payload.
-  - `crates/automation/src/a11y.rs`: Aligns accessibility output.
-  - `crates/automation/src/a11y/form_tools.rs`: Aligns form calculation output.
-  - `crates/automation/tests/it/form_bulk.rs`: 5 new integration tests verifying single-doc alerts, multi-alert arrays, cross-document isolation, undo/redo idempotency, and syntax error safety.
-- **Verification:**
-  - `cargo test -p pdfcraft-automation`: 324 passed, 0 failed.
-  - `cargo clippy -p pdfcraft-automation --tests`: 0 warnings.
-  - `git diff origin/main..upstream/automation-apply-alerts`: **Zero Android files touched.**
-- **Action Required:** Open PR against `storytold/pdfcraft:main` upon user authorization.
+- **CodeRabbit Review Remediation:**
+  - Surfaced `errors`, `doc_errors`, and `console` diagnostics in `Automation::apply` output (`crates/automation/src/documents.rs`).
+  - Added comprehensive docstring documentation to `apply`.
+  - Added integration test `form_fill_surfaces_script_errors_and_console_diagnostics` in `tests/it/form_bulk.rs` verifying multi-alert delivery, console diagnostics, document isolation, repeated call drainage, and undo/redo non-replay.
+- **Verification Evidence:**
+  - `cargo test --locked -p pdfcraft-automation`: 324 passed, 0 failed.
+  - `cargo clippy -p pdfcraft-automation --tests --locked -- -D warnings`: 0 warnings.
+  - Pushed to `origin/upstream/automation-apply-alerts` and updated GitHub PR description.
 
-### 2.2 PR 2: ISO 32000-2 Sound Annotations & Bounded RIFF Parser
+### 2.2 PR #5834: ISO 32000-2 Sound Annotations & Bounded RIFF Parser
+- **Target Pull Request:** `https://github.com/storytold/pdfcraft/pull/5834`
 - **Topic Branch:** `upstream/sound-annotations`
-- **Verified Commit:** `f9490027` (`fix(annot): implement bounded RIFF/WAVE parser with padding validation and memory limits`)
+- **Latest Verified Commit:** `81aaf0e3` (`fix(annot): validate stereo frames and bound WAV file loading to 64 MiB`)
 - **Base Commit:** `0cba87ae` (`storytold/pdfcraft:main`)
-- **Changeset:**
-  - `crates/annot/src/types.rs`: Implements `Shape::Sound` and Sound annotation dictionary serialization.
-  - `crates/annot/src/create.rs`: Constructs `/Subtype /Sound` annotation dictionary with attached sound object stream (`/R`, `/C`, `/B`, `/E /Signed`).
-  - `crates/annot/src/appearance/symbols.rs` & `appearance.rs`: Draws standard vector microphone icon appearance stream with user stroke color.
-  - `crates/automation/src/wav.rs`: Bounded, spec-compliant RIFF/WAVE parser with 64 MiB cap, 3600s duration cap, odd-chunk padding verification, and checked arithmetic.
-  - `crates/automation/src/comments.rs`: Integrates `wav_samples` for `comment_add` tool.
-  - `crates/annot/src/tests.rs`: Unit tests for sound stream dictionary and display appearances.
-  - `crates/automation/tests/it/automation.rs`: End-to-end sound comment creation, save, and reopen test.
-- **Verification:**
-  - `cargo test -p pdfcraft-annot`: 77 passed, 0 failed.
-  - `cargo test -p pdfcraft-automation`: 324 passed, 0 failed.
-  - `cargo clippy -p pdfcraft-annot -p pdfcraft-automation --tests`: 0 warnings.
-  - `git diff origin/main..upstream/sound-annotations`: **Zero Android files touched.**
-- **Action Required:** Open PR against `storytold/pdfcraft:main` upon user authorization.
+- **CodeRabbit Review Remediation:**
+  - Audio frame calculation: In `crates/annot/src/create.rs`, validates channel count before computing frame size (`bytes_per_frame = 2 * channels`); rejects non-multiples of whole frames (e.g. 2-byte or 6-byte stereo samples).
+  - Bounded WAV reading: In `crates/automation/src/comments.rs`, performs pre-allocation file metadata check rejecting files $>64\text{ MiB}$; caps reading with `take(MAX_WAV_FILE_SIZE + 1)`.
+  - Added unit test `sound_annotation_validates_channel_frames_and_samples` in `crates/annot/src/tests.rs`.
+  - Added regression test `sound_comment_rejects_oversized_and_malformed_audio_files` in `crates/automation/tests/it/automation.rs`.
+- **Verification Evidence:**
+  - `cargo test --locked -p pdfcraft-annot`: 78 passed, 0 failed.
+  - `cargo test --locked -p pdfcraft-automation`: 320 integration passed, 60 unit passed, 0 failed.
+  - `cargo clippy -p pdfcraft-annot -p pdfcraft-automation --tests --locked -- -D warnings`: 0 warnings.
+  - `cargo xtask assets`: 289 assets, 0 violations.
+  - Pushed to `origin/upstream/sound-annotations` and updated GitHub PR description with Never-Crash, Security, Parity, and Reviewer-Focus sections.
 
 ---
 
-## 3. RFC Proposal: Native Android Platform Support
-
-- **Document Location:** `docs/contributing/PROPOSAL_ISSUE_DRAFT.md`
-- **Objective:** Propose first-class native Android support in PdfCraft without imposing Android NDK or SDK toolchain requirements on desktop-only contributors.
-- **Key Tenets of Proposal:**
-  - Dedicated crate `apps/pdfcraft-android` using UniFFI library mode.
-  - Core engine reuse (rendering, editing, forms, cryptography, signing, OCR).
-  - Kotlin + Jetpack Compose UI with offline-first SAF architecture.
-  - Separate GitHub Actions workflow (`android.yml`) running only when Android directories are modified.
-- **Status:** Complete draft prepared. Awaiting user authorization to post on upstream GitHub issues.
+## 3. PR #5907: Native Android Platform Port
+- **Target Pull Request:** `https://github.com/storytold/pdfcraft/pull/5907`
+- **Head Branch:** `dikshant363:android-port`
+- **Status:** Open for maintainer review.
+- **Tenets:** Independent `apps/pdfcraft-android` module, native Rust PDF engine via UniFFI, offline-first Material 3 Compose UI, no impact on desktop-only contributors.
