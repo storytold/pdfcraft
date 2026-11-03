@@ -120,6 +120,48 @@ fn the_bookmark_of_the_page_on_screen_is_marked() {
     assert!(marked(&h, "Results") && !marked(&h, "Intro"));
 }
 
+/// The page changed while a search hides the bookmark it marks: the row is scrolled to once the
+/// search is cleared and the row is shown, not spent on a frame it wasn't drawn in.
+#[test]
+fn a_bookmark_hidden_by_a_search_is_scrolled_to_once_it_shows() {
+    // 60 sheets with a bookmark each: the last ones lie well below the panel's fold.
+    let n = 60;
+    let mut pdf = String::from("%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R /Outlines 3 0 R >> endobj\n");
+    let kids: Vec<String> = (0..n).map(|i| format!("{} 0 R", 10 + i)).collect();
+    pdf += &format!("2 0 obj << /Type /Pages /Kids [{}] /Count {n} /MediaBox [0 0 300 400] >> endobj\n", kids.join(" "));
+    pdf += &format!("3 0 obj << /Type /Outlines /First 100 0 R /Last {} 0 R /Count {n} >> endobj\n", 100 + n - 1);
+    for i in 0..n {
+        pdf += &format!("{} 0 obj << /Type /Page /Parent 2 0 R >> endobj\n", 10 + i);
+    }
+    for i in 0..n {
+        let prev = if i > 0 { format!("/Prev {} 0 R ", 100 + i - 1) } else { String::new() };
+        let next = if i + 1 < n { format!("/Next {} 0 R ", 100 + i + 1) } else { String::new() };
+        pdf += &format!("{} 0 obj << /Title (Sheet {:02}) /Parent 3 0 R {prev}{next}/Dest [{} 0 R /Fit] >> endobj\n", 100 + i, i + 1, 10 + i);
+    }
+    pdf += "trailer << /Root 1 0 R >>\n%%EOF";
+    let mut h = harness();
+    h.state_mut().open_bytes("sheets.pdf", None, pdf.into_bytes()).unwrap();
+    h.run_steps(4);
+    let window = h.ctx.content_rect();
+    let in_view = |h: &Harness<'static, PdfCraftApp>, title: &str| {
+        let r = h.get_by_label(title).rect();
+        r.top() >= window.top() && r.bottom() <= window.bottom()
+    };
+    assert!(in_view(&h, "Sheet 01") && !in_view(&h, "Sheet 55"), "the last sheets start below the fold");
+    // A search shows only the first sheet; meanwhile the reader goes to sheet 55.
+    h.get_by_label("Search").click();
+    h.run_steps(1);
+    h.get_by_label("Search").type_text("Sheet 01");
+    h.run_steps(3);
+    assert!(h.query_by_label("Sheet 55").is_none());
+    h.state_mut().set_option("page", "55").unwrap();
+    h.run_steps(3);
+    // Cleared, the list shows every sheet again and the marked one is scrolled to.
+    h.get_by_label("Clear").click();
+    h.run_steps(6);
+    assert!(in_view(&h, "Sheet 55"), "{:?} in {window:?}", h.get_by_label("Sheet 55").rect());
+}
+
 /// Under a closed bookmark, the marked one is out of sight: the closed bookmark is marked in its
 /// place, and once opened, the child itself.
 #[test]
