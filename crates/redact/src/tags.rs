@@ -193,7 +193,11 @@ pub(crate) fn clean_within(
     let touches = |doc: &Document, x: &Object, pg: Option<ObjRef>| {
         mcid_of(doc, x, pg, page, stream).is_some_and(|m| stream.is_some() || changed.contains(&m) || empty.contains(&m))
     };
+    let mut steps = 0usize;
     while let Some((k, pg, above)) = todo.pop() {
+        if over_budget(&mut steps, todo.len(), limit) {
+            return Err(RedactError::Tags);
+        }
         match k {
             Object::Array(a) => todo.extend(a.into_iter().map(|x| (x, pg, above))),
             // A number or name tree node written in place.
@@ -304,7 +308,7 @@ pub(crate) fn clean_within(
 /// Where the walk reached an object from: the nearest element above it that is an object of its
 /// own, and whether an element written in place between them carries a description (which only
 /// rewriting the object holding it could remove).
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, PartialEq, Eq, Hash)]
 struct Above {
     element: Option<ObjRef>,
     described_in_place: bool,
@@ -326,8 +330,22 @@ impl Above {
 /// The title (`/T`) is included, as producers often fill it with the element's text.
 const DESCRIPTIONS: [&[u8]; 4] = [b"Alt", b"ActualText", b"T", b"E"];
 
+/// Charges one step of a structure-tree walk visiting at most `limit` references. Kids are queued
+/// for every element that lists them, and an indirect `/K` array shared by many elements is
+/// listed again for each, so the steps and the queue are bounded too, not only the distinct
+/// references: past either the cleanup can't be shown complete, and is refused.
+fn over_budget(steps: &mut usize, pending: usize, limit: usize) -> bool {
+    *steps += 1;
+    *steps > limit.saturating_mul(STEPS_PER_REFERENCE) || pending > limit.saturating_mul(STEPS_PER_REFERENCE)
+}
+
+/// Work items a walk may spend per reference it may visit: elements, their marked-content kids and
+/// the tree nodes between them, with room to spare for real trees.
+const STEPS_PER_REFERENCE: usize = 8;
+
 /// Each element's parents as the walk found them: through `/K`, which `/P` may not agree with.
-struct Parents(HashMap<ObjRef, Vec<Above>>);
+/// A parent listing the element many times (a shared `/K` array of repeats) is held once.
+struct Parents(HashMap<ObjRef, HashSet<Above>>);
 
 impl Parents {
     fn new() -> Self {
@@ -336,7 +354,7 @@ impl Parents {
 
     fn record(&mut self, r: ObjRef, above: Above) {
         if above.element.is_some() || above.described_in_place {
-            self.0.entry(r).or_default().push(above);
+            self.0.entry(r).or_default().insert(above);
         }
     }
 }
@@ -474,7 +492,11 @@ pub(crate) fn drop_object_refs_within(doc: &mut Document, gone: &HashSet<ObjRef>
     let mut seen = HashSet::new();
     let mut parents = Parents::new();
     let mut hits: Vec<ObjRef> = Vec::new();
+    let mut steps = 0usize;
     while let Some((k, above)) = todo.pop() {
+        if over_budget(&mut steps, todo.len(), limit) {
+            return Err(RedactError::Tags);
+        }
         match k {
             Object::Array(a) => todo.extend(a.into_iter().map(|x| (x, above))),
             // A structure element written in place: its kids are followed; one that tags a
