@@ -441,13 +441,17 @@ impl TaggedWalker<'_> {
                 tagged_warning(&mut self.out, format!("text extraction reached its size limit on page {}", page + 1));
             }
             if page_text.unmarked_text
-                || page_text.by_id.iter().any(|(mcid, text)| !text.trim().is_empty() && !self.used_marks.contains(&(*page, None, *mcid)))
+                || page_text.by_id.iter().any(|(mcid, text)| !text.trim().is_empty() && !page_mark_is_used(*page, *mcid, &self.used_marks))
                 || has_unstructured_form_text(*page, page_text, &self.direct_stream_texts, &self.used_marks)
             {
                 tagged_warning(&mut self.out, format!("page {} contains text outside the structure tree", page + 1));
             }
         }
     }
+}
+
+fn page_mark_is_used(page: usize, mcid: i64, used_marks: &HashSet<(usize, Option<ObjRef>, i64)>) -> bool {
+    used_marks.iter().any(|(used_page, _, used_mcid)| *used_page == page && *used_mcid == mcid)
 }
 
 fn append_tagged_text(
