@@ -117,7 +117,7 @@ fn merge(text: &str, within: Within, op: Op, warnings: &mut Vec<String>) -> Merg
         warnings.push("The XFA data nests XML elements deeper than the reader accepts; the field values were not written to it".into());
         return Merged::Failed;
     }
-    let opts = || roxmltree::ParsingOptions { allow_dtd: false, nodes_limit: MAX_NODES };
+    let opts = || roxmltree::ParsingOptions { allow_dtd: false, nodes_limit: MAX_NODES, ..Default::default() };
     // A packet of an array may use the prefixes the XDP envelope declares: read it inside
     // an element declaring the usual ones.
     let wrapped;
@@ -389,9 +389,9 @@ pub(super) fn readable(text: &str, within: Within, warnings: &mut Vec<String>) -
         warnings.push(format!("The XFA data would be larger than {} MB; it was not written", MAX_PACKET_WRITE >> 20));
         return false;
     }
-    let opts = roxmltree::ParsingOptions { allow_dtd: false, nodes_limit: MAX_NODES };
-    let ok = roxmltree::Document::parse_with_options(text, opts).is_ok()
-        || (within == Within::Packet && roxmltree::Document::parse_with_options(&format!("{WRAP_OPEN}{text}{WRAP_CLOSE}"), opts).is_ok());
+    let opts = || roxmltree::ParsingOptions { allow_dtd: false, nodes_limit: MAX_NODES, ..Default::default() };
+    let ok = roxmltree::Document::parse_with_options(text, opts()).is_ok()
+        || (within == Within::Packet && roxmltree::Document::parse_with_options(&format!("{WRAP_OPEN}{text}{WRAP_CLOSE}"), opts()).is_ok());
     if !ok {
         warnings.push("The XFA data would not be well-formed XML after this change; it was not written".into());
     }
