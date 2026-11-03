@@ -253,6 +253,22 @@ impl ImageObb {
     }
 }
 
+/// Whether pointer `p` is on an image being cropped, its crop box or its handles (#5835).
+pub(crate) fn crop_contains_point(
+    img: &pdfcraft_engine::PageImage,
+    crop: &crate::edit_text_ui::CropMode,
+    xf: &PageXform,
+    info: &DocInfo,
+    page: usize,
+    p: Pos2,
+) -> bool {
+    let obb = ImageObb::from_image(img, xf, info, page);
+    let full_obb = ImageObb::from_matrix(img.matrix, xf, info, page);
+    crate::edit_text_ui::quad_contains(obb.corners(), p)
+        || crate::edit_text_ui::quad_contains(full_obb.corners(), p)
+        || crate::edit_text_ui::crop_controls_contain(img, crop, xf, info, page, p)
+}
+
 /// The page display as it was before full screen, put back on leaving it
 /// ([`DocView::enter_presentation`]).
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -2441,10 +2457,23 @@ fn draw_pages(
                     let xf =
                         PageXform { rect: r, rot: view.rotation, pw: info.pages[page_idx].width.max(1.0), ph: info.pages[page_idx].height.max(1.0) };
                     let images = cached_edit_images(view, doc, page_idx).to_vec();
+                    // Crop controls own the click even when another image overlaps them.
+                    if view.image_selection.as_ref().is_some_and(|s| {
+                        s.page == page_idx
+                            && s.crop
+                                .as_ref()
+                                .zip(images.get(s.index))
+                                .is_some_and(|(crop, img)| crop_contains_point(img, crop, &xf, info, page_idx, p))
+                    }) {
+                        over_image = true;
+                        break;
+                    }
                     for (idx, img) in images.iter().enumerate().rev() {
                         let obb = ImageObb::from_image(img, &xf, info, page_idx);
                         let b = image_screen_rect(img, &xf, info, page_idx);
-                        if obb.contains(b, p) {
+                        let selected_crop = view.image_selection.as_ref().is_some_and(|s| s.page == page_idx && s.index == idx && s.crop.is_some());
+                        let hit = if selected_crop { crate::edit_text_ui::quad_contains(obb.corners(), p) } else { obb.contains(b, p) };
+                        if hit {
                             over_image = true;
                             if view.image_selection.as_ref().is_none_or(|s| s.page != page_idx || s.index != idx) {
                                 view.image_selection = Some(crate::edit_text_ui::ImageSelection::at(page_idx, idx));
@@ -2557,6 +2586,22 @@ fn draw_pages(
         view.current = current;
     }
     resp.context_menu(|ui| {
+        let is_crop_over_image = tool == QuickTool::EditText
+            && view.image_selection.clone().is_some_and(|sel| {
+                let Some(ref crop) = sel.crop else { return false };
+                let pointer_pos = ptr.pos;
+                let Some(p) = pointer_pos else { return false };
+                let Some((_, xf)) = view.screen_xforms.iter().find(|(page_idx, _)| *page_idx == sel.page).cloned() else { return false };
+                let images = cached_edit_images(view, doc, sel.page).to_vec();
+                let Some(img) = images.get(sel.index) else { return false };
+                crop_contains_point(img, crop, &xf, info, sel.page, p)
+            });
+        if is_crop_over_image {
+            ui.ctx().data_mut(|d| d.insert_temp(crate::edit_text_ui::image_menu_id(), false));
+            egui::Popup::close_all(ui.ctx());
+            ui.close();
+            return;
+        }
         // Preparing a form: the selected field's menu.
         if preparing && let Some((name, wi)) = view.prepare.selected.clone() {
             // Several fields: Align, Center, Distribute, Set Fields to Same Size.
