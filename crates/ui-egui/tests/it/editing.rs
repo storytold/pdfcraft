@@ -8073,6 +8073,66 @@ fn test_image_context_menu_crop_page_edge_pills() {
 }
 
 #[test]
+fn test_rotated_image_crop_secondary_click_in_outer_bounding_box_clears_selection() {
+    let mut png = Vec::new();
+    image::RgbImage::from_pixel(80, 80, image::Rgb([200, 40, 40])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1400.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("picture.png", None, png.clone()).expect("opens");
+        app
+    });
+    h.run_steps(4);
+    let id = h.state().views[0].id;
+    let full = h.state().session.get(id).unwrap().page_images(0)[0].rect;
+    let (qw, qh) = ((full[2] - full[0]) / 4.0, (full[3] - full[1]) / 4.0);
+    let (mx, my) = ((full[0] + full[2]) / 2.0, (full[1] + full[3]) / 2.0);
+    h.state_mut().apply_edit(pdfcraft_engine::Edit::EditPageImage {
+        page: 0,
+        index: 0,
+        change: pdfcraft_engine::ImageEdit::Move([mx - qw, my - qh, mx + qw, my + qh]),
+    });
+    h.run_steps(4);
+    // Rotate the image by 45°
+    h.state_mut().apply_edit(pdfcraft_engine::Edit::EditPageImage { page: 0, index: 0, change: pdfcraft_engine::ImageEdit::RotateBy(45.0) });
+    h.run_steps(4);
+
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
+    let r = h.state().views[0].page_screen_rect(0).expect("on screen");
+    let c = r.center();
+
+    // Select the image and put it into crop mode
+    h.hover_at(c);
+    h.run_steps(1);
+    h.drag_at(c);
+    h.run_steps(1);
+    h.drop_at(c);
+    h.run_steps(2);
+    assert!(h.state().views[0].image_selection.is_some(), "selected");
+
+    let doc_id = h.state().views[0].id;
+    let img = &h.state().session.get(doc_id).unwrap().page_images(0)[0];
+    let (cx, cy) = ((full[0] + full[2]) / 2.0, (full[1] + full[3]) / 2.0);
+    let shrunk_crop = [cx - 5.0, cy - 5.0, cx + 5.0, cy + 5.0];
+    h.state_mut().views[0].image_selection.as_mut().unwrap().crop = Some(pdfcraft_ui_egui::CropMode::new(shrunk_crop));
+    h.run_steps(2);
+
+    let xf = h.state().views[0].page_xform(0).unwrap();
+    let doc_info = &h.state().session.get(doc_id).unwrap().info;
+    let b = pdfcraft_ui_egui::canvas::image_screen_rect(img, &xf, doc_info, 0);
+
+    // The top-left corner of the axis-aligned bounding box `b` is outside the 45°-rotated diamond quad
+    let corner = b.left_top() + egui::vec2(2.0, 2.0);
+    assert!(b.contains(corner), "corner point is inside screen bounding box");
+
+    // Right-clicking at the corner must clear the crop selection and show the canvas context menu (#5900 review)
+    crop_secondary_click(&mut h, corner);
+    assert!(h.state().views[0].image_selection.is_none(), "clicking in outer bounding box of rotated image clears crop selection");
+    assert!(h.query_by_label("Rotate view clockwise").is_some());
+}
+
+#[test]
 fn crop_action_pills_interactive_and_apply_cancel_reset() {
     let mut png = Vec::new();
     image::RgbImage::from_pixel(100, 100, image::Rgb([100, 150, 200]))

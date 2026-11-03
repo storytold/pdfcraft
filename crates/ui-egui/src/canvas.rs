@@ -2472,7 +2472,8 @@ fn draw_pages(
                     for (idx, img) in images.iter().enumerate().rev() {
                         let obb = ImageObb::from_image(img, &xf, info, page_idx);
                         let b = image_screen_rect(img, &xf, info, page_idx);
-                        let hit = obb.contains(b, p);
+                        let selected_crop = view.image_selection.as_ref().is_some_and(|s| s.page == page_idx && s.index == idx && s.crop.is_some());
+                        let hit = if selected_crop { crate::edit_text_ui::quad_contains(obb.corners(), p) } else { obb.contains(b, p) };
                         if hit {
                             over_image = true;
                             if view.image_selection.as_ref().is_none_or(|s| s.page != page_idx || s.index != idx) {
