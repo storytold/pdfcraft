@@ -356,12 +356,7 @@ fn decode_segments(
                     generic::decode_into(&header, page_bitmap, scratch_buffers)?;
                 } else {
                     let region = generic::decode(&header, scratch_buffers)?;
-                    page_bitmap.combine(
-                        &region.bitmap,
-                        region.bitmap.x_location as i32,
-                        region.bitmap.y_location as i32,
-                        region.combination_operator,
-                    );
+                    page_bitmap.combine_region(&region.bitmap, region.combination_operator);
                 }
                 page_state.page_pristine = false;
             }
@@ -460,12 +455,7 @@ fn decode_segments(
                         scratch_buffers,
                         work_left,
                     )?;
-                    page_bitmap.combine(
-                        &region.bitmap,
-                        region.bitmap.x_location as i32,
-                        region.bitmap.y_location as i32,
-                        region.combination_operator,
-                    );
+                    page_bitmap.combine_region(&region.bitmap, region.combination_operator);
                 }
                 page_state.page_pristine = false;
             }
@@ -518,12 +508,7 @@ fn decode_segments(
                     halftone::decode_into(&header, pattern_dict, page_bitmap, scratch_buffers)?;
                 } else {
                     let region = halftone::decode(&header, pattern_dict, scratch_buffers)?;
-                    page_bitmap.combine(
-                        &region.bitmap,
-                        region.bitmap.x_location as i32,
-                        region.bitmap.y_location as i32,
-                        region.combination_operator,
-                    );
+                    page_bitmap.combine_region(&region.bitmap, region.combination_operator);
                 }
                 page_state.page_pristine = false;
             }
@@ -582,12 +567,7 @@ fn decode_segments(
                 } else {
                     let reference = referred_segment.unwrap_or(page_bitmap);
                     let region = generic_refinement::decode(&header, reference, scratch_buffers)?;
-                    page_bitmap.combine(
-                        &region.bitmap,
-                        region.bitmap.x_location as i32,
-                        region.bitmap.y_location as i32,
-                        region.combination_operator,
-                    );
+                    page_bitmap.combine_region(&region.bitmap, region.combination_operator);
                 }
                 page_state.page_pristine = false;
             }
@@ -831,6 +811,71 @@ mod tests {
         assert!(Image::new_embedded(&stream(16385, 16384), None).is_err());
         assert!(Image::new_embedded(&stream(65536, 1), None).is_err(), "too wide, though few pixels");
         assert!(Image::new_embedded(&stream(1 << 20, 1 << 20), None).is_err());
+    }
+
+    /// PdfCraft patch: a region's location is unsigned (5.4.4), so one past `i32::MAX` is off the
+    /// page. Taken for a signed one, a region at 0xFFFFFFFE drew back onto the page two pixels left
+    /// of it, and a refinement there was refused, and the rest of the stream with it. Each region
+    /// here is 4 × 4 on a blank page of 8 × 8, its coded data arbitrary: on the page it draws, off
+    /// it nothing.
+    #[test]
+    fn a_region_located_past_i32_max_is_off_the_page() {
+        struct Ink(u32);
+        impl Decoder for Ink {
+            fn push_pixel(&mut self, black: bool) {
+                self.0 += u32::from(black);
+            }
+            fn push_pixel_chunk(&mut self, black: bool, chunks: u32) {
+                self.0 += if black { 8 * chunks } else { 0 };
+            }
+            fn next_line(&mut self) {}
+        }
+        let segment = |number: u8, kind: u8, refers_to: &[u8], data: &[u8]| {
+            let mut segment = vec![0, 0, 0, number, kind, (refers_to.len() as u8) << 5];
+            segment.extend_from_slice(refers_to);
+            segment.push(1); // the page it belongs to
+            segment.extend_from_slice(&(data.len() as u32).to_be_bytes());
+            segment.extend_from_slice(data);
+            segment
+        };
+        // Region information (7.4.1) of 4 × 4 at `x`, `y`, then the region's own header, then
+        // arbitrary coded data.
+        let region = |x: u32, y: u32, operator: u8, header: &[u8]| {
+            let mut data: Vec<u8> = [4u32, 4, x, y].iter().flat_map(|v| v.to_be_bytes()).collect();
+            data.push(operator);
+            data.extend_from_slice(header);
+            data.extend_from_slice(&[0x5a; 16]);
+            data
+        };
+        const GENERIC: &[u8] = &[0, 3, 0xFF, 0xFD, 0xFF, 2, 0xFE, 0xFE, 0xFE]; // template 0, AT
+        const REFINEMENT: &[u8] = &[0, 0xFF, 0xFF, 0xFF, 0xFF]; // template 0, AT
+        let (or, replace) = (0, 4);
+        let ink = |x: u32, y: u32| {
+            // 8 × 8, resolution unknown, flags, not striped.
+            let page = segment(0, 48, &[], &[0, 0, 0, 8, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 0, 0x42, 0, 0]);
+            let forms = [
+                // An immediate generic region.
+                vec![segment(1, 38, &[], &region(x, y, or, GENERIC))],
+                // An immediate refinement of the page, which reads the page in its own area (7.4.7.4).
+                vec![segment(1, 42, &[], &region(x, y, replace, REFINEMENT))],
+                // An immediate refinement of an intermediate region at the same place (7.4.7.5).
+                vec![
+                    segment(1, 36, &[], &region(x, y, or, GENERIC)),
+                    segment(2, 42, &[1], &region(x, y, or, REFINEMENT)),
+                ],
+            ];
+            forms.map(|form| {
+                let stream = [page.clone(), form.concat()].concat();
+                let mut ink = Ink(0);
+                Image::new_embedded(&stream, None).and_then(|image| image.decode(&mut ink)).map(|()| ink.0)
+            })
+        };
+        for (x, y) in [(0, 0), (2, 2)] {
+            assert!(ink(x, y).iter().all(|ink| matches!(ink, Ok(n) if *n > 0)), "{x}, {y}: {:?}", ink(x, y));
+        }
+        for (x, y) in [(0xFFFF_FFFE, 0), (0, 0xFFFF_FFFE), (0x8000_0000, 0x8000_0000), (u32::MAX, u32::MAX)] {
+            assert_eq!(ink(x, y).map(|ink| ink.ok()), [Some(0); 3], "{x:#x}, {y:#x}");
+        }
     }
 
     /// A stream and its globals are one stream of segments, so they have one count.

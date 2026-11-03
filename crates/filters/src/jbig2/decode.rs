@@ -143,6 +143,57 @@ mod tests {
         assert_eq!(decode_jbig2(&symbols, None, w, h, usize::MAX).unwrap(), marks);
     }
 
+    /// A region's location is unsigned (ISO/IEC 14492 5.4.4), so one past `i32::MAX` is off the
+    /// page. The decoder took it for a signed one: a region at 0xFFFFFFFC came back onto the page
+    /// four pixels left of it, and a refinement anywhere past `i32::MAX` was refused, and the page
+    /// with it. Each stream is a page of 16 × 12 covered by a generic region, then a region of 8 × 6
+    /// of one kind past `i32::MAX`, coded by the standard's procedures, and decodes to that page
+    /// alone; moved onto the page, the region draws. Vendored hayro-jbig2 patch 14.
+    #[test]
+    fn a_region_located_past_i32_max_is_off_the_page() {
+        const PAGE: &str = "0000000030000100000013000000100000000c00000000000000004200000000000126000100000035000000100000000c0000000000000000040003fffdff02fefefed906aa2cb6ee4ccb4bc975d02669ca7a9c14c20c638f5a5e1bffac";
+        let cases = [
+            // At 0xFFFFFFFC, 1.
+            ("generic", "00000002260001000000220000000800000006fffffffc00000001000003fffdff02fefefe17c876ae6f77ffac"),
+            // At 1, 0xFFFFFFFE, with its symbol dictionary.
+            (
+                "text",
+                "000000020000010000001e000003fffdff02fefefe00000001000000014fdda14149cec477ed5fffac00000003062002010000001b000000080000000600000001fffffffe00001000000001a943ffac",
+            ),
+            // At 0xFFFFFFFC, 1, with its pattern dictionary.
+            (
+                "halftone",
+                "000000021000010000000a000101000000011fffac00000003162002010000002e0000000800000006fffffffc0000000100000000000800000006000000000000000001000000d09301774485ffac",
+            ),
+            // At 0xFFFFFFFC, 1, reading the page there (7.4.7.4): 0s.
+            ("refinement of the page", "000000022a00010000001e0000000800000006fffffffc000000010400ffffffff0bd98f188428ffac"),
+            // Of an intermediate region at the same place (7.4.7.5), 1, 0xFFFFFFFE.
+            (
+                "refinement of a region",
+                "0000000224000100000023000000080000000600000001fffffffe000003fffdff02fefefe3d81322da16b7fffac000000032a2002010000001e000000080000000600000001fffffffe0000ffffffffe29946b82229ffac",
+            ),
+            // Of an intermediate refinement of an intermediate region, all at 0xFFFFFFFC, 1.
+            (
+                "refinement of a refinement",
+                "00000002240001000000230000000800000006fffffffc00000001000003fffdff02fefefecdfd921ec8c47fffac00000003282002010000001e0000000800000006fffffffc000000010000ffffffff903cdb447a47ffac000000042a2003010000001e0000000800000006fffffffc000000010000ffffffffdcd6078cab86ffac",
+            ),
+        ];
+        let hex = |text: &str| (0..text.len() / 2).map(|i| u8::from_str_radix(&text[i * 2..i * 2 + 2], 16).unwrap()).collect::<Vec<u8>>();
+        let decode = |segments: &str| decode_jbig2(&[hex(PAGE), hex(segments)].concat(), None, 16, 12, usize::MAX).unwrap();
+        let page = decode("");
+        assert!(page.iter().any(|&byte| byte != 0xFF), "the page has ink");
+        for (kind, segments) in cases {
+            assert_eq!(decode(segments), page, "{kind}");
+            // Moved onto the page, to 4, 1 or 1, 2, the same regions draw: they decode, and are
+            // left out for where they are.
+            let (off, on) = [("fffffffc00000001", "0000000400000001"), ("00000001fffffffe", "0000000100000002")]
+                .into_iter()
+                .find(|(off, _)| segments.contains(off))
+                .unwrap();
+            assert_ne!(decode(&segments.replace(off, on)), page, "{kind} on the page");
+        }
+    }
+
     /// What a page costs is the same however much a run has left. Given exactly that it decodes,
     /// and less stops it: spending all that's left, and what comes after isn't read. A page that
     /// fails still spends what it took.

@@ -10,7 +10,7 @@ use crate::ScratchBuffers;
 use crate::arithmetic_decoder::{ArithmeticDecoder, ArithmeticDecoderContext};
 use crate::bitmap::{Bitmap, WORD_BITS, WORD_SHIFT, Word};
 use crate::decode::generic::ContextGatherer;
-use crate::error::{OverflowError, ParseError, RegionError, Result, bail};
+use crate::error::{ParseError, RegionError, Result, bail};
 use crate::reader::Reader;
 
 /// Generic refinement region decoding procedure (6.3).
@@ -35,6 +35,20 @@ pub(crate) fn decode(
     })
 }
 
+/// PdfCraft patch: the offset of a refinement's reference from the region, from their locations.
+///
+/// A location is unsigned (5.4.4), so one past `i32::MAX` is a place off the page, not an
+/// overflow: a refinement there, of a region at the same place (7.4.7.5) or of the page, was
+/// refused, and the rest of the stream with it. Both bitmaps are at most 65,535 pixels a side, so
+/// an offset of `i32::MAX` either way already puts every reference pixel the decoder reads outside
+/// the reference, where they are 0 (6.3.5.2), as any larger offset would.
+fn reference_offset(reference: u32, region: u32) -> i32 {
+    let limit = i64::from(i32::MAX);
+    let offset = (i64::from(reference) - i64::from(region)).clamp(-limit, limit);
+    // Provably in range after the clamp.
+    i32::try_from(offset).unwrap_or(0)
+}
+
 /// Decode a generic refinement region directly into an existing bitmap.
 pub(crate) fn decode_into(
     header: &GenericRefinementRegionHeader<'_>,
@@ -51,22 +65,8 @@ pub(crate) fn decode_into(
         bail!(RegionError::InvalidDimension);
     }
 
-    let reference_dx = i32::try_from(reference.x_location)
-        .ok()
-        .and_then(|r: i32| {
-            i32::try_from(header.region_info.x_location)
-                .ok()
-                .and_then(|h| r.checked_sub(h))
-        })
-        .ok_or(OverflowError::ReferenceOffset)?;
-    let reference_dy = i32::try_from(reference.y_location)
-        .ok()
-        .and_then(|r: i32| {
-            i32::try_from(header.region_info.y_location)
-                .ok()
-                .and_then(|h| r.checked_sub(h))
-        })
-        .ok_or(OverflowError::ReferenceOffset)?;
+    let reference_dx = reference_offset(reference.x_location, header.region_info.x_location);
+    let reference_dy = reference_offset(reference.y_location, header.region_info.y_location);
 
     let mut decoder = ArithmeticDecoder::new(data);
     let num_context_bits = header.template.context_bits();
@@ -508,4 +508,23 @@ pub(crate) fn decode_bitmap(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// PdfCraft patch: the reference's offset is the difference of the locations, which past
+    /// `i32::MAX` are places off the page: equal ones give 0, as a refinement of a region has them
+    /// (7.4.7.5), and one too far for an `i32` is held to `i32::MAX`, either way.
+    #[test]
+    fn a_reference_offset_is_the_difference_of_unsigned_locations() {
+        assert_eq!(reference_offset(5, 3), 2);
+        assert_eq!(reference_offset(3, 5), -2);
+        assert_eq!(reference_offset(0x9000_0000, 0x9000_0000), 0, "a region and its refinement off the page");
+        assert_eq!(reference_offset(0, 0xFFFF_FFFC), -i32::MAX, "the page and a refinement of it off the page");
+        assert_eq!(reference_offset(u32::MAX, 0), i32::MAX);
+        assert_eq!(reference_offset(0x7FFF_FFFF, 0), i32::MAX, "in range");
+        assert_eq!(reference_offset(0, 0x7FFF_FFFF), -i32::MAX, "in range");
+    }
 }
