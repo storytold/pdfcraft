@@ -54,6 +54,11 @@ const CASCADE: Vec2 = vec2(40.0, 40.0);
 const TAB_GRIP: Vec2 = vec2(90.0, 18.0);
 /// How large a window embedded in the main one is, relative to the size a window would get.
 const EMBEDDED_SCALE: f32 = 0.6;
+/// How large a window opened from one that fills its screen is, relative to that window: a
+/// copy of its size would cover the screen and put the new window's title bar beyond it.
+const FILLED_SCALE: f32 = 0.75;
+/// A window at least this share of its monitor's width and height fills it, maximized or not.
+const FILLS_MONITOR: f32 = 0.9;
 
 /// The fields of `PdfCraftApp` that are one window's own.
 pub struct WindowState {
@@ -234,6 +239,12 @@ pub(crate) struct WindowGeometry {
     pub origin: Pos2,
     /// The window's content on screen, in points.
     pub rect: Rect,
+    /// The window with its title bar and borders on screen, in points, where the desktop says.
+    pub outer: Option<Rect>,
+    /// The size of the monitor the window is on, in points (egui doesn't say where it is).
+    pub monitor: Option<Vec2>,
+    /// The window is maximized or full screen.
+    pub maximized: bool,
     /// The tab strip, in the window's coordinates.
     pub strip: Option<Rect>,
     /// Each document tab's rect, in the window's coordinates, in strip order.
@@ -246,7 +257,18 @@ pub(crate) struct WindowGeometry {
 
 impl Default for WindowGeometry {
     fn default() -> Self {
-        Self { known: false, origin: Pos2::ZERO, rect: Rect::NOTHING, strip: None, tabs: Vec::new(), focused: false, app_frame: None }
+        Self {
+            known: false,
+            origin: Pos2::ZERO,
+            rect: Rect::NOTHING,
+            outer: None,
+            monitor: None,
+            maximized: false,
+            strip: None,
+            tabs: Vec::new(),
+            focused: false,
+            app_frame: None,
+        }
     }
 }
 
@@ -597,9 +619,7 @@ impl PdfCraftApp {
         let layout = self.with_window(from, |a| (a.mode, a.left, a.left_open, a.right, a.all_tools_expanded));
         let (mode, left, left_open, right, all_tools_expanded) =
             layout.unwrap_or((self.mode, self.left, self.left_open, self.right, self.all_tools_expanded));
-        let source = self.window_geometry.get(&from).filter(|g| g.known).map(|g| g.rect);
-        let size = source.map_or(DEFAULT_SIZE, |r| r.size()).max(MIN_SIZE);
-        let pos = at.map(|p| p - TAB_GRIP).or_else(|| source.map(|r| r.min + CASCADE));
+        let (pos, size) = new_window_place(self.window_geometry.get(&from).filter(|g| g.known), at);
         let id = WindowId(self.next_window_id);
         self.next_window_id = self.next_window_id.saturating_add(1);
         let state = WindowState { views: vec![view], active: Some(0), mode, left, left_open, right, all_tools_expanded, ..WindowState::default() };
@@ -754,9 +774,15 @@ impl PdfCraftApp {
     /// rect in the main window when it is drawn inside it (tests, and backends without
     /// several windows).
     pub(crate) fn track_window(&mut self, id: WindowId, ctx: &egui::Context, embedded: Option<Rect>) {
-        let (inner, focused) = ctx.input(|i| (i.viewport().inner_rect, i.viewport().focused));
+        let (inner, outer, monitor, maximized, focused) = ctx.input(|i| {
+            let v = i.viewport();
+            let maximized = v.maximized.unwrap_or(false) || v.fullscreen.unwrap_or(false);
+            (v.inner_rect, v.outer_rect.filter(|r| r.is_finite()), v.monitor_size, maximized, v.focused)
+        });
         let root_origin = self.window_geometry.get(&WindowId::ROOT).map_or(Pos2::ZERO, |g| g.origin);
         let geometry = self.window_geometry.entry(id).or_default();
+        // An embedded window's screen is the main window's: none of its own.
+        (geometry.outer, geometry.monitor, geometry.maximized) = if embedded.is_some() { (None, None, false) } else { (outer, monitor, maximized) };
         match (embedded, inner) {
             (Some(rect), _) => {
                 geometry.known = true;
@@ -933,6 +959,45 @@ impl Drop for WindowGuard<'_> {
     }
 }
 
+/// Where a window opened from `source` (where that window was last seen) goes and its content's
+/// size: at `at` with the tab under the pointer when a tab was dropped there (a screen position),
+/// else a little below and to the right of `source`.
+///
+/// It takes the source window's size, but a source that fills its screen (maximized, full
+/// screen, or nearly as large as its monitor) gives a smaller window, as a copy of its size would
+/// cover the screen. Where it can be told where that screen is (the source fills it, or the
+/// source lies on the monitor at the screen's origin; egui gives a monitor's size, not its
+/// place), the new window is moved, and made smaller if need be, to lie on it whole, title bar
+/// and close button included, unless the tab was dropped off it, on another monitor.
+fn new_window_place(source: Option<&WindowGeometry>, at: Option<Pos2>) -> (Option<Pos2>, Vec2) {
+    let grip = at.map(|p| p - TAB_GRIP);
+    let Some(source) = source else {
+        return (grip, DEFAULT_SIZE.max(MIN_SIZE));
+    };
+    let inner = source.rect;
+    let outer = source.outer.unwrap_or(inner);
+    // The title bar and borders the desktop adds (none where the app draws the window's frame).
+    let frame = (outer.size() - inner.size()).max(Vec2::ZERO);
+    let fills = source.maximized || source.monitor.is_some_and(|m| outer.width() >= m.x * FILLS_MONITOR && outer.height() >= m.y * FILLS_MONITOR);
+    // A window may stick out a few points (Windows' invisible resize borders).
+    let screen = if fills {
+        Some(outer)
+    } else {
+        source.monitor.map(|m| Rect::from_min_size(Pos2::ZERO, m)).filter(|first| first.expand(16.0).contains_rect(outer))
+    };
+    let screen = screen.filter(|s| at.is_none_or(|p| s.contains(p)));
+    let mut size = if fills { outer.size() * FILLED_SCALE - frame } else { inner.size() };
+    if let Some(s) = screen {
+        size = size.min(s.size() - frame);
+    }
+    let size = size.max(MIN_SIZE);
+    let mut pos = grip.unwrap_or(inner.min + CASCADE);
+    if let Some(s) = screen {
+        pos = pos.clamp(s.min, (s.max - (size + frame)).max(s.min));
+    }
+    (Some(pos), size)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1086,5 +1151,62 @@ mod tests {
         let unknown = WindowGeometry { rect: Rect::from_min_size(Pos2::ZERO, vec2(5000.0, 5000.0)), ..Default::default() };
         app.window_geometry.insert(WindowId(2), unknown);
         assert_eq!(app.window_under(Pos2::new(3000.0, 120.0), WindowId::ROOT), None, "a window of unknown place never matches");
+    }
+
+    /// The window `new_window_place` gives, title bar and borders included.
+    fn frame_of(place: (Option<Pos2>, Vec2), frame: Vec2) -> Rect {
+        Rect::from_min_size(place.0.expect("a place"), place.1 + frame)
+    }
+
+    #[test]
+    fn a_window_opened_from_a_maximized_one_is_smaller_and_lies_on_its_screen() {
+        // A 1536 × 816 work area under a 30-point title bar, on a 1536 × 864 monitor.
+        let screen = Rect::from_min_size(Pos2::ZERO, vec2(1536.0, 816.0));
+        let frame = vec2(0.0, 30.0);
+        let source = WindowGeometry {
+            known: true,
+            rect: Rect::from_min_max(Pos2::new(0.0, 30.0), screen.max),
+            outer: Some(screen),
+            monitor: Some(vec2(1536.0, 864.0)),
+            maximized: true,
+            ..Default::default()
+        };
+        let menu = new_window_place(Some(&source), None);
+        assert_eq!(menu.1, vec2(1152.0, 582.0), "three quarters of the screen, frame included");
+        assert_eq!(menu.0, Some(Pos2::new(40.0, 70.0)), "cascaded from the source");
+        assert!(screen.contains_rect(frame_of(menu, frame)), "{menu:?}");
+        let dropped = new_window_place(Some(&source), Some(Pos2::new(1300.0, 700.0)));
+        assert!(screen.contains_rect(frame_of(dropped, frame)), "a drop near the corner keeps the close button on screen: {dropped:?}");
+        let near = new_window_place(Some(&source), Some(Pos2::new(300.0, 200.0)));
+        assert_eq!(near.0, Some(Pos2::new(300.0, 200.0) - TAB_GRIP), "where it fits, the tab stays under the pointer");
+        // Dropped beyond the screen: on a monitor whose place egui doesn't tell. The size still drops.
+        let beyond = new_window_place(Some(&source), Some(Pos2::new(2000.0, 300.0)));
+        assert_eq!(beyond, (Some(Pos2::new(2000.0, 300.0) - TAB_GRIP), vec2(1152.0, 582.0)));
+    }
+
+    #[test]
+    fn a_window_opened_from_one_on_the_first_monitor_stays_on_it() {
+        let monitor = vec2(1920.0, 1080.0);
+        let source = WindowGeometry {
+            known: true,
+            rect: Rect::from_min_max(Pos2::new(1000.0, 530.0), Pos2::new(1900.0, 1060.0)),
+            outer: Some(Rect::from_min_max(Pos2::new(1000.0, 500.0), Pos2::new(1900.0, 1060.0))),
+            monitor: Some(monitor),
+            ..Default::default()
+        };
+        let place = new_window_place(Some(&source), None);
+        assert_eq!(place.1, vec2(900.0, 530.0), "the source's size");
+        assert!(Rect::from_min_size(Pos2::ZERO, monitor).contains_rect(frame_of(place, vec2(0.0, 30.0))), "{place:?}");
+        // Not on the monitor at the origin (one to its left): its place is unknown, so as before.
+        let left = WindowGeometry {
+            rect: source.rect.translate(vec2(-1920.0, 0.0)),
+            outer: source.outer.map(|r| r.translate(vec2(-1920.0, 0.0))),
+            ..source.clone()
+        };
+        assert_eq!(new_window_place(Some(&left), None), (Some(Pos2::new(-880.0, 570.0)), vec2(900.0, 530.0)));
+        // Nothing known of the screen (embedded windows, tests): the source's place and size.
+        let embedded = WindowGeometry { outer: None, monitor: None, ..source };
+        assert_eq!(new_window_place(Some(&embedded), None), (Some(Pos2::new(1040.0, 570.0)), vec2(900.0, 530.0)));
+        assert_eq!(new_window_place(None, None), (None, DEFAULT_SIZE));
     }
 }
