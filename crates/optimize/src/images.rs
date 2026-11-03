@@ -1368,7 +1368,8 @@ pub fn recolour_image(doc: &Document, s: &Stream, target: ImageTarget) -> Option
         return None;
     }
     let (w, h) = (d.int(b"Width")? as u32, d.int(b"Height")? as u32);
-    let px = pixels(doc, s, n)?;
+    // One picture a call: `pixels` itself refuses one past MAX_PIXELS, so no shared allowance is kept here.
+    let px = pixels(doc, s, n, &mut ImageBudget::with_work(u64::MAX))?;
     let was_dct = is_dct(s)?;
     let out: Vec<u8> = match (n, target) {
         (3, ImageTarget::Gray) => {
