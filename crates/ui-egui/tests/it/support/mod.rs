@@ -116,5 +116,6 @@ fn skip_without_glyphs_skips_only_for_undrawable_text() {
     let required = fonts_are_required(craft_fonts_required, oracles_required);
     assert_eq!(skip_without_glyphs("test", "en", "\u{10FFFD}"), !required);
     assert!(!skip_without_glyphs("test", "en", "Hello"));
+    assert!(fonts_are_required(Some("0".into()), None));
     assert!(fonts_are_required(None, Some("0".into())));
 }
