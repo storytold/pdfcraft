@@ -6801,8 +6801,13 @@ fn retained_pdf_version_is_the_later_of_header_and_catalog() {
     ok(&mut a, "doc_optimize", json!({ "doc": blank, "path": "v14.pdf", "compatibility": "1.4" }));
     let mut cos = pdfcraft_cos::Document::open(std::sync::Arc::new(std::fs::read(dir.join("v14.pdf")).unwrap())).unwrap();
     let root = cos.root().unwrap();
-    cos.update_dict(root, |c| c.set(b"Version".to_vec(), pdfcraft_cos::Object::name("1.4"))).unwrap();
-    for (label, header, expected) in [("higher-header", "1.7", "1.7"), ("equal", "1.4", "1.4")] {
+    for (label, header, catalog, expected) in [
+        ("higher-header", "1.7", "1.4", "1.7"),
+        // PDF versions compare as major/minor numbers: 2.0 is newer than 1.7.
+        ("higher-catalog", "1.7", "2.0", "2.0"),
+        ("equal", "1.4", "1.4", "1.4"),
+    ] {
+        cos.update_dict(root, |c| c.set(b"Version".to_vec(), pdfcraft_cos::Object::name(catalog))).unwrap();
         cos.set_version(header);
         let input = pdfcraft_cos::write_full(&cos, &pdfcraft_cos::SaveOptions { object_streams: false, ..Default::default() }).unwrap();
         std::fs::write(dir.join(format!("{label}-input.pdf")), input).unwrap();
