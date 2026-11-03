@@ -461,7 +461,7 @@ fn keyboard_find_step_is_explicit_and_a_late_text_layer_cannot_undo_it() {
     ctx.input_mut(|i| {
         i.events.push(egui::Event::Key { key: egui::Key::G, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::COMMAND });
     });
-    shortcuts(&mut v, &ctx, Default::default());
+    shortcuts(&mut v, &ctx, Default::default(), Default::default());
 
     assert_eq!(v.current, 2, "the keyboard step chose the next match");
     assert_eq!(v.find.as_ref().unwrap().auto_from, None, "the keyboard step is the user's choice");

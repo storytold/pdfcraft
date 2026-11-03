@@ -37,6 +37,7 @@ pub(super) mod wheel_boost;
 pub(super) mod wheel_pager;
 mod xform;
 mod zoom;
+pub mod zoom_increment;
 pub(super) mod zoom_snap;
 
 pub(crate) use area::signature_badges;

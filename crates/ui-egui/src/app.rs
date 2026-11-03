@@ -100,6 +100,7 @@ impl PdfCraftApp {
             desktop_theme_enabled: false,
             scroll_speed: scroll_speed::ScrollSpeed::default(),
             invert_middle_drag: false,
+            zoom_increment: zoom_increment::ZoomIncrement::default(),
             animation_effects: motion::AnimationEffects::default(),
             motion: motion::Motion::default(),
             language: i18n::AUTO.to_string(),

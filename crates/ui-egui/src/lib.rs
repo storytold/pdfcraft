@@ -97,6 +97,7 @@ pub use canvas::scroll_speed;
 use canvas::signature_drag;
 use canvas::wheel_boost;
 use canvas::wheel_pager;
+pub use canvas::zoom_increment;
 use canvas::zoom_snap;
 use dialogs::appearance;
 pub use dialogs::bookmark_styles_ui;
@@ -314,6 +315,9 @@ pub struct PdfCraftApp {
     /// Preferences ▸ Invert middle-button drag: the middle button's pan or auto-scroll moves the
     /// view the other way. Off by default.
     pub invert_middle_drag: bool,
+    /// Preferences ▸ Zoom In / Zoom Out step: the standard levels (the default) or a fixed
+    /// number of percentage points (#5884).
+    pub zoom_increment: zoom_increment::ZoomIncrement,
     /// Preferences ▸ Animation effects: on, off, or as the system's animation setting says.
     pub animation_effects: motion::AnimationEffects,
     /// Whether the system asked for no animations, and how the desktop app asks it.

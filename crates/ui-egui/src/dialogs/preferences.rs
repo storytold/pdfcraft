@@ -11,6 +11,7 @@ use crate::side_panels::ToolsSide;
 use crate::theme::{self, ThemeKind, Tokens};
 use crate::units::Unit;
 use crate::widgets::{self, icons};
+use crate::zoom_increment::ZoomIncrement;
 
 /// The height the Preferences dialog keeps below its scrolling settings for the buttons row.
 pub(crate) const PREFERENCES_BUTTON_ROW: f32 = 52.0;
@@ -740,6 +741,7 @@ fn card_documents_and_view(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens,
     ctx.label_secondary(ui, tl!("Used when a PDF doesn't ask for a layout or zoom. Continuous scrolling never snaps between pages."), t);
     ctx.checkbox(ui, &mut app.always_default_view, tl!("Always use my default zoom and page layout"), t);
     ui.add_space(6.0);
+    zoom_increment(ui, app, t, ctx);
 
     ui.horizontal(|ui| {
         ctx.label_primary(ui, tl!("Units"), t);
@@ -758,6 +760,30 @@ fn card_documents_and_view(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens,
     ctx.label_secondary(ui, tl!("For page sizes and margins."), t);
     ui.add_space(6.0);
     scrolling(ui, app, t, ctx);
+}
+
+/// How far Zoom In and Zoom Out go, in Card 3 (#5884).
+fn zoom_increment(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ctx: &mut PrefSearchContext) {
+    ui.horizontal(|ui| {
+        ctx.label_primary(ui, tl!("Zoom In and Zoom Out step"), t);
+        ctx.pill_choice(
+            ui,
+            t,
+            &mut app.zoom_increment,
+            &[
+                (ZoomIncrement::Standard, tl!("Standard levels")),
+                (ZoomIncrement::Five, ZoomIncrement::Five.label()),
+                (ZoomIncrement::Ten, ZoomIncrement::Ten.label()),
+                (ZoomIncrement::TwentyFive, ZoomIncrement::TwentyFive.label()),
+            ],
+        );
+    });
+    ctx.label_secondary(
+        ui,
+        tl!("Standard levels follow Acrobat's zoom menu (100%, 125%, 150%, 200%…). A percentage zooms in or out by that much each time."),
+        t,
+    );
+    ui.add_space(6.0);
 }
 
 /// The scroll speed and the middle button's direction, in Card 3.

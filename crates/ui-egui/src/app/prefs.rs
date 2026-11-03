@@ -90,6 +90,7 @@ impl PdfCraftApp {
             "theme": self.theme_preference,
             "scroll_speed": self.scroll_speed,
             "invert_middle_drag": self.invert_middle_drag,
+            "zoom_increment": self.zoom_increment,
             "animation_effects": self.animation_effects,
             "default_mode": self.default_mode,
             "default_layout": canvas::display_token(self.view_defaults.layout, self.view_defaults.continuous),
@@ -243,6 +244,9 @@ impl PdfCraftApp {
         }
         if let Some(invert) = v["invert_middle_drag"].as_bool() {
             self.invert_middle_drag = invert;
+        }
+        if let Ok(increment) = serde_json::from_value::<zoom_increment::ZoomIncrement>(v["zoom_increment"].clone()) {
+            self.zoom_increment = increment;
         }
         if let Ok(effects) = serde_json::from_value::<motion::AnimationEffects>(v["animation_effects"].clone()) {
             self.animation_effects = effects;

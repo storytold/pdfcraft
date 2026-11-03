@@ -53,6 +53,9 @@ impl PdfCraftApp {
             ("invert_middle_drag", _) => {
                 self.invert_middle_drag = value.parse::<bool>().map_err(|_| "invert_middle_drag must be true or false")?;
             }
+            ("zoom_increment", _) => {
+                self.zoom_increment = zoom_increment::ZoomIncrement::parse(value).ok_or("zoom_increment must be standard, 5, 10, or 25")?;
+            }
             ("animation_effects", _) => {
                 self.animation_effects = motion::AnimationEffects::parse(value).ok_or("animation_effects must be system, on, or off")?;
             }

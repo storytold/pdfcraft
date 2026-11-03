@@ -1,4 +1,5 @@
 use super::zoom::GRID_ZOOM_STEP;
+use super::zoom_increment::ZoomIncrement;
 use super::{DestView, DocInfo, DocView, Fit, PT, PageLayout, SIDE, ViewAction, pos2, vec2};
 
 impl DocView {
@@ -315,8 +316,9 @@ impl DocView {
     }
 }
 
-/// ⌘+ / ⌘− / ⌘0 / ⌘1 / ⌘2: zoom the page, or size the pages in the page grid.
-fn zoom_shortcuts(view: &mut DocView, pressed: &impl Fn(egui::KeyboardShortcut) -> bool) {
+/// ⌘+ / ⌘− / ⌘0 / ⌘1 / ⌘2: zoom the page (⌘+ / ⌘− by `increment`), or size the pages in the
+/// page grid.
+fn zoom_shortcuts(view: &mut DocView, increment: ZoomIncrement, pressed: &impl Fn(egui::KeyboardShortcut) -> bool) {
     use egui::{Key, KeyboardShortcut, Modifiers};
     let cmd = |k| KeyboardShortcut::new(Modifiers::COMMAND, k);
     // In the page grid ⌘+ / ⌘− / ⌘0 size its pages instead (looking is always allowed).
@@ -333,10 +335,10 @@ fn zoom_shortcuts(view: &mut DocView, pressed: &impl Fn(egui::KeyboardShortcut) 
         }
     } else {
         if zoom_in {
-            view.zoom_step(true);
+            view.zoom_step_by(true, increment);
         }
         if zoom_out {
-            view.zoom_step(false);
+            view.zoom_step_by(false, increment);
         }
         if zoom_reset {
             view.fit = Fit::Page;
@@ -352,7 +354,7 @@ fn zoom_shortcuts(view: &mut DocView, pressed: &impl Fn(egui::KeyboardShortcut) 
     }
 }
 
-pub fn shortcuts(view: &mut DocView, ctx: &egui::Context, speed: crate::scroll_speed::ScrollSpeed) {
+pub fn shortcuts(view: &mut DocView, ctx: &egui::Context, speed: crate::scroll_speed::ScrollSpeed, increment: ZoomIncrement) {
     use egui::{Key, KeyboardShortcut, Modifiers};
     if ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::F))) {
         view.open_find();
@@ -384,7 +386,7 @@ pub fn shortcuts(view: &mut DocView, ctx: &egui::Context, speed: crate::scroll_s
     if pressed(KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, Key::Minus)) {
         view.rotate_view(false);
     }
-    zoom_shortcuts(view, &pressed);
+    zoom_shortcuts(view, increment, &pressed);
     // Alt+← / Alt+→ (⌥ on macOS) too, as in Acrobat and browsers, back to where a link was
     // followed from (#3632). Consumed here, before ← / → turn the page. egui matches the pattern
     // logically, so an extra Shift is ignored and Shift+Alt+← goes back as well (harmless).
