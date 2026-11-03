@@ -4,6 +4,9 @@ use pdfcraft_cos::{Document, SaveOptions, write_full, write_incremental};
 
 use super::*;
 
+#[path = "mark_transaction_tests.rs"]
+mod mark_transactions;
+
 /// Three pages: an upright page with content that leaves the graphics state changed (an
 /// unbalanced `cm`), a page rotated 90° and one with inherited, shared resources.
 fn fixture() -> Document {
@@ -5570,6 +5573,41 @@ fn reading_follows_form_xobjects() {
     let own = images::page_images(&doc, 0).unwrap();
     assert_eq!(own.len(), 1, "{own:?}");
     assert!(own[0].is_form && own[0].object == Some(pdfcraft_cos::ObjRef::new(6, 0)), "{own:?}");
+}
+
+/// A page's `/XObject` and a form's `/Resources` are read wherever they are stored, and a form with
+/// none of its own, or with something else there, uses the ones it was drawn with (PDF 1.1 files).
+/// Each of these pages shows one line of text and one picture through one form.
+#[test]
+fn reading_follows_forms_however_their_resources_are_stored() {
+    let body = "BT /F1 12 Tf 72 700 Td (In the form) Tj ET q 20 0 0 10 5 5 cm /Im Do Q";
+    let (font, direct) = ("/Font << /F1 5 0 R >>", "/XObject << /Fm 6 0 R /Im 7 0 R >>");
+    for (page, form) in [
+        (format!("<< {font} {direct} >>"), ""),
+        (format!("<< {font} /XObject 9 0 R >>"), ""),
+        (format!("<< /Font 10 0 R {direct} >>"), ""),
+        (format!("<< {font} {direct} >>"), "/Resources 99 0 R"),
+        (format!("<< {font} {direct} >>"), "/Resources 12"),
+        ("<< /XObject << /Fm 6 0 R >> >>".to_string(), "/Resources 8 0 R"),
+        ("<< /XObject 9 0 R >>".to_string(), "/Resources << /Font << /F1 5 0 R >> /XObject 9 0 R >>"),
+    ] {
+        let doc = build(&[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            &format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Resources {page} /Contents 4 0 R >>"),
+            &stream("", "/Fm Do"),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>",
+            &stream(&format!("/Type /XObject /Subtype /Form /BBox [0 0 600 800] {form}"), body),
+            &stream("/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", "A"),
+            "<< /Font << /F1 5 0 R >> /XObject 9 0 R >>",
+            "<< /Fm 6 0 R /Im 7 0 R >>",
+            "<< /F1 5 0 R >>",
+        ]);
+        let blocks = text::reading_blocks(&doc, 0).unwrap();
+        let texts: Vec<(&str, &str)> = blocks.iter().map(|b| (b.text.as_str(), b.base_font.as_str())).collect();
+        assert_eq!(texts, [("In the form", "Courier")], "{page} {form}");
+        assert_eq!(images::reading_images(&doc, 0).unwrap().len(), 1, "{page} {form}");
+    }
 }
 
 /// A chain of forms, each drawing the next twenty times, twelve deep: within the depth cap but
