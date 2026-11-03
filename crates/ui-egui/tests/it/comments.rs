@@ -3200,6 +3200,29 @@ fn hotbar_vertical_size_and_docking() {
 }
 
 #[test]
+fn hotbar_settings_layout_and_side_controls_are_reachable_by_label() {
+    let mut h = harness(|_| {});
+    h.get_by_label("Hotbar settings").click();
+    h.run_steps(3);
+    fn vertical(h: &Harness<'static, PdfCraftApp>) -> serde_json::Value {
+        serde_json::from_str::<serde_json::Value>(&h.state().persist()).unwrap()["hotbar"]["vertical"].clone()
+    }
+    let before = vertical(&h);
+    h.get_by_role_and_label(Role::Switch, "Vertical layout").click();
+    h.run_steps(3);
+    assert_ne!(vertical(&h), before, "the layout switch toggles by its label");
+    h.get_by_role_and_label(Role::RadioButton, "Right").click();
+    h.run_steps(3);
+    let saved: serde_json::Value = serde_json::from_str(&h.state().persist()).unwrap();
+    assert_eq!(saved["hotbar"]["dock"], "right");
+    assert_eq!(saved["hotbar"]["vertical"], true, "docking at the side lays the bar out vertically");
+    h.get_by_role_and_label(Role::RadioButton, "Float").click();
+    h.run_steps(3);
+    let saved: serde_json::Value = serde_json::from_str(&h.state().persist()).unwrap();
+    assert!(saved["hotbar"]["dock"].is_null());
+}
+
+#[test]
 fn hotbar_settings_reopen_even_with_remembered_collapsed_state() {
     let mut h = harness(|_| {});
     let mut collapsed =

@@ -60,6 +60,21 @@ impl Hotbar {
         }
     }
 
+    /// Adopt preferences saved before the hotbar absorbed the quick-action bar (#5890), which have
+    /// no `placed` key. A bar left at that release's default (floating, horizontal, top centre)
+    /// moves to the new default in the left margin; any other spot is one the user chose, so it
+    /// is kept, including the top-left corner.
+    pub fn adopt_legacy(&mut self) {
+        if self.dock.is_none() && !self.vertical && self.position == [0.5, 0.0] {
+            self.position = [0.0, 0.0];
+            self.vertical = true;
+            self.full_side = false;
+            self.placed = false;
+        } else {
+            self.placed = true;
+        }
+    }
+
     /// Parse and validate a comma-separated list of command identifiers for the hotbar.
     pub fn set_tools(&mut self, value: &str) -> Result<(), String> {
         let tools: Vec<String> = value.split(',').map(str::trim).filter(|s| !s.is_empty()).map(str::to_owned).collect();
@@ -338,7 +353,7 @@ fn active_tool_controls(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ve
 }
 
 /// Render a modern iOS-style pill toggle switch.
-fn toggle_switch(ui: &mut egui::Ui, on: &mut bool, t: &Tokens) -> egui::Response {
+fn toggle_switch(ui: &mut egui::Ui, on: &mut bool, label: &str, t: &Tokens) -> egui::Response {
     let width = 34.0;
     let height = 18.0;
     let (rect, mut response) = ui.allocate_exact_size(vec2(width, height), Sense::click());
@@ -346,11 +361,11 @@ fn toggle_switch(ui: &mut egui::Ui, on: &mut bool, t: &Tokens) -> egui::Response
         *on = !*on;
         response.mark_changed();
     }
-    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Switch, true, *on, ""));
+    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Switch, ui.is_enabled(), *on, label));
 
     if ui.is_rect_visible(rect) {
         let radius = height / 2.0;
-        let bg_color = if *on { Color32::from_rgb(45, 85, 150) } else { t.border };
+        let bg_color = if *on { t.accent } else { t.border };
         ui.painter().rect(rect, CornerRadius::same(radius as u8), bg_color, Stroke::NONE, egui::StrokeKind::Inside);
         let circle_radius = radius - 2.5;
         let circle_x = if *on { rect.max.x - radius } else { rect.min.x + radius };
@@ -359,74 +374,25 @@ fn toggle_switch(ui: &mut egui::Ui, on: &mut bool, t: &Tokens) -> egui::Response
     response
 }
 
-/// Render the segmented dock placement bar: [ Float | Left | Right | Top | Bottom ].
+/// Render the dock placement choice: [ Float | Left | Right | Top | Bottom ], scrolling sideways
+/// when the picker is narrower than the row.
 fn segmented_dock_picker(ui: &mut egui::Ui, bar: &mut Hotbar, t: &Tokens) {
-    let min_width = 270.0;
-    if ui.available_width() < min_width {
-        egui::ScrollArea::horizontal().auto_shrink([false, false]).show(ui, |ui| {
-            render_dock_segments(ui, bar, t, min_width);
-        });
-    } else {
-        render_dock_segments(ui, bar, t, ui.available_width());
-    }
-}
-
-fn render_dock_segments(ui: &mut egui::Ui, bar: &mut Hotbar, t: &Tokens, total_width: f32) {
-    let sides: [(&str, Option<&str>); 5] =
-        [("Float", None), ("Left", Some("left")), ("Right", Some("right")), ("Top", Some("top")), ("Bottom", Some("bottom"))];
-    let height = 30.0;
-    let item_width = total_width / (sides.len() as f32);
-
-    let (outer_rect, _) = ui.allocate_exact_size(vec2(total_width, height), Sense::hover());
-
-    ui.painter().rect(outer_rect, CornerRadius::same(6), t.card.gamma_multiply(0.6), Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
-
-    for (i, (label, side_val)) in sides.iter().enumerate() {
-        let is_selected = match (bar.dock.as_deref(), *side_val) {
-            (None, None) => true,
-            (Some(d), Some(s)) => d == s,
-            _ => false,
-        };
-        let x_start = outer_rect.min.x + (i as f32) * item_width;
-        let item_rect = Rect::from_min_size(egui::pos2(x_start, outer_rect.min.y), vec2(item_width, height));
-        let resp = ui.interact(item_rect, ui.scope_id().with(label), Sense::click());
-        if resp.clicked() {
-            match side_val {
-                None => {
-                    let _ = bar.place("float");
-                }
-                Some(s) => {
-                    let _ = bar.place(s);
-                }
-            }
-        }
-        if is_selected {
-            ui.painter().rect(item_rect.shrink(1.0), CornerRadius::same(5), Color32::from_rgb(38, 58, 98), Stroke::NONE, egui::StrokeKind::Inside);
-        } else if resp.hovered() {
-            ui.painter().rect(item_rect.shrink(1.0), CornerRadius::same(5), t.hover, Stroke::NONE, egui::StrokeKind::Inside);
-        }
-
-        if i > 0 && !is_selected {
-            let prev_selected = match (bar.dock.as_deref(), sides[i - 1].1) {
-                (None, None) => true,
-                (Some(d), Some(s)) => d == s,
-                _ => false,
-            };
-            if !prev_selected {
-                ui.painter().vline(x_start, (outer_rect.min.y + 4.0)..=(outer_rect.max.y - 4.0), Stroke::new(1.0, t.border));
-            }
-        }
-
-        let text_color = if is_selected {
-            Color32::WHITE
-        } else if resp.hovered() {
-            t.text
-        } else {
-            t.text_muted
-        };
-        let font = theme::medium(12.5);
-        let galley = ui.painter().layout_no_wrap(tl!(*label).to_string(), font, text_color);
-        ui.painter().galley(item_rect.center() - vec2(galley.size().x / 2.0, galley.size().y / 2.0), galley, text_color);
+    let options = [
+        (None, tl!("Float")),
+        (Some("left"), tl!("Left")),
+        (Some("right"), tl!("Right")),
+        (Some("top"), tl!("Top")),
+        (Some("bottom"), tl!("Bottom")),
+    ];
+    let mut side = options.iter().map(|(side, _)| *side).find(|side| *side == bar.dock.as_deref()).flatten();
+    let changed = egui::ScrollArea::horizontal()
+        .id_salt("hotbar-dock")
+        .auto_shrink([false, true])
+        .show(ui, |ui| crate::dialogs::preferences::segmented_pill_choice(ui, t, &mut side, &options))
+        .inner;
+    if changed {
+        // `place` accepts every side listed above.
+        let _ = bar.place(side.unwrap_or("float"));
     }
 }
 
@@ -671,9 +637,10 @@ pub(crate) fn show(app: &mut PdfCraftApp, area: Rect, page_left: Option<f32>, ui
             // Vertical layout toggle switch row
             ui.horizontal(|ui| {
                 ui.add_enabled_ui(bar.dock.is_none(), |ui| {
-                    toggle_switch(ui, &mut bar.vertical, &t);
+                    let label = tl!("Vertical layout");
+                    toggle_switch(ui, &mut bar.vertical, label, &t);
                     ui.add_space(8.0);
-                    ui.label(egui::RichText::new(tl!("Vertical layout")).size(12.5).color(t.text));
+                    ui.label(egui::RichText::new(label).size(12.5).color(t.text));
                 });
             });
 
@@ -810,6 +777,24 @@ mod tests {
         app.restore(r#"{"hotbar":{"tools":["invalid","comment.ink","comment.ink"],"position":[-10,999]}}"#);
         assert_eq!(app.hotbar.tools, ["comment.ink"]);
         assert_eq!(app.hotbar.position, [0.0, 1.0]);
+    }
+
+    #[test]
+    fn hotbar_restore_moves_legacy_default_into_margin_and_keeps_chosen_spots() {
+        let mut app = PdfCraftApp::new();
+        app.restore(r#"{"hotbar":{"tools":["comment.ink"],"position":[0.5,0.0],"vertical":false,"button_size":40.0,"dock":null}}"#);
+        assert_eq!(app.hotbar.position, [0.0, 0.0]);
+        assert!(app.hotbar.vertical);
+        assert!(!app.hotbar.placed);
+        assert_eq!(app.hotbar.tools, ["comment.ink"]);
+        assert_eq!(app.hotbar.button_size, 40.0);
+        app.restore(r#"{"hotbar":{"position":[0.0,0.0],"vertical":false,"dock":null}}"#);
+        assert_eq!(app.hotbar.position, [0.0, 0.0]);
+        assert!(!app.hotbar.vertical);
+        assert!(app.hotbar.placed, "a legacy bar dragged to the corner stays there");
+        app.restore(r#"{"hotbar":{"position":[0.5,0.0],"vertical":false,"dock":null,"placed":true}}"#);
+        assert_eq!(app.hotbar.position, [0.5, 0.0], "current preferences are not migrated");
+        assert!(!app.hotbar.vertical);
     }
 
     #[test]
