@@ -177,7 +177,9 @@ fn chained(doc: &Document, action: &Object) -> usize {
     let mut visits = 0;
     while let Some(o) = stack.pop() {
         visits += 1;
-        if count >= MAX_CHAIN || visits >= MAX_CHAIN {
+        // `visits` already counts this object: the walk stops past MAX_CHAIN of them, so the
+        // MAX_CHAIN-th is still read.
+        if count >= MAX_CHAIN || visits > MAX_CHAIN {
             break;
         }
         if let Object::Ref(r) = &o
@@ -186,7 +188,7 @@ fn chained(doc: &Document, action: &Object) -> usize {
             continue;
         }
         match &*doc.resolve(&o) {
-            Object::Array(items) => stack.extend(items.iter().take(MAX_CHAIN - visits).cloned()),
+            Object::Array(items) => stack.extend(items.iter().take(MAX_CHAIN.saturating_sub(visits)).cloned()),
             Object::Dict(d) => {
                 count += 1;
                 stack.extend(d.get(b"Next").cloned());
@@ -370,5 +372,25 @@ mod tests {
         let started = std::time::Instant::now();
         assert!(chained(&doc, &Object::Ref(action)) <= MAX_CHAIN);
         assert!(started.elapsed() < std::time::Duration::from_secs(2), "{:?}", started.elapsed());
+    }
+
+    /// A `/Next` chain of exactly MAX_CHAIN actions counts all of them.
+    #[test]
+    fn a_chain_of_max_chain_actions_counts_every_one() {
+        let mut doc = Document::new_empty();
+        let mut next: Option<Object> = None;
+        for _ in 0..MAX_CHAIN {
+            let mut a = Dict::new();
+            a.set(b"S".to_vec(), Object::name("JavaScript"));
+            if let Some(n) = next.take() {
+                a.set(b"Next".to_vec(), n);
+            }
+            next = Some(Object::Ref(doc.add(Object::Dict(a))));
+        }
+        let mut first = Dict::new();
+        first.set(b"S".to_vec(), Object::name("JavaScript"));
+        first.set(b"Next".to_vec(), next.unwrap());
+        let first = doc.add(Object::Dict(first));
+        assert_eq!(chained(&doc, &Object::Ref(first)), MAX_CHAIN);
     }
 }

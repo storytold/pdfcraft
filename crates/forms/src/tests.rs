@@ -5515,3 +5515,21 @@ fn cell_name_patterns_of_unmatched_braces_are_bounded() {
     assert!(name.starts_with("{{{") && name.ends_with('3'), "{}", name.len());
     assert!(started.elapsed() < std::time::Duration::from_secs(5), "{:?}", started.elapsed());
 }
+
+/// A name-tree node listed under many generation numbers is one object (`get` reads by number):
+/// it is read once, not once per alias.
+#[test]
+fn a_script_tree_node_aliased_by_generation_is_read_once() {
+    let dict = |entries: Vec<(&[u8], Object)>| -> Object { Object::Dict(entries.into_iter().map(|(k, v)| (k.to_vec(), v)).collect()) };
+    let mut doc = Document::new_empty();
+    let action =
+        doc.add(dict(vec![(b"S", Object::Name(b"JavaScript".to_vec())), (b"JS", Object::String(pdfcraft_cos::PdfString::literal("var a;")))]));
+    let leaf = doc.add(dict(vec![(b"Names", Object::Array(vec![Object::String(pdfcraft_cos::PdfString::literal("a")), Object::Ref(action)]))]));
+    let aliases: Vec<Object> = (0..5_000u16).map(|g| Object::Ref(pdfcraft_cos::ObjRef::new(leaf.num, g))).collect();
+    let catalog = doc.add(dict(vec![
+        (b"Type", Object::Name(b"Catalog".to_vec())),
+        (b"Names", dict(vec![(b"JavaScript", dict(vec![(b"Kids", Object::Array(aliases))]))])),
+    ]));
+    doc.trailer_mut().set(b"Root".to_vec(), Object::Ref(catalog));
+    assert_eq!(document_scripts_named(&doc), [("a".to_string(), "var a;".to_string())]);
+}

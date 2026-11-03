@@ -8,7 +8,7 @@
 
 use std::collections::HashSet;
 
-use pdfcraft_cos::{Document, ObjRef, Object, PdfString};
+use pdfcraft_cos::{Document, Object, PdfString};
 
 use crate::{Field, FieldKind, FieldValue, FormError, fields, flags};
 
@@ -180,11 +180,12 @@ pub fn document_scripts_named(doc: &Document) -> Vec<(String, String)> {
     // Kids stay unresolved on the stack, and each node is read once: a node listed many times,
     // or among its own kids, must not multiply the work.
     let mut stack = vec![tree];
-    let mut seen: HashSet<ObjRef> = HashSet::new();
+    // By object number, as `get` reads a reference: `5 0 R` and `5 1 R` are the same object.
+    let mut seen: HashSet<u32> = HashSet::new();
     let mut visited = 0;
     while let Some(raw) = stack.pop() {
         if let Object::Ref(r) = raw
-            && !seen.insert(r)
+            && !seen.insert(r.num)
         {
             continue;
         }
@@ -197,7 +198,7 @@ pub fn document_scripts_named(doc: &Document) -> Vec<(String, String)> {
         // A kids array shared by reference is read once, and what is scheduled counts as visited:
         // nodes sharing one array can't multiply it.
         if let Some(kids) =
-            d.get(b"Kids").filter(|k| !matches!(k, Object::Ref(r) if !seen.insert(*r))).map(|k| doc.resolve(k)).and_then(|k| k.as_array().cloned())
+            d.get(b"Kids").filter(|k| !matches!(k, Object::Ref(r) if !seen.insert(r.num))).map(|k| doc.resolve(k)).and_then(|k| k.as_array().cloned())
         {
             let room = 10_000usize.saturating_sub(visited + stack.len());
             stack.extend(kids.into_iter().take(room));
