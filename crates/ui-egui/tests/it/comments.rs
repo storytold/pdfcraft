@@ -3022,3 +3022,229 @@ fn an_upright_comment_on_a_turned_page_is_drawn_where_it_goes_before_release() {
     h.drop_at(from + delta);
     h.run_steps(3);
 }
+
+/// `n` pages with one comment each, "Card 1" to "Card n".
+fn one_comment_per_page(n: usize) -> Vec<u8> {
+    let mut objs = vec!["<< /Type /Catalog /Pages 2 0 R >>".to_string()];
+    let kids: Vec<String> = (0..n).map(|i| format!("{} 0 R", 3 + 2 * i)).collect();
+    objs.push(format!("<< /Type /Pages /Kids [{}] /Count {n} /MediaBox [0 0 300 200] >>", kids.join(" ")));
+    for i in 0..n {
+        objs.push(format!("<< /Type /Page /Parent 2 0 R /Annots [{} 0 R] >>", 4 + 2 * i));
+        objs.push(format!("<< /Type /Annot /Subtype /Square /Rect [20 20 80 80] /C [1 0 0] /T (Ada) /Contents (Card {}) >>", i + 1));
+    }
+    let mut out = b"%PDF-1.7\n".to_vec();
+    for (i, o) in objs.iter().enumerate() {
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    out.extend_from_slice(b"trailer << /Root 1 0 R >>\n%%EOF\n");
+    out
+}
+
+/// #5488: the panel laid out every card on every frame, which put a few hundred comments over the
+/// frame budget. Cards out of view now only take up their height, and the selected one is still
+/// drawn wherever it is, so it can scroll into view.
+#[test]
+fn the_comments_panel_lays_out_only_the_cards_in_view() {
+    let mut h = harness_with_bytes(one_comment_per_page(120), |app| app.set_option("panel", "comments").unwrap());
+    h.run_steps(4);
+    let drawn = h.query_all_by_label_contains("Card ").count();
+    assert!((1..40).contains(&drawn), "{drawn} of 120 cards laid out");
+    h.state_mut().views[0].comments.selected = Some((100, 0));
+    h.state_mut().views[0].comments.reveal = true;
+    h.run_steps(4);
+    assert!(h.query_by_label("Card 101").is_some(), "the selected card is drawn and scrolled to");
+    assert!(h.query_by_label("Card 1").is_none(), "the top of the list scrolled out of view");
+}
+
+/// CodeRabbit on #5583: a card's measured height belongs to what it showed. Card 1, far above the
+/// cards in view, grows by two replies; the cards in view move down by its growth, not stay where
+/// card 1's old height would put them.
+#[test]
+fn a_card_out_of_view_that_grows_moves_the_cards_below_it() {
+    let mut h = harness_with_bytes(one_comment_per_page(120), |app| app.set_option("panel", "comments").unwrap());
+    h.run_steps(4);
+    h.state_mut().views[0].comments.selected = Some((60, 0));
+    h.state_mut().views[0].comments.reveal = true;
+    h.run_steps(4);
+    assert!(h.query_by_label("Card 1").is_none(), "card 1 is out of view");
+    let before = h.get_by_label("Card 61").rect().top();
+    for text in ["A first reply", "A second reply"] {
+        h.state_mut().apply_edit(pdfcraft_engine::Edit::ReplyToAnnotation { page: 0, index: 0, text: text.into(), author: "Bo".into() });
+    }
+    h.run_steps(4);
+    let after = h.get_by_label("Card 61").rect().top();
+    assert!(after > before + 40.0, "the cards below a grown card move down: {before} → {after}");
+}
+
+/// CodeRabbit on #5583: a card with an editor open on it is drawn wherever it is, so the cards
+/// below it make room for the editor rather than keep the card's height from before it opened.
+#[test]
+fn a_card_with_an_editor_open_out_of_view_is_drawn_at_its_size() {
+    let mut h = harness_with_bytes(one_comment_per_page(120), |app| app.set_option("panel", "comments").unwrap());
+    h.run_steps(4);
+    h.state_mut().views[0].comments.selected = Some((60, 0));
+    h.state_mut().views[0].comments.reveal = true;
+    h.run_steps(4);
+    assert!(h.query_by_label("Card 1").is_none(), "card 1 is out of view");
+    let before = h.get_by_label("Card 61").rect().top();
+    h.state_mut().views[0].comments.editing = Some((0, 0, "Card 1".into()));
+    h.run_steps(4);
+    let after = h.get_by_label("Card 61").rect().top();
+    assert!(after > before + 20.0, "the cards below make room for card 1's editor: {before} → {after}");
+}
+
+#[test]
+fn freehand_highlighter_draws_translucent_yellow_ink() {
+    let mut h = harness(|app| app.set_option("quick", "freehand_highlight").unwrap());
+    drag_pt(&mut h, (40.0, 100.0), (240.0, 100.0));
+
+    let c = comments(&h);
+    assert_eq!(c.len(), 1, "{c:?}");
+    assert_eq!(c[0].subtype, "Ink");
+    assert_eq!(c[0].intent.as_deref(), Some("FreehandHighlight"));
+    let props = h.state().session.get(h.state().views[0].id).unwrap().comment_props(0, c[0].index).expect("ink properties");
+    assert_eq!(props.color, Some([1.0, 0.94, 0.0]));
+    assert!((props.opacity - 0.35).abs() < 0.001);
+    assert_eq!(props.width, Some(14.0));
+    assert_eq!(h.state().quick_tool, QuickTool::Comment(pdfcraft_ui_egui::comments::CommentTool::FreehandHighlight));
+    h.state_mut().comment_prefs.set_width(pdfcraft_ui_egui::comments::CommentTool::FreehandHighlight, 100.0);
+    drag_pt(&mut h, (40.0, 160.0), (240.0, 160.0));
+    let c = comments(&h);
+    assert_eq!(c.len(), 2);
+    let props = h.state().session.get(h.state().views[0].id).unwrap().comment_props(0, c.iter().map(|a| a.index).max().unwrap()).unwrap();
+    assert_eq!(props.width, Some(100.0));
+    assert_eq!(h.state().views[0].comments.selected, None);
+}
+
+#[test]
+fn hotbar_picker_adds_and_runs_freehand_highlight() {
+    let mut h = harness(|_| {});
+    h.get_by_label("Hotbar settings").click();
+    h.run_steps(3);
+    field(&h, "Search all tools…").click();
+    h.run_steps(2);
+    field(&h, "Search all tools…").type_text("freehand");
+    h.run_steps(3);
+    h.get_by_role_and_label(Role::CheckBox, "Freehand-Highlight").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Close menu").is_some(), "picker stays open after adding a tool");
+    h.get_by_role_and_label(Role::CheckBox, "Draw freehand").click();
+    h.run_steps(3);
+    h.get_by_label("Close menu").click();
+    h.run_steps(3);
+    let saved: serde_json::Value = serde_json::from_str(&h.state().persist()).unwrap();
+    assert_eq!(saved["hotbar"]["tools"], serde_json::json!(["comment.freehand_highlight", "comment.ink"]));
+    h.state_mut().set_option("hotbar-side", "bottom").unwrap();
+    h.run_steps(3);
+    // The new tool is available directly from its custom shortcut.
+    h.query_all_by_role_and_label(Role::Button, "Freehand-Highlight").last().unwrap().click();
+    h.run_steps(3);
+    assert_eq!(h.state().quick_tool, QuickTool::Comment(pdfcraft_ui_egui::comments::CommentTool::FreehandHighlight));
+}
+
+#[test]
+fn hotbar_picker_searches_translated_tool_labels() {
+    let mut h = harness(|app| {
+        app.set_option("language", "fr").unwrap();
+    });
+    h.get_by_label("Hotbar settings").click();
+    h.run_steps(3);
+    field(&h, "Search all tools…").click();
+    h.run_steps(2);
+    field(&h, "Search all tools…").type_text("Dessiner");
+    h.run_steps(3);
+    h.get_by_role_and_label(Role::CheckBox, "Dessiner à main levée").click();
+    h.run_steps(3);
+    let saved: serde_json::Value = serde_json::from_str(&h.state().persist()).unwrap();
+    assert_eq!(saved["hotbar"]["tools"], serde_json::json!(["comment.ink"]));
+}
+
+#[test]
+fn hotbar_drag_moves_and_persists_position() {
+    let mut h = harness(|_| {});
+    let before: serde_json::Value = serde_json::from_str(&h.state().persist()).unwrap();
+    let from = h.get_by_label("Drag hotbar").rect().center();
+    drag(&mut h, from, from + egui::vec2(90.0, 90.0));
+    let after: serde_json::Value = serde_json::from_str(&h.state().persist()).unwrap();
+    assert_ne!(before["hotbar"]["position"], after["hotbar"]["position"]);
+    let mut restored = PdfCraftApp::new();
+    restored.restore(&h.state().persist());
+    let saved: serde_json::Value = serde_json::from_str(&restored.persist()).unwrap();
+    assert_eq!(saved["hotbar"], after["hotbar"]);
+}
+
+#[test]
+fn hotbar_vertical_size_and_docking() {
+    let mut h = harness(|app| {
+        app.set_option("hotbar-tools", "comment.ink,comment.freehand_highlight").unwrap();
+        app.set_option("hotbar-side", "right").unwrap();
+    });
+    for size in [24, 48, 64] {
+        h.state_mut().set_option("hotbar-size", &size.to_string()).unwrap();
+        h.run_steps(5);
+        let measured = h.ctx.data_mut(|d| d.get_temp::<egui::Vec2>(egui::Id::unique("custom-hotbar"))).unwrap();
+        assert!(measured.x <= size as f32 + 24.0, "vertical bar too wide: {measured:?}");
+        assert!(measured.x >= size as f32);
+    }
+    let from = h.get_by_label("Drag hotbar").rect().center();
+    drag(&mut h, from, from - egui::vec2(90.0, 90.0));
+    let saved: serde_json::Value = serde_json::from_str(&h.state().persist()).unwrap();
+    assert_eq!(saved["hotbar"]["position"], serde_json::json!([1.0, 0.5]));
+    assert_eq!(saved["hotbar"]["dock"], "right");
+    h.state_mut().set_option("hotbar-side", "float").unwrap();
+    h.run_steps(3);
+    let from = h.get_by_label("Drag hotbar").rect().center();
+    drag(&mut h, from, from - egui::vec2(90.0, 90.0));
+    let moved: serde_json::Value = serde_json::from_str(&h.state().persist()).unwrap();
+    assert_ne!(saved["hotbar"]["position"], moved["hotbar"]["position"]);
+}
+
+#[test]
+fn hotbar_settings_reopen_even_with_remembered_collapsed_state() {
+    let mut h = harness(|_| {});
+    let mut collapsed =
+        egui::collapsing_header::CollapsingState::load_with_default_open(&h.ctx, egui::Id::unique("hotbar-picker").with("collapsing"), false);
+    collapsed.set_open(false);
+    collapsed.store(&h.ctx);
+    h.get_by_label("Hotbar settings").click();
+    h.run_steps(5);
+    assert!(h.query_by_label("Close menu").is_some());
+    h.get_by_label("Hotbar settings").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Close menu").is_some(), "Hotbar settings always shows settings");
+    h.get_by_label("Close menu").click();
+    h.run_steps(3);
+    h.get_by_label("Hotbar settings").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Close menu").is_some());
+}
+
+#[test]
+fn hotbar_full_side_strip_spans_each_edge_and_returns_to_float() {
+    let mut h = harness(|app| {
+        app.set_option("hotbar-side", "right").unwrap();
+        app.set_option("hotbar-size", "48").unwrap();
+    });
+    h.get_by_label("Hotbar settings").click();
+    h.run_steps(5);
+    h.get_by_label("Full-side strip").click();
+    h.run_steps(3);
+    let enabled: serde_json::Value = serde_json::from_str(&h.state().persist()).unwrap();
+    assert_eq!(enabled["hotbar"]["full_side"], true, "settings checkbox enables strip");
+    h.get_by_label("Close menu").click();
+    for side in ["right", "left", "top", "bottom"] {
+        h.state_mut().set_option("hotbar-side", side).unwrap();
+        h.run_steps(5);
+        let size = h.ctx.data_mut(|d| d.get_temp::<egui::Vec2>(egui::Id::unique("custom-hotbar"))).unwrap();
+        let (length, thickness) = if matches!(side, "left" | "right") { (size.y, size.x) } else { (size.x, size.y) };
+        assert!(length > 300.0, "strip must fill the edge: {side} {size:?}");
+        assert!(thickness <= 64.0, "strip must stay narrow: {size:?}");
+        h.get_by_label("Hotbar settings");
+    }
+    let saved: serde_json::Value = serde_json::from_str(&h.state().persist()).unwrap();
+    assert_eq!(saved["hotbar"]["full_side"], true);
+    h.state_mut().set_option("hotbar-side", "float").unwrap();
+    h.run_steps(5);
+    let size = h.ctx.data_mut(|d| d.get_temp::<egui::Vec2>(egui::Id::unique("custom-hotbar"))).unwrap();
+    assert!(size.x < 150.0 && size.y < 150.0, "floating toolbar is compact: {size:?}");
+}
