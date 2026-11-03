@@ -16,6 +16,11 @@ fn image_dict(w: i64, h: i64, bpc: i64, cs: &str) -> Dict {
 }
 
 fn doc_with(img: Stream, content: &str) -> Document {
+    doc_with_image(img, content).0
+}
+
+/// Like [`doc_with`], also returning the image's object so a test can read it back.
+fn doc_with_image(img: Stream, content: &str) -> (Document, pdfcraft_cos::ObjRef) {
     let mut doc = Document::new_empty();
     let im = doc.add(Object::Stream(img));
     let pages = doc.root().and_then(|r| doc.get(r).as_dict().and_then(|d| d.reference(b"Pages"))).unwrap();
@@ -36,7 +41,7 @@ fn doc_with(img: Stream, content: &str) -> Document {
         d.set(b"Count".to_vec(), Object::Int(1));
     })
     .unwrap();
-    doc
+    (doc, im)
 }
 
 fn settings(target: f64, above: f64, compression: Compression) -> Settings {
@@ -92,4 +97,33 @@ fn absurd_settings_never_panic() {
             }
         }
     }
+}
+
+/// An image drawn 72 pt wide is 300 ppi. Returns its (width, height) and raw bytes after optimizing.
+fn optimized_300ppi(target: f64) -> ((i64, i64), Vec<u8>) {
+    let img = Stream::flate(image_dict(300, 300, 8, "DeviceRGB"), &vec![9u8; 300 * 300 * 3]);
+    let (mut doc, im) = doc_with_image(img, "q 72 0 0 72 0 0 cm /Im Do Q");
+    let _ = optimize(&mut doc, &settings(target, 225.0, Compression::Retain));
+    let o = doc.get(im);
+    let Object::Stream(s) = &*o else { panic!("the image is no longer a stream") };
+    ((s.dict.int(b"Width").unwrap_or(-1), s.dict.int(b"Height").unwrap_or(-1)), s.raw.to_vec())
+}
+
+#[test]
+fn a_hostile_target_ppi_leaves_the_image_as_it_is() {
+    let (_, original) = optimized_300ppi(300.0);
+    for target in [1e9, f64::INFINITY, f64::NAN, -1.0, 0.0] {
+        let (dims, raw) = optimized_300ppi(target);
+        assert_eq!(dims, (300, 300), "target_ppi {target}");
+        assert_eq!(raw, original, "target_ppi {target} must not re-encode the image");
+    }
+}
+
+#[test]
+fn a_normal_target_downsamples_and_an_equal_target_changes_nothing() {
+    let (_, original) = optimized_300ppi(300.0);
+    assert_eq!(optimized_300ppi(150.0).0, (150, 150));
+    let (dims, raw) = optimized_300ppi(300.0);
+    assert_eq!(dims, (300, 300));
+    assert_eq!(raw, original, "a target equal to the image's own resolution must not resize or re-encode it");
 }

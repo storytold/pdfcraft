@@ -156,6 +156,40 @@ fn arrow_keys_nudge_the_selected_field_instead_of_turning_the_page() {
     assert_eq!(h.state().views[0].current, 0, "the arrows moved the field, not the page");
 }
 
+/// #3632: Alt+← / Alt+→ go back and forward through the view history with a field selected, and
+/// leave the field where it is, even when Alt is let go in the same frame as the arrow, so the
+/// frame has no modifiers and only the press carries Alt.
+#[test]
+fn alt_arrows_navigate_instead_of_nudging_the_selected_field() {
+    let mut h = harness();
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::InsertBlankPage { at: 1, width: 612.0, height: 792.0 }));
+    h.run_steps(2);
+    h.state_mut().execute("form.add.text");
+    h.run_steps(1);
+    let p = at(&h, 40.0, 250.0);
+    h.hover_at(p);
+    h.run_steps(1);
+    h.drag_at(p);
+    h.run_steps(1);
+    h.drop_at(p);
+    h.run_steps(4);
+    let name = h.state().views[0].prepare.selected.clone().expect("the placed field is selected").0;
+    let before = rect_of(&h, &name);
+    h.state_mut().views[0].go_to_page(1);
+    h.run_steps(2);
+    h.state_mut().views[0].go_to_page(0);
+    h.run_steps(2);
+    assert!(h.state().views[0].prepare.selected.is_some(), "still selected, so a nudge could take the keys");
+    let arrow = |key, modifiers| egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers };
+    h.event(arrow(egui::Key::ArrowLeft, egui::Modifiers::ALT));
+    h.run_steps(4);
+    assert_eq!(h.state().views[0].current, 1, "an Alt+← press went back");
+    h.event(arrow(egui::Key::ArrowRight, egui::Modifiers::ALT));
+    h.run_steps(4);
+    assert_eq!(h.state().views[0].current, 0, "an Alt+→ press went forward");
+    assert_eq!(rect_of(&h, &name), before, "the field didn't move");
+}
+
 #[test]
 fn format_validate_and_calculate_tabs() {
     use pdfcraft_engine::form_scripts::{Calculate, Format, Validate};
@@ -1352,4 +1386,179 @@ fn deleting_two_radio_buttons_of_a_group_at_once() {
     h.key_press(egui::Key::Delete);
     h.run_steps(3);
     assert!(!names(&h).iter().any(|n| n == "shirt"));
+}
+
+/// Two calculated fields that share a name (a malformed form) each show their own formula: the
+/// first dup sums src, the second x.
+#[test]
+fn fields_sharing_a_name_each_show_their_own_formula() {
+    let widget = |name: &str, y: u32, reads: &str| {
+        format!(
+            "<< /Type /Annot /Subtype /Widget /FT /Tx /T ({name}) /Rect [50 {y} 250 {}] /P 3 0 R /AA << /C << /S /JavaScript /JS (AFSimple_Calculate\\(\"SUM\", \"{reads}\"\\);) >> >> >>",
+            y + 20
+        )
+    };
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R 6 0 R 7 0 R 8 0 R] >>".into(),
+        "<< /Fields [5 0 R 6 0 R 7 0 R 8 0 R] /DA (/Helv 0 Tf 0 g) /CO [6 0 R 7 0 R 5 0 R] >>".into(),
+        widget("dup", 700, "x"),
+        widget("dup", 660, "src"),
+        widget("src", 620, "x"),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (x) /Rect [50 580 250 600] /P 3 0 R /V (3) >>".into(),
+    ];
+    let mut bytes = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(bytes.len());
+        bytes.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = bytes.len();
+    bytes.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        bytes.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    bytes.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("dup.pdf", None, bytes.clone()).unwrap();
+        app
+    });
+    h.run_steps(4);
+    h.state_mut().execute("form.prepare");
+    h.run_steps(3);
+    h.get_by_label("Calculation order").click();
+    h.run_steps(3);
+    for (row, formula) in [("1. dup", "= sum(src)"), ("3. dup", "= sum(x)")] {
+        h.get_by_label_contains(row).hover();
+        h.run_steps(30);
+        assert!(h.query_by_label_contains(formula).is_some(), "{row} shows {formula}");
+    }
+}
+
+/// Field Properties refuses a notation it couldn't store as written, and stays open with what was
+/// typed into it: the field keeps its formula and nothing in the dialog is lost. Once the notation
+/// is fixed, OK applies it and closes.
+#[test]
+fn a_notation_that_cannot_be_stored_keeps_field_properties_open() {
+    use pdfcraft_engine::form_scripts::Calculate;
+    use pdfcraft_engine::{Edit, FieldProps, NewField};
+    let mut h = harness();
+    for (i, name) in ["qty", "sub"].into_iter().enumerate() {
+        let y = 200.0 + 30.0 * i as f64;
+        let kind = NewField::Text { multiline: false };
+        h.state_mut().apply_edit(Edit::AddField { page: 0, rect: [20.0, y, 120.0, y + 20.0], kind, name: Some(name.into()) });
+    }
+    let props = Box::new(FieldProps { calculate: Some(Calculate::Notation("qty * 2".into())), ..Default::default() });
+    h.state_mut().apply_edit(Edit::SetFieldProps { name: "sub".into(), props });
+    let formula = |h: &Harness<'static, PdfCraftApp>| {
+        let s = h.state();
+        s.session.get(s.views[0].id).unwrap().form.iter().find(|f| f.name == "sub").unwrap().actions.calculate.clone()
+    };
+    h.state_mut().open_field_props("sub", 0);
+    h.run_steps(3);
+    let d = h.state_mut().field_props.as_mut().expect("Field Properties is open");
+    d.calculate = Calculate::Notation("qty EVCALC 2".into());
+    d.tooltip = "Subtotal".into();
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    let kept = h.state().field_props.as_ref().map(|d| (d.calculate.clone(), d.tooltip.clone()));
+    assert_eq!(kept, Some((Calculate::Notation("qty EVCALC 2".into()), "Subtotal".to_owned())), "the dialog stays open as typed");
+    assert_eq!(formula(&h), Calculate::Notation("qty * 2".into()), "the field keeps its formula");
+    h.state_mut().field_props.as_mut().expect("still open").calculate = Calculate::Notation("qty * 3".into());
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert!(h.state().field_props.is_none(), "applied and closed");
+    assert_eq!(formula(&h), Calculate::Notation("qty * 3".into()));
+}
+
+/// A formula that reads a field the form doesn't have gets a card of its own, in place of "every
+/// field calculates after the fields it reads", and its link opens that formula. A script that
+/// builds the names it reads gets a note.
+#[test]
+fn a_formula_reading_a_missing_field_has_its_own_card() {
+    use pdfcraft_engine::form_scripts::Calculate;
+    use pdfcraft_engine::{Edit, FieldProps, NewField};
+    use pdfcraft_ui_egui::prepare::FieldTab;
+    let mut h = harness();
+    for (i, name) in ["qty", "discount", "sub", "rows"].into_iter().enumerate() {
+        let y = 200.0 + 30.0 * i as f64;
+        let kind = NewField::Text { multiline: false };
+        h.state_mut().apply_edit(Edit::AddField { page: 0, rect: [20.0, y, 120.0, y + 20.0], kind, name: Some(name.into()) });
+    }
+    let props = Box::new(FieldProps { calculate: Some(Calculate::Notation("qty - discount".into())), ..Default::default() });
+    h.state_mut().apply_edit(Edit::SetFieldProps { name: "sub".into(), props });
+    let script = Some("event.value = getField(\"row\" + 1).value;".to_owned());
+    h.state_mut().apply_edit(Edit::SetFieldScript { name: "rows".into(), event: "calculate".into(), script });
+    h.state_mut().execute("form.prepare");
+    h.run_steps(3);
+    h.get_by_label("Calculation order").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Every field calculates after the fields it reads.").is_some(), "nothing is missing yet");
+    assert!(h.query_by_label("rows builds some field names as it runs, so those reads aren't checked.").is_some());
+    h.state_mut().apply_edit(Edit::DeleteField { name: "discount".into() });
+    h.run_steps(3);
+    assert!(h.query_by_label("1 formula reads a field the form doesn't have").is_some());
+    assert!(h.query_by_label("sub reads discount, which the form doesn't have.").is_some());
+    assert!(h.query_by_label("Every field calculates after the fields it reads.").is_none(), "no all-clear while a formula is broken");
+    // Reordered, the order can be undone from the missing-field card; the all-clear still stays away.
+    h.state_mut().apply_edit(Edit::SetCalculationOrder { names: vec!["rows".into(), "sub".into()] });
+    h.run_steps(3);
+    assert!(h.query_by_label("Every field calculates after the fields it reads.").is_none(), "still no all-clear");
+    h.get_by_label("Undo").click();
+    h.run_steps(3);
+    let order: Vec<String> = {
+        let s = h.state();
+        s.session.get(s.views[0].id).unwrap().calculation_order().fields.into_iter().map(|f| f.name).collect()
+    };
+    assert_eq!(order, ["sub", "rows"], "Undo put the order back");
+    h.get_by_label("Edit sub's formula").click();
+    h.run_steps(3);
+    let draft = h.state().field_props.as_ref().map(|d| (d.field.clone(), d.tab));
+    assert_eq!(draft, Some(("sub".to_owned(), FieldTab::Calculate)));
+}
+
+#[test]
+fn button_export_properties_apply_cancel_and_undo() {
+    fn retype(h: &mut Harness<'static, PdfCraftApp>, value: &str) {
+        use egui::accesskit::Role;
+        h.get_by_role_and_label(Role::TextInput, "Export value").click();
+        h.run_steps(1);
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.get_by_role_and_label(Role::TextInput, "Export value").type_text(value);
+        h.run_steps(2);
+    }
+    let mut h = harness();
+    h.state_mut().execute("form.prepare");
+    h.run_steps(2);
+    h.state_mut().open_field_props("agree", 0);
+    h.run_steps(2);
+    h.get_by_label("Options").click();
+    h.run_steps(2);
+    let original = h.state().field_props.as_ref().unwrap().export_value.clone();
+    retype(&mut h, "Accepted");
+    h.get_by_label("Cancel").click();
+    h.run_steps(2);
+    h.state_mut().open_field_props("agree", 0);
+    h.run_steps(2);
+    assert_eq!(h.state().field_props.as_ref().unwrap().export_value, original);
+    h.get_by_label("Options").click();
+    h.run_steps(2);
+    retype(&mut h, "Accepted");
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    {
+        let s = h.state();
+        let f = s.session.get(s.views[0].id).unwrap().form.iter().find(|f| f.name == "agree").unwrap();
+        assert_eq!(f.export_of(0), Some("Accepted"));
+    }
+    h.state_mut().execute("edit.undo");
+    h.run_steps(3);
+    {
+        let s = h.state();
+        let f = s.session.get(s.views[0].id).unwrap().form.iter().find(|f| f.name == "agree").unwrap();
+        assert_eq!(f.export_of(0), Some(original.as_str()));
+    }
 }
