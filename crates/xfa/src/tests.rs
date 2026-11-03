@@ -4531,3 +4531,23 @@ fn a_container_is_as_wide_as_a_turned_draw_stands() {
         assert!((got - right).abs() < 0.01, "{rotate}: the neighbour stands {got} right of the anchor, not {right}");
     }
 }
+
+/// A field value is copied into every instance of a repeated subform, so values spend the same
+/// allowance as scripts: past it the form is marked truncated and later fields carry no value.
+#[test]
+fn live_form_values_of_repeated_instances_stop_at_the_byte_allowance() {
+    let big = "v".repeat(1 << 20);
+    let xml = format!(
+        r#"<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/"><subform name="form" layout="tb">
+<pageSet><pageArea name="p"><contentArea x="0" y="0" w="7in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+<subform name="outer" layout="tb"><occur min="1" max="-1" initial="50"/><subform name="row" layout="tb"><occur min="1" max="-1" initial="50"/><field name="f" w="1in" h="1in"><value><text>{big}</text></value></field></subform></subform>
+</subform></template>"#
+    );
+    let (tpl, _) = crate::parse::parse(&xml).unwrap();
+    let live = form_tree(&tpl, None, &Overrides::default());
+    fn kept(n: &FormNode) -> usize {
+        n.value.len() + n.children.iter().map(kept).sum::<usize>()
+    }
+    assert!(live.truncated, "kept {} bytes in {} children", kept(&live.root), live.root.children.len());
+    assert!(kept(&live.root) <= crate::script::MAX_EVENT_SCRIPT_BYTES, "{}", kept(&live.root));
+}

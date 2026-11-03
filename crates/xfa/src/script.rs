@@ -175,7 +175,7 @@ struct Walker<'a> {
     data: Option<&'a DataNode>,
     ov: &'a Overrides,
     events: Vec<ScriptEvent>,
-    /// Bytes of script the events hold.
+    /// Bytes the events hold (script, SOM path and validation message) and the field values built.
     script_bytes: usize,
     /// Objects built so far.
     nodes: usize,
@@ -211,7 +211,9 @@ impl Walker<'_> {
             if s.text.trim().is_empty() {
                 continue;
             }
-            match self.script_bytes.checked_add(s.text.len()).filter(|n| *n <= MAX_EVENT_SCRIPT_BYTES) {
+            // Each event owns its script, its SOM path and its validation message.
+            let owned = s.text.len().saturating_add(som.len()).saturating_add(message.map_or(0, str::len));
+            match self.script_bytes.checked_add(owned).filter(|n| *n <= MAX_EVENT_SCRIPT_BYTES) {
                 Some(n) => self.script_bytes = n,
                 None => {
                     self.truncated = true;
@@ -253,6 +255,18 @@ impl Walker<'_> {
             }
             (None, Some(v)) => f.saved_value(&Walker::as_scripts_read(f, &v)),
             (None, None) => f.value.plain().map(|v| f.saved_value(v.trim())).unwrap_or_default(),
+        };
+        // A value is copied into every instance of a repeated subform: it spends the same allowance
+        // as the scripts, and a field past it is built without its value.
+        let value = match self.script_bytes.checked_add(value.len()).filter(|n| *n <= MAX_EVENT_SCRIPT_BYTES) {
+            Some(n) => {
+                self.script_bytes = n;
+                value
+            }
+            None => {
+                self.truncated = true;
+                String::new()
+            }
         };
         self.push_events(&som, &f.scripts, f.calculate.as_ref(), f.validate.as_ref(), f.validate_message.as_deref());
         FormNode {
@@ -543,8 +557,17 @@ pub fn apply_overrides(tpl: &Template, ov: &Overrides) -> Template {
 
 /// The generated fields of the AcroForm by SOM path: `som → (field name, is a radio group)`.
 pub fn fields_by_som(doc: &Document) -> HashMap<String, String> {
-    fn walk(doc: &Document, r: pdfcraft_cos::ObjRef, prefix: &str, out: &mut HashMap<String, String>, depth: usize) {
-        if depth > MAX_DEPTH || out.len() > 100_000 {
+    fn walk(
+        doc: &Document,
+        r: pdfcraft_cos::ObjRef,
+        prefix: &str,
+        out: &mut HashMap<String, String>,
+        seen: &mut std::collections::HashSet<pdfcraft_cos::ObjRef>,
+        depth: usize,
+    ) {
+        // A field reached again (a shared Kids array, a cycle) is walked once: a graph of shared
+        // children would otherwise be expanded once per path.
+        if depth > MAX_DEPTH || out.len() > 100_000 || seen.len() > MAX_FORM_NODES || !seen.insert(r) {
             return;
         }
         let o = doc.get(r);
@@ -562,15 +585,16 @@ pub fn fields_by_som(doc: &Document) -> HashMap<String, String> {
         }
         if let Some(kids) = d.get(b"Kids").map(|k| doc.resolve(k)).and_then(|k| k.as_array().cloned()) {
             for k in kids.iter().filter_map(Object::as_ref) {
-                walk(doc, k, &name, out, depth + 1);
+                walk(doc, k, &name, out, seen, depth + 1);
             }
         }
     }
     let mut out = HashMap::new();
     let Some((_, acro)) = acroform(doc) else { return out };
     let fields = acro.get(b"Fields").map(|f| doc.resolve(f)).and_then(|f| f.as_array().cloned()).unwrap_or_default();
+    let mut seen = std::collections::HashSet::new();
     for f in fields.iter().filter_map(Object::as_ref) {
-        walk(doc, f, "", &mut out, 0);
+        walk(doc, f, "", &mut out, &mut seen, 0);
     }
     out
 }
