@@ -9,8 +9,10 @@ pub(super) struct Selection {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) enum Span {
-    /// Reading order, between two glyph indices.
-    Run { anchor: usize, head: usize },
+    /// Reading order, between two glyph indices. `head_x` is where a drag's pointer ended (page
+    /// view space), which may lie well past the head glyph, as in the empty end of a table row;
+    /// `None` when the head came from a click or a command.
+    Run { anchor: usize, head: usize, head_x: Option<f32> },
     /// Column select (#740): the glyphs inside a rectangle in page view space, drawn from the
     /// corner the drag started at (`rect[0..2]`) to the pointer (`rect[2..4]`).
     Column { rect: [f32; 4] },
@@ -18,17 +20,28 @@ pub(super) enum Span {
 
 impl Selection {
     pub(super) fn run(page: usize, anchor: usize, head: usize) -> Self {
-        Self { page, span: Span::Run { anchor, head } }
+        Self { page, span: Span::Run { anchor, head, head_x: None } }
     }
 
     fn range(anchor: usize, head: usize) -> Range<usize> {
         anchor.min(head)..anchor.max(head).saturating_add(1)
     }
 
+    /// What a drag over table rows selects by rows, not reading order's detour down each column.
+    /// Only a drag (also one after a double- or triple-click) or a ⇧-click has a pointer end; a
+    /// clicked word, line or page, Select all and a command's selection keep reading order, which
+    /// is the text they stand for.
+    fn by_rows(text: &PageText, anchor: usize, head: usize, head_x: Option<f32>) -> Option<Vec<usize>> {
+        head_x.and_then(|x| text.visual_between(anchor, head, Some(x)))
+    }
+
     /// One rectangle per selected piece of a line, in view space (highlighting, markup quads).
     pub(super) fn rects(&self, text: &PageText) -> Vec<[f32; 4]> {
         match self.span {
-            Span::Run { anchor, head } => text.line_rects(Self::range(anchor, head)),
+            Span::Run { anchor, head, head_x } => match Self::by_rows(text, anchor, head, head_x) {
+                Some(row) => text.glyph_rects(&row),
+                None => text.line_rects(Self::range(anchor, head)),
+            },
             Span::Column { rect } => text.glyph_rects(&text.glyphs_in(rect)),
         }
     }
@@ -36,7 +49,10 @@ impl Selection {
     /// The selected text, as Copy puts it on the clipboard.
     pub(super) fn text(&self, text: &PageText) -> String {
         match self.span {
-            Span::Run { anchor, head } => text.text_of(Self::range(anchor, head)),
+            Span::Run { anchor, head, head_x } => match Self::by_rows(text, anchor, head, head_x) {
+                Some(row) => text.column_text(&row),
+                None => text.text_of(Self::range(anchor, head)),
+            },
             Span::Column { rect } => text.column_text(&text.glyphs_in(rect)),
         }
     }

@@ -219,6 +219,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 ## Progress log
 
+- **2026-11-03 (M3, #3669):** A drag across a table selects its rows, as Preview does, instead of reading order's detour down each column; a cell padded with spaces reads with the next cell of its row. Synthetic render and UI drag regressions; estimates unchanged.
+
 - **2026-11-03 (M7, #5835):** In image crop mode, a right-click on the image, its crop box or its handles keeps the crop and opens no menu, so the menu no longer switches as the pointer moves. A right-click elsewhere clears the selection and opens the page menu. UI tests cover all four page rotations, overlapping images, a 45° image, and a check that the Done/Cancel/Remove Crop pills at a page edge still keep the crop.
 
 - **2026-11-02 (M10, #5743):** macOS print jobs name their title and owner (`com.apple.print.JobInfo.PMJobName`, `PMJobOwner`), as the system print dialog does, because a Kyocera filter crashes on a job without them. Checked by a test and through `doc_print` against a stand-in `lp`; not yet on a physical printer.
