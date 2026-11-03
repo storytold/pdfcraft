@@ -5376,6 +5376,19 @@ fn calculation_scripts_are_built_only_for_scripts_that_call_calculate_now() {
 }
 
 #[test]
+fn calculate_now_in_a_document_script_helper_gets_the_calculation_list() {
+    let helpers = "function times\\(a, b\\) { return a * b; } function recalc\\(\\) { calculateNow\\(\\); }";
+    let mut session = Session::new().with_clock(|| 1_700_000_000);
+    let id = session.open("calculate-helper.pdf", None, Arc::new(scripted_form_with(helpers)), None).unwrap();
+    let out = session
+        .run_javascript(id, "getField('price').value = 3; getField('qty').value = 2; recalc(); console.println(getField('total').value);", None)
+        .unwrap();
+
+    assert!(out.error.is_none(), "{out:?}");
+    assert!(out.console.iter().any(|line| line == "6"), "the document helper recalculated total: {out:?}");
+}
+
+#[test]
 fn calculate_now_uses_calculation_order_and_bounds_recursion() {
     let mut s = Session::new().with_clock(|| 1_700_000_000);
     let id = s.open("calculate-chain.pdf", None, Arc::new(scripted_form()), None).unwrap();

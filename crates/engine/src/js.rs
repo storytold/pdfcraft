@@ -225,8 +225,17 @@ thread_local! {
     pub(crate) static CALCULATION_SCRIPT_BUILDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-fn calculations_for_script(cos: &pdfcraft_cos::Document, fields: &[Field], script: &str) -> std::sync::Arc<Vec<(String, String)>> {
-    if script.contains("calculateNow") { std::sync::Arc::new(calculation_scripts(cos, fields)) } else { std::sync::Arc::new(Vec::new()) }
+fn calls_calculate_now(script: &str, doc_scripts: &[String]) -> bool {
+    script.contains("calculateNow") || doc_scripts.iter().any(|source| source.contains("calculateNow"))
+}
+
+fn calculations_for_script(
+    cos: &pdfcraft_cos::Document,
+    fields: &[Field],
+    script: &str,
+    doc_scripts: &[String],
+) -> std::sync::Arc<Vec<(String, String)>> {
+    if calls_calculate_now(script, doc_scripts) { std::sync::Arc::new(calculation_scripts(cos, fields)) } else { std::sync::Arc::new(Vec::new()) }
 }
 
 /// The Info dictionary as `this.info` keys (lower-case).
@@ -256,7 +265,7 @@ impl Scripts for JsRunner {
             .collect();
         let states = std::sync::Arc::new(states);
         let ev = pdfcraft_js::Event::field(event.name(), &target.name, value);
-        let calculations = if script.contains("calculateNow") { self.calculations(fields) } else { std::sync::Arc::new(Vec::new()) };
+        let calculations = if calls_calculate_now(script, &self.doc_scripts) { self.calculations(fields) } else { std::sync::Arc::new(Vec::new()) };
         let o = pdfcraft_js::run_shared_calculations_shared(
             script,
             &ev,
@@ -350,7 +359,7 @@ impl Session {
             Some(t) => pdfcraft_js::Event { will_commit: false, ..pdfcraft_js::Event::field("Mouse Up", t, "") },
             None => pdfcraft_js::Event::doc("Console"),
         };
-        let calculations = calculations_for_script(&cos, &fields, script);
+        let calculations = calculations_for_script(&cos, &fields, script, &runner.doc_scripts);
         let mut o = pdfcraft_js::run_shared_calculations_shared(
             script,
             &event,
