@@ -159,6 +159,13 @@ pub fn import_pages(dst: &mut Document, src: &Document, src_pages: &[usize], at:
     import_pages_with(dst, src, src_pages, at, FieldConflicts::Merge).map(|o| o.pages)
 }
 
+/// [`import_pages`] within one document: `src` is a copy of `dst` as it was, object for object.
+/// The copies' links and GoTo actions keep the pages they name, which are still in `dst`, instead
+/// of losing every destination outside the pages copied (Split Pages, jpeskov on #5587).
+pub(crate) fn copy_pages_in_place(dst: &mut Document, src: &Document, src_pages: &[usize], at: usize) -> Result<Vec<ObjRef>, OrganizeError> {
+    import_pages_inner(dst, src, src_pages, at, FieldConflicts::Merge, true).map(|o| o.pages)
+}
+
 /// What `import_pages_mapped` copied.
 struct Imported {
     /// The new pages, in order.
@@ -179,6 +186,18 @@ fn import_pages_mapped(
     at: usize,
     conflicts: FieldConflicts,
 ) -> Result<Imported, OrganizeError> {
+    import_pages_inner(dst, src, src_pages, at, conflicts, false)
+}
+
+/// `import_pages_mapped`, or with `same_document` [`copy_pages_in_place`].
+fn import_pages_inner(
+    dst: &mut Document,
+    src: &Document,
+    src_pages: &[usize],
+    at: usize,
+    conflicts: FieldConflicts,
+    same_document: bool,
+) -> Result<Imported, OrganizeError> {
     let source = walk(src)?;
     if let Some(bad) = src_pages.iter().find(|i| **i >= source.len()) {
         return Err(OrganizeError::NoSuchPage(*bad));
@@ -186,6 +205,7 @@ fn import_pages_mapped(
     let mut existing = walk(dst)?;
     let root = pages_root(dst)?;
     let mut copier = Copier::new(src, HashMap::new(), HashMap::new());
+    copier.same_document = same_document;
     // Allocate every destination page first, so destinations between copied pages resolve.
     let targets: Vec<(ObjRef, ObjRef, Dict)> = src_pages
         .iter()
@@ -208,7 +228,11 @@ fn import_pages_mapped(
         // popup, a widget's place). Destinations still map to the pages copied.
         let repeat = done.contains_key(&page);
         let new = if repeat { dst.add(Object::Null) } else { new };
-        let mut own = repeat.then(|| Copier::new(src, HashMap::new(), copier.pages.clone()));
+        let mut own = repeat.then(|| {
+            let mut own = Copier::new(src, HashMap::new(), copier.pages.clone());
+            own.same_document = same_document;
+            own
+        });
         let src_dict = src.get(page).as_dict().cloned().unwrap_or_default();
         let resources = resources_with_ancestors(src, &src_dict);
         let mut d = Dict::new();

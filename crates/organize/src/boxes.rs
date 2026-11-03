@@ -137,7 +137,10 @@ pub const MAX_SPLIT_PAGES: usize = 10_000;
 /// parts follow in reading order as the page is shown: rows from the top, each from the left,
 /// with `/Rotate` taken into account. Each part is a copy of the page (as Duplicate Pages makes
 /// it, with its own comments and widgets) whose crop box is its cell, so nothing is resampled and
-/// the content outside the cell stays in the file. Nothing changes when any page would split into
+/// the content outside the cell stays in the file. Every part keeps all of the page's comments,
+/// links and form widgets, so one that straddles a cut shows, cut short, on each part it crosses
+/// (a widget's copies are widgets of the same field, filled in together); the parts' links lead
+/// to the pages they named (jpeskov on #5587). Nothing changes when any page would split into
 /// parts smaller than a point, or when one can't be copied.
 pub fn split_pages(doc: &mut Document, pages: &[usize], columns: u32, rows: u32) -> Result<(), OrganizeError> {
     if !(1..=MAX_SPLIT).contains(&columns) || !(1..=MAX_SPLIT).contains(&rows) {
@@ -176,7 +179,8 @@ pub fn split_pages(doc: &mut Document, pages: &[usize], columns: u32, rows: u32)
     let mut out = src.clone();
     // The last page first, so the earlier ones keep their places in `src`'s order.
     for (i, page, parts) in plan.into_iter().rev() {
-        let copies = crate::import_pages(&mut out, &src, &vec![i; cells - 1], i + 1)?;
+        // Copied within the document: the parts' links still lead to the pages they named.
+        let copies = crate::import::copy_pages_in_place(&mut out, &src, &vec![i; cells - 1], i + 1)?;
         for (r, part) in std::iter::once(page).chain(copies).zip(parts) {
             out.update_dict(r, |d| d.set(b"CropBox".to_vec(), Object::Array(part.iter().map(|v| Object::Real(*v)).collect())))?;
         }

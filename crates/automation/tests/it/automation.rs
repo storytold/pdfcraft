@@ -10328,6 +10328,26 @@ fn splitting_pages_through_tools() {
         assert!(matches!(a.call("page_split", &args), Err(ToolError::InvalidArgs(_))), "{args}");
     }
     assert!(matches!(a.call("page_split", &json!({ "doc": doc, "pages": [1], "columns": 1 })), Err(ToolError::Failed(_))), "one part is no split");
+    // FredApps on #5587: a negative count is refused like zero.
+    assert!(matches!(a.call("page_split", &json!({ "doc": doc, "pages": [1], "rows": -2 })), Err(ToolError::InvalidArgs(_))));
+}
+
+/// CodeRabbit and FredApps on #5587: a turned page is cut as it is shown, and `page_sizes` gives
+/// the parts as shown; a cropped page is cut within its crop box, 2 × 2.
+#[test]
+fn splitting_turned_and_cropped_pages_through_tools() {
+    let dir = workdir("split-turned");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    // Page 2 is 200 × 300; turned a quarter it shows 300 wide and 200 high.
+    ok(&mut a, "page_rotate", json!({ "doc": doc, "pages": [2], "degrees": 90 }));
+    let r = ok(&mut a, "page_split", json!({ "doc": doc, "pages": [2] }));
+    assert_eq!(r["page_sizes"][1], json!([150.0, 200.0]), "two columns of what is shown: {}", r["page_sizes"]);
+    assert_eq!(r["page_sizes"][2], json!([150.0, 200.0]));
+    // Page 1 cropped to 100 × 150, then cut 2 × 2: four parts of 50 × 75.
+    ok(&mut a, "page_set_box", json!({ "doc": doc, "pages": [1], "rect": [0, 0, 100, 150] }));
+    let r = ok(&mut a, "page_split", json!({ "doc": doc, "pages": [1], "columns": 2, "rows": 2 }));
+    assert_eq!(r["page_sizes"].as_array().map(|s| s[..4].to_vec()), Some(vec![json!([50.0, 75.0]); 4]), "{}", r["page_sizes"]);
 }
 
 #[test]

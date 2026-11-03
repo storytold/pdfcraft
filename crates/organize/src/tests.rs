@@ -3874,6 +3874,22 @@ fn split_pages_refuse_what_they_cannot_do_and_change_nothing() {
     assert_eq!(page_boxes(&doc).unwrap(), before);
 }
 
+/// jpeskov on #5587: a link on a page that is split leads where it did on every part. The parts
+/// are copies within the document, so a link to another page keeps that page instead of losing
+/// its destination, as a copy into another document does when the page isn't copied with it.
+#[test]
+fn every_part_of_a_split_page_keeps_its_links_destinations() {
+    let mut doc = doc_c();
+    let chapter_two = pages(&doc).unwrap()[1].obj;
+    split_pages(&mut doc, &[0], 2, 1).unwrap();
+    let ps = pages(&doc).unwrap();
+    assert_eq!((ps.len(), ps[2].obj), (3, chapter_two), "two parts, then chapter two as it was");
+    assert!(annots(&doc, 0)[0].get(b"Dest").is_some(), "the first part is the page itself, its link as it was");
+    let copy = &annots(&doc, 1)[0];
+    let dest = copy.get(b"Dest").and_then(|d| d.as_array()).expect("the second part's link keeps a destination");
+    assert_eq!(dest.first().and_then(Object::as_ref), Some(chapter_two), "and it leads to chapter two");
+}
+
 /// CodeRabbit on #5587: page 1 can't be copied (an object nested deeper than a copy follows), and
 /// pages are split from the last, so page 2 is already split when page 1 fails. The document is
 /// left as it was, not half split.
