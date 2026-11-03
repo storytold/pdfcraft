@@ -206,6 +206,44 @@ fn clicking_elsewhere_keeps_the_text_and_starts_a_new_box() {
     assert!(h.state().views[0].content.draft.is_none());
 }
 
+/// #4863: the quick bar's pin keeps Add text selected after Done, so the next click starts another
+/// box; with the pin off, Done goes back to Select.
+#[test]
+fn the_pin_keeps_add_text_selected_after_done() {
+    let _gpu = gpu();
+    let mut h = harness();
+    assert!(h.state_mut().execute("edit.text"));
+    h.run_steps(2);
+    // The same button the comment tools have, shared with them.
+    h.get_by_label("Keep tool selected").click();
+    h.run_steps(3);
+    assert!(h.state().comment_prefs.pinned);
+    h.get_by_label("Keep tool selected: on");
+    for (i, word) in ["First", "Second"].into_iter().enumerate() {
+        let p = at(&h, 40.0, 300.0 - 60.0 * i as f32);
+        click(&mut h, p);
+        assert!(h.state().views[0].content.draft.is_some(), "{word}: the editor opened");
+        h.event(egui::Event::Text(word.into()));
+        h.run_steps(2);
+        h.get_by_label("Done adding text").click();
+        h.run_steps(3);
+        assert_eq!(h.state().quick_tool, QuickTool::AddText, "{word}: still adding text");
+    }
+    assert_eq!(texts(&h), ["First", "Second"]);
+    // Unpinned, Done goes back to selecting.
+    h.get_by_label("Keep tool selected: on").click();
+    h.run_steps(3);
+    assert!(!h.state().comment_prefs.pinned);
+    let p = at(&h, 40.0, 120.0);
+    click(&mut h, p);
+    h.event(egui::Event::Text("Third".into()));
+    h.run_steps(2);
+    h.get_by_label("Done adding text").click();
+    h.run_steps(3);
+    assert_eq!(h.state().quick_tool, QuickTool::Select);
+    assert_eq!(texts(&h), ["First", "Second", "Third"]);
+}
+
 #[test]
 fn typing_moving_styling_and_deleting_added_content() {
     let mut h = harness();
