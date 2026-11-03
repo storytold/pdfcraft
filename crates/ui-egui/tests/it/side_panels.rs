@@ -123,7 +123,10 @@ fn a_dragged_width_is_remembered_across_restarts() {
 /// 70 % of the window, so the page stays in view.
 #[test]
 fn the_side_panel_widens_up_to_most_of_the_window() {
-    let mut h = harness(|app| app.set_option("panel", "bookmarks").unwrap());
+    let mut h = harness(|app| {
+        app.set_option("left", "closed").unwrap();
+        app.set_option("panel", "bookmarks").unwrap();
+    });
     let before = h.state().side_panels.side_width;
     widen_side(&mut h, 400.0);
     let wide = h.state().side_panels.side_width;
@@ -131,9 +134,32 @@ fn the_side_panel_widens_up_to_most_of_the_window() {
     // Drawn as wide as set: from its resize edge to the rail.
     let drawn = rail(&h).left() - side_edge(&h).x;
     assert!(wide > 520.0 && (drawn - wide).abs() <= 12.0, "{wide} set, {drawn} drawn");
+    // Dragged far past it, it stops at 70 % of the room left of the rail (the window but the
+    // rail's 48 pt or so), and a further drag doesn't take it on.
     widen_side(&mut h, 600.0);
     let widest = h.state().side_panels.side_width;
-    assert!(widest > wide && widest <= 0.7 * WIDTH + 1.0, "{wide} -> {widest}");
+    assert!((0.7 * (WIDTH - 60.0)..=0.7 * WIDTH + 1.0).contains(&widest), "{wide} -> {widest}");
+    widen_side(&mut h, 200.0);
+    assert!((h.state().side_panels.side_width - widest).abs() <= 1.0, "{widest} -> {}", h.state().side_panels.side_width);
+}
+
+/// With the Tools pane open beside it, the side panel takes what the two together leave of the
+/// 70 %, so the page still keeps the rest of the window.
+#[test]
+fn the_side_panel_and_the_tools_pane_leave_the_page_its_share() {
+    let mut h = harness(|app| app.set_option("panel", "bookmarks").unwrap());
+    assert!(h.query_by_label("Expand all tools").is_some(), "the Tools pane is open");
+    widen_side(&mut h, 1000.0);
+    let side = h.state().side_panels.side_width;
+    assert!(side > 520.0, "still well past the old limit: {side}");
+    // The page between the Tools pane's resize edge (the leftmost) and the side panel's keeps
+    // what the two panes leave of the window: 30 % of the room left of the rail.
+    let tools_edge = h.get_all_by_label("Resize panels").map(|n| n.rect().center().x).fold(f32::INFINITY, f32::min);
+    let page = side_edge(&h).x - tools_edge;
+    assert!(page >= 0.3 * (WIDTH - 60.0) - 12.0, "the page keeps its part: {page} (side {side}, Tools to {tools_edge})");
+    // Dragged further, the side panel stays where the share ends.
+    widen_side(&mut h, 200.0);
+    assert!((h.state().side_panels.side_width - side).abs() <= 1.0, "{side} -> {}", h.state().side_panels.side_width);
 }
 
 #[test]
