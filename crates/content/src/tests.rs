@@ -566,3 +566,46 @@ fn invert_accepts_small_scale_and_rejects_singular() {
     // A subnormal scale passes the relative check but its inverse overflows (CodeRabbit on #5703).
     assert!(Matrix([1e-310, 0., 0., 1., 0., 0.]).invert().is_none());
 }
+
+/// Failed operands that read to the end of the stream (an unterminated array, hex string or
+/// dictionary, or unreadable inline-image parameters) are not retried from every byte without
+/// end: the bytes they read stay proportional to the stream, through both [`parse`] and [`ops`].
+#[test]
+fn failed_operands_read_a_bounded_multiple_of_the_stream() {
+    let n = 1 << 18;
+    for (junk, len) in [("[", 1), ("<", 1), ("<< /a ", 6), ("BI /K ( EI ", 11)] {
+        let mut src = junk.repeat(n / len).into_bytes();
+        src.extend_from_slice(b"\n1 0 0 1 0 0 cm");
+        let limit = src.len() * (RESCAN_PER_BYTE + 2) + MIN_RESCAN + src.len();
+        RESCANNED.with(|c| c.set(0));
+        let p = parse(&src);
+        let rescanned = RESCANNED.with(|c| c.get());
+        assert!(rescanned <= limit, "{junk:?}: {rescanned} bytes read for a {}-byte stream", src.len());
+        assert!(p.skipped > 0, "{junk:?}");
+        RESCANNED.with(|c| c.set(0));
+        let streamed = ops(&src).count();
+        let rescanned = RESCANNED.with(|c| c.get());
+        assert!(rescanned <= limit, "{junk:?}: {rescanned} bytes read streaming a {}-byte stream", src.len());
+        assert_eq!(streamed, p.ops.len(), "{junk:?}");
+    }
+    // A short stray opener still recovers byte by byte, keeping what follows it.
+    let p = parse(b"[ 1 0 0 1 0 0 cm");
+    assert_eq!(p.ops.last().and_then(|o| o.nums::<6>()), Some([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]));
+    let p = parse(b"<< /a 1 0 0 1 0 0 cm");
+    assert_eq!(p.ops.last().map(|o| o.op.clone()), Some(b"cm".to_vec()));
+}
+
+/// Operands without an operator are not all held: only the last [`MAX_OPERANDS`] or so are kept
+/// for the operator that may follow, and the rest count as skipped.
+#[test]
+fn operands_without_an_operator_are_bounded() {
+    let n = 100_000;
+    let mut src = "1 ".repeat(n).into_bytes();
+    src.extend_from_slice(b"0 0 1 0 0 cm");
+    let p = parse(&src);
+    let cm = p.ops.last().expect("the cm operator");
+    assert!(cm.operands.len() <= 2 * MAX_OPERANDS, "{} operands kept", cm.operands.len());
+    assert_eq!(cm.nums::<6>(), Some([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]));
+    assert_eq!(p.skipped + cm.operands.len(), n + 5);
+    assert_eq!(cm.span.start, 0);
+}
