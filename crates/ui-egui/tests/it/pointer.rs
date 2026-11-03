@@ -1726,6 +1726,66 @@ fn a_right_click_between_the_pages_anchors_no_pages_menu() {
     assert_eq!(h.state().views[0].comments.context_at, None);
 }
 
+/// Two 300×400 pages, a rectangle comment on the first.
+fn two_pages_and_a_comment_pdf() -> Vec<u8> {
+    pdf(&[
+        CATALOG,
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 300 400] >>",
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R] >>",
+        "<< /Type /Page /Parent 2 0 R >>",
+        "<< /Type /Annot /Subtype /Square /Rect [30 290 200 320] /C [1 0 0] /F 4 /T (Reviewer) >>",
+    ])
+}
+
+/// A right-click between the pages selects no comment, as one on a page's empty part does not, so
+/// the menu that opens is the current page's. The selected comment's menu used to open there.
+#[test]
+fn a_right_click_between_the_pages_opens_the_page_menu_not_the_selected_comments() {
+    let mut h = open(two_pages_and_a_comment_pdf(), "100", false);
+    h.state_mut().views[0].comments.selected = Some((0, 0));
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "the comment is selected");
+    let (one, two) = {
+        let v = &h.state().views[0];
+        (v.page_screen_rect(0).expect("page 1 on screen"), v.page_screen_rect(1).expect("page 2 on screen"))
+    };
+    let gap = egui::pos2(one.center().x, (one.max.y + two.min.y) / 2.0);
+    assert!(!one.contains(gap) && !two.contains(gap), "between the pages: {one:?} {two:?}");
+    right_click(&mut h, gap);
+    assert_eq!(h.state().views[0].comments.selected, None);
+    assert!(h.query_by_label("Rotate view counterclockwise").is_some(), "the page menu opens");
+    assert!(h.query_by_label("Reply").is_none(), "not the comment's");
+}
+
+/// Where pages touch, a right-click on the row they share is page 1's, and a picture on page 2 there
+/// opens its menu, whose Paste then places the image as Ctrl+V does. It used to centre the image on
+/// page 1's point, which on page 2 lies at its foot.
+#[test]
+fn paste_from_a_picture_menu_where_two_pages_touch_keeps_off_the_first_pages_point() {
+    let (mut h, seam) = touching_pages(|app| {
+        app.system_clipboard = false;
+        app.quick_tool = QuickTool::EditText;
+    });
+    let clip = || pdfcraft_ui_egui::Clip::Image { width: 60, height: 40, rgba: [50u8, 150, 250, 255].repeat(60 * 40) };
+    h.state_mut().clipboard_override = Some(clip());
+    assert!(h.state_mut().paste_image_at(1, [100.0, 400.0]), "a picture across page 2's top edge");
+    h.state_mut().clipboard_override = Some(clip());
+    h.state_mut().views[0].image_selection = None;
+    h.run_steps(4);
+    right_click(&mut h, seam);
+    assert_eq!(h.state().views[0].comments.context_at.map(|(page, _)| page), Some(0), "page 1 takes the right-click");
+    assert_eq!(h.state().views[0].image_selection.as_ref().map(|s| s.page), Some(1), "page 2's picture opens its menu");
+    h.get_by_label("Paste").click();
+    h.run_steps(3);
+    let pasted = {
+        let s = h.state();
+        s.session.get(s.views[0].id).unwrap().page_images(1)
+    };
+    assert_eq!(pasted.len(), 2, "the image is pasted on page 2");
+    let r = pasted[1].rect;
+    assert!((r[1] + r[3]) / 2.0 > 100.0, "not centred at page 2's foot: {r:?}");
+}
+
 /// With the camera tool, a click on another page moves the quadrilateral there, as a drag from it
 /// does. The click was located by its press's origin, which egui has cleared by the release frame,
 /// so it did nothing (on `main` too).

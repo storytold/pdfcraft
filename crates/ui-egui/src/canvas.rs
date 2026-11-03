@@ -1662,7 +1662,9 @@ fn draw_pages(
         // Set again below when the right-click lands on a link.
         view.links.context = None;
         // Set again below by the page right-clicked: a right-click off the pages (between them,
-        // beside one) anchors no page's menu, which then acts on the current page.
+        // beside one) anchors no page's menu, which then acts on the current page. It deselects the
+        // comment too (below), as one on a page's empty part does. A selected Prepare field keeps
+        // its menu, off the pages as on them.
         view.comments.context_at = None;
         let mut over_image = false;
         if tool == QuickTool::EditText {
@@ -1734,8 +1736,22 @@ fn draw_pages(
         draw_page(ui, view, &mut frame, i);
     }
     let PageFrame {
-        wanted, visible_now, mut current, best_overlap, current_overlap, current_height, pressed_page, calc_hover, out: page_out, ..
+        wanted,
+        visible_now,
+        mut current,
+        best_overlap,
+        current_overlap,
+        current_height,
+        pressed_page,
+        calc_hover,
+        out: page_out,
+        right_clicked,
+        ..
     } = frame;
+    // A right-click no page took deselects the comment, so the page's menu opens, not the comment's.
+    if resp.secondary_clicked() && !right_clicked {
+        view.comments.selected = None;
+    }
     let PageOut {
         mut canvas_action,
         clicked_link,
@@ -1905,7 +1921,9 @@ fn draw_pages(
                 }));
         if is_image_menu && let Some(sel) = view.image_selection.clone() {
             let images = cached_edit_images(view, doc, sel.page).to_vec();
-            let at = view.comments.context_at.map(|(_, at)| at);
+            // Paste lands where the menu opened only on the picture's page: where pages touch, the
+            // first page takes the right-click, and its point means nothing on the second.
+            let at = view.comments.context_at.filter(|(page, _)| *page == sel.page).map(|(_, at)| at);
             let rotation = (view.rotation % 360 + info.pages.get(sel.page).map_or(0, |p| p.rotation % 360)) % 360;
             crate::edit_text_ui::image_context_menu(ui, view, &images, sel.page, sel.index, can_paste_image, &mut image_action, at, rotation);
             return;
