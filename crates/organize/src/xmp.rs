@@ -287,10 +287,17 @@ fn set_property(xmp: &str, name: &str, ns: &str, shape: Shape, value: &str) -> O
 }
 
 /// `xmp` with a new `rdf:Description` holding `element` (and declaring its namespace) as the last
-/// description of the packet.
+/// description of the packet: before the last `</rdf:RDF>` in character data, not one inside a
+/// comment or CDATA section after it.
 fn insert_description(xmp: &str, name: &str, ns: &str, element: &str) -> Option<String> {
     let prefix = name.split(':').next()?;
-    let at = xmp.rfind("</rdf:RDF>")?;
+    let mut scan = TextScan::new(xmp);
+    let mut last = None;
+    while let Some(at) = scan.find("</rdf:RDF>") {
+        last = Some(at);
+        scan.advance(at + 1);
+    }
+    let at = last?;
     // Every description of a packet describes the same resource (XMP: one `rdf:about` value).
     let about = attribute_span(xmp, "rdf:about").and_then(|(_, s, e, _)| xmp.get(s..e)).unwrap_or_default().replace('"', "&quot;");
     let mut out = String::with_capacity(xmp.len() + element.len() + 128);
@@ -301,7 +308,8 @@ fn insert_description(xmp: &str, name: &str, ns: &str, element: &str) -> Option<
 }
 
 /// Where the element `name` is in `xmp`, from its `<` to past its end tag (or past `/>`). Only a
-/// start tag in character data counts, not one inside a comment, CDATA section or quoted value.
+/// start tag in character data counts, not one inside a comment, CDATA section or quoted value,
+/// and the same goes for its end tag.
 fn element_span(xmp: &str, name: &str) -> Option<(usize, usize)> {
     let open = format!("<{name}");
     let mut from = 0;
@@ -326,7 +334,10 @@ fn element_span(xmp: &str, name: &str) -> Option<(usize, usize)> {
             return Some((i, tag_end + 1));
         }
         let close = format!("</{name}>");
-        let end = tag_end + xmp.get(tag_end..)?.find(&close)? + close.len();
+        // On from the start tag, which stands in character data.
+        let mut scan = TextScan { xml: xmp.as_bytes(), pos: i, state };
+        scan.advance(tag_end + 1);
+        let end = scan.find(&close)? + close.len();
         return Some((i, end));
     }
     None
@@ -517,6 +528,18 @@ mod tests {
         assert_eq!(get("x &amp; <![CDATA[&amp;]]> y").as_deref(), Some("x & &amp; y"));
         assert_eq!(get("<![CDATA[open"), None, "an unterminated section");
         assert_eq!(get("<![CDATA[a]]><b/>"), None, "other markup after it");
+    }
+
+    /// An end tag or `</rdf:RDF>` inside a comment is not the real one: replacing a property
+    /// replaces all of it, and a new description goes inside the real `rdf:RDF`.
+    #[test]
+    fn end_tags_inside_comments_are_not_matched() {
+        let packet = "<rdf:RDF><rdf:Description rdf:about=\"\"><pdf:Producer>A<!-- </pdf:Producer> -->B</pdf:Producer></rdf:Description></rdf:RDF>";
+        let out = set_property(packet, "pdf:Producer", PDF, Shape::Text, "New").unwrap();
+        assert_eq!(out, "<rdf:RDF><rdf:Description rdf:about=\"\"><pdf:Producer>New</pdf:Producer></rdf:Description></rdf:RDF>");
+        let packet = "<rdf:RDF><rdf:Description rdf:about=\"\"/></rdf:RDF><!-- </rdf:RDF> -->";
+        let out = set_property(packet, "pdf:Keywords", PDF, Shape::Text, "k").unwrap();
+        assert!(out.ends_with("</rdf:Description>\n</rdf:RDF><!-- </rdf:RDF> -->"), "{out}");
     }
 
     #[test]
