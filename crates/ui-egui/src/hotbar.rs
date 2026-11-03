@@ -1,9 +1,10 @@
-//! A movable, persistent set of shortcuts to the shared command registry.
-use egui::{Rect, Sense, vec2};
+//! A movable, persistent set of shortcuts to the shared command registry and core document tools.
+use egui::{Color32, CornerRadius, Rect, Sense, Stroke, vec2};
+use pdfcraft_engine::Edit;
 use pdfcraft_engine::commands::{COMMANDS, command};
 use serde::{Deserialize, Serialize};
 
-use crate::{PdfCraftApp, icons, theme::Tokens};
+use crate::{PdfCraftApp, QuickTool, comments, icons, theme, theme::Tokens};
 
 /// Persistent state and UI state for the customizable document hotbar.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -23,12 +24,12 @@ pub(crate) struct Hotbar {
 }
 
 impl Default for Hotbar {
-    /// Create a default empty horizontal floating hotbar.
+    /// Create a default vertical floating hotbar positioned in the document margin.
     fn default() -> Self {
         Self {
             tools: Vec::new(),
-            position: [0.5, 0.0],
-            vertical: false,
+            position: [0.0, 0.0],
+            vertical: true,
             button_size: 32.0,
             dock: None,
             full_side: false,
@@ -96,6 +97,22 @@ fn settings_button(ui: &mut egui::Ui, cell: f32, picker_open: &mut bool) {
     }
 }
 
+/// Determine where flyout popup menus should open from a toolbar button based on docking and layout.
+fn popup_align_for(dock: Option<&str>, vertical: bool) -> egui::RectAlign {
+    match dock {
+        Some("right") => egui::RectAlign::LEFT_START,
+        Some("bottom") => egui::RectAlign::TOP_START,
+        Some("top") => egui::RectAlign::BOTTOM_START,
+        _ => {
+            if vertical {
+                egui::RectAlign::RIGHT_START
+            } else {
+                egui::RectAlign::BOTTOM_START
+            }
+        }
+    }
+}
+
 /// Whether `spec` matches the hotbar picker search query across the translated label, canonical
 /// English label, or command identifier (case-insensitively).
 fn matches_search(spec: &pdfcraft_engine::commands::CommandSpec, query: &str) -> bool {
@@ -103,7 +120,7 @@ fn matches_search(spec: &pdfcraft_engine::commands::CommandSpec, query: &str) ->
     tl!(spec.label).to_lowercase().contains(&search) || spec.label.to_lowercase().contains(&search) || spec.id.to_lowercase().contains(&search)
 }
 
-/// Render the configured tool shortcut buttons and their removal context menus.
+/// Render the configured custom tool shortcut buttons and their removal context menus.
 fn tool_buttons(ui: &mut egui::Ui, app: &PdfCraftApp, tools: &[String], cell: f32, run: &mut Option<&'static str>, remove: &mut Option<usize>) {
     for (index, id) in tools.iter().enumerate() {
         let Some(spec) = command(id) else { continue };
@@ -121,30 +138,312 @@ fn tool_buttons(ui: &mut egui::Ui, app: &PdfCraftApp, tools: &[String], cell: f3
     }
 }
 
-/// Draw the floating or side-docked hotbar and its tool picker window inside `area`.
-pub(crate) fn show(app: &mut PdfCraftApp, area: Rect, ctx: &egui::Context) {
+/// Render core quick tools: Select, Hand, Comment groups, Edit text, and Fill & Sign.
+fn core_tool_buttons(ui: &mut egui::Ui, app: &mut PdfCraftApp, cell: f32, popup_align: egui::RectAlign, t: &Tokens) {
+    if icons::button(ui, "mouse-pointer-2", cell, app.quick_tool == QuickTool::Select, tl!("Select (V)")).clicked() {
+        app.quick_tool = QuickTool::Select;
+    }
+    if icons::button(ui, "hand", cell, app.quick_tool == QuickTool::Hand, tl!("Hand (H)")).clicked() {
+        app.quick_tool = QuickTool::Hand;
+    }
+    // Comment ▸, Highlight ▸, Draw ▸ (Acrobat's comment toolbar groups). Clicking a
+    // group selects its last-used tool; clicking it again opens the flyout.
+    for g in 0..comments::GROUPS.len() {
+        let current = app.comment_prefs.group_tool[g];
+        let active = matches!(app.quick_tool, QuickTool::Comment(t) if t.group() == g);
+        let resp = icons::button(ui, current.icon(), cell, active, tl!(current.label()));
+        if comments::GROUPS[g].len() == 1 {
+            if resp.clicked() {
+                app.execute(current.command());
+            }
+            continue;
+        }
+        // A small corner triangle marks the flyout.
+        let r = resp.rect;
+        let tri = [r.right_bottom() + vec2(-4.0, -4.0), r.right_bottom() + vec2(-9.0, -4.0), r.right_bottom() + vec2(-4.0, -9.0)];
+        ui.painter().add(egui::Shape::convex_polygon(tri.to_vec(), if active { t.accent } else { t.text_faint }, Stroke::NONE));
+        let open = (resp.clicked() && active) || resp.secondary_clicked();
+        if resp.clicked() && !active {
+            app.execute(current.command());
+        }
+        egui::Popup::menu(&resp).open_memory(open.then_some(egui::SetOpenCommand::Toggle)).align(popup_align).gap(6.0).show(|ui| {
+            for tool in comments::GROUPS[g] {
+                let on = app.quick_tool == QuickTool::Comment(*tool);
+                let (row, click) = ui.allocate_exact_size(vec2(180.0, 28.0), Sense::click());
+                let press = theme::Press::track(ui, &click);
+                press.wash(ui, row, 4, on);
+                let body = row.translate(press.offset());
+                icons::paint(ui, Rect::from_min_size(body.min + vec2(8.0, 6.0), vec2(16.0, 16.0)), tool.icon(), 16.0, t.text);
+                let reserve = if on { 28.0 } else { 8.0 };
+                crate::widgets::paint_left(
+                    ui,
+                    body.left_center() + vec2(34.0, 0.0),
+                    tl!(tool.label()),
+                    theme::regular(13.0),
+                    t.text,
+                    (row.width() - 34.0 - reserve).max(0.0),
+                );
+                if on {
+                    icons::paint(ui, Rect::from_min_size(body.right_top() + vec2(-24.0, 7.0), vec2(14.0, 14.0)), "check", 14.0, t.accent);
+                }
+                let click = theme::hand(click);
+                let info = tl!(tool.label()).to_string();
+                click.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, on, info.clone()));
+                if click.clicked() {
+                    app.execute(tool.command());
+                    ui.close();
+                }
+            }
+        });
+    }
+    // Edit text & images, while the Edit workspace is open (Acrobat's Edit toolbar)
+    // or the tool is in use.
+    if app.mode == crate::Mode::Edit || app.quick_tool == QuickTool::EditText {
+        let on = app.quick_tool == QuickTool::EditText;
+        if icons::button(ui, "text-cursor-input", cell, on, tl!("Edit text & images")).clicked() {
+            if on {
+                app.put_down_edit_text();
+            } else {
+                app.quick_tool = QuickTool::EditText;
+            }
+        }
+    }
+    // Fill & Sign ▸ (text, marks, date, signature).
+    let current_fill = match app.quick_tool {
+        QuickTool::Fill(f) => Some(f),
+        _ => None,
+    };
+    let shown = current_fill.unwrap_or(crate::fill_sign::FillTool::Text);
+    let resp = icons::button(ui, if current_fill.is_some() { shown.icon() } else { "pen-line" }, cell, current_fill.is_some(), tl!("Fill & Sign"));
+    let r = resp.rect;
+    let tri = [r.right_bottom() + vec2(-4.0, -4.0), r.right_bottom() + vec2(-9.0, -4.0), r.right_bottom() + vec2(-4.0, -9.0)];
+    ui.painter().add(egui::Shape::convex_polygon(tri.to_vec(), if current_fill.is_some() { t.accent } else { t.text_faint }, Stroke::NONE));
+    if resp.clicked() && current_fill.is_none() {
+        app.execute(shown.command());
+    }
+    let open = (resp.clicked() && current_fill.is_some()) || resp.secondary_clicked();
+    egui::Popup::menu(&resp).open_memory(open.then_some(egui::SetOpenCommand::Toggle)).align(popup_align).gap(6.0).show(|ui| {
+        for tool in crate::fill_sign::FILL_TOOLS {
+            if matches!(tool, crate::fill_sign::FillTool::Signature | crate::fill_sign::FillTool::Initials) {
+                continue;
+            }
+            let on = current_fill == Some(tool);
+            let (row, click) = ui.allocate_exact_size(vec2(180.0, 28.0), Sense::click());
+            let press = theme::Press::track(ui, &click);
+            press.wash(ui, row, 4, on);
+            let body = row.translate(press.offset());
+            icons::paint(ui, Rect::from_min_size(body.min + vec2(8.0, 6.0), vec2(16.0, 16.0)), tool.icon(), 16.0, t.text);
+            let reserve = if on { 28.0 } else { 8.0 };
+            crate::widgets::paint_left(
+                ui,
+                body.left_center() + vec2(34.0, 0.0),
+                tl!(tool.label()),
+                theme::regular(13.0),
+                t.text,
+                (row.width() - 34.0 - reserve).max(0.0),
+            );
+            if on {
+                icons::paint(ui, Rect::from_min_size(body.right_top() + vec2(-24.0, 7.0), vec2(14.0, 14.0)), "check", 14.0, t.accent);
+            }
+            let click = theme::hand(click);
+            let info = tl!(tool.label()).to_string();
+            click.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, on, info.clone()));
+            if click.clicked() {
+                app.execute(tool.command());
+                ui.close();
+            }
+        }
+        ui.separator();
+        if let Some(command) = crate::fill_sign::signature_entries(ui, app, t) {
+            app.execute(command);
+            ui.close();
+        }
+    });
+}
+
+/// Extra controls rendered below/beside the buttons when a comment or fill tool is active.
+fn active_tool_controls(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, vertical: bool) {
+    let current_fill = match app.quick_tool {
+        QuickTool::Fill(f) => Some(f),
+        _ => None,
+    };
+    if matches!(current_fill, Some(crate::fill_sign::FillTool::Text | crate::fill_sign::FillTool::Date)) {
+        if vertical {
+            ui.label(tl!("Font size:"));
+        }
+        let size = ui.add(
+            egui::DragValue::new(&mut app.fill_text_size)
+                .range(crate::fill_sign::MIN_TEXT_SIZE..=crate::fill_sign::MAX_TEXT_SIZE)
+                .speed(0.25)
+                .suffix(" pt"),
+        );
+        if ((size.changed() && !size.dragged()) || size.drag_stopped())
+            && let Some((index, id)) = app.active_ids()
+            && let Some((page, annotation)) = app.views.get(index).and_then(|view| view.comments.selected)
+            && app.session.get(id).is_some_and(|doc| {
+                doc.allows_annotation()
+                    && doc
+                        .info
+                        .annotations
+                        .iter()
+                        .any(|a| a.page == page && a.index == annotation && a.fill_sign && a.subtype == "FreeText" && !a.locked)
+            })
+        {
+            app.apply_edit(Edit::FontSizeAnnotation { page, index: annotation, size: app.fill_text_size });
+        }
+        ui.menu_button(tl!("Colour"), |ui| {
+            if let Some(color) = comments::swatch_grid(ui, Some(app.fill_text_color)) {
+                app.fill_text_color = color;
+                ui.close();
+            }
+        });
+    }
+    if let QuickTool::Comment(tool) = app.quick_tool {
+        let (r, _) = if vertical {
+            ui.allocate_exact_size(vec2(crate::canvas::bars::QUICK_BAR_WIDTH, 9.0), Sense::hover())
+        } else {
+            ui.allocate_exact_size(vec2(9.0, crate::canvas::bars::QUICK_BAR_WIDTH), Sense::hover())
+        };
+        if vertical {
+            ui.painter().hline(r.x_range().shrink(6.0), r.center().y, Stroke::new(1.0, t.divider));
+        } else {
+            ui.painter().vline(r.center().x, r.y_range().shrink(6.0), Stroke::new(1.0, t.divider));
+        }
+        if let Some(color) = comments::quick_bar_controls(ui, tool, &mut app.comment_prefs)
+            && let Some((index, id)) = app.active_ids()
+            && let Some((page, annotation)) = app.views.get(index).and_then(|view| view.comments.selected)
+            && app.session.get(id).is_some_and(|doc| {
+                doc.allows_annotation()
+                    && doc.info.annotations.iter().any(|a| a.page == page && a.index == annotation && !a.is_reply() && comments::made_by(a, tool))
+            })
+        {
+            app.apply_edit(Edit::StyleAnnotation { page, index: annotation, color: Some(color), opacity: None, width: None, endings: None });
+        }
+    }
+}
+
+/// Render a modern iOS-style pill toggle switch.
+fn toggle_switch(ui: &mut egui::Ui, on: &mut bool, t: &Tokens) -> egui::Response {
+    let width = 34.0;
+    let height = 18.0;
+    let (rect, mut response) = ui.allocate_exact_size(vec2(width, height), Sense::click());
+    if response.clicked() {
+        *on = !*on;
+        response.mark_changed();
+    }
+    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Switch, true, *on, ""));
+
+    if ui.is_rect_visible(rect) {
+        let radius = height / 2.0;
+        let bg_color = if *on { Color32::from_rgb(45, 85, 150) } else { t.border };
+        ui.painter().rect(rect, CornerRadius::same(radius as u8), bg_color, Stroke::NONE, egui::StrokeKind::Inside);
+        let circle_radius = radius - 2.5;
+        let circle_x = if *on { rect.max.x - radius } else { rect.min.x + radius };
+        ui.painter().circle_filled(egui::pos2(circle_x, rect.center().y), circle_radius, Color32::WHITE);
+    }
+    response
+}
+
+/// Render the segmented dock placement bar: [ Float | Left | Right | Top | Bottom ].
+fn segmented_dock_picker(ui: &mut egui::Ui, bar: &mut Hotbar, t: &Tokens) {
+    let sides: [(&str, Option<&str>); 5] =
+        [("Float", None), ("Left", Some("left")), ("Right", Some("right")), ("Top", Some("top")), ("Bottom", Some("bottom"))];
+    let total_width = ui.available_width().max(280.0);
+    let height = 32.0;
+    let item_width = total_width / (sides.len() as f32);
+
+    let (outer_rect, _) = ui.allocate_exact_size(vec2(total_width, height), Sense::hover());
+
+    ui.painter().rect(outer_rect, CornerRadius::same(6), t.card.gamma_multiply(0.6), Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
+
+    for (i, (label, side_val)) in sides.iter().enumerate() {
+        let is_selected = match (bar.dock.as_deref(), *side_val) {
+            (None, None) => true,
+            (Some(d), Some(s)) => d == s,
+            _ => false,
+        };
+        let x_start = outer_rect.min.x + (i as f32) * item_width;
+        let item_rect = Rect::from_min_size(egui::pos2(x_start, outer_rect.min.y), vec2(item_width, height));
+        let resp = ui.interact(item_rect, ui.scope_id().with(label), Sense::click());
+        if resp.clicked() {
+            match side_val {
+                None => {
+                    let _ = bar.place("float");
+                }
+                Some(s) => {
+                    let _ = bar.place(s);
+                }
+            }
+        }
+        if is_selected {
+            ui.painter().rect(item_rect.shrink(1.0), CornerRadius::same(5), Color32::from_rgb(38, 58, 98), Stroke::NONE, egui::StrokeKind::Inside);
+        } else if resp.hovered() {
+            ui.painter().rect(item_rect.shrink(1.0), CornerRadius::same(5), t.hover, Stroke::NONE, egui::StrokeKind::Inside);
+        }
+
+        if i > 0 && !is_selected {
+            let prev_selected = match (bar.dock.as_deref(), sides[i - 1].1) {
+                (None, None) => true,
+                (Some(d), Some(s)) => d == s,
+                _ => false,
+            };
+            if !prev_selected {
+                ui.painter().vline(x_start, (outer_rect.min.y + 4.0)..=(outer_rect.max.y - 4.0), Stroke::new(1.0, t.border));
+            }
+        }
+
+        let text_color = if is_selected {
+            Color32::WHITE
+        } else if resp.hovered() {
+            t.text
+        } else {
+            t.text_muted
+        };
+        let font = theme::medium(13.0);
+        let galley = ui.painter().layout_no_wrap(tl!(*label).to_string(), font, text_color);
+        ui.painter().galley(item_rect.center() - vec2(galley.size().x / 2.0, galley.size().y / 2.0), galley, text_color);
+    }
+}
+
+/// Draw the unified floating or side-docked toolbar, combining quick actions, core tools, and custom shortcuts.
+pub(crate) fn show(app: &mut PdfCraftApp, area: Rect, page_left: Option<f32>, ui: &mut egui::Ui) {
+    let ctx = ui.ctx().clone();
     let mut bar = std::mem::take(&mut app.hotbar);
-    let t = Tokens::get(ctx);
-    let id = egui::Id::unique("custom-hotbar");
+    bar.normalize();
+    let t = Tokens::get(&ctx);
+    let id = egui::Id::unique("quick-bar");
     let full_side = bar.full_side && bar.dock.is_some();
     let bounds = if full_side { area } else { area.shrink(10.0) };
     if let Some(side) = bar.dock.clone() {
         let _ = bar.place(&side);
     }
     let cell = bar.button_size;
-    let mut size = ctx.data_mut(|data| data.get_temp::<egui::Vec2>(id)).unwrap_or(vec2(90.0, 44.0));
+    let popup_align = popup_align_for(bar.dock.as_deref(), bar.vertical);
+    let mut size = ctx.data_mut(|data| data.get_temp::<egui::Vec2>(id)).unwrap_or(vec2(crate::canvas::bars::QUICK_BAR_WIDTH, 220.0));
     if full_side {
         size = if bar.vertical { vec2(cell + 12.0, bounds.height()) } else { vec2(bounds.width(), cell + 12.0) };
     }
     let travel = (bounds.size() - size).max(vec2(0.0, 0.0));
-    let pos = bounds.min + vec2(travel.x * bar.position[0], travel.y * bar.position[1]);
+    let default_x = crate::canvas::bars::quick_bar_offset(page_left.map_or(0.0, |left| left - area.left()), size.x);
+    let pos = if full_side {
+        bounds.min + vec2(travel.x * bar.position[0], travel.y * bar.position[1])
+    } else if bar.dock.is_none() && bar.position == [0.0, 0.0] {
+        area.left_top() + vec2(default_x, crate::canvas::bars::QUICK_BAR_EDGE)
+    } else {
+        bounds.min + vec2(travel.x * bar.position[0], travel.y * bar.position[1])
+    };
     let mut run = None;
     let mut picker_open = bar.picker_open;
-    let shown = egui::Area::new(id).order(egui::Order::Middle).fixed_pos(pos).constrain_to(bounds).show(ctx, |ui| {
+    let shown = egui::Area::new(id).order(egui::Order::Middle).fixed_pos(pos).constrain_to(bounds).show(&ctx, |ui| {
         let frame = if full_side {
             egui::Frame::NONE.fill(t.chrome).corner_radius(egui::CornerRadius::ZERO).inner_margin(6)
         } else {
-            egui::Frame::new().fill(t.card).stroke(egui::Stroke::new(1.0, t.border)).corner_radius(10).inner_margin(6)
+            egui::Frame::new()
+                .fill(t.card)
+                .stroke(egui::Stroke::new(1.0, t.border))
+                .corner_radius(CornerRadius::same(12))
+                .shadow(egui::Shadow { offset: [0, 4], blur: 16, spread: 0, color: Color32::from_black_alpha(if t.dark() { 100 } else { 28 }) })
+                .inner_margin(6)
         };
         let frame_resp = frame.show(ui, |ui| {
             if full_side {
@@ -165,7 +464,12 @@ pub(crate) fn show(app: &mut PdfCraftApp, area: Rect, ctx: &egui::Context) {
                         let remaining = ui.available_height().max(cell);
                         egui::ScrollArea::vertical().max_width(cell).max_height(remaining).show(ui, |ui| {
                             ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
-                                tool_buttons(ui, app, &bar.tools, cell, &mut run, &mut remove);
+                                core_tool_buttons(ui, app, cell, popup_align, &t);
+                                active_tool_controls(ui, app, &t, true);
+                                if !bar.tools.is_empty() {
+                                    ui.separator();
+                                    tool_buttons(ui, app, &bar.tools, cell, &mut run, &mut remove);
+                                }
                             });
                         });
                     });
@@ -176,7 +480,12 @@ pub(crate) fn show(app: &mut PdfCraftApp, area: Rect, ctx: &egui::Context) {
                         let remaining = ui.available_width().max(cell);
                         egui::ScrollArea::horizontal().max_height(cell).max_width(remaining).show(ui, |ui| {
                             ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                                tool_buttons(ui, app, &bar.tools, cell, &mut run, &mut remove);
+                                core_tool_buttons(ui, app, cell, popup_align, &t);
+                                active_tool_controls(ui, app, &t, false);
+                                if !bar.tools.is_empty() {
+                                    ui.separator();
+                                    tool_buttons(ui, app, &bar.tools, cell, &mut run, &mut remove);
+                                }
                             });
                         });
                     });
@@ -198,20 +507,32 @@ pub(crate) fn show(app: &mut PdfCraftApp, area: Rect, ctx: &egui::Context) {
                     grip.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, drag_label));
                     if grip.dragged() && bar.dock.is_none() {
                         let delta = grip.drag_delta();
+                        if bar.position == [0.0, 0.0] {
+                            let cur_x = (pos.x - bounds.min.x).max(0.0);
+                            let cur_y = (pos.y - bounds.min.y).max(0.0);
+                            bar.position[0] = (cur_x / travel.x.max(1.0)).clamp(0.0, 1.0);
+                            bar.position[1] = (cur_y / travel.y.max(1.0)).clamp(0.0, 1.0);
+                        }
                         bar.position[0] = (bar.position[0] + delta.x / travel.x.max(1.0)).clamp(0.0, 1.0);
                         bar.position[1] = (bar.position[1] + delta.y / travel.y.max(1.0)).clamp(0.0, 1.0);
                     }
-                    let scroll_max = if bar.vertical { (bounds.height() - cell - 50.0).max(cell) } else { (bounds.width() - cell - 50.0).max(cell) };
-                    let scroll = if bar.vertical {
-                        egui::ScrollArea::vertical().max_width(cell).max_height(scroll_max)
-                    } else {
-                        egui::ScrollArea::horizontal().max_height(cell).max_width(scroll_max)
-                    };
-                    scroll.auto_shrink([true, true]).show(ui, |ui| {
-                        ui.with_layout(layout, |ui| {
-                            tool_buttons(ui, app, &bar.tools, cell, &mut run, &mut remove);
+                    core_tool_buttons(ui, app, cell, popup_align, &t);
+                    active_tool_controls(ui, app, &t, bar.vertical);
+                    if !bar.tools.is_empty() {
+                        ui.separator();
+                        let scroll_max =
+                            if bar.vertical { (bounds.height() - cell - 50.0).max(cell) } else { (bounds.width() - cell - 50.0).max(cell) };
+                        let scroll = if bar.vertical {
+                            egui::ScrollArea::vertical().max_width(cell).max_height(scroll_max)
+                        } else {
+                            egui::ScrollArea::horizontal().max_height(cell).max_width(scroll_max)
+                        };
+                        scroll.auto_shrink([true, true]).show(ui, |ui| {
+                            ui.with_layout(layout, |ui| {
+                                tool_buttons(ui, app, &bar.tools, cell, &mut run, &mut remove);
+                            });
                         });
-                    });
+                    }
                     settings_button(ui, cell, &mut picker_open);
                 });
             }
@@ -241,50 +562,119 @@ pub(crate) fn show(app: &mut PdfCraftApp, area: Rect, ctx: &egui::Context) {
     });
     let picker_id = egui::Id::unique("hotbar-picker");
     // A remembered collapsed state can survive disabling the collapse affordance.
-    let mut expanded = egui::collapsing_header::CollapsingState::load_with_default_open(ctx, picker_id.with("collapsing"), true);
+    let mut expanded = egui::collapsing_header::CollapsingState::load_with_default_open(&ctx, picker_id.with("collapsing"), true);
     expanded.set_open(true);
-    expanded.store(ctx);
+    expanded.store(&ctx);
     let screen = ctx.content_rect().shrink(12.0);
     let picker_x = if pos.x + cell + 380.0 < screen.right() { pos.x + cell + 20.0 } else { pos.x - 360.0 };
     let picker_pos = egui::pos2(
         picker_x.clamp(screen.left(), (screen.right() - 350.0).max(screen.left())),
         pos.y.clamp(screen.top(), (screen.bottom() - 640.0).max(screen.top())),
     );
+    let mut close_dialog = false;
     egui::Window::new(tl!("Hotbar tools"))
         .id(picker_id)
         .order(egui::Order::Foreground)
         .open(&mut picker_open)
         .collapsible(false)
         .resizable(false)
+        .title_bar(false)
         .fixed_pos(picker_pos)
-        .max_height((screen.height() - 24.0).max(180.0))
-        .vscroll(true)
-        .show(ctx, |ui| {
-            ui.set_min_width(260.0);
-            ui.add(egui::Slider::new(&mut bar.button_size, 24.0..=64.0).text(tl!("Toolbar size")).suffix(" px"));
-            ui.add_enabled(bar.dock.is_none(), crate::widgets::checkbox(&mut bar.vertical, tl!("Vertical layout")));
-            if ui.selectable_label(bar.dock.is_none(), tl!("Float (drag anywhere)")).clicked() {
-                let _ = bar.place("float");
-            }
-            ui.label(tl!("Stick to a side:"));
+        .frame(
+            egui::Frame::NONE
+                .fill(t.card)
+                .stroke(Stroke::new(1.0, t.border))
+                .corner_radius(CornerRadius::same(12))
+                .shadow(egui::Shadow { offset: [0, 8], blur: 24, spread: 0, color: Color32::from_black_alpha(if t.dark() { 120 } else { 35 }) })
+                .inner_margin(egui::Margin::same(16)),
+        )
+        .show(&ctx, |ui| {
+            ui.set_min_width(300.0);
+
+            // Title bar: "Hotbar Tools" on the left, "X" close button on the right
             ui.horizontal(|ui| {
-                for (label, side) in [(tl!("Left"), "left"), (tl!("Right"), "right"), (tl!("Top"), "top"), (tl!("Bottom"), "bottom")] {
-                    if ui.selectable_label(bar.dock.as_deref() == Some(side), label).clicked() {
-                        let _ = bar.place(side);
+                ui.label(egui::RichText::new(tl!("Hotbar tools")).size(16.0).strong().color(t.text));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if icons::button(ui, "x", 20.0, false, tl!("Close menu")).clicked() {
+                        close_dialog = true;
                     }
-                }
+                });
             });
+
+            ui.add_space(14.0);
+
+            // Section 1: Layout & Sizing
+            ui.label(egui::RichText::new(tl!("Layout & Sizing")).size(13.5).strong().color(t.text));
+            ui.add_space(6.0);
+
+            // Toolbar size slider row
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new(tl!("Toolbar size")).color(t.text));
+                ui.spacing_mut().slider_width = 160.0;
+                ui.add(egui::Slider::new(&mut bar.button_size, 24.0..=64.0).show_value(false));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(egui::RichText::new(format!("{:.0} px", bar.button_size)).color(t.text_muted));
+                });
+            });
+
+            ui.add_space(8.0);
+
+            // Vertical layout toggle switch row
+            ui.horizontal(|ui| {
+                ui.add_enabled_ui(bar.dock.is_none(), |ui| {
+                    toggle_switch(ui, &mut bar.vertical, &t);
+                    ui.add_space(6.0);
+                    ui.label(egui::RichText::new(tl!("Vertical layout")).color(t.text));
+                });
+            });
+
+            ui.add_space(10.0);
+
+            // Stick to a side section with segmented control
+            ui.label(egui::RichText::new(tl!("Stick to a side:")).color(t.text));
+            ui.add_space(6.0);
+            segmented_dock_picker(ui, &mut bar, &t);
+
+            ui.add_space(8.0);
+
+            // Full-side strip checkbox
             let strip_hint = tl!("Extend the docked toolbar along the entire side. Choose a side above to enable.");
             ui.add_enabled(bar.dock.is_some(), crate::widgets::checkbox(&mut bar.full_side, tl!("Full-side strip")))
                 .on_hover_text(strip_hint)
                 .on_disabled_hover_text(strip_hint);
-            if ui.button(tl!("Close menu")).clicked() {
-                ui.close();
-            }
+
+            ui.add_space(12.0);
             ui.separator();
-            ui.label(tl!("Add tools to hotbar"));
-            ui.add(egui::TextEdit::singleline(&mut bar.search).hint_text(tl!("Search all tools…")));
-            egui::ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
+            ui.add_space(10.0);
+
+            // Section 2: Add Tools to Hotbar
+            ui.label(egui::RichText::new(tl!("Add Tools to Hotbar")).size(13.5).strong().color(t.text));
+            ui.add_space(8.0);
+
+            // Search bar pill
+            let search_frame = egui::Frame::NONE
+                .fill(t.field)
+                .stroke(Stroke::new(1.0, t.border))
+                .corner_radius(CornerRadius::same(8))
+                .inner_margin(egui::Margin::symmetric(10, 6));
+            search_frame.show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 8.0;
+                    ui.add(icons::image("search", 14.0, t.text_faint));
+                    ui.add(
+                        egui::TextEdit::singleline(&mut bar.search)
+                            .hint_text(tl!("Search all tools…"))
+                            .frame(egui::Frame::NONE)
+                            .desired_width(ui.available_width()),
+                    );
+                });
+            });
+
+            ui.add_space(8.0);
+
+            // Scrollable tools list with checkboxes
+            egui::ScrollArea::vertical().max_height(240.0).auto_shrink([false, false]).show(ui, |ui| {
+                ui.spacing_mut().item_spacing.y = 6.0;
                 for spec in COMMANDS {
                     if !matches_search(spec, &bar.search) {
                         continue;
@@ -299,9 +689,14 @@ pub(crate) fn show(app: &mut PdfCraftApp, area: Rect, ctx: &egui::Context) {
                     }
                 }
             });
-            ui.separator();
         });
-    ctx.data_mut(|data| data.insert_temp(id, shown.response.rect.size()));
+    if close_dialog {
+        picker_open = false;
+    }
+    ctx.data_mut(|data| {
+        data.insert_temp(id, shown.response.rect.size());
+        data.insert_temp(egui::Id::unique("custom-hotbar"), shown.response.rect.size());
+    });
     bar.picker_open = picker_open;
     app.hotbar = bar;
     if let Some(id) = run {

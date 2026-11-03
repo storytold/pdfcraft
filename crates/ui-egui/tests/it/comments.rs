@@ -3246,5 +3246,22 @@ fn hotbar_full_side_strip_spans_each_edge_and_returns_to_float() {
     h.state_mut().set_option("hotbar-side", "float").unwrap();
     h.run_steps(5);
     let size = h.ctx.data_mut(|d| d.get_temp::<egui::Vec2>(egui::Id::unique("custom-hotbar"))).unwrap();
-    assert!(size.x < 150.0 && size.y < 150.0, "floating toolbar is compact: {size:?}");
+    let (length, thickness) = if size.y > size.x { (size.y, size.x) } else { (size.x, size.y) };
+    assert!(thickness <= 64.0 && length < 550.0, "floating toolbar is compact: {size:?}");
+}
+
+#[test]
+fn hotbar_docked_left_does_not_override_quick_tools() {
+    let mut h = harness(|app| {
+        app.set_option("hotbar-side", "left").unwrap();
+    });
+    h.run_steps(5);
+    // When docked to the left, quick tools (Select, Hand, Comments) are integrated and accessible (#5890).
+    h.get_by_label("Select (V)");
+    h.get_by_label("Hand (H)");
+    h.get_by_label("Add a sticky note");
+    h.get_by_label("Highlight");
+    h.get_by_label("Draw");
+    h.get_by_label("Fill & Sign");
+    h.get_by_label("Hotbar settings");
 }
