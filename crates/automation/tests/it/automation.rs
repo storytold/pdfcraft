@@ -7625,6 +7625,7 @@ fn exporting_to_word_html_and_rtf() {
             && !simple_html.contains("<div")
     );
     assert!(a.call("doc_export_office", &json!({ "doc": doc, "path": "bad.html", "html_mode": "compact" })).is_err());
+    assert!(a.call("doc_export_office", &json!({ "doc": doc, "path": "bad.docx", "html_mode": "simple" })).is_err());
     assert!(std::fs::read(dir.join("a.docx")).unwrap().starts_with(b"PK"));
     assert!(std::fs::read(dir.join("a.pptx")).unwrap().starts_with(b"PK"));
     assert!(std::fs::read_to_string(dir.join("a.rtf")).unwrap().contains("Page 2"));
