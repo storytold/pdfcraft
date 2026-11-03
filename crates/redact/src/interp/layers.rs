@@ -317,7 +317,7 @@ mod tests {
     use super::*;
     use crate::Report;
     use crate::interp::Mode;
-    use pdfcraft_cos::DecodeBudget;
+    use pdfcraft_cos::{DecodeBudget, ImageBudget};
 
     fn test_doc() -> Document {
         Document::new_empty()
@@ -348,7 +348,8 @@ mod tests {
         props.set(b"M2".to_vec(), Object::Ref(ocmd2_ref));
 
         let mut report = Report::default();
-        let mut scope = Scope::new(&[], Mode::Apply, &mut report, DecodeBudget::page());
+        let mut images = ImageBudget::new(&doc);
+        let mut scope = Scope::new(&[], Mode::Apply, &mut report, DecodeBudget::page(), &mut images);
         scope.layers_enabled = true;
         scope.hidden_layers.insert(ocg_ref);
 
@@ -374,7 +375,8 @@ mod tests {
         let ocmd_ref = doc.add(Object::Dict(ocmd));
 
         let mut report = Report::default();
-        let mut scope = Scope::new(&[], Mode::Apply, &mut report, DecodeBudget::page());
+        let mut images = ImageBudget::new(&doc);
+        let mut scope = Scope::new(&[], Mode::Apply, &mut report, DecodeBudget::page(), &mut images);
         scope.layers_enabled = true;
         scope.hidden_layers.insert(ocg_ref);
 
@@ -401,7 +403,8 @@ mod tests {
         let ocmd_ref = doc.add(Object::Dict(ocmd));
 
         let mut report = Report::default();
-        let mut scope = Scope::new(&[], Mode::Apply, &mut report, DecodeBudget::page());
+        let mut images = ImageBudget::new(&doc);
+        let mut scope = Scope::new(&[], Mode::Apply, &mut report, DecodeBudget::page(), &mut images);
         scope.layers_enabled = true;
 
         assert!(
@@ -427,7 +430,8 @@ mod tests {
         let ocmd_ref = doc.add(Object::Dict(ocmd));
 
         let mut report = Report::default();
-        let mut scope = Scope::new(&[], Mode::Apply, &mut report, DecodeBudget::page());
+        let mut images = ImageBudget::new(&doc);
+        let mut scope = Scope::new(&[], Mode::Apply, &mut report, DecodeBudget::page(), &mut images);
         scope.layers_enabled = true;
         scope.hidden_layers.insert(ocg_ref);
 
