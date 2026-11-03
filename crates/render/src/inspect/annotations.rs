@@ -56,6 +56,16 @@ impl<'a> Inspector<'a> {
         }
     }
 
+    /// A stamp's turn: its angle and the width and height of its upright box. `None` when upright,
+    /// or when the values don't make a turn. Keep in step with `pdfcraft_annot`'s `turn_of`.
+    fn stamp_turn(&self, d: &Dictionary) -> Option<(f32, [f32; 2])> {
+        let angle = self.resolve(d.get(b"PCAngle").ok()?).as_float().ok().filter(|a| a.is_finite() && a.rem_euclid(360.0) != 0.0)?;
+        let Object::Array(size) = self.resolve(d.get(b"PCSize").ok()?) else { return None };
+        let [w, h] = size.as_slice() else { return None };
+        let (w, h) = (self.resolve(w).as_float().ok()?, self.resolve(h).as_float().ok()?);
+        (w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0).then_some((angle, [w, h]))
+    }
+
     // ── annotations ─────────────────────────────────────────────────────────────────────────
 
     /// `text_budget` is what is left of [`MAX_LINK_ATTACHMENT_TEXT_BYTES`].
@@ -158,6 +168,8 @@ impl<'a> Inspector<'a> {
                 }
                 _ => Vec::new(),
             };
+            // Keep in step with `pdfcraft_annot::summaries`.
+            let turn = (subtype == "Stamp").then(|| self.stamp_turn(d)).flatten();
             let annotation = Annotation {
                 page,
                 subtype,
@@ -180,6 +192,7 @@ impl<'a> Inspector<'a> {
                 fill_sign,
                 no_rotate: d.get(b"F").is_ok_and(|f| draw_flags(self.resolve(f)) & 16 != 0),
                 points,
+                turn,
             };
             kept = kept.saturating_add(retained(&annotation));
             if kept > MAX_ANNOTATION_BYTES {

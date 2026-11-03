@@ -4,6 +4,7 @@ use super::create::{
 use super::draw::{draw_appearance, redraw_or_restore, set_appearance};
 use super::info::{line_endings_of, text_value};
 use super::lookup::{annot_dict, annot_ref, annotation_flags, annots, page_ref, set_annots};
+use super::turn::{rect_of, same_shape, turn_of};
 use super::types::{
     FLAG_HIDDEN, FLAG_LOCKED, FLAG_NO_ROTATE, FLAG_NO_ZOOM, FLAG_PRINT, LineEnding, Markup, Meta, NewAnnotation, ReviewState, Rgb, Shape, Style,
     StyleChange, TextReplacement,
@@ -364,8 +365,8 @@ pub fn move_annotation(doc: &mut Document, page: usize, index: usize, dx: f64, d
 }
 
 /// Resize a rectangle, oval, text box, stamp or drawing to `rect`. Stamps keep their appearance,
-/// which PDF viewers scale from its bounding box into the new rectangle; drawings scale their
-/// strokes and get a new one.
+/// which PDF viewers scale from its bounding box into the new rectangle (a turned one keeps its
+/// shape, in the middle of `rect`); drawings scale their strokes and get a new one.
 pub fn set_rect(doc: &mut Document, page: usize, index: usize, rect: [f64; 4], meta: &Meta) -> Result<(), AnnotError> {
     let (_, r) = annot_ref(doc, page, index)?;
     unlocked(doc, r)?;
@@ -376,6 +377,10 @@ pub fn set_rect(doc: &mut Document, page: usize, index: usize, rect: [f64; 4], m
         if !finite(&rect) || rect[2] <= rect[0] || rect[3] <= rect[1] {
             return Err(AnnotError::Invalid("invalid rectangle (too small)".into()));
         }
+        let rect = match rect_of(doc, &d).filter(|_| turn_of(doc, &d).is_some()) {
+            Some(old) => same_shape(old, rect),
+            None => rect,
+        };
         doc.update_dict(r, |d| {
             d.set(b"Rect".to_vec(), num_array(&rect));
             touch(d, meta);
@@ -433,12 +438,9 @@ pub fn set_points(doc: &mut Document, page: usize, index: usize, points: &[[f64;
     redraw_or_restore(doc, r, before)
 }
 
-/// Scale a drawing's strokes into `rect`. The margin between the strokes and the old `/Rect` (half
-/// the line width and a little more) stays the same on each side, so the line isn't clipped.
-fn resize_ink(doc: &mut Document, r: ObjRef, rect: [f64; 4], meta: &Meta) -> Result<(), AnnotError> {
-    let d = annot_dict(doc, r);
-    let strokes: Vec<Vec<[f64; 2]>> = d
-        .get(b"InkList")
+/// A drawing's strokes (`/InkList`).
+pub(crate) fn ink_strokes(doc: &Document, d: &Dict) -> Vec<Vec<[f64; 2]>> {
+    d.get(b"InkList")
         .map(|l| doc.resolve(l))
         .and_then(|l| l.as_array().cloned())
         .unwrap_or_default()
@@ -447,7 +449,14 @@ fn resize_ink(doc: &mut Document, r: ObjRef, rect: [f64; 4], meta: &Meta) -> Res
             let v: Vec<f64> = doc.resolve(s).as_array().map(|a| a.iter().filter_map(|x| doc.resolve(x).as_f64()).collect()).unwrap_or_default();
             v.as_chunks::<2>().0.iter().map(|p| [p[0], p[1]]).collect()
         })
-        .collect();
+        .collect()
+}
+
+/// Scale a drawing's strokes into `rect`. The margin between the strokes and the old `/Rect` (half
+/// the line width and a little more) stays the same on each side, so the line isn't clipped.
+fn resize_ink(doc: &mut Document, r: ObjRef, rect: [f64; 4], meta: &Meta) -> Result<(), AnnotError> {
+    let d = annot_dict(doc, r);
+    let strokes = ink_strokes(doc, &d);
     let Some(inner) = bounds(strokes.iter().flatten().copied()) else {
         return Err(AnnotError::Invalid("the drawing has no strokes".into()));
     };
@@ -528,7 +537,7 @@ fn apply_text_box(doc: &mut Document, r: ObjRef, rect: [f64; 4], meta: &Meta, ne
     }
 }
 
-fn border_width_of(d: &Dict) -> f64 {
+pub(crate) fn border_width_of(d: &Dict) -> f64 {
     appearance::border_width(d)
 }
 

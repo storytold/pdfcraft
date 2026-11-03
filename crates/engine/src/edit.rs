@@ -228,6 +228,12 @@ pub enum Edit {
         index: usize,
         rect: [f64; 4],
     },
+    /// Turn a stamp or a drawing about its middle, `degrees` counterclockwise.
+    RotateAnnotation {
+        page: usize,
+        index: usize,
+        degrees: f64,
+    },
     StyleAnnotation {
         page: usize,
         index: usize,

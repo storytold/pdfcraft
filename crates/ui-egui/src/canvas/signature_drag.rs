@@ -78,7 +78,11 @@ impl SignatureDrag {
             if let Some((_, page, index)) = key
                 && let Some(a) = doc.info.annotations.iter().find(|a| a.page == page && a.index == index && a.subtype == "Stamp" && !a.locked)
             {
-                if let Ok(Some(preview)) = doc.image_signature_preview(page, index) {
+                // A turned signature's frame is the hull of its box: its image doesn't fill it, so
+                // it is laid over the page as any other stamp is.
+                if a.turn.is_none()
+                    && let Ok(Some(preview)) = doc.image_signature_preview(page, index)
+                {
                     let [width, height] = preview.image.size();
                     let ratio = width as f32 / height as f32;
                     // As displayed, the image is turned by the page's rotation less the turn it is drawn back by.
@@ -390,6 +394,35 @@ mod tests {
         }
         out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
         out
+    }
+
+    /// An upright image signature is dragged as its own image, of its own proportions. A turned one
+    /// isn't: its frame is the hull of its turned box, which the upright image doesn't fill, so it
+    /// is dragged as a stamp's rendered layer, and it has no image proportions to keep.
+    #[test]
+    fn a_turned_image_signature_is_dragged_as_a_stamp_layer() {
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::RgbaImage::from_pixel(120, 40, image::Rgba([0, 0, 0, 255])).write_to(&mut png, image::ImageFormat::Png).expect("encodes");
+        let signature = pdfcraft_engine::SignatureImage::from_bytes(&png.into_inner()).expect("decodes");
+        let mut session = pdfcraft_engine::Session::new();
+        let blank = session.create_blank(300.0, 400.0, 1).expect("creates");
+        let id = session.open_new("form.pdf", blank).expect("opens");
+        let page = session.get(id).expect("open").info.pages[0].clone();
+        session.apply(id, signature.edit(0, &page, [20.0, 100.0], false, "Ada").expect("places")).expect("applies");
+        let ctx = egui::Context::default();
+
+        let mut drag = SignatureDrag::default();
+        drag.prepare(&ctx, session.get(id).expect("open"), Some((0, 0)), 1.0);
+        assert!(drag.contains(0, 0));
+        assert_eq!(drag.aspect_ratio(0, 0), Some(3.0), "its image's proportions");
+        assert!(matches!(drag.layers.as_ref().map(|l| &l.front), Some(Front::Image { .. })));
+
+        session.apply(id, Edit::RotateAnnotation { page: 0, index: 0, degrees: 30.0 }).expect("turns");
+        let mut drag = SignatureDrag::default();
+        drag.prepare(&ctx, session.get(id).expect("open"), Some((0, 0)), 1.0);
+        assert!(drag.contains(0, 0));
+        assert_eq!(drag.aspect_ratio(0, 0), None);
+        assert!(matches!(drag.layers.as_ref().map(|l| &l.front), Some(Front::Stamp(_))));
     }
 
     /// A moved comment whose own layer can't be made is asked for once per drag, not on every

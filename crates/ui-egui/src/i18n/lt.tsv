@@ -2877,3 +2877,5 @@ theme	Appearance	Išvaizda
 	No image on clipboard to paste	Iškarpinėje nėra paveikslėlio įklijuoti
 	Pinned {tool} to Home	{tool} prisegtas pradžios puslapyje
 	Unpinned {tool} from Home	{tool} atsegtas nuo pradžios puslapio
+# Turning a stamp or drawn signature by its rotate knob: the undo label (M5).
+	Rotate comment	Pasukti komentarą

@@ -190,6 +190,10 @@ impl Automation {
                 "rect": crate::view_rect(&doc.info, c.page, c.shown_rect(doc.info.pages.get(c.page).map_or(0, |p| p.rotation))),
                 "color": c.color.map(hex),
             });
+            // A turned stamp: `rect` is the turned box's upright hull.
+            if let Some((angle, _)) = c.turn {
+                v["angle"] = json!(angle);
+            }
             // A line's ends, or the corners of connected lines, a polygon or a cloud, as
             // comment_edit's `points` takes them.
             // Unchanged on a page the viewer could not read, as `rect` is.
@@ -687,9 +691,15 @@ impl Automation {
                 .collect::<Result<Vec<_>>>()?;
             edits.push(Edit::ReshapeAnnotation { page, index, points });
         }
+        if let Some(degrees) = a.opt_num("rotate")? {
+            if !(-360.0..=360.0).contains(&degrees) {
+                return Err(ToolError::InvalidArgs("rotate must be -360 to 360 degrees (counterclockwise)".into()));
+            }
+            edits.push(Edit::RotateAnnotation { page, index, degrees });
+        }
         if edits.is_empty() {
             return Err(ToolError::InvalidArgs(
-                "nothing to change: pass contents, color, opacity, width, fill, font_size, rect, move or points".into(),
+                "nothing to change: pass contents, color, opacity, width, fill, font_size, rect, move, points or rotate".into(),
             ));
         }
         let edit = if edits.len() == 1 { edits.remove(0) } else { Edit::Batch { label: "Edit comment".into(), edits } };

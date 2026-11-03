@@ -2274,3 +2274,251 @@ fn indirect_typewriter_names_keep_outer_whitespace_in_summaries() {
     check(&doc);
     check(&reopen(&doc));
 }
+
+/// A typed signature (a stamp PdfCraft draws) on a blank page: its `/Rect`, in the fixture's page 1.
+fn turned_fixture() -> (Document, usize) {
+    let mut doc = fixture();
+    let contours = vec![vec![[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]];
+    let idx = add_annotation(&mut doc, &new(0, Shape::TypedSignature { rect: [100.0, 100.0, 200.0, 140.0], contours }), &meta("sig")).unwrap();
+    (doc, idx)
+}
+
+fn numbers_at(doc: &Document, d: &Dict, key: &[u8]) -> Option<Vec<f64>> {
+    Some(doc.resolve(d.get(key)?).as_array()?.iter().map(|v| doc.resolve(v).as_f64().unwrap()).collect())
+}
+
+/// The normal appearance's `/BBox` and `/Matrix`.
+fn form_of(doc: &Document, d: &Dict) -> (Vec<f64>, Option<Vec<f64>>) {
+    let n = d.get(b"AP").map(|a| doc.resolve(a)).and_then(|a| a.as_dict().and_then(|a| a.reference(b"N"))).expect("has /AP /N");
+    let obj = doc.get(n);
+    let Object::Stream(s) = &*obj else { panic!("AP is not a stream") };
+    (numbers_at(doc, &s.dict, b"BBox").expect("has a box"), numbers_at(doc, &s.dict, b"Matrix"))
+}
+
+/// Where a viewer draws the corners of the appearance (ISO 32000-2 §12.5.5): the `/BBox` through
+/// `/Matrix`, its upright hull then fitted to `/Rect`. In order around the box.
+fn drawn_corners(doc: &Document, d: &Dict) -> [[f64; 2]; 4] {
+    let (b, m) = form_of(doc, d);
+    let m = m.unwrap_or_else(|| vec![1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+    let through = |x: f64, y: f64| [m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]];
+    let corners = [through(b[0], b[1]), through(b[2], b[1]), through(b[2], b[3]), through(b[0], b[3])];
+    let min = |i: usize| corners.iter().map(|c| c[i]).fold(f64::MAX, f64::min);
+    let max = |i: usize| corners.iter().map(|c| c[i]).fold(f64::MIN, f64::max);
+    let r = numbers_at(doc, d, b"Rect").unwrap();
+    corners.map(|c| [r[0] + (c[0] - min(0)) * (r[2] - r[0]) / (max(0) - min(0)), r[1] + (c[1] - min(1)) * (r[3] - r[1]) / (max(1) - min(1))])
+}
+
+fn assert_near(actual: &[f64], want: &[f64]) {
+    assert_eq!(actual.len(), want.len(), "{actual:?}, want {want:?}");
+    assert!(actual.iter().zip(want).all(|(a, b)| (a - b).abs() < 1e-3), "{actual:?}, want {want:?}");
+}
+
+/// A stamp turns about its middle without changing size: its appearance is turned by `/Matrix`,
+/// `/Rect` is the turned box's hull, and a viewer that follows §12.5.5 draws exactly that. Coming
+/// back upright leaves no trace.
+#[test]
+fn a_turned_stamp_keeps_its_size_and_comes_back_exactly() {
+    let (mut doc, idx) = turned_fixture();
+    let before = list(&doc, 0)[idx].clone();
+    let form = form_of(&doc, &before);
+
+    rotate_annotation(&mut doc, 0, idx, 90.0, &meta("turn")).unwrap();
+    let d = &list(&doc, 0)[idx];
+    assert_near(&numbers_at(&doc, d, b"Rect").unwrap(), &[130.0, 70.0, 170.0, 170.0]);
+    assert_eq!(d.get(b"PCAngle").and_then(Object::as_f64), Some(90.0));
+    assert_near(&numbers_at(&doc, d, b"PCSize").unwrap(), &[100.0, 40.0]);
+    // The box's lower-left corner goes to the lower-right of the hull: counterclockwise.
+    let [ll, lr, ..] = drawn_corners(&doc, d);
+    assert_near(&ll, &[170.0, 70.0]);
+    assert_near(&lr, &[170.0, 170.0]);
+    // Exact on quarter turns, with no rounding to come back through.
+    assert_eq!(form_of(&doc, d).1.unwrap()[..4], [0.0, 1.0, -1.0, 0.0]);
+    assert!(reopen(&doc).get(ObjRef { num: 1, generation: 0 }).as_dict().is_some());
+    let reread = reopen(&doc);
+    assert_eq!(summaries(&reread).iter().find(|s| s.subtype == "Stamp").unwrap().turn, Some((90.0, [100.0, 40.0])));
+
+    rotate_annotation(&mut doc, 0, idx, -90.0, &meta("back")).unwrap();
+    let d = &list(&doc, 0)[idx];
+    assert_near(&numbers_at(&doc, d, b"Rect").unwrap(), &[100.0, 100.0, 200.0, 140.0]);
+    assert_eq!(form_of(&doc, d), form);
+    assert!(!d.contains(b"PCAngle") && !d.contains(b"PCSize") && !d.contains(b"PCBaseMatrix"));
+    assert_eq!(summaries(&doc).iter().find(|s| s.subtype == "Stamp").unwrap().turn, None);
+
+    // Any other angle: the box keeps its size and its middle, and the angles add up.
+    rotate_annotation(&mut doc, 0, idx, 10.0, &meta("a")).unwrap();
+    rotate_annotation(&mut doc, 0, idx, 20.0, &meta("b")).unwrap();
+    let d = &list(&doc, 0)[idx];
+    assert_eq!(d.get(b"PCAngle").and_then(Object::as_f64), Some(30.0));
+    let [a, b, c, e] = drawn_corners(&doc, d);
+    let side = |p: [f64; 2], q: [f64; 2]| (p[0] - q[0]).hypot(p[1] - q[1]);
+    assert_near(&[side(a, b), side(b, c), side(c, e), side(e, a)], &[100.0, 40.0, 100.0, 40.0]);
+    assert_near(&[(a[0] + c[0]) / 2.0, (a[1] + c[1]) / 2.0], &[150.0, 120.0]);
+    assert_near(&[(b[1] - a[1]).atan2(b[0] - a[0]).to_degrees()], &[30.0]);
+    // Past half a turn the angle wraps.
+    rotate_annotation(&mut doc, 0, idx, 170.0, &meta("c")).unwrap();
+    assert_near(&[list(&doc, 0)[idx].get(b"PCAngle").and_then(Object::as_f64).unwrap()], &[-160.0]);
+}
+
+/// Moving or resizing a turned stamp keeps it turned and its shape, and a redraw (a new opacity)
+/// draws it upright in its own box and turns it again, rather than filling its hull.
+#[test]
+fn a_turned_stamp_stays_turned_when_moved_resized_and_redrawn() {
+    let (mut doc, idx) = turned_fixture();
+    rotate_annotation(&mut doc, 0, idx, 90.0, &meta("turn")).unwrap();
+
+    move_annotation(&mut doc, 0, idx, 10.0, -20.0, &meta("move")).unwrap();
+    let d = &list(&doc, 0)[idx];
+    assert_near(&numbers_at(&doc, d, b"Rect").unwrap(), &[140.0, 50.0, 180.0, 150.0]);
+    assert_near(&drawn_corners(&doc, d)[0], &[180.0, 50.0]);
+
+    // Twice the size, from a box that isn't its shape: it keeps its shape, in the box's middle.
+    set_rect(&mut doc, 0, idx, [120.0, 0.0, 260.0, 200.0], &meta("resize")).unwrap();
+    let d = &list(&doc, 0)[idx];
+    assert_near(&numbers_at(&doc, d, b"Rect").unwrap(), &[150.0, 0.0, 230.0, 200.0]);
+    assert_near(&drawn_corners(&doc, d)[0], &[230.0, 0.0]);
+
+    set_style(&mut doc, 0, idx, StyleChange { opacity: Some(0.5), ..Default::default() }, &meta("style")).unwrap();
+    let d = &list(&doc, 0)[idx];
+    assert_near(&numbers_at(&doc, d, b"Rect").unwrap(), &[150.0, 0.0, 230.0, 200.0]);
+    let [ll, lr, ..] = drawn_corners(&doc, d);
+    assert_near(&ll, &[230.0, 0.0]);
+    assert_near(&lr, &[230.0, 200.0]);
+    assert_eq!(form_of(&doc, d).1.unwrap()[..4], [0.0, 1.0, -1.0, 0.0]);
+    // Upright in its own box, 200 wide and 80 tall, not in the 80 x 200 hull.
+    let (b, _) = form_of(&doc, d);
+    assert_near(&[b[2] - b[0], b[3] - b[1]], &[200.0, 80.0]);
+}
+
+/// A picture's orientation on a turned page is known only to its appearance's `/Matrix`: it is
+/// kept beneath the turn, through a redraw, and it is what the stamp comes back to.
+#[test]
+fn a_turned_picture_keeps_the_orientation_it_was_placed_with() {
+    let mut doc = fixture();
+    let picture = doc.add(Object::Stream(pdfcraft_cos::Stream::from_raw(Dict::new(), Vec::new())));
+    let shape = Shape::CustomStamp { name: "Logo".into(), rect: [100.0, 100.0, 140.0, 200.0], picture, image: false, size: (100.0, 40.0) };
+    let idx = add_annotation(&mut doc, &new(0, shape), &meta("logo")).unwrap();
+    orient_image_stamp(&mut doc, 0, idx, 90).unwrap();
+    let placed = form_of(&doc, &list(&doc, 0)[idx]);
+    assert_eq!(placed.1.as_ref().unwrap()[..4], [0.0, 1.0, -1.0, 0.0]);
+
+    rotate_annotation(&mut doc, 0, idx, 90.0, &meta("turn")).unwrap();
+    let d = &list(&doc, 0)[idx];
+    assert_near(&numbers_at(&doc, d, b"PCBaseMatrix").unwrap()[..4], &[0.0, 1.0, -1.0, 0.0]);
+    // A half turn from how it was drawn: its placed quarter turn and this one. Viewers fit the placed
+    // picture's turned box to `/Rect`, so its sides aren't scaled alike.
+    let half_turn = |m: Vec<f64>| m[0] < 0.0 && m[3] < 0.0 && m[1].abs() < 1e-9 && m[2].abs() < 1e-9;
+    assert!(half_turn(form_of(&doc, d).1.unwrap()), "{:?}", form_of(&doc, d).1);
+
+    set_style(&mut doc, 0, idx, StyleChange { opacity: Some(0.5), ..Default::default() }, &meta("style")).unwrap();
+    assert!(half_turn(form_of(&doc, &list(&doc, 0)[idx]).1.unwrap()), "redrawn the same way");
+
+    rotate_annotation(&mut doc, 0, idx, -90.0, &meta("back")).unwrap();
+    let d = &list(&doc, 0)[idx];
+    assert_near(&numbers_at(&doc, d, b"Rect").unwrap(), &[100.0, 100.0, 140.0, 200.0]);
+    assert_near(&form_of(&doc, d).1.unwrap()[..4], &[0.0, 1.0, -1.0, 0.0]);
+    assert!(!d.contains(b"PCBaseMatrix"));
+}
+
+/// Another program's stamp turns too, by its own appearance, and a stamp that shares its appearance
+/// with this one stays as it is.
+#[test]
+fn turning_another_programs_stamp_leaves_a_shared_appearance_alone() {
+    let mut doc = document_of(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>",
+        b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R] >>",
+        b"<< /Type /Annot /Subtype /Stamp /Rect [100 100 200 140] /AP << /N 6 0 R /R 6 0 R >> /Foo (kept) >>",
+        b"<< /Type /Annot /Subtype /Stamp /Rect [300 100 400 140] /AP << /N 6 0 R >> >>",
+        b"<< /Type /XObject /Subtype /Form /BBox [0 0 10 4] /Length 0 >>\nstream\n\nendstream",
+    ]);
+    rotate_annotation(&mut doc, 0, 0, 90.0, &meta("turn")).unwrap();
+    let (turned, other) = (list(&doc, 0)[0].clone(), list(&doc, 0)[1].clone());
+    assert_near(&numbers_at(&doc, &turned, b"Rect").unwrap(), &[130.0, 70.0, 170.0, 170.0]);
+    assert!(form_of(&doc, &turned).1.is_some());
+    assert_eq!(form_of(&doc, &other), (vec![0.0, 0.0, 10.0, 4.0], None), "the other stamp's appearance");
+    assert!(turned.get(b"Foo").is_some(), "unknown keys stay");
+    assert!(doc.resolve(turned.get(b"AP").unwrap()).as_dict().unwrap().get(b"R").is_none(), "no old look on hover");
+}
+
+/// A drawing turns its points, which every viewer shows the same, and `/Rect` follows them.
+#[test]
+fn a_drawn_signature_turns_its_strokes() {
+    let mut doc = fixture();
+    let strokes = vec![vec![[100.0, 100.0], [200.0, 100.0]], vec![[100.0, 120.0], [200.0, 120.0]]];
+    let idx = add_annotation(&mut doc, &new(0, Shape::Signature { strokes }), &meta("ink")).unwrap();
+    rotate_annotation(&mut doc, 0, idx, 90.0, &meta("turn")).unwrap();
+    let d = &list(&doc, 0)[idx];
+    let strokes = doc.resolve(d.get(b"InkList").unwrap());
+    let strokes: Vec<Vec<f64>> =
+        strokes.as_array().unwrap().iter().map(|s| s.as_array().unwrap().iter().map(|v| v.as_f64().unwrap()).collect()).collect();
+    assert_near(&strokes[0], &[160.0, 60.0, 160.0, 160.0]);
+    assert_near(&strokes[1], &[140.0, 60.0, 140.0, 160.0]);
+    let r = numbers_at(&doc, d, b"Rect").unwrap();
+    assert!(r[0] < 140.0 && r[1] < 60.0 && r[2] > 160.0 && r[3] > 160.0, "{r:?}");
+    assert!(ap_content(&doc, d).contains("160 60 m"), "redrawn: {}", ap_content(&doc, d));
+    assert!(!d.contains(b"PCAngle"), "nothing beside the points");
+    assert!(is_fill_sign(&doc, d));
+}
+
+/// What can't turn says so and changes nothing: other comments, a locked stamp, a NoRotate one,
+/// an angle that isn't a number and a stamp with nothing to turn.
+#[test]
+fn what_cannot_turn_is_refused_and_left_alone() {
+    let (mut doc, idx) = turned_fixture();
+    assert!(rotate_annotation(&mut doc, 0, 0, 90.0, &meta("square")).is_err(), "the fixture's square");
+    for bad in [f64::NAN, f64::INFINITY] {
+        assert!(rotate_annotation(&mut doc, 0, idx, bad, &meta("nan")).is_err());
+    }
+    assert!(rotate_annotation(&mut doc, 0, 99, 90.0, &meta("gone")).is_err());
+    set_locked(&mut doc, 0, idx, true).unwrap();
+    assert!(rotate_annotation(&mut doc, 0, idx, 90.0, &meta("locked")).is_err());
+    assert_near(&numbers_at(&doc, &list(&doc, 0)[idx], b"Rect").unwrap(), &[100.0, 100.0, 200.0, 140.0]);
+    assert!(rotate_annotation(&mut fixture(), 1, 0, 90.0, &meta("no appearance")).is_err(), "page 2's stamp has no appearance");
+    let mut upright = document_of(&[
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>",
+        b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>",
+        b"<< /Type /Annot /Subtype /Stamp /Rect [100 100 200 140] /F 16 /AP << /N 5 0 R >> >>",
+        b"<< /Type /XObject /Subtype /Form /BBox [0 0 10 4] /Length 0 >>\nstream\n\nendstream",
+    ]);
+    assert!(rotate_annotation(&mut upright, 0, 0, 90.0, &meta("no rotate")).is_err());
+}
+
+/// A file can say anything in these keys: values that don't make a turn are an upright stamp, and
+/// one with an appearance that has no area can't turn, without a panic either way.
+#[test]
+fn hostile_turn_keys_are_an_upright_stamp() {
+    for extra in [
+        "/PCAngle 1e400 /PCSize [100 40]",
+        "/PCAngle (x) /PCSize [100 40]",
+        "/PCAngle 45",
+        "/PCAngle 45 /PCSize [100]",
+        "/PCAngle 45 /PCSize [0 40]",
+        "/PCAngle 45 /PCSize [-1 40]",
+        "/PCAngle 45 /PCSize [1e300 1e300]",
+        "/PCAngle 720 /PCSize [100 40]",
+    ] {
+        let annot = format!("<< /Type /Annot /Subtype /Stamp /Rect [100 100 200 140] {extra} /AP << /N 5 0 R >> >>");
+        let mut doc = document_of(&[
+            b"<< /Type /Catalog /Pages 2 0 R >>",
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>",
+            b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>",
+            annot.as_bytes(),
+            b"<< /Type /XObject /Subtype /Form /BBox [0 0 10 4] /Length 0 >>\nstream\n\nendstream",
+        ]);
+        assert_eq!(summaries(&doc)[0].turn, None, "{extra}");
+        rotate_annotation(&mut doc, 0, 0, 90.0, &meta("turn")).unwrap();
+        assert_near(&numbers_at(&doc, &list(&doc, 0)[0], b"Rect").unwrap(), &[130.0, 70.0, 170.0, 170.0]);
+    }
+    for bbox in ["[0 0 0 0]", "[0 0 10]", "(x)", "[1e300 1e300 -1e300 -1e300]"] {
+        let form = format!("<< /Type /XObject /Subtype /Form /BBox {bbox} /Length 0 >>\nstream\n\nendstream");
+        let mut doc = document_of(&[
+            b"<< /Type /Catalog /Pages 2 0 R >>",
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>",
+            b"<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>",
+            b"<< /Type /Annot /Subtype /Stamp /Rect [100 100 200 140] /AP << /N 5 0 R >> >>",
+            form.as_bytes(),
+        ]);
+        assert!(rotate_annotation(&mut doc, 0, 0, 90.0, &meta("turn")).is_err(), "{bbox}");
+    }
+}

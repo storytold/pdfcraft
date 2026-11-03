@@ -2900,3 +2900,5 @@ certificate	Version	Version
 	the area, the spacing and the column widths must be numbers, the spacing 0 or more and each width more than 0	l'aire, l'espacement et les largeurs de colonnes doivent être des nombres, l'espacement 0 ou plus et chaque largeur supérieure à 0
 	the first row number can be at most {max}	le numéro de la première ligne peut être au maximum {max}
 theme	Appearance	Apparence
+# Turning a stamp or drawn signature by its rotate knob: the undo label (M5).
+	Rotate comment	Faire pivoter le commentaire

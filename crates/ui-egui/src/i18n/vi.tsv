@@ -2885,3 +2885,5 @@ key	Space	Space
 	No image on clipboard to paste	Không có hình ảnh trong bảng nhớ tạm để dán
 	Pinned {tool} to Home	Đã ghim {tool} vào Trang chủ
 	Unpinned {tool} from Home	Đã bỏ ghim {tool} khỏi Trang chủ
+# Turning a stamp or drawn signature by its rotate knob: the undo label (M5).
+	Rotate comment	Xoay bình luận

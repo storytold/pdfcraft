@@ -49,6 +49,11 @@ deterministic; the engine supplies them.
   never paint a second icon.
 - Resizing a stamp changes its `/Rect` and preserves its original appearance and resources;
   viewers scale that appearance into the new rectangle. Locked stamps refuse the edit.
+- `rotate_annotation` turns a stamp or drawing about its middle. A drawing turns its points. A
+  stamp keeps its appearance drawn upright and turns it by the form `/Matrix`; `/Rect` is the turned
+  box's upright hull, which viewers fit the turned `/BBox` to (ISO 32000-2 §12.5.5), so every viewer
+  shows it turned. `/PCAngle`, `/PCSize` and `/PCBaseMatrix` record the turn; a program that moves or
+  resizes the stamp without knowing them leaves it turned, and a stamp turned back upright has none.
 - Picture stamps (a natural-size or explicit-rectangle image, a PDF page, or an image
   signature) and PdfCraft's rubber stamps counterrotate their appearance on rotated pages, so
   the picture or label reads upright as the page is displayed. Restyling a picture stamp keeps

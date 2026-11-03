@@ -1,3 +1,4 @@
+use super::geometry::rotatable;
 use super::paint::edit_anchor;
 use super::state::{Composer, ComposerKind};
 use super::{
@@ -90,6 +91,17 @@ pub(crate) fn context_menu(
             if ui.button(tl!("Copy text")).clicked() {
                 ui.ctx().copy_text(a.contents.clone().unwrap_or_default());
                 ui.close();
+            }
+            if rotatable(a) {
+                ui.separator();
+                if ui.add_enabled(allowed, egui::Button::new(tl!("Rotate clockwise"))).clicked() {
+                    action = Some(CanvasAction::Edit(Box::new(Edit::RotateAnnotation { page, index, degrees: -90.0 })));
+                    ui.close();
+                }
+                if ui.add_enabled(allowed, egui::Button::new(tl!("Rotate counterclockwise"))).clicked() {
+                    action = Some(CanvasAction::Edit(Box::new(Edit::RotateAnnotation { page, index, degrees: 90.0 })));
+                    ui.close();
+                }
             }
             ui.separator();
             // The engine's own check: a locked comment, or one with a locked reply, stays.

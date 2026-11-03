@@ -26,6 +26,8 @@ pub enum Gesture {
     Move { page: usize, index: usize, from: Pos2 },
     /// Resizing a comment by one of its handles: (dx, dy) ∈ {-1, 0, 1}² says which sides move.
     Resize { page: usize, index: usize, handle: (i8, i8), from: Pos2, aspect_ratio: Option<f32> },
+    /// Turning a stamp or a drawn signature by its rotate knob, from the press position on screen.
+    Rotate { page: usize, index: usize, from: Pos2 },
     /// Dragging point `point` of a line, connected lines, a polygon or a cloud (its `points`
     /// before the drag, in user space) to where the pointer is.
     Reshape { page: usize, index: usize, point: usize, points: Vec<[f64; 2]> },
@@ -387,7 +389,48 @@ impl PageCx<'_> {
     /// The topmost comment under `p`: the one drawn last, in `/Annots` order (inspection lists
     /// comments by position, not in paint order).
     pub(super) fn hit(&self, p: Pos2) -> Option<&Annotation> {
-        self.comments().filter(|a| self.screen_rects(a).any(|r| r.expand(3.0).contains(p))).max_by_key(|a| a.index)
+        self.comments().filter(|a| self.screen_rects(a).any(|r| r.expand(3.0).contains(p)) && self.inside_turned(a, p)).max_by_key(|a| a.index)
+    }
+
+    /// The corners of a comment's box on screen, in order around it: a turned stamp's box as it is
+    /// turned, any other comment's rectangle.
+    pub(super) fn outline(&self, a: &Annotation) -> [Pos2; 4] {
+        let Some((angle, own)) = a.turned_box() else {
+            let r = self.screen_rect(a);
+            return [r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom()];
+        };
+        let (sin, cos) = f64::from(angle).to_radians().sin_cos();
+        let [x0, y0, x1, y1] = own.map(f64::from);
+        let (cx, cy) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
+        [[x0, y0], [x1, y0], [x1, y1], [x0, y1]]
+            .map(|[x, y]| self.to_screen([cx + cos * (x - cx) - sin * (y - cy), cy + sin * (x - cx) + cos * (y - cy)]))
+    }
+
+    /// Whether `p` is within 3 points of a turned stamp's box, not just in a corner of its hull.
+    /// Any other comment has no such box.
+    fn inside_turned(&self, a: &Annotation, p: Pos2) -> bool {
+        if a.turn.is_none() {
+            return true;
+        }
+        let o = self.outline(a);
+        let cross = |u: egui::Vec2, v: egui::Vec2| u.x * v.y - u.y * v.x;
+        let clockwise = cross(o[1] - o[0], o[2] - o[0]) >= 0.0;
+        o.iter().zip(o.iter().cycle().skip(1)).all(|(u, v)| {
+            let side = cross(*v - *u, p - *u) / (*v - *u).length().max(0.01);
+            (if clockwise { side } else { -side }) >= -3.0
+        })
+    }
+
+    /// How far dragging a rotate knob from `from` to `p` has turned `a`, in degrees clockwise on
+    /// screen (and in user space: neither a page's nor the view's rotation changes the sense).
+    /// With Shift, `a` lands on steps of 15 degrees.
+    pub(super) fn turned_by(&self, a: &Annotation, from: Pos2, p: Pos2, shift: bool) -> f32 {
+        let degrees = crate::edit_text_ui::turn_degrees_delta(self.screen_rect(a).center(), from, p, false);
+        if !shift {
+            return degrees;
+        }
+        let was = -a.turn.map_or(0.0, |(angle, _)| angle);
+        ((was + degrees) / 15.0).round() * 15.0 - was
     }
 
     pub(crate) fn get(&self, index: usize) -> Option<&Annotation> {

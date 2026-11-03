@@ -580,14 +580,14 @@ pub enum ImageAction {
 
 /// Where the rotate knob sits, and the edge point its stem starts from: above the middle of the
 /// top edge, or below the bottom edge when the area on screen (`view`) has no room above.
-pub(super) fn rotate_knob(b: Rect, view: Rect) -> (Pos2, Pos2) {
+pub(crate) fn rotate_knob(b: Rect, view: Rect) -> (Pos2, Pos2) {
     let above = b.center_top() - egui::vec2(0.0, 22.0);
     if above.y - 6.0 >= view.top() { (above, b.center_top()) } else { (b.center_bottom() + egui::vec2(0.0, 22.0), b.center_bottom()) }
 }
 
 /// Degrees clockwise (-180..=180) that turn from `start` onto `pointer` around `centre`; `snap`
 /// rounds to steps of 15 degrees (Shift). A pointer on the centre turns nothing.
-pub(super) fn turn_degrees_delta(centre: Pos2, start: Pos2, pointer: Pos2, snap: bool) -> f32 {
+pub(crate) fn turn_degrees_delta(centre: Pos2, start: Pos2, pointer: Pos2, snap: bool) -> f32 {
     let v_start = start - centre;
     let v_curr = pointer - centre;
     if !(v_curr.x.is_finite() && v_curr.y.is_finite())

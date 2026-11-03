@@ -2,6 +2,7 @@ use super::create::finite;
 use super::draw::set_appearance;
 use super::lookup::{annot_dict, annot_ref, annotation_flags, annots, drawn_upright, is_fill_sign, page_ref, page_refs};
 use super::modify::{fillable, touch, unlocked};
+use super::turn::turn_of;
 use super::types::{FLAG_LOCKED, LineEnding, Meta, NoteIcon, Rgb};
 use super::{AnnotError, Dict, Document, ObjRef, Object, PdfString, appearance};
 
@@ -38,6 +39,8 @@ pub struct Summary {
     /// A line's two ends (`/L`), or the corners of connected lines, a polygon or a cloud
     /// (`/Vertices`), in user space; empty for other comments.
     pub points: Vec<[f32; 2]>,
+    /// A stamp's turn, as `pdfcraft_render::Annotation::turn`.
+    pub turn: Option<(f32, [f32; 2])>,
 }
 
 pub(crate) fn text_value(doc: &Document, d: &Dict, key: &[u8]) -> Option<String> {
@@ -124,6 +127,8 @@ pub fn summaries(doc: &Document) -> Vec<Summary> {
                 "PolyLine" | "Polygon" => nums(b"Vertices").as_chunks::<2>().0.to_vec(),
                 _ => Vec::new(),
             };
+            // Keep in step with `pdfcraft_render::inspect`.
+            let turn = turn_of(doc, d).filter(|_| subtype == "Stamp").map(|t| (t.angle as f32, t.size.map(|v| v as f32)));
             let irt = d.get(b"IRT").map(|o| o.as_ref().map_or_else(|| doc.resolve(o), |r| doc.get(final_ref(doc, r))));
             let in_reply_to = irt.and_then(|o| o.as_dict().cloned()).and_then(|p| text_value(doc, &p, b"NM"));
             let parent = d.get(b"IRT").and_then(Object::as_ref).and_then(|r| slots.get(&final_ref(doc, r)).copied());
@@ -149,6 +154,7 @@ pub fn summaries(doc: &Document) -> Vec<Summary> {
                 fill_sign: is_fill_sign(doc, d),
                 no_rotate: drawn_upright(doc, d),
                 points,
+                turn,
             });
         }
     }

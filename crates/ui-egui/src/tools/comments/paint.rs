@@ -1,4 +1,4 @@
-use super::geometry::{HANDLES, grabs_points, handle_pos, is_markup, reshapable, reshaped, resizable};
+use super::geometry::{grabs_points, handle_pos, handles, is_markup, reshapable, reshaped, resizable, rotatable};
 use super::state::{Gesture, PageCx, SETTLE_SECS};
 use super::{
     Annotation, Color32, CommentTool, CornerRadius, DocInfo, DocView, Edit, LineEnding, NewAnnotation, Pos2, QuickTool, Rect, SELECT_BLUE, Shape,
@@ -48,16 +48,47 @@ pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, cx: &PageCx<'_>
         if cx.allowed && grabs_points(cx.tool) && reshapable(a) {
             return paint_points(painter, cx, view, a, pointer, shift);
         }
+        if let (Some(Gesture::Rotate { page: p, index: i, from }), Some(at)) = (&cv.gesture, pointer)
+            && (*p, *i) == (page, index)
+        {
+            paint_turning(painter, cx, a, *from, at, shift);
+            return paint_gesture(painter, cx, view);
+        }
         let r = cx.adjusted_rect(a, cv.gesture.as_ref(), pointer, shift, view.pending_edit.as_ref()).expand(2.0);
         painter.rect_stroke(r, CornerRadius::ZERO, Stroke::new(1.0, SELECT_BLUE), egui::StrokeKind::Middle);
+        let still = cv.gesture.is_none() && view.pending_edit.is_none();
+        if still && a.turn.is_some() {
+            painter.add(egui::Shape::closed_line(cx.outline(a).to_vec(), Stroke::new(1.0, SELECT_BLUE)));
+        }
         if cx.allowed && resizable(a) {
-            for h in HANDLES {
-                let c = handle_pos(r, h);
+            for h in handles(a) {
+                let c = handle_pos(r, *h);
                 painter.circle(c, 4.5, Color32::WHITE, Stroke::new(1.0, SELECT_BLUE));
             }
         }
+        if cx.allowed && still && rotatable(a) {
+            let (knob, stem) = crate::edit_text_ui::rotate_knob(cx.screen_rect(a), cx.xf.rect);
+            painter.line_segment([stem, knob], Stroke::new(1.0, SELECT_BLUE));
+            painter.circle(knob, 5.0, Color32::WHITE, Stroke::new(1.0, SELECT_BLUE));
+        }
     }
     paint_gesture(painter, cx, view);
+}
+
+/// A comment being turned by its rotate knob: its box as it will be, and how far it has turned.
+fn paint_turning(painter: &egui::Painter, cx: &PageCx<'_>, a: &Annotation, from: Pos2, at: Pos2, shift: bool) {
+    let degrees = cx.turned_by(a, from, at, shift);
+    let r = cx.screen_rect(a);
+    let (sin, cos) = degrees.to_radians().sin_cos();
+    let turn = |c: Pos2| {
+        let v = c - r.center();
+        r.center() + vec2(v.x * cos - v.y * sin, v.x * sin + v.y * cos)
+    };
+    painter.add(egui::Shape::closed_line(cx.outline(a).map(turn).to_vec(), Stroke::new(1.5, SELECT_BLUE)));
+    let galley = painter.layout_no_wrap(format!("{degrees:.0}\u{b0}"), egui::FontId::proportional(12.0), SELECT_BLUE);
+    let label = Rect::from_center_size(at - vec2(0.0, 18.0), galley.size() + vec2(8.0, 4.0));
+    painter.rect(label, CornerRadius::same(3), Color32::WHITE, Stroke::new(1.0, SELECT_BLUE), egui::StrokeKind::Middle);
+    painter.galley(label.center() - galley.size() / 2.0, galley, SELECT_BLUE);
 }
 
 /// A selected line, connected lines, polygon or cloud: a handle on each end or corner and, while

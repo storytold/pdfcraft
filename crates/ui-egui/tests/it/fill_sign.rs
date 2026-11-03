@@ -1888,3 +1888,246 @@ fn fill_sign_enter_adds_lines_outside_click_commits_and_escape_cancels() {
     assert!(h.state().views[0].fill_text.is_none());
     assert_eq!(h.state().session.save_bytes(id).unwrap(), saved, "Escape cancels without writing");
 }
+
+/// Press the selected comment's rotate knob, drag it around to `to` and let go, in steps.
+fn drag_knob(h: &mut Harness<'static, PdfCraftApp>, knob: Pos2, to: Pos2) {
+    h.hover_at(knob);
+    h.run_steps(2);
+    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Grab);
+    h.drag_at(knob);
+    h.run_steps(1);
+    for k in 1..=10 {
+        h.hover_at(knob + (to - knob) * (k as f32 / 10.0));
+        h.run_steps(1);
+    }
+    h.drop_at(to);
+    h.run_steps(4);
+}
+
+/// Where a selected comment's knob is on screen: above the middle of its frame.
+fn knob_of(h: &Harness<'static, PdfCraftApp>, r: [f32; 4]) -> Pos2 {
+    at(h, (r[0] + r[2]) / 2.0, r[3]) - egui::vec2(0.0, 22.0)
+}
+
+/// #6030: the signature in every form it is stored in has a rotate knob. A quarter turn around its
+/// middle swaps its frame's sides about the same middle in one undo step, it stays turned through
+/// saving, and Escape while dragging leaves it as it was.
+#[test]
+fn signatures_turn_by_their_rotate_knob() {
+    for sig in [SavedSig::Typed("Ada Lovelace".into()), SavedSig::Drawn(vec![vec![[0.05, 0.1], [0.3, 0.2], [0.55, 0.05], [0.95, 0.15]]])] {
+        let drawn = matches!(sig, SavedSig::Drawn(_));
+        let mut h = harness();
+        h.state_mut().signature = Some(sig);
+        h.state_mut().execute("sign.fill.signature");
+        click(&mut h, 40.0, 250.0);
+        let [placed] = rects(&h)[..] else { panic!("one signature: {:?}", rects(&h)) };
+        assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "the placed signature is selected");
+        let knob = knob_of(&h, placed);
+        let middle = at(&h, (placed[0] + placed[2]) / 2.0, (placed[1] + placed[3]) / 2.0);
+        // Straight right of the middle, as far as the knob is above it.
+        let quarter = middle + egui::vec2((knob - middle).length(), 0.0);
+
+        // Escape cancels: the knob is let go of and nothing changes.
+        h.hover_at(knob);
+        h.run_steps(2);
+        h.drag_at(knob);
+        h.run_steps(1);
+        h.hover_at(quarter);
+        h.run_steps(1);
+        h.key_press(egui::Key::Escape);
+        h.run_steps(1);
+        h.drop_at(quarter);
+        h.run_steps(4);
+        assert_rect(rects(&h)[0], placed);
+        assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Add signature"));
+
+        // A quarter turn clockwise on screen.
+        drag_knob(&mut h, knob, quarter);
+        let doc = h.state().session.get(h.state().views[0].id).unwrap();
+        assert_eq!(doc.can_undo(), Some("Rotate comment"));
+        let [now] = rects(&h)[..] else { panic!("still one signature: {:?}", rects(&h)) };
+        let (w, h0) = (placed[2] - placed[0], placed[3] - placed[1]);
+        let (nw, nh) = (now[2] - now[0], now[3] - now[1]);
+        let close = |a: f32, b: f32, slack: f32| (a - b).abs() <= slack;
+        // A drawing's margin stays as wide however it turns, so its frame isn't exactly swapped.
+        let slack = if drawn { 0.25 * w } else { 0.02 * w };
+        assert!(close(nw, h0, slack) && close(nh, w, slack), "sides swapped: {placed:?} -> {now:?}");
+        assert!(
+            close(now[0] + now[2], placed[0] + placed[2], 2.0 * slack) && close(now[1] + now[3], placed[1] + placed[3], 2.0 * slack),
+            "same middle: {placed:?} -> {now:?}"
+        );
+
+        let id = h.state().views[0].id;
+        let annotation = |h: &Harness<'static, PdfCraftApp>| h.state().session.get(id).unwrap().info.annotations[0].clone();
+        if drawn {
+            assert_eq!(annotation(&h).turn, None, "a drawing turns its points");
+        } else {
+            let (angle, _) = annotation(&h).turn.expect("a stamp records its angle");
+            assert!(close(angle, -90.0, 1.0), "clockwise is a negative angle: {angle}");
+        }
+
+        h.state_mut().session.undo(id).unwrap();
+        assert_rect(rects(&h)[0], placed);
+        h.state_mut().session.redo(id).unwrap();
+        assert_rect(rects(&h)[0], now);
+        let saved = h.state().session.save_bytes(id).unwrap();
+        let again = harness_bytes(&saved);
+        assert_rect(rects(&again)[0], now);
+    }
+}
+
+/// With Shift the signature lands on steps of 15 degrees; a turned stamp's frame keeps its shape
+/// from its corners and has no side handles; a press in a corner of its hull, outside its turned
+/// box, isn't on it; and its layer follows the corner as any stamp's does.
+#[test]
+fn a_turned_signature_snaps_keeps_its_shape_and_is_hit_inside_its_box() {
+    let mut h = harness();
+    h.state_mut().signature = Some(SavedSig::Typed("Ada Lovelace".into()));
+    h.state_mut().execute("sign.fill.signature");
+    click(&mut h, 40.0, 250.0);
+    let [placed] = rects(&h)[..] else { panic!("one signature: {:?}", rects(&h)) };
+    let knob = knob_of(&h, placed);
+    let middle = at(&h, (placed[0] + placed[2]) / 2.0, (placed[1] + placed[3]) / 2.0);
+    // A little past 30 degrees clockwise.
+    let to = middle + egui::Vec2::angled((-90.0f32 + 33.0).to_radians()) * (knob - middle).length();
+    h.hover_at(knob);
+    h.run_steps(2);
+    h.drag_at(knob);
+    h.run_steps(1);
+    h.hover_at(to);
+    h.run_steps(1);
+    assert!(h.state().views[0].comments.gesture.is_some(), "the knob is being dragged");
+    h.event(egui::Event::ModifiersChanged(egui::Modifiers::SHIFT));
+    h.hover_at(to);
+    h.run_steps(1);
+    h.drop_at(to);
+    h.run_steps(4);
+    h.event(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
+    h.run_steps(1);
+    let id = h.state().views[0].id;
+    let a = h.state().session.get(id).unwrap().info.annotations[0].clone();
+    assert_eq!(a.turn.map(|t| t.0), Some(-30.0), "on the step");
+    let hull = a.rect;
+    let (w, ht) = (placed[2] - placed[0], placed[3] - placed[1]);
+    let cos30 = 30f32.to_radians().cos();
+    assert!(((hull[2] - hull[0]) - (cos30 * w + 0.5 * ht)).abs() < 0.02 * w, "the hull of the turned box: {hull:?}");
+
+    // No side handle: the middle of the hull's right side is not a resize handle.
+    h.hover_at(at(&h, hull[2], (hull[1] + hull[3]) / 2.0));
+    h.run_steps(2);
+    assert_ne!(h.output().platform_output.cursor_icon, egui::CursorIcon::ResizeHorizontal);
+
+    // A corner of the hull with the box turned away from it: a click there doesn't select it. The
+    // box turned clockwise runs down to the right, which leaves the hull's lower-left clear.
+    h.state_mut().views[0].comments.selected = None;
+    h.run_steps(1);
+    click(&mut h, hull[0] + 10.0, hull[1] + 10.0);
+    assert_eq!(h.state().views[0].comments.selected, None, "outside its turned box");
+    click(&mut h, (hull[0] + hull[2]) / 2.0, (hull[1] + hull[3]) / 2.0);
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "inside it");
+
+    // A corner keeps the hull's shape, so the signature isn't sheared.
+    let corner = at(&h, hull[2], hull[3]);
+    h.hover_at(corner);
+    h.run_steps(2);
+    h.drag_at(corner);
+    h.run_steps(1);
+    for k in 1..=10 {
+        h.hover_at(corner + egui::vec2(6.0 * k as f32, -(k as f32)));
+        h.run_steps(1);
+    }
+    h.drop_at(corner + egui::vec2(60.0, -10.0));
+    h.run_steps(4);
+    let doc = h.state().session.get(id).unwrap();
+    assert_eq!(doc.can_undo(), Some("Resize comment"));
+    let now = doc.info.annotations[0].rect;
+    let ratio = |r: [f32; 4]| (r[2] - r[0]) / (r[3] - r[1]);
+    assert!(now[2] - now[0] > hull[2] - hull[0] + 20.0, "bigger: {hull:?} -> {now:?}");
+    assert!((ratio(now) - ratio(hull)).abs() < 0.02 * ratio(hull), "same shape: {hull:?} -> {now:?}");
+    assert_eq!(doc.info.annotations[0].turn.map(|t| t.0), Some(-30.0), "still turned");
+}
+
+/// A locked signature has no knob to press. The page's menu turns one a quarter either way.
+#[test]
+fn a_locked_signature_has_no_knob_and_the_menu_turns_quarters() {
+    let mut h = harness();
+    h.state_mut().signature = Some(SavedSig::Typed("Ada Lovelace".into()));
+    h.state_mut().execute("sign.fill.signature");
+    click(&mut h, 40.0, 250.0);
+    let [placed] = rects(&h)[..] else { panic!("one signature: {:?}", rects(&h)) };
+    let id = h.state().views[0].id;
+
+    let middle = at(&h, (placed[0] + placed[2]) / 2.0, (placed[1] + placed[3]) / 2.0);
+    h.hover_at(middle);
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: middle, button: egui::PointerButton::Secondary, pressed: true, modifiers: Default::default() });
+    h.event(egui::Event::PointerButton { pos: middle, button: egui::PointerButton::Secondary, pressed: false, modifiers: Default::default() });
+    h.run_steps(3);
+    h.get_by_label("Rotate clockwise").click();
+    h.run_steps(4);
+    assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("Rotate comment"));
+    assert_eq!(h.state().session.get(id).unwrap().info.annotations[0].turn.map(|t| t.0), Some(-90.0));
+    h.state_mut().session.undo(id).unwrap();
+    h.run_steps(2);
+
+    h.state_mut().session.apply(id, pdfcraft_engine::Edit::LockAnnotation { page: 0, index: 0, locked: true }).unwrap();
+    h.state_mut().views[0].comments.selected = Some((0, 0));
+    h.run_steps(2);
+    h.hover_at(knob_of(&h, placed));
+    h.run_steps(2);
+    assert_ne!(h.output().platform_output.cursor_icon, egui::CursorIcon::Grab);
+}
+
+/// Whether the selection's blue is drawn within 3 pixels of `p`.
+fn blue_near(pixels: &image::RgbaImage, p: Pos2) -> bool {
+    (-3..=3).any(|dy| {
+        (-3..=3).any(|dx| {
+            let [r, g, b, _] = pixels.get_pixel((p.x as i32 + dx) as u32, (p.y as i32 + dy) as u32).0;
+            r < 90 && g > 80 && g < 170 && b > 190
+        })
+    })
+}
+
+/// While the knob is dragged the box is drawn where it will turn to, in a turned view as well, and
+/// the document doesn't change until it is let go of.
+#[test]
+fn the_turned_outline_follows_the_knob_before_release() {
+    let _gpu = gpu();
+    for view_rotation in [0, 90] {
+        let mut h = harness();
+        h.state_mut().signature = Some(SavedSig::Typed("Ada Lovelace".into()));
+        h.state_mut().execute("sign.fill.signature");
+        click(&mut h, 40.0, 250.0);
+        while h.state().views[0].rotation != view_rotation {
+            h.state_mut().views[0].rotate_view(true);
+        }
+        h.run_steps(3);
+        let [r] = rects(&h)[..] else { panic!("one signature: {:?}", rects(&h)) };
+        let frame = egui::Rect::from_two_pos(at(&h, r[0], r[1]), at(&h, r[2], r[3]));
+        let knob = frame.center_top() - egui::vec2(0.0, 22.0);
+        let reach = (knob - frame.center()).length();
+        // Drawn upright, nothing reaches this far above or below the middle of a wide frame.
+        let (above, below) = (frame.center() - egui::vec2(0.0, frame.width() / 2.0), frame.center() + egui::vec2(0.0, frame.width() / 2.0));
+        let generation = h.state().session.get(h.state().views[0].id).unwrap().edit_generation();
+
+        h.hover_at(knob);
+        h.run_steps(2);
+        let before = h.render().unwrap();
+        assert!(blue_near(&before, frame.center_top() - egui::vec2(0.0, 12.0)), "{view_rotation}: the knob's stem is drawn");
+        assert!(!blue_near(&before, above) && !blue_near(&before, below), "{view_rotation}: upright");
+
+        h.drag_at(knob);
+        h.run_steps(1);
+        h.hover_at(frame.center() + egui::vec2(reach, 0.0));
+        h.run_steps(2);
+        let turning = h.render().unwrap();
+        assert!(blue_near(&turning, above) && blue_near(&turning, below), "{view_rotation}: the box's ends, a quarter turned");
+        assert!(blue_near(&turning, frame.center() - egui::vec2(frame.height() / 2.0, 0.0)), "{view_rotation}: and its side");
+        let doc = h.state().session.get(h.state().views[0].id).unwrap();
+        assert_eq!((doc.edit_generation(), doc.can_undo()), (generation, Some("Add signature")), "{view_rotation}: pointer frames never edit");
+
+        h.drop_at(frame.center() + egui::vec2(reach, 0.0));
+        h.run_steps(4);
+        assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Rotate comment"));
+    }
+}
