@@ -58,6 +58,7 @@ pub enum WavError {
     IncompleteFrame { data_len: usize, block_align: usize },
     DurationExceeded { seconds: u64, max: u64 },
     IntegerOverflow,
+    Io(String),
 }
 
 impl std::fmt::Display for WavError {
@@ -97,6 +98,7 @@ impl std::fmt::Display for WavError {
                 write!(f, "audio duration ({seconds}s) exceeds maximum permitted length ({max}s)")
             }
             Self::IntegerOverflow => write!(f, "integer overflow while parsing WAV chunk offsets"),
+            Self::Io(err) => write!(f, "I/O error reading audio file: {err}"),
         }
     }
 }
@@ -332,6 +334,21 @@ struct RawAudioData {
 /// with a string error message for tool response formatting.
 pub fn wav_samples(data: &[u8]) -> std::result::Result<(u32, u8, Vec<u8>), String> {
     parse_wav_samples(data).map(|w| (w.rate, w.channels as u8, w.samples)).map_err(|e| e.to_string())
+}
+
+/// Reads bounded WAV audio data from any `std::io::Read` stream.
+///
+/// Takes at most `MAX_WAV_FILE_SIZE + 1` bytes to prevent unbounded memory allocation
+/// or hangs on infinite streams, and returns [`WavError::FileTooLarge`] if the input exceeds
+/// [`MAX_WAV_FILE_SIZE`].
+pub fn read_wav_bounded<R: std::io::Read>(mut reader: R) -> Result<Vec<u8>, WavError> {
+    use std::io::Read as _;
+    let mut data = Vec::new();
+    reader.by_ref().take(MAX_WAV_FILE_SIZE as u64 + 1).read_to_end(&mut data).map_err(|e| WavError::Io(e.to_string()))?;
+    if data.len() > MAX_WAV_FILE_SIZE {
+        return Err(WavError::FileTooLarge(data.len()));
+    }
+    Ok(data)
 }
 
 #[cfg(test)]
@@ -655,5 +672,39 @@ mod tests {
             let res = parse_wav_samples(input);
             assert!(res.is_err(), "input should fail gracefully: {input:?}");
         }
+    }
+
+    #[test]
+    fn read_wav_bounded_caps_read_at_max_size_plus_one() {
+        struct CountingReader {
+            total_available: usize,
+            bytes_yielded: usize,
+        }
+
+        impl std::io::Read for CountingReader {
+            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+                let remaining = self.total_available.saturating_sub(self.bytes_yielded);
+                if remaining == 0 {
+                    return Ok(0);
+                }
+                let to_read = buf.len().min(remaining);
+                buf[..to_read].fill(0x55);
+                self.bytes_yielded += to_read;
+                Ok(to_read)
+            }
+        }
+
+        // Reader with MAX_WAV_FILE_SIZE + 2048 available bytes
+        let mut reader = CountingReader { total_available: MAX_WAV_FILE_SIZE + 2048, bytes_yielded: 0 };
+
+        let result = read_wav_bounded(&mut reader);
+        assert_eq!(result, Err(WavError::FileTooLarge(MAX_WAV_FILE_SIZE + 1)));
+        assert_eq!(reader.bytes_yielded, MAX_WAV_FILE_SIZE + 1);
+
+        // Reader with valid size
+        let mut valid_reader = CountingReader { total_available: 1024, bytes_yielded: 0 };
+        let valid_result = read_wav_bounded(&mut valid_reader).expect("reads valid size");
+        assert_eq!(valid_result.len(), 1024);
+        assert_eq!(valid_reader.bytes_yielded, 1024);
     }
 }
