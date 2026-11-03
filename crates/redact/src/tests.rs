@@ -3897,3 +3897,32 @@ fn a_redacted_form_xobject_drops_the_source_text_of_added_content() {
     let bytes = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
     assert!(!bytes.windows(4).any(|w| w == b"1234"), "redacted text left in the saved file");
 }
+
+/// A chain of replies listed deepest first, across two pages: each pass of the old fixed-point
+/// loops removed one reply and searched a growing list for every reply, cubic work in the chain.
+/// The replies are indexed by parent and walked once now, and the whole chain still goes.
+#[test]
+fn a_reverse_ordered_reply_chain_is_removed_in_linear_work() {
+    const N: usize = 6_000;
+    let first = 7;
+    let half = N / 2;
+    let refs = |range: std::ops::Range<usize>| range.rev().map(|k| format!("{} 0 R ", first + k)).collect::<String>();
+    let mut objs = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>".to_vec(),
+        format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 5 0 R /Annots [{}] >>", refs(0..half + 1)).into_bytes(),
+        format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 6 0 R /Annots [{}] >>", refs(half + 1..N + 1)).into_bytes(),
+        stream("", b""),
+        stream("", b""),
+        b"<< /Type /Annot /Subtype /Text /Rect [10 10 20 20] /Contents (SECRET_COMMENT) >>".to_vec(),
+    ];
+    objs.extend((1..=N).map(|k| format!("<< /Type /Annot /Subtype /Text /Rect [200 200 210 210] /IRT {} 0 R >>", first + k - 1).into_bytes()));
+    let mut doc = pdf(objs);
+    mark(&mut doc, 0, &[[5.0, 5.0, 25.0, 25.0]], "");
+    let started = std::time::Instant::now();
+    assert_eq!(apply(&mut doc, None).unwrap().annotations, N + 1);
+    assert!(started.elapsed() < std::time::Duration::from_secs(60), "{:?}", started.elapsed());
+    for p in pdfcraft_model::pages(&doc) {
+        assert!(annots_of(&doc, &p.dict).is_empty(), "a reply stayed listed");
+    }
+}
