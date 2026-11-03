@@ -47,8 +47,11 @@ pub(crate) fn text_value(doc: &Document, d: &Dict, key: &[u8]) -> Option<String>
         Object::Name(n) => String::from_utf8_lossy(n).into_owned(),
         _ => return None,
     };
-    let s = s.trim_matches('\0').trim().to_string();
-    (!s.is_empty()).then_some(s)
+    let s = s.trim_matches('\0');
+    // Typewriter line breaks belong to the text (keep in step with render's inspector).
+    let keep_breaks = key == b"Contents" && d.name(b"Subtype") == Some(b"FreeText") && d.name(b"IT") == Some(b"FreeTextTypeWriter");
+    let s = if keep_breaks { s } else { s.trim() };
+    (!s.trim().is_empty()).then(|| s.to_owned())
 }
 
 /// Whether an annotation subtype is a comment. Links, form widgets, pop-ups and the non-markup

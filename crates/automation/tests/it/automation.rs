@@ -10534,3 +10534,32 @@ fn mixed_script_tools_normalize_but_undo_restores_the_exact_mixture() {
         assert_eq!(page_text(&mut a, reopened)[0], plain);
     }
 }
+
+#[test]
+fn multiline_fill_sign_engine_round_trip_preserves_lines_and_appearance() {
+    let dir = workdir("fill-sign-multiline");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path":"a.pdf"}))["doc"].as_u64().unwrap();
+    let text = "\nAda\n\nLovelace\n";
+    ok(&mut a, "fill_sign_add", json!({"doc":doc,"page":1,"type":"text","at":[20,20],"text":text}));
+    let id = pdfcraft_engine::DocId(doc);
+    let annot = &a.session().get(id).unwrap().info.annotations[0];
+    assert_eq!(annot.contents.as_deref(), Some(text), "typewriter contents keep outer line breaks");
+    assert!(annot.rect[3] - annot.rect[1] >= 66.0, "five text lines need their full height, including blank lines: {:?}", annot.rect);
+    let pixels = a.render_pixels(doc, 1, 1.0).unwrap();
+    // The fixture's page text is at y=150; only the typewriter draws at y=65..80.
+    assert!(
+        (65..80).any(|y| (20..80).any(|x| {
+            let i = (y * pixels.0 as usize + x) * 4;
+            pixels.2[i..i + 3].iter().all(|v| *v < 100)
+        })),
+        "the lower nonempty line appears inside its box"
+    );
+    let rendered = a.call("page_render", &json!({"doc":doc,"page":1,"dpi":72})).unwrap();
+    ok(&mut a, "doc_save", json!({"doc":doc,"path":"multiline.pdf"}));
+    let mut re = auto(&dir);
+    let reopened = ok(&mut re, "doc_open", json!({"path":"multiline.pdf"}))["doc"].as_u64().unwrap();
+    assert_eq!(re.session().get(pdfcraft_engine::DocId(reopened)).unwrap().info.annotations[0].contents.as_deref(), Some(text));
+    assert_eq!(rendered, re.call("page_render", &json!({"doc":reopened,"page":1,"dpi":72})).unwrap(), "saved appearances are identical");
+    std::fs::remove_dir_all(dir).unwrap();
+}
