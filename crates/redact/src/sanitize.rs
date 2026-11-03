@@ -320,6 +320,33 @@ fn strip_owned(o: &mut Object, role: Held, keys: &[&[u8]], depth: usize) {
 
 /// A comment as the comments list sees it, less file attachments (removed with Attachments) and
 /// redaction marks.
+/// The form-field dictionaries under `/AcroForm /Fields` (through `/Kids`), each once. A field's
+/// own `/A` acts when its widgets are used, so action removal must reach it as well as the
+/// widgets the pages list.
+fn field_dicts(doc: &Document) -> Vec<ObjRef> {
+    let Some((_, cat)) = catalog(doc) else { return Vec::new() };
+    let refs = |o: Option<&Object>| -> Vec<ObjRef> {
+        o.map(|f| doc.resolve(f)).and_then(|f| f.as_array().map(|a| a.iter().filter_map(Object::as_ref).collect())).unwrap_or_default()
+    };
+    let mut todo = refs(sub(doc, &cat, b"AcroForm").as_ref().and_then(|af| af.get(b"Fields")));
+    let mut seen = std::collections::HashSet::new();
+    let mut fields = Vec::new();
+    while let Some(r) = todo.pop() {
+        if !seen.insert(r) {
+            continue;
+        }
+        fields.push(r);
+        todo.extend(refs(doc.get(r).as_dict().and_then(|d| d.get(b"Kids"))));
+    }
+    fields
+}
+
+/// Whether an annotation or field dictionary holds a primary action (`/A`) that only action
+/// removal takes out: links go whole, and one with `/AA` is counted through it.
+fn primary_action_only(d: &Dict) -> bool {
+    d.contains(b"A") && !d.contains(b"AA") && d.name(b"Subtype") != Some(b"Link")
+}
+
 fn is_comment(subtype: &[u8]) -> bool {
     !matches!(subtype, b"FileAttachment" | b"Redact") && pdfcraft_annot::is_comment_subtype(&String::from_utf8_lossy(subtype))
 }
@@ -500,7 +527,11 @@ pub fn scan(doc: &Document) -> Vec<(Hidden, usize)> {
                     count_sub(b"Link")
                         + usize::from(cat.get(b"OpenAction").is_some_and(|a| doc.resolve(a).as_dict().is_some()))
                         + owned(Hidden::LinksActionsScripts)
-                        + annots.iter().filter(|a| !a.contains(b"AA") && a.name(b"Subtype") == Some(b"Widget") && a.contains(b"A")).count()
+                        + annots.iter().filter(|a| primary_action_only(a)).count()
+                        + field_dicts(doc)
+                            .into_iter()
+                            .filter(|&r| doc.get(r).as_dict().is_some_and(|d| !d.contains(b"Subtype") && primary_action_only(d)))
+                            .count()
                         + sub(doc, &names, b"JavaScript").map_or(0, |t| name_tree_len(doc, &t))
                 }
                 Hidden::PrivateData => owned(Hidden::PrivateData),
@@ -580,7 +611,8 @@ pub fn remove_hidden(doc: &mut Document, which: &[Hidden]) -> Result<Vec<(Hidden
             if removed.contains(&r) || (d.name(b"Subtype") == Some(b"Popup") && parent_gone) {
                 continue;
             }
-            if which.contains(&Hidden::LinksActionsScripts) && (d.contains(b"AA") || (d.name(b"Subtype") == Some(b"Widget") && d.contains(b"A"))) {
+            // Any annotation's `/A` is an action (a Screen's as much as a widget's).
+            if which.contains(&Hidden::LinksActionsScripts) && (d.contains(b"AA") || d.contains(b"A")) {
                 doc.update_dict(r, |d| {
                     d.remove(b"AA");
                     d.remove(b"A");
@@ -624,6 +656,13 @@ pub fn remove_hidden(doc: &mut Document, which: &[Hidden]) -> Result<Vec<(Hidden
             Hidden::LinksActionsScripts => {
                 if cat.get(b"OpenAction").is_some_and(|a| doc.resolve(a).as_dict().is_some()) {
                     cat.remove(b"OpenAction");
+                }
+                for r in field_dicts(doc) {
+                    if doc.get(r).as_dict().is_some_and(|d| d.contains(b"A")) {
+                        doc.update_dict(r, |d| {
+                            d.remove(b"A");
+                        })?;
+                    }
                 }
                 if let Some(n) = names.as_mut() {
                     n.remove(b"JavaScript");

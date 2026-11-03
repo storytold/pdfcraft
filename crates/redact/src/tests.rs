@@ -3897,3 +3897,28 @@ fn a_redacted_form_xobject_drops_the_source_text_of_added_content() {
     let bytes = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
     assert!(!bytes.windows(4).any(|w| w == b"1234"), "redacted text left in the saved file");
 }
+
+/// A Screen annotation's `/A` and a push button field's own `/A` (its widget has none) are actions
+/// too: the scan counts them and removing actions takes them out, so the script leaves the file.
+#[test]
+fn screen_and_field_primary_actions_are_removed() {
+    use crate::sanitize::{Hidden, remove_hidden, scan};
+    let mut doc = pdf(vec![
+        b"<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [7 0 R] >> >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Annots [6 0 R 8 0 R] >>".to_vec(),
+        stream("", b""),
+        b"<< /S /JavaScript /JS (SCRIPT_PAYLOAD) >>".to_vec(),
+        b"<< /Type /Annot /Subtype /Screen /Rect [0 0 10 10] /A 5 0 R >>".to_vec(),
+        b"<< /FT /Btn /Ff 65536 /T (b) /A 5 0 R /Kids [8 0 R] >>".to_vec(),
+        b"<< /Type /Annot /Subtype /Widget /Rect [20 20 40 40] /Parent 7 0 R >>".to_vec(),
+    ]);
+    let counts: HashMap<Hidden, usize> = scan(&doc).into_iter().collect();
+    assert_eq!(counts[&Hidden::LinksActionsScripts], 2, "the Screen's and the field's actions");
+    remove_hidden(&mut doc, &[Hidden::LinksActionsScripts]).unwrap();
+    for r in [6, 7] {
+        assert!(!doc.get(ObjRef::new(r, 0)).as_dict().unwrap().contains(b"A"), "object {r} keeps its action");
+    }
+    let saved = write_full(&doc, &SaveOptions::default()).unwrap();
+    assert!(!saved.windows(14).any(|w| w == b"SCRIPT_PAYLOAD"), "the script is still in the file");
+}
