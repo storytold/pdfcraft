@@ -2157,6 +2157,12 @@ fn jbig2_pages_share_one_symbol_dictionary() {
         let s = stream(&doc, images[p]);
         assert_eq!(decoded_image(&doc, &s).unwrap(), pages[p], "page {p} decodes to its samples");
     }
+    // Optimized again, each page would come out larger alone than it is beside the globals: the
+    // sharing stays.
+    let streams: Vec<Stream> = images.iter().map(|im| stream(&doc, *im)).collect();
+    let again = optimize(&mut doc, &settings).unwrap();
+    assert_eq!((again.images_recompressed, again.images_resampled), (0, 0));
+    assert!(images.iter().zip(&streams).all(|(im, s)| stream(&doc, *im) == *s));
 }
 
 /// Images share a dictionary only where that saves more than it takes: two pages of five small
@@ -2176,23 +2182,58 @@ fn a_dictionary_that_saves_less_than_it_takes_isnt_shared() {
     let settings = Settings { mono: MonoSettings { compression: MonoCompression::Jbig2, ..MonoSettings::REDUCE }, ..Settings::default() };
     let report = optimize(&mut doc, &settings).unwrap();
     assert_eq!(report.images_recompressed, 2);
+    for im in &images {
+        let s = stream(&doc, *im);
+        assert_eq!((s.dict.name(b"Filter"), s.dict.contains(b"DecodeParms")), (Some(&b"JBIG2Decode"[..]), false));
+    }
+    // Optimized again, they code to what they are, no smaller: they stay.
+    let streams: Vec<Stream> = images.iter().map(|im| stream(&doc, *im)).collect();
+    assert_eq!(optimize(&mut doc, &settings).unwrap().images_recompressed, 0);
+    assert!(images.iter().zip(&streams).all(|(im, s)| stream(&doc, *im) == *s));
+}
+
+/// Only JBIG2 asked for shares: under Retain, JBIG2 pages drawn at 600 ppi are averaged and stored
+/// as JBIG2 again, each alone, as Retain changes nothing but their resolution.
+#[test]
+fn retained_jbig2_shares_nothing() {
+    let mut doc = Document::new_empty();
+    let (w, h) = (1200u32, 960u32);
+    let images: Vec<ObjRef> = (1..=4u64)
+        .map(|k| {
+            let text = font_text(w, h, k.wrapping_mul(0x9E37_79B9_7F4A_7C15));
+            let mut d = Dict::new();
+            for (key, value) in [("Type", Object::name("XObject")), ("Subtype", Object::name("Image")), ("ColorSpace", Object::name("DeviceGray"))] {
+                d.set(key.as_bytes().to_vec(), value);
+            }
+            for (key, value) in [("Width", i64::from(w)), ("Height", i64::from(h)), ("BitsPerComponent", 1)] {
+                d.set(key.as_bytes().to_vec(), Object::Int(value));
+            }
+            d.set(b"Filter".to_vec(), Object::name("JBIG2Decode"));
+            let im = doc.add(Object::Stream(Stream::from_raw(d, pdfcraft_filters::encode_jbig2(&text, w, h).unwrap())));
+            // 1200 samples over 144 pt: 600 ppi.
+            page(&mut doc, &[("Im", im)], "q 144 0 0 115.2 6 300 cm /Im Do Q");
+            im
+        })
+        .collect();
+    let settings = Settings { mono: MonoSettings { compression: MonoCompression::Retain, ..MonoSettings::REDUCE }, ..Settings::default() };
+    assert_eq!(optimize(&mut doc, &settings).unwrap().images_resampled, 4);
     for im in images {
         let s = stream(&doc, im);
         assert_eq!((s.dict.name(b"Filter"), s.dict.contains(b"DecodeParms")), (Some(&b"JBIG2Decode"[..]), false));
     }
 }
 
-/// Sixteen images at most share one dictionary: of twenty, the first sixteen share one and the
-/// other four another.
+/// Sixteen images at most share one dictionary, and two are enough: of eighteen, the first
+/// sixteen share one and the other two another.
 #[test]
 fn sixteen_images_at_most_share_a_dictionary() {
     let mut doc = Document::new_empty();
-    let (w, h) = (300u32, 200u32);
-    let images: Vec<ObjRef> = (1..=20u64)
+    let (w, h) = (600u32, 480u32);
+    let images: Vec<ObjRef> = (1..=18u64)
         .map(|k| {
             let text = font_text(w, h, k.wrapping_mul(0x9E37_79B9_7F4A_7C15));
             let im = mono_image(&mut doc, w, h, &text, None, &[("BitsPerComponent", 1.into()), ("ColorSpace", Object::name("DeviceGray"))]);
-            page(&mut doc, &[("Im", im)], "q 300 0 0 200 6 300 cm /Im Do Q");
+            page(&mut doc, &[("Im", im)], "q 600 0 0 480 6 300 cm /Im Do Q");
             im
         })
         .collect();

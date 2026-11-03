@@ -658,8 +658,9 @@ fn encode_id(mq: &mut MqEncoder, contexts: &mut [Context], length: u32, id: u32)
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::FilterError;
     use crate::jbig2::tests::{decode, decode_with, samples, unpack};
-    use crate::jbig2::{encode_jbig2, encode_jbig2_generic};
+    use crate::jbig2::{encode_jbig2, encode_jbig2_generic, encode_jbig2_shared};
 
     type Bitmap = Vec<Vec<u8>>;
 
@@ -1126,7 +1127,8 @@ mod tests {
         let (columns, rows) = (pictures[0][0].len() as u32, pictures[0].len() as u32);
         let data: Vec<Vec<u8>> = pictures.iter().map(|p| samples(p)).collect();
         let images: Vec<(&[u8], u32, u32)> = data.iter().map(|d| (&d[..], columns, rows)).collect();
-        let (globals, coded) = encode_shared(&images).unwrap();
+        let shared = encode_jbig2_shared(&images).unwrap().unwrap();
+        let (globals, coded) = (shared.globals, shared.images);
         let coded: Vec<Vec<u8>> = coded.into_iter().map(Option::unwrap).collect();
         for (d, c) in data.iter().zip(&coded) {
             assert_eq!(decode_with(c, Some(&globals)), unpack(d, columns, rows));
@@ -1144,22 +1146,22 @@ mod tests {
             .collect()
     }
 
-    /// Mark `k` of a set of distinct ones: a stroke 31 pixels long with a pixel above every other
-    /// column for each 1 bit of `k`, below 2^15.
+    /// Mark `k` of a set of distinct ones: a stroke 33 pixels long with a pixel above every other
+    /// column for each 1 bit of `k`, below 2^17.
     fn comb(k: usize) -> Bitmap {
-        let mut g = vec![vec![0u8; 31]; 2];
+        let mut g = vec![vec![0u8; 33]; 2];
         g[1].fill(1);
-        for bit in 0..15 {
+        for bit in 0..17 {
             g[0][2 * bit] = u8::from(k >> bit & 1 == 1);
         }
         g
     }
 
     /// The combs `ks`, 120 a row, the rows four pixels apart.
-    fn combs(ks: Range<usize>) -> Bitmap {
-        let mut page = vec![vec![0u8; 120 * 34]; ks.len().div_ceil(120) * 4];
+    fn combs(ks: impl ExactSizeIterator<Item = usize>) -> Bitmap {
+        let mut page = vec![vec![0u8; 120 * 36]; ks.len().div_ceil(120) * 4];
         for (i, k) in ks.enumerate() {
-            draw(&mut page, &comb(k), (i % 120 * 34) as i64, (i / 120 * 4) as i64);
+            draw(&mut page, &comb(k), (i % 120 * 36) as i64, (i / 120 * 4) as i64);
         }
         page
     }
@@ -1215,7 +1217,7 @@ mod tests {
         assert!(coded[0].is_some() && coded[1].is_some() && coded[2].is_none());
     }
 
-    /// Images that share fewer than two marks share nothing.
+    /// Images that share fewer than two marks share nothing; two are enough.
     #[test]
     fn images_with_nothing_in_common_share_nothing() {
         let font = glyphs(30, 7);
@@ -1223,6 +1225,41 @@ mod tests {
         assert!(encode_shared(&[(&a, 600, 200), (&b, 600, 200)]).is_none());
         assert!(encode_shared(&[(&a, 600, 200)]).is_none(), "one image");
         assert!(encode_shared(&[]).is_none());
+        // The two commonest letters of the first page, below the last line of the second.
+        let mut two = text(600, 200, &stemmed(&font), 1);
+        draw(&mut two, &font[0], 10, 180);
+        draw(&mut two, &font[1], 100, 180);
+        let two = samples(&two);
+        let (globals, coded) = encode_shared(&[(&a, 600, 200), (&two, 600, 200)]).unwrap();
+        assert_eq!(exported(&globals), 2);
+        assert_eq!(decode_with(coded[1].as_ref().unwrap(), Some(&globals)), unpack(&two, 600, 200));
+    }
+
+    /// The images of a group are checked as `encode_jbig2_generic` checks one, and an image it
+    /// would refuse refuses the group.
+    #[test]
+    fn a_group_with_an_image_the_encoder_refuses_is_refused() {
+        let page = samples(&text(600, 200, &glyphs(30, 7), 1));
+        assert!(matches!(encode_jbig2_shared(&[(&page, 600, 200), (&page[..10], 600, 200)]), Err(FilterError::Corrupt { .. })));
+        assert!(matches!(encode_jbig2_shared(&[(&page, 600, 200), (&page, 0, 200)]), Err(FilterError::Unsupported(_))));
+        assert!(encode_jbig2_shared(&[(&page, 600, 200), (&page, 600, 200)]).unwrap().is_some());
+    }
+
+    /// A group holds its distinct marks within what one image's are held to: past 65,536 a mark
+    /// first seen later isn't held, so isn't shared, while those held count every image they're
+    /// in. Ten marks of the first image are in two images after it, with 464 first seen there.
+    #[test]
+    fn past_the_marks_a_group_holds_later_ones_arent_shared() {
+        let (a, b) = (samples(&combs(0..40_000)), samples(&combs(40_000..65_536)));
+        let late = combs((0..10).chain(65_536..66_000).collect::<Vec<_>>().into_iter());
+        let (rows, late) = (late.len() as u32, samples(&late));
+        let (columns, a_rows, b_rows) = (120 * 36, 40_000u32.div_ceil(120) * 4, 25_536u32.div_ceil(120) * 4);
+        let images = [(&a[..], columns, a_rows), (&b[..], columns, b_rows), (&late[..], columns, rows), (&late[..], columns, rows)];
+        let (globals, coded) = encode_shared(&images).unwrap();
+        assert_eq!(exported(&globals), 10);
+        for c in &coded[2..] {
+            assert_eq!(decode_with(c.as_ref().unwrap(), Some(&globals)), unpack(&late, columns, rows));
+        }
     }
 
     /// Past what one dictionary shares, it keeps the marks the most images hold: 20,000 shared,
@@ -1233,7 +1270,7 @@ mod tests {
     fn past_the_shared_limit_the_most_widely_held_marks_are_shared() {
         let (both, first) = (combs(0..20_000), combs(0..10_000));
         let rows = both.len();
-        let first: Bitmap = first.iter().cloned().chain(std::iter::repeat_n(vec![0u8; 120 * 34], rows - first.len())).collect();
+        let first: Bitmap = first.iter().cloned().chain(std::iter::repeat_n(vec![0u8; 120 * 36], rows - first.len())).collect();
         let (globals, coded) = shared_round_trip(&[both.clone(), both, first]);
         assert_eq!(exported(&globals), MAX_SHARED_SYMBOLS);
         assert_eq!(segment_types(&coded[2]), [48, 7]);
