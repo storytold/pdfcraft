@@ -1715,6 +1715,23 @@ fn added_thai_text_is_drawn_from_the_document_thai_face() {
     assert!(families.iter().all(|f| f == face.family), "{families:?}, expected {}", face.family);
 }
 
+/// Spaces, digits and punctuation that follow Thai are drawn from the Thai face too, so a Thai
+/// line is shown with one font and keeps the width the Thai face measured for it.
+#[test]
+fn added_thai_text_draws_following_spaces_digits_and_punctuation_with_the_thai_face() {
+    if pdfcraft_fonts::document_thai_font().is_none() {
+        return;
+    }
+    let mut doc = fixture();
+    let t = AddedText { rect: [72.0, 600.0, 400.0, 700.0], text: "ข้อ 12. ทดสอบ".into(), size: 14.0, ..AddedText::default() };
+    add_content(&mut doc, 0, &Content::Text(t)).unwrap();
+    let s = String::from_utf8_lossy(&stream_bytes(&doc, &Object::Ref(list_added(&doc)[0].obj)).unwrap()).into_owned();
+    let words: Vec<&str> = s.split_whitespace().collect();
+    let fonts: Vec<&str> = words.windows(3).filter(|w| w[2] == "Tf").filter_map(|w| w[0].strip_prefix('/')).collect();
+    assert!(!fonts.is_empty());
+    assert!(fonts.iter().all(|f| f.starts_with("PCAr")), "one shaped face for the whole line: {fonts:?}");
+}
+
 #[test]
 fn arabic_items_keep_their_own_fonts_through_saves_updates_and_deletes() {
     let mut doc = fixture();
