@@ -27,30 +27,32 @@ pub struct XmlShape {
 /// [`xml_nesting_depth`] together with the attribute counts, from the same single scan, so a
 /// reader can bound an XML parser's work before it builds a tree.
 pub fn xml_shape(text: &str) -> XmlShape {
+    /// Where `needle` next starts at or after `from`.
     fn find(hay: &[u8], from: usize, needle: &[u8]) -> Option<usize> {
-        (from..hay.len()).find(|&p| hay[p..].starts_with(needle))
+        hay.get(from..)?.windows(needle.len()).position(|w| w == needle).map(|p| from + p)
     }
     let b = text.as_bytes();
     let (mut i, mut depth) = (0usize, 0usize);
     let mut shape = XmlShape::default();
-    while i < b.len() {
-        if b[i] != b'<' {
+    while let Some(&c) = b.get(i) {
+        let rest = b.get(i..).unwrap_or_default();
+        if c != b'<' {
             i += 1;
-        } else if b[i..].starts_with(b"<!--") {
+        } else if rest.starts_with(b"<!--") {
             i = find(b, i + 4, b"-->").map_or(b.len(), |p| p + 3);
-        } else if b[i..].starts_with(b"<![CDATA[") {
+        } else if rest.starts_with(b"<![CDATA[") {
             i = find(b, i + 9, b"]]>").map_or(b.len(), |p| p + 3);
-        } else if b[i..].starts_with(b"<?") {
+        } else if rest.starts_with(b"<?") {
             i = find(b, i + 2, b"?>").map_or(b.len(), |p| p + 2);
-        } else if b[i..].starts_with(b"<!DOCTYPE") {
+        } else if rest.starts_with(b"<!DOCTYPE") {
             i = doctype_end(b, i + 9);
-        } else if b[i..].starts_with(b"<!") {
+        } else if rest.starts_with(b"<!") {
             i = find(b, i + 2, b">").map_or(b.len(), |p| p + 1);
-        } else if b[i..].starts_with(b"</") {
+        } else if rest.starts_with(b"</") {
             depth = depth.saturating_sub(1);
             i = find(b, i + 2, b">").map_or(b.len(), |p| p + 1);
         } else {
-            depth += 1;
+            depth = depth.saturating_add(1);
             shape.depth = shape.depth.max(depth);
             // Skip the rest of the start tag, over any quoted attribute value, and remember its last
             // significant byte: a tag that ends in `/` closes itself, so it is one level deep while it
@@ -59,8 +61,8 @@ pub fn xml_shape(text: &str) -> XmlShape {
             let mut quote = 0u8;
             let mut last = 0u8;
             let mut attributes = 0usize;
-            while i < b.len() {
-                let c = b[i];
+            while let Some(&c) = b.get(i) {
+                i += 1;
                 if quote != 0 {
                     if c == quote {
                         quote = 0;
@@ -68,7 +70,6 @@ pub fn xml_shape(text: &str) -> XmlShape {
                 } else if c == b'"' || c == b'\'' {
                     quote = c;
                 } else if c == b'>' {
-                    i += 1;
                     break;
                 } else if c == b'=' {
                     attributes += 1;
@@ -77,11 +78,10 @@ pub fn xml_shape(text: &str) -> XmlShape {
                 } else if !c.is_ascii_whitespace() {
                     last = c;
                 }
-                i += 1;
             }
             shape.max_tag_attributes = shape.max_tag_attributes.max(attributes);
             if last == b'/' {
-                depth -= 1;
+                depth = depth.saturating_sub(1);
             }
         }
     }
@@ -118,6 +118,7 @@ fn doctype_end(b: &[u8], from: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::xml_nesting_depth as d;
+    use super::{XmlShape, xml_shape};
 
     /// A tag that closes itself is one level while it is read, not a level left open, so a flat
     /// file with thousands of them stays shallow.
@@ -162,11 +163,23 @@ mod tests {
     /// a comment, CDATA or a processing instruction is not.
     #[test]
     fn attributes_are_counted_per_tag_and_in_all() {
-        use super::{XmlShape, xml_shape};
         let shape = |depth, attributes, max_tag_attributes| XmlShape { depth, attributes, max_tag_attributes };
         assert_eq!(xml_shape(r#"<a x="1" y='2'><b z="a=b"/></a>"#), shape(2, 3, 2));
         assert_eq!(xml_shape(r#"<?pi a="1"?><!-- b="2" --><a><![CDATA[c="3"]]></a d="4">"#), shape(1, 0, 0));
         assert_eq!(xml_shape(r#"<r xmlns:n="urn:x" n:a="1"/>"#), shape(1, 2, 2));
         assert_eq!(xml_shape(""), XmlShape::default());
+    }
+
+    /// Every cut of a document, wherever it ends (inside a comment, a CDATA section, a DOCTYPE, a
+    /// quoted value or a tag), is scanned to its end without panicking. A cut can count deeper
+    /// than the whole (a trailing `<` is a start tag to the scan), which errs towards refusing.
+    #[test]
+    fn every_truncation_is_scanned() {
+        let doc = r#"<?xml version="1.0"?><!DOCTYPE r [<!ENTITY e "<x>"> <!-- ' -->]><r a="1>" b='/'><!-- c --><![CDATA[<d>]]><s/><t u="v"></t></r>"#;
+        let whole = xml_shape(doc);
+        assert_eq!(whole, XmlShape { depth: 2, attributes: 3, max_tag_attributes: 2 });
+        for end in 0..=doc.len() {
+            assert!(xml_shape(&doc[..end]).depth <= whole.depth + 1, "{end}");
+        }
     }
 }
