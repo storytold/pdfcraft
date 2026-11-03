@@ -3886,6 +3886,7 @@ fn a_picture_whose_mask_is_not_a_stencil_is_left_alone() {
         assert_eq!(report.images_resampled + report.images_recompressed, 0, "{what}: {report:?}");
         assert_eq!(stream(&doc, img), before, "{what}");
     }
+}
 
 /// A resource dictionary shared by reference between thousands of pages is walked once by the
 /// space audit, not once per page.

@@ -51,7 +51,9 @@ fn tree_entries(doc: &Document, node: &Object) -> Vec<(Vec<u8>, Object)> {
         }
         // A kids array shared by reference is read once, and only kids not yet seen are queued:
         // nodes sharing one array can't multiply the queue.
-        if let Some(kids) = d.get(b"Kids").filter(|k| !matches!(k, Object::Ref(r) if !seen.insert(*r))).map(|x| doc.resolve(x)).and_then(|x| x.as_array().cloned()) {
+        if let Some(kids) =
+            d.get(b"Kids").filter(|k| !matches!(k, Object::Ref(r) if !seen.insert(*r))).map(|x| doc.resolve(x)).and_then(|x| x.as_array().cloned())
+        {
             queue.extend(kids.into_iter().filter(|k| !matches!(k, Object::Ref(r) if seen.contains(r))).map(|k| (k, depth + 1)));
         }
     }
