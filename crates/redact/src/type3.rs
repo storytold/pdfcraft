@@ -408,7 +408,7 @@ pub(crate) fn unlink_type3(doc: &mut Document) -> Result<(), RedactError> {
         return Ok(());
     };
 
-    let holders = crate::holders::resource_holders(doc, top);
+    let holders = crate::holders::resource_holders(doc, top)?;
 
     let form_holders = reachable_form_holders(doc, &holders)?;
 
@@ -448,7 +448,7 @@ pub(crate) fn unlink_type3(doc: &mut Document) -> Result<(), RedactError> {
             .get(b"Resources")
             .and_then(|r| ctx.doc.resolve(r).as_dict().cloned())
             .or_else(|| {
-                holders.iter().find(|(_, users)| users.contains(&p.obj)).and_then(|(h, _)| {
+                holders.iter().find(|(_, users)| users.iter().any(|u| u.num == p.obj.num)).and_then(|(h, _)| {
                     ctx.doc.get(*h).as_dict().and_then(|d| d.get(b"Resources")).and_then(|ro| ctx.doc.resolve(ro).as_dict().cloned())
                 })
             })

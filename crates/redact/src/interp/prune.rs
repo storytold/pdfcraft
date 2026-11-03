@@ -68,8 +68,9 @@ pub(crate) fn unlink_doomed(doc: &mut Document, doomed: &[ObjRef], retired_prope
     }
     let doomed: HashSet<ObjRef> = doomed.iter().copied().collect();
     let Some(top) = doc.root().and_then(|root| doc.get(root).as_dict().and_then(|d| d.reference(b"Pages"))) else { return Ok(()) };
-    let holders = crate::holders::resource_holders(doc, top);
-    let index: HashMap<ObjRef, usize> = pdfcraft_model::pages(doc).iter().enumerate().map(|(i, p)| (p.obj, i)).collect();
+    let holders = crate::holders::resource_holders(doc, top)?;
+    // By number, as both walks tell objects apart.
+    let index: HashMap<u32, usize> = pdfcraft_model::pages(doc).iter().enumerate().map(|(i, p)| (p.obj.num, i)).collect();
     let holder_nodes: Vec<ObjRef> = holders.iter().map(|(node, _)| *node).collect();
     for (node, users) in holders {
         let Some(mut res) = doc.get(node).as_dict().and_then(|d| d.get(b"Resources")).and_then(|r| doc.resolve(r).as_dict().cloned()) else {
@@ -86,7 +87,7 @@ pub(crate) fn unlink_doomed(doc: &mut Document, doomed: &[ObjRef], retired_prope
         for user in &users {
             let page = doc.get(*user).as_dict().cloned().unwrap_or_default();
             // A page whose content cannot be read may still draw the name: fail closed.
-            contents.push(page_streams(doc, &page, index.get(user).copied().unwrap_or(0))?.1);
+            contents.push(page_streams(doc, &page, index.get(&user.num).copied().unwrap_or(0))?.1);
         }
         let mut pruned = false;
         for n in names {
