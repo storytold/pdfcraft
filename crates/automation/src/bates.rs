@@ -76,7 +76,7 @@ impl Automation {
             targets.push((output.to_string(), target));
             passwords.push(entry.get("password").and_then(Value::as_str).map(str::to_owned));
         }
-        check_unique_outputs(&targets)?;
+        check_unique_outputs(&targets, dry_run)?;
 
         let mut plans = Vec::with_capacity(files.len());
         let mut next = start;
@@ -198,60 +198,112 @@ impl Automation {
     }
 }
 
-fn check_unique_outputs(targets: &[(String, PathBuf)]) -> Result<()> {
+fn check_unique_outputs(targets: &[(String, PathBuf)], dry_run: bool) -> Result<()> {
     if targets.len() < 2 {
         return Ok(());
     }
 
-    // Let each target directory decide whether probe names collide; Windows case rules vary by volume and directory.
-    let parent = targets.first().and_then(|(_, path)| path.parent()).ok_or_else(|| failed("output has no parent directory"))?;
-    let marker = tempfile::NamedTempFile::new_in(parent).map_err(failed)?;
-    let marker_name = marker.path().file_name().ok_or_else(|| failed("could not name an output preflight file"))?.to_os_string();
-    drop(marker);
-
-    let mut probes = OutputProbes::default();
-    for (name, target) in targets {
-        let parent = target.parent().ok_or_else(|| failed(format!("output has no parent directory: {name}")))?;
-        let mut probe_name = target.file_name().ok_or_else(|| failed(format!("output has no file name: {name}")))?.to_os_string();
-        probe_name.push(".pdfcraft-bates-");
-        probe_name.push(&marker_name);
-        let probe = parent.join(probe_name);
-        match std::fs::OpenOptions::new().write(true).create_new(true).open(&probe) {
-            Ok(file) => probes.add(probe, file),
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+    if dry_run {
+        let mut seen = std::collections::HashSet::new();
+        for (name, path) in targets {
+            if !seen.insert(path.as_os_str().to_os_string()) {
                 return Err(failed(format!("two files use the same output path: {name}")));
             }
-            Err(error) => return Err(failed(format!("could not validate output path {name}: {error}"))),
         }
-    }
-    probes.cleanup().map_err(|error| failed(format!("could not remove output preflight file: {error}")))
-}
-
-#[derive(Default)]
-struct OutputProbes(Vec<PathBuf>);
-
-impl OutputProbes {
-    fn add(&mut self, path: PathBuf, file: std::fs::File) {
-        drop(file);
-        self.0.push(path);
+        return Ok(());
     }
 
-    fn cleanup(&mut self) -> std::io::Result<()> {
-        while let Some(path) = self.0.pop() {
-            if let Err(error) = std::fs::remove_file(&path) {
-                self.0.push(path);
-                return Err(error);
+    // Probe exact basenames in a directory under each canonical parent, so the filesystem applies its own name rules.
+    let mut groups: std::collections::HashMap<PathBuf, (PathBuf, Vec<(String, std::ffi::OsString)>)> = std::collections::HashMap::new();
+    for (name, target) in targets {
+        let parent = target.parent().ok_or_else(|| failed(format!("output has no parent directory: {name}")))?;
+        let identity = parent.canonicalize().map_err(failed)?;
+        let probe_name = output_probe_name(target).map_err(failed)?;
+        groups.entry(identity).or_insert_with(|| (parent.to_path_buf(), Vec::new())).1.push((name.clone(), probe_name));
+    }
+
+    for (_, (parent, names)) in groups {
+        let probes = tempfile::tempdir_in(parent).map_err(failed)?;
+        for (name, probe_name) in names {
+            let probe = probes.path().join(probe_name);
+            match std::fs::OpenOptions::new().write(true).create_new(true).open(&probe) {
+                Ok(file) => drop(file),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                    return Err(failed(format!("two files use the same output path: {name}")));
+                }
+                Err(error) => return Err(failed(format!("could not validate output path {name}: {error}"))),
             }
         }
-        Ok(())
+    }
+    Ok(())
+}
+
+fn output_probe_name(path: &Path) -> std::io::Result<std::ffi::OsString> {
+    let name = path.file_name().ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "output has no file name"))?;
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::{OsStrExt, OsStringExt};
+        let is_verbatim = path.components().any(|component| matches!(component, std::path::Component::Prefix(prefix) if matches!(prefix.kind(), std::path::Prefix::Verbatim(_) | std::path::Prefix::VerbatimUNC(_, _) | std::path::Prefix::VerbatimDisk(_))));
+        let mut wide: Vec<u16> = name.encode_wide().collect();
+        if !is_verbatim {
+            while wide.last().is_some_and(|unit| *unit == u16::from(b'.') || *unit == u16::from(b' ')) {
+                wide.pop();
+            }
+        }
+        return Ok(std::ffi::OsString::from_wide(&wide));
+    }
+    #[cfg(not(windows))]
+    {
+        Ok(name.to_os_string())
     }
 }
 
-impl Drop for OutputProbes {
-    fn drop(&mut self) {
-        for path in self.0.drain(..) {
-            let _ = std::fs::remove_file(path);
-        }
+#[cfg(test)]
+mod tests {
+    use super::check_unique_outputs;
+
+    #[test]
+    fn dry_run_path_check_creates_no_probe_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("same.pdf");
+        let targets = vec![("first.pdf".into(), path.clone()), ("second.pdf".into(), path)];
+        assert!(check_unique_outputs(&targets, true).is_err());
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn long_output_names_fit_in_probe_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = dir.path().join(format!("{}.pdf", "a".repeat(220)));
+        let second = dir.path().join(format!("{}.pdf", "b".repeat(220)));
+        let targets = vec![("first.pdf".into(), first), ("second.pdf".into(), second)];
+        assert!(check_unique_outputs(&targets, false).is_ok());
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn output_probe_paths_preserve_non_utf8_names() {
+        use std::os::unix::ffi::OsStringExt;
+        let dir = tempfile::tempdir().unwrap();
+        let first = dir.path().join(std::ffi::OsString::from_vec(vec![b'o', 0xff]));
+        let second = dir.path().join(std::ffi::OsString::from_vec(vec![b'o', 0xfe]));
+        let targets = vec![("first.pdf".into(), first), ("second.pdf".into(), second)];
+        assert!(check_unique_outputs(&targets, false).is_ok());
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_probe_names_trim_only_non_verbatim_paths() {
+        use std::ffi::OsString;
+        use std::path::Path;
+
+        let normal = Path::new(r"C:\root\report.pdf. ");
+        assert_eq!(super::output_probe_name(normal).unwrap(), OsString::from("report.pdf"));
+
+        let verbatim = Path::new(r"\\?\C:\root\report.pdf. ");
+        assert_eq!(super::output_probe_name(verbatim).unwrap(), OsString::from("report.pdf. "));
     }
 }
 
