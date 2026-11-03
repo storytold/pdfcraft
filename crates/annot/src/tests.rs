@@ -1014,16 +1014,16 @@ fn comments_without_appearances_get_one_for_display_only() {
         b"<< /Type /Annot /Subtype /Sound /Rect [10 200 30 220] >>",
         b"<< /Type /XObject /Subtype /Form /BBox [10 10 50 50] /Length 0 >>\nstream\n\nendstream",
     ]);
-    let display = with_missing_appearances(&doc).expect("three comments need an appearance");
+    let display = with_missing_appearances(&doc).expect("four comments need an appearance");
     let has_ap = |doc: &Document| list(doc, 0).iter().map(|d| d.get(b"AP").is_some()).collect::<Vec<_>>();
     assert_eq!(has_ap(&doc), [false, false, false, true, false, false, false], "the document itself is untouched");
-    assert_eq!(has_ap(&display), [true, true, true, true, false, false, false], "FreeText, Ink and Text get one; the rest don't");
+    assert_eq!(has_ap(&display), [true, true, true, true, false, false, true], "FreeText, Ink, Text and Sound get one; the rest don't");
     let shown = list(&display, 0);
     let free_text = ap_content(&display, &shown[0]);
     assert!(free_text.contains("re f") && free_text.contains("Tj"), "background box and text: {free_text}");
     assert_eq!(shown[3].get(b"AP"), list(&doc, 0)[3].get(b"AP"), "an existing appearance is kept");
     // The display copy survives a save and reopen (what the renderer reads).
-    assert_eq!(has_ap(&reopen(&display)), [true, true, true, true, false, false, false]);
+    assert_eq!(has_ap(&reopen(&display)), [true, true, true, true, false, false, true]);
     // Nothing to add: no copy.
     let complete = document_of(&[
         b"<< /Type /Catalog /Pages 2 0 R >>",
@@ -2249,4 +2249,89 @@ fn freehand_highlight_is_compatible_ink_with_marker_blending() {
     for (a, b) in rect_from_border.iter().zip([10.0, 90.0, 130.0, 110.0]) {
         assert!((a - b).abs() < 1e-4, "expected [10, 90, 130, 110], got {rect_from_border:?}");
     }
+}
+
+#[test]
+fn sound_annotation_creates_valid_sound_stream_and_appearance() {
+    let shape = Shape::Sound { at: [50.0, 50.0], rate: 44100, channels: 1, samples: vec![0x12, 0x34, 0x56, 0x78] };
+    let mut annotation = new(0, shape.clone());
+    annotation.style = Style::default_for(&shape);
+    let mut doc = fixture();
+    let index = add_annotation(&mut doc, &annotation, &meta("voice comment")).unwrap();
+    let doc = reopen(&doc);
+    let sound_annot = &list(&doc, 0)[index];
+
+    assert_eq!(sound_annot.name(b"Subtype"), Some(&b"Sound"[..]));
+    assert_eq!(sound_annot.name(b"Name"), Some(&b"Mic"[..]));
+    let sound_ref = sound_annot.reference(b"Sound").unwrap();
+    let sound_dict = doc.get(sound_ref).as_dict().unwrap().clone();
+    assert_eq!(sound_dict.get(b"R").and_then(Object::as_int), Some(44100));
+    assert_eq!(sound_dict.get(b"C").and_then(Object::as_int), Some(1));
+    assert_eq!(sound_dict.get(b"B").and_then(Object::as_int), Some(16));
+    assert_eq!(sound_dict.name(b"E"), Some(&b"Signed"[..]));
+
+    let ap = sound_annot.get(b"AP").unwrap().as_dict().unwrap().reference(b"N").unwrap();
+    assert!(doc.get(ap).as_dict().is_some());
+}
+
+#[test]
+fn sound_annotation_validates_channel_frames_and_samples() {
+    let mut doc = fixture();
+
+    // Empty samples rejected
+    let empty_shape = Shape::Sound { at: [50.0, 50.0], rate: 44100, channels: 1, samples: vec![] };
+    let mut a = new(0, empty_shape.clone());
+    a.style = Style::default_for(&empty_shape);
+    let err = add_annotation(&mut doc, &a, &meta("voice")).unwrap_err();
+    assert!(err.to_string().contains("has no samples"));
+
+    // Mono: odd byte count rejected (must be multiple of 2)
+    let mono_odd = Shape::Sound { at: [50.0, 50.0], rate: 44100, channels: 1, samples: vec![0x12, 0x34, 0x56] };
+    let mut a = new(0, mono_odd.clone());
+    a.style = Style::default_for(&mono_odd);
+    let err = add_annotation(&mut doc, &a, &meta("voice")).unwrap_err();
+    assert!(err.to_string().contains("not a multiple of whole frames"));
+
+    // Zero channels rejected
+    let no_channels = Shape::Sound { at: [50.0, 50.0], rate: 44100, channels: 0, samples: vec![1, 2] };
+    let mut a = new(0, no_channels.clone());
+    a.style = Style::default_for(&no_channels);
+    let err = add_annotation(&mut doc, &a, &meta("voice")).unwrap_err();
+    assert!(err.to_string().contains("must be mono or stereo"));
+
+    // Stereo: incomplete frame (2 bytes is only 1 sample, stereo requires 4 bytes per frame)
+    let stereo_incomplete = Shape::Sound { at: [50.0, 50.0], rate: 44100, channels: 2, samples: vec![0x12, 0x34] };
+    let mut a = new(0, stereo_incomplete.clone());
+    a.style = Style::default_for(&stereo_incomplete);
+    let err = add_annotation(&mut doc, &a, &meta("voice")).unwrap_err();
+    assert!(err.to_string().contains("not a multiple of whole frames"));
+
+    // Stereo: 6 bytes is 3 samples (1.5 frames) -> rejected
+    let stereo_odd_frames = Shape::Sound { at: [50.0, 50.0], rate: 44100, channels: 2, samples: vec![1, 2, 3, 4, 5, 6] };
+    let mut a = new(0, stereo_odd_frames.clone());
+    a.style = Style::default_for(&stereo_odd_frames);
+    let err = add_annotation(&mut doc, &a, &meta("voice")).unwrap_err();
+    assert!(err.to_string().contains("not a multiple of whole frames"));
+
+    // Stereo: one complete frame (4 bytes) -> accepted
+    let stereo_one_frame = Shape::Sound { at: [50.0, 50.0], rate: 44100, channels: 2, samples: vec![1, 2, 3, 4] };
+    let mut a = new(0, stereo_one_frame.clone());
+    a.style = Style::default_for(&stereo_one_frame);
+    assert!(add_annotation(&mut doc, &a, &meta("voice")).is_ok());
+
+    // Stereo: valid 8 bytes (2 complete frames) -> accepted
+    let stereo_valid = Shape::Sound { at: [50.0, 50.0], rate: 48000, channels: 2, samples: vec![1, 2, 3, 4, 5, 6, 7, 8] };
+    let mut a = new(0, stereo_valid.clone());
+    a.style = Style::default_for(&stereo_valid);
+    let idx = add_annotation(&mut doc, &a, &meta("voice")).unwrap();
+    let re = reopen(&doc);
+    let annot = &list(&re, 0)[idx];
+    assert_eq!(annot.name(b"Subtype"), Some(&b"Sound"[..]));
+    let sref = annot.reference(b"Sound").unwrap();
+    let Object::Stream(s) = &*re.get(sref) else { panic!("Sound is not a stream") };
+    assert_eq!(s.dict.get(b"C").and_then(Object::as_int), Some(2));
+    assert_eq!(s.dict.get(b"R").and_then(Object::as_int), Some(48000));
+    assert_eq!(s.dict.get(b"B").and_then(Object::as_int), Some(16));
+    assert_eq!(s.dict.get(b"E").and_then(Object::as_name), Some(&b"Signed"[..]));
+    assert_eq!(s.decoded().unwrap(), vec![1, 2, 3, 4, 5, 6, 7, 8]);
 }

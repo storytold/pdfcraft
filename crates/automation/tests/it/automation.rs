@@ -10534,3 +10534,189 @@ fn mixed_script_tools_normalize_but_undo_restores_the_exact_mixture() {
         assert_eq!(page_text(&mut a, reopened)[0], plain);
     }
 }
+
+#[test]
+fn sound_comment_creates_valid_sound_annotation_and_survives_save_reopen() {
+    let dir = workdir("sound-comment");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+
+    let wav_bytes = {
+        let channels = 1u16;
+        let rate = 44100u32;
+        let bits = 16u16;
+        let block_align = channels * (bits / 8);
+        let byte_rate = rate * u32::from(block_align);
+        let pcm = [0x12, 0x34, 0x56, 0x78];
+
+        let mut fmt_payload = Vec::new();
+        fmt_payload.extend_from_slice(&1u16.to_le_bytes());
+        fmt_payload.extend_from_slice(&channels.to_le_bytes());
+        fmt_payload.extend_from_slice(&rate.to_le_bytes());
+        fmt_payload.extend_from_slice(&byte_rate.to_le_bytes());
+        fmt_payload.extend_from_slice(&block_align.to_le_bytes());
+        fmt_payload.extend_from_slice(&bits.to_le_bytes());
+
+        let mut body = Vec::new();
+        let bext = b"Metadata chunk before fmt";
+        body.extend_from_slice(b"bext");
+        body.extend_from_slice(&(bext.len() as u32).to_le_bytes());
+        body.extend_from_slice(bext);
+        if !bext.len().is_multiple_of(2) {
+            body.push(0);
+        }
+
+        body.extend_from_slice(b"fmt ");
+        body.extend_from_slice(&(fmt_payload.len() as u32).to_le_bytes());
+        body.extend_from_slice(&fmt_payload);
+
+        body.extend_from_slice(b"data");
+        body.extend_from_slice(&(pcm.len() as u32).to_le_bytes());
+        body.extend_from_slice(&pcm);
+
+        let mut out = Vec::new();
+        out.extend_from_slice(b"RIFF");
+        out.extend_from_slice(&(4u32 + body.len() as u32).to_le_bytes());
+        out.extend_from_slice(b"WAVE");
+        out.extend_from_slice(&body);
+        out
+    };
+
+    std::fs::write(dir.join("voice.wav"), wav_bytes).unwrap();
+
+    let res = ok(
+        &mut a,
+        "comment_add",
+        json!({
+            "doc": doc,
+            "page": 1,
+            "type": "sound",
+            "at": [50, 50],
+            "path": "voice.wav",
+            "contents": "Voice memo",
+            "author": "Alice"
+        }),
+    );
+    assert_eq!(res["comment"]["page"], 1);
+
+    let list = ok(&mut a, "comment_list", json!({ "doc": doc }));
+    assert_eq!(list["count"], 1);
+    assert_eq!(list["comments"][0]["type"], "Sound");
+
+    // Test undo and redo
+    ok(&mut a, "edit_undo", json!({ "doc": doc }));
+    assert_eq!(ok(&mut a, "comment_list", json!({ "doc": doc }))["count"], 0);
+    ok(&mut a, "edit_redo", json!({ "doc": doc }));
+    assert_eq!(ok(&mut a, "comment_list", json!({ "doc": doc }))["count"], 1);
+
+    // Save and reopen
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "saved.pdf" }));
+    let doc2 = ok(&mut a, "doc_open", json!({ "path": "saved.pdf" }))["doc"].as_u64().unwrap();
+    let list2 = ok(&mut a, "comment_list", json!({ "doc": doc2 }));
+    assert_eq!(list2["count"], 1);
+    assert_eq!(list2["comments"][0]["type"], "Sound");
+    assert_eq!(list2["comments"][0]["contents"], "Voice memo");
+
+    // Verify stored Sound stream dictionary keys and PCM sample payload in saved.pdf
+    use pdfcraft_cos::Object;
+    let saved = pdfcraft_cos::Document::open(std::sync::Arc::new(std::fs::read(dir.join("saved.pdf")).unwrap())).unwrap();
+    let catalog = saved.get(saved.root().unwrap()).as_dict().cloned().unwrap();
+    let pages = saved.get(catalog.reference(b"Pages").unwrap()).as_dict().cloned().unwrap();
+    let kids = pages.get(b"Kids").unwrap().as_array().unwrap();
+    let page0_ref = kids[0].as_ref().unwrap();
+    let page0_dict = saved.get(page0_ref).as_dict().unwrap().clone();
+    let annots_arr = page0_dict.get(b"Annots").unwrap().as_array().unwrap();
+    assert_eq!(annots_arr.len(), 1);
+    let annot_ref = annots_arr[0].as_ref().unwrap();
+    let annot_dict = saved.get(annot_ref).as_dict().unwrap().clone();
+    assert_eq!(annot_dict.name(b"Subtype"), Some(&b"Sound"[..]));
+    let sref = annot_dict.reference(b"Sound").unwrap();
+    let Object::Stream(s) = &*saved.get(sref) else { panic!("Sound is not a stream") };
+    assert_eq!(s.dict.get(b"C").and_then(Object::as_int), Some(1));
+    assert_eq!(s.dict.get(b"R").and_then(Object::as_int), Some(44100));
+    assert_eq!(s.dict.get(b"B").and_then(Object::as_int), Some(16));
+    assert_eq!(s.dict.get(b"E").and_then(Object::as_name), Some(&b"Signed"[..]));
+    assert_eq!(s.decoded().unwrap(), vec![0x34, 0x12, 0x78, 0x56]);
+}
+
+#[cfg(unix)]
+#[test]
+fn sound_comment_rejects_fifo_special_file() {
+    let dir = workdir("sound-fifo");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let fifo_path = dir.join("test.fifo");
+    let status = std::process::Command::new("mkfifo").arg(&fifo_path).status();
+    if let Ok(s) = status
+        && s.success()
+    {
+        let e = err(
+            &mut a,
+            "comment_add",
+            json!({
+                "doc": doc,
+                "page": 1,
+                "type": "sound",
+                "at": [50, 50],
+                "path": "test.fifo"
+            }),
+        );
+        assert!(e.to_string().contains("not a regular file"), "expected not a regular file, got: {e}");
+    }
+}
+
+#[test]
+fn sound_comment_rejects_oversized_and_malformed_audio_files() {
+    let dir = workdir("sound-oversized");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+
+    // 1. Oversized file (simulated with sparse file > 64 MiB)
+    let large_path = dir.join("huge.wav");
+    let huge_file = std::fs::File::create(&large_path).unwrap();
+    huge_file.set_len(64 * 1024 * 1024 + 128).unwrap();
+    drop(huge_file);
+
+    let e_huge = err(
+        &mut a,
+        "comment_add",
+        json!({
+            "doc": doc,
+            "page": 1,
+            "type": "sound",
+            "at": [50, 50],
+            "path": "huge.wav"
+        }),
+    );
+    assert!(e_huge.to_string().contains("audio file is too large"), "expected file too large error, got: {e_huge}");
+
+    // 2. Empty file
+    std::fs::write(dir.join("empty.wav"), b"").unwrap();
+    let e_empty = err(
+        &mut a,
+        "comment_add",
+        json!({
+            "doc": doc,
+            "page": 1,
+            "type": "sound",
+            "at": [50, 50],
+            "path": "empty.wav"
+        }),
+    );
+    assert!(e_empty.to_string().contains("empty audio file"), "expected empty error, got: {e_empty}");
+
+    // 3. Truncated / malformed RIFF header
+    std::fs::write(dir.join("corrupt.wav"), b"RIFF\x10\x00\x00\x00NOTWAVE").unwrap();
+    let e_corrupt = err(
+        &mut a,
+        "comment_add",
+        json!({
+            "doc": doc,
+            "page": 1,
+            "type": "sound",
+            "at": [50, 50],
+            "path": "corrupt.wav"
+        }),
+    );
+    assert!(e_corrupt.to_string().contains("not a WAVE file"), "expected not wave error, got: {e_corrupt}");
+}

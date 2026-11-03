@@ -532,3 +532,11 @@ pub(super) fn note_icon(name: &str, col: Rgb) -> String {
     }
     s
 }
+
+pub(super) fn sound_icon(col: Rgb) -> String {
+    let mut s = format!("{}1 1 1 RG 1.4 w 1 j 1 J\n", rg(col));
+    s.push_str("4 1 m 16 1 l 19 1 19 4 19 4 c 19 16 l 19 19 16 19 16 19 c 4 19 l 1 19 1 16 1 16 c 1 4 l 1 1 4 1 4 1 c h f\n");
+    s.push_str("8 11 m 8 15 l 8 17.5 12 17.5 12 15 c 12 11 l 12 8.5 8 8.5 8 11 c h S\n");
+    s.push_str("6 11.5 m 6 7 14 7 14 11.5 c S\n10 7.8 m 10 4.5 l 7.5 4.5 m 12.5 4.5 l S\n");
+    s
+}

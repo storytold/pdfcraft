@@ -344,6 +344,7 @@ fn add_annotation(s: &Shape) -> &'static str {
         Shape::Callout { .. } => "Add callout",
         Shape::Caret { .. } => "Add inserted text",
         Shape::Attachment { .. } => "Add file attachment",
+        Shape::Sound { .. } => "Add voice comment",
     }
 }
 

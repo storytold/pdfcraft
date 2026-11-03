@@ -410,6 +410,27 @@ impl Automation {
                     };
                     Shape::Attachment { at: icon_anchor(&info, x, y), icon, file, data }
                 }
+                "sound" => {
+                    let [x, y] = a.need::<2>("at", "a voice comment (its icon's top-left)")?;
+                    let path = self.resolve(a.str("path")?, false)?;
+                    let meta = std::fs::metadata(&path).map_err(|e| ToolError::Failed(format!("{}: {e}", path.display())))?;
+                    if !meta.is_file() {
+                        return Err(ToolError::Failed(format!("{}: not a regular file", path.display())));
+                    }
+                    if meta.len() > crate::wav::MAX_WAV_FILE_SIZE as u64 {
+                        let err = crate::wav::WavError::FileTooLarge(meta.len() as usize);
+                        return Err(ToolError::Failed(format!("{}: {err}", path.display())));
+                    }
+                    let file = std::fs::File::open(&path).map_err(|e| ToolError::Failed(format!("{}: {e}", path.display())))?;
+                    if let Ok(m) = file.metadata()
+                        && !m.is_file()
+                    {
+                        return Err(ToolError::Failed(format!("{}: not a regular file", path.display())));
+                    }
+                    let data = crate::wav::read_wav_bounded(file).map_err(|e| ToolError::Failed(format!("{}: {e}", path.display())))?;
+                    let (rate, channels, samples) = wav_samples(&data).map_err(|e| ToolError::Failed(format!("{}: {e}", path.display())))?;
+                    Shape::Sound { at: icon_anchor(&info, x, y), rate, channels: channels as u16, samples }
+                }
                 "caret" => {
                     let [x, y] = a.need::<2>("at", "a caret (the insertion point on the baseline)")?;
                     Shape::Caret { rect: rect_to_user(&info, [x - 4.0, y, x + 4.0, y + 8.0]) }
@@ -741,6 +762,8 @@ impl Automation {
         self.apply(a, edit)
     }
 }
+
+use crate::wav::wav_samples;
 
 #[cfg(test)]
 mod tests {

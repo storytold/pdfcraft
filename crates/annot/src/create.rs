@@ -56,7 +56,7 @@ pub(crate) fn rect_for(shape: &Shape, style: &Style) -> Result<[f64; 4], AnnotEr
     let bad = |what: &str| AnnotError::Invalid(format!("invalid {what}"));
     let half = style.width.max(0.0) / 2.0;
     let r = match shape {
-        Shape::Note { at, .. } | Shape::Attachment { at, .. } => {
+        Shape::Note { at, .. } | Shape::Attachment { at, .. } | Shape::Sound { at, .. } => {
             if !finite(at) {
                 return Err(bad("position"));
             }
@@ -188,6 +188,7 @@ fn subject(shape: &Shape) -> &'static str {
         Shape::Callout { .. } => "Callout",
         Shape::Caret { .. } => "Inserted Text",
         Shape::Attachment { .. } => "File Attachment",
+        Shape::Sound { .. } => "Voice Comment",
     }
 }
 
@@ -371,6 +372,28 @@ pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> R
             d.set(b"LE".to_vec(), Object::name(ending.name()));
             // The text box inside /Rect (§12.5.6.6 /RD).
             d.set(b"RD".to_vec(), num_array(&[tb[0] - rect[0], tb[1] - rect[1], rect[2] - tb[2], rect[3] - tb[3]]));
+        }
+        Shape::Sound { rate, channels, samples, .. } => {
+            if !(1..=2).contains(channels) || !(4000..=96000).contains(rate) {
+                return Err(AnnotError::Invalid("the recording must be mono or stereo at 4 to 96 kHz".into()));
+            }
+            let bytes_per_frame = 2 * (*channels as usize);
+            if samples.is_empty() {
+                return Err(AnnotError::Invalid("the recording has no samples".into()));
+            }
+            if samples.len() % bytes_per_frame != 0 {
+                return Err(AnnotError::Invalid("the recording sample data is not a multiple of whole frames".into()));
+            }
+            d.set(b"C".to_vec(), rgb(style.color));
+            d.set(b"Name".to_vec(), Object::name("Mic"));
+            d.set(b"F".to_vec(), Object::Int(FLAG_PRINT | FLAG_NO_ZOOM | FLAG_NO_ROTATE));
+            let mut sd = Dict::new();
+            sd.set(b"Type".to_vec(), Object::name("Sound"));
+            sd.set(b"R".to_vec(), Object::Int(i64::from(*rate)));
+            sd.set(b"C".to_vec(), Object::Int(i64::from(*channels)));
+            sd.set(b"B".to_vec(), Object::Int(16));
+            sd.set(b"E".to_vec(), Object::name("Signed"));
+            d.set(b"Sound".to_vec(), Object::Ref(doc.add(Object::Stream(pdfcraft_cos::Stream::flate(sd, samples)))));
         }
         _ => {}
     }

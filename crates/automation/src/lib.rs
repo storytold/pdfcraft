@@ -32,6 +32,7 @@ mod redact;
 mod signing;
 mod text_cache;
 mod tools;
+pub mod wav;
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
