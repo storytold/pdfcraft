@@ -40,7 +40,9 @@ including CDATA and character references. Nested-element and XFA interpretation 
 
 CSV export and spreadsheet merging quote tabs, and import distinguishes quoted tabs from TSV
 delimiters without changing field identities. Automatic detection of externally authored, ambiguous
-tables remains heuristic.
+tables remains heuristic. Both write a cell that a spreadsheet would run as a formula (`=` or `@`,
+or `+` or `-` when it isn't a plain number) with a leading `'`; CSV import takes off the `'` that
+export added, so exported data imports back unchanged.
 
 Import replaces comments with the same `/NM` (and drops the replaced comment's pop-up), draws
 appearances PdfCraft can draw, and sets values through the form's own checks (formats,

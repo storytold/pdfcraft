@@ -163,7 +163,7 @@ pub(crate) fn same_base_font(a: &str, b: &str) -> bool {
 }
 
 /// `ABCDEF+Arial` → `Arial`. A name without a subset tag is returned unchanged.
-pub(crate) fn strip_subset_tag(name: &str) -> &str {
+pub fn strip_subset_tag(name: &str) -> &str {
     let bytes = name.as_bytes();
     let is_tag = bytes.get(6) == Some(&b'+') && bytes.get(..6).is_some_and(|tag| tag.iter().all(u8::is_ascii_uppercase));
     if is_tag { name.get(7..).unwrap_or(name) } else { name }
