@@ -18,8 +18,11 @@ impl Automation {
 
     /// [`resolve`](Self::resolve) with the kind of access named, for the places where a file that
     /// is only read may still be missing (a path checked up front, whose absence is reported per
-    /// file later). The automation roots, if any, get the last word.
+    /// file later). On Windows a device name (`NUL`, `aux.pdf`, `COM¹`) is refused first, with a
+    /// root or without ([`file_access::refuse_device_names`]). The automation roots, if any, get
+    /// the last word.
     pub(crate) fn resolve_for(&self, path: &str, access: file_access::Access, may_be_missing: bool) -> Result<PathBuf> {
+        file_access::refuse_device_names(path, Path::new(path)).map_err(failed)?;
         let target = self.resolve_in_root(path, may_be_missing)?;
         self.check_roots(path, &target, access)?;
         Ok(target)

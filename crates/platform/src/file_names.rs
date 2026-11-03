@@ -21,6 +21,9 @@ pub fn is_windows_device_name(name: &str) -> bool {
 mod tests {
     use super::is_windows_device_name as device;
 
+    /// Checked on Windows 10 by writing to each name: `COM¹` and `lpt³.pdf` open `\\.\COM¹` and
+    /// `\\.\lpt³`, and `nul:.txt` opens `NUL`; `COM0`, `COM10`, `CONIN` and a no-break space before
+    /// the dot make ordinary files.
     #[test]
     fn device_names_match_in_any_case_with_any_extension() {
         for name in [
@@ -28,6 +31,7 @@ mod tests {
             "prn",
             "Aux",
             "nul.pdf",
+            "con.pdf.pdf",
             "nul .txt",
             "NUL  ",
             "clock$",
@@ -39,13 +43,16 @@ mod tests {
             "lpt³.pdf",
             "com²",
             "NUL:",
+            "nul:.pdf",
             "com1:x",
             "con :",
         ] {
             assert!(device(name), "{name}");
         }
         // Only spaces are dropped before the extension: `NUL\u{a0}.pdf` is a file.
-        for name in ["COM10", "COM0", "LPT", "Console", "nul_", "x.nul", "", ".", "CO M1", "COM⁴", "NUL\u{a0}.pdf", "con\u{3000}"] {
+        for name in
+            ["COM10", "COM0", "LPT", "Console", "CONIN", "nullx.pdf", "nul_", "x.nul", "", ".", "CO M1", "COM⁴", "NUL\u{a0}.pdf", "con\u{3000}"]
+        {
             assert!(!device(name), "{name}");
         }
     }

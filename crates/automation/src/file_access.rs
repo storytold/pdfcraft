@@ -24,6 +24,8 @@ use std::ffi::OsString;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
+use pdfcraft_platform::file_names::is_windows_device_name;
+
 /// Read access or write access.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Access {
@@ -135,12 +137,19 @@ fn absolute(shown: &str, path: &Path) -> Result<PathBuf, String> {
         return Err("automation path rejected: path is empty".into());
     }
     // Checked as given: making `…\NUL` absolute gives the device path `\\.\NUL` on Windows.
-    if cfg!(windows)
-        && path.components().any(|c| matches!(c, Component::Normal(n) if pdfcraft_platform::file_names::is_windows_device_name(&n.to_string_lossy())))
-    {
+    refuse_device_names(shown, path)?;
+    std::path::absolute(path).map_err(|e| format!("automation path rejected: cannot resolve {shown}: {e}"))
+}
+
+/// On Windows, an error naming `shown` when a component of `path` is a device name
+/// ([`is_windows_device_name`]). Such a name reaches the device rather than a file, or, joined to
+/// a folder written as `\\?\…` (as a canonicalized `--root` is), is created as a file that other
+/// programs can neither open nor delete by its plain path.
+pub(crate) fn refuse_device_names(shown: &str, path: &Path) -> Result<(), String> {
+    if cfg!(windows) && path.components().any(|c| matches!(c, Component::Normal(n) if is_windows_device_name(&n.to_string_lossy()))) {
         return Err(format!("automation path rejected: reserved device names are not allowed: {shown}"));
     }
-    std::path::absolute(path).map_err(|e| format!("automation path rejected: cannot resolve {shown}: {e}"))
+    Ok(())
 }
 
 /// `absolute` with its links followed; for a path that doesn't exist (yet), its nearest existing
