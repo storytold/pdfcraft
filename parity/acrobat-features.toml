@@ -1815,6 +1815,7 @@ evidence = [
   "crates/ui-egui/tests/it/comments.rs::hotbar_full_side_strip_spans_each_edge_and_returns_to_float",
   "crates/ui-egui/tests/it/comments.rs::hotbar_docked_left_does_not_override_quick_tools",
   "crates/ui-egui/tests/it/comments.rs::hotbar_docked_in_compact_window_keeps_settings_button_visible",
+  "crates/ui-egui/tests/it/comments.rs::hotbar_settings_menu_closes_on_click_outside",
 ]
 notes = "Pin and unpin tools on the Home page via tool card hover button, All Tools row toggle, or 'Pin a tool' search dialog. Pinned tool order persists across sessions. Customizable document hotbar searches the command registry, adds/removes tools, resizes buttons from 24 to 64 pixels, floats or docks on any side with an optional full-side chrome strip, and persists preferences (UI control: hotbar-tools, hotbar-size, hotbar-side, hotbar-full-side). Missing: hotbar shortcut reordering and full Acrobat customization-dialog parity."
 

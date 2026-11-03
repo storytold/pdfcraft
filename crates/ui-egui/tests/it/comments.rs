@@ -3284,3 +3284,38 @@ fn hotbar_docked_in_compact_window_keeps_settings_button_visible() {
         assert!(settings_rect.max.y <= 480.0, "{side} hotbar settings button must stay within window height: {settings_rect:?}");
     }
 }
+
+#[test]
+fn hotbar_settings_menu_closes_on_click_outside() {
+    let mut h = harness(|app| {
+        app.open_bytes("text.pdf", None, TEXT_FIXTURE.to_vec()).expect("opens");
+    });
+    h.get_by_label("Hotbar settings").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Close menu").is_some());
+
+    // Clicking outside on the canvas dismisses the settings menu
+    h.event(egui::Event::PointerButton {
+        pos: egui::pos2(600.0, 300.0),
+        button: egui::PointerButton::Primary,
+        pressed: true,
+        modifiers: Default::default(),
+    });
+    h.event(egui::Event::PointerButton {
+        pos: egui::pos2(600.0, 300.0),
+        button: egui::PointerButton::Primary,
+        pressed: false,
+        modifiers: Default::default(),
+    });
+    h.run_steps(3);
+    assert!(h.query_by_label("Close menu").is_none(), "clicking outside closes the hotbar settings menu");
+
+    // Reopening and clicking another tool outside dismisses the menu and activates that tool
+    h.get_by_label("Hotbar settings").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Close menu").is_some());
+    h.get_by_label("Hand (H)").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Close menu").is_none());
+    assert_eq!(h.state().quick_tool, QuickTool::Hand);
+}

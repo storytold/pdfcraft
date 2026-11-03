@@ -94,7 +94,7 @@ impl Hotbar {
 }
 
 /// Render the hotbar settings gear button and open the tool picker when clicked.
-fn settings_button(ui: &mut egui::Ui, cell: f32, picker_open: &mut bool) {
+fn settings_button(ui: &mut egui::Ui, cell: f32, picker_open: &mut bool) -> bool {
     let settings = ui
         .push_id("hotbar-settings", |ui| {
             icons::button(ui, "settings", cell, false, tl!("Hotbar settings")).on_hover_text(tl!("Hotbar settings / add tools"))
@@ -102,6 +102,9 @@ fn settings_button(ui: &mut egui::Ui, cell: f32, picker_open: &mut bool) {
         .inner;
     if settings.clicked() {
         *picker_open = true;
+        true
+    } else {
+        false
     }
 }
 
@@ -445,7 +448,9 @@ pub(crate) fn show(app: &mut PdfCraftApp, area: Rect, page_left: Option<f32>, ui
         bounds.min + vec2(travel.x * bar.position[0], travel.y * bar.position[1])
     };
     let mut run = None;
+    let was_picker_open = bar.picker_open;
     let mut picker_open = bar.picker_open;
+    let mut settings_clicked = false;
     let shown = egui::Area::new(id).order(egui::Order::Middle).fixed_pos(pos).constrain_to(bounds).show(&ctx, |ui| {
         let frame = if full_side {
             egui::Frame::NONE.fill(t.chrome).corner_radius(egui::CornerRadius::ZERO).inner_margin(6)
@@ -471,7 +476,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, area: Rect, page_left: Option<f32>, ui
             if full_side {
                 if bar.vertical {
                     ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
-                        settings_button(ui, cell, &mut picker_open);
+                        settings_clicked |= settings_button(ui, cell, &mut picker_open);
                         ui.add_space(4.0);
                         let remaining = ui.available_height().max(cell);
                         egui::ScrollArea::vertical().max_height(remaining).show(ui, |ui| {
@@ -487,7 +492,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, area: Rect, page_left: Option<f32>, ui
                     });
                 } else {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        settings_button(ui, cell, &mut picker_open);
+                        settings_clicked |= settings_button(ui, cell, &mut picker_open);
                         ui.add_space(4.0);
                         let remaining = ui.available_width().max(cell);
                         egui::ScrollArea::horizontal().max_height(cell).max_width(remaining).show(ui, |ui| {
@@ -542,7 +547,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, area: Rect, page_left: Option<f32>, ui
                                 }
                             });
                         });
-                        settings_button(ui, cell, &mut picker_open);
+                        settings_clicked |= settings_button(ui, cell, &mut picker_open);
                     } else {
                         core_tool_buttons(ui, app, cell, popup_align, &t);
                         active_tool_controls(ui, app, &t, false);
@@ -555,7 +560,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, area: Rect, page_left: Option<f32>, ui
                                 });
                             });
                         }
-                        settings_button(ui, cell, &mut picker_open);
+                        settings_clicked |= settings_button(ui, cell, &mut picker_open);
                     }
                 });
             }
@@ -595,7 +600,7 @@ pub(crate) fn show(app: &mut PdfCraftApp, area: Rect, page_left: Option<f32>, ui
         pos.y.clamp(screen.top(), (screen.bottom() - 460.0).max(screen.top())),
     );
     let mut close_dialog = false;
-    egui::Window::new(tl!("Hotbar tools"))
+    let picker_resp = egui::Window::new(tl!("Hotbar tools"))
         .id(picker_id)
         .order(egui::Order::Foreground)
         .open(&mut picker_open)
@@ -715,6 +720,15 @@ pub(crate) fn show(app: &mut PdfCraftApp, area: Rect, page_left: Option<f32>, ui
                 }
             });
         });
+    let clicked_outside = was_picker_open
+        && !settings_clicked
+        && picker_resp.as_ref().is_some_and(|wr| {
+            wr.response.clicked_elsewhere()
+                || ctx.input(|i| i.pointer.any_click() && !i.pointer.interact_pos().is_some_and(|p| wr.response.rect.contains(p)))
+        });
+    if clicked_outside || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+        close_dialog = true;
+    }
     if close_dialog {
         picker_open = false;
     }
