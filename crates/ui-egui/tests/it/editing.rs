@@ -579,6 +579,41 @@ fn the_save_button_is_greyed_out_until_there_is_something_to_save() {
     let _ = std::fs::remove_file(out);
 }
 
+/// FredApps on #5336: a file repaired as it opened (here, its cross-reference offset is wrong)
+/// keeps Save available, since only a save keeps the repair; the saved file opens clean, and the
+/// button greys out.
+#[test]
+fn a_file_repaired_as_it_opened_can_be_saved_and_then_greys_out() {
+    let mut bytes = fixture(1);
+    let at = bytes.windows(10).rposition(|w| w == b"startxref\n").unwrap() + 10;
+    let end = at + bytes[at..].iter().position(|b| *b == b'\n').unwrap();
+    bytes.splice(at..end, b"7".iter().copied());
+    let out = temp_path("repaired-save.pdf");
+    std::fs::write(&out, &bytes).unwrap();
+    let path = out.to_string_lossy().into_owned();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe({
+        let path = path.clone();
+        move |_| {
+            let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
+            app.open_bytes("repaired-save.pdf", Some(path), bytes).unwrap();
+            app
+        }
+    });
+    h.ctx.set_os(egui::os::OperatingSystem::Windows);
+    h.run_steps(4);
+    let id = h.state().views[0].id;
+    assert!(!h.state().session.get(id).unwrap().repair_log().is_empty(), "the setup is a repaired file");
+    let disabled = |h: &Harness<'static, PdfCraftApp>| h.get_by_role_and_label(Role::Button, "Save (Ctrl+S)").accesskit_node().is_disabled();
+    assert!(!dirty(&h) && !disabled(&h), "nothing edited, but the repair is only kept by saving");
+    h.state_mut().save_override = Some(path);
+    h.get_by_role_and_label(Role::Button, "Save (Ctrl+S)").click();
+    h.run_steps(3);
+    assert!(h.state().session.get(id).unwrap().repair_log().is_empty(), "the saved file needs no repair");
+    assert!(disabled(&h), "saved: nothing left to save");
+    let _ = std::fs::remove_file(out);
+}
+
 #[test]
 fn save_as_to_a_new_file_drops_earlier_revisions() {
     // #2165: Save As appended a revision, so a deleted page stayed in the new file's first one.
