@@ -49,6 +49,7 @@ impl Draft {
         }
     }
 
+    /// Creates edits for the draft fields that apply to this tag's mapped standard type.
     fn edit(&self, tag: &TagInfo) -> Option<Edit> {
         let mut edits = Vec::new();
         let mut add = |property, prior: Option<&str>, next: &str| {
