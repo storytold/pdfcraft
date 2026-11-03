@@ -33,8 +33,9 @@ fn fixture_with_info(info: Option<&str>) -> Vec<u8> {
     out
 }
 
+/// Return the rectangle recorded for a dialog card, failing the test when the card is missing.
 fn card(h: &Harness<'_, PdfCraftApp>, id: &str) -> egui::Rect {
-    h.ctx.data(|d| d.get_temp(egui::Id::new(id).with("card"))).unwrap_or_else(|| panic!("missing dialog card {id}"))
+    h.ctx.data(|d| d.get_temp(egui::Id::unique(id).with("card"))).unwrap_or_else(|| panic!("missing dialog card {id}"))
 }
 
 fn protected() -> Vec<u8> {
@@ -202,6 +203,7 @@ fn space_audit_tab_measures_again_after_an_edit() {
     assert!(h.query_all_by_label("Bookmarks").any(|n| card.contains_rect(n.rect())), "a Bookmarks row in {card:?}");
 }
 
+/// Check that a dialog's Close button follows the content when switching from a taller tab to a shorter one.
 #[test]
 fn dialog_buttons_follow_the_content_after_a_taller_tab() {
     use pdfcraft_ui_egui::{Dialog, PropsTab};
@@ -213,6 +215,10 @@ fn dialog_buttons_follow_the_content_after_a_taller_tab() {
         app
     });
     h.run_steps(4);
+    for name in ["Navigation tab", "Page layout", "Magnification"] {
+        h.get_by_role_and_label(Role::ComboBox, name);
+    }
+    h.get_by_role_and_label(Role::SpinButton, "Open to page");
     h.state_mut().dialog = Some(Dialog::Properties(PropsTab::Description));
     h.run_steps(4);
     // The card shrinks back to the shorter tab: Close sits under the last row, not halfway

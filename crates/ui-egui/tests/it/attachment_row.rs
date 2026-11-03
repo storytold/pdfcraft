@@ -127,22 +127,23 @@ fn the_right_click_menu_opens_saves_and_deletes() {
     assert_eq!((count(&h, "Save attachment…"), count(&h, "Open in a new tab"), count(&h, "Delete attachment")), (3, 1, 3));
     h.key_press(egui::Key::Escape);
     h.run_steps(3);
-    // The PDF's menu: Save writes the PDF, not the text file whose row comes last.
+    // Scope actions to the menu: egui nests it under its row in the accessibility tree.
+    // Save writes the PDF, not the text file whose row comes last.
     right_click(&mut h, "inner.pdf");
     assert_eq!(count(&h, "Open in a new tab"), 2, "the PDF's menu offers Open");
     h.state_mut().pick_override = Some(vec![target.to_string_lossy().into_owned()]);
-    h.get_all_by_label("Save attachment…").last().unwrap().click();
+    h.get_by_role(egui::accesskit::Role::Menu).get_by_label("Save attachment…").click();
     h.run_steps(3);
     assert_eq!(std::fs::read(&target).unwrap(), INNER, "Save from inner.pdf's menu");
     right_click(&mut h, "inner.pdf");
-    h.get_all_by_label("Open in a new tab").last().unwrap().click();
+    h.get_by_role(egui::accesskit::Role::Menu).get_by_label("Open in a new tab").click();
     h.run_steps(3);
     assert_eq!(h.state().views.len(), 2, "Open from the menu");
     h.state_mut().active = Some(0);
     h.run_steps(3);
     // Delete from inner.pdf's menu leaves notes.txt, whose row's button would delete itself.
     right_click(&mut h, "inner.pdf");
-    h.get_all_by_label("Delete attachment").last().unwrap().click();
+    h.get_by_role(egui::accesskit::Role::Menu).get_by_label("Delete attachment").click();
     h.run_steps(3);
     let s = h.state();
     let doc = s.session.get(s.views[0].id).unwrap();
