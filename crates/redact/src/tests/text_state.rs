@@ -25,3 +25,16 @@ fn a_form_inherits_the_text_state_of_the_page_that_draws_it() {
     let r = apply(&mut doc, None).unwrap();
     assert_eq!((r.glyphs, r.forms_rewritten), (6, 1), "{r:?}");
 }
+
+/// A Type 3 font whose matrix moves its glyphs up 5 pt (at 10 pt): the renderer draws the `A` at
+/// y 105–115, but the box from the matrix's scale alone put it at y 99–110, so a mark over the
+/// top of the drawn glyph neither removed it nor saw it left behind.
+#[test]
+fn a_type3_glyph_is_placed_with_its_whole_font_matrix() {
+    let font = b"<< /Type /Font /Subtype /Type3 /FontBBox [0 0 1000 1000] /FontMatrix [0.001 0 0 0.001 0 0.5] /FirstChar 65 /LastChar 65 /Widths [500] /Encoding << /Differences [65 /A] >> /CharProcs << /A 8 0 R >> >>";
+    let mut doc = one_page(b"BT /T3 10 Tf 10 100 Td (A) Tj ET", "/Font << /T3 7 0 R >>", vec![font.to_vec(), stream("", b"0 0 1000 1000 re f")]);
+    let top = [5.0, 111.0, 20.0, 116.0];
+    assert_eq!(under(&mut doc, 0, &[top]), 1, "the verifier sees the drawn glyph");
+    mark(&mut doc, 0, &[top], "");
+    assert_eq!(apply(&mut doc, None).unwrap().glyphs, 1);
+}

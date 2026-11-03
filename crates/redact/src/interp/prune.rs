@@ -1,6 +1,6 @@
 use super::{
     CosError, Dict, Document, HashMap, HashSet, MAX_DEPTH, Matrix, Metrics, ObjRef, Object, Op, Pieces, Rc, RedactError, Scope, is_vertical, num,
-    overlaps, page_streams, res_dict,
+    overlaps, page_streams, res_dict, type3_glyph_box,
 };
 
 /// Drop every `replaced` resource name whose `Do` no longer appears in the rewritten `content`,
@@ -328,6 +328,9 @@ pub(super) fn prune_form_resources(doc: &Document, res: &mut Dict, content: &[Ve
     Ok(())
 }
 
+/// What an ExtGState's `/Font` sets: metrics, vertical writing, size and a Type 3 glyph box.
+pub(super) type ExtGStateFont = (Rc<Metrics>, bool, f64, Option<[f64; 4]>);
+
 /// The font, writing direction and size an ExtGState's `/Font [font size]` entry sets, as `Tf`
 /// would (ISO 32000-2 §8.4.5); `None` when `name` sets no font. The metrics are cached with the
 /// fonts `Tf` names, under a key no resource name can take (a name cannot hold a null byte).
@@ -337,13 +340,14 @@ pub(super) fn extgstate_font(
     ext_gstates: &Dict,
     name: &[u8],
     fallback: &Rc<Metrics>,
-) -> Option<(Rc<Metrics>, bool, f64)> {
+) -> Option<ExtGStateFont> {
     let state = doc.resolve(ext_gstates.get(name)?).as_dict().cloned()?;
     let entry = doc.resolve(state.get(b"Font")?).as_array().cloned()?;
     let [font, size] = entry.as_slice() else { return None };
     let size = doc.resolve(size).as_f64()?;
     let font_dict = doc.resolve(font).as_dict().cloned();
     let vertical = font_dict.as_ref().is_some_and(|d| is_vertical(doc, d));
+    let glyph_box = font_dict.as_ref().and_then(|d| type3_glyph_box(doc, d));
     let key = [b"\0".as_slice(), name].concat();
     let metrics = match scope.fonts.get(&key) {
         Some(m) => m.clone(),
@@ -353,5 +357,5 @@ pub(super) fn extgstate_font(
             m
         }
     };
-    Some((metrics, vertical, size))
+    Some((metrics, vertical, size, glyph_box))
 }
