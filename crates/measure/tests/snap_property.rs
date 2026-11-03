@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use pdfcraft_cos::Document;
 use pdfcraft_measure::snap::{self, Geometry, SnapOptions};
+use pdfcraft_testkit::Pdf;
 
 const CASES: usize = 1_000;
 const SEED: u64 = 1;
@@ -96,33 +97,12 @@ fn mutate(rng: &mut Rng, seed: &[u8]) -> Vec<u8> {
 }
 
 fn one_page_pdf(content: &[u8]) -> Vec<u8> {
-    let stream = format!("<< /Length {} >>\nstream\n", content.len());
-    let objects = [
-        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
-        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>".to_vec(),
-        b"<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << >> >>".to_vec(),
-        {
-            let mut object = stream.into_bytes();
-            object.extend_from_slice(content);
-            object.extend_from_slice(b"\nendstream");
-            object
-        },
-    ];
-    let mut bytes = b"%PDF-1.7\n".to_vec();
-    let mut offsets = Vec::with_capacity(objects.len());
-    for (index, object) in objects.iter().enumerate() {
-        offsets.push(bytes.len());
-        bytes.extend_from_slice(format!("{} 0 obj\n", index + 1).as_bytes());
-        bytes.extend_from_slice(object);
-        bytes.extend_from_slice(b"\nendobj\n");
-    }
-    let xref = bytes.len();
-    bytes.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).as_bytes());
-    for offset in offsets {
-        bytes.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
-    }
-    bytes.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1).as_bytes());
-    bytes
+    Pdf::new()
+        .obj("<< /Type /Catalog /Pages 2 0 R >>")
+        .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>")
+        .obj("<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << >> >>")
+        .stream("", content)
+        .build()
 }
 
 fn finite(point: [f64; 2]) -> bool {
@@ -177,32 +157,13 @@ fn high_curvature_geometry_hits_segment_cap() {
 }
 
 fn two_piece_pdf(first: &[u8], second: &[u8]) -> Vec<u8> {
-    let mut objects = vec![
-        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
-        b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 200] >>".to_vec(),
-        b"<< /Type /Page /Parent 2 0 R /Contents [4 0 R 5 0 R] /Resources << >> >>".to_vec(),
-    ];
-    for content in [first, second] {
-        let mut object = format!("<< /Length {} >>\nstream\n", content.len()).into_bytes();
-        object.extend_from_slice(content);
-        object.extend_from_slice(b"\nendstream");
-        objects.push(object);
-    }
-    let mut bytes = b"%PDF-1.7\n".to_vec();
-    let mut offsets = Vec::new();
-    for (index, object) in objects.iter().enumerate() {
-        offsets.push(bytes.len());
-        bytes.extend_from_slice(format!("{} 0 obj\n", index + 1).as_bytes());
-        bytes.extend_from_slice(object);
-        bytes.extend_from_slice(b"\nendobj\n");
-    }
-    let xref = bytes.len();
-    bytes.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).as_bytes());
-    for offset in offsets {
-        bytes.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
-    }
-    bytes.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1).as_bytes());
-    bytes
+    Pdf::new()
+        .obj("<< /Type /Catalog /Pages 2 0 R >>")
+        .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 200] >>")
+        .obj("<< /Type /Page /Parent 2 0 R /Contents [4 0 R 5 0 R] /Resources << >> >>")
+        .stream("", first)
+        .stream("", second)
+        .build()
 }
 
 fn snap_at_box_corner(first: &[u8]) -> Option<snap::Snap> {
