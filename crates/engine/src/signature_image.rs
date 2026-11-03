@@ -57,7 +57,8 @@ impl Document {
             }
             // Decoded within an allowance sized for the small picture a signature is, not the
             // document's: a stream that inflates past it is refused before it is held whole.
-            let (_, bytes) = pdfcraft_create::image_file_within(&editor.cos, picture, &mut pdfcraft_cos::ImageBudget::with_work(SIGNATURE_IMAGE_WORK))?;
+            let (_, bytes) =
+                pdfcraft_create::image_file_within(&editor.cos, picture, &mut pdfcraft_cos::ImageBudget::with_work(SIGNATURE_IMAGE_WORK))?;
             let image = SignatureImage::from_bytes(&bytes).map_err(|e| e.to_string())?;
             let opacity =
                 pdfcraft_annot::props(&editor.cos, page, index).map(|p| p.opacity).filter(|v| v.is_finite()).unwrap_or(1.0).clamp(0.0, 1.0) as f32;
