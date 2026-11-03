@@ -3623,7 +3623,8 @@ fn indexed_thin_rules_survive_averaging_for_both_palette_orders_and_decodes() {
 
 /// An image past what the JBIG2 decoder takes on a side stays as it is: JBIG2 can state the size,
 /// but PdfCraft's decoder refuses such a stream, so stored as JBIG2 it drew nothing here. At 65,535
-/// on a side, the same bars do become JBIG2, so the fixture does reach that choice.
+/// on a side, the same bars do become JBIG2, so the fixture does reach that choice, and the coding
+/// stored (symbols, here) reads back through that decoder.
 #[test]
 fn an_image_too_large_for_the_jbig2_decoder_stays_as_it_is() {
     for (w, h, stored) in
@@ -3640,6 +3641,39 @@ fn an_image_too_large_for_the_jbig2_decoder_stays_as_it_is() {
         assert_eq!(s.dict.name(b"Filter"), Some(stored), "{w} × {h}");
         if stored == b"FlateDecode" {
             assert_eq!(s.raw, before, "{w} × {h}");
+        } else {
+            // The decoder gives padding bits as 0; the bars have them 1.
+            let mut bits = bars(w, h);
+            if w % 8 != 0 {
+                for row in bits.chunks_mut((w as usize).div_ceil(8)) {
+                    if let Some(last) = row.last_mut() {
+                        *last &= 0xFFu8 << (8 - w % 8);
+                    }
+                }
+            }
+            assert!(decoded_image(&doc, &s).unwrap() == bits, "{w} × {h} reads back");
+        }
+    }
+}
+
+/// The colour and grey steps leave an image over 80 million pixels as it is, whatever their settings
+/// (memory): 10,000 × 8,000 grey, the limit itself, drawn at 600 ppi, is resampled, and a row more
+/// stays as it is.
+#[test]
+fn grey_images_are_resampled_up_to_the_pixel_limit() {
+    for (h, resampled) in [(8_000u32, true), (8_001, false)] {
+        let mut doc = Document::new_empty();
+        let grey = image(&mut doc, 10_000, h, 1, false, None);
+        let before = stream(&doc, grey).raw.clone();
+        let (pw, ph) = (10_000.0 * 72.0 / 600.0, f64::from(h) * 72.0 / 600.0);
+        page(&mut doc, &[("G", grey)], &format!("q {pw} 0 0 {ph} 0 0 cm /G Do Q"));
+        let report = optimize(&mut doc, &Settings::default()).unwrap();
+        assert_eq!(report.images_resampled, usize::from(resampled), "10,000 × {h}: {report:?}");
+        let s = stream(&doc, grey);
+        if resampled {
+            assert_eq!(s.dict.int(b"Width"), Some(2_500), "10,000 × {h}");
+        } else {
+            assert!(s.dict.int(b"Width") == Some(10_000) && s.raw == before, "10,000 × {h} stays as it is");
         }
     }
 }
