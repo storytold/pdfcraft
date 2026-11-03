@@ -74,8 +74,28 @@ pub(crate) fn decodable_metadata(bytes: &[u8]) -> bool {
 
 /// How many Extended XMP chunks (APP1 segments) come before the image data.
 fn extended_xmp_chunks(bytes: &[u8]) -> usize {
+    let mut chunks = 0usize;
+    each_extended_xmp(bytes, |_| chunks += 1);
+    chunks
+}
+
+/// JPEG `bytes` without their Extended XMP chunks, which nothing here reads: what is left decodes
+/// in time linear in its size however many chunks the file carried.
+pub(crate) fn without_extended_xmp(bytes: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut at = 0;
+    each_extended_xmp(bytes, |r| {
+        out.extend_from_slice(bytes.get(at..r.start).unwrap_or_default());
+        at = r.end;
+    });
+    out.extend_from_slice(bytes.get(at..).unwrap_or_default());
+    out
+}
+
+/// Calls `f` with the byte range of each Extended XMP chunk (APP1 segment) before the image data.
+fn each_extended_xmp(bytes: &[u8], mut f: impl FnMut(std::ops::Range<usize>)) {
     const PREFIX: &[u8] = b"http://ns.adobe.com/xmp/extension/\0";
-    let (mut i, mut chunks) = (2usize, 0usize);
+    let mut i = 2usize;
     while let Some(&byte) = bytes.get(i) {
         // Stray bytes between segments, which the decoder skips too.
         if byte != 0xFF {
@@ -93,14 +113,14 @@ fn extended_xmp_chunks(bytes: &[u8]) -> usize {
             _ => {
                 let Some(&[hi, lo]) = bytes.get(i.saturating_add(2)..i.saturating_add(4)) else { break };
                 let len = usize::from(u16::from_be_bytes([hi, lo]));
+                let end = i.saturating_add(2).saturating_add(len.max(2));
                 if marker == 0xE1 && bytes.get(i.saturating_add(4)..).is_some_and(|seg| seg.starts_with(PREFIX)) {
-                    chunks += 1;
+                    f(i..end.min(bytes.len()));
                 }
-                i = i.saturating_add(2).saturating_add(len.max(2));
+                i = end;
             }
         }
     }
-    chunks
 }
 
 /// The resolution in a JFIF header, if the file has one in inches or centimetres.

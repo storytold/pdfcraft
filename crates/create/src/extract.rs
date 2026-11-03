@@ -340,9 +340,15 @@ fn jpeg_samples(data: &[u8], space: &Space, w: usize, h: usize) -> Option<(Vec<u
 /// a decoder converting to RGB inverts them, with YCCK converted to CMYK.
 fn cmyk_jpeg_samples(data: &[u8], w: usize, h: usize) -> Option<Vec<u8>> {
     use zune_jpeg::zune_core::{bytestream::ZCursor, colorspace::ColorSpace, options::DecoderOptions};
-    if !crate::upright_image::decodable_metadata(data) {
-        return None;
-    }
+    // Past the decoder's metadata bound, decode the image without its Extended XMP chunks
+    // rather than not at all: written out as stored, a CMYK JPEG shows inverted colours.
+    let stripped;
+    let data = if crate::upright_image::decodable_metadata(data) {
+        data
+    } else {
+        stripped = crate::upright_image::without_extended_xmp(data);
+        &stripped[..]
+    };
     let options = DecoderOptions::default().set_strict_mode(false).set_max_width(usize::from(u16::MAX)).set_max_height(usize::from(u16::MAX));
     let mut dec = zune_jpeg::JpegDecoder::new_with_options(ZCursor::new(data), options);
     dec.decode_headers().ok()?;
