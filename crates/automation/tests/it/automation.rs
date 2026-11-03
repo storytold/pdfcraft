@@ -5669,6 +5669,18 @@ fn stamps_in_other_scripts_through_tools() {
     ok(&mut a, "comment_add", add);
     let list = ok(&mut a, "comment_list", json!({ "doc": doc }));
     assert_eq!(list["count"], 1, "{list}");
+    // The stamp is written in Russian: its language is saved as /PCLang, which `comment_list` doesn't report.
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "out/ru.pdf" }));
+    let saved_lang = || -> Option<Vec<u8>> {
+        let d = pdfcraft_cos::Document::open(std::sync::Arc::new(std::fs::read(dir.join("out/ru.pdf")).ok()?)).ok()?;
+        let pages = d.get(d.root()?).as_dict()?.reference(b"Pages")?;
+        let kids = d.get(pages).as_dict()?.get(b"Kids")?.clone();
+        let page = d.resolve(&kids).as_array()?.first()?.clone();
+        let annots = d.resolve(&page).as_dict()?.get(b"Annots")?.clone();
+        let stamp = d.resolve(&annots).as_array()?.first()?.clone();
+        Some(d.resolve(&stamp).as_dict()?.name(b"PCLang")?.to_vec())
+    };
+    assert_eq!(saved_lang().as_deref(), Some(&b"ru"[..]), "the stamp's saved language");
     let comment_add = tools().into_iter().find(|t| t.name == "comment_add").unwrap();
     let listed = comment_add.description.split("optional `lang` (").nth(1).and_then(|s| s.split(')').next()).unwrap_or_default();
     let listed: Vec<&str> = listed.split(", ").collect();
