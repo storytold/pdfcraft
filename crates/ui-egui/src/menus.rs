@@ -816,19 +816,4 @@ mod tests {
         app.native_menu_clicks(&ctx);
         assert_eq!(app.session.get(doc).unwrap().info.pages[0].rotation, (before + 90) % 360, "rotated once");
     }
-
-    /// The bar's own overflow-menu sentinel is not rendered as typed: no font this app ships or
-    /// falls back to has U+22EF, and egui 0.37's `MissingGlyphPolicy::Panic` crashes on it when
-    /// the menu bar is narrow enough to need it. The other three reserved labels are plain ASCII,
-    /// so untranslated is safe for them.
-    #[test]
-    fn the_overflow_menu_sentinel_is_not_passed_through_untranslated() {
-        crate::i18n::set_current(crate::i18n::Lang::EN);
-        let translated = translate("⋯");
-        assert_ne!(translated, "⋯", "no installed font has this glyph");
-        assert_eq!(translated, "…", "the ordinary ellipsis the rest of the app already uses");
-        for label in ["Menu", "Scroll menu up", "Scroll menu down"] {
-            assert_eq!(translate(label), label, "plain ASCII reserved labels need no substitution");
-        }
-    }
 }

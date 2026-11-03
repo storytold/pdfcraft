@@ -135,10 +135,12 @@ impl Models {
     /// the two. Other languages use that same detector with their own recognition model and dictionary.
     pub fn in_dir_for(dir: &Path, language: &str) -> Option<Models> {
         let language = LANGUAGES.iter().find(|l| l.0 == language)?.0;
-        let english = [(DETECTION_MODEL, RECOGNITION_MODEL), ("text-detection.rten", "text-recognition.rten")].into_iter().find_map(|(detection, recognition)| {
-            let m = Models { detection: dir.join(detection), recognition: dir.join(recognition), language };
-            (m.detection.is_file() && m.recognition.is_file()).then_some(m)
-        });
+        let english = [(DETECTION_MODEL, RECOGNITION_MODEL), ("text-detection.rten", "text-recognition.rten")].into_iter().find_map(
+            |(detection, recognition)| {
+                let m = Models { detection: dir.join(detection), recognition: dir.join(recognition), language };
+                (m.detection.is_file() && m.recognition.is_file()).then_some(m)
+            },
+        );
         if language == "en" {
             return english;
         }
@@ -146,9 +148,10 @@ impl Models {
         if !dir.join(dictionary).is_file() || !dir.join(model).is_file() {
             return None;
         }
-        let detection = english.as_ref().map(|m| m.detection.clone()).or_else(|| {
-            [DETECTION_MODEL, "text-detection.rten"].into_iter().map(|name| dir.join(name)).find(|path| path.is_file())
-        })?;
+        let detection = english
+            .as_ref()
+            .map(|m| m.detection.clone())
+            .or_else(|| [DETECTION_MODEL, "text-detection.rten"].into_iter().map(|name| dir.join(name)).find(|path| path.is_file()))?;
         Some(Models { detection, recognition: dir.join(model), language })
     }
 
@@ -506,7 +509,8 @@ mod tests {
         for file in ["text-detection.onnx", "text-recognition.onnx"] {
             std::fs::write(dir.path().join(file), b"model").unwrap();
         }
-        let expected = Some(Models { detection: dir.path().join("text-detection.onnx"), recognition: dir.path().join("text-recognition.onnx"), language: "en" });
+        let expected =
+            Some(Models { detection: dir.path().join("text-detection.onnx"), recognition: dir.path().join("text-recognition.onnx"), language: "en" });
         assert_eq!(Models::in_dir(dir.path()), expected, "a complete ONNX pair is sufficient");
         for file in ["text-detection.rten", "text-recognition.rten"] {
             std::fs::write(dir.path().join(file), b"model").unwrap();
@@ -524,7 +528,11 @@ mod tests {
             }
             assert_eq!(
                 Models::in_dir(dir.path()),
-                Some(Models { detection: dir.path().join("text-detection.rten"), recognition: dir.path().join("text-recognition.rten"), language: "en" }),
+                Some(Models {
+                    detection: dir.path().join("text-detection.rten"),
+                    recognition: dir.path().join("text-recognition.rten"),
+                    language: "en"
+                }),
                 "{current} alone must not hide a complete legacy pair"
             );
         }
