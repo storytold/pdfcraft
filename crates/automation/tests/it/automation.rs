@@ -2833,6 +2833,74 @@ fn headers_watermarks_and_backgrounds_through_tools() {
 }
 
 #[test]
+fn bates_numbers_continue_across_files_and_report_preflight_and_permission_failures() {
+    let dir = workdir("bates-multi");
+    let files = json!([
+        {"input":"b.pdf","output":"b-numbered.pdf"},
+        {"input":"a.pdf","output":"a-numbered.pdf"}
+    ]);
+    let mut a = auto(&dir);
+    let allocation = ok(&mut a, "doc_bates_multi", json!({"files":files,"start_number":50,"dry_run":true}));
+    assert_eq!(allocation["files"][0]["first"], 50);
+    assert_eq!(allocation["files"][0]["last"], 51);
+    assert_eq!(allocation["files"][1]["first"], 52);
+    assert_eq!(allocation["files"][1]["last"], 54);
+    assert!(!dir.join("a-numbered.pdf").exists());
+
+    let applied = ok(&mut a, "doc_bates_multi", json!({"files":files,"start_number":17,"prefix":"CASE-"}));
+    assert_eq!(applied["completed"], 2);
+    let mut out = auto(&dir);
+    let first = ok(&mut out, "doc_open", json!({"path":"a-numbered.pdf"}))["doc"].as_u64().unwrap();
+    let second = ok(&mut out, "doc_open", json!({"path":"b-numbered.pdf"}))["doc"].as_u64().unwrap();
+    assert!(page_text(&mut out, second)[0].contains("CASE-000017"));
+    assert!(page_text(&mut out, first)[0].contains("CASE-000019"));
+
+    let overflow = err(&mut a, "doc_bates_multi", json!({"files":[{"input":"b.pdf","output":"overflow.pdf"}],"start_number":u64::MAX}));
+    assert!(overflow.to_string().contains("overflows"));
+    assert!(!dir.join("overflow.pdf").exists());
+    // A range may end at u64::MAX itself.
+    let at_max = ok(&mut a, "doc_bates_multi", json!({"files":[{"input":"b.pdf","output":"max.pdf"}],"start_number":u64::MAX - 1,"dry_run":true}));
+    assert_eq!(at_max["files"][0]["last"], u64::MAX);
+    for bad in
+        [json!({"start_number":-3}), json!({"start_number":2.5}), json!({"start_number":"7"}), json!({"prefix":"CASE>>"}), json!({"suffix":"A>>B"})]
+    {
+        let mut args = json!({"files":[{"input":"b.pdf","output":"bad.pdf"}],"dry_run":true});
+        args.as_object_mut().unwrap().extend(bad.as_object().unwrap().clone());
+        assert!(a.call("doc_bates_multi", &args).is_err(), "{bad}");
+    }
+
+    use pdfcraft_engine::{Changes, Edit, Protection, Session};
+    let mut session = Session::new();
+    let id = session.open("locked.pdf", None, std::sync::Arc::new(fixture(1)), None).unwrap();
+    session
+        .apply(
+            id,
+            Edit::Protect(Protection {
+                open_password: Some("open".into()),
+                permissions_password: Some("owner".into()),
+                changes: Changes::None,
+                ..Default::default()
+            }),
+        )
+        .unwrap();
+    std::fs::write(dir.join("locked.pdf"), session.save_bytes(id).unwrap().as_ref()).unwrap();
+    let result = ok(
+        &mut a,
+        "doc_bates_multi",
+        json!({"files":[
+            {"input":"b.pdf","output":"partial-numbered.pdf"},
+            {"input":"locked.pdf","output":"locked-numbered.pdf","password":"open"}
+        ]}),
+    );
+    assert_eq!(result["completed"], 1);
+    assert_eq!(result["failed"], 1);
+    assert_eq!(result["files"][1]["first"], 3);
+    assert!(result["files"][1]["error"].as_str().unwrap().contains("owner password"), "{result}");
+    assert!(dir.join("partial-numbered.pdf").exists());
+    assert!(!dir.join("locked-numbered.pdf").exists());
+}
+
+#[test]
 fn a_shrinking_header_and_footer_moves_the_page_content_out_of_their_way_through_tools() {
     let dir = workdir("hf-shrink");
     let mut a = auto(&dir);
