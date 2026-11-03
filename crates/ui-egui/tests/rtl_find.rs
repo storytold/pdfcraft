@@ -1,6 +1,7 @@
 //! The find bar and the Search panel, typed the way a person types: one character at a time.
 
 use egui_kittest::Harness;
+use egui_kittest::kittest::Queryable;
 use pdfcraft_ui_egui::PdfCraftApp;
 
 fn fixture() -> Vec<u8> {
@@ -123,12 +124,17 @@ fn find_bar_word_backspace_removes_the_last_typed_word() {
 /// picture too, so a before-and-after difference is what belongs to the query.
 fn find_bar_ink(h: &mut Harness<'static, PdfCraftApp>) -> Vec<u32> {
     let bar = h.ctx.memory(|m| m.area_rect(egui::Id::unique("find-bar"))).expect("the find bar is on screen");
+    ink_columns(h, bar)
+}
+
+/// Dark pixels in each column of `rect`. The count is in picture pixels.
+fn ink_columns(h: &mut Harness<'static, PdfCraftApp>, rect: egui::Rect) -> Vec<u32> {
     let image = h.render().expect("the find bar renders");
     let ppp = h.ctx.pixels_per_point();
-    let x0 = (bar.left() * ppp).floor().max(0.0) as u32;
-    let y0 = (bar.top() * ppp).floor().max(0.0) as u32;
-    let x1 = ((bar.right() * ppp).ceil() as u32).min(image.width());
-    let y1 = ((bar.bottom() * ppp).ceil() as u32).min(image.height());
+    let x0 = (rect.left() * ppp).floor().max(0.0) as u32;
+    let y0 = (rect.top() * ppp).floor().max(0.0) as u32;
+    let x1 = ((rect.right() * ppp).ceil() as u32).min(image.width());
+    let y1 = ((rect.bottom() * ppp).ceil() as u32).min(image.height());
     let mut columns = vec![0u32; image.width() as usize];
     for x in x0..x1 {
         let mut ink = 0u32;
@@ -170,6 +176,54 @@ fn find_bar_paints_both_words_across_the_line() {
     let left = gained.iter().filter(|x| **x < mid).count();
     let right = gained.iter().filter(|x| **x > mid).count();
     assert!(left > 4 && right > 4, "the query's ink is not on both sides: left {left} right {right} width {width}");
+}
+
+/// The first typed word is the one on the right. `ا` is one letter and `مؤشرات` is six, so a
+/// line in reading order puts most of the ink on the left. Swapping the words puts it on the right.
+/// `find_bar_paints_both_words_across_the_line` cannot see that: both arrangements have ink on
+/// both sides. Without an Arabic face the field draws nothing to measure, so the test stops.
+#[test]
+fn find_bar_puts_the_first_typed_word_on_the_right() {
+    if pdfcraft_fonts::ui_arabic_fonts().is_empty() {
+        panic!("built without an Arabic face");
+    }
+    let mut h = harness();
+    h.state_mut().views[0].open_find();
+    h.run_steps(2);
+    let phrase = "ا مؤشرات";
+    type_chars(&mut h, phrase);
+    assert_eq!(query(&h), phrase, "search keeps the typed order");
+    let field = h.get_by_label("Find text").rect();
+    let columns = ink_columns(&mut h, field);
+    // Stems inside a letter leave a few empty pixels. The space between the two words is wider.
+    let mut words: Vec<(u32, u32)> = Vec::new();
+    let mut word: Option<(u32, u32)> = None;
+    for (x, ink) in columns.iter().copied().enumerate() {
+        if ink > 2 {
+            let x = x as u32;
+            match word {
+                Some((start, end)) if x <= end.saturating_add(6) => word = Some((start, x)),
+                Some(done) => {
+                    words.push(done);
+                    word = Some((x, x));
+                }
+                None => word = Some((x, x)),
+            }
+        }
+    }
+    if let Some(done) = word {
+        words.push(done);
+    }
+    let (Some(&(left_start, left_end)), Some(&(right_start, right_end))) = (words.first(), words.last()) else {
+        panic!("the two words did not paint in the find field: {words:?}");
+    };
+    assert!(words.len() >= 2, "the two words did not paint in the find field: {words:?}");
+    let left_width = left_end.saturating_sub(left_start);
+    let right_width = right_end.saturating_sub(right_start);
+    assert!(
+        left_width > right_width.saturating_mul(2),
+        "the long word is not on the left: left {left_width}px at {left_start}..{left_end}, right {right_width}px at {right_start}..{right_end}, words {words:?}"
+    );
 }
 
 #[test]
