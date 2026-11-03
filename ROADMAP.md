@@ -1,5 +1,7 @@
 # PdfCraft roadmap
 
+> **Last reviewed:** 2026-11-03 | **Last updated:** 2026-11-03 | **Change:** patch (M4 #5887: Extract Pages prefills and selects the current page range on opening, shows the total beside Pages, and retains existing range parsing; estimates unchanged)
+
 > **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M7, PR #2155 further review: inherited drawing/text state, affine image gestures, paste/selection ownership, no-op scripts and menu permissions; estimates unchanged)
 
 > **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M7, PR #2155 latest comments: explicit image-paste events, mixed-size field refresh, and documented mixed-script normalization with Undo; estimates unchanged)
@@ -218,6 +220,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 | 8 | 1.0 polish: performance, right-to-left, missing languages, keyboard-only (M14) | 55–95 |
 
 ## Progress log
+
+- **2026-11-03 (M4, #5887):** Extract Pages opens with the selected/current page range filled in, focused and fully selected so typing replaces it. The total page count appears beside Pages using the existing translation key. Untouched extraction keeps the selection; range parsing, title and dialog movement are unchanged. Kittest covers typing, reopening, focus retention and current/disjoint/all/single-page extraction. Estimates unchanged.
 
 - **2026-11-03 (M7, #5835):** In image crop mode, a right-click on the image, its crop box or its handles keeps the crop and opens no menu, so the menu no longer switches as the pointer moves. A right-click elsewhere clears the selection and opens the page menu. UI tests cover all four page rotations, overlapping images, a 45° image, and a check that the Done/Cancel/Remove Crop pills at a page edge still keep the crop.
 
@@ -749,6 +753,7 @@ Newest first: the date, what moved, and the new overall estimate.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-03 | patch | M4 #5887: Extract Pages prefills and selects the current page range on opening, shows the total beside Pages, and retains existing range parsing; estimates unchanged. |
 | 2026-11-01 | patch | M7 #5657: header/footer, watermark and background operations commit all selected pages together; later-page errors preserve marks, content, shared/inherited resources and pending edits; estimates unchanged. |
 | 2026-10-28 | patch | M2, PR #4172: integrate main 5af10276 and retain both roadmap histories; viewer-only CJK and print/output font policies and estimates unchanged. |
 | 2026-10-27 | minor | M10: OCR stages SHA-256-verified ONNX models after the upstream RTEN URL brownout; discovery prefers a complete ONNX pair per directory, falls back to a complete RTEN pair, and never mixes formats or directories; language/web limits and estimates unchanged. |

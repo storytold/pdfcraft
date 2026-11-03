@@ -228,11 +228,11 @@ fn extract_and_delete_deletes_the_pages_only_after_their_files_are_written() {
 fn extract_pages_saves_under_the_file_name_typed_in_the_dialog() {
     let dir = scratch("extract-named");
     let mut h = harness(&[3]);
+    h.state_mut().views[0].select_pages(&[0, 2]);
     assert!(h.state_mut().execute("page.extract"));
     h.run_steps(2);
     assert_eq!(h.state().extract_draft.name, "doc0", "the dialog starts with the document's name");
     // Several pages as separate files: each is "<name> (page N).pdf".
-    h.state_mut().views[0].select_pages(&[0, 2]);
     h.state_mut().extract_draft.name = "Invoices.pdf".into();
     h.state_mut().extract_draft.separate = true;
     h.state_mut().pick_override = Some(vec![dir.to_string_lossy().into_owned()]);
@@ -242,6 +242,7 @@ fn extract_pages_saves_under_the_file_name_typed_in_the_dialog() {
     // One renamed page as a separate file is saved under exactly that name; characters a file
     // name can't hold become "_".
     h.state_mut().views[0].select_pages(&[1]);
+    h.state_mut().open_extract_dialog();
     h.state_mut().extract_draft.name = " March: 2026/receipt ".into();
     h.state_mut().extract_selection();
     h.run_steps(2);
@@ -277,7 +278,7 @@ fn extract_pages_takes_the_page_ranges_typed_in_the_dialog() {
     h.state_mut().views[0].select_pages(&[1]);
     assert!(h.state_mut().execute("page.extract"));
     h.run_steps(2);
-    assert_eq!(h.state().extract_draft.pages, "", "opens on the selection");
+    assert_eq!(h.state().extract_draft.pages, "2", "opens with the selected range filled in");
     h.get_by_label("Pages");
     h.get_by_label_contains("1 page selected.");
     // Ranges, a backward one and a repeat: in that order, each page once.
@@ -323,6 +324,7 @@ fn extract_pages_keeps_the_usual_names_when_the_file_name_is_unchanged() {
     assert!(dir.join("doc0 (page 1).pdf").exists());
     h.state_mut().extract_draft.name = "  ..  ".into();
     h.state_mut().views[0].select_pages(&[1]);
+    h.state_mut().extract_draft.pages.clear(); // An emptied range still follows the selection.
     h.state_mut().extract_selection();
     h.run_steps(2);
     assert!(dir.join("doc0 (page 2).pdf").exists(), "a name with nothing usable falls back to the document's");
@@ -1068,5 +1070,79 @@ fn files_written_from_an_attachment_tab_stay_inside_the_chosen_folder() {
         assert!(h.state().toast.as_ref().is_some_and(|t| t.0.starts_with("Wrote 1 file")), "{name}: {:?}", h.state().toast);
         assert_eq!(files_under(&dir.0), written, "{name}");
         std::fs::remove_dir_all(dir.0.join("a")).unwrap();
+    }
+}
+
+fn extract_typing(h: &mut Harness<'static, PdfCraftApp>, text: &str) {
+    h.input_mut().events.push(egui::Event::Text(text.to_owned()));
+    let ctx = h.ctx.clone();
+    let mut raw = std::mem::take(h.input_mut());
+    h.state_mut().prepare_raw_input(&ctx, &mut raw);
+    *h.input_mut() = raw;
+    h.step();
+    h.run_steps(2);
+}
+
+#[test]
+fn extract_pages_prefills_focuses_selects_and_shows_the_total() {
+    let shots = std::env::var_os("PDFCRAFT_EXTRACT_SHOTS").is_some();
+    let _gpu = shots.then(crate::gpu);
+    let mut h = harness(&[6]);
+    h.state_mut().views[0].select_pages(&[1, 2, 4]);
+    assert!(h.state_mut().execute("page.extract"));
+    h.run_steps(3);
+    assert_eq!(h.state().extract_draft.pages, "2-3, 5", "the selection is a value, not a placeholder");
+    let field = h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Pages");
+    assert!(field.is_focused(), "Pages has focus immediately after opening");
+    assert_eq!(field.value().as_deref(), Some("2-3, 5"));
+    let field_rect = field.rect();
+    let total = h.get_by_label("of 6").rect();
+    assert!(total.left() >= field_rect.right() && (total.center().y - field_rect.center().y).abs() < 3.0, "the total sits beside Pages");
+    if shots {
+        h.render().unwrap().save("/tmp/5887-extract-dialog.png").unwrap();
+    }
+    // No click, Ctrl+A or accessibility replacement: real typing must replace the whole value.
+    extract_typing(&mut h, "4");
+    assert_eq!(h.state().extract_draft.pages, "4", "the initial range was fully selected");
+    h.get_by_label("File name").click();
+    h.run_steps(3);
+    assert!(h.get_by_label("File name").is_focused(), "later frames never steal focus back");
+    h.get_by_label("Cancel").click();
+    h.run_steps(2);
+    h.state_mut().views[0].select_pages(&[5]);
+    assert!(h.state_mut().execute("page.extract"));
+    h.run_steps(3);
+    assert_eq!(h.state().extract_draft.pages, "6", "reopening uses the new selection");
+    extract_typing(&mut h, "2");
+    assert_eq!(h.state().extract_draft.pages, "2", "reopening selects its new value too");
+}
+
+#[test]
+fn extract_pages_untouched_prefill_extracts_the_selected_or_current_pages() {
+    let cases = [
+        (6, vec![], 3, "4", vec![3]),
+        (6, vec![1, 2, 4], 0, "2-3, 5", vec![1, 2, 4]),
+        (6, (0..6).collect(), 0, "1-6", (0..6).collect()),
+        (1, vec![0], 0, "1", vec![0]),
+    ];
+    for (count, selected, current, value, expected) in cases {
+        let mut h = harness(&[count]);
+        h.state_mut().views[0].select_pages(&selected);
+        if selected.is_empty() {
+            h.state_mut().views[0].current = current;
+        }
+        let source = h.state().views[0].id;
+        let before = h.state().session.save_bytes(source).unwrap();
+        assert!(h.state_mut().execute("page.extract"));
+        h.run_steps(3);
+        assert_eq!(h.state().extract_draft.pages, value);
+        h.get_by_label(&format!("of {count}"));
+        h.get_by_label("Extract").click();
+        h.run_steps(3);
+        assert_eq!(h.state().views.len(), 2);
+        let doc = h.state().session.get(h.state().views[1].id).unwrap();
+        let actual: Vec<_> = (0..doc.info.pages.len()).flat_map(|p| doc.text_blocks(p).into_iter().map(|b| b.text)).collect();
+        assert_eq!(actual, expected.iter().map(|p| format!("Page {}", p + 1)).collect::<Vec<_>>(), "untouched field extracts its original selection");
+        assert_eq!(h.state().session.save_bytes(source).unwrap(), before, "the original is unchanged");
     }
 }
