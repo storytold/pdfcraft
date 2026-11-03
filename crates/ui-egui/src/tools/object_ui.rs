@@ -198,9 +198,12 @@ pub(crate) fn hit(view: &DocView, xf: &PageXform, info: &DocInfo, page: usize, o
 /// Returns true while group selection owns the interaction. Ordinary clicks still reach the
 /// single-object text/resize tools. A text draft is finished or discarded through its editor.
 pub(crate) fn page_input(cx: PageToolContext<'_>, view: &mut DocView) -> bool {
-    let PageToolContext { ui, xf, ptr, page, .. } = cx;
+    let PageToolContext { ui, resp, xf, ptr, page, .. } = cx;
     if view.objects.input_blocked {
         return true;
+    }
+    if resp.context_menu_opened() || egui::Popup::is_any_open(ui.ctx()) {
+        return false;
     }
     if view.content.draft.is_some() || view.line_editor.as_ref().is_some_and(|e| e.has_changes()) {
         let blocked = view.objects.blocked_page == Some(page);
