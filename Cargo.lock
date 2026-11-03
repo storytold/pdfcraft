@@ -4560,6 +4560,7 @@ dependencies = [
  "pdfcraft-content",
  "pdfcraft-cos",
  "pdfcraft-model",
+ "pdfcraft-testkit",
  "roxmltree 0.21.2",
 ]
 

@@ -1,19 +1,11 @@
 use super::*;
 
 fn build(objs: &[&str], trailer_extra: &str) -> Document {
-    let mut out = b"%PDF-1.7\n".to_vec();
-    let mut offsets = Vec::new();
-    for (i, o) in objs.iter().enumerate() {
-        offsets.push(out.len());
-        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    let mut pdf = pdfcraft_testkit::Pdf::new().objs(objs.iter().copied());
+    if !trailer_extra.is_empty() {
+        pdf = pdf.trailer_entry(trailer_extra);
     }
-    let xref = out.len();
-    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
-    for o in offsets {
-        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
-    }
-    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R {trailer_extra} >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
-    Document::open(std::sync::Arc::new(out)).unwrap()
+    Document::open(std::sync::Arc::new(pdf.build())).unwrap()
 }
 
 /// A page with embedded-font-free text, a note without the print flag, a link with a
