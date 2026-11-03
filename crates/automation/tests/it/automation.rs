@@ -9598,12 +9598,12 @@ fn attachment_descriptions_can_be_edited_cleared_undone_and_saved() {
     let doc = ok(&mut a, "doc_open", json!({"path": "a.pdf"}))["doc"].as_u64().unwrap();
     ok(&mut a, "attachment_add", json!({"doc": doc, "path": "notes.txt", "description": "Original"}));
 
-    ok(&mut a, "attachment_edit", json!({"doc": doc, "name": "notes.txt", "description": "Updated"}));
-    assert_eq!(ok(&mut a, "doc_info", json!({"doc": doc}))["attachments"][0]["description"], "Updated");
+    ok(&mut a, "attachment_edit", json!({"doc": doc, "name": "notes.txt", "description": "Résumé 東京"}));
+    assert_eq!(ok(&mut a, "doc_info", json!({"doc": doc}))["attachments"][0]["description"], "Résumé 東京");
     ok(&mut a, "edit_undo", json!({"doc": doc}));
     assert_eq!(ok(&mut a, "doc_info", json!({"doc": doc}))["attachments"][0]["description"], "Original");
     ok(&mut a, "edit_redo", json!({"doc": doc}));
-    assert_eq!(ok(&mut a, "doc_info", json!({"doc": doc}))["attachments"][0]["description"], "Updated");
+    assert_eq!(ok(&mut a, "doc_info", json!({"doc": doc}))["attachments"][0]["description"], "Résumé 東京");
 
     ok(&mut a, "attachment_edit", json!({"doc": doc, "name": "notes.txt", "description": ""}));
     assert!(ok(&mut a, "doc_info", json!({"doc": doc}))["attachments"][0]["description"].is_null());
@@ -9612,10 +9612,10 @@ fn attachment_descriptions_can_be_edited_cleared_undone_and_saved() {
     let saved = std::fs::read(dir.join("edited.pdf")).unwrap();
     let info = pdfcraft_render::inspect(std::sync::Arc::new(saved.clone()), None).unwrap();
     let attachment = info.attachments.iter().find(|item| item.name == "notes.txt").unwrap();
-    assert_eq!(attachment.description.as_deref(), Some("Updated"));
+    assert_eq!(attachment.description.as_deref(), Some("Résumé 東京"));
     assert_eq!(pdfcraft_render::attachment_data(&saved, None, attachment).unwrap(), bytes);
     let reopened = ok(&mut a, "doc_open", json!({"path": "edited.pdf"}))["doc"].as_u64().unwrap();
-    assert_eq!(ok(&mut a, "doc_info", json!({"doc": reopened}))["attachments"][0]["description"], "Updated");
+    assert_eq!(ok(&mut a, "doc_info", json!({"doc": reopened}))["attachments"][0]["description"], "Résumé 東京");
 }
 
 #[test]
