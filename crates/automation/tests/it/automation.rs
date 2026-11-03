@@ -6801,11 +6801,12 @@ fn retained_pdf_version_is_the_later_of_header_and_catalog() {
     ok(&mut a, "doc_optimize", json!({ "doc": blank, "path": "v14.pdf", "compatibility": "1.4" }));
     let mut cos = pdfcraft_cos::Document::open(std::sync::Arc::new(std::fs::read(dir.join("v14.pdf")).unwrap())).unwrap();
     let root = cos.root().unwrap();
-    for (label, header, catalog, expected) in [
-        ("higher-header", "1.7", "1.4", "1.7"),
+    for (label, header, catalog, saved, reported) in [
+        ("higher-header", "1.7", "1.4", "1.7", "1.7"),
         // PDF versions compare as major/minor numbers: 2.0 is newer than 1.7.
-        ("higher-catalog", "1.7", "2.0", "2.0"),
-        ("equal", "1.4", "1.4", "1.4"),
+        // Retain keeps the header. The catalog /Version only sets the reported version.
+        ("higher-catalog", "1.7", "2.0", "1.7", "2.0"),
+        ("equal", "1.4", "1.4", "1.4", "1.4"),
     ] {
         cos.update_dict(root, |c| c.set(b"Version".to_vec(), pdfcraft_cos::Object::name(catalog))).unwrap();
         cos.set_version(header);
@@ -6814,8 +6815,8 @@ fn retained_pdf_version_is_the_later_of_header_and_catalog() {
         let doc = ok(&mut a, "doc_open", json!({ "path": format!("{label}-input.pdf") }))["doc"].as_u64().unwrap();
         let out = format!("{label}-output.pdf");
         let r = ok(&mut a, "doc_optimize", json!({ "doc": doc, "path": out, "compatibility": "retain", "object_streams": false }));
-        assert!(std::fs::read(dir.join(&out)).unwrap().starts_with(format!("%PDF-{expected}\n").as_bytes()), "{label}: written header");
-        assert_eq!(r["pdf_version"].as_str(), Some(expected), "{label}: {r}");
+        assert!(std::fs::read(dir.join(&out)).unwrap().starts_with(format!("%PDF-{saved}\n").as_bytes()), "{label}: written header");
+        assert_eq!(r["pdf_version"].as_str(), Some(reported), "{label}: {r}");
     }
 }
 
