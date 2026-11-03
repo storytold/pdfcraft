@@ -201,7 +201,9 @@ impl<'a> TaggedWalker<'a> {
         };
         let stream = dict.get(b"Stm").and_then(Object::as_ref);
         tasks.push((Object::Int(mcid), dict.get(b"Pg").and_then(Object::as_ref).or(page), depth + 1, element, stream));
-        if let Some(stream) = stream {
+        if let Some(stream) = stream
+            && page.and_then(|reference| self.page_index.get(&reference).copied()).is_some_and(|page| self.selected.contains(&page))
+        {
             let _ = self.form_texts.entry(stream).or_insert_with(|| {
                 let remaining = MAX_TAGGED_TEXT.saturating_sub(self.extracted_text);
                 let texts = form_mcid_texts(self.doc, stream, remaining).unwrap_or_default();
@@ -231,7 +233,14 @@ impl<'a> TaggedWalker<'a> {
         }
         let remaining = MAX_TAGGED_TEXT.saturating_sub(self.extracted_text);
         let text = if let Some(stream) = stream {
-            self.form_texts.get(&stream).and_then(|texts| texts.by_id.get(&mcid)).cloned()
+            let Some(texts) = self.form_texts.get(&stream) else {
+                tagged_warning(&mut self.out, format!("missing marked content {mcid} on page {}", page + 1));
+                return;
+            };
+            if texts.limited {
+                tagged_warning(&mut self.out, format!("text extraction reached its size limit on page {}", page + 1));
+            }
+            texts.by_id.get(&mcid).cloned()
         } else {
             if !self.texts.contains_key(&page) {
                 let texts = self.pages.get(page).map(|p| mcid_texts_limited(self.doc, &p.dict, MAX_TAGGED_TEXT, remaining)).unwrap_or_default();
