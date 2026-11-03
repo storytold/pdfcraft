@@ -47,8 +47,9 @@ pub(crate) const MAX_DEPTH: usize = 50;
 // visible; the build says so rather than a test, so the two limits cannot drift apart.
 const _: () = assert!(MAX_DEPTH >= pdfcraft_edit::text::MAX_FORM_DEPTH);
 
-/// The clip box before any clipping path: far beyond any page.
-const UNCLIPPED: [f64; 4] = [-1e6, -1e6, 1e6, 1e6];
+/// The clip box before any clipping path: unbounded, so an unclipped shading reaches a mark
+/// wherever it lies. The box only meets `intersect` and `overlaps`, which take infinities.
+const UNCLIPPED: [f64; 4] = [f64::NEG_INFINITY, f64::NEG_INFINITY, f64::INFINITY, f64::INFINITY];
 
 fn intersect(a: [f64; 4], b: [f64; 4]) -> [f64; 4] {
     [a[0].max(b[0]), a[1].max(b[1]), a[2].min(b[2]), a[3].min(b[3])]

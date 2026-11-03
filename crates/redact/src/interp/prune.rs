@@ -264,7 +264,9 @@ fn prune_doomed_xobjects(doc: &Document, content: &[Vec<u8>], xo: &mut Dict, doo
 
 pub(crate) fn resource_ops(doc: &Document, res: &Dict, content: &[Vec<u8>]) -> Result<Vec<Op>, CosError> {
     let parsed = Pieces::join(content).parse();
-    if parsed.skipped > 0 || parsed.ops.len() > 2_000_000 {
+    // An inline image the renderer reads no image for leaves where the operators resume a guess
+    // (as `apply` refuses on a marked page): a resource used after it could look unused.
+    if parsed.skipped > 0 || parsed.ambiguous_images > 0 || parsed.ops.len() > 2_000_000 {
         return Err(CosError::Syntax { offset: 0, detail: "redaction could not fully inspect property resources".into() });
     }
     let mut ops = parsed.ops;
@@ -281,7 +283,7 @@ pub(crate) fn resource_ops(doc: &Document, res: &Dict, content: &[Vec<u8>]) -> R
             && s.dict.get(b"Resources").is_none_or(|r| doc.resolve(r).as_dict().is_none())
         {
             let parsed = pdfcraft_content::parse(&s.decoded()?);
-            if seen.len() > 2_000_000 || ops.len().saturating_add(parsed.ops.len()) > 2_000_000 || parsed.skipped > 0 {
+            if seen.len() > 2_000_000 || ops.len().saturating_add(parsed.ops.len()) > 2_000_000 || parsed.skipped > 0 || parsed.ambiguous_images > 0 {
                 return Err(CosError::Syntax { offset: 0, detail: "redaction could not fully inspect inherited form resources".into() });
             }
             ops.extend(parsed.ops);
