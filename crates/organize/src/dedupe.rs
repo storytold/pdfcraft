@@ -103,23 +103,29 @@ fn plain_value(doc: &Document, r: ObjRef) -> Option<std::sync::Arc<Object>> {
     matches!(*o, Object::Bool(_) | Object::Int(_) | Object::Real(_) | Object::Name(_) | Object::String(_)).then_some(o)
 }
 
-fn hash_obj(o: &Object, doc: &Document, map: &HashMap<ObjRef, ObjRef>, h: &mut impl Hasher) {
+/// A string's bytes, digested once: a string is hashed by its whole content, so distinct strings
+/// sharing a long prefix and suffix don't share a bucket (each object added to a bucket is
+/// compared with all the others in it).
+fn string_digest(bytes: &[u8]) -> u64 {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    bytes.hash(&mut h);
+    h.finish()
+}
+
+/// `strings` holds the digest of each string object a reference has led to, so a long string
+/// named by many references is read once, not once per reference.
+fn hash_obj(o: &Object, doc: &Document, map: &HashMap<ObjRef, ObjRef>, strings: &mut HashMap<ObjRef, u64>, h: &mut impl Hasher) {
     match o {
         Object::Null => 0u8.hash(h),
         Object::Bool(b) => (1u8, b).hash(h),
         Object::Int(i) => (2u8, i).hash(h),
         Object::Real(f) => (3u8, f.to_bits()).hash(h),
-        Object::String(s) => {
-            // A long string hashes by its length and ends: one named by many references would
-            // otherwise be hashed whole once per reference. Equality still compares every byte.
-            let n = s.bytes.len();
-            (4u8, n, s.bytes.get(..256).unwrap_or(&s.bytes), s.bytes.get(n.saturating_sub(256)..).unwrap_or(&s.bytes)).hash(h)
-        }
+        Object::String(s) => (4u8, string_digest(&s.bytes)).hash(h),
         Object::Name(n) => (5u8, n).hash(h),
         Object::Array(a) => {
             (6u8, a.len()).hash(h);
             for x in a {
-                hash_obj(x, doc, map, h);
+                hash_obj(x, doc, map, strings, h);
             }
         }
         Object::Dict(d) => {
@@ -128,20 +134,24 @@ fn hash_obj(o: &Object, doc: &Document, map: &HashMap<ObjRef, ObjRef>, h: &mut i
             for (k, v) in d.iter() {
                 let mut eh = std::collections::hash_map::DefaultHasher::new();
                 k.hash(&mut eh);
-                hash_obj(v, doc, map, &mut eh);
+                hash_obj(v, doc, map, strings, &mut eh);
                 acc = acc.wrapping_add(eh.finish());
             }
             (7u8, d.len(), acc).hash(h);
         }
         Object::Stream(s) => {
             8u8.hash(h);
-            hash_obj(&Object::Dict(s.dict.clone()), doc, map, h);
+            hash_obj(&Object::Dict(s.dict.clone()), doc, map, strings, h);
             s.raw[..].hash(h);
         }
         Object::Ref(r) => {
             let c = canon(map, *r);
             match plain_value(doc, c) {
-                Some(v) => hash_obj(&v, doc, map, h),
+                Some(v) => match &*v {
+                    // The same as the string written in place, digested once per object.
+                    Object::String(s) => (4u8, *strings.entry(c).or_insert_with(|| string_digest(&s.bytes))).hash(h),
+                    _ => hash_obj(&v, doc, map, strings, h),
+                },
                 None => (9u8, c.num, c.generation).hash(h),
             }
         }
@@ -233,6 +243,7 @@ pub fn dedupe_resources(doc: &mut Document, candidates: &[ObjRef], index_existin
         all.into_iter().filter(|(r, o)| is_resource(o) || (listed.contains(r) && !matches!(**o, Object::Null))).collect();
 
     let mut map: HashMap<ObjRef, ObjRef> = HashMap::new();
+    let mut strings: HashMap<ObjRef, u64> = HashMap::new();
     // A fixpoint: each round can make referring objects equal. Depth is small in practice.
     for _round in 0..16 {
         let mut buckets: HashMap<u64, Vec<usize>> = HashMap::new();
@@ -242,7 +253,7 @@ pub fn dedupe_resources(doc: &mut Document, candidates: &[ObjRef], index_existin
                 continue;
             }
             let mut h = std::collections::hash_map::DefaultHasher::new();
-            hash_obj(o, doc, &map, &mut h);
+            hash_obj(o, doc, &map, &mut strings, &mut h);
             let bucket = buckets.entry(h.finish()).or_default();
             let target = bucket.iter().map(|j| &universe[*j]).find(|(_, other)| eq_obj(o, other, doc, &map)).map(|(t, _)| *t);
             match target {
@@ -291,6 +302,28 @@ mod tests {
         d.set(b"BaseFont".to_vec(), Object::name(name));
         d.set(b"FontFile".to_vec(), Object::Ref(file));
         doc.add(Object::Dict(d))
+    }
+
+    /// Long strings hash by every byte: two that differ only in the middle land in different
+    /// buckets, while a string behind a reference hashes like the same string written in place.
+    #[test]
+    fn long_strings_hash_by_their_whole_content() {
+        let mut doc = Document::new_empty();
+        let map = HashMap::new();
+        let a = vec![b'x'; 2000];
+        let mut b = a.clone();
+        b[1000] = b'y';
+        let behind = doc.add(Object::String(pdfcraft_cos::PdfString::literal(a.clone())));
+        let mut strings = HashMap::new();
+        let mut hash = |o: &Object| {
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            hash_obj(o, &doc, &map, &mut strings, &mut h);
+            h.finish()
+        };
+        let direct = hash(&Object::String(pdfcraft_cos::PdfString::literal(a)));
+        assert_ne!(direct, hash(&Object::String(pdfcraft_cos::PdfString::literal(b))));
+        assert_eq!(direct, hash(&Object::Ref(behind)));
+        assert_eq!(direct, hash(&Object::Ref(behind)), "the cached digest is the same");
     }
 
     #[test]
