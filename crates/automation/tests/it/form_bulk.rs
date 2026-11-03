@@ -389,3 +389,85 @@ fn form_fill_surfaces_script_errors_and_console_diagnostics() {
 
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn form_fill_surfaces_document_level_script_errors_and_isolates_documents() {
+    let (mut a, id1, dir) = setup("doc-script-err-1");
+    let id2 = tool(&mut a, "doc_open", json!({"path": "form.pdf"}))["doc"].as_u64().unwrap();
+    assert_ne!(id1, id2);
+
+    // 1. Add a genuine failing document-level script to doc 1
+    tool(
+        &mut a,
+        "js_set_document_script",
+        json!({
+            "doc": id1,
+            "name": "init_fail",
+            "script": "throw new Error(\"DocumentLevelInitFailure\");"
+        }),
+    );
+
+    // 2. Add a field-level script to doc 1 that also has console lines, alerts, and field errors
+    tool(
+        &mut a,
+        "form_set_script",
+        json!({
+            "doc": id1,
+            "field": "beta",
+            "event": "calculate",
+            "script": "console.println(\"beta calc\"); app.alert(\"Calc alert\"); throw new Error(\"FieldLevelCalcFailure\");"
+        }),
+    );
+
+    // 3. Edit in doc 2: must have zero errors or diagnostics (strict cross-document isolation)
+    let res2 = tool(&mut a, "form_fill", json!({"doc": id2, "values": {"alpha": "test"}}));
+    assert!(res2.get("errors").is_none());
+    assert!(res2.get("doc_errors").is_none());
+    assert!(res2.get("console").is_none());
+    assert!(res2.get("alerts").is_none());
+
+    // 4. Edit in doc 1: surfaces both doc_errors and field-level errors
+    let res1 = tool(&mut a, "form_fill", json!({"doc": id1, "values": {"alpha": "trigger"}}));
+    let doc_errs = res1["doc_errors"].as_array().expect("doc_errors array");
+    assert_eq!(doc_errs.len(), 1);
+    assert!(doc_errs[0].as_str().unwrap().contains("DocumentLevelInitFailure"));
+
+    let errs = res1["errors"].as_array().expect("errors array");
+    assert!(errs.iter().any(|e| e.as_str().unwrap().contains("DocumentLevelInitFailure")));
+    assert!(errs.iter().any(|e| e.as_str().unwrap().contains("FieldLevelCalcFailure")));
+
+    let console = res1["console"].as_array().expect("console array");
+    assert_eq!(console[0], "beta calc");
+
+    let alerts = res1["alerts"].as_array().expect("alerts array");
+    assert_eq!(alerts[0]["message"], "Calc alert");
+
+    // 5. Remove the failing document script; subsequent fill with clean condition has no doc_errors or errors
+    tool(&mut a, "js_set_document_script", json!({ "doc": id1, "name": "init_fail" }));
+    // Also set field script with condition so "other" doesn't trigger field error
+    tool(
+        &mut a,
+        "form_set_script",
+        json!({
+            "doc": id1,
+            "field": "beta",
+            "event": "calculate",
+            "script": "if (this.getField(\"alpha\").value == \"trigger\") { console.println(\"beta calc\"); app.alert(\"Calc alert\"); throw new Error(\"FieldLevelCalcFailure\"); }"
+        }),
+    );
+    let res1_clean = tool(&mut a, "form_fill", json!({"doc": id1, "values": {"alpha": "other"}}));
+    assert!(res1_clean.get("doc_errors").is_none(), "doc_errors must be empty after document script removed");
+    assert!(res1_clean.get("errors").is_none(), "errors must be empty when condition not met");
+    assert!(res1_clean.get("alerts").is_none());
+    assert!(res1_clean.get("console").is_none());
+
+    // 6. Undo/Redo does not replay diagnostics
+    let undo = tool(&mut a, "edit_undo", json!({"doc": id1}));
+    assert!(undo.get("doc_errors").is_none());
+    assert!(undo.get("errors").is_none());
+    let redo = tool(&mut a, "edit_redo", json!({"doc": id1}));
+    assert!(redo.get("doc_errors").is_none());
+    assert!(redo.get("errors").is_none());
+
+    std::fs::remove_dir_all(dir).unwrap();
+}
