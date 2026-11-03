@@ -10251,3 +10251,31 @@ fn image_transform_engine_refuses_singular_matrices_without_mutation() {
         assert_eq!(s.get(id).unwrap().bytes, before);
     }
 }
+
+/// An XFA form's datasets export (XML, XDP) copies the form's data out whole: a document whose
+/// security settings withhold copying (Table 22, bit 5) refuses it, as the text exports do,
+/// and the owner password lifts it.
+#[test]
+fn xfa_data_export_needs_copying_permission() {
+    let data = "<form><page1><country>JP</country></page1></form>";
+    let mut doc = pdfcraft_cos::Document::open(Arc::new(pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::fields_template(data)))).unwrap();
+    doc.set_encryption(&pdfcraft_cos::NewEncryption {
+        algorithm: pdfcraft_cos::Algorithm::Aes256,
+        user_password: "",
+        owner_password: "owner",
+        permissions: -1 ^ 0b1_0000,
+        encrypt_metadata: true,
+        seed: [7; 32],
+    })
+    .unwrap();
+    let bytes = Arc::new(pdfcraft_cos::write_full(&doc, &Default::default()).unwrap());
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("fields.pdf", None, bytes.clone(), None).unwrap();
+    assert!(s.get(id).unwrap().info.xfa.is_some() && !s.get(id).unwrap().allows_copying());
+    for format in [DataFormat::Xml, DataFormat::Xdp] {
+        assert_eq!(s.export_data(id, format, false, true).map(|_| ()), Err(EditError::NotPermitted("copying text and images")));
+    }
+    let oid = s.open("fields.pdf", None, bytes, Some("owner")).unwrap();
+    let xml = String::from_utf8(s.export_data(oid, DataFormat::Xml, false, true).unwrap()).unwrap();
+    assert!(xml.contains("<country>JP</country>"), "{xml}");
+}
