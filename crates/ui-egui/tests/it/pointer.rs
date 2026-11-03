@@ -1679,6 +1679,27 @@ fn with_prepare_a_click_that_began_off_the_page_keeps_the_selected_field() {
     assert!(h.state().views[0].prepare.selected.is_some(), "a click that began off the page leaves it selected");
 }
 
+/// With Prepare open and a field selected, a right-click on the empty page opens the page's menu, and
+/// one on the field the field's: the menu is what the right-click went to. The field's menu opened
+/// wherever the page was right-clicked.
+#[test]
+fn with_prepare_a_right_click_beside_the_selected_field_opens_the_pages_menu() {
+    let mut h = open(comment_and_checkbox_pdf(), "150", false);
+    assert!(h.state_mut().execute("form.prepare"));
+    h.run_steps(4);
+    let on_box = at(&h, 110.0, 210.0);
+    mouse_click(&mut h, on_box);
+    assert!(h.state().views[0].prepare.selected.is_some(), "the field is selected");
+    let blank = at(&h, 60.0, 300.0);
+    right_click(&mut h, blank);
+    assert!(h.query_by_label("Duplicate…").is_none(), "no field menu on the empty page");
+    assert!(h.query_all_by_label_contains("Copy").next().is_some(), "the page's menu");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    right_click(&mut h, on_box);
+    assert!(h.query_by_label("Duplicate…").is_some(), "the field's menu on the field");
+}
+
 /// With the Edit panel open and the Note tool, a click on added text is the added text's: no note is
 /// started under it, as before.
 #[test]

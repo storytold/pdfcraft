@@ -264,20 +264,6 @@ fn same_rect(a: [f64; 4], b: [f64; 4]) -> bool {
     a.into_iter().zip(b).all(|(a, b)| (a - b).abs() < 1e-3)
 }
 
-/// Whether `p` is on the crop box or one of its grips (#5835). The Done, Cancel and Remove
-/// Crop pills are widgets of their own, so they take their clicks before the canvas does.
-pub(crate) fn crop_controls_contain(
-    image: &pdfcraft_engine::PageImage,
-    mode: &CropMode,
-    xf: &PageXform,
-    info: &DocInfo,
-    page: usize,
-    p: Pos2,
-) -> bool {
-    crop_frames(xf, info, page, image, mode.keep)
-        .is_some_and(|(_, k)| k.contains(p) || crop_handles(k).iter().any(|h| h.distance(p) < CROP_GRIP_REACH))
-}
-
 /// Crop mode for the selected image `i` whose visible frame is `b` (screen). Returns `true`
 /// (the pointer is the crop's while it lasts; its keys are read by [`picture_keys`]).
 #[allow(clippy::cognitive_complexity)]
@@ -678,11 +664,6 @@ pub(super) fn turn_degrees(centre: Pos2, pointer: Pos2, snap: bool) -> f32 {
     turn_degrees_delta(centre, centre - egui::vec2(0.0, 10.0), pointer, snap)
 }
 
-#[doc(hidden)]
-pub fn image_menu_id() -> egui::Id {
-    egui::Id::unique("image-menu")
-}
-
 /// Images on a page: the press that is a picture's (`press`, [`body_hit`] and [`handle_hit`])
 /// selects it, a drag of the selected one moves, resizes or turns it. Returns `true` when the
 /// pointer was used.
@@ -991,20 +972,15 @@ pub(crate) fn image_input(cx: &ImageCx<'_>, images: &[pdfcraft_engine::PageImage
 }
 
 /// A right-click on `page` that went to its picture `index` (on it, a grip of it, or the box kept
-/// while it is cropped) selects it, keeping it as it is if it was selected, and opens the picture's
-/// menu; one that went to anything else (`None`) unselects the picture selected and closes the menu.
-pub(crate) fn picture_context(ctx: &egui::Context, page: usize, index: Option<usize>, view: &mut DocView) {
+/// while it is cropped) selects it for its menu, keeping it as it is if it was selected; one that
+/// went to anything else (`None`) unselects the picture selected.
+pub(crate) fn picture_context(page: usize, index: Option<usize>, view: &mut DocView) {
     match index {
-        Some(index) => {
-            if view.image_selection.as_ref().is_none_or(|s| (s.page, s.index) != (page, index)) {
-                view.image_selection = Some(ImageSelection::at(page, index));
-            }
-            ctx.data_mut(|d| d.insert_temp(image_menu_id(), true));
+        Some(index) if view.image_selection.as_ref().is_none_or(|s| (s.page, s.index) != (page, index)) => {
+            view.image_selection = Some(ImageSelection::at(page, index));
         }
-        None => {
-            view.image_selection = None;
-            ctx.data_mut(|d| d.insert_temp(image_menu_id(), false));
-        }
+        Some(_) => {}
+        None => view.image_selection = None,
     }
 }
 
@@ -1029,7 +1005,6 @@ pub(crate) fn image_context_menu(
     let picked = |ui: &mut egui::Ui, entry: egui::Response| {
         let clicked = entry.clicked();
         if clicked {
-            ui.ctx().data_mut(|d| d.insert_temp(image_menu_id(), false));
             egui::Popup::close_all(ui.ctx());
             ui.close();
         }

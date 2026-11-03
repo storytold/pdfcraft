@@ -134,7 +134,7 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
             Some(Owner::Picture { index, part }) if part != crate::page_router::PicturePart::Crop(crate::page_router::CropPart::Page) => Some(index),
             _ => None,
         };
-        crate::edit_text_ui::picture_context(ui.ctx(), i, picture, view);
+        crate::edit_text_ui::picture_context(i, picture, view);
     }
     // A mark already placed takes its own press (comments, below), as does one being moved on this
     // page until its move ends; with no button down the Fill & Sign tool's preview hides where a
@@ -347,6 +347,13 @@ fn right_click(hits: &PageHits<'_>, under: &[crate::page_router::Hit], view: &mu
     let context = hits.context_at(view, p, under);
     // Delete page, Paste and Copy Image act where the menu opened, whoever takes the right-click.
     comments::anchor(hits.pcx, p, view);
+    // The menu is what the right-click went to: Add text's is the page's. While a press is held only
+    // a link takes its menu, as only links take theirs then.
+    view.menu_for = match context {
+        Some(owner @ Owner::Link { .. }) => Some((hits.page, owner)),
+        _ if press_held || hits.tool == QuickTool::AddText && hits.can_modify => None,
+        owner => owner.map(|o| (hits.page, o)),
+    };
     if press_held {
         return context;
     }
