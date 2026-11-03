@@ -1,5 +1,8 @@
 use super::device::{DIRECTION_TOLERANCE, Drawn, WORD_GAP};
-use super::order::{NONE, REDRAW_CANDIDATES, Run, Scratch, Seg, fingerprint, is_script_on, place_glyphs, redraws, restarts_run, reverse_rtl};
+use super::order::{
+    NONE, REDRAW_CANDIDATES, Run, Scratch, Seg, fingerprint, ink_of, is_script_on, mark_barcode_rows, place_glyphs, redraws, restarts_run,
+    reverse_rtl,
+};
 use super::{HashMap, PageText, TextGlyph};
 
 /// Glyphs in reading order, as indices into the page's glyphs, with their lines and word gaps.
@@ -119,7 +122,8 @@ pub(super) fn union(a: &mut [f32; 4], b: &[f32; 4]) {
 /// Heuristics (documented so they can be tuned and tested; plan/architecture.md §8):
 /// 1. *Segments:* consecutive glyphs (content order) on one baseline with no column-sized gap.
 ///    A smaller glyph right next to the previous one (a sub- or superscript) stays in the segment.
-///    Segments on the same baseline that nearly touch are merged (text drawn out of order).
+///    Segments on the same baseline that nearly touch are merged (text drawn out of order), and so
+///    is a table cell padded with spaces with the next cell of its row (`PADDED_FIELD`).
 /// 2. *Blocks:* segments stacked with line-sized gaps and overlapping horizontally.
 /// 3. *Block order:* repeatedly take the top-most remaining block, preferring a block to its left
 ///    that overlaps it vertically (so columns read left, then right). A column goes on first (#3658):
@@ -131,6 +135,8 @@ pub(super) fn union(a: &mut [f32; 4], b: &[f32; 4]) {
 ///    Known limit: when a paragraph in the next column starts on the same line as the continuation
 ///    (text on a baseline grid), it counts as a row and the top-most rule applies, so the column
 ///    order of #3658 is lost there. Telling prose from a row in that case needs more evidence.
+///    The rows of a barcode drawn with a font (a QR or Aztec code) join no other text and are read
+///    after everything else, top to bottom.
 /// 4. Within a segment glyphs run left to right; runs of right-to-left script are reversed so the
 ///    text comes out in logical order.
 pub fn layout(glyphs: Vec<TextGlyph>) -> PageText {
@@ -198,9 +204,10 @@ fn arrange(glyphs: &[TextGlyph]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
         {
             s.first.end = i + 1;
             s.extend_box(&g, hi);
+            s.ink = s.ink.max(ink_of(glyphs[i]));
             furthest_progress = furthest_progress.max((g[0] - run_start_x).abs()).max((g[2] - run_start_x).abs());
         } else {
-            segs.push(Seg::new(Run { start: i, end: i + 1 }, g, hi));
+            segs.push(Seg::new(Run { start: i, end: i + 1 }, g, hi, ink_of(glyphs[i])));
             run_start_x = g[0];
             furthest_progress = 0.0;
         }
@@ -249,7 +256,8 @@ fn arrange(glyphs: &[TextGlyph]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
         kept_runs
     };
     segs.truncate(retained);
-    // Merge same-baseline segments that nearly touch, then attach any remaining superscript or
+    mark_barcode_rows(&mut segs);
+    // Merge same-baseline segments that nearly touch, and a padded cell with the next of its row, then attach any remaining superscript or
     // subscript segments to the closest host line segment they sit on.
     let mut merged = true;
     while merged {
@@ -262,7 +270,8 @@ fn arrange(glyphs: &[TextGlyph]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
                 let (sa, sb) = (&segs[a], &segs[b]);
                 let h = sa.h.min(sb.h);
                 let gap = (sb.bbox[0] - sa.bbox[2]).max(sa.bbox[0] - sb.bbox[2]);
-                if (sa.cy() - sb.cy()).abs() < h * 0.3 && (sa.h / sb.h - 1.0).abs() < 0.35 && gap < h * 1.2 {
+                let joined = (gap < h * 1.2 || sa.padded_towards(sb, h)) && sa.barcode == sb.barcode;
+                if (sa.cy() - sb.cy()).abs() < h * 0.3 && (sa.h / sb.h - 1.0).abs() < 0.35 && joined {
                     let sb = segs.remove(b);
                     let a = if b < a { a - 1 } else { a };
                     segs[a].merge(sb);
@@ -282,7 +291,10 @@ fn arrange(glyphs: &[TextGlyph]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
                         }
                         let sa = &segs[a];
                         let gap = (sb.bbox[0] - sa.bbox[2]).max(sa.bbox[0] - sb.bbox[2]);
-                        sa.bbox[2] - sa.bbox[0] > sb.bbox[2] - sb.bbox[0] && gap < sa.h * 1.2 && is_script_on(&sa.bbox, sa.h, &sb.bbox, sb.h)
+                        sa.bbox[2] - sa.bbox[0] > sb.bbox[2] - sb.bbox[0]
+                            && gap < sa.h * 1.2
+                            && sa.barcode == sb.barcode
+                            && is_script_on(&sa.bbox, sa.h, &sb.bbox, sb.h)
                     })
                     .min_by(|&a1, &a2| (segs[a1].cy() - sb.cy()).abs().total_cmp(&(segs[a2].cy() - sb.cy()).abs()));
                 if let Some(a) = best_host {
@@ -309,7 +321,11 @@ fn arrange(glyphs: &[TextGlyph]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
             let vgap = s.bbox[1] - last.bbox[3];
             let overlap = s.bbox[2].min(bb[2]) - s.bbox[0].max(bb[0]);
             let minw = (s.bbox[2] - s.bbox[0]).min(bb[2] - bb[0]).max(1.0);
-            vgap > -last.h * 0.5 && vgap < last.h.max(s.h) * 1.1 && overlap > minw * 0.3 && (last.h / s.h - 1.0).abs() < 0.6
+            vgap > -last.h * 0.5
+                && vgap < last.h.max(s.h) * 1.1
+                && overlap > minw * 0.3
+                && (last.h / s.h - 1.0).abs() < 0.6
+                && last.barcode == s.barcode
         });
         match target {
             Some(b) => {
@@ -322,7 +338,10 @@ fn arrange(glyphs: &[TextGlyph]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
     }
 
     // 3. Block order.
-    let mut remaining: Vec<usize> = (0..blocks.len()).collect();
+    // A barcode drawn with a font is a picture, not text to read: it comes after the page's text
+    // and does not hold up the column beside it.
+    let (mut remaining, barcodes): (Vec<usize>, Vec<usize>) =
+        (0..blocks.len()).partition(|&b| blocks[b].0.first().and_then(|&s| segs.get(s)).is_none_or(|s| !s.barcode));
     let mut block_order: Vec<usize> = Vec::with_capacity(blocks.len());
     // A block to the left of `cb` that shares at least half the height of the shorter one: it reads first.
     let beside_left = |cb: &[f32; 4], lb: &[f32; 4]| {
@@ -385,6 +404,7 @@ fn arrange(glyphs: &[TextGlyph]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
         remaining.retain(|r| *r != pick);
         block_order.push(pick);
     }
+    block_order.extend(barcodes);
 
     // 4. Emit each segment in block order. Its glyphs are placed here, into scratch that every segment reuses, and
     // appended straight to the output. Blocks and their order use only segment boxes, so placement can wait until now.
