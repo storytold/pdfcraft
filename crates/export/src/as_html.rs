@@ -38,11 +38,23 @@ pub(crate) fn base64(data: &[u8]) -> String {
 /// One HTML file: headings and paragraphs, tables as real `<table>` elements, images inline, a
 /// rule between pages.
 pub fn html(pages: &[Page], title: &str) -> String {
+    html_with_mode(pages, title, false)
+}
+
+/// A simple HTML export with no CSS; page layout and colours are omitted.
+pub fn html_simple(pages: &[Page], title: &str) -> String {
+    html_with_mode(pages, title, true)
+}
+
+fn html_with_mode(pages: &[Page], title: &str, simple: bool) -> String {
     let mut s = format!(
-        "<!DOCTYPE html>\n<html>\n<head>\n<meta charset=\"utf-8\">\n<title>{}</title>\n<style>body{{max-width:46em;margin:2em auto;font-family:sans-serif;line-height:1.45}}\
-img{{max-width:100%}}hr{{border:0;border-top:1px solid #ccc;margin:2em 0}}\
-table{{border-collapse:collapse;margin:1em 0}}td,th{{border:1px solid #999;padding:2px 6px;vertical-align:top}}</style>\n</head>\n<body>\n",
-        esc(title)
+        "<!DOCTYPE html>\n<html>\n<head>\n<meta charset=\"utf-8\">\n<title>{}</title>\n{}\n</head>\n<body>\n",
+        esc(title),
+        if simple {
+            ""
+        } else {
+            "<style>body{max-width:46em;margin:2em auto;font-family:sans-serif;line-height:1.45}img{max-width:100%}hr{border:0;border-top:1px solid #ccc;margin:2em 0}table{border-collapse:collapse;margin:1em 0}td,th{border:1px solid #999;padding:2px 6px;vertical-align:top}</style>"
+        }
     );
     for it in items(pages) {
         match it {
@@ -59,13 +71,13 @@ table{{border-collapse:collapse;margin:1em 0}}td,th{{border:1px solid #999;paddi
                     }
                     // The paragraph has its first run's colour; a run in another colour says so.
                     let colour = rgb8(r.block.color);
-                    if colour != rgb8(first.color) {
+                    if !simple && colour != rgb8(first.color) {
                         let [red, green, blue] = colour;
                         run = format!("<span style=\"color:#{red:02X}{green:02X}{blue:02X}\">{run}</span>");
                     }
                     t.push_str(&run);
                 }
-                let style = hex(first.color).map_or(String::new(), |h| format!(" style=\"color:#{h}\""));
+                let style = if simple { String::new() } else { hex(first.color).map_or(String::new(), |h| format!(" style=\"color:#{h}\"")) };
                 match lvl {
                     0 => s.push_str(&format!("<p{style}>{t}</p>\n")),
                     l => s.push_str(&format!("<h{l}{style}>{t}</h{l}>\n")),
@@ -84,7 +96,7 @@ table{{border-collapse:collapse;margin:1em 0}}td,th{{border:1px solid #999;paddi
                             body = format!("<strong>{body}</strong>");
                         }
                         let span = if c.span > 1 { format!(" colspan=\"{}\"", c.span) } else { String::new() };
-                        let style = hex(c.color).map_or(String::new(), |h| format!(" style=\"color:#{h}\""));
+                        let style = if simple { String::new() } else { hex(c.color).map_or(String::new(), |h| format!(" style=\"color:#{h}\"")) };
                         s.push_str(&format!("<td{span}{style}>{body}</td>"));
                     }
                     s.push_str("</tr>\n");
@@ -94,8 +106,10 @@ table{{border-collapse:collapse;margin:1em 0}}td,th{{border:1px solid #999;paddi
             Item::Img(im) => {
                 let mime = if im.ext == "jpg" { "image/jpeg" } else { "image/png" };
                 // Pictures flow upright: a picture the PDF mirrors or turns half round is flipped
-                // to match (a bottom-up bitmap vertically, a left-right mirror horizontally).
+                // to match (a bottom-up bitmap vertically, a left-right mirror horizontally). The
+                // flip is a style, so simple HTML, which has none, shows the picture as stored.
                 let flip = match im.upright_flips() {
+                    _ if simple => "",
                     (false, false) => "",
                     (false, true) => " style=\"transform:scale(1,-1)\"",
                     (true, false) => " style=\"transform:scale(-1,1)\"",

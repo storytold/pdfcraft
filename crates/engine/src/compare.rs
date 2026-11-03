@@ -140,6 +140,8 @@ pub enum OfficeFormat {
     Docx,
     Pptx,
     Html,
+    /// CSS-free HTML that preserves text and inline images but drops colours and layout styling.
+    HtmlSimple,
     Rtf,
     Markdown,
 }
@@ -150,6 +152,7 @@ impl OfficeFormat {
             OfficeFormat::Docx => "docx",
             OfficeFormat::Pptx => "pptx",
             OfficeFormat::Html => "html",
+            OfficeFormat::HtmlSimple => "html",
             OfficeFormat::Rtf => "rtf",
             OfficeFormat::Markdown => "md",
         }
@@ -473,6 +476,7 @@ impl crate::Document {
             }
             OfficeFormat::Pptx => pdfcraft_export::pptx(&pages, &title),
             OfficeFormat::Html => pdfcraft_export::html(&pages, &title).into_bytes(),
+            OfficeFormat::HtmlSimple => pdfcraft_export::html_simple(&pages, &title).into_bytes(),
             OfficeFormat::Rtf => pdfcraft_export::rtf(&pages).into_bytes(),
             OfficeFormat::Markdown => pdfcraft_export::markdown(&pages).into_bytes(),
         };

@@ -29,9 +29,9 @@ pub(crate) use as_docx::hex;
 use as_docx::{FRAMING_SHAPES, MAX_DOCX_LIST_ITEMS, MAX_FIELD_NAME_CHARS, MAX_MEDIA, docx_table, word_font};
 pub use as_docx::{MAX_DOCX_PAGE_POINTS, MAX_DOCX_PAGE_SHAPES, docx, docx_checked};
 pub(crate) use as_html::esc;
-pub use as_html::html;
 #[cfg(test)]
 use as_html::{allowed, base64};
+pub use as_html::{html, html_simple};
 pub use as_markdown::markdown;
 #[cfg(test)]
 use as_markdown::{emphasis, paragraph};

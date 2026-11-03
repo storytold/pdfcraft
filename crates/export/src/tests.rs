@@ -90,6 +90,24 @@ fn html_has_headings_paragraphs_and_images_in_order() {
 }
 
 #[test]
+fn simple_html_has_no_css_or_layout_elements() {
+    let mut p = page();
+    let mut unicode = block("naïve 日本語.", 72.0, 300.0, 300.0, 311.0);
+    unicode.bold = true;
+    unicode.italic = true;
+    p.blocks.push(unicode);
+    let source = html_simple(&[p, table_page()], "Simple export");
+    for banned in ["<style", "style=", "<div", "<span"] {
+        assert!(!source.contains(banned), "{banned} in {source}");
+    }
+    for wanted in ["<h1", "<p>", "<strong>", "<em>", "<table", "naïve 日本語."] {
+        assert!(source.contains(wanted), "no {wanted} in {source}");
+    }
+    // The rich export of the same pages keeps its stylesheet: only simple mode drops it.
+    assert!(html(&[page()], "Rich").contains("<style"));
+}
+
+#[test]
 fn docx_is_a_word_package() {
     let d = docx(&[page()], "Report");
     assert!(d.starts_with(b"PK"));
@@ -1250,6 +1268,7 @@ fn word_counts_every_subpath_against_the_page_limit() {
 /// A picture the PDF draws mirrored (a print driver's bottom-up bitmap, drawn with a negative
 /// height) is flipped back in every format that shows pictures: a scanned form drawn in 70 such
 /// strips came out in Word with every strip upside down, as if cut apart and pasted back wrongly.
+/// Simple HTML, which has no styles, shows it as stored.
 #[test]
 fn a_mirrored_picture_is_flipped_back_in_every_format() {
     let flipped = |mut p: Page| {
@@ -1270,6 +1289,8 @@ fn a_mirrored_picture_is_flipped_back_in_every_format() {
     assert!(!part(&pptx(&[page()], "Scan"), "ppt/slides/slide1.xml").contains("flipV"));
     assert!(html(&[flipped(page())], "Scan").contains("<img alt=\"\" style=\"transform:scale(1,-1)\" src="));
     assert!(!html(&[page()], "Scan").contains("transform"));
+    let simple = html_simple(&[flipped(page())], "Scan");
+    assert!(simple.contains("<img alt=\"\" src=") && !simple.contains("style="), "{simple}");
 }
 
 /// The writers that place pictures upright (flowing Word pages, PowerPoint, HTML) compose a mirror

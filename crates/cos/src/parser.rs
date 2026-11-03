@@ -341,7 +341,11 @@ impl<'a> Lexer<'a> {
         let s = std::str::from_utf8(tok).map_err(|_| self.err("bad number"))?;
         if s.contains('.') {
             // Tolerate forms like "--5", "5-" or "1.2.3" by parsing the longest valid prefix.
-            let cleaned: String = s.trim_start_matches('+').replacen("--", "-", 1);
+            // Only a doubled sign needs a cleaned copy: a page of InDesign `/PieceInfo` is
+            // thousands of plain reals, and building a copy and a substring search for each
+            // was a large part of reading one (#5873).
+            let t = s.trim_start_matches('+');
+            let cleaned = if t.as_bytes().windows(2).any(|w| w == b"--") { std::borrow::Cow::Owned(t.replacen("--", "-", 1)) } else { t.into() };
             let v = cleaned.get(..real_prefix_len(cleaned.as_bytes())).and_then(|p| parse_counted::<f64>(p).ok());
             return Ok(Object::Real(v.unwrap_or(0.0)));
         }
@@ -706,5 +710,14 @@ mod tests {
         let two = wide(MAX_NODES - 1).repeat(2);
         let mut lx = Lexer::new(two.as_bytes(), 0);
         assert!(lx.object().is_ok() && lx.object().is_ok());
+    }
+
+    /// A plain real is read without a cleaned copy of its token; the forms that need one read
+    /// as they did (#5873).
+    #[test]
+    fn reals_read_the_same_with_and_without_a_doubled_sign() {
+        for (token, want) in [("1.5", 1.5), ("-375.993", -375.993), ("+2.25", 2.25), ("--5.5", -5.5), ("1.2.3", 1.2), ("-.5", -0.5), ("0.0", 0.0)] {
+            assert_eq!(Lexer::new(token.as_bytes(), 0).object().unwrap(), Object::Real(want), "{token}");
+        }
     }
 }
