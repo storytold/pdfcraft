@@ -10604,3 +10604,59 @@ fn sound_comment_creates_valid_sound_annotation_and_survives_save_reopen() {
     assert_eq!(list2["comments"][0]["type"], "Sound");
     assert_eq!(list2["comments"][0]["contents"], "Voice memo");
 }
+
+#[test]
+fn sound_comment_rejects_oversized_and_malformed_audio_files() {
+    let dir = workdir("sound-oversized");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+
+    // 1. Oversized file (simulated with sparse file > 64 MiB)
+    let large_path = dir.join("huge.wav");
+    let huge_file = std::fs::File::create(&large_path).unwrap();
+    huge_file.set_len(64 * 1024 * 1024 + 128).unwrap();
+    drop(huge_file);
+
+    let e_huge = err(
+        &mut a,
+        "comment_add",
+        json!({
+            "doc": doc,
+            "page": 1,
+            "type": "sound",
+            "at": [50, 50],
+            "path": "huge.wav"
+        }),
+    );
+    assert!(e_huge.to_string().contains("audio file is too large"), "expected file too large error, got: {e_huge}");
+
+    // 2. Empty file
+    std::fs::write(dir.join("empty.wav"), b"").unwrap();
+    let e_empty = err(
+        &mut a,
+        "comment_add",
+        json!({
+            "doc": doc,
+            "page": 1,
+            "type": "sound",
+            "at": [50, 50],
+            "path": "empty.wav"
+        }),
+    );
+    assert!(e_empty.to_string().contains("empty audio file"), "expected empty error, got: {e_empty}");
+
+    // 3. Truncated / malformed RIFF header
+    std::fs::write(dir.join("corrupt.wav"), b"RIFF\x10\x00\x00\x00NOTWAVE").unwrap();
+    let e_corrupt = err(
+        &mut a,
+        "comment_add",
+        json!({
+            "doc": doc,
+            "page": 1,
+            "type": "sound",
+            "at": [50, 50],
+            "path": "corrupt.wav"
+        }),
+    );
+    assert!(e_corrupt.to_string().contains("not a WAVE file"), "expected not wave error, got: {e_corrupt}");
+}

@@ -260,6 +260,7 @@ struct FmtHeader {
     block_align: u16,
 }
 
+/// Parse and validate the PCM format chunk payload (`fmt `).
 fn parse_fmt(chunk: &[u8]) -> Result<FmtHeader, WavError> {
     if chunk.len() < 16 {
         return Err(WavError::FmtChunkTooSmall(chunk.len()));

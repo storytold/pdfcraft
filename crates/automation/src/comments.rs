@@ -411,9 +411,26 @@ impl Automation {
                     Shape::Attachment { at: icon_anchor(&info, x, y), icon, file, data }
                 }
                 "sound" => {
+                    use std::io::Read as _;
                     let [x, y] = a.need::<2>("at", "a voice comment (its icon's top-left)")?;
                     let path = self.resolve(a.str("path")?, false)?;
-                    let data = std::fs::read(&path).map_err(|e| ToolError::Failed(format!("{}: {e}", path.display())))?;
+                    let mut file = std::fs::File::open(&path).map_err(|e| ToolError::Failed(format!("{}: {e}", path.display())))?;
+                    if let Ok(meta) = file.metadata()
+                        && meta.is_file()
+                        && meta.len() > crate::wav::MAX_WAV_FILE_SIZE as u64
+                    {
+                        let err = crate::wav::WavError::FileTooLarge(meta.len() as usize);
+                        return Err(ToolError::Failed(format!("{}: {err}", path.display())));
+                    }
+                    let mut data = Vec::new();
+                    file.by_ref()
+                        .take(crate::wav::MAX_WAV_FILE_SIZE as u64 + 1)
+                        .read_to_end(&mut data)
+                        .map_err(|e| ToolError::Failed(format!("{}: {e}", path.display())))?;
+                    if data.len() > crate::wav::MAX_WAV_FILE_SIZE {
+                        let err = crate::wav::WavError::FileTooLarge(data.len());
+                        return Err(ToolError::Failed(format!("{}: {err}", path.display())));
+                    }
                     let (rate, channels, samples) = wav_samples(&data).map_err(|e| ToolError::Failed(format!("{}: {e}", path.display())))?;
                     Shape::Sound { at: icon_anchor(&info, x, y), rate, channels: channels as u16, samples }
                 }
