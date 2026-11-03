@@ -93,6 +93,11 @@ pub(crate) struct Bitmap {
     pub(crate) stride: u32,
     /// Packed pixel data, one bit per pixel, row-major order.
     /// Each row is padded to a word boundary.
+    ///
+    /// PdfCraft patch: the padding is 0s, as pixels past the edge are (6.2.5.2, 6.3.5.2). Generic
+    /// and refinement decoding read the rows above their own pixels a word at a time, padding
+    /// included, and a refinement reads its reference the same way: whatever writes whole words
+    /// keeps the padding 0 (see `clear_padding`).
     pub(crate) data: Vec<Word>,
     /// "This four-byte field gives the horizontal offset in pixels of the bitmap
     /// encoded in this segment relative to the page bitmap." (7.4.1.3)
