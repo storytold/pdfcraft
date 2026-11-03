@@ -39,6 +39,8 @@ pub(crate) fn page_input(ui: &egui::Ui, resp: &egui::Response, cx: &PageCx<'_>, 
     }
     if cv.gesture.is_some() && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
         cv.gesture = None;
+        // The moved comment's point named on the page goes with the move.
+        cv.anchor_shown = None;
         return true;
     }
     let moving = moving_on(view, cx.page);

@@ -10885,4 +10885,17 @@ fn snap_takes_the_comments_already_drawn() {
     let [x, y] = start(&lines[1]);
     assert!((x - 120.0).abs() < 1e-3 && (y - 40.0).abs() < 1e-3, "{lines:?}");
     assert_eq!(start(&lines[2]), [20.0, 250.0]);
+    // A text box snaps by its corners too, as a rectangle does (its bottom-left and top-right
+    // ones): the bottom-left one, 3 pt off the line's end, goes onto it.
+    let out =
+        ok(&mut a, "comment_add", json!({ "doc": doc, "page": 1, "type": "textbox", "rect": [117, 10, 200, 43], "contents": "Box", "snap": true }));
+    assert_eq!(out["snapped"], 1, "{out}");
+    let list = ok(&mut a, "comment_list", json!({ "doc": doc, "page": 1 }));
+    let boxed = list["comments"].as_array().unwrap().iter().find(|c| c["contents"] == "Box").cloned().expect("the text box");
+    let r: Vec<f64> = boxed["rect"].as_array().unwrap().iter().map(|v| v.as_f64().unwrap()).collect();
+    let want = [120.0, 10.0, 200.0, 40.0];
+    assert!(r.iter().zip(want).all(|(v, w)| (v - w).abs() < 1e-3), "{r:?}");
+    // A point already on a target stays and isn't counted as moved.
+    let out = ok(&mut a, "comment_add", json!({ "doc": doc, "page": 1, "type": "line", "from": [20, 40], "to": [70, 140], "snap": true }));
+    assert_eq!(out["snapped"], 0, "{out}");
 }

@@ -3736,16 +3736,19 @@ fn moved_comments_snap_by_their_corners_and_marks_by_their_centre() {
     drag_pt(&mut h, (45.0, 20.0), (37.0, 41.0));
     let r = comments(&h).into_iter().find(|a| a.subtype == "Square").expect("the rectangle").rect;
     assert!((r[0] - 20.0).abs() < 0.01 && (r[3] - 50.0).abs() < 0.01, "its corner on the line's end: {r:?}");
-    // Tab over a marker moves on to the next target under the pointer.
+    // With the Select tool, hovering shows no marker, so it reads no paths for it (a plan's take
+    // up to a second); dragging does.
+    h.hover_at(at(&h, 101.0, 101.0));
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].comments.snap_first, None, "no target while Select only hovers");
+    // A drawing tool shows the marker, and Tab over it moves on to the next target under the pointer.
+    h.state_mut().set_option("quick", "polyline").unwrap();
+    h.run_steps(2);
     h.hover_at(at(&h, 101.0, 101.0));
     h.run_steps(2);
     let first = h.state().views[0].comments.snap_first.expect("a target under the pointer");
     assert_eq!(first.1, [100.0, 100.0], "the box's corner first");
     assert!(h.state_mut().views[0].comments.cycle_snap(1));
-    // (With the Select tool the marker shows only while dragging; a drawing tool shows it.)
-    h.state_mut().set_option("quick", "polyline").unwrap();
-    h.run_steps(2);
-    h.hover_at(at(&h, 101.0, 101.0));
     h.run_steps(2);
     let shown = h.state().views[0].comments.snap_hover.map(|(_, p, _)| p);
     assert!(shown.is_some_and(|p| p != [100.0, 100.0]), "the next one: {shown:?}");
@@ -3807,23 +3810,53 @@ fn tab_picks_the_point_of_a_moved_comment_that_goes_onto_the_target() {
         h.run_steps(1);
     }
     on_the_end(&h, "Top left");
-    // Tab: the middle of its top side goes onto the end instead, then its top-right corner.
-    h.state_mut().views[0].comments.anchor_steps = 1;
-    h.run_steps(2);
+    // Tab, pressed while the button is held: the middle of its top side goes onto the end
+    // instead, then its top-right corner. The key goes through the app's raw input hook, as in
+    // production (kittest doesn't call it), which takes Tab while nothing has the keyboard.
+    assert_eq!(h.ctx.memory(|m| m.focused()), None, "Tab goes to the move while nothing has the keyboard");
+    let press = |h: &mut Harness<'static, PdfCraftApp>, modifiers: egui::Modifiers| {
+        let ctx = h.ctx.clone();
+        let mut raw = std::mem::take(h.input_mut());
+        for pressed in [true, false] {
+            raw.events.push(egui::Event::Key { key: egui::Key::Tab, pressed, modifiers, repeat: false, physical_key: None });
+        }
+        h.state_mut().prepare_raw_input(&ctx, &mut raw);
+        assert!(!raw.events.iter().any(|e| matches!(e, egui::Event::Key { key: egui::Key::Tab, .. })), "the hook takes Tab");
+        *h.input_mut() = raw;
+        h.run_steps(2);
+    };
+    press(&mut h, egui::Modifiers::NONE);
     on_the_end(&h, "Top");
-    h.state_mut().views[0].comments.anchor_steps = 1;
-    h.run_steps(2);
+    press(&mut h, egui::Modifiers::NONE);
     on_the_end(&h, "Top right");
     // Shift+Tab: back to the middle of the top side, where it is dropped.
-    h.state_mut().views[0].comments.anchor_steps = -1;
-    h.run_steps(2);
+    press(&mut h, egui::Modifiers::SHIFT);
     on_the_end(&h, "Top");
     h.drop_at(b);
     h.run_steps(3);
-    let r = comments(&h).into_iter().find(|a| a.subtype == "Square").expect("the rectangle").rect;
+    let rect_now = |h: &Harness<'static, PdfCraftApp>| comments(h).into_iter().find(|a| a.subtype == "Square").expect("the rectangle").rect;
+    let r = rect_now(&h);
     assert!((r[0] - 5.0).abs() < 0.01 && (r[2] - 35.0).abs() < 0.01 && (r[1] - 30.0).abs() < 0.01 && (r[3] - 50.0).abs() < 0.01, "{r:?}");
     assert_eq!(shown(&h), None, "nothing named once it is dropped");
     assert_eq!(h.state().views[0].comments.move_anchor, None, "the next move starts afresh");
+    // Escape cancels a move with the button still held: the point named goes with it. Brought so
+    // its bottom-left corner (5, 30) nears the check box's corner (100, 100), it snaps there.
+    let (a, b) = (at(&h, 20.0, 40.0), at(&h, 116.0, 111.0));
+    h.hover_at(a);
+    h.run_steps(1);
+    h.drag_at(a);
+    h.run_steps(1);
+    for k in 1..=4 {
+        h.hover_at(a + (b - a) * (k as f32 / 4.0));
+        h.run_steps(1);
+    }
+    assert!(shown(&h).is_some(), "a point named while it snaps");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    assert_eq!(shown(&h), None, "Escape takes the name away with the move");
+    h.drop_at(b);
+    h.run_steps(3);
+    assert_eq!(rect_now(&h), r, "and the rectangle stays");
 }
 
 /// Snapping and line handles together: a line's end dragged near the check box's corner lands

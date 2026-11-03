@@ -333,6 +333,37 @@ pub fn candidate_order(a: &Snap, b: &Snap) -> std::cmp::Ordering {
     key(a).cmp(&key(b)).then(a.distance.total_cmp(&b.distance))
 }
 
+/// The first [`MAX_CANDIDATES`] of `found` in [`candidate_order`], each point once; candidates
+/// that compare equal keep the order they were found in. At a low zoom thousands of targets can
+/// be in reach on a plan, so only a few times as many as are wanted are picked out and sorted (a
+/// partial selection), more only when duplicates leave too few.
+pub(crate) fn nearest_distinct(found: Vec<Snap>) -> Vec<Snap> {
+    let mut found: Vec<(usize, Snap)> = found.into_iter().enumerate().collect();
+    let order = |a: &(usize, Snap), b: &(usize, Snap)| candidate_order(&a.1, &b.1).then(a.0.cmp(&b.0));
+    let mut take = 4 * MAX_CANDIDATES;
+    loop {
+        if found.len() > take {
+            found.select_nth_unstable_by(take, order);
+            found[..take].sort_by(order);
+        } else {
+            found.sort_by(order);
+        }
+        let mut out: Vec<Snap> = Vec::new();
+        for (_, s) in found.iter().take(take) {
+            if out.len() >= MAX_CANDIDATES {
+                break;
+            }
+            if !out.iter().any(|o| distance(o.point, s.point) <= 1e-6) {
+                out.push(*s);
+            }
+        }
+        if out.len() >= MAX_CANDIDATES || take >= found.len() {
+            return out;
+        }
+        take = take.saturating_mul(4);
+    }
+}
+
 /// A subpath's box and corners so far, for its centre once it is known to be closed.
 #[derive(Clone, Copy, Debug)]
 struct Subpath {
@@ -349,10 +380,14 @@ impl Subpath {
         Self { lo: p, hi: p, start: p, end: p, points: 1, closed: false }
     }
     fn add(&mut self, p: Point) {
-        self.lo = [self.lo[0].min(p[0]), self.lo[1].min(p[1])];
-        self.hi = [self.hi[0].max(p[0]), self.hi[1].max(p[1])];
+        self.reach(p);
         self.end = p;
         self.points = self.points.saturating_add(1);
+    }
+    /// Widen the box to `p`, a point the subpath passes through (a curve's extreme).
+    fn reach(&mut self, p: Point) {
+        self.lo = [self.lo[0].min(p[0]), self.lo[1].min(p[1])];
+        self.hi = [self.hi[0].max(p[0]), self.hi[1].max(p[1])];
     }
     /// The centre of its box when it is a closed figure (closed by `h`, a rectangle, ending where
     /// it began, or `filled`) of three points or more with some extent.
@@ -364,6 +399,37 @@ impl Subpath {
         // corner infinite, and one infinite centre would spread the grid over the whole page).
         (closed && self.points >= 3 && extent > 1e-3 && check_points(&[c]).is_ok()).then_some(c)
     }
+}
+
+/// The points of a cubic curve where it turns back in x or in y (at most two per axis, strictly
+/// between its ends): with its ends, they span its box, which the control points alone overstate
+/// and its ends and middle can understate.
+fn cubic_extremes([a, b, c, d]: [Point; 4]) -> impl Iterator<Item = Point> {
+    let at = move |t: f64| -> Point {
+        let u = 1.0 - t;
+        let (k0, k1, k2, k3) = (u * u * u, 3.0 * u * u * t, 3.0 * u * t * t, t * t * t);
+        [k0 * a[0] + k1 * b[0] + k2 * c[0] + k3 * d[0], k0 * a[1] + k1 * b[1] + k2 * c[1] + k3 * d[1]]
+    };
+    // The derivative over 3 is qa t² + qb t + qc for each axis.
+    let roots = move |axis: usize| -> [Option<f64>; 2] {
+        let (p0, p1, p2, p3) = (a[axis], b[axis], c[axis], d[axis]);
+        let (qa, qb, qc) = (-p0 + 3.0 * p1 - 3.0 * p2 + p3, 2.0 * (p0 - 2.0 * p1 + p2), p1 - p0);
+        let scale = qa.abs().max(qb.abs()).max(qc.abs());
+        if !(scale.is_finite() && scale > 0.0) {
+            return [None, None];
+        }
+        if qa.abs() <= 1e-12 * scale {
+            return [(qb.abs() > 1e-12 * scale).then(|| -qc / qb), None];
+        }
+        let disc = qb * qb - 4.0 * qa * qc;
+        if disc < 0.0 {
+            return [None, None];
+        }
+        let r = disc.sqrt();
+        [Some((-qb + r) / (2.0 * qa)), Some((-qb - r) / (2.0 * qa))]
+    };
+    let ts = roots(0).into_iter().chain(roots(1));
+    ts.flatten().filter(|t| *t > 0.0 && *t < 1.0).map(at).filter(|p| p.iter().all(|v| v.is_finite()))
 }
 
 /// Save a subpath's implicit closing edge for fill operations. An unpainted or
@@ -443,16 +509,7 @@ impl Geometry {
                 }
             }
         }
-        found.sort_by(candidate_order);
-        let mut out: Vec<Snap> = Vec::new();
-        for s in found {
-            if out.len() >= MAX_CANDIDATES {
-                break;
-            }
-            if !out.iter().any(|o| distance(o.point, s.point) <= 1e-6) {
-                out.push(s);
-            }
-        }
+        let mut out = nearest_distinct(found);
         if options.paths {
             let path = near
                 .iter()
@@ -786,10 +843,13 @@ impl Walker<'_> {
                                 path.target([a, d], [(a[0] + 3.0 * b[0] + 3.0 * c[0] + d[0]) / 8.0, (a[1] + 3.0 * b[1] + 3.0 * c[1] + d[1]) / 8.0]);
                             }
                             current = Some(d);
-                            // The curve's middle stands for its bulge in the box (a circle's four
-                            // quarters reach its full extent there).
+                            // The curve's middle counts as a point that shapes it, and its extremes
+                            // widen the box, so the centre is the middle of the curve as drawn.
                             if let Some(sp) = subpaths.last_mut() {
                                 sp.add([(a[0] + 3.0 * b[0] + 3.0 * c[0] + d[0]) / 8.0, (a[1] + 3.0 * b[1] + 3.0 * c[1] + d[1]) / 8.0]);
+                                for p in cubic_extremes([a, b, c, d]) {
+                                    sp.reach(p);
+                                }
                                 sp.add(d);
                             }
                         }
@@ -891,7 +951,9 @@ const MAX_OUTLINES: usize = 10_000;
 /// The outlines of the comments on a page drawn with lines (lines and arrows, connected lines,
 /// polygons and clouds, rectangles, ovals, the frames of text with a border) and the boxes of
 /// text without one, each with its place in the page's `/Annots`, where they are drawn: inside
-/// `/RD` and half the border width in from `/Rect` for a rectangle, an oval or a frame. Hidden comments, freehand drawing and malformed entries are left out.
+/// `/RD` and half the border width in from `/Rect` for a rectangle, an oval or a frame. Comments
+/// not shown on screen (Hidden, NoView), rectangles and ovals with neither a border nor a fill,
+/// freehand drawing and malformed entries are left out.
 pub fn comment_outlines(doc: &Document, page_index: usize) -> Result<Vec<(usize, Outline)>> {
     let p = crate::page(doc, page_index)?;
     let annots = p.dict.get(b"Annots").map(|a| doc.resolve(a));
@@ -906,8 +968,8 @@ pub fn comment_outlines(doc: &Document, page_index: usize) -> Result<Vec<(usize,
         }
         let o = doc.resolve(entry);
         let Some(d) = o.as_dict() else { continue };
-        // Hidden (ISO 32000-2 Table 167).
-        if d.get(b"F").and_then(Object::as_int).unwrap_or(0) & 2 != 0 {
+        // Hidden and NoView (ISO 32000-2 Table 167): neither is drawn on screen.
+        if d.get(b"F").and_then(Object::as_int).unwrap_or(0) & (2 | 32) != 0 {
             continue;
         }
         let pairs = |v: Vec<f64>| -> Vec<Point> { v.as_chunks::<2>().0.iter().map(|p| [p[0], p[1]]).collect() };
@@ -928,12 +990,14 @@ pub fn comment_outlines(doc: &Document, page_index: usize) -> Result<Vec<(usize,
                 // A text box's, typewriter text's or callout's frame, where it has a border: its box,
                 // a callout's inside /RD. Without a border, only its box's points snap.
                 let unframed = kind == b"FreeText" && (!(d.contains(b"BS") || d.contains(b"Border")) || w <= 0.0);
+                // A rectangle or an oval with neither a border nor a fill shows nothing to snap to.
+                let unseen = kind != b"FreeText" && w <= 0.0 && nums(d, b"IC").is_empty();
                 let (kind, w) = match kind {
                     b"FreeText" if unframed => (b"TextBox".as_slice(), 0.0),
                     b"FreeText" => (b"Square".as_slice(), w),
                     other => (other, w),
                 };
-                <[f64; 4]>::try_from(r).ok().map(|r| {
+                <[f64; 4]>::try_from(r).ok().filter(|_| !unseen).map(|r| {
                     let (x0, y0, x1, y1) = (r[0].min(r[2]), r[1].min(r[3]), r[0].max(r[2]), r[1].max(r[3]));
                     let h = w / 2.0;
                     let rect = [x0 + rd[0] + h, y0 + rd[1] + h, x1 - rd[2] - h, y1 - rd[3] - h];

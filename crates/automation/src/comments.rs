@@ -73,7 +73,8 @@ fn hex(c: [f32; 3]) -> String {
 
 /// A shape's points moved onto the page's drawing or the comments drawn over it (`geometries`)
 /// where one lies within `tolerance` (user units), the better target of them: line ends, polygon
-/// and polyline vertices, a box's corners. How many points snapped.
+/// and polyline vertices, a box's corners (a rectangle's, an oval's, a text box's). How many
+/// points moved (a point already on its target doesn't count).
 fn snap_shape(shape: Shape, geometries: &[&measure::snap::Geometry], tolerance: f64) -> (Shape, Option<usize>) {
     let options = measure::snap::SnapOptions::default();
     let mut count = 0usize;
@@ -81,7 +82,9 @@ fn snap_shape(shape: Shape, geometries: &[&measure::snap::Geometry], tolerance: 
         let best = geometries.iter().filter_map(|g| g.snap(p, tolerance, options).ok().flatten()).min_by(measure::snap::candidate_order);
         match best {
             Some(hit) => {
-                count += 1;
+                if hit.distance > 0.0 {
+                    count += 1;
+                }
                 hit.point
             }
             None => p,
@@ -98,6 +101,11 @@ fn snap_shape(shape: Shape, geometries: &[&measure::snap::Geometry], tolerance: 
         Shape::Oval { rect } => {
             let (a, b) = (snap([rect[0], rect[1]]), snap([rect[2], rect[3]]));
             Shape::Oval { rect: [a[0].min(b[0]), a[1].min(b[1]), a[0].max(b[0]), a[1].max(b[1])] }
+        }
+        // A text box by its corners too, as the Text box tool's corners snap in the app.
+        Shape::TextBox { rect, font_size } => {
+            let (a, b) = (snap([rect[0], rect[1]]), snap([rect[2], rect[3]]));
+            Shape::TextBox { rect: [a[0].min(b[0]), a[1].min(b[1]), a[0].max(b[0]), a[1].max(b[1])], font_size }
         }
         other => other,
     };

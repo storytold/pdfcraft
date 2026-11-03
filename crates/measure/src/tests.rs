@@ -642,6 +642,46 @@ fn candidate_order_is_total_at_nearly_the_same_distance() {
     assert!(candidate_order(&s(SnapKind::Path, 1.0), &s(SnapKind::Endpoint, 1.1)).is_lt(), "nearer wins");
 }
 
+/// The candidates picked out of thousands in reach (a partial selection) are the ones a full,
+/// stable sort gives, each point once, ties in the order they were found: also when the nearest
+/// ones are mostly the same few points, so the first pick holds too few.
+#[test]
+fn the_nearest_candidates_are_those_a_full_sort_gives() {
+    use snap::{Snap, SnapKind, candidate_order};
+    let kinds = [SnapKind::Endpoint, SnapKind::Midpoint, SnapKind::Centre, SnapKind::Intersection];
+    let reference = |found: &[Snap]| {
+        let mut all = found.to_vec();
+        all.sort_by(candidate_order);
+        let mut out: Vec<Snap> = Vec::new();
+        for s in all {
+            if out.len() < 32 && !out.iter().any(|o| distance(o.point, s.point) <= 1e-6) {
+                out.push(s);
+            }
+        }
+        out
+    };
+    // 3,000 candidates in no order, at few distances (many ties), every third at one point.
+    let scattered: Vec<Snap> = (0..3000u64)
+        .map(|i| {
+            let r = (i.wrapping_mul(2_654_435_761) % 997) as f64;
+            let point = if i % 3 == 0 { [1.0, 1.0] } else { [r, (i % 13) as f64] };
+            Snap { point, kind: kinds[(i % 4) as usize], distance: (r / 50.0).floor() }
+        })
+        .collect();
+    assert_eq!(snap::nearest_distinct(scattered.clone()), reference(&scattered));
+    // The 500 nearest all at two points: the first pick of 128 holds two, so it widens.
+    let crowded: Vec<Snap> = (0..2000u64)
+        .map(|i| {
+            let near = i % 4 != 3;
+            let point = if near { [(i % 2) as f64, 0.0] } else { [i as f64, 5.0] };
+            Snap { point, kind: SnapKind::Endpoint, distance: if near { 0.5 } else { 1.0 + (i % 17) as f64 } }
+        })
+        .collect();
+    let picked = snap::nearest_distinct(crowded.clone());
+    assert_eq!(picked.len(), 32);
+    assert_eq!(picked, reference(&crowded));
+}
+
 #[test]
 fn a_centre_out_of_range_is_no_snap_target() {
     // A rectangle far beyond the coordinate range (its corners are no targets): its centre isn't
@@ -653,6 +693,28 @@ fn a_centre_out_of_range_is_no_snap_target() {
     assert!(g.centres.iter().flatten().all(|v| v.is_finite() && v.abs() <= 1e9), "{:?}", g.centres);
     assert!(g.centres.contains(&[5.0, 5.0]), "{:?}", g.centres);
 }
+/// A closed figure drawn with a curve has its centre in the middle of the curve as drawn: its box
+/// reaches the curve's extremes, not only its ends and middle. This loop bulges furthest at a
+/// third of the way in x (133.3) and at two thirds in y (44.4).
+#[test]
+fn a_curved_figure_s_centre_takes_the_curve_s_extremes() {
+    let d = fixture("0 0 m 300 0 0 100 0 0 c h S", "", &[]);
+    let g = snap::geometry(&d, 0).unwrap();
+    let want = [200.0 / 3.0, 200.0 / 9.0];
+    assert!(g.centres.iter().any(|c| (c[0] - want[0]).abs() < 1e-6 && (c[1] - want[1]).abs() < 1e-6), "{:?}", g.centres);
+    // A circle drawn as four quarters keeps its centre.
+    let k = 0.552_284_75 * 50.0;
+    let circle = format!(
+        "150 100 m 150 {a} {b} 150 100 150 c {c} 150 50 {a} 50 100 c 50 {d} {c} 50 100 50 c {b} 50 150 {d} 150 100 c h S",
+        a = 100.0 + k,
+        b = 100.0 + k,
+        c = 100.0 - k,
+        d = 100.0 - k
+    );
+    let g = snap::geometry(&fixture(&circle, "", &[]), 0).unwrap();
+    assert!(g.centres.iter().any(|c| (c[0] - 100.0).abs() < 1e-6 && (c[1] - 100.0).abs() < 1e-6), "{:?}", g.centres);
+}
+
 /// Text with a border is drawn with lines too: a text box's or typed text's frame snaps by its
 /// corners, side middles and centre, a callout's box inside /RD. Text without a border snaps by
 /// its box's points alone: its sides, not drawn, don't.
@@ -694,11 +756,20 @@ fn comments_drawn_with_lines_snap_by_their_ends_middles_and_centres() {
         << /Subtype /Circle /Rect [100 500 200 560] /RD [5 5 5 5] /BS << /W 2 >> >> \
         << /Subtype /Ink /InkList [[10 10 20 20]] /Rect [10 10 20 20] >> \
         << /Subtype /Line /L [0 700 50 700] /F 2 >> \
-        << /Subtype /Line /L [0 0 1 /x] >> ]";
+        << /Subtype /Line /L [0 0 1 /x] >> \
+        << /Subtype /Line /L [0 720 50 720] /F 32 >> \
+        << /Subtype /Square /Rect [500 300 560 360] /BS << /W 0 >> >> \
+        << /Subtype /Square /Rect [500 500 560 560] /BS << /W 0 >> /IC [1 0 0] >> ]";
     let d = fixture("", annots, &[]);
     let outlines = snap::comment_outlines(&d, 0).unwrap();
     let places: Vec<usize> = outlines.iter().map(|(i, _)| *i).collect();
-    assert_eq!(places, [0, 2, 3, 4, 5], "a note, freehand, a hidden and a malformed one are left out");
+    assert_eq!(
+        places,
+        [0, 2, 3, 4, 5, 11],
+        "a note, freehand, a hidden, a malformed, a NoView one and a rectangle with neither border nor fill are left out"
+    );
+    let filled = snap::Outline::Path { points: vec![[500.0, 500.0], [560.0, 500.0], [560.0, 560.0], [500.0, 560.0]], closed: true };
+    assert_eq!(outlines[5].1, filled, "without a border, a fill's edge still shows");
     let square = snap::Outline::Path { points: vec![[302.0, 302.0], [398.0, 302.0], [398.0, 358.0], [302.0, 358.0]], closed: true };
     assert_eq!(outlines[3].1, square, "half the 4 pt border in from /Rect");
     assert_eq!(outlines[4].1, snap::Outline::Ellipse { rect: [106.0, 506.0, 194.0, 554.0] }, "inside /RD, then half the border");
@@ -714,5 +785,7 @@ fn comments_drawn_with_lines_snap_by_their_ends_middles_and_centres() {
     assert_eq!(hit([151.0, 555.0]), Some(([150.0, 554.0], Endpoint)), "the oval's top");
     assert_eq!(hit([151.0, 531.0]), Some(([150.0, 530.0], Centre)), "and its centre");
     assert_eq!(hit([10.0, 700.0]), None, "the hidden line doesn't snap");
+    assert_eq!(hit([10.0, 720.0]), None, "nor the one not shown on screen (NoView)");
+    assert_eq!(hit([501.0, 301.0]), None, "nor a rectangle drawn with nothing to see");
     assert!(snap::outline_geometry(std::iter::empty()).segments.is_empty());
 }

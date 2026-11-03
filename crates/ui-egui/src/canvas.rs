@@ -882,6 +882,11 @@ impl DocView {
         self.marquee = None;
         self.marquee_done = None;
         self.comments.gesture = None;
+        // What snapping showed for the move goes with it: the point named on the page, the
+        // marker, and Tab's choice of point.
+        self.comments.anchor_shown = None;
+        self.comments.snap_hover = None;
+        self.comments.move_anchor = None;
         self.links.drag = None;
         self.sign.drag = None;
         self.redact_drag = None;
@@ -1557,11 +1562,13 @@ fn draw_page(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_>, i
         _ => None,
     };
     let here = pointer.is_some_and(|p| r.contains(p)) || gesture_page == Some(i);
-    // The Select tool too: a comment moved or resized snaps by its corners.
+    // The Select tool too: a comment moved or resized snaps by its corners; only while that runs
+    // on this page, as hovering over a page with Select shows no snap and shouldn't stall for its
+    // paths.
     let snaps = match tool {
         QuickTool::Comment(t) => t.snaps(),
         QuickTool::Fill(t) => t.snaps(),
-        QuickTool::Select => true,
+        QuickTool::Select => gesture_page == Some(i),
         _ => false,
     };
     let snapping = prefs.snap && snaps && here;
