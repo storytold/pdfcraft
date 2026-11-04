@@ -8933,6 +8933,51 @@ trailer << /Root 1 0 R >>
     assert_eq!(px(5, 97), vec![255, 0, 0, 255], "no opacity");
 }
 
+/// The same rule where a step too large for a cell pixmap draws the cell once (#3349): the cell
+/// is rendered on its own and must take the opacity in force too, fill and stroke alike,
+/// coloured or uncoloured.
+#[test]
+fn a_tiling_pattern_drawn_once_uses_the_alpha_current_at_paint_time() {
+    let render = |content: &str| {
+        let cell = "0 0 1 rg 0 0 10 10 re f";
+        let pdf = format!(
+            "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents 4 0 R
+  /Resources << /ExtGState << /F1 << /ca 0.25 >> /S1 << /CA 0.25 >> >> /ColorSpace << /CS0 [/Pattern /DeviceRGB] >> /Pattern << /P1 5 0 R /P2 6 0 R >> >> >> endobj
+4 0 obj << /Length {} >> stream
+{content}
+endstream endobj
+5 0 obj << /Type /Pattern /PatternType 1 /PaintType 1 /TilingType 3 /BBox [0 0 10 10] /XStep 2147480100 /YStep 2147480100 /Matrix [1 0 0 -1 10 20] /Length {} >> stream
+{cell}
+endstream endobj
+6 0 obj << /Type /Pattern /PatternType 1 /PaintType 2 /TilingType 3 /BBox [0 0 10 10] /XStep 2147480100 /YStep 2147480100 /Matrix [1 0 0 -1 10 20] /Length 14 >> stream
+0 0 10 10 re f
+endstream endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+            content.len(),
+            cell.len()
+        );
+        let mut r = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
+        let p = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() });
+        assert!(p.error.is_none(), "{content}: {:?}", p.error);
+        p.rgba[((25 * 40 + 15) * 4)..][..4].to_vec()
+    };
+    // Blue at 25% over white is about (191, 191, 255); opaque blue would be (0, 0, 255).
+    for (what, content) in [
+        ("fill under /ca 0.25", "/F1 gs /Pattern cs /P1 scn 0 0 40 40 re f"),
+        ("stroke under /CA 0.25", "/Pattern CS /P1 SCN /S1 gs 20 w 0 15 m 40 15 l S"),
+        ("uncoloured fill, /ca set after scn", "/CS0 cs 0 0 1 /P2 scn /F1 gs 0 0 40 40 re f"),
+        ("uncoloured stroke, /CA set after SCN", "/CS0 CS 0 0 1 /P2 SCN /S1 gs 20 w 0 15 m 40 15 l S"),
+    ] {
+        let c = render(content);
+        assert!((185..=197).contains(&c[0]) && (185..=197).contains(&c[1]) && c[2] >= 250, "{what}: {c:?}");
+    }
+    assert_eq!(render("/Pattern cs /P1 scn 0 0 40 40 re f"), vec![0, 0, 255, 255], "no opacity");
+}
+
 /// ISO 32000-2 §8.5.4: `W` / `W*` clip with the current path once whichever path-painting
 /// operator ends it has painted it, `S`, `f` or `B` as much as `n`. The vendored interpreter
 /// applied the clip only on `n`: after `re W* S` everything later painted outside the clip,
