@@ -10588,3 +10588,26 @@ fn review_inside_scope_group_move_matches_direct_transform_under_outer_scale() {
         }
     }
 }
+
+/// #6145: a paragraph whose gap after its bullet is a tab (drawn as a glyph with `/ActualText`
+/// U+0009, as Word writes a list) edits whatever is typed. No font has a tab glyph: the paragraph
+/// rewritten run by run handed the tab to a substitute font that can't show it either, and every
+/// edit was refused with "the source font cannot show the replacement text". It is written as a
+/// space, as the paragraph rewritten in one style writes it.
+#[test]
+fn a_paragraph_with_a_tab_edits_when_rewritten_run_by_run() {
+    // A subset with glyphs for a and b only (F2), as the reporter's file has a subset of Arial.
+    let content = "BT /F2 11 Tf 60 500 Td (ab) Tj /Span << /ActualText <feff0009> >> BDC (a) Tj EMC 14 0 Td (ba) Tj ET";
+    for control in ['\t', '\u{b}', '\u{c}'] {
+        let mut doc = text_page(content);
+        let before = text::text_blocks(&doc, 0).unwrap();
+        assert!(before[0].text.contains('\t'), "the tab reads back: {:?}", before[0].text);
+        // A line break is rewritten run by run.
+        let replacement = format!("{}\nab{control}ba", before[0].text);
+        text::replace_block(&mut doc, 0, 0, &replacement).unwrap_or_else(|e| panic!("{control:?}: {e}"));
+        let doc = reopen(&doc);
+        let after: Vec<String> = text::text_lines(&doc, 0).unwrap().into_iter().map(|l| l.text).collect();
+        assert_eq!(after.len(), 2, "{control:?}: {after:?}");
+        assert!(after.iter().all(|l| l.starts_with("ab") && l.ends_with("ba") && !l.contains(control)), "{control:?}: {after:?}");
+    }
+}
