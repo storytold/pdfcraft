@@ -3853,6 +3853,109 @@ fn action_text_named_by_reference_stays_within_the_text_allowance() {
     assert!(reset <= crate::read::MAX_TEXT_BYTES, "{reset} bytes of reset field names");
 }
 
+/// An allowance charges each copy with the `String` that holds it, refuses a copy that doesn't
+/// fit without charging it, and is spent by text that comes out longer than it was stored.
+#[test]
+fn an_allowance_charges_each_copy_and_refuses_what_does_not_fit() {
+    use crate::read::Allowance;
+    let copy = std::mem::size_of::<String>();
+    let mut a = Allowance::new(2 * copy);
+    assert!(a.entry() && a.entry());
+    assert!(!a.entry(), "a third entry doesn't fit");
+    assert_eq!(a.refusals(), 1);
+    let mut a = Allowance::new(copy + 5);
+    assert_eq!(a.copy(5, || "abcde".into()).as_deref(), Some("abcde"), "text exactly as long as what is left fits");
+    assert!(!a.entry());
+    let mut a = Allowance::new(copy + 4);
+    assert_eq!(a.copy(5, || panic!("converted")), None, "stored bytes that don't fit aren't converted");
+    assert!(a.entry(), "a refused copy charges nothing");
+    let mut a = Allowance::new(copy + 2);
+    assert_eq!(a.copy(1, || "€".into()), None);
+    assert!(!a.entry(), "text longer than its stored bytes that doesn't fit spends what is left");
+}
+
+/// Every field may inherit the form's `/DA`: a form whose `/DA` doesn't fit in the text allowance
+/// has no field read whole.
+#[test]
+fn a_form_whose_da_does_not_fit_reads_no_fields() {
+    let read = |da: Vec<u8>| {
+        let mut doc = Document::new_empty();
+        let da = doc.add(Object::String(pdfcraft_cos::PdfString::literal(da)));
+        let field = doc.add(Object::Dict(
+            [(b"FT".to_vec(), Object::name("Tx")), (b"T".to_vec(), Object::String(pdfcraft_cos::PdfString::literal("a")))].into_iter().collect(),
+        ));
+        let form =
+            Object::Dict([(b"Fields".to_vec(), Object::Array(vec![Object::Ref(field)])), (b"DA".to_vec(), Object::Ref(da))].into_iter().collect());
+        let catalog = doc.add(Object::Dict([(b"AcroForm".to_vec(), form)].into_iter().collect()));
+        doc.trailer_mut().set(b"Root".to_vec(), Object::Ref(catalog));
+        fields(&doc).len()
+    };
+    assert_eq!(read(b"/Helv 0 Tf 0 g".to_vec()), 1);
+    assert_eq!(read(vec![b' '; crate::read::MAX_TEXT_BYTES]), 0);
+}
+
+/// What a reading of the form takes from push buttons' actions (named, submit, go-to, reset and
+/// hide actions), and from a list box's border and a widget's own flags; check boxes and text
+/// fields have no button action, whatever their `/A`.
+#[test]
+fn push_button_actions_and_widget_details_are_read() {
+    let button = |name: &str, action: &str| format!("<< /FT /Btn /Ff 65536 /T ({name}) /Rect [0 0 10 10] /A {action} >>");
+    let doc = document(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 5 0 R 6 0 R 7 0 R 8 0 R 9 0 R 10 0 R 11 0 R 12 0 R 13 0 R] >> >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R >>".into(),
+        button("named", "<< /S /Named /N /Print >>"),
+        button("submit", "<< /S /SubmitForm /F << /FS /URL /F (https://example.org/a) >> >>"),
+        button("post", "<< /S /SubmitForm /F (https://example.org/b) >>"),
+        button("go", "<< /S /GoTo /D [3 0 R /Fit] >>"),
+        button("reset", "<< /S /ResetForm /Fields [9 0 R (named)] >>"),
+        "<< /FT /Btn /T (check) /Rect [0 0 10 10] /A << /S /Named /N /Print >> >>".into(),
+        "<< /FT /Tx /T (text) /Rect [0 0 10 10] /A << /S /Hide /T (named) >> >>".into(),
+        button("hide", "<< /S /Hide /T [14 0 R 9 0 R] >>"),
+        "<< /FT /Ch /T (list) /Rect [0 0 100 100] /MK << /BC [0] >> /BS << /W 3 >> >>".into(),
+        "<< /FT /Tx /T (two) /Kids [15 0 R 16 0 R] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /Rect [0 0 10 10] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /Rect [0 0 10 10] /Parent 13 0 R >>".into(),
+        "<< /Type /Annot /Subtype /Widget /Rect [0 0 10 10] /Parent 13 0 R /Ff 1 >>".into(),
+    ]);
+    let all = fields(&doc);
+    let get = |name: &str| field(&all, name).clone();
+    let s = |t: &str| t.to_string();
+    assert_eq!(get("named").button, Some(af::ButtonAction::Named(s("Print"))));
+    assert_eq!(get("submit").button, Some(af::ButtonAction::Submit(s("https://example.org/a"))));
+    assert_eq!(get("post").button, Some(af::ButtonAction::Submit(s("https://example.org/b"))));
+    assert_eq!(get("go").button, Some(af::ButtonAction::GoTo(0)));
+    assert_eq!(get("reset").button, Some(af::ButtonAction::Reset { fields: vec![s("check"), s("named")], exclude: false }));
+    assert_eq!(get("check").button, None);
+    assert_eq!(get("text").button, None);
+    assert_eq!(field_actions(&doc, "text").unwrap(), [(Trigger::MouseUp, FieldAction::ShowHide { fields: vec![s("named")], hide: true })]);
+    // A hide target that is no field (a widget with no name above it) names nothing.
+    assert_eq!(get("hide").button, Some(af::ButtonAction::ShowHide { fields: vec![s("check")], hide: true }));
+    assert_eq!(get("list").widgets[0].list.map(|l| l.inset), Some(5.0), "inset by the border's width");
+    assert_eq!(get("two").widgets.iter().map(|w| w.read_only).collect::<Vec<_>>(), [false, true], "a widget's own /Ff");
+}
+
+/// Renaming a field renames it in a calculation held by a field with several widgets, which the
+/// field's own `/AA` carries.
+#[test]
+fn a_rename_reaches_the_calculation_of_a_field_with_several_widgets() {
+    let mut doc = document(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 5 0 R] /DA (/Helv 0 Tf 0 g) >> >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 7 0 R 8 0 R] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (a) /Rect [50 700 250 720] /P 3 0 R >>".into(),
+        "<< /FT /Tx /T (total) /Kids [7 0 R 8 0 R] /AA << /C << /S /JavaScript /JS (AFSimple_Calculate(\"SUM\", new Array (\"a\"));) >> >> >>"
+            .into(),
+        "null".into(),
+        "<< /Type /Annot /Subtype /Widget /Rect [50 10 250 30] /Parent 5 0 R /P 3 0 R >>".into(),
+        "<< /Type /Annot /Subtype /Widget /Rect [50 40 250 60] /Parent 5 0 R /P 3 0 R >>".into(),
+    ]);
+    set_props(&mut doc, "a", &FieldProps { name: Some("qty".into()), ..FieldProps::default() }).unwrap();
+    let total = doc.get(ObjRef::new(5, 0));
+    let js = total.as_dict().and_then(|d| d.get(b"AA")?.as_dict()?.get(b"C")?.as_dict()?.get(b"JS")?.as_string().map(|s| s.to_text()));
+    assert_eq!(js.as_deref(), Some("AFSimple_Calculate(\"SUM\", new Array (\"qty\"));"));
+}
+
 /// A page whose `/Contents` lists one 1 MiB stream ten times is read within the budget given:
 /// pieces past it read as empty, so their rectangles aren't found.
 #[test]

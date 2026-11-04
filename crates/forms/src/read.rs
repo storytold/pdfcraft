@@ -784,8 +784,11 @@ fn walk(
         }
     }
     let tooltip = d.get(b"TU").and_then(|o| text.text(doc, o));
-    // Then the field's own copies of its full name and `/DA`.
-    if !text.take(inh.name.len()) || !text.take(field_da.len()) || text.refusals() != refusals {
+    // Then the field's own copies of its full name and `/DA`; a copy refused counts with the
+    // rest.
+    text.take(inh.name.len());
+    text.take(field_da.len());
+    if text.refusals() != refusals {
         return;
     }
     out.push(Field {

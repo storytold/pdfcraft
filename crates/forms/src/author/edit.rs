@@ -626,7 +626,7 @@ fn calculation(
     let has_aa = |r: ObjRef| doc.get(r).as_dict().and_then(|d| d.get(b"AA")).is_some_and(|a| held(doc, a).as_dict().is_some());
     let owner = match f.widgets.as_slice() {
         _ if has_aa(f.obj) => f.obj,
-        [w] if has_aa(w.obj) => w.obj,
+        [w] => w.obj,
         _ => return None,
     };
     let o = doc.get(owner);
