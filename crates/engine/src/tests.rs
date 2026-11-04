@@ -10489,7 +10489,7 @@ fn pending_button_globals_cannot_leak_into_intervening_edits() {
 #[test]
 fn doc_open_reset_and_first_event_persist_in_script_order() {
     for reset in ["resetForm();", "resetForm(['price']);"] {
-        for target in [None, Some("go")] {
+        for (target, restore) in [(None, false), (None, true), (Some("go"), false), (Some("go"), true)] {
             let mut cos = pdfcraft_cos::Document::open(Arc::new(scripted_form())).unwrap();
             let source = pdfcraft_forms::fields(&cos).into_iter().find(|f| f.name == "price").unwrap();
             cos.update_dict(source.obj, |d| {
@@ -10512,21 +10512,85 @@ fn doc_open_reset_and_first_event_persist_in_script_order() {
             let value = |s: &Session, id, name: &str| s.get(id).unwrap().form.iter().find(|f| f.name == name).unwrap().value.clone();
             let before = [value(&s, id, "price"), value(&s, id, "qty")];
             s.set_javascript(true);
-            let out = s.run_javascript(id, "getField('qty').value=held.value;held.value='99';openedValue+'/'+getField('qty').value", target).unwrap();
+            let script =
+                format!("getField('qty').value=held.value;{}openedValue+'/'+getField('qty').value", if restore { "held.value='99';" } else { "" });
+            let out = s.run_javascript(id, &script, target).unwrap();
+            let expected = if restore { "99" } else { "7" };
             assert_eq!(out.error, None);
             assert_eq!(out.result.as_deref(), Some("7/7"));
-            assert_eq!(value(&s, id, "price"), ["99"]);
+            assert_eq!(value(&s, id, "price"), [expected]);
             assert_eq!(value(&s, id, "qty"), ["7"]);
             s.undo(id).unwrap();
             assert_eq!([value(&s, id, "price"), value(&s, id, "qty")], before);
             s.redo(id).unwrap();
-            assert_eq!(value(&s, id, "price"), ["99"]);
+            assert_eq!(value(&s, id, "price"), [expected]);
             assert_eq!(value(&s, id, "qty"), ["7"]);
             let saved = s.save_bytes(id).unwrap();
             s.set_javascript(false);
             let reopened = s.open("saved-reset.pdf", None, saved, None).unwrap();
-            assert_eq!(value(&s, reopened, "price"), ["99"]);
+            assert_eq!(value(&s, reopened, "price"), [expected]);
             assert_eq!(value(&s, reopened, "qty"), ["7"]);
         }
+    }
+}
+
+/// Reset comparison includes unnamed built-in dependents and never runs custom calculations in the preview.
+#[test]
+fn reset_baseline_includes_builtin_dependents_without_custom_preview_runs() {
+    use form_scripts::{CalcOp, Calculate};
+    for combo in [false, true] {
+        let mut cos = pdfcraft_cos::Document::open(Arc::new(scripted_form())).unwrap();
+        for f in pdfcraft_forms::fields(&cos) {
+            match f.name.as_str() {
+                "price" => cos
+                    .update_dict(f.obj, |d| {
+                        d.set(b"V".to_vec(), pdfcraft_cos::PdfString::text("99"));
+                        d.set(b"DV".to_vec(), pdfcraft_cos::PdfString::text("7"));
+                    })
+                    .unwrap(),
+                "qty" => cos.update_dict(f.obj, |d| d.set(b"V".to_vec(), pdfcraft_cos::PdfString::text("2"))).unwrap(),
+                "total" if combo => cos
+                    .update_dict(f.obj, |d| {
+                        d.set(b"FT".to_vec(), pdfcraft_cos::Object::Name(b"Ch".to_vec()));
+                        d.set(b"Ff".to_vec(), pdfcraft_cos::Object::Int((1 << 17) | (1 << 18)));
+                        d.set(
+                            b"Opt".to_vec(),
+                            pdfcraft_cos::Object::Array(vec![
+                                pdfcraft_cos::PdfString::text("14").into(),
+                                pdfcraft_cos::PdfString::text("198").into(),
+                            ]),
+                        );
+                    })
+                    .unwrap(),
+                _ => (),
+            }
+        }
+        let mut s = Session::new();
+        s.set_javascript(false);
+        let id = s.open("reset-dependent.pdf", None, Arc::new(pdfcraft_cos::write_full(&cos, &Default::default()).unwrap()), None).unwrap();
+        s.apply(id, Edit::SetDocumentScript { name: "counter".into(), script: Some("var calculationCalls=0;".into()) }).unwrap();
+        s.apply(id, Edit::SetFieldScript { name: "qty".into(), event: "calculate".into(), script: Some("calculationCalls++;event.value=2;".into()) })
+            .unwrap();
+        s.apply(
+            id,
+            Edit::SetFieldProps {
+                name: "total".into(),
+                props: Box::new(FieldProps {
+                    calculate: Some(Calculate::Simple { op: CalcOp::Product, fields: vec!["price".into(), "qty".into()] }),
+                    ..Default::default()
+                }),
+            },
+        )
+        .unwrap();
+        let value = |s: &Session, n: &str| s.get(id).unwrap().form.iter().find(|f| f.name == n).unwrap().value.clone();
+        assert_eq!(value(&s, "total"), ["198"]);
+        s.set_javascript(true);
+        let out = s.run_javascript(id, "resetForm(['price']);getField('total').value=198;", None).unwrap();
+        assert_eq!(out.error, None);
+        // The explicit dependent-field delta must be emitted even though it restores its original value.
+        // Its normal writeback recalculation runs the custom callback exactly once; preview/reset run none.
+        assert_eq!(s.run_javascript(id, "calculationCalls", None).unwrap().result.as_deref(), Some("1"));
+        assert_eq!(value(&s, "price"), ["7"]);
+        assert_eq!(value(&s, "total"), ["14"], "existing automatic calculation after a value write is preserved");
     }
 }

@@ -247,19 +247,29 @@ fn wait_value(h: &mut Harness<'static, PdfCraftApp>, name: &str, expected: &str)
 #[test]
 /// A real UI menu followed by input resumes once and does not leak the menu click into the next modal.
 fn native_button_popup_and_response_resume_without_replaying_the_script() {
-    let mut h = harness();
-    let id = h.state().active_ids().unwrap().1;
-    h.state_mut().run_button_script(id,"hello","var calls=typeof calls==='number'?calls:0;calls++;var choice=app.popUpMenuEx({cName:'Morning',cReturn:'08:00'});var extra=app.response({cTitle:'Manual time',cQuestion:'Suffix',cDefault:'x'});getField('greeting').value=choice+'/'+extra+'/'+calls;");
-    wait_for(&mut h, "Morning");
-    h.get_by_label("Morning").click();
-    wait_for(&mut h, "Suffix");
-    if let Ok(path) = std::env::var("PDFCRAFT_COMPAT_SCREENSHOT") {
-        let image = h.render().unwrap();
-        let crop = image::imageops::crop_imm(&image, 400, 220, 600, 460).to_image();
-        crop.save(path).unwrap();
+    for typed in [false, true] {
+        let mut h = harness();
+        let id = h.state().active_ids().unwrap().1;
+        h.state_mut().run_button_script(id,"hello","var calls=typeof calls==='number'?calls:0;calls++;var choice=app.popUpMenuEx({cName:'Morning',cReturn:'08:00'});var extra=app.response({cTitle:'Manual time',cQuestion:'Suffix',cDefault:'x'});getField('greeting').value=choice+'/'+extra+'/'+calls;");
+        wait_for(&mut h, "Morning");
+        h.get_by_label("Morning").click();
+        wait_for(&mut h, "Suffix");
+        if typed {
+            h.get_by(|n| n.role() == egui::accesskit::Role::TextInput && n.value().as_deref() == Some("x")).focus();
+            h.run_steps(2);
+            h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+            h.run_steps(1);
+            h.get_by(|n| n.role() == egui::accesskit::Role::TextInput && n.is_focused()).type_text("typed answer");
+            h.run_steps(2);
+        }
+        if let Ok(path) = std::env::var("PDFCRAFT_COMPAT_SCREENSHOT") {
+            let image = h.render().unwrap();
+            let crop = image::imageops::crop_imm(&image, 400, 220, 600, 460).to_image();
+            crop.save(path).unwrap();
+        }
+        h.get_by_label("OK").click();
+        wait_value(&mut h, "greeting", if typed { "08:00/typed answer/1" } else { "08:00/x/1" });
     }
-    h.get_by_label("OK").click();
-    wait_value(&mut h, "greeting", "08:00/x/1");
 }
 #[test]
 /// Cancelling a native menu returns null to the same invocation without duplicating preceding work.

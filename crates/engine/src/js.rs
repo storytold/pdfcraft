@@ -475,19 +475,35 @@ impl Session {
         // Reset the PDF first, then apply the final live shadow. Compare against the
         // reset baseline so writes restoring an original value are not mistaken for no-ops.
         let mut baseline = std::borrow::Cow::Borrowed(states);
+        let mut reset_document = if resets.is_empty() {
+            None
+        } else {
+            let doc = self.get(id).ok_or(EditError::NoDocument)?;
+            let editor = doc.editor.as_ref().ok_or_else(|| EditError::ReadOnly(doc.read_only_reason.clone().unwrap_or_default()))?;
+            Some(editor.cos.clone())
+        };
         let mut edits = Vec::new();
         for names in resets {
             let all: Vec<String> = states.iter().map(|f| f.name.clone()).collect();
             let names: Option<Vec<String>> = (!names.is_empty())
                 .then(|| all.iter().filter(|n| names.iter().any(|x| *n == x || n.starts_with(&format!("{x}.")))).cloned().collect());
-            for field in baseline.to_mut().iter_mut() {
-                if !matches!(field.kind, pdfcraft_js::FieldType::Button | pdfcraft_js::FieldType::Signature)
-                    && names.as_ref().is_none_or(|names| names.contains(&field.name))
-                {
-                    field.value.clone_from(&field.default);
-                }
+            if let Some(doc) = reset_document.as_mut() {
+                // Reuse the actual reset path, whose built-in recalculation uses NoScripts.
+                // Unnamed dependent text/combo values belong to the comparison baseline too.
+                pdfcraft_forms::reset(doc, names.as_deref())?;
             }
             edits.push(Edit::ResetForm { names });
+        }
+        if let Some(doc) = reset_document {
+            let mut values = std::collections::HashMap::new();
+            for field in pdfcraft_forms::fields(&doc) {
+                values.entry(field.name).or_insert(field.value);
+            }
+            for field in baseline.to_mut() {
+                if let Some(value) = values.get(&field.name) {
+                    field.value.clone_from(value);
+                }
+            }
         }
         let changes = changes(&baseline, &o.changed);
         if !changes.is_empty() {
