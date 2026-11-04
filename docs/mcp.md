@@ -8,6 +8,53 @@ Supply `--root` at most once, followed by a nonempty directory path. Missing ope
 repeated roots and another long option in place of the directory are refused before any
 script is read or server is started. Prefix a directory name beginning with `--` with `./`.
 
+## Install and register
+
+From the repository root, with Rust 1.95+ and a native linker installed
+(see [development](development.md) for build and environment notes):
+
+```sh
+cargo install --path apps/pdfcraft-cli --locked
+# POSIX shells, for Cargo's default install location:
+export PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH"
+pdfcraft-cli --help
+pdfcraft-cli mcp --help
+```
+
+The default features include MCP; do not pass `--no-default-features` for this use.
+Cargo installs a binary, not a symlink into `target/`, so it survives `cargo clean`.
+Re-run the install command after updating the checkout.
+By default the executable goes in `$CARGO_HOME/bin` (`~/.cargo/bin` when unset), or
+`%USERPROFILE%\.cargo\bin` on Windows. If you set `--root`, `CARGO_INSTALL_ROOT`, or
+Cargo's `install.root`, use that installation root's `bin` directory instead. Add it
+to the `PATH` inherited by the MCP client, not just an interactive shell, and restart
+the client after changing its environment.
+
+Register the installed command explicitly (replace `/work/project` with an existing folder):
+
+```sh
+claude mcp add pdfcraft -- pdfcraft-cli mcp --root /work/project
+```
+
+Other MCP clients can use this bare-name configuration:
+
+```json
+{"mcpServers":{"pdfcraft":{"command":"pdfcraft-cli","args":["mcp","--root","/work/project"]}}}
+```
+
+Linux `.deb` and `.rpm` packages already install `/usr/bin/pdfcraft-cli`; those users
+can skip the source install. The [downloads list](../README.md#downloads) also includes
+standalone Linux CLI tarballs and a macOS CLI zip; unpack and copy the executable into
+a directory on the client's `PATH`. Installing does not start or register a server:
+MCP remains opt-in and uses stdio only.
+
+If a client reports `ENOENT` or "Executable not found in $PATH", verify the install with
+`command -v pdfcraft-cli` (PowerShell: `Get-Command pdfcraft-cli`) in the client's
+environment. If that environment cannot be changed, set JSON `command` to the absolute
+installed binary path, not a literal `~` or `$HOME` expression. Avoid symlinks into
+`target/release`: cleaning the build directory breaks them. A source build alone does
+not put the CLI on `PATH`.
+
 ## Confining file access
 
 ```sh
@@ -15,7 +62,7 @@ pdfcraft-cli mcp --automation-read-root /work/project --automation-write-root /w
 ```
 
 ```json
-{"mcpServers": {"pdfcraft": {"command": "/abs/path/target/release/pdfcraft-cli",
+{"mcpServers": {"pdfcraft": {"command": "pdfcraft-cli",
   "args": ["mcp", "--automation-read-root", "/work/project", "--automation-write-root", "/work/project/out"]}}}
 ```
 
@@ -43,8 +90,10 @@ config works across the suite) keep the agent to the folders you give it:
   nearest existing folder's links are followed and the rest must be plain names, so `..` below a
   folder that doesn't exist is refused, as is a link that leads nowhere (writing through it would
   create its target). The result is compared with the root by whole folder names: `/work2/x` is not
-  inside `/work`. On Windows case is ignored, UNC paths are resolved like drive-letter ones, and
-  device names (`CON`, `NUL`, `COM1`...) are refused.
+  inside `/work`. On Windows case is ignored, device names (`CON`, `NUL`, `COM1`...) are refused,
+  and a path on another network share or in a device namespace than the root's (`\\host\share`,
+  `\\?\UNC\...`, `\\.\...`) is refused by name, before it is resolved, so the host is never
+  contacted. A root on a share accepts the paths on that share.
 - A refused path is an ordinary tool error the agent can read and correct, for example
   `automation path rejected: outside the write root /work/project/out: /etc/x.pdf` or
   `automation filesystem access is not granted: write authority is absent: /work/project/out/x.pdf`.
