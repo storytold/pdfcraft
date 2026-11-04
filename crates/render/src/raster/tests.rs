@@ -5365,7 +5365,7 @@ fn gray_page(content: &str) -> (usize, Vec<u8>) {
 
 /// Issue #5532: a stroke thinner than a device pixel is drawn at least one pixel wide whichever
 /// way it runs, also under a matrix that shrinks one axis more than the other (vendored hayro
-/// patch (28)). The widening went by the larger axis scale alone, so under `1 0 0 0.25 cm` a
+/// patch (29)). The widening went by the larger axis scale alone, so under `1 0 0 0.25 cm` a
 /// horizontal line came out a quarter of a pixel thick and a quarter as dark; going by the
 /// smaller scale instead would have drawn a vertical line four pixels wide. Dashes keep the
 /// lengths the pattern gives them.
