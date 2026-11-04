@@ -399,14 +399,15 @@ mod tests {
     /// The encoder stops where the decoder does, on each side and in total: past that it would
     /// write a stream nothing here can read. 16,384 squared is exactly the bound on samples.
     /// `encode_jbig2_shared` refuses what `encode_jbig2_generic` refuses: an image taller than
-    /// the decoder takes is `Unsupported`, one at the bound is coded.
+    /// the decoder takes is `Unsupported`, one at the bound isn't refused. (Its one tall mark is
+    /// too large to be a symbol, so nothing is shared: `Ok(None)`.)
     #[test]
     fn shared_coding_takes_only_what_the_decoder_takes() {
         let past = vec![0x7F; MAX_JBIG2_COLUMNS as usize + 1];
         let tall = (&past[..], 1, MAX_JBIG2_COLUMNS + 1);
         assert!(matches!(encode_jbig2_shared(&[tall, tall]), Err(FilterError::Unsupported(_))), "too tall");
         let at = (&past[..MAX_JBIG2_COLUMNS as usize], 1, MAX_JBIG2_COLUMNS);
-        assert!(encode_jbig2_shared(&[at, at]).is_ok(), "at the bound");
+        assert!(matches!(encode_jbig2_shared(&[at, at]), Ok(None)), "at the bound");
     }
 
     #[test]
