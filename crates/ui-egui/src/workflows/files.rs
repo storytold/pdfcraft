@@ -1128,6 +1128,8 @@ mod stem_tests {
         assert!(long.len() <= 200 && long.chars().all(|c| c == '文'), "{}", long.len());
         // A two-byte character straddling byte 200 is dropped whole.
         assert_eq!(file_stem_from_user(&("a".repeat(199) + "é")), "a".repeat(199));
+        // The cut is at exactly 200 bytes, not one short of it.
+        assert_eq!(file_stem_from_user(&("a".repeat(200) + "b")), "a".repeat(200));
     }
     #[test]
     fn attachment_save_name_removes_bidi_without_hiding_the_extension() {
