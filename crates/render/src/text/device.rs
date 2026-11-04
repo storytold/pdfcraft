@@ -374,7 +374,13 @@ impl<'a> Device<'a> for TextDevice {
             let raw = text.len();
             let text = pdfcraft_cos::PdfString::literal(text).to_text();
             // The raw bytes read, or the two copies kept, whichever is more (and never nothing).
-            self.actual_budget = self.actual_budget.saturating_sub(raw.max(text.len().saturating_mul(2)).max(1));
+            let charge = raw.max(text.len().saturating_mul(2)).max(1);
+            if charge > self.actual_budget {
+                // too much for what is left: no replacement is opened, and the bytes read are still spent
+                self.actual_budget = self.actual_budget.saturating_sub(raw.max(1));
+                return;
+            }
+            self.actual_budget -= charge;
             self.actual = Some((self.depth, text, Vec::new()));
         }
     }
