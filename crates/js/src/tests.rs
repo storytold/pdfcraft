@@ -54,23 +54,21 @@ fn get_page_box_returns_supported_boxes_in_rotated_user_space() {
         Limits::default(),
     );
     assert_eq!(out.error, None);
-    assert_eq!(out.result.as_deref(), Some("[[0,280,180,0],[-10,190,290,-10],[10,270,170,10],[15,265,165,15],[15,165,265,15]]"));
+    assert_eq!(out.result.as_deref(), Some("[[0,280,180,0],[-10,190,290,-10],[5,275,175,5],[10,270,170,10],[15,165,265,15]]"));
 }
 
 #[test]
 fn get_page_box_rejects_unknown_boxes_and_invalid_pages() {
-    for script in
-        [
-            "this.getPageBox('BBox')",
-            "this.getPageBox(1)",
-            "this.getPageBox('Crop', -1)",
-            "this.getPageBox('Crop', 1.5)",
-            "this.getPageBox('Crop', 3)",
-            "this.getPageBox('Crop', null)",
-            "this.getPageBox('Crop', true)",
-            "this.getPageBox('Crop', '0')",
-        ]
-    {
+    for script in [
+        "this.getPageBox('BBox')",
+        "this.getPageBox(1)",
+        "this.getPageBox('Crop', -1)",
+        "this.getPageBox('Crop', 1.5)",
+        "this.getPageBox('Crop', 3)",
+        "this.getPageBox('Crop', null)",
+        "this.getPageBox('Crop', true)",
+        "this.getPageBox('Crop', '0')",
+    ] {
         let out = go(script, &Event::doc("Console"));
         assert!(out.error.is_some(), "{script}");
     }

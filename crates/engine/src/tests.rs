@@ -5494,7 +5494,9 @@ fn inactive_xfa_and_ordinary_pdfs_keep_document_helpers_and_alerts() {
 fn js_get_page_box_reads_effective_boxes_without_editing_the_document() {
     let (mut s, id) = session_with(1);
     let before = s.get(id).expect("opened document").can_undo().map(str::to_owned);
-    let out = s.run_javascript(id, "JSON.stringify([this.getPageBox(), this.getPageBox('Media', 0), this.getPageBox('Trim', 0)])", None).expect("script runs");
+    let out = s
+        .run_javascript(id, "JSON.stringify([this.getPageBox(), this.getPageBox('Media', 0), this.getPageBox('Trim', 0)])", None)
+        .expect("script runs");
     assert_eq!(out.error, None, "{out:?}");
     assert_eq!(out.result.as_deref(), Some("[[0,300,200,0],[0,300,200,0],[0,300,200,0]]"));
     assert_eq!(s.get(id).expect("document remains open").can_undo(), before.as_deref());
