@@ -23,7 +23,8 @@ mod layout;
 pub(crate) use background::TextBackground;
 pub use image::{CropMode, DragTarget, ImageAction, ImageDrag, ImageHandle, ImageSelection, image_menu_id};
 pub(crate) use image::{
-    ImageCx, Matrix, body_hit as picture_hit, handle_hit as picture_handle_hit, image_context_menu, image_input, quad_contains, user_to_screen,
+    ImageCx, Matrix, body_hit as picture_hit, crop_controls_contain, handle_hit as picture_handle_hit, image_context_menu, image_input,
+    quad_contains, user_to_screen,
 };
 #[cfg(test)]
 use image::{rotate_knob, turn_degrees, turn_degrees_delta};
