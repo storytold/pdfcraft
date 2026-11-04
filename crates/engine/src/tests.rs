@@ -10359,6 +10359,107 @@ fn image_transform_engine_refuses_singular_matrices_without_mutation() {
     }
 }
 
+/// Optimize has JBIG2 images share a symbol dictionary only where redaction can store each again
+/// without it. Of four pages of the same scan, the two in DeviceGray and the image mask share one;
+/// the one in a DeviceN of one colourant, which redaction doesn't store again, is coded alone.
+/// Redacting the first page then stores the second and the mask again without the dictionary,
+/// which leaves the file.
+#[test]
+fn redacting_an_optimized_jbig2_page_stores_the_rest_of_its_group_again() {
+    use pdfcraft_cos::{Dict, Document, ObjRef, Object, SaveOptions, Stream, write_full};
+    let (w, h) = (600usize, 480usize);
+    // Lines of 26 letters, each 32 rows of a run from a stem down its left side, of 2 to 24 pixels,
+    // the same to the pixel wherever it is, picked and spaced at random.
+    let mut seed = 0x2545_F491_4F6C_DD1Du64;
+    let mut next = move || {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        seed as usize
+    };
+    let letters: Vec<Vec<usize>> = (0..26).map(|_| (0..16).map(|_| 1 + next() % 12).collect()).collect();
+    let stride = w.div_ceil(8);
+    let mut bits = vec![0xFFu8; stride * h];
+    for top in (8..h - 40).step_by(44) {
+        let mut x = 8 + next() % 8;
+        while x + 32 < w {
+            let letter = &letters[next() % 26];
+            for (row, run) in letter.iter().enumerate() {
+                for (px, py) in (x..x + 2 * run).flat_map(|px| [(px, top + 2 * row), (px, top + 2 * row + 1)]) {
+                    bits[py * stride + px / 8] &= !(0x80 >> (px % 8));
+                }
+            }
+            x += 2 * letter.iter().max().unwrap_or(&1) + 4 + next() % 5;
+        }
+    }
+    let mut doc = Document::new_empty();
+    let pages = doc.root().and_then(|r| doc.get(r).as_dict().and_then(|d| d.reference(b"Pages"))).unwrap();
+    let device_n = Object::Array(vec![Object::name("DeviceN"), Object::Array(vec![Object::name("Black")]), Object::name("DeviceGray"), {
+        let mut tint = Dict::new();
+        tint.set(b"FunctionType".to_vec(), Object::Int(2));
+        tint.set(b"Domain".to_vec(), Object::Array(vec![Object::Int(0), Object::Int(1)]));
+        tint.set(b"N".to_vec(), Object::Int(1));
+        Object::Dict(tint)
+    }]);
+    let mut images: Vec<ObjRef> = Vec::new();
+    let grey = || ("ColorSpace", Object::name("DeviceGray"));
+    for (k, (key, value)) in [grey(), grey(), ("ColorSpace", device_n), ("ImageMask", Object::Bool(true))].into_iter().enumerate() {
+        let mut d = Dict::new();
+        d.set(b"Type".to_vec(), Object::name("XObject"));
+        d.set(b"Subtype".to_vec(), Object::name("Image"));
+        d.set(b"Width".to_vec(), Object::Int(w as i64));
+        d.set(b"Height".to_vec(), Object::Int(h as i64));
+        d.set(b"BitsPerComponent".to_vec(), Object::Int(1));
+        d.set(key.as_bytes().to_vec(), value);
+        let image = doc.add(Object::Stream(Stream::flate(d, &bits)));
+        images.push(image);
+        let content = doc.add(Object::Stream(Stream::from_raw(Dict::new(), b"q 144 0 0 115.2 36 600 cm /Im Do Q".to_vec())));
+        let mut xobjects = Dict::new();
+        xobjects.set(b"Im".to_vec(), Object::Ref(image));
+        let mut resources = Dict::new();
+        resources.set(b"XObject".to_vec(), Object::Dict(xobjects));
+        let mut page = Dict::new();
+        page.set(b"Type".to_vec(), Object::name("Page"));
+        page.set(b"Parent".to_vec(), Object::Ref(pages));
+        page.set(b"MediaBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 612.into(), 792.into()]));
+        page.set(b"Resources".to_vec(), Object::Dict(resources));
+        page.set(b"Contents".to_vec(), Object::Ref(content));
+        if k == 0 {
+            let mut mark = Dict::new();
+            mark.set(b"Type".to_vec(), Object::name("Annot"));
+            mark.set(b"Subtype".to_vec(), Object::name("Redact"));
+            mark.set(b"Rect".to_vec(), Object::Array(vec![40.into(), 610.into(), 100.into(), 650.into()]));
+            let mark = doc.add(Object::Dict(mark));
+            page.set(b"Annots".to_vec(), Object::Array(vec![Object::Ref(mark)]));
+        }
+        let page = doc.add(Object::Dict(page));
+        doc.update_dict(pages, |d| {
+            let mut kids = d.get(b"Kids").and_then(|k| k.as_array().cloned()).unwrap_or_default();
+            kids.push(Object::Ref(page));
+            d.set(b"Count".to_vec(), Object::Int(kids.len() as i64));
+            d.set(b"Kids".to_vec(), Object::Array(kids));
+        })
+        .unwrap();
+    }
+    let mono = pdfcraft_optimize::MonoSettings {
+        compression: pdfcraft_optimize::MonoCompression::Jbig2,
+        downsample: false,
+        ..pdfcraft_optimize::MonoSettings::REDUCE
+    };
+    pdfcraft_optimize::optimize(&mut doc, &pdfcraft_optimize::Settings { mono, ..Default::default() }).unwrap();
+    let globals = |doc: &Document, image: ObjRef| match &*doc.get(image) {
+        Object::Stream(s) => s.dict.get(b"DecodeParms").and_then(Object::as_dict).and_then(|d| d.reference(b"JBIG2Globals")),
+        _ => None,
+    };
+    let shared = globals(&doc, images[0]);
+    assert!(shared.is_some() && globals(&doc, images[1]) == shared && globals(&doc, images[3]) == shared, "DeviceGray and the mask share");
+    assert_eq!(globals(&doc, images[2]), None, "the DeviceN page is coded alone");
+    pdfcraft_redact::apply(&mut doc, None).unwrap();
+    let saved = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
+    let named = saved.scan_objects().filter(|(_, o)| matches!(&**o, Object::Stream(s) if saved.jbig2_globals_ref(s).is_some())).count();
+    assert_eq!(named, 0, "no image names the dictionary, which left with them");
+}
+
 #[test]
 fn fill_sign_multiline_text_survives_engine_save_reopen_and_render() {
     let (mut session, id) = rotated_blank(0);
