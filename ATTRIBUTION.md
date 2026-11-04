@@ -4,7 +4,7 @@
 
 Every asset PdfCraft includes, bundles or uses to build its published material, with its author, source and licence. The policy is in [AGENTS.md](AGENTS.md) §1. The machine-readable list, with the SHA-256 of every asset, is [ATTRIBUTION.toml](ATTRIBUTION.toml). Licence texts are kept beside the assets and summarised in [NOTICE](NOTICE).
 
-## In this repository (260)
+## In this repository (261)
 
 | Asset | Title | Author | Licence | Source | Used for |
 |---|---|---|---|---|---|
@@ -257,6 +257,7 @@ Every asset PdfCraft includes, bundles or uses to build its published material, 
 | `crates/sign/tests/data/cades-detached.p7s` | CAdES detached signature over openssl-signed.pdf | PdfCraft contributors | MIT OR Apache-2.0 | Contributor-original: DER CMS made with `openssl cms -sign -binary -cades -md sha256` over openssl-signed.pdf (see crates/sign/tests/data/README.md) | CAdES envelope opening tests (issue #1449): detached signature over openssl-signed.pdf |
 | `crates/sign/tests/data/cades-xml.p7m` | CAdES attached envelope (.p7m) wrapping cades-inner.xml | PdfCraft contributors | MIT OR Apache-2.0 | Contributor-original: DER CMS made with `openssl cms -sign -binary -nodetach -cades -md sha256` over cades-inner.xml (see crates/sign/tests/data/README.md) | CAdES envelope opening tests (issue #1449): attached signature whose embedded content is the XML invoice stub cades-inner.xml |
 | `crates/sign/tests/data/cades-inner.xml` | Minimal XML e-invoice stub embedded in cades-xml.p7m | PdfCraft contributors | MIT OR Apache-2.0 | Contributor-original: one-line `<?xml version="1.0"?><FatturaElettronica/>` stub written by hand (see crates/sign/tests/data/README.md) | Inner content signed into cades-xml.p7m; lets tests check a non-PDF embedded file |
+| `crates/sign/tests/data/openssl-signed.pdf.p7s` | CAdES detached signature beside openssl-signed.pdf (sibling-by-name pairing) | PdfCraft contributors | MIT OR Apache-2.0 | Contributor-original: DER CMS made with `openssl cms -sign -binary -cades -md sha256` over openssl-signed.pdf (see crates/sign/tests/data/README.md) | Detached signature pairing tests (issue #2129): the .p7s a reader finds beside openssl-signed.pdf by name |
 | `assets/icons/clipboard-paste.svg` | Lucide icon "clipboard-paste" | Lucide Contributors (portions Cole Bemis, Feather) | ISC AND MIT | https://github.com/lucide-icons/lucide (npm lucide-static 1.49.0, icons/clipboard-paste.svg) | UI icon, embedded via crates/ui-egui/src/icon_data.rs |
 | `assets/fonts/DancingScript.ttf` | Dancing Script (variable) | The Dancing Script Project Authors (Pablo Impallari) | OFL-1.1 | https://github.com/google/fonts/blob/9710da1eacb3be272583c3224dcb70f9da6eadbb/ofl/dancingscript/DancingScript%5Bwght%5D.ttf | Fill & Sign typed signatures and initials: the typed name's glyph outlines, drawn as filled paths (the font file itself is not embedded in PDFs) |
 | `packaging/macos/dmg/background.svg` | PdfCraft macOS DMG window background | @XusBadia | MIT OR Apache-2.0 | Original work for this repository, derived from the PdfCraft app icon (assets/app-icon/pdfcraft.svg, referenced via an SVG image element, not copied) | Finder window of the macOS DMG; rendered to background.tiff by packaging/macos/dmg/generate.py |

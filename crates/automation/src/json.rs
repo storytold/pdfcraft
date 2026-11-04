@@ -289,6 +289,7 @@ fn envelope(d: &Document) -> Option<Value> {
             "digest_ok": e.digest_ok,
             "signers": e.signers,
             "quirks": e.quirks,
+            "detached": e.detached,
         })
     })
 }

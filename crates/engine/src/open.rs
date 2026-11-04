@@ -86,7 +86,13 @@ impl OpenContext {
 impl Session {
     /// Snapshot the session state that affects open-time scripts, dates and signature trust.
     pub fn open_context(&self) -> OpenContext {
-        OpenContext { now: self.now(), js_off: self.js_off, trust: self.trust.clone(), xfa_time_scale: self.xfa_time_scale.unwrap_or(1), file_read_guard: self.file_read_guard.clone() }
+        OpenContext {
+            now: self.now(),
+            js_off: self.js_off,
+            trust: self.trust.clone(),
+            xfa_time_scale: self.xfa_time_scale.unwrap_or(1),
+            file_read_guard: self.file_read_guard.clone(),
+        }
     }
 
     /// Prepare a document without adding it to this session.
@@ -180,7 +186,12 @@ impl Session {
                 detached = true;
                 // The signature's own bytes are what Save writes: saving over the `.p7s` leaves
                 // it as it is, and there is no carried content to extract.
-                (sibling, doc_name, "This document was opened from a detached CAdES signature (.p7s); open the PDF itself to edit it.".to_string(), Some(bytes))
+                (
+                    sibling,
+                    doc_name,
+                    "This document was opened from a detached CAdES signature (.p7s); open the PDF itself to edit it.".to_string(),
+                    Some(bytes),
+                )
             }
         };
         let content = Arc::new(content);
