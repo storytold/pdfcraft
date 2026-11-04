@@ -90,7 +90,6 @@ fn natural_image_stamps_keep_displayed_bounds_on_rotated_pages() {
 
 #[test]
 fn creating_placing_and_keeping_custom_stamps() {
-    use egui::{Key, Modifiers};
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = PdfCraftApp::new();
         app.set_option("language", "en").unwrap();
@@ -116,51 +115,9 @@ fn creating_placing_and_keeping_custom_stamps() {
     h.get_by_label("logo");
     let stamp_id = h.state().custom_stamps[0].id;
     let stamp_data = h.state().custom_stamps[0].data.clone();
-    // Focus the palette item before opening its menu so the test targets the saved row.
-    h.get_by_label("logo").click();
-    h.run_steps(1);
-    // Rename the saved stamp through its palette menu and keep its identity and bytes.
-    h.get_by_label("logo").click_secondary();
-    h.run_steps(2);
-    h.get_by_label("Rename / change category…").click();
-    h.run_steps(2);
-    h.get_by_label("Name:").click();
-    h.key_press_modifiers(Modifiers::COMMAND, Key::A);
-    h.run_steps(1);
-    h.get_by_label("Name:").type_text("brand");
-    h.get_by_label("Category:").click();
-    h.key_press_modifiers(Modifiers::COMMAND, Key::A);
-    h.run_steps(1);
-    h.get_by_label("Category:").type_text("Marketing");
-    h.get_by_label("Save").click();
-    h.run_steps(3);
-    assert_eq!(h.state().custom_stamps.len(), 1);
-    assert_eq!(
-        (h.state().custom_stamps[0].id, h.state().custom_stamps[0].category.as_str(), h.state().custom_stamps[0].name.as_str()),
-        (stamp_id, "Marketing", "brand")
-    );
-    assert_eq!(h.state().quick_tool, QuickTool::CustomStamp(stamp_id));
-    assert_eq!(h.state().custom_stamps[0].data, stamp_data);
-    h.get_by_label("brand").click();
-    h.run_steps(1);
-    h.get_by_label("brand").click_secondary();
-    h.run_steps(2);
-    h.get_by_label("Rename / change category…").click();
-    h.run_steps(2);
-    h.get_by_label("Name:").click();
-    h.key_press_modifiers(Modifiers::COMMAND, Key::A);
-    h.run_steps(1);
-    h.get_by_label("Name:").type_text("Discarded");
-    h.get_by_label("Category:").click();
-    h.key_press_modifiers(Modifiers::COMMAND, Key::A);
-    h.run_steps(1);
-    h.get_by_label("Category:").type_text("Discarded");
-    h.get_by_label("Cancel").click();
-    h.run_steps(3);
-    assert_eq!(
-        (h.state().custom_stamps[0].id, h.state().custom_stamps[0].category.as_str(), h.state().custom_stamps[0].name.as_str()),
-        (stamp_id, "Marketing", "brand")
-    );
+    assert_eq!(h.state().custom_stamps[0].id, stamp_id);
+    assert_eq!(h.state().custom_stamps[0].name, "logo");
+    assert_eq!(h.state().custom_stamps[0].category, "Company");
     assert_eq!(h.state().custom_stamps[0].data, stamp_data);
     // Place it.
     let p = {

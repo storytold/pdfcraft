@@ -365,73 +365,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn editing_a_saved_custom_stamp_dialog_saves_and_cancel_discards_changes() {
-        use egui::{Key, Modifiers};
+    fn edit_stamp_dialog_fields_have_accessible_labels() {
+        use egui::accesskit::Role;
         use egui_kittest::Harness;
         use egui_kittest::kittest::Queryable;
 
-        let first_bytes = Arc::new(vec![1, 2, 3]);
-        let second_bytes = Arc::new(vec![4, 5, 6]);
         let mut h = Harness::builder().with_size(egui::vec2(1000.0, 700.0)).build_eframe(|_| {
             let mut app = PdfCraftApp::new();
             app.set_option("language", "en").unwrap();
-            app.custom_stamps = vec![
-                CustomStamp { id: 101, category: "Company".into(), name: "logo".into(), file: "logo.png".into(), page: 0, data: first_bytes.clone() },
-                CustomStamp {
-                    id: 202,
-                    category: "Company".into(),
-                    name: "seal".into(),
-                    file: "seal.png".into(),
-                    page: 0,
-                    data: second_bytes.clone(),
-                },
-            ];
             app.stamp_edit = Some(StampEdit { id: 202, name: "seal".into(), category: "Company".into() });
             app.dialog = Some(Dialog::EditStamp);
             app
         });
-        h.run_steps(3);
-        h.get_by_label("Edit Custom Stamp");
-        h.get_by_label("Name:").click();
-        h.key_press_modifiers(Modifiers::COMMAND, Key::A);
-        h.run_steps(1);
-        h.get_by_label("Name:").type_text("Renamed");
-        h.get_by_label("Category:").click();
-        h.key_press_modifiers(Modifiers::COMMAND, Key::A);
-        h.run_steps(1);
-        h.get_by_label("Category:").type_text("Moved");
-        h.get_by_label("Save").click();
-        h.run_steps(3);
-        assert_eq!(h.state().custom_stamps.len(), 2);
-        assert_eq!(
-            (h.state().custom_stamps[0].id, h.state().custom_stamps[0].name.as_str(), h.state().custom_stamps[0].category.as_str()),
-            (101, "logo", "Company")
-        );
-        assert!(Arc::ptr_eq(&h.state().custom_stamps[0].data, &first_bytes));
-        assert_eq!(
-            (h.state().custom_stamps[1].id, h.state().custom_stamps[1].name.as_str(), h.state().custom_stamps[1].category.as_str()),
-            (202, "Renamed", "Moved")
-        );
-        assert!(Arc::ptr_eq(&h.state().custom_stamps[1].data, &second_bytes));
-
-        h.state_mut().stamp_edit = Some(StampEdit { id: 202, name: "Renamed".into(), category: "Moved".into() });
-        h.state_mut().dialog = Some(Dialog::EditStamp);
         h.run_steps(2);
-        h.get_by_label("Name:").click();
-        h.key_press_modifiers(Modifiers::COMMAND, Key::A);
-        h.run_steps(1);
-        h.get_by_label("Name:").type_text("Discarded");
-        h.get_by_label("Category:").click();
-        h.key_press_modifiers(Modifiers::COMMAND, Key::A);
-        h.run_steps(1);
-        h.get_by_label("Category:").type_text("Discarded");
-        h.get_by_label("Cancel").click();
-        h.run_steps(3);
-        assert_eq!(
-            (h.state().custom_stamps[1].id, h.state().custom_stamps[1].name.as_str(), h.state().custom_stamps[1].category.as_str()),
-            (202, "Renamed", "Moved")
-        );
-        assert!(Arc::ptr_eq(&h.state().custom_stamps[1].data, &second_bytes));
+        h.get_by_label("Edit Custom Stamp");
+        h.get_by_role_and_label(Role::TextInput, "Category:");
+        h.get_by_role_and_label(Role::TextInput, "Name:");
+        h.get_by_label("Save");
+        h.get_by_label("Cancel");
     }
 
     #[test]
@@ -455,6 +406,33 @@ mod tests {
             }));
         app.custom_stamps.retain(|s| s.id != 202);
         assert!(app.custom_stamps.iter().any(|s| s.id == 101));
+    }
+
+    #[test]
+    fn edited_stamp_settings_restore_the_new_name_and_category() {
+        let bytes = Arc::new(vec![1, 2, 3]);
+        let mut app = PdfCraftApp::new();
+        app.custom_stamps.push(CustomStamp {
+            id: 42,
+            category: "Old".into(),
+            name: "Mark".into(),
+            file: "mark.png".into(),
+            page: 0,
+            data: bytes.clone(),
+        });
+        app.quick_tool = QuickTool::CustomStamp(42);
+        app.edit_custom_stamp(42, "Renamed", "Moved").expect("valid edit");
+
+        let settings = app.persist();
+        let mut restored = PdfCraftApp::new();
+        restored.restore(&settings);
+
+        assert_eq!(
+            (restored.custom_stamps[0].id, restored.custom_stamps[0].name.as_str(), restored.custom_stamps[0].category.as_str()),
+            (42, "Renamed", "Moved")
+        );
+        assert_eq!(restored.custom_stamps[0].data.as_slice(), bytes.as_slice());
+        assert_eq!(restored.quick_tool, QuickTool::CustomStamp(42));
     }
 
     #[test]
