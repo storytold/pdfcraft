@@ -237,10 +237,10 @@ impl Walk<'_> {
 }
 
 /// Whether `resources` remap a device colour space an image may be moved between, so that the
-/// same samples would be drawn otherwise: `/DefaultGray` or `/DefaultRGB` (ISO 32000-2 §8.6.5.6).
+/// same samples would be drawn otherwise: `/DefaultGray`, `/DefaultRGB` or `/DefaultCMYK` (ISO 32000-2 §8.6.5.6).
 fn remaps_device_spaces(doc: &Document, resources: &Dict) -> bool {
     let spaces = resources.get(b"ColorSpace").map(|c| doc.resolve(c));
-    spaces.as_deref().and_then(Object::as_dict).is_some_and(|c| c.contains(b"DefaultGray") || c.contains(b"DefaultRGB"))
+    spaces.as_deref().and_then(Object::as_dict).is_some_and(|c| c.contains(b"DefaultGray") || c.contains(b"DefaultRGB") || c.contains(b"DefaultCMYK"))
 }
 
 /// The effective resolution (ppi) of every image drawn by `pages`: the smallest over its uses.
@@ -307,6 +307,12 @@ fn indexed(doc: &Document, r: ObjRef) -> bool {
     let Object::Stream(s) = &*doc.get(r) else { return false };
     let cs = s.dict.get(b"ColorSpace").map(|cs| doc.resolve(cs));
     matches!(cs.as_deref(), Some(Object::Array(a)) if matches!(family(doc, a).as_deref().and_then(Object::as_name), Some(b"Indexed")))
+}
+
+/// Whether image `r` is in a CMYK color space.
+fn is_cmyk_image(doc: &Document, r: ObjRef) -> bool {
+    let Object::Stream(s) = &*doc.get(r) else { return false };
+    s.dict.get(b"ColorSpace").is_some_and(|cs| is_cmyk_space(doc, cs))
 }
 
 /// The first entry of colour space array `a`, its family, read through a reference.
@@ -821,18 +827,23 @@ fn apply_decode(v: u8, dmin: f32, dmax: f32) -> f32 {
     (dmin + t * (dmax - dmin)).clamp(0.0, 1.0)
 }
 
-fn read_cmyk_decode(doc: &Document, decode_obj: Option<&Object>) -> Option<[f32; 8]> {
-    let resolved = doc.resolve(decode_obj?);
-    let a = resolved.as_array()?;
+fn read_cmyk_decode(doc: &Document, decode_obj: Option<&Object>) -> Result<Option<[f32; 8]>, ()> {
+    let Some(obj) = decode_obj else {
+        return Ok(None);
+    };
+    let resolved = doc.resolve(obj);
+    let Some(a) = resolved.as_array() else {
+        return Err(());
+    };
     if a.len() != 8 {
-        return None;
+        return Err(());
     }
     let mut out = [0.0f32; 8];
     for (i, item) in a.iter().enumerate() {
-        let val = doc.resolve(item).as_f64()?;
-        *out.get_mut(i)? = val as f32;
+        let val = doc.resolve(item).as_f64().ok_or(())?;
+        *out.get_mut(i).ok_or(())? = val as f32;
     }
-    Some(out)
+    Ok(Some(out))
 }
 
 fn is_cmyk_space(doc: &Document, cs: &Object) -> bool {
@@ -891,9 +902,25 @@ fn process_cmyk(
         return None;
     }
 
+    // A soft mask with a /Matte has samples pre-blended in CMYK, which cannot be unblended in RGB.
+    let matte = |m: &Object| matches!(&*doc.resolve(m), Object::Stream(m) if m.dict.contains(b"Matte"));
+    if d.get(b"SMask").is_some_and(matte) {
+        return None;
+    }
+
     let was_dct = is_dct(s)?;
     let (w, h) = (u32::try_from(d.int(b"Width")?).ok()?, u32::try_from(d.int(b"Height")?).ok()?);
     if w == 0 || h == 0 || (w as u64) * (h as u64) > MAX_PIXELS {
+        return None;
+    }
+
+    let resize = settings.downsample && ppi.is_finite() && ppi > settings.above_ppi && settings.target_ppi > 0.0;
+    let recompress = matches!(settings.compression, Compression::Jpeg(_)) || (matches!(settings.compression, Compression::Flate) && was_dct);
+    if !resize && !recompress {
+        return None;
+    }
+    // Tiny images (icons, rules) don't benefit and JPEG would blur them.
+    if !resize && (w as u64) * (h as u64) < 64 * 64 {
         return None;
     }
 
@@ -913,10 +940,9 @@ fn process_cmyk(
         v.get(..bytes4)?.to_vec()
     };
 
-    let decode_arr = read_cmyk_decode(doc, d.get(b"Decode"));
+    let decode_arr = read_cmyk_decode(doc, d.get(b"Decode")).ok()?;
     let rgb_px = cmyk_to_rgb(&cmyk_px, decode_arr);
 
-    let resize = settings.downsample && ppi.is_finite() && ppi > settings.above_ppi && settings.target_ppi > 0.0;
     let (nw, nh) = if resize {
         let k = settings.target_ppi / ppi;
         (((f64::from(w) * k).round() as u32).max(1), ((f64::from(h) * k).round() as u32).max(1))
@@ -926,24 +952,33 @@ fn process_cmyk(
 
     let resampled = if (nw, nh) != (w, h) { resample(&rgb_px, 3, w, h, nw, nh)? } else { rgb_px };
 
-    let q = match settings.compression {
-        Compression::Jpeg(q) => q,
-        _ => 80,
-    };
-    let data = jpeg(&resampled, 3, nw, nh, q)?;
-
     let mut new_dict = d.clone();
-    for k in [&b"Filter"[..], b"DecodeParms", b"Decode", b"Length", b"DL"] {
-        new_dict.remove(k);
-    }
-    new_dict.set(b"Width".to_vec(), Object::Int(i64::from(nw)));
-    new_dict.set(b"Height".to_vec(), Object::Int(i64::from(nh)));
-    new_dict.set(b"BitsPerComponent".to_vec(), Object::Int(8));
     new_dict.set(b"ColorSpace".to_vec(), Object::name("DeviceRGB"));
-    new_dict.set(b"Filter".to_vec(), Object::name("DCTDecode"));
+    let new_stream = image_stream(&new_dict, &resampled, 3, nw, nh, settings.compression, was_dct)?;
 
-    let new_stream = Stream::from_raw(new_dict, data);
-    (new_stream.raw.len() < s.raw.len()).then_some((new_stream, None))
+    // A soft mask must keep the image's dimensions: resample it with the image (lossless).
+    let mut smask = None;
+    if let Some(mr) = d.reference(b"SMask") {
+        let mobj = doc.get(mr);
+        let Object::Stream(m) = &*mobj else { return None };
+        if (nw, nh) != (w, h) {
+            if m.dict.int(b"BitsPerComponent") != Some(8) || m.dict.contains(b"Matte") || m.dict.contains(b"Decode") {
+                return None;
+            }
+            let (mw, mh) = (u32::try_from(m.dict.int(b"Width")?).ok()?, u32::try_from(m.dict.int(b"Height")?).ok()?);
+            let mpx = pixels(doc, m, 1, budget)?;
+            let mpx = resample(&mpx, 1, mw, mh, nw, nh)?;
+            smask = Some((mr, image_stream(&m.dict, &mpx, 1, nw, nh, Compression::Flate, false)?));
+        }
+    }
+
+    let before = crate::stored_len(s)?
+        + smask.as_ref().map_or(0, |(r, _)| match &*doc.get(*r) {
+            Object::Stream(m) => crate::stored_len(m).unwrap_or(0),
+            _ => 0,
+        });
+    let after = crate::stored_len(&new_stream)? + smask.as_ref().and_then(|(_, m)| crate::stored_len(m)).unwrap_or(0);
+    (after < before).then_some((new_stream, smask))
 }
 
 /// Whether colour space `cs` has one colour component, so a 1-bit image in it has one bit per
@@ -1377,8 +1412,15 @@ pub(crate) fn run(
     // indexed image's palette says which of its samples a resampled one keeps, which they may
     // change: one used where the walk didn't look may be drawn so.
     let packs = settings.mono.compression != MonoCompression::Retain;
-    let checked: HashSet<u32> =
-        ppi.keys().filter(|r| (packs && device_rgb(doc, **r)) || (settings.mono.downsample && indexed(doc, **r))).map(|r| r.num).collect();
+    let checked: HashSet<u32> = ppi
+        .keys()
+        .filter(|r| {
+            (packs && device_rgb(doc, **r))
+                || (settings.mono.downsample && indexed(doc, **r))
+                || (settings.convert_cmyk_to_rgb && is_cmyk_image(doc, **r))
+        })
+        .map(|r| r.num)
+        .collect();
     defaults.extend(used_elsewhere(doc, &checked, &read));
     // Soft masks are processed with their image, not on their own.
     let masks: HashSet<ObjRef> = ppi
@@ -1420,9 +1462,9 @@ pub(crate) fn run(
             continue;
         }
         let n = s.dict.get(b"ColorSpace").and_then(|cs| components(doc, cs));
-        let processed = n
-            .and_then(|n| process(doc, s, ppi, if n == 1 { &settings.gray } else { &settings.color }, n, budget))
-            .or_else(|| if settings.convert_cmyk_to_rgb { process_cmyk(doc, s, ppi, &settings.color, budget) } else { None });
+        let processed = n.and_then(|n| process(doc, s, ppi, if n == 1 { &settings.gray } else { &settings.color }, n, budget)).or_else(|| {
+            if settings.convert_cmyk_to_rgb && !defaults.contains(&r.num) { process_cmyk(doc, s, ppi, &settings.color, budget) } else { None }
+        });
         // A dithered scan, say, downsampled and JPEG-compressed: the smaller wins, counting a soft
         // mask resampled with it.
         let smask_len = |smask: Option<&(ObjRef, Stream)>| match smask {
@@ -2094,7 +2136,8 @@ mod pack_tests {
 
 #[cfg(test)]
 mod cmyk_tests {
-    use super::cmyk_to_rgb;
+    use super::{cmyk_to_rgb, read_cmyk_decode};
+    use pdfcraft_cos::{Document, Object};
 
     #[test]
     fn cmyk_to_rgb_standard_colors() {
@@ -2120,5 +2163,42 @@ mod cmyk_tests {
         assert_eq!(cmyk_to_rgb(&[255, 255, 255, 255], inverted_decode), vec![255, 255, 255]);
         // Under inverted decode, 0 maps to 255 -> so [0, 0, 0, 0] maps to [255, 255, 255, 255] = Black!
         assert_eq!(cmyk_to_rgb(&[0, 0, 0, 0], inverted_decode), vec![0, 0, 0]);
+    }
+
+    #[test]
+    fn read_cmyk_decode_validates_structure() {
+        let doc = Document::new_empty();
+        // None -> Ok(None)
+        assert_eq!(read_cmyk_decode(&doc, None), Ok(None));
+
+        // Valid 8-element array -> Ok(Some(...))
+        let valid = Object::Array(vec![
+            Object::Real(0.0),
+            Object::Real(1.0),
+            Object::Real(0.0),
+            Object::Real(1.0),
+            Object::Real(0.0),
+            Object::Real(1.0),
+            Object::Real(0.0),
+            Object::Real(1.0),
+        ]);
+        assert_eq!(read_cmyk_decode(&doc, Some(&valid)), Ok(Some([0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0])));
+
+        // Invalid length (6 elements) -> Err(())
+        let invalid_len = Object::Array(vec![Object::Real(0.0); 6]);
+        assert_eq!(read_cmyk_decode(&doc, Some(&invalid_len)), Err(()));
+
+        // Non-number element -> Err(())
+        let non_number = Object::Array(vec![
+            Object::Real(0.0),
+            Object::name("invalid"),
+            Object::Real(0.0),
+            Object::Real(1.0),
+            Object::Real(0.0),
+            Object::Real(1.0),
+            Object::Real(0.0),
+            Object::Real(1.0),
+        ]);
+        assert_eq!(read_cmyk_decode(&doc, Some(&non_number)), Err(()));
     }
 }

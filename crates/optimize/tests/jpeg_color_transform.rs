@@ -9,7 +9,7 @@
 use std::sync::Arc;
 
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, SaveOptions, Stream, write_full};
-use pdfcraft_optimize::{OptimizeError, Settings, Stage, optimize, optimize_with_progress};
+use pdfcraft_optimize::{Compression, OptimizeError, Settings, Stage, optimize, optimize_with_progress};
 
 /// A photo-like RGB picture: colourful gradients with a little texture, so the colour transform
 /// matters everywhere and a medium-quality JPEG is smaller than a maximum-quality one.
@@ -350,6 +350,136 @@ fn optimize_converts_cmyk_to_rgb_when_opted_in() {
     let new_stream = stream(&doc, img);
     assert_eq!(new_stream.dict.name(b"ColorSpace"), Some(&b"DeviceRGB"[..]));
     assert_eq!(new_stream.dict.name(b"Filter"), Some(&b"DCTDecode"[..]));
+}
+
+#[test]
+fn optimize_converts_cmyk_ycck_to_rgb_and_preserves_appearance() {
+    let (w, h) = (256u16, 256u16);
+    let block = |bx: u16, by: u16| [(bx * 8) as u8, (by * 8) as u8, (255 - (bx + by) * 4) as u8, ((bx ^ by) * 8) as u8];
+    // Adobe APP14 marker = Some(2) (YCCK)
+    let jpeg = four_component_jpeg(w, h, Some(2), block);
+    let (mut doc, img) = showing(u32::from(w), u32::from(h), 288, "DeviceCMYK", jpeg, Parms::None);
+    let before = render(&doc, 2.0);
+    let settings = Settings { convert_cmyk_to_rgb: true, ..Default::default() };
+    let report = optimize(&mut doc, &settings).unwrap();
+    assert_eq!(report.images_resampled + report.images_recompressed, 1);
+    let new_stream = stream(&doc, img);
+    assert_eq!(new_stream.dict.name(b"ColorSpace"), Some(&b"DeviceRGB"[..]));
+    assert_eq!(new_stream.dict.name(b"Filter"), Some(&b"DCTDecode"[..]));
+    let after = render(&doc, 2.0);
+    let diff = mean_difference(&before, &after);
+    assert!(diff < 20.0, "YCCK conversion must preserve visual appearance (diff: {diff:.1})");
+}
+
+#[test]
+fn optimize_converts_cmyk_with_inverted_decode() {
+    let (w, h) = (256u16, 256u16);
+    let block = |bx: u16, by: u16| [(bx * 8) as u8, (by * 8) as u8, (255 - (bx + by) * 4) as u8, ((bx ^ by) * 8) as u8];
+    let jpeg = four_component_jpeg(w, h, None, block);
+    let (mut doc, img) = showing(u32::from(w), u32::from(h), 288, "DeviceCMYK", jpeg, Parms::None);
+    let mut s = stream(&doc, img);
+    s.dict.set(b"Decode".to_vec(), Object::Array(vec![1.into(), 0.into(), 1.into(), 0.into(), 1.into(), 0.into(), 1.into(), 0.into()]));
+    doc.set(img, Object::Stream(s));
+    let before = render(&doc, 2.0);
+    let settings = Settings { convert_cmyk_to_rgb: true, ..Default::default() };
+    let report = optimize(&mut doc, &settings).unwrap();
+    assert_eq!(report.images_resampled + report.images_recompressed, 1);
+    let new_stream = stream(&doc, img);
+    assert_eq!(new_stream.dict.name(b"ColorSpace"), Some(&b"DeviceRGB"[..]));
+    let after = render(&doc, 2.0);
+    let diff = mean_difference(&before, &after);
+    assert!(diff < 20.0, "Inverted decode CMYK must not invert twice (diff: {diff:.1})");
+}
+
+#[test]
+fn optimize_refuses_cmyk_with_malformed_decode() {
+    let (w, h) = (256u16, 256u16);
+    let block = |bx: u16, by: u16| [(bx * 8) as u8, (by * 8) as u8, (255 - (bx + by) * 4) as u8, ((bx ^ by) * 8) as u8];
+    let jpeg = four_component_jpeg(w, h, None, block);
+    let (mut doc, img) = showing(u32::from(w), u32::from(h), 288, "DeviceCMYK", jpeg, Parms::None);
+    let mut s = stream(&doc, img);
+    // 6 elements instead of 8: invalid for CMYK
+    s.dict.set(b"Decode".to_vec(), Object::Array(vec![0.into(), 1.into(), 0.into(), 1.into(), 0.into(), 1.into()]));
+    doc.set(img, Object::Stream(s));
+    let original = doc.get(img);
+    let settings = Settings { convert_cmyk_to_rgb: true, ..Default::default() };
+    optimize(&mut doc, &settings).unwrap();
+    assert_eq!(doc.get(img), original, "Malformed /Decode must refuse conversion and stay as it is");
+}
+
+#[test]
+fn optimize_cmyk_respects_flate_compression() {
+    let (w, h) = (128u32, 128u32);
+    let mut cmyk = Vec::with_capacity((w * h * 4) as usize);
+    for y in 0..h {
+        for x in 0..w {
+            cmyk.push((x * 2) as u8);
+            cmyk.push((y * 2) as u8);
+            cmyk.push(((x + y) / 2) as u8);
+            cmyk.push(30);
+        }
+    }
+    let mut doc = Document::new_empty();
+    let mut d = Dict::new();
+    d.set(b"Type".to_vec(), Object::name("XObject"));
+    d.set(b"Subtype".to_vec(), Object::name("Image"));
+    d.set(b"Width".to_vec(), Object::Int(w as i64));
+    d.set(b"Height".to_vec(), Object::Int(h as i64));
+    d.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+    d.set(b"ColorSpace".to_vec(), Object::name("DeviceCMYK"));
+    let img = doc.add(Object::Stream(Stream::flate(d, &cmyk)));
+    let (pw, ph) = (w * 72 / 288, h * 72 / 288);
+    one_page(&mut doc, pw, ph, &[("Im".to_string(), img)], &format!("q {pw} 0 0 {ph} 0 0 cm /Im Do Q"));
+
+    let mut settings = Settings { convert_cmyk_to_rgb: true, ..Default::default() };
+    settings.color.compression = Compression::Flate;
+    let report = optimize(&mut doc, &settings).unwrap();
+    assert_eq!(report.images_resampled + report.images_recompressed, 1);
+    let new_stream = stream(&doc, img);
+    assert_eq!(new_stream.dict.name(b"ColorSpace"), Some(&b"DeviceRGB"[..]));
+    assert_eq!(new_stream.dict.name(b"Filter"), Some(&b"FlateDecode"[..]));
+}
+
+#[test]
+fn optimize_refuses_cmyk_with_smask_matte() {
+    let (w, h) = (256u16, 256u16);
+    let block = |bx: u16, by: u16| [(bx * 8) as u8, (by * 8) as u8, (255 - (bx + by) * 4) as u8, ((bx ^ by) * 8) as u8];
+    let jpeg = four_component_jpeg(w, h, None, block);
+    let (mut doc, img) = showing(u32::from(w), u32::from(h), 288, "DeviceCMYK", jpeg, Parms::None);
+
+    // Create an SMask with a /Matte entry
+    let mut mask_dict = Dict::new();
+    mask_dict.set(b"Type".to_vec(), Object::name("XObject"));
+    mask_dict.set(b"Subtype".to_vec(), Object::name("Image"));
+    mask_dict.set(b"Width".to_vec(), Object::Int(w as i64));
+    mask_dict.set(b"Height".to_vec(), Object::Int(h as i64));
+    mask_dict.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+    mask_dict.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+    mask_dict.set(b"Matte".to_vec(), Object::Array(vec![0.into(), 0.into(), 0.into(), 0.into()]));
+    let mask_obj = doc.add(Object::Stream(Stream::flate(mask_dict, &vec![255u8; usize::from(w) * usize::from(h)])));
+
+    let mut s = stream(&doc, img);
+    s.dict.set(b"SMask".to_vec(), Object::Ref(mask_obj));
+    doc.set(img, Object::Stream(s));
+
+    let original = doc.get(img);
+    let settings = Settings { convert_cmyk_to_rgb: true, ..Default::default() };
+    optimize(&mut doc, &settings).unwrap();
+    assert_eq!(doc.get(img), original, "CMYK image with SMask Matte must refuse conversion");
+}
+
+#[test]
+fn optimize_refuses_tiny_cmyk_without_resize() {
+    // 32x32 px (< 64x64) at 72 ppi (not downsampled)
+    let (w, h) = (32u16, 32u16);
+    let block = |bx: u16, by: u16| [(bx * 8) as u8, (by * 8) as u8, (255 - (bx + by) * 4) as u8, ((bx ^ by) * 8) as u8];
+    let jpeg = four_component_jpeg(w, h, None, block);
+    let (mut doc, img) = showing(u32::from(w), u32::from(h), 72, "DeviceCMYK", jpeg, Parms::None);
+
+    let original = doc.get(img);
+    let settings = Settings { convert_cmyk_to_rgb: true, ..Default::default() };
+    optimize(&mut doc, &settings).unwrap();
+    assert_eq!(doc.get(img), original, "Tiny CMYK image (< 64x64) without resize must stay unchanged");
 }
 
 #[test]
