@@ -11,7 +11,7 @@ use super::{
 use super::{RegionBitmap, generic_refinement};
 use crate::ScratchBuffers;
 use crate::arithmetic_decoder::{ArithmeticDecoder, ArithmeticDecoderContext};
-use crate::bitmap::Bitmap;
+use crate::bitmap::{Bitmap, INTEGER_WORK, copy_work, decode_work};
 use crate::error::{HuffmanError, OverflowError, ParseError, Result, SymbolError, bail};
 use crate::huffman_table::{HuffmanTable, StandardHuffmanTables, TableLine};
 use crate::integer_decoder::IntegerDecoder;
@@ -25,6 +25,7 @@ pub(crate) fn decode(
     referred_tables: &[HuffmanTable],
     standard_tables: &StandardHuffmanTables,
     scratch: &mut ScratchBuffers,
+    work_left: &mut u64,
 ) -> Result<RegionBitmap> {
     let mut bitmap = Bitmap::new_with(
         header.region_info.width,
@@ -41,6 +42,7 @@ pub(crate) fn decode(
         standard_tables,
         &mut bitmap,
         scratch,
+        work_left,
     )?;
 
     Ok(RegionBitmap {
@@ -56,12 +58,13 @@ pub(crate) fn decode_into(
     standard_tables: &StandardHuffmanTables,
     bitmap: &mut Bitmap,
     scratch: &mut ScratchBuffers,
+    work_left: &mut u64,
 ) -> Result<()> {
     if header.flags.use_huffman {
         let mut reader = Reader::new(header.data);
         let ctx =
             DecodeContext::new_huffman(&mut reader, header, referred_tables, standard_tables)?;
-        decode_with(ctx, symbols, header, bitmap)?;
+        decode_with(ctx, symbols, header, bitmap, work_left)?;
     } else {
         let mut decoder = ArithmeticDecoder::new(header.data);
 
@@ -76,7 +79,7 @@ pub(crate) fn decode_into(
             .resize(num_gr_contexts, ArithmeticDecoderContext::default());
 
         let ctx = DecodeContext::new_arithmetic(&mut decoder, &mut contexts, &mut scratch.contexts);
-        decode_with(ctx, symbols, header, bitmap)?;
+        decode_with(ctx, symbols, header, bitmap, work_left)?;
     }
 
     Ok(())
@@ -88,6 +91,7 @@ pub(crate) fn decode_with(
     symbols: &[&Bitmap],
     header: &TextRegionHeader<'_>,
     region: &mut Bitmap,
+    work_left: &mut u64,
 ) -> Result<()> {
     let strip_size = header.strip_size();
 
@@ -147,7 +151,7 @@ pub(crate) fn decode_with(
             let symbol_id = ctx.read_symbol_id()?;
 
             let symbol_bitmap =
-                decode_symbol_instance_bitmap(&mut ctx, symbols, header, symbol_id)?;
+                decode_symbol_instance_bitmap(&mut ctx, symbols, header, symbol_id, work_left)?;
 
             let symbol_bitmap_ref: &Bitmap = match &symbol_bitmap {
                 SymbolBitmap::Reference(idx) => symbols.get(*idx).ok_or(SymbolError::OutOfRange)?,
@@ -155,6 +159,11 @@ pub(crate) fn decode_with(
             };
             let symbol_width = symbol_bitmap_ref.width as i32;
             let symbol_height = symbol_bitmap_ref.height as i32;
+
+            // PdfCraft patch: see `bitmap::MAX_WORK`. An instance of a large symbol costs its copy,
+            // and 10,000 of one took 64 s. Even one with no pixels reads its four integers.
+            let work = copy_work(symbol_bitmap_ref.width, symbol_bitmap_ref.height).saturating_add(4 * INTEGER_WORK);
+            *work_left = work_left.checked_sub(work).ok_or(OverflowError::DecodingWork)?;
 
             if !header.flags.transposed
                 && (header.flags.reference_corner == ReferenceCorner::TopRight
@@ -173,23 +182,26 @@ pub(crate) fn decode_with(
             }
 
             let symbol_s = current_s;
+            // From the corner a symbol is placed by to its far side. The strip and the offset can
+            // be anywhere an `i32` reaches, and wrapped, the symbol is off the region.
+            let back = |corner: i32, size: i32| corner.wrapping_sub(size).wrapping_add(1);
 
             let (x, y) = if !header.flags.transposed {
                 match header.flags.reference_corner {
                     ReferenceCorner::TopLeft => (symbol_s, symbol_t),
-                    ReferenceCorner::TopRight => (symbol_s - symbol_width + 1, symbol_t),
-                    ReferenceCorner::BottomLeft => (symbol_s, symbol_t - symbol_height + 1),
+                    ReferenceCorner::TopRight => (back(symbol_s, symbol_width), symbol_t),
+                    ReferenceCorner::BottomLeft => (symbol_s, back(symbol_t, symbol_height)),
                     ReferenceCorner::BottomRight => {
-                        (symbol_s - symbol_width + 1, symbol_t - symbol_height + 1)
+                        (back(symbol_s, symbol_width), back(symbol_t, symbol_height))
                     }
                 }
             } else {
                 match header.flags.reference_corner {
                     ReferenceCorner::TopLeft => (symbol_t, symbol_s),
-                    ReferenceCorner::TopRight => (symbol_t - symbol_width + 1, symbol_s),
-                    ReferenceCorner::BottomLeft => (symbol_t, symbol_s - symbol_height + 1),
+                    ReferenceCorner::TopRight => (back(symbol_t, symbol_width), symbol_s),
+                    ReferenceCorner::BottomLeft => (symbol_t, back(symbol_s, symbol_height)),
                     ReferenceCorner::BottomRight => {
-                        (symbol_t - symbol_width + 1, symbol_s - symbol_height + 1)
+                        (back(symbol_t, symbol_width), back(symbol_s, symbol_height))
                     }
                 }
             };
@@ -531,6 +543,7 @@ fn decode_symbol_instance_bitmap(
     symbols: &[&Bitmap],
     header: &TextRegionHeader<'_>,
     symbol_id: usize,
+    work_left: &mut u64,
 ) -> Result<SymbolBitmap> {
     if !header.flags.use_refinement || ctx.read_refinement_flag()? == 0 {
         return Ok(SymbolBitmap::Reference(symbol_id));
@@ -561,6 +574,11 @@ fn decode_symbol_instance_bitmap(
         .div_euclid(2)
         .checked_add(rdy)
         .ok_or(OverflowError::ReferenceOffset)?;
+
+    // PdfCraft patch: see `bitmap::MAX_WORK`. Before it is decoded: charged after, one instance
+    // could still be 2^28 pixels past what was left. With the four integers that gave its size.
+    let work = decode_work(refined_width, refined_height).saturating_add(4 * INTEGER_WORK);
+    *work_left = work_left.checked_sub(work).ok_or(OverflowError::DecodingWork)?;
 
     let mut refined_bitmap = Bitmap::new(refined_width, refined_height)?;
 
