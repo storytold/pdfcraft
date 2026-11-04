@@ -49,6 +49,9 @@ pub struct Candidate {
 /// points along its sides (#2942: a cell drawn with a midpoint on each vertical side).
 const MAX_RECT_POINTS: usize = 16;
 
+/// Graphics states saved (`q`) and kept at once while detecting; deeper saves are counted, not kept.
+const MAX_SAVES: usize = 256;
+
 /// The rectangles and horizontal segments a page draws (stroked or filled), in user space.
 #[derive(Default)]
 struct DetectionPath {
@@ -152,6 +155,7 @@ pub(crate) fn shapes_within(doc: &Document, page: usize, budget: &mut DecodeBudg
     }
     let mut ctm = Matrix::IDENTITY;
     let mut stack = Vec::new();
+    let mut lost_saves = 0usize;
     let mut path_boxes: Vec<[f64; 4]> = Vec::new();
     let mut subpaths: Vec<DetectionPath> = Vec::new();
     let mut path = DetectionPath::default();
@@ -162,7 +166,10 @@ pub(crate) fn shapes_within(doc: &Document, page: usize, budget: &mut DecodeBudg
     // byte it decoded.
     for op in pdfcraft_content::ops(joined.data()) {
         match op.op.as_slice() {
-            b"q" => stack.push(ctm),
+            b"q" if stack.len() < MAX_SAVES => stack.push(ctm),
+            // Saves past the cap are counted, not kept, so each `Q` still closes its own `q`.
+            b"q" => lost_saves = lost_saves.saturating_add(1),
+            b"Q" if lost_saves > 0 => lost_saves -= 1,
             b"Q" => ctm = stack.pop().unwrap_or(ctm),
             b"cm" => {
                 if let Some(m) = op.nums::<6>() {

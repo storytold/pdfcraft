@@ -627,6 +627,22 @@ pub fn clear_password_values(doc: &mut Document) -> Result<usize, FormError> {
     Ok(targets.len())
 }
 
+/// Whether `field`'s default value (`/DV`, its own or inherited) is a stream with data, which
+/// [`fields`] reads as empty once its value budget is spent.
+fn unread_default(doc: &Document, field: ObjRef) -> bool {
+    let mut node = Some(field);
+    for _ in 0..64 {
+        let Some(r) = node else { break };
+        let obj = doc.get(r);
+        let Some(d) = obj.as_dict() else { break };
+        if let Some(dv) = d.get(b"DV") {
+            return matches!(&*doc.resolve(dv), Object::Stream(s) if !s.raw.is_empty());
+        }
+        node = d.reference(b"Parent");
+    }
+    false
+}
+
 /// Acrobat's Clear form: every field (or the named ones) back to its default value.
 pub fn reset(doc: &mut Document, names: Option<&[String]>) -> Result<usize, FormError> {
     let all = fields(doc);
@@ -640,7 +656,9 @@ pub fn reset(doc: &mut Document, names: Option<&[String]>) -> Result<usize, Form
     }
     let mut changed = 0;
     for f in all.iter().filter(|f| names.is_none_or(|n| n.contains(&f.name))) {
-        if f.value == f.default {
+        // A default the reading didn't decode (its budget spent) is unknown, not empty: clearing
+        // the field to nothing would lose the value it should go back to.
+        if f.value == f.default || (f.default.is_empty() && unread_default(doc, f.obj)) {
             continue;
         }
         let v = match f.kind {
