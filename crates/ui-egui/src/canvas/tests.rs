@@ -1074,6 +1074,107 @@ fn text_layers_keep_the_selection_page() {
     v.frame_visible = HashSet::from([90, 91]);
     let _ = v.prepare_render_queue(&info, 1.0);
     assert_eq!(v.selected_text().as_deref(), Some("x"), "stale selections still copy");
+    // Every page of a selection across pages stays, however far from the pages shown.
+    for p in 0..100 {
+        v.texts.insert(p, Arc::new(text.clone()));
+    }
+    v.selection = Some(Selection { page: 0, span: Span::Run { anchor: 0, head: 0, head_page: 40 } });
+    let _ = v.prepare_render_queue(&info, 1.0);
+    assert!((0..=40).all(|p| v.texts.contains_key(&p)), "the selection's pages are kept");
+    assert_eq!(v.selected_text().map(|t| t.lines().count()), Some(41));
+}
+
+/// One line of 10-wide glyphs, one per char.
+fn line_text(s: &str) -> PageText {
+    PageText {
+        glyphs: s
+            .chars()
+            .map(|c| pdfcraft_render::TextGlyph { text: c.into(), rect: [0.0, 0.0, 10.0, 10.0], quad: [[0.0, 0.0]; 4], direction: [1.0, 0.0] })
+            .collect(),
+        line_of: s.chars().map(|_| 0).collect(),
+        space_before: s.chars().map(|_| false).collect(),
+    }
+}
+
+#[test]
+fn a_selection_across_pages_takes_the_rest_of_the_first_and_the_start_of_the_last() {
+    let s = Selection { page: 1, span: Span::Run { anchor: 2, head: 1, head_page: 3 } };
+    assert_eq!(s.pages(), 1..=3);
+    assert!(s.spans_pages());
+    let on = |s: &Selection| (0..5).map(|p| s.run_on(p, 5)).collect::<Vec<_>>();
+    assert_eq!(on(&s), [None, Some(2..5), Some(0..5), Some(0..2), None]);
+    // Anchored on the last page and dragged back: the same glyphs.
+    let back = Selection { page: 3, span: Span::Run { anchor: 1, head: 2, head_page: 1 } };
+    assert_eq!(on(&back), on(&s));
+    assert_eq!(back.pages(), 1..=3);
+    // On one page, as before: either way round, both ends included.
+    let one = Selection::run(2, 4, 1);
+    assert!(!one.spans_pages());
+    assert_eq!(on(&one), [None, None, Some(1..5), None, None]);
+    // A column selection stays on its page and has no reading-order run.
+    let column = Selection { page: 2, span: Span::Column { rect: [0.0, 0.0, 100.0, 100.0] } };
+    assert_eq!(column.pages(), 2..=2);
+    assert_eq!(column.run_on(2, 5), None);
+    let t = line_text("abcde");
+    assert!(column.rects_on(1, &t).is_empty() && column.text_on(1, &t).is_empty(), "nothing off its page");
+    // Extending moves the head, onto another page too; a column selection has none to move.
+    let mut ext = Selection::run(0, 3, 3);
+    ext.extend_to(2, 1);
+    assert_eq!(ext, Selection { page: 0, span: Span::Run { anchor: 3, head: 1, head_page: 2 } });
+    let mut col = column;
+    col.extend_to(4, 0);
+    assert_eq!(col, column);
+    // Hostile indices: no overflow, no inverted range.
+    let edge = Selection { page: usize::MAX, span: Span::Run { anchor: usize::MAX, head: usize::MAX, head_page: usize::MAX } };
+    assert_eq!(edge.run_on(usize::MAX, 3), Some(usize::MAX..usize::MAX));
+    assert_eq!(edge.text_on(usize::MAX, &t), "");
+    // Glyph indices past a page's end (a stale selection) select only what is there.
+    let stale = Selection { page: 0, span: Span::Run { anchor: 3, head: 99, head_page: 1 } };
+    assert_eq!(stale.text_on(0, &t), "de");
+    assert_eq!(stale.text_on(1, &t), "abcde");
+}
+
+#[test]
+fn a_selection_across_pages_copies_each_page_on_its_own_line_once_all_are_read() {
+    let info = thumbnail_info(4);
+    let mut v = DocView::new(DocId(1), &info, ViewDefaults::default());
+    v.texts.insert(0, Arc::new(line_text("abc")));
+    v.texts.insert(2, Arc::new(line_text("ghi")));
+    v.texts.insert(3, Arc::new(line_text("jkl")));
+    v.selection = Some(Selection { page: 2, span: Span::Run { anchor: 0, head: 1, head_page: 0 } });
+    assert_eq!(v.selected_text(), None, "page 2 is not read yet: no short copy");
+    assert!(v.selection_quads(&info).is_empty(), "nor a short markup");
+    v.texts.insert(1, Arc::new(line_text("def")));
+    assert_eq!(v.selected_text().as_deref(), Some("bc\ndef\ng"));
+    // A page whose text could not be read has nothing selected and is passed over.
+    v.texts.remove(&1);
+    v.text_failed.insert(1);
+    assert_eq!(v.selected_text().as_deref(), Some("bc\ng"));
+    let pages: Vec<usize> = v.selection_quads(&info).into_iter().map(|(p, _)| p).collect();
+    assert_eq!(pages, [0, 2], "one set of quads per page with text selected");
+    // A change to one of its pages ends it, as on one page; to another page it stays.
+    v.page_changed(3);
+    assert!(v.selection.is_some());
+    v.page_changed(1);
+    assert!(v.selection.is_none());
+}
+
+#[test]
+fn markup_on_several_pages_is_one_undo_step_named_like_one() {
+    let mark = |page| {
+        Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
+            page,
+            shape: pdfcraft_engine::Shape::TextMarkup { kind: pdfcraft_engine::Markup::Highlight, quads: vec![[0.0; 8]] },
+            style: Default::default(),
+            contents: String::new(),
+            author: String::new(),
+        })
+    };
+    assert!(one_undo_step(Vec::new()).is_none());
+    assert!(matches!(one_undo_step(vec![mark(0)]), Some(Edit::AddAnnotation(_))));
+    let Some(Edit::Batch { label, edits }) = one_undo_step(vec![mark(0), mark(1)]) else { panic!("a batch") };
+    assert_eq!((label.as_str(), edits.len()), (mark(0).label().wording, 2));
+    assert!(pdfcraft_engine::EDIT_LABELS.contains(&label.as_str()), "a wording the catalogues translate");
 }
 
 #[test]

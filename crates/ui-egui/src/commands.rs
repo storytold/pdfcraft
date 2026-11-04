@@ -466,17 +466,24 @@ impl PdfCraftApp {
                 if self.right.is_none() && !self.comments_panel_closed {
                     self.choose_right_panel(Some(RightPanel::Comments));
                 }
-                // A text selection made before picking a markup tool is marked right away.
+                // A text selection made before picking a markup tool is marked right away, on
+                // every page it covers, in one undo step.
                 if let (Some(kind), Some(i)) = (tool.markup(), active)
                     && let Some(doc) = self.session.get(self.views[i].id)
                 {
-                    let info = &doc.info;
-                    if let Some((page, quads)) = self.views[i].selection_quads(info) {
+                    let marks = self.views[i].selection_quads(&doc.info);
+                    let edits: Vec<Edit> = marks
+                        .into_iter()
+                        .map(|(page, quads)| {
+                            let style = self.comment_prefs.style(tool);
+                            let author = self.comment_prefs.author.clone();
+                            let shape = pdfcraft_engine::Shape::TextMarkup { kind, quads };
+                            Edit::AddAnnotation(pdfcraft_engine::NewAnnotation { page, shape, style, contents: String::new(), author })
+                        })
+                        .collect();
+                    if let Some(edit) = crate::canvas::one_undo_step(edits) {
                         self.views[i].clear_selection();
-                        let style = self.comment_prefs.style(tool);
-                        let author = self.comment_prefs.author.clone();
-                        let shape = pdfcraft_engine::Shape::TextMarkup { kind, quads };
-                        self.apply_edit(Edit::AddAnnotation(pdfcraft_engine::NewAnnotation { page, shape, style, contents: String::new(), author }));
+                        self.apply_edit(edit);
                     }
                 }
             }
@@ -745,15 +752,17 @@ impl PdfCraftApp {
                 self.quick_tool = crate::QuickTool::Redact;
                 self.left = crate::LeftPanel::Tool("redact");
                 self.reveal_tools();
-                // A text selection made first is marked right away.
+                // A text selection made first is marked right away, on every page it covers, in
+                // one undo step.
                 if let Some(i) = active
                     && let Some(doc) = self.session.get(self.views[i].id)
                 {
-                    let info = &doc.info;
-                    if let Some((page, quads)) = self.views[i].selection_quads(info) {
+                    let author = self.comment_prefs.author.clone();
+                    let marks = self.views[i].selection_quads(&doc.info);
+                    let edits: Vec<Edit> = marks.into_iter().map(|(page, quads)| self.redact_prefs.mark(page, quads, &author)).collect();
+                    if let Some(edit) = crate::canvas::one_undo_step(edits) {
                         self.views[i].clear_selection();
-                        let author = self.comment_prefs.author.clone();
-                        self.apply_edit(self.redact_prefs.mark(page, quads, &author));
+                        self.apply_edit(edit);
                     }
                 }
             }

@@ -65,7 +65,8 @@ use organize::organize_grid;
 use organize::sharp_enough;
 pub(crate) use page_input::PageToolContext;
 use page_input::{PageInput, cancel_on_escape, page_overlays, page_tool_input, text_layer};
-use selection::{Selection, Span, click_unit, selection_actions};
+pub(crate) use selection::one_undo_step;
+use selection::{Selection, Span, click_unit, selection_actions, start_selection_drag};
 pub use xform::PageXform;
 use xform::snap_to_pixels;
 use zoom::anchored_scroll;
@@ -648,9 +649,10 @@ pub struct DocView {
     pub content: crate::content_ui::ContentView,
     /// Edit a PDF ▸ Link tool state.
     pub links: crate::link_ui::LinkView,
-    /// Redact tool: the box being drawn, and a mark to add (page, quads) for the app to style.
+    /// Redact tool: the box being drawn, and the marks to add (page, quads) for the app to style,
+    /// one per page (a text selection can cover several), added in one undo step.
     pub redact_drag: crate::redact_ui::AreaDrag,
-    pub pending_redaction: Option<(usize, Vec<[f64; 8]>)>,
+    pub pending_redaction: Vec<(usize, Vec<[f64; 8]>)>,
     /// A crop rectangle being dragged (Crop tool).
     pub crop_drag: crate::crop::CropDrag,
     /// Enhance ▸ Camera image: the quadrilateral being placed.
@@ -1045,7 +1047,7 @@ impl DocView {
             content: Default::default(),
             links: Default::default(),
             redact_drag: None,
-            pending_redaction: None,
+            pending_redaction: Vec::new(),
             crop_drag: None,
             camera: None,
             camera_done: None,
@@ -1577,7 +1579,7 @@ fn draw_page(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_>, i
         if let Some(p) = frame.right_click_on(xf.rect) {
             comments::anchor(&pcx, p, view);
         }
-        PageInput { consumed: true, area_tool: false, hover: None, released_over: false }
+        PageInput { consumed: true, area_tool: false, hover: None, released_over: false, selects_from_press: false }
     } else {
         page_tool_input(ui, view, frame, &slot)
     };
@@ -1837,7 +1839,8 @@ fn draw_pages(
         }
     }
     // Held at the top or bottom edge, or dragged past it, a text selection scrolls the view
-    // so it can reach text off screen (#1670); the selection follows the pointer on its page.
+    // so it can reach text off screen (#1670); the selection follows the pointer, onto the
+    // pages it scrolls to.
     if view.selection_drag
         && navigation_enabled
         && unobstructed
@@ -2397,6 +2400,11 @@ fn plan_renders(ui: &egui::Ui, view: &mut DocView, info: &DocInfo, renders: Page
     // the rest, as text far away is let go to bound memory.)
     let need_text = |p: &usize| !view.texts.contains_key(p) && !view.text_failed.contains(p);
     let mut text_pages: Vec<usize> = if hand { Vec::new() } else { visible_now.iter().copied().filter(need_text).collect() };
+    // A selection across pages copies and marks every page it covers, scrolled past or not.
+    if let Some(s) = view.selection {
+        let rest: Vec<usize> = s.pages().filter(|p| *p < info.pages.len()).filter(need_text).filter(|p| !text_pages.contains(p)).collect();
+        text_pages.extend(rest);
+    }
     if view.find.as_ref().is_some_and(|f| !f.case_query.trim().is_empty()) {
         let n = info.pages.len();
         let rest: Vec<usize> = (0..n).map(|k| (cur + k) % n).filter(need_text).filter(|p| !text_pages.contains(p)).collect();
@@ -3387,21 +3395,28 @@ fn apply_frame_requests(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui, 
     if let Some((page, i)) = app.views[index].links.open_existing.take() {
         app.open_link_props(page, None, Some(i));
     }
-    if let Some((page, quads)) = app.views[index].pending_redaction.take() {
+    let marks = std::mem::take(&mut app.views[index].pending_redaction);
+    if !marks.is_empty() {
         let author = app.comment_prefs.author.clone();
-        app.views[index].pending_edit = Some(if app.quick_tool == QuickTool::Comment(comments::CommentTool::Highlight) {
-            // An area highlight: a highlight over the box.
-            let style = app.comment_prefs.style(comments::CommentTool::Highlight);
-            pdfcraft_engine::Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
-                page,
-                shape: pdfcraft_engine::Shape::TextMarkup { kind: pdfcraft_engine::Markup::Highlight, quads },
-                style,
-                contents: String::new(),
-                author,
+        let edits: Vec<pdfcraft_engine::Edit> = marks
+            .into_iter()
+            .map(|(page, quads)| {
+                if app.quick_tool == QuickTool::Comment(comments::CommentTool::Highlight) {
+                    // An area highlight: a highlight over the box.
+                    let style = app.comment_prefs.style(comments::CommentTool::Highlight);
+                    pdfcraft_engine::Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
+                        page,
+                        shape: pdfcraft_engine::Shape::TextMarkup { kind: pdfcraft_engine::Markup::Highlight, quads },
+                        style,
+                        contents: String::new(),
+                        author: author.clone(),
+                    })
+                } else {
+                    app.redact_prefs.mark(page, quads, &author)
+                }
             })
-        } else {
-            app.redact_prefs.mark(page, quads, &author)
-        });
+            .collect();
+        app.views[index].pending_edit = one_undo_step(edits);
     }
     match image_action {
         Some(crate::edit_text_ui::ImageAction::Replace(page, index)) => app.replace_page_image_dialog(page, index),

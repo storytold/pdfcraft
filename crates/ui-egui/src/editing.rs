@@ -193,6 +193,9 @@ impl PdfCraftApp {
                 if let Some(page) = comment_page(&edit).or_else(|| content_page(&edit)) {
                     // Comment and content edits change one page: keep every other raster.
                     view.page_changed(page);
+                } else if let Some(pages) = annotated_pages(&edit) {
+                    // Markup on a selection across pages: one comment on each of them.
+                    pages.into_iter().for_each(|page| view.page_changed(page));
                 } else if let Some(form_before) = form_before
                     && doc.info.pages.len() == page_count_before
                     && doc.xfa.is_some() == had_xfa
@@ -932,6 +935,20 @@ fn comment_page(edit: &Edit) -> Option<usize> {
         | Edit::SetAnnotationInfo { page, .. } => Some(*page),
         _ => None,
     }
+}
+
+/// The pages of a batch that only adds annotations (markup on a text selection across pages),
+/// each of which changes only its own page; `None` for anything else.
+fn annotated_pages(edit: &Edit) -> Option<Vec<usize>> {
+    let Edit::Batch { edits, .. } = edit else { return None };
+    let pages: Vec<usize> = edits
+        .iter()
+        .map(|e| match e {
+            Edit::AddAnnotation(a) => Some(a.page),
+            _ => None,
+        })
+        .collect::<Option<_>>()?;
+    (!pages.is_empty()).then_some(pages)
 }
 
 /// Whether `edit` is a form-related modification.
