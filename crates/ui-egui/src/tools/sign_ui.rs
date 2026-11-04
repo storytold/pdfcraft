@@ -8,10 +8,9 @@ use egui::{Align, Color32, CornerRadius, Layout, Pos2, Rect, Stroke, vec2};
 use pdfcraft_engine::sign::{self, Appearance, AppearanceLabels, Certificate, DigitalId, Name, PrivateKey};
 use pdfcraft_engine::{SignOptions, SignatureImage, SignatureInfo, SignatureStatus, StatusCaptions};
 
-use crate::canvas::{DocView, PageXform, Snapshot, SnapshotKind};
+use crate::canvas::{DocView, PageToolContext, Snapshot, SnapshotKind};
 use crate::fill_sign::SavedSig;
 use crate::page_cursor::Layer;
-use crate::page_pointer::PagePointer;
 use crate::theme::{self, Tokens};
 use crate::{PdfCraftApp, icons, widgets};
 
@@ -162,23 +161,17 @@ pub struct SignView {
     pub field: Option<String>,
 }
 
-/// Drag a signature rectangle on one page (Digitally sign, Certify (visible signature)).
-pub(crate) fn page_input(
-    ui: &egui::Ui,
-    resp: &egui::Response,
-    xf: &PageXform,
-    ptr: &PagePointer,
-    page: usize,
-    info: &pdfcraft_render::DocInfo,
-    view: &mut DocView,
-) {
+/// Drag a signature rectangle on one page (Digitally sign, Certify (visible signature)), from a
+/// press nobody holds (`free`).
+pub(crate) fn page_input(cx: PageToolContext<'_>, free: bool, view: &mut DocView) {
+    let PageToolContext { ui, resp, xf, ptr, page, info, .. } = cx;
     let (pointer, origin) = (ptr.pos, ptr.origin);
     if pointer.is_some_and(|p| xf.rect.contains(p)) {
         view.cursor.claim(Layer::ToolArea, egui::CursorIcon::Crosshair);
     }
-    // The tool's own press, of the primary button: nothing drawn over the page here holds it.
+    // The tool's own press, of the primary button: one nobody holds.
     if resp.drag_started_by(egui::PointerButton::Primary)
-        && view.router.owner(page).is_none()
+        && free
         && let Some(o) = origin.filter(|o| xf.rect.contains(*o))
     {
         view.sign.drag = Some((page, o));
