@@ -32,8 +32,9 @@ eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "
 serde = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }
-# UTC/calendar display (the form date picker; the combine stamp reaches it through pdfcraft_cos::civil_from_days) goes through chrono
-# (no hand-rolled calendar code); std-only, so it stays wasm-safe.
+# UTC/calendar display (the form date picker; the combine stamp reaches it through
+# pdfcraft_cos::civil_from_days) goes through chrono (no hand-rolled calendar code); std-only,
+# so it stays wasm-safe.
 chrono = { workspace = true }
 # Monotonic deadlines for work that runs in `logic` with no UI pass (native and web).
 web-time = { workspace = true }

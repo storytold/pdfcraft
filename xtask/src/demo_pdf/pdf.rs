@@ -79,7 +79,7 @@ impl Stamp {
         let (h, mi, s) = (rem / 3600, rem % 3600 / 60, rem % 60);
         let (y, m, d) = pdfcraft_cos::civil_from_days(days);
         // `{y:04}` rather than `%Y`, which writes a `+` before years past 9999.
-        Stamp { unix: secs, pdf: format!("D:{y:04}{m:02}{d:02}{h:02}{mi:02}{s:02}Z"), iso: format!("{y:04}-{m:02}-{d:02}T{h:02}:{mi:02}:{s:02}Z") }
+        Stamp { unix: secs, pdf: pdfcraft_cos::pdf_date(secs), iso: format!("{y:04}-{m:02}-{d:02}T{h:02}:{mi:02}:{s:02}Z") }
     }
 
     /// The same moment shifted by `minutes` (used to order threaded replies).

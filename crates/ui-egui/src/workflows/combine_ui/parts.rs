@@ -272,5 +272,6 @@ pub(super) fn utc_stamp(time: SystemTime) -> String {
 /// which keeps the date past chrono's range by whole 400-year cycles. `days` is a `u64` second
 /// count over 86_400, at most about 2.1e14, so it always fits an `i64`.
 fn civil_from_days(days: u64) -> (i64, u32, u32) {
+    // The fallback is unreachable: `days` is at most `u64::MAX / 86_400`, far below `i64::MAX`.
     pdfcraft_cos::civil_from_days(i64::try_from(days).unwrap_or(i64::MAX))
 }
