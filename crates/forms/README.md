@@ -41,9 +41,9 @@ let cells: Vec<table::Cell> = grid.cells_for(names)?;      // "Table1_1", "Table
 
 - Inheritable attributes (`/FT`, `/Ff`, `/V`, `/DV`, `/DA`, `/Q`, `/MaxLen`) are resolved down the
   field tree; the form's `/DA` and `/Q` are the last fallback.
-- A reading of the form (`fields`) copies at most 64 MiB each of field values, of scripts and of
-  the rest of the fields' text (full names, `/DA`, options, tooltips, captions, button actions),
-  however many fields name or inherit the same string or stream. Past that, a value or script
+- A reading of the form (`fields`) keeps at most 64 MiB of field values, 64 MiB of scripts and
+  256 MiB of the rest of the fields' text (full names, `/DA`, options, tooltips, captions, button
+  actions), however many fields name or inherit the same string or stream. Past that, a value or script
   reads as none (a list of values too, when one of them doesn't fit), and a field whose own text
   doesn't fit is left out of the reading whole, never read with part of it. Clear form (`reset`)
   leaves a field whose default the reading didn't reach as it is, rather than emptying it.

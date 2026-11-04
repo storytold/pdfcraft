@@ -209,7 +209,8 @@ const COPY: usize = std::mem::size_of::<String>();
 /// What one reading of the form may copy out of the document for one purpose, however often the
 /// file names the same object or fields inherit it: the text of each string, and the decoded
 /// bytes of each stream (every filter stage, as [`DecodeBudget`] counts them), each copy with
-/// [`COPY`] bytes besides. Text that doesn't fit in what is left isn't copied.
+/// [`COPY`] bytes besides. Text that doesn't fit in what is left isn't kept; making text that
+/// turns out longer than what is left can take up to three times that once, and spends it.
 pub(crate) struct Allowance {
     left: usize,
     refusals: usize,
@@ -669,8 +670,10 @@ fn unlisted_root(doc: &Document, r: ObjRef, seen: &std::collections::HashSet<Obj
 
 /// The rest of the text one reading of the form may copy in all, however many fields name the
 /// same string or inherit it: full names, `/DA` (a list box's widgets' too), options, tooltips,
-/// captions, on states and the text of button actions.
-pub(crate) const MAX_TEXT_BYTES: usize = 64 << 20;
+/// captions, on states and the text of button actions. As much as a page's content may decode
+/// (`DecodeBudget::page`): options are copied into each field that lists them, so an ordinary
+/// large form, 300 combo boxes listing one 2,000-item catalogue, takes about 67 MiB of it.
+pub(crate) const MAX_TEXT_BYTES: usize = 256 << 20;
 
 /// What one reading of the form's fields has used: the field and widget dictionaries read, and
 /// the allowances their scripts, values and other text share.

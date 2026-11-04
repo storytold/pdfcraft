@@ -3714,8 +3714,10 @@ fn a_rename_rewrites_a_shared_calculation_once() {
 }
 
 /// A 1 MiB literal string, as an object of [`document`].
+/// Marked as UTF-8, it reads without a conversion per byte: the bounds tests copy hundreds of
+/// MiB of it.
 fn long_string() -> String {
-    format!("({})", "x".repeat(1 << 20))
+    format!("(\u{FEFF}{})", "x".repeat(1 << 20))
 }
 
 /// 300 references to one 1 MiB value string, from fields that name it, from fields that inherit
@@ -3825,7 +3827,7 @@ fn full_names_stay_within_the_text_allowance() {
 fn field_text_named_by_reference_stays_within_the_text_allowance() {
     let n = 300;
     let list: String = (0..n).map(|i| format!("{} 0 R ", i + 5)).collect();
-    let da = format!("(/Helv 0 Tf 0 g{})", " ".repeat(1 << 20));
+    let da = format!("(\u{FEFF}/Helv 0 Tf 0 g{})", " ".repeat(1 << 20));
     let long_name = format!("/{}", "y".repeat(1 << 20));
     let text = |f: &Field| -> usize {
         let widgets: usize = f.widgets.iter().map(|w| w.caption.as_ref().map_or(0, String::len) + w.on_state.as_ref().map_or(0, String::len)).sum();
@@ -3916,6 +3918,59 @@ fn action_text_named_by_reference_stays_within_the_text_allowance() {
         .map(|(_, a)| if let FieldAction::Reset(f) = a { f.iter().map(String::len).sum() } else { 0 })
         .sum();
     assert!(reset <= crate::read::MAX_TEXT_BYTES, "{reset} bytes of reset field names");
+}
+
+/// An ordinary large form is read whole: 300 combo boxes listing one 2,000-item catalogue copy
+/// 600,000 options, about 67 MiB of the text allowance.
+#[test]
+fn a_large_ordinary_form_is_read_whole() {
+    let n = 300;
+    let list: String = (0..n).map(|i| format!("{} 0 R ", i + 3)).collect();
+    let items: String = (0..2000).map(|i| format!("[(SKU-{i:06}) (Catalogue item {i:06}, standard)] ")).collect();
+    let mut objs = vec![format!("<< /Type /Catalog /AcroForm << /Fields [{list}] >> >>"), format!("[{items}]")];
+    objs.extend((0..n).map(|i| format!("<< /FT /Ch /Ff 131072 /T (item{i}) /Opt 2 0 R >>")));
+    let all = fields(&document(&objs));
+    assert_eq!(all.len(), n);
+    assert!(all.iter().all(|f| f.options.len() == 2000));
+}
+
+/// Every entry of an array a reading walks costs it, text or not: 1,000 list boxes whose options
+/// are one array of 100,000 numbers are read until the text allowance is spent, and when that
+/// array is 1,000 fields' value, the value of a field after them doesn't fit.
+#[test]
+fn array_entries_are_charged_text_or_not() {
+    let n = 1000;
+    let list: String = (0..=n).map(|i| format!("{} 0 R ", i + 3)).collect();
+    let numbers = format!("[{}]", "0 ".repeat(100_000));
+    let mut options = vec![format!("<< /Type /Catalog /AcroForm << /Fields [{list}] >> >>"), numbers.clone()];
+    options.extend((0..n).map(|i| format!("<< /FT /Ch /T (l{i}) /Opt 2 0 R >>")));
+    let all = fields(&document(&options));
+    assert!(all.len() < n, "{} list boxes read", all.len());
+    let mut values = vec![format!("<< /Type /Catalog /AcroForm << /Fields [{list}] >> >>"), numbers];
+    values.extend((0..n).map(|i| format!("<< /FT /Ch /T (l{i}) /V 2 0 R >>")));
+    values.push("<< /FT /Tx /T (last) /V (a) >>".into());
+    let all = fields(&document(&values));
+    assert_eq!(field(&all, "last").value, Vec::<String>::new(), "the values allowance is spent");
+}
+
+/// An action whose text doesn't fit reads as one of another type, and survives the actions list
+/// being written back: read as none, it would be dropped.
+#[test]
+fn an_action_whose_text_does_not_fit_survives_a_round_trip() {
+    let names = "2 0 R ".repeat(300);
+    let doc = document(&[
+        "<< /Type /Catalog /AcroForm << /Fields [3 0 R] >> >>".into(),
+        long_string(),
+        format!("<< /FT /Tx /T (f) /Rect [0 0 10 10] /A << /S /ResetForm /Fields [{names}] >> /AA << /D << /S /Hide /T [{names}] >> >> >>"),
+    ]);
+    let mut doc = doc;
+    let before = doc.get(ObjRef::new(3, 0)).as_dict().cloned().unwrap();
+    let acts = field_actions(&doc, "f").unwrap();
+    assert_eq!(acts, [(Trigger::MouseUp, FieldAction::Other("ResetForm".into())), (Trigger::MouseDown, FieldAction::Other("Hide".into()))]);
+    set_field_actions(&mut doc, "f", &acts).unwrap();
+    let after = doc.get(ObjRef::new(3, 0)).as_dict().cloned().unwrap();
+    assert_eq!(after.get(b"A"), before.get(b"A"));
+    assert_eq!(after.get(b"AA"), before.get(b"AA"));
 }
 
 /// A field's `/DA`, tooltip, options, value and calculation named through a reference to a

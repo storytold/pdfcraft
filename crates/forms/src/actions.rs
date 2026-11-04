@@ -129,13 +129,16 @@ fn texts(doc: &Document, o: &Object, text: &mut Allowance) -> Vec<String> {
 }
 
 /// An action, its script copied against `allowances.scripts` and its other text against
-/// `allowances.text`: `None` when its text doesn't fit, as when it isn't an action.
+/// `allowances.text`. One whose text doesn't fit reads as an action of another type, named by at
+/// most 64 bytes of its `/S`, which [`set_field_actions`] keeps as it is: read as none, it would
+/// be lost when the list it was missing from is written back.
 fn read(doc: &Document, o: &Object, pages: &[pdfcraft_cos::ObjRef], allowances: &mut Allowances) -> Option<FieldAction> {
     let a = held(doc, o);
     let d = a.as_dict()?;
     let text = &mut allowances.text;
     let refusals = text.refusals();
-    let action = match d.name(b"S")? {
+    let kind = d.name(b"S")?;
+    let action = match kind {
         b"JavaScript" => FieldAction::JavaScript(crate::script(doc, o, &mut allowances.scripts).unwrap_or_default()),
         b"URI" => FieldAction::Uri(d.get(b"URI").and_then(|u| text.string(doc, u)).unwrap_or_default()),
         b"ResetForm" => FieldAction::Reset(d.get(b"Fields").map(|f| texts(doc, f, text)).unwrap_or_default()),
@@ -157,9 +160,13 @@ fn read(doc: &Document, o: &Object, pages: &[pdfcraft_cos::ObjRef], allowances: 
                 })
                 .unwrap_or_default(),
         ),
-        other => FieldAction::Other(text.copy(other.len(), || String::from_utf8_lossy(other).into_owned())?),
+        other => FieldAction::Other(text.copy(other.len(), || String::from_utf8_lossy(other).into_owned()).unwrap_or_default()),
     };
-    (text.refusals() == refusals).then_some(action)
+    if text.refusals() == refusals {
+        Some(action)
+    } else {
+        Some(FieldAction::Other(String::from_utf8_lossy(kind.get(..64).unwrap_or(kind)).into_owned()))
+    }
 }
 
 /// The actions of field `name` (its first widget), by trigger, in the tab's order.
