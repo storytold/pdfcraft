@@ -245,10 +245,6 @@ pub(crate) fn show(
     // height: laying out hundreds of them every frame put the panel over the frame budget
     // (#5488). Shorter lists are laid out whole, so every card stays in the accessibility tree.
     let virtual_list = roots.len() > LAY_OUT_WHOLE;
-    // A generation is checked as a value, not appended to the cache key: editing, undo,
-    // redo and switching documents remeasure the list without retaining a cache per revision.
-    // A document change conservatively remeasures all cards once, including changed replies.
-    let layout = ui.scope_id().with(("comments-layout", doc.id, doc.edit_generation(), crate::i18n::current().code(), allowed));
     for a in roots {
         if sort != SortBy::Page {
             let g = group_of(a);
@@ -260,12 +256,13 @@ pub(crate) fn show(
             }
         } else if a.page != page {
             page = a.page;
-            let header = ui.scope_id().with(("comment-page-header", page));
-            if !(virtual_list && skip_if_hidden(ui, header, layout)) {
+            // Per document: two documents shown at the same width don't share heights.
+            let header = ui.scope_id().with(("comment-page-header", view.id, page));
+            if !(virtual_list && skip_if_hidden(ui, header)) {
                 let top = ui.cursor().min.y;
                 page_header(ui, t, info, page, page_counts.get(&page).copied().unwrap_or_default(), &mut view.comments.collapsed_pages);
                 if virtual_list {
-                    remember_height(ui, header, layout, top);
+                    remember_height(ui, header, top);
                 }
             }
         }
@@ -273,14 +270,19 @@ pub(crate) fn show(
             continue;
         }
         let key = (a.page, a.index);
-        // Selected cards and active editors stay live off screen. After deselection the
-        // compact card must be measured again rather than retaining the reply composer's height.
         let thread = replies_of(a);
         let selected = view.comments.selected == Some(key);
+        // A height is kept for what the card showed when it was measured: its document, what the
+        // thread says, whether it was the selected card (which draws its menu and editor) and
+        // whether an editor was open on it. An
+        // edit, undo or redo that changes the card measures it afresh; other cards keep theirs.
+        // A card with an editor open on it or on a reply is always drawn too (CodeRabbit on
+        // #5583): a kept height would show it at its size before the editor opened.
         let editing = view.comments.editing.as_ref().is_some_and(|(p, i, _)| (*p, *i) == key || thread.iter().any(|r| (r.page, r.index) == (*p, *i)));
-        let stamp = layout.with((selected, editing));
-        let id = ui.scope_id().with(("comment-card", key));
-        if virtual_list && !selected && !editing && skip_if_hidden(ui, id, stamp) {
+        let id = ui.scope_id().with(("comment-card", view.id, key, card_signature(a, thread), selected, editing));
+        // The selected card is always drawn, so it can scroll itself into view and keep its menu
+        // and editor.
+        if virtual_list && !selected && !editing && skip_if_hidden(ui, id) {
             continue;
         }
         let rotation = info.pages.get(a.page).map_or(0, |p| p.rotation);
@@ -289,7 +291,7 @@ pub(crate) fn show(
             edit = Some(e);
         }
         if virtual_list {
-            remember_height(ui, id, stamp, top);
+            remember_height(ui, id, top);
         }
     }
     edit
@@ -326,16 +328,27 @@ fn page_header(ui: &mut egui::Ui, t: &Tokens, info: &DocInfo, page: usize, n: us
     }
 }
 
+/// What a card's height depends on in the document: the comment and its replies as shown (their
+/// kind, author, text, date, status, colour and lock). Two cards with the same signature lay out
+/// alike at one width.
+fn card_signature(a: &Annotation, thread: &[&Annotation]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    for x in std::iter::once(a).chain(thread.iter().copied()) {
+        (&x.subtype, &x.author, &x.contents, &x.modified, &x.state, x.locked).hash(&mut h);
+        x.color.map(|c| c.map(f32::to_bits)).hash(&mut h);
+    }
+    h.finish()
+}
+
 /// Comment lists up to this long are laid out whole; longer ones lay out only what is in view.
 const LAY_OUT_WHOLE: usize = 100;
 
-/// For a part of the list measured at this width and layout stamp that falls out of view:
-/// takes up its height without laying it out, and returns `true`.
-fn skip_if_hidden(ui: &mut egui::Ui, id: egui::Id, stamp: egui::Id) -> bool {
+/// For a part of the list (a card or a page header) that was measured at this width and would
+/// fall out of view: takes up its height without laying it out, and returns `true`.
+fn skip_if_hidden(ui: &mut egui::Ui, id: egui::Id) -> bool {
     let width = ui.available_width();
-    let Some(height) =
-        ui.data(|d| d.get_temp::<(f32, f32, egui::Id)>(id)).filter(|(w, _, s)| (w - width).abs() < 0.5 && *s == stamp).map(|(_, h, _)| h)
-    else {
+    let Some(height) = ui.data(|d| d.get_temp::<(f32, f32)>(id)).filter(|(w, _)| (w - width).abs() < 0.5).map(|(_, h)| h) else {
         return false;
     };
     if ui.is_rect_visible(egui::Rect::from_min_size(ui.cursor().min, vec2(width, height))) {
@@ -347,11 +360,11 @@ fn skip_if_hidden(ui: &mut egui::Ui, id: egui::Id, stamp: egui::Id) -> bool {
 
 /// Records the height part `id` took since the cursor was at `top`, for [`skip_if_hidden`]: less
 /// the spacing `allocate_space` adds back after it.
-fn remember_height(ui: &egui::Ui, id: egui::Id, stamp: egui::Id, top: f32) {
+fn remember_height(ui: &egui::Ui, id: egui::Id, top: f32) {
     let height = ui.cursor().min.y - top - ui.spacing().item_spacing.y;
     if height.is_finite() && height > 0.0 {
         let width = ui.available_width();
-        ui.data_mut(|d| d.insert_temp(id, (width, height, stamp)));
+        ui.data_mut(|d| d.insert_temp(id, (width, height)));
     }
 }
 
