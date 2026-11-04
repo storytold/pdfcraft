@@ -2526,6 +2526,30 @@ fn pattern_fills_carry_their_lines_into_the_layout() {
     assert_eq!((round.fill, round.pattern), (Some(yellow), lines(Hatch::Vertical, [0.0; 3])));
 }
 
+/// A patterned fill cut by a page break keeps its pattern on both pages (#6074): the
+/// fill is divided at the content area's bottom, and each piece carries the lines.
+#[test]
+fn a_patterned_fill_cut_by_a_page_break_keeps_its_pattern_on_both_pages() {
+    // A 12-inch bordered box in a 10-inch content area: it is cut at the area's bottom.
+    let body = r#"<subform name="body" layout="tb" w="7.5in"><subform name="tall" layout="position" w="7.5in" h="12in"><border><edge/><fill><color value="255,211,0"/><pattern type="diagonalLeft"><color value="255,0,0"/></pattern></fill></border><draw name="note" x="0in" y="0in" w="2in" h="0.3in"><value><text>Note</text></value></draw></subform></subform>"#;
+    let form = layout_xml(&one_area_form(r#"layout="tb""#, body)).unwrap();
+    assert_eq!(form.pages.len(), 2);
+    let fills = |page: &Page| {
+        page.items
+            .iter()
+            .filter_map(|i| match i {
+                Item::Fill { rect, color, pattern } => Some((*rect, *color, *pattern)),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    let (first, last) = (fills(&form.pages[0]), fills(&form.pages[1]));
+    assert_eq!((first.len(), last.len()), (1, 1), "{first:?} {last:?}");
+    let want = Some(Pattern { hatch: Hatch::DiagonalLeft, color: Color([1.0, 0.0, 0.0]) });
+    assert_eq!((first[0].2, last[0].2), (want, want), "both pieces keep the pattern");
+    assert!((first[0].0.h + last[0].0.h - 12.0 * 72.0).abs() < 0.01, "the two parts make the whole box");
+}
+
 /// A pattern fill is written as the fill's colour, then the same path filled with a coloured
 /// tiling pattern of the lines, named in the page's `/Pattern` resources: one pattern object
 /// for each kind of line and colour, a rounded box's lines kept inside its curves, and a turned
