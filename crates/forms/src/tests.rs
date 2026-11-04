@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use pdfcraft_cos::{Document, Object, SaveOptions, write_incremental};
 
+use super::read::{qualified_name, qualified_name_with_completion};
 use super::*;
 
 /// One page with a form: text fields (plain, multiline, comb, password, read-only, nested),
@@ -2413,6 +2414,208 @@ fn replacing_a_chained_action_with_another_type_keeps_the_chain() {
     // Deleting the trigger's action deletes its chain with it.
     set_field_actions(&mut doc, "go", &[]).unwrap();
     assert_eq!(field_action_chains(&doc, "go").unwrap(), []);
+}
+
+#[test]
+fn reset_references_reject_unresolved_explicit_targets() {
+    for parent in ["99 0 R", "10 0 R"] {
+        for targets in ["5 0 R", "7 0 R 5 0 R"] {
+            for exclude in [false, true] {
+                let objs = vec![
+                    "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 6 0 R 7 0 R 8 0 R] /DA (/Helv 10 Tf 0 g) /DR << /Font << /Helv 9 0 R >> >> >> >>".into(),
+                    "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>".into(),
+                    "<< /Type /Page /Parent 2 0 R /Annots [5 0 R 6 0 R 7 0 R 8 0 R] >>".into(),
+                    "<< /T (group) /Kids [5 0 R] >>".into(),
+                    format!("<< /Subtype /Widget /FT /Tx /T (name) /Parent {parent} /V (target-current) /DV (target-default) /Rect [20 340 280 360] >>"),
+                    "<< /Subtype /Widget /FT /Tx /T (name) /V (root-current) /DV (root-default) /Rect [20 300 280 320] >>".into(),
+                    "<< /Subtype /Widget /FT /Tx /T (safe) /V (safe-current) /DV (safe-default) /Rect [20 260 280 280] >>".into(),
+                    format!("<< /Subtype /Widget /FT /Btn /Ff 65536 /T (reset) /Rect [20 180 100 200] /A << /S /ResetForm /Fields [{targets}] /Flags {} >> >>", i32::from(exclude)),
+                    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+                    "(not a field dictionary)".into(),
+                ];
+                let mut doc = document(&objs);
+                let before = write_incremental(&doc, &SaveOptions::default()).unwrap();
+                let imported = fields(&doc);
+                assert_eq!(imported.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), ["group.name", "name", "safe", "reset"]);
+                let bad_parent = if parent == "99 0 R" { ObjRef::new(99, 0) } else { ObjRef::new(10, 0) };
+                assert!(doc.get(bad_parent).as_dict().is_none(), "the target's Parent is unresolved or a string");
+                assert_eq!(field(&imported, "reset").button, None, "parent {parent}, targets {targets}, exclude {exclude}");
+                assert_eq!(write_incremental(&doc, &SaveOptions::default()).unwrap(), before, "reading fields changes no bytes");
+                assert_eq!(field(&fields(&reopen(&doc)), "reset").button, None, "an unresolved explicit target stays disabled after saving");
+
+                // Hide retains its own tolerant handling of an unresolved target.
+                let mut hide = Dict::new();
+                hide.set(b"S".to_vec(), Object::name("Hide"));
+                hide.set(b"T".to_vec(), Object::Ref(ObjRef::new(5, 0)));
+                doc.update_dict(ObjRef::new(8, 0), |d| d.set(b"A".to_vec(), Object::Dict(hide))).unwrap();
+                assert_eq!(field(&fields(&doc), "reset").button, Some(af::ButtonAction::ShowHide { fields: vec![], hide: true }));
+
+                // Valid explicit strings and field references still produce reset actions.
+                for (target, name) in [(Object::String(PdfString::text("group.name")), "group.name"), (Object::Ref(ObjRef::new(7, 0)), "safe")] {
+                    let mut action = Dict::new();
+                    action.set(b"S".to_vec(), Object::name("ResetForm"));
+                    action.set(b"Fields".to_vec(), Object::Array(vec![target]));
+                    action.set(b"Flags".to_vec(), Object::Int(i64::from(exclude)));
+                    doc.update_dict(ObjRef::new(8, 0), |d| d.set(b"A".to_vec(), Object::Dict(action))).unwrap();
+                    assert_eq!(field(&fields(&doc), "reset").button, Some(af::ButtonAction::Reset { fields: vec![name.into()], exclude }));
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn reset_references_reject_incomplete_parent_names() {
+    let objs = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 6 0 R 9 0 R] /DA (/Helv 10 Tf 0 g) /DR << /Font << /Helv 10 0 R >> >> >> >>"
+            .into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R 7 0 R 9 0 R] >>".into(),
+        "<< /T (real) /Kids [5 0 R] >>".into(),
+        "<< /Subtype /Widget /FT /Tx /T (leaf) /Parent 8 0 R /V (real-current) /DV (real-default) /Rect [20 340 280 360] >>".into(),
+        "<< /T (wrong) /Kids [7 0 R] >>".into(),
+        "<< /Subtype /Widget /FT /Tx /T (leaf) /Parent 6 0 R /V (wrong-current) /DV (wrong-default) /Rect [20 300 280 320] >>".into(),
+        "<< /T (wrong) /Parent 8 0 R >>".into(),
+        "<< /Subtype /Widget /FT /Btn /Ff 65536 /T (reset) /Rect [20 180 100 200] /A << /S /ResetForm /Fields [5 0 R] >> >>".into(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+    ];
+    let doc = document(&objs);
+    let imported = fields(&doc);
+    assert_eq!(imported.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), ["real.leaf", "wrong.leaf", "reset"]);
+    let requested = ObjRef::new(5, 0);
+    let orphan = ObjRef::new(8, 0);
+    assert_eq!(field(&imported, "real.leaf").obj, requested);
+    assert_eq!(field(&imported, "wrong.leaf").obj, ObjRef::new(7, 0));
+    assert_eq!(doc.get(requested).as_dict().unwrap().get(b"Parent").and_then(|p| p.as_ref()), Some(orphan));
+    assert_eq!(doc.get(orphan).as_dict().unwrap().get(b"Parent").and_then(|p| p.as_ref()), Some(orphan));
+    assert_ne!(orphan, ObjRef::new(6, 0), "the orphan is distinct from the imported wrong root");
+    assert_eq!(qualified_name(&doc, requested).as_deref(), Some("wrong.leaf"), "Hide retains the tolerant partial-name helper");
+    assert_eq!(field(&imported, "reset").button, None, "a truncated Parent chain must not retarget another imported field");
+}
+
+#[test]
+fn reset_references_reject_parent_names_from_an_unimported_root() {
+    let objs = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 6 0 R 9 0 R] /DA (/Helv 10 Tf 0 g) /DR << /Font << /Helv 10 0 R >> >> >> >>"
+            .into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R 7 0 R 9 0 R] >>".into(),
+        "<< /T (real) /Kids [5 0 R] >>".into(),
+        "<< /Subtype /Widget /FT /Tx /T (leaf) /Parent 8 0 R /V (real-current) /DV (real-default) /Rect [20 340 280 360] >>".into(),
+        "<< /T (wrong) /Kids [7 0 R] >>".into(),
+        "<< /Subtype /Widget /FT /Tx /T (leaf) /Parent 6 0 R /V (wrong-current) /DV (wrong-default) /Rect [20 300 280 320] >>".into(),
+        "<< /T (wrong) >>".into(),
+        "<< /Subtype /Widget /FT /Btn /Ff 65536 /T (reset) /Rect [20 180 100 200] /A << /S /ResetForm /Fields [5 0 R] >> >>".into(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+    ];
+    let doc = document(&objs);
+    let imported = fields(&doc);
+    assert_eq!(imported.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), ["real.leaf", "wrong.leaf", "reset"]);
+    let requested = ObjRef::new(5, 0);
+    let orphan = ObjRef::new(8, 0);
+    assert_eq!(field(&imported, "real.leaf").obj, requested);
+    assert_eq!(field(&imported, "wrong.leaf").obj, ObjRef::new(7, 0));
+    assert_eq!(doc.get(requested).as_dict().unwrap().get(b"Parent").and_then(|p| p.as_ref()), Some(orphan));
+    assert!(doc.get(orphan).as_dict().unwrap().get(b"Parent").is_none(), "the orphan Parent chain is acyclic");
+    assert_ne!(orphan, ObjRef::new(6, 0), "the orphan is distinct from the imported wrong root");
+    assert_eq!(
+        qualified_name_with_completion(&doc, requested, true).as_deref(),
+        Some("wrong.leaf"),
+        "the complete Parent chain names another imported field"
+    );
+    assert_eq!(field(&imported, "reset").button, None, "a Parent name must agree with the referenced field's imported identity");
+}
+
+#[test]
+fn push_buttons_reset_references_keep_qualified_names() {
+    let mut doc = fixture();
+    let go = field(&fields(&doc), "go").obj;
+    let indirect_name = doc.add(Object::String(PdfString::text("address.city")));
+    let targets = [
+        (Object::Ref(ObjRef::new(16, 0)), "address.city"),
+        (Object::Ref(ObjRef::new(15, 0)), "address"),
+        (Object::String(PdfString::text("address.city")), "address.city"),
+        (Object::Ref(indirect_name), "address.city"),
+    ];
+    for (target, name) in targets {
+        for exclude in [false, true] {
+            let mut action = Dict::new();
+            action.set(b"S".to_vec(), Object::name("ResetForm"));
+            // Both field references and text strings may occur in the same /Fields array.
+            action.set(b"Fields".to_vec(), Object::Array(vec![target.clone(), Object::String(PdfString::text("name"))]));
+            action.set(b"Flags".to_vec(), Object::Int(i64::from(exclude)));
+            doc.update_dict(go, |d| d.set(b"A".to_vec(), Object::Dict(action))).unwrap();
+            let expected = Some(af::ButtonAction::Reset { fields: vec![name.into(), "name".into()], exclude });
+            let before = write_incremental(&doc, &SaveOptions::default()).unwrap();
+            assert_eq!(field(&fields(&doc), "go").button, expected);
+            assert_eq!(write_incremental(&doc, &SaveOptions::default()).unwrap(), before, "reading an action changes nothing");
+            assert_eq!(field(&fields(&reopen(&doc)), "go").button, expected, "qualified targets survive saving");
+        }
+    }
+}
+
+#[test]
+fn reset_references_match_imported_empty_ancestor_names() {
+    // Empty text strings are accepted by the importer; preserve its naming behavior.
+    for (root_name, parent_name, leaf_name, expected_name) in [
+        (Some(""), "", "city", "city"),
+        (None, "", "city", "city"),
+        (Some(""), "address", "city", "address.city"),
+        (Some("address"), "", "city", "address..city"),
+        (Some("address"), "city", "", "address.city."),
+        (Some(""), "", "", ""),
+    ] {
+        let mut doc = fixture();
+        let parent = ObjRef::new(15, 0);
+        let leaf = ObjRef::new(16, 0);
+        let go = field(&fields(&doc), "go").obj;
+        let mut root = Dict::new();
+        root.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(parent)]));
+        if let Some(name) = root_name {
+            root.set(b"T".to_vec(), Object::String(PdfString::text(name)));
+        }
+        let root = doc.add(Object::Dict(root));
+        doc.update_dict(parent, |d| {
+            d.set(b"Parent".to_vec(), Object::Ref(root));
+            d.set(b"T".to_vec(), Object::String(PdfString::text(parent_name)));
+        })
+        .unwrap();
+        doc.update_dict(leaf, |d| d.set(b"T".to_vec(), Object::String(PdfString::text(leaf_name)))).unwrap();
+        doc.update_dict(ObjRef::new(4, 0), |d| {
+            let mut roots = d.get(b"Fields").unwrap().as_array().unwrap().clone();
+            for entry in &mut roots {
+                if entry.as_ref() == Some(parent) {
+                    *entry = Object::Ref(root);
+                }
+            }
+            d.set(b"Fields".to_vec(), Object::Array(roots));
+        })
+        .unwrap();
+        for exclude in [false, true] {
+            let mut action = Dict::new();
+            action.set(b"S".to_vec(), Object::name("ResetForm"));
+            action.set(b"Fields".to_vec(), Object::Array(vec![Object::Ref(leaf)]));
+            action.set(b"Flags".to_vec(), Object::Int(i64::from(exclude)));
+            doc.update_dict(go, |d| d.set(b"A".to_vec(), Object::Dict(action))).unwrap();
+            let expected = Some(af::ButtonAction::Reset { fields: vec![expected_name.into()], exclude });
+            assert_eq!(field(&fields(&doc), "go").button, expected);
+            assert_eq!(fields(&doc).iter().find(|f| f.obj == leaf).unwrap().name, expected_name);
+            let saved = reopen(&doc);
+            assert_eq!(field(&fields(&saved), "go").button, expected);
+            assert_eq!(fields(&saved).iter().find(|f| f.obj == leaf).unwrap().name, expected_name);
+        }
+        // Hide uses the same qualified-name helper and must retain the imported spelling.
+        let mut hide = Dict::new();
+        hide.set(b"S".to_vec(), Object::name("Hide"));
+        hide.set(b"T".to_vec(), Object::Ref(leaf));
+        doc.update_dict(go, |d| d.set(b"A".to_vec(), Object::Dict(hide))).unwrap();
+        let expected = Some(af::ButtonAction::ShowHide { fields: vec![expected_name.into()], hide: true });
+        assert_eq!(field(&fields(&doc), "go").button, expected);
+        assert_eq!(field(&fields(&reopen(&doc)), "go").button, expected);
+    }
+    let mut doc = fixture();
+    let unnamed = doc.add(Object::Dict(Dict::new()));
+    assert_eq!(qualified_name(&doc, unnamed), None, "absence of every partial name stays distinct from explicit empty names");
 }
 
 #[test]
