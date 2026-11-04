@@ -77,7 +77,7 @@ fn scripts_change_other_fields_and_their_properties() {
 fn push_button_caption_methods_read_write_and_reject_other_faces() {
     let mut button = FieldState::new("go", FieldType::Button, vec![]);
     button.caption = Some("Old".into());
-    let fields = vec![button, FieldState::new("text", FieldType::Text, vec![])];
+    let fields = vec![button, FieldState::new("blank", FieldType::Button, vec![]), FieldState::new("text", FieldType::Text, vec![])];
     let run = |script: &str| run(script, &Event::field("Mouse Up", "go", ""), &doc(), &fields, &[], Limits::default());
     let got = run("event.value = getField('go').buttonGetCaption();");
     assert_eq!(got.value, "Old");
@@ -94,6 +94,9 @@ fn push_button_caption_methods_read_write_and_reject_other_faces() {
     assert!(run("getField('go').buttonSetCaption('Bad', 1);").error.is_some());
     assert!(run("getField('text').buttonSetCaption('Bad');").error.is_some());
     assert!(run("getField('go').buttonGetCaption(1);").error.is_some());
+    let empty = run("event.value = getField('blank').buttonGetCaption();");
+    assert_eq!(empty.error, None);
+    assert_eq!(empty.value, "");
     assert!(run("getField('text').buttonGetCaption();").error.is_some());
 }
 
