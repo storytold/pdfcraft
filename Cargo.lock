@@ -6397,8 +6397,10 @@ name = "pdfcraft-filters"
 version = "0.22.0"
 dependencies = [
  "craft-pdf",
+ "hayro-jpeg2000",
  "proptest",
  "weezl 0.2.1",
+ "zune-jpeg",
 ]
 
 [[package]]
