@@ -234,6 +234,100 @@ fn view(pages: usize, layout: PageLayout, continuous: bool) -> DocView {
     DocView::new(DocId(1), &info, ViewDefaults { layout, continuous, ..Default::default() })
 }
 
+/// Delivers a raw move event to the same viewport path used by native input.
+fn viewport_wheel_event(unit: egui::MouseWheelUnit, delta: Vec2) -> egui::Event {
+    egui::Event::MouseWheel { unit, delta, phase: egui::TouchPhase::Move, modifiers: egui::Modifiers::NONE, source: egui::MouseWheelSource::Unknown }
+}
+
+/// Runs actual UI passes while explicitly discarding the unused texture output.
+fn viewport_wheel_frame(ctx: &egui::Context, view: &mut DocView, time: f64, events: Vec<egui::Event>, passes: usize, animate: bool) -> Vec<Vec2> {
+    let screen = Rect::from_min_size(Pos2::ZERO, vec2(600.0, 800.0));
+    let mut events = events;
+    events.insert(0, egui::Event::PointerMoved(screen.center()));
+    let input = egui::RawInput { screen_rect: Some(screen), time: Some(time), predicted_dt: 1.0 / 60.0, events, ..Default::default() };
+    let mut deltas = Vec::new();
+    ctx.run_ui(input, |ui| {
+        let avail = ui.max_rect();
+        assert!(ui.rect_contains_pointer(avail), "the synthetic pointer owns the viewport");
+        let wheel = read_wheel(ui, view, avail, false, false, true, animate);
+        deltas.push(wheel.precise_scroll + wheel.coarse_scroll);
+        assert_eq!(ui.input(|i| i.smooth_scroll_delta), Vec2::ZERO, "egui's wheel copy is drained on every owned pass");
+        if deltas.len() < passes {
+            ui.ctx().request_discard("exercise viewport wheel ownership across passes");
+        }
+    })
+    .drop_without_applying_deltas();
+    assert_eq!(deltas.len(), passes);
+    deltas
+}
+
+/// Fixes line distance and discard allowance independently of host preferences.
+fn viewport_wheel_context() -> egui::Context {
+    let ctx = egui::Context::default();
+    ctx.options_mut(|options| {
+        options.max_passes = std::num::NonZeroUsize::new(3).unwrap();
+        options.input_options.line_scroll_speed = 100.0;
+    });
+    ctx
+}
+
+/// A frame's admitted distance is unchanged by additional layout passes.
+#[test]
+fn viewport_wheel_discard_passes_neither_repeat_nor_advance_motion() {
+    for animate in [false, true] {
+        let (one, three) = (viewport_wheel_context(), viewport_wheel_context());
+        let (mut single_view, mut multi_view) = (view(2, PageLayout::Single, true), view(2, PageLayout::Single, true));
+        let mut total = Vec2::ZERO;
+        for frame in 0..90 {
+            let events = if frame == 0 {
+                vec![
+                    viewport_wheel_event(egui::MouseWheelUnit::Line, vec2(0.0, -1.0)),
+                    viewport_wheel_event(egui::MouseWheelUnit::Point, vec2(0.0, -7.0)),
+                ]
+            } else {
+                Vec::new()
+            };
+            let time = 1.0 + f64::from(frame) / 60.0;
+            let expected = viewport_wheel_frame(&one, &mut single_view, time, events.clone(), 1, animate);
+            let actual = viewport_wheel_frame(&three, &mut multi_view, time, events, 3, animate);
+            assert!((actual[0] - expected[0]).length() < 0.001, "frame {frame}, animations {animate}: {actual:?} versus {expected:?}");
+            assert_eq!(&actual[1..], &[Vec2::ZERO, Vec2::ZERO], "discarded passes do not spend the retained queue");
+            if frame == 0 {
+                if animate {
+                    assert!(actual[0].y < -7.0 && actual[0].y > -107.0, "fine input is direct and the whole coarse amount is eased");
+                } else {
+                    assert_eq!(actual[0], vec2(0.0, -107.0));
+                }
+            }
+            total += actual[0];
+        }
+        assert!((total.y + 107.0).abs() < 0.002, "one admitted mixed bucket preserves distance: {total:?}");
+        assert!(!multi_view.wheel_motion.has_pending());
+    }
+}
+
+/// Mixed current input survives an older same-axis queue being interrupted.
+#[test]
+fn viewport_precise_input_cancels_only_older_motion_on_its_axis() {
+    let (actual_ctx, reference_ctx) = (viewport_wheel_context(), viewport_wheel_context());
+    let (mut actual, mut reference) = (view(2, PageLayout::Single, true), view(2, PageLayout::Single, true));
+    viewport_wheel_frame(&actual_ctx, &mut actual, 1.0, vec![viewport_wheel_event(egui::MouseWheelUnit::Line, vec2(1.0, -1.0))], 1, true);
+    viewport_wheel_frame(&reference_ctx, &mut reference, 1.0, vec![viewport_wheel_event(egui::MouseWheelUnit::Line, vec2(1.0, 0.0))], 1, true);
+    let mixed =
+        vec![viewport_wheel_event(egui::MouseWheelUnit::Line, vec2(0.0, -1.0)), viewport_wheel_event(egui::MouseWheelUnit::Point, vec2(0.0, 2.0))];
+    let mut total = Vec2::ZERO;
+    for frame in 1..90 {
+        let events = if frame == 1 { mixed.clone() } else { Vec::new() };
+        let time = 1.0 + f64::from(frame) / 60.0;
+        let output = viewport_wheel_frame(&actual_ctx, &mut actual, time, events.clone(), 3, true)[0];
+        let expected = viewport_wheel_frame(&reference_ctx, &mut reference, time, events, 1, true)[0];
+        assert!((output - expected).length() < 0.001, "older y motion is canceled, x motion and new coarse input survive");
+        total += output;
+    }
+    assert!(total.x > 0.0, "the untouched x tail continues");
+    assert!((total.y + 98.0).abs() < 0.002, "only the new y bucket is admitted: {total:?}");
+}
+
 fn history_search_view() -> DocView {
     let mut v = view(5, PageLayout::Single, true);
     v.texts.insert(
@@ -2264,4 +2358,25 @@ fn image_handles_account_for_document_and_view_rotation() {
             }
         }
     }
+}
+
+/// Cancelling the pages' pointer gestures (Escape, automation's cancel) lets go of a
+/// camera corner being dragged: the quadrilateral stays, and no corner follows the pointer.
+#[test]
+fn cancelling_pointer_gestures_lets_go_of_a_camera_corner() {
+    let mut v = view(1, PageLayout::Single, true);
+    v.camera = Some(crate::camera_ui::CameraQuad { grab: Some(2), ..crate::camera_ui::CameraQuad::inset(0, 300.0, 400.0) });
+    v.cancel_pointer_gestures();
+    assert_eq!(v.camera.map(|q| q.grab), Some(None));
+}
+
+/// A camera corner at the page's edge is hit on the page only: a press off the page is no page's,
+/// so its grab cursor does not show there.
+#[test]
+fn a_camera_corner_at_the_page_edge_is_hit_on_the_page_only() {
+    let mut v = view(1, PageLayout::Single, true);
+    v.camera = Some(crate::camera_ui::CameraQuad { page: 0, corners: [[0.0, 0.0], [300.0, 0.0], [300.0, 400.0], [0.0, 400.0]], grab: None });
+    let xf = PageXform { rect: Rect::from_min_size(pos2(10.0, 20.0), egui::vec2(300.0, 400.0)), rot: 0, pw: 300.0, ph: 400.0 };
+    assert!(crate::camera_ui::hit(&xf, 0, &v, pos2(14.0, 24.0)).is_some(), "on the page");
+    assert!(crate::camera_ui::hit(&xf, 0, &v, pos2(6.0, 16.0)).is_none(), "just off it");
 }
