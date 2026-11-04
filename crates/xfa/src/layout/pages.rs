@@ -1,5 +1,10 @@
+#[cfg(test)]
+use super::EMBED_COPIED;
 use super::items::{Item, Page, UNDERLINE_DROP};
-use super::*;
+use super::{
+    Block, Border, Ctx, Cursor, FlowMark, Font, Frame, Layouter, MAX_ITEMS, MAX_MEASURES, MAX_PAGES, PAGE_COUNT_MARK, PageRole, Para, Rc, Rect,
+    SomIndices, XfaError, text,
+};
 
 impl Layouter<'_> {
     pub(super) fn warn_once(&mut self, msg: impl Into<String>) {
