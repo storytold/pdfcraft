@@ -108,6 +108,11 @@ impl Allowances {
     fn new() -> Self {
         Self { scripts: crate::script_budget(), text: Allowance::new(MAX_TEXT_BYTES) }
     }
+
+    /// Copies refused so far, of text and of scripts.
+    fn refusals(&self) -> usize {
+        self.text.refusals().saturating_add(self.scripts.refusals())
+    }
 }
 
 /// The text of a string, or of each string an array lists until `text` is spent.
@@ -174,7 +179,12 @@ pub fn field_actions(doc: &Document, name: &str) -> Result<Vec<(Trigger, FieldAc
     let all = fields(doc);
     let f = all.iter().find(|f| f.name == name).ok_or_else(|| FormError::NoSuchField(name.into()))?;
     let pages = crate::page_refs(doc);
-    let Some(w) = f.widgets.first() else { return Ok(Vec::new()) };
+    Ok(widget_actions(doc, f, &pages))
+}
+
+/// [`field_actions`] of field `f`, read within allowances of their own.
+fn widget_actions(doc: &Document, f: &crate::Field, pages: &[pdfcraft_cos::ObjRef]) -> Vec<(Trigger, FieldAction)> {
+    let Some(w) = f.widgets.first() else { return Vec::new() };
     let wd = doc.get(w.obj).as_dict().cloned().unwrap_or_default();
     let aa = wd.get(b"AA").map(|a| doc.resolve(a)).and_then(|a| a.as_dict().cloned()).unwrap_or_default();
     let mut out = Vec::new();
@@ -185,11 +195,11 @@ pub fn field_actions(doc: &Document, name: &str) -> Result<Vec<(Trigger, FieldAc
             Some(k) => aa.get(k).cloned(),
         };
         // An action chain (/Next) counts as its first action here.
-        if let Some(a) = o.and_then(|o| read(doc, &o, &pages, &mut allowances)) {
+        if let Some(a) = o.and_then(|o| read(doc, &o, pages, &mut allowances)) {
             out.push((t, a));
         }
     }
-    Ok(out)
+    out
 }
 
 /// Most chained actions [`field_action_chains`] walks per trigger.
@@ -299,6 +309,8 @@ struct TriggerUpdate<'a> {
     trigger: Trigger,
     replacement: Option<&'a FieldAction>,
     previous: Option<Object>,
+    /// What the list the replacement came from had for the trigger: the first widget's action.
+    listed: Option<&'a FieldAction>,
 }
 
 fn replace_trigger(
@@ -309,9 +321,17 @@ fn replace_trigger(
     aa: &mut Dict,
     a_entry: &mut Option<Object>,
 ) -> Result<(), FormError> {
-    let TriggerUpdate { trigger: t, replacement: new, previous: old } = update;
-    let old_action = old.as_ref().and_then(|o| read(doc, o, pages, allowances));
-    if new.is_some() && new == old_action.as_ref() {
+    let TriggerUpdate { trigger: t, replacement: new, previous: old, listed } = update;
+    // An old action is kept when it reads as the new one. One the allowances can't read is
+    // compared with the list instead: the user left that trigger as it was, so it is kept, or
+    // changed it, so it is replaced. Written again unchanged, it would lose what `write` doesn't
+    // know (a reset's or a submission's `/Flags`).
+    let keep = new.is_some() && {
+        let refusals = allowances.refusals();
+        let old_action = old.as_ref().and_then(|o| read(doc, o, pages, allowances));
+        if allowances.refusals() == refusals { new == old_action.as_ref() } else { new == listed }
+    };
+    if keep {
         return Ok(());
     }
     // The list shows a trigger's first action: replacing it keeps the ones chained after it.
@@ -340,11 +360,14 @@ fn replace_trigger(
 
 /// Replace field `name`'s actions (on every widget) with `actions`; triggers not listed lose
 /// theirs. `Other` actions, and actions that read the same as before, are left as they are (with
-/// their chain and the keys this module doesn't read); a replaced action keeps its chain.
+/// their chain and the keys this module doesn't read); a replaced action keeps its chain. An
+/// action too long to read within the operation's allowances is left as it is when `actions`
+/// has for its trigger what [`field_actions`] reads, and replaced when it has something else.
 pub fn set_field_actions(doc: &mut Document, name: &str, actions: &[(Trigger, FieldAction)]) -> Result<(), FormError> {
     let all = fields(doc);
     let f = all.iter().find(|f| f.name == name).ok_or_else(|| FormError::NoSuchField(name.into()))?.clone();
     let pages = crate::page_refs(doc);
+    let listed = widget_actions(doc, &f, &pages);
     let mut allowances = Allowances::new();
     for w in &f.widgets {
         let wd = doc.get(w.obj).as_dict().cloned().unwrap_or_default();
@@ -359,7 +382,15 @@ pub fn set_field_actions(doc: &mut Document, name: &str, actions: &[(Trigger, Fi
                 None => wd.get(b"A").cloned().or_else(|| aa.get(b"U").cloned()),
                 Some(k) => aa.get(k).cloned(),
             };
-            replace_trigger(doc, &pages, &mut allowances, TriggerUpdate { trigger: t, replacement: new, previous: old }, &mut aa, &mut a_entry)?;
+            let listed = listed.iter().find(|(x, _)| *x == t).map(|(_, a)| a);
+            replace_trigger(
+                doc,
+                &pages,
+                &mut allowances,
+                TriggerUpdate { trigger: t, replacement: new, previous: old, listed },
+                &mut aa,
+                &mut a_entry,
+            )?;
         }
         doc.update_dict(w.obj, |d| {
             match &a_entry {

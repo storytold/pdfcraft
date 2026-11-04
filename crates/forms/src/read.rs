@@ -295,7 +295,13 @@ impl Allowance {
         let mut budget = DecodeBudget::new(self.left, 0);
         let data = budget.decode(s).ok();
         self.left = budget.remaining();
-        let data = data?;
+        let Some(data) = data else {
+            // A decode the allowance stopped counts as refused, one corrupt data stopped doesn't.
+            if self.left == 0 {
+                self.refusals = self.refusals.saturating_add(1);
+            }
+            return None;
+        };
         let decoded = data.len();
         let t = text(data)?;
         match self.left.checked_sub(t.len().saturating_sub(decoded)) {

@@ -3973,6 +3973,133 @@ fn an_action_whose_text_does_not_fit_survives_a_round_trip() {
     assert_eq!(after.get(b"AA"), before.get(b"AA"));
 }
 
+/// Writing a field's actions back leaves the actions its 300 widgets share as they are: each is
+/// read once, not until the allowances run out, after which it would be written again without
+/// the keys `write` doesn't know (a reset's `/Flags`).
+#[test]
+fn actions_widgets_share_are_kept_when_the_list_is_written_back() {
+    let n = 300;
+    let kids: String = (0..n).map(|i| format!("{} 0 R ", i + 8)).collect();
+    let mut objs = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [7 0 R] >> >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R >>".into(),
+        format!("<< /S /URI /URI {} 0 R >>", 8 + n),
+        "<< /S /ResetForm /Fields [(a)] /Flags 1 >>".into(),
+        format!("<< /S /JavaScript /JS {} 0 R >>", 9 + n),
+        format!("<< /FT /Tx /T (f) /Kids [{kids}] >>"),
+    ];
+    objs.extend(
+        (0..n).map(|_| "<< /Type /Annot /Subtype /Widget /Rect [0 0 10 10] /Parent 7 0 R /A 4 0 R /AA << /D 5 0 R /X 6 0 R >> >>".to_string()),
+    );
+    objs.push(long_string());
+    objs.push(long_string());
+    let mut doc = document(&objs);
+    let mut acts = field_actions(&doc, "f").unwrap();
+    acts.push((Trigger::OnFocus, FieldAction::Named("Print".into())));
+    set_field_actions(&mut doc, "f", &acts).unwrap();
+    for i in 0..n {
+        let w = doc.get(ObjRef::new(i as u32 + 8, 0));
+        let d = w.as_dict().unwrap();
+        let aa = d.get(b"AA").and_then(Object::as_dict).unwrap();
+        assert_eq!(d.get(b"A"), Some(&Object::Ref(ObjRef::new(4, 0))), "widget {i}'s link");
+        assert_eq!(aa.get(b"D"), Some(&Object::Ref(ObjRef::new(5, 0))), "widget {i}'s reset");
+        assert_eq!(aa.get(b"X"), Some(&Object::Ref(ObjRef::new(6, 0))), "widget {i}'s script");
+        assert!(aa.contains(b"Fo"), "widget {i} gets the new action");
+    }
+}
+
+/// Actions of a widget's own that the allowances can no longer read are kept when the list is
+/// written back: unknown isn't different, and writing them again would drop a reset's `/Flags`
+/// and a script's keys `write` doesn't know, from the widget where the scripts' allowance runs
+/// out on.
+#[test]
+fn an_action_too_long_to_read_is_kept_when_the_list_is_written_back() {
+    let n = 300;
+    let kids: String = (0..n).map(|i| format!("{} 0 R ", i + 5)).collect();
+    let mut objs = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] >> >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R >>".into(),
+        format!("<< /FT /Tx /T (f) /Kids [{kids}] >>"),
+    ];
+    let own = format!(
+        "/A << /S /URI /URI {} 0 R >> /AA << /D << /S /ResetForm /Fields [(a)] /Flags 1 >> /X << /S /JavaScript /JS {} 0 R /Extra 1 >> >>",
+        5 + n,
+        6 + n
+    );
+    objs.extend((0..n).map(|_| format!("<< /Type /Annot /Subtype /Widget /Rect [0 0 10 10] /Parent 4 0 R {own} >>")));
+    objs.push(long_string());
+    objs.push(raw_stream(&"x".repeat(1 << 20)));
+    let mut doc = document(&objs);
+    let acts = field_actions(&doc, "f").unwrap();
+    set_field_actions(&mut doc, "f", &acts).unwrap();
+    for i in 0..n {
+        let w = doc.get(ObjRef::new(i as u32 + 5, 0));
+        let aa = w.as_dict().and_then(|d| d.get(b"AA")?.as_dict().cloned()).unwrap();
+        let key = |trigger: &[u8], key: &[u8]| aa.get(trigger).and_then(|a| a.as_dict()?.get(key).cloned());
+        assert_eq!(key(b"D", b"Flags"), Some(Object::Int(1)), "widget {i}'s reset keeps its /Flags");
+        assert_eq!(key(b"X", b"Extra"), Some(Object::Int(1)), "widget {i}'s script keeps its keys");
+    }
+}
+
+/// An action the allowances can't read is replaced when the list changes it: on one widget whose
+/// reset, too long to read, the user turns into a link, and on 300 widgets each with a link of its
+/// own the user changes, past the allowance as well as before it.
+#[test]
+fn an_action_too_long_to_read_is_replaced_when_the_list_changes_it() {
+    let link = || FieldAction::Uri("https://example.org".into());
+    let mut doc = document(&[
+        "<< /Type /Catalog /AcroForm << /Fields [3 0 R] >> >>".into(),
+        long_string(),
+        format!("<< /FT /Tx /T (f) /Rect [0 0 10 10] /A << /S /ResetForm /Fields [{}] >> >>", "2 0 R ".repeat(300)),
+    ]);
+    set_field_actions(&mut doc, "f", &[(Trigger::MouseUp, link())]).unwrap();
+    assert_eq!(field_actions(&doc, "f").unwrap(), [(Trigger::MouseUp, link())]);
+    let n = 300;
+    let kids: String = (0..n).map(|i| format!("{} 0 R ", i + 5)).collect();
+    let mut objs = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] >> >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R >>".into(),
+        format!("<< /FT /Tx /T (f) /Kids [{kids}] >>"),
+    ];
+    objs.extend((0..n).map(|_| format!("<< /Type /Annot /Subtype /Widget /Rect [0 0 10 10] /Parent 4 0 R /A << /S /URI /URI {} 0 R >> >>", 5 + n)));
+    objs.push(long_string());
+    let mut doc = document(&objs);
+    set_field_actions(&mut doc, "f", &[(Trigger::MouseUp, link())]).unwrap();
+    for i in 0..n {
+        let w = doc.get(ObjRef::new(i as u32 + 5, 0));
+        let a = w.as_dict().and_then(|d| d.get(b"A").cloned()).map(|a| doc.resolve(&a));
+        let uri = a.as_deref().and_then(|a| a.as_dict()?.get(b"URI")?.as_string().map(|s| s.to_text()));
+        assert_eq!(uri.as_deref(), Some("https://example.org"), "widget {i}");
+    }
+}
+
+/// An action 300 widgets share, changed in the list, is replaced on every widget, past the
+/// allowances as well as before them.
+#[test]
+fn a_shared_action_changed_is_replaced_on_every_widget() {
+    let n = 300;
+    let kids: String = (0..n).map(|i| format!("{} 0 R ", i + 6)).collect();
+    let mut objs = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R] >> >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R >>".into(),
+        format!("<< /S /URI /URI {} 0 R >>", 6 + n),
+        format!("<< /FT /Tx /T (f) /Kids [{kids}] >>"),
+    ];
+    objs.extend((0..n).map(|_| "<< /Type /Annot /Subtype /Widget /Rect [0 0 10 10] /Parent 5 0 R /A 4 0 R >>".to_string()));
+    objs.push(long_string());
+    let mut doc = document(&objs);
+    set_field_actions(&mut doc, "f", &[(Trigger::MouseUp, FieldAction::Named("Print".into()))]).unwrap();
+    for i in 0..n {
+        let w = doc.get(ObjRef::new(i as u32 + 6, 0));
+        let a = w.as_dict().and_then(|d| d.get(b"A").cloned()).map(|a| doc.resolve(&a));
+        assert_eq!(a.as_deref().and_then(|a| a.as_dict()?.name(b"N")), Some(&b"Print"[..]), "widget {i}");
+    }
+}
+
 /// A field's `/DA`, tooltip, options, value and calculation named through a reference to a
 /// reference are read, as `Document::resolve` follows them.
 #[test]
