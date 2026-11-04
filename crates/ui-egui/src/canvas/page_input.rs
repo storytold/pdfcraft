@@ -193,6 +193,9 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
     // pictures, each told what the press is to this page. Edit text ignores input while a dialog,
     // the palette, another window or another tab has it (`gate`), as before.
     let gate = !(tool == QuickTool::EditText && view.objects.input_blocked());
+    if tool == QuickTool::EditText && can_modify && gate {
+        crate::edit_text_ui::picture_keys(ui.ctx(), view, i, &images, ptr.any_down);
+    }
     let on_objects = tool == QuickTool::EditText && can_modify && crate::object_ui::page_input(cx, press, view);
     let picks_up = matches!(tool, QuickTool::Select | QuickTool::AddText | QuickTool::EditText);
     let ccx = crate::content_ui::ContentCx {

@@ -467,24 +467,24 @@ fn apply_crop_mode(view: &mut DocView, image: &pdfcraft_engine::PageImage) {
     }
 }
 
-/// The selected picture's keys, from the app's own (none reach it under a dialog): Delete or
-/// Backspace removes it, wherever the pointer is, unless it is being dragged or cropped. In crop
-/// mode Enter applies the crop and Escape leaves it, though not while a button is down (`held`):
-/// Escape then cancels the press the pages hold, if any (`canvas::cancel_on_escape`), and crop mode
-/// stays. Nothing while a text field has the keyboard.
-pub(crate) fn picture_keys(ctx: &egui::Context, view: &mut DocView, doc: &pdfcraft_engine::Document, held: bool) {
+/// The keys of the picture selected on `page`, a page being drawn, so the keys never reach a picture
+/// off the screen, and the page grid and the Pages panel have had theirs. Delete or Backspace removes
+/// it, wherever on the pages the pointer is, unless it is being dragged or cropped. In crop mode
+/// Enter applies the crop and Escape leaves it, though not while a button is down (`held`): Escape
+/// then cancels the press the pages hold, if any (`canvas::cancel_on_escape`), and crop mode stays.
+/// Nothing while a text field has the keyboard.
+pub(crate) fn picture_keys(ctx: &egui::Context, view: &mut DocView, page: usize, images: &[pdfcraft_engine::PageImage], held: bool) {
     if ctx.egui_wants_keyboard_input() {
         return;
     }
-    let Some(s) = view.image_selection.as_ref() else { return };
-    let (page, index) = (s.page, s.index);
+    let Some(s) = view.image_selection.as_ref().filter(|s| s.page == page) else { return };
+    let index = s.index;
     let key = |k: egui::Key| ctx.input(|i| i.key_pressed(k));
-    // The page's pictures are read only when a key asks for one.
-    let image = || doc.page_images(page).into_iter().nth(index);
+    let image = images.get(index);
     if s.crop.is_some() {
         if key(egui::Key::Enter) {
-            if let Some(image) = image() {
-                apply_crop_mode(view, &image);
+            if let Some(image) = image {
+                apply_crop_mode(view, image);
             }
         } else if !held
             && key(egui::Key::Escape)
@@ -492,9 +492,8 @@ pub(crate) fn picture_keys(ctx: &egui::Context, view: &mut DocView, doc: &pdfcra
         {
             s.crop = None;
         }
-    } else if !s.dragging() && !s.turning && (key(egui::Key::Delete) || key(egui::Key::Backspace)) && image().is_some() {
-        // The key is the picture's: added content's own Delete runs later this frame, after this
-        // edit has applied.
+    } else if !s.dragging() && !s.turning && (key(egui::Key::Delete) || key(egui::Key::Backspace)) && image.is_some() {
+        // The key is the picture's: added content's own Delete runs later this frame.
         ctx.input_mut(|i| {
             i.consume_key(egui::Modifiers::NONE, egui::Key::Delete);
             i.consume_key(egui::Modifiers::NONE, egui::Key::Backspace);

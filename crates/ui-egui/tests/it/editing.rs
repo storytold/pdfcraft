@@ -7377,6 +7377,72 @@ fn a_right_click_on_an_open_paragraphs_frame_over_a_picture_selects_the_picture(
     assert!(h.query_by_label("Flip horizontal").is_some(), "its menu opens");
 }
 
+/// In the page grid, Delete deletes the page chosen there. The picture selected before the grid
+/// opened is not on screen, and stays.
+#[test]
+fn delete_in_the_page_grid_deletes_the_page_and_not_the_hidden_picture() {
+    let mut h = picture_pages(false);
+    let id = h.state().views[0].id;
+    let pictures = h.state().session.get(id).unwrap().page_images(0).len();
+    let pages = h.state().session.get(id).unwrap().info.pages.len();
+    assert!(h.state_mut().execute("page.organize"));
+    h.run_steps(4);
+    h.get_by_label("Select page 2").click();
+    h.run_steps(2);
+    h.key_press(egui::Key::Delete);
+    h.run_steps(4);
+    let doc = h.state().session.get(id).unwrap();
+    assert_eq!(doc.info.pages.len(), pages - 1, "the page chosen in the grid is deleted");
+    assert_eq!(doc.page_images(0).len(), pictures, "the picture stays");
+}
+
+/// With the picture's page not on screen, its keys do nothing: Delete removes no picture the reader
+/// can't see, and Enter applies no crop.
+#[test]
+fn a_selected_pictures_keys_wait_for_its_page_to_be_on_screen() {
+    use pdfcraft_ui_egui::canvas::PageLayout;
+    for (crop, key) in [(false, egui::Key::Delete), (true, egui::Key::Enter)] {
+        let mut h = picture_pages(crop);
+        let id = h.state().views[0].id;
+        let before = h.state().session.get(id).unwrap().page_images(0);
+        if crop {
+            let keep = before[0].visible_rect.unwrap();
+            let half = [keep[0], keep[1], (keep[0] + keep[2]) / 2.0, keep[3]];
+            h.state_mut().views[0].image_selection.as_mut().unwrap().crop.as_mut().unwrap().keep = half;
+        }
+        h.state_mut().views[0].layout = PageLayout::Single;
+        h.state_mut().views[0].continuous = false;
+        h.state_mut().views[0].go_to_page(1);
+        h.run_steps(4);
+        assert!(h.state().views[0].page_screen_rect(0).is_none(), "page 1 is off the screen");
+        h.key_press(key);
+        h.run_steps(4);
+        let after = h.state().session.get(id).unwrap().page_images(0);
+        assert_eq!(after.len(), before.len(), "the picture stays");
+        assert_eq!(after[0].visible_rect, before[0].visible_rect, "and is not cropped");
+    }
+}
+
+/// With the pointer on the Pages panel, Delete is the panel's: a page goes, though a picture is
+/// selected on the pages.
+#[test]
+fn delete_with_the_pointer_on_the_pages_panel_deletes_a_page() {
+    let mut h = picture_pages(false);
+    h.state_mut().set_option("panel", "pages").unwrap();
+    h.run_steps(4);
+    let id = h.state().views[0].id;
+    let pages = h.state().session.get(id).unwrap().info.pages.len();
+    assert!(h.state().views[0].image_selection.is_some(), "the picture is selected");
+    assert!(h.state().views[0].page_screen_rect(0).is_some(), "on a page on screen");
+    let viewport = h.state().views[0].viewport_rect();
+    assert!(viewport.right() < 1300.0, "the panel lies right of the pages: {viewport:?}");
+    h.hover_at(egui::pos2(viewport.right() + 60.0, viewport.center().y));
+    h.run_steps(2);
+    h.key_press(egui::Key::Delete);
+    h.run_steps(4);
+    assert_eq!(h.state().session.get(id).unwrap().info.pages.len(), pages - 1, "a page goes");
+}
+
 /// In crop mode, a right-click on another picture selects it for its menu, as without crop mode. It
 /// went to crop mode's whole-page hit, which unselected every picture.
 #[test]
