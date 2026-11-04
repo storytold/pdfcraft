@@ -172,6 +172,8 @@ fn editing_a_saved_custom_stamp_through_its_palette_updates_it_and_cancel_discar
     let first_id = h.state().custom_stamps[0].id;
     let second_id = h.state().custom_stamps[1].id;
 
+    support::outside_menus(&h, "Edit").click();
+    h.run_steps(3);
     h.get_by_label("seal").click_secondary();
     h.run_steps(2);
     h.get_by_label("Rename / change category…").click();
