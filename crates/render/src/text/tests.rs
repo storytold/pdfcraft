@@ -1966,7 +1966,6 @@ fn text_outside_the_crop_box_is_clipped() {
     }
 }
 
-
 /// A Type 3 font set at 58 pt whose glyphs are 6 pt high (bitmap fonts do this: the font size
 /// is nominal). The glyph box was the 1 em box, 58 pt high, so lines 8.4 pt apart overlapped
 /// and their glyphs were mixed into one line.
