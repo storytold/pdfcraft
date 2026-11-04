@@ -212,12 +212,21 @@ impl PrintDraft {
 
     /// Auto-select the printer's configured default paper (from DEVMODE / driver settings).
     pub fn auto_select_default_paper(&mut self) {
-        if let Some(ref printer) = self.printer
-            && let Some((name, size)) = spool::printer_default_paper(printer)
-        {
-            let overridden = self.paper_overridden;
-            self.apply_driver_paper(name, size);
-            self.paper_overridden = overridden;
+        self.auto_select_default_paper_with(None);
+    }
+
+    /// Auto-select the printer's default paper using an optional source (or DEVMODE / driver settings).
+    pub fn auto_select_default_paper_with(&mut self, source: Option<&super::DefaultPaperSource>) {
+        if self.handling == Handling::Label {
+            return;
+        }
+        if let Some(ref printer) = self.printer {
+            let detected = if let Some(source) = source { source(printer) } else { spool::printer_default_paper(printer) };
+            if let Some((name, size)) = detected {
+                let overridden = self.paper_overridden;
+                self.apply_driver_paper(name, size);
+                self.paper_overridden = overridden;
+            }
         }
     }
 

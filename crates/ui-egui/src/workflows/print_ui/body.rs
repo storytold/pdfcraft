@@ -87,6 +87,7 @@ pub(crate) fn body(
     t: &Tokens,
     sizes: &[(f64, f64)],
     labels: &[String],
+    default_paper_source: Option<&super::DefaultPaperSource>,
     thumb: &mut dyn FnMut(usize) -> Option<egui::TextureId>,
 ) -> (bool, bool) {
     ui.set_width(820.0);
@@ -141,6 +142,7 @@ pub(crate) fn body(
                         && let Some(p) = d.printer.clone()
                     {
                         if spool::HAS_PRINTER_PREFERENCES {
+                            d.driver_error = None;
                             match spool::show_printer_properties(&p) {
                                 Ok(Some((name, size))) => {
                                     d.apply_driver_paper(name, size);
@@ -166,7 +168,7 @@ pub(crate) fn body(
                     d.driver_error = None;
                     d.update_printer_papers();
                     if !d.paper_overridden {
-                        d.auto_select_default_paper();
+                        d.auto_select_default_paper_with(default_paper_source);
                     }
                 }
                 ui.end_row();
@@ -236,6 +238,7 @@ pub(crate) fn body(
                     if page_setup.clicked()
                         && let Some(p) = d.printer.clone()
                     {
+                        d.driver_error = None;
                         match spool::show_printer_properties(&p) {
                             Ok(Some((name, size))) => {
                                 d.apply_driver_paper(name, size);

@@ -33,6 +33,10 @@ pub type PrinterSource = std::sync::Arc<dyn Fn() -> Vec<spool::Printer> + Send +
 /// UI language) unless a test stands in. Called off the GUI thread.
 pub type OptionsSource = std::sync::Arc<dyn Fn(&str) -> Vec<spool::PrinterOption> + Send + Sync>;
 
+/// Where a printer's configured default paper comes from: the spooler's DEVMODE / driver settings
+/// unless a test stands in.
+pub type DefaultPaperSource = std::sync::Arc<dyn Fn(&str) -> Option<(String, (f64, f64))> + Send + Sync>;
+
 /// The system spooler's printers, as the desktop app's [`PrinterSource`].
 pub fn system_printers() -> PrinterSource {
     std::sync::Arc::new(spool::printers)
@@ -173,9 +177,13 @@ impl PdfCraftApp {
         };
         self.print_draft.update_printer_papers();
         if !self.print_draft.paper_overridden {
-            self.print_draft.auto_select_default_paper();
+            self.auto_select_default_paper();
         }
         self.dialog = Some(crate::Dialog::Print);
+    }
+
+    pub(crate) fn auto_select_default_paper(&mut self) {
+        self.print_draft.auto_select_default_paper_with(self.default_paper_source.as_ref());
     }
 
     /// Label printing: find each printed page's printed area (a quick low-resolution render, as
@@ -319,7 +327,7 @@ impl PdfCraftApp {
                         d.printer = default_printer(&printers);
                         d.update_printer_papers();
                         if !d.paper_overridden {
-                            d.auto_select_default_paper();
+                            d.auto_select_default_paper_with(self.default_paper_source.as_ref());
                         }
                     }
                     d.printers = printers;

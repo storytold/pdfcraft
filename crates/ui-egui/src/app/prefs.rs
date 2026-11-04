@@ -293,11 +293,11 @@ impl PdfCraftApp {
                 });
             if let Some(paper) = matched_pos {
                 self.print_draft.paper = paper;
-                self.print_draft.paper_overridden = v.get("print_paper_overridden").and_then(serde_json::Value::as_bool).unwrap_or(true);
+                self.print_draft.paper_overridden = v.get("print_paper_overridden").and_then(serde_json::Value::as_bool).unwrap_or(false);
             } else if let Some(size) = saved_size {
                 self.print_draft.papers.push((name.to_string(), size));
                 self.print_draft.paper = self.print_draft.papers.len() - 1;
-                self.print_draft.paper_overridden = v.get("print_paper_overridden").and_then(serde_json::Value::as_bool).unwrap_or(true);
+                self.print_draft.paper_overridden = v.get("print_paper_overridden").and_then(serde_json::Value::as_bool).unwrap_or(false);
             }
         }
         if let Some(on) = v["highlight_fields"].as_bool() {

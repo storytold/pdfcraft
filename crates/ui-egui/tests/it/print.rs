@@ -805,6 +805,19 @@ fn paper_choice_survives_cancel_and_settings_restore() {
     let mut restored_default = PdfCraftApp::new();
     restored_default.restore(&default_saved);
     assert!(!restored_default.print_draft.paper_overridden);
+
+    // Opening print with a printer default paper selects that paper when paper_overridden is false.
+    let mut default_h = harness();
+    use pdfcraft_engine::print::spool;
+    use std::sync::Arc;
+    default_h.state_mut().printer_source =
+        Some(Arc::new(|| vec![spool::Printer { name: "Office Printer".into(), default: true, two_sided: None, description: String::new() }]));
+    default_h.state_mut().default_paper_source =
+        Some(Arc::new(|printer: &str| if printer == "Office Printer" { Some(("A4".into(), (595.28, 841.89))) } else { None }));
+    assert!(default_h.state_mut().execute("print.dialog"));
+    default_h.run_steps(3);
+    assert_eq!(default_h.state().print_draft.paper, a4);
+    assert!(!default_h.state().print_draft.paper_overridden);
     let mut restarted = harness_with_settings(Some(saved));
     assert!(restarted.state_mut().execute("print.dialog"));
     restarted.run_steps(3);
@@ -832,6 +845,7 @@ fn paper_restore_accepts_canonical_names_and_ignores_invalid_settings() {
         let mut app = PdfCraftApp::new();
         app.restore(&serde_json::json!({"print_paper": name}).to_string());
         assert_eq!(app.print_draft.paper, index);
+        assert!(!app.print_draft.paper_overridden);
         assert_eq!(serde_json::from_str::<serde_json::Value>(&app.persist()).unwrap()["print_paper"], *name);
     }
     for invalid in [
@@ -864,10 +878,48 @@ fn paper_restore_accepts_canonical_names_and_ignores_invalid_settings() {
 }
 
 #[test]
+fn legacy_settings_restore_unsets_override_and_open_selects_printer_default() {
+    use pdfcraft_engine::print::{PAPERS, spool};
+    use std::sync::Arc;
+    let letter = PAPERS.iter().position(|(name, _)| *name == "US Letter").unwrap();
+    let a4 = PAPERS.iter().position(|(name, _)| *name == "A4").unwrap();
+    let mut h = harness();
+    let legacy = serde_json::json!({
+        "print_paper": "US Letter",
+    })
+    .to_string();
+    h.state_mut().restore(&legacy);
+    assert_eq!(h.state().print_draft.paper, letter);
+    assert!(!h.state().print_draft.paper_overridden, "legacy settings restore leaves paper_overridden as false");
+
+    h.state_mut().printer_source =
+        Some(Arc::new(|| vec![spool::Printer { name: "Office Printer".into(), default: true, two_sided: None, description: String::new() }]));
+    h.state_mut().default_paper_source =
+        Some(Arc::new(|printer: &str| if printer == "Office Printer" { Some(("A4".into(), (595.28, 841.89))) } else { None }));
+    assert!(h.state_mut().execute("print.dialog"));
+    h.run_steps(3);
+    assert_eq!(h.state().print_draft.paper, a4);
+    assert!(!h.state().print_draft.paper_overridden);
+}
+
+#[test]
+fn auto_select_default_paper_leaves_label_stock_unchanged() {
+    let mut draft = pdfcraft_ui_egui::PrintDraft {
+        printer: Some("Office Printer".into()),
+        handling: pdfcraft_ui_egui::PrintHandling::Label,
+        paper: pdfcraft_engine::print::LABEL_PAPER,
+        ..Default::default()
+    };
+    let source: pdfcraft_ui_egui::DefaultPaperSource = std::sync::Arc::new(move |_| Some(("A4".into(), (595.28, 841.89))));
+    draft.auto_select_default_paper_with(Some(&source));
+    assert_eq!(draft.paper, pdfcraft_engine::print::LABEL_PAPER);
+}
+
+#[test]
 fn restored_paper_keeps_preview_and_saved_sheet_dimensions() {
     use pdfcraft_engine::print::{self, PAPERS};
     let a4 = PAPERS.iter().find(|(name, _)| *name == "A4").unwrap().1;
-    let mut h = harness_with_settings(Some(r#"{"print_paper":"A4"}"#.into()));
+    let mut h = harness_with_settings(Some(r#"{"print_paper":"A4","print_paper_overridden":true}"#.into()));
     assert!(h.state_mut().execute("print.dialog"));
     h.run_steps(3);
     h.get_by_value("A4");
