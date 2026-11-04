@@ -248,14 +248,8 @@ pub(crate) fn console_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens)
         });
     });
     ui.add_space(6.0);
-    let input = ui.add(
-        crate::widgets::block(&mut app.js_console.input)
-            .code_editor()
-            .desired_rows(4)
-            .desired_width(f32::INFINITY)
-            .hint_text(tl!("JavaScript, e.g. getField(\"total\").value"))
-            .id_salt("js-console-input"),
-    );
+    let hint = tl!("JavaScript, e.g. getField(\"total\").value");
+    let input = crate::widgets::script_editor(ui, &mut app.js_console.input, "js-console-input", 4, f32::INFINITY, Some(hint));
     let run_key = input.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter) && i.modifiers.command);
     ui.add_space(8.0);
     match buttons(ui, "Run", &["Close", "Clear"]).as_deref() {
@@ -275,8 +269,8 @@ pub(crate) fn document_js_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
     let scripts = app.active_ids().and_then(|(_, id)| app.session.get(id)).map(|d| d.document_scripts()).unwrap_or_default();
     let mut edit: Option<Edit> = None;
     ui.horizontal(|ui| {
-        ui.label(tl!("Script Name:"));
-        ui.add(crate::widgets::line(&mut app.doc_js.name).desired_width(240.0).id_salt("doc-js-name"));
+        let label = ui.label(tl!("Script Name:"));
+        ui.add(crate::widgets::line(&mut app.doc_js.name).desired_width(240.0).id_salt("doc-js-name")).labelled_by(label.id);
     });
     ui.add_space(4.0);
     egui::Frame::new().fill(t.hover).corner_radius(egui::CornerRadius::same(6)).inner_margin(egui::Margin::same(8)).show(ui, |ui| {
@@ -294,11 +288,13 @@ pub(crate) fn document_js_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tok
         });
     });
     ui.add_space(6.0);
-    ui.add(crate::widgets::block(&mut app.doc_js.script).code_editor().desired_rows(8).desired_width(f32::INFINITY).id_salt("doc-js-script"));
+    crate::widgets::script_editor(ui, &mut app.doc_js.script, "doc-js-script", 8, f32::INFINITY, None);
     ui.add_space(8.0);
     let name = app.doc_js.name.trim().to_string();
     let close = match buttons(ui, "Save", &["Close", "Delete"]).as_deref() {
-        Some("Save") if !name.is_empty() => {
+        // A script past the engine's limit has a note for a box, so it can't have been edited
+        // (`script_editor`): Save leaves the document as it is.
+        Some("Save") if !name.is_empty() && app.doc_js.script.len() <= pdfcraft_engine::js::MAX_SCRIPT_BYTES => {
             edit = Some(Edit::SetDocumentScript { name, script: Some(app.doc_js.script.clone()) });
             false
         }

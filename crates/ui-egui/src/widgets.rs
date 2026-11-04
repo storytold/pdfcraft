@@ -7,6 +7,8 @@ use crate::theme::{self, Tokens};
 
 pub(super) mod icon_data;
 pub mod icons;
+mod script;
+pub(crate) use script::script_editor;
 
 /// Horizontal and vertical inset of a single-line field.
 const FIELD_MARGIN: egui::Margin = egui::Margin::symmetric(10, 6);
@@ -33,7 +35,8 @@ pub fn modal(ctx: &egui::Context, id: impl std::hash::Hash + std::fmt::Debug) ->
     egui::Modal::new(egui::Id::unique(id)).frame(dialog_frame(ctx))
 }
 
-/// Show [`modal`], outline its controls, and remember the card rect for layout checks.
+/// Show [`modal`], outline its controls, and remember the card rect for layout checks and
+/// [`dialog_room`].
 pub fn show_modal<R>(ctx: &egui::Context, id: &str, content: impl FnOnce(&mut egui::Ui) -> R) -> egui::ModalResponse<R> {
     let stored = egui::Id::unique(id);
     modal(ctx, id).show(ctx, |ui| {
@@ -44,6 +47,18 @@ pub fn show_modal<R>(ctx: &egui::Context, id: &str, content: impl FnOnce(&mut eg
         ui.ctx().data_mut(|d| d.insert_temp(stored.with("card"), card));
         inner
     })
+}
+
+/// Room kept between a dialog's card and the window's top and bottom edges.
+const DIALOG_EDGE: f32 = 16.0;
+
+/// How much taller the dialog `ui` is in can grow and still fit in the window with
+/// [`DIALOG_EDGE`] to spare above and below (negative when it is already too tall), by its card as
+/// [`show_modal`] stored it last frame. `None` outside such a dialog.
+pub(crate) fn dialog_room(ui: &egui::Ui) -> Option<f32> {
+    // A modal's contents paint on its area's layer, whose id is the modal's: the id the card is kept under.
+    let card: Rect = ui.ctx().data(|d| d.get_temp(ui.layer_id().id.with("card")))?;
+    Some(ui.ctx().content_rect().height() - 2.0 * DIALOG_EDGE - card.height())
 }
 
 /// Outlined controls at a shared 30-point height, with a focus stroke and 4-point corners.

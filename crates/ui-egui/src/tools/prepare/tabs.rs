@@ -1,5 +1,5 @@
 use super::draft::{ACTION_KINDS, ActionDraft, FieldDraft};
-use super::{CalcOp, Calculate, DATE_PRESETS, Format, TIME_PRESETS, Validate, format_value, theme, widgets};
+use super::{CalcOp, Calculate, DATE_PRESETS, FormFieldKind, Format, TIME_PRESETS, Validate, format_value, theme, widgets};
 
 /// The categories of the Format tab.
 #[derive(Clone, Copy, PartialEq)]
@@ -236,23 +236,35 @@ pub(super) fn actions_tab(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::them
             });
         });
         ui.end_row();
-        let hint = match a.kind {
-            0 => "JavaScript",
-            1 => "https://…",
-            2 => tl!("Fields to reset (comma-separated; empty: all)"),
-            3 => tl!("Print, NextPage, PrevPage, FirstPage or LastPage"),
-            4 => tl!("Page number"),
-            5 | 6 => tl!("Field names (comma-separated)"),
-            _ => tl!("URL to submit to"),
-        };
-        ui.label(if a.kind == 0 { tl!("Script:") } else { tl!("Value:") });
-        if a.kind == 0 {
-            ui.add(crate::widgets::block(&mut a.text).code_editor().desired_rows(3).desired_width(340.0).hint_text(hint).id_salt("action-text"));
-        } else {
+        // A script gets the dialog's whole width, under the grid; a value stays in it.
+        if a.kind != 0 {
+            let hint = match a.kind {
+                1 => "https://…",
+                2 => tl!("Fields to reset (comma-separated; empty: all)"),
+                3 => tl!("Print, NextPage, PrevPage, FirstPage or LastPage"),
+                4 => tl!("Page number"),
+                5 | 6 => tl!("Field names (comma-separated)"),
+                _ => tl!("URL to submit to"),
+            };
+            ui.label(tl!("Value:"));
             ui.add(crate::widgets::line(&mut a.text).desired_width(340.0).hint_text(hint).id_salt("action-text"));
+            ui.end_row();
         }
-        ui.end_row();
     });
+    if a.kind == 0 {
+        ui.add_space(4.0);
+        let label = ui.label(tl!("Script:"));
+        crate::widgets::script_editor(ui, &mut a.text, "action-text", 8, f32::INFINITY, Some("JavaScript")).labelled_by(label.id);
+    }
+    // What PdfCraft does with a field's action (`forms::read::button_action`): the Mouse Up of a push
+    // button runs, and the rest is kept in the PDF for other viewers.
+    if !(d.kind == FormFieldKind::PushButton && a.trigger == T::MouseUp) {
+        ui.label(
+            egui::RichText::new(tl!("PdfCraft won't run this action, because it only runs Mouse Up actions on buttons. It's still saved in the PDF, so other PDF apps can run it."))
+                .small()
+                .color(t.text_muted),
+        );
+    }
     let mut error = None;
     let (mut commit, mut discard) = (false, false);
     ui.horizontal(|ui| {

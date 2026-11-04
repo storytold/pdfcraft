@@ -7,12 +7,20 @@ use pdfcraft_ui_egui::{Dialog, PdfCraftApp};
 
 /// A form with a text field and a push button whose Mouse Up script fills it in.
 fn form() -> Vec<u8> {
+    form_with("getField\\('greeting'\\).value = 'Hello from JavaScript'; app.alert\\('Filled in'\\);")
+}
+
+/// [`form`], the button's Mouse Up script being `script`, as written in a PDF literal string.
+fn form_with(script: &str) -> Vec<u8> {
+    let button = format!(
+        "<< /Type /Annot /Subtype /Widget /FT /Btn /Ff 65536 /T (hello) /Rect [20 200 120 230] /P 3 0 R /F 4 /A << /S /JavaScript /JS ({script}) >> >>"
+    );
     let objs = [
         "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 5 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 6 0 R >> >> >> >>",
         "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 300] >>",
         "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R] >>",
         "<< /Type /Annot /Subtype /Widget /FT /Tx /T (greeting) /Rect [20 250 280 270] /P 3 0 R /F 4 >>",
-        "<< /Type /Annot /Subtype /Widget /FT /Btn /Ff 65536 /T (hello) /Rect [20 200 120 230] /P 3 0 R /F 4 /A << /S /JavaScript /JS (getField\\('greeting'\\).value = 'Hello from JavaScript'; app.alert\\('Filled in'\\);) >> >>",
+        button.as_str(),
         "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
     ];
     let mut out = b"%PDF-1.7\n".to_vec();
@@ -31,10 +39,14 @@ fn form() -> Vec<u8> {
 }
 
 fn harness() -> Harness<'static, PdfCraftApp> {
+    harness_of(form())
+}
+
+fn harness_of(pdf: Vec<u8>) -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = PdfCraftApp::new();
         app.set_option("language", "en").unwrap();
-        app.open_bytes("form.pdf", None, form()).unwrap();
+        app.open_bytes("form.pdf", None, pdf).unwrap();
         app
     });
     h.run_steps(4);
@@ -214,4 +226,152 @@ fn prepare_a_form_detects_fields_on_a_paper_form() {
     let names: Vec<String> = app.session.get(id).unwrap().form.iter().map(|f| f.name.clone()).collect();
     assert_eq!(names, ["Name", "Phone"]);
     assert_eq!(app.toast.clone().unwrap().0, "Detected 2 form fields");
+}
+
+/// A script past the engine's limit, which only a document can hold, has a note where its box would
+/// be. Nothing the dialog does with it writes it back, and Clear script is the way to replace it.
+#[test]
+fn a_document_script_too_long_to_edit_is_left_as_it_is() {
+    let mut h = harness();
+    let id = h.state().active_ids().unwrap().1;
+    let big = "x".repeat(pdfcraft_engine::js::MAX_SCRIPT_BYTES + 1);
+    h.state_mut().session.apply(id, pdfcraft_engine::Edit::SetDocumentScript { name: "big".into(), script: Some(big.clone()) }).unwrap();
+    let bytes = |h: &Harness<'static, PdfCraftApp>| h.state().session.get(id).unwrap().bytes.clone();
+    let before = bytes(&h);
+    assert!(h.state_mut().execute("tools.document_js"));
+    h.run_steps(2);
+    h.get_by_label("big").click();
+    h.run_steps(2);
+    assert_eq!(h.state().doc_js.script, big);
+    assert!(h.query_by_label_contains("too long").is_some(), "the note is shown");
+    assert!(h.query_by_label("JavaScript").is_none(), "in place of the box");
+    h.get_by_label("Save").click();
+    h.run_steps(2);
+    assert_eq!(bytes(&h), before, "saving a script it can't show writes nothing");
+    assert_eq!(h.state().doc_js.script, big);
+    h.get_by_label("Clear script").click();
+    h.run_steps(2);
+    assert_eq!(h.state().doc_js.script, "");
+    h.get_by_label("JavaScript");
+    assert_eq!(bytes(&h), before, "clearing the box is not saving it");
+}
+
+/// A field's script past the engine's limit: Edit, Update and OK change nothing.
+#[test]
+fn a_field_script_too_long_to_edit_is_left_as_it_is() {
+    let big = format!("var a = '{}';", "x".repeat(pdfcraft_engine::js::MAX_SCRIPT_BYTES));
+    let mut h = harness_of(form_with(&big));
+    let id = h.state().active_ids().unwrap().1;
+    let before = h.state().session.get(id).unwrap().bytes.clone();
+    h.state_mut().open_field_props("hello", 0);
+    h.state_mut().field_props.as_mut().unwrap().tab = pdfcraft_ui_egui::prepare::FieldTab::Actions;
+    h.run_steps(2);
+    // The last "Edit": the menu bar has one too.
+    h.get_all_by_label("Edit").last().unwrap().click();
+    h.run_steps(2);
+    assert_eq!(h.state().field_props.as_ref().unwrap().new_action.text, big);
+    assert!(h.query_by_label_contains("too long").is_some(), "the note is shown");
+    assert!(h.query_by_label("JavaScript").is_none(), "in place of the box");
+    h.get_by_label("Update").click();
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(2);
+    assert!(h.state().field_props.is_none(), "the dialog closed");
+    let doc = h.state().session.get(id).unwrap();
+    assert_eq!(doc.bytes, before, "OK writes nothing");
+    assert_eq!(doc.undo_label(), None, "and adds no undo step");
+    assert!(!doc.dirty);
+}
+
+/// A paste past the limit never gets as far as the field: the box refuses it and says why, and Update
+/// and OK write what the box still holds.
+#[test]
+fn a_paste_past_the_limit_never_reaches_the_field() {
+    let mut h = harness_of(form_with("go\\(\\);"));
+    let id = h.state().active_ids().unwrap().1;
+    let before = h.state().session.get(id).unwrap().bytes.clone();
+    h.state_mut().open_field_props("hello", 0);
+    h.state_mut().field_props.as_mut().unwrap().tab = pdfcraft_ui_egui::prepare::FieldTab::Actions;
+    h.run_steps(2);
+    h.get_all_by_label("Edit").last().unwrap().click();
+    h.run_steps(2);
+    assert_eq!(h.state().field_props.as_ref().unwrap().new_action.text, "go();");
+    h.get_by_role_and_label(egui::accesskit::Role::MultilineTextInput, "Script:").focus();
+    h.run_steps(2);
+    h.event(egui::Event::Paste("y".repeat(pdfcraft_engine::js::MAX_SCRIPT_BYTES)));
+    h.run_steps(2);
+    assert!(h.state().field_props.as_ref().unwrap().new_action.text == "go();", "the box still holds the script");
+    assert!(h.query_by_label_contains("Not added").is_some(), "the line under the box says why");
+    assert!(h.query_by_label_contains("too long").is_none(), "no note");
+    h.get_by_label("Update").click();
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(2);
+    assert!(h.state().field_props.is_none(), "the dialog closed");
+    let doc = h.state().session.get(id).unwrap();
+    assert!(doc.bytes == before, "OK writes nothing");
+    assert_eq!(doc.undo_label(), None, "and adds no undo step");
+}
+
+/// The console has no Cancel: a paste past the limit must leave what was typed, which can still be run.
+#[test]
+fn a_paste_past_the_limit_leaves_the_console_s_input() {
+    let mut h = harness();
+    assert!(h.state_mut().execute("tools.js_console"));
+    h.run_steps(2);
+    h.get_by_label("JavaScript").focus();
+    h.run_steps(2);
+    h.event(egui::Event::Text("typed".into()));
+    h.run_steps(2);
+    assert_eq!(h.state().js_console.input, "typed");
+    h.event(egui::Event::Paste("y".repeat(pdfcraft_engine::js::MAX_SCRIPT_BYTES)));
+    h.run_steps(2);
+    assert!(h.state().js_console.input == "typed", "still what was typed");
+    assert!(h.query_by_label_contains("Not added").is_some(), "the line under the box says why");
+    h.get_by_label("JavaScript");
+}
+
+/// The Actions tab says what PdfCraft does with an action. Only the Mouse Up of a push button runs;
+/// the rest is saved for other viewers, which the user could not otherwise tell.
+#[test]
+fn the_actions_tab_says_which_actions_pdfcraft_runs() {
+    use pdfcraft_engine::FieldTrigger;
+    let hint = "PdfCraft won't run this action, because it only runs Mouse Up actions on buttons. It's still saved in the PDF, so other PDF apps can run it.";
+    let mut h = harness_of(form_with("event.value = 1;"));
+    h.state_mut().execute("form.prepare");
+    h.run_steps(2);
+    h.state_mut().open_field_props("hello", 0);
+    h.run_steps(2);
+    h.get_by_label("Actions").click();
+    h.run_steps(2);
+    assert_eq!(h.state().field_props.as_ref().unwrap().new_action.trigger, FieldTrigger::MouseUp);
+    assert!(h.query_by_label(hint).is_none(), "the Mouse Up of a push button runs");
+    h.state_mut().field_props.as_mut().unwrap().new_action.trigger = FieldTrigger::OnBlur;
+    h.run_steps(2);
+    h.get_by_label(hint);
+}
+
+/// On any other kind of field, Mouse Up is saved and doesn't run either.
+#[test]
+fn the_actions_tab_of_a_text_field_says_its_actions_do_not_run() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
+        app
+    });
+    crate::support::settle(&mut h);
+    h.state_mut().execute("form.prepare");
+    h.run_steps(2);
+    h.state_mut().open_field_props("city", 0);
+    h.run_steps(2);
+    h.get_by_label("Actions").click();
+    h.run_steps(2);
+    h.get_by_label("PdfCraft won't run this action, because it only runs Mouse Up actions on buttons. It's still saved in the PDF, so other PDF apps can run it.");
+    // The script box takes the dialog's whole width, under the pickers, and its label names it.
+    let script = h.get_by_role_and_label(egui::accesskit::Role::MultilineTextInput, "Script:");
+    let width = script.rect().width();
+    assert!(width > 400.0, "wider than the 340-point column it used to sit in: {width}");
+    let height = script.rect().height();
+    assert!(height > 100.0, "eight lines, not three: {height}");
 }
