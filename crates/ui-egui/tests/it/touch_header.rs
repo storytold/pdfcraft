@@ -113,7 +113,7 @@ fn screenshot(h: &mut Harness<'static, PdfCraftApp>, name: &str) {
 
 #[test]
 fn touch_headers_fit_and_modes_and_search_work_in_english_and_german() {
-    for language in ["en", "de"] {
+    for language in crate::support::english_and("de") {
         let lang = i18n::Lang::from_code(language).unwrap();
         for width in [390.0, 768.0, 1024.0] {
             let mut h = harness(language, width);
@@ -153,7 +153,7 @@ fn touch_headers_fit_and_modes_and_search_work_in_english_and_german() {
 #[test]
 fn touch_save_activates_the_existing_save_path_at_each_width() {
     let unique = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-    for language in ["en", "de"] {
+    for language in crate::support::english_and("de") {
         for width in [390.0, 768.0, 1024.0] {
             let path = std::env::temp_dir().join(format!("pdfcraft-touch-header-{}-{unique}-{language}-{width}.pdf", std::process::id()));
             let mut h = harness(language, width);

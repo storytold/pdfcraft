@@ -83,7 +83,7 @@ fn screenshot(h: &mut Harness<'static, PdfCraftApp>, name: &str) {
 
 #[test]
 fn tab_controls_do_not_overlap_at_phone_and_tablet_widths() {
-    for language in ["en", "de"] {
+    for language in crate::support::english_and("de") {
         let lang = i18n::Lang::from_code(language).unwrap();
         for width in [390.0, 768.0, 1024.0] {
             let mut h = harness(language, width);
@@ -115,7 +115,7 @@ fn tab_controls_do_not_overlap_at_phone_and_tablet_widths() {
 
 #[test]
 fn finger_swipes_reach_undo_and_redo_without_selecting_tools_or_drawing() {
-    for language in ["en", "de"] {
+    for language in crate::support::english_and("de") {
         let lang = i18n::Lang::from_code(language).unwrap();
         for width in [390.0, 768.0, 1024.0] {
             let mut h = harness(language, width);
