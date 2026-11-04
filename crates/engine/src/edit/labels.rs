@@ -259,6 +259,10 @@ impl Edit {
             Edit::EditTextLine { .. } | Edit::EditTextBlock { .. } => Label::of("Edit text"),
             Edit::RegisterTextFont { .. } => Label::of("Load document font"),
             Edit::MoveObjects { objects, .. } => plural("Move object", "Move objects", objects.len()),
+            Edit::DeleteObjects { .. } => Label::of("Delete content"),
+            Edit::DeletePaths { paths, .. } => plural("Delete line", "Delete lines", paths.len()),
+            Edit::StylePaths { paths, .. } => plural("Format line", "Format lines", paths.len()),
+            Edit::MovePathPoint { .. } => Label::of("Move line point"),
             Edit::EditPageImage { change, .. } => Label::of(match change {
                 ImageEdit::Move(_) => "Move image",
                 ImageEdit::Transform(_) => "Transform image",

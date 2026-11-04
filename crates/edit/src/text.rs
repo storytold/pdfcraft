@@ -35,6 +35,7 @@ mod interp;
 mod lines;
 mod rewrite;
 
+pub(crate) use blocks::clear_blocks;
 use blocks::paragraph_separator;
 #[cfg(test)]
 use blocks::wrap;
