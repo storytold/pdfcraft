@@ -72,6 +72,7 @@ mod recovery;
 mod redact;
 mod reload;
 mod script_noop;
+mod scroll_prefetch;
 mod send_email;
 mod send_email_private_copy;
 mod send_email_waits_for_dialog;

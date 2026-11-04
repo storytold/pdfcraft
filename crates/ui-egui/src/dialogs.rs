@@ -20,6 +20,9 @@ pub(super) mod protect;
 pub(super) mod standards_ui;
 pub(super) mod word_count_ui;
 
+#[cfg(test)]
+mod tests;
+
 pub(crate) use prompts::{PromptButton, save_prompt_key};
 use prompts::{full_screen_prompt, link_prompt, password, remote_link_prompt, save_prompt, unlock};
 
@@ -1379,20 +1382,26 @@ fn dialog_preferences(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pendin
     // (which only applies when the settings overflow it) opens the dialog at full size.
     // A scrollbar of its own: the floating one lies over the right edge of the theme
     // cards and other full-width rows (#3557).
+    preferences_scroll(ui, max, |ui| preferences::preferences_body(ui, app, &t));
+    req.close = preferences::preferences_buttons(ui);
+    false
+}
+
+fn preferences_scroll(ui: &mut egui::Ui, max: f32, add_contents: impl FnOnce(&mut egui::Ui)) {
     ui.scope(|ui| {
         ui.spacing_mut().scroll.floating = false;
         ui.spacing_mut().scroll.bar_inner_margin = 14.0;
         ui.spacing_mut().scroll.bar_outer_margin = 2.0;
-        ui.style_mut().scroll_animation = egui::style::ScrollAnimation::duration(0.25);
+        if ui.style().scroll_animation != egui::style::ScrollAnimation::none() {
+            ui.style_mut().scroll_animation = egui::style::ScrollAnimation::duration(0.25);
+        }
         egui::ScrollArea::vertical()
             .id_salt("preferences-dialog-scroll")
             .max_height(max)
             .min_scrolled_height(max)
             .animated(true)
-            .show(ui, |ui| preferences::preferences_body(ui, app, &t));
+            .show(ui, add_contents);
     });
-    req.close = preferences::preferences_buttons(ui);
-    false
 }
 
 /// `Dialog::NumberPages` content. Returns `false` when it has its own buttons and no footer is wanted.
