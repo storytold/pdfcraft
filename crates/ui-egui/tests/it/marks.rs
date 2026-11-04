@@ -690,4 +690,10 @@ fn bates_numbering_dialog_configures_digits_and_padding() {
     h.run_steps(2);
     assert_eq!(h.state().marks_draft.focused_box, 5);
     assert_eq!(h.state().marks_draft.hf.text[5], "<<Bates Number#7#10#CASE-#-A>>");
+
+    // Nonempty text in box 5 without a Bates token preserves the existing text and appends the token.
+    h.state_mut().marks_draft.hf.text[5] = "Case: ".into();
+    assert!(h.state_mut().execute("edit.bates"));
+    h.run_steps(2);
+    assert_eq!(h.state().marks_draft.hf.text[5], "Case: <<Bates Number#7#10#CASE-#-A>>");
 }

@@ -508,13 +508,14 @@ impl PdfCraftApp {
                 self.marks_draft.replace = false;
                 self.marks_draft.focused_box = 5;
                 self.marks_draft.sync_bates_from_hf();
-                if self.marks_draft.hf.text[5].is_empty() {
-                    self.marks_draft.hf.text[5] = crate::marks_ui::format_bates_token(
+                if crate::marks_ui::parse_bates_token(&self.marks_draft.hf.text[5]).is_none() {
+                    let token = crate::marks_ui::format_bates_token(
                         self.marks_draft.bates_digits,
                         self.marks_draft.bates_start,
                         &self.marks_draft.bates_prefix,
                         &self.marks_draft.bates_suffix,
                     );
+                    self.marks_draft.hf.text[5].push_str(&token);
                 }
                 self.marks_draft.preview = None;
                 self.dialog = Some(Dialog::Marks(pdfcraft_engine::MarkKind::HeaderFooter));

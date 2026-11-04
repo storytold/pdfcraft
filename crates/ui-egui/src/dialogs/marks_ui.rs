@@ -301,7 +301,7 @@ pub(crate) fn format_bates_token(digits: usize, start: u64, prefix: &str, suffix
 
 /// Parses the first complete `<<Bates Number#digits#start#prefix#suffix>>` token in `text`,
 /// returning `(digits, start, prefix, suffix)` when present.
-fn parse_bates_token(text: &str) -> Option<(usize, u64, String, String)> {
+pub(crate) fn parse_bates_token(text: &str) -> Option<(usize, u64, String, String)> {
     let mut rest = text;
     while let Some(open) = rest.find("<<Bates Number") {
         let after_open = rest.get(open + 2..)?;
@@ -1209,5 +1209,8 @@ mod tests {
         assert_eq!(draft.bates_start, 50);
         assert_eq!(draft.bates_prefix, "PRIORITY-");
         assert_eq!(draft.bates_suffix, "-Z");
+        update_bates_token(&mut draft.hf, 5, 3, 60, "NEW-", "");
+        assert_eq!(draft.hf.text[5], "<<Bates Number#3#60#NEW-#>>");
+        assert_eq!(draft.hf.text[0], "<<Bates Number#4#10#OTHER-#>>");
     }
 }
