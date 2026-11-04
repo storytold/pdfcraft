@@ -446,7 +446,7 @@ pub fn set_tag_property(doc: &mut Document, object: ObjRef, property: TagPropert
 
 /// Rename one `/ClassMap` entry and every reachable `/C` use, preserving the class value object.
 pub fn rename_class(doc: &mut Document, old: &str, new: &str) -> Result<(), TagError> {
-    if !valid_class_name(old) || !valid_class_name(new) {
+    if !valid_class_name(new) {
         return Err(TagError::InvalidClass);
     }
     let map = class_map_dict(doc).ok_or(TagError::NoClassMap)?;

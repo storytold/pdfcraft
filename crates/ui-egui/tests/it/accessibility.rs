@@ -348,6 +348,38 @@ fn tags_panel_edits_a_tag_property_and_undoes_it() {
 }
 
 #[test]
+fn tags_panel_renames_a_structure_class() {
+    let pdf = String::from_utf8_lossy(FIGURES)
+        .replace("/RoleMap << /Photo /Figure >>", "/RoleMap << /Photo /Figure >> /ClassMap << /Old << /O /Layout /TextAlign /Start >> >>")
+        .replace("/S /Figure /P 6 0 R /Pg 3 0 R /K 0", "/S /Figure /P 6 0 R /Pg 3 0 R /K 0 /C /Old");
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("figures.pdf", None, pdf.into_bytes()).unwrap();
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state_mut().execute("a11y.tags"));
+    h.run_steps(2);
+    h.get_by_label("Figure · 7").click();
+    h.run_steps(1);
+    let class = h.get_by_role_and_label(Role::TextInput, "Classes, separated by commas");
+    assert_eq!(class.value().as_deref(), Some("Old"));
+    let old = h.get_by_role_and_label(Role::TextInput, "Rename class");
+    old.focus();
+    old.type_text("Old");
+    let new = h.get_by_role_and_label(Role::TextInput, "New class name");
+    new.focus();
+    new.type_text("Renamed");
+    h.run_steps(1);
+    h.get_by_label("Rename structure class").click();
+    h.run_steps(3);
+    let doc = h.state().session.get(h.state().views[0].id).unwrap();
+    assert_eq!(doc.tags()[1].classes, ["Renamed"]);
+    assert_eq!(doc.class_map(0, 10).1[0].name, "Renamed");
+}
+
+#[test]
 fn tags_panel_moves_a_tag_within_its_siblings() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();

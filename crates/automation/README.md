@@ -5,6 +5,8 @@ Agent control for PdfCraft: a headless tool table over the engine, and an opt-in
 - **Layer:** L7 (architecture §13), but headless. It depends on `engine`, `render` and `organize`, never on a UI toolkit.
 - **Status:** over a hundred tools; `pdfcraft-cli tools` lists the current set with their schemas (the count isn't repeated here, so it can't go stale). They cover inspection, rendering, text, page edits and organizing, page labels, bookmarks, comments and their review, form filling and authoring (fields, properties, scripts, data exchange, detection), redaction and sanitizing, password protection and signatures, calibrated 2D measurements and CSV export, adding text, images, links and stamps, optimizing, OCR, printing, export, metadata, undo/redo, save, combine, extract and split. Comment tools take geometry in the same top-left-origin points as everything else, and `comment_add` can mark text by searching for it (`find`). The MCP server also serves the open documents as resources, page images included. The running app's UI is driven separately, through the `ui.*` control channel in `pdfcraft-ui-egui`.
 
+`fill_sign_add` text accepts line breaks, including blank lines. Its typewriter box grows to hold all wrapped rows, and saving/reopening preserves the contents and appearance.
+
 ## API
 
 ```rust
@@ -20,6 +22,9 @@ mcp::McpServer::new(a).serve(stdin, stdout)?             // newline-delimited JS
 them with the image's current orientation. Full turns retain its appearance, rectangle, crop
 and flips. Angles that are not multiples of 90 are refused without changing the document or
 its undo/redo history.
+
+`page_add_text`, `content_update` and `text_edit` take per-line `aligns`. An `"inherit"` entry
+follows the box-level `align`; legacy `null` entries remain accepted with the same meaning.
 
 `Content` is `Json(Value)` or `Png { data, width, height }`. Errors are `UnknownTool`, `InvalidArgs` (the call didn't match the schema) or `Failed` (a readable message for the agent).
 
@@ -198,6 +203,19 @@ faces complete absent subset glyphs. `text_edit.ranges` accepts disjoint UTF-8 b
 undoable and survive saving/reopening. `image_hit` shares the UI's curve and hole hit testing.
 The bounds, limits and font requirements are in [existing-text editing](../../docs/editing-existing-text.md)
 and [image editing](../../docs/editing-images.md).
+
+### Superscript and subscript normalization
+
+`text_script` changes characters to their Unicode superscript or subscript forms; it does not
+change the font size or baseline. For characters that have such forms, uniformly plain text
+toggles to the requested script, and uniformly scripted text toggles back to plain text.
+Characters without a matching form stay unchanged and do not determine the selection's state.
+
+A selection mixing plain and target-script characters normalizes to the requested script.
+For example, subscript changes `H₂2` to `H₂₂`, then to `H22` on the next call; superscript
+changes `Q²2` to `Q²²`, then to `Q22`. A second toggle does not reconstruct the original
+mixture. Each call is one undoable text edit: `edit_undo` restores the exact prior text,
+including its original mixture. Save/reopen preserves the resulting normalized characters.
 
 ## Opening local GoToR links
 
