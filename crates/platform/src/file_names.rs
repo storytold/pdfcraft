@@ -2,11 +2,12 @@
 
 /// Whether Windows reads the path component `name` as a device rather than a file: `CON`, `PRN`,
 /// `AUX`, `NUL`, `COM1`–`COM9`, `LPT1`–`LPT9` and the superscript `COM¹`–`LPT³` whatever their
-/// extension or a colon after it (`NUL:`, or `NUL:x`, a stream of the device), in any case and with
-/// spaces before the first dot (`nul .txt` writes nowhere, as `NUL.pdf` does; Windows drops only
-/// spaces there, not other whitespace). `CLOCK$`, `CONIN$` and
-/// `CONOUT$` match the same way, though Windows reads the last two as devices only without an
-/// extension: a name matched by mistake is only refused or prefixed.
+/// extension or a colon after it (`NUL:`, or `NUL:x`, a stream of the device), in any case. The
+/// device part ends at the first `.` or `:`, and spaces before it are ignored (`nul .txt` and
+/// `con :` write nowhere, as `NUL.pdf` does; Windows drops only spaces there, not other
+/// whitespace). `CONIN$` and `CONOUT$` match the same way (Windows 10 opens `conin$.txt` as the
+/// console too), and so does `CLOCK$`, which Windows 10 writes as an ordinary file: a name matched
+/// by mistake is only refused or prefixed.
 pub fn is_windows_device_name(name: &str) -> bool {
     let device = name.split(['.', ':']).next().unwrap_or_default().trim_end_matches(' ').to_ascii_uppercase();
     matches!(device.as_str(), "CON" | "PRN" | "AUX" | "NUL" | "CLOCK$" | "CONIN$" | "CONOUT$")
