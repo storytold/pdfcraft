@@ -1130,7 +1130,8 @@ fn temporary_reader_keeps_file_views_and_evicts_data_of_its_own() {
     // Data of its own (decrypted streams, strings) counts: past the budget the cache is
     // cleared after the next read, including a failed one.
     let owned = Object::Stream(crate::Stream::from_raw(Dict::new(), vec![b'y'; ObjectReader::STREAM_BYTES + 1]));
-    reader.document.cache.lock().unwrap().insert(3, Arc::new(owned));
+    let size = held_bytes(&owned, &reader.document.data, 0);
+    reader.document.cache.lock().unwrap().insert(3, Arc::new(owned), size);
     assert_eq!(*reader.get(ObjRef::new(99, 0)), Object::Null);
     assert!(reader.document.cache.lock().unwrap().is_empty(), "owned data over budget is evicted");
 }
@@ -1213,13 +1214,14 @@ fn editor_cache_counts_deeply_nested_strings() {
     source.update_dict(source.root().unwrap(), |d| d.set(b"Extension".to_vec(), Object::Array(objects))).unwrap();
     let bytes = Arc::new(crate::write_full(&source, &crate::SaveOptions::default()).unwrap());
     let doc = Document::open(bytes).unwrap();
-    assert_eq!(owned_bytes(&nested, &doc.data, 0), 1 << 20);
+    let held = held_bytes(&nested, &doc.data, 0);
+    assert!((1 << 20..(1 << 20) + 4096).contains(&held), "the string and a little tree: {held}");
     let root = doc.get(doc.root().unwrap());
     for reference in root.as_dict().unwrap().get(b"Extension").unwrap().as_array().unwrap() {
         let Object::Ref(reference) = reference else { panic!("indirect object") };
         drop(doc.get(*reference));
         let cache = doc.cache.lock().unwrap();
-        let owned = cache.values().fold(0usize, |n, o| n.saturating_add(owned_bytes(o, &doc.data, 0)));
+        let owned = cache.values().fold(0usize, |n, o| n.saturating_add(held_bytes(o, &doc.data, 0)));
         let strings = cache.values().filter(|o| o.as_array().is_some()).count();
         assert!(strings << 20 <= Document::EDITOR_CACHE_BYTES + (1 << 20), "{strings} MiB strings cached, {owned} bytes counted");
     }
@@ -1261,8 +1263,8 @@ fn editor_cache_stays_bounded() {
 
 #[test]
 fn editor_cache_byte_bound_fires() {
-    // 40 × 1 MB strings: far below the count cap, above the 32 MB byte budget. Each
-    // newcomer exceeds EDITOR_LARGE_OBJECT, so every insert takes a full accounting pass.
+    // 40 × 1 MB strings: far below the count cap, above the 32 MB byte budget, which is
+    // checked after every insertion.
     let mut source = Document::new_empty();
     let objects: Vec<_> = (0..40)
         .map(|i| {
@@ -1721,4 +1723,51 @@ fn a_stream_whose_length_is_itself_and_never_ends_loads_quickly() {
         let _ = tx.send(());
     });
     rx.recv_timeout(std::time::Duration::from_secs(20)).expect("loading must not retry exponentially");
+}
+
+/// The cache keeps the sum of what its objects hold as they come and go, so neither reader has
+/// to measure the cache again on every read (#5873).
+#[test]
+fn the_object_cache_keeps_its_total_as_objects_come_and_go() {
+    let data = Arc::new(Vec::new());
+    let one = Arc::new(Object::String(crate::PdfString::literal(vec![b'x'; 100])));
+    let two = Arc::new(Object::Array(vec![Object::Int(1); 10]));
+    let (a, b) = (held_bytes(&one, &data, 0), held_bytes(&two, &data, 0));
+    let mut cache = super::state::ObjectCache::default();
+    cache.insert(1, one.clone(), a);
+    cache.insert(2, two, b);
+    assert_eq!(cache.owned(), a + b);
+    cache.insert(2, one, a);
+    assert_eq!(cache.owned(), a + a, "a replaced object no longer counts");
+    cache.retain(|n| *n == 1);
+    assert_eq!((cache.len(), cache.owned()), (1, a));
+    cache.clear();
+    assert_eq!((cache.len(), cache.owned()), (0, 0));
+}
+
+/// A dictionary of numbers owns no string or stream bytes, but parsed it is tens of thousands
+/// of values: InDesign's per-page `/PieceInfo`. Counting only strings and streams, the editing
+/// cache kept a thousand such pages and a 35 MB book held 1.5 GB (#5873). What the parsed tree
+/// holds counts now, so the byte budget bounds them.
+#[test]
+fn the_editor_cache_charges_a_dictionary_for_the_values_it_holds() {
+    let entries: String = (0..2000).map(|i| format!("/{i}[{i} 141 3 116.22 -375.993 1.0]")).collect();
+    let dict = format!("<< /PieceInfo << /InDesign << /Map << {entries} >> >> >> >>");
+    let count = 300;
+    let refs: String = (0..count).map(|i| format!("{} 0 R ", i + 2)).collect();
+    let mut bodies = vec![format!("<< /Type /Catalog /Extension [{refs}] >>")];
+    bodies.extend((0..count).map(|_| dict.clone()));
+    let bodies: Vec<&str> = bodies.iter().map(String::as_str).collect();
+    let doc = Document::open(Arc::new(build(&bodies, "/Root 1 0 R"))).unwrap();
+    let one = doc.get(crate::ObjRef::new(2, 0));
+    let held = held_bytes(&one, &doc.data, 0);
+    assert!(held > 2000 * std::mem::size_of::<Object>(), "the parsed tree counts: {held} bytes");
+    for i in 0..count {
+        drop(doc.get(crate::ObjRef::new(i as u32 + 2, 0)));
+    }
+    let cache = doc.cache.lock().unwrap();
+    assert!(cache.owned() <= Document::EDITOR_CACHE_BYTES, "{} bytes held", cache.owned());
+    assert!(cache.len() < count, "the byte budget evicted some, below the count cap: {} kept", cache.len());
+    let sum = cache.values().fold(0usize, |n, o| n.saturating_add(held_bytes(o, &doc.data, 0)));
+    assert_eq!(cache.owned(), sum, "the kept total is the cache's own");
 }
