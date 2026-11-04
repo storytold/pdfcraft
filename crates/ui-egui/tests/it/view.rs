@@ -269,6 +269,23 @@ fn page_gaps_comparison_harness() -> Harness<'static, PdfCraftApp> {
     h
 }
 
+/// Comparing a text-less document reports the engine error through the user-facing notice.
+#[test]
+fn comparing_a_textless_document_shows_an_actionable_notice() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("blank.pdf", None, PAGES.to_vec()).unwrap();
+        app.open_bytes("text.pdf", None, PAGES_WITH_TEXT.to_vec()).unwrap();
+        app.compare_old = Some(app.views[0].id);
+        app.run_compare();
+        app
+    });
+    h.run_steps(2);
+    let notice = h.state().toast.as_ref().map(|(message, _)| message.as_str()).unwrap_or_default();
+    assert!(notice.contains("has no text to compare"), "unexpected compare notice: {notice:?}");
+}
+
 /// A page-display menu choice must reach both panes before the old leader synchronizes them.
 #[test]
 fn page_gaps_comparison_menu_preserves_the_active_panes_choice() {
