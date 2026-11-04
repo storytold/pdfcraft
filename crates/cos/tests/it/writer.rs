@@ -562,7 +562,9 @@ fn assert_dpart_and_namespaces(doc: &Document) {
     let tree = doc.resolve(catalog.get(b"StructTreeRoot").unwrap());
     let namespaces = doc.resolve(tree.as_dict().unwrap().get(b"Namespaces").expect("/Namespaces kept"));
     let namespace = doc.resolve(&namespaces.as_array().unwrap()[0]);
-    assert_eq!(namespace.as_dict().unwrap().get(b"NS").unwrap().as_string().unwrap().bytes, b"http://iso.org/pdf2/ssn");
+    let namespace = namespace.as_dict().unwrap();
+    assert_eq!(namespace.get(b"NS").unwrap().as_string().unwrap().bytes, b"http://iso.org/pdf2/ssn");
+    assert!(namespace.get(b"Schema").is_some(), "/Schema is retained");
 }
 
 #[test]
@@ -578,7 +580,9 @@ fn document_parts_and_structure_namespaces_survive_full_and_incremental_saves() 
         assert!(back.repair_log().is_empty(), "{:?}", back.repair_log());
         assert_dpart_and_namespaces(&back);
         // A second generation, rewritten from the rewritten file.
-        assert_dpart_and_namespaces(&Document::open(Arc::new(write_full(&back, &opts).unwrap())).unwrap());
+        let second = Document::open(Arc::new(write_full(&back, &opts).unwrap())).unwrap();
+        assert!(second.repair_log().is_empty(), "{:?}", second.repair_log());
+        assert_dpart_and_namespaces(&second);
     }
 
     // An incremental save of an unrelated edit leaves the file's bytes, and so both, alone.
@@ -586,5 +590,7 @@ fn document_parts_and_structure_namespaces_survive_full_and_incremental_saves() 
     edited.add(Object::Int(1));
     let updated = write_incremental(&edited, &SaveOptions::default()).unwrap();
     assert!(updated.starts_with(&original));
-    assert_dpart_and_namespaces(&Document::open(Arc::new(updated)).unwrap());
+    let reopened = Document::open(Arc::new(updated)).unwrap();
+    assert!(reopened.repair_log().is_empty(), "{:?}", reopened.repair_log());
+    assert_dpart_and_namespaces(&reopened);
 }
