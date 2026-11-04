@@ -1,7 +1,11 @@
 use super::*;
 
 fn build(objs: &[&str], trailer_extra: &str) -> Document {
-    let mut out = b"%PDF-1.7\n".to_vec();
+    build_with_header(b"%PDF-1.7\n%\xE2\xE3\xCF\xD3\n", objs, trailer_extra)
+}
+
+fn build_with_header(header: &[u8], objs: &[&str], trailer_extra: &str) -> Document {
+    let mut out = header.to_vec();
     let mut offsets = Vec::new();
     for (i, o) in objs.iter().enumerate() {
         offsets.push(out.len());
@@ -487,4 +491,48 @@ fn an_output_intent_profile_header_is_read_within_a_size_cap() {
         doc.set(pdfcraft_cos::ObjRef::new(2, 0), Object::Stream(pdfcraft_cos::Stream::flate(Dict::new(), &profile)));
         assert_eq!(pdfa_intent_profile(&doc), Some(n), "a {size}-byte profile");
     }
+}
+
+/// PDF/A-2 6.1.2: the file starts with `%PDF-1.0` to `%PDF-1.7` and an end-of-line marker, then a
+/// comment of `%` and four bytes above 127; Save as PDF/A rewrites a header that doesn't.
+#[test]
+fn file_header_is_checked_and_rewritten() {
+    let objs = ["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>"];
+    let header = |h: &[u8]| -> Vec<String> {
+        let doc = build_with_header(h, &objs, "");
+        verify(&doc, Level::A2b).into_iter().filter(|i| i.clause == "6.1.2").map(|i| i.message).collect()
+    };
+    let version = || vec!["The file doesn't start with a %PDF-1.0 to %PDF-1.7 header line".to_string()];
+    let comment = || vec!["The file header isn't followed by a comment of four bytes above 127".to_string()];
+    for fine in [&b"%PDF-1.7\n%\xE2\xE3\xCF\xD3\n"[..], b"%PDF-1.4\r\n%\x80\x81\x82\x83af\r\n", b"%PDF-1.0\r%\xFF\xFF\xFF\xFF\r"] {
+        assert!(header(fine).is_empty(), "{}", String::from_utf8_lossy(fine));
+    }
+    let wrong_version = [
+        &b"%PDF-2.0\n%\xE2\xE3\xCF\xD3\n"[..],
+        b"%PDF-1.9\n%\xE2\xE3\xCF\xD3\n",
+        b"%PDF-1.70\n%\xE2\xE3\xCF\xD3\n",
+        b"%PDF-1.7   \n%\xE2\xE3\xCF\xD3\n",
+        b"SomeData\n%PDF-1.7\n%\xE2\xE3\xCF\xD3\n",
+    ];
+    for wrong in wrong_version {
+        assert_eq!(header(wrong), version(), "{}", String::from_utf8_lossy(wrong));
+    }
+    let wrong_comment = [
+        &b"%PDF-1.7\n%\xE2\xE3\xCF\n"[..],
+        b"%PDF-1.7\ninvalidData\n",
+        b"%PDF-1.7\n%a\xE3\xCF\xD3\n",
+        b"%PDF-1.7\n\n%\xE2\xE3\xCF\xD3\n",
+        b"%PDF-1.7\n",
+    ];
+    for wrong in wrong_comment {
+        assert_eq!(header(wrong), comment(), "{}", String::from_utf8_lossy(wrong));
+    }
+    // Save as PDF/A rewrites the header: the version drops to 1.7 and the next save is full.
+    let mut doc = build_with_header(b"%PDF-2.0\n%ab\n", &objs, "");
+    let report = convert(&mut doc, Level::A2b).unwrap();
+    assert!(report.fixed.iter().any(|f| f == "Rewrote the file header"));
+    assert_eq!(doc.version(), "1.7");
+    assert!(verify(&doc, Level::A2b).iter().all(|i| i.clause != "6.1.2"));
+    let saved = pdfcraft_cos::write_full(&doc, &Default::default()).unwrap();
+    assert!(saved.starts_with(b"%PDF-1.7\n%\xE2\xE3\xCF\xD3\n"));
 }
