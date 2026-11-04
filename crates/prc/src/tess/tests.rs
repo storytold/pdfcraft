@@ -686,8 +686,30 @@ fn faces_reusing_one_index_range_are_charged_for_each_triangle_they_make() {
     };
     let one = square(&[(0x2, 0, &[2])]);
     let three = square(&[(0x2, 0, &[2]), (0x2, 0, &[2]), (0x2, 0, &[2])]);
-    // Per extra face: its count entry, its one data element and its two triangles.
-    assert_eq!(three - one, 2 * 4);
+    // Per extra face: its count entry, its one data element and its two triangles, each
+    // 12 bytes of corners and 12 of normal slots.
+    assert_eq!(three - one, 2 * (2 + 2 * 4));
+}
+
+#[test]
+fn reused_textured_faces_are_charged_for_every_corner_array() {
+    // The textured square, then one untextured triangle's normal and point slots.
+    const INDICES: [u32; 24] = [0, 0, 0, 0, 2, 3, 0, 4, 6, 0, 0, 0, 0, 4, 6, 0, 6, 9, 0, 0, 0, 3, 0, 6];
+    let square = |faces: &[(u32, u32, &[u32])], sets: u32| {
+        let mut b = W::default();
+        tess_3d(&mut b, 8137, &Mesh { indices: &INDICES, faces, textures: sets, uvs: &[0.0; 8], ..Mesh::default() });
+        spent(&section(1, &b))
+    };
+    let face: (u32, u32, &[u32]) = (0x200, 0, &[2]);
+    let untextured: (u32, u32, &[u32]) = (0x2, 18, &[1]);
+    let one = square(&[face], 1);
+    let three = square(&[face, face, face], 1);
+    // Per extra face: its count, its data element and two triangles of corners, normal slots
+    // and one texture set, 16 bytes a corner triple.
+    assert_eq!(three - one, 2 * (2 + 2 * 6));
+    // One textured face gives every triangle of the mesh a texture triple.
+    let mixed = square(&[face, untextured], 1);
+    assert_eq!(mixed - one, 2 + 6);
 }
 
 #[test]
