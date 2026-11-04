@@ -36,7 +36,7 @@ use crate::{Pixels, ReadingColors};
 mod pool;
 
 use pool::lock;
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 use pool::{BusyPublishGate, ParseGate, ParserState, PoolParser, RenderGate, Shared, same_request, worker, worker_settings};
 pub use pool::{RenderPool, Retiring};
 
@@ -230,12 +230,14 @@ fn request_reading(config: &RenderConfig, req: &RenderRequest) -> ReadingColors 
 /// its scale, tile or tag: the canvas tags every zoom level and tile anew, so a wider key would
 /// let one pathological page tie up a worker for the full watchdog limit per zoom and per tile
 /// (exhausting worker replacements) and re-parse the document for every new request.
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct RequestFailureKey {
     page: usize,
     kind: RequestKind,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl From<RenderRequest> for RequestFailureKey {
     fn from(req: RenderRequest) -> Self {
         Self { page: req.page, kind: req.kind }
@@ -296,6 +298,7 @@ struct AtomicRenderStats {
 }
 
 impl AtomicRenderStats {
+    #[cfg(not(target_arch = "wasm32"))]
     fn record_request(&self, req: RenderRequest) {
         self.render_requests.fetch_add(1, Ordering::Relaxed);
         if req.tile.is_some() {

@@ -239,12 +239,8 @@ impl ImageState {
                     self.path.curve_to(p1, end, end);
                 }
             }
-            b"h" => {
-                // ClosePath with no subpath panics by the same contract (#3581).
-                if self.has_current_point() {
-                    self.path.close_path();
-                }
-            }
+            // ClosePath with no subpath panics by the same contract (#3581).
+            b"h" if self.has_current_point() => self.path.close_path(),
             b"re" => {
                 if let Some([x, y, w, h]) = op.nums::<4>()
                     && let (Some(p0), Some(p1), Some(p2), Some(p3)) =
@@ -2014,5 +2010,25 @@ mod allocation_tests {
         let before = tracker.current_state.clone();
         tracker.step(&op, &states, &doc, Matrix::translate(50.0, 0.0)).unwrap();
         assert!(before.visually_differs(&tracker.current_state), "the same mask established under a different CTM is a different effective mask");
+    }
+}
+
+#[cfg(test)]
+mod close_path_tests {
+    use super::*;
+
+    /// `h` ignores an absent subpath, but closes an existing one and resets its current point.
+    #[test]
+    fn close_path_preserves_the_subpath_start() {
+        let mut state = ImageState::new(Matrix::IDENTITY, [0.0, 0.0, 100.0, 100.0], Vec::new());
+        state.apply(&Op::new("h", vec![])).unwrap();
+        assert!(state.path.elements().is_empty());
+        for op in parse(b"10 20 m 30 40 l h").ops {
+            state.apply(&op).unwrap();
+        }
+        assert_eq!(state.path.elements().last(), Some(&kurbo::PathEl::ClosePath));
+        assert_eq!(state.current_point(), Some(Point::new(10.0, 20.0)));
+        state.apply(&Op::new("h", vec![])).unwrap();
+        assert_eq!(state.current_point(), Some(Point::new(10.0, 20.0)));
     }
 }

@@ -223,6 +223,7 @@ impl PdfCraftApp {
 /// email and are deleted with the cache. Apple Mail opens one from `Mail Downloads/<UUID>/` in
 /// its sandbox container, where other apps can't write, so saving there fails (#2751). Matched on
 /// either separator and in any case, so it can be tested on every platform.
+#[cfg(any(test, not(target_arch = "wasm32")))]
 pub(crate) fn is_mail_temp_copy(path: &str) -> bool {
     let p = path.replace('\\', "/").to_ascii_lowercase();
     // Outlook's cache holds `<marker><random folder>/<file>`: exactly one folder, then the file.
@@ -241,6 +242,7 @@ pub(crate) fn is_mail_temp_copy(path: &str) -> bool {
 /// `None` (keep the system's choice) for a new document, a path with no parent, or an email
 /// attachment's temporary copy (`is_mail_temp_copy`), which is no place to keep work. Also right
 /// for UNC paths on Windows (`\\server\share\dir\f.pdf` gives `\\server\share\dir`).
+#[cfg(any(test, not(target_arch = "wasm32")))]
 pub(crate) fn save_dialog_folder(path: Option<&str>) -> Option<std::path::PathBuf> {
     let path = path.filter(|p| !is_mail_temp_copy(p))?;
     let parent = std::path::Path::new(path).parent()?;
@@ -248,6 +250,7 @@ pub(crate) fn save_dialog_folder(path: Option<&str>) -> Option<std::path::PathBu
 }
 
 /// `dialog` opened in the folder of the document stored at `path` ([`save_dialog_folder`]).
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn in_document_folder(dialog: rfd::AsyncFileDialog, path: Option<&str>) -> rfd::AsyncFileDialog {
     match save_dialog_folder(path) {
         Some(dir) => dialog.set_directory(dir),

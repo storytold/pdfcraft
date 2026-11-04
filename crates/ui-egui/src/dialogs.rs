@@ -1275,6 +1275,8 @@ fn dialog_revert(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending) ->
 
 /// `Dialog::OverwriteChanged` content. Returns `false` when it has its own buttons and no footer is wanted.
 fn dialog_overwrite_changed(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending) -> bool {
+    #[cfg(target_arch = "wasm32")]
+    let _ = app;
     #[cfg(not(target_arch = "wasm32"))]
     let name = app.pending_overwrite.as_ref().and_then(|p| app.session.get(p.id)).map(|d| d.name.clone()).unwrap_or_default();
     #[cfg(target_arch = "wasm32")]
@@ -1778,7 +1780,7 @@ fn finish_requests(app: &mut PdfCraftApp, dialog: Dialog, modal_closed: bool, re
         }
     }
     #[cfg(target_arch = "wasm32")]
-    let _ = (req.overwrite_now, req.overwrite_elsewhere);
+    let _ = (dialog, modal_closed, req.overwrite_now, req.overwrite_elsewhere);
     // Cancelled or dismissed: the save is dropped.
     #[cfg(not(target_arch = "wasm32"))]
     if dialog == Dialog::OverwriteChanged && (modal_closed || req.close) {
