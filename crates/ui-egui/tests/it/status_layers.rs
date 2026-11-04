@@ -211,6 +211,9 @@ fn named_layers_follow_trust_and_language_and_keep_the_badge() {
     assert!(valid > 100 && unknown < 10, "n1 redraws in the valid state: {valid} green, {unknown} amber pixels");
     assert!(hovered(&mut h, "Signature is valid") > h.query_all_by_label("Signature is valid").count(), "a valid signature keeps its badge");
     // The interface language changes the caption, on the page as well as in the document.
+    if crate::support::skip_without_catalogs("the German captions of named_layers_follow_trust_and_language_and_keep_the_badge") {
+        return;
+    }
     let english = caption_strip(&mut h);
     h.state_mut().set_option("language", "de").unwrap();
     settle(&mut h);
@@ -234,10 +237,30 @@ fn a_badge_tip_stays_hidden_while_a_dialog_covers_the_page() {
 }
 
 #[test]
+fn a_badge_tip_stays_off_where_a_comment_tip_would() {
+    // Fill & Sign keeps its placement clear, and a freehand stroke isn't covered as it is drawn.
+    use pdfcraft_ui_egui::QuickTool;
+    use pdfcraft_ui_egui::comments::CommentTool;
+    use pdfcraft_ui_egui::fill_sign::FillTool;
+    let p12 = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12")).unwrap();
+    let id = pdfcraft_engine::sign::pkcs12::open(&p12, "test").unwrap();
+    let mut h = harness(signed(&id), "en");
+    let label = "Signature validity is unknown";
+    for (tool, tip) in [(QuickTool::Select, true), (QuickTool::Fill(FillTool::Text), false), (QuickTool::Comment(CommentTool::Ink), false)] {
+        h.state_mut().quick_tool = tool;
+        h.run_steps(2);
+        assert_eq!(hovered(&mut h, label) > h.query_all_by_label(label).count(), tip, "{tool:?}");
+    }
+}
+
+#[test]
 fn arabic_caption_keeps_logical_word_order_on_page_and_in_extracted_text() {
     let _gpu = gpu();
     if pdfcraft_fonts::document_arabic_font().is_none() {
         eprintln!("skipping Arabic status-caption rendering: build without a craft-fonts Arab face");
+        return;
+    }
+    if crate::support::skip_without_catalogs("arabic_caption_keeps_logical_word_order_on_page_and_in_extracted_text") {
         return;
     }
     let p12 = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12")).unwrap();
@@ -315,6 +338,9 @@ fn an_edit_on_another_page_that_changes_the_verdict_redraws_the_signature() {
 fn a_file_opened_before_the_first_frame_is_drawn_in_the_interface_language() {
     // Files named at startup open before any frame, which is when the interface language used to
     // reach the captions: drawn in English, then again.
+    if crate::support::skip_without_catalogs("a_file_opened_before_the_first_frame_is_drawn_in_the_interface_language") {
+        return;
+    }
     let p12 = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12")).unwrap();
     let id = pdfcraft_engine::sign::pkcs12::open(&p12, "test").unwrap();
     let mut app = PdfCraftApp::new();

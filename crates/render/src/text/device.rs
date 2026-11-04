@@ -1,5 +1,8 @@
 use super::layout::{Flow, along_baseline, arrange_flow, compatible, continues, from_upright, to_upright, unrolled};
-use super::*;
+use super::{
+    Affine, BezPath, BlendMode, ClipPath, Context, Device, Glyph, GlyphDrawMode, HashMap, Image, InterpreterCache, InterpreterSettings, PageText,
+    Paint, PathDrawMode, Pdf, Rect, Shape, SoftMask, TextFilter, TextGlyph, TransformExt, interpret_page,
+};
 
 /// Largest sine of the angle between a glyph's writing direction and a flow's for the glyph to be
 /// laid out in that flow's frame. Turning an em box by θ moves its edges along the line by up to
@@ -27,14 +30,19 @@ pub(super) struct TextDevice {
     painted: Option<Painted>,
     /// Whether the open `/ActualText` replacement paints anything an exclusion leaves out.
     paint_filtered: bool,
+    /// Whether the open `/ActualText` replacement paints anything wholly outside the crop box.
+    paint_cropped: bool,
     /// The bounding boxes of the clip paths in force (view space), innermost last, each cut to the
     /// one before it: an outer bound on what can show.
     clips: Vec<Rect>,
     /// Every `/ActualText` replacement made on the page.
     pub(super) replaced: Vec<Replaced>,
+    /// Visible page bounds in view space (`intersected_crop_box` after `initial_transform`).
+    page: Rect,
     filter: TextFilter,
     excluded_depth: Option<usize>,
     actual_filtered: bool,
+    actual_cropped: bool,
     partial_replacement: bool,
 }
 
@@ -172,6 +180,13 @@ impl Painted {
     }
 }
 
+/// The part of `b` inside `c`, or `None` when none of it is. A NaN edge of `c` (a damaged clip)
+/// leaves that edge uncut.
+fn cut(b: Rect, c: Rect) -> Option<Rect> {
+    let (x0, y0, x1, y1) = (b.x0.max(c.x0), b.y0.max(c.y0), b.x1.min(c.x1), b.y1.min(c.y1));
+    (x0 <= x1 && y0 <= y1).then(|| Rect::new(x0, y0, x1, y1))
+}
+
 /// The view-space box of `path` drawn with `transform`, from its control points (as redaction
 /// measures a path), or `None` when it has no finite point.
 fn control_box(path: &BezPath, transform: Affine) -> Option<Rect> {
@@ -201,11 +216,14 @@ impl TextDevice {
             actual: None,
             painted: None,
             paint_filtered: false,
+            paint_cropped: false,
             clips: Vec::new(),
             replaced: Vec::new(),
+            page: Rect::new(f64::NEG_INFINITY, f64::NEG_INFINITY, f64::INFINITY, f64::INFINITY),
             filter: TextFilter::default(),
             excluded_depth: None,
             actual_filtered: false,
+            actual_cropped: false,
             partial_replacement: false,
         }
     }
@@ -224,10 +242,18 @@ impl TextDevice {
         let Some((_, text, mut drawn)) = self.actual.take() else { return };
         let painted = self.painted.take();
         let paint_filtered = std::mem::take(&mut self.paint_filtered);
+        let paint_cropped = std::mem::take(&mut self.paint_cropped);
+        let cropped = std::mem::take(&mut self.actual_cropped);
         if std::mem::take(&mut self.actual_filtered) {
             // ActualText has no mapping from replacement words to individual glyphs. A mixed
             // span cannot be filtered honestly; a wholly excluded span can simply be omitted.
             self.partial_replacement |= !drawn.is_empty();
+            return;
+        }
+        // Before the paint: a span whose glyphs the crop box took has none left, yet it marks
+        // glyphs, so its paint doesn't place it.
+        if cropped {
+            self.glyphs.extend(drawn.into_iter().filter(|d| !d.2.text.chars().all(|c| c.is_control())));
             return;
         }
         if drawn.is_empty()
@@ -237,6 +263,10 @@ impl TextDevice {
             // The paint places it, so paint left out mixes it as excluded glyphs would.
             if paint_filtered {
                 self.partial_replacement = true;
+                return;
+            }
+            // Its words may be among what the crop box hides, as with a glyph cropped away.
+            if paint_cropped {
                 return;
             }
             drawn.push(stand_in);
@@ -256,20 +286,17 @@ impl TextDevice {
     }
 
     /// Record view-space box `b`, drawn with `transform`, as painted by the open `/ActualText`
-    /// replacement, cut to the visible area; paint an exclusion leaves out (`excluded`) only marks
-    /// the replacement.
+    /// replacement, cut to the visible area (the crop box, and the clip in force); paint wholly
+    /// outside the crop box, or that an exclusion leaves out (`excluded`), only marks the
+    /// replacement.
     fn paint(&mut self, b: Rect, transform: Affine, excluded: bool) {
-        let seen = match self.clips.last() {
-            Some(c) => {
-                let (x0, y0, x1, y1) = (b.x0.max(c.x0), b.y0.max(c.y0), b.x1.min(c.x1), b.y1.min(c.y1));
-                // Clipped away entirely: nothing of it shows.
-                if !(x0 <= x1 && y0 <= y1) {
-                    return;
-                }
-                Rect::new(x0, y0, x1, y1)
-            }
-            None => b,
+        // Wholly outside the crop box, as a glyph dropped there is: the replacement can't be read.
+        let Some(on_page) = cut(b, self.page) else {
+            self.paint_cropped = true;
+            return;
         };
+        // Clipped away entirely: nothing of it shows.
+        let Some(seen) = self.clips.last().map_or(Some(on_page), |c| cut(on_page, *c)) else { return };
         if excluded {
             self.paint_filtered = true;
         } else {
@@ -456,10 +483,13 @@ impl<'a> Device<'a> for TextDevice {
         let b = corners.iter().fold(Rect::new(f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY), |b, p| {
             Rect::new(b.x0.min(p.x), b.y0.min(p.y), b.x1.max(p.x), b.y1.max(p.y))
         });
+        let outside_crop = b.x0.max(self.page.x0) >= b.x1.min(self.page.x1) || b.y0.max(self.page.y0) >= b.y1.min(self.page.y1);
         if !(b.x0.is_finite() && b.y0.is_finite() && b.x1.is_finite() && b.y1.is_finite())
             || b.width() > MAX_GLYPH_EXTENT
             || b.height() > MAX_GLYPH_EXTENT
+            || outside_crop
         {
+            self.actual_cropped |= replaced && outside_crop;
             return;
         }
         let length = dx.hypot(dy);
@@ -537,8 +567,10 @@ pub(crate) fn extract_page_filtered(pdf: &Pdf, page: usize, settings: &Interpret
     // as in Acrobat, and match what other extractors report.
     let settings = settings.clone();
     let initial = p.initial_transform(true).to_kurbo();
-    let mut ctx = Context::new(initial, Rect::new(0.0, 0.0, w as f64, h as f64), &cache, p.xref(), settings);
+    let c = p.intersected_crop_box();
+    let mut ctx = Context::new(initial, Rect::new(0.0, 0.0, f64::from(w), f64::from(h)), &cache, p.xref(), settings);
     let mut dev = TextDevice::new();
+    dev.page = initial.transform_rect_bbox(Rect::new(c.x0, c.y0, c.x1, c.y1));
     dev.filter = filter;
     interpret_page(p, &mut ctx, &mut dev);
     // A replacement the content never closed ends with the page.

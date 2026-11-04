@@ -12,7 +12,6 @@
 //! PAdES B-B recipe (`ETSI.CAdES.detached`).
 
 use std::collections::{HashMap, HashSet};
-use std::rc::Rc;
 use std::sync::Arc;
 
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, SaveOptions, Stream};

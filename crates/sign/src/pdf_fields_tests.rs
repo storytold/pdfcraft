@@ -1,3 +1,5 @@
+use std::rc::Rc;
+
 use super::*;
 use pdfcraft_testkit::Pdf;
 

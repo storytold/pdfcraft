@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    Arc, DocId, Document, EditError, Keys, OpenError, RecoverySnapshot, RenderPool, SaveOptions, Session, SignOptions, StatusCaptions, TrustStore,
+    display_bytes, display_config, guard, render_threads, signatures_of, writable, write_full, write_incremental, xfa_sync_datasets,
+};
 
 impl Session {
     /// The bytes to write for Save: an incremental update of the file as opened/last saved,
@@ -167,7 +170,7 @@ impl Session {
         {
             doc.config.reading_colors = old.config.reading_colors;
             doc.config.hide_comments = old.config.hide_comments;
-            doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), doc.config.clone());
+            doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), display_config(&doc.config));
         }
         // Caches keyed by the edit generation (edit lines, images, measurements) must see a new
         // one; there is nothing new to autosave.
@@ -255,7 +258,7 @@ impl Session {
         let mut signatures = signatures_of(&editor.cos, &doc.bytes, &doc.trust, &doc.sig_cache);
         doc.display = display_bytes(Some(editor), &doc.bytes, &mut signatures, &doc.captions);
         doc.signatures = Arc::new(signatures);
-        doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), doc.config.clone());
+        doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), display_config(&doc.config));
     }
 
     /// The words the caption of a named-layer signature appearance is drawn with
@@ -285,7 +288,7 @@ impl Session {
         let Some(editor) = doc.editor.as_mut() else { return };
         let signatures = Arc::make_mut(&mut doc.signatures);
         doc.display = display_bytes(Some(editor), &doc.bytes, signatures, &doc.captions);
-        doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), doc.config.clone());
+        doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), display_config(&doc.config));
     }
 
     /// The signing time as a PDF date in local time with its offset (`D:…+02'00'`).

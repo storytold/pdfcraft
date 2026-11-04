@@ -1,5 +1,5 @@
 use super::error::{Result, failed};
-use super::*;
+use super::{Automation, Path, PathBuf, StagingName, file_access, foreign_share, staging_suffixes};
 
 impl Automation {
     // ---- paths -------------------------------------------------------------------------------

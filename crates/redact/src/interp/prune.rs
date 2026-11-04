@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    CosError, Dict, Document, HashMap, HashSet, MAX_DEPTH, Matrix, Metrics, ObjRef, Object, Op, Pieces, Rc, RedactError, Scope, is_vertical, num,
+    overlaps, page_streams, res_dict,
+};
 
 /// Drop every `replaced` resource name whose `Do` no longer appears in the rewritten `content`,
 /// so a full-rewrite save stops reaching the original image or form it named. A name that some

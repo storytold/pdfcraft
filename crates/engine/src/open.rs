@@ -7,8 +7,8 @@ use pdfcraft_render::{DocInfo, OpenError, RenderConfig, RenderPool, inspect};
 
 use crate::history::{Editor, Keys, TextBlocksCache};
 use crate::{
-    AppearanceCache, DocId, Document, Session, StatusCaptions, TrustStore, XFA_SCRIPTS_OFF, XfaLayout, display_bytes, guard, info_fields, js,
-    note_warnings, recovered_render_password, render_threads, same_pages, signatures_of, xfa, xfa_layout, xfa_values_from_datasets,
+    AppearanceCache, DocId, Document, Session, StatusCaptions, TrustStore, XFA_SCRIPTS_OFF, XfaLayout, display_bytes, display_config, guard,
+    info_fields, js, note_warnings, recovered_render_password, render_threads, same_pages, signatures_of, xfa, xfa_layout, xfa_values_from_datasets,
 };
 
 /// Immutable session state needed while a document is prepared away from its owning thread.
@@ -24,6 +24,17 @@ pub struct OpenContext {
 /// A fully prepared document that has not yet been registered in a session.
 pub struct PreparedDocument {
     document: Document,
+}
+
+struct DocumentOpenData<'a> {
+    name: String,
+    path: Option<String>,
+    bytes: Arc<Vec<u8>>,
+    info: DocInfo,
+    structure: Result<Result<pdfcraft_cos::Document, pdfcraft_cos::CosError>, Box<dyn std::any::Any + Send>>,
+    render_password: Option<String>,
+    password: Option<&'a str>,
+    xfa: Option<XfaLayout>,
 }
 
 impl OpenContext {
@@ -256,7 +267,8 @@ impl Session {
         };
         // XFA notes survive the document being re-read after edits.
         let xfa_warnings: Vec<String> = if info.xfa.is_some() { info.warnings.clone() } else { Vec::new() };
-        let mut document = Self::build_document(context, name, path, bytes, info, cos, render_password, password, xfa);
+        let mut document =
+            Self::build_document(context, DocumentOpenData { name, path, bytes, info, structure: cos, render_password, password, xfa });
         // A script that ran away on open turns the form's scripts off for this document.
         document.xfa_template = if ran_away { None } else { xfa_template };
         document.js_output.append(script_output);
@@ -269,18 +281,8 @@ impl Session {
     }
 
     /// The last step of opening: build the document record and register it.
-    #[allow(clippy::too_many_arguments)]
-    fn build_document(
-        context: &OpenContext,
-        name: String,
-        path: Option<String>,
-        bytes: Arc<Vec<u8>>,
-        mut info: DocInfo,
-        cos: Result<Result<pdfcraft_cos::Document, pdfcraft_cos::CosError>, Box<dyn std::any::Any + Send>>,
-        render_password: Option<String>,
-        password: Option<&str>,
-        xfa: Option<XfaLayout>,
-    ) -> Document {
+    fn build_document(context: &OpenContext, data: DocumentOpenData<'_>) -> Document {
+        let DocumentOpenData { name, path, bytes, mut info, structure: cos, render_password, password, xfa } = data;
         let config = RenderConfig { password: render_password.as_deref().map(Arc::from), ..Default::default() };
         let (mut editor, read_only_reason) = match cos {
             Ok(Ok(cos)) => {
@@ -317,7 +319,7 @@ impl Session {
             }
         }
         let display = display_bytes(editor.as_mut(), &bytes, &mut signatures, &context.captions);
-        let renderer = RenderPool::new(display.clone(), render_threads(), config.clone());
+        let renderer = RenderPool::new(display.clone(), render_threads(), display_config(&config));
         let (form, adopted) = editor
             .as_ref()
             .map(|e| {

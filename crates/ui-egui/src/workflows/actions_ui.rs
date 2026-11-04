@@ -345,11 +345,14 @@ fn edit_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> bool {
     let all = Step::all();
     let add = &mut app.wizard.add;
     ui.horizontal(|ui| {
-        egui::ComboBox::from_id_salt("action-add-step").selected_text(tl!(all[(*add).min(all.len() - 1)].label())).width(240.0).show_ui(ui, |ui| {
-            for (i, s) in all.iter().enumerate() {
-                ui.selectable_value(add, i, tl!(s.label()));
-            }
-        });
+        craft_ui::ComboBox::from_id_salt("action-add-step").selected_text(tl!(all[(*add).min(all.len() - 1)].label())).width(240.0).show_ui(
+            ui,
+            |ui| {
+                for (i, s) in all.iter().enumerate() {
+                    ui.selectable_value(add, i, tl!(s.label()));
+                }
+            },
+        );
         if ui.button(tl!("Add Step")).clicked() {
             a.steps.push(all[(*add).min(all.len() - 1)].clone());
         }

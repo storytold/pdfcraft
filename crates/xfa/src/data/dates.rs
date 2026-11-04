@@ -1,5 +1,5 @@
 use super::path::template_field;
-use super::*;
+use super::{Field, Template};
 
 /// The date letters (`yyyy-mm-dd`, `yyyymmdd`) of an XFA date picture clause such as
 /// `date{YYYY-MM-DD}`, or `None` when it has none this reads (empty, or with symbols beyond
