@@ -334,19 +334,23 @@ fn an_edit_on_another_page_that_changes_the_verdict_redraws_the_signature() {
     assert!(invalid > 100 && valid < 10, "page 1 redraws in the invalid state: {invalid} red, {valid} green pixels");
 }
 
-/// `file` with a text field, "name", below the signature on page 1.
-fn with_text_field(file: Vec<u8>) -> Vec<u8> {
+/// A text field, "name", below the signature on page 1.
+const NAME_FIELD: &[u8] = b"<< /FT /Tx /T (name) /Type /Annot /Subtype /Widget /Rect [100 40 300 70] /P 3 0 R /DA (/Helv 12 Tf 0 g) >>";
+
+/// `file` with `fields`, each one widget on page 1, added to its form.
+fn with_fields(file: Vec<u8>, fields: &[&[u8]]) -> Vec<u8> {
     use pdfcraft_cos::{Lexer, ObjRef, Object};
     let mut doc = pdfcraft_cos::Document::open(Arc::new(file)).unwrap();
-    let field = b"<< /FT /Tx /T (name) /Type /Annot /Subtype /Widget /Rect [100 40 300 70] /P 3 0 R /DA (/Helv 12 Tf 0 g) >>";
-    let field = doc.add(Lexer::new(field, 0).object().unwrap());
-    for (owner, key) in [(ObjRef::new(5, 0), &b"Fields"[..]), (ObjRef::new(3, 0), b"Annots")] {
-        doc.update_dict(owner, |d| {
-            if let Some(Object::Array(a)) = d.get_mut(key) {
-                a.push(Object::Ref(field));
-            }
-        })
-        .unwrap();
+    for field in fields {
+        let field = doc.add(Lexer::new(field, 0).object().unwrap());
+        for (owner, key) in [(ObjRef::new(5, 0), &b"Fields"[..]), (ObjRef::new(3, 0), b"Annots")] {
+            doc.update_dict(owner, |d| {
+                if let Some(Object::Array(a)) = d.get_mut(key) {
+                    a.push(Object::Ref(field));
+                }
+            })
+            .unwrap();
+        }
     }
     pdfcraft_cos::write_incremental(&doc, &pdfcraft_cos::SaveOptions::default()).unwrap()
 }
@@ -358,7 +362,7 @@ fn a_value_typed_against_a_certification_shows_while_every_page_redraws() {
     let p12 = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12")).unwrap();
     let id = pdfcraft_engine::sign::pkcs12::open(&p12, "test").unwrap();
     let anchor = id.chain.first().cloned().unwrap_or_else(|| id.certificate.clone());
-    let bytes = sign(&id, with_text_field(fixture()), |v| {
+    let bytes = sign(&id, with_fields(fixture(), &[NAME_FIELD]), |v| {
         let reference = b"[<< /Type /SigRef /TransformMethod /DocMDP /TransformParams << /Type /TransformParams /P 1 /V /1.2 >> >>]";
         v.set(b"Reference".to_vec(), pdfcraft_cos::Lexer::new(reference, 0).object().unwrap());
     });
@@ -372,6 +376,30 @@ fn a_value_typed_against_a_certification_shows_while_every_page_redraws() {
     assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::SetFieldValue { name: "name".into(), value }));
     assert_eq!(h.state().session.get(doc_id).unwrap().signatures[0].status, SignatureStatus::Invalid);
     assert!(h.state().views[0].forms.unbaked.contains(&("name".to_string(), 0)), "the value typed is drawn until page 1 redraws");
+}
+
+#[test]
+fn values_still_waiting_on_their_page_stay_drawn_when_a_form_edit_redraws_every_page() {
+    // A field filled in after an approval signature leaves every state as it was; deleting the
+    // unsigned signature field then shortens the list, so every page redraws. The value typed first
+    // is still waiting on page 1's raster and stays drawn until it arrives.
+    let p12 = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12")).unwrap();
+    let id = pdfcraft_engine::sign::pkcs12::open(&p12, "test").unwrap();
+    let unsigned: &[u8] = b"<< /FT /Sig /T (Signature2) /Type /Annot /Subtype /Widget /Rect [100 230 300 280] /P 3 0 R >>";
+    let mut h = harness(sign(&id, with_fields(fixture(), &[NAME_FIELD, unsigned]), |_| {}), "en");
+    let doc_id = h.state().views[0].id;
+    let states = |h: &Harness<'static, PdfCraftApp>| {
+        h.state().session.get(doc_id).unwrap().signatures.iter().map(|s| (s.field.clone(), s.status, s.verdict_shown)).collect::<Vec<_>>()
+    };
+    let before = states(&h);
+    let value = pdfcraft_engine::FieldValue::Text("Ada".into());
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::SetFieldValue { name: "name".into(), value }));
+    assert_eq!(states(&h), before, "filling in a field after an approval signature changes no state");
+    assert!(h.state().views[0].forms.unbaked.contains(&("name".to_string(), 0)));
+
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::DeleteField { name: "Signature2".into() }));
+    assert_eq!(states(&h).len(), before.len() - 1, "the unsigned field left the list");
+    assert!(h.state().views[0].forms.unbaked.contains(&("name".to_string(), 0)), "the value typed first is drawn until page 1 redraws");
 }
 
 #[test]

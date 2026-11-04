@@ -174,10 +174,12 @@ impl PdfCraftApp {
                     .map(|before| form_edit_pages(&before, &doc.form));
                 if signatures_before.is_some_and(|before| crate::canvas::signature_states_changed(&before, &doc.signatures)) {
                     // A signature shows its state on its own page, which an edit elsewhere can
-                    // change (a certification forbidding it, say): every page redraws. The values
-                    // just typed still show until theirs do.
+                    // change (a certification forbidding it, say): every page redraws. A form edit
+                    // moves no page, so the values it and earlier edits typed show until theirs do.
+                    let waiting = form_edit.is_some().then(|| std::mem::take(&mut view.forms.unbaked));
                     view.document_changed(info);
-                    if let Some((_, unbaked)) = form_edit {
+                    if let (Some(waiting), Some((_, unbaked))) = (waiting, form_edit) {
+                        view.forms.unbaked = waiting;
                         view.forms.unbaked.extend(unbaked);
                     }
                 } else if let Some(page) = comment_page(&edit).or_else(|| content_page(&edit)) {
