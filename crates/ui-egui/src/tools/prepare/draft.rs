@@ -1,4 +1,4 @@
-use super::{Calculate, FieldLook, FieldProps, FormField, FormFieldKind, Format, Validate};
+use super::{Calculate, FieldFont, FieldLook, FieldProps, FormField, FormFieldKind, Format, Validate};
 
 // ───────────────────────────────────────────────────────────────────────── Field Properties
 
@@ -23,6 +23,7 @@ impl crate::PdfCraftApp {
         let Some(f) = self.session.get(id).and_then(|d| d.form.iter().find(|f| f.name == name).cloned()) else { return };
         let mut d = FieldDraft::new(&f, widget);
         d.look = self.session.get(id).and_then(|doc| doc.field_look(name));
+        d.fonts = self.session.get(id).map(|doc| doc.form_fonts()).unwrap_or_default();
         d.check_style = self.session.get(id).and_then(|doc| doc.field_check_style(name));
         if let Some(o) = d.original.as_mut() {
             o.look = d.look;
@@ -101,9 +102,20 @@ impl ActionDraft {
     }
 }
 
+/// Where Field Properties gets a font file from.
+#[derive(Clone, Debug, PartialEq)]
+pub enum FontPick {
+    /// Load font…: pick a font file.
+    Load,
+    /// A font file installed on this computer.
+    Installed(std::path::PathBuf),
+}
+
 /// The Field Properties dialog's working copy.
 #[derive(Clone, Debug, PartialEq)]
 pub struct FieldDraft {
+    /// This dialog's own number: a font file picked for it is used only while it is open.
+    pub id: u64,
     pub field: String,
     pub kind: FormFieldKind,
     pub widget: usize,
@@ -136,6 +148,14 @@ pub struct FieldDraft {
     /// `/MK /R`: 0, 90, 180 or 270 degrees counterclockwise.
     pub rotation: i64,
     pub look: Option<FieldLook>,
+    /// Appearance tab: the fonts PdfCraft embedded in the form (`/PCFull<n>`), with their
+    /// PostScript names, listed beside the standard fonts.
+    pub fonts: Vec<(FieldFont, String)>,
+    /// Appearance tab: a font file chosen with Load font… or Installed fonts… (its PostScript
+    /// name and bytes), embedded in the form when the dialog is applied (#3848).
+    pub font_file: Option<(String, std::sync::Arc<Vec<u8>>)>,
+    /// Appearance tab: a font file to choose, for the dialog's caller to pick or read.
+    pub font_pick: Option<FontPick>,
     /// Check boxes and radio buttons: the mark when on (Options tab).
     pub check_style: Option<pdfcraft_engine::CheckStyle>,
     pub format: Format,
@@ -181,7 +201,10 @@ pub(crate) fn da_font(da: &str) -> &str {
 impl FieldDraft {
     pub fn new(f: &FormField, widget: usize) -> Self {
         let r = f.widgets.get(widget).map(|w| w.rect).unwrap_or_default();
+        // Each dialog a new number; wrapping after 2^64 dialogs is harmless.
+        static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         let mut d = FieldDraft {
+            id: NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             field: f.name.clone(),
             kind: f.kind,
             widget,
@@ -207,6 +230,9 @@ impl FieldDraft {
             position: [r[0], r[1], r[2] - r[0], r[3] - r[1]],
             rotation: f.widgets.get(widget).map(|w| w.rotation).unwrap_or(0),
             look: None,
+            fonts: Vec::new(),
+            font_file: None,
+            font_pick: None,
             check_style: None,
             format: f.actions.format.clone(),
             validate: f.actions.validate.clone(),
@@ -268,6 +294,7 @@ impl FieldDraft {
             rotation: (self.rotation != o.rotation).then_some((self.widget, self.rotation)),
             look: (self.look != o.look).then_some(self.look).flatten(),
             appearance: None,
+            font_file: self.font_file.as_ref().map(|(_, bytes)| bytes.clone()),
             check_style: (self.check_style != o.check_style).then_some(self.check_style).flatten(),
             format: (self.format != o.format).then(|| self.format.clone()),
             validate: (self.validate != o.validate).then(|| self.validate.clone()),

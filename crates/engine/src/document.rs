@@ -555,6 +555,14 @@ impl Document {
         Some(pdfcraft_forms::look(&e.cos, f))
     }
 
+    /// The fonts PdfCraft embedded in the form for fields to use (`/PCFull<n>`, from
+    /// [`pdfcraft_forms::add_form_font`]), with their PostScript names: Field Properties ▸
+    /// Appearance lists them beside the standard fonts. Fonts another program put in `/DR` under
+    /// its own names are not among them.
+    pub fn form_fonts(&self) -> Vec<(pdfcraft_forms::FieldFont, String)> {
+        self.editor.as_ref().map(|e| pdfcraft_forms::embedded_form_fonts(&e.cos)).unwrap_or_default()
+    }
+
     /// A check box's or radio button's mark (Field Properties ▸ Options), `None` for other fields.
     pub fn field_check_style(&self, name: &str) -> Option<CheckStyle> {
         let e = self.editor.as_ref()?;
