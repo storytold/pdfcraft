@@ -46,6 +46,15 @@ const ZOOM_IN: &str = "view.zoom.in";
 const ZOOM_OUT: &str = "view.zoom.out";
 const ROTATE_CW: &str = "view.rotate.cw";
 const ROTATE_CCW: &str = "view.rotate.ccw";
+const PLUGINS_MANAGE: &str = "plugins.manage";
+const PLUGINS_INSTALL: &str = "plugins.install";
+const PLUGINS_REFRESH: &str = "plugins.refresh";
+const NO_PLUGINS: &str = "plugins.none";
+/// A plugin with no command to offer (disabled, incompatible or empty), `{"plugin": id}`.
+const NO_PLUGIN_COMMANDS: &str = "plugins.no_commands";
+/// One plugin command, `{"plugin": id, "command": id}`. The plugin goes by its manifest id, not
+/// its position, so a menu drawn before a refresh never runs another plugin.
+const PLUGIN_RUN: &str = "plugins.run";
 
 /// The menu-only items: id, English label and the shortcut shown (the keys stay with the view).
 const EXTRA: &[(&str, &str, Option<Shortcut>)] = &[
@@ -62,6 +71,10 @@ const EXTRA: &[(&str, &str, Option<Shortcut>)] = &[
     (ZOOM_OUT, "Zoom out", Some(crate::commands::ZOOM_OUT)),
     (ROTATE_CW, "Rotate view clockwise", Some(crate::commands::ROTATE_CW)),
     (ROTATE_CCW, "Rotate view counterclockwise", Some(crate::commands::ROTATE_CCW)),
+    (PLUGINS_MANAGE, "Manage plugins…", None),
+    (PLUGINS_INSTALL, "Install a plugin…", None),
+    (PLUGINS_REFRESH, "Refresh plugins", None),
+    (NO_PLUGINS, "No plugins installed", None),
 ];
 
 /// View ▸ Side panels: the panel, its id in [`PANEL`] commands and its English label.
@@ -77,6 +90,7 @@ const PANELS: &[(RightPanel, &str, &str)] = &[
     (RightPanel::Tags, "tags", "Tags"),
     (RightPanel::Search, "search", "Search"),
     (RightPanel::Compare, "compare", "Compare"),
+    (RightPanel::Plugins, "plugins", "Plugins"),
 ];
 
 /// The English titles of the menus and submenus, for the bar's mnemonics in languages whose
@@ -101,6 +115,7 @@ const TITLES: &[&str] = &[
     "Display theme",
     "Tools",
     "Fill & Sign",
+    "Plugins",
 ];
 
 /// Separator.
@@ -360,6 +375,7 @@ impl PdfCraftApp {
         view.push(Node::submenu(tl!("Display theme"), list(THEMES, &mut used)));
         view.push(Node::Separator);
         view.push(Node::submenu(tl!("Tools"), self.tools_menu(&used)));
+        view.push(Node::submenu(tl!("Plugins"), self.plugins_menu()));
         view.extend(list(&["view.palette"], &mut used));
         let mut bar = MenuBar {
             menus: vec![
@@ -448,6 +464,32 @@ impl PdfCraftApp {
             .collect()
     }
 
+    /// View ▸ Plugins: the administration items, then one submenu per installed plugin with its commands.
+    fn plugins_menu(&self) -> Vec<Node> {
+        let mut nodes: Vec<Node> = [PLUGINS_MANAGE, PLUGINS_INSTALL, PLUGINS_REFRESH].iter().map(|&id| self.menu_item(id, None)).collect();
+        nodes.push(Node::Separator);
+        let entries = self.plugins.menu_entries();
+        if entries.is_empty() {
+            nodes.push(self.menu_item(NO_PLUGINS, None));
+        }
+        for entry in entries {
+            let mut items: Vec<Node> = entry
+                .commands
+                .iter()
+                .map(|c| {
+                    let params = serde_json::json!({ "plugin": entry.id, "command": c.id });
+                    Item::new(CommandRef::with_params(PLUGIN_RUN, params), c.label.clone()).into()
+                })
+                .collect();
+            if items.is_empty() {
+                let params = serde_json::json!({ "plugin": entry.id });
+                items.push(Item::new(CommandRef::with_params(NO_PLUGIN_COMMANDS, params), tl!("No commands available")).into());
+            }
+            nodes.push(Node::submenu(entry.name.to_owned(), items));
+        }
+        nodes
+    }
+
     /// The open documents, in tab order, for the Window menu.
     fn menu_documents(&self) -> Vec<Document> {
         (0..self.views.len())
@@ -474,7 +516,11 @@ impl PdfCraftApp {
         let text = ctx.text_edit_focused() && matches!(command.id.as_str(), "edit.undo" | "edit.redo" | "edit.copy" | CUT | PASTE | SELECT_ALL);
         let enabled = text
             || match command.id.as_str() {
-                NO_RECENT => false,
+                NO_RECENT | NO_PLUGINS | NO_PLUGIN_COMMANDS => false,
+                PLUGINS_MANAGE | PLUGINS_REFRESH => true,
+                // The web build has no plugins folder to install into.
+                PLUGINS_INSTALL => !cfg!(target_arch = "wasm32"),
+                PLUGIN_RUN => has_doc && plugin_command(command).is_some_and(|(plugin, _)| self.plugins.runnable(plugin)),
                 "file.open_recent" => index.is_none_or(|i| i < self.recent.len()),
                 "file.clear_recent" => !self.recent.is_empty(),
                 DOCUMENT => index.is_some_and(|i| i < self.views.len()),
@@ -544,6 +590,15 @@ impl PdfCraftApp {
             SELECT_ALL => self.menu_input.extend(key(egui::Key::A, egui::Modifiers::COMMAND)),
             DELETE => self.menu_input.extend(key(egui::Key::Delete, egui::Modifiers::NONE)),
             PANEL => self.choose_right_panel(panel(command)),
+            PLUGINS_MANAGE => self.dialog = Some(crate::Dialog::Plugins),
+            PLUGINS_INSTALL => self.install_plugin_dialog(),
+            PLUGINS_REFRESH => self.plugins.refresh(),
+            PLUGIN_RUN => {
+                if let Some((plugin, id)) = plugin_command(command) {
+                    let (plugin, id) = (plugin.to_owned(), id.to_owned());
+                    self.run_plugin_command(&plugin, &id);
+                }
+            }
             ACTUAL_SIZE | PAGE_LEVEL | FIT_WIDTH | FIT_HEIGHT | ZOOM_IN | ZOOM_OUT | ROTATE_CW | ROTATE_CCW => {
                 let Some(v) = self.active.and_then(|i| self.views.get_mut(i)) else { return };
                 match command.id.as_str() {
@@ -630,6 +685,13 @@ impl PdfCraftApp {
 /// A command's `{"index": n}` parameter.
 fn param_index(command: &CommandRef) -> Option<usize> {
     command.params.get("index").and_then(serde_json::Value::as_u64).and_then(|i| usize::try_from(i).ok())
+}
+
+/// The plugin and command a [`PLUGIN_RUN`] command names.
+fn plugin_command(command: &CommandRef) -> Option<(&str, &str)> {
+    let plugin = command.params.get("plugin").and_then(serde_json::Value::as_str)?;
+    let id = command.params.get("command").and_then(serde_json::Value::as_str)?;
+    Some((plugin, id))
 }
 
 /// The side panel a [`PANEL`] command names.

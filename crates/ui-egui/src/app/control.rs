@@ -69,6 +69,7 @@ impl PdfCraftApp {
                     "tags" => Some(RightPanel::Tags),
                     "search" => Some(RightPanel::Search),
                     "compare" => Some(RightPanel::Compare),
+                    "plugins" => Some(RightPanel::Plugins),
                     "none" => None,
                     other => return Err(format!("unknown panel {other}")),
                 }

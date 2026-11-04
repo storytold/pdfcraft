@@ -1,0 +1,7 @@
+Label = "Plugins"
+Label = "0"
+Button "Close" [off]
+Button "Install a plugin…"
+Button "Refresh"
+Label = "No plugins folder is available on this system."
+Label = "No plugins installed. A plugin is a single .wasm file; install one above."

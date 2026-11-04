@@ -16,6 +16,7 @@ pub(super) mod format_text_ui;
 pub(super) mod organize_panel;
 pub(super) mod page_selection_ui;
 mod pages;
+pub(super) mod plugins_ui;
 mod right;
 pub(super) mod search_ui;
 pub mod side_panels;

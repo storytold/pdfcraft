@@ -1,0 +1,19 @@
+[package]
+name = "pdfcraft-plugin"
+description = "Generic WebAssembly plugin host: discovery, installation, sandbox and versioned JSON protocol"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+wasmi = "1"
+
+[dev-dependencies]
+# WebAssembly text -> binary for the hostile-module fixtures (Apache-2.0 WITH LLVM-exception).
+wat = "1"

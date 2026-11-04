@@ -207,6 +207,7 @@ impl PdfCraftApp {
             js_console: Default::default(),
             doc_js: Default::default(),
             a11y: a11y_ui::A11yState::default(),
+            plugins: plugins_ui::PluginManager::default(),
             tags_state: Default::default(),
             a11y_skipped: Default::default(),
             alt_draft: Default::default(),

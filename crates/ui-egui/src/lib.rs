@@ -116,6 +116,7 @@ use panels::comments_panel;
 use panels::format_text_ui;
 use panels::organize_panel;
 use panels::page_selection_ui;
+use panels::plugins_ui;
 use panels::search_ui;
 pub use panels::side_panels;
 pub use persist::last_session;
@@ -510,6 +511,8 @@ pub struct PdfCraftApp {
     pub js_console: js_ui::JsConsole,
     pub doc_js: js_ui::DocJsDraft,
     pub a11y: a11y_ui::A11yState,
+    /// Installed WebAssembly plugins and their runtime state (Plugins menu, panel and dialog).
+    pub plugins: plugins_ui::PluginManager,
     pub(crate) tags_state: tags_ui::State,
     /// Rules skipped by hand, for the document they were skipped in.
     pub a11y_skipped: std::collections::HashSet<(DocId, pdfcraft_engine::a11y::Rule)>,
