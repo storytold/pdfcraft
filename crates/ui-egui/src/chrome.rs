@@ -490,7 +490,7 @@ pub fn mode_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 if app.native_menu.is_none() {
                     let btn = widgets::ghost_button_sized(ui, "panel-left", tl!("Menu"), 48.0);
                     ui.ctx().accesskit_node_builder(btn.id, |n| {
-                        n.set_role(egui::accesskit::Role::MenuItem);
+                        n.set_role(egui::accesskit::Role::Button);
                         n.set_label(tl!("Menu"));
                         n.set_has_popup(egui::accesskit::HasPopup::Menu);
                     });

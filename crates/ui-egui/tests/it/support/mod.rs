@@ -59,9 +59,10 @@ pub fn open_menu(h: &mut Harness<'static, PdfCraftApp>, title: &str) {
         let menu_label = pdfcraft_ui_egui::i18n::t("Menu");
         let menu_btn = h
             .query_by(|n| {
-                n.role() == egui::accesskit::Role::MenuItem && n.label().is_some_and(|l| l == "Menu" || l == menu_label || l.starts_with(menu_label))
+                (n.role() == egui::accesskit::Role::Button || n.role() == egui::accesskit::Role::MenuItem)
+                    && n.label().is_some_and(|l| l == "Menu" || l == menu_label || l.starts_with(menu_label))
             })
-            .or_else(|| h.query_by(|n| n.role() == egui::accesskit::Role::MenuItem));
+            .or_else(|| h.query_by(|n| n.label().as_deref() == Some("Menu")));
         if let Some(menu) = menu_btn {
             menu.click();
             h.run_steps(2);
