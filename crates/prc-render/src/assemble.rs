@@ -49,9 +49,10 @@ pub fn place(mesh: &TriangleMesh, matrix: &Matrix, colour: Option<[u8; 4]>, tria
 /// # Errors
 /// [`RenderError::Model`] when a tessellation section or the tree cannot be read, or the tree
 /// places a tessellation its file structure does not have; [`RenderError::TooManyTriangles`] past
-/// [`MAX_ASSEMBLED_TRIANGLES`] and [`RenderError::TooManyVertices`] past [`MAX_ASSEMBLED_VERTICES`].
+/// [`MAX_ASSEMBLED_TRIANGLES`] and [`RenderError::TooManyVertices`] past [`MAX_ASSEMBLED_VERTICES`],
+/// counting both what is decoded and what is placed.
 pub fn assemble(prc: &PrcFile) -> Result<Vec<WorldMesh>, RenderError> {
-    let tessellations = prc.file_structures.iter().map(|fs| fs.tessellations()).collect::<Result<Vec<_>, _>>()?;
+    let tessellations = decode(prc.file_structures.iter().map(|fs| fs.tessellations()), Budget::default())?;
     let mut budget = Budget::default();
     let mut out = Vec::new();
     if !prc.stores_tree() {
@@ -69,6 +70,23 @@ pub fn assemble(prc: &PrcFile) -> Result<Vec<WorldMesh>, RenderError> {
         triangle_colours: Box::new(move |mesh: &TriangleMesh| p.triangle_colours(mesh)),
     });
     place_items(&tessellations, items, &mut budget, &mut out)?;
+    Ok(out)
+}
+
+/// Each file structure's tessellations, decoded one structure at a time and charged to `budget`
+/// as they are, so decoding stops at the structure that passes a ceiling.
+pub(crate) fn decode(
+    structures: impl IntoIterator<Item = Result<Vec<Tessellation>, pdfcraft_prc::PrcError>>,
+    mut budget: Budget,
+) -> Result<Vec<Vec<Tessellation>>, RenderError> {
+    let mut out = Vec::new();
+    for tessellations in structures {
+        let tessellations = tessellations?;
+        for mesh in tessellations.iter().filter_map(as_mesh) {
+            budget.spend(mesh)?;
+        }
+        out.push(tessellations);
+    }
     Ok(out)
 }
 

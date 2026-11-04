@@ -308,3 +308,24 @@ fn a_small_model_far_from_the_origin_can_be_fitted() {
     let camera = Camera::fit_meshes(&[WorldMesh::new(m)], [1.0, 1.0, 1.0], [0.0, 1.0, 0.0], false, 1.0);
     assert!(camera.is_ok(), "{camera:?}");
 }
+
+#[test]
+fn a_triangle_whose_edges_overflow_is_drawn() {
+    // Its corners are finite but 2e308 apart, so the plain edge differences are infinite.
+    let m = mesh(vec![[-1e308, -1e308, 0.0], [1e308, -1e308, 0.0], [0.0, 1e308, 0.0]], vec![[0, 1, 2]]);
+    let image = render(&[WorldMesh::new(m)], &ortho(1e308), &small()).unwrap();
+    assert_eq!(pixel(&image, 20, 20), [190, 192, 200, 255]);
+}
+
+#[test]
+fn an_on_screen_triangle_is_drawn_when_projecting_it_would_overflow() {
+    let wide = RenderOptions { width: 30, height: 10, ..RenderOptions::default() };
+    let drawn = |image: &Image| image.rgba.chunks(4).filter(|px| px != &[255, 255, 255, 255]).count();
+    // A tiny field of view: x times the focal length (about 1.1e300) overflows, though x over z does not.
+    let camera = Camera { eye: [0.0; 3], target: [0.0, 0.0, 1e308], up: [0.0, 1.0, 0.0], projection: Projection::Perspective { fov_y: 1e-298 } };
+    let far = mesh(vec![[1.5e8, -3e7, 1e308], [2.5e8, -3e7, 1e308], [2e8, 3e7, 1e308]], vec![[0, 1, 2]]);
+    assert!(drawn(&render(&[WorldMesh::new(far)], &camera, &wide).unwrap()) > 0);
+    // Half the orthographic height times the aspect ratio overflows.
+    let big = mesh(vec![[-5e307, -5e307, 0.0], [5e307, -5e307, 0.0], [0.0, 5e307, 0.0]], vec![[0, 1, 2]]);
+    assert_eq!(pixel(&render(&[WorldMesh::new(big)], &ortho(1.5e308), &wide).unwrap(), 15, 5), [190, 192, 200, 255]);
+}

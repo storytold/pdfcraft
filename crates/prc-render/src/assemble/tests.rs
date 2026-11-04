@@ -112,3 +112,16 @@ fn a_placement_past_the_triangle_budget_is_an_error() {
     assert!(matches!(r, Err(RenderError::TooManyTriangles)));
     assert!(out.is_empty());
 }
+
+#[test]
+fn decoding_stops_at_the_structure_that_passes_the_ceiling() {
+    let pulled = std::cell::Cell::new(0);
+    let structures = std::iter::repeat_with(|| {
+        pulled.set(pulled.get() + 1);
+        Ok(vec![Tessellation::Mesh(triangle())])
+    })
+    .take(3);
+    let nearly_full = Budget { triangles: MAX_ASSEMBLED_TRIANGLES - 1, vertices: 0 };
+    assert_eq!(decode(structures, nearly_full).err(), Some(RenderError::TooManyTriangles));
+    assert_eq!(pulled.get(), 2, "the third structure is never decoded");
+}

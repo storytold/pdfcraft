@@ -70,9 +70,12 @@ impl View {
                 out.push(p);
             }
             if p_in != q_in {
-                let t = (near - z(p)) / (z(q) - z(p));
-                let mut cut = p;
-                for (c, d) in cut.iter_mut().zip(q) {
+                // Cut from the same end whichever way round the edge is met, so two triangles
+                // sharing it get the same cut point.
+                let (s, e) = if first(&p, &q) { (p, q) } else { (q, p) };
+                let t = (near - z(s)) / (z(e) - z(s));
+                let mut cut = s;
+                for (c, d) in cut.iter_mut().zip(e) {
                     *c += t * (d - *c);
                 }
                 out.push(cut);
@@ -85,11 +88,17 @@ impl View {
     /// in screen space and larger for nearer points.
     pub(crate) fn project(&self, [x, y, z, r, g, b]: ViewCorner, width: u32, height: u32) -> Corner {
         let (nx, ny, key) = match *self {
-            View::Perspective { focal, aspect, .. } => (x * focal / (z * aspect), y * focal / z, 1.0 / z),
-            View::Orthographic { half_height, aspect } => (x / (half_height * aspect), y / half_height, -z),
+            // Divided before multiplied, so an on-screen point's intermediate products stay finite.
+            View::Perspective { focal, aspect, .. } => (x / z * focal / aspect, y / z * focal, 1.0 / z),
+            View::Orthographic { half_height, aspect } => (x / half_height / aspect, y / half_height, -z),
         };
         Corner { at: [(nx + 1.0) / 2.0 * f64::from(width), (1.0 - ny) / 2.0 * f64::from(height), key], shade: [r, g, b] }
     }
+}
+
+/// Whether view corner `a`'s position comes before `b`'s, ordering x, then y, then z.
+fn first(a: &ViewCorner, b: &ViewCorner) -> bool {
+    a.iter().zip(b).take(3).map(|(p, q)| p.total_cmp(q)).find(|o| o.is_ne()).is_none_or(std::cmp::Ordering::is_lt)
 }
 
 /// The image being drawn: `rgba` holds `width * height` straight-RGBA pixels and `depth` their
@@ -257,6 +266,17 @@ mod tests {
         assert_eq!(channel(1e300), 255);
         assert_eq!(channel(-4.0), 0);
         assert_eq!(channel(127.5), 128);
+    }
+
+    #[test]
+    fn a_shared_edge_is_cut_at_the_same_point_from_either_triangle() {
+        // Cutting this edge from P towards Q and from Q towards P rounds differently.
+        let view = View::Perspective { focal: 1.0, aspect: 1.0, near: 0.5 };
+        let (p, q) = ([0.1, 0.1, 0.2, 1.0, 1.0, 1.0], [0.7, 0.2, 1.6, 1.0, 1.0, 1.0]);
+        let one = view.clip([p, q, [0.0, 3.0, 2.0, 1.0, 1.0, 1.0]]);
+        let other = view.clip([q, p, [3.0, 0.0, 2.0, 1.0, 1.0, 1.0]]);
+        let shared = one.iter().filter(|a| other.iter().any(|b| a[..3] == b[..3])).count();
+        assert_eq!(shared, 2, "Q and the cut on PQ: {one:?} {other:?}");
     }
 
     fn corner(x: f64, y: f64, key: f64, shade: f64) -> Corner {
