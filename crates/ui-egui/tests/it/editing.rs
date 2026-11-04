@@ -7435,6 +7435,39 @@ fn a_drag_from_the_selected_picture_under_another_moves_the_selected_one() {
     assert_eq!(selected, Some(1), "a click selects the one on top");
 }
 
+/// A move too short to be a drag of the page still resizes the selected picture from its grip, as
+/// the grip takes its drag from the press.
+#[test]
+fn a_short_drag_from_a_picture_grip_resizes_it() {
+    let mut h = picture_pages(false);
+    let id = h.state().views[0].id;
+    let before = h.state().session.get(id).unwrap().page_images(0)[0].matrix;
+    // The picture shows at x 30..160, y 170..250: its lower right grip, moved 3 px.
+    let grip = page_at(&h, 0, 160.0, 170.0);
+    h.hover_at(grip);
+    h.run_steps(1);
+    h.drag_at(grip);
+    h.run_steps(1);
+    h.hover_at(grip + egui::vec2(3.0, 0.0));
+    h.run_steps(1);
+    h.drop_at(grip + egui::vec2(3.0, 0.0));
+    h.run_steps(3);
+    assert_ne!(h.state().session.get(id).unwrap().page_images(0)[0].matrix, before, "the picture is resized");
+}
+
+/// A click on a selected picture's grip that doesn't move resizes nothing: no edit, and the picture
+/// stays selected.
+#[test]
+fn a_click_on_a_picture_grip_changes_nothing() {
+    let mut h = picture_pages(false);
+    let id = h.state().views[0].id;
+    let before = h.state().session.get(id).unwrap().edit_generation();
+    let grip = page_at(&h, 0, 160.0, 170.0);
+    slipping_click(&mut h, grip, grip);
+    assert_eq!(h.state().session.get(id).unwrap().edit_generation(), before, "no edit");
+    assert!(h.state().views[0].image_selection.is_some(), "the picture stays selected");
+}
+
 /// In the page grid, Delete deletes the page chosen there. The picture selected before the grid
 /// opened is not on screen, and stays.
 #[test]

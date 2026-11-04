@@ -782,13 +782,16 @@ pub(crate) fn image_input(cx: &ImageCx<'_>, images: &[pdfcraft_engine::PageImage
         }
 
         // A drag of the selected picture takes what its press was on ([`body_hit`], [`handle_hit`]):
-        // the rotate knob turns it, a grip resizes it, the picture itself moves.
+        // the rotate knob turns it, a grip resizes it, the picture itself moves. The knob and the
+        // grips take it from the press, so a move too short to be a drag of the page counts; the
+        // picture waits for that, as a click selects.
+        let at_press = |part| matches!(part, PicturePart::Knob | PicturePart::Corner(_));
         if gate
-            && ptr.drag_started
             && let Some(o) = ptr.origin
             && let PagePress::Mine(Owner::Picture { index, part }) = press
             && (index == i || part == PicturePart::OverSelected)
-            && let Some(s) = view.image_selection.as_mut()
+            && (ptr.drag_started || at_press(part) && ptr.pressed().is_some())
+            && let Some(s) = view.image_selection.as_mut().filter(|s| s.drag.is_none())
         {
             match part {
                 PicturePart::Knob => {
