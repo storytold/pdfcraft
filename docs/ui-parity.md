@@ -76,6 +76,7 @@ No dump of Acrobat's menu tree has been diffed against the registry yet (gap 24)
 | Document Properties (description, security, fonts, initial view, custom, advanced) | yes | all but Custom and XMP | partial |
 | Field Properties (General, Appearance, Position, Options, Actions, Format, Validate, Calculate, Signed) | yes | all but Signed | partial |
 | Comment properties and properties bar | yes | yes | shipped |
+| Snap to drawing for the drawing tools (object snap) | no | yes: F3 or the quick-bar button; endpoints, midpoints, intersections, paths, pictures' frames; added text and pictures moved in Edit text & images snap by a corner, a side's middle or the centre (Tab picks it); a turned or mirrored picture, and one on a turned page or view, not yet | shipped (beyond Acrobat) |
 | Preferences | ≈ 20 pages | Interface language, Documents and view, Identity, Fill & Sign, JavaScript | partial (gap 19) |
 
 ## Revision history

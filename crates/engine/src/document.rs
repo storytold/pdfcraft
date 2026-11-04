@@ -289,6 +289,23 @@ impl Document {
         measure::snap::geometry(&e.cos, page).map_err(|e| e.to_string())
     }
 
+    /// [`Self::measurement_paths`] without the picture at `index` among [`Self::page_images`]: a
+    /// picture being moved doesn't snap to where it was.
+    pub fn measurement_paths_without_image(&self, page: usize, index: usize) -> Result<measure::snap::Geometry, String> {
+        let e = self.editor.as_ref().ok_or("the document can't be read")?;
+        let skip: Vec<[f64; 6]> = self.page_images(page).get(index).map(|im| im.matrix).into_iter().collect();
+        measure::snap::geometry_skipping(&e.cos, page, measure::snap::Limits::default(), &skip).map_err(|e| e.to_string())
+    }
+
+    /// The comments drawn with lines on `page` (lines, connected lines, polygons, rectangles,
+    /// ovals) as snap geometry, but those at the `/Annots` places in `except` (a comment being
+    /// moved or reshaped doesn't snap to itself).
+    pub fn comment_paths(&self, page: usize, except: &[usize]) -> Result<measure::snap::Geometry, String> {
+        let e = self.editor.as_ref().ok_or("the document can't be read")?;
+        let outlines = measure::snap::comment_outlines(&e.cos, page).map_err(|e| e.to_string())?;
+        Ok(measure::snap::outline_geometry(outlines.iter().filter(|(i, _)| !except.contains(i)).map(|(_, o)| o)))
+    }
+
     /// A counter that changes with every edit (for caches of derived data).
     pub fn edit_generation(&self) -> u64 {
         self.generation

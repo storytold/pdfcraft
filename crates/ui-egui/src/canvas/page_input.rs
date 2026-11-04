@@ -62,7 +62,20 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
     let PageSlot { i, xf, .. } = *slot;
     let PageFrame { resp, ptr, pointer, .. } = *frame;
     let cx = PageToolContext { ui, resp, xf: &xf, ptr, page: i, doc, info };
-    let pcx = comments::PageCx { page: i, xf: &xf, ptr, info, tool, prefs, allowed, hidden: comments_hidden, redact_mark };
+    let pcx = comments::PageCx {
+        page: i,
+        xf: &xf,
+        ptr,
+        info,
+        tool,
+        prefs,
+        allowed,
+        hidden: comments_hidden,
+        redact_mark,
+        snap: frame.snap.clone(),
+        snap_comments: frame.snap_comments.clone(),
+        snap_cycle: view.comments.snap_cycle,
+    };
     let (lines, images) =
         if matches!(tool, QuickTool::AddText | QuickTool::EditText) && can_modify { edit_inventory(view, doc, i) } else { Default::default() };
     let field_tool = match tool {
@@ -154,6 +167,7 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
         source_blocked
             || crate::content_ui::page_input(
                 cx,
+                &pcx,
                 added,
                 tool == QuickTool::AddText && !over_source,
                 matches!(tool, QuickTool::AddText | QuickTool::EditText),
@@ -180,6 +194,7 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
             page: i,
             info,
             allow_interaction: !others_own_pointer && (matches!(view.router.owner(i), Some(crate::page_router::Owner::Picture { .. })) || !text_used),
+            snap: &pcx,
         };
         let image_used = crate::edit_text_ui::image_input(&image_cx, &images, view);
         !others_own_pointer && (text_used || image_used)
@@ -206,6 +221,18 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
     // selection rectangle, added content, which still decide for themselves) is not also a
     // commenting tool's, as before.
     let taken = on_objects || on_edit_text || on_link || on_content || boxing || on_field;
+    // Added content being moved sets the snap marker itself; any other tool that took the frame
+    // (a Prepare field tool takes every one) leaves no commenting tool's marker on the page, nor
+    // the target Tab would cycle (Tab is the field order's there).
+    if taken && !(on_edit_text || on_content) {
+        let cv = &mut view.comments;
+        if cv.snap_hover.is_some_and(|(page, ..)| page == i) {
+            cv.snap_hover = None;
+        }
+        if cv.snap_first.is_some_and(|(page, _)| page == i) {
+            cv.snap_first = None;
+        }
+    }
     let on_comment = comments::page_input(ui, resp, &pcx, press, taken, view);
     let consumed = taken || on_comment;
     let hover = pointer.and_then(|p| claim_under(&hits, view, p, frame.env.unobstructed));
@@ -299,6 +326,7 @@ fn tool_input(
             preview: frame.signature_preview,
             author,
             date_text,
+            comments: pcx,
         };
         match crate::fill_sign::page_input(cx, input, free, view) {
             Some(crate::fill_sign::FillAction::Edit(e)) => view.pending_edit = Some(*e),
@@ -736,7 +764,20 @@ pub(super) fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut P
     let PageFrame { resp, ptr, pointer, .. } = *frame;
     let painter = ui.painter();
     let tool_cx = PageToolContext { ui, resp, xf: &xf, ptr, page: i, doc, info };
-    let pcx = comments::PageCx { page: i, xf: &xf, ptr, info, tool, prefs, allowed, hidden: comments_hidden, redact_mark };
+    let pcx = comments::PageCx {
+        page: i,
+        xf: &xf,
+        ptr,
+        info,
+        tool,
+        prefs,
+        allowed,
+        hidden: comments_hidden,
+        redact_mark,
+        snap: frame.snap.clone(),
+        snap_comments: frame.snap_comments.clone(),
+        snap_cycle: view.comments.snap_cycle,
+    };
     if tool == QuickTool::Select && !input.consumed {
         crate::image_pick::page_input(resp, &xf, i, info, doc, pointer, view);
     }
@@ -754,7 +795,7 @@ pub(super) fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut P
     }
     comments::paint_page(ui, painter, &pcx, view, input.hover.as_ref());
     if editing_content {
-        crate::content_ui::paint_page(painter, &xf, i, info, added, view, pointer);
+        crate::content_ui::paint_page(painter, &xf, i, info, added, view, view.content.drag_pointer(pointer));
     }
     if tool == QuickTool::EditText {
         crate::object_ui::paint(painter, &xf, i, info, &view.objects);

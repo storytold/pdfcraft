@@ -5,6 +5,7 @@
 
 use std::collections::HashMap;
 
+use pdfcraft_engine::measure;
 use pdfcraft_engine::{Edit, LineEnding, Markup, NewAnnotation, NoteIcon, ReviewState, Rgb, Shape, StampGroup, StampKind, Style, SummarySort};
 use pdfcraft_render::{Annotation, PageInfo};
 use serde_json::{Value, json};
@@ -68,6 +69,98 @@ fn ending_pair(kind: &str, endings: Option<&[LineEnding]>) -> Result<[LineEnding
 fn hex(c: [f32; 3]) -> String {
     let b = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
     format!("#{:02X}{:02X}{:02X}", b(c[0]), b(c[1]), b(c[2]))
+}
+
+/// The points `comment_add` snaps at most, as a measurement takes.
+const SNAP_MAX_POINTS: usize = 2048;
+
+/// A shape's points moved onto the page's drawing or the comments drawn over it (`geometries`)
+/// where one lies within `tolerance` (user units), the better target of them: line ends, polygon
+/// and polyline vertices, a box's corners (a rectangle's, an oval's, a text box's). How many
+/// points moved (a point already on its target doesn't count). A box that both its corners would
+/// flatten onto one target keeps its corners, a line whose ends would meet keeps its ends, and a
+/// polygon or connected lines snapped too flat to be added keep their points.
+fn snap_shape(shape: Shape, geometries: &[&measure::snap::Geometry], tolerance: f64) -> (Shape, Option<usize>) {
+    let options = measure::snap::SnapOptions::default();
+    let path = |s: &measure::snap::Snap| s.kind == measure::snap::SnapKind::Path;
+    // The target a point goes to, as the drawing tools pick it from the page's paths and the
+    // comments together: a point in reach before a mere path, then the nearer.
+    let target = |p: [f64; 2]| -> Option<measure::snap::Snap> {
+        geometries
+            .iter()
+            .filter_map(|g| g.candidates(p, tolerance, options).ok())
+            .flatten()
+            .min_by(|a, b| path(a).cmp(&path(b)).then_with(|| measure::snap::candidate_order(a, b)))
+    };
+    let count = std::cell::Cell::new(0usize);
+    let moved = |hit: &Option<measure::snap::Snap>| usize::from(hit.is_some_and(|s| s.distance > 0.0));
+    // Points snapped, and how many of them moved: counted only if the shape keeps them.
+    let snap_points = |points: &[[f64; 2]]| -> (Vec<[f64; 2]>, usize) {
+        let hits: Vec<_> = points.iter().map(|&p| target(p)).collect();
+        let n = hits.iter().map(&moved).sum();
+        (points.iter().zip(&hits).map(|(&p, h)| h.as_ref().map_or(p, |s| s.point)).collect(), n)
+    };
+    // The width and height the points span.
+    let span = |points: &[[f64; 2]]| -> (f64, f64) {
+        let (mut lo, mut hi) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
+        for p in points {
+            lo = [lo[0].min(p[0]), lo[1].min(p[1])];
+            hi = [hi[0].max(p[0]), hi[1].max(p[1])];
+        }
+        (hi[0] - lo[0], hi[1] - lo[1])
+    };
+    let snap_box = |rect: [f64; 4]| -> [f64; 4] {
+        let (a, b) = (target([rect[0], rect[1]]), target([rect[2], rect[3]]));
+        let (pa, pb) = (a.map_or([rect[0], rect[1]], |s| s.point), b.map_or([rect[2], rect[3]], |s| s.point));
+        let snapped = [pa[0].min(pb[0]), pa[1].min(pb[1]), pa[0].max(pb[0]), pa[1].max(pb[1])];
+        // Both corners on one target (or one line) would leave no box, which can't be added.
+        if snapped[2] - snapped[0] < 1.0 || snapped[3] - snapped[1] < 1.0 {
+            return rect;
+        }
+        count.set(count.get() + moved(&a) + moved(&b));
+        snapped
+    };
+    let shape = match shape {
+        Shape::Line { from, to, start, end } => {
+            let (a, b) = (target(from), target(to));
+            let (pa, pb) = (a.map_or(from, |s| s.point), b.map_or(to, |s| s.point));
+            // Both ends on one target would leave no line, which can't be added: it keeps its ends.
+            if measure::distance(pa, pb) < 1.0 {
+                Shape::Line { from, to, start, end }
+            } else {
+                count.set(count.get() + moved(&a) + moved(&b));
+                Shape::Line { from: pa, to: pb, start, end }
+            }
+        }
+        // A polygon needs a point of width and height, connected lines a point in one direction
+        // (they may run straight across): snapped flatter than that, they keep their points.
+        Shape::Polygon { vertices, cloud } => {
+            let (snapped, n) = snap_points(&vertices);
+            let (w, h) = span(&snapped);
+            if w < 1.0 || h < 1.0 {
+                Shape::Polygon { vertices, cloud }
+            } else {
+                count.set(count.get() + n);
+                Shape::Polygon { vertices: snapped, cloud }
+            }
+        }
+        Shape::PolyLine { vertices, start, end } => {
+            let (snapped, n) = snap_points(&vertices);
+            let (w, h) = span(&snapped);
+            if w.max(h) < 1.0 {
+                Shape::PolyLine { vertices, start, end }
+            } else {
+                count.set(count.get() + n);
+                Shape::PolyLine { vertices: snapped, start, end }
+            }
+        }
+        Shape::Rectangle { rect } => Shape::Rectangle { rect: snap_box(rect) },
+        Shape::Oval { rect } => Shape::Oval { rect: snap_box(rect) },
+        // A text box by its corners too, as the Text box tool's corners snap in the app.
+        Shape::TextBox { rect, font_size } => Shape::TextBox { rect: snap_box(rect), font_size },
+        other => other,
+    };
+    (shape, Some(count.get()))
 }
 
 fn to_user(p: &PageInfo, x: f64, y: f64) -> [f64; 2] {
@@ -249,6 +342,12 @@ impl Automation {
         let page = self.page(a)?;
         let info = self.doc(a)?.info.pages[page].clone();
         let kind = a.str("type")?;
+        // Checked for every type, Replace Text too (which doesn't snap).
+        let snap = a.opt_bool("snap")?.unwrap_or(false);
+        let snap_tolerance = a.opt_num("snap_tolerance")?.unwrap_or(6.0);
+        if !snap_tolerance.is_finite() || !(0.0..=1000.0).contains(&snap_tolerance) {
+            return Err(ToolError::InvalidArgs("snap_tolerance must be between 0 and 1000 points".into()));
+        }
         let endings = line_endings(a)?;
         if endings.is_some() && !matches!(kind, "line" | "arrow" | "polyline" | "callout") {
             return Err(ToolError::InvalidArgs("endings apply to a line, arrow, polyline or callout".into()));
@@ -448,8 +547,38 @@ impl Automation {
             Shape::TextMarkup { quads, .. } => Some(quads.len()),
             _ => None,
         };
+        // Snap to drawing: the shape's points move onto the page's paths within `snap_tolerance`
+        // points on the displayed page (6 by default), as the drawing tools do with F3 on.
+        let (shape, snapped) = if snap {
+            // Each point is a search of the page's paths: as many as a measurement takes.
+            if let Shape::Polygon { vertices, .. } | Shape::PolyLine { vertices, .. } = &shape
+                && vertices.len() > SNAP_MAX_POINTS
+            {
+                return Err(ToolError::InvalidArgs(format!("snap takes at most {SNAP_MAX_POINTS} points")));
+            }
+            let tolerance = snap_tolerance;
+            let doc = self.doc(a)?;
+            let geometry = doc.measurement_paths(page).map_err(failed)?;
+            // Comments hidden on screen are no targets, as in the app.
+            let comments = (!doc.comments_hidden()).then(|| doc.comment_paths(page, &[])).transpose().map_err(failed)?;
+            // The tolerance in user units: the distance two display points apart map to.
+            let origin = doc.measurement_to_user(page, [0.0, 0.0]).map_err(failed)?;
+            let adjacent = doc.measurement_to_user(page, [tolerance, 0.0]).map_err(failed)?;
+            let tolerance = measure::distance(origin, adjacent);
+            let targets: Vec<&measure::snap::Geometry> = std::iter::once(&geometry).chain(comments.as_ref()).collect();
+            // The page's paths read only in part (an extraction limit): a target may be missing.
+            let truncated = targets.iter().any(|g| g.truncated);
+            let (shape, n) = snap_shape(shape, &targets, tolerance);
+            (shape, n.map(|n| (n, truncated)))
+        } else {
+            (shape, None)
+        };
         let before: Vec<Option<String>> = self.doc(a)?.info.annotations.iter().map(|c| c.name.clone()).collect();
         let mut out = self.apply(a, Edit::AddAnnotation(NewAnnotation { page, shape, style, contents, author }))?;
+        if let Some((n, truncated)) = snapped {
+            out["snapped"] = json!(n);
+            out["truncated"] = json!(truncated);
+        }
         let added = self.doc(a)?.info.annotations.iter().find(|c| c.page == page && c.subtype != "Popup" && !before.contains(&c.name));
         out["comment"] = json!({ "id": added.and_then(|c| c.name.clone()), "page": page + 1, "index": added.map(|c| c.index + 1) });
         if let Some(n) = marked {
