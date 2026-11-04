@@ -9645,8 +9645,10 @@ fn attachment_edit_resolves_the_listed_name_to_its_name_tree_key() {
     std::fs::write(dir.join("named.pdf"), bytes).unwrap();
 
     let doc = ok(&mut a, "doc_open", json!({"path":"named.pdf"}))["doc"].as_u64().unwrap();
-    assert_eq!(ok(&mut a, "doc_info", json!({"doc":doc}))["attachments"][0]["name"], "visible-name.txt");
-    ok(&mut a, "attachment_edit", json!({"doc":doc,"name":"visible-name.txt","description":"Updated"}));
+    let attachment = &ok(&mut a, "doc_info", json!({"doc":doc}))["attachments"][0];
+    assert_eq!(attachment["name"], "visible-name.txt");
+    assert_eq!(attachment["key"], key);
+    ok(&mut a, "attachment_edit", json!({"doc":doc,"key":key,"description":"Updated"}));
     assert_eq!(ok(&mut a, "doc_info", json!({"doc":doc}))["attachments"][0]["description"], "Updated");
     assert!(matches!(
         a.call("attachment_edit", &json!({"doc":doc,"name":"missing.txt","description":"x"})),

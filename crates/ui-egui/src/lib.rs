@@ -462,7 +462,7 @@ pub struct PdfCraftApp {
     /// Document Properties ▸ Description fields being edited: (document, Title/Author/Subject/Keywords).
     pub props_draft: Option<(DocId, [String; 4])>,
     /// Attachment description being edited: (document, name-tree key, description).
-    pub attachment_description_draft: Option<(DocId, u64, String, String)>,
+    pub attachment_description_draft: Option<(DocId, u64, String, String, String, bool)>,
     /// Document Properties ▸ Initial View (and reading options) being edited.
     pub view_draft: Option<(DocId, pdfcraft_engine::InitialView)>,
     /// Document Properties ▸ Custom being edited.

@@ -342,7 +342,7 @@ fn dialog_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: &m
             return false;
         }
         Dialog::AttachmentDescription => {
-            let Some((doc, generation, _, _)) = app.attachment_description_draft.as_ref() else {
+            let Some((doc, generation, _, _, _, _)) = app.attachment_description_draft.as_ref() else {
                 req.close = true;
                 return false;
             };
@@ -353,12 +353,12 @@ fn dialog_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: &m
                 req.close = true;
                 return false;
             }
-            let Some((_, _, key, description)) = app.attachment_description_draft.as_mut() else {
+            let Some((_, _, _, display_name, description, _)) = app.attachment_description_draft.as_mut() else {
                 req.close = true;
                 return false;
             };
             ui.heading(tl!("Edit attachment description"));
-            ui.label(key.as_str());
+            ui.label(display_name.as_str());
             let label = ui.label(tl!("Description"));
             ui.add(widgets::line(description)).labelled_by(label.id);
         }
@@ -1738,17 +1738,17 @@ fn dialog_footer(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: 
                 }
             } else if dialog == Dialog::AttachmentDescription {
                 if widgets::pill_button(ui, tl!("OK"), true).clicked() {
-                    if let Some((doc, generation, key, description)) = app.attachment_description_draft.as_ref() {
+                    if let Some((doc, generation, key, _, description, _)) = app.attachment_description_draft.as_ref() {
                         let current = app.session.get(*doc).and_then(|doc| {
                             doc.info
                                 .attachments
                                 .iter()
                                 .find(|attachment| matches!(&attachment.source, pdfcraft_render::AttachmentSource::Document { key: attachment_key } if attachment_key == key))
-                                .map(|attachment| attachment.description.as_deref().unwrap_or_default().trim().to_owned())
+                                .map(|attachment| (attachment.description.as_deref().unwrap_or_default().trim().to_owned(), attachment.has_description))
                         });
                         let normalized = description.trim();
                         let still_current = app.session.get(*doc).is_some_and(|doc| doc.edit_generation() == *generation);
-                        if still_current && current.as_deref().is_some_and(|current| current != normalized) {
+                        if still_current && current.as_ref().is_some_and(|(current, has_description)| current != normalized || (normalized.is_empty() && *has_description)) {
                             req.attachment_description_now = Some((
                                 *doc,
                                 Edit::EditAttachmentDescription { key: key.clone(), description: Some(normalized.to_owned()) },

@@ -227,7 +227,8 @@ impl<'a> Inspector<'a> {
             .and_then(|d| self.budgeted_text(d, b"UF", text_budget).or_else(|| self.budgeted_text(d, b"F", text_budget)))
             .or_else(|| fallback(text_budget))
             .unwrap_or_else(|| "attachment".into());
-        Attachment { name: display, description: d.and_then(|d| self.budgeted_text(d, b"Desc", text_budget)), size, source }
+        let has_description = d.is_some_and(|d| d.get(b"Desc").is_ok());
+        Attachment { name: display, description: d.and_then(|d| self.budgeted_text(d, b"Desc", text_budget)), has_description, size, source }
     }
 }
 

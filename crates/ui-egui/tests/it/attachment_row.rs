@@ -44,15 +44,53 @@ fn attachments_pdf() -> Vec<u8> {
 /// The app with [`attachments_pdf`] open and the Attachments panel showing, at 60 frames a
 /// second so two clicks a frame apart make a double-click.
 fn harness() -> Harness<'static, PdfCraftApp> {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 60.0).build_eframe(|_cc| {
+    harness_with_pdf(attachments_pdf())
+}
+
+fn harness_with_pdf(pdf: Vec<u8>) -> Harness<'static, PdfCraftApp> {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 60.0).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
         app.set_option("language", "en").unwrap();
-        app.open_bytes("doc.pdf", None, attachments_pdf()).unwrap();
+        app.open_bytes("doc.pdf", None, pdf).unwrap();
         app.set_option("panel", "attachments").unwrap();
         app
     });
     h.run_steps(4);
     h
+}
+
+#[test]
+fn submitting_blank_removes_an_existing_whitespace_description() {
+    let mut pdf = attachments_pdf();
+    let desc = pdf.windows(b"(Original)".len()).position(|window| window == b"(Original)").unwrap();
+    pdf[desc..desc + b"(Original)".len()].copy_from_slice(b"(        )");
+    let mut h = harness_with_pdf(pdf);
+    let doc_id = h.state().views[0].id;
+    assert!(h.state().session.get(doc_id).unwrap().info.attachments.iter().find(|a| a.name == "notes.txt").unwrap().has_description);
+    right_click(&mut h, "notes.txt");
+    h.get_by_role(egui::accesskit::Role::Menu).get_by_label("Edit description").click();
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    let doc = h.state().session.get(doc_id).unwrap();
+    let attachment = doc.info.attachments.iter().find(|a| a.name == "notes.txt").unwrap();
+    assert!(!attachment.has_description);
+    assert!(doc.dirty);
+}
+
+#[test]
+fn submitting_blank_leaves_an_absent_description_untouched() {
+    let mut h = harness();
+    right_click(&mut h, "inner.pdf");
+    h.get_by_role(egui::accesskit::Role::Menu).get_by_label("Edit description").click();
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    let doc = h.state().session.get(h.state().views[0].id).unwrap();
+    let attachment = doc.info.attachments.iter().find(|a| a.name == "inner.pdf").unwrap();
+    assert!(!attachment.has_description);
+    assert!(!doc.dirty);
+    assert_eq!(doc.can_undo(), None);
 }
 
 /// A folder of its own for one test's saved file, removed afterwards.
