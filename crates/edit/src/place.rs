@@ -416,6 +416,30 @@ pub fn stamp(doc: &mut Document, page: usize, tag: &str, content: Vec<u8>) -> Re
     place_tagged(doc, &p, tag, content, false)
 }
 
+/// Stamp `content` on `page` as a marked-content block, with the CID font `font` in the page's
+/// resources. The font is the one the content names: a text layer of Chinese text is written in
+/// it, as invisible text.
+pub fn stamp_cjk(doc: &mut Document, page: usize, tag: &str, content: Vec<u8>, font: &pdfcraft_fonts::cjk::CjkFont) -> Result<ObjRef, EditError> {
+    let all = page_list(doc);
+    check(&[page], all.len())?;
+    check_on_top(doc, &all[page])?;
+    add_cid_resource(doc, &all[page], font)?;
+    let p = page_list(doc).swap_remove(page);
+    place_tagged(doc, &p, tag, content, false)
+}
+
+/// Add the CID font to the page's own resources, under the name the text layer names it by.
+fn add_cid_resource(doc: &mut Document, page: &pdfcraft_model::Page, font: &pdfcraft_fonts::cjk::CjkFont) -> Result<(), EditError> {
+    let dict = pdfcraft_fonts::cjk::font_dict(doc, font).map_err(EditError::Invalid)?;
+    let mut res = page.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
+    let mut fonts = res.get(b"Font").map(|f| doc.resolve(f)).and_then(|f| f.as_dict().cloned()).unwrap_or_default();
+    fonts.set(pdfcraft_fonts::cjk::RESOURCE.as_bytes().to_vec(), Object::Dict(dict));
+    res.set(b"Font".to_vec(), Object::Dict(fonts));
+    // The page gets its own (possibly copied) resources; shared dictionaries stay untouched.
+    doc.update_dict(page.obj, |d| d.set(b"Resources".to_vec(), Object::Dict(res)))?;
+    Ok(())
+}
+
 pub(crate) fn begin(kind: MarkKind, subtype: &str, matrix: [f64; 6]) -> String {
     format!(
         "q\n/Artifact <</Type /Pagination /Subtype /{subtype} /PCMark /{}>> BDC\n{} {} {} {} {} {} cm\n",

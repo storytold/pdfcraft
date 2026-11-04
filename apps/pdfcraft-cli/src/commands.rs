@@ -380,8 +380,15 @@ pub(crate) fn render(args: &[String]) -> Result<(), CliError> {
     } else {
         pdfcraft_engine::display_bytes_for(bytes, password)
     };
-    let mut r =
-        PageRenderer::new(display, RenderConfig { password: render_password.as_deref().map(Arc::from), reject_oversize: true, ..Default::default() });
+    let mut config = RenderConfig { password: render_password.as_deref().map(Arc::from), reject_oversize: true, ..Default::default() };
+    // `--for-screen` draws a CID font of an Adobe CJK collection that the document does not embed
+    // with a face installed on this machine, the way the viewer does (AGENTS.md §1.2, §1.4). It is for
+    // a display copy only: the result must not be saved into a document or printed, since the
+    // substitute is a face of this machine rather than the document's own.
+    if args.iter().any(|a| a == "--for-screen") {
+        config = config.on_screen();
+    }
+    let mut r = PageRenderer::new(display, config);
     let p = r.render(RenderRequest { page: page_index, kind: RequestKind::Pixels, tile: None, scale: dpi / 72.0, tag: 0, preview: false });
     if let Some(e) = p.error {
         return Err(e.into());
