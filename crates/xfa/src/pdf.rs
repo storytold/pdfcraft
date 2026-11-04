@@ -8,8 +8,8 @@ use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream};
 use pdfcraft_fonts::{literal, win_ansi};
 
 use crate::XfaError;
-use crate::layout::{Action, BorderShape, Form, Item, Page, Rounded, Turned, Widget, WidgetKind};
-use crate::model::Rect;
+use crate::layout::{Action, BorderShape, Form, Gradient, Item, Page, Rounded, Turned, Widget, WidgetKind};
+use crate::model::{Rect, Sweep, Toward};
 use crate::text::{Face, Family, Span};
 
 mod common;
@@ -18,7 +18,8 @@ mod strip;
 pub use common::jpeg_size;
 pub(crate) use common::rounded;
 use common::{
-    all_faces, content_hash, empty_form, hex32, jpeg_info, js_action, js_string, n, parse_hex32, rgb, rgb_array, standard_font, state_name,
+    all_faces, content_hash, empty_form, hex32, jpeg_info, js_action, js_string, n, parse_hex32, rgb, rgb_array, shaded, shading, standard_font,
+    state_name,
 };
 pub(crate) use strip::USAGE_RIGHTS_REMOVED;
 use strip::drop_usage_rights;
@@ -82,6 +83,9 @@ struct Emitter<'a> {
     /// The fields above the signature fields named by their SOM paths, by the path they name:
     /// each one's object and the fields it holds.
     nodes: HashMap<String, (ObjRef, Vec<ObjRef>)>,
+    /// The gradient shadings written so far, one per kind, coordinates and colours (as
+    /// [`common::shading`] tells them apart), each with the number its resource name carries.
+    shadings: HashMap<String, (ObjRef, usize)>,
 }
 
 /// A signature field of the file that has been signed.
@@ -558,6 +562,26 @@ impl Emitter<'_> {
         }
     }
 
+    /// The name, in a page's `/Shading` resources `shadings`, of the shading that paints gradient
+    /// `g` from `from` on a page `page_h` tall, adding it there (and to the document, the first
+    /// time it is drawn). Its coordinates are in the space the box is drawn in, as `sh` paints
+    /// in the current user space: inside a turned draw the gradient turns with the box.
+    fn shading(&mut self, g: &Gradient, from: [f64; 3], page_h: f64, shadings: &mut Dict) -> String {
+        let (key, dict) = shading(g, from, page_h);
+        let next = self.shadings.len();
+        let (r, id) = match self.shadings.get(&key) {
+            Some(found) => *found,
+            None => {
+                let r = self.doc.add(Object::Dict(dict));
+                self.shadings.insert(key, (r, next));
+                (r, next)
+            }
+        };
+        let name = format!("Sh{id}");
+        shadings.set(name.clone().into_bytes(), Object::Ref(r));
+        name
+    }
+
     /// Write one laid-out page under `pages_ref`: its fills, lines, text and pictures in a
     /// content stream, the fonts and images it uses as resources, and its widgets and the links
     /// in its text as annotations. Returns the page object.
@@ -566,6 +590,7 @@ impl Emitter<'_> {
         let mut content: Vec<u8> = Vec::new();
         let mut fonts: BTreeMap<&'static str, &'static str> = BTreeMap::new();
         let mut xobjects = Dict::new();
+        let mut shadings = Dict::new();
         let mut annots = Vec::new();
         let h = page.height;
         // The link the text before ended in, which a next piece of it on the line widens.
@@ -603,10 +628,23 @@ impl Emitter<'_> {
                 last_link = None;
             }
             match item {
-                Item::Fill { rect, color } => {
-                    content.extend(format!("{} rg {} {} {} {} re f\n", rgb(*color), n(rect.x), n(h - rect.bottom()), n(rect.w), n(rect.h)).bytes());
+                Item::Fill { rect, color, gradient } => {
+                    let path = format!("{} {} {} {} re ", n(rect.x), n(h - rect.bottom()), n(rect.w), n(rect.h));
+                    match gradient {
+                        Some(g) => {
+                            let name = self.shading(g, *color, h, &mut shadings);
+                            content.extend(shaded(&name, &path).bytes());
+                        }
+                        None => content.extend(format!("{} rg {path}f\n", rgb(*color)).bytes()),
+                    }
                 }
-                Item::Rounded(r) => content.extend(rounded(r, h).bytes()),
+                Item::Rounded(r) => {
+                    let name = match (&r.gradient, r.fill) {
+                        (Some(g), Some(from)) => Some(self.shading(g, from, h, &mut shadings)),
+                        _ => None,
+                    };
+                    content.extend(rounded(r, h, name.as_deref()).bytes());
+                }
                 Item::Line { from, to, width, color, dashed } => {
                     content.extend(
                         format!(
@@ -675,6 +713,9 @@ impl Emitter<'_> {
         res.set(b"Font".to_vec(), Object::Dict(font_dict));
         if !xobjects.is_empty() {
             res.set(b"XObject".to_vec(), Object::Dict(xobjects));
+        }
+        if !shadings.is_empty() {
+            res.set(b"Shading".to_vec(), Object::Dict(shadings));
         }
         let mut cd = Dict::new();
         cd.set(b"Type".to_vec(), Object::name("XObject"));
@@ -939,6 +980,7 @@ pub fn write_form(doc: &mut Document, form: &Form) -> Result<Written, XfaError> 
         signed,
         taken,
         nodes: HashMap::new(),
+        shadings: HashMap::new(),
     };
     // Every name a field of this pass takes at the top, wherever and in whatever order it is
     // written: a signature field named by its SOM path must not repeat one.

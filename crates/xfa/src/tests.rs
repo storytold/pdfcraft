@@ -11,6 +11,7 @@ use crate::fixtures::{
     TINY_GIF, bound_date_template, fields_template, scripted_template, shell, static_shell, template, template_with_data, tiny_bmp, tiny_png,
     tiny_tiff, unnamed_hidden_template,
 };
+use crate::layout::Gradient;
 use crate::layout::Item;
 use crate::layout::WidgetKind;
 use crate::model::*;
@@ -2458,11 +2459,12 @@ fn rounded_boxes_are_written_as_curved_paths() {
         radii: [18.0; 4],
         inverted,
         fill: Some([0.9, 0.9, 0.9]),
+        gradient: None,
         edge: edge.then_some((2.0, [1.0, 0.0, 0.0], false)),
         open_top: open.0,
         open_bottom: open.1,
     };
-    let content = |r: Rounded| crate::pdf::rounded(&r, 792.0);
+    let content = |r: Rounded| crate::pdf::rounded(&r, 792.0, None);
     let ops = content(shape([false; 4], true, (false, false)));
     // The fill: from the top-left corner's start, a quarter circle to (54, 36), closed.
     assert!(ops.contains("0.9 0.9 0.9 rg 36 738 m 36 747.941 44.059 756 54 756 c "), "{ops}");
@@ -2477,6 +2479,204 @@ fn rounded_boxes_are_written_as_curved_paths() {
     let cut = content(Rounded { radii: [18.0, 18.0, 0.0, 0.0], ..shape([false; 4], true, (false, true)) });
     let edge = cut.lines().find(|l| l.contains(" RG ")).unwrap_or_default();
     assert!(edge.starts_with("q 1 0 0 RG 2 w 37 685 m 37 738 l ") && edge.ends_with(" 179 685 l S Q") && !edge.contains(" h "), "{edge}");
+}
+
+/// A `<draw>` at `y` inches holding a yellow-filled rectangle 2in × 0.5in, the fill ending in
+/// `paint` and the rectangle (or the draw) given `extra`, as #5558's fill-type rows are.
+fn fill_row(y: f64, paint: &str, rect_extra: &str, draw_extra: &str) -> String {
+    format!(
+        r#"<draw x="0.5in" y="{y}in" w="2in" h="0.5in" {draw_extra}><value><rectangle><edge/>{rect_extra}<fill><color value="255,211,0"/>{paint}</fill></rectangle></value></draw>"#
+    )
+}
+
+/// The form holding `rows` at their own places.
+fn fill_form(rows: &[String]) -> String {
+    one_area_form(r#"layout="tb""#, &format!(r#"<subform name="body" layout="position" w="7.5in" h="9in">{}</subform>"#, rows.concat()))
+}
+
+const YELLOW: [f64; 3] = [1.0, 211.0 / 255.0, 0.0];
+
+/// A `<fill>`'s `<linear>`, `<radial>` and `<stipple>` come through to the layout (#6079): a
+/// gradient from the fill's colour to its element's, across the whole box, in the direction its
+/// type names (`toRight` and `toEdge` when bare or unknown); a stipple as the one colour it
+/// blends to with the fill's at its rate (50 when bare, clamped to 0–100). A fill without one
+/// stays plain, a hidden fill draws nothing, a `<pattern>` before a gradient leaves the colour
+/// alone, and a rounded rectangle keeps its gradient.
+#[test]
+fn gradient_and_stipple_fills_carry_into_the_layout() {
+    let blue = r#"<color value="0,0,255"/>"#;
+    let red = r#"<color value="255,0,0"/>"#;
+    let form = layout_xml(&fill_form(&[
+        fill_row(0.0, &format!("<linear>{blue}</linear>"), "", ""),
+        fill_row(0.6, &format!(r#"<linear type="toBottom">{blue}</linear>"#), "", ""),
+        fill_row(1.2, &format!(r#"<linear type="sideways">{blue}</linear>"#), "", ""),
+        fill_row(1.8, &format!(r#"<radial type="toCenter">{blue}</radial>"#), "", ""),
+        fill_row(2.4, "<radial/>", "", ""),
+        fill_row(3.0, &format!(r#"<stipple rate="25">{red}</stipple>"#), "", ""),
+        fill_row(3.6, &format!("<stipple>{red}</stipple>"), "", ""),
+        fill_row(4.2, &format!(r#"<stipple rate="250">{red}</stipple>"#), "", ""),
+        fill_row(4.8, &format!(r#"<stipple rate="-5">{red}</stipple>"#), "", ""),
+        fill_row(5.4, "", "", ""),
+        fill_row(6.0, &format!("<linear>{blue}</linear>"), "", "").replace("<fill>", r#"<fill presence="hidden">"#),
+        fill_row(6.6, &format!("<pattern/><linear>{blue}</linear>"), "", ""),
+        fill_row(7.2, &format!(r#"<linear type="toLeft">{blue}</linear>"#), r#"<corner radius="0.1in"/>"#, ""),
+    ]))
+    .unwrap();
+    let items = &form.pages[0].items;
+    let top = |y: f64| 36.0 + y * 72.0;
+    let fill_at = |y: f64| {
+        items.iter().find_map(|i| match i {
+            Item::Fill { rect, color, gradient } if (rect.y - top(y)).abs() < 0.01 => Some((*color, *gradient)),
+            _ => None,
+        })
+    };
+    let area = |y: f64| Rect::new(72.0, top(y), 144.0, 36.0);
+    let sweep = |y: f64, sweep: Sweep, to: [f64; 3]| Some((YELLOW, Some(Gradient { sweep, to, area: area(y) })));
+    let blue = [0.0, 0.0, 1.0];
+    assert_eq!(fill_at(0.0), sweep(0.0, Sweep::Linear(Toward::Right), blue), "a bare linear runs to the right");
+    assert_eq!(fill_at(0.6), sweep(0.6, Sweep::Linear(Toward::Bottom), blue));
+    assert_eq!(fill_at(1.2), sweep(1.2, Sweep::Linear(Toward::Right), blue), "an unknown type runs to the right");
+    assert_eq!(fill_at(1.8), sweep(1.8, Sweep::Radial { to_center: true }, blue));
+    assert_eq!(fill_at(2.4), sweep(2.4, Sweep::Radial { to_center: false }, [0.0; 3]), "a bare radial runs to the edge, to black");
+    let flat = |y: f64| fill_at(y).map(|(c, g)| (c.map(|v| (v * 255.0 * 1000.0).round() / 1000.0), g));
+    assert_eq!(flat(3.0), Some(([255.0, 158.25, 0.0], None)), "a quarter of the way to red");
+    assert_eq!(flat(3.6), Some(([255.0, 105.5, 0.0], None)), "a bare stipple is halfway");
+    assert_eq!(flat(4.2), Some(([255.0, 0.0, 0.0], None)), "a rate past 100 is all stipple");
+    assert_eq!(flat(4.8), Some(([255.0, 211.0, 0.0], None)), "a rate below 0 is all fill");
+    assert_eq!(fill_at(5.4), Some((YELLOW, None)), "a fill without one stays plain");
+    assert_eq!(fill_at(6.0), None, "a hidden fill draws nothing");
+    assert_eq!(fill_at(6.6), Some((YELLOW, None)), "a pattern before the gradient paints only the colour here");
+    let round = rounded(&form.pages[0]).into_iter().find(|r| (r.rect.y - top(7.2)).abs() < 0.01).expect("the rounded row");
+    assert_eq!((round.fill, round.gradient), (Some(YELLOW), Some(Gradient { sweep: Sweep::Linear(Toward::Left), to: blue, area: area(7.2) })));
+}
+
+/// A gradient fill cut by a page break carries on across both pages (#6079): each part keeps
+/// the whole box as the gradient's area, moved with the part onto its page, so the second
+/// doesn't start the sweep again.
+#[test]
+fn a_gradient_fill_cut_by_a_page_break_carries_on_across_both_pages() {
+    // A 12-inch bordered box in a 10-inch content area: it is cut at the area's bottom.
+    let body = r#"<subform name="body" layout="tb" w="7.5in"><subform name="tall" layout="position" w="7.5in" h="12in"><border><edge/><fill><color value="255,211,0"/><linear type="toBottom"><color value="0,0,255"/></linear></fill></border><draw name="note" x="0in" y="0in" w="2in" h="0.3in"><value><text>Note</text></value></draw></subform></subform>"#;
+    let form = layout_xml(&one_area_form(r#"layout="tb""#, body)).unwrap();
+    assert_eq!(form.pages.len(), 2);
+    let fills = |page: &Page| {
+        page.items
+            .iter()
+            .filter_map(|i| match i {
+                Item::Fill { rect, gradient, .. } => Some((*rect, *gradient)),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    let (first, last) = (fills(&form.pages[0]), fills(&form.pages[1]));
+    assert_eq!((first.len(), last.len()), (1, 1), "{first:?} {last:?}");
+    let (a, b) = (first[0].1.expect("the first part's gradient"), last[0].1.expect("the second part's gradient"));
+    assert_eq!((a.sweep, b.sweep), (Sweep::Linear(Toward::Bottom), Sweep::Linear(Toward::Bottom)));
+    assert!((a.area.h - 12.0 * 72.0).abs() < 0.01 && (b.area.h - 12.0 * 72.0).abs() < 0.01, "both sweep the whole box: {a:?} {b:?}");
+    assert!((a.area.y - first[0].0.y).abs() < 0.01, "the first part starts the sweep");
+    assert!((b.area.bottom() - last[0].0.bottom()).abs() < 0.01, "the second part ends it: {:?} {:?}", b.area, last[0].0);
+}
+
+/// The shading `name` in the page's `/Shading` resources: its type, coordinates, and its
+/// function's two colours.
+fn shading_of(doc: &Document, page: &Dict, name: &str) -> (i64, Vec<f64>, Vec<f64>, Vec<f64>) {
+    let resources = doc.resolve(page.get(b"Resources").unwrap());
+    let shadings = resources.as_dict().unwrap().get(b"Shading").map(|s| doc.resolve(s)).expect("the page names its shadings");
+    let r = shadings.as_dict().unwrap().reference(name.as_bytes()).unwrap_or_else(|| panic!("{name} is an object"));
+    let sh = doc.get(r);
+    let d = sh.as_dict().unwrap();
+    assert_eq!(d.get(b"ColorSpace").and_then(|c| c.as_name()), Some(&b"DeviceRGB"[..]), "{name}");
+    let reals = |o: &Object| o.as_array().unwrap().iter().map(|v| v.as_f64().unwrap()).collect::<Vec<f64>>();
+    let f = d.get(b"Function").and_then(|f| f.as_dict()).expect("a function");
+    assert_eq!((f.int(b"FunctionType"), f.int(b"N")), (Some(2), Some(1)), "{name}: a two-stop function");
+    let round = |v: Vec<f64>| v.into_iter().map(|x| (x * 1000.0).round() / 1000.0).collect::<Vec<_>>();
+    (d.int(b"ShadingType").unwrap(), reals(d.get(b"Coords").unwrap()), round(reals(f.get(b"C0").unwrap())), round(reals(f.get(b"C1").unwrap())))
+}
+
+/// A gradient fill is written as the box's path, clipped, painted with an axial (linear) or
+/// radial shading named in the page's `/Shading` resources (#6079): coordinates across the box
+/// in the direction its type names, or centred in it out to its corners, between the fill's
+/// colour and its element's; `toCenter` puts the fill's colour at the edge. Boxes drawn alike
+/// share one shading object, a rounded box's gradient is clipped to its curves, and a stipple is
+/// written as the colour it blends to.
+#[test]
+fn gradient_fills_are_written_as_shadings_clipped_to_the_box() {
+    let blue = r#"<color value="0,0,255"/>"#;
+    let (doc, page) = written(&fill_form(&[
+        fill_row(0.0, &format!("<linear>{blue}</linear>"), "", ""),
+        fill_row(1.0, &format!(r#"<linear type="toTop">{blue}</linear>"#), "", ""),
+        fill_row(2.0, &format!(r#"<radial>{blue}</radial>"#), "", ""),
+        fill_row(3.0, &format!(r#"<radial type="toCenter">{blue}</radial>"#), "", ""),
+        fill_row(4.0, &format!(r#"<linear type="toLeft">{blue}</linear>"#), r#"<corner radius="0.1in"/>"#, ""),
+        fill_row(5.0, r#"<stipple rate="75"><color value="255,0,0"/></stipple>"#, "", ""),
+        fill_row(6.0, r#"<stipple rate="0"><color value="255,0,0"/></stipple>"#, "", ""),
+    ]));
+    // The same box again, twice: one shading for both.
+    let (twice, twice_page) = written(&fill_form(&[
+        fill_row(0.0, &format!("<linear>{blue}</linear>"), "", ""),
+        fill_row(0.0, &format!("<linear>{blue}</linear>"), "", ""),
+    ]));
+    let ops = page_content(&doc, &page);
+    let lines: Vec<&str> = ops.lines().collect();
+    let shaded: Vec<&str> = lines.iter().copied().filter(|l| l.ends_with(" sh Q")).collect();
+    assert_eq!(shaded.len(), 5, "each gradient row is shaded: {ops}");
+    // The box's top-left at (72, 792 - 36 - 72 × row), 144 × 36.
+    let bottom = |row: f64| 792.0 - 36.0 - 72.0 * row - 36.0;
+    for (row, line) in shaded.iter().take(4).enumerate() {
+        assert_eq!(*line, format!("q 72 {} 144 36 re W n /Sh{row} sh Q", bottom(row as f64)), "row {row} clips to the box");
+    }
+    assert!(
+        shaded[4].starts_with("q ") && shaded[4].contains(" c ") && shaded[4].ends_with(" h W n /Sh4 sh Q"),
+        "the rounded box clips along its curves: {}",
+        shaded[4]
+    );
+    for row in 0..4 {
+        let flat = format!("1 0.827 0 rg 72 {} 144 36 re f", bottom(row as f64));
+        assert!(!lines.contains(&flat.as_str()), "a gradient row paints no flat colour under it: {ops}");
+    }
+    let (yellow, blue) = (vec![1.0, 0.827, 0.0], vec![0.0, 0.0, 1.0]);
+    let mid = |row: f64| bottom(row) + 18.0;
+    assert_eq!(shading_of(&doc, &page, "Sh0"), (2, vec![72.0, mid(0.0), 216.0, mid(0.0)], yellow.clone(), blue.clone()), "left to right");
+    assert_eq!(
+        shading_of(&doc, &page, "Sh1"),
+        (2, vec![144.0, bottom(1.0), 144.0, bottom(1.0) + 36.0], yellow.clone(), blue.clone()),
+        "bottom to top"
+    );
+    let r = (144.0f64.hypot(36.0) / 2.0 * 1000.0).round() / 1000.0;
+    assert_eq!(shading_of(&doc, &page, "Sh2"), (3, vec![144.0, mid(2.0), 0.0, 144.0, mid(2.0), r], yellow.clone(), blue.clone()), "centre out");
+    assert_eq!(shading_of(&doc, &page, "Sh3"), (3, vec![144.0, mid(3.0), 0.0, 144.0, mid(3.0), r], blue.clone(), yellow.clone()), "edge in");
+    assert_eq!(shading_of(&doc, &page, "Sh4"), (2, vec![216.0, mid(4.0), 72.0, mid(4.0)], yellow, blue), "right to left");
+    // Stipples: the fill's colour 75% of the way to red, and all the way at a rate of 0,
+    // which is read as 100.
+    assert!(lines.contains(&"1 0.207 0 rg 72 360 144 36 re f"), "75% of the way to red: {ops}");
+    assert!(lines.contains(&"1 0 0 rg 72 288 144 36 re f"), "a rate of 0 is all stipple: {ops}");
+    let twice_ops = page_content(&twice, &twice_page);
+    assert_eq!(twice_ops.matches("/Sh0 sh").count(), 2, "{twice_ops}");
+    let res = twice.resolve(twice_page.get(b"Resources").unwrap());
+    let names = res.as_dict().unwrap().get(b"Shading").map(|s| twice.resolve(s)).unwrap();
+    assert_eq!(names.as_dict().unwrap().len(), 1, "one shading for two boxes drawn alike");
+}
+
+/// A gradient in a turned draw turns with it (#6079): `sh` paints in the current user space, so
+/// the shading's coordinates, written across the box as it stands before turning, sit under the
+/// draw's matrix with the box. A `toRight` gradient in a draw turned a quarter counter-clockwise
+/// runs up the page.
+#[test]
+fn a_gradient_in_a_turned_draw_turns_with_it() {
+    let (doc, page) = written(&fill_form(&[fill_row(3.0, r#"<linear><color value="0,0,255"/></linear>"#, "", r#"rotate="90""#)]));
+    let ops = page_content(&doc, &page);
+    let lines: Vec<&str> = ops.lines().collect();
+    let at = lines.iter().position(|l| l.ends_with(" sh Q")).unwrap_or_else(|| panic!("the gradient is painted: {ops}"));
+    let cm = lines[..at].iter().rev().find(|l| l.ends_with(" cm")).unwrap_or_else(|| panic!("under the draw's matrix: {ops}"));
+    let m: Vec<f64> = cm.split_whitespace().filter_map(|v| v.parse().ok()).collect();
+    assert_eq!(m.len(), 6, "{cm}");
+    assert_eq!((m[0], m[1], m[2], m[3]), (0.0, 1.0, -1.0, 0.0), "a quarter turn counter-clockwise: {cm}");
+    assert!(lines[at..].contains(&"Q"), "the matrix ends after the draw");
+    let (kind, coords, ..) = shading_of(&doc, &page, "Sh0");
+    let on_page = |x: f64, y: f64| (m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]);
+    let (from, to) = (on_page(coords[0], coords[1]), on_page(coords[2], coords[3]));
+    assert_eq!(kind, 2);
+    assert!((from.0 - to.0).abs() < 0.01 && to.1 - from.1 > 143.9, "it runs up the page: {from:?} → {to:?}");
 }
 
 /// A flowed subform without a fixed height gets its border and fill round all it takes, margins

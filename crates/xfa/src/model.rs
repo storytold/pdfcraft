@@ -134,14 +134,84 @@ pub struct Corner {
     pub inverted: bool,
 }
 
+/// The side a `<linear>` gradient runs towards (its `type`), from the fill's own colour on the
+/// opposite side to the linear's colour on this one.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Toward {
+    /// XFA's default.
+    #[default]
+    Right,
+    Bottom,
+    Left,
+    Top,
+}
+
+impl Toward {
+    /// The `type` attribute: `toRight` when absent, as XFA defines it, and when it names no
+    /// direction (a gradient rather than none, as the form asked for one).
+    pub fn parse(s: Option<&str>) -> Toward {
+        match s.map(str::trim) {
+            Some("toBottom") => Toward::Bottom,
+            Some("toLeft") => Toward::Left,
+            Some("toTop") => Toward::Top,
+            _ => Toward::Right,
+        }
+    }
+}
+
+/// How a gradient fill blends from the fill's own colour to its element's colour.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Sweep {
+    /// `<linear>`: across the box, towards one side.
+    Linear(Toward),
+    /// `<radial>`: from the box's centre to its edge (`toEdge`, XFA's default), or from the edge
+    /// to the centre (`toCenter`).
+    Radial { to_center: bool },
+}
+
+/// What a `<fill>` paints besides its own colour: the one of `<linear>`, `<radial>` and
+/// `<stipple>` it holds, with that element's colour (black unless it gives one).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Paint {
+    /// A gradient from the fill's colour to `color`.
+    Gradient { sweep: Sweep, color: Color },
+    /// `color` stippled over the fill's colour at `rate` percent (0–100), drawn as the one colour
+    /// the two blend to.
+    Stipple { rate: f64, color: Color },
+}
+
+impl Paint {
+    /// XFA's stipple rate when the element gives none.
+    pub const DEFAULT_RATE: f64 = 50.0;
+
+    /// A `<stipple>`'s `rate`, a percentage: 50 when absent or not a number, else clamped to
+    /// 0–100. A rate of exactly 0 is read as 100: a stipple that contributed nothing would be
+    /// pointless, and other readers (PDFium's `CXFA_Stipple::Draw`) treat it the same way.
+    pub fn rate(s: Option<&str>) -> f64 {
+        s.and_then(|r| r.trim().parse::<f64>().ok())
+            .filter(|r| r.is_finite())
+            .map_or(Paint::DEFAULT_RATE, |r| if r == 0.0 { 100.0 } else { r.clamp(0.0, 100.0) })
+    }
+}
+
+/// `stipple` at `rate` percent over `base`, as one colour: each component `rate`% of the way
+/// from the base's to the stipple's.
+pub fn stippled(base: Color, stipple: Color, rate: f64) -> Color {
+    let t = if rate.is_finite() { rate.clamp(0.0, 100.0) / 100.0 } else { Paint::DEFAULT_RATE / 100.0 };
+    Color(std::array::from_fn(|i| (base.0[i] + (stipple.0[i] - base.0[i]) * t).clamp(0.0, 1.0)))
+}
+
 /// A box border: four edges (top, right, bottom, left), four corners (top-left, top-right,
-/// bottom-right, bottom-left) and a fill.
+/// bottom-right, bottom-left) and a fill, which may be a gradient or a stipple.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Border {
     pub presence: Presence,
     pub edges: [Edge; 4],
     pub corners: [Corner; 4],
+    /// The fill's own colour.
     pub fill: Option<Color>,
+    /// What the fill paints besides its colour; drawn only with the fill.
+    pub paint: Option<Paint>,
 }
 
 impl Border {
@@ -152,8 +222,23 @@ impl Border {
         [self.edges[0].visible(), self.edges[1].visible(), self.edges[2].visible(), self.edges[3].visible()]
     }
 
+    /// The colour the fill paints, when it is drawn: a stipple's blend with the fill's colour, or
+    /// the fill's colour (a gradient's start).
     pub fn fill(&self) -> Option<Color> {
-        if self.presence == Presence::Visible { self.fill } else { None }
+        let fill = if self.presence == Presence::Visible { self.fill } else { None }?;
+        Some(match self.paint {
+            Some(Paint::Stipple { rate, color }) => stippled(fill, color, rate),
+            _ => fill,
+        })
+    }
+
+    /// The fill's gradient, when the fill is drawn and is one: how it sweeps and the colour it
+    /// ends in (it starts in [`Border::fill`]'s).
+    pub fn gradient(&self) -> Option<(Sweep, Color)> {
+        match self.paint {
+            Some(Paint::Gradient { sweep, color }) if self.fill().is_some() => Some((sweep, color)),
+            _ => None,
+        }
     }
 
     /// How far each corner (top-left, top-right, bottom-right, bottom-left) rounds a box `w` by
