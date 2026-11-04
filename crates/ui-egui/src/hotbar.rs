@@ -214,6 +214,9 @@ fn core_tool_buttons(ui: &mut egui::Ui, app: &mut PdfCraftApp, cell: f32, popup_
     if icons::button(ui, "hand", cell, app.quick_tool == QuickTool::Hand, tl!("Hand (H)")).clicked() {
         app.quick_tool = QuickTool::Hand;
     }
+    if icons::button(ui, "zoom-in", cell, app.quick_tool == QuickTool::DynamicZoom, tl!("Zoom (Z)")).clicked() {
+        app.quick_tool = QuickTool::DynamicZoom;
+    }
     let may_crop = command("page.crop").is_some_and(|spec| app.command_enabled(spec));
     ui.add_enabled_ui(may_crop, |ui| {
         if icons::button(ui, "crop", cell, app.quick_tool == QuickTool::Crop, tl!("Crop pages")).clicked() {
