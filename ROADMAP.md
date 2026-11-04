@@ -1,5 +1,9 @@
 # PdfCraft roadmap
 
+> **Last reviewed:** 2026-11-03 | **Last updated:** 2026-11-03 | **Change:** minor (#4782 follow-up: Optimise Clean Up can store JPEG images as JPEG XL, losslessly and reversibly (the original JPEG is rebuilt byte for byte), and restore them; both off by default, the `JXLDecode` filter name being a placeholder; estimates unchanged)
+
+> **Last reviewed:** 2026-11-03 | **Last updated:** 2026-11-03 | **Change:** minor (#4782: image XObjects in JPEG XL, `/JXLDecode` (a placeholder name until the standard names a filter), are decoded and drawn, first frame only; estimates unchanged)
+
 > **Last reviewed:** 2026-11-03 | **Last updated:** 2026-11-03 | **Change:** patch (M5 #5850 review: indirect typewriter intent and composer edits preserve outer whitespace; movement regression commits by outside click; estimates unchanged)
 
 > **Last reviewed:** 2026-11-03 | **Last updated:** 2026-11-03 | **Change:** patch (M5 #5850: Enter adds Fill & Sign line breaks; outside clicks commit, Escape cancels, and saved multiline appearances retain their text and height; estimates unchanged)
