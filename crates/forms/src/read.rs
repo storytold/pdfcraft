@@ -523,7 +523,7 @@ struct Inherited {
     dv: Option<Arc<Object>>,
     da: Option<Rc<str>>,
     /// The `/DA` that applies didn't fit the text allowance: a field that would draw with it is
-    /// left out, and one that sets its own is read.
+    /// left out, and one that sets its own, or a signature, drawn without one, is read.
     da_refused: bool,
     q: Option<i64>,
     max_len: Option<usize>,
@@ -537,7 +537,7 @@ impl Inherited {
         let refusals = text.refusals();
         match text.text(doc, o) {
             Some(da) => (self.da, self.da_refused) = (Some(Rc::from(da)), false),
-            None if text.refusals() != refusals => self.da_refused = true,
+            None if text.refusals() != refusals => (self.da, self.da_refused) = (None, true),
             None => {}
         }
     }
@@ -602,6 +602,7 @@ pub(crate) fn enumerate(doc: &Document) -> (Vec<Field>, usize) {
     let mut seen = Seen {
         fields: std::collections::HashSet::new(),
         widgets: std::collections::HashSet::new(),
+        withheld: std::collections::HashSet::new(),
         scripts: script_budget(),
         values: Allowance::new(MAX_VALUE_BYTES),
         text: Allowance::new(MAX_TEXT_BYTES),
@@ -647,7 +648,7 @@ fn adopt_page_fields(
         let Some(annots) = annots.as_array() else { continue };
         for e in annots {
             let Some(r) = e.as_ref() else { continue };
-            if seen.fields.contains(&r) || seen.widgets.contains(&r) {
+            if seen.fields.contains(&r) || seen.widgets.contains(&r) || seen.withheld.contains(&r) {
                 continue;
             }
             let obj = doc.get(r);
@@ -698,6 +699,9 @@ struct Seen {
     fields: std::collections::HashSet<ObjRef>,
     /// A widget belongs to the first field read whole that lists it, however often it is listed.
     widgets: std::collections::HashSet<ObjRef>,
+    /// The widgets of fields left out of the reading: a later field that lists one takes it, but
+    /// none is adopted as a field of its own.
+    withheld: std::collections::HashSet<ObjRef>,
     scripts: Allowance,
     values: Allowance,
     /// A field whose text doesn't fit is left out of the reading whole: a field read without
@@ -782,11 +786,8 @@ fn walk(
         }
         return;
     }
-    // A field of no kind this reads, or whose `/DA` didn't fit, is skipped before it claims
-    // widgets or scripts, which a later field listing them then reads.
-    if inh.da_refused {
-        return;
-    }
+    // A field of no kind this reads is skipped before it claims widgets or scripts, which a later
+    // field listing them then reads.
     let ff = inh.ff.unwrap_or(0);
     let kind = match inh.ft.as_deref() {
         Some(b"Tx") => FieldKind::Text,
@@ -803,6 +804,12 @@ fn walk(
     // has it when this one is left out.
     let mut claimed = std::collections::HashSet::new();
     let widget_refs: Vec<ObjRef> = widget_refs.into_iter().filter(|w| !seen.widgets.contains(w) && claimed.insert(*w)).collect();
+    // A field that would draw with a `/DA` that didn't fit is left out before it reads its
+    // scripts; a signature, drawn without one, is read.
+    if inh.da_refused && kind != FieldKind::Signature {
+        seen.withheld.extend(claimed);
+        return;
+    }
     let refusals = seen.text.refusals();
     let actions = actions_of(doc, d, &widget_refs, &mut seen.scripts);
     let button = (inh.ft.as_deref() == Some(b"Btn") && inh.ff.unwrap_or(0) & flags::PUSH_BUTTON != 0)
@@ -823,7 +830,10 @@ fn walk(
                 page: page_of.get(&w).copied(),
                 rect: [rect[0].min(rect[2]), rect[1].min(rect[3]), rect[0].max(rect[2]), rect[1].max(rect[3])],
                 on_state: matches!(kind, FieldKind::CheckBox | FieldKind::Radio).then(|| on_state_of(doc, wd, text)).flatten(),
-                state: wd.name(b"AS").and_then(|n| text.copy(n.len(), || name_text(n))),
+                state: wd.get(b"AS").and_then(|o| match &*held(doc, o) {
+                    Object::Name(n) => text.copy(n.len(), || name_text(n)),
+                    _ => None,
+                }),
                 tab: usize::MAX,
                 locked: annot_flags & 128 != 0,
                 hidden: annot_flags & (2 | 32) != 0,
@@ -873,6 +883,7 @@ fn walk(
     text.take(inh.name.len());
     text.take(field_da.len());
     if text.refusals() != refusals {
+        seen.withheld.extend(claimed);
         return;
     }
     seen.widgets.extend(claimed);
