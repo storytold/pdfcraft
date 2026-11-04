@@ -385,7 +385,7 @@ pub use layout::layout;
 use layout::{from_upright, to_upright};
 use layout::{is_rtl, union};
 #[cfg(test)]
-use order::{Run, Scratch, collide, restarts_run};
+use order::{Run, Scratch, Seg, collide, restarts_run};
 
 #[cfg(test)]
 mod tests;
