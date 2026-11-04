@@ -529,10 +529,17 @@ impl PdfCraftApp {
         let mut chosen = Vec::new();
         ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
         for menu in &bar.menus {
-            ui.menu_button(&menu.title, |ui| {
+            let resp = ui.menu_button(&menu.title, |ui| {
                 ui.set_min_width(220.0);
                 ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
-                render_nodes(ui, &menu.children, &gate, &mut chosen);
+                egui::ScrollArea::vertical().max_height(400.0).show(ui, |ui| {
+                    render_nodes(ui, &menu.children, &gate, &mut chosen);
+                });
+            });
+            ctx.accesskit_node_builder(resp.response.id, |n| {
+                n.set_role(egui::accesskit::Role::MenuItem);
+                n.set_label(&menu.title);
+                n.set_has_popup(egui::accesskit::HasPopup::Menu);
             });
         }
         for command in chosen {
@@ -577,39 +584,83 @@ impl PdfCraftApp {
     }
 }
 
+fn any_enabled(nodes: &[craft_menu::Node], gate: &craft_menu::Gate) -> bool {
+    nodes.iter().any(|node| match node {
+        craft_menu::Node::Item(item) => item.enabled && gate.allows(item),
+        craft_menu::Node::Submenu { children, .. } => any_enabled(children, gate),
+        _ => false,
+    })
+}
+
 /// Render a slice of menu `Node`s into `ui` for the "Menu" button popup, collecting clicked
 /// commands. `Standard` items (AppKit-only) are skipped.
 fn render_nodes(ui: &mut egui::Ui, nodes: &[craft_menu::Node], gate: &craft_menu::Gate, chosen: &mut Vec<CommandRef>) {
     ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+    let ctx = ui.ctx().clone();
     for node in nodes {
         match node {
             craft_menu::Node::Separator => {
                 ui.separator();
             }
             craft_menu::Node::Item(item) => {
-                if !gate.allows(item) {
-                    continue;
-                }
-                let label = match item.kind {
-                    craft_menu::ItemKind::Check(on) | craft_menu::ItemKind::Radio(on) => {
-                        format!("{}{}", if on { "\u{2713} " } else { "  " }, item.label)
-                    }
-                    craft_menu::ItemKind::Plain => item.label.clone(),
+                let enabled = item.enabled && gate.allows(item);
+                let role = match item.kind {
+                    craft_menu::ItemKind::Plain => egui::accesskit::Role::MenuItem,
+                    craft_menu::ItemKind::Check(_) => egui::accesskit::Role::MenuItemCheckBox,
+                    craft_menu::ItemKind::Radio(_) => egui::accesskit::Role::MenuItemRadio,
                 };
-                let mut button = egui::Button::new(label);
-                if let Some(s) = item.shortcut.as_ref().map(|c| c.display(Platform::current())) {
-                    button = button.shortcut_text(s);
+                let mark = match item.kind {
+                    craft_menu::ItemKind::Check(true) | craft_menu::ItemKind::Radio(true) => "\u{2713} ",
+                    craft_menu::ItemKind::Check(false) | craft_menu::ItemKind::Radio(false) => "  ",
+                    craft_menu::ItemKind::Plain => "",
+                };
+                let mut button = egui::Button::new(format!("{mark}{}", item.label));
+                let shortcut_str = item.shortcut.as_ref().map(|c| c.display(Platform::current()));
+                if let Some(ref s) = shortcut_str {
+                    button = button.shortcut_text(s.clone());
                 }
-                if ui.add_enabled(item.enabled, button).clicked() {
+                let resp = ui.add_enabled(enabled, button);
+                ctx.accesskit_node_builder(resp.id, |n| {
+                    n.set_role(role);
+                    n.set_label(&item.label);
+                    if !enabled {
+                        n.set_disabled();
+                    }
+                    if let Some(ref s) = shortcut_str {
+                        n.set_value(s.as_str());
+                    }
+                    match item.kind {
+                        craft_menu::ItemKind::Check(on) | craft_menu::ItemKind::Radio(on) => {
+                            n.set_toggled(if on { egui::accesskit::Toggled::True } else { egui::accesskit::Toggled::False });
+                        }
+                        _ => {}
+                    }
+                });
+                if resp.clicked() {
                     chosen.push(item.command.clone());
                     ui.close();
                 }
             }
             craft_menu::Node::Submenu { label, children, .. } => {
-                ui.menu_button(label, |ui| {
-                    ui.set_min_width(220.0);
-                    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
-                    render_nodes(ui, children, gate, chosen);
+                let enabled = any_enabled(children, gate);
+                let resp = ui
+                    .add_enabled_ui(enabled, |ui| {
+                        ui.menu_button(label, |ui| {
+                            ui.set_min_width(220.0);
+                            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+                            egui::ScrollArea::vertical().max_height(400.0).show(ui, |ui| {
+                                render_nodes(ui, children, gate, chosen);
+                            });
+                        })
+                    })
+                    .inner;
+                ctx.accesskit_node_builder(resp.response.id, |n| {
+                    n.set_role(egui::accesskit::Role::MenuItem);
+                    n.set_label(label);
+                    n.set_has_popup(egui::accesskit::HasPopup::Menu);
+                    if !enabled {
+                        n.set_disabled();
+                    }
                 });
             }
             craft_menu::Node::Standard { .. } => {}

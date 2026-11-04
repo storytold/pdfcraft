@@ -54,6 +54,12 @@ pub fn wait_until(h: &mut Harness<'static, PdfCraftApp>, what: &str, ready: impl
 /// Open the in-window menu bar's `title` menu (File, Edit, View…).
 pub fn open_menu(h: &mut Harness<'static, PdfCraftApp>, title: &str) {
     use egui_kittest::kittest::Queryable;
+    if h.query_by(|n| n.role() == egui::accesskit::Role::MenuItem && n.label().as_deref() == Some(title)).is_none()
+        && let Some(menu) = h.query_by(|n| n.label().as_deref() == Some("Menu"))
+    {
+        menu.click();
+        h.run_steps(2);
+    }
     h.get_by(|n| n.role() == egui::accesskit::Role::MenuItem && n.label().as_deref() == Some(title)).click();
     h.run_steps(2);
 }

@@ -489,6 +489,11 @@ pub fn mode_bar(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 // "Menu" button that opens them as a popup.
                 if app.native_menu.is_none() {
                     let btn = widgets::ghost_button_sized(ui, "panel-left", tl!("Menu"), 48.0);
+                    ui.ctx().accesskit_node_builder(btn.id, |n| {
+                        n.set_role(egui::accesskit::Role::MenuItem);
+                        n.set_label(tl!("Menu"));
+                        n.set_has_popup(egui::accesskit::HasPopup::Menu);
+                    });
                     egui::Popup::menu(&btn).show(|ui| app.menu_popup_ui(ui));
                     ui.add_space(4.0);
                     ui.painter().vline(ui.cursor().left(), ui.max_rect().y_range().shrink(12.0), Stroke::new(1.0, t.divider));
