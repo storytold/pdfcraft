@@ -3782,6 +3782,7 @@ fn bookmark_titles_follow_the_document_version() {
     old.set_version("1.7");
     add_bookmark(&mut old, &[], 0, "Caf\u{e9}", 0).unwrap();
     assert_eq!(raw(&old)[..2], [0xFE, 0xFF]);
+}
 
 /// #3502: a `/Contents` array's pieces are joined with a space, as the renderer joins them, so a
 /// `%` comment at the end of a piece without a line break continues through the first line of the
