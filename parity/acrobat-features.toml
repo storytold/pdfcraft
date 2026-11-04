@@ -1423,15 +1423,15 @@ notes = ""
 
 [[feature]]
 id = "view.find-options"
-title = "Find options: whole words, case-sensitive"
+title = "Find options: whole words, case-sensitive, accent-sensitive"
 area = "B"
 tier = "P1"
 milestone = "M3"
 status = "shipped"
 commands = ["edit.find"]
-tools = []
-evidence = ["crates/ui-egui/tests/it/viewer.rs::view_history_select_all_and_find_options"]
-notes = "whole words only, case-sensitive"
+tools = ["text_find"]
+evidence = ["crates/ui-egui/tests/it/viewer.rs::view_history_select_all_and_find_options", "crates/ui-egui/tests/it/find_accents.rs::find_matches_accented_and_plain_spellings_until_accent_sensitive_is_ticked", "crates/ui-egui/tests/it/find_accents.rs::the_accent_option_is_independent_of_case", "crates/render/tests/it/search.rs::find_ignores_accents_by_default_and_matches_them_when_asked", "crates/render/tests/it/search.rs::accents_come_off_latin_letters_and_nothing_else", "crates/automation/tests/it/automation.rs::text_find_ignores_accents_unless_asked_not_to"]
+notes = "whole words only, case-sensitive, and accent-sensitive (#3460). Find ignores accents unless Accent-sensitive is ticked: cafe finds café and Café, and resume finds résumé and Résumé. text_find takes accent_sensitive (default false, like the find bar). Only Latin letters fold: a precomposed letter whose canonical decomposition is a base letter plus combining diacritical marks (U+0300-036F) matches its base, as does a mark drawn as a separate glyph after a Latin letter. Letters with no decomposition (ł ø đ), the kana (が is not か), Cyrillic (й is not и) and Greek stay distinct. A match covers the glyphs that hold only the accents of its last letter; an accent that shares a glyph with other text is not highlighted when only the letter is found. Missing: the same option for Search & Redact (it still matches accents as written), bookmark and comment filters, and Replace (#3841) once it lands."
 
 [[feature]]
 id = "view.find-in-comments-bookmarks"
@@ -1455,7 +1455,7 @@ status = "shipped"
 commands = ["edit.advanced_search"]
 tools = ["text_find"]
 evidence = ["crates/ui-egui/tests/it/viewer.rs::advanced_search_lists_results_with_context"]
-notes = "Search panel (⇧⌘F): every match grouped by page with its context, whole words / case options, click to go; shares the find bar's search (closing the panel moves it to the bar)"
+notes = "Search panel (⇧⌘F): every match grouped by page with its context, whole words / case / accent options, click to go; shares the find bar's search (closing the panel moves it to the bar)"
 
 [[feature]]
 id = "view.advanced-search"
