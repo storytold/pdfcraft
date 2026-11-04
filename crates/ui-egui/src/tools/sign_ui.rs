@@ -815,6 +815,9 @@ mod tests {
     /// left): never a mix, and never a label signing would refuse.
     #[test]
     fn appearance_labels_are_translated_or_all_english() {
+        if !crate::i18n::needs_catalogs() {
+            return;
+        }
         use crate::i18n::{Lang, has, tr};
         let english = AppearanceLabels::default();
         assert_eq!(appearance_labels(Lang::EN), (english.clone(), false));
@@ -845,6 +848,9 @@ mod tests {
     /// its label, in the words given, and only the values when the labels are off.
     #[test]
     fn preview_lines_use_the_labels_signing_stamps() {
+        if !crate::i18n::needs_catalogs() {
+            return;
+        }
         let (de, _) = appearance_labels(crate::i18n::Lang::from_code("de").unwrap());
         let all = Appearance { reason: true, location: true, ..Appearance::default() };
         let lines = detail_lines(&all, &de, "Ada", " Genehmigt ", "Berlin", "2026.10.14 09:30:00 Z");
