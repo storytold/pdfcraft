@@ -1,7 +1,13 @@
 use super::reader::find;
-use super::state::{LENGTHS, LoadGuard, ObjStm, ObjectReader, ReadState, Slot, SourceIdentity, objstm_member, owned_bytes};
+use super::state::{LENGTHS, LoadGuard, ObjStm, ObjectReader, ReadState, Slot, SourceIdentity, held_bytes, objstm_member};
 use super::xref::{Revision, XrefEntry};
-use super::{Arc, CosError, Cow, Dict, Document, Lexer, MAX_DECODED, ObjRef, Object, Stream, is_whitespace, parse_indirect_shared};
+use super::{
+    Arc, CosError, Cow, Dict, Document, Lexer, MAX_DECODED, MAX_JBIG2_GLOBALS, ObjRef, Object, Stream, is_whitespace, parse_indirect_shared,
+};
+
+/// The most decoded `/JBIG2Globals` a document keeps for its images to share (see
+/// `Document::jbig2_globals`): two streams at [`MAX_JBIG2_GLOBALS`].
+const JBIG2_GLOBALS_HELD: usize = 2 * MAX_JBIG2_GLOBALS;
 
 impl Document {
     pub fn bytes(&self) -> &Arc<Vec<u8>> {
@@ -150,12 +156,16 @@ impl Document {
         self.try_get(r.num).unwrap_or_else(|_| Arc::new(Object::Null))
     }
 
-    /// Follow a reference if `o` is one; otherwise return `o` itself.
+    /// Follow a reference if `o` is one; otherwise return `o` itself. An object can be nothing but
+    /// a reference to another, which is followed too, up to [`MAX_REFERENCE_HOPS`] of them.
     pub fn resolve(&self, o: &Object) -> Arc<Object> {
-        match o {
-            Object::Ref(r) => self.get(*r),
-            other => Arc::new(other.clone()),
+        let Object::Ref(r) = o else { return Arc::new(o.clone()) };
+        let mut held = self.get(*r);
+        for _ in 0..MAX_REFERENCE_HOPS {
+            let Object::Ref(r) = &*held else { break };
+            held = self.get(*r);
         }
+        held
     }
 
     /// `s` with the `/DecodeParms` its filters use made direct, so [`Stream::decoded`] reads them:
@@ -212,7 +222,7 @@ impl Document {
     }
 
     /// `o`, or the object it refers to, without copying either.
-    fn held<'o>(&self, o: &'o Object) -> Held<'o> {
+    pub(crate) fn held<'o>(&self, o: &'o Object) -> Held<'o> {
         match o {
             Object::Ref(_) => Held::Resolved(self.resolve(o)),
             o => Held::Direct(o),
@@ -233,18 +243,7 @@ impl Document {
         if !matches!(chain.last(), Some((pdfcraft_filters::Filter::CcittFax, _))) {
             return None;
         }
-        // Its place in /Filter, /Crypt included, pairs it with its /DecodeParms entry (§7.4.1): the
-        // last filter but a /Crypt, which `filters` leaves out wherever it stands.
-        let index = match s.dict.get(b"Filter") {
-            Some(Object::Array(a)) => a.iter().rposition(|f| f.as_name() != Some(b"Crypt".as_slice())).unwrap_or(0),
-            _ => 0,
-        };
-        let parms = match s.dict.get(b"DecodeParms").map(|p| self.resolve(p)).as_deref() {
-            Some(Object::Array(a)) => a.get(index).and_then(|p| self.dict(p)),
-            Some(p) if index == 0 => p.as_dict().cloned(),
-            _ => None,
-        }
-        .unwrap_or_default();
+        let parms = self.last_filter_parms(s);
         let int = |key: &[u8], default: i64| parms.get(key).and_then(|v| self.resolve(v).as_int()).unwrap_or(default);
         let flag = |key: &[u8], default: bool| match parms.get(key).map(|v| self.resolve(v)).as_deref() {
             Some(Object::Bool(b)) => *b,
@@ -262,42 +261,129 @@ impl Document {
         })
     }
 
-    /// The samples of image `s`, decoded: through its filters ([`Stream::decoded`]), or, for a
-    /// CCITT fax image (its last filter), through the filters before it and then
-    /// [`pdfcraft_filters::decode_ccitt`] with its [`Document::fax_params`], as `CCITTFaxDecode`
-    /// gives them (ISO 32000-2 §7.4.6). Parameters given by reference count, for every filter
-    /// ([`Document::with_direct_parms`]). A fax image's `/Columns` has to be its `/Width`. Up to
-    /// its `/Height` rows are decoded, whatever `/Rows` says, within [`MAX_DECODED`] bytes; damaged
-    /// data gives fewer, so a caller checks it has the rows it needs.
-    pub fn decoded_image(&self, s: &Stream) -> Result<Vec<u8>, CosError> {
+    /// The `/DecodeParms` dictionary of stream `s`'s last filter, resolved: that of a lone filter,
+    /// or its entry in an array. Empty when there is none.
+    fn last_filter_parms(&self, s: &Stream) -> Dict {
+        // Its place in /Filter, /Crypt included, pairs it with its /DecodeParms entry (§7.4.1): the
+        // last filter but a /Crypt, which `filters` leaves out wherever it stands.
+        let index = match s.dict.get(b"Filter") {
+            Some(Object::Array(a)) => a.iter().rposition(|f| f.as_name() != Some(b"Crypt".as_slice())).unwrap_or(0),
+            _ => 0,
+        };
+        match s.dict.get(b"DecodeParms").map(|p| self.resolve(p)).as_deref() {
+            Some(Object::Array(a)) => a.get(index).and_then(|p| self.dict(p)),
+            Some(p) if index == 0 => p.as_dict().cloned(),
+            _ => None,
+        }
+        .unwrap_or_default()
+    }
+
+    /// [`Document::decoded_image_spending`] with no limit on the work, for tests of what an image
+    /// decodes to: everything else decodes images through an [`ImageBudget`](crate::ImageBudget).
+    #[cfg(test)]
+    pub(crate) fn decoded_image(&self, s: &Stream) -> Result<Vec<u8>, CosError> {
         self.decoded_image_within(s, MAX_DECODED)
     }
 
-    /// [`Document::decoded_image`] for an image whose decoding has a tighter bound than
-    /// [`MAX_DECODED`]: no stage, the filters before a fax decoder included, may produce more than
-    /// `max` bytes.
-    pub fn decoded_image_within(&self, s: &Stream, max: usize) -> Result<Vec<u8>, CosError> {
+    /// [`Document::decoded_image`] within `max` bytes.
+    #[cfg(test)]
+    pub(crate) fn decoded_image_within(&self, s: &Stream, max: usize) -> Result<Vec<u8>, CosError> {
+        let mut unbounded = u64::MAX;
+        self.decoded_image_spending(s, max, &mut unbounded)
+    }
+
+    /// The samples of image `s`, decoded within `max` bytes ([`MAX_DECODED`] at most), spending from
+    /// `work`: see [`ImageBudget::decode`](crate::ImageBudget::decode), the way in from outside this
+    /// crate, which says what this decodes and how.
+    pub(crate) fn decoded_image_spending(&self, s: &Stream, max: usize, work: &mut u64) -> Result<Vec<u8>, CosError> {
         let max = max.min(MAX_DECODED);
         let s = &*self.with_direct_parms(s);
-        let Some(p) = self.fax_params(s) else { return s.decoded_within(max) };
+        let filter = |e: pdfcraft_filters::FilterError| CosError::Filter(e.to_string());
+        let chain = s.readable_filters().map_err(filter)?;
+        // The filters before the image codec, such as ASCII85Decode, are undone first.
+        let undo = |before: &[(pdfcraft_filters::Filter, pdfcraft_filters::Params)], work: &mut u64| match before {
+            [] => Ok(Cow::Borrowed(&s.raw[..])),
+            _ => pdfcraft_filters::decode_tolerant_within(before, &s.raw, max, work).map(Cow::Owned).map_err(filter),
+        };
+        // `/Width` and `/Height` are read as given directly, as every caller reads them first: one
+        // given by reference has the image refused there, before it gets here.
+        let height = s.dict.int(b"Height").and_then(|h| u32::try_from(h).ok());
+        if let Some(((pdfcraft_filters::Filter::Jbig2, _), before)) = chain.split_last() {
+            let (Some(columns), Some(height)) = (s.dict.int(b"Width").and_then(|w| u32::try_from(w).ok()), height) else {
+                return Err(CosError::Filter("a JBIG2 image's /Width or /Height isn't a size".into()));
+            };
+            // Nothing to read for what can't be decoded: the images of a file share its globals.
+            let globals = if *work == 0 { None } else { self.jbig2_globals(s, work)? };
+            let data = if *work == 0 { Cow::Borrowed(&[][..]) } else { undo(before, work)? };
+            return pdfcraft_filters::decode_jbig2_within(&data, globals.as_deref().map(Vec::as_slice), columns, height, max, work).map_err(filter);
+        }
+        let Some(p) = self.fax_params(s) else { return s.decoded_spending(max, work) };
         // As many rows as the image has: a /Rows below /Height would cut the picture short, and
         // rows past /Height aren't drawn.
         let p = pdfcraft_filters::CcittParams { rows: 0, ..p };
         if s.dict.int(b"Width") != Some(p.columns) {
             return Err(CosError::Filter("a fax image's /Columns aren't its /Width".into()));
         }
-        let height = s.dict.int(b"Height").and_then(|h| u32::try_from(h).ok()).unwrap_or(0);
         let stride = usize::try_from(p.columns).unwrap_or(usize::MAX).div_ceil(8).max(1);
-        let rows = u32::try_from(max / stride).unwrap_or(u32::MAX).min(height);
-        // The filters before it, such as ASCII85Decode, are undone first.
-        let chain = s.readable_filters().map_err(|e| CosError::Filter(e.to_string()))?;
-        let data = match chain.split_last() {
-            Some((_, before)) if !before.is_empty() => {
-                Cow::Owned(pdfcraft_filters::decode_tolerant(before, &s.raw, max).map_err(|e| CosError::Filter(e.to_string()))?.0)
-            }
-            _ => Cow::Borrowed(&s.raw[..]),
+        let rows = u32::try_from(max / stride).unwrap_or(u32::MAX).min(height.unwrap_or(0));
+        let data = undo(chain.split_last().map_or(&[][..], |(_, before)| before), work)?;
+        pdfcraft_filters::decode_ccitt_within(&data, &p, rows, work).map_err(filter)
+    }
+
+    /// The `/JBIG2Globals` stream a JBIG2 image `s` names by reference in its last filter's
+    /// `/DecodeParms`: `None` for a stream whose last filter isn't `JBIG2Decode`, or one without
+    /// globals. Redaction finds with it the other images that share a redacted image's globals.
+    pub fn jbig2_globals_ref(&self, s: &Stream) -> Option<ObjRef> {
+        let chain = s.readable_filters().ok()?;
+        if !matches!(chain.last(), Some((pdfcraft_filters::Filter::Jbig2, _))) {
+            return None;
+        }
+        self.last_filter_parms(s).get(b"JBIG2Globals").and_then(Object::as_ref)
+    }
+
+    /// What the `/JBIG2Globals` stream of JBIG2 image `s` (in its last filter's `/DecodeParms`)
+    /// decodes to, within [`MAX_JBIG2_GLOBALS`]; `None` without one (a reference to no object is
+    /// one to null, ISO 32000-2 §7.3.10, which is an absent entry, §7.3.7). The image is then read
+    /// without them, as the renderer draws it, so an image that needed them mostly fails to decode
+    /// and can decode to other pixels. A stream that is there and can't be read is an error, rather
+    /// than the image decoded without it.
+    ///
+    /// The images of a scan share one globals stream, so a stream of the file, not edited since
+    /// it was read (the same in every clone) and with its `/DecodeParms` direct (by reference they
+    /// are another object, which can change while this one doesn't), has its filters undone once a
+    /// document and is kept, up to [`JBIG2_GLOBALS_HELD`] in all; others are read each time. That
+    /// saves the filters only: the segments it holds are decoded again for every image. Undoing
+    /// the filters spends from `work`, so globals read for every image pay every time.
+    fn jbig2_globals(&self, s: &Stream, work: &mut u64) -> Result<Option<Arc<Vec<u8>>>, CosError> {
+        let Some(entry) = self.last_filter_parms(s).get(b"JBIG2Globals").cloned() else { return Ok(None) };
+        let held = match entry {
+            Object::Ref(r) if !self.overlay.contains_key(&r.num) => Some(r.num),
+            _ => None,
         };
-        pdfcraft_filters::decode_ccitt(&data, &p, rows).map_err(|e| CosError::Filter(e.to_string()))
+        if let Some(hit) = held.and_then(|num| self.jbig2_globals.lock().ok()?.get(&num).cloned()) {
+            return Ok(Some(hit));
+        }
+        let Object::Stream(g) = &*self.resolve(&entry) else { return Ok(None) };
+        let readable = self.with_direct_parms(g);
+        let held = held.filter(|_| matches!(readable, Cow::Borrowed(_)));
+        let mut data = readable.decoded_spending(MAX_JBIG2_GLOBALS, work).map_err(|e| {
+            let detail = match e {
+                CosError::Filter(detail) => detail,
+                e => e.to_string(),
+            };
+            CosError::Filter(format!("the JBIG2 globals can't be read: {detail}"))
+        })?;
+        // What is kept counts by its length, so that's all it may hold on to.
+        data.shrink_to_fit();
+        let data = Arc::new(data);
+        // A poisoned lock only means nothing is kept.
+        if let (Some(num), Ok(mut kept)) = (held, self.jbig2_globals.lock()) {
+            let total = kept.values().map(|g| g.len()).fold(data.len(), usize::saturating_add);
+            if total <= JBIG2_GLOBALS_HELD {
+                kept.insert(num, data.clone());
+            }
+        }
+        Ok(Some(data))
     }
 
     pub fn try_get(&self, num: u32) -> Result<Arc<Object>, CosError> {
@@ -313,12 +399,14 @@ impl Document {
         // cycles such as `6 0 obj << /Length 6 0 R >>`. Bound the nesting on every path.
         let _guard =
             LoadGuard::enter(num).ok_or_else(|| CosError::Syntax { offset: 0, detail: format!("reference cycle while loading object {num}") })?;
+        let _scope = crate::security::FollowScope::enter();
         let obj = self.load(num, 0)?;
         let obj = Arc::new(obj);
         // The editing cache is bounded like the scan reader's: re-parsing a file-backed view
         // is cheap, and returned objects outlive eviction.
-        self.cache.lock().map_err(|_| CosError::Poisoned)?.insert(num, obj.clone());
-        self.evict_editor_cache_if_over_budget(num, &obj)?;
+        let owned = held_bytes(&obj, &self.data, 0);
+        self.cache.lock().map_err(|_| CosError::Poisoned)?.insert(num, obj.clone(), owned);
+        self.evict_editor_cache_if_over_budget(num)?;
         Ok(obj)
     }
 
@@ -327,10 +415,10 @@ impl Document {
     /// document cannot pin its whole object graph. Only owned (decrypted/copied) bytes
     /// count; file-backed views re-parse for free.
     ///
-    /// Worst case per document: input bytes + up to `EDITOR_CACHE_OBJECTS` ×
-    /// `EDITOR_LARGE_OBJECT` (1024 × 256 KB = 256 MB) of small objects between full
-    /// accounting passes + `EDITOR_OBJSTM_BYTES` (32 MB) + unsaved `overlay` edits.
-    /// The count cap always holds; byte accounting between passes is approximate.
+    /// Worst case per document: input bytes + `EDITOR_CACHE_BYTES` (32 MB) of owned object
+    /// data + `EDITOR_OBJSTM_BYTES` (32 MB) + unsaved `overlay` edits. Each object is measured
+    /// once, as it is cached ([`ObjectCache`](super::state::ObjectCache)), so both caps hold
+    /// after every insertion.
     /// Clones share these caches, so one clone's eviction drops another's hot set;
     /// that only costs re-parsing, never correctness. Eviction keeps just the newcomer:
     /// file-backed views re-parse cheaply and editor working sets stay far below 1024.
@@ -343,37 +431,13 @@ impl Document {
 
     const EDITOR_OBJSTM_BYTES: usize = 32 * 1024 * 1024;
 
-    /// Newcomers above this force a full accounting pass even below the count cap:
-    /// `EDITOR_CACHE_BYTES / 128`, so 128 large newcomers always trigger a pass before the
-    /// byte budget can double.
-    const EDITOR_LARGE_OBJECT: usize = 256 * 1024;
-
-    fn evict_editor_cache_if_over_budget(&self, fresh_num: u32, fresh: &Object) -> Result<(), CosError> {
-        // Fast path: the full fold is O(cache) per insert, so skip it for a small newcomer
-        // below the count cap. `len` is copied out first; nothing here holds the lock.
-        let len = self.cache.lock().map_err(|_| CosError::Poisoned)?.len();
-        if len <= Self::EDITOR_CACHE_OBJECTS && owned_bytes(fresh, &self.data, 0) <= Self::EDITOR_LARGE_OBJECT {
-            return Ok(());
-        }
-        // Walk a snapshot off-lock; re-lock only to evict.
-        let live: Vec<(u32, Arc<Object>)> = self.cache.lock().map_err(|_| CosError::Poisoned)?.iter().map(|(n, o)| (*n, o.clone())).collect();
-        let data = &self.data;
-        let owned: usize = live.iter().fold(0usize, |n, (_, o)| n.saturating_add(owned_bytes(o, data, 0)));
-        if live.len() <= Self::EDITOR_CACHE_OBJECTS && owned <= Self::EDITOR_CACHE_BYTES {
-            return Ok(());
-        }
-        // Re-check under the final lock: another thread may have inserted or evicted since
-        // the snapshot. Keep its newcomers, and skip the eviction if back within budget.
-        let snapshot: std::collections::HashSet<u32> = live.into_iter().map(|(n, _)| n).collect();
+    fn evict_editor_cache_if_over_budget(&self, fresh_num: u32) -> Result<(), CosError> {
         let mut cache = self.cache.lock().map_err(|_| CosError::Poisoned)?;
-        if cache.len() <= Self::EDITOR_CACHE_OBJECTS {
-            let data = &self.data;
-            let owned: usize = cache.values().fold(0usize, |n, o| n.saturating_add(owned_bytes(o, data, 0)));
-            if owned <= Self::EDITOR_CACHE_BYTES {
-                return Ok(());
-            }
+        if cache.len() <= Self::EDITOR_CACHE_OBJECTS && cache.owned() <= Self::EDITOR_CACHE_BYTES {
+            return Ok(());
         }
-        cache.retain(|n, _| *n == fresh_num || !snapshot.contains(n));
+        // Eviction keeps just the newcomer: file-backed views re-parse cheaply.
+        cache.retain(|n| *n == fresh_num);
         Ok(())
     }
 
@@ -503,7 +567,11 @@ impl Document {
         let Object::Stream(s) = &*loaded else { return Err(CosError::MissingObject(num)) };
         let n = s.dict.int(b"N").unwrap_or(0).clamp(0, 1_000_000) as usize;
         let first = usize::try_from(s.dict.int(b"First").unwrap_or(0).max(0)).ok();
-        let data = s.decoded_within(self.stream_limit)?;
+        // Its parameters can be given by reference, and can sit in another object stream. A scan of
+        // the file's object streams comes here without a read around it.
+        let _scope = crate::security::FollowScope::enter();
+        let readable = crate::security::following(Cow::Borrowed(s), || self.with_direct_parms(s));
+        let data = readable.decoded_within(self.stream_limit)?;
         let mut lx = Lexer::new(&data, 0);
         let mut index = Vec::with_capacity(n);
         for _ in 0..n {
@@ -518,8 +586,14 @@ impl Document {
         Ok(stm)
     }
 
-    /// Last-resort lookup: scan the file for `num G obj`.
+    /// Last-resort lookup: scan the file for `num G obj`. What isn't there is remembered: each miss
+    /// reads the whole file, and a file can refer to such an object from everywhere.
     fn scan_for(&self, num: u32) -> Option<(ObjRef, Object)> {
+        if self.unfound.lock().is_ok_and(|unfound| unfound.contains(&num)) {
+            return None;
+        }
+        #[cfg(test)]
+        super::tests::FILE_SCANS.with(|scans| scans.set(scans.get() + 1));
         let needle = format!("{num} ");
         let data = &self.data;
         let mut found = None;
@@ -534,6 +608,11 @@ impl Document {
             {
                 found = Some((id, o)); // keep the last (newest) definition
             }
+        }
+        if found.is_none()
+            && let Ok(mut unfound) = self.unfound.lock()
+        {
+            unfound.insert(num);
         }
         found
     }
@@ -727,9 +806,13 @@ const DECODE_PARMS_KEYS: [&[u8]; 13] = [
     b"ColorTransform",
 ];
 
+/// How many references in a row [`Document::resolve`] follows: enough for any file, and it ends a
+/// cycle of them.
+const MAX_REFERENCE_HOPS: usize = 32;
+
 /// An object read in place, or the object a reference names as the document holds it: either way
 /// nothing is copied ([`Document::held`]).
-enum Held<'o> {
+pub(crate) enum Held<'o> {
     Direct(&'o Object),
     Resolved(Arc<Object>),
 }
