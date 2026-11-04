@@ -226,8 +226,8 @@ milestone = "M1"
 status = "shipped"
 commands = []
 tools = []
-evidence = ["crates/crypt/src/tests.rs::identity_crypt_filters_leave_data_alone"]
-notes = ""
+evidence = ["crates/crypt/src/tests.rs::identity_crypt_filters_leave_data_alone", "crates/cos/tests/it/encryption.rs::a_crypt_filter_selected_by_reference_is_used", "crates/cos/tests/it/encryption.rs::an_identity_crypt_filter_selected_by_reference_leaves_a_stream_alone", "crates/render/src/raster/tests.rs::a_stream_with_a_crypt_filter_of_its_own_is_drawn"]
+notes = "a stream can name its own filter (/Crypt in /Filter, its name in /DecodeParms), read and written, each part given directly or by reference, in cos and in the renderer; /StmF, /StrF, /EFF and /CFM by reference too. A /Filter given by reference selects the crypt filter, but Stream::decoded still refuses it, so such a stream is decrypted and not decoded outside the renderer."
 
 [[feature]]
 id = "core.attachment-only-encryption"
