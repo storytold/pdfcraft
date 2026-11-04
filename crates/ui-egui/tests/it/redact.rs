@@ -62,6 +62,8 @@ fn marking_applying_and_clearing() {
     h.state_mut().execute("edit.undo");
     h.run_steps(3);
     assert_eq!(marks(&h), 2);
+    // Applying waits until the pages show the current marks (a changed page is redrawn first).
+    crate::support::settle(&mut h);
     // Redact all asks first; Apply removes the marks (and the page's fields under them).
     h.get_by_label("Redact all").click();
     h.run_steps(3);

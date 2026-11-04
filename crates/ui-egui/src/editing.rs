@@ -120,6 +120,49 @@ fn applies_redactions(edit: &Edit) -> bool {
 }
 
 impl PdfCraftApp {
+    /// The pages of document `id` with redaction marks: those the checked view lists, or, while it is
+    /// unavailable, those the comment list shows.
+    fn redaction_pages(&self, id: pdfcraft_engine::DocId) -> std::collections::BTreeSet<usize> {
+        let Some(doc) = self.session.get(id) else { return Default::default() };
+        match doc.redaction_previews() {
+            pdfcraft_engine::RedactionPreviews::Available(list) => list.iter().map(|p| p.page).collect(),
+            pdfcraft_engine::RedactionPreviews::Unavailable(_) => {
+                doc.info.annotations.iter().filter(|a| a.subtype == "Redact").map(|a| a.page).collect()
+            }
+        }
+    }
+
+    /// After a change to document `id`: the pages that bore marks before it (`before`) or bear them
+    /// now, and still show a raster from before it, are remembered until they show the current one.
+    fn note_redaction_pages(&mut self, id: pdfcraft_engine::DocId, before: &std::collections::BTreeSet<usize>) {
+        let now = self.redaction_pages(id);
+        for v in self.views.iter_mut().filter(|v| v.id == id) {
+            let stale: Vec<usize> = before.union(&now).copied().filter(|&p| v.page_out_of_date(p)).collect();
+            v.comments.redaction_stale.extend(stale);
+        }
+    }
+
+    /// Whether applying `edit` must wait: a page it applies on that bears marks, or bore them before a
+    /// change, is still drawn from a raster from before that change in some view of document `id`.
+    fn redaction_pages_out_of_date(&mut self, id: pdfcraft_engine::DocId, edit: &Edit) -> bool {
+        let selected = match edit {
+            Edit::ApplyRedactions { pages } => pages.clone(),
+            _ => None,
+        };
+        let now = self.redaction_pages(id);
+        let applies = |p: usize| selected.as_ref().is_none_or(|s| s.contains(&p));
+        let mut waiting = false;
+        for v in self.views.iter_mut().filter(|v| v.id == id) {
+            // Pages that show the current raster again are no longer waited on.
+            let current: Vec<usize> = v.comments.redaction_stale.iter().copied().filter(|&p| !v.page_out_of_date(p)).collect();
+            for p in current {
+                v.comments.redaction_stale.remove(&p);
+            }
+            waiting |= v.comments.redaction_stale.iter().chain(now.iter()).any(|&p| applies(p) && v.page_out_of_date(p));
+        }
+        waiting
+    }
+
     /// Apply an edit to the active document. Returns `true` on success; failures are shown.
     pub fn apply_edit(&mut self, edit: Edit) -> bool {
         let Some((i, id)) = self.active_ids() else { return false };
@@ -136,6 +179,19 @@ impl PdfCraftApp {
             );
             return false;
         }
+        // Nor while a page with marks still shows a raster from before its last change: the marks drawn
+        // there may not be the ones applying reads. Once the current raster arrives, it goes ahead.
+        if applies_redactions(&edit) && self.redaction_pages_out_of_date(id, &edit) {
+            self.notify_fmt(
+                "{label} failed: {e}",
+                &[
+                    ("label", &crate::i18n::edit_label(&label)),
+                    ("e", tl!("a page with redaction marks is still being redrawn; apply the redactions once it shows the current marks")),
+                ],
+            );
+            return false;
+        }
+        let marks_before = self.redaction_pages(id);
         let target_arrange_image = match &edit {
             Edit::EditPageImage { page, index, change: pdfcraft_engine::ImageEdit::Arrange(_) } => {
                 let doc = self.session.get(id);
@@ -230,6 +286,7 @@ impl PdfCraftApp {
                         ),
                     });
                 }
+                self.note_redaction_pages(id, &marks_before);
                 let out = self.session.take_js_output(id);
                 self.handle_js(id, out);
                 true
@@ -338,6 +395,7 @@ impl PdfCraftApp {
 
     fn history_step(&mut self, undo: bool) {
         let Some((i, id)) = self.active_ids() else { return };
+        let marks_before = self.redaction_pages(id);
         if !self.close_text_editors(i, id) {
             return;
         }
@@ -369,6 +427,7 @@ impl PdfCraftApp {
                     view.comments.selected = None;
                     view.comments.history_stepped();
                 }
+                self.note_redaction_pages(id, &marks_before);
                 let label = crate::i18n::edit_label(&label);
                 if undo {
                     self.notify_fmt("Undid {label}", &[("label", &label)]);

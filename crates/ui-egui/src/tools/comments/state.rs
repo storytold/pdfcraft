@@ -132,6 +132,9 @@ impl CommentView {
 /// Per-document commenting state.
 #[derive(Clone, Debug, Default)]
 pub struct CommentView {
+    /// Pages that bore redaction marks, before or after a change, whose raster on screen was still
+    /// from before it when last checked: applying waits until they show the current marks.
+    pub redaction_stale: std::collections::BTreeSet<usize>,
     /// The selected comment: (page, index in `/Annots`).
     pub selected: Option<(usize, usize)>,
     pub gesture: Option<Gesture>,

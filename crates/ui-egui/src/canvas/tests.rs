@@ -2380,3 +2380,45 @@ fn a_camera_corner_at_the_page_edge_is_hit_on_the_page_only() {
     assert!(crate::camera_ui::hit(&xf, 0, &v, pos2(14.0, 24.0)).is_some(), "on the page");
     assert!(crate::camera_ui::hit(&xf, 0, &v, pos2(6.0, 16.0)).is_none(), "just off it");
 }
+
+/// A mark moved on the page is applied only once the page shows where it is: while the raster on
+/// screen is still the one from before the move (the mark over AB), applying waits, even with no
+/// drag or pending edit; once the current raster replaces it, applying goes ahead.
+#[test]
+fn applying_waits_for_a_moved_marks_page_to_be_redrawn() {
+    use pdfcraft_cos::{Dict, Object};
+    let mut cos = pdfcraft_cos::Document::open(Arc::new(text_pages_pdf(&["AB1234CD"]))).unwrap();
+    let page = pdfcraft_model::pages(&cos)[0].obj;
+    let mut mark = Dict::new();
+    mark.set(b"Type".to_vec(), Object::name("Annot"));
+    mark.set(b"Subtype".to_vec(), Object::name("Redact"));
+    mark.set(b"Rect".to_vec(), Object::Array([70, 695, 100, 720].map(Object::Int).to_vec()));
+    let annotation = cos.add(Object::Dict(mark));
+    cos.update_dict(page, |d| d.set(b"Annots".to_vec(), Object::Array(vec![Object::Ref(annotation)]))).unwrap();
+    let bytes = pdfcraft_cos::write_full(&cos, &Default::default()).unwrap();
+    let mut app = crate::PdfCraftApp::new();
+    app.open_bytes("stale.pdf", None, bytes).unwrap();
+    let id = app.views[0].id;
+    let ctx = egui::Context::default();
+    let render = |app: &crate::PdfCraftApp| {
+        let mut renderer = pdfcraft_render::PageRenderer::new(app.session.get(id).unwrap().display.clone(), Default::default());
+        let raster = renderer.render(RenderRequest { page: 0, scale: 1.0, ..Default::default() });
+        assert!(raster.error.is_none());
+        texture_image([raster.width as usize, raster.height as usize], raster.rgba)
+    };
+    let tex = ctx.load_texture("mark-over-AB", render(&app), TextureOptions::LINEAR);
+    app.views[0].pages.insert(0, PageTex { tag: scale_tag(1.0), tex });
+    assert!(app.apply_edit(Edit::MoveAnnotation { page: 0, index: 0, dx: 100.0, dy: 0.0 }));
+    assert!(app.views[0].comments.gesture.is_none() && app.views[0].pending_edit.is_none());
+    assert!(app.views[0].page_out_of_date(0), "the raster on screen still has the mark over AB");
+    let current = app.session.get(id).unwrap().redaction_previews().get(0, 0).unwrap().removal_rects().to_vec();
+    assert_eq!(current, vec![[170.0, 695.0, 200.0, 720.0]]);
+    assert!(!app.apply_edit(Edit::ApplyRedactions { pages: None }), "the page still shows the mark where it was");
+    assert_eq!(app.session.get(id).unwrap().redaction_marks(), 1, "nothing was applied");
+    // The current raster arrives: the page shows the mark where applying will remove it.
+    let tex = ctx.load_texture("mark-moved", render(&app), TextureOptions::LINEAR);
+    app.views[0].pages.insert(0, PageTex { tag: scale_tag(1.0), tex });
+    assert!(!app.views[0].page_out_of_date(0));
+    assert!(app.apply_edit(Edit::ApplyRedactions { pages: None }));
+    assert_eq!(app.session.get(id).unwrap().redaction_marks(), 0);
+}
