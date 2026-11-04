@@ -84,3 +84,30 @@ pub(crate) fn previews_for(cos: &pdfcraft_cos::Document, pages: &[PageInfo]) -> 
         Err(e) => RedactionPreviews::Unavailable(PreviewUnavailable::Scan(e)),
     }
 }
+
+/// Draw every checked mark in `display` (a display-only copy of the working graph) exactly as
+/// the view shows it: ready marks as the outline of their areas, refused ones as a warning
+/// locator or not at all ([`pdfcraft_annot::redaction::show_in_display`]). Whatever appearance a
+/// mark carries in the file is not what the page shows. Nothing happens while the view is
+/// unavailable (applying is refused then).
+pub(crate) fn show_redactions(display: &mut pdfcraft_cos::Document, previews: &RedactionPreviews) -> Result<(), String> {
+    #[cfg(test)]
+    if FAIL_DISPLAY.with(std::cell::Cell::get) {
+        return Err("injected display failure".into());
+    }
+    let RedactionPreviews::Available(list) = previews else { return Ok(()) };
+    for p in list {
+        let shown = match &p.areas {
+            Ok(a) => pdfcraft_annot::redaction::Shown::Ready(&a.rects),
+            Err(_) => pdfcraft_annot::redaction::Shown::Refused(p.locator),
+        };
+        pdfcraft_annot::redaction::show_in_display(display, p.page, p.index, shown).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Makes [`show_redactions`] fail, as a display copy that can't be drawn would.
+    pub(crate) static FAIL_DISPLAY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}

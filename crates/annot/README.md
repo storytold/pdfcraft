@@ -25,6 +25,9 @@ Comments (annotations), ISO 32000-2 §12.5. Layer L3, depends on `pdfcraft-cos`,
   can't be used; refused without one; each area the nearest `f32` rectangle around it), and
   `redaction::mark_locator`, a refused mark's safe `/Rect` to point at. Which annotations are
   Redact marks, and whether one can be applied, is `pdfcraft-redact`'s.
+  `redaction::show_in_display` draws a mark in a display-only copy from those areas (the outline of
+  each, or a refused mark's dashed locator, or nothing), replacing its appearance there, never in
+  the document.
 - **Edits:** reply (`/IRT`), set review status (a `/State` reply, as Acrobat's "Set status"
   does), change text, move, resize, restyle, delete (with pop-up and replies).
 

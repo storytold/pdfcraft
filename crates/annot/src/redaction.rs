@@ -20,7 +20,7 @@
 //! `f32` can't hold refuses the mark. Quads are never merged into one box: that would take the
 //! gaps between marked lines with it.
 
-use pdfcraft_cos::{Dict, Document};
+use pdfcraft_cos::{Dict, Document, Object};
 use pdfcraft_model::numeric::{ArrayError, NumberReader, quad_groups, rect};
 
 /// The most `/QuadPoints` entries one mark may have (8,192 whole quads).
@@ -148,6 +148,119 @@ fn usable_rect(reader: &NumberReader<'_>, annot: &Dict) -> Option<[f64; 4]> {
 fn has_area(b: &[f64; 4]) -> bool {
     let (w, h) = (b[2] - b[0], b[3] - b[1]);
     w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0
+}
+
+/// How a Redact mark is drawn in a display-only copy of the document.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Shown<'a> {
+    /// The outline of each area applying removes.
+    Ready(&'a [[f64; 4]]),
+    /// A mark that can't be applied: a warning outline at its locator, or nothing on the page
+    /// when it has none.
+    Refused(Option<[f64; 4]>),
+}
+
+/// The annotation flags a display copy clears so a mark is drawn where it is, at its size, and
+/// at all: Invisible, Hidden, NoZoom, NoRotate, NoView (ISO 32000-2 Table 167).
+const DISPLAY_CLEARED_FLAGS: i64 = 1 | 2 | 8 | 16 | 32;
+
+/// Draw the Redact mark at `(page, index)` (its `/Annots` slot) of `display`, a display-only copy,
+/// exactly as `shown`: its normal appearance replaced by the outline of the checked areas (or a
+/// warning locator), its `/Rect` and the appearance's `/BBox` the union of them (so the appearance
+/// is placed with no scaling, in the page's own user space), its rollover and down appearances,
+/// `/AS`, `/OC` and the flags that would hide, scale or turn it removed. The mark's original
+/// dictionary and appearance stay in the document it was copied from; this is a view, never saved.
+pub fn show_in_display(display: &mut Document, page: usize, index: usize, shown: Shown<'_>) -> Result<(), crate::AnnotError> {
+    let page_obj = pdfcraft_model::pages(display).get(page).map(|p| p.obj).ok_or(crate::AnnotError::NoSuchPage(page))?;
+    let mut list = crate::annots(display, page_obj);
+    let entry = list.get(index).cloned().ok_or(crate::AnnotError::NoSuchAnnotation { page, index })?;
+    let Some(mut d) = display.resolve(&entry).as_dict().cloned() else { return Err(crate::AnnotError::NoSuchAnnotation { page, index }) };
+    let flags = d.int(b"F").unwrap_or(0) & !DISPLAY_CLEARED_FLAGS;
+    for key in [&b"AS"[..], b"OC"] {
+        d.remove(key);
+    }
+    let drawn = match shown {
+        Shown::Ready(areas) => Some((areas.to_vec(), display_stroke(display, &d), "")),
+        Shown::Refused(Some(locator)) => Some((
+            vec![locator],
+            [0.84, 0.53, 0.0],
+            "[3 2] 0 d
+",
+        )),
+        Shown::Refused(None) => None,
+    };
+    match drawn.and_then(|(areas, rgb, dash)| outline(&areas, rgb, dash)) {
+        Some((bbox, content)) => {
+            let mut sd = Dict::default();
+            sd.set(b"Type".to_vec(), Object::Name(b"XObject".to_vec()));
+            sd.set(b"Subtype".to_vec(), Object::Name(b"Form".to_vec()));
+            sd.set(b"BBox".to_vec(), reals(&bbox));
+            sd.set(b"Resources".to_vec(), Object::Dict(Dict::default()));
+            let stream = display.add(Object::Stream(pdfcraft_cos::Stream::from_raw(sd, content.into_bytes())));
+            let mut ap = Dict::default();
+            ap.set(b"N".to_vec(), Object::Ref(stream));
+            d.set(b"AP".to_vec(), Object::Dict(ap));
+            d.set(b"Rect".to_vec(), reals(&bbox));
+            d.set(b"F".to_vec(), Object::Int(flags));
+        }
+        // Nothing safe to draw: the mark is hidden on the page (the Comments panel lists it).
+        None => {
+            d.remove(b"AP");
+            d.set(b"F".to_vec(), Object::Int(flags | 2));
+        }
+    }
+    match entry {
+        // The listed object is the dictionary: the copy's object is replaced.
+        Object::Ref(r) if display.get(r).as_dict().is_some() => display.set(r, Object::Dict(d)),
+        // Written in place, or listed through a chain: the copy's list gets the drawn dictionary.
+        _ => {
+            let r = display.add(Object::Dict(d));
+            if let Some(slot) = list.get_mut(index) {
+                *slot = Object::Ref(r);
+            }
+            crate::set_annots(display, page_obj, list)?;
+        }
+    }
+    Ok(())
+}
+
+/// A mark's outline colour: its `/C` as RGB, clamped, or the red PdfCraft draws marks in.
+fn display_stroke(doc: &Document, d: &Dict) -> [f64; 3] {
+    d.get(b"C")
+        .and_then(|c| pdfcraft_model::numeric::device_color(&NumberReader::new(doc), c).ok())
+        .and_then(|c| c.rgb())
+        .map_or([0.89, 0.13, 0.13], |c| c.map(|v| v.clamp(0.0, 1.0)))
+}
+
+/// The box around `areas`, widened by the stroke so it isn't clipped, and the content stroking
+/// each area apart. `None` when there is nothing to draw or the box isn't finite.
+fn outline(areas: &[[f64; 4]], rgb: [f64; 3], dash: &str) -> Option<([f64; 4], String)> {
+    let first = areas.first()?;
+    let union = areas.iter().fold(*first, |u, r| [u[0].min(r[0]), u[1].min(r[1]), u[2].max(r[2]), u[3].max(r[3])]);
+    let bbox = [union[0] - 1.0, union[1] - 1.0, union[2] + 1.0, union[3] + 1.0];
+    if !bbox.iter().all(|v| v.is_finite()) {
+        return None;
+    }
+    let mut c = format!("q {} {} {} RG 1 w {dash}", rgb[0], rgb[1], rgb[2]);
+    for r in areas {
+        c.push_str(&format!(
+            "{} {} {} {} re S
+",
+            r[0],
+            r[1],
+            r[2] - r[0],
+            r[3] - r[1]
+        ));
+    }
+    c.push_str(
+        "Q
+",
+    );
+    Some((bbox, c))
+}
+
+fn reals(v: &[f64; 4]) -> Object {
+    Object::Array(v.iter().map(|x| Object::Real(*x)).collect())
 }
 
 #[cfg(test)]

@@ -24,8 +24,12 @@ fn pdf_of(objs: &[String]) -> Vec<u8> {
 /// AB is x 10–22, 1234 is 22–46 and CD 46–58. `annots` are listed as objects 6, 7, …; `extra`
 /// objects follow them.
 fn ab1234cd(annots: &[&str], extra: &[&str]) -> Vec<u8> {
+    page_with("BT /F1 10 Tf 10 100 Td (AB1234CD) Tj ET", annots, extra)
+}
+
+/// [`ab1234cd`] with another content stream (10 pt Courier as /F1).
+fn page_with(body: &str, annots: &[&str], extra: &[&str]) -> Vec<u8> {
     let list: String = (0..annots.len()).map(|i| format!("{} 0 R ", i + 6)).collect();
-    let body = "BT /F1 10 Tf 10 100 Td (AB1234CD) Tj ET";
     let mut objs = vec![
         "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
         "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>".to_string(),
@@ -201,4 +205,145 @@ fn stale_unavailable_capped_or_unlisted_views_never_apply() {
     assert!(view.removal_rects().is_empty());
     assert!(s.apply(id, Edit::ApplyRedactions { pages: None }).is_err());
     assert!(saved_text(&s, id).contains("AB1234CD"));
+}
+
+/// The Redact mark at `index` on page 1 of `bytes`: its dictionary and normal appearance.
+fn mark_in(bytes: &Arc<Vec<u8>>, index: usize) -> (pdfcraft_cos::Dict, pdfcraft_cos::Stream) {
+    let shown = pdfcraft_cos::Document::open(bytes.clone()).unwrap();
+    let page = pdfcraft_model::pages(&shown).swap_remove(0);
+    let list = shown.resolve(page.dict.get(b"Annots").unwrap()).as_array().unwrap().clone();
+    let d = shown.resolve(&list[index]).as_dict().unwrap().clone();
+    let ap = shown.resolve(d.get(b"AP").unwrap()).as_dict().unwrap().clone();
+    let pdfcraft_cos::Object::Stream(n) = (*shown.resolve(ap.get(b"N").unwrap())).clone() else { panic!("no /N stream") };
+    (d, n)
+}
+
+fn nums(o: &pdfcraft_cos::Object) -> Vec<f64> {
+    o.as_array().unwrap().iter().map(|v| v.as_f64().unwrap()).collect()
+}
+
+/// Whether `bytes` draws page 1 dark at user point (x, y) (a 200 × 200 page at scale 2).
+fn dark_at(bytes: &Arc<Vec<u8>>, x: f64, y: f64) -> bool {
+    let mut r = pdfcraft_render::PageRenderer::new(bytes.clone(), pdfcraft_render::RenderConfig::default());
+    let out = r.render(pdfcraft_render::RenderRequest { page: 0, scale: 2.0, ..Default::default() });
+    let (px, py) = ((x * 2.0) as usize, ((200.0 - y) * 2.0) as usize);
+    let i = (py * out.width as usize + px) * 4;
+    let p = &out.rgba[i..i + 4];
+    u32::from(p[0]) + u32::from(p[1]) + u32::from(p[2]) < 200
+}
+
+/// Decisive regression 5. A mark whose own appearance fills a box over AB (its /Rect is wider than
+/// its quads, and it is NoZoom and NoRotate), and one with no appearance, partial quads and a
+/// /Rect smaller than its usable quad: the page shows each as the outline of exactly its checked
+/// areas, placed in the page's own space with no scaling, while the file keeps every original
+/// dictionary, appearance and key.
+#[test]
+fn the_page_draws_the_checked_outline_whatever_the_mark_carries() {
+    let lying = "<< /Type /Annot /Subtype /Redact /F 24 /Rect [10 95 46 110] /QuadPoints [22 110 46 110 22 95 46 95] /AP << /N 8 0 R /D 8 0 R >> /PCKeep 1 >>";
+    let partial = "<< /Type /Annot /Subtype /Redact /Rect [100 150 110 160] /QuadPoints [120 110 140 110 120 95 140 95 1 2 3] >>";
+    let filled = "<< /Type /XObject /Subtype /Form /BBox [0 0 1 1] /Length 16 >>\nstream\n0 g 0 0 1 1 re f\nendstream";
+    let original = Arc::new(ab1234cd(&[lying, partial], &[filled]));
+    let (s, id) = open(original.to_vec());
+    // The file's own appearance fills under AB (below the baseline, where no glyph inks); the
+    // checked outline leaves it white, and applying leaves AB.
+    assert!(dark_at(&original, 16.0, 96.5), "the fixture's appearance fills AB");
+    let doc = s.get(id).unwrap();
+    assert!(!dark_at(&doc.display, 16.0, 96.5), "the page doesn't show AB as removed");
+    let (d, n) = mark_in(&doc.display, 0);
+    assert_eq!(nums(d.get(b"Rect").unwrap()), vec![21.0, 94.0, 47.0, 111.0], "the checked area, not the wider /Rect");
+    assert_eq!(nums(n.dict.get(b"BBox").unwrap()), nums(d.get(b"Rect").unwrap()), "placed with no scaling");
+    assert!(n.dict.get(b"Matrix").is_none());
+    assert_eq!(d.int(b"F"), Some(0), "NoZoom and NoRotate are cleared in the view");
+    assert!(d.get(b"AP").unwrap().as_dict().unwrap().get(b"D").is_none(), "no other appearance to show on press");
+    assert_eq!(d.int(b"PCKeep"), Some(1), "other keys stay");
+    let content = String::from_utf8_lossy(&n.decoded().unwrap()).into_owned();
+    assert!(content.contains("22 95 24 15 re S") && !content.contains(" f"), "{content}");
+    // No appearance, partial quads, /Rect smaller than the usable quad: both areas outlined.
+    let (d, n) = mark_in(&doc.display, 1);
+    let content = String::from_utf8_lossy(&n.decoded().unwrap()).into_owned();
+    assert!(content.contains("120 95 20 15 re S") && content.contains("100 150 10 10 re S"), "{content}");
+    assert_eq!(nums(d.get(b"Rect").unwrap()), vec![99.0, 94.0, 141.0, 161.0]);
+    // None of this is the document: its graph and its saved bytes are the original.
+    let cos = &doc.editor.as_ref().unwrap().cos;
+    let first = cos.get(pdfcraft_cos::ObjRef::new(6, 0));
+    let first = first.as_dict().unwrap();
+    assert_eq!((first.int(b"F"), nums(first.get(b"Rect").unwrap())), (Some(24), vec![10.0, 95.0, 46.0, 110.0]));
+    assert_eq!(s.save_bytes(id).unwrap().as_slice(), original.as_slice());
+    // The isolated image a drag draws is the same outline.
+    let layer = doc.comment_layer(0, &[0]).unwrap().unwrap();
+    let (d, _) = mark_in(&layer.bytes, 0);
+    assert_eq!(nums(d.get(b"Rect").unwrap()), vec![21.0, 94.0, 47.0, 111.0]);
+}
+
+/// A mark that can't be applied is drawn as a dashed warning at its /Rect, never its own
+/// appearance's fill; with no safe /Rect it isn't drawn on the page at all.
+#[test]
+fn a_refused_mark_is_drawn_as_a_warning_or_not_at_all() {
+    let located = "<< /Type /Annot /Subtype /Redact /Rect [10 95 46 110] /QuadPoints /oops /PCInline 1 >>";
+    let lost = "<< /Type /Annot /Subtype /Redact /QuadPoints [10 110 22 110 10 95 22 95 null 1 2 3 4 5 6 7] /AP << /N 8 0 R >> >>";
+    let filled = "<< /Type /XObject /Subtype /Form /BBox [0 0 1 1] /Length 16 >>\nstream\n0 g 0 0 1 1 re f\nendstream";
+    // The first is refused by being written in place: splice it into the list.
+    let mut bytes = ab1234cd(&[lost], &[filled]);
+    let at = bytes.windows(10).position(|w| w == b"[6 0 R ] >").unwrap();
+    bytes.splice(at + 1..at + 1, format!("{located} ").bytes());
+    let (s, id) = open(bytes);
+    let doc = s.get(id).unwrap();
+    assert_eq!(doc.redaction_previews().refused(), 2);
+    let (d, n) = mark_in(&doc.display, 0);
+    let content = String::from_utf8_lossy(&n.decoded().unwrap()).into_owned();
+    assert!(content.contains("[3 2] 0 d") && content.contains("10 95 36 15 re S"), "{content}");
+    assert_eq!(d.int(b"PCInline"), Some(1));
+    let shown = pdfcraft_cos::Document::open(doc.display.clone()).unwrap();
+    let page = pdfcraft_model::pages(&shown).swap_remove(0);
+    let list = shown.resolve(page.dict.get(b"Annots").unwrap()).as_array().unwrap().clone();
+    let lost = shown.resolve(&list[1]).as_dict().unwrap().clone();
+    assert!(lost.get(b"AP").is_none() && lost.int(b"F").is_some_and(|f| f & 2 != 0), "hidden: nothing safe to draw");
+    assert!(!dark_at(&doc.display, 16.0, 96.5), "its own appearance's fill is not shown");
+}
+
+/// When the marks can't be drawn as they would be applied, the view is unavailable and
+/// applying is refused; the document stays open and nothing changes.
+#[test]
+fn a_display_that_cant_be_drawn_blocks_applying() {
+    crate::redaction_preview::FAIL_DISPLAY.with(|f| f.set(true));
+    let (mut s, id) = open(ab1234cd(&[NULL_MARK], &[]));
+    crate::redaction_preview::FAIL_DISPLAY.with(|f| f.set(false));
+    assert_eq!(s.get(id).unwrap().redaction_previews(), &RedactionPreviews::Unavailable(PreviewUnavailable::Display));
+    let r = s.apply(id, Edit::ApplyRedactions { pages: None });
+    assert!(matches!(&r, Err(EditError::Invalid(m)) if m.contains("can't be shown")), "{r:?}");
+    assert!(saved_text(&s, id).contains("AB1234CD"));
+}
+
+/// Decisive regression 6. Separate probes wholly inside each shown area, in the gap between
+/// them and outside them: after applying, through the library and through the session (whose
+/// renderer check runs too), saved and reopened, no probe under an area can be extracted or is
+/// drawn, and the others all stay.
+#[test]
+fn what_the_preview_covers_is_gone_and_nothing_else() {
+    let body = "BT /F1 10 Tf 10 100 Td (QXONE) Tj ET BT /F1 10 Tf 10 130 Td (QXGAP) Tj ET \
+                BT /F1 10 Tf 10 160 Td (QXTWO) Tj ET BT /F1 10 Tf 120 100 Td (QXOUT) Tj ET";
+    let mark = "<< /Type /Annot /Subtype /Redact /QuadPoints [8 110 42 110 8 95 42 95 8 170 42 170 8 155 42 155] >>";
+    let bytes = page_with(body, &[mark], &[]);
+    let (mut s, id) = open(bytes.clone());
+    // Each covered probe (5 Courier glyphs, x 10–40, inked within y −1.6…+6.3 of its baseline) is
+    // wholly inside one shown area; the gap and outside probes are wholly outside them all.
+    let areas = ready(&s, id, 0, 0);
+    let inside = |b: [f64; 4]| areas.iter().any(|a| a[0] <= b[0] && a[1] <= b[1] && b[2] <= a[2] && b[3] <= a[3]);
+    let apart = |b: [f64; 4]| areas.iter().all(|a| b[2] <= a[0] || a[2] <= b[0] || b[3] <= a[1] || a[3] <= b[1]);
+    assert!(inside([10.0, 98.0, 40.0, 107.0]) && inside([10.0, 158.0, 40.0, 167.0]), "{areas:?}");
+    assert!(apart([10.0, 128.0, 40.0, 137.0]) && apart([120.0, 98.0, 150.0, 107.0]), "{areas:?}");
+    let check = |text: String, how: &str| {
+        assert!(!text.contains("QXONE") && !text.contains("QXTWO"), "{how}: {text}");
+        assert!(text.contains("QXGAP") && text.contains("QXOUT"), "{how}: {text}");
+    };
+    // The library, on its own.
+    let mut cos = pdfcraft_cos::Document::open(Arc::new(bytes)).unwrap();
+    pdfcraft_redact::apply(&mut cos, None).unwrap();
+    let written = pdfcraft_cos::write_full(&cos, &pdfcraft_cos::SaveOptions::default()).unwrap();
+    let (s2, id2) = open(written.clone());
+    check(page_texts(&s2, id2).concat(), "library");
+    assert!(!written.windows(5).any(|w| w == b"QXONE" || w == b"QXTWO"), "no covered probe left in the file");
+    // The session, with its renderer check.
+    s.apply(id, Edit::ApplyRedactions { pages: None }).unwrap();
+    check(saved_text(&s, id), "session");
 }

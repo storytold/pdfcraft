@@ -89,7 +89,7 @@ impl Document {
 /// [`StampPreview`] is.
 pub struct CommentLayer {
     page: usize,
-    bytes: Arc<Vec<u8>>,
+    pub(crate) bytes: Arc<Vec<u8>>,
     config: RenderConfig,
 }
 
@@ -130,6 +130,13 @@ impl Document {
                 return Ok(None);
             }
             let mut alone = pdfcraft_annot::with_missing_appearances(&editor.cos).unwrap_or_else(|| editor.cos.clone());
+            // A redaction mark is drawn as the page view draws it: from its checked areas. With no
+            // checked view there is no image of one to give.
+            if self.redaction_previews.is_available() {
+                crate::redaction_preview::show_redactions(&mut alone, &self.redaction_previews)?;
+            } else if self.info.annotations.iter().any(|a| a.page == page && a.subtype == "Redact" && indices.contains(&a.index)) {
+                return Ok(None);
+            }
             if !pdfcraft_annot::isolate_annotations(&mut alone, page, indices).map_err(|e| e.to_string())? {
                 return Ok(None);
             }

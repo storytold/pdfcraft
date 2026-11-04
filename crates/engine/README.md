@@ -42,6 +42,9 @@ with the display copy on every refresh (and `Unavailable` from the moment any re
 it finishes). `Session::apply` refuses `ApplyRedactions` while it is unavailable, when it is not
 the reading of the current graph, and inside an `Edit::Batch`, so nothing is removed that wasn't
 shown.
+The display copy draws every mark as the outline of those same areas, whatever appearance the file
+gives it (`Document::comment_layer`, the isolated image a drag draws, too); if it can't, the view is
+unavailable.
 
 Consequences worth preserving: the original bytes of an opened file are never rewritten in place; a
 full rewrite happens only where it must (redaction, PDF/A conversion, print imposition, a changed

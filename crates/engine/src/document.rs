@@ -671,7 +671,18 @@ pub(crate) fn display_bytes(
     let previews = redaction_preview::previews_for(&e.cos, pages);
     let comments = pdfcraft_annot::with_missing_appearances_cached(&e.cos, &mut e.appearances);
     let fields = pdfcraft_forms::with_field_appearances_cached(comments.as_ref().unwrap_or(&e.cos), &mut e.field_appearances);
-    let Some(display) = fields.or(comments) else {
+    let mut display = fields.or(comments);
+    // Redaction marks are drawn from their checked areas in the display copy, whatever appearance
+    // the file gives them: the page shows what applying removes. If that can't be done the view is
+    // unavailable (and applying refused), never left showing the file's own appearances as checked.
+    if matches!(&previews, RedactionPreviews::Available(list) if !list.is_empty()) {
+        let copy = display.get_or_insert_with(|| e.cos.clone());
+        if let Err(err) = redaction_preview::show_redactions(copy, &previews) {
+            e.cos.note_repair(format!("redaction marks could not be drawn as they would be applied ({err})"));
+            return (bytes.clone(), RedactionPreviews::Unavailable(PreviewUnavailable::Display));
+        }
+    }
+    let Some(display) = display else {
         return (bytes.clone(), previews);
     };
     match write_incremental(&display, &SaveOptions::default()) {
