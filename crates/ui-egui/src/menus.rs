@@ -7,7 +7,7 @@
 //! keys, the recent files and the open documents. [`PdfCraftApp::run_menu_command`] runs every
 //! one of them, once per click, whichever bar it came from.
 
-use craft_keymap::{Key, Mods};
+use craft_keymap::{Key, Mods, Platform};
 use craft_menu::{
     Builtin, Chord, CommandRef, Document, Gate, Item, ItemRole, ItemState, LayoutOptions, Menu, MenuBar, MenuRole, Node, Target,
 };
@@ -529,8 +529,11 @@ impl PdfCraftApp {
         let bar = craft_menu::layout(&self.menu_bar(&ctx), Target::current(), &layout_options()).bar;
         let gate = self.menu_gate(&ctx);
         let mut chosen = Vec::new();
+        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
         for menu in &bar.menus {
             ui.menu_button(&menu.title, |ui| {
+                ui.set_min_width(220.0);
+                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
                 render_nodes(ui, &menu.children, &gate, &mut chosen);
             });
         }
@@ -579,6 +582,7 @@ impl PdfCraftApp {
 /// Render a slice of menu `Node`s into `ui` for the "Menu" button popup, collecting clicked
 /// commands. `Standard` items (AppKit-only) are skipped.
 fn render_nodes(ui: &mut egui::Ui, nodes: &[craft_menu::Node], gate: &craft_menu::Gate, chosen: &mut Vec<CommandRef>) {
+    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
     for node in nodes {
         match node {
             craft_menu::Node::Separator => {
@@ -594,13 +598,21 @@ fn render_nodes(ui: &mut egui::Ui, nodes: &[craft_menu::Node], gate: &craft_menu
                     }
                     craft_menu::ItemKind::Plain => item.label.clone(),
                 };
-                if ui.add_enabled(item.enabled, egui::Button::new(label)).clicked() {
+                let mut button = egui::Button::new(label);
+                if let Some(s) = item.shortcut.as_ref().map(|c| c.display(Platform::current())) {
+                    button = button.shortcut_text(s);
+                }
+                if ui.add_enabled(item.enabled, button).clicked() {
                     chosen.push(item.command.clone());
                     ui.close();
                 }
             }
             craft_menu::Node::Submenu { label, children, .. } => {
-                ui.menu_button(label, |ui| render_nodes(ui, children, gate, chosen));
+                ui.menu_button(label, |ui| {
+                    ui.set_min_width(220.0);
+                    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+                    render_nodes(ui, children, gate, chosen);
+                });
             }
             craft_menu::Node::Standard { .. } => {}
         }
