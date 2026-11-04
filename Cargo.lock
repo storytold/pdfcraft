@@ -4652,7 +4652,7 @@ version = "0.18.1"
 
 [[package]]
 name = "pdfcraft-thumbnails"
-version = "0.13.0"
+version = "0.18.1"
 dependencies = [
  "pdfcraft-render",
  "windows",

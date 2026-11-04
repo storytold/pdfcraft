@@ -10641,6 +10641,8 @@ fn multiline_fill_sign_engine_round_trip_preserves_lines_and_appearance() {
     assert_eq!(re.session().get(pdfcraft_engine::DocId(reopened)).unwrap().info.annotations[0].contents.as_deref(), Some(text));
     assert_eq!(rendered, re.call("page_render", &json!({"doc":reopened,"page":1,"dpi":72})).unwrap(), "saved appearances are identical");
     std::fs::remove_dir_all(dir).unwrap();
+}
+
 #[test]
 fn object_delete_is_atomic_undoable_and_rejects_stale_references() {
     let dir = workdir("object-delete");

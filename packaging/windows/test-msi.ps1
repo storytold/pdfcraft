@@ -263,7 +263,7 @@ foreach ($value in @(
   $row = Read-Row ('SELECT `Value`, `Component_`, `Root` FROM `Registry` WHERE `Key` = ''' + $value[0] + ''' AND ' + $name) 3
   Assert-Equal $row[0] $value[2] "Thumbnail handler $($value[0]) $($value[1])"
   Assert-Equal $row[1] 'PdfcraftThumbnails' "Thumbnail handler $($value[0]) component"
-  Assert-Equal $row[2] '2' "Thumbnail handler $($value[0]) HKLM root"
+  Assert-Equal $row[2] '-1' "Thumbnail handler $($value[0]) HKMU root"
 }
 Assert-NoRow 'SELECT `Registry` FROM `Registry` WHERE `Key` = ''Software\Classes\.pdf\ShellEx\{e357fccd-a995-4576-b01f-234630154e96}''' '.pdf thumbnail handler'
 Assert-NoRow 'SELECT `Registry` FROM `Registry` WHERE `Name` = ''DisableProcessIsolation''' 'thumbnail process-isolation opt-out'

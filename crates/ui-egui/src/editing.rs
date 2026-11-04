@@ -161,6 +161,9 @@ impl PdfCraftApp {
                     view.line_editor = None;
                     view.block_drag = None;
                 }
+                if matches!(edit, Edit::EditPageImage { change: pdfcraft_engine::ImageEdit::Delete, .. }) {
+                    view.image_selection = None;
+                }
                 if let Some(ctx) = &self.ctx {
                     ctx.request_repaint();
                 }

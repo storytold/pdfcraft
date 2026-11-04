@@ -53,6 +53,7 @@ impl ObjectSelection {
     /// Clear any object-selection gesture and the page it was blocking.
     pub(crate) fn cancel_pointer_gesture(&mut self) {
         self.gesture = None;
+        self.vertex = None;
         self.blocked_page = None;
     }
 
@@ -301,9 +302,9 @@ fn leave_single(view: &mut DocView) {
 /// caret.
 pub(crate) fn hit(view: &DocView, xf: &PageXform, info: &DocInfo, page: usize, open: Option<Rect>, p: Pos2) -> Option<Hit> {
     let s = &view.objects;
-    if s.page == Some(page) && !s.selected.is_empty() && s.selected.iter().fold(Rect::NOTHING, |r, o| r.union(screen(xf, info, page, o))).contains(p)
-    {
-        return Some(Hit::new(Owner::Objects { part: ObjectsPart::Selection }, Layer::Placed, egui::CursorIcon::Move));
+    if s.page == Some(page) && !s.selected.is_empty() && on_selection(s, xf, info, page, p) {
+        let cursor = if near_point(s, xf, info, page, p).is_some() { egui::CursorIcon::Crosshair } else { egui::CursorIcon::Move };
+        return Some(Hit::new(Owner::Objects { part: ObjectsPart::Selection }, Layer::Placed, cursor));
     }
     open.filter(|r| on_frame(r.shrink(2.0), p)).map(|_| Hit::new(Owner::Objects { part: ObjectsPart::Frame }, Layer::Handle, egui::CursorIcon::Move))
 }
@@ -374,7 +375,7 @@ fn input(s: &mut ObjectSelection, cx: PageToolContext<'_>, view: &mut DocView) -
                 }
             }
         }
-        ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+        view.cursor.claim(Layer::Drag, egui::CursorIcon::Crosshair);
         return true;
     }
     if s.page == Some(page)
@@ -515,9 +516,9 @@ fn input(s: &mut ObjectSelection, cx: PageToolContext<'_>, view: &mut DocView) -
     s.clear();
     if let Some(object) = hit.filter(|o| o.target.kind == ObjectKind::Path) {
         leave_single(view);
-        view.objects.page = Some(page);
-        view.objects.selected = vec![object.clone()];
-        view.objects.gesture = Some(Gesture { start: p, now: p, marquee: false, additive: false });
+        s.page = Some(page);
+        s.selected = vec![object.clone()];
+        s.gesture = Some(Gesture { start: p, now: p, marquee: false, additive: false });
         return true;
     }
     // A press on something (a paragraph, its edge reaching past its box #2276, a picture, added
@@ -610,24 +611,25 @@ pub(crate) fn delete_keys(ctx: &egui::Context, view: &mut DocView, doc: &Documen
         .objects
         .page
         .filter(|_| !view.objects.selected.is_empty())
-        .map(|page| (page, view.objects.selected.iter().map(|o| o.target).collect()))
+        .map(|page| Edit::DeleteObjects { page, objects: view.objects.selected.iter().map(|o| o.target).collect() })
         .or_else(|| {
-            view.image_selection
-                .as_ref()
-                .filter(|s| s.crop.is_none() && !s.dragging())
-                .map(|s| (s.page, vec![ObjectTarget { kind: ObjectKind::Image, index: s.index }]))
+            view.image_selection.as_ref().filter(|s| s.crop.is_none() && !s.dragging()).map(|s| Edit::EditPageImage {
+                page: s.page,
+                index: s.index,
+                change: pdfcraft_engine::ImageEdit::Delete,
+            })
         });
-    let Some((page, targets)) = selection else { return };
+    let Some(edit) = selection else { return };
     use egui::{Key, Modifiers};
     if !ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Delete) || i.consume_key(Modifiers::NONE, Key::Backspace)) {
         return;
     }
-    if view.objects.page.is_some() && view.objects.generation != Some(doc.edit_generation()) {
+    if matches!(edit, Edit::DeleteObjects { .. }) && view.objects.generation != Some(doc.edit_generation()) {
         view.objects.clear();
         return;
     }
     // apply_edit clears the selection only after success; a refusal leaves it selected.
-    view.pending_edit = Some(Edit::DeleteObjects { page, objects: targets });
+    view.pending_edit = Some(edit);
 }
 
 pub(crate) fn paint(painter: &egui::Painter, xf: &PageXform, page: usize, info: &DocInfo, selection: &ObjectSelection) {
@@ -685,7 +687,7 @@ pub(crate) fn line_panel(ui: &mut egui::Ui, count: usize, look: &PathOutline) ->
     ui.horizontal(|ui| {
         ui.label(tl!("Width"));
         let shown = format!("{} pt", (look.width * 100.0).round() / 100.0);
-        egui::ComboBox::from_id_salt("path-width").selected_text(shown).width(80.0).show_ui(ui, |ui| {
+        craft_ui::ComboBox::from_id_salt("path-width").selected_text(shown).width(80.0).show_ui(ui, |ui| {
             for width in [0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0, 8.0] {
                 if ui.selectable_label((look.width - width).abs() < 0.01, format!("{width} pt")).clicked() {
                     style.width = Some(width);
@@ -695,7 +697,7 @@ pub(crate) fn line_panel(ui: &mut egui::Ui, count: usize, look: &PathOutline) ->
         // The colour a stroked line is drawn in, or a shape's fill.
         let current = look.stroke.filter(|_| look.stroked).or(look.fill).unwrap_or([0.0; 3]);
         let mut rgb = current.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8);
-        let pending = egui::Id::new("path-color-pending");
+        let pending = egui::Id::unique("path-color-pending");
         if ui.color_edit_button_srgb(&mut rgb).on_hover_text(tl!("Line colour")).changed() {
             ui.data_mut(|d| d.insert_temp(pending, rgb));
         }
@@ -719,4 +721,3 @@ pub(crate) fn move_error(error: &pdfcraft_engine::EditError) -> String {
         _ => tl!("These objects could not be moved. Select them again and try a smaller move.").into(),
     }
 }
-
