@@ -335,7 +335,9 @@ mod tests {
         // One style: the text cap stops it.
         let mut b = ClipBuilder::new();
         let chunk = "y".repeat(1 << 16);
-        while b.push(&chunk, &a) {}
+        // Bounded, so the test fails rather than runs on when the cap is gone.
+        let pushes = (0..MAX_CLIP_TEXT_BYTES / chunk.len() + 2).take_while(|_| b.push(&chunk, &a)).count();
+        assert!(pushes <= MAX_CLIP_TEXT_BYTES / chunk.len(), "the cap stopped it: {pushes}");
         let clip = b.finish();
         assert!(clip.truncated);
         assert!(clip.paragraphs.iter().flatten().map(|s| s.text.len()).sum::<usize>() <= MAX_CLIP_TEXT_BYTES);
