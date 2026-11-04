@@ -10142,11 +10142,12 @@ fn a_mark_between_two_clipped_cells_joins_neither() {
 }
 
 /// Two clipping paths with the same bounding box can show different halves of a cell: text under
-/// them is never one paragraph.
+/// them is never one paragraph. Each even-odd clip cuts one half out of the cell and shows the other,
+/// where its text sits.
 #[test]
 fn clips_with_equal_bounds_but_different_shapes_are_not_one_block() {
-    let halves = "q 50 700 60 40 re 50 700 30 40 re W* n BT /F1 12 Tf 1 0 0 1 52 712 Tm (Left) Tj ET Q\n\
-                  q 50 700 60 40 re 80 700 30 40 re W* n BT /F1 12 Tf 1 0 0 1 82 712 Tm (Right) Tj ET Q";
+    let halves = "q 50 700 60 40 re 80 700 30 40 re W* n BT /F1 12 Tf 1 0 0 1 52 712 Tm (Left) Tj ET Q\n\
+                  q 50 700 60 40 re 50 700 30 40 re W* n BT /F1 12 Tf 1 0 0 1 82 712 Tm (Right) Tj ET Q";
     let texts = text::text_blocks(&text_page(halves), 0).unwrap().into_iter().map(|b| b.text).collect::<Vec<_>>();
     assert_eq!(texts, ["Left", "Right"]);
 }

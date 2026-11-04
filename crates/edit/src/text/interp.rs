@@ -237,7 +237,7 @@ pub(crate) fn union(a: [f64; 4], b: [f64; 4]) -> [f64; 4] {
 #[derive(Clone)]
 pub(super) struct Ts {
     pub(super) ctm: Matrix,
-    /// The clipping path's bounding box in user space (see [`Clip`]).
+    /// The clipping paths in force, in user space (see [`Clip`]).
     pub(super) clip: Clip,
     /// The operators that set the current fill colour (`g`, `rg`, `k`, or `cs` + `sc`/`scn`).
     pub(super) fill: Vec<Op>,
@@ -825,7 +825,7 @@ pub(super) fn interpret(
     let mut stack: Vec<(Ts, Matrix, Matrix)> = std::mem::take(&mut carry.stack);
     let (mut tm, mut tlm) = (Matrix::IDENTITY, Matrix::IDENTITY);
     let mut bt = 0usize;
-    // The bounding box of the path under construction, and whether `W`/`W*` made it the next clip.
+    // The path under construction (bounding box and points), and the fill rule when `W`/`W*` made it the next clip.
     let mut path_box: Option<[f64; 4]> = None;
     let mut path_pts: Vec<(f64, f64)> = Vec::new();
     let mut clip_pending: Option<bool> = None;
