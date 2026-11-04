@@ -34,6 +34,7 @@ pdfcraft-geom = { path = "crates/geom", version = "0.18.1" }
 pdfcraft-filters = { path = "crates/filters", version = "0.18.1" }
 pdfcraft-cos = { path = "crates/cos", version = "0.18.1" }
 pdfcraft-crypt = { path = "crates/crypt", version = "0.18.1" }
+pdfcraft-xml = { path = "crates/xml", version = "0.18.1" }
 pdfcraft-organize = { path = "crates/organize", version = "0.18.1" }
 pdfcraft-measure = { path = "crates/measure", version = "0.18.1" }
 pdfcraft-annot = { path = "crates/annot", version = "0.18.1" }
@@ -78,6 +79,9 @@ hayro-jbig2 = "0.3"
 
 # foundation
 thiserror = "2"
+# XML trees (XFA, XFDF, XMP), always through pdfcraft-xml's bounded parse. 0.21.2 is the first
+# release that parses nested elements without recursing (no stack overflow on deep input).
+roxmltree = "0.21.2"
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
 log = "0.4"

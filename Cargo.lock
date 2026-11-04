@@ -4559,6 +4559,7 @@ dependencies = [
  "pdfcraft-content",
  "pdfcraft-cos",
  "pdfcraft-model",
+ "pdfcraft-xml",
  "roxmltree 0.21.2",
 ]
 
@@ -4725,6 +4726,7 @@ dependencies = [
  "image",
  "pdfcraft-cos",
  "pdfcraft-fonts",
+ "pdfcraft-xml",
  "png 0.18.1",
  "roxmltree 0.21.2",
  "sha2 0.11.1",
@@ -4739,8 +4741,16 @@ dependencies = [
  "pdfcraft-cos",
  "pdfcraft-forms",
  "pdfcraft-model",
+ "pdfcraft-xml",
  "roxmltree 0.21.2",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "pdfcraft-xml"
+version = "0.18.1"
+dependencies = [
+ "roxmltree 0.21.2",
 ]
 
 [[package]]

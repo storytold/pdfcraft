@@ -1,0 +1,12 @@
+[package]
+name = "pdfcraft-xml"
+description = "Bounded XML parsing for PdfCraft: what an XML parse may cost is checked before it starts"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+roxmltree = { workspace = true }
