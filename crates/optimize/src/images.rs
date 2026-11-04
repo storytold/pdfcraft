@@ -312,7 +312,7 @@ fn indexed(doc: &Document, r: ObjRef) -> bool {
 /// Whether image `r` is an 8-bit image that could be binarized under [`MonoSettings::binarize_scans`].
 fn scan_candidate(doc: &Document, r: ObjRef) -> bool {
     let Object::Stream(s) = &*doc.get(r) else { return false };
-    if s.dict.int(b"BitsPerComponent") != Some(8) || s.dict.contains(b"SMask") {
+    if s.dict.int(b"BitsPerComponent") != Some(8) || s.dict.contains(b"SMask") || s.dict.contains(b"SMaskInData") || s.dict.contains(b"OPI") {
         return false;
     }
     let cs = s.dict.get(b"ColorSpace").map(|cs| doc.resolve(cs));
@@ -895,7 +895,8 @@ fn one_bit(
 
     // Scans are flat raster images without soft masks. Only direct DeviceGray and DeviceRGB
     // with standard decode arrays can be candidates for heuristic scan binarization.
-    let mut can_binarize = binarize_scans && bits == Some(8) && !d.contains(b"SMask") && !defaults;
+    let mut can_binarize =
+        binarize_scans && bits == Some(8) && !d.contains(b"SMask") && !d.contains(b"SMaskInData") && !d.contains(b"OPI") && !defaults;
 
     // Components a pixel, bits a component, and a pixel's samples as 1 or 0.
     let (n, bpc, white): (usize, usize, Pixel) = match &*doc.resolve(cs) {
