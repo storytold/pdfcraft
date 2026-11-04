@@ -2,91 +2,18 @@ use super::{DataError, Dict, Document, Object};
 
 // ── names ───────────────────────────────────────────────────────────────────────────────────
 
-/// Form data files are attacker-supplied. Refuse a DTD and bound the node count, exactly as the
-/// XFA template parser does (`crates/xfa/src/parse.rs`), and bound how deep a nested field tree
-/// may go: the walk below recurses once per nesting level.
-const MAX_NODES: u32 = 2_000_000;
+/// Form data files are attacker-supplied: they are parsed within pdfcraft-xml's bounds (no DTD,
+/// nesting and parser work capped), with the node count the XFA template parser also allows.
+const LIMITS: pdfcraft_xml::Limits = pdfcraft_xml::Limits::new(2_000_000);
 
+/// How deep a nested field tree may go: the walk below recurses once per nesting level.
 pub(crate) const MAX_DEPTH: usize = 64;
 
-/// The deepest element nesting accepted before the text reaches the XML parser.
-///
-/// roxmltree parses by recursive descent, so its stack use grows with the nesting depth: ten
-/// thousand levels overflow the main thread's stack and abort the process. A stack overflow is
-/// `abort()`, so `catch_unwind` cannot intercept it and the whole application dies - which is why
-/// the bound has to be applied before parsing, not while walking the result. Around three thousand
-/// levels still parse on the default stack, so this stays clear of the cliff while leaving far more
-/// room than the walks below, which cut off at 64.
-pub(crate) const MAX_XML_DEPTH: usize = 1_024;
-
-/// Element nesting depth of `text`, skipping comments, CDATA, processing instructions, the DOCTYPE
-/// and quoted attribute values. A tag that closes itself (`<field/>`) is one level while it is read
-/// and does not stay open, so a long run of them cannot accumulate into the bound. It cannot
-/// under-count a real element; a stray `<` in text is invalid XML and only makes it over-count,
-/// which errs towards refusing the file.
-pub(crate) fn xml_nesting_depth(text: &str) -> usize {
-    fn find(hay: &[u8], from: usize, needle: &[u8]) -> Option<usize> {
-        (from..hay.len()).find(|&p| hay[p..].starts_with(needle))
-    }
-    let b = text.as_bytes();
-    let (mut i, mut depth, mut max) = (0usize, 0usize, 0usize);
-    while i < b.len() {
-        if b[i] != b'<' {
-            i += 1;
-        } else if b[i..].starts_with(b"<!--") {
-            i = find(b, i + 4, b"-->").map_or(b.len(), |p| p + 3);
-        } else if b[i..].starts_with(b"<![CDATA[") {
-            i = find(b, i + 9, b"]]>").map_or(b.len(), |p| p + 3);
-        } else if b[i..].starts_with(b"<?") {
-            i = find(b, i + 2, b"?>").map_or(b.len(), |p| p + 2);
-        } else if b[i..].starts_with(b"<!") {
-            i = find(b, i + 2, b">").map_or(b.len(), |p| p + 1);
-        } else if b[i..].starts_with(b"</") {
-            depth = depth.saturating_sub(1);
-            i = find(b, i + 2, b">").map_or(b.len(), |p| p + 1);
-        } else {
-            depth += 1;
-            max = max.max(depth);
-            // Skip the rest of the start tag, over any quoted attribute value, and remember its last
-            // significant byte: a tag that ends in `/` closes itself, so it is one level deep while it
-            // is read rather than a level left open.
-            i += 1;
-            let mut quote = 0u8;
-            let mut last = 0u8;
-            while i < b.len() {
-                let c = b[i];
-                if quote != 0 {
-                    if c == quote {
-                        quote = 0;
-                    }
-                } else if c == b'"' || c == b'\'' {
-                    quote = c;
-                } else if c == b'>' {
-                    i += 1;
-                    break;
-                } else if !c.is_ascii_whitespace() {
-                    last = c;
-                }
-                i += 1;
-            }
-            if last == b'/' {
-                depth -= 1;
-            }
-        }
-    }
-    max
-}
-
-pub(crate) fn check_form_xml_depth(text: &str) -> Result<(), DataError> {
-    let depth = xml_nesting_depth(text);
-    if depth > MAX_XML_DEPTH {
-        return Err(DataError::Malformed(format!("the file nests XML elements {depth} deep, past the {MAX_XML_DEPTH} the reader accepts")));
-    }
-    Ok(())
-}
-
-pub(crate) fn parse_form_xml(text: &str) -> Result<roxmltree::Document<'_>, roxmltree::Error> {
-    roxmltree::Document::parse_with_options(text, roxmltree::ParsingOptions { allow_dtd: false, nodes_limit: MAX_NODES, ..Default::default() })
+/// `text` as XML, within [`LIMITS`]. A file refused for its size or shape is `Malformed`, saying
+/// why; one that isn't XML goes through `not_xml`, which each reader words for itself.
+pub(crate) fn parse_form_xml(text: &str, not_xml: impl FnOnce(pdfcraft_xml::XmlError) -> DataError) -> Result<roxmltree::Document<'_>, DataError> {
+    pdfcraft_xml::parse(text, LIMITS)
+        .map_err(|e| if e.is_limit() { DataError::Malformed(format!("the file can't be read safely: {e}")) } else { not_xml(e) })
 }
 
 pub(crate) const SUBTYPES: [(&str, &str); 17] = [

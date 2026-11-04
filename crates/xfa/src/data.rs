@@ -47,6 +47,10 @@ pub use write::{
 const XFA_DATA_NS: &str = "http://www.xfa.org/schema/xfa-data/1.0/";
 /// Most data nodes read.
 const MAX_NODES: u32 = 1_000_000;
+/// How data packets and data files are parsed (pdfcraft-xml).
+const XML_LIMITS: pdfcraft_xml::Limits = pdfcraft_xml::Limits::new(MAX_NODES);
+/// [`XML_LIMITS`] for a packet read inside `merge::WRAP_OPEN`, whose element adds one level.
+const WRAPPED_XML_LIMITS: pdfcraft_xml::Limits = XML_LIMITS.with_max_depth(pdfcraft_xml::MAX_DEPTH + 1);
 const MAX_DEPTH: usize = 64;
 
 /// One element of the data document.

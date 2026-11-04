@@ -7,6 +7,11 @@ use pdfcraft_forms::{NewField, add_field, fields, set_value};
 use super::xfdf::PDFCRAFT_NS;
 use super::*;
 
+/// What PdfCraft wrote, read back as XML through the workspace's one parse.
+fn parse_xml(text: &str) -> Result<roxmltree::Document<'_>, pdfcraft_xml::XmlError> {
+    pdfcraft_xml::parse(text, pdfcraft_xml::Limits::new(u32::MAX))
+}
+
 /// Two blank pages with three fields (text, check box, list).
 fn blank() -> Document {
     let mut doc = Document::new_empty();
@@ -70,17 +75,6 @@ fn nested_fields_within_the_limit_still_read() {
     assert_eq!(values.len(), 1);
     assert_eq!(values[0].0, "f0.f1.f2.f3.f4.f5.f6.f7.f8.f9.f10.f11.f12.f13.f14.f15");
     assert_eq!(values[0].1, vec!["deep".to_string()]);
-}
-
-/// The scanner counts a tag that closes itself as one level while it is read, not as a level left
-/// open, so a flat file with thousands of them stays shallow and is not refused.
-#[test]
-fn self_closing_elements_do_not_accumulate_in_the_depth() {
-    use crate::xml_nesting_depth as d;
-    assert_eq!(d("<a/>"), 1);
-    assert_eq!(d("<a><b/></a>"), 2);
-    assert_eq!(d(&"<empty/>".repeat(2_000)), 1);
-    assert_eq!(d(&format!("<fields>{}</fields>", r#"<field name="a"/>"#.repeat(2_000))), 2);
 }
 
 /// The blank document with comments and values.
@@ -187,7 +181,7 @@ fn xml_exports_drop_xml_noncharacters() {
     let mut src = filled();
     set_value(&mut src, "Name", &FieldValue::Text("a\u{FFFE}b\u{FFFF}c".into())).unwrap();
     let xfdf = export_xfdf(&src, false, true, "f.pdf");
-    let doc = roxmltree::Document::parse(&xfdf).unwrap_or_else(|e| panic!("XFDF is not well-formed: {e}: {xfdf:?}"));
+    let doc = parse_xml(&xfdf).unwrap_or_else(|e| panic!("XFDF is not well-formed: {e}: {xfdf:?}"));
     let value = doc
         .descendants()
         .find(|n| n.has_tag_name("field") && n.attribute("name") == Some("Name"))
@@ -195,7 +189,7 @@ fn xml_exports_drop_xml_noncharacters() {
         .and_then(|n| n.text());
     assert_eq!(value, Some("abc"));
     let data = export_data(&src, Format::Xml);
-    roxmltree::Document::parse(&data).unwrap_or_else(|e| panic!("XML is not well-formed: {e}: {data:?}"));
+    parse_xml(&data).unwrap_or_else(|e| panic!("XML is not well-formed: {e}: {data:?}"));
 }
 
 #[test]
@@ -216,7 +210,7 @@ fn xml_exports_preserve_whitespace_in_field_names() {
     let src = Document::open(Arc::new(source_bytes.clone())).unwrap();
     for format in [Format::Xml, Format::Xfdf] {
         let exported = if format == Format::Xfdf { export_xfdf(&src, false, true, "form.pdf") } else { export_data(&src, format) };
-        let xml = roxmltree::Document::parse(&exported).unwrap();
+        let xml = parse_xml(&exported).unwrap();
         let exported_names: Vec<_> = if format == Format::Xfdf {
             xml.descendants().filter(|n| n.has_tag_name("field")).map(|n| n.attribute("name").unwrap()).collect()
         } else {
@@ -278,7 +272,7 @@ fn xfdf_exports_preserve_whitespace_in_comment_attributes() {
     let mut dst = Document::open(Arc::new(source_bytes)).unwrap();
     let file = "form\twith\nlines.pdf";
     let xfdf = export_xfdf(&dst, true, false, file);
-    let xml = roxmltree::Document::parse(&xfdf).unwrap();
+    let xml = parse_xml(&xfdf).unwrap();
     let notes: Vec<_> = xml.descendants().filter(|n| n.has_tag_name("text")).collect();
     assert_eq!(notes.iter().map(|n| n.attribute("name").unwrap()).collect::<Vec<_>>(), names);
     for note in notes {
@@ -513,7 +507,7 @@ fn xml_field_names_remain_valid_and_round_trip_without_collisions() {
     let want = values(&src);
     for format in [Format::Xml, Format::Xdp] {
         let text = export_data(&src, format);
-        let xml = roxmltree::Document::parse(&text).unwrap();
+        let xml = parse_xml(&text).unwrap();
         let children: Vec<_> = xml.root_element().children().filter(|n| n.is_element()).collect();
         assert_eq!(children.len(), names.len());
         for (child, (original, tag)) in children.iter().zip(names) {
@@ -1159,8 +1153,8 @@ fn on_small_stack<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> 
 
 #[test]
 fn deeply_nested_xml_is_refused_before_parsing() {
-    // A file nested far deeper than any stack holds used to overflow roxmltree's recursive
-    // parser, which aborts the process. It must be refused without recursing.
+    // A file nested far deeper than the walks below recurse (once overflowing roxmltree's own
+    // recursion, which aborted the process) is refused before a tree is built.
     let deep = |root: &str| format!("<{root}>{}{}</{root}>", "<a>".repeat(100_000), "</a>".repeat(100_000));
     let xfdf = deep("xfdf");
     let xml = deep("fields");
@@ -1173,6 +1167,19 @@ fn deeply_nested_xml_is_refused_before_parsing() {
     }
 }
 
+/// An element with 20,000 attributes costs roxmltree's duplicate check 4·10⁸ comparisons (about a
+/// second; 60,000 took ten). Every form data reader refuses it before parsing, as too much work.
+#[test]
+fn attribute_heavy_xml_is_refused_before_parsing() {
+    let attributes: String = (0..20_000).map(|i| format!(" a{i}='v'")).collect();
+    let xfdf = format!("<xfdf{attributes}><fields/></xfdf>");
+    let xml = format!("<fields{attributes}/>");
+    let mut doc = blank();
+    for r in [import(&mut doc, xfdf.as_bytes()).map(|_| ()), import(&mut doc, xml.as_bytes()).map(|_| ()), data_values(xfdf.as_bytes()).map(|_| ())] {
+        assert!(matches!(&r, Err(DataError::Malformed(m)) if m.contains("attributes")), "{r:?}");
+    }
+}
+
 #[test]
 fn wide_or_commented_xml_is_not_mistaken_for_deep() {
     // Thousands of siblings, self-closing tags, `>` in attribute values, and tags inside
@@ -1182,10 +1189,11 @@ fn wide_or_commented_xml_is_not_mistaken_for_deep() {
         x.push_str(&format!("<field name=\"f{i} > g\"><value>v</value></field><empty/><![CDATA[<b><b>]]><?pi <c> ?>"));
     }
     x.push_str("</fields></xfdf>");
-    assert_eq!(check_form_xml_depth(&x), Ok(()));
+    let read = |text: &str| common::parse_form_xml(text, |e| DataError::Malformed(e.to_string())).map(|_| ());
+    assert_eq!(read(&x), Ok(()));
     let nested = |n: usize| format!("{}{}", "<a>".repeat(n), "</a>".repeat(n));
-    assert_eq!(check_form_xml_depth(&nested(MAX_XML_DEPTH)), Ok(()));
-    assert!(check_form_xml_depth(&nested(MAX_XML_DEPTH + 1)).is_err());
+    assert_eq!(read(&nested(pdfcraft_xml::MAX_DEPTH)), Ok(()));
+    assert!(matches!(read(&nested(pdfcraft_xml::MAX_DEPTH + 1)), Err(DataError::Malformed(m)) if m.contains("deep")));
 }
 
 /// [`one_field`] with its field's `/T` set to `name`, periods and all, holding `value`.
@@ -1931,7 +1939,7 @@ fn xfdf_line_ending_names_are_escaped() {
     let line = doc.add(line);
     doc.update_dict(page, |d| d.set(b"Annots".to_vec(), Object::Array(vec![Object::Ref(line)]))).unwrap();
     let xml = export_xfdf(&doc, true, false, "form.pdf");
-    let parsed = roxmltree::Document::parse(&xml).unwrap();
+    let parsed = parse_xml(&xml).unwrap();
     assert!(!parsed.descendants().any(|n| n.has_tag_name("field")), "{xml}");
     let el = parsed.descendants().find(|n| n.has_tag_name("line")).unwrap();
     let want = String::from_utf8(hostile).unwrap();
@@ -2419,4 +2427,18 @@ fn copies_keep_their_intent_cloud_and_pdfcraft_keys() {
     assert_eq!(got[0].get(b"PCAngle").and_then(Object::as_f64), Some(45.0));
     assert_eq!(got[0].name(b"Subtype"), Some(b"Square".as_slice()), "not taken from the attribute");
     assert!(got[0].get(b"PCRef").is_none() && got[1].get(b"PCAngle").is_none(), "{got:?}");
+}
+
+/// The paste preview (count, outlines, bounds) reads a clipboard text through the same bounded
+/// parse as an import: a text whose one tag carries more attributes than the parser's work budget
+/// allows is no XFDF to it, rather than minutes of parser time before the comment is found.
+#[test]
+fn a_clipboard_text_past_the_parser_work_budget_shows_no_comments() {
+    let attributes: String = (0..9_000).map(|i| format!(" a{i}=\"1\"")).collect();
+    let text = format!("<xfdf xmlns=\"http://ns.adobe.com/xfdf/\"><annots><square page=\"0\" rect=\"10,10,60,40\"/><x{attributes}/></annots></xfdf>");
+    assert_eq!(comment_count(&text), 0);
+    assert_eq!(comments_bounds(&text), None);
+    // The same comment without the oversized tag is read.
+    let plain = "<xfdf xmlns=\"http://ns.adobe.com/xfdf/\"><annots><square page=\"0\" rect=\"10,10,60,40\"/></annots></xfdf>";
+    assert_eq!(comment_count(plain), 1);
 }

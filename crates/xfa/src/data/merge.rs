@@ -2,7 +2,7 @@ use super::build::{Build, CONFLICT, CONTROL, NewNodes, STRUCTURED, TOO_MANY, bui
 use super::import::{ImportNode, serialize_nodes};
 use super::values::Want;
 use super::write::MAX_PACKET_WRITE;
-use super::{DataPath, HashMap, MAX_NODES, XFA_DATA_NS};
+use super::{DataPath, HashMap, WRAPPED_XML_LIMITS, XFA_DATA_NS, XML_LIMITS};
 
 /// What a rewrite of the datasets packet does.
 #[derive(Clone, Copy)]
@@ -113,25 +113,33 @@ fn merge(text: &str, within: Within, op: Op, warnings: &mut Vec<String>) -> Merg
         Op::ReplaceData(nodes) => serialize_nodes(nodes, "xfa"),
         _ => build_children(wants, warnings),
     };
-    if crate::xml_nesting_depth(text) > crate::MAX_XML_DEPTH {
-        warnings.push("The XFA data nests XML elements deeper than the reader accepts; the field values were not written to it".into());
-        return Merged::Failed;
-    }
-    let opts = || roxmltree::ParsingOptions { allow_dtd: false, nodes_limit: MAX_NODES, ..Default::default() };
     // A packet of an array may use the prefixes the XDP envelope declares: read it inside
     // an element declaring the usual ones.
     let wrapped;
-    let (src, shift, parsed) = match roxmltree::Document::parse_with_options(text, opts()) {
+    let (src, shift, parsed) = match pdfcraft_xml::parse(text, XML_LIMITS) {
         Ok(d) => (text, 0, d),
-        Err(first) => {
+        Err(first) if first.is_limit() => {
+            warnings.push(format!("The XFA data can't be read safely ({first}); the field values were not written to it"));
+            return Merged::Failed;
+        }
+        // Only a packet of an array can lean on the envelope's prefixes.
+        Err(first) if within == Within::Packet => {
             wrapped = format!("{WRAP_OPEN}{text}{WRAP_CLOSE}");
-            match (within, roxmltree::Document::parse_with_options(&wrapped, opts())) {
-                (Within::Packet, Ok(d)) => (wrapped.as_str(), WRAP_OPEN.len(), d),
-                _ => {
+            match pdfcraft_xml::parse(&wrapped, WRAPPED_XML_LIMITS) {
+                Ok(d) => (wrapped.as_str(), WRAP_OPEN.len(), d),
+                Err(e) if e.is_limit() => {
+                    warnings.push(format!("The XFA data can't be read safely ({e}); the field values were not written to it"));
+                    return Merged::Failed;
+                }
+                Err(_) => {
                     warnings.push(format!("The XFA data could not be read ({first}); the field values were not written to it"));
                     return Merged::Failed;
                 }
             }
+        }
+        Err(first) => {
+            warnings.push(format!("The XFA data could not be read ({first}); the field values were not written to it"));
+            return Merged::Failed;
         }
     };
     let is = |n: &roxmltree::Node, name: &str| n.is_element() && n.tag_name().name() == name;
@@ -389,11 +397,40 @@ pub(super) fn readable(text: &str, within: Within, warnings: &mut Vec<String>) -
         warnings.push(format!("The XFA data would be larger than {} MB; it was not written", MAX_PACKET_WRITE >> 20));
         return false;
     }
-    let opts = || roxmltree::ParsingOptions { allow_dtd: false, nodes_limit: MAX_NODES, ..Default::default() };
-    let ok = roxmltree::Document::parse_with_options(text, opts()).is_ok()
-        || (within == Within::Packet && roxmltree::Document::parse_with_options(&format!("{WRAP_OPEN}{text}{WRAP_CLOSE}"), opts()).is_ok());
+    let ok = match pdfcraft_xml::parse(text, XML_LIMITS) {
+        Ok(_) => true,
+        Err(e) if e.is_limit() => {
+            warnings.push(format!("The XFA data would be too large or complex to read after this change ({e}); it was not written"));
+            return false;
+        }
+        Err(_) if within == Within::Packet => match pdfcraft_xml::parse(&format!("{WRAP_OPEN}{text}{WRAP_CLOSE}"), WRAPPED_XML_LIMITS) {
+            Ok(_) => true,
+            Err(e) if e.is_limit() => {
+                warnings.push(format!("The XFA data would be too large or complex to read after this change ({e}); it was not written"));
+                return false;
+            }
+            Err(_) => false,
+        },
+        Err(_) => false,
+    };
     if !ok {
         warnings.push("The XFA data would not be well-formed XML after this change; it was not written".into());
     }
     ok
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Within, readable};
+
+    /// A packet of an array that uses the envelope's `xfa:` prefix is read inside the wrapper, which
+    /// adds a level: a packet at the depth bound still reads, and one level past it doesn't.
+    #[test]
+    fn a_wrapped_packet_gets_the_level_its_wrapper_adds() {
+        let packet = |depth: usize| format!("<xfa:datasets>{}{}</xfa:datasets>", "<a>".repeat(depth - 1), "</a>".repeat(depth - 1));
+        let mut warnings = Vec::new();
+        assert!(readable(&packet(pdfcraft_xml::MAX_DEPTH), Within::Packet, &mut warnings), "{warnings:?}");
+        assert!(!readable(&packet(pdfcraft_xml::MAX_DEPTH + 1), Within::Packet, &mut warnings));
+        assert!(warnings.iter().any(|w| w.contains("deep")), "{warnings:?}");
+    }
 }

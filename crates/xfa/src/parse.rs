@@ -13,8 +13,8 @@ use crate::model::{
 
 /// Deepest element nesting followed (templates are shallow; hostile ones are not).
 const MAX_DEPTH: usize = 64;
-/// Most XML nodes a template may have.
-const MAX_NODES: u32 = 2_000_000;
+/// How a template is parsed: at most two million XML nodes, within pdfcraft-xml's depth and work bounds.
+const XML_LIMITS: pdfcraft_xml::Limits = pdfcraft_xml::Limits::new(2_000_000);
 /// Largest decoded inline image.
 const MAX_IMAGE: usize = 32 << 20;
 /// Most items a choice list keeps.
@@ -729,15 +729,7 @@ fn collect_page_roles(nodes: &[Node], out: &mut Vec<(String, PageRole)>, depth: 
 
 /// Parse a template packet. Returns the template and the warnings met on the way.
 pub fn parse(xml: &str) -> Result<(Template, Vec<String>), XfaError> {
-    let depth = crate::xml_nesting_depth(xml);
-    if depth > crate::MAX_XML_DEPTH {
-        return Err(XfaError::Malformed(format!(
-            "the template nests XML elements {depth} deep, past the {} the reader accepts",
-            crate::MAX_XML_DEPTH
-        )));
-    }
-    let opts = roxmltree::ParsingOptions { allow_dtd: false, nodes_limit: MAX_NODES, ..Default::default() };
-    let doc = roxmltree::Document::parse_with_options(xml, opts).map_err(|e| XfaError::Malformed(format!("template XML: {e}")))?;
+    let doc = pdfcraft_xml::parse(xml, XML_LIMITS).map_err(|e| XfaError::Malformed(format!("template XML: {e}")))?;
     let root = doc.root_element();
     // The XDP's config packet has a <template> element too: the one we want is in the
     // xfa-template namespace, or at least has a subform in it.

@@ -1,6 +1,5 @@
 use super::common::{
-    FLAGS, MAX_DEPTH, SUBTYPES, arr, check_form_xml_depth, csv, esc, hex, n, nums_of, parse_form_xml, parse_hex, quad_has_area, rect_strict, text_of,
-    walk_xfdf,
+    FLAGS, MAX_DEPTH, SUBTYPES, arr, csv, esc, hex, n, nums_of, parse_form_xml, parse_hex, quad_has_area, rect_strict, text_of, walk_xfdf,
 };
 use super::*;
 
@@ -379,10 +378,7 @@ pub enum Outline {
 
 /// Every comment element of an XFDF text, in order (none when it is no XFDF).
 fn with_comment_nodes(text: &str, mut f: impl FnMut(roxmltree::Node<'_, '_>)) {
-    if check_form_xml_depth(text).is_err() {
-        return;
-    }
-    let Ok(xml) = parse_form_xml(text) else { return };
+    let Ok(xml) = parse_form_xml(text, |e| DataError::Malformed(e.to_string())) else { return };
     let root = xml.root_element();
     if root.tag_name().name() != "xfdf" {
         return;
@@ -878,8 +874,7 @@ fn import_xfdf_with(
     fresh: Option<&str>,
     offset: Option<[f64; 2]>,
 ) -> Result<Report, DataError> {
-    check_form_xml_depth(text)?;
-    let xml = parse_form_xml(text).map_err(|e| DataError::Malformed(e.to_string()))?;
+    let xml = parse_form_xml(text, |e| DataError::Malformed(e.to_string()))?;
     let root = xml.root_element();
     if root.tag_name().name() != "xfdf" {
         return Err(DataError::UnknownFormat);

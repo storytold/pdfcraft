@@ -23,8 +23,8 @@ mod fdf;
 mod xfdf;
 
 #[cfg(test)]
-use common::{MAX_DEPTH, MAX_XML_DEPTH, arr, nums_of, parse_hex, text_of, xml_nesting_depth};
-use common::{check_form_xml_depth, esc, parse_form_xml, walk_xfdf, xml_name};
+use common::{MAX_DEPTH, arr, nums_of, parse_hex, text_of};
+use common::{esc, parse_form_xml, walk_xfdf, xml_name};
 pub use fdf::export_fdf;
 use fdf::{ImportBudget, fdf_body, import_fdf, walk_fdf};
 #[cfg(test)]
@@ -163,8 +163,7 @@ pub fn data_values(bytes: &[u8]) -> Result<Vec<(String, Vec<String>)>, DataError
     }
     let text = String::from_utf8_lossy(bytes);
     let t = text.trim_start_matches('\u{feff}').trim_start();
-    check_form_xml_depth(t)?;
-    let xml = parse_form_xml(t).map_err(|_| DataError::UnknownFormat)?;
+    let xml = parse_form_xml(t, |_| DataError::UnknownFormat)?;
     let root = xml.root_element();
     if root.tag_name().name() != "xfdf" {
         return Err(DataError::UnknownFormat);
@@ -262,8 +261,7 @@ fn import_table(doc: &mut Document, text: &str) -> Result<Report, DataError> {
     let mut report = Report::default();
     let t = text.trim_start_matches('\u{feff}');
     let values: Vec<(String, Vec<String>)> = if t.trim_start().starts_with('<') {
-        check_form_xml_depth(t)?;
-        let xml = parse_form_xml(t).map_err(|e| DataError::Malformed(e.to_string()))?;
+        let xml = parse_form_xml(t, |e| DataError::Malformed(e.to_string()))?;
         xml.root_element()
             .children()
             .filter(|c| c.is_element())

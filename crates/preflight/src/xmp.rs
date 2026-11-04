@@ -10,8 +10,8 @@ pub(crate) const PDFA_ID: &str = "http://www.aiim.org/pdfa/ns/id/";
 pub(crate) const PDFUA_ID: &str = "http://www.aiim.org/pdfua/ns/id/";
 
 /// Read an identification property by its expanded XML name, not its arbitrary prefix. A packet
-/// that is not well-formed XML (an undeclared prefix, an illegal character) or is too deep or wide
-/// to parse safely is read by the conventional prefix (`pdfaid:`, `pdfuaid:`) instead, as before.
+/// that is not well-formed XML (an undeclared prefix, an illegal character), or too deep or costly
+/// to parse safely, is read by the conventional prefix (`pdfaid:`, `pdfuaid:`) instead, as before.
 pub(crate) fn identifier(xmp: &str, namespace: &str, local: &str) -> Option<String> {
     if xmp.len() > MAX_XMP_BYTES {
         return None;
@@ -29,13 +29,10 @@ pub(crate) fn identifier(xmp: &str, namespace: &str, local: &str) -> Option<Stri
     }
 }
 
-/// [`identifier`] through an XML parser; `Err` when the packet can't be parsed within the limits.
+/// [`identifier`] through the XML parser; `Err` when the packet can't be parsed within
+/// pdfcraft-xml's bounds and 100,000 nodes.
 fn parsed_identifier(xmp: &str, namespace: &str, local: &str) -> Result<Option<String>, ()> {
-    if !xml_limits_ok(xmp) {
-        return Err(());
-    }
-    let options = roxmltree::ParsingOptions { allow_dtd: false, nodes_limit: 100_000, ..Default::default() };
-    let doc = roxmltree::Document::parse_with_options(xmp, options).map_err(|_| ())?;
+    let doc = pdfcraft_xml::parse(xmp, pdfcraft_xml::Limits::new(100_000)).map_err(|_| ())?;
     for node in doc.descendants().filter(roxmltree::Node::is_element) {
         if let Some(value) = node.attribute((namespace, local)) {
             return Ok(Some(value.trim().to_owned()));
@@ -45,72 +42,6 @@ fn parsed_identifier(xmp: &str, namespace: &str, local: &str) -> Result<Option<S
         }
     }
     Ok(None)
-}
-
-/// Reject deep XML and start tags with too many attributes before roxmltree checks duplicates.
-/// Each unquoted `=` in a valid start tag introduces an attribute, including namespace bindings.
-/// Every `b[i]` and `hay[p..]` below is guarded by `i < b.len()` / `p < hay.len()`.
-fn xml_limits_ok(text: &str) -> bool {
-    fn find(hay: &[u8], from: usize, needle: &[u8]) -> Option<usize> {
-        (from..hay.len()).find(|&p| hay[p..].starts_with(needle))
-    }
-    let b = text.as_bytes();
-    let (mut i, mut depth, mut total_attributes) = (0usize, 0usize, 0usize);
-    while i < b.len() {
-        if b[i] != b'<' {
-            i += 1;
-        } else if b[i..].starts_with(b"<!--") {
-            i = find(b, i + 4, b"-->").map_or(b.len(), |p| p + 3);
-        } else if b[i..].starts_with(b"<![CDATA[") {
-            i = find(b, i + 9, b"]]>").map_or(b.len(), |p| p + 3);
-        } else if b[i..].starts_with(b"<?") {
-            i = find(b, i + 2, b"?>").map_or(b.len(), |p| p + 2);
-        } else if b[i..].starts_with(b"<!") {
-            i = find(b, i + 2, b">").map_or(b.len(), |p| p + 1);
-        } else if b[i..].starts_with(b"</") {
-            depth = depth.saturating_sub(1);
-            i = find(b, i + 2, b">").map_or(b.len(), |p| p + 1);
-        } else {
-            depth += 1;
-            if depth > 1024 {
-                return false;
-            }
-            // Skip the rest of the start tag, over any quoted attribute value, and remember its last
-            // significant byte: a tag that ends in `/` closes itself, so it is one level deep while it
-            // is read rather than a level left open.
-            i += 1;
-            let mut quote = 0u8;
-            let mut last = 0u8;
-            let mut attributes = 0usize;
-            while i < b.len() {
-                let c = b[i];
-                if quote != 0 {
-                    if c == quote {
-                        quote = 0;
-                    }
-                } else if c == b'"' || c == b'\'' {
-                    quote = c;
-                } else if c == b'>' {
-                    i += 1;
-                    break;
-                } else if c == b'=' {
-                    attributes += 1;
-                    total_attributes += 1;
-                    if attributes > 128 || total_attributes > 4096 {
-                        return false;
-                    }
-                    last = c;
-                } else if !c.is_ascii_whitespace() {
-                    last = c;
-                }
-                i += 1;
-            }
-            if last == b'/' {
-                depth -= 1;
-            }
-        }
-    }
-    true
 }
 
 /// The value of a simple XMP property, written either as an attribute (`pdfaid:part="2"`) or
@@ -248,18 +179,21 @@ mod tests {
 mod limit_tests {
     use super::*;
 
+    /// Attribute-heavy packets parse as long as roxmltree's work stays within pdfcraft-xml's budget
+    /// (the per-tag and total attribute caps this module once kept refused them); past the budget
+    /// the packet is read by the conventional prefix only.
     #[test]
-    fn attribute_and_namespace_budgets_bound_parser_work() {
-        let prefix = r#"<root xmlns:a="http://www.aiim.org/pdfa/ns/id/" a:part="2" "#;
-        let attrs = |count| (0..count).map(|i| format!("x{i}=\"v=1\" ")).collect::<String>();
-        let at_limit = format!("{prefix}{}/>", attrs(126));
-        assert_eq!(identifier(&at_limit, PDFA_ID, "part").as_deref(), Some("2"));
-        let over_limit = format!("{prefix}{}/>", attrs(127));
-        assert_eq!(identifier(&over_limit, PDFA_ID, "part"), None);
-        let namespaces = (0..129).map(|i| format!("xmlns:n{i}=\"urn:{i}\" ")).collect::<String>();
-        assert_eq!(identifier(&format!("<root {namespaces}/>"), PDFA_ID, "part"), None);
-        let many_elements = format!("<root>{}</root>", r#"<n a="v"/>"#.repeat(4097));
-        assert!(!xml_limits_ok(&many_elements));
+    fn parser_work_is_bounded_by_the_shared_budget() {
+        let packet = |attributes: usize| {
+            let attrs: String = (0..attributes).map(|i| format!(" x{i}=\"v=1\"")).collect();
+            format!(r#"<root xmlns:a="http://www.aiim.org/pdfa/ns/id/" a:part="2"{attrs}/>"#)
+        };
+        assert_eq!(identifier(&packet(200), PDFA_ID, "part").as_deref(), Some("2"));
+        // 12,000 attributes: 1.4·10⁸ comparisons for the duplicate check, past the budget. The
+        // fallback looks for `pdfaid:part`, which this packet spells `a:part`.
+        assert_eq!(identifier(&packet(12_000), PDFA_ID, "part"), None);
+        let many_elements = format!(r#"<root xmlns:a="http://www.aiim.org/pdfa/ns/id/" a:part="3">{}</root>"#, r#"<n a="v"/>"#.repeat(5_000));
+        assert_eq!(identifier(&many_elements, PDFA_ID, "part").as_deref(), Some("3"));
         // Not well-formed (the prefix is never declared): read by the conventional prefix, as before.
         let undeclared = r#"<rdf:Description pdfaid:part="3" pdfaid:conformance="u"/>"#;
         assert_eq!(identifier(undeclared, PDFA_ID, "part").as_deref(), Some("3"));

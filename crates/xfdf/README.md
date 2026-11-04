@@ -47,4 +47,4 @@ export added, so exported data imports back unchanged.
 Import replaces comments with the same `/NM` (and drops the replaced comment's pop-up), draws
 appearances PdfCraft can draw, and sets values through the form's own checks (formats,
 validation, recalculation); read-only fields take imported values, as in Acrobat. XML is read
-with `roxmltree`.
+through `pdfcraft-xml`'s bounded parse (no DTD; nesting and parser work capped before parsing).
