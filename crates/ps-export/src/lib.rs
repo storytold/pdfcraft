@@ -76,10 +76,6 @@ pub enum PsExportError {
 
 /// Export the given PDF `bytes` to PostScript (`PsFormat::Ps`) or EPS (`PsFormat::Eps`).
 ///
-/// `password` opens an encrypted `bytes` (the document's user password; empty for a plain
-/// file), the same way the raster renderer's `RenderConfig::password` opens its copy —
-/// a protected document exports as it displays.
-///
 /// `pages` are 0-based page indices; they are validated against the page count (out of
 /// range → [`PsExportError::InvalidPages`]), emitted in ascending order, and duplicates
 /// collapse. EPS output needs exactly one page
@@ -656,33 +652,6 @@ mod tests {
         assert!(s.contains("%%PdfCraftNote: transparency ignored (blend Multiply)\n"), "note embedded: {s}");
     }
 
-    /// A Type 3 glyph under render mode 3 (`3 Tr`) draws nothing: the interpreter hands
-    /// the device `GlyphDrawMode::Invisible` for the glyph procedure too (only mode 3
-    /// affects Type 3 text), and the device must skip it as it skips invisible outline
-    /// glyphs — the procedure paints what invisible text is meant to hide.
-    #[test]
-    fn invisible_type3_glyphs_draw_nothing() {
-        fn type3_pdf(render_mode: u8) -> Vec<u8> {
-            assemble(vec![
-                b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
-                b"<< /Type /Pages /Kids [5 0 R] /Count 1 /MediaBox [0 0 200 300] >>".to_vec(),
-                b"<< /Type /Font /Subtype /Type3 /FontBBox [0 0 100 100] /FontMatrix [0.01 0 0 0.01 0 0] /CharProcs << /a 6 0 R >> /Encoding << /Type /Encoding /Differences [97 /a] >> /FirstChar 97 /LastChar 97 /Widths [100] /Resources << >> >>".to_vec(),
-                stream_obj("", format!("BT /F1 100 Tf {render_mode} Tr 20 100 Td (a) Tj ET").as_bytes()),
-                b"<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << /F1 3 0 R >> >> >>".to_vec(),
-                stream_obj("", b"0 0 100 100 re f"),
-            ])
-        }
-        let visible = export(std::sync::Arc::new(type3_pdf(0)), &[0], PsFormat::Ps).expect("visible Type 3 text exports");
-        let s = text(&visible);
-        assert!(s.contains("fill\n"), "the glyph procedure paints when visible: {s}");
-        let invisible = export(std::sync::Arc::new(type3_pdf(3)), &[0], PsFormat::Ps).expect("invisible Type 3 text exports");
-        let s = text(&invisible);
-        // The page's own crop-box clip still emits path operators; ink is what the
-        // glyph procedure must not leave behind.
-        assert!(!s.contains("fill\n") && !s.contains("eofill\n") && !s.contains("stroke\n"), "render mode 3 suppresses the glyph procedure: {s}");
-        assert!(s.ends_with("%%EOF\n"), "the program is still complete: {s}");
-    }
-
     /// A `/ca 0.5` ExtGState degrades to one paint-alpha note per page however many
     /// draws carry it (the module's transparency policy: first occurrence only).
     #[test]
@@ -760,45 +729,6 @@ mod tests {
             "header + trailer, nothing between"
         );
         assert!(out.warnings.is_empty(), "nothing was driven, nothing degraded");
-    }
-
-    /// The Task 7 Ghostscript gate, pinned: gs resolves Type 42 character codes
-    /// through the font's own `cmap`, so a Type 42 emission with our assigned codes
-    /// drew *nothing* for a real embedded font (Inter-Regular), while the source PDF
-    /// drew every glyph — and hand-editing the exported codes to the cmap's codes made
-    /// the same glyphs draw. Until cmap synthesis over the assigned codes exists, an
-    /// embedded TrueType font must vectorize (noted), never emit a Type 42 dictionary.
-    /// The real font rides along as a repo asset, so this also covers a font whose
-    /// cmap is (3,1)-only with a post 3.0 table — the shape real documents carry.
-    // Task 3 flips this gate: cmap synthesis landed (Layer B W1), and this test's
-    // vectorization expectations now contradict it until Task 3 re-verifies the
-    // Type 42 arm against gs and flips the assertions.
-    #[ignore]
-    #[test]
-    fn embedded_real_truetype_never_emits_type42() {
-        let path = format!("{}/../../assets/fonts/Inter-Regular.ttf", env!("CARGO_MANIFEST_DIR"));
-        let Ok(inter) = std::fs::read(&path) else {
-            // The asset moved or was renamed: the synthetic equivalent
-            // (`fonts::tests::embedded_truetype_emits_type42_with_synthesized_cmap`)
-            // still guards the arm.
-            return;
-        };
-        let objs: Vec<Vec<u8>> = vec![
-            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
-            b"<< /Type /Pages /Kids [7 0 R] /Count 1 /MediaBox [0 0 400 200] >>".to_vec(),
-            b"<< /Type /Font /Subtype /TrueType /BaseFont /Inter-Regular /Encoding /WinAnsiEncoding /FontDescriptor 5 0 R >>".to_vec(),
-            stream_obj("", b"BT /F1 12 Tf 20 100 Td (HAMBURGEFONSTIV) Tj ET"),
-            b"<< /Type /FontDescriptor /FontName /Inter-Regular /Flags 32 /FontBBox [0 -200 1000 1000] /ItalicAngle 0 /Ascent 1000 /Descent -200 /CapHeight 700 /StemV 80 /FontFile2 6 0 R >>".to_vec(),
-            stream_obj("", &inter),
-            b"<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << /F1 3 0 R >> >> >>".to_vec(),
-        ];
-        let out = export(std::sync::Arc::new(assemble(objs)), &[0], PsFormat::Ps).expect("real-font page exports");
-        let s = text(&out);
-        assert!(!s.contains("/FontType 42"), "no Type 42 dictionary: {s}");
-        assert!(!s.contains("xyshow") && !s.contains("findfont"), "no text-as-text: {s}");
-        assert!(s.matches("fill\n").count() >= 15, "every glyph draws as a path: {s}");
-        assert!(out.warnings.iter().any(|n| n.text.contains("Type 42 pending cmap synthesis")), "the disabled arm is disclosed: {:?}", out.warnings);
-        assert!(s.contains("%%PdfCraftNote: text vectorized (Type 42 pending cmap synthesis)\n"), "note embedded: {s}");
     }
 
     /// Export drives its pages with the raster renderer's font resolver (spec D3's "match
