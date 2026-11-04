@@ -86,6 +86,11 @@ fn push_button_caption_methods_read_write_and_reject_other_faces() {
     assert_eq!(set.changed[0].caption.as_deref(), Some("New"));
     let same = run("getField('go').buttonSetCaption('Old');");
     assert_eq!(same.changed[0].caption.as_deref(), Some("Old"), "same-text writes still update every widget");
+    assert!(run("getField('go').buttonSetCaption();").error.is_some());
+    let long_caption = "x".repeat(crate::xfa::MAX_LINE + 10);
+    let capped = run(&format!("getField('go').buttonSetCaption('{long_caption}');"));
+    assert_eq!(capped.error, None);
+    assert_eq!(capped.changed[0].caption.as_deref().map(str::len), Some(crate::xfa::MAX_LINE));
     let explicit = run("event.value = getField('go').buttonGetCaption(0);");
     assert_eq!(explicit.value, "Old");
     let format =

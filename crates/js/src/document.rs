@@ -1,4 +1,4 @@
-use super::host::{arg, colour, error, function, host, read, s, set_value, strings, text, value_of, write};
+use super::host::{arg, colour, error, function, host, read, s, set_value, strings, text, text_line, value_of, write};
 use super::model::{DISPLAY_HIDDEN, DISPLAY_VISIBLE, FieldType, Request};
 use super::{Attribute, Context, JsArray, JsObject, JsResult, JsString, JsValue, NativeFunction, ObjectInitializer, js_string};
 
@@ -111,7 +111,8 @@ pub(crate) fn field_object(ctx: &mut Context, name: &str) -> JsObject {
         if f.kind != FieldType::Button {
             return Err(error("buttonSetCaption is only available on push buttons"));
         }
-        let caption = text(&arg(args, 0), c)?;
+        let caption_arg = args.first().ok_or_else(|| error("buttonSetCaption requires a caption argument"))?;
+        let caption = text_line(caption_arg, c)?;
         let face = if args.get(1).is_none() { 0.0 } else { arg(args, 1).to_number(c)? };
         if !face.is_finite() || face != 0.0 {
             return Err(error("only the normal button face (0) is supported"));

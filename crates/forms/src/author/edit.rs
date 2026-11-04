@@ -141,6 +141,9 @@ pub fn set_props(doc: &mut Document, name: &str, props: &FieldProps) -> Result<S
     if props.caption_all.is_some() && f.kind != FieldKind::PushButton {
         return invalid("only push buttons have a caption");
     }
+    if props.caption_all.is_some() && f.widgets.is_empty() {
+        return invalid(format!("{name} has no widgets"));
+    }
     if props.caption_all.is_some() && props.caption.is_some() {
         return invalid("give a field caption or a widget caption, not both");
     }

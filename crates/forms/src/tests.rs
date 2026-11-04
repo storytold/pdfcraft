@@ -260,6 +260,25 @@ fn button_caption_rejects_wrong_type_and_index_before_mutation() {
     assert!(!ap(&doc, &field(&fields(&doc), "go").widgets[0]).contains(" Tj"));
 }
 
+#[test]
+fn field_wide_button_caption_rejects_a_field_without_widgets() {
+    let objs = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [] >>".into(),
+        "<< /Fields [5 0 R] >>".into(),
+        "<< /FT /Btn /T (empty) /Ff 65536 /Kids [] >>".into(),
+    ];
+    let mut doc = document(&objs);
+    let button = field(&fields(&doc), "empty");
+    assert_eq!(button.kind, FieldKind::PushButton);
+    assert!(button.widgets.is_empty());
+    let before = pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap();
+    let result = set_props(&mut doc, "empty", &FieldProps { caption_all: Some("Caption".into()), ..Default::default() });
+    assert!(result.is_err());
+    assert_eq!(pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap(), before);
+}
+
 /// Read the drawn strings together with the appearance's actual font after saving and reopening.
 fn appearance_text(doc: &Document, w: &Widget, font_name: &[u8]) -> (Object, Vec<Vec<u8>>) {
     let widget = doc.get(w.obj);
