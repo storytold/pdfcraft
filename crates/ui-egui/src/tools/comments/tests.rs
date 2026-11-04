@@ -567,3 +567,39 @@ fn text_boxes_fit_their_text() {
     assert_eq!(long[2], 300.0);
     assert!(long[3] - long[1] > 50.0);
 }
+
+/// The hover outline goes round the comment a press under the pointer would take (the top hit
+/// there): not a highlight under a form field, which takes the press.
+#[test]
+fn the_hover_outline_goes_round_what_a_press_would_take() {
+    use super::paint::hover_outline;
+    use crate::page_cursor::Layer;
+    use crate::page_router::{CommentPart, Hit, Owner};
+    let page = PageInfo { width: 200.0, height: 200.0, label: String::new(), crop: [0.0, 0.0, 200.0, 200.0], rotation: 0 };
+    let xf = PageXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(200.0, 200.0)), rot: 0, pw: 200.0, ph: 200.0 };
+    let highlight = Annotation { rect: [50.0, 50.0, 150.0, 150.0], ..annotation("Highlight", None, false) };
+    let info = DocInfo { pages: vec![page], annotations: vec![highlight], ..Default::default() };
+    let prefs = CommentPrefs::default();
+    // The pointer is over the highlight.
+    let ptr = PagePointer { pos: Some(pos2(100.0, 100.0)), ..PagePointer::default() };
+    let cx = PageCx {
+        page: 0,
+        xf: &xf,
+        ptr: &ptr,
+        info: &info,
+        tool: QuickTool::Select,
+        prefs: &prefs,
+        allowed: true,
+        hidden: false,
+        redact_mark: ([0.0; 3], 1.0),
+    };
+    let on = |owner, layer| Hit::new(owner, layer, egui::CursorIcon::PointingHand);
+    let comment = on(Owner::Comment { index: 0, part: CommentPart::Body }, Layer::Comment);
+    let field = on(Owner::Field { field: 0, widget: 0 }, Layer::Field);
+    let cv = CommentView::default();
+    assert!(hover_outline(&cx, &cv, Some(&comment)).is_some(), "the highlight a press there selects");
+    assert!(hover_outline(&cx, &cv, Some(&field)).is_none(), "not under a field that takes the press");
+    assert!(hover_outline(&cx, &cv, None).is_none(), "nor where nothing would take it");
+    let selected = CommentView { selected: Some((0, 0)), ..CommentView::default() };
+    assert!(hover_outline(&cx, &selected, Some(&comment)).is_none(), "the selected comment has its own frame");
+}
