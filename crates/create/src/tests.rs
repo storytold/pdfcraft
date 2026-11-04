@@ -1476,9 +1476,11 @@ fn flate_len(img: Embedded) -> usize {
     }
 }
 
-/// Run with `--nocapture` to see the sizes: the 1-bit page against the old 8-bit expansion.
+/// Run with `--nocapture` to see the sizes: the 1-bit BMP path against the general decoder. `add_image` stores any
+/// black-and-white image at one bit, so the two are the same size as stored; the BMP path only skips the 8-bit
+/// expansion in memory, and must never store more.
 #[test]
-fn one_bit_bmp_is_much_smaller_than_the_eight_bit_expansion() {
+fn one_bit_bmp_is_never_larger_than_the_general_decoder() {
     let sizes = |w: usize, h: usize, black: &dyn Fn(usize, usize) -> bool| {
         let stride = w.div_ceil(32) * 4;
         let mut pixels = vec![0u8; stride * h];
@@ -1506,7 +1508,7 @@ fn one_bit_bmp_is_much_smaller_than_the_eight_bit_expansion() {
         let (line, ly) = (y / 60, y % 60);
         (80..2400).contains(&x) && (1..56).contains(&line) && (20..45).contains(&ly) && ((x / 7) * 31 + line * 17 + (x % 7) * (ly % 3)) % 5 < 3
     });
-    assert!(after < before, "{after} vs {before}");
+    assert!(after <= before, "{after} vs {before}");
 }
 
 #[test]
