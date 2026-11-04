@@ -9,6 +9,10 @@ use pdfcraft_cos::{Dict, Document, ObjRef, Object, Stream};
 const MAX_PAGES: usize = 1_000;
 const MAX_PAGE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_OPERATORS: usize = 100_000;
+/// What all pages together may decode and keep: pages can share one stream, so the per-page limits
+/// alone let a small file retain a plan for every page. Real documents stay far under these.
+const MAX_TOTAL_BYTES: usize = 128 * 1024 * 1024;
+const MAX_TOTAL_OPERATORS: usize = 2_000_000;
 const MAX_TEXT_OBJECTS: usize = 4_096;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -180,6 +184,7 @@ fn plan(doc: &Document) -> Result<Vec<Plan>, AutoTagError> {
     }
     let mut out = Vec::with_capacity(pages.len());
     let mut total = 0usize;
+    let (mut total_bytes, mut total_ops) = (0usize, 0usize);
     for (index, page) in pages.iter().enumerate() {
         if page.dict.contains(b"StructParents") {
             return Err(unsupported(index, "page already has a structure parent key"));
@@ -191,9 +196,14 @@ fn plan(doc: &Document) -> Result<Vec<Plan>, AutoTagError> {
             return Err(unsupported(index, "annotations need separate structure tags"));
         }
         let bytes = content_bytes(doc, page, index)?;
+        total_bytes = total_bytes.saturating_add(bytes.len());
         let parsed = parse(&bytes);
         if parsed.skipped > 0 || parsed.ops.len() > MAX_OPERATORS {
             return Err(unsupported(index, "content has malformed or too many operators"));
+        }
+        total_ops = total_ops.saturating_add(parsed.ops.len());
+        if total_bytes > MAX_TOTAL_BYTES || total_ops > MAX_TOTAL_OPERATORS {
+            return Err(unsupported(index, "the document has too much content to auto-tag in one edit"));
         }
         let spans = text_spans(&parsed.ops, index)?;
         total = total.saturating_add(spans.len());
