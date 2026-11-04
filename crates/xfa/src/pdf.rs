@@ -953,11 +953,17 @@ fn earlier_images(doc: &Document, pages: ObjRef) -> HashMap<[u8; 32], ObjRef> {
 /// renumbered in the order found, so a re-layout reuses the object instead of adding another.
 fn earlier_shadings(doc: &Document, pages: ObjRef) -> HashMap<String, (ObjRef, usize)> {
     let mut out: HashMap<String, (ObjRef, usize)> = HashMap::new();
+    let mut seen_shadings: HashSet<ObjRef> = HashSet::new();
     let kids = doc.get(pages).as_dict().and_then(|d| d.get(b"Kids").map(|k| doc.resolve(k))).and_then(|k| k.as_array().cloned()).unwrap_or_default();
     for page in kids.iter().filter_map(Object::as_ref).take(MAX_PAGES_SEARCHED) {
         let page = doc.get(page);
         let Some(resources) = page.as_dict().and_then(|p| p.get(b"Resources")).map(|r| doc.resolve(r)) else { continue };
         let Some(shadings) = resources.as_dict().and_then(|r| r.get(b"Shading")).map(|s| doc.resolve(s)) else { continue };
+        if let Some(Object::Ref(shared)) = resources.as_dict().and_then(|r| r.get(b"Shading"))
+            && !seen_shadings.insert(*shared)
+        {
+            continue;
+        }
         for (_, v) in shadings.as_dict().into_iter().flat_map(|s| s.iter()) {
             let Some(r) = v.as_ref() else { continue };
             let obj = doc.get(r);
@@ -965,6 +971,15 @@ fn earlier_shadings(doc: &Document, pages: ObjRef) -> HashMap<String, (ObjRef, u
             let (Some(kind), Some(coords), Some(f)) = (d.int(b"ShadingType"), d.get(b"Coords"), d.get(b"Function").and_then(|f| f.as_dict())) else {
                 continue;
             };
+            // Only the shading this writer makes is reused: under the same key, another
+            // colour space, function or domain paints a different progression.
+            let unit = |o: &Object| o.as_array().is_some_and(|a| a.len() == 2 && a[0].as_f64() == Some(0.0) && a[1].as_f64() == Some(1.0));
+            if d.name(b"ColorSpace") != Some(b"DeviceRGB") || f.int(b"FunctionType") != Some(2) || f.int(b"N") != Some(1) {
+                continue;
+            }
+            if !f.get(b"Domain").is_some_and(unit) || !d.get(b"Domain").is_none_or(unit) {
+                continue;
+            }
             let Some(coords) = coords.as_array() else { continue };
             let rgb_of = |o: Option<&Object>| -> Option<[f64; 3]> {
                 let a = o?.as_array()?;

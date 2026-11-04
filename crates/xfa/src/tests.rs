@@ -2623,26 +2623,26 @@ fn a_bordered_sections_gradient_runs_on_across_a_page_break() {
 }
 
 /// A re-layout reuses the shading objects the first pass wrote (#6079), as it reuses images:
-/// the second pass names the same object instead of adding a copy.
+/// the second pass names the same objects instead of adding copies.
 #[test]
 fn a_relayout_reuses_the_shadings_the_first_pass_wrote() {
     let blue = r#"<color value="0,0,255"/>"#;
-    let xdp = fill_form(&[fill_row(0.0, &format!("<linear>{blue}</linear>"), "", "")]);
+    let xdp = fill_form(&[fill_row(0.0, &format!("<linear>{blue}</linear>"), "", ""), fill_row(1.0, &format!("<radial>{blue}</radial>"), "", "")]);
     let mut doc = Document::open(Arc::new(shell(&xdp))).unwrap();
-    let shading_ref = |doc: &Document| {
+    let shading_ref = |doc: &Document, name: &[u8]| {
         let root = doc.get(doc.root().unwrap());
         let pages = doc.get(root.as_dict().unwrap().reference(b"Pages").unwrap());
         let kids = pages.as_dict().unwrap().get(b"Kids").map(|k| doc.resolve(k)).unwrap();
         let page = doc.get(kids.as_array().unwrap()[0].as_ref().unwrap()).as_dict().unwrap().clone();
         let resources = doc.resolve(page.get(b"Resources").unwrap());
         let shadings = resources.as_dict().unwrap().get(b"Shading").map(|s| doc.resolve(s)).expect("the page names its shadings");
-        shadings.as_dict().unwrap().reference(b"Sh0").expect("the gradient's shading")
+        shadings.as_dict().unwrap().reference(name).expect("the gradient's shading")
     };
     let form = layout_xml(&xdp).unwrap();
     crate::pdf::write_form(&mut doc, &form).unwrap();
-    let first = shading_ref(&doc);
+    let first = (shading_ref(&doc, b"Sh0"), shading_ref(&doc, b"Sh1"));
     crate::pdf::write_form(&mut doc, &form).unwrap();
-    assert_eq!(shading_ref(&doc), first, "the second pass reuses the shading object");
+    assert_eq!((shading_ref(&doc, b"Sh0"), shading_ref(&doc, b"Sh1")), first, "the second pass reuses both shading objects");
 }
 
 /// The shading `name` in the page's `/Shading` resources: its type, coordinates, and its
