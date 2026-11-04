@@ -147,6 +147,7 @@ impl PdfCraftApp {
         // Set outside json! above, which is at serde_json's macro recursion limit.
         v["hide_empty_highlight_hover"] = serde_json::Value::Bool(self.comment_prefs.hide_empty_highlight_hover);
         v["show_page_edge_shadows"] = self.show_page_edge_shadows.into();
+        v["show_rulers"] = serde_json::Value::Bool(self.show_rulers);
         v["hotbar"] = serde_json::to_value(&self.hotbar).unwrap_or_default();
         v["comment_tool_pinned"] = serde_json::Value::Bool(self.comment_prefs.pinned);
         v["show_secured_notice"] = serde_json::Value::Bool(self.show_secured_notice);
@@ -301,6 +302,9 @@ impl PdfCraftApp {
         }
         if let Some(show) = v["show_page_edge_shadows"].as_bool() {
             self.show_page_edge_shadows = show;
+        }
+        if let Some(show) = v.get("show_rulers").and_then(serde_json::Value::as_bool) {
+            self.show_rulers = show;
         }
         if let Some(prefs) = RedactPrefs::from_json(&v["redact_prefs"]) {
             self.redact_prefs = prefs.clone();
