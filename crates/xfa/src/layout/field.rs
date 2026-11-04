@@ -20,7 +20,7 @@ impl Layouter<'_> {
         if let Some(b) = &f.common.border
             && f.ui != Ui::Button
         {
-            self.draw_border(b, rect)?;
+            self.draw_border(b, rect, rect)?;
         }
         let fctx = ctx.child(&f.common);
         let inner = rect.inset(&f.common.margin);

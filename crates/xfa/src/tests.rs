@@ -2575,6 +2575,74 @@ fn a_gradient_fill_cut_by_a_page_break_carries_on_across_both_pages() {
     assert!((a.area.h - 12.0 * 72.0).abs() < 0.01 && (b.area.h - 12.0 * 72.0).abs() < 0.01, "both sweep the whole box: {a:?} {b:?}");
     assert!((a.area.y - first[0].0.y).abs() < 0.01, "the first part starts the sweep");
     assert!((b.area.bottom() - last[0].0.bottom()).abs() < 0.01, "the second part ends it: {:?} {:?}", b.area, last[0].0);
+    // Written out, the second page's shading still sweeps the whole box: its coordinates run
+    // the box's full 12 inches, from above the page's top to the second part's bottom.
+    let mut doc = Document::open(Arc::new(shell(&one_area_form(r#"layout="tb""#, body)))).unwrap();
+    render_into(&mut doc).unwrap();
+    let root = doc.get(doc.root().unwrap());
+    let pages = doc.get(root.as_dict().unwrap().reference(b"Pages").unwrap());
+    let kids = pages.as_dict().unwrap().get(b"Kids").map(|k| doc.resolve(k)).unwrap();
+    let second = doc.get(kids.as_array().unwrap()[1].as_ref().unwrap()).as_dict().unwrap().clone();
+    let (kind, coords, ..) = shading_of(&doc, &second, "Sh1");
+    assert_eq!(kind, 2, "the second page's shading is the box's axial gradient");
+    assert!((coords[1] - coords[3] - 864.0).abs() < 0.01, "it sweeps the whole box: {coords:?}");
+    assert!(coords[1] > 792.0, "it starts above the page: {coords:?}");
+    assert!((coords[3] - 612.0).abs() < 0.01, "it ends at the second part's bottom: {coords:?}");
+}
+
+/// A flowed section's border gradient runs on across a page break (#6079): the section is
+/// drawn part by part, and each part's gradient area is the whole section translated onto
+/// its page, so the second part doesn't start the sweep again.
+#[test]
+fn a_bordered_sections_gradient_runs_on_across_a_page_break() {
+    let draw = |n: &str| format!(r#"<draw name="{n}" w="2in" h="4in"><value><text>x</text></value></draw>"#);
+    let body = format!(
+        r#"<subform name="body" layout="tb" w="7.5in"><subform name="sec" layout="tb" w="7.5in"><border><edge presence="hidden"/><fill><color value="255,211,0"/><linear type="toBottom"><color value="0,0,255"/></linear></fill></border>{}{}{}</subform></subform>"#,
+        draw("a"),
+        draw("b"),
+        draw("c")
+    );
+    let form = layout_xml(&one_area_form(r#"layout="tb""#, &body)).unwrap();
+    assert_eq!(form.pages.len(), 2);
+    let fills = |page: &Page| {
+        page.items
+            .iter()
+            .filter_map(|i| match i {
+                Item::Fill { rect, gradient, .. } => Some((*rect, *gradient)),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    let (first, last) = (fills(&form.pages[0]), fills(&form.pages[1]));
+    assert_eq!((first.len(), last.len()), (1, 1), "{first:?} {last:?}");
+    let (a, b) = (first[0].1.expect("the first part's gradient"), last[0].1.expect("the second part's gradient"));
+    let total = first[0].0.h + last[0].0.h;
+    assert!((a.area.h - total).abs() < 0.01 && (b.area.h - total).abs() < 0.01, "both sweep the whole section: {a:?} {b:?}");
+    assert!((a.area.y - first[0].0.y).abs() < 0.01, "the first part starts the sweep");
+    assert!((b.area.bottom() - last[0].0.bottom()).abs() < 0.01, "the second part ends it: {:?} {:?}", b.area, last[0].0);
+}
+
+/// A re-layout reuses the shading objects the first pass wrote (#6079), as it reuses images:
+/// the second pass names the same object instead of adding a copy.
+#[test]
+fn a_relayout_reuses_the_shadings_the_first_pass_wrote() {
+    let blue = r#"<color value="0,0,255"/>"#;
+    let xdp = fill_form(&[fill_row(0.0, &format!("<linear>{blue}</linear>"), "", "")]);
+    let mut doc = Document::open(Arc::new(shell(&xdp))).unwrap();
+    let shading_ref = |doc: &Document| {
+        let root = doc.get(doc.root().unwrap());
+        let pages = doc.get(root.as_dict().unwrap().reference(b"Pages").unwrap());
+        let kids = pages.as_dict().unwrap().get(b"Kids").map(|k| doc.resolve(k)).unwrap();
+        let page = doc.get(kids.as_array().unwrap()[0].as_ref().unwrap()).as_dict().unwrap().clone();
+        let resources = doc.resolve(page.get(b"Resources").unwrap());
+        let shadings = resources.as_dict().unwrap().get(b"Shading").map(|s| doc.resolve(s)).expect("the page names its shadings");
+        shadings.as_dict().unwrap().reference(b"Sh0").expect("the gradient's shading")
+    };
+    let form = layout_xml(&xdp).unwrap();
+    crate::pdf::write_form(&mut doc, &form).unwrap();
+    let first = shading_ref(&doc);
+    crate::pdf::write_form(&mut doc, &form).unwrap();
+    assert_eq!(shading_ref(&doc), first, "the second pass reuses the shading object");
 }
 
 /// The shading `name` in the page's `/Shading` resources: its type, coordinates, and its

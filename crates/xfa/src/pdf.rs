@@ -83,7 +83,7 @@ struct Emitter<'a> {
     /// The fields above the signature fields named by their SOM paths, by the path they name:
     /// each one's object and the fields it holds.
     nodes: HashMap<String, (ObjRef, Vec<ObjRef>)>,
-    /// The gradient shadings written so far, one per kind, coordinates and colours (as
+    /// The gradient shadings in play, seeded with the ones earlier passes wrote: one per kind, coordinates and colours (as
     /// [`common::shading`] tells them apart), each with the number its resource name carries.
     shadings: HashMap<String, (ObjRef, usize)>,
 }
@@ -948,6 +948,46 @@ fn earlier_images(doc: &Document, pages: ObjRef) -> HashMap<[u8; 32], ObjRef> {
     out
 }
 
+/// The gradient shadings earlier passes wrote, by the key [`common::shading`] gives each:
+/// those named in the pages under `pages` (the flat page list [`write_form`] writes),
+/// renumbered in the order found, so a re-layout reuses the object instead of adding another.
+fn earlier_shadings(doc: &Document, pages: ObjRef) -> HashMap<String, (ObjRef, usize)> {
+    let mut out: HashMap<String, (ObjRef, usize)> = HashMap::new();
+    let kids = doc.get(pages).as_dict().and_then(|d| d.get(b"Kids").map(|k| doc.resolve(k))).and_then(|k| k.as_array().cloned()).unwrap_or_default();
+    for page in kids.iter().filter_map(Object::as_ref).take(MAX_PAGES_SEARCHED) {
+        let page = doc.get(page);
+        let Some(resources) = page.as_dict().and_then(|p| p.get(b"Resources")).map(|r| doc.resolve(r)) else { continue };
+        let Some(shadings) = resources.as_dict().and_then(|r| r.get(b"Shading")).map(|s| doc.resolve(s)) else { continue };
+        for (_, v) in shadings.as_dict().into_iter().flat_map(|s| s.iter()) {
+            let Some(r) = v.as_ref() else { continue };
+            let obj = doc.get(r);
+            let Some(d) = obj.as_dict() else { continue };
+            let (Some(kind), Some(coords), Some(f)) = (d.int(b"ShadingType"), d.get(b"Coords"), d.get(b"Function").and_then(|f| f.as_dict())) else {
+                continue;
+            };
+            let Some(coords) = coords.as_array() else { continue };
+            let rgb_of = |o: Option<&Object>| -> Option<[f64; 3]> {
+                let a = o?.as_array()?;
+                if a.len() != 3 {
+                    return None;
+                }
+                Some([a[0].as_f64()?, a[1].as_f64()?, a[2].as_f64()?])
+            };
+            let (Some(c0), Some(c1)) = (rgb_of(f.get(b"C0")), rgb_of(f.get(b"C1"))) else { continue };
+            let coords: Vec<String> = coords.iter().filter_map(|v| v.as_f64()).map(common::n).collect();
+            if coords.len() != 4 && coords.len() != 6 {
+                continue;
+            }
+            let key = format!("{kind} {} {} {}", coords.join(" "), common::rgb(c0), common::rgb(c1));
+            if !out.contains_key(&key) {
+                let id = out.len();
+                out.insert(key, (r, id));
+            }
+        }
+    }
+    out
+}
+
 /// Write laid-out `form` into `doc`: its pages replace the document's, its widgets join the
 /// AcroForm's fields (a box the file holds a signature for keeps it), and the AcroForm is marked
 /// laid out. What was written, with any warnings, comes back.
@@ -968,6 +1008,8 @@ pub fn write_form(doc: &mut Document, form: &Form) -> Result<Written, XfaError> 
     };
     // Pictures embedded by earlier passes, from the pages this pass replaces.
     let images = earlier_images(doc, pages_ref);
+    // Gradient shadings those pages name, on the same terms.
+    let shadings = earlier_shadings(doc, pages_ref);
     let (signed, taken) = existing_fields(doc, &catalog);
     let mut em = Emitter {
         doc,
@@ -980,7 +1022,7 @@ pub fn write_form(doc: &mut Document, form: &Form) -> Result<Written, XfaError> 
         signed,
         taken,
         nodes: HashMap::new(),
-        shadings: HashMap::new(),
+        shadings,
     };
     // Every name a field of this pass takes at the top, wherever and in whatever order it is
     // written: a signature field named by its SOM path must not repeat one.

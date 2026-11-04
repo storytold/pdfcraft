@@ -211,18 +211,27 @@ impl Layouter<'_> {
             self.warn_once("a bordered section holding an item that doesn't fit on its page is drawn without its border");
             return Ok(());
         }
+        // The border's gradient sweeps the whole box, not the part: each part's gradient
+        // area is the box translated onto the part's page, as a cut fill's is.
+        let total_h: f64 = f.parts.iter().map(|(_, _, r)| r.h).sum();
+        let mut before = 0.0;
+        let mut parts: Vec<(usize, usize, Rect, Rect)> = Vec::with_capacity(f.parts.len());
+        for (page, at, rect) in f.parts {
+            parts.push((page, at, rect, Rect::new(rect.x, rect.y - before, rect.w, total_h)));
+            before += rect.h;
+        }
         // The last part first: a part's place on its page stays where it was found.
-        for (page, at, rect) in f.parts.into_iter().rev() {
-            self.insert_border(&b, rect, page, at)?;
+        for (page, at, rect, area) in parts.into_iter().rev() {
+            self.insert_border(&b, rect, area, page, at)?;
         }
         Ok(())
     }
 
     /// Draw border `b` round `rect` on page `page` (an index), under what that page got from item
     /// `at` on.
-    fn insert_border(&mut self, b: &Border, rect: Rect, page: usize, at: usize) -> Result<(), XfaError> {
+    fn insert_border(&mut self, b: &Border, rect: Rect, area: Rect, page: usize, at: usize) -> Result<(), XfaError> {
         let before = self.pages.last().map_or(0, |p| p.items.len());
-        self.draw_border(b, rect)?;
+        self.draw_border(b, rect, area)?;
         let drawn: Vec<Item> = match self.pages.last_mut() {
             Some(p) => {
                 let from = before.min(p.items.len());

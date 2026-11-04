@@ -137,7 +137,8 @@ pub(super) fn shading(g: &Gradient, from: [f64; 3], page_h: f64) -> (String, Dic
     };
     // Coordinates as content numbers are written, so boxes drawn alike share one shading.
     let coords: Vec<f64> = coords.into_iter().map(|v| n(v).parse().unwrap_or(0.0)).collect();
-    let (c0, c1) = (c0.map(|v| v.clamp(0.0, 1.0)), c1.map(|v| v.clamp(0.0, 1.0)));
+    let quantize = |c: [f64; 3]| c.map(|v| n(v.clamp(0.0, 1.0)).parse().unwrap_or(0.0));
+    let (c0, c1) = (quantize(c0), quantize(c1));
     let key = format!("{kind} {} {} {}", coords.iter().map(|v| n(*v)).collect::<Vec<_>>().join(" "), rgb(c0), rgb(c1));
     let mut f = Dict::new();
     f.set(b"FunctionType".to_vec(), Object::Int(2));
