@@ -920,6 +920,11 @@ fn process_cmyk(
     }
 
     let was_dct = is_dct(s)?;
+    // ColorTransform 1 without an Adobe marker indicates YCbCrK (ISO 32000-2 Table 13), which
+    // standard CMYK decoders decode as raw CMYK. Skip conversion fail-safe instead of producing wrong colors.
+    if was_dct && adobe_transform(&s.raw)?.is_none() && color_transform(doc, s)?.is_some_and(|c| c != 0) {
+        return None;
+    }
     let (w, h) = (u32::try_from(d.int(b"Width")?).ok()?, u32::try_from(d.int(b"Height")?).ok()?);
     if w == 0 || h == 0 || (w as u64) * (h as u64) > MAX_PIXELS {
         return None;
@@ -1469,7 +1474,11 @@ pub(crate) fn run(
         }
         let n = s.dict.get(b"ColorSpace").and_then(|cs| components(doc, cs));
         let processed = n.and_then(|n| process(doc, s, ppi, if n == 1 { &settings.gray } else { &settings.color }, n, budget)).or_else(|| {
-            if settings.convert_cmyk_to_rgb && !defaults_cmyk.contains(&r.num) { process_cmyk(doc, s, ppi, &settings.color, budget) } else { None }
+            if settings.convert_cmyk_to_rgb && !defaults_cmyk.contains(&r.num) && !defaults.contains(&r.num) {
+                process_cmyk(doc, s, ppi, &settings.color, budget)
+            } else {
+                None
+            }
         });
         // A dithered scan, say, downsampled and JPEG-compressed: the smaller wins, counting a soft
         // mask resampled with it.
