@@ -371,3 +371,29 @@ fn only_grew_compares_huge_arrays_without_quadratic_work() {
     assert!(!only_grew(&doc, &doc, &ints(20_000), &ints(20_001), 0));
     assert!(start.elapsed() < std::time::Duration::from_secs(10), "{:?}", start.elapsed());
 }
+
+#[test]
+fn dss_evidence_decodes_each_stream_once_within_its_caps() {
+    // One small stream listed 1000 times, then streams that inflate past the evidence cap.
+    let mut doc = fixture(&[]);
+    let small = doc.add(Object::Stream(Stream::flate(Dict::new(), b"evidence")));
+    let mut items = vec![Object::Ref(small); 1000];
+    for _ in 0..4 {
+        items.push(Object::Ref(doc.add(Object::Stream(Stream::flate(Dict::new(), &vec![0; crate::revocation::MAX_EVIDENCE + 1])))));
+    }
+    let mut dss = Dict::new();
+    dss.set(b"CRLs".to_vec(), Object::Array(items));
+    let mut crls = DssEvidence::new(&doc, &dss, b"CRLs");
+    let read: Vec<Vec<u8>> = crls.by_ref().collect();
+    assert_eq!(read, vec![b"evidence".to_vec()]);
+    assert!(!crls.cut, "repeats and oversized streams are not a cap");
+    // Distinct streams stop at the entry and byte budgets, and say so.
+    let items: Vec<Object> =
+        (0..MAX_DSS_ENTRIES + 10).map(|_| Object::Ref(doc.add(Object::Stream(Stream::flate(Dict::new(), &[1; 1 << 16]))))).collect();
+    dss.set(b"OCSPs".to_vec(), Object::Array(items));
+    let mut ocsps = DssEvidence::new(&doc, &dss, b"OCSPs");
+    let total: usize = ocsps.by_ref().map(|b| b.len()).sum();
+    assert!(total <= MAX_DSS_BYTES, "{total}");
+    assert!(ocsps.cut);
+    assert!(DssEvidence::new(&doc, &dss, b"OCSPs").count() <= MAX_DSS_ENTRIES);
+}

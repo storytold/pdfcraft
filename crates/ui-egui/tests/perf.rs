@@ -18,7 +18,7 @@ fn load_average() -> Option<f64> {
 /// Frame budgets only mean something on a machine that isn't overcommitted: with the load
 /// average above twice the core count (other builds running), skip and say so.
 fn overloaded() -> bool {
-    let cores = std::thread::available_parallelism().map_or(4, |n| n.get()) as f64;
+    let cores = std::thread::available_parallelism().map_or(4, std::num::NonZeroUsize::get) as f64;
     match load_average() {
         Some(l) if l > 2.0 * cores => {
             eprintln!("PERF skipped: load average {l:.0} on {cores} cores; frame budgets need a quiet machine");
@@ -28,7 +28,7 @@ fn overloaded() -> bool {
     }
 }
 
-/// The two budget tests take turns: each starts render workers, and measuring one while the other
+/// The budget tests take turns: each starts render workers, and measuring one while another
 /// runs would charge it for the other's work on a small CI machine.
 static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
@@ -75,6 +75,10 @@ fn big(n: usize) -> Vec<u8> {
         objs.push(format!("<< /Length {} >>\nstream\n{body}\nendstream", body.len()));
         objs.push("<< /Type /Annot /Subtype /Square /Rect [72 72 144 144] /C [1 0 0] /T (Ada) /Contents (Check) >>".into());
     }
+    pdf(objs)
+}
+
+fn pdf(objs: Vec<String>) -> Vec<u8> {
     let mut out = b"%PDF-1.7\n".to_vec();
     let mut offs = Vec::new();
     for (i, o) in objs.iter().enumerate() {
@@ -88,6 +92,56 @@ fn big(n: usize) -> Vec<u8> {
     }
     out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{x}\n%%EOF\n", objs.len() + 1).as_bytes());
     out
+}
+
+/// Named roots, none with replies: the panel still looks up every root's thread.
+fn named_comments(n: usize) -> Vec<u8> {
+    let annots: Vec<String> = (0..n).map(|i| format!("{} 0 R", i + 4)).collect();
+    let mut objs = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << >> /Annots [{}] >>", annots.join(" ")),
+    ];
+    for i in 0..n {
+        objs.push(format!(
+            "<< /Type /Annot /Subtype /Square /Rect [72 72 144 144] /C [1 0 0] /T (Ada) /NM (root-{i}) /Contents (Review note {i}) >>"
+        ));
+    }
+    pdf(objs)
+}
+
+#[test]
+fn collapsed_comments_with_ten_thousand_named_roots_stay_within_the_frame_budget() {
+    if overloaded() {
+        return;
+    }
+    let _turn = SERIAL.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let bytes = named_comments(10_000);
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("review.pdf", None, bytes).expect("opens");
+        app.set_option("left", "closed").unwrap();
+        app.set_option("panel", "comments").unwrap();
+        app.views[0].comments.collapsed_pages = vec![0];
+        app
+    });
+    h.run_steps(4);
+    {
+        let state = h.state();
+        let info = &state.session.get(state.views[0].id).unwrap().info;
+        assert_eq!(info.pages.len(), 1);
+        assert_eq!(info.annotations.len(), 10_000);
+        for a in &info.annotations {
+            assert_eq!(a.name.as_deref(), Some(format!("root-{}", a.index).as_str()));
+            assert!(a.in_reply_to.is_none());
+            assert!(a.state.is_none());
+        }
+        assert_eq!(state.views[0].comments.collapsed_pages, [0]);
+    }
+    // Folding removes card layout cost, so this measures filtering and thread lookup work.
+    let avg = best_average("collapsed named comments", 30, |_| h.step());
+    assert!(avg < BUDGET, "collapsed comments: average frame {avg:?}");
 }
 
 #[test]
@@ -112,6 +166,43 @@ fn scrolling_a_500_page_document_stays_within_the_frame_budget() {
         h.step();
     });
     assert!(avg < BUDGET, "average frame {avg:?}");
+}
+
+/// Measures real wheel events and their idle frames, separately from page-jump scheduling.
+#[test]
+fn regular_wheel_input_on_500_pages_stays_within_the_frame_budget() {
+    if overloaded() {
+        return;
+    }
+    let _turn = SERIAL.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let bytes = big(500);
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 60.0).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("wheel-budget.pdf", None, bytes).expect("opens");
+        for (key, value) in [("left", "closed"), ("panel", "none"), ("layout", "continuous"), ("zoom", "200"), ("animation_effects", "on")] {
+            app.set_option(key, value).unwrap();
+        }
+        app
+    });
+    h.run_steps(8);
+    h.hover_at(h.state().views[0].viewport_rect().center());
+    h.run_steps(2);
+    let start = h.state().views[0].current;
+    let average = best_average("wheel input", 200, |frame| {
+        if frame % 3 == 0 {
+            h.event(egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Line,
+                delta: egui::vec2(0.0, -1.0),
+                phase: egui::TouchPhase::Move,
+                modifiers: egui::Modifiers::NONE,
+                source: egui::MouseWheelSource::Unknown,
+            });
+        }
+        h.step();
+    });
+    assert!(h.state().views[0].current > start, "wheel events must actually move through the document");
+    assert!(average < BUDGET, "wheel input: average frame {average:?}");
 }
 
 #[test]

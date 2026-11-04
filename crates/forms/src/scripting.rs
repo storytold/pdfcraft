@@ -176,6 +176,7 @@ pub fn document_scripts_named(doc: &Document) -> Vec<(String, String)> {
     let Some(names) = cat.as_dict().and_then(|c| c.get(b"Names")).map(|n| doc.resolve(n)) else { return Vec::new() };
     let Some(tree) = names.as_dict().and_then(|n| n.get(b"JavaScript")).cloned() else { return Vec::new() };
     let mut out: Vec<(String, String)> = Vec::new();
+    let mut scripts = crate::script_budget();
     // Kids stay unresolved on the stack, and each node is read once: a node listed many times,
     // or among its own kids, must not multiply the work.
     let mut stack = vec![tree];
@@ -203,7 +204,7 @@ pub fn document_scripts_named(doc: &Document) -> Vec<(String, String)> {
                     Object::String(s) => s.to_text(),
                     _ => continue,
                 };
-                if let Some(js) = crate::script(doc, v) {
+                if let Some(js) = crate::script(doc, v, &mut scripts) {
                     out.push((key, js));
                 }
             }
@@ -300,25 +301,7 @@ pub fn set_field_script(doc: &mut Document, name: &str, event: &str, js: Option<
         }
     })?;
     if key == b"C" {
-        let af_ref = crate::author::ensure_form(doc)?;
-        let mut co: Vec<Object> = doc
-            .get(af_ref)
-            .as_dict()
-            .and_then(|d| d.get(b"CO").cloned())
-            .map(|c| doc.resolve(&c))
-            .and_then(|c| c.as_array().cloned())
-            .unwrap_or_default();
-        co.retain(|o| o.as_ref() != Some(f.obj));
-        if js.is_some() {
-            co.push(Object::Ref(f.obj));
-        }
-        doc.update_dict(af_ref, |d| {
-            if co.is_empty() {
-                d.remove(b"CO");
-            } else {
-                d.set(b"CO".to_vec(), Object::Array(co));
-            }
-        })?;
+        crate::calc_order::keep_listed(doc, f.obj, js.is_some())?;
     }
     Ok(())
 }

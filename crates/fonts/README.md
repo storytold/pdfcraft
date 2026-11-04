@@ -33,10 +33,6 @@ set). Without that variable `CRAFT_FONTS` is empty and everything below copes:
   titles), in manifest order.
 - `ui_telugu_fonts`: the `Telu` faces for Telugu interface text (the Telugu catalog, file names,
   document titles), in manifest order.
-- `ui_devanagari_fonts`: the `Deva` faces for Hindi interface text, in manifest order.
-  The CI/release craft-fonts revision `3d9ab3a132ed0eff457e424226a435a901da30d3`
-  has no Devanagari face, so the Hindi glyph integration test skips with that input or without
-  `CRAFT_FONTS_DIR`; a passing skipped test is not evidence of Hindi glyph coverage.
 - `ui_hebrew_fonts` / `document_hebrew_font(bold)`: the `Hebr` faces (Noto Sans Hebrew) for
   Hebrew interface text, and the face whose outlines become the Type 3 fallback for Hebrew text
   written by Edit text (Bold when asked for and present, else Regular). `None` without a
@@ -73,10 +69,10 @@ The descriptor does not change glyph programs or replace the Type 3 `FontBBox` m
 only Gothic Regular, so it cannot preserve bold. No new font assets or changes to that input are
 needed.
 
-wasm32 builds embed only BIZ UDPGothic Regular and any `Arab`, `Deva`, `Telu`, `Hebr` or `Thai` face, to keep the web build small: the web build
+wasm32 builds embed only BIZ UDPGothic Regular and any `Arab`, `Telu`, `Hebr` or `Thai` face, to keep the web build small: the web build
 currently has no Chinese face, so Chinese there still shows the replacement glyph.
 Font files are never
-committed here (`AGENTS.md` §1.4; team members: [craftrules `standards/fonts.md`](https://github.com/storytold/craftrules/blob/main/standards/fonts.md), internal).
+committed here (`AGENTS.md` §1.4).
 
 The full font subsystem (parsing, shaping, subsetting and embedding) arrives with M2.2/M7.
 
