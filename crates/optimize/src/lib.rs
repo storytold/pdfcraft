@@ -146,8 +146,9 @@ pub struct MonoSettings {
     pub target_ppi: f64,
     pub above_ppi: f64,
     pub compression: MonoCompression,
-    /// Binarize noisy near-bilevel scanned text to 1-bit mono (compressed with [`MonoCompression`],
-    /// typically CCITT Group 4 or JBIG2) when dual-guard checks pass.
+    /// Binarize pristine near-bilevel scanned text (≥98% extreme levels, ≤0.5% midtones) to
+    /// 1-bit mono (compressed with [`MonoCompression`], typically CCITT Group 4 or JBIG2).
+    /// Scans with faint content, midtones, or ambiguous histograms are left unconverted.
     pub binarize_scans: bool,
 }
 

@@ -1044,9 +1044,11 @@ fn try_binarize_scan(samples: &[u8], row_len: usize, w: usize, h: usize, n: usiz
     let dark_ratio = dark as f64 / total as f64;
     let bright_ratio = bright as f64 / total as f64;
 
-    // Must be predominantly two-tone with minimal midtones (at most 1.5%),
-    // contain actual dark text content (at least 0.5%), and white paper background (at least 50%).
-    if extreme_ratio < 0.92 || midtone_ratio > 0.015 || dark_ratio < 0.005 || bright_ratio < 0.50 {
+    // Scope: Pristine near-bilevel scans.
+    // Must be strictly two-tone (at least 98% in dark ink or paper-bright extremes),
+    // with virtually no midtones (at most 0.5%), containing actual dark text content
+    // (at least 0.5%), and white paper background (at least 50%).
+    if extreme_ratio < 0.98 || midtone_ratio > 0.005 || dark_ratio < 0.005 || bright_ratio < 0.50 {
         return None;
     }
 
@@ -1054,9 +1056,6 @@ fn try_binarize_scan(samples: &[u8], row_len: usize, w: usize, h: usize, n: usiz
     // OTSU THRESHOLDING & CONTENT-LOSS GUARD
     // -------------------------------------------------------------
     let raw = compute_otsu(&hist, total)?;
-    if matches!(raw, 0 | 255) {
-        return None;
-    }
     let threshold = raw.clamp(100, 180);
 
     // Guard against bleaching faint text strokes (lum in [threshold..215)).
