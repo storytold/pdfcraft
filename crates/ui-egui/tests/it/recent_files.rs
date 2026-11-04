@@ -207,7 +207,8 @@ fn the_limit_is_saved_and_restored_and_cuts_a_longer_list() {
             path.to_string_lossy().into_owned()
         })
         .collect();
-    let entries: Vec<RecentFile> = paths.iter().map(|p| RecentFile { name: "x.pdf".into(), path: p.clone(), pages: 1, size: 0, pinned: false }).collect();
+    let entries: Vec<RecentFile> =
+        paths.iter().map(|p| RecentFile { name: "x.pdf".into(), path: p.clone(), pages: 1, size: 0, pinned: false }).collect();
     let json = serde_json::json!({ "recent": entries, "recent_limit": 2 }).to_string();
     let mut restored = PdfCraftApp::new();
     restored.restore(&json);

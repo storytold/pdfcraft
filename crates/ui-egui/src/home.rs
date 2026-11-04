@@ -221,9 +221,8 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     press.wash(ui, rect, 8, false);
                 }
                 // Pin or unpin this file so it stays at the top of Recent across Clear (#4772).
-                // The interaction is always present so keyboard users can focus and activate it;
-                // the icon is drawn when the row is hovered, focused, or already pinned.
-                let pin_rect = Rect::from_center_size(rect.right_center() - vec2(58.0, 0.0), vec2(28.0, 28.0));
+                // Sized and separated from Remove with 12pt margins so touch users don't misclick.
+                let pin_rect = Rect::from_center_size(rect.right_center() - vec2(68.0, 0.0), vec2(32.0, 32.0));
                 let p = ui.interact(pin_rect, ui.scope_id().with(("pin-recent", &r.path)), Sense::click());
                 let (label, hover) = if r.pinned {
                     (crate::i18n::fmt(tl!("Unpin {name} from Recent"), &[("name", &r.name)]), tl!("Unpin from Recent"))
@@ -235,7 +234,7 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     if p.hovered() || p.has_focus() {
                         ui.painter().rect_filled(pin_rect, CornerRadius::same(6), t.pressed);
                     }
-                    icons::paint(ui, pin_rect.shrink(6.0), "pin", 16.0, if r.pinned { t.accent_text } else { t.icon });
+                    icons::paint(ui, pin_rect.shrink(8.0), "pin", 16.0, if r.pinned { t.accent_text } else { t.icon });
                 }
                 if p.on_hover_text(hover).clicked() {
                     pin = Some(r.path.clone());
@@ -264,7 +263,7 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 );
                 // Room on the right for the pin and remove buttons.
                 let detail = ui.painter().text(
-                    body.right_center() - vec2(80.0, 0.0),
+                    body.right_center() - vec2(96.0, 0.0),
                     Align2::RIGHT_CENTER,
                     format!("{}  ·  {}", crate::i18n::trn(crate::i18n::current(), r.pages as u64, "{n} page", "{n} pages"), human_size(r.size)),
                     theme::regular(12.0),
