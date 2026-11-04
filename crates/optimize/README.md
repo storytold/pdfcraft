@@ -89,7 +89,15 @@ let report = optimize_with_progress(&mut doc, &settings, &mut |stage| keep_going
     alone when JBIG2 is asked for, is stored again as the compression asks when that is smaller (as JBIG2 symbols where
     its own coding is a generic region, say); a symbol-coded scan, averaged, loses its exact
     repeats and often comes out larger, and then stays as it is. A JBIG2 image stored again refers to no
-    `/JBIG2Globals`, and one whose page isn't its size (PdfCraft's
+    `/JBIG2Globals` of its own. With JBIG2 asked for, the images stored as JBIG2, up to 16 at a
+    time, then share one symbol dictionary in a new `/JBIG2Globals` stream, holding the marks found
+    in more than one of them: those that come out smaller that way, when together they save more
+    than it takes. Only images that redaction can store again without it share one: image masks
+    and DeviceGray images named directly, of at most 64 Mi pixels (redaction's limit,
+    `pdfcraft_cos::MAX_REDACTED_IMAGE_PIXELS`); others are coded alone.
+    Redacting one of them stores the others of its group again without it, so the group keeps that
+    to 15 images, and each image's decode reads the dictionary of 16 at most. A
+    JBIG2 image whose page isn't its size (PdfCraft's
     renderer draws the whole page into the image) is left alone. With Retain, a resampled image
     keeps its kind of compression (CCITT, JBIG2, or Flate) and nothing else changes; an image of
     more bits is then left to the grey or colour settings. Every change is kept only when it is
@@ -103,7 +111,7 @@ let report = optimize_with_progress(&mut doc, &settings, &mut |stage| keep_going
     is past the 80 million pixels above).
 
   - Lossless JBIG2 uses bounded generic-region encoding or exact-copy symbol dictionaries when
-    smaller. No lossy symbol substitution is used. Export, redaction and this step read JBIG2
+    smaller, a dictionary shared by up to 16 images when that is smaller still. No lossy symbol substitution is used. Export, redaction and this step read JBIG2
     images, with bounded shared globals. All of a run's images share one allowance of decoding
     (`pdfcraft_cos::ImageBudget`), filters, decoders and pixels alike, JPEG samples and merged
     pictures too: about

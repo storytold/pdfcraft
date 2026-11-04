@@ -10,8 +10,9 @@
 use pdfcraft_content::{Matrix, overlaps};
 use pdfcraft_cos::{Dict, Document, ImageBudget, Object, Stream};
 
-/// Most pixels an image may have to be cleared in place (larger ones are removed).
-pub(crate) const MAX_PIXELS: u64 = 64 << 20;
+/// Most pixels an image may have to be cleared in place (larger ones are removed), or to be stored
+/// again without shared `/JBIG2Globals` (see [`crate::globals::without_dictionary`]).
+pub(crate) const MAX_PIXELS: u64 = pdfcraft_cos::MAX_REDACTED_IMAGE_PIXELS;
 
 /// The components of image `s`'s colour space, through any references (`None` when unknown).
 pub(crate) fn components(doc: &Document, s: &Stream) -> Option<usize> {
