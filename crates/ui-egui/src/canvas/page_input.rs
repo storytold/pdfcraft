@@ -847,7 +847,7 @@ pub(super) fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut P
         }
         let (icon, color) = crate::sign_ui::signature_status_style(badge.status);
         painter.rect_stroke(sr, CornerRadius::same(2), Stroke::new(1.5, color), egui::StrokeKind::Outside);
-        if let Some(mark) = verdict_mark_rect(sr, mark_anchor(&xf, info, i, badge.rect)) {
+        if let Some(mark) = verdict_mark_rect(sr, r, mark_anchor(&xf, info, i, badge.rect)) {
             icons::paint(ui, mark, icon, mark.width() * MARK_ICON_SHARE, color);
         }
         // The whole widget answers the pointer, so a field too small for a mark still says its

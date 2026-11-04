@@ -465,16 +465,18 @@ fn mark_anchor(xf: &PageXform, info: &DocInfo, page: usize, rect: [f64; 4]) -> P
     xf.user_rect(info, page, [right, bottom, right, bottom]).min
 }
 
-/// Where the validation mark sits in a signature widget's screen rectangle, or `None` when the
-/// widget is too small for a legible one. It goes in the corner nearest `anchor`, the screen
-/// position of the widget's bottom-right corner on the page, so it turns with the page and the
-/// view: off the middle, where a signer's artwork usually is, and clear of the state a named-layer
-/// appearance captions across its top.
-fn verdict_mark_rect(widget: Rect, anchor: Pos2) -> Option<Rect> {
+/// Where the validation mark sits in the part of a signature widget's screen rectangle that is on
+/// the page (`page`, on screen too), or `None` when that part is too small for a legible one. It
+/// goes in the corner nearest `anchor`, the screen position of the widget's bottom-right corner on
+/// the page, so it turns with the page and the view: off the middle, where a signer's artwork
+/// usually is, and clear of the state a named-layer appearance captions across its top.
+fn verdict_mark_rect(widget: Rect, page: Rect, anchor: Pos2) -> Option<Rect> {
     // A NaN or infinite corner has no place on screen.
     if !widget.is_finite() {
         return None;
     }
+    // A widget past the crop box's edge shows its mark on the page, not beside it.
+    let widget = widget.intersect(page);
     let side = (widget.width().min(widget.height()) * MARK_SIDE_SHARE).min(MARK_SIDE_MAX);
     // Also refuses the negative side of an inverted rectangle.
     if !(MARK_SIDE_MIN..).contains(&side) {

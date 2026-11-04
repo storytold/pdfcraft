@@ -161,14 +161,14 @@ fn the_verdict_mark_takes_the_corner_nearest_its_anchor() {
     let widget = Rect::from_min_max(pos2(40.0, 60.0), pos2(540.0, 760.0));
     let centre = widget.center();
     for anchor in [widget.left_top(), widget.right_top(), widget.right_bottom(), widget.left_bottom()] {
-        let mark = verdict_mark_rect(widget, anchor).expect("a widget this size carries a mark");
+        let mark = verdict_mark_rect(widget, Rect::EVERYTHING, anchor).expect("a widget this size carries a mark");
         assert!(widget.contains_rect(mark), "{mark:?} in {widget:?}");
         assert!(!mark.contains(centre), "the mark covers the artwork it annotates: {mark:?}");
         let (right, below) = (mark.center().x > centre.x, mark.center().y > centre.y);
         assert_eq!((right, below), (anchor.x > centre.x, anchor.y > centre.y), "{mark:?} for {anchor:?}");
     }
     // Without a usable anchor it sits bottom-right.
-    let mark = verdict_mark_rect(widget, pos2(f32::NAN, f32::NAN)).unwrap();
+    let mark = verdict_mark_rect(widget, Rect::EVERYTHING, pos2(f32::NAN, f32::NAN)).unwrap();
     assert!(mark.min.x > centre.x && mark.min.y > centre.y, "{mark:?}");
 }
 
@@ -184,7 +184,7 @@ fn the_verdict_mark_turns_with_the_page_and_the_view() {
             let info = DocInfo { pages: vec![page], ..Default::default() };
             let xf = PageXform { rect: Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 800.0)), rot: view_turn, pw: 612.0, ph: 792.0 };
             let widget = xf.user_rect(&info, 0, rect.map(|v: f64| v as f32));
-            let mark = verdict_mark_rect(widget, mark_anchor(&xf, &info, 0, rect)).expect("a widget this size carries a mark");
+            let mark = verdict_mark_rect(widget, xf.rect, mark_anchor(&xf, &info, 0, rect)).expect("a widget this size carries a mark");
             let (right, below) = (mark.center().x > widget.center().x, mark.center().y > widget.center().y);
             let expected = match (page_turn + view_turn) % 360 {
                 0 => (true, true),
@@ -201,7 +201,7 @@ fn the_verdict_mark_turns_with_the_page_and_the_view() {
 fn the_verdict_mark_scales_with_the_widget_until_the_cap() {
     let side_of = |shorter: f32| {
         let widget = Rect::from_min_max(pos2(0.0, 0.0), pos2(shorter, shorter * 2.0));
-        verdict_mark_rect(widget, widget.right_bottom()).expect("a widget this size carries a mark").width()
+        verdict_mark_rect(widget, Rect::EVERYTHING, widget.right_bottom()).expect("a widget this size carries a mark").width()
     };
     // Literal values, not the constants, so a change to the share or the cap fails here.
     assert!((side_of(96.0) - 24.0).abs() < 1e-3, "under the cap the mark is a quarter of the widget");
@@ -214,9 +214,10 @@ fn the_legible_floor_is_the_exact_shortest_side_that_still_holds_a_mark() {
     // here.
     let at_floor = MARK_SIDE_MIN / MARK_SIDE_SHARE;
     let widget = |shorter: f32| Rect::from_min_max(pos2(10.0, 10.0), pos2(10.0 + shorter, 70.0));
-    let mark = verdict_mark_rect(widget(at_floor), widget(at_floor).right_bottom()).expect("a widget exactly at the floor holds a mark");
+    let mark =
+        verdict_mark_rect(widget(at_floor), Rect::EVERYTHING, widget(at_floor).right_bottom()).expect("a widget exactly at the floor holds a mark");
     assert!((mark.width() - MARK_SIDE_MIN).abs() < 1e-3, "the mark at the floor is the floor, not less: {mark:?}");
-    assert_eq!(verdict_mark_rect(widget(at_floor - 0.5), pos2(0.0, 0.0)), None, "a notch under the floor is not legible");
+    assert_eq!(verdict_mark_rect(widget(at_floor - 0.5), Rect::EVERYTHING, pos2(0.0, 0.0)), None, "a notch under the floor is not legible");
 }
 
 #[test]
@@ -230,7 +231,7 @@ fn the_verdict_mark_is_none_for_a_rectangle_the_screen_cannot_hold() {
         Rect { min: pos2(0.0, 0.0), max: pos2(f32::INFINITY, 100.0) },
     ];
     for widget in unplaceable {
-        assert_eq!(verdict_mark_rect(widget, pos2(0.0, 0.0)), None, "{widget:?} has no place to sit at");
+        assert_eq!(verdict_mark_rect(widget, Rect::EVERYTHING, pos2(0.0, 0.0)), None, "{widget:?} has no place to sit at");
     }
 }
 
@@ -242,15 +243,29 @@ fn the_verdict_mark_stays_inside_its_widget_at_every_finite_size() {
         for &h in &sizes {
             let widget = Rect::from_min_max(pos2(10.0, 10.0), pos2(10.0 + w, 10.0 + h));
             for anchor in [widget.left_top(), widget.right_bottom()] {
-                let Some(mark) = verdict_mark_rect(widget, anchor) else { continue };
+                let Some(mark) = verdict_mark_rect(widget, Rect::EVERYTHING, anchor) else { continue };
                 assert!(widget.contains_rect(mark), "{mark:?} is not inside {widget:?} for a {w}x{h} widget");
             }
-            let Some(mark) = verdict_mark_rect(widget, widget.right_bottom()) else { continue };
+            let Some(mark) = verdict_mark_rect(widget, Rect::EVERYTHING, widget.right_bottom()) else { continue };
             // A quarter of the shorter side each way: at most 6.25% of a square widget.
             let share = mark.width() * mark.height() / (widget.width() * widget.height());
             assert!(share <= MARK_SIDE_SHARE * MARK_SIDE_SHARE * 1.0001, "the mark covers {:.2}% of a {w}x{h} widget", share * 100.0);
         }
     }
+}
+
+#[test]
+fn the_verdict_mark_stays_on_the_page_when_its_widget_crosses_the_edge() {
+    let page = Rect::from_min_max(pos2(0.0, 0.0), pos2(400.0, 300.0));
+    let widget = Rect::from_min_max(pos2(200.0, 150.0), pos2(600.0, 450.0));
+    let mark = verdict_mark_rect(widget, page, widget.right_bottom()).expect("the part on the page holds a mark");
+    assert!(page.contains_rect(mark), "{mark:?} is off {page:?}");
+    assert!(mark.max.x > 350.0 && mark.max.y > 250.0, "the corner of the part on the page nearest the anchor: {mark:?}");
+    // Wholly off the page, or a sliver on it too thin for a legible mark: none.
+    let off = widget.translate(vec2(400.0, 0.0));
+    assert_eq!(verdict_mark_rect(off, page, off.right_bottom()), None);
+    let sliver = Rect::from_min_max(pos2(390.0, 0.0), pos2(600.0, 300.0));
+    assert_eq!(verdict_mark_rect(sliver, page, sliver.right_bottom()), None);
 }
 
 #[test]
