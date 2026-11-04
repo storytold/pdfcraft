@@ -1104,8 +1104,7 @@ mod tests {
 
     #[test]
     fn saved_header_footer_names_replace_without_case_duplicates() {
-        let mut d = MarksDraft::default();
-        d.saved_hf_name = "Invoice".into();
+        let mut d = MarksDraft { saved_hf_name: "Invoice".into(), ..MarksDraft::default() };
         d.hf.text[0] = "First".into();
         d.save_hf();
         d.saved_hf_name = "invoice".into();
