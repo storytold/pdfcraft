@@ -747,18 +747,24 @@ struct ParaStyle {
     k: f64,
 }
 
-/// Spacing and scaling (text state), with the chosen values.
-fn paragraph_style(o: &Origin, style: &BlockStyle) -> Result<(String, ParaStyle), EditError> {
+/// Spacing and scaling (text state), with the chosen values. `phrase` is the size an OCR phrase
+/// is drawn at when none is chosen, in place of its first word's own (#3313).
+fn paragraph_style(o: &Origin, style: &BlockStyle, phrase: Option<f64>) -> Result<(String, ParaStyle), EditError> {
     let (font_name, old_size) = o.state.font.clone().ok_or_else(|| EditError::Invalid("the paragraph has no font".into()))?;
     let k = o.k.max(1e-6);
     // The size in text space: points ÷ the text-to-user scale.
-    let size = style.size.map_or(old_size, |pt| (pt / k).max(0.1));
+    let size = style.size.or(phrase).map_or(old_size, |pt| (pt / k).max(0.1));
     let mut state = o.state.clone();
     if let Some(c) = style.char_spacing {
         state.char_spacing = c / k;
     }
     if let Some(sc) = style.scale {
         state.scale = (sc / 100.0).clamp(0.1, 10.0);
+    }
+    // At the phrase's size, the first word's text matrix still carries its own width: scale it
+    // back, so the line is as wide as the scan whatever size OCR guessed for that word.
+    if phrase.is_some() && style.size.is_none() && style.scale.is_none() {
+        state.scale = (state.scale * old_size / size).clamp(0.1, 10.0);
     }
     Ok((font_name, ParaStyle { state, size, old_size, k }))
 }
@@ -835,7 +841,7 @@ pub(crate) fn rewrite_block_from(
     let o = &first.origin;
     let last = members.last().copied().unwrap_or(first);
     let emit = &last.origin;
-    let (font_name, ParaStyle { state: o_state, size, old_size, k }) = paragraph_style(o, style)?;
+    let (font_name, ParaStyle { state: o_state, size, old_size, k }) = paragraph_style(o, style, b.phrase_size())?;
     let source = source_font(doc, &fonts_res, &font_name, first, &flat, style);
     let reuse = source.reuse;
     // The chosen style also determines the real Japanese fallback outlines and advances.

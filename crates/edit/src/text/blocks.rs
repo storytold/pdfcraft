@@ -36,6 +36,13 @@ pub struct TextBlock {
 }
 
 impl TextBlock {
+    /// The one size a rewrite and the editor set an OCR phrase in, in place of each word's own
+    /// (#3313): the block's size, which for invisible text is its words' median. `None` for
+    /// visible text, whose runs keep their sizes.
+    pub fn phrase_size(&self) -> Option<f64> {
+        (self.invisible && self.size.is_finite() && self.size > 0.0).then_some(self.size)
+    }
+
     /// Preserve styles outside the changed ranges; inserted characters inherit the surrounding
     /// source run. The texts are aligned word by word, so words left untouched between two edits
     /// keep their own runs (#2198); past [`MAX_CHANGED_WORDS`] the draft counts as one change.
