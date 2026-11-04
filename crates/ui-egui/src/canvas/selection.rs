@@ -65,6 +65,7 @@ impl DocView {
     pub(crate) fn clear_selection(&mut self) {
         self.selection = None;
         self.actions_dismissed = None;
+        self.translation_popup = None;
     }
 
     /// Select text on `page` from glyph `from` to glyph `to` (tests and automation).
@@ -154,6 +155,7 @@ enum SelectionAction {
     Markup(comments::CommentTool),
     Replace,
     Copy,
+    Translate,
 }
 
 /// Actions on an existing text selection, next to the selected words.
@@ -209,6 +211,9 @@ pub(super) fn selection_actions(
                     if ui.add_enabled(can_copy, egui::Button::new(tl!("Copy"))).clicked() {
                         chosen = Some(SelectionAction::Copy);
                     }
+                    if ui.add_enabled(can_copy, egui::Button::new(tl!("Translate"))).clicked() {
+                        chosen = Some(SelectionAction::Translate);
+                    }
                 });
             });
         },
@@ -218,6 +223,11 @@ pub(super) fn selection_actions(
         // Copying closes the bar but keeps the words selected, for ⌘C or a second action.
         view.actions_dismissed = Some(selection);
         return true;
+    }
+    if let SelectionAction::Translate = action {
+        view.actions_dismissed = Some(selection);
+        view.translation_popup = Some(crate::translate::TranslationPopup::new(selected, pos2(x, y)));
+        return false;
     }
     let Some((page, quads)) = view.selection_quads(info) else { return false };
     let last = quads.last().copied().unwrap_or_default();
@@ -247,8 +257,8 @@ pub(super) fn selection_actions(
                 author: prefs.author.clone(),
             }));
         }
-        // Copy is dispatched through the app after the view borrow ends.
-        SelectionAction::Copy => {}
+        // Copy is dispatched through the app after the view borrow ends. Translate opens popup directly.
+        SelectionAction::Copy | SelectionAction::Translate => {}
     }
     false
 }
