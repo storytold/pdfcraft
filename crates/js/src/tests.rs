@@ -86,6 +86,11 @@ fn push_button_caption_methods_read_write_and_reject_other_faces() {
     assert_eq!(set.changed[0].caption.as_deref(), Some("New"));
     let same = run("getField('go').buttonSetCaption('Old');");
     assert_eq!(same.changed[0].caption.as_deref(), Some("Old"), "same-text writes still update every widget");
+    let explicit = run("event.value = getField('go').buttonGetCaption(0);");
+    assert_eq!(explicit.value, "Old");
+    let format =
+        super::run("getField('go').buttonSetCaption('Discarded');", &Event::field("Format", "go", "Old"), &doc(), &fields, &[], Limits::default());
+    assert!(format.error.as_deref().is_some_and(|e| e.contains("buttonSetCaption is not available in a Format event")));
     assert!(run("getField('go').buttonSetCaption('Bad', 1);").error.is_some());
     assert!(run("getField('text').buttonSetCaption('Bad');").error.is_some());
     assert!(run("getField('go').buttonGetCaption(1);").error.is_some());
@@ -374,6 +379,7 @@ fn app_alert_titles_are_clipped_and_charged() {
     // The title's bytes count against the budget with the text's, and a message the budget
     // has no room for is left out and counted.
     let mut h = Host {
+        event_name: "Open".into(),
         fields: Arc::new(Vec::new()),
         changed: BTreeSet::new(),
         alerts: Vec::new(),

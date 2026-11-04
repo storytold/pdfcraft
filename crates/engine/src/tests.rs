@@ -5378,11 +5378,8 @@ fn form_javascript_validates_calculates_and_formats() {
 
     s.apply(id, Edit::InsertBlankPage { at: 1, width: 200.0, height: 300.0 }).unwrap();
     s.apply(id, Edit::DuplicateField { name: "go".into(), pages: vec![1] }).unwrap();
-    s.apply(
-        id,
-        Edit::SetFieldProps { name: "go".into(), props: Box::new(FieldProps { caption: Some((0, "Continue".into())), ..Default::default() }) },
-    )
-    .unwrap();
+    let props = Box::new(FieldProps { caption: Some((0, "Continue".into())), ..Default::default() });
+    s.apply(id, Edit::SetFieldProps { name: "go".into(), props }).unwrap();
     s.apply(id, Edit::SetFieldProps { name: "go".into(), props: Box::new(FieldProps { caption: Some((1, "Old".into())), ..Default::default() }) })
         .unwrap();
     let caption =

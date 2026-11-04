@@ -116,6 +116,9 @@ pub(crate) fn field_object(ctx: &mut Context, name: &str) -> JsObject {
         if !face.is_finite() || face != 0.0 {
             return Err(error("only the normal button face (0) is supported"));
         }
+        if host(c)?.borrow().event_name == "Format" {
+            return Err(error("buttonSetCaption is not available in a Format event"));
+        }
         write(c, name, |f| {
             f.caption = Some(caption);
             f.caption_was_set = true;

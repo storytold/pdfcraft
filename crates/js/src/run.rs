@@ -202,6 +202,7 @@ fn run_here(
     ctx.runtime_limits_mut().set_loop_iteration_limit(limits.loop_iterations);
     ctx.runtime_limits_mut().set_recursion_limit(limits.recursion);
     ctx.insert_data(RefCell::new(Host {
+        event_name: event.name.clone(),
         fields,
         changed: BTreeSet::new(),
         alerts: Vec::new(),
