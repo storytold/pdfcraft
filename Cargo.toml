@@ -19,6 +19,10 @@ craft-quit = { git = "https://github.com/storytold/craft-libs", version = "0.1.0
 # One menu definition for the native macOS menu bar and the in-window bar elsewhere.
 craft-menu = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "787a7a0f972fd1d7a7618fdbeca3a5267a0407ff" }
 craft-keymap = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "787a7a0f972fd1d7a7618fdbeca3a5267a0407ff", default-features = false }
+# Interface translations: lookup, fallback, CLDR plurals and language names over the craft-i18n
+# catalogs that `crates/ui-egui/build.rs` embeds from `CRAFT_I18N_DIR` (storytold/craft-i18n, at
+# the commit in `craft-i18n.rev`). Already in the tree through craft-ui.
+craft-i18n = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "787a7a0f972fd1d7a7618fdbeca3a5267a0407ff" }
 # Shared system spooler; document composition remains in pdfcraft-print.
 craft-print = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "787a7a0f972fd1d7a7618fdbeca3a5267a0407ff" }
 # Whether a path stored in a document may be opened (GoToR link targets).
