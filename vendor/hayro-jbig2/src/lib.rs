@@ -858,4 +858,17 @@ mod tests {
         page.retained_words = MAX_RETAINED_WORDS;
         assert_eq!(page.retained_room(), 0);
     }
+
+    /// Pixels past a bitmap's edge are 0 (6.3.5.2), and a refinement reads its reference a word at
+    /// a time, so a bitmap filled with 1s has none past its width: made, and a page made again for
+    /// the next image.
+    #[test]
+    fn a_bitmap_of_1s_has_nothing_past_its_width() {
+        assert_eq!(Bitmap::new_with(33, 2, 0, 0, true).unwrap().data, [!0, 1 << 31, !0, 1 << 31]);
+        let mut page = Bitmap::new_with(40, 1, 0, 0, false).unwrap();
+        page.reinitialize(7, 2, true).unwrap();
+        assert_eq!(page.data, [0xFE00_0000, 0xFE00_0000]);
+        assert_eq!(Bitmap::new_with(64, 1, 0, 0, true).unwrap().data, [!0, !0], "words filled whole");
+        assert!(Bitmap::new_with(0, 3, 0, 0, true).unwrap().data.is_empty(), "no width");
+    }
 }
