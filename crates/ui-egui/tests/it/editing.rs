@@ -8894,7 +8894,10 @@ fn format_panel_shows_selection_size_and_updates_after_font_applied() {
         "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into(),
         "<< /Type /Page /Parent 2 0 R /Contents 5 0 R /Resources << /Font << /F1 3 0 R >> >> >>".into(),
     ];
-    let body = "BT /F1 24 Tf 20 200 Td (Heading) Tj /F1 12 Tf 0 -25 Td (Paragraph) Tj ET";
+    // The heading is close enough in size to stay in the paragraph (a much larger one is a block
+    // of its own), and Times goes on one word of the second row: a row set wholly in another
+    // family is a paragraph of its own.
+    let body = "BT /F1 16 Tf 20 200 Td (Heading) Tj /F1 12 Tf 0 -25 Td (Body text in a Paragraph) Tj ET";
     objs.push(format!("<< /Length {} >>\nstream\n{body}\nendstream", body.len()));
     let mut pdf = Vec::from(b"%PDF-1.7\n");
     let mut xref = Vec::new();
