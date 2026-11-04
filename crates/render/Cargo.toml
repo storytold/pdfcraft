@@ -14,6 +14,8 @@ pdfcraft-fonts = { workspace = true }
 hayro = { workspace = true }
 hayro-syntax = { workspace = true }
 hayro-svg = "0.7"
+# Picks the face of an installed font collection (the version pdfcraft-fonts already uses).
+skrifa = "0.44"
 lopdf = { workspace = true }
 kurbo = { workspace = true }
 thiserror = { workspace = true }
@@ -28,7 +30,5 @@ bytemuck = { version = "1" }
 getrandom = { version = "0.4", features = ["wasm_js"] }
 
 [dev-dependencies]
-# Checks the Japanese substitute's character coverage; the version pdfcraft-fonts already uses.
-skrifa = "0.44"
 # Builds the decompression-bomb streams in the raster tests.
 flate2 = { workspace = true }
