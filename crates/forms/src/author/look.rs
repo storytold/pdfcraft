@@ -1,4 +1,4 @@
-use super::*;
+use super::{Dict, Document, Field, FieldKind, FormError, ObjRef, Object, Stream, Widget, appearance, fields, invalid, rgb};
 
 /// The Appearance tab: borders, colours and text.
 #[derive(Clone, Copy, Debug, PartialEq)]

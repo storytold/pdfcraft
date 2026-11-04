@@ -1,6 +1,6 @@
 use super::read::{acroform, fields};
 use super::values::merged_appearance;
-use super::*;
+use super::{Dict, Document, FieldKind, ObjRef, Object, Widget, appearance, name_bytes};
 
 /// Whether the form asks viewers to draw its fields' appearances themselves (`/NeedAppearances`).
 pub fn need_appearances(doc: &Document) -> bool {

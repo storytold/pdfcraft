@@ -18,9 +18,8 @@ impl Document {
     /// [`Document::page_images`]: a raster image, or Form artwork that holds one.
     pub fn page_image_at(&self, page: usize, at: [f64; 2]) -> Option<usize> {
         let editor = self.editor.as_ref()?;
-        let inside = |r: &[f64; 4]| (r[0]..=r[2]).contains(&at[0]) && (r[1]..=r[3]).contains(&at[1]);
         self.page_images(page).iter().rposition(|i| {
-            inside(&i.rect)
+            i.contains(at)
                 && match (i.is_form, i.object) {
                     (false, Some(_)) => true,
                     (true, Some(form)) => picture_in_form(&editor.cos, form).is_some(),

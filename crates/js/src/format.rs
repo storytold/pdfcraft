@@ -1,6 +1,6 @@
 use super::host::{arg, error, s, text};
 use super::run::{MAX_PRINTF_OUTPUT_BYTES, MAX_PRINTF_WIDTH_PRECISION};
-use super::*;
+use super::{Context, JsDate, JsResult, JsString, JsValue, formcalc};
 
 /// `util.printf(cFormat, …)`: `%[,n][+ 0#][width][.prec](d|f|s|x)`, where `,0` groups
 /// thousands with commas (the default), `,1` doesn't, `,2` uses `.` and `,`, `,3` uses `.`

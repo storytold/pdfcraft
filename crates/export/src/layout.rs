@@ -1,4 +1,4 @@
-use super::*;
+use std::collections::HashMap;
 
 /// A paragraph of a page.
 #[derive(Clone, Debug, PartialEq)]

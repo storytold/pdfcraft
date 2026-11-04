@@ -1,11 +1,18 @@
-use super::*;
+use super::{Args, Automation, Result, ToolError, Value, child, failed, json, unused, write_atomic};
 
 impl Automation {
     pub(crate) fn doc_export_office(&self, a: &Args) -> Result<Value> {
         let path = self.resolve(a.str("path")?, true)?;
         let ext = path.extension().map(|e| e.to_string_lossy().into_owned()).unwrap_or_default();
         let format = pdfcraft_engine::compare::OfficeFormat::from_extension(&ext)
-            .ok_or_else(|| ToolError::InvalidArgs(format!("unsupported extension {ext:?} (docx, pptx, html or rtf)")))?;
+            .ok_or_else(|| ToolError::InvalidArgs(format!("unsupported extension {ext:?} (docx, pptx, html, rtf or md)")))?;
+        let html_mode = a.opt_str("html_mode")?.unwrap_or("rich");
+        let format = match (format, html_mode) {
+            (pdfcraft_engine::compare::OfficeFormat::Html, "rich") => pdfcraft_engine::compare::OfficeFormat::Html,
+            (pdfcraft_engine::compare::OfficeFormat::Html, "simple") => pdfcraft_engine::compare::OfficeFormat::HtmlSimple,
+            (_, "rich") => format,
+            (_, _) => return Err(ToolError::InvalidArgs("html_mode is only available for HTML exports (rich or simple)".into())),
+        };
         let export = self.doc_to_copy(a)?.export_office_checked(format);
         write_atomic(&path, &export.bytes)?;
         // Text left out to keep a hostile page bounded is said, not silent (#3120).
@@ -15,7 +22,7 @@ impl Automation {
         if !export.truncated_pages.is_empty() {
             use pdfcraft_engine::compare::{MAX_FORM_DEPTH, MAX_FORM_VISITS};
             out["warnings"] = json!([format!(
-                "forms nested more than {MAX_FORM_DEPTH} deep, or past the first {MAX_FORM_VISITS} forms of a page (forms the page draws itself count too), were left out on the pages in truncated_pages: their text and images are missing from the export, although the viewer may still show them"
+                "pictures past what one export may hold or decode, or forms nested more than {MAX_FORM_DEPTH} deep, or past the first {MAX_FORM_VISITS} forms of a page (forms the page draws itself count too), were left out on the pages in truncated_pages: their text and images are missing from the export, although the viewer may still show them"
             )]);
         }
         Ok(out)

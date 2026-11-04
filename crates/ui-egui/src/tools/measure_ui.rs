@@ -1,5 +1,5 @@
 //! Measure objects: page-space clicks, live readings and persistent drawing scales.
-use crate::{LeftPanel, PdfCraftApp, QuickTool, canvas::DocView, theme::Tokens, widgets};
+use crate::{LeftPanel, PdfCraftApp, QuickTool, canvas::DocView, page_cursor::Layer, theme::Tokens, widgets};
 use egui::{Color32, Pos2, Stroke};
 use pdfcraft_engine::{
     Document, Edit, Style,
@@ -166,6 +166,42 @@ impl MeasureView {
         self.scale = None;
     }
 }
+/// Snaps `point` to the page's drawn geometry (endpoints, midpoints, intersections, paths),
+/// recording in `state` why it couldn't when the content is too complex or unreadable.
+fn snap_to_content(
+    state: &mut MeasureView,
+    doc: &Document,
+    page: usize,
+    view_xy: [f32; 2],
+    pixels_per_unit: f32,
+    point: Point,
+) -> Option<(Point, measure::snap::SnapKind)> {
+    if state.paths.as_ref().is_none_or(|(p, g, _)| *p != page || *g != doc.edit_generation()) {
+        state.paths = Some((page, doc.edit_generation(), doc.measurement_paths(page)));
+    }
+    if let Some((_, _, Err(e))) = &state.paths {
+        state.error = Some(e.clone());
+    }
+    if let Some((_, _, Ok(paths))) = &state.paths {
+        if paths.truncated {
+            state.error = Some(tl!("This drawing exceeds the snapping limit; only the first paths are used.").into());
+        } else if paths.unreadable > 0 {
+            state.error = Some(tl!("Some page content couldn't be read; snapping uses the rest.").into());
+        }
+        let tolerance = doc
+            .measurement_to_user(page, [f64::from(view_xy[0]) + state.sensitivity / f64::from(pixels_per_unit), f64::from(view_xy[1])])
+            .map(|p| measure::distance(point, p))
+            .unwrap_or(state.sensitivity / f64::from(pixels_per_unit));
+        if state.snaps.intersections && paths.intersection_limited(point, tolerance) {
+            state.error = Some(tl!("This area has too many overlapping paths; intersection snapping is limited.").into());
+        }
+        if let Ok(Some(hit)) = paths.snap(point, tolerance, state.snaps) {
+            return Some((hit.point, hit.kind));
+        }
+    }
+    None
+}
+
 pub(crate) fn page_input(
     ui: &egui::Ui,
     resp: &egui::Response,
@@ -200,36 +236,17 @@ pub(crate) fn page_input(
     let mut hover = None;
     let mut snap = None;
     if let Some(pos) = pos {
-        ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+        view.cursor.claim(Layer::ToolArea, egui::CursorIcon::Crosshair);
         let (vx, vy) = xf.screen_to_view(pos);
         let [x, y] = info.view_to_user(vx, vy);
         let mut point = [f64::from(x), f64::from(y)];
+        let mut snapped = None;
         if state.snap_enabled {
-            if state.paths.as_ref().is_none_or(|(p, g, _)| *p != page || *g != doc.edit_generation()) {
-                state.paths = Some((page, doc.edit_generation(), doc.measurement_paths(page)));
-            }
-            let pixels_per_unit = xf.zoom().max(1e-6);
-            if let Some((_, _, Err(e))) = &state.paths {
-                state.error = Some(e.clone());
-            }
-            if let Some((_, _, Ok(paths))) = &state.paths {
-                if paths.truncated {
-                    state.error = Some(tl!("This drawing exceeds the snapping limit; only the first paths are used.").into());
-                } else if paths.unreadable > 0 {
-                    state.error = Some(tl!("Some page content couldn't be read; snapping uses the rest.").into());
-                }
-                let tolerance = doc
-                    .measurement_to_user(page, [f64::from(vx) + state.sensitivity / f64::from(pixels_per_unit), f64::from(vy)])
-                    .map(|p| measure::distance(point, p))
-                    .unwrap_or(state.sensitivity / f64::from(pixels_per_unit));
-                if state.snaps.intersections && paths.intersection_limited(point, tolerance) {
-                    state.error = Some(tl!("This area has too many overlapping paths; intersection snapping is limited.").into());
-                }
-                if let Ok(Some(hit)) = paths.snap(point, tolerance, state.snaps) {
-                    point = hit.point;
-                    snap = Some(hit.kind);
-                }
-            }
+            snapped = snap_to_content(state, doc, page, [vx, vy], xf.zoom().max(1e-6), point);
+        }
+        if let Some((snapped_point, kind)) = snapped {
+            point = snapped_point;
+            snap = Some(kind);
         }
         if ui.input(|i| i.modifiers.shift)
             && let Some(last) = state.points.last()
