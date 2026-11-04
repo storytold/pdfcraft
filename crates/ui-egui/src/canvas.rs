@@ -2942,10 +2942,24 @@ fn scroll_prefetch(view: &DocView, visible_now: &[usize]) -> Vec<usize> {
         return Vec::new();
     }
     let n = PREFETCH_ROWS * if view.layout == PageLayout::Single { 1 } else { 2 };
+    // At high zoom the other page of a two-page row can be off to the side and not on screen, so
+    // the rows are counted from the edges of the rows shown, and that page is prefetched too.
     match (view.scroll_dir, visible_now.iter().min(), visible_now.iter().max()) {
-        (1, _, Some(&last)) => (last.saturating_add(1)..=last.saturating_add(n)).collect(),
-        (-1, Some(&first), _) => (first.saturating_sub(n)..first).rev().collect(),
+        (1, _, Some(&last)) => (last.saturating_add(1)..=row_bounds(view, last).1.saturating_add(n)).collect(),
+        (-1, Some(&first), _) => (row_bounds(view, first).0.saturating_sub(n)..first).rev().collect(),
         _ => Vec::new(),
+    }
+}
+
+/// The first and last page of the row that page `i` is in, paired as [`shown_row`] pairs them.
+fn row_bounds(view: &DocView, i: usize) -> (usize, usize) {
+    match view.layout {
+        PageLayout::Single => (i, i),
+        PageLayout::TwoUp if view.cover && i == 0 => (0, 0),
+        PageLayout::TwoUp => {
+            let first = view.spread_first(i);
+            (first, first.saturating_add(1))
+        }
     }
 }
 
