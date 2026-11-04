@@ -94,16 +94,16 @@ pub(crate) struct Collected {
     pub(crate) held: Option<Arc<Object>>,
 }
 
-/// An annotation's `/Subtype`, followed through a reference when it is given by one (the
-/// renderer does so), and whether it was. Read here for every decision redaction makes about
-/// what an annotation is, so the page and redaction never classify one differently. #5849 also
-/// follows it; keeping the reading in one helper keeps that change local.
 /// Whether `d`'s `/Subtype` is a reference that can't be followed to a value (a cycle, or a chain past
 /// [`Document::resolve`]'s bound): its type is unknown, which redaction never reads as "not a mark".
 pub(crate) fn subtype_unresolved(doc: &Document, d: &Dict) -> bool {
     matches!(d.get(b"Subtype"), Some(r @ Object::Ref(_)) if matches!(&*doc.resolve(r), Object::Ref(_)))
 }
 
+/// An annotation's `/Subtype`, followed through a reference when it is given by one (the
+/// renderer does so), and whether it was. Read here for every decision redaction makes about
+/// what an annotation is, so the page and redaction never classify one differently. #5849 also
+/// follows it; keeping the reading in one helper keeps that change local.
 pub(crate) fn subtype_of(doc: &Document, d: &Dict) -> (Option<Vec<u8>>, bool) {
     match d.get(b"Subtype") {
         Some(Object::Name(n)) => (Some(n.clone()), false),

@@ -4299,3 +4299,27 @@ fn what_cant_be_followed_is_refused_never_skipped() {
     assert_eq!(mark_previews(&doc, None), Err(MarkScanError::UnresolvedAnnotations));
     assert_eq!(apply(&mut doc, None), Err(RedactError::MarkScan(MarkScanError::UnresolvedAnnotations)));
 }
+
+/// Clear all removes what it knows to be marks, refused ones included, and leaves an entry whose
+/// type can't be read alone: it may be any annotation (a comment, with its replies).
+#[test]
+fn clearing_leaves_entries_of_unknown_type_alone() {
+    let mut doc = one_page(b"BT /F1 10 Tf 10 100 Td (AB1234CD) Tj ET", "", vec![]);
+    mark(&mut doc, 0, &[[20.0, 95.0, 40.0, 110.0]], "");
+    let shape = Shape::Note { at: [150.0, 150.0], icon: Default::default() };
+    add_annotation(
+        &mut doc,
+        &NewAnnotation { page: 0, style: Style::default_for(&shape), shape, contents: "keep".into(), author: "A".into() },
+        &Meta::default(),
+    )
+    .unwrap();
+    // The note's /Subtype: 40 references to /Text, past the bound.
+    let note = annots_of(&doc, &pdfcraft_model::pages(&doc)[0].dict)[1].as_ref().unwrap();
+    let subtype = (0..40).fold(Object::name("Text"), |v, _| Object::Ref(doc.add(v)));
+    doc.update_dict(note, |d| d.set(b"Subtype".to_vec(), subtype)).unwrap();
+    assert_eq!(mark_previews(&doc, None).unwrap()[1].areas, Err(MarkRefusal::UnresolvedType));
+    assert_eq!(clear_marks(&mut doc, None), Ok(1));
+    let left = annots_of(&doc, &pdfcraft_model::pages(&doc)[0].dict);
+    assert!(left.iter().filter_map(Object::as_ref).any(|r| r == note), "the note stays (with its pop-up)");
+    assert!(mark_previews(&doc, None).unwrap().iter().all(|p| p.areas == Err(MarkRefusal::UnresolvedType)), "only the mark went");
+}

@@ -75,7 +75,7 @@ listing reference or `/Subtype` that can't be followed: `MarkRefusal::Unresolved
 never skipped, since it may be a mark the page shows), or a page whose marks hold more than 1,048,576
 entries together. A page `/Annots` that can't be followed fails the whole scan
 (`MarkScanError::UnresolvedAnnotations`). `/Subtype` is read through a reference everywhere redaction classifies an
-annotation, and `clear_marks` removes every listed mark, refused ones included. `Report::fallbacks`
+annotation, and `clear_marks` removes every listed mark, refused ones included except entries whose type can't be read (it doesn't know they are marks). `Report::fallbacks`
 lists the marks whose areas fell back: `/Rect` used because the quads were malformed or partial, or
 an area widened to `f32`. An ordinary mark with no `/QuadPoints` is not a fallback. A refused mark makes `apply`
 fail with `RedactError::UnreadableMark` before anything changes, instead of skipping it, and

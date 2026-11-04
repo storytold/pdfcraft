@@ -859,8 +859,14 @@ fn remove_page_annotations(
 pub fn clear_marks(doc: &mut Document, pages: Option<&[usize]>) -> Result<usize, RedactError> {
     // Every mark the collector lists on those pages, ready or refused (a mark that can't be applied
     // can still be removed), classified as applying classifies it; a scan that can't finish is an
-    // error, not "nothing to clear". A mark written in place has no object to remove, as before.
-    let targets: HashSet<ObjRef> = preview::collect(doc, pages)?.into_iter().filter_map(|c| c.preview.object).collect();
+    // error, not "nothing to clear". A mark written in place has no object to remove, as before. An
+    // entry whose type can't be read is left alone: it may be any annotation (a comment with its
+    // replies), and Clear all removes only what it knows to be marks.
+    let targets: HashSet<ObjRef> = preview::collect(doc, pages)?
+        .into_iter()
+        .filter(|c| c.preview.areas != Err(MarkRefusal::UnresolvedType))
+        .filter_map(|c| c.preview.object)
+        .collect();
     if targets.is_empty() {
         return Err(RedactError::NothingToApply);
     }
