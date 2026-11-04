@@ -337,6 +337,7 @@ pub(crate) fn decode(v: &serde_json::Value, saved_next_id: Option<u64>) -> (Vec<
     let mut repaired = Vec::with_capacity(stamps.len());
     for mut stamp in stamps {
         if stamp.id == 0 || ids.contains(&stamp.id) {
+            let old_id = stamp.id;
             let replacement = loop {
                 let Ok(candidate) = u64::try_from(fallback) else { break None };
                 fallback = fallback.saturating_add(1);
@@ -344,7 +345,11 @@ pub(crate) fn decode(v: &serde_json::Value, saved_next_id: Option<u64>) -> (Vec<
                     break Some(candidate);
                 }
             };
-            let Some(id) = replacement else { continue };
+            let Some(id) = replacement else {
+                log::warn!("custom stamp with unusable identity {old_id} could not be restored");
+                continue;
+            };
+            log::warn!("custom stamp identity {old_id} was unusable; assigned {id}");
             stamp.id = id;
         }
         ids.insert(stamp.id);
