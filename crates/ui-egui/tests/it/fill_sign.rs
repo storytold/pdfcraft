@@ -483,6 +483,23 @@ fn typed_signature_style_survives_preferences_and_editing() {
 }
 
 #[test]
+fn restored_typed_signatures_reject_missing_glyphs_and_overlong_text() {
+    let mut unsupported = PdfCraftApp::new();
+    unsupported.restore(r#"{"signature_text":"张","signature_style":"print"}"#);
+    assert_eq!(unsupported.signature, None);
+
+    let too_long = "A".repeat(pdfcraft_engine::MAX_SIGNATURE_CHARS + 1);
+    let mut overlong = PdfCraftApp::new();
+    overlong.restore(&serde_json::json!({"signature_text": too_long}).to_string());
+    assert_eq!(overlong.signature, None);
+
+    let initials = SavedSig::TypedStyle { text: "张".into(), style: pdfcraft_engine::SignatureStyle::Print };
+    let mut invalid_initials = PdfCraftApp::new();
+    invalid_initials.restore(&serde_json::json!({"initials": initials}).to_string());
+    assert_eq!(invalid_initials.initials, None);
+}
+
+#[test]
 fn undo_button_and_ctrl_z_take_back_one_drawn_stroke_at_a_time() {
     let mut h = harness();
     let drawn = SavedSig::Drawn(vec![vec![[0.1, 0.1], [0.5, 0.2]], vec![[0.2, 0.3], [0.6, 0.1]], vec![[0.7, 0.2], [0.9, 0.3]]]);

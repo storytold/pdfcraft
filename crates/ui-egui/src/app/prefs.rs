@@ -384,18 +384,33 @@ impl PdfCraftApp {
         {
             self.signature = Some(fill_sign::SavedSig::Drawn(s));
         }
-        if let Some(t) = v["signature_text"].as_str().filter(|t| !t.trim().is_empty()) {
+        if let Some(t) = v["signature_text"].as_str().filter(|t| {
+            !t.trim().is_empty() && t.chars().take(pdfcraft_engine::MAX_SIGNATURE_CHARS + 1).count() <= pdfcraft_engine::MAX_SIGNATURE_CHARS
+        }) {
             let style = serde_json::from_value(v["signature_style"].clone()).unwrap_or_default();
-            self.signature = Some(match style {
-                pdfcraft_engine::SignatureStyle::Script => fill_sign::SavedSig::Typed(t.to_string()),
-                style => fill_sign::SavedSig::TypedStyle { text: t.to_string(), style },
-            });
+            if pdfcraft_engine::signature_missing(t, style).is_none() {
+                self.signature = Some(match style {
+                    pdfcraft_engine::SignatureStyle::Script => fill_sign::SavedSig::Typed(t.to_string()),
+                    style => fill_sign::SavedSig::TypedStyle { text: t.to_string(), style },
+                });
+            }
         }
         if let Ok(s @ fill_sign::SavedSig::Image(_)) = serde_json::from_value::<fill_sign::SavedSig>(v["signature_image"].clone()) {
             self.signature = Some(s);
         }
         if let Ok(i) = serde_json::from_value::<fill_sign::SavedSig>(v["initials"].clone()) {
-            self.initials = Some(i);
+            let (text, style) = match &i {
+                fill_sign::SavedSig::Typed(text) => Some((text.as_str(), pdfcraft_engine::SignatureStyle::Script)),
+                fill_sign::SavedSig::TypedStyle { text, style } => Some((text.as_str(), *style)),
+                _ => None,
+            }
+            .unwrap_or(("", pdfcraft_engine::SignatureStyle::Script));
+            if text.is_empty()
+                || (text.chars().take(pdfcraft_engine::MAX_SIGNATURE_CHARS + 1).count() <= pdfcraft_engine::MAX_SIGNATURE_CHARS
+                    && pdfcraft_engine::signature_missing(text, style).is_none())
+            {
+                self.initials = Some(i);
+            }
         }
         // An unreadable choice (a damaged image) falls back to the name.
         self.sign_graphic = serde_json::from_value(v["sign_graphic"].clone()).unwrap_or_default();

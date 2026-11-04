@@ -3940,12 +3940,10 @@ fn fill_sign_typed_signature_style_reaches_the_placed_appearance() {
         })
         .collect();
     assert_eq!(saved_widths, widths, "both chosen outlines survive save and reopen");
-    assert!(
-        matches!(
-            a.call("fill_sign_add", &json!({ "doc": doc, "page": 1, "type": "signature", "at": [20, 240], "text": "Ada", "style": "cursive" })),
-            Err(ToolError::InvalidArgs(message)) if message.contains("script") && message.contains("print")
-        )
-    );
+    assert!(matches!(
+        a.call("fill_sign_add", &json!({ "doc": doc, "page": 1, "type": "signature", "at": [20, 240], "text": "Ada", "style": "cursive" })),
+        Err(ToolError::InvalidArgs(message)) if message.contains("script") && message.contains("print")
+    ));
     assert!(matches!(
         a.call("fill_sign_add", &json!({ "doc": doc, "page": 1, "type": "text", "at": [20, 260], "text": "Ada", "style": "print" })),
         Err(ToolError::InvalidArgs(message)) if message.contains("only for a typed signature")

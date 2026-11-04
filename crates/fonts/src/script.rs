@@ -70,6 +70,7 @@ struct Flatten {
     /// Horizontal shear applied to every point (x += slant × y), for slanted fallback glyphs.
     slant: f64,
     dx: f64,
+    dy: f64,
     points: usize,
     too_complex: bool,
     max_points: usize,
@@ -77,16 +78,16 @@ struct Flatten {
 
 impl Flatten {
     fn new(scale: f64) -> Self {
-        Self { contours: Vec::new(), cur: Vec::new(), scale, slant: 0.0, dx: 0.0, points: 0, too_complex: false, max_points: 4096 }
+        Self { contours: Vec::new(), cur: Vec::new(), scale, slant: 0.0, dx: 0.0, dy: 0.0, points: 0, too_complex: false, max_points: 4096 }
     }
 
     fn pt(&self, x: f32, y: f32) -> [f64; 2] {
         let (x, y) = (x as f64 * self.scale, y as f64 * self.scale);
-        [self.dx + x + self.slant * y, y]
+        [self.dx + x + self.slant * y, self.dy + y]
     }
 
     fn last(&self) -> [f64; 2] {
-        self.cur.last().copied().unwrap_or([self.dx, 0.0])
+        self.cur.last().copied().unwrap_or([self.dx, self.dy])
     }
 
     fn push(&mut self, p: [f64; 2]) {
@@ -288,25 +289,22 @@ pub fn signature_outline(text: &str, style: SignatureStyle) -> ScriptOutline {
     let loc = LocationRef::default();
     let metrics = font.metrics(Size::unscaled(), loc);
     let scale = 1.0 / metrics.units_per_em.max(1) as f64;
-    let charmap = font.charmap();
+    let Ok(shaped) = crate::source_shaping::shape(INTER_REGULAR, text) else { return ScriptOutline::default() };
     let glyphs = font.outline_glyphs();
-    let advances = font.glyph_metrics(Size::unscaled(), loc);
     let mut pen = Flatten::new(scale);
     pen.max_points = 262_144;
-    for ch in text.chars() {
-        if let Some(gid) = charmap.map(ch) {
-            if let Some(g) = glyphs.get(gid) {
-                let _ = g.draw(DrawSettings::unhinted(Size::unscaled(), loc), &mut pen);
-                pen.close();
-            }
-            pen.dx += advances.advance_width(gid).unwrap_or(0.0) as f64 * scale;
+    for glyph in shaped.glyphs {
+        (pen.dx, pen.dy) = (glyph.position[0], glyph.position[1]);
+        if let Some(g) = glyphs.get(glyph.id) {
+            let _ = g.draw(DrawSettings::unhinted(Size::unscaled(), loc), &mut pen);
+            pen.close();
         }
     }
     pen.close();
     if pen.too_complex {
         return ScriptOutline::default();
     }
-    ScriptOutline { contours: pen.contours, width: pen.dx, ascent: metrics.ascent as f64 * scale, descent: metrics.descent as f64 * scale }
+    ScriptOutline { contours: pen.contours, width: shaped.advance, ascent: metrics.ascent as f64 * scale, descent: metrics.descent as f64 * scale }
 }
 
 #[cfg(test)]
@@ -365,6 +363,14 @@ mod tests {
         assert_ne!(script.contours, print.contours);
         assert_eq!(super::signature_missing("Саша", super::SignatureStyle::Print), None);
         assert_eq!(super::signature_missing("张三", super::SignatureStyle::Print), Some('张'));
+    }
+
+    #[test]
+    fn print_signatures_shape_decomposed_marks_with_their_base() {
+        let decomposed = super::signature_outline("Jose\u{301}", super::SignatureStyle::Print);
+        let composed = super::signature_outline("José", super::SignatureStyle::Print);
+        assert_eq!(decomposed.contours, composed.contours);
+        assert_eq!(decomposed.width, composed.width);
     }
 
     #[test]
