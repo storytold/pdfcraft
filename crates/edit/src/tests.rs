@@ -571,6 +571,15 @@ fn a_staggered_grid_with_empty_rows_is_counted_by_its_copies_not_its_rows() {
 }
 
 #[test]
+fn a_grid_of_over_two_thousand_rows_with_a_thousand_copies_is_drawn() {
+    // 2,001 rows, the odd ones empty: exactly 1,000 copies, and one more row of copies is too many.
+    let rep = Repeat { spacing: [1000.0, 0.5], stagger: true };
+    let centres = tile_centres((100.0, 3000.0), (50.0, 1501.25), (10.0, 1.0), rep).unwrap();
+    assert_eq!(centres.len(), MAX_REPEATS);
+    assert!(matches!(tile_centres((100.0, 3002.0), (50.0, 1501.25), (10.0, 1.0), rep), Err(EditError::Invalid(_))));
+}
+
+#[test]
 fn a_repeat_offset_is_held_to_its_own_limit_not_the_page_centre_plus_it() {
     let wm = |offset: [f64; 2]| Watermark {
         text: "AB".into(),

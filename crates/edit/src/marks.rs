@@ -279,13 +279,7 @@ pub(crate) fn tile_centres(page: (f64, f64), anchor: (f64, f64), size: (f64, f64
     // The rows (and, for each, the columns) whose copies touch the page.
     let first_row = ((-bh / 2.0 - anchor.1) / py).ceil();
     let last_row = ((page.1 + bh / 2.0 - anchor.1) / py).floor();
-    let rows = last_row - first_row + 1.0;
-    // Staggered rows can be empty in turn, so rows alone are not the count; this only keeps the
-    // loops below short, and the copies are counted in them.
-    if rows > (2 * MAX_REPEATS) as f64 {
-        return Err(too_many());
-    }
-    // Both ends are within a few million after the checks above, so they fit an i64.
+    // Both ends are within a few hundred million after the checks above, so they fit an i64.
     let (first_row, last_row) = (first_row as i64, last_row as i64);
     let columns = |row: i64| -> (i64, i64) {
         let shift = if rep.stagger && row.rem_euclid(2) == 1 { px / 2.0 } else { 0.0 };
@@ -293,15 +287,26 @@ pub(crate) fn tile_centres(page: (f64, f64), anchor: (f64, f64), size: (f64, f64
         let last = ((page.0 + bw / 2.0 - anchor.0 - shift) / px).floor();
         (first as i64, last as i64)
     };
-    let mut total = 0usize;
-    for row in first_row..=last_row {
+    let in_row = |row: i64| -> usize {
         let (a, b) = columns(row);
-        total = total.saturating_add(usize::try_from((b - a + 1).max(0)).unwrap_or(usize::MAX));
-        if total > MAX_REPEATS {
-            return Err(too_many());
-        }
+        usize::try_from((b - a + 1).max(0)).unwrap_or(usize::MAX)
+    };
+    // Rows come in at most two kinds (shifted or not), so the copies are counted from the number
+    // of rows of each kind: the rows themselves are not the count, since staggered rows can be
+    // empty in turn, and there may be far more rows than copies.
+    let rows = usize::try_from((last_row - first_row + 1).max(0)).unwrap_or(usize::MAX);
+    let odd_rows = usize::try_from((last_row + 1).div_euclid(2) - first_row.div_euclid(2)).unwrap_or(0).min(rows);
+    let (even, odd) = (in_row(0), if rep.stagger { in_row(1) } else { in_row(0) });
+    let total = (rows - odd_rows).saturating_mul(even).saturating_add(odd_rows.saturating_mul(odd));
+    if total > MAX_REPEATS {
+        return Err(too_many());
     }
     let mut centres = Vec::with_capacity(total);
+    if total == 0 {
+        return Ok(centres);
+    }
+    // Some kind of row holds a copy and the kinds alternate, so there are at most twice as many
+    // rows as copies and this loop is as short as the cap.
     for row in first_row..=last_row {
         let shift = if rep.stagger && row.rem_euclid(2) == 1 { px / 2.0 } else { 0.0 };
         let (a, b) = columns(row);
