@@ -76,8 +76,9 @@ impl Scripts for NoScripts {
 
 /// Run the Keystroke (commit) and Validate scripts for a new text value. Returns the value to
 /// store, or why it is rejected.
-pub(crate) fn accept(doc: &mut Document, f: &Field, value: &str, scripts: &mut dyn Scripts) -> Result<String, FormError> {
+pub(crate) fn accept(doc: &mut Document, f: &Field, value: &str, scripts: &mut dyn Scripts) -> Result<(String, bool), FormError> {
     let mut v = value.to_string();
+    let mut refresh_field = false;
     for (event, script, default) in [
         (FieldEvent::Keystroke, &f.actions.scripts.keystroke, "The value entered does not match the format of the field"),
         (FieldEvent::Validate, &f.actions.scripts.validate, "The value entered is not valid for the field"),
@@ -85,13 +86,14 @@ pub(crate) fn accept(doc: &mut Document, f: &Field, value: &str, scripts: &mut d
         let Some(js) = script else { continue };
         let all = fields(doc);
         let r = scripts.run(event, js, f, &v, &all, doc);
+        refresh_field |= r.changes.iter().any(|change| change.name == f.name);
         apply_changes(doc, &r.changes, &f.name)?;
         if !r.rc {
             return Err(FormError::Invalid(r.message.unwrap_or_else(|| format!("{default} [ {} ]", f.name))));
         }
         v = r.value;
     }
-    Ok(v)
+    Ok((v, refresh_field))
 }
 
 /// The text a custom Format script shows for `value`, if the field has one.
