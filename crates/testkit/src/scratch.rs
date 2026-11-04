@@ -23,23 +23,37 @@ pub struct ScratchDir {
     path: PathBuf,
 }
 
+/// The count that makes each [`ScratchDir`] of a process a folder of its own.
+static NEXT: AtomicU64 = AtomicU64::new(0);
+
+/// How many names [`ScratchDir::new`] tries before it gives up: each name taken is a folder
+/// left by an earlier process with the same id, so a handful is already unusual.
+const ATTEMPTS: usize = 1024;
+
 impl ScratchDir {
     /// A folder named `pdfcraft-<name>-<process id>-<n>`. `name` says which test made it, in a
     /// listing of the temporary directory; the process id and a count kept per process make it a
     /// folder of its own, so tests running at the same time, as threads or as processes, never
-    /// share one.
+    /// share one. `name` is one path component: no separators.
+    ///
+    /// The folder is created here, and a name that is already taken is skipped, never reused or
+    /// emptied: process ids come round again, so the folder may be one a killed run left behind,
+    /// or one a live process with the same id made (containers with their own process ids can
+    /// share a temporary directory). Either way it isn't this test's to delete.
     pub fn new(name: &str) -> std::io::Result<Self> {
-        static NEXT: AtomicU64 = AtomicU64::new(0);
-        let n = NEXT.fetch_add(1, Ordering::Relaxed);
-        let path = std::env::temp_dir().join(format!("pdfcraft-{name}-{}-{n}", std::process::id()));
-        // Process ids come round again, so a run that was killed before its drops ran can have
-        // left a folder of this name: start empty, or fail rather than hand out its contents.
-        match std::fs::remove_dir_all(&path) {
-            Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e),
-            _ => {}
+        let temp = std::env::temp_dir();
+        for _ in 0..ATTEMPTS {
+            let n = NEXT.fetch_add(1, Ordering::Relaxed);
+            let path = temp.join(format!("pdfcraft-{name}-{}-{n}", std::process::id()));
+            // `create_dir`, not `create_dir_all`: it fails when the folder exists, in one step,
+            // so two processes can never both take the same name.
+            match std::fs::create_dir(&path) {
+                Ok(()) => return Ok(ScratchDir { path }),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(e) => return Err(e),
+            }
         }
-        std::fs::create_dir_all(&path)?;
-        Ok(ScratchDir { path })
+        Err(std::io::Error::new(std::io::ErrorKind::AlreadyExists, format!("every scratch folder name tried for {name:?} is taken")))
     }
 
     /// The folder.
@@ -150,6 +164,30 @@ mod tests {
         std::fs::write(a.join("x"), b"a").unwrap();
         drop(b);
         assert_eq!(std::fs::read(a.join("x")).unwrap(), b"a", "dropping one leaves the other's files");
+    }
+
+    /// A folder with the next name already exists (left by an earlier process with the same id,
+    /// or made by a live one): it is skipped, and what it holds is left alone.
+    #[test]
+    fn a_taken_name_is_skipped_and_its_folder_left_alone() {
+        let name = "testkit-taken";
+        let next = NEXT.load(Ordering::Relaxed);
+        // Other tests in this process can take names meanwhile, so plant a run of them. Each is
+        // held as a `ScratchDir`, so it is removed at the end even when an assertion fails.
+        let planted: Vec<ScratchDir> = (next..next + 16)
+            .map(|n| ScratchDir { path: std::env::temp_dir().join(format!("pdfcraft-{name}-{}-{n}", std::process::id())) })
+            .collect();
+        for folder in &planted {
+            std::fs::create_dir_all(folder).unwrap();
+            std::fs::write(folder.join("theirs.pdf"), b"%PDF").unwrap();
+        }
+        let dir = ScratchDir::new(name).unwrap();
+        assert!(planted.iter().all(|p| p.path() != dir.path()), "{:?} is a new folder", dir.path());
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0, "and starts empty");
+        drop(dir);
+        for folder in &planted {
+            assert_eq!(std::fs::read(folder.join("theirs.pdf")).unwrap(), b"%PDF", "{:?} kept its file", folder.path());
+        }
     }
 
     #[test]
