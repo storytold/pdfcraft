@@ -13,19 +13,41 @@ const MAX_COPY_PIXELS: u64 = 64_000_000;
 /// How deep Form artwork is searched for its picture.
 const MAX_FORM_DEPTH: usize = 12;
 
+/// A picture on a page, with its index in [`Document::page_images`].
+pub type PagePicture = (usize, pdfcraft_edit::PageImage);
+
+/// The topmost of `pictures` under user-space point `at`.
+pub fn picture_at(pictures: &[PagePicture], at: [f64; 2]) -> Option<&PagePicture> {
+    pictures.iter().rev().find(|(_, image)| image.contains(at))
+}
+
+/// The pictures on `page`, bottom first: raster images, and Form artwork that holds one.
+fn pictures(cos: &Cos, page: usize) -> Vec<PagePicture> {
+    let images = pdfcraft_edit::page_images(cos, page).unwrap_or_default();
+    images
+        .into_iter()
+        .enumerate()
+        .filter(|(_, i)| match (i.is_form, i.object) {
+            (false, Some(_)) => true,
+            (true, Some(form)) => picture_in_form(cos, form).is_some(),
+            _ => false,
+        })
+        .collect()
+}
+
 impl Document {
     /// The topmost picture on `page` under user-space point `at`, as its index in
     /// [`Document::page_images`]: a raster image, or Form artwork that holds one.
     pub fn page_image_at(&self, page: usize, at: [f64; 2]) -> Option<usize> {
         let editor = self.editor.as_ref()?;
-        self.page_images(page).iter().rposition(|i| {
-            i.contains(at)
-                && match (i.is_form, i.object) {
-                    (false, Some(_)) => true,
-                    (true, Some(form)) => picture_in_form(&editor.cos, form).is_some(),
-                    _ => false,
-                }
-        })
+        picture_at(&pictures(&editor.cos, page), at).map(|(index, _)| *index)
+    }
+
+    /// Work that lists the pictures on `page`, for another thread: it reads every drawing operator
+    /// on the page, seconds on a dense one. Look a point up with [`picture_at`].
+    pub fn page_pictures_job(&self, page: usize) -> Option<impl FnOnce() -> Vec<PagePicture> + Send + 'static> {
+        let cos = self.editor.as_ref()?.cos.clone();
+        Some(move || crate::guard(|| pictures(&cos, page)).unwrap_or_default())
     }
 
     /// Copy Image in Original Format: picture `index` on `page` as a file (extension, bytes):
