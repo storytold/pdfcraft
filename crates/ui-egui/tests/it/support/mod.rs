@@ -54,13 +54,20 @@ pub fn wait_until(h: &mut Harness<'static, PdfCraftApp>, what: &str, ready: impl
 /// Open the in-window menu bar's `title` menu (File, Edit, View…).
 pub fn open_menu(h: &mut Harness<'static, PdfCraftApp>, title: &str) {
     use egui_kittest::kittest::Queryable;
-    if h.query_by(|n| n.role() == egui::accesskit::Role::MenuItem && n.label().as_deref() == Some(title)).is_none()
-        && let Some(menu) = h.query_by(|n| n.label().as_deref() == Some("Menu"))
-    {
-        menu.click();
-        h.run_steps(2);
+    let menu_title_matches = |l: &str| l == title || l.starts_with(title);
+    if h.query_by(|n| n.role() == egui::accesskit::Role::MenuItem && n.label().is_some_and(|l| menu_title_matches(&l))).is_none() {
+        let menu_label = pdfcraft_ui_egui::i18n::t("Menu");
+        let menu_btn = h
+            .query_by(|n| {
+                n.role() == egui::accesskit::Role::MenuItem && n.label().is_some_and(|l| l == "Menu" || l == menu_label || l.starts_with(menu_label))
+            })
+            .or_else(|| h.query_by(|n| n.role() == egui::accesskit::Role::MenuItem));
+        if let Some(menu) = menu_btn {
+            menu.click();
+            h.run_steps(2);
+        }
     }
-    h.get_by(|n| n.role() == egui::accesskit::Role::MenuItem && n.label().as_deref() == Some(title)).click();
+    h.get_by(|n| n.role() == egui::accesskit::Role::MenuItem && n.label().is_some_and(|l| menu_title_matches(&l))).click();
     h.run_steps(2);
 }
 
