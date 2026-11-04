@@ -371,7 +371,9 @@ fn tags_panel_renames_a_structure_class() {
     let new = h.get_by_role_and_label(Role::TextInput, "New class name");
     new.focus();
     new.type_text("Renamed");
-    h.run_steps(1);
+    h.run_steps(3);
+    assert_eq!(old.value().as_deref(), Some("Old"));
+    assert_eq!(new.value().as_deref(), Some("Renamed"));
     h.get_by_label("Rename structure class").click();
     h.run_steps(3);
     let doc = h.state().session.get(h.state().views[0].id).unwrap();
