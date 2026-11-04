@@ -1,8 +1,8 @@
 //! Export a PDF ▸ Image ▸ Export all images, and Edit ▸ Save image as: the images that pages
 //! use, as files. JPEG images are written unchanged; other images, and JPEG images with
 //! transparency or with CMYK samples a viewer would read inverted, are decoded and written as PNG with their soft mask, stencil mask or colour
-//! key as alpha. Images PdfCraft can't decode yet (JPEG 2000, separations) are
-//! reported, never silently left out.
+//! key as alpha. JPEG 2000 images are decoded and written as PNG too. Images PdfCraft can't decode
+//! yet (separations, JPEG 2000 behind other filters) are reported, never silently left out.
 
 use std::collections::HashSet;
 
@@ -146,8 +146,9 @@ fn decoded(doc: &Document, s: &Stream, budget: &mut ImageBudget) -> Result<Vec<u
 fn image(doc: &Document, s: &Stream, budget: &mut ImageBudget) -> Result<(&'static str, Vec<u8>), String> {
     let f = filters(s);
     let jpeg = matches!(f.last().map(Vec::as_slice), Some(b"DCTDecode" | b"DCT")) && f.len() == 1;
+    let jpx = matches!(f.last().map(Vec::as_slice), Some(b"JPXDecode")) && f.len() == 1;
     match f.last().map(Vec::as_slice) {
-        Some(b"JPXDecode") => return Err("JPEG 2000 images can't be exported yet".into()),
+        Some(b"JPXDecode") if !jpx => return Err("JPEG 2000 images inside other filters can't be exported yet".into()),
         Some(b"DCTDecode" | b"DCT") if !jpeg => return Err("JPEG images inside other filters can't be exported yet".into()),
         _ => {}
     }
@@ -161,6 +162,9 @@ fn image(doc: &Document, s: &Stream, budget: &mut ImageBudget) -> Result<(&'stat
         };
     };
     let mask = s.dict.get(b"ImageMask").is_some_and(|m| matches!(&*doc.resolve(m), Object::Bool(true)));
+    if jpx && mask {
+        return Err("JPEG 2000 stencil masks can't be exported yet".into());
+    }
     // A stencil mask (`ImageMask true`) has no /SMask or /Mask of its own (8.9.6.2).
     let refused = budget.refused();
     let mut alpha = if mask { None } else { soft_mask(doc, s, w, h, budget).or_else(|| stencil_mask(doc, s, w, h, budget)) };
@@ -188,8 +192,25 @@ fn image(doc: &Document, s: &Stream, budget: &mut ImageBudget) -> Result<(&'stat
     if jpeg && alpha.is_none() && key.is_none() && !as_is_negative {
         return as_is();
     }
-    let mut space = if mask { Space::Gray } else { space(doc, s.dict.get(b"ColorSpace"))? };
-    let (samples, bpc) = if jpeg {
+    // A JPEG 2000 image with no /ColorSpace has the colours its own header gives (7.4.9), which
+    // decoding it reads.
+    let own_colours = jpx && s.dict.get(b"ColorSpace").is_none();
+    let mut space = if mask || own_colours { Space::Gray } else { space(doc, s.dict.get(b"ColorSpace"))? };
+    let (samples, bpc) = if jpx {
+        let components = if own_colours { 4 } else { space.components() as u64 };
+        if !budget.pay_jpeg((w as u64).saturating_mul(h as u64).saturating_mul(components), &s.raw) {
+            return Err(FilterError::Spent.to_string());
+        }
+        let decoded = jpx_samples(&s.raw, (!own_colours).then_some(&space), w, h).ok_or("the JPEG 2000 image can't be decoded")?;
+        space = decoded.space;
+        // Its opacity channel is the image's soft mask only when it says so, and a /SMask
+        // overrides it (8.9.5.1, Table 87).
+        let in_data = s.dict.get(b"SMaskInData").is_some_and(|v| doc.resolve(v).as_f64() == Some(1.0));
+        if alpha.is_none() && in_data && s.dict.get(b"SMask").is_none() {
+            alpha = decoded.alpha;
+        }
+        (decoded.samples, decoded.bpc)
+    } else if jpeg {
         if !budget.pay_jpeg((w as u64).saturating_mul(h as u64).saturating_mul(space.components() as u64), &s.raw) {
             return Err(FilterError::Spent.to_string());
         }
@@ -212,7 +233,8 @@ fn image(doc: &Document, s: &Stream, budget: &mut ImageBudget) -> Result<(&'stat
         (unpack(&data, w, h, space.components(), bpc).ok_or("the image data is shorter than its size says")?, bpc)
     };
     let n = space.components();
-    let decode = if jpeg || mask { None } else { decode(doc, s, n) };
+    // A JPEG 2000 image's /Decode is ignored, unless it is a mask (Table 87).
+    let decode = if jpeg || mask || jpx { None } else { decode(doc, s, n) };
     if alpha.is_none() {
         alpha = key.and_then(|k| keyed_alpha(&samples, n, bpc, &k));
     }
@@ -294,6 +316,8 @@ fn size(w: i64, h: i64) -> Option<(usize, usize)> {
 thread_local! {
     /// JPEGs decoded whole, for the tests that keep one from being decoded for nothing.
     pub(crate) static JPEGS_DECODED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// JPEG 2000 images decoded, for the tests that keep one from being decoded past its size.
+    pub(crate) static JPXS_DECODED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// The size a JPEG's header gives, which is what decoding it goes by, whatever its dictionary
@@ -357,6 +381,75 @@ fn cmyk_jpeg_samples(data: &[u8], w: usize, h: usize) -> Option<Vec<u8>> {
         }
     }
     Some(px)
+}
+
+/// A JPEG 2000 image's samples, as [`jpx_samples`] reads them.
+struct Jpx {
+    /// One byte a sample, in 0..2^min(bpc, 8) as [`unpack`] gives them.
+    samples: Vec<u8>,
+    space: Space,
+    /// The codestream's precision, 1 to 16 bits; deeper samples keep their high byte, as 16-bit
+    /// ones do in [`unpack`].
+    bpc: usize,
+    /// Its opacity channel, 8 bits a pixel, if it has one.
+    alpha: Option<Vec<u8>>,
+}
+
+/// JPEG 2000 file or codestream `data` decoded as the page draws it, if it is `w` × `h` (7.4.9):
+/// as samples of colour space `given`, palette indices kept, or with none given, in the colours
+/// its header gives, its palette applied.
+fn jpx_samples(data: &[u8], given: Option<&Space>, w: usize, h: usize) -> Option<Jpx> {
+    use hayro_jpeg2000::{ColorSpace, DecodeSettings, Image};
+    let settings = DecodeSettings { resolve_palette_indices: given.is_none(), strict: false, target_resolution: None };
+    let image = Image::new(data, &settings).ok()?;
+    if (usize::try_from(image.width()).ok()?, usize::try_from(image.height()).ok()?) != (w, h) {
+        return None;
+    }
+    let channels = usize::from(image.color_space().num_channels());
+    // Every component the decoder gives, its colours and an opacity channel if it sees one.
+    let stride = channels.checked_add(usize::from(image.has_alpha()))?;
+    // A /ColorSpace replaces the colours the header gives (7.4.9): its components are the first
+    // of the image's, and one more is its opacity.
+    let space = match given {
+        Some(space) if space.components() == stride || space.components() + 1 == stride => space.clone(),
+        Some(_) => return None,
+        None => match channels {
+            1 => Space::Gray,
+            3 => Space::Rgb,
+            4 if matches!(image.color_space(), ColorSpace::CMYK | ColorSpace::Icc { .. }) => Space::Cmyk,
+            _ => return None,
+        },
+    };
+    let n = space.components();
+    #[cfg(test)]
+    JPXS_DECODED.with(|d| d.set(d.get() + 1));
+    let pixels = image.decode().ok()?;
+    if pixels.len() != w.checked_mul(h)?.checked_mul(stride)? {
+        return None;
+    }
+    // The decoder scales each component from its own precision to 8 bits. Palette indices go back
+    // to theirs, the image's (it has one component); 16-bit samples keep their high byte.
+    let depth = usize::from(image.original_bit_depth());
+    let bpc = match space {
+        Space::Indexed(..) => depth.clamp(1, 8),
+        _ if depth == 16 => 16,
+        _ => 8,
+    };
+    let max = (1u32 << bpc.min(8)) - 1;
+    let to_bpc = |v: u8| if max == 255 { v } else { ((u32::from(v) * max + 127) / 255) as u8 };
+    let (samples, alpha) = if stride == n {
+        (pixels.into_iter().map(to_bpc).collect(), None)
+    } else {
+        let mut samples = Vec::with_capacity(w.saturating_mul(h).saturating_mul(n));
+        let mut alpha = Vec::with_capacity(w.saturating_mul(h));
+        for px in pixels.chunks_exact(stride) {
+            let (a, colour) = px.split_last()?;
+            samples.extend(colour.iter().copied().map(to_bpc));
+            alpha.push(*a);
+        }
+        (samples, Some(alpha))
+    };
+    Some(Jpx { samples, space, bpc, alpha })
 }
 
 /// The colour-key `/Mask` (8.9.6.4): a [min max] pair per colour component, in sample values.
