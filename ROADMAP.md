@@ -1,6 +1,6 @@
 # PdfCraft roadmap
 
-> **Last reviewed:** 2026-11-04 · **Last updated:** 2026-11-04 · **Change:** patch (M14 #6123 review: compiled AppImage source fallback, independent build expectation, and case-insensitive GitHub repository matching via craft-libs#595; estimates unchanged)
+> **Last reviewed:** 2026-11-04 · **Last updated:** 2026-11-04 · **Change:** patch (M14 #6123 review: first-argument repository query ignores trailing inputs; AppImage documentation distinguishes defaults from overrides; estimates unchanged)
 
 > **Last reviewed:** 2026-11-04 · **Last updated:** 2026-11-04 · **Change:** minor (M14: optional build-time GitHub update repository, validated before compilation; official defaults and development-install behavior retained; readiness and effort estimates unchanged)
 
@@ -226,6 +226,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 | 8 | 1.0 polish: performance, right-to-left, missing languages, keyboard-only (M14) | 55–95 |
 
 ## Progress log
+
+- **2026-11-04 (M14, #6123 argument review):** The repository query exits when it is the first argument, including trailing options, file names and non-Unicode paths. Earlier help/version keep their behavior. Executable tests are bounded and the AppImage update example is explicitly an official-build default. Estimates unchanged.
 
 - **2026-11-04 (M14, #6123 review):** Fix AppImage source precedence and compiled-binary fallback, independently assert the expected repository, and pin craft-update to the focused case-insensitive repository fix (craft-libs#595). Synthetic URL-confinement and packaging/query regressions cover the changes; no installed app was replaced. Estimates unchanged.
 
@@ -766,6 +768,7 @@ Newest first: the date, what moved, and the new overall estimate.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-04 | patch | M14 #6123: the first --print-update-repository argument exits before processing trailing options/files; bounded executable regressions cover ordering and non-Unicode paths; AppImage docs distinguish official defaults from overrides. Estimates unchanged. |
 | 2026-11-04 | patch | M14 #6123 review: AppImage metadata falls back to the compiled repository; test expectations are independent; craft-libs#595 preserves canonical asset URLs for mixed-case repository names. Estimates unchanged. |
 | 2026-11-04 | minor | M14: optional build-time GitHub update repository, validated before compilation; official defaults and development-install behavior retained; readiness and effort estimates unchanged. |
 | 2026-11-03 | patch | M5 #5850 review: indirect typewriter intent and composer edits preserve outer whitespace; movement regression commits by outside click; estimates unchanged. |

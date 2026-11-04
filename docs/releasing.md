@@ -47,11 +47,13 @@ and install the first copy outside that tree before testing in-place updates. Do
 `CRAFT_UPDATE_DEV` for distribution. Package-manager restrictions, launcher pins and the
 unsaved-document restart guard are unchanged.
 
-For AppImage metadata, `packaging/linux/package.sh` gives a nonempty `PDFCRAFT_UPDATE_REPO`
-first priority, followed by a nonempty `GITHUB_REPOSITORY`. Without either override, it queries
+For AppImage metadata, `packaging/linux/package.sh` uses a nonempty `PDFCRAFT_UPDATE_REPO`
+first, followed by a nonempty `GITHUB_REPOSITORY`. Without either override, it queries
 **the binary being packaged** with `pdfcraft --print-update-repository`; this also works with
 `--skip-build` after the build environment has been cleared. The query exits before logging,
 GUI initialization or network activity and ignores runtime attempts to change the compiled source.
+When the query flag is the first argument, subsequent options and file names are ignored.
+An earlier `--help` or `--version` keeps its normal behavior.
 A missing/old binary or invalid repository stops packaging instead of choosing official releases.
 For cross builds, provide an explicit override or `EMULATOR` so the binary can be queried.
 An inherited `GITHUB_REPOSITORY` is still an override: set `PDFCRAFT_UPDATE_REPO` explicitly when
@@ -262,9 +264,10 @@ The binaries are built on Ubuntu 22.04, the oldest GitHub-hosted image, so they 
 xkbcommon) and the GPU (Vulkan, EGL) are loaded at runtime from the system; the .deb and .rpm declare
 them as dependencies (see `nfpm.yaml`).
 
-Each AppImage embeds update information
-(`gh-releases-zsync|storytold|pdfcraft|latest|pdfcraft-*-linux-<arch>.AppImage.zsync`), and its
-`.zsync` is published beside it, so AppImageUpdate and AppImageLauncher can update it in place,
+By default, an official build without repository overrides embeds update information
+`gh-releases-zsync|storytold|pdfcraft|latest|pdfcraft-*-linux-<arch>.AppImage.zsync`. Custom builds
+and packaging overrides use the repository selected by the [precedence above](#custom-update-sources).
+Each AppImage's `.zsync` is published beside it, so AppImageUpdate and AppImageLauncher can update it in place,
 downloading only the changed blocks. `latest` is the newest published, non-pre-release version.
 `package.sh` writes the `.zsync` when `zsyncmake` (the `zsync` package) is installed and warns
 otherwise; the release job checks both.
