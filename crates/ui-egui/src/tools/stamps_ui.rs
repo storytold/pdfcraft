@@ -322,7 +322,7 @@ mod tests {
 
         let first_bytes = Arc::new(vec![1, 2, 3]);
         let second_bytes = Arc::new(vec![4, 5, 6]);
-        let mut h = Harness::builder().with_size(egui::vec2(1000.0, 700.0)).build_eframe(|_| {
+        let mut h = Harness::builder().with_size(egui::vec2(1000.0, 700.0)).with_accessibility_check(false).build_eframe(|_| {
             let mut app = PdfCraftApp::new();
             app.set_option("language", "en").unwrap();
             app.custom_stamps = vec![
