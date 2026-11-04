@@ -464,7 +464,7 @@ fn drawable_page(pdf: &Pdf, page: usize) -> Result<(&Page<'_>, f32, f32), String
 /// The most SVG text one page may become, by [`SvgSize`]'s estimate. hayro-svg shares only
 /// glyphs, clips, masks and patterns, and writes out every other draw, so a page that draws one
 /// form millions of times would otherwise grow the SVG until memory runs out.
-const MAX_SVG_BYTES: u64 = 256 << 20;
+pub const MAX_SVG_BYTES: u64 = 256 << 20;
 
 /// The most SVG one pixel of an image or shading raster becomes: a PNG of 4-byte pixels with
 /// each row's filter byte is at most 5 bytes a pixel and base64 makes 4 of every 3, and an image
@@ -488,8 +488,8 @@ fn svg_size(page: &Page<'_>, w: f32, h: f32, settings: &InterpreterSettings) -> 
 /// and transform about 128 bytes, each path segment at most 64, each image pixel
 /// [`PIXEL_BYTES`], and the group hayro-svg wraps each path and glyph in while a soft mask or
 /// blend mode is set. A shading fill adds the raster hayro-svg draws of its whole box, unclipped.
-/// Tiling cells, Type 3 glyphs and soft masks are visited once per key hayro-svg writes them
-/// under, as it does. Past [`MAX_SVG_BYTES`] it sets `stop`, the interpreter's cancel flag.
+/// Tiling cells, outline glyph paths, Type 3 glyphs and soft masks are counted once per key
+/// hayro-svg writes them under, as it does. Past [`MAX_SVG_BYTES`] it sets `stop`, the interpreter's cancel flag.
 struct SvgSize {
     bytes: u64,
     stop: Arc<AtomicBool>,
@@ -592,9 +592,17 @@ impl<'a> Device<'a> for SvgSize {
             GlyphDrawMode::Fill => None,
         };
         match glyph {
-            // hayro-svg sizes a glyph's paint from its outline before the glyph transform.
-            Glyph::Outline(o) if matches!(paint, Paint::Pattern(_)) => self.paint(paint, &o.outline(), transform, line_width),
-            Glyph::Outline(_) => {}
+            Glyph::Outline(o) => {
+                let outline = o.outline();
+                // hayro-svg writes the path into `<defs>` once per glyph and glyph transform.
+                if self.first((o.identifier().cache_key(), glyph_transform.cache_key()).cache_key()) {
+                    self.add_path(&outline);
+                }
+                // It sizes a glyph's paint from its outline before the glyph transform.
+                if matches!(paint, Paint::Pattern(_)) {
+                    self.paint(paint, &outline, transform, line_width);
+                }
+            }
             Glyph::Type3(t) => {
                 let key = ((t.cache_key(), transform.cache_key()), (glyph_transform.cache_key(), paint.cache_key())).cache_key();
                 if self.first(key) {

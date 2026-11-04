@@ -2123,6 +2123,24 @@ fn svg_size_counts_groups_and_pixels_as_hayro_svg_writes_them() {
     assert_eq!(twice - shaded, plain + 128 + square, "{plain} {shaded} {twice}");
 }
 
+/// hayro-svg writes an outline glyph's path once, into `<defs>`, for each glyph and glyph transform
+/// (its place in the text run), and a `<use>` of it each time it is drawn, so a font with huge
+/// glyph outlines can't slip past the size cap.
+#[test]
+fn svg_size_counts_each_outline_glyph_path_once() {
+    let size = |content: &str| {
+        let r = svg_page("/MediaBox [0 0 200 100]", content);
+        let (p, w, h) = drawable_page(r.pdf.as_ref().expect("parsed"), 0).expect("a page");
+        svg_size(p, w, h, &r.settings)
+    };
+    let none = size("BT /F1 12 Tf ET");
+    let once = size("BT /F1 12 Tf (O) Tj ET");
+    // Drawn again, the glyph adds only its `<use>`: its path is already defined.
+    let again = size("BT /F1 12 Tf (O) Tj ET BT /F1 12 Tf (O) Tj ET");
+    // An O is two closed rings of curves: its path is well over eight segments.
+    assert!(once - none >= (again - once) + 128 + 8 * 64, "{none} {once} {again}");
+}
+
 #[test]
 fn svg_export_of_a_missing_page_garbage_or_an_infinite_page_box_is_an_error() {
     assert!(svg_page("/MediaBox [0 0 200 100]", "").svg(9).is_err_and(|e| e.contains("page 10 does not exist")));
