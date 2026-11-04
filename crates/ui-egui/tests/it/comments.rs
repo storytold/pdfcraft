@@ -1092,6 +1092,9 @@ fn panel_width(h: &Harness<'static, PdfCraftApp>) -> f32 {
 
 #[test]
 fn the_panel_keeps_its_width_with_a_reply_box_open() {
+    if crate::support::skip_without_catalogs("the_panel_keeps_its_width_with_a_reply_box_open") {
+        return;
+    }
     // The reply row reserved 48 px for "Post"; Russian's wider button overflowed it, and a
     // resizable panel keeps the width its content used, so every repaint widened the panel.
     let mut h = harness(|app| app.set_option("panel", "comments").unwrap());
@@ -3279,6 +3282,9 @@ fn hotbar_picker_adds_and_runs_freehand_highlight() {
 
 #[test]
 fn hotbar_picker_searches_translated_tool_labels() {
+    if crate::support::skip_without_catalogs("hotbar_picker_searches_translated_tool_labels") {
+        return;
+    }
     let mut h = harness(|app| {
         app.set_option("language", "fr").unwrap();
     });
