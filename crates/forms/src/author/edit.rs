@@ -587,42 +587,63 @@ fn apply_late_widget_props(
 /// ([`crate::af::rename_in_calculation`]). The scripts, strings and streams alike, are read
 /// within one allowance, as a reading of the form's scripts is, however many fields name the
 /// same script; past it, a script is left as it is, like one that won't decode. A Calculate
-/// action several fields share by reference is read and rewritten once, in place, so they all
-/// read the new name.
+/// action several fields share by reference, or an `/AA` they share that holds it, is read and
+/// rewritten once, in place, so they all read the new name and nothing they share is copied for
+/// each of them.
 fn rename_in_calculations(doc: &mut Document, all: &[Field], old: &str, new: &str) -> Result<(), FormError> {
-    let aa_of =
-        |doc: &Document, r: ObjRef| doc.get(r).as_dict().and_then(|d| d.get(b"AA").map(|a| doc.resolve(a))).and_then(|a| a.as_dict().cloned());
     let mut scripts = crate::script_budget();
     let mut shared = std::collections::HashSet::new();
     for f in all {
-        let Some((owner, by_ref, js)) = calculation(doc, f, &mut scripts, &mut shared) else { continue };
+        let Some((place, js)) = calculation(doc, f, &mut scripts, &mut shared) else { continue };
         let Some(js) = crate::af::rename_in_calculation(&js, old, new) else { continue };
-        if let Some(r) = by_ref {
-            let Some(mut action) = doc.get(r).as_dict().cloned() else { continue };
-            action.set(b"JS".to_vec(), PdfString::text(&js));
-            doc.update_dict(r, |d| *d = action)?;
-            continue;
+        let js = PdfString::text(&js);
+        match place {
+            Place::Action(r) => doc.update_dict(r, |a| a.set(b"JS".to_vec(), js))?,
+            Place::Aa(r) => doc.update_dict(r, |aa| set_calculation(aa, js))?,
+            Place::Owner(r) => doc.update_dict(r, |d| {
+                if let Some(Object::Dict(aa)) = d.get_mut(b"AA") {
+                    set_calculation(aa, js);
+                }
+            })?,
         }
-        let Some(mut aa) = aa_of(doc, owner) else { continue };
-        let Some(mut action) = aa.get(b"C").and_then(|a| doc.resolve(a).as_dict().cloned()) else { continue };
-        action.set(b"JS".to_vec(), PdfString::text(&js));
-        aa.set(b"C".to_vec(), Object::Dict(action));
-        doc.update_dict(owner, |d| d.set(b"AA".to_vec(), Object::Dict(aa)))?;
     }
     Ok(())
 }
 
-/// The Calculate script of field `f`, copied against `scripts`; the field or widget whose `/AA`
-/// holds it (the field's, or its only widget's when the field has none, as `actions_of` reads
-/// it); and the action's reference, when it has one. Read where it is, so an `/AA` many fields
-/// share isn't copied for each. An action by reference that `shared` already holds was read for
-/// an earlier field, and gives `None`.
-fn calculation(
-    doc: &Document,
-    f: &Field,
-    scripts: &mut Allowance,
-    shared: &mut std::collections::HashSet<ObjRef>,
-) -> Option<(ObjRef, Option<ObjRef>, String)> {
+/// The script of `aa`'s direct `/C` replaced with `js`, the rest kept as it is.
+fn set_calculation(aa: &mut Dict, js: PdfString) {
+    if let Some(Object::Dict(c)) = aa.get_mut(b"C") {
+        c.set(b"JS".to_vec(), js);
+    }
+}
+
+/// Where a Calculate action is written back: in place when it is an object of its own, or the
+/// `/AA` holding it is, which every field naming it shares; else in the field or widget whose
+/// own `/AA` holds it.
+enum Place {
+    Action(ObjRef),
+    Aa(ObjRef),
+    Owner(ObjRef),
+}
+
+/// The object `o` refers to, through references to references as far as [`Document::resolve`]
+/// follows them (32); `None` when `o` is direct.
+fn referred(doc: &Document, o: &Object) -> Option<ObjRef> {
+    let mut r = o.as_ref()?;
+    for _ in 0..32 {
+        match Object::as_ref(&doc.get(r)) {
+            Some(next) => r = next,
+            None => break,
+        }
+    }
+    Some(r)
+}
+
+/// The Calculate script of field `f`, copied against `scripts`, and where it is written back. The
+/// action is the field's `/AA /C`, or its only widget's when the field has none, as `actions_of`
+/// reads it, read where it is, so an `/AA` many fields share isn't copied for each. An action or
+/// `/AA` of its own that `shared` already holds was read for an earlier field, and gives `None`.
+fn calculation(doc: &Document, f: &Field, scripts: &mut Allowance, shared: &mut std::collections::HashSet<ObjRef>) -> Option<(Place, String)> {
     let has_aa = |r: ObjRef| doc.get(r).as_dict().and_then(|d| d.get(b"AA")).is_some_and(|a| held(doc, a).as_dict().is_some());
     let owner = match f.widgets.as_slice() {
         _ if has_aa(f.obj) => f.obj,
@@ -630,10 +651,17 @@ fn calculation(
         _ => return None,
     };
     let o = doc.get(owner);
-    let aa = held(doc, o.as_dict()?.get(b"AA")?);
+    let aa_entry = o.as_dict()?.get(b"AA")?;
+    let aa = held(doc, aa_entry);
     let c = aa.as_dict()?.get(b"C")?;
-    let by_ref = c.as_ref();
-    if by_ref.is_some_and(|r| !shared.insert(r)) {
+    let place = match (referred(doc, c), referred(doc, aa_entry)) {
+        (Some(r), _) => Place::Action(r),
+        (None, Some(r)) => Place::Aa(r),
+        (None, None) => Place::Owner(owner),
+    };
+    if let Place::Action(r) | Place::Aa(r) = place
+        && !shared.insert(r)
+    {
         return None;
     }
     let action = held(doc, c);
@@ -641,8 +669,8 @@ fn calculation(
         Object::String(s) => scripts.copy(s.bytes.len(), || s.to_text())?,
         // A stream that isn't UTF-8 reads with replacement characters, which must not be
         // written back in place of what it holds.
-        Object::Stream(s) => String::from_utf8(scripts.decode(s)?).ok()?,
+        Object::Stream(s) => scripts.decode(s, |b| String::from_utf8(b).ok())?,
         _ => return None,
     };
-    Some((owner, by_ref, js))
+    Some((place, js))
 }

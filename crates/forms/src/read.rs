@@ -8,8 +8,16 @@ use super::{DecodeBudget, Dict, Document, Field, FieldKind, ObjRef, Object, PdfS
 const MAX_LAYER_STATE: usize = 1024;
 
 /// A push button's mouse-up action (`/A`, or `/AA /U`, on the field or its widget), its script
-/// copied against `scripts` and its other text against `text`.
-fn button_action(doc: &Document, d: &Dict, widgets: &[ObjRef], scripts: &mut Allowance, text: &mut Allowance) -> Option<af::ButtonAction> {
+/// copied against `scripts` and its other text against `text`; `pages` gives each page's index,
+/// for a go-to action.
+fn button_action(
+    doc: &Document,
+    d: &Dict,
+    widgets: &[ObjRef],
+    scripts: &mut Allowance,
+    text: &mut Allowance,
+    pages: &std::collections::HashMap<ObjRef, usize>,
+) -> Option<af::ButtonAction> {
     // A button PdfCraft generated for an XFA image field (`/PCXfaImage true`, no PDF action):
     // clicking it picks a picture, as `buttonImportIcon()` does.
     if matches!(d.get(b"PCXfaImage").map(|o| doc.resolve(o)).as_deref(), Some(Object::Bool(true))) {
@@ -19,11 +27,11 @@ fn button_action(doc: &Document, d: &Dict, widgets: &[ObjRef], scripts: &mut All
     // many buttons share isn't copied for each.
     let mut from = |dict: &Dict| -> Option<Option<af::ButtonAction>> {
         if let Some(a) = dict.get(b"A") {
-            return Some(button_action_of(doc, a, scripts, text));
+            return Some(button_action_of(doc, a, scripts, text, pages));
         }
         let aa = held(doc, dict.get(b"AA")?);
         let u = aa.as_dict()?.get(b"U")?;
-        Some(button_action_of(doc, u, scripts, text))
+        Some(button_action_of(doc, u, scripts, text, pages))
     };
     match from(d) {
         Some(found) => found,
@@ -37,7 +45,13 @@ fn button_action(doc: &Document, d: &Dict, widgets: &[ObjRef], scripts: &mut All
     }
 }
 
-fn button_action_of(doc: &Document, action: &Object, scripts: &mut Allowance, text: &mut Allowance) -> Option<af::ButtonAction> {
+fn button_action_of(
+    doc: &Document,
+    action: &Object,
+    scripts: &mut Allowance,
+    text: &mut Allowance,
+    pages: &std::collections::HashMap<ObjRef, usize>,
+) -> Option<af::ButtonAction> {
     let a = held(doc, action);
     let a = a.as_dict()?;
     Some(match a.name(b"S")? {
@@ -76,7 +90,8 @@ fn button_action_of(doc: &Document, action: &Object, scripts: &mut Allowance, te
         b"GoTo" => {
             let dest = held(doc, a.get(b"D")?);
             let target = dest.as_array()?.first()?.as_ref()?;
-            af::ButtonAction::GoTo(page_refs(doc).iter().position(|p| *p == target)?)
+            // Looked up, not walked to: a reading has many buttons, and a document many pages.
+            af::ButtonAction::GoTo(*pages.get(&target)?)
         }
         b"Hide" => {
             // /T: a field name, an annotation (or field) reference, or an array of them.
@@ -134,14 +149,18 @@ fn hide_target(doc: &Document, o: &Object, text: &mut Allowance) -> Option<Strin
 }
 
 /// The fully qualified name of the field that `r` (a field or one of its widgets) belongs to,
-/// from the partial names (`/T`) up its `/Parent` chain, copied against `text`.
-fn qualified_name(doc: &Document, r: ObjRef, text: &mut Allowance) -> Option<String> {
+/// from the partial names (`/T`) up its `/Parent` chain, copied against `text`, which each step
+/// up the chain costs as an entry: a hide action can name one deep widget many times.
+pub(crate) fn qualified_name(doc: &Document, r: ObjRef, text: &mut Allowance) -> Option<String> {
     let mut parts = Vec::new();
     let mut seen = std::collections::HashSet::new();
     let mut cur = Some(r);
     while let Some(c) = cur {
         if seen.len() > 64 || !seen.insert(c) {
             break;
+        }
+        if !text.entry() {
+            return None;
         }
         let obj = doc.get(c);
         let d = obj.as_dict()?;
@@ -174,9 +193,11 @@ impl std::ops::Deref for Held<'_> {
     }
 }
 
+/// [`Held`] `o`: a reference is followed as [`Document::resolve`] follows it, through references
+/// to references.
 pub(crate) fn held<'a>(doc: &Document, o: &'a Object) -> Held<'a> {
     match o {
-        Object::Ref(r) => Held::Indirect(doc.get(*r)),
+        Object::Ref(_) => Held::Indirect(doc.resolve(o)),
         other => Held::Direct(other),
     }
 }
@@ -261,16 +282,32 @@ impl Allowance {
         }
     }
 
-    /// `s` decoded, charged as a [`DecodeBudget`] charges it; `None` once what is left is spent,
-    /// or when it won't decode.
-    pub(crate) fn decode(&mut self, s: &pdfcraft_cos::Stream) -> Option<Vec<u8>> {
+    /// The text `text` makes of stream `s` decoded, charged as a [`DecodeBudget`] charges the
+    /// decode and, past that, for what the text adds to the decoded bytes (a PDFDocEncoding byte
+    /// can take three in UTF-8). `None` once what is left is spent, or when it won't decode; text
+    /// that outgrows what is left spends it. Its `/DecodeParms` are read only when direct:
+    /// `Document::with_direct_parms` would copy the whole stream for each field that names it.
+    pub(crate) fn decode(&mut self, s: &pdfcraft_cos::Stream, text: impl FnOnce(Vec<u8>) -> Option<String>) -> Option<String> {
         if !self.take(0) {
             return None;
         }
         let mut budget = DecodeBudget::new(self.left, 0);
-        let out = budget.decode(s).ok();
+        let data = budget.decode(s).ok();
         self.left = budget.remaining();
-        out
+        let data = data?;
+        let decoded = data.len();
+        let t = text(data)?;
+        match self.left.checked_sub(t.len().saturating_sub(decoded)) {
+            Some(left) => {
+                self.left = left;
+                Some(t)
+            }
+            None => {
+                self.left = 0;
+                self.refusals = self.refusals.saturating_add(1);
+                None
+            }
+        }
     }
 }
 
@@ -291,7 +328,7 @@ pub(crate) fn script(doc: &Document, action: &Object, budget: &mut Allowance) ->
     let js = a.as_dict()?.get(b"JS")?;
     match &*held(doc, js) {
         Object::String(s) => budget.copy(s.bytes.len(), || s.to_text()),
-        Object::Stream(s) => budget.decode(s).map(|b| String::from_utf8_lossy(&b).into_owned()),
+        Object::Stream(s) => budget.decode(s, |b| Some(String::from_utf8_lossy(&b).into_owned())),
         _ => None,
     }
 }
@@ -380,7 +417,7 @@ fn values_of(doc: &Document, o: Option<&Object>, budget: &mut Allowance) -> Vec<
             }
             if budget.refusals() == refusals { out } else { Vec::new() }
         }
-        Object::Stream(s) => budget.decode(s).map(|b| PdfString::literal(b).to_text()).into_iter().collect(),
+        Object::Stream(s) => budget.decode(s, |b| Some(PdfString::literal(b).to_text())).into_iter().collect(),
         other => budget.text(doc, other).filter(|s| s != "Off" && !s.is_empty()).into_iter().collect(),
     }
 }
@@ -390,8 +427,22 @@ fn nums(doc: &Document, o: Option<&Object>) -> Option<Vec<f64>> {
     o.as_array()?.iter().map(|x| doc.resolve(x).as_f64()).collect()
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Page-tree walks ([`page_refs`]) on this thread.
+    static PAGE_WALKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has walked a page tree.
+#[cfg(test)]
+pub(crate) fn page_walks() -> usize {
+    PAGE_WALKS.with(std::cell::Cell::get)
+}
+
 /// Leaf page objects in order (a small walker; `organize` and `annot` have their own).
 pub(crate) fn page_refs(doc: &Document) -> Vec<ObjRef> {
+    #[cfg(test)]
+    PAGE_WALKS.with(|n| n.set(n.get() + 1));
     let Some(root) = doc.root() else { return Vec::new() };
     let Some(pages) = doc.get(root).as_dict().and_then(|d| d.reference(b"Pages")) else { return Vec::new() };
     PageWalk::new(doc, pages).collect()
@@ -530,6 +581,7 @@ pub(crate) fn enumerate(doc: &Document) -> (Vec<Field>, usize) {
         scripts: script_budget(),
         values: Allowance::new(MAX_VALUE_BYTES),
         text: Allowance::new(MAX_TEXT_BYTES),
+        pages: pages.iter().enumerate().map(|(i, p)| (*p, i)).collect(),
     };
     let base = match &af {
         Some(af) => Inherited {
@@ -631,6 +683,8 @@ struct Seen {
     /// A field whose text doesn't fit is left out of the reading whole: a field read without
     /// its `/DA` or options would be drawn and checked as another field.
     text: Allowance,
+    /// Each page's index, from the one walk of the page tree a reading makes.
+    pages: std::collections::HashMap<ObjRef, usize>,
 }
 
 /// The on state of a check box or radio button widget: the first state of its normal appearance
@@ -723,7 +777,7 @@ fn walk(
     let refusals = seen.text.refusals();
     let actions = actions_of(doc, d, &widget_refs, &mut seen.scripts);
     let button = (inh.ft.as_deref() == Some(b"Btn") && inh.ff.unwrap_or(0) & flags::PUSH_BUTTON != 0)
-        .then(|| button_action(doc, d, &widget_refs, &mut seen.scripts, &mut seen.text))
+        .then(|| button_action(doc, d, &widget_refs, &mut seen.scripts, &mut seen.text, &seen.pages))
         .flatten();
     let field_da = inh.da.as_deref().unwrap_or("/Helv 0 Tf 0 g");
     let text = &mut seen.text;

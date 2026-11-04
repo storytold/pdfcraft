@@ -3918,6 +3918,131 @@ fn action_text_named_by_reference_stays_within_the_text_allowance() {
     assert!(reset <= crate::read::MAX_TEXT_BYTES, "{reset} bytes of reset field names");
 }
 
+/// A field's `/DA`, tooltip, options, value and calculation named through a reference to a
+/// reference are read, as `Document::resolve` follows them.
+#[test]
+fn entries_named_through_a_reference_to_a_reference_are_read() {
+    let doc = document(&[
+        "<< /Type /Catalog /AcroForm << /Fields [8 0 R 9 0 R] >> >>".into(),
+        "3 0 R".into(),
+        "(/Helv 9 Tf 0 g)".into(),
+        "5 0 R".into(),
+        "[(x) (y)]".into(),
+        "7 0 R".into(),
+        "<< /C << /S /JavaScript /JS (AFSimple_Calculate(\"SUM\", new Array (\"a\"));) >> >>".into(),
+        "<< /FT /Ch /T (l) /DA 2 0 R /TU 10 0 R /Opt 4 0 R /V 12 0 R /AA 6 0 R >>".into(),
+        "<< /FT /Tx /T (a) >>".into(),
+        "11 0 R".into(),
+        "(hello)".into(),
+        "13 0 R".into(),
+        "[(x)]".into(),
+    ]);
+    let all = fields(&doc);
+    let l = field(&all, "l");
+    assert_eq!(l.da, "/Helv 9 Tf 0 g");
+    assert_eq!(l.tooltip.as_deref(), Some("hello"));
+    assert_eq!(l.options, [("x".to_string(), "x".to_string()), ("y".to_string(), "y".to_string())]);
+    assert_eq!(l.value, ["x"]);
+    assert_eq!(l.actions.calculate, af::Calculate::Simple { op: af::CalcOp::Sum, fields: vec!["a".into()] });
+}
+
+/// A reading of the form walks the page tree once, however many push buttons go to a page.
+#[test]
+fn go_to_buttons_share_one_walk_of_the_page_tree() {
+    let n = 50;
+    let list: String = (0..n).map(|i| format!("{} 0 R ", i + 5)).collect();
+    let mut objs = vec![
+        format!("<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [{list}] >> >>"),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R >>".into(),
+        "<< /S /GoTo /D [3 0 R /Fit] >>".into(),
+    ];
+    objs.extend((0..n).map(|i| format!("<< /FT /Btn /Ff 65536 /T (b{i}) /Rect [0 0 10 10] /A 4 0 R >>")));
+    let doc = document(&objs);
+    let before = crate::read::page_walks();
+    let all = fields(&doc);
+    assert_eq!(crate::read::page_walks() - before, 1);
+    assert!(all.iter().all(|f| f.button == Some(af::ButtonAction::GoTo(0))));
+}
+
+/// Each step up a hide target's `/Parent` chain costs the text allowance an entry: a hide action
+/// can name one deep widget many times.
+#[test]
+fn a_hide_target_pays_for_each_step_up_its_parents() {
+    let n = 20;
+    let mut objs = vec!["<< /Type /Catalog >>".into(), "<< /T (top) >>".into()];
+    objs.extend((0..n).map(|i| format!("<< /Parent {} 0 R >>", i + 2)));
+    let doc = document(&objs);
+    let bottom = ObjRef::new(n as u32 + 2, 0);
+    let copy = std::mem::size_of::<String>();
+    let mut wide = crate::read::Allowance::new(1 << 20);
+    assert_eq!(crate::read::qualified_name(&doc, bottom, &mut wide).as_deref(), Some("top"));
+    let mut narrow = crate::read::Allowance::new(10 * copy);
+    assert_eq!(crate::read::qualified_name(&doc, bottom, &mut narrow), None, "20 steps don't fit in 10 entries");
+    assert_eq!(narrow.refusals(), 1);
+}
+
+/// Text decoded from a stream is charged for what it grows by: a PDFDocEncoding byte past 0x7F
+/// can take three in UTF-8, and an invalid one in a script reads as U+FFFD, three as well.
+#[test]
+fn text_from_streams_is_charged_for_what_it_grows_by() {
+    use pdfcraft_cos::{Dict, PdfString, Stream};
+    let n = 300;
+    let mut doc = Document::new_empty();
+    let value = doc.add(Object::Stream(Stream::flate(Dict::new(), &vec![0x80; 1 << 20])));
+    let js = doc.add(Object::Stream(Stream::flate(Dict::new(), &vec![0xFF; 1 << 20])));
+    let format = doc.add(Object::Dict([(b"S".to_vec(), Object::name("JavaScript")), (b"JS".to_vec(), Object::Ref(js))].into_iter().collect()));
+    let list: Vec<Object> = (0..n)
+        .map(|i| {
+            let aa = Object::Dict([(b"F".to_vec(), Object::Ref(format))].into_iter().collect());
+            let entries = [
+                (b"FT".to_vec(), Object::name("Tx")),
+                (b"T".to_vec(), Object::String(PdfString::literal(format!("f{i}")))),
+                (b"V".to_vec(), Object::Ref(value)),
+                (b"AA".to_vec(), aa),
+            ];
+            Object::Ref(doc.add(Object::Dict(entries.into_iter().collect())))
+        })
+        .collect();
+    let form = Object::Dict([(b"Fields".to_vec(), Object::Array(list))].into_iter().collect());
+    let catalog = doc.add(Object::Dict([(b"AcroForm".to_vec(), form)].into_iter().collect()));
+    doc.trailer_mut().set(b"Root".to_vec(), Object::Ref(catalog));
+    let all = fields(&doc);
+    let values: usize = all.iter().flat_map(|f| &f.value).map(String::len).sum();
+    assert!(values > 0 && values <= crate::read::MAX_VALUE_BYTES, "{values} bytes of values");
+    let scripts: usize = all.iter().filter_map(|f| f.actions.scripts.format.as_ref()).map(String::len).sum();
+    assert!(scripts > 0 && scripts <= MAX_SCRIPT_BYTES, "{scripts} bytes of scripts");
+}
+
+/// Renaming a field that calculations read through an `/AA` they share by reference rewrites
+/// that `/AA` once, in place: the fields keep sharing it, and its other actions stay as they are.
+#[test]
+fn a_rename_rewrites_a_shared_aa_once_in_place() {
+    let mut doc = document(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 5 0 R 6 0 R 7 0 R] /DA (/Helv 0 Tf 0 g) >> >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R 6 0 R 7 0 R] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (a) /Rect [50 700 250 720] /P 3 0 R >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (c0) /Rect [50 10 250 30] /P 3 0 R /AA 8 0 R >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (c1) /Rect [50 40 250 60] /P 3 0 R /AA 8 0 R >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (c2) /Rect [50 70 250 90] /P 3 0 R /AA 8 0 R >>".into(),
+        "<< /C << /S /JavaScript /JS (AFSimple_Calculate(\"SUM\", new Array (\"a\"));) >> /F << /S /JavaScript /JS (other) >> >>".into(),
+    ]);
+    set_props(&mut doc, "a", &FieldProps { name: Some("qty".into()), ..FieldProps::default() }).unwrap();
+    let aa = ObjRef::new(8, 0);
+    for i in 5..=7 {
+        assert_eq!(
+            doc.get(ObjRef::new(i, 0)).as_dict().and_then(|d| d.get(b"AA").cloned()),
+            Some(Object::Ref(aa)),
+            "field {i} still names the shared /AA"
+        );
+    }
+    let shared = doc.get(aa);
+    let js = |key: &[u8]| shared.as_dict().and_then(|d| d.get(key)?.as_dict()?.get(b"JS")?.as_string().map(|s| s.to_text()));
+    assert_eq!(js(b"C").as_deref(), Some("AFSimple_Calculate(\"SUM\", new Array (\"qty\"));"));
+    assert_eq!(js(b"F").as_deref(), Some("other"));
+}
+
 /// An allowance charges each copy with the `String` that holds it, refuses a copy that doesn't
 /// fit without charging it, and is spent by text that comes out longer than it was stored.
 #[test]
