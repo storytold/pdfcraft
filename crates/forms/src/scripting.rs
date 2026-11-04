@@ -110,6 +110,13 @@ pub(crate) fn apply_changes(doc: &mut Document, changes: &[FieldChange], except:
         return Ok(());
     }
     let all = fields(doc);
+    // Check every new default before mutating any field. Defaults must be values their fields can
+    // actually restore, and a script must not promote a typed password into the saved /DV.
+    for c in changes {
+        let Some(Some(value)) = &c.default_value else { continue };
+        let Some(f) = all.iter().find(|f| f.name == c.name) else { continue };
+        validate_default_value(doc, f, value)?;
+    }
     for c in changes {
         let Some(f) = all.iter().find(|f| f.name == c.name) else { continue };
         if let Some(v) = &c.value
@@ -179,6 +186,33 @@ pub(crate) fn apply_changes(doc: &mut Document, changes: &[FieldChange], except:
             crate::set_props(doc, &c.name, &crate::FieldProps { default_value: c.default_value.clone(), max_len: c.max_len, ..Default::default() })?;
         }
     }
+    Ok(())
+}
+
+fn validate_default_value(doc: &Document, f: &Field, value: &str) -> Result<(), FormError> {
+    let proposed = match f.kind {
+        FieldKind::Text if f.has(flags::PASSWORD) => {
+            return Err(FormError::Invalid(format!("{:?} cannot store a script-set password default", f.name)));
+        }
+        FieldKind::Text => FieldValue::Text(value.into()),
+        FieldKind::CheckBox if value.is_empty() || value == "Off" => FieldValue::Check(false),
+        FieldKind::CheckBox => {
+            let allowed = f.widgets.iter().enumerate().any(|(i, w)| f.export_of(i) == Some(value) || w.on_state.as_deref() == Some(value));
+            if !allowed {
+                return Err(FormError::Invalid(format!("{:?} has no checkbox export {value:?}", f.name)));
+            }
+            FieldValue::Text(value.into())
+        }
+        FieldKind::Radio if value.is_empty() || value == "Off" => FieldValue::Radio(None),
+        FieldKind::Radio if f.state_for(value).is_some() => FieldValue::Radio(Some(value.into())),
+        FieldKind::Radio => return Err(FormError::Invalid(format!("{:?} has no radio export {value:?}", f.name))),
+        FieldKind::Combo | FieldKind::List => FieldValue::Choice(if value.is_empty() { Vec::new() } else { vec![value.into()] }),
+        FieldKind::PushButton | FieldKind::Signature => {
+            return Err(FormError::Invalid(format!("{:?} has no default value", f.name)));
+        }
+    };
+    let mut candidate = doc.clone();
+    crate::write_value(&mut candidate, f, &proposed, &mut NoScripts)?;
     Ok(())
 }
 

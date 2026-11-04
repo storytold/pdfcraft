@@ -130,15 +130,17 @@ pub(crate) fn field_object(ctx: &mut Context, name: &str) -> JsObject {
                 if len > u64::try_from(f.options.len()).unwrap_or(u64::MAX) {
                     return Err(error("too many currentValueIndices"));
                 }
+                let mut seen = vec![false; f.options.len()];
                 for i in 0..len {
                     let v = a.get(i, c)?.to_number(c)?;
                     if !v.is_finite() || v < 0.0 || v.fract() != 0.0 {
                         return Err(error("currentValueIndices must be non-negative integers"));
                     }
                     let index = v as usize;
-                    if index >= f.options.len() || indices.contains(&index) {
+                    if index >= f.options.len() || seen[index] {
                         return Err(error("currentValueIndices contains an invalid or duplicate option index"));
                     }
+                    seen[index] = true;
                     indices.push(index);
                 }
             } else {
@@ -153,6 +155,8 @@ pub(crate) fn field_object(ctx: &mut Context, name: &str) -> JsObject {
                 indices.push(index);
             }
             let values = indices.iter().filter_map(|&i| f.options.get(i).map(|o| o.0.clone())).collect();
+            // `/I` is sorted by option position. Keep `/V` in the order supplied by the script.
+            indices.sort_unstable();
             write(c, name, |f| {
                 set_value(f, values);
                 f.current_value_indices = indices;

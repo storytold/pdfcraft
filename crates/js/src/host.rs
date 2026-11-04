@@ -199,5 +199,6 @@ pub(crate) fn set_value(f: &mut FieldState, vals: Vec<String>) {
         FieldType::ListBox => vals,
         _ => vals.into_iter().take(1).collect(),
     };
-    f.current_value_indices = f.options.iter().enumerate().filter_map(|(i, option)| f.value.contains(&option.0).then_some(i)).collect();
+    let limit = if f.kind == FieldType::ComboBox { 1 } else { usize::MAX };
+    f.current_value_indices = f.options.iter().enumerate().filter_map(|(i, option)| f.value.contains(&option.0).then_some(i)).take(limit).collect();
 }

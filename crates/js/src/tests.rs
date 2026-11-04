@@ -2096,7 +2096,13 @@ fn field_choice_index_setter_maps_options_and_rejects_bad_indices() {
     assert_eq!(o.value, "l|2");
     let size = o.changed.iter().find(|f| f.name == "size").unwrap();
     assert_eq!(size.value, ["l"]);
-    for script in ["getField('size').currentValueIndices=NaN", "getField('size').currentValueIndices=3"] {
+    for script in [
+        "getField('size').currentValueIndices=NaN",
+        "getField('size').currentValueIndices=Infinity",
+        "getField('size').currentValueIndices=-1",
+        "getField('size').currentValueIndices=1.5",
+        "getField('size').currentValueIndices=3",
+    ] {
         let rejected = go(script, &Event::doc("Open"));
         assert!(rejected.error.is_some(), "accepted {script}");
         assert!(rejected.changed.is_empty(), "mutated on refusal: {script}");

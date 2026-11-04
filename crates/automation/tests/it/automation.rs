@@ -10496,19 +10496,20 @@ fn javascript_current_value_indices_persist_through_tools() {
         "js_run",
         json!({
             "doc": doc,
-            "script": "getField('Size').currentValueIndices=2; getField('Choices').currentValueIndices=[0,2]; console.println([getField('Size').value,getField('Choices').value].join('|'));"
+            "script": "getField('Size').currentValueIndices=2; getField('Choices').currentValueIndices=[2,0]; console.println([getField('Size').value,getField('Choices').value,getField('Choices').currentValueIndices].join('|'));"
         }),
     );
-    assert_eq!(result["console"][0], "l|a,c");
+    assert_eq!(result["console"][0], "l|c,a|0,2");
     let fields = ok(&mut a, "form_fields", json!({ "doc": doc }));
     let field = |name: &str| fields["fields"].as_array().unwrap().iter().find(|f| f["name"] == name).unwrap().clone();
     assert_eq!(field("Size")["value"], "l");
-    assert_eq!(field("Choices")["value"], json!(["a", "c"]));
+    assert_eq!(field("Choices")["value"], json!(["c", "a"]));
     ok(&mut a, "edit_undo", json!({ "doc": doc }));
     let undone = ok(&mut a, "form_fields", json!({ "doc": doc }));
     assert_eq!(undone["fields"].as_array().unwrap().iter().find(|f| f["name"] == "Size").unwrap()["value"], "s");
     ok(&mut a, "edit_redo", json!({ "doc": doc }));
     ok(&mut a, "doc_save", json!({ "doc": doc, "path": "setters.pdf" }));
+    assert_eq!(saved_selection_indices(&dir.join("setters.pdf"), "Choices"), Some(vec![0, 2]));
     let reopened = ok(&mut a, "doc_open", json!({ "path": "setters.pdf" }))["doc"].as_u64().unwrap();
     let readback = ok(
         &mut a,
@@ -10531,6 +10532,12 @@ fn javascript_default_value_persists_and_resets_through_tools() {
         json!({ "doc": doc, "script": "getField('Qty').defaultValue='9'; console.println(getField('Qty').defaultValue+'|'+getField('Qty').value)" }),
     );
     assert_eq!(result["console"][0], "9|4");
+    ok(&mut a, "edit_undo", json!({ "doc": doc }));
+    let undone = ok(&mut a, "js_run", json!({ "doc": doc, "script": "console.println(getField('Qty').defaultValue)" }));
+    assert_eq!(undone["console"][0], "");
+    ok(&mut a, "edit_redo", json!({ "doc": doc }));
+    ok(&mut a, "js_run", json!({ "doc": doc, "script": "getField('Qty').charLimit=2" }));
+    assert!(a.call("js_run", &json!({ "doc": doc, "script": "getField('Qty').defaultValue='123'" })).is_err());
     ok(&mut a, "doc_save", json!({ "doc": doc, "path": "default.pdf" }));
     let reopened = ok(&mut a, "doc_open", json!({ "path": "default.pdf" }))["doc"].as_u64().unwrap();
     let readback =
@@ -10538,6 +10545,15 @@ fn javascript_default_value_persists_and_resets_through_tools() {
     assert_eq!(readback["console"][0], "9|4");
     ok(&mut a, "form_reset", json!({ "doc": reopened }));
     assert_eq!(ok(&mut a, "form_fields", json!({ "doc": reopened }))["fields"][0]["value"], "9");
+    ok(&mut a, "form_add_field", json!({ "doc": reopened, "page": 1, "type": "checkbox", "rect": [20, 50, 34, 64], "name": "Agree" }));
+    let checkbox = ok(
+        &mut a,
+        "js_run",
+        json!({ "doc": reopened, "script": "getField('Agree').defaultValue='Yes'; console.println(getField('Agree').defaultValue)" }),
+    );
+    assert_eq!(checkbox["console"][0], "Yes");
+    ok(&mut a, "form_reset", json!({ "doc": reopened }));
+    assert_eq!(ok(&mut a, "form_fields", json!({ "doc": reopened }))["fields"][1]["value"], true);
 }
 
 #[test]
@@ -10548,6 +10564,10 @@ fn javascript_char_limit_persists_and_is_enforced_through_tools() {
     ok(&mut a, "form_add_field", json!({ "doc": doc, "page": 1, "type": "text", "rect": [20, 20, 180, 42], "name": "Qty" }));
     let result = ok(&mut a, "js_run", json!({ "doc": doc, "script": "getField('Qty').charLimit=3; console.println(getField('Qty').charLimit)" }));
     assert_eq!(result["console"][0], "3");
+    ok(&mut a, "edit_undo", json!({ "doc": doc }));
+    let undone = ok(&mut a, "js_run", json!({ "doc": doc, "script": "console.println(getField('Qty').charLimit)" }));
+    assert_eq!(undone["console"][0], "0");
+    ok(&mut a, "edit_redo", json!({ "doc": doc }));
     ok(&mut a, "form_fill", json!({ "doc": doc, "values": { "Qty": "123" } }));
     assert!(a.call("form_fill", &json!({ "doc": doc, "values": { "Qty": "1234" } })).is_err());
     ok(&mut a, "doc_save", json!({ "doc": doc, "path": "limit.pdf" }));
