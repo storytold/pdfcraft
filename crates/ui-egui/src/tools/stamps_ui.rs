@@ -369,8 +369,9 @@ mod tests {
         app.custom_stamps = saved.to_vec();
         app.next_custom_stamp_id = u64::MAX;
         let settings = app.persist();
-        assert!(settings["custom_stamps"].is_array(), "older builds read custom_stamps as an array");
-        assert_eq!(settings["custom_stamp_next_id"], u64::MAX);
+        let settings_value: serde_json::Value = serde_json::from_str(&settings).expect("settings are JSON");
+        assert!(settings_value["custom_stamps"].is_array(), "older builds read custom_stamps as an array");
+        assert_eq!(settings_value["custom_stamp_next_id"], u64::MAX);
         let mut restored_app = PdfCraftApp::new();
         restored_app.restore(&settings);
         assert_eq!(restored_app.custom_stamps[0].id, u64::MAX - 1);
