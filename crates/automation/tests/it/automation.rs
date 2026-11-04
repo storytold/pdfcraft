@@ -7595,7 +7595,13 @@ fn comparing_page_ranges_through_tools() {
     let r = ok(&mut a, "doc_compare", json!({ "doc": v2, "other": v1, "other_pages": "2-3", "pages": "1-2" }));
     assert_eq!((r["replaced"].as_u64(), r["inserted"].as_u64(), r["deleted"].as_u64()), (Some(1), Some(0), Some(0)), "{r}");
     assert_eq!(r["changes"][0]["new"]["page"], 2);
-    for bad in [json!({ "pages": "9" }), json!({ "other_pages": "abc" }), json!({ "pages": "1", "visual": true })] {
+    assert_eq!(r["changes"][0]["old"]["page"], 3);
+    for bad in [
+        json!({ "pages": "9" }),
+        json!({ "other_pages": "abc" }),
+        json!({ "pages": "1", "visual": true }),
+        json!({ "other_pages": "2", "visual": true }),
+    ] {
         let mut args = json!({ "doc": v2, "other": v1 });
         args.as_object_mut().unwrap().extend(bad.as_object().unwrap().clone());
         assert!(a.call("doc_compare", &args).is_err(), "{args}");
