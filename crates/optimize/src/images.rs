@@ -882,9 +882,15 @@ fn one_bit(
     };
     let mut packed = d.clone();
     packed.set(b"BitsPerComponent".to_vec(), Object::Int(1));
+
+    // Scans are flat raster images without soft masks. Only direct DeviceGray and DeviceRGB
+    // with standard decode arrays can be candidates for heuristic scan binarization.
+    let mut can_binarize = binarize_scans && bits == Some(8) && !d.contains(b"SMask") && !defaults;
+
     // Components a pixel, bits a component, and a pixel's samples as 1 or 0.
     let (n, bpc, white): (usize, usize, Pixel) = match &*doc.resolve(cs) {
         Object::Array(a) if matches!(family(doc, a).as_deref().and_then(Object::as_name), Some(b"Indexed" | b"I")) => {
+            can_binarize = false;
             let bpc = bits.filter(|b| matches!(b, 2 | 4 | 8))?;
             match decode.as_deref() {
                 None => {}
@@ -907,6 +913,9 @@ fn one_bit(
             match decode.as_deref() {
                 None => {}
                 Some(v @ [d0, d1, ..]) if v.len() == 6 && v.chunks(2).all(|pair| pair == [*d0, *d1]) => {
+                    if *d0 != 0.0 || *d1 != 1.0 {
+                        can_binarize = false;
+                    }
                     let number = |n: f64| if n.fract() == 0.0 { Object::Int(n as i64) } else { Object::Real(n) };
                     packed.set(b"Decode".to_vec(), Object::Array(vec![number(*d0), number(*d1)]));
                 }
@@ -919,11 +928,24 @@ fn one_bit(
                 _ => None,
             })
         }
-        _ if bits == Some(8) && one_component(doc, cs) => (1, 8, |v| match v {
-            [0] => Some(false),
-            [255] => Some(true),
-            _ => None,
-        }),
+        Object::Name(name) if matches!(name.as_slice(), b"DeviceGray" | b"G") && bits == Some(8) => {
+            if decode.as_deref().is_some_and(|d| d != [0.0, 1.0]) {
+                can_binarize = false;
+            }
+            (1, 8, |v| match v {
+                [0] => Some(false),
+                [255] => Some(true),
+                _ => None,
+            })
+        }
+        _ if bits == Some(8) && one_component(doc, cs) => {
+            can_binarize = false;
+            (1, 8, |v| match v {
+                [0] => Some(false),
+                [255] => Some(true),
+                _ => None,
+            })
+        }
         _ => return None,
     };
     let row_len = wu.checked_mul(n)?.checked_mul(bpc)?.div_ceil(8);
@@ -931,13 +953,18 @@ fn one_bit(
     // off, rows of 0 and 255 (or palette entries 0 and 1) would still pass below, each shifted.
     let samples = budget.decode_filters(doc, s, allowance(row_len.checked_mul(hu)?, h)?).ok()?;
     let packed_data = packed_rows(&samples, row_len, wu, hu, (n, bpc, white))
-        .or_else(|| if binarize_scans && bpc == 8 { try_binarize_scan(&samples, row_len, wu, hu, n) } else { None })?;
+        .or_else(|| if can_binarize { try_binarize_scan(&samples, row_len, wu, hu, n) } else { None })?;
     Some((packed_data, w, h, Some(packed)))
 }
 
-/// Chroma threshold: maximum allowable difference between R, G, B for a non-background pixel.
-/// Colored seals (red ink) and signatures (blue ballpoint) have chromatic differences well above 15.
+/// Chroma threshold: maximum allowable difference between R, G, B for non-background content.
+/// Colored seals (red ink) and signatures (blue ballpoint) have chromatic differences well above 10.
 const CHROMA_TOLERANCE: u8 = 10;
+
+/// Chroma threshold for any pixel regardless of luminance.
+/// Vibrant inks and highlighters (e.g. bright yellow [255, 255, 0] with lum = 225)
+/// must never be treated as paper background.
+const BRIGHT_CHROMA_LIMIT: u8 = 30;
 
 /// Attempts to binarize an 8-bit image (1 or 3 channels) into 1-bit samples
 /// using Dual-Guard (Chroma Guard + Bimodal Histogram Guard) and Otsu thresholding.
@@ -956,7 +983,8 @@ fn try_binarize_scan(samples: &[u8], row_len: usize, w: usize, h: usize, n: usiz
     // -------------------------------------------------------------
     // GUARD 1: CHROMA GUARD (Only applies to RGB, n == 3)
     // Inspects ink/content pixels (lum < 225) to avoid false rejections
-    // on slightly aged or yellowed scan paper.
+    // on slightly aged or yellowed scan paper, while strictly rejecting
+    // any bright colored pixels (highlighters, stamps, colored ink).
     // -------------------------------------------------------------
     if n == 3 {
         for row in samples.chunks(row_len).take(h) {
@@ -964,13 +992,12 @@ fn try_binarize_scan(samples: &[u8], row_len: usize, w: usize, h: usize, n: usiz
             for chunk in row_pixels.as_chunks::<3>().0 {
                 let (r, g, b) = (chunk[0], chunk[1], chunk[2]);
                 let lum = ((u32::from(r) * 299 + u32::from(g) * 587 + u32::from(b) * 114) / 1000) as u8;
-                if lum < 225 {
-                    let max_c = r.max(g).max(b);
-                    let min_c = r.min(g).min(b);
-                    if max_c - min_c > CHROMA_TOLERANCE {
-                        // Color detail detected! Immediately reject to preserve JPEG colors.
-                        return None;
-                    }
+                let max_c = r.max(g).max(b);
+                let min_c = r.min(g).min(b);
+                let chroma = max_c - min_c;
+                if chroma > BRIGHT_CHROMA_LIMIT || (lum < 225 && chroma > CHROMA_TOLERANCE) {
+                    // Color detail detected! Immediately reject to preserve color appearance.
+                    return None;
                 }
             }
         }
@@ -978,6 +1005,8 @@ fn try_binarize_scan(samples: &[u8], row_len: usize, w: usize, h: usize, n: usiz
 
     // -------------------------------------------------------------
     // GUARD 2: BIMODAL HISTOGRAM GUARD
+    // Fully partitions all 256 luminance levels (0..=65 dark, 66..=214 mid,
+    // 215..=255 bright) so faint pencil or midtone strokes cannot hide.
     // -------------------------------------------------------------
     let mut hist = [0u32; 256];
     let mut dark = 0usize;
@@ -993,10 +1022,9 @@ fn try_binarize_scan(samples: &[u8], row_len: usize, w: usize, h: usize, n: usiz
                 *entry += 1;
             }
             match lum {
-                0..=60 => dark += 1,
+                0..=65 => dark += 1,
                 215..=255 => bright += 1,
-                81..=179 => mid += 1,
-                _ => {}
+                66..=214 => mid += 1,
             }
         }
     }
@@ -1005,8 +1033,9 @@ fn try_binarize_scan(samples: &[u8], row_len: usize, w: usize, h: usize, n: usiz
     let midtone_ratio = mid as f64 / total as f64;
     let dark_ratio = dark as f64 / total as f64;
 
-    // Must be predominantly two-tone with minimal midtones, and contain actual dark content
-    if extreme_ratio < 0.92 || midtone_ratio > 0.012 || dark_ratio < 0.005 {
+    // Must be predominantly two-tone with minimal midtones (at most 1.5%),
+    // and contain actual dark content (at least 0.5% dark pixels).
+    if extreme_ratio < 0.92 || midtone_ratio > 0.015 || dark_ratio < 0.005 {
         return None;
     }
 
@@ -2186,5 +2215,113 @@ mod binarize_tests {
         assert!(result.is_some(), "Must accept noisy text scan with yellowed paper");
         let packed = result.unwrap();
         assert_eq!(packed.len(), w.div_ceil(8) * h);
+    }
+
+    #[test]
+    fn chroma_guard_protects_bright_yellow_highlighter() {
+        // A 100x100 RGB document, mostly white with black text, but has a bright yellow highlighter pixel
+        // lum = ((255*299 + 255*587)/1000) = 225, chroma = 255 > 30.
+        let (w, h) = (100usize, 100usize);
+        let mut samples = vec![250u8; w * h * 3];
+
+        for i in 0..500 {
+            samples[i * 3] = 20;
+            samples[i * 3 + 1] = 20;
+            samples[i * 3 + 2] = 20;
+        }
+
+        samples[800 * 3] = 255;
+        samples[800 * 3 + 1] = 255;
+        samples[800 * 3 + 2] = 0;
+
+        assert_eq!(try_binarize_scan(&samples, w * 3, w, h, 3), None, "Chroma guard must reject images with bright yellow highlighter");
+    }
+
+    #[test]
+    fn histogram_guard_protects_faint_strokes_and_midtones() {
+        let (w, h) = (100usize, 100usize);
+        let total = w * h;
+        // 93% white background (245), 5% dark text (25), 2% faint strokes (190)
+        let mut samples = vec![245u8; total];
+
+        for s in samples.iter_mut().take(500) {
+            *s = 25;
+        }
+        for s in samples.iter_mut().skip(500).take(200) {
+            *s = 190;
+        }
+
+        assert_eq!(try_binarize_scan(&samples, w, w, h, 1), None, "Must reject scans with faint pencil or midtone strokes to prevent text bleaching");
+    }
+
+    #[test]
+    fn one_bit_refuses_smask_images_for_scan_binarization() {
+        use pdfcraft_cos::{Dict, Document, ImageBudget, Object, Stream};
+        let (w, h) = (100u32, 100u32);
+        let (wu, hu) = (w as usize, h as usize);
+        let mut samples = vec![245u8; wu * hu];
+        for s in samples.iter_mut().take(500) {
+            *s = 25;
+        }
+
+        let mut dict = Dict::new();
+        dict.set(b"Width".to_vec(), Object::Int(w.into()));
+        dict.set(b"Height".to_vec(), Object::Int(h.into()));
+        dict.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+        dict.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+
+        let stream_no_mask = Stream::from_raw(dict.clone(), samples.clone());
+        let mut budget = ImageBudget::with_work(u64::MAX);
+        let res = super::one_bit(&Document::new_empty(), &stream_no_mask, true, false, true, &mut budget);
+        assert!(res.is_some(), "Near-bilevel grayscale without SMask should binarize");
+
+        // Now attach an SMask:
+        dict.set(b"SMask".to_vec(), Object::Dict(Dict::new()));
+        let stream_with_mask = Stream::from_raw(dict, samples);
+        let mut budget = ImageBudget::with_work(u64::MAX);
+        let res = super::one_bit(&Document::new_empty(), &stream_with_mask, true, false, true, &mut budget);
+        assert!(res.is_none(), "Images with SMask must refuse scan binarization");
+    }
+
+    #[test]
+    fn one_bit_refuses_indexed_and_inverted_decode_for_scan_binarization() {
+        use pdfcraft_cos::{Dict, Document, ImageBudget, Object, Stream};
+        let (w, h) = (100u32, 100u32);
+        let (wu, hu) = (w as usize, h as usize);
+        let mut samples = vec![245u8; wu * hu];
+        for s in samples.iter_mut().take(500) {
+            *s = 25;
+        }
+
+        let mut dict = Dict::new();
+        dict.set(b"Width".to_vec(), Object::Int(w.into()));
+        dict.set(b"Height".to_vec(), Object::Int(h.into()));
+        dict.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+
+        // 1. Inverted Decode [1 0]
+        dict.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+        dict.set(b"Decode".to_vec(), Object::Array(vec![Object::Int(1), Object::Int(0)]));
+        let stream_inv = Stream::from_raw(dict.clone(), samples.clone());
+        let mut budget = ImageBudget::with_work(u64::MAX);
+        let res = super::one_bit(&Document::new_empty(), &stream_inv, true, false, true, &mut budget);
+        assert!(res.is_none(), "Inverted Decode array must refuse scan binarization");
+
+        // 2. Indexed color space
+        let mut idx_dict = Dict::new();
+        idx_dict.set(b"Width".to_vec(), Object::Int(w.into()));
+        idx_dict.set(b"Height".to_vec(), Object::Int(h.into()));
+        idx_dict.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+        let palette = vec![0u8; 3 * 256];
+        let cs = Object::Array(vec![
+            Object::name("Indexed"),
+            Object::name("DeviceRGB"),
+            Object::Int(255),
+            Object::Stream(Stream::from_raw(Dict::new(), palette)),
+        ]);
+        idx_dict.set(b"ColorSpace".to_vec(), cs);
+        let stream_idx = Stream::from_raw(idx_dict, samples);
+        let mut budget = ImageBudget::with_work(u64::MAX);
+        let res = super::one_bit(&Document::new_empty(), &stream_idx, true, false, true, &mut budget);
+        assert!(res.is_none(), "Indexed color space must refuse scan binarization");
     }
 }
