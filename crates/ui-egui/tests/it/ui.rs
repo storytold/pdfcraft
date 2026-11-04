@@ -1765,9 +1765,10 @@ fn short_window_rail_buttons_scroll_clear_of_page_navigation() {
             });
             h.run_steps(4);
         }
-        let tags = rail(&h, "Tags");
-        assert!(tags.top() >= first.top(), "Tags {tags:?} is fully visible in the scrolling area");
-        assert!(tags.bottom() <= page.top(), "Tags {tags:?} scrolls into view above the page field {page:?}");
+        // The last scrolling button is the page layout toggle, below Tags and continuous scrolling.
+        let last = rail(&h, "Two-page view");
+        assert!(last.top() >= first.top(), "the layout button {last:?} is fully visible in the scrolling area");
+        assert!(last.bottom() <= page.top(), "the layout button {last:?} scrolls into view above the page field {page:?}");
         assert_eq!(h.get(By::new().role(egui::accesskit::Role::TextInput).value("1")).rect(), page, "navigation stays put");
     }
 }
