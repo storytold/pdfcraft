@@ -1711,6 +1711,73 @@ fn the_calculation_order_is_checked_fixed_and_kept() {
     assert_eq!(order.fixed(), ["sub", "total", "tax", "grand"], "only tax moves, to just after total");
 }
 
+/// `set_props` refuses a notation it couldn't store as written before it writes anything: the
+/// tooltip given with it, which is written before the calculation, isn't set either.
+#[test]
+fn a_notation_that_cannot_be_stored_changes_nothing() {
+    use crate::af::Calculate;
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R] >>".into(),
+        "<< /Fields [5 0 R] /DA (/Helv 0 Tf 0 g) >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (total) /Rect [50 700 140 711] /P 3 0 R >>".into(),
+    ];
+    let mut doc = document(&objs);
+    for n in ["", "a EVCALC b", "a */ b", "a\\"] {
+        let props = FieldProps { tooltip: Some("Total".into()), calculate: Some(Calculate::Notation(n.into())), ..Default::default() };
+        assert!(set_props(&mut doc, "total", &props).is_err(), "{n:?}");
+        let all = fields(&doc);
+        let f = field(&all, "total");
+        assert_eq!((f.tooltip.as_deref(), &f.actions.calculate), (None, &Calculate::None), "{n:?} changed nothing");
+    }
+}
+
+/// A formula that reads a field the form doesn't have is flagged, whichever kind of formula it
+/// is: a field deleted from under a sum, a typo in notation, a script's `getField`. So is a
+/// script that builds the names it reads. Neither is an order Fix order can fix.
+#[test]
+fn missing_fields_and_built_names_are_flagged() {
+    use crate::af::{CalcOp, Calculate};
+    use crate::calc_order::CalculationIssue::{BuiltNames, MissingField};
+    let mut doc = one_page();
+    let text = NewField::Text { multiline: false };
+    for (i, name) in ["qty", "gone", "sum", "notation", "script", "built"].into_iter().enumerate() {
+        let y = 700.0 - 40.0 * i as f64;
+        add_field(&mut doc, 0, [50.0, y, 250.0, y + 20.0], &text, Some(name)).unwrap();
+    }
+    let calculate = |c: Calculate| FieldProps { calculate: Some(c), ..FieldProps::default() };
+    set_props(&mut doc, "sum", &calculate(Calculate::Simple { op: CalcOp::Sum, fields: vec!["qty".into(), "gone".into()] })).unwrap();
+    set_props(&mut doc, "notation", &calculate(Calculate::Notation("qty * nope".into()))).unwrap();
+    // qty has one widget, but a widget name is no field: recalculation and getField give qty.0
+    // nothing, so it is as missing as qty.1.
+    let script = "event.value = getField(\"qty\").value + getField(\"ghost\").value + getField(\"qty.0\").value + getField(\"qty.1\").value;";
+    set_field_script(&mut doc, "script", "calculate", Some(script)).unwrap();
+    set_field_script(&mut doc, "built", "calculate", Some("event.value = getField(\"qty\").value + getField(\"row\" + 1).value;")).unwrap();
+    let issues = |doc: &Document| {
+        let order = calculation_order(doc, &fields(doc));
+        assert!(!order.fixable(), "nothing Fix order can fix");
+        order.fields.into_iter().map(|f| (f.name, f.issues)).collect::<Vec<_>>()
+    };
+    let expected = |sum: Vec<_>| {
+        vec![
+            ("sum".to_owned(), sum),
+            ("notation".to_owned(), vec![MissingField { field: "nope".into() }]),
+            (
+                "script".to_owned(),
+                vec![MissingField { field: "ghost".into() }, MissingField { field: "qty.0".into() }, MissingField { field: "qty.1".into() }],
+            ),
+            ("built".to_owned(), vec![BuiltNames]),
+        ]
+    };
+    assert_eq!(issues(&doc), expected(vec![]));
+    delete_field(&mut doc, "gone").unwrap();
+    assert_eq!(issues(&doc), expected(vec![MissingField { field: "gone".into() }]), "a deleted field leaves the sum reading nothing");
+    assert_eq!(issues(&reopen(&doc)), expected(vec![MissingField { field: "gone".into() }]));
+    let order = calculation_order(&doc, &fields(&doc));
+    assert_eq!(order.fields[3].reads, ["qty"], "the names it does know are still read");
+}
+
 /// `/CO` as other tools leave it: a calculated field missing, a field without a calculation, an
 /// entry repeated, a reference to nothing and a number. The order reads around them, and setting
 /// the order writes `/CO` afresh.
@@ -1775,6 +1842,12 @@ fn two_fields_with_one_name_keep_their_places_in_the_order() {
     };
     let row = |name: &str, reads: &str, ok: bool| (name.to_owned(), vec![reads.to_owned()], ok);
     assert_eq!(rows(&doc), [row("dup", "src", false), row("src", "x", true), row("dup", "x", true)]);
+    // Each row is its own field object, so a caller can find the right formula for each dup.
+    let all = fields(&doc);
+    for c in calculation_order(&doc, &all).fields {
+        let f = all.iter().find(|f| f.obj == c.obj).unwrap();
+        assert_eq!((&f.name, f.actions.calculate.reads()), (&c.name, c.reads.clone()));
+    }
     let current: Vec<String> = ["dup", "src", "dup"].map(String::from).into();
     set_calculation_order(&mut doc, &current).unwrap();
     assert_eq!(rows(&doc), [row("dup", "src", false), row("src", "x", true), row("dup", "x", true)], "the current order sets back unchanged");
@@ -3500,6 +3573,149 @@ fn repeated_script_references_share_one_decode_budget() {
     assert_eq!(all.len(), 300);
     let calculate: usize = all.iter().filter_map(|f| f.actions.scripts.calculate.as_ref()).map(String::len).sum();
     assert!(calculate > 0 && calculate <= limit, "{calculate} bytes of field scripts");
+}
+
+/// An unfiltered stream of `body`, as an object of [`document`].
+fn raw_stream(body: &str) -> String {
+    format!("<< /Length {} >>\nstream\n{body}\nendstream", body.len())
+}
+
+/// 300 fields whose value is one 1 MiB text stream: a reading of the form decodes their values
+/// within one budget, not 300 MiB.
+#[test]
+fn repeated_value_streams_share_one_decode_budget() {
+    let fields_list: String = (0..300).map(|i| format!("{} 0 R ", i + 3)).collect();
+    let mut objs = vec![format!("<< /Type /Catalog /AcroForm << /Fields [{fields_list}] >> >>"), raw_stream(&"x".repeat(1 << 20))];
+    objs.extend((0..300).map(|i| format!("<< /FT /Tx /T (f{i}) /V 2 0 R /DV 2 0 R >>")));
+    let all = fields(&document(&objs));
+    assert_eq!(all.len(), 300);
+    let read: usize = all.iter().flat_map(|f| f.value.iter().chain(&f.default)).map(String::len).sum();
+    assert!(read > 0 && read <= crate::read::MAX_VALUE_BYTES, "{read} bytes of values");
+    assert_eq!(all[0].value, ["x".repeat(1 << 20)], "the first field still reads its value");
+}
+
+/// Clear form leaves a field as it is when its default is a stream the value budget didn't reach:
+/// 70 fields typed in, whose default is one 1 MiB text stream, keep a value, the first ones
+/// their default and the rest what was typed, none of them emptied.
+#[test]
+fn clear_form_keeps_a_field_whose_default_was_not_read() {
+    let n = 70;
+    let fields_list: String = (0..n).map(|i| format!("{} 0 R ", i + 3)).collect();
+    let mut objs = vec![format!("<< /Type /Catalog /AcroForm << /Fields [{fields_list}] >> >>"), raw_stream(&"d".repeat(1 << 20))];
+    objs.extend((0..n).map(|i| format!("<< /FT /Tx /T (f{i}) /V (typed) /DV 2 0 R >>")));
+    let mut doc = document(&objs);
+    reset(&mut doc, None).unwrap();
+    let values: Vec<String> = (0..n)
+        .map(|i| {
+            let field = doc.get(ObjRef::new(i as u32 + 3, 0));
+            field.as_dict().and_then(|d| d.get(b"V")).and_then(|v| v.as_string().map(PdfString::to_text)).unwrap_or_default()
+        })
+        .collect();
+    assert!(values.iter().all(|v| !v.is_empty()), "no field is emptied");
+    assert_eq!(values[0], "d".repeat(1 << 20), "the first field goes back to its default");
+    assert_eq!(values[n - 1], "typed", "the last field, whose default wasn't read, keeps its value");
+    // A value the reading didn't decode, with no default, is cleared: it isn't known to be empty.
+    let mut objs = vec![format!("<< /Type /Catalog /AcroForm << /Fields [{fields_list}] >> >>"), raw_stream(&"v".repeat(1 << 20))];
+    objs.extend((0..n).map(|i| format!("<< /FT /Tx /T (f{i}) /V 2 0 R >>")));
+    let mut doc = document(&objs);
+    reset(&mut doc, None).unwrap();
+    let last = doc.get(ObjRef::new(n as u32 + 2, 0));
+    assert!(last.as_dict().and_then(|d| d.get(b"V")).is_none_or(|v| !matches!(v, Object::Ref(_))), "the last field's unread value is cleared");
+}
+
+/// Renaming a field that 300 calculations read through one shared Calculate action, whose script
+/// is a 256 KiB stream, decodes and rewrites that action once, in place: every calculation reads
+/// the new name, and nothing is decoded or written 300 times.
+#[test]
+fn a_rename_rewrites_a_shared_calculation_once() {
+    let n = 300;
+    let refs = |from: usize| -> String { (from..from + n).map(|i| format!("{i} 0 R ")).collect() };
+    let js = format!("AFSimple_Calculate(\"SUM\", new Array (\"a\"));{}", " ".repeat(256 << 10));
+    let mut objs = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        format!("<< /Type /Page /Parent 2 0 R /Annots [5 0 R {}] >>", refs(8)),
+        format!("<< /Fields [5 0 R {}] /DA (/Helv 0 Tf 0 g) >>", refs(8)),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (a) /Rect [50 700 250 720] /P 3 0 R >>".into(),
+        "<< /S /JavaScript /JS 7 0 R >>".into(),
+        raw_stream(&js),
+    ];
+    objs.extend((0..n).map(|i| format!("<< /Type /Annot /Subtype /Widget /FT /Tx /T (c{i}) /Rect [50 10 250 30] /P 3 0 R /AA << /C 6 0 R >> >>")));
+    let mut doc = document(&objs);
+    set_props(&mut doc, "a", &FieldProps { name: Some("qty".into()), ..FieldProps::default() }).unwrap();
+    let action = ObjRef::new(6, 0);
+    let renamed = (8..8 + n).all(|i| {
+        let field = doc.get(ObjRef::new(i as u32, 0));
+        field.as_dict().and_then(|d| d.get(b"AA")).and_then(|aa| aa.as_dict()?.get(b"C")?.as_ref()) == Some(action)
+    });
+    assert!(renamed, "every calculation still names the one shared action");
+    let js = doc.get(action).as_dict().and_then(|d| d.get(b"JS")?.as_string().map(PdfString::to_text)).unwrap_or_default();
+    assert!(js.contains("\"qty\"") && !js.contains("\"a\""), "the shared action reads the new name");
+    assert!(js.len() <= MAX_SCRIPT_BYTES, "{} bytes written once", js.len());
+}
+
+/// A page whose `/Contents` lists one 1 MiB stream ten times is read within the budget given:
+/// pieces past it read as empty, so their rectangles aren't found.
+#[test]
+fn page_shapes_decode_a_repeated_content_stream_within_the_budget() {
+    let piece = format!("%{}\n10 10 20 20 re S\n", "x".repeat(1 << 20));
+    let doc = document(&[
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        format!("<< /Type /Page /Parent 2 0 R /Contents [{}] >>", "4 0 R ".repeat(10)),
+        raw_stream(&piece),
+    ]);
+    assert_eq!(crate::detect::page_shapes(&doc, 0).boxes.len(), 10, "one page's allowance reads them all");
+    let mut budget = DecodeBudget::new(4 << 20, 0);
+    let boxes = crate::detect::shapes_within(&doc, 0, &mut budget).boxes.len();
+    assert!((1..=4).contains(&boxes), "{boxes} rectangles read within 4 MiB");
+    assert_eq!(budget.remaining(), 0, "the budget is spent");
+}
+
+/// Field detection keeps at most 256 saved graphics states, and each `Q` still restores its own
+/// `q` past that: a scale set 300 saves deep is gone once they are all restored.
+#[test]
+fn page_shapes_restore_saves_past_the_cap() {
+    let content = format!("{} 2 0 0 2 0 0 cm {} 10 10 20 20 re S", "q ".repeat(300), "Q ".repeat(300));
+    let doc = document(&[
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Contents 4 0 R >>".into(),
+        raw_stream(&content),
+    ]);
+    assert_eq!(crate::detect::page_shapes(&doc, 0).boxes, [[10.0, 10.0, 30.0, 30.0]]);
+    // A scale set past the cap and closed by its own `Q` leaves a matrix that can't be known until
+    // the last lost save closes: what is drawn in between isn't reported at the scaled place.
+    let content = format!("{} q 2 0 0 2 0 0 cm Q 10 10 20 20 re S {} 40 40 10 10 re S", "q ".repeat(257), "Q ".repeat(257));
+    let doc = document(&[
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Contents 4 0 R >>".into(),
+        raw_stream(&content),
+    ]);
+    assert_eq!(crate::detect::page_shapes(&doc, 0).boxes, [[40.0, 40.0, 50.0, 50.0]]);
+}
+
+/// The PDF/A declaration is read from metadata each filter stage of which decodes within
+/// [`crate::appearances::MAX_XMP_BYTES`], as preflight decodes it: a field drawn with characters its
+/// font lacks decodes no more than that a stage.
+#[test]
+fn a_pdfa_declaration_is_read_from_metadata_within_its_cap() {
+    let declared = |xmp: String| declares_pdfa(&document(&["<< /Type /Catalog /Metadata 2 0 R >>".into(), raw_stream(&xmp)]));
+    let pdfa = |padding: usize| format!("<x:xmpmeta><pdfaid:part>2</pdfaid:part>{}</x:xmpmeta>", " ".repeat(padding));
+    assert!(declared(pdfa(1 << 20)));
+    assert!(!declared(pdfa(crate::appearances::MAX_XMP_BYTES)), "metadata past the cap declares nothing");
+    assert!(!declared("<x:xmpmeta><dc:title>pdfaid</dc:title></x:xmpmeta>".into()), "metadata without pdfaid:part declares nothing");
+    // 3.5 MiB stored as hex, then Flate: its stages decode 7 and 3.5 MiB, each within the cap.
+    let xmp = pdfa(7 << 19);
+    let hex: Vec<u8> = xmp.bytes().flat_map(|b| [b"0123456789ABCDEF"[usize::from(b >> 4)], b"0123456789ABCDEF"[usize::from(b & 15)]]).collect();
+    let mut stream = pdfcraft_cos::Stream::flate(pdfcraft_cos::Dict::new(), &hex);
+    stream.dict.set(b"Filter".to_vec(), Object::Array(vec![Object::name("FlateDecode"), Object::name("ASCIIHexDecode")]));
+    let mut doc = Document::new_empty();
+    let metadata = doc.add(Object::Stream(stream));
+    let catalog = doc.add(Object::Dict([(b"Metadata".to_vec(), Object::Ref(metadata))].into_iter().collect()));
+    doc.trailer_mut().set(b"Root".to_vec(), Object::Ref(catalog));
+    assert!(declares_pdfa(&doc), "metadata through a chain of filters declares PDF/A, as preflight decodes it");
 }
 
 /// A widget listed many times, by one field's `/Kids` or by a `/Kids` array several fields share,
@@ -5354,5 +5570,61 @@ endstream".into(),
         reset(&mut doc, None).unwrap();
         let f = field(&fields(&doc), "opts.a").clone();
         assert!(f.value.iter().all(String::is_empty), "{kind:?}: reset leaves it off, not the parent's Yes: {:?}", f.value);
+    }
+}
+
+#[test]
+fn editing_button_export_values_preserves_selection_and_appearance() {
+    let mut doc = fixture();
+    set_value(&mut doc, "size", &FieldValue::Radio(Some("S".into()))).unwrap();
+    let before = field(&fields(&doc), "size").clone();
+    let appearances: Vec<_> = before.widgets.iter().map(|w| doc.get(w.obj).as_dict().unwrap().get(b"AP").cloned()).collect();
+    set_props(&mut doc, "size", &FieldProps { export_value: Some((0, "Small å".into())), ..Default::default() }).unwrap();
+    let after = field(&fields(&doc), "size").clone();
+    assert_eq!(after.value, before.value);
+    assert_eq!(after.default, before.default);
+    assert_eq!(after.widgets, before.widgets);
+    assert_eq!(after.export_of(0), Some("Small å"));
+    assert_eq!(after.export_of(1), before.export_of(1));
+    assert_eq!(after.export_values(), vec!["Small å"]);
+    assert_eq!(appearances, after.widgets.iter().map(|w| doc.get(w.obj).as_dict().unwrap().get(b"AP").cloned()).collect::<Vec<_>>());
+    let mut saved = reopen(&doc);
+    assert_eq!(field(&fields(&saved), "size").export_of(0), Some("Small å"));
+    set_value(&mut saved, "size", &FieldValue::Radio(Some("Small å".into()))).unwrap();
+    reset(&mut saved, None).unwrap();
+    assert_eq!(field(&fields(&saved), "size").value, before.default);
+
+    set_value(&mut doc, "agree", &FieldValue::Check(true)).unwrap();
+    set_props(&mut doc, "agree", &FieldProps { export_value: Some((0, "Accepted".into())), ..Default::default() }).unwrap();
+    let check = field(&fields(&doc), "agree").clone();
+    assert_eq!(check.value, vec!["Yes"]);
+    assert_eq!(check.export_values(), vec!["Accepted"]);
+    assert_eq!(field(&fields(&reopen(&doc)), "agree").export_of(0), Some("Accepted"));
+}
+
+#[test]
+fn invalid_button_export_edits_leave_document_unchanged() {
+    let mut doc = fixture();
+    let before = write_incremental(&doc, &SaveOptions::default()).unwrap();
+    for (field_name, index, value) in [("size", 99, "new"), ("size", 0, ""), ("size", 0, "Off"), ("size", 0, "L"), ("name", 0, "new")] {
+        assert!(set_props(&mut doc, field_name, &FieldProps { export_value: Some((index, value.into())), ..Default::default() }).is_err());
+        assert_eq!(write_incremental(&doc, &SaveOptions::default()).unwrap(), before);
+    }
+}
+
+#[test]
+fn locked_button_export_edits_leave_the_document_unchanged() {
+    for name in ["agree", "size"] {
+        let mut doc = fixture();
+        set_props(&mut doc, name, &FieldProps { locked: Some(true), ..Default::default() }).unwrap();
+        let before = write_incremental(&doc, &SaveOptions::default()).unwrap();
+        let error = set_props(
+            &mut doc,
+            name,
+            &FieldProps { export_value: Some((0, "Changed".into())), tooltip: Some("Must not change".into()), ..Default::default() },
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("locked"));
+        assert_eq!(write_incremental(&doc, &SaveOptions::default()).unwrap(), before);
     }
 }

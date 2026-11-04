@@ -130,7 +130,7 @@ fn text_marks_and_date() {
     click(&mut h, 50.0, 250.0);
     h.event(egui::Event::Text("Ada Lovelace".into()));
     h.run_steps(1);
-    h.key_press(egui::Key::Enter);
+    commit_typed_text(&mut h);
     h.run_steps(4);
     let v = items(&h);
     assert_eq!(v.len(), 4, "{v:?}");
@@ -139,9 +139,9 @@ fn text_marks_and_date() {
     assert!(v.iter().any(|(t, _)| t == "Stamp"));
 }
 
-/// The open type box, found as the focused text input.
+/// The open type box, found by its accessible name for either input role.
 fn type_box_rect(h: &Harness<'static, PdfCraftApp>) -> egui::Rect {
-    h.query_all_by_role(egui::accesskit::Role::TextInput).find(|n| n.is_focused()).expect("an open type box").rect()
+    h.get_by_label("Text to place").rect()
 }
 
 #[test]
@@ -149,13 +149,13 @@ fn clicking_elsewhere_with_add_text_keeps_the_typed_text() {
     let mut h = harness();
     h.state_mut().execute("sign.fill.text");
     click(&mut h, 50.0, 250.0);
-    h.event(egui::Event::Text("Ada Lovelace".into()));
+    h.event(egui::Event::Text("\nAda\nLovelace\n".into()));
     h.run_steps(1);
     // Still on Add text: the next click starts a new box, and must keep the first one.
     click(&mut h, 50.0, 150.0);
     h.run_steps(2);
     let v = items(&h);
-    assert_eq!(v, vec![("FreeText".to_string(), Some("Ada Lovelace".to_string()))]);
+    assert_eq!(v, vec![("FreeText".to_string(), Some("\nAda\nLovelace\n".to_string()))]);
     assert!(h.state().views[0].fill_text.as_ref().is_some_and(|t| t.text.is_empty()), "a new, empty box is open");
 }
 
@@ -170,7 +170,7 @@ fn fill_text_size_controls_new_text_and_survives_settings_restore() {
     assert_eq!(h.state().views[0].fill_text.as_ref().map(|t| t.size), Some(24.0));
     h.event(egui::Event::Text("Larger text".into()));
     h.run_steps(1);
-    h.key_press(egui::Key::Enter);
+    commit_typed_text(&mut h);
     h.run_steps(3);
     let annotation =
         h.state().session.get(h.state().views[0].id).unwrap().info.annotations.iter().find(|a| a.contents.as_deref() == Some("Larger text")).unwrap();
@@ -192,7 +192,7 @@ fn fill_text_size_resizes_the_selected_text() {
     click(&mut h, 50.0, 250.0);
     h.event(egui::Event::Text("Resize me".into()));
     h.run_steps(1);
-    h.key_press(egui::Key::Enter);
+    commit_typed_text(&mut h);
     h.run_steps(3);
     let height = |h: &Harness<'static, PdfCraftApp>| {
         let s = h.state();
@@ -280,6 +280,53 @@ fn the_type_box_text_matches_the_page_zoom_in_a_turned_view() {
             assert!((d - size * zoom).abs() < 0.5, "{rotate}°: drawn at {d}, the page shows it at {}", size * zoom);
         }
     }
+}
+
+#[test]
+fn fill_text_colour_survives_preview_commit_settings_and_save() {
+    let mut h = harness();
+    h.state_mut().execute("sign.fill.text");
+    h.run_steps(2);
+    h.get_by_label("Colour").click();
+    h.run_steps(2);
+    h.get_by_label("Blue").click();
+    h.run_steps(2);
+    let color = h.state().fill_text_color;
+    assert!(color[2] > color[0], "blue was selected: {color:?}");
+    click(&mut h, 50.0, 250.0);
+    assert_eq!(h.state().views[0].fill_text.as_ref().unwrap().color, color, "the editor uses the selected colour");
+    h.event(egui::Event::Text("Blue form text".into()));
+    h.run_steps(2);
+    commit_typed_text(&mut h);
+    h.run_steps(3);
+    let id = h.state().views[0].id;
+    let expected = color.map(|v| v as f32);
+    let annotation = h.state().session.get(id).unwrap().info.annotations.iter().find(|a| a.contents.as_deref() == Some("Blue form text")).unwrap();
+    assert_eq!(annotation.color, Some(expected));
+    let bytes = h.state().session.save_bytes(id).unwrap();
+    let reopened = harness_bytes(&bytes);
+    let saved = reopened
+        .state()
+        .session
+        .get(reopened.state().views[0].id)
+        .unwrap()
+        .info
+        .annotations
+        .iter()
+        .find(|a| a.contents.as_deref() == Some("Blue form text"))
+        .unwrap();
+    assert_eq!(saved.color, Some(expected));
+    let mut restored = PdfCraftApp::new();
+    restored.restore(&h.state().persist());
+    assert_eq!(restored.fill_text_color, color);
+    restored.restore(r#"{"fill_text_color":[2,0,0]}"#);
+    assert_eq!(restored.fill_text_color, color, "invalid saved colours are ignored");
+    h.state_mut().execute("edit.undo");
+    h.run_steps(2);
+    assert!(!items(&h).iter().any(|(_, text)| text.as_deref() == Some("Blue form text")));
+    h.state_mut().execute("edit.redo");
+    h.run_steps(2);
+    assert!(items(&h).iter().any(|(_, text)| text.as_deref() == Some("Blue form text")));
 }
 
 #[test]
@@ -1109,7 +1156,7 @@ fn saving_flattens_fill_and_sign_only_when_the_preference_is_on() {
     app.open_bytes("form.pdf", None, FIXTURE.to_vec()).unwrap();
     let id = app.views[0].id;
     app.session.apply(id, mark).unwrap();
-    app.views[0].fill_text = Some(TypeBox { page: 0, at: [40.0, 200.0], text: "Typed".into(), size: 10.0, focus: false });
+    app.views[0].fill_text = Some(TypeBox { page: 0, at: [40.0, 200.0], text: "Typed".into(), size: 10.0, color: [0.0; 3], focus: false });
     let kept = dir.join("kept.pdf");
     app.save_override = Some(kept.to_string_lossy().into_owned());
     assert!(app.save_active(SaveTarget::InPlace));
@@ -1120,7 +1167,7 @@ fn saving_flattens_fill_and_sign_only_when_the_preference_is_on() {
     assert!(texts.iter().any(|t| t == "Typed"), "an open type box is saved: {texts:?}");
     assert_eq!(reopened.session.get(reopened.views[0].id).unwrap().info.annotations.len(), 2, "the check mark stays too");
 
-    app.views[0].fill_text = Some(TypeBox { page: 0, at: [40.0, 160.0], text: "More".into(), size: 10.0, focus: false });
+    app.views[0].fill_text = Some(TypeBox { page: 0, at: [40.0, 160.0], text: "More".into(), size: 10.0, color: [0.0; 3], focus: false });
     app.flatten_fill_sign_on_save = true;
     let flat = dir.join("flat.pdf");
     app.save_override = Some(flat.to_string_lossy().into_owned());
@@ -1764,4 +1811,80 @@ fn mode_tabs_keep_the_hand_over_a_type_box_scrolled_under_them() {
     h.drop_at(convert);
     h.run_steps(3);
     assert_eq!(h.state().mode, pdfcraft_ui_egui::Mode::Convert, "the tab takes the click, not the text box");
+}
+
+fn commit_typed_text(h: &mut Harness<'static, PdfCraftApp>) {
+    let p = pos2(350.0, 850.0); // Blank canvas outside the page and the type box.
+    h.hover_at(p);
+    h.drag_at(p);
+    h.run_steps(1);
+    h.drop_at(p);
+    h.run_steps(3);
+}
+
+fn fill_input(h: &mut Harness<'static, PdfCraftApp>, events: impl IntoIterator<Item = egui::Event>) {
+    h.input_mut().events.extend(events);
+    let ctx = h.ctx.clone();
+    let mut raw = std::mem::take(h.input_mut());
+    h.state_mut().prepare_raw_input(&ctx, &mut raw);
+    *h.input_mut() = raw;
+    h.step();
+    h.run_steps(2);
+}
+
+fn fill_key(h: &mut Harness<'static, PdfCraftApp>, key: egui::Key) {
+    fill_input(
+        h,
+        [true, false].map(|pressed| egui::Event::Key { key, physical_key: Some(key), pressed, repeat: false, modifiers: egui::Modifiers::NONE }),
+    );
+}
+
+#[test]
+fn fill_sign_enter_adds_lines_outside_click_commits_and_escape_cancels() {
+    let shots = std::env::var_os("PDFCRAFT_FILL_SIGN_SHOTS").is_some();
+    let _gpu = shots.then(gpu);
+    let mut h = harness();
+    assert!(h.state_mut().execute("sign.fill.text"));
+    click(&mut h, 50.0, 300.0);
+    let initial_height = type_box_rect(&h).height();
+    fill_key(&mut h, egui::Key::Enter);
+    assert_eq!(h.state().views[0].fill_text.as_ref().map(|t| t.text.as_str()), Some("\n"), "Enter inserts a newline and keeps the editor open");
+    fill_input(&mut h, [egui::Event::Text("Ada".into())]);
+    fill_key(&mut h, egui::Key::Enter);
+    fill_key(&mut h, egui::Key::Enter);
+    fill_input(&mut h, [egui::Event::Text("Lovelace".into())]);
+    fill_key(&mut h, egui::Key::Enter);
+    let text = "\nAda\n\nLovelace\n";
+    assert_eq!(h.state().views[0].fill_text.as_ref().unwrap().text, text);
+    assert!(items(&h).is_empty(), "Enter never places an annotation");
+    let galley = h
+        .output()
+        .shapes
+        .iter()
+        .find_map(|s| match &s.shape {
+            egui::Shape::Text(t) if t.galley.text() == text => Some(&t.galley),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(galley.rows.len(), 5, "short typed lines fit without accidental soft wraps");
+    assert!(type_box_rect(&h).height() > initial_height * 3.0, "the editor grows with its lines");
+    if shots {
+        h.render().unwrap().save("/tmp/5850-multiline.png").unwrap();
+    }
+    commit_typed_text(&mut h);
+    assert!(h.state().views[0].fill_text.is_none());
+    assert_eq!(items(&h), [("FreeText".to_owned(), Some(text.to_owned()))]);
+    let id = h.state().views[0].id;
+    let saved = h.state().session.save_bytes(id).unwrap();
+    let mut session = pdfcraft_engine::Session::new();
+    let reopened = session.open("again.pdf", None, saved.clone(), None).unwrap();
+    let annot = &session.get(reopened).unwrap().info.annotations[0];
+    assert_eq!(annot.contents.as_deref(), Some(text));
+    assert!(annot.rect[3] - annot.rect[1] >= 5.0 * 10.0 * 1.2, "the saved box keeps all five lines");
+    click(&mut h, 50.0, 180.0);
+    fill_input(&mut h, [egui::Event::Text("Cancel me".into())]);
+    fill_key(&mut h, egui::Key::Enter);
+    fill_key(&mut h, egui::Key::Escape);
+    assert!(h.state().views[0].fill_text.is_none());
+    assert_eq!(h.state().session.save_bytes(id).unwrap(), saved, "Escape cancels without writing");
 }
