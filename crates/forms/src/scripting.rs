@@ -158,7 +158,7 @@ pub(crate) fn apply_changes(doc: &mut Document, changes: &[FieldChange], except:
             if f.kind != FieldKind::PushButton {
                 return Err(FormError::Invalid(format!("{} is not a push button", f.name)));
             }
-            crate::set_props(doc, &f.name, &crate::FieldProps { caption: Some((0, caption.clone())), ..Default::default() })?;
+            crate::set_props(doc, &f.name, &crate::FieldProps { caption_all: Some(caption.clone()), ..Default::default() })?;
         }
     }
     Ok(())

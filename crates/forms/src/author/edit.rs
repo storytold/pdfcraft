@@ -138,6 +138,12 @@ pub fn set_props(doc: &mut Document, name: &str, props: &FieldProps) -> Result<S
             return invalid(format!("{name} has no widget {}", wi.saturating_add(1)));
         }
     }
+    if props.caption_all.is_some() && f.kind != FieldKind::PushButton {
+        return invalid("only push buttons have a caption");
+    }
+    if props.caption_all.is_some() && props.caption.is_some() {
+        return invalid("give a field caption or a widget caption, not both");
+    }
     // Validated before anything is written, so a refused rotation leaves the document unchanged.
     // `Some(Some(rect))`: the widget's axis changes and it gets the swapped rectangle.
     let mut rotated_rect: Option<Option<[f64; 4]>> = None;
@@ -576,6 +582,13 @@ fn apply_late_widget_props(
         let mut mk = doc.get(w.obj).as_dict().and_then(|d| d.get(b"MK").map(|m| doc.resolve(m).as_dict().cloned())).flatten().unwrap_or_default();
         mk.set(b"CA".to_vec(), PdfString::text(caption));
         doc.update_dict(w.obj, |d| d.set(b"MK".to_vec(), Object::Dict(mk)))?;
+    }
+    if let Some(caption) = &props.caption_all {
+        for w in &f.widgets {
+            let mut mk = doc.get(w.obj).as_dict().and_then(|d| d.get(b"MK").map(|m| doc.resolve(m).as_dict().cloned())).flatten().unwrap_or_default();
+            mk.set(b"CA".to_vec(), PdfString::text(caption));
+            doc.update_dict(w.obj, |d| d.set(b"MK".to_vec(), Object::Dict(mk)))?;
+        }
     }
     // A label-only edit must not replace another widget's custom appearances.
     let only = props.caption.as_ref().filter(|_| *props == (FieldProps { caption: props.caption.clone(), ..Default::default() })).map(|(wi, _)| *wi);

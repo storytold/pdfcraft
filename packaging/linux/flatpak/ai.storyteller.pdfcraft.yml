@@ -18,6 +18,7 @@ sdk-extensions:
   - org.freedesktop.Sdk.Extension.rust-stable
 command: pdfcraft
 finish-args:
+  - --filesystem=xdg-data/ArtCraft/versions:ro
   # Display: Wayland first; X11 only when no Wayland compositor is running.
   - --socket=wayland
   - --socket=fallback-x11
@@ -98,6 +99,9 @@ modules:
       env:
         CARGO_HOME: /run/build/pdfcraft/cargo
         CARGO_NET_OFFLINE: 'true'
+        # The interface translations (the craft-i18n source below), embedded by build.rs.
+        CRAFT_I18N_DIR: /run/build/pdfcraft/craft-i18n
+        CRAFT_I18N_REQUIRED: '1'
     build-commands:
       - cargo --offline build --release --locked -p pdfcraft
       - install -Dm755 target/release/pdfcraft /app/bin/pdfcraft
@@ -119,4 +123,9 @@ modules:
           - corpus
           - build-flatpak
           - .flatpak-builder
+      # The interface translations at the commit in craft-i18n.rev (a test keeps the two equal).
+      - type: git
+        url: https://github.com/storytold/craft-i18n
+        commit: dfbe955b1ba4aa84bb34c80c45b9d917e8da4704
+        dest: craft-i18n
       - cargo-sources.json

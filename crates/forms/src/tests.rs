@@ -221,6 +221,24 @@ fn button_caption_preserves_other_widgets_and_shared_dictionaries() {
             assert!(!apd.contains(b"R") && !apd.contains(b"D"), "stale hover/pressed text must not survive");
             assert!(ap(&doc, &f.widgets[1]).contains("(Clear Form) Tj"));
         }
+        let mut doc = original.clone();
+        set_props(&mut doc, "clear_button", &FieldProps { caption_all: Some("Continue".into()), ..Default::default() }).unwrap();
+        let doc = Document::open(Arc::new(pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
+        let f = field(&fields(&doc), "clear_button").clone();
+        assert_eq!(f.widgets.iter().map(|w| w.caption.as_deref()).collect::<Vec<_>>(), [Some("Continue"), Some("Continue")]);
+        assert!(f.widgets.iter().all(|w| ap(&doc, w).contains("(Continue) Tj")));
+
+        let mut doc = original.clone();
+        apply_script_changes(
+            &mut doc,
+            &[FieldChange { name: "clear_button".into(), caption: Some("Proceed".into()), ..Default::default() }],
+            &mut NoScripts,
+        )
+        .unwrap();
+        let doc = Document::open(Arc::new(pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
+        let f = field(&fields(&doc), "clear_button").clone();
+        assert_eq!(f.widgets.iter().map(|w| w.caption.as_deref()).collect::<Vec<_>>(), [Some("Proceed"), Some("Proceed")]);
+        assert!(f.widgets.iter().all(|w| ap(&doc, w).contains("(Proceed) Tj")));
     }
 }
 
