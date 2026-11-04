@@ -2647,7 +2647,9 @@ fn progress_is_reported_per_image_and_a_refusal_cancels() {
     };
     let mut seen = Vec::new();
     let report = optimize_with_progress(&mut build(), &Settings::default(), &mut |s| {
-        seen.push(s);
+        if !matches!(s, Stage::Reading { .. }) {
+            seen.push(s);
+        }
         true
     })
     .unwrap();
@@ -4207,4 +4209,54 @@ fn a_picture_whose_mask_is_not_a_stencil_is_left_alone() {
         assert_eq!(report.images_resampled + report.images_recompressed, 0, "{what}: {report:?}");
         assert_eq!(stream(&doc, img), before, "{what}");
     }
+}
+
+/// Pictures run on several threads: what comes out doesn't depend on how many.
+#[test]
+fn the_same_file_comes_out_with_any_number_of_threads() {
+    let build = || {
+        let mut doc = Document::new_empty();
+        let shared_mask = image(&mut doc, 1200, 1200, 1, false, None);
+        // Under a soft mask they share, at different sizes on the page: the second must start from
+        // the mask the first left. Each needs the mask at a different size.
+        let first = image(&mut doc, 1200, 1200, 3, true, Some(shared_mask));
+        let second = image(&mut doc, 1000, 1000, 3, true, Some(shared_mask));
+        page(&mut doc, &[("Im0", first)], "q 144 0 0 144 100 100 cm /Im0 Do Q");
+        page(&mut doc, &[("Im0", second)], "q 180 0 0 180 100 100 cm /Im0 Do Q");
+        // Enough others for the threads.
+        for page_no in 0..22u32 {
+            let img = image(&mut doc, 500 + page_no, 500, 3, true, None);
+            page(&mut doc, &[("Im0", img)], "q 72 0 0 72 100 100 cm /Im0 Do Q");
+        }
+        doc
+    };
+    let run = |workers| {
+        let mut doc = build();
+        let report = optimize(&mut doc, &Settings { workers: Some(workers), ..Settings::default() }).unwrap();
+        assert_eq!(report.images, 24, "{report:?}");
+        assert!(report.images_resampled + report.images_recompressed > 16, "{report:?}");
+        (write_full(&doc, &SaveOptions::default()).unwrap(), format!("{report:?}"))
+    };
+    let (one, one_report) = run(1);
+    for workers in [2, 4, 7] {
+        let (many, many_report) = run(workers);
+        assert_eq!(many_report, one_report, "{workers} threads count the same");
+        assert!(many == one, "{workers} threads write the same bytes");
+    }
+}
+
+/// Pages too small for a run aren't read, and that must not cost the smallest run there can be.
+#[test]
+fn the_fewest_strips_that_make_a_picture_are_merged() {
+    use pdfcraft_optimize::fragments::MIN_FRAGMENTS;
+    let keep = Settings {
+        gray: ImageSettings { downsample: false, target_ppi: 150.0, above_ppi: 225.0, compression: Compression::Retain },
+        ..Settings::default()
+    };
+    let (mut doc, _) = printed_page(MIN_FRAGMENTS as _, |_| false, |_, s| s);
+    let r = optimize(&mut doc, &keep).unwrap();
+    assert_eq!((r.merged_images, r.fragments_merged), (1, MIN_FRAGMENTS), "{r:?}");
+    let (mut doc, _) = printed_page((MIN_FRAGMENTS - 1) as _, |_| false, |_, s| s);
+    let r = optimize(&mut doc, &keep).unwrap();
+    assert_eq!((r.merged_images, r.fragments_merged), (0, 0), "{r:?}");
 }

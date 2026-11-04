@@ -243,14 +243,22 @@ fn merge_page(
     images: &mut ImageBudget,
 ) -> Result<usize, OptimizeError> {
     let Some(contents) = doc.get(page).as_dict().and_then(|d| d.get(b"Contents").cloned()) else { return Ok(0) };
+    let resources = page_resources(doc, page).unwrap_or_default();
+    let mut xobjects = resources.get(b"XObject").map(|x| doc.resolve(x)).and_then(|x| x.as_dict().cloned()).unwrap_or_default();
+    // Reading a heavy page takes seconds, so not one that has no picture that could be a fragment.
+    if !xobjects.iter().any(|(name, _)| fragment_image(doc, &xobjects, name).is_some()) {
+        return Ok(0);
+    }
     // A page whose content isn't all known is left alone: rewriting it would drop the rest.
     let Some(data) = content_bytes(doc, &contents, &mut DecodeBudget::page()) else { return Ok(0) };
+    // Nor one that doesn't draw enough things for a run, each fragment being a `Do`.
+    if data.windows(2).filter(|w| *w == b"Do").count() < MIN_FRAGMENTS {
+        return Ok(0);
+    }
     let parsed = parse(&data);
     if parsed.skipped > 0 {
         return Ok(0);
     }
-    let resources = page_resources(doc, page).unwrap_or_default();
-    let mut xobjects = resources.get(b"XObject").map(|x| doc.resolve(x)).and_then(|x| x.as_dict().cloned()).unwrap_or_default();
     let ops = parsed.ops;
     let mut out: Vec<Op> = Vec::with_capacity(ops.len());
     let (mut i, mut merged, mut k) = (0, 0, 0);
@@ -339,6 +347,9 @@ pub(crate) fn run(
     budget: &mut ImageBudget,
 ) -> Result<(), OptimizeError> {
     for p in pages {
+        if !progress(Stage::Reading { done: 0, total: pages.len() }) {
+            return Err(OptimizeError::Cancelled);
+        }
         report.fragments_merged += merge_page(doc, *p, report, progress, budget)?;
     }
     Ok(())
