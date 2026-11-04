@@ -11,6 +11,8 @@ pub enum CloseRequest {
     Quit,
     /// File ▸ Close all: like Quit, but the application stays open.
     All,
+    /// Close this window (not the main one) once every dirty document in it is resolved.
+    Window,
 }
 
 impl PdfCraftApp {
@@ -76,11 +78,13 @@ impl PdfCraftApp {
                 Some(i) => i,
                 None => return, // already closed
             },
-            CloseRequest::Quit | CloseRequest::All => match self.first_dirty() {
+            CloseRequest::Quit | CloseRequest::All | CloseRequest::Window => match self.first_dirty() {
                 Some(i) => i,
                 None => {
-                    if req == CloseRequest::Quit {
-                        self.quit(ctx);
+                    match req {
+                        CloseRequest::Quit => self.quit(ctx),
+                        CloseRequest::Window => self.queue_window_op(crate::WindowOp::Close(self.current_window())),
+                        _ => {}
                     }
                     return;
                 }
@@ -120,7 +124,7 @@ impl PdfCraftApp {
         self.close_tab(index);
         // A newer prompt wins: the user may have started another close while a save was pending,
         // and seen its question, which keeps counting as seen.
-        if (req == CloseRequest::Quit || req == CloseRequest::All) && self.close_request.is_none() {
+        if !matches!(req, CloseRequest::Tab(_)) && self.close_request.is_none() {
             match self.first_dirty() {
                 Some(_) => {
                     // A question about the next document is a new one.
@@ -128,6 +132,7 @@ impl PdfCraftApp {
                     self.close_request = Some(req);
                 }
                 None if req == CloseRequest::Quit => self.quit(ctx),
+                None if req == CloseRequest::Window => self.queue_window_op(crate::WindowOp::Close(self.current_window())),
                 None => {}
             }
         }
@@ -135,8 +140,16 @@ impl PdfCraftApp {
 
     /// Request a normal application exit, preserving every unsaved document until answered.
     /// Returns false while the existing save/discard/cancel prompt needs a decision.
-    pub(crate) fn request_quit(&mut self, ctx: &egui::Context) -> bool {
-        if self.first_dirty().is_some() {
+    pub fn request_quit(&mut self, ctx: &egui::Context) -> bool {
+        // Asked from another window: the main window asks, with every window's tabs in it.
+        if self.current_window() != crate::WindowId::ROOT {
+            self.queue_window_op(crate::WindowOp::MergeAll);
+            self.queue_window_op(crate::WindowOp::Quit);
+            return false;
+        }
+        if self.any_unsaved_work() {
+            // Every unsaved document is brought forward to save it, so they all come here first.
+            self.merge_all_windows();
             self.close_request = Some(CloseRequest::Quit);
             ctx.request_repaint();
             false
@@ -149,7 +162,8 @@ impl PdfCraftApp {
 
     fn quit(&mut self, ctx: &egui::Context) {
         self.allow_quit = true;
-        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        // The main window's close is the application's, whichever window asked.
+        ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Close);
     }
 
     /// Publish whether any document has unsaved work, for the browser's reload warning (#812).
@@ -157,29 +171,25 @@ impl PdfCraftApp {
         self.unsaved_flag.store(self.first_dirty().is_some(), std::sync::atomic::Ordering::Relaxed);
     }
 
-    /// Intercept window close while documents have unsaved changes.
+    /// Intercept the main window's close while documents, in any window, have unsaved changes
+    /// (⌘Q is read per window, in `window_logic`).
     pub(crate) fn guard_quit(&mut self, ctx: &egui::Context) {
         // egui's default quit shortcut ignores extra Alt/Shift, including Ctrl+Alt+Q for '@'.
         ctx.options_mut(|o| o.quit_shortcuts.clear());
-        let shortcut = ctx.input(|i| {
-            i.events.iter().any(|e| {
-                matches!(e, egui::Event::Key { key: egui::Key::Q, pressed: true, modifiers, .. }
-                    if modifiers.matches_exact(egui::Modifiers::COMMAND))
-            })
-        });
-        if shortcut {
-            self.request_quit(ctx);
-        }
         self.sync_unsaved_flag();
         if !ctx.input(|i| i.viewport().close_requested()) {
             return;
         }
-        // `first_dirty` counts text typed into a field as an unsaved change.
-        if !self.allow_quit && self.first_dirty().is_some() {
+        // `any_unsaved_work` counts text typed into a field as an unsaved change.
+        if !self.allow_quit && self.any_unsaved_work() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            // Every unsaved document is brought forward to save it, so they all come here first.
+            self.merge_all_windows();
             self.close_request = Some(CloseRequest::Quit);
         } else {
-            // A clean quit: nothing is left to recover.
+            // A clean quit: nothing is left to recover, and the last session remembers every
+            // window's files (the other windows go with the app).
+            self.merge_all_windows();
             self.shutdown_recovery();
         }
     }

@@ -1,6 +1,10 @@
 use super::{Host, Reply, Value, json};
 
 impl Host for crate::PdfCraftApp {
+    fn widget_control_supported(&self) -> bool {
+        self.current_window() == crate::WindowId::ROOT
+    }
+
     /// Cancel any in-progress pointer gesture in every open view.
     fn cancel_pointer_gestures(&mut self) {
         for view in &mut self.views {
@@ -27,6 +31,7 @@ impl Host for crate::PdfCraftApp {
     fn capture_epoch(&self) -> u64 {
         use std::hash::{Hash as _, Hasher as _};
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.current_window().hash(&mut hasher);
         let doc = self.active.and_then(|i| self.views.get(i)).map(|v| v.id.0);
         doc.hash(&mut hasher);
         format!(
@@ -71,9 +76,25 @@ impl Host for crate::PdfCraftApp {
             self.pending_opens.iter().map(|pending| json!({ "token": pending.token, "name": pending.name, "path": pending.path })).collect();
         #[cfg(target_arch = "wasm32")]
         let pending_opens: Vec<Value> = Vec::new();
+        // Several windows (M14): `documents` and `active` are the window's that the request runs
+        // in (the one with the focus, `window_id`); `windows` lists every window's tabs.
+        let windows: Vec<Value> = self
+            .window_titles()
+            .into_iter()
+            .map(|(id, title)| {
+                let tabs: Vec<Value> = self
+                    .all_views()
+                    .filter(|(w, _)| *w == id)
+                    .filter_map(|(_, v)| self.session.get(v.id).map(|d| json!({ "doc": v.id.0, "name": d.name, "dirty": d.dirty })))
+                    .collect();
+                json!({ "id": id.0, "title": title, "focused": self.focused_window() == id, "tabs": tabs })
+            })
+            .collect();
         json!({
             "side_panels": crate::side_panels::state(self),
             "documents": docs,
+            "window_id": self.current_window().0,
+            "windows": windows,
             "pending_opens": pending_opens,
             "active": active.map(|v| json!({
                 "doc": v.id.0,

@@ -51,11 +51,16 @@ impl PdfCraftApp {
     /// Colors). A document the change actually touches re-renders.
     pub fn set_reading_colors(&mut self, colors: pdfcraft_render::ReadingColors) {
         self.reading_colors = colors;
-        for i in 0..self.views.len() {
-            // Idempotent per document: the engine says whether anything changed.
-            if self.session.set_reading_colors(self.views[i].id, colors) {
-                self.views[i].invalidate_content();
-            }
+        // The documents of every window, not only the current one's.
+        for window in self.window_ids() {
+            self.with_window(window, |app| {
+                for i in 0..app.views.len() {
+                    // Idempotent per document: the engine says whether anything changed.
+                    if app.session.set_reading_colors(app.views[i].id, colors) {
+                        app.views[i].invalidate_content();
+                    }
+                }
+            });
         }
     }
 

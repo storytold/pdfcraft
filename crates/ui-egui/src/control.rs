@@ -13,7 +13,11 @@
 //!
 //! Methods (JSON in, JSON out):
 //! - `ui.state`: open documents, active document, page, zoom, page errors, mode, panels, dialog,
-//!   notice and observed window dimensions in logical points.
+//!   notice and observed window dimensions in logical points. With several windows (M14), the
+//!   documents and the active document are the focused window's (`window_id`), and `windows`
+//!   lists every window's `id`, `title`, `focused` and `tabs`. Commands, options, opening,
+//!   resizing and screenshots act on the focused window. Widget inspection and synthetic
+//!   input currently support the main window only; other windows reject them without acting.
 //! - `ui.inspect {query?, role?, focused?, limit?}`: widgets in tree order with `id` (a string), `role`, `label`,
 //!   `value`, `rect` (points), `enabled`, `toggled`, `selected`, `clickable`, `focusable`, `focused`, `depth`.
 //! - `ui.click {id}` | `{label}` | `{x, y, button?}`: click a widget (by its AccessKit action) or a
@@ -244,6 +248,11 @@ pub(crate) trait Host {
     /// Request application exit; returns whether it closed without asking for confirmation.
     fn quit(&mut self, ctx: &egui::Context) -> bool;
 
+    /// Whether the plugin's widget tree and injected input belong to this host window.
+    fn widget_control_supported(&self) -> bool {
+        true
+    }
+
     /// A generation that changes when the input target (document, dialog, focus) does.
     ///
     /// Synthetic input admitted for one generation must not be replayed into another.
@@ -395,7 +404,7 @@ impl Control {
                     };
                     reserved_total = new_total;
                     slot.cancel();
-                    let (new_slot, new_callback) = craft_ui::capture::CaptureSlot::new(ctx, egui::ViewportId::ROOT, MAX_IMAGE_BYTES);
+                    let (new_slot, new_callback) = craft_ui::capture::CaptureSlot::new(ctx, ctx.viewport_id(), MAX_IMAGE_BYTES);
                     *slot = new_slot;
                     *callback = Some(new_callback);
                     *geometry = current;
