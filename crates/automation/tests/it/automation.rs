@@ -3183,7 +3183,7 @@ fn structure_classes_list_rename_assign_undo_and_save_reopen() {
 1 0 obj << /Type /Catalog /Pages 2 0 R /MarkInfo << /Marked true >> /StructTreeRoot 5 0 R >> endobj
 2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
 3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /StructParents 0 >> endobj
-5 0 obj << /Type /StructTreeRoot /K 6 0 R /ClassMap << /RowHead << /O /Table /RowSpan 2 >> /Column << /O /Table /ColSpan 3 >> >> >> endobj
+5 0 obj << /Type /StructTreeRoot /K 6 0 R /ClassMap << /RowHead << /O /Table /RowSpan 2 >> /Column << /O /Table /ColSpan 3 >> /Name,Comma << /O /Layout >> /Legacy#20Name << /O /Layout >> >> >> endobj
 6 0 obj << /S /Document /P 5 0 R /K [7 0 R 8 0 R] >> endobj
 7 0 obj << /S /P /P 6 0 R /Pg 3 0 R /C [/Column /RowHead] >> endobj
 8 0 obj << /S /P /P 6 0 R /Pg 3 0 R /C /RowHead >> endobj
@@ -3193,7 +3193,7 @@ trailer << /Root 1 0 R >>
     .unwrap();
     let doc = ok(&mut a, "doc_open", json!({ "path": "classes.pdf" }))["doc"].as_u64().unwrap();
     let classes = ok(&mut a, "accessibility_classes", json!({ "doc": doc }));
-    assert_eq!(classes["count"], 2);
+    assert_eq!(classes["count"], 4);
     let renamed = ok(&mut a, "accessibility_rename_class", json!({ "doc": doc, "old": "RowHead", "new": "HeaderCell" }));
     assert_eq!(renamed["classes"].as_array().unwrap().iter().find(|c| c["name"] == "HeaderCell").unwrap()["assignments"], 2);
     let tags = ok(&mut a, "accessibility_tags", json!({ "doc": doc }));
@@ -3208,6 +3208,12 @@ trailer << /Root 1 0 R >>
         "accessibility_set_tag_property",
         json!({ "doc": doc, "object": 8, "generation": 0, "property": "class", "value": "Column, RowHead" }),
     );
+    assert_eq!(ok(&mut a, "edit_undo", json!({ "doc": doc }))["undone"], "Change tag properties");
+    ok(&mut a, "accessibility_set_tag_property", json!({ "doc": doc, "object": 8, "generation": 0, "property": "class", "value": "Name,Comma" }));
+    assert_eq!(ok(&mut a, "accessibility_tags", json!({ "doc": doc }))["tags"][2]["classes"], json!(["Name,Comma"]));
+    assert_eq!(ok(&mut a, "edit_undo", json!({ "doc": doc }))["undone"], "Change tag properties");
+    ok(&mut a, "accessibility_set_tag_property", json!({ "doc": doc, "object": 8, "generation": 0, "property": "class", "value": "Legacy Name" }));
+    assert_eq!(ok(&mut a, "accessibility_tags", json!({ "doc": doc }))["tags"][2]["classes"], json!(["Legacy Name"]));
     assert_eq!(ok(&mut a, "edit_undo", json!({ "doc": doc }))["undone"], "Change tag properties");
     ok(&mut a, "accessibility_rename_class", json!({ "doc": doc, "old": "RowHead", "new": "HeaderCell" }));
     ok(&mut a, "doc_save", json!({ "doc": doc, "path": "classes-saved.pdf", "full": true }));

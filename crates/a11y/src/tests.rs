@@ -439,6 +439,78 @@ fn class_assignment_requires_an_existing_class_and_can_be_cleared() {
 }
 
 #[test]
+fn class_assignment_accepts_exact_comma_and_legacy_names() {
+    let mut doc = structure_doc(&["<< /S /Document /K 4 0 R >>".into(), "<< /S /P >>".into()]);
+    doc.update_dict(pdfcraft_cos::ObjRef::new(2, 0), |root| {
+        root.set(
+            b"ClassMap".to_vec(),
+            Object::Dict({
+                let mut map = pdfcraft_cos::Dict::new();
+                map.set(b"Name,Comma".to_vec(), Object::Dict(pdfcraft_cos::Dict::new()));
+                map.set(b"Legacy Name".to_vec(), Object::Dict(pdfcraft_cos::Dict::new()));
+                map
+            }),
+        );
+    })
+    .unwrap();
+    let tag = pdfcraft_cos::ObjRef::new(4, 0);
+    set_tag_property(&mut doc, tag, TagProperty::Class, Some("Name,Comma")).unwrap();
+    assert_eq!(doc.get(tag).as_dict().unwrap().get(b"C").and_then(Object::as_name), Some(b"Name,Comma".as_slice()));
+    set_tag_property(&mut doc, tag, TagProperty::Class, Some("Legacy Name")).unwrap();
+    assert_eq!(tags(&doc)[1].classes, ["Legacy Name"]);
+}
+
+#[test]
+fn class_rename_supports_direct_roots_and_updates_inline_tags() {
+    let mut doc = pdf(
+        &[
+            "<< /Type /Catalog /StructTreeRoot << /Type /StructTreeRoot /K 2 0 R /ClassMap << /Old << /O /Layout /TextAlign /Start >> >> >> >>"
+                .into(),
+            "<< /S /Document /K [3 0 R << /S /Span /C /Old >>] >>".into(),
+            "<< /S /P /C /Old >>".into(),
+        ],
+        "",
+    );
+    rename_class(&mut doc, "Old", "New").unwrap();
+    assert_eq!(tags(&doc)[1].classes, ["New"]);
+    let structure = doc.get(pdfcraft_cos::ObjRef::new(2, 0));
+    assert_eq!(
+        structure
+            .as_dict()
+            .unwrap()
+            .get(b"K")
+            .and_then(Object::as_array)
+            .and_then(|kids| kids.get(1))
+            .and_then(Object::as_dict)
+            .and_then(|inline| inline.get(b"C"))
+            .and_then(Object::as_name),
+        Some(b"New".as_slice()),
+    );
+    assert_eq!(class_map(&doc, 0, 10).1[0].name, "New");
+}
+
+#[test]
+fn class_map_skips_non_utf8_identifiers_instead_of_returning_lossy_names() {
+    let mut doc = structure_doc(&["<< /S /Document /K 4 0 R >>".into(), "<< /S /P /C /Bad#FF >>".into()]);
+    doc.update_dict(pdfcraft_cos::ObjRef::new(2, 0), |root| {
+        root.set(
+            b"ClassMap".to_vec(),
+            Object::Dict({
+                let mut map = pdfcraft_cos::Dict::new();
+                map.set(b"Bad\xFF".to_vec(), Object::Dict(pdfcraft_cos::Dict::new()));
+                map.set(b"Good".to_vec(), Object::Dict(pdfcraft_cos::Dict::new()));
+                map
+            }),
+        );
+    })
+    .unwrap();
+    let (count, classes) = class_map(&doc, 0, 10);
+    assert_eq!(count, 1);
+    assert_eq!(classes.iter().map(|entry| entry.name.as_str()).collect::<Vec<_>>(), ["Good"]);
+    assert!(tags(&doc)[1].classes.is_empty());
+}
+
+#[test]
 fn class_map_edits_bound_cyclic_tags_and_leave_malformed_assignments_intact() {
     let mut doc = structure_doc(&["<< /S /P /K 3 0 R /C [/Old 7 /Old] >>".into()]);
     doc.update_dict(pdfcraft_cos::ObjRef::new(2, 0), |root| {

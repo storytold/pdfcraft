@@ -136,6 +136,15 @@ impl State {
         self.collapsed.clear();
         true
     }
+
+    pub(crate) fn refresh_selected(&mut self, doc: &pdfcraft_engine::Document) {
+        let tags = doc.tags();
+        if let Some(selected) = self.selected
+            && let Some(tag) = tags.iter().find(|tag| tag.object == selected)
+        {
+            self.draft = Draft::from_tag(tag);
+        }
+    }
 }
 
 /// The chosen page and an edit to apply after the panel releases its document borrow.

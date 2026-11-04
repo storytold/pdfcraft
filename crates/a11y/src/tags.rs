@@ -129,6 +129,8 @@ pub enum TagError {
     DuplicateClass(String),
     #[error("class {0} does not exist")]
     UnknownClass(String),
+    #[error("the structure tree is too large to rename a class safely")]
+    StructureTooLarge,
     #[error(transparent)]
     Cos(#[from] CosError),
 }
@@ -208,15 +210,13 @@ pub fn class_map(doc: &Document, offset: usize, limit: usize) -> (usize, Vec<Cla
         }
         counts
     });
-    let count = map.len();
+    let count = map.iter().filter(|(key, _)| std::str::from_utf8(key).is_ok()).count();
     let entries = map
         .iter()
+        .filter_map(|(key, _)| std::str::from_utf8(key).ok().map(|name| (name, key)))
         .skip(offset)
         .take(limit.min(1000))
-        .map(|(key, _)| {
-            let name = String::from_utf8_lossy(key).into_owned();
-            ClassMapEntry { assignments: assignments.get(&name).copied().unwrap_or_default(), name }
-        })
+        .map(|(name, _)| ClassMapEntry { assignments: assignments.get(name).copied().unwrap_or_default(), name: name.to_owned() })
         .collect();
     (count, entries)
 }
@@ -229,9 +229,9 @@ fn class_names(doc: &Document, tag: &Dict) -> Vec<String> {
     let Some(value) = tag.get(b"C") else { return Vec::new() };
     let value = doc.resolve(value);
     match &*value {
-        Object::Name(name) => vec![String::from_utf8_lossy(name).into_owned()],
+        Object::Name(name) => std::str::from_utf8(name).ok().map(str::to_owned).into_iter().collect(),
         Object::Array(items) => {
-            items.iter().filter_map(|item| doc.resolve(item).as_name().map(|name| String::from_utf8_lossy(name).into_owned())).collect()
+            items.iter().filter_map(|item| doc.resolve(item).as_name().and_then(|name| std::str::from_utf8(name).ok()).map(str::to_owned)).collect()
         }
         _ => Vec::new(),
     }
@@ -397,11 +397,14 @@ pub fn set_tag_property(doc: &mut Document, object: ObjRef, property: TagPropert
     if property == TagProperty::Class {
         let classes: Vec<&str> = value.filter(|s| !s.trim().is_empty()).map(|s| s.split(',').map(str::trim).collect()).unwrap_or_default();
         let map = class_map_dict(doc);
+        let exact = value.filter(|s| map.as_ref().is_some_and(|map| map.contains(s.as_bytes())));
+        let classes: Vec<&str> = exact.map(|s| vec![s]).unwrap_or(classes);
         for class in &classes {
-            if !valid_class_name(class) {
+            let exists = map.as_ref().is_some_and(|map| map.contains(class.as_bytes()));
+            if !valid_class_name(class) && !exists {
                 return Err(TagError::InvalidClass);
             }
-            if !map.as_ref().is_some_and(|map| map.contains(class.as_bytes())) {
+            if !exists {
                 return Err(if map.is_none() { TagError::NoClassMap } else { TagError::UnknownClass((*class).to_owned()) });
             }
         }
@@ -459,79 +462,117 @@ pub fn rename_class(doc: &mut Document, old: &str, new: &str) -> Result<(), TagE
     if map.contains(new.as_bytes()) {
         return Err(TagError::DuplicateClass(new.to_owned()));
     }
-    let root_ref = doc.root().and_then(|r| doc.get(r).as_dict()?.reference(b"StructTreeRoot")).ok_or(TagError::NoClassMap)?;
-    let class_map = doc.get(root_ref).as_dict().and_then(|d| d.get(b"ClassMap")).cloned().ok_or(TagError::NoClassMap)?;
-    match class_map {
-        Object::Ref(map_ref) => doc.update_dict(map_ref, |d| {
-            if let Some(value) = d.remove(old.as_bytes()) {
-                d.set(new.as_bytes().to_vec(), value);
-            }
-        })?,
-        Object::Dict(mut d) => {
-            if let Some(value) = d.remove(old.as_bytes()) {
-                d.set(new.as_bytes().to_vec(), value);
-            }
-            doc.update_dict(root_ref, |root| {
-                root.set(b"ClassMap".to_vec(), Object::Dict(d));
-            })?;
+    let catalog_ref = doc.root().ok_or(TagError::NoClassMap)?;
+    let catalog = doc.get(catalog_ref).as_dict().cloned().ok_or(TagError::NoClassMap)?;
+    let root_object = catalog.get(b"StructTreeRoot").cloned().ok_or(TagError::NoClassMap)?;
+    let mut root = doc.resolve(&root_object).as_dict().cloned().ok_or(TagError::NoClassMap)?;
+    let map_object = root.get(b"ClassMap").cloned().ok_or(TagError::NoClassMap)?;
+    let map_update = match map_object {
+        Object::Ref(reference) => {
+            let mut map = doc.get(reference).as_dict().cloned().ok_or(TagError::NoClassMap)?;
+            rename_map_entry(&mut map, old, new);
+            Some((reference, map))
+        }
+        Object::Dict(mut map) => {
+            rename_map_entry(&mut map, old, new);
+            root.set(b"ClassMap".to_vec(), Object::Dict(map));
+            None
         }
         _ => return Err(TagError::NoClassMap),
+    };
+
+    let mut budget = 1_000_000usize;
+    let mut root_changed = false;
+    if let Some(k) = root.get_mut(b"K") {
+        root_changed = rename_inline_classes(doc, k, old.as_bytes(), new, 0, &mut budget)?;
     }
+    let mut element_updates = Vec::new();
     for element in alt::elements(doc) {
-        let Some(value) = element.dict.get(b"C") else { continue };
-        match value {
-            Object::Name(name) if name == old.as_bytes() => {
-                doc.update_dict(element.object, |d| {
-                    d.set(b"C".to_vec(), Object::name(new));
-                })?;
-            }
-            Object::Array(items) => {
-                let mut items = items.clone();
-                let mut changed = false;
-                for item in &mut items {
-                    if item.as_name() == Some(old.as_bytes()) {
-                        *item = Object::name(new);
-                        changed = true;
-                    } else if let Object::Ref(name_ref) = item
-                        && doc.get(*name_ref).as_name() == Some(old.as_bytes())
-                    {
-                        *item = Object::name(new);
-                        changed = true;
-                    }
-                }
-                if changed {
-                    doc.update_dict(element.object, |d| {
-                        d.set(b"C".to_vec(), Object::Array(items));
-                    })?;
-                }
-            }
-            Object::Ref(value_ref) => match (*doc.get(*value_ref)).clone() {
-                Object::Name(name) if name == old.as_bytes() => {
-                    doc.update_dict(element.object, |d| {
-                        d.set(b"C".to_vec(), Object::name(new));
-                    })?;
-                }
-                Object::Array(mut items) => {
-                    let mut changed = false;
-                    for item in &mut items {
-                        if item.as_name() == Some(old.as_bytes()) {
-                            *item = Object::name(new);
-                            changed = true;
-                        } else if let Object::Ref(name_ref) = item
-                            && doc.get(*name_ref).as_name() == Some(old.as_bytes())
-                        {
-                            *item = Object::name(new);
-                            changed = true;
-                        }
-                    }
-                    if changed {
-                        doc.set(*value_ref, Object::Array(items));
-                    }
-                }
-                _ => {}
-            },
-            _ => {}
+        let mut dict = element.dict;
+        let mut changed = if let Some(value) = dict.get(b"C").cloned()
+            && let Some(renamed) = renamed_class_value(doc, &value, old.as_bytes(), new)
+        {
+            dict.set(b"C".to_vec(), renamed);
+            true
+        } else {
+            false
+        };
+        if let Some(k) = dict.get_mut(b"K") {
+            changed |= rename_inline_classes(doc, k, old.as_bytes(), new, 0, &mut budget)?;
+        }
+        if changed {
+            element_updates.push((element.object, dict));
+        }
+    }
+
+    if let Some((reference, map)) = map_update {
+        doc.update_dict(reference, |d| *d = map.clone())?;
+    }
+    for (reference, dict) in element_updates {
+        doc.update_dict(reference, |d| *d = dict.clone())?;
+    }
+    if root_changed || matches!(root.get(b"ClassMap"), Some(Object::Dict(_))) {
+        match root_object {
+            Object::Ref(reference) => doc.update_dict(reference, |d| *d = root.clone())?,
+            Object::Dict(_) => doc.update_dict(catalog_ref, |d| d.set(b"StructTreeRoot".to_vec(), Object::Dict(root)))?,
+            _ => return Err(TagError::NoClassMap),
         }
     }
     Ok(())
+}
+
+fn rename_map_entry(map: &mut Dict, old: &str, new: &str) {
+    if let Some(value) = map.remove(old.as_bytes()) {
+        map.set(new.as_bytes().to_vec(), value);
+    }
+}
+
+fn renamed_class_value(doc: &Document, value: &Object, old: &[u8], new: &str) -> Option<Object> {
+    let value = doc.resolve(value);
+    match &*value {
+        Object::Name(name) if name == old => Some(Object::name(new)),
+        Object::Array(items) => {
+            let mut items = items.clone();
+            let mut changed = false;
+            for item in &mut items {
+                if item.as_name() == Some(old) || doc.resolve(item).as_name() == Some(old) {
+                    *item = Object::name(new);
+                    changed = true;
+                }
+            }
+            changed.then_some(Object::Array(items))
+        }
+        _ => None,
+    }
+}
+
+fn rename_inline_classes(doc: &Document, object: &mut Object, old: &[u8], new: &str, depth: usize, budget: &mut usize) -> Result<bool, TagError> {
+    *budget = budget.checked_sub(1).ok_or(TagError::StructureTooLarge)?;
+    if depth > 128 {
+        return Err(TagError::StructureTooLarge);
+    }
+    match object {
+        Object::Array(items) => {
+            let mut changed = false;
+            for item in items {
+                changed |= rename_inline_classes(doc, item, old, new, depth + 1, budget)?;
+            }
+            Ok(changed)
+        }
+        Object::Dict(dict) if dict.contains(b"S") => {
+            let mut changed = if let Some(value) = dict.get(b"C").cloned()
+                && let Some(renamed) = renamed_class_value(doc, &value, old, new)
+            {
+                dict.set(b"C".to_vec(), renamed);
+                true
+            } else {
+                false
+            };
+            if let Some(k) = dict.get_mut(b"K") {
+                changed |= rename_inline_classes(doc, k, old, new, depth + 1, budget)?;
+            }
+            Ok(changed)
+        }
+        _ => Ok(false),
+    }
 }

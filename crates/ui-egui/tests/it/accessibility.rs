@@ -384,6 +384,7 @@ fn tags_panel_renames_a_structure_class() {
     assert_eq!(doc.can_undo(), Some("Rename structure class"));
     assert_eq!(doc.tags()[1].classes, ["Renamed"]);
     assert_eq!(doc.class_map(0, 10).1[0].name, "Renamed");
+    assert_eq!(h.get_by_role_and_label(Role::TextInput, "Classes, separated by commas").value().as_deref(), Some("Renamed"));
 }
 
 #[test]

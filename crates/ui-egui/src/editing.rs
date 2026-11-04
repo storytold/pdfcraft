@@ -148,6 +148,9 @@ impl PdfCraftApp {
         match self.session.apply(id, edit.clone()) {
             Ok(()) => {
                 let Some(doc) = self.session.get(id) else { return true };
+                if matches!(edit, Edit::RenameClass { .. }) {
+                    self.tags_state.refresh_selected(doc);
+                }
                 let info = &doc.info;
                 let view = &mut self.views[i];
                 view.applied_editor = None;
