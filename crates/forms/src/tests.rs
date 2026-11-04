@@ -2997,6 +2997,35 @@ fn validation_script_colour_is_used_when_the_field_redraws() {
 }
 
 #[test]
+fn calculation_script_colour_is_used_when_the_field_redraws() {
+    struct TestScripts;
+    impl Scripts for TestScripts {
+        fn run(&mut self, _event: FieldEvent, _script: &str, _target: &Field, _value: &str, _fields: &[Field], _doc: &Document) -> ScriptResult {
+            ScriptResult {
+                rc: true,
+                value: "Grace".into(),
+                changes: vec![FieldChange {
+                    name: "name".into(),
+                    text_color: Some(vec!["RGB".into(), "1".into(), "0".into(), "0".into()]),
+                    ..Default::default()
+                }],
+                message: None,
+            }
+        }
+    }
+
+    let mut doc = fixture();
+    set_field_script(&mut doc, "name", "calculate", Some("set_red")).unwrap();
+    recalculate_with(&mut doc, &mut TestScripts).unwrap();
+
+    let all = fields(&doc);
+    let f = field(&all, "name");
+    assert_eq!(f.value, ["Grace"]);
+    assert!(f.da.contains("1 0 0 rg"));
+    assert!(ap(&doc, &f.widgets[0]).contains("1 0 0 rg"), "redraw uses the Calculate script's updated appearance");
+}
+
+#[test]
 fn partial_appearance_keeps_custom_default_appearance_and_font_resources() {
     let mut doc = fixture();
     let obj = field(&fields(&doc), "name").obj;

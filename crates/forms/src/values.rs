@@ -177,7 +177,8 @@ pub fn recalculate_with(doc: &mut Document, scripts: &mut dyn Scripts) -> Result
         };
         if current != v && matches!(f.kind, FieldKind::Text | FieldKind::Combo) {
             doc.update_dict(f.obj, |d| d.set(b"V".to_vec(), PdfString::text(&v)))?;
-            redraw(doc, &f, std::slice::from_ref(&v), scripts)?;
+            let fresh = all.iter().find(|field| field.obj == obj).cloned().unwrap_or_else(|| f.clone());
+            redraw(doc, &fresh, std::slice::from_ref(&v), scripts)?;
             if let Some(target) = all.iter_mut().find(|x| x.obj == obj) {
                 target.value = vec![v];
             }
