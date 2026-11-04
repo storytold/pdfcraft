@@ -995,6 +995,23 @@ impl PdfCraftApp {
                 let at = parent[parent.len() - 1] + 1;
                 Edit::MoveBookmark { from: path, to_parent: grand, index: at }
             }
+            A::Copy(path) => {
+                self.copy_bookmark(id, &path);
+                return;
+            }
+            A::Cut(path) => match self.copy_bookmark(id, &path) {
+                Some(false) => Edit::DeleteBookmark { path },
+                // Paste could not bring back what the copy left out, so the bookmarks stay.
+                Some(true) => {
+                    self.notify_tr("Bookmarks nested too deep to list could not be copied, so nothing was cut.");
+                    return;
+                }
+                None => return,
+            },
+            A::Paste { parent, index } => {
+                self.paste_bookmarks(id, parent, index);
+                return;
+            }
             A::FromStructure => {
                 self.right = Some(crate::RightPanel::Bookmarks);
                 Edit::BookmarksFromStructure
@@ -1006,6 +1023,45 @@ impl PdfCraftApp {
             }
         };
         self.apply_edit(edit);
+    }
+}
+
+impl PdfCraftApp {
+    /// Put the bookmark at `path` and its subtree on the bookmark clipboard. `Some(true)` when
+    /// bookmarks nested too deep to list were left out; `None` if it could not be read (the reason
+    /// is shown).
+    fn copy_bookmark(&mut self, id: pdfcraft_engine::DocId, path: &[usize]) -> Option<bool> {
+        match self.session.outline_tree(id, path) {
+            Some(Ok(tree)) => {
+                if tree.truncated {
+                    self.notify_tr("Bookmarks nested too deep to list were left out of the copy.");
+                }
+                self.bookmark_clipboard = Some(tree.nodes);
+                Some(tree.truncated)
+            }
+            Some(Err(e)) => {
+                self.notify_error(e);
+                None
+            }
+            None => None,
+        }
+    }
+
+    /// Paste the bookmark clipboard as one undoable edit. Bookmarks whose page this document lacks
+    /// arrive without a destination, and the toast says how many.
+    fn paste_bookmarks(&mut self, id: pdfcraft_engine::DocId, parent: Vec<usize>, index: usize) {
+        let Some(bookmarks) = self.bookmark_clipboard.clone() else { return };
+        let pages = self.session.get(id).map_or(0, |d| d.info.pages.len());
+        let unmapped = pdfcraft_engine::outline_unmapped(&bookmarks, pages).len();
+        if self.apply_edit(Edit::ImportBookmarks { parent, index, bookmarks, replace: false }) && unmapped > 0 {
+            let n = u64::try_from(unmapped).unwrap_or(u64::MAX);
+            self.notify(crate::i18n::trn(
+                crate::i18n::current(),
+                n,
+                "{n} pasted bookmark points past the last page of this document and has no destination.",
+                "{n} pasted bookmarks point past the last page of this document and have no destination.",
+            ));
+        }
     }
 }
 

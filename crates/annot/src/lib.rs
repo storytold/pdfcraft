@@ -23,6 +23,7 @@ mod draw;
 mod info;
 mod lookup;
 mod modify;
+mod threed;
 mod types;
 
 #[cfg(test)]
@@ -41,6 +42,7 @@ pub use modify::{
     add_reply, add_text_replacement, deletable, delete_annotation, erase_ink, fillable, goes_with, lift_annotation, move_annotation, set_contents,
     set_fill, set_font_size, set_locked, set_marked, set_points, set_popup, set_rect, set_review_state, set_style, with_replies_and_popups,
 };
+pub use threed::{Activation as Activation3d, MAX_MODEL_BYTES, ModelFormat, NewModel3d, PosterPicture, add_3d_model, check_model};
 pub use types::{
     AttachIcon, FillMark, LineEnding, Markup, Meta, NOTE_SIZE, NewAnnotation, NoteIcon, OverlayFont, OverlayLook, ReviewState, Rgb, Shape,
     StampGroup, StampKind, Style, StyleChange, TextReplacement, rect_quad,
@@ -70,6 +72,12 @@ pub enum AnnotError {
     /// with a font that has those characters. The message names the character.
     #[error("{0}")]
     Undrawable(String),
+    /// A 3D model file that is neither U3D (starts with `U3D` and a zero byte) nor PRC (starts `PRC`).
+    #[error("not a 3D model: the file must be U3D (ECMA-363) or PRC (ISO 14739-1)")]
+    NotAModel,
+    /// A 3D model larger than `MAX_MODEL_BYTES`.
+    #[error("the 3D model is {size} bytes; the largest accepted is {max}")]
+    ModelTooLarge { size: usize, max: usize },
     #[error("{0}")]
     Cos(#[from] pdfcraft_cos::CosError),
 }
