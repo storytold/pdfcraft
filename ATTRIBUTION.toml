@@ -3041,6 +3041,50 @@ usage = "Signature validation tests (crates/sign/tests/it/pdf.rs): a signature P
 sha256 = "8b91c3b4e39c4a31717a0dd0685bd7d0468671df32aee5b9818d44dc72c2bc3c"
 
 [[asset]]
+path = "crates/sign/tests/data/cades-envelope.pdf.p7m"
+title = "CAdES attached envelope (.p7m) wrapping openssl-signed.pdf"
+author = "PdfCraft contributors"
+source = "Contributor-original: DER CMS made with `openssl cms -sign -binary -nodetach -cades -md sha256` over openssl-signed.pdf (see crates/sign/tests/data/README.md)"
+licence = "MIT OR Apache-2.0"
+licence_file = "LICENSE-MIT"
+kind = "document"
+usage = "CAdES envelope opening tests (issue #1449): attached signature whose embedded content is openssl-signed.pdf"
+sha256 = "0420a10720e32ba9c34d7503adf79f6e33308ad34311167747ab20a752835268"
+
+[[asset]]
+path = "crates/sign/tests/data/cades-detached.p7s"
+title = "CAdES detached signature over openssl-signed.pdf"
+author = "PdfCraft contributors"
+source = "Contributor-original: DER CMS made with `openssl cms -sign -binary -cades -md sha256` over openssl-signed.pdf (see crates/sign/tests/data/README.md)"
+licence = "MIT OR Apache-2.0"
+licence_file = "LICENSE-MIT"
+kind = "document"
+usage = "CAdES envelope opening tests (issue #1449): detached signature over openssl-signed.pdf"
+sha256 = "abf1afc2f2cff6295e26edc56516269f86ac04fcba6d03a07d35fa20cd00cea5"
+
+[[asset]]
+path = "crates/sign/tests/data/cades-xml.p7m"
+title = "CAdES attached envelope (.p7m) wrapping cades-inner.xml"
+author = "PdfCraft contributors"
+source = "Contributor-original: DER CMS made with `openssl cms -sign -binary -nodetach -cades -md sha256` over cades-inner.xml (see crates/sign/tests/data/README.md)"
+licence = "MIT OR Apache-2.0"
+licence_file = "LICENSE-MIT"
+kind = "document"
+usage = "CAdES envelope opening tests (issue #1449): attached signature whose embedded content is the XML invoice stub cades-inner.xml"
+sha256 = "fda3f5c552e2985d7bed69be19e4f2cd95dcaac3c973483f16ea168b48d89ecf"
+
+[[asset]]
+path = "crates/sign/tests/data/cades-inner.xml"
+title = "Minimal XML e-invoice stub embedded in cades-xml.p7m"
+author = "PdfCraft contributors"
+source = "Contributor-original: one-line `<?xml version=\"1.0\"?><FatturaElettronica/>` stub written by hand (see crates/sign/tests/data/README.md)"
+licence = "MIT OR Apache-2.0"
+licence_file = "LICENSE-MIT"
+kind = "document"
+usage = "Inner content signed into cades-xml.p7m; lets tests check a non-PDF embedded file"
+sha256 = "934f3fd21df73bc2632f4ad4bdc791d736f3ed99866141c415a26115138382f8"
+
+[[asset]]
 path = "assets/icons/clipboard-paste.svg"
 title = "Lucide icon \"clipboard-paste\""
 author = "Lucide Contributors (portions Cole Bemis, Feather)"
