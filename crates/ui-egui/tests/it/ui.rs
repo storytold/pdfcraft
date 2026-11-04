@@ -1492,6 +1492,9 @@ fn cancelling_then_discarding_an_earlier_dirty_tab_preserves_the_selected_docume
 
 #[test]
 fn long_german_tool_labels_stay_within_the_sidebar() {
+    if crate::support::skip_without_catalogs("long_german_tool_labels_stay_within_the_sidebar") {
+        return;
+    }
     use pdfcraft_ui_egui::{LeftPanel, Mode};
     let mut h = harness(|app| app.open_bytes("fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens"));
     h.state_mut().set_option("language", "de").unwrap();
