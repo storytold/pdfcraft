@@ -5396,9 +5396,15 @@ fn form_javascript_validates_calculates_and_formats() {
     );
     assert_eq!(s.get(id).unwrap().can_undo(), Some("Run JavaScript"));
     s.undo(id).unwrap();
-    assert_ne!(
+    assert_eq!(
         s.get(id).unwrap().form.iter().find(|f| f.name == "go").and_then(|f| f.widgets.first()).and_then(|w| w.caption.as_deref()),
-        Some("Continue")
+        Some("Continue"),
+        "undo keeps the first widget's original caption",
+    );
+    assert_eq!(
+        s.get(id).unwrap().form.iter().find(|f| f.name == "go").and_then(|f| f.widgets.get(1)).and_then(|w| w.caption.as_deref()),
+        Some("Old"),
+        "undo restores the second widget's original caption",
     );
     s.redo(id).unwrap();
     assert_eq!(
