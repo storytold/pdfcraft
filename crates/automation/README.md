@@ -84,6 +84,14 @@ With `backend: "ffdetr"` and no `model`, detection uses the installed managed mo
 [native field detection](../../docs/form-field-detection.md) for the model
 format, rectangle convention, job safety and current limitations.
 
+`form_detection_status` verifies the managed model offline. `form_detection_install`
+requires `confirm_download: true`, installs the separate pinned GitHub artifact
+with hash/length verification and respects read/write confinement. Detection
+with `backend: "ffdetr"` uses that installed model; it never downloads implicitly.
+`directory` can keep the model inside a constrained automation root. The desktop
+uses a first-use consent dialog and background progress; public downloads await
+publication of the separate model release. See the integration guide above.
+
 ## Shared field properties
 
 For an individual push button, `form_set_props` also edits its visible normal label:
@@ -277,13 +285,6 @@ returns to page tops, does not restore zoom, does not switch documents, and is n
 restarts. Standalone engine/MCP sessions have no viewport, so they do not have a separate
 navigation-history tool; use the opt-in UI control channel to navigate the displayed document.
 
-`form_detection_status` verifies the managed model offline. `form_detection_install`
-requires `confirm_download: true`, installs the separate pinned GitHub artifact
-with hash/length verification and respects read/write confinement. Detection
-with `backend: "ffdetr"` uses that installed model; it never downloads implicitly.
-`directory` can keep the model inside a constrained automation root. The desktop
-uses a first-use consent dialog and background progress; public downloads await
-publication of the separate model release. See the integration guide above.
 ## Fill & Sign text appearance
 
 `fill_sign_add` accepts `font_size` (4–300 pt, default 10) and `color`

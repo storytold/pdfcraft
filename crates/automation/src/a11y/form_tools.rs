@@ -71,6 +71,13 @@ impl Automation {
         Ok(json!({ "path": target.to_string_lossy(), "rows": files.len(), "columns": columns }))
     }
 
+    pub(crate) fn form_detection_status(&self, a: &Args) -> Result<Value> {
+        use pdfcraft_engine::form_detection::{MODEL_FILE, model};
+        let directory = self.form_model_directory(a, false)?;
+        Ok(json!({"available": model::available(&directory).map_err(failed)?, "path": directory.join(MODEL_FILE),
+            "download_url": model::DOWNLOAD_URL, "download_bytes": model::MODEL_BYTES}))
+    }
+
     fn form_model_directory(&self, a: &Args, install: bool) -> Result<std::path::PathBuf> {
         use crate::file_access::Access;
         use pdfcraft_engine::form_detection::{MODEL_FILE, model};
