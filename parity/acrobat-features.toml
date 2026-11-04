@@ -3422,6 +3422,18 @@ evidence = ["crates/engine/src/tests.rs::bookmarks_from_text_styles_nest_the_hea
 notes = "Bookmark options (and Pages) ▸ New bookmarks from text styles…, for documents whose headings aren't tagged (#1693): the dialog lists the document's text styles (font without its subset tag, the size shown at, bold, italic, line count and a sample), the largest first and offered for level 1; one style per level, up to four levels (nine headlessly). Every line in a level's style becomes a bookmark of that level under a new first \"Untitled\" bookmark, a heading set on several rows is one bookmark, and each goes to the top of its heading (/XYZ). Lines are read down each page, then left to right, so a multi-column page's headings are taken row by row across the columns; sizes within a quarter point match. Not yet: several styles for one level, colour as part of a style, and the first 5000 pages only. Acrobat has no such command (its bookmarks come from structure); this is beyond it"
 
 [[feature]]
+id = "organize.bookmarks-import-export"
+title = "Export, import and copy bookmarks"
+area = "D"
+tier = "P2"
+milestone = "M4"
+status = "partial"
+commands = []
+tools = ["bookmark_export", "bookmark_import", "bookmark_copy"]
+evidence = ["crates/organize/src/tests.rs::an_exported_outline_imports_into_another_document_unchanged", "crates/organize/src/tests.rs::a_page_the_target_lacks_keeps_its_bookmark_without_a_destination", "crates/organize/src/tests.rs::an_import_appends_inserts_or_replaces", "crates/organize/src/tests.rs::a_bad_node_anywhere_refuses_the_whole_import", "crates/automation/tests/it/automation.rs::bookmarks_export_import_and_copy_between_documents", "crates/automation/tests/it/automation.rs::a_bad_bookmark_tree_is_refused_whole_and_names_the_node"]
+notes = "#6018, headless only. The bookmark tree (or one bookmark's subtree) goes out as JSON with titles, nesting, open state, colour, bold/italic and destinations as page plus view in PDF user space, and comes back unchanged: into another document, under any bookmark, at any position, or in place of its outline, as one undoable step; bookmark_copy does the same between open documents by page number. A bookmark whose page the target lacks keeps its place without a destination and is reported, never dropped. Not yet: a panel command and preview, CSV/Markdown/pdftk formats, remapping by named destination (named destinations travel resolved to their page), actions other than go-to-page, structure links (/SE)"
+
+[[feature]]
 id = "organize.attachments-add"
 title = "Add file attachments"
 area = "D"
@@ -9901,6 +9913,18 @@ commands = []
 tools = []
 evidence = []
 notes = ""
+
+[[feature]]
+id = "misc.3d-add"
+title = "Add a 3D model (U3D/PRC) to a page"
+area = "N"
+tier = "P3"
+milestone = "M12"
+status = "partial"
+commands = []
+tools = ["model_add"]
+evidence = ["crates/automation/tests/it/model_3d.rs::model_add_embeds_the_model_with_a_fitted_poster", "crates/automation/tests/it/model_3d.rs::model_add_without_a_poster_draws_a_labelled_frame_and_activates_on_click", "crates/automation/tests/it/model_3d.rs::model_add_refuses_what_is_not_a_model_and_adds_nothing", "crates/engine/src/tests.rs::a_3d_model_gets_a_fitted_vector_poster_and_a_file_that_is_not_one_is_refused", "crates/annot/src/tests.rs::a_3d_model_raises_an_older_document_to_its_version"]
+notes = "Embeds a U3D or PRC file (detected from its header) as a 3D annotation with an activation choice and a poster: a chosen image or PDF page fitted in the box, or a labelled frame. Not yet: a poster rendered from the model, views (/VA, /3DV), replacing the poster later, a UI command. The poster is drawn in user space and not counter-rotated, so on a page with /Rotate it turns with the page, as the model does. An older file's catalog /Version is raised to 1.6 (U3D) or 1.7 (PRC); Adobe's extension level for PRC in 1.7 is not written."
 
 [[feature]]
 id = "misc.legacy-multimedia"
