@@ -1,10 +1,12 @@
 use super::{
-    Arc, AssertUnwindSafe, AtomicRenderStats, InterpreterSettings, JoinHandle, Mutex, Ordering, PageRenderer, Pdf, Pixels, RenderCache, RenderConfig,
-    RenderRequest, RenderStats, RenderedPage, RequestKind, ResultReceiver, Stopwatch, SyncSender, WorkQueue, catch_unwind, finish,
-    panic_message, parse, render_page, take_warnings, warning_settings,
+    Arc, AtomicRenderStats, JoinHandle, Mutex, PageRenderer, Pixels, RenderConfig, RenderRequest, RenderStats, RenderedPage, ResultReceiver,
+    SyncSender, WorkQueue,
 };
 #[cfg(not(target_arch = "wasm32"))]
-use super::{AtomicBool, Receiver, RequestFailureKey, sync_channel};
+use super::{
+    AssertUnwindSafe, AtomicBool, InterpreterSettings, Ordering, Pdf, Receiver, RenderCache, RequestFailureKey, RequestKind, Stopwatch, catch_unwind,
+    finish, panic_message, parse, render_page, sync_channel, take_warnings, warning_settings,
+};
 
 /// How long one page may render before the pool gives up on it (the watchdog).
 pub const STUCK_AFTER: std::time::Duration = std::time::Duration::from_secs(20);

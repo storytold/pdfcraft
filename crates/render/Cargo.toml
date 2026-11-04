@@ -31,3 +31,7 @@ getrandom = { version = "0.4", features = ["wasm_js"] }
 [dev-dependencies]
 # Builds the decompression-bomb streams in the raster tests.
 flate2 = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+# Existing browser regressions use wasm_bindgen_test attributes.
+wasm-bindgen-test = "0.3"

@@ -36,7 +36,7 @@ use crate::{Pixels, ReadingColors};
 mod pool;
 
 use pool::lock;
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 use pool::{BusyPublishGate, ParseGate, ParserState, PoolParser, RenderGate, Shared, same_request, worker, worker_settings};
 pub use pool::{RenderPool, Retiring};
 

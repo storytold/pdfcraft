@@ -79,6 +79,7 @@ pub(crate) fn unit_for_tag(tag: &str) -> Option<Unit> {
 /// The upper-case two-letter region of a locale tag; `None` without one (`C`, `POSIX`, `en`).
 /// Only the base tag counts: a BCP 47 extension or private use part (`-u-nu-latn`, `-x-…`, each
 /// after a one-letter singleton) is not a region (CodeRabbit on #5651).
+#[cfg(any(test, not(target_arch = "wasm32")))]
 pub(crate) fn region_of(tag: &str) -> Option<String> {
     let tag = tag.split(['.', '@']).next().unwrap_or_default();
     let region =

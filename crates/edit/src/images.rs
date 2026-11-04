@@ -2012,3 +2012,23 @@ mod allocation_tests {
         assert!(before.visually_differs(&tracker.current_state), "the same mask established under a different CTM is a different effective mask");
     }
 }
+
+#[cfg(test)]
+mod close_path_tests {
+    use super::*;
+
+    /// `h` ignores an absent subpath, but closes an existing one and resets its current point.
+    #[test]
+    fn close_path_preserves_the_subpath_start() {
+        let mut state = ImageState::new(Matrix::IDENTITY, [0.0, 0.0, 100.0, 100.0], Vec::new());
+        state.apply(&Op::new("h", vec![])).unwrap();
+        assert!(state.path.elements().is_empty());
+        for op in parse(b"10 20 m 30 40 l h").ops {
+            state.apply(&op).unwrap();
+        }
+        assert_eq!(state.path.elements().last(), Some(&kurbo::PathEl::ClosePath));
+        assert_eq!(state.current_point(), Some(Point::new(10.0, 20.0)));
+        state.apply(&Op::new("h", vec![])).unwrap();
+        assert_eq!(state.current_point(), Some(Point::new(10.0, 20.0)));
+    }
+}
