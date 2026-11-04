@@ -73,6 +73,66 @@ fn review5914_round3_read_syriac_list_keeps_drawn_row_geometry() {
     assert_eq!(w.list, Some(drawn));
 }
 
+/// A password list is drawn by the fallback writer, so its click rows must not take Syriac extents.
+#[test]
+fn review5914_round4_password_syriac_list_keeps_fallback_rows() {
+    use pdfcraft_fonts::SyriacFamily;
+    if pdfcraft_fonts::document_syriac_font_for_family(SyriacFamily::Eastern).is_none() {
+        assert!(std::env::var_os("CRAFT_FONTS_DIR").is_none(), "supplied input must include Eastern Syriac");
+        return;
+    }
+    let mut doc = fixture();
+    let f = field(&fields(&doc), "toppings").clone();
+    let w = f.widgets[0].clone();
+    doc.update_dict(w.obj, |d| {
+        d.set(b"DA".to_vec(), PdfString::text("/Helv 14 Tf 0 g"));
+        d.set(SyriacFamily::PDF_KEY.to_vec(), Object::name("Eastern"));
+    })
+    .unwrap();
+    let labels = ["\u{0720}\u{0730}\u{0747}\u{0720}\u{0733}", "\u{0729}\u{0731}\u{0748}\u{0732}\u{0723}\u{0734}"];
+    let ff = i64::from(f.flags | flags::PASSWORD);
+    doc.update_dict(f.obj, |d| {
+        d.set(b"Opt".to_vec(), Object::Array(labels.iter().map(|l| PdfString::text(l).into()).collect()));
+        d.set(b"Ff".to_vec(), Object::Int(ff));
+    })
+    .unwrap();
+    let f = field(&fields(&doc), "toppings").clone();
+    assert!(f.has(flags::PASSWORD));
+    let w = &f.widgets[0];
+    let wd = doc.get(w.obj).as_dict().cloned().unwrap();
+    let fallback = appearance::list_rows_of(&doc, &f.da, doc.get(f.obj).as_dict(), &wd, f.text_direction);
+    assert_eq!(appearance::list_rows(&doc, &f, w), fallback, "a password list is not drawn by the Syriac writer");
+    assert_eq!(w.list, Some(fallback));
+}
+
+/// Syriac list labels follow the widget's quadding, as the Arabic list and Syriac text paths do.
+#[test]
+fn review5914_round4_syriac_list_labels_follow_quadding() {
+    use pdfcraft_fonts::SyriacFamily;
+    if pdfcraft_fonts::document_syriac_font_for_family(SyriacFamily::Eastern).is_none() {
+        assert!(std::env::var_os("CRAFT_FONTS_DIR").is_none(), "supplied input must include Eastern Syriac");
+        return;
+    }
+    let mut doc = fixture();
+    let f = field(&fields(&doc), "toppings").clone();
+    doc.update_dict(f.widgets[0].obj, |d| d.set(SyriacFamily::PDF_KEY.to_vec(), Object::name("Eastern"))).unwrap();
+    doc.update_dict(f.obj, |d| d.set(b"Opt".to_vec(), Object::Array(vec![PdfString::text("\u{072B}\u{0720}\u{0721}\u{0710}").into()]))).unwrap();
+    let f = field(&fields(&doc), "toppings").clone();
+    let w = f.widgets[0].clone();
+    // The leftmost glyph origin of the label (`1 0 0 1 x y Tm`).
+    let mut left = Vec::new();
+    for q in 0..3 {
+        doc.update_dict(w.obj, |d| d.set(b"Q".to_vec(), Object::Int(q))).unwrap();
+        let (stream, missing) = appearance::field_appearance_drawn_in(&mut doc, &f, &w, &[], true);
+        assert_eq!(missing, None);
+        let text = String::from_utf8_lossy(&stream.decoded().unwrap()).into_owned();
+        let xs: Vec<f64> = text.split(" Tm").filter_map(|before| before.rsplit("1 0 0 1 ").next()?.split_whitespace().next()?.parse().ok()).collect();
+        assert!(!xs.is_empty(), "Q {q}: the label is drawn by the Syriac writer: {text}");
+        left.push(xs.iter().copied().fold(f64::INFINITY, f64::min));
+    }
+    assert!(left[0] < left[1] && left[1] < left[2], "left, centred and right labels move right in turn: {left:?}");
+}
+
 /// A combo draws its label on one line, so an imported Multiline flag must not wrap its measure.
 #[test]
 fn review5914_round3_syriac_combo_ignores_multiline_overflow() {

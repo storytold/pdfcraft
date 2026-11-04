@@ -194,6 +194,9 @@ Run scoped checks with timeouts and `-j 2`; a full workspace build is CI's respo
 export CRAFT_FONTS_DIR=/ABS/craft-fonts
 export CRAFT_FONTS_REQUIRED=1
 export PDFCRAFT_TEST_ARABIC_FONT=/ABS/arabic-deps/NotoSansArabic-Regular.ttf
+# With CRAFT_FONTS_REQUIRED=1 the Arabic source-edit tests also need a static (non-variable)
+# Arabic face; it is an external test input, never a shipped or committed asset.
+export PDFCRAFT_TEST_ARABIC_STATIC_FONT=/ABS/arabic-deps/<approved-static-Arabic-face>.ttf
 export PDFCRAFT_ARABIC_CORPUS_REQUIRED=1
 cd /ABS/pdfcraft
 

@@ -295,7 +295,7 @@ pub(super) fn field(doc: &mut Document, f: &Field, w: &Widget, values: &[String]
             content.extend(format!("{}\n", da.color).bytes());
             let line = text::line_for_family(label, unicode_bidi_rtl(label, family), family)?;
             let baseline = y - (rows.row - (top - bottom) * rows.size) / 2.0 - top * rows.size;
-            content.extend(line.write(doc, &mut fonts, [pad, baseline], rows.size)?);
+            content.extend(line.write(doc, &mut fonts, [x_for(&line, rows.size), baseline], rows.size)?);
             y -= rows.row;
         }
     } else if let Some((cells, laid)) = comb {

@@ -570,7 +570,7 @@ fn walk(
     };
     // Shaped Syriac labels can make the drawn rows taller than the `/DA` size gives; clicks and
     // scrolling must use the rows the appearance draws.
-    if field.kind == FieldKind::List && field.options.iter().any(|(_, label)| pdfcraft_fonts::content_text::contains_syriac(label)) {
+    if field.kind == FieldKind::List && field.widgets.iter().any(|w| appearance::needs_syriac(doc, &field, w, &field.value)) {
         let rows: Vec<_> = field.widgets.iter().map(|w| appearance::list_rows(doc, &field, w)).collect();
         for (w, rows) in field.widgets.iter_mut().zip(rows) {
             w.list = Some(rows);

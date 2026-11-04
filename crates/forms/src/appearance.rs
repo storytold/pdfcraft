@@ -819,7 +819,9 @@ pub fn list_rows(doc: &Document, f: &Field, w: &Widget) -> ListRows {
     let wd = wobj.as_dict().cloned().unwrap_or_default();
     let fobj = doc.get(f.obj);
     let mut rows = list_rows_of(doc, &f.da, fobj.as_dict(), &wd, f.text_direction);
-    if f.options.iter().any(|(_, label)| pdfcraft_fonts::content_text::contains_syriac(label))
+    // The same test that picks the Syriac writer, so a password list keeps the rows it is drawn with.
+    if f.kind == FieldKind::List
+        && needs_syriac(doc, f, w, &f.value)
         && let Ok((top, bottom)) = syriac::option_extents(f, syriac_family(doc, f, w))
     {
         rows.row = (top - bottom + 0.1).max(1.15) * rows.size;
