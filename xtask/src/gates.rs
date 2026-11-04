@@ -606,7 +606,11 @@ mod tests {
     #[test]
     fn translation_summary_file_appends_without_discarding_existing_content() {
         static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-        let path = std::env::temp_dir().join(format!("pdfcraft-i18n-summary-{}-{}", std::process::id(), NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
+        let path = std::env::temp_dir().join(format!(
+            "pdfcraft-i18n-summary-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
         let result = (|| {
             append_translation_summary(&path, &["first report"])?;
             append_translation_summary(&path, &["second report"])?;
