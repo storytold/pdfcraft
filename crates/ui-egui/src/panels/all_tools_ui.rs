@@ -185,6 +185,9 @@ mod tests {
 
     #[test]
     fn right_to_left_labels_match_a_query_typed_in_logical_order() {
+        if !crate::i18n::needs_catalogs() {
+            return;
+        }
         let arabic = crate::i18n::Lang::from_code("ar").expect("Arabic is registered");
         let translated = crate::i18n::tr(arabic, "Organize pages");
         assert_eq!(translated, "تنظيم الصفحات", "the catalogue keeps logical text");
