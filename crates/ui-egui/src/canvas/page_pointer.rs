@@ -47,6 +47,9 @@ pub(crate) struct PagePointer {
     /// frame's last press and before its release. A pen or a finger can move several times in
     /// one frame, and a stroke keeps every point.
     pub samples: Vec<Pos2>,
+    /// Where this frame's last primary release of a press the pages hold was: where a click came
+    /// up, which the pointer may have left by the frame's end. Kept past the cap on `edges`.
+    pub released: Option<Pos2>,
     /// The primary button is down, wherever it was pressed: a gesture ends once it is up.
     pub primary_down: bool,
     /// Some button is down, wherever it was pressed.
@@ -57,8 +60,16 @@ impl PagePointer {
     /// The pointer for `resp`, the content widget that holds every page, allocated in `ui`, while
     /// a dialog is open over the window or not (`modal`).
     pub(crate) fn read(ui: &egui::Ui, resp: &egui::Response, modal: bool) -> Self {
-        let (at, origin, edges, samples, primary_down, any_down) = ui.input(|i| {
-            (i.pointer.interact_pos(), i.pointer.press_origin(), edges(&i.events), samples(&i.events), i.pointer.primary_down(), i.pointer.any_down())
+        let (at, origin, edges, samples, released, primary_down, any_down) = ui.input(|i| {
+            (
+                i.pointer.interact_pos(),
+                i.pointer.press_origin(),
+                edges(&i.events),
+                samples(&i.events),
+                last_release(&i.events),
+                i.pointer.primary_down(),
+                i.pointer.any_down(),
+            )
         });
         // egui's own answer to "do the pages hold a press?": from the press on until the frame
         // of its click, release or drag stop. A drag can outlive egui's press while the
@@ -73,18 +84,17 @@ impl PagePointer {
         // moved and lifted in one frame and egui decided neither a click nor a drag.
         let holding = resp.id.with("page-pointer-holding");
         let was_holding = ui.data(|d| d.get_temp::<bool>(holding)).unwrap_or(false);
-        let released = edges.iter().any(|e| matches!(e, Edge::Release(_)));
         let held = resp.dragged()
             || resp.drag_stopped()
-            || (was_holding && released)
+            || (was_holding && released.is_some())
             || (!modal && (resp.interact_pointer_pos().is_some() || press_origin.is_some_and(|p| on_top(&p))));
         let still_down = held && primary_down && !matches!(edges.last(), Some(Edge::Release(_)));
         ui.data_mut(|d| d.insert_temp(holding, still_down));
         let pos = at.filter(|p| held || on_top(p));
         if !held {
-            return Self { pos, origin: None, edges: Vec::new(), samples: Vec::new(), primary_down, any_down };
+            return Self { pos, origin: None, edges: Vec::new(), samples: Vec::new(), released: None, primary_down, any_down };
         }
-        Self { pos, origin: press_origin, edges, samples, primary_down, any_down }
+        Self { pos, origin: press_origin, edges, samples, released, primary_down, any_down }
     }
 
     /// Where the pointer is, when it is inside `r`.
@@ -112,6 +122,14 @@ fn first_press(edges: &[Edge]) -> Option<Pos2> {
     edges.iter().find_map(|e| match e {
         Edge::Press(p) => Some(*p),
         Edge::Release(_) => None,
+    })
+}
+
+/// Where the last primary release among `events` was, however many came before it.
+fn last_release(events: &[Event]) -> Option<Pos2> {
+    events.iter().rev().find_map(|e| match e {
+        Event::PointerButton { pos, button: PointerButton::Primary, pressed: false, .. } if pos.is_finite() => Some(*pos),
+        _ => None,
     })
 }
 
