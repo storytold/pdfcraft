@@ -51,6 +51,9 @@ pub(crate) fn set(_: &JsValue, args: &[JsValue], name: &FieldKey, c: &mut Contex
                 .ok_or_else(|| error("buttonSetIcon requires an icon from this document"))?,
         )
     };
-    write(c, name, |f| f.icon = id)?;
+    write(c, name, |f| {
+        f.icon = id;
+        f.icon_written = true;
+    })?;
     Ok(JsValue::undefined())
 }

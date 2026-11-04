@@ -224,7 +224,8 @@ fn prepare_a_form_detects_fields_on_a_paper_form() {
 
 /// Advance bounded UI frames until the synthetic prompt label becomes available.
 fn wait_for(h: &mut Harness<'static, PdfCraftApp>, label: &str) {
-    for _ in 0..300 {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(12);
+    while std::time::Instant::now() < deadline {
         h.run_steps(1);
         if h.query_by_label(label).is_some() {
             return;
@@ -235,7 +236,8 @@ fn wait_for(h: &mut Harness<'static, PdfCraftApp>, label: &str) {
 }
 /// Advance bounded UI frames until the worker completion updates the expected synthetic field value.
 fn wait_value(h: &mut Harness<'static, PdfCraftApp>, name: &str, expected: &str) {
-    for _ in 0..300 {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(12);
+    while std::time::Instant::now() < deadline {
         h.run_steps(1);
         if value(h, name) == [expected] {
             return;
@@ -438,7 +440,8 @@ fn clicking_duplicate_named_buttons_targets_the_clicked_object() {
     h.drag_at(at);
     h.run_steps(1);
     h.drop_at(at);
-    for _ in 0..200 {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(12);
+    while std::time::Instant::now() < deadline {
         h.run_steps(2);
         if captions(&h).iter().any(|s| s.as_deref() == Some("second")) {
             break;
@@ -459,7 +462,8 @@ fn clicking_duplicate_named_buttons_targets_the_clicked_object() {
     h.drag_at(at);
     h.run_steps(1);
     h.drop_at(at);
-    for _ in 0..200 {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(12);
+    while std::time::Instant::now() < deadline {
         h.run_steps(2);
         if captions(&h).first().and_then(|s| s.as_deref()) == Some("first") {
             break;
@@ -491,4 +495,87 @@ fn clicking_duplicate_named_buttons_targets_the_clicked_object() {
         }
         h.render().unwrap().save(path).unwrap();
     }
+}
+
+/// The real image-button click and picker callback must preserve the second duplicate's identity.
+#[test]
+fn clicking_duplicate_image_buttons_imports_only_into_the_clicked_field() {
+    let _gpu = crate::gpu();
+    let mut session = pdfcraft_engine::Session::new();
+    let bytes = session.create_blank(300.0, 300.0, 1).unwrap();
+    let id = session.open("images.pdf", None, bytes, None).unwrap();
+    for (name, x) in [("first", 20.0), ("second", 160.0)] {
+        session
+            .apply(
+                id,
+                pdfcraft_engine::Edit::AddField {
+                    page: 0,
+                    rect: [x, 200.0, x + 100.0, 230.0],
+                    kind: pdfcraft_engine::NewField::Image,
+                    name: Some(name.into()),
+                },
+            )
+            .unwrap();
+    }
+    let mut cos = pdfcraft_cos::Document::open(session.save_bytes(id).unwrap()).unwrap();
+    for field in session.get(id).unwrap().form.iter() {
+        cos.update_dict(field.obj, |d| d.set(b"T".to_vec(), pdfcraft_cos::PdfString::text("same"))).unwrap();
+    }
+    let bytes = pdfcraft_cos::write_full(&cos, &Default::default()).unwrap();
+    let dir = std::env::temp_dir().join(format!("pdfcraft-exact-image-click-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("synthetic.png");
+    let mut png = vec![];
+    {
+        let mut encoder = png::Encoder::new(&mut png, 2, 2);
+        encoder.set_color(png::ColorType::Rgb);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder.write_header().unwrap().write_image_data(&[120u8; 12]).unwrap();
+    }
+    std::fs::write(&path, png).unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("images.pdf", None, bytes).unwrap();
+        app.save_override = Some(path.to_string_lossy().into_owned());
+        app
+    });
+    h.run_steps(6);
+    let rect = h.state().views[0].page_screen_rect(0).unwrap();
+    let at = rect.min + egui::vec2(rect.width() * 210.0 / 300.0, rect.height() * 85.0 / 300.0);
+    h.hover_at(at);
+    h.run_steps(1);
+    h.drag_at(at);
+    h.run_steps(1);
+    h.drop_at(at);
+    h.run_steps(3);
+    let icons = |h: &mut Harness<'_, PdfCraftApp>| {
+        let id = h.state().active_ids().unwrap().1;
+        let cos = pdfcraft_cos::Document::open(h.state_mut().session.save_bytes(id).unwrap()).unwrap();
+        let root = cos.root().unwrap();
+        let form = cos.get(root).as_dict().unwrap().get(b"AcroForm").map(|v| cos.resolve(v)).unwrap();
+        form.as_dict()
+            .unwrap()
+            .get(b"Fields")
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| {
+                cos.resolve(r)
+                    .as_dict()
+                    .and_then(|d| d.get(b"MK").map(|v| cos.resolve(v)))
+                    .is_some_and(|m| m.as_dict().is_some_and(|d| d.contains(b"I")))
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(icons(&mut h), [false, true]);
+    assert!(h.state_mut().execute("edit.undo"));
+    h.run_steps(2);
+    assert_eq!(icons(&mut h), [false, false]);
+    assert!(h.state_mut().execute("edit.redo"));
+    h.run_steps(2);
+    assert_eq!(icons(&mut h), [false, true]);
+    std::fs::remove_file(path).unwrap();
+    std::fs::remove_dir(dir).unwrap();
 }

@@ -108,8 +108,13 @@ impl PdfCraftApp {
                     if let Some(i) = view
                         && let Some(f) = self.session.get(id).and_then(|d| d.form.iter().find(|f| f.name == name))
                         && !f.read_only()
+                        && let Some((wi, widget)) = f.widgets.iter().enumerate().find(|(_, w)| !w.hidden && w.page.is_some())
                     {
-                        self.views[i].forms.focus = Some(crate::forms_ui::open_focus(f, 0));
+                        let page = widget.page.unwrap_or(0);
+                        if self.views[i].page_screen_rect(page).is_none() {
+                            self.views[i].go_to_page(page);
+                        }
+                        self.views[i].forms.focus = Some(crate::forms_ui::open_focus(f, wi));
                     }
                 }
                 Request::Beep | Request::Reset(_) => {}

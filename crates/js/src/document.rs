@@ -19,11 +19,15 @@ pub(crate) fn field_object(ctx: &mut Context, name: &str) -> JsObject {
 }
 /// Cache by object identity as well as name so duplicate-named targets remain distinct.
 pub(crate) fn field_object_by_id(ctx: &mut Context, name: &str, id: Option<u64>) -> JsObject {
-    let key = crate::host::field_cache_key(name, id);
+    let token = host(ctx)
+        .ok()
+        .and_then(|h| h.borrow().fields.iter().find(|f| f.object_id == id && (id.is_some() || f.name == name)).map(|f| f.instance_id))
+        .unwrap_or(0);
+    let key = crate::host::field_cache_key(name, id, token);
     if let Some(object) = host(ctx).ok().and_then(|h| h.borrow().objects.get(&key).cloned()) {
         return object;
     }
-    let object = field_object_new(ctx, name, id);
+    let object = field_object_new(ctx, name, id, token);
     if let Ok(h) = host(ctx)
         && h.borrow().field_keys.contains(&key)
     {
@@ -32,8 +36,8 @@ pub(crate) fn field_object_by_id(ctx: &mut Context, name: &str, id: Option<u64>)
     object
 }
 /// Construct live accessors whose identity survives host snapshot refreshes.
-fn field_object_new(ctx: &mut Context, name: &str, id: Option<u64>) -> JsObject {
-    let n = (JsString::from(name), id);
+fn field_object_new(ctx: &mut Context, name: &str, id: Option<u64>, token: u64) -> JsObject {
+    let n = (JsString::from(name), id, token);
     let value_get = getter!(ctx, n, |f, c| value_of(&f, c));
     let value_set = {
         fn set(_: &JsValue, args: &[JsValue], name: &FieldKey, c: &mut Context) -> JsResult<JsValue> {

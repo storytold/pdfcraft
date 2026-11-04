@@ -46,6 +46,7 @@ impl PdfCraftApp {
     /// Start one explicit button interaction with captured document/view state and leave egui responsive.
     pub(crate) fn start_ui_script(&mut self, id: DocId, script: &str, field: Option<&str>, identity: Option<u64>) {
         if self.script_pending.is_some() {
+            self.notify("Another form script is active; this click was not run");
             return;
         }
         let Some(view) = self.views.iter().find(|v| v.id == id) else { return };
@@ -62,14 +63,23 @@ impl PdfCraftApp {
     /// Receive worker prompts/results and invalidate stale or timed-out interactions before applying their edits.
     pub(crate) fn poll_script_dialog(&mut self, ctx: &egui::Context) {
         let Some(mut pending) = self.script_pending.take() else { return };
-        let current = self.active_ids().is_some_and(|(_, id)| id == pending.run.id)
+        let current = (self.active_ids().is_some_and(|(_, id)| id == pending.run.id)
+            || self.compare.as_ref().is_some_and(|c| {
+                c.side_by_side
+                    && (c.old == pending.run.id || c.new == pending.run.id)
+                    && self.active_ids().is_some_and(|(_, active)| active == c.old || active == c.new)
+            }))
             && self.session.script_pending_current(&pending.run)
             && self.views.iter().find(|v| v.id == pending.run.id).is_some_and(|v| v.zoom == pending.zoom && v.current == pending.page);
-        if !current
-            || (pending.prompt.is_none() && pending.started.elapsed() > Duration::from_secs(10))
+        if !current {
+            self.session.discard_javascript(&pending.run);
+            return;
+        }
+        if (pending.prompt.is_none() && pending.started.elapsed() > Duration::from_secs(10))
             || (pending.prompt.is_some() && pending.started.elapsed() > Duration::from_secs(300))
         {
             self.session.discard_javascript(&pending.run);
+            self.notify("The form script timed out; its result was discarded");
             return;
         }
         if pending.prompt.is_none() {
@@ -236,5 +246,91 @@ mod review_tests {
         }
         assert!(app.script_pending.is_none());
         assert!(!app.modal_open());
+    }
+}
+
+#[cfg(test)]
+mod review13_ui_tests {
+    use super::*;
+    /// Create a native app with a visible synthetic blank document and no renderer.
+    fn app() -> (PdfCraftApp, DocId) {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        let bytes = app.session.create_blank(200.0, 300.0, 2).unwrap();
+        app.open_bytes("synthetic.pdf", None, bytes.to_vec()).unwrap();
+        let id = app.active_ids().unwrap().1;
+        (app, id)
+    }
+    /// Refused clicks and execution/prompt timeouts are visible, while stale runs stay silent.
+    #[test]
+    fn busy_and_timeout_notices_do_not_claim_worker_termination() {
+        let ctx = egui::Context::default();
+        for (timeout, prompt) in [(true, false), (true, true), (false, false)] {
+            let (mut app, id) = app();
+            app.start_ui_script(id, "app.response({cQuestion:'Wait'});", None, None);
+            app.start_ui_script(id, "var shouldNotRun=1;", None, None);
+            assert!(app.toast.as_ref().unwrap().0.contains("not run"));
+            app.toast = None;
+            if prompt {
+                let deadline = Instant::now() + Duration::from_secs(5);
+                while app.script_pending.as_ref().unwrap().prompt.is_none() && Instant::now() < deadline {
+                    app.poll_script_dialog(&ctx);
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                assert!(app.script_pending.as_ref().unwrap().prompt.is_some());
+            }
+            if timeout {
+                app.script_pending.as_mut().unwrap().started = Instant::now() - Duration::from_secs(if prompt { 301 } else { 11 });
+            } else {
+                app.views.iter_mut().find(|v| v.id == id).unwrap().zoom += 1.0;
+            }
+            app.poll_script_dialog(&ctx);
+            assert!(app.script_pending.is_none());
+            if timeout {
+                assert_eq!(app.toast.as_ref().unwrap().0, "The form script timed out; its result was discarded");
+            } else {
+                assert!(app.toast.is_none());
+            }
+        }
+    }
+    /// The visible old comparison half may complete without being the active new-file tab.
+    #[test]
+    fn non_active_comparison_document_completes_native_script() {
+        let (mut app, old) = app();
+        let bytes = app.session.create_blank(200.0, 300.0, 1).unwrap();
+        app.open_bytes("new.pdf", None, bytes.to_vec()).unwrap();
+        assert_ne!(app.active_ids().unwrap().1, old);
+        app.compare_old = Some(old);
+        app.run_compare();
+        assert!(app.compare.as_ref().unwrap().side_by_side);
+        app.start_ui_script(old, "var comparisonKept=42;", None, None);
+        let ctx = egui::Context::default();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while app.script_pending.is_some() && Instant::now() < deadline {
+            app.poll_script_dialog(&ctx);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(app.script_pending.is_none());
+        assert_eq!(app.session.run_javascript(old, "comparisonKept", None).unwrap().result.as_deref(), Some("42"));
+    }
+    /// Script focus reveals the requested field page before opening its editor.
+    #[test]
+    fn script_focus_reveals_an_offscreen_widget() {
+        let (mut app, id) = app();
+        app.session
+            .apply(
+                id,
+                pdfcraft_engine::Edit::AddField {
+                    page: 1,
+                    rect: [20.0, 20.0, 120.0, 40.0],
+                    kind: pdfcraft_engine::NewField::Text { multiline: false },
+                    name: Some("later".into()),
+                },
+            )
+            .unwrap();
+        app.handle_js(id, JsOutput { requests: vec![pdfcraft_engine::js::Request::Focus("later".into())], ..Default::default() });
+        let view = app.views.iter().find(|v| v.id == id).unwrap();
+        assert_eq!(view.current, 1);
+        assert_eq!(view.forms.focus.as_ref().unwrap().name, "later");
     }
 }

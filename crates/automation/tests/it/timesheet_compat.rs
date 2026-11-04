@@ -184,3 +184,60 @@ fn js_run_exact_field_ids_are_discoverable_and_strictly_validated() {
     assert_eq!(schema.input_schema["properties"]["field_id"]["maximum"], 281474976710655u64);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+/// The headless image picker counterpart accepts exact duplicate identities and keeps legacy lookup.
+#[test]
+fn exact_image_field_tool_targets_duplicates_and_rejects_invalid_ids() {
+    let dir = std::env::temp_dir().join(format!("pdfcraft-exact-image-tool-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut session = Session::new();
+    let bytes = session.create_blank(300.0, 300.0, 1).unwrap();
+    let id = session.open("synthetic.pdf", None, bytes, None).unwrap();
+    for (name, x) in [("first", 20.0), ("second", 160.0)] {
+        session.apply(id, Edit::AddField { page: 0, rect: [x, 20.0, x + 100.0, 80.0], kind: NewField::Image, name: Some(name.into()) }).unwrap();
+    }
+    let mut cos = Document::open(session.save_bytes(id).unwrap()).unwrap();
+    for field in session.get(id).unwrap().form.iter() {
+        cos.update_dict(field.obj, |d| d.set(b"T".to_vec(), pdfcraft_cos::PdfString::text("same"))).unwrap();
+    }
+    std::fs::write(dir.join("synthetic.pdf"), write_full(&cos, &Default::default()).unwrap()).unwrap();
+    std::fs::write(dir.join("picture.gif"), pdfcraft_xfa::fixtures::TINY_GIF).unwrap();
+    let mut a = Automation::new().with_root(&dir).unwrap();
+    let id = call(&mut a, "doc_open", json!({"path":"synthetic.pdf"}))["doc"].as_u64().unwrap();
+    let fields = call(&mut a, "form_fields", json!({"doc":id}));
+    let second = fields["fields"][1]["field_id"].as_u64().unwrap();
+    call(&mut a, "form_set_image", json!({"doc":id,"field":"same","field_id":second,"path":"picture.gif"}));
+    let icons = |a: &mut Automation| {
+        call(a, "doc_save", json!({"doc":id,"path":"saved.pdf"}));
+        let cos = Document::open(Arc::new(std::fs::read(dir.join("saved.pdf")).unwrap())).unwrap();
+        let root = cos.get(cos.root().unwrap());
+        let form = cos.resolve(root.as_dict().unwrap().get(b"AcroForm").unwrap());
+        form.as_dict()
+            .unwrap()
+            .get(b"Fields")
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| {
+                cos.resolve(r)
+                    .as_dict()
+                    .and_then(|d| d.get(b"MK").map(|v| cos.resolve(v)))
+                    .is_some_and(|m| m.as_dict().is_some_and(|d| d.contains(b"I")))
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(icons(&mut a), [false, true]);
+    for invalid in [json!(-1), json!(1.5), json!("bad"), json!(281474976710656u64)] {
+        assert!(a.call("form_set_image", &json!({"doc":id,"field":"same","field_id":invalid,"path":"picture.gif"})).is_err());
+    }
+    assert!(a.call("form_set_image", &json!({"doc":id,"field":"missing","field_id":second,"path":"picture.gif"})).is_err());
+    assert_eq!(icons(&mut a), [false, true]);
+    call(&mut a, "edit_undo", json!({"doc":id}));
+    assert_eq!(icons(&mut a), [false, false]);
+    call(&mut a, "form_set_image", json!({"doc":id,"field":"same","path":"picture.gif"}));
+    assert_eq!(icons(&mut a), [true, false]);
+    let tool = pdfcraft_automation::tools().into_iter().find(|t| t.name == "form_set_image").unwrap();
+    assert_eq!(tool.input_schema["properties"]["field_id"]["maximum"], 281474976710655u64);
+    std::fs::remove_dir_all(dir).unwrap();
+}

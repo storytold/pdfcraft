@@ -528,7 +528,7 @@ pub fn tools() -> Vec<ToolDef> {
                 &["doc", "page", "path", "rect"],
             )),
         t("form_set_image", "Set an image field's picture", "Show an image file (PNG, JPEG, TIFF, GIF or BMP) in an image field or button, scaled to fit and centred (what clicking an image field does). On an XFA form the picture is kept in its data too (base64, as Designer saves it) and the form shows it from there. Undoable.")
-            .with(schema(json!({ "doc": doc(), "field": { "type": "string" }, "path": { "type": "string" } }), &["doc", "field", "path"])),
+            .with(schema(json!({ "doc": doc(), "field": { "type": "string" }, "field_id": {"type":"integer","minimum":0,"maximum":281474976710655u64,"description":"Optional exact document-local identity from form_fields; requires matching field name."}, "path": { "type": "string" } }), &["doc", "field", "path"])),
         t(
             "form_set_props",
             "Field properties",

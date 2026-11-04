@@ -39,6 +39,8 @@ pub struct FieldState {
     pub name: String,
     /// Stable PDF object identity, absent for synthetic name-only callers.
     pub object_id: Option<u64>,
+    /// Runtime instance token; retired field references cannot alias reused PDF numbers.
+    pub instance_id: u64,
     pub kind: FieldType,
     /// Text: the text. Check box / radio: the selected export value (empty when off). Choice:
     /// the selected export values.
@@ -70,6 +72,8 @@ pub struct FieldState {
     pub user_name: String,
     pub icon: Option<u64>,
     pub caption_mixed: bool,
+    pub icon_mixed: bool,
+    pub icon_written: bool,
 }
 
 impl FieldState {
@@ -78,6 +82,7 @@ impl FieldState {
         FieldState {
             name: name.into(),
             object_id: None,
+            instance_id: 0,
             kind,
             value,
             default: Vec::new(),
@@ -101,6 +106,8 @@ impl FieldState {
             user_name: String::new(),
             icon: None,
             caption_mixed: false,
+            icon_mixed: false,
+            icon_written: false,
         }
     }
 

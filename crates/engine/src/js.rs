@@ -235,6 +235,15 @@ pub fn field_state(doc: &pdfcraft_cos::Document, f: &Field, geometry: &pdfcraft_
             .map(|r| ((r.num as u64) << 16) | r.generation as u64);
     }
 
+    s.icon_mixed = f.widgets.iter().any(|w| {
+        let icon = doc
+            .get(w.obj)
+            .as_dict()
+            .and_then(|d| d.get(b"MK").map(|v| doc.resolve(v)))
+            .and_then(|v| v.as_dict().and_then(|d| d.get(b"I")).and_then(pdfcraft_cos::Object::as_ref))
+            .map(field_object_id);
+        icon != s.icon
+    });
     s
 }
 
@@ -273,7 +282,7 @@ fn changes(before: &[pdfcraft_js::FieldState], after: &[pdfcraft_js::FieldState]
                 line_width: (a.line_width != b.line_width).then_some(a.line_width),
                 border_style: (a.border_style != b.border_style).then(|| a.border_style.clone()),
                 user_name: (a.user_name != b.user_name).then(|| a.user_name.clone()),
-                icon: (a.icon != b.icon).then_some(a.icon),
+                icon: (a.icon != b.icon || (a.icon_written && b.icon_mixed)).then_some(a.icon),
                 text_color: (a.text_color != b.text_color).then(|| a.text_color.clone()).flatten(),
                 fill_color: (a.fill_color != b.fill_color).then(|| a.fill_color.clone()).flatten(),
                 caption: (a.caption != b.caption || (a.caption_written && b.caption_mixed)).then(|| a.caption.clone()).flatten(),
@@ -552,7 +561,11 @@ impl Session {
             },
             answers,
         );
-        self.apply_script_outcome(id, &states, o)
+        let result = self.apply_script_outcome(id, &states, o);
+        if result.is_err() {
+            self.invalidate_javascript(id);
+        }
+        result
     }
 
     /// Convert the worker snapshot delta and reset requests into permission-checked atomic document edits.
@@ -944,7 +957,11 @@ impl Session {
             return Err(EditError::Invalid("document changed while the script was running".into()));
         }
         p.runtime.lock().map_err(|_| EditError::Invalid("script runtime unavailable".into()))?.acknowledge_completion();
-        self.apply_script_outcome(p.id, &p.states, out)
+        let result = self.apply_script_outcome(p.id, &p.states, out);
+        if result.is_err() {
+            self.invalidate_javascript(p.id);
+        }
+        result
     }
 }
 pub use pdfcraft_js::interaction::{InteractiveEvent, MenuItem, Prompt};
@@ -1173,5 +1190,33 @@ mod widget_budget_review_tests {
         assert!(validate_reset_work(std::slice::from_ref(&field), &[], &resets).is_err());
         field.widgets.truncate(1);
         assert!(validate_reset_work(&[field], &[], &resets).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod icon_mixed_review_tests {
+    use super::*;
+    /// Mixed widgets need a field-wide icon delta even when the first icon is already correct.
+    #[test]
+    fn mixed_icons_emit_only_after_an_explicit_setter() {
+        for icon in [None, Some(7)] {
+            let mut before = pdfcraft_js::FieldState::new("go", pdfcraft_js::FieldType::Button, vec![]);
+            before.icon = icon;
+            before.icon_mixed = true;
+            let fields = vec![before.clone()];
+            let script =
+                if icon.is_some() { "getField('go').buttonSetIcon(getField('go').buttonGetIcon());" } else { "getField('go').buttonSetIcon(null);" };
+            let out = pdfcraft_js::run(
+                script,
+                &pdfcraft_js::Event::doc("Test"),
+                &pdfcraft_js::DocInfo::default(),
+                &fields,
+                &[],
+                pdfcraft_js::Limits::default(),
+            );
+            assert_eq!(out.error, None);
+            assert_eq!(changes(&[before.clone()], &out.changed)[0].icon, Some(icon));
+            assert!(changes(&[before.clone()], &[before]).is_empty());
+        }
     }
 }

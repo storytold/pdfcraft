@@ -118,7 +118,7 @@ pub(super) fn run_button(app: &mut PdfCraftApp, index: usize, name: &str, identi
             "{name} submits the form to {url}; PdfCraft doesn't send form data. Save the document to keep your entries.",
             &[("name", name), ("url", &url)],
         ),
-        B::ImportIcon => app.choose_field_image(name),
+        B::ImportIcon => app.choose_field_image_target(app.views[index].id, name, Some(identity)),
         B::Script(js) => {
             let id = app.views[index].id;
             app.run_button_script_target(id, name, Some(identity), &js);

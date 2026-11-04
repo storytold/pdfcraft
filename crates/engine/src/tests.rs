@@ -11287,3 +11287,212 @@ fn imported_bookmarks_undo_in_one_step() {
     assert!(err.to_string().contains("no bookmark"), "{err}");
     assert!(s.get(id).unwrap().info.outline.is_empty());
 }
+
+/// Rejected host writeback must invalidate globals for both synchronous and native completion.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn refused_script_writeback_retires_the_runtime() {
+    for native in [false, true] {
+        let mut s = Session::new().with_clock(|| 1_700_000_000);
+        let id = s.open("bounded.pdf", None, Arc::new(synthetic_acroform(1200, 500)), None).unwrap();
+        let before = s.save_bytes(id).unwrap();
+        let script = "var refusedGlobal=42;for(var i=0;i<32;i++)resetForm();";
+        if native {
+            let pending = s.start_javascript(id, script, None).unwrap();
+            let crate::js::InteractiveEvent::Complete(out) = pending.receiver.recv_timeout(std::time::Duration::from_secs(5)).unwrap() else {
+                panic!("completion")
+            };
+            assert!(s.finish_javascript(pending, out).is_err());
+        } else {
+            assert!(s.run_javascript(id, script, None).is_err());
+        }
+        assert_eq!(s.save_bytes(id).unwrap(), before);
+        assert_eq!(s.run_javascript(id, "typeof refusedGlobal", None).unwrap().result.as_deref(), Some("undefined"));
+    }
+}
+/// History retires removed fields without discarding document globals or aliasing reused numbers.
+#[test]
+fn undo_removed_field_references_cannot_write_replacement_fields() {
+    let (mut s, id) = session_with(1);
+    let add =
+        |name: &str| Edit::AddField { page: 0, rect: [20.0, 20.0, 120.0, 40.0], kind: NewField::Text { multiline: false }, name: Some(name.into()) };
+    s.apply(id, add("old")).unwrap();
+    let original = s.get(id).unwrap().form.iter().find(|f| f.name == "old").unwrap().obj;
+    s.run_javascript(id, "var kept=99;var held=getField('old');held.custom=42;", None).unwrap();
+    s.undo(id).unwrap();
+    s.apply(id, add("replacement")).unwrap();
+    let replacement = s.get(id).unwrap().form.iter().find(|f| f.name == "replacement").unwrap().obj;
+    assert_eq!(original, replacement, "exercise the reused PDF number");
+    assert_eq!(
+        s.run_javascript(id, "kept===99 && getField('replacement')!==held && getField('replacement').custom===undefined;", None)
+            .unwrap()
+            .result
+            .as_deref(),
+        Some("true")
+    );
+    let out = s.run_javascript(id, "held.value='wrong';", None).unwrap();
+    assert!(out.error.is_some());
+    assert!(s.get(id).unwrap().form.iter().find(|f| f.name == "replacement").unwrap().value.is_empty());
+    s.undo(id).unwrap();
+    s.redo(id).unwrap();
+    assert_eq!(s.run_javascript(id, "kept", None).unwrap().result.as_deref(), Some("99"));
+}
+/// An exact image target changes only the selected duplicate-name field, with history and persistence.
+#[test]
+fn exact_image_import_targets_only_the_selected_duplicate_button() {
+    let (mut s, id) = session_with(1);
+    for (name, x) in [("first", 20.0), ("second", 160.0)] {
+        s.apply(id, Edit::AddField { page: 0, rect: [x, 20.0, x + 100.0, 80.0], kind: NewField::Image, name: Some(name.into()) }).unwrap();
+    }
+    let mut cos = pdfcraft_cos::Document::open(s.save_bytes(id).unwrap()).unwrap();
+    for field in pdfcraft_forms::fields(&cos) {
+        cos.update_dict(field.obj, |d| d.set(b"T".to_vec(), pdfcraft_cos::PdfString::text("same"))).unwrap();
+    }
+    let bytes = pdfcraft_cos::write_full(&cos, &Default::default()).unwrap();
+    let id = s.open("duplicate-image.pdf", None, Arc::new(bytes), None).unwrap();
+    let target = s.get(id).unwrap().form[1].obj;
+    let edit = Edit::SetFieldImageTarget { name: "same".into(), object: target, image: Arc::new(pdfcraft_xfa::fixtures::TINY_GIF.to_vec()) };
+    let has_icons = |s: &Session, id| {
+        let doc = s.get(id).unwrap();
+        let cos = &doc.editor.as_ref().unwrap().cos;
+        doc.form
+            .iter()
+            .map(|f| {
+                cos.get(f.widgets[0].obj)
+                    .as_dict()
+                    .and_then(|d| d.get(b"MK").map(|m| cos.resolve(m)))
+                    .is_some_and(|m| m.as_dict().is_some_and(|d| d.contains(b"I")))
+            })
+            .collect::<Vec<_>>()
+    };
+    s.apply(id, edit).unwrap();
+    assert_eq!(has_icons(&s, id), [false, true]);
+    s.undo(id).unwrap();
+    assert_eq!(has_icons(&s, id), [false, false]);
+    s.redo(id).unwrap();
+    assert_eq!(has_icons(&s, id), [false, true]);
+    let bytes = s.save_bytes(id).unwrap();
+    let reopened = s.open("again.pdf", None, bytes, None).unwrap();
+    s.apply(reopened, Edit::SetInfo { key: "Title".into(), value: "check".into() }).unwrap();
+    assert_eq!(has_icons(&s, reopened), [false, true]);
+}
+
+/// Native automatic calculations and explicit calculateNow agree on all selected export values.
+#[test]
+fn multiselect_calculation_matches_explicit_script_and_saved_result() {
+    let (mut s, id) = session_with(1);
+    for (name, kind, y) in [
+        ("choices", NewField::List { options: vec!["2".into(), "5".into()], multi: true }, 100.0),
+        ("sum", NewField::Text { multiline: false }, 50.0),
+    ] {
+        s.apply(id, Edit::AddField { page: 0, rect: [20.0, y, 120.0, y + 30.0], kind, name: Some(name.into()) }).unwrap();
+    }
+    s.apply(
+        id,
+        Edit::SetFieldProps {
+            name: "sum".into(),
+            props: Box::new(pdfcraft_forms::FieldProps {
+                calculate: Some(pdfcraft_forms::af::Calculate::Simple { op: pdfcraft_forms::af::CalcOp::Sum, fields: vec!["choices".into()] }),
+                ..Default::default()
+            }),
+        },
+    )
+    .unwrap();
+    s.apply(id, Edit::SetFieldValue { name: "choices".into(), value: pdfcraft_forms::FieldValue::Choice(vec!["2".into(), "5".into()]) }).unwrap();
+    assert_eq!(s.get(id).unwrap().form.iter().find(|f| f.name == "sum").unwrap().value, ["7"]);
+    let out = s.run_javascript(id, "calculateNow();getField('sum').value", None).unwrap();
+    assert_eq!(out.error, None);
+    assert_eq!(out.result.as_deref(), Some("7"));
+    assert_eq!(s.get(id).unwrap().form.iter().find(|f| f.name == "sum").unwrap().value, ["7"]);
+    let bytes = s.save_bytes(id).unwrap();
+    let reopened = s.open("again.pdf", None, bytes, None).unwrap();
+    assert_eq!(s.get(reopened).unwrap().form.iter().find(|f| f.name == "sum").unwrap().value, ["7"]);
+}
+
+/// Real mixed widgets converge even when buttonSetIcon repeats widget zero's existing icon.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn mixed_widget_icons_are_normalized_with_history_and_save() {
+    for native in [false, true] {
+        for first_has_icon in [false, true] {
+            use pdfcraft_cos::{Dict, ObjRef, Object, Stream};
+            let mut cos = pdfcraft_cos::Document::open(Arc::new(scripted_form())).unwrap();
+            let go = pdfcraft_forms::fields(&cos).into_iter().find(|f| f.name == "go").unwrap().obj;
+            let mut dict = Dict::new();
+            dict.set(b"Type".to_vec(), Object::name("XObject"));
+            dict.set(b"Subtype".to_vec(), Object::name("Form"));
+            dict.set(b"BBox".to_vec(), Object::Array(vec![0.into(), 0.into(), 10.into(), 10.into()]));
+            let a = cos.add(Object::Stream(Stream::flate(dict.clone(), b"")));
+            let b = cos.add(Object::Stream(Stream::flate(dict, b"")));
+            let mut widgets = vec![];
+            for (i, icon) in [first_has_icon.then_some(a), Some(b)].into_iter().enumerate() {
+                let mut w = Dict::new();
+                w.set(b"Subtype".to_vec(), Object::name("Widget"));
+                w.set(b"Parent".to_vec(), go);
+                w.set(b"P".to_vec(), ObjRef::new(3, 0));
+                w.set(b"Rect".to_vec(), Object::Array(vec![(20 + i as i64 * 80).into(), 20.into(), (80 + i as i64 * 80).into(), 60.into()]));
+                let mut mk = Dict::new();
+                if let Some(icon) = icon {
+                    mk.set(b"I".to_vec(), icon);
+                }
+                w.set(b"MK".to_vec(), Object::Dict(mk));
+                widgets.push(cos.add(Object::Dict(w)));
+            }
+            cos.update_dict(go, |d| {
+                d.remove(b"Rect");
+                d.set(b"Kids".to_vec(), Object::Array(widgets.iter().map(|r| (*r).into()).collect()));
+            })
+            .unwrap();
+            cos.update_dict(ObjRef::new(3, 0), |d| {
+                let mut annots = d.get(b"Annots").unwrap().as_array().unwrap().clone();
+                annots.retain(|v| v.as_ref() != Some(go));
+                annots.extend(widgets.iter().map(|r| Object::Ref(*r)));
+                d.set(b"Annots".to_vec(), Object::Array(annots));
+            })
+            .unwrap();
+            let mut s = Session::new().with_clock(|| 1_700_000_000);
+            let id = s.open("mixed-icons.pdf", None, Arc::new(pdfcraft_cos::write_full(&cos, &Default::default()).unwrap()), None).unwrap();
+            let script = "getField('go').buttonSetIcon(getField('go').buttonGetIcon());";
+            if native {
+                let pending = s.start_javascript(id, script, Some("go")).unwrap();
+                let crate::js::InteractiveEvent::Complete(out) = pending.receiver.recv_timeout(std::time::Duration::from_secs(5)).unwrap() else {
+                    panic!("completion")
+                };
+                assert_eq!(s.finish_javascript(pending, out).unwrap().error, None);
+            } else {
+                assert_eq!(s.run_javascript(id, script, Some("go")).unwrap().error, None);
+            }
+            let icons = |s: &mut Session, id| {
+                let cos = pdfcraft_cos::Document::open(s.save_bytes(id).unwrap()).unwrap();
+                pdfcraft_forms::fields(&cos)
+                    .iter()
+                    .find(|f| f.name == "go")
+                    .unwrap()
+                    .widgets
+                    .iter()
+                    .map(|w| {
+                        cos.get(w.obj)
+                            .as_dict()
+                            .and_then(|d| d.get(b"MK").map(|v| cos.resolve(v)))
+                            .and_then(|v| v.as_dict().and_then(|d| d.reference(b"I")))
+                    })
+                    .collect::<Vec<_>>()
+            };
+            let after = icons(&mut s, id);
+            assert_eq!(after.len(), 2);
+            assert_eq!(after[0], after[1]);
+            assert_eq!(after[0].is_some(), first_has_icon);
+            s.undo(id).unwrap();
+            let before = icons(&mut s, id);
+            assert_ne!(before[0], before[1]);
+            s.redo(id).unwrap();
+            let after = icons(&mut s, id);
+            assert_eq!(after[0], after[1]);
+            let bytes = s.save_bytes(id).unwrap();
+            let reopened = s.open("again.pdf", None, bytes, None).unwrap();
+            let after = icons(&mut s, reopened);
+            assert_eq!(after[0], after[1]);
+            assert_eq!(after[0].is_some(), first_has_icon);
+        }
+    }
+}

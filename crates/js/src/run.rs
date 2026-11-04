@@ -1,7 +1,7 @@
 use super::globals::{event_object, install};
-use super::host::{Host, Shared, text};
+use super::host::{Host, Shared, host, text};
 use super::model::{DocInfo, Event, FieldState, Limits, Outcome};
-use super::{Arc, Attribute, BTreeSet, Context, HostHooks, JsNativeError, JsResult, JsString, Realm, RefCell, Source, js_string};
+use super::{Arc, BTreeSet, Context, HostHooks, JsNativeError, JsResult, JsString, JsValue, NativeFunction, Realm, RefCell, Source, js_string};
 
 /// Longest script, in bytes.
 pub(crate) const MAX_SCRIPT_BYTES: usize = 256 * 1024;
@@ -189,7 +189,7 @@ pub(crate) fn run_in_context(
             (h.icons, h.objects)
         })
         .unwrap_or_default();
-    let field_keys = fields.iter().map(|f| crate::host::field_cache_key(&f.name, f.object_id)).collect::<BTreeSet<_>>();
+    let field_keys = fields.iter().map(|f| crate::host::field_cache_key(&f.name, f.object_id, f.instance_id)).collect::<BTreeSet<_>>();
     objects.retain(|key, _| field_keys.contains(key));
     ctx.insert_data(RefCell::new(Host {
         fields,
@@ -203,6 +203,8 @@ pub(crate) fn run_in_context(
         doc: doc.clone(),
         calculations: setup.calculations.to_vec(),
         calculate_depth: 0,
+        calculation_work: 0,
+        current_event: JsValue::undefined(),
         reset_calls: setup.reset_calls,
         reset_limit_exceeded: false,
         kept: 0,
@@ -215,7 +217,16 @@ pub(crate) fn run_in_context(
             install(ctx)?;
         }
         let ev = event_object(ctx, event);
-        ctx.register_global_property(js_string!("event"), ev.clone(), Attribute::all())?;
+        host(ctx)?.borrow_mut().current_event = ev.clone().into();
+        if setup.initialize {
+            let get = crate::host::function(ctx, NativeFunction::from_fn_ptr(get_event));
+            let set = crate::host::function(ctx, NativeFunction::from_fn_ptr(set_event));
+            ctx.global_object().define_property_or_throw(
+                js_string!("event"),
+                boa_engine::property::PropertyDescriptor::builder().get(get).set(set).enumerable(true).configurable(false),
+                ctx,
+            )?;
+        }
         // One document script that throws (calling a method PdfCraft lacks, say) must not keep
         // every field script in the form from running: what it defined before the error, and
         // the other scripts, stay available (#3940).
@@ -319,4 +330,14 @@ mod review4_lexical_tests {
             assert!(refuse(&format!("{}1", fragment.repeat(6000))).is_some(), "{fragment}");
         }
     }
+}
+
+/// Read the host-owned event binding without redefining a retained global property.
+fn get_event(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    Ok(host(ctx)?.borrow().current_event.clone())
+}
+/// Keep script event assignments and nested calculation restoration compatible with frozen globals.
+fn set_event(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    host(ctx)?.borrow_mut().current_event = args.first().cloned().unwrap_or_default();
+    Ok(JsValue::undefined())
 }

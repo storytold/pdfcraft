@@ -11,7 +11,7 @@ worker thread with a dedicated 64 MiB stack reservation (the transient stateless
 its separate stack policy). Document scripts initialize once with `Doc/Open`, before the requested event;
 button, console, format, validate and calculate scripts then share that context. Field objects
 read the latest snapshot supplied by the engine, including objects retained by earlier scripts.
-The first 4,096 field objects are cached by name. Separate documents cannot share globals or
+Exposed Field objects are cached by PDF object identity; synthetic fields use name keys. Separate documents cannot share globals or
 icon objects. `eval` and dynamic Function construction remain disabled.
 
 Changing the document-script sources recreates the context. Closing, reopening, reloading,
@@ -134,3 +134,20 @@ Unknown PDF defaults (failed stream decoding or a spent shared value budget) are
 The 64-reset call budget is now enforced in the worker before argument conversion and field scanning, shared by document initialization and its first event, and reset for later jobs. A sticky outcome flag rejects PDF writeback even if JavaScript catches the exception. The existing engine admission/work guard remains. Calculations are resolved by PDF object reference to the matching snapshot position; event targets and duplicate-name value and property deltas retain object identity through the host, authoring helpers and redraw. Public getField(name) retains first-match behavior. Tests cover both calculation orders, target reads/writes, native/console completion, Undo/Redo and save/reopen.
 
 AFSimple_Calculate expands exact/group/duplicate field matches without materializing their cross-product; numeric conversion and empty-result fallbacks remain unchanged. Selector comparison work is admitted up to 2^24 estimated units. The Field cache uses canonical PDF identities (name-only keys for synthetic callers), prunes removed fields between jobs and covers every exposed field, including more than 4096; renames preserve retained references/custom properties. Script color changes detach outside widgets that share the target group's indirect MK, including bounded reference aliases, while keeping target widgets' indirect object and unrelated MK entries. Native button clicks carry exact identities through hit testing, action dispatch and event construction. Legacy name-only engine/UI entry points remain wrappers. Headless form_fields returns field_id; js_run accepts that optional 48-bit identity with a matching field name, validates it before execution, and retains deterministic prompt replies. IDs are document-local and must be rediscovered after structural changes.
+
+Field instance tokens live outside PDF undo snapshots. Successful edits and undo/redo retire
+removed field instances immediately, even when no script job observes the gap. Reusing the
+same PDF object number does not revive an old Field accessor; document globals survive history.
+A refused synchronous/native writeback invalidates its document realm before returning an error.
+The host-backed event accessor remains usable when globalThis is frozen. AFSimple_Calculate
+shares a 2^24 selector-work budget across all calculation sources in an event job; later jobs
+receive a fresh budget. Native simple calculations include every selected list export value,
+and calculateNow uses the regular value setter's checkbox/radio normalization.
+
+Native UI feedback distinguishes a refused busy click, a stale interaction and a timeout.
+Timeouts report discarded results without claiming worker termination. Visible comparison halves
+may complete; switching away, changing the view or editing still invalidates stale interactions.
+Focus reveals a laid-out widget's page, and image import carries exact clicked identity through
+the picker and SetFieldImageTarget. The headless form_set_image tool accepts the same optional
+field_id and validates exact name/identity pairs; omitted IDs preserve legacy lookup. Mixed widget icons emit field-wide changes only when an
+icon setter runs. UI waiting helpers use elapsed deadlines rather than machine-speed retry counts.

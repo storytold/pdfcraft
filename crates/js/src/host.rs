@@ -8,8 +8,8 @@ use super::{
 pub(crate) struct Host {
     pub(crate) fields: Arc<Vec<FieldState>>,
     pub(crate) icons: Vec<(super::JsObject, u64)>,
-    pub(crate) objects: std::collections::HashMap<(String, Option<u64>), super::JsObject>,
-    pub(crate) field_keys: BTreeSet<(String, Option<u64>)>,
+    pub(crate) objects: std::collections::HashMap<(String, Option<u64>, u64), super::JsObject>,
+    pub(crate) field_keys: BTreeSet<(String, Option<u64>, u64)>,
     pub(crate) changed: BTreeSet<usize>,
     pub(crate) alerts: Vec<Message>,
     pub(crate) console: Vec<String>,
@@ -17,6 +17,8 @@ pub(crate) struct Host {
     pub(crate) doc: DocInfo,
     pub(crate) calculations: Vec<(usize, String)>,
     pub(crate) calculate_depth: usize,
+    pub(crate) calculation_work: usize,
+    pub(crate) current_event: JsValue,
     pub(crate) reset_calls: usize,
     pub(crate) reset_limit_exceeded: bool,
     /// Bytes of text kept in alerts, console lines and requests, against [`xfa::MAX_PAYLOAD`].
@@ -206,11 +208,11 @@ pub(crate) fn colour(c: &Option<Vec<String>>, ctx: &mut Context) -> JsValue {
 
 // ── field objects ───────────────────────────────────────────────────────────────────────────
 
-pub(crate) type FieldKey = (JsString, Option<u64>);
+pub(crate) type FieldKey = (JsString, Option<u64>, u64);
 
 /// PDF identities survive renames; name-only synthetic fields retain name lookup semantics.
-pub(crate) fn field_cache_key(name: &str, id: Option<u64>) -> (String, Option<u64>) {
-    (if id.is_some() { String::new() } else { name.to_string() }, id)
+pub(crate) fn field_cache_key(name: &str, id: Option<u64>, token: u64) -> (String, Option<u64>, u64) {
+    (if id.is_some() { String::new() } else { name.to_string() }, id, token)
 }
 
 fn field_index(ctx: &Context, name: &FieldKey) -> JsResult<usize> {
@@ -219,7 +221,7 @@ fn field_index(ctx: &Context, name: &FieldKey) -> JsResult<usize> {
         .borrow()
         .fields
         .iter()
-        .position(|f| name.1.map_or(f.name == n, |id| f.object_id == Some(id)))
+        .position(|f| name.1.map_or(f.name == n, |id| f.object_id == Some(id) && f.instance_id == name.2))
         .ok_or_else(|| error(format!("no field named {n}")))
 }
 

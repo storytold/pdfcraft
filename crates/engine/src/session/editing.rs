@@ -219,6 +219,9 @@ impl Session {
             return Err(e);
         }
         doc.dirty = true;
+        if let Ok(mut runtime) = doc.js_runtime.lock() {
+            runtime.sync_field_ids(doc.form.iter().map(|f| crate::js::field_object_id(f.obj)));
+        }
         doc.generation += 1;
         doc.edit_notices = notices;
         if !cx.xfa_removed.is_empty() {
@@ -267,6 +270,9 @@ impl Session {
         }
         doc.edit_notices.clear();
         Self::sync_dirty(doc);
+        if let Ok(mut runtime) = doc.js_runtime.lock() {
+            runtime.sync_field_ids(doc.form.iter().map(|f| crate::js::field_object_id(f.obj)));
+        }
         doc.generation += 1;
         Ok(label)
     }
@@ -296,6 +302,9 @@ impl Session {
         }
         doc.edit_notices.clear();
         Self::sync_dirty(doc);
+        if let Ok(mut runtime) = doc.js_runtime.lock() {
+            runtime.sync_field_ids(doc.form.iter().map(|f| crate::js::field_object_id(f.obj)));
+        }
         doc.generation += 1;
         Ok(label)
     }

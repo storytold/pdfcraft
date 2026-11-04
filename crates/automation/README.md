@@ -278,3 +278,5 @@ FreeText appearance and survives reopening. Other mark/signature types reject
 `js_run` accepts optional `answers` (strings or null, at most 32), consumed in popup, response and alert order. Missing responses cancel menus/input; explicit viewer requests remain data in automation. See [the runtime contract](../../docs/acroform-script-workflows.md).
 
 For distinct PDF fields sharing a name, form_fields exposes a document-local integer field_id. Pass it with field to js_run to bind event.target to that exact field (including ordered answers); omit it for existing first-match behavior. Mismatched names/IDs, missing names and non-integer/out-of-range IDs are refused before execution.
+
+`form_set_image` accepts the optional document-local `field_id` from `form_fields` alongside the matching `field` name, selecting an exact duplicate-name image button. Omit it for the legacy first-name match. IDs are unsigned 48-bit integers and must be rediscovered after structural edits or reopening.

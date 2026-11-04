@@ -247,7 +247,7 @@ fn calculate_now(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsVa
             let mut h = shared.borrow_mut();
             if index < h.fields.len() {
                 let target = Arc::make_mut(&mut h.fields).get_mut(index).ok_or_else(|| error("the field is no longer available"))?;
-                target.value = vec![value];
+                super::host::set_value(target, vec![value]);
                 h.changed.insert(index);
             }
         }
@@ -269,7 +269,13 @@ fn af_simple_calculate(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsRe
     // Charge selector comparisons before group expansion; the iterator keeps memory independent
     // of how often selectors overlap or duplicate the same field.
     let selector_bytes = names.iter().fold(0usize, |n, s| n.saturating_add(s.len()));
-    if fields.len().saturating_mul(names.len().saturating_add(selector_bytes)) > 1 << 24 {
+    let work = fields.len().saturating_mul(names.len().saturating_add(selector_bytes));
+    let shared = host(ctx)?;
+    let mut h = shared.borrow_mut();
+    h.calculation_work = h.calculation_work.saturating_add(work);
+    let exhausted = h.calculation_work > 1 << 24;
+    drop(h);
+    if exhausted {
         return Err(error("calculation field lookup exceeds its work limit"));
     }
     let values = names

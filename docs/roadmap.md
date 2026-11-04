@@ -444,3 +444,5 @@ Estimates unchanged.
 ## Pages sidebar keyboard refresh (2026-10-30)
 
 PR #2133 retains document-local Pages sidebar focus for Ctrl/Cmd+A and Escape after the UI module split. The selection does not navigate. The focused regression is in `crates/ui-egui/tests/it/view.rs`; current-head hosted validation is pending. Feature counts and estimates are unchanged.
+
+- 2026-11-04: AcroForm review follow-up covers field-instance retirement across history, rejected-writeback realm invalidation, mixed widget icons, shared calculation budgets and multi-select/checkbox consistency, frozen-global events, exact image imports, comparison-half scripts, focus reveal and explicit busy/timeout feedback. Synthetic regressions and elapsed UI deadlines accompany the fixes.

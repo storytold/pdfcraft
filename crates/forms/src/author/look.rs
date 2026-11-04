@@ -454,7 +454,15 @@ pub(crate) fn button_appearance(doc: &Document, w: &Widget, field_da: &str) -> (
 /// Give a push button (an image field) the picture `image` (an image XObject of `px` pixels):
 /// it becomes the button's icon (`/MK /I`) and its appearance.
 pub fn set_button_icon(doc: &mut Document, name: &str, image: ObjRef, px: (u32, u32)) -> Result<(), FormError> {
-    let f = fields(doc).into_iter().find(|f| f.name == name).ok_or_else(|| FormError::NoSuchField(name.into()))?;
+    set_button_icon_target(doc, name, None, image, px)
+}
+
+/// Give the exact field its image without changing another field with the same name.
+pub fn set_button_icon_target(doc: &mut Document, name: &str, object: Option<ObjRef>, image: ObjRef, px: (u32, u32)) -> Result<(), FormError> {
+    let f = fields(doc)
+        .into_iter()
+        .find(|f| f.name == name && object.is_none_or(|obj| f.obj == obj))
+        .ok_or_else(|| FormError::NoSuchField(name.into()))?;
     if f.kind != FieldKind::PushButton {
         return invalid(format!("{name} is not a button or image field"));
     }
@@ -475,7 +483,7 @@ pub fn set_button_icon(doc: &mut Document, name: &str, image: ObjRef, px: (u32, 
         }
         doc.update_dict(wd.obj, |d| d.set(b"MK".to_vec(), Object::Dict(mk)))?;
     }
-    redraw_field(doc, name)
+    redraw_field_object(doc, name, f.obj)
 }
 
 fn empty_box(doc: &Document, w: &Widget) -> Stream {

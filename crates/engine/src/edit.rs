@@ -304,6 +304,12 @@ pub enum Edit {
         name: String,
         image: Arc<Vec<u8>>,
     },
+    /// Set the picture of one exact push-button field; legacy name-only calls remain available.
+    SetFieldImageTarget {
+        name: String,
+        object: pdfcraft_cos::ObjRef,
+        image: Arc<Vec<u8>>,
+    },
     /// Duplicate a field onto other pages (same field, shared value).
     DuplicateField {
         name: String,
