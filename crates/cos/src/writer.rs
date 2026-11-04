@@ -134,14 +134,7 @@ fn write_stream(s: &Stream, out: &mut Vec<u8>) {
 /// The object as written: encrypted with its (output) number when the document is encrypted,
 /// except the `/Encrypt` dictionary itself (`source_num` is its number in the source document).
 /// `o` has the document's numbers in its references ([`crate::security::transform`]).
-fn prepared<'a>(
-    doc: &Document,
-    source_num: u32,
-    num: u32,
-    generation: u16,
-    o: &'a Object,
-    attachments: &HashSet<u32>,
-) -> Cow<'a, Object> {
+fn prepared<'a>(doc: &Document, source_num: u32, num: u32, generation: u16, o: &'a Object, attachments: &HashSet<u32>) -> Cow<'a, Object> {
     match doc.output_security() {
         (Some(h), encrypt_num) if Some(source_num) != encrypt_num && !doc.stored_as_is(source_num) => {
             let pass = if doc.encryption_changed() { crate::security::Pass::EncryptReplacing } else { crate::security::Pass::Encrypt };
