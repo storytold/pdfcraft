@@ -119,15 +119,19 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 .inner_margin(egui::Margin::same(18))
                 .show(ui, |ui| {
                     ui.set_width(ui.available_width());
-                    ui.label(egui::RichText::new(tl!("Recommended tools")).font(theme::semibold(15.0)));
-                    ui.add_space(10.0);
+                    // Tools hidden in Preferences (and pinned ones, listed below) leave the cards; with none left,
+                    // the heading goes too.
+                    if RECOMMENDED.iter().any(|id| app.hidden_tools.shows(id) && !app.is_tool_pinned(id)) {
+                        ui.label(egui::RichText::new(tl!("Recommended tools")).font(theme::semibold(15.0)));
+                        ui.add_space(10.0);
+                    }
                     ui.horizontal_wrapped(|ui| {
                         ui.spacing_mut().item_spacing = vec2(14.0, 14.0);
                         for id in RECOMMENDED {
                             if app.is_tool_pinned(id) {
                                 continue;
                             }
-                            let Some(g) = catalog::group(id) else { continue };
+                            let Some(g) = catalog::group(id).filter(|g| app.hidden_tools.shows(g.id)) else { continue };
                             tool_card(app, ui, &t, g, false);
                         }
                         let (rect, resp) = ui.allocate_exact_size(vec2(170.0, 104.0), Sense::click());
