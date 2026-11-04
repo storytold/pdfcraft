@@ -1,8 +1,9 @@
-//! Export a PDF ▸ Image and Text (execution plan M10.3, the first formats).
+//! Export a PDF ▸ Image and Text (execution plan M10.3, the first formats) and PostScript/EPS.
 //!
 //! [`Exporter`] renders pages to PNG, JPEG or TIFF at a resolution and extracts reading-order
 //! text, from a
 //! document's working file (so unsaved edits and hidden layers are respected, as on screen).
+//! [`postscript`] redraws pages as a PostScript program from the same working file.
 
 use std::collections::BTreeMap;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -85,6 +86,17 @@ impl Document {
 pub fn extract_images(src: &ExportSource, pages: &[usize], min_side: u32) -> Result<pdfcraft_create::ImageExport, String> {
     let doc = pdfcraft_cos::Document::open_with_password(src.bytes.clone(), src.config.password.as_deref()).map_err(|e| e.to_string())?;
     Ok(pdfcraft_create::extract_images(&doc, pages, min_side))
+}
+
+pub use pdfcraft_ps_export::{ExportedPs, FidelityNote, PsExportError, PsFormat};
+
+/// Export a PDF ▸ PostScript (`PsFormat::Ps`) or EPS (`PsFormat::Eps`): the pages redrawn as a
+/// DSC-structured PostScript program, from the document's working file (unsaved edits included,
+/// as on screen — and under the same viewer configuration: password, layer visibility and
+/// comment visibility). See `pdfcraft_ps_export::export_with_config` for the semantics; the
+/// result's `warnings` list every degradation, once each.
+pub fn postscript(src: &ExportSource, pages: &[usize], format: PsFormat) -> Result<ExportedPs, PsExportError> {
+    pdfcraft_ps_export::export_with_config(src.bytes.clone(), &src.config, pages, format)
 }
 
 /// The file name for the `index`-th (1-based) exported image: `<stem>_Page_<n>_Image_<index>.<ext>`.

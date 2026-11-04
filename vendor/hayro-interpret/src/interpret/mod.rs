@@ -13,7 +13,7 @@ use crate::pattern::{Pattern, ShadingPattern};
 use crate::shading::Shading;
 use crate::util::{OptionLog, RectExt};
 use crate::x_object::{
-    FormXObject, ImageXObject, XObject, draw_form_xobject, draw_image_xobject, draw_xobject,
+    FormXObject, ImageXObject, XObject, draw_form_xobject, draw_inline_image_xobject, draw_xobject,
 };
 use hayro_syntax::content::TypedIter;
 use hayro_syntax::content::ops::TypedInstruction;
@@ -958,7 +958,9 @@ fn interpret_window<'a>(
                     transfer_function,
                     Some(&defaults),
                 ) {
-                    draw_image_xobject(&x_object, context, device);
+                    // PdfCraft patch (ps-export): inline images dispatch through their
+                    // own entry (the stream borrows the content window).
+                    draw_inline_image_xobject(&x_object, context, device);
                 }
             }
             TypedInstruction::TextRise(t) => {

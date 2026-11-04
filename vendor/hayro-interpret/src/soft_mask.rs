@@ -30,6 +30,9 @@ pub enum MaskType {
 }
 
 /// A transfer function to apply to the opacity values of a mask.
+// PdfCraft patch (ps-export): `Clone` so a re-rooted mask (see `SoftMask::re_rooted`)
+// can share its original's fields.
+#[derive(Clone)]
 pub struct TransferFunction(Function);
 
 impl TransferFunction {
@@ -50,7 +53,9 @@ impl TransferFunction {
 struct Repr<'a> {
     cache_key: u128,
     obj_id: ObjectIdentifier,
-    group: FormXObject<'a>,
+    // PdfCraft patch (ps-export): shared (`Rc`) so `SoftMask::re_rooted` can copy the
+    // group without `FormXObject` being `Clone`.
+    group: Rc<FormXObject<'a>>,
     mask_type: MaskType,
     parent_resources: Resources<'a>,
     root_transform: Affine,
@@ -170,7 +175,7 @@ impl<'a> SoftMask<'a> {
         Some(Self(Rc::new(Repr {
             cache_key,
             obj_id,
-            group,
+            group: Rc::new(group),
             mask_type,
             root_transform,
             transfer_function,
@@ -199,6 +204,35 @@ impl<'a> SoftMask<'a> {
         );
         ctx.luminosity_in_device_cmyk = self.0.luminosity_in_device_cmyk;
         draw_form_xobject(&self.0.parent_resources, &self.0.group, &mut ctx, device);
+    }
+
+    /// PdfCraft patch (ps-export): a copy of this mask whose group is interpreted
+    /// under `pre` composed onto the root transform it captured, with its bbox
+    /// mapped through `pre`. The PostScript exporter interprets a page in device
+    /// page points (y up) but replays its recorded draws into an offscreen renderer
+    /// in 300-dpi pixel space (y down): every recorded path has the page matrix
+    /// baked into its transform, and a recorded mask must be re-rooted onto that
+    /// space the same way — its captured root transform is the only geometry it
+    /// carries. The cache key folds `pre` in, so a re-rooted mask never shares a
+    /// renderer's mask-cache entry with its original.
+    pub fn re_rooted(&self, pre: Affine) -> SoftMask<'a> {
+        let r = &self.0;
+        SoftMask(Rc::new(Repr {
+            cache_key: hash128(&(r.cache_key, pre.cache_key())),
+            obj_id: r.obj_id,
+            group: Rc::clone(&r.group),
+            mask_type: r.mask_type,
+            parent_resources: r.parent_resources.clone(),
+            root_transform: pre * r.root_transform,
+            bbox: pre.transform_rect_bbox(r.bbox),
+            interpreter_cache: r.interpreter_cache.clone(),
+            transfer_function: r.transfer_function.clone(),
+            settings: r.settings.clone(),
+            background: r.background.clone(),
+            luminosity_in_device_cmyk: r.luminosity_in_device_cmyk,
+            xref: r.xref,
+            nesting_depth: r.nesting_depth,
+        }))
     }
 
     /// Return the object identifier of the mask.

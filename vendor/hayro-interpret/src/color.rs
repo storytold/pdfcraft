@@ -297,11 +297,82 @@ impl ColorSpaceType {
     }
 }
 
+/// PdfCraft patch (ps-export): which of PDF's three device colour spaces a
+/// [`ColorSpace`] is. Exporters that must name the space in an output format can only
+/// do so faithfully for these; everything else (ICC, Cal, Lab, Indexed, Separation,
+/// DeviceN, Pattern) arrives already resolved with no re-emittable definition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeviceSpace {
+    /// DeviceGray: one component.
+    Gray,
+    /// DeviceRGB: three components.
+    Rgb,
+    /// DeviceCMYK: four components.
+    Cmyk,
+}
+
+/// PdfCraft patch (ps-export): the source form of a [`Color`] — what an exporter needs
+/// to name the colour in another format, instead of the lossy RGBA rendering view.
+/// Produced by [`Color::source`].
+#[derive(Debug, Clone)]
+pub enum ColorSource<'a> {
+    /// DeviceGray, one component.
+    Gray(&'a [f32]),
+    /// DeviceRGB, three components.
+    Rgb(&'a [f32]),
+    /// DeviceCMYK, four components.
+    Cmyk(&'a [f32]),
+    /// A /Separation colour: colorant name, tint value, and what the exporter
+    /// needs to rebuild the space. `alternate` is `None` when the PDF's alternate
+    /// space is not one of the three device spaces.
+    Separation {
+        /// The colorant name (for example `Spot`).
+        colorant: &'a str,
+        /// The tint operand(s) the content stream set.
+        tint: &'a [f32],
+        /// The alternate space, when it is one of the three device spaces.
+        alternate: Option<DeviceSpace>,
+        /// The tint transform, as parsed from the PDF.
+        tint_transform: &'a Function,
+    },
+    /// A /DeviceN colour: components are not exposed (kept as today's RGB fallback).
+    DeviceN,
+}
+
+/// PdfCraft patch (ps-export): equality for [`ColorSource`]. Every field compares by
+/// value except `tint_transform`, which compares by identity — [`Function`] has no
+/// structural equality, and two colours of one colour space share the parsed function
+/// while two separately parsed spaces do not.
+impl PartialEq for ColorSource<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Gray(a), Self::Gray(b)) | (Self::Rgb(a), Self::Rgb(b)) | (Self::Cmyk(a), Self::Cmyk(b)) => a == b,
+            (
+                Self::Separation { colorant: a_name, tint: a_tint, alternate: a_alt, tint_transform: a_fn },
+                Self::Separation { colorant: b_name, tint: b_tint, alternate: b_alt, tint_transform: b_fn },
+            ) => a_name == b_name && a_tint == b_tint && a_alt == b_alt && std::ptr::eq(a_fn, b_fn),
+            (Self::DeviceN, Self::DeviceN) => true,
+            _ => false,
+        }
+    }
+}
+
 /// A PDF color space.
 #[derive(Debug, Clone)]
 pub struct ColorSpace(Arc<ColorSpaceType>);
 
 impl ColorSpace {
+    /// PdfCraft patch (ps-export): the device colour space, or `None` for every other
+    /// kind of space (ICC, Cal, Lab, Indexed, Separation, DeviceN, Pattern).
+    pub fn device_space(&self) -> Option<DeviceSpace> {
+        match self.0.as_ref() {
+            ColorSpaceType::DeviceGray => Some(DeviceSpace::Gray),
+            ColorSpaceType::DeviceRgb => Some(DeviceSpace::Rgb),
+            ColorSpaceType::DeviceCmyk => Some(DeviceSpace::Cmyk),
+            _ => None,
+        }
+    }
+
     /// Create a new color space from the given object.
     pub(crate) fn new(object: Object<'_>, cache: &Cache) -> Option<Self> {
         Self::within(object, cache, 0)
@@ -1071,6 +1142,7 @@ impl ToRgb for Indexed {
 
 #[derive(Debug, Clone)]
 pub(crate) struct Separation {
+    name: String,
     alternate_space: ColorSpace,
     /// PdfCraft patch (55): `None` when the tint transform cannot be read (see
     /// `eval_tint_transform`).
@@ -1114,6 +1186,10 @@ impl Separation {
         let is_all = name.as_str() == "All";
 
         Some(Self {
+            // PdfCraft patch (ps-export): keep the colorant name. Until now it was
+            // read only to test for "None"; `Color::source` exposes it so an
+            // exporter can rebuild the space.
+            name: name.as_str().to_string(),
             alternate_space,
             tint_transform,
             is_none_separation,
@@ -1439,6 +1515,39 @@ impl Color {
             _ => return None,
         };
         Some((tints, self.opacity.clamp(0.0, 1.0)))
+    }
+
+    /// PdfCraft patch (ps-export): the colour's source — the device space with its raw
+    /// components, the /Separation details, or the /DeviceN marker — or `None` for every
+    /// source an exporter cannot name (ICC, Cal, Lab, Indexed, pattern-embedded).
+    /// `to_rgba()` stays the rendering view; this is the export view, borrowing from
+    /// `self` (the colorant and tint transform live behind the colour space's `Arc`).
+    pub fn source(&self) -> Option<ColorSource<'_>> {
+        match self.color_space.0.as_ref() {
+            ColorSpaceType::DeviceGray => Some(ColorSource::Gray(&self.components)),
+            ColorSpaceType::DeviceRgb => Some(ColorSource::Rgb(&self.components)),
+            ColorSpaceType::DeviceCmyk => Some(ColorSource::Cmyk(&self.components)),
+            // A tint transform that cannot be read (patch 55) is not one an exporter can
+            // replay: such a separation reports no source, and the RGBA approximation draws it.
+            ColorSpaceType::Separation(separation) => separation.tint_transform.as_ref().map(|tint_transform| ColorSource::Separation {
+                colorant: &separation.name,
+                tint: &self.components,
+                alternate: separation.alternate_space.device_space(),
+                tint_transform,
+            }),
+            ColorSpaceType::DeviceN(_) => Some(ColorSource::DeviceN),
+            _ => None,
+        }
+    }
+
+    /// PdfCraft patch (ps-export): the colour's opacity — the constant alpha
+    /// the interpreter folds in from the graphics state (`/CA`/`ca`), which
+    /// [`Color::source`] deliberately does not carry. Consumers that batch or
+    /// compare paints by source must compare this alongside it: two colours of
+    /// one source with different alpha render differently, so treating them as
+    /// equal silently repaints at the wrong opacity.
+    pub fn opacity(&self) -> f32 {
+        self.opacity
     }
 
     /// Create a color from RGBA.

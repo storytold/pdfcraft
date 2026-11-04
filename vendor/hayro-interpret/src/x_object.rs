@@ -363,10 +363,14 @@ fn draw_knockout_passes<'a>(
     context.ocg_state.set_visibility(visibility);
 }
 
-pub(crate) fn draw_image_xobject<'a, 'b>(
+/// PdfCraft patch (ps-export): the image-draw body shared by the XObject and inline
+/// paths; `draw` dispatches the built image onto the device — retained (the stream
+/// provably borrows the document) or plain (the stream borrows the content window).
+fn draw_image_xobject_inner<'a, 'b>(
     x_object: &ImageXObject<'b>,
     context: &mut Context<'a>,
     device: &mut impl Device<'a>,
+    draw: impl FnOnce(&mut dyn Device<'a>, Image<'a, 'b>, Affine),
 ) {
     if !context.ocg_state.is_visible() {
         return;
@@ -441,7 +445,7 @@ pub(crate) fn draw_image_xobject<'a, 'b>(
         Image::Raster(RasterImage(x_object.clone()))
     };
 
-    device.draw_image(image, transform);
+    draw(&mut *device, image, transform);
     device.pop_transparency_group();
 
     context.restore_state(device);
@@ -449,6 +453,35 @@ pub(crate) fn draw_image_xobject<'a, 'b>(
     if has_oc {
         context.ocg_state.end_marked_content();
     }
+}
+
+/// PdfCraft patch (ps-export): an XObject image's stream borrows the document, like
+/// the resources and the device (`XObject<'a>` carries one lifetime end to end), so
+/// its draws dispatch through [`Device::draw_retained_image`] — retaining devices
+/// (the PostScript exporter's shadow scene) can capture the image by value.
+pub(crate) fn draw_image_xobject<'a>(
+    x_object: &ImageXObject<'a>,
+    context: &mut Context<'a>,
+    device: &mut impl Device<'a>,
+) {
+    draw_image_xobject_inner(x_object, context, device, |device, image, transform| {
+        device.draw_retained_image(image, transform)
+    });
+}
+
+/// PdfCraft patch (ps-export): the inline-image path. An inline image's stream
+/// borrows the content window it was parsed from, which cannot outlive the call, so
+/// the draw keeps the plain [`Device::draw_image`] entry; a retaining device must
+/// treat the image as un-recordable (the PostScript exporter records a hole and its
+/// flattens decline instead of rendering without it).
+pub(crate) fn draw_inline_image_xobject<'a, 'b>(
+    x_object: &ImageXObject<'b>,
+    context: &mut Context<'a>,
+    device: &mut impl Device<'a>,
+) {
+    draw_image_xobject_inner(x_object, context, device, |device, image, transform| {
+        device.draw_image(image, transform)
+    });
 }
 
 fn xobject_oc(dict: &Dict<'_>, context: &mut Context<'_>) -> bool {

@@ -4,7 +4,7 @@ use crate::pattern::Pattern;
 use crate::util::hash128;
 use crate::x_object::ImageXObject;
 use hayro_syntax::object::Stream;
-use kurbo::{BezPath, Cap, Join};
+use kurbo::{Affine, BezPath, Cap, Join};
 use smallvec::{SmallVec, smallvec};
 
 /// A clip path.
@@ -23,12 +23,29 @@ impl CacheKey for ClipPath {
 }
 
 /// A stencil image.
+// PdfCraft patch (ps-export): `Clone` so the PostScript exporter's replay log can
+// capture images by value (`Paint` and `ImageXObject` already are `Clone`).
+#[derive(Clone)]
 pub struct StencilImage<'a, 'b> {
     pub(crate) paint: Paint<'a>,
     pub(crate) image_xobject: ImageXObject<'b>,
 }
 
 impl<'a, 'b> StencilImage<'a, 'b> {
+    /// PdfCraft patch (ps-export): a copy of the stencil whose embedded paint's
+    /// pattern (a stencil is painted in the current colour, and that can be a
+    /// pattern colorspace) is re-rooted onto another device space
+    /// (`Pattern::re_rooted`) — the recorded counterpart of the re-rooting every
+    /// other recorded paint gets. Colour paints pass through unchanged.
+    pub fn re_rooted_paint(&self, pre: Affine) -> Self {
+        let mut re_rooted = self.clone();
+        re_rooted.paint = match &self.paint {
+            Paint::Pattern(p) => Paint::Pattern(Box::new(p.re_rooted(pre))),
+            other => other.clone(),
+        };
+        re_rooted
+    }
+
     /// Perform some operation with the stencil data of the image.
     ///
     /// The second argument allows you to give the image decoder a hint for
@@ -66,6 +83,9 @@ impl CacheKey for StencilImage<'_, '_> {
 }
 
 /// A raster image.
+// PdfCraft patch (ps-export): `Clone` so the PostScript exporter's replay log can
+// capture images by value (`ImageXObject` already is `Clone`).
+#[derive(Clone)]
 pub struct RasterImage<'a>(pub(crate) ImageXObject<'a>);
 
 impl RasterImage<'_> {
@@ -118,6 +138,18 @@ pub enum Image<'a, 'b> {
     Stencil(StencilImage<'a, 'b>),
     /// A normal raster image.
     Raster(RasterImage<'b>),
+}
+
+// PdfCraft patch (ps-export): `Image` is cloned by value into the PostScript exporter's
+// replay log; both variants are `Clone` (see the derives above — `ImageXObject` and
+// `Stream` derive it upstream).
+impl Clone for Image<'_, '_> {
+    fn clone(&self) -> Self {
+        match self {
+            Image::Stencil(s) => Image::Stencil(s.clone()),
+            Image::Raster(r) => Image::Raster(r.clone()),
+        }
+    }
 }
 
 impl Image<'_, '_> {

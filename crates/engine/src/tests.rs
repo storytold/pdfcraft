@@ -1600,6 +1600,22 @@ fn encrypted_documents_open_edit_and_save_encrypted() {
     assert_eq!(s2.get(id2).unwrap().info.pages[0].rotation, 90);
 }
 
+/// PostScript/EPS export opens the working file itself, so a password-protected document
+/// must carry its opening password into the exporter (`ExportSource::config`), as the
+/// raster renderer's own path does — otherwise export fails on every encrypted file.
+#[test]
+fn postscript_export_opens_a_protected_document_with_its_password() {
+    let bytes = protected("user", "owner", -1);
+    let mut s = Session::new();
+    let id = s.open("p.pdf", None, bytes, Some("user")).unwrap();
+    let src = s.get(id).unwrap().export_source();
+    let out = crate::export::postscript(&src, &[0], crate::export::PsFormat::Ps).expect("a document opened with its user password exports");
+    let program = String::from_utf8_lossy(&out.bytes);
+    assert!(program.starts_with("%!PS-Adobe-3.0\n"), "a PostScript program came out: {program}");
+    assert!(program.ends_with("%%EOF\n"), "the program is complete: {program}");
+    assert!(program.contains("%%Page: 1 1\n"), "the requested page drew: {program}");
+}
+
 #[test]
 fn restricted_documents_refuse_changes_unless_opened_by_the_owner() {
     let bytes = protected("", "owner", 0b0100); // print only, no password to open
@@ -1631,7 +1647,8 @@ fn copy_restricted_documents_refuse_extraction_unless_opened_by_the_owner() {
     assert!(d.allows_printing() && d.allows_modification() && d.allows_assembly(), "only copying is withheld");
     assert_eq!(d.check_copying(), Err(EditError::NotPermitted("copying text and images")));
     assert!(d.page_image_file(0, 0).unwrap_err().contains("don't allow copying"));
-    let extracting = ["edit.snapshot", "export.image", "export.text", "export.docx", "export.pptx", "export.html", "export.rtf", "export.all_images"];
+    let extracting =
+        ["edit.snapshot", "export.image", "export.text", "export.docx", "export.pptx", "export.html", "export.rtf", "export.ps", "export.all_images"];
     let enabled = |s: &Session, id, c| commands::is_enabled(commands::command(c).unwrap(), s, Some(id));
     for c in extracting {
         assert!(!enabled(&s, id, c), "{c} is disabled");
