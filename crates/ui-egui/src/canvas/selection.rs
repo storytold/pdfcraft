@@ -70,6 +70,7 @@ impl DocView {
     /// Select text on `page` from glyph `from` to glyph `to` (tests and automation).
     pub fn select_text(&mut self, page: usize, from: usize, to: usize) {
         self.all_text = false;
+        self.page_select_all = None;
         self.selection = Some(Selection::run(page, from, to));
     }
 
@@ -91,6 +92,39 @@ impl DocView {
         let s = self.selection?;
         let t = self.texts.get(&s.page)?;
         Some(s.text(t)).filter(|x| !x.is_empty())
+    }
+
+    /// A new bookmark's title from the words selected on a page, as Acrobat names it (#5577):
+    /// their text on one line, at most [`BOOKMARK_TITLE_CHARS`] characters. None after Select All,
+    /// of the document or of the page shown (`page_select_all`: the words a click or drag
+    /// selects name it, even all of a page's; CodeRabbit on #5615), or with nothing but spaces
+    /// selected.
+    pub fn bookmark_title(&self) -> Option<String> {
+        if self.all_text {
+            return None;
+        }
+        let s = self.selection?;
+        if self.page_select_all == Some(s) {
+            return None;
+        }
+        title_of(&s.text(self.texts.get(&s.page)?))
+    }
+
+    /// The text selection as it stands, to put back with [`Self::restore_text_selection`] after an
+    /// edit that leaves the pages' text as it was (adding a bookmark).
+    pub(crate) fn text_selection(&self) -> KeptSelection {
+        // The selected page's words too: an edit empties the read text, and the selection
+        // indexes into them.
+        let text = self.selection.and_then(|s| Some((s.page, Arc::clone(self.texts.get(&s.page)?))));
+        KeptSelection { selection: self.selection, all_text: self.all_text, dismissed: self.actions_dismissed, text }
+    }
+
+    /// Put back a selection kept with [`Self::text_selection`], with the words it selects.
+    pub(crate) fn restore_text_selection(&mut self, kept: KeptSelection) {
+        (self.selection, self.all_text, self.actions_dismissed) = (kept.selection, kept.all_text, kept.dismissed);
+        if let Some((page, text)) = kept.text {
+            self.texts.entry(page).or_insert(text);
+        }
     }
 
     /// Select every page without navigating; shared by Organize and the Pages sidebar.
@@ -120,7 +154,9 @@ impl DocView {
         if t.glyphs.is_empty() {
             return false;
         }
-        self.selection = Some(Selection::run(page, 0, t.glyphs.len() - 1));
+        let all = Selection::run(page, 0, t.glyphs.len() - 1);
+        self.selection = Some(all);
+        self.page_select_all = Some(all);
         true
     }
 
@@ -154,6 +190,30 @@ enum SelectionAction {
     Markup(comments::CommentTool),
     Replace,
     Copy,
+    Bookmark,
+}
+
+/// A text selection kept across an edit that leaves the pages' text as it was
+/// ([`DocView::text_selection`]).
+#[derive(Clone)]
+pub(crate) struct KeptSelection {
+    selection: Option<Selection>,
+    all_text: bool,
+    dismissed: Option<Selection>,
+    /// The selected page and its words.
+    text: Option<(usize, Arc<PageText>)>,
+}
+
+/// The longest title [`DocView::bookmark_title`] makes, in characters.
+pub const BOOKMARK_TITLE_CHARS: usize = 128;
+
+/// What the document lets the selection bar's buttons do.
+#[derive(Clone, Copy)]
+pub(super) struct SelectionRights {
+    pub comment: bool,
+    pub copy: bool,
+    /// Add a bookmark: assembly allowed and the document not read-only.
+    pub bookmark: bool,
 }
 
 /// Actions on an existing text selection, next to the selected words.
@@ -163,8 +223,7 @@ pub(super) fn selection_actions(
     view: &mut DocView,
     info: &DocInfo,
     prefs: &comments::CommentPrefs,
-    can_comment: bool,
-    can_copy: bool,
+    can: SelectionRights,
 ) -> bool {
     if ui.input(|input| input.pointer.is_decidedly_dragging()) {
         return false;
@@ -202,11 +261,15 @@ pub(super) fn selection_actions(
                         (tl!("Strikethrough"), SelectionAction::Markup(comments::CommentTool::StrikeOut)),
                         (tl!("Replace text"), SelectionAction::Replace),
                     ] {
-                        if ui.add_enabled(can_comment, egui::Button::new(label)).clicked() {
+                        if ui.add_enabled(can.comment, egui::Button::new(label)).clicked() {
                             chosen = Some(action);
                         }
                     }
-                    if ui.add_enabled(can_copy, egui::Button::new(tl!("Copy"))).clicked() {
+                    // Acrobat names a bookmark made with words selected after them (#5577).
+                    if ui.add_enabled(can.bookmark, egui::Button::new(tl!("Add bookmark"))).clicked() {
+                        chosen = Some(SelectionAction::Bookmark);
+                    }
+                    if ui.add_enabled(can.copy, egui::Button::new(tl!("Copy"))).clicked() {
                         chosen = Some(SelectionAction::Copy);
                     }
                 });
@@ -218,6 +281,12 @@ pub(super) fn selection_actions(
         // Copying closes the bar but keeps the words selected, for ⌘C or a second action.
         view.actions_dismissed = Some(selection);
         return true;
+    }
+    if let SelectionAction::Bookmark = action {
+        // The app adds it (`bookmark.add`), named after and pointing at the words still selected.
+        view.actions_dismissed = Some(selection);
+        view.bookmark_selection = true;
+        return false;
     }
     let Some((page, quads)) = view.selection_quads(info) else { return false };
     let last = quads.last().copied().unwrap_or_default();
@@ -247,8 +316,52 @@ pub(super) fn selection_actions(
                 author: prefs.author.clone(),
             }));
         }
-        // Copy is dispatched through the app after the view borrow ends.
-        SelectionAction::Copy => {}
+        // Copy and Bookmark are dispatched through the app after the view borrow ends.
+        SelectionAction::Copy | SelectionAction::Bookmark => {}
     }
     false
+}
+
+/// `text` on one line (every run of whitespace one space), at most [`BOOKMARK_TITLE_CHARS`]
+/// characters with an ellipsis when cut; None when it is only whitespace.
+fn title_of(text: &str) -> Option<String> {
+    let words = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if words.is_empty() {
+        return None;
+    }
+    Some(if words.chars().count() > BOOKMARK_TITLE_CHARS {
+        words.chars().take(BOOKMARK_TITLE_CHARS - 1).collect::<String>().trim_end().to_string() + "…"
+    } else {
+        words
+    })
+}
+
+#[cfg(test)]
+mod title_tests {
+    use super::{BOOKMARK_TITLE_CHARS, title_of};
+
+    #[test]
+    fn a_bookmark_title_is_the_selection_on_one_line_and_cut_short() {
+        assert_eq!(title_of("  Chapter\n 3:\tThe  fox \r\n").as_deref(), Some("Chapter 3: The fox"));
+        assert_eq!(title_of(" \n\t "), None);
+        // Cut at a character, not a byte: "ä" is two bytes.
+        let long = "ä".repeat(BOOKMARK_TITLE_CHARS + 10);
+        let title = title_of(&long).unwrap();
+        assert_eq!(title.chars().count(), BOOKMARK_TITLE_CHARS);
+        assert!(title.ends_with('…'));
+        let exact = "b".repeat(BOOKMARK_TITLE_CHARS);
+        assert_eq!(title_of(&exact).as_deref(), Some(exact.as_str()), "a title that fits is kept whole");
+    }
+
+    /// FredApps on #5615: right-to-left words keep their logical order, are put on one line the
+    /// same way, and a long run of them is cut at a character, not inside one.
+    #[test]
+    fn a_right_to_left_title_keeps_its_order_and_is_cut_at_a_character() {
+        assert_eq!(title_of(" שלום \n עולם ").as_deref(), Some("שלום עולם"));
+        assert_eq!(title_of("مرحبا\tبالعالم").as_deref(), Some("مرحبا بالعالم"));
+        let long = "مرحبا ".repeat(BOOKMARK_TITLE_CHARS);
+        let title = title_of(&long).unwrap();
+        assert_eq!(title.chars().count(), BOOKMARK_TITLE_CHARS);
+        assert!(title.starts_with("مرحبا مرحبا") && title.ends_with('…'), "{title}");
+    }
 }

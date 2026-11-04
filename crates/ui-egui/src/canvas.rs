@@ -545,9 +545,15 @@ pub struct DocView {
     /// Select All while scrolling continuously (#2639): the text of every page of the document,
     /// highlighted on each page as its text arrives and copied whole ([`DocView::whole_text`]).
     pub(crate) all_text: bool,
+    /// The selection Select All made of the page shown, while it stands: a new bookmark is
+    /// "Untitled" after it, as after Select All of the document, not named after the page's text
+    /// (CodeRabbit on #5615). A click or drag that selects the same words is no Select All.
+    page_select_all: Option<Selection>,
     /// The selection whose action bar was closed by its Copy button: the bar stays hidden
     /// until the selection changes, as it does once a markup button consumes the selection.
     actions_dismissed: Option<Selection>,
+    /// The selection bar's Add bookmark was clicked: the app adds one for the selected words.
+    pub(crate) bookmark_selection: bool,
     /// The drag in progress started a text selection: the wheel scrolls the page during it
     /// (#721), which egui's scroll area refuses while anything is dragged.
     selection_drag: bool,
@@ -951,7 +957,9 @@ impl DocView {
             find: None,
             selection: None,
             all_text: false,
+            page_select_all: None,
             actions_dismissed: None,
+            bookmark_selection: false,
             selection_drag: false,
             clicks: 0,
             last_press_time: 0.0,
@@ -2004,6 +2012,8 @@ fn update_selection_on_press(ui: &egui::Ui, view: &mut DocView, text: &PageText,
             && let Some((first, last)) = text.nearest(gesture.vx, gesture.vy).and_then(|anchor| click_unit(text, clicks, anchor))
         {
             view.selection = Some(Selection::run(gesture.page, first, last));
+            // Words selected by hand are no Select All, even all of a page's (CodeRabbit on #5615).
+            view.page_select_all = None;
         }
     }
     if gesture.resp.drag_started() && press_here && !view.router.keeps_drag() {
@@ -2012,6 +2022,7 @@ fn update_selection_on_press(ui: &egui::Ui, view: &mut DocView, text: &PageText,
         let origin = gesture.ptr.origin.unwrap_or(gesture.pointer);
         let (ox, oy) = gesture.xf.screen_to_view(origin);
         if view.clicks < 2 {
+            view.page_select_all = None;
             view.selection = if gesture.column {
                 Some(Selection { page: gesture.page, span: Span::Column { rect: [ox, oy, gesture.vx, gesture.vy] } })
             } else {
@@ -2078,6 +2089,7 @@ fn finish_text_pointer_gesture(ui: &egui::Ui, view: &mut DocView, text: &PageTex
         && let Some((first, last)) = text.nearest(gesture.vx, gesture.vy).and_then(|anchor| click_unit(text, clicks, anchor))
     {
         view.selection = Some(Selection::run(gesture.page, first, last));
+        view.page_select_all = None;
     } else if gesture.resp.clicked() && view.clicks < 2 && !view.router.keeps_drag() {
         let shift = ui.input(|input| input.modifiers.shift);
         match (
@@ -3741,6 +3753,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let generation = doc.edit_generation();
     let can_fill = doc.allows_form_filling();
     let can_crop = doc.allows_assembly();
+    let can_bookmark = doc.allows_assembly() && doc.read_only_reason.is_none();
     let signature = app.signature.clone();
     let initials = app.initials.clone();
     let author = app.comment_prefs.author.clone();
@@ -3866,7 +3879,8 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     view.viewport_screen = out.inner_rect;
     view.auto_scroll.paint(ui, avail);
     if unobstructed && matches!(tool, QuickTool::Select | QuickTool::ColumnSelect) {
-        copy_selected |= selection_actions(ui, avail, view, info, prefs, allowed && !comments_hidden, can_copy);
+        let can = selection::SelectionRights { comment: allowed && !comments_hidden, copy: can_copy, bookmark: can_bookmark };
+        copy_selected |= selection_actions(ui, avail, view, info, prefs, can);
     }
 
     // Collect all main-page demand, including cached surfaces, for byte admission later.
@@ -4186,6 +4200,9 @@ fn apply_frame_requests(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui, 
     }
     if copy_selected {
         app.execute("edit.copy");
+    }
+    if std::mem::take(&mut app.views[index].bookmark_selection) {
+        app.execute("bookmark.add");
     }
     // Read mode hides the tools (#2646), and full screen is the page and nothing else (#1459);
     // the quick tools come back with the window.

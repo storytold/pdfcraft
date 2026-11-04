@@ -3026,6 +3026,65 @@ fn an_upright_comment_on_a_turned_page_is_drawn_where_it_goes_before_release() {
     h.run_steps(3);
 }
 
+/// #5577: the selection bar's Add bookmark adds one named after the selected words and pointing
+/// at them, opened for renaming in the Bookmarks panel, as a bookmark made with words selected is
+/// in Acrobat.
+#[test]
+fn selected_text_bookmark_action_names_the_bookmark_after_the_words() {
+    let mut h = harness(|_| {});
+    h.state_mut().views[0].select_text(0, 4, 15);
+    h.run_steps(3);
+    h.get_by_label("Add bookmark").click();
+    h.run_steps(3);
+    let s = h.state();
+    let outline = &s.session.get(s.views[0].id).unwrap().info.outline;
+    assert_eq!(outline.len(), 1, "{outline:?}");
+    assert_eq!((outline[0].title.as_str(), outline[0].page), ("quick brown", Some(0)));
+    assert_eq!(s.bookmark_rename, Some((vec![0], "quick brown".to_string())), "opened for renaming");
+    assert_eq!(s.right, Some(pdfcraft_ui_egui::RightPanel::Bookmarks));
+}
+
+/// CodeRabbit on #5615: the words stay selected after Add bookmark, which leaves the page's text
+/// as it was.
+#[test]
+fn the_words_stay_selected_after_add_bookmark() {
+    let mut h = harness(|_| {});
+    h.state_mut().views[0].select_text(0, 4, 15);
+    h.run_steps(3);
+    h.get_by_label("Add bookmark").click();
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].selected_text().as_deref().map(str::trim), Some("quick brown"));
+}
+
+/// CodeRabbit on #5615: where the document forbids copying its text, a bookmark made with words
+/// selected is "Untitled": its title would be a copy of them.
+#[test]
+fn a_bookmark_is_not_named_after_words_the_document_forbids_copying() {
+    let mut doc = pdfcraft_cos::Document::open(std::sync::Arc::new(TEXT_FIXTURE.to_vec())).expect("fixture parses");
+    doc.set_encryption(&pdfcraft_cos::NewEncryption {
+        algorithm: pdfcraft_cos::Algorithm::Aes256,
+        user_password: "",
+        owner_password: "owner",
+        // Print, modify and assemble; no copying.
+        permissions: 4 | 8 | 1024,
+        encrypt_metadata: true,
+        seed: [7; 32],
+    })
+    .expect("encrypts");
+    let bytes = pdfcraft_cos::write_full(&doc, &Default::default()).expect("writes");
+    let mut h = harness_with_bytes(bytes, |_| {});
+    let id = h.state().views[0].id;
+    let d = h.state().session.get(id).unwrap();
+    assert!(!d.allows_copying() && d.allows_assembly(), "copying forbidden, assembly allowed");
+    h.state_mut().views[0].select_text(0, 4, 15);
+    h.run_steps(3);
+    h.get_by_label("Add bookmark").click();
+    h.run_steps(3);
+    let s = h.state();
+    let outline = &s.session.get(id).unwrap().info.outline;
+    assert_eq!(outline.iter().map(|b| b.title.as_str()).collect::<Vec<_>>(), ["Untitled"]);
+}
+
 /// `n` pages with one comment each, "Card 1" to "Card n".
 fn one_comment_per_page(n: usize) -> Vec<u8> {
     let mut objs = vec!["<< /Type /Catalog /Pages 2 0 R >>".to_string()];
@@ -3094,6 +3153,61 @@ fn a_card_with_an_editor_open_out_of_view_is_drawn_at_its_size() {
     h.run_steps(4);
     let after = h.get_by_label("Card 61").rect().top();
     assert!(after > before + 20.0, "the cards below make room for card 1's editor: {before} → {after}");
+}
+
+/// CodeRabbit on #5615: Select All of the page shown (one page at a time) is no title: the
+/// bookmark is "Untitled", as after Select All of the whole document.
+#[test]
+fn a_bookmark_made_after_select_all_of_a_page_is_untitled() {
+    let mut h = harness(|app| app.set_option("layout", "single").unwrap());
+    assert!(h.state_mut().views[0].select_all());
+    h.run_steps(3);
+    h.state_mut().execute("bookmark.add");
+    h.run_steps(3);
+    let s = h.state();
+    let outline = &s.session.get(s.views[0].id).unwrap().info.outline;
+    assert_eq!(outline.iter().map(|b| b.title.as_str()).collect::<Vec<_>>(), ["Untitled"]);
+}
+
+/// CodeRabbit on #5615: after Select All, the same words selected again by hand are no Select
+/// All: they name the bookmark.
+#[test]
+fn the_page_selected_again_by_hand_after_select_all_names_the_bookmark() {
+    let mut h = harness(|app| app.set_option("layout", "single").unwrap());
+    assert!(h.state_mut().views[0].select_all());
+    h.run_steps(3);
+    let glyphs = (0..10_000).take_while(|&i| h.state().views[0].glyph_screen_pos(0, i).is_some()).count();
+    h.state_mut().views[0].select_text(0, 0, glyphs - 1);
+    h.run_steps(3);
+    h.state_mut().execute("bookmark.add");
+    h.run_steps(3);
+    let s = h.state();
+    let outline = &s.session.get(s.views[0].id).unwrap().info.outline;
+    assert!(outline.first().is_some_and(|b| b.title.starts_with("The quick")), "{outline:?}");
+}
+
+/// CodeRabbit on #5615: words selected by hand name the bookmark even when they are all of the
+/// page's text (a double-click on a one-word page, a triple-click on a one-line page): only
+/// Select All gives "Untitled".
+#[test]
+fn every_word_of_a_page_selected_by_hand_names_the_bookmark() {
+    let mut h = harness(|_| {});
+    let glyphs = (0..10_000).take_while(|&i| h.state().views[0].glyph_screen_pos(0, i).is_some()).count();
+    assert!(glyphs > 10, "page 1 has text: {glyphs} glyphs");
+    h.state_mut().views[0].select_text(0, 0, glyphs - 1);
+    h.run_steps(3);
+    h.state_mut().execute("bookmark.add");
+    h.run_steps(3);
+    let s = h.state();
+    let outline = &s.session.get(s.views[0].id).unwrap().info.outline;
+    assert_eq!(outline.len(), 1);
+    let title = outline[0].title.as_str();
+    assert!(title != "Untitled" && title.starts_with("The quick"), "{title}");
+    // FredApps on #5615: a selection over several lines names it on one line, and the bookmark
+    // points at the selection's first word, not the page's top.
+    assert!(!title.contains(['\n', '\r', '\t']) && !title.contains("  "), "{title:?}");
+    let at_the_words = matches!(outline[0].view, pdfcraft_render::DestView::Xyz { left: Some(_), top: Some(_), .. });
+    assert!(at_the_words, "a left and top of its own: {:?}", outline[0].view);
 }
 
 #[test]
