@@ -3607,11 +3607,71 @@ fn create_and_reduce() {
     )
     .unwrap();
     let full = s2.save_full_bytes(id2).unwrap();
-    let (reduced, _) = s2.reduced_bytes(id2).unwrap();
+    let (reduced, ..) = s2.reduced_bytes(id2).unwrap();
     assert!(reduced.len() <= full.len(), "{} > {}", reduced.len(), full.len());
     let mut s3 = Session::new();
     let r = s3.open("r.pdf", None, reduced, None).unwrap();
     assert_eq!(page_texts(&s3, r), ["Page 1", "Page 1"]);
+}
+
+/// Discarding a category that holds nothing discards nothing; it used to end the whole
+/// optimization with an error about redaction marks.
+#[test]
+fn optimize_discarding_an_empty_category_still_runs() {
+    let (s, id) = session_with(2);
+    let (bytes, report) = s.optimized_bytes(id, &optimize::Settings::default(), &[crate::Hidden::Bookmarks, crate::Hidden::Comments]).unwrap();
+    assert!(bytes.starts_with(b"%PDF-"));
+    assert!(report.discarded.is_empty(), "{:?}", report.discarded);
+    // An outline root with no entries is no bookmarks: it stays, as Remove Hidden Information,
+    // which refuses then, leaves it.
+    let outline = pdfcraft_testkit::Pdf::new()
+        .obj("<< /Type /Catalog /Pages 2 0 R /Outlines 4 0 R /PageMode /UseOutlines >>")
+        .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>")
+        .obj("<< /Type /Page /Parent 2 0 R >>")
+        .obj("<< /Type /Outlines /Count 0 >>")
+        .build();
+    let mut s = Session::new();
+    let id = s.open("outline.pdf", None, Arc::new(outline), None).unwrap();
+    let (bytes, report) = s.optimized_bytes(id, &optimize::Settings::default(), &[crate::Hidden::Bookmarks]).unwrap();
+    assert!(report.discarded.is_empty(), "{:?}", report.discarded);
+    let saved = pdfcraft_cos::Document::open(bytes).unwrap();
+    let catalog = saved.get(saved.root().unwrap()).as_dict().cloned().unwrap();
+    assert!(catalog.contains(b"Outlines") && catalog.contains(b"PageMode"), "{catalog:?}");
+    // Beside an empty tick, one that holds something is discarded, and only that one.
+    let noted = pdfcraft_testkit::Pdf::new()
+        .obj("<< /Type /Catalog /Pages 2 0 R >>")
+        .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>")
+        .obj("<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>")
+        .obj("<< /Type /Annot /Subtype /Text /Rect [20 20 40 40] /Contents (internal note) >>")
+        .build();
+    let mut s = Session::new();
+    let id = s.open("noted.pdf", None, Arc::new(noted), None).unwrap();
+    let (_, report) = s.optimized_bytes(id, &optimize::Settings::default(), &[crate::Hidden::Bookmarks, crate::Hidden::Comments]).unwrap();
+    assert_eq!(report.discarded, vec![(crate::Hidden::Comments, 1)]);
+    // A field whose appearance draws text invisibly: flattening it brings that text onto the page,
+    // which no scan before counts as hidden, and discarding hidden text takes it too.
+    let form = pdfcraft_testkit::Pdf::new()
+        .obj("<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] /DA (/F1 0 Tf 0 g) >> >>")
+        .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>")
+        .obj("<< /Type /Page /Parent 2 0 R /Annots [4 0 R] /Resources << /Font << /F1 6 0 R >> >> /Contents 7 0 R >>")
+        .obj("<< /Type /Annot /Subtype /Widget /FT /Tx /T (name) /V (shown) /Rect [100 100 300 130] /P 3 0 R /F 4 /AP << /N 5 0 R >> >>")
+        .stream(
+            "/Type /XObject /Subtype /Form /BBox [0 0 200 30] /Resources << /Font << /F1 6 0 R >> >>",
+            "/Tx BMC BT /F1 12 Tf 2 10 Td (shown) Tj ET BT /F1 12 Tf 3 Tr 2 20 Td (HIDDENSECRET) Tj ET EMC",
+        )
+        .obj("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
+        .stream("", "BT /F1 12 Tf 72 700 Td (Page text) Tj ET")
+        .build();
+    let mut s = Session::new();
+    let id = s.open("form.pdf", None, Arc::new(form), None).unwrap();
+    let (bytes, _) = s.optimized_bytes(id, &optimize::Settings::default(), &[crate::Hidden::FormFields, crate::Hidden::HiddenText]).unwrap();
+    let saved = pdfcraft_cos::Document::open(bytes).unwrap();
+    for (r, object) in saved.scan_objects() {
+        if let pdfcraft_cos::Object::Stream(st) = &*object {
+            let data = st.decoded().unwrap_or_default();
+            assert!(!data.windows(12).any(|w| w == b"HIDDENSECRET"), "the hidden text stays in {r:?}");
+        }
+    }
 }
 
 #[test]
@@ -8248,10 +8308,35 @@ fn copy_image_reads_the_globals_of_a_jbig2_picture() {
     let (w, h, rgba) = d.page_image_rgba(0, 0).unwrap();
     assert_eq!((w, h), (16, 2));
     assert!(rgba.chunks(4).all(|p| p == [0, 0, 0, 255]), "the page's default pixel, from the globals");
+    // An Office export shares one allowance across its pictures. One past it is left out, and the
+    // export says the page is missing something, as for a picture past its bytes.
+    let (pages, truncated) = d.export_pages_within(true, 1 << 20, &mut pdfcraft_cos::ImageBudget::with_work(u64::MAX));
+    assert_eq!((pages[0].images.len(), truncated.len()), (1, 0));
+    let (pages, truncated) = d.export_pages_within(true, 1 << 20, &mut pdfcraft_cos::ImageBudget::with_work(0));
+    assert!(pages[0].images.is_empty());
+    assert_eq!(truncated, [0]);
+}
+
+/// An Office export leaves out a picture it can't encode, as it did. That isn't a page cut short:
+/// only a picture past what the export may do is reported as one.
+#[test]
+fn an_office_export_doesnt_call_an_unreadable_picture_truncated() {
+    let pdf = b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+        2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >> endobj\n\
+        3 0 obj << /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /XObject << /Im1 5 0 R >> >> >> endobj\n\
+        4 0 obj << /Length 31 >> stream\nq 160 0 0 20 20 100 cm /Im1 Do Q\nendstream endobj\n\
+        5 0 obj << /Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /JPXDecode /Length 4 >> stream\nnone\nendstream endobj\n\
+        trailer << /Root 1 0 R >>\n%%EOF"
+        .to_vec();
+    let mut s = Session::new();
+    let id = s.open("picture.pdf", None, Arc::new(pdf), None).unwrap();
+    let (pages, truncated) = s.get(id).unwrap().export_pages_within(true, 1 << 20, &mut pdfcraft_cos::ImageBudget::with_work(u64::MAX));
+    assert!(pages[0].images.is_empty());
+    assert_eq!(truncated, Vec::<usize>::new());
 }
 
 /// Copy Image takes a JBIG2 picture as its pixels and as a PNG file, behind another filter
-/// (ASCIIHexDecode) too: Export's decoding, through `Document::decoded_image`.
+/// (ASCIIHexDecode) too: Export's decoding, through `ImageBudget::decode`.
 #[test]
 fn copy_image_copies_a_jbig2_picture_behind_another_filter() {
     // 16 × 2: the left half of the top row black, the rest white.
@@ -9218,6 +9303,61 @@ fn a_fields_own_script_may_not_save_as_or_show_a_panel() {
     // A button's script may.
     let o = s.run_javascript(id, "app.execMenuItem('SaveAs');", Some("go")).unwrap();
     assert_eq!(o.requests, [js::Request::SaveAs]);
+}
+
+/// A page of `count` pictures of one flat grey, `side` pixels square, each an object of its own.
+fn page_of_pictures(count: usize, side: usize) -> Vec<u8> {
+    let data = pdfcraft_filters::encode_flate(&vec![0x80; side * side]);
+    let names: String = (0..count).map(|i| format!("/Im{i} {} 0 R ", 5 + i)).collect();
+    let content: String = (0..count).map(|i| format!("q 10 0 0 10 0 0 cm /Im{i} Do Q\n")).collect();
+    let mut pdf = format!(
+        "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+         2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 300] >> endobj\n\
+         3 0 obj << /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /XObject << {names}>> >> >> endobj\n\
+         4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n",
+        content.len()
+    )
+    .into_bytes();
+    for i in 0..count {
+        let dict = format!(
+            "{} 0 obj << /Type /XObject /Subtype /Image /Width {side} /Height {side} /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /FlateDecode /Length {} >> stream\n",
+            5 + i,
+            data.len()
+        );
+        pdf.extend_from_slice(dict.as_bytes());
+        pdf.extend_from_slice(&data);
+        pdf.extend_from_slice(b"\nendstream endobj\n");
+    }
+    pdf.extend_from_slice(b"trailer << /Root 1 0 R >>\n%%EOF");
+    pdf
+}
+
+/// The allowance is the export's, not each picture's: a page of many small pictures stops where it
+/// runs out, the rest are left out and counted, and the page is listed, which is what the export's
+/// warning goes by. A few large pictures are well within it, and all come through.
+#[test]
+fn a_page_of_many_pictures_stops_at_the_exports_allowance() {
+    let export = |pdf: Vec<u8>, work: &mut pdfcraft_cos::ImageBudget| {
+        let mut s = Session::new();
+        let id = s.open("pictures.pdf", None, Arc::new(pdf), None).unwrap();
+        s.get(id).unwrap().export_pages_within(true, 1 << 30, work)
+    };
+    let mut one = pdfcraft_cos::ImageBudget::with_work(u64::MAX);
+    export(page_of_pictures(1, 2), &mut one);
+    let cost = u64::MAX - one.work_left();
+    assert!(cost > 0);
+
+    let mut work = pdfcraft_cos::ImageBudget::with_work(100 * cost);
+    let (pages, truncated) = export(page_of_pictures(10_000, 2), &mut work);
+    assert_eq!(pages[0].images.len(), 100);
+    assert_eq!(truncated, vec![0]);
+    assert_eq!(work.refused(), 9_900);
+
+    let mut s = Session::new();
+    let id = s.open("large.pdf", None, Arc::new(page_of_pictures(3, 1_000)), None).unwrap();
+    let (pages, truncated) = s.get(id).unwrap().export_pages_checked(true, 1 << 30);
+    assert_eq!(pages[0].images.len(), 3);
+    assert_eq!(truncated, Vec::<usize>::new());
 }
 
 /// A page whose forms go past the reading limit and whose picture goes past the image budget is
@@ -10201,4 +10341,21 @@ fn image_transform_engine_refuses_singular_matrices_without_mutation() {
         assert!(s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Transform(matrix) }).is_err());
         assert_eq!(s.get(id).unwrap().bytes, before);
     }
+}
+
+#[test]
+fn fill_sign_multiline_text_survives_engine_save_reopen_and_render() {
+    let (mut session, id) = rotated_blank(0);
+    let text = "\nAda\n\nLovelace\n";
+    let shape = Shape::Typewriter { rect: text_box_at(0, [20.0, 250.0], 120.0, 66.0).unwrap(), font_size: 10.0 };
+    let style = Style::default_for(&shape);
+    session.apply(id, Edit::AddAnnotation(NewAnnotation { page: 0, shape, style, contents: text.into(), author: "Test".into() })).unwrap();
+    assert_eq!(session.get(id).unwrap().info.annotations[0].contents.as_deref(), Some(text), "engine keeps outer typewriter line breaks");
+    let before = render_page(&session, id);
+    assert!(before.rgba.as_chunks::<4>().0.iter().any(|p| p[..3] == [0, 0, 0]), "the appearance contains ink");
+    let bytes = session.save_bytes(id).unwrap();
+    let mut reopened = Session::new();
+    let again = reopened.open("multiline.pdf", None, bytes, None).unwrap();
+    assert_eq!(reopened.get(again).unwrap().info.annotations[0].contents.as_deref(), Some(text), "reopening preserves all blank lines");
+    assert_eq!(before.rgba, render_page(&reopened, again).rgba, "the saved appearance is identical");
 }
