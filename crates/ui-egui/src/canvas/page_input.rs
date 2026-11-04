@@ -831,8 +831,8 @@ pub(super) fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut P
         && tool == QuickTool::Select
         && !input.consumed
         && frame.out.clicked_link.is_none()
-        && let Some(owner @ crate::page_router::Owner::TextLink { index }) = view.router.owner(i)
-        && pointer.and_then(|p| text_link_hit(view, info, &xf, i, p)).is_some_and(|h| h.owner == owner)
+        && let Some(Owner::TextLink { index }) = view.router.owner(i)
+        && input.released_over
         && let Some(uri) = view.text_link_uri(i, index)
     {
         frame.out.clicked_link = Some(LinkTarget::Uri(uri));
