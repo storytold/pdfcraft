@@ -58,7 +58,13 @@ fn add(h: &mut Harness<'static, PdfCraftApp>, title: &str) {
     h.run_steps(3);
 }
 
+/// Right-click a bookmark's row and pick a menu item. The row is scrolled into view first, as a
+/// reader would: the panel scrolls to the bookmark of the page on screen, which can take the row
+/// out of view (in a deep outline whose bookmarks all go to page 1, to the deepest one).
 fn menu(h: &mut Harness<'static, PdfCraftApp>, bookmark: &str, item: &str) {
+    h.get_by_label(bookmark).scroll_to_me();
+    // The scroll is animated (at most 0.3 s, so two steps) and starts on the step after the request.
+    h.run_steps(4);
     h.get_by_label(bookmark).click_secondary();
     h.run_steps(2);
     h.get_by_label(item).click();
