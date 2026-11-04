@@ -542,3 +542,40 @@ fn separation_and_devicen_spaces_are_checked() {
             .is_empty()
     );
 }
+
+/// From the review of the 6.2.4.4 checks: nested parts compare by content, `All` and `None` get
+/// no exemption, names may be given by reference, `/Process` exempts only in an NChannel space, a
+/// null `/Colorants` entry defines nothing, and a colour space nested deep is still found.
+#[test]
+fn separation_and_devicen_checks_follow_references_depth_and_nchannel() {
+    let spots = |spaces: &str| -> Vec<String> {
+        let page = format!("<< /Type /Page /Parent 2 0 R /Resources << /ColorSpace << {spaces} >> >> >>");
+        let icc = "<< /N 3 /Length 4 >>\nstream\nabcd\nendstream";
+        let doc = build(
+            &[
+                "<< /Type /Catalog /Pages 2 0 R >>",
+                "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+                &page,
+                "<< /FunctionType 2 /Domain [0 1] /C0 [1 1 1] /C1 [1 0 0] /N 1 >>",
+                "<< /FunctionType 2 /Domain [0 1] /C0 [1 1 1] /C1 [0 1 0] /N 1 >>",
+                icc,
+                icc,
+                "/Red",
+                "null",
+            ],
+            "",
+        );
+        verify(&doc, Level::A2b).into_iter().filter(|i| i.clause == "6.2.4.4").map(|i| i.message).collect()
+    };
+    let differ = |n: &str| vec![format!("Separation colour spaces named {n} differ in their alternate space or tint transform")];
+    let undefined = |n: &str| vec![format!("The spot colour {n} of a DeviceN colour space isn't in its Colorants dictionary")];
+    // Identical ICC streams under different numbers are the same alternate space.
+    assert!(spots("/A [/Separation /Red [/ICCBased 6 0 R] 4 0 R] /B [/Separation /Red [/ICCBased 7 0 R] 4 0 R]").is_empty());
+    assert_eq!(spots("/A [/Separation /All /DeviceRGB 4 0 R] /B [/Separation /All /DeviceRGB 5 0 R]"), differ("All"));
+    assert_eq!(spots("/A [/Separation 8 0 R /DeviceRGB 4 0 R] /B [/Separation /Red /DeviceRGB 5 0 R]"), differ("Red"));
+    assert_eq!(spots("/A [/DeviceN [/Spot] /DeviceRGB 4 0 R << /Process << /Components [/Spot] >> >>]"), undefined("Spot"));
+    assert_eq!(spots("/A [/DeviceN [/Spot] /DeviceRGB 4 0 R << /Colorants << /Spot null >> >>]"), undefined("Spot"));
+    assert_eq!(spots("/A [/DeviceN [/Spot] /DeviceRGB 4 0 R << /Colorants << /Spot 9 0 R >> >>]"), undefined("Spot"));
+    let deep = format!("/A {}[/DeviceN [/Spot] /DeviceRGB 4 0 R]{}", "[".repeat(40), "]".repeat(40));
+    assert_eq!(spots(&deep), undefined("Spot"));
+}
