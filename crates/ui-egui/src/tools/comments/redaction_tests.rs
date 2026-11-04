@@ -158,3 +158,32 @@ fn a_refused_mark_gets_a_warning_and_no_fill() {
         assert_eq!(h.tip.as_deref(), Some(REFUSED_REDACTION_TIP));
     });
 }
+
+/// A mark being dragged is shown where the graph doesn't have it yet (here x 10, while the graph
+/// says 22): applying then would remove what the drag doesn't show. Applying is refused until the
+/// change is finished, and the mark is still pending.
+#[test]
+fn an_uncommitted_redaction_move_blocks_applying() {
+    let mut app = crate::PdfCraftApp::new();
+    app.open_bytes("move.pdf", None, page(0, &[NULL_MARK])).unwrap();
+    let id = app.views[0].id;
+    app.views[0].comments.selected = Some((0, 0));
+    app.views[0].comments.gesture = Some(super::state::Gesture::Move { page: 0, index: 0, from: pos2(0.0, 0.0) });
+    with_cx(app.session.get(id).unwrap(), 0, |cx| {
+        let a = cx.get(0).unwrap();
+        let base = cx.screen_rect(a);
+        let moved = cx.adjusted_rect(a, app.views[0].comments.gesture.as_ref(), Some(pos2(-18.0, 0.0)), false, None);
+        let painted = cx.rect_to_user(cx.redact_outline_rects(a)[0].translate(moved.min - base.min));
+        assert!((painted[0] - 10.0).abs() < 0.01, "shown at {painted:?}, while the graph has {:?}", cx.redact_user_rects(a));
+    });
+    assert!(!app.apply_edit(pdfcraft_engine::Edit::ApplyRedactions { pages: None }), "the drag isn't in the graph");
+    assert_eq!(app.session.get(id).unwrap().redaction_marks(), 1);
+    // A pending move (released, not yet applied) blocks it too.
+    app.views[0].comments.gesture = None;
+    app.views[0].pending_edit = Some(pdfcraft_engine::Edit::MoveAnnotation { page: 0, index: 0, dx: -12.0, dy: 0.0 });
+    assert!(!app.apply_edit(pdfcraft_engine::Edit::ApplyRedactions { pages: None }));
+    // Once nothing is in progress, applying goes ahead on the checked marks.
+    app.views[0].pending_edit = None;
+    assert!(app.apply_edit(pdfcraft_engine::Edit::ApplyRedactions { pages: None }));
+    assert_eq!(app.session.get(id).unwrap().redaction_marks(), 0);
+}

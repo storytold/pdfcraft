@@ -347,3 +347,217 @@ fn what_the_preview_covers_is_gone_and_nothing_else() {
     s.apply(id, Edit::ApplyRedactions { pages: None }).unwrap();
     check(saved_text(&s, id), "session");
 }
+
+// ---- Review 2 regressions (Sol): page identity, indirect /Subtype, every page picture, metadata,
+// and the fallbacks said.
+
+/// Equal page geometry doesn't prove the same pages: a tree that lists page 3 twice and an
+/// untyped node of two pages is walked [3, 7, 8] by the model and [3, 3, 6] by the renderer.
+#[test]
+fn equal_page_geometry_does_not_prove_page_identity() {
+    let body = "BT /F1 10 Tf 10 100 Td (AB1234CD) Tj ET";
+    let bytes = pdf_of(&[
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R 3 0 R 6 0 R] /Count 3 /MediaBox [0 0 200 200] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>".into(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>".into(),
+        format!("<< /Length {} >>\nstream\n{body}\nendstream", body.len()),
+        "<< /Parent 2 0 R /Kids [7 0 R 8 0 R] /MediaBox [0 0 200 200] >>".into(),
+        "<< /Type /Page /Parent 6 0 R /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R /Annots [9 0 R] >>".into(),
+        "<< /Type /Page /Parent 6 0 R >>".into(),
+        NULL_MARK.into(),
+    ]);
+    let (s, id) = open(bytes);
+    let doc = s.get(id).unwrap();
+    let model: Vec<_> = pdfcraft_model::pages(&doc.editor.as_ref().unwrap().cos).iter().map(|p| (p.obj.num, p.obj.generation)).collect();
+    assert_eq!(model, vec![(3, 0), (7, 0), (8, 0)]);
+    assert_eq!(doc.info.page_objects, vec![Some((3, 0)), Some((3, 0)), Some((6, 0))], "the renderer's walk");
+    assert_eq!(doc.redaction_previews(), &RedactionPreviews::Unavailable(PreviewUnavailable::PageMapping));
+}
+
+/// With those trees apply used to succeed and leave the content painted under the area shown
+/// on page 2. Now it is refused, and the page keeps its content honestly.
+#[test]
+fn a_page_identity_mismatch_refuses_the_apply() {
+    let body = "0 g 22 95 24 15 re f";
+    let bytes = pdf_of(&[
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R 3 0 R 6 0 R] /Count 3 /MediaBox [0 0 200 200] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Contents 5 0 R >>".into(),
+        "null".into(),
+        format!("<< /Length {} >>\nstream\n{body}\nendstream", body.len()),
+        "<< /Parent 2 0 R /Kids [7 0 R 8 0 R] /MediaBox [0 0 200 200] >>".into(),
+        "<< /Type /Page /Parent 6 0 R /Annots [9 0 R] >>".into(),
+        "<< /Type /Page /Parent 6 0 R >>".into(),
+        "<< /Type /Annot /Subtype /Redact /Rect [22 95 46 110] >>".into(),
+    ]);
+    let (mut s, id) = open(bytes);
+    assert!(!s.get(id).unwrap().redaction_previews().is_available());
+    let r = s.apply(id, Edit::ApplyRedactions { pages: Some(vec![1]) });
+    assert!(matches!(&r, Err(EditError::Invalid(m)) if m.contains("don't match the pages shown")), "{r:?}");
+}
+
+/// A Redact whose /Subtype is a reference is drawn by the renderer as a mark. It used to be
+/// skipped by apply (which read /Subtype directly) while its fill stayed on the page. It is now
+/// listed, refused with its reason, drawn only as a warning, and applying is refused.
+#[test]
+fn a_mark_with_an_indirect_subtype_is_refused_not_skipped() {
+    let indirect = "<< /Type /Annot /Subtype 8 0 R /Rect [8 95 22 110] /AP << /N 9 0 R >> >>";
+    let direct = "<< /Type /Annot /Subtype /Redact /Rect [22 95 46 110] >>";
+    let filled = "<< /Type /XObject /Subtype /Form /BBox [0 0 1 1] /Length 16 >>\nstream\n0 g 0 0 1 1 re f\nendstream";
+    let original = Arc::new(ab1234cd(&[indirect, direct], &["/Redact", filled]));
+    assert!(dark_at(&original, 16.0, 96.5), "the file's own appearance fills AB");
+    let (mut s, id) = open(original.to_vec());
+    let doc = s.get(id).unwrap();
+    assert_eq!(doc.info.annotations.iter().filter(|a| a.subtype == "Redact").count(), 2, "the renderer lists both");
+    let views = doc.redaction_previews().on_page(0);
+    assert_eq!(views.len(), 2);
+    assert_eq!(views[0].areas, Err(MarkRefusal::IndirectSubtype));
+    assert!(views[0].removal_rects().is_empty());
+    assert_eq!(doc.redaction_marks(), 2);
+    assert!(!dark_at(&doc.display, 16.0, 96.5), "drawn as a warning, not its own fill");
+    let r = s.apply(id, Edit::ApplyRedactions { pages: None });
+    assert!(matches!(r, Err(EditError::Redact(pdfcraft_redact::RedactError::UnreadableMark(1)))), "{r:?}");
+    assert!(saved_text(&s, id).contains("AB1234CD"));
+    // Clear all removes it with the others, refused or not.
+    s.apply(id, Edit::ClearRedactions).unwrap();
+    assert_eq!(s.get(id).unwrap().redaction_marks(), 0);
+}
+
+/// A Redact the page lists that the collector doesn't read leaves the view unavailable, never a
+/// silent "ready".
+#[test]
+fn a_shown_mark_the_collector_lacks_makes_the_view_unavailable() {
+    let (s, id) = open(ab1234cd(&[NULL_MARK], &[]));
+    let doc = s.get(id).unwrap();
+    let mut info = doc.info.clone();
+    let mut extra = info.annotations.iter().find(|a| a.subtype == "Redact").unwrap().clone();
+    extra.index = 5;
+    info.annotations.push(extra);
+    let view = crate::redaction_preview::previews_for(&doc.editor.as_ref().unwrap().cos, &info);
+    assert_eq!(view, RedactionPreviews::Unavailable(PreviewUnavailable::UnlistedMark));
+}
+
+/// A metadata edit keeps the display copy: when that copy couldn't draw the marks, the view stays
+/// unavailable (and applying refused) instead of being made ready over the old raster.
+#[test]
+fn a_metadata_edit_does_not_make_a_failed_display_ready() {
+    let lying = "<< /Type /Annot /Subtype /Redact /Rect [10 95 46 110] /QuadPoints [22 110 46 110 22 95 46 95] /AP << /N 7 0 R >> >>";
+    let filled = "<< /Type /XObject /Subtype /Form /BBox [0 0 1 1] /Length 16 >>\nstream\n0 g 0 0 1 1 re f\nendstream";
+    crate::redaction_preview::FAIL_DISPLAY.with(|f| f.set(true));
+    let (mut s, id) = open(ab1234cd(&[lying], &[filled]));
+    crate::redaction_preview::FAIL_DISPLAY.with(|f| f.set(false));
+    assert!(dark_at(&s.get(id).unwrap().display, 16.0, 96.5));
+    s.apply(id, Edit::SetInfo { key: "Title".into(), value: "new title".into() }).unwrap();
+    let doc = s.get(id).unwrap();
+    assert_eq!(doc.redaction_previews(), &RedactionPreviews::Unavailable(PreviewUnavailable::Display));
+    assert!(s.apply(id, Edit::ApplyRedactions { pages: None }).is_err());
+    assert!(saved_text(&s, id).contains("AB1234CD"));
+    // A refresh that draws the display makes it ready again.
+    s.apply(id, Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
+    assert!(s.get(id).unwrap().redaction_previews().is_available());
+}
+
+/// Every picture of the page made from a copy of the graph draws the marks as the page view does:
+/// a stamp drag's background, a text edit's backdrop, a signature drag's, the isolated drag image,
+/// and vector print (Print as Image reads the display copy).
+#[test]
+fn every_picture_of_the_page_draws_the_checked_outline() {
+    let lying = "<< /Type /Annot /Subtype /Redact /Rect [10 95 46 110] /QuadPoints [22 110 46 110 22 95 46 95] /F 4 /AP << /N 8 0 R >> >>";
+    let stamp = "<< /Type /Annot /Subtype /Stamp /Rect [100 150 120 170] /AP << /N 9 0 R >> >>";
+    let filled = "<< /Type /XObject /Subtype /Form /BBox [0 0 1 1] /Length 16 >>\nstream\n0 g 0 0 1 1 re f\nendstream";
+    let (s, id) = open(ab1234cd(&[lying, stamp], &[filled, filled]));
+    let doc = s.get(id).unwrap();
+    assert!(!dark_at(&doc.display, 16.0, 96.5));
+    let pixel_dark = |out: &pdfcraft_render::RenderedPage| {
+        let i = (207 * out.width as usize + 32) * 4;
+        u32::from(out.rgba[i]) + u32::from(out.rgba[i + 1]) + u32::from(out.rgba[i + 2]) < 200
+    };
+    let background = doc.stamp_preview(0, 1).unwrap().unwrap().render_background(2.0).unwrap();
+    assert!(!pixel_dark(&background), "a stamp drag's background");
+    let backdrop = doc.text_edit_preview(0, 0).unwrap();
+    assert!(!pixel_dark(&backdrop.render_background(2.0).unwrap()), "a text edit's backdrop");
+    let settings = pdfcraft_print::Settings {
+        pages: vec![0],
+        paper: (200.0, 200.0),
+        layout: pdfcraft_print::Layout::Size(pdfcraft_print::SizeMode::Actual),
+        ..Default::default()
+    };
+    let vector = Arc::new(s.print_pdf(id, &settings).unwrap());
+    assert!(!dark_at(&vector, 16.0, 96.5), "vector print");
+    let raster = pdfcraft_print::Settings { raster: Some(pdfcraft_print::Raster { dpi: 144.0, grayscale: false }), ..settings };
+    assert!(!dark_at(&Arc::new(s.print_pdf(id, &raster).unwrap()), 16.0, 96.5), "print as image");
+}
+
+/// A picture of the page that can't draw the marks refuses applying until the next refresh.
+#[test]
+fn a_page_picture_that_cant_draw_the_marks_blocks_applying() {
+    let stamp = "<< /Type /Annot /Subtype /Stamp /Rect [100 150 120 170] /AP << /N 8 0 R >> >>";
+    let filled = "<< /Type /XObject /Subtype /Form /BBox [0 0 1 1] /Length 16 >>\nstream\n0 g 0 0 1 1 re f\nendstream";
+    let (mut s, id) = open(ab1234cd(&[NULL_MARK, stamp], &[filled]));
+    crate::redaction_preview::FAIL_DISPLAY.with(|f| f.set(true));
+    let preview = s.get(id).unwrap().stamp_preview(0, 1);
+    crate::redaction_preview::FAIL_DISPLAY.with(|f| f.set(false));
+    assert!(preview.is_err());
+    let r = s.apply(id, Edit::ApplyRedactions { pages: None });
+    assert!(matches!(&r, Err(EditError::Invalid(m)) if m.contains("couldn't draw the redaction marks")), "{r:?}");
+    // The next refresh draws the display again, and applying goes ahead.
+    s.apply(id, Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
+    s.apply(id, Edit::ApplyRedactions { pages: None }).unwrap();
+}
+
+/// A mark applied through its /Rect (an unreadable quad) is said in the edit's notices and listed
+/// in the report: what went is what was shown, and how it was read.
+#[test]
+fn a_fallback_reading_is_said_when_applied() {
+    let (mut s, id) = open(ab1234cd(&[NULL_MARK], &[]));
+    s.apply(id, Edit::ApplyRedactions { pages: None }).unwrap();
+    let notices = &s.get(id).unwrap().edit_notices;
+    let Some(crate::EditNotice::RedactionFallbacks { marks }) = notices.first() else { panic!("{notices:?}") };
+    assert_eq!(marks.len(), 1);
+    assert!(marks[0].reading.used_rect && marks[0].reading.quad_issues.invalid_groups == 1);
+    assert!(notices[0].to_string().contains("through their Rect"), "{}", notices[0]);
+}
+
+/// `/UserUnit` doesn't change the checked areas, which are in user space, nor what applying
+/// removes.
+#[test]
+fn user_unit_keeps_the_checked_mapping() {
+    let mut bytes = ab1234cd(&[NULL_MARK], &[]);
+    let at = bytes.windows(10).position(|w| w == b"/Resources").unwrap();
+    bytes.splice(at..at, b"/UserUnit 2 ".iter().copied());
+    let (mut s, id) = open(bytes);
+    assert_eq!(ready(&s, id, 0, 0), vec![AREA]);
+    assert_eq!(s.get(id).unwrap().user_unit(0), Some(2.0));
+    s.apply(id, Edit::ApplyRedactions { pages: None }).unwrap();
+    let text = saved_text(&s, id);
+    assert!(text.contains("AB") && text.contains("CD") && !text.contains("1234"), "{text}");
+}
+
+/// Encrypted documents keep their saved bytes untouched by the display copy and apply the checked
+/// area.
+#[test]
+fn encrypted_documents_keep_the_original_and_apply_the_checked_area() {
+    for algorithm in [pdfcraft_cos::Algorithm::Rc4_128, pdfcraft_cos::Algorithm::Aes128, pdfcraft_cos::Algorithm::Aes256] {
+        let mut cos = pdfcraft_cos::Document::open(Arc::new(ab1234cd(&[NULL_MARK], &[]))).unwrap();
+        cos.set_encryption(&pdfcraft_cos::NewEncryption {
+            algorithm,
+            user_password: "u",
+            owner_password: "o",
+            permissions: -4,
+            encrypt_metadata: true,
+            seed: [1; 32],
+        })
+        .unwrap();
+        let original = Arc::new(pdfcraft_cos::write_full(&cos, &Default::default()).unwrap());
+        let mut s = Session::new();
+        let id = s.open("encrypted.pdf", None, original.clone(), Some("o")).unwrap();
+        assert!(s.get(id).unwrap().redaction_previews().is_available(), "{algorithm:?}");
+        assert_eq!(s.save_bytes(id).unwrap().as_slice(), original.as_slice(), "{algorithm:?}");
+        s.apply(id, Edit::ApplyRedactions { pages: None }).unwrap();
+        let mut reopened = Session::new();
+        let id2 = reopened.open("saved.pdf", None, s.save_bytes(id).unwrap(), Some("o")).unwrap();
+        let text = page_texts(&reopened, id2).concat();
+        assert!(text.contains("AB") && text.contains("CD") && !text.contains("1234"), "{algorithm:?}: {text}");
+    }
+}

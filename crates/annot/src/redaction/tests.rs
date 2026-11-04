@@ -1,6 +1,17 @@
+use std::cell::Cell;
+
 use pdfcraft_cos::{Lexer, Object};
 
 use super::*;
+
+thread_local! {
+    static LIST_COPIES: Cell<usize> = const { Cell::new(0) };
+}
+
+/// A display copy's `/Annots` list was copied (the seam the whole-page tests count).
+pub(super) fn count_list_copy() {
+    LIST_COPIES.with(|c| c.set(c.get().saturating_add(1)));
+}
 
 fn parse(text: &[u8]) -> Object {
     Lexer::new(text, 0).object().unwrap()
@@ -191,4 +202,56 @@ fn the_locator_is_a_safe_rect_or_nothing() {
     assert_eq!(mark_locator(&doc, &mark(None, Some(b"[null 95 40 110]"))), None, "never a zero substituted for null");
     assert_eq!(mark_locator(&doc, &mark(None, Some(b"[20 95 20 110]"))), None);
     assert_eq!(mark_locator(&doc, &mark(None, None)), None);
+}
+
+/// A one-page document whose page (object 3) lists `annots`.
+fn page_with(annots: Vec<Object>) -> (Document, ObjRef) {
+    let mut doc = Document::new_empty();
+    let pages = doc.add(Object::Null);
+    let page = doc.add(Object::Null);
+    let mut pd = Dict::default();
+    pd.set(b"Type".to_vec(), Object::Name(b"Page".to_vec()));
+    pd.set(b"Parent".to_vec(), Object::Ref(pages));
+    pd.set(b"MediaBox".to_vec(), parse(b"[0 0 200 200]"));
+    pd.set(b"Annots".to_vec(), Object::Array(annots));
+    doc.set(page, Object::Dict(pd));
+    doc.set(pages, parse(format!("<< /Type /Pages /Kids [{} 0 R] /Count 1 >>", page.num).as_bytes()));
+    (doc, page)
+}
+
+fn copies<T>(f: impl FnOnce() -> T) -> (T, usize) {
+    LIST_COPIES.with(|c| c.set(0));
+    let out = f();
+    (out, LIST_COPIES.with(Cell::get))
+}
+
+/// A page's marks are drawn in one pass: listed by reference, no copy of its `/Annots` is made;
+/// written in place, one copy for the whole page, whatever their number. The drawn dictionaries
+/// carry neither the old appearance nor the quads.
+#[test]
+fn a_page_of_marks_is_drawn_in_one_pass() {
+    let ab = [[20.0, 95.0, 40.0, 110.0]];
+    let (mut display, page) = page_with(Vec::new());
+    let refs: Vec<Object> = (0..50)
+        .map(|_| {
+            let mut m = mark(Some(b"[20 110 40 110 20 95 40 95]"), Some(RECT));
+            m.set(b"AP".to_vec(), parse(b"<< /N 99 0 R /D 98 0 R >>"));
+            Object::Ref(display.add(Object::Dict(m)))
+        })
+        .collect();
+    display.update_dict(page, |d| d.set(b"Annots".to_vec(), Object::Array(refs.clone()))).unwrap();
+    let shown: Vec<(usize, Shown<'_>)> = (0..50).map(|i| (i, Shown::Ready(&ab))).collect();
+    let (r, n) = copies(|| show_page_in_display(&mut display, 0, page, &shown));
+    assert_eq!((r, n), (Ok(()), 0), "by reference: no list copy");
+    let first = refs[0].as_ref().expect("listed by reference");
+    let d = display.get(first).as_dict().unwrap().clone();
+    assert!(d.get(b"QuadPoints").is_none());
+    let ap = d.get(b"AP").unwrap().as_dict().unwrap();
+    assert!(ap.get(b"D").is_none() && !matches!(ap.get(b"N"), Some(Object::Ref(r)) if r.num == 99));
+    // Inline marks: one copy for the page.
+    let inline: Vec<Object> = (0..3).map(|_| Object::Dict(mark(Some(b"[20 110 40 110 20 95 40 95]"), Some(RECT)))).collect();
+    let (mut display, page) = page_with(inline);
+    let shown: Vec<(usize, Shown<'_>)> = (0..3).map(|i| (i, Shown::Ready(&ab))).collect();
+    let (r, n) = copies(|| show_page_in_display(&mut display, 0, page, &shown));
+    assert_eq!((r, n), (Ok(()), 1), "written in place: one copy for the page");
 }

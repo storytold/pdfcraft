@@ -25,6 +25,9 @@ pub struct Document {
     pub display: Arc<Vec<u8>>,
     /// The checked redaction marks of the working graph, rebuilt with `display` ([`Self::redaction_previews`]).
     pub(crate) redaction_previews: RedactionPreviews,
+    /// A copy of the page drawn for a preview or print couldn't draw the checked marks: applying is
+    /// refused until the next refresh ([`Self::draw_checked_marks`]).
+    pub(crate) preview_copy_failed: std::sync::atomic::AtomicBool,
     pub info: DocInfo,
     pub renderer: RenderPool,
     /// The password the document was opened with (needed to read attachments, etc.).
@@ -79,12 +82,28 @@ pub enum EditNotice {
     /// turning it on could paint over something (`pdfcraft_edit::backdrops_left_off`). They look
     /// the same on white paper.
     BackdropsLeftOff { pages: Vec<usize> },
+    /// Redaction marks applied through a fallback reading: their `/Rect` stood in for `/QuadPoints`
+    /// that couldn't be read, or an area was widened to the nearest `f32` around it. The preview
+    /// showed exactly these areas.
+    RedactionFallbacks { marks: Vec<pdfcraft_redact::MarkFallback> },
 }
 
 impl std::fmt::Display for EditNotice {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             EditNotice::Undrawn(n) => n.fmt(f),
+            EditNotice::RedactionFallbacks { marks } => {
+                let mut pages: Vec<usize> = marks.iter().map(|m| m.page).collect();
+                pages.dedup();
+                let rect = marks.iter().filter(|m| m.reading.used_rect).count();
+                let widened = marks.iter().filter(|m| m.reading.widened).count();
+                write!(
+                    f,
+                    "{} redaction mark(s) on page(s) {} were applied as previewed through a fallback reading: {rect} through their Rect because QuadPoints could not all be read, {widened} widened to the nearest representable area",
+                    marks.len(),
+                    page_runs(&pages)
+                )
+            }
             EditNotice::BackdropsLeftOff { pages } => {
                 let (which, own) = if pages.len() == 1 { ("page", "its") } else { ("pages", "their") };
                 write!(
@@ -446,6 +465,14 @@ impl Document {
         }
     }
 
+    /// The size of page `page`'s user-space unit in points (`/UserUnit`, read as
+    /// [`pdfcraft_model::Page::user_unit`] reads it): what the redaction areas, given in user-space
+    /// units, are scaled by on paper. `None` without an editable graph or such a page.
+    pub fn user_unit(&self, page: usize) -> Option<f64> {
+        let cos = &self.editor.as_ref()?.cos;
+        pdfcraft_model::pages(cos).get(page).map(|p| p.user_unit(cos))
+    }
+
     /// The redaction marks as applying would read them: each one's areas, or why it can't be applied.
     /// A preview reads this, never the comment list's quads; applying is refused while it is
     /// [`RedactionPreviews::Unavailable`].
@@ -661,14 +688,10 @@ pub(crate) fn is_placeholder_title(title: &str) -> bool {
 /// The working file plus appearances for comments that have none, and for form fields the file
 /// leaves to the viewer (#3470). Signature artwork is preserved; validation badges belong to the
 /// viewer and never enter these bytes, which image/text exports and Print as Image also consume.
-pub(crate) fn display_bytes(
-    editor: Option<&mut Editor>,
-    bytes: &Arc<Vec<u8>>,
-    pages: &[pdfcraft_render::PageInfo],
-) -> (Arc<Vec<u8>>, RedactionPreviews) {
+pub(crate) fn display_bytes(editor: Option<&mut Editor>, bytes: &Arc<Vec<u8>>, info: &DocInfo) -> (Arc<Vec<u8>>, RedactionPreviews) {
     let Some(e) = editor else { return (bytes.clone(), RedactionPreviews::Unavailable(PreviewUnavailable::NoEditableGraph)) };
     // The checked marks come from the same graph as the display copy, at the same moment.
-    let previews = redaction_preview::previews_for(&e.cos, pages);
+    let previews = redaction_preview::previews_for(&e.cos, info);
     let comments = pdfcraft_annot::with_missing_appearances_cached(&e.cos, &mut e.appearances);
     let fields = pdfcraft_forms::with_field_appearances_cached(comments.as_ref().unwrap_or(&e.cos), &mut e.field_appearances);
     let mut display = fields.or(comments);

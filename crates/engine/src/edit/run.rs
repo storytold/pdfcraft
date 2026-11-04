@@ -188,6 +188,8 @@ pub(crate) struct EditCtx {
     /// The overlay streams the edit's applied redactions added, which alone the renderer's check
     /// leaves out.
     pub(crate) redaction_overlays: Vec<pdfcraft_cos::ObjRef>,
+    /// The marks the redaction applied through a fallback reading, for the edit's notice.
+    pub(crate) redaction_fallbacks: Vec<pdfcraft_redact::MarkFallback>,
 }
 
 impl EditCtx {
@@ -217,6 +219,7 @@ impl EditCtx {
             rng: getrandom::fill,
             renamed_fields: Vec::new(),
             redaction_overlays: Vec::new(),
+            redaction_fallbacks: Vec::new(),
         }
     }
 
@@ -793,7 +796,9 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             pdfcraft_edit::add_content(doc, *page, &content)?;
         }
         Edit::ApplyRedactions { pages } => {
-            cx.redaction_overlays = pdfcraft_redact::apply(doc, pages.as_deref())?.overlays;
+            let report = pdfcraft_redact::apply(doc, pages.as_deref())?;
+            cx.redaction_overlays = report.overlays;
+            cx.redaction_fallbacks = report.fallbacks;
         }
         Edit::ClearRedactions => {
             pdfcraft_redact::clear_marks(doc, None)?;

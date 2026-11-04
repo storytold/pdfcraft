@@ -109,6 +109,33 @@ pub struct Mark {
     pub overlay: String,
     /// How the overlay text is drawn (`/DA`, `/Q`, `/Repeat`).
     pub look: pdfcraft_annot::OverlayLook,
+    /// How the areas were read ([`MarkAreas`]): `/Rect` used, what was wrong with `/QuadPoints`,
+    /// and whether an area was widened to the nearest `f32` around it.
+    pub reading: MarkReading,
+}
+
+/// How a mark's areas were read, beyond the areas themselves.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MarkReading {
+    pub used_rect: bool,
+    pub quad_issues: QuadIssues,
+    pub widened: bool,
+}
+
+impl MarkReading {
+    /// The reading fell back: unreadable quads brought in `/Rect`, or an area was widened.
+    pub fn fell_back(&self) -> bool {
+        self.quad_issues.partial() || self.quad_issues.malformed_container || self.widened
+    }
+}
+
+/// A mark applied through a fallback reading ([`MarkReading::fell_back`]), as [`Report`] lists it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MarkFallback {
+    /// 0-based page.
+    pub page: usize,
+    pub obj: ObjRef,
+    pub reading: MarkReading,
 }
 
 /// The overlay look of a Redact annotation: font, size and colour from `/DA`, alignment from
@@ -170,6 +197,9 @@ pub struct Report {
     /// only streams a check for text left under the marks may skip: an input stream labelled
     /// like an overlay (`/PCMark /Redaction`) is checked like any other.
     pub overlays: Vec<ObjRef>,
+    /// The applied marks whose areas were read through a fallback (`/Rect` for unreadable quads,
+    /// or an area widened to `f32`): what was removed is what the preview showed, and this says how.
+    pub fallbacks: Vec<MarkFallback>,
 }
 
 fn rect_of(doc: &Document, o: Option<&Object>) -> Option<[f64; 4]> {
@@ -203,6 +233,13 @@ pub fn marks(doc: &Document) -> Vec<Mark> {
     marks_checked(doc, None).map(|(marks, _)| marks).unwrap_or_default()
 }
 
+/// The marks on `pages` (all when `None`) that can be applied, or why they couldn't all be checked:
+/// what a check made after applying (or any caller that must not take an empty list for "no
+/// marks") reads, instead of [`marks`].
+pub fn applicable_marks(doc: &Document, pages: Option<&[usize]>) -> Result<Vec<Mark>, RedactError> {
+    Ok(marks_checked(doc, pages)?.0)
+}
+
 /// The marks on `pages` (all when `None`) that can be applied, and the refused ones, from the
 /// same collector [`mark_previews`] reads, so applying uses exactly the areas a preview shows.
 pub(crate) fn marks_checked(doc: &Document, pages: Option<&[usize]>) -> Result<(Vec<Mark>, Vec<MarkPreview>), MarkScanError> {
@@ -212,7 +249,8 @@ pub(crate) fn marks_checked(doc: &Document, pages: Option<&[usize]>) -> Result<(
             (Ok(areas), Some(obj), Some(d)) => {
                 let overlay = d.get(b"OverlayText").and_then(|t| doc.resolve(t).as_string().map(|s| s.to_text())).unwrap_or_default();
                 let rects = areas.rects.clone();
-                out.push(Mark { page: preview.page, obj, rects, fill: color(doc, d, b"IC"), overlay, look: overlay_look(doc, d) });
+                let reading = MarkReading { used_rect: areas.used_rect, quad_issues: areas.quad_issues, widened: areas.widened };
+                out.push(Mark { page: preview.page, obj, rects, fill: color(doc, d, b"IC"), overlay, look: overlay_look(doc, d), reading });
             }
             // A ready mark always has its object and dictionary; anything else is refused.
             _ => refused.push(preview),
@@ -389,6 +427,8 @@ fn apply_within(doc: &mut Document, pages: Option<&[usize]>, images: pdfcraft_co
         )));
     }
     let mut report = Report { marks: chosen.len(), ..Report::default() };
+    report.fallbacks =
+        chosen.iter().filter(|m| m.reading.fell_back()).map(|m| MarkFallback { page: m.page, obj: m.obj, reading: m.reading }).collect();
     // `marks` visits pages in order. Keep slices of that order for appearance generation,
     // content rewriting and verification instead of scanning all marks for every page.
     let groups: Vec<_> = chosen.chunk_by(|a, b| a.page == b.page).filter_map(|group| group.first().map(|mark| (mark.page, group))).collect();
@@ -732,7 +772,9 @@ fn remove_page_annotations(
         let Some(r) = a.as_ref() else { continue };
         let obj = doc.get(r);
         let Some(d) = obj.as_dict() else { continue };
-        let subtype = d.name(b"Subtype").unwrap_or(b"");
+        // Classified as the collector classifies, through a `/Subtype` reference too.
+        let (subtype, _) = preview::subtype_of(doc, d);
+        let subtype = subtype.as_deref().unwrap_or(b"");
         if subtype == b"Redact" {
             if page_marks.iter().any(|m| m.obj == r) {
                 removed.push(r);
@@ -815,7 +857,10 @@ fn remove_page_annotations(
 /// deleting a comment does: a reply left behind would keep its mark in the file through `/IRT`.
 /// Returns how many marks went.
 pub fn clear_marks(doc: &mut Document, pages: Option<&[usize]>) -> Result<usize, RedactError> {
-    let targets: HashSet<ObjRef> = marks(doc).iter().filter(|m| pages.is_none_or(|p| p.contains(&m.page))).map(|m| m.obj).collect();
+    // Every mark the collector lists on those pages, ready or refused (a mark that can't be applied
+    // can still be removed), classified as applying classifies it; a scan that can't finish is an
+    // error, not "nothing to clear". A mark written in place has no object to remove, as before.
+    let targets: HashSet<ObjRef> = preview::collect(doc, pages)?.into_iter().filter_map(|c| c.preview.object).collect();
     if targets.is_empty() {
         return Err(RedactError::NothingToApply);
     }

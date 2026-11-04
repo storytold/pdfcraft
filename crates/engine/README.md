@@ -38,13 +38,20 @@ Each open document holds a `pdfcraft_cos::Document`: the object graph plus a cop
 
 Redaction marks are shown from the editable graph, not the renderer's comment list:
 `Document::redaction_previews` holds `pdfcraft_redact::mark_previews` of the working graph, rebuilt
-with the display copy on every refresh (and `Unavailable` from the moment any refresh starts until
-it finishes). `Session::apply` refuses `ApplyRedactions` while it is unavailable, when it is not
-the reading of the current graph, and inside an `Edit::Batch`, so nothing is removed that wasn't
-shown.
-The display copy draws every mark as the outline of those same areas, whatever appearance the file
-gives it (`Document::comment_layer`, the isolated image a drag draws, too); if it can't, the view is
-unavailable.
+with the display copy on every refresh and `Unavailable` from the moment any refresh starts until it
+finishes. It is ready only when the editable graph's pages are the renderer's, object for object in
+the same order (`DocInfo::page_objects`; equal sizes don't prove that), and every Redact mark the
+renderer lists is among the marks applying reads. A metadata-only edit keeps the display copy, so it
+keeps the view's state too: ready only if it was. `Session::apply` refuses `ApplyRedactions` while
+the view is unavailable, when it is not the reading of the current graph, after a picture of the
+page failed to draw the marks, and inside an `Edit::Batch`; the interface also refuses it while a
+change to a comment is still on screen (a drag, or a move not yet applied).
+
+Every picture of a page made from a copy of the graph draws the marks as the outline of those same
+areas, whatever appearance the file gives them (`Document::draw_checked_marks`): the display copy
+(and so the page view, thumbnails, Print as Image and image export), drag and text-edit
+backgrounds, the isolated image a drag draws, and vector print. Not covered: `display_bytes_for`,
+the standalone render path the CLI uses, which draws the file's own appearances.
 
 Consequences worth preserving: the original bytes of an opened file are never rewritten in place; a
 full rewrite happens only where it must (redaction, PDF/A conversion, print imposition, a changed

@@ -69,7 +69,11 @@ rectangle around it, so the screen draws exactly what is removed. `mark_previews
 annotation by page and `/Annots` slot with its areas or its `MarkRefusal`: no usable area, quads
 that need a `/Rect` it lacks, more than 65,536 `/QuadPoints` entries (refused whole, even with a
 `/Rect`), a mark written in place or listed through a chain of references (applying can't remove
-it), or a page whose marks hold more than 1,048,576 entries together. A refused mark makes `apply`
+it), a mark whose `/Subtype` is given by reference (the renderer draws it; applying one isn't
+supported yet, so it is refused rather than skipped), or a page whose marks hold more than 1,048,576
+entries together. `/Subtype` is read through a reference everywhere redaction classifies an
+annotation, and `clear_marks` removes every listed mark, refused ones included. `Report::fallbacks`
+lists the marks applied through their `/Rect` (unreadable quads) or a widened area. A refused mark makes `apply`
 fail with `RedactError::UnreadableMark` before anything changes, instead of skipping it, and
 `marks()` lists only the marks that can be applied, so a preview reads `mark_previews`. The count
 covers the marks on the pages being applied.

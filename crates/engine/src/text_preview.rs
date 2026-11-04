@@ -99,6 +99,8 @@ impl Document {
             }
             let editor = self.editor.as_ref().ok_or("the document can't be read")?;
             let mut cos = editor.cos.clone();
+            // The backdrop shows redaction marks as the page view draws them.
+            self.draw_checked_marks(&mut cos)?;
             pdfcraft_edit::delete_content(&mut cos, page, index).map_err(|e| e.to_string())?;
             let bytes = Arc::new(pdfcraft_cos::write_incremental(&cos, &pdfcraft_cos::SaveOptions::default()).map_err(|e| e.to_string())?);
             Ok(TextEditPreview { page, bytes, config: self.config.clone() })
@@ -130,6 +132,8 @@ impl Document {
         guard(|| {
             let editor = self.editor.as_ref().ok_or("the document can't be read")?;
             let mut cos = editor.cos.clone();
+            // The backdrop shows redaction marks as the page view draws them.
+            self.draw_checked_marks(&mut cos)?;
             pdfcraft_edit::clear_block(&mut cos, page, block).map_err(|e| e.to_string())?;
             let bytes = Arc::new(pdfcraft_cos::write_incremental(&cos, &pdfcraft_cos::SaveOptions::default()).map_err(|e| e.to_string())?);
             Ok(TextEditPreview { page, bytes, config: self.config.clone() })
@@ -142,6 +146,8 @@ impl Document {
         guard(|| {
             let editor = self.editor.as_ref().ok_or("the document can't be read")?;
             let mut cos = editor.cos.clone();
+            // The backdrop shows redaction marks as the page view draws them.
+            self.draw_checked_marks(&mut cos)?;
             pdfcraft_edit::delete_content(&mut cos, page, index).map_err(|e| e.to_string())?;
             let bytes = Arc::new(pdfcraft_cos::write_incremental(&cos, &pdfcraft_cos::SaveOptions::default()).map_err(|e| e.to_string())?);
             Ok(TextEditPreview { page, bytes, config: self.config.clone() })
@@ -160,6 +166,8 @@ impl Document {
         guard(|| {
             let editor = self.editor.as_ref().ok_or("the document can't be read")?;
             let mut cos = editor.cos.clone();
+            // The backdrop shows redaction marks as the page view draws them.
+            self.draw_checked_marks(&mut cos)?;
             let n = pdfcraft_model::pages(&cos).len();
             if pdfcraft_edit::remove_marks(&mut cos, &(0..n).collect::<Vec<_>>(), kind).map_err(|e| e.to_string())? == 0 {
                 return Ok(None);
@@ -182,6 +190,8 @@ impl Document {
         guard(|| {
             let editor = self.editor.as_ref().ok_or("the document can't be read")?;
             let mut cos = editor.cos.clone();
+            // A redaction mark left on the layer draws as the page view draws it.
+            self.draw_checked_marks(&mut cos)?;
             pdfcraft_edit::isolate_content(&mut cos, page, index).map_err(|e| e.to_string())?;
             let bytes = Arc::new(pdfcraft_cos::write_incremental(&cos, &pdfcraft_cos::SaveOptions::default()).map_err(|e| e.to_string())?);
             Ok(TextEditPreview { page, bytes, config: RenderConfig { transparent: true, ..self.config.clone() } })

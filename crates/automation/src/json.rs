@@ -393,12 +393,18 @@ fn outline(items: &[pdfcraft_render::OutlineItem]) -> Value {
 }
 
 /// A redaction mark as applying reads it ([`pdfcraft_engine::Document::redaction_previews`]):
-/// `ready` with the areas it removes, or `refused` with why. Areas are in PDF user space, in
-/// points, exactly (not rounded, and not in the tools' top-left convention): they are what
+/// `ready` with the areas it removes, or `refused` with why. Areas are in the page's default user
+/// space units (points times `user_unit`), exactly (not rounded, and not in the tools' top-left convention): they are what
 /// applying removes.
-pub(crate) fn redaction_mark(p: &pdfcraft_engine::MarkPreview) -> Value {
+pub(crate) fn redaction_mark(d: &Document, p: &pdfcraft_engine::MarkPreview) -> Value {
     use pdfcraft_engine::{MarkAreaError, MarkRefusal};
-    let mut v = json!({ "page": p.page + 1, "index": p.index + 1, "units": "PDF user space, points, [x0, y0, x1, y1]" });
+    let mut v = json!({
+        "page": p.page + 1,
+        "index": p.index + 1,
+        "units": "PDF default user space units of the page, [x0, y0, x1, y1]",
+        // Points per user-space unit (`/UserUnit`): 1 unless the page says otherwise.
+        "user_unit": d.user_unit(p.page),
+    });
     match &p.areas {
         Ok(a) => {
             v["status"] = json!("ready");
@@ -422,6 +428,7 @@ pub(crate) fn redaction_mark(p: &pdfcraft_engine::MarkPreview) -> Value {
                 MarkRefusal::InlineAnnotation => "inline_annotation",
                 MarkRefusal::UnsupportedAnnotationReference => "unsupported_reference",
                 MarkRefusal::PageLimit => "page_quadpoint_limit",
+                MarkRefusal::IndirectSubtype => "indirect_subtype",
             });
             v["reason"] = json!(format!("Cannot apply this redaction ({r}); remove it and mark the area again"));
             v["user_areas"] = json!([]);
@@ -435,9 +442,10 @@ pub(crate) fn redaction_mark(p: &pdfcraft_engine::MarkPreview) -> Value {
 pub(crate) fn redaction_of(d: &Document, page: usize, index: usize) -> Value {
     match d.redaction_previews() {
         pdfcraft_engine::RedactionPreviews::Unavailable(why) => json!({ "status": "unavailable", "reason": why.to_string() }),
-        view => view
-            .get(page, index)
-            .map_or_else(|| json!({ "status": "unavailable", "reason": "this mark is not among the marks applying reads" }), redaction_mark),
+        view => view.get(page, index).map_or_else(
+            || json!({ "status": "unavailable", "reason": "this mark is not among the marks applying reads" }),
+            |p| redaction_mark(d, p),
+        ),
     }
 }
 
@@ -448,7 +456,7 @@ pub(crate) fn redactions(d: &Document) -> Value {
         pdfcraft_engine::RedactionPreviews::Available(list) => json!({
             "status": "available",
             "refused": d.redaction_previews().refused(),
-            "marks": list.iter().map(redaction_mark).collect::<Vec<_>>(),
+            "marks": list.iter().map(|p| redaction_mark(d, p)).collect::<Vec<_>>(),
         }),
         pdfcraft_engine::RedactionPreviews::Unavailable(why) => json!({ "status": "unavailable", "reason": why.to_string(), "marks": [] }),
     }

@@ -64,6 +64,10 @@ pub struct DocInfo {
     /// The form is (also) an XFA form, which isn't read yet (`form.xfa-*` in the parity list).
     pub xfa: Option<Xfa>,
     pub pages: Vec<PageInfo>,
+    /// The object (number, generation) of each page in `pages`, as the renderer walks the page tree:
+    /// what is drawn as page `i`. `None` for a page with no object of its own. Callers that pair
+    /// these pages with another walk of the tree compare identities, not just sizes.
+    pub page_objects: Vec<Option<(u32, u16)>>,
     pub outline: Vec<OutlineItem>,
     /// The outline has bookmarks that `outline` leaves out (see `OUTLINE_WINDOW`, `OUTLINE_DEPTH`).
     pub outline_more: bool,

@@ -20,7 +20,7 @@
 //! `f32` can't hold refuses the mark. Quads are never merged into one box: that would take the
 //! gaps between marked lines with it.
 
-use pdfcraft_cos::{Dict, Document, Object};
+use pdfcraft_cos::{Dict, Document, ObjRef, Object};
 use pdfcraft_model::numeric::{ArrayError, NumberReader, quad_groups, rect};
 
 /// The most `/QuadPoints` entries one mark may have (8,192 whole quads).
@@ -164,69 +164,98 @@ pub enum Shown<'a> {
 /// at all: Invisible, Hidden, NoZoom, NoRotate, NoView (ISO 32000-2 Table 167).
 const DISPLAY_CLEARED_FLAGS: i64 = 1 | 2 | 8 | 16 | 32;
 
-/// Draw the Redact mark at `(page, index)` (its `/Annots` slot) of `display`, a display-only copy,
-/// exactly as `shown`: its normal appearance replaced by the outline of the checked areas (or a
-/// warning locator), its `/Rect` and the appearance's `/BBox` the union of them (so the appearance
-/// is placed with no scaling, in the page's own user space), its rollover and down appearances,
-/// `/AS`, `/OC` and the flags that would hide, scale or turn it removed. The mark's original
-/// dictionary and appearance stay in the document it was copied from; this is a view, never saved.
-pub fn show_in_display(display: &mut Document, page: usize, index: usize, shown: Shown<'_>) -> Result<(), crate::AnnotError> {
-    let page_obj = pdfcraft_model::pages(display).get(page).map(|p| p.obj).ok_or(crate::AnnotError::NoSuchPage(page))?;
-    let mut list = crate::annots(display, page_obj);
-    let entry = list.get(index).cloned().ok_or(crate::AnnotError::NoSuchAnnotation { page, index })?;
-    let held = display.resolve(&entry);
-    let Some(src) = held.as_dict() else { return Err(crate::AnnotError::NoSuchAnnotation { page, index }) };
-    // Every key but `/QuadPoints`, which the drawn appearance replaces and which can be large: the
-    // copy never carries it.
-    let mut d = Dict::default();
-    for (key, value) in src.iter().filter(|(key, _)| key.as_slice() != b"QuadPoints") {
-        d.set(key.clone(), value.clone());
+/// What an outline appearance draws: the areas, the stroke colour and a dash pattern.
+type Outline<'a> = (&'a [[f64; 4]], [f64; 3], &'static str);
+
+/// What a display copy replaces or drops of a mark's dictionary, so they are never copied: the
+/// appearance and its state, the quads it draws, optional-content membership, flags and `/Rect`.
+const DISPLAY_REPLACED_KEYS: [&[u8]; 6] = [b"QuadPoints", b"AP", b"AS", b"OC", b"F", b"Rect"];
+
+/// Draw the Redact marks `marks` (each its `/Annots` slot and how it is shown) of page `page`
+/// (object `page_obj`) of `display`, a display-only copy, exactly as shown: each mark's normal
+/// appearance becomes the outline of its checked areas (or a warning locator), its `/Rect` and
+/// the appearance's `/BBox` the union of them (placed with no scaling, in the page's own user
+/// space); its other appearances, `/AS`, `/OC` and the flags that would hide, scale or turn it
+/// are dropped. The page is read once: its `/Annots` is copied only when a mark written in place
+/// or listed through a chain has to be replaced in it. The marks' dictionaries in the document the
+/// copy was made from are not touched; this is a view, never saved.
+pub fn show_page_in_display(display: &mut Document, page: usize, page_obj: ObjRef, marks: &[(usize, Shown<'_>)]) -> Result<(), crate::AnnotError> {
+    if marks.is_empty() {
+        return Ok(());
     }
-    let flags = d.int(b"F").unwrap_or(0) & !DISPLAY_CLEARED_FLAGS;
-    for key in [&b"AS"[..], b"OC"] {
-        d.remove(key);
-    }
-    let drawn = match shown {
-        Shown::Ready(areas) => Some((areas.to_vec(), display_stroke(display, &d), "")),
-        Shown::Refused(Some(locator)) => Some((
-            vec![locator],
-            [0.84, 0.53, 0.0],
-            "[3 2] 0 d
-",
-        )),
-        Shown::Refused(None) => None,
+    let page_held = display.get(page_obj);
+    let list_held;
+    let list: &[Object] = match page_held.as_dict().and_then(|d| d.get(b"Annots")) {
+        Some(Object::Array(a)) => a,
+        Some(r @ Object::Ref(_)) => {
+            list_held = display.resolve(r);
+            list_held.as_array().map_or(&[], Vec::as_slice)
+        }
+        _ => &[],
     };
-    match drawn.and_then(|(areas, rgb, dash)| outline(&areas, rgb, dash)) {
-        Some((bbox, content)) => {
-            let mut sd = Dict::default();
-            sd.set(b"Type".to_vec(), Object::Name(b"XObject".to_vec()));
-            sd.set(b"Subtype".to_vec(), Object::Name(b"Form".to_vec()));
-            sd.set(b"BBox".to_vec(), reals(&bbox));
-            sd.set(b"Resources".to_vec(), Object::Dict(Dict::default()));
-            let stream = display.add(Object::Stream(pdfcraft_cos::Stream::from_raw(sd, content.into_bytes())));
-            let mut ap = Dict::default();
-            ap.set(b"N".to_vec(), Object::Ref(stream));
-            d.set(b"AP".to_vec(), Object::Dict(ap));
-            d.set(b"Rect".to_vec(), reals(&bbox));
-            d.set(b"F".to_vec(), Object::Int(flags));
+    let mut replaced: Vec<(usize, ObjRef)> = Vec::new();
+    for &(index, shown) in marks {
+        let listed = list.get(index).ok_or(crate::AnnotError::NoSuchAnnotation { page, index })?;
+        let entry_held;
+        let src = match listed {
+            Object::Dict(d) => d,
+            Object::Ref(_) => {
+                entry_held = display.resolve(listed);
+                entry_held.as_dict().ok_or(crate::AnnotError::NoSuchAnnotation { page, index })?
+            }
+            _ => return Err(crate::AnnotError::NoSuchAnnotation { page, index }),
+        };
+        let mut d = Dict::default();
+        for (key, value) in src.iter().filter(|(key, _)| !DISPLAY_REPLACED_KEYS.contains(&key.as_slice())) {
+            d.set(key.clone(), value.clone());
         }
-        // Nothing safe to draw: the mark is hidden on the page (the Comments panel lists it).
-        None => {
-            d.remove(b"AP");
-            d.set(b"F".to_vec(), Object::Int(flags | 2));
+        let flags = src.int(b"F").unwrap_or(0) & !DISPLAY_CLEARED_FLAGS;
+        let locator;
+        let drawn: Option<Outline<'_>> = match shown {
+            Shown::Ready(areas) => Some((areas, display_stroke(display, src), "")),
+            Shown::Refused(Some(r)) => {
+                locator = [r];
+                Some((&locator, [0.84, 0.53, 0.0], "[3 2] 0 d\n"))
+            }
+            Shown::Refused(None) => None,
+        };
+        match drawn.and_then(|(areas, rgb, dash)| outline(areas, rgb, dash)) {
+            Some((bbox, content)) => {
+                let mut sd = Dict::default();
+                sd.set(b"Type".to_vec(), Object::Name(b"XObject".to_vec()));
+                sd.set(b"Subtype".to_vec(), Object::Name(b"Form".to_vec()));
+                sd.set(b"BBox".to_vec(), reals(&bbox));
+                sd.set(b"Resources".to_vec(), Object::Dict(Dict::default()));
+                let stream = display.add(Object::Stream(pdfcraft_cos::Stream::from_raw(sd, content.into_bytes())));
+                let mut ap = Dict::default();
+                ap.set(b"N".to_vec(), Object::Ref(stream));
+                d.set(b"AP".to_vec(), Object::Dict(ap));
+                d.set(b"Rect".to_vec(), reals(&bbox));
+                d.set(b"F".to_vec(), Object::Int(flags));
+            }
+            // Nothing safe to draw: the mark is hidden on the page (the Comments panel lists it).
+            None => d.set(b"F".to_vec(), Object::Int(flags | 2)),
+        }
+        match listed {
+            // The listed object is the dictionary: the copy's object is replaced.
+            Object::Ref(r) if display.get(*r).as_dict().is_some() => display.set(*r, Object::Dict(d)),
+            // Written in place, or listed through a chain: the copy's list gets the drawn dictionary.
+            _ => {
+                replaced.try_reserve(1).map_err(|_| crate::AnnotError::Unsupported("too many redaction marks to draw".into()))?;
+                replaced.push((index, display.add(Object::Dict(d))));
+            }
         }
     }
-    match entry {
-        // The listed object is the dictionary: the copy's object is replaced.
-        Object::Ref(r) if display.get(r).as_dict().is_some() => display.set(r, Object::Dict(d)),
-        // Written in place, or listed through a chain: the copy's list gets the drawn dictionary.
-        _ => {
-            let r = display.add(Object::Dict(d));
-            if let Some(slot) = list.get_mut(index) {
+    if !replaced.is_empty() {
+        let mut copy = list.to_vec();
+        #[cfg(test)]
+        tests::count_list_copy();
+        for (index, r) in replaced {
+            if let Some(slot) = copy.get_mut(index) {
                 *slot = Object::Ref(r);
             }
-            crate::set_annots(display, page_obj, list)?;
         }
+        crate::set_annots(display, page_obj, copy)?;
     }
     Ok(())
 }

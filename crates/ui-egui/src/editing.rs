@@ -110,11 +110,32 @@ fn form_edit_pages(
     (changed_pages, unbaked)
 }
 
+/// Whether `edit`, or any edit inside a batch, applies redactions.
+fn applies_redactions(edit: &Edit) -> bool {
+    match edit {
+        Edit::ApplyRedactions { .. } => true,
+        Edit::Batch { edits, .. } => edits.iter().any(applies_redactions),
+        _ => false,
+    }
+}
+
 impl PdfCraftApp {
     /// Apply an edit to the active document. Returns `true` on success; failures are shown.
     pub fn apply_edit(&mut self, edit: Edit) -> bool {
         let Some((i, id)) = self.active_ids() else { return false };
         let label = edit.label();
+        // Redactions are applied to the marks the engine checked, never to a move or change still on
+        // screen: a dragged mark is shown where the graph doesn't have it yet.
+        if applies_redactions(&edit) && self.views.iter().any(|v| v.id == id && (v.comments.gesture.is_some() || v.pending_edit.is_some())) {
+            self.notify_fmt(
+                "{label} failed: {e}",
+                &[
+                    ("label", &crate::i18n::edit_label(&label)),
+                    ("e", tl!("a change on the page is still in progress; finish it, then apply the redactions again")),
+                ],
+            );
+            return false;
+        }
         let target_arrange_image = match &edit {
             Edit::EditPageImage { page, index, change: pdfcraft_engine::ImageEdit::Arrange(_) } => {
                 let doc = self.session.get(id);
@@ -203,6 +224,10 @@ impl PdfCraftApp {
                     self.notify(match &n {
                         pdfcraft_engine::EditNotice::Undrawn(t) => crate::content_ui::undrawn_message(t),
                         pdfcraft_engine::EditNotice::BackdropsLeftOff { pages } => crate::marks_ui::backdrops_left_off_message(pages),
+                        pdfcraft_engine::EditNotice::RedactionFallbacks { marks } => crate::i18n::fmt(
+                            tl!("{n} redaction mark(s) were applied as previewed, through their Rect because QuadPoints could not all be read, or widened slightly"),
+                            &[("n", &marks.len().to_string())],
+                        ),
                     });
                 }
                 let out = self.session.take_js_output(id);

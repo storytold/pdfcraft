@@ -60,7 +60,9 @@ pub fn inspect(bytes: Arc<Vec<u8>>, password: Option<&str>) -> Result<DocInfo, O
     let mut info = DocInfo { file_size: bytes.len(), pdf_version: version_label(&format!("{:?}", pdf.version())), ..Default::default() };
     let pages = catch_unwind(AssertUnwindSafe(|| {
         let mut out = Vec::new();
+        let mut ids = Vec::new();
         for (i, page) in pdf.pages().iter().enumerate() {
+            ids.push(page.raw().obj_id().and_then(|id| Some((u32::try_from(id.obj_number).ok()?, u16::try_from(id.gen_number).ok()?))));
             let (w, h) = page.render_dimensions();
             let c = page.intersected_crop_box();
             let rotation = match page.rotation() {
@@ -74,10 +76,13 @@ pub fn inspect(bytes: Arc<Vec<u8>>, password: Option<&str>) -> Result<DocInfo, O
             let (w, h) = if w.is_finite() && h.is_finite() && w >= 1.0 && h >= 1.0 { (w, h) } else { (612.0, 792.0) };
             out.push(PageInfo { width: w, height: h, label: (i + 1).to_string(), crop, rotation });
         }
-        out
+        (out, ids)
     }));
     match pages {
-        Ok(p) => info.pages = p,
+        Ok((p, ids)) => {
+            info.pages = p;
+            info.page_objects = ids;
+        }
         Err(p) => return Err(OpenError::Invalid(format!("the page tree could not be read: {}", crate::raster::panic_message(&p)))),
     }
     let options = load_options(password);
@@ -123,6 +128,8 @@ pub(super) fn inspect_structure(info: &mut DocInfo, fill: impl FnOnce(&mut DocIn
     match structure {
         Ok(Ok(mut filled)) => {
             filled.file_size = info.file_size;
+            // The renderer's page identities, like its page geometry, are never replaced by inspection.
+            filled.page_objects = std::mem::take(&mut info.page_objects);
             filled.pdf_version = std::mem::take(&mut info.pdf_version);
             *info = filled;
         }

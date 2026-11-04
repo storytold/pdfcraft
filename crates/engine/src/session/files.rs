@@ -154,6 +154,12 @@ impl Session {
         // #3046: the layers print as they are shown. Once the Layers panel (or a set-layer
         // action) has changed one, the print copy's default configuration says which are on, so a
         // hidden layer stays off on paper too; untouched, the document's own configuration prints.
+        // Redaction marks print as the page view draws them (the outline of what applying removes),
+        // as Print as Image does from the display copy. With no checked view the file's own
+        // appearances print: printing promises no removal.
+        if doc.redaction_previews.is_available() {
+            doc.draw_checked_marks(&mut cos).map_err(EditError::Print)?;
+        }
         if !doc.config.layers.is_empty() {
             set_default_layer_state(&mut cos, &doc.info.layers);
         }

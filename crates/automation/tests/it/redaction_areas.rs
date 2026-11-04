@@ -66,7 +66,7 @@ fn tools_see_the_areas_applying_removes() {
     assert_eq!(r["status"], "ready", "{r}");
     assert_eq!(r["user_areas"], json!([[22.0, 95.0, 46.0, 110.0]]), "exact, in user space, not [0 95 46 110]");
     assert_eq!((r["uses_rect"].clone(), r["quad_issues"]["invalid_groups"].clone()), (json!(true), json!(1)));
-    assert_eq!(r["units"], "PDF user space, points, [x0, y0, x1, y1]");
+    assert_eq!((r["units"].clone(), r["user_unit"].clone()), (json!("PDF default user space units of the page, [x0, y0, x1, y1]"), json!(1.0)));
     let info = ok(&mut a, "doc_info", json!({ "doc": doc }));
     assert_eq!(info["redactions"]["status"], "available");
     assert_eq!(info["redactions"]["marks"][0]["user_areas"], r["user_areas"]);

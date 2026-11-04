@@ -25,7 +25,7 @@ fn check_redaction_view(
     edit: &Edit,
     shown: &RedactionPreviews,
     cos: &pdfcraft_cos::Document,
-    pages: &[pdfcraft_render::PageInfo],
+    info: &pdfcraft_render::DocInfo,
 ) -> Result<(), EditError> {
     if !applies_redactions(edit) {
         return Ok(());
@@ -41,7 +41,7 @@ fn check_redaction_view(
         )));
     }
     // Nothing else may have changed the graph since the view was built.
-    if redaction_preview::previews_for(cos, pages) != *shown {
+    if redaction_preview::previews_for(cos, info) != *shown {
         return Err(EditError::Invalid(
             "the redaction marks changed since they were shown; look at them again, then apply (nothing was redacted)".into(),
         ));
@@ -100,7 +100,12 @@ impl Session {
             }
             other => other,
         };
-        check_redaction_view(&edit, &doc.redaction_previews, &editor.cos, &doc.info.pages)?;
+        if applies_redactions(&edit) && doc.preview_copy_failed.load(std::sync::atomic::Ordering::Relaxed) {
+            return Err(EditError::Invalid(
+                "a picture of the page couldn't draw the redaction marks as they would be applied, so they can't be applied until the document is refreshed; nothing was redacted".into(),
+            ));
+        }
+        check_redaction_view(&edit, &doc.redaction_previews, &editor.cos, &doc.info)?;
         // Nothing to bake: leave undo history and the dirty flag alone.
         if matches!(&edit, Edit::FlattenFillSign) && !pdfcraft_annot::has_visible_fill_sign(&editor.cos) {
             return Ok(());
@@ -111,14 +116,15 @@ impl Session {
         }
         cx.renamed_fields.clear();
         cx.redaction_overlays.clear();
+        cx.redaction_fallbacks.clear();
         // `next` is a copy: if the edit fails or crashes, the document is unchanged.
         guard(|| run_edit(&mut next, &edit, &mut cx))
             .unwrap_or_else(|m| Err(EditError::Invalid(format!("{} failed unexpectedly ({m}); the document was not changed", edit.label()))))?;
         // Redaction removed what its own interpreter places under the marks. The marks were drawn
         // over the page as the renderer shows it, so the renderer has the last word.
         if let Edit::ApplyRedactions { pages } = &edit {
-            let marks: Vec<pdfcraft_redact::Mark> =
-                pdfcraft_redact::marks(&editor.cos).into_iter().filter(|m| pages.as_ref().is_none_or(|p| p.contains(&m.page))).collect();
+            // The same marks applying read, scoped to its pages; a scan that can't finish refuses.
+            let marks = pdfcraft_redact::applicable_marks(&editor.cos, pages.as_deref())?;
             guard(|| shown_under_redactions(&next, &marks, &cx.redaction_overlays, &doc.info.pages, doc.password.as_deref()))
                 .unwrap_or_else(|m| Err(EditError::Invalid(format!("{} failed unexpectedly ({m}); the document was not changed", edit.label()))))?;
         }
@@ -223,7 +229,11 @@ impl Session {
         if signed && ((rewrites(&next) && !rewrites(&editor.cos)) || (next.is_modified() && next.revisions().is_empty())) {
             return Err(EditError::SignedRewrite(edit.label().to_string()));
         }
-        let notices = edit_notices(&edit, &editor.cos, &next);
+        let mut notices = edit_notices(&edit, &editor.cos, &next);
+        // Marks applied through a fallback reading are said: what went is what was shown, and how.
+        if !cx.redaction_fallbacks.is_empty() {
+            notices.push(EditNotice::RedactionFallbacks { marks: std::mem::take(&mut cx.redaction_fallbacks) });
+        }
         let previous = std::mem::replace(&mut editor.cos, next);
         let keys = keys_after(&edit).unwrap_or_else(|| editor.keys.clone());
         let previous_keys = std::mem::replace(&mut editor.keys, keys);
@@ -353,7 +363,8 @@ impl Session {
     fn refresh_scoped(doc: &mut Document, scope: Scope) -> Result<(), EditError> {
         // Whatever path follows, the checked marks are of the graph before this change until it
         // rebuilds them: never shown or applied as current meanwhile.
-        doc.redaction_previews = RedactionPreviews::Unavailable(PreviewUnavailable::Refreshing);
+        let before = std::mem::replace(&mut doc.redaction_previews, RedactionPreviews::Unavailable(PreviewUnavailable::Refreshing));
+        let copy_failed = doc.preview_copy_failed.swap(false, std::sync::atomic::Ordering::Relaxed);
         if scope == Scope::Full || doc.info.encrypted != doc.editor.as_ref().is_some_and(|e| e.cos.output_handler().is_some()) {
             return Self::refresh(doc);
         }
@@ -383,9 +394,14 @@ impl Session {
                 *field = value;
             }
             doc.info.custom = pdfcraft_organize::custom_info(&editor.cos);
-            // A metadata edit keeps the display copy (no annotation changes), but the view of the
-            // marks is still read again from the new graph.
-            doc.redaction_previews = redaction_preview::previews_for(&editor.cos, &doc.info.pages);
+            // A metadata edit keeps the display copy, which was drawn from the view before it: the
+            // view is ready again only if it was, and the new graph reads the same. A view that wasn't
+            // (a display that couldn't be drawn) stays as it was until a refresh draws the display.
+            doc.redaction_previews = match before {
+                RedactionPreviews::Available(_) if !copy_failed && redaction_preview::previews_for(&editor.cos, &doc.info) == before => before,
+                RedactionPreviews::Available(_) => RedactionPreviews::Unavailable(PreviewUnavailable::Display),
+                unavailable => unavailable,
+            };
             doc.info.file_size = bytes.len();
             #[cfg(test)]
             check_refresh_panic();
@@ -435,7 +451,7 @@ impl Session {
         doc.info.file_size = bytes.len();
         doc.form = form;
         let signatures = if doc.signatures.is_empty() { Vec::new() } else { signatures_of(&editor.cos, &bytes, &doc.trust, &doc.sig_cache) };
-        (doc.display, doc.redaction_previews) = display_bytes(Some(editor), &bytes, &doc.info.pages);
+        (doc.display, doc.redaction_previews) = display_bytes(Some(editor), &bytes, &doc.info);
         doc.signatures = Arc::new(signatures);
         doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), display_config(&doc.config));
         doc.bytes = bytes;
@@ -478,6 +494,7 @@ impl Session {
     /// appearances are kept: content edits leave every annotation dictionary alone.
     fn refresh_content(doc: &mut Document, edit: Option<&Edit>) -> Result<(), EditError> {
         doc.redaction_previews = RedactionPreviews::Unavailable(PreviewUnavailable::Refreshing);
+        doc.preview_copy_failed.store(false, std::sync::atomic::Ordering::Relaxed);
         Self::release_working(doc);
         sync_xfa_state(doc);
         let Some(editor) = doc.editor.as_mut() else { return Ok(()) };
@@ -494,7 +511,7 @@ impl Session {
         }
         doc.info.file_size = bytes.len();
         let signatures = if doc.signatures.is_empty() { Vec::new() } else { signatures_of(&editor.cos, &bytes, &doc.trust, &doc.sig_cache) };
-        (doc.display, doc.redaction_previews) = display_bytes(Some(editor), &bytes, &doc.info.pages);
+        (doc.display, doc.redaction_previews) = display_bytes(Some(editor), &bytes, &doc.info);
         doc.signatures = Arc::new(signatures);
         doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), display_config(&doc.config));
         doc.bytes = bytes;
@@ -512,6 +529,7 @@ impl Session {
     /// from the editor, never from these.
     pub(crate) fn release_working(doc: &mut Document) {
         doc.redaction_previews = RedactionPreviews::Unavailable(PreviewUnavailable::Refreshing);
+        doc.preview_copy_failed.store(false, std::sync::atomic::Ordering::Relaxed);
         let Some(original) = doc.editor.as_ref().map(|e| e.cos.bytes().clone()) else { return };
         // Dropping the pool stops its workers; each lets go of the file when it exits.
         doc.renderer = RenderPool::new_inline(Arc::new(Vec::new()), doc.config.clone());
@@ -539,6 +557,7 @@ impl Session {
 
     fn refresh_with_indexes(doc: &mut Document, invalidate_markers: bool, invalidate_links: bool) -> Result<(), EditError> {
         doc.redaction_previews = RedactionPreviews::Unavailable(PreviewUnavailable::Refreshing);
+        doc.preview_copy_failed.store(false, std::sync::atomic::Ordering::Relaxed);
         // A full refresh may follow structural or annotation changes: cached appearances
         // may be stale, so they are rebuilt below.
         if let Some(editor) = doc.editor.as_mut() {
@@ -580,7 +599,7 @@ impl Session {
             doc.links = OnceLock::new();
         }
         let signatures = signatures_of(&editor.cos, &bytes, &doc.trust, &doc.sig_cache);
-        (doc.display, doc.redaction_previews) = display_bytes(Some(editor), &bytes, &doc.info.pages);
+        (doc.display, doc.redaction_previews) = display_bytes(Some(editor), &bytes, &doc.info);
         doc.signatures = Arc::new(signatures);
         doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), display_config(&doc.config));
         doc.bytes = bytes;

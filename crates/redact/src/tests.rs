@@ -4183,3 +4183,84 @@ fn the_collector_holds_marks_without_copying_them() {
     let held = collected[0].held.as_ref().unwrap();
     assert!(Arc::ptr_eq(held, &doc.get(m.obj)), "the document's own object, not a copy");
 }
+
+/// The collector charges every mark to its budget before it keeps it: past the budget it stops
+/// with an error, having kept no more than the budget allows (never every mark, then a check).
+#[test]
+fn the_collector_is_bounded_before_it_keeps_a_mark() {
+    let mut doc = one_page(b"BT /F1 10 Tf 10 100 Td (AB1234CD) Tj ET", "", vec![]);
+    for _ in 0..40 {
+        mark(&mut doc, 0, &[[20.0, 95.0, 40.0, 110.0]], "");
+    }
+    let (all, kept) = preview::tests::candidates(|| preview::collect(&doc, None).map(|c| c.len()));
+    assert_eq!((all, kept), (Ok(40), 40));
+    // A budget of about ten marks: it stops at the eleventh, before keeping it.
+    let budget = 10 * 512;
+    let (out, kept) = preview::tests::candidates(|| preview::collect_within(&doc, None, budget).map(|c| c.len()));
+    assert_eq!(out, Err(MarkScanError::PreviewLimit));
+    assert!(kept < 40 && kept * 64 <= budget, "kept {kept}");
+}
+
+/// Marks written in place are read where they are listed: an inline mark with more QuadPoints
+/// than one mark may have is refused whole, on a page of inline marks read once.
+#[test]
+fn inline_marks_are_read_in_place_and_capped() {
+    let mut doc = one_page(b"BT /F1 10 Tf 10 100 Td (AB1234CD) Tj ET", "", vec![]);
+    let mut big = Dict::new();
+    big.set(b"Type".to_vec(), Object::name("Annot"));
+    big.set(b"Subtype".to_vec(), Object::name("Redact"));
+    big.set(b"Rect".to_vec(), Object::Array([20, 95, 40, 110].map(Object::Int).to_vec()));
+    big.set(b"QuadPoints".to_vec(), Object::Array(vec![Object::Int(1); pdfcraft_annot::redaction::MAX_QUADPOINT_VALUES + 8]));
+    let annots = vec![Object::Dict(big.clone()), Object::Dict(big)];
+    doc.update_dict(ObjRef::new(3, 0), |d| d.set(b"Annots".to_vec(), Object::Array(annots))).unwrap();
+    let (p, kept) = preview::tests::candidates(|| mark_previews(&doc, None).unwrap());
+    assert_eq!(kept, 2);
+    assert!(p.iter().all(|p| p.areas == Err(MarkRefusal::Geometry(MarkAreaError::TooManyValues)) && p.object.is_none()));
+}
+
+/// A Redact whose /Subtype is a reference is a Redact for every decision redaction makes: listed
+/// and refused (not skipped), and removal never takes it for another annotation.
+#[test]
+fn an_indirect_subtype_is_a_refused_mark() {
+    let mut doc = one_page(b"BT /F1 10 Tf 10 100 Td (AB1234CD) Tj ET", "", vec![]);
+    mark(&mut doc, 0, &[[20.0, 95.0, 40.0, 110.0]], "");
+    let m = marks(&doc).swap_remove(0);
+    let name = doc.add(Object::name("Redact"));
+    doc.update_dict(m.obj, |d| d.set(b"Subtype".to_vec(), Object::Ref(name))).unwrap();
+    let p = mark_previews(&doc, None).unwrap();
+    assert_eq!((p.len(), p[0].areas.clone()), (1, Err(MarkRefusal::IndirectSubtype)));
+    assert_eq!(p[0].locator, Some([20.0, 95.0, 40.0, 110.0]));
+    assert_eq!(apply(&mut doc, None), Err(RedactError::UnreadableMark(1)));
+    assert!(content(&doc, 0).contains("(AB1234CD) Tj"));
+}
+
+/// Clear all removes every mark the collector lists, those that can't be applied included.
+#[test]
+fn clearing_takes_refused_marks_too() {
+    let mut doc = one_page(b"BT /F1 10 Tf 10 100 Td (AB1234CD) Tj ET", "", vec![]);
+    mark(&mut doc, 0, &[[20.0, 95.0, 40.0, 110.0]], "");
+    mark(&mut doc, 0, &[[10.0, 95.0, 20.0, 110.0]], "");
+    let bad = marks(&doc)[1].obj;
+    doc.update_dict(bad, |d| {
+        d.set(b"QuadPoints".to_vec(), Object::name("oops"));
+        d.remove(b"Rect");
+    })
+    .unwrap();
+    assert_eq!(marks(&doc).len(), 1);
+    assert_eq!(clear_marks(&mut doc, None), Ok(2));
+    assert!(mark_previews(&doc, None).unwrap().is_empty());
+}
+
+/// The report lists a mark applied through a fallback reading.
+#[test]
+fn the_report_lists_fallback_readings() {
+    let mut doc = one_page(b"BT /F1 10 Tf 10 100 Td (AB1234CD) Tj ET", "", vec![]);
+    mark(&mut doc, 0, &[[20.0, 95.0, 40.0, 110.0]], "");
+    mark(&mut doc, 0, &[[46.0, 95.0, 50.0, 110.0]], "");
+    let m = marks(&doc).swap_remove(0);
+    doc.update_dict(m.obj, |d| d.set(b"QuadPoints".to_vec(), pdfcraft_cos::Lexer::new(b"[null 110 40 110 20 95 40 95]", 0).object().unwrap()))
+        .unwrap();
+    let r = apply(&mut doc, None).unwrap();
+    assert_eq!(r.fallbacks.len(), 1, "only the mark read through its /Rect");
+    assert_eq!((r.fallbacks[0].obj, r.fallbacks[0].reading.used_rect), (m.obj, true));
+}

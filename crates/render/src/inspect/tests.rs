@@ -1184,6 +1184,9 @@ fn lazy_structure_matches_the_compatibility_inspector() {
         assert_eq!(format!("{b:?}"), format!("{c:?}"));
         a.file_size = 0;
         a.pdf_version.clear();
+        // Like the page geometry, the page identities are the renderer's, not inspection's.
+        assert_eq!(a.page_objects.len(), a.pages.len());
+        a.page_objects.clear();
         assert_eq!(format!("{a:?}"), format!("{c:?}"));
     }
 }
