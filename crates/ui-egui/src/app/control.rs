@@ -16,6 +16,18 @@ impl PdfCraftApp {
     pub fn set_option(&mut self, key: &str, value: &str) -> Result<(), String> {
         let view = self.active.and_then(|i| self.views.get_mut(i));
         match (key, view) {
+            ("hotbar-size", _) => {
+                let size: f32 = value.parse().map_err(|_| "hotbar-size must be 24–64 pixels")?;
+                if !size.is_finite() || !(24.0..=64.0).contains(&size) {
+                    return Err("hotbar-size must be 24–64 pixels".into());
+                }
+                self.hotbar.button_size = size;
+            }
+            ("hotbar-full-side", _) => {
+                self.hotbar.full_side = value.parse().map_err(|_| "hotbar-full-side must be true or false")?;
+            }
+            ("hotbar-tools", _) => self.hotbar.set_tools(value)?,
+            ("hotbar-side", _) => self.hotbar.place(value)?,
             ("language", _) => {
                 let language = i18n::normalize_pref(value).ok_or_else(|| {
                     let codes: Vec<&str> = std::iter::once(i18n::AUTO).chain(i18n::Lang::all().map(i18n::Lang::code)).collect();
@@ -32,8 +44,14 @@ impl PdfCraftApp {
                 };
                 self.set_theme_preference(preference);
             }
+            ("show_page_edge_shadows", _) => {
+                self.show_page_edge_shadows = value.parse::<bool>().map_err(|_| "show_page_edge_shadows must be true or false")?;
+            }
             ("scroll_speed", _) => {
                 self.scroll_speed = scroll_speed::ScrollSpeed::parse(value).ok_or("scroll_speed must be slow, normal, or fast")?;
+            }
+            ("invert_middle_drag", _) => {
+                self.invert_middle_drag = value.parse::<bool>().map_err(|_| "invert_middle_drag must be true or false")?;
             }
             ("animation_effects", _) => {
                 self.animation_effects = motion::AnimationEffects::parse(value).ok_or("animation_effects must be system, on, or off")?;
@@ -167,6 +185,12 @@ impl PdfCraftApp {
                     _ => return Err("default-page-gaps must be on or off".into()),
                 };
             }
+            ("recent-files", _) => {
+                let max = crate::RECENT_FILES_MAX;
+                let limit = value.parse().ok().filter(|n| *n <= max).ok_or_else(|| format!("recent-files must be between 0 and {max}"))?;
+                self.recent_limit = limit;
+                self.recent.truncate(limit);
+            }
             ("cover", Some(v)) => {
                 let on = match value {
                     "on" => true,
@@ -206,6 +230,13 @@ impl PdfCraftApp {
                     "left" => side_panels::ToolsSide::Left,
                     "right" => side_panels::ToolsSide::Right,
                     _ => return Err("tools-side must be left or right".into()),
+                }
+            }
+            ("rail-side", _) => {
+                self.side_panels.rail_side = match value {
+                    "left" => side_panels::ToolsSide::Left,
+                    "right" => side_panels::ToolsSide::Right,
+                    _ => return Err("rail-side must be left or right".into()),
                 }
             }
             ("organize", Some(v)) => {
@@ -268,7 +299,7 @@ impl PdfCraftApp {
             }
             ("notice", Some(v)) => v.notice_dismissed = value == "off",
             ("quick", _) => {
-                // `--quick select|hand|note|freetext|highlight|underline|strikeout|ink|line|arrow|square|circle`
+                // Custom stamps accept explicit ID/index forms; `custom-stamp-N` remains a legacy index.
                 self.quick_tool = match value {
                     "select" => QuickTool::Select,
                     measure if measure.starts_with("measure-") => QuickTool::Measure(
@@ -286,15 +317,24 @@ impl PdfCraftApp {
                     "snapshot" => QuickTool::Snapshot,
                     "column-select" => QuickTool::ColumnSelect,
                     "certify" => QuickTool::SignArea { certify: true },
-                    custom if custom.starts_with("custom-stamp-") => {
-                        let key = &custom[13..];
+                    custom if custom.starts_with("custom-stamp-id-") => {
+                        let key = custom.strip_prefix("custom-stamp-id-").unwrap_or_default();
                         let id = key
                             .parse::<u64>()
                             .ok()
                             .filter(|id| self.custom_stamps.iter().any(|stamp| stamp.id == *id))
-                            .or_else(|| key.parse::<usize>().ok().and_then(|index| self.custom_stamps.get(index).map(|stamp| stamp.id)))
-                            .ok_or_else(|| format!("unknown custom stamp {key}; there are {} custom stamps", self.custom_stamps.len()))?;
+                            .ok_or_else(|| format!("unknown custom stamp ID {key}"))?;
                         QuickTool::CustomStamp(id)
+                    }
+                    custom if custom.starts_with("custom-stamp-index-") => {
+                        let key = custom.strip_prefix("custom-stamp-index-").unwrap_or_default();
+                        let id = key.parse::<usize>().ok().and_then(|index| self.custom_stamps.get(index).map(|stamp| stamp.id));
+                        QuickTool::CustomStamp(id.ok_or_else(|| format!("unknown custom stamp index {key}; there are {} custom stamps", self.custom_stamps.len()))?)
+                    }
+                    custom if custom.starts_with("custom-stamp-") => {
+                        let key = custom.strip_prefix("custom-stamp-").unwrap_or_default();
+                        let id = key.parse::<usize>().ok().and_then(|index| self.custom_stamps.get(index).map(|stamp| stamp.id));
+                        QuickTool::CustomStamp(id.ok_or_else(|| format!("unknown custom stamp index {key}; there are {} custom stamps", self.custom_stamps.len()))?)
                     }
                     stamp if stamp.starts_with("stamp-") => QuickTool::Stamp(
                         pdfcraft_engine::StampKind::ALL
@@ -399,5 +439,34 @@ impl PdfCraftApp {
             (other, _) => return Err(format!("unknown option {other}")),
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn stamp(id: u64, name: &str) -> crate::tools::stamps_ui::CustomStamp {
+        crate::tools::stamps_ui::CustomStamp {
+            id,
+            category: "Test".into(),
+            name: name.into(),
+            file: "test.png".into(),
+            page: 0,
+            data: std::sync::Arc::new(Vec::new()),
+        }
+    }
+
+    #[test]
+    fn custom_stamp_quick_keys_distinguish_ids_from_indexes() {
+        let mut app = PdfCraftApp::new();
+        app.custom_stamps = vec![stamp(1, "First"), stamp(77, "Second")];
+
+        app.set_option("quick", "custom-stamp-1").expect("legacy index is accepted");
+        assert_eq!(app.quick_tool, QuickTool::CustomStamp(77));
+        app.set_option("quick", "custom-stamp-index-1").expect("explicit index is accepted");
+        assert_eq!(app.quick_tool, QuickTool::CustomStamp(77));
+        app.set_option("quick", "custom-stamp-id-1").expect("explicit ID is accepted");
+        assert_eq!(app.quick_tool, QuickTool::CustomStamp(1));
     }
 }

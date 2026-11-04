@@ -1,5 +1,6 @@
 //! Add a stamp: the palette and placing stamps on the page.
 
+use egui::{Key, Modifiers};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use pdfcraft_ui_egui::{PdfCraftApp, QuickTool};
@@ -139,4 +140,61 @@ fn creating_placing_and_keeping_custom_stamps() {
     assert_eq!(again.custom_stamps.len(), 1);
     assert_eq!((again.custom_stamps[0].category.as_str(), again.custom_stamps[0].name.as_str()), ("Company", "logo"));
     assert_eq!(again.custom_stamps[0].data, s.custom_stamps[0].data);
+}
+
+#[test]
+fn editing_a_saved_custom_stamp_through_its_palette_updates_it_and_cancel_discards_changes() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
+        app.set_option("zoom", "150").unwrap();
+        app
+    });
+    h.run_steps(6);
+    assert!(h.state_mut().execute("comment.stamp"));
+    h.run_steps(2);
+    let mut png = Vec::new();
+    image::RgbImage::from_pixel(60, 20, image::Rgb([20, 120, 220]))
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .unwrap();
+    h.state_mut().start_custom_stamp("logo.png".into(), png);
+    h.run_steps(2);
+    h.get_by_label("Create Custom Stamp");
+    h.state_mut().stamp_draft.category = "Company".into();
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+
+    h.get_by_label("logo").click_secondary();
+    h.run_steps(2);
+    h.get_by_label("Rename / change category…").click();
+    h.run_steps(3);
+    h.get_by_label("Edit Custom Stamp");
+    h.get_by_value("logo").click();
+    h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+    h.run_steps(1);
+    h.get_by_value("logo").type_text("Renamed");
+    h.get_by_value("Company").click();
+    h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+    h.run_steps(1);
+    h.get_by_value("Company").type_text("Moved");
+    h.get_by_label("Save").click();
+    h.run_steps(3);
+    assert_eq!((h.state().custom_stamps[0].name.as_str(), h.state().custom_stamps[0].category.as_str()), ("Renamed", "Moved"));
+
+    h.get_by_label("Renamed").click_secondary();
+    h.run_steps(2);
+    h.get_by_label("Rename / change category…").click();
+    h.run_steps(3);
+    h.get_by_value("Renamed").click();
+    h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+    h.run_steps(1);
+    h.get_by_value("Renamed").type_text("Discarded");
+    h.get_by_value("Moved").click();
+    h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+    h.run_steps(1);
+    h.get_by_value("Moved").type_text("Discarded");
+    h.get_by_label("Cancel").click();
+    h.run_steps(3);
+    assert_eq!((h.state().custom_stamps[0].name.as_str(), h.state().custom_stamps[0].category.as_str()), ("Renamed", "Moved"));
 }
