@@ -61,7 +61,7 @@ use vello_cpu::{Level, Pixmap, RenderMode};
 
 mod renderer;
 /// PdfCraft patch: exported for its regression test.
-pub use renderer::{image_resampling_size, tiling_cell_scale};
+pub use renderer::{image_resampling_size, tiling_cell_pixels, tiling_cell_scale, usable_cell_scale};
 /// PdfCraft patch: exported for its regression test.
 #[doc(hidden)]
 pub use renderer::set_skip_offscreen_paths;
@@ -254,15 +254,20 @@ pub fn render_into<'a>(
         interpreter_settings.preview,
     );
 
-    // PdfCraft patch (18): the page renders as one transparency group with the background
-    // painted *inside* it, as the initial backdrop. A group isolates what it wraps from what
-    // was painted before it, so with the background outside, a Multiply highlight blended
-    // only with the group's transparent backdrop and stayed its own colour — over a dark
-    // reading-colours background the whole quad became one flat bar and the words under it
-    // vanished. Inside the group the highlight multiplies with the background too: the words
-    // keep the highlight's colour and the band between them takes the background (white
-    // backgrounds are unaffected — multiplying with white is the identity).
-    device.push_transparency_group(1.0, None, BlendMode::Normal);
+    // PdfCraft patch (18): the page renders as one transparency group (the page group). Its
+    // objects composite with an initially transparent backdrop, and the group is then put on
+    // the paper (ISO 32000-2, page group), so a blend mode only blends where something was
+    // drawn: a /BM /Screen fill over an empty part of the page keeps its colour (#2970).
+    // Under reading colours the background is painted *inside* the group instead, as its
+    // initial backdrop, so a Multiply highlight blends with the dark background: outside it,
+    // the highlight kept its own flat colour and the words under it vanished into the band
+    // (#1548). Reading colours replace the page's colours anyway; for document colours the
+    // background stays outside, or every separable mode but Normal, Multiply, Darken and
+    // HardLight would blend with the white paper.
+    let backdrop_inside = render_settings.color_replacement.is_some();
+    if backdrop_inside {
+        device.push_transparency_group(1.0, None, BlendMode::Normal);
+    }
 
     device.ctx.set_paint(render_settings.bg_color);
     device
@@ -274,11 +279,19 @@ pub fn render_into<'a>(
         path: clip_path,
         fill: FillRule::NonZero,
     });
+    if !backdrop_inside {
+        device.push_transparency_group(1.0, None, BlendMode::Normal);
+    }
 
     interpret_page(page, &mut state, &mut device);
 
+    if !backdrop_inside {
+        device.pop_transparency_group();
+    }
     device.pop_clip_path();
-    device.pop_transparency_group();
+    if backdrop_inside {
+        device.pop_transparency_group();
+    }
 
     let mut resources = vello_cpu::Resources::default();
     device.ctx.render_to_buffer(
@@ -673,5 +686,139 @@ mod color_replacement_render_tests {
         let no_line_art = render_stencil_on(BLACK, Some(replacement(false)));
         assert_eq!(sample(&no_line_art, 5, 5), [0, 0, 0, 255]);
         assert_eq!(sample(&no_line_art, 40, 25), [0, 0, 0, 255]);
+    }
+}
+
+/// PdfCraft patch (19): a mesh shading paints its triangles alone (`EncodedShadingPattern::extent`),
+/// and one with no triangle on the canvas paints nothing.
+#[cfg(test)]
+mod mesh_extent_tests {
+    use super::{InterpreterSettings, Pdf, Pixmap, RenderCache, RenderSettings, render};
+    use vello_cpu::color::palette::css::WHITE;
+
+    /// A one-page 200×200 pt PDF whose content is `body`, with a type 4 (free-form triangle)
+    /// shading `/Sh0`: one red triangle with corners (x0, y0), (x1, y0) and (x0, y1) in user
+    /// space, and an ExtGState `/Half` with 50% alpha.
+    fn fixture(body: &str, (x0, y0, x1, y1): (i32, i32, i32, i32)) -> Vec<u8> {
+        // Three vertices: a flag, x and y (8 bits each, decoded into the ranges) and RGB.
+        let mesh: [u8; 18] = [
+            0, 0, 0, 255, 0, 0, //
+            0, 255, 0, 255, 0, 0, //
+            0, 0, 255, 255, 0, 0,
+        ];
+        let mut objs: Vec<Vec<u8>> = vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Shading << /Sh0 5 0 R >> \
+              /ExtGState << /Half << /ca 0.5 /CA 0.5 >> >> >> >>"
+                .to_vec(),
+            format!("<< /Length {} >>\nstream\n{body}\nendstream", body.len()).into_bytes(),
+        ];
+        let mut shading = format!(
+            "<< /ShadingType 4 /ColorSpace /DeviceRGB /BitsPerCoordinate 8 /BitsPerComponent 8 \
+             /BitsPerFlag 8 /Decode [{x0} {x1} {y0} {y1} 0 1 0 1 0 1] /Length {} >>\nstream\n",
+            mesh.len()
+        )
+        .into_bytes();
+        shading.extend_from_slice(&mesh);
+        shading.extend_from_slice(b"\nendstream");
+        objs.push(shading);
+
+        let mut out = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, o) in objs.iter().enumerate() {
+            offsets.push(out.len());
+            out.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+            out.extend_from_slice(o);
+            out.extend_from_slice(b"\nendobj\n");
+        }
+        let xref = out.len();
+        out.extend_from_slice(
+            format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes(),
+        );
+        for o in offsets {
+            out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+        }
+        out.extend_from_slice(
+            format!(
+                "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n",
+                objs.len() + 1
+            )
+            .as_bytes(),
+        );
+        out
+    }
+
+    fn render_at(pdf: Vec<u8>, scale: f32) -> Pixmap {
+        let pdf = Pdf::new(pdf).unwrap();
+        let cache = RenderCache::new();
+        let settings = RenderSettings {
+            x_scale: scale,
+            y_scale: scale,
+            bg_color: WHITE,
+            ..RenderSettings::default()
+        };
+        render(
+            pdf.pages().get(0).expect("the fixture has one page"),
+            &cache,
+            &InterpreterSettings::default(),
+            &settings,
+        )
+    }
+
+    fn px(pixmap: &Pixmap, x: u16, y: u16) -> [u8; 4] {
+        let p = pixmap.sample(x, y);
+        [p.r, p.g, p.b, p.a]
+    }
+
+    fn inked(pixmap: &Pixmap) -> usize {
+        (0..pixmap.height())
+            .flat_map(|y| (0..pixmap.width()).map(move |x| (x, y)))
+            .filter(|&(x, y)| px(pixmap, x, y) != [255, 255, 255, 255])
+            .count()
+    }
+
+    /// The triangle (100, 100)–(110, 100)–(100, 110) in a 200 pt page: in device space (y
+    /// down) the pixel (102, 97) is inside it, (108, 91) past its hypotenuse, and the rest of
+    /// the page is nowhere near it.
+    #[test]
+    fn a_mesh_paints_its_triangles_alone() {
+        let white = [255, 255, 255, 255];
+        for scale in [1.0_f32, 4.0] {
+            let p = render_at(fixture("/Sh0 sh", (100, 100, 110, 110)), scale);
+            let at = |x: f32, y: f32| ((x * scale) as u16, (y * scale) as u16);
+            let (x, y) = at(102.5, 97.5);
+            assert_eq!(px(&p, x, y), [255, 0, 0, 255], "scale {scale}: inside the triangle");
+            let (x, y) = at(108.5, 91.5);
+            assert_eq!(px(&p, x, y), white, "scale {scale}: past the hypotenuse");
+            let (x, y) = at(150.0, 50.0);
+            assert_eq!(px(&p, x, y), white, "scale {scale}: far from it");
+            let (x, y) = at(10.0, 190.0);
+            assert_eq!(px(&p, x, y), white, "scale {scale}: the texture is not repeated");
+            // A 10 × 10 pt right triangle covers 50 pt²; the sampler counts the pixels whose
+            // corner lies inside it (36 at scale 1, nearer 50 as the scale grows), and nothing
+            // beyond its own bounding box is touched.
+            let area = inked(&p) as f32 / (scale * scale);
+            assert!((30.0..=60.0).contains(&area), "scale {scale}: {area} pt² inked");
+        }
+    }
+
+    /// The alpha of the graphics state still applies: red at 50% over white is pink.
+    #[test]
+    fn a_mesh_keeps_the_graphics_state_alpha() {
+        let p = render_at(fixture("/Half gs /Sh0 sh", (100, 100, 110, 110)), 1.0);
+        let [r, g, b, a] = px(&p, 102, 97);
+        assert!(r == 255 && (120..=136).contains(&g) && g == b && a == 255, "{:?}", [r, g, b, a]);
+    }
+
+    /// A mesh whose triangle lies off the canvas paints nothing, and costs no texture.
+    #[test]
+    fn a_mesh_off_the_canvas_paints_nothing() {
+        let p = render_at(fixture("/Sh0 sh", (300, 300, 310, 310)), 1.0);
+        assert_eq!(inked(&p), 0);
+        // One straddling the edge paints its part on the canvas.
+        let p = render_at(fixture("/Sh0 sh", (195, 100, 205, 110)), 1.0);
+        assert_eq!(px(&p, 196, 98), [255, 0, 0, 255]);
+        assert_eq!(px(&p, 150, 50), [255, 255, 255, 255]);
     }
 }

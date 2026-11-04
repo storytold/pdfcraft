@@ -75,20 +75,31 @@ impl Stamp {
     }
 
     pub fn from_unix(secs: i64) -> Self {
-        let days = secs.div_euclid(86_400);
-        let rem = secs.rem_euclid(86_400);
+        let (days, rem) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
         let (h, mi, s) = (rem / 3600, rem % 3600 / 60, rem % 60);
-        // Civil-from-days (Howard Hinnant's algorithm).
-        let z = days + 719_468;
-        let era = z.div_euclid(146_097);
-        let doe = z - era * 146_097;
-        let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-        let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-        let mp = (5 * doy + 2) / 153;
-        let d = doy - (153 * mp + 2) / 5 + 1;
-        let m = if mp < 10 { mp + 3 } else { mp - 9 };
-        let y = yoe + era * 400 + i64::from(m <= 2);
+        let (y, m, d) = Self::civil_from_days(days);
+        // `{y:04}` rather than `%Y`, which writes a `+` before years past 9999.
         Stamp { unix: secs, pdf: format!("D:{y:04}{m:02}{d:02}{h:02}{mi:02}{s:02}Z"), iso: format!("{y:04}-{m:02}-{d:02}T{h:02}:{mi:02}:{s:02}Z") }
+    }
+
+    /// Days since 1970-01-01 → proleptic Gregorian (year, month, day).
+    ///
+    /// Past `NaiveDate`'s ±262143-year range the old hand-rolled converter still produced a date,
+    /// which both stamps formatted directly; a `from_timestamp` epoch fallback would change it.
+    /// The Gregorian calendar repeats every 400 years (146_097 days), so chrono converts the day
+    /// within one cycle and whole cycles go back into the year (an `i128` so the extremes can't
+    /// overflow), keeping chrono as the only calendar logic. 1970-01-01 is `num_days_from_ce` 719_163.
+    fn civil_from_days(days: i64) -> (i64, u32, u32) {
+        use chrono::Datelike;
+        let (cycles, rest) = (days.div_euclid(146_097), days.rem_euclid(146_097));
+        // `rest + 719_163` is 719_163..865_259, always a valid CE day.
+        match i32::try_from(rest + 719_163).ok().and_then(chrono::NaiveDate::from_num_days_from_ce_opt) {
+            Some(d) => {
+                let y = i128::from(d.year()) + i128::from(cycles) * 400;
+                (i64::try_from(y).unwrap_or(if y < 0 { i64::MIN } else { i64::MAX }), d.month(), d.day())
+            }
+            None => (1970, 1, 1), // unreachable
+        }
     }
 
     /// The same moment shifted by `minutes` (used to order threaded replies).
@@ -429,6 +440,14 @@ mod tests {
         assert_eq!(s.iso, "2026-09-21T14:13:20Z");
         assert_eq!(s.plus_minutes(0).pdf, s.pdf);
         assert_eq!(s.plus_minutes(60 * 24).iso, "2026-09-22T14:13:20Z");
+        // Years past 9999 keep the plain zero-padded year (no `+`).
+        assert_eq!(Stamp::from_unix(253_402_300_800).iso, "10000-01-01T00:00:00Z");
+        assert_eq!(Stamp::from_unix(253_402_300_800).pdf, "D:100000101000000Z");
+        // Past chrono's ±262143-year range the proleptic Gregorian date is kept, not the epoch.
+        // Pinned to the old hand-rolled output (no year clamp — a negative year keeps its sign).
+        assert_eq!(Stamp::from_unix(10_000_000_000_000).iso, "318857-05-20T17:46:40Z");
+        assert_eq!(Stamp::from_unix(10_000_000_000_000).pdf, "D:3188570520174640Z");
+        assert_eq!(Stamp::from_unix(-10_000_000_000_000).iso, "-314918-08-13T06:13:20Z");
     }
 
     #[test]
