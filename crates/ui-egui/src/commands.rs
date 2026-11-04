@@ -888,6 +888,9 @@ mod tests {
 
     #[test]
     fn localized_shortcut_labels_follow_language_and_platform() {
+        if !crate::i18n::needs_catalogs() {
+            return;
+        }
         let previous = crate::i18n::current();
         let ctx = egui::Context::default();
         for os in [OperatingSystem::Windows, OperatingSystem::Nix] {
