@@ -162,6 +162,13 @@ fn every_registered_command_is_implemented() {
         // A picker the list above misses (file.pin_folder, create.multiple_separate did) must not
         // open a real file dialog on the desktop running the tests: answer it as a cancel.
         app.pick_override = Some(Vec::new());
+        if spec.id == "file.detach_tab" {
+            // This harness has no native window host. The host-enabled command is exercised by
+            // tab_windows::tests::tear_off_close_uses_save_discard_cancel_and_does_not_close_other_windows.
+            assert!(!app.can_detach_tab(app.views[0].id));
+            assert!(!app.execute(spec.id));
+            continue;
+        }
         assert!(app.execute(spec.id), "{} is registered but not implemented (or wrongly disabled)", spec.id);
     }
 }

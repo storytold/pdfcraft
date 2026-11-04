@@ -295,7 +295,11 @@ impl PdfCraftApp {
     pub fn autosave_now(&mut self) {
         let Some(store) = self.recovery.clone() else { return };
         for snap in self.session.autosave_snapshots() {
-            let key = self.recovery_keys.entry(snap.doc).or_insert_with(|| format!("{}-{}-{}", now_secs(), std::process::id(), snap.doc.0)).clone();
+            let key = self
+                .recovery_keys
+                .entry(snap.doc)
+                .or_insert_with(|| format!("{}-{}-{}-{}", now_secs(), std::process::id(), snap.doc.0, CLAIMS.fetch_add(1, Ordering::Relaxed)))
+                .clone();
             let meta =
                 RecoveryMeta { key, name: snap.name, path: snap.path, saved_at: now_secs(), encrypted: snap.encrypted, instance: store.instance() };
             if let Err(e) = store.write(&meta, &snap.bytes) {

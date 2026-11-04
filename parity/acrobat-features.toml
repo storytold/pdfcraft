@@ -10285,3 +10285,15 @@ commands = []
 tools = []
 evidence = []
 notes = ""
+
+[[feature]]
+id = "core.tab-tear-off"
+title = "Move a document tab into a separate native window"
+area = "A"
+tier = "P2"
+milestone = "M3"
+status = "partial"
+commands = ["file.detach_tab"]
+tools = []
+evidence = ["crates/ui-egui/src/tab_windows.rs::tear_off_preserves_working_bytes_undo_redo_view_and_recovery_identity", "crates/ui-egui/src/tab_windows.rs::tear_off_raw_drag_queues_only_outside_strip_and_escape_cancels", "crates/ui-egui/src/tab_windows.rs::tear_off_keeps_horizontal_reordering_and_strip_edge_scrolling", "crates/ui-egui/src/tab_windows.rs::tear_off_close_uses_save_discard_cancel_and_does_not_close_other_windows", "crates/ui-egui/src/tab_windows.rs::window_drop_tab_move_keeps_identity_view_recovery_and_target_order", "crates/ui-egui/src/tab_windows.rs::window_drop_organize_copies_current_pages_at_gap_and_undo_keeps_source"]
+notes = "Windows native viewport host; normal tab reordering retained. UI control: file.detach_tab. Moves the live document and view, preserving unsaved edits, Undo/Redo and recovery. Drops onto another managed window's tab bar move the live tab; Organize drops copy current PDF pages with Undo. Other hosts, separate processes, and restoring multi-window layout are not implemented. See docs/tab-windows.md."
