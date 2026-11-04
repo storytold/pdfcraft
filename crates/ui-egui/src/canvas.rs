@@ -69,7 +69,8 @@ use xform::snap_to_pixels;
 use zoom::anchored_scroll;
 pub use zoom::{GRID_ZOOM_RANGE, THUMBNAIL_ZOOM_RANGE};
 
-/// Logical pixels per PDF point at 100% (96 dpi, like browsers).
+/// Logical pixels per PDF point at 100% on the standard basis (96 dpi, like browsers). A view
+/// draws at its own [`DocView::pt`], which a calibrated screen resolution changes ([`crate::screen_ppi`]).
 pub const PT: f32 = 96.0 / 72.0;
 const GAP: f32 = 14.0;
 const MARGIN: f32 = 28.0;
@@ -459,6 +460,9 @@ pub(crate) fn snapshot_tab_name(title: &str, file_name: &str, snapshot: &Snapsho
 pub struct DocView {
     pub id: DocId,
     pub zoom: f32,
+    /// Logical pixels per PDF point at 100%: [`PT`], or the screen's calibrated resolution
+    /// ([`crate::screen_ppi::basis`]), set by the app every frame.
+    pub pt: f32,
     pub fit: Fit,
     pub layout: PageLayout,
     /// Whether the base layout scrolls continuously (independent of `layout`, as in Acrobat).
@@ -896,6 +900,7 @@ impl DocView {
         Self {
             id,
             zoom: defaults.zoom,
+            pt: PT,
             fit: defaults.fit,
             layout: defaults.layout,
             continuous: defaults.continuous,

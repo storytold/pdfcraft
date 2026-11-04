@@ -133,6 +133,8 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
             Dialog::FieldProps | Dialog::BulkFieldProps => 600.0,
             Dialog::Preferences => 610.0,
             Dialog::About => 780.0,
+            // As long a line to measure as the window allows: a 0.5 mm misreading over 25 cm is 0.2%.
+            Dialog::CalibrateScreen => (ctx.content_rect().width() - 120.0).max(520.0),
             Dialog::PinTool => 540.0,
             _ => 520.0,
         });
@@ -380,6 +382,10 @@ fn dialog_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: &m
         Dialog::DocumentJs => {
             ui.set_width(640.0);
             req.close = crate::js_ui::document_js_body(ui, app, &t);
+            return false;
+        }
+        Dialog::CalibrateScreen => {
+            req.next = Some(crate::screen_ppi::calibrate_body(ui, app, &t));
             return false;
         }
         Dialog::Preferences => {
@@ -1375,6 +1381,11 @@ fn dialog_preferences(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pendin
     // A scrollbar of its own: the floating one lies over the right edge of the theme
     // cards and other full-width rows (#3557).
     preferences_scroll(ui, max, |ui| preferences::preferences_body(ui, app, &t));
+    // Screen resolution ▸ Calibrate… opens its own window in place of Preferences.
+    if let Some(d) = app.dialog.filter(|d| *d == Dialog::CalibrateScreen) {
+        req.next = Some(d);
+        return false;
+    }
     req.close = preferences::preferences_buttons(ui);
     false
 }

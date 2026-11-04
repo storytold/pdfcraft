@@ -962,8 +962,8 @@ milestone = "M3"
 status = "shipped"
 commands = []
 tools = []
-evidence = ["crates/ui-egui/tests/it/ui.rs::selection_works_in_every_view_rotation", "crates/ui-egui/tests/it/view.rs::the_rail_zoom_field_sets_a_typed_zoom"]
-notes = "Typed into the right rail's zoom field (150, 150% or 62.5 %, Enter applies, Escape discards, clamped to 8–6400%) or set through the control channel's zoom option; no preset dropdown in the field yet. PdfCraft draws a percentage on its fixed 96-dpi basis: 96/72 logical pixels per PDF point at 100%. Acrobat draws it at its Page Display resolution, with logical pixels per PDF point = ppi / 72 × zoom (checked black-box with Custom resolutions of 96, 110 and 120 ppi on one display), so the same percentage can differ in size. Acrobat's Use System Setting resolution is not reproduced. Tracked with misc.prefs-page-display"
+evidence = ["crates/ui-egui/tests/it/ui.rs::selection_works_in_every_view_rotation", "crates/ui-egui/tests/it/view.rs::the_rail_zoom_field_sets_a_typed_zoom", "crates/ui-egui/tests/it/view.rs::a_calibrated_screen_draws_actual_size_at_its_real_size_and_keeps_fits"]
+notes = "Typed into the right rail's zoom field (150, 150% or 62.5 %, Enter applies, Escape discards, clamped to 8–6400%) or set through the control channel's zoom option; no preset dropdown in the field yet. A percentage scales the screen-resolution basis (Preferences ▸ Documents and view ▸ Screen resolution, #739): Standard is 96/72 logical pixels per PDF point at 100%; a Custom or calibrated resolution, in device pixels per inch, gives ppi / pixels-per-point / 72, as Acrobat's Page Display resolution gives ppi / 72 × zoom (checked black-box with Custom resolutions of 96, 110 and 120 ppi on one display). Unlike Acrobat, a Custom value is stored as a physical density, so it keeps a page's size when the display scaling changes. Acrobat's Use System Setting resolution is not reproduced."
 
 [[feature]]
 id = "view.zoom-actual-size"
@@ -974,8 +974,8 @@ milestone = "M3"
 status = "shipped"
 commands = []
 tools = []
-evidence = ["crates/ui-egui/tests/it/view.rs::actual_size_fit_width_and_fit_page"]
-notes = "Actual size is 100% on PdfCraft's fixed 96-dpi basis: 96/72 logical pixels per PDF point. Acrobat's Actual Size uses its Page Display resolution (ppi / 72 logical pixels per PDF point at 100%), which PdfCraft does not offer yet, so the two can draw a page at different sizes. Tracked with misc.prefs-page-display"
+evidence = ["crates/ui-egui/tests/it/view.rs::actual_size_fit_width_and_fit_page", "crates/ui-egui/tests/it/view.rs::a_calibrated_screen_draws_actual_size_at_its_real_size_and_keeps_fits"]
+notes = "Actual size is 100% on the screen-resolution basis: 96 dpi by default, or a Custom resolution, which Calibrate… measures with a ruler so the page shows at its real size on the glass (#739). Missing: a resolution per monitor (one value for every screen) and Acrobat's Use System Setting."
 
 [[feature]]
 id = "view.zoom-fit-page"
@@ -9959,8 +9959,8 @@ milestone = "M14"
 status = "partial"
 commands = []
 tools = []
-evidence = ["crates/ui-egui/tests/page_shadows.rs::viewport_fades_follow_the_preference_and_keep_other_scroll_areas_styled", "crates/ui-egui/tests/page_shadows.rs::rendered_page_content_is_identical_with_and_without_decoration", "crates/ui-egui/tests/page_shadows.rs::page_shadow_preference_round_trips_and_ignores_invalid_settings", "crates/ui-egui/tests/page_shadows.rs::viewer_shadows_follow_the_preference_without_moving_pages", "crates/ui-egui/tests/page_shadows.rs::organize_shadows_follow_the_preference", "crates/ui-egui/tests/it/control.rs::page_shadows_are_an_observable_app_wide_preference", "crates/ui-egui/tests/it/view.rs::default_page_display_is_used_for_new_documents", "crates/ui-egui/tests/it/view.rs::default_zoom_is_used_for_new_documents", "crates/ui-egui/tests/it/view.rs::preferences_set_the_default_zoom", "crates/ui-egui/tests/it/view.rs::always_use_my_default_zoom_and_page_layout_ignores_what_the_pdf_asks_for"]
-notes = "Preferences ▸ Documents and view: Default page display and Default zoom (Fit to width, Zoom to page level or a percentage) for every new tab; a PDF that asks for a layout or zoom gets it, unless Always use my default zoom and page layout is on. Preferences ▸ Appearance also has an app-wide, persistent Show Page Edge Shadows checkbox (on by default), exposed through ui.set and ui.state; it affects viewer and Organize decorations, including the viewport-edge gradients painted over pages, only. Missing: Acrobat's resolution, rendering and page-content options"
+evidence = ["crates/ui-egui/tests/page_shadows.rs::viewport_fades_follow_the_preference_and_keep_other_scroll_areas_styled", "crates/ui-egui/tests/page_shadows.rs::rendered_page_content_is_identical_with_and_without_decoration", "crates/ui-egui/tests/page_shadows.rs::page_shadow_preference_round_trips_and_ignores_invalid_settings", "crates/ui-egui/tests/page_shadows.rs::viewer_shadows_follow_the_preference_without_moving_pages", "crates/ui-egui/tests/page_shadows.rs::organize_shadows_follow_the_preference", "crates/ui-egui/tests/it/control.rs::page_shadows_are_an_observable_app_wide_preference", "crates/ui-egui/tests/it/view.rs::default_page_display_is_used_for_new_documents", "crates/ui-egui/tests/it/view.rs::default_zoom_is_used_for_new_documents", "crates/ui-egui/tests/it/view.rs::preferences_set_the_default_zoom", "crates/ui-egui/tests/it/view.rs::always_use_my_default_zoom_and_page_layout_ignores_what_the_pdf_asks_for", "crates/ui-egui/tests/it/view.rs::a_calibrated_screen_draws_actual_size_at_its_real_size_and_keeps_fits", "crates/ui-egui/tests/it/view.rs::the_screen_resolution_is_kept_and_bad_values_are_refused"]
+notes = "Preferences ▸ Documents and view: Default page display and Default zoom (Fit to width, Zoom to page level or a percentage) for every new tab; a PDF that asks for a layout or zoom gets it, unless Always use my default zoom and page layout is on. Preferences ▸ Appearance also has an app-wide, persistent Show Page Edge Shadows checkbox (on by default), exposed through ui.set and ui.state; it affects viewer and Organize decorations, including the viewport-edge gradients painted over pages, only. Screen resolution: Standard (96 ppi) or Custom in device pixels per inch, typed or measured with a ruler (Calibrate…), setting `screen_ppi`, control option `screen-ppi` (#739). Missing: Acrobat's Use System Setting resolution, a resolution per monitor, and the rendering and page-content options"
 
 [[feature]]
 id = "misc.prefs-documents"

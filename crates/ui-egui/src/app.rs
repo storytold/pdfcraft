@@ -106,6 +106,8 @@ impl PdfCraftApp {
             ui_scale: None,
             system_text_scale: 1.0,
             ui_scale_applied: None,
+            screen_ppi: None,
+            calibration_readings: [0.0; screen_ppi::LINES.len()],
             flatten_fill_sign_on_save: false,
             fill_text_size: fill_sign::TEXT_SIZE,
             fill_text_color: [0.0; 3],
@@ -474,6 +476,11 @@ impl eframe::App for PdfCraftApp {
         self.sync_theme(ctx);
         let native = ctx.native_pixels_per_point().unwrap_or(1.0);
         ui_scale::sync(ctx, ui_scale::zoom(self.ui_scale, self.system_text_scale, native), &mut self.ui_scale_applied);
+        // Every frame, so a changed interface size or display scale keeps a calibrated page its real size.
+        let basis = screen_ppi::basis(self.screen_ppi, ctx.pixels_per_point());
+        for view in &mut self.views {
+            view.pt = basis;
+        }
         // Remember user work even if its tab is subsequently closed or Home is selected.
         self.startup_superseded |= !self.views.is_empty() || self.combine_showing() || self.dialog.is_some() || self.password_prompt.is_some();
         // Also done in `raw_input_hook`, before input; here for hosts that don't call the hook.

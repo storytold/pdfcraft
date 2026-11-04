@@ -172,6 +172,8 @@ pub enum Dialog {
     DocumentJs,
     /// Preferences.
     Preferences,
+    /// Preferences ▸ Screen resolution ▸ Calibrate… (a line to measure with a ruler).
+    CalibrateScreen,
     /// Compare files: choose the older version.
     CompareFiles,
     /// Action Wizard.

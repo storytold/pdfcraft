@@ -1,6 +1,6 @@
 use super::find::Follow;
 use super::{
-    Arc, Color32, DocInfo, DocView, HashSet, PRINT_TAG, PT, PageText, Range, RenderPool, RenderRequest, RequestKind, TextureHandle, TextureOptions,
+    Arc, Color32, DocInfo, DocView, HashSet, PRINT_TAG, PageText, Range, RenderPool, RenderRequest, RequestKind, TextureHandle, TextureOptions,
     device_pixels,
 };
 
@@ -650,7 +650,7 @@ impl DocView {
     pub(super) fn render_scale(&self, ppp: f32) -> f32 {
         // Exactly the device scale: a raster at any other scale is resampled on screen, which
         // blurs every line and glyph (#260).
-        self.zoom * PT * ppp
+        self.zoom * self.pt * ppp
     }
 
     /// Set whether the print preview rasters become luminance before upload. Toggling it drops
