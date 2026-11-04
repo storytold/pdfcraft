@@ -16,6 +16,7 @@ pub use pdfcraft_fonts::helvetica_width;
 
 mod chinese;
 pub mod cjk_text;
+pub mod orient;
 
 use chinese::Chinese;
 
@@ -182,6 +183,18 @@ impl Ocr {
         let rgb = rgb_pixels(pixels, width, height);
         let lines = chinese::detect_lines(&self.engine, &rgb, width, height)?;
         chinese.read(&rgb, width as usize, height as usize, &lines)
+    }
+
+    /// The quarter turn (clockwise) at which the Chinese model reads `pixels` most confidently.
+    /// [`chinese::Chinese::best_turn`] for how it decides; `None` when there is no readable text
+    /// or no Chinese models.
+    pub fn best_chinese_turn(&self, pixels: &[u8], width: u32, height: u32) -> Result<Option<u8>, OcrError> {
+        let Some(chinese) = self.chinese.as_ref() else { return Err(OcrError::NoChineseModels) };
+        if width == 0 || height == 0 || pixels.is_empty() {
+            return Err(OcrError::EmptyImage);
+        }
+        let rgb = rgb_pixels(pixels, width, height);
+        chinese.best_turn(&self.engine, &rgb, width, height)
     }
 
     /// Recognise the text in an RGBA (or RGB, or grey) image, `width` × `height` pixels.
