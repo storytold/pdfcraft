@@ -2976,7 +2976,11 @@ fn validation_script_colour_is_used_when_the_field_redraws() {
             ScriptResult {
                 rc: true,
                 value: value.into(),
-                changes: vec![FieldChange { name: "name".into(), text_color: Some(vec!["RGB".into(), "1".into(), "0".into(), "0".into()]), ..Default::default() }],
+                changes: vec![FieldChange {
+                    name: "name".into(),
+                    text_color: Some(vec!["RGB".into(), "1".into(), "0".into(), "0".into()]),
+                    ..Default::default()
+                }],
                 message: None,
             }
         }
