@@ -6,7 +6,7 @@
 //! the shapes from a page's content, [`raster::shapes`] from a picture of the page (a scan).
 
 use pdfcraft_content::{Matrix, Pieces};
-use pdfcraft_cos::{Document, Object};
+use pdfcraft_cos::{DecodeBudget, Document, Object};
 
 pub mod raster;
 
@@ -125,7 +125,15 @@ impl DetectionPath {
     }
 }
 
+/// The shapes page `page`'s content draws, its streams decoded within one page's allowance
+/// ([`DecodeBudget::page`]), however often `/Contents` lists the same stream.
 pub fn page_shapes(doc: &Document, page: usize) -> Shapes {
+    shapes_within(doc, page, &mut DecodeBudget::page())
+}
+
+/// [`page_shapes`], decoding against `budget`: a stream `/Contents` lists again is charged again,
+/// and one past what is left reads as empty.
+pub(crate) fn shapes_within(doc: &Document, page: usize, budget: &mut DecodeBudget) -> Shapes {
     let mut out = Shapes::default();
     let Some(p) = pdfcraft_model::pages(doc).into_iter().nth(page) else { return out };
     let list: Vec<Object> = match p.dict.get(b"Contents").map(|c| doc.resolve(c)) {
@@ -139,7 +147,7 @@ pub fn page_shapes(doc: &Document, page: usize) -> Shapes {
     let mut pieces = Vec::new();
     for o in list {
         if let Object::Stream(s) = &*doc.resolve(&o) {
-            pieces.push(s.decoded().unwrap_or_default());
+            pieces.push(budget.decode(s).unwrap_or_default());
         }
     }
     let mut ctm = Matrix::IDENTITY;

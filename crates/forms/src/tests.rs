@@ -3575,6 +3575,88 @@ fn repeated_script_references_share_one_decode_budget() {
     assert!(calculate > 0 && calculate <= limit, "{calculate} bytes of field scripts");
 }
 
+/// An unfiltered stream of `body`, as an object of [`document`].
+fn raw_stream(body: &str) -> String {
+    format!("<< /Length {} >>\nstream\n{body}\nendstream", body.len())
+}
+
+/// 300 fields whose value is one 1 MiB text stream: a reading of the form decodes their values
+/// within one budget, not 300 MiB.
+#[test]
+fn repeated_value_streams_share_one_decode_budget() {
+    let fields_list: String = (0..300).map(|i| format!("{} 0 R ", i + 3)).collect();
+    let mut objs = vec![format!("<< /Type /Catalog /AcroForm << /Fields [{fields_list}] >> >>"), raw_stream(&"x".repeat(1 << 20))];
+    objs.extend((0..300).map(|i| format!("<< /FT /Tx /T (f{i}) /V 2 0 R /DV 2 0 R >>")));
+    let all = fields(&document(&objs));
+    assert_eq!(all.len(), 300);
+    let read: usize = all.iter().flat_map(|f| f.value.iter().chain(&f.default)).map(String::len).sum();
+    assert!(read > 0 && read <= crate::read::MAX_VALUE_BYTES, "{read} bytes of values");
+    assert_eq!(all[0].value, ["x".repeat(1 << 20)], "the first field still reads its value");
+}
+
+/// Renaming a field that 300 calculations read through one 256 KiB script stream decodes the
+/// stream within one script budget: the calculations past it are left as they are, not 75 MiB
+/// decoded and written back.
+#[test]
+fn a_rename_decodes_repeated_calculation_streams_within_one_budget() {
+    let n = 300;
+    let refs = |from: usize| -> String { (from..from + n).map(|i| format!("{i} 0 R ")).collect() };
+    let js = format!("AFSimple_Calculate(\"SUM\", new Array (\"a\"));{}", " ".repeat(256 << 10));
+    let mut objs = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        format!("<< /Type /Page /Parent 2 0 R /Annots [5 0 R {}] >>", refs(8)),
+        format!("<< /Fields [5 0 R {}] /DA (/Helv 0 Tf 0 g) >>", refs(8)),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (a) /Rect [50 700 250 720] /P 3 0 R >>".into(),
+        "<< /S /JavaScript /JS 7 0 R >>".into(),
+        raw_stream(&js),
+    ];
+    objs.extend((0..n).map(|i| format!("<< /Type /Annot /Subtype /Widget /FT /Tx /T (c{i}) /Rect [50 10 250 30] /P 3 0 R /AA << /C 6 0 R >> >>")));
+    let mut doc = document(&objs);
+    set_props(&mut doc, "a", &FieldProps { name: Some("qty".into()), ..FieldProps::default() }).unwrap();
+    let rewritten: Vec<usize> = (8..8 + n)
+        .filter_map(|i| {
+            let field = doc.get(ObjRef::new(i as u32, 0));
+            let c = field.as_dict()?.get(b"AA")?.as_dict()?.get(b"C")?.as_dict()?.clone();
+            let js = c.get(b"JS")?.as_string()?.to_text();
+            js.contains("\"qty\"").then_some(js.len())
+        })
+        .collect();
+    assert!(!rewritten.is_empty(), "the first calculations are renamed");
+    let total: usize = rewritten.iter().sum();
+    assert!(total <= MAX_SCRIPT_BYTES, "{} calculations, {total} bytes, renamed", rewritten.len());
+}
+
+/// A page whose `/Contents` lists one 1 MiB stream ten times is read within the budget given:
+/// pieces past it read as empty, so their rectangles aren't found.
+#[test]
+fn page_shapes_decode_a_repeated_content_stream_within_the_budget() {
+    let piece = format!("%{}\n10 10 20 20 re S\n", "x".repeat(1 << 20));
+    let doc = document(&[
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        format!("<< /Type /Page /Parent 2 0 R /Contents [{}] >>", "4 0 R ".repeat(10)),
+        raw_stream(&piece),
+    ]);
+    assert_eq!(crate::detect::page_shapes(&doc, 0).boxes.len(), 10, "one page's allowance reads them all");
+    let mut budget = DecodeBudget::new(4 << 20, 0);
+    let boxes = crate::detect::shapes_within(&doc, 0, &mut budget).boxes.len();
+    assert!((1..=4).contains(&boxes), "{boxes} rectangles read within 4 MiB");
+    assert!(budget.exhausted());
+}
+
+/// The PDF/A declaration is read from at most [`crate::appearances::MAX_XMP_BYTES`] of metadata, as
+/// preflight reads it: a field drawn with characters its font lacks decodes no more than that.
+#[test]
+fn a_pdfa_declaration_is_read_from_metadata_within_its_cap() {
+    let declared = |padding: usize| {
+        let xmp = format!("<x:xmpmeta><pdfaid:part>2</pdfaid:part>{}</x:xmpmeta>", " ".repeat(padding));
+        declares_pdfa(&document(&["<< /Type /Catalog /Metadata 2 0 R >>".into(), raw_stream(&xmp)]))
+    };
+    assert!(declared(1 << 20));
+    assert!(!declared(crate::appearances::MAX_XMP_BYTES), "metadata past the cap declares nothing");
+}
+
 /// A widget listed many times, by one field's `/Kids` or by a `/Kids` array several fields share,
 /// is read once: the first field to list it owns it.
 #[test]

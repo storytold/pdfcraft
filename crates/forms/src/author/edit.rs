@@ -583,10 +583,13 @@ fn apply_late_widget_props(
 }
 
 /// Name field `old` `new` in each field's Calculate script that reads it
-/// ([`crate::af::rename_in_calculation`]).
+/// ([`crate::af::rename_in_calculation`]). Script streams share one budget, as a reading of the
+/// form's scripts does, however many fields name the same stream; past it, a script is left as
+/// it is, like one that won't decode.
 fn rename_in_calculations(doc: &mut Document, all: &[Field], old: &str, new: &str) -> Result<(), FormError> {
     let aa_of =
         |doc: &Document, r: ObjRef| doc.get(r).as_dict().and_then(|d| d.get(b"AA").map(|a| doc.resolve(a))).and_then(|a| a.as_dict().cloned());
+    let mut scripts = crate::script_budget();
     for f in all {
         // The script is the field's, or its only widget's when the field has none, as
         // `actions_of` reads it.
@@ -600,7 +603,7 @@ fn rename_in_calculations(doc: &mut Document, all: &[Field], old: &str, new: &st
             Some(Object::String(s)) => s.to_text(),
             // A stream that isn't UTF-8 reads with replacement characters, which must not be
             // written back in place of what it holds.
-            Some(Object::Stream(s)) => match s.decoded().ok().and_then(|b| String::from_utf8(b).ok()) {
+            Some(Object::Stream(s)) => match scripts.decode(s).ok().and_then(|b| String::from_utf8(b).ok()) {
                 Some(js) => js,
                 None => continue,
             },

@@ -470,7 +470,9 @@ fn redraw(doc: &mut Document, f: &Field, values: &[String], scripts: &mut dyn Sc
 /// document that declares PDF/A, which forbids it: there the widget's mark
 /// (`pdfcraft_fonts::UNDRAWN_MARK`) is all, and the edit's report says the `?` shows everywhere.
 pub(crate) fn ask_viewers_to_redraw(doc: &mut Document) -> Result<(), FormError> {
-    if declares_pdfa(doc) || need_appearances(doc) {
+    // The form's own flag first: once it is set, the metadata needn't be decoded again for each
+    // field drawn after.
+    if need_appearances(doc) || declares_pdfa(doc) {
         return Ok(());
     }
     let Some(root) = doc.root() else { return Ok(()) };
