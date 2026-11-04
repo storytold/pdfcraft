@@ -194,3 +194,8 @@ sync_github_name = false
 
 [people.enriquemelzer-bit]
 sync_github_name = true
+
+[people.DesignsByRay]
+real_name = "Raymond L"
+display_name = "Raymond L"
+sync_github_name = false
