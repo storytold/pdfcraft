@@ -1607,6 +1607,7 @@ fn a_right_click_with_edit_text_on_a_paragraph_under_a_comment_selects_the_comme
     wait_for_cursor(&mut h, on_text, |c| c != egui::CursorIcon::Default);
     right_click(&mut h, on_text);
     assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "the comment over the paragraph is selected");
+    assert!(h.query_by_label("Properties…").is_some(), "its menu opens");
     assert_eq!(h.state().views[0].comments.context_at.map(|(page, _)| page), Some(0), "the menu is anchored on the page");
     // The rectangle ends at x 200; the line goes on.
     let beside = at(&h, 230.0, 303.0);
@@ -1891,6 +1892,46 @@ fn with_prepare_a_click_that_began_off_the_page_keeps_the_selected_field() {
     let left = page(&h).min.x;
     slipping_click(&mut h, egui::pos2(left - 2.0, on_box.y), egui::pos2(left + 3.0, on_box.y));
     assert!(h.state().views[0].prepare.selected.is_some(), "a click that began off the page leaves it selected");
+}
+
+/// With Prepare open, a drag from a highlight draws the selection rectangle: a highlight lets a drag
+/// go, so nobody holds it and it is Prepare's.
+#[test]
+fn with_prepare_a_drag_from_a_highlight_draws_the_selection_rectangle() {
+    let mut h = open(highlighted_checkbox_pdf(), "150", false);
+    assert!(h.state_mut().execute("form.prepare"));
+    h.run_steps(4);
+    // On the highlight, beside the box; the drag ends past the box's other corner.
+    let (from, to) = (at(&h, 97.0, 197.0), at(&h, 130.0, 230.0));
+    mouse_drag(&mut h, from, to - from);
+    assert!(h.state().views[0].prepare.selected.is_some(), "the rectangle selects the field inside it");
+}
+
+/// A right-click while the primary button is held opens the menu of the comment it went to, when that
+/// is the one selected, and leaves the selection as it is.
+#[test]
+fn a_right_click_with_the_button_held_opens_the_selected_comments_menu() {
+    let mut h = open(comment_on_text_pdf(), "150", false);
+    // On the rectangle's left edge: an unfilled one takes a press on its border.
+    let edge = at(&h, 30.0, 303.0);
+    wait_for_cursor(&mut h, edge, |c| c != egui::CursorIcon::Default);
+    mouse_click(&mut h, edge);
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "the comment is selected");
+    h.hover_at(edge);
+    h.run_steps(1);
+    h.drag_at(edge);
+    h.run_steps(1);
+    let moved = edge + egui::vec2(20.0, 0.0);
+    h.hover_at(moved);
+    h.run_steps(1);
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos: moved, button: egui::PointerButton::Secondary, pressed, modifiers: egui::Modifiers::NONE });
+    }
+    h.run_steps(3);
+    assert!(h.query_by_label("Properties…").is_some(), "the comment's menu");
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "the selection stays");
+    h.drop_at(moved);
+    h.run_steps(2);
 }
 
 /// With Prepare open on a document that can't be changed, a right-click on a field selects nothing

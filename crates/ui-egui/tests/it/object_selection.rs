@@ -451,3 +451,15 @@ fn a_double_click_on_a_grouped_object_reaches_it() {
     h.run_steps(2);
     assert!(h.state().views[0].content.draft.as_ref().is_some_and(|d| d.index == Some(0)), "the added note opens for typing");
 }
+
+/// A double-click on a paragraph selected with others opens it for typing (the user's ruling).
+#[test]
+fn a_double_click_on_a_grouped_paragraph_opens_it() {
+    let mut h = harness();
+    marquee(&mut h);
+    // "Group headline" is at x 40, its baseline y 430 of 500.
+    let headline = at(&h, 80.0, 65.0);
+    crate::support::input::double_click(&mut h, headline);
+    h.run_steps(2);
+    assert!(h.state().views[0].line_editor.is_some(), "the paragraph is open for typing");
+}

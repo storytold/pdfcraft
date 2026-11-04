@@ -7499,6 +7499,61 @@ fn add_text_moves_no_paragraph_while_it_holds_a_draft_it_cant_draw() {
     assert_eq!(h.state().session.get(id).unwrap().text_blocks(0)[0].rect, block.rect, "the paragraph stays");
 }
 
+/// With Edit text, a right-click on a comment over a picture opens the comment's menu, and the
+/// picture is not selected for its own.
+#[test]
+fn a_right_click_on_a_comment_over_a_picture_opens_its_menu() {
+    let mut h = picture_pages(false);
+    h.state_mut().views[0].image_selection = None;
+    let shape = pdfcraft_engine::Shape::Rectangle { rect: [60.0, 190.0, 150.0, 230.0] };
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
+        page: 0,
+        style: pdfcraft_engine::Style::default_for(&shape),
+        shape,
+        contents: "Reviewed".into(),
+        author: "Tester".into(),
+    })));
+    h.state_mut().views[0].comments.selected = None;
+    h.run_steps(3);
+    let on_it = page_at(&h, 0, 100.0, 210.0);
+    right_click_at(&mut h, on_it);
+    assert!(h.state().views[0].comments.selected.is_some(), "the comment is selected");
+    assert!(h.state().views[0].image_selection.is_none(), "the picture is not");
+    assert!(h.query_by_label("Properties…").is_some(), "the comment's menu opens");
+}
+
+/// In crop mode, a right-click on the next page goes to what lies there, though a clipped artwork's
+/// whole frame reaches over it: crop mode ends and the page's menu opens.
+#[test]
+fn a_right_click_on_the_next_page_leaves_crop_mode() {
+    let mut h = picture_pages(true);
+    let on_two = page_at(&h, 1, 100.0, 40.0);
+    right_click_at(&mut h, on_two);
+    assert!(h.state().views[0].image_selection.is_none(), "crop mode ends");
+    assert!(h.query_by_label("Marquee Zoom").is_some(), "the page's menu opens");
+}
+
+/// A crop grip takes a press as far off as its cursor shows: 9 px from the grip, outside the box.
+#[test]
+fn a_crop_grip_takes_a_press_within_its_reach() {
+    let mut h = picture_pages(true);
+    let keep = |h: &Harness<'static, PdfCraftApp>| h.state().views[0].image_selection.as_ref().and_then(|s| s.crop.as_ref()).map(|c| c.keep);
+    let before = keep(&h);
+    // The box kept is the picture's frame shown, x 30..160, y 170..250: its upper left corner.
+    let press = page_at(&h, 0, 30.0, 250.0) - egui::vec2(9.0, 0.0);
+    h.hover_at(press);
+    h.run_steps(1);
+    h.drag_at(press);
+    h.run_steps(1);
+    for k in 1..=4 {
+        h.hover_at(press + egui::vec2(8.0 * k as f32, 8.0 * k as f32));
+        h.run_steps(1);
+    }
+    h.drop_at(press + egui::vec2(32.0, 32.0));
+    h.run_steps(2);
+    assert_ne!(keep(&h), before, "the grip takes the drag");
+}
+
 /// In the page grid, Delete deletes the page chosen there. The picture selected before the grid
 /// opened is not on screen, and stays.
 #[test]
