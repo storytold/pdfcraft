@@ -2621,7 +2621,7 @@ fn scroll_direction(dir: i8, dy: f32, resized: bool) -> i8 {
 /// The hover tip, find bar, size hint and the in-place editors drawn over the pages. Whether the
 /// text editor was finished.
 fn frame_overlays(ui: &mut egui::Ui, view: &mut DocView, env: &PageEnv<'_>, primary_down: bool, hover_text: Option<(Pos2, String)>) -> bool {
-    let PageEnv { added, author, avail, can_modify, doc, form, info, prefs, t, today, tool, units, unobstructed, .. } = *env;
+    let PageEnv { added, allowed, author, avail, can_modify, doc, form, info, prefs, t, today, tool, units, unobstructed, .. } = *env;
     if let Some((pos, text)) = hover_text {
         // Click-through, as a tooltip is: the pages lose the pointer under anything that isn't.
         let tip = egui::Area::new(egui::Id::unique("canvas-hover")).order(egui::Order::Tooltip).interactable(false);
@@ -2638,6 +2638,14 @@ fn frame_overlays(ui: &mut egui::Ui, view: &mut DocView, env: &PageEnv<'_>, prim
         crate::camera_ui::bar(ui.ctx(), view, avail, t, can_modify);
     }
     if let Some(e) = comments::composer(ui.ctx(), view, info, prefs) {
+        view.pending_edit = Some(e);
+    }
+    // The selected comment's colour and opacity, in place; Properties keeps the rest. Not with
+    // a drawing tool: the bar sits just above the selected comment, where the next shape, line
+    // or callout often starts, and a press on it would never reach the page.
+    let keeps_selection = tool == QuickTool::Select || matches!(tool, QuickTool::Comment(t) if t.markup().is_some());
+    let props = view.comments.selected.filter(|_| keeps_selection).and_then(|(p, i)| doc.comment_props(p, i));
+    if let Some(e) = comments::style_bar(ui.ctx(), view, info, props.as_ref(), prefs, allowed) {
         view.pending_edit = Some(e);
     }
     if let Some(e) = crate::edit_text_ui::overlay(ui.ctx(), view, info) {

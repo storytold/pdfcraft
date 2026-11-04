@@ -4314,4 +4314,42 @@ fn escape_with_a_fill_tool_deselects_every_comment_then_drops_the_tool() {
     h.key_press(egui::Key::Escape);
     h.run_steps(2);
     assert_eq!(h.state().quick_tool, QuickTool::Select);
+
+/// Acrobat's mini toolbar on a selected comment: the bar over a selected highlight recolours and
+/// fades it in place, one undo step each; a locked comment shows no bar.
+#[test]
+fn the_style_bar_recolours_and_fades_the_selected_highlight() {
+    let mut h = harness(|app| app.set_option("quick", "highlight").unwrap());
+    let (a, b) = {
+        let v = &h.state().views[0];
+        (v.glyph_screen_pos(0, 4).expect("text layer"), v.glyph_screen_pos(0, 14).expect("glyph"))
+    };
+    drag(&mut h, a, b);
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "the new highlight is selected");
+    let props = |h: &Harness<'static, PdfCraftApp>| {
+        let s = h.state();
+        s.session.get(s.views[0].id).expect("document").comment_props(0, 0).expect("props")
+    };
+    assert_eq!((props(&h).color, props(&h).opacity), (Some([1.0, 0.94, 0.0]), 1.0));
+
+    h.get_by_label("Comment colour: Blue").click();
+    h.run_steps(3);
+    assert_eq!(props(&h).color, Some([0.0, 0.47, 0.84]));
+    {
+        let s = h.state();
+        assert_eq!(s.session.get(s.views[0].id).unwrap().can_undo(), Some("Change comment properties"), "one undo step");
+    }
+
+    h.get_by_label("Comment opacity").click();
+    h.run_steps(2);
+    h.get_by(|n| n.role() == Role::Slider && n.label().as_deref() == Some("Opacity")).focus();
+    h.run_steps(1);
+    h.key_press(egui::Key::ArrowLeft);
+    h.run_steps(3);
+    assert!((props(&h).opacity - 0.95).abs() < 1e-9, "one 5 % step down: {}", props(&h).opacity);
+
+    // Locked comments refuse restyling, so they get no bar.
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::LockAnnotation { page: 0, index: 0, locked: true }));
+    h.run_steps(3);
+    assert!(h.query_by_label("Comment colour: Blue").is_none(), "no bar over a locked comment");
 }

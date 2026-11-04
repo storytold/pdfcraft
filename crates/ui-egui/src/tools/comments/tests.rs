@@ -561,3 +561,60 @@ fn the_hover_outline_goes_round_what_a_press_would_take() {
     let selected = CommentView { selected: Some((0, 0)), ..CommentView::default() };
     assert!(hover_outline(&cx, &selected, Some(&comment)).is_none(), "the selected comment has its own frame");
 }
+
+/// The style bar over a selected comment: one of its six swatches recolours it, and an arrow key
+/// on the opacity slider fades it one step, each as its own `StyleAnnotation` edit.
+#[test]
+fn the_style_bar_controls_recolour_and_fade_the_comment() {
+    use egui_kittest::kittest::Queryable;
+    let props = pdfcraft_engine::CommentProps {
+        subtype: "Highlight".into(),
+        author: String::new(),
+        subject: String::new(),
+        color: Some([1.0, 0.94, 0.0]),
+        opacity: 1.0,
+        width: None,
+        icon: None,
+        modified: None,
+        restylable: true,
+        locked: false,
+        endings: None,
+        fillable: false,
+        fill: None,
+        font_size: None,
+        border_color: None,
+        border_shape: None,
+        fill_opacity: None,
+        text_opacity: None,
+    };
+    let mut h = egui_kittest::Harness::new_ui_state(
+        |ui, (props, edits): &mut (pdfcraft_engine::CommentProps, Vec<Edit>)| {
+            if let Some(e) = style_controls(ui, 0, 3, props) {
+                edits.push(e);
+            }
+        },
+        (props, Vec::new()),
+    );
+    h.run();
+    assert_eq!(h.query_all_by_label_contains("Comment colour: ").count(), 6, "six swatches, no picker");
+    h.get_by_label("Comment colour: Blue").click();
+    h.run();
+    h.get_by_label("Comment opacity").click();
+    h.run();
+    // The slider and its value box share the label; the slider takes the arrow keys.
+    h.get_by(|n| n.role() == egui::accesskit::Role::Slider && n.label().as_deref() == Some("Opacity")).focus();
+    h.run();
+    h.key_press(egui::Key::ArrowLeft);
+    h.run();
+    let edits = &h.state().1;
+    match edits.as_slice() {
+        [
+            Edit::StyleAnnotation { page: 0, index: 3, color: Some(c), opacity: None, .. },
+            Edit::StyleAnnotation { page: 0, index: 3, color: None, opacity: Some(o), .. },
+        ] => {
+            assert!(same_colour(c, &[0.0, 0.47, 0.84]), "{c:?}");
+            assert!((*o - 0.95).abs() < 1e-9, "{o}");
+        }
+        other => panic!("{other:?}"),
+    }
+}
