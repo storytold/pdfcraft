@@ -14,9 +14,19 @@ impl Automation {
     pub(crate) fn redact_mark(&mut self, a: &Args) -> Result<Value> {
         let doc = self.doc(a)?;
         let (id, n) = (doc.id, doc.info.pages.len());
-        let pages: Vec<usize> = match a.opt_ints("pages")? {
-            Some(_) => self.pages(a, "pages")?,
-            None => (0..n).collect(),
+        if a.get("page").is_some() && a.get("pages").is_some() {
+            return Err(ToolError::InvalidArgs("pass page or pages, not both".into()));
+        }
+        if a.get("rect").is_some() && a.get("pages").is_some() {
+            return Err(ToolError::InvalidArgs("rect requires page, not pages".into()));
+        }
+        let pages: Vec<usize> = if a.get("page").is_some() {
+            vec![self.page(a)?]
+        } else {
+            match a.opt_ints("pages")? {
+                Some(_) => self.pages(a, "pages")?,
+                None => (0..n).collect(),
+            }
         };
         let overlay = match (a.opt_str("overlay")?, a.opt_str("code_set")?) {
             (Some(_), Some(_)) => return Err(ToolError::InvalidArgs("pass overlay or code_set with codes, not both".into())),
@@ -53,6 +63,11 @@ impl Automation {
         ];
         if chosen.iter().filter(|c| **c).count() != 1 {
             return Err(ToolError::InvalidArgs("pass exactly one of rect (with page), find, words, pattern or whole_pages: true".into()));
+        }
+        let case_sensitive = a.opt_bool("case_sensitive")?.unwrap_or(false);
+        let whole_words = a.opt_bool("whole_words")?.unwrap_or(false);
+        if (case_sensitive || whole_words) && a.get("find").is_none() && a.get("words").is_none() {
+            return Err(ToolError::InvalidArgs("case_sensitive and whole_words apply only to find or words".into()));
         }
         // Per searched word or phrase: how many marks it made.
         let mut matched_words: Vec<(String, usize)> = Vec::new();
@@ -95,7 +110,11 @@ impl Automation {
             for (&p, text) in pages.iter().zip(&texts) {
                 let hits: Vec<(Option<usize>, _)> = match pattern {
                     Some(pat) => text.find_with(|chars| find_pattern(pat, chars)).into_iter().map(|h| (None, h)).collect(),
-                    None => needles.iter().enumerate().flat_map(|(i, w)| text.find(w).into_iter().map(move |h| (Some(i), h))).collect(),
+                    None => needles
+                        .iter()
+                        .enumerate()
+                        .flat_map(|(i, w)| text.find_opts(w, case_sensitive, whole_words).into_iter().map(move |h| (Some(i), h)))
+                        .collect(),
                 };
                 for (word, h) in hits {
                     let quads: Vec<[f64; 8]> = text.line_rects(h).into_iter().map(|r| info.pages[p].view_rect_to_quad(r)).collect();
@@ -163,9 +182,27 @@ impl Automation {
         Ok(json!({ "total": total, "categories": items }))
     }
 
+    pub(crate) fn doc_audit_redactions(&self, a: &Args) -> Result<Value> {
+        let d = self.doc(a)?;
+        let findings = d.audit_redactions().map_err(ToolError::Failed)?;
+        let items: Vec<Value> = findings
+            .into_iter()
+            .map(|f| {
+                json!({
+                    "page": f.page + 1,
+                    "kind": f.kind.id(),
+                    // Points from the top-left of the displayed page, like `comment_list` and `doc_info`.
+                    "rect": crate::view_rect(&d.info, f.page, f.rect.map(|v| v as f32)),
+                    "covered_text": f.covered_text,
+                })
+            })
+            .collect();
+        Ok(json!({ "findings": items, "count": items.len() }))
+    }
+
     pub(crate) fn doc_remove_hidden(&mut self, a: &Args) -> Result<Value> {
-        let edit = match a.get("categories") {
-            None => Edit::Sanitize,
+        let which = match a.get("categories") {
+            None => None,
             Some(_) => {
                 let which = a
                     .strs("categories")?
@@ -175,10 +212,24 @@ impl Automation {
                 if which.is_empty() {
                     return Err(ToolError::InvalidArgs("categories is empty".into()));
                 }
+                Some(which)
+            }
+        };
+        // One scan, for this check and for what was removed. The removal refuses when it counts
+        // every listed category as 0 (an AcroForm with no fields counts 1), with an error about
+        // redaction marks; this reads the same scan, so it refuses exactly then. A document that
+        // can't be edited has no scan: `apply` says why.
+        let info = self.doc(a)?.hidden_info();
+        let edit = match which {
+            None => Edit::Sanitize,
+            Some(which) => {
+                if !info.is_empty() && which.iter().all(|h| info.iter().find(|c| c.0 == *h).is_none_or(|c| c.1 == 0)) {
+                    return Err(failed("nothing to remove: the listed categories hold nothing (see doc_hidden_info)"));
+                }
                 Edit::RemoveHidden { which }
             }
         };
-        let before: usize = self.doc(a)?.hidden_info().iter().map(|c| c.1).sum();
+        let before: usize = info.iter().map(|c| c.1).sum();
         let mut out = self.apply(a, edit)?;
         let after: usize = self.doc(a)?.hidden_info().iter().map(|c| c.1).sum();
         out["removed"] = json!(before.saturating_sub(after));

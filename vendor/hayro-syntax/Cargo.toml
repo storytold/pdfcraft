@@ -46,6 +46,7 @@ std = [
     "hayro-jbig2?/std",
     "hayro-jpeg2000?/std",
     "dep:rustc-hash",
+    "dep:stringprep",
     "zune-jpeg?/std",
 ]
 unsafe = [
@@ -101,6 +102,10 @@ optional = true
 
 [dependencies.smallvec]
 version = "1"
+
+[dependencies.stringprep]
+version = "0.1"
+optional = true
 
 [dependencies.zune-jpeg]
 version = "0.5"

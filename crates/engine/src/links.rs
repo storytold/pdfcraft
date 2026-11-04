@@ -2,6 +2,7 @@
 //! About dialog, the home screen, the CLI and the README agree.
 
 use icu_properties::props::Script;
+use std::path::{Path, PathBuf};
 
 /// The app's name in ArtCraft URLs (`getartcraft.com/apps/{APP}`, `github.com/storytold/{APP}`).
 pub const APP: &str = "pdfcraft";
@@ -126,6 +127,113 @@ pub fn document_url(raw: &str) -> Result<String, BlockedLink> {
         check_mail_parameters(rest)?;
     }
     Ok(url.to_string())
+}
+
+/// Maximum decoded GoToR file-spec size retained by inspection and accepted by the resolver.
+pub const MAX_REMOTE_DOCUMENT_PATH_BYTES: usize = 4096;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RemoteDocumentPathError {
+    Empty,
+    TooLong,
+    Hidden,
+    /// A URL, a network or device path, or a path that climbs above its root.
+    NotLocal(craft_docpath::Refused),
+    MissingSourcePath,
+    /// The target doesn't end in `.pdf`.
+    NotPdf,
+    /// The target is a directory, device, FIFO or socket rather than a regular file.
+    NotAFile,
+    /// The target is larger than [`MAX_REMOTE_DOCUMENT_BYTES`].
+    TooLarge,
+    /// The target couldn't be read.
+    Read(String),
+}
+
+impl std::fmt::Display for RemoteDocumentPathError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Empty => f.write_str("the file specification is empty"),
+            Self::TooLong => f.write_str("the file specification is too long"),
+            Self::Hidden => f.write_str("the file specification contains hidden or control characters"),
+            Self::NotLocal(r) => write!(f, "only local document paths are supported: {r}"),
+            Self::MissingSourcePath => f.write_str("a relative link needs a source document path"),
+            Self::NotPdf => f.write_str("the linked file is not a .pdf file"),
+            Self::NotAFile => f.write_str("the linked path is not a regular file"),
+            Self::TooLarge => f.write_str("the linked file is too large to open"),
+            Self::Read(e) => write!(f, "the linked file couldn't be read: {e}"),
+        }
+    }
+}
+
+/// Whether the original GoToR file specification is absolute on this platform.
+/// Check this before resolving relative paths against the source document. This does no I/O;
+/// the resolver must still reject URL/network paths and malformed file specifications.
+pub fn remote_document_path_is_absolute(raw: &str) -> bool {
+    Path::new(raw).is_absolute()
+}
+
+/// Resolve a PDF remote-Go-To file specification to a local path without opening it.
+/// Relative paths are based on the source document, which should be an absolute path; an
+/// in-memory source has no fallback to CWD. URLs (including `file:`), network and device paths are
+/// refused ([`craft_docpath::resolve_absolute`]).
+pub fn resolve_remote_document_path(source: Option<&Path>, raw: &str) -> Result<PathBuf, RemoteDocumentPathError> {
+    if raw.is_empty() || raw.trim().is_empty() {
+        return Err(RemoteDocumentPathError::Empty);
+    }
+    if raw.len() > MAX_REMOTE_DOCUMENT_PATH_BYTES {
+        return Err(RemoteDocumentPathError::TooLong);
+    }
+    if raw.chars().any(hides_text) {
+        return Err(RemoteDocumentPathError::Hidden);
+    }
+    // A GoToR file specification is a path, not a URL: any scheme of two or more characters is
+    // refused (one letter is a drive), `file:` and names such as `custom:target.pdf` included.
+    if let Some((scheme, _)) = raw.split_once(':') {
+        let is_scheme = scheme.len() > 1
+            && scheme.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
+            && scheme.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'));
+        if is_scheme {
+            return Err(RemoteDocumentPathError::NotLocal(craft_docpath::Refused::Url));
+        }
+    }
+    craft_docpath::resolve_absolute(raw, source).map_err(|r| match r {
+        // A path that resolves but not to an absolute one needed a source with an absolute path. With
+        // such a source, it is a path this platform cannot open (`C:\x.pdf` on Unix).
+        craft_docpath::Refused::Invalid if !source.is_some_and(Path::is_absolute) && craft_docpath::resolve(raw, source).is_ok() => {
+            RemoteDocumentPathError::MissingSourcePath
+        }
+        r => RemoteDocumentPathError::NotLocal(r),
+    })
+}
+
+/// Largest linked PDF a GoToR link may open (1 GiB, the largest size the large-file work measures).
+pub const MAX_REMOTE_DOCUMENT_BYTES: u64 = 1 << 30;
+
+/// Read the PDF a GoToR link resolved to. The path comes from an untrusted document, so only a
+/// regular `.pdf` file of at most [`MAX_REMOTE_DOCUMENT_BYTES`] is read: a directory, a device such
+/// as `/dev/zero` or a FIFO is refused before it is opened, and a file that grows past the cap
+/// while it is read is refused too.
+pub fn read_remote_document(path: &Path) -> Result<Vec<u8>, RemoteDocumentPathError> {
+    use std::io::Read;
+    let is_pdf = path.extension().is_some_and(|e| e.eq_ignore_ascii_case("pdf"));
+    if !is_pdf {
+        return Err(RemoteDocumentPathError::NotPdf);
+    }
+    let meta = std::fs::metadata(path).map_err(|e| RemoteDocumentPathError::Read(e.to_string()))?;
+    if !meta.is_file() {
+        return Err(RemoteDocumentPathError::NotAFile);
+    }
+    if meta.len() > MAX_REMOTE_DOCUMENT_BYTES {
+        return Err(RemoteDocumentPathError::TooLarge);
+    }
+    let file = std::fs::File::open(path).map_err(|e| RemoteDocumentPathError::Read(e.to_string()))?;
+    let mut bytes = Vec::with_capacity(usize::try_from(meta.len()).unwrap_or(0));
+    file.take(MAX_REMOTE_DOCUMENT_BYTES.saturating_add(1)).read_to_end(&mut bytes).map_err(|e| RemoteDocumentPathError::Read(e.to_string()))?;
+    if u64::try_from(bytes.len()).map_or(true, |n| n > MAX_REMOTE_DOCUMENT_BYTES) {
+        return Err(RemoteDocumentPathError::TooLarge);
+    }
+    Ok(bytes)
 }
 
 /// Email-address parameters that make an email app read a file from the user's computer: Evolution,
@@ -338,220 +446,4 @@ fn mixes_scripts(label: &str) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
-    #[test]
-    fn urls_follow_the_artcraft_scheme() {
-        assert_eq!(super::APP_PAGE, format!("{}/apps/{}", super::WEBSITE, super::APP));
-        assert_eq!(super::GITHUB, format!("https://github.com/storytold/{}", super::APP));
-        for l in super::LINKS {
-            assert!(l.url.starts_with("https://"), "{}", l.url);
-            assert!(crate::commands::command(l.command).is_some(), "{} is a registered command", l.command);
-        }
-    }
-
-    #[test]
-    fn documents_may_offer_web_and_email_addresses() {
-        use super::document_url;
-        for ok in [
-            "https://example.org",
-            "HTTPS://Example.org/a?b=c#d",
-            "http://example.org:8080/x",
-            "mailto:someone@example.org",
-            "https://[::1]:8443/",
-            // Plain spaces turn up in real documents' links and are visible in the dialog.
-            "mailto:orders@example.org?subject=Order form",
-            "https://example.org/My Report.pdf",
-        ] {
-            assert_eq!(document_url(ok).as_deref(), Ok(ok), "{ok}");
-        }
-        let multibyte = format!("https://example.org/{}", "é".repeat(super::MAX_DOCUMENT_URL - 20));
-        assert!(document_url(&multibyte).is_ok(), "the limit counts characters, not bytes");
-        assert_eq!(document_url("  https://example.org/ \n").as_deref(), Ok("https://example.org/"), "surrounding whitespace is trimmed");
-    }
-
-    #[test]
-    fn documents_may_not_offer_other_kinds_of_address() {
-        use super::{BlockedLink as B, MAX_DOCUMENT_URL, document_url};
-        let scheme = |s: &str| Err(B::Scheme(s.into()));
-        assert_eq!(document_url("file:///C:/Windows/System32/calc.exe"), scheme("file"));
-        assert_eq!(document_url("FILE://server/share/x.exe"), scheme("file"));
-        assert_eq!(document_url("javascript:alert(1)"), scheme("javascript"));
-        assert_eq!(document_url("data:text/html,<script>x</script>"), scheme("data"));
-        assert_eq!(document_url("ms-settings:privacy"), scheme("ms-settings"));
-        assert_eq!(document_url("smb://server/share"), scheme("smb"));
-        assert_eq!(document_url(""), Err(B::Empty));
-        assert_eq!(document_url("   "), Err(B::Empty));
-        for bad in [
-            "example.org",
-            "//example.org",
-            "1http://x",
-            "ht tp://x",
-            "https:",
-            "https://",
-            "https:///path",
-            "https://user@/x",
-            "mailto:",
-            "https://trusted.example /x",
-        ] {
-            assert_eq!(document_url(bad), Err(B::Malformed), "{bad}");
-        }
-        for hidden in [
-            "https://exa\u{202E}gro.elpmaxe",
-            "https://example.org\u{200B}.evil",
-            "https://a.org/\u{0007}",
-            "https://a.org/x\ty",
-            "https://a.org/x\ny",
-            "https://example.org/a\u{00A0}b",
-        ] {
-            assert_eq!(document_url(hidden), Err(B::Hidden), "{hidden:?}");
-        }
-        let long = format!("https://example.org/?q={}", "a".repeat(MAX_DOCUMENT_URL));
-        assert!(matches!(document_url(&long), Err(B::TooLong(_))));
-    }
-
-    #[test]
-    fn the_host_shown_is_the_one_the_address_goes_to() {
-        use super::host;
-        assert_eq!(host("https://example.org/path"), Some("example.org"));
-        assert_eq!(host("https://trusted.example@other.example/"), Some("other.example"));
-        assert_eq!(host("http://user:pw@other.example:8080?x"), Some("other.example"));
-        assert_eq!(host("https://[::1]:8443/"), Some("[::1]"));
-        // Browsers read `\` as `/`, so this goes to other.example, not trusted.example.
-        assert_eq!(host("https://other.example\\@trusted.example/"), Some("other.example"));
-        assert_eq!(host("https://other.example\\x@trusted.example/"), Some("other.example"));
-        assert_eq!(host("mailto:a@example.org"), None);
-        assert_eq!(host("https:///nohost"), None);
-    }
-
-    #[test]
-    fn addresses_the_url_parser_rejects_are_refused() {
-        use super::{BlockedLink as B, document_url};
-        // The webbrowser crate would open each of these as a local file path.
-        for bad in ["mailto://a^b/x", "mailto://a:99999/", "mailto://[x]/", "mailto://a\\b/", "mailto://a b/", "https://a^b/", "http://a<b/"] {
-            assert_eq!(document_url(bad), Err(B::Malformed), "{bad}");
-        }
-        for ok in ["mailto://example.org/x", "mailto:a@example.org?subject=a b"] {
-            assert_eq!(document_url(ok).as_deref(), Ok(ok), "{ok}");
-        }
-    }
-
-    #[test]
-    fn email_links_may_not_ask_for_a_local_file() {
-        use super::{BlockedLink as B, document_url};
-        for bad in [
-            // Evolution, KMail and Claws Mail attach the named file.
-            "mailto:a@example.org?attach=/home/me/.ssh/id_ed25519",
-            "mailto:a@example.org?subject=Hi&attachment=file:///etc/passwd",
-            // Claws Mail reads an `insert` file into the message body.
-            "mailto:a@example.org?insert=/home/me/notes.txt",
-            // Names are matched case-insensitively (Evolution, KMail) and after percent-decoding (KMail).
-            "mailto:a@example.org?ATTACH=x",
-            "mailto:a@example.org?Attachment=x",
-            "mailto:a@example.org?%61ttach=x",
-            "mailto:a@example.org?%2561ttach=x",
-            "mailto:a@example.org?%49NSERT=x",
-            "mailto:a@example.org?attach%3D/etc/passwd",
-            // An empty value, a repeated name, spaces or quotes before `=`.
-            "mailto:a@example.org?attach=",
-            "mailto:a@example.org?subject=a&attach=x&attach=y",
-            "mailto:a@example.org?subject=a& attach =x",
-            "mailto:a@example.org?subject=a&'attachment'='x'",
-            // No recipient, no `?` at all (xdg-email), a second `?`, and a `?` that only exists once decoded.
-            "mailto:?attach=x",
-            "mailto:a@example.org&attach=/etc/passwd",
-            "mailto:a@example.org?subject=a?attach=x",
-            "mailto:a@example.org%3Fattach=x",
-            // KMail reads the query from the first `?` even inside a fragment, and reads `&#38;` as `&`.
-            "mailto:a@example.org#?attach=x",
-            "mailto:a@example.org?subject=a#&attach=x",
-            "mailto:a@example.org?subject=a&#38;attach=x",
-            "mailto:a@example.org?subject=a;attach=x",
-            // An encoded `&`, and a comma (xdg-email copies the subject into a comma-separated list).
-            "mailto:a@example.org?subject=a%26attach=x",
-            "mailto:a@example.org?subject=a,attachment='/etc/passwd'",
-            // A `+`, an encoded tab or an encoded space between the name and `=`.
-            "mailto:a@example.org?attach+=x",
-            "mailto:a@example.org?attach%09=x",
-            "mailto:a@example.org?attach%20=x",
-        ] {
-            assert_eq!(document_url(bad), Err(B::MailFile), "{bad}");
-        }
-        // KMail decodes RFC 2047 encoded words across the whole address before reading it, so
-        // `=?utf-8?q?attach?=` could become `attach`. Such words never belong in a link.
-        for bad in [
-            "mailto:a@example.org?=?utf-8?q?attach?==/etc/passwd",
-            "mailto:a@example.org?subject==?UTF-8?B?YXR0YWNo?=",
-            "mailto:a@example.org?subject=%3D%3Futf-8%3Fq%3Fattach%3F%3D",
-            "mailto:a@example.org?subject==??q?attach?=",
-            "mailto:a@example.org?subject==?utf-8?base64?YXR0YWNo?=",
-            // Backslash escapes that `echo` in xdg-email decodes, raw and percent-encoded.
-            "mailto:a@example.org?\\0141ttach=x",
-            "mailto:x\\x61ttachment=y",
-            "mailto:a@example.org?%5C0141ttach=x",
-        ] {
-            assert_eq!(document_url(bad), Err(B::MailEncodedWord), "{bad}");
-        }
-        for ok in [
-            "mailto:orders@example.org?subject=Order form&body=Please attach the invoice",
-            "mailto:a@example.org?subject=Attachments%20to%20follow",
-            "mailto:a@example.org?body=Questions%3F%20Attach%20your%20CV",
-            "mailto:a@example.org?body=Hi%3B%20insert%20your%20name",
-            "mailto:a@example.org?cc=b@example.org&bcc=c@example.org&in-reply-to=%3Cid@example.org%3E",
-            "mailto:attach@example.org",
-            "mailto:a@example.org?attach",
-            "mailto:a@example.org?x-attach=1&reattach=2",
-            "mailto:a@example.org?body=Saved in C:\\Users\\me\\Documents",
-        ] {
-            assert_eq!(document_url(ok).as_deref(), Ok(ok), "{ok}");
-        }
-    }
-
-    #[test]
-    fn hosts_are_shown_as_the_browser_receives_them() {
-        use super::{BlockedLink as B, HostDisplay, display_host, document_url};
-        let plain = |a: &str| Some(HostDisplay { ascii: a.into(), international: false, mixed_scripts: false });
-        assert_eq!(display_host("https://example.org/path"), plain("example.org"));
-        assert_eq!(display_host("HTTPS://EXAMPLE.ORG/"), plain("example.org"), "lowercased, as the browser does");
-        assert_eq!(display_host("https://example.org./"), plain("example.org."));
-        assert_eq!(display_host("https://ex%61mple.org/"), plain("example.org"), "percent-decoded, as the browser does");
-        assert_eq!(display_host("https://ｅｘａｍｐｌｅ。org/"), plain("example.org"), "fullwidth letters and `。` are mapped");
-        assert_eq!(display_host("https://trusted.example@other.example/"), plain("other.example"));
-        assert_eq!(display_host("https://other.example\\@trusted.example/"), plain("other.example"));
-        assert_eq!(display_host("mailto:a@example.org"), None);
-        // Numeric hosts in the form the browser connects to, so a local address can't hide.
-        assert_eq!(display_host("https://[::1]:8443/"), plain("[::1]"));
-        assert_eq!(display_host("https://[0:0:0:0:0:0:0:1]/"), plain("[::1]"));
-        assert_eq!(display_host("http://3232235777/"), plain("192.168.1.1"));
-        assert_eq!(display_host("http://0x7f.1/"), plain("127.0.0.1"));
-        assert_eq!(display_host("http://0300.0250.01.01/"), plain("192.168.1.1"));
-
-        // International hosts are shown in punycode and marked.
-        let bucher = display_host("https://bücher.example/").unwrap();
-        assert_eq!(bucher, HostDisplay { ascii: "xn--bcher-kva.example".into(), international: true, mixed_scripts: false });
-        assert!(!display_host("https://ソニーstore.example/").unwrap().mixed_scripts, "Latin with Japanese is normal (UTS #39)");
-        assert!(!display_host("https://example.ελ/").unwrap().mixed_scripts, "scripts are compared within a label, not across labels");
-        // Cyrillic `а` (U+0430) in a Latin name: punycode, and flagged as mixed.
-        let lookalike = display_host("https://p\u{0430}ypal.com/").unwrap();
-        assert_eq!(lookalike, HostDisplay { ascii: "xn--pypal-4ve.com".into(), international: true, mixed_scripts: true });
-        // The same lookalike written in punycode in the document, and upper-case.
-        assert_eq!(display_host("https://XN--PYPAL-4VE.com/"), Some(lookalike));
-        // A whole-script lookalike (all Cyrillic) isn't mixed, but is still shown in punycode, marked.
-        let cyrillic = display_host("https://\u{0430}\u{0440}\u{0440}\u{04CF}\u{0435}.com/").unwrap();
-        assert!(cyrillic.ascii.starts_with("xn--") && cyrillic.international && !cyrillic.mixed_scripts, "{cyrillic:?}");
-
-        // A host the browser can't turn into an address is refused rather than shown.
-        for bad in [
-            "https://xn--a.example/",
-            "https://exa%FFmple.org/",
-            "https://\u{0300}a.example/",
-            "https://%E2%80%AEexample.org/",
-            "https://trusted.example%40other.example/",
-            "https://[evil.example]/",
-            "https://example.org:port/",
-            "https://example.org:99999/",
-        ] {
-            assert_eq!(display_host(bad), None, "{bad}");
-            assert_eq!(document_url(bad), Err(B::Malformed), "{bad}");
-        }
-    }
-}
+mod tests;

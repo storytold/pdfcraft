@@ -5,6 +5,9 @@
 //! tells a [`Visitor`] about each element as it opens and as it closes. What the rules keep is
 //! bounded by the elements still open, plus, for a table, the row spans that reach into later
 //! rows. Findings are kept in document order, up to the report's limit.
+//!
+//! Every sentence a rule here can say is listed in [`crate::WORDINGS`], so interfaces can say it in
+//! their own language; a test in this crate keeps that list complete.
 
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet};
@@ -14,6 +17,9 @@ use pdfcraft_cos::{Dict, Document, ObjRef, Object};
 use pdfcraft_model::Page;
 
 use crate::{Finding, MAX_FINDINGS, Rule};
+
+/// Why a table's rows are irregular; `{min}` and `{max}` are the narrowest and widest row.
+const IRREGULAR: &str = "rows have between {min} and {max} columns";
 
 /// Standard structure types (PDF 1.7 and 2.0); anything else goes through the role map.
 const STANDARD: &[&[u8]] = &[
@@ -148,6 +154,8 @@ fn kind_of(ty: &[u8]) -> Kind {
 /// is filled in as the walk goes on.
 #[derive(Debug)]
 pub(crate) struct Frame {
+    /// Indirect object holding this tag, if it is not an inline dictionary.
+    object: Option<ObjRef>,
     /// The standard type after the role map, or the type as written when it maps to nothing.
     ty: Vec<u8>,
     kind: Kind,
@@ -308,7 +316,7 @@ impl Walker<'_> {
             }
             Object::Int(_) => self.mark_content(),
             Object::Ref(r) => self.reference(*r, depth, page, v),
-            Object::Dict(_) => self.dict(loc, depth, page, v),
+            Object::Dict(_) => self.dict(loc, depth, page, None, v),
             _ => {}
         }
     }
@@ -320,13 +328,13 @@ impl Walker<'_> {
         }
         let target = self.doc.get(r);
         if target.as_dict().is_some() {
-            self.dict(&Loc { owner: target, path: Vec::new() }, depth, page, v);
+            self.dict(&Loc { owner: target, path: Vec::new() }, depth, page, Some(r), v);
         }
     }
 
     /// A dictionary. Marked content and object references only mark the open element; a
     /// dictionary with /S is an element, and its /K kids are read inside it.
-    fn dict<V: Visitor>(&mut self, loc: &Loc, depth: usize, page: Option<usize>, v: &mut V) {
+    fn dict<V: Visitor>(&mut self, loc: &Loc, depth: usize, page: Option<usize>, object: Option<ObjRef>, v: &mut V) {
         let Some(d) = loc.value().and_then(|o| o.as_dict()) else { return };
         match d.name(b"Type") {
             Some(b"MCR") => return self.mark_content(),
@@ -350,6 +358,7 @@ impl Walker<'_> {
         let kind = kind_of(&ty);
         let attrs = if matches!(kind, Kind::Table | Kind::Td | Kind::Th) { self.attr_dicts(d) } else { Vec::new() };
         let frame = Frame {
+            object,
             ty,
             kind,
             index: self.opened,
@@ -449,10 +458,28 @@ fn row_owner(path: &[Frame]) -> Option<usize> {
     }
 }
 
-fn finding(e: &Frame, what: &str) -> Finding {
-    let ty = String::from_utf8_lossy(&e.ty);
-    let at = e.page.map(|p| format!(" on page {}", p + 1)).unwrap_or_default();
-    Finding { page: e.page, message: format!("{ty} element{at}: {what}") }
+/// A finding about element `e`: which element it is, and in `{what}` what is wrong with it.
+///
+/// `what` is a wording, not a finished sentence, and `extra` fills any holes it has of its own.
+/// With and without a page are separate wordings so each reads the way the language reads it;
+/// `{ty}` is the structure tag's own name and goes in as it stands.
+fn worded(e: &Frame, what: &'static str, extra: Vec<(&'static str, String)>) -> Finding {
+    let mut values = extra;
+    values.push(("{ty}", String::from_utf8_lossy(&e.ty).into_owned()));
+    let mut finding = match e.page {
+        Some(p) => {
+            values.push(("{p}", p.saturating_add(1).to_string()));
+            Finding::nested(e.page, "{ty} element on page {p}: {what}", what, values)
+        }
+        None => Finding::nested(None, "{ty} element: {what}", what, values),
+    };
+    finding.object = e.object;
+    finding
+}
+
+/// A finding whose `{what}` wording has no holes of its own.
+fn finding(e: &Frame, what: &'static str) -> Finding {
+    worded(e, what, Vec::new())
 }
 
 /// Columns `start..end` that a row span covers, with the rows still to come after this one.
@@ -685,8 +712,16 @@ impl Visitor for Checks {
                 let prev = self.heading;
                 if level > prev + 1 {
                     self.add(Rule::HeadingNesting, e.index, || {
-                        let what = if prev == 0 { format!("the first heading is an H{level}") } else { format!("H{level} follows an H{prev}") };
-                        finding(e, &format!("{what}; headings should not skip levels"))
+                        // A whole sentence each way: what is wrong with the first heading and what is
+                        // wrong with a later one are not the same remark with a word swapped.
+                        let mut values = vec![("{n}", level.to_string())];
+                        let what = if prev == 0 {
+                            "the first heading is an H{n}; headings should not skip levels"
+                        } else {
+                            values.push(("{d}", prev.to_string()));
+                            "H{n} follows an H{d}; headings should not skip levels"
+                        };
+                        worded(e, what, values)
                     });
                 }
                 self.heading = level;
@@ -705,7 +740,9 @@ impl Visitor for Checks {
                         self.add(Rule::TableHeaders, e.index, || finding(e, "no header cells (TH)"));
                     }
                     if let Some((narrow, wide)) = table.range.filter(|(lo, hi)| lo != hi) {
-                        self.add(Rule::TableRegularity, e.index, || finding(e, &format!("rows have between {narrow} and {wide} columns")));
+                        self.add(Rule::TableRegularity, e.index, || {
+                            worded(e, IRREGULAR, vec![("{min}", narrow.to_string()), ("{max}", wide.to_string())])
+                        });
                     }
                 }
             }

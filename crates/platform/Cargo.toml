@@ -10,8 +10,19 @@ workspace = true
 
 [dependencies]
 
+[target.'cfg(target_os = "macos")'.dependencies]
+# `write_atomically`: a volume that refuses F_FULLFSYNC gets a plain fsync.
+rustix = { version = "1", features = ["fs"] }
+
 [target.'cfg(target_os = "linux")'.dependencies]
-# The desktop's light/dark choice (see `desktop_theme.rs`). Already in the tree, with the features
-# this needs, through accesskit's accessibility bus; pinned to the same version so nothing is
-# built twice.
-zbus = "=5.19.0"
+# Already in the dependency graph through the accessibility integration. The portal watcher
+# uses the async API so dropping it can cancel an idle subscription without polling.
+zbus = { version = "=5.19.0", default-features = false, features = ["async-io"] }
+async-channel = "2"
+futures-lite = "2"
+
+[dev-dependencies]
+# Exercise the actual portal wire decoder and cancellable worker on every native test host.
+zbus = { version = "=5.19.0", default-features = false, features = ["async-io"] }
+async-channel = "2"
+futures-lite = "2"

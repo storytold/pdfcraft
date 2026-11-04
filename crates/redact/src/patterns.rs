@@ -56,7 +56,12 @@ fn digit_run(s: &[char], start: usize, seps: &[char], max_len: usize) -> (usize,
         let c = s[i];
         if c.is_ascii_digit() {
             n += 1;
-        } else if !(seps.contains(&c) && (digit(s.get(i + 1)) || s.get(i + 1) == Some(&'(')) || (c == '(' || c == ')') && seps.contains(&c)) {
+        } else if !(seps.contains(&c)
+            && (digit(s.get(i + 1)) || s.get(i + 1) == Some(&'('))
+            // A slash only ever joins two digits ("0426/123456").
+            && (c != '/' || digit(s.get(i + 1)) && digit(i.checked_sub(1).and_then(|p| s.get(p))))
+            || (c == '(' || c == ')') && seps.contains(&c))
+        {
             break;
         }
         i += 1;
@@ -68,18 +73,110 @@ fn digit_run(s: &[char], start: usize, seps: &[char], max_len: usize) -> (usize,
     (i, n)
 }
 
+/// Whether the separated digit run goes on past `k` in the direction `step` (1 or −1): the next
+/// digit after `k` is reached through separators only.
+fn run_continues(s: &[char], k: usize, step: isize, seps: &[char]) -> bool {
+    let mut j = k;
+    loop {
+        let Some(c) = j.checked_add_signed(step).and_then(|j| s.get(j)) else { return false };
+        if c.is_ascii_digit() {
+            return true;
+        }
+        if !seps.contains(c) {
+            return false;
+        }
+        j = j.wrapping_add_signed(step);
+    }
+}
+
+/// Words that label the number after them as a phone number, lowercased ("Tel.", "cell.", "Fax:").
+const PHONE_LABELS: [&str; 24] = [
+    "tel",
+    "tél",
+    "tele",
+    "telefon",
+    "telefono",
+    "teléfono",
+    "telephone",
+    "téléphone",
+    "phone",
+    "ph",
+    "cell",
+    "cel",
+    "cellulare",
+    "cellphone",
+    "mobile",
+    "mob",
+    "mobil",
+    "móvil",
+    "movil",
+    "handy",
+    "fax",
+    "tlf",
+    "telf",
+    "gsm",
+];
+
+/// Whether the text before `i` is a phone label, with one to four spaces, colons or dots between.
+fn labelled(s: &[char], i: usize) -> bool {
+    let before = |k: usize| k.checked_sub(1).and_then(|p| s.get(p)).copied();
+    let mut j = i;
+    while i - j < 4 && before(j).is_some_and(|c| matches!(c, ' ' | ':' | '.' | '\u{a0}')) {
+        j -= 1;
+    }
+    let end = j;
+    while end - j < 12 && before(j).is_some_and(char::is_alphabetic) {
+        j -= 1;
+    }
+    if end == i || before(j).is_some_and(char::is_alphanumeric) {
+        return false;
+    }
+    let label: String = s.get(j..end).unwrap_or_default().iter().flat_map(|c| c.to_lowercase()).collect();
+    PHONE_LABELS.contains(&label.as_str())
+}
+
 fn phone(s: &[char], i: usize) -> Option<usize> {
+    const SEPS: [char; 5] = [' ', '-', '.', '(', ')'];
+    // A slash joins the area code to the number in Italian and German landlines ("0426/123456").
+    const RUN_SEPS: [char; 6] = [' ', '-', '.', '(', ')', '/'];
     let start_ok = s[i] == '+' && digit(s.get(i + 1)) || s[i] == '(' && digit(s.get(i + 1)) || s[i].is_ascii_digit();
     if !start_ok || word(i.checked_sub(1).and_then(|p| s.get(p))) || s.get(i.wrapping_sub(1)) == Some(&'+') {
         return None;
     }
+    // A phone number is a whole run of digit groups. The tail of a longer one (an IBAN, a
+    // company or social security number) is not a phone number, however it is grouped (#1884).
+    if run_continues(s, i, -1, &SEPS) {
+        return None;
+    }
     let plus = s[i] == '+';
     let first = if plus { i + 1 } else { i };
-    let (end, n) = digit_run(s, first, &[' ', '-', '.', '(', ')'], 28);
+    let (end, n) = digit_run(s, first, &RUN_SEPS, 28);
     let run = s.get(first..end)?;
     let seps = run.iter().filter(|c| !c.is_ascii_digit()).count();
-    // Always grouped by at least one separator, so plain numbers never match.
-    if seps == 0 || digit(s.get(end)) {
+    // Grouped by at least one separator, or labelled ("cell. 3451234567", #3205), so plain
+    // numbers never match; nor does the head of a run too long to be a phone number.
+    if seps == 0 && !labelled(s, i) || digit(s.get(end)) || run_continues(s, end.checked_sub(1)?, 1, &SEPS) {
+        return None;
+    }
+    let slash = run.contains(&'/');
+    // Italian geographic numbers retain their initial 0 after +39. For a labelled number,
+    // apply the national slash rule after that country code and an optional separating space.
+    // AGCOM's E.164 plan gives geographic numbers 6 to 11 national digits (#3205).
+    let slash_run = if plus && slash {
+        if !labelled(s, i) || !(8..=13).contains(&n) {
+            return None;
+        }
+        let national = run.strip_prefix(&['3', '9'])?;
+        national.strip_prefix(&[' ']).unwrap_or(national)
+    } else {
+        run
+    };
+    // Only an area code beginning with 0 takes a slash, so "2024/123456" is no phone number;
+    // and only one, right after it (not "0426/12/3456" or "0426 12/3456").
+    if run.iter().filter(|c| **c == '/').count() > 1
+        || slash
+            && (slash_run.first() != Some(&'0') || !digit(slash_run.get(1)) || !slash_run.iter().take_while(|c| **c != '/').all(char::is_ascii_digit))
+    {
         return None;
     }
     let ok = if plus {
@@ -87,7 +184,7 @@ fn phone(s: &[char], i: usize) -> Option<usize> {
         (8..=15).contains(&n)
     } else {
         // North American: 10 digits, 11 with a country code ("(555) 123-4567").
-        let nanp = (10..=11).contains(&n);
+        let nanp = (10..=11).contains(&n) && !slash;
         // National with a trunk 0 and 6–14 more digits ("0211 123456", "01 23 45 67 89").
         // The first group needs two digits so decimals ("0.1234567") don't match, and
         // day-first dates ("01.10.2026") are left to the date pattern.
@@ -117,14 +214,16 @@ fn address_char(c: char) -> bool {
 
 fn email(s: &[char], i: usize) -> Option<usize> {
     let local = |c: &char| address_char(*c) || "._%+-".contains(*c);
-    if !address_char(s[i]) || i.checked_sub(1).and_then(|p| s.get(p)).is_some_and(local) {
+    // A match starts at the first character of a run of local characters, which may be
+    // punctuation ("_admin@host.com"), but the run needs a letter or digit.
+    if !local(&s[i]) || i.checked_sub(1).and_then(|p| s.get(p)).is_some_and(local) {
         return None;
     }
     let mut j = i;
     while j < s.len() && local(&s[j]) {
         j += 1;
     }
-    if s.get(j) != Some(&'@') {
+    if s.get(j) != Some(&'@') || !s[i..j].iter().any(|c| address_char(*c)) {
         return None;
     }
     let d0 = j + 1;
@@ -158,12 +257,33 @@ fn credit_card(s: &[char], i: usize) -> Option<usize> {
     if !s[i].is_ascii_digit() || digit(i.checked_sub(1).and_then(|p| s.get(p))) {
         return None;
     }
-    let (end, n) = digit_run(s, i, &[' ', '-'], 23);
-    if !(13..=19).contains(&n) || digit(s.get(end)) {
+    // Room for the longest card (19 digits in groups, 23 characters) and a tail of up to four digits.
+    let (end, n) = digit_run(s, i, &[' ', '-'], 29);
+    // A run longer than that is some other, longer number.
+    if end == i || run_continues(s, end - 1, 1, &[' ', '-']) {
         return None;
     }
-    let digits: Vec<u32> = s[i..end].iter().filter_map(|c| c.to_digit(10)).collect();
-    luhn(&digits).then_some(end - i)
+    // The longest run may carry a trailing number (an expiry, a year, a CVV), so try it and then
+    // each shorter run ending at a group boundary, longest first. The dropped tail is at most four
+    // digits, so a longer number (an IBAN's digits) doesn't match on a prefix.
+    let mut count = n;
+    for e in (i + 1..=end).rev() {
+        if n - count > 4 {
+            break;
+        }
+        if !s.get(e - 1).is_some_and(char::is_ascii_digit) {
+            continue;
+        }
+        let boundary = if e == end { !digit(s.get(end)) } else { matches!(s.get(e), Some(' ' | '-')) };
+        if boundary && (13..=19).contains(&count) {
+            let digits: Vec<u32> = s[i..e].iter().filter_map(|c| c.to_digit(10)).collect();
+            if luhn(&digits) {
+                return Some(e - i);
+            }
+        }
+        count = count.saturating_sub(1);
+    }
+    None
 }
 
 fn ssn(s: &[char], i: usize) -> Option<usize> {
@@ -241,7 +361,7 @@ fn date(s: &[char], i: usize) -> Option<usize> {
     // Numeric: m/d/yy(yy), m-d-yyyy, d.m.yyyy, yyyy-mm-dd.
     if let Some(a) = number(s, i, 1, 4) {
         let sep = s.get(i + a).copied();
-        if matches!(sep, Some('/' | '-' | '.'))
+        if matches!(sep, Some('-'..='/'))
             && let Some(b) = number(s, i + a + 1, 1, 2)
             && s.get(i + a + 1 + b).copied() == sep
             && let Some(c) = number(s, i + a + b + 2, if a == 4 { 1 } else { 2 }, if a == 4 { 2 } else { 4 })
@@ -358,12 +478,111 @@ mod tests {
         );
     }
 
+    /// #3205: Italian numbers written with a slash, and, after a phone label, without separators.
+    #[test]
+    fn slashed_and_labelled_unseparated_phone_numbers() {
+        let lines = [
+            "A tel. 0426 123456",
+            "B tel. +39 0426 123456",
+            "C cell. 345 1234567",
+            "D cell. 3451234567",
+            "E tel. 0426/123456",
+            "F cell. 345.123.4567",
+            "G tel. 0426.123456",
+            "H cell. +393451234567",
+            "Fax: 0211123456",
+            "Telefono 0426/123456",
+        ];
+        assert_eq!(
+            found(Pattern::Phone, &lines.join("\n")),
+            [
+                "0426 123456",
+                "+39 0426 123456",
+                "345 1234567",
+                "3451234567",
+                "0426/123456",
+                "345.123.4567",
+                "0426.123456",
+                "+393451234567",
+                "0211123456",
+                "0426/123456"
+            ]
+        );
+        // Without a label, or after a word that only ends like one, unseparated numbers stay
+        // unmarked; a slash needs a trunk 0 and digits on both sides, and dates stay dates.
+        assert_eq!(
+            found(
+                Pattern::Phone,
+                "id 0211123456, +4921511234567, hotel 3451234567, prot. 2024/123456, on 01/10/2026, \
+                 tel. 12345, tel 0426/ 123456, +39 0426/123456, tel 0426/12/3456, tel 0426 12/3456"
+            ),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    /// Labelled Italian geographic numbers match completely while dates and other digit runs stay unmarked.
+    fn labelled_italian_international_slash_numbers_match_whole() {
+        for (text, number) in [
+            ("tel. +39 0426/123456", "+39 0426/123456"),
+            ("Fax: +390426/123456", "+390426/123456"),
+            ("Telefono +39 02/12345678", "+39 02/12345678"),
+            ("tel. +39 02/1234", "+39 02/1234"),
+            ("tel. +39 0426/1234567", "+39 0426/1234567"),
+        ] {
+            assert_eq!(found(Pattern::Phone, text), [number], "{text}");
+        }
+        for text in [
+            "+39 0426/123456",
+            "tel. +39 2024/123456",
+            "tel. +39 0/123456789",
+            "tel. +39 0426/12/3456",
+            "tel. +39 0426 12/3456",
+            "tel. +39 0426/ 123456",
+            "tel. +39 02/123",
+            "tel. +39 0426/12345678",
+            "tel. +39 0426/1234567890",
+            "tel. +39  0426/123456",
+            "tel. +39-0426/123456",
+            "tel. +39 -0426/123456",
+            "tel. +40 0426/123456",
+            "protocol 2024/123456",
+            "on 01/10/2026",
+        ] {
+            assert!(found(Pattern::Phone, text).is_empty(), "{text}");
+        }
+    }
+
+    #[test]
+    fn the_tail_of_a_longer_number_is_not_a_phone_number() {
+        // #1884: the last groups of a French social security number, an IBAN and a SIRET used
+        // to be marked as phone numbers (and the start left visible). Example numbers.
+        for s in ["NIR 1 85 05 78 006 084 36 end", "IBAN FR76 3000 6000 0112 3456 7890 189", "SIRET 123 456 782 00010"] {
+            assert_eq!(found(Pattern::Phone, s), Vec::<String>::new(), "{s}");
+        }
+        assert_eq!(found(Pattern::Phone, "tel 01 23 45 67 89 / +33 1 23 45 67 89"), ["01 23 45 67 89", "+33 1 23 45 67 89"]);
+        // Nor the head of a run too long to be one: 28 characters in, this one still goes on.
+        assert_eq!(found(Pattern::Phone, "01 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7"), Vec::<String>::new());
+    }
+
     #[test]
     fn emails() {
         assert_eq!(
             found(Pattern::Email, "Write to ada.lovelace+pdf@example.co.uk, or bob@host (no TLD) or x@y.z."),
             ["ada.lovelace+pdf@example.co.uk"]
         );
+    }
+
+    #[test]
+    fn emails_with_a_leading_punctuation_character() {
+        for lead in ["_", "-", ".", "%", "+"] {
+            let address = format!("{lead}john@example.com");
+            assert_eq!(found(Pattern::Email, &format!("Write to {address} now")), [address.as_str()], "lead {lead:?}");
+        }
+        // A run of local characters is still matched whole, never from its middle.
+        assert_eq!(found(Pattern::Email, "a.b@x.com, foo_john@example.com"), ["a.b@x.com", "foo_john@example.com"]);
+        // Punctuation alone is no local part.
+        assert_eq!(found(Pattern::Email, "Write to ..@example.com or -@example.com"), Vec::<String>::new());
     }
 
     #[test]
@@ -384,6 +603,18 @@ mod tests {
             found(Pattern::CreditCard, "Visa 4111 1111 1111 1111, bad 4111 1111 1111 1112, amex 3782-822463-10005"),
             ["4111 1111 1111 1111", "3782-822463-10005"]
         );
+    }
+
+    #[test]
+    fn credit_card_followed_by_another_number() {
+        for tail in ["12/26", "2026", "123", "12 26"] {
+            assert_eq!(found(Pattern::CreditCard, &format!("Card 4111 1111 1111 1111 {tail}")), ["4111 1111 1111 1111"], "tail {tail}");
+        }
+        assert_eq!(found(Pattern::CreditCard, "Card 3782-822463-10005 123"), ["3782-822463-10005"]);
+        // A run that is not a card at any group boundary still matches nothing.
+        assert_eq!(found(Pattern::CreditCard, "Card 4111 1111 1111 1112 12/26"), Vec::<String>::new());
+        // A longer grouped number doesn't match on a card-shaped prefix.
+        assert_eq!(found(Pattern::CreditCard, "IBAN 4111 1111 1111 1111 0000 0000"), Vec::<String>::new());
     }
 
     #[test]

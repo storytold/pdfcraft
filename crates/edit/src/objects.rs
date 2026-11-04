@@ -81,9 +81,10 @@ pub fn editable_objects(doc: &Document, page: usize) -> Result<Vec<EditableObjec
         });
     }
     for (index, image) in crate::images::selectable_images(doc, page, &excluded)? {
+        let Some(rect) = image.visible_rect else { continue };
         objects.push(EditableObject {
             target: ObjectTarget { kind: ObjectKind::Image, index },
-            rect: image.rect,
+            rect,
             content_type: if image.is_form { "form" } else { "image" },
             text: None,
         });

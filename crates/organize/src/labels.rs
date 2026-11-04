@@ -7,7 +7,7 @@
 
 use std::collections::HashSet;
 
-use pdfcraft_cos::page_labels::{MAX_LABEL_BYTES, MAX_LABEL_TREE_DEPTH, MAX_LABEL_TREE_WORK, MAX_PREFIX_BYTES, alpha, roman};
+use pdfcraft_cos::page_labels::{MAX_LABEL_BYTES, MAX_LABEL_TREE_DEPTH, MAX_LABEL_TREE_WORK, MAX_PREFIX_BYTES, MAX_PREFIX_TOTAL_BYTES, alpha, roman};
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString};
 
 use crate::{OrganizeError, page_count, pages_root};
@@ -146,6 +146,7 @@ fn read_label_node(
     left: &mut usize,
     seen: &mut HashSet<ObjRef>,
     entries: &mut Vec<LabelRange>,
+    prefix_left: &mut usize,
 ) -> Result<(), OrganizeError> {
     label_work(left, 1)?;
     if depth > MAX_LABEL_TREE_DEPTH {
@@ -179,6 +180,9 @@ fn read_label_node(
                         if prefix.len() > MAX_LABEL_BYTES {
                             return Err(invalid_label("a decoded prefix exceeds 1024 UTF-8 bytes"));
                         }
+                        // A prefix object shared by many ranges is copied into each: count every copy.
+                        *prefix_left =
+                            prefix_left.checked_sub(prefix.len()).ok_or_else(|| invalid_label("decoded prefixes exceed 4 MiB in total"))?;
                         let style = spec.name(b"S").map_or(LabelStyle::None, LabelStyle::from_name);
                         let first = spec.int(b"St").unwrap_or(1).max(1);
                         let first = if style == LabelStyle::None {
@@ -203,7 +207,7 @@ fn read_label_node(
                 }
                 // Recursion is bounded before descending, and arrays are borrowed throughout.
                 for kid in kids {
-                    read_label_node(doc, kid, depth + 1, left, seen, entries)?;
+                    read_label_node(doc, kid, depth + 1, left, seen, entries, prefix_left)?;
                 }
                 Ok(())
             })?;
@@ -217,8 +221,8 @@ fn checked_ranges(doc: &Document) -> Result<Vec<LabelRange>, OrganizeError> {
     let catalog = doc.get(root);
     let Some(tree) = catalog.as_dict().and_then(|c| c.get(b"PageLabels")) else { return Ok(Vec::new()) };
     let mut entries = Vec::new();
-    let mut left = MAX_LABEL_TREE_WORK;
-    read_label_node(doc, tree, 0, &mut left, &mut HashSet::new(), &mut entries)?;
+    let (mut left, mut prefix_left) = (MAX_LABEL_TREE_WORK, MAX_PREFIX_TOTAL_BYTES);
+    read_label_node(doc, tree, 0, &mut left, &mut HashSet::new(), &mut entries, &mut prefix_left)?;
     // A start page given twice keeps its later range, as readers that overwrite do (the sort is
     // stable, so the later one is last among equals).
     entries.sort_by_key(|r| r.start);
@@ -381,13 +385,40 @@ pub fn set_page_label_ranges(doc: &mut Document, ranges: &[LabelRange]) -> Resul
             spec.set(b"St".to_vec(), Object::Int(i64::from(r.first)));
         }
         nums.push(Object::Int(r.start as i64));
-        nums.push(Object::Dict(spec));
+        // Indirect, as Acrobat writes them: a direct dictionary is valid too, but some readers
+        // (pdfannots2json, through unipdf) skip it and show physical page numbers (#1763).
+        nums.push(Object::Ref(doc.add(Object::Dict(spec))));
     }
     let mut tree = Dict::new();
     tree.set(b"Nums".to_vec(), Object::Array(nums));
     let tree = doc.add(Object::Dict(tree));
     doc.update_dict(root, |c| c.set(b"PageLabels".to_vec(), Object::Ref(tree)))?;
     Ok(())
+}
+
+/// After `deleted` pages (0-based, as they were numbered before the delete) are gone, move the label
+/// ranges with the pages they label: a range starts as many pages earlier as were deleted before
+/// it, and keeps its first number, so numbering continues over the gap as in Acrobat. A range whose
+/// first page went starts on the next page left; one left with no pages gives way to the next.
+/// A tree that can't be read is left as it is: the delete still goes ahead.
+pub(crate) fn drop_deleted_pages(doc: &mut Document, deleted: &[usize]) -> Result<(), OrganizeError> {
+    let Ok(old) = checked_ranges(doc) else { return Ok(()) };
+    let mut deleted = deleted.to_vec();
+    deleted.sort_unstable();
+    deleted.dedup();
+    let mut ranges: Vec<LabelRange> = Vec::with_capacity(old.len());
+    for r in &old {
+        let start = r.start.saturating_sub(deleted.partition_point(|d| *d < r.start));
+        match ranges.last_mut() {
+            // The later range is the one on the first page left; ranges stay sorted by start.
+            Some(last) if last.start == start => *last = LabelRange { start, ..r.clone() },
+            _ => ranges.push(LabelRange { start, ..r.clone() }),
+        }
+    }
+    if ranges == old {
+        return Ok(());
+    }
+    set_page_label_ranges(doc, &ranges)
 }
 
 /// Acrobat's "Number pages": label pages `from..=to` (0-based) with `style`, `prefix` and

@@ -1,41 +1,50 @@
-//! One PdfCraft per Windows sign-in: a launch that only names files hands them to the PdfCraft
-//! that is already running, where they open as tabs, and exits (#282, #317).
+//! One PdfCraft per Windows sign-in or Linux/BSD display: a launch that only names files hands them
+//! to the PdfCraft that is already running, where they open as tabs, and exits (#282, #317, #1726).
 //!
-//! Outlook attachments, Explorer double-clicks and Open With all start `pdfcraft.exe "<file>"`, so
-//! until now every file got its own process and window. The first PdfCraft listens on a Unix
-//! domain socket (Windows 10 1803 and later) in `%LOCALAPPDATA%\PdfCraft`, or in the data folder of
-//! a portable copy. The socket is named after the Windows session (`instance-Console.sock`), so
-//! two sign-ins of the same user never open files in each other's windows, and it lives in the
-//! user's own profile, so other accounts can't create, replace or reach it: nobody else can
-//! intercept a launch or open files in this user's window. The exchange is one line each way, a
-//! JSON request naming absolute paths and `ok`, and the running app opens the paths exactly as
-//! File ▸ Open would.
+//! Outlook attachments, Explorer double-clicks and Open With all start `pdfcraft.exe "<file>"`, and
+//! a file manager or `xdg-open` starts `pdfcraft <file>` the same way, so until now every file got
+//! its own process and window. The first PdfCraft listens on a Unix domain socket. On Windows (10
+//! 1803 and later) it is in `%LOCALAPPDATA%\PdfCraft`, or in the data folder of a portable copy,
+//! and is named after the Windows session (`instance-Console.sock`), so two sign-ins of the same
+//! user never open files in each other's windows. On Linux and the BSDs it is in
+//! `$XDG_RUNTIME_DIR/pdfcraft` and is named after the display (`instance-wayland-0.sock`), so a
+//! launch on another display or seat opens its own window there. Either way it lives in a folder
+//! only the user can reach, so other accounts can't create, replace or reach it: nobody else can
+//! intercept a launch or open files in this user's window. Inside a Flatpak, `$XDG_RUNTIME_DIR` is
+//! the app's own and is shared by every run of it, so the handoff works there too. The exchange is
+//! one line each way, a JSON request naming absolute paths and `ok`, and the running app opens the
+//! paths exactly as File ▸ Open would.
 //!
 //! Every failure falls back to the old behaviour: a launch that can't hand its files over within
 //! a few seconds opens its own window. `--new-window`, any other option, or no files at all also
-//! starts a window of its own, as before. Other platforms keep their current behaviour (macOS
-//! already routes Finder opens to the running app through Apple events).
+//! starts a window of its own, as before. macOS keeps its current behaviour (it already routes
+//! Finder opens to the running app through Apple events).
 //!
-//! The socket comes from `uds_windows`, already in the lockfile through zbus: `std` has no Unix
-//! sockets on Windows, and calling Winsock directly would need `unsafe`, which the workspace
-//! forbids.
+//! On Windows the socket comes from `uds_windows`, already in the lockfile through zbus: `std` has
+//! no Unix sockets on Windows, and calling Winsock directly would need `unsafe`, which the
+//! workspace forbids.
 
 use std::sync::{Arc, Mutex, PoisonError};
-#[cfg(windows)]
+#[cfg(any(windows, all(unix, not(target_os = "macos"))))]
 use std::time::Duration;
+
+#[cfg(all(unix, not(target_os = "macos")))]
+use std::os::unix::net::{UnixListener, UnixStream};
+#[cfg(windows)]
+use uds_windows::{UnixListener, UnixStream};
 
 use pdfcraft_ui_egui::{OsEvent, OsEventsFn};
 
 /// Longest request read: one line of JSON, far longer than any real list of paths.
-#[cfg_attr(not(windows), allow(dead_code))]
+#[cfg_attr(not(any(windows, all(unix, not(target_os = "macos")))), allow(dead_code))]
 const MAX_REQUEST: u64 = 1 << 20;
 
 /// How long either side waits for the other before giving up.
-#[cfg(windows)]
+#[cfg(any(windows, all(unix, not(target_os = "macos"))))]
 const TIMEOUT: Duration = Duration::from_secs(5);
 
 /// What this launch should do.
-#[cfg_attr(not(windows), allow(dead_code))]
+#[cfg_attr(not(any(windows, all(unix, not(target_os = "macos")))), allow(dead_code))]
 pub enum Claim {
     /// The running PdfCraft took the files: exit without a window.
     HandedOff,
@@ -59,13 +68,13 @@ pub struct Server {
 }
 
 impl Server {
-    #[cfg_attr(not(windows), allow(dead_code))]
+    #[cfg_attr(not(any(windows, all(unix, not(target_os = "macos")))), allow(dead_code))]
     fn new() -> Self {
         Self { inbox: Arc::default() }
     }
 
     /// Queue files from another launch and wake the UI.
-    #[cfg_attr(not(windows), allow(dead_code))]
+    #[cfg_attr(not(any(windows, all(unix, not(target_os = "macos")))), allow(dead_code))]
     fn deliver(&self, paths: Vec<String>) {
         let mut inbox = self.inbox.lock().unwrap_or_else(PoisonError::into_inner);
         inbox.paths.extend(paths);
@@ -76,8 +85,10 @@ impl Server {
 
     /// The queue the UI drains every frame (`PdfCraftApp::os_events`). Files that arrived before
     /// the window existed are in the first batch. A batch also brings the window forward, as the
-    /// new window it replaces would have been.
-    pub fn connect(&self, ctx: &egui::Context) -> OsEventsFn {
+    /// new window it replaces would have been. A Wayland window can't bring itself forward (winit
+    /// ignores `Focus` there), so on `native_wayland` it asks for the user's attention instead,
+    /// which desktops show by highlighting it in the taskbar.
+    pub fn connect(&self, ctx: &egui::Context, native_wayland: bool) -> OsEventsFn {
         let wake = ctx.clone();
         self.inbox.lock().unwrap_or_else(PoisonError::into_inner).wake = Some(Box::new(move || wake.request_repaint()));
         let inbox = Arc::clone(&self.inbox);
@@ -89,13 +100,16 @@ impl Server {
             }
             ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
             ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+            if native_wayland {
+                ctx.send_viewport_cmd(egui::ViewportCommand::RequestUserAttention(egui::UserAttentionType::Informational));
+            }
             vec![OsEvent::Open(paths)]
         })
     }
 }
 
 /// The request a launch sends: `{"open":[…]}` and a newline.
-#[cfg_attr(not(windows), allow(dead_code))]
+#[cfg_attr(not(any(windows, all(unix, not(target_os = "macos")))), allow(dead_code))]
 pub fn request(paths: &[String]) -> String {
     let mut line = serde_json::json!({ "open": paths }).to_string();
     line.push('\n');
@@ -104,7 +118,7 @@ pub fn request(paths: &[String]) -> String {
 
 /// The paths a request names, or `None` when it isn't a request: anything but one JSON object
 /// whose `open` is a non-empty list of non-empty strings.
-#[cfg_attr(not(windows), allow(dead_code))]
+#[cfg_attr(not(any(windows, all(unix, not(target_os = "macos")))), allow(dead_code))]
 pub fn parse_request(line: &str) -> Option<Vec<String>> {
     let value: serde_json::Value = serde_json::from_str(line.trim_end()).ok()?;
     let open = value.get("open")?.as_array()?;
@@ -121,14 +135,14 @@ pub fn absolute(paths: &[String]) -> Vec<String> {
 /// Decide what this launch does. `files` are absolute ([`absolute`]); `may_hand_off` is false
 /// when the launch asked for anything besides opening files, so it gets its own window.
 pub fn claim(files: &[String], may_hand_off: bool) -> Claim {
-    #[cfg(windows)]
+    #[cfg(any(windows, all(unix, not(target_os = "macos"))))]
     {
         match socket_path() {
             Some(path) => claim_at(&path, files, may_hand_off),
             None => Claim::Alone,
         }
     }
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, all(unix, not(target_os = "macos")))))]
     {
         let _ = (files, may_hand_off);
         Claim::Alone
@@ -139,7 +153,7 @@ pub fn claim(files: &[String], may_hand_off: bool) -> Claim {
 /// `%LOCALAPPDATA%` is unset.
 #[cfg(windows)]
 fn socket_path() -> Option<std::path::PathBuf> {
-    let name = socket_name(std::env::var("SESSIONNAME").ok().as_deref());
+    let name = socket_name(session_id(), std::env::var("SESSIONNAME").ok().as_deref());
     // %LOCALAPPDATA% is private to the user's sign-in, so other accounts can't receive this
     // user's file paths or send it files to open. A portable copy uses it too (#889), under its
     // own name so it never hands files to an installed copy (which keeps its settings elsewhere).
@@ -148,22 +162,62 @@ fn socket_path() -> Option<std::path::PathBuf> {
     std::env::var_os("LOCALAPPDATA").filter(|v| !v.is_empty()).map(|d| std::path::PathBuf::from(d).join("PdfCraft").join(name))
 }
 
-/// The socket's file name for a Windows session (`SESSIONNAME`: `Console`, `RDP-Tcp#3`…). The
-/// same user signed in twice (at the console and over Remote Desktop) gets one socket per session,
-/// so a file never opens in a window on the other screen. Only letters, digits and `-` are kept.
+/// The socket in `$XDG_RUNTIME_DIR/pdfcraft`; none when `$XDG_RUNTIME_DIR` is unset. Never `/tmp`
+/// instead: other accounts can create files there, and so could listen in this user's place.
+#[cfg(all(unix, not(target_os = "macos")))]
+fn socket_path() -> Option<std::path::PathBuf> {
+    let var = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
+    let name = display_socket_name(var("WAYLAND_DISPLAY").or_else(|| var("DISPLAY")).as_deref());
+    // The XDG base directory spec makes it the user's own (mode 0700), so the folder inside it is
+    // out of other accounts' reach whatever the umask.
+    var("XDG_RUNTIME_DIR").map(|d| std::path::PathBuf::from(d).join("pdfcraft").join(name))
+}
+
+/// The socket's file name for a display (`WAYLAND_DISPLAY`, else `DISPLAY`): a launch opens its
+/// files on the display it was started on, never in a window on another seat, a nested
+/// compositor or a remote X display. Letters, digits, `-`, `_` and `.` are kept, and of those the
+/// last 32, where an absolute `WAYLAND_DISPLAY` (`/run/user/1000/wayland-1`) differs.
+#[cfg_attr(not(all(unix, not(target_os = "macos"))), allow(dead_code))]
+fn display_socket_name(display: Option<&str>) -> String {
+    let kept: Vec<char> = display.unwrap_or_default().chars().filter(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.')).collect();
+    let display: String = kept.get(kept.len().saturating_sub(32)..).unwrap_or_default().iter().collect();
+    if display.is_empty() { "instance.sock".to_string() } else { format!("instance-{display}.sock") }
+}
+
+/// The Windows session this process runs in, from its access token: the console, each Remote
+/// Desktop sign-in and session 0 (services) each have their own. `None` if Windows won't say.
+#[cfg(windows)]
+fn session_id() -> Option<u32> {
+    use winsafe::{HACCESSTOKEN, TokenInfo, co::TOKEN_INFORMATION_CLASS};
+    match HACCESSTOKEN::GetCurrentProcessToken().GetTokenInformation(TOKEN_INFORMATION_CLASS::SessionId) {
+        Ok(TokenInfo::SessionId(id)) => Some(*id),
+        _ => None,
+    }
+}
+
+/// The socket's file name for a Windows session. The same user signed in twice (at the console
+/// and over Remote Desktop) gets one socket per session, so a file never opens in a window on the
+/// other screen. The session is the token's session id (`session`): a launch from Task Scheduler,
+/// a service or a remote shell has no `SESSIONNAME` but still runs in a session, so it finds the
+/// window of the session it runs in (#3338), and never one in another session (review on #3340).
+/// Only if the id can't be read does `SESSIONNAME` (`Console`, `RDP-Tcp#3`…) name it, letters,
+/// digits and `-` kept.
 #[cfg_attr(not(windows), allow(dead_code))]
-fn socket_name(session: Option<&str>) -> String {
-    let session: String = session.unwrap_or_default().chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-').take(32).collect();
-    if session.is_empty() { "instance.sock".to_string() } else { format!("instance-{session}.sock") }
+fn socket_name(session: Option<u32>, session_name: Option<&str>) -> String {
+    if let Some(id) = session {
+        return format!("instance-s{id}.sock");
+    }
+    let name: String = session_name.unwrap_or_default().chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-').take(32).collect();
+    if name.is_empty() { "instance.sock".to_string() } else { format!("instance-{name}.sock") }
 }
 
 /// Held while a launch finds out whether it is the first, so launches that start together (several
 /// files selected in Explorer and opened at once) take turns: the first one is listening before
 /// the next one looks. Without it a launch could find the socket bound but not yet listening,
 /// fail to clear it ("Access is denied") and open a window of its own. The lock is on a file
-/// beside the socket, which is never deleted; Windows releases it when the process ends, however
-/// it ends. Best effort: without the lock the launch goes on as before.
-#[cfg(windows)]
+/// beside the socket, which is never deleted; the system releases it when the process ends,
+/// however it ends. Best effort: without the lock the launch goes on as before.
+#[cfg(any(windows, all(unix, not(target_os = "macos"))))]
 fn election(socket: &std::path::Path) -> Option<std::fs::File> {
     if let Some(dir) = socket.parent() {
         let _ = std::fs::create_dir_all(dir);
@@ -183,9 +237,8 @@ fn election(socket: &std::path::Path) -> Option<std::fs::File> {
 }
 
 /// [`claim`] with the socket at `path`.
-#[cfg(windows)]
+#[cfg(any(windows, all(unix, not(target_os = "macos"))))]
 fn claim_at(path: &std::path::Path, files: &[String], may_hand_off: bool) -> Claim {
-    use uds_windows::{UnixListener, UnixStream};
     // Released when this function returns: by then this launch listens, or has handed over.
     let _election = election(path);
     // Two launches can start together: the one that loses the race to bind hands over to the
@@ -241,8 +294,8 @@ fn claim_at(path: &std::path::Path, files: &[String], may_hand_off: bool) -> Cla
 }
 
 /// Send `files` over `stream` and wait for the running app's `ok`.
-#[cfg(windows)]
-fn hand_off(stream: &uds_windows::UnixStream, files: &[String]) -> std::io::Result<()> {
+#[cfg(any(windows, all(unix, not(target_os = "macos"))))]
+fn hand_off(stream: &UnixStream, files: &[String]) -> std::io::Result<()> {
     use std::io::{BufRead, Read, Write};
     stream.set_read_timeout(Some(TIMEOUT))?;
     stream.set_write_timeout(Some(TIMEOUT))?;
@@ -254,8 +307,8 @@ fn hand_off(stream: &uds_windows::UnixStream, files: &[String]) -> std::io::Resu
 }
 
 /// Accept launches on a background thread for as long as the process runs.
-#[cfg(windows)]
-fn serve(listener: uds_windows::UnixListener) -> Claim {
+#[cfg(any(windows, all(unix, not(target_os = "macos"))))]
+fn serve(listener: UnixListener) -> Claim {
     let server = Server::new();
     let inbox = Server { inbox: Arc::clone(&server.inbox) };
     let started = std::thread::Builder::new().name("single-instance".into()).spawn(move || {
@@ -278,8 +331,8 @@ fn serve(listener: uds_windows::UnixListener) -> Claim {
 }
 
 /// Read one launch's request, queue its files and confirm.
-#[cfg(windows)]
-fn receive(stream: &uds_windows::UnixStream, server: &Server) -> std::io::Result<()> {
+#[cfg(any(windows, all(unix, not(target_os = "macos"))))]
+fn receive(stream: &UnixStream, server: &Server) -> std::io::Result<()> {
     use std::io::{BufRead, Read, Write};
     stream.set_read_timeout(Some(TIMEOUT))?;
     stream.set_write_timeout(Some(TIMEOUT))?;
@@ -324,12 +377,20 @@ mod tests {
 
     #[test]
     fn each_windows_session_gets_its_own_socket_name() {
-        assert_eq!(socket_name(Some("Console")), "instance-Console.sock");
-        assert_eq!(socket_name(Some("RDP-Tcp#3")), "instance-RDP-Tcp3.sock");
-        assert_ne!(socket_name(Some("RDP-Tcp#3")), socket_name(Some("RDP-Tcp#4")));
-        assert_eq!(socket_name(Some(r"..\x/y:z")), "instance-xyz.sock", "never a path");
-        assert_eq!(socket_name(None), "instance.sock");
-        assert_eq!(socket_name(Some("")), "instance.sock");
+        // The session id decides: #3338, a launch from Task Scheduler (no SESSIONNAME) in the
+        // console's session finds the window opened from Explorer there...
+        assert_eq!(socket_name(Some(1), None), socket_name(Some(1), Some("Console")));
+        // ...and (review on #3340) one in a Remote Desktop session never reaches the console's.
+        assert_ne!(socket_name(Some(2), None), socket_name(Some(1), Some("Console")));
+        assert_ne!(socket_name(Some(2), Some("RDP-Tcp#3")), socket_name(Some(3), Some("RDP-Tcp#3")));
+        assert_eq!(socket_name(Some(4_000_000_000), None), "instance-s4000000000.sock");
+        // Only without an id does SESSIONNAME name it.
+        assert_eq!(socket_name(None, Some("Console")), "instance-Console.sock");
+        assert_eq!(socket_name(None, Some("RDP-Tcp#3")), "instance-RDP-Tcp3.sock");
+        assert_ne!(socket_name(None, Some("RDP-Tcp#3")), socket_name(None, Some("RDP-Tcp#4")));
+        assert_eq!(socket_name(None, Some(r"..\x/y:z")), "instance-xyz.sock", "never a path");
+        assert_eq!(socket_name(None, None), "instance.sock");
+        assert_eq!(socket_name(None, Some("")), "instance.sock");
     }
 
     #[test]
@@ -338,26 +399,50 @@ mod tests {
         // Before the window exists: queued, nothing to wake yet.
         server.deliver(vec!["a.pdf".into()]);
         let ctx = egui::Context::default();
-        let mut poll = server.connect(&ctx);
+        let mut poll = server.connect(&ctx, false);
         server.deliver(vec!["b.pdf".into()]);
         let events = poll();
         assert!(matches!(events.as_slice(), [OsEvent::Open(p)] if p == &["a.pdf", "b.pdf"]));
         assert!(poll().is_empty(), "each file is delivered once");
     }
 
+    #[test]
+    fn each_display_gets_its_own_socket_name() {
+        assert_eq!(display_socket_name(Some("wayland-0")), "instance-wayland-0.sock");
+        assert_eq!(display_socket_name(Some(":0")), "instance-0.sock");
+        assert_ne!(display_socket_name(Some(":1.0")), display_socket_name(Some(":10")));
+        assert_ne!(display_socket_name(Some("wayland-0")), display_socket_name(Some("wayland-1")));
+        // An absolute WAYLAND_DISPLAY keeps the end of its path, where nested compositors differ.
+        let nested = display_socket_name(Some("/home/someone/.cache/nested-compositor/run/wayland-1"));
+        assert!(nested.ends_with("wayland-1.sock") && !nested.contains('/'), "{nested}");
+        assert_eq!(display_socket_name(Some("../../x/y")), "instance-....xy.sock", "never a path");
+        assert_eq!(display_socket_name(None), "instance.sock");
+        assert_eq!(display_socket_name(Some("")), "instance.sock");
+    }
+
+    /// The socket is named by the session the process runs in, which Windows always gives.
     #[cfg(windows)]
+    #[test]
+    fn this_process_has_a_session_id() {
+        let id = super::session_id();
+        assert!(id.is_some(), "the access token names the session");
+        let name = socket_name(id, None);
+        assert!(socket_path().is_none_or(|p| p.file_name().is_some_and(|f| f.to_string_lossy().ends_with(&name))), "{name}");
+    }
+
+    #[cfg(any(windows, all(unix, not(target_os = "macos"))))]
     fn socket(test: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!("pdfcraft-instance-{}-{test}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        dir.join(socket_name(None))
+        dir.join(socket_name(None, None))
     }
 
-    #[cfg(windows)]
+    #[cfg(any(windows, all(unix, not(target_os = "macos"))))]
     #[test]
     fn a_second_launch_hands_its_files_to_the_first() {
         let path = socket("hand-off");
         let Claim::Primary(first) = claim_at(&path, &[], true) else { panic!("the first launch listens") };
-        let mut poll = first.connect(&egui::Context::default());
+        let mut poll = first.connect(&egui::Context::default(), false);
         assert!(matches!(claim_at(&path, &["C:\\a.pdf".into()], true), Claim::HandedOff));
         assert!(matches!(poll().as_slice(), [OsEvent::Open(p)] if p == &["C:\\a.pdf"]));
         // A launch with options keeps its own window and doesn't take over the socket.
@@ -365,10 +450,10 @@ mod tests {
         assert!(poll().is_empty());
     }
 
-    #[cfg(windows)]
+    #[cfg(any(windows, all(unix, not(target_os = "macos"))))]
     #[test]
     fn launches_started_together_share_one_window() {
-        // Several files selected in Explorer and opened with Enter: one process per file, all at once.
+        // Several files selected in Explorer or a file manager and opened at once: one process per file.
         let path = socket("together");
         let barrier = Arc::new(std::sync::Barrier::new(8));
         let launches: Vec<_> = (0..8)
@@ -386,12 +471,12 @@ mod tests {
         assert_eq!(claims.iter().filter(|c| matches!(c, Claim::HandedOff)).count(), 7, "the rest hand over");
     }
 
-    #[cfg(windows)]
+    #[cfg(any(windows, all(unix, not(target_os = "macos"))))]
     #[test]
     fn a_socket_left_by_a_crashed_instance_is_replaced() {
         let path = socket("stale");
         // Bind and drop: the file stays, nobody listens.
-        drop(uds_windows::UnixListener::bind({
+        drop(UnixListener::bind({
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
             &path
         }));

@@ -634,6 +634,7 @@ fn new_window(
             app_delegate,
             &window,
             attrs.platform_specific.accepts_first_mouse,
+            attrs.platform_specific.movable_by_window_background,
             attrs.platform_specific.option_as_alt,
         );
 

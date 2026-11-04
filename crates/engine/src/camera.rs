@@ -115,6 +115,20 @@ impl Session {
     /// inside `corners` (PDF user space, any order), straightened to a rectangle. The page is
     /// read at its picture's own resolution (at most 600 dpi) and keeps that physical size.
     pub fn enhance_camera_page(&mut self, id: DocId, page: usize, corners: [Point; 4]) -> Result<(), EditError> {
+        self.enhance_camera_page_at(id, page, corners, crate::camera_clean::Look::Original, 0)
+    }
+
+    /// [`Session::enhance_camera_page`], then give the straightened photo a `look` at `level`
+    /// (0 = as photographed … 100 = white paper, strong contrast, no specks; for black and white
+    /// the threshold; see [`crate::camera_clean`]). Still one undoable step.
+    pub fn enhance_camera_page_at(
+        &mut self,
+        id: DocId,
+        page: usize,
+        corners: [Point; 4],
+        look: crate::camera_clean::Look,
+        level: u8,
+    ) -> Result<(), EditError> {
         let doc = self.get(id).ok_or(EditError::NoDocument)?;
         if let Some(why) = &doc.read_only_reason {
             return Err(EditError::ReadOnly(why.clone()));
@@ -147,18 +161,46 @@ impl Session {
             [vx as f64 * k, vy as f64 * k]
         });
         let out = warp(&shot.rgba, shot.width, shot.height, quad).map_err(EditError::Invalid)?;
-        let mut jpeg = Vec::new();
-        image::ImageEncoder::write_image(
-            image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, QUALITY),
-            &out.rgb,
-            out.width,
-            out.height,
-            image::ExtendedColorType::Rgb8,
-        )
-        .map_err(|e| EditError::Invalid(format!("the straightened page could not be encoded: {e}")))?;
+        let pixels = crate::camera_clean::apply(&out.rgb, out.width, out.height, look, level)
+            .ok_or_else(|| EditError::Invalid("the straightened page could not be cleaned up".into()))?;
+        // Black and white is lossless (PNG): JPEG would smear grey around every letter.
+        let mut encoded = Vec::new();
+        let (name, written) = match &pixels {
+            crate::camera_clean::Pixels::Rgb(rgb) => (
+                "camera.jpg",
+                image::ImageEncoder::write_image(
+                    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut encoded, QUALITY),
+                    rgb,
+                    out.width,
+                    out.height,
+                    image::ExtendedColorType::Rgb8,
+                ),
+            ),
+            crate::camera_clean::Pixels::Grey(grey) if look == crate::camera_clean::Look::BlackWhite => (
+                "camera.png",
+                image::ImageEncoder::write_image(
+                    image::codecs::png::PngEncoder::new(&mut encoded),
+                    grey,
+                    out.width,
+                    out.height,
+                    image::ExtendedColorType::L8,
+                ),
+            ),
+            crate::camera_clean::Pixels::Grey(grey) => (
+                "camera.jpg",
+                image::ImageEncoder::write_image(
+                    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut encoded, QUALITY),
+                    grey,
+                    out.width,
+                    out.height,
+                    image::ExtendedColorType::L8,
+                ),
+            ),
+        };
+        written.map_err(|e| EditError::Invalid(format!("the straightened page could not be encoded: {e}")))?;
         // One device pixel per `k` points keeps the page's physical size.
         let dpi = (k * 72.0).clamp(1.0, 1200.0);
-        let bytes = self.create_from_images_with_resolution(&[("camera.jpg".into(), jpeg)], ImageResolution::Dpi(dpi))?;
+        let bytes = self.create_from_images_with_resolution(&[(name.into(), encoded)], ImageResolution::Dpi(dpi))?;
         let replace = Edit::ReplacePages { pages: vec![page], name: "camera.pdf".into(), bytes, src_pages: vec![0] };
         self.apply(id, Edit::Batch { label: "Enhance camera image".into(), edits: vec![replace] })
     }

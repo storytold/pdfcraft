@@ -7,7 +7,14 @@ A dynamic XFA form is a PDF shell around an XML template (`/AcroForm /XFA`): one
 ("requires Adobe Reader") and `/NeedsRendering true`. Viewers without an XFA engine show the
 placeholder. This crate reads the template, lays it out, and writes ordinary pages and AcroForm
 fields into the document, so everything else in PdfCraft (rendering, filling, saving, printing,
-the automation tools) works on it unchanged. The engine does this when it opens such a form.
+the automation tools) works on it unchanged. The engine does this when it opens such a form,
+and repeats layout after an edited multiline text field without a fixed height changes value.
+This uses the final datasets after calculations, including on forms without scripts; pages
+and widgets refresh together and undo/redo restores their layout. Text longer than a page
+uses the existing page-text fallback: the full value remains in the datasets and is shown
+across pages, with a warning that it can no longer be edited as a widget. Fixed-height fields
+keep their geometry. If a value cannot be synchronized to the datasets, the engine reports
+that warning and keeps the existing layout and accepted widget values.
 
 ## What it does
 
@@ -17,6 +24,7 @@ the automation tools) works on it unchanged. The engine does this when it opens 
   page areas, content areas and media; measurements in mm, cm, in, pt and px; fonts, paragraphs,
   margins, borders (edge order rules), captions with reserves, check-button items, pictures,
   rich text (`exData` XHTML: paragraphs, `br`, bold/italic/underline/size spans, embedded fields),
+  text-field limits (`text/maxChars` and `exData/maxLength`, carried into AcroForm `/MaxLen`),
   inline JPEG, PNG and GIF images, lines, rectangles, occurrences, `breakBefore`/`breakAfter`, overflow
   leaders, `columnWidths` and `colSpan`.
 - **Layout** (`layout`): positioned, `tb`, `lr-tb`/`rl-tb`, `table` and `row` layouts; a
@@ -24,14 +32,20 @@ the automation tools) works on it unchanged. The engine does this when it opens 
   page masters chosen by occurrence; a table's header row repeats after a break; presence
   `hidden` takes no space, `invisible` takes space; repeating subforms get their initial
   instances, in flowed content and in a top-to-bottom container inside positioned content (a
-  table in an area) alike; fields that compute the page number or count on layout show the numbers.
+  table in an area) alike; fields that compute the page number or count on layout show the numbers;
+  a draw placed by position turns about its anchor (`rotate`: degrees counter-clockwise, a multiple
+  of 90), as one item a page break doesn't cut, and its container grows to the box it stands in. A
+  field, a subform or a draw in a flow doesn't turn.
 - **PDF** (`pdf::write_form`): pages with content streams in the standard 14 fonts (Arial and
   friends → Helvetica, Courier New → Courier, serif faces → Times; nothing is embedded), JPEG
   XObjects, and widgets: text (multi-line, max length, alignment), date (Acrobat's `AFDate`
   format and keystroke actions from the picture clause), check boxes and radio groups (from
   `exclGroup`), push buttons with Reset / Print / Save As / URI actions recognised from their
-  scripts. Appearance streams are left empty for the forms layer to generate. Each field keeps
-  its SOM path in `/PCSom`; the AcroForm gets `/PCXfaLayout` so a saved form is not laid out
+  scripts, and signature fields, each named by its SOM path (`form1[0].page1[0].sign[0]`, as
+  fields under one for each step above it) because other viewers lay a dynamic form out again
+  and find a signature by that name. A box whose path, or a part of it, the file already gives
+  another field keeps its own name, and a new layout keeps a signature a generated box holds. Appearance streams are left empty for the forms layer to
+  generate. Each field keeps its SOM path in `/PCSom`; the AcroForm gets `/PCXfaLayout` so a saved form is not laid out
   twice. The XFA packets stay, so Adobe's viewers keep rendering the form from them.
 
 - **Data** (`data`): the `datasets` packet. On layout, a field takes its value from the data
@@ -59,7 +73,13 @@ be measured exponentially often in their nesting. A measurement budget backs thi
   the datasets packet per event), and `rerender`, which lays the form out again from template,
   data and overrides. The scripts themselves run in the `js` crate's XFA object model; the
   engine runs initialize and calculate on open, change, exit, validate and calculate after a
-  field changes, and click for buttons.
+  field changes, and click for buttons. Every generated copy of a page-master button resolves
+  its own PDF field to the shared XFA click script, so clicking an early copy works as well
+  as the last, including through `js_run` and after save/reopen.
+  While this XFA layout is active, the engine does not
+  initialize Acrobat JavaScript with the PDF container's document-level scripts (including
+  non-XFA-viewer warnings). They stay available for inspection and saving; explicit console
+  scripts and XFA messages still run. Static XFA keeps its document scripts.
 
   Private keys PdfCraft writes (other viewers ignore them):
 
@@ -68,6 +88,7 @@ be measured exponentially often in their nesting. A measurement budget backs thi
   | `/PCSom` | generated fields | the field's SOM path, so values go back to the data |
   | `/PCXfaLayout` | AcroForm | what laying out produced, so a saved form is not laid out again |
   | `/PCXfaOverrides` | AcroForm | `<< /Presence << /som (hidden) … >> /Access << /som (readOnly) … >> >>`: presence and access scripts set, by SOM path (instance 0 of a repeating subform stands for all); applied to the template before every layout, so undo, save and reopen keep them. Adobe's viewers draw from the XFA packets and don't read it; at most 10 000 entries are read or written |
+  | `/PCXfaNode` | generated fields above a signature field | `true`: the field names a step of the signature field's SOM path; a new layout replaces it with the fields it holds |
   | `/PCXfaClick` | generated push buttons | `true`: the template has a click script for this button. Such buttons carry no `/A`: XFA JavaScript is not Acrobat JavaScript, so it is never written as a `/S /JavaScript` action other viewers would run. PdfCraft finds the script by the field's `/PCSom` |
 
 ## API sketch
@@ -83,8 +104,7 @@ let form = pdfcraft_xfa::layout_xml(template_xml)?;       // pages of items, for
 ## Deliberately not done (yet)
 
 - **Data binding** is the default one only: explicit `bind ref` expressions, global binding and
-  data descriptions are not followed, and no standalone XML or XDP data file is imported or
-  exported.
+  data descriptions are not followed (a data description is kept as written, not checked).
 - **Scripting.** JavaScript (boa) and FormCalc (a native interpreter, `pdfcraft_js::formcalc`)
   share one object model, one set of effects and one set of budgets. FormCalc covers the
   language and the common built-ins (arithmetic, logical, string, date/time, financial, unit);
@@ -98,8 +118,6 @@ let form = pdfcraft_xfa::layout_xml(template_xml)?;       // pages of items, for
   A hidden instance of a repeating subform hides every instance (overrides apply to the template).
   A repeating subform shows what its data holds once the data holds any instance, else its
   `initial` count, and never fewer than one (`occur min="0"` still shows one row).
-  Each script runs in a fresh engine on its own thread; a form with hundreds of calculate
-  scripts pays that on every field change (a shared engine per event is the obvious next step).
 - **Script limits.** Forms run their scripts on open without being asked, so the engine bounds
   each event: a script's effects (values set again on the same object merge, the last wins;
   10 000 effects, 100 message boxes, 1 000 console lines per script and per event), its loop
@@ -107,19 +125,43 @@ let form = pdfcraft_xfa::layout_xml(template_xml)?;       // pages of items, for
   click and change), 2 000 scripts and 50 relayouts per event, and 3 s (open, changes) or 5 s
   (click) of scripts per event, after which the rest are skipped and reported. Only a click may
   print, save, open a link or move the focus; other events asking are noted in the console.
+  All the scripts of one event (open, a change, a click) run on one thread, each in a fresh
+  JavaScript context (or FormCalc interpreter) on a copy of the form as the engine holds it
+  then: scripts share nothing, a script that fails halfway leaves nothing behind, and what a
+  script changed reaches the next one only through the engine, which applies the effects and
+  keeps its live form up to date in place for values (rebuilding it only when the structure
+  changed). A form with hundreds of calculations runs them all well within the open budget,
+  where each used to pay for a thread of its own and a rebuild of the whole form.
   What open-time scripts change is noted in the document's XFA warnings. Known gaps: the
   engine's loop limit is per call frame, so loops inside nested calls can run far longer; such
   a script is abandoned after 1 s (3 s for a click) on its thread, which keeps running until the
   engine's own limits end it, and the document's scripts are turned off. Memory a script
   allocates is not capped (the same holds for AcroForm JavaScript).
 - **Static XFA forms** (`/NeedsRendering` absent, AcroForm fields present) keep their AcroForm;
-  only their data is read and written.
+  only their data is read and written. A form with no fields is also static when its `config`
+  packet says `<dynamicRender>forbidden</dynamicRender>` (Designer's static PDF form): its pages
+  are the form and are not laid out again (#3180). Without that, no fields means dynamic.
+- **Flattening and converting.** `strip` takes the XFA out of a document: the packets,
+  `/NeedsRendering`, the layout mark, the overrides and the private keys on the fields. The
+  engine calls it after flattening an XFA form's fields (so Adobe's viewers show the baked
+  pages instead of laying the form out again from the template) and for "convert to a static
+  form" (`xfa_to_static`), which keeps the laid-out pages and the fields with their values as
+  an ordinary AcroForm that no viewer lays out again and whose scripts no longer run.
 - **Field kinds.** Choice lists become combo boxes (editable with `textEntry`) or list boxes
   (`open="always"`, multi-select with `open="multiSelect"`), with the shown items and the saved
   values of `<items save="1">` as the options; the data holds saved values, several on
   separate lines. Password fields are password text fields. Signature fields are `/Sig` fields
   the app can sign. Image fields show the picture the data or template holds (JPEG, PNG, GIF)
-  but a new picture can't be chosen; barcode fields show their value as text, not as bars.
+  and are buttons that pick a new one, kept in the data as base64 with its `xfa:contentType`
+  (`write_data_image`); barcode fields show their value as text, not as bars.
+- **Data files.** `export_data` writes the data as Acrobat's Export Data does: an XML document
+  holding the data alone (the form's root data node at the root, its namespaces declared) or
+  an XDP holding the whole datasets and a reference to the PDF. `import_data` takes an XDP, a
+  datasets or data element, or a data document whose root is the form's root data node, and
+  makes it the form's whole data, keeping the rest of the datasets (data descriptions). The
+  file's data is held as a tree and written with the packet's own namespace prefix, never as
+  the file's markup, and every rewrite of the packet is parsed back before it is written; the
+  engine then lays a dynamic form out again from it and runs its calculations.
 - Missing: `keep` constraints, `subformSet` relations, `rl-tb` is mirrored `lr-tb`, font
   metrics are the approximate Helvetica ones, and line heights are 1.15 × size.
 - Acrobat cannot be an oracle here (clean-room rules): layout follows the specification, and
