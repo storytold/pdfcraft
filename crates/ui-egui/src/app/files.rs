@@ -175,6 +175,22 @@ impl PdfCraftApp {
                 Some(Err(error)) => self.notify_fmt("Couldn't open {name}: {e}", &[("name", &pending.name), ("e", &error)]),
                 None => {}
             },
+            open_worker::ResultKind::ConvertedPdf(pdf) => {
+                let name = pending.name.clone();
+                match self.open_converted_pdf(&name, pdf) {
+                    Ok(()) => {
+                        if let Some(view) = self.active.and_then(|i| self.views.get_mut(i)) {
+                            if let Some(override_rect) = pending.display_override {
+                                view.display_override = Some(override_rect);
+                            }
+                        }
+                        if let Some(command) = pending.then {
+                            self.execute(command);
+                        }
+                    }
+                    Err(error) => self.notify_fmt("Couldn't open {name}: {e}", &[("name", &name), ("e", &error)]),
+                }
+            },
             open_worker::ResultKind::Prepared { bytes, result } => match *result {
                 Ok(prepared) => match self.finish_open(&pending.name, pending.path.clone(), bytes.len(), prepared, pending.activate) {
                     Ok(id) => {
@@ -389,7 +405,28 @@ impl PdfCraftApp {
             (Err(e), _) => self.notify_fmt("Couldn't read {name}: {e}", &[("name", &att.name), ("e", &e.to_string())]),
             (Ok(bytes), true) => {
                 // The tab name later names files written from the tab (Split, Extract pages).
-                if let Err(e) = self.open_bytes(&crate::files::attachment_file_name(&att.name), None, bytes) {
+                let safe_name = crate::files::attachment_file_name(&att.name);
+                #[cfg(not(target_arch = "wasm32"))]
+                if self.ctx.is_some()
+                    && !self.run_inline
+                    && pdfcraft_engine::source_kind(&safe_name, &bytes) == Some(pdfcraft_engine::SourceKind::Office)
+                {
+                    if let Err(e) = self.schedule_open(OpenRequest {
+                        name: safe_name,
+                        path: None,
+                        stamp: None,
+                        input: open_worker::Input::Bytes(std::sync::Arc::new(bytes)),
+                        password: None,
+                        activate: true,
+                        after_open: None,
+                        recovered: None,
+                        then: None,
+                    }) {
+                        self.notify_fmt("Couldn't open {name}: {e}", &[("name", &att.name), ("e", &e)]);
+                    }
+                    return;
+                }
+                if let Err(e) = self.open_bytes(&safe_name, None, bytes) {
                     self.notify_fmt("Couldn't open {name}: {e}", &[("name", &att.name), ("e", &e.to_string())]);
                 }
             }
