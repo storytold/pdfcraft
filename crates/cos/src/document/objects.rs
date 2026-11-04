@@ -1,5 +1,5 @@
 use super::reader::find;
-use super::state::{LENGTHS, LoadGuard, ObjStm, ObjectReader, ReadState, Slot, SourceIdentity, objstm_member, owned_bytes};
+use super::state::{LENGTHS, LoadGuard, ObjStm, ObjectReader, ReadState, Slot, SourceIdentity, held_bytes, objstm_member};
 use super::xref::{Revision, XrefEntry};
 use super::{
     Arc, CosError, Cow, Dict, Document, Lexer, MAX_DECODED, MAX_JBIG2_GLOBALS, ObjRef, Object, Stream, is_whitespace, parse_indirect_shared,
@@ -407,8 +407,9 @@ impl Document {
         let obj = Arc::new(obj);
         // The editing cache is bounded like the scan reader's: re-parsing a file-backed view
         // is cheap, and returned objects outlive eviction.
-        self.cache.lock().map_err(|_| CosError::Poisoned)?.insert(num, obj.clone());
-        self.evict_editor_cache_if_over_budget(num, &obj)?;
+        let owned = held_bytes(&obj, &self.data, 0);
+        self.cache.lock().map_err(|_| CosError::Poisoned)?.insert(num, obj.clone(), owned);
+        self.evict_editor_cache_if_over_budget(num)?;
         Ok(obj)
     }
 
@@ -417,10 +418,10 @@ impl Document {
     /// document cannot pin its whole object graph. Only owned (decrypted/copied) bytes
     /// count; file-backed views re-parse for free.
     ///
-    /// Worst case per document: input bytes + up to `EDITOR_CACHE_OBJECTS` ×
-    /// `EDITOR_LARGE_OBJECT` (1024 × 256 KB = 256 MB) of small objects between full
-    /// accounting passes + `EDITOR_OBJSTM_BYTES` (32 MB) + unsaved `overlay` edits.
-    /// The count cap always holds; byte accounting between passes is approximate.
+    /// Worst case per document: input bytes + `EDITOR_CACHE_BYTES` (32 MB) of owned object
+    /// data + `EDITOR_OBJSTM_BYTES` (32 MB) + unsaved `overlay` edits. Each object is measured
+    /// once, as it is cached ([`ObjectCache`](super::state::ObjectCache)), so both caps hold
+    /// after every insertion.
     /// Clones share these caches, so one clone's eviction drops another's hot set;
     /// that only costs re-parsing, never correctness. Eviction keeps just the newcomer:
     /// file-backed views re-parse cheaply and editor working sets stay far below 1024.
@@ -433,37 +434,13 @@ impl Document {
 
     const EDITOR_OBJSTM_BYTES: usize = 32 * 1024 * 1024;
 
-    /// Newcomers above this force a full accounting pass even below the count cap:
-    /// `EDITOR_CACHE_BYTES / 128`, so 128 large newcomers always trigger a pass before the
-    /// byte budget can double.
-    const EDITOR_LARGE_OBJECT: usize = 256 * 1024;
-
-    fn evict_editor_cache_if_over_budget(&self, fresh_num: u32, fresh: &Object) -> Result<(), CosError> {
-        // Fast path: the full fold is O(cache) per insert, so skip it for a small newcomer
-        // below the count cap. `len` is copied out first; nothing here holds the lock.
-        let len = self.cache.lock().map_err(|_| CosError::Poisoned)?.len();
-        if len <= Self::EDITOR_CACHE_OBJECTS && owned_bytes(fresh, &self.data, 0) <= Self::EDITOR_LARGE_OBJECT {
-            return Ok(());
-        }
-        // Walk a snapshot off-lock; re-lock only to evict.
-        let live: Vec<(u32, Arc<Object>)> = self.cache.lock().map_err(|_| CosError::Poisoned)?.iter().map(|(n, o)| (*n, o.clone())).collect();
-        let data = &self.data;
-        let owned: usize = live.iter().fold(0usize, |n, (_, o)| n.saturating_add(owned_bytes(o, data, 0)));
-        if live.len() <= Self::EDITOR_CACHE_OBJECTS && owned <= Self::EDITOR_CACHE_BYTES {
-            return Ok(());
-        }
-        // Re-check under the final lock: another thread may have inserted or evicted since
-        // the snapshot. Keep its newcomers, and skip the eviction if back within budget.
-        let snapshot: std::collections::HashSet<u32> = live.into_iter().map(|(n, _)| n).collect();
+    fn evict_editor_cache_if_over_budget(&self, fresh_num: u32) -> Result<(), CosError> {
         let mut cache = self.cache.lock().map_err(|_| CosError::Poisoned)?;
-        if cache.len() <= Self::EDITOR_CACHE_OBJECTS {
-            let data = &self.data;
-            let owned: usize = cache.values().fold(0usize, |n, o| n.saturating_add(owned_bytes(o, data, 0)));
-            if owned <= Self::EDITOR_CACHE_BYTES {
-                return Ok(());
-            }
+        if cache.len() <= Self::EDITOR_CACHE_OBJECTS && cache.owned() <= Self::EDITOR_CACHE_BYTES {
+            return Ok(());
         }
-        cache.retain(|n, _| *n == fresh_num || !snapshot.contains(n));
+        // Eviction keeps just the newcomer: file-backed views re-parse cheaply.
+        cache.retain(|n| *n == fresh_num);
         Ok(())
     }
 

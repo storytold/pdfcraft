@@ -163,11 +163,10 @@ impl ObjectReader {
         // input bytes, which the document keeps anyway, so they don't count; decrypted
         // streams and strings do. Checked after failed loads too: resolving a /Length may
         // have cached large objects.
-        if let Ok(mut cache) = self.document.cache.lock() {
-            let data = &self.document.data;
-            if cache.len() >= Self::OBJECTS || cache.values().fold(0usize, |n, o| n.saturating_add(owned_bytes(o, data, 0))) > Self::STREAM_BYTES {
-                cache.clear();
-            }
+        if let Ok(mut cache) = self.document.cache.lock()
+            && (cache.len() >= Self::OBJECTS || cache.owned() > Self::STREAM_BYTES)
+        {
+            cache.clear();
         }
         object
     }
@@ -179,26 +178,96 @@ thread_local! {
     pub(super) static SECTION_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// Nesting [`owned_bytes`] walks: past the parser's own nesting limit, so every parsed object
+/// Parsed objects by number, each with what it holds ([`held_bytes`]) measured once, when it goes
+/// in, and their sum kept beside them.
+///
+/// Both caches are bounded by those bytes. Summing them on every read walked every cached object
+/// whole each time: a file whose page dictionaries carry kilobytes of private data (InDesign's
+/// `/PieceInfo`) took seconds to open, almost all of it re-measuring objects already measured
+/// (#5873).
+#[derive(Default)]
+pub(crate) struct ObjectCache {
+    entries: HashMap<u32, (Arc<Object>, usize)>,
+    owned: usize,
+}
+
+impl ObjectCache {
+    pub(crate) fn get(&self, num: &u32) -> Option<&Arc<Object>> {
+        self.entries.get(num).map(|(object, _)| object)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn contains_key(&self, num: &u32) -> bool {
+        self.entries.contains_key(num)
+    }
+
+    /// Keep `object` as `num`, which holds `owned` bytes (what [`held_bytes`] says of it).
+    pub(crate) fn insert(&mut self, num: u32, object: Arc<Object>, owned: usize) {
+        if let Some((_, before)) = self.entries.insert(num, (object, owned)) {
+            self.owned = self.owned.saturating_sub(before);
+        }
+        self.owned = self.owned.saturating_add(owned);
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    /// The bytes the cached objects hold between them.
+    pub(crate) fn owned(&self) -> usize {
+        self.owned
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.entries.clear();
+        self.owned = 0;
+    }
+
+    pub(crate) fn retain(&mut self, mut keep: impl FnMut(&u32) -> bool) {
+        self.entries.retain(|num, _| keep(num));
+        self.owned = self.entries.values().fold(0usize, |n, (_, owned)| n.saturating_add(*owned));
+    }
+
+    #[cfg(test)]
+    pub(crate) fn values(&self) -> impl Iterator<Item = &Arc<Object>> {
+        self.entries.values().map(|(object, _)| object)
+    }
+}
+
+/// Nesting [`held_bytes`] walks: past the parser's own nesting limit, so every parsed object
 /// is measured in full.
 const OWNED_BYTES_DEPTH: usize = 256;
 
-/// Bytes `object` holds of its own: string and stream data that is not a view into `data`
-/// (the input file). An object nested deeper than [`OWNED_BYTES_DEPTH`] cannot be measured
-/// and counts as too large to keep.
-pub(super) fn owned_bytes(object: &Object, data: &Arc<Vec<u8>>, depth: usize) -> usize {
+/// What keeping `object` parsed costs: string and stream data that is not a view into `data`
+/// (the input file), and the parsed tree around it -- an [`Object`] per value and a key per
+/// dictionary entry. An object nested deeper than [`OWNED_BYTES_DEPTH`] cannot be measured and
+/// counts as too large to keep.
+///
+/// The tree counts. Measured by its strings and streams alone, a page dictionary carrying
+/// InDesign's `/PieceInfo` -- thousands of small numeric arrays, parsed into tens of thousands of
+/// values -- weighed nothing, so the caches kept a thousand of them: a 35 MB file held 1.5 GB
+/// (#5873).
+pub(super) fn held_bytes(object: &Object, data: &Arc<Vec<u8>>, depth: usize) -> usize {
     if depth > OWNED_BYTES_DEPTH {
         return usize::MAX;
     }
+    let node = std::mem::size_of::<Object>();
+    // A key, its slot beside the value, and room in the index a large dictionary keeps.
+    let entry = |key: &[u8]| key.len().saturating_add(std::mem::size_of::<(crate::Name, Object)>()).saturating_add(16);
+    let dict =
+        |d: &crate::Dict, start: usize| d.iter().fold(start, |n, (k, v)| n.saturating_add(entry(k)).saturating_add(held_bytes(v, data, depth + 1)));
     match object {
-        Object::String(s) => s.bytes.len(),
-        Object::Stream(s) => {
-            let own = if s.raw.shares(data) { 0 } else { s.raw.len() };
-            s.dict.iter().fold(own, |n, (_, v)| n.saturating_add(owned_bytes(v, data, depth + 1)))
-        }
-        Object::Array(a) => a.iter().fold(0usize, |n, v| n.saturating_add(owned_bytes(v, data, depth + 1))),
-        Object::Dict(d) => d.iter().fold(0usize, |n, (_, v)| n.saturating_add(owned_bytes(v, data, depth + 1))),
-        _ => 0,
+        Object::String(s) => node.saturating_add(s.bytes.len()),
+        Object::Name(n) => node.saturating_add(n.len()),
+        Object::Stream(s) => dict(&s.dict, node.saturating_add(if s.raw.shares(data) { 0 } else { s.raw.len() })),
+        Object::Array(a) => a.iter().fold(node, |n, v| n.saturating_add(held_bytes(v, data, depth + 1))),
+        Object::Dict(d) => dict(d, node),
+        _ => node,
     }
 }
 

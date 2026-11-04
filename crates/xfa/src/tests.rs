@@ -4533,3 +4533,13 @@ fn a_container_is_as_wide_as_a_turned_draw_stands() {
         assert!((got - right).abs() < 0.01, "{rotate}: the neighbour stands {got} right of the anchor, not {right}");
     }
 }
+
+/// Only a template that is a packet of the XDP is the form's: one inside imported data (a
+/// dataset holding XML that looks like a template) is not read, and neither are its scripts.
+#[test]
+fn a_template_inside_the_data_is_not_the_form() {
+    let nested = "<xdp:xdp xmlns:xdp=\"http://ns.adobe.com/xdp/\"><xfa:datasets xmlns:xfa=\"http://www.xfa.org/schema/xfa-data/1.0/\"><xfa:data><template xmlns=\"http://www.xfa.org/schema/xfa-template/3.3/\"><subform name=\"evil\"><event activity=\"initialize\"><script>xfa.host.messageBox(1)</script></event></subform></template></xfa:data></xfa:datasets></xdp:xdp>";
+    assert!(parse(nested).is_err(), "no template packet");
+    let real = "<xdp:xdp xmlns:xdp=\"http://ns.adobe.com/xdp/\"><template xmlns=\"http://www.xfa.org/schema/xfa-template/3.3/\"><subform name=\"form1\"/></template></xdp:xdp>";
+    assert_eq!(parse(real).unwrap().0.root.common.name.as_deref(), Some("form1"));
+}
