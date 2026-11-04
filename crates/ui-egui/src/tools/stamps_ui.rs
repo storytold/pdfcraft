@@ -342,14 +342,14 @@ mod tests {
         });
         h.run_steps(3);
         h.get_by_label("Edit Custom Stamp");
-        h.get_by_value("seal").click();
+        h.get_by_label("Name:").click();
         h.key_press_modifiers(Modifiers::COMMAND, Key::A);
         h.run_steps(1);
-        h.get_by_value("seal").type_text("Renamed");
-        h.get_by_value("Company").click();
+        h.get_by_label("Name:").type_text("Renamed");
+        h.get_by_label("Category:").click();
         h.key_press_modifiers(Modifiers::COMMAND, Key::A);
         h.run_steps(1);
-        h.get_by_value("Company").type_text("Moved");
+        h.get_by_label("Category:").type_text("Moved");
         h.get_by_label("Save").click();
         h.run_steps(3);
         assert_eq!(h.state().custom_stamps.len(), 2);
@@ -367,14 +367,14 @@ mod tests {
         h.state_mut().stamp_edit = Some(StampEdit { id: 202, name: "Renamed".into(), category: "Moved".into() });
         h.state_mut().dialog = Some(Dialog::EditStamp);
         h.run_steps(2);
-        h.get_by_value("Renamed").click();
+        h.get_by_label("Name:").click();
         h.key_press_modifiers(Modifiers::COMMAND, Key::A);
         h.run_steps(1);
-        h.get_by_value("Renamed").type_text("Discarded");
-        h.get_by_value("Moved").click();
+        h.get_by_label("Name:").type_text("Discarded");
+        h.get_by_label("Category:").click();
         h.key_press_modifiers(Modifiers::COMMAND, Key::A);
         h.run_steps(1);
-        h.get_by_value("Moved").type_text("Discarded");
+        h.get_by_label("Category:").type_text("Discarded");
         h.get_by_label("Cancel").click();
         h.run_steps(3);
         assert_eq!(
