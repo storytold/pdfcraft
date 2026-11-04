@@ -110,15 +110,14 @@ fn check_certification(doc: &Document) -> Result<(), SignError> {
             let covered = covered as usize;
             let old = cache.revision(doc, bytes, covered)?;
             let old_fields = sig_fields(&old);
-            let historical = old_fields.iter().find_map(|old_field| {
+            old_fields.iter().find_map(|old_field| {
                 if old_field.name != field.name {
                     return None;
                 }
                 let old_signature = old_field.signature(&old)?;
                 let matches_revision = nums(&old, &old_signature, b"ByteRange").is_some_and(|r| r.len() == 4 && r[2] + r[3] == covered as f64);
                 matches_revision.then(|| super::validate::docmdp(&old, &old_signature))
-            });
-            historical
+            })
         });
         // A signature whose signed revision is unreadable keeps the level it states now.
         if let Some(level) = signed {
