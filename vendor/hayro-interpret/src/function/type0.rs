@@ -4,7 +4,7 @@ use hayro_syntax::bit_reader::BitReader;
 use hayro_syntax::object::Array;
 use hayro_syntax::object::Stream;
 use hayro_syntax::object::dict::keys::{BITS_PER_SAMPLE, DECODE, ENCODE, SIZE};
-use smallvec::SmallVec;
+use smallvec::{SmallVec, smallvec};
 
 /// A type 0 function (sampled function).
 #[derive(Debug)]

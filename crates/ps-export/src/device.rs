@@ -555,7 +555,7 @@ impl<'a> Device<'a> for PsDevice<'a> {
                 g.interpret(self, transform, glyph_transform, paint);
             }
             Glyph::Outline(outline) => match draw_mode {
-                // Invisible text renders nothing, as in the raster renderer; neither does
+                // Invisible text renders nothing (as in the raster renderer); neither does
                 // clipping text (7 Tr): the interpreter reports it without painting a glyph
                 // (its clip is hayro-side, patch 64), and PostScript has no clip-from-text.
                 GlyphDrawMode::Invisible | GlyphDrawMode::Clip => {}
