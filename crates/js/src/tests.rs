@@ -90,7 +90,9 @@ fn push_button_caption_methods_read_write_and_reject_other_faces() {
     let long_caption = "x".repeat(crate::xfa::MAX_LINE + 10);
     let capped = run(&format!("getField('go').buttonSetCaption('{long_caption}');"));
     assert_eq!(capped.error, None);
-    assert_eq!(capped.changed[0].caption.as_deref().map(str::len), Some(crate::xfa::MAX_LINE));
+    let caption = capped.changed[0].caption.as_deref().unwrap_or_default();
+    assert_eq!(caption.chars().count(), crate::xfa::MAX_LINE + 1);
+    assert!(caption.ends_with('…'));
     let explicit = run("event.value = getField('go').buttonGetCaption(0);");
     assert_eq!(explicit.value, "Old");
     let format =
