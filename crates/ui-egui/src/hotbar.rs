@@ -811,6 +811,9 @@ mod tests {
 
     #[test]
     fn hotbar_search_matches_translated_and_canonical_labels() {
+        if !crate::i18n::needs_catalogs() {
+            return;
+        }
         let ink = command("comment.ink").unwrap();
         crate::i18n::set_current(crate::i18n::lang_from_tag("fr").unwrap());
         assert_eq!(tl!(ink.label), "Dessiner à main levée");
