@@ -101,7 +101,13 @@ impl Layouter<'_> {
         let content = area.content.first().copied().unwrap_or(Rect::new(0.0, 0.0, area.width, area.height));
         self.cur = Some(Cursor { area: idx, content: 0, rect: content, y: content.y, placed: false });
         // Master page content: positioned draws and fields.
-        let ctx = Ctx { font: Font::default(), para: Para::default(), som: area.name.clone().map(|n| format!("{n}[0]")).unwrap_or_default() };
+        // The page set is inside the root subform, so master page content takes its locale.
+        let ctx = Ctx {
+            font: Font::default(),
+            para: Para::default(),
+            som: area.name.clone().map(|n| format!("{n}[0]")).unwrap_or_default(),
+            locale: self.tpl.root.common.locale.clone(),
+        };
         let page_rect = Rect::new(0.0, 0.0, area.width, area.height);
         let sibs = SomIndices::of(&area.items);
         for (i, item) in area.items.iter().enumerate() {

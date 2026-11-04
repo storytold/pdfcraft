@@ -645,6 +645,62 @@ function AddDays(dateObj, daysOffset) {
     .to_string()
 }
 
+/// Number fields with display pictures (#5820), all fictitious values: the issue's quantity and
+/// price, a calculated amount, ENG Form 93's parenthesised balance and its line items'
+/// `num.currency{}` (the en_US pattern from the `localeSet`), a German field whose `,` and `.`
+/// swap and whose `$` is `€`, and pictures Acrobat's number format can't show: optional decimals,
+/// zero-filled digits, a sign, a locale the form doesn't describe, and a text field (not a number
+/// field). `data` fills the `xfa:data` packet; empty leaves the datasets out.
+pub fn number_pictures_template(data: &str) -> String {
+    let datasets = if data.is_empty() {
+        String::new()
+    } else {
+        format!("<xfa:datasets xmlns:xfa=\"http://www.xfa.org/schema/xfa-data/1.0/\"><xfa:data>{data}</xfa:data></xfa:datasets>")
+    };
+    format!(
+        r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb" locale="en_US">
+ <pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <subform name="page" layout="tb">
+  <field name="qty" w="2in" h="0.3in"><ui><numericEdit/></ui><value><decimal/></value><format><picture>num{{z,zz9}}</picture></format></field>
+  <field name="price" w="2in" h="0.3in"><ui><numericEdit/></ui><value><decimal/></value><format><picture>num{{$z,zzz,zz9.99}}</picture></format></field>
+  <field name="amount" w="2in" h="0.3in" access="readOnly"><ui><numericEdit/></ui><value><decimal/></value><format><picture>num{{$z,zzz,zz9.99}}</picture></format>
+   <calculate><script>qty * price</script></calculate></field>
+  <field name="balance" w="2in" h="0.3in"><ui><numericEdit/></ui><value><decimal/></value><format><picture>num{{($z,zzz,zzz,zz9.99)}}</picture></format></field>
+  <field name="unit" w="2in" h="0.3in"><ui><numericEdit/></ui><value><decimal/></value><format><picture>num.currency{{}}</picture></format></field>
+  <field name="euro" w="2in" h="0.3in" locale="de_DE"><ui><textEdit/></ui><value><float/></value><format><picture>num{{z,zzz,zz9.99 $}}</picture></format></field>
+  <field name="ratio" w="2in" h="0.3in"><ui><numericEdit/></ui><value><decimal/></value><format><picture>num{{z,zz9.zzz}}</picture></format></field>
+  <field name="padded" w="2in" h="0.3in"><ui><numericEdit/></ui><value><integer/></value><format><picture>num{{9999}}</picture></format></field>
+  <field name="signed" w="2in" h="0.3in"><ui><numericEdit/></ui><value><decimal/></value><format><picture>num{{s,zz9.99}}</picture></format></field>
+  <field name="franc" w="2in" h="0.3in" locale="fr_CH"><ui><numericEdit/></ui><value><decimal/></value><format><picture>num{{z,zz9.99}}</picture></format></field>
+  <field name="code" w="2in" h="0.3in"><ui><textEdit/></ui><format><picture>num{{$z,zz9.99}}</picture></format></field>
+ </subform>
+</subform>
+</template>
+<localeSet xmlns="http://www.xfa.org/schema/xfa-locale-set/2.7/">
+ <locale name="en_US" desc="English (United States)">
+  <numberPatterns><numberPattern name="numeric">z,zz9.zzz</numberPattern><numberPattern name="currency">$z,zz9.99|($z,zz9.99)</numberPattern><numberPattern name="percent">z,zz9%</numberPattern></numberPatterns>
+  <numberSymbols><numberSymbol name="decimal">.</numberSymbol><numberSymbol name="grouping">,</numberSymbol><numberSymbol name="percent">%</numberSymbol><numberSymbol name="minus">-</numberSymbol><numberSymbol name="zero">0</numberSymbol></numberSymbols>
+  <currencySymbols><currencySymbol name="symbol">$</currencySymbol><currencySymbol name="isoname">USD</currencySymbol><currencySymbol name="decimal">.</currencySymbol></currencySymbols>
+ </locale>
+ <locale name="de_DE" desc="German (Germany)">
+  <numberPatterns><numberPattern name="numeric">z,zz9.zzz</numberPattern><numberPattern name="currency">z,zz9.99 $</numberPattern><numberPattern name="percent">z,zz9%</numberPattern></numberPatterns>
+  <numberSymbols><numberSymbol name="decimal">,</numberSymbol><numberSymbol name="grouping">.</numberSymbol><numberSymbol name="percent">%</numberSymbol><numberSymbol name="minus">-</numberSymbol><numberSymbol name="zero">0</numberSymbol></numberSymbols>
+  <currencySymbols><currencySymbol name="symbol">€</currencySymbol><currencySymbol name="isoname">EUR</currencySymbol><currencySymbol name="decimal">,</currencySymbol></currencySymbols>
+ </locale>
+</localeSet>
+{datasets}
+</xdp:xdp>
+"##
+    )
+}
+
+/// The data [`number_pictures_template`]'s issue repro opens with, as Adobe's viewers save it.
+pub const NUMBER_PICTURES_DATA: &str = "<form><page><qty>1.00000000</qty><price>279893.88000000</price><balance>-1466917.35</balance>\
+<unit>12.5</unit><euro>1234.5</euro><ratio>1.00000000</ratio><padded>7</padded><signed>-3</signed><franc>1234.5</franc><code>12</code></page></form>";
+
 /// A PDF shell around `xdp`: one placeholder page, `/NeedsRendering true`, no fields.
 pub fn shell(xdp: &str) -> Vec<u8> {
     let objs: Vec<Vec<u8>> = vec![

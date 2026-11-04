@@ -419,6 +419,15 @@ pub(crate) fn merged_appearance(doc: &Document, widget: ObjRef, fresh: &Dict) ->
 }
 
 /// Regenerate the normal appearance of every widget of a text or choice field.
+/// Draw text or combo box `f` again showing `value` through its native format, which no script
+/// computes (a script's value is written without running the field's actions).
+pub(crate) fn redraw_formatted(doc: &mut Document, f: &Field, value: &str) -> Result<(), FormError> {
+    if !matches!(f.kind, FieldKind::Text | FieldKind::Combo) {
+        return Ok(());
+    }
+    redraw(doc, f, &[value.to_string()], &mut NoScripts)
+}
+
 fn redraw(doc: &mut Document, f: &Field, values: &[String], scripts: &mut dyn Scripts) -> Result<(), FormError> {
     let shown = match values {
         [one] if matches!(f.kind, FieldKind::Text | FieldKind::Combo) => scripting::formatted(doc, f, one, scripts),

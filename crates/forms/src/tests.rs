@@ -2924,6 +2924,32 @@ fn check_box_redraw_keeps_down_states_it_still_draws() {
     assert!(!d.contains(b"Gone"), "a state the box no longer draws");
 }
 
+/// A value a script sets is stored as the script gives it (no keystroke or validate runs on it)
+/// and shown through the field's format, as Acrobat runs the Format event to display it and as a
+/// calculated value is shown; a value the format can't read shows as it is (#5820).
+#[test]
+fn a_value_a_script_sets_is_shown_through_the_fields_format() {
+    use crate::af::{Format, Validate};
+    let mut doc = one_page();
+    add_field(&mut doc, 0, [50.0, 700.0, 250.0, 720.0], &NewField::Text { multiline: false }, Some("amount")).unwrap();
+    let money = Format::Number { decimals: 2, sep: 0, neg: 0, currency: "$".into(), prepend: true };
+    let props = FieldProps { format: Some(money), validate: Some(Validate::Range { min: Some(0.0), max: Some(10.0) }), ..FieldProps::default() };
+    set_props(&mut doc, "amount", &props).unwrap();
+    let set = |doc: &mut Document, v: &str| {
+        let change = FieldChange { name: "amount".into(), value: Some(vec![v.into()]), ..Default::default() };
+        apply_script_changes(doc, &[change], &mut NoScripts).unwrap();
+    };
+    set(&mut doc, "279893.880000000005");
+    let f = field(&fields(&doc), "amount").clone();
+    assert_eq!(f.value, ["279893.880000000005"], "stored as given, past the range a typed value must keep to");
+    let shown = ap(&doc, &f.widgets[0]);
+    assert!(shown.contains("($279,893.88) Tj"), "{shown}");
+    set(&mut doc, "n/a");
+    let f = field(&fields(&doc), "amount").clone();
+    assert_eq!(f.value, ["n/a"]);
+    assert!(ap(&doc, &f.widgets[0]).contains("(n/a) Tj"));
+}
+
 #[test]
 fn recalc_chain_where_script_changes_checkbox() {
     struct TestScripts;

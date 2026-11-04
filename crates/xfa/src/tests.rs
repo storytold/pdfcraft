@@ -4541,3 +4541,208 @@ fn a_template_inside_the_data_is_not_the_form() {
     let real = "<xdp:xdp xmlns:xdp=\"http://ns.adobe.com/xdp/\"><template xmlns=\"http://www.xfa.org/schema/xfa-template/3.3/\"><subform name=\"form1\"/></template></xdp:xdp>";
     assert_eq!(parse(real).unwrap().0.root.common.name.as_deref(), Some("form1"));
 }
+
+/// The `AFNumber_Format` arguments (decimals, separator style, negative style, currency,
+/// prepend) a picture translates into, or `None`.
+fn number_args(picture: &str, locale: Option<&str>, locales: &[Locale]) -> Option<(u8, u8, u8, String, bool)> {
+    crate::number::number_format(picture, locale, locales).map(|f| (f.decimals, f.sep, f.neg, f.currency, f.prepend))
+}
+
+/// The locales of [`crate::fixtures::number_pictures_template`]'s `localeSet`.
+fn number_locales() -> Vec<Locale> {
+    parse(&crate::fixtures::number_pictures_template("")).unwrap().0.locales
+}
+
+/// #5820: number display pictures that Acrobat's `AFNumber_Format` shows as XFA defines them
+/// become its arguments, in the field's locale: `z,zz9` shows `1` for `1.00000000`, and
+/// `$z,zzz,zz9.99` shows `$279,893.88` for `279893.88000000`.
+#[test]
+fn number_pictures_acrobat_can_show_become_its_number_format() {
+    let locales = number_locales();
+    let none = String::new();
+    let dollar = "$".to_string();
+    // The issue's pictures, ENG Form 93's parenthesised one, and the en_US currency pattern.
+    assert_eq!(number_args("num{z,zz9}", Some("en_US"), &locales), Some((0, 0, 0, none.clone(), true)));
+    assert_eq!(number_args("num{$z,zzz,zz9.99}", Some("en_US"), &locales), Some((2, 0, 0, dollar.clone(), true)));
+    assert_eq!(number_args("num{($z,zzz,zzz,zz9.99)}", Some("en_US"), &locales), Some((2, 0, 2, dollar.clone(), true)));
+    assert_eq!(number_args("num.currency{}", Some("en_US"), &locales), Some((2, 0, 2, dollar.clone(), true)), "$z,zz9.99|($z,zz9.99)");
+    assert_eq!(number_args("num(en_US).currency{}", None, &locales), Some((2, 0, 2, dollar.clone(), true)));
+    assert_eq!(number_args("num.currency(en_US){}", None, &locales), Some((2, 0, 2, dollar.clone(), true)));
+    assert_eq!(number_args("num(ambient){$z,zz9.99}", Some("de_DE"), &locales), Some((2, 2, 0, "€".into(), true)), "ambient: the field's own");
+    // Alternatives: the negative form in parentheses, or after a minus sign.
+    assert_eq!(number_args("num{$z,zz9.99}|num{($z,zz9.99)}", None, &locales), Some((2, 0, 2, dollar.clone(), true)));
+    assert_eq!(number_args("num{z,zz9.99}|num{-z,zz9.99}", None, &locales), Some((2, 0, 0, none.clone(), true)));
+    // A bare pattern in a number field is a number pattern; without a comma, no grouping.
+    assert_eq!(number_args("$z,zz9.99", None, &locales), Some((2, 0, 0, dollar.clone(), true)));
+    assert_eq!(number_args("num{zzzzzz9.9}", None, &locales), Some((1, 1, 0, none.clone(), true)));
+    assert_eq!(number_args("num{zz,zz9}", None, &locales), Some((0, 0, 0, none.clone(), true)), "a short first group");
+    // The locale's symbols: German swaps `,` and `.` and shows `$` as `€`, here after the number.
+    assert_eq!(number_args("num{z,zzz,zz9.99 $}", Some("de_DE"), &locales), Some((2, 2, 0, " €".into(), false)));
+    assert_eq!(number_args("num(de_DE){$ zzz9.99}", Some("en_US"), &locales), Some((2, 3, 0, "€ ".into(), true)), "the clause's locale wins");
+    assert_eq!(number_args("num.currency{}", Some("de_DE"), &locales), Some((2, 2, 0, " €".into(), false)));
+    // Unnamed, `ambient` or en_US without a localeSet entry: en_US.
+    assert_eq!(number_args("num{$z,zz9.99}", None, &[]), Some((2, 0, 0, dollar.clone(), true)));
+    assert_eq!(number_args("num{$z,zz9.99}", Some("en_US"), &[]), Some((2, 0, 0, dollar, true)));
+}
+
+/// #5820: a picture `AFNumber_Format` can't show as XFA defines it keeps the raw value: Acrobat
+/// would pad, drop or add what the picture says otherwise.
+#[test]
+fn number_pictures_acrobat_cant_show_keep_the_raw_value() {
+    let locales = number_locales();
+    for picture in [
+        // Optional decimals (`1` for `1.00000000`, `1.5` for `1.5`): Acrobat pads to a count.
+        "num{z,zz9.zzz}",
+        "num.decimal{}",
+        // Zero-filled or space-filled integer digits, and no digit that shows 0.
+        "num{9999}",
+        "num{ZZZ9}",
+        "num{zzzz}",
+        "num{zzz.99}",
+        // Signs, exponents, credit and debit, percent, implied radix, literal text.
+        "num{s,zz9.99}",
+        "num{zzz9E}",
+        "num{z,zz9.99CR}",
+        "num{z,zz9%}",
+        "num{zzz9v99}",
+        "num{'USD' z,zz9.99}",
+        "num{z,zz9.99}|num{z,zz9.99DB}",
+        "num{($z,zz9.99)}|num{-$z,zz9.99}",
+        // Groups that aren't of three, a radix with nothing after it, too many decimals.
+        "num{z,zz,zz9}",
+        "num{,zz9}",
+        "num{z,,zz9}",
+        "num{zzz9.}",
+        "num{z9.9999999999999999}",
+        // Not a number clause, an unknown or empty predefined one, a clause that doesn't close.
+        "date{YYYY}",
+        "text{999}",
+        "num.percent{}",
+        "num.integer{}",
+        "num.currency{$z}",
+        "num{}",
+        "num{z,zz9",
+        "num(en_US{z,zz9}",
+        "",
+        "|",
+        "num{z,zz9}|num{z,zz9}|num{z,zz9}",
+    ] {
+        assert_eq!(number_args(picture, Some("en_US"), &locales), None, "{picture}");
+    }
+    // A locale the form doesn't describe, other than en_US; a predefined clause without a
+    // localeSet entry.
+    assert_eq!(number_args("num{z,zz9.99}", Some("fr_CH"), &locales), None);
+    assert_eq!(number_args("num.currency{}", None, &[]), None);
+    // Separators Acrobat has no style for (a space groups French digits), and a currency the
+    // action's script would have to escape.
+    let space = vec![Locale {
+        name: "fr_FR".into(),
+        decimal: Some(",".into()),
+        grouping: Some("\u{a0}".into()),
+        currency: Some("€".into()),
+        ..Default::default()
+    }];
+    assert_eq!(number_args("num{z,zz9.99}", Some("fr_FR"), &space), None);
+    assert_eq!(number_args("num{zzz9.99}", Some("fr_FR"), &space), Some((2, 3, 0, String::new(), true)), "no grouping: no space");
+    let control =
+        vec![Locale { name: "xx".into(), decimal: Some(".".into()), grouping: Some(",".into()), currency: Some("\n".into()), ..Default::default() }];
+    assert_eq!(number_args("num{$z,zz9.99}", Some("xx"), &control), None, "a currency no locale has");
+    let unknown = vec![Locale { name: "xx".into(), ..Default::default() }];
+    assert_eq!(number_args("num{zzz9}", Some("xx"), &unknown), None, "a locale without a radix");
+}
+
+/// The `localeSet` packet's number symbols and patterns are read per locale, and an object's
+/// `locale` attribute is kept (`ambient` is the viewer's own: none).
+#[test]
+fn locale_sets_and_locale_attributes_are_parsed() {
+    let (tpl, _) = parse(&crate::fixtures::number_pictures_template("")).unwrap();
+    let names: Vec<&str> = tpl.locales.iter().map(|l| l.name.as_str()).collect();
+    assert_eq!(names, ["en_US", "de_DE"]);
+    let de = &tpl.locales[1];
+    assert_eq!((de.decimal.as_deref(), de.grouping.as_deref(), de.currency.as_deref()), (Some(","), Some("."), Some("€")));
+    assert_eq!(de.number_pattern("currency"), Some("z,zz9.99 $"));
+    assert_eq!(de.number_pattern("missing"), None);
+    assert_eq!(tpl.root.common.locale.as_deref(), Some("en_US"));
+    let xml = crate::fixtures::number_pictures_template("").replace(r#"locale="en_US""#, r#"locale="ambient""#);
+    assert_eq!(parse(&xml).unwrap().0.root.common.locale, None);
+}
+
+/// #5820: number fields with a picture Acrobat can show become number widgets, which keep the
+/// value the data holds; the others, and text fields with a number picture, stay text widgets.
+#[test]
+fn number_fields_are_laid_out_as_number_widgets_with_their_raw_values() {
+    use crate::number::NumberFormat;
+    let form = layout_xml(&crate::fixtures::number_pictures_template(crate::fixtures::NUMBER_PICTURES_DATA)).unwrap();
+    let w = widgets(&form.pages[0]);
+    let widget = |name: &str| w.iter().find(|w| w.name == name).copied().unwrap_or_else(|| panic!("no widget {name}"));
+    let number =
+        |decimals, sep, neg, currency: &str, prepend| WidgetKind::Number(NumberFormat { decimals, sep, neg, currency: currency.into(), prepend });
+    assert_eq!(widget("qty").kind, number(0, 0, 0, "", true));
+    assert_eq!(widget("qty").value.as_deref(), Some("1.00000000"), "the value stays as the data holds it");
+    assert_eq!(widget("price").kind, number(2, 0, 0, "$", true));
+    assert_eq!(widget("price").value.as_deref(), Some("279893.88000000"));
+    assert_eq!(widget("amount").kind, number(2, 0, 0, "$", true));
+    assert_eq!(widget("balance").kind, number(2, 0, 2, "$", true));
+    assert_eq!(widget("unit").kind, number(2, 0, 2, "$", true), "num.currency{{}} through the localeSet");
+    // Its own locale over the form's, on a text field whose value is a number.
+    assert_eq!(widget("euro").kind, number(2, 2, 0, " €", false));
+    for raw in ["ratio", "padded", "signed", "franc", "code"] {
+        assert_eq!(widget(raw).kind, WidgetKind::Text, "{raw}");
+    }
+}
+
+/// #5820: a field takes the nearest locale an enclosing subform names, and a field on a master
+/// page the root subform's, as the page set is inside it.
+#[test]
+fn number_fields_take_the_locale_of_their_subform_and_master_pages_the_roots() {
+    let xml = crate::fixtures::number_pictures_template("").replace(
+        r#"<subform name="form" layout="tb" locale="en_US">
+ <pageSet><pageArea name="front">"#,
+        r#"<subform name="form" layout="tb" locale="de_DE">
+ <pageSet><pageArea name="front"><field name="sum" x="0.5in" y="10.5in" w="2in" h="0.3in"><ui><numericEdit/></ui><value><decimal/></value><format><picture>num{z,zz9.99}</picture></format></field>"#,
+    );
+    assert!(xml.contains(r#"name="sum""#));
+    let form = layout_xml(&xml).unwrap();
+    let w = widgets(&form.pages[0]);
+    let sum = w.iter().find(|w| w.name == "sum").expect("the master page field");
+    assert_eq!(sum.kind, WidgetKind::Number(crate::number::NumberFormat { decimals: 2, sep: 2, neg: 0, currency: String::new(), prepend: true }));
+    let qty = w.iter().find(|w| w.name == "qty").expect("a flowed field");
+    assert_eq!(qty.kind, WidgetKind::Number(crate::number::NumberFormat { decimals: 0, sep: 2, neg: 0, currency: String::new(), prepend: true }));
+}
+
+/// #5820: a number widget's field carries `AFNumber_Format` and `AFNumber_Keystroke` with its
+/// arguments, a currency outside ASCII in a UTF-16 text string, and its raw value; a field whose
+/// picture can't be shown carries no action.
+#[test]
+fn number_widgets_are_written_with_acrobat_number_actions() {
+    let mut doc = Document::open(Arc::new(shell(&crate::fixtures::number_pictures_template(crate::fixtures::NUMBER_PICTURES_DATA)))).unwrap();
+    render_into(&mut doc).unwrap();
+    let fields = top_fields(&doc);
+    let field = |name: &str| fields.iter().find(|(n, _)| n == name).map(|(_, d)| d.clone()).unwrap_or_else(|| panic!("no field {name}"));
+    let script = |name: &str, event: &[u8]| {
+        let aa = field(name).get(b"AA").map(|a| doc.resolve(a).as_dict().cloned().unwrap()).expect("additional actions");
+        let action = doc.resolve(aa.get(event).unwrap()).as_dict().cloned().unwrap();
+        assert_eq!(action.get(b"S").and_then(Object::as_name), Some(&b"JavaScript"[..]));
+        action.get(b"JS").and_then(Object::as_string).map(|s| s.to_text()).unwrap()
+    };
+    assert_eq!(script("price", b"F"), r#"AFNumber_Format(2, 0, 0, 0, "$", true);"#);
+    assert_eq!(script("price", b"K"), r#"AFNumber_Keystroke(2, 0, 0, 0, "$", true);"#);
+    assert_eq!(script("qty", b"F"), r#"AFNumber_Format(0, 0, 0, 0, "", true);"#);
+    assert_eq!(script("balance", b"F"), r#"AFNumber_Format(2, 0, 2, 0, "$", true);"#);
+    assert_eq!(script("euro", b"F"), r#"AFNumber_Format(2, 2, 0, 0, " €", false);"#);
+    let value = |name: &str| field(name).get(b"V").and_then(Object::as_string).map(|s| s.to_text());
+    assert_eq!(value("price").as_deref(), Some("279893.88000000"), "the value is kept, only shown formatted");
+    assert_eq!(field("price").get(b"FT").and_then(Object::as_name), Some(&b"Tx"[..]));
+    for raw in ["ratio", "padded", "code"] {
+        assert!(field(raw).get(b"AA").is_none(), "{raw}");
+    }
+    // A currency that tries to close its string stays one string literal.
+    let hostile = crate::fixtures::number_pictures_template(crate::fixtures::NUMBER_PICTURES_DATA)
+        .replace(r#"<currencySymbol name="symbol">$</currencySymbol>"#, r#"<currencySymbol name="symbol">");//</currencySymbol>"#);
+    let mut doc = Document::open(Arc::new(shell(&hostile))).unwrap();
+    render_into(&mut doc).unwrap();
+    let price = top_fields(&doc).into_iter().find(|(n, _)| n == "price").map(|(_, d)| d).unwrap();
+    let aa = price.get(b"AA").map(|a| doc.resolve(a).as_dict().cloned().unwrap()).unwrap();
+    let js = doc.resolve(aa.get(b"F").unwrap()).as_dict().unwrap().get(b"JS").and_then(Object::as_string).map(|s| s.to_text()).unwrap();
+    assert_eq!(js, r#"AFNumber_Format(2, 0, 0, 0, "\");//", true);"#);
+}

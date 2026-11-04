@@ -350,6 +350,9 @@ pub struct Common {
     pub para: ParaSpec,
     /// Table cells: how many columns this cell spans.
     pub col_span: usize,
+    /// The locale its values are shown in (`locale="en_US"`), which the objects inside take when
+    /// they name none. `None`: unnamed, or `ambient` (the viewer's own).
+    pub locale: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -760,6 +763,32 @@ pub struct Template {
     /// Fields that compute the page number or the page count on layout, by `id`, so text that
     /// embeds them can show the numbers.
     pub page_roles: Vec<(String, PageRole)>,
+    /// The locales of the form's `localeSet` packet, in its order.
+    pub locales: Vec<Locale>,
+}
+
+/// What a locale of the `localeSet` packet tells number pictures (XFA 3.3, "Locale Set
+/// Specification"): the symbols a picture's `.`, `,` and `$` stand for, and the patterns of its
+/// predefined clauses (`num.currency{}`). A symbol or pattern the packet doesn't give is `None`.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Locale {
+    /// `name="en_US"`.
+    pub name: String,
+    /// `<numberSymbol name="decimal">`: the radix.
+    pub decimal: Option<String>,
+    /// `<numberSymbol name="grouping">`: the separator between groups of digits.
+    pub grouping: Option<String>,
+    /// `<currencySymbol name="symbol">`: what `$` shows.
+    pub currency: Option<String>,
+    /// `<numberPattern name="…">`, by name (`numeric`, `currency`, `percent`).
+    pub number_patterns: Vec<(String, String)>,
+}
+
+impl Locale {
+    /// The pattern named `name` (`currency`), if the locale gives one.
+    pub fn number_pattern(&self, name: &str) -> Option<&str> {
+        self.number_patterns.iter().find(|(n, _)| n == name).map(|(_, p)| p.as_str())
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

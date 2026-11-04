@@ -80,6 +80,9 @@ pub enum WidgetKind {
     Image,
     /// A date field with its Acrobat format pattern (`yyyy-mm-dd`).
     Date(String),
+    /// A number field shown through its display picture, as Acrobat's `AFNumber_Format` with
+    /// these arguments shows it.
+    Number(crate::number::NumberFormat),
     CheckBox {
         on: String,
         round: bool,

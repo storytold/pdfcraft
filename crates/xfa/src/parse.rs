@@ -6,15 +6,23 @@ use roxmltree::Node as XmlNode;
 
 use crate::XfaError;
 use crate::model::{
-    Access, Anchor, Area, Border, Caption, ChoiceList, Color, Common, Corner, Draw, Edge, ExclGroup, Field, FontSpec, HAlign, Layout, Margin, Node,
-    Occur, PageArea, PageRole, PageSet, ParaSpec, Paragraph, Placement, Presence, Rect, RichText, Run, Script, Stroke, Subform, Template, Ui, VAlign,
-    Value,
+    Access, Anchor, Area, Border, Caption, ChoiceList, Color, Common, Corner, Draw, Edge, ExclGroup, Field, FontSpec, HAlign, Layout, Locale, Margin,
+    Node, Occur, PageArea, PageRole, PageSet, ParaSpec, Paragraph, Placement, Presence, Rect, RichText, Run, Script, Stroke, Subform, Template, Ui,
+    VAlign, Value,
 };
 
 /// Deepest element nesting followed (templates are shallow; hostile ones are not).
 const MAX_DEPTH: usize = 64;
 /// Most XML nodes a template may have.
 const MAX_NODES: u32 = 2_000_000;
+/// Most locales read from a `localeSet` packet (Designer writes the few a form uses).
+const MAX_LOCALES: usize = 1024;
+/// Most number patterns read from one locale (a locale has three).
+const MAX_LOCALE_PATTERNS: usize = 16;
+/// Longest locale number pattern kept, in bytes.
+const MAX_LOCALE_PATTERN: usize = 256;
+/// Longest locale symbol kept, in bytes (`CHF`, a non-breaking space).
+const MAX_LOCALE_SYMBOL: usize = 16;
 /// Largest decoded inline image.
 const MAX_IMAGE: usize = 32 << 20;
 /// Most items a choice list keeps.
@@ -228,6 +236,7 @@ fn parse_common(n: XmlNode) -> Common {
         font: parse_font(child(n, "font")),
         para: parse_para(child(n, "para")),
         col_span: n.attribute("colSpan").and_then(|c| c.trim().parse::<usize>().ok()).unwrap_or(1).clamp(1, 64),
+        locale: n.attribute("locale").map(str::trim).filter(|l| !l.is_empty() && !l.eq_ignore_ascii_case("ambient")).map(str::to_string),
     }
 }
 
@@ -772,7 +781,44 @@ pub fn parse(xml: &str) -> Result<(Template, Vec<String>), XfaError> {
     }
     let mut page_roles = Vec::new();
     collect_page_roles(&[Node::Subform(Box::new(root_sf.clone()))], &mut page_roles, 0);
-    Ok((Template { root: root_sf, page_roles }, warnings))
+    // The localeSet packet beside the template says what each locale's number symbols are; like
+    // the template, only a packet of the XDP itself, not one nested in data.
+    let locale_set = root.children().find(|n| n.is_element() && n.tag_name().name() == "localeSet");
+    let locales = locale_set.map(parse_locales).unwrap_or_default();
+    Ok((Template { root: root_sf, page_roles, locales }, warnings))
+}
+
+/// The locales of a `localeSet` packet: their number and currency symbols and number patterns,
+/// at most [`MAX_LOCALES`] of them. A symbol or pattern longer than any locale's is left out.
+/// Symbols keep their spaces (a space groups digits in some locales); patterns are trimmed.
+fn parse_locales(set: XmlNode) -> Vec<Locale> {
+    let short = |n: XmlNode, max: usize| Some(text_of(n)).filter(|t| !t.is_empty() && t.len() <= max);
+    let named = |parent: Option<XmlNode>, element: &'static str, name: &str, max: usize| {
+        parent.and_then(|p| children(p, element).find(|c| c.attribute("name") == Some(name))).and_then(|c| short(c, max))
+    };
+    children(set, "locale")
+        .filter_map(|l| {
+            let name = l.attribute("name").map(str::trim).filter(|n| !n.is_empty())?.to_string();
+            let numbers = child(l, "numberSymbols");
+            let currencies = child(l, "currencySymbols");
+            let number_patterns = child(l, "numberPatterns")
+                .map(|p| {
+                    children(p, "numberPattern")
+                        .filter_map(|c| Some((c.attribute("name")?.to_string(), short(c, MAX_LOCALE_PATTERN)?.trim().to_string())))
+                        .take(MAX_LOCALE_PATTERNS)
+                        .collect()
+                })
+                .unwrap_or_default();
+            Some(Locale {
+                name,
+                decimal: named(numbers, "numberSymbol", "decimal", MAX_LOCALE_SYMBOL),
+                grouping: named(numbers, "numberSymbol", "grouping", MAX_LOCALE_SYMBOL),
+                currency: named(currencies, "currencySymbol", "symbol", MAX_LOCALE_SYMBOL),
+                number_patterns,
+            })
+        })
+        .take(MAX_LOCALES)
+        .collect()
 }
 
 fn parse_access(a: Option<&str>) -> Option<Access> {

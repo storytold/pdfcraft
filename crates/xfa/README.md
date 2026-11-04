@@ -26,7 +26,8 @@ that warning and keeps the existing layout and accepted widget values.
   rich text (`exData` XHTML: paragraphs, `br`, bold/italic/underline/size spans, embedded fields),
   text-field limits (`text/maxChars` and `exData/maxLength`, carried into AcroForm `/MaxLen`),
   inline JPEG, PNG and GIF images, lines, rectangles, occurrences, `breakBefore`/`breakAfter`, overflow
-  leaders, `columnWidths` and `colSpan`.
+  leaders, `columnWidths` and `colSpan`; `locale` attributes, and the number symbols and patterns
+  of the `localeSet` packet's locales.
 - **Layout** (`layout`): positioned, `tb`, `lr-tb`/`rl-tb`, `table` and `row` layouts; a
   container without a width is as wide as its content; flow across content areas and pages with
   page masters chosen by occurrence; a table's header row repeats after a break; presence
@@ -39,7 +40,8 @@ that warning and keeps the existing layout and accepted widget values.
 - **PDF** (`pdf::write_form`): pages with content streams in the standard 14 fonts (Arial and
   friends → Helvetica, Courier New → Courier, serif faces → Times; nothing is embedded), JPEG
   XObjects, and widgets: text (multi-line, max length, alignment), date (Acrobat's `AFDate`
-  format and keystroke actions from the picture clause), check boxes and radio groups (from
+  format and keystroke actions from the picture clause), number (Acrobat's `AFNumber` format and
+  keystroke actions from a display picture they show as XFA defines it, see below), check boxes and radio groups (from
   `exclGroup`), push buttons with Reset / Print / Save As / URI actions recognised from their
   scripts, and signature fields, each named by its SOM path (`form1[0].page1[0].sign[0]`, as
   fields under one for each step above it) because other viewers lay a dynamic form out again
@@ -154,6 +156,23 @@ let form = pdfcraft_xfa::layout_xml(template_xml)?;       // pages of items, for
   the app can sign. Image fields show the picture the data or template holds (JPEG, PNG, GIF)
   and are buttons that pick a new one, kept in the data as base64 with its `xfa:contentType`
   (`write_data_image`); barcode fields show their value as text, not as bars.
+- **Number pictures** (`number`). A number field (`numericEdit`, or a `decimal`, `integer` or
+  `float` value) keeps the value the data holds and is shown through its display picture
+  (`<format><picture>`) by Acrobat's `AFNumber_Format`, when that shows it as XFA 3.3's picture
+  clauses define it: `z`s then one `9` before the radix, only `9`s after it, `,` between groups
+  of three, `$` before or after the number (with one space between, or none), parentheses
+  around it, and a second alternative that is the first in parentheses or after a minus sign
+  (`num{$z,zzz,zz9.99}`, `num{($z,zzz,zz9.99)}`, `$z,zz9.99|($z,zz9.99)`). `.`, `,` and `$`
+  show the symbols of the field's locale (its own `locale`, else the nearest enclosing
+  object's; a master page takes the root subform's) from the `localeSet` packet, which also
+  gives `num.decimal{}` and `num.currency{}` their patterns; an unnamed or `ambient` locale is
+  en_US. Any other picture (optional decimals, zero- or space-filled digits, signs, `CR`/`DB`,
+  `E`, `%`, literal text, `num.integer{}`, `num.percent{}`), a locale the form doesn't describe
+  (other than en_US) and separators Acrobat has no style for (a space) keep the raw value.
+  Where `AFNumber_Format` and XFA still differ: a negative value in a picture with no sign or
+  parentheses shows a minus sign, and a value with more digits than the picture has shows them
+  all, where XFA's formatting would fail and show the raw value. `formattedValue` in scripts
+  is still the raw value for number pictures.
 - **Data files.** `export_data` writes the data as Acrobat's Export Data does: an XML document
   holding the data alone (the form's root data node at the root, its namespaces declared) or
   an XDP holding the whole datasets and a reference to the PDF. `import_data` takes an XDP, a
