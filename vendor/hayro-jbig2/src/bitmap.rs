@@ -93,6 +93,11 @@ pub(crate) struct Bitmap {
     pub(crate) stride: u32,
     /// Packed pixel data, one bit per pixel, row-major order.
     /// Each row is padded to a word boundary.
+    ///
+    /// PdfCraft patch: the padding is 0s, as pixels past the edge are (6.2.5.2, 6.3.5.2). Generic
+    /// and refinement decoding read the rows above their own pixels a word at a time, padding
+    /// included, and a refinement reads its reference the same way: whatever writes whole words
+    /// keeps the padding 0 (see `clear_padding`).
     pub(crate) data: Vec<Word>,
     /// "This four-byte field gives the horizontal offset in pixels of the bitmap
     /// encoded in this segment relative to the page bitmap." (7.4.1.3)
@@ -134,14 +139,37 @@ impl Bitmap {
         let stride = width.div_ceil(WORD_BITS);
         let default_word: Word = if default_pixel { !0 } else { 0 };
         let data = vec![default_word; stride as usize * height as usize];
-        Ok(Self {
+        let mut bitmap = Self {
             width,
             height,
             stride,
             data,
             x_location,
             y_location,
-        })
+        };
+        if default_pixel {
+            bitmap.clear_padding();
+        }
+        Ok(bitmap)
+    }
+
+    /// PdfCraft patch: clear the bits past `width` in each row's last word. "All pixels lying
+    /// outside the bounds of the actual bitmap or the reference bitmap have the value 0" (6.3.5.2),
+    /// and a refinement reads its reference a word at a time, those bits included: filled whole
+    /// with a default pixel of 1, they read as 1s, so a refinement of the page, or of an
+    /// intermediate text or halftone region, decoded to other pixels than were coded.
+    fn clear_padding(&mut self) {
+        let trailing = self.width % WORD_BITS;
+        // A width of 0 has no words to clear, and `chunks_exact_mut` would take a stride of 0.
+        if trailing == 0 {
+            return;
+        }
+        let mask: Word = !0 << (WORD_BITS - trailing);
+        for row in self.data.chunks_exact_mut(self.stride as usize) {
+            if let Some(last) = row.last_mut() {
+                *last &= mask;
+            }
+        }
     }
 
     pub(crate) fn reinitialize(
@@ -162,6 +190,9 @@ impl Bitmap {
         self.data.clear();
         self.data
             .resize(stride as usize * height as usize, default_word);
+        if default_pixel {
+            self.clear_padding();
+        }
 
         Ok(())
     }

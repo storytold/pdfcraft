@@ -1005,11 +1005,12 @@ mod tests {
 
     /// PdfCraft patch: the area a refinement of the page refines is the page inside it and 0
     /// outside: off the page's rows and columns, past where a column can be, and past the page's
-    /// width and the area's own whatever the padding of the page's rows holds (a page filled with
-    /// 1s has 1s there).
+    /// width and the area's own whatever the padding of the page's rows holds. `new_with` clears
+    /// that padding (patch 13), so the page's words are set to all 1s, padding included.
     #[test]
     fn a_page_area_is_the_page_inside_it_and_0_outside() {
-        let page = Bitmap::new_with(40, 3, 0, 0, true).unwrap();
+        let mut page = Bitmap::new_with(40, 3, 0, 0, true).unwrap();
+        page.data.fill(!0);
         let area = |x, y, width, height| page.area(x, y, width, height).unwrap().data;
         assert_eq!(area(30, 1, 20, 3), [0xFFC0_0000, 0xFFC0_0000, 0], "10 columns and 2 rows of the page");
         assert_eq!(area(0, 0, 33, 1), [!0, 0x8000_0000], "the whole of a word, and none of the area's padding");
@@ -1045,5 +1046,18 @@ mod tests {
         assert_eq!(page.retained_room(), MAX_RETAINED_WORDS - 1000 - ENTRY_WORDS);
         page.retained_words = MAX_RETAINED_WORDS;
         assert_eq!(page.retained_room(), 0);
+    }
+
+    /// Pixels past a bitmap's edge are 0 (6.3.5.2), and a refinement reads its reference a word at
+    /// a time, so a bitmap filled with 1s has none past its width: made, and a page made again for
+    /// the next image.
+    #[test]
+    fn a_bitmap_of_1s_has_nothing_past_its_width() {
+        assert_eq!(Bitmap::new_with(33, 2, 0, 0, true).unwrap().data, [!0, 1 << 31, !0, 1 << 31]);
+        let mut page = Bitmap::new_with(40, 1, 0, 0, false).unwrap();
+        page.reinitialize(7, 2, true).unwrap();
+        assert_eq!(page.data, [0xFE00_0000, 0xFE00_0000]);
+        assert_eq!(Bitmap::new_with(64, 1, 0, 0, true).unwrap().data, [!0, !0], "words filled whole");
+        assert!(Bitmap::new_with(0, 3, 0, 0, true).unwrap().data.is_empty(), "no width");
     }
 }
