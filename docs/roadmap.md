@@ -1,7 +1,5 @@
 # PdfCraft roadmap: milestones and what's next
 
-> **Last reviewed:** 2026-11-02 | **Last updated:** 2026-11-02 | **Change:** patch (M10 #2192 Windows discovery and shared capability lifetime; printer discovery and dialog responsiveness; readiness estimates unchanged)
-
 > **Last reviewed:** 2026-11-01 | **Last updated:** 2026-11-01 | **Change:** patch (M7 #5657: header/footer, watermark and background operations commit all selected pages together; later-page errors preserve marks, content, shared/inherited resources and pending edits; estimates unchanged)
 
 > **Last reviewed:** 2026-11-03 | **Last updated:** 2026-11-03 | **Change:** maintenance (M14: inherited strict Clippy diagnostics and a stale Preferences lint expectation removed; behavior and estimates unchanged)
