@@ -4274,6 +4274,7 @@ dependencies = [
  "pdfcraft-cos",
  "pdfcraft-engine",
  "pdfcraft-fonts",
+ "pdfcraft-form-detect",
  "pdfcraft-model",
  "pdfcraft-organize",
  "pdfcraft-platform",
@@ -4401,6 +4402,7 @@ dependencies = [
  "pdfcraft-export",
  "pdfcraft-filters",
  "pdfcraft-fonts",
+ "pdfcraft-form-detect",
  "pdfcraft-forms",
  "pdfcraft-geom",
  "pdfcraft-js",
@@ -4452,6 +4454,21 @@ dependencies = [
  "pdfcraft-cos",
  "skrifa 0.44.0",
  "unicode-bidi",
+]
+
+[[package]]
+name = "pdfcraft-form-detect"
+version = "0.18.0"
+dependencies = [
+ "image",
+ "rten",
+ "rten-tensor",
+ "rustls-native-certs",
+ "serde_json",
+ "sha2 0.11.1",
+ "tempfile",
+ "thiserror 2.0.21",
+ "ureq",
 ]
 
 [[package]]
@@ -4681,6 +4698,7 @@ dependencies = [
  "pdfcraft-cos",
  "pdfcraft-engine",
  "pdfcraft-fonts",
+ "pdfcraft-form-detect",
  "pdfcraft-model",
  "pdfcraft-platform",
  "pdfcraft-render",
@@ -4695,6 +4713,7 @@ dependencies = [
  "serde_json",
  "skrifa 0.44.0",
  "sys-locale",
+ "tempfile",
  "toml",
  "unicode-bidi",
  "wasm-bindgen",
@@ -8381,6 +8400,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.1",
+ "tempfile",
  "toml",
 ]
 

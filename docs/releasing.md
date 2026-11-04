@@ -84,6 +84,16 @@ The first directory with a complete supported pair wins, even if an earlier lega
 The release-package locations are `models\` beside `pdfcraft.exe` (MSI, portable zip), `PdfCraft.app/Contents/Resources/models` (macOS), and `share/pdfcraft/models` beside `bin/` (deb, rpm, tar.gz, AppImage, Flatpak, FreeBSD).
 The web build does not include these models, and OCR remains limited to the Latin alphabet without accents.
 
+**Optional FFDetr model:** exclude it from app installers. `cargo xtask form-model-package
+/path/to/ffdetr-576.onnx` prepares verified model/licence/attribution/checksum files
+in `dist/models-ffdetr-576-v1/`. Publish those as assets of the separate GitHub
+release `models-ffdetr-576-v1` before releasing the first-use download UI. Mark
+that model release as **pre-release** and **not latest** (`--prerelease --latest=false`
+with `gh release create`) so the app updater keeps finding app versions. Runtime
+installation uses the pinned asset URL and requires explicit user consent.
+See [form-field-detection.md](form-field-detection.md). This work prepares the
+release files; it does not publish that model release.
+
 ### macOS
 
 `packaging/macos/package.sh` builds both architectures, joins them with `lipo`, and assembles

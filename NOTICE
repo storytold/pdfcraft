@@ -76,3 +76,8 @@ Permission is hereby granted, free of charge, to any person obtaining a copy of 
 The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+Optional form detection download (not bundled in the app installer):
+- FFDetr by Joe Barrow — Apache License 2.0 (LICENSE-APACHE).
+  Source: https://huggingface.co/jbarrow/FFDetr/tree/56f4e4235e28dcb2953513dc020bb191a2f54cfe
+  Converted to self-contained ONNX, 576px float32, for native PdfCraft inference.
+  The download installs attribution and the Apache-2.0 licence beside the model.

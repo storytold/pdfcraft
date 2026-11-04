@@ -7,6 +7,7 @@ mod backdrop;
 mod batch;
 mod button_caption;
 mod form_bulk;
+mod form_detection;
 mod hostile_args;
 mod optimize_content_boundaries;
 mod redact_after_stray_q_form;

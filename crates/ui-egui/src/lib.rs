@@ -55,6 +55,7 @@ mod bidi;
 mod dialogs;
 pub use edit_text_ui::{CropMode, DragTarget, ImageDrag, ImageHandle, ImageSelection};
 mod editing;
+pub mod form_detection_ui;
 mod home;
 mod hotbar;
 mod panels;
@@ -506,6 +507,7 @@ pub struct PdfCraftApp {
     /// Compare files: the chosen older document and the last result.
     pub compare_old: Option<DocId>,
     pub compare: Option<compare_ui::CompareState>,
+    pub form_detection: form_detection_ui::State,
     /// The JavaScript console and the Document JavaScripts draft.
     pub js_console: js_ui::JsConsole,
     pub doc_js: js_ui::DocJsDraft,

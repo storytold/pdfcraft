@@ -223,6 +223,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 ## Progress log
 
+- **2026-11-03 (M6, PR #3105 refresh):** Rebased native FFDetr detection onto upstream `9ce6d89f` and workspace 0.18.0. Adapted integration points and tests to the current module layout. Removed local translation catalogs and their asset entries; English strings remain in code and translations come from craft-i18n. Eleven focused automation/UI tests, WASM compilation, formatting, assets, layers and parity passed; Clippy reports existing lints in unchanged upstream files. Optional model release publication and wider evaluation remain pending. Estimates unchanged.
+
 - **2026-11-03 (M5, #5850 review):** Resolve indirect IT when recognizing typewriter contents and Fill & Sign marks. Comment listing and property lookup retain their existing direct-Subtype behavior. A real double-click Edit composer preserves the typewriter’s text as written; ordinary comment edits keep trimming. Regressions cover direct Subtype with indirect intent, save/reopen, raw posted contents and same-index comments on different pages. The existing live-movement test now commits its setup with an outside click rather than Enter. Estimates unchanged.
 
 - **2026-11-03 (M5, #5850):** Fill & Sign Enter inserts a line break in a growing editor; clicking outside commits and Escape cancels. Nonempty text keeps leading, internal and trailing line breaks. The headless fill_sign_add path sizes its typewriter box for the same wrapped lines so saved appearances show every row. Production-order keyboard and engine save/reopen/render regressions exercise the UI and headless callers. Estimates unchanged.

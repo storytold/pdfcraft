@@ -3200,3 +3200,18 @@ kind = "icon"
 usage = "UI icon, embedded via crates/ui-egui/src/icon_data.rs"
 sha256 = "864ab2f19254e6ac7240bc6a98323197332e8f714d4d3f94831f41309e5ef2f7"
 
+# Optional runtime download. Excluded from `cargo xtask models` and every app installer.
+# The release asset must be published by maintainers before first-use downloads are available.
+[[fetched]]
+file = "ffdetr-576.onnx"
+url = "https://github.com/storytold/pdfcraft/releases/download/models-ffdetr-576-v1/ffdetr-576.onnx"
+title = "FFDetr form-field detector, self-contained 576px ONNX export"
+author = "Joe Barrow; ONNX conversion by PdfCraft contributors"
+source = "https://huggingface.co/jbarrow/FFDetr/tree/56f4e4235e28dcb2953513dc020bb191a2f54cfe (Apache-2.0 model card; RF-DETR 1.11.2, PyTorch 2.14.1+cpu, float32, opset 17)"
+licence = "Apache-2.0"
+licence_file = "LICENSE-APACHE"
+licence_url = "https://raw.githubusercontent.com/storytold/pdfcraft/d20eef9d56a991f9adbfb70987962e85e1bd51dd/LICENSE-APACHE"
+licence_sha256 = "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+kind = "optional-model"
+usage = "Prepare a form: optional one-time runtime download after explicit consent; verified by size and SHA-256, stored locally; never bundled in installers"
+sha256 = "5e5920c8cbf7287b9fef4d67c0d20728a7155e884ae638ee75926b1bbae79370"
