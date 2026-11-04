@@ -79,6 +79,7 @@ impl<'a> Inspector<'a> {
         seen: &mut HashSet<*const Dictionary>,
         depth: u32,
         out: &mut HashMap<Vec<u8>, &'a Object>,
+        key_budget: &mut usize,
     ) {
         if depth > 32 || !seen.insert(node as *const _) {
             return;
@@ -87,18 +88,25 @@ impl<'a> Inspector<'a> {
             for pair in pairs.chunks(2) {
                 if let [k, v] = pair {
                     let key = match self.resolve(k) {
-                        Object::String(s, _) => s.clone(),
-                        Object::Name(n) => n.clone(),
+                        Object::String(s, _) => s,
+                        Object::Name(n) => n,
                         _ => continue,
                     };
-                    out.entry(key).or_insert(v);
+                    // Every key is hashed, so its bytes are spent from one allowance for the whole
+                    // tree (a key repeated by reference is charged each time); one past it is
+                    // not indexed. Only a first occurrence is copied.
+                    let Some(left) = key_budget.checked_sub(key.len()) else { continue };
+                    *key_budget = left;
+                    if !out.contains_key(key.as_slice()) {
+                        out.insert(key.clone(), v);
+                    }
                 }
             }
         }
         if let Ok(Object::Array(kids)) = node.get(b"Kids").map(|o| self.resolve(o)) {
             for k in kids {
                 if let Some(d) = self.dict(k) {
-                    self.name_tree_raw(d, seen, depth + 1, out);
+                    self.name_tree_raw(d, seen, depth + 1, out, key_budget);
                 }
             }
         }
@@ -549,5 +557,18 @@ mod open_dest_tests {
         // A shallow one is read.
         let shallow = ["<< /Kids [7 0 R] >>".to_string(), "<< /Kids [8 0 R] >>".into(), "<< /Names [(x) [4 0 R /Fit]] >>".into()];
         assert_eq!(open_dest("/OpenAction (x) /Names << /Dests 6 0 R >>", &shallow), Some((1, DestView::Fit)));
+    }
+
+    #[test]
+    fn a_key_repeated_by_reference_is_charged_each_time_against_the_name_tree_allowance() {
+        let big = format!("<{}>", "41".repeat(1 << 20));
+        let tree = |repeats: usize| {
+            let names = format!("{}(x) [4 0 R /Fit]", "7 0 R [4 0 R /Fit] ".repeat(repeats));
+            [format!("<< /Names [{names}] >>"), big.clone()]
+        };
+        let catalog = "/OpenAction (x) /Names << /Dests 6 0 R >>";
+        assert_eq!(open_dest(catalog, &tree(2)), Some((1, DestView::Fit)));
+        // 17 MiB of repeats of one reference spend the 16 MiB allowance before the real key.
+        assert_eq!(open_dest(catalog, &tree(17)), None);
     }
 }
