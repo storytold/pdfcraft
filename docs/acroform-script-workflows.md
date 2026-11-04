@@ -151,3 +151,5 @@ Focus reveals a laid-out widget's page, and image import carries exact clicked i
 the picker and SetFieldImageTarget. The headless form_set_image tool accepts the same optional
 field_id and validates exact name/identity pairs; omitted IDs preserve legacy lookup. Mixed widget icons emit field-wide changes only when an
 icon setter runs. UI waiting helpers use elapsed deadlines rather than machine-speed retry counts.
+
+Comparison script document requests use their source view. Save As captures the source document without changing the comparison tab. Print activates and retains the source tab because the existing print dialog reads the active document throughout its lifetime. Missing source views never fall back to another active document. Regression coverage distinguishes a two-page source from a one-page comparison file and checks saved bytes, print-dialog page state and untouched comparison content.

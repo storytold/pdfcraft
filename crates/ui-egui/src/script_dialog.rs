@@ -293,25 +293,61 @@ mod review13_ui_tests {
             }
         }
     }
-    /// The visible old comparison half may complete without being the active new-file tab.
+    /// Comparison completion preserves globals and sends Save As/Print to its source document.
     #[test]
     fn non_active_comparison_document_completes_native_script() {
-        let (mut app, old) = app();
-        let bytes = app.session.create_blank(200.0, 300.0, 1).unwrap();
-        app.open_bytes("new.pdf", None, bytes.to_vec()).unwrap();
-        assert_ne!(app.active_ids().unwrap().1, old);
-        app.compare_old = Some(old);
-        app.run_compare();
-        assert!(app.compare.as_ref().unwrap().side_by_side);
-        app.start_ui_script(old, "var comparisonKept=42;", None, None);
-        let ctx = egui::Context::default();
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while app.script_pending.is_some() && Instant::now() < deadline {
-            app.poll_script_dialog(&ctx);
-            std::thread::sleep(Duration::from_millis(5));
+        for request in ["", "app.execMenuItem('SaveAs');", "print();"] {
+            let (mut app, old) = app();
+            app.views.iter_mut().find(|v| v.id == old).unwrap().current = 1;
+            let bytes = app.session.create_blank(200.0, 300.0, 1).unwrap();
+            app.open_bytes("new.pdf", None, bytes.to_vec()).unwrap();
+            let new = app.active_ids().unwrap().1;
+            assert_ne!(new, old);
+            let new_before = app.session.save_bytes(new).unwrap();
+            app.compare_old = Some(old);
+            app.run_compare();
+            assert!(app.compare.as_ref().unwrap().side_by_side);
+            let dir = std::env::temp_dir().join(format!(
+                "pdfcraft-comparison-request-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+            ));
+            std::fs::create_dir(&dir).unwrap();
+            let saved = dir.join("source.pdf");
+            app.save_override = Some(saved.to_string_lossy().into_owned());
+            app.printer_source = Some(std::sync::Arc::new(Vec::new));
+            app.start_ui_script(old, &format!("var comparisonKept=42;{request}"), None, None);
+            let ctx = egui::Context::default();
+            let deadline = Instant::now() + Duration::from_secs(12);
+            while app.script_pending.is_some() && Instant::now() < deadline {
+                app.poll_script_dialog(&ctx);
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            assert!(app.script_pending.is_none());
+            assert_eq!(app.session.run_javascript(old, "comparisonKept", None).unwrap().result.as_deref(), Some("42"));
+            assert_eq!(app.session.save_bytes(new).unwrap(), new_before);
+            assert!(app.session.get(new).unwrap().path.is_none());
+            if request.contains("SaveAs") {
+                assert_eq!(app.active_ids().unwrap().1, new, "Save As need not change the comparison tab");
+                assert_eq!(app.session.get(old).unwrap().path.as_deref(), saved.to_str());
+                let mut reopened = pdfcraft_engine::Session::new();
+                let id = reopened.open("saved.pdf", None, std::sync::Arc::new(std::fs::read(&saved).unwrap()), None).unwrap();
+                assert_eq!(reopened.get(id).unwrap().info.pages.len(), 2, "the saved file is the two-page source, not the one-page active file");
+            } else if request == "print();" {
+                assert_eq!(app.active_ids().unwrap().1, old, "Print must retain its source as the active document");
+                assert!(matches!(app.dialog, Some(crate::Dialog::Print)));
+                assert_eq!(app.print_draft.current_page, 1);
+                assert!(!saved.exists());
+            } else {
+                assert_eq!(app.active_ids().unwrap().1, new);
+                assert!(!saved.exists());
+            }
+            drop(app);
+            if saved.exists() {
+                std::fs::remove_file(saved).unwrap();
+            }
+            std::fs::remove_dir(dir).unwrap();
         }
-        assert!(app.script_pending.is_none());
-        assert_eq!(app.session.run_javascript(old, "comparisonKept", None).unwrap().result.as_deref(), Some("42"));
     }
     /// Script focus reveals the requested field page before opening its editor.
     #[test]

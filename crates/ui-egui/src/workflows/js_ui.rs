@@ -70,7 +70,14 @@ impl PdfCraftApp {
         }
         for r in out.requests {
             match r {
-                Request::Print => self.open_print(),
+                Request::Print => {
+                    if let Some(i) = view {
+                        // The print dialog reads the active document throughout its lifetime.
+                        // Keep the source selected; restoring the comparison tab would retarget it.
+                        self.active = Some(i);
+                        self.open_print();
+                    }
+                }
                 Request::GoToPage(p) => {
                     if let Some(i) = view {
                         self.views[i].go_to_page(p);
@@ -81,7 +88,11 @@ impl PdfCraftApp {
                     "The form asks to be submitted to {u}; PdfCraft doesn't send form data. Save the document to keep your entries.",
                     &[("u", &u)],
                 ),
-                Request::SaveAs => self.run_command("file.save_as"),
+                Request::SaveAs => {
+                    if let Some(i) = view {
+                        self.save_view(i, crate::SaveTarget::As);
+                    }
+                }
                 Request::ShowPanel(p) => {
                     let panel = match p {
                         Panel::Bookmarks => crate::RightPanel::Bookmarks,
