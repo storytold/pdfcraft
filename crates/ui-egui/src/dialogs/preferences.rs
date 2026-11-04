@@ -660,6 +660,7 @@ fn card_general(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ctx: &mut 
     #[cfg(not(target_arch = "wasm32"))]
     ctx.checkbox(ui, &mut app.reload_changed_files, tl!("Reload documents when their files change on disk"), t);
     ctx.checkbox(ui, &mut app.show_secured_notice, tl!("Show a notice when a document is secured"), t);
+    ctx.checkbox(ui, &mut app.show_form_field_reminder, tl!("Show form field reminder"), t);
 
     #[cfg(not(target_arch = "wasm32"))]
     {
