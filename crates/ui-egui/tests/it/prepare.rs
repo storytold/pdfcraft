@@ -55,6 +55,17 @@ fn rect_of(h: &Harness<'static, PdfCraftApp>, name: &str) -> [f64; 4] {
     s.session.get(s.views[0].id).unwrap().form.iter().find(|f| f.name == name).unwrap().widgets[0].rect
 }
 
+fn text_center_near(h: &Harness<'static, PdfCraftApp>, label: &str, expected: Pos2) -> Option<Pos2> {
+    h.output()
+        .shapes
+        .iter()
+        .filter_map(|clipped| match &clipped.shape {
+            egui::Shape::Text(text) if text.galley.text() == label => Some(text.visual_bounding_rect().center()),
+            _ => None,
+        })
+        .min_by(|a, b| a.distance(expected).total_cmp(&b.distance(expected)))
+}
+
 #[test]
 fn placing_moving_editing_and_deleting_a_field() {
     let mut h = harness();
@@ -623,6 +634,77 @@ fn tab_numbers_follow_fill_order_without_dirtying_the_document() {
         };
         assert!(clip_rect.contains_rect(*text_rect), "the whole tab number {expected} should be visible");
     }
+}
+
+#[test]
+fn tab_badge_tracks_its_widget_during_a_drag() {
+    let mut h = harness();
+    h.state_mut().execute("form.prepare");
+    h.run_steps(2);
+    h.get_by_label("Show tab numbers").click();
+    h.run_steps(3);
+
+    let (name, widget, rect) = {
+        let s = h.state();
+        let doc = s.session.get(s.views[0].id).unwrap();
+        let mut order: Vec<(usize, usize, usize)> = doc
+            .form
+            .iter()
+            .enumerate()
+            .filter(|(_, field)| {
+                !field.read_only() && !matches!(field.kind, pdfcraft_engine::FormFieldKind::PushButton | pdfcraft_engine::FormFieldKind::Signature)
+            })
+            .flat_map(|(fi, field)| {
+                field
+                    .widgets
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, widget)| {
+                        let Some(page) = widget.page.and_then(|page| doc.info.pages.get(page)) else { return false };
+                        let [x0, y0, x1, y1] = widget.rect;
+                        let [cx0, cy0, cx1, cy1] = page.crop.map(f64::from);
+                        !widget.hidden
+                            && !widget.read_only
+                            && [x0, y0, x1, y1].into_iter().all(f64::is_finite)
+                            && x0 < x1
+                            && y0 < y1
+                            && x1 > cx0
+                            && x0 < cx1
+                            && y1 > cy0
+                            && y0 < cy1
+                    })
+                    .map(move |(wi, widget)| (widget.tab, fi, wi))
+            })
+            .collect();
+        order.sort_by_key(|(tab, _, _)| *tab);
+        let (_, fi, wi) = *order.first().expect("the form has a fillable widget");
+        let field = doc.form.get(fi).expect("the first fillable field exists");
+        (field.name.clone(), wi, pdfcraft_ui_egui::forms_ui::field_screen_rect(&s.views[0], &doc.info, field, wi).unwrap())
+    };
+    let start = rect.center();
+    let badge_before = text_center_near(&h, "1", rect.min + egui::vec2(10.0, 10.0)).expect("the first badge is painted");
+
+    h.hover_at(start);
+    h.run_steps(1);
+    h.drag_at(start);
+    h.run_steps(1);
+    h.drop_at(start);
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].prepare.selected.as_ref().map(|selected| (selected.0.as_str(), selected.1)), Some((name.as_str(), widget)));
+
+    let delta = egui::vec2(24.0, 16.0);
+    h.hover_at(start);
+    h.run_steps(1);
+    h.drag_at(start);
+    h.run_steps(1);
+    h.hover_at(start + delta);
+    h.run_steps(3);
+
+    let badge_during_drag = text_center_near(&h, "1", badge_before + delta).expect("the badge stays painted during the drag");
+    assert!(badge_during_drag.distance(badge_before + delta) < 8.0, "badge {badge_before:?} moved to {badge_during_drag:?}");
+    assert!(badge_during_drag.distance(badge_before) > 12.0, "the badge follows the dragged widget");
+    h.drop_at(start + delta);
+    h.run_steps(3);
 }
 
 #[test]

@@ -750,9 +750,24 @@ fn tab_to_next_field(
     // the document's tab order (each page's /Tabs: rows, columns or structure), wrapping.
     let order = tab_order(form, info);
     let exact = order.iter().position(|(fi, wi)| form.get(*fi).is_some_and(|x| x.name == f.name && *wi == widget));
-    if let Some(pos) = exact.or_else(|| order.iter().position(|(fi, _)| form.get(*fi).is_some_and(|x| x.name == f.name))) {
+    let same_field = order.iter().position(|(fi, _)| form.get(*fi).is_some_and(|x| x.name == f.name));
+    let next_after_removed = if forward && exact.is_none() && same_field.is_none() {
+        form.iter().position(|field| field.name == f.name).and_then(|fi| {
+            let tab = form.get(fi)?.widgets.get(widget)?.tab;
+            let key = (tab, fi, widget);
+            order
+                .iter()
+                .position(|(other_fi, other_wi)| {
+                    form.get(*other_fi).and_then(|field| field.widgets.get(*other_wi)).is_some_and(|other| (other.tab, *other_fi, *other_wi) > key)
+                })
+                .or_else(|| (!order.is_empty()).then_some(0))
+        })
+    } else {
+        None
+    };
+    if let Some(pos) = exact.or(same_field).or(next_after_removed) {
         // A focused widget that left the order is replaced by the field's first remaining stop.
-        let k = if forward && exact.is_none() {
+        let k = if forward && (exact.is_none() || next_after_removed.is_some()) {
             pos
         } else if forward {
             (pos + 1) % order.len()
@@ -762,10 +777,14 @@ fn tab_to_next_field(
         let Some((fi, wi)) = order.get(k).copied() else { return edit.or(pending) };
         let Some(target) = form.get(fi) else { return edit.or(pending) };
         view.forms.focus = Some(Focus { select_all: true, ..open_focus(target, wi) });
-        if let Some(p) = target.widgets.get(wi).and_then(|widget| widget.page)
-            && view.page_screen_rect(p).is_none()
+        if let Some(widget) = target.widgets.get(wi)
+            && let Some(page) = widget.page
+            && !field_screen_rect(view, info, target, wi).is_some_and(|rect| {
+                let viewport = view.viewport_rect();
+                viewport.contains(rect.min) && viewport.contains(rect.max)
+            })
         {
-            view.go_to_page(p);
+            view.reveal_rect(page, widget.rect.map(|coord| coord as f32), info);
         }
     }
     edit.or(pending)

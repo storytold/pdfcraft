@@ -254,6 +254,29 @@ fn tab_badge_rect(widget: Rect, page: Rect, size: egui::Vec2) -> Option<Rect> {
     Some(Rect::from_min_size(min, size))
 }
 
+fn place_tab_badge(widget: Rect, page: Rect, size: egui::Vec2, placed: &[Rect]) -> Option<Rect> {
+    let preferred = tab_badge_rect(widget, page, size)?;
+    if placed.iter().all(|badge| !badge.intersects(preferred)) {
+        return Some(preferred);
+    }
+
+    let gap = 2.0;
+    let step = size + vec2(gap, gap);
+    let columns = (((page.width() - size.x) / step.x).floor().max(0.0) as usize).saturating_add(1);
+    let rows = (((page.height() - size.y) / step.y).floor().max(0.0) as usize).saturating_add(1);
+    let attempts = columns.saturating_mul(rows).min(placed.len().saturating_add(1));
+    for slot in 0..attempts {
+        let col = slot % columns;
+        let row = slot / columns;
+        let min = page.min + vec2(col as f32 * step.x, row as f32 * step.y);
+        let candidate = Rect::from_min_size(min, size);
+        if placed.iter().all(|badge| !badge.intersects(candidate)) {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
 pub(crate) struct Outcome {
     /// The click or drag belonged to Prepare a form.
     pub consumed: bool,
@@ -620,6 +643,7 @@ pub(crate) fn paint_page(cx: PageToolContext<'_>, form: &[FormField], tab_order:
         }
     }
     if prep.show_tab_numbers {
+        let mut placed = Vec::new();
         for (number, (fi, wi)) in tab_order.iter().copied().enumerate() {
             let Some(field) = form.get(fi) else { continue };
             let Some(widget) = field.widgets.get(wi) else { continue };
@@ -634,7 +658,8 @@ pub(crate) fn paint_page(cx: PageToolContext<'_>, form: &[FormField], tab_order:
             let label = number.saturating_add(1).to_string();
             let font = theme::semibold((10.0 * zoom).clamp(8.0, 14.0));
             let galley = painter.layout_no_wrap(label, font, Color32::WHITE);
-            let Some(badge) = tab_badge_rect(r, xf.rect, galley.size() + vec2(8.0, 5.0)) else { continue };
+            let Some(badge) = place_tab_badge(r, xf.rect, galley.size() + vec2(8.0, 5.0), &placed) else { continue };
+            placed.push(badge);
             let clipped = painter.with_clip_rect(painter.clip_rect().intersect(xf.rect));
             clipped.rect_filled(badge, CornerRadius::same(3), SELECT_BLUE);
             clipped.galley(badge.min + vec2(4.0, 2.0), galley, Color32::WHITE);
@@ -802,7 +827,7 @@ mod tests {
     }
 
     #[test]
-    fn tab_badges_follow_dragged_widgets_and_stay_inside_page_edges() {
+    fn tab_badge_rect_tracks_dragged_rect_and_clamps_to_page_edges() {
         let page = Rect::from_min_size(pos2(10.0, 20.0), vec2(100.0, 80.0));
         let widget = Rect::from_min_size(pos2(30.0, 40.0), vec2(20.0, 15.0));
         let size = vec2(24.0, 14.0);
@@ -820,5 +845,17 @@ mod tests {
         let page = Rect::from_min_size(pos2(10.0, 20.0), vec2(20.0, 12.0));
         let widget = Rect::from_min_size(pos2(10.0, 20.0), vec2(4.0, 4.0));
         assert_eq!(tab_badge_rect(widget, page, vec2(24.0, 14.0)), None);
+    }
+
+    #[test]
+    fn tab_badges_near_the_right_edge_do_not_overlap() {
+        let page = Rect::from_min_size(pos2(10.0, 20.0), vec2(100.0, 80.0));
+        let size = vec2(24.0, 14.0);
+        let first_widget = Rect::from_min_size(pos2(104.0, 45.0), vec2(8.0, 8.0));
+        let second_widget = Rect::from_min_size(pos2(106.0, 45.0), vec2(8.0, 8.0));
+        let first = place_tab_badge(first_widget, page, size, &[]).unwrap();
+        let second = place_tab_badge(second_widget, page, size, &[first]).unwrap();
+        assert!(!first.intersects(second), "{first:?} overlaps {second:?}");
+        assert!(page.contains_rect(first) && page.contains_rect(second));
     }
 }
