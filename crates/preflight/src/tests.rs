@@ -521,10 +521,50 @@ fn implementation_limits_are_reported() {
     let name = "n".repeat(128);
     assert_eq!(limits(&doc(&format!("/V /{name}"), "", ok, "")), ["A name is longer than 127 bytes"]);
     assert_eq!(limits(&doc(&format!("/{name} 1"), "", ok, "")), ["A name is longer than 127 bytes"]);
+    assert_eq!(limits(&doc("", &format!("/{name} Do"), ok, "")), ["A name is longer than 127 bytes"]);
     // 200 bytes as written, 66 once the escapes are read.
     let escaped = format!("A{}", "#41".repeat(65) + &"B".repeat(4));
     assert!(limits(&doc(&format!("/V /{escaped}"), "", ok, "")).is_empty());
     assert_eq!(limits(&doc("", "", "[0 0 2 200]", "")), ["Page 1 has a boundary smaller than 3 or larger than 14400 units"]);
     assert_eq!(limits(&doc("", "", ok, "/CropBox [0 0 14401 200]")), ["Page 1 has a boundary smaller than 3 or larger than 14400 units"]);
     assert!(limits(&doc("", "", "[0 0 2 2]", "/MediaBox [0 0 3 14400]")).is_empty(), "the page's own box overrides its parent's");
+}
+
+/// 6.1.13 also reads the trailer, a page's `/Contents` streams joined (operands may end one
+/// stream and their operator start the next, ISO 32000-1 7.8.2), values nested as deep as the
+/// parser allows, and a page box whose size overflows to infinity.
+#[test]
+fn implementation_limits_reach_the_trailer_split_content_deep_values_and_huge_boxes() {
+    let limits =
+        |doc: &Document| -> Vec<String> { verify(doc, Level::A2b).into_iter().filter(|i| i.clause == "6.1.13").map(|i| i.message).collect() };
+    let stream = |data: &str| {
+        format!(
+            "<< /Length {} >>
+stream
+{data}
+endstream",
+            data.len()
+        )
+    };
+    let page = |contents: &str, catalog_extra: &str, media: &str, trailer: &str| {
+        let (first, second) = contents.split_once('|').unwrap_or((contents, ""));
+        build(
+            &[
+                &format!("<< /Type /Catalog /Pages 2 0 R {catalog_extra} >>"),
+                &format!("<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox {media} >>"),
+                "<< /Type /Page /Parent 2 0 R /Contents [4 0 R 5 0 R] >>",
+                &stream(first),
+                &stream(second),
+            ],
+            trailer,
+        )
+    };
+    let ok = "[0 0 200 200]";
+    assert!(limits(&page("|", "", ok, "")).is_empty());
+    assert_eq!(limits(&page("|", "", ok, "/Custom 2147483648")), ["An integer is outside the 32-bit range"]);
+    let long = "x".repeat(32768);
+    assert_eq!(limits(&page(&format!("BT ({long})|Tj ET"), "", ok, "")), ["A string is longer than 32767 bytes"]);
+    let deep = format!("/Deep {}2147483648{}", "[".repeat(40), "]".repeat(40));
+    assert_eq!(limits(&page("|", &deep, ok, "")), ["An integer is outside the 32-bit range"]);
+    assert_eq!(limits(&page("|", "", "[-1e308 0 1e308 200]", "")), ["Page 1 has a boundary smaller than 3 or larger than 14400 units"]);
 }

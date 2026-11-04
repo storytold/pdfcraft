@@ -521,7 +521,7 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
     }
     check_objects(doc, level, &objs, &page_of, &mut issue);
     // 6.1.13: the implementation limits of ISO 32000-1 Annex C.
-    let over = limits::exceeded(&objs, &referenced_content(doc, &objs));
+    let over = limits::exceeded(doc, &objs, &referenced_content(doc, &objs));
     if over.int {
         issue("6.1.13", "An integer is outside the 32-bit range", None, None, false);
     }
