@@ -486,6 +486,7 @@ pub fn scan(doc: &Document) -> Vec<(Hidden, usize)> {
     let pages = pdfcraft_model::pages(doc);
     let annots: Vec<Dict> = pages.iter().flat_map(|p| annots_of(doc, &p.dict)).filter_map(|a| doc.resolve(&a).as_dict().cloned()).collect();
     let count_sub = |s: &[u8]| annots.iter().filter(|a| a.name(b"Subtype") == Some(s)).count();
+    let listed = listed_annotations(doc);
     let names = sub(doc, &cat, b"Names").unwrap_or_default();
     let owned_keys: Vec<&[u8]> = OWNED.iter().map(|o| o.1).collect();
     // A graph nested too deeply to walk counts as holding everything, so the removal runs and
@@ -528,9 +529,10 @@ pub fn scan(doc: &Document) -> Vec<(Hidden, usize)> {
                         + usize::from(cat.get(b"OpenAction").is_some_and(|a| doc.resolve(a).as_dict().is_some()))
                         + owned(Hidden::LinksActionsScripts)
                         + annots.iter().filter(|a| primary_action_only(a)).count()
+                        // fields no page lists (a listed widget is counted with the annotations above)
                         + field_dicts(doc)
                             .into_iter()
-                            .filter(|&r| doc.get(r).as_dict().is_some_and(|d| !d.contains(b"Subtype") && primary_action_only(d)))
+                            .filter(|r| !listed.contains(r) && doc.get(*r).as_dict().is_some_and(primary_action_only))
                             .count()
                         + sub(doc, &names, b"JavaScript").map_or(0, |t| name_tree_len(doc, &t))
                 }
@@ -601,9 +603,18 @@ pub fn remove_hidden(doc: &mut Document, which: &[Hidden]) -> Result<Vec<(Hidden
         let mut kept = Vec::new();
         for a in list {
             let Some(r) = a.as_ref() else {
-                if !doc.resolve(&a).as_dict().is_some_and(drop_annot) {
-                    kept.push(a);
+                let mut a = a;
+                if doc.resolve(&a).as_dict().is_some_and(drop_annot) {
+                    continue;
                 }
+                // a direct annotation holds its own actions: removed from the entry kept in the array
+                if which.contains(&Hidden::LinksActionsScripts)
+                    && let Object::Dict(d) = &mut a
+                {
+                    d.remove(b"AA");
+                    d.remove(b"A");
+                }
+                kept.push(a);
                 continue;
             };
             let d = doc.get(r).as_dict().cloned().unwrap_or_default();

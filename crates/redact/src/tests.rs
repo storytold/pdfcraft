@@ -3922,3 +3922,40 @@ fn screen_and_field_primary_actions_are_removed() {
     let saved = write_full(&doc, &SaveOptions::default()).unwrap();
     assert!(!saved.windows(14).any(|w| w == b"SCRIPT_PAYLOAD"), "the script is still in the file");
 }
+
+/// A direct annotation dictionary in `/Annots` holds its own action: removal clears it there, not
+/// only from annotations that are indirect objects.
+#[test]
+fn removing_actions_clears_a_direct_annotation_action() {
+    use crate::sanitize::{Hidden, remove_hidden, scan};
+    let objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Annots [<< /Type /Annot /Subtype /Screen /Rect [10 10 50 50] /A << /S /JavaScript /JS (app.alert\\(1\\)) >> >>] >>"
+            .to_vec(),
+        stream("", b"BT ET"),
+    ];
+    let mut doc = pdf(objs);
+    let counts: HashMap<Hidden, usize> = scan(&doc).into_iter().collect();
+    assert!(counts[&Hidden::LinksActionsScripts] > 0, "{counts:?}");
+    remove_hidden(&mut doc, &[Hidden::LinksActionsScripts]).unwrap();
+    let bytes = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
+    assert!(!bytes.windows(10).any(|w| w == b"JavaScript"), "the direct annotation's action survived the save");
+}
+
+/// A widget field no page lists, with `/Subtype`, still counts for the actions scan when it holds
+/// an action, as removal clears it.
+#[test]
+fn an_unlisted_widget_field_action_is_counted() {
+    use crate::sanitize::{Hidden, scan};
+    let objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R] >> >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R >>".to_vec(),
+        stream("", b"BT ET"),
+        b"<< /Type /Annot /Subtype /Widget /FT /Btn /T (b) /Rect [0 0 10 10] /A << /S /JavaScript /JS (x) >> >>".to_vec(),
+    ];
+    let doc = pdf(objs);
+    let counts: HashMap<Hidden, usize> = scan(&doc).into_iter().collect();
+    assert!(counts[&Hidden::LinksActionsScripts] > 0, "{counts:?}");
+}
