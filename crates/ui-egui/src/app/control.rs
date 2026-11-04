@@ -374,6 +374,14 @@ impl PdfCraftApp {
                     _ => return Err("secured-notice must be true or false".into()),
                 };
             }
+            // `--pdfa-notice false`: no notice above the pages that a document declares PDF/A.
+            ("pdfa-notice", _) => {
+                self.show_pdfa_notice = match value {
+                    "true" => true,
+                    "false" => false,
+                    _ => return Err("pdfa-notice must be true or false".into()),
+                };
+            }
             ("system-title-bar", _) => {
                 self.system_title_bar = match value {
                     "true" => true,

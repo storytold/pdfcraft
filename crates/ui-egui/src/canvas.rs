@@ -629,6 +629,9 @@ pub struct DocView {
     pub(crate) move_background: crate::content_ui::MoveBackground,
     /// Edit text & images: the images per page (by document generation), and the selected one.
     pub(crate) edit_images: HashMap<usize, (u64, Vec<pdfcraft_engine::PageImage>)>,
+    /// The PDF/A part and conformance the document declares, read from its XMP once per edit
+    /// generation for the notice bar (#5930).
+    pub(crate) declared_pdfa: Option<(u64, Option<(u8, String)>)>,
     pub(crate) objects: crate::object_ui::ObjectSelection,
     pub image_selection: Option<crate::edit_text_ui::ImageSelection>,
     /// Select tool: the picture clicked, to copy in its original format.
@@ -1005,6 +1008,7 @@ impl DocView {
             text_background: Default::default(),
             move_background: Default::default(),
             edit_images: HashMap::new(),
+            declared_pdfa: None,
             objects: Default::default(),
             image_selection: None,
             picked_image: None,
@@ -2406,6 +2410,18 @@ fn apply_notice(app: &mut PdfCraftApp, index: usize, notice: Option<Notice>) {
         Some(Notice::Console) => app.dialog = Some(crate::Dialog::JsConsole),
         // Back on in Preferences ▸ General.
         Some(Notice::HideSecured) => app.show_secured_notice = false,
+        // The dialog opens with the document verified: against the part it declares where the
+        // dialog has that level, else the level it was left at.
+        Some(Notice::PdfA(part)) => {
+            if app.execute("standards.pdfa") {
+                if let Some(level) = [pdfcraft_engine::pdfa::Level::A2b, pdfcraft_engine::pdfa::Level::A3b].into_iter().find(|l| l.part() == part) {
+                    app.pdfa.level = level;
+                }
+                app.pdfa_verify();
+            }
+        }
+        // Back on in Preferences ▸ General.
+        Some(Notice::HidePdfA) => app.show_pdfa_notice = false,
         None => {}
     }
 }
@@ -2916,13 +2932,14 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         (app.left_open && app.left == crate::LeftPanel::Tool("edit")) || matches!(app.quick_tool, QuickTool::AddText | QuickTool::EditText);
     let text_style = app.text_style.clone();
     let show_secured_notice = app.show_secured_notice;
+    let show_pdfa_notice = app.show_pdfa_notice;
     let view = &mut app.views[index];
     // Opened without the owner password and something is restricted. The notice says so unless
     // the user turned it off (#4035): the restrictions themselves, and Document Properties ▸
     // Security, stay as they are.
     let secured = show_secured_notice && doc.security_summary().is_some_and(|s| !(s.owner || (s.permissions.modify() && s.permissions.assemble())));
     let repaired = !doc.repair_log().is_empty();
-    let notice = notices(view, doc, secured, repaired, crate::sign_ui::banner(&doc.signatures), ui, &t);
+    let notice = notices(view, doc, secured, repaired, show_pdfa_notice, crate::sign_ui::banner(&doc.signatures), ui, &t);
     apply_notice(app, index, notice);
     let Some(doc) = app.session.get(app.views[index].id) else { return };
     let info = &doc.info;

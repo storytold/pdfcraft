@@ -263,6 +263,88 @@ fn pdfa_dialog_shows_a_declared_pdfua() {
     }
 }
 
+fn open_declaring(ids: &str, settings: Option<String>) -> Harness<'static, PdfCraftApp> {
+    let doc = declaring(ids);
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        if let Some(s) = &settings {
+            app.restore(s);
+        }
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("archive.pdf", None, doc.clone()).unwrap();
+        app
+    });
+    h.run_steps(4);
+    h
+}
+
+const PDFA_NOTICE: &str = "This document declares that it conforms to";
+
+/// #5930: a document that declares PDF/A says so above its pages, naming the part, as Acrobat's
+/// bar does. Verify opens Standards ▸ PDF/A with the document verified against the part it
+/// declares, and the bar goes once the declaration is removed and comes back on Undo.
+#[test]
+fn a_document_that_declares_pdfa_says_so_above_its_pages() {
+    let mut h = open_declaring("pdfaid:part=\"2\" pdfaid:conformance=\"B\"", None);
+    h.get_by_label("This document declares that it conforms to PDF/A-2b. Changes can break its conformance.");
+    assert!(h.state().dialog.is_none());
+    h.get_by_label("Verify").click();
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, Some(pdfcraft_ui_egui::Dialog::PdfA));
+    assert!(h.state().pdfa.issues.is_some(), "the dialog opens verified");
+    h.get_by_label("Remove PDF/A identification").click();
+    h.run_steps(3);
+    h.state_mut().dialog = None;
+    h.run_steps(3);
+    assert!(h.query_by_label_contains(PDFA_NOTICE).is_none(), "nothing is declared any more");
+    h.state_mut().undo();
+    h.run_steps(3);
+    h.get_by_label_contains("PDF/A-2b");
+
+    // PDF/A-3 is verified as 3b, even after the dialog was left at 2b.
+    let mut h = open_declaring("pdfaid:part=\"3\" pdfaid:conformance=\"A\"", None);
+    h.get_by_label_contains("conforms to PDF/A-3a.");
+    h.get_by_label("Verify").click();
+    h.run_steps(3);
+    assert_eq!(h.state().pdfa.level, pdfcraft_engine::pdfa::Level::A3b);
+
+    // PDF/UA alone is not PDF/A: no bar.
+    let h = open_declaring("pdfuaid:part=\"1\"", None);
+    assert!(h.query_by_label_contains(PDFA_NOTICE).is_none());
+}
+
+/// #5930: Don't show again turns the PDF/A notice off in every document, kept in the settings,
+/// and Preferences ▸ General (or `--pdfa-notice`) turns it back on.
+#[test]
+fn the_pdfa_notice_can_be_turned_off_for_good() {
+    let declares = "pdfaid:part=\"2\" pdfaid:conformance=\"U\"";
+    let mut h = open_declaring(declares, None);
+    assert!(h.state().show_pdfa_notice, "on by default");
+    h.get_by_label_contains(PDFA_NOTICE);
+    h.get_by_label("Don't show again").click();
+    h.run_steps(2);
+    assert!(h.query_by_label_contains(PDFA_NOTICE).is_none());
+    assert!(!h.state().show_pdfa_notice);
+    let saved = h.state().persist();
+    let mut h = open_declaring(declares, Some(saved));
+    assert!(h.query_by_label_contains(PDFA_NOTICE).is_none(), "remembered across a restart");
+    h.state_mut().set_option("dialog", "preferences").unwrap();
+    h.run_steps(2);
+    let label = "Show a notice when a document declares PDF/A conformance";
+    h.get_by_role_and_label(egui::accesskit::Role::CheckBox, label).scroll_to_me();
+    h.run_steps(4);
+    h.get_by_role_and_label(egui::accesskit::Role::CheckBox, label).click();
+    h.run_steps(2);
+    assert!(h.state().show_pdfa_notice);
+    h.state_mut().dialog = None;
+    h.run_steps(2);
+    h.get_by_label_contains("conforms to PDF/A-2u.");
+    let app = h.state_mut();
+    app.set_option("pdfa-notice", "false").unwrap();
+    assert!(!app.show_pdfa_notice);
+    assert_eq!(app.set_option("pdfa-notice", "maybe"), Err("pdfa-notice must be true or false".into()));
+}
+
 #[test]
 fn export_to_word_html_and_rtf() {
     let doc = Session::new().create_from_text("t", "Exported words").unwrap().to_vec();
