@@ -218,6 +218,10 @@ pub(super) fn pages(ui: &mut egui::Ui, t: &Tokens, info: &DocInfo, view: &mut cr
                     view.pending_action = Some(crate::canvas::ViewAction::PastePages);
                     ui.close();
                 }
+                if ui.add_enabled(editable, egui::Button::new(tl!("Duplicate pages"))).clicked() {
+                    view.pending_edit = Some(pdfcraft_engine::Edit::DuplicatePages { pages: view.target_pages(), at: None });
+                    ui.close();
+                }
                 ui.separator();
                 let some_left = view.target_pages().len() < count;
                 // Never every page: a document keeps at least one.
