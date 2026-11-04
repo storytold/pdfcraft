@@ -158,6 +158,7 @@ impl PdfCraftApp {
         // settings written then would turn this off unasked.
         v["update_check_at_start"] = self.update_check_at_start.into();
         v["hotbar"] = serde_json::to_value(&self.hotbar).unwrap_or_default();
+        v["hidden_tools"] = self.hidden_tools.to_json();
         v["comment_tool_pinned"] = serde_json::Value::Bool(self.comment_prefs.pinned);
         v["show_secured_notice"] = serde_json::Value::Bool(self.show_secured_notice);
         v["organize_zoom"] = serde_json::json!(self.organize_zoom);
@@ -335,6 +336,8 @@ impl PdfCraftApp {
         self.fill_text_border = self.fill_text_default.width;
         self.fill_text_border_color = self.fill_text_default.color;
         self.fill_text_border_shape = self.fill_text_default.shape;
+        // Settings are untrusted: unknown tool ids are dropped, and a value that isn't a list hides nothing.
+        self.hidden_tools = tool_visibility::HiddenTools::from_json(&v["hidden_tools"]).unwrap_or_default();
         if let Some(prefs) = RedactPrefs::from_json(&v["redact_prefs"]) {
             self.redact_prefs = prefs.clone();
             self.redact_defaults = prefs;

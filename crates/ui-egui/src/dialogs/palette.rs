@@ -77,7 +77,7 @@ pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
             ));
         }
     }
-    for g in TOOL_GROUPS {
+    for g in TOOL_GROUPS.iter().filter(|g| app.hidden_tools.shows(g.id)) {
         if let Some(s) = score(tl!(g.label), &q).or_else(|| score(g.label, &q)) {
             hits.push((
                 s,
