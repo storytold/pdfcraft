@@ -236,7 +236,8 @@ pub(super) fn sig_fields(doc: &Document) -> Vec<Field> {
         let kids: Vec<Object> = d.get(b"Kids").map(|k| doc.resolve(k)).and_then(|k| k.as_array().cloned()).unwrap_or_default();
         // Kids with a /T are fields; others are this field's widgets.
         let (sub, widgets): (Vec<Object>, Vec<Object>) = kids.into_iter().partition(|k| doc.resolve(k).as_dict().is_some_and(|kd| kd.contains(b"T")));
-        name_bytes = name_bytes.saturating_add(name.len());
+        // this name, and the clone of it each queued sub-field is about to hold
+        name_bytes = name_bytes.saturating_add(name.len().saturating_mul(sub.len() + 1));
         if name_bytes > MAX_FIELD_NAME_BYTES {
             break;
         }
