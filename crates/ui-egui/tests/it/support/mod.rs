@@ -86,8 +86,8 @@ pub fn skip_without_glyphs(name: &str, language: &str, text: &str) -> bool {
     if fonts_are_required(std::env::var_os("CRAFT_FONTS_REQUIRED"), std::env::var_os("PDFCRAFT_ORACLES_REQUIRED")) {
         return false;
     }
-    let catalog = i18n::LANGUAGES.iter().find(|l| l.code == language).map_or("", |l| l.source);
-    let translations = catalog.lines().filter(|l| !l.starts_with('#')).filter_map(|l| l.split('\t').nth(2));
+    let catalogs: Vec<&str> = i18n::Lang::from_code(language).into_iter().flat_map(i18n::Lang::catalog_texts).collect();
+    let translations = catalogs.iter().flat_map(|c| c.lines()).filter(|l| !l.starts_with('#')).filter_map(|l| l.split('\t').nth(2));
     let chars: BTreeSet<char> = std::iter::once(text).chain(translations).flat_map(str::chars).filter(|c| !c.is_control()).collect();
     let cjk = theme::CjkPreference::for_language(language);
     let missing = [theme::CjkPreference::Default, cjk].into_iter().find_map(|cjk| {
@@ -103,6 +103,7 @@ pub fn skip_without_glyphs(name: &str, language: &str, text: &str) -> bool {
     true
 }
 
+/// Whether either CI requirement flag is set, regardless of its value.
 fn fonts_are_required(craft_fonts: Option<std::ffi::OsString>, oracles: Option<std::ffi::OsString>) -> bool {
     craft_fonts.is_some() || oracles.is_some()
 }
@@ -118,4 +119,13 @@ fn skip_without_glyphs_skips_only_for_undrawable_text() {
     assert!(!skip_without_glyphs("test", "en", "Hello"));
     assert!(fonts_are_required(Some("0".into()), None));
     assert!(fonts_are_required(None, Some("0".into())));
+}
+
+/// Whether `name` is skipped because the build embeds no craft-i18n catalogs (English only).
+pub fn skip_without_catalogs(name: &str) -> bool {
+    let skip = !pdfcraft_ui_egui::i18n::catalogs_embedded();
+    if skip {
+        eprintln!("skipping {name}: built without craft-i18n (set CRAFT_I18N_DIR to a craft-i18n checkout)");
+    }
+    skip
 }

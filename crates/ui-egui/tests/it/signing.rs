@@ -536,6 +536,9 @@ fn stamped(path: &std::path::Path) -> String {
 /// so under the preview: signing neither fails nor writes `?` for them.
 #[test]
 fn the_signature_labels_follow_the_interface_language() {
+    if crate::support::skip_without_catalogs("the_signature_labels_follow_the_interface_language") {
+        return;
+    }
     use pdfcraft_ui_egui::i18n::{Lang, tr};
     let p12 = concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12");
     let cert = pdfcraft_engine::sign::pkcs12::open(&std::fs::read(p12).unwrap(), "test").unwrap().certificate;
