@@ -12,6 +12,7 @@ mod license_check;
 mod macos_integration;
 mod parity;
 mod screenshots;
+mod vendor_test;
 mod version;
 
 type Command = fn(&[String]) -> anyhow::Result<()>;
@@ -28,6 +29,7 @@ const COMMANDS: &[(&str, &str, Command)] = &[
         gates::ci,
     ),
     ("test", "Workspace tests: cargo nextest (cargo test when it is missing), then doctests", gates::test),
+    ("vendor-test", "Unit tests of the patched crates under vendor/, which the workspace (and `test`) leaves out", vendor_test::run),
     ("i18n-report", "Print the strings each interface language lacks (counts and a few keys); never fails", gates::i18n_report),
     ("license-check", "Offline source licence documents, attribution and metadata", license_check::run),
     ("assets", "Enforce the asset policy (AGENTS.md §1) against ATTRIBUTION.toml; --write regenerates ATTRIBUTION.md", assets::run),
