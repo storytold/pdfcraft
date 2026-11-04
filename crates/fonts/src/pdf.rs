@@ -145,7 +145,8 @@ pub fn embedded_sfnt_within(doc: &Document, font: &Dict, budget: &mut DecodeBudg
 }
 
 /// The CIDs (below 65 536) of a Type 0 font over an embedded TrueType program whose glyph has
-/// outline data, through `/CIDToGIDMap`; empty when the program or the map can't be read.
+/// outline data, through `/CIDToGIDMap`; empty when the program or the map can't be read, and one
+/// zeroed word when it can be but no glyph has an outline (so it still counts as read).
 /// Subsetters keep glyph ids and empty the glyphs they drop, so an empty glyph is a missing one.
 fn cids_with_outlines(doc: &Document, font: &Dict) -> Vec<u64> {
     use skrifa::raw::TableProvider as _;
@@ -160,17 +161,17 @@ fn cids_with_outlines(doc: &Document, font: &Dict) -> Vec<u64> {
     let Some(loca) = skrifa::FontRef::from_index(&bytes, 0).ok().and_then(|face| face.loca(None).ok()) else { return Vec::new() };
     let outlined = |gid: u32| loca.get_raw(gid as usize).zip(loca.get_raw(gid as usize + 1)).is_some_and(|(start, end)| end > start);
     match descendant.get(b"CIDToGIDMap").map(|o| doc.resolve(o)).as_deref() {
-        None | Some(Object::Name(_)) => bit_set_below_64k((0..loca.len().min(0x1_0000) as u32).filter(|&gid| outlined(gid))),
+        None | Some(Object::Name(_)) => read_bits(bit_set_below_64k((0..loca.len().min(0x1_0000) as u32).filter(|&gid| outlined(gid)))),
         Some(Object::Stream(map)) => {
             let Ok(map) = doc.with_direct_parms(map).decoded_within(1 << 17) else { return Vec::new() };
-            bit_set_below_64k(
+            read_bits(bit_set_below_64k(
                 map.as_chunks::<2>()
                     .0
                     .iter()
                     .enumerate()
                     .filter(|(_, gid)| outlined(u32::from(u16::from_be_bytes(**gid))))
                     .map(|(cid, _)| cid as u32),
-            )
+            ))
         }
         Some(_) => Vec::new(),
     }
@@ -1072,6 +1073,12 @@ fn stretches(spans: &[(u32, u32)], later_wins: bool) -> Vec<(u64, Option<usize>)
         }
     }
     cover
+}
+
+/// The outlined-CID bits of a program that was read: a program whose glyphs all lack outlines gives
+/// no bits at all, which would read as "no program"; one zeroed word says it was read and holds none.
+fn read_bits(bits: Vec<u64>) -> Vec<u64> {
+    if bits.is_empty() { vec![0] } else { bits }
 }
 
 /// Whether `text` is all blank (white space, a soft hyphen, zero-width marks): the glyphs that
