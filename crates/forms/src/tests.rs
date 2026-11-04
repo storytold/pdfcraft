@@ -3649,12 +3649,11 @@ fn page_shapes_decode_a_repeated_content_stream_within_the_budget() {
 /// preflight reads it: a field drawn with characters its font lacks decodes no more than that.
 #[test]
 fn a_pdfa_declaration_is_read_from_metadata_within_its_cap() {
-    let declared = |padding: usize| {
-        let xmp = format!("<x:xmpmeta><pdfaid:part>2</pdfaid:part>{}</x:xmpmeta>", " ".repeat(padding));
-        declares_pdfa(&document(&["<< /Type /Catalog /Metadata 2 0 R >>".into(), raw_stream(&xmp)]))
-    };
-    assert!(declared(1 << 20));
-    assert!(!declared(crate::appearances::MAX_XMP_BYTES), "metadata past the cap declares nothing");
+    let declared = |xmp: String| declares_pdfa(&document(&["<< /Type /Catalog /Metadata 2 0 R >>".into(), raw_stream(&xmp)]));
+    let pdfa = |padding: usize| format!("<x:xmpmeta><pdfaid:part>2</pdfaid:part>{}</x:xmpmeta>", " ".repeat(padding));
+    assert!(declared(pdfa(1 << 20)));
+    assert!(!declared(pdfa(crate::appearances::MAX_XMP_BYTES)), "metadata past the cap declares nothing");
+    assert!(!declared("<x:xmpmeta><dc:title>pdfaid</dc:title></x:xmpmeta>".into()), "metadata without pdfaid:part declares nothing");
 }
 
 /// A widget listed many times, by one field's `/Kids` or by a `/Kids` array several fields share,
