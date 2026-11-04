@@ -59,6 +59,8 @@ pdfcraft-create = { path = "crates/create", version = "0.18.0" }
 pdfcraft-forms = { path = "crates/forms", version = "0.18.0" }
 pdfcraft-xfa = { path = "crates/xfa", version = "0.18.0" }
 pdfcraft-render = { path = "crates/render", version = "0.18.0" }
+pdfcraft-prc = { path = "crates/prc", version = "0.18.0" }
+pdfcraft-prc-render = { path = "crates/prc-render", version = "0.18.0" }
 pdfcraft-engine = { path = "crates/engine", version = "0.18.0" }
 pdfcraft-platform = { path = "crates/platform", version = "0.18.0" }
 pdfcraft-ui-egui = { path = "crates/ui-egui", version = "0.18.0" }

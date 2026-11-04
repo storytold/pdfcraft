@@ -1,0 +1,126 @@
+//! A parsed PRC file's tessellations placed in the world, ready for [`crate::render`].
+
+use crate::RenderError;
+use crate::raster::channel;
+use pdfcraft_prc::{Matrix, PrcFile, Rgba, Tessellation, TriangleMesh};
+
+/// The most triangles [`assemble`] places, over every placement: a tessellation many
+/// occurrences draw is copied once per occurrence.
+pub const MAX_ASSEMBLED_TRIANGLES: usize = 1 << 24;
+
+/// A triangle mesh in world coordinates with the colours it draws in.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct WorldMesh {
+    /// The triangles, already placed.
+    pub mesh: TriangleMesh,
+    /// The mesh's straight-RGBA colour; `None` takes [`crate::RenderOptions::colour`], opaque.
+    pub colour: Option<[u8; 4]>,
+    /// Per triangle, its own colour when its face is styled; `None` (the whole list or an entry)
+    /// takes [`Self::colour`].
+    pub triangle_colours: Option<Vec<Option<[u8; 4]>>>,
+}
+
+impl WorldMesh {
+    /// `mesh`, uncoloured.
+    #[must_use]
+    pub fn new(mesh: TriangleMesh) -> Self {
+        WorldMesh { mesh, colour: None, triangle_colours: None }
+    }
+
+    /// The colour triangle `t` draws in, before the render options' default.
+    pub(crate) fn colour_of(&self, t: usize) -> Option<[u8; 4]> {
+        self.triangle_colours.as_ref().and_then(|c| c.get(t).copied().flatten()).or(self.colour)
+    }
+}
+
+/// `mesh` moved into the world by `matrix`, drawn in `colour` and, per triangle, `triangle_colours`.
+#[must_use]
+pub fn place(mesh: &TriangleMesh, matrix: &Matrix, colour: Option<[u8; 4]>, triangle_colours: Option<Vec<Option<[u8; 4]>>>) -> WorldMesh {
+    WorldMesh { mesh: mesh.transformed(matrix), colour, triangle_colours }
+}
+
+/// Every triangle mesh `prc` draws, in world coordinates and coloured as its product tree says
+/// ([`PrcFile::placements`]). A file with no tree draws each file structure's meshes where they
+/// are, uncoloured. Wires, markups and compressed tessellations are not drawn.
+///
+/// # Errors
+/// [`RenderError::Model`] when a tessellation section or the tree cannot be read;
+/// [`RenderError::TooManyTriangles`] past [`MAX_ASSEMBLED_TRIANGLES`].
+pub fn assemble(prc: &PrcFile) -> Result<Vec<WorldMesh>, RenderError> {
+    let tessellations = prc.file_structures.iter().map(|fs| fs.tessellations()).collect::<Result<Vec<_>, _>>()?;
+    let mut budget = Budget(0);
+    let mut out = Vec::new();
+    if !prc.stores_tree() {
+        for mesh in tessellations.iter().flatten().filter_map(as_mesh) {
+            budget.spend(mesh)?;
+            out.push(WorldMesh::new(mesh.clone()));
+        }
+        return Ok(out);
+    }
+    let items = prc.placements()?.into_iter().map(|p| Item {
+        file_structure: p.file_structure,
+        tessellation: p.tessellation,
+        matrix: p.matrix,
+        colour: p.colour,
+        triangle_colours: Box::new(move |mesh: &TriangleMesh| p.triangle_colours(mesh)),
+    });
+    place_items(&tessellations, items, &mut budget, &mut out)?;
+    Ok(out)
+}
+
+/// One placement as [`place_items`] reads it: a tessellation by file structure and index, where
+/// it goes and how it is coloured.
+pub(crate) struct Item<'a> {
+    pub(crate) file_structure: usize,
+    pub(crate) tessellation: usize,
+    pub(crate) matrix: Matrix,
+    pub(crate) colour: Option<Rgba>,
+    pub(crate) triangle_colours: Box<FaceColours<'a>>,
+}
+
+/// Per triangle of a mesh, the colour its face's style resolves to.
+type FaceColours<'a> = dyn Fn(&TriangleMesh) -> Option<Vec<Option<Rgba>>> + 'a;
+
+/// Each item's mesh moved into the world and coloured, appended to `out`. Items naming no
+/// triangle mesh are skipped.
+pub(crate) fn place_items<'a>(
+    tessellations: &[Vec<Tessellation>],
+    items: impl IntoIterator<Item = Item<'a>>,
+    budget: &mut Budget,
+    out: &mut Vec<WorldMesh>,
+) -> Result<(), RenderError> {
+    for p in items {
+        let Some(mesh) = tessellations.get(p.file_structure).and_then(|t| t.get(p.tessellation)).and_then(as_mesh) else {
+            continue;
+        };
+        budget.spend(mesh)?;
+        let triangle_colours = (p.triangle_colours)(mesh).map(|c| c.into_iter().map(|c| c.map(bytes)).collect());
+        out.push(place(mesh, &p.matrix, p.colour.map(bytes), triangle_colours));
+    }
+    Ok(())
+}
+
+/// Triangles placed so far.
+pub(crate) struct Budget(pub(crate) usize);
+
+impl Budget {
+    fn spend(&mut self, mesh: &TriangleMesh) -> Result<(), RenderError> {
+        self.0 = self.0.checked_add(mesh.triangles.len()).filter(|&n| n <= MAX_ASSEMBLED_TRIANGLES).ok_or(RenderError::TooManyTriangles)?;
+        Ok(())
+    }
+}
+
+fn as_mesh(t: &Tessellation) -> Option<&TriangleMesh> {
+    match t {
+        Tessellation::Mesh(m) => Some(m),
+        _ => None,
+    }
+}
+
+/// A 0–1 colour as straight-RGBA bytes, each channel clamped.
+fn bytes(c: Rgba) -> [u8; 4] {
+    [c.r, c.g, c.b, c.a].map(|v| channel(v.clamp(0.0, 1.0) * 255.0))
+}
+
+#[cfg(test)]
+mod tests;
