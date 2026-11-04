@@ -147,7 +147,7 @@ pub static TOOL_GROUPS: &[ToolGroup] = &[
                     item("Link", "link-2", "edit.link", Ready),
                     item("Bates numbering", "hash", "edit.bates", Ready),
                     menu_item("Background", "palette", &["edit.background", "edit.background.update", "edit.background.remove"]),
-                    item("Attach file", "paperclip", "edit.attach", Planned("M12")),
+                    item("Attach file", "paperclip", "edit.attach", Ready),
                 ],
             },
         ],
@@ -550,6 +550,23 @@ pub fn group(id: &str) -> Option<&'static ToolGroup> {
     TOOL_GROUPS.iter().find(|g| g.id == id)
 }
 
+/// A heading of the expanded All tools view, as Acrobat files its tools under "Create & Edit",
+/// "Forms & Signatures" and so on. Every group belongs to exactly one category.
+#[derive(Clone, Copy, Debug)]
+pub struct ToolCategory {
+    pub label: &'static str,
+    /// [`ToolGroup::id`]s, in display order.
+    pub groups: &'static [&'static str],
+}
+
+pub static TOOL_CATEGORIES: &[ToolCategory] = &[
+    ToolCategory { label: "Create & Edit", groups: &["create", "edit", "export", "combine", "organize", "scan", "compress"] },
+    ToolCategory { label: "Review & Compare", groups: &["comment", "stamp", "compare", "measure"] },
+    ToolCategory { label: "Forms & Signatures", groups: &["fill_sign", "form", "certificate"] },
+    ToolCategory { label: "Protect & Standardize", groups: &["protect", "redact", "accessibility", "standards", "print_production"] },
+    ToolCategory { label: "Customize & Automate", groups: &["actions", "javascript", "search_index", "ai"] },
+];
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -562,6 +579,18 @@ mod tests {
             assert!(seen.insert(g.id), "duplicate group id {}", g.id);
             assert!(g.sections.iter().any(|s| !s.items.is_empty()), "{} has no items", g.id);
         }
+    }
+
+    #[test]
+    fn every_group_is_in_exactly_one_category() {
+        let mut seen = HashSet::new();
+        for c in TOOL_CATEGORIES {
+            for id in c.groups {
+                assert!(group(id).is_some(), "{} lists unknown group {id}", c.label);
+                assert!(seen.insert(*id), "{id} is in two categories");
+            }
+        }
+        assert_eq!(seen.len(), TOOL_GROUPS.len(), "a group is in no category");
     }
 
     #[test]

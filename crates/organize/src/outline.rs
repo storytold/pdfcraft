@@ -265,6 +265,15 @@ fn explicit_dest(doc: &Document, targets: &mut Targets, dest: &Object, depth: u8
     }
 }
 
+/// The explicit destination array `dest` stands for: itself, a dictionary whose `/D` is one, or a
+/// named destination (a name or string, ISO 32000-2 §12.3.2.4) looked up in the `/Names /Dests`
+/// tree, then the catalog `/Dests`. `None` when a name names nothing.
+pub(crate) fn resolve_dest(doc: &Document, dest: &Object) -> Option<Vec<Object>> {
+    // Names only: the page map is not needed to look one up.
+    let mut targets = Targets { pages: HashMap::new(), names: None };
+    explicit_dest(doc, &mut targets, dest, 0)
+}
+
 /// The page index an explicit destination array names.
 fn page_of_explicit(targets: &Targets, dest: &[Object]) -> Option<usize> {
     match dest.first()? {
@@ -509,14 +518,10 @@ fn destination_at(doc: &Document, page: usize, left: Option<f64>, top: Option<f6
     Ok(go_to_at(*p, left, top))
 }
 
-/// `/XYZ null null null`: go to the page, keeping the reader's zoom (what Acrobat writes for a
-/// new bookmark when the view has no specific position).
-fn go_to(page: ObjRef) -> Object {
-    go_to_at(page, None, None)
-}
-
 /// `/XYZ left top null`: the point (`left`, `top`) at the window's upper-left corner, at the
-/// reader's zoom; a coordinate that is left out keeps the reader's position.
+/// reader's zoom; a coordinate that is left out keeps the reader's position. With neither,
+/// `/XYZ null null null` goes to the page, keeping the reader's zoom (what Acrobat writes for a
+/// new bookmark when the view has no specific position).
 fn go_to_at(page: ObjRef, left: Option<f64>, top: Option<f64>) -> Object {
     let coordinate = |v: Option<f64>| v.map_or(Object::Null, Object::Real);
     Object::Array(vec![Object::Ref(page), Object::name("XYZ"), coordinate(left), coordinate(top), Object::Null])
@@ -553,17 +558,14 @@ pub fn add_bookmark_at(
     let at = index.min(kids.len());
     kids.insert(at, item);
     relink(doc, parent, &kids)?;
-    // Show the new bookmark: open its parent (the root is always open).
-    if !parent_path.is_empty() && doc.get(parent).as_dict().and_then(|d| d.int(b"Count")).is_none_or(|c| c <= 0) {
-        put(doc, parent, b"Count", Some(Object::Int(1)))?;
-    }
+    show_children(doc, parent, parent_path)?;
     recount(doc)?;
     let mut path = parent_path.to_vec();
     path.push(at);
     Ok(path)
 }
 
-/// One bookmark of a generated tree (New Bookmarks from Structure).
+/// One bookmark of a generated tree (New Bookmarks from Structure, or from text styles).
 #[derive(Clone, Debug, PartialEq)]
 pub struct OutlineEntry {
     /// 1 = directly under the new parent; deeper levels nest under the last shallower entry.
@@ -572,6 +574,9 @@ pub struct OutlineEntry {
     pub page: usize,
     /// The structure element it stands for (`/SE`).
     pub element: Option<ObjRef>,
+    /// Where on the page it goes: this height (user space) at the top of the window, at the
+    /// reader's zoom. `None` goes to the page, keeping the reader's position.
+    pub top: Option<f64>,
 }
 
 /// Add a new top-level bookmark `parent_title` (first in the list) holding `entries` nested by
@@ -595,7 +600,7 @@ pub fn add_bookmark_tree(doc: &mut Document, parent_title: &str, entries: &[Outl
     for (e, page) in entries.iter().zip(targets) {
         let mut d = Dict::new();
         d.set(b"Title".to_vec(), Object::String(PdfString::text(&e.title)));
-        d.set(b"Dest".to_vec(), go_to(page));
+        d.set(b"Dest".to_vec(), go_to_at(page, None, e.top));
         if let Some(se) = e.element {
             d.set(b"SE".to_vec(), Object::Ref(se));
         }
@@ -699,9 +704,21 @@ pub fn move_bookmark(doc: &mut Document, from: &[usize], to_parent: &[usize], in
     let at = index.min(kids.len());
     kids.insert(at, r);
     relink(doc, parent, &kids)?;
+    if parent != old_parent {
+        show_children(doc, parent, &to_parent)?;
+    }
     recount(doc)?;
     to_parent.push(at);
     Ok(to_parent)
+}
+
+/// Open `parent` so a bookmark just added or moved into it shows (the root is always open).
+/// Only the sign of `/Count` matters here: [`recount`] sets its value.
+fn show_children(doc: &mut Document, parent: ObjRef, parent_path: &[usize]) -> Result<()> {
+    if !parent_path.is_empty() && doc.get(parent).as_dict().and_then(|d| d.int(b"Count")).is_none_or(|c| c <= 0) {
+        put(doc, parent, b"Count", Some(Object::Int(1)))?;
+    }
+    Ok(())
 }
 
 /// Expand or collapse a bookmark that has children.

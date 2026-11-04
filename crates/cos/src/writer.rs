@@ -2,17 +2,20 @@
 //!
 //! * `write_incremental` appends the edited objects, a cross-reference section in the same style
 //!   as the file's last one (table or stream) and a trailer with `/Prev`. The original bytes are
-//!   never modified, which keeps digital signatures over earlier revisions valid.
+//!   never modified, which keeps digital signatures over earlier revisions valid. With
+//!   `SaveOptions::drop_unlinked`, objects added since the file was read that nothing refers to
+//!   any more are left out (written as free).
 //! * `write_full` writes only objects reachable from the trailer, renumbered densely, with a
 //!   cross-reference table or stream — the "Save As" / garbage-collecting path. Unknown trailer
 //!   entries are copied, including objects reachable only from them.
 
 use std::borrow::Cow;
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::io::Write;
+use std::sync::Arc;
 
 use crate::CosError;
-use crate::document::{Document, ObjectReader};
+use crate::document::{Document, ObjectReader, XrefEntry};
 use crate::object::{Dict, ObjRef, Object, PdfString, Stream};
 
 /// Serialize one object. Deterministic: same object → same bytes.
@@ -130,11 +133,12 @@ fn write_stream(s: &Stream, out: &mut Vec<u8>) {
 
 /// The object as written: encrypted with its (output) number when the document is encrypted,
 /// except the `/Encrypt` dictionary itself (`source_num` is its number in the source document).
+/// `o` has the document's numbers in its references ([`crate::security::transform`]).
 fn prepared<'a>(doc: &Document, source_num: u32, num: u32, generation: u16, o: &'a Object) -> Cow<'a, Object> {
     match doc.output_security() {
-        (Some(h), encrypt_num) if Some(source_num) != encrypt_num => {
+        (Some(h), encrypt_num) if Some(source_num) != encrypt_num && !doc.stored_as_is(source_num) => {
             let pass = if doc.encryption_changed() { crate::security::Pass::EncryptReplacing } else { crate::security::Pass::Encrypt };
-            Cow::Owned(crate::security::transform(h, o, num, generation, pass))
+            Cow::Owned(crate::security::transform(doc, h, o, num, generation, pass))
         }
         _ => Cow::Borrowed(o),
     }
@@ -156,11 +160,18 @@ pub struct SaveOptions {
     /// Full saves: pack non-stream objects into compressed object streams with a cross-reference
     /// stream (PDF 1.5+, §7.5.7–7.5.8). Off writes a classic table that any reader accepts.
     pub object_streams: bool,
+    /// Incremental saves: leave out what was added since the file was read and nothing refers to
+    /// any more, such as a comment added and deleted again or a redaction mark added and cleared
+    /// (written as free). Off by default, because a writer may add an object only it finds again
+    /// by scanning, as a standalone document timestamp is; such a writer frees the leftovers
+    /// before adding it, with [`Document::free_unlinked_additions`]. Full saves always leave
+    /// these out.
+    pub drop_unlinked: bool,
 }
 
 impl Default for SaveOptions {
     fn default() -> Self {
-        Self { mod_date: None, id_seed: 0x5052_494E_5443_5241, object_streams: true }
+        Self { mod_date: None, id_seed: 0x5052_494E_5443_5241, object_streams: true, drop_unlinked: false }
     }
 }
 
@@ -209,8 +220,14 @@ pub fn write_incremental(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, 
     let base = (original.len() + usize::from(newline)).saturating_sub(shift) as u64;
     let mut out = Vec::new();
     let mut offsets: BTreeMap<u32, (u64, u16, bool)> = BTreeMap::new(); // num → (offset, gen, in use)
+    let unlinked = if opts.drop_unlinked { unlinked_additions(&doc) } else { HashSet::new() };
     for (num, generation, obj) in doc.overlay_entries() {
         match obj {
+            // Written as free, so `/Size` still covers every number this document handed out. The
+            // generation stays: the number was never in use, and an undo can bring it back as is.
+            Some(_) if unlinked.contains(&num) => {
+                offsets.insert(num, (0, generation, false));
+            }
             Some(o) => {
                 offsets.insert(num, (base + out.len() as u64, generation, true));
                 write_indirect(num, generation, &prepared(&doc, num, num, generation, &o), &mut out);
@@ -229,7 +246,7 @@ pub fn write_incremental(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, 
     if let Some(p) = prev {
         trailer.set(b"Prev".to_vec(), Object::Int(p as i64));
     }
-    let size = doc.next_num().max(trailer.int(b"Size").unwrap_or(0) as u32);
+    let size = doc.next_num().max(trailer.int(b"Size").map_or(0, |n| n.clamp(0, i64::from(u32::MAX)) as u32));
     if as_stream {
         let rows = offsets.iter().map(|(n, (o, g, used))| (*n, if *used { Row::InFile(*o, *g) } else { Row::Free(*g) })).collect();
         write_xref_stream(&mut out, base, &mut trailer, rows, size);
@@ -271,6 +288,10 @@ pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosErro
             queue.push_back(r);
         }
     }
+    // A direct /Encrypt can refer to objects, /CF or /StmF, say.
+    if let Some(encrypt @ Object::Dict(_)) = trailer_in.get(b"Encrypt") {
+        visit_refs(encrypt, &mut queue);
+    }
     // Unknown trailer entries are document data. Objects they alone reference must be written
     // too, or a full rewrite would keep the key and drop its value.
     for (key, value) in trailer_in.iter() {
@@ -299,7 +320,10 @@ pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosErro
     // The /Encrypt dictionary and everything it references (e.g. indirect /CF crypt-filter
     // dictionaries) are needed before anything can be decrypted: never inside object streams.
     let mut encryption_objects: std::collections::HashSet<ObjRef> = std::collections::HashSet::new();
-    let mut pending: Vec<ObjRef> = trailer_in.reference(b"Encrypt").into_iter().collect();
+    let mut pending: Vec<ObjRef> = Vec::new();
+    if let Some(encrypt) = trailer_in.get(b"Encrypt") {
+        collect_refs(encrypt, &mut |r| pending.push(r));
+    }
     while let Some(r) = pending.pop() {
         if encryption_objects.insert(r) {
             collect_refs(&reader.get(r), &mut |x| pending.push(x));
@@ -320,9 +344,10 @@ pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosErro
         if in_stream {
             packed.push((num, *r));
         } else {
-            let o = renumber(&*reread(&mut reader, *r, *is_stream)?, &map);
+            let o = reread(&mut reader, *r, *is_stream)?;
+            let o = renumber(&prepared(&reader.document, r.num, num, 0, &o), &map);
             rows.insert(num, Row::InFile(out.len() as u64, 0));
-            write_indirect(num, 0, &prepared(&reader.document, r.num, num, 0, &o), &mut out);
+            write_indirect(num, 0, &o, &mut out);
         }
     }
     // Object streams take the numbers after the last object. Their contents are not encrypted
@@ -352,11 +377,11 @@ pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosErro
             trailer.set(key.to_vec(), Object::Ref(ObjRef::new(*r, 0)));
         }
     }
-    if let Some(Object::Dict(d)) = trailer_in.get(b"Encrypt") {
-        trailer.set(b"Encrypt".to_vec(), Object::Dict(d.clone()));
+    if let Some(encrypt @ Object::Dict(_)) = trailer_in.get(b"Encrypt") {
+        trailer.set(b"Encrypt".to_vec(), renumber(encrypt, &map));
     }
     if let Some(id) = trailer_in.get(b"ID") {
-        trailer.set(b"ID".to_vec(), id.clone());
+        trailer.set(b"ID".to_vec(), direct_id(&reader.document, id));
     }
     for (key, value) in trailer_in.iter() {
         if !trailer_key_rewritten(key) {
@@ -387,7 +412,7 @@ pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosErro
 /// Object `r` read again for writing. The traversal read it once and only kept its number, so
 /// a second read that fails, finds nothing or finds a different kind of object must fail the
 /// save rather than write `null` in its place.
-fn reread(reader: &mut ObjectReader, r: ObjRef, is_stream: bool) -> Result<std::sync::Arc<Object>, CosError> {
+fn reread(reader: &mut ObjectReader, r: ObjRef, is_stream: bool) -> Result<Arc<Object>, CosError> {
     let o = reader.try_get(r)?;
     if matches!(*o, Object::Null) || matches!(*o, Object::Stream(_)) != is_stream {
         return Err(CosError::Syntax { offset: 0, detail: format!("object {} read differently while saving; nothing was written", r.num) });
@@ -426,6 +451,22 @@ impl ObjectStreamBatch {
     }
 }
 
+/// `/ID` for the trailer, direct, as it has to be with `/Encrypt`: nothing else in the file holds
+/// what it refers to now. Given by reference it is two entries at most, however many references a
+/// file gave, so that one large string isn't copied for each. An entry that isn't a string stays in
+/// its place as an empty one, which is how the key read it.
+fn direct_id(doc: &Document, id: &Object) -> Object {
+    if matches!(id, Object::Array(a) if !a.iter().any(|s| matches!(s, Object::Ref(_)))) {
+        return id.clone();
+    }
+    let entry = |s: &Object| match &*doc.resolve(s) {
+        s @ Object::String(_) => s.clone(),
+        _ => Object::String(crate::PdfString { bytes: Vec::new(), hex: true }),
+    };
+    let held = doc.resolve(id);
+    Object::Array(held.as_array().into_iter().flatten().take(2).map(entry).collect())
+}
+
 /// Trailer keys a full rewrite generates itself. Everything else is copied, with references
 /// renumbered, so a save does not drop metadata the reader accepted.
 fn trailer_key_rewritten(key: &[u8]) -> bool {
@@ -439,7 +480,38 @@ fn output_number(index: usize) -> Result<u32, CosError> {
     u32::try_from(index).ok().and_then(|n| n.checked_add(1)).ok_or_else(|| CosError::Syntax { offset: 0, detail: "too many objects to save".into() })
 }
 
-fn collect_refs(o: &Object, f: &mut impl FnMut(ObjRef)) {
+/// Objects added since the file was read (their numbers are not in use in it) that nothing an
+/// incremental update writes refers to: what one edit added and a later one unlinked, such as a
+/// deleted comment or a cleared redaction mark. The file never held them, so leaving them out
+/// loses nothing, while writing them would keep what the user removed. Only the update is walked:
+/// from the trailer and the file's changed objects through additions. An unchanged object of the
+/// file is not followed: a reference it holds to such a number already reads as null in the file
+/// (a damaged file's dangling reference), and it still does.
+pub(crate) fn unlinked_additions(doc: &Document) -> HashSet<u32> {
+    let added = |num: u32| matches!(doc.xref_entry(num), None | Some(XrefEntry::Free { .. }));
+    let mut pending: HashMap<u32, Arc<Object>> =
+        doc.overlay_entries().filter_map(|(num, _, o)| Some((num, o?))).filter(|(num, _)| added(*num)).collect();
+    if pending.is_empty() {
+        return HashSet::new();
+    }
+    let mut stack: Vec<ObjRef> = Vec::new();
+    doc.trailer().iter().for_each(|(_, v)| collect_refs(v, &mut |r| stack.push(r)));
+    for (num, _, o) in doc.overlay_entries() {
+        if let Some(o) = o
+            && !added(num)
+        {
+            collect_refs(&o, &mut |r| stack.push(r));
+        }
+    }
+    while let Some(r) = stack.pop() {
+        if let Some(o) = pending.remove(&r.num) {
+            collect_refs(&o, &mut |r| stack.push(r));
+        }
+    }
+    pending.into_keys().collect()
+}
+
+pub(crate) fn collect_refs(o: &Object, f: &mut impl FnMut(ObjRef)) {
     match o {
         Object::Ref(r) => f(*r),
         Object::Array(a) => a.iter().for_each(|x| collect_refs(x, f)),
@@ -616,6 +688,15 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
 
 #[cfg(test)]
 mod tests {
+    /// `/ID` by reference comes out direct, each entry where it was: the key is made from the first.
+    #[test]
+    fn a_file_identifier_keeps_its_entries_in_their_places() {
+        let doc = Document::new_empty();
+        let string = |bytes: &[u8]| Object::String(crate::PdfString { bytes: bytes.to_vec(), hex: true });
+        let nowhere = Object::Ref(ObjRef::new(9_999, 0));
+        assert_eq!(super::direct_id(&doc, &Object::Array(vec![nowhere, string(b"ab")])), Object::Array(vec![string(b""), string(b"ab")]));
+    }
+
     use proptest::prelude::*;
 
     use super::*;

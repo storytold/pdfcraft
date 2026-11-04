@@ -26,7 +26,7 @@ No dump of Acrobat's menu tree has been diffed against the registry yet (gap 24)
 |---|---|---|---|
 | Home view (recent files, recommended tools) | yes | yes | shipped |
 | All tools pane, tool sets | yes | yes, with milestone badges | shipped |
-| Quick-action toolbar, customisable | yes | fixed | partial (`view.customize-quick-tools` planned) |
+| Quick-action toolbar, customisable | yes | customizable floating/docked hotbar, adjustable size, persistent multi-select picker | partial (`view.customize-quick-tools`; no shortcut reordering) |
 | Command search | "Search tools" | command palette (⌘K), matches translated and English labels | shipped |
 | Document tabs | yes | yes, with unsaved marker | shipped |
 | Multiple windows, drag a tab out | yes | no | planned |
@@ -47,12 +47,13 @@ No dump of Acrobat's menu tree has been diffed against the registry yet (gap 24)
 | Hand tool, middle-button pan, autoscroll | yes | hand tool; Linux autoscroll | partial |
 | Text selection, column select | yes, Alt-drag columns | reading-order selection; Alt/Option-drag or Edit ▸ Column select (#740) | shipped |
 | Select and move several objects at once | yes | on one page: Shift/Ctrl/⌘-click and marquee, one undo step (#844); not across pages, no group resize | partial |
+| Moved comments drawn where they go while dragged | yes | yes: the comment's own pixels follow the pointer, the page shows it where it was until release; stamps and Fill & Sign marks also hide the original | shipped |
 | Object handles: corners keep proportion, edges free | yes | yes for added images and signatures; Shift on a corner keeps the proportions of comments, stamps and form fields (#2199); no Alt resize from the centre | shipped |
 | Arrange, align and distribute page objects | yes | fields only | partial |
 | Rulers, grids, snap to grid, guides | yes | no | planned |
 | Cursor coordinates, line weights | yes | no | planned |
 | Measuring snap to paths, endpoints, midpoints, intersections | yes | yes | shipped |
-| Nudge selected objects with arrow keys (Shift for larger steps) | yes | yes in Edit text: a point, Shift ten points, for selected objects, images and an open paragraph's box (#1520); and in Prepare a form, for the selected field (#2608) | shipped |
+| Nudge selected objects with arrow keys (Shift for larger steps) | yes | yes in Edit text: a point, Shift ten points, for selected objects, images and an open paragraph's box (#1520); and in Prepare a form, for the selected field (#2608); a selected comment: a screen pixel, ⌘/Ctrl or Shift ten | shipped |
 | Single-key tool accelerators (H, V, Z, …) | yes, opt-in | no | planned |
 | Context menus on pages, thumbnails, comments, fields | yes | thumbnails, comments, fields | partial |
 | Comment pop-ups as movable windows, connector lines | yes | inline in the panel | planned |
