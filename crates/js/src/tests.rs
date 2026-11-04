@@ -2133,6 +2133,26 @@ fn choice_index_setter_preserves_the_selection_when_exports_repeat() {
 }
 
 #[test]
+fn assigning_a_combo_value_keeps_its_matching_duplicate_export_index() {
+    let mut fields = fields();
+    let size = fields.iter_mut().find(|f| f.name == "size").unwrap();
+    size.value = vec!["same".into()];
+    size.options = vec![("same".into(), "First".into()), ("same".into(), "Second".into())];
+    size.current_value_indices = vec![1];
+    let o = run(
+        "var s=getField('size'); s.value='same'; event.value=s.currentValueIndices;",
+        &Event::field("Mouse Up", "size", ""),
+        &doc(),
+        &fields,
+        &[],
+        Limits::default(),
+    );
+    assert_eq!(o.error, None);
+    assert_eq!(o.value, "1");
+    assert_eq!(o.changed.iter().find(|f| f.name == "size").unwrap().current_value_indices, [1]);
+}
+
+#[test]
 fn default_value_setter_is_live() {
     let o = go("var q=getField('qty'); q.defaultValue='9'; event.value=getField('qty').defaultValue;", &Event::doc("Open"));
     assert_eq!(o.error, None);

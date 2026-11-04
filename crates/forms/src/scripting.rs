@@ -166,8 +166,11 @@ pub(crate) fn apply_changes(doc: &mut Document, changes: &[FieldChange], except:
             if f.kind != FieldKind::Combo && f.kind != FieldKind::List {
                 return Err(FormError::Invalid(format!("{:?} is not a choice field", c.name)));
             }
-            if indices.iter().any(|&i| i >= f.options.len()) {
-                return Err(FormError::Invalid(format!("{:?} has an invalid current option index", c.name)));
+            if indices.iter().any(|&i| i >= f.options.len()) || indices.windows(2).any(|w| w[0] >= w[1]) {
+                return Err(FormError::Invalid(format!("{:?} has an invalid current option index list", c.name)));
+            }
+            if f.kind == FieldKind::Combo && indices.len() > 1 {
+                return Err(FormError::Invalid(format!("{:?} can select only one item", c.name)));
             }
             let encoded = indices
                 .iter()
