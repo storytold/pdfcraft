@@ -43,7 +43,18 @@ pub(crate) fn check_one(args: &[String]) -> Result<(), CliError> {
     let path = *positional(args, CHECK_ONE_OPTIONS).first().ok_or("check-one: missing file")?;
     let dpi = parse_dpi(flag(args, "--dpi").unwrap_or("36"))?;
     let start = Instant::now();
-    let bytes = read(path)?;
+    // A file that can't be read (past the input cap, say) is this file's record, not a crash of the child.
+    let bytes = match read(path) {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            let status = if e.contains("larger than") { "input-too-large" } else { "read-error" };
+            let line = serde_json::json!({ "file": path, "status": status, "pages": 0, "failed_pages": 0, "warnings": 0,
+                "ms": start.elapsed().as_millis() as u64, "detail": e.chars().take(400).collect::<String>() });
+            stdout_line(format_args!("{line}"))?;
+            // (the record is the answer `check` reads; the error and exit status are for a direct run)
+            return Err(e.into());
+        }
+    };
     let (status, pages, failed, detail, warnings) = match inspect(bytes.clone(), None) {
         Err(e) => (format!("open-error:{}", short(&e.to_string())), 0, 0, e.to_string(), 0),
         Ok(info) => {
