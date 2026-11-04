@@ -52,8 +52,11 @@ fn select_after_edit(
         // A stroke drawn with the pen stays unselected, so the selection box and
         // author popup don't sit over the next stroke (#429).
         Edit::AddAnnotation(a)
-            if matches!(a.shape, pdfcraft_engine::Shape::Ink { .. })
-                && quick_tool == crate::QuickTool::Comment(crate::comments::CommentTool::Ink) =>
+            if matches!(a.shape, pdfcraft_engine::Shape::Ink { .. } | pdfcraft_engine::Shape::FreehandHighlight { .. })
+                && matches!(
+                    quick_tool,
+                    crate::QuickTool::Comment(crate::comments::CommentTool::Ink | crate::comments::CommentTool::FreehandHighlight)
+                ) =>
         {
             view.comments.selected = None;
         }
@@ -1089,6 +1092,9 @@ mod revert_draft_tests {
     /// interface language; a drawable value says nothing.
     #[test]
     fn a_value_its_font_cannot_draw_is_kept_and_explained() {
+        if !crate::i18n::needs_catalogs() {
+            return;
+        }
         let mut app = app();
         let fill =
             |app: &mut PdfCraftApp, text: &str| app.apply_edit(Edit::SetFieldValue { name: "name".into(), value: FieldValue::Text(text.into()) });
