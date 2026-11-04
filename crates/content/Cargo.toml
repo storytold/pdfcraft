@@ -10,3 +10,6 @@ workspace = true
 
 [dependencies]
 pdfcraft-cos = { workspace = true }
+# The renderer's content tokenizer, already in the tree through pdfcraft-cos: inline images end
+# where the renderer ends them.
+hayro-syntax = { workspace = true }

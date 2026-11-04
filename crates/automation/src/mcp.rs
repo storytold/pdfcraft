@@ -25,6 +25,10 @@ const PARSE_ERROR: i64 = -32700;
 const INVALID_REQUEST: i64 = -32600;
 const METHOD_NOT_FOUND: i64 = -32601;
 const INVALID_PARAMS: i64 = -32602;
+const INTERNAL_ERROR: i64 = -32603;
+
+/// Longest JSON-RPC request line [`McpServer::serve`] buffers into memory (16 MiB).
+pub const MAX_LINE_BYTES: usize = 16 * 1024 * 1024;
 
 const INSTRUCTIONS: &str = "PdfCraft edits PDFs. Open a file with doc_open to get a document id, then inspect \
 (doc_info, text_extract, text_find, page_render) or edit it (page_*, doc_set_info). Edits are undoable \
@@ -83,18 +87,36 @@ impl McpServer {
     }
 
     /// Serve until `input` reaches end of file.
-    pub fn serve(&mut self, input: impl BufRead, mut output: impl Write) -> std::io::Result<()> {
-        for line in input.lines() {
-            let line = line?;
-            if line.trim().is_empty() {
-                continue;
+    pub fn serve(&mut self, mut input: impl BufRead, mut output: impl Write) -> std::io::Result<()> {
+        let mut buf = Vec::new();
+        loop {
+            match read_line_limited(&mut input, &mut buf, MAX_LINE_BYTES)? {
+                LineRead::End => return Ok(()),
+                LineRead::TooLong => {
+                    drain_line(&mut input)?;
+                    buf.clear();
+                    buf.shrink_to(64 * 1024);
+                    let reply = error(Value::Null, INVALID_REQUEST, &format!("request line exceeds {MAX_LINE_BYTES} bytes"));
+                    writeln!(output, "{reply}")?;
+                    output.flush()?;
+                    continue;
+                }
+                LineRead::Line => {}
             }
-            if let Some(reply) = self.handle_line(&line) {
+            let reply = match std::str::from_utf8(&buf) {
+                Ok(line) if line.trim().is_empty() => None,
+                Ok(line) => self.handle_line(line),
+                Err(e) => Some(error(Value::Null, PARSE_ERROR, &format!("parse error: {e}")).to_string()),
+            };
+            if buf.capacity() > 64 * 1024 {
+                buf.clear();
+                buf.shrink_to(64 * 1024);
+            }
+            if let Some(reply) = reply {
                 writeln!(output, "{reply}")?;
                 output.flush()?;
             }
         }
-        Ok(())
     }
 
     /// Handle one JSON-RPC message; returns the serialized reply, if one is due.
@@ -116,7 +138,7 @@ impl McpServer {
         };
         let params = obj.get("params").cloned().unwrap_or(Value::Null);
         let id = id?; // notifications/initialized, notifications/cancelled, …: nothing to answer
-        let result = if method == "tools/call" { guarded_tool(|| self.dispatch(method, &params)) } else { self.dispatch(method, &params) };
+        let result = guarded_dispatch(method, || self.dispatch(method, &params));
         Some(match result {
             Ok(result) => json!({ "jsonrpc": "2.0", "id": id, "result": result }),
             Err((code, message)) => error(id, code, &message),
@@ -323,9 +345,65 @@ fn unwrap_tool_call(args: &Value) -> Result<(String, Value), String> {
     Ok((name.to_owned(), inner))
 }
 
+/// What [`read_line_limited`] found.
+#[derive(Debug, PartialEq, Eq)]
+enum LineRead {
+    /// A line, now in the buffer (newline and a trailing `\r` stripped).
+    Line,
+    /// End of stream.
+    End,
+    /// The line is longer than the limit; at most `max + 1` bytes of it were read.
+    TooLong,
+}
+
+/// Read one `\n`-terminated line of at most `max` bytes into `buf`.
+fn read_line_limited(reader: &mut impl BufRead, buf: &mut Vec<u8>, max: usize) -> std::io::Result<LineRead> {
+    use std::io::Read as _;
+    buf.clear();
+    // `take` bounds what is buffered for one line: never more than `max + 1` bytes.
+    let limit = u64::try_from(max).unwrap_or(u64::MAX).saturating_add(1);
+    if reader.take(limit).read_until(b'\n', buf)? == 0 {
+        return Ok(LineRead::End);
+    }
+    if buf.last() == Some(&b'\n') {
+        buf.pop();
+        if buf.last() == Some(&b'\r') {
+            buf.pop();
+        }
+        return Ok(LineRead::Line);
+    }
+    // No newline: either the limit was passed, or this is a last line before end of stream.
+    Ok(if buf.len() > max { LineRead::TooLong } else { LineRead::Line })
+}
+
+/// Discard the rest of an overlong line up to `\n` or end of stream without buffering it.
+fn drain_line(reader: &mut impl BufRead) -> std::io::Result<()> {
+    loop {
+        let chunk = reader.fill_buf()?;
+        if chunk.is_empty() {
+            return Ok(());
+        }
+        if let Some(pos) = chunk.iter().position(|&b| b == b'\n') {
+            reader.consume(pos + 1);
+            return Ok(());
+        }
+        let len = chunk.len();
+        reader.consume(len);
+    }
+}
+
 /// Last-resort boundary shared by every tools/call route, including compact dispatch.
 fn guarded_tool(f: impl FnOnce() -> Result<Value, (i64, String)>) -> Result<Value, (i64, String)> {
     pdfcraft_engine::guard(f).unwrap_or_else(|message| Ok(tool_error(&format!("internal error: {message}"))))
+}
+
+/// Last-resort boundary for every JSON-RPC method: tool calls report panics in the tool result
+/// (`isError: true`), while resource and protocol methods report a JSON-RPC internal error.
+fn guarded_dispatch(method: &str, f: impl FnOnce() -> Result<Value, (i64, String)>) -> Result<Value, (i64, String)> {
+    if method == "tools/call" {
+        return guarded_tool(f);
+    }
+    pdfcraft_engine::guard(f).unwrap_or_else(|message| Err((INTERNAL_ERROR, format!("internal error: {message}"))))
 }
 
 fn tool_content(name: &str, content: Vec<Content>) -> Value {
@@ -509,7 +587,12 @@ fn call_result(content: Vec<Content>) -> Value {
 
 #[cfg(test)]
 mod tests {
-    use super::{Resource, first_sentence, parse_uri};
+    use std::io::{BufReader, Read as _};
+
+    use serde_json::{Value, json};
+
+    use super::{McpServer, Resource, first_sentence, parse_uri};
+    use crate::Automation;
 
     #[test]
     fn conventions_panic_is_a_tool_error() {
@@ -518,6 +601,59 @@ mod tests {
         assert!(r["content"][0]["text"].as_str().unwrap().contains("synthetic tool failure"));
         let next = super::guarded_tool(|| Ok(serde_json::json!({"ok":true}))).unwrap();
         assert_eq!(next["ok"], true);
+    }
+
+    #[test]
+    fn guarded_dispatch_catches_resource_and_protocol_panics() {
+        for method in ["resources/read", "resources/list", "resources/templates/list", "initialize"] {
+            let (code, msg) = super::guarded_dispatch(method, || panic!("synthetic {method} failure")).unwrap_err();
+            assert_eq!(code, -32603, "{method}");
+            assert!(msg.contains(&format!("synthetic {method} failure")), "{msg}");
+        }
+        let ok = super::guarded_dispatch("resources/list", || Ok(json!({"resources": []}))).unwrap();
+        assert_eq!(ok["resources"], json!([]));
+    }
+
+    #[test]
+    fn read_line_limited_and_drain_line_respect_boundaries() {
+        use super::{LineRead, drain_line, read_line_limited};
+        let mut buf = Vec::new();
+        let mut input: &[u8] = b"aaaaaaaaaa\nbb\r\ncc";
+        assert_eq!(read_line_limited(&mut input, &mut buf, 10).unwrap(), LineRead::Line);
+        assert_eq!(buf, b"aaaaaaaaaa", "a line exactly at the limit is accepted");
+        assert_eq!(read_line_limited(&mut input, &mut buf, 10).unwrap(), LineRead::Line);
+        assert_eq!(buf, b"bb", "CRLF is stripped");
+        assert_eq!(read_line_limited(&mut input, &mut buf, 10).unwrap(), LineRead::Line);
+        assert_eq!(buf, b"cc", "a last line without a newline is still read");
+        assert_eq!(read_line_limited(&mut input, &mut buf, 10).unwrap(), LineRead::End);
+
+        let mut overlong: &[u8] = b"0123456789abcdef\nafter\n";
+        assert_eq!(read_line_limited(&mut overlong, &mut buf, 10).unwrap(), LineRead::TooLong);
+        assert_eq!(buf.len(), 11, "at most max + 1 bytes are buffered");
+        drain_line(&mut overlong).unwrap();
+        assert_eq!(read_line_limited(&mut overlong, &mut buf, 10).unwrap(), LineRead::Line);
+        assert_eq!(buf, b"after", "the next line after an overlong line is read cleanly");
+    }
+
+    #[test]
+    fn serve_answers_non_utf8_and_overlong_lines_and_keeps_serving() {
+        let init = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": { "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": { "name": "test", "version": "0" } }
+        })
+        .to_string();
+        let tail = format!("\n{init}\n");
+        let stream = (&b"\xff\n"[..]).chain(std::io::repeat(b'a').take(64 * 1024 * 1024)).chain(tail.as_bytes());
+        let mut out = Vec::new();
+        McpServer::new(Automation::new()).serve(BufReader::new(stream), &mut out).unwrap();
+        let replies: Vec<Value> = String::from_utf8(out).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+        assert_eq!(replies.len(), 3, "{replies:?}");
+        assert_eq!(replies[0]["error"]["code"], -32700);
+        assert_eq!(replies[1]["error"]["code"], -32600);
+        assert_eq!(replies[2]["id"], 1);
+        assert_eq!(replies[2]["result"]["serverInfo"]["name"], "pdfcraft");
     }
 
     #[test]
