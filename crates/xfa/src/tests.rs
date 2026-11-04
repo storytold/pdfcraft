@@ -2554,10 +2554,26 @@ fn a_patterned_fill_cut_by_a_page_break_keeps_its_pattern_on_both_pages() {
     for at in 0..2 {
         let (doc, page) = written_page(&xdp, at);
         let ops = page_content(&doc, &page);
-        assert!(ops.lines().any(|l| l.starts_with("q /Pattern cs /Ph") && l.contains(" scn ")), "page {at} hatches its piece: {ops}");
+        let lines: Vec<&str> = ops.lines().collect();
+        let hatch = lines
+            .iter()
+            .position(|l| l.starts_with("q /Pattern cs /Ph") && l.contains(" scn "))
+            .unwrap_or_else(|| panic!("page {at} hatches its piece: {ops}"));
+        // The hatch fills the same path as the background fill written just before it.
+        let path = lines[hatch - 1]
+            .split_once(" rg ")
+            .and_then(|(_, f)| f.strip_suffix('f'))
+            .unwrap_or_else(|| panic!("the colour first: {}", lines[hatch - 1]));
+        assert!(lines[hatch].ends_with(&format!(" scn {path}f Q")), "{} after {}", lines[hatch], lines[hatch - 1]);
+        let painted = lines[hatch]
+            .split_whitespace()
+            .nth(3)
+            .map(|name| name.trim_start_matches('/'))
+            .unwrap_or_else(|| panic!("page {at} hatches its piece: {ops}"));
         let resources = doc.resolve(page.get(b"Resources").unwrap());
         let patterns = resources.as_dict().unwrap().get(b"Pattern").map(|p| doc.resolve(p)).expect("the page names its patterns");
         assert_eq!(patterns.as_dict().unwrap().len(), 1, "page {at} names the one pattern it paints with");
+        assert!(patterns.as_dict().unwrap().reference(painted.as_bytes()).is_some(), "page {at} names the pattern {painted} it paints with");
     }
 }
 
