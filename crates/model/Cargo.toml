@@ -10,3 +10,5 @@ workspace = true
 
 [dependencies]
 pdfcraft-cos = { workspace = true }
+pdfcraft-geom = { workspace = true }
+thiserror = { workspace = true }

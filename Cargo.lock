@@ -4499,6 +4499,8 @@ name = "pdfcraft-model"
 version = "0.18.1"
 dependencies = [
  "pdfcraft-cos",
+ "pdfcraft-geom",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
