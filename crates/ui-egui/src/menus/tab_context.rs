@@ -5,6 +5,7 @@ pub(crate) enum Action {
     /// Close a tab, by its view key (`DocView::view_key`: split view can show one document in two
     /// tabs).
     Close(u64),
+    Detach(DocId),
     Reopen,
     Reveal(DocId),
     Rename(DocId),
@@ -60,6 +61,9 @@ impl crate::PdfCraftApp {
                 if let Some(i) = self.tab_with_key(tab) {
                     self.split_tab(i, down);
                 }
+            }
+            Action::Detach(id) => {
+                self.request_detach_tab(id, None);
             }
             Action::Reopen => {
                 #[cfg(not(target_arch = "wasm32"))]
