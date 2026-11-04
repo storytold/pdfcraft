@@ -5,6 +5,81 @@ macOS, Windows, Linux, FreeBSD and the web, signs the ones it has certificates f
 updates a **draft** GitHub Release named `PdfCraft v<version>`. Nobody sees a draft until a
 maintainer publishes it.
 
+## Custom update sources
+
+`PDFCRAFT_UPDATE_REPO` selects one public GitHub repository when compiling the app. For example:
+
+```sh
+PDFCRAFT_UPDATE_REPO=example/pdfcraft cargo build --release -p pdfcraft
+```
+
+With the variable unset, the source is `storytold/pdfcraft`. Set it on **every** app build you
+distribute, including replacement binaries in later releases: the source is compiled into each
+binary, not retained in settings across replacement. Changing the environment when launching an
+already-built app does nothing. This option does not change an existing installation, publish a
+release, or download/install a binary during the build.
+
+The value must be `owner/repo`: an ASCII GitHub owner of 1–39 letters, digits or single internal
+hyphens, and a repository of 1–100 letters, digits, dots, underscores or hyphens (except `.` and
+`..`). Empty values, URLs, credentials, extra path segments, query strings and whitespace fail
+the build. GitHub owner/repository comparison is case-insensitive; tag and asset spelling is preserved. There is no private-repository authentication,
+GitHub Enterprise endpoint, runtime source selector or prerelease-channel selector.
+
+The desktop startup/manual check, release links and in-place updater all use this repository;
+the web app's manual check opens its releases page. Release asset URLs still go through
+craft-update's repository validation. Supply published **stable** releases tagged `v<version>`,
+matching the workspace version embedded in their binaries, with an increasing numeric version
+(for example `0.18.1` → `0.18.2`). Drafts and prereleases are not offered. A new `+build` suffix
+alone is not a newer version, and source-build suffixes such as `-dev` require a higher numeric
+version before an update is offered.
+
+Keep the `pdfcraft` executable and asset stem, and the platform/architecture/package names in the
+release table below. For example, a standalone Linux x86_64 copy needs
+`pdfcraft-0.18.2-linux-x86_64.tar.gz`, containing `bin/pdfcraft`. Include `SHA256SUMS.txt` alongside
+the packages. Keep every replacement compatible with the installed package layout and signing
+identity; the existing platform checks still apply (including Windows' matching publisher).
+Unix standalone updates replace the executable only, so a change to companion models or libraries
+needs an appropriate packaged/manual installation instead.
+
+A binary run directly from Cargo's build tree remains a development build: it offers a download
+instead of overwriting build output, even with `--release` or a custom `CARGO_TARGET_DIR`. Package
+and install the first copy outside that tree before testing in-place updates. Do not use
+`CRAFT_UPDATE_DEV` for distribution. Package-manager restrictions, launcher pins and the
+unsaved-document restart guard are unchanged.
+
+For AppImage metadata, `packaging/linux/package.sh` uses a nonempty `PDFCRAFT_UPDATE_REPO`
+first, followed by a nonempty `GITHUB_REPOSITORY`. Without either override, it queries
+**the binary being packaged** with `pdfcraft --print-update-repository`; this also works with
+`--skip-build` after the build environment has been cleared. The query exits before logging,
+GUI initialization or network activity and ignores runtime attempts to change the compiled source.
+When the query flag is the first argument, subsequent options and file names are ignored.
+An earlier `--help` or `--version` keeps its normal behavior.
+A missing/old binary or invalid repository stops packaging instead of choosing official releases.
+For cross builds, provide an explicit override or `EMULATOR` so the binary can be queried.
+An inherited `GITHUB_REPOSITORY` is still an override: set `PDFCRAFT_UPDATE_REPO` explicitly when
+packaging for a different release repository.
+
+The test expectation is independent of the build-script output. Check a custom build with both
+variables set (the mixed casing also exercises canonical GitHub asset URLs):
+
+```sh
+PDFCRAFT_UPDATE_REPO=Example/PdfCraft PDFCRAFT_EXPECTED_UPDATE_REPO=Example/PdfCraft \
+  cargo test -p pdfcraft-ui-egui --test update_source --locked -j 2
+PDFCRAFT_UPDATE_REPO=Example/PdfCraft PDFCRAFT_EXPECTED_UPDATE_REPO=Example/PdfCraft \
+  cargo test -p pdfcraft --test it --locked -j 2 -- update_repository::
+```
+
+Unset both variables to test official defaults. CI coverage for the additional custom-source
+invocation belongs in the shared craft-common-actions workflow, separately from this feature PR.
+The case-insensitive asset comparison is supplied by [craft-libs#595](https://github.com/storytold/craft-libs/pull/595);
+the pinned revision carries only that fix above the previous craft-update base.
+
+This selects an update source, not a separate application identity: package IDs, settings and
+launcher choices remain PdfCraft's. It does not grant branding rights or rebrand a fork; follow
+the fork requirements in `AGENTS.md` and `docs/brand/LICENSE-brand.txt` when distributing one.
+
+## Release artifacts
+
 The pipeline was ported from PhotoCraft's. User-facing names say **PdfCraft**; files, binaries and
 ids stay lowercase (`pdfcraft-<version>-<platform>-<arch>.<ext>`, `ai.storyteller.pdfcraft`).
 
@@ -189,9 +264,10 @@ The binaries are built on Ubuntu 22.04, the oldest GitHub-hosted image, so they 
 xkbcommon) and the GPU (Vulkan, EGL) are loaded at runtime from the system; the .deb and .rpm declare
 them as dependencies (see `nfpm.yaml`).
 
-Each AppImage embeds update information
-(`gh-releases-zsync|storytold|pdfcraft|latest|pdfcraft-*-linux-<arch>.AppImage.zsync`), and its
-`.zsync` is published beside it, so AppImageUpdate and AppImageLauncher can update it in place,
+By default, an official build without repository overrides embeds update information
+`gh-releases-zsync|storytold|pdfcraft|latest|pdfcraft-*-linux-<arch>.AppImage.zsync`. Custom builds
+and packaging overrides use the repository selected by the [precedence above](#custom-update-sources).
+Each AppImage's `.zsync` is published beside it, so AppImageUpdate and AppImageLauncher can update it in place,
 downloading only the changed blocks. `latest` is the newest published, non-pre-release version.
 `package.sh` writes the `.zsync` when `zsyncmake` (the `zsync` package) is installed and warns
 otherwise; the release job checks both.

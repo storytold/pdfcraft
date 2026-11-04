@@ -74,6 +74,7 @@ Options:
                               view settings applied once the files are open
   -h, --help                  print this and exit
   --version                   print the version and exit
+  --print-update-repository   as the first argument, print the compiled GitHub update source and exit
 
 To inspect, convert or edit PDFs from a script, use pdfcraft-cli (pdfcraft-cli --help).";
 
@@ -198,6 +199,10 @@ fn rejoin_split_paths(args: Vec<String>, exists: impl Fn(&str) -> bool) -> Vec<S
 }
 
 fn main() -> eframe::Result {
+    // Packaging reads the exact binary's source, without a display, logs or update/network work.
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--print-update-repository")) {
+        return print_and_exit(pdfcraft_ui_egui::updates::REPOSITORY);
+    }
     // Windows: the update helper is a copy of this program started with `--finish-update`.
     #[cfg(windows)]
     if let Some(result) = craft_update::self_update::finish(&pdfcraft_ui_egui::UPDATE_APP, &std::env::args_os().skip(1).collect::<Vec<_>>()) {

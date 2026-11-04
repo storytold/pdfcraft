@@ -1,5 +1,9 @@
 # PdfCraft roadmap
 
+> **Last reviewed:** 2026-11-04 · **Last updated:** 2026-11-04 · **Change:** patch (M14 #6123 review: first-argument repository query ignores trailing inputs; AppImage documentation distinguishes defaults from overrides; estimates unchanged)
+
+> **Last reviewed:** 2026-11-04 · **Last updated:** 2026-11-04 · **Change:** minor (M14: optional build-time GitHub update repository, validated before compilation; official defaults and development-install behavior retained; readiness and effort estimates unchanged)
+
 > **Last reviewed:** 2026-11-03 | **Last updated:** 2026-11-03 | **Change:** patch (M5 #5850 review: indirect typewriter intent and composer edits preserve outer whitespace; movement regression commits by outside click; estimates unchanged)
 
 > **Last reviewed:** 2026-11-03 | **Last updated:** 2026-11-03 | **Change:** patch (M5 #5850: Enter adds Fill & Sign line breaks; outside clicks commit, Escape cancels, and saved multiline appearances retain their text and height; estimates unchanged)
@@ -223,6 +227,11 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 ## Progress log
 
+- **2026-11-04 (M14, #6123 argument review):** The repository query exits when it is the first argument, including trailing options, file names and non-Unicode paths. Earlier help/version keep their behavior. Executable tests are bounded and the AppImage update example is explicitly an official-build default. Estimates unchanged.
+
+- **2026-11-04 (M14, #6123 review):** Fix AppImage source precedence and compiled-binary fallback, independently assert the expected repository, and pin craft-update to the focused case-insensitive repository fix (craft-libs#595). Synthetic URL-confinement and packaging/query regressions cover the changes; no installed app was replaced. Estimates unchanged.
+
+- **2026-11-04 (M14, candidate):** Distributors may compile one validated GitHub release repository with `PDFCRAFT_UPDATE_REPO`; native checks and web release links share it. Unset builds still follow official releases. Build-input tests cover accepted names, default selection, malformed paths and non-Unicode input; integration tests cover the compiled source and release asset confinement. No release was published and no in-place update was exercised. Estimates unchanged.
 - **2026-11-03 (M11, shared JBIG2 dictionary):** With Monochrome Images set to JBIG2, Optimize has up to 16 JBIG2 images share one symbol dictionary (`/JBIG2Globals`), the letters found on more than one page stored once, when that is smaller (`pdfcraft_filters::encode_jbig2_shared`). Eight pages of 10 pt text rendered at 300 dpi take 41% less in Helvetica and 42% in Times than coded alone, 10% in Courier; groups of 16 save 45%, of 32 only 47%. Only images redaction can store again without the dictionary share one (image masks and DeviceGray named directly, at most 64 Mi pixels), and redacting one stores the rest of its group so, which the group bounds to 15.
 
 - **2026-11-03 (M5, #5850 review):** Resolve indirect IT when recognizing typewriter contents and Fill & Sign marks. Comment listing and property lookup retain their existing direct-Subtype behavior. A real double-click Edit composer preserves the typewriter’s text as written; ordinary comment edits keep trimming. Regressions cover direct Subtype with indirect intent, save/reopen, raw posted contents and same-index comments on different pages. The existing live-movement test now commits its setup with an outside click rather than Enter. Estimates unchanged.
@@ -759,6 +768,9 @@ Newest first: the date, what moved, and the new overall estimate.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-04 | patch | M14 #6123: the first --print-update-repository argument exits before processing trailing options/files; bounded executable regressions cover ordering and non-Unicode paths; AppImage docs distinguish official defaults from overrides. Estimates unchanged. |
+| 2026-11-04 | patch | M14 #6123 review: AppImage metadata falls back to the compiled repository; test expectations are independent; craft-libs#595 preserves canonical asset URLs for mixed-case repository names. Estimates unchanged. |
+| 2026-11-04 | minor | M14: optional build-time GitHub update repository, validated before compilation; official defaults and development-install behavior retained; readiness and effort estimates unchanged. |
 | 2026-11-03 | patch | M5 #5850 review: indirect typewriter intent and composer edits preserve outer whitespace; movement regression commits by outside click; estimates unchanged. |
 | 2026-11-03 | patch | M5 #5850: Enter adds Fill & Sign line breaks; outside clicks commit, Escape cancels, and saved multiline appearances retain their text and height; estimates unchanged. |
 | 2026-11-01 | patch | M7 #5657: header/footer, watermark and background operations commit all selected pages together; later-page errors preserve marks, content, shared/inherited resources and pending edits; estimates unchanged. |
