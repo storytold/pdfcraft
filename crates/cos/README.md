@@ -21,8 +21,9 @@ let doc = Document::open_with_password(bytes, Some("owner"))?;  // encrypted fil
 
 let root = doc.root();                               // Option<ObjRef> — the catalog
 let obj  = doc.get(ObjRef { num: 12, gen: 0 });      // load (and cache): Arc<Object>
-let real = doc.resolve(&obj);                        // follow one indirect reference
+let real = doc.resolve(&obj);                        // follow a reference, and up to 32 more it leads to
 let d    = doc.dict(&obj);                           // Option<Dict>, resolving first
+let rect = NumberReader::new(&doc).tuple::<4>(&obj)?; // exactly four finite numbers (`numbers`)
 let data = stream.decoded()?;                        // filters applied on demand
 let data = doc.with_direct_parms(&stream).decoded()?; // /DecodeParms given by reference too
 let px   = doc.decoded_image(&stream)?;              // an image's samples, a CCITT fax image's too
@@ -43,6 +44,14 @@ Useful alongside: `doc.repair_log()` (what was reconstructed), `doc.revisions()`
 `doc.revision_ends()` (the incremental history), `doc.is_edited(num)` and `doc.modified_objects()`,
 `doc.permissions()` and `doc.security()`, `doc.set_encryption()` / `doc.remove_encryption()`, and
 `doc.require_full_save()` for edits that cannot be expressed incrementally.
+
+`numbers::NumberReader` reads numbers out of the graph without losing their places: one finite
+number, an exact-length tuple (`tuple::<N>`, its length checked before any entry is read), or a
+capped `sequence` in which every original slot keeps its own result, so a bad entry never shifts
+the ones after it and an array past the cap gives no prefix. It follows references with `resolve`'s
+bounded chain (a chain that still ends in a reference is an error), reads a direct array in place
+rather than copying it, and knows nothing of rectangles or colours (that is `pdfcraft-model`).
+`NumberReader::direct()` reads direct values only, for inputs with no document.
 
 `Document` is **cheap to clone**: the original bytes, the xref index and the parse caches are
 shared, so a clone is a snapshot. Undo/redo and background jobs hold clones while the UI edits
