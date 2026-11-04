@@ -869,7 +869,11 @@ impl Automation {
         // Only the line that now shows the requested text is the edited one: a neighbour that
         // took its number (the edit emptied the line) is the document's own text, echoed only
         // when the document allows copying it, as for a paragraph.
-        if let Some(l) = after.get(line as usize - 1).filter(|l| l.text.split_whitespace().collect::<String>() == wanted) {
+        // An overlay copy of the line that comes before it in content order goes with the edit, so
+        // the edited line moved down as many places as lines are gone: look there first.
+        let gone = n.saturating_sub(after.len());
+        let at = (line as usize - 1).checked_sub(gone).into_iter().chain([line as usize - 1]);
+        if let Some(l) = at.filter_map(|i| after.get(i)).find(|l| l.text.split_whitespace().collect::<String>() == wanted) {
             out["line"] = json!({ "font": l.base_font });
             if doc.allows_copying() {
                 out["line"]["text"] = json!(l.text);
