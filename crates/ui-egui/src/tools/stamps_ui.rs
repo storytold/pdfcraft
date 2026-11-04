@@ -386,12 +386,7 @@ mod tests {
     fn saving_without_an_available_identity_keeps_the_stamp_draft() {
         let mut app = PdfCraftApp::new();
         app.next_custom_stamp_id = 0;
-        app.stamp_draft = StampDraft {
-            file: "mark.png".into(),
-            data: Arc::new(vec![1, 2]),
-            category: "Tools".into(),
-            name: "Mark".into(),
-        };
+        app.stamp_draft = StampDraft { file: "mark.png".into(), data: Arc::new(vec![1, 2]), category: "Tools".into(), name: "Mark".into() };
 
         app.save_custom_stamp();
 

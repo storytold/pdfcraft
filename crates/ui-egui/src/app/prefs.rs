@@ -391,8 +391,7 @@ impl PdfCraftApp {
         if let Ok(ids) = serde_json::from_value::<Vec<DigitalIdEntry>>(v["digital_ids"].clone()) {
             self.digital_ids = ids;
         }
-        let (custom_stamps, next_custom_stamp_id) =
-            stamps_ui::decode(&v["custom_stamps"], v["custom_stamp_next_id"].as_u64());
+        let (custom_stamps, next_custom_stamp_id) = stamps_ui::decode(&v["custom_stamps"], v["custom_stamp_next_id"].as_u64());
         self.custom_stamps = custom_stamps;
         self.next_custom_stamp_id = next_custom_stamp_id;
         self.custom_actions = actions_ui::decode(&v["actions"]);
