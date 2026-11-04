@@ -93,8 +93,11 @@ garbage-collecting path. By default (`SaveOptions::object_streams`) it packs non
 into compressed object streams with a cross-reference stream (PDF 1.5+); turning that off writes a
 classic table any reader accepts. Both forms map accepted xref/header aliases to one output
 object, retaining shared identity such as page-tree parent links; unrelated generations stay null.
-`write_full_to` is the same writer handing each object to a `Write` sink as it is serialized;
-memory stays at the document plus the largest object or object stream instead of the whole output.
+`write_full_to` is the same writer handing each object to a `Write` sink as it is serialized, so
+the output is never held whole. What it still holds besides the document grows with the object
+*count*, not the output size: the numbering and offset bookkeeping, and the cross-reference
+section, which is built in full before it is written. Object data in flight stays within about
+64 KB plus the largest object or object stream.
 
 A full save keeps the file's `/ID` as it is, unless the document asked for a new identifier with
 `Document::require_full_save_with_new_id` (redaction and sanitizing do). Then both strings are
