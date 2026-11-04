@@ -373,13 +373,17 @@ impl PageCx<'_> {
         let u = self.to_user(p);
         let all = self.snap_candidates(u);
         let Some(first) = all.first() else { return (u, None) };
-        // Tab moves through the candidates; another set starts again from its first.
-        let step = match self.snap_cycle {
+        let i = usize::try_from(self.snap_step(first).rem_euclid(all.len().max(1) as isize)).unwrap_or(0);
+        all.get(i).map_or((u, None), |hit| (hit.point, Some(hit.kind)))
+    }
+
+    /// How far Tab has moved through the candidates whose first is `first`; another set starts
+    /// again from its first.
+    fn snap_step(&self, first: &measure::snap::Snap) -> isize {
+        match self.snap_cycle {
             Some((f, n)) if measure::distance(f, first.point) <= 1e-6 => n,
             _ => 0,
-        };
-        let i = usize::try_from(step.rem_euclid(all.len().max(1) as isize)).unwrap_or(0);
-        all.get(i).map_or((u, None), |hit| (hit.point, Some(hit.kind)))
+        }
     }
 
     /// Whether points snap: to the page's paths or to the comments drawn over it.
@@ -457,8 +461,9 @@ impl PageCx<'_> {
 
     /// Where a Fill & Sign mark `side` points across goes for the pointer at `p` when snapping is
     /// on: the centre of the box drawn around it when that is a check box or a table cell (at
-    /// most ten marks long and three across, either way round: a protocol's "OK" column), else as
-    /// [`Self::snapped`] puts a point.
+    /// most ten marks long and three across, either way round: a protocol's "OK" column), from
+    /// which Tab moves on through the other targets under the pointer; else as [`Self::snapped`]
+    /// puts a point.
     pub(crate) fn snapped_mark(&self, p: Pos2, side: f64) -> ([f64; 2], Option<measure::snap::SnapKind>) {
         let u = self.to_user(p);
         let (long, short) = (10.0 * side, 3.0 * side);
@@ -468,7 +473,16 @@ impl PageCx<'_> {
             && let (w, h) = (x1 - x0, y1 - y0)
             && ((w <= long && h <= short) || (w <= short && h <= long))
         {
-            return ([(x0 + x1) / 2.0, (y0 + y1) / 2.0], Some(measure::snap::SnapKind::Centre));
+            // The box's middle first; Tab moves on through the other targets under the pointer.
+            let centre = [(x0 + x1) / 2.0, (y0 + y1) / 2.0];
+            let all = self.snap_candidates(u);
+            let step = all.first().map_or(0, |first| self.snap_step(first));
+            let others: Vec<_> = all.iter().filter(|s| measure::distance(s.point, centre) > 1e-6).collect();
+            let i = usize::try_from(step.rem_euclid(others.len() as isize + 1)).unwrap_or(0);
+            return match i.checked_sub(1).and_then(|i| others.get(i)) {
+                Some(hit) => (hit.point, Some(hit.kind)),
+                None => (centre, Some(measure::snap::SnapKind::Centre)),
+            };
         }
         self.snapped(p)
     }

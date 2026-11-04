@@ -85,6 +85,21 @@ fn click_pt(h: &mut Harness<'static, PdfCraftApp>, p: (f32, f32)) {
     click(h, p);
 }
 
+/// Tab (Shift+Tab with `modifiers` SHIFT) through the app's raw input hook, as in production
+/// (kittest doesn't call the hook), which takes it for the snap marker while nothing has the
+/// keyboard.
+fn snap_tab(h: &mut Harness<'static, PdfCraftApp>, modifiers: egui::Modifiers) {
+    let ctx = h.ctx.clone();
+    let mut raw = std::mem::take(h.input_mut());
+    for pressed in [true, false] {
+        raw.events.push(egui::Event::Key { key: egui::Key::Tab, pressed, modifiers, repeat: false, physical_key: None });
+    }
+    h.state_mut().prepare_raw_input(&ctx, &mut raw);
+    assert!(!raw.events.iter().any(|e| matches!(e, egui::Event::Key { key: egui::Key::Tab, .. })), "the hook takes Tab");
+    *h.input_mut() = raw;
+    h.run_steps(2);
+}
+
 /// A text field by its placeholder ("Add a comment", "Add a reply").
 fn field<'a>(h: &'a Harness<'static, PdfCraftApp>, placeholder: &'a str) -> egui_kittest::Node<'a> {
     h.query_all_by(|n| n.placeholder() == Some(placeholder)).next().unwrap_or_else(|| panic!("no field {placeholder:?}"))
@@ -3514,6 +3529,12 @@ fn snapping_reads_the_paths_of_the_page_under_the_pointer_only() {
     h.hover_at(at(&h, 150.0, 100.0));
     h.run_steps(3);
     assert_eq!(h.state().views[0].comments.snap_cache.cached_pages(), [0], "only the page under the pointer");
+    // The pages share one content stream, so which page's paths were read tells them apart.
+    let second = h.state().views[0].page_screen_rect(1).expect("page 2 on screen");
+    h.hover_at(second.center());
+    h.run_steps(3);
+    let read = h.state().views[0].comments.snap_cache.cached_pages();
+    assert!(read.contains(&1) && !read.contains(&2), "the second page's, when it is under the pointer: {read:?}");
 }
 
 /// With Snap to drawing on (F3), the points of connected lines land on the page's paths: an
@@ -3636,6 +3657,64 @@ const CHECK_BOX_FIXTURE: &[u8] = b"%PDF-1.7
 endstream endobj
 trailer << /Root 1 0 R >>
 %%EOF";
+
+/// A Fill & Sign cross over a table cell snaps to its middle; Tab moves it on to the other targets
+/// under the pointer (on the cell's bottom line, 2 pt below), and Shift+Tab back.
+#[test]
+fn tab_moves_a_mark_on_from_the_middle_of_a_cell() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("protocol.pdf", None, CHECK_BOX_FIXTURE.to_vec()).expect("opens");
+        app.set_option("left", "closed").unwrap();
+        app.set_option("zoom", "100").unwrap();
+        app
+    });
+    h.run_steps(4);
+    crate::support::settle(&mut h);
+    assert!(h.state_mut().execute("sign.fill.cross"));
+    h.key_press(egui::Key::F3);
+    h.run_steps(2);
+    let shown = |h: &Harness<'static, PdfCraftApp>| h.state().views[0].comments.snap_hover.map(|(_, p, _)| p);
+    h.hover_at(at(&h, 214.0, 152.0));
+    h.run_steps(2);
+    assert_eq!(shown(&h), Some([204.5, 159.0]), "the cell's middle");
+    snap_tab(&mut h, egui::Modifiers::NONE);
+    let on_line = shown(&h).expect("a marker");
+    // (Below the pointer, to the pixel the pointer is at.)
+    assert!((on_line[0] - 214.0).abs() < 1.5 && (on_line[1] - 150.0).abs() < 0.01, "on the line: {on_line:?}");
+    snap_tab(&mut h, egui::Modifiers::SHIFT);
+    assert_eq!(shown(&h), Some([204.5, 159.0]), "Shift+Tab: back to the middle");
+}
+
+/// The Measure tool snaps to the targets chosen for commenting: near the drawing's crossing (which
+/// is also the horizontal line's midpoint) a point lands there; with intersections and midpoints
+/// off, on the vertical line beside it.
+#[test]
+fn measuring_follows_the_chosen_snap_targets() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("drawing.pdf", None, DRAWING_FIXTURE.to_vec()).expect("opens");
+        app.set_option("left", "closed").unwrap();
+        app.set_option("zoom", "100").unwrap();
+        app.set_option("quick", "measure-distance").unwrap();
+        app
+    });
+    h.run_steps(4);
+    crate::support::settle(&mut h);
+    assert!(h.state().views[0].measure.snap_enabled);
+    click_pt(&mut h, (151.0, 52.0));
+    assert_eq!(h.state().views[0].measure.points.first().copied(), Some([150.0, 50.0]), "the crossing");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    assert!(h.state().views[0].measure.points.is_empty());
+    h.state_mut().comment_prefs.snap_targets.intersections = false;
+    h.state_mut().comment_prefs.snap_targets.midpoints = false;
+    click_pt(&mut h, (151.0, 52.0));
+    let p = h.state().views[0].measure.points.first().copied().expect("a point");
+    assert!((p[0] - 150.0).abs() < 0.01 && (p[1] - 52.0).abs() < 0.5, "on the vertical line: {p:?}");
+}
 
 /// With Snap to drawing on, a Fill & Sign cross clicked inside a check box or a table cell lands
 /// in its middle, and a text box's corner lands on a line, as the drawing tools' points do; off, both stay
@@ -3784,8 +3863,9 @@ fn moved_comments_snap_by_their_corners_and_marks_by_their_centre() {
     h.run_steps(2);
     let first = h.state().views[0].comments.snap_first.expect("a target under the pointer");
     assert_eq!(first.1, [100.0, 100.0], "the box's corner first");
-    assert!(h.state_mut().views[0].comments.cycle_snap(1));
-    h.run_steps(2);
+    // A key press through the app's hook, which takes the Tab before egui's focus moves on.
+    snap_tab(&mut h, egui::Modifiers::NONE);
+    assert_eq!(h.state().views[0].comments.snap_cycle.map(|(_, n)| n), Some(1), "Tab cycled");
     let shown = h.state().views[0].comments.snap_hover.map(|(_, p, _)| p);
     assert!(shown.is_some_and(|p| p != [100.0, 100.0]), "the next one: {shown:?}");
     // Centres off: the cross keeps its place inside the cell.

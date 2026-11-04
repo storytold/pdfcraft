@@ -488,8 +488,12 @@ impl Gestures<'_> {
                 let u = cx.snapped(p).0;
                 // Snapped onto the first point's target, or onto one line through it, a box or line
                 // would have no size and draw nothing: then the pointer's own point.
+                // (The marker goes too: it would show a point the corner isn't on.)
                 let u = match points.first() {
-                    Some(first) if drawn_shape(*tool, &[*first, u]).is_none() => cx.to_user(p),
+                    Some(first) if drawn_shape(*tool, &[*first, u]).is_none() => {
+                        cv.snap_hover = None;
+                        cx.to_user(p)
+                    }
                     _ => u,
                 };
                 points.truncate(1);
@@ -708,6 +712,9 @@ impl Gestures<'_> {
                     let r = Rect::from_two_pos(cx.to_screen(*f), cx.to_screen(u));
                     r.width() < 6.0 || r.height() < 6.0
                 });
+                if flat {
+                    cv.snap_hover = None;
+                }
                 points.truncate(1);
                 points.push(if flat { cx.to_user(q) } else { u });
             }

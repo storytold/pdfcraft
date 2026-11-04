@@ -10889,6 +10889,7 @@ fn snap_takes_the_comments_already_drawn() {
     ok(&mut a, "comment_add", json!({ "doc": doc, "page": 1, "type": "line", "from": [20, 40], "to": [120, 40] }));
     let out = ok(&mut a, "comment_add", json!({ "doc": doc, "page": 1, "type": "line", "from": [123, 43], "to": [123, 140], "snap": true }));
     assert_eq!(out["snapped"], 1, "{out}");
+    assert_eq!(out["truncated"], false, "the page was read whole: {out}");
     let out = ok(&mut a, "comment_add", json!({ "doc": doc, "page": 1, "type": "line", "from": [20, 250], "to": [80, 250], "snap": true }));
     assert_eq!(out["snapped"], 0, "{out}");
     let list = ok(&mut a, "comment_list", json!({ "doc": doc, "page": 1 }));
@@ -10931,4 +10932,24 @@ fn snap_takes_the_comments_already_drawn() {
     let list = ok(&mut a, "comment_list", json!({ "doc": doc, "page": 1 }));
     let short = list["comments"].as_array().unwrap().iter().find(|c| c["id"] == out["comment"]["id"]).cloned().expect("the short line");
     assert_eq!(short["points"], json!([[78.0, 251.0], [82.0, 249.0]]), "{short}");
+    // Connected lines and a polygon whose points would all go onto one line end (of two lines
+    // drawn for them, at y 200 and 270) would be too flat to add: they keep their points.
+    let points = |a: &mut Automation, out: &Value| -> Value {
+        let list = ok(a, "comment_list", json!({ "doc": doc, "page": 1 }));
+        list["comments"].as_array().unwrap().iter().find(|c| c["id"] == out["comment"]["id"]).cloned().expect("added")["points"].clone()
+    };
+    ok(&mut a, "comment_add", json!({ "doc": doc, "page": 1, "type": "line", "from": [140, 200], "to": [180, 200] }));
+    ok(&mut a, "comment_add", json!({ "doc": doc, "page": 1, "type": "line", "from": [140, 270], "to": [180, 270] }));
+    let out = ok(&mut a, "comment_add", json!({ "doc": doc, "page": 1, "type": "polyline", "points": [[178, 201], [182, 199]], "snap": true }));
+    assert_eq!(out["snapped"], 0, "{out}");
+    assert_eq!(points(&mut a, &out), json!([[178.0, 201.0], [182.0, 199.0]]));
+    let out =
+        ok(&mut a, "comment_add", json!({ "doc": doc, "page": 1, "type": "polygon", "points": [[178, 271], [182, 269], [180, 273]], "snap": true }));
+    assert_eq!(out["snapped"], 0, "{out}");
+    assert_eq!(points(&mut a, &out), json!([[178.0, 271.0], [182.0, 269.0], [180.0, 273.0]]));
+    // Replace Text doesn't snap, but a reach out of range is refused for it as for the others.
+    assert!(matches!(
+        a.call("comment_add", &json!({ "doc": doc, "page": 1, "type": "replace", "find": "Page 1", "contents": "One", "snap_tolerance": 5000 })),
+        Err(ToolError::InvalidArgs(_))
+    ));
 }
