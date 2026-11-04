@@ -15,6 +15,7 @@ pub mod graphic;
 #[cfg(target_os = "macos")]
 pub mod keychain;
 pub mod keys;
+pub mod p7m;
 pub mod pdf;
 pub mod pkcs12;
 pub mod revocation;

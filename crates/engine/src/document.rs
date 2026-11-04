@@ -13,6 +13,23 @@ use crate::{
 #[cfg(test)]
 use crate::{record_link_scan, record_marker_scan};
 
+/// What the CAdES envelope a document was opened from says about it (issue #1449). Present
+/// only on documents opened from a `.p7m`; see [`Session::open`] and [`Session::extract_original`].
+#[derive(Clone, Debug)]
+pub struct EnvelopeInfo {
+    /// The signer's name as their certificate shows it.
+    pub signer: String,
+    /// When the signer says they signed, as "YYYY-MM-DD HH:MM UTC" (an envelope without a
+    /// signing-time attribute has none).
+    pub signing_time: Option<String>,
+    /// Whether the content still matches what was signed. Trust is never checked here.
+    pub digest_ok: bool,
+    /// How many signers the envelope carries (details of the first are shown).
+    pub signers: usize,
+    /// Encoding irregularities that were tolerated while reading the envelope.
+    pub quirks: Vec<String>,
+}
+
 pub struct Document {
     pub id: DocId,
     pub name: String,
@@ -26,6 +43,12 @@ pub struct Document {
     pub renderer: RenderPool,
     /// The password the document was opened with (needed to read attachments, etc.).
     pub password: Option<String>,
+    /// The credential the document was opened with, verbatim: the owner password when that is
+    /// what unlocked it, while [`Document::password`] holds the user password owner
+    /// authentication recovers for R2–R4 files. Opening a copy of the document's bytes with it
+    /// keeps the owner's rights — extraction ([`Session::extract_original`]) must not hand out
+    /// a copy the user has to unlock again.
+    pub(crate) reopen_password: Option<String>,
     /// `true` when there are edits that have not been saved.
     pub dirty: bool,
     /// Bumped on every change to the working file (edit, undo, redo, save); autosave compares it.
@@ -34,6 +57,16 @@ pub struct Document {
     pub(crate) snapshot_generation: u64,
     /// Why the document cannot be edited (e.g. encryption), if so.
     pub read_only_reason: Option<String>,
+    /// The CAdES envelope the document was opened from (read-only by nature), if so.
+    pub envelope: Option<EnvelopeInfo>,
+    /// The envelope file's own bytes, as opened: what Save writes for an envelope document —
+    /// the signed envelope, never the unsigned PDF inside it, so saving over the `.p7m` cannot
+    /// replace it. `None` on every other document.
+    pub(crate) envelope_file: Option<Arc<Vec<u8>>>,
+    /// The exact PDF bytes the envelope encapsulated, untouched by any repair or layout its
+    /// open performed on the working `bytes`: what [`Session::extract_original`] hands out,
+    /// byte-identical to what was signed. `None` on every other document.
+    pub(crate) envelope_content: Option<Arc<Vec<u8>>>,
     /// Interactive form fields of the current state (empty without a form).
     pub form: Arc<Vec<pdfcraft_forms::Field>>,
     pub(crate) marker_scan: OnceLock<pdfcraft_edit::MarkerScan>,
@@ -624,7 +657,7 @@ impl Document {
     /// The file as last opened or saved, without unsaved edits: what an incremental save appends
     /// to. This stays that file when undo has restored an older snapshot.
     pub fn saved_bytes(&self) -> Arc<Vec<u8>> {
-        self.editor.as_ref().map_or_else(|| self.bytes.clone(), |e| e.saved.clone())
+        self.editor.as_ref().map_or_else(|| self.envelope_file.clone().unwrap_or_else(|| self.bytes.clone()), |e| e.saved.clone())
     }
 
     /// Notes about damage repaired while opening (Document Properties ▸ Advanced, notices).

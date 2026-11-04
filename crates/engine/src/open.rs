@@ -7,8 +7,8 @@ use pdfcraft_render::{DocInfo, OpenError, RenderConfig, RenderPool, inspect};
 
 use crate::history::{Editor, Keys, TextBlocksCache};
 use crate::{
-    AppearanceCache, DocId, Document, Session, TrustStore, XFA_SCRIPTS_OFF, XfaLayout, display_bytes, display_config, guard, info_fields, js,
-    note_warnings, recovered_render_password, render_threads, same_pages, signatures_of, xfa, xfa_layout, xfa_values_from_datasets,
+    AppearanceCache, DocId, Document, EnvelopeInfo, Session, TrustStore, XFA_SCRIPTS_OFF, XfaLayout, display_bytes, display_config, guard,
+    info_fields, js, note_warnings, recovered_render_password, render_threads, same_pages, signatures_of, xfa, xfa_layout, xfa_values_from_datasets,
 };
 
 /// Immutable session state needed while a document is prepared away from its owning thread.
@@ -46,6 +46,13 @@ impl OpenContext {
         password: Option<&str>,
     ) -> Result<PreparedDocument, OpenError> {
         let name = name.into();
+        // A CAdES envelope (.p7m, issue #1449) opens as the document it wraps, read-only. The
+        // DER object is structurally disjoint from any PDF (a PDF starts with `%`, DER with a
+        // SEQUENCE), so this one sniff decides which reader sees the bytes.
+        if pdfcraft_sign::p7m::is_cms_envelope(&bytes) {
+            return guard(|| Session::prepare_envelope(self, name, bytes, password))
+                .unwrap_or_else(|m| Err(OpenError::Invalid(format!("reading it failed unexpectedly ({m})"))));
+        }
         guard(|| Session::prepare_open_unguarded(self, name, path, bytes, password))
             .unwrap_or_else(|m| Err(OpenError::Invalid(format!("reading it failed unexpectedly ({m})"))))
     }
@@ -82,6 +89,42 @@ impl Session {
     pub fn open(&mut self, name: impl Into<String>, path: Option<String>, bytes: Arc<Vec<u8>>, password: Option<&str>) -> Result<DocId, OpenError> {
         let prepared = self.prepare_open(name, path, bytes, password)?;
         Ok(self.commit_open(prepared))
+    }
+
+    /// Prepare the document a CMS envelope wraps: read-only, with the signer identified.
+    /// Detached signatures and non-PDF content are actionable errors (never a repair).
+    fn prepare_envelope(context: &OpenContext, name: String, bytes: Arc<Vec<u8>>, password: Option<&str>) -> Result<PreparedDocument, OpenError> {
+        let env = pdfcraft_sign::p7m::read(&bytes).map_err(|e| OpenError::Invalid(e.to_string()))?;
+        let content = match env.content {
+            Some(c) => c,
+            // A detached signature has its document beside it, not inside: opening the file
+            // alone has nothing to show (and nothing to verify the signature against).
+            None => return Err(OpenError::Unsupported("this is a detached CAdES signature; the signed document is not inside the file".into())),
+        };
+        if !content.starts_with(b"%PDF-") {
+            let kind = if content.starts_with(b"<?xml") || content.starts_with(b"<") { "XML data" } else { "non-PDF data" };
+            return Err(OpenError::Unsupported(format!("the CAdES envelope contains {kind}, not a PDF")));
+        }
+        // `path` stays None: Save writes a read-only document in full to its path, and that
+        // file is the envelope, which is never rewritten.
+        let content = Arc::new(content);
+        let mut prepared = Self::prepare_open_unguarded(context, strip_p7m(&name), None, content.clone(), password)?;
+        // The user's file is the envelope, not the PDF inside it: the document keeps the
+        // envelope's bytes (what Extract hands out) and no editor of its own.
+        prepared.document.editor = None;
+        prepared.document.read_only_reason =
+            Some("This document is inside a CAdES signature envelope (.p7m); extracting the original PDF makes an editable copy.".into());
+        prepared.document.envelope = Some(EnvelopeInfo {
+            signer: env.signer_name,
+            signing_time: env.signing_time.map(|t| format!("{:04}-{:02}-{:02} {:02}:{:02} UTC", t.year, t.month, t.day, t.hour, t.minute)),
+            digest_ok: env.digest_ok,
+            signers: env.signers,
+            quirks: env.quirks.iter().map(|q| (*q).to_string()).collect(),
+        });
+        prepared.document.envelope_file = Some(bytes);
+        prepared.document.envelope_content = Some(content);
+        prepared.document.dirty = false;
+        Ok(prepared)
     }
 
     fn prepare_open_unguarded(
@@ -333,10 +376,14 @@ impl Session {
             info,
             renderer,
             password: render_password,
+            reopen_password: password.map(str::to_owned),
             dirty: false,
             generation: 0,
             snapshot_generation: 0,
             read_only_reason,
+            envelope: None,
+            envelope_file: None,
+            envelope_content: None,
             form: Arc::new(form),
             marker_scan: OnceLock::new(),
             links: OnceLock::new(),
@@ -353,5 +400,16 @@ impl Session {
             xfa_warnings: Vec::new(),
             edit_notices: Vec::new(),
         }
+    }
+}
+
+/// A display name without one trailing `.p7m` (any case): what the PDF inside the envelope is
+/// called. Anything else is kept as it is.
+fn strip_p7m(name: &str) -> String {
+    // The matched suffix is ASCII, so cutting it off stays on a char boundary.
+    if name.len() >= 4 && name.as_bytes()[name.len() - 4..].eq_ignore_ascii_case(b".p7m") {
+        name[..name.len() - 4].to_string()
+    } else {
+        name.to_string()
     }
 }

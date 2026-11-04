@@ -13,6 +13,12 @@ impl Session {
     /// break its signatures, so with no edits it keeps its bytes, damage and all.
     pub fn save_bytes(&self, id: DocId) -> Result<Arc<Vec<u8>>, EditError> {
         let doc = self.get(id).ok_or(EditError::NoDocument)?;
+        // An envelope document saves as the file it was opened from: the signed envelope,
+        // never the unsigned PDF inside it (Extract makes the editable copy). This is the
+        // read-only Save As path, so saving over the `.p7m` leaves it as it is.
+        if let Some(envelope) = &doc.envelope_file {
+            return Ok(envelope.clone());
+        }
         let Some(editor) = doc.editor.as_ref() else { return Ok(doc.bytes.clone()) };
         let on_saved = Arc::ptr_eq(editor.cos.bytes(), &editor.saved);
         if !editor.cos.is_modified() && on_saved && (!editor.cos.reconstructed() || doc.is_signed()) {

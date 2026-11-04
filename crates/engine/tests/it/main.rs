@@ -5,6 +5,7 @@ mod support {
 }
 
 mod document_fonts;
+mod envelope;
 mod form_rotation;
 mod marked_content_isolation;
 mod ocr_edit;

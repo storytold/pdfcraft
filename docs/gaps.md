@@ -221,6 +221,8 @@ update the numbers.
   [#775](https://github.com/storytold/pdfcraft/issues/775),
   [#718](https://github.com/storytold/pdfcraft/issues/718)).
 - **Impact:** government and legal users sign with tokens and need B-LT/B-LTA.
+- **Done since:** CAdES `.pdf.p7m` envelopes (beyond Acrobat parity) open read-only with the
+  signer shown and the original PDF extractable (`sign.cades-envelope-open`).
 - **Estimate:** 40–70 h; tokens need hardware to test. **Doc:** [pdf-spec-parity.md](pdf-spec-parity.md).
 
 ### 11. Accessibility: only text-only automatic structure creation

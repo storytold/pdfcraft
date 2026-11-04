@@ -64,6 +64,7 @@ impl Automation {
             }
             "doc_close" => self.doc_close(&a)?,
             "doc_save" => self.doc_save(&a)?,
+            "doc_extract_original" => self.doc_extract_original(&a)?,
             "doc_set_info" => {
                 let edit = Edit::SetInfo { key: a.str("key")?.into(), value: a.str("value")?.into() };
                 self.apply(&a, edit)?
@@ -916,6 +917,24 @@ impl Automation {
             _ => json!({}),
         };
         out["script"] = json!(name);
+        Ok(out)
+    }
+    /// Take the PDF out of a CAdES signature envelope: it opens as a new, editable, unsaved
+    /// document; with `out`, the PDF is also written there, atomically. The output path is
+    /// resolved first (a refused path must fail before a copy exists to clean up), and a
+    /// failed write closes the copy so no half-done extraction stays behind.
+    fn doc_extract_original(&mut self, a: &Args) -> Result<Value> {
+        let target = a.opt_str("out")?.map(|p| self.resolve(p, true)).transpose()?;
+        let id = self.doc(a)?.id;
+        let copy = self.session.extract_original(id).map_err(failed)?;
+        let mut out = summary(self.session.get(copy).ok_or_else(|| failed("the document vanished"))?);
+        if let Some(path) = target {
+            let bytes = self.session.get(copy).ok_or_else(|| failed("the document vanished"))?.bytes.clone();
+            write_atomic(&path, &bytes).inspect_err(|_| {
+                self.session.close(copy);
+            })?;
+            out["written"] = json!(path.to_string_lossy().into_owned());
+        }
         Ok(out)
     }
 }

@@ -384,6 +384,9 @@ Estimates unchanged.
 | 2026-10-13 | minor | M2/M6: images with at most 16 bits of samples a pixel (8-bit Separation/DeviceN, 1-4-bit gray or indexed) convert once per pixel value (hayro-interpret patch 28), so spot-colour form backgrounds draw in milliseconds instead of seconds; widgets without `/P` are placed in one pass; the Fields panel no longer searches the form per row and draws only the rows in view. Estimates unchanged. |
 | 2026-10-13 | minor | M3: native-open admission preserves modal/picker ownership; regressions cover queued replies and one-shot picker wakes. Estimates unchanged |
 | 2026-10-14 | minor | M14: Catalan interface and date language (2,592-entry catalog, coverage tests). Estimates unchanged |
+=======
+| 2026-10-14 | minor | M9: CAdES .pdf.p7m envelopes open read-only with the signer shown and the original extractable, beyond Acrobat parity. Estimates unchanged. |
+>>>>>>> 5e0c53a7 (#1449: parity and gap tracking for CAdES envelope open)
 | 2026-10-12 | minor | M13: CLI check directory identity, with overlap and symlink regressions; estimates unchanged |
 | 2026-10-12 | minor | M4: shared Type 3 glyph resources survive extraction, with save/reopen and independent raster regressions; estimates unchanged |
 | 2026-10-12 | minor | M2: packed TIFF-predictor RGB row boundaries, with decoding and page-render regressions; estimates unchanged |
