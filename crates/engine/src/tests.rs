@@ -10485,30 +10485,33 @@ fn pending_button_globals_cannot_leak_into_intervening_edits() {
     }
 }
 
+/// Shared synthetic reset fixture; scripts are disabled while the document and actions are installed.
+fn reset_order_session(reset: &str) -> (Session, DocId) {
+    let mut cos = pdfcraft_cos::Document::open(Arc::new(scripted_form())).unwrap();
+    let source = pdfcraft_forms::fields(&cos).into_iter().find(|f| f.name == "price").unwrap();
+    cos.update_dict(source.obj, |d| {
+        d.set(b"DV".to_vec(), pdfcraft_cos::PdfString::text("7"));
+        d.set(b"V".to_vec(), pdfcraft_cos::PdfString::text("99"));
+    })
+    .unwrap();
+    let bytes = Arc::new(pdfcraft_cos::write_full(&cos, &Default::default()).unwrap());
+    let mut s = Session::new();
+    s.set_javascript(false);
+    let id = s.open("reset-order.pdf", None, bytes, None).unwrap();
+    s.apply(
+        id,
+        Edit::SetDocumentScript { name: "reset".into(), script: Some(format!("var held=getField('price');{reset}var openedValue=held.value;")) },
+    )
+    .unwrap();
+    (s, id)
+}
+
 /// Reinitialization resets before the first event reads, while later writes survive save and Undo/Redo.
 #[test]
 fn doc_open_reset_and_first_event_persist_in_script_order() {
     for reset in ["resetForm();", "resetForm(['price']);"] {
         for (target, restore) in [(None, false), (None, true), (Some("go"), false), (Some("go"), true)] {
-            let mut cos = pdfcraft_cos::Document::open(Arc::new(scripted_form())).unwrap();
-            let source = pdfcraft_forms::fields(&cos).into_iter().find(|f| f.name == "price").unwrap();
-            cos.update_dict(source.obj, |d| {
-                d.set(b"DV".to_vec(), pdfcraft_cos::PdfString::text("7"));
-                d.set(b"V".to_vec(), pdfcraft_cos::PdfString::text("99"));
-            })
-            .unwrap();
-            let bytes = Arc::new(pdfcraft_cos::write_full(&cos, &Default::default()).unwrap());
-            let mut s = Session::new();
-            s.set_javascript(false);
-            let id = s.open("reset-order.pdf", None, bytes, None).unwrap();
-            s.apply(
-                id,
-                Edit::SetDocumentScript {
-                    name: "reset".into(),
-                    script: Some(format!("var held=getField('price');{reset}var openedValue=held.value;")),
-                },
-            )
-            .unwrap();
+            let (mut s, id) = reset_order_session(reset);
             let value = |s: &Session, id, name: &str| s.get(id).unwrap().form.iter().find(|f| f.name == name).unwrap().value.clone();
             let before = [value(&s, id, "price"), value(&s, id, "qty")];
             s.set_javascript(true);
@@ -10593,4 +10596,96 @@ fn reset_baseline_includes_builtin_dependents_without_custom_preview_runs() {
         assert_eq!(value(&s, "price"), ["7"]);
         assert_eq!(value(&s, "total"), ["14"], "existing automatic calculation after a value write is preserved");
     }
+}
+
+/// Native completions preserve reset/default/restore ordering and persist the resulting values.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn native_reset_completion_preserves_values_and_atomic_undo() {
+    use crate::js::InteractiveEvent;
+    for repetitions in [1, 64] {
+        for restore in [false, true] {
+            let (mut s, id) = reset_order_session(&"resetForm(['price']);".repeat(repetitions));
+            s.set_javascript(true);
+            let script =
+                format!("getField('qty').value=held.value;{}openedValue+'/'+getField('qty').value", if restore { "held.value='99';" } else { "" });
+            let pending = s.start_javascript(id, &script, Some("go")).unwrap();
+            let InteractiveEvent::Complete(out) = pending.receiver.recv_timeout(std::time::Duration::from_secs(3)).unwrap() else {
+                panic!("completion")
+            };
+            let out = s.finish_javascript(pending, out).unwrap();
+            assert_eq!(out.error, None);
+            assert_eq!(out.result.as_deref(), Some("7/7"));
+            let value = |s: &Session, id, n: &str| s.get(id).unwrap().form.iter().find(|f| f.name == n).unwrap().value.clone();
+            let expected = if restore { "99" } else { "7" };
+            assert_eq!(value(&s, id, "price"), [expected]);
+            assert_eq!(value(&s, id, "qty"), ["7"]);
+            assert_eq!(s.get(id).unwrap().can_undo(), Some("Run JavaScript"));
+            s.undo(id).unwrap();
+            assert_eq!(value(&s, id, "price"), ["99"]);
+            s.redo(id).unwrap();
+            assert_eq!(value(&s, id, "price"), [expected]);
+            let bytes = s.save_bytes(id).unwrap();
+            s.set_javascript(false);
+            let reopened = s.open("native-reset-saved.pdf", None, bytes, None).unwrap();
+            assert_eq!(value(&s, reopened, "price"), [expected]);
+            assert_eq!(value(&s, reopened, "qty"), ["7"]);
+        }
+    }
+}
+
+/// Over-budget native results are rejected before resetting or committing any PDF edits.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn native_reset_flood_is_rejected_without_changing_the_document() {
+    use crate::js::InteractiveEvent;
+    for repetitions in [65, 10_000] {
+        let mut s = Session::new().with_clock(|| 1_700_000_000);
+        let id = s.open("reset-flood.pdf", None, Arc::new(scripted_form()), None).unwrap();
+        let before = s.save_bytes(id).unwrap();
+        let generation = s.get(id).unwrap().generation;
+        let script = format!("for(var i=0;i<{repetitions};i++)resetForm(['price']);getField('qty').value='uncommitted';");
+        let pending = s.start_javascript(id, &script, Some("go")).unwrap();
+        let InteractiveEvent::Complete(out) = pending.receiver.recv_timeout(std::time::Duration::from_secs(3)).unwrap() else { panic!("completion") };
+        assert_eq!(out.error, None);
+        assert_eq!(out.requests.iter().filter(|r| matches!(r, crate::js::Request::Reset(_))).count(), repetitions);
+        let error = s.finish_javascript(pending, out).expect_err("the reset flood must be rejected before applying it");
+        assert!(error.to_string().contains("reset"), "{error}");
+        assert_eq!(s.get(id).unwrap().generation, generation);
+        assert_eq!(s.get(id).unwrap().can_undo(), None);
+        assert_eq!(s.save_bytes(id).unwrap(), before);
+        assert!(s.run_javascript(id, "1+1", None).unwrap().error.is_none());
+    }
+}
+
+/// The aggregate budget also rejects expensive batches below the reset-count cap.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn native_reset_aggregate_work_is_bounded() {
+    use crate::js::InteractiveEvent;
+    let mut s = Session::new();
+    let id = s.open("large-reset.pdf", None, Arc::new(synthetic_acroform(1200, 500)), None).unwrap();
+    let generation = s.get(id).unwrap().generation;
+    let pending = s.start_javascript(id, "for(var i=0;i<32;i++)resetForm();", None).unwrap();
+    let InteractiveEvent::Complete(out) = pending.receiver.recv_timeout(std::time::Duration::from_secs(3)).unwrap() else { panic!("completion") };
+    assert_eq!(out.error, None);
+    let error = s.finish_javascript(pending, out).expect_err("aggregate reset work must be refused");
+    assert!(error.to_string().contains("reset work limit"), "{error}");
+    assert_eq!(s.get(id).unwrap().generation, generation);
+    assert_eq!(s.get(id).unwrap().can_undo(), None);
+}
+
+/// A huge selector list must be rejected before copying requests or expanding names against fields.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn native_reset_selector_count_is_bounded() {
+    use crate::js::InteractiveEvent;
+    let mut s = Session::new();
+    let id = s.open("selectors.pdf", None, Arc::new(scripted_form()), None).unwrap();
+    let generation = s.get(id).unwrap().generation;
+    let pending = s.start_javascript(id, "resetForm(new Array(4097).fill('price'));", Some("go")).unwrap();
+    let InteractiveEvent::Complete(out) = pending.receiver.recv_timeout(std::time::Duration::from_secs(3)).unwrap() else { panic!("completion") };
+    assert_eq!(out.error, None);
+    assert!(s.finish_javascript(pending, out).unwrap_err().to_string().contains("reset work limit"));
+    assert_eq!(s.get(id).unwrap().generation, generation);
 }

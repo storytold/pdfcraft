@@ -1,5 +1,6 @@
 # PdfCraft roadmap: milestones and what's next
 
+> **2026-11-04 (M6, PR #5699 reset budget):** Reject reset amplification before request copies, preview and PDF mutation; cap reset/selector counts and aggregate estimated work. Add native completion, boundary, flood and large-form regressions; preserve ordered under-budget resets.
 > **2026-11-04 (M6, PR #5699 dependent reset):** Reuse form reset on an isolated comparison document so unnamed built-in calculated text/combo fields are included; retain normal post-write calculation. Extend persisted-default and typed-response regressions.
 > **2026-11-04 (M6, PR #5699 reset ordering):** Reset live field values synchronously, commit resets before final script deltas using a reset baseline, and cover Doc Open reinitialization, save/reopen, Undo/Redo and replay-sensitive UI counters.
 > **2026-11-04 (M6, PR #5699 review):** Bound worker capacity and synchronous deadlines, isolate expired/pending realms before edits, keep script prompts above other dialogs, and cover block ASI, control-position regex literals, event routing and complete undo state. Validation is reported in the PR; parity remains partial.

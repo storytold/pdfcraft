@@ -11,6 +11,50 @@ pub use pdfcraft_js::{Limits, Message, MessageButtons, MessageIcon, Outcome, Pan
 
 use crate::{DocId, Edit, EditError, Session};
 
+/// Reset writeback does two full passes (preview and commit); reject amplification before either.
+const MAX_SCRIPT_RESETS: usize = 64;
+const MAX_SCRIPT_RESET_SELECTORS: usize = 4096;
+const MAX_SCRIPT_RESET_WORK: usize = 1 << 24;
+
+/// Bound request count, selector storage/scans and estimated form/calculation visits before cloning a PDF.
+fn validate_reset_work(fields: &[Field], snapshot_fields: usize, requests: &[Request]) -> Result<(), EditError> {
+    let invalid = || EditError::Invalid("script reset work limit exceeded; use fewer reset calls or combine field selections".into());
+    let (mut resets, mut selectors, mut bytes) = (0usize, 0usize, 0usize);
+    for request in requests {
+        if let Request::Reset(names) = request {
+            resets = resets.saturating_add(1);
+            selectors = selectors.saturating_add(names.len());
+            if resets > MAX_SCRIPT_RESETS || selectors > MAX_SCRIPT_RESET_SELECTORS {
+                return Err(invalid());
+            }
+            bytes = names.iter().fold(bytes, |n, name| n.saturating_add(name.len()));
+        }
+    }
+    if resets == 0 {
+        return Ok(());
+    }
+    let count = fields.len().max(snapshot_fields);
+    let (mut calculations, mut references, mut source_bytes) = (0usize, 0usize, 0usize);
+    for field in fields {
+        use pdfcraft_forms::af::Calculate;
+        if field.actions.calculate != Calculate::None || field.actions.scripts.calculate.is_some() {
+            calculations = calculations.saturating_add(1);
+        }
+        references = references.saturating_add(match &field.actions.calculate {
+            Calculate::Simple { fields, .. } => fields.len(),
+            Calculate::Notation(source) => source.len(),
+            Calculate::None => 0,
+        });
+        source_bytes = source_bytes.saturating_add(field.actions.scripts.calculate.as_ref().map_or(0, String::len));
+    }
+    let per_pass = count.saturating_mul(1usize.saturating_add(calculations).saturating_add(references)).saturating_add(source_bytes);
+    let work = resets.saturating_mul(per_pass).saturating_add(count.saturating_mul(selectors)).saturating_add(bytes).saturating_mul(2);
+    if work > MAX_SCRIPT_RESET_WORK {
+        return Err(invalid());
+    }
+    Ok(())
+}
+
 /// What scripts produced for the viewer since it last looked.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct JsOutput {
@@ -463,6 +507,10 @@ impl Session {
 
     /// Convert the worker snapshot delta and reset requests into permission-checked atomic document edits.
     fn apply_script_outcome(&mut self, id: DocId, states: &[pdfcraft_js::FieldState], mut o: Outcome) -> Result<Outcome, EditError> {
+        if o.requests.iter().any(|r| matches!(r, Request::Reset(_))) {
+            let doc = self.get(id).ok_or(EditError::NoDocument)?;
+            validate_reset_work(&doc.form, states.len(), &o.requests)?;
+        }
         let resets: Vec<Vec<String>> = o
             .requests
             .iter()
@@ -485,8 +533,9 @@ impl Session {
         let mut edits = Vec::new();
         for names in resets {
             let all: Vec<String> = states.iter().map(|f| f.name.clone()).collect();
-            let names: Option<Vec<String>> = (!names.is_empty())
-                .then(|| all.iter().filter(|n| names.iter().any(|x| *n == x || n.starts_with(&format!("{x}.")))).cloned().collect());
+            let names: Option<Vec<String>> = (!names.is_empty()).then(|| {
+                all.iter().filter(|n| names.iter().any(|x| *n == x || n.strip_prefix(x).is_some_and(|rest| rest.starts_with('.')))).cloned().collect()
+            });
             if let Some(doc) = reset_document.as_mut() {
                 // Reuse the actual reset path, whose built-in recalculation uses NoScripts.
                 // Unnamed dependent text/combo values belong to the comparison baseline too.
