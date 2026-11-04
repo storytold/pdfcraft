@@ -111,18 +111,27 @@ pub(super) struct Paint {
     clip: Clip,
 }
 
-/// The user-space bounding box of the clipping path (`W`/`W*`), intersected as clips accumulate.
-/// Two clips are the same cell when their boxes agree to a hundredth of a unit.
-#[derive(Clone, Copy, Debug, Default)]
-pub(super) struct Clip(Option<[f64; 4]>);
+/// The clipping paths (`W`/`W*`) in force: their intersected user-space bounding box, and each path's
+/// fill rule and points. Two clips are the same cell only when every path agrees to a hundredth of a
+/// unit, since equal bounds can still show different parts of a cell.
+#[derive(Clone, Debug, Default)]
+pub(super) struct Clip {
+    bounds: Option<[f64; 4]>,
+    paths: Vec<(bool, Vec<(f64, f64)>)>,
+}
 
 impl PartialEq for Clip {
     fn eq(&self, other: &Clip) -> bool {
-        match (self.0, other.0) {
+        let near = |a: f64, b: f64| (a - b).abs() < 0.01;
+        let same_bounds = match (self.bounds, other.bounds) {
             (None, None) => true,
-            (Some(a), Some(b)) => a.iter().zip(&b).all(|(x, y)| (x - y).abs() < 0.01),
+            (Some(a), Some(b)) => a.iter().zip(&b).all(|(x, y)| near(*x, *y)),
             _ => false,
-        }
+        };
+        let same_path = |a: &(bool, Vec<(f64, f64)>), b: &(bool, Vec<(f64, f64)>)| {
+            a.0 == b.0 && a.1.len() == b.1.len() && a.1.iter().zip(&b.1).all(|(p, q)| near(p.0, q.0) && near(p.1, q.1))
+        };
+        same_bounds && self.paths.len() == other.paths.len() && self.paths.iter().zip(&other.paths).all(|(a, b)| same_path(a, b))
     }
 }
 
@@ -787,7 +796,7 @@ fn show_text(op: &Op, i: usize, state: &mut TextRunState<'_>) -> Result<(), Edit
         visual_order: m.visual_order,
         decodable,
         scope: marked.regions.last().copied().flatten(),
-        paint: Paint { layers: marked.layers.iter().flatten().cloned().collect(), gs: ts.gs.clone(), clip: ts.clip },
+        paint: Paint { layers: marked.layers.iter().flatten().cloned().collect(), gs: ts.gs.clone(), clip: ts.clip.clone() },
         logical_order: false,
         actual_text: false,
         soft_break: state.soft_break,
@@ -818,7 +827,8 @@ pub(super) fn interpret(
     let mut bt = 0usize;
     // The bounding box of the path under construction, and whether `W`/`W*` made it the next clip.
     let mut path_box: Option<[f64; 4]> = None;
-    let mut clip_pending = false;
+    let mut path_pts: Vec<(f64, f64)> = Vec::new();
+    let mut clip_pending: Option<bool> = None;
     let mut marked =
         MarkedContent { regions: std::mem::take(&mut carry.marked), layers: std::mem::take(&mut carry.layers), ..MarkedContent::default() };
     // A rewrite names a wrap (`/PCSoft`) or a break it kept (`/PCHard`) in an empty marker
@@ -873,16 +883,19 @@ pub(super) fn interpret(
             b"m" | b"l" | b"re" | b"c" | b"v" | b"y" => {
                 for (x, y) in path_points(op, &ts.ctm) {
                     path_box = Some(path_box.map_or([x, y, x, y], |b| [b[0].min(x), b[1].min(y), b[2].max(x), b[3].max(y)]));
+                    path_pts.push((x, y));
                 }
             }
-            b"W" | b"W*" => clip_pending = true,
+            b"W" => clip_pending = Some(false),
+            b"W*" => clip_pending = Some(true),
             b"n" | b"S" | b"s" | b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*" => {
-                if clip_pending && let Some(b) = path_box {
-                    let clipped = ts.clip.0.map_or(b, |c| [c[0].max(b[0]), c[1].max(b[1]), c[2].min(b[2]), c[3].min(b[3])]);
-                    ts.clip = Clip(Some(clipped));
+                if let (Some(even_odd), Some(b)) = (clip_pending, path_box) {
+                    ts.clip.bounds = Some(ts.clip.bounds.map_or(b, |c| [c[0].max(b[0]), c[1].max(b[1]), c[2].min(b[2]), c[3].min(b[3])]));
+                    ts.clip.paths.push((even_odd, std::mem::take(&mut path_pts)));
                 }
                 path_box = None;
-                clip_pending = false;
+                path_pts.clear();
+                clip_pending = None;
             }
             b"BT" => {
                 tm = Matrix::IDENTITY;
