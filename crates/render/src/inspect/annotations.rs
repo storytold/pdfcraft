@@ -1,5 +1,7 @@
 use super::core::{limited_pdf_string, pretty_date, spend};
-use super::model::{Annotation, AttachmentSource, DestView, Field, FieldKind, LayerOp, Link, LinkTarget, RemoteDestination, link_replies};
+use super::model::{
+    Annotation, AttachmentSource, DestView, Field, FieldKind, Format3d, LayerOp, Link, LinkTarget, Model3d, RemoteDestination, link_replies,
+};
 use super::navigation::text_string;
 use super::{Dictionary, DocInfo, Entry, HashMap, HashSet, Inspector, Object, ObjectId};
 
@@ -22,6 +24,9 @@ pub(super) const MAX_ANNOTATION_BYTES: usize = 64 << 20;
 /// key does not fit is not listed.
 pub(super) const MAX_LINK_ATTACHMENT_TEXT_BYTES: usize = 16 << 20;
 
+/// 3D models `DocInfo::models_3d` lists. Real files have one per page or fewer.
+pub(super) const MAX_MODELS_3D: usize = 1024;
+
 /// The bytes a listed annotation keeps.
 pub(super) fn retained(a: &Annotation) -> usize {
     let text = [&a.author, &a.contents, &a.modified, &a.name, &a.in_reply_to, &a.state, &a.intent];
@@ -37,6 +42,22 @@ pub(super) fn retained(a: &Annotation) -> usize {
 }
 
 impl<'a> Inspector<'a> {
+    /// The format of a 3D annotation's model: its `/3DD` stream's `/Subtype`, following one 3D
+    /// reference dictionary (`/Type /3DRef`, a stream another annotation shares; §13.6.3).
+    fn format_3d(&self, annot: &Dictionary) -> Format3d {
+        let mut data = annot.get(b"3DD").ok().and_then(|o| self.dict(o));
+        if let Some(d) = data
+            && self.name(d, b"Type").as_deref() == Some("3DRef")
+        {
+            data = d.get(b"3DD").ok().and_then(|o| self.dict(o));
+        }
+        match data.and_then(|d| self.name(d, b"Subtype")).as_deref() {
+            Some("PRC") => Format3d::Prc,
+            Some("U3D") => Format3d::U3d,
+            _ => Format3d::Unknown,
+        }
+    }
+
     /// Whether an annotation is a Fill & Sign mark. Keep in step with
     /// `pdfcraft_annot::is_fill_sign`, which the engine's comment list uses.
     fn is_fill_sign(&self, d: &Dictionary, subtype: &str) -> bool {
@@ -106,6 +127,13 @@ impl<'a> Inspector<'a> {
                         info.has_javascript = true;
                     }
                     info.links.push(link);
+                }
+                continue;
+            }
+            if subtype == "3D" {
+                if info.models_3d.len() < MAX_MODELS_3D {
+                    let rect = rect4(self.resolve(d.get(b"Rect").unwrap_or(&Object::Null)));
+                    info.models_3d.push(Model3d { page, index, rect, format: self.format_3d(d) });
                 }
                 continue;
             }

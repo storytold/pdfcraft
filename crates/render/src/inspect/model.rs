@@ -199,6 +199,29 @@ pub struct Link {
     pub target: LinkTarget,
 }
 
+/// A 3D annotation (ISO 32000-2 §13.6): a 3D model shown in `rect`. It is not a comment, so it is
+/// listed in [`DocInfo::models_3d`](super::DocInfo::models_3d), not with the annotations.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Model3d {
+    pub page: usize,
+    /// Zero-based position in the page's raw `/Annots` array.
+    pub index: usize,
+    /// User space, normalized so `rect[0] <= rect[2]` and `rect[1] <= rect[3]`.
+    pub rect: [f32; 4],
+    pub format: Format3d,
+}
+
+/// The format of a 3D stream's data (`/3DD /Subtype`, ISO 32000-2 §13.6.3).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Format3d {
+    /// PRC (ISO 14739-1), which SOLIDWORKS and other CAD programs write today.
+    Prc,
+    /// U3D (ECMA-363), found in older 3D PDFs.
+    U3d,
+    /// No 3D stream, or one in a format PdfCraft doesn't know.
+    Unknown,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum LinkTarget {
     /// A destination in this document: the 0-based page and where on it the view goes.

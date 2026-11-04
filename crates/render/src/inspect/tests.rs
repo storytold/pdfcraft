@@ -623,6 +623,40 @@ fn page_label_limits_keep_other_ranges_when_one_is_too_long() {
     assert!(info.warnings[0].contains("physical page numbers"), "{:?}", info.warnings);
 }
 
+/// Page 1: a PRC model (as SOLIDWORKS writes it) after a comment, and a 3D annotation without
+/// data. Page 2: a 3D reference to a shared U3D stream, with a flipped `/Rect`.
+const MODELS_3D: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 792 612] /Annots [5 0 R 6 0 R 7 0 R] >> endobj
+4 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 792 612] /Annots [8 0 R] >> endobj
+5 0 obj << /Type /Annot /Subtype /Text /Rect [10 10 30 30] /Contents (note) >> endobj
+6 0 obj << /Type /Annot /Subtype /3D /Rect [50 50 750 550] /3DD 9 0 R >> endobj
+7 0 obj << /Type /Annot /Subtype /3D /Rect [0 0 10 10] >> endobj
+8 0 obj << /Type /Annot /Subtype /3D /Rect [300 400 100 200] /3DD << /Type /3DRef /3DD 10 0 R >> >> endobj
+9 0 obj << /Type /3D /Subtype /PRC /Length 3 >> stream
+PRC
+endstream endobj
+10 0 obj << /Type /3D /Subtype /U3D /Length 3 >> stream
+U3D
+endstream endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+
+#[test]
+fn models_3d_are_listed_with_their_format_and_not_as_comments() {
+    let info = inspect(Arc::new(MODELS_3D.to_vec()), None).expect("opens");
+    assert_eq!(
+        info.models_3d,
+        [
+            Model3d { page: 0, index: 1, rect: [50.0, 50.0, 750.0, 550.0], format: Format3d::Prc },
+            Model3d { page: 0, index: 2, rect: [0.0, 0.0, 10.0, 10.0], format: Format3d::Unknown },
+            Model3d { page: 1, index: 0, rect: [100.0, 200.0, 300.0, 400.0], format: Format3d::U3d },
+        ]
+    );
+    assert_eq!(info.annotations.iter().map(|a| a.subtype.as_str()).collect::<Vec<_>>(), ["Text"]);
+}
+
 const ATTACHMENTS: &[u8] = b"%PDF-1.7
 1 0 obj << /Type /Catalog /Pages 2 0 R /Names << /EmbeddedFiles << /Names [(notes.txt) 6 0 R] >> >> >> endobj
 2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
