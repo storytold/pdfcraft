@@ -4,7 +4,7 @@
 use egui::{Color32, CornerRadius, Pos2, Rect, Stroke, vec2};
 use pdfcraft_render::{DocInfo, PageText};
 
-use super::{DocView, PageEnv, PageFrame, PageSlot, PageXform, Selection, Span, cached_edit_images, click_unit, signature_badges};
+use super::{DocView, NoText, PageEnv, PageFrame, PageSlot, PageXform, Selection, Span, cached_edit_images, click_unit, signature_badges};
 use crate::page_cursor::{Layer, Subject};
 use crate::page_pointer::PagePointer;
 use crate::page_router::{Owner, PagePress, top};
@@ -585,6 +585,7 @@ struct TextGesture<'a> {
     over_text: bool,
     over_link: bool,
     column: bool,
+    offers_ocr: bool,
 }
 
 fn text_pointer_input(ui: &mut egui::Ui, view: &mut DocView, text: &PageText, pointer: TextPointer<'_>) {
@@ -593,7 +594,10 @@ fn text_pointer_input(ui: &mut egui::Ui, view: &mut DocView, text: &PageText, po
     let over_text = text.glyphs.iter().any(|glyph| vx >= glyph.rect[0] && vx <= glyph.rect[2] && vy >= glyph.rect[1] && vy <= glyph.rect[3]);
     let over_link = info.links.iter().any(|link| link.page == page && xf.user_rect(info, page, link.rect).contains(screen_pointer));
     let column = tool == QuickTool::ColumnSelect || ui.input(|input| input.modifiers.alt);
-    let gesture = TextGesture { page, xf, rect, tool, ptr, resp, pointer: screen_pointer, vx, vy, over_text, over_link, column };
+    // Selecting on a page with no text at all (a scan) offers to recognize it, unless that is
+    // already happening in the background.
+    let offers_ocr = text.is_empty() && !view.auto_ocr.running() && matches!(tool, QuickTool::Select | QuickTool::ColumnSelect);
+    let gesture = TextGesture { page, xf, rect, tool, ptr, resp, pointer: screen_pointer, vx, vy, over_text, over_link, column, offers_ocr };
     update_text_cursor(view, &gesture);
     update_selection_on_press(ui, view, text, &gesture);
     update_dragged_selection(view, text, &gesture);
@@ -627,6 +631,9 @@ fn update_selection_on_press(ui: &egui::Ui, view: &mut DocView, text: &PageText,
         {
             view.selection = Some(Selection::run(gesture.page, first, last));
         }
+        if clicks >= 2 && gesture.offers_ocr {
+            view.no_text = Some(NoText { page: gesture.page, at: [gesture.vx, gesture.vy], since: now });
+        }
     }
     if gesture.resp.drag_started() && press_here && !view.router.keeps_drag() {
         view.actions_dismissed = None;
@@ -640,6 +647,7 @@ fn update_selection_on_press(ui: &egui::Ui, view: &mut DocView, text: &PageText,
                 text.nearest(ox, oy).map(|anchor| Selection::run(gesture.page, anchor, anchor))
             };
         }
+        view.no_text = gesture.offers_ocr.then(|| NoText { page: gesture.page, at: [ox, oy], since: ui.input(|input| input.time) });
     }
 }
 
