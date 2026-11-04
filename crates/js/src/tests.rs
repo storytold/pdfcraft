@@ -91,14 +91,8 @@ fn choice_and_check_box_object_model() {
 fn current_value_indices_are_derived_for_unindexed_choice_fields() {
     let mut size = FieldState::new("size", FieldType::ComboBox, vec!["m".into()]);
     size.options = vec![("s".into(), "Small".into()), ("m".into(), "Medium".into()), ("l".into(), "Large".into())];
-    let o = run(
-        "event.value = getField('size').currentValueIndices;",
-        &Event::field("Calculate", "total", ""),
-        &doc(),
-        &[size],
-        &[],
-        Limits::default(),
-    );
+    let o =
+        run("event.value = getField('size').currentValueIndices;", &Event::field("Calculate", "total", ""), &doc(), &[size], &[], Limits::default());
     assert_eq!(o.error, None);
     assert_eq!(o.value, "1");
 }
