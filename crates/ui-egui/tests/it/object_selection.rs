@@ -753,7 +753,7 @@ fn delete_and_backspace_in_a_text_field_leave_the_selection_alone() {
     // The page number box in the toolbar.
     assert!(h.state_mut().execute("view.focus_page_input"));
     h.run_steps(2);
-    let page_input = egui::Id::new(("page-input", h.state().views[0].id.0));
+    let page_input = egui::Id::unique(("page-input", h.state().views[0].id.0));
     assert!(h.ctx.memory(|m| m.has_focus(page_input)));
     for key in [Key::Backspace, Key::Delete] {
         h.key_press(key);
@@ -823,8 +823,8 @@ fn bring_to_front_in_the_page_menu_restacks_the_path_and_keeps_it_selected() {
     click(&mut h, p, Modifiers::NONE);
     h.get_by_label("1 object selected");
     right_click(&mut h, p);
-    assert!(!disabled(&h, "Arrange ⏵"));
-    menu_item(&mut h, "Arrange ⏵", "Bring to front");
+    assert!(!disabled(&h, "Arrange"));
+    menu_item(&mut h, "Arrange", "Bring to front");
     assert_eq!(fills(&h), [blue, pale]);
     assert_eq!(undo_label(&h).as_deref(), Some("Bring to front"));
     h.get_by_label("1 object selected");
@@ -851,8 +851,8 @@ fn align_left_in_the_page_menu_lines_up_the_selection_and_keeps_it() {
     h.get_by_label("2 objects selected");
     right_click(&mut h, panel);
     // Distributing takes three objects, arranging one.
-    assert!(disabled(&h, "Distribute ⏵") && disabled(&h, "Arrange ⏵"));
-    menu_item(&mut h, "Align ⏵", "Left");
+    assert!(disabled(&h, "Distribute") && disabled(&h, "Arrange"));
+    menu_item(&mut h, "Align", "Left");
     let after = objects(&h);
     for old in &before {
         let new = after.iter().find(|o| o.target == old.target).unwrap();
@@ -862,7 +862,7 @@ fn align_left_in_the_page_menu_lines_up_the_selection_and_keeps_it() {
     assert_eq!(undo_label(&h).as_deref(), Some("Align objects"));
     // Again: the engine's refusal is said, and the selection stays.
     right_click(&mut h, panel);
-    menu_item(&mut h, "Align ⏵", "Left");
+    menu_item(&mut h, "Align", "Left");
     assert!(h.state().toast.as_ref().unwrap().0.contains("Align objects failed: the objects are already aligned"));
     assert_eq!(objects(&h), after);
     // The figure is still selected along with the panel: Delete takes both.
@@ -907,7 +907,7 @@ fn the_page_menu_leaves_text_out_of_arrange_and_deletes_it_only_without_paths() 
     click(&mut h, headline, Modifiers::SHIFT);
     h.get_by_label("1 object selected");
     right_click(&mut h, headline);
-    assert!(disabled(&h, "Arrange ⏵") && disabled(&h, "Align ⏵"));
+    assert!(disabled(&h, "Arrange") && disabled(&h, "Align"));
     h.get_all_by_label("Delete").last().unwrap().click();
     h.run_steps(4);
     let after = objects(&h);
@@ -952,7 +952,7 @@ fn an_arrange_with_nothing_to_pass_explains_and_changes_nothing() {
     let p = at(&h, 330.0, 380.0);
     click(&mut h, p, Modifiers::NONE);
     right_click(&mut h, p);
-    menu_item(&mut h, "Arrange ⏵", "Bring to front");
+    menu_item(&mut h, "Arrange", "Bring to front");
     assert!(h.state().toast.as_ref().unwrap().0.contains("Bring to front failed: nothing above this object overlaps it"));
     assert!(!dirty(&h));
     h.get_by_label("1 object selected");
@@ -985,12 +985,12 @@ fn an_arranged_copy_stacked_on_its_twin_stays_selected() {
     click(&mut h, p, Modifiers::SHIFT);
     h.get_by_label("1 object selected");
     right_click(&mut h, p);
-    menu_item(&mut h, "Arrange ⏵", "Send to back");
+    menu_item(&mut h, "Arrange", "Send to back");
     assert_eq!(undo_label(&h).as_deref(), Some("Send to back"));
     h.get_by_label("1 object selected");
     // The selection followed the copy down: it has its twin to pass again.
     right_click(&mut h, p);
-    menu_item(&mut h, "Arrange ⏵", "Bring to front");
+    menu_item(&mut h, "Arrange", "Bring to front");
     assert_eq!(undo_label(&h).as_deref(), Some("Bring to front"));
     h.get_by_label("1 object selected");
 }
@@ -1005,7 +1005,7 @@ fn an_aligned_paragraph_with_a_twin_elsewhere_stays_selected() {
     }
     h.get_by_label("2 objects selected");
     right_click(&mut h, panel);
-    menu_item(&mut h, "Align ⏵", "Left");
+    menu_item(&mut h, "Align", "Left");
     assert_eq!(undo_label(&h).as_deref(), Some("Align objects"));
     h.get_by_label("2 objects selected");
 }

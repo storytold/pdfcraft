@@ -283,8 +283,8 @@ fn spooler_arguments_and_printer_list() {
     assert_eq!(
         parse_lpstat(out),
         [
-            spool::Printer { name: "Office_Laser".into(), default: true, two_sided: None },
-            spool::Printer { name: "Label_Writer".into(), default: false, two_sided: None }
+            spool::Printer { name: "Office_Laser".into(), default: true, two_sided: None, description: String::new() },
+            spool::Printer { name: "Label_Writer".into(), default: false, two_sided: None, description: String::new() }
         ]
     );
     assert!(parse_lpstat("lpstat: No destinations added.\nno system default destination\n").is_empty());
@@ -303,6 +303,107 @@ fn spooler_arguments_and_printer_list() {
         "-d Office_Laser -n 3 -t memo.pdf -o collate=false -o sides=two-sided-long-edge -o print-color-mode=monochrome -o fit-to-page=false"
     );
     assert_eq!(lp_args(&Job::default())[0], "-n", "no -d: the default printer");
+}
+
+/// The job name and owner, read from the `lp` arguments, since `lp_args` drops a value it can't
+/// pass on: the job must reach the spooler named, whatever its title holds (#5743).
+#[test]
+fn a_job_names_its_title_and_owner_to_the_spooler() {
+    let args_for = |title: &str, owner: Option<&str>| {
+        let job = Job { title: title.into(), ..Job::default() };
+        lp_args(&spool::with_job_info(&job, owner))
+    };
+    let option = |args: &[String], key: &str| {
+        let prefix = format!("com.apple.print.JobInfo.{key}=");
+        args.iter().find_map(|a| a.strip_prefix(prefix.as_str()).map(str::to_string))
+    };
+    let args = args_for("memo.pdf", Some("sam"));
+    assert_eq!(option(&args, "PMJobName").as_deref(), Some("memo.pdf"), "{args:?}");
+    assert_eq!(option(&args, "PMJobOwner").as_deref(), Some("sam"), "{args:?}");
+    // The title keeps its place as `-t`, in full.
+    assert!(args_for("Q3 report: a/b=\"c\".pdf", None).windows(2).any(|w| w[0] == "-t" && w[1] == "Q3 report: a/b=\"c\".pdf"));
+
+    let named = args_for("Q3 report: a/b=\"c\".pdf", None);
+    assert_eq!(option(&named, "PMJobName").as_deref(), Some("Q3_report__a_b__c_.pdf"), "what lp can't be given becomes _");
+    assert_eq!(option(&named, "PMJobOwner").as_deref(), Some("PdfCraft"), "no owner known: the filter still gets one");
+
+    for nothing_left in ["", "   ", "見積書", "/:=\""] {
+        assert_eq!(option(&args_for(nothing_left, Some("")), "PMJobName").as_deref(), Some("PdfCraft"), "{nothing_left:?}");
+    }
+    assert_eq!(option(&args_for("見積書2.pdf", None), "PMJobName").as_deref(), Some("___2.pdf"), "a part of it is kept");
+    let long = option(&args_for(&format!("a{}", "é".repeat(200)), None), "PMJobName").unwrap_or_default();
+    assert_eq!(long.len(), 64, "cut to what lp_args takes, on a multi-byte title too: {long}");
+
+    // What CUPS would quote away or send as another type, as this Mac's libcups does.
+    for (title, name) in [("it's.pdf", "it_s.pdf"), (r"a\b.pdf", "a_b.pdf"), ("{draft}.pdf", "_draft}.pdf"), ("a{b", "a_b")] {
+        assert_eq!(option(&args_for(title, None), "PMJobName").as_deref(), Some(name), "{title:?}");
+    }
+    for boolean in ["true", "TRUE", "false", "False"] {
+        assert_eq!(option(&args_for(boolean, Some(boolean)), "PMJobName").as_deref(), Some("PdfCraft"), "{boolean:?}");
+        assert_eq!(option(&args_for(boolean, Some(boolean)), "PMJobOwner").as_deref(), Some("PdfCraft"), "{boolean:?}");
+    }
+    assert_eq!(option(&args_for("true.pdf", None), "PMJobName").as_deref(), Some("true.pdf"), "only the bare word is a boolean");
+}
+
+/// A job's own values stand: CUPS keeps the last of a repeated option, ignoring the case of its
+/// name, so a default after them would replace what a `doc_print` caller set (#5743).
+#[test]
+fn a_job_keeps_the_title_and_owner_it_already_sets() {
+    let values = |job: &Job, key: &str| -> Vec<String> {
+        let found = spool::with_job_info(job, Some("sam")).options;
+        found.into_iter().filter(|(k, _)| k.eq_ignore_ascii_case(key)).map(|(_, v)| v).collect()
+    };
+    let (name, owner) = ("com.apple.print.JobInfo.PMJobName", "com.apple.print.JobInfo.PMJobOwner");
+    let job = Job { title: "memo.pdf".into(), options: vec![(name.to_string(), "Mine".to_string())], ..Job::default() };
+    assert_eq!(values(&job, name), ["Mine"]);
+    assert_eq!(values(&job, owner), ["sam"], "the one it left out still gets its default");
+
+    let job = Job { title: "memo.pdf".into(), options: vec![(owner.to_ascii_uppercase(), "Theirs".to_string())], ..Job::default() };
+    assert_eq!(values(&job, owner), ["Theirs"]);
+    assert_eq!(values(&job, name), ["memo.pdf"]);
+}
+
+/// Both ways to submit reach `lp` with the job named. `lp` comes from `PATH`, which only a child
+/// process can change here, so the test runs itself again with a stand-in that records its
+/// arguments; no job reaches a real spooler (#5743).
+#[cfg(target_os = "macos")]
+#[test]
+fn a_submitted_job_reaches_lp_named() {
+    const TEST: &str = "tests::a_submitted_job_reaches_lp_named";
+    if let Ok(way) = std::env::var("PDFCRAFT_SUBMIT_TO_STAND_IN") {
+        let job = Job { title: "memo.pdf".into(), ..Job::default() };
+        let sent = match way.as_str() {
+            "submit" => spool::submit(b"%PDF-1.7", &job),
+            _ => spool::submit_with_progress(b"%PDF-1.7", &job, &mut |_, _| {}),
+        };
+        assert!(sent.is_ok(), "{sent:?}");
+        return;
+    }
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = std::env::temp_dir().join(format!("pdfcraft-lp-stand-in-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let lp = dir.join("lp");
+    let recorded = dir.join("args");
+    let script =
+        format!("#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\n/bin/cat > /dev/null\necho 'request id is stand-in-1 (1 file(s))'\n", recorded.display());
+    std::fs::write(&lp, script).expect("stand-in");
+    std::fs::set_permissions(&lp, std::fs::Permissions::from_mode(0o700)).expect("executable");
+    for way in ["submit", "submit_with_progress"] {
+        let _ = std::fs::remove_file(&recorded);
+        let this = std::env::current_exe().expect("this test binary");
+        let child = std::process::Command::new(this)
+            .args(["--exact", TEST, "--nocapture"])
+            .env("PDFCRAFT_SUBMIT_TO_STAND_IN", way)
+            .env("PATH", &dir)
+            .env("USER", "sam")
+            .output()
+            .expect("run the test again");
+        assert!(child.status.success(), "{way}: {}", String::from_utf8_lossy(&child.stdout));
+        let args = std::fs::read_to_string(&recorded).expect("lp was run");
+        assert!(args.lines().any(|a| a == "com.apple.print.JobInfo.PMJobName=memo.pdf"), "{way}: {args}");
+        assert!(args.lines().any(|a| a == "com.apple.print.JobInfo.PMJobOwner=sam"), "{way}: {args}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -327,18 +428,21 @@ fn driverless_printers_join_the_list_without_a_queue() {
     assert_eq!(
         spool::printers_parsed(queues, Some("Basement_Color\nOffice_Laser\n")),
         [
-            spool::Printer { name: "Office_Laser".into(), default: true, two_sided: None },
-            spool::Printer { name: "Basement_Color".into(), default: false, two_sided: None },
+            spool::Printer { name: "Office_Laser".into(), default: true, two_sided: None, description: String::new() },
+            spool::Printer { name: "Basement_Color".into(), default: false, two_sided: None, description: String::new() },
         ],
         "queues first, then the driverless destination; the queue listed twice is not doubled"
     );
     // An old spooler without `-e` (CUPS < 1.7) keeps its queues; only the driverless names are lost.
-    assert_eq!(spool::printers_parsed(queues, None), [spool::Printer { name: "Office_Laser".into(), default: true, two_sided: None }]);
+    assert_eq!(
+        spool::printers_parsed(queues, None),
+        [spool::Printer { name: "Office_Laser".into(), default: true, two_sided: None, description: String::new() }]
+    );
     // The default can itself be driverless (`lpoptions -d` names a destination no queue exists
     // for): it keeps its marker, so the dialog preselects the user's default, not the first queue.
     assert_eq!(
         spool::printers_parsed("system default destination: Basement_Color\n", Some("Basement_Color\n")),
-        [spool::Printer { name: "Basement_Color".into(), default: true, two_sided: None }],
+        [spool::Printer { name: "Basement_Color".into(), default: true, two_sided: None, description: String::new() }],
         "a default destination without a queue is still the default"
     );
     assert!(spool::parse_lpstat_e("\n \n").is_empty(), "no destinations is empty, not [\"\"]");
@@ -414,17 +518,17 @@ fn windows_printers_carry_one_default_and_keep_their_names() {
     // Windows marks the system default with a `*` no queue name may contain; names hold spaces,
     // parentheses and non-ASCII letters, and the lines end with CRLF.
     let printers = parse_windows_printers("*Microsoft Print to PDF\r\nHP LaserJet 400 (Copy 2)\r\nКопир Canon iR\r\n\r\n*XPS via USB\r\n");
-    assert_eq!(printers[0], Printer { name: "Microsoft Print to PDF".into(), default: true, two_sided: None });
-    assert_eq!(printers[1], Printer { name: "HP LaserJet 400 (Copy 2)".into(), default: false, two_sided: None });
-    assert_eq!(printers[2], Printer { name: "Копир Canon iR".into(), default: false, two_sided: None });
+    assert_eq!(printers[0], Printer { name: "Microsoft Print to PDF".into(), default: true, two_sided: None, description: String::new() });
+    assert_eq!(printers[1], Printer { name: "HP LaserJet 400 (Copy 2)".into(), default: false, two_sided: None, description: String::new() });
+    assert_eq!(printers[2], Printer { name: "Копир Canon iR".into(), default: false, two_sided: None, description: String::new() });
     // A spooler marking two defaults: the first still wins, so the dialog has one to preselect.
-    assert_eq!(printers[3], Printer { name: "XPS via USB".into(), default: false, two_sided: None });
+    assert_eq!(printers[3], Printer { name: "XPS via USB".into(), default: false, two_sided: None, description: String::new() });
     assert_eq!(parse_windows_printers("\r\n"), Vec::new());
     // After a tab, whether the driver reports two-sided printing; a tab inside a name stays.
     let sided = parse_windows_printers("*Office PCL\t2\r\nOffice PS\t1\r\nTab\tName\t2\r\n");
-    assert_eq!(sided[0], Printer { name: "Office PCL".into(), default: true, two_sided: Some(true) });
-    assert_eq!(sided[1], Printer { name: "Office PS".into(), default: false, two_sided: Some(false) });
-    assert_eq!(sided[2], Printer { name: "Tab\tName".into(), default: false, two_sided: Some(true) });
+    assert_eq!(sided[0], Printer { name: "Office PCL".into(), default: true, two_sided: Some(true), description: String::new() });
+    assert_eq!(sided[1], Printer { name: "Office PS".into(), default: false, two_sided: Some(false), description: String::new() });
+    assert_eq!(sided[2], Printer { name: "Tab\tName".into(), default: false, two_sided: Some(true), description: String::new() });
 }
 
 /// A PPD shaped like a Fiery's: installable options, multi-line PostScript in the choices, Latin-1
@@ -1058,4 +1162,86 @@ fn a_booklet_prints_both_sides_on_the_short_edge() {
     assert_eq!(booklet_duplex(BookletSubset::BothSides), spool::Duplex::ShortEdge);
     assert_eq!(booklet_duplex(BookletSubset::FrontOnly), spool::Duplex::Off);
     assert_eq!(booklet_duplex(BookletSubset::BackOnly), spool::Duplex::Off);
+}
+
+/// #3502: `/Contents` array pieces are joined with a space, matching the renderer, so a `%`
+/// comment at the end of a piece without a line break continues through the first line of the
+/// next piece in both `impose` and `text_reads_up`.
+#[test]
+fn contents_pieces_join_with_a_space_across_a_trailing_comment() {
+    let build_doc = |first_piece: &[u8]| {
+        let mut doc = Document::new_empty();
+        let font = doc.add(
+            [
+                (b"Type".to_vec(), Object::name("Font")),
+                (b"Subtype".to_vec(), Object::name("Type1")),
+                (b"BaseFont".to_vec(), Object::name("Helvetica")),
+            ]
+            .into_iter()
+            .collect::<Dict>(),
+        );
+        let s1 = doc.add(Stream::from_raw(Dict::new(), first_piece.to_vec()));
+        // Line 1 of s2 draws sideways ("HIDDEN") and 4 characters reading up; line 2 draws upright ("SHOWN").
+        let s2 = doc.add(Stream::from_raw(
+            Dict::new(),
+            b"BT /F1 18 Tf 0 1 -1 0 50 50 Tm (HIDDEN) Tj ET\nBT /F1 18 Tf 1 0 0 1 20 100 Tm (SHOWN) Tj ET".to_vec(),
+        ));
+        let fonts: Dict = [(b"F1".to_vec(), Object::Ref(font))].into_iter().collect();
+        let res: Dict = [(b"Font".to_vec(), Object::Dict(fonts))].into_iter().collect();
+        let pages_root = doc.add(Object::Null);
+        let page = doc.add(
+            [
+                (b"Type".to_vec(), Object::name("Page")),
+                (b"Parent".to_vec(), Object::Ref(pages_root)),
+                (b"MediaBox".to_vec(), Object::Array([0.0, 0.0, 200.0, 300.0].into_iter().map(Object::Real).collect())),
+                (b"Resources".to_vec(), Object::Dict(res)),
+                (b"Contents".to_vec(), Object::Array(vec![Object::Ref(s1), Object::Ref(s2)])),
+            ]
+            .into_iter()
+            .collect::<Dict>(),
+        );
+        doc.set(
+            pages_root,
+            Object::Dict(
+                [
+                    (b"Type".to_vec(), Object::name("Pages")),
+                    (b"Kids".to_vec(), Object::Array(vec![Object::Ref(page)])),
+                    (b"Count".to_vec(), Object::Int(1)),
+                ]
+                .into_iter()
+                .collect(),
+            ),
+        );
+        let cat = doc.add([(b"Type".to_vec(), Object::name("Catalog")), (b"Pages".to_vec(), Object::Ref(pages_root))].into_iter().collect::<Dict>());
+        doc.trailer_mut().set(b"Root".to_vec(), Object::Ref(cat));
+        doc
+    };
+
+    let form_strings = |imposed: Vec<u8>| -> Vec<Vec<u8>> {
+        let out = Document::open(Arc::new(imposed)).unwrap();
+        let page = &pdfcraft_model::pages(&out)[0];
+        let res = out.resolve(page.dict.get(b"Resources").unwrap()).as_dict().cloned().unwrap();
+        let xo = out.resolve(res.get(b"XObject").unwrap()).as_dict().cloned().unwrap();
+        let form_obj = out.resolve(xo.get(b"P0").unwrap());
+        let Object::Stream(form) = &*form_obj else { panic!("form stream") };
+        let body = form.decoded().unwrap();
+        pdfcraft_content::parse(&body)
+            .ops
+            .into_iter()
+            .filter(|op| op.op == b"Tj")
+            .filter_map(|op| op.operands.first().and_then(Object::as_string).map(|s| s.bytes.to_vec()))
+            .collect()
+    };
+
+    // Without a newline at the end of s1, `% comment` swallows line 1 of s2 (`(HIDDEN) Tj`).
+    let commented = build_doc(b"q Q % trailing comment");
+    assert!(!text_reads_up(&commented, 0), "commented-out vertical text on piece 2's first line is not counted");
+    let printed = impose(&commented, &settings(vec![0], Layout::Size(SizeMode::Actual))).unwrap();
+    assert_eq!(form_strings(printed), [b"SHOWN".to_vec()], "impose does not un-comment piece 2's first line");
+
+    // Control: when s1 terminates the comment with a newline, line 1 of s2 is drawn and counted.
+    let with_newline = build_doc(b"q Q % trailing comment\n");
+    assert!(text_reads_up(&with_newline, 0), "6 vertical vs 5 horizontal chars when line 1 is not commented out");
+    let printed_ctrl = impose(&with_newline, &settings(vec![0], Layout::Size(SizeMode::Actual))).unwrap();
+    assert_eq!(form_strings(printed_ctrl), [b"HIDDEN".to_vec(), b"SHOWN".to_vec()]);
 }

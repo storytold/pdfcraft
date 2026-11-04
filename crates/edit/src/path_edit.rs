@@ -90,7 +90,7 @@ fn rewrite(doc: &mut Document, page: usize, edits: &[(usize, Edit)], images: &[u
     let paths = if edits.is_empty() { Vec::new() } else { page_paths(doc, page)? };
     let p = pdfcraft_model::pages(doc).into_iter().nth(page).ok_or(EditError::NoSuchPage(page))?;
     let streams = checked_streams(doc, page)?;
-    let marked: Vec<bool> = streams.iter().map(|(o, _)| crate::stream_tag(doc, o).is_some()).collect();
+    let marked: Vec<bool> = streams.iter().map(|(o, _)| crate::place::stream_tag(doc, o).is_some()).collect();
     let pieces = Pieces::join(&streams.iter().map(|(_, data)| data.as_slice()).collect::<Vec<_>>());
     let ops = pieces.parse().ops;
     let in_mark = |i: usize| ops.get(i).is_some_and(|op| marked.get(pieces.piece_of(op.span.start)) == Some(&true));
@@ -147,8 +147,7 @@ fn rewrite(doc: &mut Document, page: usize, edits: &[(usize, Edit)], images: &[u
                 }
                 // A private clip moves with its path, but PdfCraft's q/Q wrapper streams around the
                 // page's content are left as they are: the path then moves under the clip.
-                let (start, end, placement) =
-                    crate::images::transform_scope(&ops, path.ops.clone(), Some(&in_mark))?.unwrap_or((first, last, path.matrix));
+                let (start, end, placement) = crate::images::transform_scope(&ops, path.ops.clone(), &in_mark)?.unwrap_or((first, last, path.matrix));
                 let inverse =
                     placement.invert().ok_or_else(|| EditError::Invalid("this vector path is drawn flat, so it can't be moved or resized".into()))?;
                 let local = placement.then(t).then(&inverse);

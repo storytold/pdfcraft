@@ -488,7 +488,7 @@ fn arranged(doc: &Document, page: usize, target: ObjectTarget, order: ZOrder) ->
     let p = pdfcraft_model::pages(doc).into_iter().nth(page).ok_or(EditError::NoSuchPage(page))?;
     let streams = checked_streams(doc, page)?;
     // PdfCraft's marks, added items and the `q`/`Q` it puts around the page's own content.
-    let marked: Vec<bool> = streams.iter().map(|(o, _)| crate::stream_tag(doc, o).is_some()).collect();
+    let marked: Vec<bool> = streams.iter().map(|(o, _)| crate::place::stream_tag(doc, o).is_some()).collect();
     let pieces = Pieces::join(&streams.iter().map(|(_, data)| data.as_slice()).collect::<Vec<_>>());
     let (ops, data) = (pieces.parse().ops, pieces.data());
     let foreign = |i: usize| {

@@ -11,6 +11,8 @@ use crate::EditError;
 pub(crate) struct ClipPath {
     pub(crate) path: Arc<BezPath>,
     pub(crate) even_odd: bool,
+    /// Written by PdfCraft's image crop tool (a `/PdfCraftImageCrop MP` before its path).
+    pub(crate) app_crop: bool,
 }
 
 impl ClipPath {
@@ -91,7 +93,11 @@ pub(crate) struct GState {
     pub(crate) placement: Placement,
     stack: Vec<Placement>,
     path: BezPath,
+    /// Where the current subpath started: the current point after `h`.
+    subpath_start: Option<Point>,
     pending_clip: Option<bool>,
+    /// A `/PdfCraftImageCrop MP` marked the clip being built.
+    app_crop: bool,
     /// Glyphs were shown in a clipping mode in the current text object.
     glyph_clip: bool,
 }
@@ -111,14 +117,26 @@ impl GState {
             },
             stack: Vec::new(),
             path: BezPath::new(),
+            subpath_start: None,
             pending_clip: None,
+            app_crop: false,
             glyph_clip: false,
         }
     }
 
-    fn point(&self, x: f64, y: f64) -> Point {
+    fn current_point(&self) -> Option<Point> {
+        match self.path.elements().last() {
+            Some(PathEl::MoveTo(p) | PathEl::LineTo(p)) => Some(*p),
+            Some(PathEl::QuadTo(_, p2) | PathEl::CurveTo(_, _, p2)) => Some(*p2),
+            Some(PathEl::ClosePath) => self.subpath_start,
+            None => None,
+        }
+    }
+
+    /// A user-space point, unless the CTM takes it out of range.
+    fn point(&self, x: f64, y: f64) -> Option<Point> {
         let (x, y) = self.placement.matrix.apply(x, y);
-        Point::new(x, y)
+        (x.is_finite() && y.is_finite()).then(|| Point::new(x, y))
     }
 
     /// Apply one operator. Returns the path a painting operator paints, unless it also clips.
@@ -134,7 +152,7 @@ impl GState {
         // A segment or close before any `m` (or `re`) has no subpath to extend: kurbo panics on
         // it by contract, and the renderer, MuPDF and pdftotext skip it, so it is skipped (#3581).
         // `v` needs the current point itself and checks below.
-        if matches!(op.op.as_slice(), b"l" | b"c" | b"y" | b"h") && self.path.elements().is_empty() {
+        if matches!(op.op.as_slice(), b"l" | b"c" | b"y" | b"h") && self.current_point().is_none() {
             return Ok(None);
         }
         let stroke = op.op.first().is_some_and(u8::is_ascii_uppercase);
@@ -148,7 +166,10 @@ impl GState {
             }
             b"cm" => {
                 if let Some(m) = op.nums::<6>() {
-                    self.placement.matrix = Matrix(m).then(&self.placement.matrix);
+                    let next = Matrix(m).then(&self.placement.matrix);
+                    if next.0.iter().all(|v| v.is_finite()) {
+                        self.placement.matrix = next;
+                    }
                 }
             }
             b"w" => {
@@ -185,47 +206,63 @@ impl GState {
                 }
             }
             b"m" => {
-                if let Some([x, y]) = op.nums::<2>() {
-                    self.path.move_to(self.point(x, y));
+                if let Some([x, y]) = op.nums::<2>()
+                    && let Some(p) = self.point(x, y)
+                {
+                    self.subpath_start = Some(p);
+                    self.path.move_to(p);
                 }
             }
             b"l" => {
-                if let Some([x, y]) = op.nums::<2>() {
-                    self.path.line_to(self.point(x, y));
+                if let Some([x, y]) = op.nums::<2>()
+                    && let Some(p) = self.point(x, y)
+                {
+                    self.path.line_to(p);
                 }
             }
             b"c" => {
-                if let Some([x1, y1, x2, y2, x3, y3]) = op.nums::<6>() {
-                    self.path.curve_to(self.point(x1, y1), self.point(x2, y2), self.point(x3, y3));
+                if let Some([x1, y1, x2, y2, x3, y3]) = op.nums::<6>()
+                    && let (Some(p1), Some(p2), Some(p3)) = (self.point(x1, y1), self.point(x2, y2), self.point(x3, y3))
+                {
+                    self.path.curve_to(p1, p2, p3);
                 }
             }
             b"v" => {
                 if let Some([x1, y1, x2, y2]) = op.nums::<4>()
-                    && let Some(current) = self.path.elements().last().and_then(|e| e.end_point())
+                    && let (Some(p1), Some(p2)) = (self.point(x1, y1), self.point(x2, y2))
+                    && let Some(current) = self.current_point()
                 {
-                    self.path.curve_to(current, self.point(x1, y1), self.point(x2, y2));
+                    self.path.curve_to(current, p1, p2);
                 }
             }
             b"y" => {
-                if let Some([x1, y1, x2, y2]) = op.nums::<4>() {
-                    let end = self.point(x2, y2);
-                    self.path.curve_to(self.point(x1, y1), end, end);
+                if let Some([x1, y1, x2, y2]) = op.nums::<4>()
+                    && let (Some(p1), Some(end)) = (self.point(x1, y1), self.point(x2, y2))
+                {
+                    self.path.curve_to(p1, end, end);
                 }
             }
             b"h" => self.path.close_path(),
             b"re" => {
-                if let Some([x, y, w, h]) = op.nums::<4>() {
-                    self.path.move_to(self.point(x, y));
-                    self.path.line_to(self.point(x + w, y));
-                    self.path.line_to(self.point(x + w, y + h));
-                    self.path.line_to(self.point(x, y + h));
+                if let Some([x, y, w, h]) = op.nums::<4>()
+                    && let (Some(p0), Some(p1), Some(p2), Some(p3)) =
+                        (self.point(x, y), self.point(x + w, y), self.point(x + w, y + h), self.point(x, y + h))
+                {
+                    self.subpath_start = Some(p0);
+                    self.path.move_to(p0);
+                    self.path.line_to(p1);
+                    self.path.line_to(p2);
+                    self.path.line_to(p3);
                     self.path.close_path();
                 }
             }
+            b"MP" if op.name(0) == Some(b"PdfCraftImageCrop") => self.app_crop = true,
             b"W" => self.pending_clip = Some(false),
             b"W*" => self.pending_clip = Some(true),
             b"n" | b"S" | b"s" | b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*" => {
                 let path = std::mem::take(&mut self.path);
+                self.subpath_start = None;
+                let app_crop = std::mem::take(&mut self.app_crop);
                 let Some(even_odd) = self.pending_clip.take() else {
                     return Ok((!op.is("n")).then_some(path));
                 };
@@ -233,7 +270,7 @@ impl GState {
                 // extrema, not controls) are the closed clip's too.
                 let bounds = path.bounding_box();
                 self.placement.clip = intersection(self.placement.clip, [bounds.x0, bounds.y0, bounds.x1, bounds.y1]).unwrap_or([0.0; 4]);
-                self.placement.clips.push(ClipPath { path: Arc::new(closed(&path)), even_odd });
+                self.placement.clips.push(ClipPath { path: Arc::new(closed(&path)), even_odd, app_crop });
             }
             _ => {}
         }

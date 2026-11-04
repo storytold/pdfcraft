@@ -94,7 +94,7 @@ fn pdf(objs: Vec<String>) -> Vec<u8> {
     out
 }
 
-/// Named roots exercise thread lookups even when none of the comments has replies.
+/// Named roots, none with replies: the panel still looks up every root's thread.
 fn named_comments(n: usize) -> Vec<u8> {
     let annots: Vec<String> = (0..n).map(|i| format!("{} 0 R", i + 4)).collect();
     let mut objs = vec![

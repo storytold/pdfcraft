@@ -132,7 +132,7 @@ pub fn page_paths(doc: &Document, page: usize) -> Result<Vec<PagePath>, EditErro
             .unwrap_or_default()
     };
     let (ext_gstates, colour_spaces) = (category(b"ExtGState"), category(b"ColorSpace"));
-    let marked: Vec<bool> = streams.iter().map(|(o, _)| crate::stream_tag(doc, o).is_some()).collect();
+    let marked: Vec<bool> = streams.iter().map(|(o, _)| crate::place::stream_tag(doc, o).is_some()).collect();
     let any_marked = marked.contains(&true);
     let in_mark = |piece: usize| marked.get(piece) == Some(&true);
     let pieces = Pieces::join(&streams.iter().map(|(_, data)| data.as_slice()).collect::<Vec<_>>());
