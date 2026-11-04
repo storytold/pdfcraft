@@ -206,7 +206,13 @@ impl<'a> Tlv<'a> {
 
     /// A non-negative INTEGER that fits in a u64.
     pub fn u64(&self) -> Result<u64, SignError> {
-        if self.tag != tag::INTEGER || self.value.is_empty() || self.value.len() > 9 || self.value[0] & 0x80 != 0 {
+        // (nine bytes only with a 0x00 pad: a nonzero first byte is past 64 bits)
+        if self.tag != tag::INTEGER
+            || self.value.is_empty()
+            || self.value.len() > 9
+            || self.value[0] & 0x80 != 0
+            || (self.value.len() == 9 && self.value[0] != 0)
+        {
             return Err(bad("expected a small non-negative INTEGER"));
         }
         Ok(self.value.iter().fold(0u64, |acc, b| (acc << 8) | *b as u64))
@@ -562,6 +568,20 @@ pub fn algorithm(oid_s: &str, params: Option<&[u8]>) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_nine_byte_integer_needs_a_zero_pad_to_fit_64_bits() {
+        let tlv = |value: &[u8]| {
+            let mut b = vec![tag::INTEGER, value.len() as u8];
+            b.extend_from_slice(value);
+            b
+        };
+        // 2^64 would fold to 0: refused, not read as 0
+        assert!(Tlv::parse_all(&tlv(&[1, 0, 0, 0, 0, 0, 0, 0, 0])).unwrap().u64().is_err());
+        // u64::MAX with its pad is fine
+        let max = [0, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff];
+        assert_eq!(Tlv::parse_all(&tlv(&max)).unwrap().u64().unwrap(), u64::MAX);
+    }
 
     #[test]
     fn try_oid_rejects_signs_and_empty_arcs() {
