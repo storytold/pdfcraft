@@ -349,12 +349,11 @@ fn inline_style_fixture(subtype: &str, flags: i64) -> Document {
     reopen(&doc)
 }
 
-fn assert_inline_style_refusal(mut doc: Document, expected: fn(&AnnotError) -> bool) {
+fn assert_inline_style_refusal(mut doc: Document, change: StyleChange, expected: fn(&AnnotError) -> bool) {
     let page = page_ref(&doc, 0).unwrap();
     let before = annots(&doc, page);
     assert!(matches!(before.as_slice(), [Object::Dict(_)]));
     assert!(!doc.is_modified());
-    let change = StyleChange::new(Some([1.0, 0.0, 0.0]), Some(0.5), Some(2.0), None);
     let error = set_style(&mut doc, 0, 0, change, &meta("refused")).unwrap_err();
     assert!(expected(&error), "unexpected refusal: {error:?}");
     assert_eq!(annots(&doc, page), before, "a refusal must preserve the exact inline entry");
@@ -363,20 +362,47 @@ fn assert_inline_style_refusal(mut doc: Document, expected: fn(&AnnotError) -> b
 
 #[test]
 fn unsupported_inline_style_does_not_promote_the_annotation() {
-    assert_inline_style_refusal(inline_style_fixture("Stamp", 0), |e| matches!(e, AnnotError::Unsupported(s) if s == "Stamp"));
+    assert_inline_style_refusal(
+        inline_style_fixture("Stamp", 0),
+        StyleChange::new(Some([1.0, 0.0, 0.0]), Some(0.5), Some(2.0), None),
+        |e| matches!(e, AnnotError::Unsupported(s) if s == "Stamp"),
+    );
 }
 
 #[test]
 fn locked_inline_style_keeps_its_refusal_precedence_and_document() {
     assert_inline_style_refusal(
         inline_style_fixture("Stamp", super::types::FLAG_LOCKED),
+        StyleChange::new(Some([1.0, 0.0, 0.0]), Some(0.5), Some(2.0), None),
         |e| matches!(e, AnnotError::Invalid(s) if s == "the comment is locked"),
     );
 }
 
 #[test]
 fn foreign_text_inline_style_does_not_promote_the_annotation() {
-    assert_inline_style_refusal(inline_style_fixture("FreeText", 0), |e| matches!(e, AnnotError::Undrawable(s) if s.contains("U+6B22")));
+    assert_inline_style_refusal(
+        inline_style_fixture("FreeText", 0),
+        StyleChange::new(Some([1.0, 0.0, 0.0]), Some(0.5), Some(2.0), None),
+        |e| matches!(e, AnnotError::Undrawable(s) if s.contains("U+6B22")),
+    );
+}
+
+#[test]
+fn invalid_inline_style_does_not_promote_the_annotation() {
+    assert_inline_style_refusal(
+        inline_style_fixture("Square", 0),
+        StyleChange::new(Some([f64::NAN, 0.0, 0.0]), None, None, None),
+        |e| matches!(e, AnnotError::Invalid(s) if s == "invalid style"),
+    );
+}
+
+#[test]
+fn invalid_inline_line_endings_do_not_promote_the_annotation() {
+    assert_inline_style_refusal(
+        inline_style_fixture("Square", 0),
+        StyleChange::new(None, None, None, Some(vec![LineEnding::None, LineEnding::Square])),
+        |e| matches!(e, AnnotError::Invalid(s) if s == "this comment has no line endings to change"),
+    );
 }
 
 #[test]
