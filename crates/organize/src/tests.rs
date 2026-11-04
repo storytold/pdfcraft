@@ -3847,6 +3847,8 @@ fn page_edits_keep_document_parts_and_structure_namespaces() {
         );
         assert_document_parts_and_namespaces_kept(&open(write_full(&doc, &SaveOptions::default()).unwrap()), &format!("{what}, full save"));
     }
+}
+
 /// #3502: a `/Contents` array's pieces are joined with a space, as the renderer joins them, so a
 /// `%` comment at the end of a piece without a line break continues through the first line of the
 /// next piece in both resource pruning (`extract_pages`) and `page_as_form`.
