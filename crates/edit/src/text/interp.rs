@@ -18,13 +18,33 @@ pub(super) struct TextState {
     /// graphics state the text was painted with that [`TextState::ops`] doesn't restate.
     pub(super) stroke: Vec<Op>,
     pub(super) line_width: Option<f64>,
-    ext_gstate: Vec<Vec<u8>>,
+    ext_gstate: Vec<GsSelection>,
     /// The dash pattern and line cap in force (see [`Ts`]): compared, not restated.
     pub(super) dash: Dash,
     pub(super) line_cap: i64,
 }
 
 impl TextState {
+    /// The state a page's content starts in (ISO 32000-2 §8.4.1, §9.3.1): what is in force on
+    /// top of the page, after its content wrapped in `q`/`Q`.
+    pub(crate) fn initial() -> Self {
+        TextState {
+            font: None,
+            char_spacing: 0.0,
+            word_spacing: 0.0,
+            scale: 1.0,
+            leading: 0.0,
+            rise: 0.0,
+            fill: Vec::new(),
+            render_mode: 0,
+            stroke: Vec::new(),
+            line_width: None,
+            ext_gstate: Vec::new(),
+            dash: (Vec::new(), 0.0),
+            line_cap: 0,
+        }
+    }
+
     pub(super) fn of(ts: &Ts) -> Self {
         TextState {
             font: ts.font.as_ref().map(|(n, _)| (String::from_utf8_lossy(n).into_owned(), ts.size)),
@@ -54,13 +74,17 @@ impl TextState {
     ///
     /// A `gs` has no inverse, so a selection `current` has and this state doesn't stays in force:
     /// run these inside a `q`/`Q` that starts from `current`, one per state drawn.
-    pub(crate) fn paint_ops(&self, current: &TextState) -> Vec<Op> {
+    ///
+    /// `ctm` is the CTM where they run. A soft mask is placed by the CTM its `gs` ran at
+    /// (ISO 32000-2 §11.6.5.2), so one selected at another CTM is selected there and the CTM
+    /// set back.
+    pub(crate) fn paint_ops(&self, current: &TextState, ctm: [f64; 6]) -> Vec<Op> {
         let n = pdfcraft_content::num;
         let mut v = Vec::new();
         // The selections both share stay in force; the ones after them are selected again in order.
         let shared = self.ext_gstate.iter().zip(&current.ext_gstate).take_while(|(a, b)| a == b).count();
-        for name in self.ext_gstate.iter().skip(shared) {
-            v.push(Op::new("gs", vec![Object::Name(name.clone())]));
+        for sel in self.ext_gstate.iter().skip(shared) {
+            sel.push_ops(&mut v, ctm);
         }
         // A reselected ExtGState may set `/LW`, so the width (already the effective one) follows it.
         let reselected = !v.is_empty();
@@ -222,7 +246,7 @@ pub(super) struct Ts {
     /// The line width a `w` or an ExtGState's `/LW` set (`None`: the initial 1.0).
     pub(super) line_width: Option<f64>,
     /// The ExtGState resources selected with `gs`, oldest first (see [`select_gs`]).
-    pub(super) ext_gstate: Vec<Vec<u8>>,
+    pub(super) ext_gstate: Vec<GsSelection>,
     /// The dash pattern a `d` or an ExtGState's `/D` set (initially solid: `[] 0`).
     pub(super) dash: Dash,
     /// The line cap a `J` or an ExtGState's `/LC` set (initially 0, butt).
@@ -255,12 +279,38 @@ const MAX_GS: usize = 32;
 /// Record `gs /name` in `list`. A `gs` sets every parameter its dictionary names to an absolute
 /// value, so a later selection of the same dictionary overrides the earlier one completely: the
 /// earlier entry goes, which keeps replaying the list equivalent to replaying the stream.
-fn select_gs(list: &mut Vec<Vec<u8>>, name: &[u8]) {
-    list.retain(|n| n != name);
+fn select_gs(list: &mut Vec<GsSelection>, name: &[u8], anchor: Option<[f64; 6]>) {
+    list.retain(|s| s.name != name);
     if list.len() >= MAX_GS {
         list.remove(0);
     }
-    list.push(name.to_vec());
+    list.push(GsSelection { name: name.to_vec(), anchor });
+}
+
+/// One `gs` selection: the ExtGState's resource name, and the CTM it ran at when the dictionary
+/// has a soft mask, which that CTM places (ISO 32000-2 §11.6.5.2).
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct GsSelection {
+    name: Vec<u8>,
+    anchor: Option<[f64; 6]>,
+}
+
+impl GsSelection {
+    /// Select this ExtGState from where the CTM is `ctm`: at its anchor, then back to `ctm`. Both
+    /// moves need an invertible matrix; without one it is selected where it runs.
+    fn push_ops(&self, v: &mut Vec<Op>, ctm: [f64; 6]) {
+        let gs = Op::new("gs", vec![Object::Name(self.name.clone())]);
+        let moves = self.anchor.filter(|a| *a != ctm).and_then(|a| {
+            let (anchor, here) = (Matrix(a), Matrix(ctm));
+            Some((anchor.then(&here.invert()?), here.then(&anchor.invert()?)))
+        });
+        let Some((to, back)) = moves else {
+            v.push(gs);
+            return;
+        };
+        let cm = |m: Matrix| Op::new("cm", m.0.iter().map(|x| pdfcraft_content::num(*x)).collect());
+        v.extend([cm(to), gs, cm(back)]);
+    }
 }
 
 /// The text-showing operators of one stream with their text, font, box and baseline.
@@ -917,14 +967,15 @@ pub(super) fn interpret(
             b"Ts" => ts.rise = op.num(0).unwrap_or(0.0),
             b"Tr" => ts.render_mode = op.operands.first().and_then(Object::as_int).unwrap_or(-1),
             b"gs" => {
-                if let Some(name) = op.name(0) {
-                    select_gs(&mut ts.ext_gstate, name);
-                }
                 let mut held = None;
                 let params = match op.name(0).and_then(|name| states.get(name)) {
                     Some(p) => super::dict_in_place(doc, p, &mut held),
                     None => None,
                 };
+                if let Some(name) = op.name(0) {
+                    let masked = params.and_then(|p| p.get(b"SMask")).is_some_and(|m| doc.resolve(m).as_dict().is_some());
+                    select_gs(&mut ts.ext_gstate, name, masked.then_some(ts.ctm.0));
+                }
                 if let Some(params) = params {
                     ts.gs.apply(doc, params);
                     // `/LW` sets the line width as `w` does (ISO 32000-2 §8.4.5).

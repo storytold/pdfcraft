@@ -6388,6 +6388,126 @@ fn group_selection_refuses_incomplete_content_and_resource_budget_overruns() {
     assert!(editable_objects(&doc, 0).is_err(), "an undecodable stream is refused");
 }
 
+/// Invisible text moves on top only when something painted after it covers it: an XObject drawn
+/// over its box (an image, or a form holding one), or any inline image or shading. An image
+/// clipped away entirely, or drawn elsewhere, does not move it.
+#[test]
+fn revealed_text_moves_on_top_only_when_painted_over() {
+    let on_top_of = |doc: Document| {
+        let block = text::text_blocks(&doc, 0).unwrap().remove(0);
+        let ops = pdfcraft_content::parse(&page_content_bytes(&doc, 0)).ops;
+        let at = ops.iter().position(|o| o.is("BT")).unwrap();
+        revealed_under_paint(&doc, 0, block.invisible, block.rect, &ops, at)
+    };
+    let on_top = |content: &str| on_top_of(image_page_with(content));
+    let scan = "q 200 0 0 100 100 100 cm /Im0 Do Q";
+    assert!(on_top(&format!("BT /F1 12 Tf 3 Tr 110 150 Td (Under) Tj ET {scan}")), "the scan covers it");
+    assert!(!on_top(&format!("BT /F1 12 Tf 3 Tr 400 600 Td (Away) Tj ET {scan}")), "an image elsewhere");
+    assert!(!on_top(&format!("{scan} BT /F1 12 Tf 3 Tr 110 150 Td (Over) Tj ET")), "the scan is drawn first");
+    assert!(!on_top(&format!("BT /F1 12 Tf 0 Tr 110 150 Td (Shown) Tj ET {scan}")), "visible text stays where it is");
+    assert!(!on_top("BT /F1 12 Tf 3 Tr 110 150 Td (Path) Tj ET 0 0 600 800 re f"), "a filled path does not move it");
+    assert!(on_top("BT /F1 12 Tf 3 Tr 400 600 Td (Shade) Tj ET /Sh sh"), "a shading after it");
+    assert!(on_top("BT /F1 12 Tf 3 Tr 400 600 Td (Inline) Tj ET BI /W 1 /H 1 /CS /G /BPC 8 ID x EI"), "an inline image after it");
+    let under = "BT /F1 12 Tf 3 Tr 110 150 Td (Under) Tj ET";
+    let elsewhere = "q 50 0 0 50 400 600 cm /Im0 Do Q";
+    assert!(!on_top(&format!("{under} q 0 0 10 10 re W n {scan} Q")), "the scan is clipped away entirely");
+    assert!(on_top(&format!("{under} {elsewhere} {scan}")), "two images, the second over it");
+    assert!(on_top(&format!("{under} {scan} {elsewhere}")), "two images, the first over it");
+    assert!(!on_top(&format!("{under} {elsewhere} {elsewhere}")), "two images, neither over it");
+    let in_form = |content: &str| {
+        let page = "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> /XObject << /Fm0 7 0 R >> >> >>";
+        let image = stream("/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", "A");
+        let form = stream("/Type /XObject /Subtype /Form /BBox [0 0 1 1] /Resources << /XObject << /Im0 6 0 R >> >>", "/Im0 Do");
+        let objs = [
+            "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+            page.into(),
+            stream("", content),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into(),
+            image,
+            form,
+        ];
+        on_top_of(build(&objs.iter().map(String::as_str).collect::<Vec<_>>()))
+    };
+    assert!(in_form(&format!("{under} q 200 0 0 100 100 100 cm /Fm0 Do Q")), "a form holding the scan, over it");
+    assert!(!in_form(&format!("{under} q 50 0 0 50 400 600 cm /Fm0 Do Q")), "a form holding an image elsewhere");
+}
+
+/// Revealed OCR text is checked where the rewrite lands, not only where it was: an image drawn
+/// after it over just the moved or grown text still lifts the text on top, on both rewrite paths.
+#[test]
+fn an_ocr_rewrite_goes_on_top_of_paint_over_where_it_lands() {
+    let scan = "q 200 0 0 100 100 100 cm /Im0 Do Q";
+    let moved = text::BlockStyle { offset: Some([-290.0, -450.0]), ..Default::default() };
+    let sized = text::BlockStyle { size: Some(24.0), ..Default::default() };
+    let spaced = text::BlockStyle { line_spacing: Some(3.0), ..Default::default() };
+    let range = text::RangeStyle {
+        range: 0..2,
+        family: None,
+        resource: None,
+        size: Some(120.0),
+        color: None,
+        underline: None,
+        char_spacing: None,
+        scale: None,
+    };
+    let enlarged = text::BlockStyle { ranges: vec![range], ..Default::default() };
+    let above = "q 200 0 0 60 100 200 cm /Im0 Do Q";
+    let cases = [
+        ("BT /F1 12 Tf 3 Tr 400 600 Td (Away) Tj ET", "Moved", &moved),
+        ("BT /F1 12 Tf 3 Tr 400 600 Td (Away) Tj ET", "Moved\nTwice", &moved),
+        ("BT /F1 12 Tf 3 Tr 40 150 Td (Hi) Tj ET", "Hello there, this line now runs well past the scan's left edge", &text::BlockStyle::default()),
+        ("BT /F1 12 Tf 3 Tr 40 150 Td (Hi) Tj ET", "Hello there,\nthis line now runs well past the scan's left edge", &text::BlockStyle::default()),
+        ("BT /F1 12 Tf 3 Tr 110 230 Td (Above) Tj ET", "One\nTwo\nThree\nFour\nFive\nSix", &text::BlockStyle::default()),
+    ];
+    let low = "q 200 0 0 30 100 300 cm /Im0 Do Q";
+    let cases = cases.into_iter().map(|(c, e, s)| (c, e, s, scan)).chain([
+        ("BT /F1 12 Tf 3 Tr 110 500 Td (Above) Tj ET", "One\nTwo\nThree\nFour\nFive\nSix", &sized, low),
+        ("BT /F1 12 Tf 3 Tr 110 500 Td (Above) Tj ET", "One\nTwo\nThree\nFour\nFive\nSix", &spaced, low),
+        ("BT /F1 12 Tf 3 Tr 110 150 Td (Hi there) Tj ET", "Hi there", &enlarged, above),
+    ]);
+    for (content, edit, style, scan) in cases {
+        let mut doc = image_page_with(&format!("{content} {scan}"));
+        let before = text::text_blocks(&doc, 0).unwrap().remove(0);
+        let ops = pdfcraft_content::parse(&page_content_bytes(&doc, 0)).ops;
+        let at = ops.iter().position(|o| o.is("BT")).unwrap();
+        assert!(!revealed_under_paint(&doc, 0, true, before.rect, &ops, at), "{edit:?}: the old box alone is clear of the scan");
+        text::rewrite_block(&mut doc, 0, 0, Some(edit), style).unwrap();
+        let ops = pdfcraft_content::parse(&page_content_bytes(&doc, 0)).ops;
+        let scan_at = ops.iter().position(|o| o.is("Do")).unwrap();
+        let shows = ["Tj", "TJ", "'", "\""];
+        assert!(ops.iter().skip(scan_at).any(|o| shows.iter().any(|s| o.is(s))), "{edit:?}: the rewrite is drawn over the scan");
+    }
+}
+
+/// [`crate::Reach`] grows the old box to the move, the width either way and the lines below.
+#[test]
+fn a_rewrites_reach_covers_its_move_width_and_lines() {
+    let reach = |offset, width, rows, upright| crate::Reach { rect: [10.0, 90.0, 30.0, 100.0], offset, width, rows, pitch: 10.0, upright }.bounds();
+    assert_eq!(reach([0.0, 0.0], 20.0, 1, true), [10.0, 90.0, 30.0, 110.0]);
+    assert_eq!(reach([5.0, -50.0], 20.0, 1, true), [10.0, 40.0, 35.0, 100.0]);
+    assert_eq!(reach([0.0, 0.0], 50.0, 3, true), [-20.0, 70.0, 60.0, 110.0]);
+    assert_eq!(reach([0.0, 0.0], 30.0, 4, false), [-40.0, 40.0, 80.0, 150.0]);
+    assert_eq!(reach([f64::NAN, 0.0], 20.0, 1, true)[0], f64::NEG_INFINITY);
+    let larger = crate::Reach { rect: [10.0, 90.0, 30.0, 100.0], offset: [0.0, 0.0], width: 20.0, rows: 1, pitch: 24.0, upright: true };
+    assert_eq!(larger.bounds(), [10.0, 76.0, 30.0, 124.0], "a larger size grows the line up as well as down");
+}
+
+/// Revealed OCR text may have to go on top of the page; a page whose marked content nests too deep
+/// for that is refused before either rewrite path changes anything.
+#[test]
+fn an_ocr_rewrite_refused_on_top_leaves_the_document_as_it_was() {
+    let content = format!("{} BT /F1 20 Tf 3 Tr 42 44 Td (John) Tj ET /Im Do {}", "/X BMC ".repeat(10_001), "EMC ".repeat(10_001));
+    let mut doc = text_page(&content);
+    assert!(text::text_blocks(&doc, 0).unwrap()[0].invisible);
+    let before = write_full(&doc, &SaveOptions::default()).unwrap();
+    for edit in ["Jane", "Jane\nDoe"] {
+        let error = text::rewrite_block(&mut doc, 0, 0, Some(edit), &text::BlockStyle::default()).unwrap_err();
+        assert!(error.to_string().contains("nested too deeply"), "{edit:?}: {error}");
+        assert!(write_full(&doc, &SaveOptions::default()).unwrap() == before, "{edit:?}: a refused rewrite changes nothing");
+    }
+}
+
 #[test]
 fn group_move_budget_refusals_keep_the_original_page_selectable() {
     let text = text_page(&format!("{} BT /F1 12 Tf 40 400 Td (Target) Tj ET", "n ".repeat(99_995)));
