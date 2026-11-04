@@ -10219,6 +10219,133 @@ fn content_units_does_not_swallow_subsequent_units_on_standalone_gs() {
     assert_eq!(units.len(), 2);
 }
 
+/// A 1 × 1 grey inline image whose one sample is `data`.
+fn inline_image(data: char) -> String {
+    format!("BI /W 1 /H 1 /CS /G /BPC 8 ID {data} EI")
+}
+
+/// What page 0 paints, in order: `BI x` for an inline image with sample `x`, `Do x,y` for an
+/// XObject placed by a `cm` translating to x,y, and `Tj` for text. A `cm` lasts until its `Q`, so an
+/// XObject moved out of its `q`/`Q` wrapper shows as a bare `Do `.
+fn painted(doc: &Document) -> Vec<String> {
+    let mut at = vec![String::new()];
+    pdfcraft_content::parse(&page_content_bytes(doc, 0))
+        .ops
+        .iter()
+        .filter_map(|op| match op.op.as_slice() {
+            b"q" => {
+                at.push(at.last().unwrap().clone());
+                None
+            }
+            b"Q" => {
+                at.pop();
+                None
+            }
+            b"cm" => {
+                let m = op.nums::<6>().unwrap();
+                *at.last_mut().unwrap() = format!("{},{}", m[4], m[5]);
+                None
+            }
+            b"Do" => Some(format!("Do {}", at.last().unwrap())),
+            b"BI" => Some(format!("BI {}", String::from_utf8_lossy(&op.inline.as_ref().unwrap().1))),
+            b"Tj" => Some("Tj".into()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The index in [`images::page_images`] of the image whose box starts at `x`,`y`.
+fn image_at(doc: &Document, x: f64, y: f64) -> usize {
+    images::page_images(doc, 0).unwrap().iter().position(|i| (i.rect[0] - x).abs() < 1e-6 && (i.rect[1] - y).abs() < 1e-6).unwrap()
+}
+
+#[test]
+fn content_units_keep_each_top_level_inline_image_to_itself() {
+    // The parser emits a whole inline image as one `BI` op; its unit must not run on to the end
+    // (#3146). Inline images at the start, side by side and at the end are one unit each.
+    let content = format!(
+        "{} q 200 0 0 100 100 100 cm /Im0 Do Q {} {} q 10 0 0 10 300 300 cm /Im0 Do Q {}",
+        inline_image('a'),
+        inline_image('b'),
+        inline_image('c'),
+        inline_image('d')
+    );
+    let ops = pdfcraft_content::parse(content.as_bytes()).ops;
+    let units = images::content_units(&ops, 0, ops.len());
+    assert_eq!(units, [0..1, 1..5, 5..6, 6..7, 7..11, 11..12]);
+}
+
+#[test]
+fn content_units_keep_a_nested_inline_image_inside_its_enclosing_unit() {
+    // A `BI` inside `q`/`Q` or a marked-content sequence stays part of that sequence's unit.
+    let content = format!("q {} Q /Span << /MCID 0 >> BDC {} EMC {}", inline_image('a'), inline_image('b'), inline_image('c'));
+    let ops = pdfcraft_content::parse(content.as_bytes()).ops;
+    let units = images::content_units(&ops, 0, ops.len());
+    assert_eq!(units, [0..3, 3..6, 6..7]);
+}
+
+#[test]
+fn send_backward_after_a_top_level_inline_image_moves_one_step() {
+    // Before #3146 the inline image's unit swallowed everything after it, so SendBackward on a later
+    // image acted like SendToBack: it must step behind the text only.
+    let content = format!(
+        "{} q 100 0 0 100 100 100 cm /Im0 Do Q BT /F1 12 Tf 72 700 Td (Middle Text) Tj ET q 150 0 0 150 200 200 cm /Im0 Do Q",
+        inline_image('x')
+    );
+    let mut doc = image_page_with(&content);
+    let front = image_at(&doc, 200.0, 200.0);
+    arrange(&mut doc, 0, front, images::ArrangeOrder::SendBackward).unwrap();
+    let doc = reopen(&doc);
+    assert_eq!(painted(&doc), ["BI x", "Do 100,100", "Do 200,200", "Tj"]);
+}
+
+#[test]
+fn arrange_steps_an_image_past_one_inline_image_at_a_time() {
+    // Before #3146 BringForward on B, inside the first inline image's unit, put it in front of
+    // everything. One step forward is past the next inline image only, and one step back again
+    // is behind that inline image only.
+    let content = format!(
+        "q 100 0 0 100 100 100 cm /Im0 Do Q {} q 150 0 0 150 200 200 cm /Im0 Do Q {} BT /F1 12 Tf 72 700 Td (Text) Tj ET q 50 0 0 50 300 300 cm /Im0 Do Q",
+        inline_image('a'),
+        inline_image('b')
+    );
+    let mut doc = image_page_with(&content);
+    let b = image_at(&doc, 200.0, 200.0);
+    arrange(&mut doc, 0, b, images::ArrangeOrder::BringForward).unwrap();
+    let mut doc = reopen(&doc);
+    assert_eq!(painted(&doc), ["Do 100,100", "BI a", "BI b", "Do 200,200", "Tj", "Do 300,300"]);
+    let b = image_at(&doc, 200.0, 200.0);
+    arrange(&mut doc, 0, b, images::ArrangeOrder::SendBackward).unwrap();
+    let doc = reopen(&doc);
+    assert_eq!(painted(&doc), ["Do 100,100", "BI a", "Do 200,200", "BI b", "Tj", "Do 300,300"]);
+}
+
+#[test]
+fn arrange_around_inline_images_at_the_ends_of_the_stream() {
+    // Before #3146 BringToFront on the last image after an inline image "succeeded" without moving
+    // it. It is already in front, so it is refused and nothing changes.
+    let content =
+        format!("{} q 100 0 0 100 100 100 cm /Im0 Do Q BT /F1 12 Tf 72 700 Td (Text) Tj ET q 150 0 0 150 200 200 cm /Im0 Do Q", inline_image('a'));
+    let mut doc = image_page_with(&content);
+    let before = page_content_bytes(&doc, 0);
+    let front = image_at(&doc, 200.0, 200.0);
+    assert!(arrange(&mut doc, 0, front, images::ArrangeOrder::BringToFront).is_err());
+    assert!(arrange(&mut doc, 0, front, images::ArrangeOrder::BringForward).is_err());
+    assert_eq!(page_content_bytes(&doc, 0), before);
+    // Send to back goes behind the inline image that starts the stream.
+    arrange(&mut doc, 0, front, images::ArrangeOrder::SendToBack).unwrap();
+    let doc = reopen(&doc);
+    assert_eq!(painted(&doc), ["Do 200,200", "BI a", "Do 100,100", "Tj"]);
+
+    // Bring to front goes past the inline image that ends the stream.
+    let content = format!("q 100 0 0 100 100 100 cm /Im0 Do Q BT /F1 12 Tf 72 700 Td (Text) Tj ET {}", inline_image('z'));
+    let mut doc = image_page_with(&content);
+    let back = image_at(&doc, 100.0, 100.0);
+    arrange(&mut doc, 0, back, images::ArrangeOrder::BringToFront).unwrap();
+    let doc = reopen(&doc);
+    assert_eq!(painted(&doc), ["Tj", "BI z", "Do 100,100"]);
+}
+
 #[test]
 fn different_inline_soft_masks_have_distinct_identities() {
     let doc = Document::new_empty();

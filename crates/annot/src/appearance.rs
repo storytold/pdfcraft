@@ -47,7 +47,10 @@ pub fn text_box_size_for_family(text: &str, size: f64, family: pdfcraft_fonts::S
         return Ok([(width + 8.0).clamp(20.0, 600.0), height]);
     }
     if !pdfcraft_fonts::content_text::contains_syriac(text) {
-        return Ok([(text_width(text, size) + 8.0).clamp(20.0, 600.0), size * 1.2 + 6.0]);
+        let longest = text.lines().map(|line| text_width(line, size)).fold(0.0, f64::max);
+        let w = (longest + 8.0).clamp(20.0, 600.0);
+        let rows = wrap(text, size, w - 4.0).len().max(1);
+        return Ok([w, rows as f64 * size * 1.2 + 6.0]);
     }
     let lines = pdfcraft_fonts::content_text::wrap_for_family(text, size, 592.0, family)?;
     let (mut width, mut ascent, mut descent) = (0.0f64, 0.9f64, -0.2f64);

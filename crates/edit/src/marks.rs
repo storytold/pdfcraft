@@ -384,7 +384,12 @@ pub fn expand(template: &str, page_number: u32, count: usize, bates: u64, cx: &C
                 let digits = parts.get(1).and_then(|d| d.parse::<usize>().ok()).unwrap_or(6).clamp(1, 15);
                 format!("{}{:0digits$}{}", parts.get(3).unwrap_or(&""), bates, parts.get(4).unwrap_or(&""))
             }
-            _ => format!("<<{token}>>"),
+            _ => {
+                // Not a token: emit one `<` and retry, so a later token is still found.
+                out.push('<');
+                rest = &rest[start + 1..];
+                continue;
+            }
         };
         out.push_str(&value);
         rest = &after[end + 2..];
@@ -399,4 +404,17 @@ pub(crate) fn bates_start(template: &str) -> Option<u64> {
     let t = &template[i + 2..];
     let t = &t[..t.find(">>")?];
     t.split('#').nth(2).and_then(|s| s.parse().ok()).or(Some(1))
+}
+
+#[cfg(test)]
+mod expand_tests {
+    use super::*;
+
+    #[test]
+    fn expand_token_after_extra_angle_brackets() {
+        let cx = Context::default();
+        assert_eq!(expand("<<<1>>>", 3, 9, 1, &cx), "<3>");
+        assert_eq!(expand("<< <<1>>", 3, 9, 1, &cx), "<< 3");
+        assert_eq!(expand("<<x>> <<1>>", 3, 9, 1, &cx), "<<x>> 3");
+    }
 }

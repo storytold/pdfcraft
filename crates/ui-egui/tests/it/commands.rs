@@ -416,6 +416,9 @@ fn the_shortcuts_dialog_lists_the_real_bindings() {
 
 #[test]
 fn localized_shortcuts_update_immediately_and_keep_command_ids_and_key_bindings() {
+    if crate::support::skip_without_catalogs("localized_shortcuts_update_immediately_and_keep_command_ids_and_key_bindings") {
+        return;
+    }
     let mut h = harness();
     h.ctx.set_os(OperatingSystem::Windows);
     h.state_mut().set_option("language", "de").unwrap();
