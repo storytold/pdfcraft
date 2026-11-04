@@ -3,6 +3,16 @@
 use egui_kittest::Harness;
 use pdfcraft_ui_egui::PdfCraftApp;
 
+/// Held by each test that renders pixels, as in `tests/it`: on runners without a GPU, wgpu falls back to
+/// WARP, whose ARM64 shader JIT crashes when two devices compile at once. Declared before the harness,
+/// so it is released after the device is dropped.
+static GPU: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn gpu() -> std::sync::MutexGuard<'static, ()> {
+    // A test that panicked while holding it leaves nothing to clean up.
+    GPU.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 /// Build a synthetic one-page Helvetica PDF for native Find and Search input regressions.
 fn fixture() -> Vec<u8> {
     let body = "BT /F1 18 Tf 20 150 Td (Page) Tj ET";
@@ -57,6 +67,7 @@ fn type_chars(h: &mut Harness<'static, PdfCraftApp>, text: &str) {
 #[test]
 /// Verify incremental Arabic typing, deletion and Search-panel continuation retain logical query order and render text.
 fn find_bar_keeps_arabic_typing_order() {
+    let _gpu = gpu();
     let mut h = harness();
     h.state_mut().views[0].open_find();
     h.run_steps(2);
@@ -155,6 +166,7 @@ fn find_bar_ink(h: &mut Harness<'static, PdfCraftApp>) -> Vec<u32> {
 /// be in that band. A frozen stack of glyphs is only a few columns wide.
 #[test]
 fn find_bar_paints_both_words_across_the_line() {
+    let _gpu = gpu();
     let mut h = harness();
     h.state_mut().views[0].open_find();
     h.run_steps(2);

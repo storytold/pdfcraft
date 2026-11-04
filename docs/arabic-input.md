@@ -34,7 +34,7 @@ guard follows that native transition so commands do not remain blocked afterward
 The existing opt-in, token-authenticated UI control channel accepts `ui.ime`:
 
 ```sh
-pdfcraft-cli ui --control control.json ime phase=preedit text=مرح selection=[0,3]
+pdfcraft-cli ui --control control.json ime phase=preedit text=مرح selection='[0,3]'
 pdfcraft-cli ui --control control.json ime phase=commit text=مرحبا
 pdfcraft-cli ui --control control.json ime phase=cancel
 ```
