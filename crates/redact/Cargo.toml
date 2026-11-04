@@ -20,7 +20,7 @@ pdfcraft-forms = { workspace = true }
 pdfcraft-edit = { workspace = true }
 pdfcraft-annot = { workspace = true }
 pdfcraft-xfa = { workspace = true }
-# CCITT Group 4 and JBIG2 encoding for cleared one-bit images.
+# CCITT Group 4 and JBIG2 encoding for cleared one-bit images; JPEG and JPEG 2000 decoding.
 pdfcraft-filters = { workspace = true }
 regex = { workspace = true }
 thiserror = { workspace = true }
@@ -29,8 +29,6 @@ unicode-normalization = "0.1"
 # Reads the PDF/A and PDF/UA identification by namespace; already in the build through pdfcraft-xfa.
 roxmltree = "0.21"
 sha2 = "0.11"
-# The JPEG decoder for clearing a DCT (scanned) image in place (#2246).
-image = { version = "0.25", default-features = false, features = ["jpeg"] }
 
 [dev-dependencies]
 pdfcraft-testkit = { workspace = true }

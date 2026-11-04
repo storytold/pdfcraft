@@ -26,6 +26,10 @@
 //! assert!(pdfcraft_filters::decode_ccitt_within(&[], &p, 1, &mut work).is_ok());
 //! ```
 //!
+//! JPEG and JPEG 2000 images decode to their samples on their own too ([`decode_dct`],
+//! [`decode_jpx`]), for code that changes pixels and stores them again; the caller pays for that
+//! first (`pdfcraft_cos::ImageBudget::pay_jpeg`).
+//!
 //! 1-bit samples can be encoded as CCITT Group 4 ([`encode_g4`]) or lossless JBIG2
 //! ([`encode_jbig2`]), a group of images sharing their marks through `/JBIG2Globals`
 //! ([`encode_jbig2_shared`]).
@@ -38,8 +42,10 @@
 mod ascii85;
 mod asciihex;
 mod ccitt;
+mod dct;
 mod flate;
 mod jbig2;
+mod jpx;
 mod lzw;
 mod mq;
 mod predictor;
@@ -48,7 +54,9 @@ mod runlength;
 use std::borrow::Cow;
 
 pub use ccitt::{CcittParams, MAX_CCITT_COLUMNS, MAX_G4_COLUMNS, decode_ccitt_within, encode_g4};
+pub use dct::decode_dct;
 pub use jbig2::{MAX_JBIG2_COLUMNS, MAX_JBIG2_PIXELS, SharedJbig2, decode_jbig2_within, encode_jbig2, encode_jbig2_generic, encode_jbig2_shared};
+pub use jpx::{JpxSamples, decode_jpx};
 
 /// A PDF stream filter, identified by its `/Filter` name.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
