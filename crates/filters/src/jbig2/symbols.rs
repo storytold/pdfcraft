@@ -135,7 +135,7 @@ pub(super) fn encode_shared(images: &[(&[u8], u32, u32)]) -> Option<SharedCoding
     let mut table: Vec<Symbol> = Vec::new();
     let mut by_hash: HashMap<u64, Vec<u32>> = HashMap::new();
     let mut held = 0usize;
-    for (samples, columns, rows) in images {
+    for (samples, columns, _) in images {
         let Some(page) = page(samples, *columns) else { continue };
         // An image's symbols are distinct, so each counts an image once.
         for symbol in page.symbols {
