@@ -27,6 +27,22 @@ pub enum Item {
         content_type: String,
     },
     Widget(Box<Widget>),
+    /// A draw turned about its anchor.
+    Turned(Box<Turned>),
+}
+
+/// A draw turned about its anchor ([`Item::Turned`]). It stays one item, so a page break doesn't
+/// cut it, and what it holds is written unturned under one matrix.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Turned {
+    /// The point it turns about.
+    pub about: (f64, f64),
+    /// Quarter turns counter-clockwise, 1 to 3.
+    pub quarters: u8,
+    /// Top and bottom of its box once turned.
+    pub extent: (f64, f64),
+    /// The draw as it stands before turning.
+    pub items: Vec<Item>,
 }
 
 /// A box with rounded corners ([`Item::Rounded`]).
