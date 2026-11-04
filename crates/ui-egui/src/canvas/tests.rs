@@ -1300,6 +1300,99 @@ fn on_screen_pages_and_tiles_are_admitted_beyond_the_prefetch_allowance() {
     assert_eq!(v.prepare_render_queue(&info, 1.0).len(), 40);
 }
 
+/// `count` pages that each make a 2,980 x 3,850 raster (about 43.8 MiB, a Letter page at fit
+/// width in a 3440 x 1440 window) at scale `1 / size`.
+fn fit_width_pages(count: usize, size: f32) -> DocInfo {
+    let mut info = thumbnail_info(count);
+    for p in &mut info.pages {
+        p.width = 2980.0 * size;
+        p.height = 3850.0 * size;
+    }
+    info
+}
+
+#[test]
+fn large_pages_on_screen_widen_the_allowance_for_the_pages_around_them() {
+    // A wide window at fit width, or smaller pages zoomed in: the raster's size is what counts.
+    for (size, scale) in [(1.0, 1.0), (0.5, 2.0)] {
+        let info = fit_width_pages(5, size);
+        let mut v = DocView::new(DocId(1), &info, ViewDefaults::default());
+        v.frame_visible = HashSet::from([3, 4]);
+        v.frame_queue = (0..5).map(|page| RenderRequest { page, scale, tag: 1000, ..Default::default() }).collect();
+        let pages: Vec<usize> = v.prepare_render_queue(&info, 1.0).iter().map(|r| r.page).collect();
+        assert_eq!(pages, (0..5).collect::<Vec<_>>(), "two pages on screen and three off screen at scale {scale}");
+    }
+}
+
+#[test]
+fn tiled_pages_on_screen_keep_the_128_mib_page_allowance() {
+    let info = fit_width_pages(8, 1.0);
+    let mut v = DocView::new(DocId(1), &info, ViewDefaults::default());
+    v.frame_visible = HashSet::from([3, 4]);
+    // Pages 3 and 4 are on screen as a backdrop and tiles, beside whole pages off screen.
+    let mut queue: Vec<RenderRequest> = [3, 4]
+        .into_iter()
+        .flat_map(|page| {
+            [
+                RenderRequest { page, scale: 0.25, tag: 2000, ..Default::default() },
+                RenderRequest { page, scale: 1.0, tag: 1000, tile: Some(Tile { x: 0, y: 0, w: 1024, h: 1024 }), ..Default::default() },
+            ]
+        })
+        .collect();
+    queue.extend([2, 5, 1, 6, 0, 7].map(|page| RenderRequest { page, scale: 1.0, tag: 1000, ..Default::default() }));
+    v.frame_queue = queue;
+    let pages: Vec<usize> = v.prepare_render_queue(&info, 1.0).iter().filter(|r| r.tile.is_none()).map(|r| r.page).collect();
+    assert_eq!(pages, vec![3, 4, 2, 5], "two backdrops and two whole pages fit in 128 MiB");
+}
+
+#[test]
+fn rasters_on_screen_size_the_allowance_for_arriving_pages() {
+    let ctx = egui::Context::default();
+    ctx.begin_pass(egui::RawInput { max_texture_side: Some(4096), ..Default::default() });
+    let info = fit_width_pages(8, 1.0);
+    let mut v = DocView::new(DocId(1), &info, ViewDefaults::default());
+    let off_screen = RenderRequest { page: 0, scale: 1.0, tag: 1000, ..Default::default() };
+    let mib = 1024 * 1024;
+    assert!(!v.admit_texture(off_screen, 150 * mib), "with nothing on screen the allowance is 128 MiB");
+    v.frame_visible = HashSet::from([3, 4]);
+    v.last_queue = [3, 4].map(|page| RenderRequest { page, scale: 1.0, tag: 1000, ..Default::default() }).to_vec();
+    for req in v.last_queue.clone() {
+        assert!(v.receive_result(&ctx, solid_result(req, 2980, 3850)) > 0, "on-screen page {} uploaded", req.page);
+    }
+    assert!(v.admit_texture(off_screen, 150 * mib), "two 43.8 MiB pages on screen allow 350 MiB, or 256 MiB on the web");
+    assert!(!v.admit_texture(off_screen, 400 * mib), "past the largest allowance");
+    ctx.end_pass().textures_delta.clear();
+}
+
+#[test]
+fn a_raster_held_on_screen_without_a_request_sizes_the_allowance() {
+    let ctx = egui::Context::default();
+    ctx.begin_pass(egui::RawInput { max_texture_side: Some(4096), ..Default::default() });
+    let info = fit_width_pages(8, 1.0);
+    let mut v = DocView::new(DocId(1), &info, ViewDefaults::default());
+    v.frame_visible = HashSet::from([3]);
+    let req = RenderRequest { page: 3, scale: 1.0, tag: 1000, ..Default::default() };
+    v.last_queue = vec![req];
+    assert!(v.receive_result(&ctx, solid_result(req, 2980, 3850)) > 0);
+    // A zoom hold leaves page 3's request out while its raster stays on screen.
+    v.frame_queue = [2, 4, 1].map(|page| RenderRequest { page, scale: 1.0, tag: 1000, ..Default::default() }).to_vec();
+    let pages: Vec<usize> = v.prepare_render_queue(&info, 1.0).iter().map(|r| r.page).collect();
+    assert_eq!(pages, vec![2, 4, 1]);
+    assert!(v.pages.contains_key(&3), "the held raster is kept beside the prefetch");
+    ctx.end_pass().textures_delta.clear();
+}
+
+#[test]
+fn the_page_allowance_is_eight_on_screen_rasters_within_its_limits() {
+    let mib = 1024 * 1024;
+    assert_eq!(cache::page_budget(0), PAGE_BYTES);
+    assert_eq!(cache::page_budget(10 * mib), PAGE_BYTES);
+    assert_eq!(cache::page_budget(20 * mib), 160 * mib);
+    let ceiling = cache::page_budget(usize::MAX);
+    assert_eq!(cache::page_budget(64 * mib), ceiling);
+    assert_eq!(ceiling, if cfg!(target_arch = "wasm32") { 256 * mib } else { 384 * mib });
+}
+
 #[test]
 fn a_page_turned_back_to_is_still_cached() {
     let ctx = egui::Context::default();
@@ -2001,4 +2094,39 @@ fn a_moved_picture_is_drawn_from_the_fresh_raster_while_a_tile_is_still_stale() 
     assert_eq!(red(&pixels, old), 0, "nothing shows where it first was");
     h.state_mut().views[0].stale_tiles.clear();
     h.state_mut().views[0].tiles.clear();
+}
+
+#[test]
+fn image_handles_account_for_document_and_view_rotation() {
+    for page_rotation in [0, 90, 180, 270] {
+        for view_rotation in [0, 90, 180, 270] {
+            let (width, height) = if page_rotation % 180 == 0 { (300.0, 400.0) } else { (400.0, 300.0) };
+            let info = DocInfo {
+                pages: vec![pdfcraft_render::PageInfo {
+                    width,
+                    height,
+                    label: String::new(),
+                    crop: [0.0, 0.0, 300.0, 400.0],
+                    rotation: page_rotation,
+                }],
+                ..Default::default()
+            };
+            let size = if view_rotation % 180 == 0 { vec2(width, height) } else { vec2(height, width) };
+            let xf = PageXform { rect: Rect::from_min_size(pos2(10.0, 20.0), size), rot: view_rotation, pw: width, ph: height };
+            let obb = ImageObb::from_matrix([100.0, 0.0, 0.0, 50.0, 50.0, 70.0], &xf, &info, 0);
+            let total = (page_rotation + view_rotation) % 360;
+            assert_eq!(obb.is_rotated, total != 0, "page={page_rotation} view={view_rotation}: user-labelled grips need matrix resize when turned");
+            for (handle, point) in obb.handles() {
+                let direction = point - obb.screen_center;
+                let cursor = match handle {
+                    ImageHandle::TopLeft | ImageHandle::TopRight | ImageHandle::BottomLeft | ImageHandle::BottomRight => {
+                        if direction.x * direction.y > 0.0 { egui::CursorIcon::ResizeNwSe } else { egui::CursorIcon::ResizeNeSw }
+                    }
+                    _ if direction.x.abs() > direction.y.abs() => egui::CursorIcon::ResizeHorizontal,
+                    _ => egui::CursorIcon::ResizeVertical,
+                };
+                assert_eq!(obb.handle_cursor(handle), cursor, "page={page_rotation} view={view_rotation} handle={handle:?}");
+            }
+        }
+    }
 }
