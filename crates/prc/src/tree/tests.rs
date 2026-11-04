@@ -453,6 +453,27 @@ fn one_step_allowance_covers_the_whole_walk() {
     assert_eq!(two.placements().map(|p| p.len()), Ok(2));
 }
 
+/// Each structure's schema is read once, charged to the walk's allowance: a schema too large
+/// for what is left is an error, not decoded outside the allowance and then skipped.
+#[test]
+fn the_globals_schema_is_charged_to_the_walk() {
+    let mut schema = W::default();
+    // 200 empty entries cost 200 elements.
+    schema.uint(200);
+    for t in 0..200 {
+        schema.uint(50_000 + t).uint(0);
+    }
+    let fs = Fs {
+        globals: globals_after(schema, &[RED], &[], &[], &[]),
+        tree: tree(&[plate(S_RED)], &[Occ { part: 1, ..Occ::default() }]),
+        tess: two_face_square(),
+    };
+    let f = PrcFile::parse(&prc(&[fs], &model(&[(0, 1)]))).unwrap();
+    let walk = |n| f.walk_within(StyleAlpha::default(), EntityOverrides::default(), Budget { elements: n, ..Budget::FULL });
+    assert!(matches!(walk(100), Err(PrcError::TooManyElements { .. })));
+    assert_eq!(walk(1000).map(|w| w.0.len()), Ok(1));
+}
+
 /// Globals that cannot be read are reported, not replaced by empty ones, when an entity
 /// reference names one of their coordinate systems.
 #[test]

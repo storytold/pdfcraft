@@ -56,6 +56,13 @@ impl<'a> BitReader<'a> {
         Self::with_budget(data, Budget { elements, ..Budget::FULL })
     }
 
+    /// This reader, at its position, allowed `budget` instead: what readers of the same
+    /// stream left since it stopped.
+    pub(crate) fn with_remaining(mut self, budget: Budget) -> Self {
+        self.budget = budget;
+        self
+    }
+
     /// What this reader may still spend.
     pub(crate) fn budget(&self) -> Budget {
         self.budget

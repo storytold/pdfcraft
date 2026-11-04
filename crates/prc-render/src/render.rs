@@ -5,7 +5,7 @@
 
 use crate::WorldMesh;
 use crate::raster::{Corner, Target, View, ViewCorner, at};
-use crate::vec3::{cross, dot, length, normalize, scale, sub};
+use crate::vec3::{cross, dot, length, normalize, scale, sub, unit_cross};
 use pdfcraft_prc::TriangleMesh;
 
 /// The largest image [`render`] draws, in pixels (width × height).
@@ -318,7 +318,7 @@ impl Scene {
         let Some(world) = mesh.triangles.get(t).and_then(|tri| corners(mesh, tri)) else {
             return;
         };
-        let Some(face) = normalize(cross(sub(at3(&world, 1), at3(&world, 0)), sub(at3(&world, 2), at3(&world, 0)))) else {
+        let Some(face) = unit_cross(sub(at3(&world, 1), at3(&world, 0)), sub(at3(&world, 2), at3(&world, 0))) else {
             return;
         };
         let stored = stored_normals(mesh, t);
