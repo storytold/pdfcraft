@@ -133,16 +133,16 @@ impl State {
 }
 
 /// The chosen page and an edit to apply after the panel releases its document borrow.
-pub(crate) fn panel(
-    ui: &mut Ui,
-    t: &Tokens,
-    doc: DocId,
-    document: &pdfcraft_engine::Document,
-    tags: &[TagInfo],
-    content: &[TagContentItem],
-    state: &mut State,
-    can_edit: bool,
-) -> (Option<usize>, Option<Edit>) {
+pub(crate) struct PanelContext<'a> {
+    pub(crate) doc: DocId,
+    pub(crate) document: &'a pdfcraft_engine::Document,
+    pub(crate) tags: &'a [TagInfo],
+    pub(crate) content: &'a [TagContentItem],
+    pub(crate) can_edit: bool,
+}
+
+pub(crate) fn panel(ui: &mut Ui, t: &Tokens, state: &mut State, context: PanelContext<'_>) -> (Option<usize>, Option<Edit>) {
+    let PanelContext { doc, document, tags, content, can_edit } = context;
     if state.doc != Some(doc) {
         state.doc = Some(doc);
         state.selected = None;
