@@ -283,20 +283,19 @@ impl PrcFile {
         let mut left = budget;
         let mut trees = Vec::with_capacity(self.file_structures.len());
         for fs in &self.file_structures {
-            let schema = fs.schema()?;
+            // The globals open with the schema every reader of this structure uses: read it
+            // once, charged to the walk, and go on from there for the globals themselves.
+            let mut globals_reader = BitReader::with_budget(fs.section(SectionKind::Globals), left);
+            let schema = Schema::read(&mut globals_reader)?;
+            left = globals_reader.budget();
             let mut ctx = Ctx::new(BitReader::with_budget(fs.section(SectionKind::Tree), left), &schema, fs.authoring_version);
             let tree = ctx.file_structure_tree()?;
             left = ctx.r.budget();
             // The globals carry the coordinate systems and the colours; colours alone are not
             // worth refusing the placements over.
-            let globals = (|| {
-                let mut r = BitReader::with_budget(fs.section(SectionKind::Globals), left);
-                Schema::read(&mut r)?;
-                let mut ctx = Ctx::new(r, &schema, fs.authoring_version);
-                let globals = ctx.globals();
-                left = ctx.r.budget();
-                globals
-            })();
+            let mut ctx = Ctx::new(globals_reader.with_remaining(left), &schema, fs.authoring_version);
+            let globals = ctx.globals();
+            left = ctx.r.budget();
             let globals = match globals {
                 Ok(g) => g,
                 Err(e) if places_by_system(&tree) => return Err(e),
