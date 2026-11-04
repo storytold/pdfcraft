@@ -81,10 +81,11 @@ help/docs polish (catalog and script work are already done), not missing UI stri
 | Romanian | `ro` | 2,798 entries (every current key) | partial; AI-assisted, not yet reviewed line by line by a native speaker | no |
 | Norwegian Bokmål | `nb` | 2,707 entries | partial; native-speaker terminology review by the contributor ([#1836](https://github.com/storytold/pdfcraft/pull/1836)), not yet line by line | yes |
 | Persian | `fa` | 2,785 entries (all but 13 keys of the current 2,798-key union) | partial; AI-assisted, not yet reviewed line by line by a native speaker | no |
+| Hebrew | `he` | 2,763 entries | partial (right-to-left like Arabic, Kurdish and Persian; embedded craft-fonts `Hebr` face with desktop system Hebrew font fallback) | yes (Middle East edition) |
 
-**20 other languages** ship (34 catalogs plus English = **35** interface languages in Preferences).
+**21 other languages** ship (35 catalogs plus English = **36** interface languages in Preferences).
 The entry counts without percentages are as of 2026-10-25; they are not percentages of the older 2,143-key snapshot above. Their presence does not imply a detailed linguistic or runtime review.
-Acrobat languages PdfCraft lacks: Danish, Dutch, Swedish, Hebrew. Vietnamese is shipped here but not by Acrobat.
+Acrobat languages PdfCraft lacks: Danish, Dutch, Swedish. Vietnamese is shipped here but not by Acrobat.
 
 ## Revision history
 

@@ -37,6 +37,18 @@ pub(crate) fn add_resources(doc: &mut Document, page: &pdfcraft_model::Page, opa
         }
         faces.push((name.to_vec(), base));
     }
+    if let Some(c) = content {
+        let parsed = pdfcraft_content::Pieces::join(&[c.to_vec()]).parse();
+        for op in &parsed.ops {
+            if op.is("Tf")
+                && let Some(Object::Name(n)) = op.operands.first()
+                && (n == b"PCOCR" || n.starts_with(b"PCOCR_"))
+                && !faces.iter().any(|(existing, _)| existing == n)
+            {
+                faces.push((n.clone(), "PCOCR"));
+            }
+        }
+    }
     add_page_resources(doc, page, opacity, &faces)
 }
 
@@ -46,14 +58,46 @@ pub(crate) fn page_fonts(doc: &Document, page: &pdfcraft_model::Page) -> Dict {
     res.get(b"Font").map(|f| doc.resolve(f)).and_then(|f| f.as_dict().cloned()).unwrap_or_default()
 }
 
+fn pcocr_cmap_bytes() -> Vec<u8> {
+    let mut cmap_bytes = b"/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def\n/CMapName /PCOCRUnicode def\n/CMapType 2 def\n1 begincodespacerange\n<0000> <FFFF>\nendcodespacerange\n".to_vec();
+    let highs: Vec<u32> = (0..=0xFFu32).filter(|h| !(0xD8..=0xDF).contains(h)).collect();
+    for chunk in highs.chunks(100) {
+        cmap_bytes.extend(format!("{} beginbfrange\n", chunk.len()).bytes());
+        for h in chunk {
+            cmap_bytes.extend(format!("<{h:02X}00> <{h:02X}FF> <{h:02X}00>\n").bytes());
+        }
+        cmap_bytes.extend(b"endbfrange\n");
+    }
+    cmap_bytes.extend(b"endcmap\nCMapName currentdict /CMap defineresource pop\nend\nend\n");
+    cmap_bytes
+}
+
+fn is_compatible_pcocr(doc: &Document, font: &Object, expected_cmap: &[u8]) -> bool {
+    doc.resolve(font).as_dict().is_some_and(|d| {
+        d.name(b"Type") == Some(b"Font")
+            && d.name(b"Subtype") == Some(b"Type0")
+            && d.name(b"BaseFont") == Some(b"PCOCR")
+            && d.name(b"Encoding") == Some(b"Identity-H")
+            && d.get(b"DescendantFonts").and_then(|f| doc.resolve(f).as_array().cloned()).is_some_and(|a| !a.is_empty())
+            && d.get(b"ToUnicode")
+                .and_then(|t| match &*doc.resolve(t) {
+                    Object::Stream(s) => s.decoded_within(64 * 1024).ok(),
+                    _ => None,
+                })
+                .is_some_and(|bytes| bytes == expected_cmap)
+    })
+}
+
 /// A name in `fonts` for the standard face `base` that can't take over a font the page already
-/// draws with: `preferred` when it is free or already names exactly the dictionary
+/// draws with: `preferred` when it is free or already names_exactly the dictionary
 /// [`add_page_resources`] writes for that face, otherwise the first such `preferred_1`,
 /// `preferred_2`… (one of the first `fonts.len() + 1` always is). A font with anything more
 /// (`/ToUnicode`, `/Widths`…) is someone else's, even in the same face.
 pub(crate) fn free_font_name(doc: &Document, fonts: &Dict, preferred: &str, base: &str) -> String {
+    let expected_cmap = (base == "PCOCR").then(pcocr_cmap_bytes);
     let usable = |name: &str| match fonts.get(name.as_bytes()) {
         None => true,
+        Some(font) if base == "PCOCR" => is_compatible_pcocr(doc, font, expected_cmap.as_deref().unwrap_or_default()),
         Some(font) => doc.resolve(font).as_dict().is_some_and(|d| {
             d.len() == 4
                 && d.name(b"Type") == Some(b"Font")
@@ -68,6 +112,15 @@ pub(crate) fn free_font_name(doc: &Document, fonts: &Dict, preferred: &str, base
     (1..=fonts.len().saturating_add(1)).map(|k| format!("{preferred}_{k}")).find(|name| usable(name)).unwrap_or_else(|| preferred.to_string())
 }
 
+/// The font resource name to use for a Unicode OCR text layer on `page` (0-based): `"PCOCR"`
+/// when it is free or already compatible, otherwise `"PCOCR_1"`, `"PCOCR_2"`, …
+pub fn ocr_font_name(doc: &Document, page: usize) -> String {
+    let all = page_list(doc);
+    let Some(p) = all.get(page) else { return "PCOCR".into() };
+    let fonts = page_fonts(doc, p);
+    free_font_name(doc, &fonts, "PCOCR", "PCOCR")
+}
+
 /// Add the standard `faces` (resource name, base font) and an opacity state to the page's own
 /// resources.
 pub(crate) fn add_page_resources(
@@ -79,6 +132,51 @@ pub(crate) fn add_page_resources(
     let mut res = page.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
     let mut fonts = res.get(b"Font").map(|f| doc.resolve(f)).and_then(|f| f.as_dict().cloned()).unwrap_or_default();
     for (name, base) in faces {
+        if *base == "PCOCR" {
+            let cmap_bytes = pcocr_cmap_bytes();
+            let target_name = if fonts.get(name.as_slice()).is_none_or(|existing| is_compatible_pcocr(doc, existing, &cmap_bytes)) {
+                name.clone()
+            } else {
+                free_font_name(doc, &fonts, "PCOCR", "PCOCR").into_bytes()
+            };
+            if fonts.get(target_name.as_slice()).is_some_and(|existing| is_compatible_pcocr(doc, existing, &cmap_bytes)) {
+                continue;
+            }
+            let cmap = doc.add(Object::Stream(Stream::flate(Dict::new(), &cmap_bytes)));
+            let mut desc = Dict::new();
+            desc.set(b"Type".to_vec(), Object::name("FontDescriptor"));
+            desc.set(b"FontName".to_vec(), Object::name("PCOCR"));
+            desc.set(b"Flags".to_vec(), Object::Int(32));
+            desc.set(b"FontBBox".to_vec(), Object::Array(vec![Object::Int(0), Object::Int(-200), Object::Int(1000), Object::Int(800)]));
+            desc.set(b"ItalicAngle".to_vec(), Object::Int(0));
+            desc.set(b"Ascent".to_vec(), Object::Int(800));
+            desc.set(b"Descent".to_vec(), Object::Int(-200));
+            desc.set(b"CapHeight".to_vec(), Object::Int(700));
+            desc.set(b"StemV".to_vec(), Object::Int(80));
+            let desc_ref = doc.add(Object::Dict(desc));
+            let mut sys = Dict::new();
+            sys.set(b"Registry".to_vec(), Object::String(pdfcraft_cos::PdfString::literal(b"Adobe".to_vec())));
+            sys.set(b"Ordering".to_vec(), Object::String(pdfcraft_cos::PdfString::literal(b"Identity".to_vec())));
+            sys.set(b"Supplement".to_vec(), Object::Int(0));
+            let mut cid = Dict::new();
+            cid.set(b"Type".to_vec(), Object::name("Font"));
+            cid.set(b"Subtype".to_vec(), Object::name("CIDFontType2"));
+            cid.set(b"BaseFont".to_vec(), Object::name("PCOCR"));
+            cid.set(b"CIDSystemInfo".to_vec(), Object::Dict(sys));
+            cid.set(b"FontDescriptor".to_vec(), Object::Ref(desc_ref));
+            cid.set(b"DW".to_vec(), Object::Int(500));
+            cid.set(b"CIDToGIDMap".to_vec(), Object::name("Identity"));
+            let cid_ref = doc.add(Object::Dict(cid));
+            let mut font = Dict::new();
+            font.set(b"Type".to_vec(), Object::name("Font"));
+            font.set(b"Subtype".to_vec(), Object::name("Type0"));
+            font.set(b"BaseFont".to_vec(), Object::name("PCOCR"));
+            font.set(b"Encoding".to_vec(), Object::name("Identity-H"));
+            font.set(b"DescendantFonts".to_vec(), Object::Array(vec![Object::Ref(cid_ref)]));
+            font.set(b"ToUnicode".to_vec(), Object::Ref(cmap));
+            fonts.set(target_name, Object::Dict(font));
+            continue;
+        }
         let mut font = Dict::new();
         font.set(b"Type".to_vec(), Object::name("Font"));
         font.set(b"Subtype".to_vec(), Object::name("Type1"));

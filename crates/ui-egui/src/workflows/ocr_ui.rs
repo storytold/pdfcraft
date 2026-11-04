@@ -26,6 +26,7 @@ pub struct OcrDraft {
     pub from: usize,
     pub to: usize,
     pub language: String,
+    pub lang_picked: bool,
     /// "Downsample to" resolution.
     pub dpi: u32,
     /// Also recognize pages that already have text (pictures on them; their text isn't added again).
@@ -34,14 +35,22 @@ pub struct OcrDraft {
 
 impl Default for OcrDraft {
     fn default() -> Self {
-        OcrDraft { pages: OcrPages::All, from: 1, to: 1, language: "en".into(), dpi: 300, text_pages: false }
+        let language = if crate::i18n::current().code() == "he" { "he" } else { "en" };
+        OcrDraft { pages: OcrPages::All, from: 1, to: 1, language: language.into(), lang_picked: false, dpi: 300, text_pages: false }
     }
 }
 
 impl OcrDraft {
     /// The recognition settings these choices make.
     pub fn settings(&self) -> OcrSettings {
-        OcrSettings { dpi: self.dpi as f32, language: self.language.clone(), skip_text_pages: !self.text_pages, ..Default::default() }
+        let language = if self.lang_picked {
+            self.language.clone()
+        } else if crate::i18n::current().code() == "he" {
+            "he".into()
+        } else {
+            "en".into()
+        };
+        OcrSettings { dpi: self.dpi as f32, language, skip_text_pages: !self.text_pages, ..Default::default() }
     }
 }
 
@@ -92,8 +101,11 @@ pub struct AutoOcr {
 
 pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (bool, bool) {
     let pages = app.active_ids().and_then(|(_, id)| app.session.get(id)).map_or(1, |d| d.info.pages.len().max(1));
-    let available = pdfcraft_engine::ocr::available();
     let d = &mut app.ocr_draft;
+    if !d.lang_picked {
+        d.language = if crate::i18n::current().code() == "he" { "he".into() } else { "en".into() };
+    }
+    let available = pdfcraft_engine::ocr::available_for(&d.language);
     d.to = d.to.clamp(1, pages);
     d.from = d.from.clamp(1, d.to);
     ui.label(egui::RichText::new(tl!("Recognize Text")).font(theme::semibold(18.0)));
@@ -123,7 +135,9 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
             let name = LANGUAGES.iter().find(|l| l.0 == d.language).map_or("English", |l| l.1);
             craft_ui::ComboBox::from_id_salt("ocr-language").selected_text(tl!(name)).width(220.0).show_ui(ui, |ui| {
                 for (code, name) in LANGUAGES {
-                    ui.selectable_value(&mut d.language, (*code).to_string(), tl!(*name));
+                    if ui.selectable_value(&mut d.language, (*code).to_string(), tl!(*name)).clicked() {
+                        d.lang_picked = true;
+                    }
                 }
             });
             ui.end_row();
@@ -201,7 +215,8 @@ impl PdfCraftApp {
     /// is one undoable step, "Recognize text", and is not run again for that page after Undo.
     pub(crate) fn auto_ocr_scanned_page(&mut self) {
         let Some(scan) = self.scan_to_read() else { return };
-        if !pdfcraft_engine::ocr::available() {
+        let mut settings = self.ocr_draft.settings();
+        if !pdfcraft_engine::ocr::available_for(&settings.language) {
             self.views[scan.view].auto_ocr_skipped.insert(scan.page, scan.generation);
             return;
         }
@@ -209,7 +224,6 @@ impl PdfCraftApp {
         // Only a page with no text of its own is read. Comments and text boxes over the picture do
         // not count as its text (a scan with a few comments is still a scan, as in Acrobat), but
         // a page with real text and a background picture is left alone.
-        let mut settings = self.ocr_draft.settings();
         settings.skip_text_pages = true;
         settings.native_text_only = true;
         self.start_ocr_pages(scan.doc, &[scan.page], settings, true);
@@ -275,8 +289,8 @@ impl PdfCraftApp {
         let work = move || {
             crate::i18n::set_current(lang);
             let result = recognize_guarded(|| {
-                pdfcraft_engine::ocr::engine().map(|ocr| {
-                    job.run(&ocr, |done, total| {
+                pdfcraft_engine::ocr::engine_for(&job.settings.language).map(|ocr| {
+                    job.run_with(ocr.as_deref(), |done, total| {
                         let Ok(mut s) = p.lock() else { return false };
                         s.done = done;
                         s.total = total;
@@ -366,14 +380,14 @@ fn recognize_files(
     #[cfg(not(target_arch = "wasm32"))] dir: &std::path::Path,
 ) -> String {
     let (mut ok, mut words, mut failed) = (0, 0, Vec::new());
-    match pdfcraft_engine::ocr::engine() {
+    match pdfcraft_engine::ocr::engine_for(&settings.language) {
         Err(e) => failed.push(e),
         Ok(ocr) => {
             for (i, (name, bytes)) in files.into_iter().enumerate() {
                 if let Ok(mut s) = p.lock() {
                     s.done = i;
                 }
-                let r = pdfcraft_engine::ocr::recognize_file(&name, Arc::new(bytes), None, settings.clone(), &ocr, |_, _| true);
+                let r = pdfcraft_engine::ocr::recognize_file_with(&name, Arc::new(bytes), None, settings.clone(), ocr.as_deref(), |_, _| true);
                 let saved = r.and_then(|r| {
                     #[cfg(not(target_arch = "wasm32"))]
                     crate::editing::write_atomically(&dir.join(&name).to_string_lossy(), &r.bytes).map_err(|e| e.to_string())?;
@@ -500,6 +514,14 @@ impl PdfCraftApp {
         };
         let read = found.iter().filter(|p| p.skipped.is_none()).count();
         let skipped = found.len() - read;
+        if read == 0
+            && let Some(why) = found.iter().find_map(|p| p.skipped.as_deref()).filter(|&why| why != "the page already contains text")
+        {
+            if !automatic {
+                self.notify_error(why);
+            }
+            return;
+        }
         match self.session.apply_ocr(doc, &found) {
             Ok(words) => {
                 if let Some(info) = self.session.get(doc).map(|d| d.info.clone())

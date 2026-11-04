@@ -78,7 +78,7 @@ pub(crate) use place::undrawable;
 #[cfg(test)]
 use place::{ISOLATION_MAX_DEPTH, OLD_WRAP_CLOSE, WRAP_CLOSE, WRAP_OPEN, is_wrap_close, page_fonts, stream_bytes, stream_tag, tagged, wrapper_role};
 use place::{check, check_on_top, contents, page_list, place_tagged};
-pub use place::{stamp, undrawable_message};
+pub use place::{ocr_font_name, stamp, undrawable_message};
 
 #[cfg(test)]
 mod marked_isolation_tests;
