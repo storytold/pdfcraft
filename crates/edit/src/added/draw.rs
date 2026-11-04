@@ -252,6 +252,51 @@ fn type3_shaped(doc: &mut Document, clusters: &[&ShapedCluster], outlines: &Hash
     doc.add(Object::Dict(font))
 }
 
+/// Embed positioned glyphs from the approved Arabic document face as static outlines. This
+/// works with craft-fonts' variable face without embedding an unsupported variable font program.
+/// Every outline is checked before creating any PDF objects.
+pub(crate) fn embed_arabic_glyphs(
+    doc: &mut Document,
+    fonts: &mut Dict,
+    shaped: &pdfcraft_fonts::source_shaping::ShapedRun,
+) -> Result<Vec<(String, Vec<u8>)>, EditError> {
+    let script = ShapedScript::Arabic;
+    let mut outlines = HashMap::new();
+    let mut points = 0usize;
+    let mut clusters = Vec::with_capacity(shaped.glyphs.len());
+    for glyph in &shaped.glyphs {
+        let id = glyph.id.to_u32();
+        if let std::collections::hash_map::Entry::Vacant(entry) = outlines.entry((script, id)) {
+            let outline = shaped_glyph(script, id).map_err(|e| arabic_error(e, &glyph.text))?;
+            points = outline.contours.iter().fold(points, |n, contour| n.saturating_add(contour.len()));
+            if points > 262_144 {
+                return Err(EditError::Invalid("the Arabic replacement outlines exceed their complexity budget".into()));
+            }
+            entry.insert(outline);
+        }
+        let width = outlines.get(&(script, id)).map_or(0.0, |outline| outline.width);
+        clusters.push(ShapedCluster { script, glyphs: vec![(id, [0.0, 0.0])], advance: width, text: glyph.text.clone() });
+    }
+    let mut codes = Vec::with_capacity(clusters.len());
+    for chunk in clusters.chunks(GLYPHS_PER_FONT) {
+        let mut suffix = 0usize;
+        let mut name = format!("PCArEdit{suffix}");
+        while fonts.contains(name.as_bytes()) {
+            suffix = suffix.checked_add(1).ok_or_else(|| EditError::Invalid("the Arabic font resource limit was reached".into()))?;
+            name = format!("PCArEdit{suffix}");
+        }
+        let references: Vec<_> = chunk.iter().collect();
+        let font = type3_shaped(doc, &references, &outlines);
+        fonts.set(name.as_bytes().to_vec(), Object::Ref(font));
+        for (i, _) in chunk.iter().enumerate() {
+            // A chunk holds at most 240 entries; its codes are 1 through 240.
+            let code = u8::try_from(i.saturating_add(1)).map_err(|_| EditError::Invalid("the Arabic glyph code limit was reached".into()))?;
+            codes.push((name.clone(), vec![code]));
+        }
+    }
+    Ok(codes)
+}
+
 /// Content and resources for an item; `view` maps display space to user space. `taken` holds the
 /// page's font names. `existing`: the item is being replaced, so a build without the Arabic or
 /// Hebrew face keeps drawing that text as `?`, as before it was supported, rather than refusing to

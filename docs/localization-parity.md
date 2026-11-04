@@ -1,10 +1,16 @@
 # Localization parity
 
+> **Last reviewed:** 2026-11-04 · **Last updated:** 2026-11-04 · **Change:** patch (PR #1851: rebase onto craft-i18n; local catalog changes removed; estimates unchanged)
+
 > **Last reviewed:** 2026-11-03 · **Last updated:** 2026-11-03 · **Change:** minor (Turkish: 2,867 entries, 0 missing in `cargo xtask i18n-report` on 2026-11-03; AI-assisted)
 > **Last reviewed:** 2026-10-25 · **Last updated:** 2026-10-25 · **Change:** minor (Persian (`fa`, 2,785 entries) added right-to-left like Arabic and Kurdish; Arabic current state corrected: catalogs stay logical, RTL labels take an explicit direction and stock chrome mirrors; native/browser RTL input, IME and complex workflows remain unqualified. Native release Hans face via LXGW WenKai Lite; release-pinned craft-fonts still has no Telugu face. Current union 2,798 keys. Scores and estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
 Per-language status of PdfCraft's interface against Acrobat Pro's. How translations work and how to
 add a language: [localization.md](localization.md). Summary in [ROADMAP.md](../ROADMAP.md).
+
+The 2026-10-31 source snapshot, before the move to craft-i18n, had **2,809 distinct keys translated into Arabic** against
+**2,824 keys in the then-bundled catalog union**. The coverage scores below retain their
+measurement dates; this update does not re-estimate readiness.
 
 ## How this was measured
 
@@ -87,6 +93,8 @@ The entry counts without percentages are as of 2026-10-25; they are not percenta
 Acrobat languages PdfCraft lacks: Danish, Dutch, Swedish, Hebrew. Vietnamese is shipped here but not by Acrobat.
 
 ## Revision history
+
+2026-11-04, PR #1851: rebased Arabic editing onto craft-i18n; local catalogs and translation-attribution edits removed. Upstream theme accessibility is retained. Estimates unchanged.
 
 | Date | Change | Summary |
 |---|---|---|

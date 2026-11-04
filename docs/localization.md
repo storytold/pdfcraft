@@ -42,11 +42,24 @@ The Albanian catalog (craft-i18n `locales/sq/`, interface name **Shqip**) is wri
 
 ## Arabic and right-to-left text
 
-The Arabic catalog has 2,783 entries in Modern Standard Arabic with Western digits. Counts use the six [CLDR Arabic forms](https://www.unicode.org/cldr/charts/48/supplemental/language_plural_rules.html#ar) (`0`, `1`, `2`, `3–10`, `11–99`, the rest), and dates use the Arabic names of the Gregorian months.
+At the 2026-10-31 snapshot, before the move to craft-i18n, the Arabic catalog had 2,809 distinct translated keys in Modern Standard Arabic with Western digits. Counts use the six [CLDR Arabic forms](https://www.unicode.org/cldr/charts/48/supplemental/language_plural_rules.html#ar) (`0`, `1`, `2`, `3–10`, `11–99`, the rest), and dates use the Arabic names of the Gregorian months.
 
 egui 0.37's epaint shapes every line with the Unicode bidirectional algorithm (UAX #9). Catalog entries stay in logical (typing) order and are never preordered: `tl!`, `tr` and `trn` return logical text, `bidi::display_rtl` and `bidi::visual` exist only for the tests that prove the old preordering is gone, and epaint joins and reorders Arabic on every line. Interface labels use an explicit `TextDirection::RightToLeft` in an Arabic, Kurdish or Persian interface, so a label whose first strong character is Latin or a `{placeholder}` still reads right to left. File and path labels use `TextDirection::LeftToRight`, so an Arabic file name keeps `.pdf` at its visual end; document-authored text uses `Auto`. Stock chrome is mirrored through `Style::right_to_left` (menus, combo boxes, scroll bars, headers), and `i18n::fmt` inserts values in one pass. The command search matches a query of several Arabic words word by word.
 
 Wrapped paragraphs break between words in logical order and epaint reorders each resulting line, so a wrapped label reads in the right direction from the first line down. Text typed into a field is shaped and reordered while editing, and the stored value stays logical.
+
+Existing PDF paragraphs first try their source face. Arabic subsets without contextual
+shaping tables or new characters can use the approved craft-fonts Arabic document face,
+written as static outlines with logical text for copy/search. Substitution can change
+appearance; explicit font selections and mixed contextual style boundaries remain strict.
+The selection toolbar's **Edit text** opens a unique source paragraph with the word selected;
+its replacement suggestion still creates an annotation. Repeated matches, including overlaps,
+keep direct editing disabled so it cannot choose the wrong occurrence. Single-row RTL growth is measured
+through the PDF rewrite and retains the source right edge on Apply and save/reopen.
+Width changes retain hard row breaks and their trailing hyphens, while tagged or
+geometrically inferred soft wraps can reflow.
+Offset-only edits move the source operators without rewriting or adding paragraph markers.
+Arabic fallback and spacing normalization leave Latin source segments unchanged.
 
 Central Kurdish (Sorani, `ckb`) takes the same path: its catalog is written in logical order and `rtl: true` selects the explicit right-to-left direction; epaint reorders it, so it behaves as Arabic does above. Counts use the two [CLDR ckb forms](https://www.unicode.org/cldr/charts/48/supplemental/language_plural_rules.html#ckb) (`one`, `other`); Sorani keeps the noun singular after a numeral, so the two `@plural` forms usually read the same. Dates use the Kurdish names of the Gregorian months. The `Arab` face (Noto Sans Arabic) covers the Kurdish-only letters (`ێ ڵ ڕ ۆ ە ڤ ژ چ گ پ`).
 

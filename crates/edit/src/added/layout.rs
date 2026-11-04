@@ -108,7 +108,7 @@ pub(super) fn is_thai(c: char) -> bool {
 
 /// Arabic letters, marks, digits and punctuation: an item with any of them is shaped with the
 /// craft-fonts Arabic face.
-pub(super) fn is_arabic(c: char) -> bool {
+pub(crate) fn is_arabic(c: char) -> bool {
     matches!(u32::from(c), 0x0600..=0x06FF | 0x0750..=0x077F | 0x0870..=0x08FF | 0xFB50..=0xFDFF | 0xFE70..=0xFEFC)
 }
 

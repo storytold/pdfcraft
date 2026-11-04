@@ -3467,3 +3467,42 @@ fn other_edit_composers_keep_trimming_trailing_whitespace() {
         edit_composer_preserves_only_typewriter_whitespace(kind);
     }
 }
+
+#[test]
+fn selected_text_edit_action_replaces_the_source_word_and_undo_restores_it() {
+    let mut h = harness(|_| {});
+    h.state_mut().views[0].select_text(0, 4, 8);
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].selected_text().as_deref(), Some("quick"));
+    h.get_by_label("Edit text").click();
+    h.run_steps(3);
+    let editor = h.state().views[0].line_editor.as_ref().expect("the selection opens its paragraph");
+    assert_eq!(editor.text, "The quick brown fox");
+    assert_eq!(editor.selection, Some(4..9));
+    h.event(egui::Event::Text("slow".into()));
+    h.run_steps(2);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Enter);
+    h.run_steps(4);
+    let id = h.state().views[0].id;
+    assert_eq!(h.state().session.get(id).unwrap().text_blocks(0)[0].editor_text, "The slow brown fox");
+    assert!(comments(&h).is_empty(), "direct editing changes page content");
+    assert!(h.state_mut().execute("edit.undo"));
+    h.run_steps(3);
+    assert_eq!(h.state().session.get(id).unwrap().text_blocks(0)[0].editor_text, "The quick brown fox");
+}
+
+#[test]
+fn selected_text_edit_action_refuses_overlapping_occurrences() {
+    // Equal-length substitution keeps this synthetic fixture's stream lengths unchanged.
+    let bytes = String::from_utf8(TEXT_FIXTURE.to_vec()).unwrap().replace("The quick brown fox", "banana pear fruitxx").into_bytes();
+    let mut h = harness_with_bytes(bytes, |_| {});
+    h.state_mut().views[0].select_text(0, 3, 5);
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].selected_text().as_deref(), Some("ana"));
+    let button = h.get_by_label("Edit text");
+    assert!(button.accesskit_node().is_disabled(), "both overlapping occurrences must count, so editing cannot target the first by mistake");
+    let at = button.rect().center();
+    click(&mut h, at);
+    assert!(h.state().views[0].line_editor.is_none());
+    assert!(!h.state().session.get(h.state().views[0].id).unwrap().dirty);
+}
