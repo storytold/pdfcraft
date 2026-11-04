@@ -796,3 +796,50 @@ fn markup_tools_mark_a_selection_across_pages_on_every_page() {
         assert_eq!(marks(&h), both(kind), "{command}: picked after selecting");
     }
 }
+
+/// Review of #5017: an area highlight whose drag ends in the same frame as Escape (which drops
+/// the Highlight tool for Select) is still a highlight, never a redaction: the queued box keeps
+/// the tool that drew it.
+#[test]
+fn an_area_highlight_ended_with_escape_stays_a_highlight() {
+    let mut h = three_pages();
+    assert!(h.state_mut().execute("comment.highlight"));
+    h.run_steps(2);
+    // A box in the empty top of page 1 (its text is at the bottom).
+    let page = h.state().views[0].page_screen_rect(0).expect("page on screen");
+    let (from, to) = (page.min + egui::vec2(20.0, 15.0), page.min + egui::vec2(120.0, 60.0));
+    h.event(Event::PointerButton { pos: from, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    for k in 1..=4 {
+        h.hover_at(from + (to - from) * (k as f32 / 4.0));
+        h.run_steps(1);
+    }
+    // Release and Escape in one frame.
+    h.input_mut().events.extend([
+        Event::PointerButton { pos: to, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE },
+        Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE },
+    ]);
+    h.run_steps(3);
+    let app = h.state();
+    let doc = app.session.get(app.views[0].id).unwrap();
+    let marks: Vec<&str> = doc.info.annotations.iter().map(|a| a.subtype.as_str()).collect();
+    assert_eq!(marks, ["Highlight"], "the box is a highlight");
+    assert_eq!(doc.redaction_marks(), 0, "nothing marked for redaction");
+}
+
+/// Review of #5017: a highlight across pages is followed up as one on a single page is: the
+/// comment where the selection ends is selected and its note opens for typing.
+#[test]
+fn a_highlight_across_pages_selects_its_last_part_and_opens_its_note() {
+    let mut h = three_pages();
+    let (from, to) = (glyph_on(&h, 0, 7), glyph_on(&h, 1, 10));
+    drag(&mut h, from, to);
+    h.run_steps(3);
+    assert!(h.state_mut().execute("comment.highlight"));
+    h.run_steps(3);
+    let app = h.state();
+    let doc = app.session.get(app.views[0].id).unwrap();
+    let on_page_2 = doc.info.annotations.iter().find(|a| a.page == 1 && a.subtype == "Highlight").map(|a| a.index).expect("a highlight on page 2");
+    assert_eq!(app.views[0].comments.selected, Some((1, on_page_2)), "the part where the selection ends is selected");
+    assert!(app.views[0].comments.editing.as_ref().is_some_and(|(p, i, _)| (*p, *i) == (1, on_page_2)), "its note is open");
+}

@@ -140,7 +140,7 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
             let (vx, vy) = xf.screen_to_view(p);
             text.as_ref().is_some_and(|t| t.glyphs.iter().any(|g| vx >= g.rect[0] && vx <= g.rect[2] && vy >= g.rect[1] && vy <= g.rect[3]))
         };
-        crate::redact_ui::page_input(cx, over_text, press == PagePress::Free, view)
+        crate::redact_ui::page_input(cx, tool, over_text, press == PagePress::Free, view)
     };
     let on_objects = tool == QuickTool::EditText && can_modify && crate::object_ui::page_input(cx, view);
     // Add text acts on the page's own paragraphs over them, and on the one its press was on until
