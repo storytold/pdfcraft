@@ -290,4 +290,5 @@ a match of the `CobaltStrikeBeacon` family rule.
 
 ## Distribution build configuration (2026-11-02)
 
-macOS packaging accepts APPLE_KEYCHAIN_PROFILE for notarization, with precedence over the unchanged three-variable authentication path.
+Direct invocations of the macOS packaging script accept `APPLE_KEYCHAIN_PROFILE` for notarization, with precedence over the unchanged three-variable authentication path.
+The shared GitHub release workflow still requires `APPLE_ID`, `APPLE_PASSWORD` and `APPLE_TEAM_ID` and does not pass `APPLE_KEYCHAIN_PROFILE` to packaging. Keep those workflow secrets; a Keychain profile currently applies only to direct script invocations.
