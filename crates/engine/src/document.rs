@@ -43,6 +43,12 @@ pub struct Document {
     pub renderer: RenderPool,
     /// The password the document was opened with (needed to read attachments, etc.).
     pub password: Option<String>,
+    /// The credential the document was opened with, verbatim: the owner password when that is
+    /// what unlocked it, while [`Document::password`] holds the user password owner
+    /// authentication recovers for R2–R4 files. Opening a copy of the document's bytes with it
+    /// keeps the owner's rights — extraction ([`Session::extract_original`]) must not hand out
+    /// a copy the user has to unlock again.
+    pub(crate) reopen_password: Option<String>,
     /// `true` when there are edits that have not been saved.
     pub dirty: bool,
     /// Bumped on every change to the working file (edit, undo, redo, save); autosave compares it.

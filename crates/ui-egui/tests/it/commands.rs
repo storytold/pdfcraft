@@ -79,6 +79,9 @@ fn every_registered_command_is_implemented() {
         app.set_option("language", "en").unwrap();
         if spec.id.starts_with("form.") || spec.id == "comment.flatten" {
             app.open_bytes("form.pdf", None, include_bytes!("../data/form.pdf").to_vec()).unwrap();
+        } else if spec.id == "file.extract_original" {
+            // Only an envelope document offers the extraction.
+            app.open_bytes("cades-envelope.pdf.p7m", None, include_bytes!("../../../sign/tests/data/cades-envelope.pdf.p7m").to_vec()).unwrap();
         } else if spec.id == "protect.unlock" {
             // Only a permissions password: opens restricted, and can be unlocked.
             let mut doc = pdfcraft_cos::Document::open(std::sync::Arc::new(fixture(3))).unwrap();

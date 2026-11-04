@@ -10831,6 +10831,8 @@ fn a_bad_bookmark_tree_is_refused_whole_and_names_the_node() {
     }
     assert!(!out.exists());
     assert_eq!(ok(&mut a, "bookmark_list", json!({ "doc": doc }))["bookmarks"], json!([]));
+}
+
 // ---- CAdES envelopes (.pdf.p7m, issue #1449) ----------------------------------------------------
 
 /// A fresh root with the named CAdES fixtures from pdfcraft-sign (OpenSSL-made;

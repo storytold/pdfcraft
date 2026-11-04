@@ -461,7 +461,29 @@ fn dialog_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: &m
     true
 }
 
-/// `Dialog::Properties(tab)` content. Returns `false` when it has its own buttons and no footer is wanted.
+/// The CAdES envelope a document was opened from, as the Properties ▸ Description rows it adds
+/// (issue #1449): the signer, when they signed, whether the content still matches what was
+/// signed, and any tolerated encoding irregularity. Empty for every other document.
+fn envelope_rows(doc: &pdfcraft_engine::Document) -> Vec<(String, String)> {
+    let Some(env) = doc.envelope.as_ref() else { return Vec::new() };
+    let mut rows = vec![
+        ("Signer".to_string(), env.signer.clone()),
+        ("Signing time".to_string(), env.signing_time.clone().unwrap_or_default()),
+        (
+            "Integrity".to_string(),
+            if env.digest_ok { tl!("Matches what was signed").to_string() } else { tl!("Does not match what was signed").to_string() },
+        ),
+    ];
+    if env.signers > 1 {
+        rows.push((
+            "Signers".to_string(),
+            crate::i18n::fmt(tl!("{signers} signers; details of the first are shown"), &[("signers", &env.signers.to_string())]),
+        ));
+    }
+    rows.push(("Quirks".to_string(), if env.quirks.is_empty() { tl!("None").to_string() } else { env.quirks.join("; ") }));
+    rows
+}
+
 fn dialog_properties(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending, tab: PropsTab) -> bool {
     let t = Tokens::get(ui.ctx());
     ui.label(egui::RichText::new(tl!("Document Properties")).font(theme::semibold(18.0)));
@@ -873,29 +895,8 @@ fn dialog_properties(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending
                     ui.end_row();
                 }
                 // What the CAdES envelope a document was opened from says (issue #1449).
-                if let Some(env) = &doc.envelope {
-                    row(ui, "Signer", env.signer.clone());
-                    row(ui, "Signing time", env.signing_time.clone().unwrap_or_default());
-                    row(
-                        ui,
-                        "Integrity",
-                        if env.digest_ok {
-                            tl!("Matches what was signed").to_string()
-                        } else {
-                            tl!("Does not match what was signed").to_string()
-                        },
-                    );
-                    if env.signers > 1 {
-                        row(
-                            ui,
-                            "Signers",
-                            crate::i18n::fmt(
-                                tl!("{signers} signers; details of the first are shown"),
-                                &[("signers", &env.signers.to_string())],
-                            ),
-                        );
-                    }
-                    row(ui, "Quirks", if env.quirks.is_empty() { tl!("None").to_string() } else { env.quirks.join("; ") });
+                for (k, v) in envelope_rows(doc) {
+                    row(ui, &k, v);
                 }
                 // What was repaired while reading a damaged file (fidelity: never silent).
                 let repairs = doc.repair_log();

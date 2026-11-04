@@ -302,6 +302,7 @@ pub(crate) fn info(d: &Document) -> Value {
     }
     json!({
         "document": summary(d),
+        "envelope": envelope(d),
         "pdf_version": i.pdf_version,
         "file_size": i.file_size,
         "title": i.title, "author": i.author, "subject": i.subject, "keywords": i.keywords,

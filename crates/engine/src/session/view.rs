@@ -217,11 +217,14 @@ impl Session {
             return Err("this document is not inside a CAdES envelope".into());
         }
         // The exact bytes the envelope carries, not the working file (whose open may have
-        // repaired the PDF or laid out a form): the copy is what was signed. The password the
-        // envelope was opened with unlocks the copy too — it is the same bytes, and asking for
-        // it again would block the extraction of an encrypted original.
+        // repaired the PDF or laid out a form): the copy is what was signed. The credential
+        // the envelope was opened with unlocks the copy too — it is the same bytes, and asking
+        // for it again would block the extraction of an encrypted original. The original
+        // credential, not the render password: an R2–R4 file unlocked with its owner password
+        // keeps the owner's rights on the copy, while the recovered user password would
+        // re-restrict it (the user would have to unlock their own extraction again).
         let name = doc.name.clone();
-        let password = doc.password.clone();
+        let password = doc.reopen_password.clone().or_else(|| doc.password.clone());
         let bytes = doc.envelope_content.clone().ok_or("the envelope's content is unavailable")?;
         self.open_new_with_password(name, bytes, password.as_deref()).map_err(|e| e.to_string())
     }

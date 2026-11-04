@@ -44,6 +44,24 @@ fn encrypted_pdf(user: &str) -> Vec<u8> {
     write_full(&doc, &SaveOptions::default()).unwrap()
 }
 
+/// An R2–R4 (RC4-128) PDF whose owner password withholds every permission, built like the
+/// engine's `owner_password_of_older_revisions_opens_the_viewer_too`: opening it with the
+/// owner password recovers the user password for rendering, and only the owner credential
+/// keeps the owner's rights on a copy.
+fn restricted_r4_pdf(user: &str, owner: &str) -> Vec<u8> {
+    let mut doc = CosDocument::open(Arc::new(data("openssl-signed.pdf"))).unwrap();
+    doc.set_encryption(&NewEncryption {
+        algorithm: Algorithm::Rc4_128,
+        user_password: user,
+        owner_password: owner,
+        permissions: 0,
+        encrypt_metadata: true,
+        seed: [4; 32],
+    })
+    .unwrap();
+    write_full(&doc, &SaveOptions::default()).unwrap()
+}
+
 #[test]
 fn envelope_opens_read_only_without_repairs() {
     let mut s = Session::new();
@@ -190,4 +208,25 @@ fn save_as_hands_out_the_signed_envelope_not_the_pdf_inside() {
     assert_eq!(&s.get(id).unwrap().saved_bytes()[..], &envelope[..], "the envelope is also the saved base");
     // The working file stays the PDF everything else processes (pages, printing, combining).
     assert_eq!(&s.get(id).unwrap().bytes[..], &data("openssl-signed.pdf")[..]);
+}
+
+/// An encrypted original opened with the OWNER password of an R2–R4 file extracts with the
+/// owner's rights, not as a re-restricted copy: `Document::password` carries the user
+/// password owner authentication recovers (for rendering), so extraction must use the
+/// original credential it retains instead. Before the fix the copy opened with the recovered
+/// user password and every permission stayed withheld (#1449 review).
+#[test]
+fn extracted_original_opened_with_the_owner_password_keeps_owner_rights() {
+    let inner = restricted_r4_pdf("u", "o");
+    let wrapped = envelope_over(&inner);
+    let mut s = Session::new();
+    let id = s.open("locked.pdf.p7m", None, wrapped, Some("o")).unwrap();
+    // The envelope document itself renders through the recovered user password.
+    assert_eq!(s.get(id).unwrap().password.as_deref(), Some("u"));
+    let copy = s.extract_original(id).unwrap();
+    let d = s.get(copy).unwrap();
+    let summary = d.security_summary().expect("still encrypted");
+    assert!(summary.owner, "the copy opens with the owner's rights: {:?}", summary);
+    assert!(d.allows_modification(), "the withheld permissions are the owner's to lift: {:?}", summary);
+    assert_eq!(&d.bytes[..], &inner[..], "byte-identical to the encrypted PDF that was signed");
 }
