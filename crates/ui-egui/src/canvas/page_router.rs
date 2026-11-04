@@ -48,6 +48,9 @@ pub(crate) enum Owner {
 pub(crate) enum PicturePart {
     /// The picture: a click selects it, a drag moves the selected one.
     Body,
+    /// A picture lying over the selected one, within the selected one's frame: a click selects the
+    /// one on top, a drag moves the selected one.
+    OverSelected,
     /// A resize grip in `ImageObb::handles` order (four corners and four edge midpoints).
     Corner(usize),
     /// The selected picture's rotate knob: a drag turns it.

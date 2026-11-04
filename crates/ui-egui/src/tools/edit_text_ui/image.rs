@@ -611,17 +611,19 @@ pub(crate) fn body_hit(xf: &PageXform, page: usize, info: &DocInfo, images: &[pd
     }
     let (x, y) = xf.screen_to_view(p);
     let user = info.pages.get(page)?.view_to_user(x, y).map(f64::from);
-    let index = images
-        .iter()
-        .rposition(|im| im.visible_rect.is_some_and(|r| xf.user_rect(info, page, r.map(|v| v as f32)).contains(p)) && im.contains(user))
-        .or_else(|| {
-            let s = view.image_selection.as_ref().filter(|s| s.page == page && s.crop.is_none())?;
-            let image = images.get(s.index)?;
-            quad_contains(ImageObb::from_image(image, xf, info, page).corners(), p).then_some(s.index)
-        })?;
+    let on_picture = |im: &pdfcraft_engine::PageImage| {
+        im.visible_rect.is_some_and(|r| xf.user_rect(info, page, r.map(|v| v as f32)).contains(p)) && im.contains(user)
+    };
+    // The selected picture's frame is its own, a hole in it and a picture over it included.
+    let framed =
+        view.image_selection.as_ref().filter(|s| s.page == page && s.crop.is_none()).map(|s| s.index).filter(|i| {
+            images.get(*i).is_some_and(|image| on_picture(image) || quad_contains(ImageObb::from_image(image, xf, info, page).corners(), p))
+        });
+    let index = images.iter().rposition(on_picture).or(framed)?;
     let selected = view.image_selection.as_ref().is_some_and(|s| s.page == page && s.index == index);
     let icon = if selected { egui::CursorIcon::Move } else { egui::CursorIcon::PointingHand };
-    Some(Hit::new(Owner::Picture { index, part: PicturePart::Body }, Layer::Text, icon))
+    let part = if framed.is_some_and(|i| i != index) { PicturePart::OverSelected } else { PicturePart::Body };
+    Some(Hit::new(Owner::Picture { index, part }, Layer::Text, icon))
 }
 
 /// What a right-click on a selected image asks for.
@@ -785,7 +787,7 @@ pub(crate) fn image_input(cx: &ImageCx<'_>, images: &[pdfcraft_engine::PageImage
             && ptr.drag_started
             && let Some(o) = ptr.origin
             && let PagePress::Mine(Owner::Picture { index, part }) = press
-            && index == i
+            && (index == i || part == PicturePart::OverSelected)
             && let Some(s) = view.image_selection.as_mut()
         {
             match part {
@@ -803,7 +805,7 @@ pub(crate) fn image_input(cx: &ImageCx<'_>, images: &[pdfcraft_engine::PageImage
                         });
                     }
                 }
-                PicturePart::Body => {
+                PicturePart::Body | PicturePart::OverSelected => {
                     s.drag = Some(ImageDrag { start: o, target: DragTarget::Move, initial_rect: b, initial_matrix: image.matrix });
                 }
                 PicturePart::Crop(_) => {}

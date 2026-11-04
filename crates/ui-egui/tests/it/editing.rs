@@ -7377,6 +7377,64 @@ fn a_right_click_on_an_open_paragraphs_frame_over_a_picture_selects_the_picture(
     assert!(h.query_by_label("Flip horizontal").is_some(), "its menu opens");
 }
 
+/// A drag from the selected picture moves it, though another picture lies over it there; a click
+/// there selects the one on top.
+#[test]
+fn a_drag_from_the_selected_picture_under_another_moves_the_selected_one() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1400.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("two.pdf", None, two_image_fixture()).unwrap();
+        app
+    });
+    h.run_steps(4);
+    // The second picture lies over the right half of the first.
+    h.state_mut().apply_edit(pdfcraft_engine::Edit::EditPageImage {
+        page: 0,
+        index: 1,
+        change: pdfcraft_engine::ImageEdit::Move([110.0, 100.0, 130.0, 120.0]),
+    });
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(4);
+    h.state_mut().views[0].image_selection = Some(pdfcraft_ui_egui::ImageSelection::at(0, 0));
+    h.run_steps(2);
+    let id = h.state().views[0].id;
+    let rects = |h: &Harness<'static, PdfCraftApp>| {
+        let images = h.state().session.get(id).unwrap().page_images(0);
+        (images[0].rect, images[1].rect)
+    };
+    let before = rects(&h);
+    let xf = h.state().views[0].page_xform(0).unwrap();
+    let doc = h.state().session.get(id).unwrap();
+    let images = doc.page_images(0);
+    let frame = |i: usize| pdfcraft_ui_egui::canvas::image_screen_rect(&images[i], &xf, &doc.info, 0);
+    let overlap = frame(0).intersect(frame(1)).center();
+    h.hover_at(overlap);
+    h.run_steps(1);
+    h.drag_at(overlap);
+    h.run_steps(1);
+    for k in 1..=4 {
+        h.hover_at(overlap + egui::vec2(8.0 * k as f32, 0.0));
+        h.run_steps(1);
+    }
+    h.drop_at(overlap + egui::vec2(32.0, 0.0));
+    h.run_steps(3);
+    let after = rects(&h);
+    assert_ne!(after.0, before.0, "the selected picture moves");
+    assert_eq!(after.1, before.1, "the one over it stays");
+    let selected = h.state().views[0].image_selection.as_ref().map(|s| s.index);
+    assert_eq!(selected, Some(0), "and stays selected");
+    // After the move the two still overlap, a little further along.
+    let xf = h.state().views[0].page_xform(0).unwrap();
+    let doc = h.state().session.get(id).unwrap();
+    let images = doc.page_images(0);
+    let frame = |i: usize| pdfcraft_ui_egui::canvas::image_screen_rect(&images[i], &xf, &doc.info, 0);
+    let overlap = frame(0).intersect(frame(1)).center();
+    slipping_click(&mut h, overlap, overlap);
+    let selected = h.state().views[0].image_selection.as_ref().map(|s| s.index);
+    assert_eq!(selected, Some(1), "a click selects the one on top");
+}
+
 /// In the page grid, Delete deletes the page chosen there. The picture selected before the grid
 /// opened is not on screen, and stays.
 #[test]
