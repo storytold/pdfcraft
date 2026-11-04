@@ -8,6 +8,20 @@ pub(crate) fn allowed(c: char) -> bool {
     matches!(c, '\t' | '\n' | '\r') || !(c.is_ascii_control() || c == '\u{FFFE}' || c == '\u{FFFF}')
 }
 
+/// `lang` when it is a well formed language tag (BCP 47, as a PDF's `/Lang` holds one): a primary
+/// language of two or three letters, then subtags of one to eight letters or digits, joined by
+/// hyphens, 35 characters at most. Anything else names no language.
+pub(crate) fn language_tag(lang: Option<&str>) -> Option<&str> {
+    let tag = lang?.trim();
+    let mut subtags = tag.split('-');
+    let primary = subtags.next()?;
+    let well_formed = tag.len() <= 35
+        && (2..=3).contains(&primary.len())
+        && primary.bytes().all(|b| b.is_ascii_alphabetic())
+        && subtags.all(|s| (1..=8).contains(&s.len()) && s.bytes().all(|b| b.is_ascii_alphanumeric()));
+    well_formed.then_some(tag)
+}
+
 pub(crate) fn esc(s: &str) -> String {
     let mut o = String::with_capacity(s.len());
     for c in s.chars().filter(|c| allowed(*c)) {
@@ -38,17 +52,31 @@ pub(crate) fn base64(data: &[u8]) -> String {
 /// One HTML file: headings and paragraphs, tables as real `<table>` elements, images inline, a
 /// rule between pages.
 pub fn html(pages: &[Page], title: &str) -> String {
-    html_with_mode(pages, title, false)
+    html_with_language(pages, title, None)
 }
 
 /// A simple HTML export with no CSS; page layout and colours are omitted.
 pub fn html_simple(pages: &[Page], title: &str) -> String {
-    html_with_mode(pages, title, true)
+    html_simple_with_language(pages, title, None)
 }
 
-fn html_with_mode(pages: &[Page], title: &str, simple: bool) -> String {
+/// [`html`] for a document in `language` (a BCP 47 tag such as `bg-BG`, as a PDF's `/Lang` gives
+/// it), which the page names (`<html lang>`) for spell checking, speech and hyphenation. A
+/// language that is not a well formed tag is left out.
+pub fn html_with_language(pages: &[Page], title: &str, language: Option<&str>) -> String {
+    html_with_mode(pages, title, false, language)
+}
+
+/// [`html_simple`] for a document in `language`, named as [`html_with_language`] names it: a
+/// language is not styling, so the simple export keeps it.
+pub fn html_simple_with_language(pages: &[Page], title: &str, language: Option<&str>) -> String {
+    html_with_mode(pages, title, true, language)
+}
+
+fn html_with_mode(pages: &[Page], title: &str, simple: bool, language: Option<&str>) -> String {
+    let lang = language_tag(language).map(|tag| format!(" lang=\"{}\"", esc(tag))).unwrap_or_default();
     let mut s = format!(
-        "<!DOCTYPE html>\n<html>\n<head>\n<meta charset=\"utf-8\">\n<title>{}</title>\n{}\n</head>\n<body>\n",
+        "<!DOCTYPE html>\n<html{lang}>\n<head>\n<meta charset=\"utf-8\">\n<title>{}</title>\n{}\n</head>\n<body>\n",
         esc(title),
         if simple {
             ""
