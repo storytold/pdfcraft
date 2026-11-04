@@ -112,7 +112,9 @@ type Palettes = Arc<[Arc<[Option<Paint>]>]>;
 pub struct Placement {
     /// Index into [`PrcFile::file_structures`].
     pub file_structure: usize,
-    /// Index into that file structure's [`tessellations`](crate::FileStructure::tessellations).
+    /// Index into that file structure's [`tessellations`](crate::FileStructure::tessellations),
+    /// as the tree stores it: [`PrcFile::placements`] does not decode that section, so an
+    /// index past its end is the caller's to refuse.
     pub tessellation: usize,
     /// The occurrence path's locations, then the representation item's coordinate systems.
     pub matrix: Matrix,
@@ -232,7 +234,7 @@ impl PrcFile {
     ///
     /// # Errors
     /// [`PrcError::Unsupported`] when an item or an entity reference names a reference
-    /// coordinate system and the globals carry fonts or fill patterns; [`PrcError::Malformed`] for an index naming no entity,
+    /// coordinate system and the globals carry fonts or fill patterns; [`PrcError::Malformed`] for a tree index naming no entity,
     /// a cycle of occurrences or prototypes, or a tree past [`MAX_PLACEMENTS`] or the depth
     /// ceiling; read errors as [`crate::FileStructure::tessellations`].
     pub fn placements(&self) -> Result<Vec<Placement>, PrcError> {

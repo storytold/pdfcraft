@@ -107,6 +107,11 @@ fn an_offset_or_count_past_the_data_is_an_error_not_a_panic() {
     bad[95..99].copy_from_slice(&u32::MAX.to_le_bytes());
     bad[99..103].copy_from_slice(&u32::MAX.to_le_bytes());
     assert!(PrcFile::parse(&bad).is_err());
+    // A model file ending one byte past the data, its zlib stream whole.
+    let mut bad = build(SECTIONS, b"m", 0);
+    let past = u32::try_from(bad.len() + 1).unwrap();
+    bad[99..103].copy_from_slice(&past.to_le_bytes());
+    assert!(matches!(PrcFile::parse(&bad), Err(PrcError::Malformed(_))));
     // A section count that claims more offsets than the data holds.
     let mut bad = build(SECTIONS, b"m", 0);
     bad[67..71].copy_from_slice(&u32::MAX.to_le_bytes());

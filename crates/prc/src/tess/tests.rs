@@ -24,8 +24,12 @@ fn uints(w: &mut W, v: &[u32]) {
 }
 
 fn square(w: &mut W, entity: u32) {
-    w.uint(entity).bit(false).uint(12);
-    for c in SQUARE {
+    coordinates(w, entity, &SQUARE);
+}
+
+fn coordinates(w: &mut W, entity: u32, coords: &[f64]) {
+    w.uint(entity).bit(false).uint(u32::try_from(coords.len()).unwrap());
+    for &c in coords {
         w.double(c);
     }
 }
@@ -37,11 +41,13 @@ struct Mesh<'a> {
     faces: &'a [(u32, u32, &'a [u32])],
     textures: u32,
     uvs: &'a [f64],
+    /// The coordinates; [`SQUARE`] when `None`.
+    coords: Option<&'a [f64]>,
 }
 
 /// A TESS_3D over [`SQUARE`] at authoring version `v`.
 fn tess_3d(w: &mut W, v: u32, m: &Mesh<'_>) {
-    square(w, 172);
+    coordinates(w, 172, m.coords.unwrap_or(&SQUARE));
     w.bit(true);
     if v >= 7039 {
         w.bit(false);
@@ -333,6 +339,11 @@ fn reused_vertex_colours_may_be_the_last_data() {
 /// carrying `attrs` and, when it has any, behaviour 0x30; then `colours` per-point colours
 /// and a trailing wire.
 fn styled_face(attrs: &[u32], colours: usize) -> Vec<Tessellation> {
+    decode(&styled_face_section(attrs, colours, 0x30), &Schema::default(), 8137).unwrap()
+}
+
+/// [`styled_face`]'s section, the face's behaviour `behaviour`.
+fn styled_face_section(attrs: &[u32], colours: usize, behaviour: u32) -> W {
     let mut b = W::default();
     square(&mut b, 172);
     b.bit(true).bit(false).bit(false).uint(0).uint(0);
@@ -349,11 +360,11 @@ fn styled_face(attrs: &[u32], colours: usize) -> Vec<Tessellation> {
         }
     }
     if !attrs.is_empty() {
-        b.uint(0x30);
+        b.uint(behaviour);
     }
     b.uint(0);
     wire(&mut b, false);
-    decode(&section(2, &b), &Schema::default(), 8137).unwrap()
+    section(2, &b)
 }
 
 #[test]
@@ -576,6 +587,13 @@ fn every_truncation_of_a_section_is_an_error_not_a_panic() {
 /// A one-file-structure PRC stream whose tessellation section is `tess`, with an empty
 /// globals section schema.
 fn prc_file(tess: &[u8]) -> Vec<u8> {
+    let mut globals = W::default();
+    globals.uint(0);
+    prc_file_with(&globals.bytes(), tess)
+}
+
+/// As [`prc_file`] with the globals section `globals`.
+fn prc_file_with(globals: &[u8], tess: &[u8]) -> Vec<u8> {
     use std::io::Write as _;
     const HEADER_LEN: usize = 107;
     let zlib = |data: &[u8]| {
@@ -584,9 +602,7 @@ fn prc_file(tess: &[u8]) -> Vec<u8> {
         e.finish().unwrap()
     };
     let u32s = |out: &mut Vec<u8>, vs: &[u32]| vs.iter().for_each(|v| out.extend_from_slice(&v.to_le_bytes()));
-    let mut globals = W::default();
-    globals.uint(0);
-    let sections: [&[u8]; 5] = [&globals.bytes(), b"", tess, b"", b""];
+    let sections: [&[u8]; 5] = [globals, b"", tess, b"", b""];
     let mut body = b"PRC".to_vec();
     u32s(&mut body, &[8137, 8137, 5, 6, 7, 8, 0, 0, 0, 0, 0]);
     let mut offs = vec![HEADER_LEN];
@@ -630,4 +646,59 @@ fn counted_entity_arrays_are_charged_against_the_allowance() {
     let read = |n| Ctx::new(BitReader::with_elements(&bytes, n), &schema, 8137).uints("indices");
     assert!(matches!(read(2), Err(PrcError::TooManyElements { .. })));
     assert_eq!(read(3).unwrap(), [1, 2, 3]);
+}
+
+#[test]
+fn a_face_behaviour_wider_than_16_bits_is_malformed() {
+    let r = decode(&styled_face_section(&[1], 0, 0x1_0030), &Schema::default(), 8137);
+    assert!(matches!(r, Err(PrcError::Malformed(m)) if m == "face behaviour 65584 is wider than 16 bits"));
+}
+
+#[test]
+fn coordinates_that_are_not_whole_points_are_malformed() {
+    let mut partial = SQUARE.to_vec();
+    partial.push(7.0);
+    let mut b = W::default();
+    let faces: &[(u32, u32, &[u32])] = &[(0x2, 0, &[1])];
+    tess_3d(&mut b, 8137, &Mesh { indices: &[0, 0, 0, 3, 0, 6], faces, coords: Some(&partial), ..Mesh::default() });
+    let r = decode(&section(1, &b), &Schema::default(), 8137);
+    assert!(matches!(r, Err(PrcError::Malformed(m)) if m == "13 coordinates are not whole points"));
+    // A partial last normal drops the stored normals, as a slot naming none does.
+    assert_eq!(stored_normals(&[0.0, 0.0, 1.0, 0.0], &[[0, 0, 0]], 1), (Vec::new(), Vec::new()));
+}
+
+/// Elements a tessellation section spends from a full allowance.
+fn spent(section: &W) -> usize {
+    let bytes = section.bytes();
+    let schema = Schema::default();
+    let mut ctx = Ctx::new(BitReader::new(&bytes), &schema, 8137);
+    ctx.file_structure_tessellation().unwrap();
+    crate::MAX_DECODED_ELEMENTS - ctx.r.elements_left()
+}
+
+#[test]
+fn faces_reusing_one_index_range_are_charged_for_each_triangle_they_make() {
+    const INDICES: [u32; 12] = [0, 0, 0, 3, 0, 6, 0, 0, 0, 6, 0, 9];
+    let square = |faces: &[(u32, u32, &[u32])]| {
+        let mut b = W::default();
+        tess_3d(&mut b, 8137, &Mesh { indices: &INDICES, faces, ..Mesh::default() });
+        spent(&section(1, &b))
+    };
+    let one = square(&[(0x2, 0, &[2])]);
+    let three = square(&[(0x2, 0, &[2]), (0x2, 0, &[2]), (0x2, 0, &[2])]);
+    // Per extra face: its count entry, its one data element and its two triangles.
+    assert_eq!(three - one, 2 * 4);
+}
+
+#[test]
+fn the_globals_schema_and_the_tessellations_share_one_allowance() {
+    // A schema of one entry with three tokens: four elements.
+    let mut globals = W::default();
+    globals.uint(1).uint(999).uint(3).uint(0).uint(0).uint(0);
+    let tess = textured_square();
+    let f = crate::PrcFile::parse(&prc_file_with(&globals.bytes(), &tess.bytes())).unwrap();
+    let need = spent(&tess) + 4;
+    let within = |elements| f.file_structures[0].tessellations_within(crate::bits::Budget { elements, ..crate::bits::Budget::FULL });
+    assert!(within(need).is_ok());
+    assert!(matches!(within(need - 1), Err(PrcError::TooManyElements { .. })));
 }

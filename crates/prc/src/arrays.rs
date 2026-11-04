@@ -126,6 +126,12 @@ fn huffman_leaves(b: &mut Lsb<'_>, nbits: u32, signed: bool) -> Result<HashMap<(
             return Err(malformed("duplicate Huffman code"));
         }
     }
+    // A leaf whose code begins another's would end that code early, leaving its unread bits
+    // in front of the next element.
+    let shadowed = codes.keys().any(|&(len, code)| (1..len).any(|l| codes.contains_key(&(l, code >> (len - l)))));
+    if shadowed {
+        return Err(malformed("a Huffman code that is a prefix of another"));
+    }
     Ok(codes)
 }
 
@@ -280,6 +286,16 @@ mod tests {
         w.huffman_count(2, 2, &[(1, 0b10, 2)], u32::MAX);
         let bytes = w.bytes();
         assert!(matches!(huffman(&mut BitReader::new(&bytes), 2, false), Err(PrcError::Truncated("a Huffman element count"))));
+    }
+
+    #[test]
+    fn a_huffman_code_that_begins_another_is_malformed() {
+        // `10` would end every `100` one bit early.
+        let mut w = W::default();
+        w.huffman(2, 2, &[(1, 0b10, 2), (2, 0b100, 3)], &[2, 1]);
+        let bytes = w.bytes();
+        let r = huffman(&mut BitReader::new(&bytes), 2, false);
+        assert!(malformed_by(r, "a Huffman code that is a prefix of another"));
     }
 
     #[test]
