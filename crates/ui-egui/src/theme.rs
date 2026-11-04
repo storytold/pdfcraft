@@ -392,6 +392,20 @@ fn font_definitions_for_platform(cjk: CjkPreference, platform: FontPolicyPlatfor
             fonts.families.entry(family).or_default().push(name.clone());
         }
     }
+    // The symbol faces (a separator like U+25B8, which a translation writes and no text face
+    // has) after the text faces, so a text face keeps a character it has.
+    for face in pdfcraft_fonts::ui_symbol_fonts() {
+        let name = face.name();
+        if !fonts.font_data.contains_key(&name) {
+            add(&mut fonts, &name, face.bytes);
+        }
+        for family in [FontFamily::Proportional, FontFamily::Monospace] {
+            let stack = fonts.families.entry(family).or_default();
+            if !stack.contains(&name) {
+                stack.push(name.clone());
+            }
+        }
+    }
     // Arabic-script faces (file names, document titles), Telugu faces (the Telugu interface,
     // file names), Hebrew faces (file names, text being edited), Thai faces and Devanagari faces
     // (the Hindi interface) after the CJK ones; the ranges don't overlap.

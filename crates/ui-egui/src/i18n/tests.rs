@@ -1557,3 +1557,47 @@ fn image_paste_and_home_notifications_are_translated() {
         }
     }
 }
+
+/// With craft-fonts, every Chinese translation has glyphs: the Simplified catalog with the
+/// `Hans` face, the Traditional catalog with the `Hant` face. A translation whose character the
+/// face lacks shows a replacement box, so the check fails rather than skips when the build has
+/// no Chinese face at all (#651).
+#[test]
+fn chinese_labels_have_glyphs() {
+    let craft = pdfcraft_fonts::CRAFT_FONTS;
+    let Some(hans) = craft.iter().find(|f| f.covers("Hans")) else {
+        panic!(
+            "no Simplified Chinese face bundled: build with CRAFT_FONTS_DIR holding one \
+             (the Simplified Chinese face is required)"
+        );
+    };
+    let Some(hant) = craft.iter().find(|f| f.covers("Hant")) else {
+        panic!(
+            "no Traditional Chinese face bundled: build with CRAFT_FONTS_DIR holding one \
+             (a face covering Traditional Chinese is required)"
+        );
+    };
+    use egui::epaint::text::{Fonts, TextOptions};
+    for (code, face) in [("zh-hans", hans), ("zh-hant", hant)] {
+        let lang = Lang::from_code(code).expect("the Chinese catalog is registered");
+        let (entries, _) = parse_entries(lang.0.source, 1);
+        let labels: String = entries.iter().flat_map(|e| e.translation.chars()).chain(lang.name().chars()).filter(|c| !c.is_control()).collect();
+        // The whole stack, as the desktop builds it: the Chinese face the catalog needs, the
+        // symbol faces (a separator like U+25B8 is not a Chinese character), and the app's own
+        // fonts. The web build has no Chinese face at all: the Simplified Chinese face is
+        // native-only, so there is no web variant to check.
+        let defs = crate::theme::font_definitions_for(if code == "zh-hans" {
+            crate::theme::CjkPreference::SimplifiedChinese
+        } else {
+            crate::theme::CjkPreference::TraditionalChinese
+        });
+        let wanted = face.name();
+        for family in defs.families.values() {
+            assert!(family.iter().any(|n| n == &wanted), "{code}: the {wanted} face is not in the stack");
+        }
+        let mut fonts = Fonts::new(TextOptions::default(), defs);
+        for id in [egui::FontId::proportional(13.0), egui::FontId::monospace(13.0), crate::theme::medium(13.0), crate::theme::semibold(17.0)] {
+            assert!(fonts.has_glyphs(&id, &labels), "{code}: {id:?} lacks a Chinese label glyph");
+        }
+    }
+}
