@@ -757,6 +757,32 @@ fn unicode_annotation_colours_are_ignored_without_panicking() {
     }
 }
 
+#[test]
+fn xfdf_comment_import_preserves_text_around_comments_and_instructions() {
+    for (body, expected) in [
+        ("left<!-- ignored -->right", "leftright"),
+        ("<!-- first -->left<?note ignored?>middle<!-- last -->right", "leftmiddleright"),
+        ("<![CDATA[Å<left>]]><!-- ignored -->&amp;Ω", "Å<left>&Ω"),
+        (" left <!-- ignored --> right ", " left  right "),
+        ("left\n<!-- ignored -->right&#13;\nlast", "left\rright\rlast"),
+        ("<!-- empty --><?note ignored?>", ""),
+    ] {
+        let mut doc = blank();
+        let xml = format!(
+            r#"<xfdf xmlns="http://ns.adobe.com/xfdf/"><annots><text page="0" name="split-text" rect="10,10,30,30"><contents>{body}</contents></text></annots></xfdf>"#
+        );
+        let report = import(&mut doc, xml.as_bytes()).unwrap();
+        assert_eq!(report.comments, 1);
+        assert!(report.rejected.is_empty());
+        for saved in [write_full(&doc, &SaveOptions::default()).unwrap(), write_incremental(&doc, &SaveOptions::default()).unwrap()] {
+            let reopened = Document::open(Arc::new(saved)).unwrap();
+            let comments = annots_of(&reopened);
+            let note = comments.iter().find(|d| d.name(b"Subtype") == Some(b"Text")).unwrap();
+            assert_eq!(note.get(b"Contents").unwrap().as_string().unwrap().to_text(), expected, "XFDF contents: {body}");
+        }
+    }
+}
+
 /// Importing the same note again must not leave the earlier pop-up on the page.
 #[test]
 fn reimporting_a_note_replaces_its_popup() {
