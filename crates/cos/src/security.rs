@@ -13,7 +13,7 @@ use pdfcraft_crypt::{EncryptDict, Method, SecurityHandler, StreamKind};
 use pdfcraft_filters::MAX_CHAIN;
 
 use crate::document::Held;
-use crate::{Dict, Document, Object, PdfString, Stream};
+use crate::{Dict, Document, ObjRef, Object, PdfString, Stream};
 
 /// How many references one read or write of an object may follow, with all that it loads on the
 /// way. How an object is treated can be given by reference, and what that loads can do the same: a
@@ -305,7 +305,7 @@ pub(crate) fn transform(doc: &Document, h: &SecurityHandler, o: &Object, num: u3
     // which overflowed the stack on a 10 KB file. A stream can't be nested, and a dictionary that
     // is reads as it says directly.
     match o {
-        Object::Stream(s) => stream(doc, s, &strings, h, num, generation, pass, attachment),
+        Object::Stream(s) => stream(doc, s, &strings, h, ObjRef::new(num, generation), pass, attachment),
         Object::Dict(d) if is_signature_dict(Some(doc), d) => signature_dict(d, &strings),
         o => walk(o, &strings),
     }
@@ -338,8 +338,7 @@ fn stream(
     s: &Stream,
     strings: &dyn Fn(&PdfString) -> PdfString,
     h: &SecurityHandler,
-    num: u32,
-    generation: u16,
+    id: ObjRef,
     pass: Pass,
     attachment: bool,
 ) -> Object {
@@ -370,7 +369,7 @@ fn stream(
         (None, _) if attachment => StreamKind::EmbeddedFile,
         _ => StreamKind::Normal,
     };
-    let raw = if decrypt { h.decrypt_stream(num, generation, &s.raw, kind) } else { h.encrypt_stream(num, generation, &s.raw, kind) };
+    let raw = if decrypt { h.decrypt_stream(id.num, id.generation, &s.raw, kind) } else { h.encrypt_stream(id.num, id.generation, &s.raw, kind) };
     Object::Stream(Stream { dict, raw: raw.into() })
 }
 #[cfg(test)]
