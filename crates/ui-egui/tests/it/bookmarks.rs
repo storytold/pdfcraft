@@ -120,6 +120,22 @@ fn the_bookmark_of_the_page_on_screen_is_marked() {
     assert!(marked(&h, "Results") && !marked(&h, "Intro"));
 }
 
+/// A page before the first bookmark's page has no section it is in: no bookmark is marked.
+#[test]
+fn no_bookmark_is_marked_before_the_first_ones_page() {
+    let mut h = harness();
+    h.state_mut().set_option("page", "2").unwrap();
+    h.run_steps(3);
+    add(&mut h, "Middle");
+    let marked =
+        |h: &Harness<'static, PdfCraftApp>, title: &str| h.get_by_label(title).accesskit_node().toggled() == Some(egui::accesskit::Toggled::True);
+    assert!(marked(&h, "Middle"));
+    h.state_mut().set_option("page", "1").unwrap();
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].current, 0);
+    assert!(!marked(&h, "Middle"), "page 1 comes before every bookmark");
+}
+
 /// The page changed while a search hides the bookmark it marks: the row is scrolled to once the
 /// search is cleared and the row is shown, not spent on a frame it wasn't drawn in.
 #[test]
