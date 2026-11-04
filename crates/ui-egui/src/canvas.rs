@@ -1138,6 +1138,8 @@ impl DocView {
         self.wheel_boost_x.reset();
         self.wheel_boost_y.reset();
         self.wheel_motion.reset();
+        self.fling.stop();
+        self.fling.reset_gesture();
     }
 }
 
@@ -2113,6 +2115,14 @@ struct Wheel {
     paging_owns_vertical: bool,
 }
 
+impl Wheel {
+    /// True when this frame received discrete notch or page wheel input, as separated by
+    /// `wheel_boost::accumulate` (#4840).
+    fn has_discrete(&self) -> bool {
+        self.line_base != Vec2::ZERO || self.coarse_scroll != Vec2::ZERO || self.has_page
+    }
+}
+
 /// Cancels older motion before the pager reads new input, without discarding that input.
 fn reset_interrupted_wheel(ui: &egui::Ui, view: &mut DocView, other_motion: bool) {
     let frame = ui.ctx().cumulative_frame_nr();
@@ -2797,6 +2807,9 @@ fn step_glide(ui: &egui::Ui, view: &mut DocView, avail: Rect, cx: &GlideCx) -> V
     let interrupted = glide_interrupted(ui);
     if !may_glide || interrupted || key_scroll != 0.0 || key_side != 0.0 || auto_delta != Vec2::ZERO || zoom_delta != 1.0 {
         view.fling.stop();
+        if interrupted || key_scroll != 0.0 || key_side != 0.0 || auto_delta != Vec2::ZERO || zoom_delta != 1.0 {
+            view.fling.reset_gesture();
+        }
     }
     let glide = view.fling.step(now);
     if view.fling.gliding() {
@@ -2974,12 +2987,13 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let now = ui.input(|i| i.time);
     let animates = app.animation_effects.animates(app.motion.reduced);
     let wheel_enabled = navigation_enabled && unobstructed && !middle_gesture;
-    let Wheel { precise_scroll, line_base, coarse_scroll, has_page, paging_owns_vertical } =
-        read_wheel(ui, view, avail, single_paging, edge_turned, wheel_enabled, animates);
-    let may_glide = !paging_owns_vertical && !middle_gesture && navigation_enabled && unobstructed && animates;
-    let wheel_scrolled = precise_scroll != Vec2::ZERO || line_base != Vec2::ZERO || coarse_scroll != Vec2::ZERO || has_page;
+    let wheel = read_wheel(ui, view, avail, single_paging, edge_turned, wheel_enabled, animates);
+    let has_discrete_wheel = wheel.has_discrete();
+    let may_glide = !wheel.paging_owns_vertical && !middle_gesture && navigation_enabled && unobstructed && animates && !has_discrete_wheel;
+    let wheel_scrolled = wheel.precise_scroll != Vec2::ZERO || has_discrete_wheel;
     let motion = GlideCx { now, may_glide, key_scroll, key_side, auto_delta, zoom_delta, edge_delta, wheel_scrolled };
     let glide = step_glide(ui, view, avail, &motion);
+    let Wheel { precise_scroll, coarse_scroll, .. } = wheel;
     // The wheel may have turned the page above: draw the row it turned to. Measured from the old
     // row, the jump to the new page scrolled both out of view, a blank frame on every turn forward.
     let row = shown_row(view, &rects);
