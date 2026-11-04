@@ -137,7 +137,8 @@ pub(crate) fn encrypt_dict(doc: &Document, d: &Dict) -> EncryptDict {
         ue: bytes_of(doc, d, b"UE"),
         perms: bytes_of(doc, d, b"Perms"),
         p: int(b"P", -1) as i32,
-        encrypt_metadata: cf_encrypt_metadata.unwrap_or(!matches!(d.get(b"EncryptMetadata").map(|v| doc.resolve(v)).as_deref(), Some(Object::Bool(false)))),
+        encrypt_metadata: cf_encrypt_metadata
+            .unwrap_or(!matches!(d.get(b"EncryptMetadata").map(|v| doc.resolve(v)).as_deref(), Some(Object::Bool(false)))),
         sub_filter: name(d, b"SubFilter").unwrap_or_default(),
         recipients,
         crypt_filters,

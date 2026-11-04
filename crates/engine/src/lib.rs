@@ -35,6 +35,7 @@ mod history;
 pub mod js;
 mod layers;
 pub mod links;
+pub mod model3d;
 pub mod ocr;
 mod open;
 pub mod optimizer;
@@ -71,7 +72,10 @@ pub use signature_scan::{PhotoRect, ScanError, SignaturePhoto, Turn};
 pub use stamp_preview::{CommentLayer, StampPreview};
 pub use text_preview::{TextEditPreview, UnmarkedPages};
 
-pub use pdfcraft_organize::{BoxSpec, FieldConflicts, PageBox, SplitBy, Transition, TransitionSpec, mime_for_name, split_ranges};
+pub use pdfcraft_organize::{
+    BoxSpec, FieldConflicts, MAX_IMPORT_BOOKMARKS, OutlineNode, OutlineTree, PageBox, SplitBy, Transition, TransitionSpec, mime_for_name,
+    split_ranges, unmapped as outline_unmapped, view_arity as outline_view_arity,
+};
 
 pub use pdfcraft_organize::LabelStyle;
 pub use pdfcraft_organize::Standard;
@@ -108,9 +112,10 @@ pub use pdfcraft_fonts::{MAX_SIGNATURE_CHARS, ScriptOutline, script_missing, scr
 pub use pdfcraft_annot::appearance as annot_text;
 pub use pdfcraft_annot::links::{Highlight as LinkHighlight, LinkAction, LinkItem, LinkStyle};
 pub use pdfcraft_annot::{
-    AppearanceCache, AttachIcon, FillMark, LineEnding, Markup, NOTE_SIZE, NewAnnotation, NoteIcon, OverlayFont, OverlayLook, Props as CommentProps,
-    ReviewState, Rgb, Shape, StampGroup, StampKind, Style, rect_quad,
+    Activation3d, AppearanceCache, AttachIcon, FillMark, LineEnding, Markup, NOTE_SIZE, NewAnnotation, NoteIcon, OverlayFont, OverlayLook,
+    Props as CommentProps, ReviewState, Rgb, Shape, StampGroup, StampKind, Style, rect_quad,
 };
+pub use pdfcraft_annot::{MAX_MODEL_BYTES as MAX_3D_MODEL_BYTES, ModelFormat as Model3dFormat};
 pub use pdfcraft_forms::detect;
 pub use pdfcraft_optimize as optimize;
 pub use pdfcraft_preflight as pdfa;
@@ -140,7 +145,7 @@ use layers::{apply_layer_state, set_default_layer_state, use_layer_choices};
 pub use open::{OpenContext, PreparedDocument};
 pub use page_filter::{PageOrientation, PageParity, filter_pages};
 pub use pictures::{MarkFile, image_dimensions};
-use pictures::{embed_image, fit_picture, mark_source};
+use pictures::{embed_image, fit_picture, mark_source, model_poster};
 pub use protection::{CertificateProtection, CertificateRecipient, Changes, Printing, Protection, SecuritySummary};
 use protection::{certificate_secured, plain_copy, unlock_with_identities, unrestricted, working_file};
 pub use session::Session;

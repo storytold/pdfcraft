@@ -170,6 +170,14 @@ impl Session {
         Some(BookmarkPage { rows, next: (end < all.len()).then_some(end), truncated: doc.info.outline_more })
     }
 
+    /// The bookmark at `path` with everything under it, or the whole outline for `[]`, as a tree
+    /// another document can take ([`crate::Edit::ImportBookmarks`]). `None` when no document has
+    /// `id`, or its structure could not be read for editing.
+    pub fn outline_tree(&self, id: DocId, path: &[usize]) -> Option<Result<pdfcraft_organize::OutlineTree, pdfcraft_organize::OutlineError>> {
+        let editor = self.get(id)?.editor.as_ref()?;
+        Some(pdfcraft_organize::outline_tree(&editor.cos, path))
+    }
+
     /// Top-level bookmarks as split points: (first page of each part, its bookmark's title).
     pub fn bookmark_splits(&self, id: DocId) -> Vec<(usize, String)> {
         let Some(doc) = self.get(id) else { return Vec::new() };
