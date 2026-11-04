@@ -320,6 +320,21 @@ fn tab_and_space_fill_in_a_check_box_between_text_fields() {
 }
 
 #[test]
+fn tab_uses_the_first_remaining_widget_when_focus_leaves_the_order() {
+    let mut h = check_box_harness();
+    click_field(&mut h, "pick", 0);
+    h.state_mut().apply_edit(pdfcraft_engine::Edit::SetFieldProps {
+        name: "pick".into(),
+        props: Box::new(pdfcraft_engine::FieldProps { rect: Some((0, [320.0, 230.0, 336.0, 246.0])), ..Default::default() }),
+    });
+    h.run_steps(3);
+
+    h.key_press(egui::Key::Tab);
+    h.run_steps(3);
+    assert_eq!(focused(&h), Some(("pick".into(), 1)), "Tab replaces the off-page focus with the group's remaining widget");
+}
+
+#[test]
 fn tab_and_shift_tab_follow_widget_order_across_pages() {
     let mut h = check_box_harness();
     h.state_mut().apply_edit(pdfcraft_engine::Edit::AddField {
@@ -331,7 +346,9 @@ fn tab_and_shift_tab_follow_widget_order_across_pages() {
     h.run_steps(4);
     let order = {
         let s = h.state();
-        let form = &s.session.get(s.views[0].id).unwrap().form;
+        let doc = s.session.get(s.views[0].id).unwrap();
+        let form = &doc.form;
+        let info = &doc.info;
         let mut widgets: Vec<(usize, String, usize)> = form
             .iter()
             .filter(|field| {
@@ -342,7 +359,20 @@ fn tab_and_shift_tab_follow_widget_order_across_pages() {
                     .widgets
                     .iter()
                     .enumerate()
-                    .filter(|(_, widget)| widget.page.is_some() && !widget.hidden)
+                    .filter(|(_, widget)| {
+                        let Some(page) = widget.page.and_then(|page| info.pages.get(page)) else { return false };
+                        let [x0, y0, x1, y1] = widget.rect;
+                        let [cx0, cy0, cx1, cy1] = page.crop.map(f64::from);
+                        !widget.hidden
+                            && !widget.read_only
+                            && [x0, y0, x1, y1].into_iter().all(f64::is_finite)
+                            && x0 < x1
+                            && y0 < y1
+                            && x1 > cx0
+                            && x0 < cx1
+                            && y1 > cy0
+                            && y0 < cy1
+                    })
                     .map(move |(wi, widget)| (widget.tab, field.name.clone(), wi))
             })
             .collect();

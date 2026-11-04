@@ -749,12 +749,16 @@ fn tab_to_next_field(
     // The next field that can be filled in, check boxes and radio buttons included (#2223), in
     // the document's tab order (each page's /Tabs: rows, columns or structure), wrapping.
     let order = tab_order(form, info);
-    if let Some(pos) = order
-        .iter()
-        .position(|(fi, wi)| form.get(*fi).is_some_and(|x| x.name == f.name && *wi == widget))
-        .or_else(|| order.iter().position(|(fi, _)| form.get(*fi).is_some_and(|x| x.name == f.name)))
-    {
-        let k = if forward { (pos + 1) % order.len() } else { (pos + order.len() - 1) % order.len() };
+    let exact = order.iter().position(|(fi, wi)| form.get(*fi).is_some_and(|x| x.name == f.name && *wi == widget));
+    if let Some(pos) = exact.or_else(|| order.iter().position(|(fi, _)| form.get(*fi).is_some_and(|x| x.name == f.name))) {
+        // A focused widget that left the order is replaced by the field's first remaining stop.
+        let k = if forward && exact.is_none() {
+            pos
+        } else if forward {
+            (pos + 1) % order.len()
+        } else {
+            (pos + order.len() - 1) % order.len()
+        };
         let Some((fi, wi)) = order.get(k).copied() else { return edit.or(pending) };
         let Some(target) = form.get(fi) else { return edit.or(pending) };
         view.forms.focus = Some(Focus { select_all: true, ..open_focus(target, wi) });

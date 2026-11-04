@@ -153,7 +153,7 @@ fn form_tab_numbers_can_be_shown_and_captured_through_the_control_channel() {
     assert!(h.state().views[h.state().active.unwrap()].prepare.show_tab_numbers);
     assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["documents"][1]["dirty"], false);
     let shot = ok(&mut h, &c, "ui.screenshot", json!({}));
-    assert!(shot["png_base64"].as_str().is_some_and(|png| !png.is_empty()), "the control channel captures the enabled overlay");
+    assert!(shot["png_base64"].as_str().is_some_and(|png| !png.is_empty()), "the control channel returns a nonempty screenshot");
 }
 
 #[test]

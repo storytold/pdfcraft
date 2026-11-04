@@ -244,11 +244,14 @@ fn dragged(r: Rect, grab: Grab, delta: egui::Vec2, shift: bool) -> Rect {
     }
 }
 
-fn tab_badge_rect(widget: Rect, page: Rect, size: egui::Vec2) -> Rect {
-    let max_x = (page.right() - size.x).max(page.left());
-    let max_y = (page.bottom() - size.y).max(page.top());
+fn tab_badge_rect(widget: Rect, page: Rect, size: egui::Vec2) -> Option<Rect> {
+    if !page.is_positive() || !size.is_finite() || size.x < 0.0 || size.y < 0.0 || size.x > page.width() || size.y > page.height() {
+        return None;
+    }
+    let max_x = page.right() - size.x;
+    let max_y = page.bottom() - size.y;
     let min = egui::pos2((widget.left() + 3.0).clamp(page.left(), max_x), (widget.top() + 3.0).clamp(page.top(), max_y));
-    Rect::from_min_size(min, size)
+    Some(Rect::from_min_size(min, size))
 }
 
 pub(crate) struct Outcome {
@@ -575,7 +578,7 @@ pub fn arrange(form: &[FormField], anchor: &(String, usize), others: &[(String, 
 
 /// Fields with their light-blue fill and name tags, the selection with its handles, and the
 /// rectangle being drawn or dragged to the pages' `pointer`.
-pub(crate) fn paint_page(cx: PageToolContext<'_>, form: &[FormField], view: &DocView) {
+pub(crate) fn paint_page(cx: PageToolContext<'_>, form: &[FormField], tab_order: &[(usize, usize)], view: &DocView) {
     let PageToolContext { ui, xf, page, info, ptr, .. } = cx;
     let painter = ui.painter();
     let pointer = ptr.pos;
@@ -617,7 +620,7 @@ pub(crate) fn paint_page(cx: PageToolContext<'_>, form: &[FormField], view: &Doc
         }
     }
     if prep.show_tab_numbers {
-        for (number, (fi, wi)) in crate::forms_ui::tab_order(form, info).into_iter().enumerate() {
+        for (number, (fi, wi)) in tab_order.iter().copied().enumerate() {
             let Some(field) = form.get(fi) else { continue };
             let Some(widget) = field.widgets.get(wi) else { continue };
             if widget.page != Some(page) {
@@ -631,7 +634,7 @@ pub(crate) fn paint_page(cx: PageToolContext<'_>, form: &[FormField], view: &Doc
             let label = number.saturating_add(1).to_string();
             let font = theme::semibold((10.0 * zoom).clamp(8.0, 14.0));
             let galley = painter.layout_no_wrap(label, font, Color32::WHITE);
-            let badge = tab_badge_rect(r, xf.rect, galley.size() + vec2(8.0, 5.0));
+            let Some(badge) = tab_badge_rect(r, xf.rect, galley.size() + vec2(8.0, 5.0)) else { continue };
             let clipped = painter.with_clip_rect(painter.clip_rect().intersect(xf.rect));
             clipped.rect_filled(badge, CornerRadius::same(3), SELECT_BLUE);
             clipped.galley(badge.min + vec2(4.0, 2.0), galley, Color32::WHITE);
@@ -803,12 +806,19 @@ mod tests {
         let page = Rect::from_min_size(pos2(10.0, 20.0), vec2(100.0, 80.0));
         let widget = Rect::from_min_size(pos2(30.0, 40.0), vec2(20.0, 15.0));
         let size = vec2(24.0, 14.0);
-        let original = tab_badge_rect(widget, page, size);
+        let original = tab_badge_rect(widget, page, size).unwrap();
         let moved = dragged(widget, Grab::Move, vec2(12.0, 8.0), false);
-        assert_eq!(tab_badge_rect(moved, page, size).min, original.min + vec2(12.0, 8.0));
+        assert_eq!(tab_badge_rect(moved, page, size).unwrap().min, original.min + vec2(12.0, 8.0));
 
         let near_edge = Rect::from_min_size(pos2(100.0, 95.0), vec2(8.0, 8.0));
-        let badge = tab_badge_rect(near_edge, page, size);
+        let badge = tab_badge_rect(near_edge, page, size).unwrap();
         assert!(page.contains_rect(badge));
+    }
+
+    #[test]
+    fn tab_badge_is_omitted_when_it_cannot_fit_on_the_page() {
+        let page = Rect::from_min_size(pos2(10.0, 20.0), vec2(20.0, 12.0));
+        let widget = Rect::from_min_size(pos2(10.0, 20.0), vec2(4.0, 4.0));
+        assert_eq!(tab_badge_rect(widget, page, vec2(24.0, 14.0)), None);
     }
 }
