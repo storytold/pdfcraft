@@ -54,6 +54,8 @@ pub struct FieldState {
     pub fill_color: Option<Vec<String>>,
     /// Normal push-button caption, when this is a button.
     pub caption: Option<String>,
+    /// `buttonSetCaption` was called, even when it set the current text again.
+    pub caption_was_set: bool,
 }
 
 impl FieldState {
@@ -71,6 +73,7 @@ impl FieldState {
             text_color: None,
             fill_color: None,
             caption: None,
+            caption_was_set: false,
         }
     }
 
