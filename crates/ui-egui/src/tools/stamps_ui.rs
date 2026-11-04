@@ -209,7 +209,7 @@ impl PdfCraftApp {
     /// Save the dialog's stamp in the library and choose it.
     pub(crate) fn save_custom_stamp(&mut self) {
         let d = std::mem::take(&mut self.stamp_draft);
-        let id = match new_stamp_id(&self.custom_stamps) {
+        let id = match new_stamp_id(&mut self.next_custom_stamp_id, &self.custom_stamps) {
             Ok(id) => id,
             Err(error) => {
                 self.notify(error);
@@ -248,39 +248,79 @@ pub struct StampEdit {
     pub category: String,
 }
 
-fn new_stamp_id(stamps: &[CustomStamp]) -> Result<u64, String> {
-    let used: std::collections::HashSet<u64> = stamps.iter().map(|stamp| stamp.id).collect();
-    let mut candidate = 1;
-    while used.contains(&candidate) {
+fn new_stamp_id(next_id: &mut u64, stamps: &[CustomStamp]) -> Result<u64, String> {
+    if *next_id == 0 {
+        return Err("custom stamp library has no available identity".into());
+    }
+    let floor = match stamps.iter().map(|stamp| stamp.id).max() {
+        Some(max) => match max.checked_add(1) {
+            Some(next) => next,
+            None => {
+                *next_id = 0;
+                return Err("custom stamp library has no available identity".into());
+            }
+        },
+        None => 1,
+    };
+    let mut candidate = (*next_id).max(floor);
+    while stamps.iter().any(|stamp| stamp.id == candidate) {
         candidate = candidate.checked_add(1).ok_or_else(|| "custom stamp library has no available identity".to_string())?;
     }
+    *next_id = candidate.checked_add(1).unwrap_or_default();
     Ok(candidate)
 }
 
 /// The custom stamps for `persist` (kept small: base64 of each file).
-pub(crate) fn encode(stamps: &[CustomStamp]) -> serde_json::Value {
-    serde_json::to_value(stamps).unwrap_or_default()
+pub(crate) fn encode(stamps: &[CustomStamp], next_id: u64) -> serde_json::Value {
+    serde_json::json!({
+        "next_id": next_id,
+        "stamps": serde_json::to_value(stamps).unwrap_or_default(),
+    })
 }
 
-/// Read stamps back; malformed entries are dropped.
-pub(crate) fn decode(v: &serde_json::Value) -> Vec<CustomStamp> {
-    let mut stamps: Vec<CustomStamp> = v
-        .as_array()
+/// Read stamps and the identity counter back; malformed entries are dropped.
+pub(crate) fn decode(v: &serde_json::Value) -> (Vec<CustomStamp>, u64) {
+    let (entries, saved_next_id) = if v.is_array() {
+        (Some(v), None)
+    } else {
+        (v.get("stamps"), v.get("next_id").and_then(serde_json::Value::as_u64))
+    };
+    let stamps: Vec<CustomStamp> = entries
+        .and_then(serde_json::Value::as_array)
         .map(|a| a.iter().filter_map(|x| serde_json::from_value::<CustomStamp>(x.clone()).ok()).filter(|s| s.data.len() <= MAX_STAMP_BYTES).collect())
         .unwrap_or_default();
+    let reserved: std::collections::HashSet<u64> = stamps.iter().map(|stamp| stamp.id).filter(|id| *id != 0).collect();
     let mut ids = std::collections::HashSet::new();
-    let mut fallback = u64::MAX;
-    for stamp in &mut stamps {
-        if stamp.id == 0 || !ids.insert(stamp.id) {
-            while fallback == 0 || ids.contains(&fallback) {
-                fallback = fallback.saturating_sub(1);
-            }
-            stamp.id = fallback;
-            ids.insert(fallback);
-            fallback = fallback.saturating_sub(1);
+    let mut fallback = 1u128;
+    let mut repaired = Vec::with_capacity(stamps.len());
+    for mut stamp in stamps {
+        if stamp.id == 0 || ids.contains(&stamp.id) {
+            let replacement = loop {
+                let Ok(candidate) = u64::try_from(fallback) else { break None };
+                fallback = fallback.saturating_add(1);
+                if !reserved.contains(&candidate) && !ids.contains(&candidate) {
+                    break Some(candidate);
+                }
+            };
+            let Some(id) = replacement else { continue };
+            stamp.id = id;
         }
+        ids.insert(stamp.id);
+        repaired.push(stamp);
     }
-    stamps
+    let minimum_next_id = repaired
+        .iter()
+        .map(|stamp| stamp.id)
+        .max()
+        .map(|id| id.checked_add(1).unwrap_or_default())
+        .unwrap_or(1);
+    let next_id = match saved_next_id {
+        Some(0) => 0,
+        Some(saved) if minimum_next_id != 0 => saved.max(minimum_next_id),
+        Some(_) => 0,
+        None => minimum_next_id,
+    };
+    (repaired, next_id)
 }
 
 #[cfg(test)]
@@ -338,17 +378,26 @@ mod tests {
             page: 0,
             data: Arc::new(vec![9]),
         }];
-        let restored = decode(&encode(&saved));
+        let (restored, next_id) = decode(&encode(&saved, u64::MAX));
         assert_eq!(restored[0].id, u64::MAX - 1);
         assert_eq!(restored[0].data.as_slice(), &[9]);
+        assert_eq!(next_id, u64::MAX);
         let old = serde_json::json!([{"category":"Tools","name":"Old","file":"old.png","page":0,"data":"CQ=="}]);
-        assert_ne!(decode(&old)[0].id, 0);
+        let (restored, next_id) = decode(&old);
+        assert_eq!(restored[0].id, 1);
+        assert_eq!(next_id, 2);
     }
 
     #[test]
-    fn new_stamp_ids_skip_existing_values() {
+    fn new_stamp_ids_remain_monotonic_after_deletion_and_settings_restore() {
         let make = |id| CustomStamp { id, category: String::new(), name: String::new(), file: String::new(), page: 0, data: Arc::new(Vec::new()) };
-        assert_eq!(new_stamp_id(&[make(1), make(2)]), Ok(3));
-        assert!(new_stamp_id(&[make(u64::MAX), make(1), make(2)]).is_ok());
+        let mut next_id = 1;
+        assert_eq!(new_stamp_id(&mut next_id, &[]), Ok(1));
+        assert_eq!(new_stamp_id(&mut next_id, &[make(1)]), Ok(2));
+        let remaining = [make(2)];
+        let (restored, mut next_id) = decode(&encode(&remaining, next_id));
+        assert_eq!(new_stamp_id(&mut next_id, &restored), Ok(3));
+        let mut exhausted = 0;
+        assert!(new_stamp_id(&mut exhausted, &[make(u64::MAX)]).is_err());
     }
 }

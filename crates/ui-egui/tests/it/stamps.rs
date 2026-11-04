@@ -156,29 +156,46 @@ fn editing_a_saved_custom_stamp_through_its_palette_updates_it_and_cancel_discar
     h.run_steps(2);
     let mut png = Vec::new();
     image::RgbImage::from_pixel(60, 20, image::Rgb([20, 120, 220])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
-    h.state_mut().start_custom_stamp("logo.png".into(), png);
+    h.state_mut().start_custom_stamp("logo.png".into(), png.clone());
     h.run_steps(2);
     h.get_by_label("Create Custom Stamp");
     h.state_mut().stamp_draft.category = "Company".into();
     h.get_by_label("OK").click();
     h.run_steps(3);
 
-    h.get_by_label("logo").click_secondary();
+    h.state_mut().start_custom_stamp("seal.png".into(), png);
+    h.run_steps(2);
+    h.get_by_label("Create Custom Stamp");
+    h.state_mut().stamp_draft.category = "Company".into();
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    let first_id = h.state().custom_stamps[0].id;
+    let second_id = h.state().custom_stamps[1].id;
+
+    h.get_by_label("seal").click_secondary();
     h.run_steps(2);
     h.get_by_label("Rename / change category…").click();
     h.run_steps(3);
     h.get_by_label("Edit Custom Stamp");
-    h.get_by_value("logo").click();
+    h.get_by_value("seal").click();
     h.key_press_modifiers(Modifiers::COMMAND, Key::A);
     h.run_steps(1);
-    h.get_by_value("logo").type_text("Renamed");
+    h.get_by_value("seal").type_text("Renamed");
     h.get_by_value("Company").click();
     h.key_press_modifiers(Modifiers::COMMAND, Key::A);
     h.run_steps(1);
     h.get_by_value("Company").type_text("Moved");
     h.get_by_label("Save").click();
     h.run_steps(3);
-    assert_eq!((h.state().custom_stamps[0].name.as_str(), h.state().custom_stamps[0].category.as_str()), ("Renamed", "Moved"));
+    assert_eq!(h.state().custom_stamps.len(), 2);
+    assert_eq!(
+        (h.state().custom_stamps[0].id, h.state().custom_stamps[0].name.as_str(), h.state().custom_stamps[0].category.as_str()),
+        (first_id, "logo", "Company")
+    );
+    assert_eq!(
+        (h.state().custom_stamps[1].id, h.state().custom_stamps[1].name.as_str(), h.state().custom_stamps[1].category.as_str()),
+        (second_id, "Renamed", "Moved")
+    );
 
     h.get_by_label("Renamed").click_secondary();
     h.run_steps(2);
@@ -194,5 +211,13 @@ fn editing_a_saved_custom_stamp_through_its_palette_updates_it_and_cancel_discar
     h.get_by_value("Moved").type_text("Discarded");
     h.get_by_label("Cancel").click();
     h.run_steps(3);
-    assert_eq!((h.state().custom_stamps[0].name.as_str(), h.state().custom_stamps[0].category.as_str()), ("Renamed", "Moved"));
+    assert_eq!(h.state().custom_stamps.len(), 2);
+    assert_eq!(
+        (h.state().custom_stamps[0].id, h.state().custom_stamps[0].name.as_str(), h.state().custom_stamps[0].category.as_str()),
+        (first_id, "logo", "Company")
+    );
+    assert_eq!(
+        (h.state().custom_stamps[1].id, h.state().custom_stamps[1].name.as_str(), h.state().custom_stamps[1].category.as_str()),
+        (second_id, "Renamed", "Moved")
+    );
 }

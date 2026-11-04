@@ -224,6 +224,7 @@ impl PdfCraftApp {
             combine_thumbs: Default::default(),
             image_import: None,
             custom_stamps: Vec::new(),
+            next_custom_stamp_id: 1,
             stamp_draft: Default::default(),
             stamp_edit: None,
             optimize_draft: OptimizeDraft::default(),
