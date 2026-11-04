@@ -11,7 +11,7 @@ fn release(tag: &str) -> craft_update::Release {
     craft_update::Release {
         tag: tag.to_string(),
         version: craft_update::parse_version(tag),
-        html_url: format!("https://github.com/storytold/pdfcraft/releases/tag/{tag}"),
+        html_url: format!("{}/tag/{tag}", pdfcraft_ui_egui::updates::RELEASES_PAGE),
         ..Default::default()
     }
 }

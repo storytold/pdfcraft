@@ -393,6 +393,10 @@ cargo xtask demo-pdf                              # build the showcase PDF used 
 cargo xtask screenshots                           # regenerate every screenshot in this README
 ```
 
+Distributors can compile a fixed GitHub release source with `PDFCRAFT_UPDATE_REPO=owner/repo`.
+Unset, the app follows official PdfCraft releases. See [custom update sources](docs/releasing.md#custom-update-sources)
+for packaging and version requirements; running from a Cargo build directory still uses the development-mode download flow.
+
 The interface language is chosen in **Menu → Edit → Preferences…** (Command-comma on macOS,
 Ctrl-comma elsewhere, also with no document open; Auto follows the system language;
 see [docs/localization.md](docs/localization.md)) and saved. Japanese covers commands,

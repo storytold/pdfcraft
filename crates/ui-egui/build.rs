@@ -18,7 +18,20 @@ use std::fmt::Write as _;
 
 use serde_json::Value;
 
+#[path = "build/update_source.rs"]
+mod update_source;
+
 fn main() {
+    println!("cargo::rerun-if-changed=build/update_source.rs");
+    println!("cargo::rerun-if-env-changed=PDFCRAFT_UPDATE_REPO");
+    let update_repo = std::env::var_os("PDFCRAFT_UPDATE_REPO");
+    match update_source::repository(update_repo.as_deref()) {
+        Ok(repo) => println!("cargo::rustc-env=PDFCRAFT_UPDATE_REPO={repo}"),
+        Err(error) => {
+            println!("cargo::error={error}");
+            return;
+        }
+    }
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../contributors");
     let json = read(&dir.join("contributors.json"), "the About window shows no contributors", |t| {
         serde_json::from_str::<Value>(t).map_err(|e| e.to_string())

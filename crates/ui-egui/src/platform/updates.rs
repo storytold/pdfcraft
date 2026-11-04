@@ -9,8 +9,11 @@ use craft_update::{CheckResultDialog, CheckResultResponse};
 
 use crate::PdfCraftApp;
 
-/// Where every PdfCraft release is listed.
-pub const RELEASES_PAGE: &str = "https://github.com/storytold/pdfcraft/releases";
+/// The GitHub owner/repo selected at build time; validated by the build script.
+pub const REPOSITORY: &str = env!("PDFCRAFT_UPDATE_REPO");
+
+/// Releases for this build, also used by the web app's manual update command.
+pub const RELEASES_PAGE: &str = concat!("https://github.com/", env!("PDFCRAFT_UPDATE_REPO"), "/releases");
 
 /// Stands in for the network in tests.
 #[cfg(not(target_arch = "wasm32"))]

@@ -1778,8 +1778,8 @@ milestone = "M3"
 status = "partial"
 commands = ["help.check_updates"]
 tools = []
-evidence = ["crates/ui-egui/tests/it/updates.rs::a_newer_release_is_offered_for_download", "crates/ui-egui/tests/it/updates.rs::an_up_to_date_or_failed_check_says_so", "crates/ui-egui/tests/it/updates.rs::the_check_at_start_offers_the_prompt_and_later_dismisses_it", "crates/ui-egui/tests/it/updates.rs::nothing_is_asked_until_the_user_checks"]
-notes = "asks GitHub Releases through craft-update at start (desktop app only) and on request, offers the release page, and updates and restarts in place where the install type allows it; an install waits while documents are unsaved"
+evidence = ["crates/ui-egui/tests/it/updates.rs::a_newer_release_is_offered_for_download", "crates/ui-egui/tests/it/updates.rs::an_up_to_date_or_failed_check_says_so", "crates/ui-egui/tests/it/updates.rs::the_check_at_start_offers_the_prompt_and_later_dismisses_it", "crates/ui-egui/tests/it/updates.rs::nothing_is_asked_until_the_user_checks", "crates/ui-egui/tests/update_source.rs::compiled_source_is_shared_by_native_updates_and_the_release_link", "crates/ui-egui/tests/update_source.rs::release_assets_stay_inside_the_compiled_repository"]
+notes = "asks GitHub Releases through craft-update at start (desktop app only) and on request, offers the release page, and updates and restarts in place where the install type allows it; an install waits while documents are unsaved. Distributors may compile a validated PDFCRAFT_UPDATE_REPO owner/repo; unset builds follow official releases, and Cargo build-tree copies still offer downloads. No runtime source/channel selector."
 
 [[feature]]
 id = "view.single-key-accelerators"
