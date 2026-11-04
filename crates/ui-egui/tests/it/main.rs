@@ -67,6 +67,7 @@ mod prepare;
 mod print;
 mod protect;
 mod reading_colors;
+mod recent_files;
 mod recovery;
 mod redact;
 mod reload;

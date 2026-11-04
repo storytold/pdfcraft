@@ -97,6 +97,13 @@ modules:
           - 'exec "/app/libexec/cups/${0##*/}" "$@"'
   - name: pdfcraft
     buildsystem: simple
+    # The release binaries were built with the interface translations at the commit in
+    # craft-i18n.rev (the craft-i18n source below); nothing here compiles, so this records which
+    # translations the bundle carries and keeps it in step with the from-source manifest (a test
+    # keeps both equal to the pin).
+    build-options:
+      env:
+        CRAFT_I18N_DIR: /run/build/pdfcraft/craft-i18n
     build-commands:
       - install -Dm755 bin/pdfcraft /app/bin/pdfcraft
       - install -Dm755 bin/pdfcraft-cli /app/bin/pdfcraft-cli
@@ -111,3 +118,7 @@ modules:
     sources:
       - type: dir
         path: stage
+      - type: git
+        url: https://github.com/storytold/craft-i18n
+        commit: dfbe955b1ba4aa84bb34c80c45b9d917e8da4704
+        dest: craft-i18n
