@@ -195,13 +195,14 @@ pub fn tools() -> Vec<ToolDef> {
             .with(schema(json!({ "doc": doc(), "pages": pages("to count (default: all)"),
                 "exclude_tables": { "type": "boolean" }, "exclude_code": { "type": "boolean" }, "exclude_images": { "type": "boolean" }
             }), &["doc"])),
-        t("text_extract", "Extract text", "Extract the text of some or all pages, in reading order. With rect, only the text inside that rectangle on each page, as Column select takes it: one row per visual line, side-by-side pieces (table cells) separated by a tab.")
+        t("text_extract", "Extract text", "Extract the text of some or all pages, in reading order. With rect, only the text inside that rectangle on each page, as Column select takes it: one row per visual line, side-by-side pieces (table cells) separated by a tab. With format \"html\", each page also carries html, the same text as Copy with formatting puts on the clipboard (paragraphs, bold, italic, size, colour and font family), and styles_incomplete when some styles had to be left out.")
             .ro()
             .cmd("edit.column_select")
             .with(schema(
                 json!({
                     "doc": doc(), "pages": pages("to extract (default: all)"),
-                    "rect": { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4, "description": "Column select: [x0, y0, x1, y1] in points from the top-left of the displayed page; a glyph counts when its centre is inside." }
+                    "rect": { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4, "description": "Column select: [x0, y0, x1, y1] in points from the top-left of the displayed page; a glyph counts when its centre is inside." },
+                    "format": { "type": "string", "enum": ["text", "html"], "description": "text (default) or html: also return each page's text as formatted HTML." }
                 }),
                 &["doc"],
             )),

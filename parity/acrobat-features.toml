@@ -1571,11 +1571,11 @@ title = "Copy text keeping layout"
 area = "B"
 tier = "P2"
 milestone = "M3"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "partial"
+commands = ["edit.copy"]
+tools = ["text_extract"]
+evidence = ["crates/export/src/clip.rs::heading_body_and_coloured_span_keep_their_formatting", "crates/export/src/clip.rs::special_characters_are_escaped_and_cannot_leave_the_style", "crates/export/src/clip.rs::empty_and_huge_selections_are_bounded", "crates/engine/src/rich_copy.rs::copy_keeps_headings_body_and_colour_as_html", "crates/engine/src/rich_copy.rs::copy_with_formatting_is_refused_when_copying_is_withheld", "crates/automation/tests/it/automation.rs::text_extract_as_html_keeps_the_formatting", "crates/ui-egui/tests/it/text_select.rs::selected_text_copy_keeps_the_formatting_as_html", "crates/ui-egui/tests/it/text_select.rs::selected_text_copy_with_formatting_honours_permissions"]
+notes = "Copy of a page-text selection also puts HTML on the system clipboard (paragraphs, bold, italic, size, colour, font family; plain text as the alternative), and text_extract format html returns the same. Missing: RTF, underline and strike-through, tables, Select All of the whole document (plain text only), the web build (plain text only), and styles for glyphs outside the page's reading blocks (copied unstyled)"
 
 [[feature]]
 id = "view.snapshot"

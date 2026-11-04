@@ -2420,6 +2420,7 @@ fn protecting_through_tools() {
     // Copying wasn't allowed either (#568): no text or images come out, though search works.
     for (tool, args) in [
         ("text_extract", json!({ "doc": re })),
+        ("text_extract", json!({ "doc": re, "format": "html" })),
         ("text_word_count", json!({ "doc": re })),
         ("text_paragraphs", json!({ "doc": re, "page": 1 })),
         ("doc_export_text", json!({ "doc": re, "path": "out.txt" })),
@@ -8974,6 +8975,35 @@ fn text_extract_with_a_rect_takes_one_column() {
     // A rect that is not four numbers is refused.
     for bad in [json!([1, 2, 3]), json!("0 0 1 1"), json!([0, 0, "a", 1])] {
         let e = a.call("text_extract", &json!({ "doc": doc, "rect": bad })).unwrap_err();
+        assert!(matches!(e, ToolError::InvalidArgs(_)), "{bad}: {e}");
+    }
+}
+
+/// Copy with formatting, headless: `format: "html"` adds each page's text as the HTML fragment
+/// Copy puts on the clipboard, for the whole page or only what `rect` takes.
+#[test]
+fn text_extract_as_html_keeps_the_formatting() {
+    let dir = workdir("rich-copy");
+    std::fs::write(dir.join("table.pdf"), table_pdf()).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "table.pdf" }))["doc"].as_u64().unwrap();
+    let page = &ok(&mut a, "text_extract", json!({ "doc": doc, "pages": [1], "format": "html" }))["pages"][0];
+    let html = page["html"].as_str().unwrap();
+    assert!(html.starts_with("<p style=\"margin:0\"><span style=\"font-family:'Helvetica';font-size:12pt\">Name"), "{html}");
+    assert!(html.contains("Pear") && html.contains("Qty"), "{html}");
+    assert_eq!(page["text"], "Name\nApple\nPear\nQty\n12\n7", "the plain text is unchanged");
+    assert_eq!(page["styles_incomplete"], false);
+    // Plain text by default: no html key.
+    assert!(ok(&mut a, "text_extract", json!({ "doc": doc, "pages": [1] }))["pages"][0].get("html").is_none());
+    // Only what the rect takes; nothing inside gives empty HTML.
+    let column = ok(&mut a, "text_extract", json!({ "doc": doc, "pages": [1], "rect": [120, 0, 300, 300], "format": "html" }));
+    let html = column["pages"][0]["html"].as_str().unwrap();
+    assert!(html.contains("Qty") && !html.contains("Name"), "{html}");
+    let none = ok(&mut a, "text_extract", json!({ "doc": doc, "pages": [1], "rect": [0, 0, 5, 5], "format": "html" }));
+    assert_eq!(none["pages"][0]["html"], "");
+    // An unknown format is refused.
+    for bad in [json!("rtf"), json!(1)] {
+        let e = a.call("text_extract", &json!({ "doc": doc, "format": bad })).unwrap_err();
         assert!(matches!(e, ToolError::InvalidArgs(_)), "{bad}: {e}");
     }
 }

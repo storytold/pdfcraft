@@ -124,11 +124,32 @@ impl PdfCraftApp {
             return true;
         }
         let Some(text) = v.selected_text().filter(|text| !text.is_empty()) else { return false };
+        let glyphs = v.selected_glyphs();
         if !self.may_copy(id) {
             return false;
         }
-        ctx.copy_text(text);
+        self.last_copied_html = glyphs
+            .and_then(|(page, layer, glyphs)| self.session.get(id)?.rich_copy(page, &layer, &glyphs).ok())
+            .map(|copy| copy.html)
+            .filter(|html| !html.is_empty());
+        if !self.put_rich_text(&text) {
+            ctx.copy_text(text);
+        }
         true
+    }
+
+    /// Put [`Self::last_copied_html`] on the system clipboard with `text` as its plain
+    /// alternative (Copy with formatting). `false` when it wasn't (no HTML, the system clipboard
+    /// is off or failed, the web build), so the caller copies the plain text the usual way.
+    fn put_rich_text(&self, text: &str) -> bool {
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.system_clipboard
+            && let Some(html) = self.last_copied_html.as_deref()
+        {
+            return crate::os_clipboard::with(|c| c.set().html(html, Some(text))).is_ok();
+        }
+        let _ = text;
+        false
     }
 
     /// The clipboard text of a whole-document copy, once its pages are read; dropped with the

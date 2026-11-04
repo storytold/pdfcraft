@@ -201,6 +201,11 @@ impl Automation {
     }
 
     pub(crate) fn text_extract(&mut self, a: &Args) -> Result<Value> {
+        let html = match a.opt_str("format")?.unwrap_or("text") {
+            "text" => false,
+            "html" => true,
+            other => return Err(ToolError::InvalidArgs(format!("format must be \"text\" or \"html\", not {other:?}"))),
+        };
         let doc = self.doc_to_copy(a)?;
         let id = doc.id;
         let pages = match a.opt_ints("pages")? {
@@ -214,7 +219,22 @@ impl Automation {
             Some(r) => t.column_text(&t.glyphs_in(r)),
             None => t.plain_text(),
         };
-        let out: Vec<Value> = pages.iter().zip(texts).map(|(p, t)| json!({ "page": p + 1, "text": text(&t) })).collect();
+        let doc = self.doc(a)?;
+        let mut out = Vec::with_capacity(pages.len());
+        for (&p, t) in pages.iter().zip(texts) {
+            let mut page = json!({ "page": p + 1, "text": text(&t) });
+            if html {
+                // Copy with formatting: the same glyphs as an HTML fragment.
+                let glyphs: Vec<usize> = match rect {
+                    Some(r) => t.glyphs_in(r),
+                    None => (0..t.glyphs.len()).collect(),
+                };
+                let copy = doc.rich_copy(p, &t, &glyphs).map_err(failed)?;
+                page["html"] = json!(copy.html);
+                page["styles_incomplete"] = json!(copy.styles_incomplete);
+            }
+            out.push(page);
+        }
         Ok(json!({ "pages": out }))
     }
 

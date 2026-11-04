@@ -193,7 +193,7 @@ fn copied(h: &Harness<'static, PdfCraftApp>, want: &str) -> bool {
 #[test]
 fn selected_text_copy_edit_and_context_menus() {
     use egui_kittest::kittest::Queryable;
-    let (mut h, at) = harness(|_| {});
+    let (mut h, at) = harness(|app| app.system_clipboard = false);
     click(&mut h, at);
     click(&mut h, at);
     h.state_mut().quick_tool = pdfcraft_ui_egui::QuickTool::Hand;
@@ -245,7 +245,7 @@ fn escape_closes_an_open_menu_before_it_clears_the_selection() {
 
 #[test]
 fn selected_text_copy_command_requires_selection() {
-    let (mut h, at) = harness(|_| {});
+    let (mut h, at) = harness(|app| app.system_clipboard = false);
     assert!(!h.state_mut().execute("edit.copy"));
     click(&mut h, at);
     click(&mut h, at);
@@ -277,6 +277,7 @@ fn selected_text_copy_floating_button_honours_permissions() {
             app.open_bytes("no-copy.pdf", None, bytes).unwrap();
             app.submit_password(Some(password.into()));
             app.set_option("left", "closed").unwrap();
+            app.system_clipboard = false;
             app
         });
         let mut loaded = false;
@@ -299,6 +300,57 @@ fn selected_text_copy_floating_button_honours_permissions() {
         assert_eq!(did_copy, password == "owner", "floating Copy with {password} password");
         assert_eq!(h.state_mut().execute("edit.copy"), password == "owner");
     }
+}
+
+/// Copy with formatting: Copy also produces the selection as HTML (font, size) for the system
+/// clipboard, next to the plain text, and a new copy replaces it.
+#[test]
+fn selected_text_copy_keeps_the_formatting_as_html() {
+    let (mut h, at) = harness(|app| app.system_clipboard = false);
+    click(&mut h, at);
+    click(&mut h, at);
+    assert!(h.state_mut().execute("edit.copy"));
+    h.step();
+    assert!(copied(&h, "quick"), "the plain text still goes out");
+    assert_eq!(
+        h.state().last_copied_html.as_deref(),
+        Some("<p style=\"margin:0\"><span style=\"font-family:'Helvetica';font-size:14pt\">quick</span></p>\n")
+    );
+    // Three clicks: the line, a new copy.
+    h.run_steps(60);
+    for _ in 0..3 {
+        click(&mut h, at);
+    }
+    assert!(h.state_mut().execute("edit.copy"));
+    let html = h.state().last_copied_html.clone().unwrap_or_default();
+    assert!(html.contains(">The quick brown fox</span>"), "{html}");
+}
+
+/// A document that withholds copying gives neither the text nor its HTML.
+#[test]
+fn selected_text_copy_with_formatting_honours_permissions() {
+    let mut doc = pdfcraft_cos::Document::open(std::sync::Arc::new(two_lines())).unwrap();
+    doc.set_encryption(&pdfcraft_cos::NewEncryption {
+        algorithm: pdfcraft_cos::Algorithm::Aes256,
+        user_password: "pw",
+        owner_password: "owner",
+        permissions: -1 ^ 0b1_0000,
+        encrypt_metadata: true,
+        seed: [4; 32],
+    })
+    .unwrap();
+    let bytes = pdfcraft_cos::write_full(&doc, &Default::default()).unwrap();
+    let (mut h, at) = harness_with(bytes, |app| {
+        app.submit_password(Some("pw".into()));
+        app.system_clipboard = false;
+    });
+    click(&mut h, at);
+    click(&mut h, at);
+    assert_eq!(h.state().views[0].selected_text().as_deref(), Some("quick"));
+    assert!(!h.state_mut().execute("edit.copy"));
+    h.step();
+    assert!(!copied(&h, "quick"));
+    assert_eq!(h.state().last_copied_html, None);
 }
 
 #[test]

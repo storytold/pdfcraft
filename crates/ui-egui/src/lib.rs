@@ -563,6 +563,9 @@ pub struct PdfCraftApp {
     /// The last image copied in its original format (file name, bytes), also put on the
     /// system clipboard as a file when `system_clipboard` is on.
     pub last_copied_file: Option<(String, Vec<u8>)>,
+    /// The HTML of the last text copy (Copy with formatting), also put on the system clipboard
+    /// next to the plain text when `system_clipboard` is on.
+    pub last_copied_html: Option<String>,
     pub system_clipboard: bool,
     /// What ⌘V reads instead of the system clipboard (tests).
     pub clipboard_override: Option<create_ui::Clip>,
