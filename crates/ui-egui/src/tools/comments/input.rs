@@ -690,6 +690,8 @@ impl Gestures<'_> {
         if over_page {
             view.cursor.claim(Layer::ToolArea, egui::CursorIcon::Crosshair);
         }
+        // A text box dragged out whose corner gave way to the pointer (below): no marker then.
+        let mut flat_drag = false;
         // A text box also takes a drag, as in Acrobat: the box is drawn at that size and its
         // text wraps inside it (#2669).
         if tool == CommentTool::TextBox {
@@ -714,6 +716,7 @@ impl Gestures<'_> {
                 });
                 if flat {
                     cv.snap_hover = None;
+                    flat_drag = true;
                 }
                 points.truncate(1);
                 points.push(if flat { cx.to_user(q) } else { u });
@@ -735,7 +738,8 @@ impl Gestures<'_> {
         }
         // Snapping: the note's or text box's corner goes onto the drawing, as a drawing
         // tool's point does.
-        if let Some(p) = pointer.filter(|_| over_page)
+        if !flat_drag
+            && let Some(p) = pointer.filter(|_| over_page)
             && let (u, Some(kind)) = cx.snapped(p)
         {
             cv.snap_hover = Some((cx.page, u, kind));

@@ -3508,6 +3508,38 @@ endstream endobj
 trailer << /Root 1 0 R >>
 %%EOF";
 
+/// A text box dragged out from the horizontal line towards the crossing: its second corner would
+/// snap onto the crossing, on the first corner's line, and leave no box, so it takes the pointer's
+/// own point, and no snap marker shows the crossing while it does.
+#[test]
+fn a_text_box_whose_snap_would_flatten_it_shows_no_marker() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("drawing.pdf", None, DRAWING_FIXTURE.to_vec()).expect("opens");
+        app.set_option("left", "closed").unwrap();
+        app.set_option("zoom", "100").unwrap();
+        app
+    });
+    h.run_steps(4);
+    crate::support::settle(&mut h);
+    assert!(h.state_mut().execute("comment.freetext"));
+    h.key_press(egui::Key::F3);
+    h.run_steps(2);
+    let (a, b) = (at(&h, 100.0, 52.0), at(&h, 150.0, 53.5));
+    h.hover_at(a);
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: a, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
+    h.run_steps(1);
+    for k in 1..=4 {
+        h.hover_at(a + (b - a) * (k as f32 / 4.0));
+        h.run_steps(1);
+    }
+    assert_eq!(h.state().views[0].comments.snap_hover, None, "no marker on the crossing the corner isn't on");
+    h.event(egui::Event::PointerButton { pos: b, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
+    h.run_steps(2);
+}
+
 /// The pages' paths are read only for the page under the pointer, not for every page on screen:
 /// the content widget holds all of them, so its hover tells nothing (a plan's paths take up to
 /// a second to read).
