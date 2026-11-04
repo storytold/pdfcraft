@@ -177,7 +177,8 @@ const DISPLAY_REPLACED_KEYS: [&[u8]; 6] = [b"QuadPoints", b"AP", b"AS", b"OC", b
 /// the appearance's `/BBox` the union of them (placed with no scaling, in the page's own user
 /// space); its other appearances, `/AS`, `/OC` and the flags that would hide, scale or turn it
 /// are dropped. The page is read once: its `/Annots` is copied only when a mark written in place
-/// or listed through a chain has to be replaced in it. The marks' dictionaries in the document the
+/// or listed through a chain has to be replaced in it. An entry that can't be followed is replaced by `null`
+/// in the copy: it can't be drawn as checked, so the page shows nothing there. The marks' dictionaries in the document the
 /// copy was made from are not touched; this is a view, never saved.
 pub fn show_page_in_display(display: &mut Document, page: usize, page_obj: ObjRef, marks: &[(usize, Shown<'_>)]) -> Result<(), crate::AnnotError> {
     if marks.is_empty() {
@@ -193,7 +194,8 @@ pub fn show_page_in_display(display: &mut Document, page: usize, page_obj: ObjRe
         }
         _ => &[],
     };
-    let mut replaced: Vec<(usize, ObjRef)> = Vec::new();
+    // The slots to replace in the copy's list: a drawn dictionary, or `null` (nothing drawn).
+    let mut replaced: Vec<(usize, Object)> = Vec::new();
     for &(index, shown) in marks {
         let listed = list.get(index).ok_or(crate::AnnotError::NoSuchAnnotation { page, index })?;
         let entry_held;
@@ -206,7 +208,13 @@ pub fn show_page_in_display(display: &mut Document, page: usize, page_obj: ObjRe
                 match &*entry_held {
                     Object::Dict(d) => d,
                     Object::Stream(s) => &s.dict,
-                    _ => return Err(crate::AnnotError::NoSuchAnnotation { page, index }),
+                    // A reference that can't be followed: whatever it is can't be drawn as checked, so the
+                    // page shows nothing there (the mark stays refused; the document keeps the entry).
+                    _ => {
+                        replaced.try_reserve(1).map_err(|_| crate::AnnotError::Unsupported("too many redaction marks to draw".into()))?;
+                        replaced.push((index, Object::Null));
+                        continue;
+                    }
                 }
             }
             _ => return Err(crate::AnnotError::NoSuchAnnotation { page, index }),
@@ -248,7 +256,7 @@ pub fn show_page_in_display(display: &mut Document, page: usize, page_obj: ObjRe
             // Written in place, or listed through a chain: the copy's list gets the drawn dictionary.
             _ => {
                 replaced.try_reserve(1).map_err(|_| crate::AnnotError::Unsupported("too many redaction marks to draw".into()))?;
-                replaced.push((index, display.add(Object::Dict(d))));
+                replaced.push((index, Object::Ref(display.add(Object::Dict(d)))));
             }
         }
     }
@@ -256,9 +264,9 @@ pub fn show_page_in_display(display: &mut Document, page: usize, page_obj: ObjRe
         let mut copy = list.to_vec();
         #[cfg(test)]
         tests::count_list_copy();
-        for (index, r) in replaced {
+        for (index, value) in replaced {
             if let Some(slot) = copy.get_mut(index) {
-                *slot = Object::Ref(r);
+                *slot = value;
             }
         }
         crate::set_annots(display, page_obj, copy)?;

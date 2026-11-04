@@ -6,8 +6,8 @@ use pdfcraft_automation::{Automation, Content, ToolError};
 use serde_json::{Value, json};
 
 /// `AB1234CD` in 10 pt Courier at (10, 100) (AB is x 10–22, 1234 is 22–46), with `annots` listed
-/// as objects 6, 7, ….
-fn pdf(annots: &[&str]) -> Vec<u8> {
+/// as objects 6, 7, …, then `extras` (not listed).
+fn pdf(annots: &[&str], extras: &[&str]) -> Vec<u8> {
     let body = "BT /F1 10 Tf 10 100 Td (AB1234CD) Tj ET";
     let list: String = (0..annots.len()).map(|i| format!("{} 0 R ", i + 6)).collect();
     let mut objects = vec![
@@ -17,7 +17,7 @@ fn pdf(annots: &[&str]) -> Vec<u8> {
         "<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>".to_owned(),
         format!("<< /Length {} >>\nstream\n{body}\nendstream", body.len()),
     ];
-    objects.extend(annots.iter().map(|s| (*s).to_owned()));
+    objects.extend(annots.iter().chain(extras).map(|s| (*s).to_owned()));
     let mut out = b"%PDF-1.7\n".to_vec();
     let mut offsets = Vec::new();
     for (i, object) in objects.iter().enumerate() {
@@ -44,10 +44,14 @@ fn ok(a: &mut Automation, tool: &str, args: Value) -> Value {
 }
 
 fn setup(test: &str, annots: &[&str]) -> (std::path::PathBuf, Automation, Value) {
+    setup_with(test, annots, &[])
+}
+
+fn setup_with(test: &str, annots: &[&str], extras: &[&str]) -> (std::path::PathBuf, Automation, Value) {
     let dir = std::env::temp_dir().join(format!("pdfcraft-redaction-areas-{test}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("in.pdf"), pdf(annots)).unwrap();
+    std::fs::write(dir.join("in.pdf"), pdf(annots, extras)).unwrap();
     let mut a = Automation::new().with_root(&dir).unwrap();
     let doc = ok(&mut a, "doc_open", json!({ "path": "in.pdf" }))["doc"].clone();
     (dir, a, doc)
@@ -104,19 +108,22 @@ fn tools_see_a_refusal_and_why() {
 /// stays refused before and after the edit, and the page keeps its text.
 #[test]
 fn tools_keep_a_mark_whose_type_cant_be_followed_refused() {
-    let mut objects = vec![
-        "<< /Type /Annot /Subtype 9 0 R /Rect [8 95 22 110] /AP << /N 8 0 R >> >>".to_owned(),
-        "<< /Type /Annot /Subtype /Redact /Rect [22 95 46 110] >>".to_owned(),
-        "<< /Type /XObject /Subtype /Form /BBox [0 0 1 1] /Length 16 >>\nstream\n0 g 0 0 1 1 re f\nendstream".to_owned(),
-    ];
+    // Only the two marks are listed; the fill (object 8) and the chain (9…) are other objects.
+    let annots =
+        ["<< /Type /Annot /Subtype 9 0 R /Rect [8 95 22 110] /AP << /N 8 0 R >> >>", "<< /Type /Annot /Subtype /Redact /Rect [22 95 46 110] >>"];
+    let mut extras = vec!["<< /Type /XObject /Subtype /Form /BBox [0 0 1 1] /Length 16 >>\nstream\n0 g 0 0 1 1 re f\nendstream".to_owned()];
     for i in 0..34 {
-        objects.push(if i == 33 { "/Redact".into() } else { format!("{} 0 R", 10 + i) });
+        extras.push(if i == 33 { "/Redact".into() } else { format!("{} 0 R", 10 + i) });
     }
-    let refs: Vec<&str> = objects.iter().map(String::as_str).collect();
-    let (dir, mut a, doc) = setup("unresolved-type", &refs);
+    let extras: Vec<&str> = extras.iter().map(String::as_str).collect();
+    let (dir, mut a, doc) = setup_with("unresolved-type", &annots, &extras);
+    // The view is available (the page draws), and the first mark is refused as a mark whose type
+    // can't be read: not a display failure.
     let refused = |info: &Value| {
-        info["redactions"]["status"] == "unavailable"
-            || info["redactions"]["marks"].as_array().is_some_and(|m| m.iter().any(|m| m["index"] == 1 && m["status"] == "refused"))
+        info["redactions"]["status"] == "available"
+            && info["redactions"]["marks"]
+                .as_array()
+                .is_some_and(|m| m.iter().any(|m| m["index"] == 1 && m["status"] == "refused" && m["refusal"] == "unresolved_type"))
     };
     let before = ok(&mut a, "doc_info", json!({ "doc": doc }));
     assert!(refused(&before), "{}", before["redactions"]);

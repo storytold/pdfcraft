@@ -737,3 +737,62 @@ fn a_fallback_reading_is_kept_in_the_repair_log() {
     let log = doc.repair_log();
     assert!(log.iter().any(|l| l.contains("fallback reading") && l.contains("page 1 object 6") && l.contains("its Rect")), "{log:?}");
 }
+
+// ---- Review 4 regressions.
+
+/// An /Annots entry that is a reference to itself, beside a square that needs its appearance drawn
+/// for display: the square is still drawn (the entry can't be drawn, so the page shows nothing
+/// there), applying stays refused (the entry may be a mark), and refreshing says nothing new in
+/// the repair log.
+#[test]
+fn an_unfollowable_entry_never_wipes_the_other_appearances() {
+    let square = "<< /Type /Annot /Subtype /Square /Rect [100 100 150 150] /C [0 0 0] /IC [0 0 0] >>";
+    let (mut s, id) = open(ab1234cd(&[square, "7 0 R"], &[]));
+    let doc = s.get(id).unwrap();
+    assert!(dark_at(&doc.display, 125.0, 125.0), "the square is drawn");
+    assert_ne!(doc.display, doc.bytes);
+    assert_eq!(doc.redaction_previews().get(0, 1).unwrap().areas, Err(MarkRefusal::UnresolvedType));
+    let log = doc.repair_log().len();
+    for i in 0..3 {
+        s.apply(id, Edit::SetAnnotationContents { page: 0, index: 0, text: format!("{i}") }).unwrap();
+    }
+    let doc = s.get(id).unwrap();
+    assert!(dark_at(&doc.display, 125.0, 125.0), "still drawn after refreshes");
+    assert_eq!(doc.repair_log().len(), log, "{:?}", doc.repair_log());
+    assert!(matches!(s.apply(id, Edit::ApplyRedactions { pages: None }), Err(EditError::Redact(_))));
+}
+
+/// When the marks can't be drawn, the display keeps every other appearance (the square), only the
+/// view of the marks is unavailable, and the note about it is made once, not once per refresh.
+#[test]
+fn a_failed_mark_drawing_keeps_the_other_appearances_and_is_noted_once() {
+    let square = "<< /Type /Annot /Subtype /Square /Rect [100 100 150 150] /C [0 0 0] /IC [0 0 0] >>";
+    crate::redaction_preview::FAIL_DISPLAY.with(|f| f.set(true));
+    let (mut s, id) = open(ab1234cd(&[square, NULL_MARK], &[]));
+    for i in 0..3 {
+        s.apply(id, Edit::SetAnnotationContents { page: 0, index: 0, text: format!("{i}") }).unwrap();
+    }
+    crate::redaction_preview::FAIL_DISPLAY.with(|f| f.set(false));
+    let doc = s.get(id).unwrap();
+    assert_eq!(doc.redaction_previews(), &RedactionPreviews::Unavailable(PreviewUnavailable::Display));
+    assert!(dark_at(&doc.display, 125.0, 125.0), "the square is still drawn");
+    let notes = doc.repair_log().iter().filter(|l| l.contains("redaction marks could not be drawn")).count();
+    assert_eq!(notes, 1, "{:?}", doc.repair_log());
+}
+
+/// A trust-store change rebuilds the display without inspecting the file again: a view missing a
+/// listed mark stays so, as after any other refresh that doesn't inspect.
+#[test]
+fn a_trust_change_never_lifts_an_unlisted_mark() {
+    let note = "<< /Type /Annot /Subtype /Text /Rect [150 150 170 170] /Contents (n) >>";
+    let (mut s, id) = open(ab1234cd(&[note, NULL_MARK], &[]));
+    s.doc_mut(id).unwrap().redaction_previews = RedactionPreviews::Unavailable(PreviewUnavailable::UnlistedMark);
+    s.apply(id, Edit::SetAnnotationContents { page: 0, index: 0, text: "refresh".into() }).unwrap();
+    s.set_trusted_certificates(Vec::new());
+    assert_eq!(s.get(id).unwrap().redaction_previews(), &RedactionPreviews::Unavailable(PreviewUnavailable::UnlistedMark));
+    // Undo and redo of the comment edit keep it too.
+    s.undo(id).unwrap();
+    assert!(!s.get(id).unwrap().redaction_previews().is_available());
+    s.redo(id).unwrap();
+    assert!(!s.get(id).unwrap().redaction_previews().is_available());
+}

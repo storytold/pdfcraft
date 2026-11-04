@@ -705,11 +705,17 @@ pub(crate) fn display_bytes(editor: Option<&mut Editor>, bytes: &Arc<Vec<u8>>, i
     // Redaction marks are drawn from their checked areas in the display copy, whatever appearance
     // the file gives them: the page shows what applying removes. If that can't be done the view is
     // unavailable (and applying refused), never left showing the file's own appearances as checked.
+    // They are drawn into a scratch copy: if that fails, the display keeps every other appearance
+    // (comments, fields) as it was, and only the view of the marks becomes unavailable.
+    let mut previews = previews;
     if matches!(&previews, RedactionPreviews::Available(list) if !list.is_empty()) {
-        let copy = display.get_or_insert_with(|| e.cos.clone());
-        if let Err(err) = redaction_preview::show_redactions(copy, &previews) {
-            e.cos.note_repair(format!("redaction marks could not be drawn as they would be applied ({err})"));
-            return (bytes.clone(), RedactionPreviews::Unavailable(PreviewUnavailable::Display));
+        let mut drawn = display.clone().unwrap_or_else(|| e.cos.clone());
+        match redaction_preview::show_redactions(&mut drawn, &previews) {
+            Ok(()) => display = Some(drawn),
+            Err(err) => {
+                note_once(&mut e.cos, format!("redaction marks could not be drawn as they would be applied ({err})"));
+                previews = RedactionPreviews::Unavailable(PreviewUnavailable::Display);
+            }
         }
     }
     let Some(display) = display else {
@@ -718,9 +724,17 @@ pub(crate) fn display_bytes(editor: Option<&mut Editor>, bytes: &Arc<Vec<u8>>, i
     match write_incremental(&display, &SaveOptions::default()) {
         Ok(written) => (Arc::new(written), previews),
         Err(err) => {
-            e.cos.note_repair(format!("missing comment or field appearances could not be drawn ({err})"));
+            note_once(&mut e.cos, format!("missing comment or field appearances could not be drawn ({err})"));
             (bytes.clone(), RedactionPreviews::Unavailable(PreviewUnavailable::Display))
         }
+    }
+}
+
+/// Add `line` to `cos`'s repair log unless it is already the last line: a condition found again
+/// on every refresh is said once, not once per refresh.
+fn note_once(cos: &mut pdfcraft_cos::Document, line: String) {
+    if cos.repair_log().last() != Some(&line) {
+        cos.note_repair(line);
     }
 }
 

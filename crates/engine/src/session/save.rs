@@ -250,7 +250,11 @@ impl Session {
             // Keep verdict refresh and renderer refresh together. Viewer caches are
             // invalidated by the UI trust path; trust alone changes no document artwork.
             let signatures = if doc.signatures.is_empty() { Vec::new() } else { signatures_of(&editor.cos, &doc.bytes, &doc.trust, &doc.sig_cache) };
+            // No inspection here: a view missing a mark the renderer listed stays so (as in every refresh
+            // that doesn't inspect the file again).
+            let before = std::mem::replace(&mut doc.redaction_previews, crate::RedactionPreviews::Unavailable(crate::PreviewUnavailable::Refreshing));
             (doc.display, doc.redaction_previews) = display_bytes(Some(editor), &doc.bytes, &doc.info);
+            super::editing::keep_unlisted(&before, &mut doc.redaction_previews);
             doc.signatures = Arc::new(signatures);
             doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), display_config(&doc.config));
         }

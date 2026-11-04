@@ -640,7 +640,7 @@ fn fallback_note(marks: &[pdfcraft_redact::MarkFallback]) -> String {
 /// comment list from the graph, or keep it) can't show that a mark the renderer listed and the
 /// collector lacked is now accounted for: a view that was missing one stays so until a full
 /// refresh inspects the file again. Absence from a list read the lossy way is never proof.
-fn keep_unlisted(before: &RedactionPreviews, now: &mut RedactionPreviews) {
+pub(super) fn keep_unlisted(before: &RedactionPreviews, now: &mut RedactionPreviews) {
     if *before == RedactionPreviews::Unavailable(PreviewUnavailable::UnlistedMark) {
         *now = RedactionPreviews::Unavailable(PreviewUnavailable::UnlistedMark);
     }
