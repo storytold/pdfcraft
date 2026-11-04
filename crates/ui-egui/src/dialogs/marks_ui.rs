@@ -685,7 +685,27 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
         }
         watermark_centres(&probe, page)
     });
-    let too_many = matches!(layout, Some(Err(_)));
+    // OK is held back when the repeat needs too many copies on a page it will be added to. Pages
+    // of one size give one answer, so each size is checked once. A picture's real size is only
+    // known once the engine imports it, so for a picture the preview's square stand-in can only
+    // warn; the engine makes the final call.
+    let preview_too_many = matches!(layout, Some(Err(_)));
+    let too_many = kind == MarkKind::Watermark && wm.repeat.is_some() && !d.use_file && {
+        let mut probe = wm.clone();
+        if probe.text.trim().is_empty() {
+            probe.text = "CONFIDENTIAL".into();
+        }
+        if fit {
+            probe.font_size = 0.0;
+        }
+        let mut seen = HashSet::new();
+        d.range
+            .pages(count)
+            .into_iter()
+            .filter_map(|p| doc.info.pages.get(p))
+            .map(|p| (p.width as f64, p.height as f64))
+            .any(|size| seen.insert((size.0.to_bits(), size.1.to_bits())) && watermark_centres(&probe, size).is_err())
+    };
     ui.horizontal(|ui| {
         preview(ui, t, page, picture, tint, |p, r, s| match kind {
             MarkKind::HeaderFooter => {
@@ -787,7 +807,7 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
             if d.replace {
                 ui.label(egui::RichText::new(tl!("Replaces the existing one on those pages.")).small().color(t.text_faint));
             }
-            if too_many {
+            if too_many || preview_too_many {
                 ui.label(egui::RichText::new(tl!("Too many copies: increase the spacing or the size.")).small().color(ui.visuals().error_fg_color));
             }
         });

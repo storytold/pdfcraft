@@ -119,9 +119,9 @@ pub struct MarkSource {
 }
 
 impl MarkSource {
-    /// A stand-in for a picture that isn't in the document yet: a one-point square, which fills
-    /// the same share of the page as any picture does. For laying out previews with
-    /// [`watermark_centres`].
+    /// A stand-in for a picture that isn't in the document yet: a one-point square. Its aspect
+    /// ratio is a guess, so a layout made from it (a preview with [`watermark_centres`]) may not
+    /// match the picture's: a repeat it refuses is a warning, and [`add_watermark`] decides.
     pub fn placeholder() -> Self {
         Self { xobject: pdfcraft_cos::ObjRef::new(0, 0), size: (1.0, 1.0), image: true }
     }

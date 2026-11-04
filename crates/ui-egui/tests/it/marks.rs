@@ -161,6 +161,42 @@ fn a_watermark_can_be_repeated_and_a_repeat_that_needs_too_many_copies_is_held_b
 }
 
 #[test]
+fn a_repeat_too_big_for_any_selected_page_holds_ok_back_not_only_for_the_page_shown() {
+    // Page 1 (the one shown) is tiny and takes the repeat; page 2 is 300 x 400 and would need
+    // over 3,000 copies, which the engine refuses.
+    let pdf = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 20 20] >> endobj
+4 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 400] >> endobj
+trailer << /Root 1 0 R >>
+%%EOF"
+        .to_vec();
+    let mut h = harness_with(pdf);
+    h.state_mut().execute("edit.watermark");
+    h.run_steps(2);
+    {
+        let d = &mut h.state_mut().marks_draft;
+        d.fit = false;
+        d.wm.text = "I".into();
+        d.wm.font_size = 6.0;
+        d.wm.repeat = Some(Repeat { spacing: [0.0, 0.0], stagger: false });
+    }
+    h.run_steps(2);
+    h.get_by_label("Too many copies: increase the spacing or the size.");
+    assert!(h.query_by(|n| n.label().as_deref() == Some("OK") && n.is_disabled()).is_some(), "OK is held back");
+    // Leaving the big page out of the range lets it go ahead.
+    {
+        let r = &mut h.state_mut().marks_draft.range;
+        r.all = false;
+        r.from = 1;
+        r.to = 1;
+    }
+    h.run_steps(2);
+    assert!(h.query_by(|n| n.label().as_deref() == Some("OK") && n.is_disabled()).is_none(), "OK is available");
+}
+
+#[test]
 fn backgrounds_and_watermarks_from_a_file() {
     let mut h = harness();
     h.state_mut().execute("edit.background");
