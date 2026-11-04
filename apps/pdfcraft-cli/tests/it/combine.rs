@@ -99,6 +99,33 @@ fn sort_folder_reads_a_leading_dot_as_the_same_folder() {
 }
 
 #[test]
+fn sort_folder_works_out_where_each_path_really_leads() {
+    let dir = folder("leads", &[("a.pdf", 1), ("m.pdf", 1), ("z.pdf", 1), ("up/in.pdf", 1)]);
+    let up = dir.join("up");
+    assert_eq!(combined(&up, &["../z.pdf", "in.pdf", "../a.pdf", "--sort", "folder"]), ["a", "z", "in"], "a folder before the folders inside it");
+    assert_eq!(combined(&up, &["../z.pdf", "in.pdf", "../a.pdf", "--sort", "folder", "--descending"]), ["in", "a", "z"]);
+    assert_eq!(combined(&dir, &["./up/../z.pdf", "m.pdf", "--sort", "folder"]), ["m", "z"], "one folder, so by name");
+    let full = dir.join("a.pdf");
+    assert_eq!(
+        combined(&dir, &["z.pdf", full.to_str().unwrap(), "up/in.pdf", "--sort", "folder"]),
+        ["a", "z", "in"],
+        "a full path beside relative ones"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[cfg(unix)]
+#[test]
+fn sort_follows_a_linked_folder_and_keeps_a_linked_files_own_name() {
+    let dir = folder("links", &[("a.pdf", 1), ("m.pdf", 1), ("z.pdf", 1), ("mid/x.pdf", 1), ("real/b.pdf", 1), ("real/c.pdf", 1)]);
+    std::os::unix::fs::symlink("real", dir.join("alias")).unwrap();
+    std::os::unix::fs::symlink("z.pdf", dir.join("link.pdf")).unwrap();
+    assert_eq!(combined(&dir, &["real/c.pdf", "mid/x.pdf", "alias/b.pdf", "--sort", "folder"]), ["x", "b", "c"], "alias is real by another name");
+    assert_eq!(combined(&dir, &["m.pdf", "link.pdf", "a.pdf", "--sort", "name"]), ["a", "z", "m"], "link.pdf, which shows z, goes by its own name");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn sort_folder_keeps_folders_that_read_alike_apart() {
     let dir = folder("alike", &[("v01/a.pdf", 1), ("v1/b.pdf", 1), ("v01/c.pdf", 1), ("v1/d.pdf", 1)]);
     let listed = ["v01/a.pdf", "v1/b.pdf", "v01/c.pdf", "v1/d.pdf"];

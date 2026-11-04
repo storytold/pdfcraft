@@ -1327,6 +1327,18 @@ fn combine_sorts_by_the_folder_before_the_name_and_by_name_alone_when_asked() {
 }
 
 #[test]
+fn combine_without_a_root_works_out_where_each_path_really_leads() {
+    let dir = workdir("combine-sort-leads");
+    write_pdf(&dir, "sub/c.pdf", 1);
+    let path = |p: &str| dir.join(p).to_string_lossy().into_owned();
+    let mut a = Automation::new();
+    let paths = json!([path("sub/../b.pdf"), path("sub/c.pdf"), path("a.pdf")]);
+    assert_eq!(combined_files(&mut a, json!({ "paths": paths, "sort": "folder" })), ["a", "b", "c"]);
+    let sorted = ok(&mut a, "doc_combine", json!({ "paths": paths, "sort": "folder", "open": true }));
+    assert_eq!(sorted["order"], json!([path("a.pdf"), path("sub/../b.pdf"), path("sub/c.pdf")]), "as the caller wrote them");
+}
+
+#[test]
 fn combine_keeps_folders_that_read_alike_apart() {
     let dir = workdir("combine-sort-alike");
     for path in ["v01/a.pdf", "v1/b.pdf", "v01/c.pdf", "v1/d.pdf"] {

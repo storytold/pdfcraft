@@ -1,5 +1,5 @@
 use pdfcraft_engine::order::FileSort;
-use pdfcraft_engine::{SortedSource, combine_order};
+use pdfcraft_engine::{SortedSource, combine_order, in_real_folder};
 
 use super::options::{
     COMBINE_OPTIONS, EXTRACT_OPTIONS, INFO_OPTIONS, RENDER_OPTIONS, SPLIT_OPTIONS, TEXT_OPTIONS, can_be_path_value, flag, needs_value, positional,
@@ -302,12 +302,13 @@ pub(crate) fn combine(args: &[String]) -> Result<(), CliError> {
     let mut sources = inputs.iter().map(|p| Ok((file_stem(p), read(p)?))).collect::<Result<Vec<_>, String>>()?;
     if let Some(by) = sort {
         let order = {
+            let paths: Vec<PathBuf> = inputs.iter().map(|path| in_real_folder(Path::new(path))).collect();
             let files: Vec<SortedSource> = sources
                 .iter()
-                .zip(&inputs)
+                .zip(&paths)
                 .map(|((_, bytes), path)| SortedSource {
                     bytes,
-                    path: Path::new(path),
+                    path,
                     modified: std::fs::metadata(path).and_then(|m| m.modified()).ok(),
                     password: None,
                 })

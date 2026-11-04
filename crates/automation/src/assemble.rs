@@ -3,7 +3,7 @@ use super::json::{Args, one_based, summary};
 use super::paths::{child, read_input, read_input_bytes, unused, write_atomic};
 use super::{Arc, Automation, CombineSource, Edit, Path, PathBuf, Value, json};
 use pdfcraft_engine::order::FileSort;
-use pdfcraft_engine::{SortedSource, combine_order};
+use pdfcraft_engine::{SortedSource, combine_order, in_real_folder};
 use std::time::SystemTime;
 
 impl Automation {
@@ -344,7 +344,7 @@ impl Automation {
             let name = path.file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
             sources.push((name, bytes, range));
             let modified = if sort == Some(FileSort::Modified) { std::fs::metadata(&path).and_then(|m| m.modified()).ok() } else { None };
-            files.push((path, modified));
+            files.push((if sort == Some(FileSort::Folder) { in_real_folder(&path) } else { path }, modified));
         }
         // Each file keeps its page range and password, which came in step with its path.
         let order = sort.map(|by| {
