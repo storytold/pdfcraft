@@ -759,6 +759,7 @@ Newest first: the date, what moved, and the new overall estimate.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-04 | minor | M7 #1540, merge of `upstream/main` at 9ce6d89f: checklist recounted with `cargo xtask parity` (61.7% unweighted: 455 shipped + 106 partial of 824; P0 94.6%; ≈ 71% tier-weighted) and area breadths updated; readiness and hours not re-judged |
 | 2026-11-03 | patch | M5 #5850 review: indirect typewriter intent and composer edits preserve outer whitespace; movement regression commits by outside click; estimates unchanged. |
 | 2026-11-03 | patch | M5 #5850: Enter adds Fill & Sign line breaks; outside clicks commit, Escape cancels, and saved multiline appearances retain their text and height; estimates unchanged. |
 | 2026-11-01 | patch | M7 #5657: header/footer, watermark and background operations commit all selected pages together; later-page errors preserve marks, content, shared/inherited resources and pending edits; estimates unchanged. |
@@ -788,7 +789,6 @@ Newest first: the date, what moved, and the new overall estimate.
 | 2026-10-13 | minor | M7 #1540: vector editing, align, distribute and arrange shipped; checklist recounted by hand (58.6% unweighted, ≈ 69% tier-weighted, area breadths); readiness and hours not re-judged |
 | 2026-10-20 | minor | M7 #1540, merge of `upstream/main` at 22bedbf2: checklist recounted with `cargo xtask parity` (59.9% unweighted: 441 shipped + 94 partial of 815; P0 94.6%; ≈ 70% tier-weighted) and area breadths updated, since the 2026-10-13 hand count had drifted; readiness and hours not re-judged |
 | 2026-10-22 | minor | M7 #1540, merge of `upstream/main` at 80b7d215: checklist recounted with `cargo xtask parity` (60.4% unweighted: 444 shipped + 99 partial of 817; P0 94.6%; ≈ 70% tier-weighted) and area breadths updated; readiness and hours not re-judged |
-| 2026-11-04 | minor | M7 #1540, merge of `upstream/main` at 9ce6d89f: checklist recounted with `cargo xtask parity` (61.7% unweighted: 455 shipped + 106 partial of 824; P0 94.6%; ≈ 71% tier-weighted) and area breadths updated; readiness and hours not re-judged |
 | 2026-10-16 | minor | M10 #1201 partial: lossless image export applies component Decode pairs and Indexed mapping. Estimates unchanged. |
 | 2026-10-15 | minor | M6: CSV export and spreadsheet merging quote tabs, and import distinguishes quoted tabs from TSV delimiters without changing field identities. Estimates unchanged. |
 | 2026-10-13 | minor | M4: rotation queries and edits resolve indirect page-tree values; inherited, negative and large rotations verified through both saves. Estimates unchanged. |

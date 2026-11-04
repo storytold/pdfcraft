@@ -449,6 +449,20 @@ fn a_vector_path_over_background_artwork_can_be_shift_clicked() {
 }
 
 #[test]
+fn a_vector_path_over_background_artwork_takes_a_plain_click() {
+    let mut h = harness_document(false, true, " 0 0 1 RG 3 w 300 100 m 380 180 l S");
+    let on_line = at(&h, 340.0, 360.0);
+    click(&mut h, on_line, Modifiers::NONE);
+    h.get_by_label("1 object selected");
+    assert!(h.state().views[0].image_selection.is_none());
+    // Away from the line and its selection box a plain click is still the background Form's own.
+    let p = at(&h, 200.0, 250.0);
+    click(&mut h, p, Modifiers::NONE);
+    assert!(nothing_selected(&h));
+    assert!(h.state().views[0].image_selection.as_ref().is_some_and(|s| s.index == 0));
+}
+
+#[test]
 fn an_image_over_a_vector_panel_keeps_modifier_clicks() {
     // A panel (30..110 across, 120..170 down) under a second copy of the figure.
     let mut h = harness_document(false, false, " 0.8 0.9 1 rg 30 330 80 50 re f q 1 0 0 1 40 340 cm /Figure Do Q");
