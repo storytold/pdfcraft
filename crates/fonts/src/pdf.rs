@@ -169,7 +169,9 @@ fn cids_with_outlines(doc: &Document, font: &Dict) -> Vec<u64> {
                     .0
                     .iter()
                     .enumerate()
-                    .filter(|(_, gid)| outlined(u32::from(u16::from_be_bytes(**gid))))
+                    // Glyph 0 is `.notdef`, which has an outline of its own: a CID the subset doesn't have maps to it,
+                    // and typing with it would draw that box, not the letter.
+                    .filter(|(_, gid)| u16::from_be_bytes(**gid) != 0 && outlined(u32::from(u16::from_be_bytes(**gid))))
                     .map(|(cid, _)| cid as u32),
             ))
         }

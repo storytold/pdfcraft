@@ -875,3 +875,44 @@ fn a_composite_subsets_program_decides_which_glyphs_are_there_not_its_widths() {
     assert_eq!(none.encode("P"), None, "listed in /W, but the program has no outline for it");
     assert!(none.encode(" ").is_some(), "a space is still blank by nature");
 }
+
+/// In a `/CIDToGIDMap` stream a CID the subset doesn't have maps to glyph 0, `.notdef`, which has an outline of
+/// its own: typing with that CID would draw the box, not the letter.
+#[test]
+fn a_cid_the_map_sends_to_notdef_is_not_a_glyph() {
+    use pdfcraft_cos::Stream;
+    let mut doc = Document::new_empty();
+    let inter = include_bytes!("../../../../assets/fonts/Inter-Regular.ttf");
+    let program = doc.add(Object::Stream(Stream::flate(Dict::new(), inter)));
+    // Inter's glyph ids: o 790 (0x316), r 852 (0x354). CIDs up to 0x354 map to the glyph of their own number,
+    // except that 0x354 maps to glyph 0.
+    let map: Vec<u8> = (0..=0x354u16).flat_map(|cid| if cid == 0x354 { 0u16 } else { cid }.to_be_bytes()).collect();
+    let map = doc.add(Object::Stream(Stream::flate(Dict::new(), &map)));
+    let cmap = b"1 begincodespacerange <0000> <FFFF> endcodespacerange 2 beginbfchar <0316> <006F> <0354> <0072> endbfchar";
+    let tu = doc.add(Object::Stream(Stream::from_raw(Dict::new(), cmap.to_vec())));
+    let mut descriptor = Dict::new();
+    descriptor.set(b"FontFile2".to_vec(), Object::Ref(program));
+    let mut desc = Dict::new();
+    desc.set(b"Subtype".to_vec(), Object::name("CIDFontType2"));
+    desc.set(b"CIDToGIDMap".to_vec(), Object::Ref(map));
+    desc.set(b"FontDescriptor".to_vec(), Object::Dict(descriptor));
+    desc.set(
+        b"W".to_vec(),
+        Object::Array(
+            [(0x316, 600), (0x354, 376)].into_iter().flat_map(|(cid, w)| [Object::Int(cid), Object::Array(vec![Object::Int(w)])]).collect(),
+        ),
+    );
+    let f = font(
+        &mut doc,
+        vec![
+            ("Subtype", Object::name("Type0")),
+            ("BaseFont", Object::name("BAAAAA+SampleSans")),
+            ("Encoding", Object::name("Identity-H")),
+            ("DescendantFonts", Object::Array(vec![Object::Dict(desc)])),
+            ("ToUnicode", Object::Ref(tu)),
+        ],
+    );
+    let m = Metrics::from_dict(&doc, &f);
+    assert_eq!(m.encode("o").as_deref(), Some(&[0x03, 0x16][..]));
+    assert_eq!(m.encode("r"), None, "its CID maps to .notdef");
+}
