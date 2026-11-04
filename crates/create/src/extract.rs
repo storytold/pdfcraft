@@ -1,7 +1,7 @@
 //! Export a PDF ▸ Image ▸ Export all images, and Edit ▸ Save image as: the images that pages
 //! use, as files. JPEG images are written unchanged; other images, and JPEG images with
 //! transparency or with CMYK samples a viewer would read inverted, are decoded and written as PNG with their soft mask, stencil mask or colour
-//! key as alpha. Images PdfCraft can't decode yet (JPEG 2000, separations) are
+//! key as alpha, JPEG 2000 images included. Images PdfCraft can't decode yet (separations) are
 //! reported, never silently left out.
 
 use std::collections::HashSet;
@@ -147,12 +147,23 @@ fn image(doc: &Document, s: &Stream, budget: &mut ImageBudget) -> Result<(&'stat
     let f = filters(s);
     let jpeg = matches!(f.last().map(Vec::as_slice), Some(b"DCTDecode" | b"DCT")) && f.len() == 1;
     match f.last().map(Vec::as_slice) {
-        Some(b"JPXDecode") => return Err("JPEG 2000 images can't be exported yet".into()),
+        Some(b"JPXDecode") if f.len() != 1 => return Err("JPEG 2000 images inside other filters can't be exported yet".into()),
         Some(b"DCTDecode" | b"DCT") if !jpeg => return Err("JPEG images inside other filters can't be exported yet".into()),
         _ => {}
     }
+    // A JPEG 2000 image is decoded first: its codestream, not its dictionary, says how large it is.
+    // With no usable /ColorSpace its colours come from the file's header, palette included.
+    let mut jpx = if f.last().map(Vec::as_slice) == Some(b"JPXDecode") {
+        let palette = !matches!(s.dict.get(b"ColorSpace").map(|cs| space(doc, Some(cs))), Some(Ok(_)));
+        Some(jpx_samples(&s.raw, palette, budget)?)
+    } else {
+        None
+    };
     let as_is = || Ok(("jpg", s.raw.to_vec()));
-    let (w, h) = (s.dict.int(b"Width").unwrap_or(0), s.dict.int(b"Height").unwrap_or(0));
+    let (w, h) = match &jpx {
+        Some(j) => (j.w as i64, j.h as i64),
+        None => (s.dict.int(b"Width").unwrap_or(0), s.dict.int(b"Height").unwrap_or(0)),
+    };
     let Some((w, h)) = size(w, h) else {
         return match () {
             _ if jpeg => as_is(),
@@ -163,7 +174,12 @@ fn image(doc: &Document, s: &Stream, budget: &mut ImageBudget) -> Result<(&'stat
     let mask = s.dict.get(b"ImageMask").is_some_and(|m| matches!(&*doc.resolve(m), Object::Bool(true)));
     // A stencil mask (`ImageMask true`) has no /SMask or /Mask of its own (8.9.6.2).
     let refused = budget.refused();
-    let mut alpha = if mask { None } else { soft_mask(doc, s, w, h, budget).or_else(|| stencil_mask(doc, s, w, h, budget)) };
+    let mut alpha = if mask {
+        None
+    } else {
+        // The file's own alpha channel counts only where the dictionary has no mask.
+        soft_mask(doc, s, w, h, budget).or_else(|| stencil_mask(doc, s, w, h, budget)).or_else(|| jpx.as_mut().and_then(|j| j.alpha.take()))
+    };
     // Without its mask the image would come out opaque, showing what the mask hides.
     if budget.refused() > refused {
         return Err(FilterError::Spent.to_string());
@@ -188,7 +204,17 @@ fn image(doc: &Document, s: &Stream, budget: &mut ImageBudget) -> Result<(&'stat
     if jpeg && alpha.is_none() && key.is_none() && !as_is_negative {
         return as_is();
     }
-    let mut space = if mask { Space::Gray } else { space(doc, s.dict.get(b"ColorSpace"))? };
+    let mut space = match &jpx {
+        // The dictionary's space wins when it fits the samples; otherwise the file's own.
+        Some(j) => s
+            .dict
+            .get(b"ColorSpace")
+            .and_then(|cs| space(doc, Some(cs)).ok())
+            .filter(|sp| sp.components() == j.space.components())
+            .unwrap_or_else(|| j.space.clone()),
+        None if mask => Space::Gray,
+        None => space(doc, s.dict.get(b"ColorSpace"))?,
+    };
     let (samples, bpc) = if jpeg {
         if !budget.pay_jpeg((w as u64).saturating_mul(h as u64).saturating_mul(space.components() as u64), &s.raw) {
             return Err(FilterError::Spent.to_string());
@@ -198,6 +224,8 @@ fn image(doc: &Document, s: &Stream, budget: &mut ImageBudget) -> Result<(&'stat
         let Some((samples, decoded)) = jpeg_samples(&s.raw, &space, w, h) else { return as_is() };
         space = decoded;
         (samples, 8)
+    } else if let Some(j) = jpx {
+        (j.samples, 8)
     } else {
         let data = decoded(doc, s, budget)?;
         let bpc = if mask { 1 } else { s.dict.int(b"BitsPerComponent").unwrap_or(8) };
@@ -263,6 +291,67 @@ fn image(doc: &Document, s: &Stream, budget: &mut ImageBudget) -> Result<(&'stat
         unpremultiply(&mut rgb, a, matte);
     }
     png(w as u32, h as u32, &rgb, alpha.as_deref()).map(|p| ("png", p))
+}
+
+/// A JPEG 2000 image, decoded: 8-bit samples of its colour channels, interleaved, and the alpha
+/// channel its file holds.
+struct Jpx {
+    w: usize,
+    h: usize,
+    space: Space,
+    samples: Vec<u8>,
+    alpha: Option<Vec<u8>>,
+}
+
+/// What a sample of JPEG 2000 costs next to a JPEG's (`ImageBudget::pay_jpeg`): wavelet synthesis
+/// and arithmetic decoding take more per sample than a DCT. A rough factor, not a measurement.
+const JPX_COST: u64 = 4;
+
+/// JPEG 2000 file `data` (a JP2 file or a bare codestream) decoded for export. `palette` resolves a
+/// palette in the file's header, as when the image has no colour space of its own (ISO 32000-2
+/// 7.4.9); with one, the raw indices stay. A file that can't be read, or is too large, is refused with
+/// the reason.
+fn jpx_samples(data: &[u8], palette: bool, budget: &mut ImageBudget) -> Result<Jpx, String> {
+    use hayro_jpeg2000::{ColorSpace, DecodeSettings, Image};
+    let settings = DecodeSettings { resolve_palette_indices: palette, strict: false, target_resolution: None };
+    let image = Image::new(data, &settings).map_err(|e| format!("the JPEG 2000 image can't be read ({e})"))?;
+    let Some((w, h)) = size(i64::from(image.width()), i64::from(image.height())) else {
+        return Err(format!("the JPEG 2000 image is {} × {}, which can't be exported", image.width(), image.height()));
+    };
+    let space = match image.color_space() {
+        ColorSpace::Gray => Space::Gray,
+        ColorSpace::RGB => Space::Rgb,
+        ColorSpace::CMYK => Space::Cmyk,
+        ColorSpace::Unknown { num_channels } | ColorSpace::Icc { num_channels, .. } => match num_channels {
+            1 => Space::Gray,
+            3 => Space::Rgb,
+            4 => Space::Cmyk,
+            n => return Err(format!("a JPEG 2000 image of {n} colour channels can't be exported")),
+        },
+    };
+    let n = space.components();
+    let channels = n + usize::from(image.has_alpha());
+    let samples = (w as u64).saturating_mul(h as u64).saturating_mul(channels as u64);
+    if samples > MAX_DECODED as u64 {
+        return Err(format!("{w} × {h} is too large to export"));
+    }
+    if !budget.pay_pixels(samples.saturating_mul(JPX_COST).saturating_add((data.len() as u64).saturating_mul(JPX_COST))) {
+        return Err(FilterError::Spent.to_string());
+    }
+    let bitmap = image.decode().map_err(|e| format!("the JPEG 2000 image can't be decoded ({e})"))?;
+    if bitmap.len() as u64 != samples {
+        return Err("the JPEG 2000 image decoded to the wrong size".into());
+    }
+    if !image.has_alpha() {
+        return Ok(Jpx { w, h, space, samples: bitmap, alpha: None });
+    }
+    let (mut colour, mut alpha) = (Vec::with_capacity(w * h * n), Vec::with_capacity(w * h));
+    for px in bitmap.chunks_exact(channels) {
+        let (a, c) = px.split_last().ok_or("the JPEG 2000 image decoded to the wrong size")?;
+        colour.extend_from_slice(c);
+        alpha.push(*a);
+    }
+    Ok(Jpx { w, h, space, samples: colour, alpha: Some(alpha) })
 }
 
 /// The explicit Decode intervals for a lossless colour image (8.9.5.2, Table 90).

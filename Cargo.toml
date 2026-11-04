@@ -75,6 +75,8 @@ fax = "0.2.7"
 # Independent CCITT and JBIG2 codecs, already in the tree through hayro.
 hayro-ccitt = "0.3"
 hayro-jbig2 = "0.3"
+# JPEG 2000 decoder, already in the tree through hayro-syntax; pdfcraft-create reads it for Save Image As.
+hayro-jpeg2000 = { version = "0.3.5", default-features = false, features = ["std"] }
 
 # foundation
 thiserror = "2"

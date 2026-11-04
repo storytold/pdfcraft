@@ -4337,6 +4337,7 @@ version = "0.18.1"
 dependencies = [
  "encoding_rs",
  "hayro-ccitt",
+ "hayro-jpeg2000",
  "hayro-syntax",
  "image",
  "pdfcraft-cos",
