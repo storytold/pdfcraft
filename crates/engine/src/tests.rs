@@ -10352,3 +10352,20 @@ fn redacting_an_optimized_jbig2_page_stores_the_rest_of_its_group_again() {
     let named = saved.scan_objects().filter(|(_, o)| matches!(&**o, Object::Stream(s) if saved.jbig2_globals_ref(s).is_some())).count();
     assert_eq!(named, 0, "no image names the dictionary, which left with them");
 }
+
+#[test]
+fn fill_sign_multiline_text_survives_engine_save_reopen_and_render() {
+    let (mut session, id) = rotated_blank(0);
+    let text = "\nAda\n\nLovelace\n";
+    let shape = Shape::Typewriter { rect: text_box_at(0, [20.0, 250.0], 120.0, 66.0).unwrap(), font_size: 10.0 };
+    let style = Style::default_for(&shape);
+    session.apply(id, Edit::AddAnnotation(NewAnnotation { page: 0, shape, style, contents: text.into(), author: "Test".into() })).unwrap();
+    assert_eq!(session.get(id).unwrap().info.annotations[0].contents.as_deref(), Some(text), "engine keeps outer typewriter line breaks");
+    let before = render_page(&session, id);
+    assert!(before.rgba.as_chunks::<4>().0.iter().any(|p| p[..3] == [0, 0, 0]), "the appearance contains ink");
+    let bytes = session.save_bytes(id).unwrap();
+    let mut reopened = Session::new();
+    let again = reopened.open("multiline.pdf", None, bytes, None).unwrap();
+    assert_eq!(reopened.get(again).unwrap().info.annotations[0].contents.as_deref(), Some(text), "reopening preserves all blank lines");
+    assert_eq!(before.rgba, render_page(&reopened, again).rgba, "the saved appearance is identical");
+}
