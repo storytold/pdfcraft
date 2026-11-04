@@ -1639,6 +1639,7 @@ fn ctrl_wheel_zooms_an_unfocused_window() {
         delta: vec2(0.0, 1.0),
         phase: egui::TouchPhase::Move,
         modifiers: egui::Modifiers::COMMAND,
+        source: egui::MouseWheelSource::Unknown,
     };
     h.state_mut().palette_open = true;
     let before = h.state().views[0].zoom;
