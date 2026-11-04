@@ -310,6 +310,45 @@ fn subset_fonts_only_encode_the_glyphs_they_have() {
     assert_eq!(m.encode("abc"), None);
 }
 
+/// #6131: pdfTeX writes `/FirstChar` below 32 and `/Widths` of 0 for the codes it never uses, the space
+/// among them: the subset has no space glyph, and the words are apart by `TJ` gaps. Writing a typed space as
+/// code 32 would glue the words together at width 0, so the font can't encode one and the edit sets the
+/// space as a gap instead (as for a subset whose widths stop short of 32).
+#[test]
+fn a_subset_that_gives_the_space_no_width_cannot_encode_one() {
+    let metrics = |base: &str, space: i64| {
+        let mut doc = Document::new_empty();
+        // Codes 32..=98: the space, then a and b (97, 98) with a width, everything else 0.
+        let widths: Vec<Object> = (32..=98)
+            .map(|code| {
+                Object::Int(match code {
+                    32 => space,
+                    97 | 98 => 500,
+                    _ => 0,
+                })
+            })
+            .collect();
+        let f = font(
+            &mut doc,
+            vec![
+                ("Subtype", Object::name("TrueType")),
+                ("BaseFont", Object::name(base)),
+                ("FirstChar", Object::Int(32)),
+                ("Widths", Object::Array(widths)),
+                ("Encoding", Object::name("WinAnsiEncoding")),
+            ],
+        );
+        Metrics::from_dict(&doc, &f)
+    };
+    let subset = metrics("ABCDEF+Sample", 0);
+    assert!(subset.subset);
+    assert_eq!(subset.encode("ab").as_deref(), Some(&b"ab"[..]));
+    assert_eq!(subset.encode("a b"), None, "no space glyph: a gap sets it");
+    assert_eq!(subset.encode(" "), None);
+    assert_eq!(metrics("ABCDEF+Sample", 250).encode("a b").as_deref(), Some(&b"a b"[..]), "a subset that does draw the space");
+    assert_eq!(metrics("Sample", 0).encode("a b").as_deref(), Some(&b"a b"[..]), "a full font keeps its space whatever the width says");
+}
+
 #[test]
 fn cmap_streams_decode_within_a_size_cap() {
     // A valid CMap padded past the cap (a small Flate stream of whitespace) is not decoded whole.
