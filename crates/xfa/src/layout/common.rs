@@ -1,26 +1,42 @@
 use super::items::{Action, Item, Rounded};
-use super::{HashMap, Layout, MAX_DEPTH, Node, Rect, Script, date_letters, iso_to_pattern};
+use super::{DataNode, DataPath, HashMap, Layout, MAX_DEPTH, Node, Rect, Script, SomIndices, date_letters, iso_to_pattern};
 
-pub(super) fn collect_values(nodes: &[Node], out: &mut HashMap<String, String>, depth: usize) {
+/// The values of the fields with an `id` in `nodes`, for the rich text that embeds them
+/// (floating fields, XFA 3.3 p. 1222): the data's, else the template's default. `path` is the
+/// data path of `nodes`' parent: a named subform or field adds its name and index among its
+/// siblings; areas and unnamed subforms add nothing, as they have no data of their own.
+pub(super) fn collect_values(nodes: &[Node], data: Option<&DataNode>, path: &mut DataPath, out: &mut HashMap<String, String>, depth: usize) {
     if depth > MAX_DEPTH {
         return;
     }
-    for n in nodes {
+    let sibs = SomIndices::of(nodes);
+    for (i, n) in nodes.iter().enumerate() {
         match n {
             Node::Field(f) => {
                 if let Some(id) = &f.common.id {
-                    out.insert(id.clone(), f.value.plain().unwrap_or_default());
+                    let from_data = f.common.name.as_ref().and_then(|name| {
+                        path.push((name.clone(), sibs.at(i)));
+                        // As a field shows it: the data's value wins unless it is blank.
+                        let text = data.and_then(|d| d.text_at(path)).map(str::trim).filter(|t| !t.is_empty()).map(str::to_string);
+                        path.pop();
+                        text
+                    });
+                    out.insert(id.clone(), from_data.or_else(|| f.value.plain()).unwrap_or_default());
                 }
             }
             Node::Subform(s) => {
-                collect_values(&s.children, out, depth + 1);
+                let named = s.common.name.as_ref().map(|name| path.push((name.clone(), sibs.at(i)))).is_some();
+                collect_values(&s.children, data, path, out, depth + 1);
                 if let Some(ps) = &s.page_set {
                     for a in &ps.areas {
-                        collect_values(&a.items, out, depth + 1);
+                        collect_values(&a.items, data, path, out, depth + 1);
                     }
                 }
+                if named {
+                    path.pop();
+                }
             }
-            Node::Area(a) => collect_values(&a.children, out, depth + 1),
+            Node::Area(a) => collect_values(&a.children, data, path, out, depth + 1),
             Node::ExclGroup(_) | Node::Draw(_) => {}
         }
     }

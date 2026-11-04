@@ -293,8 +293,9 @@ impl Interp<'_> {
                 _ => Ok(Val::Null),
             },
             Val::Layout => match m.as_str() {
-                "page" | "abspage" => Ok(Val::Num(self.h.doc.page as f64 + if m == "page" { 1.0 } else { 0.0 })),
-                "pagecount" | "abspagecount" => Ok(Val::Num(self.h.doc.page_count as f64)),
+                // On screen every page is a sheet of its own (see the JavaScript `sheet`).
+                "page" | "abspage" | "sheet" => Ok(Val::Num(self.h.doc.page as f64 + if m == "page" { 1.0 } else { 0.0 })),
+                "pagecount" | "abspagecount" | "sheetcount" => Ok(Val::Num(self.h.doc.page_count as f64)),
                 "relayout" | "relayoutpagearea" => {
                     self.h.push(XfaEffect::Relayout);
                     Ok(Val::Null)

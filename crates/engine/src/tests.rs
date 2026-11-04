@@ -9246,6 +9246,53 @@ fn a_date_its_validate_script_refuses_is_not_tried_again() {
     assert!(value(&s, "name").is_empty(), "nothing the refused run changed is kept: {:?}", value(&s, "name"));
 }
 
+/// Floating fields (XFA 3.3 p. 1222): text that embeds a hidden field shows the value its
+/// initialize script gives it, the value a button's script gives it later and the value a
+/// calculation gives one, as it does the sheet number and count; the fields sit in an unnamed
+/// subform, as forms place them (#6160).
+#[test]
+fn text_shows_the_values_scripts_give_its_floating_fields() {
+    let xdp = r##"<?xml version="1.0" encoding="UTF-8"?>
+<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+ <pageSet><pageArea name="front"><contentArea x="0.5in" y="0.5in" w="7.5in" h="10in"/><medium short="8.5in" long="11in"/></pageArea></pageSet>
+ <subform w="7in" h="9in">
+  <field name="Viewer" id="floatViewer" presence="hidden" access="readOnly" w="1in" h="0.3in"><ui><textEdit/></ui>
+   <event activity="initialize"><script contentType="application/x-javascript">this.rawValue = "Opened";</script></event><bind match="none"/></field>
+  <field name="Sheet" id="floatSheet" presence="hidden" w="1in" h="0.3in"><ui><textEdit/></ui>
+   <event activity="ready" ref="$layout"><script contentType="application/x-javascript">this.rawValue = xfa.layout.sheet(this)+1</script></event><bind match="none"/></field>
+  <field name="Sheets" id="floatSheets" presence="hidden" w="1in" h="0.3in"><ui><textEdit/></ui>
+   <event activity="ready" ref="$layout"><script contentType="application/x-javascript">this.rawValue = xfa.layout.sheetCount()</script></event><bind match="none"/></field>
+  <field name="Shout" id="floatShout" presence="hidden" w="1in" h="0.3in"><ui><textEdit/></ui>
+   <calculate><script contentType="application/x-javascript">Viewer.rawValue + "!"</script></calculate><bind match="none"/></field>
+  <field name="set" y="1in" w="2in" h="0.3in"><ui><button/></ui>
+   <event activity="click"><script contentType="application/x-javascript">Viewer.rawValue = "Clicked";</script></event></field>
+  <draw name="line" y="2in" w="6in" h="1in"><value><exData contentType="text/html"><body xmlns="http://www.w3.org/1999/xhtml" xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><p>Viewer: <span xfa:embedType="uri" xfa:embedMode="raw" xfa:embed="#floatViewer"/><br/>Sheet <span xfa:embed="#floatSheet"/> of <span xfa:embed="#floatSheets"/><br/>Calculated: <span xfa:embed="#floatShout"/></p></body></exData></value></draw>
+ </subform>
+</subform>
+</template>
+</xdp:xdp>
+"##;
+    let mut s = Session::new();
+    let id = s.open("float.pdf", None, Arc::new(pdfcraft_xfa::fixtures::shell(xdp)), None).expect("opens");
+    let text = page_texts(&s, id).join(
+        "
+",
+    );
+    assert!(text.contains("Viewer: Opened"), "{text}");
+    assert!(text.contains("Sheet 1 of 1"), "{text}");
+    assert!(text.contains("Calculated: Opened!"), "{text}");
+    let o = s.run_javascript(id, "", Some("set")).expect("clicks");
+    assert_eq!(o.error, None, "{o:?}");
+    let text = page_texts(&s, id).join(
+        "
+",
+    );
+    assert!(text.contains("Viewer: Clicked"), "{text}");
+    assert!(text.contains("Calculated: Clicked!"), "{text}");
+}
+
 /// An XFA button's click script may show the attachments panel; a text field's exit script
 /// asking the same is noted on the console and ignored.
 #[test]

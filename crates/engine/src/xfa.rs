@@ -275,6 +275,9 @@ struct Runner<'a, 'b> {
     /// rebuilt when the structure changed).
     session: Option<XfaSession>,
     changes: Changes,
+    /// A field embedded in rich text (a floating field) took a new value since the form was
+    /// last laid out: the text that shows it is laid out again when the event ends.
+    embedded_changed: bool,
 }
 
 impl<'a, 'b> Runner<'a, 'b> {
@@ -304,6 +307,7 @@ impl<'a, 'b> Runner<'a, 'b> {
             cached: None,
             session: None,
             changes: Changes::default(),
+            embedded_changed: false,
         }
     }
 
@@ -471,6 +475,10 @@ impl<'a, 'b> Runner<'a, 'b> {
         }
         if changed {
             self.changes.values += 1;
+            // A floating field shows its value in the text that embeds it (XFA 3.3 p. 1222).
+            if !self.embedded_changed && pdfcraft_xfa::field_is_embedded(self.tpl, som) {
+                self.embedded_changed = true;
+            }
         }
         changed
     }
@@ -521,6 +529,7 @@ impl<'a, 'b> Runner<'a, 'b> {
         }
         self.relayouts += 1;
         self.flush()?;
+        self.embedded_changed = false;
         let report = pdfcraft_xfa::rerender(self.doc, self.tpl).map_err(|e| e.to_string())?;
         self.console(report.warnings);
         crate::xfa_redraw(self.doc)?;
@@ -719,7 +728,7 @@ impl<'a, 'b> Runner<'a, 'b> {
     fn finish(mut self) -> Result<Changes, String> {
         #[cfg(test)]
         self.check_live();
-        if self.relayouts_skipped {
+        if self.relayouts_skipped || self.embedded_changed {
             self.relayouts = 0;
             self.relayouts_skipped = false;
             self.relayout()?;

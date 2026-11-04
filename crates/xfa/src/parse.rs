@@ -690,15 +690,53 @@ fn parse_node(c: XmlNode, warnings: &mut Vec<String>, depth: usize) -> Option<No
     })
 }
 
-/// Which page-number role a field with a layout:ready script plays, if any.
+/// Which page-number role a field with a layout:ready script plays, if any. On screen every
+/// page is a sheet of its own, so the sheet count is the page count, and the sheet number a form
+/// shows (`sheet(this) + 1`, the sheet counted from 0) is the page number.
 fn page_role(f: &Field) -> Option<PageRole> {
     let script = f.scripts.iter().find(|s| s.activity == "ready" || s.activity == "layoutReady")?;
-    if script.text.contains("pageCount") {
+    let sheet_number = || script.text.chars().filter(|c| !c.is_whitespace()).collect::<String>().contains("layout.sheet(this)+1");
+    if script.text.contains("pageCount") || script.text.contains("sheetCount") {
         Some(PageRole::Count)
-    } else if script.text.contains("layout.page(") || script.text.contains("layout.absPage(") {
+    } else if script.text.contains("layout.page(") || script.text.contains("layout.absPage(") || sheet_number() {
         Some(PageRole::Number)
     } else {
         None
+    }
+}
+
+/// The ids rich text in `nodes` embeds (draws' values, fields' values and captions), down to
+/// [`MAX_DEPTH`].
+fn collect_embedded(nodes: &[Node], out: &mut std::collections::BTreeSet<String>, depth: usize) {
+    fn of(value: &Value, out: &mut std::collections::BTreeSet<String>) {
+        if let Value::Rich(r) = value {
+            out.extend(r.paragraphs.iter().flat_map(|p| p.runs.iter()).filter_map(|r| r.embed.clone()));
+        }
+    }
+    fn field(f: &Field, out: &mut std::collections::BTreeSet<String>) {
+        of(&f.value, out);
+        if let Some(c) = &f.caption {
+            of(&c.value, out);
+        }
+    }
+    if depth > MAX_DEPTH {
+        return;
+    }
+    for n in nodes {
+        match n {
+            Node::Draw(d) => of(&d.value, out),
+            Node::Field(f) => field(f, out),
+            Node::ExclGroup(g) => g.fields.iter().for_each(|f| field(f, out)),
+            Node::Subform(s) => {
+                collect_embedded(&s.children, out, depth + 1);
+                if let Some(ps) = &s.page_set {
+                    for a in &ps.areas {
+                        collect_embedded(&a.items, out, depth + 1);
+                    }
+                }
+            }
+            Node::Area(a) => collect_embedded(&a.children, out, depth + 1),
+        }
     }
 }
 
@@ -771,8 +809,11 @@ pub fn parse(xml: &str) -> Result<(Template, Vec<String>), XfaError> {
         apply_saved_state(&mut root_sf.children, saved_root, 0);
     }
     let mut page_roles = Vec::new();
-    collect_page_roles(&[Node::Subform(Box::new(root_sf.clone()))], &mut page_roles, 0);
-    Ok((Template { root: root_sf, page_roles }, warnings))
+    let root_node = [Node::Subform(Box::new(root_sf.clone()))];
+    collect_page_roles(&root_node, &mut page_roles, 0);
+    let mut embedded = std::collections::BTreeSet::new();
+    collect_embedded(&root_node, &mut embedded, 0);
+    Ok((Template { root: root_sf, page_roles, embedded }, warnings))
 }
 
 fn parse_access(a: Option<&str>) -> Option<Access> {

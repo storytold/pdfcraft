@@ -665,6 +665,12 @@ pub fn field_grows_with_text(tpl: &Template, som: &str) -> bool {
     crate::data::template_field(tpl, som).is_some_and(Field::grows_with_text)
 }
 
+/// Is the field at `som` embedded in rich text (a floating field, XFA 3.3 p. 1222)? Its value
+/// is shown in that text, so a new one needs the form laid out again.
+pub fn field_is_embedded(tpl: &Template, som: &str) -> bool {
+    !tpl.embedded.is_empty() && crate::data::template_field(tpl, som).and_then(|f| f.common.id.as_ref()).is_some_and(|id| tpl.embedded.contains(id))
+}
+
 /// Give the field at `som` in `live`, and every other field bound to the same data node (a
 /// field inside an area shares its node with one outside, since areas are left out of data
 /// paths), the value [`form_tree`] would give it from `data` now, so a value change needs no

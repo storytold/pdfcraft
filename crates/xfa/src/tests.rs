@@ -147,6 +147,38 @@ fn horizontally_scaled_text_is_written_with_tz_inside_its_own_graphics_state() {
 /// The sample template parses without warnings into what the layout uses: its page areas,
 /// page-number draws, rich-text title, field font, caption and widget border, check box,
 /// date field, radio group, table columns and page break all come through.
+/// Floating fields (XFA 3.3 p. 1222): the template knows which field ids rich text embeds,
+/// whether in a draw, a field's value or its caption; and a field that shows the sheet number
+/// (`sheet(this)+1`, however spaced) or the sheet count plays the page role, as every page is a
+/// sheet of its own on screen. A script that reads `sheet(this)` alone plays none.
+#[test]
+fn the_template_knows_its_floating_fields_and_sheet_roles() {
+    let span = |id: &str| format!(r##"<span xfa:embed="#{id}" xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"/>"##);
+    let rich =
+        |id: &str| format!(r#"<exData contentType="text/html"><body xmlns="http://www.w3.org/1999/xhtml"><p>x {}</p></body></exData>"#, span(id));
+    let ready = |id: &str, script: &str| {
+        format!(
+            r#"<field id="{id}" presence="hidden" w="1in" h="0.2in"><ui><textEdit/></ui><event activity="ready" ref="$layout"><script contentType="application/x-javascript">{script}</script></event></field>"#
+        )
+    };
+    let tpl = format!(
+        r#"<template><subform name="form" layout="tb"><subform>
+{}{}{}
+<draw w="2in" h="0.3in"><value>{}</value></draw>
+<field name="f" w="2in" h="0.3in"><ui><textEdit/></ui><caption><value>{}</value></caption><value>{}</value></field>
+</subform></subform></template>"#,
+        ready("sheet", "this.rawValue = xfa.layout.sheet(this) + 1"),
+        ready("sheets", "this.rawValue = xfa.layout.sheetCount()"),
+        ready("bare", "this.rawValue = xfa.layout.sheet(this)"),
+        rich("inDraw"),
+        rich("inCaption"),
+        rich("inValue"),
+    );
+    let (tpl, _) = parse(&tpl).unwrap();
+    assert_eq!(tpl.embedded.iter().map(String::as_str).collect::<Vec<_>>(), ["inCaption", "inDraw", "inValue"]);
+    assert_eq!(tpl.page_roles, vec![("sheet".to_string(), PageRole::Number), ("sheets".to_string(), PageRole::Count)]);
+}
+
 #[test]
 fn the_template_parses_with_fonts_captions_and_rich_text() {
     let (tpl, warnings) = parse(&template(2)).unwrap();
