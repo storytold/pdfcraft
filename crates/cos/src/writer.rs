@@ -15,7 +15,7 @@ use std::io::Write;
 use std::sync::Arc;
 
 use crate::CosError;
-use crate::document::{Document, ObjectReader, XrefEntry, owned_bytes};
+use crate::document::{Document, ObjectReader, XrefEntry, held_bytes};
 use crate::object::{Dict, ObjRef, Object, PdfString, Stream};
 
 /// Serialize one object. Deterministic: same object → same bytes.
@@ -133,11 +133,12 @@ fn write_stream(s: &Stream, out: &mut Vec<u8>) {
 
 /// The object as written: encrypted with its (output) number when the document is encrypted,
 /// except the `/Encrypt` dictionary itself (`source_num` is its number in the source document).
+/// `o` has the document's numbers in its references ([`crate::security::transform`]).
 fn prepared<'a>(doc: &Document, source_num: u32, num: u32, generation: u16, o: &'a Object) -> Cow<'a, Object> {
     match doc.output_security() {
-        (Some(h), encrypt_num) if Some(source_num) != encrypt_num => {
+        (Some(h), encrypt_num) if Some(source_num) != encrypt_num && !doc.stored_as_is(source_num) => {
             let pass = if doc.encryption_changed() { crate::security::Pass::EncryptReplacing } else { crate::security::Pass::Encrypt };
-            Cow::Owned(crate::security::transform(h, o, num, generation, pass))
+            Cow::Owned(crate::security::transform(doc, h, o, num, generation, pass))
         }
         _ => Cow::Borrowed(o),
     }
@@ -245,7 +246,7 @@ pub fn write_incremental(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, 
     if let Some(p) = prev {
         trailer.set(b"Prev".to_vec(), Object::Int(p as i64));
     }
-    let size = doc.next_num().max(trailer.int(b"Size").unwrap_or(0) as u32);
+    let size = doc.next_num().max(trailer.int(b"Size").map_or(0, |n| n.clamp(0, i64::from(u32::MAX)) as u32));
     if as_stream {
         let rows = offsets.iter().map(|(n, (o, g, used))| (*n, if *used { Row::InFile(*o, *g) } else { Row::Free(*g) })).collect();
         write_xref_stream(&mut out, base, &mut trailer, rows, size);
@@ -291,6 +292,10 @@ pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosErro
             queue.push_back(r);
         }
     }
+    // A direct /Encrypt can refer to objects, /CF or /StmF, say.
+    if let Some(encrypt @ Object::Dict(_)) = trailer_in.get(b"Encrypt") {
+        visit_refs(encrypt, &mut queue);
+    }
     // Unknown trailer entries are document data. Objects they alone reference must be written
     // too, or a full rewrite would keep the key and drop its value.
     for (key, value) in trailer_in.iter() {
@@ -320,7 +325,10 @@ pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosErro
     // The /Encrypt dictionary and everything it references (e.g. indirect /CF crypt-filter
     // dictionaries) are needed before anything can be decrypted: never inside object streams.
     let mut encryption_objects: std::collections::HashSet<ObjRef> = std::collections::HashSet::new();
-    let mut pending: Vec<ObjRef> = trailer_in.reference(b"Encrypt").into_iter().collect();
+    let mut pending: Vec<ObjRef> = Vec::new();
+    if let Some(encrypt) = trailer_in.get(b"Encrypt") {
+        collect_refs(encrypt, &mut |r| pending.push(r));
+    }
     while let Some(r) = pending.pop() {
         if encryption_objects.insert(r) {
             collect_refs(&reader.get(r), &mut |x| pending.push(x));
@@ -341,9 +349,10 @@ pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosErro
         if in_stream {
             packed.push((num, *r, kept[i].take()));
         } else {
-            let o = renumber(&*written_object(&mut reader, *r, *is_stream, kept[i].take())?, &map);
+            let o = written_object(&mut reader, *r, *is_stream, kept[i].take())?;
+            let o = renumber(&prepared(&reader.document, r.num, num, 0, &o), &map);
             rows.insert(num, Row::InFile(out.len() as u64, 0));
-            write_indirect(num, 0, &prepared(&reader.document, r.num, num, 0, &o), &mut out);
+            write_indirect(num, 0, &o, &mut out);
         }
     }
     // Object streams take the numbers after the last object. Their contents are not encrypted
@@ -373,11 +382,11 @@ pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosErro
             trailer.set(key.to_vec(), Object::Ref(ObjRef::new(*r, 0)));
         }
     }
-    if let Some(Object::Dict(d)) = trailer_in.get(b"Encrypt") {
-        trailer.set(b"Encrypt".to_vec(), Object::Dict(d.clone()));
+    if let Some(encrypt @ Object::Dict(_)) = trailer_in.get(b"Encrypt") {
+        trailer.set(b"Encrypt".to_vec(), renumber(encrypt, &map));
     }
     if let Some(id) = trailer_in.get(b"ID") {
-        trailer.set(b"ID".to_vec(), id.clone());
+        trailer.set(b"ID".to_vec(), direct_id(&reader.document, id));
     }
     for (key, value) in trailer_in.iter() {
         if !trailer_key_rewritten(key) {
@@ -405,45 +414,27 @@ pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosErro
     Ok(out)
 }
 
-/// What `write_full` keeps of the objects it parsed while numbering them: owned bytes (see
-/// [`owned_bytes`]; streams read from the file are views and cost only their dictionary) and
-/// tree nodes. Beyond either limit objects are read again when written, which bounds the memory
-/// of a save of a huge document.
+/// What `write_full` keeps of the objects it parsed while numbering them, measured with
+/// [`held_bytes`] (the parsed tree and any data that is not a view into the file). Beyond the
+/// budget objects are read again when written, which bounds the memory of a save of a huge
+/// document.
 #[derive(Default)]
 struct KeptObjects {
     bytes: usize,
-    nodes: usize,
 }
 
 impl KeptObjects {
     const BYTES: usize = 64 * 1024 * 1024;
-    const NODES: usize = 2_000_000;
 
     /// Whether `object` still fits the budget; if so it is counted against it.
     fn admit(&mut self, object: &Object, data: &Arc<Vec<u8>>) -> bool {
-        let bytes = self.bytes.saturating_add(owned_bytes(object, data, 0));
-        let nodes = self.nodes.saturating_add(node_count(object, 0));
-        if bytes > Self::BYTES || nodes > Self::NODES {
+        let bytes = self.bytes.saturating_add(held_bytes(object, data, 0));
+        if bytes > Self::BYTES {
             return false;
         }
-        (self.bytes, self.nodes) = (bytes, nodes);
+        self.bytes = bytes;
         true
     }
-}
-
-/// Values in `object`'s tree, counting the object itself. Past the parser's nesting limit
-/// the count is `usize::MAX`, so nothing that deep is kept.
-fn node_count(object: &Object, depth: usize) -> usize {
-    if depth > 256 {
-        return usize::MAX;
-    }
-    let children = match object {
-        Object::Stream(s) => s.dict.iter().fold(0usize, |n, (_, v)| n.saturating_add(node_count(v, depth + 1))),
-        Object::Array(a) => a.iter().fold(0usize, |n, v| n.saturating_add(node_count(v, depth + 1))),
-        Object::Dict(d) => d.iter().fold(0usize, |n, (_, v)| n.saturating_add(node_count(v, depth + 1))),
-        _ => 0,
-    };
-    children.saturating_add(1)
 }
 
 /// The object to write for `r`: the one parsed while numbering when it was kept, else `r` read
@@ -497,6 +488,22 @@ impl ObjectStreamBatch {
     }
 }
 
+/// `/ID` for the trailer, direct, as it has to be with `/Encrypt`: nothing else in the file holds
+/// what it refers to now. Given by reference it is two entries at most, however many references a
+/// file gave, so that one large string isn't copied for each. An entry that isn't a string stays in
+/// its place as an empty one, which is how the key read it.
+fn direct_id(doc: &Document, id: &Object) -> Object {
+    if matches!(id, Object::Array(a) if !a.iter().any(|s| matches!(s, Object::Ref(_)))) {
+        return id.clone();
+    }
+    let entry = |s: &Object| match &*doc.resolve(s) {
+        s @ Object::String(_) => s.clone(),
+        _ => Object::String(crate::PdfString { bytes: Vec::new(), hex: true }),
+    };
+    let held = doc.resolve(id);
+    Object::Array(held.as_array().into_iter().flatten().take(2).map(entry).collect())
+}
+
 /// Trailer keys a full rewrite generates itself. Everything else is copied, with references
 /// renumbered, so a save does not drop metadata the reader accepted.
 fn trailer_key_rewritten(key: &[u8]) -> bool {
@@ -541,7 +548,7 @@ pub(crate) fn unlinked_additions(doc: &Document) -> HashSet<u32> {
     pending.into_keys().collect()
 }
 
-fn collect_refs(o: &Object, f: &mut impl FnMut(ObjRef)) {
+pub(crate) fn collect_refs(o: &Object, f: &mut impl FnMut(ObjRef)) {
     match o {
         Object::Ref(r) => f(*r),
         Object::Array(a) => a.iter().for_each(|x| collect_refs(x, f)),
@@ -718,6 +725,15 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
 
 #[cfg(test)]
 mod tests {
+    /// `/ID` by reference comes out direct, each entry where it was: the key is made from the first.
+    #[test]
+    fn a_file_identifier_keeps_its_entries_in_their_places() {
+        let doc = Document::new_empty();
+        let string = |bytes: &[u8]| Object::String(crate::PdfString { bytes: bytes.to_vec(), hex: true });
+        let nowhere = Object::Ref(ObjRef::new(9_999, 0));
+        assert_eq!(super::direct_id(&doc, &Object::Array(vec![nowhere, string(b"ab")])), Object::Array(vec![string(b""), string(b"ab")]));
+    }
+
     use proptest::prelude::*;
 
     use super::*;
@@ -730,20 +746,17 @@ mod tests {
     }
 
     #[test]
-    fn kept_objects_stop_at_their_byte_and_node_budget() {
+    fn kept_objects_stop_at_their_byte_budget() {
         let data = Arc::new(Vec::new());
         let string = Object::String(PdfString::literal(vec![b'x'; 1000]));
         let array = Object::Array(vec![Object::Int(1), Object::Null]);
         let mut kept = KeptObjects::default();
         assert!(kept.admit(&string, &data) && kept.admit(&array, &data));
-        assert_eq!((kept.bytes, kept.nodes), (1000, 4));
-        let mut full = KeptObjects { bytes: KeptObjects::BYTES - 999, nodes: 0 };
-        assert!(!full.admit(&string, &data), "one byte over the byte budget");
-        assert_eq!((full.bytes, full.nodes), (KeptObjects::BYTES - 999, 0), "a refused object is not counted");
-        assert!(full.admit(&Object::Int(1), &data));
-        let mut full = KeptObjects { bytes: 0, nodes: KeptObjects::NODES - 2 };
-        assert!(!full.admit(&array, &data), "a node past the node budget");
-        assert!(full.admit(&Object::Int(1), &data));
+        assert_eq!(kept.bytes, held_bytes(&string, &data, 0) + held_bytes(&array, &data, 0));
+        let mut full = KeptObjects { bytes: KeptObjects::BYTES - held_bytes(&string, &data, 0) + 1 };
+        let before = full.bytes;
+        assert!(!full.admit(&string, &data), "one byte over the budget");
+        assert_eq!(full.bytes, before, "a refused object is not counted");
         let mut deep = Object::Null;
         for _ in 0..300 {
             deep = Object::Array(vec![deep]);
@@ -757,20 +770,11 @@ mod tests {
         let name = Object::Name(vec![b'n'; KeptObjects::BYTES + 1]);
         let mut kept = KeptObjects::default();
         assert!(!kept.admit(&name, &data), "a name over the byte budget is not kept");
-        assert_eq!((kept.bytes, kept.nodes), (0, 0));
+        assert_eq!(kept.bytes, 0);
         let mut dict = Dict::new();
         dict.set(vec![b'k'; KeptObjects::BYTES + 1], Object::Null);
         assert!(!kept.admit(&Object::Dict(dict), &data), "nor a dictionary key");
-        let mut small = Dict::new();
-        small.set(b"Key".to_vec(), Object::name("Value"));
-        assert!(kept.admit(&Object::Dict(small), &data));
-        assert_eq!(kept.bytes, 3 + 5);
-        // A dictionary large enough to index its keys holds each one twice.
-        let mut big = Dict::new();
-        for i in 0..64 {
-            big.set(format!("K{i:03}").into_bytes(), Object::Null);
-        }
-        assert_eq!(owned_bytes(&Object::Dict(big), &data, 0), 64 * 4 * 2);
+        assert_eq!(kept.bytes, 0);
     }
 
     #[test]

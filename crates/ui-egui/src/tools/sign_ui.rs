@@ -2,15 +2,17 @@
 //! click an empty signature field), the Sign with a Digital ID / Configure New Digital ID /
 //! Sign as dialogs, the Signatures panel, and the signature message bar.
 
+#[cfg(not(target_arch = "wasm32"))]
+use crate::file_filter::AddFilterAnyCase as _;
 use std::path::PathBuf;
 
 use egui::{Align, Color32, CornerRadius, Layout, Pos2, Rect, Stroke, vec2};
 use pdfcraft_engine::sign::{self, Appearance, AppearanceLabels, Certificate, DigitalId, Name, PrivateKey};
 use pdfcraft_engine::{SignOptions, SignatureImage, SignatureInfo, SignatureStatus};
 
-use crate::canvas::{DocView, PageXform, Snapshot, SnapshotKind};
+use crate::canvas::{DocView, PageToolContext, Snapshot, SnapshotKind};
 use crate::fill_sign::SavedSig;
-use crate::page_pointer::PagePointer;
+use crate::page_cursor::Layer;
 use crate::theme::{self, Tokens};
 use crate::{PdfCraftApp, icons, widgets};
 
@@ -161,34 +163,31 @@ pub struct SignView {
     pub field: Option<String>,
 }
 
-/// Drag a signature rectangle on one page (Digitally sign, Certify (visible signature)).
-pub(crate) fn page_input(
-    ui: &egui::Ui,
-    resp: &egui::Response,
-    xf: &PageXform,
-    ptr: &PagePointer,
-    page: usize,
-    info: &pdfcraft_render::DocInfo,
-    view: &mut DocView,
-) {
+/// Drag a signature rectangle on one page (Digitally sign, Certify (visible signature)), from a
+/// press nobody holds (`free`).
+pub(crate) fn page_input(cx: PageToolContext<'_>, free: bool, view: &mut DocView) {
+    let PageToolContext { ui, resp, xf, ptr, page, info, .. } = cx;
     let (pointer, origin) = (ptr.pos, ptr.origin);
     if pointer.is_some_and(|p| xf.rect.contains(p)) {
-        ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+        view.cursor.claim(Layer::ToolArea, egui::CursorIcon::Crosshair);
     }
-    if resp.drag_started()
+    // The tool's own press, of the primary button: one nobody holds.
+    if resp.drag_started_by(egui::PointerButton::Primary)
+        && free
         && let Some(o) = origin.filter(|o| xf.rect.contains(*o))
     {
         view.sign.drag = Some((page, o));
     }
     if let Some((p, start)) = view.sign.drag
         && p == page
-        && let Some(end) = pointer
     {
+        // Where the pointer is, or where it went down when it is off the window.
+        let end = pointer.unwrap_or(start);
         let end = Pos2::new(end.x.clamp(xf.rect.left(), xf.rect.right()), end.y.clamp(xf.rect.top(), xf.rect.bottom()));
         let r = Rect::from_two_pos(start, end);
         ui.painter().rect_filled(r, CornerRadius::ZERO, Color32::from_rgba_unmultiplied(0x14, 0x73, 0xE6, 28));
         ui.painter().rect_stroke(r, CornerRadius::ZERO, Stroke::new(1.0, Color32::from_rgb(0x14, 0x73, 0xE6)), egui::StrokeKind::Middle);
-        if resp.drag_stopped() {
+        if resp.drag_stopped() || !ptr.primary_down {
             view.sign.drag = None;
             if r.width() >= 8.0 && r.height() >= 8.0 {
                 let user = |q: Pos2| {
@@ -497,7 +496,7 @@ impl PdfCraftApp {
             Some(p) => sign_and_save(self, PathBuf::from(p)),
             #[cfg(not(target_arch = "wasm32"))]
             None => {
-                let dialog = rfd::AsyncFileDialog::new().add_filter("PDF", &["pdf"]).set_file_name(format!("{stem}_signed.pdf"));
+                let dialog = rfd::AsyncFileDialog::new().add_filter_any_case("PDF", &["pdf"]).set_file_name(format!("{stem}_signed.pdf"));
                 let dialog = crate::editing::in_document_folder(dialog, folder.as_deref());
                 // The signature's page, rectangle and field refer to the document as it is now:
                 // the pick is dropped (with a notice) if it is edited or switched away from
@@ -529,7 +528,7 @@ impl PdfCraftApp {
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn pick_sign_graphic_image(&mut self) {
         let epoch = self.dialog_epoch();
-        let dialog = rfd::AsyncFileDialog::new().add_filter(tl!("Image"), &["png", "jpg", "jpeg"]);
+        let dialog = rfd::AsyncFileDialog::new().add_filter_any_case(tl!("Image"), &["png", "jpg", "jpeg"]);
         self.ask_one(crate::pickers::Ask::File(dialog), None, move |app, path| {
             if app.dialog_epoch() != epoch || app.dialog != Some(crate::Dialog::Sign) {
                 return;
@@ -811,6 +810,9 @@ mod tests {
     /// left): never a mix, and never a label signing would refuse.
     #[test]
     fn appearance_labels_are_translated_or_all_english() {
+        if !crate::i18n::needs_catalogs() {
+            return;
+        }
         use crate::i18n::{Lang, has, tr};
         let english = AppearanceLabels::default();
         assert_eq!(appearance_labels(Lang::EN), (english.clone(), false));
@@ -841,6 +843,9 @@ mod tests {
     /// its label, in the words given, and only the values when the labels are off.
     #[test]
     fn preview_lines_use_the_labels_signing_stamps() {
+        if !crate::i18n::needs_catalogs() {
+            return;
+        }
         let (de, _) = appearance_labels(crate::i18n::Lang::from_code("de").unwrap());
         let all = Appearance { reason: true, location: true, ..Appearance::default() };
         let lines = detail_lines(&all, &de, "Ada", " Genehmigt ", "Berlin", "2026.10.14 09:30:00 Z");
