@@ -242,6 +242,10 @@ pub enum RenderError {
     /// The placed model has more than [`crate::MAX_ASSEMBLED_TRIANGLES`] triangles.
     #[error("the placed model has more triangles than the assembly ceiling")]
     TooManyTriangles,
+    /// The placed model has more than [`crate::MAX_ASSEMBLED_VERTICES`] positions, normals and
+    /// texture coordinates.
+    #[error("the placed model has more vertices than the assembly ceiling")]
+    TooManyVertices,
 }
 
 /// Draw `meshes` as seen by `camera`.
@@ -251,12 +255,14 @@ pub enum RenderError {
 /// nearer surfaces hide farther ones. Opaque triangles are drawn first; translucent ones are then
 /// blended over them, hidden by nearer opaque surfaces but not by each other, in mesh order; fully
 /// transparent ones are not drawn. Triangles with a non-finite or out-of-range vertex are skipped.
-/// A perspective camera clips what lies behind it.
+/// A perspective camera clips at a near plane 1/10,000 of the way from the eye to the target, so
+/// what lies behind the eye, or in front of it but nearer than that, is not drawn; an orthographic
+/// camera does not clip.
 ///
 /// # Errors
 /// [`RenderError::Size`] for an empty or over-ceiling image; [`RenderError::Camera`] for a camera
 /// that cannot form a view (eye on the target, `up` parallel to the view, a field of view outside
-/// 0–180°, a non-positive orthographic height).
+/// 0–180° or too small for a finite focal length, a non-positive orthographic height).
 pub fn render(meshes: &[WorldMesh], camera: &Camera, options: &RenderOptions) -> Result<Image, RenderError> {
     let (width, height) = (options.width, options.height);
     let size = RenderError::Size { width, height };
@@ -266,10 +272,11 @@ pub fn render(meshes: &[WorldMesh], camera: &Camera, options: &RenderOptions) ->
     }
     let pixels = usize::try_from(pixels).map_err(|_| size)?;
     let view = View::new(camera, f64::from(width) / f64::from(height))?;
+    let perspective = matches!(view, View::Perspective { .. });
     let scene = Scene { eye: camera.eye, basis: camera.basis()?, view, lighting: options.lighting };
     let mut rgba = options.background.repeat(pixels);
     let mut depth = vec![f64::NEG_INFINITY; pixels];
-    let mut target = Target { width, height, rgba: &mut rgba, depth: &mut depth };
+    let mut target = Target { perspective, width, height, rgba: &mut rgba, depth: &mut depth };
     let [r, g, b] = options.colour;
     for opaque in [true, false] {
         for m in meshes {

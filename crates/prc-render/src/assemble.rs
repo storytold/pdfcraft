@@ -8,6 +8,9 @@ use pdfcraft_prc::{Matrix, PrcFile, Rgba, Tessellation, TriangleMesh};
 /// occurrences draw is copied once per occurrence.
 pub const MAX_ASSEMBLED_TRIANGLES: usize = 1 << 24;
 
+/// The most positions, normals and texture coordinates [`assemble`] copies, over every placement.
+pub const MAX_ASSEMBLED_VERTICES: usize = 1 << 24;
+
 /// A triangle mesh in world coordinates with the colours it draws in.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct WorldMesh {
@@ -44,11 +47,12 @@ pub fn place(mesh: &TriangleMesh, matrix: &Matrix, colour: Option<[u8; 4]>, tria
 /// are, uncoloured. Wires, markups and compressed tessellations are not drawn.
 ///
 /// # Errors
-/// [`RenderError::Model`] when a tessellation section or the tree cannot be read;
-/// [`RenderError::TooManyTriangles`] past [`MAX_ASSEMBLED_TRIANGLES`].
+/// [`RenderError::Model`] when a tessellation section or the tree cannot be read, or the tree
+/// places a tessellation its file structure does not have; [`RenderError::TooManyTriangles`] past
+/// [`MAX_ASSEMBLED_TRIANGLES`] and [`RenderError::TooManyVertices`] past [`MAX_ASSEMBLED_VERTICES`].
 pub fn assemble(prc: &PrcFile) -> Result<Vec<WorldMesh>, RenderError> {
     let tessellations = prc.file_structures.iter().map(|fs| fs.tessellations()).collect::<Result<Vec<_>, _>>()?;
-    let mut budget = Budget(0);
+    let mut budget = Budget::default();
     let mut out = Vec::new();
     if !prc.stores_tree() {
         for mesh in tessellations.iter().flatten().filter_map(as_mesh) {
@@ -81,8 +85,9 @@ pub(crate) struct Item<'a> {
 /// Per triangle of a mesh, the colour its face's style resolves to.
 type FaceColours<'a> = dyn Fn(&TriangleMesh) -> Option<Vec<Option<Rgba>>> + 'a;
 
-/// Each item's mesh moved into the world and coloured, appended to `out`. Items naming no
-/// triangle mesh are skipped.
+/// Each item's mesh moved into the world and coloured, appended to `out`. Items naming a wire,
+/// markup or compressed tessellation are skipped; an item naming no tessellation at all is
+/// [`PrcError::Malformed`](pdfcraft_prc::PrcError::Malformed).
 pub(crate) fn place_items<'a>(
     tessellations: &[Vec<Tessellation>],
     items: impl IntoIterator<Item = Item<'a>>,
@@ -90,7 +95,11 @@ pub(crate) fn place_items<'a>(
     out: &mut Vec<WorldMesh>,
 ) -> Result<(), RenderError> {
     for p in items {
-        let Some(mesh) = tessellations.get(p.file_structure).and_then(|t| t.get(p.tessellation)).and_then(as_mesh) else {
+        let Some(tessellation) = tessellations.get(p.file_structure).and_then(|t| t.get(p.tessellation)) else {
+            let what = format!("tessellation {} of file structure {}, which has none by that index", p.tessellation, p.file_structure);
+            return Err(pdfcraft_prc::PrcError::Malformed(what).into());
+        };
+        let Some(mesh) = as_mesh(tessellation) else {
             continue;
         };
         budget.spend(mesh)?;
@@ -100,12 +109,23 @@ pub(crate) fn place_items<'a>(
     Ok(())
 }
 
-/// Triangles placed so far.
-pub(crate) struct Budget(pub(crate) usize);
+/// Triangles and vertex entries (positions, normals, texture coordinates) placed so far.
+#[derive(Debug, Default)]
+pub(crate) struct Budget {
+    pub(crate) triangles: usize,
+    pub(crate) vertices: usize,
+}
 
 impl Budget {
     fn spend(&mut self, mesh: &TriangleMesh) -> Result<(), RenderError> {
-        self.0 = self.0.checked_add(mesh.triangles.len()).filter(|&n| n <= MAX_ASSEMBLED_TRIANGLES).ok_or(RenderError::TooManyTriangles)?;
+        let triangles =
+            self.triangles.checked_add(mesh.triangles.len()).filter(|&n| n <= MAX_ASSEMBLED_TRIANGLES).ok_or(RenderError::TooManyTriangles)?;
+        let vertices = [mesh.positions.len(), mesh.normals.len(), mesh.uvs.len()]
+            .into_iter()
+            .try_fold(self.vertices, usize::checked_add)
+            .filter(|&n| n <= MAX_ASSEMBLED_VERTICES)
+            .ok_or(RenderError::TooManyVertices)?;
+        (self.triangles, self.vertices) = (triangles, vertices);
         Ok(())
     }
 }
