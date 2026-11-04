@@ -871,15 +871,22 @@ impl Metrics {
             if cid == 0 {
                 return false;
             }
-            // A CID /W leaves out takes /DW, and Skia (Chrome) leaves out every CID of that width: for
-            // those, only the subset's program says whether the glyph is there.
-            return self.cid_widths.contains_key(&cid)
-                || self.cid_ranges.find(cid).is_some()
+            let listed = self.cid_widths.contains_key(&cid) || self.cid_ranges.find(cid).is_some();
+            let outlined = self.outlined_cids.get(cid as usize / 64).is_some_and(|w| (*w >> (cid % 64)) & 1 == 1);
+            if self.subset && !self.outlined_cids.is_empty() {
+                // The subset's own program says which glyphs it kept. `/W` can't: a CID it leaves out takes
+                // /DW, and Skia (Chrome) leaves out every CID of that width, while PyMuPDF and other
+                // producers that keep glyph ids list a width for every glyph of the full font, the
+                // ones they emptied too, so an edit that typed one drew nothing (#6149). A glyph with
+                // no outline is there only when it is blank by nature (a space) and `/W` lists it.
+                return outlined || (listed && self.text_of(code).is_some_and(|t| is_blank(&t)));
+            }
+            // A CID /W leaves out takes /DW: for those, only the subset's program says whether the glyph is there.
+            return listed
                 || !self.subset
-                || self.outlined_cids.get(cid as usize / 64).is_some_and(|w| (*w >> (cid % 64)) & 1 == 1)
                 // No readable TrueType program to ask (e.g. CFF or missing): an explicit /DW
                 // still says /W may leave out glyphs of that width (#1443).
-                || (self.outlined_cids.is_empty() && self.explicit_default);
+                || self.explicit_default;
         }
         match code.checked_sub(self.first).and_then(|i| self.widths.get(i as usize)) {
             Some(w) => *w > 0.0 || code == 32,
@@ -1065,6 +1072,12 @@ fn stretches(spans: &[(u32, u32)], later_wins: bool) -> Vec<(u64, Option<usize>)
         }
     }
     cover
+}
+
+/// Whether `text` is all blank (white space, a soft hyphen, zero-width marks): the glyphs that
+/// have no outline in a font that does have them.
+fn is_blank(text: &str) -> bool {
+    !text.is_empty() && text.chars().all(|c| c.is_whitespace() || matches!(c, '\u{ad}' | '\u{200b}'..='\u{200f}' | '\u{2060}' | '\u{feff}'))
 }
 
 /// One bit for each code below 65 536 in `codes`; empty when there is none.
