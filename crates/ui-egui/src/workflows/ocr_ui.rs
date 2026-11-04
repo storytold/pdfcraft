@@ -243,16 +243,11 @@ impl PdfCraftApp {
             return;
         }
         let Some(scan) = self.scan_to_read() else { return };
-        if !pdfcraft_engine::ocr::available()
-            || self.session.get(scan.doc).is_none_or(|d| !d.text_blocks(scan.page).is_empty())
-        {
+        if !pdfcraft_engine::ocr::available() || self.session.get(scan.doc).is_none_or(|d| !d.text_blocks(scan.page).is_empty()) {
             self.views[scan.view].auto_ocr_skipped.insert(scan.page, scan.generation);
             return;
         }
-        if self.views[scan.view].line_editor.is_some()
-            || self.views[scan.view].pending_edit.is_some()
-            || self.views[scan.view].snapshot.is_some()
-        {
+        if self.views[scan.view].line_editor.is_some() || self.views[scan.view].pending_edit.is_some() || self.views[scan.view].snapshot.is_some() {
             return;
         }
         self.views[scan.view].auto_ocr_tried.insert(scan.page);
@@ -313,7 +308,8 @@ impl PdfCraftApp {
         let page_area = f64::from(info.width) * f64::from(info.height);
         let covered = document.page_images(page).iter().any(|i| {
             let [x0, y0, x1, y1] = i.visible_rect.unwrap_or(i.rect);
-            page_area > 0.0 && ((x1 - x0) * (y1 - y0)).abs() >= 0.5 * page_area
+            let area = ((x1 - x0) * (y1 - y0)).abs();
+            page_area.is_finite() && page_area > 0.0 && i.width > 1 && i.height > 1 && area.is_finite() && area >= 0.5 * page_area
         });
         if !covered {
             self.views[view].auto_ocr_skipped.insert(page, generation);
@@ -324,6 +320,20 @@ impl PdfCraftApp {
 
     /// Recognize `pages` (0-based; empty = all) of document `id` in the background.
     fn start_ocr_pages(&mut self, id: DocId, pages: &[usize], settings: OcrSettings, automatic: bool) {
+        if self.ocr_run.is_some() || self.ocr_batch.is_some() {
+            self.notify_tr("Text recognition is already running");
+            return;
+        }
+        let Some(document) = self.session.get(id) else { return };
+        if let Some(reason) = document.read_only_reason.clone() {
+            self.notify(reason);
+            return;
+        }
+        if !document.allows_modification() {
+            self.notify_tr("This document does not allow editing");
+            return;
+        }
+        let generation = document.edit_generation();
         // What an automatic run's result must still fit when it arrives (see `AutoOcr`).
         let auto = if automatic {
             pages.first().map(|&page| AutoOcr { page, generation: self.session.get(id).map_or(0, |d| d.edit_generation()) })
@@ -354,12 +364,12 @@ impl PdfCraftApp {
         #[cfg(not(target_arch = "wasm32"))]
         if self.run_inline {
             work();
-        } else {
-            std::thread::Builder::new().name("pdfcraft-ocr".into()).spawn(work).ok();
+        } else if let Err(error) = std::thread::Builder::new().name("pdfcraft-ocr".into()).spawn(work) {
+            self.notify_error(error);
+            return;
         }
         #[cfg(target_arch = "wasm32")]
         work();
-        let generation = self.session.get(id).map_or(0, |d| d.edit_generation());
         self.ocr_run = Some(OcrRun { doc: id, generation, progress, automatic: auto });
         self.poll_ocr();
     }
@@ -467,40 +477,6 @@ fn recognize_files(
     msg
 }
 
-pub(crate) fn toggle(ui: &mut egui::Ui, app: &mut PdfCraftApp) {
-    let mut enabled = app.auto_ocr;
-    if ui
-        .add(widgets::checkbox(&mut enabled, tl!("Recognize scanned text automatically")))
-        .on_hover_text(tl!("Ask whether to recognize the current page or all pages when editing a scan."))
-        .changed()
-    {
-        app.set_auto_ocr(enabled);
-    }
-}
-
-pub(crate) fn scan_prompt_body(ui: &mut egui::Ui, app: &mut PdfCraftApp) -> (Option<bool>, bool) {
-    ui.label(egui::RichText::new(tl!("Scanned text detected")).font(theme::semibold(18.0)));
-    ui.add_space(8.0);
-    ui.label(tl!("Recognize text on this page or throughout the document?"));
-    ui.add_space(8.0);
-    toggle(ui, app);
-    ui.add_space(8.0);
-    let mut all = None;
-    let mut cancel = false;
-    ui.horizontal(|ui| {
-        if widgets::pill_button(ui, tl!("Current page"), true).clicked() {
-            all = Some(false);
-        }
-        if widgets::pill_button(ui, tl!("All pages"), false).clicked() {
-            all = Some(true);
-        }
-        if widgets::pill_button(ui, tl!("Cancel"), false).clicked() {
-            cancel = true;
-        }
-    });
-    (all, cancel)
-}
-
 impl PdfCraftApp {
     /// Stop a running recognition (the pages read so far are kept).
     pub fn cancel_ocr(&mut self) {
@@ -541,6 +517,7 @@ impl PdfCraftApp {
         }
         let Some(run) = self.ocr_run.as_ref() else { return };
         let (doc, generation, progress, auto) = (run.doc, run.generation, run.progress.clone(), run.automatic);
+        let generation = auto.map_or(generation, |a| a.generation);
         let automatic = auto.is_some();
         let mut s = match progress.lock() {
             Ok(s) => s,
@@ -828,9 +805,6 @@ mod tests {
         assert!(app.ocr_batch.is_none());
         let toast = app.toast.take().map(|t| t.0).unwrap_or_default();
         assert!(toast.starts_with("Recognize text failed"), "{toast}");
-    }
-}
-        }
     }
 }
 
