@@ -125,6 +125,11 @@ impl Motion {
             self.frame = None;
             return;
         }
+        if crate::canvas::wheel_reset::reset_this_pass(ctx) {
+            // The document's hidden cancel resets egui before fresh input. Its app reader
+            // must forget the same older gesture modifiers before reading those events.
+            self.wheel = WheelReader::default();
+        }
         let options = ctx.options(|o| o.input_options);
         // One frame may run several passes (`request_discard`). Only the first pass has this
         // frame's events, and only it may hand the wheel on: a scroll area applies the delta to

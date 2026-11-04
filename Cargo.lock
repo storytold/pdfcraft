@@ -1197,17 +1197,40 @@ dependencies = [
 [[package]]
 name = "craft-docpath"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=82a24b006eefa036b43c09a67fb9a3fbd17ffe63#82a24b006eefa036b43c09a67fb9a3fbd17ffe63"
+source = "git+https://github.com/storytold/craft-libs?rev=787a7a0f972fd1d7a7618fdbeca3a5267a0407ff#787a7a0f972fd1d7a7618fdbeca3a5267a0407ff"
 
 [[package]]
 name = "craft-fonts-build"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=refs%2Fpull%2F112%2Fhead#8f1b3332475b221ee1e79c18bb33fd41ca8e32b9"
+source = "git+https://github.com/storytold/craft-libs?rev=refs%2Fpull%2F112%2Fhead#b291f191a942c13d55a5e790fa176316c050e06a"
 
 [[package]]
 name = "craft-i18n"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=refs%2Fpull%2F112%2Fhead#8f1b3332475b221ee1e79c18bb33fd41ca8e32b9"
+source = "git+https://github.com/storytold/craft-libs?rev=787a7a0f972fd1d7a7618fdbeca3a5267a0407ff#787a7a0f972fd1d7a7618fdbeca3a5267a0407ff"
+dependencies = [
+ "fixed_decimal",
+ "icu_decimal",
+ "icu_locale_core",
+ "icu_locale_fallback",
+ "icu_normalizer",
+ "icu_plurals",
+ "icu_properties",
+ "icu_provider",
+ "icu_provider_adapters",
+ "icu_provider_blob",
+ "log",
+ "objc2-foundation 0.3.2",
+ "sys-locale",
+ "unicode-bidi",
+ "windows-registry",
+ "writeable",
+]
+
+[[package]]
+name = "craft-i18n"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=refs%2Fpull%2F112%2Fhead#b291f191a942c13d55a5e790fa176316c050e06a"
 dependencies = [
  "fixed_decimal",
  "icu_decimal",
@@ -1238,7 +1261,7 @@ dependencies = [
 [[package]]
 name = "craft-keymap"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=edc41f68fa24c46651c3b5117d10f0ead75ec9cb#edc41f68fa24c46651c3b5117d10f0ead75ec9cb"
+source = "git+https://github.com/storytold/craft-libs?rev=787a7a0f972fd1d7a7618fdbeca3a5267a0407ff#787a7a0f972fd1d7a7618fdbeca3a5267a0407ff"
 dependencies = [
  "egui",
  "serde",
@@ -1248,7 +1271,7 @@ dependencies = [
 [[package]]
 name = "craft-menu"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=edc41f68fa24c46651c3b5117d10f0ead75ec9cb#edc41f68fa24c46651c3b5117d10f0ead75ec9cb"
+source = "git+https://github.com/storytold/craft-libs?rev=787a7a0f972fd1d7a7618fdbeca3a5267a0407ff#787a7a0f972fd1d7a7618fdbeca3a5267a0407ff"
 dependencies = [
  "craft-keymap",
  "craft-quit",
@@ -1261,11 +1284,12 @@ dependencies = [
 [[package]]
 name = "craft-print"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=42e30cd5b3f4b114270dd053fccbc33bedc47f68#42e30cd5b3f4b114270dd053fccbc33bedc47f68"
+source = "git+https://github.com/storytold/craft-libs?rev=787a7a0f972fd1d7a7618fdbeca3a5267a0407ff#787a7a0f972fd1d7a7618fdbeca3a5267a0407ff"
 dependencies = [
  "craft-winprint-gdi",
- "miniz_oxide 0.8.9",
- "roxmltree",
+ "log",
+ "miniz_oxide 0.9.1",
+ "roxmltree 0.21.2",
  "tempfile",
  "winprint",
  "winsafe",
@@ -1274,7 +1298,7 @@ dependencies = [
 [[package]]
 name = "craft-quit"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=edc41f68fa24c46651c3b5117d10f0ead75ec9cb#edc41f68fa24c46651c3b5117d10f0ead75ec9cb"
+source = "git+https://github.com/storytold/craft-libs?rev=787a7a0f972fd1d7a7618fdbeca3a5267a0407ff#787a7a0f972fd1d7a7618fdbeca3a5267a0407ff"
 dependencies = [
  "dispatch2",
  "egui",
@@ -1298,10 +1322,10 @@ dependencies = [
 [[package]]
 name = "craft-ui"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=refs%2Fpull%2F112%2Fhead#8f1b3332475b221ee1e79c18bb33fd41ca8e32b9"
+source = "git+https://github.com/storytold/craft-libs?rev=refs%2Fpull%2F112%2Fhead#b291f191a942c13d55a5e790fa176316c050e06a"
 dependencies = [
  "craft-fonts-build",
- "craft-i18n",
+ "craft-i18n 0.1.0 (git+https://github.com/storytold/craft-libs?rev=refs%2Fpull%2F112%2Fhead)",
  "egui",
  "epaint",
  "js-sys",
@@ -1319,13 +1343,14 @@ dependencies = [
 [[package]]
 name = "craft-update"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=495e5971bc024aa96e6ed318cb6e7cd3a0103184#495e5971bc024aa96e6ed318cb6e7cd3a0103184"
+source = "git+https://github.com/storytold/craft-libs?rev=787a7a0f972fd1d7a7618fdbeca3a5267a0407ff#787a7a0f972fd1d7a7618fdbeca3a5267a0407ff"
 dependencies = [
  "chrono",
  "dunce",
  "egui",
  "flate2",
  "getrandom 0.3.4",
+ "image",
  "log",
  "plist",
  "semver",
@@ -2284,7 +2309,7 @@ version = "0.5.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bbc773e24e02d4ddd8395fd30dc147524273a83e54e0f312d986ea30de5f5646"
 dependencies = [
- "roxmltree",
+ "roxmltree 0.20.0",
 ]
 
 [[package]]
@@ -2771,6 +2796,7 @@ version = "0.3.0"
 dependencies = [
  "fearless_simd",
  "hayro-ccitt",
+ "image",
 ]
 
 [[package]]
@@ -4245,7 +4271,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft"
-version = "0.14.0"
+version = "0.18.1"
 dependencies = [
  "chrono",
  "craft-update",
@@ -4269,7 +4295,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-a11y"
-version = "0.14.0"
+version = "0.18.1"
 dependencies = [
  "pdfcraft-content",
  "pdfcraft-cos",
@@ -4281,7 +4307,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-annot"
-version = "0.14.0"
+version = "0.18.1"
 dependencies = [
  "hayro-syntax",
  "pdfcraft-cos",
@@ -4292,7 +4318,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-audit"
-version = "0.14.0"
+version = "0.18.1"
 dependencies = [
  "pdfcraft-content",
  "pdfcraft-cos",
@@ -4303,7 +4329,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-automation"
-version = "0.14.0"
+version = "0.18.1"
 dependencies = [
  "base64 0.23.1",
  "craft-devices",
@@ -4326,7 +4352,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-cli"
-version = "0.14.0"
+version = "0.18.1"
 dependencies = [
  "base64 0.23.1",
  "craft-job",
@@ -4345,11 +4371,11 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-compare"
-version = "0.14.0"
+version = "0.18.1"
 
 [[package]]
 name = "pdfcraft-content"
-version = "0.14.0"
+version = "0.18.1"
 dependencies = [
  "hayro-syntax",
  "pdfcraft-cos",
@@ -4357,7 +4383,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-cos"
-version = "0.14.0"
+version = "0.18.1"
 dependencies = [
  "chrono",
  "hayro-syntax",
@@ -4372,14 +4398,17 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-create"
-version = "0.14.0"
+version = "0.18.1"
 dependencies = [
  "encoding_rs",
+ "hayro-ccitt",
  "hayro-syntax",
  "image",
  "pdfcraft-cos",
+ "pdfcraft-filters",
  "pdfcraft-fonts",
  "pdfcraft-model",
+ "pdfcraft-xfa",
  "png 0.18.1",
  "thiserror 2.0.21",
  "tiff",
@@ -4388,7 +4417,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-crypt"
-version = "0.14.0"
+version = "0.18.1"
 dependencies = [
  "aes",
  "md-5",
@@ -4400,7 +4429,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-edit"
-version = "0.14.0"
+version = "0.18.1"
 dependencies = [
  "hayro-syntax",
  "kurbo 0.13.1",
@@ -4409,16 +4438,20 @@ dependencies = [
  "pdfcraft-cos",
  "pdfcraft-fonts",
  "pdfcraft-model",
+ "pdfcraft-render",
+ "proptest",
+ "sha2 0.11.1",
  "thiserror 2.0.21",
  "unicode-bidi",
 ]
 
 [[package]]
 name = "pdfcraft-engine"
-version = "0.14.0"
+version = "0.18.1"
 dependencies = [
  "chrono",
  "craft-docpath",
+ "getrandom 0.4.3",
  "icu_properties",
  "idna",
  "image",
@@ -4426,10 +4459,12 @@ dependencies = [
  "pdfcraft-annot",
  "pdfcraft-audit",
  "pdfcraft-compare",
+ "pdfcraft-content",
  "pdfcraft-cos",
  "pdfcraft-create",
  "pdfcraft-edit",
  "pdfcraft-export",
+ "pdfcraft-filters",
  "pdfcraft-fonts",
  "pdfcraft-forms",
  "pdfcraft-geom",
@@ -4456,16 +4491,19 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-export"
-version = "0.14.0"
+version = "0.18.1"
 dependencies = [
  "flate2",
 ]
 
 [[package]]
 name = "pdfcraft-filters"
-version = "0.14.0"
+version = "0.18.1"
 dependencies = [
+ "fax",
  "flate2",
+ "hayro-ccitt",
+ "hayro-jbig2",
  "proptest",
  "thiserror 2.0.21",
  "weezl 0.2.1",
@@ -4473,7 +4511,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-fonts"
-version = "0.14.0"
+version = "0.18.1"
 dependencies = [
  "harfrust",
  "pdfcraft-cos",
@@ -4483,7 +4521,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-forms"
-version = "0.14.0"
+version = "0.18.1"
 dependencies = [
  "hayro-syntax",
  "pdfcraft-content",
@@ -4496,11 +4534,11 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-geom"
-version = "0.14.0"
+version = "0.18.1"
 
 [[package]]
 name = "pdfcraft-js"
-version = "0.14.0"
+version = "0.18.1"
 dependencies = [
  "boa_engine",
  "chrono",
@@ -4508,7 +4546,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-measure"
-version = "0.14.0"
+version = "0.18.1"
 dependencies = [
  "pdfcraft-annot",
  "pdfcraft-content",
@@ -4521,24 +4559,25 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-model"
-version = "0.14.0"
+version = "0.18.1"
 dependencies = [
  "pdfcraft-cos",
 ]
 
 [[package]]
 name = "pdfcraft-ocr"
-version = "0.14.0"
+version = "0.18.1"
 dependencies = [
  "ocrs",
  "pdfcraft-fonts",
  "rten",
+ "tempfile",
  "thiserror 2.0.21",
 ]
 
 [[package]]
 name = "pdfcraft-optimize"
-version = "0.14.0"
+version = "0.18.1"
 dependencies = [
  "image",
  "pdfcraft-annot",
@@ -4547,17 +4586,18 @@ dependencies = [
  "pdfcraft-filters",
  "pdfcraft-model",
  "pdfcraft-render",
+ "proptest",
  "thiserror 2.0.21",
  "zune-jpeg",
 ]
 
 [[package]]
 name = "pdfcraft-oracle"
-version = "0.14.0"
+version = "0.18.1"
 
 [[package]]
 name = "pdfcraft-organize"
-version = "0.14.0"
+version = "0.18.1"
 dependencies = [
  "hayro-syntax",
  "pdfcraft-content",
@@ -4568,7 +4608,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-platform"
-version = "0.14.0"
+version = "0.18.1"
 dependencies = [
  "async-channel",
  "craft-scan",
@@ -4580,18 +4620,18 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-preflight"
-version = "0.14.0"
+version = "0.18.1"
 dependencies = [
  "flate2",
  "pdfcraft-content",
  "pdfcraft-cos",
  "pdfcraft-model",
- "roxmltree",
+ "roxmltree 0.21.2",
 ]
 
 [[package]]
 name = "pdfcraft-print"
-version = "0.14.0"
+version = "0.18.1"
 dependencies = [
  "craft-print",
  "pdfcraft-content",
@@ -4603,12 +4643,13 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-redact"
-version = "0.14.0"
+version = "0.18.1"
 dependencies = [
  "pdfcraft-annot",
  "pdfcraft-content",
  "pdfcraft-cos",
  "pdfcraft-edit",
+ "pdfcraft-filters",
  "pdfcraft-fonts",
  "pdfcraft-forms",
  "pdfcraft-model",
@@ -4619,7 +4660,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-render"
-version = "0.14.0"
+version = "0.18.1"
 dependencies = [
  "bytemuck",
  "flate2",
@@ -4638,7 +4679,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-sign"
-version = "0.14.0"
+version = "0.18.1"
 dependencies = [
  "aes",
  "aws-lc-rs",
@@ -4674,17 +4715,18 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-testkit"
-version = "0.14.0"
+version = "0.18.1"
 
 [[package]]
 name = "pdfcraft-ui-egui"
-version = "0.14.0"
+version = "0.18.1"
 dependencies = [
  "arboard",
  "base64 0.23.1",
  "block2 0.6.2",
  "bytemuck",
  "chrono",
+ "craft-i18n 0.1.0 (git+https://github.com/storytold/craft-libs?rev=787a7a0f972fd1d7a7618fdbeca3a5267a0407ff)",
  "craft-keymap",
  "craft-menu",
  "craft-quit",
@@ -4702,6 +4744,7 @@ dependencies = [
  "objc2 0.6.5",
  "objc2-app-kit 0.3.2",
  "objc2-foundation 0.3.2",
+ "pdfcraft-content",
  "pdfcraft-cos",
  "pdfcraft-engine",
  "pdfcraft-fonts",
@@ -4712,6 +4755,7 @@ dependencies = [
  "plist",
  "png 0.18.1",
  "pollster 1.0.1",
+ "proptest",
  "rfd",
  "rustix 1.1.5",
  "serde",
@@ -4730,7 +4774,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-web"
-version = "0.14.0"
+version = "0.18.1"
 dependencies = [
  "eframe",
  "egui",
@@ -4742,7 +4786,7 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-wia"
-version = "0.14.0"
+version = "0.18.1"
 dependencies = [
  "craft-scan",
  "log",
@@ -4752,27 +4796,27 @@ dependencies = [
 
 [[package]]
 name = "pdfcraft-xfa"
-version = "0.14.0"
+version = "0.18.1"
 dependencies = [
  "base64 0.23.1",
  "image",
  "pdfcraft-cos",
  "pdfcraft-fonts",
  "png 0.18.1",
- "roxmltree",
+ "roxmltree 0.21.2",
  "sha2 0.11.1",
  "thiserror 2.0.21",
 ]
 
 [[package]]
 name = "pdfcraft-xfdf"
-version = "0.14.0"
+version = "0.18.1"
 dependencies = [
  "pdfcraft-annot",
  "pdfcraft-cos",
  "pdfcraft-forms",
  "pdfcraft-model",
- "roxmltree",
+ "roxmltree 0.21.2",
  "thiserror 2.0.21",
 ]
 
@@ -5662,6 +5706,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6c20b6793b5c2fa6553b250154b78d6d0db37e72700ae35fad9387a46f487c97"
 
 [[package]]
+name = "roxmltree"
+version = "0.21.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9da7f59328b09405b181fee1018925fad50f157afb43c0c0f5c522c256dd5907"
+dependencies = [
+ "memchr",
+]
+
+[[package]]
 name = "rsa"
 version = "0.10.0-rc.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5690,6 +5743,7 @@ dependencies = [
  "rten-base",
  "rten-gemm",
  "rten-model-file",
+ "rten-onnx",
  "rten-parallel",
  "rten-shape-inference",
  "rten-simd",
@@ -5738,6 +5792,12 @@ dependencies = [
  "flatbuffers",
  "rten-base",
 ]
+
+[[package]]
+name = "rten-onnx"
+version = "0.26.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "96944374568990b8d1bbc5bae5957585866f9dd8256130460405730948bfd42e"
 
 [[package]]
 name = "rten-parallel"
@@ -5819,7 +5879,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.4.15",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -7299,7 +7359,7 @@ dependencies = [
  "kurbo 0.11.3",
  "log",
  "pico-args",
- "roxmltree",
+ "roxmltree 0.20.0",
  "simplecss",
  "siphasher",
  "strict-num",
@@ -7387,8 +7447,6 @@ dependencies = [
 [[package]]
 name = "vello_cpu"
 version = "0.0.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6d8ded630e8316bb94a55881256506d1f3b9947b5f66db8a7d32ca7ba02decd0"
 dependencies = [
  "bytemuck",
  "glifo 0.1.1",

@@ -21,8 +21,9 @@ use crate::theme::{self, Tokens};
 use crate::{PdfCraftApp, widgets};
 
 /// What the dialog's buttons asked for this frame.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ScanClick {
+    #[default]
     None,
     Close,
     /// Stop an in-flight transfer without closing the dialog.
@@ -1508,7 +1509,7 @@ fn more_options(ui: &mut egui::Ui, draft: &mut ScanDraft, t: &Tokens, choices: &
         if !choices.dpi_y.is_empty() && choices.dpi_y != choices.dpi {
             ui.label(tl!("Vertical resolution"));
             let current = draft.dpi_y.unwrap_or(draft.dpi);
-            egui::ComboBox::from_id_salt("scan-dpi-y").selected_text(format!("{current} dpi")).width(220.0).show_ui(ui, |ui| {
+            craft_ui::ComboBox::from_id_salt("scan-dpi-y").selected_text(format!("{current} dpi")).width(220.0).show_ui(ui, |ui| {
                 for value in &choices.dpi_y {
                     ui.selectable_value(&mut draft.dpi_y, Some(*value), format!("{value} dpi"));
                 }
@@ -1535,7 +1536,7 @@ fn more_options(ui: &mut egui::Ui, draft: &mut ScanDraft, t: &Tokens, choices: &
         if choices.formats.len() > 1 {
             ui.label(tl!("Format"));
             let current = draft.format.clone().unwrap_or_else(|| choices.formats.first().cloned().unwrap_or_default());
-            egui::ComboBox::from_id_salt("scan-format").selected_text(&current).width(220.0).show_ui(ui, |ui| {
+            craft_ui::ComboBox::from_id_salt("scan-format").selected_text(&current).width(220.0).show_ui(ui, |ui| {
                 for format in &choices.formats {
                     ui.selectable_value(&mut draft.format, Some(format.clone()), format);
                 }
@@ -1545,7 +1546,7 @@ fn more_options(ui: &mut egui::Ui, draft: &mut ScanDraft, t: &Tokens, choices: &
         if choices.compression.len() > 1 {
             ui.label(tl!("Compression"));
             let current = draft.compression.clone().unwrap_or_else(|| choices.compression.first().cloned().unwrap_or_default());
-            egui::ComboBox::from_id_salt("scan-compression").selected_text(&current).width(220.0).show_ui(ui, |ui| {
+            craft_ui::ComboBox::from_id_salt("scan-compression").selected_text(&current).width(220.0).show_ui(ui, |ui| {
                 for name in &choices.compression {
                     ui.selectable_value(&mut draft.compression, Some(name.clone()), name);
                 }
@@ -1555,7 +1556,7 @@ fn more_options(ui: &mut egui::Ui, draft: &mut ScanDraft, t: &Tokens, choices: &
         if !choices.intents.is_empty() {
             ui.label(tl!("Intent"));
             let current = draft.intent.map(|intent| intent.name().to_string()).unwrap_or_else(|| tl!("Driver default").to_string());
-            egui::ComboBox::from_id_salt("scan-intent").selected_text(current).width(220.0).show_ui(ui, |ui| {
+            craft_ui::ComboBox::from_id_salt("scan-intent").selected_text(current).width(220.0).show_ui(ui, |ui| {
                 ui.selectable_value(&mut draft.intent, None, tl!("Driver default"));
                 for intent in &choices.intents {
                     ui.selectable_value(&mut draft.intent, Some(*intent), intent.name());
@@ -1566,7 +1567,7 @@ fn more_options(ui: &mut egui::Ui, draft: &mut ScanDraft, t: &Tokens, choices: &
         if choices.page_sizes.len() > 1 {
             ui.label(tl!("Page size"));
             let current = draft.page_size.map(|size| size.name().to_string()).unwrap_or_default();
-            egui::ComboBox::from_id_salt("scan-page-size").selected_text(current).width(220.0).show_ui(ui, |ui| {
+            craft_ui::ComboBox::from_id_salt("scan-page-size").selected_text(current).width(220.0).show_ui(ui, |ui| {
                 for size in &choices.page_sizes {
                     ui.selectable_value(&mut draft.page_size, Some(*size), size.name());
                 }
@@ -1584,7 +1585,7 @@ fn more_options(ui: &mut egui::Ui, draft: &mut ScanDraft, t: &Tokens, choices: &
         if choices.photometric.len() > 1 {
             ui.label(tl!("Photometric"));
             let current = draft.photometric.map(|value| value.to_string()).unwrap_or_default();
-            egui::ComboBox::from_id_salt("scan-photometric").selected_text(current).width(220.0).show_ui(ui, |ui| {
+            craft_ui::ComboBox::from_id_salt("scan-photometric").selected_text(current).width(220.0).show_ui(ui, |ui| {
                 for value in &choices.photometric {
                     ui.selectable_value(&mut draft.photometric, Some(*value), value.to_string());
                 }
@@ -1642,7 +1643,7 @@ fn more_options(ui: &mut egui::Ui, draft: &mut ScanDraft, t: &Tokens, choices: &
             });
         } else {
             let current = draft.orientation.map(|value| value.to_string()).unwrap_or_default();
-            egui::ComboBox::from_id_salt("scan-orientation").selected_text(current).width(220.0).show_ui(ui, |ui| {
+            craft_ui::ComboBox::from_id_salt("scan-orientation").selected_text(current).width(220.0).show_ui(ui, |ui| {
                 for value in &choices.orientation {
                     ui.selectable_value(&mut draft.orientation, Some(*value), value.to_string());
                 }
@@ -2313,6 +2314,137 @@ impl PdfCraftApp {
         self.start_scan_with(click, None);
     }
 
+    /// The settings for the button pressed, checked against the scanner; `None` (with the reason in the
+    /// dialog) when they can't be scanned.
+    fn checked_scan_settings(
+        &mut self,
+        click: ScanClick,
+        scanner: &Scanner,
+        resume: Option<&Resume>,
+        cancel: &CancelToken,
+        live: &ProgressToken,
+    ) -> Option<ScanSettings> {
+        let mut settings = match click {
+            ScanClick::Preview => {
+                let mut settings = preview_settings(&self.scan.draft, scanner);
+                settings.cancel = Some(cancel.clone());
+                settings.progress = Some(live.clone());
+                settings
+            }
+            ScanClick::Create | ScanClick::Insert | ScanClick::ReverseSides | ScanClick::MoreFronts => {
+                let mut settings = final_settings(&self.scan.draft, scanner, cancel.clone());
+                settings.progress = Some(live.clone());
+                settings
+            }
+            ScanClick::None | ScanClick::Close | ScanClick::Stop => return None,
+        };
+        if matches!(click, ScanClick::MoreFronts) {
+            // More fronts come from where the first ones did, into the same document after the last one.
+            let Some(pending) = self.scan.duplex.filter(|pending| self.views.iter().any(|view| view.id == pending.doc)) else {
+                self.scan.duplex = None;
+                self.scan.draft.error = Some(tl!("The document is no longer open.").to_string());
+                return None;
+            };
+            settings.source = pending.source;
+        }
+        if let Some(r) = resume {
+            // Once pages came in, keep the bed or feeder they came from (Auto would pick the bed
+            // when the tray is now empty) and ask only for the pages still missing.
+            if settings.source == Source::Auto
+                && let Some(source) = r.source
+            {
+                settings.source = source;
+            }
+            if r.feeder
+                && !matches!(click, ScanClick::ReverseSides)
+                && let Some(pages) = r.pages
+            {
+                settings.pages = pages;
+            }
+        }
+        if matches!(click, ScanClick::ReverseSides)
+            && let Some(pending) = self.scan.duplex
+            && !self.views.iter().any(|view| view.id == pending.doc)
+        {
+            // Never reached through the UI (closing the document cancels the reverse sides), but never scan for it.
+            self.scan.duplex = None;
+            self.scan.draft.error = Some(tl!("The document is no longer open.").to_string());
+            return None;
+        }
+        if matches!(click, ScanClick::ReverseSides)
+            && let Some(pending) = &self.scan.duplex
+        {
+            let n = u32::try_from(pending.fronts).unwrap_or(0);
+            if n == 0 {
+                self.scan.draft.error = Some(tl!("Scan the fronts before the reverse sides.").to_string());
+                return None;
+            }
+            // Same source as the fronts. Forcing the feeder here broke bed reverse-side scans.
+            settings.source = pending.source;
+            settings.pages = if pending.source == Source::Glass { 1 } else { reverse_pages(pending.fronts, pending.backs) };
+            if pending.source == Source::Glass && n != 1 {
+                self.scan.draft.error =
+                    Some(tl!("The bed scans one page at a time. Scan one front, flip it, then scan its reverse side.").to_string());
+                return None;
+            }
+        }
+        if let Err(error) = settings.checked() {
+            self.scan.draft.error = Some(error.to_string());
+            return None;
+        }
+        if let Some(region) = settings.region {
+            let max = match effective_source(&self.scan.draft, scanner) {
+                Source::Glass | Source::Auto => scanner.bed,
+                Source::Feeder => scanner.sheet,
+            };
+            if let Err(error) = scan::fit_region(region, max).and_then(|fitted| region_pixels(fitted, settings.dpi)) {
+                self.scan.draft.error = Some(error.to_string());
+                return None;
+            }
+        }
+        Some(settings)
+    }
+
+    /// Where the pages of the button pressed go; `None` when that document is gone.
+    fn scan_kind(&mut self, click: ScanClick, resume: Option<&Resume>) -> Option<ScanKind> {
+        let kind = match click {
+            ScanClick::Preview => ScanKind::Preview,
+            ScanClick::Create => ScanKind::Create,
+            ScanClick::Insert => match resume.map(|r| r.scan_kind) {
+                Some(ScanKind::Insert(id)) => {
+                    if !self.views.iter().any(|view| view.id == id) {
+                        self.scan.draft.error = Some(tl!("The document is no longer open.").to_string());
+                        return None;
+                    }
+                    ScanKind::Insert(id)
+                }
+                _ => ScanKind::Insert(self.active_ids()?.1),
+            },
+            ScanClick::ReverseSides => ScanKind::ReverseSides,
+            ScanClick::MoreFronts => ScanKind::Insert(self.scan.duplex?.doc),
+            ScanClick::None | ScanClick::Close | ScanClick::Stop => return None,
+        };
+        Some(kind)
+    }
+
+    /// The bed or the feeder the pages of a manual-duplex first pass come from.
+    fn duplex_source(&self, click: ScanClick, scanner: &Scanner) -> Source {
+        let duplex_source = match effective_source(&self.scan.draft, scanner) {
+            Source::Auto => Source::Glass, // acquire will resolve; bed is the empty-tray case
+            source => source,
+        };
+        // Prefer the source acquire will actually use when Auto is chosen.
+        let duplex_source = if self.scan.draft.source == Source::Auto {
+            if scanner.feeder_ready == Some(true) && (scanner.feeder || scanner.feeder_choices.is_some()) { Source::Feeder } else { Source::Glass }
+        } else {
+            duplex_source
+        };
+        match (click, self.scan.duplex) {
+            (ScanClick::MoreFronts, Some(pending)) => pending.source,
+            _ => duplex_source,
+        }
+    }
+
     /// [`Self::start_scan`], or the next leg of an interrupted scan. True when a job started.
     fn start_scan_with(&mut self, click: ScanClick, resume: Option<Resume>) -> bool {
         if matches!(click, ScanClick::Stop) {
@@ -2339,121 +2471,9 @@ impl PdfCraftApp {
         }
         let cancel = CancelToken::new();
         let live = ProgressToken::new();
-        let mut settings = match click {
-            ScanClick::Preview => {
-                let mut settings = preview_settings(&self.scan.draft, &scanner);
-                settings.cancel = Some(cancel.clone());
-                settings.progress = Some(live.clone());
-                settings
-            }
-            ScanClick::Create | ScanClick::Insert | ScanClick::ReverseSides | ScanClick::MoreFronts => {
-                let mut settings = final_settings(&self.scan.draft, &scanner, cancel.clone());
-                settings.progress = Some(live.clone());
-                settings
-            }
-            ScanClick::None | ScanClick::Close | ScanClick::Stop => return false,
-        };
-        if matches!(click, ScanClick::MoreFronts) {
-            // More fronts come from where the first ones did, into the same document after the last one.
-            let Some(pending) = self.scan.duplex.filter(|pending| self.views.iter().any(|view| view.id == pending.doc)) else {
-                self.scan.duplex = None;
-                self.scan.draft.error = Some(tl!("The document is no longer open.").to_string());
-                return false;
-            };
-            settings.source = pending.source;
-        }
-        if let Some(r) = &resume {
-            // Once pages came in, keep the bed or feeder they came from (Auto would pick the bed
-            // when the tray is now empty) and ask only for the pages still missing.
-            if settings.source == Source::Auto
-                && let Some(source) = r.source
-            {
-                settings.source = source;
-            }
-            if r.feeder
-                && !matches!(click, ScanClick::ReverseSides)
-                && let Some(pages) = r.pages
-            {
-                settings.pages = pages;
-            }
-        }
-        if matches!(click, ScanClick::ReverseSides)
-            && let Some(pending) = self.scan.duplex
-            && !self.views.iter().any(|view| view.id == pending.doc)
-        {
-            // Never reached through the UI (closing the document cancels the reverse sides), but never scan for it.
-            self.scan.duplex = None;
-            self.scan.draft.error = Some(tl!("The document is no longer open.").to_string());
-            return false;
-        }
-        if matches!(click, ScanClick::ReverseSides)
-            && let Some(pending) = &self.scan.duplex
-        {
-            let n = u32::try_from(pending.fronts).unwrap_or(0);
-            if n == 0 {
-                self.scan.draft.error = Some(tl!("Scan the fronts before the reverse sides.").to_string());
-                return false;
-            }
-            // Same source as the fronts. Forcing the feeder here broke bed reverse-side scans.
-            settings.source = pending.source;
-            settings.pages = if pending.source == Source::Glass { 1 } else { reverse_pages(pending.fronts, pending.backs) };
-            if pending.source == Source::Glass && n != 1 {
-                self.scan.draft.error =
-                    Some(tl!("The bed scans one page at a time. Scan one front, flip it, then scan its reverse side.").to_string());
-                return false;
-            }
-        }
-        if let Err(error) = settings.checked() {
-            self.scan.draft.error = Some(error.to_string());
-            return false;
-        }
-        if let Some(region) = settings.region {
-            let max = match effective_source(&self.scan.draft, &scanner) {
-                Source::Glass | Source::Auto => scanner.bed,
-                Source::Feeder => scanner.sheet,
-            };
-            if let Err(error) = scan::fit_region(region, max).and_then(|fitted| region_pixels(fitted, settings.dpi)) {
-                self.scan.draft.error = Some(error.to_string());
-                return false;
-            }
-        }
-        let kind = match click {
-            ScanClick::Preview => ScanKind::Preview,
-            ScanClick::Create => ScanKind::Create,
-            ScanClick::Insert => match resume.as_ref().map(|r| r.scan_kind) {
-                Some(ScanKind::Insert(id)) => {
-                    if !self.views.iter().any(|view| view.id == id) {
-                        self.scan.draft.error = Some(tl!("The document is no longer open.").to_string());
-                        return false;
-                    }
-                    ScanKind::Insert(id)
-                }
-                _ => {
-                    let Some((_, id)) = self.active_ids() else { return false };
-                    ScanKind::Insert(id)
-                }
-            },
-            ScanClick::ReverseSides => ScanKind::ReverseSides,
-            ScanClick::MoreFronts => match self.scan.duplex {
-                Some(pending) => ScanKind::Insert(pending.doc),
-                None => return false,
-            },
-            ScanClick::None | ScanClick::Close | ScanClick::Stop => return false,
-        };
-        let duplex_source = match effective_source(&self.scan.draft, &scanner) {
-            Source::Auto => Source::Glass, // acquire will resolve; bed is the empty-tray case
-            source => source,
-        };
-        // Prefer the source acquire will actually use when Auto is chosen.
-        let duplex_source = if self.scan.draft.source == Source::Auto {
-            if scanner.feeder_ready == Some(true) && (scanner.feeder || scanner.feeder_choices.is_some()) { Source::Feeder } else { Source::Glass }
-        } else {
-            duplex_source
-        };
-        let duplex_source = match (click, self.scan.duplex) {
-            (ScanClick::MoreFronts, Some(pending)) => pending.source,
-            _ => duplex_source,
-        };
+        let Some(settings) = self.checked_scan_settings(click, &scanner, resume.as_ref(), &cancel, &live) else { return false };
+        let Some(kind) = self.scan_kind(click, resume.as_ref()) else { return false };
+        let duplex_source = self.duplex_source(click, &scanner);
         let duplex_first_pass = (self.scan.draft.manual_duplex || matches!(click, ScanClick::MoreFronts))
             && !scanner.duplex
             && matches!(kind, ScanKind::Create | ScanKind::Insert(_))
