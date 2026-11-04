@@ -254,7 +254,8 @@ fn non_finite_and_missing_vertices_are_skipped() {
     let m = WorldMesh::new(mesh(vec![[0.0, 0.0, 0.0], [f64::NAN, 0.0, 0.0], [0.0, 1.0, 0.0]], vec![[0, 1, 2], [0, 2, 9], [0, 2, u32::MAX]]));
     let image = render(std::slice::from_ref(&m), &ortho(4.0), &small()).unwrap();
     assert!(image.rgba.chunks(4).all(|p| p == [255, 255, 255, 255]));
-    assert_eq!(Bounds::of(&[m]).unwrap().max, [0.0, 1.0, 0.0]);
+    // No triangle can be drawn, so none frames the model.
+    assert_eq!(Bounds::of(&[m]), None);
 }
 
 #[test]
@@ -275,4 +276,35 @@ fn a_huge_square_is_drawn() {
     let image = render(&[quad(0.0, 1e160, 0.0)], &ortho(4e160), &small()).unwrap();
     assert_eq!(pixel(&image, 20, 20), [190, 192, 200, 255]);
     assert_eq!(pixel(&image, 1, 1), [255, 255, 255, 255]);
+}
+
+#[test]
+fn a_camera_very_far_away_still_draws() {
+    let camera = Camera { eye: [0.0, 0.0, 1e200], target: [0.0; 3], up: [0.0, 1.0, 0.0], projection: Projection::Perspective { fov_y: 30.0 } };
+    let image = render(&[quad(0.0, 1e199, 0.0)], &camera, &small()).unwrap();
+    // The headlight meets the square almost head-on at the centre pixel.
+    let [r, _, _, a] = pixel(&image, 20, 20);
+    assert!((185..=190).contains(&r) && a == 255, "{:?}", pixel(&image, 20, 20));
+}
+
+#[test]
+fn the_centre_of_a_box_near_the_largest_float_is_finite() {
+    let b = Bounds { min: [1e308; 3], max: [1.5e308; 3] };
+    assert!(b.centre().iter().all(|c| c.is_finite()), "{:?}", b.centre());
+}
+
+#[test]
+fn a_triangle_that_is_not_drawn_does_not_widen_the_box() {
+    // The second triangle has a non-finite corner, so its finite far corner is not drawn either.
+    let m = mesh(vec![[0.0; 3], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [f64::NAN, 0.0, 0.0], [1e6, 0.0, 0.0]], vec![[0, 1, 2], [3, 4, 0]]);
+    let b = Bounds::of(&[WorldMesh::new(m)]).unwrap();
+    assert_eq!(b.max, [1.0, 1.0, 0.0]);
+}
+
+#[test]
+fn a_small_model_far_from_the_origin_can_be_fitted() {
+    let (o, d) = (1e16, 4.0);
+    let m = mesh(vec![[o, o, o], [o + d, o, o], [o, o + d, o]], vec![[0, 1, 2]]);
+    let camera = Camera::fit_meshes(&[WorldMesh::new(m)], [1.0, 1.0, 1.0], [0.0, 1.0, 0.0], false, 1.0);
+    assert!(camera.is_ok(), "{camera:?}");
 }

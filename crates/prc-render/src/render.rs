@@ -11,6 +11,10 @@ use pdfcraft_prc::TriangleMesh;
 /// The largest image [`render`] draws, in pixels (width × height).
 pub const MAX_RENDER_PIXELS: u64 = 16 * 1024 * 1024;
 
+/// The most pixel centres one [`render`] tests, summed over each drawn triangle's bounding box
+/// clipped to the image: 128 full layers of the largest image.
+pub const MAX_RENDER_WORK: u64 = 1 << 31;
+
 /// [`Camera::fit`]'s framed extent over the model's: 5% clear on each side.
 const FIT_MARGIN: f64 = 1.1;
 
@@ -66,10 +70,10 @@ impl Bounds {
         out
     }
 
-    /// The box's centre.
+    /// The box's centre, finite for any finite box.
     #[must_use]
     pub fn centre(&self) -> [f64; 3] {
-        [0, 1, 2].map(|i| (at(self.min, i) + at(self.max, i)) / 2.0)
+        [0, 1, 2].map(|i| at(self.min, i) / 2.0 + at(self.max, i) / 2.0)
     }
 
     /// Half the box's diagonal: the radius of a sphere holding it.
@@ -79,16 +83,9 @@ impl Bounds {
     }
 }
 
-/// Every finite vertex the meshes' triangles use.
+/// Every corner of the triangles [`render`] draws: those whose three corners exist and are finite.
 fn vertices(meshes: &[WorldMesh]) -> impl Iterator<Item = [f64; 3]> + Clone + '_ {
-    meshes.iter().flat_map(|m| {
-        let mesh = &m.mesh;
-        mesh.triangles
-            .iter()
-            .flatten()
-            .filter_map(|&i| mesh.positions.get(usize::try_from(i).ok()?).copied())
-            .filter(|p| p.iter().all(|c| c.is_finite()))
-    })
+    meshes.iter().flat_map(|m| m.mesh.triangles.iter().filter_map(|tri| corners(&m.mesh, tri)).flatten())
 }
 
 impl Camera {
@@ -130,8 +127,7 @@ impl Camera {
             r if r.is_finite() && r > 0.0 => r,
             _ => 1.0,
         };
-        let [right, upward, forward] =
-            Camera { eye: sub(centre, dir), target: centre, up, projection: Projection::Orthographic { height: 1.0 } }.basis()?;
+        let [right, upward, forward] = axes(dir, up)?;
         let view = |p: [f64; 3]| {
             let r = sub(p, centre);
             [dot(r, right), dot(r, upward), dot(r, forward)]
@@ -171,9 +167,14 @@ impl Camera {
     /// Right, up and forward unit vectors.
     pub(crate) fn basis(&self) -> Result<[[f64; 3]; 3], RenderError> {
         let forward = normalize(sub(self.target, self.eye)).ok_or(RenderError::Camera("the eye and the target coincide"))?;
-        let right = normalize(cross(forward, self.up)).ok_or(RenderError::Camera("the up direction is zero or parallel to the view direction"))?;
-        Ok([right, cross(right, forward), forward])
+        axes(forward, self.up)
     }
+}
+
+/// Right, up and `forward` (a unit vector) for a camera whose up direction is `up`.
+fn axes(forward: [f64; 3], up: [f64; 3]) -> Result<[[f64; 3]; 3], RenderError> {
+    let right = normalize(cross(forward, up)).ok_or(RenderError::Camera("the up direction is zero or parallel to the view direction"))?;
+    Ok([right, cross(right, forward), forward])
 }
 
 /// How surfaces are lit.
@@ -246,6 +247,9 @@ pub enum RenderError {
     /// texture coordinates.
     #[error("the placed model has more vertices than the assembly ceiling")]
     TooManyVertices,
+    /// Drawing would test more than [`MAX_RENDER_WORK`] pixel centres.
+    #[error("the render would test more pixels than the work ceiling")]
+    TooMuchWork,
 }
 
 /// Draw `meshes` as seen by `camera`.
@@ -262,7 +266,8 @@ pub enum RenderError {
 /// # Errors
 /// [`RenderError::Size`] for an empty or over-ceiling image; [`RenderError::Camera`] for a camera
 /// that cannot form a view (eye on the target, `up` parallel to the view, a field of view outside
-/// 0–180° or too small for a finite focal length, a non-positive orthographic height).
+/// 0–180° or too small for a finite focal length, a non-positive orthographic height);
+/// [`RenderError::TooMuchWork`] past [`MAX_RENDER_WORK`].
 pub fn render(meshes: &[WorldMesh], camera: &Camera, options: &RenderOptions) -> Result<Image, RenderError> {
     let (width, height) = (options.width, options.height);
     let size = RenderError::Size { width, height };
@@ -276,14 +281,14 @@ pub fn render(meshes: &[WorldMesh], camera: &Camera, options: &RenderOptions) ->
     let scene = Scene { eye: camera.eye, basis: camera.basis()?, view, lighting: options.lighting };
     let mut rgba = options.background.repeat(pixels);
     let mut depth = vec![f64::NEG_INFINITY; pixels];
-    let mut target = Target { perspective, width, height, rgba: &mut rgba, depth: &mut depth };
+    let mut target = Target { perspective, width, height, rgba: &mut rgba, depth: &mut depth, work: MAX_RENDER_WORK };
     let [r, g, b] = options.colour;
     for opaque in [true, false] {
         for m in meshes {
             for t in 0..m.mesh.triangles.len() {
                 let colour = m.colour_of(t).unwrap_or([r, g, b, 255]);
                 if (colour[3] == 255) == opaque && colour[3] != 0 {
-                    scene.draw(&mut target, &m.mesh, t, colour);
+                    scene.draw(&mut target, &m.mesh, t, colour)?;
                 }
             }
         }
@@ -313,13 +318,14 @@ impl Scene {
         [0.3 + 0.7 * towards.map_or(1.0, |v| dot(n, v).abs().min(1.0)); 3]
     }
 
-    /// Draw triangle `t` of `mesh` into `target` in straight-RGBA `colour`.
-    fn draw(&self, target: &mut Target, mesh: &TriangleMesh, t: usize, colour: [u8; 4]) {
+    /// Draw triangle `t` of `mesh` into `target` in straight-RGBA `colour`; refused once the
+    /// target's work allowance is spent.
+    fn draw(&self, target: &mut Target, mesh: &TriangleMesh, t: usize, colour: [u8; 4]) -> Result<(), RenderError> {
         let Some(world) = mesh.triangles.get(t).and_then(|tri| corners(mesh, tri)) else {
-            return;
+            return Ok(());
         };
         let Some(face) = unit_cross(sub(at3(&world, 1), at3(&world, 0)), sub(at3(&world, 2), at3(&world, 0))) else {
-            return;
+            return Ok(());
         };
         let stored = stored_normals(mesh, t);
         let normal = |k: usize| stored.and_then(|n| n.get(k).copied().flatten()).unwrap_or(face);
@@ -336,10 +342,11 @@ impl Scene {
         if let Some((&a, rest)) = screen.split_first() {
             for pair in rest.windows(2) {
                 if let [b, c] = pair {
-                    target.fill([a, *b, *c], colour);
+                    target.fill([a, *b, *c], colour)?;
                 }
             }
         }
+        Ok(())
     }
 }
 
