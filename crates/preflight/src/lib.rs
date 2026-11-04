@@ -329,6 +329,24 @@ fn referenced_content(doc: &Document, objs: &[(ObjRef, std::sync::Arc<Object>)])
     out
 }
 
+/// The fonts the document draws with: those a resource dictionary names (`/Resources`, of a page or
+/// a page tree node, a form XObject or an annotation's appearance stream, a pattern or a Type 3
+/// font). PDF/A asks that every font "used for rendering" be embedded (ISO 19005-2, 6.2.11.4.1). A
+/// font that only the interactive form's default resources hold (`/AcroForm /DR`, ISO 32000-1
+/// 12.7.2) draws nothing, so it needn't be: an appearance stream that does draw with it names it in
+/// its own `/Resources`.
+fn drawing_fonts(doc: &Document, objs: &[(ObjRef, std::sync::Arc<Object>)]) -> std::collections::HashSet<ObjRef> {
+    let mut out = std::collections::HashSet::new();
+    for (_, o) in objs {
+        let Some(resources) = dict_of(o).and_then(|d| d.get(b"Resources")).map(|r| doc.resolve(r)) else { continue };
+        let Some(fonts) = resources.as_dict().and_then(|r| r.get(b"Font")).map(|f| doc.resolve(f)) else { continue };
+        if let Some(fonts) = fonts.as_dict() {
+            out.extend(fonts.iter().filter_map(|(_, f)| f.as_ref()));
+        }
+    }
+    out
+}
+
 /// Whether a stream's own dictionary says it holds content: a form XObject, or a stream with a
 /// `/BBox` and no `/Subtype` (a tiling pattern, or an appearance stream that leaves out
 /// `/Subtype /Form`). Mesh shadings may carry a `/BBox` too, but their data isn't content.
@@ -514,7 +532,8 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
             issue("6.5.2", "Page {} has additional actions", Some((i + 1).to_string()), Some(i), true);
         }
     }
-    check_objects(doc, level, &objs, &page_of, &mut issue);
+    let drawing = drawing_fonts(doc, &objs);
+    check_objects(doc, level, &objs, &drawing, &page_of, &mut issue);
     // One message per kind of problem is enough for repeated ones (as preflight summaries do).
     let mut seen = std::collections::HashSet::new();
     out.retain(|i| seen.insert((i.clause, i.message.clone(), i.page)));
@@ -525,28 +544,29 @@ fn check_objects(
     doc: &Document,
     level: Level,
     objects: &[(ObjRef, std::sync::Arc<Object>)],
+    drawing: &std::collections::HashSet<ObjRef>,
     page_of: &impl Fn(ObjRef) -> Option<usize>,
     issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool),
 ) {
     for (r, o) in objects {
         let Some(d) = dict_of(o) else { continue };
-        check_one_object(doc, level, *r, d, o, page_of, issue);
+        check_one_object(doc, level, d, o, drawing.contains(r), page_of(*r), issue);
     }
 }
 
 fn check_one_object(
     doc: &Document,
     level: Level,
-    reference: ObjRef,
     dict: &Dict,
     object: &Object,
-    page_of: &impl Fn(ObjRef) -> Option<usize>,
+    draws: bool,
+    page: Option<usize>,
     issue: &mut impl FnMut(&'static str, &'static str, Option<String>, Option<usize>, bool),
 ) {
     let ty = dict.name(b"Type");
     let subtype = dict.name(b"Subtype");
     check_actions(doc, dict, issue);
-    if is_annotation(dict, ty, subtype) && check_annotation(doc, dict, subtype, page_of(reference), issue) {
+    if is_annotation(dict, ty, subtype) && check_annotation(doc, dict, subtype, page, issue) {
         // A forbidden annotation stops every later check for its object, as the scan did before
         // it was split into helpers: the rest of its own checks and the form field, font, stream
         // and embedded file below all came after that `continue`.
@@ -555,7 +575,8 @@ fn check_one_object(
     if dict.get(b"FT").is_some() && dict.get(b"AA").is_some() && ty != Some(b"Annot") {
         issue("6.5.2", "A form field has additional actions", None, None, true);
     }
-    if ty == Some(b"Font") || dict.get(b"BaseFont").is_some() && subtype.is_some() {
+    // A Type 0 font's descendant is checked through it.
+    if draws && (ty == Some(b"Font") || dict.get(b"BaseFont").is_some() && subtype.is_some()) {
         check_font(doc, dict, issue);
     }
     if let Object::Stream(stream) = object {

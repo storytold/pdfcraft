@@ -488,3 +488,31 @@ fn an_output_intent_profile_header_is_read_within_a_size_cap() {
         assert_eq!(pdfa_intent_profile(&doc), Some(n), "a {size}-byte profile");
     }
 }
+
+/// PDF/A asks for the fonts "used for rendering" to be embedded (ISO 19005-2, 6.2.11.4.1). A font
+/// that only the form's default resources hold (`/AcroForm /DR`, ISO 32000-1 12.7.2) draws
+/// nothing, as in veraPDF's 6-4-1-t02-pass-a; one that a widget's appearance stream draws with is
+/// named in that stream's `/Resources`, and still has to be embedded.
+#[test]
+fn only_fonts_something_draws_with_must_be_embedded() {
+    let fonts =
+        |doc: &Document| -> Vec<String> { verify(doc, Level::A2b).into_iter().filter(|i| i.clause == "6.2.11.4").map(|i| i.message).collect() };
+    let form = |appearance_fonts: &str| {
+        build(
+            &[
+                "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 4 0 R /ZaDb 5 0 R >> >> >> >>",
+                "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+                "<< /Type /Page /Parent 2 0 R /Resources << >> /Annots [6 0 R] >>",
+                "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+                "<< /Type /Font /Subtype /Type1 /BaseFont /ZapfDingbats >>",
+                "<< /Type /Annot /Subtype /Widget /FT /Tx /T (name) /F 4 /Rect [10 10 90 30] /P 3 0 R /AP << /N 7 0 R >> >>",
+                &format!("<< /Type /XObject /Subtype /Form /BBox [0 0 80 20] /Resources << {appearance_fonts} >> /Length 0 >>\nstream\n\nendstream"),
+            ],
+            "",
+        )
+    };
+    assert!(fonts(&form("")).is_empty(), "{:?}", fonts(&form("")));
+    assert_eq!(fonts(&form("/Font << /Helv 4 0 R >>")), ["The font Helvetica isn't embedded"]);
+    // A page's own font is checked as before.
+    assert_eq!(fonts(&messy()), ["The font Helvetica isn't embedded"]);
+}
