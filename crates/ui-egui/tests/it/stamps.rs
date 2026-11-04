@@ -90,6 +90,7 @@ fn natural_image_stamps_keep_displayed_bounds_on_rotated_pages() {
 
 #[test]
 fn creating_placing_and_keeping_custom_stamps() {
+    use egui::{Key, Modifiers, PointerButton};
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = PdfCraftApp::new();
         app.set_option("language", "en").unwrap();
@@ -131,12 +132,41 @@ fn creating_placing_and_keeping_custom_stamps() {
     let r = stamps[0].rect;
     assert!(((r[2] - r[0]) / (r[3] - r[1]) - 3.0).abs() < 0.05, "keeps the picture's shape: {r:?}");
     assert_eq!(doc.can_undo(), Some("Add stamp"));
-    // The library is kept with the app's settings.
-    let saved = s.persist();
+    // Rename the saved stamp through its palette menu and keep its identity and bytes.
+    let stamp_id = s.custom_stamps[0].id;
+    let stamp_data = s.custom_stamps[0].data.clone();
+    let logo = h.get_by_label("logo").rect().center();
+    h.event(egui::Event::PointerButton { pos: logo, button: PointerButton::Secondary, pressed: true, modifiers: Modifiers::NONE });
+    h.event(egui::Event::PointerButton { pos: logo, button: PointerButton::Secondary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(2);
+    h.get_by_label("Rename / change category…").click();
+    h.run_steps(2);
+    h.get_by_label("Name:").click();
+    h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+    h.run_steps(1);
+    h.get_by_label("Name:").type_text("brand");
+    h.get_by_label("Category:").click();
+    h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+    h.run_steps(1);
+    h.get_by_label("Category:").type_text("Marketing");
+    h.get_by_label("Save").click();
+    h.run_steps(3);
+    assert_eq!(h.state().custom_stamps.len(), 1);
+    assert_eq!(
+        (h.state().custom_stamps[0].id, h.state().custom_stamps[0].category.as_str(), h.state().custom_stamps[0].name.as_str()),
+        (stamp_id, "Marketing", "brand")
+    );
+    assert_eq!(h.state().quick_tool, QuickTool::CustomStamp(stamp_id));
+    assert_eq!(h.state().custom_stamps[0].data, stamp_data);
+    // The edited library is kept with the app's settings.
+    let saved = h.state().persist();
     let mut again = PdfCraftApp::new();
     again.set_option("language", "en").unwrap();
     again.restore(&saved);
     assert_eq!(again.custom_stamps.len(), 1);
-    assert_eq!((again.custom_stamps[0].category.as_str(), again.custom_stamps[0].name.as_str()), ("Company", "logo"));
-    assert_eq!(again.custom_stamps[0].data, s.custom_stamps[0].data);
+    assert_eq!(
+        (again.custom_stamps[0].id, again.custom_stamps[0].category.as_str(), again.custom_stamps[0].name.as_str()),
+        (stamp_id, "Marketing", "brand")
+    );
+    assert_eq!(again.custom_stamps[0].data, stamp_data);
 }
