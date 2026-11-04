@@ -662,6 +662,9 @@ fn card_general(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, ctx: &mut 
     #[cfg(not(target_arch = "wasm32"))]
     ctx.checkbox(ui, &mut app.update_check_at_start, tl!("Check for updates when PdfCraft starts"), t);
     ctx.checkbox(ui, &mut app.show_secured_notice, tl!("Show a notice when a document is secured"), t);
+    // The web build has no threads to recognise in the background.
+    #[cfg(not(target_arch = "wasm32"))]
+    ctx.checkbox(ui, &mut app.auto_ocr, tl!("Recognize the text of scanned pages in the background (the file is not changed)"), t);
 
     #[cfg(not(target_arch = "wasm32"))]
     {
