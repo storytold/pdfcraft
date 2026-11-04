@@ -1571,12 +1571,17 @@ fn file_names_from_documents_stay_in_the_output_folder() {
     ok(&mut a, "doc_export_images", json!({ "doc": doc, "folder": "src", "dpi": 18 }));
     let pic =
         ok(&mut a, "doc_create", json!({ "from": "images", "paths": ["src/inside_page_1.png"], "name": "../../escape" }))["doc"].as_u64().unwrap();
-    let r = ok(&mut a, "doc_export_all_images", json!({ "doc": pic, "folder": "all" }));
+    let r = ok(&mut a, "doc_export_all_images", json!({ "doc": pic, "folder": "all", "prefix": "custom" }));
     let files = r["files"].as_array().unwrap();
     assert_eq!(files.len(), 1, "{r}");
+    assert_eq!(Path::new(files[0]["path"].as_str().unwrap()).file_name().unwrap(), "custom_Page_1_Image_0001.png");
     for f in files {
         assert_eq!(Path::new(f["path"].as_str().unwrap()).parent(), Some(root.join("all").as_path()), "{r}");
     }
+    assert!(err(&mut a, "doc_export_all_images", json!({ "doc": pic, "folder": "all", "prefix": "custom" })).to_string().contains("already exists"));
+    assert!(matches!(err(&mut a, "doc_export_all_images", json!({ "doc": pic, "folder": "bad", "prefix": "../escape" })), ToolError::InvalidArgs(_)));
+    let empty = ok(&mut a, "doc_export_all_images", json!({ "doc": pic, "folder": "empty", "prefix": "" }));
+    assert_eq!(Path::new(empty["files"][0]["path"].as_str().unwrap()).file_name().unwrap(), "Page_1_Image_0001.png");
     let mut left: Vec<String> = std::fs::read_dir(&base).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
     left.sort();
     assert_eq!(left, ["outside", "root"]);

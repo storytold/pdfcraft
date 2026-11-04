@@ -87,12 +87,28 @@ pub fn extract_images(src: &ExportSource, pages: &[usize], min_side: u32) -> Res
     Ok(pdfcraft_create::extract_images(&doc, pages, min_side))
 }
 
-/// The file name for the `index`-th (1-based) exported image: `<stem>_Page_<n>_Image_<index>.<ext>`.
+/// The file name for the `index`-th (1-based) exported image: `<prefix>_Page_<n>_Image_<index>.<ext>`.
 /// The page number has leading zeros for as many digits as the document's `page_count` has, so the
 /// files sort in page order (#2208): page 7 of 120 is `Page_007`.
-pub fn image_file_name(stem: &str, image: &pdfcraft_create::ExtractedImage, index: usize, page_count: usize) -> String {
+pub fn image_file_name(
+    stem: &str,
+    prefix: Option<&str>,
+    image: &pdfcraft_create::ExtractedImage,
+    index: usize,
+    page_count: usize,
+) -> Result<String, String> {
+    let prefix = prefix.unwrap_or(stem);
+    if prefix.chars().any(|c| matches!(c, '/' | '\\' | ':' | '<' | '>' | '"' | '|' | '?' | '*') || c.is_control())
+        || prefix == "."
+        || prefix == ".."
+        || prefix.ends_with('.')
+        || prefix.ends_with(' ')
+    {
+        return Err("image filename prefix must be a single filename component".into());
+    }
     let width = page_count.max(1).to_string().len();
-    format!("{stem}_Page_{:0width$}_Image_{index:04}.{}", image.page + 1, image.extension)
+    let separator = if prefix.is_empty() { "" } else { "_" };
+    Ok(format!("{prefix}{separator}Page_{:0width$}_Image_{index:04}.{}", image.page + 1, image.extension))
 }
 
 impl Exporter {
@@ -467,12 +483,17 @@ mod image_name_tests {
 
     #[test]
     fn page_number_is_padded_to_the_page_count() {
-        assert_eq!(image_file_name("doc", &image(0), 1, 1), "doc_Page_1_Image_0001.png");
-        assert_eq!(image_file_name("doc", &image(0), 1, 9), "doc_Page_1_Image_0001.png");
-        assert_eq!(image_file_name("doc", &image(6), 2, 20), "doc_Page_07_Image_0002.png");
-        assert_eq!(image_file_name("doc", &image(6), 3, 120), "doc_Page_007_Image_0003.png");
-        assert_eq!(image_file_name("doc", &image(119), 4, 120), "doc_Page_120_Image_0004.png");
-        assert_eq!(image_file_name("doc", &image(0), 1, 0), "doc_Page_1_Image_0001.png");
+        assert_eq!(image_file_name("doc", None, &image(0), 1, 1).unwrap(), "doc_Page_1_Image_0001.png");
+        assert_eq!(image_file_name("doc", None, &image(0), 1, 9).unwrap(), "doc_Page_1_Image_0001.png");
+        assert_eq!(image_file_name("doc", None, &image(6), 2, 20).unwrap(), "doc_Page_07_Image_0002.png");
+        assert_eq!(image_file_name("doc", None, &image(6), 3, 120).unwrap(), "doc_Page_007_Image_0003.png");
+        assert_eq!(image_file_name("doc", None, &image(119), 4, 120).unwrap(), "doc_Page_120_Image_0004.png");
+        assert_eq!(image_file_name("doc", None, &image(0), 1, 0).unwrap(), "doc_Page_1_Image_0001.png");
+        assert_eq!(image_file_name("doc", Some("custom"), &image(0), 1, 1).unwrap(), "custom_Page_1_Image_0001.png");
+        assert_eq!(image_file_name("doc", Some(""), &image(0), 1, 1).unwrap(), "Page_1_Image_0001.png");
+        for prefix in ["..", ".", "a/b", "a\\b", "C:"] {
+            assert!(image_file_name("doc", Some(prefix), &image(0), 1, 1).is_err(), "{prefix:?}");
+        }
     }
 }
 
