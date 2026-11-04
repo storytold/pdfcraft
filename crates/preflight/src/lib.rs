@@ -117,6 +117,8 @@ pub const WORDINGS: &[&str] = &[
     // The document as a whole.
     "The document is encrypted",
     "An integer is outside the 32-bit range",
+    "A real number is outside ±3.403 × 10³⁸",
+    "A CMap maps a character code to a CID above 65535",
     "A string is longer than 32767 bytes",
     "A name is longer than 127 bytes",
     "Page {} has a boundary smaller than 3 or larger than 14400 units",
@@ -525,8 +527,14 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
     if over.int {
         issue("6.1.13", "An integer is outside the 32-bit range", None, None, false);
     }
+    if over.real {
+        issue("6.1.13", "A real number is outside ±3.403 × 10³⁸", None, None, false);
+    }
     if over.string {
         issue("6.1.13", "A string is longer than 32767 bytes", None, None, false);
+    }
+    if limits::cid_over_limit(doc, &objs) {
+        issue("6.1.13", "A CMap maps a character code to a CID above 65535", None, None, false);
     }
     if over.name {
         issue("6.1.13", "A name is longer than 127 bytes", None, None, false);

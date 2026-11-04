@@ -566,5 +566,45 @@ endstream",
     assert_eq!(limits(&page(&format!("BT ({long})|Tj ET"), "", ok, "")), ["A string is longer than 32767 bytes"]);
     let deep = format!("/Deep {}2147483648{}", "[".repeat(40), "]".repeat(40));
     assert_eq!(limits(&page("|", &deep, ok, "")), ["An integer is outside the 32-bit range"]);
-    assert_eq!(limits(&page("|", "", "[-1e308 0 1e308 200]", "")), ["Page 1 has a boundary smaller than 3 or larger than 14400 units"]);
+    // Corners near ±1e308 are reals past the limit too, and the width overflows to infinity.
+    assert_eq!(
+        limits(&page("|", "", "[-1e308 0 1e308 200]", "")),
+        ["A real number is outside ±3.403 × 10³⁸", "Page 1 has a boundary smaller than 3 or larger than 14400 units"]
+    );
+}
+
+/// 6.1.13's two remaining limits of ISO 32000-1 Annex C: a real number beyond ±3.403 × 10³⁸, and
+/// a CID above 65535 that an embedded CMap of a Type 0 font maps to (a `begincidrange` reaching
+/// past it, a `begincidchar` naming one, or a CMap it uses through `/UseCMap`).
+#[test]
+fn implementation_limits_cover_reals_and_cids() {
+    let limits =
+        |doc: &Document| -> Vec<String> { verify(doc, Level::A2b).into_iter().filter(|i| i.clause == "6.1.13").map(|i| i.message).collect() };
+    let stream = |dict: &str, data: &str| format!("<< {dict} /Length {} >>\nstream\n{data}\nendstream", data.len());
+    let doc = |catalog_extra: &str, cmap: &str, used: &str| {
+        let first = stream("/Type /CMap /CMapName /Test-A /UseCMap 6 0 R", cmap);
+        let second = stream("/Type /CMap /CMapName /Test-B", used);
+        build(
+            &[
+                &format!("<< /Type /Catalog /Pages 2 0 R {catalog_extra} >>"),
+                "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+                "<< /Type /Page /Parent 2 0 R /Resources << /Font << /F 4 0 R >> >> >>",
+                "<< /Type /Font /Subtype /Type0 /BaseFont /Test /Encoding 5 0 R /DescendantFonts [] >>",
+                &first,
+                &second,
+            ],
+            "",
+        )
+    };
+    let range = |low: &str, high: &str, cid: u32| format!("1 begincidrange <{low}> <{high}> {cid} endcidrange");
+    let near = format!("34{}.0", "0".repeat(37));
+    let far = format!("4{}.0", "0".repeat(38));
+    assert!(limits(&doc(&format!("/R {near} /S -{near}"), &range("0000", "00ff", 65280), "")).is_empty(), "both at their limits");
+    assert_eq!(limits(&doc(&format!("/R {far}"), "", "")), ["A real number is outside ±3.403 × 10³⁸"]);
+    assert_eq!(limits(&doc(&format!("/R -{far}"), "", "")), ["A real number is outside ±3.403 × 10³⁸"]);
+    let cid = ["A CMap maps a character code to a CID above 65535"];
+    assert_eq!(limits(&doc("", &range("3f00", "3fff", 65536), "")), cid);
+    assert_eq!(limits(&doc("", &range("0000", "0100", 65280), "")), cid, "the range reaches 65536");
+    assert_eq!(limits(&doc("", "1 begincidchar <01> 70000 endcidchar", "")), cid);
+    assert_eq!(limits(&doc("", &range("0000", "00ff", 0), &range("3f00", "3fff", 65536))), cid, "through /UseCMap");
 }
