@@ -1,5 +1,7 @@
 # PdfCraft roadmap
 
+> **Last reviewed:** 2026-11-04 · **Last updated:** 2026-11-04 · **Change:** minor (M10, #3335: optional Hungarian OCR rebased onto 9bbcde46; translations live in craft-i18n; readiness and effort estimates unchanged)
+
 > **Last reviewed:** 2026-11-03 | **Last updated:** 2026-11-03 | **Change:** patch (M5 #5850 review: indirect typewriter intent and composer edits preserve outer whitespace; movement regression commits by outside click; estimates unchanged)
 
 > **Last reviewed:** 2026-11-03 | **Last updated:** 2026-11-03 | **Change:** patch (M5 #5850: Enter adds Fill & Sign line breaks; outside clicks commit, Escape cancels, and saved multiline appearances retain their text and height; estimates unchanged)
@@ -223,6 +225,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 
 ## Progress log
 
+- **2026-11-04 (M10, #3335):** Rebase optional Hungarian Tesseract/hun OCR onto `9bbcde46`, preserving ONNX/RTEN model discovery and current permission checks. Unicode text layers, language-aware automatic OCR retries and the CLI/MCP/batch paths remain. Translation catalogs are owned by craft-i18n (#141); new source strings are English. Readiness and effort estimates unchanged.
+
 - **2026-11-03 (M5, #5850 review):** Resolve indirect IT when recognizing typewriter contents and Fill & Sign marks. Comment listing and property lookup retain their existing direct-Subtype behavior. A real double-click Edit composer preserves the typewriter’s text as written; ordinary comment edits keep trimming. Regressions cover direct Subtype with indirect intent, save/reopen, raw posted contents and same-index comments on different pages. The existing live-movement test now commits its setup with an outside click rather than Enter. Estimates unchanged.
 
 - **2026-11-03 (M5, #5850):** Fill & Sign Enter inserts a line break in a growing editor; clicking outside commits and Escape cancels. Nonempty text keeps leading, internal and trailing line breaks. The headless fill_sign_add path sizes its typewriter box for the same wrapped lines so saved appearances show every row. Production-order keyboard and engine save/reopen/render regressions exercise the UI and headless callers. Estimates unchanged.
@@ -346,8 +350,6 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 - **2026-10-15 (M5, PR #1971 refresh):** Nested FDF annotation values retain shared or cyclic copied graphs. Discovery borrows direct values and records annotation positions with lazy array owners; retained entries are budgeted before cloning. Synthetic stress fixtures include repeated aliases and saved-PDF cache eviction. Limits cover the copied graph; source parsing and page discovery retain their existing limits, with no total source-memory bound. FDF import semantics and estimates are unchanged.
 - **2026-10-13 (M5, nested FDF values):** Comment export copies and renumbers nested indirect values, retaining geometry, colours, borders and shared graphs. Graph/data limits return an error before the destination is written; synthetic saved-PDF and automation exchange regressions. Estimates unchanged.
 - **2026-10-18 (M2, #3086):** Text extraction estimates letter tracking without repeated punctuation gaps so dotted TOC leaders do not swallow word spaces. Synthetic PDF regressions cover leader lengths, phrase search and selection; strongly tracked text stays intact. Estimates unchanged.
-- **2026-10-19 (M10, PR #3335 review):** Hungarian OCR installation notices use all interface catalogs, with raw diagnostics under Details; refreshed measured parity counts and retained dated historical audience estimates.
-- **2026-10-25 (M10, PR #3335):** Rebased Hungarian OCR onto main `e90f7882` with egui 0.37 and shared side panels, preserving guarded recognition and document permissions; migrated OCR tests and evidence to consolidated test targets. Automatic OCR checks the selected language backend and retries skipped scans when the language changes. Refreshed measured parity counts; readiness estimates unchanged.
 
 - **2026-10-18 (M6, #2892):** Push-button normal labels are editable per widget through Options and form_set_props, independently of field names; rendering, undo/redo and incremental/full save/reopen are covered. Estimates unchanged.
 
@@ -361,7 +363,6 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 - **2026-10-19 (M4, #3309 review):** Page deletion keeps working with 60,000 named destinations, without a name-count traversal limit. Synthetic regressions verify every surviving target after deletion and restoration of the deleted page and its destinations by undo/redo, full/incremental save/reopen and unchanged rendering. Estimates unchanged.
 - **2026-10-18 (M4, #3309):** Deleting a page prunes named destinations without recursive calls. Cyclic and shared indirect nodes are visited once. Synthetic deep/cyclic graph, save/reopen and automation regressions cover the change. Estimates unchanged.
 - **2026-10-18 (M1, #2658):** macOS atomic saves retain destination extended attributes, including Finder tags, and reject partial resource-fork reads after size changes. Metadata failures retain the original PDF and unsaved edit. Estimates unchanged.
-- **2026-10-18 (M10, Hungarian OCR):** Optional local Tesseract/hun backend wired through the dialog, engine, CLI/MCP and batches; embedded Unicode OCR text preserves Hungarian double accents. Other languages, browser support and bundled Tesseract remain outside this change.
 - **2026-10-15 (M7, Edit text caret):** In a text region that mixes sizes (a 24 pt title over 12 pt lines), the inline editor's caret on a small row was as tall as the region's first size and reached into the row below: egui draws the caret at least one row of the text field's font tall, and that font had the paragraph's first size. The field's font is now half the region's smallest size, so each row's own height decides. Kittest regression; checked in the app on a real document. Estimates unchanged.
 - **2026-10-16 (M3, #2781):** The Pages panel follows the current page, as Acrobat's page thumbnails do: going to a page whose thumbnail is out of sight (scrolling, Page Down, Go to page, a bookmark) scrolls the panel just enough to show it. A thumbnail already in view, or clicked, leaves the panel where it is, and a page change while the user scrolls the panel or drags thumbnails does not move it. Estimates unchanged.
 - **2026-10-16 (M12, #1645):** CLI info, text and render use the engine's dynamic XFA layout rather than placeholder pages. Synthetic two-page and encrypted-form regressions cover counts, text, pixels, copy permissions and unchanged input bytes. Estimates unchanged.
@@ -760,6 +761,7 @@ Newest first: the date, what moved, and the new overall estimate.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-04 | minor | M10 #3335: Hungarian OCR uses optional Tesseract/hun and an embedded Unicode text layer; port calls to split modules, retain ONNX/RTEN discovery, and remove local translation catalogs after craft-i18n#141. Readiness and effort estimates unchanged. |
 | 2026-11-03 | patch | M5 #5850 review: indirect typewriter intent and composer edits preserve outer whitespace; movement regression commits by outside click; estimates unchanged. |
 | 2026-11-03 | patch | M5 #5850: Enter adds Fill & Sign line breaks; outside clicks commit, Escape cancels, and saved multiline appearances retain their text and height; estimates unchanged. |
 | 2026-11-01 | patch | M7 #5657: header/footer, watermark and background operations commit all selected pages together; later-page errors preserve marks, content, shared/inherited resources and pending edits; estimates unchanged. |

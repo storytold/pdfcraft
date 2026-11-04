@@ -354,7 +354,9 @@ fn hungarian_is_selectable_in_the_ocr_dialog() {
     let _gpu = crate::gpu();
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = PdfCraftApp::new();
-        app.set_option("language", "hu").unwrap();
+        // Catalogs are an optional build input; document-language selection also works without them.
+        let locale = if pdfcraft_ui_egui::i18n::Lang::from_code("hu").is_some() { "hu" } else { "en" };
+        app.set_option("language", locale).unwrap();
         app.open_bytes("scan.pdf", None, scan()).unwrap();
         app
     });
@@ -363,7 +365,8 @@ fn hungarian_is_selectable_in_the_ocr_dialog() {
     h.run_steps(2);
     h.get_by_value("English").click();
     h.run_steps(2);
-    h.get_by_label("Magyar").click();
+    let label = pdfcraft_ui_egui::i18n::Lang::from_code("hu").map_or("Hungarian", pdfcraft_ui_egui::i18n::Lang::name);
+    h.get_by_label(label).click();
     h.run_steps(2);
     assert_eq!(h.state().ocr_draft.settings().language, "hu");
     if let Ok(path) = std::env::var("PDFCRAFT_OCR_SCREENSHOT") {

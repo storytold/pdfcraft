@@ -96,7 +96,7 @@ working document’s render configuration and never enters the undo history.
 
 ## Hungarian OCR (desktop)
 
-In Scan & OCR → Recognize Text, choose **Magyar** as the document language. English keeps
+In Scan & OCR → Recognize Text, choose **Hungarian** (shown as **Magyar** when the shared catalogs are embedded) as the document language. English keeps
 using the bundled ocrs models; Hungarian uses a local Tesseract installation with the `hun`
 model. It does not upload pages, use an API key, or download anything at runtime.
 

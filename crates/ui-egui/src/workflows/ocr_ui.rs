@@ -90,6 +90,11 @@ pub struct AutoOcr {
     pub generation: u64,
 }
 
+/// Language names come from the shared catalogs; English source names also work without catalogs.
+fn document_language_name(code: &str, fallback: &'static str) -> &'static str {
+    crate::i18n::Lang::from_code(code).map_or(fallback, crate::i18n::Lang::name)
+}
+
 /// The native installation probe may take seconds; never run it on the GUI thread.
 fn readiness(ctx: &egui::Context, language: &str) -> Option<Result<(), String>> {
     #[cfg(not(target_arch = "wasm32"))]
@@ -146,10 +151,10 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
     group(ui, "Settings", &mut |ui| {
         egui::Grid::new("ocr-settings").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
             ui.label(tl!("Document language"));
-            let name = LANGUAGES.iter().find(|l| l.0 == d.language).map_or("English", |l| l.1);
-            craft_ui::ComboBox::from_id_salt("ocr-language").selected_text(tl!(name)).width(220.0).show_ui(ui, |ui| {
+            let name = LANGUAGES.iter().find(|l| l.0 == d.language).map_or("English", |l| document_language_name(l.0, l.1));
+            craft_ui::ComboBox::from_id_salt("ocr-language").selected_text(name).width(220.0).show_ui(ui, |ui| {
                 for (code, name) in LANGUAGES {
-                    ui.selectable_value(&mut d.language, (*code).to_string(), tl!(*name));
+                    ui.selectable_value(&mut d.language, (*code).to_string(), document_language_name(code, name));
                 }
             });
             ui.end_row();

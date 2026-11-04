@@ -27,7 +27,7 @@ pub const RECOGNITION_MODEL: &str = "text-recognition.onnx";
 pub const ALPHABET: &str = " 0123456789!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~€ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 
 /// Supported document languages (ISO 639-1). Hungarian requires native Tesseract.
-pub const LANGUAGES: &[(&str, &str)] = &[("en", "English"), ("hu", "Magyar")];
+pub const LANGUAGES: &[(&str, &str)] = &[("en", "English"), ("hu", "Hungarian")];
 
 #[derive(Debug, thiserror::Error)]
 pub enum OcrError {
