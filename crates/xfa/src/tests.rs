@@ -212,6 +212,13 @@ fn a_page_area_keeps_at_most_a_hundred_and_twenty_eight_content_areas() {
     let ps = tpl.root.page_set.as_ref().unwrap();
     assert_eq!(ps.areas[0].content.len(), 128, "the content areas are capped");
     assert!(warnings.iter().any(|w| w.contains("content areas")), "a warning records the cap: {warnings:?}");
+    // Still said after a hundred other warnings (CodeRabbit review on #5844): images that can't
+    // be decoded, parsed before the page set, fill the warnings' shared cap first.
+    let bad = "<draw w=\"1in\" h=\"1in\"><value><image contentType=\"image/png\">!!!</image></value></draw>".repeat(120);
+    let crowded = xml.replace("<subform name=\"form\" layout=\"tb\">", &format!("<subform name=\"form\" layout=\"tb\">{bad}"));
+    let (_, warnings) = parse(&crowded).unwrap();
+    assert!(warnings.len() > 100, "the other warnings came first: {}", warnings.len());
+    assert!(warnings.iter().any(|w| w.contains("content areas")), "the cap is still recorded");
 }
 
 #[test]
@@ -720,7 +727,11 @@ fn a_block_split_across_very_many_pages_spends_the_layout_budget() {
          <value><exData contentType=\"text/html\"><body xmlns=\"http://www.w3.org/1999/xhtml\">{paras}</body></exData></value>\
          </field></subform></subform></template>"
     );
-    assert!(matches!(layout_xml(&tpl), Err(XfaError::TooLarge(_))), "a block split across very many pages must be refused");
+    match layout_xml(&tpl) {
+        // It says what ran out, not that the form is nested too deeply (CodeRabbit review on #5844).
+        Err(XfaError::TooLarge(m)) => assert!(m.contains("split across"), "{m}"),
+        other => panic!("a block split across very many pages must be refused: {other:?}"),
+    }
 }
 
 #[test]

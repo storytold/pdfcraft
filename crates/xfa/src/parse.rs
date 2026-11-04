@@ -617,8 +617,11 @@ fn parse_page_set(n: XmlNode, warnings: &mut Vec<String>, depth: usize) -> PageS
             .collect();
         if content.len() > MAX_CONTENT_AREAS {
             content.truncate(MAX_CONTENT_AREAS);
-            if warnings.len() < 100 {
-                warnings.push(format!("a page area has more than {MAX_CONTENT_AREAS} content areas; the rest are left out"));
+            // Said once however many warnings came before: other warnings fill the shared cap of
+            // 100 without limit of their own, and this one must not go silent behind them.
+            let said = format!("a page area has more than {MAX_CONTENT_AREAS} content areas; the rest are left out");
+            if !warnings.contains(&said) {
+                warnings.push(said);
             }
         }
         if content.is_empty() {
