@@ -10,7 +10,7 @@
 use std::collections::HashSet;
 
 use egui::{Color32, CornerRadius, Pos2, Rect, Stroke, vec2};
-use pdfcraft_engine::{Edit, FieldValue, FormField, FormFieldKind, FormWidget, field_flags, form_appearance};
+use pdfcraft_engine::{DocId, Edit, FieldValue, FormField, FormFieldKind, FormWidget, field_flags, form_appearance};
 use pdfcraft_render::DocInfo;
 
 use crate::canvas::{DocView, PageToolContext, PageXform};
@@ -21,6 +21,17 @@ use crate::theme::Tokens;
 const FOCUS_BLUE: Color32 = Color32::from_rgb(0x14, 0x73, 0xE6);
 /// Background of the in-place text field editor, the same in every theme.
 const FIELD_FILL: Color32 = Color32::from_rgb(0xFF, 0xFF, 0xF4);
+
+/// The egui id of the editor drawn over widget `widget` of field `name`: text, combo, or the
+/// focus holder of a check box or radio button.
+fn editor_id(view: DocId, name: &str, widget: usize) -> egui::Id {
+    egui::Id::unique(("form-field", view.0, name, widget))
+}
+
+/// The id of the open field editor, so an IME composition in it can hold off a click on the page.
+pub(crate) fn focused_editor_id(view: &DocView) -> Option<egui::Id> {
+    view.forms.focus.as_ref().map(|focus| editor_id(view.id, &focus.name, focus.widget))
+}
 
 /// The field being edited.
 #[derive(Clone, Debug, PartialEq)]
@@ -355,7 +366,7 @@ fn combo_editor(ctx: &egui::Context, view: &mut DocView, editor: ComboEditor<'_>
                 .background_color(FIELD_FILL)
                 .text_color(Color32::BLACK)
                 .margin(egui::Margin::symmetric(3, 1))
-                .id(egui::Id::unique(("form-field", view.id.0, &f.name, widget)));
+                .id(editor_id(view.id, &f.name, widget));
             // The form field's own logical name; not a visual/preordered label.
             let r = ui.add_sized(rect.size(), te).accessible_name(f.name.clone());
             if std::mem::take(&mut fx.request_focus) {
@@ -868,7 +879,7 @@ pub(crate) fn overlay(
                         .text_color(Color32::BLACK)
                         .margin(egui::Margin::symmetric(3, 1))
                         .password(f.has(field_flags::PASSWORD))
-                        .id(egui::Id::unique(("form-field", view.id.0, &f.name, focus.widget)));
+                        .id(editor_id(view.id, &f.name, focus.widget));
                     if let Some(max) = f.max_len {
                         te = te.char_limit(max);
                     }
@@ -991,7 +1002,7 @@ pub(crate) fn overlay(
         FormFieldKind::CheckBox | FormFieldKind::Radio => {
             // Nothing is drawn over the box, but a widget there holds egui's keyboard focus, so
             // Space, Tab and the arrows come here instead of turning or scrolling the page.
-            let id = egui::Id::unique(("form-field", view.id.0, &f.name, focus.widget));
+            let id = editor_id(view.id, &f.name, focus.widget);
             let mut has_focus = false;
             // Not interactable, so clicks still reach the page under it.
             let area = egui::Area::new(egui::Id::unique(("form-toggle", view.id.0))).order(egui::Order::Foreground).interactable(false);

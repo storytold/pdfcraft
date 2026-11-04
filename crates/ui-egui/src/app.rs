@@ -418,11 +418,11 @@ impl eframe::App for PdfCraftApp {
         let size = ctx.input(|i| i.viewport().inner_rect).map_or(egui::Vec2::ZERO, |r| r.size());
         drag_pointer::locate_wheel(raw, known, size, || drag_pointer::in_window(ctx));
         self.prepare_raw_input(ctx, raw);
-        let inline = self
-            .active
-            .and_then(|i| self.views.get(i))
-            .filter(|view| view.line_editor.is_some())
-            .map(|view| (crate::edit_text_ui::input_id(), view.viewport_rect()));
+        // The paragraph editor or an open form field editor: a page click must not commit its preedit.
+        let inline = self.active.and_then(|i| self.views.get(i)).and_then(|view| {
+            let editor = if view.line_editor.is_some() { Some(crate::edit_text_ui::input_id()) } else { crate::forms_ui::focused_editor_id(view) };
+            editor.map(|id| (id, view.viewport_rect()))
+        });
         crate::text_input::protect_raw(ctx, &mut raw.events, inline);
         if raw.hovered_files.is_empty() && raw.dropped_files.is_empty() {
             return;

@@ -495,3 +495,60 @@ fn composition_pointer_interruption_releases_native_editor_commands() {
         assert!(if source { h.state().views[0].line_editor.is_none() } else { h.state().views[0].content.draft.is_none() });
     }
 }
+
+#[test]
+/// A click elsewhere on the page closes a form field's editor and queues its text. While the
+/// field holds a live preedit, that click must not write the candidate into the field (the
+/// queued edit bypasses the Save-time composition check, and the focus has moved by then).
+/// ASCII isolates composition ownership from optional script-font coverage.
+fn form_composition_blocks_click_away_until_the_composition_ends() {
+    let slot = Arc::new(Mutex::new(None));
+    let capture = Arc::clone(&slot);
+    let bytes = include_bytes!("data/form.pdf").to_vec();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(0.25).build_eframe(move |cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        *capture.lock().unwrap() = Some(app.attach_control(&cc.egui_ctx));
+        app.open_bytes("form-ime-click.pdf", None, bytes).unwrap();
+        app.set_option("left", "closed").unwrap();
+        app.set_option("zoom", "150").unwrap();
+        app
+    });
+    h.run_steps(4);
+    let client = slot.lock().unwrap().take().unwrap();
+    let field_value = |h: &Harness<'static, PdfCraftApp>| {
+        h.state().session.get(h.state().views[0].id).unwrap().form.iter().find(|field| field.name == "name").unwrap().value.clone()
+    };
+    let before_value = field_value(&h);
+    let field = {
+        let app = h.state();
+        let doc = app.session.get(app.views[0].id).unwrap();
+        let field = doc.form.iter().find(|field| field.name == "name").unwrap();
+        pdfcraft_ui_egui::forms_ui::field_screen_rect(&app.views[0], &doc.info, field, 0).expect("form field is visible")
+    };
+    let away = field.left_bottom() + egui::vec2(0.0, field.height() * 2.0);
+    assert!(h.state().views[0].viewport_rect().contains(away) && !field.contains(away), "the click-away point is on the page");
+    let host_click = |h: &mut Harness<'static, PdfCraftApp>| {
+        h.hover_at(away);
+        h.run_steps(1);
+        let events = [true, false]
+            .into_iter()
+            .map(|pressed| Event::PointerButton { pos: away, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE })
+            .collect();
+        // Like real eframe hosts, run raw_input_hook before egui moves focus.
+        native_input(h, events);
+    };
+    click(&mut h, field.center());
+    let draft = h.state().views[0].forms.focus.as_ref().expect("actual form editor is open").text.clone();
+    select(&mut h, 0, draft.chars().count());
+    call(&mut h, &client, "ui.ime", json!({"phase":"preedit","text":"candidate"})).unwrap();
+    assert_eq!(h.state().views[0].forms.focus.as_ref().unwrap().text, "candidate");
+    host_click(&mut h);
+    assert_eq!(field_value(&h), before_value, "clicking away cannot commit a live preedit into the field");
+    let focus = h.state().views[0].forms.focus.as_ref().expect("the composing field stays open");
+    assert_eq!((focus.name.as_str(), focus.text.as_str()), ("name", "candidate"));
+    call(&mut h, &client, "ui.ime", json!({"phase":"commit","text":"Committed value"})).unwrap();
+    host_click(&mut h);
+    assert!(h.state().views[0].forms.focus.is_none(), "clicking away resumes after the composition ends");
+    assert_eq!(field_value(&h), ["Committed value"], "the committed text is what the click-away writes");
+}
