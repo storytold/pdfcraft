@@ -117,13 +117,64 @@ impl PageCursor {
     /// Sets the cursor, once, to the icon of the claim on the highest layer `tool` reaches, and
     /// returns the tip: that claim's own, or else the description. With no such claim the cursor
     /// is left as it is. The claims are spent: the next frame starts with none.
-    pub(crate) fn resolve(&mut self, ctx: &egui::Context, tool: QuickTool) -> Option<String> {
+    pub(crate) fn resolve(&mut self, ctx: &egui::Context, tool: QuickTool, pointer: Option<egui::Pos2>) -> Option<String> {
+        self.resolve_with(ctx, tool, pointer, soft_cursor())
+    }
+
+    /// [`PageCursor::resolve`] with the high-contrast cursor `soft` on or off. With it on, a text or crosshair
+    /// cursor over the page is drawn by the app, at `pointer`, and the system's is hidden.
+    fn resolve_with(&mut self, ctx: &egui::Context, tool: QuickTool, pointer: Option<egui::Pos2>, soft: bool) -> Option<String> {
         let PageCursor { claims, description } = std::mem::take(self);
         let winner = Self::winner(claims, tool);
         if let Some(w) = &winner {
-            ctx.set_cursor_icon(w.icon);
+            match pointer.filter(|_| soft && matches!(w.icon, CursorIcon::Text | CursorIcon::Crosshair)) {
+                Some(at) => {
+                    ctx.set_cursor_icon(CursorIcon::None);
+                    paint_soft_cursor(ctx, w.icon, at);
+                }
+                None => ctx.set_cursor_icon(w.icon),
+            }
         }
         winner.and_then(|w| w.tip).or(description.map(|(_, text)| text))
+    }
+}
+
+/// Whether the app draws its own text and crosshair cursors (`PDFCRAFT_SOFT_CURSOR` set, and not `0`). The system
+/// draws them thin and, on some Windows drivers, white or not at all, so over a white page they can't be seen
+/// (#5738, #6113, #6114); an opt-in way to tell whether that is the cause.
+fn soft_cursor() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("PDFCRAFT_SOFT_CURSOR").is_some_and(|v| v != "0"))
+}
+
+/// Half the length of a soft cursor's arm, in points.
+const SOFT_ARM: f32 = 9.0;
+/// How far an I-beam's serifs reach to each side, in points.
+const SOFT_SERIF: f32 = 3.0;
+
+/// The line segments of the soft cursor for `icon`, centred on `at`: an I-beam with serifs, or a plus.
+fn soft_cursor_segments(icon: CursorIcon, at: egui::Pos2) -> Vec<[egui::Pos2; 2]> {
+    let (x, y) = (at.x, at.y);
+    match icon {
+        CursorIcon::Text => vec![
+            [egui::pos2(x, y - SOFT_ARM), egui::pos2(x, y + SOFT_ARM)],
+            [egui::pos2(x - SOFT_SERIF, y - SOFT_ARM), egui::pos2(x + SOFT_SERIF, y - SOFT_ARM)],
+            [egui::pos2(x - SOFT_SERIF, y + SOFT_ARM), egui::pos2(x + SOFT_SERIF, y + SOFT_ARM)],
+        ],
+        _ => vec![[egui::pos2(x - SOFT_ARM, y), egui::pos2(x + SOFT_ARM, y)], [egui::pos2(x, y - SOFT_ARM), egui::pos2(x, y + SOFT_ARM)]],
+    }
+}
+
+/// Draws the soft cursor over everything: a black line with a white halo, which shows on a white page and on a
+/// dark one.
+fn paint_soft_cursor(ctx: &egui::Context, icon: CursorIcon, at: egui::Pos2) {
+    let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique("pdfcraft_soft_cursor")));
+    let segments = soft_cursor_segments(icon, at);
+    for segment in &segments {
+        painter.line_segment(*segment, egui::Stroke::new(3.5, egui::Color32::WHITE));
+    }
+    for segment in &segments {
+        painter.line_segment(*segment, egui::Stroke::new(1.5, egui::Color32::BLACK));
     }
 }
 
@@ -258,7 +309,7 @@ mod tests {
             if let Some(icon) = before {
                 ui.ctx().set_cursor_icon(icon);
             }
-            tip = claims.resolve(ui.ctx(), tool);
+            tip = claims.resolve_with(ui.ctx(), tool, None, false);
         });
         // An input-only test has no renderer to take the font texture.
         output.textures_delta.clear();
@@ -330,5 +381,41 @@ mod tests {
         assert_eq!(said(badge_then_comment).as_deref(), Some("Ana"));
         assert_eq!(said(comment_then_badges).as_deref(), Some("Ana"), "whichever came first");
         assert_eq!(said(two_badges).as_deref(), Some("Signature is invalid"), "the badge painted last is on top");
+    }
+
+    /// One frame with `claims` for the Select tool, the pointer at (50, 60), and the soft cursor `soft`: the system cursor
+    /// it ends on, and how many shapes were painted.
+    fn soft_frame(icon: CursorIcon, pointer: Option<egui::Pos2>, soft: bool) -> (CursorIcon, usize) {
+        let ctx = egui::Context::default();
+        let mut cursor = claims(&[(Layer::ToolArea, icon, None)]);
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            cursor.resolve_with(ui.ctx(), QuickTool::Select, pointer, soft);
+        });
+        let shapes = output.shapes.len();
+        output.textures_delta.clear();
+        (output.platform_output.cursor_icon, shapes)
+    }
+
+    /// The soft cursor replaces the system's text and crosshair cursors only when it is on and the pointer is known:
+    /// the system's cursor is hidden and a halo and a line are drawn for each segment. Every other cursor stays the system's.
+    #[test]
+    fn the_soft_cursor_replaces_the_text_and_crosshair_cursors_when_on() {
+        let at = Some(egui::pos2(50.0, 60.0));
+        assert_eq!(soft_frame(CursorIcon::Text, at, true), (CursorIcon::None, 6), "an I-beam is three segments, drawn twice");
+        assert_eq!(soft_frame(CursorIcon::Crosshair, at, true), (CursorIcon::None, 4), "a plus is two segments, drawn twice");
+        assert_eq!(soft_frame(CursorIcon::Text, at, false), (CursorIcon::Text, 0), "off: the system's");
+        assert_eq!(soft_frame(CursorIcon::Text, None, true), (CursorIcon::Text, 0), "no pointer to draw at: the system's");
+        assert_eq!(soft_frame(CursorIcon::PointingHand, at, true), (CursorIcon::PointingHand, 0), "a hand is not one of the two");
+    }
+
+    #[test]
+    fn the_soft_cursor_is_centred_on_the_pointer() {
+        let at = egui::pos2(50.0, 60.0);
+        for icon in [CursorIcon::Text, CursorIcon::Crosshair] {
+            let points: Vec<egui::Pos2> = soft_cursor_segments(icon, at).into_iter().flatten().collect();
+            let (min, max) =
+                points.iter().fold((egui::pos2(f32::MAX, f32::MAX), egui::pos2(f32::MIN, f32::MIN)), |(lo, hi), p| (lo.min(*p), hi.max(*p)));
+            assert_eq!(((min.x + max.x) / 2.0, (min.y + max.y) / 2.0), (at.x, at.y), "{icon:?}");
+        }
     }
 }
