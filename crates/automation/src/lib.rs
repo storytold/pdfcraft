@@ -47,6 +47,32 @@ pub use pdfcraft_render::Pixels;
 pub use tools::{ToolDef, tools};
 
 use file_access::foreign_share;
+
+/// `pageSize` (a paper name such as "a4" or "letter") or `pageWidth` and `pageHeight` in points:
+/// every image goes on a page of that size, scaled to fit and centred. Without them each page is
+/// the size of its own image, as before (#3273).
+pub(crate) fn image_page(a: &Args) -> Result<pdfcraft_engine::ImagePage> {
+    let named = match a.opt_str("pageSize")? {
+        Some(name) => Some(pdfcraft_engine::Session::paper_size(name).ok_or_else(|| {
+            let names = pdfcraft_print::PAPERS.iter().map(|(paper, _)| *paper).collect::<Vec<_>>().join(", ");
+            failed(format!("unknown pageSize `{name}`: expected one of {names}, or pageWidth and pageHeight in points"))
+        })?),
+        None => None,
+    };
+    let (width, height) = (a.opt_num("pageWidth")?, a.opt_num("pageHeight")?);
+    let page = match (named, width, height) {
+        (Some(_), Some(_), _) | (Some(_), _, Some(_)) => return Err(failed("pageSize and pageWidth/pageHeight can't both be given")),
+        (Some((width, height)), None, None) => pdfcraft_engine::ImagePage::Fixed { width, height },
+        (None, Some(width), Some(height)) => pdfcraft_engine::ImagePage::Fixed { width, height },
+        (None, None, None) => pdfcraft_engine::ImagePage::Image,
+        (None, _, _) => return Err(failed("pageWidth and pageHeight must be given together")),
+    };
+    // Checked here rather than only where images are written: a source with no image in it never
+    // reaches that writer, so a text-only combine succeeded carrying a page size the schema's
+    // `"minimum": 1` had already refused (noted in review). `ImagePage::check` is the one rule.
+    page.check().map_err(|why| ToolError::InvalidArgs(why.to_string()))?;
+    Ok(page)
+}
 use text_cache::TextCache;
 
 mod assemble;
