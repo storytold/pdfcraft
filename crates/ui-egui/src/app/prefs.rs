@@ -89,6 +89,7 @@ impl PdfCraftApp {
             "pinned_folders": self.pinned.folders,
             "theme": self.theme_preference,
             "scroll_speed": self.scroll_speed,
+            "invert_middle_drag": self.invert_middle_drag,
             "animation_effects": self.animation_effects,
             "default_mode": self.default_mode,
             "default_layout": canvas::display_token(self.view_defaults.layout, self.view_defaults.continuous),
@@ -160,6 +161,9 @@ impl PdfCraftApp {
     pub fn restore(&mut self, json: &str) {
         let Ok(v) = serde_json::from_str::<serde_json::Value>(json) else { return };
         if let Ok(mut bar) = serde_json::from_value::<crate::hotbar::Hotbar>(v["hotbar"].clone()) {
+            if v["hotbar"].get("placed").is_none() {
+                bar.adopt_legacy();
+            }
             bar.normalize();
             self.hotbar = bar;
         }
@@ -237,6 +241,9 @@ impl PdfCraftApp {
         }
         if let Ok(speed) = serde_json::from_value::<scroll_speed::ScrollSpeed>(v["scroll_speed"].clone()) {
             self.scroll_speed = speed;
+        }
+        if let Some(invert) = v["invert_middle_drag"].as_bool() {
+            self.invert_middle_drag = invert;
         }
         if let Ok(effects) = serde_json::from_value::<motion::AnimationEffects>(v["animation_effects"].clone()) {
             self.animation_effects = effects;
