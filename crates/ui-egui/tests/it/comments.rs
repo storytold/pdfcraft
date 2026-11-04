@@ -3540,6 +3540,35 @@ fn a_text_box_whose_snap_would_flatten_it_shows_no_marker() {
     h.run_steps(2);
 }
 
+/// A Prepare field tool takes every frame: the snap marker a drawing tool left goes, and so does
+/// the target Tab would cycle (Tab is the field order's there).
+#[test]
+fn a_field_tool_leaves_no_snap_marker_behind() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("drawing.pdf", None, DRAWING_FIXTURE.to_vec()).expect("opens");
+        app.set_option("left", "closed").unwrap();
+        app.set_option("zoom", "100").unwrap();
+        app.set_option("quick", "polyline").unwrap();
+        app
+    });
+    h.run_steps(4);
+    crate::support::settle(&mut h);
+    h.key_press(egui::Key::F3);
+    h.run_steps(2);
+    h.hover_at(at(&h, 151.0, 52.0));
+    h.run_steps(2);
+    let c = &h.state().views[0].comments;
+    assert!(c.snap_hover.is_some() && c.snap_first.is_some(), "the marker over the crossing");
+    assert!(h.state_mut().execute("form.add.text"));
+    h.run_steps(2);
+    h.hover_at(at(&h, 152.0, 53.0));
+    h.run_steps(2);
+    let c = &h.state().views[0].comments;
+    assert_eq!((c.snap_hover, c.snap_first), (None, None), "nothing left behind");
+}
+
 /// The pages' paths are read only for the page under the pointer, not for every page on screen:
 /// the content widget holds all of them, so its hover tells nothing (a plan's paths take up to
 /// a second to read).

@@ -221,6 +221,18 @@ pub(super) fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut
     // selection rectangle, added content, which still decide for themselves) is not also a
     // commenting tool's, as before.
     let taken = on_objects || on_edit_text || on_link || on_content || boxing || on_field;
+    // Added content being moved sets the snap marker itself; any other tool that took the frame
+    // (a Prepare field tool takes every one) leaves no commenting tool's marker on the page, nor
+    // the target Tab would cycle (Tab is the field order's there).
+    if taken && !(on_edit_text || on_content) {
+        let cv = &mut view.comments;
+        if cv.snap_hover.is_some_and(|(page, ..)| page == i) {
+            cv.snap_hover = None;
+        }
+        if cv.snap_first.is_some_and(|(page, _)| page == i) {
+            cv.snap_first = None;
+        }
+    }
     let on_comment = comments::page_input(ui, resp, &pcx, press, taken, view);
     let consumed = taken || on_comment;
     let hover = pointer.and_then(|p| claim_under(&hits, view, p, frame.env.unobstructed));

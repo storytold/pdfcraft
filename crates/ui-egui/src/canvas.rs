@@ -3216,6 +3216,8 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     }
     if tool != QuickTool::EditText {
         view.image_selection = None;
+        // A picture's move ended by a tool change (Space, V) leaves no Tab anchor for the next.
+        view.content.end_snap();
         crate::content_ui::release_image_selection(view, &added);
     }
     if editing_content {
