@@ -865,4 +865,13 @@ fn a_composite_subsets_program_decides_which_glyphs_are_there_not_its_widths() {
     assert_eq!(m.encode("y"), None);
     assert_eq!(m.encode("Po y"), None);
     assert_eq!(m.encode("Po a").as_deref(), Some(&[0x01, 0x77, 0x03, 0x16, 0x06, 0xF1, 0x01, 0xFB][..]), "a space is blank by nature");
+    // Every glyph emptied: the program was read and holds no outline at all, which is not "no program".
+    let count = {
+        use skrifa::raw::TableProvider as _;
+        u32::from(skrifa::FontRef::new(inter).unwrap().maxp().unwrap().num_glyphs())
+    };
+    // Last glyph first: each glyph takes the end of the one after it, which is already empty.
+    let none = metrics(with_empty_glyphs(inter, &(0..count).rev().collect::<Vec<_>>()));
+    assert_eq!(none.encode("P"), None, "listed in /W, but the program has no outline for it");
+    assert!(none.encode(" ").is_some(), "a space is still blank by nature");
 }
