@@ -22,7 +22,7 @@ release, or download/install a binary during the build.
 The value must be `owner/repo`: an ASCII GitHub owner of 1–39 letters, digits or single internal
 hyphens, and a repository of 1–100 letters, digits, dots, underscores or hyphens (except `.` and
 `..`). Empty values, URLs, credentials, extra path segments, query strings and whitespace fail
-the build. Use the repository's canonical spelling. There is no private-repository authentication,
+the build. GitHub owner/repository comparison is case-insensitive; tag and asset spelling is preserved. There is no private-repository authentication,
 GitHub Enterprise endpoint, runtime source selector or prerelease-channel selector.
 
 The desktop startup/manual check, release links and in-place updater all use this repository;
@@ -46,6 +46,31 @@ instead of overwriting build output, even with `--release` or a custom `CARGO_TA
 and install the first copy outside that tree before testing in-place updates. Do not use
 `CRAFT_UPDATE_DEV` for distribution. Package-manager restrictions, launcher pins and the
 unsaved-document restart guard are unchanged.
+
+For AppImage metadata, `packaging/linux/package.sh` gives a nonempty `PDFCRAFT_UPDATE_REPO`
+first priority, followed by a nonempty `GITHUB_REPOSITORY`. Without either override, it queries
+**the binary being packaged** with `pdfcraft --print-update-repository`; this also works with
+`--skip-build` after the build environment has been cleared. The query exits before logging,
+GUI initialization or network activity and ignores runtime attempts to change the compiled source.
+A missing/old binary or invalid repository stops packaging instead of choosing official releases.
+For cross builds, provide an explicit override or `EMULATOR` so the binary can be queried.
+An inherited `GITHUB_REPOSITORY` is still an override: set `PDFCRAFT_UPDATE_REPO` explicitly when
+packaging for a different release repository.
+
+The test expectation is independent of the build-script output. Check a custom build with both
+variables set (the mixed casing also exercises canonical GitHub asset URLs):
+
+```sh
+PDFCRAFT_UPDATE_REPO=Example/PdfCraft PDFCRAFT_EXPECTED_UPDATE_REPO=Example/PdfCraft \
+  cargo test -p pdfcraft-ui-egui --test update_source --locked -j 2
+PDFCRAFT_UPDATE_REPO=Example/PdfCraft PDFCRAFT_EXPECTED_UPDATE_REPO=Example/PdfCraft \
+  cargo test -p pdfcraft --test it --locked -j 2 -- update_repository::
+```
+
+Unset both variables to test official defaults. CI coverage for the additional custom-source
+invocation belongs in the shared craft-common-actions workflow, separately from this feature PR.
+The case-insensitive asset comparison is supplied by [craft-libs#595](https://github.com/storytold/craft-libs/pull/595);
+the pinned revision carries only that fix above the previous craft-update base.
 
 This selects an update source, not a separate application identity: package IDs, settings and
 launcher choices remain PdfCraft's. It does not grant branding rights or rebrand a fork; follow

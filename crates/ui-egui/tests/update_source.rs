@@ -7,7 +7,8 @@ mod update_source;
 fn compiled_source_is_shared_by_native_updates_and_the_release_link() {
     use pdfcraft_ui_egui::updates::{RELEASES_PAGE, REPOSITORY};
 
-    assert_eq!(REPOSITORY, env!("PDFCRAFT_UPDATE_REPO"));
+    let expected = std::env::var("PDFCRAFT_EXPECTED_UPDATE_REPO").unwrap_or_else(|_| "storytold/pdfcraft".to_owned());
+    assert_eq!(REPOSITORY, expected, "compiled source must match the independent test expectation");
     assert_eq!(RELEASES_PAGE, format!("https://github.com/{REPOSITORY}/releases"));
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -21,7 +22,8 @@ fn compiled_source_is_shared_by_native_updates_and_the_release_link() {
 fn release_assets_stay_inside_the_compiled_repository() {
     let repo = pdfcraft_ui_egui::UPDATE_APP.repo;
     let foreign = format!("{repo}-other");
-    let allowed = format!("https://github.com/{repo}/releases/download/v99.0.0/pdfcraft-99.0.0-linux-x86_64.tar.gz");
+    let canonical = repo.to_ascii_lowercase();
+    let allowed = format!("https://github.com/{canonical}/releases/download/v99.0.0/pdfcraft-99.0.0-linux-x86_64.tar.gz");
     let json = serde_json::json!({
         "tag_name": "v99.0.0",
         "html_url": format!("https://github.com/{foreign}/releases/tag/v99.0.0"),

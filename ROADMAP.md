@@ -1,5 +1,7 @@
 # PdfCraft roadmap
 
+> **Last reviewed:** 2026-11-04 · **Last updated:** 2026-11-04 · **Change:** patch (M14 #6123 review: compiled AppImage source fallback, independent build expectation, and case-insensitive GitHub repository matching via craft-libs#595; estimates unchanged)
+
 > **Last reviewed:** 2026-11-04 · **Last updated:** 2026-11-04 · **Change:** minor (M14: optional build-time GitHub update repository, validated before compilation; official defaults and development-install behavior retained; readiness and effort estimates unchanged)
 
 > **Last reviewed:** 2026-11-03 | **Last updated:** 2026-11-03 | **Change:** patch (M5 #5850 review: indirect typewriter intent and composer edits preserve outer whitespace; movement regression commits by outside click; estimates unchanged)
@@ -224,6 +226,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 | 8 | 1.0 polish: performance, right-to-left, missing languages, keyboard-only (M14) | 55–95 |
 
 ## Progress log
+
+- **2026-11-04 (M14, #6123 review):** Fix AppImage source precedence and compiled-binary fallback, independently assert the expected repository, and pin craft-update to the focused case-insensitive repository fix (craft-libs#595). Synthetic URL-confinement and packaging/query regressions cover the changes; no installed app was replaced. Estimates unchanged.
 
 - **2026-11-04 (M14, candidate):** Distributors may compile one validated GitHub release repository with `PDFCRAFT_UPDATE_REPO`; native checks and web release links share it. Unset builds still follow official releases. Build-input tests cover accepted names, default selection, malformed paths and non-Unicode input; integration tests cover the compiled source and release asset confinement. No release was published and no in-place update was exercised. Estimates unchanged.
 - **2026-11-03 (M11, shared JBIG2 dictionary):** With Monochrome Images set to JBIG2, Optimize has up to 16 JBIG2 images share one symbol dictionary (`/JBIG2Globals`), the letters found on more than one page stored once, when that is smaller (`pdfcraft_filters::encode_jbig2_shared`). Eight pages of 10 pt text rendered at 300 dpi take 41% less in Helvetica and 42% in Times than coded alone, 10% in Courier; groups of 16 save 45%, of 32 only 47%. Only images redaction can store again without the dictionary share one (image masks and DeviceGray named directly, at most 64 Mi pixels), and redacting one stores the rest of its group so, which the group bounds to 15.
@@ -762,6 +766,7 @@ Newest first: the date, what moved, and the new overall estimate.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-04 | patch | M14 #6123 review: AppImage metadata falls back to the compiled repository; test expectations are independent; craft-libs#595 preserves canonical asset URLs for mixed-case repository names. Estimates unchanged. |
 | 2026-11-04 | minor | M14: optional build-time GitHub update repository, validated before compilation; official defaults and development-install behavior retained; readiness and effort estimates unchanged. |
 | 2026-11-03 | patch | M5 #5850 review: indirect typewriter intent and composer edits preserve outer whitespace; movement regression commits by outside click; estimates unchanged. |
 | 2026-11-03 | patch | M5 #5850: Enter adds Fill & Sign line breaks; outside clicks commit, Escape cancels, and saved multiline appearances retain their text and height; estimates unchanged. |
