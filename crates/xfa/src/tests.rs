@@ -2565,6 +2565,14 @@ fn a_patterned_fill_cut_by_a_page_break_keeps_its_pattern_on_both_pages() {
             .and_then(|(_, f)| f.strip_suffix('f'))
             .unwrap_or_else(|| panic!("the colour first: {}", lines[hatch - 1]));
         assert!(lines[hatch].ends_with(&format!(" scn {path}f Q")), "{} after {}", lines[hatch], lines[hatch - 1]);
+        // And the path sits where the layout put the piece: its rectangle in page coordinates.
+        let piece = [first[0].0, last[0].0][at];
+        let operands: Vec<f64> = path.split_whitespace().filter_map(|v| v.parse().ok()).collect();
+        let expect = [piece.x, 792.0 - piece.bottom(), piece.w, piece.h];
+        assert_eq!(operands.len(), 4, "page {at}'s piece is one rectangle: {path}");
+        for (got, want) in operands.iter().zip(expect) {
+            assert!((got - want).abs() < 0.01, "page {at}'s piece sits at {operands:?}, not {expect:?}");
+        }
         let painted = lines[hatch]
             .split_whitespace()
             .nth(3)
