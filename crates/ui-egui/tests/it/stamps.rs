@@ -176,6 +176,8 @@ fn editing_a_saved_custom_stamp_through_its_palette_updates_it_and_cancel_discar
 
     support::outside_menus(&h, "Edit").click();
     h.run_steps(3);
+    assert!(h.state_mut().execute("comment.stamp"));
+    h.run_steps(2);
     h.get_by_label("seal").click_secondary();
     h.run_steps(2);
     h.get_by_label("Rename / change category…").click();
