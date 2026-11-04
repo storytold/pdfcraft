@@ -9,39 +9,58 @@ pub(crate) const MAX_XMP_BYTES: usize = 8 * 1024 * 1024;
 pub(crate) const PDFA_ID: &str = "http://www.aiim.org/pdfa/ns/id/";
 pub(crate) const PDFUA_ID: &str = "http://www.aiim.org/pdfua/ns/id/";
 
-/// Read an identification property by its expanded XML name, not its arbitrary prefix. A packet
-/// that is not well-formed XML (an undeclared prefix, an illegal character), or too deep or costly
-/// to parse safely, is read by the conventional prefix (`pdfaid:`, `pdfuaid:`) instead, as before.
-pub(crate) fn identifier(xmp: &str, namespace: &str, local: &str) -> Option<String> {
-    if xmp.len() > MAX_XMP_BYTES {
-        return None;
-    }
-    match parsed_identifier(xmp, namespace, local) {
-        Ok(found) => found,
-        Err(()) => {
-            let prefix = match namespace {
-                PDFA_ID => "pdfaid",
-                PDFUA_ID => "pdfuaid",
-                _ => return None,
-            };
-            value(xmp, &format!("{prefix}:{local}"))
-        }
-    }
+/// The PDF/A and PDF/UA identification a packet declares: each value trimmed, its case kept.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct Identification {
+    /// `pdfaid:part`.
+    pub pdfa_part: Option<String>,
+    /// `pdfaid:conformance`.
+    pub pdfa_conformance: Option<String>,
+    /// `pdfuaid:part`.
+    pub pdfua_part: Option<String>,
 }
 
-/// [`identifier`] through the XML parser; `Err` when the packet can't be parsed within
-/// pdfcraft-xml's bounds and 100,000 nodes.
-fn parsed_identifier(xmp: &str, namespace: &str, local: &str) -> Result<Option<String>, ()> {
+/// The identification properties read: namespace, conventional prefix, local name, in the order
+/// of [`Identification`]'s fields.
+const PROPERTIES: [(&str, &str, &str); 3] = [(PDFA_ID, "pdfaid", "part"), (PDFA_ID, "pdfaid", "conformance"), (PDFUA_ID, "pdfuaid", "part")];
+
+/// Read the identification properties by their expanded XML names, not their arbitrary prefixes,
+/// in one parse. A packet that is not well-formed XML (an undeclared prefix, an illegal
+/// character), or too deep or costly to parse safely, is read by the conventional prefixes
+/// (`pdfaid:`, `pdfuaid:`) instead.
+pub(crate) fn identification(xmp: &str) -> Identification {
+    if xmp.len() > MAX_XMP_BYTES {
+        return Identification::default();
+    }
+    let [pdfa_part, pdfa_conformance, pdfua_part] = match parsed_identification(xmp) {
+        Ok(found) => found,
+        Err(()) => PROPERTIES.map(|(_, prefix, local)| value(xmp, &format!("{prefix}:{local}"))),
+    };
+    Identification { pdfa_part, pdfa_conformance, pdfua_part }
+}
+
+/// [`identification`] through the XML parser; `Err` when the packet can't be parsed within
+/// pdfcraft-xml's bounds and 100,000 nodes. Each property is the first element, in document
+/// order, that carries it as an attribute or is named by it (then its text, which may be absent).
+fn parsed_identification(xmp: &str) -> Result<[Option<String>; 3], ()> {
     let doc = pdfcraft_xml::parse(xmp, pdfcraft_xml::Limits::new(100_000)).map_err(|_| ())?;
+    let mut found: [Option<Option<String>>; 3] = Default::default();
     for node in doc.descendants().filter(roxmltree::Node::is_element) {
-        if let Some(value) = node.attribute((namespace, local)) {
-            return Ok(Some(value.trim().to_owned()));
+        for (slot, (namespace, _, local)) in found.iter_mut().zip(PROPERTIES) {
+            if slot.is_some() {
+                continue;
+            }
+            if let Some(value) = node.attribute((namespace, local)) {
+                *slot = Some(Some(value.trim().to_owned()));
+            } else if node.tag_name().namespace() == Some(namespace) && node.tag_name().name() == local {
+                *slot = Some(node.text().map(|value| value.trim().to_owned()));
+            }
         }
-        if node.tag_name().namespace() == Some(namespace) && node.tag_name().name() == local {
-            return Ok(node.text().map(|value| value.trim().to_owned()));
+        if found.iter().all(Option::is_some) {
+            break;
         }
     }
-    Ok(None)
+    Ok(found.map(Option::flatten))
 }
 
 /// The value of a simple XMP property, written either as an attribute (`pdfaid:part="2"`) or
@@ -179,6 +198,27 @@ mod tests {
 mod limit_tests {
     use super::*;
 
+    /// One parse finds every property wherever it is, by namespace and not by prefix, in
+    /// attribute or element form; the first element that has a property settles it, even when
+    /// that element is empty.
+    #[test]
+    fn one_parse_reads_every_identification_property() {
+        // The second description repeats both parts after the first settled them, while the
+        // conformance is still unread.
+        let xmp = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+            <rdf:RDF>
+                <rdf:Description xmlns:ua="http://www.aiim.org/pdfua/ns/id/" xmlns:id="http://www.aiim.org/pdfa/ns/id/">
+                    <ua:part/>
+                    <id:part> 2 </id:part>
+                </rdf:Description>
+                <rdf:Description xmlns:pdfaid="http://www.aiim.org/pdfa/ns/id/" xmlns:pdfuaid="http://www.aiim.org/pdfua/ns/id/" pdfaid:part="3" pdfuaid:part="1"/>
+                <rdf:Description xmlns:id="http://www.aiim.org/pdfa/ns/id/" id:conformance=" b "/>
+            </rdf:RDF>
+        </x:xmpmeta>"#;
+        let expected = Identification { pdfa_part: Some("2".into()), pdfa_conformance: Some("b".into()), pdfua_part: None };
+        assert_eq!(identification(xmp), expected);
+    }
+
     /// Attribute-heavy packets parse as long as roxmltree's work stays within pdfcraft-xml's budget
     /// (the per-tag and total attribute caps this module once kept refused them); past the budget
     /// the packet is read by the conventional prefix only.
@@ -188,17 +228,18 @@ mod limit_tests {
             let attrs: String = (0..attributes).map(|i| format!(" x{i}=\"v=1\"")).collect();
             format!(r#"<root xmlns:a="http://www.aiim.org/pdfa/ns/id/" a:part="2"{attrs}/>"#)
         };
-        assert_eq!(identifier(&packet(200), PDFA_ID, "part").as_deref(), Some("2"));
+        let part = |xmp: &str| identification(xmp).pdfa_part;
+        assert_eq!(part(&packet(200)).as_deref(), Some("2"));
         // 12,000 attributes: 1.4·10⁸ comparisons for the duplicate check, past the budget. The
         // fallback looks for `pdfaid:part`, which this packet spells `a:part`.
-        assert_eq!(identifier(&packet(12_000), PDFA_ID, "part"), None);
+        assert_eq!(part(&packet(12_000)), None);
         let many_elements = format!(r#"<root xmlns:a="http://www.aiim.org/pdfa/ns/id/" a:part="3">{}</root>"#, r#"<n a="v"/>"#.repeat(5_000));
-        assert_eq!(identifier(&many_elements, PDFA_ID, "part").as_deref(), Some("3"));
+        assert_eq!(part(&many_elements).as_deref(), Some("3"));
         // Not well-formed (the prefix is never declared): read by the conventional prefix, as before.
-        let undeclared = r#"<rdf:Description pdfaid:part="3" pdfaid:conformance="u"/>"#;
-        assert_eq!(identifier(undeclared, PDFA_ID, "part").as_deref(), Some("3"));
-        assert_eq!(identifier(undeclared, PDFA_ID, "conformance").as_deref(), Some("u"));
+        let undeclared = r#"<rdf:Description pdfaid:part="3" pdfaid:conformance="u" pdfuaid:part="1"/>"#;
+        let expected = Identification { pdfa_part: Some("3".into()), pdfa_conformance: Some("u".into()), pdfua_part: Some("1".into()) };
+        assert_eq!(identification(undeclared), expected);
         let over_bytes = format!("<root>{}</root>", " ".repeat(8 * 1024 * 1024));
-        assert_eq!(identifier(&over_bytes, PDFA_ID, "part"), None);
+        assert_eq!(identification(&over_bytes), Identification::default());
     }
 }

@@ -174,10 +174,11 @@ fn metadata(doc: &Document) -> Option<String> {
 pub fn declared(doc: &Document) -> Declared {
     let mut d = Declared::default();
     if let Some(x) = metadata(doc) {
-        let part = xmp::identifier(&x, xmp::PDFA_ID, "part").and_then(|p| p.parse().ok());
-        let conf = xmp::identifier(&x, xmp::PDFA_ID, "conformance").unwrap_or_default();
+        let id = xmp::identification(&x);
+        let part = id.pdfa_part.and_then(|p| p.parse().ok());
+        let conf = id.pdfa_conformance.unwrap_or_default();
         d.pdfa = part.map(|p| (p, conf.to_uppercase()));
-        d.pdfua = xmp::identifier(&x, xmp::PDFUA_ID, "part").and_then(|p| p.parse().ok());
+        d.pdfua = id.pdfua_part.and_then(|p| p.parse().ok());
     }
     let cat = catalog(doc);
     if let Some(list) = cat.get(b"OutputIntents").map(|o| doc.resolve(o)).and_then(|o| o.as_array().cloned()) {
@@ -442,8 +443,7 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
     match metadata(doc) {
         None => issue("6.6.2.1", "The document has no XMP metadata", None, None, true),
         Some(x) => {
-            let part = xmp::identifier(&x, xmp::PDFA_ID, "part");
-            let conf = xmp::identifier(&x, xmp::PDFA_ID, "conformance");
+            let xmp::Identification { pdfa_part: part, pdfa_conformance: conf, .. } = xmp::identification(&x);
             if part.as_deref() != Some(&level.part().to_string()) || conf.as_deref().map(str::to_uppercase).as_deref() != Some("B") {
                 issue("6.6.4", "The metadata doesn't identify the file as {}", Some(level.label().to_owned()), None, true);
             }
