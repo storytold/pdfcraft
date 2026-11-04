@@ -1299,6 +1299,45 @@ fn combine_sorts_by_folder_a_folder_before_the_folders_inside_it() {
 }
 
 #[test]
+fn combine_sorts_a_file_and_its_namesake_in_a_subfolder_by_their_folders() {
+    let dir = workdir("combine-sort-namesakes");
+    write_pdf(&dir, "top/a.pdf", 1);
+    write_pdf(&dir, "top/sub/a.pdf", 2);
+    let mut a = auto(&dir);
+    for paths in [json!(["top/a.pdf", "top/sub/a.pdf"]), json!(["top/sub/a.pdf", "top/a.pdf"])] {
+        let up = ok(&mut a, "doc_combine", json!({ "paths": paths, "sort": "folder", "open": true }));
+        assert_eq!(up["order"], json!(["top/a.pdf", "top/sub/a.pdf"]), "{paths}");
+        assert_eq!(page_text(&mut a, up["document"]["doc"].as_u64().unwrap()), ["Page 1", "Page 1", "Page 2"], "{paths}");
+        let down = ok(&mut a, "doc_combine", json!({ "paths": paths, "sort": "folder", "descending": true, "open": true }));
+        assert_eq!(down["order"], json!(["top/sub/a.pdf", "top/a.pdf"]), "{paths}");
+        assert_eq!(page_text(&mut a, down["document"]["doc"].as_u64().unwrap()), ["Page 1", "Page 2", "Page 1"], "{paths}");
+    }
+}
+
+#[test]
+fn combine_sorts_by_the_folder_before_the_name_and_by_name_alone_when_asked() {
+    let dir = workdir("combine-sort-subfolder");
+    write_pdf(&dir, "top/b.pdf", 1);
+    write_pdf(&dir, "top/sub/a.pdf", 1);
+    let mut a = auto(&dir);
+    let paths = json!(["top/sub/a.pdf", "top/b.pdf"]);
+    assert_eq!(combined_files(&mut a, json!({ "paths": paths, "sort": "folder" })), ["b", "a"]);
+    assert_eq!(combined_files(&mut a, json!({ "paths": paths, "sort": "folder", "descending": true })), ["a", "b"]);
+    assert_eq!(combined_files(&mut a, json!({ "paths": paths, "sort": "name" })), ["a", "b"]);
+}
+
+#[test]
+fn combine_keeps_folders_that_read_alike_apart() {
+    let dir = workdir("combine-sort-alike");
+    for path in ["v01/a.pdf", "v1/b.pdf", "v01/c.pdf", "v1/d.pdf"] {
+        write_pdf(&dir, path, 1);
+    }
+    let mut a = auto(&dir);
+    let paths = json!(["v01/a.pdf", "v1/b.pdf", "v01/c.pdf", "v1/d.pdf"]);
+    assert_eq!(combined_files(&mut a, json!({ "paths": paths, "sort": "folder" })), ["a", "c", "b", "d"]);
+}
+
+#[test]
 fn a_sorted_file_keeps_its_pages_and_password() {
     let dir = workdir("combine-sort-keeps");
     let mut a = auto(&dir);

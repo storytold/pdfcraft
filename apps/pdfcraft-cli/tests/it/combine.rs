@@ -90,6 +90,46 @@ fn sort_reads_pages_size_modified_time_and_folder() {
 }
 
 #[test]
+fn sort_folder_reads_a_leading_dot_as_the_same_folder() {
+    let dir = folder("spelling", &[("a.pdf", 1), ("m.pdf", 1), ("z.pdf", 1), ("docs/b.pdf", 1)]);
+    assert_eq!(combined(&dir, &["z.pdf", "./a.pdf", "m.pdf", "--sort", "folder"]), ["a", "m", "z"]);
+    assert_eq!(combined(&dir, &["./docs/b.pdf", "z.pdf", "./a.pdf", "--sort", "folder"]), ["a", "z", "b"]);
+    assert_eq!(combined(&dir, &["docs/b.pdf", "./z.pdf", "a.pdf", "--sort", "folder", "--descending"]), ["b", "a", "z"]);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn sort_folder_keeps_folders_that_read_alike_apart() {
+    let dir = folder("alike", &[("v01/a.pdf", 1), ("v1/b.pdf", 1), ("v01/c.pdf", 1), ("v1/d.pdf", 1)]);
+    let listed = ["v01/a.pdf", "v1/b.pdf", "v01/c.pdf", "v1/d.pdf"];
+    assert_eq!(combined(&dir, &[&listed[..], &["--sort", "folder"]].concat()), ["a", "c", "b", "d"]);
+    assert_eq!(combined(&dir, &[&listed[..], &["--sort", "folder", "--descending"]].concat()), ["b", "d", "a", "c"]);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn sort_folder_puts_a_file_before_its_namesake_in_a_subfolder() {
+    let dir = folder("namesakes", &[("a.pdf", 1)]);
+    std::fs::create_dir_all(dir.join("sub")).unwrap();
+    std::fs::write(dir.join("sub/a.pdf"), pdf("inner", 1)).unwrap();
+    for listed in [["a.pdf", "sub/a.pdf"], ["sub/a.pdf", "a.pdf"]] {
+        assert_eq!(combined(&dir, &[&listed[..], &["--sort", "folder"]].concat()), ["a", "inner"], "{listed:?}");
+        assert_eq!(combined(&dir, &[&listed[..], &["--sort", "folder", "--descending"]].concat()), ["inner", "a"], "{listed:?}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn sort_folder_goes_by_the_folder_before_the_name_and_sort_name_by_the_name_alone() {
+    let dir = folder("subfolder", &[("b.pdf", 1), ("sub/a.pdf", 1)]);
+    let listed = ["sub/a.pdf", "b.pdf"];
+    assert_eq!(combined(&dir, &[&listed[..], &["--sort", "folder"]].concat()), ["b", "a"]);
+    assert_eq!(combined(&dir, &[&listed[..], &["--sort", "folder", "--descending"]].concat()), ["a", "b"]);
+    assert_eq!(combined(&dir, &[&["b.pdf", "sub/a.pdf"][..], &["--sort", "name"]].concat()), ["a", "b"]);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn a_bad_sort_says_what_is_wrong_and_writes_nothing() {
     let dir = folder("refused", &[("a.pdf", 1), ("b.pdf", 1)]);
     for (args, says) in [

@@ -2,7 +2,7 @@
 //! them compare. Everything that sorts files to combine does it here, so they all agree.
 
 use std::cmp::Ordering;
-use std::path::Path;
+use std::path::{Component, Path};
 use std::time::SystemTime;
 
 /// What files are sorted by.
@@ -115,18 +115,25 @@ pub fn natural(a: &str, b: &str) -> Ordering {
 }
 
 /// Folders in the order people expect: one part of the path at a time, each in [`natural`]
-/// order, so a folder comes before the folders inside it and those before its next sibling.
+/// order, so a folder comes before the folders inside it and those before its next sibling. A
+/// `.` is no part of a path, so `./docs` and `docs` are one folder. Parts [`natural`] can't tell
+/// apart (`v01` and `v1`) go by their raw names, so two folders never tie and their files never
+/// mix.
 fn natural_path(a: &Path, b: &Path) -> Ordering {
-    let (mut a, mut b) = (a.components(), b.components());
+    let named = |part: &Component<'_>| *part != Component::CurDir;
+    let (mut a, mut b) = (a.components().filter(named), b.components().filter(named));
     loop {
         match (a.next(), b.next()) {
             (None, None) => return Ordering::Equal,
             (None, Some(_)) => return Ordering::Less,
             (Some(_), None) => return Ordering::Greater,
-            (Some(x), Some(y)) => match natural(&x.as_os_str().to_string_lossy(), &y.as_os_str().to_string_lossy()) {
-                Ordering::Equal => {}
-                other => return other,
-            },
+            (Some(x), Some(y)) => {
+                let (x, y) = (x.as_os_str(), y.as_os_str());
+                match natural(&x.to_string_lossy(), &y.to_string_lossy()).then_with(|| x.cmp(y)) {
+                    Ordering::Equal => {}
+                    other => return other,
+                }
+            }
         }
     }
 }
@@ -175,6 +182,77 @@ mod tests {
         let mut folders = vec!["/x/B", "/x/a b", "/x/a/inner", "/x/a", "/x/a10", "/x/a2"];
         folders.sort_by(|a, b| natural_path(Path::new(a), Path::new(b)));
         assert_eq!(folders, ["/x/a", "/x/a/inner", "/x/a b", "/x/a2", "/x/a10", "/x/B"]);
+    }
+
+    /// `sort_by` may panic on an order that isn't total, and folders come from strangers.
+    #[test]
+    fn natural_path_is_a_total_order_on_awkward_folders() {
+        let folders =
+            ["", ".", "./", "./a", "a", "a/.", "a/b", "./a/b", "..", "../a", "/", "/a", "v1", "v01", "V1", "v1/a", "v01/a", "a b", "ß", "ss"];
+        for a in folders.map(Path::new) {
+            for b in folders.map(Path::new) {
+                assert_eq!(natural_path(a, b), natural_path(b, a).reverse(), "{a:?} and {b:?}");
+                for c in folders.map(Path::new) {
+                    if natural_path(a, b).is_le() && natural_path(b, c).is_le() {
+                        assert!(natural_path(a, c).is_le(), "{a:?}, {b:?} and {c:?}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_leading_dot_is_the_same_folder() {
+        for (a, b) in [("", "."), ("docs", "./docs"), ("docs/inner", "./docs/inner"), ("docs", "docs/.")] {
+            assert_eq!(natural_path(Path::new(a), Path::new(b)), Ordering::Equal, "{a:?} and {b:?}");
+        }
+        let here = |name, folder| FileFacts { folder: Some(Path::new(folder)), ..named(name) };
+        let files = [here("z", ""), here("a", "."), here("m", ""), here("b", "./docs"), here("c", "docs")];
+        assert_eq!(sorted(&files, FileSort::Folder, true), ["a", "m", "z", "b", "c"]);
+        assert_eq!(sorted(&files, FileSort::Folder, false), ["b", "c", "a", "m", "z"]);
+    }
+
+    #[test]
+    fn folders_that_read_alike_keep_their_files_apart() {
+        for (one, other) in [("/x/v01", "/x/v1"), ("/x/Scans", "/x/scans"), ("v01/inner", "v1/inner")] {
+            assert_ne!(natural_path(Path::new(one), Path::new(other)), Ordering::Equal, "{one:?} and {other:?}");
+            let from = |name, folder| FileFacts { folder: Some(Path::new(folder)), ..named(name) };
+            let files = [from("a", one), from("b", other), from("c", one), from("d", other)];
+            assert_eq!(sorted(&files, FileSort::Folder, true), ["a", "c", "b", "d"], "{one:?} and {other:?}");
+            assert_eq!(sorted(&files, FileSort::Folder, false), ["b", "d", "a", "c"], "{one:?} and {other:?}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn folders_whose_names_are_not_text_keep_their_files_apart() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+        let (one, other) = (Path::new(OsStr::from_bytes(b"/x/\xff")), Path::new(OsStr::from_bytes(b"/x/\xfe")));
+        assert_eq!(one.to_string_lossy(), other.to_string_lossy(), "both read as the same replacement character");
+        let from = |name, folder| FileFacts { folder: Some(folder), ..named(name) };
+        let files = [from("a", one), from("b", other), from("c", one), from("d", other)];
+        assert_eq!(sorted(&files, FileSort::Folder, true), ["b", "d", "a", "c"]);
+    }
+
+    #[test]
+    fn a_file_in_a_folder_comes_before_its_namesake_in_a_folder_inside_it() {
+        let from = |folder| FileFacts { folder: Some(Path::new(folder)), ..named("a") };
+        let (top, inner) = (from("/x"), from("/x/sub"));
+        assert_eq!(file_order(&[top, inner], FileSort::Folder, true), [0, 1]);
+        assert_eq!(file_order(&[inner, top], FileSort::Folder, true), [1, 0], "however they were listed");
+        assert_eq!(file_order(&[top, inner], FileSort::Folder, false), [1, 0]);
+        assert_eq!(file_order(&[inner, top], FileSort::Folder, false), [0, 1], "however they were listed");
+        assert_eq!(file_order(&[inner, top], FileSort::Name, true), [0, 1], "by name they tie, and stay as they were");
+    }
+
+    #[test]
+    fn the_folder_decides_before_the_name_and_only_when_sorting_by_folder() {
+        let files = [FileFacts { folder: Some(Path::new("/x/sub")), ..named("a") }, FileFacts { folder: Some(Path::new("/x")), ..named("b") }];
+        assert_eq!(sorted(&files, FileSort::Folder, true), ["b", "a"]);
+        assert_eq!(sorted(&files, FileSort::Folder, false), ["a", "b"]);
+        assert_eq!(sorted(&files, FileSort::Name, true), ["a", "b"]);
+        assert_eq!(sorted(&files, FileSort::Name, false), ["b", "a"]);
     }
 
     #[test]

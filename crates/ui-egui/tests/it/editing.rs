@@ -1851,6 +1851,85 @@ fn sort_by_folder_groups_files_by_their_folder_and_files_from_no_folder_go_last(
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A folder chosen with Add folder and subfolders, holding `files`: each a path inside it and how
+/// many pages it has. The list opens in Grid view with those files and no others.
+fn combine_folder(test: &str, files: &[(&str, usize)]) -> (Harness<'static, PdfCraftApp>, std::path::PathBuf) {
+    let dir = temp_path(test);
+    let _ = std::fs::remove_dir_all(&dir);
+    for (name, pages) in files {
+        let path = dir.join(name);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, fixture(*pages)).unwrap();
+    }
+    let mut h = harness(1, |_| {});
+    h.state_mut().execute("page.combine");
+    h.run_steps(2);
+    h.state_mut().pick_override = Some(vec![dir.to_string_lossy().into_owned()]);
+    h.get_by_label("More ways to add files").click();
+    h.run_steps(2);
+    h.get_by_label("Add folder and subfolders…").click();
+    h.run_steps(4);
+    (h, dir)
+}
+
+/// The Sort menu's `item`.
+fn sort_combine_by(h: &mut Harness<'static, PdfCraftApp>, item: &str) {
+    h.get_by_label("Sort").click();
+    h.run_steps(2);
+    h.get_by_label(item).click();
+    h.run_steps(2);
+}
+
+/// Each file in the list: its name, and its folder inside `dir` ("" for `dir` itself).
+fn combine_places(h: &Harness<'static, PdfCraftApp>, dir: &std::path::Path) -> Vec<(String, String)> {
+    let inside = |f: &std::path::Path| f.strip_prefix(dir).unwrap().to_string_lossy().into_owned();
+    h.state().combine_draft.iter().map(|f| (f.name.clone(), inside(f.folder.as_deref().unwrap()))).collect()
+}
+
+fn places(list: &[(&str, &str)]) -> Vec<(String, String)> {
+    list.iter().map(|(name, folder)| (name.to_string(), folder.to_string())).collect()
+}
+
+#[test]
+fn a_folder_with_a_file_and_its_namesake_inside_sorts_them_by_their_folders() {
+    let (mut h, dir) = combine_folder("combine-sort-namesakes", &[("a.pdf", 1), ("sub/a.pdf", 2)]);
+    assert_eq!(h.state().combine_draft.len(), 2, "two files called alike are two");
+    sort_combine_by(&mut h, "Folder");
+    assert_eq!(combine_places(&h, &dir), places(&[("a.pdf", ""), ("a.pdf", "sub")]));
+    assert_eq!(h.state().combine_draft.iter().map(|f| f.pages).collect::<Vec<_>>(), [1, 2], "each keeps its own pages");
+    sort_combine_by(&mut h, "Descending");
+    assert_eq!(combine_places(&h, &dir), places(&[("a.pdf", "sub"), ("a.pdf", "")]));
+    sort_combine_by(&mut h, "Ascending");
+    assert_eq!(combine_places(&h, &dir), places(&[("a.pdf", ""), ("a.pdf", "sub")]));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_file_in_a_subfolder_comes_after_the_folders_own_files_whatever_its_name() {
+    let (mut h, dir) = combine_folder("combine-sort-subfolder", &[("b.pdf", 1), ("sub/a.pdf", 1)]);
+    sort_combine_by(&mut h, "Folder");
+    assert_eq!(combine_places(&h, &dir), places(&[("b.pdf", ""), ("a.pdf", "sub")]));
+    sort_combine_by(&mut h, "Descending");
+    assert_eq!(combine_places(&h, &dir), places(&[("a.pdf", "sub"), ("b.pdf", "")]));
+    sort_combine_by(&mut h, "File name");
+    assert_eq!(combine_names(&h), ["b.pdf", "a.pdf"], "still descending, now by name alone");
+    sort_combine_by(&mut h, "Ascending");
+    assert_eq!(combine_places(&h, &dir), places(&[("a.pdf", "sub"), ("b.pdf", "")]));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Their cards read the same but for the folder, so a screen reader needs it to tell them apart.
+#[test]
+fn cards_of_files_called_alike_tell_a_screen_reader_their_folders() {
+    let (h, dir) = combine_folder("combine-card-folders", &[("a.pdf", 1), ("sub/a.pdf", 1)]);
+    let said: Vec<String> = h.get_all_by_label("a.pdf").map(|card| card.accesskit_node().description().unwrap_or_default().to_string()).collect();
+    let (top, inner) = (dir.display().to_string(), dir.join("sub").display().to_string());
+    assert_eq!(said.len(), 2, "{said:?}");
+    assert!(said.contains(&format!("1 page. {top}")), "{said:?}");
+    assert!(said.contains(&format!("1 page. {inner}")), "{said:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// #569: an image or a text file added to Combine files becomes a PDF as it joins the list, an
 /// ordinary row with its pages.
 #[test]
