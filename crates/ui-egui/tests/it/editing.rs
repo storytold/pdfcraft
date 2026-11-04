@@ -8729,6 +8729,330 @@ fn mode_tabs_keep_the_hand_over_a_paragraph_scrolled_under_them() {
 }
 
 #[test]
+fn corner_rotation_is_one_edit_and_escape_cancels_the_next_drag() {
+    use pdfcraft_engine::{AddedText, Edit};
+    let mut h = harness(1, |app| {
+        assert!(app.apply_edit(Edit::AddText {
+            page: 0,
+            text: AddedText { text: "Corner rotation".into(), rect: [30.0, 70.0, 150.0, 95.0], ..Default::default() }
+        }));
+        app.execute("edit.edit_text");
+        app.views[0].content.selected = Some((0, 0));
+        app.views[0].fit = pdfcraft_ui_egui::canvas::Fit::Page;
+    });
+    let id = h.state().views[0].id;
+    for k in 1..=4 {
+        assert!(h.query_by_label(&format!("Rotate corner {k}")).is_some());
+    }
+    let from = h.get_by_label("Rotate corner 1").rect().center();
+    let opposite = h.get_by_label("Rotate corner 3").rect().center();
+    let pivot = from + (opposite - from) * 0.5;
+    let d = from - pivot;
+    let to = pivot + egui::vec2(-d.y, d.x);
+    let before = h.state().session.get(id).unwrap().edit_generation();
+    h.hover_at(from);
+    h.run_steps(1);
+    h.drag_at(from);
+    h.run_steps(1);
+    for step in 1..=8 {
+        h.hover_at(from + (to - from) * (step as f32 / 8.0));
+        h.run_steps(1);
+    }
+    assert_eq!(h.state().session.get(id).unwrap().edit_generation(), before, "preview never edits the document");
+    h.drop_at(to);
+    h.run_steps(4);
+    assert!(
+        (h.state().session.get(id).unwrap().added()[0].rotation - 90.0).abs() < 0.1,
+        "angle={}, undo={:?}, from={from:?}, to={to:?}, pivot={pivot:?}",
+        h.state().session.get(id).unwrap().added()[0].rotation,
+        h.state().session.get(id).unwrap().can_undo()
+    );
+    assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("Rotate object"));
+    let after = h.state().session.get(id).unwrap().edit_generation();
+    let from = h.get_by_label("Rotate corner 2").rect().center();
+    h.hover_at(from);
+    h.run_steps(1);
+    h.drag_at(from);
+    h.run_steps(1);
+    h.hover_at(from + egui::vec2(40.0, 40.0));
+    h.run_steps(1);
+    h.key_press(egui::Key::Escape);
+    h.run_steps(1);
+    h.drop_at(from);
+    h.run_steps(3);
+    assert_eq!(h.state().session.get(id).unwrap().edit_generation(), after);
+    h.state_mut().undo();
+    h.run_steps(3);
+    assert_eq!(h.state().session.get(id).unwrap().added()[0].rotation, 0.0);
+}
+
+#[test]
+fn corner_rotation_source_text_and_select_tool_image_keep_editable_objects() {
+    use pdfcraft_ui_egui::QuickTool;
+    for image in [false, true] {
+        let mut h = harness(1, move |app| {
+            if image {
+                app.open_bytes("image.pdf", None, clipped_artwork_with_labels_drawn(true)).unwrap();
+                app.quick_tool = QuickTool::Select;
+            } else {
+                app.execute("edit.edit_text");
+            }
+        });
+        let vi = if image { 1 } else { 0 };
+        let id = h.state().views[vi].id;
+        let rect = h.state().views[vi].page_screen_rect(0).unwrap();
+        let at = if image { [95.0, 195.0] } else { [40.0, 158.0] };
+        let at = egui::pos2(rect.left() + at[0] / 200.0 * rect.width(), rect.top() + (300.0 - at[1]) / 300.0 * rect.height());
+        h.hover_at(at);
+        h.run_steps(1);
+        h.drag_at(at);
+        h.run_steps(1);
+        h.drop_at(at);
+        h.run_steps(3);
+        let from = h.get_by_label("Rotate corner 2").rect().center();
+        let opposite = h.get_by_label("Rotate corner 4").rect().center();
+        let pivot = from + (opposite - from) * 0.5;
+        let d = from - pivot;
+        let (s, c) = 22.0_f32.to_radians().sin_cos();
+        let to = pivot + egui::vec2(c * d.x - s * d.y, s * d.x + c * d.y);
+        let before = h.state().session.get(id).unwrap().edit_generation();
+        h.hover_at(from);
+        h.run_steps(1);
+        h.drag_at(from);
+        h.run_steps(1);
+        h.input_mut().events.push(egui::Event::ModifiersChanged(Modifiers::SHIFT));
+        h.hover_at(to);
+        h.run_steps(2);
+        assert_eq!(h.state().session.get(id).unwrap().edit_generation(), before);
+        h.input_mut().events.push(egui::Event::PointerButton {
+            pos: to,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: Modifiers::SHIFT,
+        });
+        h.run_steps(4);
+        let doc = h.state().session.get(id).unwrap();
+        assert_eq!(doc.can_undo(), Some("Rotate object"));
+        if image {
+            let m = doc.page_images(0)[0].matrix;
+            let degrees = m[1].atan2(m[0]).to_degrees();
+            assert!((degrees + 15.0).abs() < 0.1, "shift snapped image to 15 degrees: {degrees}");
+        } else {
+            let block = &doc.text_blocks(0)[0];
+            assert_eq!(block.text, "Page 1");
+            assert!((block.rotation + 15.0).abs() < 0.1, "shift snapped text to 15 degrees: {}", block.rotation);
+        }
+        h.state_mut().undo();
+        h.run_steps(3);
+    }
+}
+
+#[test]
+fn corner_rotation_select_tool_resolves_added_image_metadata() {
+    let mut h = harness(1, |app| {
+        let mut png = Vec::new();
+        image::RgbImage::from_pixel(80, 40, image::Rgb([30, 130, 220]))
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        assert!(app.apply_edit(pdfcraft_engine::Edit::AddImage {
+            page: 0,
+            rect: Some([30.0, 170.0, 160.0, 250.0]),
+            name: "synthetic.png".into(),
+            bytes: std::sync::Arc::new(png)
+        }));
+        app.quick_tool = pdfcraft_ui_egui::QuickTool::Select;
+        app.views[0].fit = pdfcraft_ui_egui::canvas::Fit::Page;
+    });
+    let id = h.state().views[0].id;
+    let r = h.state().views[0].page_screen_rect(0).unwrap();
+    let at = egui::pos2(r.left() + 95.0 / 200.0 * r.width(), r.top() + 90.0 / 300.0 * r.height());
+    h.hover_at(at);
+    h.run_steps(1);
+    h.drag_at(at);
+    h.run_steps(1);
+    h.drop_at(at);
+    h.run_steps(3);
+    if let Some(path) = std::env::var_os("PDFCRAFT_ROTATION_SNAPSHOT") {
+        for _ in 0..100 {
+            h.run_steps(2);
+            if !h.state().render_pending() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        h.render().unwrap().save(std::path::Path::new(&path)).unwrap();
+    }
+    let from = h.get_by_label("Rotate corner 1").rect().center();
+    let opposite = h.get_by_label("Rotate corner 3").rect().center();
+    let pivot = from + (opposite - from) * 0.5;
+    let d = from - pivot;
+    let to = pivot + egui::vec2(-d.y, d.x);
+    h.hover_at(from);
+    h.run_steps(1);
+    h.drag_at(from);
+    h.run_steps(1);
+    h.hover_at(to);
+    h.run_steps(2);
+    h.drop_at(to);
+    h.run_steps(3);
+    let doc = h.state().session.get(id).unwrap();
+    assert!((doc.added()[0].rotation - 90.0).abs() < 0.1);
+    assert_eq!(doc.can_undo(), Some("Rotate object"));
+}
+
+/// Exercise the same selected object across rotation, scaling and translation, then save it.
+#[test]
+fn corner_transforms_scale_and_translate_rotated_text_and_images() {
+    use pdfcraft_engine::{AddedText, Edit, ObjectKind};
+    use pdfcraft_ui_egui::QuickTool;
+    for (image, added) in [(true, false), (true, true), (false, false), (false, true)] {
+        let mut h = harness(1, move |app| {
+            if image && !added {
+                app.open_bytes("image.pdf", None, clipped_artwork_with_labels_drawn(true)).unwrap();
+            } else if image {
+                let mut png = Vec::new();
+                image::RgbImage::from_pixel(80, 40, image::Rgb([30, 130, 220]))
+                    .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+                    .unwrap();
+                assert!(app.apply_edit(Edit::AddImage {
+                    page: 0,
+                    rect: Some([30.0, 170.0, 160.0, 250.0]),
+                    name: "synthetic.png".into(),
+                    bytes: std::sync::Arc::new(png)
+                }));
+            } else if added {
+                assert!(app.apply_edit(Edit::AddText {
+                    page: 0,
+                    text: AddedText { text: "Scale and move".into(), rect: [30.0, 70.0, 150.0, 95.0], ..Default::default() }
+                }));
+            }
+            let vi = if image && !added { 1 } else { 0 };
+            app.views[vi].fit = pdfcraft_ui_egui::canvas::Fit::Page;
+            if image {
+                app.quick_tool = QuickTool::Select;
+            } else {
+                app.execute("edit.edit_text");
+            }
+            if added && !image {
+                app.views[vi].content.selected = Some((0, 0));
+            }
+        });
+        let vi = if image && !added { 1 } else { 0 };
+        let id = h.state().views[vi].id;
+        let drag = |h: &mut Harness<'_, PdfCraftApp>, from: egui::Pos2, to: egui::Pos2| {
+            h.hover_at(from);
+            h.run_steps(1);
+            h.drag_at(from);
+            h.run_steps(1);
+            h.hover_at(to);
+            h.run_steps(2);
+            h.drop_at(to);
+            h.run_steps(4);
+        };
+        if image || !added {
+            let r = h.state().views[vi].page_screen_rect(0).unwrap();
+            let at = if image { [95.0, 195.0] } else { [40.0, 158.0] };
+            let at = egui::pos2(r.left() + at[0] / 200.0 * r.width(), r.top() + (300.0 - at[1]) / 300.0 * r.height());
+            drag(&mut h, at, at);
+        }
+        let from = h.get_by_label("Rotate corner 2").rect().center();
+        let opposite = h.get_by_label("Rotate corner 4").rect().center();
+        let center = from + (opposite - from) * 0.5;
+        let d = from - center;
+        let (s, c) = 20.0_f32.to_radians().sin_cos();
+        drag(&mut h, from, center + egui::vec2(c * d.x - s * d.y, s * d.x + c * d.y));
+        assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("Rotate object"));
+        h.state_mut().quick_tool = QuickTool::Select;
+        h.run_steps(3);
+        let kind = if added {
+            ObjectKind::Added
+        } else if image {
+            ObjectKind::Image
+        } else {
+            ObjectKind::Text
+        };
+        let object = |h: &Harness<'_, PdfCraftApp>| {
+            h.state().session.get(id).unwrap().editable_objects(0).unwrap().into_iter().find(|o| o.target.kind == kind).unwrap()
+        };
+        let rotated = object(&h);
+        let from = h.get_by_label("Scale corner 3").rect().center();
+        let fixed = h.get_by_label("Scale corner 1").rect().center();
+        drag(&mut h, from, fixed + (from - fixed) * 0.75);
+        let scaled = object(&h);
+        assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("Scale object"));
+        for (new, old) in [
+            (scaled.rect[2] - scaled.rect[0], rotated.rect[2] - rotated.rect[0]),
+            (scaled.rect[3] - scaled.rect[1], rotated.rect[3] - rotated.rect[1]),
+        ] {
+            assert!((new / old - 0.75).abs() < 0.005, "image={image}, added={added}: {new}/{old}");
+        }
+        // Small text must remain draggable when zoomed out (an 8px inset erased its body).
+        if !image {
+            h.state_mut().set_option("zoom", "60").unwrap();
+            h.run_steps(3);
+        }
+        let a = h.get_by_label("Scale corner 1").rect().center();
+        let b = h.get_by_label("Scale corner 3").rect().center();
+        let from = a + (b - a) * 0.5;
+        let r = h.state().views[vi].page_screen_rect(0).unwrap();
+        let delta = egui::vec2(r.width() * 10.0 / 200.0, r.height() * 12.0 / 300.0);
+        drag(&mut h, from, from + delta);
+        let moved = object(&h);
+        assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("Move object"));
+        assert!((moved.rect[0] - scaled.rect[0] - 10.0).abs() < 0.05, "{moved:?} {scaled:?}");
+        assert!((moved.rect[1] - scaled.rect[1] + 12.0).abs() < 0.05);
+        assert_eq!(moved.text, rotated.text);
+        h.state_mut().undo();
+        h.run_steps(3);
+        let restored = object(&h);
+        assert!(restored.rect.iter().zip(scaled.rect).all(|(a, b)| (a - b).abs() < 0.01));
+        h.state_mut().redo();
+        h.run_steps(3);
+        let bytes = h.state_mut().session.save_bytes(id).unwrap();
+        let mut reopened = pdfcraft_engine::Session::new();
+        let rid = reopened.open("transformed.pdf", None, bytes, None).unwrap();
+        let saved = reopened.get(rid).unwrap().editable_objects(0).unwrap().into_iter().find(|o| o.target.kind == kind).unwrap();
+        assert!(saved.rect.iter().zip(moved.rect).all(|(a, b)| (a - b).abs() < 0.01));
+        assert_eq!(saved.text, moved.text);
+    }
+}
+
+#[test]
+fn corner_rotation_is_cancelled_when_organize_hides_the_page() {
+    use pdfcraft_engine::{AddedText, Edit};
+    let mut h = harness(1, |app| {
+        assert!(app.apply_edit(Edit::AddText {
+            page: 0,
+            text: AddedText { text: "Keep my orientation".into(), rect: [30.0, 70.0, 150.0, 95.0], ..Default::default() }
+        }));
+        app.execute("edit.edit_text");
+        app.views[0].content.selected = Some((0, 0));
+        app.views[0].fit = pdfcraft_ui_egui::canvas::Fit::Page;
+    });
+    let id = h.state().views[0].id;
+    let before = h.state().session.get(id).unwrap().edit_generation();
+    let from = h.get_by_label("Rotate corner 1").rect().center();
+    let opposite = h.get_by_label("Rotate corner 3").rect().center();
+    let pivot = from + (opposite - from) * 0.5;
+    let d = from - pivot;
+    let to = pivot + egui::vec2(-d.y, d.x);
+    h.hover_at(from);
+    h.run_steps(1);
+    h.drag_at(from);
+    h.run_steps(1);
+    h.hover_at(to);
+    h.run_steps(2);
+    h.state_mut().views[0].open_organize();
+    h.run_steps(2);
+    h.drop_at(to);
+    h.run_steps(2);
+    h.state_mut().views[0].organize = false;
+    h.run_steps(3);
+    assert_eq!(h.state().session.get(id).unwrap().edit_generation(), before);
+    assert_eq!(h.state().session.get(id).unwrap().added()[0].rotation, 0.0);
+}
+
+#[test]
 fn copy_pasted_image_discards_coordinates_and_moves_without_offset() {
     let mut png = Vec::new();
     image::RgbImage::from_pixel(60, 60, image::Rgb([100, 150, 200])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();

@@ -761,7 +761,7 @@ fn type_then_save_in_one_frame(h: &mut Harness<'static, PdfCraftApp>, name: &str
 
 #[test]
 fn typing_and_saving_in_the_same_frame_saves_the_last_keystrokes() {
-    let dir = scratch("same-frame");
+    let dir = scratch("typing-same-frame");
     let out = dir.join("saved.pdf");
     let mut h = harness();
     type_then_save_in_one_frame(&mut h, "name", "Browser", egui::Event::Text(" Form 123".into()), &out);

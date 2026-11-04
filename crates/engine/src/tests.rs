@@ -9206,6 +9206,85 @@ fn exporting_office_keeps_dotted_leader_entries_as_paragraphs() {
     assert!(positions.windows(2).all(|pair| pair[0] < pair[1]), "reading order: {html}");
 }
 
+#[test]
+fn object_rotation_preserves_text_and_added_edits_across_save_and_undo() {
+    let (mut s, id) = session_with(1);
+    let original = s.get(id).unwrap().editable_objects(0).unwrap();
+    let target = original.iter().find(|o| o.target.kind == crate::ObjectKind::Text).unwrap().target;
+    s.apply(id, Edit::RotateObject { page: 0, object: target, degrees: 37.0 }).unwrap();
+    let rotated = s.get(id).unwrap().editable_objects(0).unwrap();
+    assert_eq!(rotated[0].text, original[0].text);
+    assert_ne!(rotated[0].rect, original[0].rect);
+    assert_eq!(s.get(id).unwrap().can_undo(), Some("Rotate object"));
+    s.undo(id).unwrap();
+    assert_eq!(s.get(id).unwrap().editable_objects(0).unwrap(), original);
+    s.redo(id).unwrap();
+    let bytes = s.save_bytes(id).unwrap();
+    let mut reopened = Session::new();
+    let rid = reopened.open("rotated.pdf", None, bytes, None).unwrap();
+    assert_eq!(reopened.get(rid).unwrap().editable_objects(0).unwrap(), rotated);
+    s.apply(id, Edit::AddText { page: 0, text: AddedText { text: "Rotate me".into(), rect: [20.0, 40.0, 160.0, 70.0], ..Default::default() } })
+        .unwrap();
+    let added = crate::ObjectTarget { kind: crate::ObjectKind::Added, index: 0 };
+    s.apply(id, Edit::RotateObject { page: 0, object: added, degrees: 45.0 }).unwrap();
+    assert_eq!(s.get(id).unwrap().added()[0].rotation, 45.0);
+    let before_move = s.get(id).unwrap().added()[0].content.rect();
+    s.apply(id, Edit::MoveObjects { page: 0, objects: vec![added], offset: [10.0, 20.0] }).unwrap();
+    let moved = s.get(id).unwrap().added()[0].content.rect();
+    assert!((moved[0] - before_move[0] - 10.0).abs() < 1e-6);
+    assert!((moved[1] - before_move[1] - 20.0).abs() < 1e-6);
+    let mut text = match &s.get(id).unwrap().added()[0].content {
+        AddedContent::Text(t) => t.clone(),
+        _ => panic!("text"),
+    };
+    text.text = "Still editable".into();
+    s.apply(id, Edit::UpdateContent { page: 0, index: 0, content: AddedContent::Text(text) }).unwrap();
+    assert_eq!(s.get(id).unwrap().added()[0].rotation, 45.0);
+    let bytes = s.save_bytes(id).unwrap();
+    let rid = reopened.open("added-rotated.pdf", None, bytes, None).unwrap();
+    assert_eq!(reopened.get(rid).unwrap().added()[0], s.get(id).unwrap().added()[0]);
+    let before = s.save_bytes(id).unwrap();
+    for degrees in [f64::NAN, f64::INFINITY, 36001.0] {
+        assert!(s.apply(id, Edit::RotateObject { page: 0, object: added, degrees }).is_err());
+        assert_eq!(s.save_bytes(id).unwrap(), before);
+    }
+}
+
+#[test]
+fn object_scale_keeps_rotated_added_text_editable_on_rotated_pages() {
+    for page_angle in [0, 90, 180, 270] {
+        let (mut s, id) = session_with(1);
+        s.apply(id, Edit::AddText { page: 0, text: AddedText { text: "Scale me".into(), rect: [20.0, 40.0, 160.0, 70.0], ..Default::default() } })
+            .unwrap();
+        let object = crate::ObjectTarget { kind: crate::ObjectKind::Added, index: 0 };
+        s.apply(id, Edit::RotateObject { page: 0, object, degrees: 27.0 }).unwrap();
+        if page_angle != 0 {
+            s.apply(id, Edit::RotatePages { pages: vec![0], degrees: page_angle }).unwrap();
+        }
+        let before = s.get(id).unwrap().editable_objects(0).unwrap().into_iter().find(|o| o.target == object).unwrap();
+        let r = before.rect;
+        let draw_angle = s.get(id).unwrap().text_blocks(0).into_iter().find(|b| b.text == "Scale me").unwrap().rotation;
+        s.apply(id, Edit::ScaleObject { page: 0, object, factor: 1.3, pivot: [r[0], r[1]] }).unwrap();
+        let after = s.get(id).unwrap().editable_objects(0).unwrap().into_iter().find(|o| o.target == object).unwrap();
+        for (i, v) in after.rect.iter().enumerate() {
+            let pivot = if i % 2 == 0 { r[0] } else { r[1] };
+            assert!((v - (pivot + (r[i] - pivot) * 1.3)).abs() < 0.01, "page angle {page_angle}: {before:?} {after:?}");
+        }
+        let a = &s.get(id).unwrap().added()[0];
+        let scaled_angle = s.get(id).unwrap().text_blocks(0).into_iter().find(|b| b.text == "Scale me").unwrap().rotation;
+        assert!((scaled_angle - draw_angle).abs() < 1e-5);
+        let AddedContent::Text(t) = &a.content else { panic!("text") };
+        assert!((t.size - 15.6).abs() < 1e-5);
+        let mut t = t.clone();
+        t.text = "Still editable after scaling".into();
+        s.apply(id, Edit::UpdateContent { page: 0, index: 0, content: AddedContent::Text(t) }).unwrap();
+        let bytes = s.save_bytes(id).unwrap();
+        let mut reopened = Session::new();
+        let rid = reopened.open("scaled.pdf", None, bytes, None).unwrap();
+        assert_eq!(reopened.get(rid).unwrap().added()[0], s.get(id).unwrap().added()[0]);
+    }
+}
+
 /// A date typed in another of an XFA date field's edit patterns is kept in its first: yymmdd and
 /// yyyymd are rewritten as yyyymmdd, a date none of them reads is refused, and the data holds the date.
 #[test]

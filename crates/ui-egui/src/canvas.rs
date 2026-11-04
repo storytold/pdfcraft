@@ -622,6 +622,7 @@ pub struct DocView {
     pub picked_image: Option<crate::image_pick::PickedImage>,
     /// A paragraph box being dragged (moved, or resized from its right edge) in Edit text.
     pub block_drag: Option<crate::edit_text_ui::BlockDrag>,
+    pub(crate) object_rotation: crate::rotation_ui::Rotation,
     /// Commenting state: selected comment, gestures, composer.
     pub comments: crate::comments::CommentView,
     pub measure: crate::measure_ui::MeasureView,
@@ -885,6 +886,7 @@ impl DocView {
         self.prepare.cancel_pointer_gesture();
         self.content.cancel_pointer_gesture();
         self.objects.cancel_pointer_gesture();
+        self.object_rotation.cancel();
         if let Some(image) = &mut self.image_selection {
             image.cancel_pointer_gesture();
         }
@@ -981,6 +983,7 @@ impl DocView {
             image_selection: None,
             picked_image: None,
             block_drag: None,
+            object_rotation: Default::default(),
             pending_action: None,
             insert_at: None,
             grid_gap: None,
@@ -1663,7 +1666,9 @@ fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<
         };
         crate::redact_ui::page_input(cx, over_text, view)
     };
-    let on_objects = tool == QuickTool::EditText && can_modify && crate::object_ui::page_input(cx, view);
+    let rotating_content = (editing_content || tool == QuickTool::Select) && can_modify && !preparing && frame.env.unobstructed;
+    let on_rotation = rotating_content && crate::rotation_ui::page_input(ui, resp, &xf, i, doc, view, tool == QuickTool::Select, editing_content);
+    let on_objects = !on_rotation && tool == QuickTool::EditText && can_modify && crate::object_ui::page_input(cx, view);
     // Add text acts on the page's own paragraphs over them, and on the one its press was on until
     // the button is up: a drag that leaves the box still ends, and no new box takes it over.
     let over_source = tool == QuickTool::AddText
@@ -1678,7 +1683,7 @@ fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<
         }
         view.content.selected = None;
     }
-    let on_content = !on_objects && editing_content && can_modify && {
+    let on_content = !on_rotation && !on_objects && editing_content && can_modify && {
         source_blocked
             || crate::content_ui::page_input(
                 cx,
@@ -1695,8 +1700,8 @@ fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<
     // input waits while selected objects or added content own the pointer, or while page
     // input is blocked (another tab, a dialog, the window unfocused): the boxes stay drawn
     // instead of vanishing until the pointer comes back.
-    let others_own_pointer = on_objects || on_content;
-    let on_edit_text = (tool == QuickTool::EditText || over_source) && can_modify && {
+    let others_own_pointer = on_rotation || on_objects || on_content;
+    let on_edit_text = !view.object_rotation.dragging(i) && (tool == QuickTool::EditText || over_source) && can_modify && {
         // Editable text takes precedence over background/overlapping artwork. Both
         // inventories are painted every frame, even when text owns the pointer.
         let text_used = crate::edit_text_ui::page_input(cx, &lines, view, !others_own_pointer);
@@ -1730,7 +1735,8 @@ fn page_tool_input(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<
     {
         view.links.context = Some((i, l.index));
     }
-    let consumed = on_objects || on_edit_text || on_link || on_content || boxing || on_field || comments::page_input(ui, resp, &pcx, view);
+    let consumed =
+        on_rotation || on_objects || on_edit_text || on_link || on_content || boxing || on_field || comments::page_input(ui, resp, &pcx, view);
     // The cursor and the tip from what lies under the pointer, after the tools claimed theirs (the
     // last claim on a layer stands).
     if frame.env.unobstructed
@@ -3676,6 +3682,8 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     } else {
         view.prepare.selected = None;
     }
+    let rotating_content = (editing_content || tool == QuickTool::Select) && can_modify && !preparing && unobstructed;
+    view.object_rotation.prepare(doc, rotating_content, ui.ctx());
     view.objects.prepare(doc, tool == QuickTool::EditText && can_modify, ui.ctx());
     view.text_background.prepare(ui.ctx(), doc, view.line_editor.as_ref(), view.content.draft.as_ref(), scale);
     let added = if editing_content { doc.added().to_vec() } else { Vec::new() };

@@ -1,5 +1,5 @@
 use super::draw::{draw, params};
-use super::layout::{first_undrawable, is_thai, nums, shaped_arabic, thai_error};
+use super::layout::{first_undrawable, is_thai, nums, shaped_arabic, text_rect, thai_error};
 use super::types::{Added, AddedImage, AddedText, CHAR_SPACING_LIMIT, Family, MarkerScan, TAG};
 use super::{Content, Dict, Document, EditError, GlyphError, MarkKind, ObjRef, Object, Stream, align_from, check, contents, page_list, place_tagged};
 
@@ -111,7 +111,12 @@ pub fn scan_markers(doc: &Document) -> MarkerScan {
                             .and_then(Object::as_f64)
                             .filter(|u| u.is_finite() && *u >= 1.0)
                             .map_or(1.0, |u| u.min(pdfcraft_model::MAX_USER_UNIT));
-                        scan.added.push(Added { page: pi, obj, content: content.scaled(page.user_unit(doc) / written) });
+                        scan.added.push(Added {
+                            rotation: params.get(b"RotationDegrees").and_then(Object::as_f64).filter(|v| v.is_finite()).unwrap_or(0.0),
+                            page: pi,
+                            obj,
+                            content: content.scaled(page.user_unit(doc) / written),
+                        });
                     }
                 });
             });
@@ -169,12 +174,22 @@ fn validate(c: &Content) -> Result<(), EditError> {
 }
 
 /// Write an item's stream (new, or replacing `obj`) and make its resources available to the page.
-fn write(doc: &mut Document, page: usize, c: &Content, obj: Option<ObjRef>) -> Result<ObjRef, EditError> {
+fn write(doc: &mut Document, page: usize, c: &Content, obj: Option<ObjRef>, rotation: f64) -> Result<ObjRef, EditError> {
     validate(c)?;
     let all = page_list(doc);
     check(&[page], all.len())?;
     let p = &all[page];
-    let view = p.view_matrix(doc);
+    if !rotation.is_finite() {
+        return Err(EditError::Invalid("the object rotation must be finite".into()));
+    }
+    let rotation = rotation.rem_euclid(360.0);
+    // Painting and persisted text bounds both follow the newly laid-out line count.
+    let r = match c {
+        Content::Text(t) => text_rect(t),
+        Content::Image(i) => i.rect,
+    };
+    let view =
+        crate::objects::rotation_matrix([(r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0], rotation).then(&pdfcraft_content::Matrix(p.view_matrix(doc))).0;
     let user_unit = p.user_unit(doc);
     // The page gets its own copy of its resources with the item's fonts and images added, and
     // without the Arabic fonts of the version it replaces.
@@ -198,6 +213,9 @@ fn write(doc: &mut Document, page: usize, c: &Content, obj: Option<ObjRef>) -> R
     let mut sd = Dict::new();
     sd.set(b"PCMark".to_vec(), Object::name(TAG));
     let mut added = params(c);
+    if rotation != 0.0 {
+        added.set(b"RotationDegrees".to_vec(), Object::Real(rotation));
+    }
     if user_unit != 1.0 {
         added.set(b"UserUnit".to_vec(), Object::Real(user_unit));
     }
@@ -227,7 +245,7 @@ pub fn list_added(doc: &Document) -> Vec<Added> {
 
 /// Add an item to a page (0-based). Returns its index among the page's added items.
 pub fn add_content(doc: &mut Document, page: usize, c: &Content) -> Result<usize, EditError> {
-    write(doc, page, c, None)?;
+    write(doc, page, c, None, 0.0)?;
     Ok(list_added(doc).iter().filter(|a| a.page == page).count() - 1)
 }
 
@@ -245,7 +263,14 @@ pub fn update_content(doc: &mut Document, page: usize, index: usize, c: &Content
     if std::mem::discriminant(&a.content) != std::mem::discriminant(c) {
         return Err(EditError::Invalid("an item can't change between text and image".into()));
     }
-    write(doc, page, c, Some(a.obj))?;
+    write(doc, page, c, Some(a.obj), a.rotation)?;
+    Ok(())
+}
+
+/// Write transformed editable parameters together with their displayed rotation.
+pub(crate) fn update_transformed_content(doc: &mut Document, page: usize, index: usize, content: &Content, rotation: f64) -> Result<(), EditError> {
+    let a = find(doc, page, index)?;
+    write(doc, page, content, Some(a.obj), rotation)?;
     Ok(())
 }
 

@@ -41,6 +41,9 @@ pub struct PageImage {
     /// The XObject resource name and object.
     pub name: String,
     pub object: Option<ObjRef>,
+    /// Owning page content stream, for mapping PdfCraft-added images to their editable metadata.
+    /// Nested read-only image inventories leave this unset.
+    pub content_stream: Option<ObjRef>,
     /// Whether this is grouped Form artwork, edited as a whole (including its nested content).
     pub is_form: bool,
     /// Pixel size; zero for vector/grouped Form artwork.
@@ -287,7 +290,8 @@ pub fn page_images(doc: &Document, page: usize) -> Result<Vec<PageImage>, EditEr
     let mut out = Vec::new();
     // The streams are one stream in pieces, so the graphics state and operators carry over.
     let mut state = ImageState::new(Matrix::IDENTITY, p.crop(doc), Vec::new());
-    let pieces = joined(&content_streams(doc, &p.dict)?);
+    let all = content_streams(doc, &p.dict)?;
+    let pieces = joined(&all);
     for (i, op) in pieces.parse().ops.iter().enumerate() {
         state.apply(op)?;
         let ctm = state.placement.matrix;
@@ -346,6 +350,7 @@ pub fn page_images(doc: &Document, page: usize) -> Result<Vec<PageImage>, EditEr
                 matrix: matrix.0,
                 name: String::from_utf8_lossy(name).into_owned(),
                 object: resource.as_ref(),
+                content_stream: all.get(pieces.piece_of(op.span.start)).and_then(|(o, _)| o.as_ref()),
                 is_form,
                 width: if is_form { 0 } else { s.dict.int(b"Width").unwrap_or(0).clamp(0, u32::MAX as i64) as u32 },
                 height: if is_form { 0 } else { s.dict.int(b"Height").unwrap_or(0).clamp(0, u32::MAX as i64) as u32 },
@@ -422,6 +427,7 @@ pub fn reading_images(doc: &Document, page: usize) -> Result<Vec<PageImage>, Edi
                     matrix: ctm.0,
                     name: String::from_utf8_lossy(name).into_owned(),
                     object: Some(r),
+                    content_stream: None,
                     is_form: false,
                     width: s.dict.int(b"Width").unwrap_or(0).max(0) as u32,
                     height: s.dict.int(b"Height").unwrap_or(0).max(0) as u32,

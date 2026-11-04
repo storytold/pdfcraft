@@ -727,6 +727,8 @@ impl Automation {
             "links_from_urls" => self.links_from_urls(&a)?,
             "links_remove" => self.links_remove(&a)?,
             "object_list" => self.object_list(&a)?,
+            "object_rotate" => self.object_transform(&a, false)?,
+            "object_scale" => self.object_transform(&a, true)?,
             "object_move" => self.object_move(&a)?,
             "content_list" => self.content_list(&a)?,
             "page_add_text" => self.page_add_text(&a)?,

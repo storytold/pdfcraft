@@ -1084,6 +1084,126 @@ fn vertical_encoding(doc: &Document, font: &Dict) -> Result<bool, EditError> {
     Err(EditError::Invalid("the text encoding is nested too deeply".into()))
 }
 
+/// Transform only the chosen paragraph's show operators. Close the text object before
+/// q/cm/Q (ISO 32000-1, 8.2), then restore both text matrices on re-entry (9.4).
+/// The line matrix and numeric TJ advance retain following text and T* positioning.
+/// Marked content opened inside a text object is refused to avoid crossing or duplicating tags.
+pub(crate) fn transform_block(doc: &mut Document, page: usize, index: usize, transform: Matrix) -> Result<(), EditError> {
+    let p = page_dict(doc, page)?;
+    let streams = content_streams(doc, &p.dict)?;
+    let lines = text_lines(doc, page)?;
+    let blocks = group_blocks(&lines);
+    let block = blocks.get(index).ok_or_else(|| EditError::Invalid("the selected paragraph no longer exists".into()))?;
+    for line in &block.lines {
+        lines.get(*line).ok_or_else(|| EditError::Invalid("a selected text line no longer exists".into()))?.ensure_editable()?;
+    }
+    let mut selected: std::collections::BTreeSet<_> = block.lines.iter().filter_map(|i| lines.get(*i)).flat_map(|l| l.ops.iter().copied()).collect();
+    let res = p.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
+    let fonts = res.get(b"Font").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
+    let pieces = Pieces::join(&streams.iter().map(|(_, d)| d.as_slice()).collect::<Vec<_>>());
+    let ops = pieces.parse().ops;
+    // Logical ActualText spans also list BDC/EMC boundaries. Keep those untouched;
+    // only glyph-show operations need a transform patch (including every show in a span).
+    selected.retain(|i| ops.get(*i).is_some_and(|op| matches!(op.op.as_slice(), b"Tj" | b"TJ" | b"'" | b"\"")));
+
+    // Inserting ET/BT inside an inner BMC/BDC would cross its matching EMC.
+    // Do not close/reopen those spans: that can duplicate MCIDs or ActualText.
+    // Refuse before touching the document; spans surrounding BT/ET remain supported.
+    let mut in_text = false;
+    let mut marked = Vec::new();
+    for (i, op) in ops.iter().enumerate() {
+        match op.op.as_slice() {
+            b"BT" => in_text = true,
+            b"ET" => in_text = false,
+            b"BMC" | b"BDC" => marked.push(in_text),
+            b"EMC" => {
+                marked.pop();
+            }
+            _ => {}
+        }
+        if selected.contains(&i) && marked.last() == Some(&true) {
+            return Err(EditError::Invalid("text inside marked content opened within a text object cannot be rotated or scaled".into()));
+        }
+    }
+
+    let shown = interpret(doc, &ops, &res, &mut HashMap::new(), &mut Carry::new(), None, None)?;
+    // ET commits accumulated text clipping. Splitting anywhere in such a text object
+    // could clip selected or neighbouring glyphs earlier than the original ET.
+    let selected_bt: std::collections::BTreeSet<_> = shown.iter().filter(|s| selected.contains(&s.op)).map(|s| s.bt).collect();
+    if shown.iter().any(|s| selected_bt.contains(&s.bt) && !(0..=3).contains(&s.state.render_mode)) {
+        return Err(EditError::Invalid("text objects containing a clipping path cannot be transformed".into()));
+    }
+    let mut patches = HashMap::new();
+    for s in shown.into_iter().filter(|s| selected.contains(&s.op)) {
+        let inverse = s.state.ctm.invert().ok_or_else(|| EditError::Invalid("the selected paragraph has no area".into()))?;
+        let local = s.state.ctm.then(&transform).then(&inverse);
+        if !local.0.iter().all(|v| v.is_finite() && v.abs() <= 1e12) {
+            return Err(EditError::Invalid("the paragraph transform is too large".into()));
+        }
+        let font = fonts.get(&s.font).and_then(|f| doc.dict(f)).ok_or_else(|| EditError::Invalid("a selected paragraph has no font".into()))?;
+        if vertical_encoding(doc, &font)? {
+            return Err(EditError::Invalid("vertical text cannot be transformed".into()));
+        }
+        // Tm restores both matrices to the original line start; TJ restores just Tm.
+        // Include advances from earlier shows on this line, not only this operator.
+        let line_inverse = s.tlm.invert().ok_or_else(|| EditError::Invalid("the selected text line has no area".into()))?;
+        let start = s.tm.then(&line_inverse);
+        let advance = start.0[4] + s.advance;
+        let denominator = s.state.size * s.state.scale;
+        let adjustment = if denominator.abs() > 1e-12 {
+            -1000.0 * advance / denominator
+        } else if advance == 0.0 {
+            0.0
+        } else {
+            return Err(EditError::Invalid("the paragraph's text advance cannot be restored".into()));
+        };
+        if !s.tm.0.iter().chain(s.tlm.0.iter()).chain(start.0.iter()).chain([adjustment].iter()).all(|v| v.is_finite() && v.abs() <= 1e12)
+            || start.0[5].abs() > 1e-6
+        {
+            return Err(EditError::Invalid("the paragraph's text matrices cannot be restored".into()));
+        }
+        let original = ops.get(s.op).ok_or_else(|| EditError::Invalid("a selected text operation is missing".into()))?;
+        let mut replacement = Vec::new();
+        let show = if original.is("'") || original.is("\"") {
+            if original.is("\"") {
+                let spacing = original
+                    .operands
+                    .get(..2)
+                    .filter(|a| a.iter().all(|o| o.as_f64().is_some()))
+                    .ok_or_else(|| EditError::Invalid("a text operation has invalid spacing".into()))?;
+                for (operator, operand) in ["Tw", "Tc"].into_iter().zip(spacing) {
+                    replacement.push(Op::new(operator, vec![operand.clone()]));
+                }
+            }
+            replacement.push(Op::new("T*", vec![]));
+            Op::new("Tj", vec![original.operands.last().cloned().ok_or_else(|| EditError::Invalid("a text operation has no string".into()))?])
+        } else {
+            original.clone()
+        };
+        replacement.extend([
+            Op::new("ET", vec![]),
+            Op::new("q", vec![]),
+            Op::new("cm", local.0.map(Object::Real).to_vec()),
+            Op::new("BT", vec![]),
+            Op::new("Tm", s.tm.0.map(Object::Real).to_vec()),
+            show,
+            Op::new("ET", vec![]),
+            Op::new("Q", vec![]),
+            Op::new("BT", vec![]),
+            Op::new("Tm", s.tlm.0.map(Object::Real).to_vec()),
+            Op::new("TJ", vec![Object::Array(vec![Object::Real(adjustment)])]),
+        ]);
+        patches.insert(s.op, replacement);
+    }
+    if patches.len() != selected.len() || patches.is_empty() {
+        return Err(EditError::Invalid("the selected text cannot be transformed".into()));
+    }
+    let data = splice(&pieces, &ops, |i| patches.remove(&i).map_or((Vec::new(), true), |v| (v, false)));
+    let contents = rewritten_contents(doc, &streams, data);
+    doc.update_dict(p.obj, |d| d.set(b"Contents".to_vec(), contents))?;
+    Ok(())
+}
+
 /// Translate paragraphs together without re-encoding glyphs, changing fonts or reflowing.
 /// Numeric TJ offsets and text rise temporarily move each selected show operation, then
 /// restore both advances and rise. The PDF reader advances the original glyph bytes itself:

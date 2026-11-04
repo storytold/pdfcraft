@@ -105,6 +105,8 @@ pub(crate) fn check_permission(edit: &Edit, p: &pdfcraft_cos::Permissions) -> Re
         | Edit::AddImage { .. }
         | Edit::UpdateContent { .. }
         | Edit::MoveObjects { .. }
+        | Edit::ScaleObject { .. }
+        | Edit::RotateObject { .. }
         | Edit::DeleteContent { .. }
         | Edit::ReplaceImage { .. }
         | Edit::PasteContent { .. }
@@ -690,6 +692,8 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
             pdfcraft_edit::stamp(doc, *page, "OCR", pdfcraft_ocr::text_layer(words))?;
         }
         Edit::EditPageImage { page, index, change } => run_edit_page_image(doc, *page, *index, change)?,
+        Edit::ScaleObject { page, object, factor, pivot } => pdfcraft_edit::scale_object(doc, *page, *object, *factor, *pivot)?,
+        Edit::RotateObject { page, object, degrees } => pdfcraft_edit::rotate_object(doc, *page, *object, *degrees)?,
         Edit::MoveObjects { page, objects, offset } => pdfcraft_edit::move_objects(doc, *page, objects, *offset)?,
         Edit::EditTextBlock { page, block, text, style } => {
             pdfcraft_edit::rewrite_block(doc, *page, *block, Some(text), style)?;

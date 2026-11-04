@@ -111,6 +111,11 @@ pub struct ContentView {
 }
 
 impl ContentView {
+    /// Whether the existing content handler owns a drag on this page.
+    pub(crate) fn dragging(&self, page: usize) -> bool {
+        self.grab.is_some_and(|(p, _, _)| p == page)
+    }
+
     /// Forget an in-progress pointer grab for content editing.
     pub(crate) fn cancel_pointer_gesture(&mut self) {
         self.grab = None;
@@ -180,7 +185,7 @@ impl MoveBackground {
             if let Some((_, page, index)) = key {
                 self.renderer = doc.added_content_preview(page, index).ok().map(|p| p.renderer());
                 self.item_renderer = doc.added_content_alone(page, index).ok().map(|p| p.renderer());
-                self.from = on_page(doc.added(), page).into_iter().find(|(i, _)| *i == index).map(|(_, a)| a.content.rect());
+                self.from = on_page(doc.added(), page).into_iter().find(|(i, _)| *i == index).map(|(_, a)| a.display_rect());
                 self.picture = picture(page, index);
             }
         }
@@ -318,7 +323,7 @@ pub(crate) fn hits_added(xf: &PageXform, info: &DocInfo, page: usize, added: &[A
     on_page(added, page)
         .iter()
         .filter(|(_, a)| matches!(a.content, AddedContent::Text(_)))
-        .any(|(_, a)| screen_rect(xf, info, page, a.content.rect()).expand(2.0).contains(point))
+        .any(|(_, a)| screen_rect(xf, info, page, a.display_rect()).expand(2.0).contains(point))
 }
 
 fn handles(r: Rect) -> [(Pos2, bool, bool); 4] {
@@ -361,12 +366,12 @@ pub(crate) fn hit(xf: &PageXform, info: &DocInfo, page: usize, added: &[Added], 
     let items: Vec<(usize, &Added)> = on_page(added, page).into_iter().filter(|(_, a)| matches!(a.content, AddedContent::Text(_))).collect();
     let selected = view.content.selected.filter(|s| s.0 == page).and_then(|(_, si)| items.iter().find(|(i, _)| *i == si));
     if let Some((index, a)) = selected
-        && let Some((_, left, top)) = handles(screen_rect(xf, info, page, a.content.rect())).into_iter().find(|(c, ..)| c.distance(p) <= 6.0)
+        && let Some((_, left, top)) = handles(screen_rect(xf, info, page, a.display_rect())).into_iter().find(|(c, ..)| c.distance(p) <= 6.0)
     {
         let icon = if left == top { egui::CursorIcon::ResizeNwSe } else { egui::CursorIcon::ResizeNeSw };
         return Some(Hit::new(Owner::Added { index: *index, corner: Some((left, top)) }, Layer::Handle, icon));
     }
-    let (index, _) = items.iter().rev().find(|(_, a)| screen_rect(xf, info, page, a.content.rect()).expand(2.0).contains(p))?;
+    let (index, _) = items.iter().rev().find(|(_, a)| screen_rect(xf, info, page, a.display_rect()).expand(2.0).contains(p))?;
     Some(Hit::new(Owner::Added { index: *index, corner: None }, Layer::Placed, egui::CursorIcon::Move))
 }
 
@@ -396,9 +401,19 @@ pub(crate) fn page_input(
                 && let Some((_, a)) = on_page(added, page).into_iter().find(|(i, a)| *i == si && matches!(a.content, AddedContent::Text(_)))
                 && (end - start).length() >= 1.0
             {
-                let r = dragged(screen_rect(xf, info, page, a.content.rect()), grab, end - start, false);
+                let r = dragged(screen_rect(xf, info, page, a.display_rect()), grab, end - start, false);
                 let (p0, p1) = (to_display(xf, info, page, r.left_bottom()), to_display(xf, info, page, r.right_top()));
                 let mut rect = [p0[0], p0[1], p1[0], p1[1]];
+                if a.rotation != 0.0 {
+                    let from = a.display_rect();
+                    let base = a.content.rect();
+                    let dx = (rect[0] + rect[2] - from[0] - from[2]) / 2.0;
+                    let dy = (rect[1] + rect[3] - from[1] - from[3]) / 2.0;
+                    let scale = if grab == Grab::Move { 1.0 } else { ((rect[2] - rect[0]) / (from[2] - from[0]).max(0.01)).max(0.05) };
+                    let (cx, cy) = ((base[0] + base[2]) / 2.0 + dx, (base[1] + base[3]) / 2.0 + dy);
+                    let (w, h) = ((base[2] - base[0]) * scale / 2.0, (base[3] - base[1]) * scale / 2.0);
+                    rect = [cx - w, cy - h, cx + w, cy + h];
+                }
                 if let AddedContent::Text(t) = &a.content
                     && grab == Grab::Move
                 {
@@ -412,12 +427,12 @@ pub(crate) fn page_input(
     }
     let Some(p) = pointer.filter(|p| xf.rect.contains(*p)) else { return consumed };
     let items: Vec<(usize, &Added)> = on_page(added, page).into_iter().filter(|(_, a)| matches!(a.content, AddedContent::Text(_))).collect();
-    let hit = items.iter().rev().find(|(_, a)| screen_rect(xf, info, page, a.content.rect()).expand(2.0).contains(p)).map(|(i, a)| (*i, *a));
+    let hit = items.iter().rev().find(|(_, a)| screen_rect(xf, info, page, a.display_rect()).expand(2.0).contains(p)).map(|(i, a)| (*i, *a));
     let selected_rect = cv
         .selected
         .filter(|s| s.0 == page)
         .and_then(|(_, si)| items.iter().find(|(i, _)| *i == si))
-        .map(|(_, a)| screen_rect(xf, info, page, a.content.rect()));
+        .map(|(_, a)| screen_rect(xf, info, page, a.display_rect()));
     let corner = selected_rect.and_then(|r| handles(r).into_iter().find(|(c, ..)| c.distance(p) <= 6.0));
     if adding_text && hit.is_none() {
         view.cursor.claim(Layer::ToolArea, egui::CursorIcon::Text);
@@ -515,6 +530,9 @@ pub(crate) fn paint_page(
     view: &DocView,
     pointer: Option<Pos2>,
 ) {
+    if view.object_rotation.dragging(page) {
+        return;
+    }
     let cv = &view.content;
     for (i, a) in on_page(added, page) {
         if matches!(a.content, AddedContent::Image(_)) {
@@ -523,7 +541,7 @@ pub(crate) fn paint_page(
         if cv.draft.as_ref().is_some_and(|d| d.page == page && d.index == Some(i)) {
             continue;
         }
-        let mut r = screen_rect(xf, info, page, a.content.rect());
+        let mut r = screen_rect(xf, info, page, a.display_rect());
         let selected = cv.selected == Some((page, i));
         if selected
             && let (Some((gp, g, start)), Some(p)) = (cv.grab, pointer)

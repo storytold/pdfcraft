@@ -323,6 +323,58 @@ impl Automation {
         Ok(json!({"page":page+1,"generation":doc.edit_generation(),"count":items.len(),"objects":items}))
     }
 
+    /// Validate target generation and displayed coordinates before dispatching rotate or scale.
+    pub(crate) fn object_transform(&mut self, a: &Args, scaling: bool) -> Result<Value> {
+        use pdfcraft_engine::{ObjectKind, ObjectTarget};
+        let page = self.page(a)?;
+        let kind = match a.get("kind").and_then(Value::as_str) {
+            Some("added") => ObjectKind::Added,
+            Some("text") => ObjectKind::Text,
+            Some("image") => ObjectKind::Image,
+            _ => return Err(bad("kind must be added, text or image (see object_list)")),
+        };
+        let index = a
+            .get("index")
+            .and_then(Value::as_u64)
+            .and_then(|i| i.checked_sub(1))
+            .and_then(|i| usize::try_from(i).ok())
+            .ok_or_else(|| bad("index must be a positive integer from object_list"))?;
+        let degrees = if scaling {
+            0.0
+        } else {
+            a.get("degrees")
+                .and_then(Value::as_f64)
+                .filter(|d| d.is_finite() && d.abs() <= 36000.0)
+                .ok_or_else(|| bad("degrees must be finite and between -36000 and 36000 (clockwise)"))?
+        };
+        let doc = self.doc(a)?;
+        if let Some(g) = a.get("generation") {
+            let g = g.as_u64().ok_or_else(|| bad("generation must be a non-negative integer from object_list"))?;
+            if g != doc.edit_generation() {
+                return Err(failed("the document changed; call object_list again before transforming"));
+            }
+        }
+        if scaling {
+            let factor = a
+                .get("factor")
+                .and_then(Value::as_f64)
+                .filter(|f| f.is_finite() && (0.01..=100.0).contains(f))
+                .ok_or_else(|| bad("factor must be between 0.01 and 100"))?;
+            let p = a
+                .get("pivot")
+                .and_then(Value::as_array)
+                .filter(|p| p.len() == 2)
+                .and_then(|p| Some([p.first()?.as_f64()?, p.get(1)?.as_f64()?]))
+                .filter(|p| p.iter().all(|v| v.is_finite() && v.abs() <= 1e9))
+                .ok_or_else(|| bad("pivot must be two finite displayed coordinates"))?;
+            let info = doc.info.pages.get(page).ok_or_else(|| bad("page no longer exists"))?;
+            let pivot = info.view_to_user(p[0] as f32, p[1] as f32).map(f64::from);
+            self.apply(a, Edit::ScaleObject { page, object: ObjectTarget { kind, index }, factor, pivot })
+        } else {
+            self.apply(a, Edit::RotateObject { page, object: ObjectTarget { kind, index }, degrees })
+        }
+    }
+
     pub(crate) fn object_move(&mut self, a: &Args) -> Result<Value> {
         use pdfcraft_engine::{MAX_MOVE_OBJECTS, ObjectKind, ObjectTarget};
         let page = self.page(a)?;

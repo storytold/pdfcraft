@@ -209,10 +209,20 @@ impl AddedImage {
 /// An added item on a page.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Added {
+    /// Clockwise rotation about the content box centre, in displayed degrees.
+    pub rotation: f64,
     pub page: usize,
     /// The item's content stream.
     pub obj: ObjRef,
     pub content: Content,
+}
+
+impl Added {
+    /// Axis-aligned visible selection bounds in display space, including arbitrary rotation.
+    pub fn display_rect(&self) -> [f64; 4] {
+        let r = self.content.rect();
+        crate::objects::rotation_matrix([(r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0], self.rotation).bbox(r)
+    }
 }
 
 /// PdfCraft-owned page content discovered in one page/content traversal.

@@ -399,6 +399,19 @@ pub enum Edit {
         index: usize,
         change: ImageEdit,
     },
+    /// Clockwise rotation about an object's centre. One undo step; source text stays text.
+    RotateObject {
+        page: usize,
+        object: ObjectTarget,
+        degrees: f64,
+    },
+    /// Uniform scale about a user-space pivot, retaining editable content and rotation.
+    ScaleObject {
+        page: usize,
+        object: ObjectTarget,
+        factor: f64,
+        pivot: [f64; 2],
+    },
     /// Move mixed existing and added objects together. References resolve before any change;
     /// offset is a user-space vector. No retyping, reflow or font substitution is involved.
     MoveObjects {
