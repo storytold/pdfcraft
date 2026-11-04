@@ -10349,7 +10349,13 @@ fn redacting_an_optimized_jbig2_page_stores_the_rest_of_its_group_again() {
     assert_eq!(globals(&doc, images[2]), None, "the DeviceN page is coded alone");
     pdfcraft_redact::apply(&mut doc, None).unwrap();
     let saved = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
-    let named = saved.scan_objects().filter(|(_, o)| matches!(&**o, Object::Stream(s) if saved.jbig2_globals_ref(s).is_some())).count();
+    // Named in any spelling of its parameters: the stream's dictionary holds the key.
+    let names = |s: &Stream| {
+        let mut bytes = Vec::new();
+        pdfcraft_cos::serialize(&Object::Dict(s.dict.clone()), &mut bytes);
+        bytes.windows(12).any(|w| w == b"JBIG2Globals")
+    };
+    let named = saved.scan_objects().filter(|(_, o)| matches!(&**o, Object::Stream(s) if names(s))).count();
     assert_eq!(named, 0, "no image names the dictionary, which left with them");
 }
 
