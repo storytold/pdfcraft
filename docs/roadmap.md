@@ -308,6 +308,7 @@ Estimates unchanged.
 | Date | Change | Summary |
 |---|---|---|
 | 2026-11-04 | patch | #1172: merge main after the catalogs moved to craft-i18n; the Explorer menu labels (MUIVerb 1001–1003) now come from `CRAFT_I18N_DIR` `locales/<code>/pdfcraft.tsv`, English without a checkout or for a locale missing one. Estimates unchanged. |
+| 2026-11-03 | minor | M11: Optimize's JBIG2 images share a symbol dictionary (`/JBIG2Globals`), up to 16 at a time and when smaller (`pdfcraft_filters::encode_jbig2_shared`): 41–46% smaller on rendered text in proportional fonts, 10% in Courier |
 | 2026-11-03 | patch | M5 #5850 review: indirect typewriter intent and composer edits preserve outer whitespace; movement regression commits by outside click; estimates unchanged. |
 | 2026-11-03 | patch | M5 #5850: Enter adds Fill & Sign line breaks; outside clicks commit, Escape cancels, and saved multiline appearances retain their text and height; estimates unchanged. |
 | 2026-11-03 | patch | #1172: merge current main; the Explorer arrival-order test opens Rotate Pages after the harness's first accessibility-checked run (FreeBSD CI). Estimates unchanged. |
