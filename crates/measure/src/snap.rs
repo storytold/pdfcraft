@@ -5,19 +5,42 @@ use pdfcraft_cos::{Dict, Document, ObjRef, Object};
 use serde::Serialize;
 use std::collections::HashSet;
 
-const MAX_SEGMENTS: usize = 20_000;
-/// Endpoints and midpoints together, across the whole page.
-const MAX_TARGETS: usize = 2 * MAX_SEGMENTS;
-const MAX_BYTES: usize = 16 * 1024 * 1024;
+/// Open subpaths remembered for a fill, which closes each of them.
+const MAX_OPEN_SUBPATHS: usize = Limits::DEFAULT.segments;
+/// How much of a page extraction reads and keeps.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Limits {
+    /// Straight segments (curves are split into several).
+    pub segments: usize,
+    /// Endpoints and midpoints together, across the whole page.
+    pub targets: usize,
+    /// Decoded content bytes, across every stream read.
+    pub bytes: usize,
+}
+impl Limits {
+    /// Enough for heavy CAD sheets (several million segments), and
+    /// the renderer's own content limit. At about 40 bytes a segment, the cap holds ~320 MB.
+    pub const DEFAULT: Self = Self { segments: 8_000_000, targets: 24_000_000, bytes: 512 << 20 };
+}
+impl Default for Limits {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
+}
+/// The page's drawn geometry in user space, compactly (`f32`: about 0.0003 units of precision at
+/// A0 sizes), with a grid index so that a snap looks only near the pointer.
 #[derive(Clone, Debug, Default)]
 pub struct Geometry {
-    pub segments: Vec<[Point; 2]>,
-    pub endpoints: Vec<Point>,
-    pub midpoints: Vec<Point>,
+    /// Segments as `[ax, ay, bx, by]`.
+    segs: Vec<[f32; 4]>,
+    /// Snap targets: a straight edge's or curve's two ends, then its midpoint.
+    tgts: Vec<[f32; 6]>,
     /// A limit stopped extraction early (segments, targets, bytes, streams, nesting).
     pub truncated: bool,
     /// Content streams that couldn't be decoded and were skipped.
     pub unreadable: usize,
+    limits: Limits,
+    grid: Grid,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -80,7 +103,7 @@ fn remember_close(closures: &mut Vec<[Point; 2]>, current: Option<Point>, start:
     if let (Some(a), Some(b)) = (current, start)
         && distance(a, b) > 1e-9
     {
-        if closures.len() >= MAX_SEGMENTS {
+        if closures.len() >= MAX_OPEN_SUBPATHS {
             return false;
         }
         closures.push([a, b]);
@@ -88,10 +111,42 @@ fn remember_close(closures: &mut Vec<[Point; 2]>, current: Option<Point>, start:
     true
 }
 
+fn seg(s: &[f32; 4]) -> [Point; 2] {
+    [[f64::from(s[0]), f64::from(s[1])], [f64::from(s[2]), f64::from(s[3])]]
+}
+fn pt(x: f32, y: f32) -> Point {
+    [f64::from(x), f64::from(y)]
+}
 impl Geometry {
+    fn with_limits(limits: Limits) -> Self {
+        Self { limits, ..Self::default() }
+    }
+    /// How many segments were kept.
+    pub fn segment_count(&self) -> usize {
+        self.segs.len()
+    }
+    /// The segments, in drawing order.
+    pub fn segments(&self) -> impl ExactSizeIterator<Item = [Point; 2]> + '_ {
+        self.segs.iter().map(seg)
+    }
+    /// Snap endpoints: each edge's or curve's two ends, in drawing order.
+    pub fn endpoints(&self) -> impl Iterator<Item = Point> + '_ {
+        self.tgts.iter().flat_map(|t| [pt(t[0], t[1]), pt(t[2], t[3])])
+    }
+    /// Snap midpoints: each edge's or curve's middle, in drawing order.
+    pub fn midpoints(&self) -> impl Iterator<Item = Point> + '_ {
+        self.tgts.iter().map(|t| pt(t[4], t[5]))
+    }
     /// Dense intersection searches are capped independently from path extraction.
     pub fn intersection_limited(&self, at: Point, tolerance: f64) -> bool {
-        self.segments.iter().filter(|[a, b]| distance(at, nearest(at, *a, *b)) <= tolerance).take(257).count() > 256
+        let (segs, _) = self.grid.near(self, at, tolerance);
+        segs.iter()
+            .filter_map(|&i| self.segs.get(i as usize))
+            .map(seg)
+            .filter(|[a, b]| distance(at, nearest(at, *a, *b)) <= tolerance)
+            .take(257)
+            .count()
+            > 256
     }
     pub fn snap(&self, at: Point, tolerance: f64, options: SnapOptions) -> Result<Option<Snap>> {
         check_points(&[at])?;
@@ -106,19 +161,25 @@ impl Geometry {
                 *best = Some(Snap { point: p, kind, distance });
             }
         };
+        // Only what the grid finds near the pointer: everything within `tolerance` is there, in
+        // drawing order, so the result is the one a scan of the whole page would give.
+        let (segs, tgts) = self.grid.near(self, at, tolerance);
+        let targets: Vec<&[f32; 6]> = tgts.iter().filter_map(|&i| self.tgts.get(i as usize)).collect();
         if options.endpoints {
-            for &p in &self.endpoints {
-                consider(&mut best, p, SnapKind::Endpoint);
+            for t in &targets {
+                consider(&mut best, pt(t[0], t[1]), SnapKind::Endpoint);
+                consider(&mut best, pt(t[2], t[3]), SnapKind::Endpoint);
             }
         }
         if options.midpoints {
-            for &p in &self.midpoints {
-                consider(&mut best, p, SnapKind::Midpoint);
+            for t in &targets {
+                consider(&mut best, pt(t[4], t[5]), SnapKind::Midpoint);
             }
         }
+        let near: Vec<[Point; 2]> = segs.iter().filter_map(|&i| self.segs.get(i as usize)).map(seg).collect();
         // Only segments in the pointer's neighbourhood participate in intersection tests.
         // Cap the local quadratic work even on a malicious densely overlapping drawing.
-        let local: Vec<_> = self.segments.iter().filter(|[a, b]| distance(at, nearest(at, *a, *b)) <= tolerance).take(256).collect();
+        let local: Vec<_> = near.iter().filter(|[a, b]| distance(at, nearest(at, *a, *b)) <= tolerance).take(256).collect();
         if options.intersections {
             for (i, s) in local.iter().enumerate() {
                 for t in local.iter().skip(i + 1) {
@@ -129,35 +190,36 @@ impl Geometry {
             }
         }
         if options.paths && best.is_none() {
-            for [a, b] in &self.segments {
+            for [a, b] in &near {
                 consider(&mut best, nearest(at, *a, *b), SnapKind::Path);
             }
         }
         Ok(best)
     }
+    /// Endpoints and midpoints together.
     fn targets(&self) -> usize {
-        self.endpoints.len().saturating_add(self.midpoints.len())
+        self.tgts.len().saturating_mul(3)
     }
     /// Whether the segment was accepted (finite, non-degenerate and within the cap).
     fn segment(&mut self, a: Point, b: Point) -> bool {
-        if self.segments.len() >= MAX_SEGMENTS {
+        if self.segs.len() >= self.limits.segments {
             self.truncated = true;
             return false;
         }
         if check_points(&[a, b]).is_ok() && distance(a, b) > 1e-9 {
-            self.segments.push([a, b]);
+            self.segs.push([a[0] as f32, a[1] as f32, b[0] as f32, b[1] as f32]);
             return true;
         }
         false
     }
     /// Snap targets are recorded only for accepted geometry, and are capped.
     fn target(&mut self, ends: [Point; 2], mid: Point) {
-        if self.targets() >= MAX_TARGETS {
+        if self.targets() >= self.limits.targets {
             self.truncated = true;
             return;
         }
-        self.endpoints.extend(ends);
-        self.midpoints.push(mid);
+        let [a, b] = ends;
+        self.tgts.push([a[0] as f32, a[1] as f32, b[0] as f32, b[1] as f32, mid[0] as f32, mid[1] as f32]);
     }
     fn edge(&mut self, a: Point, b: Point) {
         if self.segment(a, b) {
@@ -166,7 +228,7 @@ impl Geometry {
     }
     fn curve(&mut self, points: [Point; 4], depth: usize) {
         let [a, b, c, d] = points;
-        if self.segments.len() >= MAX_SEGMENTS {
+        if self.segs.len() >= self.limits.segments {
             self.truncated = true;
             return;
         }
@@ -195,6 +257,7 @@ struct Walker<'a> {
     seen: HashSet<ObjRef>,
     bytes: usize,
     streams: usize,
+    limits: Limits,
 }
 impl Walker<'_> {
     fn walk(&mut self, object: &Object, resources: &Dict, initial: Matrix, depth: usize) -> Result<()> {
@@ -209,7 +272,7 @@ impl Walker<'_> {
             for part in arr {
                 let s = self.doc.resolve(part);
                 if let Object::Stream(s) = s.as_ref() {
-                    let remaining = MAX_BYTES.saturating_sub(self.bytes).saturating_sub(joined.len());
+                    let remaining = self.limits.bytes.saturating_sub(self.bytes).saturating_sub(joined.len());
                     if remaining == 0 {
                         self.geometry.truncated = true;
                         break;
@@ -228,7 +291,7 @@ impl Walker<'_> {
             return self.ops(&joined, resources, initial, depth);
         }
         let Object::Stream(stream) = o.as_ref() else { return Ok(()) };
-        let remaining = MAX_BYTES.saturating_sub(self.bytes);
+        let remaining = self.limits.bytes.saturating_sub(self.bytes);
         if remaining == 0 {
             self.geometry.truncated = true;
             return Ok(());
@@ -255,7 +318,7 @@ impl Walker<'_> {
         let mut start = None;
         let mut current = None;
         let mut closures = Vec::new();
-        let mut path = Geometry::default();
+        let mut path = Geometry::with_limits(self.limits);
         // Read on the first `Do` and kept: resolving a direct dictionary copies it.
         let mut xobjects = None;
         let point = |m: Matrix, x: f64, y: f64| {
@@ -263,8 +326,8 @@ impl Walker<'_> {
             [x, y]
         };
         for op in parse(data).ops {
-            if self.geometry.segments.len().saturating_add(path.segments.len()) >= MAX_SEGMENTS
-                || self.geometry.targets().saturating_add(path.targets()) >= MAX_TARGETS
+            if self.geometry.segs.len().saturating_add(path.segs.len()) >= self.limits.segments
+                || self.geometry.targets().saturating_add(path.targets()) >= self.limits.targets
             {
                 self.geometry.truncated = true;
                 break;
@@ -320,9 +383,9 @@ impl Walker<'_> {
                         if let Some([a, b, c, d]) = curve
                             && check_points(&[a, b, c, d]).is_ok()
                         {
-                            let before = path.segments.len();
+                            let before = path.segs.len();
                             path.curve([a, b, c, d], 0);
-                            if path.segments.len() > before {
+                            if path.segs.len() > before {
                                 path.target([a, d], [(a[0] + 3.0 * b[0] + 3.0 * c[0] + d[0]) / 8.0, (a[1] + 3.0 * b[1] + 3.0 * c[1] + d[1]) / 8.0]);
                             }
                             current = Some(d);
@@ -362,8 +425,8 @@ impl Walker<'_> {
                         // Filling implicitly closes every open subpath, not just the last one.
                         // Stroke-only S leaves its open subpaths unchanged.
                         for [a, b] in closures.drain(..) {
-                            if self.geometry.segments.len().saturating_add(path.segments.len()) >= MAX_SEGMENTS
-                                || self.geometry.targets().saturating_add(path.targets()) >= MAX_TARGETS
+                            if self.geometry.segs.len().saturating_add(path.segs.len()) >= self.limits.segments
+                                || self.geometry.targets().saturating_add(path.targets()) >= self.limits.targets
                             {
                                 path.truncated = true;
                                 break;
@@ -375,9 +438,8 @@ impl Walker<'_> {
                     {
                         path.edge(a, b);
                     }
-                    self.geometry.segments.append(&mut path.segments);
-                    self.geometry.endpoints.append(&mut path.endpoints);
-                    self.geometry.midpoints.append(&mut path.midpoints);
+                    self.geometry.segs.append(&mut path.segs);
+                    self.geometry.tgts.append(&mut path.tgts);
                     self.geometry.truncated |= path.truncated;
                     closures.clear();
                     current = None;
@@ -385,7 +447,7 @@ impl Walker<'_> {
                 }
                 "n" => {
                     self.geometry.truncated |= path.truncated;
-                    path = Geometry::default();
+                    path = Geometry::with_limits(self.limits);
                     closures.clear();
                     current = None;
                     start = None;
@@ -438,15 +500,207 @@ thread_local! {
     pub(crate) static XOBJECT_DICT_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
+/// The page's geometry for snapping, within [`Limits::DEFAULT`].
 pub fn geometry(doc: &Document, page_index: usize) -> Result<Geometry> {
+    geometry_with_limits(doc, page_index, Limits::DEFAULT)
+}
+
+/// The page's geometry for snapping, within `limits`.
+pub fn geometry_with_limits(doc: &Document, page_index: usize, limits: Limits) -> Result<Geometry> {
     let p = crate::page(doc, page_index)?;
     let resources = p.dict.get(b"Resources").map(|o| doc.resolve(o));
     let empty = Dict::new();
     let resources = resources.as_ref().and_then(|o| o.as_dict()).unwrap_or(&empty);
-    let mut walker = Walker { doc, geometry: Geometry::default(), seen: HashSet::new(), bytes: 0, streams: 0 };
+    let mut walker = Walker { doc, geometry: Geometry::with_limits(limits), seen: HashSet::new(), bytes: 0, streams: 0, limits };
     // Extraction is lenient: limits and unreadable streams are reported in the geometry.
     if let Some(contents) = p.dict.get(b"Contents") {
         walker.walk(contents, resources, Matrix::IDENTITY, 0)?;
     }
-    Ok(walker.geometry)
+    let mut geometry = walker.geometry;
+    geometry.segs.shrink_to_fit();
+    geometry.tgts.shrink_to_fit();
+    geometry.grid = Grid::build(&geometry);
+    Ok(geometry)
+}
+
+/// The most cells a side of the grid has.
+const GRID_SIDE: usize = 1024;
+/// A segment whose box covers more cells than this is kept in one list checked at every snap
+/// (a long line would otherwise fill a whole row of cells).
+const WIDE_CELLS: usize = 64;
+/// The most cells one snap reads; a larger search area (a huge tolerance) scans everything.
+const MAX_QUERY_CELLS: usize = 4096;
+
+/// A uniform grid over the geometry's box: per cell, the segments and targets touching it.
+#[derive(Clone, Debug, Default)]
+struct Grid {
+    x0: f32,
+    y0: f32,
+    cell: f32,
+    cols: usize,
+    rows: usize,
+    /// Per cell, where its segment indices start in `seg_items` (one more entry than cells).
+    seg_start: Vec<u32>,
+    seg_items: Vec<u32>,
+    tgt_start: Vec<u32>,
+    tgt_items: Vec<u32>,
+    /// Segments too long for the cells.
+    wide: Vec<u32>,
+}
+
+impl Grid {
+    fn build(g: &Geometry) -> Self {
+        let mut bounds: Option<[f32; 4]> = None;
+        let mut grow = |x: f32, y: f32| {
+            let b = bounds.get_or_insert([x, y, x, y]);
+            *b = [b[0].min(x), b[1].min(y), b[2].max(x), b[3].max(y)];
+        };
+        for s in &g.segs {
+            grow(s[0], s[1]);
+            grow(s[2], s[3]);
+        }
+        for t in &g.tgts {
+            grow(t[0], t[1]);
+            grow(t[2], t[3]);
+            grow(t[4], t[5]);
+        }
+        let Some([x0, y0, x1, y1]) = bounds else { return Self::default() };
+        let items = g.segs.len().max(g.tgts.len()).max(1);
+        // About eight items a cell.
+        let side = ((items as f64 / 8.0).sqrt().ceil() as usize).clamp(1, GRID_SIDE);
+        let extent = (x1 - x0).max(y1 - y0).max(1e-3);
+        let cell = extent / side as f32;
+        let cols = (((x1 - x0) / cell) as usize + 1).min(GRID_SIDE);
+        let rows = (((y1 - y0) / cell) as usize + 1).min(GRID_SIDE);
+        let mut grid = Self { x0, y0, cell, cols, rows, ..Self::default() };
+        let cells = cols * rows;
+        // Segments: count, then fill (compressed rows).
+        let seg_cells = |s: &[f32; 4]| grid.range(s[0].min(s[2]), s[1].min(s[3]), s[0].max(s[2]), s[1].max(s[3]));
+        let mut counts = vec![0u32; cells];
+        let mut wide = Vec::new();
+        for (i, s) in g.segs.iter().enumerate() {
+            let (c0, r0, c1, r1) = seg_cells(s);
+            if (c1 - c0 + 1) * (r1 - r0 + 1) > WIDE_CELLS {
+                wide.push(i as u32);
+                continue;
+            }
+            for r in r0..=r1 {
+                for c in c0..=c1 {
+                    counts[r * cols + c] += 1;
+                }
+            }
+        }
+        let (seg_start, mut fill) = Self::starts(&counts);
+        let mut seg_items = vec![0u32; seg_start.last().copied().unwrap_or(0) as usize];
+        for (i, s) in g.segs.iter().enumerate() {
+            let (c0, r0, c1, r1) = seg_cells(s);
+            if (c1 - c0 + 1) * (r1 - r0 + 1) > WIDE_CELLS {
+                continue;
+            }
+            for r in r0..=r1 {
+                for c in c0..=c1 {
+                    let k = r * cols + c;
+                    seg_items[fill[k] as usize] = i as u32;
+                    fill[k] += 1;
+                }
+            }
+        }
+        // Targets: the cells of their three points.
+        let tgt_cells = |t: &[f32; 6]| {
+            let mut cs = [grid.cell_of(t[0], t[1]), grid.cell_of(t[2], t[3]), grid.cell_of(t[4], t[5])];
+            cs.sort_unstable();
+            cs
+        };
+        let mut counts = vec![0u32; cells];
+        for t in &g.tgts {
+            let cs = tgt_cells(t);
+            for (j, &k) in cs.iter().enumerate() {
+                if j == 0 || cs[j - 1] != k {
+                    counts[k] += 1;
+                }
+            }
+        }
+        let (tgt_start, mut fill) = Self::starts(&counts);
+        let mut tgt_items = vec![0u32; tgt_start.last().copied().unwrap_or(0) as usize];
+        for (i, t) in g.tgts.iter().enumerate() {
+            let cs = tgt_cells(t);
+            for (j, &k) in cs.iter().enumerate() {
+                if j == 0 || cs[j - 1] != k {
+                    tgt_items[fill[k] as usize] = i as u32;
+                    fill[k] += 1;
+                }
+            }
+        }
+        grid.seg_start = seg_start;
+        grid.seg_items = seg_items;
+        grid.tgt_start = tgt_start;
+        grid.tgt_items = tgt_items;
+        grid.wide = wide;
+        grid
+    }
+
+    /// Prefix sums of `counts` (the starts), and a copy to fill from.
+    fn starts(counts: &[u32]) -> (Vec<u32>, Vec<u32>) {
+        let mut start = Vec::with_capacity(counts.len() + 1);
+        let mut total = 0u32;
+        start.push(0);
+        for &c in counts {
+            total = total.saturating_add(c);
+            start.push(total);
+        }
+        let fill = start[..counts.len()].to_vec();
+        (start, fill)
+    }
+
+    fn col(&self, x: f32) -> usize {
+        (((x - self.x0) / self.cell).max(0.0) as usize).min(self.cols.saturating_sub(1))
+    }
+    fn row(&self, y: f32) -> usize {
+        (((y - self.y0) / self.cell).max(0.0) as usize).min(self.rows.saturating_sub(1))
+    }
+    fn cell_of(&self, x: f32, y: f32) -> usize {
+        self.row(y) * self.cols + self.col(x)
+    }
+    /// The cells (first and last column, first and last row) a box covers.
+    fn range(&self, x0: f32, y0: f32, x1: f32, y1: f32) -> (usize, usize, usize, usize) {
+        (self.col(x0), self.row(y0), self.col(x1), self.row(y1))
+    }
+
+    /// The segments and targets near `at` (all within `tolerance` of it, and maybe more), each
+    /// list in drawing order without repeats.
+    fn near(&self, g: &Geometry, at: Point, tolerance: f64) -> (Vec<u32>, Vec<u32>) {
+        let all = || ((0..g.segs.len() as u32).collect(), (0..g.tgts.len() as u32).collect());
+        if self.cols == 0 || self.rows == 0 {
+            return if g.segs.is_empty() && g.tgts.is_empty() { (Vec::new(), Vec::new()) } else { all() };
+        }
+        let t = tolerance as f32;
+        let (x, y) = (at[0] as f32, at[1] as f32);
+        if !(x.is_finite() && y.is_finite() && t.is_finite()) {
+            return all();
+        }
+        let (c0, r0, c1, r1) = self.range(x - t, y - t, x + t, y + t);
+        // Entirely outside the grid: nothing is near (except wide segments).
+        let outside =
+            x + t < self.x0 || y + t < self.y0 || x - t > self.x0 + self.cell * self.cols as f32 || y - t > self.y0 + self.cell * self.rows as f32;
+        if (c1 - c0 + 1) * (r1 - r0 + 1) > MAX_QUERY_CELLS {
+            return all();
+        }
+        let mut segs: Vec<u32> = self.wide.clone();
+        let mut tgts: Vec<u32> = Vec::new();
+        if !outside {
+            for r in r0..=r1 {
+                for c in c0..=c1 {
+                    let k = r * self.cols + c;
+                    let range = |start: &[u32]| (start[k] as usize)..(start[k + 1] as usize);
+                    segs.extend_from_slice(self.seg_items.get(range(&self.seg_start)).unwrap_or(&[]));
+                    tgts.extend_from_slice(self.tgt_items.get(range(&self.tgt_start)).unwrap_or(&[]));
+                }
+            }
+        }
+        segs.sort_unstable();
+        segs.dedup();
+        tgts.sort_unstable();
+        tgts.dedup();
+        (segs, tgts)
+    }
 }
