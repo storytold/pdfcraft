@@ -1300,7 +1300,7 @@ fn errors_are_specific_and_safe() {
     assert!(matches!(err(&mut a, "page_delete", json!({ "doc": doc, "pages": [0] })), ToolError::InvalidArgs(_)));
     assert!(matches!(err(&mut a, "page_delete", json!({ "doc": doc, "page": [1] })), ToolError::InvalidArgs(m) if m.contains("unknown argument")));
     assert!(matches!(err(&mut a, "page_rotate", json!({ "doc": doc, "pages": [1], "degrees": 45 })), ToolError::InvalidArgs(_)));
-    assert!(matches!(err(&mut a, "doc_info", json!({ "doc": 99 })), ToolError::Failed(_)));
+    assert!(matches!(err(&mut a, "doc_info", json!({ "doc": i64::MAX })), ToolError::Failed(_)));
     assert!(matches!(err(&mut a, "edit_undo", json!({ "doc": doc })), ToolError::Failed(_)));
 
     // Unsaved changes are never dropped silently.
@@ -1621,14 +1621,18 @@ fn mcp_session_over_stdio() {
         json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }),
         json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }),
         json!({ "jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": { "name": "doc_open", "arguments": { "path": path } } }),
-        json!({ "jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": { "name": "page_render", "arguments": { "doc": 1, "page": 2, "dpi": 36 } } }),
     ]
     .iter()
     .map(Value::to_string)
     .collect::<Vec<_>>()
     .join("\n");
     let mut out = Vec::new();
-    McpServer::new(Automation::new()).serve(input.as_bytes(), &mut out).unwrap();
+    let mut server = McpServer::new(Automation::new());
+    server.serve(input.as_bytes(), &mut out).unwrap();
+    let opened: Value = serde_json::from_str(std::str::from_utf8(&out).unwrap().lines().last().unwrap()).unwrap();
+    let doc = opened["result"]["structuredContent"]["doc"].as_u64().unwrap();
+    let render = json!({ "jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": { "name": "page_render", "arguments": { "doc": doc, "page": 2, "dpi": 36 } } }).to_string();
+    server.serve(render.as_bytes(), &mut out).unwrap();
     let replies: Vec<Value> = String::from_utf8(out).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
     assert_eq!(replies.len(), 4, "the notification gets no reply");
 
@@ -1668,22 +1672,23 @@ fn mcp_resources_expose_open_documents() {
     assert!(rpc(&mut s, 1, "initialize", json!({}))["result"]["capabilities"]["resources"].is_object());
     assert_eq!(rpc(&mut s, 2, "resources/list", json!({}))["result"]["resources"].as_array().unwrap().len(), 2);
     assert_eq!(rpc(&mut s, 3, "resources/templates/list", json!({}))["result"]["resourceTemplates"].as_array().unwrap().len(), 4);
-    rpc(&mut s, 4, "tools/call", json!({ "name": "doc_open", "arguments": { "path": "a.pdf" } }));
+    let opened = rpc(&mut s, 4, "tools/call", json!({ "name": "doc_open", "arguments": { "path": "a.pdf" } }));
+    let doc = opened["result"]["structuredContent"]["doc"].as_u64().unwrap();
     let list = rpc(&mut s, 5, "resources/list", json!({}))["result"]["resources"].as_array().cloned().unwrap();
     assert_eq!(list.len(), 2 + 3 + 2, "info, text, three page images and two session resources");
-    assert_eq!(list[0]["uri"], "pdfcraft://doc/1/info");
+    assert_eq!(list[0]["uri"], format!("pdfcraft://doc/{doc}/info"));
     let read = |s: &mut McpServer, uri: &str| rpc(s, 6, "resources/read", json!({ "uri": uri }))["result"]["contents"][0].clone();
-    let text = read(&mut s, "pdfcraft://doc/1/text");
+    let text = read(&mut s, &format!("pdfcraft://doc/{doc}/text"));
     assert_eq!(text["mimeType"], "text/plain");
     assert!(text["text"].as_str().unwrap().contains("Page 2\nPage 2"), "{text}");
-    assert_eq!(read(&mut s, "pdfcraft://doc/1/page/3/text")["text"], "Page 3");
-    let info: Value = serde_json::from_str(read(&mut s, "pdfcraft://doc/1/info")["text"].as_str().unwrap()).unwrap();
+    assert_eq!(read(&mut s, &format!("pdfcraft://doc/{doc}/page/3/text"))["text"], "Page 3");
+    let info: Value = serde_json::from_str(read(&mut s, &format!("pdfcraft://doc/{doc}/info"))["text"].as_str().unwrap()).unwrap();
     assert_eq!(info["pages"].as_array().unwrap().len(), 3);
-    let img = read(&mut s, "pdfcraft://doc/1/page/1/image?dpi=36");
+    let img = read(&mut s, &format!("pdfcraft://doc/{doc}/page/1/image?dpi=36"));
     use base64::Engine as _;
     let png = base64::engine::general_purpose::STANDARD.decode(img["blob"].as_str().unwrap()).unwrap();
     assert_eq!(&png[1..4], b"PNG");
-    assert_eq!(rpc(&mut s, 7, "resources/read", json!({ "uri": "pdfcraft://doc/1/page/9/image" }))["error"]["code"], -32602);
+    assert_eq!(rpc(&mut s, 7, "resources/read", json!({ "uri": format!("pdfcraft://doc/{doc}/page/9/image") }))["error"]["code"], -32602);
 }
 
 /// A server in compact mode with `dir` as its root.
@@ -1797,8 +1802,10 @@ fn mcp_compact_tool_call_dispatches_to_any_tool() {
     assert_eq!(opened["result"]["isError"], false);
     assert_eq!(opened["result"]["structuredContent"]["pages"], 3);
 
+    let doc = opened["result"]["structuredContent"]["doc"].as_u64().unwrap();
+
     // A tool outside the core list, through the meta tool.
-    let deleted = via_tool_call(&mut s, 2, "page_delete", json!({ "doc": 1, "pages": [3] }));
+    let deleted = via_tool_call(&mut s, 2, "page_delete", json!({ "doc": doc, "pages": [3] }));
     assert_eq!(deleted["result"]["isError"], false, "{deleted}");
     assert_eq!(deleted["result"]["structuredContent"]["pages"], 2);
 
@@ -1808,7 +1815,7 @@ fn mcp_compact_tool_call_dispatches_to_any_tool() {
     assert_eq!(listed["result"]["structuredContent"]["documents"][0]["pages"], 2);
 
     // Images come back as images.
-    let png = via_tool_call(&mut s, 4, "page_render", json!({ "doc": 1, "page": 1, "dpi": 36 }));
+    let png = via_tool_call(&mut s, 4, "page_render", json!({ "doc": doc, "page": 1, "dpi": 36 }));
     assert_eq!(png["result"]["content"][0]["type"], "image");
 
     // `arguments` may be left out for tools that need none.
@@ -1817,8 +1824,8 @@ fn mcp_compact_tool_call_dispatches_to_any_tool() {
     assert_eq!(no_args["result"]["isError"], false);
 
     // The result equals what the direct call returns.
-    let direct = rpc(&mut s, 7, "tools/call", json!({ "name": "doc_info", "arguments": { "doc": 1 } }));
-    let wrapped = via_tool_call(&mut s, 8, "doc_info", json!({ "doc": 1 }));
+    let direct = rpc(&mut s, 7, "tools/call", json!({ "name": "doc_info", "arguments": { "doc": doc } }));
+    let wrapped = via_tool_call(&mut s, 8, "doc_info", json!({ "doc": doc }));
     assert_eq!(direct["result"], wrapped["result"]);
 }
 
@@ -7668,7 +7675,7 @@ fn print_readiness_through_tools() {
     assert_eq!(trim[0]["severity"], "info");
     assert!(trim[0]["page"].is_null(), "{r}");
     assert_eq!(ok(&mut a, "doc_info", json!({ "doc": doc })), before, "verification doesn't change the document");
-    assert!(a.call("print_readiness", &json!({ "doc": 999 })).is_err());
+    assert!(a.call("print_readiness", &json!({ "doc": i64::MAX })).is_err());
     assert!(pdfcraft_automation::tools().iter().any(|t| t.name == "print_readiness" && t.read_only));
 }
 

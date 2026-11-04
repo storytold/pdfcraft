@@ -95,6 +95,7 @@ impl PdfCraftApp {
                     .is_some_and(|v| !v.organize && (v.all_text || v.selected_text().is_some_and(|t| !t.is_empty()))))
             && (spec.needs != commands::Needs::TwoPageView || self.active.and_then(|i| self.views.get(i)).is_some_and(crate::DocView::cover_applies))
             && match spec.id {
+                "file.detach_tab" => self.active_ids().is_some_and(|(_, id)| self.can_detach_tab(id)),
                 "view.previous_view" => self.active.and_then(|i| self.views.get(i)).is_some_and(|v| !v.back.is_empty()),
                 "view.next_view" => self.active.and_then(|i| self.views.get(i)).is_some_and(|v| !v.forward.is_empty()),
                 _ => true,
@@ -195,6 +196,11 @@ impl PdfCraftApp {
                 }
             }
             "file.close_all" => self.close_all(),
+            "file.detach_tab" => {
+                if let Some((_, doc)) = self.active_ids() {
+                    self.request_detach_tab(doc, None);
+                }
+            }
             "file.revert" => self.dialog = Some(Dialog::Revert),
             "file.properties" => self.dialog = Some(Dialog::Properties(PropsTab::Description)),
             "file.word_count" => self.dialog = Some(Dialog::WordCount),

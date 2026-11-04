@@ -843,3 +843,7 @@ PR #2133 retains document-local Pages sidebar focus for Ctrl/Cmd+A and Escape af
 PR #1952 retains per-widget checkbox/radio export-value editing in the split form-authoring and Prepare modules. Caption editing remains supported. Tests cover preserved appearances and selection, invalid/locked refusals, data-format round trips, and Apply/Cancel/Undo. Current-head hosted validation is pending; feature estimates are unchanged.
 
 - **2026-10-31 (#1577):** Reconciled the page-shadow preference with split viewer, organizer, settings and control modules, preserving upstream page-gap shadow suppression. CI validation pending.
+
+- 2026-11-03 (PR #3753): Rebased tab tear-off, cross-window transfers and Organize insertion onto current main after module extraction. Retired local translation catalogs; strings are supplied by craft-i18n (storytold/craft-i18n#141). Existing feature estimates unchanged.
+
+- 2026-11-04: Tab windows: include Move Tab to New Window in the explicit File menu; regress menu completeness and native-host/modal guards.

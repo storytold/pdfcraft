@@ -118,6 +118,7 @@ const FILE: &[&str] = &[
     "file.save_as",
     "file.revert",
     SEP,
+    "file.detach_tab",
     "file.close",
     "file.close_all",
     SEP,
@@ -708,6 +709,28 @@ mod tests {
                 "{id} runs something"
             );
         }
+    }
+
+    /// The File menu follows native-host and modal guards, and queues a move without closing a document.
+    #[test]
+    fn move_tab_menu_uses_host_and_modal_guards() {
+        let command = CommandRef::new("file.detach_tab");
+        let (mut app, ctx) = app(&["a.pdf"]);
+        let id = app.views[0].id;
+        assert!(!item(&linux(&app, &ctx), &command).enabled);
+        app.run_menu_command(&ctx, &command);
+        assert!(app.detach_request.is_none());
+        app.managed_windows = true;
+        assert!(item(&linux(&app, &ctx), &command).enabled);
+        app.dialog = Some(crate::Dialog::About);
+        assert!(!app.menu_gate(&ctx).allows_command(&command));
+        app.run_menu_command(&ctx, &command);
+        assert!(app.detach_request.is_none());
+        app.dialog = None;
+        app.run_menu_command(&ctx, &command);
+        assert_eq!(app.detach_request, Some((id, None)));
+        assert!(app.session.get(id).is_some());
+        assert_eq!(app.views.len(), 1);
     }
 
     #[test]

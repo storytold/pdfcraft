@@ -3,6 +3,7 @@ use pdfcraft_engine::DocId;
 
 pub(crate) enum Action {
     Close(DocId),
+    Detach(DocId),
     Reopen,
     Reveal(DocId),
 }
@@ -14,6 +15,9 @@ impl crate::PdfCraftApp {
                 if let Some(i) = self.views.iter().position(|v| v.id == id) {
                     self.request_close_tab(i);
                 }
+            }
+            Action::Detach(id) => {
+                self.request_detach_tab(id, None);
             }
             Action::Reopen => {
                 #[cfg(not(target_arch = "wasm32"))]

@@ -105,7 +105,7 @@ fn refused(server: &mut McpServer, name: &str, args: Value, why: &str) {
     assert!(!text.contains("TOP SECRET"), "{name} {args} let the file's text through: {text}");
 }
 
-/// The text of document 1, through the resource a client can read it with.
+/// The text of a document, through the resource a client can read it with.
 fn text_of(server: &mut McpServer, doc: u64) -> String {
     rpc(server, "resources/read", json!({"uri": format!("pdfcraft://doc/{doc}/text")}))["result"]["contents"][0]["text"]
         .as_str()
@@ -123,8 +123,8 @@ fn names(dir: &Path) -> Vec<String> {
 fn files_open_only_from_inside_the_read_root() {
     let (mut server, base) = confined("open", true, true);
     let sep = std::path::MAIN_SEPARATOR;
-    ok(&mut server, "doc_open", json!({"path": s(&base.join("in/a.pdf"))}));
-    assert!(text_of(&mut server, 1).contains("Inside page"));
+    let doc = ok(&mut server, "doc_open", json!({"path": s(&base.join("in/a.pdf"))}))["doc"].as_u64().unwrap();
+    assert!(text_of(&mut server, doc).contains("Inside page"));
 
     refused(&mut server, "doc_open", json!({"path": s(&base.join("outside/secret.pdf"))}), "outside the read root");
     refused(&mut server, "doc_open", json!({"path": format!("{}{sep}..{sep}outside{sep}secret.pdf", s(&base.join("in")))}), "outside the read root");
@@ -142,36 +142,36 @@ fn files_open_only_from_inside_the_read_root() {
 #[test]
 fn tools_that_read_a_path_are_held_to_the_read_root() {
     let (mut server, base) = confined("reads", true, true);
-    ok(&mut server, "doc_open", json!({"path": s(&base.join("in/a.pdf"))}));
+    let doc = ok(&mut server, "doc_open", json!({"path": s(&base.join("in/a.pdf"))}))["doc"].as_u64().unwrap();
     let (secret, pic, gone) = (s(&base.join("outside/secret.pdf")), s(&base.join("outside/pic.png")), s(&base.join("outside/gone.bin")));
     let out = s(&base.join("out/result.pdf"));
     for (tool, args) in [
-        ("page_insert_file", json!({"doc": 1, "path": secret, "at": 1})),
-        ("page_replace", json!({"doc": 1, "pages": [1], "path": secret})),
+        ("page_insert_file", json!({"doc": doc, "path": secret, "at": 1})),
+        ("page_replace", json!({"doc": doc, "pages": [1], "path": secret})),
         ("doc_combine", json!({"paths": [s(&base.join("in/a.pdf")), secret], "out": out})),
         ("doc_create_multiple", json!({"paths": [secret], "mode": "combine", "out": out})),
         ("doc_create", json!({"from": "images", "paths": [pic]})),
-        ("stamp_custom", json!({"doc": 1, "page": 1, "path": secret, "at": [10, 10]})),
-        ("stamp_custom", json!({"doc": 1, "page": 1, "path": secret, "rect": [10, 10, 493, 300]})),
-        ("page_add_image", json!({"doc": 1, "page": 1, "path": pic})),
-        ("image_edit", json!({"doc": 1, "page": 1, "image": 1, "action": "replace", "path": pic})),
-        ("comment_add", json!({"doc": 1, "page": 1, "type": "attachment", "at": [10, 10], "path": secret})),
-        ("fill_sign_add", json!({"doc": 1, "page": 1, "type": "signature", "at": [10, 10], "path": pic})),
-        ("form_set_image", json!({"doc": 1, "field": "f", "path": pic})),
-        ("doc_import_data", json!({"doc": 1, "path": secret})),
-        ("doc_watermark", json!({"doc": 1, "file": pic})),
-        ("doc_background", json!({"doc": 1, "file": pic})),
+        ("stamp_custom", json!({"doc": doc, "page": 1, "path": secret, "at": [10, 10]})),
+        ("stamp_custom", json!({"doc": doc, "page": 1, "path": secret, "rect": [10, 10, 493, 300]})),
+        ("page_add_image", json!({"doc": doc, "page": 1, "path": pic})),
+        ("image_edit", json!({"doc": doc, "page": 1, "image": 1, "action": "replace", "path": pic})),
+        ("comment_add", json!({"doc": doc, "page": 1, "type": "attachment", "at": [10, 10], "path": secret})),
+        ("fill_sign_add", json!({"doc": doc, "page": 1, "type": "signature", "at": [10, 10], "path": pic})),
+        ("form_set_image", json!({"doc": doc, "field": "f", "path": pic})),
+        ("doc_import_data", json!({"doc": doc, "path": secret})),
+        ("doc_watermark", json!({"doc": doc, "file": pic})),
+        ("doc_background", json!({"doc": doc, "file": pic})),
         ("form_merge_data", json!({"paths": [secret], "path": out})),
         ("ocr_recognize_files", json!({"paths": [secret], "folder": s(&base.join("out/ocr"))})),
         ("sign_trust", json!({"paths": [secret]})),
-        ("sign_document", json!({"doc": 1, "id": secret, "out": out})),
-        ("text_font_import", json!({"doc": 1, "page": 1, "path": gone})),
+        ("sign_document", json!({"doc": doc, "id": secret, "out": out})),
+        ("text_font_import", json!({"doc": doc, "page": 1, "path": gone})),
         ("text_font_files", json!({"directories": [s(&base.join("outside"))]})),
     ] {
         refused(&mut server, tool, args, "outside the read root");
     }
     // The refused calls changed neither the document nor the disk.
-    assert!(!text_of(&mut server, 1).contains("TOP SECRET"));
+    assert!(!text_of(&mut server, doc).contains("TOP SECRET"));
     assert_eq!(ok(&mut server, "doc_list", json!({}))["documents"].as_array().unwrap().len(), 1);
     assert_eq!(names(&base.join("out")), Vec::<String>::new());
 
@@ -186,9 +186,9 @@ fn tools_that_read_a_path_are_held_to_the_read_root() {
 
     // The same tools work on files inside the root.
     std::fs::remove_dir_all(base.join("out/sep")).unwrap();
-    ok(&mut server, "page_insert_file", json!({"doc": 1, "path": s(&base.join("in/b.pdf")), "at": 2}));
-    assert!(text_of(&mut server, 1).contains("Second inside"));
-    ok(&mut server, "page_add_image", json!({"doc": 1, "page": 1, "path": s(&base.join("in/pic.png"))}));
+    ok(&mut server, "page_insert_file", json!({"doc": doc, "path": s(&base.join("in/b.pdf")), "at": 2}));
+    assert!(text_of(&mut server, doc).contains("Second inside"));
+    ok(&mut server, "page_add_image", json!({"doc": doc, "page": 1, "path": s(&base.join("in/pic.png"))}));
     ok(&mut server, "doc_combine", json!({"paths": [s(&base.join("in/a.pdf")), s(&base.join("in/b.pdf"))], "out": out}));
     assert_eq!(names(&base.join("out")), ["result.pdf"]);
     // Without a folder to list, the installed fonts are outside the read root: it is searched instead.
@@ -200,32 +200,32 @@ fn tools_that_read_a_path_are_held_to_the_read_root() {
 fn tools_that_write_a_path_are_held_to_the_write_root() {
     let (mut server, base) = confined("writes", true, true);
     let input = |name: &str| s(&base.join("in").join(name));
-    ok(&mut server, "doc_open", json!({"path": input("a.pdf")}));
-    ok(&mut server, "doc_open", json!({"path": input("b.pdf")}));
+    let doc = ok(&mut server, "doc_open", json!({"path": input("a.pdf")}))["doc"].as_u64().unwrap();
+    let other = ok(&mut server, "doc_open", json!({"path": input("b.pdf")}))["doc"].as_u64().unwrap();
     let writes = |dir: &str| -> Vec<(&'static str, Value)> {
         let file = |name: &str| s(&base.join(dir).join(name));
         vec![
-            ("doc_save", json!({"doc": 1, "path": file("saved.pdf")})),
-            ("page_extract", json!({"doc": 1, "pages": [1], "out": file("extract.pdf")})),
-            ("page_extract", json!({"doc": 1, "pages": [1], "separate": true, "out_dir": file("pages")})),
+            ("doc_save", json!({"doc": doc, "path": file("saved.pdf")})),
+            ("page_extract", json!({"doc": doc, "pages": [1], "out": file("extract.pdf")})),
+            ("page_extract", json!({"doc": doc, "pages": [1], "separate": true, "out_dir": file("pages")})),
             ("doc_combine", json!({"paths": [input("a.pdf"), input("b.pdf")], "out": file("combined.pdf")})),
             ("doc_create_multiple", json!({"paths": [input("a.pdf")], "mode": "combine", "out": file("multiple.pdf")})),
             ("doc_create_multiple", json!({"paths": [input("a.pdf")], "mode": "separate", "out_dir": file("separate")})),
-            ("doc_split", json!({"doc": 1, "every": 1, "out_dir": file("parts")})),
-            ("doc_reduce", json!({"doc": 1, "path": file("reduced.pdf")})),
-            ("doc_optimize", json!({"doc": 1, "path": file("optimized.pdf")})),
-            ("doc_print", json!({"doc": 1, "path": file("printed.pdf")})),
-            ("doc_export_text", json!({"doc": 1, "path": file("text.txt")})),
-            ("doc_export_office", json!({"doc": 1, "path": file("export.docx")})),
-            ("doc_export_data", json!({"doc": 1, "path": file("data.xfdf")})),
-            ("doc_export_images", json!({"doc": 1, "folder": file("renders")})),
-            ("doc_export_all_images", json!({"doc": 1, "folder": file("images")})),
-            ("image_save", json!({"doc": 1, "page": 1, "image": 1, "path": file("image.png")})),
-            ("measure_export", json!({"doc": 1, "out": file("measurements.csv")})),
-            ("comments_summarize", json!({"doc": 1, "out": file("summary.pdf")})),
-            ("accessibility_report", json!({"doc": 1, "path": file("report.html")})),
-            ("accessibility_review_record", json!({"before": 1, "after": 2, "path": file("record.json")})),
-            ("doc_compare_report", json!({"doc": 1, "other": 2, "path": file("compare.pdf")})),
+            ("doc_split", json!({"doc": doc, "every": 1, "out_dir": file("parts")})),
+            ("doc_reduce", json!({"doc": doc, "path": file("reduced.pdf")})),
+            ("doc_optimize", json!({"doc": doc, "path": file("optimized.pdf")})),
+            ("doc_print", json!({"doc": doc, "path": file("printed.pdf")})),
+            ("doc_export_text", json!({"doc": doc, "path": file("text.txt")})),
+            ("doc_export_office", json!({"doc": doc, "path": file("export.docx")})),
+            ("doc_export_data", json!({"doc": doc, "path": file("data.xfdf")})),
+            ("doc_export_images", json!({"doc": doc, "folder": file("renders")})),
+            ("doc_export_all_images", json!({"doc": doc, "folder": file("images")})),
+            ("image_save", json!({"doc": doc, "page": 1, "image": 1, "path": file("image.png")})),
+            ("measure_export", json!({"doc": doc, "out": file("measurements.csv")})),
+            ("comments_summarize", json!({"doc": doc, "out": file("summary.pdf")})),
+            ("accessibility_report", json!({"doc": doc, "path": file("report.html")})),
+            ("accessibility_review_record", json!({"before": doc, "after": other, "path": file("record.json")})),
+            ("doc_compare_report", json!({"doc": doc, "other": other, "path": file("compare.pdf")})),
             ("form_merge_data", json!({"paths": [input("a.pdf")], "path": file("merged.csv")})),
             ("action_run", json!({"paths": [input("a.pdf")], "folder": file("actions"), "action": "Add Page Numbers"})),
             ("ocr_recognize_files", json!({"paths": [input("a.pdf")], "folder": file("ocr")})),
@@ -245,13 +245,13 @@ fn tools_that_write_a_path_are_held_to_the_write_root() {
     refused(
         &mut server,
         "doc_save",
-        json!({"doc": 1, "path": format!("{}{sep}..{sep}outside{sep}up.pdf", s(&base.join("out")))}),
+        json!({"doc": doc, "path": format!("{}{sep}..{sep}outside{sep}up.pdf", s(&base.join("out")))}),
         "outside the write root",
     );
     std::fs::create_dir_all(base.join("out2")).unwrap();
-    refused(&mut server, "doc_save", json!({"doc": 1, "path": s(&base.join("out2/x.pdf"))}), "outside the write root");
+    refused(&mut server, "doc_save", json!({"doc": doc, "path": s(&base.join("out2/x.pdf"))}), "outside the write root");
     // Saving in place writes to the folder the file was opened from: the read root, not the write root.
-    refused(&mut server, "doc_save", json!({"doc": 1}), "outside the write root");
+    refused(&mut server, "doc_save", json!({"doc": doc}), "outside the write root");
 
     assert_eq!(names(&base.join("outside")), ["pic.png", "secret.pdf"], "nothing was written outside the roots");
     assert_eq!(names(&base.join("in")), ["a.pdf", "b.pdf", "pic.png"], "nothing was written to the read root");
@@ -278,7 +278,7 @@ fn signing_writes_and_reads_only_inside_the_roots() {
     std::fs::write(work.join("a.pdf"), pdf("Work page")).unwrap();
     let roots = AutomationRoots::new(Some(&work), Some(&work)).unwrap();
     let mut server = McpServer::new(Automation::new().with_automation_roots(roots).with_clock(|| 1_700_000_000));
-    ok(&mut server, "doc_open", json!({"path": s(&work.join("a.pdf"))}));
+    let doc = ok(&mut server, "doc_open", json!({"path": s(&work.join("a.pdf"))}))["doc"].as_u64().unwrap();
     ok(&mut server, "sign_id_create", json!({"name": "Test", "password": "secret12", "path": s(&work.join("id.p12")), "key": "p256"}));
     refused(
         &mut server,
@@ -289,10 +289,10 @@ fn signing_writes_and_reads_only_inside_the_roots() {
     refused(
         &mut server,
         "sign_document",
-        json!({"doc": 1, "id": s(&work.join("id.p12")), "password": "secret12", "out": s(&base.join("outside/signed.pdf"))}),
+        json!({"doc": doc, "id": s(&work.join("id.p12")), "password": "secret12", "out": s(&base.join("outside/signed.pdf"))}),
         "outside the write root",
     );
-    ok(&mut server, "sign_document", json!({"doc": 1, "id": s(&work.join("id.p12")), "password": "secret12", "out": s(&work.join("signed.pdf"))}));
+    ok(&mut server, "sign_document", json!({"doc": doc, "id": s(&work.join("id.p12")), "password": "secret12", "out": s(&work.join("signed.pdf"))}));
     assert!(work.join("signed.pdf").is_file());
     assert_eq!(names(&base.join("outside")), ["pic.png", "secret.pdf"]);
 }
@@ -300,17 +300,17 @@ fn signing_writes_and_reads_only_inside_the_roots() {
 #[test]
 fn a_root_left_out_grants_none_of_its_access() {
     let (mut server, base) = confined("read-only", true, false);
-    ok(&mut server, "doc_open", json!({"path": s(&base.join("in/a.pdf"))}));
+    let doc = ok(&mut server, "doc_open", json!({"path": s(&base.join("in/a.pdf"))}))["doc"].as_u64().unwrap();
     for target in ["out/doc.pdf", "in/doc.pdf"] {
-        refused(&mut server, "doc_save", json!({"doc": 1, "path": s(&base.join(target))}), "write authority is absent");
+        refused(&mut server, "doc_save", json!({"doc": doc, "path": s(&base.join(target))}), "write authority is absent");
     }
-    refused(&mut server, "doc_save", json!({"doc": 1}), "write authority is absent");
-    refused(&mut server, "doc_export_text", json!({"doc": 1, "path": s(&base.join("out/t.txt"))}), "write authority is absent");
-    refused(&mut server, "page_extract", json!({"doc": 1, "pages": [1], "out": s(&base.join("out/e.pdf"))}), "write authority is absent");
-    refused(&mut server, "doc_split", json!({"doc": 1, "every": 1, "out_dir": s(&base.join("out/parts"))}), "write authority is absent");
+    refused(&mut server, "doc_save", json!({"doc": doc}), "write authority is absent");
+    refused(&mut server, "doc_export_text", json!({"doc": doc, "path": s(&base.join("out/t.txt"))}), "write authority is absent");
+    refused(&mut server, "page_extract", json!({"doc": doc, "pages": [1], "out": s(&base.join("out/e.pdf"))}), "write authority is absent");
+    refused(&mut server, "doc_split", json!({"doc": doc, "every": 1, "out_dir": s(&base.join("out/parts"))}), "write authority is absent");
     assert!(names(&base.join("out")).is_empty() && names(&base.join("in")) == ["a.pdf", "b.pdf", "pic.png"]);
     // A tool that gives its result back instead of writing it still can.
-    ok(&mut server, "page_extract", json!({"doc": 1, "pages": [1]}));
+    ok(&mut server, "page_extract", json!({"doc": doc, "pages": [1]}));
 
     let (mut server, base) = confined("write-only", false, true);
     refused(&mut server, "doc_open", json!({"path": s(&base.join("in/a.pdf"))}), "read authority is absent");
@@ -321,8 +321,8 @@ fn a_root_left_out_grants_none_of_its_access() {
         "read authority is absent",
     );
     refused(&mut server, "text_font_files", json!({}), "read authority is absent");
-    ok(&mut server, "doc_create", json!({"from": "blank", "pages": 1, "width": 200, "height": 300}));
-    ok(&mut server, "doc_save", json!({"doc": 1, "path": s(&base.join("out/blank.pdf"))}));
+    let doc = ok(&mut server, "doc_create", json!({"from": "blank", "pages": 1, "width": 200, "height": 300}))["doc"].as_u64().unwrap();
+    ok(&mut server, "doc_save", json!({"doc": doc, "path": s(&base.join("out/blank.pdf"))}));
     assert!(base.join("out/blank.pdf").is_file());
 }
 
@@ -344,11 +344,11 @@ fn links_out_of_a_root_are_refused() {
         eprintln!("skipped: symbolic links can't be made here");
         return;
     }
-    ok(&mut server, "doc_open", json!({"path": s(&base.join("in/a.pdf"))}));
+    let doc = ok(&mut server, "doc_open", json!({"path": s(&base.join("in/a.pdf"))}))["doc"].as_u64().unwrap();
     refused(&mut server, "doc_open", json!({"path": s(&base.join("in/leak.pdf"))}), "outside the read root");
-    refused(&mut server, "doc_save", json!({"doc": 1, "path": s(&base.join("out/away/doc.pdf"))}), "outside the write root");
-    refused(&mut server, "doc_save", json!({"doc": 1, "path": s(&base.join("out/away/deeper/doc.pdf"))}), "outside the write root");
-    refused(&mut server, "doc_save", json!({"doc": 1, "path": s(&base.join("out/dangling.pdf"))}), "a link that leads nowhere");
+    refused(&mut server, "doc_save", json!({"doc": doc, "path": s(&base.join("out/away/doc.pdf"))}), "outside the write root");
+    refused(&mut server, "doc_save", json!({"doc": doc, "path": s(&base.join("out/away/deeper/doc.pdf"))}), "outside the write root");
+    refused(&mut server, "doc_save", json!({"doc": doc, "path": s(&base.join("out/dangling.pdf"))}), "a link that leads nowhere");
     assert_eq!(names(&base.join("outside")), ["pic.png", "secret.pdf"]);
 }
 
@@ -358,10 +358,10 @@ fn links_out_of_a_root_are_refused() {
 #[test]
 fn other_shares_and_devices_are_refused_by_name() {
     let (mut server, base) = confined("shares", true, true);
-    ok(&mut server, "doc_open", json!({"path": s(&base.join("in/a.pdf"))}));
+    let doc = ok(&mut server, "doc_open", json!({"path": s(&base.join("in/a.pdf"))}))["doc"].as_u64().unwrap();
     for p in [r"\\.\pipe\pdfcraft-4003.pdf", r"\\pdfcraft-no-such-host.invalid\share\a.pdf", "//pdfcraft-no-such-host.invalid/share/a.pdf"] {
         refused(&mut server, "doc_open", json!({"path": p}), "outside the read root");
-        refused(&mut server, "doc_save", json!({"doc": 1, "path": p}), "outside the write root");
+        refused(&mut server, "doc_save", json!({"doc": doc, "path": p}), "outside the write root");
     }
 }
 
@@ -369,9 +369,9 @@ fn other_shares_and_devices_are_refused_by_name() {
 fn without_roots_nothing_is_confined() {
     let base = folders("none");
     let mut server = McpServer::new(Automation::new());
-    ok(&mut server, "doc_open", json!({"path": s(&base.join("outside/secret.pdf"))}));
-    assert!(text_of(&mut server, 1).contains("TOP SECRET"));
-    ok(&mut server, "doc_save", json!({"doc": 1, "path": s(&base.join("in2/copy.pdf"))}));
+    let doc = ok(&mut server, "doc_open", json!({"path": s(&base.join("outside/secret.pdf"))}))["doc"].as_u64().unwrap();
+    assert!(text_of(&mut server, doc).contains("TOP SECRET"));
+    ok(&mut server, "doc_save", json!({"doc": doc, "path": s(&base.join("in2/copy.pdf"))}));
     assert!(base.join("in2/copy.pdf").is_file());
 }
 
@@ -381,10 +381,10 @@ fn the_roots_apply_on_top_of_a_root() {
     let roots = AutomationRoots::new(Some(&base.join("in")), Some(&base.join("out"))).unwrap();
     // `--root` resolves relative paths inside `in`, which the read root allows and the write root does not.
     let mut server = McpServer::new(Automation::new().with_root(base.join("in")).unwrap().with_automation_roots(roots));
-    ok(&mut server, "doc_open", json!({"path": "a.pdf"}));
-    refused(&mut server, "doc_save", json!({"doc": 1, "path": "copy.pdf"}), "outside the write root");
+    let doc = ok(&mut server, "doc_open", json!({"path": "a.pdf"}))["doc"].as_u64().unwrap();
+    refused(&mut server, "doc_save", json!({"doc": doc, "path": "copy.pdf"}), "outside the write root");
     refused(&mut server, "doc_open", json!({"path": "../outside/secret.pdf"}), "outside the allowed directory");
     assert!(!base.join("in/copy.pdf").exists());
     // The write root alone is not enough: the other root still has its say.
-    refused(&mut server, "doc_save", json!({"doc": 1, "path": "../out/copy.pdf"}), "outside the allowed directory");
+    refused(&mut server, "doc_save", json!({"doc": doc, "path": "../out/copy.pdf"}), "outside the allowed directory");
 }
