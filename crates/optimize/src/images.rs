@@ -237,10 +237,10 @@ impl Walk<'_> {
 }
 
 /// Whether `resources` remap a device colour space an image may be moved between, so that the
-/// same samples would be drawn otherwise: `/DefaultGray`, `/DefaultRGB` or `/DefaultCMYK` (ISO 32000-2 §8.6.5.6).
+/// same samples would be drawn otherwise: `/DefaultGray` or `/DefaultRGB` (ISO 32000-2 §8.6.5.6).
 fn remaps_device_spaces(doc: &Document, resources: &Dict) -> bool {
     let spaces = resources.get(b"ColorSpace").map(|c| doc.resolve(c));
-    spaces.as_deref().and_then(Object::as_dict).is_some_and(|c| c.contains(b"DefaultGray") || c.contains(b"DefaultRGB") || c.contains(b"DefaultCMYK"))
+    spaces.as_deref().and_then(Object::as_dict).is_some_and(|c| c.contains(b"DefaultGray") || c.contains(b"DefaultRGB"))
 }
 
 /// The effective resolution (ppi) of every image drawn by `pages`: the smallest over its uses.
@@ -848,14 +848,7 @@ fn read_cmyk_decode(doc: &Document, decode_obj: Option<&Object>) -> Result<Optio
 
 fn is_cmyk_space(doc: &Document, cs: &Object) -> bool {
     let cs = doc.resolve(cs);
-    match &*cs {
-        Object::Name(n) => matches!(n.as_slice(), b"DeviceCMYK" | b"CMYK"),
-        Object::Array(a) => match family(doc, a).as_deref().and_then(Object::as_name) {
-            Some(b"ICCBased") => a.get(1).is_some_and(|icc| matches!(&*doc.resolve(icc), Object::Stream(s) if s.dict.int(b"N") == Some(4))),
-            _ => false,
-        },
-        _ => false,
-    }
+    matches!(&*cs, Object::Name(n) if matches!(n.as_slice(), b"DeviceCMYK" | b"CMYK"))
 }
 
 fn decode_cmyk_jpeg(data: &[u8], w: usize, h: usize) -> Option<Vec<u8>> {
