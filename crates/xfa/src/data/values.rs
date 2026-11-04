@@ -1,6 +1,6 @@
 use super::dates::{data_date_pattern, data_to_iso, iso_to_data, iso_to_pattern, pattern_to_iso};
 use super::path::{data_path, parse_datasets, som_to_path};
-use super::*;
+use super::{DataPath, Dict, Document, ObjRef, Object, Template};
 
 /// What a field holds, for writing the datasets.
 #[derive(Clone, Debug, PartialEq)]

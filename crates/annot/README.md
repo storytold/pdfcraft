@@ -30,7 +30,7 @@ let index = add_annotation(&mut doc, &NewAnnotation { page, shape, style, conten
 add_reply(&mut doc, page, index, "Agreed", "Ada", &meta)?;
 set_review_state(&mut doc, page, index, ReviewState::Accepted, "Ada", &meta)?;
 move_annotation(&mut doc, page, index, dx, dy, &meta)?;
-set_style(&mut doc, page, index, Some(rgb), Some(0.5), Some(2.0), &meta)?;
+set_style(&mut doc, page, index, StyleChange::new(Some(rgb), Some(0.5), Some(2.0), None), &meta)?;
 delete_annotation(&mut doc, page, index)?;
 signature_image(&doc, page, index)?; // embedded image XObject of Fill & Sign signature/initials
 ```

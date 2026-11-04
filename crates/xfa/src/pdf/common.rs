@@ -1,4 +1,4 @@
-use super::*;
+use super::{Dict, Document, Family, Object, PdfString, Rect, Rounded, Stream};
 
 /// Width and height of a JPEG from its first frame header (SOF0–SOF15, not the DNL/JPG/DAC/DHT
 /// markers). `None` for anything else.
@@ -192,9 +192,41 @@ pub(super) fn empty_form(doc: &mut Document, w: f64, h: f64) -> Object {
     Object::Ref(doc.add(Object::Stream(Stream::from_raw(d, Vec::new()))))
 }
 
+/// `s` as a JavaScript string literal, quotes included: a quote, a backslash or a line break in
+/// it stays text instead of ending the string and running as code.
+pub(super) fn js_string(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' | '\\' => {
+                out.push('\\');
+                out.push(c);
+            }
+            c if c.is_control() || c == '\u{2028}' || c == '\u{2029}' => out.push_str(&format!("\\u{:04x}", u32::from(c))),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
 pub(super) fn js_action(js: &str) -> Object {
     let mut a = Dict::new();
     a.set(b"S".to_vec(), Object::name("JavaScript"));
     a.set(b"JS".to_vec(), Object::String(PdfString::literal(js.as_bytes().to_vec())));
     Object::Dict(a)
+}
+
+#[cfg(test)]
+mod js_string_tests {
+    use super::js_string;
+
+    /// A date pattern that tries to close the string and run code stays one string literal.
+    #[test]
+    fn a_pattern_cannot_leave_its_string() {
+        assert_eq!(js_string("yyyy-mm-dd"), "\"yyyy-mm-dd\"");
+        assert_eq!(js_string("x\");app.alert(1);//"), "\"x\\\");app.alert(1);//\"");
+        assert_eq!(js_string("a\\\nb\u{2028}"), "\"a\\\\\\u000ab\\u2028\"");
+    }
 }
