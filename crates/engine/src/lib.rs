@@ -35,6 +35,7 @@ mod history;
 pub mod js;
 mod layers;
 pub mod links;
+pub mod model3d;
 pub mod ocr;
 mod open;
 pub mod optimizer;

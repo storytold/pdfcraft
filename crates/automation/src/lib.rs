@@ -27,6 +27,7 @@ mod links;
 #[cfg(feature = "mcp")]
 pub mod mcp;
 mod measure;
+mod model3d_render;
 mod printing;
 mod reading;
 mod redact;
