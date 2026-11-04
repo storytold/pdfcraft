@@ -339,6 +339,20 @@ fn optimize_leaves_cmyk_jpegs_as_they_are_with_or_without_an_adobe_marker() {
 }
 
 #[test]
+fn optimize_converts_cmyk_to_rgb_when_opted_in() {
+    let (w, h) = (256u16, 256u16);
+    let block = |bx: u16, by: u16| [(bx * 8) as u8, (by * 8) as u8, (255 - (bx + by) * 4) as u8, ((bx ^ by) * 8) as u8];
+    let jpeg = four_component_jpeg(w, h, None, block);
+    let (mut doc, img) = showing(u32::from(w), u32::from(h), 288, "DeviceCMYK", jpeg, Parms::None);
+    let settings = Settings { convert_cmyk_to_rgb: true, ..Default::default() };
+    let report = optimize(&mut doc, &settings).unwrap();
+    assert_eq!(report.images_resampled + report.images_recompressed, 1);
+    let new_stream = stream(&doc, img);
+    assert_eq!(new_stream.dict.name(b"ColorSpace"), Some(&b"DeviceRGB"[..]));
+    assert_eq!(new_stream.dict.name(b"Filter"), Some(&b"DCTDecode"[..]));
+}
+
+#[test]
 fn merging_jpeg_strips_keeps_their_colour_transform() {
     // A page picture printed as 16 JPEG strips stored untransformed (/ColorTransform 0, no
     // Adobe marker): the merged image must show the strips' colours, not their samples converted

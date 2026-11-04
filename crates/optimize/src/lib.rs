@@ -201,6 +201,8 @@ pub struct Settings {
     pub remove_invalid_links: bool,
     /// Clean Up: remove named destinations nothing refers to.
     pub remove_unreferenced_dests: bool,
+    /// Convert DeviceCMYK images to DeviceRGB so they can be resampled and JPEG-recompressed.
+    pub convert_cmyk_to_rgb: bool,
 }
 
 impl Settings {
@@ -229,6 +231,7 @@ impl Default for Settings {
             lzw_to_flate: true,
             remove_invalid_links: true,
             remove_unreferenced_dests: true,
+            convert_cmyk_to_rgb: false,
         }
     }
 }

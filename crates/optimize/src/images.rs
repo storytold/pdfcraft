@@ -793,6 +793,159 @@ fn process(
     (after < before).then_some((new, smask))
 }
 
+/// Convert a CMYK pixel slice to RGB using subtractive color mixing, applying /Decode array mapping if present.
+pub(crate) fn cmyk_to_rgb(cmyk: &[u8], decode: Option<[f32; 8]>) -> Vec<u8> {
+    let dec = decode.unwrap_or([0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0]);
+    let mut rgb = Vec::with_capacity((cmyk.len() / 4) * 3);
+
+    for chunk in cmyk.as_chunks::<4>().0 {
+        let c = apply_decode(chunk[0], dec[0], dec[1]);
+        let m = apply_decode(chunk[1], dec[2], dec[3]);
+        let y = apply_decode(chunk[2], dec[4], dec[5]);
+        let k = apply_decode(chunk[3], dec[6], dec[7]);
+
+        let kf = 1.0 - k;
+        let r = (255.0 * (1.0 - c) * kf).round().clamp(0.0, 255.0) as u8;
+        let g = (255.0 * (1.0 - m) * kf).round().clamp(0.0, 255.0) as u8;
+        let b = (255.0 * (1.0 - y) * kf).round().clamp(0.0, 255.0) as u8;
+
+        rgb.push(r);
+        rgb.push(g);
+        rgb.push(b);
+    }
+    rgb
+}
+
+fn apply_decode(v: u8, dmin: f32, dmax: f32) -> f32 {
+    let t = f32::from(v) / 255.0;
+    (dmin + t * (dmax - dmin)).clamp(0.0, 1.0)
+}
+
+fn read_cmyk_decode(doc: &Document, decode_obj: Option<&Object>) -> Option<[f32; 8]> {
+    let resolved = doc.resolve(decode_obj?);
+    let a = resolved.as_array()?;
+    if a.len() != 8 {
+        return None;
+    }
+    let mut out = [0.0f32; 8];
+    for (i, item) in a.iter().enumerate() {
+        let val = doc.resolve(item).as_f64()?;
+        *out.get_mut(i)? = val as f32;
+    }
+    Some(out)
+}
+
+fn is_cmyk_space(doc: &Document, cs: &Object) -> bool {
+    let cs = doc.resolve(cs);
+    match &*cs {
+        Object::Name(n) => matches!(n.as_slice(), b"DeviceCMYK" | b"CMYK"),
+        Object::Array(a) => match family(doc, a).as_deref().and_then(Object::as_name) {
+            Some(b"ICCBased") => a.get(1).is_some_and(|icc| matches!(&*doc.resolve(icc), Object::Stream(s) if s.dict.int(b"N") == Some(4))),
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
+fn decode_cmyk_jpeg(data: &[u8], w: usize, h: usize) -> Option<Vec<u8>> {
+    use zune_jpeg::zune_core::{bytestream::ZCursor, colorspace::ColorSpace, options::DecoderOptions};
+    let options = DecoderOptions::default().set_strict_mode(false).set_max_width(usize::from(u16::MAX)).set_max_height(usize::from(u16::MAX));
+    let mut dec = zune_jpeg::JpegDecoder::new_with_options(ZCursor::new(data), options);
+    dec.decode_headers().ok()?;
+    let input = dec.input_colorspace()?;
+    if !matches!(input, ColorSpace::CMYK | ColorSpace::YCCK) || dec.dimensions()? != (w, h) {
+        return None;
+    }
+    dec.set_options(options.jpeg_set_out_colorspace(input));
+    let mut px = dec.decode().ok()?;
+    if px.len() != w.checked_mul(h)?.checked_mul(4)? {
+        return None;
+    }
+    if input == ColorSpace::YCCK {
+        for p in px.as_chunks_mut::<4>().0 {
+            let (y, cb, cr) = (f32::from(p[0]), f32::from(p[1]) - 128.0, f32::from(p[2]) - 128.0);
+            let ink = |rgb: f32| (255.0 - rgb).round().clamp(0.0, 255.0) as u8;
+            p[0] = ink(y + 1.402 * cr);
+            p[1] = ink(y - 0.344_136 * cb - 0.714_136 * cr);
+            p[2] = ink(y + 1.772 * cb);
+        }
+    }
+    Some(px)
+}
+
+fn process_cmyk(
+    doc: &Document,
+    s: &Stream,
+    ppi: f64,
+    settings: &ImageSettings,
+    budget: &mut ImageBudget,
+) -> Option<(Stream, Option<(ObjRef, Stream)>)> {
+    let d = &s.dict;
+    let cs = d.get(b"ColorSpace")?;
+    if !is_cmyk_space(doc, cs)
+        || d.get(b"Mask").is_some_and(|m| !is_stencil(doc, m))
+        || d.name(b"ImageMask").is_some()
+        || matches!(d.get(b"ImageMask"), Some(Object::Bool(true)))
+        || d.int(b"BitsPerComponent") != Some(8)
+    {
+        return None;
+    }
+
+    let was_dct = is_dct(s)?;
+    let (w, h) = (u32::try_from(d.int(b"Width")?).ok()?, u32::try_from(d.int(b"Height")?).ok()?);
+    if w == 0 || h == 0 || (w as u64) * (h as u64) > MAX_PIXELS {
+        return None;
+    }
+
+    let wu = usize::try_from(w).ok()?;
+    let hu = usize::try_from(h).ok()?;
+    let bytes4 = wu.checked_mul(hu)?.checked_mul(4)?;
+
+    let cmyk_px = if was_dct {
+        if !budget.pay_jpeg(u64::try_from(bytes4).ok()?, &s.raw) {
+            return None;
+        }
+        let v = decode_cmyk_jpeg(&s.raw, wu, hu)?;
+        count_decoded(u64::from(w) * u64::from(h));
+        v
+    } else {
+        let v = budget.decode_filters(doc, s, allowance(bytes4, h)?).ok()?;
+        v.get(..bytes4)?.to_vec()
+    };
+
+    let decode_arr = read_cmyk_decode(doc, d.get(b"Decode"));
+    let rgb_px = cmyk_to_rgb(&cmyk_px, decode_arr);
+
+    let resize = settings.downsample && ppi.is_finite() && ppi > settings.above_ppi && settings.target_ppi > 0.0;
+    let (nw, nh) = if resize {
+        let k = settings.target_ppi / ppi;
+        (((f64::from(w) * k).round() as u32).max(1), ((f64::from(h) * k).round() as u32).max(1))
+    } else {
+        (w, h)
+    };
+
+    let resampled = if (nw, nh) != (w, h) { resample(&rgb_px, 3, w, h, nw, nh)? } else { rgb_px };
+
+    let q = match settings.compression {
+        Compression::Jpeg(q) => q,
+        _ => 80,
+    };
+    let data = jpeg(&resampled, 3, nw, nh, q)?;
+
+    let mut new_dict = d.clone();
+    for k in [&b"Filter"[..], b"DecodeParms", b"Decode", b"Length", b"DL"] {
+        new_dict.remove(k);
+    }
+    new_dict.set(b"Width".to_vec(), Object::Int(i64::from(nw)));
+    new_dict.set(b"Height".to_vec(), Object::Int(i64::from(nh)));
+    new_dict.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+    new_dict.set(b"ColorSpace".to_vec(), Object::name("DeviceRGB"));
+    new_dict.set(b"Filter".to_vec(), Object::name("DCTDecode"));
+
+    let new_stream = Stream::from_raw(new_dict, data);
+    (new_stream.raw.len() < s.raw.len()).then_some((new_stream, None))
+}
+
 /// Whether colour space `cs` has one colour component, so a 1-bit image in it has one bit per
 /// pixel: grey, a separation, an indexed space or a DeviceN of one colourant. Of names, only
 /// DeviceGray counts, with `/G`, its abbreviation, which readers take as grey too: another name
@@ -1267,7 +1420,9 @@ pub(crate) fn run(
             continue;
         }
         let n = s.dict.get(b"ColorSpace").and_then(|cs| components(doc, cs));
-        let processed = n.and_then(|n| process(doc, s, ppi, if n == 1 { &settings.gray } else { &settings.color }, n, budget));
+        let processed = n
+            .and_then(|n| process(doc, s, ppi, if n == 1 { &settings.gray } else { &settings.color }, n, budget))
+            .or_else(|| if settings.convert_cmyk_to_rgb { process_cmyk(doc, s, ppi, &settings.color, budget) } else { None });
         // A dithered scan, say, downsampled and JPEG-compressed: the smaller wins, counting a soft
         // mask resampled with it.
         let smask_len = |smask: Option<&(ObjRef, Stream)>| match smask {
@@ -1934,5 +2089,36 @@ mod pack_tests {
         for (row_len, w, n, bpc) in [(1, 0, 1, 1), (1, 1, 0, 8), (1, 1, 1, 3), (1, 1, 2, 4), (1, 9, 1, 1), (1, usize::MAX / 8, 1, 1)] {
             assert_eq!(packed_rows(&samples, row_len, w, 4, (n, bpc, WHITE_IS_1)), None, "row of {row_len} for {w} × {n} × {bpc}");
         }
+    }
+}
+
+#[cfg(test)]
+mod cmyk_tests {
+    use super::cmyk_to_rgb;
+
+    #[test]
+    fn cmyk_to_rgb_standard_colors() {
+        // [C, M, Y, K]
+        // White: 0 0 0 0 -> 255 255 255
+        assert_eq!(cmyk_to_rgb(&[0, 0, 0, 0], None), vec![255, 255, 255]);
+        // Black (pure K): 0 0 0 255 -> 0 0 0
+        assert_eq!(cmyk_to_rgb(&[0, 0, 0, 255], None), vec![0, 0, 0]);
+        // Cyan: 255 0 0 0 -> 0 255 255
+        assert_eq!(cmyk_to_rgb(&[255, 0, 0, 0], None), vec![0, 255, 255]);
+        // Magenta: 0 255 0 0 -> 255 0 255
+        assert_eq!(cmyk_to_rgb(&[0, 255, 0, 0], None), vec![255, 0, 255]);
+        // Yellow: 0 0 255 0 -> 255 255 0
+        assert_eq!(cmyk_to_rgb(&[0, 0, 255, 0], None), vec![255, 255, 0]);
+    }
+
+    #[test]
+    fn cmyk_to_rgb_with_inverted_decode() {
+        // Inverted decode array commonly produced by Adobe Photoshop/InDesign:
+        // [1 0 1 0 1 0 1 0]
+        let inverted_decode = Some([1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0]);
+        // Under inverted decode, 255 maps to 0 -> so [255, 255, 255, 255] maps to [0, 0, 0, 0] = White!
+        assert_eq!(cmyk_to_rgb(&[255, 255, 255, 255], inverted_decode), vec![255, 255, 255]);
+        // Under inverted decode, 0 maps to 255 -> so [0, 0, 0, 0] maps to [255, 255, 255, 255] = Black!
+        assert_eq!(cmyk_to_rgb(&[0, 0, 0, 0], inverted_decode), vec![0, 0, 0]);
     }
 }
