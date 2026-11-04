@@ -318,7 +318,7 @@ fn shading(s: &CompareState, old: bool) -> Vec<(usize, [f32; 4], Color32)> {
     for (p, r) in &s.visual {
         let r = r.map(|v| v as f32);
         // The old file's half also skips a region overlapping one it already shades.
-        if !overlaps(*p, r, &text) && !(old && overlaps(*p, r, &visual)) {
+        if !(overlaps(*p, r, &text) || (old && overlaps(*p, r, &visual))) {
             visual.push((*p, r, VISUAL));
         }
     }
