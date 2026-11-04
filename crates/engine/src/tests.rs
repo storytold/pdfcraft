@@ -549,6 +549,85 @@ fn pdf_page_stamps_fit_inside_an_explicit_box() {
     assert!(content.contains("/Pic Do") && !content.contains("BI"), "{content}");
 }
 
+/// #1297: a 3D model on a page keeps the whole box as its rectangle and draws a PDF poster as a
+/// form XObject fitted inside it, keeping its shape and centred.
+#[test]
+fn a_3d_model_gets_a_fitted_vector_poster_and_a_file_that_is_not_one_is_refused() {
+    let mut session = Session::new().with_clock(|| 1_700_000_000);
+    let blank = session.create_blank(595.0, 842.0, 1).unwrap();
+    let id = session.open_new("model.pdf", blank).unwrap();
+    let mut prc = b"PRC".to_vec();
+    prc.extend_from_slice(&[1; 64]);
+    let add = |model: Vec<u8>| Edit::AddModel3d {
+        page: 0,
+        rect: [56.0, 400.0, 539.0, 700.0],
+        model: Arc::new(model),
+        poster: Some(MarkFile { name: "poster.pdf".into(), bytes: Arc::new(half_red_page()), page: 0 }),
+        activation: Activation3d::default(),
+        name: "Bracket".into(),
+    };
+    assert!(session.apply(id, add(b"%PDF-1.7 not a model".to_vec())).is_err());
+    session.apply(id, add(prc)).unwrap();
+
+    let doc = pdfcraft_cos::Document::open(session.save_bytes(id).unwrap()).unwrap();
+    let page = &pdfcraft_model::pages(&doc)[0];
+    let annots = doc.resolve(page.dict.get(b"Annots").unwrap());
+    let [only] = annots.as_array().unwrap().as_slice() else { panic!("the refused model added nothing: {annots:?}") };
+    let annot = doc.get(only.as_ref().unwrap());
+    let annot = annot.as_dict().unwrap();
+    assert_eq!(annot.name(b"Subtype"), Some(&b"3D"[..]));
+    let rect: Vec<f64> = annot.get(b"Rect").unwrap().as_array().unwrap().iter().filter_map(pdfcraft_cos::Object::as_f64).collect();
+    assert_eq!(rect, [56.0, 400.0, 539.0, 700.0], "the whole box, not the fitted picture");
+    assert_eq!(doc.resolve(annot.get(b"3DA").unwrap()).as_dict().unwrap().name(b"A"), Some(&b"XA"[..]));
+    let ap = doc.resolve(annot.get(b"AP").unwrap());
+    let pdfcraft_cos::Object::Stream(normal) = doc.get(ap.as_dict().unwrap().reference(b"N").unwrap()).as_ref().clone() else {
+        panic!("an appearance stream")
+    };
+    let pic = doc.resolve(normal.dict.get(b"Resources").unwrap()).as_dict().unwrap().clone();
+    let pic = doc.resolve(pic.get(b"XObject").unwrap()).as_dict().unwrap().reference(b"Pic").unwrap();
+    let pdfcraft_cos::Object::Stream(picture) = doc.get(pic).as_ref().clone() else { panic!("the picture is a stream") };
+    assert_eq!(picture.dict.name(b"Subtype"), Some(&b"Form"[..]), "the page is kept as a form XObject");
+    // The 80 × 40 page in the 483 × 300 box: 483 × 241.5 from y 429.25.
+    let content = String::from_utf8(normal.decoded().unwrap().to_vec()).unwrap();
+    assert!(content.contains(" 56 429.25 cm /Pic Do"), "{content}");
+}
+
+/// A PDF poster whose page has no area is refused rather than drawn as nothing.
+#[test]
+fn a_3d_poster_page_without_area_is_refused() {
+    let mut session = Session::new().with_clock(|| 1_700_000_000);
+    let blank = session.create_blank(595.0, 842.0, 1).unwrap();
+    let id = session.open_new("model.pdf", blank).unwrap();
+    let flat = String::from_utf8(half_red_page()).unwrap().replace("[0 0 80 40]", "[0 0 80 0 ]");
+    let add = Edit::AddModel3d {
+        page: 0,
+        rect: [56.0, 400.0, 539.0, 700.0],
+        model: Arc::new(b"PRC rest".to_vec()),
+        poster: Some(MarkFile { name: "flat.pdf".into(), bytes: Arc::new(flat.into_bytes()), page: 0 }),
+        activation: Activation3d::default(),
+        name: "Bracket".into(),
+    };
+    assert!(matches!(session.apply(id, add), Err(EditError::Source(_))));
+    assert!(session.get(id).unwrap().info.annotations.is_empty(), "nothing was added");
+}
+
+/// Adding a 3D model is a comment change: refused without the comments permission, and only the
+/// comments are rebuilt after it.
+#[test]
+fn a_3d_model_needs_the_comments_permission_and_changes_the_comments() {
+    let edit = Edit::AddModel3d {
+        page: 0,
+        rect: [0.0, 0.0, 100.0, 100.0],
+        model: Arc::new(b"PRC rest".to_vec()),
+        poster: None,
+        activation: Activation3d::default(),
+        name: String::new(),
+    };
+    let p = pdfcraft_cos::Permissions { bits: 0, owner: false };
+    assert_eq!(check_permission(&edit, &p), Err(EditError::NotPermitted("comments")));
+    assert_eq!(crate::history::scope_of(&edit), crate::history::Scope::Comments);
+}
+
 fn page_texts(s: &Session, id: DocId) -> Vec<String> {
     let doc = s.get(id).unwrap();
     let config = pdfcraft_render::RenderConfig { password: doc.password.as_deref().map(Arc::from), ..Default::default() };
