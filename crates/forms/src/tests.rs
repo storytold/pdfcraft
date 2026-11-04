@@ -2990,7 +2990,8 @@ fn validation_script_colour_is_used_when_the_field_redraws() {
     set_field_script(&mut doc, "name", "validate", Some("set_red")).unwrap();
     set_value_with(&mut doc, "name", &FieldValue::Text("Grace".into()), &mut TestScripts).unwrap();
 
-    let f = field(&fields(&doc), "name");
+    let all = fields(&doc);
+    let f = field(&all, "name");
     assert!(f.da.contains("1 0 0 rg"));
     assert!(ap(&doc, &f.widgets[0]).contains("1 0 0 rg"), "redraw uses the Validate script's updated appearance");
 }
