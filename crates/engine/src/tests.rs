@@ -10268,3 +10268,42 @@ fn fill_sign_multiline_text_survives_engine_save_reopen_and_render() {
     assert_eq!(reopened.get(again).unwrap().info.annotations[0].contents.as_deref(), Some(text), "reopening preserves all blank lines");
     assert_eq!(before.rgba, render_page(&reopened, again).rgba, "the saved appearance is identical");
 }
+
+#[test]
+fn deleting_several_bookmarks_is_one_undo_step_and_survives_save() {
+    let (mut s, id) = session_with(4);
+    let titles = |s: &Session| outline_titles(&s.get(id).unwrap().info.outline);
+    let dest = pdfcraft_render::DestView::Xyz { left: Some(72.0), top: Some(150.0), zoom: None };
+    for (i, name) in ["One", "Two", "Three", "Four"].iter().enumerate() {
+        let (left, top) = if i == 2 { (Some(72.0), Some(150.0)) } else { (None, None) };
+        s.apply(id, Edit::AddBookmark { parent: vec![], index: i, title: (*name).into(), page: i, left, top }).unwrap();
+    }
+    s.apply(id, Edit::AddBookmark { parent: vec![1], index: 0, title: "Two-a".into(), page: 1, left: None, top: None }).unwrap();
+    assert_eq!(titles(&s), ["One→1", "Two→2[Two-a→2]", "Three→3", "Four→4"]);
+
+    // A parent, its own child and a separate entry go together; the rest stays.
+    s.apply(id, Edit::DeleteBookmarks { paths: vec![vec![1, 0], vec![1], vec![3]] }).unwrap();
+    assert_eq!(titles(&s), ["One→1", "Three→3"]);
+    assert_eq!(s.get(id).unwrap().info.outline[1].view, dest, "the survivor keeps its coordinates");
+    assert_eq!(s.get(id).unwrap().can_undo(), Some("Delete bookmarks"));
+    s.undo(id).unwrap();
+    assert_eq!(titles(&s), ["One→1", "Two→2[Two-a→2]", "Three→3", "Four→4"]);
+    s.redo(id).unwrap();
+    assert_eq!(titles(&s), ["One→1", "Three→3"]);
+
+    // A bad path, or no path, fails and leaves the outline and the undo history alone.
+    assert!(matches!(s.apply(id, Edit::DeleteBookmarks { paths: vec![vec![0], vec![7]] }), Err(EditError::Bookmark(_))));
+    assert!(matches!(s.apply(id, Edit::DeleteBookmarks { paths: vec![] }), Err(EditError::Bookmark(_))));
+    assert_eq!(titles(&s), ["One→1", "Three→3"]);
+    assert_eq!(s.get(id).unwrap().can_undo(), Some("Delete bookmarks"));
+
+    // One bookmark keeps the singular label.
+    s.apply(id, Edit::DeleteBookmarks { paths: vec![vec![0]] }).unwrap();
+    assert_eq!(s.get(id).unwrap().can_undo(), Some("Delete bookmark"));
+
+    let saved = s.save_bytes(id).unwrap();
+    let mut again = Session::new();
+    let id2 = again.open("again.pdf", None, saved, None).unwrap();
+    assert_eq!(outline_titles(&again.get(id2).unwrap().info.outline), ["Three→3"]);
+    assert_eq!(again.get(id2).unwrap().info.outline[0].view, dest, "coordinates survive reopening");
+}

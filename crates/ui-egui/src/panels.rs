@@ -22,6 +22,7 @@ pub mod side_panels;
 mod tools;
 
 pub use bookmarks::BmAction;
+pub(crate) use bookmarks::BookmarkPick;
 pub(crate) use bookmarks::ellipsized_prefix;
 pub use right::right_panel;
 pub use tools::left_panel;

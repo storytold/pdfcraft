@@ -4,6 +4,8 @@ use super::{Document, Value, comments, json};
 /// How far from the page's corner a bookmark's position may be given, in points (a PDF page is at
 /// most 14 400 across).
 const MAX_BOOKMARK_POSITION: f64 = 1_000_000.0;
+/// Bookmarks one `bookmark_delete` call may name.
+const MAX_BOOKMARK_PATHS: usize = 10_000;
 
 // ---- JSON helpers ----------------------------------------------------------------------------
 
@@ -143,6 +145,26 @@ impl Args<'_> {
             Some(v) if v.is_finite() && v.abs() <= MAX_BOOKMARK_POSITION => Ok(Some(v as f32)),
             Some(_) => Err(ToolError::InvalidArgs(format!("{key} must be between -{MAX_BOOKMARK_POSITION} and {MAX_BOOKMARK_POSITION} points"))),
         }
+    }
+    /// A list of 1-based bookmark paths → 0-based indices, at most [`MAX_BOOKMARK_PATHS`] and none empty.
+    pub(crate) fn bookmark_paths(&self, key: &str) -> Result<Vec<Vec<usize>>> {
+        let v = self.get(key).ok_or_else(|| Self::missing(key))?;
+        let list = v.as_array().ok_or_else(|| Self::wrong(key, "an array of bookmark paths"))?;
+        if list.is_empty() || list.len() > MAX_BOOKMARK_PATHS {
+            return Err(ToolError::InvalidArgs(format!("{key} must hold between 1 and {MAX_BOOKMARK_PATHS} bookmark paths")));
+        }
+        list.iter()
+            .map(|p| {
+                let positions = p.as_array().filter(|p| !p.is_empty()).ok_or_else(|| Self::wrong(key, "non-empty arrays of 1-based positions"))?;
+                positions
+                    .iter()
+                    .map(|i| match i.as_u64() {
+                        Some(n) if n >= 1 => usize::try_from(n - 1).map_err(|_| Self::wrong(key, "1-based positions")),
+                        _ => Err(Self::wrong(key, "1-based positions")),
+                    })
+                    .collect()
+            })
+            .collect()
     }
     pub(crate) fn strs(&self, key: &str) -> Result<Vec<&str>> {
         let v = self.get(key).ok_or_else(|| Self::missing(key))?;
