@@ -20,6 +20,8 @@ tiff = "0.11"
 image = { version = "0.25", default-features = false, features = ["bmp", "gif", "jpeg"] }
 # Already in the graph through image; read directly for CMYK JPEG samples, which image converts to RGB.
 zune-jpeg = "0.5"
+# Already in the graph through hayro-syntax; decodes JPEG 2000 images for export and Copy Image.
+hayro-jpeg2000 = { workspace = true }
 thiserror = { workspace = true }
 # Already in the graph through lopdf; used only to read plain-text files (decode_text).
 encoding_rs = "0.8"

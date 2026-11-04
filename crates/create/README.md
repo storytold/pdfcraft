@@ -46,4 +46,4 @@ CCITT fax images (Group 3 and 4) are decoded for export through `pdfcraft_cos::D
 `ASCII85Decode` too. Byte-aligned Group 3 rows are read by their end-of-line codes, whether the fill starts each code on a byte or
 ends it on one, when the data starts with one (T.4 sends one before the first row), and on bytes otherwise, whatever `/EndOfLine`
 says; data that comes up short is reported. Data with codes but none before the first row is read on bytes, and is reported or,
-at `/K 0`, may come out wrong. JPEG 2000 images are still reported, not exported.
+at `/K 0`, may come out wrong. JPEG 2000 images are decoded and written as PNG (a JPEG 2000 mask, though, is still left out, so the image comes out opaque).

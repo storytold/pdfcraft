@@ -416,7 +416,7 @@ fn jpeg_2000_images_are_embedded_as_is() {
     let m = media(p);
     assert!((m[2] - 30.0 * 72.0 / 150.0).abs() < 0.2 && (m[3] - 20.0 * 72.0 / 150.0).abs() < 0.2, "{m:?}");
     let out = extract_images(&doc, &[0], 0);
-    assert!(out.images.is_empty() && out.skipped.len() == 1, "JPX can't be exported yet: {:?}", out.skipped);
+    assert!(out.images.is_empty() && out.skipped.len() == 1, "a stub JPX can't be decoded, so it is skipped: {:?}", out.skipped);
     // A raw codestream: the size comes from SIZ.
     let mut siz = vec![0xFF, 0x4F, 0xFF, 0x51, 0, 41, 0, 0];
     for v in [64u32, 48, 0, 0] {
@@ -2619,4 +2619,88 @@ fn proportions_up_to_the_limit_scale_as_they_did() {
     // A mask of its image's size comes through as it is.
     let mask = noise(20, 10);
     assert_eq!(crate::extract::scaled(&mask, 20, 10), mask);
+}
+
+/// Contributor-original JPEG 2000 codestream: one unsigned 8-bit pixel per component, one tile, no
+/// decomposition and one empty packet per component, so every sample decodes to the midpoint (128).
+fn jpx_midpoint_codestream(components: u16) -> Vec<u8> {
+    let mut codestream = vec![0xff, 0x4f, 0xff, 0x51]; // SOC, SIZ.
+    codestream.extend_from_slice(&(38 + 3 * components).to_be_bytes());
+    codestream.extend_from_slice(&0_u16.to_be_bytes()); // Rsiz.
+    for value in [1_u32, 1, 0, 0, 1, 1, 0, 0] {
+        codestream.extend_from_slice(&value.to_be_bytes());
+    }
+    codestream.extend_from_slice(&components.to_be_bytes());
+    for _ in 0..components {
+        codestream.extend_from_slice(&[7, 1, 1]); // Eight bits, no subsampling.
+    }
+    codestream.extend_from_slice(&[0xff, 0x52, 0, 12, 0, 0, 0, 1, 0, 0, 4, 4, 0, 1]); // COD
+    codestream.extend_from_slice(&[0xff, 0x5c, 0, 4, 0x40, 0x40]); // QCD
+    codestream.extend_from_slice(&[0xff, 0x90, 0, 10, 0, 0]); // SOT, tile zero.
+    codestream.extend_from_slice(&(14 + u32::from(components)).to_be_bytes());
+    codestream.extend_from_slice(&[0, 1, 0xff, 0x93]); // One tile part, SOD.
+    codestream.extend(std::iter::repeat_n(0, usize::from(components)));
+    codestream.extend_from_slice(&[0xff, 0xd9]); // EOC.
+    codestream
+}
+
+/// A one-page PDF holding a 1 × 1 `/JPXDecode` image made of `codestream`, with `extra` in its dictionary.
+fn jpx_pdf(codestream: &[u8], extra: &str) -> Document {
+    let content = "q 20 0 0 20 5 5 cm /Im1 Do Q";
+    let mut pdf = format!(
+        "%PDF-1.7\n\
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents 4 0 R /Resources << /XObject << /Im1 5 0 R >> >> >> endobj\n\
+4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+5 0 obj << /Type /XObject /Subtype /Image /Width 1 /Height 1 /BitsPerComponent 8 {extra}/Filter /JPXDecode /Length {} >> stream\n",
+        content.len(),
+        codestream.len()
+    )
+    .into_bytes();
+    pdf.extend_from_slice(codestream);
+    pdf.extend_from_slice(b"\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF");
+    Document::open(Arc::new(pdf)).unwrap()
+}
+
+fn png_pixels(data: &[u8]) -> (png::ColorType, u32, u32, Vec<u8>) {
+    let mut r = png::Decoder::new(std::io::Cursor::new(data.to_vec())).read_info().unwrap();
+    let mut buf = vec![0; r.output_buffer_size().unwrap()];
+    let info = r.next_frame(&mut buf).unwrap();
+    buf.truncate(info.buffer_size());
+    (info.color_type, info.width, info.height, buf)
+}
+
+/// #6121: Copy Image and Save Image As failed on every `/JPXDecode` image ("JPEG 2000 images can't be
+/// exported yet") though the viewer draws it. It is decoded and written as a PNG.
+#[test]
+fn a_jpeg_2000_image_is_exported_as_a_png() {
+    for (components, extra, pixel) in
+        [(3, "", vec![128, 128, 128]), (1, "/ColorSpace /DeviceGray ", vec![128, 128, 128]), (1, "", vec![128, 128, 128])]
+    {
+        let doc = jpx_pdf(&jpx_midpoint_codestream(components), extra);
+        let out = extract_images(&doc, &[0], 0);
+        assert!(out.skipped.is_empty(), "{components} components {extra}: {:?}", out.skipped);
+        let [image] = out.images.as_slice() else { panic!("one image: {:?}", out.images) };
+        assert_eq!(image.extension, "png");
+        let (colour, w, h, pixels) = png_pixels(&image.data);
+        assert_eq!((colour, w, h), (png::ColorType::Rgb, 1, 1), "{components} components {extra}");
+        assert_eq!(pixels, pixel, "{components} components {extra}");
+        // The same file through Save Image As / Copy Image.
+        let r = pages(&doc)[0].get(b"Resources").and_then(|r| r.as_dict().cloned()).unwrap();
+        let im = doc.resolve(r.get(b"XObject").unwrap()).as_dict().unwrap().reference(b"Im1").unwrap();
+        assert_eq!(image_file(&doc, im).unwrap().0, "png");
+    }
+}
+
+/// A JPEG 2000 image that is cut short, or isn't one, is reported and never panics.
+#[test]
+fn a_damaged_jpeg_2000_image_is_skipped_with_a_reason() {
+    let whole = jpx_midpoint_codestream(3);
+    for data in [&whole[..whole.len() / 2], &whole[..4], &[0u8; 16][..], &[][..]] {
+        let out = extract_images(&jpx_pdf(data, ""), &[0], 0);
+        assert!(out.images.is_empty(), "{} bytes", data.len());
+        let [(_, _, why)] = out.skipped.as_slice() else { panic!("one skipped: {:?}", out.skipped) };
+        assert!(!why.is_empty() && !why.contains("can't be exported yet"), "{why}");
+    }
 }

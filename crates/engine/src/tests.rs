@@ -10369,3 +10369,41 @@ fn fill_sign_multiline_text_survives_engine_save_reopen_and_render() {
     assert_eq!(reopened.get(again).unwrap().info.annotations[0].contents.as_deref(), Some(text), "reopening preserves all blank lines");
     assert_eq!(before.rgba, render_page(&reopened, again).rgba, "the saved appearance is identical");
 }
+
+/// #6121: Copy Image and Copy Image in Original Format failed on a `/JPXDecode` picture ("JPEG 2000
+/// images can't be exported yet") though the page shows it. The picture is decoded; the clipboard
+/// cannot hold JPEG 2000, so the file form is a PNG.
+#[test]
+fn copy_image_decodes_a_jpeg_2000_picture() {
+    // Contributor-original codestream: one 8-bit RGB pixel, one tile, one empty packet per component,
+    // so every sample decodes to the midpoint, 128.
+    let mut codestream = vec![0xff, 0x4f, 0xff, 0x51, 0, 47, 0, 0]; // SOC, SIZ (Lsiz 47), Rsiz.
+    for value in [1_u32, 1, 0, 0, 1, 1, 0, 0] {
+        codestream.extend_from_slice(&value.to_be_bytes());
+    }
+    codestream.extend_from_slice(&[0, 3, 7, 1, 1, 7, 1, 1, 7, 1, 1]);
+    codestream.extend_from_slice(&[0xff, 0x52, 0, 12, 0, 0, 0, 1, 0, 0, 4, 4, 0, 1]); // COD
+    codestream.extend_from_slice(&[0xff, 0x5c, 0, 4, 0x40, 0x40]); // QCD
+    codestream.extend_from_slice(&[0xff, 0x90, 0, 10, 0, 0, 0, 0, 0, 17, 0, 1, 0xff, 0x93, 0, 0, 0, 0xff, 0xd9]);
+    let content = "q 20 0 0 20 5 5 cm /Im1 Do Q";
+    let mut pdf = format!(
+        "%PDF-1.7\n\
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents 4 0 R /Resources << /XObject << /Im1 5 0 R >> >> >> endobj\n\
+4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+5 0 obj << /Type /XObject /Subtype /Image /Width 1 /Height 1 /BitsPerComponent 8 /Filter /JPXDecode /Length {} >> stream\n",
+        content.len(),
+        codestream.len()
+    )
+    .into_bytes();
+    pdf.extend_from_slice(&codestream);
+    pdf.extend_from_slice(b"\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF");
+    let mut s = Session::new();
+    let id = s.open("jpx.pdf", None, std::sync::Arc::new(pdf), None).unwrap();
+    let d = s.get(id).unwrap();
+    let r = d.page_images(0)[0].rect;
+    assert_eq!(d.page_image_at(0, [(r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0]), Some(0));
+    assert_eq!(d.page_image_rgba(0, 0).unwrap(), (1, 1, vec![128, 128, 128, 255]));
+    assert_eq!(d.page_image_copy_file(0, 0).unwrap().0, "png");
+}
