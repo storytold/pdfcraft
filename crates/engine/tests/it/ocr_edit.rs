@@ -207,3 +207,20 @@ fn visible_stretched_text_rewrites_unchanged() {
     let i = ((y * out.width + x) * 4) as usize;
     assert_eq!(&out.rgba[i..i + 3], &[255, 255, 255]);
 }
+
+#[test]
+fn hebrew_ocr_words_are_searchable_in_logical_order() {
+    // On an RTL line, "שלום" sits on the right (x = 120..160) and "עולם" on the left (x = 60..100).
+    let (s, id) = scanned_with(vec![word("שלום", 120.0, 160.0, 50.0), word("עולם", 60.0, 100.0, 50.0)]);
+    let doc = s.get(id).unwrap();
+    let out = PageRenderer::new(doc.bytes.clone(), Default::default()).render(RenderRequest {
+        page: 0,
+        kind: pdfcraft_render::RequestKind::Text,
+        scale: 1.0,
+        ..Default::default()
+    });
+    let page_text = out.text.expect("page text extracted");
+    assert_eq!(page_text.plain_text().trim(), "שלום עולם");
+    assert!(!page_text.find("שלום").is_empty());
+    assert!(!page_text.find("עולם").is_empty());
+}
