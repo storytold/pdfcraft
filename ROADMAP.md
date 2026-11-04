@@ -1,3 +1,4 @@
+- 2026-11-04 (M6, PR #5699 memory/widget bounds): Count reset widgets and bound escaped UTF-8 text conversion before copies; add negative and Unicode boundary regressions.
 - 2026-11-04 (M6, PR #5699 reset estimate): Charge expanded-name scans and field-name copy/comparison bytes; add three negative regressions and byte-exact refusal checks.
 # PdfCraft roadmap
 

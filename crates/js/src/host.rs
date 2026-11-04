@@ -132,6 +132,38 @@ pub(crate) fn function(ctx: &mut Context, f: NativeFunction) -> JsFunction {
     FunctionObjectBuilder::new(ctx.realm(), f).build()
 }
 
+/// Format exactly the escaped UTF-8 representation used by `text`, refusing a
+/// write before it exceeds the remaining aggregate budget. No full Rust copy of
+/// an oversized JavaScript string is made just to discover its byte length.
+fn text_with_budget(v: &JsValue, ctx: &mut Context, remaining: usize) -> JsResult<String> {
+    use std::fmt::Write;
+    if v.is_undefined() || v.is_null() {
+        return Ok(String::new());
+    }
+    let js = v.to_string(ctx)?;
+    let exceeded = || error("string array byte limit exceeded");
+    // Every UTF-16 unit contributes at least one byte in the escaped UTF-8 output.
+    if js.len() > remaining {
+        return Err(exceeded());
+    }
+    struct BoundedText {
+        text: String,
+        limit: usize,
+    }
+    impl std::fmt::Write for BoundedText {
+        fn write_str(&mut self, text: &str) -> std::fmt::Result {
+            if self.text.len().checked_add(text.len()).is_none_or(|len| len > self.limit) {
+                return Err(std::fmt::Error);
+            }
+            self.text.push_str(text);
+            Ok(())
+        }
+    }
+    let mut out = BoundedText { text: String::new(), limit: remaining };
+    write!(&mut out, "{}", js.display_escaped()).map_err(|_| exceeded())?;
+    Ok(out.text)
+}
+
 pub(crate) fn strings(v: &JsValue, ctx: &mut Context) -> JsResult<Vec<String>> {
     if let Some(o) = v.as_object()
         && o.is_array()
@@ -142,13 +174,16 @@ pub(crate) fn strings(v: &JsValue, ctx: &mut Context) -> JsResult<Vec<String>> {
             return Err(error(format!("array length exceeds {MAX_ARRAY_LENGTH}")));
         }
         let mut out = Vec::new();
+        let mut remaining = xfa::MAX_PAYLOAD;
         for i in 0..n {
             let x = a.get(i, ctx)?;
-            out.push(text(&x, ctx)?);
+            let value = text_with_budget(&x, ctx, remaining)?;
+            remaining = remaining.saturating_sub(value.len());
+            out.push(value);
         }
         return Ok(out);
     }
-    Ok(if v.is_undefined() || v.is_null() { Vec::new() } else { vec![text(v, ctx)?] })
+    Ok(if v.is_undefined() || v.is_null() { Vec::new() } else { vec![text_with_budget(v, ctx, xfa::MAX_PAYLOAD)?] })
 }
 
 pub(crate) fn colour(c: &Option<Vec<String>>, ctx: &mut Context) -> JsValue {
@@ -203,4 +238,21 @@ pub(crate) fn set_value(f: &mut FieldState, vals: Vec<String>) {
         FieldType::ListBox => vals,
         _ => vals.into_iter().take(1).collect(),
     };
+}
+
+#[cfg(test)]
+mod string_budget_review_tests {
+    use super::*;
+    #[test]
+    fn escaped_text_budget_counts_exact_utf8_bytes() {
+        let mut ctx = Context::default();
+        for (script, bytes) in [("'ascii'", 5), ("'é'", 2), ("'😀'", 4), ("'\\uD800'", 6)] {
+            let value = ctx.eval(boa_engine::Source::from_bytes(script)).unwrap();
+            let expected = text(&value, &mut ctx).unwrap();
+            assert_eq!(expected.len(), bytes);
+            assert_eq!(text_with_budget(&value, &mut ctx, bytes).unwrap(), expected);
+            assert!(text_with_budget(&value, &mut ctx, bytes - 1).is_err());
+        }
+        assert_eq!(text_with_budget(&JsValue::null(), &mut ctx, 0).unwrap(), "");
+    }
 }

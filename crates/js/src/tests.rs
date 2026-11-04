@@ -2143,3 +2143,10 @@ fn a_plain_form_sees_the_xfa_version_but_not_installed() {
     assert_eq!(o.value, "undefined number 3.5");
     assert_eq!(o.alerts, [Message::plain("old viewer")]);
 }
+
+#[test]
+fn string_arrays_refuse_aggregate_text_before_request_clipping() {
+    let o = go("resetForm(new Array(65).fill('x'.repeat(1 << 19)));", &Event::doc("Console"));
+    assert!(o.error.as_deref().is_some_and(|e| e.contains("string array byte limit")), "{:?}", o.error);
+    assert!(o.requests.is_empty() && o.changed.is_empty());
+}

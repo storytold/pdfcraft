@@ -50,8 +50,12 @@ fn validate_reset_work(fields: &[Field], states: &[pdfcraft_js::FieldState], req
     }
     let name_bytes =
         fields.iter().fold(0usize, |n, f| n.saturating_add(f.name.len())).max(states.iter().fold(0usize, |n, f| n.saturating_add(f.name.len())));
-    let per_pass =
-        count.saturating_mul(1usize.saturating_add(calculations).saturating_add(references)).saturating_add(source_bytes).saturating_add(name_bytes);
+    let widgets = fields.iter().fold(0usize, |n, f| n.saturating_add(f.widgets.len()));
+    let per_pass = count
+        .saturating_mul(1usize.saturating_add(calculations).saturating_add(references))
+        .saturating_add(source_bytes)
+        .saturating_add(name_bytes)
+        .saturating_add(widgets);
     // A named reset may expand to every field. The forms layer validates each expanded
     // name against all fields and scans the selection again for each field. Charge the
     // worst case before performing expansion, including bytes read by string comparisons.
@@ -1075,5 +1079,48 @@ mod reset_budget_review_tests {
         let resets = vec![Request::Reset(Vec::new()); 64];
         assert!(validate_reset_work(&[], &states, &resets).is_err());
         assert!(validate_reset_work(&[], &states, &[Request::Reset(Vec::new())]).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod widget_budget_review_tests {
+    use super::*;
+    #[test]
+    fn reset_budget_charges_all_widgets() {
+        let widget = pdfcraft_forms::Widget {
+            obj: pdfcraft_cos::ObjRef { num: 1, generation: 0 },
+            page: None,
+            rect: [0.0; 4],
+            on_state: None,
+            state: None,
+            tab: 0,
+            locked: false,
+            hidden: false,
+            read_only: false,
+            rotation: 0,
+            caption: None,
+            list: None,
+            round: false,
+        };
+        let mut field = Field {
+            name: "x".into(),
+            obj: widget.obj,
+            kind: FieldKind::Text,
+            value: vec![],
+            default: vec![],
+            flags: 0,
+            max_len: None,
+            options: vec![],
+            da: String::new(),
+            quadding: 0,
+            tooltip: None,
+            widgets: vec![widget; 140_000],
+            actions: Default::default(),
+            button: None,
+        };
+        let resets = vec![Request::Reset(Vec::new()); 64];
+        assert!(validate_reset_work(std::slice::from_ref(&field), &[], &resets).is_err());
+        field.widgets.truncate(1);
+        assert!(validate_reset_work(&[field], &[], &resets).is_ok());
     }
 }
