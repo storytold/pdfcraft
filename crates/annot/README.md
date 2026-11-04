@@ -45,7 +45,7 @@ deterministic; the engine supplies them.
 
 - Unknown keys are kept. Inline annotation dictionaries are promoted to indirect objects only
   when an edit needs a reference to them.
-- `set_style` refuses (and changes nothing) when it cannot redraw the comment, e.g. a stamp
+- `set_style` refuses when it cannot redraw the comment, e.g. a stamp
   whose appearance cannot be regenerated, instead of leaving a stale appearance.
 - Replies get the parent's `/Rect` and an empty appearance: they appear in comment lists but
   never paint a second icon.
