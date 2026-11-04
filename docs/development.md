@@ -182,3 +182,6 @@ preference is accessible through `ui.set` with `on` or `off`; changing it requir
 Adapted from https://github.com/storytold/lightcraft/pull/2421. Windows startup, restart persistence,
 light/dark modal opacity, resizing, and forced OpenGL were checked through the opt-in control
 channel on 2026-10-23. The user confirmed on 2026-10-23 that the fix works on a VRR monitor.
+
+The Windows startup flag is saved atomically in `compose-window` beside `app.ron`.
+It is read independently of stamp-library size. Existing preferences migrate on the next save.

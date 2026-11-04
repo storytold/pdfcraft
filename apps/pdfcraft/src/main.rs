@@ -351,7 +351,7 @@ fn native_options(integrated: bool, app_frame: bool, renderer: eframe::Renderer)
         viewport = viewport.with_decorations(false);
     }
     let persistence_path = settings_dir().map(|d| d.join("app.ron"));
-    let compose = cfg!(target_os = "windows") && persistence_path.as_deref().is_some_and(vrr::load);
+    let compose = cfg!(target_os = "windows") && settings_dir().is_some_and(|d| vrr::load(&d.join("compose-window")));
     viewport = viewport.with_transparent(vrr::enabled(
         cfg!(target_os = "windows"),
         compose,
@@ -413,6 +413,15 @@ fn app_creator<'a>(
         app.reopen_last_session = reopen::system_default();
         if let Some(json) = cc.storage.and_then(|s| s.get_string("pdfcraft").or_else(|| s.get_string(LEGACY_STORAGE_KEY))) {
             app.restore(&json);
+        }
+        #[cfg(target_os = "windows")]
+        {
+            app.compose_window_path = settings_dir().map(|d| d.join("compose-window"));
+            // Existing app.ron preferences migrate when eframe next saves. Once present,
+            // the small startup flag is authoritative even for large settings libraries.
+            if let Some(path) = app.compose_window_path.as_deref().filter(|p| p.exists()) {
+                app.compose_window = vrr::load(path);
+            }
         }
         app.window_state = pdfcraft_ui_egui::window_state::WindowState::started_with(cc.storage);
         app.integrated_titlebar = integrated;

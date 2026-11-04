@@ -1,24 +1,11 @@
 //! Startup-only Windows composition preference. Adapted from LightCraft PR #2421.
-use std::{collections::HashMap, io::Read, path::Path};
+use std::{io::Read, path::Path};
 
-/// Read eframe's RON map before the renderer creates its window. Corrupt settings are harmless.
+/// Read the dedicated startup flag, independently of large stamp libraries in app.ron.
 pub fn load(path: &Path) -> bool {
-    let mut text = String::new();
     let Ok(file) = std::fs::File::open(path) else { return false };
-    // Preferences are untrusted; never allocate without a bound for a startup flag.
-    if file.take(8 * 1024 * 1024 + 1).read_to_string(&mut text).is_err() || text.len() > 8 * 1024 * 1024 {
-        return false;
-    }
-    saved(&text)
-}
-
-fn saved(text: &str) -> bool {
-    let Ok(map) = ron::from_str::<HashMap<String, String>>(text) else { return false };
-    map.get("pdfcraft")
-        .or_else(|| map.get(super::LEGACY_STORAGE_KEY))
-        .and_then(|json| serde_json::from_str::<serde_json::Value>(json).ok())
-        .and_then(|v| v.get("compose_window").and_then(serde_json::Value::as_bool))
-        .unwrap_or(false)
+    let mut text = String::new();
+    file.take(4).read_to_string(&mut text).is_ok() && text == "on"
 }
 
 /// Explicit renderer/presentation overrides and fallback OpenGL keep their normal window.
@@ -31,23 +18,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn startup_composition_reads_current_and_legacy_storage_safely() {
-        for key in ["pdfcraft", "printcraft"] {
-            for (json, expected) in [
-                (r#"{"compose_window":true}"#, true),
-                (r#"{"compose_window":false}"#, false),
-                ("{}", false),
-                (r#"{"compose_window":"true"}"#, false),
-                ("broken", false),
-            ] {
-                let text = ron::to_string(&HashMap::from([(key, json)])).unwrap();
-                assert_eq!(saved(&text), expected);
-            }
+    fn startup_composition_loads_a_small_flag_beside_large_settings() {
+        let dir = std::env::temp_dir().join(format!("pdfcraft-vrr-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("compose-window");
+        std::fs::write(dir.join("app.ron"), vec![b' '; 9 * 1024 * 1024]).unwrap();
+        assert!(!load(&path));
+        for (text, expected) in [("on", true), ("off", false), ("broken", false), ("", false), ("onextra", false)] {
+            std::fs::write(&path, text).unwrap();
+            assert_eq!(load(&path), expected);
         }
-        assert!(!saved("broken"));
-        let text = ron::to_string(&HashMap::from([("pdfcraft", "{}"), ("printcraft", r#"{"compose_window":true}"#)])).unwrap();
-        assert!(!saved(&text), "current key takes precedence");
-        assert!(!load(Path::new("missing-vrr-settings/app.ron")));
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

@@ -102,6 +102,8 @@ impl PdfCraftApp {
             invert_middle_drag: false,
             animation_effects: motion::AnimationEffects::default(),
             compose_window: false,
+            #[cfg(target_os = "windows")]
+            compose_window_path: None,
             motion: motion::Motion::default(),
             language: i18n::AUTO.to_string(),
             ui_scale: None,
@@ -441,6 +443,18 @@ impl eframe::App for PdfCraftApp {
             let minimized = self.ctx.as_ref().is_some_and(|c| c.input(|i| i.viewport().minimized == Some(true)));
             self.window_state.keep(storage, minimized);
         }
+        #[cfg(target_os = "windows")]
+        if let Some(path) = &self.compose_window_path {
+            if let Some(parent) = path.parent()
+                && let Err(error) = std::fs::create_dir_all(parent)
+            {
+                log::warn!("Cannot create composition preference directory: {error}");
+            }
+            let bytes: &[u8] = if self.compose_window { b"on" } else { b"off" };
+            if let Err(error) = pdfcraft_platform::staging::write_atomically(path, bytes, pdfcraft_platform::staging::StagingName::TagThenSuffix) {
+                log::warn!("Cannot save composition preference: {error}");
+            }
+        }
         storage.set_string("pdfcraft", self.persist());
     }
 
@@ -712,6 +726,30 @@ impl eframe::App for PdfCraftApp {
 #[cfg(test)]
 mod vrr_tests {
     use super::*;
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn vrr_save_writes_the_dedicated_startup_flag() {
+        struct Storage;
+        impl eframe::Storage for Storage {
+            fn get_string(&self, _: &str) -> Option<String> {
+                None
+            }
+            fn set_string(&mut self, _: &str, _: String) {}
+            fn flush(&mut self) {}
+            fn remove_string(&mut self, _: &str) {}
+        }
+        let dir = std::env::temp_dir().join(format!("pdfcraft-vrr-save-{}", std::process::id()));
+        let path = dir.join("compose-window");
+        let mut app = PdfCraftApp::new();
+        app.compose_window_path = Some(path.clone());
+        for (enabled, expected) in [(true, "on"), (false, "off")] {
+            app.compose_window = enabled;
+            eframe::App::save(&mut app, &mut Storage);
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), expected);
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn vrr_preference_round_trips_and_rejects_invalid_options() {
