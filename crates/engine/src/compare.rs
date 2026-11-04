@@ -150,7 +150,10 @@ pub enum OfficeFormat {
     Docx,
     Pptx,
     Html,
+    /// CSS-free HTML that preserves text and inline images but drops colours and layout styling.
+    HtmlSimple,
     Rtf,
+    Markdown,
 }
 
 impl OfficeFormat {
@@ -159,7 +162,9 @@ impl OfficeFormat {
             OfficeFormat::Docx => "docx",
             OfficeFormat::Pptx => "pptx",
             OfficeFormat::Html => "html",
+            OfficeFormat::HtmlSimple => "html",
             OfficeFormat::Rtf => "rtf",
+            OfficeFormat::Markdown => "md",
         }
     }
 
@@ -169,25 +174,27 @@ impl OfficeFormat {
             "pptx" => Some(OfficeFormat::Pptx),
             "html" | "htm" => Some(OfficeFormat::Html),
             "rtf" => Some(OfficeFormat::Rtf),
+            "md" | "markdown" => Some(OfficeFormat::Markdown),
             _ => None,
         }
     }
 }
 
-/// A Word, PowerPoint, HTML or RTF export ([`crate::Document::export_office_checked`]).
+/// A Word, PowerPoint, HTML, RTF or Markdown export ([`crate::Document::export_office_checked`]).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct OfficeExport {
     /// The exported file.
     pub bytes: Vec<u8>,
     /// Pages (0-based) that draw forms nested deeper than [`MAX_FORM_DEPTH`] or more of them
-    /// than [`MAX_FORM_VISITS`], or pictures past [`MAX_EXPORT_IMAGE_BYTES`]: export stops
-    /// reading there to stay bounded on hostile files, so the text and images of those forms, or
+    /// than [`MAX_FORM_VISITS`], or pictures past [`MAX_EXPORT_IMAGE_BYTES`] or past what one export
+    /// may decode: export stops reading there to stay bounded on hostile files, so the text and images of those forms, or
     /// those pictures, are missing from `bytes`.
     pub truncated_pages: Vec<usize>,
 }
 
 /// An image object prepared for Office export: its file extension and encoded bytes, or why it is
-/// left out (`Err(true)`: past [`MAX_EXPORT_IMAGE_BYTES`]; `Err(false)`: it can't be encoded).
+/// left out (`Err(true)`: past [`MAX_EXPORT_IMAGE_BYTES`], or what the export may decode;
+/// `Err(false)`: it can't be encoded).
 type PreparedImage = Result<(&'static str, Arc<[u8]>), bool>;
 
 impl crate::Document {
@@ -201,6 +208,18 @@ impl crate::Document {
     /// pictures went past `image_budget` bytes ([`OfficeExport::truncated_pages`]). Without
     /// `images` no picture is prepared.
     pub(crate) fn export_pages_checked(&self, images: bool, image_budget: usize) -> (Vec<pdfcraft_export::Page>, Vec<usize>) {
+        let Some(editor) = self.editor.as_ref() else { return (Vec::new(), Vec::new()) };
+        self.export_pages_within(images, image_budget, &mut pdfcraft_cos::ImageBudget::new(&editor.cos))
+    }
+
+    /// [`Self::export_pages_checked`], its pictures decoded within `image_work`, which is shared
+    /// by the whole export: a picture past it is left out like one past `image_budget`.
+    pub(crate) fn export_pages_within(
+        &self,
+        images: bool,
+        image_budget: usize,
+        image_work: &mut pdfcraft_cos::ImageBudget,
+    ) -> (Vec<pdfcraft_export::Page>, Vec<usize>) {
         let Some(cos) = self.editor.as_ref().map(|e| &e.cos) else { return (Vec::new(), Vec::new()) };
         let mut truncated = Vec::new();
         // Each image object is encoded once and shared by every place that draws it.
@@ -251,7 +270,9 @@ impl crate::Document {
                     .filter_map(|im| {
                         let object = im.object?;
                         let prepared = encoded.entry(object).or_insert_with(|| {
-                            let (ext, bytes) = pdfcraft_create::image_file(cos, object).map_err(|_| false)?;
+                            let refused = image_work.refused();
+                            let (ext, bytes) =
+                                pdfcraft_create::image_file_within(cos, object, &mut *image_work).map_err(|_| image_work.refused() > refused)?;
                             image_bytes = image_bytes.checked_sub(bytes.len()).ok_or(true)?;
                             Ok((if ext == "jpg" { "jpg" } else { "png" }, Arc::from(bytes)))
                         });
@@ -285,14 +306,17 @@ impl crate::Document {
     /// [`Self::export_office`], and the pages whose text it had to leave out
     /// ([`OfficeExport::truncated_pages`]).
     pub fn export_office_checked(&self, format: OfficeFormat) -> OfficeExport {
-        // RTF leaves pictures out.
-        let (pages, truncated_pages) = self.export_pages_checked(format != OfficeFormat::Rtf, MAX_EXPORT_IMAGE_BYTES);
+        // RTF and Markdown leave pictures out.
+        let (pages, truncated_pages) =
+            self.export_pages_checked(!matches!(format, OfficeFormat::Rtf | OfficeFormat::Markdown), MAX_EXPORT_IMAGE_BYTES);
         let title = self.info.title.clone().unwrap_or_else(|| self.name.trim_end_matches(".pdf").to_string());
         let bytes = match format {
             OfficeFormat::Docx => pdfcraft_export::docx(&pages, &title),
             OfficeFormat::Pptx => pdfcraft_export::pptx(&pages, &title),
             OfficeFormat::Html => pdfcraft_export::html(&pages, &title).into_bytes(),
+            OfficeFormat::HtmlSimple => pdfcraft_export::html_simple(&pages, &title).into_bytes(),
             OfficeFormat::Rtf => pdfcraft_export::rtf(&pages).into_bytes(),
+            OfficeFormat::Markdown => pdfcraft_export::markdown(&pages).into_bytes(),
         };
         OfficeExport { bytes, truncated_pages }
     }

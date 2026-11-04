@@ -118,7 +118,9 @@ neither the MSI nor the portable zip needs the Visual C++ redistributable.
 - Before packaging, it reads both executables' PE headers: the machine type must match `-Arch`, and
   `pdfcraft.exe` must be a GUI-subsystem program (no console window, #57) while `pdfcraft-cli.exe`
   stays a console program.
-- `pdfcraft.wxs` (WiX v5) installs per machine into Program Files with a Start Menu shortcut, a
+- `pdfcraft.wxs` (WiX v5) is a dual-scope package (per-user by default into
+  `%LOCALAPPDATA%\Programs\ArtCraft\PdfCraft`, per-machine into `Program Files\ArtCraft\PdfCraft` (`Program Files (x86)` for the 32-bit build),
+  see `packaging/windows/INSTALLATION.md`) with a Start Menu shortcut, a
   desktop shortcut (on by default) and an App Paths entry. Both shortcuts are plain links to
   `pdfcraft.exe`, not advertised MSI shortcuts (#107, #143). The MSI version is the numeric `X.Y.Z`
   (MSI has no pre-release field), and same-version upgrades are allowed so release candidates replace

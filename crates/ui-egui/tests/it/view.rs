@@ -58,6 +58,59 @@ fn rect(h: &Harness<'static, PdfCraftApp>, page: usize) -> Option<egui::Rect> {
     h.state().views[0].page_screen_rect(page)
 }
 
+fn sidebar_key(h: &mut Harness<'static, PdfCraftApp>, key: Key, modifiers: Modifiers) {
+    h.event(egui::Event::ModifiersChanged(modifiers));
+    for pressed in [true, false] {
+        h.event(egui::Event::Key { key, physical_key: None, pressed, repeat: false, modifiers });
+    }
+    h.run_steps(2);
+    h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+    h.run_steps(1);
+}
+
+#[test]
+fn pages_sidebar_select_all_keeps_current_page_and_keyboard_scope() {
+    use egui_kittest::kittest::Queryable;
+    let mut h = harness(&[("panel", "pages")]);
+    let _ = h.get_by_role_and_label(egui::accesskit::Role::Group, "Pages");
+    h.get_by_label("Page 2").click();
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].current, 1);
+    // Moving the pointer is not a keyboard-focus change.
+    h.hover_at(rect(&h, 1).unwrap().center());
+    h.run_steps(1);
+    for _ in 0..2 {
+        sidebar_key(&mut h, Key::A, Modifiers::COMMAND);
+        assert_eq!(h.state().views[0].target_pages(), vec![0, 1, 2]);
+        assert_eq!(h.state().views[0].current, 1, "selecting does not navigate");
+    }
+    sidebar_key(&mut h, Key::Escape, Modifiers::NONE);
+    assert!(h.state().views[0].selected.is_empty());
+
+    // A click on the viewer returns Ctrl+A to text selection, even with Pages open.
+    let pos = rect(&h, 1).unwrap().center();
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
+    }
+    h.run_steps(3);
+    sidebar_key(&mut h, Key::A, Modifiers::COMMAND);
+    assert!(h.state().views[0].selected.is_empty(), "viewer shortcut must not select thumbnails");
+
+    // A different document does not inherit the previous sidebar's keyboard ownership.
+    h.get_by_label("Page 2").click();
+    h.run_steps(2);
+    h.state_mut().open_bytes("other.pdf", None, PAGES.to_vec()).unwrap();
+    h.run_steps(5);
+    sidebar_key(&mut h, Key::A, Modifiers::COMMAND);
+    let active = h.state().active.unwrap();
+    assert!(h.state().views[active].selected.is_empty());
+    h.get_by_label("Page 1").click();
+    h.run_steps(2);
+    sidebar_key(&mut h, Key::A, Modifiers::COMMAND);
+    assert_eq!(h.state().views[active].target_pages(), vec![0, 1, 2]);
+    assert!(h.state().views[0].selected.is_empty(), "selection remains document-local");
+}
+
 /// Two pages of different sizes: 300×400 then 600×300.
 const MIXED: &[u8] = b"%PDF-1.7
 1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
@@ -480,6 +533,98 @@ fn single_page_swipe_that_reaches_the_edge_does_not_turn_but_a_fresh_one_does() 
         "page 2 starts at its top after the swipe: {top} in {:?}",
         h.state().views[0].viewport_rect()
     );
+}
+
+#[test]
+fn single_page_wheel_at_last_page_bottom_edge_can_scroll_back_up() {
+    let mut h = harness_stepping(1.0 / 60.0, &[("layout", "single"), ("zoom", "200")]);
+    h.state_mut().views[0].go_to_page(2); // Go to last page of PAGES (3 pages)
+    h.run_steps(20);
+    let at = h.state().views[0].viewport_rect().center();
+    h.hover_at(at);
+    h.run_steps(4);
+
+    // Scroll to the bottom edge of page 3
+    let mut notches = 0;
+    let mut last = rect(&h, 2).expect("page 3 on screen").min.y;
+    let mut at_bottom = false;
+    while notches < 80 {
+        h.event(wheel(MouseWheelUnit::Line, -1.0, TouchPhase::Move));
+        h.run_steps(12);
+        notches += 1;
+        if let Some(r) = rect(&h, 2) {
+            if (r.min.y - last).abs() < 0.01 {
+                at_bottom = true;
+                break;
+            }
+            last = r.min.y;
+        }
+    }
+    assert!(at_bottom, "reached bottom edge of last page");
+    assert_eq!(h.state().views[0].current, 2, "remains on page 3");
+
+    // Push the wheel further against the bottom edge (cannot turn because it's the last page)
+    for _ in 0..5 {
+        h.event(wheel(MouseWheelUnit::Line, -1.0, TouchPhase::Move));
+        h.run_steps(12);
+    }
+    let bottom_y = rect(&h, 2).expect("page 3 on screen").min.y;
+
+    // Roll the wheel back up: the page must move away from the bottom edge (#5713)
+    h.event(wheel(MouseWheelUnit::Line, 1.0, TouchPhase::Move));
+    h.run_steps(12);
+    let after_up_y = rect(&h, 2).expect("page 3 on screen").min.y;
+    assert!(after_up_y > bottom_y, "scrolling up moves the page away from the bottom edge: {after_up_y} > {bottom_y}");
+}
+
+/// One notch of a mouse wheel that macOS reports in points (a Logitech mouse sends about 14).
+const POINT_NOTCH: f32 = 14.0;
+
+#[test]
+fn single_page_point_notches_pan_the_page_a_notch_turned_to() {
+    let mut h = harness_stepping(1.0 / 60.0, &[("layout", "single"), ("zoom", "200")]);
+    let at = h.state().views[0].viewport_rect().center();
+    h.hover_at(at);
+    h.run_steps(20);
+    for _ in 0..120 {
+        h.event(wheel(MouseWheelUnit::Point, -POINT_NOTCH, TouchPhase::Move));
+        h.run_steps(12);
+        if h.state().views[0].current == 1 {
+            break;
+        }
+    }
+    assert_eq!(h.state().views[0].current, 1, "notches pan page 1, then turn to page 2");
+    h.run_steps(20);
+    let top = rect(&h, 1).expect("page 2 on screen").min.y;
+    for _ in 0..3 {
+        h.event(wheel(MouseWheelUnit::Point, -POINT_NOTCH, TouchPhase::Move));
+        h.run_steps(12);
+    }
+    let after = rect(&h, 1).expect("page 2 on screen").min.y;
+    assert!(after < top, "notches pan page 2 down after the turn (#5713): {after} < {top}");
+}
+
+#[test]
+fn single_page_point_notches_scroll_back_up_from_the_last_page_bottom() {
+    let mut h = harness_stepping(1.0 / 60.0, &[("layout", "single"), ("zoom", "200")]);
+    h.state_mut().views[0].go_to_page(2);
+    h.run_steps(20);
+    let at = h.state().views[0].viewport_rect().center();
+    h.hover_at(at);
+    h.run_steps(4);
+    // Past the bottom: the extra notches push against the last page's edge.
+    for _ in 0..200 {
+        h.event(wheel(MouseWheelUnit::Point, -POINT_NOTCH, TouchPhase::Move));
+        h.run_steps(12);
+    }
+    assert_eq!(h.state().views[0].current, 2, "stays on the last page");
+    let bottom = rect(&h, 2).expect("page 3 on screen").min.y;
+    for _ in 0..3 {
+        h.event(wheel(MouseWheelUnit::Point, POINT_NOTCH, TouchPhase::Move));
+        h.run_steps(12);
+    }
+    let after = rect(&h, 2).expect("page 3 on screen").min.y;
+    assert!(after > bottom + 1.0, "notches scroll back up from the last page's bottom (#5713): {after} > {bottom}");
 }
 
 #[test]
@@ -1871,7 +2016,8 @@ fn sidebar_collapse_and_resize_preserves_scroll_position() {
     let rect_after = v.page_screen_rect(2).expect("page 2 still on screen");
     let vp_after = v.viewport_rect();
     let rel_y_after = rect_after.min.y - vp_after.min.y;
-    assert!((rel_y_after - rel_y_before).abs() < 1.0, "page 2 scroll position preserved: before {rel_y_before}, after {rel_y_after}");
+    // Page rectangles snap to whole pixels, so a different width can move the page by one.
+    assert!((rel_y_after - rel_y_before).abs() <= 1.0, "page 2 scroll position preserved: before {rel_y_before}, after {rel_y_after}");
 
     // Reopen bookmarks panel: available width decreases, so fit-width zoom decreases.
     h.state_mut().set_option("panel", "bookmarks").unwrap();
@@ -1888,7 +2034,10 @@ fn sidebar_collapse_and_resize_preserves_scroll_position() {
     let rect_reopened = v.page_screen_rect(2).expect("page 2 still on screen");
     let vp_reopened = v.viewport_rect();
     let rel_y_reopened = rect_reopened.min.y - vp_reopened.min.y;
-    assert!((rel_y_reopened - rel_y_before).abs() < 1.0, "page 2 scroll position preserved on reopen: before {rel_y_before}, after {rel_y_reopened}");
+    assert!(
+        (rel_y_reopened - rel_y_before).abs() <= 1.0,
+        "page 2 scroll position preserved on reopen: before {rel_y_before}, after {rel_y_reopened}"
+    );
 }
 
 /// Synthetic unequal-height spreads, generated without font or image assets.
@@ -2034,7 +2183,11 @@ fn long_view_menu_fits_a_short_window() {
     assert!(after <= 400.0, "the menu scrolls Side panels into view: {after}");
     crate::support::menu_row(&h, "Side panels").hover();
     h.run_steps(4);
-    h.get_all_by_label("Bookmarks").last().unwrap().click();
+    // The navigation rail has a Bookmarks button too; click the submenu's radio item.
+    let bookmarks = h.get_by(|n| n.role() == egui::accesskit::Role::MenuItemRadio && n.label().as_deref() == Some("Bookmarks"));
+    let row = bookmarks.rect();
+    assert!(row.top() >= 0.0 && row.bottom() <= 400.0, "the Bookmarks submenu row is onscreen: {row:?}");
+    bookmarks.click();
     h.run_steps(4);
     assert_eq!(h.state().right, Some(pdfcraft_ui_egui::RightPanel::Bookmarks));
 }
@@ -2271,4 +2424,23 @@ fn the_pages_panel_tools_are_off_without_page_editing_permission() {
     h.run_steps(3);
     assert!(h.query_by_label("Delete the selected pages").is_none(), "its menu doesn't open");
     assert_eq!(h.state().session.get(id).unwrap().info.pages.len(), 3);
+}
+
+#[test]
+fn a_document_press_releases_pages_keyboard_focus_without_escape() {
+    let mut h = harness(&[("panel", "pages")]);
+    h.get_by_label("Page 2").click();
+    h.run_steps(3);
+    let focused = h.ctx.memory(|m| m.focused());
+    assert!(focused.is_some(), "the thumbnail owns keyboard input");
+    let pos = rect(&h, 1).unwrap().center();
+    h.event(egui::Event::PointerMoved(pos));
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
+        h.run_steps(1);
+    }
+    h.run_steps(2);
+    assert_ne!(h.ctx.memory(|m| m.focused()), focused, "pressing the document relinquishes Pages focus without Escape");
+    sidebar_key(&mut h, Key::A, Modifiers::COMMAND);
+    assert!(h.state().views[0].selected.is_empty(), "Ctrl+A now belongs to the viewer, not page thumbnails");
 }

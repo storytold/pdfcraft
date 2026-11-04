@@ -1,5 +1,5 @@
 use super::options::{UI_OPTIONS, flag, positional, validate_options};
-use super::*;
+use super::{CliError, Duration, stdout_line};
 
 // ---- UI control channel client -----------------------------------------------------------------
 
