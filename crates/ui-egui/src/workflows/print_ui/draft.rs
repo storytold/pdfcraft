@@ -145,6 +145,11 @@ impl PrintDraft {
     /// replaced; leaving Label gives that paper back, unless another one was picked meanwhile.
     pub fn set_handling(&mut self, handling: Handling) {
         let leaving_label = self.handling == Handling::Label && handling != Handling::Label;
+        // An area crop is not a label crop: Label reads its own printed areas again.
+        if self.handling == Handling::Area && handling != Handling::Area {
+            self.crops.clear();
+            self.crop_pages = None;
+        }
         self.handling = handling;
         self.sheet = 0;
         if handling == Handling::Label {

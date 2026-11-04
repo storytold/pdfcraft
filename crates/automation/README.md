@@ -31,7 +31,7 @@ follows the box-level `align`; legacy `null` entries remain accepted with the sa
 ## Conventions
 
 - Tool names are `snake_case` (`page_rotate`): MCP clients reject dots. `ToolDef::command` links a tool to the registry id it automates (`page.rotate`), and `command_list` reports the link.
-- Pages and positions are **1-based**. Rectangles are PDF points with the origin at the top-left of the displayed page.
+- Pages and positions are **1-based**. Rectangles are PDF points with the origin at the top-left of the displayed page. The exception is `doc_print`'s `area` (`layout: "area"`): its `[x0, y0, x1, y1]` has the origin at the bottom-left of the displayed page.
 - Unknown arguments are rejected, so typos fail loudly.
 - Tools that change a document return its summary (`doc`, `pages`, `dirty`, `undo`, `redo`, …).
 - `comment_image_preview` returns JSON and a PNG: `layer: "background"` (the default) gives the page without the selected image signature/initials; `layer: "image"` gives its embedded image with alpha. The metadata supplies its displayed rectangle, document rotation, `image_rotation` (how far clockwise the image is shown turned: 0 for one placed by PdfCraft, which keeps it upright as displayed) and annotation opacity. Each result can be saved with the CLI's `--out`. Cache the background and transform the image for live movement/resizing; `comment_edit` commits the final geometry in one undo step. Previewing never changes the document.

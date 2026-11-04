@@ -730,6 +730,12 @@ mod tests {
         assert_eq!(draft.paper, print::LABEL_PAPER);
         draft.set_handling(Handling::Area);
         assert_eq!(draft.paper, paper);
+
+        // Leaving Area drops the dragged rectangle, so Label reads its own printed areas.
+        draft.crops = vec![Some(print::Crop { rect: [0.0, 0.0, 10.0, 10.0], text_up: false })];
+        draft.crop_pages = Some(vec![0]);
+        draft.set_handling(Handling::Label);
+        assert!(draft.crops.is_empty() && draft.crop_pages.is_none());
     }
 
     /// A job being spooled holds the progress card, counting its sheets as the spooler reports
