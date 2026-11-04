@@ -27,6 +27,12 @@ pub const MAX_PAGE_DECODED: usize = 256 << 20;
 /// Form XObjects one page's content walk may enter, each entry counted again.
 pub const MAX_PAGE_FORMS: usize = 50_000;
 
+/// The most pixels an image redaction decodes, to clear the ones under a mark or to store again
+/// without the `/JBIG2Globals` it shares with a redacted image (`pdfcraft_redact`). Optimize has
+/// JBIG2 images share a dictionary only within it (`pdfcraft_optimize`), so that redaction can
+/// store each of them again: one it couldn't would refuse the redaction.
+pub const MAX_REDACTED_IMAGE_PIXELS: u64 = 64 << 20;
+
 /// The steps a sample of a JPEG costs: a few bytes can hold a page of one grey, and decoding,
 /// resampling and storing it took about 20 to 45 ns a sample.
 const JPEG_WORK: u64 = 2;

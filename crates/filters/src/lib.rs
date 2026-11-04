@@ -27,7 +27,8 @@
 //! ```
 //!
 //! 1-bit samples can be encoded as CCITT Group 4 ([`encode_g4`]) or lossless JBIG2
-//! ([`encode_jbig2`]).
+//! ([`encode_jbig2`]), a group of images sharing their marks through `/JBIG2Globals`
+//! ([`encode_jbig2_shared`]).
 //!
 //! Every decoder is bounded by a caller-supplied `max_output` (decompression-bomb
 //! defence) and never panics on malformed input.
@@ -47,7 +48,7 @@ mod runlength;
 use std::borrow::Cow;
 
 pub use ccitt::{CcittParams, MAX_CCITT_COLUMNS, MAX_G4_COLUMNS, decode_ccitt_within, encode_g4};
-pub use jbig2::{MAX_JBIG2_COLUMNS, MAX_JBIG2_PIXELS, decode_jbig2_within, encode_jbig2, encode_jbig2_generic};
+pub use jbig2::{MAX_JBIG2_COLUMNS, MAX_JBIG2_PIXELS, SharedJbig2, decode_jbig2_within, encode_jbig2, encode_jbig2_generic, encode_jbig2_shared};
 
 /// A PDF stream filter, identified by its `/Filter` name.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
