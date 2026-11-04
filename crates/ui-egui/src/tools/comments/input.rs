@@ -103,7 +103,7 @@ pub(crate) fn hit(cx: &PageCx<'_>, view: &DocView, p: Pos2, on_link: bool) -> Op
     // there selects the group. Only a click: a drag still moves what is under the pointer.
     let (a, member) = match cx.comment_at(p) {
         Some(a) => (a, false),
-        None => (cx.click_hit(p)?, true),
+        None => (cx.click_target(p)?, true),
     };
     let a = Some(a).filter(|a| bodies && pick(a))?;
     // A click on a highlight over a link follows the link, so the link's hand and tip show there.
@@ -131,7 +131,7 @@ pub(crate) fn context_hit(cx: &PageCx<'_>, p: Pos2) -> Option<Hit> {
     if cx.hidden || !cx.xf.rect.contains(p) {
         return None;
     }
-    let a = cx.click_hit(p)?;
+    let a = cx.click_target(p)?;
     Some(Hit::new(Owner::Comment { index: a.index, part: CommentPart::Body }, layer(a), egui::CursorIcon::Default))
 }
 
@@ -146,7 +146,8 @@ pub(crate) fn anchor(cx: &PageCx<'_>, p: Pos2, view: &mut DocView) {
 /// anything else selects none.
 pub(crate) fn context(cx: &PageCx<'_>, p: Pos2, index: Option<usize>, view: &mut DocView) {
     match index {
-        Some(i) => match cx.click_hit(p).filter(|a| a.index == i) {
+        // `index` is what the right-click is on ([`context_hit`]): no second look at the point.
+        Some(i) => match cx.get(i) {
             Some(a) => view.comments.pick(cx, p, a),
             None => view.comments.select(Some((cx.page, i))),
         },

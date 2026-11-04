@@ -208,7 +208,7 @@ impl CommentView {
         self.member = None;
     }
 
-    /// Select `a`, the comment a press at `p` on this page selects ([`PageCx::click_hit`]),
+    /// Select `a`, the comment a press at `p` on this page selects ([`PageCx::click_target`]),
     /// remembering the group subordinate under `p` when `a` is its group's primary
     /// ([`PageCx::picked`]). The only place that sets [`Self::member`].
     pub(crate) fn pick(&mut self, cx: &PageCx<'_>, p: Pos2, a: &Annotation) {
@@ -439,7 +439,7 @@ impl PageCx<'_> {
 
     /// The comment a click at `p` selects: the topmost one under it or, on a group subordinate,
     /// the group's primary, which stands for the group.
-    pub(super) fn click_hit(&self, p: Pos2) -> Option<&Annotation> {
+    pub(super) fn click_target(&self, p: Pos2) -> Option<&Annotation> {
         self.comment_at(p).or_else(|| self.member_at(p).map(|(_, p)| p))
     }
 
