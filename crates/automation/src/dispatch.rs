@@ -53,6 +53,7 @@ impl Automation {
         tools::check_args(def, args)?;
         let a = Args(args);
         let out = match name {
+            "doc_bates_multi" => self.doc_bates_multi(&a)?,
             "doc_open" => self.doc_open(&a)?,
             "doc_batch" => self.doc_batch(&a)?,
             "doc_list" => json!({ "documents": self.session.docs().iter().map(summary).collect::<Vec<_>>() }),
@@ -195,6 +196,9 @@ impl Automation {
                 out
             }
             "bookmark_list" => self.bookmark_listing(&a)?,
+            "bookmark_export" => self.bookmark_export(&a)?,
+            "bookmark_import" => self.bookmark_import(&a)?,
+            "bookmark_copy" => self.bookmark_copy(&a)?,
             "bookmark_add" => {
                 let page = self.page(&a)?;
                 let parent = a.opt_path("parent")?.unwrap_or_default();
@@ -768,6 +772,7 @@ impl Automation {
             "comment_list" => self.comment_list(&a)?,
             "comment_add" => self.comment_add(&a)?,
             "stamp_custom" => self.stamp_custom(&a)?,
+            "model_add" => self.model_add(&a)?,
             "comment_reply" => self.comment_reply(&a)?,
             "comment_set_status" => self.comment_set_status(&a)?,
             "sign_list" => self.sign_list(&a)?,

@@ -121,6 +121,14 @@ pub fn tools() -> Vec<ToolDef> {
     let save_out = json!({ "type": "string", "description": "File to write. Omit to open the result as a new unsaved document instead." });
     let open = json!({ "type": "boolean", "description": "Also open the result as a new document (default: only when out is omitted)." });
     vec![
+        t("doc_bates_multi", "Add Bates numbering across files", "Apply one consecutive Bates sequence to an ordered list of PDFs. Each file entry has input and output paths and an optional open or permissions password. The operation first validates every input/output and computes inclusive numeric intervals; dry_run returns that allocation without writing. Existing output files are never replaced. On application, files that cannot be edited or saved are reported individually and later files continue.")
+            .destructive()
+            .with(schema(json!({
+                "files": {"type":"array","minItems":1,"maxItems":1000,"description":"PDFs in Bates sequence order.","items":{"type":"object","properties":{"input":{"type":"string","minLength":1,"description":"Input PDF path."},"output":{"type":"string","minLength":1,"description":"New output PDF path; must not exist."},"password":{"type":"string","description":"Open or permissions password, if needed."}},"required":["input","output"],"additionalProperties":false}},
+                "start_number": {"type":"integer","minimum":1,"description":"First number in the sequence (default 1)."}, "digits": {"type":"integer","minimum":1,"maximum":12,"description":"Zero-padded number width (default 6)."},
+                "prefix": {"type":"string","maxLength":128,"description":"Text before the number: at most 128 UTF-8 bytes, without # or >>."}, "suffix": {"type":"string","maxLength":128,"description":"Text after the number: at most 128 UTF-8 bytes, without # or >>."},
+                "dry_run": {"type":"boolean","description":"Return each file's inclusive number interval without writing (default false)."}
+            }), &["files"])),
         t("doc_batch", "Process files and folders", "Run convert, ocr and/or optimize over files and folders, one file at a time. recursive defaults to false. Preserve paths relative to each selected folder inside out_dir; duplicate inputs run once. Skip unsupported files, links and the output subtree. Existing outputs receive numbered names and are never replaced. Continue after per-file errors unless stop_on_error is true. Return completed/failed/skipped counts and per-file results. Discovery is bounded to 10000 entries and 64 folder levels. Convert must be first; each step can appear once. OCR uses installed models. Optimize uses Reduce File Size settings, optionally overriding target ppi (threshold 1.5 times ppi; black-and-white images go to the larger of ppi and 300) and JPEG quality; a larger candidate keeps the original bytes. Sources and open documents are unchanged.")
             .with(schema(json!({
                 "paths": {"type":"array","items":{"type":"string"},"minItems":1,"maxItems":1000},
@@ -315,6 +323,50 @@ pub fn tools() -> Vec<ToolDef> {
             }),
             &["doc", "title", "page"],
         )),
+        t(
+            "bookmark_export",
+            "Export bookmarks",
+            "The bookmark tree, or the subtree at path, as a list of nodes bookmark_import takes back unchanged. A node has title, page (1-based, null when it goes nowhere), open, and when set view ({type, values}: a destination type from ISO 32000-2 §12.3.2.2 Table 149 and its values in PDF user space, as the file stores them), color ([r, g, b], 0-1), bold, italic and children. truncated is true when bookmarks nested deeper than 33 levels were left out. With out, the tree is also written there as a JSON file {\"bookmarks\": [...]}, with \"truncated\": true when that is so; out is overwritten.",
+        )
+        .destructive()
+        .with(schema(
+            json!({ "doc": doc(), "path": path("The bookmark whose subtree to export (omit for the whole outline)"), "out": path_arg() }),
+            &["doc"],
+        )),
+        t(
+            "bookmark_import",
+            "Import bookmarks",
+            "Add a tree of bookmarks, as bookmark_export gives it (bookmarks) or as a JSON file it wrote (file), under a parent bookmark (or at the top level) at a position, or with replace in place of the whole outline. A bookmark whose page this document lacks is kept without a destination and listed in unmapped (1-based paths into the given tree). A view takes exactly its type's values (XYZ 3, FitR 4, FitH/FitV/FitBH/FitBV 1, Fit/FitB none). Give exactly one of bookmarks and file. A title may be empty but not missing; a key a node does not have is refused. Every node is checked before anything is written: at most 100000 bookmarks, nested at most 33 levels counting the parent's. truncated is true when the file says its export left bookmarks out. Undoable.",
+        )
+        .destructive()
+        .with(schema(
+            json!({
+                "doc": doc(),
+                "bookmarks": { "type": "array", "items": { "type": "object" }, "minItems": 1, "description": "Nodes as bookmark_export returns them." },
+                "file": path_arg(),
+                "parent": path("Parent bookmark (omit for the top level)"),
+                "position": { "type": "integer", "minimum": 1, "description": "1-based position among the parent's children (default: last)." },
+                "replace": { "type": "boolean", "description": "Replace the document's bookmarks instead of adding to them (default false; leave parent out)." }
+            }),
+            &["doc"],
+        )),
+        t(
+            "bookmark_copy",
+            "Copy bookmarks from another document",
+            "Copy the bookmarks of document from (or the subtree at path) into doc, by page number: under a parent bookmark (or at the top level) at a position, or with replace in place of doc's outline. A bookmark whose page doc lacks is kept without a destination and listed in unmapped (1-based paths into the copied tree). truncated is true when bookmarks nested deeper than 33 levels were left out of the copy. Undoable.",
+        )
+        .destructive()
+        .with(schema(
+            json!({
+                "doc": doc(),
+                "from": { "type": "integer", "minimum": 1, "description": "Id of the document to copy from." },
+                "path": path("The bookmark whose subtree to copy (omit for the whole outline)"),
+                "parent": path("Parent bookmark in doc (omit for the top level)"),
+                "position": { "type": "integer", "minimum": 1, "description": "1-based position among the parent's children (default: last)." },
+                "replace": { "type": "boolean", "description": "Replace doc's bookmarks instead of adding to them (default false; leave parent out)." }
+            }),
+            &["doc", "from"],
+        )),
         t("bookmark_rename", "Rename a bookmark", "Change a bookmark's title. Undoable.")
             .with(schema(json!({ "doc": doc(), "path": path("The bookmark"), "title": { "type": "string", "minLength": 1 } }), &["doc", "path", "title"])),
         t("bookmark_delete", "Delete a bookmark", "Delete a bookmark and the bookmarks under it. Undoable.")
@@ -461,6 +513,20 @@ pub fn tools() -> Vec<ToolDef> {
                 }),
                 &["doc", "page", "path"],
             )),
+        t("model_add", "Add a 3D model", "Add a 3D model (Acrobat: Rich Media ▸ Add 3D): the U3D or PRC file at path, recognised by its first bytes, as a 3D annotation in rect [x0, y0, x1, y1] (points from the top-left of the displayed page; each side 1–14400 pt; at most 256 MiB). Its poster, what prints and what readers show until the model is activated, is the picture at poster (a PDF page, poster_page default 1, or an image) fitted inside rect keeping its shape and centred; without poster, a frame labelled \"3D model\". activation: click (default), page_open or page_visible. name is its description (default: the file name). No views are added: readers open the model on its own default view. Undoable.")
+            .with(schema(
+                json!({
+                    "doc": doc(),
+                    "page": { "type": "integer", "minimum": 1 },
+                    "path": { "type": "string" },
+                    "rect": { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4 },
+                    "poster": { "type": "string" },
+                    "poster_page": { "type": "integer", "minimum": 1 },
+                    "activation": { "type": "string", "enum": ["click", "page_open", "page_visible"] },
+                    "name": { "type": "string" },
+                }),
+                &["doc", "page", "path", "rect"],
+            )),
         t("form_set_image", "Set an image field's picture", "Show an image file (PNG, JPEG, TIFF, GIF or BMP) in an image field or button, scaled to fit and centred (what clicking an image field does). On an XFA form the picture is kept in its data too (base64, as Designer saves it) and the form shows it from there. Undoable.")
             .with(schema(json!({ "doc": doc(), "field": { "type": "string" }, "path": { "type": "string" } }), &["doc", "field", "path"])),
         t(
@@ -562,7 +628,7 @@ pub fn tools() -> Vec<ToolDef> {
         t(
             "doc_remove_hidden",
             "Remove hidden information / Sanitize",
-            "Remove the listed categories (see doc_hidden_info), or every category when none are listed (Sanitize Document). Form fields are flattened so their values stay visible. The next save rewrites the whole file. Undoable until saved.",
+            "Remove the listed categories (see doc_hidden_info), or every category when none are listed (Sanitize Document). Fails when the listed categories hold nothing. Form fields are flattened so their values stay visible. The next save rewrites the whole file. Undoable until saved.",
         )
         .destructive()
         .with(schema(
@@ -1194,9 +1260,9 @@ pub fn tools() -> Vec<ToolDef> {
                 json!({ "doc": doc(), "field": { "type": "string" }, "event": { "type": "string", "enum": ["keystroke", "format", "validate", "calculate", "mouse_up"] }, "script": { "type": "string" } }),
                 &["doc", "field", "event"],
             )),
-        t("doc_export_office", "Export to Word, PowerPoint, HTML, RTF or Markdown", "Export a PDF ▸ Word (.docx), PowerPoint (.pptx, one slide per page), HTML (.html, one file with images inline), RTF (.rtf) or Markdown (.md or .markdown: pipe tables, images left out), chosen by path's extension: text, headings, bold and italic. Word uses borderless inferred tables and positioned editable shapes on pages with artwork, rotated or large text; each source page retains its size. Font matching and vector graphics remain limited. Export reads forms 50 deep and up to 50 000 a page, counting forms the page draws itself. Pages that go past either limit, or that have pictures past what one export may hold or decode, are listed in truncated_pages, with a warning; what was left out is missing.")
+        t("doc_export_office", "Export to Word, PowerPoint, HTML, RTF or Markdown", "Export a PDF ▸ Word (.docx), PowerPoint (.pptx, one slide per page), HTML (.html, one file with images inline), RTF (.rtf) or Markdown (.md or .markdown: pipe tables, images left out), chosen by path's extension: text, headings, bold and italic. HTML uses rich styling by default; set html_mode to simple for CSS-free headings, paragraphs, emphasis and tables. Simple HTML keeps text and inline images but omits colour and layout styling. Word uses borderless inferred tables and positioned editable shapes on pages with artwork, rotated or large text; each source page retains its size. Font matching and vector graphics remain limited. Export reads forms 50 deep and up to 50 000 a page, counting forms the page draws itself. Pages that go past either limit, or that have pictures past what one export may hold or decode, are listed in truncated_pages, with a warning; what was left out is missing.")
             .cmd("export.docx")
-            .with(schema(json!({ "doc": doc(), "path": { "type": "string" } }), &["doc", "path"])),
+            .with(schema(json!({ "doc": doc(), "path": { "type": "string" }, "html_mode": { "type": "string", "enum": ["rich", "simple"], "default": "rich" } }), &["doc", "path"])),
         t("pdfa_verify", "Verify PDF/A", "Standards ▸ Verify PDF/A compliance: the PDF/A-2b or 3b rules the document breaks (ISO 19005 clause, message, page, whether Save as PDF/A can fix it), plus what it declares.")
             .ro()
             .cmd("standards.pdfa")
@@ -1451,7 +1517,7 @@ pub fn tools() -> Vec<ToolDef> {
             .with(schema(json!({ "doc": doc() }), &["doc"])),
         t("doc_open_revision", "Open a revision", "Open saved revision `revision` (1 = the oldest) of a document as a new, unsaved document, to see the file as it was then.")
             .with(schema(json!({ "doc": doc(), "revision": { "type": "integer", "minimum": 1 } }), &["doc", "revision"])),
-        t("doc_optimize", "Optimize PDF", "Write an optimized copy to `path` (Acrobat's PDF Optimizer). preset: standard (default; Reduce File Size's choices) or mobile (images to 96 ppi above 144, JPEG high quality); the options below change it. compatibility: retain (default; keeps the document's version, or 1.5 when object streams are written), 1.4, 1.5, 1.6, 1.7 or 2.0. merge_fragments (default true) first puts a page picture drawn as many stacked image strips (as some PDF printers write it) back together into one image, so it can be resampled (merged_images, fragments_merged). color / gray: { downsample, ppi, above_ppi, compression: jpeg|zip|retain, quality 1–100 } (defaults: downsample to 150 ppi above 225, JPEG 60). mono: { downsample, ppi, above_ppi, compression: ccitt_g4|jbig2|retain } for black-and-white images and image masks (default: averaged down to 300 ppi above 450 ppi, counted in images_resampled; stored losslessly as CCITT Group 4 or JBIG2 (or 1-bit Flate, once resampled or packed from more bits) when that is smaller, Group 3 fax images, JBIG2 images, black-and-white RGB and indexed images using only palette entries 0 and 1 among them, counted in images_recompressed; retain resamples only, a CCITT image staying CCITT, a JBIG2 image JBIG2 and any other becoming Flate). Images past what one run may decode stay as they are, counted in images_refused; streams it only stores with Flate past that stay LZW, uncounted. Images are measured where pages draw them and replaced only when smaller. discard_*: thumbnails (default true), alternate_images (true), tags, print_settings; flate_unencoded (true); object_streams (default true; always off for 1.4); lzw_to_flate (true) decodes LZW streams and stores them with Flate instead, leaving any it cannot decode unchanged (lzw_streams counts the streams converted); remove_invalid_links and remove_unreferenced_dests (true); discard_external_refs takes GoToR, GoToE, Launch and ImportData actions, and Thread actions with /F, out of links and bookmarks, removes a link left with nothing to do, and keeps links within the document and web links (external_links, external_bookmarks); images and forms the pages list but never draw are always dropped (unused_xobjects). discard: Remove Hidden Information categories (metadata, attachments, comments, form-fields, hidden-text, hidden-layers, bookmarks, links-actions-scripts, private-data). Signed documents are refused. The open document is unchanged.")
+        t("doc_optimize", "Optimize PDF", "Write an optimized copy to `path` (Acrobat's PDF Optimizer). preset: standard (default; Reduce File Size's choices) or mobile (images to 96 ppi above 144, JPEG high quality); the options below change it. compatibility: retain (default; keeps the document's version, or 1.5 when object streams are written), 1.4, 1.5, 1.6, 1.7 or 2.0. merge_fragments (default true) first puts a page picture drawn as many stacked image strips (as some PDF printers write it) back together into one image, so it can be resampled (merged_images, fragments_merged). color / gray: { downsample, ppi, above_ppi, compression: jpeg|zip|retain, quality 1–100 } (defaults: downsample to 150 ppi above 225, JPEG 60). mono: { downsample, ppi, above_ppi, compression: ccitt_g4|jbig2|retain } for black-and-white images and image masks (default: averaged down to 300 ppi above 450 ppi, counted in images_resampled; stored losslessly as CCITT Group 4 or JBIG2 (or 1-bit Flate, once resampled or packed from more bits) when that is smaller, up to 16 JBIG2 images sharing one symbol dictionary (/JBIG2Globals) where that is smaller still (image masks and DeviceGray images named directly, of at most 64 Mi pixels, which redaction can store again without it), Group 3 fax images, JBIG2 images, black-and-white RGB and indexed images using only palette entries 0 and 1 among them, counted in images_recompressed; retain resamples only, a CCITT image staying CCITT, a JBIG2 image JBIG2 and any other becoming Flate). Images past what one run may decode stay as they are, counted in images_refused; streams it only stores with Flate past that stay LZW, uncounted. Images are measured where pages draw them and replaced only when smaller. discard_*: thumbnails (default true), alternate_images (true), tags, print_settings; flate_unencoded (true); object_streams (default true; always off for 1.4); lzw_to_flate (true) decodes LZW streams and stores them with Flate instead, leaving any it cannot decode unchanged (lzw_streams counts the streams converted); remove_invalid_links and remove_unreferenced_dests (true); discard_external_refs takes GoToR, GoToE, Launch and ImportData actions, and Thread actions with /F, out of links and bookmarks, removes a link left with nothing to do, and keeps links within the document and web links (external_links, external_bookmarks); images and forms the pages list but never draw are always dropped (unused_xobjects). discard: Remove Hidden Information categories (metadata, attachments, comments, form-fields, hidden-text, hidden-layers, bookmarks, links-actions-scripts, private-data). Signed documents are refused. The open document is unchanged.")
             .cmd("optimize.advanced")
             .with(schema(
                 json!({
