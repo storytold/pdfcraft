@@ -45,6 +45,11 @@ finish-args:
   # Deliberately not granted: home/host filesystem access. No CUPS socket either: printing
   # runs the `lp` command (crates/print), which the freedesktop runtime doesn't ship, so Print
   # reports that the spooler is unavailable until it goes through the print portal.
+# The release runner's flatpak-builder has no eu-strip (elfutils), which its debuginfo pass runs
+# on cups-client's unstripped tools, in whichever module comes first after they're installed. The
+# app's own binaries come from the release tarball, already stripped.
+build-options:
+  no-debuginfo: true
 modules:
   # CUPS client tools for craft-print: the runtime has libcups but not lpstat/lp/lpoptions.
   # Linked statically against this release's libcups, so a runtime update can't break them;
@@ -92,6 +97,13 @@ modules:
           - 'exec "/app/libexec/cups/${0##*/}" "$@"'
   - name: pdfcraft
     buildsystem: simple
+    # The release binaries were built with the interface translations at the commit in
+    # craft-i18n.rev (the craft-i18n source below); nothing here compiles, so this records which
+    # translations the bundle carries and keeps it in step with the from-source manifest (a test
+    # keeps both equal to the pin).
+    build-options:
+      env:
+        CRAFT_I18N_DIR: /run/build/pdfcraft/craft-i18n
     build-commands:
       - install -Dm755 bin/pdfcraft /app/bin/pdfcraft
       - install -Dm755 bin/pdfcraft-cli /app/bin/pdfcraft-cli
@@ -106,3 +118,7 @@ modules:
     sources:
       - type: dir
         path: stage
+      - type: git
+        url: https://github.com/storytold/craft-i18n
+        commit: dfbe955b1ba4aa84bb34c80c45b9d917e8da4704
+        dest: craft-i18n

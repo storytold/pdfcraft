@@ -106,7 +106,7 @@ pub(crate) fn tab_order(form: &[FormField]) -> Vec<(usize, usize)> {
                 .widgets
                 .iter()
                 .enumerate()
-                .filter(|(_, widget)| widget.page.is_some() && !widget.hidden)
+                .filter(|(_, widget)| widget.page.is_some() && !widget.hidden && !widget.read_only)
                 .map(move |(wi, widget)| (widget.tab, fi, wi))
         })
         .collect();

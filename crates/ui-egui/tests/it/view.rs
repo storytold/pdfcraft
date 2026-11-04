@@ -521,6 +521,98 @@ fn single_page_swipe_that_reaches_the_edge_does_not_turn_but_a_fresh_one_does() 
 }
 
 #[test]
+fn single_page_wheel_at_last_page_bottom_edge_can_scroll_back_up() {
+    let mut h = harness_stepping(1.0 / 60.0, &[("layout", "single"), ("zoom", "200")]);
+    h.state_mut().views[0].go_to_page(2); // Go to last page of PAGES (3 pages)
+    h.run_steps(20);
+    let at = h.state().views[0].viewport_rect().center();
+    h.hover_at(at);
+    h.run_steps(4);
+
+    // Scroll to the bottom edge of page 3
+    let mut notches = 0;
+    let mut last = rect(&h, 2).expect("page 3 on screen").min.y;
+    let mut at_bottom = false;
+    while notches < 80 {
+        h.event(wheel(MouseWheelUnit::Line, -1.0, TouchPhase::Move));
+        h.run_steps(12);
+        notches += 1;
+        if let Some(r) = rect(&h, 2) {
+            if (r.min.y - last).abs() < 0.01 {
+                at_bottom = true;
+                break;
+            }
+            last = r.min.y;
+        }
+    }
+    assert!(at_bottom, "reached bottom edge of last page");
+    assert_eq!(h.state().views[0].current, 2, "remains on page 3");
+
+    // Push the wheel further against the bottom edge (cannot turn because it's the last page)
+    for _ in 0..5 {
+        h.event(wheel(MouseWheelUnit::Line, -1.0, TouchPhase::Move));
+        h.run_steps(12);
+    }
+    let bottom_y = rect(&h, 2).expect("page 3 on screen").min.y;
+
+    // Roll the wheel back up: the page must move away from the bottom edge (#5713)
+    h.event(wheel(MouseWheelUnit::Line, 1.0, TouchPhase::Move));
+    h.run_steps(12);
+    let after_up_y = rect(&h, 2).expect("page 3 on screen").min.y;
+    assert!(after_up_y > bottom_y, "scrolling up moves the page away from the bottom edge: {after_up_y} > {bottom_y}");
+}
+
+/// One notch of a mouse wheel that macOS reports in points (a Logitech mouse sends about 14).
+const POINT_NOTCH: f32 = 14.0;
+
+#[test]
+fn single_page_point_notches_pan_the_page_a_notch_turned_to() {
+    let mut h = harness_stepping(1.0 / 60.0, &[("layout", "single"), ("zoom", "200")]);
+    let at = h.state().views[0].viewport_rect().center();
+    h.hover_at(at);
+    h.run_steps(20);
+    for _ in 0..120 {
+        h.event(wheel(MouseWheelUnit::Point, -POINT_NOTCH, TouchPhase::Move));
+        h.run_steps(12);
+        if h.state().views[0].current == 1 {
+            break;
+        }
+    }
+    assert_eq!(h.state().views[0].current, 1, "notches pan page 1, then turn to page 2");
+    h.run_steps(20);
+    let top = rect(&h, 1).expect("page 2 on screen").min.y;
+    for _ in 0..3 {
+        h.event(wheel(MouseWheelUnit::Point, -POINT_NOTCH, TouchPhase::Move));
+        h.run_steps(12);
+    }
+    let after = rect(&h, 1).expect("page 2 on screen").min.y;
+    assert!(after < top, "notches pan page 2 down after the turn (#5713): {after} < {top}");
+}
+
+#[test]
+fn single_page_point_notches_scroll_back_up_from_the_last_page_bottom() {
+    let mut h = harness_stepping(1.0 / 60.0, &[("layout", "single"), ("zoom", "200")]);
+    h.state_mut().views[0].go_to_page(2);
+    h.run_steps(20);
+    let at = h.state().views[0].viewport_rect().center();
+    h.hover_at(at);
+    h.run_steps(4);
+    // Past the bottom: the extra notches push against the last page's edge.
+    for _ in 0..200 {
+        h.event(wheel(MouseWheelUnit::Point, -POINT_NOTCH, TouchPhase::Move));
+        h.run_steps(12);
+    }
+    assert_eq!(h.state().views[0].current, 2, "stays on the last page");
+    let bottom = rect(&h, 2).expect("page 3 on screen").min.y;
+    for _ in 0..3 {
+        h.event(wheel(MouseWheelUnit::Point, POINT_NOTCH, TouchPhase::Move));
+        h.run_steps(12);
+    }
+    let after = rect(&h, 2).expect("page 3 on screen").min.y;
+    assert!(after > bottom + 1.0, "notches scroll back up from the last page's bottom (#5713): {after} > {bottom}");
+}
+
+#[test]
 fn stepping_past_either_end_leaves_the_view_alone() {
     // Paging on past the first or last page must not jump the page back to its top.
     for (page, forward) in [(2, true), (0, false)] {
@@ -1909,7 +2001,8 @@ fn sidebar_collapse_and_resize_preserves_scroll_position() {
     let rect_after = v.page_screen_rect(2).expect("page 2 still on screen");
     let vp_after = v.viewport_rect();
     let rel_y_after = rect_after.min.y - vp_after.min.y;
-    assert!((rel_y_after - rel_y_before).abs() < 1.0, "page 2 scroll position preserved: before {rel_y_before}, after {rel_y_after}");
+    // Page rectangles snap to whole pixels, so a different width can move the page by one.
+    assert!((rel_y_after - rel_y_before).abs() <= 1.0, "page 2 scroll position preserved: before {rel_y_before}, after {rel_y_after}");
 
     // Reopen bookmarks panel: available width decreases, so fit-width zoom decreases.
     h.state_mut().set_option("panel", "bookmarks").unwrap();
@@ -1926,7 +2019,10 @@ fn sidebar_collapse_and_resize_preserves_scroll_position() {
     let rect_reopened = v.page_screen_rect(2).expect("page 2 still on screen");
     let vp_reopened = v.viewport_rect();
     let rel_y_reopened = rect_reopened.min.y - vp_reopened.min.y;
-    assert!((rel_y_reopened - rel_y_before).abs() < 1.0, "page 2 scroll position preserved on reopen: before {rel_y_before}, after {rel_y_reopened}");
+    assert!(
+        (rel_y_reopened - rel_y_before).abs() <= 1.0,
+        "page 2 scroll position preserved on reopen: before {rel_y_before}, after {rel_y_reopened}"
+    );
 }
 
 /// Synthetic unequal-height spreads, generated without font or image assets.
@@ -2072,7 +2168,11 @@ fn long_view_menu_fits_a_short_window() {
     assert!(after <= 400.0, "the menu scrolls Side panels into view: {after}");
     crate::support::menu_row(&h, "Side panels").hover();
     h.run_steps(4);
-    h.get_all_by_label("Bookmarks").last().unwrap().click();
+    // The navigation rail has a Bookmarks button too; click the submenu's radio item.
+    let bookmarks = h.get_by(|n| n.role() == egui::accesskit::Role::MenuItemRadio && n.label().as_deref() == Some("Bookmarks"));
+    let row = bookmarks.rect();
+    assert!(row.top() >= 0.0 && row.bottom() <= 400.0, "the Bookmarks submenu row is onscreen: {row:?}");
+    bookmarks.click();
     h.run_steps(4);
     assert_eq!(h.state().right, Some(pdfcraft_ui_egui::RightPanel::Bookmarks));
 }

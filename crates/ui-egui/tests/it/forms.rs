@@ -87,6 +87,17 @@ fn a_read_only_fields_tooltip_shows_on_hover() {
     assert!(h.query_all_by_label("Where you live").next().is_some());
 }
 
+#[test]
+fn read_only_widgets_are_skipped_by_tab_order() {
+    let mut h = harness();
+    set_city(&mut h, pdfcraft_engine::FieldProps { read_only: Some(true), ..Default::default() });
+    let s = h.state();
+    let doc = s.session.get(s.views[0].id).unwrap();
+    let city = doc.form.iter().position(|field| field.name == "city").unwrap();
+    assert!(doc.form[city].widgets.iter().all(|widget| widget.read_only));
+    assert!(pdfcraft_ui_egui::forms_ui::tab_order(&doc.form).iter().all(|(fi, _)| *fi != city));
+}
+
 /// A `/TU` of only spaces shows no tooltip (no empty box under the pointer).
 #[test]
 fn a_blank_tooltip_shows_nothing() {
@@ -608,6 +619,9 @@ fn the_calendar_picks_today_in_the_fields_format_from_any_month() {
 
 #[test]
 fn lithuanian_calendar_localizes_months_and_weekdays_without_changing_field_values() {
+    if crate::support::skip_without_catalogs("lithuanian_calendar_localizes_months_and_weekdays_without_changing_field_values") {
+        return;
+    }
     use egui_kittest::kittest::Queryable;
     let mut h = harness();
     h.state_mut().set_option("language", "lt").unwrap();

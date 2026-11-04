@@ -620,7 +620,7 @@ pub(crate) fn paint_page(cx: PageToolContext<'_>, form: &[FormField], view: &Doc
             let font = theme::semibold((10.0 * zoom).clamp(8.0, 14.0));
             let galley = painter.layout_no_wrap(label, font, Color32::WHITE);
             let badge = Rect::from_min_size(r.min + vec2(3.0, 3.0), galley.size() + vec2(8.0, 5.0));
-            let clipped = painter.with_clip_rect(painter.clip_rect().intersect(r));
+            let clipped = painter.with_clip_rect(painter.clip_rect().intersect(xf.rect));
             clipped.rect_filled(badge, CornerRadius::same(3), SELECT_BLUE);
             clipped.galley(badge.min + vec2(4.0, 2.0), galley, Color32::WHITE);
         }

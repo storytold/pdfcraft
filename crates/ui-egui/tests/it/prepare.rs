@@ -590,25 +590,32 @@ fn tab_numbers_follow_fill_order_without_dirtying_the_document() {
         .count();
     assert_eq!(size_widgets, 2, "each radio widget has its own tab stop");
 
-    let drawn: Vec<(String, egui::Pos2)> = h
+    let drawn: Vec<(String, egui::Pos2, egui::Rect, egui::Rect)> = h
         .output()
         .shapes
         .iter()
         .filter_map(|clipped| match &clipped.shape {
-            egui::Shape::Text(text) => Some((text.galley.text().to_owned(), text.visual_bounding_rect().center())),
+            egui::Shape::Text(text) => Some((
+                text.galley.text().to_owned(),
+                text.visual_bounding_rect().center(),
+                text.visual_bounding_rect(),
+                clipped.clip_rect,
+            )),
             _ => None,
         })
         .collect();
+    let mut badge_extends_past_widget = false;
     for (i, rect) in rects.iter().enumerate() {
         let expected = i.saturating_add(1).to_string();
         let badge_center = rect.min + egui::vec2(3.0 + 4.0 + 3.0, 3.0 + 2.0 + 5.0);
-        assert!(
-            drawn.iter().any(|(label, center)| label == &expected && center.distance(badge_center) < 8.0),
-            "widget {:?} should show tab number {expected} near {:?}; drawn: {drawn:?}",
-            order.get(i),
-            rect.min
-        );
+        let badge = drawn.iter().find(|(label, center, _, _)| label == &expected && center.distance(badge_center) < 8.0);
+        let Some((_, _, text_rect, clip_rect)) = badge else {
+            panic!("widget {:?} should show tab number {expected} near {:?}; drawn: {drawn:?}", order.get(i), rect.min);
+        };
+        assert!(clip_rect.contains_rect(*text_rect), "the whole tab number {expected} should be visible");
+        badge_extends_past_widget |= rect.width() < text_rect.width() + 8.0;
     }
+    assert!(badge_extends_past_widget, "the fixture includes a widget narrower than its tab number badge");
 }
 
 #[test]
