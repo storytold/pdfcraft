@@ -71,6 +71,8 @@ impl OptimizeKind {
 pub struct OptimizeRun {
     pub doc: DocId,
     pub kind: OptimizeKind,
+    /// Where the copy goes, if the command asked first. Otherwise it asks when the run is done.
+    pub destination: Option<String>,
     pub progress: Arc<Mutex<OptimizeProgress>>,
 }
 
@@ -378,18 +380,23 @@ impl PdfCraftApp {
     /// Run an optimization of the active document on a worker thread (inline in tests and on
     /// the web), showing its progress; the copy is saved when it is done.
     pub(crate) fn start_optimize(&mut self, kind: OptimizeKind, settings: &Settings, discard: &[Hidden]) {
+        let Some((_, id)) = self.active_ids() else { return };
+        self.run_optimize(id, kind, settings, discard, None);
+    }
+
+    /// [`Self::start_optimize`] for document `id`, saving to `destination` if that's known already.
+    pub(crate) fn run_optimize(&mut self, id: DocId, kind: OptimizeKind, settings: &Settings, discard: &[Hidden], destination: Option<String>) {
         // What's typed in a form field is part of the document (#166).
         if !self.commit_form_typing() {
             return;
         }
-        let Some((_, id)) = self.active_ids() else { return };
         if self.optimize_run.is_some() {
             self.notify_tr("Optimization is already running");
             return;
         }
         let job = match self.session.optimize_job(id, settings, discard) {
             Ok(job) => job,
-            Err(e) => return self.save_optimized(id, kind, Err(e)),
+            Err(e) => return self.save_optimized(id, kind, Err(e), destination),
         };
         let progress = Arc::new(Mutex::new(OptimizeProgress::default()));
         let p = progress.clone();
@@ -414,7 +421,7 @@ impl PdfCraftApp {
         }
         #[cfg(target_arch = "wasm32")]
         work();
-        self.optimize_run = Some(OptimizeRun { doc: id, kind, progress });
+        self.optimize_run = Some(OptimizeRun { doc: id, kind, destination, progress });
         self.poll_optimize();
     }
 
@@ -430,7 +437,7 @@ impl PdfCraftApp {
     /// Show progress; save the copy once the worker is done.
     pub(crate) fn poll_optimize(&mut self) {
         let Some(run) = self.optimize_run.as_ref() else { return };
-        let (doc, kind, progress) = (run.doc, run.kind, run.progress.clone());
+        let (doc, kind, destination, progress) = (run.doc, run.kind, run.destination.clone(), run.progress.clone());
         let Ok(mut s) = progress.lock() else {
             // The worker panicked while holding the lock: it will never report back.
             self.optimize_run = None;
@@ -459,7 +466,7 @@ impl PdfCraftApp {
                     let detail = if kind == OptimizeKind::Advanced { summary(&r) } else { String::new() };
                     (b, detail)
                 });
-                self.save_optimized(doc, kind, result);
+                self.save_optimized(doc, kind, result, destination);
             }
         }
     }
@@ -481,7 +488,7 @@ mod tests {
             app.set_option("language", "en").unwrap();
             app.open_bytes("notes.txt", None, b"hello".to_vec()).unwrap();
             let (_, doc) = app.active_ids().unwrap();
-            app.optimize_run = Some(OptimizeRun { doc, kind: OptimizeKind::Advanced, progress: p });
+            app.optimize_run = Some(OptimizeRun { doc, kind: OptimizeKind::Advanced, destination: None, progress: p });
             app.notify("Saved notes.pdf");
             app
         });
@@ -514,7 +521,7 @@ mod tests {
         app.set_option("language", "en").unwrap();
         app.open_bytes("notes.txt", None, b"hello".to_vec()).unwrap();
         let (_, doc) = app.active_ids().unwrap();
-        app.optimize_run = Some(OptimizeRun { doc, kind: OptimizeKind::Reduce, progress: Arc::default() });
+        app.optimize_run = Some(OptimizeRun { doc, kind: OptimizeKind::Reduce, destination: None, progress: Arc::default() });
         app.optimize_with_draft();
         assert_eq!(app.toast.as_ref().map(|t| t.0.as_str()), Some("Optimization is already running"));
     }

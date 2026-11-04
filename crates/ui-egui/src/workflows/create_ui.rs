@@ -248,21 +248,52 @@ impl PdfCraftApp {
     }
 
     /// Reduce File Size: write a compacted copy with images downsampled (the open document is
-    /// unchanged). It runs in the background with a progress bar, like the PDF Optimizer.
+    /// unchanged). It asks where to save first, so a heavy file can finish by itself, then runs in
+    /// the background with a progress bar, like the PDF Optimizer.
     pub(crate) fn reduce_file_size(&mut self) {
-        self.start_optimize(crate::optimize_ui::OptimizeKind::Reduce, &pdfcraft_engine::optimize::Settings::default(), &[]);
+        use crate::optimize_ui::OptimizeKind::Reduce;
+        let settings = pdfcraft_engine::optimize::Settings::default();
+        #[cfg(target_arch = "wasm32")]
+        self.start_optimize(Reduce, &settings, &[]);
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            // What can't run says so now, not after asking where to save.
+            if !self.commit_form_typing() {
+                return;
+            }
+            let Some((_, id)) = self.active_ids() else { return };
+            if self.optimize_run.is_some() {
+                self.notify_tr("Optimization is already running");
+                return;
+            }
+            if let Err(e) = self.session.optimize_job(id, &settings, &[]) {
+                return self.save_optimized(id, Reduce, Err(e), None);
+            }
+            if let Some(path) = self.save_override.clone() {
+                return self.run_optimize(id, Reduce, &settings, &[], Some(path));
+            }
+            let Some(doc) = self.session.get(id) else { return };
+            let dialog = rfd::AsyncFileDialog::new().add_filter_any_case("PDF", &["pdf"]).set_file_name(optimized_name(&doc.name, Reduce));
+            let dialog = crate::editing::in_document_folder(dialog, doc.path.as_deref());
+            // With the target, a document closed, switched from or edited meanwhile isn't compressed.
+            self.ask_one(crate::pickers::Ask::Save(dialog), Some(id), move |app, path| {
+                app.run_optimize(id, Reduce, &settings, &[], Some(path.to_string_lossy().into_owned()));
+            });
+        }
     }
 
-    /// Save an optimized copy (Reduce File Size, Optimize PDF) next to the original, reporting
-    /// the saving. A Reduce File Size copy that isn't smaller is not saved (#490).
+    /// Save an optimized copy (Reduce File Size, Optimize PDF) to `destination`, or where the user
+    /// now chooses, reporting the saving. A Reduce File Size copy that isn't smaller is not saved
+    /// (#490).
     pub(crate) fn save_optimized(
         &mut self,
         id: pdfcraft_engine::DocId,
         kind: crate::optimize_ui::OptimizeKind,
         result: Result<(Arc<Vec<u8>>, String), pdfcraft_engine::EditError>,
+        destination: Option<String>,
     ) {
         let Some(doc) = self.session.get(id) else { return };
-        let (before, name) = (doc.bytes.len(), format!("{} ({}).pdf", stem(&doc.name), kind.suffix()));
+        let (before, name) = (doc.bytes.len(), optimized_name(&doc.name, kind));
         #[cfg(not(target_arch = "wasm32"))]
         let folder = doc.path.clone();
         let (bytes, detail) = match result {
@@ -298,23 +329,53 @@ impl PdfCraftApp {
         };
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let write = move |app: &mut Self, path: String| match crate::editing::write_atomically(&path, &bytes) {
-                Ok(()) => saved(app, path),
-                Err(e) => app.notify_fmt("Couldn't write {path}: {e}", &[("path", &path), ("e", &e.to_string())]),
-            };
-            match self.save_override.clone() {
-                Some(p) => write(self, p),
-                None => {
-                    let dialog = rfd::AsyncFileDialog::new().add_filter_any_case("PDF", &["pdf"]).set_file_name(&name);
-                    let dialog = crate::editing::in_document_folder(dialog, folder.as_deref());
-                    self.ask_one(crate::pickers::Ask::Save(dialog), None, move |app, p| write(app, p.to_string_lossy().into_owned()));
-                }
+            let chose_first = destination.is_some() && self.save_override.is_none();
+            match destination.or_else(|| self.save_override.clone()) {
+                Some(path) => match crate::editing::write_atomically(&path, &bytes) {
+                    Ok(()) => saved(self, path),
+                    Err(e) => {
+                        self.notify_fmt("Couldn't write {path}: {e}", &[("path", &path), ("e", &e.to_string())]);
+                        // The copy can have taken minutes: a place that has gone bad since doesn't lose it.
+                        if chose_first {
+                            self.ask_where_to_save_optimized(&name, folder.as_deref(), bytes, saved);
+                        }
+                    }
+                },
+                None => self.ask_where_to_save_optimized(&name, folder.as_deref(), bytes, saved),
             }
         }
         #[cfg(target_arch = "wasm32")]
-        match crate::editing::download(&name, &bytes) {
-            Ok(()) => saved(self, name),
-            Err(e) => self.notify_fmt("Couldn't download {name}: {e}", &[("name", &name), ("e", &e.to_string())]),
+        {
+            let _ = destination;
+            match crate::editing::download(&name, &bytes) {
+                Ok(()) => saved(self, name),
+                Err(e) => self.notify_fmt("Couldn't download {name}: {e}", &[("name", &name), ("e", &e.to_string())]),
+            }
         }
     }
+
+    /// Ask where an optimized copy goes and write it there.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn ask_where_to_save_optimized(
+        &mut self,
+        name: &str,
+        folder: Option<&str>,
+        bytes: Arc<Vec<u8>>,
+        saved: impl FnOnce(&mut Self, String) + Send + 'static,
+    ) {
+        let dialog = rfd::AsyncFileDialog::new().add_filter_any_case("PDF", &["pdf"]).set_file_name(name);
+        let dialog = crate::editing::in_document_folder(dialog, folder);
+        self.ask_one(crate::pickers::Ask::Save(dialog), None, move |app, p| {
+            let path = p.to_string_lossy().into_owned();
+            match crate::editing::write_atomically(&path, &bytes) {
+                Ok(()) => saved(app, path),
+                Err(e) => app.notify_fmt("Couldn't write {path}: {e}", &[("path", &path), ("e", &e.to_string())]),
+            }
+        });
+    }
+}
+
+/// The suggested name of an optimized copy of `document` ("notes (reduced).pdf").
+fn optimized_name(document: &str, kind: crate::optimize_ui::OptimizeKind) -> String {
+    format!("{} ({}).pdf", stem(document), kind.suffix())
 }
