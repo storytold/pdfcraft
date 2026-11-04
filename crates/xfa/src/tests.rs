@@ -219,6 +219,13 @@ fn a_page_area_keeps_at_most_a_hundred_and_twenty_eight_content_areas() {
     let (_, warnings) = parse(&crowded).unwrap();
     assert!(warnings.len() > 100, "the other warnings came first: {}", warnings.len());
     assert!(warnings.iter().any(|w| w.contains("content areas")), "the cap is still recorded");
+    // Many capped page areas say it once, found without scanning every warning (it comes first).
+    let page_area = |n: usize| format!(r#"<pageArea name="p{n}"><medium stock="letter" short="8.5in" long="11in"/>{areas}</pageArea>"#);
+    let many: String = (0..50).map(page_area).collect();
+    let crowded = crowded.replacen(&page_area(0).replace("p0", "front"), &many, 1);
+    let (_, warnings) = parse(&crowded).unwrap();
+    assert_eq!(warnings.iter().filter(|w| w.contains("content areas")).count(), 1, "said once");
+    assert!(warnings[0].contains("content areas"), "kept first: {:?}", warnings.first());
 }
 
 #[test]
