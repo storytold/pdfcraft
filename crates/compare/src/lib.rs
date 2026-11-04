@@ -400,33 +400,12 @@ pub fn compare(old: &[Word], new: &[Word]) -> Comparison {
     compare_with_pages(old, 0, new, 0)
 }
 
-/// Compare two documents' words with explicit page counts (so blank or image-only pages are
-/// aligned as well).
-pub fn compare_with_pages(old: &[Word], old_pages: usize, new: &[Word], new_pages: usize) -> Comparison {
-    let n = old_pages.max(old.iter().map(|w| w.page + 1).max().unwrap_or(0));
-    let m = new_pages.max(new.iter().map(|w| w.page + 1).max().unwrap_or(0));
-    if n == 0 && m == 0 {
-        return Comparison::default();
-    }
-    let mut old_by_page: Vec<Vec<&Word>> = vec![Vec::new(); n];
-    for w in old {
-        if let Some(p) = old_by_page.get_mut(w.page) {
-            p.push(w);
-        }
-    }
-    let mut new_by_page: Vec<Vec<&Word>> = vec![Vec::new(); m];
-    for w in new {
-        if let Some(q) = new_by_page.get_mut(w.page) {
-            q.push(w);
-        }
-    }
-
+fn candidate_page_pairs(old_profiles: &[PageProfile], new_profiles: &[PageProfile]) -> Vec<(usize, usize, f64)> {
     const MIN_PAGE_SIM: f64 = 0.25;
     const MAX_POSTINGS: usize = 32;
     const TOP_CANDIDATES: usize = 4;
-    let old_profiles: Vec<PageProfile> = old_by_page.iter().map(|w| PageProfile::from_words(w)).collect();
-    let new_profiles: Vec<PageProfile> = new_by_page.iter().map(|w| PageProfile::from_words(w)).collect();
 
+    let (n, m) = (old_profiles.len(), new_profiles.len());
     let mut token_to_new: std::collections::HashMap<u64, Vec<(usize, usize)>> = std::collections::HashMap::new();
     for (q, pb) in new_profiles.iter().enumerate() {
         for (&h, &c) in &pb.unigrams {
@@ -470,8 +449,7 @@ pub fn compare_with_pages(old: &[Word], old_pages: usize, new: &[Word], new_page
         }
         touched.sort_unstable_by(|&qa, &qb| votes[qb].cmp(&votes[qa]).then_with(|| p.abs_diff(qa).cmp(&p.abs_diff(qb))));
         for &q in touched.iter().take(TOP_CANDIDATES) {
-            let pb = &new_profiles[q];
-            let sim = page_similarity(pa, pb);
+            let sim = page_similarity(pa, &new_profiles[q]);
             if sim >= MIN_PAGE_SIM {
                 let rel_dist = (p as f64 / n.max(1) as f64 - q as f64 / m.max(1) as f64).abs();
                 let bonus = 1e-4 * (1.0 - rel_dist) + if p == q { 1e-5 } else { 0.0 };
@@ -484,6 +462,14 @@ pub fn compare_with_pages(old: &[Word], old_pages: usize, new: &[Word], new_page
         touched.clear();
     }
     candidates.sort_by(|a, b| b.2.total_cmp(&a.2).then_with(|| a.0.abs_diff(a.1).cmp(&b.0.abs_diff(b.1))).then_with(|| (a.0, a.1).cmp(&(b.0, b.1))));
+    candidates
+}
+
+fn align_pages(old_by_page: &[Vec<&Word>], new_by_page: &[Vec<&Word>]) -> (Vec<Option<usize>>, Vec<Option<usize>>) {
+    let (n, m) = (old_by_page.len(), new_by_page.len());
+    let old_profiles: Vec<PageProfile> = old_by_page.iter().map(|w| PageProfile::from_words(w)).collect();
+    let new_profiles: Vec<PageProfile> = new_by_page.iter().map(|w| PageProfile::from_words(w)).collect();
+    let candidates = candidate_page_pairs(&old_profiles, &new_profiles);
 
     let mut old_to_new: Vec<Option<usize>> = vec![None; n];
     let mut new_to_old: Vec<Option<usize>> = vec![None; m];
@@ -505,12 +491,10 @@ pub fn compare_with_pages(old: &[Word], old_pages: usize, new: &[Word], new_page
 
     // Pair blank/image-only pages that sit in the same monotonic gap between matched text pages.
     let initial_in_order = in_order_mask(n, &old_to_new);
-    let mut anchors: Vec<(usize, usize)> = (0..n).filter(|&p| initial_in_order[p]).filter_map(|p| old_to_new[p].map(|q| (p, q))).collect();
+    let anchors: Vec<(usize, usize)> = (0..n).filter(|&p| initial_in_order[p]).filter_map(|p| old_to_new[p].map(|q| (p, q))).collect();
     let mut bounds = Vec::with_capacity(anchors.len() + 2);
     bounds.push((0usize, 0usize));
-    for &(p, q) in &anchors {
-        bounds.push((p, q));
-    }
+    bounds.extend_from_slice(&anchors);
     bounds.push((n, m));
     for w in bounds.windows(2) {
         let ((p0, q0), (p1, q1)) = (w[0], w[1]);
@@ -519,7 +503,6 @@ pub fn compare_with_pages(old: &[Word], old_pages: usize, new: &[Word], new_page
         for (&p, &q) in empty_old.iter().zip(empty_new.iter()) {
             old_to_new[p] = Some(q);
             new_to_old[q] = Some(p);
-            anchors.push((p, q));
         }
         // Same number of leftover text pages on both sides of the gap: treat them as edited pages.
         let rest_old: Vec<usize> = (p0..p1).filter(|&p| old_to_new[p].is_none()).collect();
@@ -531,77 +514,32 @@ pub fn compare_with_pages(old: &[Word], old_pages: usize, new: &[Word], new_page
             }
         }
     }
+    (old_to_new, new_to_old)
+}
 
-    let in_order = in_order_mask(n, &old_to_new);
-    let page_pairs: Vec<(usize, usize)> = (0..m).filter_map(|q| new_to_old[q].map(|p| (p, q))).collect();
-
-    let anchor_new_for_old = |p: usize| -> (usize, Option<&Word>) {
-        if let Some((prev_p, prev_q)) = (0..p).rev().find_map(|k| old_to_new[k].map(|q| (k, q))) {
-            let _ = prev_p;
-            (prev_q, new_by_page.get(prev_q).and_then(|w| w.last().copied()))
-        } else {
-            (0, new_by_page.first().and_then(|w| w.first().copied()))
-        }
-    };
-    let anchor_old_for_new = |q: usize| -> (usize, Option<&Word>) {
-        if let Some((prev_q, prev_p)) = (0..q).rev().find_map(|k| new_to_old[k].map(|p| (k, p))) {
-            let _ = prev_q;
-            (prev_p, old_by_page.get(prev_p).and_then(|w| w.last().copied()))
-        } else {
-            (0, old_by_page.first().and_then(|w| w.first().copied()))
-        }
-    };
-
-    // Group deleted old pages by the new page they precede (or `m` when they sit after all matched pages).
-    let mut deleted_before_new: Vec<Vec<usize>> = vec![Vec::new(); m + 1];
-    let mut page_changes = Vec::new();
-    for p in 0..n {
-        match old_to_new[p] {
-            None => {
-                let (anchor_new, _) = anchor_new_for_old(p);
-                let slot = (p + 1..n).find_map(|k| old_to_new[k]).unwrap_or(m);
-                deleted_before_new[slot].push(p);
-                page_changes.push(PageChange { kind: PageKind::Deleted, old_page: p, new_page: anchor_new });
-            }
-            Some(q) if !in_order[p] => {
-                page_changes.push(PageChange { kind: PageKind::Moved, old_page: p, new_page: q });
-            }
-            Some(_) => {}
-        }
+fn anchor_for_page<'a>(idx: usize, map: &[Option<usize>], target_by_page: &[Vec<&'a Word>]) -> (usize, Option<&'a Word>) {
+    if let Some(prev_target) = (0..idx).rev().find_map(|k| map.get(k).copied().flatten()) {
+        (prev_target, target_by_page.get(prev_target).and_then(|w| w.last().copied()))
+    } else {
+        (0, target_by_page.first().and_then(|w| w.first().copied()))
     }
-    for (q, matched_old) in new_to_old.iter().enumerate() {
-        if matched_old.is_none() {
-            let (anchor_old, _) = anchor_old_for_new(q);
-            page_changes.push(PageChange { kind: PageKind::Inserted, old_page: anchor_old, new_page: q });
-        }
-    }
-    page_changes.sort_by_key(|c| (c.new_page, c.old_page));
+}
 
-    // Diff the full sequence of words after reordering moved `old` pages into `new` page order,
-    // so text that reflows across a page break matches across the boundary.
-    let mut reordered_old: Vec<&Word> = Vec::with_capacity(old.len());
-    let mut ordered_new: Vec<&Word> = Vec::with_capacity(new.len());
-    for q in 0..m {
-        for &del_p in &deleted_before_new[q] {
-            reordered_old.extend_from_slice(&old_by_page[del_p]);
-        }
-        if let Some(p) = new_to_old[q] {
-            reordered_old.extend_from_slice(&old_by_page[p]);
-        }
-        ordered_new.extend_from_slice(&new_by_page[q]);
-    }
-    for &del_p in &deleted_before_new[m] {
-        reordered_old.extend_from_slice(&old_by_page[del_p]);
-    }
-
+fn build_word_changes(
+    reordered_old: &[&Word],
+    ordered_new: &[&Word],
+    old_by_page: &[Vec<&Word>],
+    new_by_page: &[Vec<&Word>],
+    old_to_new: &[Option<usize>],
+    new_to_old: &[Option<usize>],
+) -> Vec<Change> {
     let a: Vec<u64> = reordered_old.iter().map(|w| hash(&w.text)).collect();
     let b: Vec<u64> = ordered_new.iter().map(|w| hash(&w.text)).collect();
     let mut ops = Vec::with_capacity(a.len().max(b.len()));
     diff(&a, &b, &mut ops, 0);
 
     let mut changes = Vec::new();
-    let (mut i, mut j) = (0usize, 0usize);
-    let mut k = 0;
+    let (mut i, mut j, mut k) = (0usize, 0usize, 0usize);
     while k < ops.len() {
         if ops[k] == Op::Equal {
             i += 1;
@@ -632,38 +570,106 @@ pub fn compare_with_pages(old: &[Word], old_pages: usize, new: &[Word], new_page
             (false, true) => Kind::Deleted,
             _ => Kind::Inserted,
         };
-        let (old_page, old_near) = if let Some(&w) = del.first() {
-            (w.page, None)
-        } else {
-            let ins_page = ins.first().map_or(0, |w| w.page);
-            let target_old = new_to_old.get(ins_page).copied().flatten().unwrap_or_else(|| anchor_old_for_new(ins_page).0);
-            let near = reordered_old
-                .get(i)
-                .copied()
-                .filter(|w| w.page == target_old)
-                .or_else(|| i.checked_sub(1).and_then(|idx| reordered_old.get(idx).copied()).filter(|w| w.page == target_old))
-                .or_else(|| anchor_old_for_new(ins_page).1)
-                .or_else(|| reordered_old.get(i).copied())
-                .or_else(|| reordered_old.last().copied());
-            (target_old, near)
-        };
-        let (new_page, new_near) = if let Some(&w) = ins.first() {
-            (w.page, None)
-        } else {
-            let del_page = del.first().map_or(0, |w| w.page);
-            let target_new = old_to_new.get(del_page).copied().flatten().unwrap_or_else(|| anchor_new_for_old(del_page).0);
-            let near = ordered_new
-                .get(j)
-                .copied()
-                .filter(|w| w.page == target_new)
-                .or_else(|| j.checked_sub(1).and_then(|idx| ordered_new.get(idx).copied()).filter(|w| w.page == target_new))
-                .or_else(|| anchor_new_for_old(del_page).1)
-                .or_else(|| ordered_new.get(j).copied())
-                .or_else(|| ordered_new.last().copied());
-            (target_new, near)
-        };
+        let (old_page, old_near) = resolve_side_anchor(&del, &ins, i, reordered_old, new_to_old, old_by_page);
+        let (new_page, new_near) = resolve_side_anchor(&ins, &del, j, ordered_new, old_to_new, new_by_page);
         changes.push(Change { kind, old: side_on_page(&del, old_near, old_page), new: side_on_page(&ins, new_near, new_page) });
     }
+    changes
+}
+
+fn resolve_side_anchor<'a>(
+    own: &[&'a Word],
+    other: &[&'a Word],
+    cursor: usize,
+    stream: &[&'a Word],
+    other_to_own: &[Option<usize>],
+    own_by_page: &[Vec<&'a Word>],
+) -> (usize, Option<&'a Word>) {
+    if let Some(&w) = own.first() {
+        return (w.page, None);
+    }
+    let other_page = other.first().map_or(0, |w| w.page);
+    let (anchor_page, anchor_word) = anchor_for_page(other_page, other_to_own, own_by_page);
+    let target = other_to_own.get(other_page).copied().flatten().unwrap_or(anchor_page);
+    let near = stream
+        .get(cursor)
+        .copied()
+        .filter(|w| w.page == target)
+        .or_else(|| cursor.checked_sub(1).and_then(|idx| stream.get(idx).copied()).filter(|w| w.page == target))
+        .or(anchor_word)
+        .or_else(|| stream.get(cursor).copied())
+        .or_else(|| stream.last().copied());
+    (target, near)
+}
+
+/// Compare two documents' words with explicit page counts (so blank or image-only pages are
+/// aligned as well).
+pub fn compare_with_pages(old: &[Word], old_pages: usize, new: &[Word], new_pages: usize) -> Comparison {
+    let n = old_pages.max(old.iter().map(|w| w.page + 1).max().unwrap_or(0));
+    let m = new_pages.max(new.iter().map(|w| w.page + 1).max().unwrap_or(0));
+    if n == 0 && m == 0 {
+        return Comparison::default();
+    }
+    let mut old_by_page: Vec<Vec<&Word>> = vec![Vec::new(); n];
+    for w in old {
+        if let Some(p) = old_by_page.get_mut(w.page) {
+            p.push(w);
+        }
+    }
+    let mut new_by_page: Vec<Vec<&Word>> = vec![Vec::new(); m];
+    for w in new {
+        if let Some(q) = new_by_page.get_mut(w.page) {
+            q.push(w);
+        }
+    }
+
+    let (old_to_new, new_to_old) = align_pages(&old_by_page, &new_by_page);
+    let in_order = in_order_mask(n, &old_to_new);
+    let page_pairs: Vec<(usize, usize)> = (0..m).filter_map(|q| new_to_old[q].map(|p| (p, q))).collect();
+
+    // Group deleted old pages by the new page they precede (or `m` when they sit after all matched pages).
+    let mut deleted_before_new: Vec<Vec<usize>> = vec![Vec::new(); m + 1];
+    let mut page_changes = Vec::new();
+    for p in 0..n {
+        match old_to_new[p] {
+            None => {
+                let (anchor_new, _) = anchor_for_page(p, &old_to_new, &new_by_page);
+                let slot = (p + 1..n).find_map(|k| old_to_new[k]).unwrap_or(m);
+                deleted_before_new[slot].push(p);
+                page_changes.push(PageChange { kind: PageKind::Deleted, old_page: p, new_page: anchor_new });
+            }
+            Some(q) if !in_order[p] => {
+                page_changes.push(PageChange { kind: PageKind::Moved, old_page: p, new_page: q });
+            }
+            Some(_) => {}
+        }
+    }
+    for (q, matched_old) in new_to_old.iter().enumerate() {
+        if matched_old.is_none() {
+            let (anchor_old, _) = anchor_for_page(q, &new_to_old, &old_by_page);
+            page_changes.push(PageChange { kind: PageKind::Inserted, old_page: anchor_old, new_page: q });
+        }
+    }
+    page_changes.sort_by_key(|c| (c.new_page, c.old_page));
+
+    // Diff the full sequence of words after reordering moved `old` pages into `new` page order,
+    // so text that reflows across a page break matches across the boundary.
+    let mut reordered_old: Vec<&Word> = Vec::with_capacity(old.len());
+    let mut ordered_new: Vec<&Word> = Vec::with_capacity(new.len());
+    for q in 0..m {
+        for &del_p in &deleted_before_new[q] {
+            reordered_old.extend_from_slice(&old_by_page[del_p]);
+        }
+        if let Some(p) = new_to_old[q] {
+            reordered_old.extend_from_slice(&old_by_page[p]);
+        }
+        ordered_new.extend_from_slice(&new_by_page[q]);
+    }
+    for &del_p in &deleted_before_new[m] {
+        reordered_old.extend_from_slice(&old_by_page[del_p]);
+    }
+
+    let changes = build_word_changes(&reordered_old, &ordered_new, &old_by_page, &new_by_page, &old_to_new, &new_to_old);
 
     // Pure pagination reflow of identical text produces no word changes; do not report reflowed
     // page breaks as inserted or deleted pages, while keeping blank or image-only page changes.
