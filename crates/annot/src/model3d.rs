@@ -2,10 +2,8 @@
 //! 3D stream, or a 3D reference dictionary naming the stream another annotation shares.
 
 use super::lookup::{annots, page_ref};
+use super::threed::MAX_MODEL_BYTES;
 use super::{AnnotError, Dict, Document, Object};
-
-/// The largest decoded 3D stream [`model_3d`] reads, in bytes.
-pub const MAX_MODEL_BYTES: usize = 256 << 20;
 
 /// The format of a 3D stream, from its `/Subtype`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
