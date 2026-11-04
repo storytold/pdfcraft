@@ -34,7 +34,9 @@ pub struct OcrDraft {
 
 impl Default for OcrDraft {
     fn default() -> Self {
-        OcrDraft { pages: OcrPages::All, from: 1, to: 1, language: "en".into(), dpi: 300, text_pages: false }
+        // Chinese is the default: the models read Chinese and Latin, and a page that is mostly
+        // Chinese is read wrongly by the Latin ones.
+        OcrDraft { pages: OcrPages::All, from: 1, to: 1, language: "zh".into(), dpi: 300, text_pages: false }
     }
 }
 
@@ -272,6 +274,10 @@ impl PdfCraftApp {
         } else {
             None
         };
+        // The language names the models that read the page; the web build sends it to the
+        // server, which has no way to know which ones the user picked.
+        #[cfg(target_arch = "wasm32")]
+        let language = settings.language.clone();
         let Some(job) = self.session.ocr_job(id, pages, settings) else { return };
         let progress = Arc::new(Mutex::new(OcrProgress { total: job.pages.len(), ..Default::default() }));
         let p = progress.clone();
@@ -309,7 +315,7 @@ impl PdfCraftApp {
             wasm_bindgen_futures::spawn_local(async move {
                 let result = match bytes {
                     Some(bytes) => match crate::server::upload(bytes.as_ref().clone()).await {
-                        Ok((token, _)) => crate::server::ocr_pdf(&token).await,
+                        Ok((token, _)) => crate::server::ocr_pdf(&token, &language).await,
                         Err(e) => Err(e),
                     },
                     None => Err("the document could not be read".into()),

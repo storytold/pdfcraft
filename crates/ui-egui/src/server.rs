@@ -8,7 +8,7 @@
 use js_sys::Uint8Array;
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::JsFuture;
-use web_sys::{Request, RequestInit};
+use web_sys::{Headers, Request, RequestInit};
 
 /// The same-origin API the site is served with.
 const BASE: &str = "/api";
@@ -42,6 +42,19 @@ fn post(url: &str, body: Option<Vec<u8>>) -> Result<Request, String> {
     Request::new_with_str_and_init(url, &init).map_err(|e| format!("{e:?}"))
 }
 
+/// A POST whose body is a form, as the OCR endpoint takes its language in one.
+fn post_form(url: &str, form: &str) -> Result<Request, String> {
+    let mut init = RequestInit::new();
+    init.method("POST");
+    let headers = Headers::new().map_err(|e| format!("{e:?}"))?;
+    headers.set("Content-Type", "application/x-www-form-urlencoded").map_err(|e| format!("{e:?}"))?;
+    init.headers(&headers);
+    let array = Uint8Array::from(form.as_bytes());
+    let value: JsValue = array.into();
+    init.body(Some(&value));
+    Request::new_with_str_and_init(url, &init).map_err(|e| format!("{e:?}"))
+}
+
 /// Hand the document to the server and get a token for it back.
 pub async fn upload(pdf: Vec<u8>) -> Result<(String, usize), String> {
     let bytes = send(post(&format!("{BASE}/upload"), Some(pdf))?).await?;
@@ -67,8 +80,10 @@ pub async fn render_page(id: &str, page: usize, dpi: u32) -> Result<Vec<u8>, Str
 }
 
 /// The document with an invisible text layer over its pages: the server recognized it.
-pub async fn ocr_pdf(id: &str) -> Result<Vec<u8>, String> {
-    send(post(&format!("{BASE}/ocr?id={id}"), None)?).await
+/// The language names the models that read it, as it does on the desktop.
+pub async fn ocr_pdf(id: &str, language: &str) -> Result<Vec<u8>, String> {
+    let form = format!("lang={language}");
+    send(post_form(&format!("{BASE}/ocr?id={id}"), &form)?).await
 }
 
 /// A copy of the document whose pages the server draws: a browser has no face for a font the
