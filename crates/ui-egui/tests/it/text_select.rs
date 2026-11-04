@@ -529,6 +529,7 @@ fn a_selection_across_pages_is_marked_on_every_page_in_one_step() {
     };
     assert_eq!(marks(&h), [(0, "Underline".to_string()), (1, "Underline".to_string())]);
     assert!(h.state().views[0].selected_text().is_none(), "the selection is consumed");
+    assert!(h.state().views[0].comments.selected.is_some_and(|(page, _)| page == 1), "its last part is selected, as one markup is");
     h.state_mut().undo();
     h.run_steps(3);
     assert_eq!(marks(&h), [], "one undo removes both");
@@ -842,4 +843,20 @@ fn a_highlight_across_pages_selects_its_last_part_and_opens_its_note() {
     let on_page_2 = doc.info.annotations.iter().find(|a| a.page == 1 && a.subtype == "Highlight").map(|a| a.index).expect("a highlight on page 2");
     assert_eq!(app.views[0].comments.selected, Some((1, on_page_2)), "the part where the selection ends is selected");
     assert!(app.views[0].comments.editing.as_ref().is_some_and(|(p, i, _)| (*p, *i) == (1, on_page_2)), "its note is open");
+}
+
+/// Review of #5017: only markup on a text selection across pages is followed up as one markup.
+/// Redact ▸ Mark Page Range, also one comment per page in one batch, selects nothing and leaves
+/// the comment editor alone, as before.
+#[test]
+fn a_page_range_redaction_is_not_followed_up_as_a_selection() {
+    let mut h = three_pages();
+    h.state_mut().redact_pages_draft = pdfcraft_ui_egui::RedactPagesDraft { current: false, from: 1, to: 3 };
+    h.state_mut().redact_pages();
+    h.run_steps(3);
+    let app = h.state();
+    let doc = app.session.get(app.views[0].id).unwrap();
+    assert_eq!(doc.redaction_marks(), 3, "a mark on every page");
+    assert_eq!(app.views[0].comments.selected, None, "no mark selected");
+    assert!(app.views[0].comments.editing.is_none(), "no editor opened");
 }

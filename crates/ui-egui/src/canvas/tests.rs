@@ -1177,9 +1177,9 @@ fn markup_on_several_pages_is_one_undo_step_named_like_one() {
             author: String::new(),
         })
     };
-    assert!(one_undo_step(Vec::new()).is_none());
-    assert!(matches!(one_undo_step(vec![mark(0)]), Some(Edit::AddAnnotation(_))));
-    let Some(Edit::Batch { label, edits }) = one_undo_step(vec![mark(0), mark(1)]) else { panic!("a batch") };
+    assert!(selection::one_undo_step(Vec::new()).is_none());
+    assert!(matches!(selection::one_undo_step(vec![mark(0)]), Some(Edit::AddAnnotation(_))));
+    let Some(Edit::Batch { label, edits }) = selection::one_undo_step(vec![mark(0), mark(1)]) else { panic!("a batch") };
     assert_eq!((label.as_str(), edits.len()), (mark(0).label().wording, 2));
     assert!(pdfcraft_engine::EDIT_LABELS.contains(&label.as_str()), "a wording the catalogues translate");
 }

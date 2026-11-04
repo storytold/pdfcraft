@@ -404,7 +404,7 @@ pub(crate) fn page_after_text(resp: &egui::Response, cx: &PageCx<'_>, view: &mut
                 author: cx.prefs.author.clone(),
             })
         });
-        view.pending_edit = crate::canvas::one_undo_step(edits.collect());
+        view.pending_edit = view.selection_marks_edit(edits.collect());
     }
 }
 

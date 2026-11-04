@@ -228,6 +228,16 @@ impl DocView {
         ToolMarks::Marks(marks)
     }
 
+    /// The edit adding what a tool marks on a text selection, one edit per page, as one undo
+    /// step ([`one_undo_step`]). Across pages it is marked as such for `apply_edit`
+    /// ([`Self::marks_across_pages`]), which follows it up as one markup: other batches of
+    /// comments (Redact's page range or search) are not followed up.
+    pub(crate) fn selection_marks_edit(&mut self, edits: Vec<Edit>) -> Option<Edit> {
+        let edit = one_undo_step(edits);
+        self.marks_across_pages = matches!(edit, Some(Edit::Batch { .. }));
+        edit
+    }
+
     pub(crate) fn clear_selection(&mut self) {
         self.selection = None;
         self.actions_dismissed = None;
@@ -436,7 +446,7 @@ pub(super) fn selection_actions(
                     author: prefs.author.clone(),
                 })
             });
-            view.pending_edit = one_undo_step(edits.collect());
+            view.pending_edit = view.selection_marks_edit(edits.collect());
         }
         // Copy is dispatched through the app after the view borrow ends.
         SelectionAction::Copy => {}

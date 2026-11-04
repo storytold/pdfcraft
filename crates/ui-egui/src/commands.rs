@@ -482,7 +482,7 @@ impl PdfCraftApp {
                                 Edit::AddAnnotation(pdfcraft_engine::NewAnnotation { page, shape, style, contents: String::new(), author })
                             })
                             .collect();
-                        if let Some(edit) = crate::canvas::one_undo_step(edits) {
+                        if let Some(edit) = self.views[i].selection_marks_edit(edits) {
                             self.views[i].clear_selection();
                             self.apply_edit(edit);
                         }
@@ -765,7 +765,7 @@ impl PdfCraftApp {
                     match self.views[i].tool_marks(crate::QuickTool::Redact, true, None, true, &doc.info) {
                         crate::canvas::ToolMarks::Marks(marks) => {
                             let edits: Vec<Edit> = marks.into_iter().map(|(page, quads)| self.redact_prefs.mark(page, quads, &author)).collect();
-                            if let Some(edit) = crate::canvas::one_undo_step(edits) {
+                            if let Some(edit) = self.views[i].selection_marks_edit(edits) {
                                 self.views[i].clear_selection();
                                 self.apply_edit(edit);
                             }

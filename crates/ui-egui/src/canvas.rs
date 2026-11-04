@@ -66,7 +66,7 @@ use organize::sharp_enough;
 pub(crate) use page_input::PageToolContext;
 use page_input::{PageInput, cancel_on_escape, page_overlays, page_tool_input, text_layer};
 use selection::{Selection, Span, click_unit, selection_actions, start_selection_drag};
-pub(crate) use selection::{TextSpan, ToolMarks, one_undo_step};
+pub(crate) use selection::{TextSpan, ToolMarks};
 pub use xform::PageXform;
 use xform::snap_to_pixels;
 use zoom::anchored_scroll;
@@ -661,6 +661,10 @@ pub struct DocView {
     /// A text selection Redact did not mark: it covers a page whose text could not be read
     /// ([`ToolMarks::Unreadable`]). The app says so.
     pub(crate) redaction_refused: bool,
+    /// The next edit applied is markup on a text selection across pages, one comment per page in
+    /// one batch ([`DocView::selection_marks_edit`]): `apply_edit` follows it up as one markup and
+    /// takes this back, whatever becomes of the edit.
+    pub(crate) marks_across_pages: bool,
     /// A marking tool finished this text selection while a page it covers was still to be read
     /// (or none was drawn): it is marked once they are ([`DocView::tool_marks`]).
     marks_waiting: Option<(QuickTool, Selection)>,
@@ -1060,6 +1064,7 @@ impl DocView {
             redact_drag: None,
             pending_redaction: None,
             redaction_refused: false,
+            marks_across_pages: false,
             marks_waiting: None,
             crop_drag: None,
             camera: None,
@@ -3433,7 +3438,8 @@ fn apply_frame_requests(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui, 
                 }
             })
             .collect();
-        app.views[index].pending_edit = one_undo_step(edits);
+        let edit = app.views[index].selection_marks_edit(edits);
+        app.views[index].pending_edit = edit;
     }
     match image_action {
         Some(crate::edit_text_ui::ImageAction::Replace(page, index)) => app.replace_page_image_dialog(page, index),
