@@ -400,6 +400,7 @@ mod tests {
             "write_atomic_with",
             "read_input",
             "read_input_bytes",
+            "read_model",
             "read_review_sidecar",
             "process",
             "linked",
