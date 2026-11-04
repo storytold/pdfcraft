@@ -99,8 +99,13 @@ pub(super) fn across_in_columns(glyphs: &[Drawn], across: &[usize], down: &[usiz
         // The fallbacks are for a number with nothing that way, and must not take part in the
         // comparison -- seeding `min` with the run's own edge made it beat a real character below,
         // which left a gap for the layout to read as a word space (#3812 report).
-        let above = boxes.iter().filter(|b| b[1] <= run_box[1]).map(|b| b[3]).fold(f32::NEG_INFINITY, f32::max);
-        let below = boxes.iter().filter(|b| b[3] >= run_box[3]).map(|b| b[1]).fold(f32::INFINITY, f32::min);
+        //
+        // Only characters within a column width count: columns are grouped by their centre alone,
+        // so a tier set lower on the page at the same x is in the same group, and taking its first
+        // character as the one "below" stretched the slot over the gap and joined the two tiers
+        // into one line (noted in review). The same nearness `beside` asks for above.
+        let above = boxes.iter().filter(|b| b[1] <= run_box[1] && b[3] >= run_box[1] - cw).map(|b| b[3]).fold(f32::NEG_INFINITY, f32::max);
+        let below = boxes.iter().filter(|b| b[3] >= run_box[3] && b[1] <= run_box[3] + cw).map(|b| b[1]).fold(f32::INFINITY, f32::min);
         let slot0 = if above.is_finite() { above } else { run_box[1] - cw * 0.2 };
         let slot1 = if below.is_finite() { below } else { run_box[3] + cw * 0.2 };
         let step = ((slot1 - slot0) / run.len() as f32).max(0.1);

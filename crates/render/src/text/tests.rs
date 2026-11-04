@@ -2234,6 +2234,16 @@ fn a_number_set_across_a_vertical_column_stays_in_it() {
     );
     assert_eq!(high.plain_text(), "第12頁共有三段");
 
+    // Two tiers of columns at the same x, the upper ending with a number: the number's slot ends
+    // at the tier it is in, not at the first character of the tier far below, so the two tiers
+    // stay apart instead of reading as one column (noted in review).
+    let tiers = render(
+        "BT /CV 12 Tf 1 0 0 1 250 250 Tm <0006> Tj ET BT /F1 8 Tf 1 0 0 1 245.55 229 Tm (12) Tj ET \
+         BT /CV 12 Tf 1 0 0 1 250 120 Tm <000700080009000A000B> Tj ET"
+            .to_string(),
+    );
+    assert_eq!(tiers.plain_text(), "\u{7B2C}12\n\u{9801}\u{5171}\u{6709}\u{4E09}\u{6BB5}", "two tiers, two lines");
+
     // A number centred on a column but far from every one of its characters -- in a hole in the
     // column rather than beside a character -- is not part of it (#3812 review). Here the
     // column's characters are 48 pt apart and the number sits in the middle of that hole.
