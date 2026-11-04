@@ -379,6 +379,9 @@ mod tests {
         // The superscript digits name a port too.
         let e = roots.check(&s(base.join("out/COM¹.pdf")), Access::Write).unwrap_err();
         assert!(e.contains("reserved device names"), "{e}");
+        // A colon ends the device part too: `nul:.pdf` is the device, not a stream of a file.
+        let e = roots.check(&s(base.join("out/nul:.pdf")), Access::Write).unwrap_err();
+        assert!(e.contains("reserved device names"), "{e}");
         assert_eq!(roots.check(&s(base.join("out/console.txt")), Access::Write), Ok(()));
         let _ = std::fs::remove_dir_all(base);
     }
