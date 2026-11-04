@@ -236,6 +236,7 @@ fn bad_sizes_and_cameras_are_refused() {
         Camera { up: [0.0, 0.0, 1.0], ..ortho(1.0) },
         Camera { projection: Projection::Perspective { fov_y: 180.0 }, ..ortho(1.0) },
         Camera { projection: Projection::Perspective { fov_y: f64::NAN }, ..ortho(1.0) },
+        Camera { projection: Projection::Perspective { fov_y: 1e-310 }, ..ortho(1.0) },
         ortho(0.0),
         ortho(f64::INFINITY),
     ];

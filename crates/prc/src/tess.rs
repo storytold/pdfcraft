@@ -11,7 +11,7 @@
 mod triangulate;
 
 use crate::arrays;
-use crate::bits::BitReader;
+use crate::bits::{BitReader, Budget};
 use crate::entity::{Ctx, malformed};
 use crate::{FileStructure, PrcError, SectionKind};
 use triangulate::{Corners, Face};
@@ -109,8 +109,14 @@ impl FileStructure {
     /// [`PrcError::Malformed`] for a damaged section; [`PrcError::Unsupported`] for
     /// optimised vertex colours.
     pub fn tessellations(&self) -> Result<Vec<Tessellation>, PrcError> {
-        let schema = self.schema()?;
-        let r = BitReader::new(self.section(SectionKind::Tessellation));
+        self.tessellations_within(Budget::FULL)
+    }
+
+    /// As [`Self::tessellations`], the globals' schema and the section sharing `budget`.
+    pub(crate) fn tessellations_within(&self, budget: Budget) -> Result<Vec<Tessellation>, PrcError> {
+        let mut globals = BitReader::with_budget(self.section(SectionKind::Globals), budget);
+        let schema = crate::Schema::read(&mut globals)?;
+        let r = BitReader::with_budget(self.section(SectionKind::Tessellation), globals.budget());
         Ctx::new(r, &schema, self.authoring_version).file_structure_tessellation()
     }
 }
@@ -193,12 +199,14 @@ impl Ctx<'_, '_> {
         let texture = self.doubles("texture coordinates")?;
         self.schema.skip_added_fields(TESS_3D, &mut self.r)?;
 
-        let mut mesh = TriangleMesh { positions: points(&coords), normals_recalculated: recalc, ..TriangleMesh::default() };
+        let mut mesh = TriangleMesh { positions: points(&coords)?, normals_recalculated: recalc, ..TriangleMesh::default() };
         let styled = faces.iter().any(|f| !f.styles.is_empty());
         let mut corners = Corners::default();
         for f in &faces {
             let start = mesh.triangles.len();
             let entities = f.triangulate(&indices, !recalc, mesh.positions.len(), &mut mesh.triangles, &mut corners)?;
+            // Faces may reuse one index range, so the triangles are charged as they are made.
+            self.r.take_elements(mesh.triangles.len().saturating_sub(start))?;
             mesh.faces.push(start..mesh.triangles.len());
             if styled {
                 f.styles_into(&entities, &mut mesh.triangle_styles);
@@ -224,7 +232,8 @@ impl Ctx<'_, '_> {
             self.vertex_colors(n, false)?;
         }
         if !face.styles.is_empty() {
-            face.behaviour = u16::try_from(self.r.unsigned_integer()?).unwrap_or(0);
+            let bits = self.r.unsigned_integer()?;
+            face.behaviour = u16::try_from(bits).map_err(|_| malformed(format!("face behaviour {bits} is wider than 16 bits")))?;
         }
         self.schema.skip_added_fields(TESS_FACE, &mut self.r)?;
         Ok(face)
@@ -232,7 +241,7 @@ impl Ctx<'_, '_> {
 
     /// `TESS_3D_Wire` (175) after its type code [WD 7.8.7].
     fn wire(&mut self) -> Result<Vec<Vec<[f64; 3]>>, PrcError> {
-        let pts = points(&self.base_tess_data()?);
+        let pts = points(&self.base_tess_data()?)?;
         let words = self.uints("wire indices")?;
         let mut wires: Vec<Vec<[f64; 3]>> = Vec::new();
         let mut colours = 0usize;
@@ -377,7 +386,10 @@ impl Ctx<'_, '_> {
 /// The normal array and each triangle's corner normals, or both empty when any slot fails to
 /// name a normal: a mesh shades from its stored normals wholly or not at all.
 fn stored_normals(coords: &[f64], slots: &[[u32; 3]], triangles: usize) -> (Vec<[f64; 3]>, Vec<[u32; 3]>) {
-    let normals = points(coords);
+    // Like a slot naming no normal, a partial last normal drops the stored normals.
+    let Ok(normals) = points(coords) else {
+        return (Vec::new(), Vec::new());
+    };
     let named = |k: u32| k.is_multiple_of(3) && (k as usize / 3) < normals.len();
     if normals.is_empty() || slots.len() != triangles || !slots.iter().flatten().all(|&k| named(k)) {
         return (Vec::new(), Vec::new());
@@ -403,8 +415,13 @@ fn stored_uvs(coords: &[f64], sets: UvSets) -> (Vec<[f64; 2]>, UvSets) {
     (uvs, sets)
 }
 
-fn points(coords: &[f64]) -> Vec<[f64; 3]> {
-    coords.as_chunks::<3>().0.to_vec()
+/// `coords` as points; an array that does not divide into whole points is malformed.
+fn points(coords: &[f64]) -> Result<Vec<[f64; 3]>, PrcError> {
+    let (whole, rest) = coords.as_chunks::<3>();
+    if !rest.is_empty() {
+        return Err(malformed(format!("{} coordinates are not whole points", coords.len())));
+    }
+    Ok(whole.to_vec())
 }
 
 /// The point a `Double`-offset index names [WD 7.8.5.2: multiples of 3].

@@ -13,6 +13,9 @@ pub(crate) struct Corner {
     pub(crate) shade: [f64; 3],
 }
 
+/// The perspective near plane, as a fraction of the eye-to-target distance.
+pub(crate) const NEAR_FRACTION: f64 = 1e-4;
+
 pub(crate) enum View {
     /// `focal` = 1 / tan(fov_y / 2); `near` = the clip distance.
     Perspective {
@@ -35,8 +38,13 @@ impl View {
                 if !(fov_y > 0.0 && fov_y < 180.0) {
                     return Err(RenderError::Camera("the field of view is not between 0 and 180 degrees"));
                 }
+                let focal = 1.0 / (fov_y.to_radians() / 2.0).tan();
+                // A field of view too small to measure leaves no finite focal length.
+                if !focal.is_finite() {
+                    return Err(RenderError::Camera("the field of view is too small"));
+                }
                 let distance = length(sub(camera.target, camera.eye));
-                Ok(View::Perspective { focal: 1.0 / (fov_y.to_radians() / 2.0).tan(), aspect, near: (distance * 1e-4).max(f64::MIN_POSITIVE) })
+                Ok(View::Perspective { focal, aspect, near: (distance * NEAR_FRACTION).max(f64::MIN_POSITIVE) })
             }
             Projection::Orthographic { height } => {
                 if !(height.is_finite() && height > 0.0) {
@@ -87,6 +95,8 @@ impl View {
 /// The image being drawn: `rgba` holds `width * height` straight-RGBA pixels and `depth` their
 /// depth keys, row by row from the top.
 pub(crate) struct Target<'b> {
+    /// Depth keys are 1/z (a perspective view), so the shade is interpolated perspective-correct.
+    pub(crate) perspective: bool,
     pub(crate) width: u32,
     pub(crate) height: u32,
     pub(crate) rgba: &'b mut [u8],
@@ -95,11 +105,13 @@ pub(crate) struct Target<'b> {
 
 impl Target<'_> {
     /// Fill the screen triangle of `corners` with straight-RGBA `colour`, depth-tested at pixel
-    /// centres, the shade interpolated across it. An opaque pixel replaces the pixel and its
-    /// depth; a translucent one is blended over it, leaving the depth.
+    /// centres, the shade interpolated across it. A pixel centre on an edge two triangles share
+    /// belongs to one of them only. An opaque pixel replaces the pixel and its depth; a
+    /// translucent one is blended over it, leaving the depth.
     pub(crate) fn fill(&mut self, corners: [Corner; 3], colour: [u8; 4]) {
         let [a, b, c] = corners;
         let area = edge(a.at, b.at, c.at);
+        let edges = [(b.at, c.at), (c.at, a.at), (a.at, b.at)];
         if !area.is_finite() || area.abs() < 1e-12 {
             return;
         }
@@ -109,8 +121,8 @@ impl Target<'_> {
         for y in y0..=y1 {
             for x in x0..=x1 {
                 let p = [f64::from(x) + 0.5, f64::from(y) + 0.5, 0.0];
-                let w = [edge(b.at, c.at, p), edge(c.at, a.at, p), edge(a.at, b.at, p)].map(|e| e / area);
-                if w.iter().any(|&k| k < 0.0) {
+                let w = edges.map(|(from, to)| edge(from, to, p) / area);
+                if w.iter().zip(edges).any(|(&k, (from, to))| k < 0.0 || (k == 0.0 && !owns(from, to, area))) {
                     continue;
                 }
                 let mix = |f: &dyn Fn(&Corner) -> f64| w.iter().zip(&corners).map(|(k, c)| k * f(c)).sum::<f64>();
@@ -121,7 +133,14 @@ impl Target<'_> {
                 if self.depth.get(i).is_none_or(|&d| key <= d) {
                     continue;
                 }
-                let shade = if a.shade == b.shade && b.shade == c.shade { a.shade } else { [0, 1, 2].map(|j| mix(&|c| at(c.shade, j))) };
+                let shade = if a.shade == b.shade && b.shade == c.shade {
+                    a.shade
+                } else if self.perspective && key > 0.0 {
+                    // Screen weights times 1/z, renormalised, are the surface's own weights.
+                    [0, 1, 2].map(|j| mix(&|c| at(c.shade, j) * at(c.at, 2)) / key)
+                } else {
+                    [0, 1, 2].map(|j| mix(&|c| at(c.shade, j)))
+                };
                 self.blend(i, key, shaded(colour, shade));
             }
         }
@@ -193,6 +212,15 @@ pub(crate) fn edge(a: [f64; 3], b: [f64; 3], p: [f64; 3]) -> f64 {
     (at(b, 0) - at(a, 0)) * (at(p, 1) - at(a, 1)) - (at(b, 1) - at(a, 1)) * (at(p, 0) - at(a, 0))
 }
 
+/// Whether a pixel centre exactly on the edge `from`-`to` of a triangle of signed doubled area
+/// `area` is the triangle's: the side the triangle grows towards, +x first, then +y. Two
+/// triangles sharing the edge lie on opposite sides of it, so exactly one owns it.
+fn owns(from: [f64; 3], to: [f64; 3], area: f64) -> bool {
+    let s = area.signum();
+    let (gx, gy) = (-(at(to, 1) - at(from, 1)) * s, (at(to, 0) - at(from, 0)) * s);
+    gx > 0.0 || (gx == 0.0 && gy > 0.0)
+}
+
 /// Component `i` of `v`, 0.0 out of range.
 pub(crate) fn at(v: [f64; 3], i: usize) -> f64 {
     v.get(i).copied().unwrap_or(0.0)
@@ -222,5 +250,33 @@ mod tests {
         assert_eq!(channel(1e300), 255);
         assert_eq!(channel(-4.0), 0);
         assert_eq!(channel(127.5), 128);
+    }
+
+    fn corner(x: f64, y: f64, key: f64, shade: f64) -> Corner {
+        Corner { at: [x, y, key], shade: [shade; 3] }
+    }
+
+    #[test]
+    fn a_pixel_on_an_edge_two_triangles_share_is_blended_once() {
+        let (mut rgba, mut depth) = (vec![0; 64], vec![f64::NEG_INFINITY; 16]);
+        let mut t = Target { perspective: false, width: 4, height: 4, rgba: &mut rgba, depth: &mut depth };
+        let [a, b, c, d] = [(0.0, 0.0), (4.0, 0.0), (4.0, 4.0), (0.0, 4.0)].map(|(x, y)| corner(x, y, 1.0, 1.0));
+        t.fill([a, b, c], [255, 0, 0, 128]);
+        t.fill([a, c, d], [255, 0, 0, 128]);
+        // The diagonal runs through four pixel centres; each must look like the rest.
+        for px in rgba.chunks(4) {
+            assert_eq!(px, [255, 0, 0, 128]);
+        }
+    }
+
+    #[test]
+    fn a_perspective_shade_is_interpolated_on_the_surface_not_the_screen() {
+        let (mut rgba, mut depth) = (vec![0; 64], vec![f64::NEG_INFINITY; 16]);
+        let mut t = Target { perspective: true, width: 4, height: 4, rgba: &mut rgba, depth: &mut depth };
+        // The x = 4 corner is three times as far away as the others, and the only lit one.
+        t.fill([corner(0.0, 0.0, 1.0, 0.0), corner(4.0, 0.0, 1.0 / 3.0, 1.0), corner(0.0, 4.0, 1.0, 0.0)], [240, 240, 240, 255]);
+        // At screen (1.5, 0.5) the weights are 0.5, 0.375, 0.125: on the surface the far corner
+        // counts 0.125 / 0.75 = 1/6, where on the screen it would count 0.375.
+        assert_eq!(rgba.get(4..8), Some(&[40, 40, 40, 255][..]));
     }
 }

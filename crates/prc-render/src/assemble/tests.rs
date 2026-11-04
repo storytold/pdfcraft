@@ -47,11 +47,27 @@ fn colours_are_clamped_into_bytes() {
 
 #[test]
 fn the_triangle_budget_is_shared_and_refuses_past_the_ceiling() {
-    let mut b = Budget(MAX_ASSEMBLED_TRIANGLES - 1);
+    let mut b = Budget { triangles: MAX_ASSEMBLED_TRIANGLES - 1, vertices: 0 };
     assert!(b.spend(&triangle()).is_ok());
     assert_eq!(b.spend(&triangle()), Err(RenderError::TooManyTriangles));
-    let mut b = Budget(usize::MAX);
+    let mut b = Budget { triangles: usize::MAX, vertices: 0 };
     assert_eq!(b.spend(&triangle()), Err(RenderError::TooManyTriangles));
+}
+
+#[test]
+fn the_vertex_budget_counts_positions_normals_and_uvs() {
+    let mut heavy = triangle();
+    heavy.normals = vec![[0.0, 0.0, 1.0]; 2];
+    heavy.uvs = vec![[0.0; 2]; 4];
+    let mut b = Budget::default();
+    b.spend(&heavy).unwrap();
+    assert_eq!((b.triangles, b.vertices), (1, 9));
+    // One triangle over many vertices: the triangle ceiling alone would let it through.
+    let mut b = Budget { triangles: 0, vertices: MAX_ASSEMBLED_VERTICES - 8 };
+    assert_eq!(b.spend(&heavy), Err(RenderError::TooManyVertices));
+    assert_eq!((b.triangles, b.vertices), (0, MAX_ASSEMBLED_VERTICES - 8), "a refused mesh spends nothing");
+    let mut b = Budget { triangles: 0, vertices: usize::MAX };
+    assert_eq!(b.spend(&triangle()), Err(RenderError::TooManyVertices));
 }
 
 fn item<'a>(fs: usize, tess: usize, x: f64, colour: Option<Rgba>) -> Item<'a> {
@@ -66,22 +82,32 @@ fn each_placement_draws_its_tessellation_where_and_in_the_colour_the_tree_says()
     let mut red = Rgba::default();
     red.r = 1.0;
     red.a = 1.0;
-    // Two occurrences of one tessellation at different places, one coloured; one naming nothing.
-    let items = [item(0, 0, 3.0, Some(red)), item(0, 0, -4.0, None), item(1, 0, 0.0, None), item(0, 7, 0.0, None)];
-    let (mut budget, mut out) = (Budget(0), Vec::new());
+    // Two occurrences of one tessellation at different places, one coloured.
+    let items = [item(0, 0, 3.0, Some(red)), item(0, 0, -4.0, None)];
+    let (mut budget, mut out) = (Budget::default(), Vec::new());
     place_items(&tessellations, items, &mut budget, &mut out).unwrap();
-    assert_eq!(out.len(), 2, "items naming no mesh are skipped");
+    assert_eq!(out.len(), 2);
     assert_eq!(out[0].mesh.positions, [[3.0, 0.0, 0.0], [4.0, 0.0, 0.0], [3.0, 1.0, 0.0]]);
     assert_eq!(out[0].colour, Some([255, 0, 0, 255]));
     assert_eq!(out[1].mesh.positions, [[-4.0, 0.0, 0.0], [-3.0, 0.0, 0.0], [-4.0, 1.0, 0.0]]);
     assert_eq!(out[1].colour, None);
-    assert_eq!(budget.0, 2, "each occurrence spends its triangles");
+    assert_eq!(budget.triangles, 2, "each occurrence spends its triangles");
+}
+
+#[test]
+fn a_placement_naming_a_missing_tessellation_is_malformed() {
+    let tessellations = vec![vec![Tessellation::Mesh(triangle())]];
+    for (fs, tess) in [(1, 0), (0, 7)] {
+        let (mut budget, mut out) = (Budget::default(), Vec::new());
+        let r = place_items(&tessellations, [item(fs, tess, 0.0, None)], &mut budget, &mut out);
+        assert!(matches!(r, Err(RenderError::Model(pdfcraft_prc::PrcError::Malformed(_)))), "{fs}/{tess}: {r:?}");
+    }
 }
 
 #[test]
 fn a_placement_past_the_triangle_budget_is_an_error() {
     let tessellations = vec![vec![Tessellation::Mesh(triangle())]];
-    let (mut budget, mut out) = (Budget(MAX_ASSEMBLED_TRIANGLES), Vec::new());
+    let (mut budget, mut out) = (Budget { triangles: MAX_ASSEMBLED_TRIANGLES, vertices: 0 }, Vec::new());
     let r = place_items(&tessellations, [item(0, 0, 0.0, None)], &mut budget, &mut out);
     assert!(matches!(r, Err(RenderError::TooManyTriangles)));
     assert!(out.is_empty());

@@ -28,8 +28,14 @@ pub(crate) fn length(a: Vec3) -> f64 {
     dot(a, a).sqrt()
 }
 
-/// `a` scaled to unit length; `None` when its length is zero or not finite.
+/// `a` scaled to unit length; `None` when its length is zero or not finite. `a` is first divided
+/// by its largest component, so squaring cannot overflow or underflow.
 pub(crate) fn normalize(a: Vec3) -> Option<Vec3> {
+    let big = a.iter().fold(0.0_f64, |m, c| m.max(c.abs()));
+    if !(big.is_finite() && big > 0.0) {
+        return None;
+    }
+    let a = a.map(|c| c / big);
     let l = length(a);
     (l.is_finite() && l > 0.0).then(|| scale(a, 1.0 / l))
 }
@@ -49,5 +55,12 @@ mod tests {
         assert_eq!(normalize([0.0, 4.0, 0.0]), Some([0.0, 1.0, 0.0]));
         assert_eq!(normalize([0.0; 3]), None);
         assert_eq!(normalize([f64::NAN, 0.0, 0.0]), None);
+        assert_eq!(normalize([f64::INFINITY, 0.0, 0.0]), None);
+    }
+
+    #[test]
+    fn normalize_keeps_huge_and_tiny_vectors() {
+        assert_eq!(normalize([1e200, 0.0, 0.0]), Some([1.0, 0.0, 0.0]));
+        assert_eq!(normalize([0.0, -3e-320, 0.0]), Some([0.0, -1.0, 0.0]));
     }
 }

@@ -21,8 +21,8 @@ render(&[WorldMesh], &Camera, &RenderOptions) -> Result<Image, RenderError>
 - A triangle's own colour wins over its mesh's, which wins over `RenderOptions::colour`.
 - Opaque triangles are drawn first, then translucent ones blended over them; alpha 0 is not drawn.
 - `Lighting::Headlight` (default) shades by the angle to the view direction; `Lighting::Unlit` draws flat colour.
-- Perspective triangles are clipped at a near plane; orthographic views are not clipped.
+- Perspective triangles are clipped at a near plane 1/10,000 of the eye-to-target distance from the eye; orthographic views are not clipped.
 - `MAX_RENDER_PIXELS` (2^24, about 16 MP) bounds the image: at most 64 MB of RGBA plus 128 MB of depth.
-  `MAX_ASSEMBLED_TRIANGLES` (2^24) bounds one `assemble` call. Neither bounds time: a model of many large
+  `MAX_ASSEMBLED_TRIANGLES` and `MAX_ASSEMBLED_VERTICES` (2^24 each) bound one `assemble` call. None bounds time: a model of many large
   triangles at full size is a long CPU render, so callers on a UI thread should render small or off-thread.
 - Not yet: shadows, ambient occlusion, specular light, scene lights, textures, wires and markups.
