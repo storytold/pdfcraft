@@ -90,7 +90,7 @@ fn natural_image_stamps_keep_displayed_bounds_on_rotated_pages() {
 
 #[test]
 fn creating_placing_and_keeping_custom_stamps() {
-    use egui::{Key, Modifiers, PointerButton};
+    use egui::{Key, Modifiers};
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
         let mut app = PdfCraftApp::new();
         app.set_option("language", "en").unwrap();
@@ -114,32 +114,10 @@ fn creating_placing_and_keeping_custom_stamps() {
     assert_eq!(h.state().quick_tool, QuickTool::CustomStamp(h.state().custom_stamps[0].id));
     h.get_by_label("Company");
     h.get_by_label("logo");
-    // Place it.
-    let p = {
-        let r = h.state().views[0].page_screen_rect(0).unwrap();
-        r.min + egui::vec2(r.width() * 0.5, r.height() * 0.85)
-    };
-    h.hover_at(p);
-    h.run_steps(1);
-    h.drag_at(p);
-    h.run_steps(1);
-    h.drop_at(p);
-    h.run_steps(4);
-    let s = h.state();
-    let doc = s.session.get(s.views[0].id).unwrap();
-    let stamps: Vec<_> = doc.info.annotations.iter().filter(|a| a.subtype == "Stamp").collect();
-    assert_eq!(stamps.len(), 1);
-    let r = stamps[0].rect;
-    assert!(((r[2] - r[0]) / (r[3] - r[1]) - 3.0).abs() < 0.05, "keeps the picture's shape: {r:?}");
-    assert_eq!(doc.can_undo(), Some("Add stamp"));
+    let stamp_id = h.state().custom_stamps[0].id;
+    let stamp_data = h.state().custom_stamps[0].data.clone();
     // Rename the saved stamp through its palette menu and keep its identity and bytes.
-    let stamp_id = s.custom_stamps[0].id;
-    let stamp_data = s.custom_stamps[0].data.clone();
-    let logo = h.get_by_label("logo").rect().center();
-    h.hover_at(logo);
-    h.run_steps(2);
-    h.event(egui::Event::PointerButton { pos: logo, button: PointerButton::Secondary, pressed: true, modifiers: Modifiers::NONE });
-    h.event(egui::Event::PointerButton { pos: logo, button: PointerButton::Secondary, pressed: false, modifiers: Modifiers::NONE });
+    h.get_by_label("logo").click_secondary();
     h.run_steps(2);
     h.get_by_label("Rename / change category…").click();
     h.run_steps(2);
@@ -160,12 +138,8 @@ fn creating_placing_and_keeping_custom_stamps() {
     );
     assert_eq!(h.state().quick_tool, QuickTool::CustomStamp(stamp_id));
     assert_eq!(h.state().custom_stamps[0].data, stamp_data);
-    let brand = h.get_by_label("brand").rect().center();
-    h.hover_at(brand);
+    h.get_by_label("brand").click_secondary();
     h.run_steps(2);
-    h.event(egui::Event::PointerButton { pos: brand, button: PointerButton::Secondary, pressed: true, modifiers: Modifiers::NONE });
-    h.event(egui::Event::PointerButton { pos: brand, button: PointerButton::Secondary, pressed: false, modifiers: Modifiers::NONE });
-    h.run_steps(3);
     h.get_by_label("Rename / change category…").click();
     h.run_steps(2);
     h.get_by_label("Name:").click();
@@ -183,6 +157,24 @@ fn creating_placing_and_keeping_custom_stamps() {
         (stamp_id, "Marketing", "brand")
     );
     assert_eq!(h.state().custom_stamps[0].data, stamp_data);
+    // Place it.
+    let p = {
+        let r = h.state().views[0].page_screen_rect(0).unwrap();
+        r.min + egui::vec2(r.width() * 0.5, r.height() * 0.85)
+    };
+    h.hover_at(p);
+    h.run_steps(1);
+    h.drag_at(p);
+    h.run_steps(1);
+    h.drop_at(p);
+    h.run_steps(4);
+    let s = h.state();
+    let doc = s.session.get(s.views[0].id).unwrap();
+    let stamps: Vec<_> = doc.info.annotations.iter().filter(|a| a.subtype == "Stamp").collect();
+    assert_eq!(stamps.len(), 1);
+    let r = stamps[0].rect;
+    assert!(((r[2] - r[0]) / (r[3] - r[1]) - 3.0).abs() < 0.05, "keeps the picture's shape: {r:?}");
+    assert_eq!(doc.can_undo(), Some("Add stamp"));
     // The edited library is kept with the app's settings.
     let saved = h.state().persist();
     let mut again = PdfCraftApp::new();
