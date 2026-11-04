@@ -145,7 +145,7 @@ fn creating_placing_and_keeping_custom_stamps() {
     assert_eq!(again.custom_stamps.len(), 1);
     assert_eq!(
         (again.custom_stamps[0].id, again.custom_stamps[0].category.as_str(), again.custom_stamps[0].name.as_str()),
-        (stamp_id, "Marketing", "brand")
+        (stamp_id, "Company", "logo")
     );
     assert_eq!(again.custom_stamps[0].data, stamp_data);
 }

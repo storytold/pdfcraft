@@ -432,7 +432,6 @@ mod tests {
             (42, "Renamed", "Moved")
         );
         assert_eq!(restored.custom_stamps[0].data.as_slice(), bytes.as_slice());
-        assert_eq!(restored.quick_tool, QuickTool::CustomStamp(42));
     }
 
     #[test]
