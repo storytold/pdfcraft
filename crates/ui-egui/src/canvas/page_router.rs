@@ -180,6 +180,11 @@ impl PageRouter {
         }
     }
 
+    /// Whether the press the pages hold began off them: between them, or beside one.
+    pub(crate) fn began_off_the_pages(&self) -> bool {
+        self.began == Some(None)
+    }
+
     /// Who holds the press on `page`.
     pub(crate) fn owner(&self, page: usize) -> Option<Owner> {
         self.press_for(page).owner()

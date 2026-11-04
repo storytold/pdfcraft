@@ -4315,3 +4315,49 @@ fn escape_with_a_fill_tool_deselects_every_comment_then_drops_the_tool() {
     h.run_steps(2);
     assert_eq!(h.state().quick_tool, QuickTool::Select);
 }
+
+/// #6133: a click beside the page, or between pages, lets go of a selected comment and of
+/// selected text, as a click on the page's empty part does and as Escape does.
+#[test]
+fn a_click_beside_the_pages_lets_go_of_what_is_selected() {
+    let mut h = harness(|app| {
+        app.set_option("quick", "select").unwrap();
+        app.set_option("layout", "continuous").unwrap();
+        app.set_option("zoom", "100").unwrap();
+    });
+    let shape = pdfcraft_engine::Shape::Rectangle { rect: [20.0, 20.0, 80.0, 60.0] };
+    h.state_mut().apply_edit(pdfcraft_engine::Edit::AddAnnotation(pdfcraft_engine::NewAnnotation {
+        page: 0,
+        style: pdfcraft_engine::Style::default_for(&shape),
+        shape,
+        contents: "Reviewed".into(),
+        author: "Tester".into(),
+    }));
+    h.state_mut().views[0].comments.selected = None;
+    crate::support::settle(&mut h);
+    let page = h.state().views[0].page_screen_rect(0).expect("page 1 on screen");
+    let next = h.state().views[0].page_screen_rect(1).expect("page 2 on screen");
+    let beside = pos2(page.left() - 40.0, page.center().y);
+    let between = pos2(page.center().x, (page.bottom() + next.top()) / 2.0);
+    assert!(next.top() - page.bottom() > 4.0, "a gap to click in: {page:?} {next:?}");
+    for off in [beside, between] {
+        // The comment's border, which a click takes.
+        click_pt(&mut h, (20.0, 40.0));
+        assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "the comment is selected");
+        click(&mut h, off);
+        assert_eq!(h.state().views[0].comments.selected, None, "a click at {off:?} lets go of the comment");
+
+        h.state_mut().views[0].select_text(0, 4, 8);
+        h.run_steps(2);
+        assert!(h.state().views[0].selected_text().is_some());
+        click(&mut h, off);
+        assert_eq!(h.state().views[0].selected_text(), None, "a click at {off:?} lets go of the text");
+    }
+    // A drag beside the pages is not a click: it keeps the selection.
+    click_pt(&mut h, (20.0, 40.0));
+    drag(&mut h, beside, beside + egui::vec2(0.0, 60.0));
+    assert_eq!(h.state().views[0].comments.selected, Some((0, 0)), "a drag beside the page keeps it");
+    // A click on the page's empty part let go of it before, and still does.
+    click_pt(&mut h, (200.0, 150.0));
+    assert_eq!(h.state().views[0].comments.selected, None);
+}

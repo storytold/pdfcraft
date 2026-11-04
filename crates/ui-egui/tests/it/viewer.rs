@@ -2040,6 +2040,27 @@ fn a_clicked_picture_is_selected_and_copied_in_its_original_format() {
     assert_eq!(h.state().views[i].picked_image, None);
 }
 
+/// #6133: a picture picked with the Select tool is let go of by a click beside the page, as by
+/// Escape: a full-page scan can't be unpicked by a click on the page, which picks it again.
+#[test]
+fn a_click_beside_the_page_lets_go_of_a_picked_picture() {
+    let (_, mut h) = picture_harness();
+    let i = h.state().active.unwrap();
+    let page = h.state().views[i].page_screen_rect(0).expect("on screen");
+    let press = |h: &mut egui_kittest::Harness<'static, pdfcraft_ui_egui::PdfCraftApp>, at: egui::Pos2| {
+        h.hover_at(at);
+        h.run_steps(1);
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() });
+        }
+        h.run_steps(2);
+    };
+    press(&mut h, page.center());
+    assert!(h.state().views[i].picked_image.is_some(), "picked with the Select tool");
+    press(&mut h, egui::pos2(page.left() - 30.0, page.center().y));
+    assert_eq!(h.state().views[i].picked_image, None, "a click beside the page lets go of it");
+}
+
 /// A picture picked with the Select tool, then deleted in Edit text & images, leaves no highlight
 /// behind on the empty spot where it was.
 #[test]

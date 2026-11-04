@@ -1797,6 +1797,14 @@ fn draw_pages(
     if resp.secondary_clicked() && !right_clicked {
         view.comments.selected = None;
     }
+    // A click beside the pages is none of theirs, so no page module lets go of its selection for
+    // it, as each does for a click on its page's empty part: it is let go of here (#6133). Only one
+    // released beside them too: a click that slipped onto a page from beside it keeps what it had,
+    // as page modules keep theirs for it.
+    let released_off = pointer.is_some_and(|p| !view.screen_rects.iter().any(|(_, r)| r.contains(p)));
+    if resp.clicked() && view.router.began_off_the_pages() && released_off {
+        view.deselect_beside_pages();
+    }
     let PageOut {
         mut canvas_action,
         clicked_link,
