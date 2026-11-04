@@ -99,6 +99,9 @@ modules:
       env:
         CARGO_HOME: /run/build/pdfcraft/cargo
         CARGO_NET_OFFLINE: 'true'
+        # The interface translations (the craft-i18n source below), embedded by build.rs.
+        CRAFT_I18N_DIR: /run/build/pdfcraft/craft-i18n
+        CRAFT_I18N_REQUIRED: '1'
     build-commands:
       - cargo --offline build --release --locked -p pdfcraft
       - install -Dm755 target/release/pdfcraft /app/bin/pdfcraft
@@ -120,4 +123,9 @@ modules:
           - corpus
           - build-flatpak
           - .flatpak-builder
+      # The interface translations at the commit in craft-i18n.rev (a test keeps the two equal).
+      - type: git
+        url: https://github.com/storytold/craft-i18n
+        commit: 575cfdef63227b14daf173b8cc87928bfdfa325e
+        dest: craft-i18n
       - cargo-sources.json

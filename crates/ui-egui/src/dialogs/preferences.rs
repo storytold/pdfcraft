@@ -375,7 +375,7 @@ impl<'a> PrefSearchContext<'a> {
 }
 
 /// Whether the interface can draw a language picker's native name.
-fn picker_text_is_drawable(ui: &egui::Ui, text: &str) -> bool {
+pub(crate) fn picker_text_is_drawable(ui: &egui::Ui, text: &str) -> bool {
     #[cfg(target_arch = "wasm32")]
     {
         let _ = (ui, text);
