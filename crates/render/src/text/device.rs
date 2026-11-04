@@ -316,7 +316,13 @@ impl<'a> Device<'a> for TextDevice {
         } else {
             3
         };
-        let em = Rect::new(0.0, -200.0, advance, 800.0);
+        // A Type 3 glyph is boxed by its own bounds: its font size is nominal (bitmap fonts set at
+        // 58 pt draw glyphs 5 pt high), so the -200..800 em box would swallow the lines around it.
+        let (bottom, top) = match glyph {
+            Glyph::Type3(g) => g.vertical_bounds().unwrap_or((-200.0, 800.0)),
+            Glyph::Outline(_) => (-200.0, 800.0),
+        };
+        let em = Rect::new(0.0, bottom, advance, top);
         let corners = if matches!(glyph, Glyph::Outline(g) if g.is_vertical()) {
             [(em.x0, em.y1), (em.x0, em.y0), (em.x1, em.y0), (em.x1, em.y1)]
         } else {
