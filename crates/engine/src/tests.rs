@@ -5062,6 +5062,11 @@ fn real_layered_signatures_round_trip_behind_a_user_password() {
 /// 1 catalog, 2 pages, 3 page (400×300), 4 field, 5 AcroForm, 6 /N, 7 /FRM, 8–12 n0–n4,
 /// 13 Helvetica, 14 page content. `sign_prepared` adds the value.
 fn named_layer_signable_fixture() -> Vec<u8> {
+    named_layer_signable_fixture_with("[0 0 100 100]")
+}
+
+/// [`named_layer_signable_fixture`] with `n1_bbox` as its n1 layer's `/BBox`.
+fn named_layer_signable_fixture_with(n1_bbox: &str) -> Vec<u8> {
     fn form(bbox: &str, resources: &str, ops: &str) -> String {
         format!("<< /Type /XObject /Subtype /Form /BBox {bbox} /Resources {resources} /Length {} >>\nstream\n{ops}\nendstream", ops.len())
     }
@@ -5082,7 +5087,7 @@ fn named_layer_signable_fixture() -> Vec<u8> {
         ),
         form("[0 0 100 100]", "<< >>", "% DSBlank"),
         form(
-            "[0 0 100 100]",
+            n1_bbox,
             "<< >>",
             "q 1 0.84 0.2 rg 0.55 0.4 0 RG 3 w 30 72 m 30 88 42 98 56 98 c 72 98 84 88 84 74 c 66 50 l 58 28 l 44 28 l 44 48 l h B 44 6 14 14 re B Q",
         ),
@@ -8044,6 +8049,21 @@ fn cli_display_draws_signature_states_as_the_app_does_without_trust() {
     let page = renderer.render(pdfcraft_render::RenderRequest { page: 0, scale: 1.0, ..Default::default() });
     assert!(pixels_near(&page.rgba, UNKNOWN_AMBER) > 500, "the unknown state is drawn");
     assert!(pixels_near(&page.rgba, [255, 214, 51]) < 50, "the stored question mark is not");
+}
+
+/// A layer recognised but too small to draw an icon in (a side so small the icon's scale rounds to
+/// zero) changes nothing, so the CLI renders the source, as the app does.
+#[test]
+fn cli_display_makes_no_copy_when_no_state_could_be_drawn() {
+    let (id, _) = test_identity();
+    let n1 = format!("[0 0 0.{}6 100]", "0".repeat(322));
+    let mut doc = pdfcraft_cos::Document::open(Arc::new(named_layer_signable_fixture_with(&n1))).unwrap();
+    let signed = Arc::new(sign_prepared(&mut doc, &id, "D:20261002120000+01'00'"));
+    let cos = pdfcraft_cos::Document::open(signed.clone()).unwrap();
+    let trust = pdfcraft_sign::TrustStore::default();
+    let signatures = crate::doc_state::signatures_of(&cos, &signed, &trust, &pdfcraft_sign::DigestCache::default());
+    assert!(pdfcraft_sign::has_status_layers(&cos, &signatures), "the layers are recognised");
+    assert!(Arc::ptr_eq(&display_bytes_for(signed.clone(), None), &signed), "nothing was drawn, so there is no copy");
 }
 
 /// #2371: a comment without an appearance stream is displayed by the app, so the CLI's page image

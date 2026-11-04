@@ -756,20 +756,22 @@ pub(crate) fn info_fields<'a>(info: &'a mut DocInfo, cos: &pdfcraft_cos::Documen
 /// captions ([`display_bytes`]): appearances drawn, in memory only, for comments that have none
 /// and form fields the file leaves to the viewer, and the state of each named-layer signature.
 /// Render paths outside the app, such as the CLI, use this so their page images agree with the app
-/// and independent viewers. It never changes the source document, and an unparseable file, a
-/// write failure or a parser panic falls back to the original bytes.
+/// and independent viewers. It never changes the source document: a file with nothing to draw, an
+/// unparseable file, a write failure or a parser panic gives back the original bytes.
 pub fn display_bytes_for(bytes: Arc<Vec<u8>>, password: Option<&str>) -> Arc<Vec<u8>> {
     guard(|| {
         let cos = pdfcraft_cos::Document::open_with_password(bytes.clone(), password).ok()?;
         let mut signatures = signatures_of(&cos, &bytes, &TrustStore::default(), &pdfcraft_sign::DigestCache::default());
         let layered = pdfcraft_sign::has_status_layers(&cos, &signatures);
-        let mut display = match with_field_appearances(pdfcraft_annot::with_missing_appearances(&cos), &cos) {
-            Some(display) => display,
-            None if layered => cos,
+        let (mut display, added) = match with_field_appearances(pdfcraft_annot::with_missing_appearances(&cos), &cos) {
+            Some(display) => (display, true),
+            None if layered => (cos, false),
             None => return None,
         };
-        if layered {
-            pdfcraft_sign::show_status_layers(&mut display, &mut signatures, &StatusCaptions::default());
+        // As in the app, a layer recognised but not drawn after all makes no copy.
+        let drawn = layered && pdfcraft_sign::show_status_layers(&mut display, &mut signatures, &StatusCaptions::default());
+        if !(added || drawn) {
+            return None;
         }
         write_incremental(&display, &SaveOptions::default()).ok().map(Arc::new)
     })
