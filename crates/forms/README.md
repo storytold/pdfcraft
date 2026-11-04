@@ -47,7 +47,9 @@ let cells: Vec<table::Cell> = grid.cells_for(names)?;      // "Table1_1", "Table
   reads as none (a list of values too, when one of them doesn't fit), and a field whose own text
   doesn't fit is left out of the reading whole, never read with part of it. Clear form (`reset`)
   leaves a field whose default the reading didn't reach as it is, rather than emptying it.
-  `field_actions`, `document_scripts` and renaming a field read within the same allowances.
+  `field_actions`, `document_scripts` and renaming a field read within the same allowances;
+  `field_actions` lists an action whose script or text doesn't fit as an action of another type,
+  which `set_field_actions` keeps as it is.
 - Text and choice fields get new appearance streams (`/Tx BMC … EMC`): auto-size (`0 Tf`), comb
   (cells parted in the border colour), multiline wrapping, password masking, quadding, `/MK`
   background and border, list-box selection.

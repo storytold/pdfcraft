@@ -3921,7 +3921,7 @@ fn action_text_named_by_reference_stays_within_the_text_allowance() {
 }
 
 /// An ordinary large form is read whole: 300 combo boxes listing one 2,000-item catalogue copy
-/// 600,000 options, about 67 MiB of the text allowance.
+/// 600,000 options, about 65 MiB of the text allowance.
 #[test]
 fn a_large_ordinary_form_is_read_whole() {
     let n = 300;
@@ -3985,7 +3985,7 @@ fn actions_widgets_share_are_kept_when_the_list_is_written_back() {
         "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
         "<< /Type /Page /Parent 2 0 R >>".into(),
         format!("<< /S /URI /URI {} 0 R >>", 8 + n),
-        "<< /S /ResetForm /Fields [(a)] /Flags 1 >>".into(),
+        format!("<< /S /ResetForm /Fields [{}] /Flags 1 >>", format!("{} 0 R ", 8 + n).repeat(4)),
         format!("<< /S /JavaScript /JS {} 0 R >>", 9 + n),
         format!("<< /FT /Tx /T (f) /Kids [{kids}] >>"),
     ];
@@ -4024,7 +4024,7 @@ fn an_action_too_long_to_read_is_kept_when_the_list_is_written_back() {
         format!("<< /FT /Tx /T (f) /Kids [{kids}] >>"),
     ];
     let own = format!(
-        "/A << /S /URI /URI {} 0 R >> /AA << /D << /S /ResetForm /Fields [(a)] /Flags 1 >> /X << /S /JavaScript /JS {} 0 R /Extra 1 >> >>",
+        "/A << /S /URI /URI {0} 0 R >> /AA << /D << /S /ResetForm /Fields [{0} 0 R {0} 0 R {0} 0 R {0} 0 R] /Flags 1 >> /X << /S /JavaScript /JS {1} 0 R /Extra 1 >> >>",
         5 + n,
         6 + n
     );
@@ -4041,6 +4041,48 @@ fn an_action_too_long_to_read_is_kept_when_the_list_is_written_back() {
         assert_eq!(key(b"D", b"Flags"), Some(Object::Int(1)), "widget {i}'s reset keeps its /Flags");
         assert_eq!(key(b"X", b"Extra"), Some(Object::Int(1)), "widget {i}'s script keeps its keys");
     }
+}
+
+/// Deleting one trigger leaves a script on another that the scripts allowance couldn't read as it
+/// is: listed as an action of another type, not as an empty script written back over it. A script
+/// whose stream won't decode reads as empty, as on `main`.
+#[test]
+fn a_script_too_long_to_read_is_kept_when_another_trigger_is_deleted() {
+    use pdfcraft_cos::{Dict, PdfString, Stream};
+    let dict = |entries: Vec<(&[u8], Object)>| -> Object { Object::Dict(entries.into_iter().map(|(k, v)| (k.to_vec(), v)).collect()) };
+    let mut doc = Document::new_empty();
+    // 25 MiB of bytes past 0x7F: 75 MiB once read as text, which spends the scripts allowance.
+    let long = doc.add(Object::String(PdfString::literal(vec![0x80; 25 << 20])));
+    let js = |s: Object| dict(vec![(b"S", Object::name("JavaScript")), (b"JS", s)]);
+    let down = dict(vec![(b"S", Object::name("JavaScript")), (b"JS", Object::String(PdfString::literal("y"))), (b"Extra", Object::Int(1))]);
+    let rect = || Object::Array([0, 0, 10, 10].map(Object::from).to_vec());
+    let f = doc.add(dict(vec![
+        (b"FT", Object::name("Tx")),
+        (b"T", Object::String(PdfString::literal("f"))),
+        (b"Rect", rect()),
+        (b"A", js(Object::Ref(long))),
+        (b"AA", dict(vec![(b"D", down)])),
+    ]));
+    let mut broken = Stream::flate(Dict::new(), b"abc");
+    broken.dict.set(b"Filter".to_vec(), Object::name("NoSuchFilter"));
+    let broken = doc.add(Object::Stream(broken));
+    let g = doc.add(dict(vec![
+        (b"FT", Object::name("Tx")),
+        (b"T", Object::String(PdfString::literal("g"))),
+        (b"Rect", rect()),
+        (b"A", js(Object::Ref(broken))),
+    ]));
+    let catalog = doc.add(dict(vec![(b"AcroForm", dict(vec![(b"Fields", Object::Array(vec![Object::Ref(f), Object::Ref(g)]))]))]));
+    doc.trailer_mut().set(b"Root".to_vec(), Object::Ref(catalog));
+    let acts = field_actions(&doc, "f").unwrap();
+    assert_eq!(acts, [(Trigger::MouseUp, FieldAction::Other("JavaScript".into())), (Trigger::MouseDown, FieldAction::Other("JavaScript".into()))]);
+    let kept: Vec<_> = acts.into_iter().filter(|(t, _)| *t != Trigger::MouseUp).collect();
+    set_field_actions(&mut doc, "f", &kept).unwrap();
+    let w = doc.get(f);
+    let down = w.as_dict().and_then(|d| d.get(b"AA")?.as_dict()?.get(b"D")?.as_dict().cloned()).unwrap();
+    assert_eq!(down.get(b"JS"), Some(&Object::String(PdfString::literal("y"))));
+    assert_eq!(down.get(b"Extra"), Some(&Object::Int(1)));
+    assert_eq!(field_actions(&doc, "g").unwrap(), [(Trigger::MouseUp, FieldAction::JavaScript(String::new()))]);
 }
 
 /// An action the allowances can't read is replaced when the list changes it: on one widget whose

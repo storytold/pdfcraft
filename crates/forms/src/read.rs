@@ -221,9 +221,9 @@ impl Allowance {
         Self { left: bytes, refusals: 0 }
     }
 
-    /// How many copies [`Allowance::take`], [`Allowance::entry`] and [`Allowance::copy`] refused
-    /// so far: a reader that must have all of something's text or none compares it before and
-    /// after.
+    /// How many copies [`Allowance::take`], [`Allowance::entry`], [`Allowance::copy`] and
+    /// [`Allowance::decode`] refused so far: a reader that must have all of something's text or
+    /// none compares it before and after.
     pub(crate) fn refusals(&self) -> usize {
         self.refusals
     }
@@ -678,7 +678,7 @@ fn unlisted_root(doc: &Document, r: ObjRef, seen: &std::collections::HashSet<Obj
 /// same string or inherit it: full names, `/DA` (a list box's widgets' too), options, tooltips,
 /// captions, on states and the text of button actions. As much as a page's content may decode
 /// (`DecodeBudget::page`): options are copied into each field that lists them, so an ordinary
-/// large form, 300 combo boxes listing one 2,000-item catalogue, takes about 67 MiB of it.
+/// large form, 300 combo boxes listing one 2,000-item catalogue, takes about 65 MiB of it.
 pub(crate) const MAX_TEXT_BYTES: usize = 256 << 20;
 
 /// What one reading of the form's fields has used: the field and widget dictionaries read, and

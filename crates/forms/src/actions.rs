@@ -134,14 +134,14 @@ fn texts(doc: &Document, o: &Object, text: &mut Allowance) -> Vec<String> {
 }
 
 /// An action, its script copied against `allowances.scripts` and its other text against
-/// `allowances.text`. One whose text doesn't fit reads as an action of another type, named by at
-/// most 64 bytes of its `/S`, which [`set_field_actions`] keeps as it is: read as none, it would
-/// be lost when the list it was missing from is written back.
+/// `allowances.text`. One whose script or text doesn't fit reads as an action of another type,
+/// named by at most 64 bytes of its `/S`, which [`set_field_actions`] keeps as it is: read as
+/// none, or as an empty script, it would be lost or emptied when the list is written back.
 fn read(doc: &Document, o: &Object, pages: &[pdfcraft_cos::ObjRef], allowances: &mut Allowances) -> Option<FieldAction> {
     let a = held(doc, o);
     let d = a.as_dict()?;
+    let refusals = allowances.refusals();
     let text = &mut allowances.text;
-    let refusals = text.refusals();
     let kind = d.name(b"S")?;
     let action = match kind {
         b"JavaScript" => FieldAction::JavaScript(crate::script(doc, o, &mut allowances.scripts).unwrap_or_default()),
@@ -167,7 +167,7 @@ fn read(doc: &Document, o: &Object, pages: &[pdfcraft_cos::ObjRef], allowances: 
         ),
         other => FieldAction::Other(text.copy(other.len(), || String::from_utf8_lossy(other).into_owned()).unwrap_or_default()),
     };
-    if text.refusals() == refusals {
+    if allowances.refusals() == refusals {
         Some(action)
     } else {
         Some(FieldAction::Other(String::from_utf8_lossy(kind.get(..64).unwrap_or(kind)).into_owned()))
