@@ -46,8 +46,71 @@ fn is_korean_face(face: &CraftFont) -> bool {
 fn is_hangul(c: char) -> bool {
     matches!(
         u32::from(c),
-        0x1100..=0x11FF | 0x3130..=0x318F | 0xA960..=0xA97F | 0xAC00..=0xD7AF | 0xD7B0..=0xD7FF | 0xFFA0..=0xFFDC
+        0x1100..=0x11FF | 0x3130..=0x318F | 0xA960..=0xA97F | 0xAC00..=0xD7A3 | 0xD7B0..=0xD7FF | 0xFFA0..=0xFFDC
     )
+}
+
+/// Unicode §3.12 Hangul syllable composition constants.
+const HANGUL_S_BASE: u32 = 0xAC00;
+const HANGUL_L_BASE: u32 = 0x1100;
+const HANGUL_V_BASE: u32 = 0x1161;
+const HANGUL_T_BASE: u32 = 0x11A7;
+const HANGUL_L_COUNT: u32 = 19;
+const HANGUL_V_COUNT: u32 = 21;
+const HANGUL_T_COUNT: u32 = 28;
+const HANGUL_S_COUNT: u32 = HANGUL_L_COUNT * HANGUL_V_COUNT * HANGUL_T_COUNT;
+
+/// Hangul typed as conjoining jamo (NFD, as text pasted from macOS file names often is) composed
+/// into the precomposed syllables, by the arithmetic of Unicode §3.12 (what NFC does for Hangul;
+/// nothing else is normalized). One Type 3 glyph is drawn per character, so uncomposed jamo would
+/// be drawn side by side instead of as one syllable. `None` when there is nothing to compose.
+///
+/// The second value maps every char boundary of `text`, and its end, in order, to the matching
+/// offset in the result; a jamo folded into the syllable before it maps to that syllable's end.
+pub(crate) fn compose_hangul(text: &str) -> Option<(String, Vec<(usize, usize)>)> {
+    let mut out = String::with_capacity(text.len());
+    let mut map = Vec::with_capacity(text.len().saturating_add(1));
+    // The last character written and where it starts in `out`.
+    let mut last: Option<(u32, usize)> = None;
+    let mut changed = false;
+    for (at, c) in text.char_indices() {
+        let cp = u32::from(c);
+        let composed = last.and_then(|(prev, start)| {
+            let l = prev.checked_sub(HANGUL_L_BASE).filter(|l| *l < HANGUL_L_COUNT);
+            let v = cp.checked_sub(HANGUL_V_BASE).filter(|v| *v < HANGUL_V_COUNT);
+            let lv = prev.checked_sub(HANGUL_S_BASE).filter(|s| *s < HANGUL_S_COUNT && s % HANGUL_T_COUNT == 0);
+            let t = cp.checked_sub(HANGUL_T_BASE).filter(|t| (1..HANGUL_T_COUNT).contains(t));
+            let syllable = match (l, v, lv, t) {
+                (Some(l), Some(v), _, _) => HANGUL_S_BASE + (l * HANGUL_V_COUNT + v) * HANGUL_T_COUNT,
+                (_, _, Some(_), Some(t)) => prev + t,
+                _ => return None,
+            };
+            char::from_u32(syllable).map(|s| (s, start))
+        });
+        if let Some((syllable, start)) = composed {
+            // `start` is where the previous character begins, a char boundary of `out`.
+            out.truncate(start);
+            out.push(syllable);
+            last = Some((u32::from(syllable), start));
+            changed = true;
+            map.push((at, out.len()));
+            continue;
+        }
+        map.push((at, out.len()));
+        last = Some((cp, out.len()));
+        out.push(c);
+    }
+    map.push((text.len(), out.len()));
+    changed.then_some((out, map))
+}
+
+/// `offset` in the text [`compose_hangul`] read, as an offset in its result. An offset that isn't
+/// a char boundary takes the boundary before it.
+pub(crate) fn composed_offset(map: &[(usize, usize)], offset: usize) -> usize {
+    match map.binary_search_by_key(&offset, |(from, _)| *from) {
+        Ok(i) => map.get(i).map_or(0, |(_, to)| *to),
+        Err(i) => i.checked_sub(1).and_then(|i| map.get(i)).map_or(0, |(_, to)| *to),
+    }
 }
 
 /// The generated font's `/Name` and its resource prefix: the bundled Latin face, Hebrew, Korean, or

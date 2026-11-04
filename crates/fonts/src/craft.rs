@@ -102,15 +102,17 @@ pub fn document_hebrew_font(bold: bool) -> Option<&'static CraftFont> {
     hebrew_face(CRAFT_FONTS, bold)
 }
 
-/// The face for Korean text written into PDFs: the first `Kore` or `Hang` face (craft-fonts has
-/// NanumGothic Regular). `None` without craft-fonts or without a Korean face, and on the web, whose
-/// build carries no Korean face. There is one weight, so bold sources are drawn in Regular.
+/// The face for Korean text written into PDFs: the first Regular `Kore` or `Hang` face, else the
+/// first of any style (craft-fonts has NanumGothic Regular). Preferring Regular keeps plain text
+/// plain once craft-fonts carries more Korean weights. `None` without craft-fonts or without a
+/// Korean face, and on the web, whose build carries no Korean face. Bold sources are drawn in it too.
 pub fn document_korean_font() -> Option<&'static CraftFont> {
     korean_face(CRAFT_FONTS)
 }
 
 fn korean_face(faces: &[CraftFont]) -> Option<&CraftFont> {
-    faces.iter().find(|f| f.covers("Kore") || f.covers("Hang"))
+    let korean = || faces.iter().filter(|f| f.covers("Kore") || f.covers("Hang"));
+    korean().find(|f| f.style == "Regular").or_else(|| korean().next())
 }
 
 fn hebrew_face(faces: &[CraftFont], bold: bool) -> Option<&CraftFont> {
@@ -334,6 +336,13 @@ mod tests {
         ];
         assert_eq!(korean_face(&faces).map(|f| f.bytes), Some(&b"hang"[..]));
         assert_eq!(korean_face(&faces[2..]).map(|f| f.bytes), Some(&b"kore"[..]));
+        // Regular wins over a heavier face listed first; without one, any Korean face.
+        let weights = [
+            CraftFont { family: "FakeKorean", style: "Bold", scripts: &["Hang", "Kore"], bytes: b"bold" },
+            CraftFont { family: "FakeKorean", style: "Regular", scripts: &["Hang", "Kore"], bytes: b"regular" },
+        ];
+        assert_eq!(korean_face(&weights).map(|f| f.bytes), Some(&b"regular"[..]));
+        assert_eq!(korean_face(&weights[..1]).map(|f| f.bytes), Some(&b"bold"[..]));
         // Never a face of another script, even a CJK one.
         assert!(korean_face(&faces[..1]).is_none());
         assert_eq!(document_korean_font().is_some(), CRAFT_FONTS.iter().any(|f| f.covers("Kore") || f.covers("Hang")));

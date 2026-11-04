@@ -5370,11 +5370,16 @@ fn korean_replacement_uses_the_korean_face() {
     let procs = reopened.resolve(font.as_dict().unwrap().get(b"CharProcs").unwrap());
     let procs = procs.as_dict().unwrap();
     assert_eq!(procs.iter().count(), typed.chars().collect::<std::collections::HashSet<_>>().len());
+    // Every character that has ink is drawn with a path, not an empty box.
+    let mut outlined = 0;
     for (_, glyph) in procs.iter() {
         let pdfcraft_cos::Object::Stream(s) = &*reopened.resolve(glyph) else { panic!("glyph stream") };
         let path = String::from_utf8(s.decoded().unwrap()).unwrap();
         assert!(path.starts_with(|c: char| c.is_ascii_digit()) && path.contains(" d1"), "{path}");
+        outlined += usize::from(path.contains(" m\n"));
     }
+    let inked = typed.chars().filter(|c| !c.is_whitespace()).collect::<std::collections::HashSet<_>>().len();
+    assert_eq!(outlined, inked);
 
     // A whole paragraph too, then an edit of the edited line.
     let mut doc = text_page("BT /F2 12 Tf 72 700 Td (ab) Tj ET");
@@ -5382,6 +5387,67 @@ fn korean_replacement_uses_the_korean_face() {
     assert_eq!(text::text_blocks(&reopen(&doc), 0).unwrap()[0].text, "문단 전체를 한글로");
     text::replace_line(&mut doc, 0, 0, "다시 고침").unwrap();
     assert_eq!(text::text_lines(&reopen(&doc), 0).unwrap()[0].text, "다시 고침");
+
+    // Hanja the Korean face lacks come from the Japanese faces, into the same Korean font. 働 is a
+    // Japanese-made character, outside the Korean character sets the Korean face covers.
+    let korean = pdfcraft_fonts::document_korean_font().unwrap();
+    if pdfcraft_fonts::japanese_glyph_from(korean, '働').is_ok() || pdfcraft_fonts::document_japanese_font().is_none() {
+        eprintln!("the Korean face has 働, or there is no Japanese face: the Hanja fallback isn't exercised");
+    } else {
+        let mut doc = text_page("BT /F2 12 Tf 72 700 Td (ab) Tj ET");
+        text::replace_line(&mut doc, 0, 0, "노동 勞動 働").unwrap();
+        let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+        assert!(content.contains("/PCKo") && !content.contains("/PCJp"), "{content}");
+        assert_eq!(text::text_lines(&reopen(&doc), 0).unwrap()[0].text, "노동 勞動 働");
+    }
+}
+
+/// Hangul pasted as conjoining jamo (NFD, as macOS file names have it) is composed into
+/// syllables before it is drawn, one glyph per syllable, and style ranges given in the typed text
+/// still land on the characters they were given for.
+#[test]
+fn decomposed_korean_is_written_as_syllables() {
+    if pdfcraft_fonts::document_korean_font().is_none() {
+        eprintln!("built without a craft-fonts Korean face: the Type 3 path is checked with CRAFT_FONTS_DIR");
+        return;
+    }
+    let nfd = "\u{1112}\u{1161}\u{11AB}\u{1100}\u{1173}\u{11AF} 2026";
+    let mut doc = text_page("BT /F2 12 Tf 72 700 Td (ab) Tj ET");
+    text::replace_line(&mut doc, 0, 0, nfd).unwrap();
+    let reopened = reopen(&doc);
+    assert_eq!(text::text_lines(&reopened, 0).unwrap()[0].text, "한글 2026");
+    let p = pdfcraft_model::pages(&reopened).swap_remove(0);
+    let res = reopened.resolve(p.dict.get(b"Resources").unwrap());
+    let fonts = reopened.resolve(res.as_dict().unwrap().get(b"Font").unwrap());
+    let font = reopened.resolve(fonts.as_dict().unwrap().get(b"PCKo").unwrap());
+    let procs = reopened.resolve(font.as_dict().unwrap().get(b"CharProcs").unwrap());
+    // 한, 글, space, 2, 0, 6: no glyph for a lone jamo.
+    assert_eq!(procs.as_dict().unwrap().iter().count(), 6);
+
+    // A styled paragraph: the range is given in the decomposed text and styles "CD" after it.
+    let typed = "AB \u{1112}\u{1161}\u{11AB} CD";
+    let cd = typed.find("CD").unwrap();
+    let style = BlockStyle {
+        ranges: vec![RangeStyle {
+            range: cd..cd + 2,
+            family: None,
+            resource: None,
+            size: Some(18.0),
+            color: None,
+            underline: None,
+            char_spacing: None,
+            scale: None,
+        }],
+        ..Default::default()
+    };
+    let mut doc = text_page("BT /F2 12 Tf 72 700 Td (ab) Tj ET");
+    text::rewrite_block(&mut doc, 0, 0, Some(typed), &style).unwrap();
+    let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    assert!(content.contains("/PCKo"), "{content}");
+    let lines = text::text_lines(&reopen(&doc), 0).unwrap();
+    assert_eq!(lines.iter().map(|l| l.text.as_str()).collect::<String>().replace(' ', ""), "AB한CD", "{lines:?}");
+    assert!(lines.iter().any(|l| l.text.trim() == "CD" && l.size == 18.0), "{lines:?}");
+    assert!(lines.iter().all(|l| !l.text.contains("CD") || l.size == 18.0), "{lines:?}");
 }
 
 /// #2013: the dialog asks `first_undrawable` before offering OK, so it must refuse exactly what
