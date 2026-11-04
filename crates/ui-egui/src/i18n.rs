@@ -497,11 +497,16 @@ pub fn in_sentence(label: &str) -> std::borrow::Cow<'_, str> {
 /// The translation of `english` in upper case, for section titles. Rust's case mapping knows no
 /// language, and Turkish has a dotted and a dotless i (`i` ↔ `İ`, `ı` ↔ `I`): "Gelişmiş" must
 /// become "GELİŞMİŞ", not "GELIŞMIŞ". A label without a Turkish row is still English and keeps
-/// the English rule.
+/// the English rule. Georgian has no capitals in ordinary writing (Mtavruli is a display style,
+/// not upper case), so Georgian letters stay as written, also in a title passed in translated.
 pub fn upper_label(english: &str) -> String {
     let lang = current();
     let shown = tr(lang, english);
-    if lang.code() == "tr" && has(lang, english) { shown.chars().flat_map(upper_turkish).collect() } else { shown.to_uppercase() }
+    if lang.code() == "tr" && has(lang, english) {
+        shown.chars().flat_map(upper_turkish).collect()
+    } else {
+        shown.chars().map(|c| if ('\u{10A0}'..='\u{10FF}').contains(&c) { c.to_string() } else { c.to_uppercase().to_string() }).collect()
+    }
 }
 
 fn upper_turkish(c: char) -> std::char::ToUppercase {
