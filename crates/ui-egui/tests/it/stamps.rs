@@ -116,6 +116,9 @@ fn creating_placing_and_keeping_custom_stamps() {
     h.get_by_label("logo");
     let stamp_id = h.state().custom_stamps[0].id;
     let stamp_data = h.state().custom_stamps[0].data.clone();
+    // Focus the palette item before opening its menu so the test targets the saved row.
+    h.get_by_label("logo").click();
+    h.run_steps(1);
     // Rename the saved stamp through its palette menu and keep its identity and bytes.
     h.get_by_label("logo").click_secondary();
     h.run_steps(2);
@@ -138,6 +141,8 @@ fn creating_placing_and_keeping_custom_stamps() {
     );
     assert_eq!(h.state().quick_tool, QuickTool::CustomStamp(stamp_id));
     assert_eq!(h.state().custom_stamps[0].data, stamp_data);
+    h.get_by_label("brand").click();
+    h.run_steps(1);
     h.get_by_label("brand").click_secondary();
     h.run_steps(2);
     h.get_by_label("Rename / change category…").click();
