@@ -129,7 +129,8 @@ impl PdfCraftApp {
             // macOS Keychain and Windows store identities are read from their OS key stores each time.
             "digital_ids": self.digital_ids.iter().filter(|e| !e.path.starts_with("keychain:") && !e.path.starts_with("windows:")).collect::<Vec<_>>(),
             "trusted": trusted,
-            "custom_stamps": stamps_ui::encode(&self.custom_stamps, self.next_custom_stamp_id),
+            "custom_stamps": stamps_ui::encode(&self.custom_stamps),
+            "custom_stamp_next_id": self.next_custom_stamp_id,
             "javascript": self.session.javascript(),
             "actions": actions_ui::encode(&self.custom_actions),
             "combine_columns": self.combine_columns.to_json(),
@@ -390,7 +391,8 @@ impl PdfCraftApp {
         if let Ok(ids) = serde_json::from_value::<Vec<DigitalIdEntry>>(v["digital_ids"].clone()) {
             self.digital_ids = ids;
         }
-        let (custom_stamps, next_custom_stamp_id) = stamps_ui::decode(&v["custom_stamps"]);
+        let (custom_stamps, next_custom_stamp_id) =
+            stamps_ui::decode(&v["custom_stamps"], v["custom_stamp_next_id"].as_u64());
         self.custom_stamps = custom_stamps;
         self.next_custom_stamp_id = next_custom_stamp_id;
         self.custom_actions = actions_ui::decode(&v["actions"]);

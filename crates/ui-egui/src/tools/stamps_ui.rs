@@ -208,7 +208,6 @@ impl PdfCraftApp {
 
     /// Save the dialog's stamp in the library and choose it.
     pub(crate) fn save_custom_stamp(&mut self) {
-        let d = std::mem::take(&mut self.stamp_draft);
         let id = match new_stamp_id(&mut self.next_custom_stamp_id, &self.custom_stamps) {
             Ok(id) => id,
             Err(error) => {
@@ -216,6 +215,7 @@ impl PdfCraftApp {
                 return;
             }
         };
+        let d = std::mem::take(&mut self.stamp_draft);
         self.custom_stamps.push(CustomStamp {
             id,
             category: d.category.trim().into(),
@@ -271,19 +271,14 @@ fn new_stamp_id(next_id: &mut u64, stamps: &[CustomStamp]) -> Result<u64, String
 }
 
 /// The custom stamps for `persist` (kept small: base64 of each file).
-pub(crate) fn encode(stamps: &[CustomStamp], next_id: u64) -> serde_json::Value {
-    serde_json::json!({
-        "next_id": next_id,
-        "stamps": serde_json::to_value(stamps).unwrap_or_default(),
-    })
+pub(crate) fn encode(stamps: &[CustomStamp]) -> serde_json::Value {
+    serde_json::to_value(stamps).unwrap_or_default()
 }
 
 /// Read stamps and the identity counter back; malformed entries are dropped.
-pub(crate) fn decode(v: &serde_json::Value) -> (Vec<CustomStamp>, u64) {
-    let (entries, saved_next_id) =
-        if v.is_array() { (Some(v), None) } else { (v.get("stamps"), v.get("next_id").and_then(serde_json::Value::as_u64)) };
-    let stamps: Vec<CustomStamp> = entries
-        .and_then(serde_json::Value::as_array)
+pub(crate) fn decode(v: &serde_json::Value, saved_next_id: Option<u64>) -> (Vec<CustomStamp>, u64) {
+    let stamps: Vec<CustomStamp> = v
+        .as_array()
         .map(|a| a.iter().filter_map(|x| serde_json::from_value::<CustomStamp>(x.clone()).ok()).filter(|s| s.data.len() <= MAX_STAMP_BYTES).collect())
         .unwrap_or_default();
     let reserved: std::collections::HashSet<u64> = stamps.iter().map(|stamp| stamp.id).filter(|id| *id != 0).collect();
@@ -370,14 +365,41 @@ mod tests {
             page: 0,
             data: Arc::new(vec![9]),
         }];
-        let (restored, next_id) = decode(&encode(&saved, u64::MAX));
-        assert_eq!(restored[0].id, u64::MAX - 1);
-        assert_eq!(restored[0].data.as_slice(), &[9]);
-        assert_eq!(next_id, u64::MAX);
+        let mut app = PdfCraftApp::new();
+        app.custom_stamps = saved.to_vec();
+        app.next_custom_stamp_id = u64::MAX;
+        let settings = app.persist();
+        assert!(settings["custom_stamps"].is_array(), "older builds read custom_stamps as an array");
+        assert_eq!(settings["custom_stamp_next_id"], u64::MAX);
+        let mut restored_app = PdfCraftApp::new();
+        restored_app.restore(&settings);
+        assert_eq!(restored_app.custom_stamps[0].id, u64::MAX - 1);
+        assert_eq!(restored_app.custom_stamps[0].data.as_slice(), &[9]);
+        assert_eq!(restored_app.next_custom_stamp_id, u64::MAX);
         let old = serde_json::json!([{"category":"Tools","name":"Old","file":"old.png","page":0,"data":"CQ=="}]);
-        let (restored, next_id) = decode(&old);
+        let (restored, next_id) = decode(&old, None);
         assert_eq!(restored[0].id, 1);
         assert_eq!(next_id, 2);
+    }
+
+    #[test]
+    fn saving_without_an_available_identity_keeps_the_stamp_draft() {
+        let mut app = PdfCraftApp::new();
+        app.next_custom_stamp_id = 0;
+        app.stamp_draft = StampDraft {
+            file: "mark.png".into(),
+            data: Arc::new(vec![1, 2]),
+            category: "Tools".into(),
+            name: "Mark".into(),
+        };
+
+        app.save_custom_stamp();
+
+        assert_eq!(app.stamp_draft.file, "mark.png");
+        assert_eq!(app.stamp_draft.category, "Tools");
+        assert_eq!(app.stamp_draft.name, "Mark");
+        assert_eq!(app.stamp_draft.data.as_slice(), &[1, 2]);
+        assert!(app.custom_stamps.is_empty());
     }
 
     #[test]
@@ -387,7 +409,7 @@ mod tests {
         assert_eq!(new_stamp_id(&mut next_id, &[]), Ok(1));
         assert_eq!(new_stamp_id(&mut next_id, &[make(1)]), Ok(2));
         let remaining = [make(2)];
-        let (restored, mut next_id) = decode(&encode(&remaining, next_id));
+        let (restored, mut next_id) = decode(&encode(&remaining), Some(next_id));
         assert_eq!(new_stamp_id(&mut next_id, &restored), Ok(3));
         let mut exhausted = 0;
         assert!(new_stamp_id(&mut exhausted, &[make(u64::MAX)]).is_err());
