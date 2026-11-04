@@ -5793,6 +5793,7 @@ fn added_thai_text_wraps_clusters_and_survives_reopen() {
 #[test]
 fn group_moves_preserve_glyph_bytes_and_unselected_text_state() {
     for content in [
+        "BT /F1 12 Tf 1.3 Tc 2 Tw 80 Tz 14 TL 1 0.2 -0.1 1 50 600 Tm (Before) Tj 0 0 1 rg [(Quoted) -120 ( text)] TJ 1 0 0 rg (After) Tj T* (Next) Tj 10 -50 TD (Final) Tj ET",
         "BT /F1 12 Tf 1.3 Tc 2 Tw 80 Tz 14 TL 1 0.2 -0.1 1 50 600 Tm (A\\101) Tj 1 0 0 rg (Neighbour) Tj T* (Next) Tj ET",
         "BT /F1 12 Tf 14 TL 50 600 Td (Before) Tj 0 0 1 rg (Quoted) ' 1 0 0 rg (After) Tj ET",
         "BT /F1 12 Tf 14 TL 50 600 Td (Before) Tj 0 0 1 rg 2 1 (Quoted) \" 1 0 0 rg [(After) -120 (wards)] TJ T* (Last) Tj ET",
@@ -8521,6 +8522,392 @@ fn reading_keeps_dotted_leader_entries_whole_and_in_order() {
     );
 }
 
+#[test]
+fn object_rotation_preserves_glyph_bytes_and_unselected_text_state() {
+    for content in [
+        "BT /F1 12 Tf 1.3 Tc 2 Tw 80 Tz 14 TL 1 0.2 -0.1 1 50 600 Tm (A\\101) Tj 1 0 0 rg (Neighbour) Tj T* (Next) Tj ET",
+        "BT /F1 12 Tf 14 TL 50 600 Td (Before) Tj 0 0 1 rg (Quoted) ' 1 0 0 rg (After) Tj ET",
+        "BT /F1 12 Tf 14 TL 50 600 Td (Before) Tj 0 0 1 rg 2 1 (Quoted) \" 1 0 0 rg [(After) -120 (wards)] TJ T* (Last) Tj ET",
+        "q 1.2 0.3 -0.1 0.9 20 30 cm BT /F1 12 Tf 50 600 Td [(A) -120 (B)] TJ 1 0 0 rg (After) Tj ET Q %keep-this-comment\n",
+        "BT /F1 12.3456789 Tf 81.23456789 Tz 0.123456789 Ts 14 TL 50 600 Td (Before) Tj 0 0 1 rg 2.123456789 1.987654321 (Quoted) \" 1 0 0 rg (After) Tj ET",
+    ] {
+        let mut doc = text_page(content);
+        let before = text::text_lines(&doc, 0).unwrap();
+        let blocks = text::text_blocks(&doc, 0).unwrap();
+        let index = blocks.iter().position(|b| b.text.contains("Quoted")).unwrap_or(0);
+        let selected: Vec<_> = blocks[index].lines.iter().map(|i| before[*i].text.clone()).collect();
+        let glyph_bytes = |doc: &Document| {
+            pdfcraft_content::parse(&page_content_bytes(doc, 0))
+                .ops
+                .iter()
+                .flat_map(|op| {
+                    op.operands
+                        .iter()
+                        .flat_map(|o| match o {
+                            Object::String(s) => vec![s.bytes.clone()],
+                            Object::Array(a) => a.iter().filter_map(|v| v.as_string().map(|s| s.bytes.clone())).collect(),
+                            _ => Vec::new(),
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>()
+        };
+        let original_bytes = glyph_bytes(&doc);
+        let target = ObjectTarget { kind: ObjectKind::Text, index };
+        rotate_object(&mut doc, 0, target, 37.0).unwrap();
+        let doc = reopen(&doc);
+        assert_transform_text_context(&doc);
+        assert_eq!(glyph_bytes(&doc), original_bytes, "original codes and kerning strings survive");
+        let after = text::text_lines(&doc, 0).unwrap();
+        assert_eq!(after.len(), before.len(), "{content}");
+        for old in before {
+            let new = after.iter().find(|l| l.text == old.text).unwrap();
+            if selected.contains(&old.text) {
+                assert_ne!(new.rect, old.rect);
+            } else {
+                assert!(new.rect.iter().zip(old.rect).all(|(a, b)| (a - b).abs() < 1e-6), "unselected text moved: {}", old.text);
+            }
+            assert_eq!((new.font.clone(), new.color), (old.font, old.color));
+        }
+        if content.contains("%keep-this-comment") {
+            assert!(String::from_utf8_lossy(&page_content_bytes(&doc, 0)).contains("%keep-this-comment"));
+        }
+    }
+}
+
+#[test]
+fn object_rotation_refuses_clipping_text_atomically() {
+    for mode in 4..=7 {
+        let mut doc = clipping_text_page(mode);
+        let before = page_content_bytes(&doc, 0);
+        let error = rotate_object(&mut doc, 0, ObjectTarget { kind: ObjectKind::Text, index: 0 }, 23.0).unwrap_err();
+        assert!(error.to_string().contains("clipping"), "{error}");
+        assert_eq!(page_content_bytes(&doc, 0), before);
+    }
+}
+
+#[test]
+fn object_rotation_image_keeps_the_pivot_and_survives_reopen() {
+    let mut doc = image_page();
+    let old = images::page_images(&doc, 0).unwrap()[0].clone();
+    let rect = old.visible_rect.unwrap();
+    let center = [(rect[0] + rect[2]) / 2.0, (rect[1] + rect[3]) / 2.0];
+    rotate_object(&mut doc, 0, ObjectTarget { kind: ObjectKind::Image, index: 0 }, 33.0).unwrap();
+    let doc = reopen(&doc);
+    let new = images::page_images(&doc, 0).unwrap()[0].clone();
+    assert_eq!(new.object, old.object, "image pixels are not rewritten");
+    let matrix = pdfcraft_content::Matrix(new.matrix);
+    let pivot = matrix.apply(0.5, 0.5);
+    assert!((pivot.0 - center[0]).abs() < 1e-5 && (pivot.1 - center[1]).abs() < 1e-5);
+    assert_ne!(new.matrix, old.matrix);
+}
+
+#[test]
+fn object_scale_preserves_source_bytes_pivot_rotation_and_neighbours() {
+    let mut doc = text_page("BT /F1 12 Tf 20 600 Td (Scale me) Tj ET BT /F1 12 Tf 20 100 Td (Neighbour) Tj ET");
+    let target = ObjectTarget { kind: ObjectKind::Text, index: 0 };
+    rotate_object(&mut doc, 0, target, 25.0).unwrap();
+    let before = text::text_blocks(&doc, 0).unwrap();
+    let r = before[0].rect;
+    scale_object(&mut doc, 0, target, 1.5, [r[0], r[1]]).unwrap();
+    let doc = reopen(&doc);
+    let after = text::text_blocks(&doc, 0).unwrap();
+    assert_eq!(after[0].text, before[0].text);
+    assert!((after[0].rotation - before[0].rotation).abs() < 1e-5);
+    assert_eq!(after[1].rect, before[1].rect);
+    for i in 0..4 {
+        let pivot = if i % 2 == 0 { r[0] } else { r[1] };
+        assert!((after[0].rect[i] - (pivot + (r[i] - pivot) * 1.5)).abs() < 1e-4);
+    }
+    assert!(String::from_utf8_lossy(&page_content_bytes(&doc, 0)).contains("(Scale me) Tj"));
+    let mut doc = image_page();
+    let target = ObjectTarget { kind: ObjectKind::Image, index: 0 };
+    rotate_object(&mut doc, 0, target, 31.0).unwrap();
+    let before = images::page_images(&doc, 0).unwrap()[0].clone();
+    scale_object(&mut doc, 0, target, 0.6, [10.0, 20.0]).unwrap();
+    let doc = reopen(&doc);
+    let after = images::page_images(&doc, 0).unwrap()[0].clone();
+    assert_eq!(after.object, before.object);
+    for i in 0..4 {
+        assert!((after.matrix[i] - before.matrix[i] * 0.6).abs() < 1e-5);
+    }
+}
+
+#[test]
+fn object_scale_refuses_invalid_or_clipping_edits_atomically() {
+    let target = ObjectTarget { kind: ObjectKind::Text, index: 0 };
+    for mode in 4..=7 {
+        let mut doc = clipping_text_page(mode);
+        let before = page_content_bytes(&doc, 0);
+        assert!(scale_object(&mut doc, 0, target, 1.5, [0.0, 0.0]).is_err());
+        assert_eq!(page_content_bytes(&doc, 0), before);
+    }
+    let mut doc = text_page("BT /F1 12 Tf 20 600 Td (Scale me) Tj ET");
+    let before = page_content_bytes(&doc, 0);
+    for factor in [f64::NAN, f64::INFINITY, 0.0, -1.0, 101.0] {
+        assert!(scale_object(&mut doc, 0, target, factor, [0.0, 0.0]).is_err());
+        assert_eq!(page_content_bytes(&doc, 0), before);
+    }
+    assert!(scale_object(&mut doc, 0, target, 2.0, [f64::NAN, 0.0]).is_err());
+    assert_eq!(page_content_bytes(&doc, 0), before);
+}
+
+/// Graphics operators stay outside BT/ET; marked-content and text pairs nest independently.
+fn assert_transform_text_context(doc: &Document) {
+    let mut in_text = false;
+    let mut depth = 0;
+    let mut marked = Vec::new();
+    for op in pdfcraft_content::parse(&page_content_bytes(doc, 0)).ops {
+        match op.op.as_slice() {
+            b"BT" => {
+                assert!(!in_text);
+                in_text = true;
+            }
+            b"ET" => {
+                assert!(in_text);
+                assert_ne!(marked.last(), Some(&true), "marked content opened inside BT crosses ET");
+                in_text = false;
+            }
+            b"BDC" | b"BMC" => marked.push(in_text),
+            b"EMC" => assert_eq!(marked.pop(), Some(in_text), "marked content crosses a text boundary"),
+            b"q" | b"Q" | b"cm" => {
+                assert!(!in_text, "special graphics operator inside text: {:?}", op.op);
+                if op.is("q") {
+                    depth += 1;
+                }
+                if op.is("Q") {
+                    depth -= 1;
+                    assert!(depth >= 0);
+                }
+            }
+            _ => {}
+        }
+    }
+    assert!(!in_text);
+    assert_eq!(depth, 0);
+    assert!(marked.is_empty());
+}
+
+#[test]
+fn object_rotation_indirect_metadata_survives_transform_retype_and_reopen() {
+    fn indirect(doc: &mut Document) {
+        let item = added::list_added(doc)[0].clone();
+        let metadata = doc.get(item.obj).as_dict().unwrap().get(b"PCAdded").unwrap().clone();
+        let reference = doc.add(metadata);
+        doc.update_dict(item.obj, |d| d.set(b"PCAdded".to_vec(), Object::Ref(reference))).unwrap();
+    }
+    let mut doc = text_page("");
+    added::add_content(
+        &mut doc,
+        0,
+        &Content::Text(added::AddedText { text: "Original".into(), rect: [50.0, 300.0, 200.0, 330.0], ..Default::default() }),
+    )
+    .unwrap();
+    let target = ObjectTarget { kind: ObjectKind::Added, index: 0 };
+    indirect(&mut doc);
+    rotate_object(&mut doc, 0, target, 37.0).unwrap();
+    doc = reopen(&doc);
+    assert!((added::list_added(&doc)[0].rotation - 37.0).abs() < 1e-6);
+    let before = text::text_blocks(&doc, 0).unwrap()[0].rotation;
+    indirect(&mut doc);
+    let Content::Text(mut text) = added::list_added(&doc)[0].content.clone() else { panic!("text") };
+    text.text = "Retyped".into();
+    added::update_content(&mut doc, 0, 0, &Content::Text(text)).unwrap();
+    doc = reopen(&doc);
+    assert!((added::list_added(&doc)[0].rotation - 37.0).abs() < 1e-6);
+    let block = &text::text_blocks(&doc, 0).unwrap()[0];
+    assert_eq!(block.text, "Retyped");
+    assert!((block.rotation - before).abs() < 1e-6);
+    indirect(&mut doc);
+    scale_object(&mut doc, 0, target, 1.2, [50.0, 300.0]).unwrap();
+    doc = reopen(&doc);
+    assert!((added::list_added(&doc)[0].rotation - 37.0).abs() < 1e-6);
+}
+
+#[test]
+fn object_rotation_retyping_indirect_metadata_retains_existing_angle() {
+    let mut doc = text_page("");
+    added::add_content(
+        &mut doc,
+        0,
+        &Content::Text(added::AddedText { text: "Original".into(), rect: [50.0, 300.0, 200.0, 330.0], ..Default::default() }),
+    )
+    .unwrap();
+    rotate_object(&mut doc, 0, ObjectTarget { kind: ObjectKind::Added, index: 0 }, 41.0).unwrap();
+    let item = added::list_added(&doc)[0].clone();
+    let metadata = doc.get(item.obj).as_dict().unwrap().get(b"PCAdded").unwrap().clone();
+    let reference = doc.add(metadata);
+    doc.update_dict(item.obj, |d| d.set(b"PCAdded".to_vec(), Object::Ref(reference))).unwrap();
+    let Content::Text(mut text) = item.content else { panic!("text") };
+    text.text = "Retyped".into();
+    added::update_content(&mut doc, 0, 0, &Content::Text(text)).unwrap();
+    let doc = reopen(&doc);
+    assert!((added::list_added(&doc)[0].rotation - 41.0).abs() < 1e-6);
+}
+
+#[test]
+fn object_rotation_refuses_shared_clipping_text_objects_atomically() {
+    for content in
+        ["BT /F1 12 Tf 20 600 Td 7 Tr (Clip) Tj 0 Tr 0 -200 Td (Selected) Tj ET", "BT /F1 12 Tf 20 600 Td (Selected) Tj 0 -200 Td 7 Tr (Clip) Tj ET"]
+    {
+        let mut doc = text_page(content);
+        let index = text::text_blocks(&doc, 0).unwrap().iter().position(|b| b.text == "Selected").unwrap();
+        let before = write_full(&doc, &SaveOptions::default()).unwrap();
+        assert!(rotate_object(&mut doc, 0, ObjectTarget { kind: ObjectKind::Text, index }, 20.0).is_err());
+        assert_eq!(write_full(&doc, &SaveOptions::default()).unwrap(), before);
+    }
+}
+
+#[test]
+fn object_rotation_restores_prior_advances_and_line_matrix() {
+    // Main groups rows that share their stated leading. The quote fixtures give
+    // the preceding row its own leading so it remains an unselected paragraph.
+    for content in [
+        "BT /F1 12 Tf 1.3 Tc 2 Tw 80 Tz 120 TL 1 .2 -.1 1 50 600 Tm (Before) Tj [-5000] TJ 0 0 1 rg [(Chosen) -120 ( label)] TJ [-5000] TJ 1 0 0 rg (After) Tj T* (Next) Tj ET",
+        "BT /F1 12 Tf 14 TL 50 600 Td (Before) Tj 120 TL 0 0 1 rg (Chosen label) ' [-5000] TJ 1 0 0 rg (After) Tj T* (Next) Tj ET",
+        "BT /F1 12.3456789 Tf 81.23456789 Tz .123456789 Ts 14 TL 50 600 Td (Before) Tj 120 TL 0 0 1 rg 2.123456789 1.987654321 (Chosen label) \" [-5000] TJ 1 0 0 rg (After) Tj T* (Next) Tj ET",
+    ] {
+        let mut doc = text_page(content);
+        let before = text::text_blocks(&doc, 0).unwrap();
+        let index = before.iter().position(|b| b.text == "Chosen label").unwrap_or_else(|| panic!("independent selected block: {before:?}"));
+        assert_eq!(before.len(), 4, "three genuinely unselected neighbours");
+        let target = ObjectTarget { kind: ObjectKind::Text, index };
+        rotate_object(&mut doc, 0, target, 30.0).unwrap();
+        scale_object(&mut doc, 0, target, 1.25, [200.0, 200.0]).unwrap();
+        let doc = reopen(&doc);
+        assert_transform_text_context(&doc);
+        let after = text::text_blocks(&doc, 0).unwrap();
+        assert_eq!(before.len(), after.len());
+        for old in &before {
+            let new = after.iter().find(|b| b.text == old.text).unwrap();
+            if old.text != "Chosen label" {
+                assert!(old.rect.iter().zip(new.rect).all(|(a, b)| (a - b).abs() < 1e-6), "{} moved: {:?} -> {:?}", old.text, old.rect, new.rect);
+            }
+        }
+    }
+}
+
+/// Retyping to a different height must use the same pivot for painting and saved bounds.
+#[test]
+fn object_rotation_retyped_line_count_uses_current_visible_pivot() {
+    let mut doc = text_page("");
+    added::add_content(
+        &mut doc,
+        0,
+        &Content::Text(added::AddedText { text: "First".into(), rect: [50.0, 300.0, 200.0, 330.0], ..Default::default() }),
+    )
+    .unwrap();
+    rotate_object(&mut doc, 0, ObjectTarget { kind: ObjectKind::Added, index: 0 }, 35.0).unwrap();
+    for value in ["First\nSecond\nThird", "Short", "A line that wraps repeatedly in a narrow text box"] {
+        let Content::Text(mut text) = added::list_added(&doc)[0].content.clone() else { panic!("text") };
+        text.text = value.into();
+        let expected = added::text_rect(&text);
+        added::update_content(&mut doc, 0, 0, &Content::Text(text)).unwrap();
+        doc = reopen(&doc);
+        let item = &added::list_added(&doc)[0];
+        assert_eq!(item.content.rect(), expected);
+        let matrix = pdfcraft_content::parse(&stream_bytes(&doc, &Object::Ref(item.obj)).unwrap())
+            .ops
+            .into_iter()
+            .find(|o| o.is("cm"))
+            .unwrap()
+            .nums::<6>()
+            .unwrap();
+        let pivot = [(expected[0] + expected[2]) / 2.0, (expected[1] + expected[3]) / 2.0];
+        let view = pdfcraft_content::Matrix(pdfcraft_model::pages(&doc)[0].view_matrix(&doc));
+        let expected_matrix = crate::objects::rotation_matrix(pivot, 35.0).then(&view);
+        assert!(
+            matrix.iter().zip(expected_matrix.0).all(|(a, b)| (a - b).abs() < 1e-5),
+            "paint must use persisted bounds: {matrix:?} != {:?}",
+            expected_matrix.0
+        );
+        assert!(item.display_rect().iter().zip(crate::objects::rotation_matrix(pivot, 35.0).bbox(expected)).all(|(a, b)| (a - b).abs() < 1e-5));
+    }
+}
+
+/// Outer ActualText wrappers survive; inner wrappers are refused without changing PDF bytes.
+#[test]
+fn object_rotation_actual_text_preserves_markup_and_neighbours() {
+    for (named, inside) in [(false, false), (false, true), (true, false), (true, true)] {
+        let marker = if named { "/Span /MC0 BDC" } else { "/Span << /ActualText (Logical label) >> BDC" };
+        let marked = if inside {
+            format!("BT /F1 12 Tf 40 400 Td {marker} (Glyph) Tj [(s) -120 ( here)] TJ EMC ET")
+        } else {
+            format!("{marker} BT /F1 12 Tf 40 400 Td (Glyph) Tj [(s) -120 ( here)] TJ ET EMC")
+        };
+        let content = format!("BT /F1 12 Tf 40 600 Td (Before) Tj ET {marked} BT /F1 12 Tf 40 100 Td (After) Tj ET");
+        let mut doc = build(&[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> /Properties << /MC0 << /ActualText (Logical label) >> >> >> /Contents 4 0 R >>",
+            &stream("", &content),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+        ]);
+        let before = text::text_blocks(&doc, 0).unwrap();
+        let index = before.iter().position(|b| b.editor_text == "Logical label").unwrap();
+        let target = ObjectTarget { kind: ObjectKind::Text, index };
+        assert_transform_text_context(&doc);
+        if inside {
+            let bytes = write_full(&doc, &SaveOptions::default()).unwrap();
+            assert!(rotate_object(&mut doc, 0, target, 30.0).is_err());
+            assert_eq!(write_full(&doc, &SaveOptions::default()).unwrap(), bytes);
+            assert!(scale_object(&mut doc, 0, target, 1.25, [40.0, 400.0]).is_err());
+            assert_eq!(write_full(&doc, &SaveOptions::default()).unwrap(), bytes);
+            continue;
+        }
+        rotate_object(&mut doc, 0, target, 30.0).unwrap();
+        scale_object(&mut doc, 0, target, 1.25, [40.0, 400.0]).unwrap();
+        let doc = reopen(&doc);
+        assert_transform_text_context(&doc);
+        let data = page_content_bytes(&doc, 0);
+        let data = String::from_utf8_lossy(&data);
+        assert!(data.contains(marker), "{data}");
+        assert_eq!(data.matches("BDC").count(), 1);
+        assert_eq!(data.matches("EMC").count(), 1);
+        assert!(data.contains("(Glyph)") && data.contains("(s)") && data.contains("( here)"));
+        let after = text::text_blocks(&doc, 0).unwrap();
+        assert_eq!(after[index].editor_text, "Logical label");
+        for label in ["Before", "After"] {
+            let a = before.iter().find(|b| b.text == label).unwrap();
+            let b = after.iter().find(|b| b.text == label).unwrap();
+            assert!(a.rect.iter().zip(b.rect).all(|(a, b)| (a - b).abs() < 1e-6));
+        }
+    }
+}
+
+/// Nested BMC/BDC spans (including MCIDs) cannot be split or duplicated by a transform.
+#[test]
+fn object_transforms_refuse_inner_marked_content_without_mutation() {
+    for wrapper in ["/Artifact BMC", "/Span << /MCID 0 >> BDC", "/Span << /ActualText (Selected) >> BDC"] {
+        let mut doc = text_page(&format!("/Document BMC BT /F1 12 Tf 40 400 Td /Span BMC {wrapper} (Selected) Tj EMC EMC ET EMC"));
+        let target = ObjectTarget { kind: ObjectKind::Text, index: 0 };
+        assert_transform_text_context(&doc);
+        let bytes = write_full(&doc, &SaveOptions::default()).unwrap();
+        let err = rotate_object(&mut doc, 0, target, 30.0).unwrap_err().to_string();
+        assert!(err.contains("marked content"), "{err}");
+        assert_eq!(write_full(&doc, &SaveOptions::default()).unwrap(), bytes);
+        assert!(scale_object(&mut doc, 0, target, 1.25, [40.0, 400.0]).is_err());
+        assert_eq!(write_full(&doc, &SaveOptions::default()).unwrap(), bytes);
+    }
+}
+
+/// A completed inner span elsewhere in the text object must not block an unrelated show.
+#[test]
+fn object_rotation_after_closed_marked_content_preserves_nesting() {
+    let mut doc = text_page("BT /F1 12 Tf 40 600 Td /Artifact BMC (Before) Tj EMC 0 -200 Td (Selected) Tj ET");
+    let before = text::text_blocks(&doc, 0).unwrap();
+    let index = before.iter().position(|b| b.text == "Selected").unwrap();
+    let target = ObjectTarget { kind: ObjectKind::Text, index };
+    rotate_object(&mut doc, 0, target, 30.0).unwrap();
+    scale_object(&mut doc, 0, target, 1.25, [40.0, 400.0]).unwrap();
+    let doc = reopen(&doc);
+    assert_transform_text_context(&doc);
+    let after = text::text_blocks(&doc, 0).unwrap();
+    let old = before.iter().find(|b| b.text == "Before").unwrap();
+    let new = after.iter().find(|b| b.text == "Before").unwrap();
+    assert!(old.rect.iter().zip(new.rect).all(|(a, b)| (a - b).abs() < 1e-6));
+}
+
 #[cfg(test)]
 mod proptests {
     use super::*;
@@ -10467,4 +10854,18 @@ fn review_inside_scope_group_move_matches_direct_transform_under_outer_scale() {
             );
         }
     }
+}
+
+/// Uniform scaling includes the added-text character spacing introduced on main.
+#[test]
+fn object_scale_added_text_keeps_character_spacing_proportional() {
+    let mut doc = text_page("");
+    let text = AddedText { text: "Spaced paint".into(), rect: [20.0, 30.0, 220.0, 80.0], size: 12.0, char_spacing: 2.0, ..Default::default() };
+    add_content(&mut doc, 0, &Content::Text(text)).unwrap();
+    let target = ObjectTarget { kind: ObjectKind::Added, index: 0 };
+    scale_object(&mut doc, 0, target, 2.0, [20.0, 30.0]).unwrap();
+    let added = list_added(&doc);
+    let Content::Text(text) = &added[0].content else { panic!("expected editable text") };
+    assert_eq!(text.size, 24.0);
+    assert_eq!(text.char_spacing, 4.0);
 }

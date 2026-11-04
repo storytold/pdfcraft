@@ -132,6 +132,76 @@ pub fn move_objects(doc: &mut Document, page: usize, targets: &[ObjectTarget], o
     Ok(())
 }
 
+/// Clockwise rotation in page user space. The pivot stays fixed.
+pub(crate) fn rotation_matrix(pivot: [f64; 2], degrees: f64) -> Matrix {
+    let (s, c) = (-degrees.to_radians()).sin_cos();
+    let [x, y] = pivot;
+    Matrix([c, s, -s, c, x - c * x + s * y, y - s * x - c * y])
+}
+
+/// Rotate one source or added item, without rasterizing. Refusal is atomic.
+pub fn rotate_object(doc: &mut Document, page: usize, target: ObjectTarget, degrees: f64) -> Result<(), EditError> {
+    if !degrees.is_finite() || degrees.abs() > 36000.0 {
+        return Err(EditError::Invalid("rotation must be finite and between -36000 and 36000 degrees".into()));
+    }
+    let object = editable_objects(doc, page)?
+        .into_iter()
+        .find(|o| o.target == target)
+        .ok_or_else(|| EditError::Invalid("the selected object no longer exists; select it again".into()))?;
+    let r = object.rect;
+    let transform = rotation_matrix([(r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0], degrees.rem_euclid(360.0));
+    let mut work = doc.clone();
+    match target.kind {
+        ObjectKind::Text => crate::text::transform_block(&mut work, page, target.index, transform)?,
+        ObjectKind::Image => crate::images::change_image(&mut work, page, target.index, &crate::images::ImageChange::Transform(transform.0))?,
+        ObjectKind::Added => {
+            let (content, rotation) = added_in_page_space(&work, page, target.index)?;
+            crate::added::update_transformed_content(&mut work, page, target.index, &content, rotation + degrees)?;
+        }
+    }
+    editable_objects(&work, page)?;
+    *doc = work;
+    Ok(())
+}
+
+/// Uniform scaling about a user-space pivot; preserves the object's existing rotation.
+/// Refuses invalid geometry before swapping the working graph into the document.
+pub fn scale_object(doc: &mut Document, page: usize, target: ObjectTarget, factor: f64, pivot: [f64; 2]) -> Result<(), EditError> {
+    if !factor.is_finite() || !(0.01..=100.0).contains(&factor) || !pivot.iter().all(|v| v.is_finite() && v.abs() <= MAX_COORDINATE) {
+        return Err(EditError::Invalid("scale must be between 0.01 and 100 and its pivot must be finite".into()));
+    }
+    let object = editable_objects(doc, page)?
+        .into_iter()
+        .find(|o| o.target == target)
+        .ok_or_else(|| EditError::Invalid("the selected object no longer exists; select it again".into()))?;
+    let [x, y] = pivot;
+    let transform = Matrix([factor, 0.0, 0.0, factor, x * (1.0 - factor), y * (1.0 - factor)]);
+    if !valid_rect(transform.bbox(object.rect)) {
+        return Err(EditError::Invalid("the scaled object is too large".into()));
+    }
+    let mut work = doc.clone();
+    match target.kind {
+        ObjectKind::Text => crate::text::transform_block(&mut work, page, target.index, transform)?,
+        ObjectKind::Image => crate::images::change_image(&mut work, page, target.index, &crate::images::ImageChange::Transform(transform.0))?,
+        ObjectKind::Added => {
+            let (content, rotation) = added_in_page_space(&work, page, target.index)?;
+            let p = pdfcraft_model::pages(&work).into_iter().nth(page).ok_or(EditError::NoSuchPage(page))?;
+            let inverse = Matrix(p.view_matrix(&work)).invert().ok_or_else(|| EditError::Invalid("the page has no area".into()))?;
+            let local = transform.then(&inverse);
+            let mapping = Matrix(p.view_matrix(&work)).then(&local);
+            let mut content = content.with_rect(mapping.bbox(content.rect()));
+            if let Content::Text(t) = &mut content {
+                t.size *= factor;
+                t.char_spacing *= factor;
+            }
+            crate::added::update_transformed_content(&mut work, page, target.index, &content, rotation)?;
+        }
+    }
+    editable_objects(&work, page)?;
+    *doc = work;
+    Ok(())
+}
+
 struct AddedGeometry {
     rect: [f64; 4],
     local_rect: [f64; 4],
@@ -231,11 +301,72 @@ fn added_geometry(doc: &Document, page: usize) -> Result<(Pieces, Vec<AddedGeome
     Ok((pieces, geometry))
 }
 
+/// Rebase an added item's editable parameters onto today's page display basis. Page
+/// rotation/crop/UserUnit may have changed since it was written. Uniform placement is
+/// representable by a box and angle; refuse shear/reflection rather than move the artwork.
+fn added_in_page_space(doc: &Document, page: usize, index: usize) -> Result<(Content, f64), EditError> {
+    let item = crate::list_added(doc)
+        .into_iter()
+        .filter(|a| a.page == page)
+        .nth(index)
+        .ok_or_else(|| EditError::Invalid("the added item no longer exists".into()))?;
+    let geometry = added_geometry(doc, page)?.1;
+    let g = geometry.get(index).ok_or_else(|| EditError::Invalid("the added item has no placement".into()))?;
+    if g.outside.0.iter().zip(Matrix::IDENTITY.0).any(|(a, b)| (a - b).abs() > 1e-9) {
+        return Err(EditError::Invalid("the added item inherits an unsupported surrounding transform".into()));
+    }
+    let p = pdfcraft_model::pages(doc).into_iter().nth(page).ok_or(EditError::NoSuchPage(page))?;
+    let inverse = Matrix(p.view_matrix(doc)).invert().ok_or_else(|| EditError::Invalid("the page has no area".into()))?;
+    let r = item.content.rect();
+    let unit = (r[2] - r[0]) / (g.local_rect[2] - g.local_rect[0]);
+    if !unit.is_finite() || unit <= 0.0 {
+        return Err(EditError::Invalid("the added item has invalid units".into()));
+    }
+    let mapping = Matrix([1.0 / unit, 0.0, 0.0, 1.0 / unit, 0.0, 0.0]).then(&g.origin).then(&g.outside).then(&inverse);
+    let [a, b, c, d, _, _] = mapping.0;
+    let scale = a.hypot(b);
+    if !mapping.0.iter().all(|v| v.is_finite()) || scale <= 1e-9 || (a - d).abs() > scale * 1e-6 || (b + c).abs() > scale * 1e-6 {
+        return Err(EditError::Invalid("the added item has an unsupported non-uniform placement".into()));
+    }
+    let (x, y) = mapping.apply((r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0);
+    let (w, h) = ((r[2] - r[0]) * scale / 2.0, (r[3] - r[1]) * scale / 2.0);
+    let rect = [x - w, y - h, x + w, y + h];
+    if !valid_rect(rect) {
+        return Err(EditError::Invalid("the added item placement is too large".into()));
+    }
+    let mut content = item.content.with_rect(rect);
+    if let Content::Text(t) = &mut content {
+        t.size *= scale;
+    }
+    Ok((content, (-b.atan2(a).to_degrees()).rem_euclid(360.0)))
+}
+
 fn translate_added(doc: &mut Document, page: usize, indexes: &[usize], offset: [f64; 2]) -> Result<(), EditError> {
     if indexes.is_empty() {
         return Ok(());
     }
     let p = pdfcraft_model::pages(doc).into_iter().nth(page).ok_or(EditError::NoSuchPage(page))?;
+    // Rotated added items store an unrotated text box plus an angle. Translate that box
+    // in display space, so subsequent typing keeps both the new position and the angle.
+    let added: Vec<_> = crate::list_added(doc).into_iter().filter(|a| a.page == page).collect();
+    if indexes.iter().any(|i| added.get(*i).is_some_and(|a| a.rotation != 0.0)) {
+        let plain: Vec<_> = indexes.iter().copied().filter(|i| added.get(*i).is_some_and(|a| a.rotation == 0.0)).collect();
+        translate_added(doc, page, &plain, offset)?;
+        let inverse = Matrix(p.view_matrix(doc)).invert().ok_or_else(|| EditError::Invalid("the page has no area".into()))?;
+        let [a, b, c, d, _, _] = inverse.0;
+        let delta = [a * offset[0] + c * offset[1], b * offset[0] + d * offset[1]];
+        for index in indexes {
+            let item = added.get(*index).ok_or_else(|| EditError::Invalid("a selected added item no longer exists".into()))?;
+            if item.rotation == 0.0 {
+                continue;
+            }
+            let (content, rotation) = added_in_page_space(doc, page, *index)?;
+            let r = content.rect();
+            let content = content.with_rect([r[0] + delta[0], r[1] + delta[1], r[2] + delta[0], r[3] + delta[1]]);
+            crate::added::update_transformed_content(doc, page, *index, &content, rotation)?;
+        }
+        return Ok(());
+    }
     let streams = checked_streams(doc, page)?;
     let (pieces, geometry) = added_geometry(doc, page)?;
     let ops = pieces.parse().ops;

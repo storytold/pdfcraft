@@ -591,6 +591,9 @@ impl eframe::App for PdfCraftApp {
         let blocked = self.modal_open() || self.palette_open || !ctx.input(|i| i.focused);
         for (index, view) in self.views.iter_mut().enumerate() {
             view.objects.set_input_blocked(blocked || self.active != Some(index));
+            if blocked || self.active != Some(index) || view.organize {
+                view.object_rotation.cancel();
+            }
             if blocked || self.active != Some(index) {
                 view.auto_scroll.cancel();
             }

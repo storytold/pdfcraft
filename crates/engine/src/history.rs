@@ -73,7 +73,9 @@ pub(crate) fn scope_of(edit: &Edit) -> Scope {
         Edit::SetFieldValue { .. } | Edit::ResetForm { .. } | Edit::SetFieldImage { .. } | Edit::ApplyScriptChanges { .. } => Scope::Form,
         // Page content, resources and added content/marks only: the page tree, annotations,
         // fields, links and document metadata are untouched (see `refresh_content`).
-        Edit::MoveObjects { .. }
+        Edit::ScaleObject { .. }
+        | Edit::RotateObject { .. }
+        | Edit::MoveObjects { .. }
         | Edit::EditTextLine { .. }
         | Edit::EditTextBlock { .. }
         | Edit::EditPageImage { .. }

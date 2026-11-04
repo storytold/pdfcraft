@@ -44,7 +44,7 @@ pub use text::strip_subset_tag;
 mod background;
 pub use background::page_background;
 pub mod objects;
-pub use objects::{EditableObject, MAX_MOVE_OBJECTS, ObjectKind, ObjectTarget, editable_objects, move_objects};
+pub use objects::{EditableObject, MAX_MOVE_OBJECTS, ObjectKind, ObjectTarget, editable_objects, move_objects, rotate_object, scale_object};
 
 mod flatten;
 pub use flatten::{flatten, flatten_fill_sign};

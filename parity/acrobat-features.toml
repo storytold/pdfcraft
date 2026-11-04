@@ -10285,3 +10285,15 @@ commands = []
 tools = []
 evidence = []
 notes = ""
+
+[[feature]]
+id = "edit.corner-object-rotation"
+title = "Corner rotation, proportional scaling and movement of text and images"
+area = "C"
+tier = "P1"
+milestone = "M7"
+status = "shipped"
+commands = ["edit.edit_text"]
+tools = ["object_rotate", "object_scale", "object_move"]
+evidence = ["crates/ui-egui/tests/it/editing.rs::corner_transforms_scale_and_translate_rotated_text_and_images", "crates/automation/tests/it/automation.rs::object_scale_tool_preserves_rotated_text_and_rejects_stale_targets", "crates/ui-egui/tests/it/editing.rs::corner_rotation_is_one_edit_and_escape_cancels_the_next_drag", "crates/ui-egui/tests/it/editing.rs::corner_rotation_source_text_and_select_tool_image_keep_editable_objects", "crates/engine/src/tests.rs::object_rotation_preserves_text_and_added_edits_across_save_and_undo", "crates/automation/tests/it/automation.rs::object_rotation_tool_checks_generation_and_saves_editable_text"]
+notes = "Four corner-oriented curved-arrow handles, separate proportional scale grips and primary-drag translation around a single selected object, centre pivot, angle outline preview, Shift 15-degree snapping and release-only undo. Source glyphs/fonts and image data are preserved. Added text retains its angle through later edits. Escape, focus loss and modal/tab changes cancel the drag. Clipping text and marked-content spans opened inside BT are refused atomically; outer ActualText spans remain supported. Grouped Forms remain one item. Existing right-click menus are unchanged. See docs/object-rotation.md."

@@ -9941,6 +9941,53 @@ fn comments_are_reshaped_through_the_tool() {
     assert!(matches!(a.call("comment_edit", &json!({ "doc": doc, "page": 1, "index": 1, "points": "no" })), Err(ToolError::InvalidArgs(_))));
 }
 
+#[test]
+fn object_rotation_tool_checks_generation_and_saves_editable_text() {
+    let dir = workdir("object-rotation");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path":"a.pdf"}))["doc"].as_u64().unwrap();
+    ok(&mut a, "page_add_text", json!({"doc":doc,"page":1,"text":"Turn me","rect":[20,20,130,45]}));
+    let before = ok(&mut a, "object_list", json!({"doc":doc,"page":1}));
+    let args = json!({"doc":doc,"page":1,"kind":"added","index":1,"degrees":33,"generation":before["generation"]});
+    ok(&mut a, "object_rotate", args.clone());
+    let after = ok(&mut a, "object_list", json!({"doc":doc,"page":1}));
+    assert_ne!(before["objects"], after["objects"]);
+    assert!(a.call("object_rotate", &args).is_err());
+    assert_eq!(ok(&mut a, "object_list", json!({"doc":doc,"page":1})), after);
+    ok(&mut a, "edit_undo", json!({"doc":doc}));
+    assert_eq!(ok(&mut a, "object_list", json!({"doc":doc,"page":1}))["objects"], before["objects"]);
+    ok(&mut a, "edit_redo", json!({"doc":doc}));
+    ok(&mut a, "doc_save", json!({"doc":doc,"path":"rotated.pdf"}));
+    let reopened = ok(&mut a, "doc_open", json!({"path":"rotated.pdf"}))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut a, "object_list", json!({"doc":reopened,"page":1}))["objects"], after["objects"]);
+    assert!(page_text(&mut a, reopened)[0].contains("Turn me"));
+}
+
+#[test]
+fn object_scale_tool_preserves_rotated_text_and_rejects_stale_targets() {
+    let dir = workdir("object-scale");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path":"a.pdf"}))["doc"].as_u64().unwrap();
+    ok(&mut a, "page_add_text", json!({"doc":doc,"page":1,"text":"Scale me","rect":[20,20,130,45]}));
+    ok(&mut a, "object_rotate", json!({"doc":doc,"page":1,"kind":"added","index":1,"degrees":33}));
+    let before = ok(&mut a, "object_list", json!({"doc":doc,"page":1}));
+    let args = json!({"doc":doc,"page":1,"kind":"added","index":1,"factor":1.5,"pivot":[20,20],"generation":before["generation"]});
+    ok(&mut a, "object_scale", args.clone());
+    let after = ok(&mut a, "object_list", json!({"doc":doc,"page":1}));
+    assert!(a.call("object_scale", &args).is_err());
+    for factor in [0.0, -1.0, 101.0] {
+        assert!(a.call("object_scale", &json!({"doc":doc,"page":1,"kind":"added","index":1,"factor":factor,"pivot":[20,20]})).is_err());
+    }
+    assert_eq!(ok(&mut a, "object_list", json!({"doc":doc,"page":1})), after);
+    ok(&mut a, "edit_undo", json!({"doc":doc}));
+    assert_eq!(ok(&mut a, "object_list", json!({"doc":doc,"page":1}))["objects"], before["objects"]);
+    ok(&mut a, "edit_redo", json!({"doc":doc}));
+    ok(&mut a, "doc_save", json!({"doc":doc,"path":"scaled.pdf"}));
+    let reopened = ok(&mut a, "doc_open", json!({"path":"scaled.pdf"}))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut a, "object_list", json!({"doc":reopened,"page":1}))["objects"], after["objects"]);
+    assert!(page_text(&mut a, reopened)[0].contains("Scale me"));
+}
+
 /// #3193: bookmark_list reports a bookmark's colour and style (ISO 32000-2 §12.3.3, Tables 151
 /// and 152), only where they differ from black and regular. The list is read from the opened file
 /// and, once the document has been edited, from the edited one; both read them alike.
