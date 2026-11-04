@@ -1,8 +1,9 @@
 use super::blocks::{BlockStyle, TextBlock};
 use super::fallback::MAX_TYPE3_GLYPHS;
+use super::interp::{frame_corners, from_frame, to_frame};
 use super::lines::{page_dict, text_lines};
 use super::rewrite::rewrite_block_from;
-use super::{DecodeBudget, Document, EditError, Metrics, Object, TextLine, TextSession};
+use super::{DecodeBudget, Document, EditError, Metrics, Object, TextLine, TextSession, union};
 
 /// An embedded sfnt source face, read only for the inline editor. Bytes stay in memory and
 /// are never installed, copied into assets, or used as a font for another document.
@@ -75,6 +76,28 @@ pub fn text_edit_layout(doc: &Document, page: usize, block: usize, text: &str, s
     TextSession::open(doc, page, block)?.layout(text, style)
 }
 
+/// Visible draft bounds in page space and in the paragraph's local frame.
+fn draft_line_bounds(line: &TextLine, dir: (f64, f64)) -> ([f64; 4], [f64; 4]) {
+    // Spaces typed after a row's last word are drawn but show nothing, so an upright row is
+    // measured to the end of its last word: they don't make a draft overflow (#4199).
+    let mut rect = line.rect;
+    if line.upright() && !line.ink.is_empty() {
+        if crate::bidi::rtl_base(&line.text) {
+            rect[0] = rect[0].max(line.ink.iter().map(|i| i[0]).fold(f64::INFINITY, f64::min));
+        } else {
+            rect[2] = rect[2].min(line.ink.iter().map(|i| i[2]).fold(f64::NEG_INFINITY, f64::max));
+        }
+    }
+    // Project the line's oriented corners, never its world-axis bounding box: rotating
+    // that already enlarged box would report overflow for text that fits its frame.
+    let corners = if line.upright() { frame_corners(rect) } else { frame_corners(line.frame_rect()).map(|p| from_frame(line.direction(), p)) };
+    let local = corners
+        .map(|p| to_frame(dir, p))
+        .into_iter()
+        .fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |r, p| [r[0].min(p.0), r[1].min(p.1), r[2].max(p.0), r[3].max(p.1)]);
+    (rect, local)
+}
+
 /// A draft of paragraph `source` (number `block` among the page's `lines`) laid out by the rewrite
 /// Apply runs, on a copy of `doc`.
 pub(crate) fn layout_draft(
@@ -86,8 +109,33 @@ pub(crate) fn layout_draft(
     text: &str,
     style: &BlockStyle,
 ) -> Result<TextEditLayout, EditError> {
+    let source_rect = source.editing_rect();
+    let dir = source.direction();
+    let mut target_rect = source.editing_frame();
+    if let Some(width) = style.width {
+        target_rect[2] = target_rect[0] + width;
+    }
+    if let Some([bottom, top]) = style.vertical_frame {
+        target_rect[1] = bottom;
+        target_rect[3] = top;
+    }
+    if let Some([dx, dy]) = style.offset {
+        let (dx, dy) = to_frame(dir, (dx, dy));
+        target_rect = [target_rect[0] + dx, target_rect[1] + dy, target_rect[2] + dx, target_rect[3] + dy];
+    }
+    let outside =
+        |r: [f64; 4]| r[0] < target_rect[0] - 0.5 || r[1] < target_rect[1] - 0.5 || r[2] > target_rect[2] + 0.5 || r[3] > target_rect[3] + 0.5;
     if text == source.editor_text && *style == BlockStyle::default() {
-        return Ok(TextEditLayout { source_rect: source.rect, draft_rect: Some(source.rect), overflow: false });
+        // Measure the existing runs without rewriting them, using the same visible bounds as
+        // an edited draft. Preserved trailing spaces must not change the warning after Apply.
+        let bounds = source
+            .lines
+            .iter()
+            .filter_map(|index| lines.get(*index))
+            .map(|line| draft_line_bounds(line, dir))
+            .reduce(|(rect, frame), (r, f)| (union(rect, r), union(frame, f)));
+        let (draft_rect, overflow) = bounds.map_or((None, false), |(rect, frame)| (Some(rect), outside(frame)));
+        return Ok(TextEditLayout { source_rect, draft_rect, overflow });
     }
     // Subtract the untouched runs by value, rather than by operator offsets: a rewrite may
     // split BT/ET or add font resources. A multiset also handles coincident repeated text.
@@ -102,6 +150,7 @@ pub(crate) fn layout_draft(
     let mut draft = doc.clone();
     rewrite_block_from(&mut draft, page, lines.to_vec(), block, Some(text), style, MAX_TYPE3_GLYPHS)?;
     let mut rect: Option<[f64; 4]> = None;
+    let mut frame: Option<[f64; 4]> = None;
     for line in text_lines(&draft, page)? {
         if let Some(count) = untouched.get_mut(&key(&line))
             && *count > 0
@@ -109,19 +158,10 @@ pub(crate) fn layout_draft(
             *count -= 1;
             continue;
         }
-        // Spaces typed after a row's last word are drawn but show nothing, so an upright row is
-        // measured to the end of its last word: they don't make a draft overflow (#4199).
-        let mut r = line.rect;
-        if line.upright() && !line.ink.is_empty() {
-            if crate::bidi::rtl_base(&line.text) {
-                r[0] = r[0].max(line.ink.iter().map(|i| i[0]).fold(f64::INFINITY, f64::min));
-            } else {
-                r[2] = r[2].min(line.ink.iter().map(|i| i[2]).fold(f64::NEG_INFINITY, f64::max));
-            }
-        }
-        rect = Some(rect.map_or(r, |a| [a[0].min(r[0]), a[1].min(r[1]), a[2].max(r[2]), a[3].max(r[3])]));
+        let (r, local) = draft_line_bounds(&line, dir);
+        rect = Some(rect.map_or(r, |previous| union(previous, r)));
+        frame = Some(frame.map_or(local, |r| union(r, local)));
     }
-    let overflow = rect
-        .is_some_and(|r| r[0] < source.rect[0] - 0.5 || r[1] < source.rect[1] - 0.5 || r[2] > source.rect[2] + 0.5 || r[3] > source.rect[3] + 0.5);
-    Ok(TextEditLayout { source_rect: source.rect, draft_rect: rect, overflow })
+    let overflow = frame.is_some_and(outside);
+    Ok(TextEditLayout { source_rect, draft_rect: rect, overflow })
 }

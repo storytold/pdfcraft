@@ -3,11 +3,11 @@ use super::fallback::{
     Encoder, MAX_TYPE3_GLYPHS, Type3Fallback, drop_unused_fallback_fonts, needs_type3, no_japanese_font, source_encodes, source_family,
     source_program_completes, source_show, source_space, source_width, type3_encode, type3_font,
 };
-use super::interp::{Carry, Origin, TextState, interpret};
+use super::interp::{Carry, Origin, TextState, from_frame, interpret, to_frame};
 use super::lines::{content_streams, page_dict, rewritten_contents, splice, text_lines};
 use super::{
-    Dict, Document, EditError, HashMap, Matrix, Metrics, Object, Op, PdfString, Pieces, TextLine, TextSession, alignment_frame, group_blocks,
-    is_centred, parse, rewrite_styled_block,
+    Dict, Document, EditError, HashMap, HorizontalFrame, Matrix, Metrics, Object, Op, PdfString, Pieces, TextLine, TextSession, alignment_frame,
+    group_blocks, is_centred, parse, rewrite_styled_block, text_frame,
 };
 
 /// What replacing a line did.
@@ -235,6 +235,11 @@ fn choose_rewrite_path(
     // Turned text is rewritten in its own text space by the single-style path. Styled layout uses
     // page x-coordinates and cannot safely apply those operations to rotated runs.
     let upright = members.iter().all(|line| line.upright());
+    if !upright && members.iter().any(|line| line.font != first.font || line.size != first.size || line.color != first.color) {
+        return Err(EditError::Invalid(
+            "rewrapping mixed-style turned text isn't supported yet; its height can be changed without rewriting it".into(),
+        ));
+    }
     if !upright && (!style.ranges.is_empty() || style.resource.is_some()) {
         return Err(EditError::Invalid("formatting part of turned text, or choosing a document font for it, isn't supported yet".into()));
     }
@@ -695,11 +700,13 @@ struct BlockPlan<'a> {
     tm: [f64; 6],
     size: f64,
     underline: bool,
+    saved_frame: Option<Op>,
 }
 
 fn block_ops(plan: &BlockPlan<'_>, writer: &LineWriter<'_>, wrapped: &[(String, bool, usize)], show_font: String) -> Result<Vec<Op>, EditError> {
     let n = pdfcraft_content::num;
     let mut ops = vec![Op::new("q", vec![])];
+    ops.extend(plan.saved_frame.clone());
     ops.extend(reveal_ops(plan.block, plan.lines, plan.style, plan.emit.ctm)?);
     // Moved: a translation inside that state.
     if let Some((ax, ay)) = plan.movement {
@@ -722,6 +729,9 @@ fn block_ops(plan: &BlockPlan<'_>, writer: &LineWriter<'_>, wrapped: &[(String, 
     ops.push(Op::new("ET", vec![]));
     if plan.underline {
         ops.extend(underline_ops(&state.fill, &plan.tm, plan.size, &underlines));
+    }
+    if plan.saved_frame.is_some() {
+        ops.push(Op::new("EMC", vec![]));
     }
     ops.push(Op::new("Q", vec![]));
     Ok(ops)
@@ -779,6 +789,71 @@ fn source_font(doc: &Document, fonts_res: &Dict, font_name: &str, first: &TextLi
     SourceFont { metrics, reuse, space }
 }
 
+fn frame_style(block: &TextBlock, style: &BlockStyle) -> Result<BlockStyle, EditError> {
+    let mut style = style.clone();
+    if let Some([left, right]) = block.horizontal_frame {
+        style.width.get_or_insert(right - left);
+        style.align = style.align.or(block.horizontal_alignment);
+    }
+    style.vertical_frame = style.vertical_frame.or(block.vertical_frame);
+    if let Some([bottom, top]) = style.vertical_frame {
+        if ![bottom, top].iter().all(|v| v.is_finite() && v.abs() <= 1e9) || top <= bottom || top - bottom > 14_400.0 + 1e-6 {
+            return Err(EditError::Invalid("the paragraph's height must be positive and at most 14400 points".into()));
+        }
+        style.vertical_frame = Some([bottom, top.min(bottom + 14_400.0)]);
+        style.width.get_or_insert(block.editing_frame()[2] - block.editing_frame()[0]);
+    }
+    Ok(style)
+}
+
+/// A comparison copy: a repeated colour operator paints the same wherever its source bytes lie.
+/// Keep every other property, including operator order and operands, without altering provenance.
+fn without_paint_spans(mut state: TextState) -> TextState {
+    for op in state.fill.iter_mut().chain(&mut state.stroke) {
+        op.span = 0..0;
+    }
+    state
+}
+
+fn ensure_uniform_turned_text(doc: &Document, ops: &[Op], res: &Dict, members: &[&TextLine], first: &TextLine) -> Result<(), EditError> {
+    // One extracted line can contain several showing operators with different tracking,
+    // rise or rendering modes. Refuse before embedding fonts instead of flattening the source.
+    let selected: std::collections::HashSet<_> = members.iter().flat_map(|line| line.ops.iter().copied()).collect();
+    let shown = interpret(doc, ops, res, &mut HashMap::new(), &mut Carry::new(), None, None)?;
+    let expected = without_paint_spans(first.origin.state.clone());
+    let expected_transform = Matrix(first.origin.tm).then(&Matrix(first.origin.ctm));
+    if shown.iter().filter(|s| selected.contains(&s.op)).any(|s| {
+        // Row translations may differ, but the writer uses the first row's scale and shear
+        // for every glyph. Allow only composition roundoff, with an absolute tolerance.
+        let transform = s.tm.then(&s.state.ctm);
+        let same_linear = transform.0.iter().zip(expected_transform.0).take(4).all(|(a, b)| (a - b).abs() <= 1e-9);
+        let mut state = TextState::of(&s.state);
+        // TD changes leading between rows without changing their glyphs. The writer derives
+        // line spacing from row geometry; all painted properties must match.
+        state.leading = first.origin.state.leading;
+        !same_linear || without_paint_spans(state) != expected
+    }) {
+        return Err(EditError::Invalid(
+            "rewrapping turned text with mixed text states isn't supported yet; its height can be changed without rewriting it".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn frame_text_matrix(first: &TextLine, emit: &Origin, block: &TextBlock) -> Result<[f64; 6], EditError> {
+    let mut tm = emit_text_matrix(&first.origin, emit)?;
+    if block.horizontal_frame.is_some() {
+        let back = Matrix([emit.ctm[0], emit.ctm[1], emit.ctm[2], emit.ctm[3], 0.0, 0.0])
+            .invert()
+            .ok_or_else(|| EditError::Invalid("the paragraph's frame has no area".into()))?;
+        let correction = from_frame(first.direction(), (block.editing_frame()[0] - first.frame_origin().0, 0.0));
+        let (x, y) = back.apply(correction.0, correction.1);
+        tm[4] += x;
+        tm[5] += y;
+    }
+    Ok(tm)
+}
+
 /// [`rewrite_block_with_limit`] with the page's [`text_lines`], read from `doc` as it is now.
 pub(crate) fn rewrite_block_from(
     doc: &mut Document,
@@ -791,6 +866,11 @@ pub(crate) fn rewrite_block_from(
 ) -> Result<LineEdit, EditError> {
     let blocks = group_blocks(&lines);
     let b = blocks.get(block).cloned().ok_or_else(|| EditError::Invalid(format!("page {} has no paragraph {}", page + 1, block + 1)))?;
+    let requested_justify = style.align == Some(crate::added::Align::Justify);
+    let vertical_only = style.vertical_frame.is_some()
+        && text.is_none_or(|text| text == b.editor_text)
+        && BlockStyle { vertical_frame: None, ..style.clone() } == BlockStyle::default();
+    let style = &frame_style(&b, style)?;
     // Existing PDF paragraphs do not yet persist selected-row alignment intent. Refuse
     // that operation before writing anything; whole-paragraph `align` remains supported.
     if style.aligns.iter().any(Option::is_some) {
@@ -818,8 +898,13 @@ pub(crate) fn rewrite_block_from(
     let p = page_dict(doc, page)?;
     let mut res = p.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
     let mut fonts_res = res.get(b"Font").map(|f| doc.resolve(f)).and_then(|f| f.as_dict().cloned()).unwrap_or_default();
+    if vertical_only && let Some(bounds) = style.vertical_frame {
+        return text_frame::resize_vertical(doc, page, &b, &lines, bounds);
+    }
     let dispatch = choose_rewrite_path(doc, &fonts_res, &b, &members, first, text, style)?;
-    if dispatch.use_styled_path && style.align == Some(crate::added::Align::Justify) {
+    // A saved justification keeps its source spacing; only a new request asks the styled
+    // writer to justify the paragraph, which it cannot yet do.
+    if dispatch.use_styled_path && requested_justify {
         return Err(EditError::Invalid("justification of mixed-style existing paragraphs is not supported".into()));
     }
     if dispatch.use_styled_path {
@@ -829,6 +914,9 @@ pub(crate) fn rewrite_block_from(
     let streams = content_streams(doc, &p.dict)?;
     let pieces = Pieces::join(&streams.iter().map(|(_, d)| d.as_slice()).collect::<Vec<_>>());
     let ops = pieces.parse().ops;
+    if !upright {
+        ensure_uniform_turned_text(doc, &ops, &res, &members, first)?;
+    }
     let text = paragraph_text(text.unwrap_or(&b.text));
     // The characters to show, for choosing fonts: the breaks are moves, not glyphs.
     let flat = text.replace('\n', " ");
@@ -850,11 +938,9 @@ pub(crate) fn rewrite_block_from(
     let rtl = crate::bidi::rtl_base(&flat);
     let anchored_right = rtl && upright && style.width.is_none() && members.len() == 1;
     // The paragraph's width along its lines: in user space unless it is turned.
-    let frame = if upright {
-        b.rect
-    } else {
-        members.iter().map(|l| l.frame_rect()).reduce(|a, f| [a[0].min(f[0]), a[1].min(f[1]), a[2].max(f[2]), a[3].max(f[3])]).unwrap_or(b.rect)
-    };
+    let frame = b.editing_frame();
+    let dir = first.direction();
+    let (along_move, across_move) = to_frame(dir, (dx, dy));
     // A centred title is laid out in the box it already sits in, so it keeps its centre as it
     // grows or wraps, rather than being grown to the right up to the page's margin (#2581).
     // Turned text is left alone: its centre lives along its own baseline, not in page space.
@@ -866,7 +952,20 @@ pub(crate) fn rewrite_block_from(
     // Where a right-aligned line ends, from the paragraph's left edge (user space).
     let right_edge = if anchored_right { (b.rect[2] - b.rect[0]).max(0.0) } else { width };
     let movement = drawn_movement(emit.ctm, dx, dy)?;
-    let tm = emit_text_matrix(o, emit)?;
+    let tm = frame_text_matrix(first, emit, &b)?;
+    let saved_frame = if style.width.is_some() {
+        Some(HorizontalFrame::start(
+            frame[0] + along_move,
+            first.frame_origin().1 + across_move,
+            width,
+            style.vertical_frame.map(|[bottom, top]| [bottom + across_move, top + across_move]),
+            align.unwrap_or(crate::added::Align::Left),
+            Matrix(emit.ctm),
+            dir,
+        )?)
+    } else {
+        None
+    };
     let type3 = if !reuse && needs_type3(&flat) { Some(type3_font(doc, &mut fonts_res, &flat, family, bold, max_glyphs)?) } else { None };
     let source_metrics = source.metrics.as_ref().filter(|_| reuse);
     let advance = Advance {
@@ -904,6 +1003,9 @@ pub(crate) fn rewrite_block_from(
         &mut fonts_res,
     )?;
     let lead = line_lead(&b, &lines, style, &LeadScale { k, size, old_size, leading: o_state.leading });
+    if let Some(frame) = first.horizontal_frame {
+        frame.remove(&ops, &mut dropped);
+    }
     let start = last.ops.first().copied().unwrap_or(emit.bt_op);
     let split = shows_before_paragraph(&ops, emit.bt_op, start, &dropped);
     // What the text after the paragraph expects, and what is in force where the paragraph is
@@ -930,8 +1032,19 @@ pub(crate) fn rewrite_block_from(
         char_spacing: o_state.char_spacing,
         lead,
     };
-    let plan =
-        BlockPlan { block: &b, lines: &lines, style, emit, after, movement, state: o_state, tm, size, underline: style.underline == Some(true) };
+    let plan = BlockPlan {
+        block: &b,
+        lines: &lines,
+        style,
+        emit,
+        after,
+        movement,
+        state: o_state,
+        tm,
+        size,
+        underline: style.underline == Some(true),
+        saved_frame,
+    };
     let mut block_ops = block_ops(&plan, &writer, &wrapped, font.show_font.clone())?;
     let n = pdfcraft_content::num;
     block_ops.extend(after.ops().into_iter().filter(|op| !op.is("Tf") || after.font.is_some()));
@@ -1176,6 +1289,12 @@ pub(crate) fn translate_blocks(doc: &mut Document, page: usize, indexes: &[usize
     }
     if patches.len() != selected.len() {
         return Err(EditError::Invalid("a selected text operation cannot be moved".into()));
+    }
+    for frame in lines.iter().filter(|l| l.ops.iter().any(|i| selected.contains(i))).filter_map(|l| l.horizontal_frame) {
+        if let std::collections::hash_map::Entry::Vacant(entry) = patches.entry(frame.op) {
+            let original = ops.get(frame.op).ok_or_else(|| EditError::Invalid("the paragraph's frame is missing".into()))?;
+            entry.insert(vec![frame.moved(original, offset)?]);
+        }
     }
     let data = splice(&pieces, &ops, |i| patches.remove(&i).map_or((Vec::new(), true), |v| (v, false)));
     let contents = rewritten_contents(doc, &streams, data);

@@ -11,6 +11,7 @@ pub(crate) struct TextBackground {
     received: Option<u64>,
     draft_key: Option<(String, pdfcraft_engine::BlockStyle)>,
     draft_rect: Option<[f64; 4]>,
+    draft_overflow: Option<bool>,
     /// This frame's place for the textless page under the open paragraph's editor. It stays
     /// empty, so the page shows its own text, until the paragraph is changed ([`Self::reveal`]).
     slot: Option<(egui::Painter, egui::layers::ShapeIdx, egui::Shape)>,
@@ -95,7 +96,9 @@ impl TextBackground {
         if let Some(ed) = editor {
             let draft_key = (ed.text.clone(), ed.style());
             if self.draft_key.as_ref() != Some(&draft_key) {
-                self.draft_rect = doc.text_edit_layout(ed.page, ed.block, &ed.text, &draft_key.1).ok().and_then(|layout| layout.draft_rect);
+                let layout = doc.text_edit_layout(ed.page, ed.block, &ed.text, &draft_key.1).ok();
+                self.draft_rect = layout.as_ref().and_then(|layout| layout.draft_rect);
+                self.draft_overflow = layout.map(|layout| layout.overflow);
                 self.draft_key = Some(draft_key);
             }
         }
@@ -135,6 +138,10 @@ impl TextBackground {
     /// The draft's measured extent, when it was measured for paragraph `block` on `page`.
     pub fn draft_rect_for(&self, page: usize, block: usize) -> Option<[f64; 4]> {
         self.draft_rect.filter(|_| self.key.is_some_and(|(_, p, target)| (p, target) == (page, TextTarget::Block(block))))
+    }
+
+    pub(super) fn draft_overflow_for(&self, page: usize, block: usize) -> Option<bool> {
+        self.draft_overflow.filter(|_| self.key.is_some_and(|(_, p, target)| (p, target) == (page, TextTarget::Block(block))))
     }
 
     pub fn ready(&self, page: usize, block: usize) -> bool {
