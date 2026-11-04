@@ -18,24 +18,23 @@ endstream endobj
 trailer << /Root 1 0 R >>
 %%EOF";
 
-/// A fresh folder per call: tests run in parallel and must not remove each other's files.
-fn dir() -> std::path::PathBuf {
-    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let d = std::env::temp_dir().join(format!("pdfcraft-signing-ui-{}-{n}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&d);
-    std::fs::create_dir_all(&d).unwrap();
-    d
+/// A fresh folder per call, removed when the test ends (#6028): tests run in parallel and must not
+/// remove each other's files. Keep it bound (`let scratch = dir();`) while the test uses it.
+fn dir() -> pdfcraft_testkit::ScratchDir {
+    pdfcraft_testkit::ScratchDir::new("signing-ui").unwrap()
 }
 
-fn harness(dir: std::path::PathBuf) -> Harness<'static, PdfCraftApp> {
+/// The signing fixture open, exporting and saving into `dir`, which the caller keeps alive.
+fn harness(dir: &std::path::Path) -> Harness<'static, PdfCraftApp> {
+    let export_dir = dir.to_string_lossy().into_owned();
+    let save_to = dir.join("contract_signed.pdf").to_string_lossy().into_owned();
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
         app.set_option("language", "en").unwrap();
         app.open_bytes("contract.pdf", None, FIXTURE.to_vec()).expect("opens");
         app.set_option("left", "closed").unwrap();
-        app.export_dir_override = Some(dir.to_string_lossy().into_owned());
-        app.save_override = Some(dir.join("contract_signed.pdf").to_string_lossy().into_owned());
+        app.export_dir_override = Some(export_dir);
+        app.save_override = Some(save_to);
         app
     });
     h.run_steps(6);
@@ -66,7 +65,8 @@ fn field<'a>(h: &'a Harness<'static, PdfCraftApp>, label: &'a str) -> egui_kitte
 
 #[test]
 fn ctrl_alt_q_types_an_email_without_quitting() {
-    let mut h = harness(dir());
+    let scratch = dir();
+    let mut h = harness(&scratch);
     h.state_mut().execute("sign.digital");
     let (a, b) = (at(&h, 40.0, 90.0), at(&h, 220.0, 40.0));
     drag(&mut h, a, b);
@@ -96,7 +96,7 @@ fn ctrl_alt_q_types_an_email_without_quitting() {
 #[test]
 fn drawing_a_signature_creating_an_id_signing_and_trusting() {
     let dir = dir();
-    let mut h = harness(dir.clone());
+    let mut h = harness(&dir);
     create_signing_id(&mut h);
     sign_with_created_id(&mut h, &dir);
     trust_signer_and_inspect_certificate(&mut h);
@@ -287,9 +287,10 @@ fn assert_trust_and_id_persist(h: &Harness<'static, PdfCraftApp>) {
 
 #[test]
 fn certifying_without_a_visible_signature() {
-    let dir = dir().join("certify");
+    let scratch = dir();
+    let dir = scratch.join("certify");
     std::fs::create_dir_all(&dir).unwrap();
-    let mut h = harness(dir.clone());
+    let mut h = harness(&dir);
     // An ID from a file.
     let p12 = concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12");
     assert!(h.state_mut().execute("sign.certify_invisible"));
@@ -333,7 +334,8 @@ fn save_as_keeps_a_signed_document_incremental() {
     let id = s.open("contract.pdf", None, std::sync::Arc::new(FIXTURE.to_vec()), None).unwrap();
     let opts = pdfcraft_engine::SignOptions { page: 0, rect: Some([20.0, 20.0, 180.0, 60.0]), ..Default::default() };
     let signed = s.sign(id, &digital_id, opts).unwrap();
-    let out = dir().join("copy.pdf");
+    let scratch = dir();
+    let out = scratch.join("copy.pdf");
     let (bytes, cert) = (signed.to_vec(), digital_id.certificate.clone());
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
@@ -366,9 +368,10 @@ trailer << /Root 1 0 R >>
 
 #[test]
 fn clicking_an_empty_signature_field_signs_it() {
-    let dir = dir().join("field");
+    let scratch = dir();
+    let dir = scratch.join("field");
     std::fs::create_dir_all(&dir).unwrap();
-    let mut h = harness(dir.clone());
+    let mut h = harness(&dir);
     sign_the_empty_field(&mut h);
     let s = h.state();
     let sig = s.session.get(s.views[1].id).unwrap().signatures.iter().find(|x| x.field == "Approver").cloned().unwrap();
@@ -426,9 +429,10 @@ fn tip_says(h: &Harness<'static, PdfCraftApp>, text: &str) -> bool {
 /// is the tip with any tool, beside that tool's cursor.
 #[test]
 fn a_signature_badge_says_its_verdict_with_any_tool() {
-    let dir = dir().join("badge");
+    let scratch = dir();
+    let dir = scratch.join("badge");
     std::fs::create_dir_all(&dir).unwrap();
-    let mut h = harness(dir.clone());
+    let mut h = harness(&dir);
     sign_the_empty_field(&mut h);
     let verdict = {
         let s = h.state();
@@ -452,9 +456,10 @@ fn a_signature_badge_says_its_verdict_with_any_tool() {
 fn the_fill_and_sign_signature_or_an_image_shows_in_a_digital_signature() {
     use pdfcraft_ui_egui::SignGraphic;
     use pdfcraft_ui_egui::fill_sign::SavedSig;
-    let dir = dir().join("graphic");
+    let scratch = dir();
+    let dir = scratch.join("graphic");
     std::fs::create_dir_all(&dir).unwrap();
-    let mut h = harness(dir.clone());
+    let mut h = harness(&dir);
     let p12 = concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12");
     let cert = pdfcraft_engine::sign::pkcs12::open(&std::fs::read(p12).unwrap(), "test").unwrap().certificate;
     let sign_as = |h: &mut Harness<'static, PdfCraftApp>, rect: [f64; 4]| {
@@ -544,9 +549,10 @@ fn the_signature_labels_follow_the_interface_language() {
     let cert = pdfcraft_engine::sign::pkcs12::open(&std::fs::read(p12).unwrap(), "test").unwrap().certificate;
     let note = "The labels are in English: the signature's font can't draw them in this language.";
     for (code, labels, in_english) in [("de", ["(Digital", "(Grund:", "(Datum:"], false), ("zh-hans", ["(Digitally", "(Reason:", "(Date:"], true)] {
-        let dir = dir().join(code);
+        let scratch = dir();
+        let dir = scratch.join(code);
         std::fs::create_dir_all(&dir).unwrap();
-        let mut h = harness(dir.clone());
+        let mut h = harness(&dir);
         let lang = Lang::from_code(code).unwrap();
         h.state_mut().set_option("language", code).unwrap();
         h.state_mut().start_signing(0, Some([20.0, 110.0, 280.0, 180.0]), None, None);
@@ -597,7 +603,8 @@ fn os_store_identities_are_not_persisted() {
 
 #[test]
 fn windows_store_identity_does_not_ask_for_a_file_password() {
-    let mut h = harness(dir());
+    let scratch = dir();
+    let mut h = harness(&scratch);
     h.state_mut().start_signing(0, None, None, None);
     // A synthetic picker entry exercises the dialog without a real Windows identity.
     h.state_mut().digital_ids.push(pdfcraft_ui_egui::DigitalIdEntry {
@@ -627,7 +634,8 @@ fn windows_store_identity_does_not_ask_for_a_file_password() {
 /// row with "…" instead of painting them past the dialog's edge.
 #[test]
 fn long_digital_id_names_stay_inside_the_picker() {
-    let mut h = harness(dir());
+    let scratch = dir();
+    let mut h = harness(&scratch);
     h.state_mut().start_signing(0, None, None, None);
     let long = "a certificate subject much longer than the picker is wide ".repeat(4);
     h.state_mut().digital_ids.push(pdfcraft_ui_egui::DigitalIdEntry {
@@ -665,7 +673,8 @@ fn long_digital_id_names_stay_inside_the_picker() {
 /// identity Acrobat lists is missing, issue #179) but is never selected or chosen.
 #[test]
 fn an_unusable_id_is_shown_with_its_reason_and_cannot_be_chosen() {
-    let mut h = harness(dir());
+    let scratch = dir();
+    let mut h = harness(&scratch);
     // Not a `windows:` path: those are replaced by the real store listing when signing starts.
     h.state_mut().digital_ids.push(pdfcraft_ui_egui::DigitalIdEntry {
         path: "store-test:broken".into(),
@@ -704,11 +713,12 @@ fn an_unusable_id_is_shown_with_its_reason_and_cannot_be_chosen() {
 /// confirmation, and its file stays where it was.
 #[test]
 fn an_imported_digital_id_can_be_removed() {
-    let dir = dir().join("remove");
+    let scratch = dir();
+    let dir = scratch.join("remove");
     std::fs::create_dir_all(&dir).unwrap();
     let p12 = dir.join("signer.p12");
     std::fs::copy(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12"), &p12).unwrap();
-    let mut h = harness(dir.clone());
+    let mut h = harness(&dir);
     assert!(h.state_mut().execute("sign.certify_invisible"));
     h.run_steps(2);
     {
@@ -754,7 +764,7 @@ fn signing_preserves_destination_opening_attributes() {
     std::fs::write(&dest, FIXTURE).unwrap();
     xattr::set(&dest, "com.apple.LaunchServices.OpenWith", b"existing binding").unwrap();
     xattr::set(&dest, "com.apple.quarantine", b"0082;1234;Preview;").unwrap();
-    let mut h = harness(dir.clone());
+    let mut h = harness(&dir);
     let p12 = concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12");
     let cert = pdfcraft_engine::sign::pkcs12::open(&std::fs::read(p12).unwrap(), "test").unwrap().certificate;
     h.state_mut().start_signing(0, None, None, None);

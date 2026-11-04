@@ -42,6 +42,8 @@ wayland-protocols = { version = "0.32", features = ["client"] }
 raw-window-handle = "0.6"
 
 [dev-dependencies]
+# Scratch folders the single-instance tests remove when they end (#6028).
+pdfcraft-testkit = { workspace = true }
 # Waits for wgpu's adapter, device and error-scope futures in tests (already in the tree through wgpu).
 pollster = "1.0"
 
