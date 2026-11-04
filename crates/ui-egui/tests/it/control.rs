@@ -174,7 +174,6 @@ fn page_shadows_are_an_observable_app_wide_preference() {
     ok(&mut h, &c, "ui.set", json!({ "key": "show_page_edge_shadows", "value": "false" }));
     assert_eq!(ok(&mut h, &c, "ui.state", json!({}))["show_page_edge_shadows"], false);
 }
-}
 
 #[test]
 fn control_resize_reports_observed_dimensions_and_rejects_invalid_sizes() {
