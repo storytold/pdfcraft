@@ -3645,8 +3645,9 @@ fn page_shapes_decode_a_repeated_content_stream_within_the_budget() {
     assert!(budget.exhausted());
 }
 
-/// The PDF/A declaration is read from at most [`crate::appearances::MAX_XMP_BYTES`] of metadata, as
-/// preflight reads it: a field drawn with characters its font lacks decodes no more than that.
+/// The PDF/A declaration is read from metadata each filter stage of which decodes within
+/// [`crate::appearances::MAX_XMP_BYTES`], as preflight reads it: a field drawn with characters its
+/// font lacks decodes no more than that a stage.
 #[test]
 fn a_pdfa_declaration_is_read_from_metadata_within_its_cap() {
     let declared = |xmp: String| declares_pdfa(&document(&["<< /Type /Catalog /Metadata 2 0 R >>".into(), raw_stream(&xmp)]));
@@ -3654,6 +3655,16 @@ fn a_pdfa_declaration_is_read_from_metadata_within_its_cap() {
     assert!(declared(pdfa(1 << 20)));
     assert!(!declared(pdfa(crate::appearances::MAX_XMP_BYTES)), "metadata past the cap declares nothing");
     assert!(!declared("<x:xmpmeta><dc:title>pdfaid</dc:title></x:xmpmeta>".into()), "metadata without pdfaid:part declares nothing");
+    // 3.5 MiB stored as hex, then Flate: its stages decode 7 and 3.5 MiB, each within the cap.
+    let xmp = pdfa(7 << 19);
+    let hex: Vec<u8> = xmp.bytes().flat_map(|b| [b"0123456789ABCDEF"[usize::from(b >> 4)], b"0123456789ABCDEF"[usize::from(b & 15)]]).collect();
+    let mut stream = pdfcraft_cos::Stream::flate(pdfcraft_cos::Dict::new(), &hex);
+    stream.dict.set(b"Filter".to_vec(), Object::Array(vec![Object::name("FlateDecode"), Object::name("ASCIIHexDecode")]));
+    let mut doc = Document::new_empty();
+    let metadata = doc.add(Object::Stream(stream));
+    let catalog = doc.add(Object::Dict([(b"Metadata".to_vec(), Object::Ref(metadata))].into_iter().collect()));
+    doc.trailer_mut().set(b"Root".to_vec(), Object::Ref(catalog));
+    assert!(declares_pdfa(&doc), "metadata through a chain of filters declares PDF/A, as preflight reads it");
 }
 
 /// A widget listed many times, by one field's `/Kids` or by a `/Kids` array several fields share,

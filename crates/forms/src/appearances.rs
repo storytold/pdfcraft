@@ -1,6 +1,6 @@
 use super::read::{acroform, fields};
 use super::values::merged_appearance;
-use super::{DecodeBudget, Dict, Document, FieldKind, ObjRef, Object, Widget, appearance, name_bytes};
+use super::{Dict, Document, FieldKind, ObjRef, Object, Widget, appearance, name_bytes};
 
 /// Whether the form asks viewers to draw its fields' appearances themselves (`/NeedAppearances`).
 pub fn need_appearances(doc: &Document) -> bool {
@@ -212,18 +212,21 @@ impl FieldAppearanceCache {
     }
 }
 
-/// The most of the XMP metadata stream decoded to find a PDF/A declaration, as preflight's
-/// Standards panel reads it: past it, metadata declares nothing there either.
+/// The most each filter stage of the XMP metadata stream may decode for its PDF/A declaration to
+/// be read, as preflight's Standards panel reads it: past it, metadata declares nothing there
+/// either.
 pub(crate) const MAX_XMP_BYTES: usize = 8 << 20;
 
-/// Whether the document's XMP metadata declares PDF/A conformance (`pdfaid:part`). Metadata that
-/// decodes past [`MAX_XMP_BYTES`] doesn't.
+/// Whether the document's XMP metadata declares PDF/A conformance (`pdfaid:part`). Metadata a
+/// filter stage of which decodes past [`MAX_XMP_BYTES`] doesn't.
 pub fn declares_pdfa(doc: &Document) -> bool {
     let Some(root) = doc.root() else { return false };
     let Some(m) = doc.get(root).as_dict().and_then(|c| c.get(b"Metadata").cloned()) else { return false };
     let m = doc.resolve(&m);
     match &*m {
-        Object::Stream(s) => DecodeBudget::new(MAX_XMP_BYTES, 0).decode(s).is_ok_and(|b| b.windows(11).any(|w| w == b"pdfaid:part")),
+        // Not a `DecodeBudget`, which counts every stage against one allowance: preflight bounds
+        // each stage, and the two must agree on metadata stored through a chain of filters.
+        Object::Stream(s) => s.decoded_within(MAX_XMP_BYTES).is_ok_and(|b| b.windows(11).any(|w| w == b"pdfaid:part")),
         _ => false,
     }
 }

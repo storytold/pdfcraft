@@ -156,7 +156,11 @@ pub(crate) fn shapes_within(doc: &Document, page: usize, budget: &mut DecodeBudg
     let mut subpaths: Vec<DetectionPath> = Vec::new();
     let mut path = DetectionPath::default();
     let mut cur: Option<[f64; 2]> = None;
-    for op in Pieces::join(&pieces).parse().ops {
+    let joined = Pieces::join(&pieces);
+    drop(pieces);
+    // An operator at a time: dense content (`n n n …`) parsed whole holds about 80 bytes for each
+    // byte it decoded.
+    for op in pdfcraft_content::ops(joined.data()) {
         match op.op.as_slice() {
             b"q" => stack.push(ctm),
             b"Q" => ctm = stack.pop().unwrap_or(ctm),
