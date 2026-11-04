@@ -18,7 +18,7 @@ fn be32(out: &mut Vec<u8>, n: u32) {
 }
 
 /// A TrueType font whose (1, 0) and (3, 0) subtables disagree about the code `A`.
-fn disagreeing_font() -> Vec<u8> {
+pub(super) fn disagreeing_font() -> Vec<u8> {
     // Glyph 2: one contour, the square 0..1000 on both axes (glyph 0 and 1 are empty).
     let mut square = Vec::new();
     for n in [1i16, 0, 0, 1000, 1000] {
@@ -119,7 +119,7 @@ fn out16(out: &mut Vec<u8>, n: i16) {
 
 /// A 40 × 40 pt page that shows `text` at 30 pt from (5, 5) in the font, marked symbolic and
 /// with no `/Encoding`, as SAS writes it.
-fn page_with_symbolic_font(font: &[u8], text: &str) -> Vec<u8> {
+pub(super) fn page_with_symbolic_font(font: &[u8], text: &str) -> Vec<u8> {
     let content = format!("BT /F1 30 Tf 5 5 Td ({text}) Tj ET").into_bytes();
     let objects: Vec<Vec<u8>> = vec![
         b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
