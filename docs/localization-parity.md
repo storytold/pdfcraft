@@ -8,7 +8,7 @@ add a language: [localization.md](localization.md). Summary in [ROADMAP.md](../R
 
 ## How this was measured
 
-- **Strings translated** is measured: the catalogs in `crates/ui-egui/src/i18n/<code>.tsv`, counted
+- **Strings translated** is measured: the catalogs in `crates/ui-egui/src/i18n/<code>.tsv` (since moved to craft-i18n's `locales/<code>/`), counted
   as distinct `(context, English)` keys with a non-empty translation. The denominator is the union of
   keys across all catalogs, counting language-specific context rows such as `theme`/`Appearance`.
   **That union is a moving target**: every change that adds a string widens it, so a count is only
@@ -81,8 +81,8 @@ help/docs polish (catalog and script work are already done), not missing UI stri
 | Romanian | `ro` | 2,798 entries (every current key) | partial; AI-assisted, not yet reviewed line by line by a native speaker | no |
 | Norwegian Bokmål | `nb` | 2,707 entries | partial; native-speaker terminology review by the contributor ([#1836](https://github.com/storytold/pdfcraft/pull/1836)), not yet line by line | yes |
 | Persian | `fa` | 2,785 entries (all but 13 keys of the current 2,798-key union) | partial; AI-assisted, not yet reviewed line by line by a native speaker | no |
-| Bengali | `bn` | 2,898 entries (0 missing in `cargo xtask i18n-report` on 2026-11-03) | partial; AI-assisted, not yet reviewed by a native speaker. No craft-fonts face covers Bengali: an installed one (Nirmala UI, Bangla Sangam MN, Noto Sans Bengali) draws it on desktop, and the web build shows boxes | no |
-| Urdu | `ur` | 2,898 entries (0 missing in `cargo xtask i18n-report` on 2026-11-03) | partial; right to left like Arabic and drawn with its craft-fonts face (Naskh, not Nastaliq); AI-assisted, not yet reviewed by a native speaker | no |
+| Bengali | `bn` | craft-i18n `locales/bn/pdfcraft.tsv` at the pinned `craft-i18n.rev`, every key the translation gaps report counted on 2026-11-03 | partial; AI-assisted, not yet reviewed by a native speaker. No craft-fonts face covers Bengali: an installed one (Nirmala UI, Bangla Sangam MN, Noto Sans Bengali) draws it on desktop, and the web build shows boxes | no |
+| Urdu | `ur` | craft-i18n `locales/ur/pdfcraft.tsv` at the pinned `craft-i18n.rev`, every key the translation gaps report counted on 2026-11-03 | partial; right to left like Arabic and drawn with its craft-fonts face (Naskh, not Nastaliq); AI-assisted, not yet reviewed by a native speaker | no |
 
 **22 other languages** ship (36 catalogs plus English = **37** interface languages in Preferences).
 The entry counts without percentages are as of 2026-10-25; they are not percentages of the older 2,143-key snapshot above. Their presence does not imply a detailed linguistic or runtime review.
@@ -92,7 +92,8 @@ Acrobat languages PdfCraft lacks: Danish, Dutch, Swedish, Hebrew. Vietnamese is 
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-03 | patch | Bengali and Urdu gained the 44 strings the translation gaps report listed (2,898 entries each, 0 missing). |
+| 2026-11-04 | patch | Bengali and Urdu registered over the craft-i18n catalogs (`locales/bn`, `locales/ur` at the pinned `craft-i18n.rev`) now that the interface catalogs live there; nothing in this repository holds their rows. |
+| 2026-11-03 | patch | Bengali and Urdu gained the 46 strings the translation gaps report listed (2,898 entries each, 0 missing). |
 | 2026-11-02 | minor | Added Bengali (`bn`) and Urdu (`ur`), 2,852 entries each (every key of that date's union); Urdu is right to left with the Arabic face, Bengali draws with an installed face until craft-fonts has one; AI-assisted, not native-reviewed |
 | 2026-10-25 | minor | Arabic current state corrected: catalogs stay logical, Arabic/Kurdish labels take an explicit RTL direction, and stock chrome mirrors; native/browser RTL input, IME and complex workflows remain unqualified. Native Simplified Chinese uses LXGW WenKai Lite; the web build still has no Hans face and the release-pinned craft-fonts still has no Telugu face. Scores and estimates unchanged |
 | 2026-10-25 | minor | Added Persian (`fa`, 2,785 entries, all but 13 of the current 2,798-key union); right-to-left like Arabic and Kurdish, with logical entries reordered by egui 0.37's epaint; AI-assisted, not yet native-reviewed |
