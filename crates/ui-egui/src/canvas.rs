@@ -1185,7 +1185,16 @@ impl DocView {
                         let y1 = (y + band_y).min(1.0);
                         ((y1 - band_y).max(0.0), y1)
                     }
-                    None => (0.0, band_y),
+                    None => {
+                        let preserved = self.goto_point.as_ref().filter(|(p, ..)| *p == page).and_then(|(_, _, y, _)| *y);
+                        match preserved {
+                            Some(y) => {
+                                let y1 = (y + band_y).min(1.0);
+                                ((y1 - band_y).max(0.0), y1)
+                            }
+                            None => (0.0, band_y),
+                        }
+                    }
                 };
                 [x0, y0, x1, y1]
             }

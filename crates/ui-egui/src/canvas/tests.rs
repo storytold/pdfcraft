@@ -2454,5 +2454,20 @@ fn dest_indicator_rect_covers_each_destination_view() {
     let fitv_rot = rotated.dest_indicator_rect(0, DestView::FitV { left: Some(75.0) }, &info).expect("rotated fitv rect");
     assert!((fitv_rot[0] - 0.0).abs() < 1e-4 && (fitv_rot[1] - 0.25).abs() < 1e-4 && (fitv_rot[2] - 1.0).abs() < 1e-4);
 
+    // Null-top XYZ destination falls back to top edge when no position is preserved,
+    // and uses the resolved position when goto_point preserved it.
+    let v_unrotated = view(1, PageLayout::Single, true);
+    let xyz_null_top =
+        v_unrotated.dest_indicator_rect(0, DestView::Xyz { left: Some(150.0), top: None, zoom: None }, &info).expect("xyz null top rect");
+    assert_eq!(xyz_null_top[1], 0.0);
+    assert!((xyz_null_top[3] - 24.0 / 400.0).abs() < 1e-4);
+
+    let mut v_with_preserved = view(1, PageLayout::Single, true);
+    v_with_preserved.goto_point = Some((0, Some(0.5), Some(0.6), egui::vec2(0.0, 0.0)));
+    let xyz_preserved =
+        v_with_preserved.dest_indicator_rect(0, DestView::Xyz { left: Some(150.0), top: None, zoom: None }, &info).expect("xyz preserved top rect");
+    assert!((xyz_preserved[1] - 0.6).abs() < 1e-4);
+    assert!((xyz_preserved[3] - 0.66).abs() < 1e-4);
+
     assert!(rotated.dest_indicator_rect(5, DestView::Top, &info).is_none());
 }
