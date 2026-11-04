@@ -1294,6 +1294,206 @@ fn use_system_title_bar_swaps_the_header_bar_for_the_window_frame() {
     assert_eq!(decorations(&h), None);
 }
 
+fn window_command(h: &Harness<'static, PdfCraftApp>, command: &egui::ViewportCommand) -> bool {
+    h.output().viewport_output.values().any(|v| v.commands.contains(command))
+}
+
+fn title_bar_event(h: &mut Harness<'static, PdfCraftApp>, event: egui::Event, elapsed: f64) {
+    let time = h.ctx.input(|i| i.time) + elapsed;
+    h.input_mut().time = Some(time);
+    h.input_mut().events.push(event);
+    let ctx = h.ctx.clone();
+    pdfcraft_ui_egui::window_controls::release_after_desktop_grab(&ctx, h.input_mut());
+    h.step();
+}
+
+#[test]
+fn title_bar_starts_window_drag_on_the_primary_press() {
+    let mut h = harness(|app| app.window_controls = Some(Default::default()));
+    let pos = egui::pos2(700.0, 18.0);
+    h.event(egui::Event::PointerMoved(pos));
+    h.step();
+    h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Secondary, pressed: true, modifiers: egui::Modifiers::NONE });
+    h.step();
+    assert!(!window_command(&h, &egui::ViewportCommand::StartDrag));
+    h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Secondary, pressed: false, modifiers: egui::Modifiers::NONE });
+    h.step();
+    h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
+    h.step();
+    assert!(window_command(&h, &egui::ViewportCommand::StartDrag), "the desktop must receive the grab before the first mouse movement");
+    h.event(egui::Event::PointerMoved(pos + egui::vec2(10.0, 5.0)));
+    h.step();
+    assert!(!window_command(&h, &egui::ViewportCommand::StartDrag), "one native grab per press");
+}
+
+#[test]
+fn title_bar_double_click_still_maximizes() {
+    // kittest does not call eframe's raw_input_hook. Include the release repair used by
+    // the desktop host, since starting a native grab must not swallow the second click.
+    let send = |h: &mut Harness<'static, PdfCraftApp>, event| title_bar_event(h, event, 0.05);
+    for (maximized, desktop_kept_first_release) in [(false, false), (false, true), (true, false), (true, true)] {
+        let mut h = harness(|app| app.window_controls = Some(Default::default()));
+        h.input_mut().viewports.get_mut(&egui::ViewportId::ROOT).unwrap().maximized = Some(maximized);
+        let pos = egui::pos2(700.0, 18.0);
+        h.event(egui::Event::PointerMoved(pos));
+        h.step();
+        for click in 0..2 {
+            send(&mut h, egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
+            if cfg!(target_os = "windows") {
+                assert_eq!(
+                    window_command(&h, &egui::ViewportCommand::StartDrag),
+                    click == 0,
+                    "only the first press may enter a native move loop; maximized: {maximized}, kept release: {desktop_kept_first_release}"
+                );
+            }
+            if click == 0 && desktop_kept_first_release {
+                // The compositor kept the release. Let the host supply it on the next frame.
+                let time = h.ctx.input(|i| i.time) + 0.05;
+                h.input_mut().time = Some(time);
+                let ctx = h.ctx.clone();
+                pdfcraft_ui_egui::window_controls::release_after_desktop_grab(&ctx, h.input_mut());
+                h.step();
+            } else {
+                send(
+                    &mut h,
+                    egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE },
+                );
+            }
+        }
+        assert!(window_command(&h, &egui::ViewportCommand::Maximized(!maximized)), "desktop kept first release: {desktop_kept_first_release}");
+    }
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn title_bar_a_late_or_distant_press_starts_another_drag() {
+    for (delay, offset) in [(0.35, egui::Vec2::ZERO), (0.05, egui::vec2(30.0, 0.0))] {
+        let mut h = harness(|app| app.window_controls = Some(Default::default()));
+        let pos = egui::pos2(700.0, 18.0);
+        h.event(egui::Event::PointerMoved(pos));
+        h.step();
+        h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
+        h.step();
+        assert!(window_command(&h, &egui::ViewportCommand::StartDrag));
+        h.input_mut().events.push(egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+        let ctx = h.ctx.clone();
+        pdfcraft_ui_egui::window_controls::release_after_desktop_grab(&ctx, h.input_mut());
+        h.step();
+        let time = h.ctx.input(|i| i.time) + delay;
+        h.input_mut().time = Some(time);
+        h.input_mut().events.push(egui::Event::PointerMoved(pos + offset));
+        h.input_mut().events.push(egui::Event::PointerButton {
+            pos: pos + offset,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: egui::Modifiers::NONE,
+        });
+        let ctx = h.ctx.clone();
+        pdfcraft_ui_egui::window_controls::release_after_desktop_grab(&ctx, h.input_mut());
+        h.step();
+        assert!(window_command(&h, &egui::ViewportCommand::StartDrag), "delay: {delay}, offset: {offset:?}");
+    }
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn title_bar_a_deferred_press_can_become_a_drag() {
+    for (elapsed, movement) in [(0.05, egui::vec2(30.0, 0.0)), (0.35, egui::Vec2::ZERO)] {
+        let mut h = harness(|app| app.window_controls = Some(Default::default()));
+        let pos = egui::pos2(700.0, 18.0);
+        let button =
+            |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+        title_bar_event(&mut h, egui::Event::PointerMoved(pos), 0.05);
+        title_bar_event(&mut h, button(pos, true), 0.05);
+        title_bar_event(&mut h, button(pos, false), 0.05);
+        title_bar_event(&mut h, button(pos, true), 0.05);
+        assert!(!window_command(&h, &egui::ViewportCommand::StartDrag), "second press can still be a double-click");
+        title_bar_event(&mut h, egui::Event::PointerMoved(pos + movement), elapsed);
+        assert!(window_command(&h, &egui::ViewportCommand::StartDrag), "elapsed: {elapsed}, movement: {movement:?}");
+        title_bar_event(&mut h, button(pos + movement, false), 0.02);
+        assert!(!window_command(&h, &egui::ViewportCommand::Maximized(true)), "a promoted native drag cannot also maximize");
+    }
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn title_bar_a_native_move_does_not_count_as_a_click() {
+    let mut h = harness(|app| app.window_controls = Some(Default::default()));
+    let pos = egui::pos2(700.0, 18.0);
+    let button = |pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+    let outer = egui::Rect::from_min_size(egui::pos2(100.0, 100.0), egui::vec2(1400.0, 900.0));
+    h.input_mut().viewports.get_mut(&egui::ViewportId::ROOT).unwrap().outer_rect = Some(outer);
+    title_bar_event(&mut h, egui::Event::PointerMoved(pos), 0.05);
+    title_bar_event(&mut h, button(true), 0.05);
+    assert!(window_command(&h, &egui::ViewportCommand::StartDrag));
+    // Native movement keeps the grab point at the same client coordinate. Only the viewport
+    // position says this was a drag, even if the repaired release still looks like a click.
+    h.input_mut().viewports.get_mut(&egui::ViewportId::ROOT).unwrap().outer_rect = Some(outer.translate(egui::vec2(100.0, 50.0)));
+    title_bar_event(&mut h, button(false), 0.05);
+    title_bar_event(&mut h, button(true), 0.05);
+    assert!(window_command(&h, &egui::ViewportCommand::StartDrag), "a quick successive native drag starts on its first movement-free press");
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn title_bar_two_complete_clicks_in_one_frame_maximize_without_a_grab() {
+    let mut h = harness(|app| app.window_controls = Some(Default::default()));
+    let pos = egui::pos2(700.0, 18.0);
+    title_bar_event(&mut h, egui::Event::PointerMoved(pos), 0.05);
+    for pressed in [true, false, true, false] {
+        h.input_mut().events.push(egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        });
+    }
+    h.step();
+    assert!(!window_command(&h, &egui::ViewportCommand::StartDrag));
+    assert!(window_command(&h, &egui::ViewportCommand::Maximized(true)));
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn title_bar_a_repaired_release_and_second_press_can_share_a_frame() {
+    let mut h = harness(|app| app.window_controls = Some(Default::default()));
+    let pos = egui::pos2(700.0, 18.0);
+    let button = |pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+    title_bar_event(&mut h, egui::Event::PointerMoved(pos), 0.05);
+    title_bar_event(&mut h, button(true), 0.05);
+    // No physical release reaches the app before this second press.
+    title_bar_event(&mut h, button(true), 0.05);
+    assert!(!window_command(&h, &egui::ViewportCommand::StartDrag));
+    title_bar_event(&mut h, button(false), 0.05);
+    assert!(window_command(&h, &egui::ViewportCommand::Maximized(true)));
+}
+
+#[test]
+fn title_bar_children_do_not_start_window_drags() {
+    let mut h = three_tab_harness();
+    h.state_mut().window_controls = Some(Default::default());
+    h.run_steps(3);
+    for label in ["first.pdf", "Maximize"] {
+        let pos = h.get_by_label(label).rect().center();
+        h.event(egui::Event::PointerMoved(pos));
+        h.step();
+        h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
+        h.step();
+        assert!(!window_command(&h, &egui::ViewportCommand::StartDrag), "press on {label}");
+        h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
+        h.step();
+        assert!(!window_command(&h, &egui::ViewportCommand::StartDrag), "release on {label}");
+        if label == "Maximize" {
+            assert!(window_command(&h, &egui::ViewportCommand::Maximized(true)));
+        }
+    }
+}
+
 /// Preferences ▸ Animation effects: the system's animation setting until the user chooses On or
 /// Off. The choice is saved, and settings holding anything else leave it alone.
 #[test]

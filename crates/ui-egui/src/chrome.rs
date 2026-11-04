@@ -27,6 +27,119 @@ const TAB_STRIP: f32 = 38.0;
 const TAB_HEIGHT: f32 = 30.0;
 const STRIP_BUTTON: f32 = 28.0;
 
+#[cfg(any(target_os = "windows", test))]
+#[derive(Clone, Copy, Default)]
+struct TitleBarClicks {
+    // Native movement can finish after a repaired release; retain the window position too.
+    previous: Option<(f64, egui::Pos2, Option<egui::Pos2>)>,
+    deferred_press: bool,
+    captured_press: bool,
+    native_origin: Option<egui::Pos2>,
+}
+
+/// Classify the second primary press before entering a native move loop. A maximize/restore
+/// must belong to a press that did not start that loop; egui's double-click flag arrives too late.
+#[cfg(any(target_os = "windows", test))]
+fn title_bar_input(ui: &egui::Ui, title: &egui::Response) {
+    let id = title.id.with("clicks");
+    let (focused, outer_pos) = ui.input(|i| (i.focused, i.viewport().outer_rect.map(|r| r.min)));
+    if !focused {
+        ui.data_mut(|d| d.remove_temp::<TitleBarClicks>(id));
+        return;
+    }
+    let mut clicks = ui.data(|d| d.get_temp::<TitleBarClicks>(id)).unwrap_or_default();
+    let (delay, distance) = ui.ctx().options(|o| (o.input_options.max_double_click_delay, o.input_options.max_click_dist));
+    let (time, pressed, down, released, any_pressed, press_pos, release_pos, press_count, release_count) = ui.input(|i| {
+        let position = |pressed| {
+            i.events.iter().rev().find_map(|event| match event {
+                egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: p, .. } if *p == pressed => Some(*pos),
+                _ => None,
+            })
+        };
+        let count = |pressed| {
+            i.events
+                .iter()
+                .filter(|event| matches!(event, egui::Event::PointerButton { button: egui::PointerButton::Primary, pressed: p, .. } if *p == pressed))
+                .take(3)
+                .count()
+        };
+        (
+            i.time,
+            i.pointer.primary_pressed(),
+            i.pointer.primary_down(),
+            i.pointer.primary_released(),
+            i.pointer.any_pressed(),
+            position(true),
+            position(false),
+            count(true),
+            count(false),
+        )
+    });
+    let near_previous = |clicks: &TitleBarClicks, pos: Option<egui::Pos2>| {
+        clicks.previous.zip(pos).is_some_and(|((last, previous, window), pos)| {
+            time - last < delay && previous.distance_sq(pos) < distance * distance && window.zip(outer_pos).is_none_or(|(from, to)| from == to)
+        })
+    };
+    let finish_click = |clicks: &mut TitleBarClicks| {
+        // Native movement keeps the client pointer at its grab point; the window position
+        // distinguishes that drag from a stationary click when the release is repaired.
+        let moved = clicks.native_origin.zip(outer_pos).is_some_and(|(from, to)| from != to);
+        let maximize = clicks.deferred_press && near_previous(clicks, release_pos) && !moved;
+        clicks.previous = if maximize || moved { None } else { release_pos.map(|pos| (time, pos, outer_pos)) };
+        clicks.deferred_press = false;
+        clicks.captured_press = false;
+        clicks.native_origin = None;
+        maximize
+    };
+    let clicked = title.clicked_by(egui::PointerButton::Primary);
+    let mut maximize = false;
+    // A release kept by the desktop can be repaired into the same frame as the next press.
+    if clicked && pressed && down {
+        maximize |= finish_click(&mut clicks);
+    }
+    if pressed {
+        if title.is_pointer_button_down_on() || clicked {
+            clicks.deferred_press = near_previous(&clicks, press_pos);
+            clicks.captured_press = title.is_pointer_button_down_on();
+            if title.is_pointer_button_down_on() && !clicks.deferred_press {
+                clicks.native_origin = outer_pos;
+                window_controls::desktop_grab(ui.ctx(), egui::ViewportCommand::StartDrag);
+            }
+        } else {
+            clicks = TitleBarClicks::default();
+        }
+    } else if any_pressed {
+        clicks = TitleBarClicks::default();
+    }
+    // A prospective double-click can become a drag or outlive the double-click interval.
+    // Once native movement starts, its release must never also maximize the window.
+    clicks.captured_press |= down && title.is_pointer_button_down_on();
+    if clicks.deferred_press && down && clicks.captured_press && !near_previous(&clicks, ui.input(|i| i.pointer.interact_pos())) {
+        clicks = TitleBarClicks::default();
+        clicks.native_origin = outer_pos;
+        window_controls::desktop_grab(ui.ctx(), egui::ViewportCommand::StartDrag);
+    }
+    if clicked && !(pressed && down) {
+        maximize |= finish_click(&mut clicks);
+    }
+    // A repaired release may be followed by the physical release from Windows. Only
+    // cancel an active gesture; an already-completed click must keep its history.
+    if released && !clicked && (clicks.captured_press || clicks.deferred_press || clicks.native_origin.is_some()) {
+        clicks = TitleBarClicks::default();
+    }
+    // A stalled frame may receive two complete clicks. These already-released presses never
+    // entered a native move loop, so egui's completed double-click is safe to apply directly.
+    if pressed && !down && press_count == 2 && release_count == 2 && title.double_clicked() {
+        clicks = TitleBarClicks::default();
+        maximize = true;
+    }
+    ui.data_mut(|d| d.insert_temp(id, clicks));
+    if maximize {
+        let max = ui.ctx().input(|i| i.viewport().maximized.unwrap_or(false));
+        ui.ctx().send_viewport_cmd(egui::ViewportCommand::Maximized(!max));
+    }
+}
+
 /// Draw the window's tab strip: home and open controls, shrinkable and scrollable document tabs with drag
 /// reordering, and platform window controls.
 pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
@@ -41,13 +154,23 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
         .frame(egui::Frame::NONE.fill(t.titlebar).inner_margin(egui::Margin { left, right: 10, top: 0, bottom: 0 }))
         .show(ui, |ui| {
             let full = ui.max_rect();
-            let drag = ui.interact(full, ui.scope_id().with("titledrag"), Sense::click_and_drag());
-            if drag.drag_started() {
-                window_controls::desktop_grab(ui.ctx(), egui::ViewportCommand::StartDrag);
-            }
-            if drag.double_clicked() {
-                let max = ui.ctx().input(|i| i.viewport().maximized.unwrap_or(false));
-                ui.ctx().send_viewport_cmd(egui::ViewportCommand::Maximized(!max));
+            // The desktop handles movement from the press, without egui's drag threshold.
+            // Sense only clicks: sensing drags too makes the background a potential drag
+            // target even when a child button owns the click. Clicks retain double-clicks.
+            let title = ui.interact(full, ui.scope_id().with("titledrag"), Sense::click());
+            #[cfg(target_os = "windows")]
+            title_bar_input(ui, &title);
+            #[cfg(not(target_os = "windows"))]
+            {
+                // Preserve the existing compositor behavior. In particular Wayland has no
+                // outer window position with which to distinguish native movement from clicks.
+                if title.is_pointer_button_down_on() && ui.input(|i| i.pointer.primary_pressed()) {
+                    window_controls::desktop_grab(ui.ctx(), egui::ViewportCommand::StartDrag);
+                }
+                if title.double_clicked() {
+                    let max = ui.ctx().input(|i| i.viewport().maximized.unwrap_or(false));
+                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::Maximized(!max));
+                }
             }
             // GNOME on Wayland: the strip is the header bar, with the window buttons at its ends.
             let fullscreen = ui.ctx().input(|i| i.viewport().fullscreen.unwrap_or(false));
@@ -806,6 +929,141 @@ fn rail_view_menu(ui: &mut egui::Ui, view: &mut DocView) -> Option<&'static str>
         ui.close();
     }
     picked
+}
+
+#[cfg(test)]
+mod title_bar_tests {
+    #[test]
+    fn a_late_physical_release_does_not_erase_the_repaired_title_click() {
+        let ctx = egui::Context::default();
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 900.0));
+        let pos = egui::pos2(700.0, 18.0);
+        let button = |pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+        let frame = |time, events| {
+            let mut raw = egui::RawInput { time: Some(time), screen_rect: Some(screen), focused: true, events, ..Default::default() };
+            crate::window_controls::release_after_desktop_grab(&ctx, &mut raw);
+            let out = ctx.run_ui(raw, |ui| {
+                let title = ui.interact(
+                    egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 38.0)),
+                    egui::Id::unique("late_title_release"),
+                    egui::Sense::click(),
+                );
+                super::title_bar_input(ui, &title);
+            });
+            let commands: Vec<_> = out.viewport_output.values().flat_map(|v| v.commands.iter().cloned()).collect();
+            out.drop_without_applying_deltas();
+            commands
+        };
+        frame(0.0, vec![]);
+        assert!(frame(0.05, vec![egui::Event::PointerMoved(pos), button(true)]).contains(&egui::ViewportCommand::StartDrag));
+        frame(0.08, vec![]); // The repair releases the press before Windows returns its release.
+        frame(0.10, vec![button(false)]);
+        assert!(!frame(0.14, vec![button(true)]).contains(&egui::ViewportCommand::StartDrag));
+        assert!(frame(0.17, vec![button(false)]).contains(&egui::ViewportCommand::Maximized(true)));
+    }
+
+    #[test]
+    fn a_canceled_second_title_press_clears_double_click_history() {
+        let ctx = egui::Context::default();
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 900.0));
+        let pos = egui::pos2(700.0, 18.0);
+        let button = |pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+        let frame = |time, events| {
+            let mut raw = egui::RawInput { time: Some(time), screen_rect: Some(screen), focused: true, events, ..Default::default() };
+            crate::window_controls::release_after_desktop_grab(&ctx, &mut raw);
+            let out = ctx.run_ui(raw, |ui| {
+                let title = ui.interact(
+                    egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 38.0)),
+                    egui::Id::unique("canceled_title_click"),
+                    egui::Sense::click(),
+                );
+                super::title_bar_input(ui, &title);
+            });
+            let commands: Vec<_> = out.viewport_output.values().flat_map(|v| v.commands.iter().cloned()).collect();
+            out.drop_without_applying_deltas();
+            commands
+        };
+        frame(0.0, vec![]);
+        assert!(frame(0.05, vec![egui::Event::PointerMoved(pos), button(true)]).contains(&egui::ViewportCommand::StartDrag));
+        frame(0.08, vec![]); // The repair releases the press before Windows returns its release.
+        frame(0.10, vec![button(false)]);
+        assert!(!frame(0.14, vec![button(true)]).contains(&egui::ViewportCommand::StartDrag));
+        let outside = egui::pos2(700.0, 200.0);
+        let canceled = frame(
+            0.17,
+            vec![
+                egui::Event::PointerMoved(outside),
+                egui::Event::PointerButton { pos: outside, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE },
+            ],
+        );
+        assert!(!canceled.contains(&egui::ViewportCommand::Maximized(true)));
+        assert!(frame(0.20, vec![egui::Event::PointerMoved(pos), button(true)]).contains(&egui::ViewportCommand::StartDrag));
+    }
+
+    #[test]
+    fn a_native_move_after_the_repaired_release_does_not_become_a_double_click() {
+        let ctx = egui::Context::default();
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 900.0));
+        let outer = std::cell::Cell::new(egui::pos2(100.0, 100.0));
+        let pos = egui::pos2(700.0, 18.0);
+        let button = |pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+        let frame = |time, events| {
+            let mut raw = egui::RawInput { time: Some(time), screen_rect: Some(screen), focused: true, events, ..Default::default() };
+            raw.viewports.get_mut(&egui::ViewportId::ROOT).unwrap().outer_rect = Some(egui::Rect::from_min_size(outer.get(), screen.size()));
+            crate::window_controls::release_after_desktop_grab(&ctx, &mut raw);
+            let out = ctx.run_ui(raw, |ui| {
+                let title = ui.interact(
+                    egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 38.0)),
+                    egui::Id::unique("late_native_title_move"),
+                    egui::Sense::click(),
+                );
+                super::title_bar_input(ui, &title);
+            });
+            let commands: Vec<_> = out.viewport_output.values().flat_map(|v| v.commands.iter().cloned()).collect();
+            out.drop_without_applying_deltas();
+            commands
+        };
+        frame(0.0, vec![]);
+        assert!(frame(0.05, vec![egui::Event::PointerMoved(pos), button(true)]).contains(&egui::ViewportCommand::StartDrag));
+        frame(0.08, vec![]); // The repair releases the press before Windows returns its release.
+        outer.set(egui::pos2(200.0, 150.0)); // Native movement completes after the repair.
+        frame(0.10, vec![button(false)]);
+        assert!(frame(0.14, vec![button(true)]).contains(&egui::ViewportCommand::StartDrag));
+        assert!(!frame(0.17, vec![button(false)]).contains(&egui::ViewportCommand::Maximized(true)));
+    }
+
+    #[test]
+    fn native_title_bar_double_click_does_not_enter_two_move_loops() {
+        for kept_release in [false, true] {
+            let ctx = egui::Context::default();
+            let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 900.0));
+            let pos = egui::pos2(700.0, 18.0);
+            let button =
+                |pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+            let frame = |time, events| {
+                let mut raw = egui::RawInput { time: Some(time), screen_rect: Some(rect), focused: true, events, ..Default::default() };
+                crate::window_controls::release_after_desktop_grab(&ctx, &mut raw);
+                let out = ctx.run_ui(raw, |ui| {
+                    let response = ui.interact(
+                        egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 38.0)),
+                        egui::Id::unique("native_title_click"),
+                        egui::Sense::click(),
+                    );
+                    super::title_bar_input(ui, &response);
+                });
+                let commands: Vec<_> = out.viewport_output.values().flat_map(|v| v.commands.iter().cloned()).collect();
+                out.drop_without_applying_deltas();
+                commands
+            };
+            frame(0.0, vec![]);
+            assert!(frame(0.05, vec![egui::Event::PointerMoved(pos), button(true)]).contains(&egui::ViewportCommand::StartDrag));
+            if !kept_release {
+                frame(0.08, vec![button(false)]);
+            }
+            assert!(!frame(0.14, vec![button(true)]).contains(&egui::ViewportCommand::StartDrag), "kept release: {kept_release}");
+            assert!(frame(0.17, vec![button(false)]).contains(&egui::ViewportCommand::Maximized(true)));
+        }
+    }
 }
 
 #[cfg(test)]

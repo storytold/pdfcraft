@@ -233,8 +233,18 @@ fn main() -> eframe::Result {
     let may_hand_off = startup.may_hand_off();
     let startup::Arguments { files, options, control_file, create_images, two_paged, .. } = startup;
     let integrated = cfg!(target_os = "macos");
-    // GNOME on Wayland leaves the window frame to the app (src/decorations.rs).
-    let window_controls = if cfg!(any(target_os = "macos", target_os = "windows")) { None } else { decorations::app_drawn() };
+    // GNOME on Wayland leaves the window frame to the app (src/decorations.rs). Windows' own
+    // title bar stays white in the dark theme, so the app draws the tab strip as the title bar.
+    let titlebar = std::env::var("PDFCRAFT_TITLEBAR").ok();
+    let force_app_titlebar = titlebar.as_deref().map(str::trim) == Some("app");
+    let window_controls = if cfg!(target_os = "macos") {
+        None
+    } else if cfg!(target_os = "windows") {
+        // `PDFCRAFT_TITLEBAR=system` keeps the native frame, as on Linux.
+        (titlebar.as_deref().map(str::trim) != Some("system")).then(pdfcraft_ui_egui::window_controls::Layout::default)
+    } else {
+        decorations::app_drawn()
+    };
     migrate_legacy_folders();
     // The log file stays in the data folder; opened after the arguments (so `--version` leaves
     // no file behind) and after the PrintCraft migration (which a fresh folder would block).
@@ -261,7 +271,7 @@ fn main() -> eframe::Result {
         single_instance::Claim::Alone => None,
     };
     let choice = renderer_choice(std::env::var("PDFCRAFT_RENDERER").ok().as_deref());
-    let launch = Launch { files, options, control_file, create_images, integrated, window_controls, two_paged };
+    let launch = Launch { files, options, control_file, create_images, integrated, window_controls, force_app_titlebar, two_paged };
     // Finder, Open With and the Dock deliver files as Apple events, not arguments; catch the one
     // that launched us as well as later ones. Lives until the event loop returns.
     #[cfg(target_os = "macos")]
@@ -371,6 +381,8 @@ struct Launch {
     integrated: bool,
     /// The window buttons the app draws, when the desktop leaves the frame to it.
     window_controls: Option<pdfcraft_ui_egui::window_controls::Layout>,
+    /// An explicit app title bar wins over a restored system-frame preference.
+    force_app_titlebar: bool,
     two_paged: bool,
 }
 
@@ -392,7 +404,7 @@ fn app_creator<'a>(
     instance: Option<&'a single_instance::Server>,
     #[cfg(target_os = "macos")] apple_events: &'a apple_events::AppleEvents,
 ) -> eframe::AppCreator<'a> {
-    let Launch { files, options, control_file, create_images, integrated, window_controls, two_paged } = launch;
+    let Launch { files, options, control_file, create_images, integrated, window_controls, force_app_titlebar, two_paged } = launch;
     Box::new(move |cc| {
         started.set(true);
         let mut app = PdfCraftApp::new();
@@ -408,6 +420,7 @@ fn app_creator<'a>(
         app.window_state = pdfcraft_ui_egui::window_state::WindowState::started_with(cc.storage);
         app.integrated_titlebar = integrated;
         app.window_controls = window_controls;
+        decorations::apply_app_override(&mut app, force_app_titlebar);
         app.system_text_scale = text_scale::system();
         // Windows' Animation effects setting, which Preferences ▸ Animation effects follows unless
         // it is set to On or Off.
