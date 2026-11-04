@@ -1043,11 +1043,11 @@ title = "Dynamic zoom (drag to zoom)"
 area = "B"
 tier = "P2"
 milestone = "M3"
-status = "planned"
-commands = []
+status = "shipped"
+commands = ["view.dynamic_zoom"]
 tools = []
-evidence = []
-notes = ""
+evidence = ["crates/ui-egui/tests/it/viewer.rs::dynamic_zoom_drags_up_to_zoom_in_and_down_to_zoom_out"]
+notes = "Drag up to zoom in, drag down to zoom out around the initial press point; click zooms in, Shift-click zooms out; Esc clears drag."
 
 [[feature]]
 id = "view.loupe"
