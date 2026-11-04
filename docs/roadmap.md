@@ -1,3 +1,4 @@
+- 2026-11-04 (M6, PR #5699 reset estimate): Charge expanded-name scans and field-name copy/comparison bytes; add three negative regressions and byte-exact refusal checks.
 # PdfCraft roadmap: milestones and what's next
 
 > **2026-11-04 (M6, PR #5699 reset budget):** Reject reset amplification before request copies, preview and PDF mutation; cap reset/selector counts and aggregate estimated work. Add native completion, boundary, flood and large-form regressions; preserve ordered under-budget resets.

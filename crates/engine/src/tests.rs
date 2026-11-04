@@ -10663,8 +10663,9 @@ fn native_reset_flood_is_rejected_without_changing_the_document() {
 #[test]
 fn native_reset_aggregate_work_is_bounded() {
     use crate::js::InteractiveEvent;
-    let mut s = Session::new();
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
     let id = s.open("large-reset.pdf", None, Arc::new(synthetic_acroform(1200, 500)), None).unwrap();
+    let before = s.save_bytes(id).unwrap();
     let generation = s.get(id).unwrap().generation;
     let pending = s.start_javascript(id, "for(var i=0;i<32;i++)resetForm();", None).unwrap();
     let InteractiveEvent::Complete(out) = pending.receiver.recv_timeout(std::time::Duration::from_secs(3)).unwrap() else { panic!("completion") };
@@ -10673,6 +10674,7 @@ fn native_reset_aggregate_work_is_bounded() {
     assert!(error.to_string().contains("reset work limit"), "{error}");
     assert_eq!(s.get(id).unwrap().generation, generation);
     assert_eq!(s.get(id).unwrap().can_undo(), None);
+    assert_eq!(s.save_bytes(id).unwrap(), before);
 }
 
 /// A huge selector list must be rejected before copying requests or expanding names against fields.
@@ -10680,12 +10682,14 @@ fn native_reset_aggregate_work_is_bounded() {
 #[test]
 fn native_reset_selector_count_is_bounded() {
     use crate::js::InteractiveEvent;
-    let mut s = Session::new();
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
     let id = s.open("selectors.pdf", None, Arc::new(scripted_form()), None).unwrap();
+    let before = s.save_bytes(id).unwrap();
     let generation = s.get(id).unwrap().generation;
     let pending = s.start_javascript(id, "resetForm(new Array(4097).fill('price'));", Some("go")).unwrap();
     let InteractiveEvent::Complete(out) = pending.receiver.recv_timeout(std::time::Duration::from_secs(3)).unwrap() else { panic!("completion") };
     assert_eq!(out.error, None);
     assert!(s.finish_javascript(pending, out).unwrap_err().to_string().contains("reset work limit"));
     assert_eq!(s.get(id).unwrap().generation, generation);
+    assert_eq!(s.save_bytes(id).unwrap(), before);
 }

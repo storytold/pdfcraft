@@ -17,12 +17,13 @@ const MAX_SCRIPT_RESET_SELECTORS: usize = 4096;
 const MAX_SCRIPT_RESET_WORK: usize = 1 << 24;
 
 /// Bound request count, selector storage/scans and estimated form/calculation visits before cloning a PDF.
-fn validate_reset_work(fields: &[Field], snapshot_fields: usize, requests: &[Request]) -> Result<(), EditError> {
+fn validate_reset_work(fields: &[Field], states: &[pdfcraft_js::FieldState], requests: &[Request]) -> Result<(), EditError> {
     let invalid = || EditError::Invalid("script reset work limit exceeded; use fewer reset calls or combine field selections".into());
-    let (mut resets, mut selectors, mut bytes) = (0usize, 0usize, 0usize);
+    let (mut resets, mut named_resets, mut selectors, mut bytes) = (0usize, 0usize, 0usize, 0usize);
     for request in requests {
         if let Request::Reset(names) = request {
             resets = resets.saturating_add(1);
+            named_resets = named_resets.saturating_add(usize::from(!names.is_empty()));
             selectors = selectors.saturating_add(names.len());
             if resets > MAX_SCRIPT_RESETS || selectors > MAX_SCRIPT_RESET_SELECTORS {
                 return Err(invalid());
@@ -33,7 +34,7 @@ fn validate_reset_work(fields: &[Field], snapshot_fields: usize, requests: &[Req
     if resets == 0 {
         return Ok(());
     }
-    let count = fields.len().max(snapshot_fields);
+    let count = fields.len().max(states.len());
     let (mut calculations, mut references, mut source_bytes) = (0usize, 0usize, 0usize);
     for field in fields {
         use pdfcraft_forms::af::Calculate;
@@ -47,8 +48,16 @@ fn validate_reset_work(fields: &[Field], snapshot_fields: usize, requests: &[Req
         });
         source_bytes = source_bytes.saturating_add(field.actions.scripts.calculate.as_ref().map_or(0, String::len));
     }
-    let per_pass = count.saturating_mul(1usize.saturating_add(calculations).saturating_add(references)).saturating_add(source_bytes);
-    let work = resets.saturating_mul(per_pass).saturating_add(count.saturating_mul(selectors)).saturating_add(bytes).saturating_mul(2);
+    let name_bytes =
+        fields.iter().fold(0usize, |n, f| n.saturating_add(f.name.len())).max(states.iter().fold(0usize, |n, f| n.saturating_add(f.name.len())));
+    let per_pass =
+        count.saturating_mul(1usize.saturating_add(calculations).saturating_add(references)).saturating_add(source_bytes).saturating_add(name_bytes);
+    // A named reset may expand to every field. The forms layer validates each expanded
+    // name against all fields and scans the selection again for each field. Charge the
+    // worst case before performing expansion, including bytes read by string comparisons.
+    let expanded = named_resets.saturating_mul(count).saturating_mul(count.saturating_add(name_bytes)).saturating_mul(2);
+    let comparisons = count.saturating_mul(selectors).saturating_add(count.saturating_mul(bytes));
+    let work = resets.saturating_mul(per_pass).saturating_add(expanded).saturating_add(comparisons).saturating_add(bytes).saturating_mul(2);
     if work > MAX_SCRIPT_RESET_WORK {
         return Err(invalid());
     }
@@ -509,7 +518,7 @@ impl Session {
     fn apply_script_outcome(&mut self, id: DocId, states: &[pdfcraft_js::FieldState], mut o: Outcome) -> Result<Outcome, EditError> {
         if o.requests.iter().any(|r| matches!(r, Request::Reset(_))) {
             let doc = self.get(id).ok_or(EditError::NoDocument)?;
-            validate_reset_work(&doc.form, states.len(), &o.requests)?;
+            validate_reset_work(&doc.form, states, &o.requests)?;
         }
         let resets: Vec<Vec<String>> = o
             .requests
@@ -1038,5 +1047,33 @@ mod snapshot_review_tests {
         let work = SNAPSHOT_WORK.with(std::cell::Cell::get);
         eprintln!("geometry snapshots={}, calculation plan builds={}", work.0, work.1);
         assert_eq!(work, (1, 1), "one geometry snapshot and one calculation plan per runner");
+    }
+}
+
+#[cfg(test)]
+mod reset_budget_review_tests {
+    use super::*;
+    fn state(name: String) -> pdfcraft_js::FieldState {
+        pdfcraft_js::FieldState::new(name, pdfcraft_js::FieldType::Text, Vec::new())
+    }
+    #[test]
+    fn reset_budget_charges_expanded_descendants() {
+        let states: Vec<_> = (0..3000).map(|i| state(format!("parent.{i}"))).collect();
+        assert!(validate_reset_work(&[], &states, &[Request::Reset(vec!["parent".into()])]).is_err());
+        assert!(validate_reset_work(&[], &states, &[Request::Reset(Vec::new())]).is_ok());
+    }
+    #[test]
+    fn reset_budget_charges_shared_prefix_comparisons() {
+        let prefix = "p".repeat(4096);
+        let states: Vec<_> = (0..128).map(|i| state(format!("{prefix}.{i}"))).collect();
+        let names = (0..128).map(|i| format!("{prefix}.missing{i}")).collect();
+        assert!(validate_reset_work(&[], &states, &[Request::Reset(names)]).is_err());
+    }
+    #[test]
+    fn reset_budget_charges_full_form_name_copies() {
+        let states = vec![state("n".repeat(140_000))];
+        let resets = vec![Request::Reset(Vec::new()); 64];
+        assert!(validate_reset_work(&[], &states, &resets).is_err());
+        assert!(validate_reset_work(&[], &states, &[Request::Reset(Vec::new())]).is_ok());
     }
 }
