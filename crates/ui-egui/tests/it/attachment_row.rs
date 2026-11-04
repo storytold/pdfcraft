@@ -191,10 +191,10 @@ fn editing_the_document_while_description_dialog_is_open_discards_its_stale_draf
     right_click(&mut h, "notes.txt");
     h.get_by_role(egui::accesskit::Role::Menu).get_by_label("Edit description").click();
     h.run_steps(2);
-    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::EditAttachmentDescription {
-        key: "notes.txt".into(),
-        description: Some("Changed elsewhere".into()),
-    }));
+    assert!(
+        h.state_mut()
+            .apply_edit(pdfcraft_engine::Edit::EditAttachmentDescription { key: "notes.txt".into(), description: Some("Changed elsewhere".into()) })
+    );
     h.get_by_label("OK").click();
     h.run_steps(3);
     let state = h.state();

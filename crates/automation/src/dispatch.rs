@@ -770,7 +770,11 @@ impl Automation {
                 let key = match keys.as_slice() {
                     [key] => key.clone(),
                     [] => return Err(ToolError::InvalidArgs(format!("there is no document attachment named {name:?}; use a name from doc_info"))),
-                    _ => return Err(ToolError::InvalidArgs(format!("more than one document attachment is named {name:?}; choose an unambiguous name"))),
+                    _ => {
+                        return Err(ToolError::InvalidArgs(format!(
+                            "more than one document attachment is named {name:?}; choose an unambiguous name"
+                        )));
+                    }
                 };
                 let edit = Edit::EditAttachmentDescription { key, description: Some(a.str("description")?.into()) };
                 self.apply(&a, edit)?
