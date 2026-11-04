@@ -2833,6 +2833,74 @@ fn headers_watermarks_and_backgrounds_through_tools() {
 }
 
 #[test]
+fn bates_numbers_continue_across_files_and_report_preflight_and_permission_failures() {
+    let dir = workdir("bates-multi");
+    let files = json!([
+        {"input":"b.pdf","output":"b-numbered.pdf"},
+        {"input":"a.pdf","output":"a-numbered.pdf"}
+    ]);
+    let mut a = auto(&dir);
+    let allocation = ok(&mut a, "doc_bates_multi", json!({"files":files,"start_number":50,"dry_run":true}));
+    assert_eq!(allocation["files"][0]["first"], 50);
+    assert_eq!(allocation["files"][0]["last"], 51);
+    assert_eq!(allocation["files"][1]["first"], 52);
+    assert_eq!(allocation["files"][1]["last"], 54);
+    assert!(!dir.join("a-numbered.pdf").exists());
+
+    let applied = ok(&mut a, "doc_bates_multi", json!({"files":files,"start_number":17,"prefix":"CASE-"}));
+    assert_eq!(applied["completed"], 2);
+    let mut out = auto(&dir);
+    let first = ok(&mut out, "doc_open", json!({"path":"a-numbered.pdf"}))["doc"].as_u64().unwrap();
+    let second = ok(&mut out, "doc_open", json!({"path":"b-numbered.pdf"}))["doc"].as_u64().unwrap();
+    assert!(page_text(&mut out, second)[0].contains("CASE-000017"));
+    assert!(page_text(&mut out, first)[0].contains("CASE-000019"));
+
+    let overflow = err(&mut a, "doc_bates_multi", json!({"files":[{"input":"b.pdf","output":"overflow.pdf"}],"start_number":u64::MAX}));
+    assert!(overflow.to_string().contains("overflows"));
+    assert!(!dir.join("overflow.pdf").exists());
+    // A range may end at u64::MAX itself.
+    let at_max = ok(&mut a, "doc_bates_multi", json!({"files":[{"input":"b.pdf","output":"max.pdf"}],"start_number":u64::MAX - 1,"dry_run":true}));
+    assert_eq!(at_max["files"][0]["last"], u64::MAX);
+    for bad in
+        [json!({"start_number":-3}), json!({"start_number":2.5}), json!({"start_number":"7"}), json!({"prefix":"CASE>>"}), json!({"suffix":"A>>B"})]
+    {
+        let mut args = json!({"files":[{"input":"b.pdf","output":"bad.pdf"}],"dry_run":true});
+        args.as_object_mut().unwrap().extend(bad.as_object().unwrap().clone());
+        assert!(a.call("doc_bates_multi", &args).is_err(), "{bad}");
+    }
+
+    use pdfcraft_engine::{Changes, Edit, Protection, Session};
+    let mut session = Session::new();
+    let id = session.open("locked.pdf", None, std::sync::Arc::new(fixture(1)), None).unwrap();
+    session
+        .apply(
+            id,
+            Edit::Protect(Protection {
+                open_password: Some("open".into()),
+                permissions_password: Some("owner".into()),
+                changes: Changes::None,
+                ..Default::default()
+            }),
+        )
+        .unwrap();
+    std::fs::write(dir.join("locked.pdf"), session.save_bytes(id).unwrap().as_ref()).unwrap();
+    let result = ok(
+        &mut a,
+        "doc_bates_multi",
+        json!({"files":[
+            {"input":"b.pdf","output":"partial-numbered.pdf"},
+            {"input":"locked.pdf","output":"locked-numbered.pdf","password":"open"}
+        ]}),
+    );
+    assert_eq!(result["completed"], 1);
+    assert_eq!(result["failed"], 1);
+    assert_eq!(result["files"][1]["first"], 3);
+    assert!(result["files"][1]["error"].as_str().unwrap().contains("owner password"), "{result}");
+    assert!(dir.join("partial-numbered.pdf").exists());
+    assert!(!dir.join("locked-numbered.pdf").exists());
+}
+
+#[test]
 fn a_shrinking_header_and_footer_moves_the_page_content_out_of_their_way_through_tools() {
     let dir = workdir("hf-shrink");
     let mut a = auto(&dir);
@@ -4670,12 +4738,23 @@ fn removing_hidden_information_through_tools() {
     assert_eq!(r["undo"], "Remove hidden information");
     assert_eq!(ok(&mut a, "comment_list", json!({ "doc": doc }))["count"], 0);
     assert!(count(&ok(&mut a, "doc_hidden_info", json!({ "doc": doc })), "metadata") >= 1, "only comments went");
+    // With none left, removing them again says so, and Optimize discarding them still runs.
+    let again = a.call("doc_remove_hidden", &json!({ "doc": doc, "categories": ["comments"] }));
+    assert!(matches!(&again, Err(ToolError::Failed(m)) if m.starts_with("nothing to remove")), "{again:?}");
+    let optimized = ok(&mut a, "doc_optimize", json!({ "doc": doc, "path": "optimized.pdf", "discard": ["comments", "bookmarks"] }));
+    assert_eq!(optimized["discarded"], json!([]), "{optimized}");
     let r = ok(&mut a, "doc_remove_hidden", json!({ "doc": doc }));
     assert_eq!(r["undo"], "Sanitize document");
     ok(&mut a, "doc_save", json!({ "doc": doc, "path": "clean.pdf" }));
     let bytes = std::fs::read(dir.join("clean.pdf")).unwrap();
     assert!(!bytes.windows(11).any(|w| w == b"Secret plan"), "the old revision is gone");
     assert!(matches!(a.call("doc_remove_hidden", &json!({ "doc": doc, "categories": ["nonsense"] })), Err(ToolError::InvalidArgs(_))));
+    // A document that can't be edited has no scan: the refusal says why, not that nothing is there.
+    let junk = [vec![b'x'; 5000], std::fs::read(dir.join("a.pdf")).unwrap()].concat();
+    std::fs::write(dir.join("junk.pdf"), junk).unwrap();
+    let read_only = ok(&mut a, "doc_open", json!({ "path": "junk.pdf" }))["doc"].as_u64().unwrap();
+    let refused = a.call("doc_remove_hidden", &json!({ "doc": read_only, "categories": ["comments"] }));
+    assert!(matches!(&refused, Err(ToolError::Failed(m)) if m.contains("can't be edited")), "{refused:?}");
 }
 
 /// A one-page PDF whose text "TOP SECRET" sits under an opaque black rectangle.
@@ -6666,10 +6745,12 @@ fn optimizing_through_tools() {
     let reduced = ok(&mut a, "doc_reduce", json!({ "doc": doc, "path": "reduced.pdf" }));
     assert!(reduced["bytes_after"].as_u64().unwrap() < reduced["bytes_before"].as_u64().unwrap());
     assert_eq!(reduced["written"], true);
+    assert_eq!(reduced["images_refused"], 0);
     assert_eq!(std::fs::metadata(dir.join("reduced.pdf")).unwrap().len(), reduced["bytes_after"].as_u64().unwrap());
 
     // Target PDF 1.4 (disables object streams) and PDF 2.0 (with object_streams toggled off).
     let v14 = ok(&mut a, "doc_optimize", json!({ "doc": doc, "path": "v14.pdf", "compatibility": "1.4" }));
+    assert_eq!(v14["images_refused"], 0);
     assert_eq!((v14["pdf_version"].as_str(), v14["object_streams"].as_bool()), (Some("1.4"), Some(false)), "{v14}");
     let v14_bytes = std::fs::read(dir.join("v14.pdf")).unwrap();
     assert!(v14_bytes.starts_with(b"%PDF-1.4\n") && !v14_bytes.windows(7).any(|w| w == b"/ObjStm"));
@@ -7617,6 +7698,17 @@ fn exporting_to_word_html_and_rtf() {
     }
     let html = std::fs::read_to_string(dir.join("a.html")).unwrap();
     assert!(html.contains("Page 1") && html.contains("Page 3") && html.matches("<hr>").count() == 2, "{html}");
+    ok(&mut a, "doc_export_office", json!({ "doc": doc, "path": "simple.html", "html_mode": "simple" }));
+    let simple_html = std::fs::read_to_string(dir.join("simple.html")).unwrap();
+    assert!(
+        simple_html.contains("Page 1")
+            && !simple_html.contains("<style")
+            && !simple_html.contains("style=")
+            && !simple_html.contains("<span")
+            && !simple_html.contains("<div")
+    );
+    assert!(a.call("doc_export_office", &json!({ "doc": doc, "path": "bad.html", "html_mode": "compact" })).is_err());
+    assert!(a.call("doc_export_office", &json!({ "doc": doc, "path": "bad.docx", "html_mode": "simple" })).is_err());
     assert!(std::fs::read(dir.join("a.docx")).unwrap().starts_with(b"PK"));
     assert!(std::fs::read(dir.join("a.pptx")).unwrap().starts_with(b"PK"));
     assert!(std::fs::read_to_string(dir.join("a.rtf")).unwrap().contains("Page 2"));
@@ -10535,4 +10627,33 @@ fn mixed_script_tools_normalize_but_undo_restores_the_exact_mixture() {
         let reopened = ok(&mut a, "doc_open", json!({"path":path}))["doc"].as_u64().unwrap();
         assert_eq!(page_text(&mut a, reopened)[0], plain);
     }
+}
+
+#[test]
+fn multiline_fill_sign_engine_round_trip_preserves_lines_and_appearance() {
+    let dir = workdir("fill-sign-multiline");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path":"a.pdf"}))["doc"].as_u64().unwrap();
+    let text = "\nAda\n\nLovelace\n";
+    ok(&mut a, "fill_sign_add", json!({"doc":doc,"page":1,"type":"text","at":[20,20],"text":text}));
+    let id = pdfcraft_engine::DocId(doc);
+    let annot = &a.session().get(id).unwrap().info.annotations[0];
+    assert_eq!(annot.contents.as_deref(), Some(text), "typewriter contents keep outer line breaks");
+    assert!(annot.rect[3] - annot.rect[1] >= 66.0, "five text lines need their full height, including blank lines: {:?}", annot.rect);
+    let pixels = a.render_pixels(doc, 1, 1.0).unwrap();
+    // The fixture's page text is at y=150; only the typewriter draws at y=65..80.
+    assert!(
+        (65..80).any(|y| (20..80).any(|x| {
+            let i = (y * pixels.0 as usize + x) * 4;
+            pixels.2[i..i + 3].iter().all(|v| *v < 100)
+        })),
+        "the lower nonempty line appears inside its box"
+    );
+    let rendered = a.call("page_render", &json!({"doc":doc,"page":1,"dpi":72})).unwrap();
+    ok(&mut a, "doc_save", json!({"doc":doc,"path":"multiline.pdf"}));
+    let mut re = auto(&dir);
+    let reopened = ok(&mut re, "doc_open", json!({"path":"multiline.pdf"}))["doc"].as_u64().unwrap();
+    assert_eq!(re.session().get(pdfcraft_engine::DocId(reopened)).unwrap().info.annotations[0].contents.as_deref(), Some(text));
+    assert_eq!(rendered, re.call("page_render", &json!({"doc":reopened,"page":1,"dpi":72})).unwrap(), "saved appearances are identical");
+    std::fs::remove_dir_all(dir).unwrap();
 }

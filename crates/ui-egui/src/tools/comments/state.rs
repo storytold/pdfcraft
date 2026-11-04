@@ -133,8 +133,6 @@ pub struct CommentView {
     /// Drawings just released: shown from their points until the page raster that includes the
     /// committed annotation arrives, so the stroke never vanishes in between (#1858).
     pub(crate) settling: Vec<Settling>,
-    /// Escape ends egui's drag too; ignore its synthetic release until the mouse is up.
-    pub(super) cancelled_drag: bool,
     pub composer: Option<Composer>,
     /// Reply being typed under the selected card.
     pub reply: String,
@@ -388,7 +386,7 @@ impl PageCx<'_> {
     /// comments by position, not in paint order). A Replace Text strikeout is grouped under its
     /// caret (`/RT /Group`), which holds the proposal, so the strikeout is hit as that caret: the
     /// proposal is picked by either part, not only by its small caret.
-    pub(super) fn hit(&self, p: Pos2) -> Option<&Annotation> {
+    pub(super) fn comment_at(&self, p: Pos2) -> Option<&Annotation> {
         let under = |a: &&Annotation| self.screen_rects(a).any(|r| r.expand(3.0).contains(p));
         let strikes = self
             .info
