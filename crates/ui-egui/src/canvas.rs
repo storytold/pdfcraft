@@ -873,6 +873,7 @@ impl DocView {
     pub(crate) fn cancel_pointer_gestures(&mut self) {
         self.marquee = None;
         self.marquee_done = None;
+        self.zoom_drag = None;
         self.comments.gesture = None;
         self.links.drag = None;
         self.sign.drag = None;
@@ -1054,6 +1055,11 @@ impl DocView {
         // Thumbnail drags hold page indexes from before the change.
         self.panel_drag = None;
         self.org_drag = None;
+        // A Dynamic Zoom drag anchors to page rectangles from before the change, and the next
+        // frame's would be too (laid out before this): the held press zooms no more until it is up.
+        if self.zoom_drag.take().is_some() {
+            self.press_cancelled = true;
+        }
         self.reset_coarse_state();
     }
 
@@ -1092,6 +1098,8 @@ impl DocView {
         fresh.viewport_w = self.viewport_w;
         fresh.viewport_h = self.viewport_h;
         fresh.viewport_screen = self.viewport_screen;
+        // For `document_changed` to end it with its press.
+        fresh.zoom_drag = self.zoom_drag;
         *self = fresh;
         // Marks the kept images out of date and clamps the page to the new page count.
         self.document_changed(info);

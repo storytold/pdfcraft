@@ -84,6 +84,12 @@ pub(crate) fn dynamic_input(ui: &egui::Ui, resp: &egui::Response, ptr: &PagePoin
         let layer = if resp.dragged() { Layer::Drag } else { Layer::ToolArea };
         view.cursor.claim(layer, if out { egui::CursorIcon::ZoomOut } else { egui::CursorIcon::ZoomIn });
     }
+    // A cancelled press (Escape, an edit, undo or redo while it is held) zooms no more, and its
+    // release does not click, until the button is up.
+    if view.press_cancelled {
+        view.zoom_drag = None;
+        return;
+    }
     if !resp.dragged_by(egui::PointerButton::Primary) {
         view.zoom_drag = None;
     } else if view.zoom_drag.is_none()
