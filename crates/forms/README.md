@@ -51,7 +51,9 @@ let cells: Vec<table::Cell> = grid.cells_for(names)?;      // "Table1_1", "Table
   marked with the first one (`pdfcraft_fonts::UNDRAWN_MARK`, cleared once all of it can be drawn)
   and the form sets `/NeedAppearances`, so other viewers draw the field from its value with fonts
   that have them. Not in a document that declares PDF/A, which forbids that flag (`declares_pdfa`:
-  `pdfaid:part` in XMP metadata that decodes within 8 MiB, as preflight's Standards panel reads it).
+  the bytes `pdfaid:part` in XMP metadata each filter stage of which decodes within 8 MiB, the cap
+  preflight's Standards panel reads it with; preflight reads the identifier by its namespace, so a
+  packet that gives that namespace another prefix declares PDF/A there and not here).
   `undrawn_fields` lists the marked fields; the engine reports each edit that draws one, and
   flattening refuses to make that `?` permanent.
 - Displaying a form that leaves its appearances to the viewer (`/NeedAppearances`, or a text or

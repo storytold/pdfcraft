@@ -3646,7 +3646,7 @@ fn page_shapes_decode_a_repeated_content_stream_within_the_budget() {
 }
 
 /// The PDF/A declaration is read from metadata each filter stage of which decodes within
-/// [`crate::appearances::MAX_XMP_BYTES`], as preflight reads it: a field drawn with characters its
+/// [`crate::appearances::MAX_XMP_BYTES`], as preflight decodes it: a field drawn with characters its
 /// font lacks decodes no more than that a stage.
 #[test]
 fn a_pdfa_declaration_is_read_from_metadata_within_its_cap() {
@@ -3664,7 +3664,7 @@ fn a_pdfa_declaration_is_read_from_metadata_within_its_cap() {
     let metadata = doc.add(Object::Stream(stream));
     let catalog = doc.add(Object::Dict([(b"Metadata".to_vec(), Object::Ref(metadata))].into_iter().collect()));
     doc.trailer_mut().set(b"Root".to_vec(), Object::Ref(catalog));
-    assert!(declares_pdfa(&doc), "metadata through a chain of filters declares PDF/A, as preflight reads it");
+    assert!(declares_pdfa(&doc), "metadata through a chain of filters declares PDF/A, as preflight decodes it");
 }
 
 /// A widget listed many times, by one field's `/Kids` or by a `/Kids` array several fields share,

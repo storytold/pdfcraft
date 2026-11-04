@@ -213,12 +213,12 @@ impl FieldAppearanceCache {
 }
 
 /// The most each filter stage of the XMP metadata stream may decode for its PDF/A declaration to
-/// be read, as preflight's Standards panel reads it: past it, metadata declares nothing there
-/// either.
+/// be read, the cap preflight's Standards panel reads it with: past it, metadata declares nothing
+/// there either.
 pub(crate) const MAX_XMP_BYTES: usize = 8 << 20;
 
-/// Whether the document's XMP metadata declares PDF/A conformance (`pdfaid:part`). Metadata a
-/// filter stage of which decodes past [`MAX_XMP_BYTES`] doesn't.
+/// Whether the document's XMP metadata declares PDF/A conformance (the bytes `pdfaid:part`).
+/// Metadata a filter stage of which decodes past [`MAX_XMP_BYTES`] doesn't.
 pub fn declares_pdfa(doc: &Document) -> bool {
     let Some(root) = doc.root() else { return false };
     let Some(m) = doc.get(root).as_dict().and_then(|c| c.get(b"Metadata").cloned()) else { return false };
@@ -226,6 +226,9 @@ pub fn declares_pdfa(doc: &Document) -> bool {
     match &*m {
         // Not a `DecodeBudget`, which counts every stage against one allowance: preflight bounds
         // each stage, and the two must agree on metadata stored through a chain of filters.
+        // `/DecodeParms` is read only when direct, as preflight and organize read metadata too:
+        // PDF/A asks for it unfiltered, so only a file that breaks that reaches parameters here,
+        // and the readers go to `with_direct_parms` together or they disagree.
         Object::Stream(s) => s.decoded_within(MAX_XMP_BYTES).is_ok_and(|b| b.windows(11).any(|w| w == b"pdfaid:part")),
         _ => false,
     }
