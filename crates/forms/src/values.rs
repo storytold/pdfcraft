@@ -219,7 +219,8 @@ pub(crate) fn write_value(doc: &mut Document, f: &Field, value: &FieldValue, scr
                 }
                 d.remove(b"RV");
             })?;
-            let current = if refresh_field { fields(doc).into_iter().find(|current| current.obj == f.obj).unwrap_or_else(|| f.clone()) } else { f.clone() };
+            let current =
+                if refresh_field { fields(doc).into_iter().find(|current| current.obj == f.obj).unwrap_or_else(|| f.clone()) } else { f.clone() };
             redraw(doc, &current, std::slice::from_ref(&t), scripts)
         }
         (FieldKind::CheckBox, v) => {
