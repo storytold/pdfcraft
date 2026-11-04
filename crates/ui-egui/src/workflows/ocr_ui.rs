@@ -454,9 +454,21 @@ impl PdfCraftApp {
                 self.ocr_run = None;
                 match result {
                     Ok(bytes) => {
-                        let name = doc.and_then(|d| self.session.get(d)).map(|d| d.name.clone()).unwrap_or_else(|| "document.pdf".into());
-                        match self.open_bytes(&name, None, bytes) {
-                            Ok(()) => self.notify_tr("Text recognized on the server"),
+                        // The answer replaces the document, so its pages carry their text from
+                        // here on: the tab stays the one the reader is looking at.
+                        let Some(doc) = doc else {
+                            self.notify(format!("The document could not be opened: {}", "no document to replace"));
+                            return;
+                        };
+                        match self.session.reload(doc, std::sync::Arc::new(bytes)) {
+                            Ok(()) => {
+                                if let Some(info) = self.session.get(doc).map(|d| d.info.clone())
+                                    && let Some(view) = self.views.iter_mut().find(|v| v.id == doc)
+                                {
+                                    view.document_changed(&info);
+                                }
+                                self.notify_tr("Text recognized on the server");
+                            }
                             Err(e) => self.notify(format!("The document could not be opened: {e}")),
                         }
                     }
