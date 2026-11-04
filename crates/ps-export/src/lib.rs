@@ -574,7 +574,7 @@ mod tests {
     /// so a caller can act on exactly what was wrong.
     #[test]
     fn invalid_page_index_is_actionable() {
-        let err = export(std::sync::Arc::new(fixture()), None, &[0, 3], PsFormat::Ps).expect_err("index 3 is out of range");
+        let err = export(std::sync::Arc::new(fixture()), &[0, 3], PsFormat::Ps).expect_err("index 3 is out of range");
         assert_eq!(err, PsExportError::InvalidPages { requested: vec![0, 3], page_count: 1 });
     }
 
@@ -605,7 +605,7 @@ mod tests {
     /// is set, and no transparency pseudo-operator appears.
     #[test]
     fn blend_mode_produces_note_not_ops() {
-        let out = export(std::sync::Arc::new(blend_pdf()), None, &[0], PsFormat::Ps).expect("transparent content exports");
+        let out = export(std::sync::Arc::new(blend_pdf()), &[0], PsFormat::Ps).expect("transparent content exports");
         let s = text(&out);
         assert_eq!(s.matches("fill\n").count(), 2, "both draws still emit: {s}");
         assert!(!s.contains("/Blend"), "no transparency pseudo-ops: {s}");
@@ -618,7 +618,6 @@ mod tests {
         assert!(s.contains("%%PdfCraftNote: transparency ignored (blend Multiply)\n"), "note embedded: {s}");
     }
 
-<<<<<<< HEAD
     /// A Type 3 glyph under render mode 3 (`3 Tr`) draws nothing: the interpreter hands
     /// the device `GlyphDrawMode::Invisible` for the glyph procedure too (only mode 3
     /// affects Type 3 text), and the device must skip it as it skips invisible outline
@@ -635,16 +634,17 @@ mod tests {
                 stream_obj("", b"0 0 100 100 re f"),
             ])
         }
-        let visible = export(std::sync::Arc::new(type3_pdf(0)), None, &[0], PsFormat::Ps).expect("visible Type 3 text exports");
+        let visible = export(std::sync::Arc::new(type3_pdf(0)), &[0], PsFormat::Ps).expect("visible Type 3 text exports");
         let s = text(&visible);
         assert!(s.contains("fill\n"), "the glyph procedure paints when visible: {s}");
-        let invisible = export(std::sync::Arc::new(type3_pdf(3)), None, &[0], PsFormat::Ps).expect("invisible Type 3 text exports");
+        let invisible = export(std::sync::Arc::new(type3_pdf(3)), &[0], PsFormat::Ps).expect("invisible Type 3 text exports");
         let s = text(&invisible);
         // The page's own crop-box clip still emits path operators; ink is what the
         // glyph procedure must not leave behind.
         assert!(!s.contains("fill\n") && !s.contains("eofill\n") && !s.contains("stroke\n"), "render mode 3 suppresses the glyph procedure: {s}");
         assert!(s.ends_with("%%EOF\n"), "the program is still complete: {s}");
-=======
+    }
+
     /// A `/ca 0.5` ExtGState degrades to one paint-alpha note per page however many
     /// draws carry it (the module's transparency policy: first occurrence only).
     #[test]
@@ -658,7 +658,6 @@ mod tests {
             "one note per page, first occurrence only"
         );
         assert_eq!(s.matches("%%PdfCraftNote: transparency ignored (paint alpha)\n").count(), 1, "note embedded once: {s}");
->>>>>>> 1a4ab50e (M10: note ignored transparency once per page (paint alpha, shading opacity))
     }
 
     /// Stroked text's line width is a user-space operand (it scales with the CTM, never the
@@ -674,7 +673,7 @@ mod tests {
             stream_obj("", b"3 w BT /F1 2000 Tf 1 Tr 10 100 Td (A) Tj ET"),
             b"<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << /F1 3 0 R >> >> >>".to_vec(),
         ]);
-        let out = export(std::sync::Arc::new(pdf), None, &[0], PsFormat::Ps).expect("stroked text exports");
+        let out = export(std::sync::Arc::new(pdf), &[0], PsFormat::Ps).expect("stroked text exports");
         let s = text(&out);
         // The glyph path is emitted in user space (outline × glyph matrix, coords ~38..954
         // for the 1000-unit 'A' at ×2) under the identity CTM, and `3 setlinewidth` rides
@@ -690,7 +689,7 @@ mod tests {
     /// depth bound holds) with a balanced graphics-state stack.
     #[test]
     fn deep_form_xobjects_complete() {
-        let out = export(std::sync::Arc::new(deep_form_pdf()), None, &[0], PsFormat::Ps).expect("deep recursion is bounded");
+        let out = export(std::sync::Arc::new(deep_form_pdf()), &[0], PsFormat::Ps).expect("deep recursion is bounded");
         let s = text(&out);
         assert!(s.contains("fill\n"), "content after the form drew: {s}");
         assert!(s.ends_with("%%EOF\n"), "document closed: {s}");
@@ -701,7 +700,7 @@ mod tests {
     /// valid DSC PostScript with a zero page count.
     #[test]
     fn empty_pages_slice_yields_header_only_valid_ps() {
-        let out = export(std::sync::Arc::new(fixture()), None, &[], PsFormat::Ps).expect("empty selection exports");
+        let out = export(std::sync::Arc::new(fixture()), &[], PsFormat::Ps).expect("empty selection exports");
         assert_eq!(
             out.bytes,
             b"%!PS-Adobe-3.0\n\
@@ -748,7 +747,7 @@ mod tests {
             stream_obj("", &inter),
             b"<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << /F1 3 0 R >> >> >>".to_vec(),
         ];
-        let out = export(std::sync::Arc::new(assemble(objs)), None, &[0], PsFormat::Ps).expect("real-font page exports");
+        let out = export(std::sync::Arc::new(assemble(objs)), &[0], PsFormat::Ps).expect("real-font page exports");
         let s = text(&out);
         assert!(!s.contains("/FontType 42"), "no Type 42 dictionary: {s}");
         assert!(!s.contains("xyshow") && !s.contains("findfont"), "no text-as-text: {s}");
