@@ -10234,7 +10234,8 @@ fn script_choice_index_preserves_repeated_export_values_through_save() {
     let saved = pdfcraft_cos::write_incremental(&cos, &Default::default()).unwrap();
     let reopened = pdfcraft_cos::Document::open(Arc::new(saved)).unwrap();
     let field = pdfcraft_forms::fields(&reopened).into_iter().find(|f| f.name == "ranks").unwrap();
-    let indices = reopened.get(field.obj).as_dict().and_then(|d| d.get(b"I")).and_then(Object::as_array).unwrap();
+    let saved_field = reopened.get(field.obj);
+    let indices = saved_field.as_dict().and_then(|d| d.get(b"I")).and_then(Object::as_array).unwrap();
     assert_eq!(indices.iter().map(|i| i.as_int().unwrap()).collect::<Vec<_>>(), [1]);
 }
 
