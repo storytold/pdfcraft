@@ -1286,6 +1286,29 @@ fn thumbnails_release_on_scroll_panel_close_and_request_again_after_eviction() {
 }
 
 #[test]
+fn closing_the_last_thumbnail_consumer_releases_thumbnails_while_a_visible_page_renders() {
+    let ctx = egui::Context::default();
+    let info = thumbnail_info(1);
+    let mut v = DocView::new(DocId(1), &info, ViewDefaults::default());
+    v.need_thumbnail(0, true);
+    let first = v.prepare_render_queue(&info, 1.0);
+    v.last_queue = first.clone();
+    assert_eq!(v.receive_result(&ctx, solid_result(first[0], 132, 171)), 132 * 171 * 4);
+    let main = RenderRequest { scale: 1.0, tag: 1000, ..Default::default() };
+    v.begin_render_frame();
+    v.need_thumbnail(0, true);
+    v.frame_queue = vec![main];
+    v.frame_visible.insert(0);
+    assert_eq!(v.prepare_render_queue(&info, 1.0), vec![main]);
+    assert!(!v.thumbs.is_empty(), "a thumbnail still shown waits for the page");
+    v.begin_render_frame();
+    v.frame_queue = vec![main];
+    v.frame_visible.insert(0);
+    assert_eq!(v.prepare_render_queue(&info, 1.0), vec![main]);
+    assert!(v.thumbs.is_empty(), "nothing shows it any more, whatever the page is doing");
+}
+
+#[test]
 fn stale_results_are_rejected_before_conversion_after_dpi_invalidation_and_suspend() {
     let ctx = egui::Context::default();
     let info = thumbnail_info(1);
