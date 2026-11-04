@@ -52,7 +52,7 @@ struct Walk<'a> {
     /// Forms with their own resources already walked, by the linear part of their matrix and
     /// whether default colour spaces were in force. Drawing one again at the same scale (only
     /// moved) can't change any image's resolution.
-    walked: HashSet<(ObjRef, [u64; 4], bool)>,
+    walked: HashSet<(ObjRef, [u64; 4], bool, bool)>,
     /// Forms walked at least once.
     seen: HashSet<ObjRef>,
     rewalks: usize,
@@ -64,6 +64,8 @@ struct Walk<'a> {
     /// Images drawn or listed at least once where `/DefaultGray` or `/DefaultRGB` is in force, by
     /// object number: a reference with another generation reaches the same image.
     defaults: HashSet<u32>,
+    /// Images drawn or listed at least once where `/DefaultCMYK` is in force, by object number.
+    defaults_cmyk: HashSet<u32>,
     /// The references the walk followed to reach its images, and the pages and page-tree nodes
     /// whose resources it read.
     read: Read,
@@ -89,10 +91,12 @@ struct Read {
 impl Walk<'_> {
     /// Walk one content stream, recording each image's displayed resolution (pixels per inch, the
     /// smaller of the two axes) and descending into form XObjects. `holder` is the object holding
-    /// `resources`. `defaults`: an enclosing stream's resources remap a device colour space.
-    fn content(&mut self, data: &[u8], resources: &Dict, holder: ObjRef, ctm: Matrix, defaults: bool) {
+    /// `resources`. `defaults`: an enclosing stream's resources remap `/DefaultGray` or `/DefaultRGB`.
+    /// `defaults_cmyk`: an enclosing stream's resources remap `/DefaultCMYK`.
+    fn content(&mut self, data: &[u8], resources: &Dict, holder: ObjRef, ctm: Matrix, defaults: bool, defaults_cmyk: bool) {
         let doc = self.doc;
         let defaults = defaults || remaps_device_spaces(doc, resources);
+        let defaults_cmyk = defaults_cmyk || remaps_default_cmyk(doc, resources);
         let xobjects = resources.get(b"XObject").map(|x| doc.resolve(x)).and_then(|x| x.as_dict().cloned()).unwrap_or_default();
         let xholder = match resources.get(b"XObject").and_then(Object::as_ref) {
             Some(x) => {
@@ -108,6 +112,9 @@ impl Walk<'_> {
                 self.read.entries.insert((r.num, xholder.num, Entry::Name(name.to_vec())));
                 if defaults {
                     self.defaults.insert(r.num);
+                }
+                if defaults_cmyk {
+                    self.defaults_cmyk.insert(r.num);
                 }
             }
         }
@@ -144,8 +151,11 @@ impl Walk<'_> {
                             if defaults {
                                 self.defaults.insert(r.num);
                             }
+                            if defaults_cmyk {
+                                self.defaults_cmyk.insert(r.num);
+                            }
                         }
-                        Some(b"Form") => self.form(r, s, (resources, holder), top, defaults),
+                        Some(b"Form") => self.form(r, s, (resources, holder), top, defaults, defaults_cmyk),
                         _ => {}
                     }
                 }
@@ -176,7 +186,7 @@ impl Walk<'_> {
                     }
                     None => n,
                 };
-                self.content(&[], &resources, holder, Matrix([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]), false);
+                self.content(&[], &resources, holder, Matrix([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]), false, false);
             }
             node = d.reference(b"Parent");
         }
@@ -184,7 +194,7 @@ impl Walk<'_> {
 
     /// Descend into form `r` drawn with `ctm` from a stream whose resources are `resources`, with
     /// the object holding them.
-    fn form(&mut self, r: ObjRef, s: &Stream, (resources, holder): (&Dict, ObjRef), ctm: Matrix, defaults: bool) {
+    fn form(&mut self, r: ObjRef, s: &Stream, (resources, holder): (&Dict, ObjRef), ctm: Matrix, defaults: bool, defaults_cmyk: bool) {
         if self.path.contains(&r) {
             return;
         }
@@ -199,7 +209,7 @@ impl Walk<'_> {
         // A form without resources uses its caller's, so the same form can draw other images.
         if own.is_some() {
             let [a, b, c, d, ..] = inner.0;
-            if !self.walked.insert((r, [a.to_bits(), b.to_bits(), c.to_bits(), d.to_bits()], defaults)) {
+            if !self.walked.insert((r, [a.to_bits(), b.to_bits(), c.to_bits(), d.to_bits()], defaults, defaults_cmyk)) {
                 return;
             }
         }
@@ -228,9 +238,9 @@ impl Walk<'_> {
                     }
                     None => r,
                 };
-                self.content(&data, own, own_holder, inner, defaults);
+                self.content(&data, own, own_holder, inner, defaults, defaults_cmyk);
             }
-            None => self.content(&data, resources, holder, inner, defaults),
+            None => self.content(&data, resources, holder, inner, defaults, defaults_cmyk),
         }
         self.path.pop();
     }
@@ -243,6 +253,12 @@ fn remaps_device_spaces(doc: &Document, resources: &Dict) -> bool {
     spaces.as_deref().and_then(Object::as_dict).is_some_and(|c| c.contains(b"DefaultGray") || c.contains(b"DefaultRGB"))
 }
 
+/// Whether `resources` remap DeviceCMYK: `/DefaultCMYK` (ISO 32000-2 §8.6.5.6).
+fn remaps_default_cmyk(doc: &Document, resources: &Dict) -> bool {
+    let spaces = resources.get(b"ColorSpace").map(|c| doc.resolve(c));
+    spaces.as_deref().and_then(Object::as_dict).is_some_and(|c| c.contains(b"DefaultCMYK"))
+}
+
 /// The effective resolution (ppi) of every image drawn by `pages`: the smallest over its uses.
 ///
 /// If forms nest too deeply, are drawn too many times, or a page's content doesn't decode within
@@ -253,9 +269,9 @@ pub fn effective_resolutions(doc: &Document, pages: &[ObjRef]) -> HashMap<ObjRef
 }
 
 /// [`effective_resolutions`], the images drawn or listed where `/DefaultGray` or `/DefaultRGB` is
-/// in force, by object number (all of them when a use may have been missed), and the references
-/// followed to reach them.
-fn walk_pages(doc: &Document, pages: &[ObjRef]) -> (HashMap<ObjRef, f64>, HashSet<u32>, Read) {
+/// in force, by object number (all of them when a use may have been missed), the images where
+/// `/DefaultCMYK` is in force, and the references followed to reach them.
+fn walk_pages(doc: &Document, pages: &[ObjRef]) -> (HashMap<ObjRef, f64>, HashSet<u32>, HashSet<u32>, Read) {
     let mut walk = Walk {
         doc,
         path: Vec::new(),
@@ -266,6 +282,7 @@ fn walk_pages(doc: &Document, pages: &[ObjRef]) -> (HashMap<ObjRef, f64>, HashSe
         complete: true,
         out: HashMap::new(),
         defaults: HashSet::new(),
+        defaults_cmyk: HashSet::new(),
         read: Read::default(),
     };
     for p in pages {
@@ -281,13 +298,14 @@ fn walk_pages(doc: &Document, pages: &[ObjRef]) -> (HashMap<ObjRef, f64>, HashSe
         };
         // Content coordinates are in page units; image resolution is in physical inches.
         let unit = page.user_unit(doc);
-        walk.content(&data, &res, holder, Matrix([unit, 0.0, 0.0, unit, 0.0, 0.0]), false);
+        walk.content(&data, &res, holder, Matrix([unit, 0.0, 0.0, unit, 0.0, 0.0]), false, false);
     }
     if !walk.complete {
         walk.out.values_mut().for_each(|v| *v = f64::INFINITY);
         walk.defaults.extend(walk.out.keys().map(|r| r.num));
+        walk.defaults_cmyk.extend(walk.out.keys().map(|r| r.num));
     }
-    (walk.out, walk.defaults, walk.read)
+    (walk.out, walk.defaults, walk.defaults_cmyk, walk.read)
 }
 
 /// Whether image `r` is one [`one_bit`] may make grey: eight-bit `DeviceRGB`, not in an image codec.
@@ -1400,21 +1418,16 @@ pub(crate) fn run(
     progress: &mut dyn FnMut(Stage) -> bool,
     budget: &mut ImageBudget,
 ) -> Result<(), OptimizeError> {
-    let (ppi, mut defaults, read) = walk_pages(doc, pages);
+    let (ppi, mut defaults, mut defaults_cmyk, read) = walk_pages(doc, pages);
     // Black-and-white RGB becomes grey, which default colour spaces would draw otherwise, and an
     // indexed image's palette says which of its samples a resampled one keeps, which they may
     // change: one used where the walk didn't look may be drawn so.
     let packs = settings.mono.compression != MonoCompression::Retain;
-    let checked: HashSet<u32> = ppi
-        .keys()
-        .filter(|r| {
-            (packs && device_rgb(doc, **r))
-                || (settings.mono.downsample && indexed(doc, **r))
-                || (settings.convert_cmyk_to_rgb && is_cmyk_image(doc, **r))
-        })
-        .map(|r| r.num)
-        .collect();
+    let checked: HashSet<u32> =
+        ppi.keys().filter(|r| (packs && device_rgb(doc, **r)) || (settings.mono.downsample && indexed(doc, **r))).map(|r| r.num).collect();
     defaults.extend(used_elsewhere(doc, &checked, &read));
+    let checked_cmyk: HashSet<u32> = ppi.keys().filter(|r| settings.convert_cmyk_to_rgb && is_cmyk_image(doc, **r)).map(|r| r.num).collect();
+    defaults_cmyk.extend(used_elsewhere(doc, &checked_cmyk, &read));
     // Soft masks are processed with their image, not on their own.
     let masks: HashSet<ObjRef> = ppi
         .keys()
@@ -1456,7 +1469,7 @@ pub(crate) fn run(
         }
         let n = s.dict.get(b"ColorSpace").and_then(|cs| components(doc, cs));
         let processed = n.and_then(|n| process(doc, s, ppi, if n == 1 { &settings.gray } else { &settings.color }, n, budget)).or_else(|| {
-            if settings.convert_cmyk_to_rgb && !defaults.contains(&r.num) { process_cmyk(doc, s, ppi, &settings.color, budget) } else { None }
+            if settings.convert_cmyk_to_rgb && !defaults_cmyk.contains(&r.num) { process_cmyk(doc, s, ppi, &settings.color, budget) } else { None }
         });
         // A dithered scan, say, downsampled and JPEG-compressed: the smaller wins, counting a soft
         // mask resampled with it.
