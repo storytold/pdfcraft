@@ -9,6 +9,7 @@ mod button_caption;
 mod form_bulk;
 mod hostile_args;
 mod model_3d;
+mod model_render;
 mod optimize_content_boundaries;
 mod redact_after_stray_q_form;
 mod redact_text_after_q;
