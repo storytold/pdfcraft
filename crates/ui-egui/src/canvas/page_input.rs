@@ -462,6 +462,9 @@ impl PageHits<'_> {
     /// whatever the field tool. Links count for the tools that reach them (Select; the Link tool,
     /// below). Edit text's paragraphs have no menu, and give way to the picture under them (the
     /// user's ruling): with Edit text, a picture under a link or a paragraph takes the right-click.
+    /// Nor have added content or an open paragraph's frame: those give way to a picture under them,
+    /// and to nothing else. (Where objects are selected together, the page view unselects the picture
+    /// a right-click selects, and the menu is the page's.)
     /// A highlight over a link is the highlight's ([`comments::context_hit`]).
     /// The Link tool edits links and reaches no comment: on a document it can change, its
     /// right-click is what its press there would take (`under`, the hits at `p`), when that is
@@ -473,11 +476,18 @@ impl PageHits<'_> {
         {
             return Some(press.owner);
         }
-        let reached = self
+        let reached: Vec<_> = self
             .hits(view, p, true, None)
             .into_iter()
-            .filter(|h| (h.layer != Layer::Link || h.layer.reached_by(self.tool)) && !matches!(h.owner, Owner::Paragraph { .. }));
-        top(reached, QuickTool::Select).map(|h| h.owner)
+            .filter(|h| (h.layer != Layer::Link || h.layer.reached_by(self.tool)) && !matches!(h.owner, Owner::Paragraph { .. }))
+            .collect();
+        let on_top = top(reached.iter().cloned(), QuickTool::Select)?.owner;
+        if self.tool == QuickTool::EditText && matches!(on_top, Owner::Added { .. } | Owner::Objects { part: crate::page_router::ObjectsPart::Frame })
+        {
+            let pictures = reached.into_iter().filter(|h| matches!(h.owner, Owner::Picture { .. }));
+            return Some(top(pictures, QuickTool::Select).map_or(on_top, |h| h.owner));
+        }
+        Some(on_top)
     }
 
     /// The hits at `p`, bottom up: links, comments; Edit text's pictures under its paragraphs (text

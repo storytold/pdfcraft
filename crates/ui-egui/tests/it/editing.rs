@@ -7336,6 +7336,47 @@ fn a_right_click_on_text_over_a_picture_selects_the_picture() {
     assert_eq!(selected, Some((0, 0)), "the picture under the text is selected for its menu");
 }
 
+/// With Edit text, a right-click on added text over a picture is the picture's, which is selected
+/// for its menu: added text has no menu of its own. It unselected the picture and opened the page's.
+#[test]
+fn a_right_click_on_added_text_over_a_picture_selects_the_picture() {
+    let mut h = picture_pages(false);
+    h.state_mut().views[0].image_selection = None;
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::AddText {
+        page: 0,
+        text: pdfcraft_engine::AddedText { rect: [60.0, 190.0, 150.0, 205.0], text: "Added".into(), ..Default::default() },
+    }));
+    h.run_steps(3);
+    let on_it = page_at(&h, 0, 100.0, 198.0);
+    right_click_at(&mut h, on_it);
+    let selected = h.state().views[0].image_selection.as_ref().map(|s| (s.page, s.index));
+    assert_eq!(selected, Some((0, 0)), "the picture under the added text is selected for its menu");
+    assert!(h.query_by_label("Flip horizontal").is_some(), "its menu opens");
+}
+
+/// With Edit text, a right-click on the frame of a paragraph open for typing over a picture is the
+/// picture's too. It unselected the picture and opened the page's menu.
+#[test]
+fn a_right_click_on_an_open_paragraphs_frame_over_a_picture_selects_the_picture() {
+    let mut h = picture_pages(false);
+    h.state_mut().views[0].image_selection = None;
+    h.run_steps(2);
+    // "Overlay" lies on the picture, at x 40, y 220.
+    let overlay = page_at(&h, 0, 50.0, 224.0);
+    slipping_click(&mut h, overlay, overlay);
+    assert!(h.state().views[0].line_editor.is_some(), "the paragraph is open for typing");
+    let id = h.state().views[0].id;
+    let blocks = h.state().session.get(id).unwrap().text_blocks(0);
+    let block =
+        blocks.iter().find(|b| b.rect[0] < 50.0 && 50.0 < b.rect[2] && b.rect[1] < 224.0 && 224.0 < b.rect[3]).expect("the paragraph opened").clone();
+    // Its frame runs just outside its box.
+    let frame = page_at(&h, 0, block.rect[0] as f32, ((block.rect[1] + block.rect[3]) / 2.0) as f32) - egui::vec2(3.0, 0.0);
+    right_click_at(&mut h, frame);
+    let selected = h.state().views[0].image_selection.as_ref().map(|s| (s.page, s.index));
+    assert_eq!(selected, Some((0, 0)), "the picture under the frame is selected for its menu");
+    assert!(h.query_by_label("Flip horizontal").is_some(), "its menu opens");
+}
+
 /// In crop mode, a right-click on another picture selects it for its menu, as without crop mode. It
 /// went to crop mode's whole-page hit, which unselected every picture.
 #[test]

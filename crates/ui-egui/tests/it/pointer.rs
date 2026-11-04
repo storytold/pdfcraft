@@ -1579,6 +1579,22 @@ fn a_right_click_with_edit_text_on_a_paragraph_under_a_comment_selects_the_comme
     assert_eq!(h.state().views[0].comments.selected, None, "the paragraph beside the comment leaves it unselected");
 }
 
+/// With Edit text, a right-click on added text over a comment selects no comment: what has no menu
+/// gives way to a picture under it and to nothing else, as before.
+#[test]
+fn a_right_click_with_edit_text_on_added_text_over_a_comment_selects_no_comment() {
+    let mut h = open(comment_on_text_pdf(), "150", false);
+    assert!(h.state_mut().execute("edit.edit_text"));
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::AddText {
+        page: 0,
+        text: pdfcraft_engine::AddedText { rect: [110.0, 296.0, 190.0, 311.0], text: "Added".into(), ..Default::default() },
+    }));
+    h.run_steps(4);
+    let on_added = at(&h, 150.0, 303.0);
+    right_click(&mut h, on_added);
+    assert_eq!(h.state().views[0].comments.selected, None, "the comment under the added text is not selected");
+}
+
 /// With a Prepare field tool a right-click is the tool's, as before: a comment under it is not
 /// selected.
 #[test]

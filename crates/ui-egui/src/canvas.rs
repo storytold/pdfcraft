@@ -1676,7 +1676,7 @@ fn draw_pages(
         // Set again below by the page right-clicked: a right-click off the pages (between them,
         // beside one) anchors no page's menu, which then acts on the current page. It deselects the
         // comment, and Edit text's picture, too (below), as one on a page's empty part does. A
-        // selected Prepare field keeps its menu, off the pages as on them.
+        // selected Prepare field stays selected, and the menu is the page's there too.
         view.comments.context_at = None;
         view.menu_for = None;
     }
