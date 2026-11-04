@@ -735,7 +735,15 @@ fn settle_text_editor(
 
 /// Tab / Shift+Tab: commits the field and moves to the next fillable widget in the document's tab
 /// order, returning the edit to apply (the commit's, or `edit`).
-fn tab_to_next_field(view: &mut DocView, info: &DocInfo, form: &[FormField], f: &FormField, widget: usize, forward: bool, edit: Option<Edit>) -> Option<Edit> {
+fn tab_to_next_field(
+    view: &mut DocView,
+    info: &DocInfo,
+    form: &[FormField],
+    f: &FormField,
+    widget: usize,
+    forward: bool,
+    edit: Option<Edit>,
+) -> Option<Edit> {
     commit(view, form);
     let pending = view.pending_edit.take();
     // The next field that can be filled in, check boxes and radio buttons included (#2223), in
