@@ -171,7 +171,7 @@ fn a_click_selects_the_topmost_of_comments_and_group_subordinates() {
             hidden: false,
             redact_mark: ([0.0; 3], 1.0),
         };
-        let hit = cx.click_hit(pos2(100.0, 100.0));
+        let hit = cx.click_target(pos2(100.0, 100.0));
         assert_eq!(hit.map(|a| (a.index, a.contents.as_deref())), Some((index, Some(contents))), "{case}: the press lands on it");
         assert_eq!(hit.map(|a| cx.selects(a)), Some((0, selects)), "{case}: a click selects it, or its group's primary");
     }

@@ -419,6 +419,11 @@ impl PageCx<'_> {
 
     /// The comment, or group subordinate, listed at `index` on this page: a subordinate is moved
     /// and resized on its own ([`Self::selected_here`]).
+    /// This page's comment or group subordinate `index`, by its place in `/Annots`.
+    pub(super) fn annotation(&self, index: usize) -> Option<&Annotation> {
+        self.get(index).or_else(|| self.group_members().into_iter().map(|(m, _)| m).find(|m| m.index == index))
+    }
+
     pub(crate) fn get(&self, index: usize) -> Option<&Annotation> {
         self.comments().find(|a| a.index == index).or_else(|| self.group_members().into_iter().map(|(m, _)| m).find(|m| m.index == index))
     }
@@ -443,13 +448,13 @@ impl PageCx<'_> {
     /// The comment or group subordinate a press at `p` lands on: the topmost under it, in
     /// `/Annots` (paint) order as [`Self::hit`] reads it. A click there selects [`Self::selects`];
     /// a drag moves just it.
-    pub(super) fn click_hit(&self, p: Pos2) -> Option<&Annotation> {
-        self.click_hit_where(p, |_| true)
+    pub(super) fn click_target(&self, p: Pos2) -> Option<&Annotation> {
+        self.click_target_where(p, |_| true)
     }
 
-    /// [`Self::click_hit`] among the annotations `takes` accepts: a tool that picks up only some
+    /// [`Self::click_target`] among the annotations `takes` accepts: a tool that picks up only some
     /// (Fill & Sign's marks) reaches one under an annotation it ignores.
-    pub(super) fn click_hit_where(&self, p: Pos2, takes: impl Fn(&Annotation) -> bool) -> Option<&Annotation> {
+    pub(super) fn click_target_where(&self, p: Pos2, takes: impl Fn(&Annotation) -> bool) -> Option<&Annotation> {
         self.comments()
             .chain(self.group_members().into_iter().map(|(m, _)| m))
             .filter(|a| takes(a) && self.screen_rects(a).any(|r| r.expand(3.0).contains(p)))
