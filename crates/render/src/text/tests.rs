@@ -1996,3 +1996,31 @@ trailer << /Root 1 0 R >>
     let text = extract_page(&pdf, 0, &InterpreterSettings::default()).unwrap();
     assert_eq!(text.plain_text(), "ab\ncd");
 }
+
+/// The same font with `d0` glyphs: there is no glyph box, so the non-empty `/FontBBox` bounds them.
+#[test]
+fn type3_lines_are_boxed_by_their_glyphs_not_by_the_font_size_without_d1_use_the_font_bbox() {
+    let proc = "120 0 d0 0 0 100 100 re f";
+    let content = "BT /F1 58 Tf 1 0 0 1 10 60 Tm (ab) Tj 1 0 0 1 10 51.6 Tm (cd) Tj ET";
+    let pdf = format!(
+        "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj
+4 0 obj << /Length {} >> stream
+{content}
+endstream endobj
+5 0 obj << /Type /Font /Subtype /Type3 /FontBBox [0 0 100 100] /FontMatrix [0.001 0 0 0.001 0 0] /FirstChar 97 /LastChar 100 /Widths [120 120 120 120]
+  /Encoding << /Differences [97 /a /b /c /d] >> /CharProcs << /a 6 0 R /b 6 0 R /c 6 0 R /d 6 0 R >> >> endobj
+6 0 obj << /Length {} >> stream
+{proc}
+endstream endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+        content.len(),
+        proc.len()
+    );
+    let pdf = Pdf::new(std::sync::Arc::new(pdf.into_bytes())).unwrap();
+    let text = extract_page(&pdf, 0, &InterpreterSettings::default()).unwrap();
+    assert_eq!(text.plain_text(), "ab\ncd");
+}

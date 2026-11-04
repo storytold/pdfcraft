@@ -139,7 +139,7 @@ impl<'a> Type3<'a> {
         }
         let bounds = from_glyph.or_else(|| (self.font_bbox.width() * self.font_bbox.height() > 0.0).then_some(self.font_bbox))?;
         let scale = Affine::scale(UNITS_PER_EM as f64);
-        let r = (scale * self.matrix).transform_rect_bbox(bounds.abs());
+        let r = (self.matrix * scale).transform_rect_bbox(bounds.abs());
         (r.y0.is_finite() && r.y1.is_finite() && r.height() > 0.0).then_some(r)
     }
 
