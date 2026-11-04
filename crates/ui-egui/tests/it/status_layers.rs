@@ -375,31 +375,45 @@ fn a_value_typed_against_a_certification_shows_while_every_page_redraws() {
     let value = pdfcraft_engine::FieldValue::Text("Ada".into());
     assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::SetFieldValue { name: "name".into(), value }));
     assert_eq!(h.state().session.get(doc_id).unwrap().signatures[0].status, SignatureStatus::Invalid);
-    assert!(h.state().views[0].forms.unbaked.contains(&("name".to_string(), 0)), "the value typed is drawn until page 1 redraws");
+    assert!(h.state().views[0].forms.unbaked.contains(&("name".to_string(), 0)), "the value typed is pending until page 1 redraws");
 }
 
 #[test]
-fn values_still_waiting_on_their_page_stay_drawn_when_a_form_edit_redraws_every_page() {
-    // A field filled in after an approval signature leaves every state as it was; deleting the
-    // unsigned signature field then shortens the list, so every page redraws. The value typed first
-    // is still waiting on page 1's raster and stays drawn until it arrives.
+fn values_still_waiting_on_their_page_stay_pending_when_a_later_edit_redraws_every_page() {
+    // A certification that allows filling in fields: the fill leaves every state as it was. Each
+    // second edit changes the list, deleting the unsigned signature field or breaking the
+    // certification with a comment, so every page redraws; neither moves a page, so the value typed
+    // first stays pending, drawn over page 1's old raster until the new one arrives.
     let p12 = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12")).unwrap();
     let id = pdfcraft_engine::sign::pkcs12::open(&p12, "test").unwrap();
+    let anchor = id.chain.first().cloned().unwrap_or_else(|| id.certificate.clone());
     let unsigned: &[u8] = b"<< /FT /Sig /T (Signature2) /Type /Annot /Subtype /Widget /Rect [100 230 300 280] /P 3 0 R >>";
-    let mut h = harness(sign(&id, with_fields(fixture(), &[NAME_FIELD, unsigned]), |_| {}), "en");
-    let doc_id = h.state().views[0].id;
-    let states = |h: &Harness<'static, PdfCraftApp>| {
-        h.state().session.get(doc_id).unwrap().signatures.iter().map(|s| (s.field.clone(), s.status, s.verdict_shown)).collect::<Vec<_>>()
-    };
-    let before = states(&h);
-    let value = pdfcraft_engine::FieldValue::Text("Ada".into());
-    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::SetFieldValue { name: "name".into(), value }));
-    assert_eq!(states(&h), before, "filling in a field after an approval signature changes no state");
-    assert!(h.state().views[0].forms.unbaked.contains(&("name".to_string(), 0)));
+    let shape = pdfcraft_engine::Shape::Rectangle { rect: [320.0, 20.0, 380.0, 80.0] };
+    let style = pdfcraft_engine::Style::default_for(&shape);
+    let comment = pdfcraft_engine::NewAnnotation { page: 0, style, shape, contents: String::new(), author: "Tester".into() };
+    for second in [pdfcraft_engine::Edit::DeleteField { name: "Signature2".into() }, pdfcraft_engine::Edit::AddAnnotation(comment)] {
+        let bytes = sign(&id, with_fields(fixture(), &[NAME_FIELD, unsigned]), |v| {
+            let reference = b"[<< /Type /SigRef /TransformMethod /DocMDP /TransformParams << /Type /TransformParams /P 2 /V /1.2 >> >>]";
+            v.set(b"Reference".to_vec(), pdfcraft_cos::Lexer::new(reference, 0).object().unwrap());
+        });
+        let mut h = harness(bytes, "en");
+        h.state_mut().apply_trusted_certificates(vec![anchor.clone()]);
+        settle(&mut h);
+        let doc_id = h.state().views[0].id;
+        let states = |h: &Harness<'static, PdfCraftApp>| {
+            h.state().session.get(doc_id).unwrap().signatures.iter().map(|s| (s.field.clone(), s.status, s.verdict_shown)).collect::<Vec<_>>()
+        };
+        let before = states(&h);
+        let value = pdfcraft_engine::FieldValue::Text("Ada".into());
+        assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::SetFieldValue { name: "name".into(), value }));
+        assert_eq!(states(&h), before, "the certification allows filling in a field");
+        assert!(h.state().views[0].forms.unbaked.contains(&("name".to_string(), 0)));
 
-    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::DeleteField { name: "Signature2".into() }));
-    assert_eq!(states(&h).len(), before.len() - 1, "the unsigned field left the list");
-    assert!(h.state().views[0].forms.unbaked.contains(&("name".to_string(), 0)), "the value typed first is drawn until page 1 redraws");
+        let label = second.label();
+        assert!(h.state_mut().apply_edit(second), "{label}");
+        assert_ne!(states(&h), before, "{label} changes the list");
+        assert!(h.state().views[0].forms.unbaked.contains(&("name".to_string(), 0)), "{label}: the value typed first is still pending");
+    }
 }
 
 #[test]

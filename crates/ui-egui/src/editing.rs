@@ -172,17 +172,21 @@ impl PdfCraftApp {
                 let form_edit = form_before
                     .filter(|_| doc.info.pages.len() == page_count_before && doc.xfa.is_some() == had_xfa && doc.xfa.is_none() && is_form_edit(&edit))
                     .map(|before| form_edit_pages(&before, &doc.form));
+                let one_page = comment_page(&edit).or_else(|| content_page(&edit));
                 if signatures_before.is_some_and(|before| crate::canvas::signature_states_changed(&before, &doc.signatures)) {
                     // A signature shows its state on its own page, which an edit elsewhere can
-                    // change (a certification forbidding it, say): every page redraws. A form edit
-                    // moves no page, so the values it and earlier edits typed show until theirs do.
-                    let waiting = form_edit.is_some().then(|| std::mem::take(&mut view.forms.unbaked));
+                    // change (a certification forbidding it, say): every page redraws. An edit that
+                    // moves no page (a form edit, or one to a page's comments or content) keeps the
+                    // values typed, in it and before it, showing until their pages redraw.
+                    let waiting = (form_edit.is_some() || one_page.is_some()).then(|| std::mem::take(&mut view.forms.unbaked));
                     view.document_changed(info);
-                    if let (Some(waiting), Some((_, unbaked))) = (waiting, form_edit) {
+                    if let Some(waiting) = waiting {
                         view.forms.unbaked = waiting;
+                    }
+                    if let Some((_, unbaked)) = form_edit {
                         view.forms.unbaked.extend(unbaked);
                     }
-                } else if let Some(page) = comment_page(&edit).or_else(|| content_page(&edit)) {
+                } else if let Some(page) = one_page {
                     // Comment and content edits change one page: keep every other raster.
                     view.page_changed(page);
                 } else if let Some((changed_pages, unbaked)) = form_edit {
