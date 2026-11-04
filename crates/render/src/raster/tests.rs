@@ -4058,7 +4058,10 @@ fn jbig2_image_draws_with(stream: &[u8], space: &str, entries: &str, objects: &[
     pdf.extend_from_slice(b"\nendstream endobj\n");
     pdf.extend_from_slice(objects);
     pdf.extend_from_slice(b"trailer << /Root 1 0 R >>\n%%EOF\n");
-    let mut r = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
+    // What one image may take, which the page's allowance, tested on its own, would otherwise reach
+    // first: it is the same size, and the page itself comes out of it.
+    let config = RenderConfig { jbig2_work: Some(u64::MAX), ..RenderConfig::default() };
+    let mut r = PageRenderer::new(Arc::new(pdf), config);
     let page = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() });
     assert!(page.error.is_none(), "{:?}", page.error);
     assert_eq!(&page.rgba[((38 * 40 + 1) * 4)..][..4], &[255, 0, 0, 255], "the rest of the page draws");
@@ -4068,6 +4071,217 @@ fn jbig2_image_draws_with(stream: &[u8], space: &str, entries: &str, objects: &[
         [255, 255, 255, 255] => false,
         other => panic!("neither the image nor the page: {other:?}"),
     }
+}
+
+/// The JBIG2 images of a page share one allowance, down to the step, and the next page starts with
+/// its own. The images differ by an extension segment: one image decoded again isn't decoded twice.
+#[test]
+fn the_jbig2_images_of_a_page_share_one_allowance() {
+    let image = |number: u8, id: u8| {
+        let mut stream = black_jbig2_page();
+        jbig2_segment(&mut stream, 1, 62, &[], &[0, 0, 0, 0, id]);
+        let mut object = format!(
+            "{number} 0 obj << /Type /XObject /Subtype /Image /Width 16 /Height 2 /BitsPerComponent 1 /ColorSpace /DeviceGray /Filter /JBIG2Decode /Length {} >> stream\n",
+            stream.len()
+        )
+        .into_bytes();
+        object.extend_from_slice(&stream);
+        object.extend_from_slice(b"\nendstream endobj\n");
+        object
+    };
+    let page = |number: u8, content: u8, xobjects: &str| {
+        format!("{number} 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents {content} 0 R /Resources << /XObject << {xobjects} >> >> >> endobj\n").into_bytes()
+    };
+    let content = |number: u8, text: &str| format!("{number} 0 obj << /Length {} >> stream\n{text}\nendstream endobj\n", text.len()).into_bytes();
+    let mut pdf =
+        b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >> endobj\n".to_vec();
+    pdf.extend(page(3, 5, "/A 7 0 R /B 8 0 R"));
+    pdf.extend(page(4, 6, "/C 9 0 R"));
+    pdf.extend(content(5, "q 20 0 0 40 0 0 cm /A Do Q q 20 0 0 40 20 0 cm /B Do Q"));
+    pdf.extend(content(6, "q 20 0 0 40 0 0 cm /C Do Q"));
+    pdf.extend(image(7, 1));
+    pdf.extend(image(8, 2));
+    pdf.extend(image(9, 3));
+    pdf.extend_from_slice(b"trailer << /Root 1 0 R >>\n%%EOF\n");
+    let pdf = Arc::new(pdf);
+    let black = |page: &RenderedPage, x: usize| match &page.rgba[((20 * 40 + x) * 4)..][..4] {
+        [0, 0, 0, 255] => true,
+        [255, 255, 255, 255] => false,
+        other => panic!("neither an image nor the page: {other:?}"),
+    };
+    let pages = |work: u64| {
+        let mut renderer = PageRenderer::new(pdf.clone(), RenderConfig { jbig2_work: Some(work), ..RenderConfig::default() });
+        [0, 1].map(|page| renderer.render(RenderRequest { page, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() }))
+    };
+    let drawn = |work: u64| {
+        let [first, _] = pages(work);
+        assert!(first.error.is_none(), "{:?}", first.error);
+        (black(&first, 10), black(&first, 30))
+    };
+    let one = (1..1_000).find(|work| drawn(*work).0).expect("a small image is cheap");
+    assert_eq!(drawn(one - 1), (false, false), "a step short of the first");
+    assert_eq!(drawn(one), (true, false), "enough for one");
+    assert_eq!(drawn(2 * one - 1), (true, false), "a step short of both");
+    assert_eq!(drawn(2 * one), (true, true), "enough for both");
+    let [first, second] = pages(one);
+    assert!(first.warnings.contains(&RenderWarning::ContentTruncated), "the page says it left something out: {:?}", first.warnings);
+    assert!(pages(2 * one)[0].warnings.is_empty(), "and only then");
+    assert!(black(&second, 10), "the next page has its own allowance, though this one spent all of it");
+    let usual = PageRenderer::new(pdf.clone(), RenderConfig::default()).render(RenderRequest {
+        page: 0,
+        kind: RequestKind::Pixels,
+        tile: None,
+        scale: 1.0,
+        tag: 0,
+        ..Default::default()
+    });
+    assert!(black(&usual, 10) && black(&usual, 30), "the usual allowance is far above a page like this");
+}
+
+/// Without its mask a picture would show what the mask hides, so a JBIG2 mask past the page's
+/// allowance takes the picture with it, and the page says so. A mask that can't be read for any
+/// other reason leaves the picture, as it did.
+#[test]
+fn a_picture_whose_jbig2_mask_is_past_the_pages_allowance_is_not_drawn() {
+    let draw = |entry: &str, filter: &str, mask: &[u8], work: u64| {
+        let content = b"q 20 0 0 20 5 5 cm /Im1 Do Q";
+        let mut pdf = b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents 4 0 R /Resources << /XObject << /Im1 5 0 R >> >> >> endobj\n".to_vec();
+        pdf.extend_from_slice(format!("4 0 obj << /Length {} >> stream\n", content.len()).as_bytes());
+        pdf.extend_from_slice(content);
+        pdf.extend_from_slice(b"\nendstream endobj\n");
+        pdf.extend_from_slice(
+            format!("5 0 obj << /Type /XObject /Subtype /Image /Width 1 /Height 1 /BitsPerComponent 8 /ColorSpace /DeviceGray {entry} 6 0 R /Length 1 >> stream\n\0\nendstream endobj\n").as_bytes(),
+        );
+        let kind = if entry == "/Mask" { "/ImageMask true" } else { "/ColorSpace /DeviceGray" };
+        pdf.extend_from_slice(
+            format!(
+                "6 0 obj << /Type /XObject /Subtype /Image /Width 16 /Height 2 /BitsPerComponent 1 {kind} /Filter {filter} /Length {} >> stream\n",
+                mask.len()
+            )
+            .as_bytes(),
+        );
+        pdf.extend_from_slice(mask);
+        pdf.extend_from_slice(b"\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF\n");
+        let config = RenderConfig { jbig2_work: Some(work), ..RenderConfig::default() };
+        let page = PageRenderer::new(Arc::new(pdf), config).render(RenderRequest {
+            page: 0,
+            kind: RequestKind::Pixels,
+            tile: None,
+            scale: 1.0,
+            tag: 0,
+            ..Default::default()
+        });
+        assert!(page.error.is_none(), "{:?}", page.error);
+        let shown = match &page.rgba[((25 * 40 + 15) * 4)..][..4] {
+            [0, 0, 0, 255] => true,
+            [255, 255, 255, 255] => false,
+            other => panic!("neither the picture nor the page: {other:?}"),
+        };
+        (shown, page.warnings.contains(&RenderWarning::ContentTruncated))
+    };
+    let mask = black_jbig2_page();
+    let jbig2 = "/JBIG2Decode";
+    assert_eq!(draw("/SMask", jbig2, &mask, u64::MAX), (false, false), "the mask hides all of it");
+    assert_eq!(draw("/SMask", jbig2, &mask, 0), (false, true), "past the allowance a soft mask hides it too");
+    assert_eq!(draw("/Mask", jbig2, &mask, 0), (false, true), "and so does a stencil mask");
+    assert_eq!(draw("/SMask", jbig2, b"no JBIG2 here", 1 << 20), (true, false), "any other bad mask is no mask");
+    let other = draw("/SMask", "/DCTDecode", b"no JPEG here", 0);
+    assert_eq!(other, (true, false), "and a page with nothing left says nothing of a mask that isn't JBIG2");
+}
+
+/// A page's allowance ends with it, so what decodes on its thread afterwards has no page to run out
+/// on, and a `Context` used again starts afresh.
+#[test]
+fn a_pages_jbig2_allowance_ends_with_the_page() {
+    use hayro::hayro_interpret::font::Glyph;
+    use hayro::hayro_interpret::hayro_syntax::Pdf;
+    use hayro::hayro_interpret::{
+        BlendMode, ClipPath, Context, Device, GlyphDrawMode, Image, InterpreterCache, InterpreterSettings, Paint, PathDrawMode, SoftMask,
+        TransformExt, interpret_page,
+    };
+    use hayro_syntax::page_jbig2_work_spent;
+    use kurbo::{Affine, BezPath, Rect};
+
+    /// Notes at each path whether the page has run out.
+    struct Spent(Vec<bool>);
+    impl<'a> Device<'a> for Spent {
+        fn set_soft_mask(&mut self, _: Option<SoftMask<'a>>) {}
+        fn set_blend_mode(&mut self, _: BlendMode) {}
+        fn draw_path(&mut self, _: &BezPath, _: Affine, _: &Paint<'a>, _: &PathDrawMode) {
+            self.0.push(page_jbig2_work_spent());
+        }
+        fn push_clip_path(&mut self, _: &ClipPath) {}
+        fn push_transparency_group(&mut self, _: f32, _: Option<SoftMask<'a>>, _: BlendMode) {}
+        fn draw_glyph(&mut self, _: &Glyph<'a>, _: Affine, _: Affine, _: &Paint<'a>, _: &GlyphDrawMode) {}
+        fn draw_image(&mut self, _: Image<'a, '_>, _: Affine) {}
+        fn pop_clip_path(&mut self) {}
+        fn pop_transparency_group(&mut self) {}
+    }
+
+    let content = "0 0 4 4 re f";
+    let bytes = format!(
+        "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents 4 0 R >> endobj\n4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF\n",
+        content.len()
+    );
+    let pdf = Pdf::new(Arc::new(bytes.into_bytes())).expect("parses");
+    let page = &pdf.pages()[0];
+    let cache = InterpreterCache::new();
+    let settings = InterpreterSettings { jbig2_work: 0, ..InterpreterSettings::default() };
+    let mut ctx = Context::new(page.initial_transform(true).to_kurbo(), Rect::new(0.0, 0.0, 40.0, 40.0), &cache, page.xref(), settings);
+    let mut device = Spent(Vec::new());
+    for _ in 0..2 {
+        interpret_page(page, &mut ctx, &mut device);
+        assert!(!page_jbig2_work_spent(), "no page is being drawn");
+    }
+    assert_eq!(device.0, [true, true], "each time, the page has what its settings give it");
+}
+
+/// An image that can't be decoded has still cost its reading, which a page repeats for each time
+/// it draws one, since such an image isn't kept. So what it reads comes out of the page's allowance,
+/// and an image after it has less. Allowed exactly what the good one takes, it isn't drawn behind
+/// the bad one, and is drawn alone.
+#[test]
+fn an_image_that_fails_spends_the_pages_allowance_too() {
+    let image = |number: u8, stream: &[u8]| {
+        let mut object = format!(
+            "{number} 0 obj << /Type /XObject /Subtype /Image /Width 16 /Height 2 /BitsPerComponent 1 /ColorSpace /DeviceGray /Filter /JBIG2Decode /Length {} >> stream\n",
+            stream.len()
+        )
+        .into_bytes();
+        object.extend_from_slice(stream);
+        object.extend_from_slice(b"\nendstream endobj\n");
+        object
+    };
+    let pdf = |content: &str| {
+        let mut pdf = format!(
+            "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+             3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents 4 0 R /Resources << /XObject << /Bad 5 0 R /Good 6 0 R >> >> >> endobj\n\
+             4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n",
+            content.len()
+        )
+        .into_bytes();
+        pdf.extend(image(5, &[0xFF; 64]));
+        pdf.extend(image(6, &black_jbig2_page()));
+        pdf.extend_from_slice(b"trailer << /Root 1 0 R >>\n%%EOF\n");
+        Arc::new(pdf)
+    };
+    let good = "q 40 0 0 40 0 0 cm /Good Do Q";
+    let drawn = |content: &str, work: u64| {
+        let config = RenderConfig { jbig2_work: Some(work), ..RenderConfig::default() };
+        let page = PageRenderer::new(pdf(content), config).render(RenderRequest {
+            page: 0,
+            kind: RequestKind::Pixels,
+            tile: None,
+            scale: 1.0,
+            tag: 0,
+            ..Default::default()
+        });
+        assert!(page.error.is_none(), "{:?}", page.error);
+        page.rgba[((20 * 40 + 20) * 4)..][..4] == [0, 0, 0, 255]
+    };
+    let cost = (1..2_000).find(|work| drawn(good, *work)).expect("a small image is cheap");
+    assert!(!drawn(&format!("q 1 0 0 1 0 0 cm /Bad Do Q {good}"), cost), "the bad one spent some of it");
+    assert!(drawn(&format!("q 1 0 0 1 0 0 cm /Bad Do Q {good}"), cost + 4 * 64), "and what it spent is its reading");
 }
 
 /// Bits written from the top of each byte, as JBIG2's Huffman-coded data is.
@@ -8004,6 +8218,61 @@ fn japanese_substitute_spaces_keep_pdf_widths_and_unicode() {
     }
 }
 
+/// One code, `<0010>`, in a Type 0 font named `base_font` that the PDF doesn't embed, with a
+/// `/ToUnicode` that maps it to the UTF-16 `unicode`. 0x10 is the hyphen's glyph index in Arial,
+/// and Identity-H with an identity `/CIDToGIDMap` makes the code that index, as Word writes it.
+fn soft_hyphen_pdf(base_font: &str, unicode: &str) -> Vec<u8> {
+    let content = "BT /F1 60 Tf 10 20 Td <0010> Tj ET";
+    let cmap = format!(
+        "/CIDInit /ProcSet findresource begin 12 dict begin begincmap
+/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def
+/CMapName /Adobe-Identity-UCS def /CMapType 2 def
+1 begincodespacerange <0000> <FFFF> endcodespacerange
+1 beginbfchar <0010> <{unicode}> endbfchar
+endcmap CMapName currentdict /CMap defineresource pop end end"
+    );
+    format!(
+        "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 60 60] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj
+4 0 obj << /Length {} >> stream
+{content}
+endstream endobj
+5 0 obj << /Type /Font /Subtype /Type0 /BaseFont /{base_font} /Encoding /Identity-H /DescendantFonts [6 0 R] /ToUnicode 8 0 R >> endobj
+6 0 obj << /Type /Font /Subtype /CIDFontType2 /BaseFont /{base_font} /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >>
+  /FontDescriptor 7 0 R /CIDToGIDMap /Identity /DW 1000 /W [16 [333]] >> endobj
+7 0 obj << /Type /FontDescriptor /FontName /{base_font} /Flags 32 /FontBBox [-665 -325 2000 1040] /ItalicAngle 0 /Ascent 728 /Descent -210 /CapHeight 716 /StemV 80 >> endobj
+8 0 obj << /Length {} >> stream
+{cmap}
+endstream endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+        content.len(),
+        cmap.len()
+    )
+    .into_bytes()
+}
+
+/// #5888: Windows exporters map the hyphen glyph of an Arial they don't embed to U+00AD. The
+/// standard substitute has no soft hyphen, so code 0x0010 was taken as its glyph 16 and drew
+/// `Ë` (`!` in bold). It draws the substitute's hyphen now, and the text keeps the soft hyphen.
+#[test]
+fn a_soft_hyphen_a_substitute_lacks_draws_its_hyphen() {
+    for base_font in ["ArialMT", "Arial-BoldMT"] {
+        let soft = soft_hyphen_pdf(base_font, "00AD");
+        let out = render_first_page(soft.clone());
+        let expected = render_first_page(soft_hyphen_pdf(base_font, "002D"));
+        assert!(expected.rgba.as_chunks::<4>().0.iter().any(|pixel| pixel[0] < 128), "{base_font}: the hyphen control must draw ink");
+        assert!(out.rgba.as_ref() == expected.rgba.as_ref(), "{base_font}: a soft hyphen draws as the substitute's hyphen");
+        let mut renderer = PageRenderer::new(Arc::new(soft), RenderConfig::default());
+        let text = renderer.render(RenderRequest { page: 0, kind: RequestKind::Text, ..Default::default() });
+        assert!(text.error.is_none(), "{:?}", text.error);
+        let glyphs: String = text.text.unwrap().glyphs.iter().map(|glyph| glyph.text.as_str()).collect();
+        assert_eq!(glyphs, "\u{ad}", "{base_font}: drawing the hyphen must not rewrite Unicode");
+    }
+}
+
 /// Half-width katakana are common in Japanese documents set in a non-embedded Mincho font
 /// such as HeiseiMin-W3. The Mincho substitute must have those glyphs: one that lacks them
 /// (Shippori Mincho) draws them as .notdef.
@@ -8491,6 +8760,99 @@ mod devicen_inks;
 // patch 27).
 mod isolated_cmyk_groups;
 
+/// The generation-0 stand-in a rebuilt table files an object under must not make the object a
+/// second object: enumeration yielded it once per key, so a document recovered without a readable
+/// page tree reported the page twice (noted in review of #5580).
+///
+/// And a later header for the same object number replaces the stand-in, so `N 0 R` cannot be left
+/// pointing at a body the exact key no longer names.
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn a_rebuilt_tables_generation_0_stand_in_is_not_a_second_object() {
+    // No table, no `startxref`, and no readable page tree: the pages are recovered by looking for
+    // objects that are pages, which is where a doubled object shows up as a doubled page.
+    let pdf = "%PDF-1.4\n\
+               1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+               3 99999 obj << /Type /Page /MediaBox [0 0 200 100] /Contents 4 0 R >> endobj\n\
+               4 0 obj << /Length 0 >> stream\n\nendstream endobj\n\
+               trailer << /Root 1 0 R >>\n\
+               %%EOF\n";
+    let mut r = PageRenderer::new(Arc::new(pdf.to_string().into_bytes()), RenderConfig::default());
+    let first = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false });
+    assert!(first.error.is_none(), "the page is recovered: {:?}", first.error);
+    let second = r.render(RenderRequest { page: 1, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false });
+    assert!(second.error.is_some(), "and it is one page, not two: page 2 must not exist");
+
+    // Two headers for object 3, the second the one the exact key names: the stand-in follows it.
+    // `(B)` is drawn by the later body, so the page that comes back says which one was read.
+    let twice = "%PDF-1.4\n\
+                 1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+                 2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+                 3 1 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Contents 5 0 R >> endobj\n\
+                 3 1 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 150] /Contents 5 0 R >> endobj\n\
+                 5 0 obj << /Length 0 >> stream\n\nendstream endobj\n\
+                 trailer << /Root 1 0 R >>\n\
+                 %%EOF\n";
+    let mut r = PageRenderer::new(Arc::new(twice.to_string().into_bytes()), RenderConfig::default());
+    let page = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false });
+    assert!(page.error.is_none(), "the page is found: {:?}", page.error);
+    assert_eq!((page.width, page.height), (300, 150), "`3 0 R` reads the later body, as `3 1` does");
+}
+
+/// A file whose cross-reference table has to be rebuilt keeps an object whose header names a
+/// generation the reference does not.
+///
+/// `poppler-85140-0.pdf` is 340 bytes with no table at all, and its one page's header reads
+/// `3 18446744073709551616 obj` while the page tree points at `3 0 R`. Before #427 the digits
+/// wrapped, and 2^64 wrapped to exactly 0, so the header read as `3 0 obj` and the file opened by
+/// accident; once an overflowing integer became a real the object was unreachable and the file
+/// stopped opening at all, which `cargo xtask check` reports as a regression (#5580).
+///
+/// A rebuilt table has no revision history to tell two generations of an object apart -- the scan
+/// already files objects found in object streams under generation 0 -- so the object number is
+/// what identifies one. A readable generation that simply is not the one referenced
+/// (`3 99999 obj`) was lost the same way, and is covered here too.
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn a_rebuilt_table_finds_an_object_whose_header_names_another_generation() {
+    for generation in [
+        // The generation the reference names, which always worked.
+        "0",
+        // One that reads as an integer but is not the one referenced.
+        "99999",
+        // And one no generation may be: 2^64, which is what the reported file carries. A
+        // generation number is at most 65,535 (ISO 32000-2 §7.5.4).
+        "18446744073709551616",
+    ] {
+        // No table and no `startxref`, so the objects are recovered by scanning the file.
+        let pdf = format!(
+            "%PDF-1.4\n\
+             1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+             2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+             3 {generation} obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] >> endobj\n\
+             trailer << /Root 1 0 R >>\n\
+             %%EOF\n"
+        );
+        let mut r = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
+        let page = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false });
+        assert!(page.error.is_none(), "generation {generation}: the page is found: {:?}", page.error);
+        assert_eq!((page.width, page.height), (200, 100), "generation {generation}: and it is the page's own size");
+    }
+
+    // A stray number before a header (`42 3 0 obj`) is not a header, and must not cost the one
+    // after it: the lenient read leaves the scan where it was when it fails (noted in review).
+    let pdf = "%PDF-1.4\n\
+               1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+               2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+               42 3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] >> endobj\n\
+               trailer << /Root 1 0 R >>\n\
+               %%EOF\n";
+    let mut r = PageRenderer::new(Arc::new(pdf.to_string().into_bytes()), RenderConfig::default());
+    let page = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false });
+    assert!(page.error.is_none(), "the header after a stray number is found: {:?}", page.error);
+    assert_eq!((page.width, page.height), (200, 100));
+}
+
 /// #3109 / #3116: clipping-only text (`7 Tr`) installs a clip for subsequent painting
 /// but draws no pixels itself.
 #[test]
@@ -8764,4 +9126,272 @@ fn content_after_an_inline_image_holding_ei_is_still_read() {
     // The image ran to the real `EI`, so the text after it is the page's only text: the first
     // `EI` inside the data was not taken for the end.
     assert!(page.contains("AFTER"), "the content after the image was lost: {page:?}");
+}
+
+/// `/Crypt` has nothing to undo, so a chain naming it thousands of times costs no copy of the data
+/// for each. A chain of filters that does work has its own cost, which this isn't about.
+#[test]
+fn a_long_chain_of_crypt_filters_takes_no_time() {
+    use super::*;
+    let content = format!("1 0 0 rg 0 0 200 200 re f\n{}", " ".repeat(16 << 20));
+    let chain = "/Crypt ".repeat(100_000);
+    let pdf = format!(
+        "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+             2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+             3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R >> endobj\n\
+             4 0 obj << /Filter [{chain}] /Length {} >> stream\n{content}\nendstream endobj\n\
+             trailer << /Root 1 0 R >>\n%%EOF",
+        content.len()
+    );
+    let (done, finished) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let page = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default()).render(RenderRequest {
+            page: 0,
+            kind: RequestKind::Pixels,
+            tile: None,
+            scale: 1.0,
+            tag: 0,
+            preview: false,
+        });
+        let start = (100 * page.width as usize + 100) * 4;
+        let _ = done.send(page.rgba.get(start..start + 4).map(<[u8]>::to_vec));
+    });
+    // Skipped, this takes a moment; copied, 1.6 TB, which a margin this wide tells apart however
+    // busy the machine.
+    let pixel = finished.recv_timeout(std::time::Duration::from_secs(120)).expect("the chain costs no copy for each entry");
+    assert_eq!(pixel, Some(vec![255, 0, 0, 255]));
+}
+
+/// A lone filter takes its parameters as a dictionary or as an array of one, and given as an array
+/// of one itself it takes either too. The form of `/Filter` decided which was read, so a predictor
+/// in the other form was lost and the content came out as noise. `/StmF` and `/StrF` are optional,
+/// meaning `/Identity`: such a file didn't open at all, though a stream can still name a filter.
+#[test]
+fn a_filters_parameters_are_read_in_either_form() {
+    use super::*;
+    use pdfcraft_cos::{Algorithm, Dict, Document, NewEncryption, Object, SaveOptions, Stream, write_full, write_incremental};
+    let content = b"1 0 0 rg 0 0 200 200 re f";
+    let centre = |bytes: Vec<u8>| -> [u8; 4] {
+        let page = PageRenderer::new(Arc::new(bytes), RenderConfig::default()).render(RenderRequest {
+            page: 0,
+            kind: RequestKind::Pixels,
+            tile: None,
+            scale: 1.0,
+            tag: 0,
+            preview: false,
+        });
+        let start = (100 * page.width as usize + 100) * 4;
+        let mut pixel = [0; 4];
+        pixel.copy_from_slice(page.rgba.get(start..start + 4).expect("centre pixel"));
+        pixel
+    };
+    let page = |stream: &[u8]| {
+        let mut pdf = b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R >> endobj\n".to_vec();
+        pdf.extend_from_slice(stream);
+        pdf.extend_from_slice(b"\ntrailer << /Root 1 0 R >>\n%%EOF\n");
+        pdf
+    };
+    // PNG Sub over one row, which reads as noise if it isn't undone.
+    let mut rows = vec![1u8];
+    let mut before = 0u8;
+    for b in content {
+        rows.push(b.wrapping_sub(before));
+        before = *b;
+    }
+    let coded = Stream::flate(Dict::new(), &rows).raw;
+    let parms = format!("<< /Predictor 11 /Columns {} >>", content.len());
+    for (filter, decode_parms) in [
+        ("/FlateDecode", parms.clone()),
+        ("/FlateDecode", format!("[{parms}]")),
+        ("[/FlateDecode]", parms.clone()),
+        ("[/FlateDecode]", format!("[{parms}]")),
+    ] {
+        let mut stream = format!("4 0 obj << /Filter {filter} /DecodeParms {decode_parms} /Length {} >> stream\n", coded.len()).into_bytes();
+        stream.extend_from_slice(&coded);
+        stream.extend_from_slice(b"\nendstream endobj");
+        assert_eq!(centre(page(&stream)), [255, 0, 0, 255], "{filter} with {decode_parms}");
+    }
+
+    let plain = format!("4 0 obj << /Length {} >> stream\n{}\nendstream endobj", content.len(), String::from_utf8_lossy(content));
+    let mut doc = Document::open(Arc::new(page(plain.as_bytes()))).unwrap();
+    doc.set_encryption(&NewEncryption {
+        algorithm: Algorithm::Aes128,
+        user_password: "",
+        owner_password: "owner",
+        permissions: -1,
+        encrypt_metadata: true,
+        seed: [9; 32],
+    })
+    .unwrap();
+    // No object streams: they would be encrypted under the /StmF about to go.
+    let saved = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
+    let mut doc = Document::open(Arc::new(saved)).unwrap();
+    let encrypt = doc.trailer().reference(b"Encrypt").unwrap();
+    doc.update_dict(encrypt, |e| {
+        e.remove(b"StmF");
+        e.remove(b"StrF");
+    })
+    .unwrap();
+    let mut doc = Document::open(Arc::new(write_incremental(&doc, &SaveOptions::default()).unwrap())).unwrap();
+    let catalog = doc.get(doc.root().unwrap());
+    let pages = doc.get(catalog.as_dict().unwrap().reference(b"Pages").unwrap());
+    let first = doc.resolve(&pages.as_dict().unwrap().get(b"Kids").unwrap().as_array().unwrap()[0]);
+    let contents = first.as_dict().unwrap().reference(b"Contents").unwrap();
+    let mut named = Dict::new();
+    named.set(b"Name".to_vec(), Object::name("StdCF"));
+    let mut dict = Dict::new();
+    dict.set(b"Filter".to_vec(), Object::name("Crypt"));
+    dict.set(b"DecodeParms".to_vec(), Object::Dict(named));
+    doc.set(contents, Object::Stream(Stream::from_raw(dict, content.to_vec())));
+    assert_eq!(centre(write_incremental(&doc, &SaveOptions::default()).unwrap()), [255, 0, 0, 255], "no /StmF, and a stream naming StdCF");
+}
+
+/// A stream can pick its own crypt filter: `/Crypt` in `/Filter`, with the filter's name in
+/// `/DecodeParms`, or `/Identity` without one (ISO 32000-2 §7.4.10). The renderer used the
+/// document's filter for every stream, and then couldn't decode `/Crypt`, so the page stayed blank.
+#[test]
+fn a_stream_with_a_crypt_filter_of_its_own_is_drawn() {
+    use super::*;
+    use pdfcraft_cos::{Algorithm, Dict, Document, NewEncryption, Object, SaveOptions, Stream, write_full, write_incremental};
+    let content = "1 0 0 rg 0 0 200 200 re f";
+    let page = format!(
+        "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+             2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+             3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R >> endobj\n\
+             4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+             trailer << /Root 1 0 R >>\n%%EOF",
+        content.len()
+    );
+    let centre = |bytes: Vec<u8>| -> [u8; 4] {
+        let page = PageRenderer::new(Arc::new(bytes), RenderConfig::default()).render(RenderRequest {
+            page: 0,
+            kind: RequestKind::Pixels,
+            tile: None,
+            scale: 1.0,
+            tag: 0,
+            preview: false,
+        });
+        let start = (100 * page.width as usize + 100) * 4;
+        let mut pixel = [0; 4];
+        pixel.copy_from_slice(page.rgba.get(start..start + 4).expect("centre pixel"));
+        pixel
+    };
+    let name = |n: &str| {
+        let mut parms = Dict::new();
+        parms.set(b"Name".to_vec(), Object::name(n));
+        Object::Dict(parms)
+    };
+    let hex: String = content.bytes().map(|b| format!("{b:02X}")).chain([">".to_string()]).collect();
+    let crypt = || Object::name("Crypt");
+    let contents_of = |doc: &Document| {
+        let catalog = doc.get(doc.root().unwrap());
+        let pages = doc.get(catalog.as_dict().unwrap().reference(b"Pages").unwrap());
+        let page = doc.resolve(&pages.as_dict().unwrap().get(b"Kids").unwrap().as_array().unwrap()[0]);
+        page.as_dict().unwrap().reference(b"Contents").unwrap()
+    };
+    for (algorithm, filters) in [(Algorithm::Rc4_128, false), (Algorithm::Aes128, true), (Algorithm::Aes256, true)] {
+        let mut doc = Document::open(Arc::new(page.clone().into_bytes())).unwrap();
+        doc.set_encryption(&NewEncryption {
+            algorithm,
+            user_password: "",
+            owner_password: "owner",
+            permissions: -1,
+            encrypt_metadata: true,
+            seed: [9; 32],
+        })
+        .unwrap();
+        let protected = write_full(&doc, &SaveOptions::default()).unwrap();
+        assert_eq!(centre(protected.clone()), [255, 0, 0, 255], "{algorithm:?}: the document's own filter");
+        // A filter of its own name that stores streams as they are, beside the document's.
+        let mut doc = Document::open(Arc::new(protected)).unwrap();
+        if filters {
+            let encrypt = doc.trailer().reference(b"Encrypt").unwrap();
+            doc.update_dict(encrypt, |e| {
+                let Some(Object::Dict(cf)) = e.get(b"CF") else { panic!("no /CF") };
+                let mut cf = cf.clone();
+                let mut stored = Dict::new();
+                stored.set(b"CFM".to_vec(), Object::name("None"));
+                cf.set(b"Stored".to_vec(), Object::Dict(stored));
+                // `/Identity` is never one of these, whatever a file says.
+                let mut named = Dict::new();
+                named.set(b"CFM".to_vec(), Object::name("AESV2"));
+                cf.set(b"Identity".to_vec(), Object::Dict(named));
+                e.set(b"CF".to_vec(), Object::Dict(cf));
+            })
+            .unwrap();
+        }
+        let protected = write_incremental(&doc, &SaveOptions::default()).unwrap();
+        let spellings = [
+            "no name",
+            "/Identity",
+            "StdCF",
+            "Stored",
+            "/DecodeParms by reference",
+            "/Filter by reference",
+            "an entry of /Filter by reference",
+            "an entry of /DecodeParms by reference",
+            "/Name by reference",
+            "before another filter",
+            "a lone dictionary for an array of one",
+            "an array of one for a name",
+            "a dictionary by reference for an array of one",
+            "an array of one by reference for a dictionary",
+            "a name by reference for an array",
+            "a lone dictionary before another filter",
+            "past the longest chain",
+        ];
+        for what in spellings {
+            let mut doc = Document::open(Arc::new(protected.clone())).unwrap();
+            let (filter, parms) = match what {
+                "no name" => (crypt(), None),
+                "/Identity" => (crypt(), Some(name("Identity"))),
+                "StdCF" => (crypt(), Some(name("StdCF"))),
+                "Stored" => (crypt(), Some(name("Stored"))),
+                "/DecodeParms by reference" => (crypt(), Some(Object::Ref(doc.add(name("StdCF"))))),
+                "/Filter by reference" => (Object::Ref(doc.add(crypt())), Some(name("StdCF"))),
+                "an entry of /Filter by reference" => (Object::Array(vec![Object::Ref(doc.add(crypt()))]), Some(Object::Array(vec![name("StdCF")]))),
+                "an entry of /DecodeParms by reference" => {
+                    (Object::Array(vec![crypt()]), Some(Object::Array(vec![Object::Ref(doc.add(name("StdCF")))])))
+                }
+                "/Name by reference" => {
+                    let mut parms = Dict::new();
+                    parms.set(b"Name".to_vec(), Object::Ref(doc.add(Object::name("StdCF"))));
+                    (crypt(), Some(Object::Dict(parms)))
+                }
+                "a lone dictionary for an array of one" => (Object::Array(vec![crypt()]), Some(name("StdCF"))),
+                "an array of one for a name" => (crypt(), Some(Object::Array(vec![name("StdCF")]))),
+                "a dictionary by reference for an array of one" => (Object::Array(vec![crypt()]), Some(Object::Ref(doc.add(name("StdCF"))))),
+                "an array of one by reference for a dictionary" => (Object::Ref(doc.add(Object::Array(vec![crypt()]))), Some(name("StdCF"))),
+                "a name by reference for an array" => (Object::Ref(doc.add(crypt())), Some(Object::Array(vec![name("StdCF")]))),
+                "a lone dictionary before another filter" => (Object::Array(vec![crypt(), Object::name("ASCIIHexDecode")]), Some(name("StdCF"))),
+                // One filter more than cos decodes: it names none there, so here neither, and the
+                // stream is read with the document's filter, not the `Stored` it says.
+                "past the longest chain" => {
+                    let mut chain = vec![crypt()];
+                    chain.extend(std::iter::repeat_n(Object::name("ASCIIHexDecode"), 9));
+                    (Object::Array(chain), Some(Object::Array(vec![name("Stored")])))
+                }
+                _ => (Object::Array(vec![crypt(), Object::name("ASCIIHexDecode")]), Some(Object::Array(vec![name("StdCF"), Object::Null]))),
+            };
+            let contents = contents_of(&doc);
+            let Object::Stream(s) = doc.get(contents).as_ref().clone() else { panic!("no content stream") };
+            let mut dict = s.dict.clone();
+            dict.set(b"Filter".to_vec(), filter);
+            if let Some(parms) = parms {
+                dict.set(b"DecodeParms".to_vec(), parms);
+            }
+            let raw = match what {
+                "before another filter" | "a lone dictionary before another filter" => hex.clone().into_bytes(),
+                "past the longest chain" => (0..9).fold(content.as_bytes().to_vec(), |data, _| {
+                    let mut coded: Vec<u8> = data.iter().flat_map(|b| format!("{b:02X}").into_bytes()).collect();
+                    coded.push(b'>');
+                    coded
+                }),
+                _ => content.as_bytes().to_vec(),
+            };
+            doc.set(contents, Object::Stream(Stream::from_raw(dict, raw)));
+            let saved = write_incremental(&doc, &SaveOptions::default()).unwrap();
+            assert_eq!(centre(saved), [255, 0, 0, 255], "{algorithm:?}: {what}");
+        }
+    }
 }
