@@ -41,7 +41,66 @@ fn a_field_the_form_reading_leaves_out_refuses_the_redaction() {
     past.update_dict(field, |d| d.set(b"TU".to_vec(), tooltip)).unwrap();
     assert!(matches!(apply(&mut past, None), Err(RedactError::FormPastAllowance(1))));
     assert!(past.get(field).as_dict().is_some_and(|d| d.contains(b"V")) && marks(&past).len() == 1, "nothing changed");
+    // A mark over page text alone, away from every widget, still applies.
+    let mut text_only = past.clone();
+    clear_marks(&mut text_only, None).unwrap();
+    mark(&mut text_only, 0, &[[150.0, 150.0, 200.0, 200.0]], "");
+    assert!(apply(&mut text_only, None).is_ok());
     assert_eq!(apply(&mut doc, None).unwrap().fields, 1, "read whole, the field goes");
+}
+
+/// A widget under a mark whose field the form's reading doesn't have, its type given by reference
+/// or the widget missing from its parent's `/Kids`, refuses the redaction: removing the widget
+/// would keep the field and its value. A widget that names no field just goes.
+#[test]
+fn a_widget_of_a_field_the_form_reading_lacks_refuses_the_redaction() {
+    let filled = || {
+        let mut doc = one_page(b"", "", vec![]);
+        pdfcraft_forms::add_field(&mut doc, 0, [10.0, 50.0, 100.0, 70.0], &pdfcraft_forms::NewField::Text { multiline: false }, Some("ssn")).unwrap();
+        pdfcraft_forms::set_value(&mut doc, "ssn", &pdfcraft_forms::FieldValue::Text("SSN-078-05-1120".into())).unwrap();
+        let field = pdfcraft_forms::fields(&doc).swap_remove(0).obj;
+        (doc, field)
+    };
+    let (mut by_reference, field) = filled();
+    let tx = by_reference.add(Object::Name(b"Tx".to_vec()));
+    by_reference.update_dict(field, |d| d.set(b"FT".to_vec(), Object::Ref(tx))).unwrap();
+    mark(&mut by_reference, 0, &[[0.0, 40.0, 120.0, 80.0]], "");
+    assert!(matches!(apply(&mut by_reference, None), Err(RedactError::FieldNotRead)));
+    // A second widget of the field, on the page but not in the field's /Kids.
+    let page = pdfcraft_model::pages(&filled().0).swap_remove(0).obj;
+    let widget = |doc: &mut Document, parent: Option<ObjRef>, name: Option<&str>| {
+        let mut w: Dict =
+            [(b"Type".to_vec(), Object::Name(b"Annot".to_vec())), (b"Subtype".to_vec(), Object::Name(b"Widget".to_vec()))].into_iter().collect();
+        w.set(b"Rect".to_vec(), Object::Array([200, 50, 280, 70].map(Object::Int).to_vec()));
+        if let Some(p) = parent {
+            w.set(b"Parent".to_vec(), Object::Ref(p));
+        }
+        if let Some(n) = name {
+            w.set(b"T".to_vec(), Object::String(pdfcraft_cos::PdfString::literal(n.as_bytes().to_vec())));
+            w.set(b"V".to_vec(), Object::String(pdfcraft_cos::PdfString::literal(b"UNTYPED-SECRET".to_vec())));
+        }
+        let w = doc.add(Object::Dict(w));
+        doc.update_dict(page, |d| {
+            let mut annots = d.get(b"Annots").and_then(Object::as_array).cloned().unwrap_or_default();
+            annots.push(Object::Ref(w));
+            d.set(b"Annots".to_vec(), Object::Array(annots));
+        })
+        .unwrap();
+    };
+    let (mut unlisted, field) = filled();
+    widget(&mut unlisted, Some(field), None);
+    mark(&mut unlisted, 0, &[[190.0, 40.0, 290.0, 80.0]], "");
+    assert!(matches!(apply(&mut unlisted, None), Err(RedactError::FieldNotRead)));
+    // A field of no type, which the reading skips, named and with a value.
+    let (mut untyped, _) = filled();
+    widget(&mut untyped, None, Some("untyped"));
+    mark(&mut untyped, 0, &[[190.0, 40.0, 290.0, 80.0]], "");
+    assert!(matches!(apply(&mut untyped, None), Err(RedactError::FieldNotRead)));
+    let (mut orphan, _) = filled();
+    widget(&mut orphan, None, None);
+    mark(&mut orphan, 0, &[[190.0, 40.0, 290.0, 80.0]], "");
+    assert_eq!(apply(&mut orphan, None).unwrap().fields, 0);
+    assert!(full_save_holds(&orphan, b"SSN-078-05-1120"), "the field outside the mark keeps its value");
 }
 
 /// A surviving form shares the page's resource dictionary, which lists the image the mark

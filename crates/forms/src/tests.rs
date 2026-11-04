@@ -4384,6 +4384,16 @@ fn a_field_left_out_leaves_its_widgets_to_a_later_field() {
         assert!(read.items.is_empty(), "{owner}: {:?}", read.items.iter().map(|f| &f.name).collect::<Vec<_>>());
         assert_eq!((read.adopted_page_fields, read.left_out), (0, 1), "{owner}");
     }
+    // Each terminal field under one left out for its name counts.
+    let mut doc = document(&[
+        "<< /Type /Catalog /AcroForm << /Fields [2 0 R] >> >>".into(),
+        "<< /FT /Tx /T (p) /Kids [3 0 R 4 0 R 5 0 R] >>".into(),
+        "<< /T (k0) /Parent 2 0 R >>".into(),
+        "<< /T (k1) /Parent 2 0 R >>".into(),
+        "<< /T (k2) /Parent 2 0 R >>".into(),
+    ]);
+    doc.update_dict(ObjRef::new(2, 0), |f| f.set(b"T".to_vec(), long_name())).unwrap();
+    assert_eq!(fields_with_adopted(&doc).left_out, 3);
 }
 
 /// A widget's `/AS` is copied within the text allowance like the rest of the field's text: one

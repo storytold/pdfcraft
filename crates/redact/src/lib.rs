@@ -80,12 +80,18 @@ pub enum RedactError {
         "{0} JBIG2 image(s) share their symbol data with a redacted image and can't be decoded to be stored without it, so that data, which can show what is under the marks, would stay in the file; nothing was redacted"
     )]
     SharedJbig2Globals(usize),
-    /// Fields whose text is past what one reading of the form takes are left out of it, so a
-    /// widget under a mark can't be matched to its field, whose value would stay in the file.
+    /// Fields whose text is past what one reading of the form takes are left out of it, and a
+    /// widget under a mark belongs to no field read: it may be one of theirs, whose value would
+    /// stay in the file.
     #[error(
-        "{0} form field(s) hold more text than PdfCraft reads at once, so the fields under the marks can't all be found and their values could stay in the file; nothing was redacted"
+        "{0} form field(s) hold more text than PdfCraft reads at once, and a widget under the marks may belong to one, so its value could stay in the file; nothing was redacted"
     )]
     FormPastAllowance(usize),
+    /// A widget under a mark belongs to a form field the form's reading doesn't have (its type
+    /// given by reference, nested too deep, or missing from its parent's `/Kids`): removing the
+    /// widget would keep the field and its value.
+    #[error("a form field under the marks can't be read, so its value would stay in the file; nothing was redacted")]
+    FieldNotRead,
     #[error(transparent)]
     Edit(#[from] pdfcraft_edit::EditError),
     #[error(transparent)]
@@ -432,12 +438,7 @@ fn apply_within(doc: &mut Document, pages: Option<&[usize]>, images: pdfcraft_co
         .iter()
         .map(|&(pi, page_marks)| overlay::content(page_marks, &mut remaining).map(|content| (pi, content)))
         .collect::<Result<Vec<_>, _>>()?;
-    // A field the form's reading left out owns widgets no read field does, and its value would
-    // stay under a mark: refuse before anything changes.
     let form = pdfcraft_forms::fields_with_adopted(doc);
-    if form.left_out > 0 {
-        return Err(RedactError::FormPastAllowance(form.left_out));
-    }
     report.pages = by_page.len();
     localize_resources(doc, &by_page)?;
     let widget_owner: Vec<(ObjRef, ObjRef)> =
@@ -449,6 +450,7 @@ fn apply_within(doc: &mut Document, pages: Option<&[usize]>, images: pdfcraft_co
         doomed_xobjects: Vec::new(),
         retired_properties: Vec::new(),
         widget_owner,
+        left_out: form.left_out,
         removed_everywhere: HashSet::new(),
         images,
     };
@@ -649,6 +651,9 @@ struct Applying {
     doomed_xobjects: Vec<ObjRef>,
     retired_properties: Vec<Object>,
     widget_owner: Vec<(ObjRef, ObjRef)>,
+    /// Fields the form's reading left out, their text past its allowances
+    /// ([`pdfcraft_forms::Fields::left_out`]).
+    left_out: usize,
     removed_everywhere: HashSet<ObjRef>,
     /// What clearing images may spend, across the run's pages.
     images: pdfcraft_cos::ImageBudget,
@@ -763,7 +768,7 @@ fn remove_page_annotations(
     rects: &[[f64; 4]],
     page_marks: &[&Mark],
 ) -> Result<(), RedactError> {
-    let Applying { report, doomed_fields, widget_owner, removed_everywhere, .. } = applying;
+    let Applying { report, doomed_fields, widget_owner, left_out, removed_everywhere, .. } = applying;
     // 2. Annotations: the marks, and whatever lies under them (with their pop-ups).
     let annots = annots_of(doc, &doc.get(page.obj).as_dict().cloned().unwrap_or_default());
     let mut removed: Vec<ObjRef> = Vec::new();
@@ -784,10 +789,18 @@ fn remove_page_annotations(
         if rect_of(doc, d.get(b"Rect")).is_some_and(|b| rects.iter().any(|x| pdfcraft_content::overlaps(*x, b, 0.0))) {
             removed.push(r);
             if subtype == b"Widget" {
-                if let Some((_, field)) = widget_owner.iter().find(|(w, _)| *w == r)
-                    && !doomed_fields.contains(field)
-                {
-                    doomed_fields.push(*field);
+                match widget_owner.iter().find(|(w, _)| *w == r) {
+                    Some((_, field)) => {
+                        if !doomed_fields.contains(field) {
+                            doomed_fields.push(*field);
+                        }
+                    }
+                    // A widget of a field the form's reading doesn't have would go and leave the
+                    // field and its value: one that names a field, or any while the reading left
+                    // fields out.
+                    None if *left_out > 0 => return Err(RedactError::FormPastAllowance(*left_out)),
+                    None if d.contains(b"Parent") || d.contains(b"T") || d.contains(b"FT") => return Err(RedactError::FieldNotRead),
+                    None => {}
                 }
             } else {
                 report.annotations += 1;

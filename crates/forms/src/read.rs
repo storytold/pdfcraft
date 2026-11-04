@@ -543,8 +543,9 @@ impl Inherited {
     }
 }
 
-/// Every terminal field: the `/Fields` tree in order, then the fields reachable only through the
-/// page annotations (see [`adopt_page_fields`]).
+/// Every terminal field the reading reads: the `/Fields` tree in order, then the fields reachable
+/// only through the page annotations (see [`adopt_page_fields`]). Fields whose text is past the
+/// reading's allowances are left out, and [`Fields::left_out`] counts them.
 pub fn fields(doc: &Document) -> Vec<Field> {
     fields_with_adopted(doc).items
 }
@@ -562,9 +563,9 @@ pub struct Fields {
     pub items: Vec<Field>,
     /// How many fields were reachable only through page annotations.
     pub adopted_page_fields: usize,
-    /// How many fields were left out because their text didn't fit the reading's allowances, a
-    /// field left out for its name counting once with the fields under it. More than none means
-    /// `items` isn't the whole form: an operation that must reach every field (redaction) refuses.
+    /// How many terminal fields were left out because their text, or a field's above them, didn't
+    /// fit the reading's allowances. More than none means `items` isn't the whole form: redaction
+    /// refuses to remove a widget under a mark that no field read owns.
     pub left_out: usize,
 }
 
@@ -737,7 +738,10 @@ fn on_state_of(doc: &Document, wd: &Dict, text: &mut Allowance) -> Option<String
 /// Withholds the fields and widgets under `r`, a field left out of the reading for its name: none
 /// is adopted from the page as a field of its own, and a later field in the tree that lists one
 /// still takes it. Each is visited once, its text unread, so the walk ends however the kids loop.
-fn withhold_below(doc: &Document, r: ObjRef, seen: &mut Seen) {
+/// How many terminal fields it holds, `r` among them: those with a name and no kid that has one.
+fn withhold_below(doc: &Document, r: ObjRef, seen: &mut Seen) -> usize {
+    let named = |n: &ObjRef| doc.get(*n).as_dict().is_some_and(|d| d.contains(b"T"));
+    let mut terminal = 0usize;
     let mut stack = vec![r];
     while let Some(n) = stack.pop() {
         let kids: Vec<ObjRef> = doc
@@ -746,12 +750,16 @@ fn withhold_below(doc: &Document, r: ObjRef, seen: &mut Seen) {
             .and_then(|d| d.get(b"Kids").map(|k| doc.resolve(k)))
             .map(|k| k.as_array().into_iter().flatten().filter_map(Object::as_ref).collect())
             .unwrap_or_default();
+        if named(&n) && !kids.iter().any(named) {
+            terminal = terminal.saturating_add(1);
+        }
         for k in kids {
             if seen.withheld.insert(k) {
                 stack.push(k);
             }
         }
     }
+    terminal
 }
 
 /// Read the field at `r` and the fields under it into `out`, with what they inherit from
@@ -796,8 +804,8 @@ fn walk(
     // A name that doesn't fit leaves the field out, with the fields under it, whose full names
     // need it; a `/DA` that doesn't fit, only the fields that would draw with it.
     if seen.text.refusals() != refusals {
-        seen.left_out = seen.left_out.saturating_add(1);
-        withhold_below(doc, r, seen);
+        let fields = withhold_below(doc, r, seen).max(1);
+        seen.left_out = seen.left_out.saturating_add(fields);
         return;
     }
     if let Some(o) = d.get(b"DA") {

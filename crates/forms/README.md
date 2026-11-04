@@ -47,8 +47,10 @@ let cells: Vec<table::Cell> = grid.cells_for(names)?;      // "Table1_1", "Table
   that, a value or script reads as none (a list of values too, when one of them doesn't fit), and a
   field whose own text doesn't fit is left out of the reading whole, never read with part of it, as
   is one that would draw with a `/DA` that doesn't fit; its widgets go to a later field that lists
-  them. Clear form (`reset`)
-  leaves a field whose default the reading didn't reach as it is, rather than emptying it.
+  them. `fields_with_adopted` counts the fields left out (`Fields::left_out`): opening the file
+  records them as a repair, and redaction refuses to remove a widget no field read owns. Clear
+  form (`reset`) leaves a field whose default the reading didn't reach as it is, rather than
+  emptying it.
   `field_actions`, `document_scripts` and renaming a field read within the same allowances;
   `field_actions` lists an action whose script or text doesn't fit as an action of another type,
   which `set_field_actions` keeps as it is.
