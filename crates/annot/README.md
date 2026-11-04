@@ -6,7 +6,9 @@ Comments (annotations), ISO 32000-2 §12.5. Layer L3, depends on `pdfcraft-cos`,
 
 - **Builders** for the comment types Acrobat's commenting tools create: sticky note (`Text` +
   `Popup`), highlight, underline, strikethrough, squiggly, rectangle (`Square`), oval (`Circle`),
-  line and arrow (`Line` with `/LE`), freehand drawing (`Ink`) and text box (`FreeText`).
+  line and arrow (`Line` with `/LE`), freehand drawing (`Ink`), text box and callout
+  (`FreeText`), polygon (including cloudy borders), polyline, caret, rubber and custom stamp,
+  and file attachment.
 - **Appearance streams** (`appearance::build`) generated from the annotation dictionary, so new
   and restyled comments look the same in every viewer. Highlights multiply (`/BM /Multiply`).
   A line's leader lines (`/LL`, `/LLE`, `/LLO`) and caption (`/Cap`, `/CP`, `/CO`) are drawn as
@@ -43,8 +45,8 @@ deterministic; the engine supplies them.
 
 - Unknown keys are kept. Inline annotation dictionaries are promoted to indirect objects only
   when an edit needs a reference to them.
-- `set_style` refuses (and changes nothing) when it cannot redraw the comment, e.g. stamps,
-  cloudy borders or callouts, instead of leaving a stale appearance.
+- `set_style` refuses (and changes nothing) when it cannot redraw the comment, e.g. a stamp
+  whose appearance cannot be regenerated, instead of leaving a stale appearance.
 - Replies get the parent's `/Rect` and an empty appearance: they appear in comment lists but
   never paint a second icon.
 - Resizing a stamp changes its `/Rect` and preserves its original appearance and resources;
@@ -59,7 +61,9 @@ deterministic; the engine supplies them.
   (vendored hayro-interpret patch 37), and `Summary::no_rotate` tells the UI where the icon is
   drawn.
 
-## Not yet
+## Rich text and remaining limits
 
-Callouts, polygons and polylines, clouds, carets (insert/replace text), stamps, file
-attachments, rich text (`/RC`, `/DS`), and the shared named-appearance cache Acrobat writes.
+Text-box text and colour edits regenerate `/RC` (XHTML) and `/DS` from the plain
+`/Contents`, `/DA` and `/Q`, so rich-text editors show the same text and style. These edits
+replace imported rich-text formatting. The shared named-appearance cache Acrobat writes
+is not implemented.
