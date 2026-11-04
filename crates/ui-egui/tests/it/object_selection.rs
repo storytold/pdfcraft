@@ -242,6 +242,8 @@ fn refusing_one_object_keeps_the_whole_group_and_its_selection() {
     assert!(!h.state().session.get(h.state().views[0].id).unwrap().dirty);
 }
 
+/// A group drag released beyond the page finishes once: every object in the group moves by the same
+/// amount and stops at the page's right edge (#5264).
 #[test]
 fn a_group_drag_released_beyond_the_page_finishes_once() {
     let mut h = harness();

@@ -270,6 +270,8 @@ fn rectangle_tool_over_a_link_shows_its_crosshair() {
     assert_eq!(on, off, "a drag over the link draws a rectangle, as it does off the link");
 }
 
+/// With Edit Text, a linked word offers the same move arrow as a plain word, and dragging from it
+/// moves the paragraph.
 #[test]
 fn edit_text_over_a_linked_word_offers_the_move_arrow() {
     let mut h = open(linked_text_pdf(), "150", false);

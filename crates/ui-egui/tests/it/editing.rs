@@ -4561,6 +4561,8 @@ fn editing_existing_form_artwork_on_the_page() {
     check_existing_artwork("figure.pdf", write_incremental(&doc, &SaveOptions::default()).unwrap());
 }
 
+/// Opens `name`, shrinks its page-filling artwork to the middle of the page, then selects it with
+/// Edit Text and drags it to the right as one "Move image" step.
 fn check_existing_artwork(name: &'static str, bytes: Vec<u8>) {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
