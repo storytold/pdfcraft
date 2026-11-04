@@ -65,7 +65,7 @@ impl PdfCraftApp {
                 self.notify_fmt("Couldn't read {name}: {e}", &[("name", &att.name), ("e", &e.to_string())]);
             }
             Ok(bytes) => {
-                if !att.name.to_lowercase().ends_with(".pdf") && !bytes.starts_with(b"%PDF-") {
+                if !matches!(pdfcraft_engine::source_kind(&att.name, &bytes), Some(pdfcraft_engine::SourceKind::Pdf)) {
                     self.notify_fmt("Couldn't follow linked PDF: {reason}", &[("reason", tl!("the linked file is not a .pdf file"))]);
                     return;
                 }

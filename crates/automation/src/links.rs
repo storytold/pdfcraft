@@ -173,7 +173,7 @@ impl Automation {
                         return Err(failed("the attached file was not found"));
                     };
                     let bytes = pdfcraft_render::attachment_data(&source.bytes, source.password.as_deref(), att).map_err(failed)?;
-                    if !att.name.to_lowercase().ends_with(".pdf") && !bytes.starts_with(b"%PDF-") {
+                    if !matches!(pdfcraft_engine::source_kind(&att.name, &bytes), Some(pdfcraft_engine::SourceKind::Pdf)) {
                         return Err(failed("the linked file is not a .pdf file"));
                     }
                     (att.name.clone(), bytes)
