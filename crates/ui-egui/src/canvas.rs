@@ -74,6 +74,17 @@ const GAP: f32 = 14.0;
 const MARGIN: f32 = 28.0;
 /// Horizontal gutter that keeps pages clear of the floating quick-action bar.
 const SIDE: f32 = 70.0;
+const DESTINATION_FLASH_SECONDS: f32 = 1.6;
+
+fn destination_flash_alpha(age: f32, animated: bool) -> Option<u8> {
+    if !age.is_finite() || age < 0.0 || age >= DESTINATION_FLASH_SECONDS {
+        None
+    } else if animated {
+        Some(((DESTINATION_FLASH_SECONDS - age) / DESTINATION_FLASH_SECONDS * 255.0) as u8)
+    } else {
+        Some(255)
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Fit {
@@ -499,7 +510,8 @@ pub struct DocView {
     /// Single-page view, as last drawn: the page shown and whether the view was at its top and
     /// at its bottom, so ↑ / ↓ turn the page there instead of doing nothing (#273).
     single_edges: Option<(usize, bool, bool)>,
-    /// Briefly outline an annotation after navigating to it from a panel.
+    /// The one destination cue. A new one replaces the old; it lasts 1.6 seconds and fades only
+    /// when animation effects are on.
     pub flash: Option<(usize, [f32; 4], f64)>,
     /// Compare files: differences shaded on this document's pages (page, user-space box, colour).
     pub compare_marks: Vec<(usize, [f32; 4], Color32)>,
@@ -2194,8 +2206,7 @@ fn page_overlays(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_
         let t0 = if t0 == 0.0 { now } else { t0 };
         view.flash = Some((fp, fr, t0));
         let age = (now - t0) as f32;
-        if age < 1.6 {
-            let a = ((1.6 - age) / 1.6 * 255.0) as u8;
+        if let Some(a) = destination_flash_alpha(age, crate::platform::motion::animated(ui.ctx())) {
             let sr = xf.user_rect(info, i, fr).expand(4.0);
             painter.rect_stroke(
                 sr,
@@ -3379,7 +3390,12 @@ fn follow_link(
         LinkTarget::Page(p, dest) => {
             let view = &mut app.views[index];
             if let Some(doc) = app.session.get(view.id) {
+                // Read before the jump: a null coordinate keeps the reader's place.
+                let landing = view.resolve_dest(dest, &doc.info);
                 view.go_to_dest(p, dest, &doc.info);
+                // `go_to_dest` clamps an out-of-range page to the document. Flash the page
+                // that actually became current, so the marker follows that navigation.
+                view.flash_dest(view.current, landing, &doc.info);
             }
         }
         LinkTarget::Uri(u) => app.request_document_url(&u, crate::LinkOrigin::Link),
