@@ -2,6 +2,7 @@ use super::join::{check_join, join_radio_group};
 use super::look::{BorderStyle, da_string, patch_da, patch_widget_look, redraw_widgets};
 use super::tree::{ancestor_sets, attach, check_place, child_named, clash, detach, ensure_form, inherited, name_parts, own_inherited};
 use super::{Dict, Document, Field, FieldKind, FieldProps, FormError, MIN_FIELD_SIDE, ObjRef, Object, PdfString, fields, flags, invalid};
+use crate::read::{Allowance, held};
 
 /// Swap width and height, keeping the center. `None` when that is not a usable widget.
 fn swapped_around_center(r: [f64; 4]) -> Option<[f64; 4]> {
@@ -583,46 +584,65 @@ fn apply_late_widget_props(
 }
 
 /// Name field `old` `new` in each field's Calculate script that reads it
-/// ([`crate::af::rename_in_calculation`]). Script streams share one budget, as a reading of the
-/// form's scripts does, however many fields name the same stream; past it, a script is left as
-/// it is, like one that won't decode. A Calculate action several fields share by reference is
-/// read and rewritten once, in place, so they all read the new name.
+/// ([`crate::af::rename_in_calculation`]). The scripts, strings and streams alike, are read
+/// within one allowance, as a reading of the form's scripts is, however many fields name the
+/// same script; past it, a script is left as it is, like one that won't decode. A Calculate
+/// action several fields share by reference is read and rewritten once, in place, so they all
+/// read the new name.
 fn rename_in_calculations(doc: &mut Document, all: &[Field], old: &str, new: &str) -> Result<(), FormError> {
     let aa_of =
         |doc: &Document, r: ObjRef| doc.get(r).as_dict().and_then(|d| d.get(b"AA").map(|a| doc.resolve(a))).and_then(|a| a.as_dict().cloned());
     let mut scripts = crate::script_budget();
     let mut shared = std::collections::HashSet::new();
     for f in all {
-        // The script is the field's, or its only widget's when the field has none, as
-        // `actions_of` reads it.
-        let only_widget = || match f.widgets.as_slice() {
-            [w] => aa_of(doc, w.obj).map(|aa| (w.obj, aa)),
-            _ => None,
-        };
-        let Some((owner, mut aa)) = aa_of(doc, f.obj).map(|aa| (f.obj, aa)).or_else(only_widget) else { continue };
-        let by_ref = aa.get(b"C").and_then(Object::as_ref);
-        if by_ref.is_some_and(|r| !shared.insert(r)) {
-            continue;
-        }
-        let Some(mut action) = aa.get(b"C").and_then(|a| doc.resolve(a).as_dict().cloned()) else { continue };
-        let js = match action.get(b"JS").map(|js| doc.resolve(js)).as_deref() {
-            Some(Object::String(s)) => s.to_text(),
-            // A stream that isn't UTF-8 reads with replacement characters, which must not be
-            // written back in place of what it holds.
-            Some(Object::Stream(s)) => match scripts.decode(s).ok().and_then(|b| String::from_utf8(b).ok()) {
-                Some(js) => js,
-                None => continue,
-            },
-            _ => continue,
-        };
+        let Some((owner, by_ref, js)) = calculation(doc, f, &mut scripts, &mut shared) else { continue };
         let Some(js) = crate::af::rename_in_calculation(&js, old, new) else { continue };
-        action.set(b"JS".to_vec(), PdfString::text(&js));
         if let Some(r) = by_ref {
+            let Some(mut action) = doc.get(r).as_dict().cloned() else { continue };
+            action.set(b"JS".to_vec(), PdfString::text(&js));
             doc.update_dict(r, |d| *d = action)?;
             continue;
         }
+        let Some(mut aa) = aa_of(doc, owner) else { continue };
+        let Some(mut action) = aa.get(b"C").and_then(|a| doc.resolve(a).as_dict().cloned()) else { continue };
+        action.set(b"JS".to_vec(), PdfString::text(&js));
         aa.set(b"C".to_vec(), Object::Dict(action));
         doc.update_dict(owner, |d| d.set(b"AA".to_vec(), Object::Dict(aa)))?;
     }
     Ok(())
+}
+
+/// The Calculate script of field `f`, copied against `scripts`; the field or widget whose `/AA`
+/// holds it (the field's, or its only widget's when the field has none, as `actions_of` reads
+/// it); and the action's reference, when it has one. Read where it is, so an `/AA` many fields
+/// share isn't copied for each. An action by reference that `shared` already holds was read for
+/// an earlier field, and gives `None`.
+fn calculation(
+    doc: &Document,
+    f: &Field,
+    scripts: &mut Allowance,
+    shared: &mut std::collections::HashSet<ObjRef>,
+) -> Option<(ObjRef, Option<ObjRef>, String)> {
+    let has_aa = |r: ObjRef| doc.get(r).as_dict().and_then(|d| d.get(b"AA")).is_some_and(|a| held(doc, a).as_dict().is_some());
+    let owner = match f.widgets.as_slice() {
+        _ if has_aa(f.obj) => f.obj,
+        [w] if has_aa(w.obj) => w.obj,
+        _ => return None,
+    };
+    let o = doc.get(owner);
+    let aa = held(doc, o.as_dict()?.get(b"AA")?);
+    let c = aa.as_dict()?.get(b"C")?;
+    let by_ref = c.as_ref();
+    if by_ref.is_some_and(|r| !shared.insert(r)) {
+        return None;
+    }
+    let action = held(doc, c);
+    let js = match &*held(doc, action.as_dict()?.get(b"JS")?) {
+        Object::String(s) => scripts.copy(s.bytes.len(), || s.to_text())?,
+        // A stream that isn't UTF-8 reads with replacement characters, which must not be
+        // written back in place of what it holds.
+        Object::Stream(s) => String::from_utf8(scripts.decode(s)?).ok()?,
+        _ => return None,
+    };
+    Some((owner, by_ref, js))
 }

@@ -3654,6 +3654,205 @@ fn a_rename_rewrites_a_shared_calculation_once() {
     assert!(js.len() <= MAX_SCRIPT_BYTES, "{} bytes written once", js.len());
 }
 
+/// A 1 MiB literal string, as an object of [`document`].
+fn long_string() -> String {
+    format!("({})", "x".repeat(1 << 20))
+}
+
+/// 300 references to one 1 MiB value string, from fields that name it, from fields that inherit
+/// it and from one list box's array of values, are copied within one allowance, not 300 MiB.
+#[test]
+fn value_strings_named_by_reference_share_one_allowance() {
+    let read = |all: &[Field]| -> usize { all.iter().flat_map(|f| f.value.iter().chain(&f.default)).map(String::len).sum() };
+    let fields_list: String = (0..300).map(|i| format!("{} 0 R ", i + 3)).collect();
+    let mut named = vec![format!("<< /Type /Catalog /AcroForm << /Fields [{fields_list}] >> >>"), long_string()];
+    named.extend((0..300).map(|i| format!("<< /FT /Tx /T (f{i}) /V 2 0 R /DV 2 0 R >>")));
+    let kids: String = (0..300).map(|i| format!("{} 0 R ", i + 4)).collect();
+    let mut inherited =
+        vec!["<< /Type /Catalog /AcroForm << /Fields [3 0 R] >> >>".into(), long_string(), format!("<< /FT /Tx /T (p) /V 2 0 R /Kids [{kids}] >>")];
+    inherited.extend((0..300).map(|i| format!("<< /T (k{i}) /Parent 3 0 R >>")));
+    let listed = vec![
+        "<< /Type /Catalog /AcroForm << /Fields [3 0 R] >> >>".into(),
+        long_string(),
+        format!("<< /FT /Ch /T (l) /Ff 2097152 /V [{}] >>", "2 0 R ".repeat(300)),
+    ];
+    for (how, objs) in [("named", named), ("inherited", inherited), ("listed", listed)] {
+        let all = fields(&document(&objs));
+        let bytes = read(&all);
+        assert!(bytes <= crate::read::MAX_VALUE_BYTES, "{bytes} bytes of values {how}");
+        assert_eq!(all[0].value.first(), Some(&"x".repeat(1 << 20)), "the first value {how} is read");
+    }
+}
+
+/// Script strings named by reference — one 256 KiB calculation script that 300 fields' own
+/// calculations and 300 document scripts name, one 1 MiB format script the fields name, and a
+/// 1 MiB name each document script has — are copied within the script allowance: by a reading
+/// of the form, by the document's scripts with their names, and by renaming the field the
+/// calculations read, which rewrites each field's own calculation.
+#[test]
+fn script_strings_named_by_reference_share_one_allowance() {
+    let n = 300;
+    let refs = |from: usize| -> String { (from..from + n).map(|i| format!("{i} 0 R ")).collect() };
+    let names: String = (0..n).map(|_| format!("{} 0 R 6 0 R ", 8 + n)).collect();
+    let mut objs = vec![
+        format!("<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R /Names << /JavaScript << /Names [{names}] >> >> >>"),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        format!("<< /Type /Page /Parent 2 0 R /Annots [5 0 R {}] >>", refs(8)),
+        format!("<< /Fields [5 0 R {}] /DA (/Helv 0 Tf 0 g) >>", refs(8)),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (a) /Rect [50 700 250 720] /P 3 0 R >>".into(),
+        "<< /S /JavaScript /JS 7 0 R >>".into(),
+        format!("(AFSimple_Calculate(\"SUM\", new Array (\"a\"));{})", " ".repeat(256 << 10)),
+    ];
+    // Each calculated field has a calculation of its own, whose script is the shared string, and
+    // formats its value with the 1 MiB string, a script no native format reads, which the reading
+    // keeps as text.
+    objs.extend(
+        (0..n).map(|i| {
+            format!("<< /Type /Annot /Subtype /Widget /FT /Tx /T (c{i}) /Rect [50 10 250 30] /P 3 0 R /AA << /C << /S /JavaScript /JS 7 0 R >> /F {} 0 R >> >>", 9 + n)
+        }),
+    );
+    objs.push(long_string());
+    objs.push(format!("<< /S /JavaScript /JS {} 0 R >>", 8 + n));
+    let mut doc = document(&objs);
+    let kept: usize = fields(&doc).iter().filter_map(|f| f.actions.scripts.format.as_ref()).map(String::len).sum();
+    assert!(kept > 0 && kept <= MAX_SCRIPT_BYTES, "{kept} bytes of field scripts");
+    let named: usize = document_scripts_named(&doc).iter().map(|(name, js)| name.len() + js.len()).sum();
+    assert!(named > 0 && named <= MAX_SCRIPT_BYTES, "{named} bytes of document scripts and their names");
+    set_props(&mut doc, "a", &FieldProps { name: Some("qty".into()), ..FieldProps::default() }).unwrap();
+    let rewritten: Vec<usize> = (8..8 + n)
+        .filter_map(|i| {
+            let field = doc.get(ObjRef::new(i as u32, 0));
+            let c = field.as_dict()?.get(b"AA")?.as_dict()?.get(b"C")?.as_dict()?.clone();
+            let js = c.get(b"JS")?.as_string()?.to_text();
+            js.contains("\"qty\"").then_some(js.len())
+        })
+        .collect();
+    assert!(!rewritten.is_empty(), "the first calculations are renamed");
+    let total: usize = rewritten.iter().sum();
+    assert!(total <= MAX_SCRIPT_BYTES, "{} calculations, {total} bytes, renamed", rewritten.len());
+}
+
+/// A field's full name copies the names above it: 300 fields under one whose name is a 1 MiB
+/// string get their names within the text allowance, the fields whose names don't fit are left
+/// out, and a field after them is read.
+#[test]
+fn full_names_stay_within_the_text_allowance() {
+    let kids: String = (0..300).map(|i| format!("{} 0 R ", i + 5)).collect();
+    let mut objs = vec![
+        "<< /Type /Catalog /AcroForm << /Fields [3 0 R 4 0 R] >> >>".into(),
+        long_string(),
+        format!("<< /T 2 0 R /FT /Tx /Kids [{kids}] >>"),
+        "<< /T (after) /FT /Tx >>".into(),
+    ];
+    objs.extend((0..300).map(|i| format!("<< /T (f{i}) /Parent 3 0 R >>")));
+    let all = fields(&document(&objs));
+    let names: usize = all.iter().map(|f| f.name.len()).sum();
+    assert!(names <= crate::read::MAX_TEXT_BYTES, "{} fields, {names} bytes of names", all.len());
+    assert_eq!(all.first().map(|f| f.name.clone()), Some(format!("{}.f0", "x".repeat(1 << 20))));
+    assert!(all.len() < 301, "fields whose names don't fit are left out");
+    assert_eq!(all.last().map(|f| f.name.as_str()), Some("after"), "the field after them is read");
+}
+
+/// 300 fields whose `/DA`, options, tooltip, caption, on state or list-box `/DA` name one 1 MiB
+/// string get them within the text allowance, and each field is read whole or left out: none is
+/// read with a fallback `/DA`, or without its options.
+#[test]
+fn field_text_named_by_reference_stays_within_the_text_allowance() {
+    let n = 300;
+    let list: String = (0..n).map(|i| format!("{} 0 R ", i + 5)).collect();
+    let da = format!("(/Helv 0 Tf 0 g{})", " ".repeat(1 << 20));
+    let long_name = format!("/{}", "y".repeat(1 << 20));
+    let text = |f: &Field| -> usize {
+        let widgets: usize = f.widgets.iter().map(|w| w.caption.as_ref().map_or(0, String::len) + w.on_state.as_ref().map_or(0, String::len)).sum();
+        f.name.len()
+            + f.da.len()
+            + f.options.iter().map(|(a, b)| a.len() + b.len()).sum::<usize>()
+            + f.tooltip.as_ref().map_or(0, String::len)
+            + widgets
+    };
+    // Each case: what is named by reference, objects 2 to 4 its fields share, its field, and what
+    // a field read whole has.
+    type Case = (&'static str, [String; 3], fn(usize) -> String, fn(&Field) -> bool);
+    let cases: [Case; 5] = [
+        ("/DA", [da.clone(), "null".into(), "null".into()], |i| format!("<< /FT /Tx /T (f{i}) /DA 2 0 R >>"), |f| f.da.len() > 1 << 20),
+        (
+            "/Opt",
+            [long_string(), "[2 0 R [2 0 R 2 0 R]]".into(), "null".into()],
+            |i| format!("<< /FT /Ch /Ff 131072 /T (f{i}) /Opt 3 0 R >>"),
+            |f| f.options.len() == 2,
+        ),
+        ("/TU", [long_string(), "null".into(), "null".into()], |i| format!("<< /FT /Tx /T (f{i}) /TU 2 0 R >>"), |f| f.tooltip.is_some()),
+        (
+            "/MK /CA",
+            [long_string(), "null".into(), "<< /CA 2 0 R >>".into()],
+            |i| format!("<< /FT /Btn /Ff 65536 /T (f{i}) /Rect [0 0 10 10] /MK 4 0 R >>"),
+            |f| f.widgets.iter().all(|w| w.caption.is_some()),
+        ),
+        (
+            "on state",
+            ["<< >>".into(), "null".into(), format!("<< /Off 2 0 R {long_name} 2 0 R >>")],
+            |i| format!("<< /FT /Btn /T (f{i}) /Rect [0 0 10 10] /AP << /N 4 0 R >> >>"),
+            |f| f.widgets.iter().all(|w| w.on_state.is_some()),
+        ),
+    ];
+    for (what, shared, field, whole) in cases {
+        let mut objs = vec![format!("<< /Type /Catalog /AcroForm << /Fields [{list}] >> >>")];
+        objs.extend(shared);
+        objs.extend((0..n).map(field));
+        let all = fields(&document(&objs));
+        let bytes: usize = all.iter().map(text).sum();
+        assert!(bytes <= crate::read::MAX_TEXT_BYTES, "{} fields, {bytes} bytes of text, with {what} by reference", all.len());
+        assert!(!all.is_empty() && all.len() < n, "{} fields read whole with {what} by reference", all.len());
+        assert!(all.iter().all(whole), "a field is read with its {what}, or left out");
+    }
+    // List boxes whose widgets' own `/DA` names the string: reading their rows copies it for
+    // each widget, though no field keeps it.
+    let mut objs = vec![format!("<< /Type /Catalog /AcroForm << /Fields [{list}] >> >>"), da, "null".into(), "null".into()];
+    objs.extend((0..n).map(|i| format!("<< /FT /Ch /T (f{i}) /Kids [{} 0 R] >>", 5 + n + i)));
+    objs.extend((0..n).map(|i| format!("<< /Type /Annot /Subtype /Widget /Rect [0 0 10 10] /DA 2 0 R /Parent {} 0 R >>", 5 + i)));
+    let all = fields(&document(&objs));
+    assert!(!all.is_empty() && all.len() < n, "{} list boxes read within the allowance", all.len());
+    assert!(all.iter().all(|f| f.widgets.iter().all(|w| w.list.is_some())));
+}
+
+/// Push buttons' action text named by reference is copied within the text allowance by a
+/// reading of the form, and a field's actions within one by Field Properties ▸ Actions.
+#[test]
+fn action_text_named_by_reference_stays_within_the_text_allowance() {
+    let n = 300;
+    let list: String = (0..n).map(|i| format!("{} 0 R ", i + 4)).collect();
+    let mut uri = vec![format!("<< /Type /Catalog /AcroForm << /Fields [{list}] >> >>"), long_string(), "<< /S /URI /URI 2 0 R >>".into()];
+    uri.extend((0..n).map(|i| format!("<< /FT /Btn /Ff 65536 /T (b{i}) /Rect [0 0 10 10] /A 3 0 R >>")));
+    let all = fields(&document(&uri));
+    let bytes: usize = all.iter().map(|f| if let Some(af::ButtonAction::Uri(u)) = &f.button { u.len() } else { 0 }).sum();
+    assert!(bytes <= crate::read::MAX_TEXT_BYTES, "{bytes} bytes of links");
+    assert!(!all.is_empty() && all.len() < n, "{} buttons read whole", all.len());
+    // One button that hides 300 fields named by reference to a field whose name is 1 MiB, and
+    // one text field that resets them.
+    let targets = "4 0 R ".repeat(n);
+    let named = vec![
+        "<< /Type /Catalog /AcroForm << /Fields [5 0 R 6 0 R] >> >>".into(),
+        long_string(),
+        format!("<< /S /Hide /T [{targets}] >>"),
+        "<< /T 2 0 R /FT /Tx >>".into(),
+        "<< /FT /Btn /Ff 65536 /T (hide) /Rect [0 0 10 10] /A 3 0 R >>".into(),
+        format!("<< /FT /Tx /T (reset) /Rect [0 0 10 10] /A << /S /ResetForm /Fields [{}] >> >>", "2 0 R ".repeat(n)),
+    ];
+    let doc = document(&named);
+    let all = fields(&doc);
+    let hidden: usize = all
+        .iter()
+        .map(|f| if let Some(af::ButtonAction::ShowHide { fields, .. }) = &f.button { fields.iter().map(String::len).sum() } else { 0 })
+        .sum();
+    assert!(hidden <= crate::read::MAX_TEXT_BYTES, "{hidden} bytes of hidden field names");
+    let reset: usize = field_actions(&doc, "reset")
+        .unwrap()
+        .iter()
+        .map(|(_, a)| if let FieldAction::Reset(f) = a { f.iter().map(String::len).sum() } else { 0 })
+        .sum();
+    assert!(reset <= crate::read::MAX_TEXT_BYTES, "{reset} bytes of reset field names");
+}
+
 /// A page whose `/Contents` lists one 1 MiB stream ten times is read within the budget given:
 /// pieces past it read as empty, so their rectangles aren't found.
 #[test]

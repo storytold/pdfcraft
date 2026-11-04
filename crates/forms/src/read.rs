@@ -1,65 +1,99 @@
+use std::rc::Rc;
+use std::sync::Arc;
+
 use super::tab_order::rank_tabs;
-use super::{DecodeBudget, Dict, Document, Field, FieldKind, ObjRef, Object, PdfString, Widget, af, appearance, flags, name_text, text_of};
+use super::{DecodeBudget, Dict, Document, Field, FieldKind, ObjRef, Object, PdfString, Widget, af, appearance, flags, name_text};
 
 /// At most this many `/State` entries of a set-layer-visibility action are read.
 const MAX_LAYER_STATE: usize = 1024;
 
-/// A push button's mouse-up action (`/A`, or `/AA /U`, on the field or its widget).
-fn button_action(doc: &Document, d: &Dict, widgets: &[ObjRef], scripts: &mut DecodeBudget) -> Option<af::ButtonAction> {
+/// A push button's mouse-up action (`/A`, or `/AA /U`, on the field or its widget), its script
+/// copied against `scripts` and its other text against `text`.
+fn button_action(doc: &Document, d: &Dict, widgets: &[ObjRef], scripts: &mut Allowance, text: &mut Allowance) -> Option<af::ButtonAction> {
     // A button PdfCraft generated for an XFA image field (`/PCXfaImage true`, no PDF action):
     // clicking it picks a picture, as `buttonImportIcon()` does.
     if matches!(d.get(b"PCXfaImage").map(|o| doc.resolve(o)).as_deref(), Some(Object::Bool(true))) {
         return Some(af::ButtonAction::ImportIcon);
     }
-    let pick = |dict: &Dict| -> Option<Object> {
-        dict.get(b"A").cloned().or_else(|| dict.get(b"AA").map(|a| doc.resolve(a)).and_then(|a| a.as_dict().and_then(|aa| aa.get(b"U").cloned())))
+    // The action of the first of these dictionaries that has one, read where it is: an `/AA`
+    // many buttons share isn't copied for each.
+    let mut from = |dict: &Dict| -> Option<Option<af::ButtonAction>> {
+        if let Some(a) = dict.get(b"A") {
+            return Some(button_action_of(doc, a, scripts, text));
+        }
+        let aa = held(doc, dict.get(b"AA")?);
+        let u = aa.as_dict()?.get(b"U")?;
+        Some(button_action_of(doc, u, scripts, text))
     };
-    let action = pick(d).or_else(|| widgets.iter().find_map(|w| doc.get(*w).as_dict().and_then(pick)))?;
-    let a = doc.resolve(&action);
+    match from(d) {
+        Some(found) => found,
+        None => widgets
+            .iter()
+            .find_map(|w| {
+                let wo = doc.get(*w);
+                from(wo.as_dict()?)
+            })
+            .flatten(),
+    }
+}
+
+fn button_action_of(doc: &Document, action: &Object, scripts: &mut Allowance, text: &mut Allowance) -> Option<af::ButtonAction> {
+    let a = held(doc, action);
     let a = a.as_dict()?;
-    let s = |k: &[u8]| a.get(k).and_then(|v| text_of(&doc.resolve(v)));
     Some(match a.name(b"S")? {
         b"ResetForm" => {
-            let fields = a
-                .get(b"Fields")
-                .map(|f| doc.resolve(f))
-                .and_then(|f| f.as_array().cloned())
-                .unwrap_or_default()
-                .iter()
-                .filter_map(|o| match o {
-                    Object::Ref(r) => doc.get(*r).as_dict().and_then(|fd| fd.get(b"T").and_then(|t| text_of(&doc.resolve(t)))),
-                    other => text_of(&doc.resolve(other)),
-                })
-                .collect();
+            let mut fields = Vec::new();
+            let list = a.get(b"Fields").map(|f| held(doc, f));
+            for o in list.as_deref().and_then(Object::as_array).into_iter().flatten() {
+                if !text.entry() {
+                    break;
+                }
+                let name = match o {
+                    Object::Ref(r) => doc.get(*r).as_dict().and_then(|fd| fd.get(b"T")).and_then(|t| text.text(doc, t)),
+                    other => text.text(doc, other),
+                };
+                fields.extend(name);
+            }
             let exclude = a.get(b"Flags").and_then(|f| doc.resolve(f).as_int()).unwrap_or(0) & 1 != 0;
             af::ButtonAction::Reset { fields, exclude }
         }
-        b"Named" => af::ButtonAction::Named(String::from_utf8_lossy(a.name(b"N")?).into_owned()),
-        b"URI" => af::ButtonAction::Uri(s(b"URI")?),
+        b"Named" => {
+            let n = a.name(b"N")?;
+            af::ButtonAction::Named(text.copy(n.len(), || String::from_utf8_lossy(n).into_owned())?)
+        }
+        b"URI" => af::ButtonAction::Uri(text.text(doc, a.get(b"URI")?)?),
         b"SubmitForm" => af::ButtonAction::Submit(
             a.get(b"F")
-                .map(|f| doc.resolve(f))
-                .and_then(|f| f.as_dict().and_then(|fd| fd.get(b"F").and_then(|x| text_of(&doc.resolve(x)))).or_else(|| text_of(&f)))
+                .and_then(|f| {
+                    let f = held(doc, f);
+                    match f.as_dict() {
+                        Some(fd) => fd.get(b"F").and_then(|x| text.text(doc, x)),
+                        None => text.text(doc, &f),
+                    }
+                })
                 .unwrap_or_default(),
         ),
         b"GoTo" => {
-            let dest = doc.resolve(a.get(b"D")?);
+            let dest = held(doc, a.get(b"D")?);
             let target = dest.as_array()?.first()?.as_ref()?;
             af::ButtonAction::GoTo(page_refs(doc).iter().position(|p| *p == target)?)
         }
         b"Hide" => {
             // /T: a field name, an annotation (or field) reference, or an array of them.
-            let target = |o: &Object| match o {
-                Object::Ref(r) => qualified_name(doc, *r).or_else(|| text_of(&doc.resolve(o))),
-                other => text_of(other),
-            };
-            let fields = match a.get(b"T") {
-                Some(t) => match &*doc.resolve(t) {
-                    Object::Array(items) => items.iter().filter_map(target).collect(),
-                    _ => target(t).into_iter().collect(),
-                },
-                None => Vec::new(),
-            };
+            let mut fields = Vec::new();
+            if let Some(t) = a.get(b"T") {
+                match &*held(doc, t) {
+                    Object::Array(items) => {
+                        for o in items {
+                            if !text.entry() {
+                                break;
+                            }
+                            fields.extend(hide_target(doc, o, text));
+                        }
+                    }
+                    _ => fields.extend(hide_target(doc, t, text)),
+                }
+            }
             let hide = !a.get(b"H").is_some_and(|h| matches!(&*doc.resolve(h), Object::Bool(false)));
             af::ButtonAction::ShowHide { fields, hide }
         }
@@ -68,7 +102,7 @@ fn button_action(doc: &Document, d: &Dict, widgets: &[ObjRef], scripts: &mut Dec
             let mut changes = Vec::new();
             if let Some(state) = a.get(b"State") {
                 let mut op = None;
-                for item in doc.resolve(state).as_array().into_iter().flatten().take(MAX_LAYER_STATE) {
+                for item in held(doc, state).as_array().into_iter().flatten().take(MAX_LAYER_STATE) {
                     match item {
                         Object::Name(n) => {
                             op = match n.as_slice() {
@@ -86,14 +120,22 @@ fn button_action(doc: &Document, d: &Dict, widgets: &[ObjRef], scripts: &mut Dec
             let preserve_rb = !a.get(b"PreserveRB").is_some_and(|p| matches!(&*doc.resolve(p), Object::Bool(false)));
             af::ButtonAction::SetLayers { changes, preserve_rb }
         }
-        b"JavaScript" => af::button_script(&script(doc, &action, scripts)?),
+        b"JavaScript" => af::button_script(&script(doc, action, scripts)?),
         _ => return None,
     })
 }
 
+/// A field a hide action names: by name, or by reference to the field or one of its widgets.
+fn hide_target(doc: &Document, o: &Object, text: &mut Allowance) -> Option<String> {
+    match o {
+        Object::Ref(r) => qualified_name(doc, *r, text).or_else(|| text.text(doc, o)),
+        other => text.text(doc, other),
+    }
+}
+
 /// The fully qualified name of the field that `r` (a field or one of its widgets) belongs to,
-/// from the partial names (`/T`) up its `/Parent` chain.
-fn qualified_name(doc: &Document, r: ObjRef) -> Option<String> {
+/// from the partial names (`/T`) up its `/Parent` chain, copied against `text`.
+fn qualified_name(doc: &Document, r: ObjRef, text: &mut Allowance) -> Option<String> {
     let mut parts = Vec::new();
     let mut seen = std::collections::HashSet::new();
     let mut cur = Some(r);
@@ -103,47 +145,171 @@ fn qualified_name(doc: &Document, r: ObjRef) -> Option<String> {
         }
         let obj = doc.get(c);
         let d = obj.as_dict()?;
-        if let Some(t) = d.get(b"T").and_then(|o| text_of(&doc.resolve(o))) {
+        if let Some(t) = d.get(b"T").and_then(|o| text.text(doc, o)) {
             parts.push(t);
         }
         cur = d.get(b"Parent").and_then(|p| p.as_ref());
     }
     parts.reverse();
-    (!parts.is_empty()).then(|| parts.join("."))
+    // The name is one more copy of its parts.
+    let len = parts.iter().fold(parts.len(), |n, p| n.saturating_add(p.len()));
+    (!parts.is_empty() && text.take(len)).then(|| parts.join("."))
 }
 
-/// JavaScript streams one reading of the form (its fields, or its document scripts) may decode
-/// in all, however many actions name the same stream.
+/// `o`, or the object it refers to, borrowed: [`Document::resolve`] copies a direct object, so a
+/// string held directly in a dictionary many fields share would be copied once for each.
+pub(crate) enum Held<'a> {
+    Direct(&'a Object),
+    Indirect(Arc<Object>),
+}
+
+impl std::ops::Deref for Held<'_> {
+    type Target = Object;
+
+    fn deref(&self) -> &Object {
+        match self {
+            Held::Direct(o) => o,
+            Held::Indirect(o) => o,
+        }
+    }
+}
+
+pub(crate) fn held<'a>(doc: &Document, o: &'a Object) -> Held<'a> {
+    match o {
+        Object::Ref(r) => Held::Indirect(doc.get(*r)),
+        other => Held::Direct(other),
+    }
+}
+
+/// What a copy costs besides its bytes, the `String` that holds it: a file naming one empty
+/// string a million times pays for the million copies.
+const COPY: usize = std::mem::size_of::<String>();
+
+/// What one reading of the form may copy out of the document for one purpose, however often the
+/// file names the same object or fields inherit it: the text of each string, and the decoded
+/// bytes of each stream (every filter stage, as [`DecodeBudget`] counts them), each copy with
+/// [`COPY`] bytes besides. Text that doesn't fit in what is left isn't copied.
+pub(crate) struct Allowance {
+    left: usize,
+    refusals: usize,
+}
+
+impl Allowance {
+    pub(crate) const fn new(bytes: usize) -> Self {
+        Self { left: bytes, refusals: 0 }
+    }
+
+    /// How many copies [`Allowance::take`], [`Allowance::entry`] and [`Allowance::copy`] refused
+    /// so far: a reader that must have all of something's text or none compares it before and
+    /// after.
+    pub(crate) fn refusals(&self) -> usize {
+        self.refusals
+    }
+
+    /// Charges a copy of `bytes` bytes. `false`, charging nothing, when it doesn't fit.
+    pub(crate) fn take(&mut self, bytes: usize) -> bool {
+        match self.left.checked_sub(bytes.saturating_add(COPY)) {
+            Some(left) => {
+                self.left = left;
+                true
+            }
+            None => {
+                self.refusals = self.refusals.saturating_add(1);
+                false
+            }
+        }
+    }
+
+    /// Charges reading one entry of an array, text or not, as a copy of nothing: an array the
+    /// file names many times is paid for by its length, and once the allowance is spent the
+    /// reader stops at the next entry.
+    pub(crate) fn entry(&mut self) -> bool {
+        self.take(0)
+    }
+
+    /// The text `text` makes of what the file stores in `stored` bytes, charged by its length.
+    /// Text whose stored bytes alone don't fit isn't made, and text that comes out longer than
+    /// what is left spends it, as a decode past it does.
+    pub(crate) fn copy(&mut self, stored: usize, text: impl FnOnce() -> String) -> Option<String> {
+        if stored.saturating_add(COPY) > self.left {
+            self.refusals = self.refusals.saturating_add(1);
+            return None;
+        }
+        let t = text();
+        if self.take(t.len()) {
+            Some(t)
+        } else {
+            self.left = 0;
+            None
+        }
+    }
+
+    /// The text of a string object (`o`, or what it refers to).
+    pub(crate) fn string(&mut self, doc: &Document, o: &Object) -> Option<String> {
+        match &*held(doc, o) {
+            Object::String(s) => self.copy(s.bytes.len(), || s.to_text()),
+            _ => None,
+        }
+    }
+
+    /// The text of a string or name object, as [`crate::text_of`] reads it.
+    pub(crate) fn text(&mut self, doc: &Document, o: &Object) -> Option<String> {
+        match &*held(doc, o) {
+            Object::String(s) => self.copy(s.bytes.len(), || s.to_text()),
+            Object::Name(n) => self.copy(n.len(), || name_text(n)),
+            _ => None,
+        }
+    }
+
+    /// `s` decoded, charged as a [`DecodeBudget`] charges it; `None` once what is left is spent,
+    /// or when it won't decode.
+    pub(crate) fn decode(&mut self, s: &pdfcraft_cos::Stream) -> Option<Vec<u8>> {
+        if !self.take(0) {
+            return None;
+        }
+        let mut budget = DecodeBudget::new(self.left, 0);
+        let out = budget.decode(s).ok();
+        self.left = budget.remaining();
+        out
+    }
+}
+
+/// The JavaScript, `/JS` strings and streams, one reading of the form (its fields, or its
+/// document scripts with their names) may copy in all, however many actions name the same
+/// script.
 pub(crate) const MAX_SCRIPT_BYTES: usize = 64 << 20;
 
-/// A budget for the script streams of one reading of the form.
-pub(crate) fn script_budget() -> DecodeBudget {
-    DecodeBudget::new(MAX_SCRIPT_BYTES, 0)
+/// The allowance for the scripts of one reading of the form.
+pub(crate) fn script_budget() -> Allowance {
+    Allowance::new(MAX_SCRIPT_BYTES)
 }
 
-/// The JavaScript of an action dictionary (`/JS` string or stream). A stream is decoded against
-/// `budget`, and is `None` once it is spent.
-pub(crate) fn script(doc: &Document, action: &Object, budget: &mut DecodeBudget) -> Option<String> {
-    let a = doc.resolve(action);
-    let js = a.as_dict()?.get(b"JS")?.clone();
-    match &*doc.resolve(&js) {
-        Object::String(s) => Some(s.to_text()),
-        Object::Stream(s) => budget.decode(s).ok().map(|b| String::from_utf8_lossy(&b).into_owned()),
+/// The JavaScript of an action dictionary (`/JS` string or stream), copied against `budget`:
+/// `None` once it doesn't fit.
+pub(crate) fn script(doc: &Document, action: &Object, budget: &mut Allowance) -> Option<String> {
+    let a = held(doc, action);
+    let js = a.as_dict()?.get(b"JS")?;
+    match &*held(doc, js) {
+        Object::String(s) => budget.copy(s.bytes.len(), || s.to_text()),
+        Object::Stream(s) => budget.decode(s).map(|b| String::from_utf8_lossy(&b).into_owned()),
         _ => None,
     }
 }
 
 /// A field's format/keystroke, validate and calculate scripts (field dictionary, or its only
 /// widget's when the field has none).
-fn actions_of(doc: &Document, d: &Dict, widgets: &[ObjRef], scripts: &mut DecodeBudget) -> af::Actions {
-    let aa = d.get(b"AA").map(|a| doc.resolve(a)).and_then(|a| a.as_dict().cloned()).or_else(|| {
-        (widgets.len() == 1)
-            .then(|| doc.get(widgets[0]))
-            .and_then(|w| w.as_dict().and_then(|wd| wd.get(b"AA").map(|a| doc.resolve(a))))
-            .and_then(|a| a.as_dict().cloned())
-    });
+fn actions_of(doc: &Document, d: &Dict, widgets: &[ObjRef], scripts: &mut Allowance) -> af::Actions {
+    // Read where it is: an `/AA` many fields share isn't copied for each.
+    let widget = match widgets {
+        [w] => Some(doc.get(*w)),
+        _ => None,
+    };
+    fn aa_of<'a>(doc: &Document, dict: &'a Dict) -> Option<Held<'a>> {
+        dict.get(b"AA").map(|a| held(doc, a)).filter(|a| a.as_dict().is_some())
+    }
+    let aa = aa_of(doc, d).or_else(|| widget.as_deref().and_then(Object::as_dict).and_then(|wd| aa_of(doc, wd)));
     let mut out = af::Actions::default();
-    let Some(aa) = aa else { return out };
+    let Some(aa) = aa.as_deref().and_then(Object::as_dict) else { return out };
     let mut js = |k: &[u8]| aa.get(k).and_then(|a| script(doc, a, scripts));
     if let Some(f) = js(b"F") {
         match af::parse_format(&f) {
@@ -192,18 +358,29 @@ fn actions_of(doc: &Document, d: &Dict, widgets: &[ObjRef], scripts: &mut Decode
     out
 }
 
-/// Text streams of field values (`/V`, `/DV`) one reading of the form may decode in all, however
-/// many fields name the same stream.
+/// The field values (`/V`, `/DV`: strings and names by their text, text streams by what they
+/// decode to) one reading of the form may copy in all, however many fields name the same value
+/// or inherit it.
 pub(crate) const MAX_VALUE_BYTES: usize = 64 << 20;
 
-/// A field's value or default value (`/V`, `/DV`). A text stream is decoded against `budget`, and
-/// reads as no value once it is spent, as one that won't decode does.
-fn values_of(doc: &Document, o: Option<&Object>, budget: &mut DecodeBudget) -> Vec<String> {
+/// A field's value or default value (`/V`, `/DV`), copied against `budget`. A value that doesn't
+/// fit reads as none, as one that won't decode does, and of an array of values those that fit
+/// are read until the allowance is spent.
+fn values_of(doc: &Document, o: Option<&Object>, budget: &mut Allowance) -> Vec<String> {
     let Some(o) = o else { return Vec::new() };
-    match &*doc.resolve(o) {
-        Object::Array(a) => a.iter().filter_map(|x| text_of(&doc.resolve(x))).collect(),
-        Object::Stream(s) => budget.decode(s).ok().map(|b| PdfString::literal(b).to_text()).into_iter().collect(),
-        other => text_of(other).filter(|s| s != "Off" && !s.is_empty()).into_iter().collect(),
+    match &*held(doc, o) {
+        Object::Array(a) => {
+            let mut out = Vec::new();
+            for x in a {
+                if !budget.entry() {
+                    break;
+                }
+                out.extend(budget.text(doc, x));
+            }
+            out
+        }
+        Object::Stream(s) => budget.decode(s).map(|b| PdfString::literal(b).to_text()).into_iter().collect(),
+        other => budget.text(doc, other).filter(|s| s != "Off" && !s.is_empty()).into_iter().collect(),
     }
 }
 
@@ -274,14 +451,18 @@ pub fn acroform(doc: &Document) -> Option<Dict> {
     doc.resolve(&af).as_dict().cloned()
 }
 
+/// What a field inherits from the fields above it. Text is shared with the fields below, not
+/// copied, and a value is read from the field that carries it, where a field needs it: a long
+/// name, `/DA` or value would otherwise be copied once for each field under it.
 #[derive(Clone, Default)]
 struct Inherited {
-    name: String,
-    ft: Option<Vec<u8>>,
+    name: Rc<str>,
+    ft: Option<Rc<[u8]>>,
     ff: Option<u32>,
-    v: Option<Object>,
-    dv: Option<Object>,
-    da: Option<String>,
+    /// The fields that carry the `/V` and `/DV` that apply.
+    v: Option<Arc<Object>>,
+    dv: Option<Arc<Object>>,
+    da: Option<Rc<str>>,
     q: Option<i64>,
     max_len: Option<usize>,
 }
@@ -342,21 +523,27 @@ pub(crate) fn enumerate(doc: &Document) -> (Vec<Field>, usize) {
             }
         }
     }
+    let mut seen = Seen {
+        fields: std::collections::HashSet::new(),
+        widgets: std::collections::HashSet::new(),
+        scripts: script_budget(),
+        values: Allowance::new(MAX_VALUE_BYTES),
+        text: Allowance::new(MAX_TEXT_BYTES),
+    };
     let base = match &af {
         Some(af) => Inherited {
-            da: af.get(b"DA").and_then(|o| text_of(&doc.resolve(o))),
+            da: af.get(b"DA").and_then(|o| seen.text.text(doc, o)).map(Rc::from),
             q: af.get(b"Q").and_then(|o| doc.resolve(o).as_int()),
             ..Default::default()
         },
         None => Inherited::default(),
     };
+    // Every field may inherit the form's `/DA`: a form whose `/DA` doesn't fit has none read
+    // whole.
+    if seen.text.refusals() > 0 {
+        return (Vec::new(), 0);
+    }
     let mut out = Vec::new();
-    let mut seen = Seen {
-        fields: std::collections::HashSet::new(),
-        widgets: std::collections::HashSet::new(),
-        scripts: script_budget(),
-        values: DecodeBudget::new(MAX_VALUE_BYTES, 0),
-    };
     if let Some(af) = &af {
         for f in af.get(b"Fields").map(|o| doc.resolve(o)).and_then(|o| o.as_array().cloned()).unwrap_or_default() {
             if let Some(r) = f.as_ref() {
@@ -427,14 +614,31 @@ fn unlisted_root(doc: &Document, r: ObjRef, seen: &std::collections::HashSet<Obj
     }
 }
 
-/// What one reading of the form's fields has used: the field and widget dictionaries read, the
-/// script budget their actions share, and the budget their value streams share.
+/// The rest of the text one reading of the form may copy in all, however many fields name the
+/// same string or inherit it: full names, `/DA` (a list box's widgets' too), options, tooltips,
+/// captions, on states and the text of button actions.
+pub(crate) const MAX_TEXT_BYTES: usize = 64 << 20;
+
+/// What one reading of the form's fields has used: the field and widget dictionaries read, and
+/// the allowances their scripts, values and other text share.
 struct Seen {
     fields: std::collections::HashSet<ObjRef>,
     /// A widget belongs to the first field that lists it, however often it is listed.
     widgets: std::collections::HashSet<ObjRef>,
-    scripts: DecodeBudget,
-    values: DecodeBudget,
+    scripts: Allowance,
+    values: Allowance,
+    /// A field whose text doesn't fit is left out of the reading whole: a field read without
+    /// its `/DA` or options would be drawn and checked as another field.
+    text: Allowance,
+}
+
+/// The on state of a check box or radio button widget: the first state of its normal appearance
+/// (`/AP /N`) other than Off.
+fn on_state_of(doc: &Document, wd: &Dict, text: &mut Allowance) -> Option<String> {
+    let ap = held(doc, wd.get(b"AP")?);
+    let n = held(doc, ap.as_dict()?.get(b"N")?);
+    let (k, _) = n.as_dict()?.iter().find(|(k, _)| k.as_slice() != b"Off")?;
+    text.copy(k.len(), || name_text(k))
 }
 
 /// Read the field at `r` and the fields under it into `out`, with what they inherit from
@@ -454,22 +658,32 @@ fn walk(
     let obj = doc.get(r);
     let Some(d) = obj.as_dict() else { return };
     let mut inh = parent.clone();
-    if let Some(t) = d.get(b"T").and_then(|o| text_of(&doc.resolve(o))) {
-        inh.name = if inh.name.is_empty() { t } else { format!("{}.{t}", inh.name) };
+    let refusals = seen.text.refusals();
+    if let Some(t) = d.get(b"T").and_then(|o| seen.text.text(doc, o)) {
+        if inh.name.is_empty() {
+            inh.name = Rc::from(t);
+        } else if seen.text.take(inh.name.len().saturating_add(t.len()).saturating_add(1)) {
+            // The full name: one more copy, of the parent's with this part added.
+            inh.name = Rc::from(format!("{}.{t}", inh.name));
+        }
     }
     if let Some(ft) = d.name(b"FT") {
-        inh.ft = Some(ft.to_vec());
+        inh.ft = Some(Rc::from(ft));
     }
     if let Some(ff) = field_flags(doc, d) {
         inh.ff = Some(ff);
     }
     for (k, slot) in [(&b"V"[..], &mut inh.v), (b"DV", &mut inh.dv)] {
-        if let Some(v) = d.get(k) {
-            *slot = Some(v.clone());
+        if d.contains(k) {
+            *slot = Some(obj.clone());
         }
     }
-    if let Some(da) = d.get(b"DA").and_then(|o| text_of(&doc.resolve(o))) {
-        inh.da = Some(da);
+    if let Some(da) = d.get(b"DA").and_then(|o| seen.text.text(doc, o)) {
+        inh.da = Some(Rc::from(da));
+    }
+    // A name or `/DA` that doesn't fit leaves the field out, with the fields under it.
+    if seen.text.refusals() != refusals {
+        return;
     }
     if let Some(q) = d.get(b"Q").and_then(|o| doc.resolve(o).as_int()) {
         inh.q = Some(q);
@@ -505,10 +719,13 @@ fn walk(
     };
     let widget_refs: Vec<ObjRef> = if d.contains(b"Rect") { vec![r] } else { kids };
     let widget_refs: Vec<ObjRef> = widget_refs.into_iter().filter(|w| seen.widgets.insert(*w)).collect();
+    let refusals = seen.text.refusals();
     let actions = actions_of(doc, d, &widget_refs, &mut seen.scripts);
     let button = (inh.ft.as_deref() == Some(b"Btn") && inh.ff.unwrap_or(0) & flags::PUSH_BUTTON != 0)
-        .then(|| button_action(doc, d, &widget_refs, &mut seen.scripts))
+        .then(|| button_action(doc, d, &widget_refs, &mut seen.scripts, &mut seen.text))
         .flatten();
+    let field_da = inh.da.as_deref().unwrap_or("/Helv 0 Tf 0 g");
+    let text = &mut seen.text;
     let widgets = widget_refs
         .into_iter()
         .filter_map(|w| {
@@ -517,17 +734,11 @@ fn walk(
             let rect = nums(doc, wd.get(b"Rect")).filter(|r| r.len() == 4).unwrap_or_else(|| vec![0.0; 4]);
             let annot_flags = wd.get(b"F").and_then(|f| doc.resolve(f).as_int()).unwrap_or(0);
             let own_ff = if w == r { 0 } else { field_flags(doc, wd).unwrap_or(0) };
-            let on_state = wd
-                .get(b"AP")
-                .map(|ap| doc.resolve(ap))
-                .and_then(|ap| ap.as_dict().and_then(|a| a.get(b"N").cloned()))
-                .and_then(|n| doc.resolve(&n).as_dict().cloned())
-                .and_then(|n| n.iter().map(|(k, _)| name_text(k)).find(|k| k != "Off"));
             Some(Widget {
                 obj: w,
                 page: page_of.get(&w).copied(),
                 rect: [rect[0].min(rect[2]), rect[1].min(rect[3]), rect[0].max(rect[2]), rect[1].max(rect[3])],
-                on_state: on_state.filter(|_| matches!(kind, FieldKind::CheckBox | FieldKind::Radio)),
+                on_state: matches!(kind, FieldKind::CheckBox | FieldKind::Radio).then(|| on_state_of(doc, wd, text)).flatten(),
                 state: wd.name(b"AS").map(name_text),
                 tab: usize::MAX,
                 locked: annot_flags & 128 != 0,
@@ -536,39 +747,59 @@ fn walk(
                 rotation: appearance::mk_rotation(doc, wd),
                 caption: (kind == FieldKind::PushButton)
                     .then(|| {
-                        let mk = doc.resolve(wd.get(b"MK")?);
-                        let value = doc.resolve(mk.as_dict()?.get(b"CA")?);
-                        value.as_string().map(|s| s.to_text())
+                        let mk = held(doc, wd.get(b"MK")?);
+                        text.string(doc, mk.as_dict()?.get(b"CA")?)
                     })
                     .flatten(),
-                list: (kind == FieldKind::List).then(|| appearance::list_rows_of(doc, inh.da.as_deref().unwrap_or("/Helv 0 Tf 0 g"), Some(d), wd)),
+                list: (kind == FieldKind::List).then(|| {
+                    let da = wd.get(b"DA").and_then(|o| text.string(doc, o));
+                    appearance::list_rows_drawn_with(doc, da.as_deref().unwrap_or(field_da), Some(d), wd)
+                }),
                 round: kind == FieldKind::Radio || (kind == FieldKind::CheckBox && appearance::is_round(doc, wd)),
             })
         })
         .collect();
-    let options = d
-        .get(b"Opt")
-        .map(|o| doc.resolve(o))
-        .and_then(|o| o.as_array().cloned())
-        .unwrap_or_default()
-        .iter()
-        .filter_map(|o| match &*doc.resolve(o) {
-            Object::Array(pair) if pair.len() >= 2 => Some((text_of(&doc.resolve(&pair[0]))?, text_of(&doc.resolve(&pair[1]))?)),
-            other => text_of(other).map(|t| (t.clone(), t)),
-        })
-        .collect();
+    let mut options = Vec::new();
+    let opt = d.get(b"Opt").map(|o| held(doc, o));
+    for o in opt.as_deref().and_then(Object::as_array).into_iter().flatten() {
+        if !text.entry() {
+            break;
+        }
+        match &*held(doc, o) {
+            Object::Array(pair) => {
+                if let [export, shown, ..] = pair.as_slice()
+                    && let Some(export) = text.text(doc, export)
+                    && let Some(shown) = text.text(doc, shown)
+                {
+                    options.push((export, shown));
+                }
+            }
+            other => {
+                if let Some(t) = text.text(doc, other)
+                    && text.take(t.len())
+                {
+                    options.push((t.clone(), t));
+                }
+            }
+        }
+    }
+    let tooltip = d.get(b"TU").and_then(|o| text.text(doc, o));
+    // Then the field's own copies of its full name and `/DA`.
+    if !text.take(inh.name.len()) || !text.take(field_da.len()) || text.refusals() != refusals {
+        return;
+    }
     out.push(Field {
-        name: inh.name.clone(),
+        name: inh.name.to_string(),
         obj: r,
         kind,
-        value: values_of(doc, inh.v.as_ref(), &mut seen.values),
-        default: values_of(doc, inh.dv.as_ref(), &mut seen.values),
+        value: values_of(doc, inh.v.as_deref().and_then(Object::as_dict).and_then(|f| f.get(b"V")), &mut seen.values),
+        default: values_of(doc, inh.dv.as_deref().and_then(Object::as_dict).and_then(|f| f.get(b"DV")), &mut seen.values),
         flags: ff,
         max_len: inh.max_len,
         options,
-        da: inh.da.clone().unwrap_or_else(|| "/Helv 0 Tf 0 g".into()),
+        da: field_da.to_string(),
         quadding: inh.q.unwrap_or(0),
-        tooltip: d.get(b"TU").and_then(|o| text_of(&doc.resolve(o))),
+        tooltip,
         widgets,
         actions,
         button,

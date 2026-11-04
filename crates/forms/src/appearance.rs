@@ -571,21 +571,23 @@ fn circle_path(cx: f64, cy: f64, r: f64) -> String {
 /// The width [`frame`] insets the content by: the `/BS` border width when the widget has a
 /// border colour, doubled for beveled and inset borders, and 0 without a border.
 fn border_width(doc: &Document, wd: &Dict) -> f64 {
-    let mk = wd.get(b"MK").map(|m| doc.resolve(m)).and_then(|m| m.as_dict().cloned());
-    let bs = wd.get(b"BS").map(|b| doc.resolve(b)).and_then(|b| b.as_dict().cloned());
+    // Read where they are: a `/MK` or `/BS` many widgets share by reference isn't copied for each
+    // (reading a form's list boxes measures every one).
+    let mk = wd.get(b"MK").map(|m| doc.resolve(m));
+    let bs = wd.get(b"BS").map(|b| doc.resolve(b));
     let bw = line_width(doc, wd);
-    if color_array(doc, mk.as_ref(), b"BC").is_none() || bw <= 0.0 {
+    if color_array(doc, mk.as_deref().and_then(Object::as_dict), b"BC").is_none() || bw <= 0.0 {
         return 0.0;
     }
-    let style = bs.as_ref().and_then(|b| b.name(b"S").map(<[u8]>::to_vec)).unwrap_or_default();
+    let style = bs.as_deref().and_then(Object::as_dict).and_then(|b| b.name(b"S")).unwrap_or_default();
     if style == b"B" || style == b"I" { 2.0 * bw } else { bw }
 }
 
 /// The widget's border line width, `/BS /W` (default 1, Table 168), as [`frame`] strokes it.
 fn line_width(doc: &Document, wd: &Dict) -> f64 {
-    let bs = wd.get(b"BS").map(|b| doc.resolve(b)).and_then(|b| b.as_dict().cloned());
+    let bs = wd.get(b"BS").map(|b| doc.resolve(b));
     // `f64::max` turns NaN into 0, as it does a negative width.
-    bs.as_ref().and_then(|b| b.get(b"W")).and_then(|x| doc.resolve(x).as_f64()).unwrap_or(1.0).max(0.0)
+    bs.as_deref().and_then(Object::as_dict).and_then(|b| b.get(b"W")).and_then(|x| doc.resolve(x).as_f64()).unwrap_or(1.0).max(0.0)
 }
 
 /// Comb fields stop drawing their cells past this many; they would be a solid block anyway.
@@ -673,7 +675,14 @@ fn top_index(doc: &Document, wd: &Dict, field: Option<&Dict>) -> usize {
 
 /// The rows of a list box whose field's `/DA` is `f_da`, in widget `wd`.
 pub(crate) fn list_rows_of(doc: &Document, f_da: &str, field: Option<&Dict>, wd: &Dict) -> ListRows {
-    let da = parse_da(wd.get(b"DA").and_then(|o| doc.resolve(o).as_string().map(|s| s.to_text())).as_deref().unwrap_or(f_da));
+    let da = wd.get(b"DA").and_then(|o| doc.resolve(o).as_string().map(|s| s.to_text()));
+    list_rows_drawn_with(doc, da.as_deref().unwrap_or(f_da), field, wd)
+}
+
+/// The rows of a list box drawn with appearance string `da` (its widget's `/DA`, else its
+/// field's), in widget `wd`.
+pub(crate) fn list_rows_drawn_with(doc: &Document, da: &str, field: Option<&Dict>, wd: &Dict) -> ListRows {
+    let da = parse_da(da);
     let size = if da.size > 0.0 { da.size } else { 12.0 };
     ListRows { top: top_index(doc, wd, field), inset: 2.0 + border_width(doc, wd), row: size * 1.15, size }
 }
