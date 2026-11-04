@@ -329,12 +329,16 @@ impl PdfCraftApp {
                     custom if custom.starts_with("custom-stamp-index-") => {
                         let key = custom.strip_prefix("custom-stamp-index-").unwrap_or_default();
                         let id = key.parse::<usize>().ok().and_then(|index| self.custom_stamps.get(index).map(|stamp| stamp.id));
-                        QuickTool::CustomStamp(id.ok_or_else(|| format!("unknown custom stamp index {key}; there are {} custom stamps", self.custom_stamps.len()))?)
+                        QuickTool::CustomStamp(
+                            id.ok_or_else(|| format!("unknown custom stamp index {key}; there are {} custom stamps", self.custom_stamps.len()))?,
+                        )
                     }
                     custom if custom.starts_with("custom-stamp-") => {
                         let key = custom.strip_prefix("custom-stamp-").unwrap_or_default();
                         let id = key.parse::<usize>().ok().and_then(|index| self.custom_stamps.get(index).map(|stamp| stamp.id));
-                        QuickTool::CustomStamp(id.ok_or_else(|| format!("unknown custom stamp index {key}; there are {} custom stamps", self.custom_stamps.len()))?)
+                        QuickTool::CustomStamp(
+                            id.ok_or_else(|| format!("unknown custom stamp index {key}; there are {} custom stamps", self.custom_stamps.len()))?,
+                        )
                     }
                     stamp if stamp.starts_with("stamp-") => QuickTool::Stamp(
                         pdfcraft_engine::StampKind::ALL

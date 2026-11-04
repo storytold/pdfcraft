@@ -155,9 +155,7 @@ fn editing_a_saved_custom_stamp_through_its_palette_updates_it_and_cancel_discar
     assert!(h.state_mut().execute("comment.stamp"));
     h.run_steps(2);
     let mut png = Vec::new();
-    image::RgbImage::from_pixel(60, 20, image::Rgb([20, 120, 220]))
-        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
-        .unwrap();
+    image::RgbImage::from_pixel(60, 20, image::Rgb([20, 120, 220])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
     h.state_mut().start_custom_stamp("logo.png".into(), png);
     h.run_steps(2);
     h.get_by_label("Create Custom Stamp");
