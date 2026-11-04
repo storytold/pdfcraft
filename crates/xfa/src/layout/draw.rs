@@ -242,14 +242,29 @@ impl Layouter<'_> {
         // Text that doesn't fit the height it was given (the template's face is narrower than
         // the standard one drawn in its place, so it wraps to more lines) is drawn smaller,
         // down to 70%, rather than over what lies below.
-        let fits = |k: f64| {
+        // A pass is not started once the budget is spent, and one that spends it stops the rest.
+        let fits = |k: f64| -> Result<bool, XfaError> {
+            self.check_drawn_chars()?;
             self.drawn_chars.set(self.drawn_chars.get().saturating_add(cost));
-            text::measure_height(&rich, rect.w / k, para, &face, &embed) <= rect.h / k + 1.0
+            let fit = text::measure_height(&rich, rect.w / k, para, &face, &embed) <= rect.h / k + 1.0;
+            self.check_drawn_chars()?;
+            Ok(fit)
         };
-        let scale = if rect.h < 4.0 || fits(1.0) { 1.0 } else { [0.95, 0.9, 0.85, 0.8, 0.75].into_iter().find(|k| fits(*k)).unwrap_or(0.7) };
+        let mut scale = 1.0;
+        if rect.h >= 4.0 && !fits(1.0)? {
+            scale = 0.7;
+            for k in [0.95, 0.9, 0.85, 0.8, 0.75] {
+                if fits(k)? {
+                    scale = k;
+                    break;
+                }
+            }
+        }
         self.drawn_chars.set(self.drawn_chars.get().saturating_add(cost));
         self.check_drawn_chars()?;
         let mut block = text::layout(&rich, Rect::new(rect.x, rect.y, rect.w / scale, rect.h / scale), para, &face, &embed);
+        // The layout itself expands the embedded values once more.
+        self.check_drawn_chars()?;
         if scale < 1.0 {
             for s in &mut block.spans {
                 s.x = rect.x + (s.x - rect.x) * scale;

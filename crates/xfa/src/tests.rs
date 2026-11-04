@@ -713,6 +713,40 @@ fn embedded_values_drawn_in_many_instances_spend_the_draw_budget() {
     assert!(layout_xml(&one).is_ok(), "a single draw embedding a long value must lay out");
 }
 
+/// The last layout pass of a draw counts against the budget too: a draw that fits is measured
+/// once and laid out once, each pass expanding its embedded value, and when the form's last draw
+/// crosses the budget in that final pass it is still refused (CodeRabbit review on #5852).
+#[test]
+fn the_draw_that_crosses_the_budget_in_its_last_pass_is_refused() {
+    // 15,000 characters: with the 1 MiB test budget, the tenth such draw crosses it during its
+    // final layout pass, after every check before that pass has passed.
+    let value = "word ".repeat(3000);
+    let span = r##"<span xfa:embed="#long" xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"/>"##;
+    let form = |n: usize| {
+        format!(
+            r#"<template><subform layout="tb"><field id="long" presence="hidden" w="1in" h="0.2in"><ui><textEdit/></ui><value><text>{value}</text></value></field><subform layout="tb"><occur initial="{n}" max="-1"/><draw w="7in" h="9in"><value><exData contentType="text/html"><body xmlns="http://www.w3.org/1999/xhtml"><p>x {span}</p></body></exData></value></draw></subform></subform></template>"#
+        )
+    };
+    assert!(layout_xml(&form(9)).is_ok());
+    assert!(matches!(layout_xml(&form(10)), Err(XfaError::TooLarge(_))), "the draw crossing the budget in its last pass must be refused");
+}
+
+/// Once a fit pass spends the budget, no more passes are made: a draw that doesn't fit and embeds
+/// a long value is measured once, not seven times, before it is refused (CodeRabbit review on
+/// #5852).
+#[test]
+fn fit_passes_stop_once_the_draw_budget_is_spent() {
+    let value = "word ".repeat(text::MAX_EMBEDDED / 5 + 1000);
+    let span = r##"<span xfa:embed="#long" xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"/>"##;
+    let tpl = format!(
+        r#"<template><subform layout="tb"><field id="long" presence="hidden" w="1in" h="0.2in"><ui><textEdit/></ui><value><text>{value}</text></value></field><draw w="1in" h="0.5in"><value><exData contentType="text/html"><body xmlns="http://www.w3.org/1999/xhtml"><p>x {span}</p></body></exData></value></draw></subform></template>"#
+    );
+    crate::layout::EMBED_COPIED.with(|c| c.set(0));
+    assert!(matches!(layout_xml(&tpl), Err(XfaError::TooLarge(_))));
+    let copied = crate::layout::EMBED_COPIED.with(|c| c.get());
+    assert!(copied <= 2 * text::MAX_EMBEDDED as u64, "{copied} bytes copied: more passes after the budget was spent");
+}
+
 #[test]
 fn a_packet_stream_listed_many_times_is_read_once() {
     let mut doc = Document::open(Arc::new(shell("<template><subform/></template>"))).unwrap();
