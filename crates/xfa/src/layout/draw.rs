@@ -166,8 +166,9 @@ impl Layouter<'_> {
         }
     }
 
-    /// Draw border `b` around `rect`: its fill, then each shown edge as a line inside the box, or
-    /// the whole box as one rounded shape when its corners are rounded.
+    /// Draw border `b` around `rect`: its fill (with its pattern's lines over it), then each
+    /// shown edge as a line inside the box, or the whole box as one rounded shape when its
+    /// corners are rounded.
     pub(super) fn draw_border(&mut self, b: &Border, rect: Rect) -> Result<(), XfaError> {
         let vis = b.visible_edges();
         // Rounded corners: the box is one shape, filled and edged along its curves, when its
@@ -186,6 +187,7 @@ impl Layouter<'_> {
                 radii,
                 inverted: b.corners.map(|c| c.inverted),
                 fill: b.fill().map(|f| f.0),
+                pattern: b.pattern(),
                 edge,
                 open_top: false,
                 open_bottom: false,
@@ -193,7 +195,7 @@ impl Layouter<'_> {
             return self.push(Item::Rounded(Box::new(shape)));
         }
         if let Some(fill) = b.fill() {
-            self.push(Item::Fill { rect, color: fill.0 })?;
+            self.push(Item::Fill { rect, color: fill.0, pattern: b.pattern() })?;
         }
         let (x0, y0, x1, y1) = (rect.x, rect.y, rect.right(), rect.bottom());
         // Top, right, bottom, left; lines sit inside the box.
