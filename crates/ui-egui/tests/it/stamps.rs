@@ -136,6 +136,8 @@ fn creating_placing_and_keeping_custom_stamps() {
     let stamp_id = s.custom_stamps[0].id;
     let stamp_data = s.custom_stamps[0].data.clone();
     let logo = h.get_by_label("logo").rect().center();
+    h.hover_at(logo);
+    h.run_steps(2);
     h.event(egui::Event::PointerButton { pos: logo, button: PointerButton::Secondary, pressed: true, modifiers: Modifiers::NONE });
     h.event(egui::Event::PointerButton { pos: logo, button: PointerButton::Secondary, pressed: false, modifiers: Modifiers::NONE });
     h.run_steps(2);
