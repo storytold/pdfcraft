@@ -238,6 +238,10 @@ fn clean_hf_name(name: &str) -> Option<String> {
     (!name.is_empty()).then_some(name)
 }
 
+fn same_hf_name(a: &str, b: &str) -> bool {
+    a.to_lowercase() == b.to_lowercase()
+}
+
 impl SavedHeaderFooter {
     fn to_json(&self) -> serde_json::Value {
         let h = &self.settings;
@@ -286,16 +290,28 @@ impl SavedHeaderFooter {
 }
 
 pub(crate) fn saved_hf_to_json(saved: &[SavedHeaderFooter]) -> serde_json::Value {
-    serde_json::Value::Array(saved.iter().map(|s| serde_json::json!({"name": s.name, "settings": s.to_json()})).collect())
+    serde_json::json!({
+        "version": 1,
+        "items": saved.iter().map(|s| serde_json::json!({"name": s.name, "settings": s.to_json()})).collect::<Vec<_>>()
+    })
 }
 
 pub(crate) fn saved_hf_from_json(v: &serde_json::Value) -> Vec<SavedHeaderFooter> {
+    // Accept the pre-versioned array as version 0 so existing preferences migrate on save.
+    let items = if let Some(items) = v.as_array() {
+        items
+    } else if v.get("version").and_then(serde_json::Value::as_u64) == Some(1) {
+        let Some(items) = v.get("items").and_then(serde_json::Value::as_array) else { return Vec::new() };
+        items
+    } else {
+        return Vec::new();
+    };
     let mut out = Vec::new();
-    for saved in v.as_array().into_iter().flatten().filter_map(SavedHeaderFooter::from_json) {
+    for saved in items.iter().filter_map(SavedHeaderFooter::from_json) {
         if out.len() >= MAX_SAVED_HF {
             break;
         }
-        if !out.iter().any(|s: &SavedHeaderFooter| s.name == saved.name) {
+        if !out.iter().any(|s: &SavedHeaderFooter| same_hf_name(&s.name, &saved.name)) {
             out.push(saved);
         }
     }
@@ -309,8 +325,11 @@ impl MarksDraft {
 
     fn save_hf(&mut self) {
         let Some(name) = clean_hf_name(&self.saved_hf_name) else { return };
-        let Some(index) =
-            self.saved_hf.iter().position(|s| s.name == name).or_else(|| (self.saved_hf.len() < MAX_SAVED_HF).then_some(self.saved_hf.len()))
+        let Some(index) = self
+            .saved_hf
+            .iter()
+            .position(|s| same_hf_name(&s.name, &name))
+            .or_else(|| (self.saved_hf.len() < MAX_SAVED_HF).then_some(self.saved_hf.len()))
         else {
             return;
         };
@@ -1061,7 +1080,8 @@ mod tests {
         let restored = saved_hf_from_json(&json);
         assert_eq!(restored, d.saved_hf);
         assert_eq!(restored[0].name, "En-tête 日本");
-        let config = &json[0]["settings"];
+        assert_eq!(json["version"], 1);
+        let config = &json["items"][0]["settings"];
         assert_eq!(config["header_left"], "Résumé <<1>>");
         assert!(config.get("name").is_none() && config.get("pages").is_none(), "the headless tool receives reusable settings without name or range");
 
@@ -1069,12 +1089,31 @@ mod tests {
             {"name":"bad", "settings":{"header_left":"only"}},
             {"name":"", "settings":{"header_left":"", "header_center":"", "header_right":"", "footer_left":"", "footer_center":"", "footer_right":""}},
             {"name":"kept", "settings":{"header_left":"", "header_center":"", "header_right":"", "footer_left":"", "footer_center":"", "footer_right":"", "font_size":null}},
-            {"name":"kept", "settings":{"header_left":"duplicate", "header_center":"", "header_right":"", "footer_left":"", "footer_center":"", "footer_right":""}}
+            {"name":"KEPT", "settings":{"header_left":"duplicate", "header_center":"", "header_right":"", "footer_left":"", "footer_center":"", "footer_right":""}}
         ]);
         let restored = saved_hf_from_json(&malformed);
         assert_eq!(restored.len(), 1);
         assert_eq!(restored[0].name, "kept");
         assert_eq!(restored[0].settings.font_size, HeaderFooter::default().font_size);
+
+        let legacy = serde_json::json!([{"name":"Old preference", "settings": {
+            "header_left":"", "header_center":"", "header_right":"", "footer_left":"", "footer_center":"", "footer_right":""
+        }}]);
+        assert_eq!(saved_hf_from_json(&legacy)[0].name, "Old preference");
+    }
+
+    #[test]
+    fn saved_header_footer_names_replace_without_case_duplicates() {
+        let mut d = MarksDraft::default();
+        d.saved_hf_name = "Invoice".into();
+        d.hf.text[0] = "First".into();
+        d.save_hf();
+        d.saved_hf_name = "invoice".into();
+        d.hf.text[0] = "Second".into();
+        d.save_hf();
+        assert_eq!(d.saved_hf.len(), 1);
+        assert_eq!(d.saved_hf[0].name, "invoice");
+        assert_eq!(d.saved_hf[0].settings.text[0], "Second");
     }
 
     #[test]
