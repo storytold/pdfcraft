@@ -110,6 +110,7 @@ impl PdfCraftApp {
             fill_text_size: fill_sign::TEXT_SIZE,
             fill_text_color: [0.0; 3],
             dialog: None,
+            pan_zoom: None,
             updates: updates::Updates::default(),
             printer_source: None,
             options_source: None,
