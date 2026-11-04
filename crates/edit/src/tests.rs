@@ -4791,6 +4791,41 @@ fn a_one_row_title_keeps_its_centre_when_it_grows_and_when_it_wraps() {
 }
 
 #[test]
+fn rewriting_a_paragraph_again_replaces_the_previous_block() {
+    let mut doc = text_page("BT /F1 24 Tf 40 400 Td (Repeat me) Tj ET");
+    let x = text::text_blocks(&doc, 0).unwrap()[0].rect[0];
+    let mut sizes = Vec::new();
+    for k in 0..10 {
+        text::rewrite_block(&mut doc, 0, 0, Some(&format!("Repeat me {k}")), &text::BlockStyle::default()).unwrap();
+        doc = reopen(&doc);
+        let content = page_content_bytes(&doc, 0);
+        let ops = pdfcraft_content::parse(&content).ops;
+        let (mut depth, mut deepest, mut empty, mut shown) = (0usize, 0usize, 0usize, false);
+        for op in &ops {
+            match op.op.as_slice() {
+                b"q" => {
+                    depth += 1;
+                    deepest = deepest.max(depth);
+                }
+                b"Q" => depth = depth.saturating_sub(1),
+                b"BT" => shown = false,
+                b"Tj" | b"TJ" | b"'" | b"\"" => shown = true,
+                b"ET" if !shown => empty += 1,
+                _ => {}
+            }
+        }
+        assert!(deepest <= 1, "edit {k}: q nested {deepest} deep in {}", String::from_utf8_lossy(&content));
+        assert!(empty <= 1, "edit {k}: {empty} empty text objects in {}", String::from_utf8_lossy(&content));
+        let blocks = text::text_blocks(&doc, 0).unwrap();
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].text, format!("Repeat me {k}"));
+        assert!((blocks[0].rect[0] - x).abs() < 0.5, "edit {k}: moved to {}", blocks[0].rect[0]);
+        sizes.push(content.len());
+    }
+    assert!(sizes.iter().skip(1).all(|s| *s == sizes[1]), "the content grows: {sizes:?}");
+}
+
+#[test]
 fn a_new_paragraph_colour_does_not_spill_into_the_text_after_it() {
     let mut doc = text_page("BT /F1 10 Tf 72 700 Td (First paragraph) Tj 0 -40 Td (Second paragraph) Tj ET");
     let style = text::BlockStyle { color: Some([1.0, 0.0, 0.0]), ..Default::default() };

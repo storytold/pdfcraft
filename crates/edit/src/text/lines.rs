@@ -113,9 +113,28 @@ pub(crate) fn splice(pieces: &Pieces, ops: &[Op], mut edit: impl FnMut(usize) ->
                 bytes.push(b'\n');
             }
             bytes.extend_from_slice(&serialize_ops(&insert));
+            // In place of an operator followed by white space, that white space ends the insert.
+            if !keep && data.get(op.span.end).is_some_and(u8::is_ascii_whitespace) {
+                while bytes.last().is_some_and(u8::is_ascii_whitespace) {
+                    bytes.pop();
+                }
+            }
         }
         let end = if keep { op.span.start } else { op.span.end };
-        edits.push((op.span.start..end, bytes));
+        // A run of dropped operators goes with the white space between them, so dropping a
+        // whole block leaves no blank lines behind.
+        let start = match i.checked_sub(1).and_then(|p| ops.get(p)) {
+            Some(prev)
+                if !keep
+                    && edits.last().is_some_and(|(r, _): &(std::ops::Range<usize>, _)| r.end == prev.span.end)
+                    && pieces.piece_of(prev.span.end) == pieces.piece_of(op.span.start)
+                    && data.get(prev.span.end..op.span.start).is_some_and(|gap| gap.iter().all(u8::is_ascii_whitespace)) =>
+            {
+                prev.span.end
+            }
+            _ => op.span.start,
+        };
+        edits.push((start..end, bytes));
     }
     pieces.splice(edits)
 }
