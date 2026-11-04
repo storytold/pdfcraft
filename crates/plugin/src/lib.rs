@@ -5,8 +5,9 @@
 //! which itself follows PhotoCraft): a plug-in is **one `.wasm` file** — no
 //! package format, no native code — carrying its manifest inside the
 //! module, run in the `wasmi` sandbox with no host imports. One file works
-//! on macOS, Windows, Linux and the web build, survives PdfCraft updates
-//! as long as its ABI version is supported, and is installed by picking
+//! on macOS, Windows, Linux and FreeBSD (the web build has no plug-ins
+//! folder and loads none), survives PdfCraft updates as long as its ABI
+//! version is supported, and is installed by picking
 //! the file (Plugins panel / menu) or by dropping it in the plug-ins
 //! folder, exactly like the sibling apps' preference folder.
 //!
@@ -47,9 +48,15 @@ use serde::{Deserialize, Serialize};
 pub const API_VERSION: u32 = 1;
 
 /// Instruction budget per call: the siblings' base budget, plus a
-/// per-input-byte allowance for document-sized contexts.
+/// per-input-byte allowance for document-sized contexts, capped so that no
+/// input buys a run long enough to freeze the app.
 const FUEL_BASE: u64 = 50_000_000;
 const FUEL_PER_BYTE: u64 = 4_000;
+const FUEL_MAX: u64 = 1_000_000_000;
+
+/// Largest linear memory a guest may grow to. Fuel bounds time, not
+/// memory: without this, one `memory.grow` claims gigabytes.
+const MAX_MEMORY_BYTES: usize = 256 * 1024 * 1024;
 
 /// Largest module accepted (the siblings' limit).
 const MAX_MODULE_BYTES: usize = 32 * 1024 * 1024;
@@ -152,9 +159,33 @@ pub struct InstalledPlugin {
 impl InstalledPlugin {
     /// Instantiate the guest (fuel-limited, no imports).
     pub fn load(&self) -> Result<LoadedPlugin> {
-        let bytes = std::fs::read(&self.path)?;
-        LoadedPlugin::from_bytes(bytes)
+        LoadedPlugin::from_bytes(read_module(&self.path)?)
     }
+}
+
+/// Read a module file, refusing one over the size cap before reading it.
+fn read_module(path: &Path) -> Result<Vec<u8>> {
+    let len = std::fs::metadata(path)?.len();
+    if !usize::try_from(len).is_ok_and(|len| len <= MAX_MODULE_BYTES) {
+        return Err(invalid("the module is larger than 32 MiB"));
+    }
+    Ok(std::fs::read(path)?)
+}
+
+/// Replace `path` with `bytes` through a temporary file in the same folder,
+/// so an interrupted write never leaves a truncated file behind.
+fn write_replacing(path: &Path, bytes: &[u8]) -> Result<()> {
+    let name = path.file_name().ok_or_else(|| invalid("the target has no file name"))?;
+    let mut tmp_name = std::ffi::OsString::from(".");
+    tmp_name.push(name);
+    tmp_name.push(".tmp");
+    let tmp = path.with_file_name(tmp_name);
+    std::fs::write(&tmp, bytes)?;
+    if let Err(e) = std::fs::rename(&tmp, path) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e.into());
+    }
+    Ok(())
 }
 
 /// Read a module's manifest without keeping it instantiated.
@@ -164,18 +195,24 @@ pub fn read_manifest(wasm: &[u8]) -> Result<Manifest> {
 
 /// Every `*.wasm` plug-in directly in `dir` (not recursive, like the
 /// siblings' plug-ins folder). Files whose manifest cannot be read are
-/// reported through `problems` and skipped.
+/// reported through `problems` and skipped; a missing folder is no problem,
+/// an unreadable one is.
 pub fn discover(dir: &Path) -> (Vec<InstalledPlugin>, Vec<String>) {
     let mut plugins = Vec::new();
     let mut problems = Vec::new();
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return (plugins, problems);
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return (plugins, problems),
+        Err(e) => {
+            problems.push(format!("{}: {e}", dir.display()));
+            return (plugins, problems);
+        }
     };
     let mut files: Vec<PathBuf> =
         entries.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| p.extension().map(|x| x.eq_ignore_ascii_case("wasm")).unwrap_or(false)).collect();
     files.sort();
     for path in files {
-        match std::fs::read(&path).map_err(PluginError::from).and_then(|bytes| read_manifest(&bytes)) {
+        match read_module(&path).and_then(|bytes| read_manifest(&bytes)) {
             Ok(manifest) => plugins.push(InstalledPlugin { manifest, path }),
             Err(e) => problems.push(format!("{}: {e}", path.display())),
         }
@@ -192,31 +229,39 @@ pub fn install_module(wasm: &[u8], plugins_dir: &Path) -> Result<Manifest> {
         return Err(invalid(problem));
     }
     std::fs::create_dir_all(plugins_dir)?;
-    std::fs::write(plugins_dir.join(format!("{}.wasm", manifest.id)), wasm)?;
+    write_replacing(&plugins_dir.join(format!("{}.wasm", manifest.id)), wasm)?;
     Ok(manifest)
 }
 
-/// Remove an installed plug-in file (`<id>.wasm` in the plug-ins folder).
-pub fn uninstall(plugins_dir: &Path, id: &str) -> Result<()> {
-    let target = plugins_dir.join(format!("{id}.wasm"));
-    if !target.is_file() {
-        return Err(invalid(format!("{id:?} is not an installed plug-in")));
+/// Remove a plug-in that [`discover`] found, by its file: a dropped-in
+/// file need not be named after its id, and the id comes from the guest,
+/// so it never builds a path. The file must sit directly in `plugins_dir`.
+pub fn uninstall(plugins_dir: &Path, plugin: &InstalledPlugin) -> Result<()> {
+    let target = &plugin.path;
+    let is_wasm = target.extension().is_some_and(|x| x.eq_ignore_ascii_case("wasm"));
+    if target.parent() != Some(plugins_dir) || !is_wasm || !target.is_file() {
+        return Err(invalid(format!("{} is not an installed plug-in", target.display())));
     }
-    std::fs::remove_file(&target)?;
+    std::fs::remove_file(target)?;
     Ok(())
 }
 
 /// Ids the user disabled, persisted as a JSON array next to the plug-ins.
-pub fn load_disabled(dir: &Path) -> BTreeSet<String> {
-    std::fs::read_to_string(dir.join("disabled.json")).ok().and_then(|text| serde_json::from_str(&text).ok()).unwrap_or_default()
+/// A missing file means none; an unreadable one is an error, so the
+/// caller keeps it rather than overwriting the user's choices.
+pub fn load_disabled(dir: &Path) -> Result<BTreeSet<String>> {
+    match std::fs::read_to_string(dir.join("disabled.json")) {
+        Ok(text) => Ok(serde_json::from_str(&text)?),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(BTreeSet::new()),
+        Err(e) => Err(e.into()),
+    }
 }
 
 /// Persist the disabled set.
 pub fn save_disabled(dir: &Path, disabled: &BTreeSet<String>) -> Result<()> {
     std::fs::create_dir_all(dir)?;
     let text = serde_json::to_string_pretty(&disabled.iter().collect::<Vec<_>>())?;
-    std::fs::write(dir.join("disabled.json"), text)?;
-    Ok(())
+    write_replacing(&dir.join("disabled.json"), text.as_bytes())
 }
 
 /// A compiled guest module, ready to run commands. Each run uses a fresh
@@ -259,8 +304,10 @@ impl LoadedPlugin {
         Ok(self.manifest.clone())
     }
 
-    fn instantiate(&self) -> Result<(wasmi::Store<()>, wasmi::Instance)> {
-        let mut store = wasmi::Store::new(&self.engine, ());
+    fn instantiate(&self) -> Result<(wasmi::Store<wasmi::StoreLimits>, wasmi::Instance)> {
+        let limits = wasmi::StoreLimitsBuilder::new().memory_size(MAX_MEMORY_BYTES).build();
+        let mut store = wasmi::Store::new(&self.engine, limits);
+        store.limiter(|limits| limits);
         store.set_fuel(FUEL_BASE).map_err(|e| PluginError::Runtime(e.to_string()))?;
         let linker = wasmi::Linker::new(&self.engine);
         let instance = linker.instantiate_and_start(&mut store, &self.module).map_err(|e| PluginError::Runtime(e.to_string()))?;
@@ -286,8 +333,12 @@ impl LoadedPlugin {
         Ok(serde_json::from_slice(&bytes)?)
     }
 
-    /// Run one command against a host-supplied context.
+    /// Run one command against a host-supplied context. A plug-in this
+    /// host cannot run (see [`Manifest::compatibility`]) is refused.
     pub fn invoke(&self, command: &str, context: &serde_json::Value) -> Result<Response> {
+        if let Some(problem) = self.manifest.compatibility() {
+            return Err(invalid(problem));
+        }
         let input = serde_json::json!({ "command": command, "context": context });
         let payload = serde_json::to_vec(&input)?;
         let output = self.run(&payload, b"{}")?;
@@ -299,13 +350,13 @@ impl LoadedPlugin {
             return Err(invalid("the request to the plug-in is too large"));
         }
         let (mut store, instance) = self.instantiate()?;
-        let extra = FUEL_PER_BYTE.saturating_mul((input.len() + params.len()) as u64);
-        store.set_fuel(FUEL_BASE.saturating_add(extra)).map_err(|e| PluginError::Runtime(e.to_string()))?;
+        let extra = FUEL_PER_BYTE.saturating_mul(input.len().saturating_add(params.len()) as u64);
+        store.set_fuel(FUEL_BASE.saturating_add(extra).min(FUEL_MAX)).map_err(|e| PluginError::Runtime(e.to_string()))?;
         let memory = instance.get_memory(&store, "memory").ok_or_else(|| invalid("the plug-in does not export its memory"))?;
         let alloc = instance.get_typed_func::<u32, u32>(&store, "pdf_alloc").map_err(|_| invalid("the plug-in does not export pdf_alloc"))?;
         let run =
             instance.get_typed_func::<(u32, u32, u32, u32), i64>(&store, "pdf_run").map_err(|_| invalid("the plug-in does not export pdf_run"))?;
-        let write = |store: &mut wasmi::Store<()>, bytes: &[u8]| -> Result<u32> {
+        let write = |store: &mut wasmi::Store<wasmi::StoreLimits>, bytes: &[u8]| -> Result<u32> {
             let len = u32::try_from(bytes.len()).map_err(|_| invalid("request too large"))?;
             let ptr = alloc.call(&mut *store, len).map_err(|e| PluginError::Runtime(e.to_string()))?;
             if ptr == 0 && len > 0 {
@@ -327,7 +378,7 @@ impl LoadedPlugin {
 }
 
 /// Read `(len << 32) | ptr` packed bytes out of a guest instance.
-fn read_packed(instance: &wasmi::Instance, store: &wasmi::Store<()>, packed: i64) -> Result<Vec<u8>> {
+fn read_packed(instance: &wasmi::Instance, store: &wasmi::Store<wasmi::StoreLimits>, packed: i64) -> Result<Vec<u8>> {
     let len = (packed >> 32) as u32;
     let ptr = packed as u32;
     if len as usize > MAX_PAYLOAD {

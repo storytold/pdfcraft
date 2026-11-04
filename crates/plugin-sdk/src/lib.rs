@@ -97,7 +97,10 @@ macro_rules! plugin {
 }
 
 thread_local! {
-    static INPUT: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
+    /// The blocks `pdf_alloc` handed out for the current call, one boxed
+    /// slice each: a box never moves its contents, so a later allocation
+    /// cannot invalidate a pointer the host already holds.
+    static BLOCKS: RefCell<Vec<Box<[u8]>>> = const { RefCell::new(Vec::new()) };
     static OUTPUT: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
 }
 
@@ -113,14 +116,10 @@ pub fn __packed(bytes: &[u8]) -> i64 {
 
 #[doc(hidden)]
 pub fn __alloc(size: u32) -> *mut u8 {
-    // Allocateur à progression : l'hôte écrit l'entrée puis les paramètres
-    // dans deux blocs distincts ; aucun ne doit écraser l'autre.
-    INPUT.with(|input| {
-        let mut buf = input.borrow_mut();
-        let start = buf.len();
-        buf.resize(start + size as usize, 0);
-        unsafe { buf.as_mut_ptr().add(start) }
-    })
+    let mut block = vec![0u8; size as usize].into_boxed_slice();
+    let ptr = block.as_mut_ptr();
+    BLOCKS.with(|blocks| blocks.borrow_mut().push(block));
+    ptr
 }
 
 #[derive(serde::Deserialize)]
@@ -133,10 +132,16 @@ struct RawInput {
 
 #[doc(hidden)]
 pub fn __run(ptr: *const u8, len: u32, handler: fn(&str, &Value) -> Response) -> i64 {
-    // The host wrote `len` bytes at `ptr` into the buffer `pdf_alloc`
-    // handed it; reading them back is the ABI's core contract.
-    let payload: &[u8] = if ptr.is_null() { &[] } else { unsafe { std::slice::from_raw_parts(ptr, len as usize) } };
-    let Ok(raw) = serde_json::from_slice::<RawInput>(payload) else {
+    // The input is read back from the block `pdf_alloc` handed out at
+    // `ptr`, so a pointer or length the host got wrong yields no input
+    // rather than a read outside that block.
+    let raw = BLOCKS.with(|blocks| {
+        let blocks = blocks.borrow();
+        let payload = blocks.iter().find(|b| b.as_ptr() == ptr).and_then(|b| b.get(..len as usize)).unwrap_or(&[]);
+        serde_json::from_slice::<RawInput>(payload)
+    });
+    BLOCKS.with(|blocks| blocks.borrow_mut().clear());
+    let Ok(raw) = raw else {
         return -1;
     };
     let response = handler(&raw.command, &raw.context);

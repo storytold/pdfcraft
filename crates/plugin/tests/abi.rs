@@ -97,9 +97,9 @@ fn hostile_modules_fail_quickly() {
     assert!(elapsed < Duration::from_secs(30), "loop took {elapsed:?}");
     let _ = e;
 
-    // An answer claiming far more bytes than the payload cap is refused.
-    let (e, _) = invoke_err(&ok_module("(i64.or (i64.shl (i64.const 60000000) (i64.const 32)) (i64.const 16))"));
-    assert!(e.to_string().contains("too large") || e.to_string().contains("runtime"), "{e}");
+    // An answer claiming more bytes than the 64 MiB payload cap is refused before any read.
+    let (e, _) = invoke_err(&ok_module("(i64.or (i64.shl (i64.const 70000000) (i64.const 32)) (i64.const 16))"));
+    assert!(e.to_string().contains("answer is too large"), "{e}");
 }
 
 #[test]
@@ -140,7 +140,7 @@ fn registry_install_list_remove() {
     let (found, _) = pdfcraft_plugin::discover(&dir);
     assert_eq!(found.len(), 1);
 
-    pdfcraft_plugin::uninstall(&dir, &manifest.id).expect("remove");
+    pdfcraft_plugin::uninstall(&dir, &found[0]).expect("remove");
     let (found, _) = pdfcraft_plugin::discover(&dir);
     assert!(found.is_empty());
     let _ = std::fs::remove_dir_all(&dir);
@@ -161,10 +161,10 @@ fn folder_loading_skips_bad_files() {
 #[test]
 fn disabled_set_round_trips() {
     let dir = temp_dir("disabled");
-    let mut set = pdfcraft_plugin::load_disabled(&dir);
+    let mut set = pdfcraft_plugin::load_disabled(&dir).expect("no file reads as empty");
     assert!(set.is_empty());
     set.insert("org.example.x".to_string());
     pdfcraft_plugin::save_disabled(&dir, &set).expect("save");
-    assert!(pdfcraft_plugin::load_disabled(&dir).contains("org.example.x"));
+    assert!(pdfcraft_plugin::load_disabled(&dir).expect("load").contains("org.example.x"));
     let _ = std::fs::remove_dir_all(&dir);
 }

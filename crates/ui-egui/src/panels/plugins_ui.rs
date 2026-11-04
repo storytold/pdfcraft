@@ -9,7 +9,7 @@
 //! listed with the reason and never loaded.
 
 use std::collections::{BTreeSet, HashMap};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use pdfcraft_plugin::{Command, InstalledPlugin, LoadedPlugin};
 
@@ -30,6 +30,7 @@ pub enum Effect {
 /// One installed plugin as the administration dialog displays it.
 pub(crate) struct AdminEntry {
     pub id: String,
+    pub path: PathBuf,
     pub name: String,
     pub version: String,
     pub description: String,
@@ -49,6 +50,10 @@ pub struct PluginManager {
     dir: Option<PathBuf>,
     entries: Vec<Entry>,
     disabled: BTreeSet<String>,
+    /// Why `disabled.json` could not be read. While set, every plugin
+    /// counts as disabled and toggles are refused, so the file is never
+    /// overwritten with a set that lost the user's stored choices.
+    disabled_error: Option<String>,
     loaded: HashMap<String, LoadedPlugin>,
     problems: Vec<String>,
     /// The last message produced by a plugin run, shown in the panel.
@@ -66,8 +71,15 @@ impl Default for PluginManager {
 impl PluginManager {
     /// The plugins installed in `dir`, read now.
     pub fn with_dir(dir: Option<PathBuf>) -> Self {
-        let mut manager =
-            Self { dir, entries: Vec::new(), disabled: BTreeSet::new(), loaded: HashMap::new(), problems: Vec::new(), last_message: None };
+        let mut manager = Self {
+            dir,
+            entries: Vec::new(),
+            disabled: BTreeSet::new(),
+            disabled_error: None,
+            loaded: HashMap::new(),
+            problems: Vec::new(),
+            last_message: None,
+        };
         manager.refresh();
         manager
     }
@@ -82,7 +94,20 @@ impl PluginManager {
         };
         let (found, problems) = pdfcraft_plugin::discover(&dir);
         self.problems = problems;
-        self.disabled = pdfcraft_plugin::load_disabled(&dir);
+        match pdfcraft_plugin::load_disabled(&dir) {
+            Ok(disabled) => {
+                self.disabled = disabled;
+                self.disabled_error = None;
+            }
+            Err(e) => {
+                // The stored choices are unknown, so every plugin counts as disabled: none runs
+                // against the user's wish, and toggles are refused until the file is fixed.
+                let message = format!("{}: {e}", dir.join("disabled.json").display());
+                self.problems.push(message.clone());
+                self.disabled_error = Some(message);
+                self.disabled = found.iter().map(|p| p.manifest.id.clone()).collect();
+            }
+        }
         self.entries = found
             .into_iter()
             .map(|installed| {
@@ -113,6 +138,7 @@ impl PluginManager {
                 let m = &entry.installed.manifest;
                 AdminEntry {
                     id: m.id.clone(),
+                    path: entry.installed.path.clone(),
                     name: m.name.clone(),
                     version: m.version.clone(),
                     description: m.description.clone(),
@@ -125,18 +151,38 @@ impl PluginManager {
             .collect()
     }
 
-    /// Enable or disable a plugin, and persist the choice in `disabled.json`.
+    /// Enable or disable a plugin. The choice is persisted in
+    /// `disabled.json` first and applied only once it is saved.
     fn set_enabled(&mut self, id: &str, enabled: bool) -> Result<(), String> {
+        if let Some(error) = &self.disabled_error {
+            return Err(error.clone());
+        }
+        let mut disabled = self.disabled.clone();
         if enabled {
-            self.disabled.remove(id);
+            disabled.remove(id);
         } else {
-            self.disabled.insert(id.to_string());
+            disabled.insert(id.to_string());
+        }
+        if let Some(dir) = self.dir.as_deref() {
+            pdfcraft_plugin::save_disabled(dir, &disabled).map_err(|e| e.to_string())?;
+        }
+        self.disabled = disabled;
+        if !enabled {
             self.loaded.remove(id);
         }
-        match self.dir.as_deref() {
-            Some(dir) => pdfcraft_plugin::save_disabled(dir, &self.disabled).map_err(|e| e.to_string()),
-            None => Ok(()),
-        }
+        Ok(())
+    }
+
+    /// Delete the plugin file at `path` (one [`pdfcraft_plugin::discover`]
+    /// found) and re-read the folder. Returns the removed plugin's name.
+    fn remove(&mut self, path: &Path) -> Result<String, String> {
+        let (Some(dir), Some(entry)) = (self.dir.clone(), self.entries.iter().find(|e| e.installed.path == path)) else {
+            return Err(format!("{} is not an installed plug-in", path.display()));
+        };
+        let name = entry.installed.manifest.name.clone();
+        let result = pdfcraft_plugin::uninstall(&dir, &entry.installed).map_err(|e| e.to_string());
+        self.refresh();
+        result.map(|()| name)
     }
 
     fn entry(&self, id: &str) -> Option<&Entry> {
@@ -157,6 +203,11 @@ impl PluginManager {
         }
         if !self.loaded.contains_key(id) {
             let loaded = entry.installed.load().map_err(|e| e.to_string())?;
+            // The file may have been replaced since the folder was read: never run a module
+            // other than the one whose name and commands the menu shows.
+            if loaded.manifest().map_err(|e| e.to_string())? != entry.installed.manifest {
+                return Err(format!("the plugin {id} changed on disk; refresh the plugins"));
+            }
             self.loaded.insert(id.to_string(), loaded);
         }
         self.loaded.get_mut(id).ok_or_else(|| format!("the plugin {id} could not be loaded"))
@@ -198,37 +249,39 @@ impl PluginManager {
             .collect()
     }
 
-    /// Run one command and translate the guest's answer into effects.
+    /// Run one command and translate the guest's answer into effects. An
+    /// answer with any malformed action is rejected whole: none of its
+    /// actions apply, so the document is left untouched.
     pub(crate) fn invoke(&mut self, id: &str, command: &str, context: &serde_json::Value) -> Vec<Effect> {
-        let mut effects = Vec::new();
-        match self.ensure_loaded(id) {
+        let response = match self.ensure_loaded(id) {
             Ok(loaded) => match loaded.invoke(command, context) {
-                Ok(response) => {
-                    if let Some(message) = &response.message {
-                        self.last_message = Some(message.clone());
-                    }
-                    for action in response.actions {
-                        match action {
-                            pdfcraft_plugin::Action::ShowMessage { text } => {
-                                self.last_message = Some(text.clone());
-                                effects.push(Effect::Message(text));
-                            }
-                            pdfcraft_plugin::Action::SetDocumentInfo { key, value } => {
-                                effects.push(Effect::SetDocumentInfo { key, value });
-                            }
-                            pdfcraft_plugin::Action::OpenDocument { name, data_base64 } => {
-                                use base64::Engine as _;
-                                match base64::engine::general_purpose::STANDARD.decode(&data_base64) {
-                                    Ok(bytes) => effects.push(Effect::OpenDocument { name, bytes }),
-                                    Err(e) => effects.push(Effect::Message(format!("the plugin sent an unreadable document: {e}"))),
-                                }
-                            }
-                        }
+                Ok(response) => response,
+                Err(e) => return vec![Effect::Message(e.to_string())],
+            },
+            Err(e) => return vec![Effect::Message(e)],
+        };
+        let mut effects = Vec::new();
+        if let Some(message) = response.message {
+            self.last_message = Some(message.clone());
+            effects.push(Effect::Message(message));
+        }
+        for action in response.actions {
+            match action {
+                pdfcraft_plugin::Action::ShowMessage { text } => {
+                    self.last_message = Some(text.clone());
+                    effects.push(Effect::Message(text));
+                }
+                pdfcraft_plugin::Action::SetDocumentInfo { key, value } => {
+                    effects.push(Effect::SetDocumentInfo { key, value });
+                }
+                pdfcraft_plugin::Action::OpenDocument { name, data_base64 } => {
+                    use base64::Engine as _;
+                    match base64::engine::general_purpose::STANDARD.decode(&data_base64) {
+                        Ok(bytes) => effects.push(Effect::OpenDocument { name, bytes }),
+                        Err(e) => return vec![Effect::Message(format!("the plugin sent an unreadable document: {e}"))],
                     }
                 }
-                Err(e) => effects.push(Effect::Message(e.to_string())),
-            },
-            Err(e) => effects.push(Effect::Message(e)),
+            }
         }
         effects
     }
@@ -263,7 +316,7 @@ pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, manager: &mut PluginManager, 
     }
 
     let mut toggle: Option<(String, bool)> = None;
-    let mut remove: Option<String> = None;
+    let mut remove: Option<PathBuf> = None;
     let mut run: Option<(String, String)> = None;
     for entry in &manager.entries {
         let manifest = &entry.installed.manifest;
@@ -283,7 +336,7 @@ pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, manager: &mut PluginManager, 
                 toggle = Some((manifest.id.clone(), on));
             }
             if ui.button(tl!("Remove")).clicked() {
-                remove = Some(manifest.id.clone());
+                remove = Some(entry.installed.path.clone());
             }
         });
         if let Some(reason) = &incompatible {
@@ -303,14 +356,11 @@ pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, manager: &mut PluginManager, 
     {
         effects.push(Effect::Message(e));
     }
-    if let Some(id) = remove
-        && let Some(dir) = manager.dir.clone()
-    {
-        match pdfcraft_plugin::uninstall(&dir, &id) {
-            Ok(()) => effects.push(Effect::Message(format!("Removed {id}."))),
-            Err(e) => effects.push(Effect::Message(e.to_string())),
+    if let Some(path) = remove {
+        match manager.remove(&path) {
+            Ok(name) => effects.push(Effect::Message(format!("Removed {name}."))),
+            Err(e) => effects.push(Effect::Message(e)),
         }
-        manager.refresh();
     }
     if let Some((id, command)) = run {
         effects.extend(manager.invoke(&id, &command, context));
@@ -387,7 +437,7 @@ impl crate::PdfCraftApp {
     }
 }
 
-/// The Plugins administration dialog (Plugins ▸ Manage plugins…).
+/// The Plugins administration dialog (View ▸ Plugins ▸ Manage plugins…).
 ///
 /// Unlike the right-hand panel, this dialog exists with no document open:
 /// installing, enabling and removing plugins is application administration,
@@ -397,7 +447,7 @@ pub(crate) fn admin_body(ui: &mut egui::Ui, app: &mut crate::PdfCraftApp) {
     let t = crate::theme::Tokens::get(ui.ctx());
     let mut install = false;
     let mut toggle: Option<(String, bool)> = None;
-    let mut remove: Option<String> = None;
+    let mut remove: Option<PathBuf> = None;
 
     {
         let manager = &mut app.plugins;
@@ -471,7 +521,7 @@ pub(crate) fn admin_body(ui: &mut egui::Ui, app: &mut crate::PdfCraftApp) {
                                 toggle = Some((entry.id.clone(), on));
                             }
                             if ui.button(tl!("Remove")).clicked() {
-                                remove = Some(entry.id.clone());
+                                remove = Some(entry.path.clone());
                             }
                         });
                     });
@@ -489,13 +539,10 @@ pub(crate) fn admin_body(ui: &mut egui::Ui, app: &mut crate::PdfCraftApp) {
     {
         app.notify_error(e);
     }
-    if let Some(id) = remove
-        && let Some(dir) = app.plugins.dir().cloned()
-    {
-        match pdfcraft_plugin::uninstall(&dir, &id) {
-            Ok(()) => app.notify(format!("Removed {id}.")),
-            Err(e) => app.notify_error(e.to_string()),
+    if let Some(path) = remove {
+        match app.plugins.remove(&path) {
+            Ok(name) => app.notify(format!("Removed {name}.")),
+            Err(e) => app.notify_error(e),
         }
-        app.plugins.refresh();
     }
 }
