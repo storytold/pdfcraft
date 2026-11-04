@@ -93,7 +93,7 @@ impl BookmarkPick {
 
     /// Forget the pick unless it was made in the document as it is now (`generation`).
     pub(super) fn keep_only_if_current(&mut self, generation: u64) {
-        if !self.paths.is_empty() && self.generation != generation {
+        if self.generation != generation {
             self.clear();
         }
     }

@@ -10273,8 +10273,10 @@ fn fill_sign_multiline_text_survives_engine_save_reopen_and_render() {
 fn deleting_several_bookmarks_is_one_undo_step_and_survives_save() {
     let (mut s, id) = session_with(4);
     let titles = |s: &Session| outline_titles(&s.get(id).unwrap().info.outline);
+    let dest = pdfcraft_render::DestView::Xyz { left: Some(72.0), top: Some(150.0), zoom: None };
     for (i, name) in ["One", "Two", "Three", "Four"].iter().enumerate() {
-        s.apply(id, Edit::AddBookmark { parent: vec![], index: i, title: (*name).into(), page: i, left: None, top: None }).unwrap();
+        let (left, top) = if i == 2 { (Some(72.0), Some(150.0)) } else { (None, None) };
+        s.apply(id, Edit::AddBookmark { parent: vec![], index: i, title: (*name).into(), page: i, left, top }).unwrap();
     }
     s.apply(id, Edit::AddBookmark { parent: vec![1], index: 0, title: "Two-a".into(), page: 1, left: None, top: None }).unwrap();
     assert_eq!(titles(&s), ["One→1", "Two→2[Two-a→2]", "Three→3", "Four→4"]);
@@ -10282,6 +10284,7 @@ fn deleting_several_bookmarks_is_one_undo_step_and_survives_save() {
     // A parent, its own child and a separate entry go together; the rest stays.
     s.apply(id, Edit::DeleteBookmarks { paths: vec![vec![1, 0], vec![1], vec![3]] }).unwrap();
     assert_eq!(titles(&s), ["One→1", "Three→3"]);
+    assert_eq!(s.get(id).unwrap().info.outline[1].view, dest, "the survivor keeps its coordinates");
     assert_eq!(s.get(id).unwrap().can_undo(), Some("Delete bookmarks"));
     s.undo(id).unwrap();
     assert_eq!(titles(&s), ["One→1", "Two→2[Two-a→2]", "Three→3", "Four→4"]);
@@ -10302,4 +10305,5 @@ fn deleting_several_bookmarks_is_one_undo_step_and_survives_save() {
     let mut again = Session::new();
     let id2 = again.open("again.pdf", None, saved, None).unwrap();
     assert_eq!(outline_titles(&again.get(id2).unwrap().info.outline), ["Three→3"]);
+    assert_eq!(again.get(id2).unwrap().info.outline[0].view, dest, "coordinates survive reopening");
 }

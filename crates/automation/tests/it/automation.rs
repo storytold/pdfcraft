@@ -2057,6 +2057,8 @@ fn bookmark_delete_takes_several_paths_in_one_undoable_step() {
     assert!(matches!(bad(&mut a, json!({ "doc": doc, "paths": [[1], [0]] })), ToolError::InvalidArgs(_)), "positions are 1-based");
     assert!(matches!(bad(&mut a, json!({ "doc": doc, "paths": [[1], []] })), ToolError::InvalidArgs(_)));
     assert!(matches!(bad(&mut a, json!({ "doc": doc, "paths": [] })), ToolError::InvalidArgs(_)));
+    assert!(matches!(bad(&mut a, json!({ "doc": doc, "paths": vec![json!([1]); 10_001] })), ToolError::InvalidArgs(_)), "at most 10000 paths");
+    assert_eq!(bookmark_titles(&mut a, doc), ["Intro", "Body[Detail]", "Notes", "Index"], "oversized paths change nothing");
     assert!(matches!(bad(&mut a, json!({ "doc": doc, "paths": [1] })), ToolError::InvalidArgs(_)));
     assert!(matches!(bad(&mut a, json!({ "doc": doc, "paths": "all" })), ToolError::InvalidArgs(_)));
     assert!(matches!(bad(&mut a, json!({ "doc": doc, "paths": [[1]], "path": [2] })), ToolError::InvalidArgs(_)));

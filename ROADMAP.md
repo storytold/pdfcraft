@@ -1,5 +1,7 @@
 # PdfCraft roadmap
 
+> **Last reviewed:** 2026-11-03 | **Last updated:** 2026-11-03 | **Change:** patch (M4 #3853 review: discard a stale bookmark range anchor after an outline edit even when the pick is empty; add real-click, oversized-path and survivor-coordinate coverage; estimates unchanged)
+
 > **Last reviewed:** 2026-11-03 | **Last updated:** 2026-11-03 | **Change:** patch (M4 #3853: rebase PR #3859 onto main 9ce6d89f and remove all 18 obsolete UI TSV changes; translations are maintained in craft-i18n#141; bookmark behavior and estimates unchanged)
 
 > **Last reviewed:** 2026-11-03 | **Last updated:** 2026-11-03 | **Change:** patch (M5 #5850 review: indirect typewriter intent and composer edits preserve outer whitespace; movement regression commits by outside click; estimates unchanged)
@@ -225,6 +227,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 | 8 | 1.0 polish: performance, right-to-left, missing languages, keyboard-only (M14) | 55–95 |
 
 ## Progress log
+
+- **2026-11-03 (M4, #3853 review):** A document-generation change clears the bookmark pick and its range anchor even after Ctrl-click deselects the last row. A real-click regression checks that a later Shift-click selects and deletes only its target after an outline edit. The automation rejection test covers 10,001 valid paths without deleting a bookmark, and the grouped-deletion engine test checks a surviving XYZ destination before and after save/reopen. Estimates unchanged.
 
 - **2026-11-03 (M4, #3853 / PR #3859):** Rebased onto the external-catalogue main, removed all 18 deleted in-repository TSV changes, and retained the bookmark selection, plural menu and undo-label callers and their tests. Translation rows and contributor credit live in craft-i18n#141; the pinned catalogue input can fall back to English for new labels. Both engine regression blocks and roadmap histories are retained. Scoped stable tests pass (3,099; nine existing ignored), with formatting, strict all-target Clippy, layers/assets/parity and wasm checks green. Behavior and estimates unchanged.
 
@@ -767,6 +771,7 @@ Newest first: the date, what moved, and the new overall estimate.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-03 | patch | M4 #3853 review: discard a stale bookmark range anchor after an outline edit even when the pick is empty; add real-click, oversized-path and survivor-coordinate coverage; estimates unchanged. |
 | 2026-11-03 | patch | M4 #3853: rebase PR #3859 onto main 9ce6d89f and remove all 18 obsolete UI TSV changes; translations are maintained in craft-i18n#141; bookmark behavior and estimates unchanged. |
 | 2026-11-03 | patch | M5 #5850 review: indirect typewriter intent and composer edits preserve outer whitespace; movement regression commits by outside click; estimates unchanged. |
 | 2026-11-03 | patch | M5 #5850: Enter adds Fill & Sign line breaks; outside clicks commit, Escape cancels, and saved multiline appearances retain their text and height; estimates unchanged. |

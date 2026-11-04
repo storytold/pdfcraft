@@ -2,7 +2,7 @@
 
 use egui::{Key, Modifiers};
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use pdfcraft_ui_egui::PdfCraftApp;
 
 const PAGES: &[u8] = b"%PDF-1.7
@@ -622,4 +622,28 @@ fn a_pick_survives_neither_a_reorder_nor_an_undo_that_leave_the_outline_looking_
     h.key_press(Key::Delete);
     h.run_steps(3);
     assert_eq!(titles(&h), ["Same", "Same"], "a pick made before an edit and its undo is dropped");
+}
+
+#[test]
+fn deselecting_the_last_bookmark_drops_its_anchor_after_an_outline_edit() {
+    use egui::accesskit::Toggled;
+    let mut h = outline_of_five();
+    h.get_by_label("Body").click_modifiers(Modifiers::COMMAND);
+    h.run_steps(30); // Separate the two clicks so they do not start a double-click rename.
+    assert_eq!(h.get_by_label("Body").accesskit_node().toggled(), Some(Toggled::True));
+    h.get_by_label("Body").click_modifiers(Modifiers::COMMAND);
+    h.run_steps(2);
+    assert_eq!(h.get_by_label("Body").accesskit_node().toggled(), Some(Toggled::False));
+
+    // An edit outside the pick changes path [1] from Body to Notes, while the pick is empty.
+    h.state_mut().apply_edit(pdfcraft_engine::Edit::DeleteBookmark { path: vec![0] });
+    h.run_steps(3);
+    assert_eq!(titles(&h), ["Body", "Detail", "Notes", "Index"]);
+    h.get_by_label("Index").click_modifiers(Modifiers::SHIFT);
+    h.run_steps(2);
+    assert_eq!(h.get_by_label("Index").accesskit_node().toggled(), Some(Toggled::True));
+    assert_eq!(h.get_by_label("Notes").accesskit_node().toggled(), Some(Toggled::False), "the old empty pick's anchor must not select Notes");
+    h.key_press(Key::Delete);
+    h.run_steps(3);
+    assert_eq!(titles(&h), ["Body", "Detail", "Notes"], "only the Shift-clicked bookmark is deleted");
 }

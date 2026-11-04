@@ -1,5 +1,7 @@
 # PdfCraft roadmap: milestones and what's next
 
+> **Last reviewed:** 2026-11-03 | **Last updated:** 2026-11-03 | **Change:** patch (M4 #3853 review: discard a stale bookmark range anchor after an outline edit even when the pick is empty; add real-click, oversized-path and survivor-coordinate coverage; estimates unchanged)
+
 > **Last reviewed:** 2026-11-03 | **Last updated:** 2026-11-03 | **Change:** patch (M4 #3853: rebase PR #3859 onto main 9ce6d89f and remove all 18 obsolete UI TSV changes; translations are maintained in craft-i18n#141; bookmark behavior and estimates unchanged)
 
 > **Last reviewed:** 2026-11-03 | **Last updated:** 2026-11-03 | **Change:** patch (M5 #5850 review: indirect typewriter intent and composer edits preserve outer whitespace; movement regression commits by outside click; estimates unchanged)
@@ -307,6 +309,7 @@ Estimates unchanged.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-03 | patch | M4 #3853 review: discard a stale bookmark range anchor after an outline edit even when the pick is empty; add real-click, oversized-path and survivor-coordinate coverage; estimates unchanged. |
 | 2026-11-03 | patch | M4 #3853: rebase PR #3859 onto main 9ce6d89f and remove all 18 obsolete UI TSV changes; translations are maintained in craft-i18n#141; bookmark behavior and estimates unchanged. |
 | 2026-11-03 | patch | M5 #5850 review: indirect typewriter intent and composer edits preserve outer whitespace; movement regression commits by outside click; estimates unchanged. |
 | 2026-11-03 | patch | M5 #5850: Enter adds Fill & Sign line breaks; outside clicks commit, Escape cancels, and saved multiline appearances retain their text and height; estimates unchanged. |
