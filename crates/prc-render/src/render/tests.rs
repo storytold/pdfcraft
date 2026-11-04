@@ -268,3 +268,11 @@ fn unlit_draws_the_plain_colour_and_the_headlight_shades_by_angle() {
     assert_eq!(lit(Lighting::Headlight, 1.0), [151, 153, 159, 255]);
     assert_eq!(lit(Lighting::Unlit, 1.0), [190, 192, 200, 255]);
 }
+
+#[test]
+fn a_huge_square_is_drawn() {
+    // Its edges' cross product (about 1e320) overflows unless they are scaled first.
+    let image = render(&[quad(0.0, 1e160, 0.0)], &ortho(4e160), &small()).unwrap();
+    assert_eq!(pixel(&image, 20, 20), [190, 192, 200, 255]);
+    assert_eq!(pixel(&image, 1, 1), [255, 255, 255, 255]);
+}

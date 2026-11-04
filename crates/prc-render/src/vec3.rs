@@ -40,6 +40,17 @@ pub(crate) fn normalize(a: Vec3) -> Option<Vec3> {
     (l.is_finite() && l > 0.0).then(|| scale(a, 1.0 / l))
 }
 
+/// The unit normal of the plane spanned by `a` and `b` (`a × b`, normalized); `None` when they are
+/// parallel, zero or not finite. Both are first divided by their largest component, so the cross
+/// product of two huge edges cannot overflow before it is normalized.
+pub(crate) fn unit_cross(a: Vec3, b: Vec3) -> Option<Vec3> {
+    let big = a.iter().chain(b.iter()).fold(0.0_f64, |m, c| m.max(c.abs()));
+    if !(big.is_finite() && big > 0.0) {
+        return None;
+    }
+    normalize(cross(a.map(|c| c / big), b.map(|c| c / big)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -62,5 +73,13 @@ mod tests {
     fn normalize_keeps_huge_and_tiny_vectors() {
         assert_eq!(normalize([1e200, 0.0, 0.0]), Some([1.0, 0.0, 0.0]));
         assert_eq!(normalize([0.0, -3e-320, 0.0]), Some([0.0, -1.0, 0.0]));
+    }
+
+    #[test]
+    fn unit_cross_survives_edges_whose_product_overflows() {
+        assert_eq!(unit_cross([1e160, 0.0, 0.0], [0.0, 1e160, 0.0]), Some([0.0, 0.0, 1.0]));
+        assert_eq!(unit_cross([1e-170, 0.0, 0.0], [0.0, 1e-170, 0.0]), Some([0.0, 0.0, 1.0]));
+        assert_eq!(unit_cross([2.0, 0.0, 0.0], [4.0, 0.0, 0.0]), None);
+        assert_eq!(unit_cross([f64::INFINITY, 0.0, 0.0], [0.0, 1.0, 0.0]), None);
     }
 }
