@@ -52,6 +52,8 @@ pub enum RightPanel {
     Search,
     /// Compare files: the differences.
     Compare,
+    /// Installed WebAssembly plugins and their commands.
+    Plugins,
 }
 
 /// Quick-action bar tools (the vertical floating strip).
@@ -103,6 +105,8 @@ pub(crate) type GridFile = (String, Result<Vec<u8>, std::path::PathBuf>);
 pub enum Dialog {
     WordCount,
     CreateImages,
+    /// Plugins ▸ Manage plugins… (works with no document open).
+    Plugins,
     Properties(PropsTab),
     About,
     Shortcuts,

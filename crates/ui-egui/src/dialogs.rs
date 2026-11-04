@@ -134,6 +134,7 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
             Dialog::Preferences => 610.0,
             Dialog::About => 780.0,
             Dialog::PinTool => 540.0,
+            Dialog::Plugins => 640.0,
             _ => 520.0,
         });
         if dialog_body(ui, app, dialog, &mut req) {
@@ -442,6 +443,7 @@ fn dialog_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, dialog: Dialog, req: &m
                 return false;
             }
         }
+        Dialog::Plugins => crate::plugins_ui::admin_body(ui, app),
         Dialog::Shortcuts => {
             if !dialog_shortcuts(ui) {
                 return false;

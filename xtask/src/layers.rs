@@ -34,6 +34,7 @@ pub const TABLE: &[(&str, Class)] = &[
     ("filters", Class::Standalone(0)),
     ("crypt", Class::Standalone(0)),
     ("arlington", Class::Standalone(0)),
+    ("plugin", Class::Standalone(0)),
     // L1 object layer
     ("cos", Class::Standalone(1)),
     // L2 core model

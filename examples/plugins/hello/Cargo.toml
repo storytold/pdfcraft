@@ -1,0 +1,14 @@
+[package]
+name = "pdfcraft-plugin-hello"
+description = "Example PdfCraft plugin: reports document facts and stamps document info"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+pdfcraft-plugin-sdk = { path = "../../../crates/plugin-sdk" }
