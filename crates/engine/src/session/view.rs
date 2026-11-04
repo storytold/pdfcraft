@@ -25,6 +25,15 @@ impl Session {
         self
     }
 
+    /// Confine the engine's own reads besides the opened file (the document beside a detached
+    /// signature) with `guard`, which performs the confined open itself and hands the engine
+    /// the handle. Automation installs its root check, so a `.p7s` cannot reach a file the
+    /// tools themselves would refuse to open.
+    pub fn with_file_read_guard(mut self, guard: crate::FileReadGuard) -> Self {
+        self.file_read_guard = Some(guard);
+        self
+    }
+
     /// A real clock for a host that has neither a clock nor a time zone of its own (a
     /// `wasm32-unknown-unknown` build: `now()` would be empty and `local_utc_offset()` is 0, so
     /// Fill & Sign stamps 1 Jan 1970 and `/ModDate` is never written). `clock` is the UTC time in
@@ -191,7 +200,13 @@ impl Session {
 
     /// Open freshly created bytes (combine / extract) as a new, unsaved document.
     pub fn open_new(&mut self, name: impl Into<String>, bytes: Arc<Vec<u8>>) -> Result<DocId, OpenError> {
-        let id = self.open(name, None, bytes, None)?;
+        self.open_new_with_password(name, bytes, None)
+    }
+
+    /// [`Self::open_new`] for bytes that may be encrypted, opened with `password` — the one the
+    /// source document was unlocked with (an envelope's inner PDF keeps it in `Document::password`).
+    pub fn open_new_with_password(&mut self, name: impl Into<String>, bytes: Arc<Vec<u8>>, password: Option<&str>) -> Result<DocId, OpenError> {
+        let id = self.open(name, None, bytes, password)?;
         if let Some(d) = self.docs.iter_mut().find(|d| d.id == id) {
             d.dirty = true;
             if let Some(e) = d.editor.as_mut() {
@@ -201,6 +216,30 @@ impl Session {
             d.generation += 1;
         }
         Ok(id)
+    }
+
+    /// Extract the original PDF from a CAdES envelope document as a new, editable, unsaved
+    /// copy (the envelope itself is never changed). Refuses plain documents.
+    pub fn extract_original(&mut self, id: DocId) -> Result<DocId, String> {
+        let doc = self.get(id).ok_or("no such document")?;
+        match &doc.envelope {
+            None => return Err("this document is not inside a CAdES envelope".into()),
+            Some(e) if e.detached => {
+                return Err("a detached signature has nothing to extract; open the PDF itself to edit it.".into());
+            }
+            Some(_) => {}
+        }
+        // The exact bytes the envelope carries, not the working file (whose open may have
+        // repaired the PDF or laid out a form): the copy is what was signed. The credential
+        // the envelope was opened with unlocks the copy too — it is the same bytes, and asking
+        // for it again would block the extraction of an encrypted original. The original
+        // credential, not the render password: an R2–R4 file unlocked with its owner password
+        // keeps the owner's rights on the copy, while the recovered user password would
+        // re-restrict it (the user would have to unlock their own extraction again).
+        let name = doc.name.clone();
+        let password = doc.reopen_password.clone().or_else(|| doc.password.clone());
+        let bytes = doc.envelope_content.clone().ok_or("the envelope's content is unavailable")?;
+        self.open_new_with_password(name, bytes, password.as_deref()).map_err(|e| e.to_string())
     }
 
     /// Show or hide a layer (optional content group) for viewing. Returns `true` if it changed;

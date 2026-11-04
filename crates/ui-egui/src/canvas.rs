@@ -2364,6 +2364,8 @@ fn apply_notice(app: &mut PdfCraftApp, index: usize, notice: Option<Notice>) {
         Some(Notice::Reload) => app.watch.reload_request = app.views.get(index).map(|view| view.id),
         #[cfg(target_arch = "wasm32")]
         Some(Notice::Reload) => {}
+        // `doc` is still borrowed here, so the command runs next frame (like deferred shortcuts).
+        Some(Notice::EnvelopeExtract) => app.deferred_commands.push(("file.extract_original", app.active_ids().map(|(_, id)| id))),
         Some(Notice::Repairs) => app.dialog = Some(crate::Dialog::Properties(crate::PropsTab::Advanced)),
         Some(Notice::Security) => app.dialog = Some(crate::Dialog::Properties(crate::PropsTab::Security)),
         Some(Notice::Unlock) => {

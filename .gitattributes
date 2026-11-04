@@ -8,6 +8,8 @@ craft-i18n.rev text eol=lf
 
 # Not text at all: no textual diffs or merges either.
 *.pdf binary
+*.p7m binary
+*.p7s binary
 *.p12 binary
 *.pfb binary
 *.ttf binary

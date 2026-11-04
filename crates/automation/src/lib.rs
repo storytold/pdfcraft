@@ -40,7 +40,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use pdfcraft_engine::{BlockKey, CombineSource, DocId, Document, Edit, Session, TextBlock, block_overlapping, commands};
+use pdfcraft_engine::{BlockKey, CombineSource, DocId, Document, Edit, FileReadRefusal, Session, TextBlock, block_overlapping, commands};
 use pdfcraft_platform::staging::{StagingName, staging_suffixes};
 use pdfcraft_render::{PageRenderer, PageText, RenderConfig, RenderRequest, RequestKind};
 use serde_json::{Value, json};
@@ -120,6 +120,7 @@ impl Automation {
             return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "the root must be a folder"));
         }
         self.root = Some(root);
+        self.confine_sibling_reads();
         Ok(self)
     }
 
@@ -128,7 +129,37 @@ impl Automation {
     /// are set.
     pub fn with_automation_roots(mut self, roots: Option<Arc<file_access::AutomationRoots>>) -> Self {
         self.roots = roots;
+        self.confine_sibling_reads();
         self
+    }
+
+    /// Hold the engine's own reads beside an opened file — the document a `.p7s` signs — to the
+    /// same roots as every tool path. The engine derives that path itself, so without this a
+    /// link inside the root pointing out of it would hand it a file the tools would refuse to
+    /// open (#2129, AGENTS.md §3). The guard opens the file itself, beside its checks, and the
+    /// engine reads from the handle it gets back: the path is never resolved again after the
+    /// checks. The open still follows a link swapped in during the window between check and
+    /// open; closing that would need no-follow opens (`cap-std`), which the workspace does not
+    /// carry as a dependency.
+    fn confine_sibling_reads(&mut self) {
+        let (root, roots) = (self.root.clone(), self.roots.clone());
+        self.session = std::mem::take(&mut self.session).with_file_read_guard(Arc::new(move |path| {
+            // A sibling that cannot be resolved is the read's business: its error says the
+            // document was "not found beside it", which names nothing outside the root.
+            if let Some(root) = &root
+                && path.canonicalize().is_ok_and(|real| !real.starts_with(root))
+            {
+                return Err(FileReadRefusal::Refused(format!("{} is outside the allowed directory {}", path.display(), root.display())));
+            }
+            if let Some(roots) = &roots {
+                let shown = path.to_string_lossy().into_owned();
+                roots.check_path(&shown, path, file_access::Access::Read).map_err(FileReadRefusal::Refused)?;
+            }
+            // The confined open, next to the checks that authorize it. Every way it can fail
+            // says the same thing, so it cannot be used to probe the directory around the
+            // signature.
+            std::fs::File::open(path).map_err(|_| FileReadRefusal::Unreadable)
+        }));
     }
 
     /// Use a fixed clock for saves (deterministic output in tests).

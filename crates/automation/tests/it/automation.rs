@@ -10832,3 +10832,201 @@ fn a_bad_bookmark_tree_is_refused_whole_and_names_the_node() {
     assert!(!out.exists());
     assert_eq!(ok(&mut a, "bookmark_list", json!({ "doc": doc }))["bookmarks"], json!([]));
 }
+
+// ---- CAdES envelopes (.pdf.p7m, issue #1449) ----------------------------------------------------
+// ---- CAdES envelopes (.pdf.p7m, issue #1449; detached .p7s pairs, issue #2129) -------------------
+
+/// A fresh root with the named CAdES fixtures from pdfcraft-sign (OpenSSL-made;
+/// tests/data/README.md there) copied in, beside the usual `a.pdf`/`b.pdf`.
+fn envelope_dir(test: &str, names: &[&str]) -> PathBuf {
+    let dir = workdir(test);
+    for name in names {
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../sign/tests/data").join(name);
+        std::fs::copy(&src, dir.join(name)).unwrap();
+    }
+    dir
+}
+
+/// The original PDF the fixtures wrap (byte-identical to what extraction writes).
+fn openssl_signed_pdf() -> Vec<u8> {
+    std::fs::read(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../sign/tests/data/openssl-signed.pdf")).unwrap()
+}
+
+#[test]
+fn envelope_opens_with_info_and_no_repairs() {
+    let dir = envelope_dir("envelope", &["cades-envelope.pdf.p7m"]);
+    let mut a = auto(&dir);
+    let opened = ok(&mut a, "doc_open", json!({ "path": "cades-envelope.pdf.p7m" }));
+    assert_eq!(opened["editable"], false, "the envelope document is read-only: {opened}");
+    assert!(opened["read_only_reason"].as_str().is_some_and(|r| r.contains("CAdES")), "{opened}");
+    assert_eq!(opened["path"], Value::Null, "the envelope's file is never the document's save target");
+    let env = &opened["envelope"];
+    assert_eq!(env["signer"], "PdfCraft Test", "{opened}");
+    assert_eq!(env["digest_ok"], true);
+    assert_eq!(env["signers"], 1);
+    assert!(env["signing_time"].is_string(), "the OpenSSL fixture carries a signing time: {env}");
+    assert_eq!(env["quirks"], json!([]));
+
+    let doc = opened["doc"].as_u64().unwrap();
+    let info = ok(&mut a, "doc_info", json!({ "doc": doc }));
+    assert_eq!(info["repairs"], json!([]), "the embedded PDF opens as it is: {info}");
+    assert_eq!(info["envelope"]["signer"], "PdfCraft Test", "doc_info reports the envelope too: {info}");
+    // doc_list carries the same envelope summary.
+    let list = ok(&mut a, "doc_list", json!({}));
+    assert_eq!(list["documents"][0]["envelope"]["digest_ok"], true, "{list}");
+}
+
+#[test]
+fn doc_extract_original_makes_an_editable_copy() {
+    let dir = envelope_dir("extract-copy", &["cades-envelope.pdf.p7m"]);
+    let mut a = auto(&dir);
+    let env = ok(&mut a, "doc_open", json!({ "path": "cades-envelope.pdf.p7m" }))["doc"].as_u64().unwrap();
+
+    let copy = ok(&mut a, "doc_extract_original", json!({ "doc": env }));
+    assert_ne!(copy["doc"].as_u64(), Some(env), "the copy is a new document: {copy}");
+    assert_eq!(copy["editable"], true);
+    assert_eq!(copy["read_only_reason"], Value::Null);
+    assert_eq!(copy["envelope"], Value::Null, "the copy is a plain PDF, no longer an envelope");
+    assert_eq!(copy["pages"], 1);
+
+    // The envelope document is still open, unchanged and read-only.
+    let list = ok(&mut a, "doc_list", json!({}));
+    let docs = list["documents"].as_array().unwrap();
+    assert_eq!(docs.len(), 2, "{list}");
+    let kept = docs.iter().find(|d| d["doc"].as_u64() == Some(env)).unwrap();
+    assert_eq!(kept["editable"], false, "{kept}");
+}
+
+#[test]
+fn doc_extract_original_out_writes_the_inner_pdf() {
+    let dir = envelope_dir("extract-out", &["cades-envelope.pdf.p7m"]);
+    let mut a = auto(&dir);
+    let env = ok(&mut a, "doc_open", json!({ "path": "cades-envelope.pdf.p7m" }))["doc"].as_u64().unwrap();
+
+    let copy = ok(&mut a, "doc_extract_original", json!({ "doc": env, "out": "inner/original.pdf" }));
+    let expected = openssl_signed_pdf();
+    assert_eq!(std::fs::read(dir.join("inner/original.pdf")).unwrap(), expected, "byte-identical to the embedded PDF");
+    // The tool reports the canonical path (on Windows: `\\?\` prefix and long names, not the
+    // 8.3 short form a joined temp dir may carry) — compare like with like.
+    assert_eq!(
+        std::fs::canonicalize(copy["written"].as_str().unwrap()).unwrap(),
+        std::fs::canonicalize(dir.join("inner/original.pdf")).unwrap(),
+        "{copy}"
+    );
+    assert!(copy["doc"].as_u64().is_some(), "the editable copy is opened too: {copy}");
+
+    // A path outside the root is refused, and nothing is written there. The refusal happens
+    // before the extraction, so no half-done copy is left open either.
+    for bad in ["../outside.pdf", "sub/../../outside.pdf"] {
+        let e = a.call("doc_extract_original", &json!({ "doc": env, "out": bad })).unwrap_err();
+        assert!(e.to_string().contains("outside the allowed directory"), "{bad}: {e}");
+    }
+    assert!(!dir.parent().unwrap().join("outside.pdf").exists(), "nothing may land outside the root");
+    let list = ok(&mut a, "doc_list", json!({}));
+    assert_eq!(list["documents"].as_array().unwrap().len(), 2, "the envelope and the first copy only: {list}");
+
+    // A write that fails (the destination's parent is a file) closes the extracted copy: the
+    // tool errors without leaving an unannounced document behind.
+    let e = a.call("doc_extract_original", &json!({ "doc": env, "out": "a.pdf/inner.pdf" })).unwrap_err();
+    assert!(e.to_string().contains("a.pdf"), "says where the writing stopped: {e}");
+    let list = ok(&mut a, "doc_list", json!({}));
+    assert_eq!(list["documents"].as_array().unwrap().len(), 2, "the failed write left no copy behind: {list}");
+}
+
+#[test]
+fn doc_save_of_an_envelope_document_writes_the_envelope() {
+    let dir = envelope_dir("envelope-save", &["cades-envelope.pdf.p7m"]);
+    let mut a = auto(&dir);
+    let env = ok(&mut a, "doc_open", json!({ "path": "cades-envelope.pdf.p7m" }))["doc"].as_u64().unwrap();
+    let fixture = std::fs::read(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../sign/tests/data/cades-envelope.pdf.p7m")).unwrap();
+
+    // Saving the read-only document — even straight over the source `.p7m` — writes the
+    // signed envelope, never the unsigned PDF inside it.
+    let saved = ok(&mut a, "doc_save", json!({ "doc": env, "path": "cades-envelope.pdf.p7m", "full": false }));
+    assert_eq!(saved["bytes"].as_u64(), Some(fixture.len() as u64), "{saved}");
+    assert_eq!(std::fs::read(dir.join("cades-envelope.pdf.p7m")).unwrap(), fixture, "the signed envelope, byte-identical");
+    assert_ne!(std::fs::read(dir.join("cades-envelope.pdf.p7m")).unwrap(), openssl_signed_pdf(), "never the unsigned PDF inside");
+}
+
+#[test]
+fn detached_envelope_error_is_actionable() {
+    let dir = envelope_dir("detached", &["cades-detached.p7s"]);
+    let mut a = auto(&dir);
+    let e = a.call("doc_open", &json!({ "path": "cades-detached.p7s" })).unwrap_err();
+    let m = e.to_string();
+    assert!(m.contains("detached"), "{m}");
+    // A .p7s opened from disk looks for its document beside it (#2129): the error names the
+    // file it expected, so an agent can provide it or point at where it is.
+    assert!(m.contains("signs cades-detached, which was not found beside it"), "says which file is missing: {m}");
+    // Nothing opened.
+    assert_eq!(ok(&mut a, "doc_list", json!({}))["documents"], json!([]));
+}
+
+#[test]
+fn detached_pair_opens_verified_via_tools() {
+    let dir = envelope_dir("detached-pair", &["openssl-signed.pdf.p7s", "openssl-signed.pdf"]);
+    let mut a = auto(&dir);
+    let opened = ok(&mut a, "doc_open", json!({ "path": "openssl-signed.pdf.p7s" }));
+    assert_eq!(opened["envelope"]["detached"], true, "opened from the sibling, not from inside: {opened}");
+    assert_eq!(opened["envelope"]["digest_ok"], true, "the signature is verified over the sibling's bytes: {opened}");
+    assert_eq!(opened["envelope"]["signer"], "PdfCraft Test", "{opened}");
+    assert_eq!(opened["envelope"]["signers"], 1, "{opened}");
+    assert_eq!(opened["editable"], false);
+    let doc = opened["doc"].as_u64().unwrap();
+    let info = ok(&mut a, "doc_info", json!({ "doc": doc }));
+    assert_eq!(info["repairs"], json!([]), "the sibling PDF opens as it is: {info}");
+    assert_eq!(info["document"]["envelope"]["detached"], true, "doc_info reports the pair too: {info}");
+}
+
+#[test]
+fn doc_extract_original_refuses_detached() {
+    let dir = envelope_dir("extract-detached", &["openssl-signed.pdf.p7s", "openssl-signed.pdf"]);
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "openssl-signed.pdf.p7s" }))["doc"].as_u64().unwrap();
+    let e = err(&mut a, "doc_extract_original", json!({ "doc": doc }));
+    assert!(matches!(&e, ToolError::Failed(m) if m.contains("a detached signature has nothing to extract; open the PDF itself to edit it")), "{e}");
+    // The refusal opened nothing: only the pair is in the session.
+    let list = ok(&mut a, "doc_list", json!({}));
+    assert_eq!(list["documents"].as_array().unwrap().len(), 1, "{list}");
+}
+
+#[test]
+fn detached_tampered_sibling_reports_mismatch() {
+    let dir = envelope_dir("detached-tampered", &["openssl-signed.pdf.p7s"]);
+    // Flip the version digit after the %PDF- magic, the way the engine test does: still an
+    // openable document, but no longer the bytes that were signed.
+    let mut tampered = openssl_signed_pdf();
+    tampered[7] = b'8';
+    std::fs::write(dir.join("openssl-signed.pdf"), &tampered).unwrap();
+    let mut a = auto(&dir);
+    let opened = ok(&mut a, "doc_open", json!({ "path": "openssl-signed.pdf.p7s" }));
+    assert_eq!(opened["envelope"]["detached"], true, "{opened}");
+    assert_eq!(opened["envelope"]["digest_ok"], false, "the flipped byte is caught: {opened}");
+    assert_eq!(opened["editable"], false, "a mismatching pair is still read-only: {opened}");
+}
+
+#[test]
+fn detached_without_sibling_is_actionable() {
+    let dir = envelope_dir("detached-alone", &["openssl-signed.pdf.p7s"]);
+    let mut a = auto(&dir);
+    let e = err(&mut a, "doc_open", json!({ "path": "openssl-signed.pdf.p7s" }));
+    // The pair's naming: the document is the signature's name without the .p7s suffix.
+    assert!(matches!(&e, ToolError::Failed(m) if m == "openssl-signed.pdf.p7s signs openssl-signed.pdf, which was not found beside it"), "{e}");
+    // Nothing opened.
+    assert_eq!(ok(&mut a, "doc_list", json!({}))["documents"], json!([]));
+}
+
+#[test]
+fn plain_documents_are_refused() {
+    let dir = workdir("extract-plain");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let e = a.call("doc_extract_original", &json!({ "doc": doc })).unwrap_err();
+    assert!(matches!(&e, ToolError::Failed(m) if m.contains("not inside a CAdES envelope")), "{e}");
+    // An unknown document id is refused with where to look.
+    let e = a.call("doc_extract_original", &json!({ "doc": 999 })).unwrap_err();
+    assert!(e.to_string().contains("no open document with id 999"), "{e}");
+    // A bad argument is rejected before the engine sees it.
+    let e = a.call("doc_extract_original", &json!({ "doc": doc, "typo": true })).unwrap_err();
+    assert!(matches!(e, ToolError::InvalidArgs(_)), "{e}");
+}

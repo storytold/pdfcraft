@@ -45,4 +45,7 @@ pub struct Session {
     /// What the XFA scripts' time limits are multiplied by (`None`: 1); see
     /// [`Session::with_xfa_time_scale`].
     pub(crate) xfa_time_scale: Option<u32>,
+    /// Confinement for the engine's own reads besides the file it was handed (see
+    /// [`crate::FileReadGuard`]). Set by hosts that hold every path to a root (AGENTS.md §3).
+    pub(crate) file_read_guard: Option<crate::FileReadGuard>,
 }

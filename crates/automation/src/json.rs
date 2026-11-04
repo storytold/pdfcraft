@@ -273,9 +273,24 @@ pub(crate) fn summary(d: &Document) -> Value {
         "dirty": d.dirty,
         "editable": d.read_only_reason.is_none(),
         "read_only_reason": d.read_only_reason,
+        "envelope": envelope(d),
         "encrypted": d.info.encrypted,
         "undo": d.can_undo(),
         "redo": d.can_redo(),
+    })
+}
+
+/// The CAdES envelope a document was opened from (issue #1449), if so.
+fn envelope(d: &Document) -> Option<Value> {
+    d.envelope.as_ref().map(|e| {
+        json!({
+            "signer": e.signer,
+            "signing_time": e.signing_time,
+            "digest_ok": e.digest_ok,
+            "signers": e.signers,
+            "quirks": e.quirks,
+            "detached": e.detached,
+        })
     })
 }
 
@@ -288,6 +303,7 @@ pub(crate) fn info(d: &Document) -> Value {
     }
     json!({
         "document": summary(d),
+        "envelope": envelope(d),
         "pdf_version": i.pdf_version,
         "file_size": i.file_size,
         "title": i.title, "author": i.author, "subject": i.subject, "keywords": i.keywords,

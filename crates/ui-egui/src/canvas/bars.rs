@@ -56,6 +56,8 @@ pub(super) enum Notice {
     Close,
     /// Stop showing the secured-document notice, in every document (#4035).
     HideSecured,
+    /// Extract the original PDF from the CAdES envelope the document was opened from.
+    EnvelopeExtract,
 }
 
 /// The notice bar above the pages: a file changed on disk first, then what a historical
@@ -72,6 +74,57 @@ pub(super) fn notices(
 ) -> Option<Notice> {
     let info = &doc.info;
     let xfa = doc.xfa.as_ref();
+    // A document opened from a CAdES envelope (.p7m, issue #1449) is the envelope's to describe:
+    // its bar comes ahead of every other notice about the document, the wrapped PDF's own
+    // signature banner included (the Signatures panel still has that signature).
+    if let Some(env) = &doc.envelope {
+        if view.notice_dismissed {
+            return None;
+        }
+        let signer = env.signer.as_str();
+        let detail = match (env.digest_ok, env.signing_time.as_deref()) {
+            (true, Some(time)) => crate::i18n::fmt(
+                tl!("Signed by {signer} on {time}; the content matches what was signed; the signer's trust was not checked."),
+                &[("signer", signer), ("time", time)],
+            ),
+            (false, Some(time)) => crate::i18n::fmt(
+                tl!("Signed by {signer} on {time}; the content does not match what was signed; the signer's trust was not checked."),
+                &[("signer", signer), ("time", time)],
+            ),
+            (true, None) => crate::i18n::fmt(
+                tl!("Signed by {signer}; the content matches what was signed; the signer's trust was not checked."),
+                &[("signer", signer)],
+            ),
+            (false, None) => crate::i18n::fmt(
+                tl!("Signed by {signer}; the content does not match what was signed; the signer's trust was not checked."),
+                &[("signer", signer)],
+            ),
+        };
+        // A detached signature (.p7s, issue #2129) says the same thing about its pair, minus
+        // Extract: nothing is carried inside, and the signed PDF beside the signature is
+        // already the editable copy.
+        let mut text = if env.detached {
+            format!("{} {detail}", tl!("Opened from a detached CAdES signature — read-only."))
+        } else {
+            format!("{} {detail}", tl!("Opened from a CAdES signature envelope — read-only."))
+        };
+        if !info.warnings.is_empty() {
+            // Damage of the PDF inside surfaces on the same bar (an envelope never "repairs").
+            text.push(' ');
+            text.push_str(&info.warnings.join("; "));
+            text.push('.');
+        }
+        let mut extract = false;
+        notice_bar(ui, t, if env.digest_ok { "file-lock-2" } else { "triangle-alert" }, t.accent_text, text, |ui| {
+            if icons::button(ui, "x", 22.0, false, tl!("Dismiss")).clicked() {
+                view.notice_dismissed = true;
+            }
+            if !env.detached && crate::widgets::pill_button(ui, tl!("Extract the original PDF…"), false).clicked() {
+                extract = true;
+            }
+        });
+        return extract.then_some(Notice::EnvelopeExtract);
+    }
     // The file changed on disk while this document has unsaved changes (#431): ask before
     // replacing it, ahead of every other notice.
     if view.disk_changed {

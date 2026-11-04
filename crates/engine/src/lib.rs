@@ -135,14 +135,14 @@ use comments::comment_list;
 pub use comments::{SummarySort, comment_kind, comment_summary, comment_type_name};
 #[cfg(test)]
 use document::page_runs;
-pub use document::{Document, EditNotice, TextNotice, display_bytes_for, render_password_for};
+pub use document::{Document, EditNotice, EnvelopeInfo, TextNotice, display_bytes_for, render_password_for};
 use document::{display_bytes, info_fields, recovered_render_password, same_pages, shown_under_redactions, undrawn_notices};
 pub use edit::{BATCH_LABELS, EDIT_LABELS, Edit};
 pub use error::{EditError, SourceProblem};
 pub use fill_sign::{displayed_offset, text_box_at, typed_signature_graphic, typed_signature_shape};
 pub use history::Label;
 use layers::{apply_layer_state, set_default_layer_state, use_layer_choices};
-pub use open::{OpenContext, PreparedDocument};
+pub use open::{FileReadGuard, FileReadRefusal, OpenContext, PreparedDocument};
 pub use page_filter::{PageOrientation, PageParity, filter_pages};
 pub use pictures::{MarkFile, image_dimensions};
 use pictures::{embed_image, fit_picture, mark_source, model_poster};

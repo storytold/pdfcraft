@@ -6215,6 +6215,30 @@ evidence = ["crates/sign/tests/it/crypto.rs::signatures_round_trip_for_every_key
 notes = "ETSI.CAdES.detached with signing-certificate-v2; pdfsig reports them valid"
 
 [[feature]]
+id = "sign.cades-envelope-open"
+title = "Open CAdES .pdf.p7m envelopes (beyond Acrobat parity)"
+area = "H"
+tier = "P2"
+milestone = "M9"
+status = "shipped"
+commands = ["file.open", "file.extract_original"]
+tools = ["doc_extract_original"]
+evidence = ["crates/engine/tests/it/envelope.rs::envelope_opens_read_only_without_repairs", "crates/automation/tests/it/automation.rs::envelope_opens_with_info_and_no_repairs"]
+notes = "beyond Acrobat parity: a .pdf.p7m CAdES envelope opens as the PDF it wraps, read-only, with the signer shown, and Extract the original PDF makes an editable copy (the envelope is never changed). v1 limits: no trust-chain validation, non-PDF content refused with an error, no .p7m writing, and a single signer shown (the count is reported)"
+
+[[feature]]
+id = "sign.cades-detached-open"
+title = "Open detached CAdES pairs (.pdf.p7s)"
+area = "H"
+tier = "P2"
+milestone = "M9"
+status = "shipped"
+commands = ["file.open"]
+tools = ["doc_open"]
+evidence = ["crates/engine/tests/it/envelope.rs::detached_pair_opens_read_only_verified", "crates/automation/tests/it/automation.rs::detached_pair_opens_verified_via_tools"]
+notes = "beyond Acrobat parity: a detached CAdES signature (.pdf.p7s) opens as the sibling PDF beside it, read-only, with the signer shown and the signature verified over the sibling's bytes; a missing or unreadable sibling is one error naming the expected file. v1 limits: forward direction only (the .p7s resolves its sibling), no reverse notice (opening a PDF never looks for a signature), a single sibling found by the exact stripped name, no trust-chain validation, and no .p7s writing"
+
+[[feature]]
 id = "sign.hash-algorithms"
 title = "SHA-256/384/512 hashes; no SHA-1 for new signatures"
 area = "H"

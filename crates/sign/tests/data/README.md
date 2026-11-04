@@ -38,6 +38,42 @@ openssl pkcs12 -export -legacy -inkey leaf.key -in leaf.crt -certfile ca.crt -ou
 byte ranges (`adbe.pkcs7.detached`, with OpenSSL's signing-time attribute). It checks the
 validator against a signature PdfCraft did not make; poppler's `pdfsig` reports it valid.
 
+### CAdES signature envelopes (issue #1449)
+
+`cades-envelope.pdf.p7m` and `cades-xml.p7m` are attached (`-nodetach`) CAdES-BES envelopes made
+with `openssl cms -sign -binary -nodetach -cades -md sha256 -outform DER` over `openssl-signed.pdf`
+and `cades-inner.xml` respectively; `openssl cms -verify -noverify` extracts embedded content
+byte-identical to the input. `cades-detached.p7s` is the same signature over `openssl-signed.pdf`
+without `-nodetach`; verify it with `-content openssl-signed.pdf`. All three are DER PKCS #7
+Signed Data carrying OpenSSL's signing-time attribute and the CAdES
+`id-smime-aa-signingCertificateV2` attribute. `cades-inner.xml` is the one-line stub
+`<?xml version="1.0"?><FatturaElettronica/>` signed into `cades-xml.p7m`. Regenerate with:
+
+```sh
+openssl req -x509 -newkey rsa:2048 -nodes -keyout key.pem -out cert.pem -subj "/CN=PdfCraft Test" -days 3650
+printf '<?xml version="1.0"?><FatturaElettronica/>' > cades-inner.xml
+openssl cms -sign -binary -nodetach -cades -md sha256 -in openssl-signed.pdf -signer cert.pem -inkey key.pem -outform DER -out cades-envelope.pdf.p7m
+openssl cms -sign -binary -cades -md sha256 -in openssl-signed.pdf -signer cert.pem -inkey key.pem -outform DER -out cades-detached.p7s
+openssl cms -sign -binary -nodetach -cades -md sha256 -in cades-inner.xml -signer cert.pem -inkey key.pem -outform DER -out cades-xml.p7m
+```
+
+The key is throw-away and each signature embeds its signing time, so regenerating changes every file's bytes.
+
+### Detached signature beside its file (issue #2129)
+
+`openssl-signed.pdf.p7s` is a detached (`-cades`, without `-nodetach`) DER CAdES-BES signature over
+the exact bytes of `openssl-signed.pdf`, made with its own throw-away RSA key
+(`-subj "/CN=PdfCraft Test"`); the sibling-by-name pairing with `openssl-signed.pdf` is the point.
+`openssl cms -verify -noverify -binary -inform DER -in openssl-signed.pdf.p7s -content openssl-signed.pdf -out x.pdf`
+extracts content byte-identical to the input. Regenerate with:
+
+```sh
+openssl req -x509 -newkey rsa:2048 -nodes -keyout key.pem -out cert.pem -subj "/CN=PdfCraft Test" -days 3650
+openssl cms -sign -binary -cades -md sha256 -in openssl-signed.pdf -signer cert.pem -inkey key.pem -outform DER -out openssl-signed.pdf.p7s
+```
+
+The key is throw-away and the signature embeds its signing time, so regenerating changes the bytes.
+
 ### `x509-rsa-sha1.pdf`
 
 A synthetic one-page PDF signed the legacy way (`/SubFilter /adbe.x509.rsa_sha1`, `/Cert` = `rsa.crt.pem`,

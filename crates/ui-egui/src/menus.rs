@@ -120,6 +120,7 @@ const FILE: &[&str] = &[
     SEP,
     "file.close",
     "file.close_all",
+    "file.extract_original",
     SEP,
     "optimize.reduce",
     "optimize.advanced",
