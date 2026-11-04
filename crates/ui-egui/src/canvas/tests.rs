@@ -1634,7 +1634,12 @@ fn ctrl_wheel_zooms_an_unfocused_window() {
     h.hover_at(center);
     h.input_mut().focused = false;
     h.run_steps(2);
-    let ctrl_wheel = egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Line, delta: vec2(0.0, 1.0), phase: egui::TouchPhase::Move, modifiers: egui::Modifiers::COMMAND };
+    let ctrl_wheel = egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Line,
+        delta: vec2(0.0, 1.0),
+        phase: egui::TouchPhase::Move,
+        modifiers: egui::Modifiers::COMMAND,
+    };
     h.state_mut().palette_open = true;
     let before = h.state().views[0].zoom;
     h.event(ctrl_wheel.clone());
