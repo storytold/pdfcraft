@@ -3434,6 +3434,18 @@ evidence = ["crates/organize/src/tests.rs::an_exported_outline_imports_into_anot
 notes = "#6018, headless only. The bookmark tree (or one bookmark's subtree) goes out as JSON with titles, nesting, open state, colour, bold/italic and destinations as page plus view in PDF user space, and comes back unchanged: into another document, under any bookmark, at any position, or in place of its outline, as one undoable step; bookmark_copy does the same between open documents by page number. A bookmark whose page the target lacks keeps its place without a destination and is reported, never dropped. Not yet: a panel command and preview, CSV/Markdown/pdftk formats, remapping by named destination (named destinations travel resolved to their page), actions other than go-to-page, structure links (/SE)"
 
 [[feature]]
+id = "organize.bookmark-clipboard"
+title = "Cut, copy and paste bookmarks"
+area = "D"
+tier = "P2"
+milestone = "M4"
+status = "shipped"
+commands = []
+tools = ["bookmark_copy", "bookmark_export", "bookmark_import", "bookmark_delete"]
+evidence = ["crates/ui-egui/tests/it/bookmarks.rs::cut_copy_and_paste_a_bookmark_subtree_within_and_between_documents", "crates/automation/tests/it/automation.rs::bookmarks_export_import_and_copy_between_documents"]
+notes = "#3994 (the cut/copy/paste part). Cut, Copy and Paste in a bookmark's menu, and Paste bookmarks in Bookmark options, carry a bookmark with its whole subtree within a document or into another one, each as one undo step. A destination is a page index: a bookmark whose page the target lacks keeps its place without a destination and the toast counts them. Headless, bookmark_copy copies between open documents directly (there is no clipboard). Not yet: keyboard shortcuts in the panel, the system clipboard (the bookmarks stay inside the app), several bookmarks at once, copying out of a document that cannot be edited (the bookmark menu is hidden there), page-ordered insertion (the other half of #3994), actions other than go-to-page"
+
+[[feature]]
 id = "organize.attachments-add"
 title = "Add file attachments"
 area = "D"
