@@ -579,3 +579,47 @@ fn separation_and_devicen_checks_follow_references_depth_and_nchannel() {
     let deep = format!("/A {}[/DeviceN [/Spot] /DeviceRGB 4 0 R]{}", "[".repeat(40), "]".repeat(40));
     assert_eq!(spots(&deep), undefined("Spot"));
 }
+
+/// From the second review of the 6.2.4.4 checks: a `/Colorants` entry is a Separation space of
+/// its own colorant, tint-transform streams compare by decoded data, and a structure shared by
+/// many definitions is compared once rather than once per path through it.
+#[test]
+fn separation_checks_match_colorant_entries_decode_streams_and_share_comparisons() {
+    // Two copies of a chain of arrays, each level naming the next twice: comparing them path by
+    // path takes about 2^19 steps.
+    const LEVELS: usize = 18;
+    let chain = |first: usize| -> Vec<String> {
+        (0..LEVELS).map(|k| if k + 1 < LEVELS { format!("[{n} 0 R {n} 0 R]", n = first + k + 1) } else { "[1 2 3]".into() }).collect()
+    };
+    let (a, b) = (5, 5 + LEVELS);
+    let spots = |spaces: &str| -> Vec<String> {
+        let page = format!("<< /Type /Page /Parent 2 0 R /Resources << /ColorSpace << {spaces} >> >> >>");
+        let mut objects = vec![
+            "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>".into(),
+            page,
+            "<< /FunctionType 2 /Domain [0 1] /C0 [1 1 1] /C1 [1 0 0] /N 1 >>".into(),
+        ];
+        objects.extend(chain(a));
+        objects.extend(chain(b));
+        objects.push("<< /FunctionType 4 /Domain [0 1] /Range [0 1 0 1 0 1] /Length 15 >>\nstream\n{ dup dup pop }\nendstream".into());
+        objects.push("<< /FunctionType 4 /Domain [0 1] /Range [0 1 0 1 0 1] /Filter /ASCIIHexDecode /Length 31 >>\nstream\n7B206475702064757020706F70207D>\nendstream".into());
+        objects.push("<< /FunctionType 4 /Domain [0 1] /Range [0 1 0 1 0 1] /Length 15 >>\nstream\n{ dup pop dup }\nendstream".into());
+        let objects: Vec<&str> = objects.iter().map(String::as_str).collect();
+        let doc = build(&objects, "");
+        verify(&doc, Level::A2b).into_iter().filter(|i| i.clause == "6.2.4.4").map(|i| i.message).collect()
+    };
+    let differ = vec!["Separation colour spaces named Red differ in their alternate space or tint transform".to_string()];
+    let undefined = vec!["The spot colour Spot of a DeviceN colour space isn't in its Colorants dictionary".to_string()];
+    // A Colorants entry that isn't a Separation space of the same colorant defines nothing.
+    assert_eq!(spots("/A [/DeviceN [/Spot] /DeviceRGB 4 0 R << /Colorants << /Spot /DeviceRGB >> >>]"), undefined);
+    assert_eq!(spots("/A [/DeviceN [/Spot] /DeviceRGB 4 0 R << /Colorants << /Spot [/Separation /Other /DeviceRGB 4 0 R] >> >>]"), undefined);
+    assert!(spots("/A [/DeviceN [/Spot] /DeviceRGB 4 0 R << /Colorants << /Spot [/Separation /Spot /DeviceRGB 4 0 R] >> >>]").is_empty());
+    // The same PostScript function, once plain and once hex-encoded, is the same tint transform.
+    let (plain, hex, other) = (5 + 2 * LEVELS, 6 + 2 * LEVELS, 7 + 2 * LEVELS);
+    assert!(spots(&format!("/A [/Separation /Red /DeviceRGB {plain} 0 R] /B [/Separation /Red /DeviceRGB {hex} 0 R]")).is_empty());
+    assert_eq!(spots(&format!("/A [/Separation /Red /DeviceRGB {plain} 0 R] /B [/Separation /Red /DeviceRGB {other} 0 R]")), differ);
+    // Equal copies compared again and again still leave room to find the one that differs.
+    let sep = |f: usize| format!("[/Separation /Red /DeviceRGB {f} 0 R]");
+    assert_eq!(spots(&format!("/A {} /B {} /C {} /D {} /E {}", sep(a), sep(b), sep(b), sep(b), sep(4))), differ);
+}

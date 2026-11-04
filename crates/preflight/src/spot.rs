@@ -11,15 +11,22 @@
 //! Colour spaces are found wherever they are written: in resource dictionaries, images, shadings
 //! and other colour spaces, direct or by reference.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
-use pdfcraft_cos::{Document, ObjRef, Object};
+use pdfcraft_cos::{DecodeBudget, Dict, Document, ObjRef, Object, Stream};
 
 /// How deep a direct object is followed (arrays and dictionaries inside one another): as deep as
 /// the parser nests them.
 const MAX_DEPTH: u8 = 128;
 /// How deep two definitions are compared, references followed.
 const MAX_COMPARE_DEPTH: u8 = 32;
+/// How many object pairs the comparisons of one document visit in all. Past it, a comparison
+/// claims no difference.
+const MAX_COMPARE_STEPS: u32 = 1 << 20;
+/// The decoded bytes the stream comparisons of one document may spend in all.
+const MAX_COMPARE_BYTES: usize = 64 << 20;
+/// The stream entries that say how the data is stored, not what it is.
+const ENCODING: [&[u8]; 3] = [b"Length", b"Filter", b"DecodeParms"];
 /// The colorants of DeviceCMYK, which a DeviceN space may name without defining them.
 const PROCESS: [&[u8]; 4] = [b"Cyan", b"Magenta", b"Yellow", b"Black"];
 
@@ -34,7 +41,8 @@ pub(crate) struct Findings {
 
 /// The 6.2.4.4 findings over the indirect objects `objs`.
 pub(crate) fn check(doc: &Document, objs: &[(ObjRef, std::sync::Arc<Object>)]) -> Findings {
-    let mut scan = Scan { doc, separations: HashMap::new(), findings: Findings::default() };
+    let compare = Compare { doc, equal: HashSet::new(), steps: MAX_COMPARE_STEPS, budget: DecodeBudget::new(MAX_COMPARE_BYTES, 0) };
+    let mut scan = Scan { doc, compare, separations: HashMap::new(), findings: Findings::default() };
     for (_, o) in objs {
         scan.walk(o, 0);
     }
@@ -43,6 +51,7 @@ pub(crate) fn check(doc: &Document, objs: &[(ObjRef, std::sync::Arc<Object>)]) -
 
 struct Scan<'a> {
     doc: &'a Document,
+    compare: Compare<'a>,
     /// Each colorant name's first Separation space: its alternate space and tint transform.
     separations: HashMap<Vec<u8>, (Object, Object)>,
     findings: Findings,
@@ -87,7 +96,7 @@ impl Scan<'_> {
         let this = (alternate.clone(), tint.clone());
         match self.separations.get(name) {
             Some((alt, fun)) => {
-                if !same(self.doc, alt, &this.0, 0) || !same(self.doc, fun, &this.1, 0) {
+                if !self.compare.same(alt, &this.0, 0) || !self.compare.same(fun, &this.1, 0) {
                     self.findings.differing.insert(String::from_utf8_lossy(name).into_owned());
                 }
             }
@@ -120,38 +129,84 @@ impl Scan<'_> {
         for n in names.iter().map(|n| self.doc.resolve(n)) {
             let Some(n) = n.as_name() else { continue };
             let spot = n != b"None" && !PROCESS.contains(&n) && !process.iter().any(|p| p == n);
-            // A null entry, or one referring to no object, defines nothing (ISO 32000-1 7.3.9).
-            let defined = colorants.and_then(|c| c.get(n)).is_some_and(|e| !matches!(*self.doc.resolve(e), Object::Null));
+            // Each entry is a Separation space for the colorant it is keyed by (ISO 32000-1 8.6.6.5,
+            // Table 71); a null entry, or one referring to no object, defines nothing (7.3.9).
+            let defined = colorants.and_then(|c| c.get(n)).is_some_and(|e| self.separation_named(e, n));
             if spot && !defined {
                 self.findings.undefined.insert(String::from_utf8_lossy(n).into_owned());
             }
         }
     }
-}
 
-/// Whether `a` and `b` are the same object, wherever their parts are stored: references are
-/// followed (to [`MAX_COMPARE_DEPTH`]), so two identical streams under different object numbers
-/// are the same.
-fn same(doc: &Document, a: &Object, b: &Object, depth: u8) -> bool {
-    if let (Object::Ref(x), Object::Ref(y)) = (a, b)
-        && x == y
-    {
-        return true;
-    }
-    if depth > MAX_COMPARE_DEPTH {
-        return false;
-    }
-    let (a, b) = (doc.resolve(a), doc.resolve(b));
-    let deeper = depth.saturating_add(1);
-    match (&*a, &*b) {
-        (Object::Array(x), Object::Array(y)) => x.len() == y.len() && x.iter().zip(y).all(|(p, q)| same(doc, p, q, deeper)),
-        (Object::Dict(x), Object::Dict(y)) => same_dict(doc, x, y, deeper),
-        (Object::Stream(x), Object::Stream(y)) => x.raw == y.raw && same_dict(doc, &x.dict, &y.dict, deeper),
-        (x, y) => x == y,
+    /// Whether `o` is `[/Separation name ...]` for the colorant `name`.
+    fn separation_named(&self, o: &Object, name: &[u8]) -> bool {
+        let o = self.doc.resolve(o);
+        let Some([kind, n, ..]) = o.as_array().map(Vec::as_slice) else { return false };
+        kind.as_name() == Some(b"Separation") && self.doc.resolve(n).as_name() == Some(name)
     }
 }
 
-fn same_dict(doc: &Document, a: &pdfcraft_cos::Dict, b: &pdfcraft_cos::Dict, depth: u8) -> bool {
-    // `/Length` may be written directly in one and by reference in the other: `same` resolves it.
-    a.len() == b.len() && a.iter().all(|(k, v)| b.get(k).is_some_and(|w| same(doc, v, w, depth)))
+/// Compares definitions, remembering which reference pairs it found equal, so a structure shared
+/// by many definitions is compared once, within [`MAX_COMPARE_STEPS`] and [`MAX_COMPARE_BYTES`].
+struct Compare<'a> {
+    doc: &'a Document,
+    /// Reference pairs compared equal. A depth cut-off only ever answers "different", so an
+    /// equal answer holds at any depth.
+    equal: HashSet<(ObjRef, ObjRef)>,
+    steps: u32,
+    budget: DecodeBudget,
+}
+
+impl Compare<'_> {
+    /// Whether `a` and `b` are the same object, wherever their parts are stored: references are
+    /// followed (to [`MAX_COMPARE_DEPTH`]), so two identical streams under different object
+    /// numbers are the same, and streams compare by their decoded data. Once the steps or the
+    /// decode allowance run out, nothing more is called different.
+    fn same(&mut self, a: &Object, b: &Object, depth: u8) -> bool {
+        let pair = match (a, b) {
+            (Object::Ref(x), Object::Ref(y)) if x == y || self.equal.contains(&(*x, *y)) => return true,
+            (Object::Ref(x), Object::Ref(y)) => Some((*x, *y)),
+            _ => None,
+        };
+        let Some(steps) = self.steps.checked_sub(1) else { return true };
+        self.steps = steps;
+        if depth > MAX_COMPARE_DEPTH {
+            return false;
+        }
+        let (a, b) = (self.doc.resolve(a), self.doc.resolve(b));
+        let deeper = depth.saturating_add(1);
+        let same = match (&*a, &*b) {
+            (Object::Array(x), Object::Array(y)) => x.len() == y.len() && x.iter().zip(y).all(|(p, q)| self.same(p, q, deeper)),
+            (Object::Dict(x), Object::Dict(y)) => self.same_dict(x, y, &[], deeper),
+            (Object::Stream(x), Object::Stream(y)) => self.same_data(x, y, deeper) && self.same_dict(&x.dict, &y.dict, &ENCODING, deeper),
+            (x, y) => x == y,
+        };
+        if same && let Some(pair) = pair {
+            self.equal.insert(pair);
+        }
+        same
+    }
+
+    /// Whether two dictionaries hold the same entries, those keyed in `skip` aside.
+    fn same_dict(&mut self, a: &Dict, b: &Dict, skip: &[&[u8]], depth: u8) -> bool {
+        let kept = |d: &Dict| d.iter().filter(|(k, _)| !skip.contains(&k.as_slice())).count();
+        kept(a) == kept(b) && a.iter().filter(|(k, _)| !skip.contains(&k.as_slice())).all(|(k, v)| b.get(k).is_some_and(|w| self.same(v, w, depth)))
+    }
+
+    /// Whether two streams hold the same data, however each is encoded. Data that can't be
+    /// decoded within the allowance is not called different.
+    fn same_data(&mut self, a: &Stream, b: &Stream, depth: u8) -> bool {
+        let stored_alike = |c: &mut Self, k: &[u8]| match (a.dict.get(k), b.dict.get(k)) {
+            (None, None) => true,
+            (Some(x), Some(y)) => c.same(x, y, depth),
+            _ => false,
+        };
+        if a.raw == b.raw && stored_alike(self, b"Filter") && stored_alike(self, b"DecodeParms") {
+            return true;
+        }
+        match (self.budget.decode(a), self.budget.decode(b)) {
+            (Ok(x), Ok(y)) => x == y,
+            _ => true,
+        }
+    }
 }
