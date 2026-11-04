@@ -813,6 +813,8 @@ pub(crate) struct Renderer {
     /// PdfCraft patch (27): set while this renderer draws one ink pass of a group blending
     /// in `DeviceCMYK` (see [`Renderer::draw_isolated_cmyk_group`]).
     ink: InkState,
+    /// PdfCraft patch: the "Smooth images" display preference (`RenderSettings::smooth_images`).
+    smooth_images: bool,
 }
 
 /// PdfCraft patch (27): which inks a pass of a `DeviceCMYK` group draws, and whether the
@@ -902,6 +904,7 @@ impl Renderer {
         cache: &RenderCache<'_>,
         color_replacement: Option<ColorReplacement>,
         preview: bool,
+        smooth_images: bool,
     ) -> Self {
         Self {
             ctx: RenderContext::new_with(width, height, settings),
@@ -920,6 +923,7 @@ impl Renderer {
             preview,
             image_transparency_stack: Vec::new(),
             ink: InkState::default(),
+            smooth_images,
         }
     }
 
@@ -1026,6 +1030,7 @@ impl Renderer {
                 preview: self.preview,
                 image_transparency_stack: Vec::new(),
                 ink: InkState::default(),
+                smooth_images: self.smooth_images,
             };
             let mut mask_pix = Pixmap::new(self.ctx.width(), self.ctx.height());
             let rgb_data = ImageData::Rgb(RgbData {
@@ -1248,12 +1253,18 @@ impl Renderer {
             return;
         }
         let interpolate = image_data.interpolate();
+        // PdfCraft patch: the "Smooth images" display preference gates the smoothing this
+        // renderer gives images that don't ask for `/Interpolate`. Off restores the
+        // nearest-neighbour path of #635 for them; `/Interpolate true` and Type 3 glyph images
+        // are unaffected.
+        let smooth = self.smooth_images;
         let requested_resize = x_scale < 1.0 || y_scale < 1.0;
         // PdfCraft patch: an image that did not ask for interpolation and is drawn below its
         // resolution is shrunk by area averaging (`area_shrink`), not nearest-neighbour, which
         // broke up the text of scans shown at screen size. Type 3 glyph images keep the nearest
         // shrink of #624: they are drawn with a frame of their own and never snapped.
-        let area = !interpolate
+        let area = smooth
+            && !interpolate
             && requested_resize
             && !self.in_type3_glyph
             // Wider sources keep #624's bounded nearest-neighbour shrink (`area_shrink` refuses
@@ -1339,7 +1350,8 @@ impl Renderer {
         // pixel art) keep their hard pixels. A scan shrunk on one side and stretched on the other
         // is smoothed too: the area shrink leaves the shrunk side at 1:1, where bilinear adds
         // nothing, and the stretched side would otherwise be drawn nearest-neighbour.
-        if !interpolate
+        if smooth
+            && !interpolate
             && !self.in_type3_glyph
             && (x_scale > SMOOTHED_IMAGE_SCALE || y_scale > SMOOTHED_IMAGE_SCALE)
             && source_width.min(source_height) >= SMOOTHED_IMAGE_SIDE
@@ -1595,6 +1607,7 @@ impl Renderer {
                 pass: Some(pass),
                 unsupported: false,
             },
+            smooth_images: self.smooth_images,
             knockout: Vec::new(),
             erasing: false,
             erase_groups: 0,
@@ -1869,6 +1882,7 @@ impl Renderer {
                                 preview: self.preview,
                                 image_transparency_stack: Vec::new(),
                                 ink: InkState::default(),
+                                smooth_images: self.smooth_images,
                             };
                             let initial_transform = Affine::translate((BORDER, BORDER))
                                 * Affine::scale_non_uniform(xs as f64, ys as f64)
@@ -1933,6 +1947,7 @@ impl Renderer {
                             preview: self.preview,
                             image_transparency_stack: Vec::new(),
                             ink: InkState::default(),
+                            smooth_images: self.smooth_images,
                         };
                         let mut initial_transform = Affine::scale_non_uniform(xs, ys)
                             * Affine::translate((-bbox.x0, -bbox.y0));
@@ -2239,6 +2254,7 @@ impl<'a> Device<'a> for Renderer {
                                         preview: self.preview,
                                         image_transparency_stack: Vec::new(),
                                         ink: InkState::default(),
+                                        smooth_images: self.smooth_images,
                                     };
                                     let mut sub_pix = Pixmap::new(width, height);
                                     sub_renderer.ctx.set_transform(transform);
@@ -2422,7 +2438,7 @@ impl<'a> Device<'a> for Renderer {
 
                 self.soft_mask_cache
                     .entry(m.cache_key())
-                    .or_insert_with(|| draw_soft_mask(&m, settings, width, height, self.preview))
+                    .or_insert_with(|| draw_soft_mask(&m, settings, width, height, self.preview, self.smooth_images))
                     .clone()
             }),
             None,
@@ -2551,7 +2567,7 @@ impl<'a> Device<'a> for Renderer {
 
             self.soft_mask_cache
                 .entry(m.cache_key())
-                .or_insert_with(|| draw_soft_mask(&m, settings, width, height, self.preview))
+                .or_insert_with(|| draw_soft_mask(&m, settings, width, height, self.preview, self.smooth_images))
                 .clone()
         });
         if let Some(mask) = self.cur_mask.clone() {
@@ -2736,7 +2752,7 @@ fn render_shading_texture(
     )
 }
 
-fn draw_soft_mask(mask: &SoftMask<'_>, settings: RenderSettings, width: u16, height: u16, preview: bool) -> Mask {
+fn draw_soft_mask(mask: &SoftMask<'_>, settings: RenderSettings, width: u16, height: u16, preview: bool, smooth_images: bool) -> Mask {
     let mut renderer = Renderer {
         ctx: RenderContext::new_with(width, height, derive_settings(&settings)),
         // PdfCraft patch: a soft mask must keep its original luminance values, so its
@@ -2756,6 +2772,7 @@ fn draw_soft_mask(mask: &SoftMask<'_>, settings: RenderSettings, width: u16, hei
         preview,
         image_transparency_stack: Vec::new(),
         ink: InkState::default(),
+        smooth_images,
     };
 
     let bg_color = mask.background_color().to_rgba();

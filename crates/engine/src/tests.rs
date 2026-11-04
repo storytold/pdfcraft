@@ -4676,6 +4676,21 @@ fn reading_colors_set_and_invalidated() {
 }
 
 #[test]
+fn smooth_images_applies_to_open_and_future_documents() {
+    let (mut s, id) = session_with(1);
+    assert!(s.smooth_images(), "on by default");
+    assert!(s.get(id).unwrap().config.smooth_images);
+    assert!(s.set_smooth_images(false));
+    assert!(!s.smooth_images());
+    assert!(!s.get(id).unwrap().config.smooth_images, "an open document is updated");
+    assert!(!s.set_smooth_images(false), "unchanged");
+    let later = s.open("later.pdf", None, Arc::new(fixture(1)), None).unwrap();
+    assert!(!s.get(later).unwrap().config.smooth_images, "a later document inherits the setting");
+    assert!(s.set_smooth_images(true));
+    assert!(s.get(later).unwrap().config.smooth_images);
+}
+
+#[test]
 fn signing_saving_trusting_and_commenting_afterwards() {
     let p12 = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12")).unwrap();
     let digital_id = sign::pkcs12::open(&p12, "test").unwrap();

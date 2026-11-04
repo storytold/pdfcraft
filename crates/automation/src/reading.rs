@@ -33,4 +33,16 @@ impl Automation {
             "line_art": colors.params.is_some_and(|p| p.line_art),
         }))
     }
+
+    /// Preferences ▸ Documents and view ▸ Smooth images: a session-wide display setting. Read
+    /// it with no argument; `enabled` sets it. Documents opened later inherit the setting.
+    pub(crate) fn view_smooth_images(&mut self, a: &Args) -> Result<Value> {
+        if let Some(on) = a.opt_bool("enabled")?
+            && self.session.set_smooth_images(on)
+        {
+            // Cached renderers baked the old setting into their config; page_render must re-read it.
+            self.renderers.clear();
+        }
+        Ok(json!({ "enabled": self.session.smooth_images() }))
+    }
 }

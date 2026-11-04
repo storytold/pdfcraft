@@ -6396,6 +6396,19 @@ fn draw_minified_image(
     alpha: Option<&[u8]>,
     device: (u32, u32),
 ) -> RenderedPage {
+    draw_minified_image_with(space, size, interpolate, data, alpha, device, RenderConfig::default())
+}
+
+/// [`draw_minified_image`] with an explicit config, for the Smooth images preference tests.
+fn draw_minified_image_with(
+    space: &str,
+    size: (u32, u32),
+    interpolate: Option<bool>,
+    data: &[u8],
+    alpha: Option<&[u8]>,
+    device: (u32, u32),
+    config: RenderConfig,
+) -> RenderedPage {
     let (width, height) = size;
     let interp = interpolate.map_or_else(String::new, |value| format!("/Interpolate {value} "));
     let (smask, mask) = match alpha {
@@ -6423,7 +6436,7 @@ fn draw_minified_image(
         content.len(),
         image.len() + 1
     );
-    let mut renderer = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
+    let mut renderer = PageRenderer::new(Arc::new(pdf.into_bytes()), config);
     let page = renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, scale: 1.0, ..Default::default() });
     assert!(page.error.is_none(), "{:?}", page.error);
     assert_eq!((page.width, page.height), device);
@@ -6909,6 +6922,91 @@ fn non_interpolated_type3_glyph_images_are_not_smoothed_when_minified() {
     }
     let enabled = render("/Interpolate true ");
     assert!(interior(&enabled).iter().any(|px| !palette.contains(px)), "/Interpolate true glyph image should still be sampled bicubically");
+}
+
+/// With the Smooth images preference off, an image that doesn't ask for interpolation goes back
+/// to the nearest-neighbour shrink of #635: the area average read whole columns instead.
+#[test]
+fn non_interpolated_minification_is_nearest_when_smoothing_is_off() {
+    let ramp = [10u8, 20, 30, 40, 50, 60, 70, 80, 90, 100];
+    let page =
+        draw_minified_image_with("DeviceGray", (10, 1), None, &ramp, None, (6, 1), RenderConfig { smooth_images: false, ..Default::default() });
+    let grays: Vec<u8> = page.rgba.as_chunks::<4>().0.iter().map(|px| px[0]).collect();
+    assert_eq!(grays, [10, 30, 50, 60, 80, 100], "nearest read whole columns 0, 2, 4, 5, 7 and 9");
+}
+
+/// The masked nearest path of #635 too: colour and mask come from the same column, so a mask
+/// sample never pairs with a neighbour's colour.
+#[test]
+fn non_interpolated_masked_minification_is_nearest_when_smoothing_is_off() {
+    let ramp = [10u8, 20, 30, 40, 50, 60, 70, 80, 90, 100];
+    let mask = [255u8, 0, 0, 0, 255, 255, 0, 0, 0, 255];
+    let page = draw_minified_image_with(
+        "DeviceGray",
+        (10, 1),
+        None,
+        &ramp,
+        Some(&mask),
+        (6, 1),
+        RenderConfig { smooth_images: false, ..Default::default() },
+    );
+    let expected: Vec<[u8; 4]> = [10u8, 255, 50, 60, 255, 100].iter().map(|&v| [v, v, v, 255]).collect();
+    assert_eq!(page.rgba.as_chunks::<4>().0.to_vec(), expected);
+}
+
+/// With the preference off, a page-scan-sized image enlarged without `/Interpolate` is drawn
+/// nearest-neighbour again, so every device pixel is one source tone.
+#[test]
+fn non_interpolated_enlargement_keeps_hard_pixels_when_smoothing_is_off() {
+    let side = 512usize;
+    let half: Vec<u8> = (0..side * side).map(|i| if i % side < side / 2 { 0 } else { 255 }).collect();
+    let page = draw_minified_image_with(
+        "DeviceGray",
+        (512, 512),
+        None,
+        &half,
+        None,
+        (1536, 1536),
+        RenderConfig { smooth_images: false, ..Default::default() },
+    );
+    assert!(page.rgba.as_chunks::<4>().0.iter().all(|px| px[0] == 0 || px[0] == 255), "a scan enlarged with smoothing off was blended");
+}
+
+/// A barcode-like 1-bit pattern (4 × 4 modules) enlarged above the scan threshold keeps its hard
+/// pixels when smoothing is off: no grey edge between modules.
+#[test]
+fn barcode_like_image_keeps_hard_pixels_when_smoothing_is_off() {
+    let side = 512usize;
+    let modules: Vec<u8> = (0..side * side).map(|i| if ((i / side) / 4 + (i % side) / 4).is_multiple_of(2) { 0 } else { 255 }).collect();
+    let page = draw_minified_image_with(
+        "DeviceGray",
+        (512, 512),
+        None,
+        &modules,
+        None,
+        (1024, 1024),
+        RenderConfig { smooth_images: false, ..Default::default() },
+    );
+    assert!(page.rgba.as_chunks::<4>().0.iter().all(|px| px[0] == 0 || px[0] == 255), "a barcode-like pattern was smoothed");
+}
+
+/// The preference only gates images that don't ask for interpolation: `/Interpolate true` still
+/// blends when it is off.
+#[test]
+fn interpolated_images_still_smooth_when_smoothing_is_off() {
+    let palette: [[u8; 3]; 8] = [[0, 0, 0], [255, 255, 255], [255, 0, 0], [0, 255, 0], [0, 0, 255], [255, 255, 0], [255, 0, 255], [0, 255, 255]];
+    let rgb: Vec<u8> = block_source(palette).concat();
+    let exact: Vec<[u8; 4]> = palette.iter().map(|c| [c[0], c[1], c[2], 255]).collect();
+    let page =
+        draw_minified_image_with("DeviceRGB", (8, 4), Some(true), &rgb, None, (4, 2), RenderConfig { smooth_images: false, ..Default::default() });
+    let pixels = page.rgba.as_chunks::<4>().0.to_vec();
+    assert_ne!(pixels, exact, "/Interpolate true must still blend with smoothing off");
+    assert!(pixels.iter().any(|px| px[..3].iter().any(|&c| (32..=223).contains(&c))), "/Interpolate true made no mid-tone");
+}
+
+#[test]
+fn smooth_images_is_on_by_default() {
+    assert!(RenderConfig::default().smooth_images);
 }
 
 /// From `cargo xtask fuzz`: a CID font whose /W range spans every u32 inserted billions of

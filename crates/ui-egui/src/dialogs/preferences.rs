@@ -741,6 +741,17 @@ fn card_documents_and_view(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens,
     ctx.checkbox(ui, &mut app.always_default_view, tl!("Always use my default zoom and page layout"), t);
     ui.add_space(6.0);
 
+    let mut smooth = app.session.smooth_images();
+    if ctx.checkbox(ui, &mut smooth, tl!("Smooth images"), t).changed() {
+        app.set_smooth_images(smooth);
+    }
+    ctx.label_secondary(
+        ui,
+        tl!("Smooth images that don't ask for interpolation: scans are averaged when shrunk and smoothed when enlarged. Turn this off to keep QR codes, barcodes and pixel art sharp."),
+        t,
+    );
+    ui.add_space(6.0);
+
     ui.horizontal(|ui| {
         ctx.label_primary(ui, tl!("Units"), t);
         ctx.pill_choice(

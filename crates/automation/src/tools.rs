@@ -1326,6 +1326,8 @@ pub fn tools() -> Vec<ToolDef> {
             )),
         t("js_enabled", "JavaScript on or off", "Preferences ▸ JavaScript ▸ Enable Acrobat JavaScript: set it with `enabled`, or read it. With JavaScript off, field scripts other than Acrobat's AF calls don't run.")
             .with(schema(json!({ "enabled": { "type": "boolean" } }), &[])),
+        t("view_smooth_images", "Smooth images on or off", "Preferences ▸ Documents and view ▸ Smooth images: set it with `enabled`, or read it. On by default. It smooths images that don't ask for `/Interpolate`: a shrunk one is area-averaged and a page-scan-sized one is drawn bilinearly when enlarged. Turn it off to keep QR codes, barcodes and pixel art hard (the nearest-neighbour path). `/Interpolate true` is unaffected either way. A view setting: the file doesn't change, and documents opened later inherit it.")
+            .with(schema(json!({ "enabled": { "type": "boolean" } }), &[])),
         t("ocr_recognize", "Recognize text (OCR)", "Scan & OCR ▸ Recognize text: render pages, read the words in them and add them as invisible text over the page image, so scanned pages become searchable and selectable (a searchable image; the image is not changed). Pages that already have text are skipped unless skip_text_pages is false; then pictures on those pages are read too, and recognised words that the page's own text already has (an earlier OCR layer included) are left out and counted as already_on_page. Returns each page's recognised text (left out when the document's security doesn't allow copying), word count or why it was skipped. Needs the OCR models (ocr_status). Undoable as one step.")
             .cmd("ocr.recognize")
             .with(schema(

@@ -277,6 +277,27 @@ impl Session {
         Some(self.get(id)?.config.reading_colors)
     }
 
+    /// Preferences ▸ Documents and view ▸ Smooth images (on by default). A session-wide display
+    /// setting: every open document is updated and re-rendered, and documents opened later
+    /// inherit it. Returns whether anything changed.
+    pub fn set_smooth_images(&mut self, on: bool) -> bool {
+        let mut changed = self.smooth_images() != on;
+        self.smooth_images_off = !on;
+        for doc in &mut self.docs {
+            if doc.config.smooth_images != on {
+                doc.config.smooth_images = on;
+                doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), display_config(&doc.config));
+                doc.generation += 1;
+                changed = true;
+            }
+        }
+        changed
+    }
+
+    pub fn smooth_images(&self) -> bool {
+        !self.smooth_images_off
+    }
+
     /// How the document's pages are drawn for viewing: its password and view settings (layer
     /// visibility, hidden comments, reading colours). `None` when no such document is open.
     pub fn render_config(&self, id: DocId) -> Option<RenderConfig> {
