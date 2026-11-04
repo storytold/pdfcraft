@@ -4941,6 +4941,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "pdfcraft-prc"
+version = "0.18.1"
+dependencies = [
+ "flate2",
+ "proptest",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "pdfcraft-preflight"
 version = "0.18.1"
 dependencies = [

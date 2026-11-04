@@ -29,6 +29,7 @@ mod links;
 #[cfg(feature = "mcp")]
 pub mod mcp;
 mod measure;
+mod model3d;
 mod printing;
 mod reading;
 mod redact;
@@ -52,6 +53,7 @@ use file_access::foreign_share;
 use text_cache::TextCache;
 
 mod assemble;
+mod bookmark_io;
 mod dispatch;
 mod documents;
 mod error;
