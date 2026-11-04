@@ -157,3 +157,30 @@ fn prompt_answer_schema_advertises_the_length_budget() {
     let tool = pdfcraft_automation::tools().into_iter().find(|t| t.name == "js_run").unwrap();
     assert_eq!(tool.input_schema["properties"]["answers"]["items"]["maxLength"], 4096);
 }
+
+#[test]
+fn js_run_exact_field_ids_are_discoverable_and_strictly_validated() {
+    let dir = std::env::temp_dir().join(format!("pdfcraft-field-identity-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("synthetic.pdf"), fixture()).unwrap();
+    let mut a = Automation::new().with_root(&dir).unwrap();
+    let id = call(&mut a, "doc_open", json!({"path":"synthetic.pdf"}))["doc"].as_u64().unwrap();
+    let fields = call(&mut a, "form_fields", json!({"doc":id}));
+    let entries = fields["fields"].as_array().unwrap();
+    let go = entries.iter().find(|f| f["name"] == "go").unwrap()["field_id"].as_u64().unwrap();
+    let other = entries.iter().find(|f| f["name"] == "input").unwrap()["field_id"].as_u64().unwrap();
+    let out = call(
+        &mut a,
+        "js_run",
+        json!({"doc":id,"field":"go","field_id":go,"script":"event.target.buttonSetCaption(app.response({cQuestion:'Caption'}));event.target.name;","answers":["exact"]}),
+    );
+    assert_eq!(out["error"], Value::Null);
+    assert_eq!(out["result"], "go");
+    for invalid in [json!(-1), json!(1.5), json!("bad"), json!(281474976710656u64), json!(other)] {
+        assert!(a.call("js_run", &json!({"doc":id,"field":"go","field_id":invalid,"script":"getField('input').value='bad';"})).is_err());
+    }
+    assert!(a.call("js_run", &json!({"doc":id,"field_id":go,"script":"true;"})).is_err());
+    let schema = pdfcraft_automation::tools().into_iter().find(|t| t.name == "js_run").unwrap();
+    assert_eq!(schema.input_schema["properties"]["field_id"]["maximum"], 281474976710655u64);
+    std::fs::remove_dir_all(dir).unwrap();
+}

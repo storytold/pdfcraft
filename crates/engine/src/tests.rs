@@ -11023,3 +11023,156 @@ fn calculate_now_preserves_duplicate_field_object_identity() {
         );
     }
 }
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn script_colors_do_not_mutate_another_fields_shared_mk() {
+    for native in [false, true] {
+        for (script, fill, border) in [
+            ("getField('price').fillColor=color.red;", Some([1., 0., 0.]), Some([0., 0., 0.])),
+            ("getField('price').strokeColor=color.blue;", Some([1., 1., 1.]), Some([0., 0., 1.])),
+            ("getField('price').fillColor=color.red;getField('price').strokeColor=color.blue;", Some([1., 0., 0.]), Some([0., 0., 1.])),
+            ("getField('price').fillColor=color.transparent;", None, Some([0., 0., 0.])),
+        ] {
+            let mut cos = pdfcraft_cos::Document::open(Arc::new(scripted_form())).unwrap();
+            let all = pdfcraft_forms::fields(&cos);
+            let price = all.iter().find(|f| f.name == "price").unwrap().obj;
+            let qty = all.iter().find(|f| f.name == "qty").unwrap().obj;
+            let total = all.iter().find(|f| f.name == "total").unwrap().obj;
+            let mut mk = pdfcraft_cos::Dict::new();
+            mk.set(b"BG".to_vec(), pdfcraft_cos::Object::Array(vec![1.into(), 1.into(), 1.into()]));
+            mk.set(b"BC".to_vec(), pdfcraft_cos::Object::Array(vec![0.into(), 0.into(), 0.into()]));
+            mk.set(b"CA".to_vec(), pdfcraft_cos::PdfString::text("keep"));
+            let shared = cos.add(pdfcraft_cos::Object::Dict(mk));
+            let alias = cos.add(pdfcraft_cos::Object::Ref(shared));
+            for (object, reference) in [(qty, shared), (total, alias)] {
+                cos.update_dict(object, |d| d.set(b"MK".to_vec(), reference)).unwrap();
+            }
+            let mut widgets = Vec::new();
+            for x in [20, 90] {
+                let mut w = pdfcraft_cos::Dict::new();
+                w.set(b"Subtype".to_vec(), pdfcraft_cos::Object::name("Widget"));
+                w.set(b"Parent".to_vec(), price);
+                w.set(b"P".to_vec(), pdfcraft_cos::ObjRef::new(3, 0));
+                w.set(b"Rect".to_vec(), pdfcraft_cos::Object::Array(vec![x.into(), 250.into(), (x + 50).into(), 270.into()]));
+                w.set(b"MK".to_vec(), shared);
+                widgets.push(cos.add(pdfcraft_cos::Object::Dict(w)));
+            }
+            cos.update_dict(price, |d| {
+                d.remove(b"Rect");
+                d.set(b"Kids".to_vec(), pdfcraft_cos::Object::Array(widgets.iter().map(|r| (*r).into()).collect()));
+            })
+            .unwrap();
+            cos.update_dict(pdfcraft_cos::ObjRef::new(3, 0), |d| {
+                let mut a = d.get(b"Annots").unwrap().as_array().unwrap().clone();
+                a.retain(|o| o.as_ref() != Some(price));
+                a.extend(widgets.iter().map(|r| (*r).into()));
+                d.set(b"Annots".to_vec(), pdfcraft_cos::Object::Array(a));
+            })
+            .unwrap();
+            let mut alias_probe = cos.clone();
+            pdfcraft_forms::apply_script_changes(
+                &mut alias_probe,
+                &[pdfcraft_forms::FieldChange {
+                    name: "price".into(),
+                    fill_color: Some(vec!["RGB".into(), "1".into(), "0".into(), "0".into()]),
+                    ..Default::default()
+                }],
+                &mut pdfcraft_forms::NoScripts,
+            )
+            .unwrap();
+            for name in ["qty", "total"] {
+                let field = pdfcraft_forms::fields(&alias_probe).into_iter().find(|f| f.name == name).unwrap();
+                assert_eq!(pdfcraft_forms::look(&alias_probe, &field).fill, Some([1., 1., 1.]));
+            }
+            let mut s = Session::new();
+            s.set_javascript(false);
+            let id = s.open("shared-colors.pdf", None, Arc::new(pdfcraft_cos::write_full(&cos, &Default::default()).unwrap()), None).unwrap();
+            s.set_javascript(true);
+            let original_id = id;
+            let owned_reference = {
+                let doc = s.get(id).unwrap();
+                let widget = doc.form.iter().find(|f| f.name == "price").unwrap().widgets.first().unwrap().obj;
+                doc.editor.as_ref().unwrap().cos.get(widget).as_dict().unwrap().reference(b"MK").unwrap()
+            };
+            let out = if native {
+                let p = s.start_javascript(id, script, Some("go")).unwrap();
+                let crate::js::InteractiveEvent::Complete(out) = p.receiver.recv_timeout(std::time::Duration::from_secs(3)).unwrap() else {
+                    panic!("completion")
+                };
+                s.finish_javascript(p, out).unwrap()
+            } else {
+                s.run_javascript(id, script, None).unwrap()
+            };
+            assert_eq!(out.error, None);
+            let verify = |s: &Session, id, expected_fill, expected_border| {
+                let doc = s.get(id).unwrap();
+                let cos = &doc.editor.as_ref().unwrap().cos;
+                let f = doc.form.iter().find(|f| f.name == "price").unwrap();
+                assert_eq!(f.widgets.len(), 2);
+                let look = pdfcraft_forms::look(cos, f);
+                assert_eq!(look.fill, expected_fill);
+                assert_eq!(look.border, expected_border);
+                let actual_reference = cos.get(f.widgets.first().unwrap().obj).as_dict().unwrap().reference(b"MK").unwrap();
+                if id == original_id {
+                    assert_eq!(actual_reference, owned_reference);
+                }
+                for w in &f.widgets {
+                    assert_eq!(cos.get(w.obj).as_dict().unwrap().reference(b"MK"), Some(actual_reference));
+                }
+                for name in ["qty", "total"] {
+                    let f = doc.form.iter().find(|f| f.name == name).unwrap();
+                    let look = pdfcraft_forms::look(cos, f);
+                    assert_eq!(look.fill, Some([1., 1., 1.]));
+                    assert_eq!(look.border, Some([0., 0., 0.]));
+                    let mk = cos.get(f.widgets.first().unwrap().obj).as_dict().unwrap().get(b"MK").cloned().unwrap();
+                    assert_eq!(cos.resolve(&mk).as_dict().unwrap().get(b"CA").unwrap().as_string().unwrap().to_text(), "keep");
+                }
+            };
+            verify(&s, id, fill, border);
+            s.undo(id).unwrap();
+            verify(&s, id, Some([1., 1., 1.]), Some([0., 0., 0.]));
+            s.redo(id).unwrap();
+            verify(&s, id, fill, border);
+            let bytes = s.save_bytes(id).unwrap();
+            s.set_javascript(false);
+            let reopened = s.open("saved-colors.pdf", None, bytes, None).unwrap();
+            verify(&s, reopened, fill, border);
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn exact_button_target_ids_are_validated_before_script_execution() {
+    for native in [false, true] {
+        let mut s = Session::new().with_clock(|| 1_700_000_000);
+        let id = s.open("buttons.pdf", None, Arc::new(scripted_form()), None).unwrap();
+        let fields = s.get(id).unwrap().form.clone();
+        let go = fields.iter().find(|f| f.name == "go").unwrap();
+        let identity = crate::js::field_object_id(go.obj);
+        let price = crate::js::field_object_id(fields.iter().find(|f| f.name == "price").unwrap().obj);
+        let before = s.save_bytes(id).unwrap();
+        for (name, key) in [(Some("go"), price), (None, identity), (Some("missing"), identity), (Some("go"), u64::MAX)] {
+            if native {
+                assert!(s.start_javascript_target(id, "var shouldNotRun=1;", name, Some(key)).is_err());
+            } else {
+                assert!(s.run_javascript_target(id, "var shouldNotRun=1;", name, Some(key)).is_err());
+            }
+        }
+        assert_eq!(s.save_bytes(id).unwrap(), before);
+        assert_eq!(s.run_javascript(id, "typeof shouldNotRun", None).unwrap().result.as_deref(), Some("undefined"));
+        let out = s
+            .run_javascript_answers_target(
+                id,
+                "event.target.buttonSetCaption(app.response({cQuestion:'Caption'}));event.target.name;",
+                Some("go"),
+                Some(identity),
+                &[Some("answered".into())],
+            )
+            .unwrap();
+        assert_eq!(out.error, None);
+        assert_eq!(out.result.as_deref(), Some("go"));
+        assert_eq!(s.get(id).unwrap().form.iter().find(|f| f.name == "go").unwrap().widgets.first().unwrap().caption.as_deref(), Some("answered"));
+    }
+}

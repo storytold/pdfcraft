@@ -112,6 +112,38 @@ pub(crate) fn formatted(doc: &Document, f: &Field, value: &str, scripts: &mut dy
     Some(r.value)
 }
 
+/// Immediate and aliased MK references of one widget; cycles and depth are bounded.
+fn widget_mk_refs(doc: &Document, widget: ObjRef) -> Vec<ObjRef> {
+    let mut value = doc.get(widget).as_dict().and_then(|d| d.get(b"MK")).cloned();
+    let mut seen = Vec::new();
+    for _ in 0..64 {
+        let Some(Object::Ref(reference)) = value else { break };
+        if seen.contains(&reference) {
+            break;
+        }
+        seen.push(reference);
+        value = Some(doc.get(reference).as_ref().clone());
+    }
+    seen
+}
+
+/// Keep target widgets' shared indirect MK in place, while outside widgets retain old colors.
+fn protect_other_mk_owners(doc: &mut Document, field: &Field, owners: &std::collections::HashMap<ObjRef, Vec<ObjRef>>) -> Result<(), FormError> {
+    let own: HashSet<_> = field.widgets.iter().map(|w| w.obj).collect();
+    let refs: HashSet<_> = field.widgets.iter().filter_map(|w| doc.get(w.obj).as_dict().and_then(|d| d.reference(b"MK"))).collect();
+    for reference in refs {
+        for widget in owners.get(&reference).into_iter().flatten().filter(|w| !own.contains(w)) {
+            if !widget_mk_refs(doc, *widget).contains(&reference) {
+                continue;
+            }
+            let mk =
+                doc.get(*widget).as_dict().and_then(|d| d.get(b"MK")).map(|m| doc.resolve(m)).and_then(|v| v.as_dict().cloned()).unwrap_or_default();
+            doc.update_dict(*widget, |d| d.set(b"MK".to_vec(), Object::Dict(mk)))?;
+        }
+    }
+    Ok(())
+}
+
 /// Apply script changes to other fields (values written without re-running their scripts;
 /// read-only, required and visibility as flags; button captions). `except` is the event's own
 /// field, whose value the event sets.
@@ -129,6 +161,17 @@ pub(crate) fn apply_changes(doc: &mut Document, changes: &[FieldChange], except:
         }
     }
     let all = fields(doc);
+    let mut mk_owners: std::collections::HashMap<ObjRef, Vec<ObjRef>> = std::collections::HashMap::new();
+    if changes.iter().any(|c| c.fill_color.is_some() || c.stroke_color.is_some()) {
+        for field in &all {
+            for widget in &field.widgets {
+                for reference in widget_mk_refs(doc, widget.obj) {
+                    mk_owners.entry(reference).or_default().push(widget.obj);
+                }
+            }
+        }
+    }
+
     for c in changes {
         let Some(f) = all.iter().find(|f| f.name == c.name && c.object.is_none_or(|obj| f.obj == obj)) else { continue };
         if let Some(v) = &c.value
@@ -175,6 +218,9 @@ pub(crate) fn apply_changes(doc: &mut Document, changes: &[FieldChange], except:
                     doc.update_dict(w.obj, |d| d.set(b"F".to_vec(), Object::Int(new)))?;
                 }
             }
+        }
+        if c.fill_color.is_some() || c.stroke_color.is_some() {
+            protect_other_mk_owners(doc, f, &mk_owners)?;
         }
         let appearance = crate::LookPatch {
             text: c.text_color.as_deref().map(js_rgb).transpose()?,

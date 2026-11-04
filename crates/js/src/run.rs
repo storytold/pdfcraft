@@ -182,17 +182,20 @@ pub(crate) fn run_in_context(
 ) -> Outcome {
     ctx.runtime_limits_mut().set_loop_iteration_limit(limits.loop_iterations);
     ctx.runtime_limits_mut().set_recursion_limit(limits.recursion);
-    let (icons, objects) = ctx
+    let (icons, mut objects) = ctx
         .remove_data::<Shared>()
         .map(|h| {
             let h = h.into_inner();
             (h.icons, h.objects)
         })
         .unwrap_or_default();
+    let field_keys = fields.iter().map(|f| crate::host::field_cache_key(&f.name, f.object_id)).collect::<BTreeSet<_>>();
+    objects.retain(|key, _| field_keys.contains(key));
     ctx.insert_data(RefCell::new(Host {
         fields,
         icons,
         objects,
+        field_keys,
         changed: BTreeSet::new(),
         alerts: Vec::new(),
         console: Vec::new(),

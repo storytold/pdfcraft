@@ -241,6 +241,7 @@ impl Automation {
                 });
                 let mut v = json!({
                     "name": f.name,
+                    "field_id": pdfcraft_engine::js::field_object_id(f.obj),
                     "type": kind_name(f.kind),
                     "value": match f.kind {
                         FormFieldKind::CheckBox => json!(!f.value.is_empty()),

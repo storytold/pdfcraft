@@ -634,3 +634,65 @@ mod event_identity_tests {
         assert_eq!(out.result.as_deref(), Some("true"));
     }
 }
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod cache_capacity_tests {
+    use super::*;
+    #[test]
+    fn every_exposed_field_keeps_identity_beyond_4096_entries() {
+        let fields = Arc::new(
+            (0..4100)
+                .map(|i| {
+                    let mut f = FieldState::new(format!("f{i}"), crate::FieldType::Text, vec![]);
+                    f.object_id = Some(i);
+                    f
+                })
+                .collect(),
+        );
+        let job=Job{script:"for(var i=0;i<4100;i++)getField('f'+i);var held=getField('f4099');held.custom=42;held===getField('f4099') && getField('f4099').custom===42;".into(),event:Event::doc("Console"),doc:Default::default(),fields,doc_scripts:vec![],calculations:vec![]};
+        let mut session = ScriptSession::default();
+        let out = session.run(job.clone(), &[]);
+        assert_eq!(out.error, None);
+        assert_eq!(out.result.as_deref(), Some("true"));
+        let out = session.run(Job { script: "held===getField('f4099') && held.custom===42;".into(), ..job }, &[]);
+        assert_eq!(out.result.as_deref(), Some("true"));
+    }
+}
+
+#[cfg(test)]
+mod cache_lifecycle_tests {
+    use super::*;
+    #[test]
+    fn cache_follows_object_renames_and_prunes_removed_fields() {
+        let mut field = FieldState::new("old", crate::FieldType::Text, vec![]);
+        field.object_id = Some(17);
+        let mut job = Job {
+            script: "var held=getField('old');held.custom=42;".into(),
+            event: Event::doc("Console"),
+            doc: Default::default(),
+            fields: Arc::new(vec![field.clone()]),
+            doc_scripts: vec![],
+            calculations: vec![],
+        };
+        let mut realm = Realm::new();
+        assert_eq!(realm.run(job.clone()).error, None);
+        for i in 0..16 {
+            field.name = format!("renamed{i}");
+            job.fields = Arc::new(vec![field.clone()]);
+            job.script = format!("held.setFocus();held===getField('{}') && held.name==='{}' && held.custom===42;", field.name, field.name);
+            let out = realm.run(job.clone());
+            assert_eq!(out.error, None);
+            assert_eq!(out.result.as_deref(), Some("true"));
+            assert_eq!(out.requests, [crate::Request::Focus(field.name.clone())]);
+            assert_eq!(crate::host::host(realm.context.as_ref().unwrap()).unwrap().borrow().objects.len(), 1);
+        }
+        field.object_id = Some(18);
+        field.name = "replacement".into();
+        job.fields = Arc::new(vec![field]);
+        job.script = "getField('replacement');".into();
+        assert_eq!(realm.run(job.clone()).error, None);
+        assert_eq!(crate::host::host(realm.context.as_ref().unwrap()).unwrap().borrow().objects.len(), 1);
+        job.script = "held.value;".into();
+        assert!(realm.run(job).error.is_some());
+    }
+}

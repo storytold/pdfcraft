@@ -1,6 +1,6 @@
 use super::document::{get_field, get_nth_field_name, noop, num_fields, page_num_get, page_num_set, print, reset_form, submit_form};
 use super::format::{printd, printf, printx, scand};
-use super::host::{arg, error, function, host, read, s, strings, text, text_line};
+use super::host::{arg, error, function, host, s, strings, text, text_line};
 use super::model::{DISPLAY_HIDDEN, DISPLAY_NO_PRINT, DISPLAY_NO_VIEW, DISPLAY_VISIBLE, Event, Panel, Request};
 use super::{
     Arc, Attribute, Context, JsArray, JsObject, JsResult, JsString, JsValue, Message, MessageButtons, MessageIcon, NativeFunction, ObjectInitializer,
@@ -265,18 +265,27 @@ fn calculate_now(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsVa
 fn af_simple_calculate(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let op = text(&arg(args, 0), ctx)?;
     let names = strings(&arg(args, 1), ctx)?;
-    let mut values = Vec::new();
-    for name in names {
-        let field = read(ctx, &(JsString::from(name), None))?;
-        values.extend(field.value.iter().map(|v| super::host::as_number(v).unwrap_or(0.0)));
+    let fields = host(ctx)?.borrow().fields.clone();
+    // Charge selector comparisons before group expansion; the iterator keeps memory independent
+    // of how often selectors overlap or duplicate the same field.
+    let selector_bytes = names.iter().fold(0usize, |n, s| n.saturating_add(s.len()));
+    if fields.len().saturating_mul(names.len().saturating_add(selector_bytes)) > 1 << 24 {
+        return Err(error("calculation field lookup exceeds its work limit"));
     }
+    let values = names
+        .iter()
+        .flat_map(|name| fields.iter().filter(move |f| f.name == *name || f.name.strip_prefix(name).is_some_and(|rest| rest.starts_with('.'))))
+        .flat_map(|field| field.value.iter())
+        .map(|v| super::host::as_number(v).unwrap_or(0.0));
     let result = match op.as_str() {
-        "SUM" => values.iter().sum(),
-        "PRD" => values.iter().product(),
-        "AVG" if values.is_empty() => 0.0,
-        "AVG" => values.iter().sum::<f64>() / values.len() as f64,
-        "MIN" => values.iter().copied().reduce(f64::min).unwrap_or(0.0),
-        "MAX" => values.iter().copied().reduce(f64::max).unwrap_or(0.0),
+        "SUM" => values.sum(),
+        "PRD" => values.product(),
+        "AVG" => {
+            let (count, total) = values.fold((0usize, 0.0), |(n, sum), v| (n.saturating_add(1), sum + v));
+            if count == 0 { 0.0 } else { total / count as f64 }
+        }
+        "MIN" => values.reduce(f64::min).unwrap_or(0.0),
+        "MAX" => values.reduce(f64::max).unwrap_or(0.0),
         _ => 0.0,
     };
     Ok(s(&if result.is_finite() { result.to_string() } else { "0".into() }))

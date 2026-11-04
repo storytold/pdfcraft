@@ -164,11 +164,25 @@ fn display(doc: &pdfcraft_cos::Document, f: &Field) -> i32 {
     }
 }
 
+/// Document-local PDF field identity used by snapshots, tools and native hit tests.
+pub fn field_object_id(object: pdfcraft_cos::ObjRef) -> u64 {
+    (u64::from(object.num) << 16) | u64::from(object.generation)
+}
+
+fn validate_script_target(target: Option<&str>, identity: Option<u64>, fields: &[Field]) -> Result<(), EditError> {
+    if let Some(id) = identity
+        && !fields.iter().any(|f| Some(f.name.as_str()) == target && field_object_id(f.obj) == id)
+    {
+        return Err(EditError::Invalid("script field identity does not match the named field in this document".into()));
+    }
+    Ok(())
+}
+
 /// Snapshot a current form field using page geometry already read once for this runner.
 /// Values/appearances come from `doc` and `f`, never from the cached calculation plan.
 pub fn field_state(doc: &pdfcraft_cos::Document, f: &Field, geometry: &pdfcraft_js::DocInfo) -> pdfcraft_js::FieldState {
     let mut s = pdfcraft_js::FieldState::new(f.name.clone(), kind(f.kind), f.value.clone());
-    s.object_id = Some((u64::from(f.obj.num) << 16) | u64::from(f.obj.generation));
+    s.object_id = Some(field_object_id(f.obj));
     s.default = f.default.clone();
     s.default_known = pdfcraft_forms::default_value_known(doc, f);
     s.readonly = f.read_only();
@@ -477,15 +491,31 @@ impl Session {
         target: Option<&str>,
         answers: &[Option<String>],
     ) -> Result<Outcome, EditError> {
+        self.run_javascript_answers_target(id, script, target, None, answers)
+    }
+    /// Run with an optional exact PDF field identity; name-only callers keep first-match behavior.
+    pub fn run_javascript_target(&mut self, id: DocId, script: &str, target: Option<&str>, target_id: Option<u64>) -> Result<Outcome, EditError> {
+        self.run_javascript_answers_target(id, script, target, target_id, &[])
+    }
+    /// Exact-target counterpart of run_javascript_answers, including deterministic prompt replies.
+    pub fn run_javascript_answers_target(
+        &mut self,
+        id: DocId,
+        script: &str,
+        target: Option<&str>,
+        target_id: Option<u64>,
+        answers: &[Option<String>],
+    ) -> Result<Outcome, EditError> {
         if self.js_off {
             return Err(EditError::Invalid("JavaScript is turned off (Preferences ▸ JavaScript)".into()));
         }
         let doc = self.get(id).ok_or(EditError::NoDocument)?;
         let cos = doc.editor.as_ref().map(|e| e.cos.clone()).ok_or_else(|| EditError::ReadOnly(doc.read_only_reason.clone().unwrap_or_default()))?;
+        validate_script_target(target, target_id, &doc.form)?;
         // A button PdfCraft generated from an XFA template runs its XFA click script.
         if let Some(t) = target
             && let Some(tpl) = doc.xfa_template.clone()
-            && let Some(field) = doc.form.iter().find(|f| f.name == t)
+            && let Some(field) = doc.form.iter().find(|f| f.name == t && target_id.is_none_or(|id| field_object_id(f.obj) == id))
             && let Some(som) = crate::xfa::clickable_som(&cos, &tpl, field)
         {
             self.apply(id, Edit::XfaEvent { som, activity: "click".into() })?;
@@ -506,7 +536,7 @@ impl Session {
         let fields = pdfcraft_forms::fields(&cos);
         let states = std::sync::Arc::new(fields.iter().map(|f| field_state(&cos, f, &runner.doc)).collect::<Vec<_>>());
         let event = match target {
-            Some(t) => pdfcraft_js::Event { will_commit: false, ..pdfcraft_js::Event::field("Mouse Up", t, "") },
+            Some(t) => pdfcraft_js::Event { will_commit: false, target_id, ..pdfcraft_js::Event::field("Mouse Up", t, "") },
             None => pdfcraft_js::Event::doc("Console"),
         };
         let calculations = calculation_scripts(&cos, &fields);
@@ -862,6 +892,16 @@ impl Session {
     }
     /// Capture the current fields/view and start a native script without blocking the caller on its prompts.
     pub fn start_javascript(&mut self, id: DocId, script: &str, target: Option<&str>) -> Result<PendingScript, EditError> {
+        self.start_javascript_target(id, script, target, None)
+    }
+    /// Start an asynchronous button event retaining the clicked field's exact identity.
+    pub fn start_javascript_target(
+        &mut self,
+        id: DocId,
+        script: &str,
+        target: Option<&str>,
+        target_id: Option<u64>,
+    ) -> Result<PendingScript, EditError> {
         if self.js_off {
             return Err(EditError::Invalid("JavaScript is disabled".into()));
         }
@@ -872,12 +912,13 @@ impl Session {
         runner.doc.runtime_highlight = doc.js_highlight;
         runner.doc.page = doc.js_page;
         let fields = pdfcraft_forms::fields(cos);
+        validate_script_target(target, target_id, &fields)?;
         let states = std::sync::Arc::new(fields.iter().map(|f| field_state(cos, f, &runner.doc)).collect::<Vec<_>>());
         let job = pdfcraft_js::session::Job {
             script: script.into(),
             event: target.map_or_else(
                 || pdfcraft_js::Event::doc("Console"),
-                |t| pdfcraft_js::Event { will_commit: false, ..pdfcraft_js::Event::field("Mouse Up", t, "") },
+                |t| pdfcraft_js::Event { will_commit: false, target_id, ..pdfcraft_js::Event::field("Mouse Up", t, "") },
             ),
             doc: runner.doc,
             fields: states.clone(),

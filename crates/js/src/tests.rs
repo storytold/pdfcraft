@@ -423,7 +423,8 @@ fn app_alert_titles_are_clipped_and_charged() {
     // has no room for is left out and counted.
     let mut h = Host {
         icons: Vec::new(),
-        objects: Vec::new(),
+        objects: Default::default(),
+        field_keys: Default::default(),
         fields: Arc::new(Vec::new()),
         changed: BTreeSet::new(),
         alerts: Vec::new(),
@@ -2166,4 +2167,40 @@ fn caught_reset_limit_cannot_admit_additional_resets() {
     assert_eq!(out.error, None);
     assert!(out.reset_limit_exceeded);
     assert_eq!(out.requests.iter().filter(|r| matches!(r, Request::Reset(_))).count(), 64);
+}
+
+#[test]
+fn af_simple_calculate_expands_groups_and_duplicate_names() {
+    let fields = vec![
+        FieldState::new("row.0", FieldType::Text, vec!["2".into()]),
+        FieldState::new("row.1", FieldType::Text, vec!["3".into()]),
+        FieldState::new("row.1", FieldType::Text, vec!["5".into()]),
+        FieldState::new("rowExtra", FieldType::Text, vec!["100".into()]),
+    ];
+    for (op, names, expected) in [
+        ("SUM", "['row']", 10.0),
+        ("SUM", "['row.1']", 8.0),
+        ("SUM", "['row','row.1']", 18.0),
+        ("PRD", "['row']", 30.0),
+        ("AVG", "['row']", 10.0 / 3.0),
+        ("MIN", "['row']", 2.0),
+        ("MAX", "['row']", 5.0),
+        ("SUM", "['missing']", 0.0),
+        ("PRD", "['missing']", 1.0),
+        ("AVG", "['missing']", 0.0),
+        ("MIN", "[]", 0.0),
+        ("MAX", "[]", 0.0),
+    ] {
+        let script = format!("event.value=AFSimple_Calculate('{op}',{names});event.value;");
+        let out = run(&script, &Event::field("Calculate", "out", ""), &Default::default(), &fields, &[], Default::default());
+        assert_eq!(out.error, None, "{script}");
+        assert!((out.result.unwrap().parse::<f64>().unwrap() - expected).abs() < 1e-10, "{script}");
+    }
+}
+#[test]
+fn af_simple_calculate_bounds_selector_work_before_expansion() {
+    let fields = vec![FieldState::new("n", FieldType::Text, vec!["1".into()]); 4096];
+    let out =
+        run("AFSimple_Calculate('SUM',new Array(4096).fill('n'));", &Event::doc("Console"), &Default::default(), &fields, &[], Default::default());
+    assert!(out.error.as_deref().is_some_and(|e| e.contains("calculation field lookup exceeds")));
 }

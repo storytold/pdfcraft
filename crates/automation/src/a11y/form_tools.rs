@@ -42,7 +42,15 @@ impl Automation {
                 .collect::<Result<Vec<_>>>()?,
             _ => return Err(ToolError::InvalidArgs("answers must be an array of at most 32 strings or null".into())),
         };
-        let o = self.session.run_javascript_answers(id, a.str("script")?, a.opt_str("field")?, &answers).map_err(failed)?;
+        let identity =
+            a.0.get("field_id")
+                .map(|v| {
+                    v.as_u64()
+                        .filter(|id| *id < 1 << 48)
+                        .ok_or_else(|| ToolError::InvalidArgs("field_id must be an integer between 0 and 281474976710655".into()))
+                })
+                .transpose()?;
+        let o = self.session.run_javascript_answers_target(id, a.str("script")?, a.opt_str("field")?, identity, &answers).map_err(failed)?;
         let reqs: Vec<Value> = o.requests.iter().map(request_json).collect();
         let alerts: Vec<Value> = o.alerts.iter().map(alert_json).collect();
         Ok(json!({ "alerts": alerts, "console": o.console, "requests": reqs, "error": o.error, "document_errors": o.doc_errors, "result": o.result }))

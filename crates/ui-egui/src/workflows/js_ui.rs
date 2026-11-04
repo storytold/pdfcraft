@@ -158,16 +158,20 @@ impl PdfCraftApp {
 
     /// Run a push button's JavaScript (its Mouse Up action).
     pub fn run_button_script(&mut self, id: DocId, field: &str, script: &str) {
+        self.run_button_script_target(id, field, None, script);
+    }
+    /// Run the action of the exact clicked button, preserving legacy name-only entry points.
+    pub fn run_button_script_target(&mut self, id: DocId, field: &str, identity: Option<u64>, script: &str) {
         // A script reads the fields: include what's still being typed in one (#166).
         if !self.commit_form_typing() {
             return;
         }
         #[cfg(not(target_arch = "wasm32"))]
         if self.session.get(id).is_some_and(|d| d.info.xfa.is_none()) {
-            self.start_ui_script(id, script, Some(field));
+            self.start_ui_script(id, script, Some(field), identity);
             return;
         }
-        match self.session.run_javascript(id, script, Some(field)) {
+        match self.session.run_javascript_target(id, script, Some(field), identity) {
             Ok(o) => {
                 if let Some(i) = self.views.iter().position(|v| v.id == id)
                     && let Some(info) = self.session.get(id).map(|d| d.info.clone())

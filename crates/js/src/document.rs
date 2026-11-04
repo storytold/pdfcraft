@@ -19,15 +19,15 @@ pub(crate) fn field_object(ctx: &mut Context, name: &str) -> JsObject {
 }
 /// Cache by object identity as well as name so duplicate-named targets remain distinct.
 pub(crate) fn field_object_by_id(ctx: &mut Context, name: &str, id: Option<u64>) -> JsObject {
-    let key = (name.to_string(), id);
-    if let Some(object) = host(ctx).ok().and_then(|h| h.borrow().objects.iter().find(|(n, _)| *n == key).map(|(_, o)| o.clone())) {
+    let key = crate::host::field_cache_key(name, id);
+    if let Some(object) = host(ctx).ok().and_then(|h| h.borrow().objects.get(&key).cloned()) {
         return object;
     }
     let object = field_object_new(ctx, name, id);
     if let Ok(h) = host(ctx)
-        && h.borrow().objects.len() < 4096
+        && h.borrow().field_keys.contains(&key)
     {
-        h.borrow_mut().objects.push((key, object.clone()));
+        h.borrow_mut().objects.insert(key, object.clone());
     }
     object
 }
@@ -263,7 +263,8 @@ fn field_object_new(ctx: &mut Context, name: &str, id: Option<u64>) -> JsObject 
         Ok(JsValue::undefined())
     }
     fn set_focus(_: &JsValue, _: &[JsValue], name: &FieldKey, c: &mut Context) -> JsResult<JsValue> {
-        host(c)?.borrow_mut().request(Request::Focus(name.0.to_std_string_escaped()));
+        let current_name = read(c, name)?.name;
+        host(c)?.borrow_mut().request(Request::Focus(current_name));
         Ok(JsValue::undefined())
     }
 

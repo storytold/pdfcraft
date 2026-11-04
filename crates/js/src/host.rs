@@ -8,7 +8,8 @@ use super::{
 pub(crate) struct Host {
     pub(crate) fields: Arc<Vec<FieldState>>,
     pub(crate) icons: Vec<(super::JsObject, u64)>,
-    pub(crate) objects: Vec<((String, Option<u64>), super::JsObject)>,
+    pub(crate) objects: std::collections::HashMap<(String, Option<u64>), super::JsObject>,
+    pub(crate) field_keys: BTreeSet<(String, Option<u64>)>,
     pub(crate) changed: BTreeSet<usize>,
     pub(crate) alerts: Vec<Message>,
     pub(crate) console: Vec<String>,
@@ -206,6 +207,11 @@ pub(crate) fn colour(c: &Option<Vec<String>>, ctx: &mut Context) -> JsValue {
 // ── field objects ───────────────────────────────────────────────────────────────────────────
 
 pub(crate) type FieldKey = (JsString, Option<u64>);
+
+/// PDF identities survive renames; name-only synthetic fields retain name lookup semantics.
+pub(crate) fn field_cache_key(name: &str, id: Option<u64>) -> (String, Option<u64>) {
+    (if id.is_some() { String::new() } else { name.to_string() }, id)
+}
 
 fn field_index(ctx: &Context, name: &FieldKey) -> JsResult<usize> {
     let n = name.0.to_std_string_escaped();

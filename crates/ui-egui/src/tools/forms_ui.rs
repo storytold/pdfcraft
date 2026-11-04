@@ -64,8 +64,8 @@ pub struct FormView {
     pub unbaked: HashSet<(String, usize)>,
     /// A message for the app to show (e.g. "buttons run JavaScript").
     pub notice: Option<FormNotice>,
-    /// A push button was clicked: (its field name, what it does).
-    pub button: Option<(String, pdfcraft_engine::form_scripts::ButtonAction)>,
+    /// A push button was clicked: (its field name, exact PDF identity, what it does).
+    pub button: Option<(String, u64, pdfcraft_engine::form_scripts::ButtonAction)>,
     /// The focused check box or radio button was clicked. It toggles once no other edit is
     /// queued: the text the click committed goes first, and the toggle is dropped if that text
     /// is refused and its field reopens.
@@ -232,7 +232,7 @@ pub(crate) fn page_input(
     match f.kind {
         _ if f.read_only() || w.read_only => view.forms.notice = Some(FormNotice::ReadOnly(f.name.clone())),
         FormFieldKind::PushButton => match &f.button {
-            Some(a) => view.forms.button = Some((f.name.clone(), a.clone())),
+            Some(a) => view.forms.button = Some((f.name.clone(), pdfcraft_engine::js::field_object_id(f.obj), a.clone())),
             None => view.forms.notice = Some(FormNotice::NoAction(f.name.clone())),
         },
         FormFieldKind::Signature => view.sign.field = Some(f.name.clone()),

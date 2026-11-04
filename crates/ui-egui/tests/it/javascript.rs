@@ -337,6 +337,7 @@ fn native_popup_keeps_undo_shortcuts_out_of_the_document() {
 /// A script response stays clickable while another modal remains open underneath it.
 #[test]
 fn native_script_prompt_is_above_an_existing_dialog() {
+    let _gpu = crate::gpu();
     for open_first in [true, false] {
         let mut h = harness();
         let id = h.state().active_ids().unwrap().1;
@@ -367,5 +368,127 @@ fn native_script_prompt_is_above_an_existing_dialog() {
         h.key_press(egui::Key::Escape);
         wait_value(&mut h, "greeting", "null");
         assert_eq!(h.state().dialog, Some(Dialog::JsConsole));
+    }
+}
+
+/// A real pointer click must retain the second same-named button through native completion.
+#[test]
+fn clicking_duplicate_named_buttons_targets_the_clicked_object() {
+    let _gpu = crate::gpu();
+    use pdfcraft_cos::{Dict, ObjRef, Object, PdfString};
+    use std::sync::Arc;
+    let mut cos = pdfcraft_cos::Document::open(Arc::new(form())).unwrap();
+    let first = ObjRef::new(5, 0);
+    let action = |caption: &str| {
+        let mut a = Dict::new();
+        a.set(b"S".to_vec(), Object::name("JavaScript"));
+        a.set(b"JS".to_vec(), PdfString::text(&format!("event.target.buttonSetCaption('{caption}');")));
+        Object::Dict(a)
+    };
+    cos.update_dict(first, |d| {
+        d.set(b"A".to_vec(), action("first"));
+        let mut mk = Dict::new();
+        mk.set(b"CA".to_vec(), PdfString::text("idle"));
+        d.set(b"MK".to_vec(), Object::Dict(mk));
+    })
+    .unwrap();
+    let mut second = cos.get(first).as_dict().unwrap().clone();
+    second.set(b"Rect".to_vec(), Object::Array(vec![160.into(), 200.into(), 280.into(), 230.into()]));
+    second.set(b"A".to_vec(), action("second"));
+    let second = cos.add(Object::Dict(second));
+    let root = cos.root().unwrap();
+    cos.update_dict(root, |d| {
+        let mut af = d.get(b"AcroForm").unwrap().as_dict().unwrap().clone();
+        let mut refs = af.get(b"Fields").unwrap().as_array().unwrap().clone();
+        refs.push(second.into());
+        af.set(b"Fields".to_vec(), Object::Array(refs));
+        d.set(b"AcroForm".to_vec(), Object::Dict(af));
+    })
+    .unwrap();
+    cos.update_dict(ObjRef::new(3, 0), |d| {
+        let mut a = d.get(b"Annots").unwrap().as_array().unwrap().clone();
+        a.push(second.into());
+        d.set(b"Annots".to_vec(), Object::Array(a));
+    })
+    .unwrap();
+    let bytes = pdfcraft_cos::write_full(&cos, &Default::default()).unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("duplicate-buttons.pdf", None, bytes).unwrap();
+        app
+    });
+    h.run_steps(6);
+    let captions = |h: &Harness<'_, PdfCraftApp>| {
+        let id = h.state().active_ids().unwrap().1;
+        h.state()
+            .session
+            .get(id)
+            .unwrap()
+            .form
+            .iter()
+            .filter(|f| f.name == "hello")
+            .map(|f| f.widgets.first().and_then(|w| w.caption.clone()))
+            .collect::<Vec<_>>()
+    };
+    let r = h.state().views[0].page_screen_rect(0).unwrap();
+    let at = r.min + egui::vec2(r.width() * 220.0 / 300.0, r.height() * 85.0 / 300.0);
+    h.hover_at(at);
+    h.run_steps(1);
+    h.drag_at(at);
+    h.run_steps(1);
+    h.drop_at(at);
+    for _ in 0..200 {
+        h.run_steps(2);
+        if captions(&h).iter().any(|s| s.as_deref() == Some("second")) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(captions(&h), [Some("idle".into()), Some("second".into())]);
+    assert!(h.state_mut().execute("edit.undo"));
+    h.run_steps(3);
+    assert_eq!(captions(&h), [Some("idle".into()), Some("idle".into())]);
+    assert!(h.state_mut().execute("edit.redo"));
+    h.run_steps(3);
+    assert_eq!(captions(&h), [Some("idle".into()), Some("second".into())]);
+    let r = h.state().views[0].page_screen_rect(0).unwrap();
+    let at = r.min + egui::vec2(r.width() * 70.0 / 300.0, r.height() * 85.0 / 300.0);
+    h.hover_at(at);
+    h.run_steps(1);
+    h.drag_at(at);
+    h.run_steps(1);
+    h.drop_at(at);
+    for _ in 0..200 {
+        h.run_steps(2);
+        if captions(&h).first().and_then(|s| s.as_deref()) == Some("first") {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(captions(&h), [Some("first".into()), Some("second".into())]);
+    let id = h.state().active_ids().unwrap().1;
+    let bytes = h.state().session.save_bytes(id).unwrap();
+    let mut reopened = pdfcraft_engine::Session::new();
+    reopened.set_javascript(false);
+    let reopened_id = reopened.open("saved-buttons.pdf", None, bytes, None).unwrap();
+    assert_eq!(
+        reopened
+            .get(reopened_id)
+            .unwrap()
+            .form
+            .iter()
+            .filter(|f| f.name == "hello")
+            .map(|f| f.widgets.first().and_then(|w| w.caption.clone()))
+            .collect::<Vec<_>>(),
+        [Some("first".into()), Some("second".into())]
+    );
+    if let Ok(path) = std::env::var("PDFCRAFT_REVIEW12_BUTTON_SCREENSHOT") {
+        // Let the asynchronous page raster catch up with the final accepted script edit.
+        for _ in 0..60 {
+            h.run_steps(2);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        h.render().unwrap().save(path).unwrap();
     }
 }

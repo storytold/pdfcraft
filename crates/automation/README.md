@@ -276,3 +276,5 @@ FreeText appearance and survives reopening. Other mark/signature types reject
 ## AcroForm script interactions
 
 `js_run` accepts optional `answers` (strings or null, at most 32), consumed in popup, response and alert order. Missing responses cancel menus/input; explicit viewer requests remain data in automation. See [the runtime contract](../../docs/acroform-script-workflows.md).
+
+For distinct PDF fields sharing a name, form_fields exposes a document-local integer field_id. Pass it with field to js_run to bind event.target to that exact field (including ordered answers); omit it for existing first-match behavior. Mismatched names/IDs, missing names and non-integer/out-of-range IDs are refused before execution.

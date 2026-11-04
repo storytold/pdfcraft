@@ -44,14 +44,14 @@ fn menu(ui: &mut egui::Ui, items: &[MenuItem], answer: &mut Option<String>) {
 }
 impl PdfCraftApp {
     /// Start one explicit button interaction with captured document/view state and leave egui responsive.
-    pub(crate) fn start_ui_script(&mut self, id: DocId, script: &str, field: Option<&str>) {
+    pub(crate) fn start_ui_script(&mut self, id: DocId, script: &str, field: Option<&str>, identity: Option<u64>) {
         if self.script_pending.is_some() {
             return;
         }
         let Some(view) = self.views.iter().find(|v| v.id == id) else { return };
         let (zoom, page, highlight) = (view.zoom, view.current, view.highlight_fields);
         self.session.set_javascript_view(id, zoom as f64 * 100.0, highlight, page);
-        match self.session.start_javascript(id, script, field) {
+        match self.session.start_javascript_target(id, script, field, identity) {
             Ok(run) => {
                 self.script_pending =
                     Some(Pending { run, prompt: None, text: String::new(), focus: false, started: Instant::now(), zoom, page, serial: 0 })
@@ -214,7 +214,7 @@ mod review_tests {
         let bytes = app.session.create_blank(200.0, 300.0, 1).unwrap();
         app.open_bytes("synthetic.pdf", None, bytes.to_vec()).unwrap();
         let id = app.active_ids().unwrap().1;
-        app.start_ui_script(id, "app.response({cQuestion:'Wait'});", None);
+        app.start_ui_script(id, "app.response({cQuestion:'Wait'});", None, None);
         let ctx = egui::Context::default();
         for _ in 0..300 {
             app.poll_script_dialog(&ctx);
