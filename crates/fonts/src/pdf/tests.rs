@@ -795,3 +795,13 @@ fn low_codes_resolve_to_the_covering_range() {
     assert_eq!(covered, [5, 6, 7, 100, 101]);
     assert_eq!((u.covering(0xFFFF).is_some(), u.covering(0x1_0001).is_some(), u.covering(0x1_0002).is_none()), (true, true, true));
 }
+
+#[test]
+fn base_font_name_matches_the_metrics_name() {
+    let doc = Document::new_empty();
+    let mut f = Dict::new();
+    f.set(b"BaseFont".to_vec(), Object::name("ABCDEF+Body"));
+    assert_eq!(base_font_name(&doc, &f), "ABCDEF+Body");
+    assert_eq!(base_font_name(&doc, &f), Metrics::from_dict(&doc, &f).base_font);
+    assert_eq!(base_font_name(&doc, &Dict::new()), "");
+}

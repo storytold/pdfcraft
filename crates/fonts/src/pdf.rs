@@ -559,6 +559,20 @@ fn number(t: &Tok) -> Option<u32> {
     }
 }
 
+/// The font's `/BaseFont` (a Type 3 font's descriptor `/FontName` when it has none), read without
+/// building its metrics, so it decodes no CMap.
+pub fn base_font_name(doc: &Document, font: &Dict) -> String {
+    font.name(b"BaseFont")
+        .map(|name| String::from_utf8_lossy(name).into_owned())
+        .or_else(|| {
+            (font.name(b"Subtype") == Some(b"Type3"))
+                .then(|| dict(doc, font.get(b"FontDescriptor")))
+                .flatten()
+                .and_then(|d| d.name(b"FontName").map(|name| String::from_utf8_lossy(name).into_owned()))
+        })
+        .unwrap_or_default()
+}
+
 /// Codespace ranges and CID mappings from an embedded CMap stream, at most
 /// [`MAX_CMAP_RANGES`] of each (every glyph searches them).
 #[allow(clippy::type_complexity)]
@@ -633,16 +647,7 @@ impl Metrics {
 
     pub fn from_dict(doc: &Document, font: &Dict) -> Self {
         let mut m = Self::read_metrics(doc, font);
-        let base = font
-            .name(b"BaseFont")
-            .map(|name| String::from_utf8_lossy(name).into_owned())
-            .or_else(|| {
-                (font.name(b"Subtype") == Some(b"Type3"))
-                    .then(|| dict(doc, font.get(b"FontDescriptor")))
-                    .flatten()
-                    .and_then(|d| d.name(b"FontName").map(|name| String::from_utf8_lossy(name).into_owned()))
-            })
-            .unwrap_or_default();
+        let base = base_font_name(doc, font);
         m.subset = base.len() > 7 && base.as_bytes()[6] == b'+' && base[..6].bytes().all(|b| b.is_ascii_uppercase());
         let (bold, italic) = style_from_name(&base);
         m.bold |= bold;
