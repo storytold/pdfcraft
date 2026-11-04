@@ -63,6 +63,28 @@ impl Matrix {
             + a(0, 2) * (a(1, 0) * a(2, 1) - a(1, 1) * a(2, 0))
     }
 
+    /// The determinant of the whole matrix, by expansion along the last row.
+    fn det4(&self) -> f64 {
+        (0..4)
+            .map(|j| {
+                let cols: Vec<usize> = (0..4).filter(|&c| c != j).collect();
+                let a = |i: usize, k: usize| cols.get(k).map_or(0.0, |&c| self.at(i, c));
+                let minor = a(0, 0) * (a(1, 1) * a(2, 2) - a(1, 2) * a(2, 1)) - a(0, 1) * (a(1, 0) * a(2, 2) - a(1, 2) * a(2, 0))
+                    + a(0, 2) * (a(1, 0) * a(2, 1) - a(1, 1) * a(2, 0));
+                let sign = if (3 + j) % 2 == 0 { 1.0 } else { -1.0 };
+                sign * self.at(3, j) * minor
+            })
+            .sum()
+    }
+
+    /// Whether mapping points through this matrix turns them inside out. Where the point is
+    /// divided by `w`, the Jacobian's sign is the sign of the 4×4 determinant; a last row of
+    /// zeros (no division) falls back to the 3×3 block.
+    fn mirrors(&self) -> bool {
+        let det = self.det4();
+        if det == 0.0 { self.det3() < 0.0 } else { det < 0.0 }
+    }
+
     /// Cofactor `(i, j)` of the upper-left 3×3 block (`i`, `j` < 3).
     fn cofactor(&self, i: usize, j: usize) -> f64 {
         let (r0, r1) = ((i + 1) % 3, (i + 2) % 3);
@@ -73,8 +95,9 @@ impl Matrix {
 
 impl TriangleMesh {
     /// This mesh with every position mapped through `m` and every stored normal through its
-    /// inverse transpose (renormalised); a mirroring `m` (negative determinant) reverses each
-    /// triangle so the outside stays counter-clockwise. A projective `m` (a last row other than
+    /// inverse transpose (renormalised); a mirroring `m` (negative 4×4 determinant, which a
+    /// negative `w` can cause too) reverses each triangle so the outside stays
+    /// counter-clockwise. A projective `m` (a last row other than
     /// `[0, 0, 0, w]`) bends the surface per point, so the stored normals are dropped.
     ///
     /// ```
@@ -96,8 +119,8 @@ impl TriangleMesh {
         }
         // The cofactor matrix is det times the inverse transpose, so its sign is corrected
         // and the result renormalised.
-        let det = m.det3();
-        let sign = if det < 0.0 { -1.0 } else { 1.0 };
+        let mirrors = m.mirrors();
+        let sign = if mirrors { -1.0 } else { 1.0 };
         if m.at(3, 0) != 0.0 || m.at(3, 1) != 0.0 || m.at(3, 2) != 0.0 {
             out.normals.clear();
             out.triangle_normals.clear();
@@ -108,7 +131,7 @@ impl TriangleMesh {
             let len = v.iter().map(|c| c * c).sum::<f64>().sqrt();
             *n = if len > 0.0 && len.is_finite() { v.map(|c| c / len) } else { v };
         }
-        if det < 0.0 {
+        if mirrors {
             for t in &mut out.triangles {
                 t.swap(1, 2);
             }
@@ -193,6 +216,35 @@ mod tests {
         let mut uniform = Matrix::IDENTITY;
         uniform.0[3][3] = 2.0;
         assert_eq!(mesh.transformed(&uniform).triangle_normals, [[0, 0, 0]]);
+    }
+
+    /// A negative `w` turns the mapped triangles inside out though the 3×3 block does not
+    /// mirror, so the winding is reversed by the sign of the whole determinant.
+    #[test]
+    fn a_negative_w_reverses_the_winding() {
+        let mesh = TriangleMesh {
+            positions: vec![[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+            triangles: vec![[0, 1, 2]],
+            normals: vec![[1.0, 0.0, 0.0]],
+            triangle_normals: vec![[0, 0, 0]],
+            ..TriangleMesh::default()
+        };
+        let mut negated = Matrix::IDENTITY;
+        negated.0[3][3] = -1.0;
+        let placed = mesh.transformed(&negated);
+        assert_eq!(placed.positions, [[-1.0, 0.0, 0.0], [0.0, -1.0, 0.0], [0.0, 0.0, -1.0]]);
+        assert_eq!(placed.triangles, [[0, 2, 1]]);
+        assert_eq!(placed.normals, [[-1.0, 0.0, 0.0]]);
+        // A projective w that is negative over the mesh: w = z - 3.
+        let mut projective = Matrix::IDENTITY;
+        projective.0[3][2] = 1.0;
+        projective.0[3][3] = -3.0;
+        assert_eq!(mesh.transformed(&projective).triangles, [[0, 2, 1]]);
+        // A positive w, uniform or projective, keeps the winding.
+        let mut positive = Matrix::IDENTITY;
+        positive.0[3][2] = 1.0;
+        positive.0[3][3] = 3.0;
+        assert_eq!(mesh.transformed(&positive).triangles, [[0, 1, 2]]);
     }
 
     impl Matrix {
