@@ -1912,3 +1912,100 @@ fn inspection_keeps_no_private_page_data() {
     };
     assert_eq!(report(with), report(without), "what inspection reports does not change");
 }
+
+/// Links with Named, Hide, and ResetForm actions parse correctly (§12.6.4).
+#[test]
+fn links_read_named_hide_and_reset_form_actions() {
+    let pdf = "%PDF-1.7\n\
+        1 0 obj << /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 5 0 R 6 0 R] >> >> endobj\n\
+        2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >> endobj\n\
+        3 0 obj << /Type /Page /Parent 2 0 R /Annots [10 0 R 11 0 R 12 0 R 13 0 R 14 0 R 15 0 R 16 0 R 17 0 R 18 0 R 19 0 R] >> endobj\n\
+        4 0 obj << /Type /Annot /Subtype /Widget /FT /Tx /T (secret) /Rect [10 10 50 30] >> endobj\n\
+        5 0 obj << /Type /Annot /Subtype /Widget /FT /Tx /T (f1) /Rect [60 10 100 30] >> endobj\n\
+        6 0 obj << /FT /Tx /T (parent) /Kids [7 0 R] >> endobj\n\
+        7 0 obj << /Type /Annot /Subtype /Widget /Parent 6 0 R /T (child) /Kids [8 0 R] /Rect [10 40 50 60] >> endobj\n\
+        8 0 obj << /Type /Annot /Subtype /Widget /Parent 7 0 R /Rect [10 70 50 90] >> endobj\n\
+        9 0 obj << /Type /Annot /Subtype /Text /T (CommentAuthor) /Rect [10 100 50 120] >> endobj\n\
+        10 0 obj << /Type /Annot /Subtype /Link /Rect [0 0 10 10] /A << /S /Named /N /NextPage >> >> endobj\n\
+        11 0 obj << /Type /Annot /Subtype /Link /Rect [0 10 10 20] /A << /S /Named /N /Bogus >> >> endobj\n\
+        12 0 obj << /Type /Annot /Subtype /Link /Rect [0 20 10 30] /A << /S /Hide /T (secret) >> >> endobj\n\
+        13 0 obj << /Type /Annot /Subtype /Link /Rect [0 30 10 40] /A << /S /Hide /T 4 0 R /H false >> >> endobj\n\
+        14 0 obj << /Type /Annot /Subtype /Link /Rect [0 40 10 50] /A << /S /ResetForm /Fields [(f1)] /Flags 0 >> >> endobj\n\
+        15 0 obj << /Type /Annot /Subtype /Link /Rect [0 50 10 60] /A << /S /ResetForm /Fields [5 0 R] /Flags 1 >> >> endobj\n\
+        16 0 obj << /Type /Annot /Subtype /Link /Rect [0 60 10 70] /A << /S /Hide /T [4 0 R 8 0 R] >> >> endobj\n\
+        17 0 obj << /Type /Annot /Subtype /Link /Rect [0 70 10 80] /A << /S /Hide /T 9 0 R >> >> endobj\n\
+        18 0 obj << /Type /Annot /Subtype /Link /Rect [0 80 10 90] /A << /S /ResetForm /Fields [9 0 R] /Flags 0 >> >> endobj\n\
+        19 0 obj << /Type /Annot /Subtype /Link /Rect [0 90 10 100] /A << /S /ResetForm /Flags 0 >> >> endobj\n\
+        trailer << /Root 1 0 R >>\n%%EOF";
+    let info = inspect(Arc::new(pdf.as_bytes().to_vec()), None).expect("opens");
+    let targets: Vec<_> = info.links.iter().map(|l| l.target.clone()).collect();
+    assert_eq!(
+        targets,
+        [
+            LinkTarget::Named("NextPage".into()),
+            LinkTarget::Named("Bogus".into()),
+            LinkTarget::Hide { targets: vec![HideTarget::Field("secret".into())], hide: true },
+            LinkTarget::Hide { targets: vec![HideTarget::Annotation((4, 0))], hide: false },
+            LinkTarget::ResetForm { fields: vec!["f1".into()], exclude: false },
+            LinkTarget::ResetForm { fields: vec!["f1".into()], exclude: true },
+            LinkTarget::Hide { targets: vec![HideTarget::Annotation((4, 0)), HideTarget::Annotation((8, 0))], hide: true },
+            LinkTarget::Hide { targets: vec![HideTarget::Annotation((9, 0))], hide: true },
+            // 18 is ResetForm with include-mode but only non-field target 9 0 R, so it's dropped (None)
+            LinkTarget::ResetForm { fields: Vec::new(), exclude: false },
+        ]
+    );
+}
+
+/// Links with /Next chains execute actions in sequence, cycles are bounded without hanging,
+/// and repeated non-cyclic action references in chains are preserved in order.
+#[test]
+fn links_read_next_action_chains_and_guard_against_cycles() {
+    let pdf = "%PDF-1.7\n\
+        1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+        2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >> endobj\n\
+        3 0 obj << /Type /Page /Parent 2 0 R /Annots [10 0 R 20 0 R 30 0 R] >> endobj\n\
+        10 0 obj << /Type /Annot /Subtype /Link /Rect [0 0 10 10] /A << /S /Named /N /NextPage /Next << /S /GoTo /D [3 0 R /Fit] >> >> >> endobj\n\
+        20 0 obj << /Type /Annot /Subtype /Link /Rect [0 10 10 20] /A 21 0 R >> endobj\n\
+        21 0 obj << /S /Named /N /FirstPage /Next 22 0 R >> endobj\n\
+        22 0 obj << /S /Named /N /LastPage /Next 21 0 R >> endobj\n\
+        30 0 obj << /Type /Annot /Subtype /Link /Rect [0 20 10 30] /A << /S /Named /N /NextPage /Next [21 0 R 21 0 R] >> >> endobj\n\
+        trailer << /Root 1 0 R >>\n%%EOF";
+    let info = inspect(Arc::new(pdf.as_bytes().to_vec()), None).expect("opens");
+    assert_eq!(info.links[0].target, LinkTarget::Sequence(vec![LinkTarget::Named("NextPage".into()), LinkTarget::Page(0, DestView::Fit)]));
+    let LinkTarget::Sequence(chain) = &info.links[1].target else { panic!("expected sequence") };
+    assert_eq!(chain, &[LinkTarget::Named("FirstPage".into()), LinkTarget::Named("LastPage".into())]);
+    let LinkTarget::Sequence(repeated) = &info.links[2].target else { panic!("expected sequence") };
+    assert_eq!(
+        repeated,
+        &[
+            LinkTarget::Named("NextPage".into()),
+            LinkTarget::Named("FirstPage".into()),
+            LinkTarget::Named("LastPage".into()),
+            LinkTarget::Named("FirstPage".into()),
+            LinkTarget::Named("LastPage".into()),
+        ]
+    );
+}
+
+/// A fan-out `/Next` DAG of action dictionaries with no `/S` does not hang or trigger exponential recursion.
+#[test]
+fn links_read_next_fanout_dag_is_bounded() {
+    let mut pdf = b"%PDF-1.7\n\
+        1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+        2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >> endobj\n\
+        3 0 obj << /Type /Page /Parent 2 0 R /Annots [10 0 R] >> endobj\n\
+        10 0 obj << /Type /Annot /Subtype /Link /Rect [0 0 10 10] /A 11 0 R >> endobj\n"
+        .to_vec();
+    // 20 levels of fan-out: each level k has /Next [k+1 0 R k+1 0 R] without /S.
+    // Without visit bounding, this would be 2^20 = 1,048,576 recursive calls.
+    for k in 11..31 {
+        pdf.extend_from_slice(format!("{k} 0 obj << /Next [{} 0 R {} 0 R] >> endobj\n", k + 1, k + 1).as_bytes());
+    }
+    pdf.extend_from_slice(
+        b"31 0 obj << /S /Named /N /NextPage >> endobj\n\
+        trailer << /Root 1 0 R >>\n%%EOF",
+    );
+    let info = inspect(Arc::new(pdf), None).expect("opens quickly");
+    assert_eq!(info.links.len(), 1);
+}
+
