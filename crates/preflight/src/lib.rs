@@ -22,6 +22,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod icc;
+mod limits;
 mod xmp;
 
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream};
@@ -115,6 +116,10 @@ pub const WORDINGS: &[&str] = &[
     "The title in the metadata and the document information differ",
     // The document as a whole.
     "The document is encrypted",
+    "An integer is outside the 32-bit range",
+    "A string is longer than 32767 bytes",
+    "A name is longer than 127 bytes",
+    "Page {} has a boundary smaller than 3 or larger than 14400 units",
     "Device colour is used, but there is no PDF/A output intent",
     "DeviceCMYK is used: it needs a CMYK output intent (not added automatically)",
     "DeviceCMYK is used, but the PDF/A output intent isn't a CMYK profile",
@@ -515,6 +520,22 @@ pub fn verify(doc: &Document, level: Level) -> Vec<Issue> {
         }
     }
     check_objects(doc, level, &objs, &page_of, &mut issue);
+    // 6.1.13: the implementation limits of ISO 32000-1 Annex C.
+    let over = limits::exceeded(&objs, &referenced_content(doc, &objs));
+    if over.int {
+        issue("6.1.13", "An integer is outside the 32-bit range", None, None, false);
+    }
+    if over.string {
+        issue("6.1.13", "A string is longer than 32767 bytes", None, None, false);
+    }
+    if over.name {
+        issue("6.1.13", "A name is longer than 127 bytes", None, None, false);
+    }
+    for (i, p) in pages.iter().enumerate() {
+        if limits::page_box_out_of_range(doc, &p.dict) {
+            issue("6.1.13", "Page {} has a boundary smaller than 3 or larger than 14400 units", Some((i + 1).to_string()), Some(i), false);
+        }
+    }
     // One message per kind of problem is enough for repeated ones (as preflight summaries do).
     let mut seen = std::collections::HashSet::new();
     out.retain(|i| seen.insert((i.clause, i.message.clone(), i.page)));

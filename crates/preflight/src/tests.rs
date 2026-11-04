@@ -488,3 +488,43 @@ fn an_output_intent_profile_header_is_read_within_a_size_cap() {
         assert_eq!(pdfa_intent_profile(&doc), Some(n), "a {size}-byte profile");
     }
 }
+
+/// PDF/A-2 6.1.13 holds a file to the implementation limits of ISO 32000-1 Annex C (Table C.1):
+/// an integer past 32 bits, a string over 32767 bytes or a name over 127 bytes (decoded: a name
+/// written with `#xx` escapes counts its bytes once read), in an object or in content; and a page
+/// boundary under 3 or over 14400 units, read after inheritance, so a page that overrides its
+/// parent's box is judged by its own.
+#[test]
+fn implementation_limits_are_reported() {
+    let limits =
+        |doc: &Document| -> Vec<String> { verify(doc, Level::A2b).into_iter().filter(|i| i.clause == "6.1.13").map(|i| i.message).collect() };
+    let doc = |extra: &str, content: &str, parent_box: &str, page_box: &str| {
+        let objects = [
+            format!("<< /Type /Catalog /Pages 2 0 R {extra} >>"),
+            format!("<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox {parent_box} >>"),
+            format!("<< /Type /Page /Parent 2 0 R /Contents 4 0 R {page_box} >>"),
+            format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+        ];
+        let refs: Vec<&str> = objects.iter().map(String::as_str).collect();
+        build(&refs, "")
+    };
+    let ok = "[0 0 200 200]";
+    assert!(limits(&doc("", "", ok, "")).is_empty(), "{:?}", limits(&doc("", "", ok, "")));
+    assert_eq!(limits(&doc("/Big 2147483648", "", ok, "")), ["An integer is outside the 32-bit range"]);
+    assert_eq!(limits(&doc("/Small -2147483649", "", ok, "")), ["An integer is outside the 32-bit range"]);
+    assert!(limits(&doc("/Edge -2147483648 /Top 2147483647", "", ok, "")).is_empty());
+    assert_eq!(limits(&doc("", "2147483648 0 Td", ok, "")), ["An integer is outside the 32-bit range"]);
+    let long = "x".repeat(32768);
+    assert_eq!(limits(&doc(&format!("/S ({long})"), "", ok, "")), ["A string is longer than 32767 bytes"]);
+    assert_eq!(limits(&doc("", &format!("BT ({long}) Tj ET"), ok, "")), ["A string is longer than 32767 bytes"]);
+    assert!(limits(&doc(&format!("/S ({})", "x".repeat(32767)), "", ok, "")).is_empty());
+    let name = "n".repeat(128);
+    assert_eq!(limits(&doc(&format!("/V /{name}"), "", ok, "")), ["A name is longer than 127 bytes"]);
+    assert_eq!(limits(&doc(&format!("/{name} 1"), "", ok, "")), ["A name is longer than 127 bytes"]);
+    // 200 bytes as written, 66 once the escapes are read.
+    let escaped = format!("A{}", "#41".repeat(65) + &"B".repeat(4));
+    assert!(limits(&doc(&format!("/V /{escaped}"), "", ok, "")).is_empty());
+    assert_eq!(limits(&doc("", "", "[0 0 2 200]", "")), ["Page 1 has a boundary smaller than 3 or larger than 14400 units"]);
+    assert_eq!(limits(&doc("", "", ok, "/CropBox [0 0 14401 200]")), ["Page 1 has a boundary smaller than 3 or larger than 14400 units"]);
+    assert!(limits(&doc("", "", "[0 0 2 2]", "/MediaBox [0 0 3 14400]")).is_empty(), "the page's own box overrides its parent's");
+}
