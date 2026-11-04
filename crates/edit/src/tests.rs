@@ -4719,6 +4719,52 @@ fn form_artwork_edits_only_the_selected_placement() {
     assert!(images::page_images(&doc, 0).unwrap().is_empty());
 }
 
+/// #6145: a Form whose /BBox gives its top first, [0 842 595 0] as some writers put it, is the
+/// same rectangle (ISO 32000-2 §7.9.5) and drawn just the same, so it is Form artwork like any:
+/// listed, moved and deleted. It used to be skipped as empty, so a logo and rules drawn through it
+/// could not be selected. Corners in any order are one box; one with no area is still skipped.
+#[test]
+fn form_artwork_with_its_bbox_corners_in_another_order_is_listed() {
+    for bbox in [[10, 70, 110, 20], [110, 20, 10, 70], [110, 70, 10, 20], [10, 20, 110, 70]] {
+        let mut doc = fixture();
+        let mut form = Dict::new();
+        form.set(b"Subtype".to_vec(), Object::name("Form"));
+        form.set(b"BBox".to_vec(), Object::Array(bbox.map(Object::Int).to_vec()));
+        let artwork = doc.add(Object::Stream(Stream::flate(form, b"1 0 0 rg 10 20 100 50 re f")));
+        doc.update_dict(pdfcraft_cos::ObjRef::new(6, 0), |d| {
+            let mut xo = Dict::new();
+            xo.set(b"Figure".to_vec(), Object::Ref(artwork));
+            d.set(b"XObject".to_vec(), Object::Dict(xo));
+        })
+        .unwrap();
+        doc.set(pdfcraft_cos::ObjRef::new(7, 0), Object::Stream(Stream::flate(Dict::new(), b"q 1 0 0 1 40 80 cm /Figure Do Q")));
+        let mut doc = reopen(&doc);
+        let imgs = images::page_images(&doc, 0).unwrap();
+        assert_eq!(imgs.len(), 1, "BBox {bbox:?}");
+        assert!(imgs[0].is_form && close(imgs[0].rect, [50.0, 100.0, 150.0, 150.0]), "BBox {bbox:?}: {:?}", imgs[0].rect);
+        let target = [60.0, 110.0, 160.0, 160.0];
+        images::change_image(&mut doc, 0, 0, &images::ImageChange::Transform(images::rect_to_rect(imgs[0].rect, target))).unwrap();
+        let doc = reopen(&doc);
+        assert!(close(images::page_images(&doc, 0).unwrap()[0].rect, target), "BBox {bbox:?}: moved");
+    }
+    // No area, in either order: still skipped.
+    for bbox in [[10, 20, 10, 70], [10, 70, 110, 70]] {
+        let mut doc = fixture();
+        let mut form = Dict::new();
+        form.set(b"Subtype".to_vec(), Object::name("Form"));
+        form.set(b"BBox".to_vec(), Object::Array(bbox.map(Object::Int).to_vec()));
+        let artwork = doc.add(Object::Stream(Stream::flate(form, b"0 g 10 20 100 50 re f")));
+        doc.update_dict(pdfcraft_cos::ObjRef::new(6, 0), |d| {
+            let mut xo = Dict::new();
+            xo.set(b"Figure".to_vec(), Object::Ref(artwork));
+            d.set(b"XObject".to_vec(), Object::Dict(xo));
+        })
+        .unwrap();
+        doc.set(pdfcraft_cos::ObjRef::new(7, 0), Object::Stream(Stream::flate(Dict::new(), b"/Figure Do")));
+        assert!(images::page_images(&reopen(&doc), 0).unwrap().is_empty(), "BBox {bbox:?}");
+    }
+}
+
 #[test]
 fn paragraphs_take_new_formatting() {
     let mut doc = text_page("BT /F1 10 Tf 12 TL 100 700 Td (One two three four five six seven) Tj T* (eight nine ten eleven twelve) Tj ET");
