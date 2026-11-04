@@ -34,19 +34,32 @@ fn recognize_text_dialog_adds_searchable_text() {
     assert!(h.state().ocr_draft.auto_rotate && h.state().ocr_draft.deskew);
     let expected = pdfcraft_engine::ocr::language_for_locale(sys_locale::get_locale().as_deref());
     assert_eq!(h.state().ocr_draft.language, expected, "OCR follows the system even when the interface is English");
+    // A Japanese or Chinese name shows in English where no face can draw it (an English-only
+    // build on a machine without such a face installed).
+    fn english(native: &'static str) -> &'static str {
+        match native {
+            "日本語" => "Japanese",
+            "繁體中文" => "Traditional Chinese",
+            "简体中文" => "Simplified Chinese",
+            other => other,
+        }
+    }
     let label = pdfcraft_engine::ocr::LANGUAGES.iter().find(|(code, _)| *code == expected).unwrap().1;
+    let label = if h.query_by_value(label).is_some() { label } else { english(label) };
     h.get_by_value(label).click();
     h.run_steps(2);
-    for label in ["Nederlands", "Dansk", "Norsk bokmål", "Svenska", "Suomi", "Português", "Català", "繁體中文", "简体中文"] {
+    let shown = |h: &Harness<'_, PdfCraftApp>, native: &'static str| if h.query_by_label(native).is_some() { native } else { english(native) };
+    let (hant, hans) = (shown(&h, "繁體中文"), shown(&h, "简体中文"));
+    for label in ["Nederlands", "Dansk", "Norsk bokmål", "Svenska", "Suomi", "Português", "Català", hant, hans] {
         h.get_by_label(label);
     }
     // The expanded language list scrolls when the popup reaches the window edge.
-    h.get_by_label("简体中文").scroll_to_me();
+    h.get_by_label(hans).scroll_to_me();
     h.run_steps(4);
-    h.get_by_label("简体中文").click();
+    h.get_by_label(hans).click();
     h.run_steps(2);
     assert_eq!(h.state().ocr_draft.language, "zh-Hans", "the last language in the list can be chosen");
-    h.get_by_value("简体中文").click();
+    h.get_by_value(hans).click();
     h.run_steps(2);
     h.get_by_label("Català").scroll_to_me();
     h.run_steps(4);

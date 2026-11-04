@@ -153,10 +153,11 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) -> (boo
     group(ui, "Settings", &mut |ui| {
         egui::Grid::new("ocr-settings").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
             ui.label(tl!("Document language"));
-            let name = LANGUAGES.iter().find(|l| l.0 == d.language).map_or("English", |l| l.1);
+            let name = LANGUAGES.iter().find(|l| l.0 == d.language).map_or("English", |l| language_name(ui, l.0, l.1));
             craft_ui::ComboBox::from_id_salt("ocr-language").selected_text(tl!(name)).width(220.0).height(560.0).show_ui(ui, |ui| {
                 for (code, name) in LANGUAGES {
-                    ui.selectable_value(&mut d.language, (*code).to_string(), tl!(*name));
+                    let name = language_name(ui, code, name);
+                    ui.selectable_value(&mut d.language, (*code).to_string(), tl!(name));
                 }
             });
             ui.end_row();
@@ -605,6 +606,20 @@ impl PdfCraftApp {
             Err(e) => self.notify_error(e),
         }
     }
+}
+
+/// An OCR language's name in the picker: its native name when the interface's fonts can draw it,
+/// otherwise English, as the other language pickers do ([`crate::i18n::Lang::picker_name`]).
+/// egui 0.37 panics on a glyph no face has, and an English-only build without an embedded or
+/// installed Chinese face cannot draw `简体中文`.
+fn language_name(ui: &egui::Ui, code: &str, native: &'static str) -> &'static str {
+    let english = match code {
+        "ja" => "Japanese",
+        "zh-Hant" => "Traditional Chinese",
+        "zh-Hans" => "Simplified Chinese",
+        _ => return native,
+    };
+    if crate::dialogs::preferences::picker_text_is_drawable(ui, native) { native } else { english }
 }
 
 /// "Recognize text failed: {e}", in the current language.
