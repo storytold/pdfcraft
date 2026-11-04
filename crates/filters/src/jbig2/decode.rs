@@ -4,7 +4,8 @@ use crate::FilterError;
 use crate::ccitt::Rows;
 
 /// The largest JBIG2 page [`decode_jbig2_within`] decodes, in pixels. The decoder decodes a page whole,
-/// and takes pages of up to about this many (20,000 × 10,000 decodes).
+/// and takes pages of up to this many (20,000 × 10,000 decodes). It is also the most
+/// [`encode_jbig2_generic`](crate::encode_jbig2_generic) encodes, so what it stores reads back.
 pub const MAX_JBIG2_PIXELS: u64 = 1 << 28;
 
 /// A `JBIG2Decode` stream's `data`, with what its `/JBIG2Globals` stream decodes to, decoded as the
@@ -143,6 +144,143 @@ mod tests {
         assert_eq!(decode_jbig2(&symbols, None, w, h, usize::MAX).unwrap(), marks);
     }
 
+    /// A region's location is unsigned (ISO/IEC 14492 5.4.4), so one past `i32::MAX` is off the
+    /// page. The decoder took it for a signed one: a region at 0xFFFFFFFC came back onto the page
+    /// four pixels left of it, and a refinement anywhere past `i32::MAX` was refused, and the page
+    /// with it. Each stream is a page of 16 × 12 covered by a generic region, then a region of 8 × 6
+    /// of one kind past `i32::MAX`, coded by the standard's procedures, and decodes to that page
+    /// alone; moved onto the page, the region draws. Vendored hayro-jbig2 patch 14.
+    #[test]
+    fn a_region_located_past_i32_max_is_off_the_page() {
+        const PAGE: &str = "0000000030000100000013000000100000000c00000000000000004200000000000126000100000035000000100000000c0000000000000000040003fffdff02fefefed906aa2cb6ee4ccb4bc975d02669ca7a9c14c20c638f5a5e1bffac";
+        let cases = [
+            // At 0xFFFFFFFC, 1.
+            ("generic", "00000002260001000000220000000800000006fffffffc00000001000003fffdff02fefefe17c876ae6f77ffac"),
+            // At 1, 0xFFFFFFFE, with its symbol dictionary.
+            (
+                "text",
+                "000000020000010000001e000003fffdff02fefefe00000001000000014fdda14149cec477ed5fffac00000003062002010000001b000000080000000600000001fffffffe00001000000001a943ffac",
+            ),
+            // At 0xFFFFFFFC, 1, with its pattern dictionary.
+            (
+                "halftone",
+                "000000021000010000000a000101000000011fffac00000003162002010000002e0000000800000006fffffffc0000000100000000000800000006000000000000000001000000d09301774485ffac",
+            ),
+            // At 0xFFFFFFFC, 1, reading the page there (7.4.7.4): 0s.
+            ("refinement of the page", "000000022a00010000001e0000000800000006fffffffc000000010400ffffffff0bd98f188428ffac"),
+            // Of an intermediate region at the same place (7.4.7.5), 1, 0xFFFFFFFE.
+            (
+                "refinement of a region",
+                "0000000224000100000023000000080000000600000001fffffffe000003fffdff02fefefe3d81322da16b7fffac000000032a2002010000001e000000080000000600000001fffffffe0000ffffffffe29946b82229ffac",
+            ),
+            // Of an intermediate refinement of an intermediate region, all at 0xFFFFFFFC, 1.
+            (
+                "refinement of a refinement",
+                "00000002240001000000230000000800000006fffffffc00000001000003fffdff02fefefecdfd921ec8c47fffac00000003282002010000001e0000000800000006fffffffc000000010000ffffffff903cdb447a47ffac000000042a2003010000001e0000000800000006fffffffc000000010000ffffffffdcd6078cab86ffac",
+            ),
+        ];
+        let hex = |text: &str| (0..text.len() / 2).map(|i| u8::from_str_radix(&text[i * 2..i * 2 + 2], 16).unwrap()).collect::<Vec<u8>>();
+        let decode = |segments: &str| decode_jbig2(&[hex(PAGE), hex(segments)].concat(), None, 16, 12, usize::MAX).unwrap();
+        let page = decode("");
+        assert!(page.iter().any(|&byte| byte != 0xFF), "the page has ink");
+        for (kind, segments) in cases {
+            assert_eq!(decode(segments), page, "{kind}");
+            // Moved onto the page, to 4, 1 or 1, 2, the same regions draw: they decode, and are
+            // left out for where they are.
+            let (off, on) = [("fffffffc00000001", "0000000400000001"), ("00000001fffffffe", "0000000100000002")]
+                .into_iter()
+                .find(|(off, _)| segments.contains(off))
+                .unwrap();
+            assert_ne!(decode(&segments.replace(off, on)), page, "{kind} on the page");
+        }
+
+        // A refinement at 2, 0 of an intermediate region at 0x80000000, 0. A refinement of a
+        // region refines it where it is, "GRREFERENCEDX 0, GRREFERENCEDY 0" (Table 35), and the two
+        // should be at one place (7.4.7.5). Where they aren't, it decodes as it does where they are.
+        const ELSEWHERE: &str = "000000022400010000002300000008000000068000000000000000000003fffdff02fefefe1bca3149568cdfffac000000032a2002010000001e000000080000000600000002000000000000ffffffff784a909cc761ffac";
+        let refined = decode(ELSEWHERE);
+        assert_eq!(refined, decode(&ELSEWHERE.replace("8000000000000000", "0000000200000000")), "the region at 2, 0 too");
+        assert_ne!(refined, page, "drawn");
+    }
+
+    /// A refinement of the page refines "the current contents of the page buffer, restricted to the
+    /// area of the page buffer specified by this segment's region segment information field"
+    /// (ISO/IEC 14492 7.4.7.4), at an offset of 0 (Table 35), and reads 0 outside that area
+    /// (6.3.5.2). The decoder read the page around the area too, and refused a refinement wider or
+    /// taller than the page. A refinement of another region refines that region, not the page. And
+    /// a reference 32 or more left of a refinement (GRREFERENCEDX below −31, as a symbol refined
+    /// with an RDX below −31 has, Table 18) is read from where each row starts in it: each row's
+    /// first context read 0 for the reference column it starts at, and from 33 left for the one
+    /// before it too. Each stream is coded by the standard's procedures and decodes to its
+    /// picture, `#` for black. Vendored hayro-jbig2 patch 16.
+    #[test]
+    fn a_refinement_refines_the_page_in_its_area_and_any_reference_where_it_is() {
+        let cases: [(&str, &str, &[&str]); 5] = [
+            (
+                "a 48 × 6 page a generic region has inked, refined at 33: ink on both sides of the area, template 0",
+                "000000003000010000001300000030000000060000000000000000420000000000012600010000004100000030000000060000000000000000040003fffdff02fefefe331433558a5c5056cf412003ec9a38164df39bd4463b9331502c4fb1c267ab77b665aa5962ffac000000022a0001000000210000000c0000000600000021000000000400ffffffff9a6c35bbeee221f687ffac",
+                &[
+                    ".#..##.######..#.#..#####.##..#........##.##..##",
+                    ".#..####.####.#...###.##.##.#.#.....#.#.####.###",
+                    "##.#......#..#....#..#.###.#..#.#####.###.######",
+                    "......#....###.#.##..#.##........#.#.#...#####..",
+                    "#.##..###.#.#.##.....#...#.#..#.##.#..#...#...#.",
+                    ".###...#..#..#..##..#.#..#####.#.##.......###.##",
+                ],
+            ),
+            (
+                "a 24 × 8 inked page refined at 5, 1, template 1",
+                "000000003000010000001300000018000000080000000000000000420000000000012600010000003500000018000000080000000000000000040003fffdff02fefefeb1e133cb8bcbb8510e81d219bb880dfb40a311dc5c298819efffac000000022a00010000001b0000000a0000000500000005000000010401e55c0078dcd30fffac",
+                &[
+                    "#.##.##...##....##.##..#",
+                    "#.##.##...#.####..##..#.",
+                    "##..##.##...#...###..#.#",
+                    ".....#.#.##.#...###....#",
+                    "..#.#...#.#...#.#...##.#",
+                    "....######...#.####....#",
+                    "..######..##.#.#..##.#..",
+                    "...#..##.####.#..##...#.",
+                ],
+            ),
+            (
+                "a 16 × 5 inked page refined by a region 4 wider than it, template 0",
+                "000000003000010000001300000010000000050000000000000000420000000000012600010000002600000010000000050000000000000000040003fffdff02fefefe22e5e253a429cbf2c701ffac000000022a000100000023000000140000000500000000000000000400ffffffff3afa516532bbe3d481926fffac",
+                &[".#.#.#.#..#.#.#.", "##.####..###...#", "..####.#..####.#", ".###.#.....#..#.", "#.###..#########"],
+            ),
+            (
+                "an intermediate region at 4, 1 on an inked 20 × 8 page, refined there (OR): the region, not the page, template 0",
+                "000000003000010000001300000014000000080000000000000000420000000000012600010000003000000014000000080000000000000000040003fffdff02fefefeb91e434e1726ca89ed06c2bffb0fe5fa7fccc80fffac00000002240001000000230000000a000000050000000400000001000003fffdff02fefefece7a9826ba81bfffac000000032a2002010000001e0000000a0000000500000004000000010000ffffffffd046ee6f6190ffac",
+                &[
+                    "#.#.#....#.#...#....",
+                    "##..#.#.#.##.....##.",
+                    "##.#.#.#.#.###.##...",
+                    "###.##.####..###.#.#",
+                    "...#.###..###.#.#..#",
+                    "#...#######.#...####",
+                    "..##.##...#..##..#.#",
+                    "#...##...#.##....#..",
+                ],
+            ),
+            (
+                "a symbol refined in a symbol dictionary from a 40 × 6 one, RDX −33: 33 left, template 1",
+                "0000000030000100000013000000070000000600000000000000004200000000000100000100000036000003fffdff02fefefe00000001000000014f913296209e2187f37bddb8589c8beb7d70109de7124ebe47d04914ef7e655c3c4cffac00000002002001010000001f100203fffdff02fefefe00000001000000014fe451a27bddf49f7ef7e7ffac00000003062002010000001b0000000700000006000000000000000004001000000001a943ffac",
+                &[".####.#", ".##..##", "......#", "...#..#", "#.#.###", "....##."],
+            ),
+        ];
+        let hex = |text: &str| (0..text.len() / 2).map(|i| u8::from_str_radix(&text[i * 2..i * 2 + 2], 16).unwrap()).collect::<Vec<u8>>();
+        for (form, stream, picture) in cases {
+            let (w, h) = (picture[0].len(), picture.len());
+            // As the filter gives it: black as 0, each row padded to a byte with 0s.
+            let mut rows = vec![0u8; w.div_ceil(8) * h];
+            for (y, row) in picture.iter().enumerate() {
+                for (x, _) in row.bytes().enumerate().filter(|(_, c)| *c == b'.') {
+                    rows[y * w.div_ceil(8) + x / 8] |= 0x80 >> (x % 8);
+                }
+            }
+            assert_eq!(decode_jbig2(&hex(stream), None, w as u32, h as u32, usize::MAX).unwrap(), rows, "{form}");
+        }
+    }
+
     /// What a page costs is the same however much a run has left. Given exactly that it decodes,
     /// and less stops it: spending all that's left, and what comes after isn't read. A page that
     /// fails still spends what it took.
@@ -211,6 +349,89 @@ mod tests {
         assert!(matches!(decode_jbig2(&data, Some(b"not JBIG2"), w, h, usize::MAX), Err(FilterError::Corrupt { .. })));
         for end in 0..data.len() {
             let _ = decode_jbig2(&data[..end], None, w, h, usize::MAX);
+        }
+    }
+
+    /// Pixels past a bitmap's edge are 0 (ISO/IEC 14492 6.3.5.2). A page whose default pixel is 1,
+    /// and an intermediate text or halftone region whose default pixel is 1, kept 1s past their
+    /// width in their last word of each row, and a refinement, which reads its reference a word at
+    /// a time, read them as pixels: of rows not a multiple of 32 wide, it decoded to other pixels
+    /// than were coded. Each stream is a refinement coded by the standard's procedures from a
+    /// reference read as 0 past its edge, and decodes to the picture given, `#` for black.
+    /// Vendored hayro-jbig2 patch 13.
+    #[test]
+    fn a_refinement_reads_nothing_past_its_references_width() {
+        // A page of 7 × 6, then of 33 × 6, whose default pixel is 1, refined whole.
+        const PAGE_7: &str = "000000003000010000001300000007000000060000000000000000460000000000012a00010000001e000000070000000600000000000000000400ffffffffe42d7e889ebcffac";
+        const PAGE_33: &str = "000000003000010000001300000021000000060000000000000000460000000000012a000100000034000000210000000600000000000000000400ffffffff314a8d598037eb3f915ab3d526ccae915ad6a6a7b814111b124ae60fffac";
+        // An intermediate text region of 31 × 6 whose default pixel is 1, then one of 7 × 6 on a
+        // page of 40, each refined into the page.
+        const TEXT_31: &str = "00000000300001000000130000001f0000000600000000000000004200000000000100000100000030000003fffdff02fefefe00000001000000014f96dceb76c7f1ff585971969cd9f88e538261a6f713be68d77e8e1fffac00000002042001010000001b0000001f00000006000000000000000000029000000001a943ffac000000032a2002010000002f0000001f0000000600000000000000000400ffffffff9ac311688adbc8f570a2f96aef93d332e3b1f4b27b704bffac";
+        const TEXT_7: &str = "000000003000010000001300000028000000060000000000000000420000000000010000010000001d000003fffdff02fefefe00000001000000014fe1f79f4a95c5b77fffac00000002042001010000001b0000000700000006000000000000000000029000000001a943ffac000000032a2002010000001e000000070000000600000000000000000400ffffffffa71dae12bd7fffac";
+        // An intermediate halftone region of 33 × 6 whose default pixel is 1, refined into the page.
+        const HALFTONE_33: &str = "000000003000010000001300000021000000060000000000000000420000000000011000010000000a000101000000011fffac00000002142001010000004100000021000000060000000000000000009000000021000000060000000000000000010000004ea6618f551d48ff24c2c5c98124d449f2adea6fca76e4297fffac000000032a20020100000032000000210000000600000000000000000400ffffffffe87db809393a3251e565e7a749e6470ab37f7aef186ceaf5167bffac";
+        let cases: [(&str, &str, [&str; 6]); 5] = [
+            ("page 7", PAGE_7, ["###.#.#", ".......", "#.####.", "######.", "#.#...#", ".#...##"]),
+            (
+                "page 33",
+                PAGE_33,
+                [
+                    ".#..##........###..####....#.##.#",
+                    ".#.###.###.##.##..#..#...#.....##",
+                    ".....##..#....#.##.######.###..#.",
+                    "##...#..##.###..###.##..#.#.#.#.#",
+                    ".##.#........##.#.#.....###......",
+                    "...#.#####.#..#.###......###..###",
+                ],
+            ),
+            (
+                "text 31",
+                TEXT_31,
+                [
+                    "....##....###......#.##.#.#....",
+                    ".#.....##.......##..###.#...#..",
+                    ".#.#.#.####...#####.####...#.#.",
+                    "......#...#...#.##...##...#..#.",
+                    ".#..##.###.#.###..####...#...#.",
+                    "#...#...#..#.#....#.##.#.....#.",
+                ],
+            ),
+            (
+                "text 7 on a page of 40",
+                TEXT_7,
+                [
+                    "......#.................................",
+                    ".....##.................................",
+                    "##...##.................................",
+                    "..#.....................................",
+                    "##......................................",
+                    "..#.....................................",
+                ],
+            ),
+            (
+                "halftone 33",
+                HALFTONE_33,
+                [
+                    "##...#.###.#.###.....#.####..####",
+                    "##.##.#...#.##.##.##.#...#.#.###.",
+                    "###..#.#....##.###...#..##.##..##",
+                    "##..#...###...##..#.####.###.#...",
+                    "####.###.###.#..#..#.#.####...###",
+                    "#.#..#........#....#.#.##.##..#.#",
+                ],
+            ),
+        ];
+        let hex = |text: &str| (0..text.len() / 2).map(|i| u8::from_str_radix(&text[i * 2..i * 2 + 2], 16).unwrap()).collect::<Vec<u8>>();
+        for (form, stream, picture) in cases {
+            let w = picture[0].len();
+            // As the filter gives it: black as 0, each row padded to a byte with 0s.
+            let mut rows = vec![0u8; w.div_ceil(8) * picture.len()];
+            for (y, row) in picture.iter().enumerate() {
+                for (x, _) in row.bytes().enumerate().filter(|(_, c)| *c == b'.') {
+                    rows[y * w.div_ceil(8) + x / 8] |= 0x80 >> (x % 8);
+                }
+            }
+            assert_eq!(decode_jbig2(&hex(stream), None, w as u32, 6, usize::MAX).unwrap(), rows, "{form}");
         }
     }
 }

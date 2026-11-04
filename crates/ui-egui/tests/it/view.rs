@@ -760,6 +760,99 @@ fn changing_continuous_layout_resets_wheel_acceleration() {
     assert!((moved - base).abs() < 1.0, "a layout jump clears the old burst: moved {moved}, base {base}");
 }
 
+/// A steady wheel burst must not alternate a large accelerated jump with nearly still frames.
+#[test]
+fn scroll_regression_regular_notches_have_regular_frame_motion() {
+    let mut h = harness_stepping(1.0 / 60.0, &[("layout", "continuous"), ("zoom", "3000"), ("animation_effects", "on")]);
+    let at = h.state().views[0].viewport_rect().center();
+    h.hover_at(at);
+    h.run_steps(2);
+    let mut settled = Vec::new();
+    for frame in 0..66 {
+        if frame % 3 == 0 {
+            h.event(wheel(MouseWheelUnit::Line, -1.0, TouchPhase::Move));
+        }
+        let moved = scroll_over(&mut h, 1);
+        if frame >= 48 {
+            settled.push(moved);
+        }
+    }
+    let low = settled.iter().copied().fold(f32::INFINITY, f32::min);
+    let high = settled.iter().copied().fold(0.0, f32::max);
+    assert!(low > 0.0 && high < low * 3.0, "regular input has bounded frame variation: {settled:?}");
+}
+
+/// Windows and X11 can report continuous device movement as fractions of a line.
+#[test]
+fn scroll_regression_fractional_lines_preserve_distance_without_an_idle_tail() {
+    let mut h = harness_stepping(1.0 / 60.0, &[("layout", "continuous"), ("zoom", "3000"), ("animation_effects", "on")]);
+    let at = h.state().views[0].viewport_rect().center();
+    h.hover_at(at);
+    h.run_steps(2);
+    let line = pdfcraft_ui_egui::scroll_speed::ScrollSpeed::default().line_points();
+    let mut distance = 0.0;
+    for _ in 0..24 {
+        h.event(wheel(MouseWheelUnit::Line, -0.25, TouchPhase::Move));
+        distance += scroll_over(&mut h, 1);
+    }
+    // Page rectangles report the previous pass's scroll request on the following draw.
+    distance += scroll_over(&mut h, 1);
+    assert!((distance - line * 6.0).abs() < 1.0, "continuous motion retains its input distance: {distance}");
+    let tail = scroll_over(&mut h, 40);
+    assert!(tail.abs() < 1.0, "continuous motion stops with the input: {tail}");
+}
+
+/// Input ownership changes discard an old queue even when the view is hidden very briefly.
+#[test]
+fn scroll_regression_returning_to_a_tab_does_not_resume_old_motion() {
+    let mut h = harness_stepping(1.0 / 60.0, &[("layout", "continuous"), ("zoom", "3000"), ("animation_effects", "on")]);
+    let at = h.state().views[0].viewport_rect().center();
+    h.hover_at(at);
+    h.run_steps(2);
+    for _ in 0..5 {
+        h.event(wheel(MouseWheelUnit::Line, -1.0, TouchPhase::Move));
+        scroll_over(&mut h, 1);
+    }
+    h.state_mut().open_bytes("second.pdf", None, PAGES.to_vec()).unwrap();
+    h.run_steps(2);
+    h.state_mut().active = Some(0);
+    h.run_steps(2);
+    assert!(scroll_over(&mut h, 12).abs() < 0.5, "returning to a tab must not continue its old wheel burst");
+}
+
+/// Direct input ends an old coarse burst, so a later isolated notch has its base distance.
+#[test]
+fn scroll_regression_precise_input_resets_coarse_acceleration() {
+    let mut h = harness_stepping(1.0 / 60.0, &[("layout", "continuous"), ("zoom", "3000"), ("animation_effects", "off")]);
+    let at = h.state().views[0].viewport_rect().center();
+    h.hover_at(at);
+    h.run_steps(2);
+    for _ in 0..5 {
+        h.event(wheel(MouseWheelUnit::Line, -1.0, TouchPhase::Move));
+        scroll_over(&mut h, 1);
+    }
+    h.event(wheel(MouseWheelUnit::Point, -10.0, TouchPhase::Move));
+    scroll_over(&mut h, 2);
+    h.event(wheel(MouseWheelUnit::Line, -1.0, TouchPhase::Move));
+    let distance = scroll_over(&mut h, 2);
+    let base = pdfcraft_ui_egui::scroll_speed::ScrollSpeed::default().line_points();
+    assert!((distance - base).abs() < 0.5, "a new coarse burst begins at the base distance: {distance}");
+}
+
+/// A key cancels earlier movement without consuming a new wheel event in the same frame.
+#[test]
+fn scroll_regression_key_interrupt_retains_current_wheel_input() {
+    let mut h = harness_stepping(1.0 / 60.0, &[("layout", "continuous"), ("zoom", "3000"), ("animation_effects", "off")]);
+    let at = h.state().views[0].viewport_rect().center();
+    h.hover_at(at);
+    h.run_steps(2);
+    h.event(egui::Event::Key { key: Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE });
+    h.event(wheel(MouseWheelUnit::Line, -1.0, TouchPhase::Move));
+    let distance = scroll_over(&mut h, 2);
+    let base = pdfcraft_ui_egui::scroll_speed::ScrollSpeed::default().line_points();
+    assert!((distance - base).abs() < 0.5, "new wheel input survives a simultaneous key: {distance}");
+}
+
 /// Steps `frames` frames and returns how far the document scrolled down over them, from the
 /// pages on screen in each pair of consecutive frames (a page can leave the screen on the way).
 /// Used by wheel and non-macOS glide tests below.
@@ -2054,8 +2147,9 @@ fn final_spread_at_scroll_end(heights: &[u32], cover: bool) -> (Vec<(usize, egui
     let at = h.state().views[0].viewport_rect().center();
     h.hover_at(at);
     h.run_steps(2);
-    for _ in 0..4 {
-        h.event(wheel(MouseWheelUnit::Line, -1000.0, TouchPhase::Move));
+    // Reach the end through admitted wheel steps; the assertion concerns spread geometry.
+    for _ in 0..8 {
+        h.event(wheel(MouseWheelUnit::Line, -10.0, TouchPhase::Move));
         h.run_steps(45);
     }
     let view = &h.state().views[0];

@@ -202,9 +202,23 @@ fn snap_to_content(
     None
 }
 
+/// The Measure tools' own clicks this frame: those of a press nobody holds.
+#[derive(Clone, Copy)]
+pub(crate) struct Clicks {
+    pub single: bool,
+    pub double: bool,
+}
+
+impl Clicks {
+    /// `resp`'s clicks, when the press is the tool's (`free`).
+    pub(crate) fn of(resp: &egui::Response, free: bool) -> Self {
+        Clicks { single: free && resp.clicked(), double: free && resp.double_clicked() }
+    }
+}
+
 pub(crate) fn page_input(
     ui: &egui::Ui,
-    resp: &egui::Response,
+    clicks: Clicks,
     doc: &Document,
     view: &mut DocView,
     cx: &crate::comments::PageCx<'_>,
@@ -254,7 +268,7 @@ pub(crate) fn page_input(
             point = measure::snap::constrain(*last, point);
         }
         hover = Some(point);
-        if resp.clicked() {
+        if clicks.single {
             if state.page != Some(page) {
                 state.cancel();
                 state.page = Some(page);
@@ -284,7 +298,7 @@ pub(crate) fn page_input(
         }
     }
     if state.page == Some(page) && !state.points.is_empty() {
-        if (resp.double_clicked() || !typing && ui.input(|i| i.key_pressed(egui::Key::Enter))) && matches!(tool, Tool::Perimeter | Tool::Area) {
+        if (clicks.double || !typing && ui.input(|i| i.key_pressed(egui::Key::Enter))) && matches!(tool, Tool::Perimeter | Tool::Area) {
             finish(state, &mut view.pending_edit, doc, page, tool, author, units);
         }
         if !typing && ui.input(|i| i.key_pressed(egui::Key::Backspace)) {
