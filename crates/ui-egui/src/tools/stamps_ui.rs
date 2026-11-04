@@ -280,11 +280,8 @@ pub(crate) fn encode(stamps: &[CustomStamp], next_id: u64) -> serde_json::Value 
 
 /// Read stamps and the identity counter back; malformed entries are dropped.
 pub(crate) fn decode(v: &serde_json::Value) -> (Vec<CustomStamp>, u64) {
-    let (entries, saved_next_id) = if v.is_array() {
-        (Some(v), None)
-    } else {
-        (v.get("stamps"), v.get("next_id").and_then(serde_json::Value::as_u64))
-    };
+    let (entries, saved_next_id) =
+        if v.is_array() { (Some(v), None) } else { (v.get("stamps"), v.get("next_id").and_then(serde_json::Value::as_u64)) };
     let stamps: Vec<CustomStamp> = entries
         .and_then(serde_json::Value::as_array)
         .map(|a| a.iter().filter_map(|x| serde_json::from_value::<CustomStamp>(x.clone()).ok()).filter(|s| s.data.len() <= MAX_STAMP_BYTES).collect())
@@ -308,12 +305,7 @@ pub(crate) fn decode(v: &serde_json::Value) -> (Vec<CustomStamp>, u64) {
         ids.insert(stamp.id);
         repaired.push(stamp);
     }
-    let minimum_next_id = repaired
-        .iter()
-        .map(|stamp| stamp.id)
-        .max()
-        .map(|id| id.checked_add(1).unwrap_or_default())
-        .unwrap_or(1);
+    let minimum_next_id = repaired.iter().map(|stamp| stamp.id).max().map(|id| id.checked_add(1).unwrap_or_default()).unwrap_or(1);
     let next_id = match saved_next_id {
         Some(0) => 0,
         Some(saved) if minimum_next_id != 0 => saved.max(minimum_next_id),
