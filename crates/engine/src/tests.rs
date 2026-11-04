@@ -10205,6 +10205,7 @@ fn script_char_limit_is_written_to_the_field() {
     let field = pdfcraft_forms::fields(&cos).into_iter().find(|f| f.name == "ranks").unwrap();
     assert_eq!(field.max_len, None);
     assert_eq!(cos.get(field.obj).as_dict().unwrap().int(b"MaxLen"), Some(0));
+}
 
 fn contains(haystack: &[u8], needle: &[u8]) -> bool {
     haystack.windows(needle.len()).any(|w| w == needle)

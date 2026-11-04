@@ -10562,6 +10562,7 @@ fn javascript_char_limit_persists_and_is_enforced_through_tools() {
     let cleared = ok(&mut a, "js_run", json!({ "doc": reopened, "script": "console.println(getField('Qty').charLimit)" }));
     assert_eq!(cleared["console"][0], "0");
     assert_eq!(saved_field_max_len(&dir.join("unlimited.pdf"), "Qty"), Some(0));
+}
 
 #[test]
 fn editor_crop_group_move_and_arrange_survive_added_item_deletion_through_tools() {
