@@ -67,6 +67,13 @@ impl PdfCraftApp {
         {
             self.cut_page_image(sel.page, sel.index);
         }
+        // Image files copied in Explorer, Finder or a file manager (#1289) come before the
+        // pasted picture: Finder puts the file's icon beside it, and that icon is what the
+        // window delivers.
+        #[cfg(not(target_arch = "wasm32"))]
+        if (paste || !pastes.is_empty()) && self.paste_copied_files() {
+            return;
+        }
         if !pastes.is_empty() {
             self.receive_pastes(i, pastes, true);
             return;

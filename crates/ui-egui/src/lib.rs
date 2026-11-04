@@ -470,6 +470,9 @@ pub struct PdfCraftApp {
     /// Native file pickers in flight (they never block the frame; see `pickers`).
     #[cfg(not(target_arch = "wasm32"))]
     pickers: pickers::Pickers,
+    /// Copied image files being read for ⌘V, off the frame (see `content_ui`).
+    #[cfg(not(target_arch = "wasm32"))]
+    paste_reads: content_ui::PasteReads,
     /// Pick these files instead of showing a picker (tests and automation).
     #[cfg(not(target_arch = "wasm32"))]
     pub pick_override: Option<Vec<String>>,
