@@ -3992,7 +3992,12 @@ fn embedded_values_are_copied_out_only_as_far_as_the_budget() {
 </subform></template>"#
     );
     crate::layout::EMBED_COPIED.with(|c| c.set(0));
-    layout_xml(&tpl).unwrap();
+    // The draw budget counts embedded values too (1 MiB in tests), so it may stop the draw
+    // before its last pass; either way no more than this is copied out.
+    match layout_xml(&tpl) {
+        Ok(_) | Err(XfaError::TooLarge(_)) => {}
+        Err(e) => panic!("{e:?}"),
+    }
     let copied = crate::layout::EMBED_COPIED.with(|c| c.get());
     // The draw is measured at most seven times before it is laid out once.
     assert!(copied <= 8 * text::MAX_EMBEDDED as u64 + 8 * 4 * 201, "{copied} bytes of embedded values copied");
