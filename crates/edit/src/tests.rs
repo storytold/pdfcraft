@@ -5339,6 +5339,51 @@ fn hebrew_letters_the_page_font_lacks_use_the_hebrew_face() {
     assert_eq!(text::text_blocks(&reopen(&doc), 0).unwrap()[0].text, "עברית מלאה");
 }
 
+/// Hangul is drawn with the Korean face from craft-fonts (NanumGothic), and so are the Latin
+/// letters and digits on its line; the Japanese faces have no Hangul, so it used to be refused.
+/// A build without the Korean face says so and changes nothing.
+#[test]
+fn korean_replacement_uses_the_korean_face() {
+    let mut doc = text_page("BT /F2 12 Tf 72 700 Td (ab) Tj ET");
+    let before = page_content_bytes(&doc, 0);
+    // Syllables, a compatibility jamo, Latin, digits and punctuation on one line.
+    let typed = "한글 편집 ㅋ 2026 (PDF), 가나다!";
+    let line = text::replace_line(&mut doc, 0, 0, typed);
+    if pdfcraft_fonts::document_korean_font().is_none() {
+        let Err(EditError::Invalid(msg)) = line else { panic!("expected a clear error, got {line:?}") };
+        assert!(msg.contains("Korean fallback font") && msg.contains("CRAFT_FONTS_DIR"), "{msg}");
+        assert_eq!(page_content_bytes(&doc, 0), before);
+        eprintln!("built without a craft-fonts Korean face: the Type 3 path is checked with CRAFT_FONTS_DIR");
+        return;
+    }
+    assert_eq!(line.unwrap().substituted.as_deref(), Some("NanumGothic Type3"));
+    let content = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    assert!(content.contains("/PCKo") && !content.contains("/PCJp"), "{content}");
+    let reopened = reopen(&doc);
+    assert_eq!(text::text_lines(&reopened, 0).unwrap()[0].text, typed);
+    // One outlined glyph per distinct character, in a font recognized as ours.
+    let p = pdfcraft_model::pages(&reopened).swap_remove(0);
+    let res = reopened.resolve(p.dict.get(b"Resources").unwrap());
+    let fonts = reopened.resolve(res.as_dict().unwrap().get(b"Font").unwrap());
+    let font = reopened.resolve(fonts.as_dict().unwrap().get(b"PCKo").unwrap());
+    assert_eq!(font.as_dict().unwrap().name(b"Name"), Some(&b"PCKorean"[..]));
+    let procs = reopened.resolve(font.as_dict().unwrap().get(b"CharProcs").unwrap());
+    let procs = procs.as_dict().unwrap();
+    assert_eq!(procs.iter().count(), typed.chars().collect::<std::collections::HashSet<_>>().len());
+    for (_, glyph) in procs.iter() {
+        let pdfcraft_cos::Object::Stream(s) = &*reopened.resolve(glyph) else { panic!("glyph stream") };
+        let path = String::from_utf8(s.decoded().unwrap()).unwrap();
+        assert!(path.starts_with(|c: char| c.is_ascii_digit()) && path.contains(" d1"), "{path}");
+    }
+
+    // A whole paragraph too, then an edit of the edited line.
+    let mut doc = text_page("BT /F2 12 Tf 72 700 Td (ab) Tj ET");
+    assert_eq!(text::replace_block(&mut doc, 0, 0, "문단 전체를 한글로").unwrap().substituted.as_deref(), Some("NanumGothic Type3"));
+    assert_eq!(text::text_blocks(&reopen(&doc), 0).unwrap()[0].text, "문단 전체를 한글로");
+    text::replace_line(&mut doc, 0, 0, "다시 고침").unwrap();
+    assert_eq!(text::text_lines(&reopen(&doc), 0).unwrap()[0].text, "다시 고침");
+}
+
 /// #2013: the dialog asks `first_undrawable` before offering OK, so it must refuse exactly what
 /// applying refuses: a Cyrillic footer was previewed (in the interface font) and then failed.
 #[test]

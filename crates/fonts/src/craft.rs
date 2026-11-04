@@ -102,6 +102,17 @@ pub fn document_hebrew_font(bold: bool) -> Option<&'static CraftFont> {
     hebrew_face(CRAFT_FONTS, bold)
 }
 
+/// The face for Korean text written into PDFs: the first `Kore` or `Hang` face (craft-fonts has
+/// NanumGothic Regular). `None` without craft-fonts or without a Korean face, and on the web, whose
+/// build carries no Korean face. There is one weight, so bold sources are drawn in Regular.
+pub fn document_korean_font() -> Option<&'static CraftFont> {
+    korean_face(CRAFT_FONTS)
+}
+
+fn korean_face(faces: &[CraftFont]) -> Option<&CraftFont> {
+    faces.iter().find(|f| f.covers("Kore") || f.covers("Hang"))
+}
+
 fn hebrew_face(faces: &[CraftFont], bold: bool) -> Option<&CraftFont> {
     let hebr = || faces.iter().filter(|f| f.covers("Hebr"));
     let style = if bold { "Bold" } else { "Regular" };
@@ -312,6 +323,20 @@ mod tests {
         assert!(hebrew_face(&faces[..1], false).is_none());
         assert_eq!(ui_hebrew_fonts().len(), CRAFT_FONTS.iter().filter(|f| f.covers("Hebr")).count());
         assert_eq!(document_hebrew_font(false).is_some(), CRAFT_FONTS.iter().any(|f| f.covers("Hebr")));
+    }
+
+    #[test]
+    fn korean_document_face_is_the_first_kore_or_hang_face() {
+        let faces = [
+            CraftFont { family: "BIZ UDPGothic", style: "Regular", scripts: &["Jpan"], bytes: b"japanese" },
+            CraftFont { family: "FakeHangul", style: "Regular", scripts: &["Hang"], bytes: b"hang" },
+            CraftFont { family: "FakeKorean", style: "Regular", scripts: &["Hang", "Kore"], bytes: b"kore" },
+        ];
+        assert_eq!(korean_face(&faces).map(|f| f.bytes), Some(&b"hang"[..]));
+        assert_eq!(korean_face(&faces[2..]).map(|f| f.bytes), Some(&b"kore"[..]));
+        // Never a face of another script, even a CJK one.
+        assert!(korean_face(&faces[..1]).is_none());
+        assert_eq!(document_korean_font().is_some(), CRAFT_FONTS.iter().any(|f| f.covers("Kore") || f.covers("Hang")));
     }
 
     /// `build.rs` embeds the Japanese CJK faces whole and any other CJK face only up to

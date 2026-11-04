@@ -289,7 +289,7 @@ mod tests {
     }
 
     #[test]
-    fn hebrew_and_japanese_fallback_shards_are_recognized_as_ours() {
+    fn hebrew_japanese_and_korean_fallback_shards_are_recognized_as_ours() {
         static HEBR: &[&str] = &["Hebr"];
         let face = CraftFont { family: "FakeHebrew", style: "Regular", scripts: HEBR, bytes: b"" };
         let glyph = |code, ch| Type3Glyph { code, ch, path: b"0 0 0 0 0 0 d1\nf\n".to_vec(), width: 0.5 };
@@ -300,7 +300,12 @@ mod tests {
         let he1 = add_type3_font(&mut doc, &mut fonts, &face, true, vec![glyph(1, 'ב')]);
         let jp = add_type3_font(&mut doc, &mut fonts, &face, false, vec![glyph(1, 'あ')]);
         assert_eq!([he.as_str(), he1.as_str(), jp.as_str()], ["PCHe", "PCHe1", "PCJp"]);
-        for name in [&he, &he1, &jp] {
+        // The Korean font is told by its face, whatever the caller passes.
+        static HANG_KORE: &[&str] = &["Hang", "Kore"];
+        let korean = CraftFont { family: "FakeKorean", style: "Regular", scripts: HANG_KORE, bytes: b"" };
+        let ko = add_type3_font(&mut doc, &mut fonts, &korean, false, vec![glyph(1, '한')]);
+        assert_eq!(ko, "PCKo");
+        for name in [&he, &he1, &jp, &ko] {
             let font = fonts.get(name.as_bytes()).and_then(Object::as_dict).cloned().unwrap_or_default();
             assert!(is_type3_fallback(&font), "{name} isn't recognized as a generated fallback font");
         }
