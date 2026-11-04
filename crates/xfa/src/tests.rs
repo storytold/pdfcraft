@@ -2645,6 +2645,52 @@ fn a_relayout_reuses_the_shadings_the_first_pass_wrote() {
     assert_eq!((shading_ref(&doc, b"Sh0"), shading_ref(&doc, b"Sh1")), first, "the second pass reuses both shading objects");
 }
 
+/// A first-pass shading the file has since given a BBox, a function Range, or an Extend
+/// short of [true true] is not this writer's shading any more (#6079): each of those clips
+/// or stops the progression, so a re-layout writes its own object instead of reusing it.
+#[test]
+fn a_relayout_does_not_reuse_a_shading_that_clips_or_stops_early() {
+    let blue = r#"<color value="0,0,255"/>"#;
+    let xdp = fill_form(&[fill_row(0.0, &format!("<linear>{blue}</linear>"), "", "")]);
+    let form = layout_xml(&xdp).unwrap();
+    let shading_ref = |doc: &Document| {
+        let root = doc.get(doc.root().unwrap());
+        let pages = doc.get(root.as_dict().unwrap().reference(b"Pages").unwrap());
+        let kids = pages.as_dict().unwrap().get(b"Kids").map(|k| doc.resolve(k)).unwrap();
+        let page = doc.get(kids.as_array().unwrap()[0].as_ref().unwrap()).as_dict().unwrap().clone();
+        let resources = doc.resolve(page.get(b"Resources").unwrap());
+        let shadings = resources.as_dict().unwrap().get(b"Shading").map(|s| doc.resolve(s)).expect("the page names its shadings");
+        shadings.as_dict().unwrap().reference(b"Sh0").expect("the gradient's shading")
+    };
+    // (name, the mutation a foreign editor could have made to the first pass's shading)
+    type Spoil = Box<dyn Fn(&mut Dict)>;
+    let spoil: Vec<(&str, Spoil)> = vec![
+        ("a BBox", Box::new(|d| d.set(b"BBox".to_vec(), Object::Array(vec![Object::Int(0), Object::Int(0), Object::Int(10), Object::Int(10)])))),
+        (
+            "a function Range",
+            Box::new(|d| {
+                let mut f = d.get(b"Function").and_then(|f| f.as_dict()).expect("a function").clone();
+                f.set(
+                    b"Range".to_vec(),
+                    Object::Array(vec![Object::Int(0), Object::Int(1), Object::Int(0), Object::Int(1), Object::Int(0), Object::Int(1)]),
+                );
+                d.set(b"Function".to_vec(), Object::Dict(f));
+            }),
+        ),
+        ("an Extend of [true false]", Box::new(|d| d.set(b"Extend".to_vec(), Object::Array(vec![Object::Bool(true), Object::Bool(false)])))),
+    ];
+    for (name, spoil_it) in spoil {
+        let mut doc = Document::open(Arc::new(shell(&xdp))).unwrap();
+        crate::pdf::write_form(&mut doc, &form).unwrap();
+        let first = shading_ref(&doc);
+        let mut d = doc.get(first).as_dict().expect("a shading dict").clone();
+        spoil_it(&mut d);
+        doc.set(first, Object::Dict(d));
+        crate::pdf::write_form(&mut doc, &form).unwrap();
+        assert_ne!(shading_ref(&doc), first, "a shading with {name} is not reused");
+    }
+}
+
 /// The shading `name` in the page's `/Shading` resources: its type, coordinates, and its
 /// function's two colours.
 fn shading_of(doc: &Document, page: &Dict, name: &str) -> (i64, Vec<f64>, Vec<f64>, Vec<f64>) {

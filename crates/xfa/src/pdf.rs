@@ -980,6 +980,13 @@ fn earlier_shadings(doc: &Document, pages: ObjRef) -> HashMap<String, (ObjRef, u
             if !f.get(b"Domain").is_some_and(unit) || !d.get(b"Domain").is_none_or(unit) {
                 continue;
             }
+            // Nor may it clip or stop where this writer's would not: a BBox clips the
+            // painted area, a function Range clips its outputs, and an Extend short of
+            // [true true] ends the progression at the shading's endpoints.
+            let extends = |o: &Object| o.as_array().is_some_and(|a| a.len() == 2 && a.iter().all(|v| matches!(v, Object::Bool(true))));
+            if d.get(b"BBox").is_some() || f.get(b"Range").is_some() || !d.get(b"Extend").is_some_and(extends) {
+                continue;
+            }
             let Some(coords) = coords.as_array() else { continue };
             let rgb_of = |o: Option<&Object>| -> Option<[f64; 3]> {
                 let a = o?.as_array()?;
