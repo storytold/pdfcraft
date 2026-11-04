@@ -195,7 +195,8 @@ impl Field {
             let Some(parent) = d.get(b"Parent").map(|p| doc.resolve(p)).and_then(|p| p.as_dict().cloned()) else { return false };
             d = parent;
         }
-        false
+        // a chain too deep to read to its end: refuse (a ReadOnly bit may sit past the limit)
+        true
     }
 
     /// The signature dictionary in /V. A field without one is unsigned, whether /V is missing,
@@ -385,4 +386,36 @@ pub(super) fn mk_rotation(doc: &Document, widget: &Dict) -> i64 {
         .and_then(|mk| mk.as_dict().and_then(|mk| mk.get(b"R")).map(|r| doc.resolve(r)))
         .and_then(|r| r.as_int().or_else(|| r.as_f64().filter(|v| v.is_finite() && v.abs() <= 1.0e6).map(|v| v.round() as i64)));
     r.map(|r| r.rem_euclid(360)).filter(|q| matches!(q, 90 | 180 | 270)).unwrap_or(0)
+}
+
+#[cfg(test)]
+mod read_only_tests {
+    use super::*;
+
+    /// A field whose `/Parent` chain is `depth` dictionaries long, the topmost holding `ff`.
+    fn field(doc: &mut Document, depth: usize, ff: Option<i64>) -> Field {
+        let mut top = Dict::new();
+        if let Some(ff) = ff {
+            top.set(b"Ff".to_vec(), Object::Int(ff));
+        }
+        let mut parent = doc.add(Object::Dict(top));
+        for _ in 1..depth {
+            let mut d = Dict::new();
+            d.set(b"Parent".to_vec(), Object::Ref(parent));
+            parent = doc.add(Object::Dict(d));
+        }
+        let mut leaf = Dict::new();
+        leaf.set(b"Parent".to_vec(), Object::Ref(parent));
+        Field { name: "f".into(), r: None, dict: leaf, widgets: Vec::new() }
+    }
+
+    #[test]
+    fn a_chain_too_deep_to_read_is_read_only() {
+        let mut doc = Document::new_empty();
+        assert!(field(&mut doc, 3, Some(1)).read_only(&doc));
+        assert!(!field(&mut doc, 3, Some(0)).read_only(&doc));
+        assert!(!field(&mut doc, 3, None).read_only(&doc), "a short chain with no flags is writable");
+        // the flag sits past the 64 dictionaries read: refused, not signed
+        assert!(field(&mut doc, 80, Some(1)).read_only(&doc));
+    }
 }
