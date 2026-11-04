@@ -145,6 +145,9 @@ fn get_page_box(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<Js
     let page = if page_value.is_undefined() {
         0
     } else {
+        if !page_value.is_number() {
+            return Err(error("getPageBox page must be a non-negative in-range integer"));
+        }
         let page = page_value.to_number(ctx)?;
         if !page.is_finite() || page < 0.0 || page.fract() != 0.0 || page >= usize::MAX as f64 {
             return Err(error("getPageBox page must be a non-negative in-range integer"));
@@ -163,7 +166,7 @@ fn get_page_box(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<Js
         90 => [y0 - cy0, cx1 - x0, y1 - cy0, cx1 - x1],
         180 => [cx1 - x1, cy1 - y0, cx1 - x0, cy1 - y1],
         270 => [cy1 - y1, x1 - cx0, cy1 - y0, x0 - cx0],
-        _ => [x0, y1, x1, y0],
+        _ => [x0 - cx0, y1 - cy0, x1 - cx0, y0 - cy0],
     };
     if !rotated.iter().all(|value| value.is_finite()) {
         return Err(error("getPageBox returned non-finite coordinates"));

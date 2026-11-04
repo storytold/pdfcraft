@@ -61,6 +61,10 @@ fn intersect(a: [f64; 4], b: [f64; 4]) -> [f64; 4] {
     [a[0].max(b[0]), a[1].max(b[1]), a[2].min(b[2]), a[3].min(b[3])]
 }
 
+fn has_area(r: [f64; 4]) -> bool {
+    r[2] > r[0] && r[3] > r[1]
+}
+
 /// The effective boxes of every page: media, crop, bleed, trim, art.
 pub fn page_boxes(doc: &Document) -> Result<Vec<[[f64; 4]; 5]>, OrganizeError> {
     Ok(walk(doc)?
@@ -70,8 +74,8 @@ pub fn page_boxes(doc: &Document) -> Result<Vec<[[f64; 4]; 5]>, OrganizeError> {
             let d = obj.as_dict().cloned().unwrap_or_default();
             let own = |k: &[u8]| rect_of(d.get(k).or_else(|| inherited.get(k)), doc);
             let media = own(b"MediaBox").unwrap_or([0.0, 0.0, 612.0, 792.0]);
-            let crop = own(b"CropBox").map(|c| intersect(c, media)).unwrap_or(media);
-            let child = |k: &[u8]| rect_of(d.get(k), doc).map(|c| intersect(c, media)).unwrap_or(crop);
+            let crop = own(b"CropBox").map(|c| intersect(c, media)).filter(|r| has_area(*r)).unwrap_or(media);
+            let child = |k: &[u8]| rect_of(d.get(k), doc).map(|c| intersect(c, media)).filter(|r| has_area(*r)).unwrap_or(crop);
             [media, crop, child(b"BleedBox"), child(b"TrimBox"), child(b"ArtBox")]
         })
         .collect())
