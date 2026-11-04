@@ -10349,7 +10349,7 @@ fn redacting_an_optimized_jbig2_page_stores_the_rest_of_its_group_again() {
     assert_eq!(globals(&doc, images[2]), None, "the DeviceN page is coded alone");
     pdfcraft_redact::apply(&mut doc, None).unwrap();
     let saved = Document::open(Arc::new(write_full(&doc, &SaveOptions::default()).unwrap())).unwrap();
-    // Named in any spelling of its parameters: the stream's dictionary holds the key.
+    // Optimize writes the parameters direct, so a stream that names the dictionary holds the key.
     let names = |s: &Stream| {
         let mut bytes = Vec::new();
         pdfcraft_cos::serialize(&Object::Dict(s.dict.clone()), &mut bytes);
