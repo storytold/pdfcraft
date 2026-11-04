@@ -455,7 +455,7 @@ pub(crate) struct PageInput<'a> {
 }
 
 /// Preview and clicks with a Fill & Sign tool on one page.
-pub(crate) fn page_input(cx: PageToolContext<'_>, input: PageInput<'_>, view: &mut DocView) -> Option<FillAction> {
+pub(crate) fn page_input(cx: PageToolContext<'_>, input: PageInput<'_>, free: bool, view: &mut DocView) -> Option<FillAction> {
     let PageToolContext { ui, resp, xf, ptr, page, info, .. } = cx;
     let PageInput { tool, text_size, text_color, signature, initials, preview, author, date_text } = input;
     let pointer = ptr.within(xf.rect)?;
@@ -475,7 +475,8 @@ pub(crate) fn page_input(cx: PageToolContext<'_>, input: PageInput<'_>, view: &m
     } else {
         view.cursor.claim(Layer::ToolArea, if tool == FillTool::Text { egui::CursorIcon::Text } else { egui::CursorIcon::Crosshair });
     }
-    if !resp.clicked() {
+    // The tool's own click: one nobody holds.
+    if !(free && resp.clicked()) {
         return None;
     }
     // Typed text starts a little above the click, as displayed.
