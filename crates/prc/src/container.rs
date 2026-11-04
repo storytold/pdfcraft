@@ -314,13 +314,16 @@ impl PrcFile {
         if mf_end < mf_start {
             return Err(PrcError::Malformed("model file ends before it starts".into()));
         }
+        if mf_end > data.len() {
+            return Err(PrcError::Malformed(format!("model file ends at {mf_end}, past the {}-byte stream", data.len())));
+        }
 
         let mut budget = Budget { left: limit, limit };
         // prc-rs: the last section runs to the model file's start.
         let last = mf_start.min(data.len());
         let file_structures =
             descriptions.iter().map(|(id, offs)| file_structure(data, *id, &Extent { offs, last }, &mut budget)).collect::<Result<Vec<_>, _>>()?;
-        let model_file = budget.inflate(data, (mf_start, mf_end.min(data.len())), "model file")?;
+        let model_file = budget.inflate(data, (mf_start, mf_end), "model file")?;
         Ok(PrcFile { header, file_structures, model_file, uncompressed_files })
     }
 }

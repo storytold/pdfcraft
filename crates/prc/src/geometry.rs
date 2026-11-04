@@ -74,7 +74,8 @@ impl Matrix {
 impl TriangleMesh {
     /// This mesh with every position mapped through `m` and every stored normal through its
     /// inverse transpose (renormalised); a mirroring `m` (negative determinant) reverses each
-    /// triangle so the outside stays counter-clockwise.
+    /// triangle so the outside stays counter-clockwise. A projective `m` (a last row other than
+    /// `[0, 0, 0, w]`) bends the surface per point, so the stored normals are dropped.
     ///
     /// ```
     /// use pdfcraft_prc::{Matrix, TriangleMesh};
@@ -97,6 +98,10 @@ impl TriangleMesh {
         // and the result renormalised.
         let det = m.det3();
         let sign = if det < 0.0 { -1.0 } else { 1.0 };
+        if m.at(3, 0) != 0.0 || m.at(3, 1) != 0.0 || m.at(3, 2) != 0.0 {
+            out.normals.clear();
+            out.triangle_normals.clear();
+        }
         for n in &mut out.normals {
             let [x, y, z] = *n;
             let v = [0, 1, 2].map(|i| sign * (m.cofactor(i, 0) * x + m.cofactor(i, 1) * y + m.cofactor(i, 2) * z));
@@ -169,6 +174,25 @@ mod tests {
         assert_eq!(placed.triangles, [[0, 2, 1]]);
         assert_eq!(placed.triangle_normals, [[0, 0, 0]]);
         assert_eq!(placed.normals, [[1.0, 0.0, 0.0]]);
+    }
+
+    #[test]
+    fn a_projective_transform_drops_the_stored_normals() {
+        let mesh = TriangleMesh {
+            positions: vec![[0.0; 3], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]],
+            triangles: vec![[0, 1, 2]],
+            normals: vec![[1.0, 0.0, 1.0]],
+            triangle_normals: vec![[0, 0, 0]],
+            ..TriangleMesh::default()
+        };
+        let mut projective = Matrix::IDENTITY;
+        projective.0[3][0] = 1.0;
+        let placed = mesh.transformed(&projective);
+        assert!(placed.normals.is_empty() && placed.triangle_normals.is_empty());
+        // A uniform w keeps them.
+        let mut uniform = Matrix::IDENTITY;
+        uniform.0[3][3] = 2.0;
+        assert_eq!(mesh.transformed(&uniform).triangle_normals, [[0, 0, 0]]);
     }
 
     impl Matrix {

@@ -41,7 +41,8 @@ impl Schema {
     ///
     /// # Errors
     /// [`PrcError::Truncated`] when a count runs past the data;
-    /// [`PrcError::Malformed`] for an entity type listed twice.
+    /// [`PrcError::Malformed`] for an entity type listed twice; [`PrcError::TooManyElements`]
+    /// past the reader's allowance, one element per entry and per token.
     pub fn read(r: &mut BitReader<'_>) -> Result<Self, PrcError> {
         let n = r.unsigned_integer()? as usize;
         // Every entry takes at least two bits.
@@ -50,6 +51,8 @@ impl Schema {
         }
         let mut programs = HashMap::new();
         for _ in 0..n {
+            // The entry itself costs one element, so empty programs are not free.
+            r.take_elements(1)?;
             let entity_type = r.unsigned_integer()?;
             let len = r.unsigned_integer()? as usize;
             if len > r.remaining() {
@@ -336,12 +339,16 @@ mod tests {
         w
     }
 
-    /// A schema program's tokens are charged against the reader's element allowance.
+    /// Each schema entry and its program's tokens are charged against the reader's element
+    /// allowance.
     #[test]
     fn program_tokens_are_charged_against_the_allowance() {
         let bytes = schema(&[(172, &[1, 2, 3])]).bytes();
-        assert!(matches!(Schema::read(&mut BitReader::with_elements(&bytes, 2)), Err(PrcError::TooManyElements { .. })));
-        assert!(Schema::read(&mut BitReader::with_elements(&bytes, 3)).is_ok());
+        assert!(matches!(Schema::read(&mut BitReader::with_elements(&bytes, 3)), Err(PrcError::TooManyElements { .. })));
+        assert!(Schema::read(&mut BitReader::with_elements(&bytes, 4)).is_ok());
+        let empty = schema(&[(172, &[]), (173, &[]), (174, &[])]).bytes();
+        assert!(matches!(Schema::read(&mut BitReader::with_elements(&empty, 2)), Err(PrcError::TooManyElements { .. })));
+        assert!(Schema::read(&mut BitReader::with_elements(&empty, 3)).is_ok());
     }
 
     fn run(entries: &[(u32, &[u32])], data: &W) -> (Result<(), PrcError>, usize) {
