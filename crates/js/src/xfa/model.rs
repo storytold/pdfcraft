@@ -61,6 +61,9 @@ pub struct XfaEvent {
     pub target: String,
     pub new_text: String,
     pub prev_text: String,
+    /// The modifier keys held when the user made the event happen (`xfa.event.shift`,
+    /// `xfa.event.modifier`).
+    pub keys: crate::Keys,
 }
 
 /// About the document.

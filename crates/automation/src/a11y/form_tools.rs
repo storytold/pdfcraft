@@ -28,7 +28,8 @@ impl Automation {
     /// messages, console lines, requests, error, the failing document scripts' errors and result.
     pub(crate) fn js_run(&mut self, a: &Args) -> Result<Value> {
         let id = self.doc(a)?.id;
-        let o = self.session.run_javascript(id, a.str("script")?, a.opt_str("field")?).map_err(failed)?;
+        let keys = pdfcraft_engine::js::Keys { shift: a.opt_bool("shift")?.unwrap_or(false), modifier: a.opt_bool("modifier")?.unwrap_or(false) };
+        let o = self.session.run_javascript_with_keys(id, a.str("script")?, a.opt_str("field")?, keys).map_err(failed)?;
         let reqs: Vec<Value> = o.requests.iter().map(request_json).collect();
         let alerts: Vec<Value> = o.alerts.iter().map(alert_json).collect();
         Ok(json!({ "alerts": alerts, "console": o.console, "requests": reqs, "error": o.error, "document_errors": o.doc_errors, "result": o.result }))

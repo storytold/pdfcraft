@@ -267,7 +267,10 @@ impl Interp<'_> {
                 "prevtext" => Val::Str(self.event.prev_text.clone()),
                 "change" => Val::Str(String::new()),
                 "target" => Val::Node(self.h.current),
-                "selstart" | "selend" | "cancelaction" | "reenter" | "shift" | "modifier" | "keydown" | "commitkey" => Val::Num(0.0),
+                // FormCalc has no booleans: a held key is 1.
+                "shift" => Val::Num(f64::from(u8::from(self.event.keys.shift))),
+                "modifier" => Val::Num(f64::from(u8::from(self.event.keys.modifier))),
+                "selstart" | "selend" | "cancelaction" | "reenter" | "keydown" | "commitkey" => Val::Num(0.0),
                 _ => Val::Sink,
             }),
             Val::Xfa => Ok(match name.to_ascii_lowercase().as_str() {

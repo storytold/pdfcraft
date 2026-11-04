@@ -395,10 +395,12 @@ pub enum Edit {
         changes: Vec<pdfcraft_forms::FieldChange>,
     },
     /// An XFA form's scripted event (a button's `click`, say) on the object at `som`: what the
-    /// script changes (values, rows, visibility) is applied and the form laid out again.
+    /// script changes (values, rows, visibility) is applied and the form laid out again. `keys`
+    /// are the modifier keys the user held (`xfa.event.shift`).
     XfaEvent {
         som: String,
         activity: String,
+        keys: pdfcraft_js::Keys,
     },
     /// Scan & OCR ▸ Recognize text: put recognised words on `page` as invisible text over the
     /// image (from [`ocr::OcrJob::run`](crate::ocr::OcrJob::run)).

@@ -2072,3 +2072,55 @@ fn a_plain_form_sees_the_xfa_version_but_not_installed() {
     assert_eq!(o.value, "undefined number 3.5");
     assert_eq!(o.alerts, [Message::plain("old viewer")]);
 }
+
+/// #6159: a button clicked with Shift or Ctrl (Command) held tells its script, in each language
+/// a form's scripts are written in: `event.shift` and `event.modifier` in Acrobat JavaScript,
+/// `xfa.event.shift` and `xfa.event.modifier` in an XFA form's JavaScript, and `$event.shift`
+/// and `$event.modifier` (1 or 0) in its FormCalc. Without keys they read false.
+mod event_keys {
+    use super::xfa_model::form;
+    use crate::formcalc::run_formcalc;
+    use crate::xfa::{XfaDoc, XfaEvent, run_xfa};
+    use crate::{Event, Keys, Limits};
+
+    const NONE: Keys = Keys { shift: false, modifier: false };
+    const SHIFT: Keys = Keys { shift: true, modifier: false };
+    const CTRL: Keys = Keys { shift: false, modifier: true };
+
+    fn acrobat(keys: Keys) -> String {
+        let o = super::go("event.shift + ',' + event.modifier", &Event { keys, ..Event::field("Mouse Up", "total", "") });
+        assert_eq!(o.error, None, "{o:?}");
+        o.result.unwrap_or_default()
+    }
+
+    fn xfa(script: &str, formcalc: bool, keys: Keys) -> String {
+        let ev = XfaEvent { activity: "click".into(), target: "form1[0].page1[0].go[0]".into(), keys, ..Default::default() };
+        let doc = XfaDoc { file_name: "f.pdf".into(), page: 0, page_count: 1 };
+        let o = if formcalc {
+            run_formcalc(script, &ev, &doc, &form(), Limits::default())
+        } else {
+            run_xfa(script, &ev, &doc, &form(), Limits::default())
+        };
+        assert_eq!(o.error, None, "{script}: {o:?}");
+        o.result.unwrap_or_default()
+    }
+
+    #[test]
+    fn a_click_tells_its_script_which_modifier_keys_were_held() {
+        assert_eq!(acrobat(NONE), "false,false");
+        assert_eq!(acrobat(SHIFT), "true,false");
+        assert_eq!(acrobat(CTRL), "false,true");
+        let js = "xfa.event.shift + ',' + xfa.event.modifier + ',' + event.shift";
+        assert_eq!(xfa(js, false, NONE), "false,false,false");
+        assert_eq!(xfa(js, false, SHIFT), "true,false,true", "`event` is `xfa.event`");
+        assert_eq!(xfa(js, false, CTRL), "false,true,false");
+        // The issue's script: Shift adds a hundred rows, a plain click one.
+        assert_eq!(xfa("xfa.event.shift ? 100 : 1", false, SHIFT), "100");
+        assert_eq!(xfa("xfa.event.shift ? 100 : 1", false, NONE), "1");
+        let fc = "Concat($event.shift, \",\", $event.modifier)";
+        assert_eq!(xfa(fc, true, NONE), "0,0");
+        assert_eq!(xfa(fc, true, SHIFT), "1,0");
+        assert_eq!(xfa(fc, true, CTRL), "0,1");
+        assert_eq!(xfa("if ($event.shift) then 100 else 1 endif", true, SHIFT), "100");
+    }
+}

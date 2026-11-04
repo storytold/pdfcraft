@@ -2691,6 +2691,19 @@ fn presentation_click_state(ui: &egui::Ui, view: &DocView, navigation_rect: Rect
     })
 }
 
+/// The modifier keys of a click on a button, for its script (`event.shift`, #6159): as held now,
+/// or as the click's own release carried them (a synthetic click).
+fn click_keys(ui: &egui::Ui) -> pdfcraft_engine::js::Keys {
+    ui.input(|i| {
+        let released = i.events.iter().find_map(|e| match e {
+            egui::Event::PointerButton { button: egui::PointerButton::Primary, pressed: false, modifiers, .. } => Some(*modifiers),
+            _ => None,
+        });
+        let m = released.unwrap_or(i.modifiers);
+        pdfcraft_engine::js::Keys { shift: m.shift || i.modifiers.shift, modifier: m.command || i.modifiers.command }
+    })
+}
+
 /// Pinch / ctrl+scroll zoom, anchored on the pointer or the current page.
 fn pinch_zoom(ui: &egui::Ui, view: &mut DocView, zoom_delta: f32, navigation_rect: Rect, enabled: bool) {
     if zoom_delta.is_finite() && zoom_delta > 0.0 && zoom_delta != 1.0 && enabled && ui.rect_contains_pointer(navigation_rect) {
@@ -3418,7 +3431,7 @@ fn apply_frame_requests(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui, 
         }
     }
     if let Some((name, action)) = app.views[index].forms.button.take() {
-        run_button(app, index, &name, action);
+        run_button(app, index, &name, action, click_keys(ui));
     }
     if copy_selected {
         app.execute("edit.copy");
