@@ -203,10 +203,11 @@ impl Ctx<'_, '_> {
         let styled = faces.iter().any(|f| !f.styles.is_empty());
         let mut corners = Corners::default();
         for f in &faces {
+            // Faces may reuse one index range, so each face's triangles are charged before
+            // they are made.
+            self.r.take_elements(f.triangle_count()?)?;
             let start = mesh.triangles.len();
             let entities = f.triangulate(&indices, !recalc, mesh.positions.len(), &mut mesh.triangles, &mut corners)?;
-            // Faces may reuse one index range, so the triangles are charged as they are made.
-            self.r.take_elements(mesh.triangles.len().saturating_sub(start))?;
             mesh.faces.push(start..mesh.triangles.len());
             if styled {
                 f.styles_into(&entities, &mut mesh.triangle_styles);

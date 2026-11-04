@@ -119,6 +119,19 @@ impl Face {
         Ok(n)
     }
 
+    /// Triangles [`Self::triangulate`] makes: one per triangle-block count, two fewer than the
+    /// points of each fan and strip.
+    pub(super) fn triangle_count(&self) -> Result<usize, PrcError> {
+        let mut n = 0usize;
+        for (b, sizes) in self.entities()? {
+            for s in sizes {
+                let s = (s & COUNT_MASK) as usize;
+                n = n.saturating_add(if matches!(b.shape, Shape::Triangles) { s } else { s.saturating_sub(2) });
+            }
+        }
+        Ok(n)
+    }
+
     /// Emit the face's triangles into `out`; `normals` = the index array stores normal slots,
     /// in which case each triangle's corner normal slots go to `corners`, as do its corner
     /// texture slots. Returns the triangles each triangulation entity emitted, in order: one

@@ -303,11 +303,12 @@ impl Exec<'_, '_, '_> {
                 if !run {
                     return Ok(0);
                 }
+                let overflow = || malformed("a schema expression overflows");
                 Ok(match t {
-                    29 => a.wrapping_mul(b),
+                    29 => a.checked_mul(b).ok_or_else(overflow)?,
                     30 => a.checked_div(b).ok_or_else(|| malformed("division by zero"))?,
-                    31 => a.wrapping_add(b),
-                    32 => a.wrapping_sub(b),
+                    31 => a.checked_add(b).ok_or_else(overflow)?,
+                    32 => a.checked_sub(b).ok_or_else(overflow)?,
                     33 => i64::from(a < b),
                     34 => i64::from(a <= b),
                     35 => i64::from(a > b),
@@ -490,6 +491,14 @@ mod tests {
         let (res, used) = run(&[(172, prog)], &d);
         res.unwrap();
         assert_eq!(used, want);
+    }
+
+    #[test]
+    fn an_expression_that_overflows_is_malformed() {
+        // For ((2^31 * 2^31) * 4) { UInt }: 2^64 would wrap to 0 and read nothing.
+        let prog: &[u32] = &[15, 29, 29, 26, 1 << 31, 26, 1 << 31, 26, 4, 3];
+        let (res, _) = run(&[(172, prog)], &W::default());
+        assert!(matches!(res, Err(PrcError::Malformed(m)) if m.contains("overflows")));
     }
 
     #[test]

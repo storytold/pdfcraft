@@ -17,7 +17,8 @@ pub const PRC_READER_VERSION: u32 = 8137;
 /// The most file structures [`PrcFile::parse`] accepts.
 pub const MAX_FILE_STRUCTURES: usize = 65_536;
 
-/// Ceiling on the total inflated size of every section in one PRC stream.
+/// Ceiling on the total inflated size of every section in one PRC stream, together with the
+/// picture and uncompressed blocks it copies.
 pub const MAX_INFLATED_BYTES: usize = 512 * 1024 * 1024;
 
 /// Sections per file structure [WD 6.1.2]: its header, then the five in [`SectionKind`]
@@ -163,8 +164,9 @@ impl<'a> Bytes<'a> {
         }
     }
 
-    /// `UncompressedBlock`s: a count, then size-prefixed blocks [WD 10.2.2-3].
-    fn blocks(&mut self, what: &'static str) -> Result<Vec<Vec<u8>>, PrcError> {
+    /// `UncompressedBlock`s: a count, then size-prefixed blocks [WD 10.2.2-3], each charged to
+    /// `budget` before it is copied.
+    fn blocks(&mut self, what: &'static str, budget: &mut Budget) -> Result<Vec<Vec<u8>>, PrcError> {
         let n = offset(self.u32(what)?);
         // Each block needs at least its 4-byte size, so `n` is bounded by the data left.
         if n > self.data.len().saturating_sub(self.pos) / 4 {
@@ -173,7 +175,9 @@ impl<'a> Bytes<'a> {
         (0..n)
             .map(|_| {
                 let len = offset(self.u32(what)?);
-                Ok(self.take(len, what)?.to_vec())
+                let block = self.take(len, what)?;
+                budget.charge(block.len())?;
+                Ok(block.to_vec())
             })
             .collect()
     }
@@ -235,7 +239,8 @@ fn file_structure(data: &[u8], id: UniqueId, extent: &Extent, budget: &mut Budge
         return Err(PrcError::Malformed("file structure id differs from its description".into()));
     }
     let _application = h.id("file structure header")?;
-    let pictures = h.blocks("file structure pictures")?;
+    // Headers may overlap, so each structure's copy of its pictures is charged.
+    let pictures = h.blocks("file structure pictures", budget)?;
     let mut sections: [Vec<u8>; 5] = Default::default();
     for (i, (slot, kind)) in sections.iter_mut().zip(SectionKind::ALL).enumerate() {
         let end = if i + 2 < SECTIONS { extent.bound(i + 2) } else { extent.last };
@@ -262,8 +267,14 @@ impl Budget {
         // One byte past the budget is enough to know it was exceeded.
         let cap = u64::try_from(self.left).unwrap_or(u64::MAX).saturating_add(1);
         flate2::read::ZlibDecoder::new(src).take(cap).read_to_end(&mut out).map_err(|e| PrcError::Inflate { section, reason: e.to_string() })?;
-        self.left = self.left.checked_sub(out.len()).ok_or(PrcError::TooLarge { limit: self.limit })?;
+        self.charge(out.len())?;
         Ok(out)
+    }
+
+    /// Spend `n` bytes of the ceiling.
+    fn charge(&mut self, n: usize) -> Result<(), PrcError> {
+        self.left = self.left.checked_sub(n).ok_or(PrcError::TooLarge { limit: self.limit })?;
+        Ok(())
     }
 }
 
@@ -278,7 +289,7 @@ impl PrcFile {
     /// [`PrcError::NotPrc`] without the magic; [`PrcError::Truncated`] or
     /// [`PrcError::Malformed`] for a damaged header or offset table; [`PrcError::Inflate`]
     /// for a section that is not zlib; [`PrcError::TooLarge`] past [`MAX_INFLATED_BYTES`]
-    /// in total.
+    /// in total, inflated sections and copied blocks together.
     ///
     /// # Examples
     /// ```
@@ -310,7 +321,8 @@ impl PrcFile {
         let descriptions = (0..n_fs).map(|_| file_structure_description(&mut r)).collect::<Result<Vec<_>, _>>()?;
         let mf_start = offset(r.u32("model file offsets")?);
         let mf_end = offset(r.u32("model file offsets")?);
-        let uncompressed_files = r.blocks("uncompressed files")?;
+        let mut budget = Budget { left: limit, limit };
+        let uncompressed_files = r.blocks("uncompressed files", &mut budget)?;
         if mf_end < mf_start {
             return Err(PrcError::Malformed("model file ends before it starts".into()));
         }
@@ -318,7 +330,6 @@ impl PrcFile {
             return Err(PrcError::Malformed(format!("model file ends at {mf_end}, past the {}-byte stream", data.len())));
         }
 
-        let mut budget = Budget { left: limit, limit };
         // prc-rs: the last section runs to the model file's start.
         let last = mf_start.min(data.len());
         let file_structures =

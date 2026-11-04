@@ -95,9 +95,18 @@ fn damaged_containers_are_refused_by_name() {
 
 #[test]
 fn the_inflation_ceiling_is_reported_not_exceeded() {
+    // 1,200 inflated bytes and the 3-byte picture.
     let f = build([&[0u8; 600], &[0u8; 600], b"", b"", b""], b"", 0);
-    assert!(PrcFile::parse_with_limit(&f, 1200).is_ok());
-    assert_eq!(PrcFile::parse_with_limit(&f, 1199).unwrap_err(), PrcError::TooLarge { limit: 1199 });
+    assert!(PrcFile::parse_with_limit(&f, 1203).is_ok());
+    assert_eq!(PrcFile::parse_with_limit(&f, 1202).unwrap_err(), PrcError::TooLarge { limit: 1202 });
+}
+
+#[test]
+fn copied_picture_blocks_are_charged_to_the_ceiling() {
+    // Nothing inflates to more than 0 bytes; the header's one picture is 3 bytes.
+    let f = build([b"", b"", b"", b"", b""], b"", 0);
+    assert!(PrcFile::parse_with_limit(&f, 3).is_ok());
+    assert_eq!(PrcFile::parse_with_limit(&f, 2).unwrap_err(), PrcError::TooLarge { limit: 2 });
 }
 
 #[test]

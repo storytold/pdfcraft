@@ -79,10 +79,15 @@ impl Matrix {
 
     /// Whether mapping points through this matrix turns them inside out. Where the point is
     /// divided by `w`, the Jacobian's sign is the sign of the 4×4 determinant; a last row of
-    /// zeros (no division) falls back to the 3×3 block.
+    /// zeros (no division) falls back to the 3×3 block. Each row is first divided by its
+    /// largest entry, which keeps both signs while the products stay in range.
     fn mirrors(&self) -> bool {
-        let det = self.det4();
-        if det == 0.0 { self.det3() < 0.0 } else { det < 0.0 }
+        let scaled = Matrix(self.0.map(|row| {
+            let big = row.iter().fold(0.0_f64, |m, c| m.max(c.abs()));
+            if big.is_finite() && big > 0.0 { row.map(|c| c / big) } else { row }
+        }));
+        let det = scaled.det4();
+        if det == 0.0 { scaled.det3() < 0.0 } else { det < 0.0 }
     }
 
     /// Cofactor `(i, j)` of the upper-left 3×3 block (`i`, `j` < 3).
@@ -245,6 +250,22 @@ mod tests {
         positive.0[3][2] = 1.0;
         positive.0[3][3] = 3.0;
         assert_eq!(mesh.transformed(&positive).triangles, [[0, 1, 2]]);
+    }
+
+    #[test]
+    fn a_mirror_whose_determinant_underflows_still_reverses_the_winding() {
+        let mesh = TriangleMesh {
+            positions: vec![[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+            triangles: vec![[0, 1, 2]],
+            ..TriangleMesh::default()
+        };
+        let diagonal = |x: f64| {
+            let mut m = Matrix::IDENTITY;
+            (m.0[0][0], m.0[1][1], m.0[2][2]) = (x, 1e-200, 1e-200);
+            m
+        };
+        assert_eq!(mesh.transformed(&diagonal(-1e200)).triangles, [[0, 2, 1]]);
+        assert_eq!(mesh.transformed(&diagonal(1e200)).triangles, [[0, 1, 2]]);
     }
 
     impl Matrix {

@@ -691,6 +691,18 @@ fn faces_reusing_one_index_range_are_charged_for_each_triangle_they_make() {
 }
 
 #[test]
+fn a_face_is_charged_before_it_is_triangulated() {
+    // One face claiming a million triangles over a 12-entry index array.
+    const INDICES: [u32; 12] = [0, 0, 0, 3, 0, 6, 0, 0, 0, 6, 0, 9];
+    let mut b = W::default();
+    tess_3d(&mut b, 8137, &Mesh { indices: &INDICES, faces: &[(0x2, 0, &[1_000_000])], ..Mesh::default() });
+    let bytes = section(1, &b).bytes();
+    let schema = Schema::default();
+    let r = Ctx::new(BitReader::with_elements(&bytes, 1000), &schema, 8137).file_structure_tessellation();
+    assert!(matches!(r, Err(PrcError::TooManyElements { .. })), "{r:?}");
+}
+
+#[test]
 fn the_globals_schema_and_the_tessellations_share_one_allowance() {
     // A schema of one entry with three tokens: four elements.
     let mut globals = W::default();
