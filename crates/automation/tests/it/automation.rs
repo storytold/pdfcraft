@@ -10642,3 +10642,95 @@ fn multiline_fill_sign_engine_round_trip_preserves_lines_and_appearance() {
     assert_eq!(rendered, re.call("page_render", &json!({"doc":reopened,"page":1,"dpi":72})).unwrap(), "saved appearances are identical");
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+/// Export, then import into another document and copy between open documents: the tree comes
+/// back unchanged, a page the target lacks is reported, and the import undoes in one step.
+#[test]
+fn bookmarks_export_import_and_copy_between_documents() {
+    let dir = workdir("bookmark-io");
+    let mut a = auto(&dir);
+    let src = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "bookmark_add", json!({ "doc": src, "title": "Intro", "page": 1 }));
+    ok(&mut a, "bookmark_add", json!({ "doc": src, "title": "Detail", "page": 3, "parent": [1] }));
+    ok(&mut a, "bookmark_add", json!({ "doc": src, "title": "End", "page": 2 }));
+    ok(&mut a, "bookmark_set_style", json!({ "doc": src, "path": [1], "color": [1, 0, 0], "bold": true }));
+    let exported = ok(&mut a, "bookmark_export", json!({ "doc": src, "out": "marks.json" }));
+    assert_eq!(exported["truncated"], false);
+    let tree = exported["bookmarks"].clone();
+    assert_eq!((tree[0]["title"].clone(), tree[0]["color"].clone(), tree[0]["bold"].clone()), (json!("Intro"), json!([1.0, 0.0, 0.0]), json!(true)));
+    assert_eq!((tree[0]["children"][0]["title"].clone(), tree[0]["children"][0]["page"].clone()), (json!("Detail"), json!(3)));
+    assert_eq!(tree[0]["view"]["type"], "XYZ");
+    let subtree = ok(&mut a, "bookmark_export", json!({ "doc": src, "path": [1, 1] }))["bookmarks"].clone();
+    assert_eq!(subtree, json!([tree[0]["children"][0]]));
+
+    // b.pdf has two pages: Detail goes to the third, so it arrives without a destination.
+    let dst = ok(&mut a, "doc_open", json!({ "path": "b.pdf" }))["doc"].as_u64().unwrap();
+    let imported = ok(&mut a, "bookmark_import", json!({ "doc": dst, "file": "marks.json" }));
+    assert_eq!(imported["unmapped"], json!([[1, 1]]));
+    let back = ok(&mut a, "bookmark_export", json!({ "doc": dst }))["bookmarks"].clone();
+    assert_eq!(back[0]["children"][0]["page"], json!(null));
+    assert_eq!((back[0]["title"].clone(), back[1].clone()), (tree[0]["title"].clone(), tree[1].clone()));
+    ok(&mut a, "edit_undo", json!({ "doc": dst }));
+    assert_eq!(ok(&mut a, "bookmark_list", json!({ "doc": dst }))["bookmarks"], json!([]));
+
+    // Into a document with every page, the tree is unchanged, wherever it is copied from.
+    let same = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "bookmark_add", json!({ "doc": same, "title": "Old", "page": 1 }));
+    let copied = ok(&mut a, "bookmark_copy", json!({ "doc": same, "from": src, "replace": true }));
+    assert_eq!(copied["unmapped"], json!([]));
+    assert_eq!(ok(&mut a, "bookmark_export", json!({ "doc": same }))["bookmarks"], tree);
+    ok(&mut a, "bookmark_import", json!({ "doc": same, "bookmarks": subtree, "parent": [2], "position": 1 }));
+    assert_eq!(ok(&mut a, "bookmark_list", json!({ "doc": same }))["bookmarks"][1]["children"][0]["title"], "Detail");
+}
+
+#[test]
+fn a_bad_bookmark_tree_is_refused_whole_and_names_the_node() {
+    let dir = workdir("bookmark-io-bad");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let refused = |a: &mut Automation, bookmarks: Value| match a.call("bookmark_import", &json!({ "doc": doc, "bookmarks": bookmarks })) {
+        Err(ToolError::InvalidArgs(m)) => m,
+        other => panic!("expected InvalidArgs, got {other:?}"),
+    };
+    let fine = json!({ "title": "Fine", "page": 1 });
+    let m = refused(&mut a, json!([fine, { "title": "Parent", "children": [{ "page": 1 }] }]));
+    assert!(m.contains("[2, 1]") && m.contains("title"), "{m}");
+    let m = refused(&mut a, json!([{ "title": "  " }]));
+    assert!(m.contains("[1]") && m.contains("title"), "{m}");
+    let m = refused(&mut a, json!([fine, { "title": "Bad", "page": 0 }]));
+    assert!(m.contains("[2]") && m.contains("page"), "{m}");
+    let m = refused(&mut a, json!([{ "title": "Bad", "color": [2, 0, 0] }]));
+    assert!(m.contains("color"), "{m}");
+    let m = refused(&mut a, json!([{ "title": "Bad", "view": { "type": "XYZ", "values": [1, 2, 3, 4, 5] } }]));
+    assert!(m.contains("view"), "{m}");
+    let mut deep = json!({ "title": "Leaf" });
+    for _ in 0..40 {
+        deep = json!({ "title": "Level", "children": [deep] });
+    }
+    assert!(refused(&mut a, json!([deep])).contains("33 levels"));
+    let m = refused(&mut a, json!([fine, { "title": "Z", "page": 1, "view": { "type": "Zoom" } }]));
+    assert!(m.contains("[2]") && m.contains("XYZ (3 values"), "{m}");
+    let m = refused(&mut a, json!([fine, { "title": "Z", "page": 1, "view": { "type": "FitH", "values": [1, 2] } }]));
+    assert!(m.contains("[2]") && m.contains("FitH view takes 1"), "{m}");
+    let m = refused(&mut a, json!([{ "title": "R", "view": { "type": "FitR", "values": [0, null, 1, 1] } }]));
+    assert!(m.contains("all four"), "{m}");
+    assert!(matches!(a.call("bookmark_import", &json!({ "doc": doc })), Err(ToolError::InvalidArgs(_))));
+    assert!(matches!(a.call("bookmark_import", &json!({ "doc": doc, "bookmarks": [fine], "file": "x.json" })), Err(ToolError::InvalidArgs(_))));
+    // A real bookmark file outside the root is refused for being outside, not for being missing.
+    let outside = dir.with_extension("outside.json");
+    std::fs::write(&outside, br#"{"bookmarks": [{"title": "Outside", "page": 1}]}"#).unwrap();
+    let name = format!("../{}", outside.file_name().unwrap().to_string_lossy());
+    match a.call("bookmark_import", &json!({ "doc": doc, "file": name })) {
+        Err(ToolError::Failed(m)) => assert!(m.contains("outside the allowed directory"), "{m}"),
+        other => panic!("expected the root to refuse it, got {other:?}"),
+    }
+    let _ = std::fs::remove_file(&outside);
+    let out = dir.with_extension("out.json");
+    let name = format!("../{}", out.file_name().unwrap().to_string_lossy());
+    match a.call("bookmark_export", &json!({ "doc": doc, "out": name })) {
+        Err(ToolError::Failed(m)) => assert!(m.contains("outside the allowed directory"), "{m}"),
+        other => panic!("expected the root to refuse it, got {other:?}"),
+    }
+    assert!(!out.exists());
+    assert_eq!(ok(&mut a, "bookmark_list", json!({ "doc": doc }))["bookmarks"], json!([]));
+}
