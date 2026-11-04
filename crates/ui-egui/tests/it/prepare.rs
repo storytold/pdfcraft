@@ -595,12 +595,9 @@ fn tab_numbers_follow_fill_order_without_dirtying_the_document() {
         .shapes
         .iter()
         .filter_map(|clipped| match &clipped.shape {
-            egui::Shape::Text(text) => Some((
-                text.galley.text().to_owned(),
-                text.visual_bounding_rect().center(),
-                text.visual_bounding_rect(),
-                clipped.clip_rect,
-            )),
+            egui::Shape::Text(text) => {
+                Some((text.galley.text().to_owned(), text.visual_bounding_rect().center(), text.visual_bounding_rect(), clipped.clip_rect))
+            }
             _ => None,
         })
         .collect();
