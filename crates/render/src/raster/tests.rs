@@ -9230,6 +9230,7 @@ fn a_long_chain_of_crypt_filters_takes_no_time() {
             scale: 1.0,
             tag: 0,
             preview: false,
+            magnification: None,
         });
         let start = (100 * page.width as usize + 100) * 4;
         let _ = done.send(page.rgba.get(start..start + 4).map(<[u8]>::to_vec));
@@ -9257,6 +9258,7 @@ fn a_filters_parameters_are_read_in_either_form() {
             scale: 1.0,
             tag: 0,
             preview: false,
+            magnification: None,
         });
         let start = (100 * page.width as usize + 100) * 4;
         let mut pixel = [0; 4];
@@ -9348,6 +9350,7 @@ fn a_stream_with_a_crypt_filter_of_its_own_is_drawn() {
             scale: 1.0,
             tag: 0,
             preview: false,
+            magnification: None,
         });
         let start = (100 * page.width as usize + 100) * 4;
         let mut pixel = [0; 4];
