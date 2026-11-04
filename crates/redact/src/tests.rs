@@ -55,7 +55,8 @@ fn under(doc: &mut Document, page: usize, rects: &[[f64; 4]]) -> usize {
     let (_, data) = page_streams_within(doc, &p.dict, page, &mut budget).unwrap();
     let res = p.dict.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned()).unwrap_or_default();
     let mut rep = Report::default();
-    let mut scope = Scope::new(rects, Mode::Verify, &mut rep, budget);
+    let mut images = pdfcraft_cos::ImageBudget::with_work(0);
+    let mut scope = Scope::new(rects, Mode::Verify, &mut rep, budget, &mut images);
     process(doc, &mut scope, &data, &res, pdfcraft_content::Matrix::IDENTITY).residue
 }
 
@@ -522,10 +523,16 @@ fn two_pages_one_resource_dictionary(inherited: bool, again: bool) -> Document {
     ])
 }
 
+/// What image `s` decodes to, its fax or JBIG2 data included, with no limit on the work: the
+/// samples an operation would read through its `ImageBudget`.
+fn decoded_image(doc: &Document, s: &pdfcraft_cos::Stream) -> Result<Vec<u8>, pdfcraft_cos::CosError> {
+    pdfcraft_cos::ImageBudget::with_work(u64::MAX).decode(doc, s, pdfcraft_cos::MAX_DECODED)
+}
+
 /// The samples of the image a page's (possibly inherited) resources name `name`, decoded through
-/// its image codec too (`Document::decoded_image`).
+/// its image codec too ([`decoded_image`]).
 fn named_image(doc: &Document, page: usize, name: &[u8]) -> Option<Vec<u8>> {
-    named_stream(doc, page, name).and_then(|s| doc.decoded_image(&s).ok())
+    named_stream(doc, page, name).and_then(|s| decoded_image(doc, &s).ok())
 }
 
 /// The image a page's (possibly inherited) resources name `name`.
@@ -710,7 +717,8 @@ fn group_3_on_bytes_is_removed_whole_and_other_fax_images_cleared() {
         (-1, true, "<< /K -1 /Columns 16 /EncodedByteAlign true >>", vec![0x80, 0x80], vec![], false),
     ] {
         let p = pdfcraft_filters::CcittParams { k, columns: 16, encoded_byte_align: on_bytes, ..Default::default() };
-        assert_eq!(pdfcraft_filters::decode_ccitt(&data, &p, 2).unwrap(), [0xFF; 4], "{parms}: the picture is white");
+        let mut work = u64::MAX;
+        assert_eq!(pdfcraft_filters::decode_ccitt_within(&data, &p, 2, &mut work).unwrap(), [0xFF; 4], "{parms}: the picture is white");
         let dict = format!("{image} /DecodeParms {parms}");
         let mut objs = vec![stream(&dict, data)];
         objs.extend(extra);
@@ -772,7 +780,7 @@ fn no_stream_holds_the_pixels_under_a_mark_on_a_jbig2_scan() {
     }
     let holds = |doc: &Document, pixels: &[u8]| {
         doc.scan_objects().any(|(_, object)| match &*object {
-            Object::Stream(s) => doc.decoded_image(s).is_ok_and(|d| d.windows(pixels.len()).any(|w| w == pixels)),
+            Object::Stream(s) => decoded_image(doc, s).is_ok_and(|d| d.windows(pixels.len()).any(|w| w == pixels)),
             _ => false,
         })
     };
@@ -809,6 +817,61 @@ fn jbig2_globals(secret: &[u8]) -> Vec<u8> {
     g
 }
 
+/// An image the run's allowance can't decode can't be cleared. Removed whole, like an image that
+/// can't be read, it would take what no mark covers with it without a word, so the run stops there,
+/// and [`apply`] leaves the document as it was.
+#[test]
+fn a_jbig2_image_past_the_runs_allowance_stops_the_run() {
+    let mut dict = Dict::new();
+    dict.set(b"Width".to_vec(), Object::Int(16));
+    dict.set(b"Height".to_vec(), Object::Int(2));
+    dict.set(b"BitsPerComponent".to_vec(), Object::Int(1));
+    dict.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+    dict.set(b"Filter".to_vec(), Object::name("JBIG2Decode"));
+    let image = Stream::from_raw(dict, pdfcraft_filters::encode_jbig2_generic(&[0xFF; 4], 16, 2).unwrap());
+    let doc = Document::new_empty();
+    let half = [[0.0, 0.0, 0.5, 1.0]];
+    let clear = |work| crate::image::clear(&doc, &image, &pdfcraft_content::Matrix::IDENTITY, &half, &mut pdfcraft_cos::ImageBudget::with_work(work));
+    assert!(matches!(clear(u64::MAX), Ok(Some(_))), "cleared in a copy");
+    assert!(matches!(clear(0), Err(())), "it can't be cleared");
+
+    let coded = pdfcraft_filters::encode_jbig2_generic(&[0xFF; 4], 16, 2).unwrap();
+    let dict = "/Type /XObject /Subtype /Image /Width 16 /Height 2 /BitsPerComponent 1 /ColorSpace /DeviceGray /Filter /JBIG2Decode";
+    let mut doc = one_page(b"q 160 0 0 20 0 0 cm /Im Do Q", "/XObject << /Im 7 0 R >>", vec![stream(dict, coded)]);
+    mark(&mut doc, 0, &[[0.0, 12.0, 75.0, 18.0]], "");
+    let refused = crate::apply_within(&mut doc, None, pdfcraft_cos::ImageBudget::with_work(0));
+    assert!(matches!(refused, Err(crate::RedactError::ImagesPastAllowance)), "{refused:?}");
+    let mut doc = one_page(
+        b"q 160 0 0 20 0 0 cm /Im Do Q",
+        "/XObject << /Im 7 0 R >>",
+        vec![stream(dict, pdfcraft_filters::encode_jbig2_generic(&[0xFF; 4], 16, 2).unwrap())],
+    );
+    mark(&mut doc, 0, &[[0.0, 12.0, 75.0, 18.0]], "");
+    assert!(crate::apply_within(&mut doc, None, pdfcraft_cos::ImageBudget::with_work(u64::MAX)).is_ok());
+}
+
+/// A Flate image past the run's allowance stops the run as a JBIG2 image does: removed whole, it
+/// would take what no mark covers with it, unreported. A JPEG, which clearing doesn't read, is
+/// removed whole as it always was, and spends nothing.
+#[test]
+fn a_flate_image_past_the_runs_allowance_stops_the_run() {
+    let dict = "/Type /XObject /Subtype /Image /Width 2 /Height 2 /BitsPerComponent 8 /ColorSpace /DeviceGray /Filter /FlateDecode";
+    let page = || one_page(b"q 160 0 0 20 0 0 cm /Im Do Q", "/XObject << /Im 7 0 R >>", vec![stream(dict, pdfcraft_filters::encode_flate(&[9; 4]))]);
+    let mut doc = page();
+    mark(&mut doc, 0, &[[0.0, 12.0, 75.0, 18.0]], "");
+    let refused = crate::apply_within(&mut doc, None, pdfcraft_cos::ImageBudget::with_work(0));
+    assert!(matches!(refused, Err(crate::RedactError::ImagesPastAllowance)), "{refused:?}");
+    let mut doc = page();
+    mark(&mut doc, 0, &[[0.0, 12.0, 75.0, 18.0]], "");
+    assert!(crate::apply_within(&mut doc, None, pdfcraft_cos::ImageBudget::with_work(u64::MAX)).is_ok());
+
+    let dict = "/Type /XObject /Subtype /Image /Width 2 /Height 2 /BitsPerComponent 8 /ColorSpace /DeviceGray /Filter /DCTDecode";
+    let mut doc = one_page(b"q 160 0 0 20 0 0 cm /Im Do Q", "/XObject << /Im 7 0 R >>", vec![stream(dict, b"not read")]);
+    mark(&mut doc, 0, &[[0.0, 12.0, 75.0, 18.0]], "");
+    let report = crate::apply_within(&mut doc, None, pdfcraft_cos::ImageBudget::with_work(0)).unwrap();
+    assert_eq!(report.images_removed, 1);
+}
+
 /// A JBIG2 image (a scan the optimizer stored as JBIG2) has its covered pixels cleared in a copy,
 /// like a fax image, instead of being removed whole: with `/JBIG2Globals`, its `/DecodeParms` by
 /// reference, behind another filter with its globals at its own place, or as a mask, its decode
@@ -833,6 +896,13 @@ fn a_jbig2_image_has_its_covered_pixels_cleared_instead_of_being_removed() {
         (
             format!("{image} /ColorSpace /DeviceGray /Filter [/ASCIIHexDecode /JBIG2Decode] /DecodeParms [null << /JBIG2Globals 8 0 R >>]"),
             hex,
+            vec![globals.clone()],
+            [0x00, 0xFF, 0xFF, 0xFF],
+        ),
+        // `/Crypt` was undone on load, and takes a place in the parameters.
+        (
+            format!("{image} /ColorSpace /DeviceGray /Filter [/Crypt /JBIG2Decode] /DecodeParms [null << /JBIG2Globals 8 0 R >>]"),
+            white.clone(),
             vec![globals],
             [0x00, 0xFF, 0xFF, 0xFF],
         ),
@@ -1202,7 +1272,7 @@ fn globals_a_redacted_jbig2_image_shares_with_another_page_leave_the_file() {
         let res = doc.resolve(p.dict.get(b"Resources")?).as_dict().cloned()?;
         let xo = doc.resolve(res.get(b"XObject")?).as_dict().cloned()?;
         match &*doc.get(xo.get(name)?.as_ref()?) {
-            Object::Stream(s) => doc.decoded_image(s).ok(),
+            Object::Stream(s) => decoded_image(doc, s).ok(),
             _ => None,
         }
     };
@@ -1243,6 +1313,15 @@ fn globals_a_redacted_jbig2_image_shares_with_another_page_leave_the_file() {
     let mut doc = build(&image.replace(&format!("/Height {h}"), &format!("/Height {}", h + 1)));
     mark(&mut doc, 0, &[[0.25, 113.75, 49.75, 120.0]], "");
     assert!(matches!(apply(&mut doc, None), Err(RedactError::SharedJbig2Globals(1))));
+    // Storing the second page's image again decodes it, within what is left of the run's
+    // allowance: with nothing left the redaction is refused as one past the allowance, not
+    // reported as an image that can't be read.
+    let mut doc = build(&image);
+    let first_image = [ObjRef::new(7, 0)];
+    let refused = crate::restore_shared_jbig2(&mut doc, &first_image, &mut pdfcraft_cos::ImageBudget::with_work(0));
+    assert!(matches!(refused, Err(RedactError::ImagesPastAllowance)), "{refused:?}");
+    let restored = crate::restore_shared_jbig2(&mut doc, &first_image, &mut pdfcraft_cos::ImageBudget::with_work(u64::MAX));
+    assert_eq!(restored.ok(), Some(1));
 }
 
 /// Apply Redactions gives the page its own pruned /Resources, but the dictionary it drew through
@@ -2333,7 +2412,8 @@ fn runs_join_by_position_across_operators() {
     let res = page.dict.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned()).unwrap_or_default();
     let mut rep = Report::default();
     let rects = [[0.0, 90.0, 300.0, 120.0], [0.0, 190.0, 300.0, 220.0]];
-    let mut scope = Scope::new(&rects, Mode::Apply, &mut rep, pdfcraft_cos::DecodeBudget::page());
+    let mut images = pdfcraft_cos::ImageBudget::new(&doc);
+    let mut scope = Scope::new(&rects, Mode::Apply, &mut rep, pdfcraft_cos::DecodeBudget::page(), &mut images);
     process(&mut doc, &mut scope, &data, &res, pdfcraft_content::Matrix::IDENTITY);
     scope.flush_run();
     assert_eq!(
@@ -3215,7 +3295,7 @@ fn secret_is_present(doc: &Document, secret: &[u8]) -> bool {
             return true;
         }
         if let Object::Stream(s) = &*object
-            && has(&s.decoded().or_else(|_| saved.decoded_image(s)).unwrap())
+            && has(&s.decoded().or_else(|_| decoded_image(&saved, s)).unwrap())
         {
             return true;
         }
@@ -4136,4 +4216,30 @@ fn a_reply_on_another_page_to_a_removed_popup_goes_too() {
     for gone in [&b"POPUP-REPLY"[..], b"POPUP-TEXT", b"PARENT-NOTE"] {
         assert!(!bytes.windows(gone.len()).any(|w| w == gone), "{} survived", String::from_utf8_lossy(gone));
     }
+}
+
+#[test]
+fn a_rewritten_form_xobject_drops_the_source_text_of_added_content() {
+    // A form drawing invisible text whose dictionary repeats it in /PCAdded.
+    let form = stream(
+        "/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /Font << /F1 5 0 R >> >> /PCMark /Added /PCAdded << /Kind /Text /Text (LEAK_FORM_SOURCE) >>",
+        b"BT /F1 10 Tf 3 Tr 10 100 Td (HIDDEN) Tj ET BT /F1 10 Tf 10 200 Td (Shown) Tj ET",
+    );
+    let mut doc = one_page(b"/X Do", "/XObject << /X 7 0 R >>", vec![form]);
+    sanitize::remove_hidden(&mut doc, &[sanitize::Hidden::HiddenText]).unwrap();
+    let bytes = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
+    assert!(!bytes.windows(16).any(|w| w == b"LEAK_FORM_SOURCE"), "the form's added-content source text survived");
+}
+
+#[test]
+fn a_redacted_form_xobject_drops_the_source_text_of_added_content() {
+    let form = stream(
+        "/Type /XObject /Subtype /Form /BBox [0 0 300 300] /Resources << /Font << /F1 5 0 R >> >> /PCMark /Added /PCAdded << /Kind /Text /Text (AB1234CD) >>",
+        b"BT /F1 10 Tf 10 100 Td (AB1234CD) Tj ET",
+    );
+    let mut doc = one_page(b"/X Do", "/XObject << /X 7 0 R >>", vec![form]);
+    mark(&mut doc, 0, &[[20.0, 95.0, 40.0, 110.0]], "");
+    apply(&mut doc, None).unwrap();
+    let bytes = write_full(&doc, &SaveOptions { object_streams: false, ..SaveOptions::default() }).unwrap();
+    assert!(!bytes.windows(4).any(|w| w == b"1234"), "redacted text left in the saved file");
 }
