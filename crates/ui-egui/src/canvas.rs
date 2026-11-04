@@ -656,6 +656,8 @@ pub struct DocView {
     /// Marquee Zoom / Snapshot: the rectangle being dragged (page, start), and a finished one.
     pub marquee: Option<(usize, Pos2)>,
     pub marquee_done: Option<crate::zoom_snap::Marquee>,
+    /// Dynamic Zoom: the drag in progress.
+    pub(crate) zoom_drag: Option<crate::zoom_snap::ZoomDrag>,
     /// Fill & Sign text being typed.
     pub fill_text: Option<crate::fill_sign::TypeBox>,
     /// A queued Fill & Sign signature: select it after its edit succeeds, then leave placement.
@@ -1018,6 +1020,7 @@ impl DocView {
             pages_focus_id: None,
             marquee: None,
             marquee_done: None,
+            zoom_drag: None,
             fill_text: None,
             fill_signature_page: None,
             signature_drag: Default::default(),
@@ -2417,14 +2420,22 @@ fn draw_pages(
             view.cursor.claim(Layer::ToolArea, egui::CursorIcon::Grab);
         }
     }
+    // The pointer as the pages see it: nothing over them (a dialog from the frame it opens),
+    // or a press they hold. The page modules read it rather than egui's raw pointer state.
+    let ptr = PagePointer::read(ui, &resp, modal);
+    // Dynamic Zoom zooms by this widget's drag, about the point pressed. The pages below are
+    // laid out at the old zoom, so it anchors to last frame's page rectangles, the ones on screen,
+    // before they are cleared.
+    if tool == QuickTool::DynamicZoom {
+        crate::zoom_snap::dynamic_input(ui, &resp, &ptr, view);
+    } else {
+        view.zoom_drag = None;
+    }
     let origin = resp_rect.min - vec2(0.0, y_shift);
     let visible = viewport.translate(resp_rect.min.to_vec2());
     view.screen_rects.clear();
     view.screen_ppp = ui.ctx().pixels_per_point();
     view.screen_xforms.clear();
-    // The pointer as the pages see it: nothing over them (a dialog from the frame it opens),
-    // or a press they hold. The page modules read it rather than egui's raw pointer state.
-    let ptr = PagePointer::read(ui, &resp, modal);
     cancel_on_escape(ui.ctx(), view, &ptr);
     view.router.settle(ptr.any_down, !ptr.edges.is_empty());
     // A new press is no longer the last one's, wherever it lands (the page it is on gives it
@@ -3460,6 +3471,7 @@ fn tool_selects_text(tool: QuickTool, preparing: bool) -> bool {
         | QuickTool::Link
         | QuickTool::SignArea { .. }
         | QuickTool::MarqueeZoom
+        | QuickTool::DynamicZoom
         | QuickTool::Snapshot => false,
     }
 }

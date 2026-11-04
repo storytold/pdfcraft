@@ -208,22 +208,35 @@ impl DocView {
 
     /// Zoom keeping the document point under `screen_pos` still (pinch, ⌘-scroll).
     pub fn zoom_at(&mut self, zoom: f32, screen_pos: Pos2) {
-        if !zoom.is_finite() || !screen_pos.is_finite() {
+        if !screen_pos.is_finite() {
+            return;
+        }
+        let anchor = self.anchor_at(screen_pos);
+        self.zoom_about(zoom, anchor);
+    }
+
+    /// Where `screen_pos` is, as a zoom anchor: a page, the fraction of it across and down, and
+    /// the point's offset in the viewport. In gutters/gaps it is relative to the nearest page
+    /// rather than jumping to its top; fractions outside 0..1 keep the point's place outside the
+    /// page as well.
+    pub(crate) fn anchor_at(&self, screen_pos: Pos2) -> Option<(usize, f32, f32, Vec2)> {
+        self.screen_rects.iter().min_by(|(_, a), (_, b)| a.distance_sq_to_pos(screen_pos).total_cmp(&b.distance_sq_to_pos(screen_pos))).map(
+            |(p, r)| {
+                let f = (screen_pos - r.min) / r.size();
+                (*p, f.x, f.y, screen_pos - self.viewport_screen.min)
+            },
+        )
+    }
+
+    /// Zoom keeping `anchor` (from [`Self::anchor_at`]) still.
+    pub(crate) fn zoom_about(&mut self, zoom: f32, anchor: Option<(usize, f32, f32, Vec2)>) {
+        if !zoom.is_finite() {
             return;
         }
         let zoom = zoom.clamp(0.08, 64.0);
         if zoom == self.zoom && self.fit == Fit::None {
             return;
         }
-        // In gutters/gaps, anchor relative to the nearest page rather than jumping to its top.
-        // Fractions outside 0..1 preserve the pointer's position outside the page as well.
-        let anchor =
-            self.screen_rects.iter().min_by(|(_, a), (_, b)| a.distance_sq_to_pos(screen_pos).total_cmp(&b.distance_sq_to_pos(screen_pos))).map(
-                |(p, r)| {
-                    let f = (screen_pos - r.min) / r.size();
-                    (*p, f.x, f.y, screen_pos - self.viewport_screen.min)
-                },
-            );
         self.zoom = zoom;
         self.fit = Fit::None;
         match anchor {
@@ -242,12 +255,16 @@ impl DocView {
 
     /// Standard zoom steps (as in Acrobat's zoom menu).
     pub fn zoom_step(&mut self, up: bool) {
-        const STEPS: [f32; 17] = [0.1, 0.25, 0.33, 0.5, 0.66, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0, 4.0, 6.0, 8.0, 12.0, 16.0, 32.0];
-        let z = self.zoom;
-        let next = if up { STEPS.iter().copied().find(|s| *s > z * 1.01) } else { STEPS.iter().rev().copied().find(|s| *s < z * 0.99) };
-        if let Some(n) = next {
+        if let Some(n) = self.next_zoom_step(up) {
             self.set_zoom(n);
         }
+    }
+
+    /// The standard zoom step above (or below) the current zoom, if there is one.
+    pub(crate) fn next_zoom_step(&self, up: bool) -> Option<f32> {
+        const STEPS: [f32; 17] = [0.1, 0.25, 0.33, 0.5, 0.66, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0, 4.0, 6.0, 8.0, 12.0, 16.0, 32.0];
+        let z = self.zoom;
+        if up { STEPS.iter().copied().find(|s| *s > z * 1.01) } else { STEPS.iter().rev().copied().find(|s| *s < z * 0.99) }
     }
 
     /// The first page of the two-page spread page `c` is in: spreads are [0, 1], [2, 3], … or,

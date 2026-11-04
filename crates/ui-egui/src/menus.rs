@@ -154,7 +154,8 @@ const EDIT: &[&str] = &[
     SEP,
     "app.preferences",
 ];
-const ZOOM: &[&str] = &[ACTUAL_SIZE, PAGE_LEVEL, FIT_WIDTH, FIT_HEIGHT, "view.fit_visible", SEP, ZOOM_IN, ZOOM_OUT, SEP, "view.marquee_zoom"];
+const ZOOM: &[&str] =
+    &[ACTUAL_SIZE, PAGE_LEVEL, FIT_WIDTH, FIT_HEIGHT, "view.fit_visible", SEP, ZOOM_IN, ZOOM_OUT, SEP, "view.marquee_zoom", "view.dynamic_zoom"];
 const NAVIGATION: &[&str] = &["view.focus_page_input", SEP, "view.previous_view", "view.next_view"];
 const DISPLAY: &[&str] = &[
     "view.layout.single",

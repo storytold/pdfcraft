@@ -176,6 +176,7 @@ mod tests {
                 | QuickTool::Link
                 | QuickTool::SignArea { .. }
                 | QuickTool::MarqueeZoom
+                | QuickTool::DynamicZoom
                 | QuickTool::Snapshot
                 | QuickTool::ColumnSelect => {}
             }
