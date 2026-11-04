@@ -428,6 +428,12 @@ impl DocView {
         self.frame_demanded = pages.clone();
         let mut kept = pages.len();
         for page in undemanded {
+            // An out-of-date raster of a page off screen, which nobody asks for again, would never be
+            // replaced: it goes, so a page is out of date only while it is on screen or about to be
+            // (applying redactions waits on that). A page on screen keeps its raster until the new one.
+            if !self.frame_visible.contains(&page) && self.pages.get(&page).is_some_and(|p| p.tag == STALE_TAG) {
+                continue;
+            }
             let bytes = self.pages.get(&page).map_or(0, |p| texture_bytes(&p.tex));
             if kept < MAX_CACHED_PAGES && page_bytes.saturating_add(bytes) <= page_limit {
                 page_bytes = page_bytes.saturating_add(bytes);
@@ -443,7 +449,12 @@ impl DocView {
         // rectangle, and dropping it made every pan or zoom back a cold miss that re-blurred the
         // page and re-interpreted it once per tile. The per-frame cap below (OLD_TILES,
         // nearest scale first) is what bounds how much of that stays.
-        self.tiles.retain(|key, _| tiles.contains(key) || !tile_tags.contains(&key.1) || self.frame_visible.contains(&key.0));
+        // An out-of-date tile at the current zoom that this frame doesn't demand (outside the viewport)
+        // would never be replaced either: it goes. Tiles of an earlier zoom keep their rule.
+        self.tiles.retain(|key, _| {
+            let stale_off_view = self.stale_tiles.contains(key) && tile_tags.contains(&key.1) && !tiles.contains(key);
+            !stale_off_view && (tiles.contains(key) || !tile_tags.contains(&key.1) || self.frame_visible.contains(&key.0))
+        });
         self.stale_tiles.retain(|key| self.tiles.contains_key(key));
         queue.extend(grid);
         // Opening (or turning to) a page queues its pixels alongside thumbnails and

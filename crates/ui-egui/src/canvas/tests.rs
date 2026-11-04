@@ -2422,3 +2422,50 @@ fn applying_waits_for_a_moved_marks_page_to_be_redrawn() {
     assert!(app.apply_edit(Edit::ApplyRedactions { pages: None }));
     assert_eq!(app.session.get(id).unwrap().redaction_marks(), 0);
 }
+
+/// A document-wide edit marks every cached raster out of date. A page with marks that was viewed
+/// earlier but is now off screen is never asked for again: its out-of-date raster is let go, so
+/// applying waits only for what is on screen (or about to be), not forever.
+#[test]
+fn applying_waits_only_for_pages_on_screen() {
+    use pdfcraft_cos::{Dict, Object};
+    use pdfcraft_engine::Edit;
+    let mut cos = pdfcraft_cos::Document::open(Arc::new(text_pages_pdf(&["AB1234CD", "nothing", "EF5678GH"]))).unwrap();
+    let pages = pdfcraft_model::pages(&cos);
+    for p in [pages[0].obj, pages[2].obj] {
+        let mut mark = Dict::new();
+        mark.set(b"Type".to_vec(), Object::name("Annot"));
+        mark.set(b"Subtype".to_vec(), Object::name("Redact"));
+        mark.set(b"Rect".to_vec(), Object::Array([70, 695, 100, 720].map(Object::Int).to_vec()));
+        let a = cos.add(Object::Dict(mark));
+        cos.update_dict(p, |d| d.set(b"Annots".to_vec(), Object::Array(vec![Object::Ref(a)]))).unwrap();
+    }
+    let bytes = pdfcraft_cos::write_full(&cos, &Default::default()).unwrap();
+    let mut app = crate::PdfCraftApp::new();
+    app.open_bytes("offscreen.pdf", None, bytes).unwrap();
+    let id = app.views[0].id;
+    let ctx = egui::Context::default();
+    let frame = |app: &mut crate::PdfCraftApp, page: usize| {
+        let doc = app.session.get(id).unwrap();
+        let info = doc.info.clone();
+        let pool = RenderPool::new_inline(doc.display.clone(), Default::default());
+        for _ in 0..3 {
+            let v = &mut app.views[0];
+            v.begin_render_frame();
+            v.frame_visible.insert(page);
+            v.frame_queue = vec![RenderRequest { page, scale: 1.0, tag: scale_tag(1.0), ..Default::default() }];
+            v.finish_render_frame(&ctx, &info, &pool);
+        }
+    };
+    // The reader looked at page 3, then went back to page 1.
+    frame(&mut app, 2);
+    frame(&mut app, 0);
+    assert!(app.views[0].pages.contains_key(&2) && app.views[0].pages.contains_key(&0), "{:?}", app.views[0].cached_pages_debug());
+    // A metadata edit: the whole document is redrawn.
+    assert!(app.apply_edit(Edit::SetInfo { key: "Title".into(), value: "t".into() }));
+    for _ in 0..5 {
+        frame(&mut app, 0);
+    }
+    let applied = app.apply_edit(Edit::ApplyRedactions { pages: None });
+    assert!(applied, "no page on screen shows an out-of-date mark");
+}
