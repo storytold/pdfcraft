@@ -103,11 +103,11 @@ pub(crate) fn edit_body(ui: &mut egui::Ui, app: &mut PdfCraftApp, _t: &Tokens) -
     ui.label(egui::RichText::new(tl!("Edit Custom Stamp")).font(theme::semibold(18.0)));
     ui.add_space(8.0);
     egui::Grid::new("stamp-edit").num_columns(2).spacing([10.0, 8.0]).show(ui, |ui| {
-        ui.label(tl!("Category:"));
-        ui.add(crate::widgets::line(&mut edit.category).desired_width(240.0));
+        let category_label = ui.label(tl!("Category:"));
+        ui.add(crate::widgets::line(&mut edit.category).desired_width(240.0)).labelled_by(category_label.id);
         ui.end_row();
-        ui.label(tl!("Name:"));
-        ui.add(crate::widgets::line(&mut edit.name).desired_width(240.0));
+        let name_label = ui.label(tl!("Name:"));
+        ui.add(crate::widgets::line(&mut edit.name).desired_width(240.0)).labelled_by(name_label.id);
         ui.end_row();
     });
     ui.add_space(12.0);
@@ -322,7 +322,7 @@ mod tests {
 
         let first_bytes = Arc::new(vec![1, 2, 3]);
         let second_bytes = Arc::new(vec![4, 5, 6]);
-        let mut h = Harness::builder().with_size(egui::vec2(1000.0, 700.0)).with_accessibility_check(false).build_eframe(|_| {
+        let mut h = Harness::builder().with_size(egui::vec2(1000.0, 700.0)).build_eframe(|_| {
             let mut app = PdfCraftApp::new();
             app.set_option("language", "en").unwrap();
             app.custom_stamps = vec![
