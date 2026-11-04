@@ -1,6 +1,5 @@
 //! Add a stamp: the palette and placing stamps on the page.
 
-use egui::{Key, Modifiers};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use pdfcraft_ui_egui::{PdfCraftApp, QuickTool};
