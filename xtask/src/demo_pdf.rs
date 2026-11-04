@@ -203,4 +203,12 @@ mod tests {
         assert!(!url.contains("//?/"), "{url}");
         assert!(url.starts_with("file:///"), "{url}");
     }
+
+    /// A space, `#`, `%` and UTF-8 bytes are escaped as `%XX` in capitals; letters, digits and
+    /// `/-_.~:` stay. The path does not exist, so `canonicalize` leaves it as written.
+    #[test]
+    fn file_url_escapes_everything_but_the_path_characters() {
+        let url = file_url(Path::new("no such dir/a b#%é-_.~:Z9.pdf"));
+        assert_eq!(url, "file:///no%20such%20dir/a%20b%23%25%C3%A9-_.~:Z9.pdf");
+    }
 }
