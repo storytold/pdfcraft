@@ -19,7 +19,7 @@ use std::collections::{BTreeSet, HashMap};
 
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream};
 
-use crate::{LETTER, MAX_SIDE, add_page};
+use crate::{LETTER, MAX_SIDE, Pages};
 use layout::{Item, Layout, MAX_PAGES, Page};
 use text::{FaceId, Fonts};
 
@@ -624,6 +624,7 @@ fn write(
     let (fonts_ref, program_names) = embed_fonts(&mut doc, &std_names, maps, fonts, notes);
     // Pages.
     let mut page_refs = Vec::with_capacity(pages.len());
+    let mut tree = Pages::of(&doc).map_err(|e| EpubError::Damaged(e.to_string()))?;
     for (page, (mut c, images)) in pages.iter().zip(contents) {
         // The program resources' names are known now.
         for (i, name) in &program_names {
@@ -645,9 +646,13 @@ fn write(
             res.set(b"XObject".to_vec(), Object::Dict(x));
         }
         let (w, h) = (page.size.0.clamp(3.0, MAX_SIDE), page.size.1.clamp(3.0, MAX_SIDE));
-        let r = add_page(&mut doc, w, h, res, Some(c)).map_err(|e| EpubError::Damaged(e.to_string()))?;
-        page_refs.push(r);
+        tree.add(&mut doc, w, h, res, Some(c));
+        // `Pages::add` ends its list of kids with the page it made.
+        if let Some(Object::Ref(r)) = tree.kids.last() {
+            page_refs.push(*r);
+        }
     }
+    tree.finish(&mut doc).map_err(|e| EpubError::Damaged(e.to_string()))?;
     // A target (container path with an optional fragment) as an explicit destination.
     let dest = |target: &str| -> Option<Object> {
         let (page, y) = anchors.get(target).or_else(|| anchors.get(target.split('#').next().unwrap_or(target)))?;
