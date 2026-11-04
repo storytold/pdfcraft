@@ -88,6 +88,61 @@ pub enum FieldKind {
     Signature,
 }
 
+/// How a field shows and prints: Acrobat's Common Properties ▸ Form Field choices, written as the
+/// widgets' annotation flags (`/F`: Hidden 2, Print 4, NoView 32; ISO 32000-2 Table 167).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum FieldDisplay {
+    /// Shown on screen and printed.
+    #[default]
+    Visible,
+    /// Not shown and takes no input.
+    Hidden,
+    /// Shown on screen, but not printed (a Submit or Print button, say).
+    VisibleNoPrint,
+    /// Not shown on screen, but printed.
+    HiddenPrintable,
+}
+
+impl FieldDisplay {
+    /// The display a widget's `/F` flags give it: Hidden first, then NoView (printable only with
+    /// the Print flag; without it the widget neither shows nor prints, which is Hidden), then no
+    /// Print flag.
+    pub fn from_flags(flags: i64) -> Self {
+        if flags & 2 != 0 {
+            Self::Hidden
+        } else if flags & 32 != 0 {
+            if flags & 4 != 0 { Self::HiddenPrintable } else { Self::Hidden }
+        } else if flags & 4 == 0 {
+            Self::VisibleNoPrint
+        } else {
+            Self::Visible
+        }
+    }
+
+    /// `old` (a widget's `/F`) with this display's Hidden, Print and NoView bits; every other flag
+    /// (Locked, NoRotate…) is kept.
+    pub fn apply_to(self, old: i64) -> i64 {
+        let base = old & !(2 | 4 | 32);
+        match self {
+            Self::Visible => base | 4,
+            Self::Hidden => base | 2 | 4,
+            Self::VisibleNoPrint => base,
+            Self::HiddenPrintable => base | 4 | 32,
+        }
+    }
+
+    /// JavaScript's `field.display`: 0 visible, 1 hidden, 2 noPrint, 3 noView (anything else is
+    /// visible).
+    pub fn from_script_code(code: i32) -> Self {
+        match code {
+            1 => Self::Hidden,
+            2 => Self::VisibleNoPrint,
+            3 => Self::HiddenPrintable,
+            _ => Self::Visible,
+        }
+    }
+}
+
 /// Field flags (§12.7.4, Tables 226, 228, 229, 231).
 pub mod flags {
     pub const READ_ONLY: u32 = 1;
@@ -130,6 +185,8 @@ pub struct Widget {
     pub locked: bool,
     /// The widget's Hidden or NoView flag (`/F` bit 2 or 6): it isn't shown and takes no input.
     pub hidden: bool,
+    /// Whether it shows and prints, from its `/F` flags (Acrobat's Common Properties ▸ Form Field).
+    pub display: FieldDisplay,
     /// Read-only: the field is, or the widget's own `/Ff` says so (a radio button of a group can
     /// be locked on its own, as an XFA exclusion group's layout writes it).
     pub read_only: bool,

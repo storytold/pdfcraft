@@ -708,6 +708,14 @@ impl PdfCraftApp {
         }
         if let (Some(mut draft), Some(view)) = (committed, self.views.get_mut(i)) {
             draft.request_focus = true;
+            // Refused while its widget is hidden: the editor stays open until left (see
+            // `Focus::refused`), so it isn't committed and refused again every frame.
+            draft.refused = self
+                .session
+                .get(view.id)
+                .and_then(|doc| doc.form.iter().find(|field| field.name == draft.name))
+                .and_then(|field| field.widgets.get(draft.widget))
+                .is_some_and(|w| w.hidden);
             view.forms.focus = Some(draft);
         }
         false
@@ -1039,6 +1047,7 @@ mod revert_draft_tests {
             calendar_rect: None,
             calendar_text: None,
             had_focus: false,
+            refused: false,
         }
     }
 

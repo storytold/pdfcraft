@@ -169,6 +169,7 @@ pub fn add_field(doc: &mut Document, page: usize, rect: [f64; 4], kind: &NewFiel
                 tab: usize::MAX,
                 locked: false,
                 hidden: false,
+                display: crate::FieldDisplay::Visible,
                 read_only: false,
                 rotation: 0,
                 caption: None,
