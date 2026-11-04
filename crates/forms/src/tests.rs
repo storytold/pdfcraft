@@ -270,7 +270,8 @@ fn field_wide_button_caption_rejects_a_field_without_widgets() {
         "<< /FT /Btn /T (empty) /Ff 65536 /Kids [] >>".into(),
     ];
     let mut doc = document(&objs);
-    let button = field(&fields(&doc), "empty");
+    let all_fields = fields(&doc);
+    let button = field(&all_fields, "empty");
     assert_eq!(button.kind, FieldKind::PushButton);
     assert!(button.widgets.is_empty());
     let before = pdfcraft_cos::write_full(&doc, &SaveOptions::default()).unwrap();
