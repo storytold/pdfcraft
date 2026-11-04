@@ -78,12 +78,10 @@ fn up_for([x, y, z]: [f64; 3]) -> [f64; 3] {
 
 /// Straight RGBA to the premultiplied RGBA `encode_png` takes.
 fn premultiplied(mut rgba: Vec<u8>) -> Vec<u8> {
-    for px in rgba.chunks_exact_mut(4) {
-        if let [r, g, b, alpha] = px {
-            let a = u16::from(*alpha);
-            for c in [r, g, b] {
-                *c = u8::try_from((u16::from(*c) * a + 127) / 255).unwrap_or(u8::MAX);
-            }
+    for [r, g, b, alpha] in rgba.as_chunks_mut::<4>().0 {
+        let a = u16::from(*alpha);
+        for c in [r, g, b] {
+            *c = u8::try_from((u16::from(*c) * a + 127) / 255).unwrap_or(u8::MAX);
         }
     }
     rgba
