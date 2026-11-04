@@ -507,12 +507,16 @@ fn only_fonts_something_draws_with_must_be_embedded() {
                 "<< /Type /Font /Subtype /Type1 /BaseFont /ZapfDingbats >>",
                 "<< /Type /Annot /Subtype /Widget /FT /Tx /T (name) /F 4 /Rect [10 10 90 30] /P 3 0 R /AP << /N 7 0 R >> >>",
                 &format!("<< /Type /XObject /Subtype /Form /BBox [0 0 80 20] /Resources << {appearance_fonts} >> /Length 0 >>\nstream\n\nendstream"),
+                // An object that is nothing but a reference to the Helvetica font (ISO 32000-1 7.3.10).
+                "4 0 R",
             ],
             "",
         )
     };
     assert!(fonts(&form("")).is_empty(), "{:?}", fonts(&form("")));
     assert_eq!(fonts(&form("/Font << /Helv 4 0 R >>")), ["The font Helvetica isn't embedded"]);
+    // Named through a reference to it, it is still the font something draws with.
+    assert_eq!(fonts(&form("/Font << /Helv 8 0 R >>")), ["The font Helvetica isn't embedded"]);
     // A page's own font is checked as before.
     assert_eq!(fonts(&messy()), ["The font Helvetica isn't embedded"]);
 }

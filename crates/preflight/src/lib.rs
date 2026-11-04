@@ -341,10 +341,23 @@ fn drawing_fonts(doc: &Document, objs: &[(ObjRef, std::sync::Arc<Object>)]) -> s
         let Some(resources) = dict_of(o).and_then(|d| d.get(b"Resources")).map(|r| doc.resolve(r)) else { continue };
         let Some(fonts) = resources.as_dict().and_then(|r| r.get(b"Font")).map(|f| doc.resolve(f)) else { continue };
         if let Some(fonts) = fonts.as_dict() {
-            out.extend(fonts.iter().filter_map(|(_, f)| f.as_ref()));
+            out.extend(fonts.iter().filter_map(|(_, f)| f.as_ref()).map(|r| font_object(doc, r)));
         }
     }
     out
+}
+
+/// How many references [`font_object`] follows, as the document's own `resolve` does.
+const MAX_REFERENCE_HOPS: usize = 32;
+
+/// The object a font entry's reference `r` ends at: an object can be nothing but a reference to
+/// another (ISO 32000-1 7.3.10), and the font dictionary is the last one in that chain.
+fn font_object(doc: &Document, mut r: ObjRef) -> ObjRef {
+    for _ in 0..MAX_REFERENCE_HOPS {
+        let Object::Ref(next) = &*doc.get(r) else { break };
+        r = *next;
+    }
+    r
 }
 
 /// Whether a stream's own dictionary says it holds content: a form XObject, or a stream with a
