@@ -88,16 +88,23 @@ impl FontResolver<'_> {
         Ok(name)
     }
 
-    fn substitute_font(&mut self, source: &TextLine) -> String {
+    fn substitute_font(&mut self, source: &TextLine, draft: &str) -> String {
         let family = source_family(&source.base_font);
         let base = family.base_font(source.bold, source.italic);
         let name = format!("PCEd{}", base.replace('-', ""));
+        let encoding = self
+            .fonts
+            .get(name.as_bytes())
+            .and_then(|f| {
+                self.doc.resolve(f).as_dict().and_then(|d| d.get(b"Encoding")).and_then(|e| self.doc.resolve(e).as_dict().cloned().map(Object::Dict))
+            })
+            .unwrap_or_else(|| pdfcraft_fonts::standard_encoding(draft));
         let mut font = Dict::new();
         font.set(b"Type".to_vec(), Object::name("Font"));
         font.set(b"Subtype".to_vec(), Object::name("Type1"));
         font.set(b"BaseFont".to_vec(), Object::name(base));
-        font.set(b"Encoding".to_vec(), Object::name("WinAnsiEncoding"));
-        self.metrics.entry(name.clone()).or_insert_with(|| Metrics::from_dict(self.doc, &font));
+        font.set(b"Encoding".to_vec(), encoding);
+        self.metrics.insert(name.clone(), Metrics::from_dict(self.doc, &font));
         self.fonts.set(name.clone().into_bytes(), Object::Dict(font));
         name
     }
@@ -148,7 +155,7 @@ impl CharacterPreparation<'_> {
                 } else if needs_type3(&text) {
                     fallback.prepare(source, ch, &text, chars.len())?
                 } else {
-                    let name = resolver.substitute_font(source);
+                    let name = resolver.substitute_font(source, draft);
                     substituted = Some(source_family(&source.base_font).base_font(source.bold, source.italic).to_owned());
                     name
                 };
@@ -356,14 +363,19 @@ fn page_font_metrics(
     resource_dict: &Dict,
     block: &TextBlock,
     lines: &[TextLine],
+    draft: &str,
 ) -> (Dict, std::collections::BTreeMap<String, Metrics>) {
     let mut fonts = resource_dict.get(b"Font").and_then(|resource| doc.resolve(resource).as_dict().cloned()).unwrap_or_default();
     for line in lines.iter().filter(|line| line.font.starts_with("PCRange")) {
+        let encoding = fonts
+            .get(line.font.as_bytes())
+            .and_then(|f| doc.resolve(f).as_dict().and_then(|d| d.get(b"Encoding")).and_then(|e| doc.resolve(e).as_dict().cloned().map(Object::Dict)))
+            .unwrap_or_else(|| pdfcraft_fonts::standard_encoding(draft));
         let mut font = Dict::new();
         font.set(b"Type".to_vec(), Object::name("Font"));
         font.set(b"Subtype".to_vec(), Object::name("Type1"));
         font.set(b"BaseFont".to_vec(), Object::name(&line.base_font));
-        font.set(b"Encoding".to_vec(), Object::name("WinAnsiEncoding"));
+        font.set(b"Encoding".to_vec(), encoding);
         fonts.set(line.font.as_bytes().to_vec(), Object::Dict(font));
     }
     let mut metrics = std::collections::BTreeMap::new();
@@ -863,7 +875,7 @@ pub(crate) fn rewrite_styled_block(
     let overrides = styled.overrides;
     let p = page_dict(doc, page)?;
     let mut res = p.dict.get(b"Resources").and_then(|resource| doc.resolve(resource).as_dict().cloned()).unwrap_or_default();
-    let (mut fonts, mut metrics) = page_font_metrics(doc, &res, block, lines);
+    let (mut fonts, mut metrics) = page_font_metrics(doc, &res, block, lines, draft);
     let (dx, dy, width) = paragraph_geometry(doc, &p, block, style)?;
     let prepared = CharacterPreparation {
         doc,

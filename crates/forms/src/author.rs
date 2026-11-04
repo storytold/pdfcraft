@@ -22,7 +22,7 @@ pub use edit::set_props;
 pub use lifecycle::{add_field, delete_field, delete_field_object, delete_widget, duplicate_field};
 pub(crate) use look::button_appearance;
 pub use look::{BorderStyle, CheckStyle, FieldFont, Look, LookPatch, check_style, look, redraw_field, set_button_icon};
-pub(crate) use tree::{ensure_form, form_fonts_as_objects};
+pub(crate) use tree::{ensure_form, ensure_turkish_dr, form_fonts_as_objects};
 
 /// The smallest width and height of a field's widget, in points: a smaller one is refused.
 pub const MIN_FIELD_SIDE: f64 = 4.0;

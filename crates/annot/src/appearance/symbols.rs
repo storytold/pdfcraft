@@ -383,7 +383,7 @@ pub(super) fn stamp(label: &str, sign_here: bool, rect: [f64; 4], col: Rgb, by: 
         f.set(b"Type".to_vec(), Object::name("Font"));
         f.set(b"Subtype".to_vec(), Object::name("Type1"));
         f.set(b"BaseFont".to_vec(), Object::name(base));
-        f.set(b"Encoding".to_vec(), Object::name("WinAnsiEncoding"));
+        f.set(b"Encoding".to_vec(), pdfcraft_fonts::standard_encoding(by.unwrap_or(label)));
         Object::Dict(f)
     };
     let mut fonts = Dict::new();

@@ -1014,5 +1014,7 @@ mod tests {
         assert!(e.contains("火曜日") && e.contains("can't be written into the PDF yet"), "{e}");
         assert!(s.today_text_for_pdf(Some("dd.mm.yyyy"), Some("ja")).is_ok(), "numbers are fine in any language");
         assert!(s.today_text_for_pdf(Some("yyyy\\年mm\\月"), Some("ja")).unwrap_err().contains("年月"));
+        assert_eq!(s.today_text_for_pdf(Some("dddd, d mmmm yyyy"), Some("tr")).as_deref(), Ok("Salı, 14 Kasım 2023"));
+        assert_eq!(unwritable("Çarşamba, 19 Ağustos – 20 Şubat"), "");
     }
 }

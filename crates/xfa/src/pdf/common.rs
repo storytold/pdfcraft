@@ -87,12 +87,12 @@ pub(super) fn rgb_array(c: [f64; 3]) -> Object {
     Object::Array(c.iter().map(|v| Object::Real(v.clamp(0.0, 1.0))).collect())
 }
 
-pub(super) fn standard_font(base: &str) -> Object {
+pub(super) fn standard_font(base: &str, turkish: bool) -> Object {
     let mut f = Dict::new();
     f.set(b"Type".to_vec(), Object::name("Font"));
     f.set(b"Subtype".to_vec(), Object::name("Type1"));
     f.set(b"BaseFont".to_vec(), Object::name(base));
-    f.set(b"Encoding".to_vec(), Object::name("WinAnsiEncoding"));
+    f.set(b"Encoding".to_vec(), if turkish { pdfcraft_fonts::turkish_encoding() } else { Object::name("WinAnsiEncoding") });
     Object::Dict(f)
 }
 

@@ -37,7 +37,7 @@ pub(crate) fn add_resources(doc: &mut Document, page: &pdfcraft_model::Page, opa
         }
         faces.push((name.to_vec(), base));
     }
-    add_page_resources(doc, page, opacity, &faces)
+    add_page_resources(doc, page, opacity, &faces, content)
 }
 
 /// The fonts a page draws with: its own resources' or the ones it inherits.
@@ -59,7 +59,8 @@ pub(crate) fn free_font_name(doc: &Document, fonts: &Dict, preferred: &str, base
                 && d.name(b"Type") == Some(b"Font")
                 && d.name(b"Subtype") == Some(b"Type1")
                 && d.name(b"BaseFont") == Some(base.as_bytes())
-                && d.name(b"Encoding") == Some(b"WinAnsiEncoding")
+                && (d.name(b"Encoding") == Some(b"WinAnsiEncoding")
+                    || d.get(b"Encoding").is_some_and(|e| *doc.resolve(e) == pdfcraft_fonts::turkish_encoding()))
         }),
     };
     if usable(preferred) {
@@ -75,15 +76,26 @@ pub(crate) fn add_page_resources(
     page: &pdfcraft_model::Page,
     opacity: Option<f64>,
     faces: &[(Vec<u8>, &str)],
+    content: Option<&[u8]>,
 ) -> Result<(), EditError> {
     let mut res = page.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
     let mut fonts = res.get(b"Font").map(|f| doc.resolve(f)).and_then(|f| f.as_dict().cloned()).unwrap_or_default();
     for (name, base) in faces {
+        let encoding = fonts
+            .get(name.as_slice())
+            .and_then(|f| doc.resolve(f).as_dict().and_then(|d| d.get(b"Encoding")).and_then(|e| doc.resolve(e).as_dict().cloned().map(Object::Dict)))
+            .unwrap_or_else(|| {
+                if content.is_some_and(pdfcraft_fonts::has_turkish_bytes) {
+                    pdfcraft_fonts::turkish_encoding()
+                } else {
+                    Object::name("WinAnsiEncoding")
+                }
+            });
         let mut font = Dict::new();
         font.set(b"Type".to_vec(), Object::name("Font"));
         font.set(b"Subtype".to_vec(), Object::name("Type1"));
         font.set(b"BaseFont".to_vec(), Object::name(base));
-        font.set(b"Encoding".to_vec(), Object::name("WinAnsiEncoding"));
+        font.set(b"Encoding".to_vec(), encoding);
         fonts.set(name.clone(), Object::Dict(font));
     }
     res.set(b"Font".to_vec(), Object::Dict(fonts));

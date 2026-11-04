@@ -147,7 +147,7 @@ pub(crate) fn panel(
     let search_label = ui.label(tl!("Find a tag"));
     ui.add(egui::TextEdit::singleline(&mut state.query).hint_text(tl!("Find a tag"))).labelled_by(search_label.id);
     ui.add_space(4.0);
-    let query = state.query.to_lowercase();
+    let query = pdfcraft_render::text::fold_case(&state.query);
     let matching = visible_tags(tags, &query, &state.collapsed);
     let parents: HashSet<ObjRef> = tags.iter().filter_map(|tag| tag.parent).collect();
     let dirty = state.selected.and_then(|r| tags.iter().find(|t| t.object == r)).is_some_and(|tag| state.draft.edit(tag).is_some());
@@ -271,9 +271,10 @@ fn visible_tags<'a>(tags: &'a [TagInfo], query: &str, collapsed: &BTreeSet<ObjRe
     }
     let by_object: HashMap<ObjRef, &TagInfo> = tags.iter().map(|tag| (tag.object, tag)).collect();
     let mut show = HashSet::new();
-    for tag in
-        tags.iter().filter(|tag| tag.kind.to_lowercase().contains(query) || tag.title.as_ref().is_some_and(|v| v.to_lowercase().contains(query)))
-    {
+    for tag in tags.iter().filter(|tag| {
+        pdfcraft_render::text::fold_case(&tag.kind).contains(query)
+            || tag.title.as_ref().is_some_and(|v| pdfcraft_render::text::fold_case(v).contains(query))
+    }) {
         let mut next = Some(tag.object);
         for _ in 0..=256 {
             let Some(object) = next.filter(|o| show.insert(*o)) else { break };

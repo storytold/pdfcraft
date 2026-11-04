@@ -116,11 +116,17 @@ pub(crate) fn replace_line_with_limit(doc: &mut Document, page: usize, line: usi
                 replacement.push(Op::new("Tj", vec![Object::String(PdfString::literal(win))]));
                 replacement.push(Op::new("Tf", vec![Object::name(&target.font), pdfcraft_content::num(size)]));
                 substituted = Some(base.to_string());
+                let encoding = fonts_res
+                    .get(substitute_name.as_bytes())
+                    .and_then(|f| {
+                        doc.resolve(f).as_dict().and_then(|d| d.get(b"Encoding")).and_then(|e| doc.resolve(e).as_dict().cloned().map(Object::Dict))
+                    })
+                    .unwrap_or_else(|| pdfcraft_fonts::standard_encoding(&fallback_shown));
                 let mut f = Dict::new();
                 f.set(b"Type".to_vec(), Object::name("Font"));
                 f.set(b"Subtype".to_vec(), Object::name("Type1"));
                 f.set(b"BaseFont".to_vec(), Object::name(base));
-                f.set(b"Encoding".to_vec(), Object::name("WinAnsiEncoding"));
+                f.set(b"Encoding".to_vec(), encoding);
                 fonts_res.set(substitute_name.into_bytes(), Object::Dict(f));
             }
         }
@@ -382,6 +388,7 @@ struct FontChoice {
 
 /// What [`choose_font`] needs to know about the paragraph.
 struct FontInputs<'a> {
+    doc: &'a Document,
     /// The source font, when its glyphs are reused.
     source: Option<&'a Metrics>,
     type3: Option<&'a Type3Fallback>,
@@ -415,14 +422,20 @@ fn choose_font(inputs: &FontInputs<'_>, fonts_res: &mut Dict) -> Result<FontChoi
     if flat.chars().zip(back.chars()).any(|(a, c)| c == '?' && a != '?') {
         return Err(EditError::Invalid(format!("\"{flat}\" has characters neither {} nor {base} can show", inputs.source_base_font)));
     }
+    // Named after its face, as the line and region rewrites name theirs: one name for every
+    // stand-in would repoint the paragraphs set in an earlier one at this face (#4280).
+    let name = format!("PCEd{}", base.replace('-', ""));
+    let encoding = fonts_res
+        .get(name.as_bytes())
+        .and_then(|f| {
+            inputs.doc.resolve(f).as_dict().and_then(|d| d.get(b"Encoding")).and_then(|e| inputs.doc.resolve(e).as_dict().cloned().map(Object::Dict))
+        })
+        .unwrap_or_else(|| pdfcraft_fonts::standard_encoding(flat));
     let mut f = Dict::new();
     f.set(b"Type".to_vec(), Object::name("Font"));
     f.set(b"Subtype".to_vec(), Object::name("Type1"));
     f.set(b"BaseFont".to_vec(), Object::name(base));
-    f.set(b"Encoding".to_vec(), Object::name("WinAnsiEncoding"));
-    // Named after its face, as the line and region rewrites name theirs: one name for every
-    // stand-in would repoint the paragraphs set in an earlier one at this face (#4280).
-    let name = format!("PCEd{}", base.replace('-', ""));
+    f.set(b"Encoding".to_vec(), encoding);
     fonts_res.set(name.clone().into_bytes(), Object::Dict(f));
     let substituted = (!inputs.family_requested).then(|| base.to_string());
     let shown = name.clone();
@@ -891,6 +904,7 @@ pub(crate) fn rewrite_block_from(
     let wrapped = wrap(&text, width + 0.5, |s| advance.of(s));
     let font = choose_font(
         &FontInputs {
+            doc,
             source: source_metrics,
             type3: type3.as_ref(),
             font_name: &font_name,

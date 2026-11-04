@@ -315,6 +315,12 @@ pub fn redraw_field(doc: &mut Document, name: &str) -> Result<(), FormError> {
 /// `FormError::NoSuchField` when no field is named `name`.
 pub(super) fn redraw_widgets(doc: &mut Document, name: &str, only: Option<usize>) -> Result<(), FormError> {
     let f = fields(doc).into_iter().find(|f| f.name == name).ok_or_else(|| FormError::NoSuchField(name.into()))?;
+    if f.value.iter().any(|s| pdfcraft_fonts::has_turkish(s))
+        || f.options.iter().any(|(_, d)| pdfcraft_fonts::has_turkish(d))
+        || f.widgets.iter().filter_map(|w| w.caption.as_deref()).any(pdfcraft_fonts::has_turkish)
+    {
+        super::ensure_turkish_dr(doc);
+    }
     let mut undrawn = false;
     for (index, w) in f.widgets.iter().enumerate() {
         if only.is_some_and(|only| only != index) {

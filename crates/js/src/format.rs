@@ -541,6 +541,11 @@ pub(crate) fn scand(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResul
     Ok(date.into())
 }
 
+/// Whether `c` is one of the six Turkish-specific letters (`Ğ`, `ğ`, `İ`, `ı`, `Ş`, `ş`).
+pub(crate) fn is_turkish_char(c: char) -> bool {
+    matches!(c, 'Ğ' | 'ğ' | 'İ' | 'ı' | 'Ş' | 'ş')
+}
+
 /// `util.printx(cFormat, cSource)`: `?` any character, `X` letter or digit, `A` letter, `9`
 /// digit, `*` the rest, `\` escape, `>` / `<` / `=` upper / lower / as is.
 pub(crate) fn printx(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
@@ -548,8 +553,13 @@ pub(crate) fn printx(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResu
     let src: Vec<char> = text(&arg(args, 1), ctx)?.chars().collect();
     let (mut out, mut j, mut case) = (String::new(), 0, 0);
     let mut i = 0;
+    let turkish = src.iter().copied().any(is_turkish_char);
     let push = |out: &mut String, c: char, case: i32| match case {
+        1 if turkish && c == 'i' => out.push('İ'),
+        1 if c == 'ı' => out.push('I'),
         1 => out.extend(c.to_uppercase()),
+        -1 if c == 'İ' => out.push('i'),
+        -1 if turkish && c == 'I' => out.push('ı'),
         -1 => out.extend(c.to_lowercase()),
         _ => out.push(c),
     };

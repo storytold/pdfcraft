@@ -324,13 +324,14 @@ pub fn undrawable_text(d: &Dict) -> Option<(&'static str, char)> {
     Some((what, first_undrawable(&text)?))
 }
 
-/// `/Font` resources naming `/Helv`: standard Helvetica with WinAnsiEncoding.
-fn helvetica_resource() -> Object {
+/// `/Font` resources naming `/Helv`: standard Helvetica with WinAnsiEncoding (or the Turkish
+/// `/Differences` when `text` has Turkish letters).
+fn helvetica_resource(text: &str) -> Object {
     let mut font = Dict::new();
     font.set(b"Type".to_vec(), Object::name("Font"));
     font.set(b"Subtype".to_vec(), Object::name("Type1"));
     font.set(b"BaseFont".to_vec(), Object::name("Helvetica"));
-    font.set(b"Encoding".to_vec(), Object::name("WinAnsiEncoding"));
+    font.set(b"Encoding".to_vec(), pdfcraft_fonts::standard_encoding(text));
     let mut fonts = Dict::new();
     fonts.set(b"Helv".to_vec(), Object::Dict(font));
     Object::Dict(fonts)
@@ -478,7 +479,7 @@ fn finish_appearance(context: &AppearanceContext<'_>, mut drawing: AppearanceDra
             // WinAnsi bytes (e.g. 0xB2 for "²") go into the stream as-is, not through UTF-8.
             out.extend(literal(&win_ansi(&value)));
             out.extend_from_slice(b" Tj ET\n");
-            drawing.resources.set(b"Font".to_vec(), helvetica_resource());
+            drawing.resources.set(b"Font".to_vec(), helvetica_resource(&value));
         }
     }
     Some(form(context.rect, &out, drawing.resources))
@@ -625,7 +626,7 @@ fn draw_line(context: &AppearanceContext<'_>, drawing: &mut AppearanceDrawing) -
         // WinAnsi bytes go into the stream as-is, not through UTF-8.
         tail.extend(literal(&win_ansi(&text)));
         tail.extend_from_slice(b" Tj ET Q\n");
-        res.set(b"Font".to_vec(), helvetica_resource());
+        res.set(b"Font".to_vec(), helvetica_resource(&text));
     }
     Some(())
 }
@@ -728,7 +729,7 @@ fn draw_caret(context: &AppearanceContext<'_>, drawing: &mut AppearanceDrawing) 
         drawing.tail.extend(format!("BT /Helv {} Tf {} {} Td (", n(size), n(x), n(y)).bytes());
         drawing.tail.push(0xB6);
         drawing.tail.extend_from_slice(b") Tj ET\n");
-        drawing.resources.set(b"Font".to_vec(), helvetica_resource());
+        drawing.resources.set(b"Font".to_vec(), helvetica_resource("\u{b6}"));
     }
     Some(())
 }
@@ -995,7 +996,7 @@ fn draw_free_text(context: &AppearanceContext<'_>, mut drawing: AppearanceDrawin
         y -= size * 1.2;
     }
     out.extend_from_slice(b"ET\n");
-    res.set(b"Font".to_vec(), helvetica_resource());
+    res.set(b"Font".to_vec(), helvetica_resource(&text));
     let mut stream = form(full, &out, res);
     if let Some(m) = matrix {
         stream.dict.set(b"Matrix".to_vec(), Object::Array(m.iter().copied().map(Object::Real).collect()));

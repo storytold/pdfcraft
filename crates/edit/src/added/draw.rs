@@ -277,7 +277,7 @@ pub(super) fn draw(doc: &mut Document, c: &Content, view: [f64; 6], taken: &Dict
             font.set(b"Subtype".to_vec(), Object::name("Type1"));
             font.set(b"BaseFont".to_vec(), Object::name(base));
             if t.family != Family::Courier || !t.text.is_ascii() {
-                font.set(b"Encoding".to_vec(), Object::name("WinAnsiEncoding"));
+                font.set(b"Encoding".to_vec(), pdfcraft_fonts::standard_encoding(&t.text));
             }
             let mut fonts = Dict::new();
             fonts.set(name.clone().into_bytes(), Object::Dict(font));
