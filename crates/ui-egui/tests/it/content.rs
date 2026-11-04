@@ -757,14 +757,16 @@ fn format_text_fits_the_tools_pane_at_its_narrowest() {
     }
 }
 
-/// Whether this machine's interface faces draw every translation in `catalog` (a catalog file's
-/// text) in the families the panels use. A script with no face at all fails (Lao without system
-/// fonts), and so does one a fallback face covers only in part: on Windows without a Japanese face,
-/// the Korean fallback draws 日本語 but not the katakana "ー", on which egui's
-/// `MissingGlyphPolicy::Panic` aborts the frame.
-fn draws_catalog(ctx: &egui::Context, catalog: &str) -> bool {
-    let chars: std::collections::BTreeSet<char> = catalog
-        .lines()
+/// Whether this machine's interface faces draw every translation in `catalogs` (the craft-i18n
+/// catalog files a language reads, `Lang::catalog_texts`: none for English, or in a build without
+/// them) in the families the panels use. A script with no
+/// face at all fails (Lao without system fonts), and so does one a fallback face covers only in
+/// part: on Windows without a Japanese face, the Korean fallback draws 日本語 but not the katakana
+/// "ー", on which egui's `MissingGlyphPolicy::Panic` aborts the frame.
+fn draws_catalog<'a>(ctx: &egui::Context, catalogs: impl IntoIterator<Item = &'a str>) -> bool {
+    let chars: std::collections::BTreeSet<char> = catalogs
+        .into_iter()
+        .flat_map(str::lines)
         .filter(|line| !line.starts_with('#'))
         // Context and source, then the translation and any further plural forms.
         .flat_map(|line| line.split('\t').skip(2))
@@ -784,13 +786,13 @@ fn draws_catalog(ctx: &egui::Context, catalog: &str) -> bool {
 fn format_text_lists_fit_the_narrowest_tools_pane_in_every_language() {
     use egui::accesskit::Role;
     let mut checked = Vec::new();
-    for info in &pdfcraft_ui_egui::i18n::LANGUAGES {
+    for lang in pdfcraft_ui_egui::i18n::Lang::all() {
         let mut h = harness();
-        if !draws_catalog(&h.ctx, info.source) {
+        if !draws_catalog(&h.ctx, lang.catalog_texts()) {
             continue;
         }
-        checked.push(info.code);
-        h.state_mut().set_option("language", info.code).unwrap();
+        checked.push(lang.code());
+        h.state_mut().set_option("language", lang.code()).unwrap();
         h.state_mut().side_panels.tools_width = 0.0;
         assert!(h.state_mut().execute("edit.text"));
         h.run_steps(3);
@@ -799,15 +801,17 @@ fn format_text_lists_fit_the_narrowest_tools_pane_in_every_language() {
         // could make another list the widest.
         let font = h.query_all_by_role(Role::ComboBox).find(|n| n.value().as_deref() == Some("Helvetica")).map(|n| n.rect()).expect("the font list");
         for r in &lists {
-            assert!(r.right() <= font.right() + 0.5, "{}: {r:?} reaches past the font list ({font:?})", info.code);
+            assert!(r.right() <= font.right() + 0.5, "{}: {r:?} reaches past the font list ({font:?})", lang.code());
         }
         // The size row too: its field reserves room for a translated "Mixed".
         let align = h.get_by_label(pdfcraft_ui_egui::i18n::t("Alignment")).rect();
-        assert!(align.right() <= font.right() + 0.5, "{}: Alignment {align:?} reaches past the font list ({font:?})", info.code);
+        assert!(align.right() <= font.right() + 0.5, "{}: Alignment {align:?} reaches past the font list ({font:?})", lang.code());
     }
-    // The app's own faces draw these on every machine, so the skip above can't hide them.
-    for code in ["en", "cs", "fr"] {
-        assert!(checked.contains(&code), "{code} was skipped as undrawable");
+    // The app's own faces draw these on every machine, so the skip above can't hide them. A build
+    // without the craft-i18n catalogs offers English alone (`Lang::all`).
+    let always: &[&str] = if pdfcraft_ui_egui::i18n::catalogs_embedded() { &["en", "cs", "fr"] } else { &["en"] };
+    for code in always {
+        assert!(checked.contains(code), "{code} was skipped as undrawable");
     }
 }
 
