@@ -8,14 +8,16 @@ use super::{
 pub(crate) struct Host {
     pub(crate) fields: Arc<Vec<FieldState>>,
     pub(crate) icons: Vec<(super::JsObject, u64)>,
-    pub(crate) objects: Vec<(String, super::JsObject)>,
+    pub(crate) objects: Vec<((String, Option<u64>), super::JsObject)>,
     pub(crate) changed: BTreeSet<usize>,
     pub(crate) alerts: Vec<Message>,
     pub(crate) console: Vec<String>,
     pub(crate) requests: Vec<Request>,
     pub(crate) doc: DocInfo,
-    pub(crate) calculations: Vec<(String, String)>,
+    pub(crate) calculations: Vec<(usize, String)>,
     pub(crate) calculate_depth: usize,
+    pub(crate) reset_calls: usize,
+    pub(crate) reset_limit_exceeded: bool,
     /// Bytes of text kept in alerts, console lines and requests, against [`xfa::MAX_PAYLOAD`].
     pub(crate) kept: usize,
     /// Alerts, console lines and requests the limits left out.
@@ -203,17 +205,24 @@ pub(crate) fn colour(c: &Option<Vec<String>>, ctx: &mut Context) -> JsValue {
 
 // ── field objects ───────────────────────────────────────────────────────────────────────────
 
-fn field_index(ctx: &Context, name: &JsString) -> JsResult<usize> {
-    let n = name.to_std_string_escaped();
-    host(ctx)?.borrow().fields.iter().position(|f| f.name == n).ok_or_else(|| error(format!("no field named {n}")))
+pub(crate) type FieldKey = (JsString, Option<u64>);
+
+fn field_index(ctx: &Context, name: &FieldKey) -> JsResult<usize> {
+    let n = name.0.to_std_string_escaped();
+    host(ctx)?
+        .borrow()
+        .fields
+        .iter()
+        .position(|f| name.1.map_or(f.name == n, |id| f.object_id == Some(id)))
+        .ok_or_else(|| error(format!("no field named {n}")))
 }
 
-pub(crate) fn read(ctx: &Context, name: &JsString) -> JsResult<FieldState> {
+pub(crate) fn read(ctx: &Context, name: &FieldKey) -> JsResult<FieldState> {
     let i = field_index(ctx, name)?;
     Ok(host(ctx)?.borrow().fields[i].clone())
 }
 
-pub(crate) fn write(ctx: &Context, name: &JsString, change: impl FnOnce(&mut FieldState)) -> JsResult<()> {
+pub(crate) fn write(ctx: &Context, name: &FieldKey, change: impl FnOnce(&mut FieldState)) -> JsResult<()> {
     let i = field_index(ctx, name)?;
     let mut h = host(ctx)?.borrow_mut();
     let field = Arc::make_mut(&mut h.fields).get_mut(i).ok_or_else(|| error("the field is no longer available"))?;

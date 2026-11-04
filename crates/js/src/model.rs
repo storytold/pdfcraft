@@ -37,6 +37,8 @@ pub const DISPLAY_NO_VIEW: i32 = 3;
 #[derive(Clone, Debug, PartialEq)]
 pub struct FieldState {
     pub name: String,
+    /// Stable PDF object identity, absent for synthetic name-only callers.
+    pub object_id: Option<u64>,
     pub kind: FieldType,
     /// Text: the text. Check box / radio: the selected export value (empty when off). Choice:
     /// the selected export values.
@@ -75,6 +77,7 @@ impl FieldState {
     pub fn new(name: impl Into<String>, kind: FieldType, value: Vec<String>) -> FieldState {
         FieldState {
             name: name.into(),
+            object_id: None,
             kind,
             value,
             default: Vec::new(),
@@ -115,6 +118,8 @@ pub struct Event {
     pub kind: String,
     /// The field the event is for.
     pub target: Option<String>,
+    /// Identity for an unambiguous event.target, even with duplicate field names.
+    pub target_id: Option<u64>,
     pub value: String,
     pub change: String,
     pub will_commit: bool,
@@ -123,12 +128,28 @@ pub struct Event {
 impl Event {
     /// A field event (`event.type` = "Field").
     pub fn field(name: &str, target: &str, value: &str) -> Event {
-        Event { name: name.into(), kind: "Field".into(), target: Some(target.into()), value: value.into(), change: String::new(), will_commit: true }
+        Event {
+            name: name.into(),
+            kind: "Field".into(),
+            target: Some(target.into()),
+            target_id: None,
+            value: value.into(),
+            change: String::new(),
+            will_commit: true,
+        }
     }
 
     /// A document event (`event.type` = "Doc"), e.g. Open or WillSave.
     pub fn doc(name: &str) -> Event {
-        Event { name: name.into(), kind: "Doc".into(), target: None, value: String::new(), change: String::new(), will_commit: false }
+        Event {
+            name: name.into(),
+            kind: "Doc".into(),
+            target: None,
+            target_id: None,
+            value: String::new(),
+            change: String::new(),
+            will_commit: false,
+        }
     }
 }
 
@@ -309,6 +330,8 @@ impl Panel {
 /// What running a script did.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Outcome {
+    /// Sticky admission failure: callers must not commit a partial run, even if JS caught the error.
+    pub reset_limit_exceeded: bool,
     /// `event.rc`: `false` rejects the keystroke or value.
     pub rc: bool,
     /// `event.value` after the script.

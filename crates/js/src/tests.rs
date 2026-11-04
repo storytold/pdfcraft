@@ -432,6 +432,8 @@ fn app_alert_titles_are_clipped_and_charged() {
         doc: doc(),
         calculations: Vec::new(),
         calculate_depth: 0,
+        reset_calls: 0,
+        reset_limit_exceeded: false,
         kept: 0,
         dropped: 0,
     };
@@ -2149,4 +2151,19 @@ fn string_arrays_refuse_aggregate_text_before_request_clipping() {
     let o = go("resetForm(new Array(65).fill('x'.repeat(1 << 19)));", &Event::doc("Console"));
     assert!(o.error.as_deref().is_some_and(|e| e.contains("string array byte limit")), "{:?}", o.error);
     assert!(o.requests.is_empty() && o.changed.is_empty());
+}
+
+#[test]
+fn reset_call_limit_precedes_argument_conversion_and_survives_catches() {
+    let o = go("for(var i=0;i<64;i++)resetForm();resetForm([{toString(){throw Error('argument read');}}]);", &Event::doc("Console"));
+    assert!(o.error.as_deref().is_some_and(|e| e.contains("reset call limit")), "{:?}", o.error);
+    assert_eq!(o.requests.iter().filter(|r| matches!(r, Request::Reset(_))).count(), 64);
+}
+
+#[test]
+fn caught_reset_limit_cannot_admit_additional_resets() {
+    let out = go("for(var i=0;i<10000;i++){try{resetForm();}catch(e){}} getField('price').value=99;", &Event::doc("Console"));
+    assert_eq!(out.error, None);
+    assert!(out.reset_limit_exceeded);
+    assert_eq!(out.requests.iter().filter(|r| matches!(r, Request::Reset(_))).count(), 64);
 }

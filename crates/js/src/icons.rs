@@ -1,6 +1,6 @@
 //! Document-bound icon handles. Only object identities minted by this host are accepted.
-use crate::host::{arg, error, host, read, write};
-use crate::{Attribute, Context, JsObject, JsResult, JsString, JsValue, ObjectInitializer};
+use crate::host::{FieldKey, arg, error, host, read, write};
+use crate::{Attribute, Context, JsObject, JsResult, JsValue, ObjectInitializer};
 
 /// Accept omitted/normal face zero only; reject unsupported icon states before touching a field.
 fn normal_face(args: &[JsValue], index: usize, c: &mut Context) -> JsResult<()> {
@@ -13,7 +13,7 @@ fn normal_face(args: &[JsValue], index: usize, c: &mut Context) -> JsResult<()> 
     Ok(())
 }
 /// Return a context-minted normal-icon handle, reusing object identity and enforcing the handle limit.
-pub(crate) fn get(_: &JsValue, args: &[JsValue], name: &JsString, c: &mut Context) -> JsResult<JsValue> {
+pub(crate) fn get(_: &JsValue, args: &[JsValue], name: &FieldKey, c: &mut Context) -> JsResult<JsValue> {
     normal_face(args, 0, c)?;
     let f = read(c, name)?;
     if f.kind != crate::FieldType::Button {
@@ -31,7 +31,7 @@ pub(crate) fn get(_: &JsValue, args: &[JsValue], name: &JsString, c: &mut Contex
     Ok(obj.into())
 }
 /// Stage a normal-icon copy/clear only for a handle minted in this context, refusing forged objects.
-pub(crate) fn set(_: &JsValue, args: &[JsValue], name: &JsString, c: &mut Context) -> JsResult<JsValue> {
+pub(crate) fn set(_: &JsValue, args: &[JsValue], name: &FieldKey, c: &mut Context) -> JsResult<JsValue> {
     normal_face(args, 1, c)?;
     if read(c, name)?.kind != crate::FieldType::Button {
         return Err(error("icons require a push button"));

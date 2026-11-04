@@ -74,3 +74,6 @@ mod icons;
 
 pub mod interaction;
 pub mod session;
+
+/// Maximum reset calls admitted by one document invocation, before argument conversion or field scans.
+pub const MAX_RESET_CALLS: usize = 64;

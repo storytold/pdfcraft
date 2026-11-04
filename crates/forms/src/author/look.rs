@@ -314,7 +314,18 @@ pub fn redraw_field(doc: &mut Document, name: &str) -> Result<(), FormError> {
 /// other widgets' appearances as they are), or for every widget when `only` is `None`. Fails with
 /// `FormError::NoSuchField` when no field is named `name`.
 pub(super) fn redraw_widgets(doc: &mut Document, name: &str, only: Option<usize>) -> Result<(), FormError> {
-    let f = fields(doc).into_iter().find(|f| f.name == name).ok_or_else(|| FormError::NoSuchField(name.into()))?;
+    redraw_widgets_target(doc, name, None, only)
+}
+
+pub(crate) fn redraw_field_object(doc: &mut Document, name: &str, object: ObjRef) -> Result<(), FormError> {
+    redraw_widgets_target(doc, name, Some(object), None)
+}
+
+pub(super) fn redraw_widgets_target(doc: &mut Document, name: &str, object: Option<ObjRef>, only: Option<usize>) -> Result<(), FormError> {
+    let f = fields(doc)
+        .into_iter()
+        .find(|f| f.name == name && object.is_none_or(|obj| f.obj == obj))
+        .ok_or_else(|| FormError::NoSuchField(name.into()))?;
     let mut undrawn = false;
     for (index, w) in f.widgets.iter().enumerate() {
         if only.is_some_and(|only| only != index) {

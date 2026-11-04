@@ -1,10 +1,10 @@
-use super::host::{arg, colour, error, function, host, read, s, set_value, strings, text, value_of, write};
+use super::host::{FieldKey, arg, colour, error, function, host, read, s, set_value, strings, text, value_of, write};
 use super::model::{DISPLAY_HIDDEN, DISPLAY_VISIBLE, FieldType, Request};
 use super::{Attribute, Context, JsArray, JsObject, JsResult, JsString, JsValue, NativeFunction, ObjectInitializer, js_string};
 
 macro_rules! getter {
     ($ctx:expr, $name:expr, |$f:ident, $c:ident| $body:expr) => {{
-        fn get(_: &JsValue, _: &[JsValue], name: &JsString, $c: &mut Context) -> JsResult<JsValue> {
+        fn get(_: &JsValue, _: &[JsValue], name: &FieldKey, $c: &mut Context) -> JsResult<JsValue> {
             let $f = read($c, name)?;
             Ok($body)
         }
@@ -12,25 +12,31 @@ macro_rules! getter {
     }};
 }
 
-/// Reuse a context-local Field object by name so retained references and custom properties survive events.
+/// Resolve public name lookups to their first matching object, preserving ordinary getField behavior.
 pub(crate) fn field_object(ctx: &mut Context, name: &str) -> JsObject {
-    if let Some(object) = host(ctx).ok().and_then(|h| h.borrow().objects.iter().find(|(n, _)| n == name).map(|(_, o)| o.clone())) {
+    let id = host(ctx).ok().and_then(|h| h.borrow().fields.iter().find(|f| f.name == name).and_then(|f| f.object_id));
+    field_object_by_id(ctx, name, id)
+}
+/// Cache by object identity as well as name so duplicate-named targets remain distinct.
+pub(crate) fn field_object_by_id(ctx: &mut Context, name: &str, id: Option<u64>) -> JsObject {
+    let key = (name.to_string(), id);
+    if let Some(object) = host(ctx).ok().and_then(|h| h.borrow().objects.iter().find(|(n, _)| *n == key).map(|(_, o)| o.clone())) {
         return object;
     }
-    let object = field_object_new(ctx, name);
+    let object = field_object_new(ctx, name, id);
     if let Ok(h) = host(ctx)
         && h.borrow().objects.len() < 4096
     {
-        h.borrow_mut().objects.push((name.into(), object.clone()));
+        h.borrow_mut().objects.push((key, object.clone()));
     }
     object
 }
-/// Construct live Field accessors whose reads/writes resolve the current host snapshot by name.
-fn field_object_new(ctx: &mut Context, name: &str) -> JsObject {
-    let n = JsString::from(name);
+/// Construct live accessors whose identity survives host snapshot refreshes.
+fn field_object_new(ctx: &mut Context, name: &str, id: Option<u64>) -> JsObject {
+    let n = (JsString::from(name), id);
     let value_get = getter!(ctx, n, |f, c| value_of(&f, c));
     let value_set = {
-        fn set(_: &JsValue, args: &[JsValue], name: &JsString, c: &mut Context) -> JsResult<JsValue> {
+        fn set(_: &JsValue, args: &[JsValue], name: &FieldKey, c: &mut Context) -> JsResult<JsValue> {
             let vals = strings(&arg(args, 0), c)?;
             write(c, name, |f| set_value(f, vals))?;
             Ok(JsValue::undefined())
@@ -46,7 +52,7 @@ fn field_object_new(ctx: &mut Context, name: &str) -> JsObject {
     let fname = getter!(ctx, n, |f, _c| s(&f.name));
     let readonly_get = getter!(ctx, n, |f, _c| JsValue::from(f.readonly));
     let readonly_set = {
-        fn set(_: &JsValue, args: &[JsValue], name: &JsString, c: &mut Context) -> JsResult<JsValue> {
+        fn set(_: &JsValue, args: &[JsValue], name: &FieldKey, c: &mut Context) -> JsResult<JsValue> {
             let on = arg(args, 0).to_boolean();
             write(c, name, |f| f.readonly = on)?;
             Ok(JsValue::undefined())
@@ -55,7 +61,7 @@ fn field_object_new(ctx: &mut Context, name: &str) -> JsObject {
     };
     let required_get = getter!(ctx, n, |f, _c| JsValue::from(f.required));
     let required_set = {
-        fn set(_: &JsValue, args: &[JsValue], name: &JsString, c: &mut Context) -> JsResult<JsValue> {
+        fn set(_: &JsValue, args: &[JsValue], name: &FieldKey, c: &mut Context) -> JsResult<JsValue> {
             let on = arg(args, 0).to_boolean();
             write(c, name, |f| f.required = on)?;
             Ok(JsValue::undefined())
@@ -64,7 +70,7 @@ fn field_object_new(ctx: &mut Context, name: &str) -> JsObject {
     };
     let display_get = getter!(ctx, n, |f, _c| JsValue::from(f.display));
     let display_set = {
-        fn set(_: &JsValue, args: &[JsValue], name: &JsString, c: &mut Context) -> JsResult<JsValue> {
+        fn set(_: &JsValue, args: &[JsValue], name: &FieldKey, c: &mut Context) -> JsResult<JsValue> {
             let d = arg(args, 0).to_number(c)? as i32;
             write(c, name, |f| f.display = d.clamp(0, 3))?;
             Ok(JsValue::undefined())
@@ -73,7 +79,7 @@ fn field_object_new(ctx: &mut Context, name: &str) -> JsObject {
     };
     let hidden_get = getter!(ctx, n, |f, _c| JsValue::from(f.display == DISPLAY_HIDDEN));
     let hidden_set = {
-        fn set(_: &JsValue, args: &[JsValue], name: &JsString, c: &mut Context) -> JsResult<JsValue> {
+        fn set(_: &JsValue, args: &[JsValue], name: &FieldKey, c: &mut Context) -> JsResult<JsValue> {
             let on = arg(args, 0).to_boolean();
             write(c, name, |f| f.display = if on { DISPLAY_HIDDEN } else { DISPLAY_VISIBLE })?;
             Ok(JsValue::undefined())
@@ -92,7 +98,7 @@ fn field_object_new(ctx: &mut Context, name: &str) -> JsObject {
     });
     let text_color_get = getter!(ctx, n, |f, c| colour(&f.text_color, c));
     let text_color_set = {
-        fn set(_: &JsValue, args: &[JsValue], name: &JsString, c: &mut Context) -> JsResult<JsValue> {
+        fn set(_: &JsValue, args: &[JsValue], name: &FieldKey, c: &mut Context) -> JsResult<JsValue> {
             let v = strings(&arg(args, 0), c)?;
             write(c, name, |f| f.text_color = Some(v))?;
             Ok(JsValue::undefined())
@@ -101,7 +107,7 @@ fn field_object_new(ctx: &mut Context, name: &str) -> JsObject {
     };
     let fill_color_get = getter!(ctx, n, |f, c| colour(&f.fill_color, c));
     let fill_color_set = {
-        fn set(_: &JsValue, args: &[JsValue], name: &JsString, c: &mut Context) -> JsResult<JsValue> {
+        fn set(_: &JsValue, args: &[JsValue], name: &FieldKey, c: &mut Context) -> JsResult<JsValue> {
             let v = strings(&arg(args, 0), c)?;
             write(c, name, |f| f.fill_color = Some(v))?;
             Ok(JsValue::undefined())
@@ -112,7 +118,7 @@ fn field_object_new(ctx: &mut Context, name: &str) -> JsObject {
     let text_size_get = getter!(ctx, n, |f, c| JsValue::from(f.text_size));
     let text_size_set = {
         /// Validate a finite text size in 0..=300 points before staging the field appearance change.
-        fn set(_: &JsValue, args: &[JsValue], name: &JsString, c: &mut Context) -> JsResult<JsValue> {
+        fn set(_: &JsValue, args: &[JsValue], name: &FieldKey, c: &mut Context) -> JsResult<JsValue> {
             let v = arg(args, 0).to_number(c)?;
             if !v.is_finite() || !(0.0..=300.0).contains(&v) {
                 return Err(error("textSize must be between 0 and 300"));
@@ -125,7 +131,7 @@ fn field_object_new(ctx: &mut Context, name: &str) -> JsObject {
     let line_width_get = getter!(ctx, n, |f, c| JsValue::from(f.line_width));
     let line_width_set = {
         /// Validate a finite border width in 0..=12 points before staging the appearance change.
-        fn set(_: &JsValue, args: &[JsValue], name: &JsString, c: &mut Context) -> JsResult<JsValue> {
+        fn set(_: &JsValue, args: &[JsValue], name: &FieldKey, c: &mut Context) -> JsResult<JsValue> {
             let v = arg(args, 0).to_number(c)?;
             if !v.is_finite() || !(0.0..=12.0).contains(&v) {
                 return Err(error("lineWidth must be between 0 and 12"));
@@ -138,7 +144,7 @@ fn field_object_new(ctx: &mut Context, name: &str) -> JsObject {
     let border_style_get = getter!(ctx, n, |f, c| s(&f.border_style));
     let border_style_set = {
         /// Accept only supported border styles and stage the validated value for PDF writeback.
-        fn set(_: &JsValue, args: &[JsValue], name: &JsString, c: &mut Context) -> JsResult<JsValue> {
+        fn set(_: &JsValue, args: &[JsValue], name: &FieldKey, c: &mut Context) -> JsResult<JsValue> {
             let v = text(&arg(args, 0), c)?;
             if !["solid", "dashed", "beveled", "inset", "underline"].contains(&v.as_str()) {
                 return Err(error("unsupported borderStyle"));
@@ -151,7 +157,7 @@ fn field_object_new(ctx: &mut Context, name: &str) -> JsObject {
     let user_name_get = getter!(ctx, n, |f, c| s(&f.user_name));
     let user_name_set = {
         /// Bound the tooltip string to 4,096 bytes before staging the field user name.
-        fn set(_: &JsValue, args: &[JsValue], name: &JsString, c: &mut Context) -> JsResult<JsValue> {
+        fn set(_: &JsValue, args: &[JsValue], name: &FieldKey, c: &mut Context) -> JsResult<JsValue> {
             let v = text(&arg(args, 0), c)?;
             if v.len() > 4096 {
                 return Err(error("userName is too long"));
@@ -164,7 +170,7 @@ fn field_object_new(ctx: &mut Context, name: &str) -> JsObject {
     let stroke_color_get = getter!(ctx, n, |f, c| colour(&f.stroke_color, c));
     let stroke_color_set = {
         /// Read the bounded stroke-colour array for validation at the form writeback boundary.
-        fn set(_: &JsValue, args: &[JsValue], name: &JsString, c: &mut Context) -> JsResult<JsValue> {
+        fn set(_: &JsValue, args: &[JsValue], name: &FieldKey, c: &mut Context) -> JsResult<JsValue> {
             let v = Some(strings(&arg(args, 0), c)?);
             write(c, name, |f| f.stroke_color = v)?;
             Ok(JsValue::undefined())
@@ -174,7 +180,7 @@ fn field_object_new(ctx: &mut Context, name: &str) -> JsObject {
     let rect_get = getter!(ctx, n, |f, c| f.rect.map_or_else(JsValue::undefined, |r| JsArray::from_iter(r.map(JsValue::from), c).into()));
     let rect_set = {
         /// Validate finite ordered rectangle coordinates while permitting zero-sized script overlays.
-        fn set(_: &JsValue, args: &[JsValue], name: &JsString, c: &mut Context) -> JsResult<JsValue> {
+        fn set(_: &JsValue, args: &[JsValue], name: &FieldKey, c: &mut Context) -> JsResult<JsValue> {
             let a = arg(args, 0).as_object().ok_or_else(|| error("rect needs an array"))?;
             let a = JsArray::from_object(a)?;
             if a.length(c)? != 4 {
@@ -198,7 +204,7 @@ fn field_object_new(ctx: &mut Context, name: &str) -> JsObject {
     };
 
     /// Read the normal caption of the first button widget and refuse unsupported caption faces.
-    fn button_get_caption(_: &JsValue, args: &[JsValue], name: &JsString, c: &mut Context) -> JsResult<JsValue> {
+    fn button_get_caption(_: &JsValue, args: &[JsValue], name: &FieldKey, c: &mut Context) -> JsResult<JsValue> {
         let f = read(c, name)?;
         if f.kind != FieldType::Button {
             return Err(error(format!("{} is not a push button", f.name)));
@@ -210,7 +216,7 @@ fn field_object_new(ctx: &mut Context, name: &str) -> JsObject {
         Ok(s(f.caption.as_deref().unwrap_or("")))
     }
     /// Record a normal-caption setter even when widget zero already matches, allowing all-widget writeback.
-    fn button_set_caption(_: &JsValue, args: &[JsValue], name: &JsString, c: &mut Context) -> JsResult<JsValue> {
+    fn button_set_caption(_: &JsValue, args: &[JsValue], name: &FieldKey, c: &mut Context) -> JsResult<JsValue> {
         let f = read(c, name)?;
         if f.kind != FieldType::Button {
             return Err(error("buttonSetCaption is only available on push buttons"));
@@ -227,7 +233,7 @@ fn field_object_new(ctx: &mut Context, name: &str) -> JsObject {
         Ok(JsValue::undefined())
     }
 
-    fn get_item_at(_: &JsValue, args: &[JsValue], name: &JsString, c: &mut Context) -> JsResult<JsValue> {
+    fn get_item_at(_: &JsValue, args: &[JsValue], name: &FieldKey, c: &mut Context) -> JsResult<JsValue> {
         let f = read(c, name)?;
         let i = arg(args, 0).to_number(c)?;
         // bExportValue defaults to true.
@@ -236,13 +242,13 @@ fn field_object_new(ctx: &mut Context, name: &str) -> JsObject {
         let o = f.options.get(i).ok_or_else(|| error(format!("{} has no item {i}", f.name)))?;
         Ok(s(if export { &o.0 } else { &o.1 }))
     }
-    fn is_box_checked(_: &JsValue, args: &[JsValue], name: &JsString, c: &mut Context) -> JsResult<JsValue> {
+    fn is_box_checked(_: &JsValue, args: &[JsValue], name: &FieldKey, c: &mut Context) -> JsResult<JsValue> {
         let f = read(c, name)?;
         let i = arg(args, 0).to_number(c)? as usize;
         let on = f.options.get(i).is_some_and(|o| f.value.first() == Some(&o.0));
         Ok(JsValue::from(on))
     }
-    fn check_this_box(_: &JsValue, args: &[JsValue], name: &JsString, c: &mut Context) -> JsResult<JsValue> {
+    fn check_this_box(_: &JsValue, args: &[JsValue], name: &FieldKey, c: &mut Context) -> JsResult<JsValue> {
         let f = read(c, name)?;
         let i = arg(args, 0).to_number(c)? as usize;
         let on = args.get(1).is_none_or(JsValue::to_boolean);
@@ -256,8 +262,8 @@ fn field_object_new(ctx: &mut Context, name: &str) -> JsObject {
         })?;
         Ok(JsValue::undefined())
     }
-    fn set_focus(_: &JsValue, _: &[JsValue], name: &JsString, c: &mut Context) -> JsResult<JsValue> {
-        host(c)?.borrow_mut().request(Request::Focus(name.to_std_string_escaped()));
+    fn set_focus(_: &JsValue, _: &[JsValue], name: &FieldKey, c: &mut Context) -> JsResult<JsValue> {
+        host(c)?.borrow_mut().request(Request::Focus(name.0.to_std_string_escaped()));
         Ok(JsValue::undefined())
     }
 
@@ -324,6 +330,14 @@ pub(crate) fn get_nth_field_name(_: &JsValue, args: &[JsValue], ctx: &mut Contex
 }
 
 pub(crate) fn reset_form(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    {
+        let mut h = host(ctx)?.borrow_mut();
+        if h.reset_calls >= crate::MAX_RESET_CALLS {
+            h.reset_limit_exceeded = true;
+            return Err(error("reset call limit exceeded"));
+        }
+        h.reset_calls = h.reset_calls.saturating_add(1);
+    }
     let names = strings(&arg(args, 0), ctx)?;
     let mut h = host(ctx)?.borrow_mut();
     let queued = h.requests.len();

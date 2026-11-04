@@ -10740,16 +10740,18 @@ fn native_reset_completion_preserves_values_and_atomic_undo() {
 #[test]
 fn native_reset_flood_is_rejected_without_changing_the_document() {
     use crate::js::InteractiveEvent;
-    for repetitions in [65, 10_000] {
+    for (repetitions, caught) in [(65, false), (10_000, false), (10_000, true)] {
         let mut s = Session::new().with_clock(|| 1_700_000_000);
         let id = s.open("reset-flood.pdf", None, Arc::new(scripted_form()), None).unwrap();
         let before = s.save_bytes(id).unwrap();
         let generation = s.get(id).unwrap().generation;
-        let script = format!("for(var i=0;i<{repetitions};i++)resetForm(['price']);getField('qty').value='uncommitted';");
+        let reset = if caught { "try{resetForm(['price']);}catch(e){}" } else { "resetForm(['price']);" };
+        let script = format!("for(var i=0;i<{repetitions};i++){{{reset}}}getField('qty').value='uncommitted';");
         let pending = s.start_javascript(id, &script, Some("go")).unwrap();
         let InteractiveEvent::Complete(out) = pending.receiver.recv_timeout(std::time::Duration::from_secs(3)).unwrap() else { panic!("completion") };
-        assert_eq!(out.error, None);
-        assert_eq!(out.requests.iter().filter(|r| matches!(r, crate::js::Request::Reset(_))).count(), repetitions);
+        assert!(out.reset_limit_exceeded);
+        assert_eq!(out.error.is_none(), caught);
+        assert_eq!(out.requests.iter().filter(|r| matches!(r, crate::js::Request::Reset(_))).count(), pdfcraft_js::MAX_RESET_CALLS);
         let error = s.finish_javascript(pending, out).expect_err("the reset flood must be rejected before applying it");
         assert!(error.to_string().contains("reset"), "{error}");
         assert_eq!(s.get(id).unwrap().generation, generation);
@@ -10942,4 +10944,82 @@ fn calculate_now_after_reset_reads_and_persists_recalculated_dependents() {
     assert_eq!(out.error, None);
     assert_eq!(out.result.as_deref(), Some("14"));
     assert_eq!(s.get(id).unwrap().form.iter().find(|f| f.name == "total").unwrap().value, ["14"]);
+}
+
+/// Duplicate names retain distinct Calculate scripts, targets and persisted values.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn calculate_now_preserves_duplicate_field_object_identity() {
+    for (native, reverse) in [(false, false), (false, true), (true, false), (true, true)] {
+        let mut cos = pdfcraft_cos::Document::open(Arc::new(scripted_form())).unwrap();
+        let fields = pdfcraft_forms::fields(&cos);
+        let a = fields.iter().find(|f| f.name == "price").unwrap().obj;
+        let b = fields.iter().find(|f| f.name == "qty").unwrap().obj;
+        for (obj, tag, color) in [(a, "A", "color.red"), (b, "B", "color.blue")] {
+            cos.update_dict(obj, |d| {
+                d.set(b"T".to_vec(), pdfcraft_cos::PdfString::text("duplicate"));
+                d.set(b"V".to_vec(), pdfcraft_cos::PdfString::text(tag));
+                let mut action = pdfcraft_cos::Dict::new();
+                action.set(b"S".to_vec(), pdfcraft_cos::Object::name("JavaScript"));
+                action.set(
+                    b"JS".to_vec(),
+                    pdfcraft_cos::PdfString::text(&format!(
+                        "trace+='{tag}'+event.target.value;event.target.userName='{tag}';event.target.fillColor={color};event.target.value='{tag}-temporary';event.value='{tag}-done';"
+                    )),
+                );
+                let mut aa = pdfcraft_cos::Dict::new();
+                aa.set(b"C".to_vec(), pdfcraft_cos::Object::Dict(action));
+                d.set(b"AA".to_vec(), pdfcraft_cos::Object::Dict(aa));
+            })
+            .unwrap();
+        }
+        let root = cos.root().unwrap();
+        cos.update_dict(root, |d| {
+            let mut af = d.get(b"AcroForm").unwrap().as_dict().unwrap().clone();
+            af.set(b"CO".to_vec(), pdfcraft_cos::Object::Array(if reverse { vec![b.into(), a.into()] } else { vec![a.into(), b.into()] }));
+            d.set(b"AcroForm".to_vec(), pdfcraft_cos::Object::Dict(af));
+        })
+        .unwrap();
+        // Disable the unrelated original total calculation.
+        let total = fields.iter().find(|f| f.name == "total").unwrap().obj;
+        cos.update_dict(total, |d| {
+            d.remove(b"AA");
+        })
+        .unwrap();
+        let mut s = Session::new();
+        s.set_javascript(false);
+        let id = s.open("duplicate-calculations.pdf", None, Arc::new(pdfcraft_cos::write_full(&cos, &Default::default()).unwrap()), None).unwrap();
+        s.set_javascript(true);
+        let script = "var trace='';calculateNow();trace;";
+        let out = if native {
+            let p = s.start_javascript(id, script, Some("go")).unwrap();
+            let crate::js::InteractiveEvent::Complete(out) = p.receiver.recv_timeout(std::time::Duration::from_secs(3)).unwrap() else {
+                panic!("completion")
+            };
+            s.finish_javascript(p, out).unwrap()
+        } else {
+            s.run_javascript(id, script, None).unwrap()
+        };
+        assert_eq!(out.error, None);
+        let duplicate_fields: Vec<_> = s.get(id).unwrap().form.iter().filter(|f| f.name == "duplicate").collect();
+        assert_eq!(duplicate_fields.iter().map(|f| f.tooltip.as_deref()).collect::<Vec<_>>(), [Some("A"), Some("B")]);
+        let cos = &s.get(id).unwrap().editor.as_ref().unwrap().cos;
+        assert_eq!(pdfcraft_forms::look(cos, duplicate_fields[0]).fill, Some([1.0, 0.0, 0.0]));
+        assert_eq!(pdfcraft_forms::look(cos, duplicate_fields[1]).fill, Some([0.0, 0.0, 1.0]));
+
+        assert_eq!(out.result.as_deref(), Some(if reverse { "BBAA" } else { "AABB" }));
+        let values = |s: &Session| s.get(id).unwrap().form.iter().filter(|f| f.name == "duplicate").map(|f| f.value.clone()).collect::<Vec<_>>();
+        assert_eq!(values(&s), vec![vec!["A-done"], vec!["B-done"]]);
+        s.undo(id).unwrap();
+        assert_eq!(values(&s), vec![vec!["A"], vec!["B"]]);
+        s.redo(id).unwrap();
+        assert_eq!(values(&s), vec![vec!["A-done"], vec!["B-done"]]);
+        let bytes = s.save_bytes(id).unwrap();
+        s.set_javascript(false);
+        let reopened = s.open("saved-duplicates.pdf", None, bytes, None).unwrap();
+        assert_eq!(
+            s.get(reopened).unwrap().form.iter().filter(|f| f.name == "duplicate").map(|f| f.value.clone()).collect::<Vec<_>>(),
+            vec![vec!["A-done"], vec!["B-done"]]
+        );
+    }
 }

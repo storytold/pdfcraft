@@ -62,14 +62,15 @@ pub fn run_shared(script: &str, event: &Event, doc: &DocInfo, fields: Arc<Vec<Fi
 }
 
 /// Like [`run_shared`], with the document's ordered calculated fields available to
-/// `calculateNow()` while this context is running.
+/// `calculateNow()` while this context is running. Each tuple contains the target
+/// position in `fields` and its source; the engine resolves positions by PDF object identity.
 pub fn run_shared_calculations(
     script: &str,
     event: &Event,
     doc: &DocInfo,
     fields: Arc<Vec<FieldState>>,
     doc_scripts: &[String],
-    calculations: &[(String, String)],
+    calculations: &[(usize, String)],
     limits: Limits,
 ) -> Outcome {
     let failed = |why: String| Outcome { rc: true, value: event.value.clone(), change: event.change.clone(), error: Some(why), ..Default::default() };
@@ -95,7 +96,14 @@ pub fn run_shared_calculations(
     {
         std::thread::scope(|scope| {
             let spawned = std::thread::Builder::new().name("pdfcraft-js".into()).stack_size(SCRIPT_STACK).spawn_scoped(scope, || {
-                run_here(script, event, doc, fields, ScriptSetup { doc_scripts: kept, skipped, calculations, initialize: true }, limits)
+                run_here(
+                    script,
+                    event,
+                    doc,
+                    fields,
+                    ScriptSetup { doc_scripts: kept, skipped, calculations, initialize: true, reset_calls: 0 },
+                    limits,
+                )
             });
             match spawned {
                 Ok(thread) => thread.join().unwrap_or_else(|_| failed("the script stopped with an internal error".into())),
@@ -104,7 +112,7 @@ pub fn run_shared_calculations(
         })
     }
     #[cfg(target_arch = "wasm32")]
-    run_here(script, event, doc, fields, ScriptSetup { doc_scripts: kept, skipped, calculations, initialize: true }, limits)
+    run_here(script, event, doc, fields, ScriptSetup { doc_scripts: kept, skipped, calculations, initialize: true, reset_calls: 0 }, limits)
 }
 
 /// Host hooks that refuse to compile code from strings (`eval`, `Function` and its generator
@@ -149,8 +157,9 @@ fn doc_error(index: usize, error: &dyn std::fmt::Display) -> String {
 pub(crate) struct ScriptSetup<'a> {
     pub(crate) doc_scripts: &'a [(usize, &'a str)],
     pub(crate) skipped: &'a [(usize, String)],
-    pub(crate) calculations: &'a [(String, String)],
+    pub(crate) calculations: &'a [(usize, String)],
     pub(crate) initialize: bool,
+    pub(crate) reset_calls: usize,
 }
 
 /// Create a restricted temporary Boa context and convert initialization failures into script outcomes.
@@ -191,6 +200,8 @@ pub(crate) fn run_in_context(
         doc: doc.clone(),
         calculations: setup.calculations.to_vec(),
         calculate_depth: 0,
+        reset_calls: setup.reset_calls,
+        reset_limit_exceeded: false,
         kept: 0,
         dropped: 0,
     }));
@@ -229,6 +240,7 @@ pub(crate) fn run_in_context(
     out.doc_errors = doc_errors.into_iter().map(|(_, e)| e).collect();
     if let Some(h) = ctx.remove_data::<Shared>() {
         let mut h = h.into_inner();
+        out.reset_limit_exceeded = h.reset_limit_exceeded;
         out.changed = h.changed.iter().filter_map(|i| h.fields.get(*i).cloned()).collect();
         out.alerts = std::mem::take(&mut h.alerts);
         out.console = std::mem::take(&mut h.console);

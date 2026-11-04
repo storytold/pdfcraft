@@ -1,3 +1,4 @@
+- 2026-11-04 (M6, PR #5699 early reset/duplicate identities): Enforce the shared 64-call reset budget before argument conversion/scanning, with sticky atomic rejection and Open/event budget sharing. Preserve PDF object identity in Calculate order, live targets and value writeback; regress duplicate names, reversed order, native completion and persistence.
 - 2026-11-04 (M6, PR #5699 independent review): Preserve unknown defaults through the JS reset shadow; bound menu/response text before copies. Cover native/console reset persistence, inherited defaults, decode-budget exhaustion and exact Unicode dialog boundaries.
 - 2026-11-04 (M6, PR #5699 memory/widget bounds): Count reset widgets and bound escaped UTF-8 text conversion before copies; add negative and Unicode boundary regressions.
 - 2026-11-04 (M6, PR #5699 reset estimate): Charge expanded-name scans and field-name copy/comparison bytes; add three negative regressions and byte-exact refusal checks.

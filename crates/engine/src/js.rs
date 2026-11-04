@@ -12,7 +12,7 @@ pub use pdfcraft_js::{Limits, Message, MessageButtons, MessageIcon, Outcome, Pan
 use crate::{DocId, Edit, EditError, Session};
 
 /// Reset writeback does two full passes (preview and commit); reject amplification before either.
-const MAX_SCRIPT_RESETS: usize = 64;
+const MAX_SCRIPT_RESETS: usize = pdfcraft_js::MAX_RESET_CALLS;
 const MAX_SCRIPT_RESET_SELECTORS: usize = 4096;
 const MAX_SCRIPT_RESET_WORK: usize = 1 << 24;
 
@@ -168,6 +168,7 @@ fn display(doc: &pdfcraft_cos::Document, f: &Field) -> i32 {
 /// Values/appearances come from `doc` and `f`, never from the cached calculation plan.
 pub fn field_state(doc: &pdfcraft_cos::Document, f: &Field, geometry: &pdfcraft_js::DocInfo) -> pdfcraft_js::FieldState {
     let mut s = pdfcraft_js::FieldState::new(f.name.clone(), kind(f.kind), f.value.clone());
+    s.object_id = Some((u64::from(f.obj.num) << 16) | u64::from(f.obj.generation));
     s.default = f.default.clone();
     s.default_known = pdfcraft_forms::default_value_known(doc, f);
     s.readonly = f.read_only();
@@ -234,12 +235,20 @@ fn changes(before: &[pdfcraft_js::FieldState], after: &[pdfcraft_js::FieldState]
     for field in before {
         by_name.entry(field.name.as_str()).or_insert(field);
     }
+    let by_id: std::collections::HashMap<_, _> = before.iter().filter_map(|f| f.object_id.map(|id| (id, f))).collect();
+    let mut names = std::collections::HashSet::new();
+    let duplicates: std::collections::HashSet<_> =
+        before.iter().filter_map(|f| (!names.insert(f.name.as_str())).then_some(f.name.as_str())).collect();
     after
         .iter()
         .filter_map(|a| {
-            let b = by_name.get(a.name.as_str())?;
+            let b = if let Some(id) = a.object_id { by_id.get(&id)? } else { by_name.get(a.name.as_str())? };
             let c = FieldChange {
                 name: a.name.clone(),
+                object: a
+                    .object_id
+                    .filter(|_| duplicates.contains(a.name.as_str()))
+                    .map(|id| pdfcraft_cos::ObjRef::new((id >> 16) as u32, id as u16)),
                 value: (a.value != b.value).then(|| a.value.clone()),
                 read_only: (a.readonly != b.readonly).then_some(a.readonly),
                 required: (a.required != b.required).then_some(a.required),
@@ -283,7 +292,7 @@ pub struct JsRunner {
     pub doc_scripts: Vec<String>,
     pub output: JsOutput,
     /// Source/order cache for this edit only; each callback still snapshots current field values.
-    calculations: Option<Vec<(String, String)>>,
+    calculations: Option<Vec<(usize, String)>>,
 }
 
 impl JsRunner {
@@ -338,23 +347,19 @@ impl JsRunner {
     }
 }
 
-/// Build the ordered calculation sources once, indexing first-name matches to avoid repeated linear field searches.
-fn calculation_scripts(cos: &pdfcraft_cos::Document, fields: &[Field]) -> Vec<(String, String)> {
+/// Index calculation sources by PDF object identity, retaining their matching snapshot positions.
+fn calculation_scripts(cos: &pdfcraft_cos::Document, fields: &[Field]) -> Vec<(usize, String)> {
     #[cfg(test)]
     SNAPSHOT_WORK.with(|c| {
         let (g, p) = c.get();
         c.set((g, p + 1));
     });
-    // Preserve the first duplicate name as the old linear search did for malformed forms.
-    let mut by_name = std::collections::HashMap::with_capacity(fields.len());
-    for field in fields {
-        by_name.entry(field.name.as_str()).or_insert(field);
-    }
+    let by_object: std::collections::HashMap<_, _> = fields.iter().enumerate().map(|(i, f)| (f.obj, (i, f))).collect();
     pdfcraft_forms::calculation_order(cos, fields)
         .fields
         .iter()
         .filter_map(|ordered| {
-            let field = by_name.get(ordered.name.as_str())?;
+            let (index, field) = by_object.get(&ordered.obj)?;
             let script = field.actions.scripts.calculate.clone().or_else(|| {
                 let source = pdfcraft_forms::af::calculate_js(&field.actions.calculate)?;
                 Some(match &field.actions.calculate {
@@ -362,7 +367,7 @@ fn calculation_scripts(cos: &pdfcraft_cos::Document, fields: &[Field]) -> Vec<(S
                     _ => source,
                 })
             })?;
-            Some((field.name.clone(), script))
+            Some((*index, script))
         })
         .collect()
 }
@@ -384,7 +389,8 @@ impl Scripts for JsRunner {
     fn run(&mut self, event: FieldEvent, script: &str, target: &Field, value: &str, fields: &[Field], doc: &pdfcraft_cos::Document) -> ScriptResult {
         let states: Vec<_> = fields.iter().map(|f| field_state(doc, f, &self.doc)).collect();
         let states = std::sync::Arc::new(states);
-        let ev = pdfcraft_js::Event::field(event.name(), &target.name, value);
+        let mut ev = pdfcraft_js::Event::field(event.name(), &target.name, value);
+        ev.target_id = Some((u64::from(target.obj.num) << 16) | u64::from(target.obj.generation));
         let calculations = self.calculations.get_or_insert_with(|| calculation_scripts(doc, fields)).clone();
         let o = match self.runtime.lock() {
             Ok(mut runtime) => runtime.run(
@@ -401,7 +407,7 @@ impl Scripts for JsRunner {
             Err(_) => Outcome { error: Some("document script runtime is unavailable".into()), ..Default::default() },
         };
         self.output.absorb(&o);
-        if o.error.is_some() {
+        if o.error.is_some() || o.reset_limit_exceeded {
             // As in Acrobat, a failing script leaves the value alone (the error goes to the console).
             return ScriptResult { rc: true, value: value.to_string(), changes: Vec::new(), message: None };
         }
@@ -521,6 +527,9 @@ impl Session {
 
     /// Convert the worker snapshot delta and reset requests into permission-checked atomic document edits.
     fn apply_script_outcome(&mut self, id: DocId, states: &[pdfcraft_js::FieldState], mut o: Outcome) -> Result<Outcome, EditError> {
+        if o.reset_limit_exceeded {
+            return Err(EditError::Invalid("script reset call limit exceeded; no script edits were committed".into()));
+        }
         if o.requests.iter().any(|r| matches!(r, Request::Reset(_))) {
             let doc = self.get(id).ok_or(EditError::NoDocument)?;
             validate_reset_work(&doc.form, states, &o.requests)?;
@@ -560,10 +569,10 @@ impl Session {
         if let Some(doc) = reset_document {
             let mut values = std::collections::HashMap::new();
             for field in pdfcraft_forms::fields(&doc) {
-                values.entry(field.name).or_insert(field.value);
+                values.entry((u64::from(field.obj.num) << 16) | u64::from(field.obj.generation)).or_insert(field.value);
             }
             for field in baseline.to_mut() {
-                if let Some(value) = values.get(&field.name) {
+                if let Some(value) = field.object_id.and_then(|id| values.get(&id)) {
                     field.value.clone_from(value);
                 }
             }

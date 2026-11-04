@@ -14,7 +14,8 @@ pub struct Job {
     pub doc: DocInfo,
     pub fields: Arc<Vec<FieldState>>,
     pub doc_scripts: Vec<String>,
-    pub calculations: Vec<(String, String)>,
+    /// Target positions in this job's field snapshot and their ordered script sources.
+    pub calculations: Vec<(usize, String)>,
 }
 /// Boa context and initialization sources retained by exactly one open-document runtime.
 pub(crate) struct Realm {
@@ -69,21 +70,36 @@ impl Realm {
                 &Event::doc("Open"),
                 &job.doc,
                 job.fields.clone(),
-                crate::run::ScriptSetup { doc_scripts: &scripts, skipped: &skipped, calculations: &job.calculations, initialize: true },
+                crate::run::ScriptSetup {
+                    doc_scripts: &scripts,
+                    skipped: &skipped,
+                    calculations: &job.calculations,
+                    initialize: true,
+                    reset_calls: 0,
+                },
                 Limits::default(),
             );
-            let fields = crate::host::host(ctx).map(|h| h.borrow().fields.clone()).unwrap_or(job.fields);
+            let (fields, reset_calls) = crate::host::host(ctx)
+                .map(|h| {
+                    let h = h.borrow();
+                    (h.fields.clone(), h.reset_calls)
+                })
+                .unwrap_or((job.fields, 0));
             let mut out = crate::run::run_in_context(
                 ctx,
                 &job.script,
                 &job.event,
                 &job.doc,
                 fields,
-                crate::run::ScriptSetup { doc_scripts: &[], skipped: &[], calculations: &job.calculations, initialize: false },
+                crate::run::ScriptSetup { doc_scripts: &[], skipped: &[], calculations: &job.calculations, initialize: false, reset_calls },
                 Limits::default(),
             );
+            out.reset_limit_exceeded |= initial.reset_limit_exceeded;
             for field in initial.changed {
-                if !out.changed.iter().any(|f| f.name == field.name) {
+                if !out.changed.iter().any(|f| match (f.object_id, field.object_id) {
+                    (Some(a), Some(b)) => a == b,
+                    _ => f.name == field.name,
+                }) {
                     out.changed.push(field);
                 }
             }
@@ -105,7 +121,7 @@ impl Realm {
                 &job.event,
                 &job.doc,
                 job.fields,
-                crate::run::ScriptSetup { doc_scripts: &[], skipped: &[], calculations: &job.calculations, initialize: false },
+                crate::run::ScriptSetup { doc_scripts: &[], skipped: &[], calculations: &job.calculations, initialize: false, reset_calls: 0 },
                 Limits::default(),
             )
         }
@@ -570,5 +586,51 @@ mod tests {
             assert_eq!(out.changed.iter().find(|f| f.name == "group.source").unwrap().value, ["old"]);
             assert_eq!(out.changed.iter().find(|f| f.name == "dest").unwrap().value, ["new"]);
         }
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod reset_budget_tests {
+    use super::*;
+    #[test]
+    fn open_and_first_event_share_reset_budget_but_later_jobs_reset_it() {
+        let mut runtime = ScriptSession::default();
+        let mut job = Job {
+            script: "resetForm();".into(),
+            event: Event::doc("Console"),
+            doc: Default::default(),
+            fields: Arc::new(vec![]),
+            doc_scripts: vec!["for(var i=0;i<64;i++)resetForm();".into()],
+            calculations: vec![],
+        };
+        let out = runtime.run(job.clone(), &[]);
+        assert!(out.reset_limit_exceeded);
+        assert_eq!(out.requests.iter().filter(|r| matches!(r, crate::Request::Reset(_))).count(), 64);
+        job.script = "resetForm();true;".into();
+        let out = runtime.run(job, &[]);
+        assert!(!out.reset_limit_exceeded);
+        assert_eq!(out.error, None);
+        assert_eq!(out.result.as_deref(), Some("true"));
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod event_identity_tests {
+    use super::*;
+    #[test]
+    fn ordinary_button_event_target_reuses_public_field_object() {
+        let mut field = FieldState::new("go", crate::FieldType::Button, vec![]);
+        field.object_id = Some(17);
+        let job = Job {
+            script: "event.target===getField('go');".into(),
+            event: Event::field("Mouse Up", "go", ""),
+            doc: Default::default(),
+            fields: Arc::new(vec![field]),
+            doc_scripts: vec![],
+            calculations: vec![],
+        };
+        let out = ScriptSession::default().run(job, &[]);
+        assert_eq!(out.error, None);
+        assert_eq!(out.result.as_deref(), Some("true"));
     }
 }

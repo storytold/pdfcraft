@@ -37,6 +37,8 @@ impl FieldEvent {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct FieldChange {
     pub name: String,
+    /// Optional exact object target for malformed forms with duplicate field names.
+    pub object: Option<ObjRef>,
     pub value: Option<Vec<String>>,
     pub read_only: Option<bool>,
     pub required: Option<bool>,
@@ -94,7 +96,7 @@ pub(crate) fn accept(doc: &mut Document, f: &Field, value: &str, scripts: &mut d
         let Some(js) = script else { continue };
         let all = fields(doc);
         let r = scripts.run(event, js, f, &v, &all, doc);
-        apply_changes(doc, &r.changes, &f.name)?;
+        apply_changes(doc, &r.changes, &f.name, Some(f.obj))?;
         if !r.rc {
             return Err(FormError::Invalid(r.message.unwrap_or_else(|| format!("{default} [ {} ]", f.name))));
         }
@@ -113,7 +115,7 @@ pub(crate) fn formatted(doc: &Document, f: &Field, value: &str, scripts: &mut dy
 /// Apply script changes to other fields (values written without re-running their scripts;
 /// read-only, required and visibility as flags; button captions). `except` is the event's own
 /// field, whose value the event sets.
-pub(crate) fn apply_changes(doc: &mut Document, changes: &[FieldChange], except: &str) -> Result<(), FormError> {
+pub(crate) fn apply_changes(doc: &mut Document, changes: &[FieldChange], except: &str, except_object: Option<ObjRef>) -> Result<(), FormError> {
     if changes.is_empty() {
         return Ok(());
     }
@@ -128,9 +130,9 @@ pub(crate) fn apply_changes(doc: &mut Document, changes: &[FieldChange], except:
     }
     let all = fields(doc);
     for c in changes {
-        let Some(f) = all.iter().find(|f| f.name == c.name) else { continue };
+        let Some(f) = all.iter().find(|f| f.name == c.name && c.object.is_none_or(|obj| f.obj == obj)) else { continue };
         if let Some(v) = &c.value
-            && c.name != except
+            && !except_object.map_or(c.name == except, |obj| f.obj == obj)
             && *v != f.value
         {
             let value = match f.kind {
@@ -194,9 +196,10 @@ pub(crate) fn apply_changes(doc: &mut Document, changes: &[FieldChange], except:
             ..Default::default()
         };
         if appearance != crate::LookPatch::default() || c.text_size.is_some() || c.user_name.is_some() {
-            crate::set_props(
+            crate::author::set_props_object(
                 doc,
                 &c.name,
+                f.obj,
                 &crate::FieldProps {
                     appearance: (appearance != crate::LookPatch::default()).then_some(appearance),
                     font_size: c.text_size,
@@ -211,7 +214,7 @@ pub(crate) fn apply_changes(doc: &mut Document, changes: &[FieldChange], except:
             }
             let widget = f.widgets.first().ok_or_else(|| FormError::Invalid("field has no widget rectangle".into()))?;
             doc.update_dict(widget.obj, |d| d.set(b"Rect".to_vec(), Object::Array(rect.into_iter().map(Object::Real).collect())))?;
-            crate::redraw_field(doc, &c.name)?;
+            crate::author::redraw_field_object(doc, &c.name, f.obj)?;
         }
         if let Some(icon) = c.icon {
             if f.kind != FieldKind::PushButton {
@@ -246,7 +249,7 @@ pub(crate) fn apply_changes(doc: &mut Document, changes: &[FieldChange], except:
                 }
                 doc.update_dict(widget.obj, |d| d.set(b"MK".to_vec(), Object::Dict(mk)))?;
             }
-            crate::redraw_field(doc, &c.name)?;
+            crate::author::redraw_field_object(doc, &c.name, f.obj)?;
         }
         if let Some(caption) = &c.caption {
             if f.kind != FieldKind::PushButton {
@@ -256,7 +259,12 @@ pub(crate) fn apply_changes(doc: &mut Document, changes: &[FieldChange], except:
             // the first widget used by the getter. Keep each widget's other MK/AP entries.
             for (index, widget) in f.widgets.iter().enumerate() {
                 if widget.caption.as_deref() != Some(caption.as_str()) {
-                    crate::set_props(doc, &f.name, &crate::FieldProps { caption: Some((index, caption.clone())), ..Default::default() })?;
+                    crate::author::set_props_object(
+                        doc,
+                        &f.name,
+                        f.obj,
+                        &crate::FieldProps { caption: Some((index, caption.clone())), ..Default::default() },
+                    )?;
                 }
             }
         }
@@ -287,7 +295,7 @@ fn js_rgb(values: &[String]) -> Result<[f64; 3], FormError> {
 
 /// Apply button/console field and appearance changes, recalculating after value writes.
 pub fn apply_script_changes(doc: &mut Document, changes: &[FieldChange], scripts: &mut dyn Scripts) -> Result<(), FormError> {
-    apply_changes(doc, changes, "")?;
+    apply_changes(doc, changes, "", None)?;
     // Acrobat's automatic calculation is driven by value changes. A keypad caption,
     // position or visibility update must not execute every calculated field again.
     if changes.iter().any(|change| change.value.is_some()) {
