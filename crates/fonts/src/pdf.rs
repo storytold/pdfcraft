@@ -115,7 +115,7 @@ pub fn embedded_sfnt_within(doc: &Document, font: &Dict, budget: &mut DecodeBudg
         let Some(object) = descriptor.get(key) else { continue };
         let object = doc.resolve(object);
         let Object::Stream(stream) = object.as_ref() else { continue };
-        let Ok(mut bytes) = budget.decode_within(stream, MAX_SFNT) else { continue };
+        let Ok(mut bytes) = budget.decode_within(&doc.with_direct_parms(stream), MAX_SFNT) else { continue };
         let Ok(face) = skrifa::FontRef::from_index(&bytes, 0) else { continue };
         if face.metrics(skrifa::instance::Size::unscaled(), skrifa::instance::LocationRef::default()).units_per_em == 0 {
             continue;
@@ -305,25 +305,31 @@ const MAX_CID_TO_GID: usize = 1 << 17;
 /// The streams one reading of a font decodes, against the caller's allowance, and whether one was
 /// left unread because that allowance was spent.
 struct Reads<'a> {
+    doc: &'a Document,
     budget: &'a mut DecodeBudget,
     refused: bool,
 }
 
 impl<'a> Reads<'a> {
-    fn new(budget: &'a mut DecodeBudget) -> Self {
-        Self { budget, refused: false }
+    fn new(doc: &'a Document, budget: &'a mut DecodeBudget) -> Self {
+        Self { doc, budget, refused: false }
     }
 
-    /// `stream` decoded within `max` and the allowance; `None` when it can't be, noting when the
-    /// allowance is why. A stream past `max` is unread as before allowances, not refused.
+    /// `stream` decoded within `max` and the allowance, its `/DecodeParms` read where they are given
+    /// by reference too ([`Document::with_direct_parms`]); `None` when it can't be, noting when the
+    /// allowance is why.
     ///
-    /// `max` bounds what the stream decodes to. Its filter stages are paid for together, up to
-    /// `max` for each, the most a decode without an allowance lets them make: a map of 65,536 CIDs
+    /// `max` bounds what the stream decodes to, and its filter stages together may make up to `max`
+    /// for each of them, as much as a decode without an allowance lets them: a map of 65,536 CIDs
     /// behind ASCIIHex and Flate makes all of `MAX_CID_TO_GID` in its last stage, with the hex
-    /// stage's output on top.
+    /// stage's output on top. One stage may so make more than `max`, which a decode without an
+    /// allowance stops, so a stream that one leaves unread can read here, never the other way
+    /// round. A stream past `max` is unread, not refused, when what is left can pay for its stages;
+    /// when it can't, the stream spends it and counts as refused.
     fn decode(&mut self, stream: &Stream, max: usize) -> Option<Vec<u8>> {
+        let stream = self.doc.with_direct_parms(stream);
         let stages = stream.filters().len().max(1);
-        match self.budget.decode_within(stream, max.saturating_mul(stages)) {
+        match self.budget.decode_within(&stream, max.saturating_mul(stages)) {
             Ok(data) if data.len() <= max => Some(data),
             Ok(_) => None,
             Err(_) => {
@@ -690,7 +696,7 @@ impl Metrics {
     /// it reads (a page's, say): each stream pays for what it decodes, usable or not. A stream the
     /// allowance can't pay for is left unread, and [`Metrics::past_allowance`] says so.
     pub fn from_dict_within(doc: &Document, font: &Dict, budget: &mut DecodeBudget) -> Self {
-        let mut reads = Reads::new(budget);
+        let mut reads = Reads::new(doc, budget);
         let mut m = Self::read_metrics(doc, font, &mut reads);
         let base = font
             .name(b"BaseFont")

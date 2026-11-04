@@ -334,6 +334,55 @@ fn a_full_cid_map_reads_behind_any_number_of_filters() {
     }
 }
 
+/// `data` in rows of `columns` bytes behind Flate and a PNG predictor, each row tagged None, with
+/// its `/DecodeParms` given by reference or direct.
+fn predicted(doc: &mut Document, data: &[u8], columns: usize, by_reference: bool) -> Object {
+    let rows: Vec<u8> = data.chunks(columns).flat_map(|row| std::iter::once(0).chain(row.iter().copied())).collect();
+    let mut s = Stream::flate(Dict::new(), &rows);
+    let parms: Dict =
+        [(b"Predictor".to_vec(), Object::Int(12)), (b"Columns".to_vec(), Object::Int(i64::try_from(columns).unwrap()))].into_iter().collect();
+    let parms = if by_reference { Object::Ref(doc.add(Object::Dict(parms))) } else { Object::Dict(parms) };
+    s.dict.set(b"DecodeParms".to_vec(), parms);
+    Object::Ref(doc.add(Object::Stream(s)))
+}
+
+/// A stream whose `/DecodeParms` are given by reference reads as it does with them direct: a PNG
+/// predictor's tag bytes are taken out of the map, the CMap and the editor's program, not left in.
+#[test]
+fn parameters_given_by_reference_are_read() {
+    let read = |by_reference: bool| {
+        let mut doc = Document::new_empty();
+        let (mut f, _) = subset_type0(&mut doc, b"");
+        let map: Vec<u8> = (0..1000u16).flat_map(u16::to_be_bytes).collect();
+        let map = predicted(&mut doc, &map, 2, by_reference);
+        let mut cmap = b"1 beginbfchar <0001> <0058> endbfchar".to_vec();
+        cmap.resize(48, b' ');
+        let unicode = predicted(&mut doc, &cmap, 16, by_reference);
+        let Some(Object::Array(mut descendants)) = f.get(b"DescendantFonts").cloned() else { panic!("descendant") };
+        if let Some(Object::Dict(d)) = descendants.get_mut(0) {
+            d.set(b"CIDToGIDMap".to_vec(), map);
+        }
+        f.set(b"DescendantFonts".to_vec(), Object::Array(descendants));
+        f.set(b"ToUnicode".to_vec(), unicode);
+        let m = Metrics::from_dict(&doc, &f);
+        (m.outlined_cids.clone(), m.text_of(1).map(Cow::into_owned))
+    };
+    let direct = read(false);
+    assert!(!direct.0.is_empty());
+    assert_eq!(direct.1.as_deref(), Some("X"));
+    assert_eq!(read(true), direct);
+    let mut program = include_bytes!("../../../../assets/fonts/Inter-Regular.ttf").to_vec();
+    program.resize(program.len().next_multiple_of(4), 0);
+    for by_reference in [false, true] {
+        let mut doc = Document::new_empty();
+        let file = predicted(&mut doc, &program, 4, by_reference);
+        let mut descriptor = Dict::new();
+        descriptor.set(b"FontFile2".to_vec(), file);
+        let simple = font(&mut doc, vec![("FontDescriptor", Object::Dict(descriptor))]);
+        assert_eq!(embedded_sfnt(&doc, &simple).as_deref(), Some(program.as_slice()), "by reference: {by_reference}");
+    }
+}
+
 /// Fonts that each name one large ToUnicode share the allowance they are read within: it pays for
 /// as many readings as it holds, and the rest are left unread, where each reading used to decode
 /// it afresh.
@@ -732,7 +781,7 @@ fn malformed_cmaps_never_panic() {
     let mut enc = Dict::new();
     enc.set(b"Differences".to_vec(), Object::Array(vec![Object::Int(i64::MAX), Object::name("A"), Object::name("B")]));
     let f = font(&mut doc, vec![("Subtype", Object::name("Type1")), ("Encoding", Object::Dict(enc))]);
-    assert_eq!(unicode_map(&doc, &f, false, &mut Reads::new(&mut DecodeBudget::new(usize::MAX, 0))).text(u32::MAX).as_deref(), Some("B"));
+    assert_eq!(unicode_map(&doc, &f, false, &mut Reads::new(&doc, &mut DecodeBudget::new(usize::MAX, 0))).text(u32::MAX).as_deref(), Some("B"));
 }
 
 #[test]
