@@ -115,8 +115,7 @@ fn check_certification(doc: &Document) -> Result<(), SignError> {
                     return None;
                 }
                 let old_signature = old_field.signature(&old)?;
-                let matches_revision = nums(&old, &old_signature, b"ByteRange")
-                    .is_some_and(|r| r.len() == 4 && r[2] + r[3] == covered as f64);
+                let matches_revision = nums(&old, &old_signature, b"ByteRange").is_some_and(|r| r.len() == 4 && r[2] + r[3] == covered as f64);
                 matches_revision.then(|| super::validate::docmdp(&old, &old_signature))
             });
             historical
