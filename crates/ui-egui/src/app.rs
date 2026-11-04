@@ -351,6 +351,7 @@ impl PdfCraftApp {
             two_sided_source: None,
             palette_open: false,
             all_tools_expanded: false,
+            hidden_tools: crate::tool_visibility::HiddenTools::default(),
             all_tools_full: false,
             all_tools_query: String::new(),
             all_tools_tab: (None, false),

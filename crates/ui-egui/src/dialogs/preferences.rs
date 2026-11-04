@@ -26,6 +26,7 @@ use crate::colour_picker::PickerHost;
 use crate::i18n::{self, Lang};
 use crate::scroll_speed::ScrollSpeed;
 use crate::state::Mode;
+use crate::tool_visibility::{self, HiddenTools};
 use crate::ui_scale;
 use crate::units::Unit;
 
@@ -90,6 +91,7 @@ struct PrefsDraft {
     date_format: String,
     date_language: Option<String>,
     javascript: bool,
+    hidden_tools: HiddenTools,
 }
 
 impl PrefsDraft {
@@ -126,6 +128,7 @@ impl PrefsDraft {
             date_format: app.session.date_format().to_string(),
             date_language: app.session.date_language().map(str::to_string),
             javascript: app.session.javascript(),
+            hidden_tools: app.hidden_tools.clone(),
         }
     }
 
@@ -167,6 +170,7 @@ impl PrefsDraft {
             date_format: engine.date_format().to_string(),
             date_language: engine.date_language().map(str::to_string),
             javascript: engine.javascript(),
+            hidden_tools: HiddenTools::default(),
         }
     }
 }
@@ -243,6 +247,8 @@ struct Texts {
     unwritable: String,
     date_help: String,
     date_custom_id: &'static str,
+    /// One row key per tool group, `tools.show.<id>`, for the Tools page.
+    tool_keys: Vec<String>,
 }
 
 impl Texts {
@@ -278,6 +284,7 @@ impl Texts {
                 &[("escape", "\\")],
             ),
             date_custom_id: "custom",
+            tool_keys: pdfcraft_engine::catalog::TOOL_GROUPS.iter().map(|g| format!("{TOOL_KEY}{}", g.id)).collect(),
         }
     }
 }
@@ -286,6 +293,10 @@ impl Texts {
 const AUTO_ID: &str = "auto";
 /// The date language option that follows the interface language.
 const FOLLOW_ID: &str = "";
+/// The Tools page's row key for one tool group, before its id.
+const TOOL_KEY: &str = "tools.show.";
+/// The Tools page's preset choice for a selection no preset makes.
+const CUSTOM_PRESET: &str = "custom";
 
 /// The app's side of the window: maps rows to the draft and the draft to the app.
 struct Prefs<'a> {
@@ -410,7 +421,15 @@ fn date_language_picker_name(ctx: &egui::Context, l: &pdfcraft_engine::dates::Da
 
 impl PreferencesModel for Prefs<'_> {
     fn pages(&self) -> Vec<PageSpec<'_>> {
-        vec![self.general_page(), self.appearance_page(), self.documents_page(), self.comment_page(), self.fill_sign_page(), self.javascript_page()]
+        vec![
+            self.general_page(),
+            self.appearance_page(),
+            self.documents_page(),
+            self.comment_page(),
+            self.fill_sign_page(),
+            self.javascript_page(),
+            self.tools_page(),
+        ]
     }
 
     fn set(&mut self, key: &str, value: PrefValue) {
@@ -490,6 +509,12 @@ impl PreferencesModel for Prefs<'_> {
             }
             ("fill.date_language", PrefValue::Choice(id)) => d.date_language = (id != FOLLOW_ID).then_some(id),
             ("javascript.enable", PrefValue::Bool(v)) => d.javascript = v,
+            ("tools.preset", PrefValue::Choice(id)) => {
+                if let Some(preset) = pdfcraft_engine::catalog::preset(&id) {
+                    d.hidden_tools = HiddenTools::of_preset(preset);
+                }
+            }
+            (key, PrefValue::Bool(v)) if key.starts_with(TOOL_KEY) => d.hidden_tools.set_shown(&key[TOOL_KEY.len()..], v),
             _ => {}
         }
     }
@@ -582,6 +607,7 @@ impl PreferencesModel for Prefs<'_> {
                 d.date_language = fresh.date_language;
             }
             "javascript" => d.javascript = fresh.javascript,
+            "tools" => d.hidden_tools = fresh.hidden_tools,
             _ => {}
         }
     }
@@ -654,6 +680,7 @@ impl PreferencesDraft for Prefs<'_> {
         self.app.ask_to_lock_signatures = d.ask_to_lock_signatures;
 
         self.app.session.set_javascript(d.javascript);
+        self.app.hidden_tools = d.hidden_tools;
         self.app.apply_selection(std::mem::take(&mut *self.selection));
 
         let defaults = self.app.view_defaults;
@@ -835,6 +862,23 @@ impl Prefs<'_> {
             )),
         ];
         PageSpec::new("javascript", "JavaScript", rows)
+    }
+
+    /// Which tools All tools, the palette and Home list: a preset, or one check box per tool.
+    fn tools_page(&self) -> PageSpec<'_> {
+        use pdfcraft_engine::catalog::{TOOL_GROUPS, TOOL_PRESETS};
+        let hidden = &self.draft.hidden_tools;
+        let mut presets: Vec<_> = TOOL_PRESETS.iter().map(|p| Entry::new(p.id, tool_visibility::preset_label(p))).collect();
+        presets.push(Entry::new(CUSTOM_PRESET, tl!("Custom selection")));
+        let preset = hidden.preset().map_or(CUSTOM_PRESET, |p| p.id);
+        let tools = TOOL_GROUPS
+            .iter()
+            .zip(&self.texts.tool_keys)
+            .map(|(g, key)| RowSpec::new(key.as_str(), tl!(g.label), RowKind::Bool(hidden.shows(g.id))))
+            .collect();
+        PageSpec::new("tools", tl!("Tools shown in All tools"), vec![RowSpec::new("tools.preset", tl!("Preset"), RowKind::choice(preset, presets))])
+            .group(GroupSpec::new(Some(tl!("Choose individual tools")), tools))
+            .footnote(tl!("Hidden tools stay available from the menus, the mode tabs and keyboard shortcuts."))
     }
 }
 

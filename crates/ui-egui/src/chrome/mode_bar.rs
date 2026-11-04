@@ -107,7 +107,8 @@ pub(super) fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
 fn palette_entries(app: &PdfCraftApp, ctx: &egui::Context) -> Vec<HelpEntry> {
     let mut entries = app.menu_bar(ctx).help_entries(Target::current(), &crate::menus::layout_options());
     for group in TOOL_GROUPS {
-        if group.availability == Availability::Ready {
+        // A tool hidden in Preferences leaves the palette's tool rows; its commands are still found by name.
+        if group.availability == Availability::Ready && app.hidden_tools.shows(group.id) {
             // PLAN: assumed `tool.group` reads a `group` parameter (pdf-chrome-w9)
             let select = CommandRef::with_params("tool.group", serde_json::json!({ "group": group.id }));
             entries.push(HelpEntry::new(select, tl!(group.label)).with_path([tl!("Tool")]));

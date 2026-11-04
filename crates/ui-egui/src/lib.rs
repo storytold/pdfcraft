@@ -63,6 +63,7 @@ pub use print_ui::{
 };
 pub use redact_ui::{HiddenDraft, RedactPrefs, SearchDraft as RedactSearchDraft, SearchMode as RedactSearchMode};
 pub mod i18n;
+mod tool_visibility;
 pub mod viewer_prefs;
 // PLAN: the lead adds `mod notices; mod icons; mod brand; mod colour_picker; pub mod fonts;` here, and `pub mod settings;` in app.rs, at combine (L-212).
 
@@ -399,6 +400,8 @@ pub struct PdfCraftApp {
     pub(crate) print_tasks: print_ui::PrintTasks,
     pub palette_open: bool,
     pub all_tools_expanded: bool,
+    /// Preferences: tools All tools, the palette and Home leave out (menus and tabs keep them).
+    pub(crate) hidden_tools: tool_visibility::HiddenTools,
     /// The All tools view fills the workspace (its sidebar's expand button).
     pub all_tools_full: bool,
     pub all_tools_query: String,

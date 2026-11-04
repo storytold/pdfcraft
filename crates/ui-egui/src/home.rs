@@ -140,7 +140,8 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
     let pinned_folders = app.pinned_folders(&Env::of(ui));
 
     let pinned_tools: Vec<&'static ToolGroup> = app.pinned_tools.iter().filter_map(|id| catalog::group(id)).collect();
-    let recommended: Vec<&'static ToolGroup> = RECOMMENDED.iter().filter(|id| !app.is_tool_pinned(id)).filter_map(|id| catalog::group(id)).collect();
+    let recommended: Vec<&'static ToolGroup> =
+        RECOMMENDED.iter().filter(|id| !app.is_tool_pinned(id) && app.hidden_tools.shows(id)).filter_map(|id| catalog::group(id)).collect();
     let community_card = !app.community_card_closed;
     let asked = RefCell::new(Vec::new());
 
@@ -184,8 +185,11 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                     },
                 );
             }
+            // Tools hidden in Preferences (and pinned ones, listed below) leave the cards; the Open card stays.
             Stack::new().label(tl!("Recommended tools")).fill_width().surface(SurfaceKind::Raised).pad(Pad::Regular).show(ui, |ui, _| {
-                let _ = Text::new(tl!("Recommended tools").to_string()).role(TypeRole::Heading).show(ui);
+                if !recommended.is_empty() {
+                    let _ = Text::new(tl!("Recommended tools").to_string()).role(TypeRole::Heading).show(ui);
+                }
                 recommended_grid(ui, &recommended, &asked);
             });
             // The heading is the page's, with "Pin a tool…" at its end, as the framework's own sections show theirs.

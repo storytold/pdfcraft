@@ -96,6 +96,7 @@ mod stamps;
 mod status_layers;
 mod text_select;
 mod theme;
+mod tool_visibility;
 mod trust_signer;
 mod ui;
 mod updates;

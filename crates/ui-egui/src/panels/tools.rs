@@ -101,31 +101,40 @@ fn tool_row(g: &'static ToolGroup, pinned: bool) -> ListRow<'static> {
 /// The All tools sidebar body: the tool list, the first few tools until View more shows them all. Its Expand and
 /// Close belong to the dock's group header.
 fn all_tools(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
-    let shown = if app.all_tools_expanded { TOOL_GROUPS.len() } else { COLLAPSED_TOOLS.min(TOOL_GROUPS.len()) };
-    let pins: Vec<bool> = TOOL_GROUPS[..shown].iter().map(|g| app.is_tool_pinned(g.id)).collect();
+    // Tools hidden in Preferences are left out; the menus and mode tabs still reach them.
+    let visible: Vec<&'static ToolGroup> = TOOL_GROUPS.iter().filter(|g| app.hidden_tools.shows(g.id)).collect();
+    if visible.is_empty() {
+        craft::ui::display::Text::new(tl!("No tools are shown. Choose them in Preferences.").to_string()).show(ui);
+        return;
+    }
+    let shown = if app.all_tools_expanded { visible.len() } else { COLLAPSED_TOOLS.min(visible.len()) };
+    let pins: Vec<bool> = visible[..shown].iter().map(|g| app.is_tool_pinned(g.id)).collect();
     let out = List::<usize>::new(tl!("All tools").to_owned())
         .natural_height(true)
         .select(SelectMode::Single)
         .activate(ActivateOn::Click)
         .selection(Bind::given(Selection::default()))
-        .show_items(ui, &Rows(shown), &mut |at, _| match (TOOL_GROUPS.get(*at), pins.get(*at)) {
+        .show_items(ui, &Rows(shown), &mut |at, _| match (visible.get(*at), pins.get(*at)) {
             (Some(g), Some(pinned)) => tool_row(g, *pinned),
             _ => ListRow::spacer(),
         });
     for event in out.events {
         match event {
             CollectionEvent::Activate(at) => {
-                if let Some(g) = TOOL_GROUPS.get(at) {
+                if let Some(g) = visible.get(at) {
                     app.select_tool(ui.ctx(), g.id);
                 }
             }
             CollectionEvent::Item(at, RowEvent::Trailing { part, .. }) if part == PIN => {
-                if let Some(g) = TOOL_GROUPS.get(at) {
+                if let Some(g) = visible.get(at) {
                     app.toggle_pin_tool(g.id);
                 }
             }
             _ => {}
         }
+    }
+    if visible.len() <= COLLAPSED_TOOLS {
+        return;
     }
     let more = if app.all_tools_expanded { "View less" } else { "View more" };
     if clicked(craft::ui::buttons::Link::new(tl!(more).to_owned()).show(ui).response()) {
